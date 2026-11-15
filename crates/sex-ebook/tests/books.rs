@@ -163,3 +163,18 @@ fn saved_places_and_settings() {
     assert_eq!(Settings::parse(&s.serialize()), s);
     assert_eq!(Settings::parse(""), Settings::default());
 }
+
+#[test]
+fn repeated_spine_entries_do_not_amplify() {
+    // Issue #302: a 12 KB EPUB whose spine names one large chapter thousands of times
+    // used to unpack to gigabytes. Each item now enters the spine once, under a budget.
+    let data = include_bytes!("../../../fuzz/repros/round3/bodice-epub-spine-amplification-dos.epub");
+    let start = std::time::Instant::now();
+    if let Ok(book) = sex_ebook::open("dos.epub", data) {
+        let blocks: usize = book.chapters.iter().map(|c| c.blocks.len()).sum();
+        assert!(book.chapters.len() <= sex_ebook::SPINE_MAX);
+        assert!(book.chapters.len() < 100, "{} chapters", book.chapters.len());
+        let _ = blocks;
+    }
+    assert!(start.elapsed().as_secs() < 10, "took {:?}", start.elapsed());
+}

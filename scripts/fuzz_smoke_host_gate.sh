@@ -28,6 +28,11 @@ if command -v cargo-fuzz >/dev/null 2>&1; then
         fuzz_bodice_epub
         fuzz_gossip_feed
         fuzz_swingers_bencode
+        fuzz_kaleidoscope_ext_package
+        fuzz_kaleidoscope_ext_manifest
+        fuzz_kaleidoscope_ext_dnr
+        fuzz_burlesque_pptx
+        fuzz_batik_psd
     )
     
     for t in "${TARGETS[@]}"; do

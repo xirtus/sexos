@@ -21,9 +21,14 @@ mod program {
         let s = app.ui.theme().scale;
 
         sex_pdx::serial_record!(
-            "[batik.state] layers={} tool={} undo={} pixel0={:08x}",
+            "[batik.state] layers={} active={} blend={} mask={} edit_mask={} tool={} sel={} undo={} pixel0={:08x}",
             b.layer_count(),
+            b.active_layer_id,
+            b.active_blend_name(),
+            if b.active_has_mask() { "yes" } else { "no" },
+            if b.edit_mask { "yes" } else { "no" },
             b.tool_name(),
+            if b.selection.is_active() { "yes" } else { "no" },
             b.undo_count(),
             b.pixel0()
         );
@@ -50,32 +55,73 @@ mod program {
         sex_pdx::serial_record!("[batik.frame] n={}", app.frames);
     }
 
-    fn save_document(app: &mut App, b: &Batik, is_png: bool) {
-        if is_png {
-            match b.encode_png() {
-                Ok(bytes) => {
-                    match sex_app::files::write(&mut app.window, b"painting.png", &bytes) {
-                        Ok(()) => {
-                            sex_pdx::serial_record!(
-                                "[batik.saved] file=/data/batik/painting.png bytes={}",
-                                bytes.len()
-                            );
-                        }
-                        Err(e) => {
-                            sex_pdx::serial_record!("[batik.save_err] write error={}", e);
-                        }
+    fn export_file(app: &mut App, b: &Batik, fmt: &str) {
+        let (filename, res): (&[u8], Result<alloc::vec::Vec<u8>, _>) = match fmt {
+            "png" => (b"painting.png", b.encode_png()),
+            "jpg" => (b"painting.jpg", b.encode_jpeg(90)),
+            "webp" => (b"painting.webp", b.encode_webp()),
+            "psd" => (b"painting.psd", b.encode_psd()),
+            "ora" => (b"painting.ora", b.encode_ora()),
+            _ => return,
+        };
+
+        match res {
+            Ok(bytes) => {
+                match sex_app::files::write(&mut app.window, filename, &bytes) {
+                    Ok(()) => {
+                        sex_pdx::serial_record!(
+                            "[batik.exported] fmt={} bytes={}",
+                            fmt,
+                            bytes.len()
+                        );
+                        sex_pdx::serial_record!(
+                            "[batik.saved] file=/data/batik/{} bytes={}",
+                            core::str::from_utf8(filename).unwrap_or("file"),
+                            bytes.len()
+                        );
+                    }
+                    Err(e) => {
+                        sex_pdx::serial_record!("[batik.export_err] fmt={} write error={}", fmt, e);
                     }
                 }
-                Err(e) => {
-                    sex_pdx::serial_record!("[batik.save_err] png encode error={:?}", e);
+            }
+            Err(e) => {
+                sex_pdx::serial_record!("[batik.export_err] fmt={} encode error={:?}", fmt, e);
+            }
+        }
+    }
+
+    fn import_file(app: &mut App, b: &mut Batik, fmt: &str) {
+        let filename: &[u8] = match fmt {
+            "png" => b"painting.png",
+            "jpg" => b"painting.jpg",
+            "webp" => b"painting.webp",
+            "psd" => b"painting.psd",
+            "ora" => b"painting.ora",
+            _ => return,
+        };
+
+        let mut buf = alloc::vec![0u8; 16 * 1024 * 1024];
+        match sex_app::files::read(&mut app.window, filename, &mut buf) {
+            Ok(n) => {
+                let bytes = &buf[..n];
+                match b.import_bytes(bytes, &mut app.ui) {
+                    Ok(()) => {
+                        sex_pdx::serial_record!(
+                            "[batik.imported] fmt={} layers={} w={} h={}",
+                            fmt,
+                            b.doc.layers.len(),
+                            b.doc.width,
+                            b.doc.height
+                        );
+                    }
+                    Err(e) => {
+                        sex_pdx::serial_record!("[batik.import_err] fmt={} decode error={:?}", fmt, e);
+                    }
                 }
             }
-        } else if let Ok(bytes) = b.encode_ora() {
-            if sex_app::files::write(&mut app.window, b"painting.ora", &bytes).is_ok() {
-                sex_pdx::serial_record!(
-                    "[batik.saved] file=/data/batik/painting.ora bytes={}",
-                    bytes.len()
-                );
+            Err(e) => {
+                sex_pdx::serial_record!("[batik.import_err] fmt={} read error={}", fmt, e);
             }
         }
     }
@@ -94,23 +140,79 @@ mod program {
                 sex_pdx::task_finish(0);
             }
             if let Response::Clicked(id) = r {
-                if id == batik.btn_save_png {
-                    save_document(app, batik, true);
+                if id == batik.btn_export_png {
+                    export_file(app, batik, "png");
+                    changed = true;
+                    continue;
+                } else if id == batik.btn_export_jpg {
+                    export_file(app, batik, "jpg");
+                    changed = true;
+                    continue;
+                } else if id == batik.btn_export_webp {
+                    export_file(app, batik, "webp");
+                    changed = true;
+                    continue;
+                } else if id == batik.btn_export_psd {
+                    export_file(app, batik, "psd");
                     changed = true;
                     continue;
                 } else if id == batik.btn_save_ora {
-                    save_document(app, batik, false);
+                    export_file(app, batik, "ora");
+                    changed = true;
+                    continue;
+                } else if id == batik.btn_import_png {
+                    import_file(app, batik, "png");
+                    changed = true;
+                    continue;
+                } else if id == batik.btn_import_jpg {
+                    import_file(app, batik, "jpg");
+                    changed = true;
+                    continue;
+                } else if id == batik.btn_import_webp {
+                    import_file(app, batik, "webp");
+                    changed = true;
+                    continue;
+                } else if id == batik.btn_import_psd {
+                    import_file(app, batik, "psd");
                     changed = true;
                     continue;
                 }
             }
             if let Response::Command(ref cmd) = r {
-                if cmd == "batik.save-png" {
-                    save_document(app, batik, true);
+                if cmd == "batik.export-png" {
+                    export_file(app, batik, "png");
+                    changed = true;
+                    continue;
+                } else if cmd == "batik.export-jpg" {
+                    export_file(app, batik, "jpg");
+                    changed = true;
+                    continue;
+                } else if cmd == "batik.export-webp" {
+                    export_file(app, batik, "webp");
+                    changed = true;
+                    continue;
+                } else if cmd == "batik.export-psd" {
+                    export_file(app, batik, "psd");
                     changed = true;
                     continue;
                 } else if cmd == "batik.save-ora" {
-                    save_document(app, batik, false);
+                    export_file(app, batik, "ora");
+                    changed = true;
+                    continue;
+                } else if cmd == "batik.import-png" {
+                    import_file(app, batik, "png");
+                    changed = true;
+                    continue;
+                } else if cmd == "batik.import-jpg" {
+                    import_file(app, batik, "jpg");
+                    changed = true;
+                    continue;
+                } else if cmd == "batik.import-webp" {
+                    import_file(app, batik, "webp");
+                    changed = true;
+                    continue;
+                } else if cmd == "batik.import-psd" {
+                    import_file(app, batik, "psd");
                     changed = true;
                     continue;
                 }
@@ -132,15 +234,36 @@ mod program {
         if !args.is_empty() {
             if let Ok(arg_str) = core::str::from_utf8(args) {
                 let clean = arg_str.trim();
-                if clean.ends_with(".ora") {
-                    let mut file_buf = alloc::vec![0u8; 1024 * 1024];
-                    if let Ok(n) = sex_app::files::read(&mut app.window, clean.as_bytes(), &mut file_buf) {
-                        let limits = sex_image::Limits::PHOTO;
-                        if let Ok(doc) = batik_core::read_ora(&file_buf[..n], &limits) {
-                            batik.doc = doc;
-                            batik.canvas_w = batik.doc.width;
-                            batik.canvas_h = batik.doc.height;
-                            batik.refresh_canvas(&mut app.ui);
+                let path = if clean.starts_with('@') {
+                    &clean[1..]
+                } else {
+                    clean
+                };
+                if !path.is_empty() {
+                    let mut file_buf = alloc::vec![0u8; 16 * 1024 * 1024];
+                    if let Ok(n) = sex_app::files::read(&mut app.window, path.as_bytes(), &mut file_buf) {
+                        let bytes = &file_buf[..n];
+                        let fmt = if bytes.starts_with(b"8BPS") {
+                            "psd"
+                        } else if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+                            "png"
+                        } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+                            "jpg"
+                        } else if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+                            "webp"
+                        } else if bytes.starts_with(b"PK\x03\x04") {
+                            "ora"
+                        } else {
+                            "img"
+                        };
+                        if batik.import_bytes(bytes, &mut app.ui).is_ok() {
+                            sex_pdx::serial_record!(
+                                "[batik.imported] fmt={} layers={} w={} h={}",
+                                fmt,
+                                batik.doc.layers.len(),
+                                batik.doc.width,
+                                batik.doc.height
+                            );
                         }
                     }
                 }
