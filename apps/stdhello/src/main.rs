@@ -91,8 +91,8 @@ fn main() {
     let _ = std::fs::create_dir("stdhello-tree/empty");
     check("read_dir of an empty folder", sex_std::fs::read_dir("stdhello-tree/empty").is_ok_and(|v| v.is_empty()));
     check("remove_dir_all", sex_std::fs::remove_dir_all("stdhello-tree").is_ok() && std::fs::metadata("stdhello-tree").is_err());
-    // std's own answer for starting another program (see sex_std::process).
-    check("Command says unsupported", std::process::Command::new("stdhello").status().is_err_and(|e| e.kind() == std::io::ErrorKind::Unsupported));
+    // Starting another program (sex_std::process; scripts/process_gate.py runs real ones).
+    check("Command of a missing program", std::process::Command::new("no-such-program").status().is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound));
 
     let counter = Arc::new(Mutex::new(0u64));
     let handles: Vec<_> = (0..4).map(|i| {

@@ -4,9 +4,10 @@
 * `run assuit` writes welcome.docx (hand-written WordprocessingML, apps/assuit/make_welcome.py)
   into its folder, opens it and draws page 1 with ink on it.
 * End, then typing " today" adds to the title; the record shows the new first line.
-* Shift+Home and Ctrl+B run WordCraft's caret.home (extending) and format.bold.
+* Shift+Home selects the title line (one highlight rectangle) and Ctrl+B runs format.bold.
 * Ctrl+S writes the docx; the window closes.
-* A second `run assuit` reads the saved file back with the edit in its first line.
+* A second `run assuit` reads the saved file back with the edit in its first line; Ctrl+End
+  and fifty Enters push the text onto page 2, which the view draws below page 1.
 
 No kernel panic, page fault or std abort anywhere in the record."""
 import argparse,os,re,shutil,time
@@ -43,6 +44,7 @@ def main():
   s=len(t());q.key('end');type_line(' today')
   g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today\n',s,300)
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'home'}],'hold-time':80})
+  g['wait'](r'\[assuit\.selection\] rects=1 pages=1\n',s,120)
   g['chord']('ctrl','b',r'\[assuit\.command\] format\.bold\n')
   m=g['chord']('ctrl','s',r'\[assuit\.saved\] name=welcome\.docx bytes=(\d+)\n')
   assert int(m[1])>2000,f'saved file is too small: {m[0]}'
@@ -51,6 +53,10 @@ def main():
   o=opened()
   s=len(t());q.key('end');q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'1'}],'hold-time':80})
   g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today!\n',s,300)
+  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'end'}],'hold-time':80});time.sleep(.5)
+  for _ in range(50):q.key('ret');time.sleep(.08)
+  g['wait'](r'\[assuit\.page\] page=2 pages=2 width=\d+ height=\d+ ink=\d+ ms=\d+\n',s,300)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-pages.ppm')})
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})

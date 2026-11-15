@@ -118,9 +118,66 @@ pub fn map_len(len: usize) -> Option<usize> {
     len.checked_add(PAGE - 1).map(|n| n & !(PAGE - 1))
 }
 
+// ---- processes ---------------------------------------------------------------------------
+
+pub const SIGKILL: c_int = 9;
+pub const WNOHANG: c_int = 1;
+
+/// A wait status (`<sys/wait.h>`) for a run that ended: `exit(code)` gives
+/// `WIFEXITED` with `WEXITSTATUS == code & 0xff`; a run that ended without a status
+/// (killed, or it crashed) reads as ended by SIGKILL.
+pub fn wait_status(status: Option<u32>) -> c_int {
+    match status { Some(code) => ((code & 0xff) << 8) as c_int, None => SIGKILL }
+}
+
+/// The words of a `system()` command line: split at blanks, with '...' and "..."
+/// keeping blanks (and `\` before `"`, `\` or `$` inside double quotes, and before any
+/// character outside quotes). No variables, globs, pipes or redirections: there is no
+/// shell, the first word is the program.
+pub fn command_words(line: &[u8]) -> Vec<Vec<u8>> {
+    let mut words = Vec::new();
+    let mut word: Option<Vec<u8>> = None;
+    let mut quote = 0u8;
+    let mut i = 0;
+    while i < line.len() {
+        let b = line[i];
+        match (quote, b) {
+            (0, b' ' | b'\t' | b'\n') => { if let Some(w) = word.take() { words.push(w); } }
+            (0, b'\'' | b'"') => { quote = b; word.get_or_insert_with(Vec::new); }
+            (0, b'\\') if i + 1 < line.len() => { i += 1; word.get_or_insert_with(Vec::new).push(line[i]); }
+            (b'"', b'\\') if matches!(line.get(i + 1), Some(b'"' | b'\\' | b'$')) => { i += 1; word.get_or_insert_with(Vec::new).push(line[i]); }
+            (q, b) if q != 0 && b == q => quote = 0,
+            _ => word.get_or_insert_with(Vec::new).push(b),
+        }
+        i += 1;
+    }
+    if let Some(w) = word { words.push(w); }
+    words
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wait_statuses_read_as_posix_says() {
+        let exited = wait_status(Some(7));
+        assert_eq!(exited & 0x7f, 0, "WIFEXITED");
+        assert_eq!((exited & 0xff00) >> 8, 7, "WEXITSTATUS");
+        assert_eq!(wait_status(Some(256 + 3)) >> 8, 3);
+        let killed = wait_status(None);
+        assert!(((killed & 0xffff) as u32).wrapping_sub(1) < 0xff, "WIFSIGNALED");
+        assert_eq!(killed & 0x7f, SIGKILL, "WTERMSIG");
+    }
+
+    #[test]
+    fn command_lines_split_like_a_shell() {
+        let w = |s: &[u8]| command_words(s).into_iter().map(|w| String::from_utf8(w).unwrap()).collect::<Vec<_>>();
+        assert_eq!(w(b"  stdspawn exit   7 "), ["stdspawn", "exit", "7"]);
+        assert_eq!(w(br#"rg "two words" 'single "q"' a\ b "" x"#), ["rg", "two words", r#"single "q""#, "a b", "", "x"]);
+        assert_eq!(w(br#"p "a\"b\\c""#), ["p", r#"a"b\c"#]);
+        assert!(w(b"   ").is_empty());
+    }
 
     #[test]
     fn select_sets_round_trip_through_poll() {

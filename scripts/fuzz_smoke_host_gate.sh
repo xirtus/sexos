@@ -33,6 +33,10 @@ if command -v cargo-fuzz >/dev/null 2>&1; then
         fuzz_kaleidoscope_ext_dnr
         fuzz_burlesque_pptx
         fuzz_batik_psd
+        fuzz_bt_gatt
+        fuzz_bt_hid_touch
+        fuzz_bt_hid_pointer
+        fuzz_swingers_rpc
     )
     
     for t in "${TARGETS[@]}"; do

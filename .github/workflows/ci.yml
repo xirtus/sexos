@@ -87,8 +87,8 @@ jobs:
       run: cargo test --locked -p vellum-edit
     - name: Gaze decoders (EXIF orientation, JPEG XL, SVG, RAW previews) on the host
       run: cargo test --locked -p gaze-codecs --all-features
-    - name: Vellum and Gaze apps (annotation geometry, form order, thumbnails, EXIF panel) on the host
-      run: cargo test --locked -p pdf -p view
+    - name: Vellum app (annotation geometry, form order, thumbnails) on the host
+      run: cargo test --locked -p pdf
     - name: Image codecs (WebP, animated GIF, AVIF, HEIC, 4-quadrant fidelity, 50k fuzzer) on the host
       run: bash scripts/sex_codecs_host_gate.sh
     - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
@@ -254,6 +254,8 @@ jobs:
       run: MEMORY_AUTHORITY_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/memory_authority_runtime_gate.sh
     - name: Guest sext paging and fault recovery
       run: PAGING_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/paging_recovery_runtime_gate.sh
+    - name: Cufflinks (Bluetooth) starts and sleeps without a controller
+      run: python3 scripts/cufflinks_idle_gate.py --log "$RUNNER_TEMP/sexos-runtime/serial.log"
     - name: Ordinary Rust and C programs
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
@@ -538,7 +540,7 @@ jobs:
   programs:
     name: Programs, packages and ports
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -578,6 +580,8 @@ jobs:
       run: python3 scripts/moan_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan"
     - name: Climax benchmark and thermal torture app
       run: python3 scripts/climax_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/climax"
+    - name: Programs run programs (std::process, posix_spawn, waitpid, kill, system)
+      run: python3 scripts/process_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/process"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4

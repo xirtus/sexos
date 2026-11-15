@@ -2,16 +2,16 @@
 name = "view"
 version = "0.1.0"
 edition = "2021"
-license.workspace = true
 
 [[bin]]
 name = "view"
 path = "src/main.rs"
 
 [dependencies]
-sex-std = { path = "../../crates/sex-std" }
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
 sex-image = { path = "../../crates/sex-image" }
-# EXIF, orientation, RAW previews, JPEG XL and SVG: Gaze's codecs.
-gaze-codecs = { path = "../../crates/gaze-codecs", features = ["jxl", "svg"] }
-# The details panel's text, and the font SVG text is drawn in.
 sex-font = { path = "../../crates/sex-font" }
+gaze-codecs = { path = "../../crates/gaze-codecs", default-features = false }
+batik-core = { path = "../../crates/batik-core", default-features = false }
+gaze-core = { path = "../../crates/gaze-core", default-features = false }

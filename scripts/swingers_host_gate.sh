@@ -6,6 +6,7 @@
 #     Swingers finds it through the same tracker over UDP (BEP 15).
 #  4. The daemon takes the magnet over Transmission's RPC (transmission-remote), downloads
 #     it from that seeder, and lists, stops and removes it with its data.
+#  5. A trackerless magnet finds the seeder through the DHT.
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 W=$(mktemp -d); trap 'kill $(jobs -p) 2>/dev/null || true; rm -rf "$W"' EXIT
@@ -23,21 +24,21 @@ check() { got=$(grep -a "^\[swingers.file\]" "$1" | awk '{print $3}'); [[ "$got"
 
 "${aria[@]}" --listen-port=16881 -d seed -V --seed-time=2 film.torrent > aria1.log 2>&1 &
 sleep 2
-timeout 120 "$B" get film.torrent --dir t1 --peer 127.0.0.1:16881 --port 16891 > t1.log
+timeout 120 "$B" get --no-dht film.torrent --dir t1 --peer 127.0.0.1:16881 --port 16891 > t1.log
 check t1.log "download from aria2 (.torrent)"
-timeout 120 "$B" get "magnet:?xt=urn:btih:$hash&x.pe=127.0.0.1:16881" --dir t2 --port 16892 > t2.log
+timeout 120 "$B" get --no-dht "magnet:?xt=urn:btih:$hash&x.pe=127.0.0.1:16881" --dir t2 --port 16892 > t2.log
 check t2.log "download from aria2 (magnet)"
 
-timeout 150 "$B" get film.torrent --dir t1 --port 16893 --seed-secs 120 > t3.log &
+timeout 150 "$B" get --no-dht film.torrent --dir t1 --port 16893 --seed-secs 120 > t3.log &
 sleep 3
 timeout 120 "${aria[@]}" --seed-time=0 --listen-port=16882 -d t4 film.torrent
 got=$(sha256sum t4/film.bin | cut -c1-64); [[ "$got" == "$want" ]] || { echo "FAIL aria2 from Swingers"; exit 1; }
 echo "ok aria2 downloads from Swingers"
-timeout 120 "$B" get "magnet:?xt=urn:btih:$hash&tr=udp%3A%2F%2F127.0.0.1%3A16970" --dir t6 --port 16895 > t6.log
+timeout 120 "$B" get --no-dht "magnet:?xt=urn:btih:$hash&tr=udp%3A%2F%2F127.0.0.1%3A16970" --dir t6 --port 16895 > t6.log
 grep -q "udp://127.0.0.1:16970 peers=" t6.log || { echo "FAIL no UDP tracker answer"; tail -20 t6.log; exit 1; }
 check t6.log "download from Swingers found through a UDP tracker (magnet)"
 
-"$B" daemon --dir t5 --port 16894 --rpc 16991 --user u --password p > t5.log 2>&1 &
+"$B" daemon --no-dht --dir t5 --port 16894 --rpc 16991 --user u --password p > t5.log 2>&1 &
 sleep 1
 R=(transmission-remote 127.0.0.1:16991 -n u:p)
 "${R[@]}" -a "magnet:?xt=urn:btih:$hash&x.pe=127.0.0.1:16893" | grep -q success
@@ -49,4 +50,14 @@ got=$(sha256sum t5/film.bin | cut -c1-64); [[ "$got" == "$want" ]] || { echo "FA
 [[ ! -e t5/film.bin ]] || { echo "FAIL remove-and-delete left the file"; exit 1; }
 noauth=$(transmission-remote 127.0.0.1:16991 -l 2>&1 || true); [[ "$noauth" == *401* ]] || { echo "FAIL RPC without password was let in"; exit 1; }
 echo "ok daemon over Transmission RPC"
+
+# 5. Trackerless: a DHT node (the daemon) is the only meeting point. The seeder announces
+#    itself there; a magnet with nothing but the hash finds it and downloads.
+"$B" daemon --dir t7r --port 16896 --rpc 16992 --dht-node 127.0.0.1:9 > t7r.log 2>&1 &
+sleep 1
+timeout 150 "$B" get film.torrent --dir t1 --port 16897 --seed-secs 90 --dht-node 127.0.0.1:16896 > t7s.log &
+sleep 3
+timeout 120 "$B" get "magnet:?xt=urn:btih:$hash" --dir t7 --port 16898 --dht-node 127.0.0.1:16896 > t7.log
+grep -q "\[swingers.dht\] $hash peers=[1-9]" t7.log || { echo "FAIL no peers from the DHT"; tail -20 t7.log; exit 1; }
+check t7.log "download through the DHT (magnet, no tracker)"
 echo "swingers host gate passed"
