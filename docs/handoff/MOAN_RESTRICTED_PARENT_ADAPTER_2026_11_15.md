@@ -16,7 +16,7 @@ bounded; staging and result copying remain synchronous, with no frame-time claim
 
 Cancellation and metadata release use a nonblocking SDK End state. Poll never
 waits for its reply. Moan retains the job and disables file/project actions until
-actual child retirement and cleanup ACK, or verified Files replacement. Errors,
+actual child retirement plus either cleanup ACK or verified Files replacement. Errors,
 timeouts and unknown status cannot declare completion. An accepted result is
 retained through release; a rejected result retains Failed through cleanup.
 
@@ -42,3 +42,13 @@ result lifetime issues before this checkpoint. Runtime crash/restart and isolati
 qualification is incomplete: automatic security review stopped the test agent,
 including the reduced crash/restart scope. No new QEMU sandbox proof, hostile-code
 containment, installer, merge or current-master compatibility claim is made.
+
+Follow-up UI review keeps every busy Close deferred until cleanup, including a
+completed result awaiting memory retry, so Discard is not opened twice. A
+Finishing state keeps Play disabled after automatic result import until cleanup
+ends. The updated real allocation-failure fixture still injects failures in both
+result-byte allocation and quantization, verifies no retry spin, retries the same
+completed job once and retains it through asynchronous release. Moan's 60 host
+tests, including the finishing-state project/Play lock, pass in
+`/tmp/sexos-root-moan-cleanup-ui-host-v2.log`; the updated OOM/Term focused set
+passes 13 tests in `/tmp/sexos-root-repaired-fixtures-focused.log`.

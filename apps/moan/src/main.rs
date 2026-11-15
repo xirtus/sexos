@@ -321,17 +321,13 @@ mod guest {
                     (playing || paused) && recording.is_none() && !plugin.busy(),
                 );
                 let outcome = if r == Response::Close {
-                    if plugin.busy() && !plugin.retired() {
+                    if plugin.busy() {
                         plugin.cancel();
                         pending_plugin_close = true;
                         studio.plugin_status(&mut app.ui, plugin.status());
                         studio.message(&mut app.ui, "Cancelling offline render before closing");
                         moan::project_io::decline_close(&app);
                         continue;
-                    }
-                    if plugin.busy() {
-                        plugin.cancel();
-                        studio.plugin_status(&mut app.ui, plugin.status());
                     }
                     let action =
                         studio.request_close_with_pending(&mut app.ui, recording.is_some());

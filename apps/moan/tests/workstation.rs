@@ -360,6 +360,18 @@ fn offline_job_locks_project_replacement_until_retirement_or_explicit_memory_ret
         );
     }
     assert_eq!(studio.session.encode_project().unwrap(), before);
+    studio.plugin_status(&mut ui, moan::plugins::Status::Finishing);
+    let play = studio.buttons.iter().find(|(_, name)| *name == "Play").unwrap().0;
+    assert!(!ui.is_enabled(play));
+    for command in [
+        "moan.play", "moan.new-project", "moan.open-project", "moan.save-project",
+    ] {
+        assert_eq!(
+            studio.on(&mut ui, &Response::Command(command.into())).unwrap(), None
+        );
+    }
+    assert_eq!(studio.session.encode_project().unwrap(), before);
+    studio.plugin_status(&mut ui, moan::plugins::Status::Rendering);
     let render = studio
         .buttons
         .iter()

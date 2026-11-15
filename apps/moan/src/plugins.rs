@@ -40,6 +40,7 @@ pub enum Status {
     WaitingForMemory,
     Idle,
     Rendering,
+    Finishing,
     Cancelling,
     Ready,
     Failed,
@@ -50,6 +51,7 @@ impl Status {
             Self::WaitingForMemory => "Completed offline render kept; free memory and retry",
             Self::Idle => "Offline render ready",
             Self::Rendering => "Offline render running",
+            Self::Finishing => "Finishing offline render",
             Self::Cancelling => "Cancelling offline render; waiting for helper retirement",
             Self::Ready => "Offline render ready to import",
             Self::Failed => "Offline render failed; original region unchanged",
@@ -302,7 +304,11 @@ pub mod guest {
         pub fn take_result(&mut self) -> Option<Audio> {
             let result = self.result.take();
             if result.is_some() {
-                self.status = Status::Idle;
+                self.status = if self.active.is_some() {
+                    Status::Finishing
+                } else {
+                    Status::Idle
+                };
             }
             result
         }

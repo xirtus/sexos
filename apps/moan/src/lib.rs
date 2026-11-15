@@ -1173,6 +1173,7 @@ impl Studio {
                     !matches!(
                         status,
                         plugins::Status::Rendering
+                            | plugins::Status::Finishing
                             | plugins::Status::Cancelling
                             | plugins::Status::WaitingForMemory
                     ),
@@ -2161,6 +2162,7 @@ impl Studio {
             let plugin_active = matches!(
                 self.plugin_state,
                 plugins::Status::Rendering
+                    | plugins::Status::Finishing
                     | plugins::Status::Cancelling
                     | plugins::Status::WaitingForMemory
             );
