@@ -75,6 +75,10 @@ pub struct Doc {
     pub queue: Vec<Op>,
     /// Text editor buffers: (name, text).
     pub texts: Vec<(String, String)>,
+    /// Keyframe animation (anim.rs).
+    pub anim: crate::anim::Anim,
+    /// Report history, clipboard and editor mailbox (anim.rs).
+    pub info: crate::anim::Info,
 }
 
 impl Default for Doc {
@@ -105,6 +109,8 @@ impl Doc {
             want_workspace: None,
             queue: Vec::new(),
             texts: Vec::new(),
+            anim: Default::default(),
+            info: Default::default(),
         }
     }
 
@@ -345,6 +351,7 @@ impl Doc {
             }
             "screen.animation_play" => self.playing = !self.playing,
             "screen.workspace" => self.want_workspace = Some(arg.to_string()),
+            _ if crate::anim::run(self, op) => {}
             _ => self.unknown(op),
         }
     }

@@ -10,6 +10,7 @@
 //!
 //! Everything here is plain Rust drawing into a pixel buffer, so host tests
 //! drive the whole window with synthetic input and read back its pixels.
+pub mod anim;
 pub mod app;
 pub mod doc;
 pub mod draw;
