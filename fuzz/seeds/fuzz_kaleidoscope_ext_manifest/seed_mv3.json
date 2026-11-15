@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Full MV3 Ext",
+  "version": "2.1.0",
+  "description": "An extension for testing",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": ["storage", "alarms"],
+  "host_permissions": ["*://*.example.com/*", "https://api.github.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["*://*.example.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start"
+    }
+  ]
+}
