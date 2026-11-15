@@ -20,15 +20,27 @@ pub enum Text {
     Char(char),
 }
 
+/// Program -> Shell: which keys this program wants besides the usual ones (arg0 =
+/// [`DESKTOP_KEYS`] | [`KEYPAD`]). Shell keeps it for this run of the program.
+pub const OP_KEYS: u64 = 0x62;
+/// Tab, backtick, F1-F10, F12, Scroll Lock and Insert reach the program while it has
+/// focus, instead of Shell. F11 and every Super chord stay Shell's.
+pub const DESKTOP_KEYS: u64 = 1;
+/// Numpad keys arrive with [`Key::keypad`] set, so they differ from the grey arrows,
+/// Home/End, Page Up/Down, Insert and Delete that share their codes.
+pub const KEYPAD: u64 = 2;
+
 /// `alt` is the left Alt key; the right one is AltGr and only changes what a key types.
 /// A key pressed with Alt types nothing ([`Key::char`]): it is a shortcut.
+/// `keypad`: the key is on the numpad (only for programs that asked for [`KEYPAD`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Key { pub code: u8, pub shift: bool, pub control: bool, pub alt: bool, pub text: Text }
+pub struct Key { pub code: u8, pub shift: bool, pub control: bool, pub alt: bool, pub keypad: bool, pub text: Text }
 impl Key {
-    pub const fn new(code: u8, shift: bool, control: bool) -> Self { Self { code, shift, control, alt: false, text: Text::Us } }
+    pub const fn new(code: u8, shift: bool, control: bool) -> Self { Self { code, shift, control, alt: false, keypad: false, text: Text::Us } }
     pub const fn with_alt(self, alt: bool) -> Self { Self { alt, ..self } }
+    pub const fn with_keypad(self, keypad: bool) -> Self { Self { keypad, ..self } }
     pub const fn wire(self) -> u64 {
-        let base = TAG | self.code as u64 | (self.shift as u64) << 8 | (self.control as u64) << 9 | (self.alt as u64) << 10;
+        let base = TAG | self.code as u64 | (self.shift as u64) << 8 | (self.control as u64) << 9 | (self.alt as u64) << 10 | (self.keypad as u64) << 11;
         match self.text {
             Text::Us => base,
             Text::Nothing => base | TEXT,
@@ -36,7 +48,7 @@ impl Key {
         }
     }
     pub fn decode(word: u64, down: u64, class: u64) -> Option<Self> {
-        if down != 1 || class != 1 || word & !(TAG | TEXT | 0x7ff | SCALAR_MASK << SCALAR_SHIFT) != 0 || word & TAG == 0 { return None; }
+        if down != 1 || class != 1 || word & !(TAG | TEXT | 0xfff | SCALAR_MASK << SCALAR_SHIFT) != 0 || word & TAG == 0 { return None; }
         let scalar = (word >> SCALAR_SHIFT) as u32;
         let text = match (word & TEXT != 0, scalar) {
             (false, 0) => Text::Us,
@@ -44,7 +56,7 @@ impl Key {
             (true, 0) => Text::Nothing,
             (true, s) => Text::Char(char::from_u32(s)?),
         };
-        let key = Self { code: word as u8, shift: word & 256 != 0, control: word & 512 != 0, alt: word & 1024 != 0, text };
+        let key = Self { code: word as u8, shift: word & 256 != 0, control: word & 512 != 0, alt: word & 1024 != 0, keypad: word & 2048 != 0, text };
         (key.code != 0 && key.wire() == word).then_some(key)
     }
     /// A key going up: Shell sends the word of the press with `down` = 0 to the focused

@@ -212,7 +212,7 @@ unsafe fn app_input_poll(){
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,key.wire(),0,EV_KEY);
             if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
             APP_INPUT.pop();
-            sex_pdx::serial_record!("[shell.program.key.up] pd={} task={} code={:#x} status={}",item.destination.subject.pd,item.destination.subject.task,key.code,status);
+            sex_pdx::serial_record!("[shell.program.key.up] pd={} task={} code={:#x} keypad={} status={}",item.destination.subject.pd,item.destination.subject.task,key.code,key.keypad as u8,status);
         },
         app_input::Input::Resize(wire)=>{
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,wire,0,app_input::RESIZE_CLASS);
@@ -10407,6 +10407,33 @@ fn dnd_send(route:u64,op:u64,m:sex_pdx::dnd::Message)->bool{
 }
 // ── The clipboard for ordinary programs (sex_pdx::program_clipboard) ─────
 /// The program the person last pressed a key or clicked in, and when.
+/// The extra keys each program run asked for (`app_key::OP_KEYS`), by pd and task.
+static mut PROGRAM_KEYS:[Option<(sex_pdx::clipboard::Subject,u64)>;16]=[None;16];
+/// The key edge being handled came from the numpad (sexinput sets arg0 bit 8).
+static mut KEY_KEYPAD:bool=false;
+unsafe fn program_keys(subject:sex_pdx::clipboard::Subject)->u64{
+    PROGRAM_KEYS.iter().flatten().find(|(s,_)|*s==subject).map_or(0,|(_,f)|*f)
+}
+/// A program asks for desktop keys or numpad marks; only a running program can.
+unsafe fn shell_keys_message(msg:&sex_pdx::PdxMessage)->bool{
+    use sex_pdx::app_key::{OP_KEYS,DESKTOP_KEYS,KEYPAD};
+    if msg.type_id!=OP_KEYS{return false}
+    let subject=sex_pdx::clipboard::Subject{pd:msg.caller_pd,task:msg.caller_task};
+    let program=APP_CUSTODY.iter().flatten().any(|e|e.target==subject.pd&&e.task==subject.task&&!e.dead&&!e.retired
+        &&app_catalog::by_surface(e.target,e.surface).is_some_and(|r|r.app==app_catalog::App::Program));
+    let flags=msg.arg0&(DESKTOP_KEYS|KEYPAD);
+    if !program||msg.arg0!=flags||msg.arg1!=0||msg.arg2!=0{
+        sex_pdx::serial_record!("[shell.keys.denied] caller={} task={}",subject.pd,subject.task);return true
+    }
+    // Replace this run's entry, else a free one, else one of a program that ended.
+    let live=|s:&sex_pdx::clipboard::Subject|APP_CUSTODY.iter().flatten().any(|e|e.target==s.pd&&e.task==s.task&&!e.dead&&!e.retired);
+    let slot=PROGRAM_KEYS.iter().position(|e|e.is_some_and(|(s,_)|s==subject))
+        .or_else(||PROGRAM_KEYS.iter().position(|e|e.is_none()))
+        .or_else(||PROGRAM_KEYS.iter().position(|e|e.is_some_and(|(s,_)|!live(&s))));
+    if let Some(i)=slot{PROGRAM_KEYS[i]=Some((subject,flags));}
+    sex_pdx::serial_record!("[shell.keys.wanted] pd={} task={} flags={} ok={}",subject.pd,subject.task,flags,slot.is_some() as u8);
+    true
+}
 static mut CLIP_TOUCH:Option<(sex_pdx::clipboard::Subject,u64)>=None;
 /// A copy being put together, and whose.
 static mut CLIP_FROM:Option<sex_pdx::clipboard::Subject>=None;
@@ -10733,11 +10760,15 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     app_input_poll();return true;
                 }
                 if let Some(destination)=focused_program_participant(){
-                    let desktop_key=matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59);
+                    let wants=program_keys(destination.subject);
+                    let keypad=KEY_KEYPAD&&wants&sex_pdx::app_key::KEYPAD!=0;
+                    // F11 always stays Shell's way out of a program that takes the rest.
+                    let desktop_key=matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59)
+                        &&(code==0x57||wants&sex_pdx::app_key::DESKTOP_KEYS==0);
                     // A key going up, a modifier's too, reaches the program as the press's
                     // word with down=0 (walk keys, hold-to-act tools); older programs drop it.
                     if value==0 && !desktop_key{
-                        if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::KeyUp(APP_MODIFIERS.key(code))}){
+                        if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::KeyUp(APP_MODIFIERS.key(code).with_keypad(keypad))}){
                             sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
                         }
                         app_input_poll();return true;
@@ -10748,7 +10779,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(shortcut),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
                         if changed{keyboard_preedit_notice();}app_input_poll();return true;
                     }
-                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code))}){
+                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code).with_keypad(keypad))}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
                     }else if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}
                     app_input_poll();return true;
@@ -11244,6 +11275,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         );
     }
 
+    if event_class==EV_KEY {KEY_KEYPAD=arg0>>8&1==1;}
     if event_class==EV_KEY && desktop_shortcut(scancode,value){return;}
 
     if event_class == EV_KEY {
@@ -26861,6 +26893,7 @@ pub extern "C" fn _start() -> ! {
             if shell_launch_message(&msg) { continue; }
             if shell_dnd_message(&msg) { continue; }
             if shell_clip_message(&msg) { continue; }
+            if shell_keys_message(&msg) { continue; }
             if config_watch::receive(&msg) { continue; }
             if lock::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
@@ -27154,6 +27187,7 @@ pub extern "C" fn _start() -> ! {
                         }
 
                         // ── Event-class dispatch ──
+                        if event_class==EV_KEY {KEY_KEYPAD=msg.arg0>>8&1==1;}
                         if event_class==EV_KEY && desktop_shortcut(scancode,value) {
                             mutated=true;
                         } else if event_class == EV_KEY && value == 1 {
