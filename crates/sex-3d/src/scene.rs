@@ -460,6 +460,8 @@ pub struct Scene {
     pub frame_current: i32,
     /// Node groups (Blender's node group data-blocks), shared by trees.
     pub node_groups: Vec<crate::nodes::NodeTree>,
+    /// The compositing node tree (Compositor's Use Nodes).
+    pub compositor: Option<crate::nodes::NodeTree>,
 }
 
 impl Default for Scene {
@@ -481,6 +483,7 @@ impl Default for Scene {
             fps: 24.0,
             frame_current: 1,
             node_groups: Vec::new(),
+            compositor: None,
         }
     }
 }

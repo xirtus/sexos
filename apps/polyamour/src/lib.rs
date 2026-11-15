@@ -18,6 +18,7 @@ pub mod edit;
 pub mod edit_ops;
 pub mod editors;
 pub mod input;
+pub mod nodetree;
 pub mod persist;
 pub mod screen;
 pub mod settings;

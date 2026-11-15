@@ -9,7 +9,10 @@
 //! VM, the compositor, geometry nodes).
 use std::fmt;
 
+pub mod edit;
+pub mod enums;
 pub mod registry;
+pub mod update;
 
 pub use registry::{categories, new_node, node_types, Category, NodeType};
 

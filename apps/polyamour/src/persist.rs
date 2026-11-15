@@ -54,6 +54,7 @@ pub fn save(doc: &Doc) -> String {
     for (name, body) in &doc.texts {
         out.push_str(&format!("#@text {}\t{}\n", esc(name), esc(body)));
     }
+    trees::save(&doc.scene, &mut out);
     out
 }
 
@@ -114,9 +115,12 @@ pub fn load(text: &str) -> Result<Doc, String> {
         }
     }
     doc.settings.migrate_sensors(&mut doc.scene);
+    trees::load(&mut doc.scene, text);
     doc.anim.dirty = true;
     Ok(doc)
 }
+
+mod trees;
 
 fn interp_name(i: Interp) -> &'static str {
     match i {
@@ -126,7 +130,7 @@ fn interp_name(i: Interp) -> &'static str {
     }
 }
 
-fn esc(s: &str) -> String {
+pub(crate) fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
@@ -140,7 +144,7 @@ fn esc(s: &str) -> String {
     o
 }
 
-fn unesc(s: &str) -> String {
+pub(crate) fn unesc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     let mut it = s.chars();
     while let Some(c) = it.next() {

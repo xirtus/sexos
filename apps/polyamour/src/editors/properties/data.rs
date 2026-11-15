@@ -523,8 +523,14 @@ pub fn material(l: &mut L, d: &mut Doc, c: &mut Ctx) {
             l.y += 120 + GAP;
         }
     });
+    let has_tree = d.scene.materials[mi].node_tree.is_some();
+    if has_tree {
+        super::nodepanel::material(l, d, &mut c.open_picker, mi);
+    }
+    if !has_tree {
     l.panel(d, "material.surface", "Surface", true, &mut |l, d| {
         let m = d.scene.materials[mi].clone();
+        super::nodepanel::use_nodes_button(l, d, crate::nodetree::TreeRef::Material(mi));
         l.enumeration("Surface", "surface", "Principled BSDF", &["Principled BSDF"]);
         if let Some(ti) = m.base_color_texture {
             let n = d.scene.images.get(ti).map(|i| i.name.clone()).unwrap_or_default();
@@ -606,8 +612,11 @@ pub fn material(l: &mut L, d: &mut Doc, c: &mut Ctx) {
             });
         });
     });
-    l.panel(d, "material.volume", "Volume", false, &mut |l, _| l.info("Volume", "None"));
-    l.panel(d, "material.displacement", "Displacement", false, &mut |l, _| l.info("Displacement", "Default"));
+    }
+    if !has_tree {
+        l.panel(d, "material.volume", "Volume", false, &mut |l, _| l.info("Volume", "None"));
+        l.panel(d, "material.displacement", "Displacement", false, &mut |l, _| l.info("Displacement", "Default"));
+    }
     l.panel(d, "material.settings", "Settings", false, &mut |l, d| {
         let mut v = !d.scene.materials[mi].double_sided;
         if l.check("", "Backface Culling", &mut v) {

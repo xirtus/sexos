@@ -11,9 +11,10 @@
 //! applies at the start of its next draw, before anything else runs them.
 mod data;
 pub mod icons;
-mod layout;
+pub mod layout;
+pub mod nodepanel;
 mod object;
-mod picker;
+pub mod picker;
 mod tabs;
 
 pub use object::{rename_object, set_parent};
@@ -117,6 +118,8 @@ pub enum ColorTarget {
     Emission(usize),
     World,
     Light(usize),
+    /// A colour inside a node of a node tree.
+    Node(crate::nodetree::TreeRef, usize, crate::nodetree::NodeColor),
 }
 
 /// Per-frame context the panels share.
