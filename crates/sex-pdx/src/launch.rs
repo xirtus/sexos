@@ -87,7 +87,7 @@ pub fn program_for(path: &[u8]) -> Option<&'static [u8]> {
     const TABLE: &[(&[u8], &[&[u8]])] = &[
         (b"pdf", &[b"pdf"]),
         (b"play", &[b"mp4", b"m4v", b"mov", b"webm", b"mkv", b"ogv", b"avi", b"mp3", b"m4a", b"aac", b"ogg", b"opus", b"oga", b"flac", b"wav"]),
-        (b"view", &[b"png", b"jpg", b"jpeg", b"webp", b"gif", b"bmp"]),
+        (b"gaze", &[b"png", b"jpg", b"jpeg", b"webp", b"gif", b"bmp"]),
         (b"jot", &[b"txt", b"md", b"rs", b"toml", b"json", b"c", b"h", b"cpp", b"py", b"lua", b"sh", b"csv", b"log", b"ini", b"cfg", b"conf", b"yaml", b"yml", b"xml"]),
     ];
     TABLE.iter().find(|(_, exts)| exts.contains(&ext)).map(|(program, _)| *program)
