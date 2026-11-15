@@ -41,9 +41,9 @@ mod program {
         sex_pdx::task_finish(1);
     }
 
-    /// The clip, read through Files a piece at a time (as Play reads it).
+    /// The clip, read through Files a piece at a time. It holds no Window: reads go
+    /// straight to Files, so events stay queued on the program's own window.
     struct FileSource {
-        window: *mut Window,
         path: Vec<u8>,
         len: u64,
         cache: Vec<u8>,
@@ -61,9 +61,7 @@ mod program {
             if !(at >= self.cache_at && at < self.cache_at + self.cache.len() as u64) {
                 let want = (256 * 1024u64).min(self.len - at) as usize;
                 self.cache.resize(want, 0);
-                // The window lives until the program ends, longer than any decoder.
-                let window = unsafe { &mut *self.window };
-                match files::read_at(window, &self.path, at, &mut self.cache) {
+                match files::direct::read_at(&self.path, at, &mut self.cache) {
                     Ok(got) if got > 0 => {
                         self.cache.truncate(got);
                         self.cache_at = at;
@@ -78,8 +76,8 @@ mod program {
         }
     }
 
-    fn open_decoder(window: *mut Window, path: &[u8], len: u64) -> Result<Decoder, sex_media::Error> {
-        Decoder::open(Box::new(FileSource { window, path: path.to_vec(), len, cache: Vec::new(), cache_at: 0 }))
+    fn open_decoder(path: &[u8], len: u64) -> Result<Decoder, sex_media::Error> {
+        Decoder::open(Box::new(FileSource { path: path.to_vec(), len, cache: Vec::new(), cache_at: 0 }))
     }
 
     /// The picture a source shows at a time: decodes forward, seeking only when asked
@@ -133,7 +131,6 @@ mod program {
     /// pictures and sound each read forward.
     struct SoundFeed {
         dec: Option<Decoder>,
-        rate: u32,
         pieces: Vec<SoundPiece>,
         piece: usize,
         /// Output samples written so far.
@@ -163,13 +160,9 @@ mod program {
                 match dec.next(&mut tiny, 2, 2, &mut self.scratch)? {
                     Next::Sound { frames, at_ms } => {
                         let start = at_ms.max(0) as u64 * RATE as u64 / 1000;
-                        // Bring the source to the output rate (nearest sample).
-                        let out_n = frames as u64 * RATE as u64 / self.rate.max(1) as u64;
+                        // The decoder already gives 48 kHz stereo, whatever the source rate.
                         self.held.clear();
-                        for i in 0..out_n {
-                            let j = (i * self.rate as u64 / RATE as u64) as usize;
-                            self.held.push(self.scratch[j.min(frames.saturating_sub(1))]);
-                        }
+                        self.held.extend_from_slice(&self.scratch[..frames.min(self.scratch.len())]);
                         self.held_at = start;
                         if from < start + self.held.len() as u64 && from + RATE as u64 / 10 >= start {
                             return Ok(true);
@@ -242,6 +235,8 @@ mod program {
         window: &'a mut Window,
         path: &'a [u8],
         feed: Option<&'a mut SoundFeed>,
+        /// The edit's length in output samples: sound never runs past it.
+        total: u64,
         fps: (u32, u32),
         frames: u64,
     }
@@ -253,7 +248,7 @@ mod program {
             self.ex.picture(pixels, n).map_err(|_| "The encoder refused a picture.")?;
             drain(self.ex, self.window, self.path)?;
             if let Some(feed) = self.feed.as_deref_mut() {
-                let until = (at as u64 * RATE as u64 / SECOND as u64) + RATE as u64 / 10;
+                let until = ((at as u64 * RATE as u64 / SECOND as u64) + RATE as u64 / 10).min(self.total);
                 feed.fill(self.ex, self.window, self.path, until)?;
             }
             self.frames += 1;
@@ -444,9 +439,8 @@ mod program {
             }
             let wp: *mut Window = &mut self.window;
             let mut feed = if self.has_sound {
-                let dec = open_decoder(wp, &self.path, self.len).ok();
-                let rate = dec.as_ref().map_or(RATE, |d| d.info.sample_rate.max(1));
-                Some(SoundFeed { dec, rate, pieces: sound_pieces(&tl, RATE), piece: 0, written: 0, held: Vec::new(), held_at: 0, scratch: vec![[0; 2]; 8192] })
+                let dec = open_decoder(&self.path, self.len).ok();
+                Some(SoundFeed { dec, pieces: sound_pieces(&tl, RATE), piece: 0, written: 0, held: Vec::new(), held_at: 0, scratch: vec![[0; 2]; 8192] })
             } else {
                 None
             };
@@ -457,7 +451,7 @@ mod program {
             // Safety of the alias: the sink and the feed use the window only between the
             // grabber's reads, never during one, and all on this one thread.
             let window = unsafe { &mut *wp };
-            let mut sink = Sink { ex: &mut ex, window, path: out, feed: feed.as_mut(), fps: (tl.fps_num, tl.fps_den), frames: 0 };
+            let mut sink = Sink { ex: &mut ex, window, path: out, feed: feed.as_mut(), total, fps: (tl.fps_num, tl.fps_den), frames: 0 };
             let frames = export_pictures(&tl, None, w * h, &mut src, &mut sink).map_err(|e| match e {
                 sex_splice::export::ExportError::Picture(_) => "Cannot read the clip's pictures.",
                 sex_splice::export::ExportError::Output(why) => why,
@@ -550,8 +544,7 @@ mod program {
             Err(_) => sex_splice::transcript::Transcript { media: 0, words: Vec::new() },
         };
         drop(text);
-        let wp: *mut Window = &mut window;
-        let (grab, duration, fps, has_sound) = match open_decoder(wp, &path, len) {
+        let (grab, duration, fps, has_sound) = match open_decoder(&path, len) {
             Ok(dec) => {
                 let info = dec.info.clone();
                 let (w, h) = sex_media::fit(info.width.max(2) as usize, info.height.max(2) as usize, 640, 360);

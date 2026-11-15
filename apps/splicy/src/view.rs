@@ -96,11 +96,14 @@ pub struct View {
     small: Pen,
     /// How far the transcript is scrolled, in pixels.
     pub scroll: i32,
+    /// The caret and anchor last brought into view, so a wheel scroll away from an
+    /// unmoved caret stays where the editor put it.
+    followed: Option<(usize, Option<usize>)>,
 }
 
 impl Default for View {
     fn default() -> Self {
-        View { pen: Pen::sans(16), small: Pen::sans(12), scroll: 0 }
+        View { pen: Pen::sans(16), small: Pen::sans(12), scroll: 0, followed: None }
     }
 }
 
@@ -241,8 +244,10 @@ impl View {
         }
         let lh = self.line_height();
         let placed = self.layout(ed, r.w);
-        // Keep the caret's line in view.
-        if let Some(p) = placed.get(ed.caret) {
+        // Bring the caret's line into view when the caret or selection moved.
+        let now = Some((ed.caret, ed.anchor));
+        if let Some(p) = placed.get(ed.caret).filter(|_| self.followed != now) {
+            self.followed = now;
             if p.y < self.scroll {
                 self.scroll = p.y;
             }

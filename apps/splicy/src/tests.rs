@@ -211,3 +211,23 @@ fn painting_shows_the_picture_selection_and_cuts_at_any_size() {
     let join_x = strip.x + strip.w / 4; // 2 s of 8 s
     assert_eq!(px[(strip.y + 2) as usize * 900 + join_x as usize], view::ACCENT, "join marked on the strip");
 }
+
+#[test]
+fn a_wheel_scroll_stays_until_the_caret_moves() {
+    // A transcript taller than the pane.
+    let mut text = String::new();
+    for i in 0..400 {
+        text.push_str(&alloc::format!("{} {} word{}\n", i * 300, i * 300 + 200, i));
+    }
+    let mut ed = Editor::open("long.webm", 130 * SECOND, (30, 1), true, words::parse(&text).unwrap());
+    let mut view = View::default();
+    let mut px = alloc::vec![0u32; 800 * 600];
+    view.paint(&mut px, 800, 600, &ed, None, 0, "");
+    assert_eq!(view.scroll, 0);
+    view.scroll = 120;
+    view.paint(&mut px, 800, 600, &ed, None, 0, "");
+    assert_eq!(view.scroll, 120, "the scroll stays while the caret is still");
+    ed.move_caret(1, false);
+    view.paint(&mut px, 800, 600, &ed, None, 0, "");
+    assert_eq!(view.scroll, 0, "moving the caret brings it back into view");
+}
