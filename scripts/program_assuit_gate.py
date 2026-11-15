@@ -8,6 +8,10 @@
 * Ctrl+S writes the docx; the window closes.
 * A second `run assuit` reads the saved file back with the edit in its first line; Ctrl+End
   and fifty Enters push the text onto page 2, which the view draws below page 1.
+* Before that, Ctrl+F and "assuit" with Enter select a match and Enter again the next one;
+  Esc closes the prompt and Ctrl+C copies the match, which Ctrl+V pastes on page 2.
+* Ctrl+H replaces every "assuit" with "assuit writer"; Ctrl+Home and Ctrl+Shift+S open the
+  style list on the title's style, Up and Enter make the title a Heading 1.
 
 No kernel panic, page fault or std abort anywhere in the record."""
 import argparse,os,re,shutil,time
@@ -34,6 +38,9 @@ def main():
   assert int(m[3])>3000,f'page 1 looks empty: {m[0]}'
   g['focus'](SURFACE[int(o[1])]);time.sleep(.8)
   return o
+ def press(*keys):
+  # Down in order, up in reverse, as separate events (send-key can leave Shift held here).
+  q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]});time.sleep(.3)
  def close(o):
   s=len(t());q.key('f11');g['wait'](r'\[assuit\.closed\]\n',s,120)
   g['wait'](rf'\[app\.private\.retired\] target={o[1]} task={o[2]} ',s,180)
@@ -43,7 +50,7 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-opened.ppm')})
   s=len(t());q.key('end');type_line(' today')
   g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today\n',s,300)
-  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'home'}],'hold-time':80})
+  s=len(t());press('shift','home')
   g['wait'](r'\[assuit\.selection\] rects=1 pages=1\n',s,120)
   g['chord']('ctrl','b',r'\[assuit\.command\] format\.bold\n')
   m=g['chord']('ctrl','s',r'\[assuit\.saved\] name=welcome\.docx bytes=(\d+)\n')
@@ -51,11 +58,36 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-edited.ppm')})
   close(o)
   o=opened()
-  s=len(t());q.key('end');q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'1'}],'hold-time':80})
+  s=len(t());q.key('end');press('shift','1')
   g['wait'](r'\[assuit\.text\] chars=\d+ first=Welcome to Assuit today!\n',s,300)
+  # Find, then copy the match.
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80});time.sleep(.5)
+  s=len(t());type_line('assuit');q.key('ret')
+  f1=g['wait'](r'\[assuit\.find\] what=assuit match=(\d+) of=(\d+)\n',s,120)
+  assert int(f1[2])>=2,f1[0]
+  s=len(t());q.key('ret')
+  f2=g['wait'](r'\[assuit\.find\] what=assuit match=(\d+) of=(\d+)\n',s,120)
+  assert f2[1]!=f1[1],(f1[0],f2[0])
+  q.key('esc');time.sleep(.3)
+  g['wait'](r'\[assuit\.selection\] rects=1 pages=1\n',s,60)
+  g['chord']('ctrl','c',r'\[assuit\.command\] edit\.copy\n')
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'end'}],'hold-time':80});time.sleep(.5)
   for _ in range(50):q.key('ret');time.sleep(.08)
   g['wait'](r'\[assuit\.page\] page=2 pages=2 width=\d+ height=\d+ ink=\d+ ms=\d+\n',s,300)
+  g['chord']('ctrl','v',r'\[assuit\.command\] edit\.paste\n')
+  # Replace all, then a paragraph style.
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'h'}],'hold-time':80});time.sleep(.5)
+  s=len(t());type_line('assuit');q.key('ret');type_line('assuit writer');q.key('ret')
+  r=g['wait'](r'\[assuit\.replace\] what=assuit with=assuit writer count=(\d+)\n',s,120)
+  assert int(r[1])>=3,r[0]
+  q.key('esc');time.sleep(.3)
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'home'}],'hold-time':80});time.sleep(.5)
+  s=len(t());keys=('ctrl','shift','s')
+  q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]})
+  g['wait'](r'\[assuit\.styles\] count=\d+ current=Title\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-styles.ppm')})
+  s=len(t());q.key('up');time.sleep(.3);q.key('ret')
+  g['wait'](r'\[assuit\.style\] style=Heading 1\n',s,120)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-pages.ppm')})
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text

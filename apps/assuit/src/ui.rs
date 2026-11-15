@@ -32,6 +32,25 @@ pub struct Ui {
     pen: Pen,
     /// Where each page sat in the last draw: (top in the stack, left, width, height, scale).
     places: Vec<(i32, i32, i32, i32, f32)>,
+    /// The Ctrl+F or Ctrl+H prompt, while it is open.
+    find: Option<Prompt>,
+    /// The Ctrl+Shift+S style list, while it is open: (id, name) and the highlighted row.
+    picker: Option<(Vec<(String, String)>, usize)>,
+}
+
+/// Ctrl+F asks what to find; Ctrl+H also asks what to put in its place.
+struct Prompt {
+    what: String,
+    with: Option<String>,
+    /// Typing goes into `with` (Tab or Enter moves there from `what`).
+    on_with: bool,
+}
+
+impl Prompt {
+    /// The text being typed into.
+    fn field(&mut self) -> &mut String {
+        match &mut self.with { Some(with) if self.on_with => with, _ => &mut self.what }
+    }
 }
 
 const GAP: i32 = 12;
@@ -44,6 +63,8 @@ mod code {
     pub const TAB: u8 = 0x0F;
     pub const ENTER: u8 = 0x1C;
     pub const S: u8 = 0x1F;
+    pub const F: u8 = 0x21;
+    pub const H: u8 = 0x23;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
 }
@@ -70,7 +91,7 @@ fn key_name(key: Key) -> Option<String> {
 
 impl Ui {
     pub fn new(book: Book, name: String) -> Ui {
-        Ui { book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new() }
+        Ui { book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None }
     }
 
     fn scale(&mut self, page: usize, width: i32) -> f32 {
@@ -152,13 +173,43 @@ impl Ui {
                 if bottom > top { canvas.fill(cx, top, 2, bottom - top, CARET); }
             }
         }
+        if let Some((styles, at)) = &self.picker {
+            let row = self.pen.line_height() + 8;
+            // As many rows as fit, scrolled so the highlighted one shows.
+            let fit = ((view_h - 2 * MARGIN - 34) / row).max(1) as usize;
+            let shown = styles.len().min(fit);
+            let first = (at + 1).saturating_sub(shown);
+            let (bw, bh) = (240, row * shown as i32 + 34);
+            let (bx, by) = (MARGIN, (view_h - bh - MARGIN).max(MARGIN.min(view_h - bh)));
+            canvas.fill(bx + 3, by + 3, bw, bh, SHADOW);
+            canvas.fill(bx, by, bw, bh, BAR_BG);
+            canvas.frame(bx, by, bw, bh, LINE);
+            self.pen.text(&mut canvas, bx + 10, by + 8, "Apply a style (Enter, Esc)", DIM, Some((bx, bw - 10)));
+            for (i, (_, name)) in styles.iter().enumerate().skip(first).take(shown) {
+                let y = by + 30 + (i - first) as i32 * row;
+                if i == *at { canvas.fill(bx + 4, y - 2, bw - 8, row, SELECTED); }
+                self.pen.text(&mut canvas, bx + 12, y + 2, name, if i == *at { 0x00ffffff } else { CARET }, Some((bx, bw - 12)));
+            }
+        }
         canvas.fill(0, view_h, w, STATUS_H, BAR_BG);
         canvas.fill(0, view_h, w, 1, LINE);
         let pages = self.places.len();
         let page = caret.map_or(0, |c| c.page);
-        let status = if self.message.is_empty() {
-            format!("{}{}   Page {} of {}   Ctrl+S save  Ctrl+B/I/U style  Ctrl+Z undo  Ctrl+=/- zoom",
-                self.name, if self.book.dirty() { " (changed)" } else { "" }, page + 1, pages)
+        let status = if let Some(p) = &self.find {
+            match &p.with {
+                None => {
+                    let said = if self.message.is_empty() { "Enter finds the next, Esc closes" } else { &self.message };
+                    format!("Find: {}_   {said}", p.what)
+                }
+                Some(with) => {
+                    let said = if self.message.is_empty() { "Tab switches, Enter replaces all, Esc closes" } else { &self.message };
+                    let (a, b) = if p.on_with { ("", "_") } else { ("_", "") };
+                    format!("Find: {}{a}   Replace with: {with}{b}   {said}", p.what)
+                }
+            }
+        } else if self.message.is_empty() {
+            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+F find  Ctrl+H replace  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
+                self.name, if self.book.dirty() { " (changed)" } else { "" }, page + 1, pages, self.book.paragraph_style(), self.book.words())
         } else {
             self.message.clone()
         };
@@ -187,10 +238,22 @@ impl Ui {
 
     /// One key: Assuit's own (save, zoom), then WordCraft's shortcut, then typed text.
     fn key(&mut self, key: Key) {
+        if self.find.is_some() { return self.find_key(key); }
+        if self.picker.is_some() { return self.picker_key(key); }
         self.message.clear();
         if key.control {
             match (key.code, sex_app::typed(Key { control: false, ..key })) {
+                (code::S, _) if key.shift => {
+                    let styles = self.book.styles();
+                    let current = self.book.paragraph_style();
+                    let at = styles.iter().position(|s| s.1 == current).unwrap_or(0);
+                    sex_std::record(&format!("[assuit.styles] count={} current={current}", styles.len()));
+                    if !styles.is_empty() { self.picker = Some((styles, at)); }
+                    return;
+                }
                 (code::S, _) => return self.save(),
+                (code::F, _) if !key.shift => { self.find = Some(Prompt { what: String::new(), with: None, on_with: false }); return; }
+                (code::H, _) if !key.shift => { self.find = Some(Prompt { what: String::new(), with: Some(String::new()), on_with: false }); return; }
                 (_, Some(b'=' | b'+')) => { self.zoom = (self.zoom * 1.25).min(4.0); self.invalidate(); return; }
                 (_, Some(b'-')) => { self.zoom = (self.zoom / 1.25).max(0.25); self.invalidate(); return; }
                 (_, Some(b'0')) => { self.zoom = 1.0; self.invalidate(); return; }
@@ -212,6 +275,67 @@ impl Ui {
         if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) {
             let mut s = [0u8; 4];
             if self.book.type_text(ch.encode_utf8(&mut s)).is_ok() { self.invalidate(); }
+        }
+    }
+
+    /// A key while the find (or find and replace) prompt is open: Enter selects the next
+    /// match, or with a replacement replaces them all.
+    fn find_key(&mut self, key: Key) {
+        let Some(p) = &mut self.find else { return };
+        match key.code {
+            code::ESC => self.find = None,
+            code::BACKSPACE => { p.field().pop(); self.message.clear(); }
+            code::TAB if p.with.is_some() => p.on_with = !p.on_with,
+            code::ENTER if p.with.is_some() && !p.on_with => p.on_with = true,
+            code::ENTER if !p.what.is_empty() => {
+                let what = p.what.clone();
+                if let Some(with) = p.with.clone() {
+                    match self.book.replace_all(&what, &with) {
+                        Ok(n) => {
+                            sex_std::record(&format!("[assuit.replace] what={what} with={with} count={n}"));
+                            self.message = format!("Replaced {n}");
+                            if n > 0 { self.invalidate(); }
+                        }
+                        Err(e) => self.message = e,
+                    }
+                    return;
+                }
+                match self.book.find_next(&what) {
+                    Ok((at, count)) => {
+                        sex_std::record(&format!("[assuit.find] what={what} match={at} of={count}"));
+                        self.message = format!("\"{what}\": match {at} of {count}");
+                    }
+                    Err(e) => {
+                        sex_std::record(&format!("[assuit.find] what={what} none"));
+                        self.message = e;
+                    }
+                }
+                // The prompt stays open: Enter again goes on to the next match.
+            }
+            _ => if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { p.field().push(ch); self.message.clear(); },
+        }
+    }
+
+    /// A key while the style list is open: arrows choose, Enter applies, Esc closes.
+    fn picker_key(&mut self, key: Key) {
+        let Some((styles, at)) = &mut self.picker else { return };
+        match (key.code, sex_app::nav(key)) {
+            (code::ESC, _) => self.picker = None,
+            (_, Some(Nav::Up)) => *at = at.saturating_sub(1),
+            (_, Some(Nav::Down)) => *at = (*at + 1).min(styles.len() - 1),
+            (code::ENTER, _) => {
+                let (id, name) = styles[*at].clone();
+                self.picker = None;
+                match self.book.set_style(&id) {
+                    Ok(()) => {
+                        sex_std::record(&format!("[assuit.style] style={name}"));
+                        self.message = format!("Paragraph style: {name}");
+                        self.invalidate();
+                    }
+                    Err(e) => self.message = e,
+                }
+            }
+            _ => {}
         }
     }
 

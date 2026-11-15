@@ -147,3 +147,20 @@ fn point(wire: &[u8; 64]) -> Option<AffinePoint> {
     let e = EncodedPoint::from_affine_coordinates(&x.into(), &y.into(), false);
     Option::from(AffinePoint::from_encoded_point(&e))
 }
+
+/// The random address hash (Core 5.4, Vol 3 Part H, 2.2.2): ah(k, r) = e(k, 0^104 || r)
+/// mod 2^24. `irk` in wire order; `prand` and the result as 24-bit numbers.
+pub fn ah(irk: &[u8; 16], prand: u32) -> u32 {
+    let mut block = [0u8; 16];
+    block[13..].copy_from_slice(&prand.to_be_bytes()[1..]);
+    let e = aes(&rev(irk), block);
+    u32::from_be_bytes([0, e[13], e[14], e[15]])
+}
+
+/// Whether `addr` (wire order) is a resolvable private address made with `irk`.
+pub fn resolves(irk: &[u8; 16], addr: &[u8; 6]) -> bool {
+    if addr[5] >> 6 != 0b01 { return false; }
+    let prand = u32::from_le_bytes([addr[3], addr[4], addr[5], 0]);
+    let hash = u32::from_le_bytes([addr[0], addr[1], addr[2], 0]);
+    ah(irk, prand) == hash
+}

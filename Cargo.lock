@@ -5299,6 +5299,7 @@ dependencies = [
  "sex-gl",
  "sex-html",
  "sex-image",
+ "sha2 0.10.9",
  "wasmi",
 ]
 
@@ -5417,6 +5418,10 @@ dependencies = [
 
 [[package]]
 name = "sex-net-config"
+version = "0.1.0"
+
+[[package]]
+name = "sex-ntp"
 version = "0.1.0"
 
 [[package]]
@@ -5731,6 +5736,7 @@ dependencies = [
  "linked_list_allocator",
  "serde",
  "sex-net",
+ "sex-ntp",
  "sex-pdx",
  "sex-rt",
  "sex-tls",
@@ -6095,6 +6101,17 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "splicy"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-office",
+ "sex-pdx",
+ "sex-splice",
 ]
 
 [[package]]

@@ -483,7 +483,12 @@ fn walk_tree(node: &Value, path: &mut Vec<String>, depth: usize, out: &mut Vec<F
                 if child.dict().map_or(0, |d| d.len()) != 1 || props.dict().is_none() { return Err(Error::BadFileTree); }
                 let attr = FileAttr::parse(props.get(b"attr").and_then(|v| v.bytes()).unwrap_or(b""));
                 if attr.pad { return Err(Error::BadFileTree); }
-                let length = if attr.symlink && props.get(b"length").is_none() { 0 } else { length_of(props)? };
+                // A v2 symlink carries no data (BEP 52); a length would make pieces with
+                // no hashes behind them (fuzz round 5, #337).
+                let length = if attr.symlink {
+                    if props.get(b"length").is_some() && length_of(props)? != 0 { return Err(Error::BadField("length")); }
+                    0
+                } else { length_of(props)? };
                 if path.is_empty() { return Err(Error::BadPath); }
                 let mut e = entry(path.clone(), length, props, attr)?;
                 if length > 0 && !attr.symlink {
@@ -606,6 +611,15 @@ mod tests {
     use crate::bencode::{dict, Item};
     use crate::{from_hex, to_hex};
     use alloc::vec;
+
+    #[test]
+    fn v2_symlink_with_a_length_is_refused() {
+        // Fuzz round 5 (#337): 2^38 bytes behind a symlink would be 16M pieces with no hashes.
+        let info = |len: &str| alloc::format!("d9:file treed4:linkd0:d4:attr1:l6:length{len}12:symlink pathl1:aeeee12:meta versioni2e4:name1:t12:piece lengthi16384ee");
+        assert_eq!(Metainfo::from_info_bytes(info("i274877906944e").as_bytes()).err(), Some(Error::BadField("length")));
+        // Zero is allowed; this one torrent is then refused only for holding no data.
+        assert_eq!(Metainfo::from_info_bytes(info("i0e").as_bytes()).err(), Some(Error::Empty));
+    }
 
     const BASE: &[u8] = include_bytes!("../tests/fixtures/base.torrent");
     const PAD_FILE: &[u8] = include_bytes!("../tests/fixtures/pad_file.torrent");

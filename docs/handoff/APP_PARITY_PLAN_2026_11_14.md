@@ -550,7 +550,7 @@ Andreas (2026-11-14): the Craft apps are the starting point, improved as we go. 
 their UI, list what is not perfect, and fill the blanks from the leaders: **Logic Pro, REAPER, Audacity,
 Ardour and LMMS** for Moan; **Kdenlive and Shotcut** (FilmCraft's layout is good) and
 **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, AI transcript-based editing)
-for Splicy; Blender gets its own workstream (Z). V16 is that audit.
+for Splicy; Blender gets its own workstream (Z). V16 is that audit: [CRAFT_UI_AUDIT_2026_11_15.md](CRAFT_UI_AUDIT_2026_11_15.md).
 
 V ports the Craft creative apps on M11 (see T): PhotoCraft becomes Batik, VectorCraft Gestalt,
 FilmCraft Splicy, SoundCraft Moan. LightCraft's non-destructive development feeds Gaze's

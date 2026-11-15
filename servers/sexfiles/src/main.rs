@@ -34,6 +34,7 @@ mod history_disk;
 mod crash_keeper;
 mod config_store;
 mod password_store;
+mod bt_bonds;
 
 use crate::trampoline::trampoline_main;
 

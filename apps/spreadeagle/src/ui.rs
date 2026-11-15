@@ -62,6 +62,28 @@ pub struct Ui {
     cols: Vec<(u32, i32, i32)>,
     /// The grid area's size in the last draw.
     grid: (i32, i32),
+    /// The cells last copied or cut, outlined until pasted over or Esc.
+    copied: Option<(Range, bool)>,
+    /// The Ctrl+F or Ctrl+H prompt, while it is open.
+    find: Option<Prompt>,
+    /// A column whose right edge is being dragged: (column, pointer x at the start, width then,
+    /// width now).
+    resizing: Option<(u32, i32, i32, i32)>,
+}
+
+/// Ctrl+F asks what to find; Ctrl+H also asks what to put in its place.
+struct Prompt {
+    what: Vec<char>,
+    with: Option<Vec<char>>,
+    /// Typing goes into `with` (Tab or Enter moves there from `what`).
+    on_with: bool,
+}
+
+impl Prompt {
+    /// The text being typed into.
+    fn field(&mut self) -> &mut Vec<char> {
+        match &mut self.with { Some(with) if self.on_with => with, _ => &mut self.what }
+    }
 }
 
 /// Set-1 scan codes Shell passes (with the normalized codes some keyboards send).
@@ -79,6 +101,18 @@ mod code {
     pub const F: u8 = 0x21;
     pub const L: u8 = 0x26;
     pub const C: u8 = 0x2E;
+    pub const X: u8 = 0x2D;
+    pub const V: u8 = 0x2F;
+    pub const R: u8 = 0x13;
+    pub const T: u8 = 0x14;
+    pub const B: u8 = 0x30;
+    pub const I: u8 = 0x17;
+    pub const U: u8 = 0x16;
+    pub const F2: u8 = 0x3C;
+    pub const H: u8 = 0x23;
+    /// The digit row: 1 to 6, and the key left of 1 (` and ~).
+    pub fn digit(c: u8) -> Option<u8> { (0x02..=0x07).contains(&c).then(|| c - 1) }
+    pub const GRAVE: u8 = 0x29;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
 }
@@ -95,7 +129,7 @@ impl Ui {
     pub fn new(book: Book, name: String) -> Ui {
         Ui {
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
-            pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX),
+            pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None,
         }
     }
 
@@ -299,7 +333,16 @@ impl Ui {
                 }
                 let tx = if shown.right { x + cw - PAD - tw } else { x + PAD };
                 let color = if shown.error { ERROR } else { INK };
-                self.pen.text(&mut canvas, tx, y + (rh - self.pen.line_height()) / 2, &shown.text, color, Some((x + 1, room - 2)));
+                let ty = y + (rh - self.pen.line_height()) / 2;
+                let clip = Some((x + 1, room - 2));
+                let (bold, _, underline) = self.book.font(r, c);
+                self.pen.text(&mut canvas, tx, ty, &shown.text, color, clip);
+                // One face for now (sex-font): bold is the text drawn again a pixel right.
+                if bold { self.pen.text(&mut canvas, tx + 1, ty, &shown.text, color, clip); }
+                if underline {
+                    let ux = tx.max(x + 1);
+                    canvas.fill(ux, ty + self.pen.line_height() - 2, (tx + tw + bold as i32).min(x + room - 1) - ux, 1, color);
+                }
             }
         }
 
@@ -314,6 +357,22 @@ impl Ui {
                     for i in 0..4 { canvas.fill(bx + 3 + i, by + 5 + i, 8 - 2 * i, 1, DIM); }
                 }
             }
+        }
+
+        // The copied cells, outlined as Excel's marching ants are (still: no timer here).
+        if let Some((range, _)) = self.copied {
+            let (t, l, b, r) = range.bounds();
+            let (x0, y0) = (self.col_x(l), self.row_y(t));
+            let (x1, y1) = (self.col_x(r) + self.book.col_width(r) as i32, self.row_y(b) + self.book.row_height(b) as i32);
+            if x1 > ROW_HEAD_W && y1 > top_y + HEAD_H {
+                let (x0, y0) = (x0.max(ROW_HEAD_W - 1), y0.max(top_y + HEAD_H - 1));
+                for i in 0..2 { canvas.frame(x0 - 1 + i, y0 - 1 + i, x1 - x0 + 2 - 2 * i, y1 - y0 + 2 - 2 * i, ACCENT); }
+            }
+        }
+
+        // The edge being dragged.
+        if let Some((c, _, _, w)) = self.resizing {
+            if let Some(&(_, cx, _)) = cols.iter().find(|k| k.0 == c) { canvas.fill(cx + w - 1, top_y, 2, h - top_y - TABS_H, CURSOR); }
         }
 
         // The cursor cell.
@@ -358,8 +417,22 @@ impl Ui {
             self.pen.text(&mut canvas, tx + 12, ty0 + (TABS_H - self.pen.line_height()) / 2, sheet, if i == active { ACCENT } else { DIM }, None);
             tx += tw + 2;
         }
-        let status = if self.message.is_empty() {
-            format!("{}{}  Ctrl+S save  Ctrl+Z undo  Ctrl+Shift+A/D sort  L filter  E filter to cell  F freeze  C chart",
+        let status = if let Some(p) = &self.find {
+            let what: String = p.what.iter().collect();
+            match &p.with {
+                None => {
+                    let said = if self.message.is_empty() { "Enter finds the next, Esc closes" } else { &self.message };
+                    format!("Find: {what}_   {said}")
+                }
+                Some(with) => {
+                    let with: String = with.iter().collect();
+                    let said = if self.message.is_empty() { "Tab switches, Enter replaces all, Esc closes" } else { &self.message };
+                    let (a, b) = if p.on_with { ("", "_") } else { ("_", "") };
+                    format!("Find: {what}{a}   Replace with: {with}{b}   {said}")
+                }
+            }
+        } else if self.message.is_empty() {
+            format!("{}{}  Ctrl+S save  Ctrl+Z undo  Ctrl+C/X/V copy  Ctrl+F find  Ctrl+H replace  Ctrl+D fill  Ctrl+Shift+T sum  Ctrl+Shift+A/D sort  L filter  F freeze  C chart",
                 self.name, if self.book.dirty() { " (changed)" } else { "" })
         } else {
             self.message.clone()
@@ -456,9 +529,16 @@ impl Ui {
     /// One key. Returns whether the cells (or the sheet) changed: worth a record of the column.
     fn key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
         let (row, col) = (self.row as i64, self.col as i64);
+        if self.find.is_some() { return self.find_key(key); }
         if key.control {
             if key.shift && self.edit.is_none() && matches!(key.code, code::A | code::D | code::E | code::F | code::L | code::C) {
                 return self.data_key(key.code);
+            }
+            if key.shift && self.edit.is_none() && (code::digit(key.code).is_some() || key.code == code::GRAVE) {
+                return self.format_key(key.code);
+            }
+            if self.edit.is_none() && matches!(key.code, code::C | code::X | code::V | code::D | code::R | code::B | code::I | code::U | code::F | code::H | code::T) {
+                return self.edit_key(key.code, key.shift);
             }
             match key.code {
                 code::S => { self.commit(); self.save(); return false; }
@@ -503,14 +583,16 @@ impl Ui {
             return false;
         }
         match (key.code, sex_app::nav(key)) {
-            (code::ENTER, _) => {
+            (code::ENTER | code::F2, _) => {
                 let text: Vec<char> = self.book.input(self.row, self.col).chars().collect();
                 self.edit = Some(Edit { caret: text.len(), text, replace: false });
             }
-            (code::ESC, _) => self.anchor = None,
+            (code::ESC, _) => { self.anchor = None; self.copied = None; }
             (code::TAB, _) => { self.anchor = None; self.move_to(row, col + if key.shift { -1 } else { 1 }); }
             (code::BACKSPACE, _) | (_, Some(Nav::Delete)) => {
-                if self.book.clear(self.row, self.col).is_ok() { return true; }
+                let sel = self.selection();
+                let done = if sel.single() { self.book.clear(self.row, self.col) } else { self.book.clear_range(sel) };
+                if done.is_ok() { return true; }
             }
             (c, _) if code::page_up(c) => { self.anchor = None; self.step_rows(-(PAGE as i64)); }
             (c, _) if code::page_down(c) => { self.anchor = None; self.step_rows(PAGE as i64); }
@@ -520,6 +602,108 @@ impl Ui {
                     self.anchor = None;
                     self.edit = Some(Edit { text: vec![ch], caret: 1, replace: true });
                 }
+            }
+        }
+        false
+    }
+
+    /// Ctrl shortcuts on the cells: clipboard, fill, styles, AutoSum and find, on GridCraft's
+    /// keys (Excel's). Returns whether cells changed.
+    fn edit_key(&mut self, code: u8, shift: bool) -> bool {
+        let sel = self.selection();
+        match code {
+            code::C | code::X => {
+                let cut = code == code::X;
+                let id = if cut { "edit.cut" } else { "edit.copy" };
+                let done = self.book.copy(sel, cut);
+                let n = done.as_ref().map_or(0, |t| t.lines().count());
+                if done.is_ok() { self.copied = Some((sel, cut)); }
+                self.command(id, done.map(|_| ()), format!("{} {} ({n} rows). Ctrl+V pastes at the cursor", if cut { "Cut" } else { "Copied" }, sel.a1()));
+                false
+            }
+            code::V => {
+                let done = self.book.paste(self.row, self.col);
+                let to = done.clone().unwrap_or_default();
+                if done.is_ok() && self.copied.is_some_and(|(_, cut)| cut) { self.copied = None; }
+                if let Ok(at) = &done { sex_std::record(&format!("[spreadeagle.paste] at={at}")); }
+                self.command("edit.paste", done.map(|_| ()), format!("Pasted into {to}"))
+            }
+            code::D | code::R => {
+                let down = code == code::D;
+                let done = self.book.fill(sel, down);
+                self.command(if down { "edit.fillDown" } else { "edit.fillRight" }, done, format!("Filled {} {}", sel.a1(), if down { "down" } else { "right" }))
+            }
+            code::B | code::I | code::U => {
+                let style = match code { code::B => "bold", code::I => "italic", _ => "underline" };
+                let done = self.book.toggle_style(sel, style);
+                let on = *done.as_ref().unwrap_or(&false);
+                let said = format!("{} {} {}", sel.a1(), if on { "now" } else { "no longer" }, style);
+                self.command(&format!("home.{style}"), done.map(|_| ()), said);
+                true
+            }
+            code::T if shift => {
+                let done = self.book.auto_sum(self.row, self.col);
+                let said = format!("{} = {}", self.cell_name(), done.clone().unwrap_or_default());
+                self.command("formulas.autoSum", done.map(|_| ()), said)
+            }
+            code::F => { self.find = Some(Prompt { what: Vec::new(), with: None, on_with: false }); false }
+            code::H => { self.find = Some(Prompt { what: Vec::new(), with: Some(Vec::new()), on_with: false }); false }
+            _ => false,
+        }
+    }
+
+    /// Ctrl+Shift+~ and Ctrl+Shift+1..6: Excel's number formats on the selection.
+    fn format_key(&mut self, code: u8) -> bool {
+        let format = match code::digit(code) {
+            Some(1) => "Number",
+            Some(2) => "Time",
+            Some(3) => "Short Date",
+            Some(4) => "Currency",
+            Some(5) => "Percentage",
+            Some(6) => "Scientific",
+            _ => "General",
+        };
+        let sel = self.selection();
+        let done = self.book.number_format(sel, format);
+        self.command("home.numberFormat", done, format!("{} as {format}", sel.a1()))
+    }
+
+    /// A key while the find (or find and replace) prompt is open.
+    fn find_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
+        let Some(p) = &mut self.find else { return false };
+        match key.code {
+            code::ESC => { self.find = None; }
+            code::BACKSPACE => { p.field().pop(); self.message.clear(); }
+            code::TAB if p.with.is_some() => { p.on_with = !p.on_with; }
+            code::ENTER if p.with.is_some() && !p.on_with => { p.on_with = true; }
+            code::ENTER => {
+                let what: String = p.what.iter().collect();
+                if what.is_empty() { return false; }
+                if let Some(with) = &p.with {
+                    let with: String = with.iter().collect();
+                    let done = self.book.replace_all(&what, &with);
+                    let n = *done.as_ref().unwrap_or(&0);
+                    sex_std::record(&format!("[spreadeagle.replace] what={what} with={with} cells={n}"));
+                    self.message = match &done { Ok(_) => format!("Replaced \"{what}\" in {n} cells"), Err(e) => e.clone() };
+                    return n > 0;
+                }
+                match self.book.find(self.row, self.col, &what) {
+                    Ok((sheet, row, col, n)) => {
+                        self.anchor = None;
+                        self.row = row;
+                        self.col = col;
+                        let sheets = self.book.sheets();
+                        let name = sheets.get(sheet).cloned().unwrap_or_default();
+                        sex_std::record(&format!("[spreadeagle.find] what={what} sheet={name} cell={}", self.cell_name()));
+                        self.message = format!("Found \"{what}\" in {name}!{} ({n} cells match)", self.cell_name());
+                        // The cursor moved, maybe to another sheet: worth a record.
+                        return true;
+                    }
+                    Err(e) => { sex_std::record(&format!("[spreadeagle.find] what={what} none")); self.message = e; }
+                }
+            }
+            _ => {
+                if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { p.field().push(ch); self.message.clear(); }
             }
         }
         false
@@ -572,11 +756,30 @@ impl Ui {
                     }
                     return;
                 }
+                // A column header's right edge: drag it to change the width.
+                if (BAR_H..BAR_H + HEAD_H).contains(&y) {
+                    if let Some(&(c, _, cw)) = self.cols.iter().find(|c| (x - (c.1 + c.2)).abs() <= 3) {
+                        self.resizing = Some((c, x, cw, cw));
+                        return;
+                    }
+                }
                 let (Some(&(c, ..)), Some(&(r, ..))) = (self.cols.iter().find(|c| x >= c.1 && x < c.1 + c.2), self.rows.iter().find(|r| y >= r.1 && y < r.1 + r.2)) else { return };
                 self.commit();
                 self.anchor = None;
                 self.row = r;
                 self.col = c;
+            }
+            Kind::Move => {
+                if let Some((c, x0, w0, _)) = self.resizing { self.resizing = Some((c, x0, w0, (w0 + x - x0).clamp(8, 1800))); }
+            }
+            Kind::Up { button: 0 } => {
+                if let Some((c, _, w0, w)) = self.resizing.take() {
+                    if w != w0 {
+                        let done = self.book.set_col_width(c, w as u32);
+                        sex_std::record(&format!("[spreadeagle.width] col={} width={}", column_name(c), self.book.col_width(c)));
+                        self.command("home.columnWidth", done, format!("Column {} is {w} pixels wide", column_name(c)));
+                    }
+                }
             }
             _ => {}
         }
@@ -586,6 +789,7 @@ impl Ui {
         self.draw(window);
         let frozen = self.book.frozen().map_or("none".into(), |(r, c)| format!("{r},{c}"));
         sex_std::record(&format!("[spreadeagle.view] charts={} frozen={frozen}", self.book.charts().len()));
+        sex_std::record(&format!("[spreadeagle.columns] A={} B={}", self.book.col_width(0), self.book.col_width(1)));
         self.record_column();
         loop {
             match window.next() {
@@ -598,7 +802,7 @@ impl Ui {
                     if changed || col != self.col { self.record_column(); }
                 }
                 Event::Pointer(p) => {
-                    if matches!(p.kind, Kind::Down { .. } | Kind::Wheel { .. }) {
+                    if matches!(p.kind, Kind::Down { .. } | Kind::Wheel { .. }) || self.resizing.is_some() {
                         let col = self.col;
                         self.pointer(p, window);
                         self.draw(window);
