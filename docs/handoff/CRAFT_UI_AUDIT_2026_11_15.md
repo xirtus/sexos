@@ -46,7 +46,7 @@ the SexOS style, borrowing Craft's layouts where they are good. It does not copy
 | Spreadeagle (sheets) | GridCraft | Excel, LibreOffice Calc | engine crates as dependencies; own grid UI | T1 + T2 + this PR | office thread (T) |
 | Assuit (words) | WordCraft | Word, Writer | engine crates as dependencies; own page view | T3 + pages + this PR | office thread (T) |
 | Batik (images) | PhotoCraft (plan) | Photoshop, GIMP, Krita, Pixelmator | native `batik-core`, PhotoCraft not used | layers, masks, brushes, selections, adjustments, PSD/ORA | Gemini |
-| Gestalt (vector) | VectorCraft (plan) | Illustrator, Inkscape | not started (`apps/shapes` is a 59-line demo) | none | unassigned (V4) |
+| Gestalt (vector) | VectorCraft (plan) | Illustrator, Inkscape | not started (`apps/shapes` is a 59-line demo) | none | office thread (T) |
 | Splicy (video) | FilmCraft (plan) | Premiere, Kdenlive, Shotcut, Scarlet | native `sex-splice` core and export | core and export; no editor window | Splicy thread |
 | Moan (DAW) | SoundCraft (plan) | REAPER, Ardour, Logic, Audacity, LMMS | native `moan-core` and `serenade-core` | engine slices and a probe; no window | ChatGPT |
 | Burlesque (slides) | none in V16 | Keynote, PowerPoint, Impress | native `burlesque-core` | decks, PPTX/ODP, presenter, rehearse | Gemini |
@@ -115,9 +115,12 @@ that float over cells.
 | Ctrl+F find across sheets, Enter for the next match | **fixed here** |
 | F2 edits the cell, as in Excel | **fixed here** |
 | Copying between programs | cross-cutting 1 (shell) |
-| Find and replace (Ctrl+H), Go To (Ctrl+G / F5) | next Spreadeagle slice |
-| Column resize by dragging, row and column insert or delete, hide and unhide | next slice |
-| Number format keys (Ctrl+Shift+1..6), cell borders | next slice |
+| Find and replace (Ctrl+H) | **fixed** (office slice 2) |
+| Go To (Ctrl+G / F5) | next Spreadeagle slice |
+| Column resize by dragging | **fixed** (office slice 2) |
+| Row and column insert or delete, hide and unhide | next slice |
+| Number format keys (Ctrl+Shift+~ and 1..6) | **fixed** (office slice 2) |
+| Cell borders | next slice |
 | Multi-value filter picker, more chart kinds, moving and resizing charts | next slice |
 | ODS writing (saves as `.xlsx` today) | next slice |
 | PivotTables, conditional formatting UI, Get & Transform | later (GridCraft roadmap) |
@@ -145,8 +148,10 @@ that float over cells.
 | Word count in the status bar | **fixed here** |
 | Copy, cut and paste inside the document (WordCraft's clipboard) | works; now gated |
 | Copying between programs | cross-cutting 1 (shell) |
-| Find and replace, Go To page | next Assuit slice |
-| Styles picker (Heading 1, Normal, …) and the Navigation pane of headings | next slice |
+| Find and replace (Ctrl+H) | **fixed** (office slice 2) |
+| Go To page | next Assuit slice |
+| Styles picker (Ctrl+Shift+S) and the paragraph's style in the status line | **fixed** (office slice 2) |
+| Navigation pane of headings | next slice |
 | Shift-click to extend a selection | cross-cutting 2 (input) |
 | Loom file picker for Open and Save As | waits on Loom (Q) |
 | Tables, pictures, track changes UI, comments | later (WordCraft has the engine) |
@@ -201,7 +206,7 @@ snapping) and `.ai` files from real users as its first two gaps.
 
 | Gap | Owner |
 |---|---|
-| The whole app (V4): SVG open, edit, save; paths and nodes; text; PNG/PDF export | unassigned |
+| The whole app (V4): SVG open, edit, save; paths and nodes; text; PNG/PDF export | office thread (T), from 2026-11-15 |
 | SVG as the native file format, Inkscape-style, with `.ai` and PDF import | V4 |
 
 ## Splicy and FilmCraft (Premiere, Kdenlive, Shotcut, Scarlet)

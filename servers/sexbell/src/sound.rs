@@ -495,7 +495,17 @@ impl Player {
             // window: what it writes next then plays within ~130 ms instead of
             // after half a second of silence already handed to the card.
             if !notes && self.took[slot].iter().all(|&n| n == 0) && self.flying >= MIN_AHEAD { break; }
-            let period = self.period;
+            let mut period = self.period;
+            // A Bluetooth headset is up: the mix goes to Cufflinks, the card plays
+            // silence (and keeps the clock).
+            if let Some(bt) = bt_ring() {
+                let on = bt.sink();
+                if on != bt_was_on() {
+                    unsafe { *core::ptr::addr_of_mut!(BT_ON) = on };
+                    sex_pdx::serial_record!("[bell.bt.sink] on={} sinks={} dropped={}", on as u8, bt.sinks(), bt.dropped());
+                }
+                if on { bt.push_bytes(&period); period = [0; PERIOD_BYTES]; }
+            }
             match self.card.submit(&period) {
                 Ok(token) => { self.tokens[(self.first + self.flying) % IN_FLIGHT] = token; self.flying += 1; }
                 Err(_) => { self.len = 0; break; }
@@ -508,8 +518,26 @@ impl Player {
     }
 }
 
+/// Bell's side of the Bluetooth audio region (`sex_pdx::bt_audio`), when BOOT
+/// paired it with Cufflinks.
+static mut BT: Option<sex_pdx::bt_audio::Shared> = None;
+static mut BT_ON: bool = false;
+fn bt_ring() -> Option<sex_pdx::bt_audio::Shared> { unsafe { *core::ptr::addr_of!(BT) } }
+fn bt_was_on() -> bool { unsafe { *core::ptr::addr_of!(BT_ON) } }
+
+fn bt_init() {
+    use sex_pdx::bt_audio as b;
+    let ok = sex_pdx::memory_region_info(b::SLOT).ok().filter(|i| i.region_id == b::REGION_ID && i.length == b::BYTES
+        && i.peer_pd == Some(sex_pdx::bt_hci::CUFFLINKS_PD) && i.rights == m::QUERY_VIEW | m::READ | m::WRITE)
+        .and_then(|_| sex_pdx::memory_region_full_view(b::SLOT, m::QUERY_VIEW | m::READ | m::WRITE).ok())
+        .filter(|v| v.virtual_address != 0 && v.length >= b::BYTES);
+    if let Some(v) = ok { unsafe { *core::ptr::addr_of_mut!(BT) = Some(b::Shared::at(v.virtual_address as *mut u8)) }; }
+    sex_pdx::serial_record!("[bell.bt.route] region={}", ok.is_some() as u8);
+}
+
 /// Take the BOOT lease, if there is one, and ready the card's first output stream.
 pub fn init() {
+    bt_init();
     match open() {
         Ok(p) => {
             sex_pdx::serial_record!("[bell.sound.ready] card={} stream={} rate={} channels={} period_bytes={}",

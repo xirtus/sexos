@@ -64,8 +64,26 @@ pub struct Ui {
     grid: (i32, i32),
     /// The cells last copied or cut, outlined until pasted over or Esc.
     copied: Option<(Range, bool)>,
-    /// What Ctrl+F is being asked to find, while its prompt is open.
-    find: Option<Vec<char>>,
+    /// The Ctrl+F or Ctrl+H prompt, while it is open.
+    find: Option<Prompt>,
+    /// A column whose right edge is being dragged: (column, pointer x at the start, width then,
+    /// width now).
+    resizing: Option<(u32, i32, i32, i32)>,
+}
+
+/// Ctrl+F asks what to find; Ctrl+H also asks what to put in its place.
+struct Prompt {
+    what: Vec<char>,
+    with: Option<Vec<char>>,
+    /// Typing goes into `with` (Tab or Enter moves there from `what`).
+    on_with: bool,
+}
+
+impl Prompt {
+    /// The text being typed into.
+    fn field(&mut self) -> &mut Vec<char> {
+        match &mut self.with { Some(with) if self.on_with => with, _ => &mut self.what }
+    }
 }
 
 /// Set-1 scan codes Shell passes (with the normalized codes some keyboards send).
@@ -91,6 +109,10 @@ mod code {
     pub const I: u8 = 0x17;
     pub const U: u8 = 0x16;
     pub const F2: u8 = 0x3C;
+    pub const H: u8 = 0x23;
+    /// The digit row: 1 to 6, and the key left of 1 (` and ~).
+    pub fn digit(c: u8) -> Option<u8> { (0x02..=0x07).contains(&c).then(|| c - 1) }
+    pub const GRAVE: u8 = 0x29;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
 }
@@ -107,7 +129,7 @@ impl Ui {
     pub fn new(book: Book, name: String) -> Ui {
         Ui {
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
-            pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None,
+            pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None,
         }
     }
 
@@ -348,6 +370,11 @@ impl Ui {
             }
         }
 
+        // The edge being dragged.
+        if let Some((c, _, _, w)) = self.resizing {
+            if let Some(&(_, cx, _)) = cols.iter().find(|k| k.0 == c) { canvas.fill(cx + w - 1, top_y, 2, h - top_y - TABS_H, CURSOR); }
+        }
+
         // The cursor cell.
         if let (Some(&(_, cx, cw)), Some(&(_, cy, ch))) = (cols.iter().find(|c| c.0 == self.col), rows.iter().find(|r| r.0 == self.row)) {
             canvas.frame(cx - 1, cy - 1, cw + 1, ch + 1, CURSOR);
@@ -390,11 +417,22 @@ impl Ui {
             self.pen.text(&mut canvas, tx + 12, ty0 + (TABS_H - self.pen.line_height()) / 2, sheet, if i == active { ACCENT } else { DIM }, None);
             tx += tw + 2;
         }
-        let status = if let Some(find) = &self.find {
-            let said = if self.message.is_empty() { "Enter finds the next, Esc closes" } else { &self.message };
-            format!("Find: {}_   {said}", find.iter().collect::<String>())
+        let status = if let Some(p) = &self.find {
+            let what: String = p.what.iter().collect();
+            match &p.with {
+                None => {
+                    let said = if self.message.is_empty() { "Enter finds the next, Esc closes" } else { &self.message };
+                    format!("Find: {what}_   {said}")
+                }
+                Some(with) => {
+                    let with: String = with.iter().collect();
+                    let said = if self.message.is_empty() { "Tab switches, Enter replaces all, Esc closes" } else { &self.message };
+                    let (a, b) = if p.on_with { ("", "_") } else { ("_", "") };
+                    format!("Find: {what}{a}   Replace with: {with}{b}   {said}")
+                }
+            }
         } else if self.message.is_empty() {
-            format!("{}{}  Ctrl+S save  Ctrl+Z undo  Ctrl+C/X/V copy  Ctrl+F find  Ctrl+D fill  Ctrl+Shift+T sum  Ctrl+Shift+A/D sort  L filter  F freeze  C chart",
+            format!("{}{}  Ctrl+S save  Ctrl+Z undo  Ctrl+C/X/V copy  Ctrl+F find  Ctrl+H replace  Ctrl+D fill  Ctrl+Shift+T sum  Ctrl+Shift+A/D sort  L filter  F freeze  C chart",
                 self.name, if self.book.dirty() { " (changed)" } else { "" })
         } else {
             self.message.clone()
@@ -496,7 +534,10 @@ impl Ui {
             if key.shift && self.edit.is_none() && matches!(key.code, code::A | code::D | code::E | code::F | code::L | code::C) {
                 return self.data_key(key.code);
             }
-            if self.edit.is_none() && matches!(key.code, code::C | code::X | code::V | code::D | code::R | code::B | code::I | code::U | code::F | code::T) {
+            if key.shift && self.edit.is_none() && (code::digit(key.code).is_some() || key.code == code::GRAVE) {
+                return self.format_key(key.code);
+            }
+            if self.edit.is_none() && matches!(key.code, code::C | code::X | code::V | code::D | code::R | code::B | code::I | code::U | code::F | code::H | code::T) {
                 return self.edit_key(key.code, key.shift);
             }
             match key.code {
@@ -605,20 +646,47 @@ impl Ui {
                 let said = format!("{} = {}", self.cell_name(), done.clone().unwrap_or_default());
                 self.command("formulas.autoSum", done.map(|_| ()), said)
             }
-            code::F => { self.find = Some(Vec::new()); false }
+            code::F => { self.find = Some(Prompt { what: Vec::new(), with: None, on_with: false }); false }
+            code::H => { self.find = Some(Prompt { what: Vec::new(), with: Some(Vec::new()), on_with: false }); false }
             _ => false,
         }
     }
 
-    /// A key while the find prompt is open.
+    /// Ctrl+Shift+~ and Ctrl+Shift+1..6: Excel's number formats on the selection.
+    fn format_key(&mut self, code: u8) -> bool {
+        let format = match code::digit(code) {
+            Some(1) => "Number",
+            Some(2) => "Time",
+            Some(3) => "Short Date",
+            Some(4) => "Currency",
+            Some(5) => "Percentage",
+            Some(6) => "Scientific",
+            _ => "General",
+        };
+        let sel = self.selection();
+        let done = self.book.number_format(sel, format);
+        self.command("home.numberFormat", done, format!("{} as {format}", sel.a1()))
+    }
+
+    /// A key while the find (or find and replace) prompt is open.
     fn find_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
-        let Some(find) = &mut self.find else { return false };
+        let Some(p) = &mut self.find else { return false };
         match key.code {
             code::ESC => { self.find = None; }
-            code::BACKSPACE => { find.pop(); self.message.clear(); }
+            code::BACKSPACE => { p.field().pop(); self.message.clear(); }
+            code::TAB if p.with.is_some() => { p.on_with = !p.on_with; }
+            code::ENTER if p.with.is_some() && !p.on_with => { p.on_with = true; }
             code::ENTER => {
-                let what: String = find.iter().collect();
+                let what: String = p.what.iter().collect();
                 if what.is_empty() { return false; }
+                if let Some(with) = &p.with {
+                    let with: String = with.iter().collect();
+                    let done = self.book.replace_all(&what, &with);
+                    let n = *done.as_ref().unwrap_or(&0);
+                    sex_std::record(&format!("[spreadeagle.replace] what={what} with={with} cells={n}"));
+                    self.message = match &done { Ok(_) => format!("Replaced \"{what}\" in {n} cells"), Err(e) => e.clone() };
+                    return n > 0;
+                }
                 match self.book.find(self.row, self.col, &what) {
                     Ok((sheet, row, col, n)) => {
                         self.anchor = None;
@@ -635,7 +703,7 @@ impl Ui {
                 }
             }
             _ => {
-                if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { find.push(ch); self.message.clear(); }
+                if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { p.field().push(ch); self.message.clear(); }
             }
         }
         false
@@ -688,11 +756,30 @@ impl Ui {
                     }
                     return;
                 }
+                // A column header's right edge: drag it to change the width.
+                if (BAR_H..BAR_H + HEAD_H).contains(&y) {
+                    if let Some(&(c, _, cw)) = self.cols.iter().find(|c| (x - (c.1 + c.2)).abs() <= 3) {
+                        self.resizing = Some((c, x, cw, cw));
+                        return;
+                    }
+                }
                 let (Some(&(c, ..)), Some(&(r, ..))) = (self.cols.iter().find(|c| x >= c.1 && x < c.1 + c.2), self.rows.iter().find(|r| y >= r.1 && y < r.1 + r.2)) else { return };
                 self.commit();
                 self.anchor = None;
                 self.row = r;
                 self.col = c;
+            }
+            Kind::Move => {
+                if let Some((c, x0, w0, _)) = self.resizing { self.resizing = Some((c, x0, w0, (w0 + x - x0).clamp(8, 1800))); }
+            }
+            Kind::Up { button: 0 } => {
+                if let Some((c, _, w0, w)) = self.resizing.take() {
+                    if w != w0 {
+                        let done = self.book.set_col_width(c, w as u32);
+                        sex_std::record(&format!("[spreadeagle.width] col={} width={}", column_name(c), self.book.col_width(c)));
+                        self.command("home.columnWidth", done, format!("Column {} is {w} pixels wide", column_name(c)));
+                    }
+                }
             }
             _ => {}
         }
@@ -702,6 +789,7 @@ impl Ui {
         self.draw(window);
         let frozen = self.book.frozen().map_or("none".into(), |(r, c)| format!("{r},{c}"));
         sex_std::record(&format!("[spreadeagle.view] charts={} frozen={frozen}", self.book.charts().len()));
+        sex_std::record(&format!("[spreadeagle.columns] A={} B={}", self.book.col_width(0), self.book.col_width(1)));
         self.record_column();
         loop {
             match window.next() {
@@ -714,7 +802,7 @@ impl Ui {
                     if changed || col != self.col { self.record_column(); }
                 }
                 Event::Pointer(p) => {
-                    if matches!(p.kind, Kind::Down { .. } | Kind::Wheel { .. }) {
+                    if matches!(p.kind, Kind::Down { .. } | Kind::Wheel { .. }) || self.resizing.is_some() {
                         let col = self.col;
                         self.pointer(p, window);
                         self.draw(window);

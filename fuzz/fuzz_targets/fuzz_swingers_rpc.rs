@@ -13,7 +13,8 @@ use sex_torrent::rpc::{
 use sex_torrent::session::{Torrent, TorrentParams};
 use sex_torrent::{webui, PeerId};
 
-const MAX_HEAD_BYTES: usize = 8 * 1024;
+/// The parser's own limit for the head plus chunk trailers.
+const MAX_HEAD_BYTES: usize = sex_torrent::rpc::MAX_HEAD;
 
 struct FuzzRpcBackend {
     session: SessionSettings,
