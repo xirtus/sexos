@@ -7,7 +7,7 @@
 use crate::anim::{Interp, Keyframe, Prop};
 use crate::doc::Doc;
 use crate::settings::{Engine, RotationMode, Settings, UnitSystem};
-use sex_3d::render::ViewTransform;
+use sex_3d::render::{MistFalloff, Pass, Passes, ShutterPosition, ViewTransform};
 use sex_3d::scene::Scene;
 
 /// The whole document as `.poly` text.
@@ -113,6 +113,7 @@ pub fn load(text: &str) -> Result<Doc, String> {
             _ => {}
         }
     }
+    doc.settings.migrate_sensors(&mut doc.scene);
     doc.anim.dirty = true;
     Ok(doc)
 }
@@ -170,6 +171,47 @@ fn rot_name(r: RotationMode) -> &'static str {
     }
 }
 
+/// Pass names in `.poly` files (Blender's `use_pass_*` property suffixes).
+fn pass_key(p: Pass) -> &'static str {
+    match p {
+        Pass::Combined => "combined",
+        Pass::Depth => "z",
+        Pass::Mist => "mist",
+        Pass::Normal => "normal",
+        Pass::Position => "position",
+        Pass::Uv => "uv",
+        Pass::DenoisingAlbedo => "denoising_albedo",
+        Pass::DenoisingNormal => "denoising_normal",
+        Pass::ObjectIndex => "object_index",
+        Pass::MaterialIndex => "material_index",
+        Pass::DiffuseDirect => "diffuse_direct",
+        Pass::DiffuseIndirect => "diffuse_indirect",
+        Pass::DiffuseColor => "diffuse_color",
+        Pass::GlossyDirect => "glossy_direct",
+        Pass::GlossyIndirect => "glossy_indirect",
+        Pass::GlossyColor => "glossy_color",
+        Pass::TransmissionDirect => "transmission_direct",
+        Pass::TransmissionIndirect => "transmission_indirect",
+        Pass::TransmissionColor => "transmission_color",
+        Pass::VolumeDirect => "volume_direct",
+        Pass::VolumeIndirect => "volume_indirect",
+        Pass::Emission => "emit",
+        Pass::Environment => "environment",
+        Pass::AmbientOcclusion => "ambient_occlusion",
+    }
+}
+
+fn view_key(v: ViewTransform) -> &'static str {
+    match v {
+        ViewTransform::Standard => "STANDARD",
+        ViewTransform::Filmic => "FILMIC",
+        ViewTransform::AgX => "AGX",
+        ViewTransform::KhronosPbrNeutral => "KHRONOS_PBR_NEUTRAL",
+        ViewTransform::FalseColor => "FALSE_COLOR",
+        ViewTransform::Raw => "RAW",
+    }
+}
+
 fn settings_pairs(s: &Settings) -> Vec<(&'static str, String)> {
     let b = |v: bool| (v as u8).to_string();
     vec![
@@ -177,13 +219,35 @@ fn settings_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("viewport_samples", s.viewport_samples.to_string()),
         ("render_samples", s.render_samples.to_string()),
         ("noise_threshold", b(s.noise_threshold)),
+        ("adaptive_threshold", s.adaptive_threshold.to_string()),
+        ("adaptive_min_samples", s.adaptive_min_samples.to_string()),
+        ("viewport_noise_threshold", b(s.viewport_noise_threshold)),
+        ("viewport_adaptive_threshold", s.viewport_adaptive_threshold.to_string()),
+        ("time_limit", s.time_limit.to_string()),
         ("max_bounces", s.max_bounces.to_string()),
+        ("diffuse_bounces", s.diffuse_bounces.to_string()),
+        ("glossy_bounces", s.glossy_bounces.to_string()),
+        ("transmission_bounces", s.transmission_bounces.to_string()),
+        ("volume_bounces", s.volume_bounces.to_string()),
+        ("transparent_bounces", s.transparent_bounces.to_string()),
         ("denoise", b(s.denoise)),
         ("viewport_denoise", b(s.viewport_denoise)),
+        ("clamp_direct", s.clamp_direct.to_string()),
         ("clamp_indirect", s.clamp_indirect.to_string()),
+        ("caustics_reflective", b(s.caustics_reflective)),
+        ("caustics_refractive", b(s.caustics_refractive)),
+        ("filter_glossy", s.filter_glossy.to_string()),
         ("seed", s.seed.to_string()),
+        ("animated_seed", b(s.animated_seed)),
         ("film_transparent", b(s.film_transparent)),
         ("filter_width", s.filter_width.to_string()),
+        ("threads", s.threads.to_string()),
+        ("motion_blur", b(s.motion_blur)),
+        ("shutter", s.shutter.to_string()),
+        ("shutter_position", match s.shutter_position { ShutterPosition::Start => "START", ShutterPosition::Center => "CENTER", ShutterPosition::End => "END" }.into()),
+        ("use_border", b(s.use_border)),
+        ("border", join(s.border)),
+        ("crop_to_border", b(s.crop_to_border)),
         ("resolution_x", s.resolution_x.to_string()),
         ("resolution_y", s.resolution_y.to_string()),
         ("resolution_pct", s.resolution_pct.to_string()),
@@ -196,14 +260,16 @@ fn settings_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("degrees", b(s.degrees)),
         ("gravity_on", b(s.gravity_on)),
         ("gravity", join(s.gravity)),
-        ("view_transform", match s.view_transform { ViewTransform::Standard => "STANDARD", ViewTransform::AgX => "AGX" }.into()),
+        ("view_transform", view_key(s.view_transform).into()),
         ("look", s.look.clone()),
         ("exposure", s.exposure.to_string()),
         ("gamma", s.gamma.to_string()),
         ("use_for_rendering", b(s.use_for_rendering)),
-        ("pass_z", b(s.pass_z)),
-        ("pass_normal", b(s.pass_normal)),
-        ("pass_denoising", b(s.pass_denoising)),
+        ("passes", s.passes.iter().map(pass_key).collect::<Vec<_>>().join(",")),
+        ("mist_start", s.mist_start.to_string()),
+        ("mist_depth", s.mist_depth.to_string()),
+        ("mist_falloff", match s.mist_falloff { MistFalloff::Quadratic => "QUADRATIC", MistFalloff::Linear => "LINEAR", MistFalloff::InverseQuadratic => "INVERSE_QUADRATIC" }.into()),
+        ("ao_distance", s.ao_distance.to_string()),
         ("hide_render", s.hide_render.iter().map(|n| esc(n).replace(',', "\\,")).collect::<Vec<_>>().join(",")),
         ("excluded", join(&s.excluded)),
         ("collection_hidden", join(&s.collection_hidden)),
@@ -252,13 +318,46 @@ fn set_setting(s: &mut Settings, key: &str, v: &str) {
         "viewport_samples" => p(&mut s.viewport_samples, v),
         "render_samples" => p(&mut s.render_samples, v),
         "noise_threshold" => flag(&mut s.noise_threshold),
+        "adaptive_threshold" => p(&mut s.adaptive_threshold, v),
+        "adaptive_min_samples" => p(&mut s.adaptive_min_samples, v),
+        "viewport_noise_threshold" => flag(&mut s.viewport_noise_threshold),
+        "viewport_adaptive_threshold" => p(&mut s.viewport_adaptive_threshold, v),
+        "time_limit" => p(&mut s.time_limit, v),
         "max_bounces" => p(&mut s.max_bounces, v),
+        "diffuse_bounces" => p(&mut s.diffuse_bounces, v),
+        "glossy_bounces" => p(&mut s.glossy_bounces, v),
+        "transmission_bounces" => p(&mut s.transmission_bounces, v),
+        "volume_bounces" => p(&mut s.volume_bounces, v),
+        "transparent_bounces" => p(&mut s.transparent_bounces, v),
         "denoise" => flag(&mut s.denoise),
         "viewport_denoise" => flag(&mut s.viewport_denoise),
+        "clamp_direct" => p(&mut s.clamp_direct, v),
         "clamp_indirect" => p(&mut s.clamp_indirect, v),
+        "caustics_reflective" => flag(&mut s.caustics_reflective),
+        "caustics_refractive" => flag(&mut s.caustics_refractive),
+        "filter_glossy" => p(&mut s.filter_glossy, v),
         "seed" => p(&mut s.seed, v),
+        "animated_seed" => flag(&mut s.animated_seed),
         "film_transparent" => flag(&mut s.film_transparent),
         "filter_width" => p(&mut s.filter_width, v),
+        "threads" => p(&mut s.threads, v),
+        "motion_blur" => flag(&mut s.motion_blur),
+        "shutter" => p(&mut s.shutter, v),
+        "shutter_position" => {
+            s.shutter_position = match v {
+                "START" => ShutterPosition::Start,
+                "END" => ShutterPosition::End,
+                _ => ShutterPosition::Center,
+            }
+        }
+        "use_border" => flag(&mut s.use_border),
+        "border" => {
+            let b: Vec<f32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+            if b.len() == 4 {
+                s.border = [b[0], b[1], b[2], b[3]];
+            }
+        }
+        "crop_to_border" => flag(&mut s.crop_to_border),
         "resolution_x" => p(&mut s.resolution_x, v),
         "resolution_y" => p(&mut s.resolution_y, v),
         "resolution_pct" => p(&mut s.resolution_pct, v),
@@ -282,14 +381,29 @@ fn set_setting(s: &mut Settings, key: &str, v: &str) {
                 s.gravity = [g[0], g[1], g[2]];
             }
         }
-        "view_transform" => s.view_transform = if v == "STANDARD" { ViewTransform::Standard } else { ViewTransform::AgX },
+        "view_transform" => s.view_transform = ViewTransform::ALL.into_iter().find(|t| view_key(*t) == v).unwrap_or(ViewTransform::AgX),
         "look" => s.look = v.into(),
         "exposure" => p(&mut s.exposure, v),
         "gamma" => p(&mut s.gamma, v),
         "use_for_rendering" => flag(&mut s.use_for_rendering),
-        "pass_z" => flag(&mut s.pass_z),
-        "pass_normal" => flag(&mut s.pass_normal),
-        "pass_denoising" => flag(&mut s.pass_denoising),
+        "passes" => s.passes = v.split(',').filter_map(|k| Pass::ALL.into_iter().find(|p| pass_key(*p) == k)).collect::<Passes>(),
+        // Older files.
+        "pass_z" => s.passes.set(Pass::Depth, v == "1"),
+        "pass_normal" => s.passes.set(Pass::Normal, v == "1"),
+        "pass_denoising" => {
+            s.passes.set(Pass::DenoisingAlbedo, v == "1");
+            s.passes.set(Pass::DenoisingNormal, v == "1");
+        }
+        "mist_start" => p(&mut s.mist_start, v),
+        "mist_depth" => p(&mut s.mist_depth, v),
+        "mist_falloff" => {
+            s.mist_falloff = match v {
+                "LINEAR" => MistFalloff::Linear,
+                "INVERSE_QUADRATIC" => MistFalloff::InverseQuadratic,
+                _ => MistFalloff::Quadratic,
+            }
+        }
+        "ao_distance" => p(&mut s.ao_distance, v),
         "hide_render" => s.hide_render = list(v).into_iter().map(|n| unesc(&n)).collect(),
         "excluded" => s.excluded = v.split(',').filter_map(|x| x.parse().ok()).collect(),
         "collection_hidden" => s.collection_hidden = v.split(',').filter_map(|x| x.parse().ok()).collect(),
@@ -325,6 +439,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn old_files_migrate_sensor_sizes_and_passes() {
+        let doc = Doc::default();
+        let cam = doc.scene.objects.iter().find(|o| matches!(o.data, sex_3d::scene::ObjectData::Camera(_))).unwrap().name.clone();
+        let mut text = save(&doc);
+        text.push_str(&format!("#@set sensor\t{cam}=50\n#@set pass_z\t0\n#@set pass_normal\t1\n#@set pass_denoising\t1\n"));
+        let back = load(&text).unwrap();
+        assert!(back.settings.sensor.is_empty());
+        let o = back.scene.objects.iter().find(|o| o.name == cam).unwrap();
+        let sex_3d::scene::ObjectData::Camera(c) = &o.data else { panic!() };
+        assert_eq!(c.sensor_width, 50.0);
+        let p = back.settings.passes;
+        assert!(!p.contains(Pass::Depth) && p.contains(Pass::Normal) && p.contains(Pass::DenoisingAlbedo) && p.contains(Pass::DenoisingNormal));
+    }
+
+    #[test]
+    fn camera_light_and_object_render_options_survive_poly() {
+        use sex_3d::scene::{AreaShape, Light, LightKind, ObjectData, PanoramaType};
+        let mut doc = Doc::default();
+        let ci = doc.scene.objects.iter().position(|o| matches!(o.data, ObjectData::Camera(_))).unwrap();
+        if let ObjectData::Camera(c) = &mut doc.scene.objects[ci].data {
+            c.panorama = Some(PanoramaType::FisheyeEquisolid);
+            c.shift_x = 0.25;
+            c.dof.enabled = true;
+            c.dof.fstop = 1.4;
+            c.dof.blades = 6;
+            c.dof.focus_object = Some(0);
+        }
+        let li = doc.scene.objects.iter().position(|o| matches!(o.data, ObjectData::Light(_))).unwrap();
+        doc.scene.objects[li].data = ObjectData::Light(Light { kind: LightKind::Area { size: 2.0 }, shape: AreaShape::Ellipse, size_y: 0.5, spread: 1.0, max_bounces: 3, cast_shadow: false, use_mis: false, ..Light::default() });
+        doc.scene.objects[0].holdout = true;
+        doc.scene.objects[0].pass_index = 4;
+        doc.scene.objects[0].visibility.glossy = false;
+        let back = load(&save(&doc)).unwrap();
+        assert_eq!(back.scene.objects[ci].data, doc.scene.objects[ci].data);
+        assert_eq!(back.scene.objects[li].data, doc.scene.objects[li].data);
+        assert!(back.scene.objects[0].holdout);
+        assert_eq!(back.scene.objects[0].pass_index, 4);
+        assert_eq!(back.scene.objects[0].visibility, doc.scene.objects[0].visibility);
+    }
+
+    #[test]
     fn poly_round_trips_document_state() {
         let mut doc = Doc::default();
         doc.frame = 12;
@@ -332,7 +487,18 @@ mod tests {
         doc.settings.render_samples = 99;
         doc.settings.engine = Engine::Workbench;
         doc.settings.hide_render.insert("Cube, the first".into());
-        doc.settings.sensor.insert("Camera".into(), 50.0);
+        doc.settings.diffuse_bounces = 7;
+        doc.settings.caustics_refractive = false;
+        doc.settings.view_transform = ViewTransform::KhronosPbrNeutral;
+        doc.settings.look = "High Contrast".into();
+        doc.settings.passes = [Pass::Mist, Pass::ObjectIndex, Pass::GlossyIndirect].into_iter().collect();
+        doc.settings.motion_blur = true;
+        doc.settings.shutter_position = ShutterPosition::End;
+        doc.settings.use_border = true;
+        doc.settings.border = [0.1, 0.2, 0.6, 0.9];
+        doc.settings.mist_falloff = MistFalloff::Linear;
+        doc.settings.time_limit = 12.5;
+        doc.settings.threads = 3;
         doc.texts.push(("Text".into(), "line one\n\tline two \\ end".into()));
         let keys_before = doc.anim.objects.iter().map(|o| o.curves.iter().map(|c| c.keys.len()).sum::<usize>()).sum::<usize>();
         assert!(keys_before > 0, "default scene has a selected object to key");

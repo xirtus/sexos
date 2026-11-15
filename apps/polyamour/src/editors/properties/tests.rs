@@ -245,6 +245,87 @@ fn light_and_camera_data() {
     assert!((f - 35.0).abs() < 1e-3, "{f}");
 }
 
+/// Pick `value` for the dropdown `key` as its menu would.
+fn pick(app: &mut App, key: &str, value: &str) {
+    app.doc.queue.push(crate::ui::Op::with("properties.set", &format!("{key}={value}")));
+    app.frame(Input::Tick);
+}
+
+#[test]
+fn render_tab_sampling_and_color_management() {
+    use sex_3d::render::{Look, ViewTransform};
+    let mut app = app();
+    open_tab(&mut app, Tab::Render);
+    set_field(&mut app, "min_samples", "8");
+    set_field(&mut app, "time_limit", "3");
+    set_field(&mut app, "threshold", "0.05");
+    let st = &app.doc.settings;
+    assert_eq!((st.adaptive_min_samples, st.time_limit), (8, 3.0));
+    let rs = st.render_settings();
+    assert_eq!((rs.min_samples, rs.time_limit, rs.noise_threshold), (8, 3.0, 0.05));
+    pick(&mut app, "view_transform", "Khronos PBR Neutral");
+    pick(&mut app, "look", "Punchy");
+    let cm = app.doc.settings.color_management();
+    assert_eq!((cm.view, cm.look), (ViewTransform::KhronosPbrNeutral, Look::Punchy));
+    app.frame(Input::key_mods(Key::Char('z'), Mods::CTRL));
+    assert_eq!(app.doc.settings.look, "None", "look change is one undo step");
+    assert_eq!(app.doc.settings.view_transform, ViewTransform::KhronosPbrNeutral);
+}
+
+#[test]
+fn ctrl_f12_renders_the_frame_range_to_files() {
+    let mut app = app();
+    let dir = std::env::temp_dir().join(format!("polyamour-anim-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let st = &mut app.doc.settings;
+    st.output_path = format!("{}/f", dir.display());
+    st.resolution_pct = 2;
+    st.render_samples = 1;
+    st.motion_blur = true;
+    app.doc.scene.frame_start = 3;
+    app.doc.scene.frame_end = 4;
+    app.frame(Input::key_mods(Key::F(12), Mods::CTRL));
+    assert!(app.doc.report.contains("Rendered 2 frames"), "{}", app.doc.report);
+    for f in ["f0003.png", "f0004.png"] {
+        let bytes = std::fs::read(dir.join(f)).unwrap();
+        assert_eq!(&bytes[1..4], b"PNG");
+    }
+    assert!(app.doc.render.is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn camera_lens_types_and_area_light_shape() {
+    use sex_3d::scene::{AreaShape, LightKind, PanoramaType};
+    let mut app = app();
+    let cam = app.doc.scene.find_object("Camera").unwrap();
+    app.doc.select_only(Some(cam));
+    app.frame(Input::Tick);
+    open_tab(&mut app, Tab::Data);
+    set_field(&mut app, "shift_x", "0.1");
+    pick(&mut app, "lens_type", "Panoramic");
+    pick(&mut app, "panorama_type", "Fisheye Equidistant");
+    pick(&mut app, "sensor_fit", "Vertical");
+    let ObjectData::Camera(c) = app.doc.scene.objects[cam].data else { panic!() };
+    assert_eq!(c.panorama, Some(PanoramaType::FisheyeEquidistant));
+    assert_eq!(c.shift_x, 0.1);
+    assert_eq!(c.sensor_fit, sex_3d::scene::SensorFit::Vertical);
+    pick(&mut app, "lens_type", "Orthographic");
+    let ObjectData::Camera(c) = app.doc.scene.objects[cam].data else { panic!() };
+    assert!(c.panorama.is_none() && c.ortho_scale.is_some());
+
+    let light = app.doc.scene.find_object("Light").unwrap();
+    if let ObjectData::Light(l) = &mut app.doc.scene.objects[light].data {
+        l.kind = LightKind::Area { size: 1.0 };
+    }
+    app.doc.select_only(Some(light));
+    app.frame(Input::Tick);
+    pick(&mut app, "area_shape", "Rectangle");
+    set_field(&mut app, "area_size_y", "0.25");
+    let ObjectData::Light(l) = app.doc.scene.objects[light].data else { panic!() };
+    assert_eq!((l.shape, l.size_y), (AreaShape::Rectangle, 0.25));
+}
+
 #[test]
 fn search_hides_panels_without_matches() {
     let mut app = app();

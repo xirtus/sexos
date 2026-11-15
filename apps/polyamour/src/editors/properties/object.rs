@@ -11,7 +11,7 @@ use crate::settings::RotationMode;
 use crate::theme as t;
 use crate::ui::{MenuItem, NumOpts, Op};
 use sex_3d::modifiers::Modifier;
-use sex_3d::scene::{ObjectData, Transform};
+use sex_3d::scene::{ObjectData, RayVisibility, Transform};
 use sex_3d::script::quat_to_euler_xyz;
 use sex_3d::{Quat, Vec3};
 
@@ -225,11 +225,42 @@ pub fn object(l: &mut L, d: &mut Doc, c: &mut Ctx) {
                 d.settings.hide_render.insert(name.clone());
             }
         }
+        l.panel(d, "object.visibility.rays", "Ray Visibility", true, &mut |l, d| {
+            let vis = d.scene.objects[o].visibility;
+            let rows: [(&str, &str, fn(&mut RayVisibility) -> &mut bool); 6] = [
+                ("Ray Visibility", "Camera", |v| &mut v.camera),
+                ("", "Diffuse", |v| &mut v.diffuse),
+                ("", "Glossy", |v| &mut v.glossy),
+                ("", "Transmission", |v| &mut v.transmission),
+                ("", "Volume Scatter", |v| &mut v.volume_scatter),
+                ("", "Shadow", |v| &mut v.shadow),
+            ];
+            for (heading, label, field) in rows {
+                let mut nv = vis;
+                let mut b = *field(&mut nv);
+                if l.check(heading, label, &mut b) {
+                    *field(&mut nv) = b;
+                    l.commit(d, &format!("{label} Visibility"));
+                    d.scene.objects[o].visibility = nv;
+                }
+            }
+        });
         inactive(l, |l| {
             let mut f = false;
             l.check("Mask", "Shadow Catcher", &mut f);
-            l.check("", "Holdout", &mut f);
         });
+        let mut h = d.scene.objects[o].holdout;
+        if l.check("", "Holdout", &mut h) {
+            l.commit(d, "Holdout");
+            d.scene.objects[o].holdout = h;
+        }
+    });
+    l.panel(d, "object.render", "Render", false, &mut |l, d| {
+        let mut v = d.scene.objects[o].pass_index;
+        if l.uint("Pass Index", "ob_pass_index", &mut v, 0, 32767) {
+            l.commit(d, "Pass Index");
+            d.scene.objects[o].pass_index = v;
+        }
     });
     l.panel(d, "object.viewport_display", "Viewport Display", false, &mut |l, _| {
         inactive(l, |l| {

@@ -843,7 +843,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     // Rendered shading adds one sample per frame.
     s.refining = false;
     if matches!(s.shading, Shading::Material | Shading::Rendered) {
-        s.refining = render::RenderView::refresh(&mut s.render, &d.scene, d.generation, &s.cam, r.w, r.h, s.shading == Shading::Material);
+        s.refining = render::RenderView::refresh(&mut s.render, &d.scene, &d.settings, d.generation, &s.cam, s.camera_view, r.w, r.h, s.shading == Shading::Material);
     } else {
         s.render = None;
     }

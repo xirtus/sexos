@@ -158,6 +158,9 @@ pub enum BoxMode {
 pub struct Doc {
     pub scene: Scene,
     pub undo: UndoStack,
+    /// Settings as they were at each undo (and redo) step, in step with `undo`.
+    settings_undo: Vec<crate::settings::Settings>,
+    settings_redo: Vec<crate::settings::Settings>,
     pub mode: Mode,
     pub select_mode: SelectMode,
     pub edit: EditSelection,
@@ -228,6 +231,8 @@ impl Doc {
         Doc {
             scene,
             undo: UndoStack::new(),
+            settings_undo: Vec::new(),
+            settings_redo: Vec::new(),
             mode: Mode::Object,
             select_mode: SelectMode::Vertex,
             edit: EditSelection::default(),
@@ -264,6 +269,11 @@ impl Doc {
     /// Record an undo step named `label` before changing the scene.
     pub fn push_undo(&mut self, label: &str) {
         self.undo.push(label, &self.scene);
+        self.settings_undo.push(self.settings.clone());
+        if self.settings_undo.len() > self.undo.max_steps {
+            self.settings_undo.remove(0);
+        }
+        self.settings_redo.clear();
         self.dirty = true;
     }
     /// The scene changed: caches must rebuild.
@@ -319,7 +329,12 @@ impl Doc {
         match op.id.as_str() {
             "ed.undo" => {
                 match self.undo.undo(&mut self.scene) {
-                    Some(l) => self.report = format!("Undo {l}"),
+                    Some(l) => {
+                        if let Some(prev) = self.settings_undo.pop() {
+                            self.settings_redo.push(std::mem::replace(&mut self.settings, prev));
+                        }
+                        self.report = format!("Undo {l}")
+                    }
                     None => self.report = "Nothing to undo".into(),
                 }
                 crate::edit::sanitize(self);
@@ -327,7 +342,12 @@ impl Doc {
             }
             "ed.redo" => {
                 match self.undo.redo(&mut self.scene) {
-                    Some(l) => self.report = format!("Redo {l}"),
+                    Some(l) => {
+                        if let Some(next) = self.settings_redo.pop() {
+                            self.settings_undo.push(std::mem::replace(&mut self.settings, next));
+                        }
+                        self.report = format!("Redo {l}")
+                    }
                     None => self.report = "Nothing to redo".into(),
                 }
                 crate::edit::sanitize(self);
