@@ -92,7 +92,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     assert not any(out.iterdir()), 'fresh evidence directory required'
     sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
-    programs = [(n, app_root / 'iso_root/programs' / n) for n in ('moan', 'moanplug', 'files')]
+    programs = [(n, app_root / 'iso_root/programs' / n) for n in ('moan', 'moanplug', 'loom')]
     programs.append(('moanrack', args.seed_elf.resolve()))
     inputs = {str(p): sha(p) for p in [args.iso, args.source_disk, *[p for _, p in programs]]}
     for root in (own, app_root):

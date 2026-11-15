@@ -271,6 +271,9 @@ mod guest {
         let alive = app.ui.button(column, "Parent still works");
         let mut counter = 0u32;
         let mut job: Option<OfflineJob> = None;
+        // A taken result still holds its Files entry until release; keep polling.
+        let mut reported = false;
+        let mut hold_after_start = false;
         let mut closing = false;
         let mut selected = 0;
         let mut resume_at: Option<u64> = None;
@@ -305,7 +308,15 @@ mod guest {
             }
             if let Some(j) = job.as_mut().filter(|_| can_poll) {
                 j.poll(now);
-                if j.retired() {
+                if hold_after_start && j.child_identity().is_some() {
+                    hold_after_start = false;
+                    resume_at = Some(now.saturating_add(3000));
+                }
+                if reported && j.retired() {
+                    // Files released the job entry: only now is the job slot free.
+                    job = None;
+                    reported = false;
+                } else if j.retired() && !reported {
                     let st = j.status();
                     let result = j.take_result();
                     let pass = match result {
@@ -337,7 +348,11 @@ mod guest {
                             "Child failed or cancelled; parent remains alive"
                         },
                     );
-                    job = None;
+                    reported = true;
+                    if j.retired() {
+                        job = None;
+                        reported = false;
+                    }
                 }
             }
             if closing && job.is_none() {
@@ -415,15 +430,17 @@ mod guest {
                             },
                             now,
                         )
-                        .map_err(|_| ())
+                        .map_err(|e| {
+                            sex_pdx::serial_record!("[moanrack.refused] mode={} why={:?}", i, e);
+                        })
                     }) {
                         Ok(mut j) => {
                             if i == 2 {
                                 j.shorten_deadline(now.saturating_add(2000));
                             }
-                            if i == 6 {
-                                resume_at = Some(now.saturating_add(500));
-                            }
+                            // Hold the window once the helper has started, so its Done
+                            // waits in the mailbox while this parent does not poll.
+                            hold_after_start = i == 6;
                             job = Some(j);
                             app.ui.set_text(status, "Offline render running");
                             sex_pdx::serial_record!(

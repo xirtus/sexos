@@ -17,13 +17,13 @@ for name in ('iso','source-disk','seed-elf','out'):
 args=parser.parse_args()
 ISO=args.iso.resolve();SEED=args.source_disk.resolve();SEED_ELF=args.seed_elf.resolve()
 OUT=args.out.resolve();OUT.mkdir(parents=True,exist_ok=False)
-inputs={str(p):sha(p)for p in [ISO,SEED,SEED_ELF,Path(__file__),*[ROOT/'iso_root/programs'/name for name in('moan','files')]]}
+inputs={str(p):sha(p)for p in [ISO,SEED,SEED_ELF,Path(__file__),*[ROOT/'iso_root/programs'/name for name in('moan','loom')]]}
 for d in('apps/moan','crates/moan-core','crates/moan-plugin','crates/serenade-core','crates/weft','crates/sex-app','crates/sex-pdx','assets/fonts','scripts'):
  for p in(ROOT/d).rglob('*'):
   if p.is_file()and'__pycache__'not in p.parts and'target'not in p.relative_to(ROOT/d).parts:inputs[str(p)]=sha(p)
 (OUT/'inputs.json').write_text(json.dumps(inputs,indent=2)+'\n')
 (OUT/'source-commit.txt').write_text(subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True))
-disk=OUT/'nvme.img';shutil.copyfile(SEED,disk);install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('moan','files')]+[('moanrack',SEED_ELF.read_bytes())])
+disk=OUT/'nvme.img';shutil.copyfile(SEED,disk);install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('moan','loom')]+[('moanrack',SEED_ELF.read_bytes())])
 wav=OUT/'live.wav';os.environ['SEXOS_GATE_DEVICES']=f'-audiodev wav,id=snd0,path={wav},out.frequency=48000,out.channels=2 -device virtio-sound-pci,audiodev=snd0';os.environ['SEXOS_GATE_BOUND']='1800'
 g=boot(ISO,disk,OUT,'workspace-live','1280x800');shots=[];phases=[]
 class Driver(Probe):

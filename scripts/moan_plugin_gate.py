@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Native offline CLAP processing/crash/timeout qualification; no hostile sandbox claim."""
+"""Native offline CLAP processing/crash/timeout qualification through the restricted
+helper coordinator (moan.role.* receipts); no hostile sandbox claim."""
 import argparse,hashlib,json,os,re,shutil,time
 from pathlib import Path
 from install_program import install
@@ -43,18 +44,18 @@ def main():
     time.sleep(.1)
    (out/f'{name}-captures.json').write_text(json.dumps(dict(ok=False,attempts=attempts),indent=2)+'\n');raise AssertionError('fresh visible status failed: '+expected)
   for mode in [0,1,0,2,0,4,5,6]:
-   s=len(text());click(mode);began=g['wait'](rf'\[moanrack.started\] mode={mode} cookie=(\d+)',s,60);cookie=int(began[1]);child=g['wait'](rf'\[shell.launch.event\] parent={parent} event=Started \{{ cookie: {cookie}, row: (\d+), task: (\d+) \}} sent=1',s,120)
+   s=len(text());click(mode);began=g['wait'](rf'\[moanrack.started\] mode={mode} cookie=(\d+)',s,60);cookie=int(began[1]);child=g['wait'](rf'\[moan.role.started\] parent={parent} parent_task={task} cookie={cookie} pd=(\d+) task=(\d+)',s,120)
    expected=1 if mode in (0,4,6) else 0;result_marker=g['wait'](rf'\[moanrack.result\] mode={mode} cookie={cookie} complete={expected} processed={expected} retired=1',s,180);result_end=s+result_marker.end()
    if mode==4:g['wait'](r'\[moanplug.rendered\] frames=1025 blocks=5 ticks=\d+ format=vst3 offline=1',s,60)
    if mode==0:g['wait'](r'\[moanplug.rendered\] frames=1025 blocks=5 ticks=\d+ format=clap offline=1',s,60)
    elif mode==1:assert re.search(rf'fault.kill \[cpu.fault.terminal\] pd={child[1]} kind=invalid_opcode ',text()[s:]),'missing exact child invalid-opcode fault receipt'
-   elif mode==2:g['wait'](rf'\[shell.launch.kill\] parent={parent} child={child[1]} task={child[2]} ok=1',s,60)
+   elif mode==2:g['wait'](rf'\[app.program.forced\] target={child[1]} task={child[2]} ',s,60)
    if mode==5:
     assert 'format=clap offline=1' not in text()[s:],'restart output must not publish'
     g['wait'](r'\[moanplug.rejected\] format=clap reason=restart',s,60)
-    g['wait'](rf'\[shell.launch.event\] parent={parent} event=Done \{{ cookie: {cookie}, row: {child[1]}, task: {child[2]}, status: Some\(2\) \}} sent=1',s,60)
+    g['wait'](rf'\[app.private.retired\] target={child[1]} task={child[2]} ',s,60)
    if mode==6:
-    segment=text()[s:];done=re.search(rf'\[shell.launch.event\] parent={parent} event=Done \{{ cookie: {cookie}, row: {child[1]}, task: {child[2]}, status: Some\(0\) \}} sent=1',segment);resume=re.search(r'\[moanrack.window.waited\] receipts_pending=1',segment);assert done and resume and done.start()<resume.start(),'missing causal window-wait mailbox preservation'
+    segment=text()[s:];done=re.search(rf'\[app.private.retired\] target={child[1]} task={child[2]} ',segment);resume=re.search(r'\[moanrack.window.waited\] receipts_pending=1',segment);assert done and resume and done.start()<resume.start(),'missing causal window-wait mailbox preservation'
    capture_status(f'mode-{mode}-result-{cookie}',expected_status(mode),result_end)
    s=len(text());click(7);alive_marker=g['wait'](r'\[moanrack.alive\] n=(\d+)',s,60)
    capture_status(f'mode-{mode}-parent-{cookie}',f'Parent action {int(alive_marker[1])}',s+alive_marker.end())
