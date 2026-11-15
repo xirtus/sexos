@@ -1,36 +1,239 @@
-# Polyamour Python scripting (Z7, first cut): polyops 1
+# Polyamour Python scripting: live kernel, bpy, add-ons (polyops 1)
 
-Python scripts drive Polyamour through `import polyamour` (or plain `import bpy`).
-A script cannot link into the Polyamour process, so the package writes a text
-command stream, **polyops**, that `crates/sex-3d/src/script.rs` executes against a
-`Scene`.
+Python scripts drive Polyamour through `import bpy` (or `import polyamour`),
+`mathutils`, `bmesh` and `bpy_extras`. Python runs in its own process and
+talks to Polyamour in **polyops**, a line language that
+`crates/sex-3d/src/script.rs` executes against a `Scene`. Since phase 5 the
+channel is **live**: a long-running Python *kernel* sends a request for every
+read and write and waits for the reply, so a script reads back what it just
+did, as in Blender.
 
 | Piece | Where |
 |---|---|
-| Interpreter, scene writer | `crates/sex-3d/src/script.rs` |
-| Tests (every command, errors, round trip, python3 end to end) | `crates/sex-3d/tests/script.rs` |
-| Python API | `apps/polyamour/python/polyamour/{__init__,polyops,types}.py` |
-| Blender aliases | `apps/polyamour/python/bpy/`, `apps/polyamour/python/mathutils/` |
-| Examples | `apps/polyamour/python/examples/{spiral_staircase,blender_pyramid}.py` |
-| Freezing into `python` | `scripts/python_freeze.py` (`POLYAMOUR` list) → `apps/python/frozen/` |
+| polyops interpreter, scene writer | `crates/sex-3d/src/script.rs` (+ `script/{rig,nodes}.rs`) |
+| bpy commands (dumps, Blender-idname operators, keyframes, registry, reports, noise) | `crates/sex-3d/src/script/bpy.rs` |
+| Live channel, batch fallback | `crates/sex-3d/src/script/live.rs` |
+| The kernel | `apps/polyamour/python/polyamour/kernel.py` |
+| Python API | `apps/polyamour/python/{polyamour,bpy,bpy_extras,mathutils,bmesh}/` |
+| App integration (console, Run Script, add-ons, panels, F3, handlers) | `apps/polyamour/src/python.rs`, `editors/{simple,text}.rs`, hooks in `app.rs`, `doc.rs`, `editors/view3d/sidebar.rs`, `editors/properties/mod.rs` |
+| Templates (ours) and examples | `apps/polyamour/python/templates/`, `apps/polyamour/python/examples/` |
+| Tests | `crates/sex-3d/tests/python_live.rs` (10), `crates/sex-3d/tests/script.rs` (`python_*`, 4), `apps/polyamour/src/python.rs` (4), `editors/simple.rs` (console, 2) |
+| Freezing into SexOS's `python` | `scripts/python_freeze.py` (`POLYAMOUR` list) -> `apps/python/frozen/` |
 
-## How Polyamour runs a script
+## The live protocol (`sex_3d::script::live`)
 
-1. Write the current scene with `script::scene_to_polyops(&scene)` to a file and
-   pass its path as `POLYAMOUR_SCENE`. The package loads it at import, so
-   `bpy.data.objects['Cube']`, `obj.location`, `context.active_object`, mesh
-   vertices etc. read real values.
-2. Start `python SCRIPT` with `POLYAMOUR_OPS=<path>`. Without `POLYAMOUR_OPS` the
-   commands go to standard output and the script's own `print` output is moved
-   to standard error, so either stream can be the channel.
-3. When the process exits, read the file and call `script::run(&mut scene, &text)`
-   after `undo.push("Run Script", &scene)`. `run` is atomic (it works on a copy),
-   so one script is one undo step, and a failed run changes nothing.
-4. Check `report.complete`: the package always ends the stream with `end`, or with
-   `abort "KeyError: 'Missing'"` when the script raised (which makes `run` fail).
-   A stream without either was cut short (the interpreter died): do not apply it.
-5. `report.render` holds `render k=v` settings (the `Scene` has no render settings
-   yet), `report.created` the names of new objects.
+Polyamour starts `python3 -u -I -c BOOT` (BOOT puts the package folders on
+`sys.path` and runs `polyamour.kernel.main()`), with `POLYAMOUR_LIVE=1`. The
+kernel keeps the original stdin/stdout for the protocol and gives running code
+an empty stdin and `sys.stdout`/`sys.stderr` that become `out`/`err` lines.
+Every line is one message; tokens are polyops tokens (quoted when needed).
+
+```text
+python -> host   hello polyops 1 python=3.13.18
+host   -> python call 7 exec "script.py" "import bpy\n..."
+python -> host   @1 op mesh.primitive_cube_add size=2      (a request: any polyops command)
+host   -> python @1 ok Cube.001                           (or: @1 err "message")
+python -> host   @2 dump_object Cube.001
+host   -> python @2 ok =json {"name":"Cube.001",...}
+python -> host   out "made Cube.001\n"                    (err "..." for stderr)
+python -> host   done 7 ok                                (done 7 json {...} / done 7 error MSG line=N traceback=TEXT)
+host   -> python quit
+```
+
+* Call kinds: `exec NAME SOURCE`, `console LINE` (answers `ok`, `more` or
+  `error`), `complete TEXT` (json `{prefix, completions}`), `draw PANEL`,
+  `menu MENU`, `panels` (registered panels, operators, menus, appended menus,
+  keymaps, handler counts, timer count), `operator IDNAME invoke|execute|poll
+  PROPS-JSON`, `set_prop PANEL REF VALUE-JSON`, `modal EVENT-JSON`,
+  `handler NAME`, `frame N`, `timers` (json `{next}`), `addons DIR...`,
+  `addon_enable M`, `addon_disable M`, `reset`, `ping`.
+* While a call runs, each request gets exactly one reply before Python goes
+  on. One `Session` lives as long as the kernel, so `as=$N` handles and the
+  `bpy::State` (selection, edit-mode selection, render props, registered
+  classes, reports) persist across calls. A `Host` gets the first look at each
+  request; `NoHost` serves everything from the scene.
+* The kernel caches read replies (JSON dumps) until the next write, and drops
+  the cache at the start of every call (the host may have undone or rolled
+  back in between). Local mesh edits (`vertices[i].co`, `foreach_set`, uv,
+  smooth, seams...) are kept in Python and flushed as one `mesh_set` /
+  `mesh_attr` / `mesh_select` before the next request.
+* Rust API: `Kernel::spawn(&KernelConfig) -> io::Result<Kernel>`,
+  `Kernel::with_wire(Box<dyn Wire>)` (any line transport), `kernel.call(&mut
+  scene, &mut dyn Host, kind, &[args]) -> CallResult { printed, result:
+  Result<Vec<String>, CallError { message, line, traceback }>, json, requests }`,
+  `kernel.session` (the `Session`), `run_script(&mut scene, name, src)` (one
+  shot, all or nothing), `live::json` (serde_json re-exported).
+* Undo is the caller's: Polyamour runs a call that may change the scene on a
+  copy and keeps the copy as **one undo step** when the call succeeded and the
+  scene changed; a failed call changes nothing.
+
+## SexOS: starting another program and talking to it
+
+What a SexOS program can do today (`patches/rust-std/process_sexos.rs`, over
+`crates/sex-std/src/process.rs` and `sex_app::launch`):
+
+* `std::process::Command::new("python")` starts `/bin/python` (a bare name,
+  `/bin/NAME`, or `@/path` of a program file the run holds). **Arguments**
+  are passed (as one quoted line). `spawn()`, `status()`, `wait()`,
+  `try_wait()`, `kill()` and `id()` work; the exit code comes back.
+* **No environment variables** and **no `current_dir`** reach the child.
+  `SEXOS_RUN_WINDOWED=1` / `SEXOS_RUN_NETWORK=1` in `Command::env` are read as
+  flags (a window; network), nothing else.
+* **No pipes**: `Stdio::piped()` fails with `Unsupported`, so `output()` fails
+  unless both streams are `null()` or `inherit()`. A child's output otherwise
+  goes to the serial record only.
+* So the only data channel is **files**, named in the arguments, read after
+  the child ended (or polled while it runs). Whether a child sees every file
+  of its parent depends on what the run holds; Polyamour keeps its files under
+  `/data/polyamour/run`.
+
+Consequences for Polyamour on SexOS: `Kernel::spawn` fails with `Unsupported`
+(no pipes), and Polyamour uses the **batch path**:
+
+1. `live::batch_snapshot(&scene)` writes the replies to the start-of-run reads
+   (`ids`, `dump_scene`, `op_list`, every object, material, material node tree,
+   mesh up to 100k vertices, armature) as JSON `[[request tokens], reply]`.
+2. `live::batch_command(&cfg, script, ops, snapshot)` runs
+   `python -I -c BOOT OPS SNAPSHOT SCRIPT` (BOOT = `live::batch_boot`, calling
+   `polyops.run_batch`); everything travels as arguments.
+3. The script's commands go to OPS; creating commands get `as=$N` handles in
+   place of names; `print` output goes into OPS as `#> "text"` (stdout) /
+   `#! "text"` (stderr) comment lines (`live::batch_output`); an uncaught
+   exception ends the stream with `abort "line N: Kind: message"`.
+4. `live::batch_apply(&mut scene, ops)` applies it all or nothing; Polyamour
+   pushes one undo step.
+
+Batch limits: reads see the scene as it was when the script started (a script
+cannot read back an object it just made, e.g. `context.active_object` after an
+operator, or a new material's node tree); the console, add-ons, script panels,
+handlers and timers need the live kernel and say so. Info and the status bar
+say "Python runs scripts in batch mode: live Python needs pipes between
+programs, which this system does not have yet".
+
+**Dropping the live channel in later:** the protocol only needs a line
+transport (`trait Wire { send, recv, diagnostics, close }`). When SexOS gets
+pipes, `Kernel::spawn` works unchanged. Without pipes, a `Wire` over two files
+(the host appends calls to one, the kernel appends requests to the other, each
+side polling with `try_wait` for liveness) would carry the same protocol;
+`kernel.main()` takes any pair of text streams.
+
+## In the app
+
+* **Text Editor**: Run Script (header button, Text > Run Script, **Alt+P**, or
+  Ctrl+Enter). A text starting with `polyops 1` runs in-process; anything else
+  runs in the kernel as one undo step. An error changes nothing; the traceback
+  goes to Info as output lines and `script.py: line N: KeyError: ...` to Info
+  and the status bar. Templates > Python: Operator Simple, UI Panel Simple,
+  Add-on Add Object, Bmesh Simple, Handlers and Timers, Pyramid, Spiral
+  Staircase (all ours).
+* **Python Console**: Blender's banner and colours, `>>> ` / `... ` prompts
+  with auto-indent (an indent-only line ends the block), Up/Down history,
+  **Tab** (indent at line start, otherwise complete) and **Ctrl+Space**
+  completion from the live namespace (attributes, `D.objects['` keys,
+  builtins), `C = bpy.context`, `D = bpy.data`, `from mathutils import *`,
+  `from math import *`. Results are echoed (`repr`), errors print the
+  traceback in red. Each line that changed the scene is one undo step. Without
+  live Python the console falls back to polyops lines.
+* **Add-ons** (Preferences > Add-ons): add-ons are `.py` modules or package
+  folders with `bl_info` (or `blender_manifest.toml`) in the add-ons folder:
+  `/data/polyamour/addons` on SexOS, `$XDG_DATA_HOME/polyamour/addons` or
+  `~/.local/share/polyamour/addons` on a host (`POLYAMOUR_DATA` overrides).
+  The checkbox enables/disables (`register()`/`unregister()`), the list is kept
+  in `addons_enabled.txt` next to it and enabled again at the next start.
+* **F3** lists script operators after the built-in entries; running one is
+  `bpy.ops.X.Y('INVOKE_DEFAULT')` (poll, invoke, execute, modal).
+* **Script panels**: `bl_space_type='VIEW_3D'`, `bl_region_type='UI'` panels
+  appear as sidebar (N) tabs by `bl_category` (default "Misc");
+  `bl_space_type='PROPERTIES'` panels appear under the tab of their
+  `bl_context`. `draw()` is recorded into a layout description (rows, columns,
+  boxes, splits, labels, props with kind/min/max/enum items, operator buttons
+  with properties, menus, lists) that Polyamour draws with its own widgets;
+  editing a prop sends `set_prop`, a button runs the operator. Sub-panels
+  (`bl_parent_id`), `poll()`, `HIDE_HEADER`, `DEFAULT_CLOSED` are honoured.
+* **Handlers**: `frame_change_pre/post` run when the frame changes (only when a
+  handler is registered), `depsgraph_update_post` after a call changed
+  something; `load_*`/`save_*` can be called with `handler NAME`.
+  **`bpy.app.timers`** run from the window loop (the window keeps ticking
+  while timers wait). Handlers and timers make no undo steps, as in Blender.
+
+## Python API coverage
+
+* `bpy.data`: objects, meshes, materials, collections, images, node_groups,
+  armatures, lattices, actions, lights, cameras, scenes, worlds, texts with
+  `new/remove/get/[name]/[index]/iteration/foreach_get`. `bpy.context`:
+  scene, view_layer, collection, active_object/object, selected_objects,
+  mode, active_bone, selected pose bones, area, `temp_override`,
+  `evaluated_depsgraph_get`.
+* Objects: transforms (all rotation modes), `matrix_world/local/basis`,
+  parent, `dimensions`, hide/select, modifiers (Blender types and attribute
+  names), material slots, constraints, vertex groups, shape keys, pose,
+  `animation_data`, `keyframe_insert/delete`, `evaluated_get`, `ray_cast`,
+  `copy()`, `to_mesh()`.
+* Meshes: `from_pydata`, vertices/edges/polygons/loops/loop_triangles with
+  `foreach_get/set`, normals, uv layers, attributes (lite), materials,
+  `transform`, `update/validate`, shape keys, select/hide flags, seams, sharp.
+* Animation: actions, fcurves (`evaluate`, keyframe points with handles and
+  interpolation), groups; `scene.frame_set` runs handlers.
+* Rigging: armatures, `edit_bones` (head/tail/roll/matrix, Blender's
+  vec_roll conventions), bones, pose bones (`matrix`, rotation modes,
+  constraints), lattices.
+* Shading: node trees for materials, world, groups and the compositor;
+  nodes/links/sockets (`default_value`, `is_linked`), interface sockets, color
+  ramps; Principled inputs also set the material's own colour and numbers;
+  images (`pixels`, `save`), `render.render()` with `write_still`.
+* `bpy.ops`: Polyamour's operators under Blender idnames with `poll()` and
+  `{'FINISHED'}`/`{'CANCELLED'}`; unknown idnames raise like Blender.
+* `bpy.types`: Operator (+ Macro), Panel, Menu (with `append/prepend` on
+  built-in menus), Header, UIList, PropertyGroup, AddonPreferences;
+  `bpy.props` (Bool/Int/Float/String/Enum/Pointer/Collection and vectors with
+  update/get/set callbacks); `bpy.utils.register_class`,
+  `register_classes_factory`, keymaps (recorded).
+* `bpy.app`: `version` (4, 2, 0), `version_string`, handlers (all of Blender's
+  lists, `persistent`), timers, translations stub, `binary_path`, `debug`.
+* `mathutils`: Vector, Matrix, Quaternion, Euler, Color with Blender's
+  operators and conversions; `geometry`, `kdtree`, `bvhtree`,
+  `noise` (Polyamour's own noise through the `noise` command, values agree with
+  the renderer to float precision), `interpolate`.
+* `bmesh`: BMesh/BMVert/BMEdge/BMFace/BMLoop, layers (uv, deform, float/int),
+  `from_mesh/to_mesh/from_edit_mesh/update_edit_mesh`, and ops
+  create_cube/grid/uvsphere/icosphere/circle/cone, translate/scale/rotate/
+  transform, reverse_faces, recalc_face_normals, triangulate, remove_doubles,
+  weld_verts, delete, duplicate, contextual_create, holes_fill, poke,
+  extrude_face_region/discrete_faces/edge_only/vert_indiv,
+  inset_individual/region, subdivide_edges (grid fill), spin, mirror,
+  dissolve_verts/edges/faces, bevel (runs Polyamour's bevel on a copy),
+  collapse, pointmerge, join_triangles, smooth_vert.
+
+## Missing compared with Blender's Python API
+
+* No pipes on SexOS: live features (console, add-ons, panels, handlers,
+  timers, read-after-write) need the host build until SexOS has pipes or the
+  file `Wire` is written; batch reads see the start-of-run scene.
+* `gpu`, `blf`, `bgl`, `aud`, `imbuf`, `freestyle`, `bl_math`, `idprop`
+  modules; drawing callbacks (`SpaceView3D.draw_handler_add`) are accepted but
+  never called.
+* `bpy.msgbus` subscriptions are recorded but never fire; `bpy.app.handlers`
+  for render, undo/redo, load/save run only when the host calls them.
+* Modal operators get the events the host sends (`modal` call); the app does
+  not forward viewport events to script modal operators yet. Operator redo
+  panels (Adjust Last Operation) are not shown.
+* Layout widgets not drawn: icons, `template_*` beyond `template_list`,
+  popovers, pie menus (drawn as rows), `operator_enum`, color pickers for
+  script color props (drawn as number fields).
+* One scene per file (`bpy.data.scenes.new` raises); no linked libraries,
+  `bpy.data.libraries`, `bpy.data.batch_remove`, `bpy.data.user_map`.
+* Node trees: no copying a tree, no removing group interface sockets; Geometry
+  Nodes trees through bpy are limited to what the polyops node commands carry.
+* Images: no `scale`, no packing; textures (`bpy.data.textures`) absent.
+* Lights cannot change type after creation; an object cannot switch data to a
+  different data type.
+* bmesh: `convex_hull`, `bridge_loops`, `connect_verts`, `BMFace.copy`,
+  `utils.vert_separate`, `utils.loop_separate` raise `NotImplementedError`;
+  `face_split` ignores `coords`; custom-data layers are kept in Python only for
+  uv, deform and simple float/int.
+* Drivers (`driver_add`) and the expression namespace are absent.
+* Grease Pencil, curves/text objects, particles, physics, sequencer, and
+  `bpy.ops` for editors Polyamour does not have.
 
 ## Rust API (`sex_3d::script`)
 
@@ -47,8 +250,8 @@ pub struct ScriptError { line: usize, message: String }   // Display: "line N: m
 pub struct Session;  // new(), exec_line(&mut scene, line), take_replies(), finish()
 ```
 
-`Session` is the line-at-a-time engine under `run`, for a future live channel
-(feed a line, take its reply lines, send them back).
+`Session` is the line-at-a-time engine under `run` and under the live
+channel (feed a line, take its reply lines, send them back).
 
 ## The language
 
@@ -76,8 +279,8 @@ pub struct Session;  // new(), exec_line(&mut scene, line), take_replies(), fini
 * Request/response: `@ID` before the command word (`@7 get Cube.location`) asks
   for a reply `@7 ok 1 2 3`; creating commands answer with the name they gave.
   Queries (`get`, `list`, `exists`, `ping`) always reply (`ok ...`). Replies are
-  collected in `RunReport::replies`; today's file stream is one-way, so scripts
-  read the `POLYAMOUR_SCENE` mirror instead. Any error stops the run and names
+  collected in `RunReport::replies`, and the live channel sends them back to
+  the script. Any error stops the run and names
   its 1-based line: `line 12: no object named 'Cueb'`.
 
 ### Commands
@@ -114,6 +317,7 @@ selected one (Blender's rule).
 | `world color=r,g,b strength=` / `scene name= frame_start= frame_end= fps=` | world, scene settings |
 | `render key=value...` | stored into `RunReport::render` |
 | `get` `list objects\|meshes\|materials\|collections\|selected` `exists OBJ` `ping` | queries |
+| `ids`, `dump_object/mesh/material/tree/scene/armature/lattice/image/action OBJ`, `eval_mesh`, `op_list`, `op_poll`, `op IDNAME [opts]`, `noise KIND POINTS`, ... | the bpy commands of `script/bpy.rs` (JSON replies), used by the Python package |
 
 `scene_to_polyops` uses `scene`, `world`, `collection_new/_set`, `material_new`,
 `mesh_new`, `add_object/add_empty/light_add/camera_add` (with `quaternion=` so
@@ -125,74 +329,33 @@ materials, loose edges, every light kind, an ortho camera, modifiers, hidden
 objects). Not carried: images, material textures, the world HDRI; duplicate
 material names come back made unique.
 
-## Python API
-
-`import polyamour as pa` (or `import bpy`; `from mathutils import Vector`):
-
-* `pa.data.objects` (`[name]`, `.get`, iteration, `.new(name, data)`,
-  `.remove(obj)`), `meshes.new`, `materials.new`, `collections.new`,
-  `lights.new(name, type)`, `cameras.new`.
-* Objects: `name`, `type`, `data`, `location` / `rotation_euler` / `scale`
-  (live vectors: `obj.location.x = 2`, `obj.location += Vector(...)`), `parent`,
-  `children`, `modifiers.new(name, type)` with Blender types `SUBSURF MIRROR
-  ARRAY SOLIDIFY BEVEL TRIANGULATE WELD DISPLACE SMOOTH` and their Blender
-  attribute names (`levels`, `use_axis[1]`, `relative_offset_displace`,
-  `merge_threshold`, `angle_limit`, ...), `active_material`, `material_slots`,
-  `select_set/select_get`, `hide_set/hide_viewport`.
-* Meshes: `from_pydata(verts, edges, faces)`, `vertices[i].co` (read/write),
-  `polygons`, `materials.append(mat)`, `shade_smooth()`.
-* Materials: `base_color` / `diffuse_color`, `metallic`, `roughness`, `ior`,
-  `transmission`, `emission_color`, `emission_strength`, and
-  `node_tree.nodes['Principled BSDF'].inputs['Base Color'].default_value`.
-* Lights: `energy`, `color`, `shadow_soft_size`, `spot_size`, `spot_blend`,
-  `size`. Cameras: `lens`, `angle`, `clip_start`, `clip_end`, `type`, `ortho_scale`.
-* `pa.context`: `scene` (`objects`, `collection`, `camera`, `frame_start/end`,
-  `render.*`, `world.color/strength`), `active_object`/`object`,
-  `selected_objects`, `collection`, `view_layer.objects.active`.
-* `pa.ops.mesh.primitive_{cube,plane,grid,uv_sphere,ico_sphere,cylinder,cone,torus}_add`
-  (Blender arguments incl. `location`, `rotation`, `scale`), `pa.ops.object.`
-  `light_add`, `camera_add`, `empty_add`, `select_all`, `delete`, `shade_smooth`,
-  `shade_flat`, `modifier_add`.
-
-Only the stdlib modules in `apps/python/frozen/MANIFEST` are used (`os`, `sys`,
-`atexit`, `math`, `base64`, `struct`).
 
 ## Getting it onto SexOS
 
 `apps/python` freezes pure-Python modules into the binary from
 `apps/python/frozen/*.bin` + `MANIFEST` (build.rs turns them into CPython's
-frozen tables). `scripts/python_freeze.py` now also compiles `polyamour`,
-`polyamour.polyops`, `polyamour.types`, `bpy` and `mathutils` from
-`apps/polyamour/python`, and the regenerated `apps/python/frozen/` is committed:
-every `python` on SexOS can `import bpy` with nothing in its folder. The
-standard-library `.bin` files came out byte-identical (checked), so only five
-new files and five `MANIFEST` lines changed.
+frozen tables). `scripts/python_freeze.py` compiles every module of
+`polyamour` (with the kernel), `bpy`, `bpy_extras`, `mathutils` and `bmesh`
+(the `POLYAMOUR` list, which must name every module) and `codeop` for the
+console; the regenerated `apps/python/frozen/` is committed, so every
+`python` on SexOS can `import bpy` with nothing in its folder. The
+standard-library `.bin` files come out byte-identical.
 
-**After editing anything under `apps/polyamour/python/polyamour|bpy|mathutils`,
-refreeze**, with any CPython 3.13 (bytecode is per release series):
+**After editing anything under `apps/polyamour/python/`, refreeze** with any
+CPython 3.13 (bytecode is per release series), and add new modules to
+`POLYAMOUR`:
 
-    mkdir -p /tmp/cp && ln -sfn /usr/local/lib/python3.13 /tmp/cp/Lib   # or a v3.13.18 checkout
-    python3.13 scripts/python_freeze.py /tmp/cp
+    mkdir -p "$SCRATCH/cp" && ln -sfn /usr/local/lib/python3.13 "$SCRATCH/cp/Lib"   # or a v3.13.18 checkout
+    python3.13 scripts/python_freeze.py "$SCRATCH/cp"
     cargo build -p python --target <SexOS target>   # rebuilds the frozen tables
 
-Without refreezing, an edited package still works when its folder is next to a
-script: sys.path holds the script's directory and `/lib`, but frozen modules are
-found first, so a stale frozen copy wins. (Frozen import of the packages was
-checked on the host by loading the `.bin` files through a finder like
-FrozenImporter and running `examples/blender_pyramid.py`.)
+The frozen copies were checked on the host by importing all 39 modules through
+a finder that loads the `.bin` files (as FrozenImporter does) and running
+bmesh and mathutils code. Without refreezing, an edited package still works
+when its folder is next to a script, but frozen modules are found first, so a
+stale frozen copy wins.
 
-## Weak spots / next steps
-
-* One-way today: replies exist (`@ID`, queries) but nothing carries them back to
-  the script yet; reads come from the `POLYAMOUR_SCENE` snapshot taken at start.
-* Primitives created by `pa.ops` have no geometry in the Python mirror
-  (`len(obj.data.vertices) == 0`) until the script sets it.
-* `bpy.data.objects.new` adds the object to the scene at once (Polyamour has no
-  unlinked objects); `collection.objects.link` *moves* it (one collection per object).
-* Material slots live on objects; `mesh.materials.append` updates every current
-  user of the mesh and later users created through `objects.new`.
-* `sys.exit(1)` is not treated as failure (no `abort`); only uncaught exceptions are.
-* No `matrix_world`/`Matrix`, keyframes, bmesh, edit-mode operators, drivers,
-  node graphs beyond the Principled shim, or images/textures.
-* Not yet run inside SexOS itself (needs a `python` rebuild with musl headers and
-  a gate like `scripts/python_gate.py` typing `run python stairs.py`).
+Not yet run inside SexOS itself: the build host has no musl headers
+(`MUSL_INCLUDE`), so `cargo build -p python` builds the stub without CPython;
+a gate like `scripts/python_gate.py` typing `run polyamour` and Alt+P would
+check the batch path end to end.
