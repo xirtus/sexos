@@ -23,8 +23,8 @@ fn s(pd:u32,task:u32)->Subject{Subject{pd,task}}
 }
 #[test]fn empty_cold_checkpoint_recovers_and_missing_or_unknown_journal_denies(){
  let journal=Journal::new();let rows=[42,43];let mut p=pool::Pool::new();p.initialize(&journal,Some(1),true,&rows);let mut restarted=pool::Pool::new();restarted.initialize(&journal,Some(2),true,&rows);assert!(restarted.normal());assert!(!restarted.recovering());
- restarted.initialize(&journal,Some(2),false,&rows);assert!(!restarted.normal());assert!(restarted.reserved(42));
- let bad=Journal::new();let mut l=Ledger::empty();l.quarantine(s(999,999),1);bad.persist(&l);let mut p=pool::Pool::new();p.initialize(&bad,Some(2),true,&rows);assert!(!p.normal());assert!(p.reserved(42));p.recovered();assert!(!p.normal());
+ restarted.initialize(&journal,Some(2),false,&rows);assert!(!restarted.normal());assert!(!restarted.recovering());assert!(restarted.reserved(42));
+ let bad=Journal::new();let mut l=Ledger::empty();l.quarantine(s(999,999),1);bad.persist(&l);let mut p=pool::Pool::new();p.initialize(&bad,Some(2),true,&rows);assert!(!p.normal());assert!(!p.recovering());assert!(p.reserved(42));p.recovered();assert!(!p.normal());
  let many=Journal::new();let mut l=Ledger::empty();for pd in [42,43,44]{l.quarantine(s(pd,pd),pd as u64);}many.persist(&l);p.initialize(&many,Some(2),true,&[42,43,44]);assert!(!p.normal());
 }
 '''

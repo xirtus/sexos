@@ -41,7 +41,7 @@ impl Pool {
         self.ready && !self.recovering
     }
     pub fn recovering(&self) -> bool {
-        self.recovering
+        self.ready && self.recovering
     }
     pub fn recovered(&mut self) {
         if self.ready {
