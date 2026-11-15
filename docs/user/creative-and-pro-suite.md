@@ -23,7 +23,7 @@ To achieve parity with class-leading professional creative software on Linux, ma
 | **Flash** | Camera Capture | Photography / Pun | Direct webcam and video input preview and recording utility supporting USB Video Class (UVC) devices and direct WebM recording via Splicy's export bridge. | *Capture Utility* |
 | **Moan** | Digital Audio Workstation (DAW) | Audio / Pun (Andreas's pick, PR #244) | Frame-accurate audio multitrack recording and editing workstation (Logic Pro / REAPER class) supporting soft synths, plugins, and mastering. | *Suite Tool* |
 | **Serenade** | Audio Recorder | Romance (a song of devotion) | Minimalist high-fidelity audio capture utility for voice memos, podcasts, and acoustic instrument recordings. | *Suite Tool* |
-| **Batik** | Raster Painting | Fabric (wax-resist cloth dyeing) | Digital painting and image retouching suite with pressure-sensitive brush engines, layer blending modes, and color grading. | *Suite Tool* |
+| **Batik** | Raster Painting | Fabric (wax-resist cloth dyeing) | Digital painting and image retouching suite with multi-layer blend modes, 8-bit layer masks, pressure-sensitive brushes, lasso & magic wand selections, filters, and PNG/JPEG/WebP/PSD import & export. | **[Batik Manual](apps/batik.md)** |
 
 ---
 

@@ -123,6 +123,7 @@ pub enum Adjustment {
     Posterize { levels: u8 },
     Threshold { cutoff: u8 },
     Desaturate,
+    Sepia,
 }
 
 impl Adjustment {
@@ -198,6 +199,45 @@ impl Adjustment {
                 let lum = ((r as u32 * 77 + g as u32 * 150 + b as u32 * 29) >> 8) as u8;
                 pack_argb(a, lum, lum, lum)
             }
+            Adjustment::Sepia => {
+                let rf = r as f32;
+                let gf = g as f32;
+                let bf = b as f32;
+                let nr = libm::roundf(0.393 * rf + 0.769 * gf + 0.189 * bf).clamp(0.0, 255.0) as u8;
+                let ng = libm::roundf(0.349 * rf + 0.686 * gf + 0.168 * bf).clamp(0.0, 255.0) as u8;
+                let nb = libm::roundf(0.272 * rf + 0.534 * gf + 0.131 * bf).clamp(0.0, 255.0) as u8;
+                pack_argb(a, nr, ng, nb)
+            }
+        }
+    }
+
+    /// Automatically computes an optimal Levels adjustment from image pixels.
+    pub fn auto_levels(pixels: &[u32]) -> Levels {
+        let mut min_r = 255u8;
+        let mut max_r = 0u8;
+        let mut min_g = 255u8;
+        let mut max_g = 0u8;
+        let mut min_b = 255u8;
+        let mut max_b = 0u8;
+        for &p in pixels {
+            let (a, r, g, b) = split_argb(p);
+            if a > 0 {
+                min_r = min_r.min(r);
+                max_r = max_r.max(r);
+                min_g = min_g.min(g);
+                max_g = max_g.max(g);
+                min_b = min_b.min(b);
+                max_b = max_b.max(b);
+            }
+        }
+        let in_black = min_r.min(min_g).min(min_b);
+        let in_white = max_r.max(max_g).max(max_b);
+        Levels {
+            in_black,
+            in_white: if in_white > in_black { in_white } else { 255 },
+            gamma_fp: 1.0,
+            out_black: 0,
+            out_white: 255,
         }
     }
 
@@ -229,6 +269,11 @@ impl Adjustment {
             }
         }
     }
+}
+
+/// Automatically computes an optimal Levels adjustment from image pixels.
+pub fn auto_levels(pixels: &[u32]) -> Levels {
+    Adjustment::auto_levels(pixels)
 }
 
 fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {

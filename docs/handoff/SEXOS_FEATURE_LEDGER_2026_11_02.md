@@ -4425,3 +4425,13 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Zero broken relative markdown links verified across all 32 documents (96 relative links checked).
 - Passed root allowlist check with `root-allowlist: clean`.
 
+## G-23: Batik to Pixelmator level (2026-11-15)
+- Upgraded `crates/batik-core` (`#![no_std]`, `#![forbid(unsafe_code)]`) and `apps/batik` to full Pixelmator-class raster editing & digital painting:
+  - Multi-layer stack with Porter-Duff blend modes (`Normal`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`, `ColorDodge`, `ColorBurn`, `HardLight`, `SoftLight`, `Difference`, `Exclusion`), layer visibility, opacity, duplicate, and merge-down.
+  - Non-destructive 8-bit grayscale per-layer masks (`Add Mask`, `Mask from Selection`, `Invert Mask`, and interactive `Edit Mask` painting with `HistoryAction::LayerMaskDelta` undo/redo).
+  - Pressure-sensitive brush engine with presets (`Soft Airbrush`, `Hard Round`, `Calligraphy/Chisel`, `Eraser`) and dynamic pressure taper curves (`Taper`, `Full`, `Light`).
+  - Freehand polygon `Lasso` and tolerance-configurable `Magic Wand` selections with live marching-ants canvas overlay and selection-clipped painting & filters.
+  - Spatial and color filters (`Blur`, `Sharpen`, `Emboss`, `Sepia`, `Posterize`, `Invert`, `Auto-Levels`).
+  - Pure-Rust `#![no_std]` import & export for **PNG**, **JPEG** (baseline DCT 4:4:4 encoder), **WebP** (bit-exact lossless VP8L encoder), and multi-layer **PSD** (`8BPS` v1 reader + writer preserving layers, blend modes, and layer masks), plus OpenRaster (`.ora`).
+- Verified by `scripts/batik_host_gate.sh` (36 `batik-core` tests + 7 `batik` window tests + `key_bytes.py` 0 forbidden opcodes) and live QEMU `scripts/batik_gate.py` (`PASS`) with 6 genuine screenshots in `docs/user/assets/batik-*.png` and `docs/user/apps/batik.md`.
+

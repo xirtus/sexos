@@ -39,6 +39,11 @@ pub enum HistoryAction {
         new_height: usize,
         layer_shifts: Vec<(u64, i32, i32)>, // (layer_id, dx, dy)
     },
+    LayerMaskDelta {
+        layer_id: u64,
+        old_mask: Option<Vec<u8>>,
+        new_mask: Option<Vec<u8>>,
+    },
 }
 
 impl HistoryAction {
@@ -61,6 +66,9 @@ impl HistoryAction {
             HistoryAction::LayerPropertyChange { .. } => base,
             HistoryAction::DocumentCrop { layer_shifts, .. } => {
                 base + layer_shifts.len() * core::mem::size_of::<(u64, i32, i32)>()
+            }
+            HistoryAction::LayerMaskDelta { old_mask, new_mask, .. } => {
+                base + old_mask.as_ref().map_or(0, |m| m.len()) + new_mask.as_ref().map_or(0, |m| m.len())
             }
         }
     }
@@ -170,6 +178,13 @@ impl History {
                     }
                 }
             }
+            HistoryAction::LayerMaskDelta { layer_id, old_mask, .. } => {
+                if let Some(layer) = doc.get_layer_mut(*layer_id) {
+                    if let LayerKind::Raster(ref mut raster) = layer.kind {
+                        raster.mask = old_mask.clone();
+                    }
+                }
+            }
         }
 
         self.redo_stack.push_back(action);
@@ -223,6 +238,13 @@ impl History {
                             raster.offset_x -= dx;
                             raster.offset_y -= dy;
                         }
+                    }
+                }
+            }
+            HistoryAction::LayerMaskDelta { layer_id, new_mask, .. } => {
+                if let Some(layer) = doc.get_layer_mut(*layer_id) {
+                    if let LayerKind::Raster(ref mut raster) = layer.kind {
+                        raster.mask = new_mask.clone();
                     }
                 }
             }
