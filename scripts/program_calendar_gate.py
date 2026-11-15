@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The calendar, a program built on sex-app: it imports an iCalendar file it was given
-(`run calendar @cal.ics`, the host-test fixture: folded lines, escapes, an alarm and a
+(`run date @cal.ics`, the host-test fixture: folded lines, escapes, an alarm and a
 to-do to skip, weekly/daily/monthly/yearly repeats with COUNT, UNTIL and INTERVAL),
 opens on today's date by the machine's clock, moves by month and day from the keyboard,
 shows a day's events with repeats expanded onto it, adds a quick event with `n`, keeps
@@ -26,7 +26,7 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- install(disk,[('calendar',(ROOT/'iso_root/programs/calendar').read_bytes())])
+ install(disk,[('date',(ROOT/'iso_root/programs/date').read_bytes())])
  g=boot(a.iso,disk,a.out,'calendar',a.resolution);t=g['text'];q=g['q']
  def keys(text):
   for k in text:
@@ -37,7 +37,7 @@ def main():
  def spindle(text,pattern,timeout=120):
   g['focus'](153);time.sleep(.5);s=len(t());keys(text);q.key('ret');return g['wait'](pattern,s,timeout)
  def start(args):
-  s=len(t());spindle(f'run calendar{args}',r'\[shell.program.launch\]')
+  s=len(t());spindle(f'run date{args}',r'\[shell.program.launch\]')
   ready=g['wait'](r'\[calendar.ready\] target=(\d+) task=(\d+) today=(\d{4}-\d\d-\d\d) month=',s,120)
   launch=g['wait'](rf'\[shell.program.launch\] target={ready[1]} task={ready[2]} surface=(\d+)',s,60)
   g['wait'](rf'\[display.app.pixels\] target={ready[1]} ',s,60);time.sleep(2)
