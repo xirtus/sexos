@@ -70,7 +70,7 @@ jobs:
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Spreadeagle workbook engine and office painting (host)
-      run: cargo test --locked -p spreadeagle -p assuit -p sex-office
+      run: cargo test --locked -p spreadeagle -p assuit -p gestalt -p sex-office
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
     - name: Keyboard layouts, dead keys and Compose
@@ -543,6 +543,8 @@ jobs:
       run: python3 scripts/program_spreadeagle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/spreadeagle"
     - name: Assuit word processor opens, edits, saves and reopens docx
       run: python3 scripts/program_assuit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/assuit"
+    - name: Gestalt vector editor draws, edits, saves and reopens SVG
+      run: python3 scripts/program_gestalt_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/gestalt"
     - name: Lua 5.4 interpreter
       run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
     - name: Signed packages, install service and first-run grant question
