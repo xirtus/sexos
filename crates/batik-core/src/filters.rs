@@ -422,3 +422,151 @@ pub fn edge_detect(pixels: &[u32], width: usize, height: usize) -> Vec<u32> {
     out
 }
 
+/// Non-destructive filter specification for layer filter stacks.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FilterSpec {
+    BoxBlur { radius: u8 },
+    GaussianBlur { radius: u8 },
+    Sharpen { amount_pct: u8 },
+    Emboss,
+    EdgeDetect,
+    Posterize { levels: u8 },
+    Sepia { intensity_pct: u8 },
+    Invert,
+    HueSaturation { hue_deg: i16, saturation_pct: i16, lightness_pct: i16 },
+    Curves(crate::adjust::CurvesAdjustment),
+}
+
+impl FilterSpec {
+    pub fn name(&self) -> &'static str {
+        match self {
+            FilterSpec::BoxBlur { .. } => "Box Blur",
+            FilterSpec::GaussianBlur { .. } => "Gaussian Blur",
+            FilterSpec::Sharpen { .. } => "Sharpen",
+            FilterSpec::Emboss => "Emboss",
+            FilterSpec::EdgeDetect => "Edge Detect",
+            FilterSpec::Posterize { .. } => "Posterize",
+            FilterSpec::Sepia { .. } => "Sepia",
+            FilterSpec::Invert => "Invert",
+            FilterSpec::HueSaturation { .. } => "Hue/Saturation",
+            FilterSpec::Curves(..) => "Curves",
+        }
+    }
+
+    pub fn apply(&self, pixels: &mut [u32], width: usize, height: usize) {
+        if width == 0 || height == 0 || pixels.len() < width * height {
+            return;
+        }
+
+        match self {
+            FilterSpec::BoxBlur { radius } => {
+                if *radius > 0 {
+                    let res = box_blur(pixels, width, height, *radius as usize);
+                    pixels.copy_from_slice(&res);
+                }
+            }
+            FilterSpec::GaussianBlur { radius } => {
+                if *radius > 0 {
+                    let sigma = (*radius as f32 * 0.8).max(0.5);
+                    let res = gaussian_blur(pixels, width, height, sigma);
+                    pixels.copy_from_slice(&res);
+                }
+            }
+            FilterSpec::Sharpen { amount_pct } => {
+                if *amount_pct > 0 {
+                    let res = sharpen(pixels, width, height);
+                    if *amount_pct >= 100 {
+                        pixels.copy_from_slice(&res);
+                    } else {
+                        let w = *amount_pct as f32 / 100.0;
+                        for i in 0..pixels.len() {
+                            let (oa, or, og, ob) = split_argb(pixels[i]);
+                            let (_, sr, sg, sb) = split_argb(res[i]);
+                            let nr = (or as f32 + w * (sr as f32 - or as f32)).clamp(0.0, 255.0) as u8;
+                            let ng = (og as f32 + w * (sg as f32 - og as f32)).clamp(0.0, 255.0) as u8;
+                            let nb = (ob as f32 + w * (sb as f32 - ob as f32)).clamp(0.0, 255.0) as u8;
+                            pixels[i] = pack_argb(oa, nr, ng, nb);
+                        }
+                    }
+                }
+            }
+            FilterSpec::Emboss => {
+                let res = emboss(pixels, width, height);
+                pixels.copy_from_slice(&res);
+            }
+            FilterSpec::EdgeDetect => {
+                let res = edge_detect(pixels, width, height);
+                pixels.copy_from_slice(&res);
+            }
+            FilterSpec::Posterize { levels } => {
+                let adj = crate::adjust::AdjustmentKind::Posterize { levels: *levels };
+                for p in pixels.iter_mut() {
+                    *p = adj.apply_pixel(*p);
+                }
+            }
+            FilterSpec::Sepia { intensity_pct } => {
+                let adj = crate::adjust::AdjustmentKind::Sepia;
+                if *intensity_pct >= 100 {
+                    for p in pixels.iter_mut() {
+                        *p = adj.apply_pixel(*p);
+                    }
+                } else {
+                    let w = *intensity_pct as f32 / 100.0;
+                    for p in pixels.iter_mut() {
+                        let (oa, or, og, ob) = split_argb(*p);
+                        let (_, sr, sg, sb) = split_argb(adj.apply_pixel(*p));
+                        let nr = (or as f32 + w * (sr as f32 - or as f32)).clamp(0.0, 255.0) as u8;
+                        let ng = (og as f32 + w * (sg as f32 - og as f32)).clamp(0.0, 255.0) as u8;
+                        let nb = (ob as f32 + w * (sb as f32 - ob as f32)).clamp(0.0, 255.0) as u8;
+                        *p = pack_argb(oa, nr, ng, nb);
+                    }
+                }
+            }
+            FilterSpec::Invert => {
+                let adj = crate::adjust::AdjustmentKind::Invert;
+                for p in pixels.iter_mut() {
+                    *p = adj.apply_pixel(*p);
+                }
+            }
+            FilterSpec::HueSaturation { hue_deg, saturation_pct, lightness_pct } => {
+                let hs = crate::adjust::HueSatAdjustment::new(*hue_deg, *saturation_pct, *lightness_pct);
+                for p in pixels.iter_mut() {
+                    *p = hs.apply_pixel(*p);
+                }
+            }
+            FilterSpec::Curves(curves) => {
+                let (lut_m, lut_r, lut_g, lut_b) = curves.build_all_luts();
+                for p in pixels.iter_mut() {
+                    *p = crate::adjust::CurvesAdjustment::apply_with_luts(
+                        *p, &lut_m, &lut_r, &lut_g, &lut_b,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Individual node in a layer's non-destructive filter stack.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FilterNode {
+    pub enabled: bool,
+    pub spec: FilterSpec,
+}
+
+impl FilterNode {
+    pub fn new(spec: FilterSpec) -> Self {
+        Self { enabled: true, spec }
+    }
+}
+
+pub type FilterStack = Vec<FilterNode>;
+
+/// Evaluates all enabled filter nodes in a filter stack sequentially on an image buffer.
+pub fn apply_filter_stack(stack: &[FilterNode], pixels: &mut [u32], width: usize, height: usize) {
+    for node in stack {
+        if node.enabled {
+            node.spec.apply(pixels, width, height);
+        }
+    }
+}
+

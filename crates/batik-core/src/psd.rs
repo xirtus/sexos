@@ -9,7 +9,7 @@ use crate::admit_limits;
 use crate::blend::{pack_argb, BlendMode};
 use crate::document::{BackgroundMode, Document};
 use crate::error::BatikError;
-use crate::layer::{Layer, LayerKind, RasterLayer};
+use crate::layer::{Layer, RasterLayer};
 
 struct Cursor<'a> {
     data: &'a [u8],
@@ -317,6 +317,7 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
                     opacity: rec.opacity,
                     blend_mode: rec.blend_mode,
                     kind: crate::layer::LayerKind::Raster(raster),
+                    filter_stack: Vec::new(),
                 };
                 layers.push(layer);
             }
@@ -423,6 +424,7 @@ pub fn parse_psd(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
             opacity: 255,
             blend_mode: BlendMode::Normal,
             kind: crate::layer::LayerKind::Raster(raster),
+            filter_stack: Vec::new(),
         });
     }
 
@@ -555,22 +557,14 @@ pub fn encode_psd(doc: &Document) -> Result<Vec<u8>, BatikError> {
     out.extend_from_slice(&0u32.to_be_bytes());
 
     // 4. Layer and Mask Information section
-    let raster_layers: Vec<(&Layer, &RasterLayer)> = doc
-        .layers
-        .iter()
-        .filter_map(|l| match &l.kind {
-            LayerKind::Raster(ref r) => Some((l, r)),
-            _ => None,
-        })
-        .collect();
-
-    let layer_count = raster_layers.len();
+    let exported_layers = doc.exportable_raster_layers();
+    let layer_count = exported_layers.len();
     let mut layer_info = Vec::new();
     layer_info.extend_from_slice(&(layer_count as i16).to_be_bytes());
 
     let mut all_channel_data = Vec::new();
 
-    for (l, r) in &raster_layers {
+    for (l, r) in &exported_layers {
         let top = r.offset_y;
         let left = r.offset_x;
         let bottom = r.offset_y + r.height as i32;
