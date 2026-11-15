@@ -12,8 +12,9 @@ run gestalt                # opens welcome.svg, writing it first if it is missin
 run gestalt poster.svg     # opens poster.svg, or starts an 800 x 600 pt artboard saved there
 ```
 
-Gestalt opens SVG, PDF, Illustrator `.ai`, EPS and `.vectorcraft` files, and saves in the format
-the file name asks for (SVG unless it says otherwise).
+Gestalt opens SVG, PDF, Illustrator `.ai`, EPS and `.vectorcraft` files. It saves SVG, SVGZ,
+PDF and `.vectorcraft` in place; an `.ai` or EPS drawing saves beside itself as SVG (`art.eps`
+saves to `art.svg`), and the original is left as it was.
 
 ## Tools
 

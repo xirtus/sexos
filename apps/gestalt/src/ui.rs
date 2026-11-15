@@ -228,6 +228,8 @@ impl Ui {
     fn save(&mut self) {
         match self.d.save() {
             Ok(bytes) => {
+                // An `.ai` or EPS drawing saves beside itself as SVG.
+                self.name = self.d.path.clone();
                 sex_std::record(&format!("[gestalt.saved] name={} bytes={bytes} objects={}", self.d.path, self.d.objects()));
                 self.message = format!("Saved {} ({bytes} bytes)", self.name);
             }

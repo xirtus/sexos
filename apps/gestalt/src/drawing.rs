@@ -32,10 +32,12 @@ pub struct Drawing {
 
 fn err(e: impl std::fmt::Display) -> String { e.to_string() }
 
-/// The format a file name asks for: SVG unless it says otherwise.
-fn format_of(path: &str) -> &'static str {
+/// The format a file name asks for, when Gestalt writes that format: SVG, SVGZ, PDF or
+/// `.vectorcraft`. Other names (`.ai`, EPS, anything else) are opened but not written.
+fn format_of(path: &str) -> Option<&'static str> {
     let lower = path.to_ascii_lowercase();
-    if lower.ends_with(".vectorcraft") { "vectorcraft" } else if lower.ends_with(".pdf") { "pdf" } else if lower.ends_with(".svgz") { "svgz" } else { "svg" }
+    [(".svg", "svg"), (".svgz", "svgz"), (".pdf", "pdf"), (".vectorcraft", "vectorcraft")]
+        .into_iter().find(|(ext, _)| lower.ends_with(ext)).map(|(_, f)| f)
 }
 
 impl Drawing {
@@ -64,8 +66,14 @@ impl Drawing {
     /// Saves to [`Self::path`] in the format its name asks for; returns the bytes written.
     /// Gestalt writes the file itself: the engine's own save writes a temporary file and
     /// renames it, and SexOS std files have no rename yet.
+    /// A drawing opened from a format Gestalt does not write (`.ai`, EPS) saves beside it as
+    /// SVG, under the same name with `.svg`, and saves there from then on.
     pub fn save(&mut self) -> Result<usize, String> {
-        let data = self.serialize(format_of(&self.path))?;
+        if format_of(&self.path).is_none() {
+            let stem = self.path.rsplit_once('.').filter(|(s, _)| !s.is_empty() && !s.ends_with('/')).map_or(self.path.as_str(), |(s, _)| s);
+            self.path = format!("{stem}.svg");
+        }
+        let data = self.serialize(format_of(&self.path).unwrap_or("svg"))?;
         std::fs::write(&self.path, &data).map_err(|e| format!("Could not save {}: {e}", self.path))?;
         if let Ok(d) = self.s.doc_mut() { d.mark_saved(); }
         Ok(data.len())
@@ -217,6 +225,20 @@ mod tests {
         let (png, bytes) = d.export("png").unwrap();
         assert!(png.ends_with("a.png") && bytes > 100);
         assert_eq!(&std::fs::read(&png).unwrap()[1..4], b"PNG");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_imported_eps_saves_beside_it_as_svg() {
+        let dir = std::env::temp_dir().join(format!("gestalt-eps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let eps = dir.join("art.eps").to_string_lossy().into_owned();
+        let mut d = Drawing::blank(&eps, 200.0, 200.0);
+        std::fs::write(&eps, b"%!PS-Adobe-3.0 EPSF-3.0").unwrap();
+        d.save().unwrap();
+        assert!(d.path.ends_with("art.svg"), "{}", d.path);
+        assert_eq!(std::fs::read(&eps).unwrap(), b"%!PS-Adobe-3.0 EPSF-3.0", "the EPS is untouched");
+        assert!(std::fs::read_to_string(&d.path).unwrap().contains("<svg"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
