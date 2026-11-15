@@ -177,7 +177,10 @@ def main():
 
         start = c.command(surface, 'ctrl', 'o')
         select_file('source.wav', start)
-        g['wait'](r'\[moan.project\] tracks=1 frames=48000 ', start, 120)
+        # Import emits selection/control state; the read-only layout command
+        # emits the aggregate project receipt after the completed import.
+        imported, _, _ = refresh(g, surface)
+        g['wait'](r'\[moan.project\] tracks=1 frames=48000 ', imported, 120)
         c.click(surface, 'Instruments')
         choose_plugin('swap.clap')
         start = len(text())
