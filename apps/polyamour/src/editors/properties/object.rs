@@ -36,6 +36,7 @@ pub fn rename_object(d: &mut Doc, o: usize, want: &str) {
     let n = sex_3d::scene::unique_name(want, |n| d.scene.objects.iter().enumerate().any(|(i, x)| i != o && x.name == n));
     let old = core::mem::replace(&mut d.scene.objects[o].name, n.clone());
     d.settings.rename_object(&old, &n);
+    d.anim.rename_object(&old, &n);
     d.touch();
 }
 

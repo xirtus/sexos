@@ -270,7 +270,7 @@ impl Anim {
     pub fn get_mut(&mut self, object: &str) -> Option<&mut ObjectAnim> {
         self.objects.iter_mut().find(|o| o.object == object)
     }
-    fn entry(&mut self, object: &str) -> &mut ObjectAnim {
+    pub(crate) fn entry(&mut self, object: &str) -> &mut ObjectAnim {
         let i = match self.objects.iter().position(|o| o.object == object) {
             Some(i) => i,
             None => {
@@ -279,6 +279,16 @@ impl Anim {
             }
         };
         &mut self.objects[i]
+    }
+    /// Follow an object rename: its curves keep driving it under the new name.
+    pub fn rename_object(&mut self, old: &str, new: &str) {
+        for o in self.objects.iter_mut().filter(|o| o.object == old) {
+            o.object = new.to_string();
+        }
+        for (n, _) in self.seen.iter_mut().filter(|(n, _)| n == old) {
+            *n = new.to_string();
+        }
+        self.dirty = true;
     }
     /// Every key, for selection passes.
     pub fn keys_mut(&mut self) -> impl Iterator<Item = &mut Keyframe> {

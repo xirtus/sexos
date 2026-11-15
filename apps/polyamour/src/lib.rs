@@ -17,6 +17,7 @@ pub mod draw;
 pub mod edit;
 pub mod editors;
 pub mod input;
+pub mod persist;
 pub mod screen;
 pub mod settings;
 pub mod theme;

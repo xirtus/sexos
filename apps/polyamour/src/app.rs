@@ -47,15 +47,13 @@ impl App {
 
     /// Open a scene file (any format sex-3d reads) in place of the current one.
     pub fn open_bytes(&mut self, name: &str, bytes: &[u8], resolver: &dyn Fn(&str) -> Option<Vec<u8>>) -> Result<(), String> {
-        let fmt = sex_3d::io::Format::from_path(name).or_else(|| sex_3d::io::Format::sniff(bytes)).ok_or_else(|| format!("{name}: unknown file type"))?;
-        let scene = if name.ends_with(".poly") {
-            let mut s = sex_3d::scene::Scene::new();
-            sex_3d::script::run(&mut s, &String::from_utf8_lossy(bytes)).map_err(|e| e.to_string())?;
-            s
+        let doc = if name.ends_with(".poly") || bytes.starts_with(b"polyops ") {
+            crate::persist::load(&String::from_utf8_lossy(bytes))?
         } else {
-            sex_3d::io::import(bytes, fmt, resolver).map_err(|e| e.to_string())?
+            let fmt = sex_3d::io::Format::from_path(name).or_else(|| sex_3d::io::Format::sniff(bytes)).ok_or_else(|| format!("{name}: unknown file type"))?;
+            Doc::new(sex_3d::io::import(bytes, fmt, resolver).map_err(|e| e.to_string())?)
         };
-        self.doc = Doc::new(scene);
+        self.doc = doc;
         self.doc.path = Some(name.to_string());
         self.doc.report = format!("Opened {name}");
         Ok(())
@@ -279,7 +277,7 @@ impl App {
     fn save(&mut self, ext: Option<String>) {
         let stem = self.doc.path.as_deref().map(|p| p.rsplit_once('.').map_or(p, |x| x.0).to_string()).unwrap_or_else(|| "untitled".into());
         let result: Result<Vec<(String, Vec<u8>)>, String> = match ext.as_deref() {
-            None => Ok(vec![(format!("{stem}.poly"), sex_3d::script::scene_to_polyops(&self.doc.scene).into_bytes())]),
+            None => Ok(vec![(format!("{stem}.poly"), crate::persist::save(&self.doc).into_bytes())]),
             Some(e) => match sex_3d::io::Format::from_extension(e) {
                 Some(f) => sex_3d::io::export_files(&self.doc.scene, f, &stem).map_err(|e| e.to_string()),
                 None => Err(format!("cannot export .{e}")),
