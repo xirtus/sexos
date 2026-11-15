@@ -35,7 +35,7 @@ enum Done {
     Announced { torrent: TorrentKey, url: String, peers: Vec<PeerAddr>, interval: u64, error: Option<String> },
 }
 
-pub(crate) struct Job { pub next_dht: Millis, pub trackers: Vec<String>, pub disk: Option<Disk>, pub next_announce: Millis, pub announced_done: bool, pub finished_at: Option<Millis>, pub name: String, pub id: u64, pub added: i64, pub dir: PathBuf, pub paused: bool, pub magnet: String }
+pub(crate) struct Job { pub next_dht: Millis, pub private: bool, pub trackers: Vec<String>, pub disk: Option<Disk>, pub next_announce: Millis, pub announced_done: bool, pub finished_at: Option<Millis>, pub name: String, pub id: u64, pub added: i64, pub dir: PathBuf, pub paused: bool, pub magnet: String }
 
 pub struct Client {
     pub(crate) session: Session,
@@ -162,7 +162,7 @@ impl Client {
             let outs = self.dht.as_mut().expect("dht").on_tick(now);
             self.dht_handle(outs, now);
             let announce = if self.listener.is_some() { Some(self.port) } else { None };
-            let due: Vec<TorrentKey> = self.jobs.iter().filter(|(k, j)| !j.paused && now >= j.next_dht && !self.lookups.values().any(|l| l == *k)).map(|(k, _)| *k).collect();
+            let due: Vec<TorrentKey> = self.jobs.iter().filter(|(k, j)| !j.paused && !j.private && now >= j.next_dht && !self.lookups.values().any(|l| l == *k)).map(|(k, _)| *k).collect();
             for k in due {
                 if let Some(j) = self.jobs.get_mut(&k) { j.next_dht = now + 60_000; }
                 let lid = self.dht.as_mut().expect("dht").get_peers(k, announce, now);
@@ -178,7 +178,10 @@ impl Client {
     /// Adds a torrent from a magnet link, info-hash or .torrent. Returns its RPC id, key
     /// and whether it was already here.
     pub fn add_source(&mut self, source: &str, bytes: Option<Vec<u8>>, extra_peers: Vec<PeerAddr>, dir: Option<PathBuf>) -> Result<(u64, TorrentKey, bool), String> {
-        let prep = crate::prepare(source, bytes, self.peer_id, self.port, self.anonymous)?;
+        let mut prep = crate::prepare(source, bytes, self.peer_id, self.port, self.anonymous)?;
+        let private = prep.meta.as_ref().is_some_and(|m| m.private);
+        // A private torrent (BEP 27) stays off the DHT; others tell peers our DHT port.
+        if self.dht.is_some() && !private { prep.params.config.dht_port = Some(self.port); }
         let key = prep.params.info_hashes.wire();
         if let Some(j) = self.jobs.get(&key) { return Ok((j.id, key, true)); }
         let magnet = prep.meta.as_ref().map(|m| sex_torrent::magnet::Magnet::from_metainfo(m).to_uri()).unwrap_or_else(|| format!("magnet:?xt=urn:btih:{}", sex_torrent::to_hex(&key)));
@@ -186,6 +189,7 @@ impl Client {
         let mut peers = prep.peers;
         peers.extend(extra_peers);
         self.add(prep.params, prep.name, prep.trackers, peers, dir.unwrap_or_else(|| self.dir.clone()), magnet);
+        if let Some(j) = self.jobs.get_mut(&key) { j.private = private; }
         Ok((self.jobs[&key].id, key, false))
     }
 
@@ -196,7 +200,7 @@ impl Client {
         let t = Torrent::new(params, now);
         let id = self.next_id; self.next_id += 1;
         let added = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
-        self.jobs.insert(key, Job { next_dht: now + 1500, trackers, disk, next_announce: 0, announced_done: false, finished_at: None, name, id, added, dir, paused: false, magnet });
+        self.jobs.insert(key, Job { next_dht: now + 1500, private: false, trackers, disk, next_announce: 0, announced_done: false, finished_at: None, name, id, added, dir, paused: false, magnet });
         if let Some(a) = self.session.add(t, now) { self.queue.extend(a); }
         let more = self.session.with(&key, now, |t, now| t.add_peers(&peers, now));
         self.queue.extend(more);
@@ -308,6 +312,7 @@ impl Client {
                 Ok(l) => {
                     if let Some(job) = self.jobs.get_mut(&torrent) {
                         job.name = m.name.clone();
+                        job.private = m.private;
                         job.disk = Some(Disk::new(&job.dir.clone(), l.clone(), &sex_torrent::to_hex(&torrent)));
                     }
                     say(&format!("[swingers.metadata] {} {} files={}", sex_torrent::to_hex(&torrent), m.name, m.files.iter().filter(|f| !f.attr.pad).count()));
