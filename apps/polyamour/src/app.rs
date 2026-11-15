@@ -153,6 +153,7 @@ impl App {
         }
         let ran = self.run_queue();
         let ran = crate::anim::tick(&mut self.doc) || ran;
+        let ran = crate::python::tick(&mut self.doc) || ran;
         if let Some(name) = self.doc.want_workspace.take() {
             if let Some(i) = self.workspaces.iter().position(|w| w.name == name) {
                 self.active_ws = i;
@@ -174,7 +175,7 @@ impl App {
     /// Whether an editor in the active workspace wants `Input::Tick` events
     /// (a viewport refining a progressive render).
     pub fn wants_tick(&self) -> bool {
-        self.workspaces[self.active_ws].areas().iter().any(|a| a.editor.wants_tick())
+        self.workspaces[self.active_ws].areas().iter().any(|a| a.editor.wants_tick()) || self.doc.python.wants_tick()
     }
 
     /// Draw the whole window, returning the event if no widget took it.
@@ -273,7 +274,14 @@ impl App {
                 "render.render_animation" => self.render_animation(),
                 "wm.search_menu" => {
                     let (mx, my) = self.ui.mouse;
-                    self.popup = Some(Popup::new("Search", search_items(), mx - 100, my - 10));
+                    let mut items = search_items();
+                    // Operators scripts and add-ons registered.
+                    let script = crate::python::search_items(&self.doc);
+                    if !script.is_empty() {
+                        items.push(MenuItem::Separator);
+                        items.extend(script);
+                    }
+                    self.popup = Some(Popup::new("Search", items, mx - 100, my - 10));
                 }
                 _ => self.doc.run(&op),
             }

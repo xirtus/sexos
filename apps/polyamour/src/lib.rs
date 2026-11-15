@@ -20,6 +20,7 @@ pub mod editors;
 pub mod input;
 pub mod nodetree;
 pub mod persist;
+pub mod python;
 pub mod screen;
 pub mod settings;
 pub mod theme;

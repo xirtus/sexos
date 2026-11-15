@@ -321,6 +321,25 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         Tab::Material => data::material(&mut l, d, &mut ctx),
         Tab::Texture => tabs::texture(&mut l, d),
     }
+    // Panels scripts and add-ons registered for this tab (bl_context).
+    let context = match tab {
+        Tab::Tool => "tool",
+        Tab::Render => "render",
+        Tab::Output => "output",
+        Tab::ViewLayer => "view_layer",
+        Tab::Scene => "scene",
+        Tab::World => "world",
+        Tab::Collection => "collection",
+        Tab::Object => "object",
+        Tab::Modifiers => "modifier",
+        Tab::Particles => "particle",
+        Tab::Physics => "physics",
+        Tab::Constraints => "constraint",
+        Tab::Data => "data",
+        Tab::Material => "material",
+        Tab::Texture => "texture",
+    };
+    crate::python::properties_panels(&mut l, d, context);
     let content_h = l.y - top + 12;
     s.undo_for = if l.ui.st.active.is_none() { None } else { l.undo_for };
     s.fields = core::mem::take(&mut l.fields);
