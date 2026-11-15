@@ -4919,3 +4919,34 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Exact source, runner, private-disk/program-store, WAV, project, screenshot and
   ISO/config digests are in `MOAN_STEP_RUNTIME_2026_11_15.json`. The first Step gate's
   incorrect all-notes velocity action remains preserved as an identified failure.
+
+## ChatGPT round 195: integrated plugin and trust foundation (2026-11-15)
+
+- Integrated the bounded CLAP/VST3 ELF loader, disposable child supervisor,
+  explicit offline region adapter, final-block restart rejection, fallible audio
+  buffers, retained result retry and per-parent unique job cookies with MIDI/Step.
+  All 88 Rust tests pass at `18325d391`; the subsequent Files trust foundation at
+  `154816f76` passes 1,336 Python tests. The 59 receipt/runtime controls and 13
+  trust-boundary controls also pass independently.
+- Canonical guest release helper passes the unchanged byte scanner. Files builds
+  with a software SHA-256/length pin matching that exact helper. All staging writers
+  and attestation share a guard, including nested block waits and error cleanup.
+  These are build checks; no combined image or active restricted-role claim.
+- Helper staging now precedes Files. Explicit generated-input receipts bind the
+  helper before/after the consuming build to its staged Files ELF. The master gate
+  revalidates them before boot; the freezer validates and archives both artifacts
+  separately from source inputs. See MOAN_GENERATED_INPUT_BINDING_2026_11_15.md.
+- Independently verified all 60 raw v8 plugin proof artifacts and both preserved
+  binaries. Actual QEMU source `59067a245` qualifies DSP, final-block restart denial,
+  crash/timeout/exact-task reuse, retained Window receipts and visible model/pixels.
+  This earlier cohort proves crash containment, not hostile plugin authority or the
+  later Files pin/guard. Exact digests: MOAN_PLUGIN_FOUNDATION_2026_11_15.json.
+- Provider isolation remains unexposed. Review found Files/Net lack reverse Shell
+  routes on this kernel. The userspace protocol is being revised around actual
+  authenticated one-word replies, provider freshness challenges, persistent deny
+  fences and immutable bounded job snapshots; no kernel grant is invented.
+- User confirms Drag/Denim repairs remain with their authors. PR296 already has
+  actual293/245 and retains the complementary IPv6 half; its new 21 jobs remain
+  queued at the last verified snapshot. No merge without exact-head leaves and
+  aggregator green plus final compatibility review. Finish Moan before JIT object
+  and string inline caches.
