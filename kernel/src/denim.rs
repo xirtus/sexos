@@ -12,7 +12,8 @@ use core::sync::atomic::Ordering;
 const _: () = {
     use crate::app_resource_state::RECALL;
     use sex_pdx::{program_code as c, program_threads as t};
-    let statuses = [c::OK, c::INVALID, c::RETRY, c::DENIED, c::BLOCKED, t::FULL, t::AGAIN];
+    use sex_pdx::vm as v;
+    let statuses = [c::OK, c::INVALID, c::RETRY, c::DENIED, c::BLOCKED, t::FULL, t::AGAIN, v::INVALID, v::DENIED, v::BUSY];
     let mut i = 0;
     while i < statuses.len() { assert!(statuses[i] != RECALL); i += 1; }
 };

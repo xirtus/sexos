@@ -77,9 +77,9 @@ def main():
   z=g['chord']('ctrl','equal',r'\[web.zoom\] percent=110 height=(\d+)')
   s=len(t());q.key('f11');g['wait'](r'\[web.profile.saved\] files=\d+ history=\d+ bookmarks=1',s,60)
   g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
-  # Spindle keeps the open programs for session restore and saves a moment after one
-  # ends: wait for that, or the next boot would start Kaleidoscope again by itself.
-  g['wait'](r'\[spindle.session.saved\] bytes=\d+ status=0',s,60)
+  # Spindle keeps open programs for session restore and saves a moment after one ends:
+  # wait for the save with nothing open, or the next boot reopens Kaleidoscope by itself.
+  g['wait'](r'\[spindle.session.saved\] bytes=0 status=0',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'boot1':'ok','zoom_height':z[1]})
  finally:g['stop']()

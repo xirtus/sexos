@@ -254,6 +254,90 @@ pub mod dnd {
     pub fn cancel() { let _ = send(d::Message::Cancel); }
 }
 
+/// The system clipboard, shared with every program and Quil, through Shell
+/// ([`sex_pdx::program_clipboard`]). Shell takes a copy or a paste only while this
+/// window has focus and right after the person pressed a key or clicked in it, so call
+/// these from the handler of the key or click that asked (Ctrl+C, Ctrl+V, a menu).
+pub mod clipboard {
+    use super::{Event, Window, SHELL};
+    use sex_pdx::program_clipboard as pc;
+    static mut TEXT: pc::Text = pc::Text::new();
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Error {
+        /// The clipboard is empty.
+        Empty,
+        /// Not the focused window, or not right after a key or click in it.
+        Denied,
+        /// Another transfer was under way: try again.
+        Busy,
+        /// More than [`sex_pdx::program_clipboard::MAX_BYTES`], or a garbled answer.
+        Invalid,
+        /// Shell did not answer, or the window was asked to close meanwhile.
+        Shell,
+    }
+    fn send(m: pc::Message) -> Result<(), Error> {
+        let [a, b, c] = m.wire();
+        for _ in 0..200 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, pc::OP_CLIP, a, b, c) {
+                Ok(_) => return Ok(()),
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return Err(Error::Shell),
+            }
+        }
+        Err(Error::Shell)
+    }
+    fn status(s: u8) -> Result<(), Error> {
+        match s { pc::OK => Ok(()), pc::EMPTY => Err(Error::Empty), pc::DENIED => Err(Error::Denied), pc::BUSY => Err(Error::Busy), _ => Err(Error::Invalid) }
+    }
+    /// Shell's answers, until `done` says the transfer is over. Keys and clicks that
+    /// arrive meanwhile wait in the window for later.
+    fn answers(window: &mut Window, mut done: impl FnMut(pc::Message) -> Option<Result<(), Error>>) -> Result<(), Error> {
+        let mut end = sex_pdx::get_ticks().saturating_add(2_000);
+        loop {
+            while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+                if m.type_id == pc::OP_CLIPPED && m.caller_pd == SHELL {
+                    let Some(answer) = pc::Message::decode([m.arg0, m.arg1, m.arg2]) else { return Err(Error::Invalid) };
+                    if let Some(r) = done(answer) { return r; }
+                    end = sex_pdx::get_ticks().saturating_add(2_000);
+                    continue;
+                }
+                if let Some(event) = window.event(&m) {
+                    let close = matches!(event, Event::Close);
+                    if let Some(slot) = window.held.iter_mut().find(|e| e.is_none()) { *slot = Some(event); }
+                    if close { return Err(Error::Shell); }
+                }
+            }
+            if sex_pdx::get_ticks() >= end { return Err(Error::Shell); }
+            let _ = sex_pdx::sys_wait_self_ticks(2);
+        }
+    }
+    /// Puts `text` on the clipboard.
+    pub fn copy(window: &mut Window, text: &str) -> Result<(), Error> {
+        let bytes = text.as_bytes();
+        if bytes.is_empty() || bytes.len() > pc::MAX_BYTES { return Err(Error::Invalid); }
+        send(pc::Message::Copy { len: bytes.len() })?;
+        for piece in pc::pieces(bytes) { send(piece)?; }
+        send(pc::Message::End { hash: pc::hash(bytes) })?;
+        answers(window, |m| match m { pc::Message::Done { status: s } => Some(status(s)), _ => None })
+    }
+    /// The text on the clipboard. It stays readable until the next paste.
+    pub fn paste(window: &mut Window) -> Result<&'static str, Error> {
+        let text = unsafe { &mut *core::ptr::addr_of_mut!(TEXT) };
+        text.erase();
+        send(pc::Message::Paste)?;
+        let mut hash = None;
+        answers(window, |m| match m {
+            pc::Message::Begin { len } => { text.begin(len); None }
+            pc::Message::Data { offset, count, bytes } => if text.take(offset, count, &bytes) { None } else { Some(Err(Error::Invalid)) },
+            pc::Message::End { hash: h } => { hash = Some(h); Some(Ok(())) }
+            pc::Message::Done { status: s } => Some(status(s).and(Err(Error::Invalid))),
+            _ => Some(Err(Error::Invalid)),
+        })?;
+        let bytes = text.finish(hash.ok_or(Error::Invalid)?).ok_or(Error::Invalid)?;
+        core::str::from_utf8(bytes).map_err(|_| Error::Invalid)
+    }
+}
+
 pub mod launch {
     use super::{files, mailbox, SHELL};
     use sex_pdx::launch as l;
@@ -563,7 +647,9 @@ pub mod files {
         }
 
         /// A console attached to a terminal, and a terminal's side of it
-        /// (`sex_pdx::console_relay`): bytes through Files, no window.
+        /// (`sex_pdx::console_relay`): bytes through Files, no window. A terminal names
+        /// the slot (tab or pane, below `c::SLOTS`) of each call in the `*_at` forms; the
+        /// plain forms are slot 0.
         pub mod relay {
             use super::{exchange, w, Error};
             use sex_pdx::console_relay as c;
@@ -581,37 +667,61 @@ pub mod files {
                 let want = out.len().min(c::INPUT_BYTES);
                 exchange(None, c::KIND, b"", c::READ, want as u64, |_| {}, |n, d| { let n = (n as usize).min(want); out[..n].copy_from_slice(&d[..n]); n })
             }
+            /// How many input bytes wait, taking none. `Err(c::INTERRUPTED)` (once) after
+            /// Ctrl+C, `Err(c::HUNG_UP)` at the end of input: a long computation's look.
+            pub fn poll() -> Result<usize, Error> { op(c::POLL, 0).map(|n| n as usize) }
+            /// The terminal's size in cells and how often it changed (0 by 0: not known).
+            pub fn size() -> Result<c::Size, Error> {
+                exchange(None, c::KIND, b"", c::SIZE, c::SIZE_BYTES as u64, |_| {}, |_, d| c::Size::decode(d))
+            }
+            /// This run's terminal mode (`c::RAW`, `c::NO_ECHO`, `c::NO_SIGNALS`); the one before.
+            pub fn set_mode(mode: u8) -> Result<u8, Error> { op(c::SET_MODE, (mode & c::MODES) as u64).map(|m| m as u8) }
             /// The run ends with `code`.
             pub fn exit(code: u32) { let _ = op(c::EXIT, code as u64); }
 
             /// Terminal: prepares `/bin/NAME` with `args` (only plain words reach it) and asks
             /// Shell to start it attached here. Needs the `+launch` grant (Spindle's `spindle` command).
-            pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> {
+            pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> { start_at(0, name, args) }
+            pub fn start_at(slot: usize, name: &[u8], args: &[u8]) -> Result<(), Error> {
                 let bin = sex_pdx::program_store::BIN;
                 let mut path = alloc::vec::Vec::with_capacity(bin.len() + name.len());
                 path.extend_from_slice(bin); path.extend_from_slice(name);
                 let n = args.len().min(w::ARGS_MAX);
-                let ticket = exchange(None, w::PREPARE, &path, 0, n as u64, |d| d[..n].copy_from_slice(&args[..n]), |t, _| t)?;
+                let ticket = exchange(None, w::PREPARE, &path, c::at_slot(0, slot), n as u64, |d| d[..n].copy_from_slice(&args[..n]), |t, _| t)?;
                 sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64, 0)
                     .map(|_| ()).map_err(|_| w::UNAVAILABLE)
             }
             /// Terminal: input for the run; how many bytes it took.
-            pub fn put(bytes: &[u8]) -> Result<usize, Error> {
+            pub fn put(bytes: &[u8]) -> Result<usize, Error> { put_at(0, bytes) }
+            pub fn put_at(slot: usize, bytes: &[u8]) -> Result<usize, Error> {
                 let n = bytes.len().min(c::INPUT_BYTES);
-                exchange(None, c::KIND, b"", c::PUT, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
+                exchange(None, c::KIND, b"", c::at_slot(c::PUT, slot), n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
             }
             /// Terminal: the run's state and its output since the last call.
-            pub fn take() -> Result<(c::Status, alloc::vec::Vec<u8>), Error> {
+            pub fn take() -> Result<(c::Status, alloc::vec::Vec<u8>), Error> { take_at(0) }
+            pub fn take_at(slot: usize) -> Result<(c::Status, alloc::vec::Vec<u8>), Error> {
                 let want = c::STATUS_BYTES + c::OUTPUT_BYTES;
-                exchange(None, c::KIND, b"", c::TAKE, want as u64, |_| {}, |n, d| {
+                exchange(None, c::KIND, b"", c::at_slot(c::TAKE, slot), want as u64, |_| {}, |n, d| {
                     let n = (n as usize).min(c::OUTPUT_BYTES);
                     (c::Status::decode(d), d[c::STATUS_BYTES..c::STATUS_BYTES + n].to_vec())
                 })
             }
-            pub fn interrupt() -> Result<(), Error> { op(c::INTERRUPT, 0).map(|_| ()) }
-            pub fn hang_up() -> Result<(), Error> { op(c::HANG_UP, 0).map(|_| ()) }
+            pub fn interrupt() -> Result<(), Error> { interrupt_at(0) }
+            pub fn interrupt_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::INTERRUPT, slot), 0).map(|_| ()) }
+            pub fn hang_up() -> Result<(), Error> { hang_up_at(0) }
+            pub fn hang_up_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::HANG_UP, slot), 0).map(|_| ()) }
             /// Terminal: forget the run that ended, so another can start.
-            pub fn release() -> Result<(), Error> { op(c::RELEASE, 0).map(|_| ()) }
+            pub fn release() -> Result<(), Error> { release_at(0) }
+            pub fn release_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::RELEASE, slot), 0).map(|_| ()) }
+            /// Terminal: its size in cells, for the run to read (on start and on every resize).
+            pub fn set_size(cols: u16, rows: u16) -> Result<(), Error> { set_size_at(0, cols, rows) }
+            pub fn set_size_at(slot: usize, cols: u16, rows: u16) -> Result<(), Error> { op(c::at_slot(c::SET_SIZE, slot), c::size_word(cols, rows)).map(|_| ()) }
+            /// Terminal: stop the run with `target` (TAKE's `Status::target`) that it started,
+            /// when Ctrl+C did not end it: Shell ends it as it ends a program ignoring Close.
+            pub fn stop(target: u32) -> Result<(), Error> {
+                sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_STOP_ATTACHED, target as u64, 0, 0)
+                    .map(|_| ()).map_err(|_| w::UNAVAILABLE)
+            }
         }
 
         /// The words typed after the program's name, if it was started with any.

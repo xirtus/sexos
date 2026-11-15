@@ -46,6 +46,9 @@ mod vfs {
             .bridge
             .as_ptr() as u64
     }
+    pub fn diskfs_bridge_buf_len() -> u64 {
+        crate::WORLD.lock().unwrap().as_ref().unwrap().bridge.len() as u64
+    }
 }
 mod backends {
     pub mod diskfs {
@@ -68,6 +71,7 @@ mod backends {
     }
 }
 mod console_relay {
+    pub const SLOTS: usize = 8;
     pub fn not_started(_: usize) {}
 }
 mod fs_service {

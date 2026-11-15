@@ -142,6 +142,7 @@ use sex_pdx::app_catalog;
 mod text_transaction;
 mod glyphs;
 mod lock_screen;
+mod bt_panel;
 mod bitmap_binding;
 mod bitmap_transaction;
 mod bitmap_stores;
@@ -2169,6 +2170,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         }
         draw_launcher_panel(fb,w,h,total,scene);
         draw_tray_menu(fb,w,h,total,scene);
+        bt_panel::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_window_switcher(fb,w,h,total,scene);
         draw_screenshot_ui(fb,w,h,total,scene);
     }
@@ -4543,6 +4545,8 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+                // Only the Shell shows the Bluetooth panel (bt_panel.rs checks the caller).
+                sex_pdx::bt_ui::OP_PANEL => { if bt_panel::receive(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) { needs_full_redraw = true; } }
                 sex_pdx::screenshot::OP_SCREENSHOT_UI => {
                     // Only the Shell shows, moves and hides the screenshot selection.
                     if msg.caller_pd == 3 {

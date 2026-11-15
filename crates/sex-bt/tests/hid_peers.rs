@@ -211,12 +211,15 @@ impl Controller {
 
     fn take(&mut self, p: &[u8]) {
         if let Some((h, pb, data)) = hci::parse_acl(p) {
+            // The controller hands the buffer back (Number Of Completed Packets).
+            self.out.push_back(hci::event(hci::ev::NUMBER_OF_COMPLETED_PACKETS, &[1, h as u8, (h >> 8) as u8, 1, 0]));
             let Some(f) = self.rx.push(pb, data) else { return };
             let (cid, payload) = l2cap::parse_frame(&f).unwrap();
             if h == self.le_handle {
                 match cid {
                     l2cap::CID_SMP => { let a = self.kb.smp.on_pdu(payload); self.kb_actions(a); }
                     l2cap::CID_ATT => { if let Some(r) = self.kb.att(payload) { self.le_send(l2cap::CID_ATT, &r); } }
+                    l2cap::CID_LE_SIGNALING => assert_eq!(payload[0], l2cap::sig::CONNECTION_PARAMETER_UPDATE_RESPONSE),
                     _ => panic!("LE cid {cid:#x}"),
                 }
             } else {
@@ -445,6 +448,13 @@ fn ble_keyboard_pairs_types_and_comes_back() {
     assert_eq!(inputs(&pump(&mut h2, &mut c2)), [Input::Keys { modifiers: 0, keys: [0x28, 0, 0, 0, 0, 0] }]);
     // Encryption used the stored key, not a new pairing.
     assert_eq!(c2.opcodes.iter().filter(|o| **o == hop::LE_START_ENCRYPTION).count(), 1);
+    // Forgetting the bond (listed under its first address) drops the live link that
+    // came in from the new private address.
+    assert!(!c2.opcodes.contains(&code::DISCONNECT));
+    h2.forget(first);
+    pump(&mut h2, &mut c2);
+    assert!(c2.opcodes.contains(&code::DISCONNECT));
+    assert!(h2.bonds.le_for(&back).is_none());
 }
 
 #[test]
@@ -495,6 +505,31 @@ fn classic_mouse_pairs_moves_and_reconnects() {
 }
 
 #[test]
+fn a_page_that_fails_is_noted_and_can_be_retried() {
+    let (mut h, mut c) = ready();
+    let found = Found { addr: MOUSE, transport: Transport::Classic, addr_type: 0, rssi: Some(-40), class: Some(0x002580),
+        name: Some("Cuff Classic Mouse".into()), appearance: None, flags: None, connectable: true };
+    h.connect_hid(&found);
+    let page = h.poll().expect("the page");
+    assert_eq!(u16::from_le_bytes([page[1], page[2]]), hop::CREATE_CONNECTION);
+    // The mouse is out of range: the controller accepts the page, then times out.
+    h.on_packet(&hci::command_status(hop::CREATE_CONNECTION, 0));
+    let mut e = vec![0x04, 0, 0];
+    e.extend_from_slice(&MOUSE.0);
+    e.extend_from_slice(&[0x01, 0x00]);
+    h.on_packet(&hci::event(hci::ev::CONNECTION_COMPLETE, &e));
+    let notes = pump(&mut h, &mut c);
+    assert!(notes.contains(&Note::ConnectFailed { addr: MOUSE, status: 0x04 }), "{notes:?}");
+    // A failed page of a device we never asked for says nothing.
+    h.on_packet(&hci::event(hci::ev::CONNECTION_COMPLETE, &e));
+    assert!(!pump(&mut h, &mut c).iter().any(|n| matches!(n, Note::ConnectFailed { .. })));
+    // Asked again (the user picks Pair once more), it pages again and pairs.
+    h.connect_hid(&found);
+    let notes = pump(&mut h, &mut c);
+    assert!(notes.contains(&Note::Paired { addr: MOUSE, le: false }), "{notes:?}");
+}
+
+#[test]
 fn stranger_paging_us_is_refused() {
     let (mut h, mut c) = ready();
     let mut req = MOUSE.0.to_vec();
@@ -530,4 +565,19 @@ fn spoofed_bonded_address_injects_nothing() {
     assert!(!notes.iter().any(|n| matches!(n, Note::Encrypted { handle: 0x000d })), "{notes:?}");
     assert!(notes.iter().any(|n| matches!(n, Note::PairingFailed { addr, .. } if *addr == MOUSE)), "{notes:?}");
     assert!(c.opcodes.contains(&code::DISCONNECT), "the impostor is dropped");
+}
+
+#[test]
+fn le_parameter_update_reaches_the_controller() {
+    let (mut h, mut c) = ready();
+    let found = Found { addr: c.kb_addr, transport: Transport::Le, addr_type: 1, rssi: Some(-50), class: None,
+        name: Some("Silk BLE Keyboard".into()), appearance: Some(0x03c1), flags: Some(0x05), connectable: true };
+    h.connect_hid(&found);
+    pump(&mut h, &mut c);
+    // The keyboard (peripheral) asks for 30-45 ms, latency 4, timeout 4 s.
+    let mut d = vec![];
+    for v in [24u16, 36, 4, 400] { d.extend_from_slice(&v.to_le_bytes()); }
+    c.le_send(l2cap::CID_LE_SIGNALING, &l2cap::command(l2cap::sig::CONNECTION_PARAMETER_UPDATE_REQUEST, 7, &d));
+    pump(&mut h, &mut c);
+    assert!(c.opcodes.contains(&code::LE_CONNECTION_UPDATE));
 }

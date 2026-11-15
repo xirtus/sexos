@@ -1,0 +1,9 @@
+[package]
+name = "sex-ntp"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "SNTPv4 client codec for SexOS: request, checked reply, clock offset (RFC 4330 / RFC 5905 on-wire)"
+
+[lib]
+path = "src/lib.rs"

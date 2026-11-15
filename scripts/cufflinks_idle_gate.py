@@ -3,7 +3,8 @@
 (master_runtime_gate.sh --keep-log); QEMU has no Bluetooth controller (usb-bt-dongle is
 gone upstream), so this checks the no-controller path only:
 
-- BOOT spawns Cufflinks (domain 52, Senses key 4) and pairs the HCI region with SexUSB;
+- BOOT spawns Cufflinks (domain 52, Senses key 4) and pairs the HCI region with SexUSB,
+  the audio region with Bell and the Bluetooth panel region (W2b) with the Shell;
 - Cufflinks finds the region, logs `[cufflinks.idle] controller=none` once and sleeps;
 - it never panics, never repeats its start lines, and stays off the CPU once idle: the
   scheduler's per-second active-domain masks (`[sched.active] ... domains=0x...`) after
@@ -25,6 +26,12 @@ def check(text):
         (r'\[cufflinks\.start\]', 'Cufflinks never ran'),
         (r'\[cufflinks\.transport\] ok=1 slot=1003', 'Cufflinks did not find its region'),
         (r'\[sexusb\.bt\.route\] region=1', 'SexUSB did not find the region'),
+        (r'\[boot\.bt\.audio\] bell=[1-9]\d* cufflinks=52 slot=1006 bytes=262144 runtime_mint=0', 'Bluetooth audio region not paired with Bell'),
+        (r'\[cufflinks\.audio\.route\] ok=1 slot=1006', 'Cufflinks did not find the Bell audio region'),
+        (r'\[bell\.bt\.route\] region=1', 'Bell did not find the Bluetooth audio region'),
+        (r'\[boot\.bt\.ui\] shell=3 cufflinks=52 slot=1007 notify=1008 runtime_mint=0', 'Bluetooth panel region not paired with the Shell'),
+        (r'\[cufflinks\.ui\.route\] ok=1 slot=1007', 'Cufflinks did not find the Bluetooth panel region'),
+        (r'\[shell\.bt\.route\] ok=1 slot=1007', 'the Shell did not find the Bluetooth panel region'),
     ]
     for pattern, why in need:
         if not re.search(pattern, text): fails.append(why)

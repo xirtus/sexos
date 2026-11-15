@@ -196,6 +196,22 @@ impl Book {
         let n = |k: &str| r.get(k).and_then(Json::as_u64).unwrap_or(0) as usize;
         Ok((n("sheet"), at.row, at.col, n("count")))
     }
+    /// Replaces every `what` with `with` in the text and formulas of every sheet (Excel's
+    /// Replace All). Returns how many cells changed.
+    pub fn replace_all(&mut self, what: &str, with: &str) -> Result<usize, String> {
+        let r = self.run("edit.replace", json!({ "what": what, "with": with, "all": true, "within": "workbook" }))?;
+        Ok(r.get("replaced").and_then(Json::as_u64).unwrap_or(0) as usize)
+    }
+    /// Sets the width of column `col` in pixels at 100% (0 hides it).
+    pub fn set_col_width(&mut self, col: u32, width: u32) -> Result<(), String> {
+        let name = column_name(col);
+        self.run("home.columnWidth", json!({ "cols": format!("{name}:{name}"), "width": width.min(1800) })).map(|_| ())
+    }
+    /// Gives `range` a number format: "General", "Number", "Currency", "Short Date",
+    /// "Time", "Percentage", "Scientific" (GridCraft's names), or a format code.
+    pub fn number_format(&mut self, range: Range, format: &str) -> Result<(), String> {
+        self.run_on(range, "home.numberFormat", json!({ "range": range.a1(), "format": format })).map(|_| ())
+    }
     pub fn undo(&mut self) -> Result<(), String> { self.run("edit.undo", json!({})).map(|_| ()) }
     pub fn redo(&mut self) -> Result<(), String> { self.run("edit.redo", json!({})).map(|_| ()) }
 
@@ -593,6 +609,25 @@ mod tests {
         assert_eq!((sheet, row, col), (0, 3, 0));
         assert!(n >= 1);
         assert!(book.find(0, 0, "no such text anywhere").is_err());
+    }
+
+
+    #[test]
+    fn replace_widths_and_number_formats() {
+        let path = temp("replace.xlsx");
+        std::fs::write(&path, WELCOME).unwrap();
+        let (mut book, _) = Book::open(&path).unwrap();
+        assert_eq!(book.replace_all("Rent", "Lodging").unwrap(), 1);
+        assert_eq!(book.shown(1, 0).text, "Lodging");
+        assert_eq!(book.replace_all("nothing like this", "x").unwrap_or(0), 0);
+        book.set_col_width(0, 150).unwrap();
+        assert_eq!(book.col_width(0), 150);
+        book.number_format(Range { r0: 1, c0: 1, r1: 3, c1: 1 }, "Currency").unwrap();
+        assert!(book.shown(1, 1).text.contains("1,200.00"), "{}", book.shown(1, 1).text);
+        book.number_format(Range::cell(1, 1), "Percentage").unwrap();
+        assert!(book.shown(1, 1).text.ends_with('%'), "{}", book.shown(1, 1).text);
+        book.undo().unwrap();
+        assert!(book.shown(1, 1).text.contains("1,200.00"));
     }
 
 }

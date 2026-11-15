@@ -111,7 +111,7 @@ pub mod id {
 }
 
 /// Programs that open each kind of file, the default first. Append-only.
-pub const PDF_PROGRAMS: &[&str] = &["pdf", "kaleidoscope"];
+pub const PDF_PROGRAMS: &[&str] = &["vellum", "kaleidoscope"];
 pub const IMAGE_PROGRAMS: &[&str] = &["gaze", "kaleidoscope"];
 pub const VIDEO_PROGRAMS: &[&str] = &["play"];
 pub const AUDIO_PROGRAMS: &[&str] = &["play"];
@@ -466,7 +466,7 @@ mod tests {
     #[test]
     fn files_open_with_the_chosen_program() {
         let mut c = Config::new();
-        assert_eq!(c.program_for(b"report.PDF"), Some("pdf"));
+        assert_eq!(c.program_for(b"report.PDF"), Some("vellum"));
         assert_eq!(c.program_for(b"cat.jpeg"), Some("gaze"));
         assert_eq!(c.program_for(b"film.mkv"), Some("play"));
         assert_eq!(c.program_for(b"song.flac"), Some("play"));

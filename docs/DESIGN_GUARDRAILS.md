@@ -38,6 +38,8 @@ do from ring 3. When a feature needs a little ring-0 help, add the smallest mech
 | 2026-11-10 | 21,500 | Unchanged. Display and Shell restarting in place adds about 30 lines of mechanism (keep their BOOT pages, end a domain at its next syscall); the desktop logic for coming back lives in Shell. |
 | 2026-11-14 | 22,700 | Drag VM mechanism (SYS_VM, VMX root, EPT, vCPU run), approved by Andreas 2026-11-14. Raise of 1,200 over 21,500; D1 (`kernel/src/vmx.rs` plus hooks) added about 560 lines, so SVM (D5) and later phases share the rest. |
 | 2026-11-14 | 22,700 | Unchanged. Cufflinks boot start (W1b) adds 27 kernel lines, all BOOT wiring: spawn domain 52 (like Denim), pair the `bt_hci` region with SexUSB, grant SexUSB's wake route and Cufflinks's Files route, and hand it the firmware pack (the Wi-Fi pack grant made generic). No Bluetooth protocol code in ring 0; kernel 20,199 lines. |
+| 2026-11-15 | 22,700 | Unchanged. Cufflinks headphones (W3) add 3 kernel lines, BOOT wiring only: pair the `bt_audio` region between Bell and Cufflinks. SBC, SDP, AVDTP and the routing of Bell's mix all live in `crates/sex-bt`, Cufflinks and Bell. |
+| 2026-11-15 | 22,700 | Unchanged. The Bluetooth pairing prompt (W2b) adds 4 kernel lines, BOOT wiring only: pair the `bt_ui` region between the Shell and Cufflinks and grant Cufflinks its wake route to the Shell. The panel, the commands and the pairing policy live in `sex_pdx::bt_ui`, the Shell, Display and Cufflinks; kernel 20,619 lines. |
 
 ## 2. No Linux-shaped kernel API
 

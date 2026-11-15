@@ -103,6 +103,9 @@ impl Pen {
     pub fn sans(size: u32) -> Self { Self::new(sex_font::GEIST_SANS, size) }
     /// Geist Mono at `size` pixels per em.
     pub fn mono(size: u32) -> Self { Self::new(sex_font::GEIST_MONO, size) }
+    /// Geist Sans, or Geist Mono when `mono`, in bold, italic or both
+    /// (`sex_font::Style`), at `size` pixels per em.
+    pub fn styled(mono: bool, style: sex_font::Style, size: u32) -> Self { Self::new(sex_font::geist(mono, style), size) }
     pub fn new(data: &'static [u8], size: u32) -> Self {
         let font = Font::new(data).expect("bundled font parses");
         let ascent = (font.ascender(size * 64) + 255) / 256;
@@ -177,6 +180,19 @@ mod tests {
         let inked: Vec<usize> = (0..200).filter(|x| (0..40).any(|y| px[y * 200 + x] != 0)).collect();
         assert!(!inked.is_empty());
         assert!(inked.iter().all(|x| (10..60).contains(x)), "{inked:?}");
+    }
+
+    #[test]
+    fn bold_pen_inks_more_than_regular() {
+        let ink = |mut pen: Pen| {
+            let mut px = vec![0u32; 200 * 40];
+            let mut canvas = Canvas::new(&mut px, 200, 40);
+            pen.text(&mut canvas, 4, 8, "Assuit", 0xffffff, None);
+            px.iter().map(|p| p & 0xff).sum::<u32>()
+        };
+        let regular = ink(Pen::sans(16));
+        assert!(ink(Pen::styled(false, sex_font::Style::BOLD, 16)) as f32 > regular as f32 * 1.3);
+        assert!(ink(Pen::styled(true, sex_font::Style::BOLD_ITALIC, 16)) > 0);
     }
 
     #[test]

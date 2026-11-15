@@ -22,6 +22,7 @@ mod idle_media;
 mod lock;
 mod keyboard_layout;
 mod key_repeat;
+mod bt_panel;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -203,6 +204,7 @@ unsafe fn app_input_poll(){
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,key.wire(),1,EV_KEY);
             if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
             APP_INPUT.pop();
+            if status==0{clip_touched(item.destination.subject);}
             if browser_input_participant(item.destination)&&status==0{
                 sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot={} accepted=1",key.code,item.destination.route);
             }
@@ -218,6 +220,7 @@ unsafe fn app_input_poll(){
             if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
             APP_INPUT.pop();
             if !is_pointer_move(word){
+                if status==0{clip_touched(item.destination.subject);}
                 sex_pdx::serial_record!("[shell.program.pointer] pd={} task={} word={:#x} status={}",item.destination.subject.pd,item.destination.subject.task,word,status);
             }
         },
@@ -10365,7 +10368,7 @@ unsafe fn program_pointer_target()->Option<(u64,sex_pdx::clipboard::Participant,
     Some((sid,p,lx.clamp(i16::MIN as i32,i16::MAX as i32) as i16,ly.clamp(i16::MIN as i32,i16::MAX as i32) as i16,inside))
 }
 unsafe fn program_pointer_send(p:sex_pdx::clipboard::Participant,x:i16,y:i16,kind:sex_pdx::app_pointer::Kind)->bool{
-    let word=sex_pdx::app_pointer::Pointer{x,y,buttons:POINTER_BUTTONS&7,kind}.wire();
+    let word=sex_pdx::app_pointer::Pointer{x,y,buttons:POINTER_BUTTONS&7,kind,mods:APP_MODIFIERS.pointer()}.wire();
     let accepted=APP_INPUT.push_move(app_input::Item{destination:p,input:app_input::Input::Pointer(word)},is_pointer_move);
     app_input_poll();
     accepted
@@ -10396,6 +10399,58 @@ fn dnd_send(route:u64,op:u64,m:sex_pdx::dnd::Message)->bool{
         match pdx_call_checked(route,op,a,b,c){Ok(_)=>return true,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>sys_yield(),Err(_)=>return false}
     }
     false
+}
+// ── The clipboard for ordinary programs (sex_pdx::program_clipboard) ─────
+/// The program the person last pressed a key or clicked in, and when.
+static mut CLIP_TOUCH:Option<(sex_pdx::clipboard::Subject,u64)>=None;
+/// A copy being put together, and whose.
+static mut CLIP_FROM:Option<sex_pdx::clipboard::Subject>=None;
+static mut CLIP_TEXT:sex_pdx::program_clipboard::Text=sex_pdx::program_clipboard::Text::new();
+unsafe fn clip_touched(subject:sex_pdx::clipboard::Subject){CLIP_TOUCH=Some((subject,sex_pdx::get_ticks()));}
+fn clip_send(route:u64,m:sex_pdx::program_clipboard::Message)->bool{
+    let [a,b,c]=m.wire();
+    for _ in 0..1024{
+        match pdx_call_checked(route,sex_pdx::program_clipboard::OP_CLIPPED,a,b,c){Ok(_)=>return true,Err(sex_pdx::ERR_SERVICE_NOT_READY)=>sys_yield(),Err(_)=>return false}
+    }
+    false
+}
+/// A program's `OP_CLIP`: only the focused program, just used, copies or pastes.
+unsafe fn shell_clip_message(msg:&sex_pdx::PdxMessage)->bool{
+    use sex_pdx::program_clipboard::{self as pc,Message};
+    if msg.type_id!=pc::OP_CLIP{return false}
+    let Some(p)=focused_program_participant().filter(|p|p.subject.pd==msg.caller_pd&&p.subject.task==msg.caller_task)else{
+        sex_pdx::serial_record!("[shell.clip.denied] caller={} task={} reason=not_focused",msg.caller_pd,msg.caller_task);return true
+    };
+    let touched=CLIP_TOUCH.is_some_and(|(s,t)|s==p.subject&&sex_pdx::get_ticks().saturating_sub(t)<=pc::TOUCH_TICKS);
+    let done=|status:u8|{let _=clip_send(p.route,Message::Done{status});};
+    match Message::decode([msg.arg0,msg.arg1,msg.arg2]){
+        Some(Message::Copy{len})=>{
+            if !touched{sex_pdx::serial_record!("[shell.clip.denied] caller={} reason=not_used",p.subject.pd);done(pc::DENIED);return true}
+            CLIP_FROM=Some(p.subject);CLIP_TEXT.begin(len);
+        }
+        Some(Message::Data{offset,count,bytes})=>{
+            if CLIP_FROM==Some(p.subject)&&!CLIP_TEXT.take(offset,count,&bytes){CLIP_FROM=None;CLIP_TEXT.erase();done(pc::INVALID);}
+        }
+        Some(Message::End{hash})=>{
+            if CLIP_FROM.take()!=Some(p.subject){done(pc::INVALID);return true}
+            let result=match CLIP_TEXT.finish(hash){Some(text)=>CLIPBOARD.publish_program(p.subject,text),None=>Err(sex_pdx::clipboard::Status::Invalid)};
+            CLIP_TEXT.erase();
+            sex_pdx::serial_record!("[shell.clip.copied] pd={} task={} len={} ok={}",p.subject.pd,p.subject.task,result.map_or(0,|r|r.len),result.is_ok() as u8);
+            done(match result{Ok(_)=>pc::OK,Err(sex_pdx::clipboard::Status::Busy)=>pc::BUSY,Err(_)=>pc::INVALID});
+        }
+        Some(Message::Paste)=>{
+            if !touched{sex_pdx::serial_record!("[shell.clip.denied] caller={} reason=not_used",p.subject.pd);done(pc::DENIED);return true}
+            // The owner of what is on the clipboard must still be running.
+            if !clipboard_source_ready(){done(pc::BUSY);return true}
+            let Some(text)=CLIPBOARD.current_text()else{done(pc::EMPTY);return true};
+            let mut ok=clip_send(p.route,Message::Begin{len:text.len()});
+            for piece in pc::pieces(text){ok=ok&&clip_send(p.route,piece);}
+            ok=ok&&clip_send(p.route,Message::End{hash:pc::hash(text)});
+            sex_pdx::serial_record!("[shell.clip.pasted] pd={} task={} len={} ok={}",p.subject.pd,p.subject.task,text.len(),ok as u8);
+        }
+        _=>{}
+    }
+    true
 }
 /// A program's `OP_DRAG`.
 unsafe fn shell_dnd_message(msg:&sex_pdx::PdxMessage)->bool{
@@ -10617,6 +10672,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::NightLight => desktop_look_step(0, 1),
         A::Lock => lock::lock(),
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
+        A::Bluetooth => bt_panel::toggle(),
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
         action, done as u8, before.0, ACTIVE_SCENE_IDX, before.1, FOCUSED_SURFACE_ID, wm_tiling().layout.name());
@@ -10646,6 +10702,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
         }
     }
     if overview_key(code,value) {return true;}
+    if bt_panel::key(code,value) {return true;}
     if media_keys::is_player_key(code){if value==1{player_key(code);}return true;}
     let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
     if screenshot_key(code,value) {return true;}
@@ -10974,6 +11031,24 @@ static mut TRAY_REFRESHED: Option<u64> = None;
 /// one undelivered reply per PD, so Bell and sexnet are asked one after the other.
 static mut TRAY_WIFI_ASKED: Option<u64> = None;
 static mut TRAY_WIFI_DUE: bool = false;
+/// A volume or mute click made while another answer was owed to Shell: sent once that
+/// answer is in. The kernel keeps one unread reply per domain, so a second answer
+/// arriving before Shell reads the first is lost (and the tray would show the old state).
+static mut TRAY_OWED_VOLUME: Option<u8> = None;
+static mut TRAY_OWED_MUTE: bool = false;
+/// Whether an answer from Bell or sexnet may still be on its way to Shell.
+unsafe fn tray_answer_owed() -> bool {
+    MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000)
+}
+/// Sends a waiting volume or mute click once nothing else is owed.
+unsafe fn tray_send_owed() {
+    if tray_answer_owed() { return; }
+    let (action, a) = if let Some(v) = TRAY_OWED_VOLUME.take() { (sex_pdx::sound_mixer::SET_MASTER, v as u64) }
+        else if core::mem::take(&mut TRAY_OWED_MUTE) { (sex_pdx::sound_mixer::MUTE_MASTER, 2) }
+        else { return };
+    if pdx_call(SLOT_BELL, sex_pdx::sound_mixer::OP_MIXER, action, a, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
+    sex_pdx::serial_record!("[shell.tray.owed.sent] action={} arg={}", action, a);
+}
 /// sexnet's PD, which answers Wi-Fi state.
 const TRAY_SEXNET_PD: u32 = 13;
 unsafe fn tray_publish() {
@@ -11002,15 +11077,22 @@ unsafe fn tray_ask_wifi() {
 }
 /// Every 30 s, and every 2 s while a tray menu shows.
 unsafe fn tray_tick() {
+    let lost = MEDIA_ASKS.expire(sex_pdx::get_ticks());
+    if lost != 0 { sex_pdx::serial_record!("[shell.media.lost] asks={}", lost); }
     // The first look waits for boot to settle (Bell, sexnet and the bar up).
     if TRAY_REFRESHED.is_none() && sex_pdx::get_ticks() < 8_000 { return; }
+    tray_send_owed();
     let every = if TRAY_VIEW.menu == sex_pdx::tray::Menu::None { 30_000 } else { 2_000 };
     if TRAY_REFRESHED.map_or(true, |t| sex_pdx::get_ticks().saturating_sub(t) >= every) { tray_refresh(); }
 }
 unsafe fn tray_volume(word: u64) {
     use sex_pdx::sound_mixer as mixer;
-    TRAY.volume = mixer::state_volume(word).min(100); TRAY.muted = mixer::state_muted(word); TRAY.sound = true;
+    // A click still waiting to go to Bell keeps what it shows.
+    if TRAY_OWED_VOLUME.is_none() { TRAY.volume = mixer::state_volume(word).min(100); }
+    if !TRAY_OWED_MUTE { TRAY.muted = mixer::state_muted(word); }
+    TRAY.sound = true;
     tray_publish();
+    tray_send_owed();
     tray_ask_wifi();
 }
 unsafe fn tray_receive(msg: &sex_pdx::PdxMessage) -> bool {
@@ -11018,6 +11100,7 @@ unsafe fn tray_receive(msg: &sex_pdx::PdxMessage) -> bool {
     TRAY_WIFI_ASKED = None;
     TRAY.wifi = sex_pdx::wifi_status::State::of(msg.arg0).phase;
     tray_publish();
+    tray_send_owed();
     true
 }
 /// Opens (or closes) a tray menu on its OS panel surface, closing the other one.
@@ -11068,7 +11151,9 @@ unsafe fn tray_click(px: i32, py: i32) {
             if let Some((action, a)) = ask {
                 // Show the choice at once; Bell's answer confirms it.
                 if action == mixer::SET_MASTER { TRAY.volume = a as u8; } else { TRAY.muted = !TRAY.muted; }
-                if pdx_call(SLOT_BELL, mixer::OP_MIXER, action, a, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
+                // The latest volume wins; two mute clicks while waiting undo each other.
+                if action == mixer::SET_MASTER { TRAY_OWED_VOLUME = Some(a as u8); } else { TRAY_OWED_MUTE = !TRAY_OWED_MUTE; }
+                tray_send_owed();
                 tray_publish();
             }
         }
@@ -11102,6 +11187,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
     if msg.type_id!=1||msg.caller_pd!=NOTIFY_BELL_PD||!media_keys::is_mixer_answer(msg.arg0)||!MEDIA_ASKS.pending(){return false}
     let word=msg.arg0;
     match MEDIA_ASKS.pop(){
+        // An answer from before a change still waiting is not what the person chose.
         Some(media_keys::Ask::Tray) if !media_keys::refused(word)=>tray_volume(word),
         Some(media_keys::Ask::Volume) if !media_keys::refused(word)=>{
             tray_volume(word);
@@ -11122,6 +11208,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
         Some(media_keys::Ask::Restore) if !media_keys::refused(word)=>{}
         ask=>sex_pdx::serial_record!("[shell.media.refused] ask={:?}",ask),
     }
+    tray_send_owed();
     true
 }
 
@@ -17504,6 +17591,7 @@ static mut PROGRAM_NETWORK: bool = false;
 /// Files may then serve the program its own folder, and the network service talk to
 /// it if the person asked, for this run alone.
 fn program_bind(target:u32,task:u32){
+    attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
     let network=unsafe{core::mem::take(&mut PROGRAM_NETWORK)};
     if network{let _=pdx_call(sex_pdx::web::SHELL_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
@@ -17667,6 +17755,37 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
     }
     true
 }
+/// The terminal (target, task) whose ticket is being read, until its run is bound.
+static mut PROGRAM_LAUNCHER: Option<(u32,u32)> = None;
+/// Runs a terminal started attached to it (`sex_pdx::console_relay`): (run target, run
+/// task, terminal target, terminal task). Only that terminal may stop the run.
+static mut ATTACHED_RUNS: [Option<(u32,u32,u32,u32)>;16] = [None;16];
+/// The task `target`'s row runs now, if it runs.
+fn running_task(target:u32)->Option<u32>{
+    let row=app_catalog::by_target(target)?;
+    let c=sex_pdx::app_lifecycle::catalog(row.lifecycle_slot).ok()?;
+    (c.target_pd==target&&sex_pdx::app_lifecycle::info(row.lifecycle_slot)==Err(sex_pdx::app_lifecycle::LIVE)).then_some(c.task_id)
+}
+fn attached_record(target:u32,task:u32){
+    let runs=unsafe{&mut *core::ptr::addr_of_mut!(ATTACHED_RUNS)};
+    // The row's earlier run is no one's now.
+    for r in runs.iter_mut(){if r.is_some_and(|r|r.0==target){*r=None;}}
+    let Some((by,by_task))=(unsafe{core::mem::take(&mut *core::ptr::addr_of_mut!(PROGRAM_LAUNCHER))})else{return};
+    let free=runs.iter().position(|r|r.is_none_or(|r|running_task(r.0)!=Some(r.1)||running_task(r.2)!=Some(r.3)));
+    if let Some(i)=free{runs[i]=Some((target,task,by,by_task));}
+}
+/// A terminal's second Ctrl+C: its attached run did not end, so it is ended the way a
+/// program that ignores Close is (`app_lifecycle::force_end`). Only the terminal run that
+/// started it may ask, while both still run.
+unsafe fn attached_stop(caller:u32,target:u64){
+    let runs=&mut *core::ptr::addr_of_mut!(ATTACHED_RUNS);
+    let found=runs.iter().flatten().copied().find(|r|r.0 as u64==target&&r.2==caller);
+    let ok=found.is_some_and(|r|running_task(r.2)==Some(r.3)&&running_task(r.0)==Some(r.1));
+    let Some(r)=found.filter(|_|ok)else{sex_pdx::serial_record!("[shell.attached.stop.denied] caller={} target={}",caller,target);return};
+    let Some(row)=app_catalog::by_target(r.0)else{return};
+    let result=sex_pdx::app_lifecycle::force_end(row.lifecycle_slot);
+    sex_pdx::serial_record!("[shell.attached.stop] terminal={} target={} task={} ok={}",caller,r.0,r.1,result.is_ok() as u8);
+}
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
 unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     use sex_pdx::{app_lifecycle as a,program_store as store};
@@ -17684,6 +17803,10 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         RECORD_SPAWN_WANTED=if status==0{msg.arg2}else{0};
         return true;
     }
+    if msg.type_id==store::OP_STOP_ATTACHED {
+        if matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program)){attached_stop(msg.caller_pd,msg.arg0);}
+        return true;
+    }
     if msg.type_id==store::OP_RUN {
         // A terminal's ticket (sex_pdx::console_relay): Files starts it only for the program that prepared it.
         let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
@@ -17694,6 +17817,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;
         PROGRAM_NETWORK=status==0&&!by_program&&msg.arg2&store::RUN_NETWORK!=0;
+        PROGRAM_LAUNCHER=if status==0&&by_program{running_task(msg.caller_pd).map(|t|(msg.caller_pd,t))}else{None};
         // A restored run's workspace, and the ticket Spindle keeps the session by: Spindle's runs only.
         PROGRAM_TICKET=if by_program{0}else{msg.arg1};PROGRAM_SCENE=if by_program{None}else{sex_pdx::session_restore::scene_of(msg.arg2).filter(|s|(*s as usize)<ATLAS_MAX_SCENES)};
         if status!=0{sex_pdx::serial_record!("[shell.program.denied] reason=files_busy status={}",status);}
@@ -24760,6 +24884,7 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
     if TRAY_VIEW.menu != sex_pdx::tray::Menu::None && py >= desktop_bar_height() { tray_click(px, py); return (HitTarget::None, true); }
+    if bt_panel::click(px, py, desktop_width(), desktop_bar_height()) { return (HitTarget::None, true); }
     let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
@@ -26064,6 +26189,7 @@ pub extern "C" fn _start() -> ! {
         // Held keys: the repeat goes ahead of the queue drain below.
         unsafe { key_repeat_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
+        bt_panel::poll();
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -26753,7 +26879,7 @@ pub extern "C" fn _start() -> ! {
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); continue; }
         // The kernel: the power button or the lid. Read the sensors now.
         if msg.type_id == sex_pdx::power::OP_EVENT && msg.caller_pd == 0 { unsafe { LAPTOP_NEXT_POLL = 0; laptop_poll(); } continue; }
         // The kernel's critical-memory word: the poll above acts on it.
@@ -26762,8 +26888,10 @@ pub extern "C" fn _start() -> ! {
             if shell_lifecycle_hint(&msg) { continue; }
             if shell_launch_message(&msg) { continue; }
             if shell_dnd_message(&msg) { continue; }
+            if shell_clip_message(&msg) { continue; }
             if config_watch::receive(&msg) { continue; }
             if lock::receive(&msg) { continue; }
+            if bt_panel::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }

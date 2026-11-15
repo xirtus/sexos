@@ -127,6 +127,7 @@ fn take(w: &mut Watch, key: u16, value: i32) {
         id::WALLPAPER | id::NIGHT_LIGHT => show_look(w),
         id::ZONE => show_zone(w),
         id::VOLUME => give_volume(w),
+        id::NTP => give_network_time(w),
         id::REPEAT_DELAY | id::REPEAT_RATE | id::CAPS_AS_CTRL => keyboard(w),
         _ => {}
     }
@@ -145,6 +146,13 @@ fn show_zone(w: &mut Watch) {
 fn keyboard(w: &mut Watch) {
     let v = |k| w.copy.value(k).max(0) as u64;
     unsafe { crate::keyboard_settings(v(id::REPEAT_DELAY), v(id::REPEAT_RATE), v(id::CAPS_AS_CTRL) != 0) };
+}
+
+/// sexnet sets the clock from the network unless the person turned it off.
+fn give_network_time(w: &mut Watch) {
+    let on = w.copy.value(id::NTP) != 0;
+    let r = sex_pdx::pdx_call(sex_pdx::SLOT_NET, sex_pdx::network_time::OP, sex_pdx::network_time::SET_ENABLED, on as u64, 0).0;
+    sex_pdx::serial_record!("[shell.network_time] on={} ok={}", on as u8, (r == sex_pdx::network_time::OK) as u8);
 }
 
 fn give_volume(w: &mut Watch) {
