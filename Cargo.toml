@@ -145,6 +145,7 @@ members = [
     "crates/sex-rfb",
     "apps/lurk",
     "crates/gaze-codecs",
+    "crates/gaze-core",
     "crates/sex-codecs",
     "crates/vellum-edit",
     "crates/loom-core",
