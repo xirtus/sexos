@@ -10970,6 +10970,15 @@ unsafe fn player_key(code:u8){
 static mut TRAY: sex_pdx::tray::Status = sex_pdx::tray::Status::UNKNOWN;
 static mut TRAY_VIEW: sex_pdx::tray::View = sex_pdx::tray::View { menu: sex_pdx::tray::Menu::None, month_offset: 0 };
 static mut TRAY_REFRESHED: Option<u64> = None;
+/// A tray change waiting for Bell's answer to the ask before it: Bell answers each caller
+/// in one place, so a second ask sent before the first answer is read loses an answer.
+static mut TRAY_DEFERRED: Option<(u64, u64)> = None;
+/// Sends the tray change that waited, once nothing else is asked of Bell.
+unsafe fn tray_send_deferred() {
+    if MEDIA_ASKS.pending() { return; }
+    let Some((action, a)) = TRAY_DEFERRED.take() else { return };
+    if pdx_call(SLOT_BELL, sex_pdx::sound_mixer::OP_MIXER, action, a, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
+}
 /// When Shell last asked sexnet, and whether a look is due. The kernel keeps
 /// one undelivered reply per PD, so Bell and sexnet are asked one after the other.
 static mut TRAY_WIFI_ASKED: Option<u64> = None;
@@ -11068,7 +11077,10 @@ unsafe fn tray_click(px: i32, py: i32) {
             if let Some((action, a)) = ask {
                 // Show the choice at once; Bell's answer confirms it.
                 if action == mixer::SET_MASTER { TRAY.volume = a as u8; } else { TRAY.muted = !TRAY.muted; }
-                if pdx_call(SLOT_BELL, mixer::OP_MIXER, action, a, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
+                if MEDIA_ASKS.pending() {
+                    // Two mute presses while waiting cancel out; a new volume replaces the old.
+                    TRAY_DEFERRED = match TRAY_DEFERRED { Some((d, _)) if d == mixer::MUTE_MASTER && action == mixer::MUTE_MASTER => None, _ => Some((action, a)) };
+                } else if pdx_call(SLOT_BELL, mixer::OP_MIXER, action, a, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
                 tray_publish();
             }
         }
@@ -11102,7 +11114,8 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
     if msg.type_id!=1||msg.caller_pd!=NOTIFY_BELL_PD||!media_keys::is_mixer_answer(msg.arg0)||!MEDIA_ASKS.pending(){return false}
     let word=msg.arg0;
     match MEDIA_ASKS.pop(){
-        Some(media_keys::Ask::Tray) if !media_keys::refused(word)=>tray_volume(word),
+        // An answer from before a change still waiting is not what the person chose.
+        Some(media_keys::Ask::Tray) if !media_keys::refused(word)=>if TRAY_DEFERRED.is_none(){tray_volume(word)},
         Some(media_keys::Ask::Volume) if !media_keys::refused(word)=>{
             tray_volume(word);
             let mut text=[0u8;48];let n=media_keys::osd_text(word,&mut text);
@@ -11122,6 +11135,7 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
         Some(media_keys::Ask::Restore) if !media_keys::refused(word)=>{}
         ask=>sex_pdx::serial_record!("[shell.media.refused] ask={:?}",ask),
     }
+    tray_send_deferred();
     true
 }
 
