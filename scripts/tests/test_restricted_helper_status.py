@@ -16,13 +16,14 @@ static RAW:std::sync::Mutex<Vec<PdxMessage>>=std::sync::Mutex::new(Vec::new());
 fn pdx_try_listen_raw(_:u64)->Option<PdxMessage>{let mut q=RAW.lock().unwrap();if q.is_empty(){None}else{Some(q.remove(0))}}
 fn pdx_call(_:u64,_:u64,_:u64,_:u64,_:u64)->(u64,u64){(0,0)}
 mod mailbox{use super::*;pub static Q:std::sync::Mutex<Vec<PdxMessage>>=std::sync::Mutex::new(Vec::new());pub fn put(m:PdxMessage){Q.lock().unwrap().push(m)}pub fn take(mut p:impl FnMut(&PdxMessage)->bool)->Option<PdxMessage>{let mut q=Q.lock().unwrap();let i=q.iter().position(|m|p(m))?;Some(q.remove(i))}}
-fn msg(cookie:u32,epoch:u64)->PdxMessage{let w=restricted_job::Observation{cookie,state:restricted_job::STATUS_UNKNOWN,recovery_complete:true,current:None,shell_epoch:epoch}.words().unwrap();PdxMessage{caller_pd:3,caller_task:3,type_id:restricted_job::OP_STATUS_EVENT,arg0:w[0],arg1:w[1],arg2:w[2]}}
+fn msg(cookie:u32,epoch:u64)->PdxMessage{let w=restricted_job::Observation{cookie,ticket:7,state:restricted_job::STATUS_UNKNOWN,recovery_complete:true,current:None,shell_epoch:epoch}.words().unwrap();PdxMessage{caller_pd:3,caller_task:3,type_id:restricted_job::OP_STATUS_EVENT,arg0:w[0],arg1:w[1],arg2:w[2]}}
 #[test]fn exact_sender_epoch_cookie_and_single_drain(){
  let old=msg(9,1);mailbox::put(old);mailbox::put(msg(10,2));mailbox::put(msg(9,2));
- assert!(restricted_status::poll(9,2).is_some());assert_eq!(mailbox::Q.lock().unwrap().len(),1);assert!(restricted_status::poll(9,2).is_none());assert_eq!(mailbox::Q.lock().unwrap().len(),1);assert!(restricted_status::poll(10,2).is_some());
+ assert!(restricted_status::poll(9,7,2).is_some());assert_eq!(mailbox::Q.lock().unwrap().len(),1);assert!(restricted_status::poll(9,7,2).is_none());assert_eq!(mailbox::Q.lock().unwrap().len(),1);assert!(restricted_status::poll(10,7,2).is_some());
  for m in [PdxMessage{caller_pd:4,..msg(9,2)},PdxMessage{caller_task:4,..msg(9,2)},PdxMessage{arg0:0,..msg(9,2)},msg(9,1),msg(10,2),msg(9,2)]{RAW.lock().unwrap().push(m);}
- assert!(restricted_status::poll(9,2).is_some());assert!(RAW.lock().unwrap().is_empty());assert!(restricted_status::poll(9,2).is_none());assert!(restricted_status::poll(10,2).is_some());
- assert!(!restricted_status::query(0,None,1));assert!(!restricted_status::query(9,None,0));assert!(restricted_status::query(9,None,2));
+ assert!(restricted_status::poll(9,7,2).is_some());assert!(RAW.lock().unwrap().is_empty());assert!(restricted_status::poll(9,7,2).is_none());assert!(restricted_status::poll(10,7,2).is_some());
+ let mut other=msg(9,2);other.arg0=(other.arg0&!(0xff_ffffu64<<32))|(8<<32);mailbox::put(other);mailbox::put(msg(9,2));assert!(restricted_status::poll(9,7,2).is_some());assert!(restricted_status::poll(9,7,2).is_none());assert!(restricted_status::poll(9,8,2).is_some());
+ assert!(!restricted_status::query(0,7,None,1));assert!(!restricted_status::query(9,7,None,0));assert!(restricted_status::query(9,7,None,2));
 }
 '''
    (root/'actual.rs').write_text(rust)

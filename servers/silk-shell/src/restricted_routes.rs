@@ -66,7 +66,7 @@ fn status(actor: Subject, words: [u64; 3]) {
     if !live(actor) || crate::restricted_pool::reserved(actor.pd) {
         return;
     }
-    let Some((cookie, known, epoch)) = job::status_decode(words) else {
+    let Some((cookie, ticket, known, epoch)) = job::status_decode(words) else {
         return;
     };
     if sex_pdx::crash_log::self_epoch().ok() != Some(epoch) {
@@ -74,6 +74,7 @@ fn status(actor: Subject, words: [u64; 3]) {
     }
     let mut value = job::Observation {
         cookie,
+        ticket,
         state: job::STATUS_UNKNOWN,
         recovery_complete: crate::restricted_pool::normal(),
         current: None,
@@ -127,8 +128,9 @@ fn status(actor: Subject, words: [u64; 3]) {
     let slots = unsafe { &mut *core::ptr::addr_of_mut!(STATUSBOX) };
     if let Some(slot) = slots[i * 2..i * 2 + 2].iter_mut().find(|s| {
         s.is_none()
-            || s.as_ref()
-                .is_some_and(|s| s.parent == actor && s.value.cookie == cookie)
+            || s.as_ref().is_some_and(|s| {
+                s.parent == actor && s.value.cookie == cookie && s.value.ticket == ticket
+            })
     }) {
         *slot = Some(StatusNotice {
             parent: actor,
