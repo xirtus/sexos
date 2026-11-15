@@ -4983,8 +4983,11 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
   failed run waited for aggregate import telemetry not emitted by Import; the
   runner now explicitly requests that state and keeps the original assertion.
   The next run exercised all processing paths but failed on three cursor pixels
-  overlapping the status strip. All 64 failed captures remain; moving the actual
-  pointer outside app pixels fixes it without cropping/relaxing the RGB oracle.
+  overlapping the status strip. All 64 failed captures remain. The passing run
+  removes that bottom-right move and retains the exact RGB oracle. Later source
+  audit finds its attempted corner parking was rejected by Shell; that run does
+  not qualify cursor parking. The maintained checker now requires actual accepted
+  mid-bar movement before capture, without cropping/relaxing any pixel predicate.
 - Review also reproduced post-saturation master attenuation: two 24,000-sample
   tracks at 50% yielded 16,383. The fix applies gain to the wide bus before its
   final clamp, preserving unity and per-track taps. Both polarities and the

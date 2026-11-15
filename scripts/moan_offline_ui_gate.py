@@ -153,8 +153,12 @@ def main():
             # The fourth region lowers the status strip to the client bottom.
             # Park on the global bar so the hardware cursor cannot cover any
             # checked app pixels; keep the complete status-strip RGB oracle.
-            assert client[1] > 32, 'cursor parking must be outside app pixels'
-            c.move(1, 1)
+            assert client[1] > 40, 'cursor parking must be outside app pixels'
+            parked = len(text())
+            # Shell deliberately rejects large jumps into the top-left corner.
+            # Use the middle of the bar and require its actual acceptance.
+            c.move(320, 10)
+            g['wait'](r'\[shell.abs.normalize\] raw_x=\d+ raw_y=\d+ sx=(?:319|320) sy=(?:9|10) accepted=1 reason=ok', parked, 120)
             g['wait'](rf'\[moan.plugin.paint\] target={target} task={task} surface={surface} .* text_hex={expected.encode().hex()}\r?\n', since, 120)
             g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} w={size[0]} h={size[1]}\r?\n', since, 120)
             deadline = time.monotonic() + 15

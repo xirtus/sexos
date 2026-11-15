@@ -163,5 +163,12 @@
     "restricted service policies and immutable job snapshots plus hostile route/restart probes",
     "final combined root image project/export/microphone/cancel regression",
     "JIT inline caches for objects/strings after Moan"
-  ]
+  ],
+  "cursor_procedure_review": {
+    "scope": "All six exact RGB captures remain valid; corner parking was not accepted",
+    "rejected_corner_moves": 6,
+    "actual_procedure": "Bottom-right cursor move removed; cursor remains at preceding control when corner jump is rejected",
+    "maintained_fix": "Use mid-bar320,10 and require fresh Shell acceptance; not assigned to this older runtime",
+    "original_trace_sha256": "403e1e3c7083f1ee09dd1f23ab2861b2dc74bab9746242ae33029173ca027aa5"
+  }
 }
