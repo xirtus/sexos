@@ -89,14 +89,42 @@
 //! - `Camera`: `type` (0 perspective, 1 orthographic), `lens` (mm), `sensor_x`,
 //!   `sensor_y`, `sensor_fit` (0 auto, 1 horizontal, 2 vertical), `ortho_scale`
 //!   (along the fitted axis), `clip_start`/`clipsta`, `clip_end`/`clipend`.
-//! - `Scene`: `id`, `camera`, `r` (`RenderData`: `xsch`, `ysch`, `xasp`,
-//!   `yasp`, `sfra`, `efra`, `frs_sec`, `frs_sec_base`). The current scene is
-//!   `FileGlobal.curscene` in the `GLOB` block, else the first `SC` block.
+//! - `Scene`: `id`, `camera`, `world`, `master_collection` (2.8+), `r`
+//!   (`RenderData`: `xsch`, `ysch`, `xasp`, `yasp`, `sfra`, `efra`, `frs_sec`,
+//!   `frs_sec_base`). The current scene is `FileGlobal.curscene` in the `GLOB`
+//!   block, else the first `SC` block.
+//! - `World`: `horr horg horb` (viewport colour) and, when `use_nodes` is set,
+//!   the `ShaderNodeBackground` node's `Color` and `Strength` inputs.
+//! - `Collection` (2.8+): `id`, `gobject` (ListBase of `CollectionObject {ob}`),
+//!   `children` (ListBase of `CollectionChild {collection}`), `flag` (bit 0 =
+//!   disabled in viewports). Objects: `visibility_flag` (2.9+) or
+//!   `restrictflag` (2.8 and older), bit 0 = disabled in viewports.
+//! - Modifiers: `Object.modifiers` is a ListBase of blocks whose SDNA struct is
+//!   the concrete type (`MirrorModifierData`, `SubsurfModifierData`, ...), each
+//!   starting with `ModifierData modifier {next, prev, type, mode, name}`;
+//!   `mode` bit 0 = shown in the viewport. The concrete struct is taken from
+//!   each block's own SDNA index, so no modifier type numbers are hard-coded.
+//!   Settings read: Mirror `flag` (axis bits 3..5, bit 7 = no merge),
+//!   `tolerance`; Subsurf `subdivType` (1 = simple), `levels`; Array `count`,
+//!   `offset_type` (bit 0 constant, bit 1 relative), `offset`, `scale`,
+//!   `flags` (bit 0 merge); Solidify `offset` (thickness), `offset_fac`; Bevel
+//!   `value`, `res`, `lim_flags` (bit 3 angle, 4 weight, 5 vertex group),
+//!   `bevel_angle`, `affect_type` (0 vertices) or `flags` bit 1 before 2.90;
+//!   Weld `merge_dist`; Displace `strength`, `midlevel`, `direction` (3 normal,
+//!   5 custom normal), `texture`; Smooth `fac`, `repeat`.
+//! - Animation: `Object.adt` -> `AnimData {action, slot_handle}` -> `bAction`.
+//!   Up to 4.3 the F-curves are the `curves` ListBase of `FCurve {bezt, fpt,
+//!   totvert, array_index, rna_path}`; 4.4+ "slotted" actions keep them in
+//!   `strip_keyframe_data_array[] -> channelbag_array[] -> fcurve_array[]`,
+//!   picking the channelbag whose `slot_handle` matches the AnimData's.
+//!   `BezTriple {vec[3][3], ipo}`: `vec[1]` is the (frame, value) key.
 //!
-//! Not imported yet: modifiers, collections and visibility, shape keys,
-//! textures/images, world, animation, library links, custom split normals.
+//! Not imported yet: shape keys, textures/images, view-layer visibility (the
+//! eye icon), drivers, NLA, library links, custom split normals, modifiers
+//! other than the nine above.
 use crate::math::{Mat4, Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
+use crate::modifiers::Modifier;
 use crate::scene::{Camera, Light, LightKind, Material, Object, ObjectData, Scene, Transform};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -116,9 +144,57 @@ const CD_PROP_FLOAT2: i64 = 49;
 
 /// Read a `.blend` file (raw, gzip or zstd) into a [`Scene`].
 pub fn import_blend(bytes: &[u8]) -> Result<Scene, String> {
+    import_blend_full(bytes).map(|(scene, _)| scene)
+}
+
+/// Like [`import_blend`], also returning the transform animation of every
+/// object whose action animates `location`, `rotation_euler` or `scale`.
+pub fn import_blend_full(bytes: &[u8]) -> Result<(Scene, Vec<BlendAction>), String> {
     let raw = decompress(bytes)?;
     let file = BlendFile::parse(&raw)?;
     Importer::new(&file).run()
+}
+
+/// Constant interpolation (Blender's `BEZT_IPO_CONST`).
+pub const INTERP_CONSTANT: u8 = 0;
+/// Linear interpolation (`BEZT_IPO_LIN`); also used for baked sample points.
+pub const INTERP_LINEAR: u8 = 1;
+/// Bezier interpolation (`BEZT_IPO_BEZ`), Blender's default. Larger values
+/// are the easing curves (sine, quad, ..., elastic) in Blender's order.
+pub const INTERP_BEZIER: u8 = 2;
+
+/// F-curve properties of an object that are imported.
+const ANIMATED_PATHS: [&str; 3] = ["location", "rotation_euler", "scale"];
+
+/// One keyframe.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BlendKey {
+    pub frame: f32,
+    pub value: f32,
+    /// Interpolation towards the next key: [`INTERP_CONSTANT`],
+    /// [`INTERP_LINEAR`], [`INTERP_BEZIER`] or a Blender easing mode.
+    pub interpolation: u8,
+}
+
+/// One animated channel: element `index` of the property `path`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlendFCurve {
+    /// RNA path, e.g. `"location"`.
+    pub path: String,
+    /// Array element (0 = X, 1 = Y, 2 = Z).
+    pub index: usize,
+    /// Keys in file order (Blender keeps them sorted by frame).
+    pub keys: Vec<BlendKey>,
+}
+
+/// The transform F-curves an object's action holds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlendAction {
+    /// Name of the object in the imported [`Scene`].
+    pub object: String,
+    /// Name of the Blender action.
+    pub action: String,
+    pub curves: Vec<BlendFCurve>,
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +382,7 @@ struct Member {
 
 #[derive(Debug)]
 struct StructDef {
+    name: String,
     size: usize,
     members: HashMap<String, Member>,
 }
@@ -427,7 +504,7 @@ impl Sdna {
             }
             struct_of_type[ty] = Some(si);
             by_name.entry(types[ty].clone()).or_insert(si);
-            structs.push(StructDef { size, members });
+            structs.push(StructDef { name: types[ty].clone(), size, members });
         }
         Ok(Sdna { structs, struct_of_type, by_name })
     }
@@ -560,6 +637,16 @@ impl<'a> BlendFile<'a> {
         self.view(self.struct_idx(names)?, self.block(ptr)?.data)
     }
 
+    /// The block at `ptr` read as its own SDNA struct, whatever that is.
+    fn view_own(&self, ptr: u64) -> Option<View<'_, 'a>> {
+        self.block_view(self.block(ptr)?)
+    }
+
+    /// The NUL-terminated string a `char *` points at.
+    fn cstr_at(&self, ptr: u64) -> Option<String> {
+        self.block(ptr).map(|b| c_string(b.data))
+    }
+
     /// `n` consecutive structs of type `names` at `ptr`.
     fn view_array(&self, ptr: u64, names: &[&str], n: usize) -> Option<Vec<View<'_, 'a>>> {
         let s = self.struct_idx(names)?;
@@ -684,6 +771,10 @@ impl<'f, 'a> View<'f, 'a> {
         let s = (*self.f.sdna.struct_of_type.get(m.ty)?)?;
         self.f.view(s, self.data.get(m.offset..)?)
     }
+    /// Name of this view's SDNA struct.
+    fn struct_name(&self) -> &'f str {
+        &self.f.sdna.structs[self.s].name
+    }
     /// The ID name without its two-letter type code.
     fn id_name(&self) -> String {
         let n = self.sub("id").and_then(|id| id.string("name")).unwrap_or_default();
@@ -706,11 +797,12 @@ struct Importer<'f, 'a> {
     materials: HashMap<u64, usize>,
     meshes: HashMap<u64, usize>,
     render: Render,
+    actions: Vec<BlendAction>,
 }
 
 impl<'f, 'a> Importer<'f, 'a> {
     fn new(f: &'f BlendFile<'a>) -> Self {
-        Importer { f, scene: Scene::new(), materials: HashMap::new(), meshes: HashMap::new(), render: Render { width: 1920.0, height: 1080.0 } }
+        Importer { f, scene: Scene::new(), materials: HashMap::new(), meshes: HashMap::new(), render: Render { width: 1920.0, height: 1080.0 }, actions: Vec::new() }
     }
 
     /// Every ID block with a two-letter `code`, with its old address.
@@ -723,7 +815,7 @@ impl<'f, 'a> Importer<'f, 'a> {
             .collect()
     }
 
-    fn run(mut self) -> Result<Scene, String> {
+    fn run(mut self) -> Result<(Scene, Vec<BlendAction>), String> {
         let f = self.f;
         // Current scene: FileGlobal.curscene, else the first SC block.
         let glob = f.blocks.iter().find(|b| &b.code == b"GLOB").and_then(|b| f.view(f.struct_idx(&["FileGlobal"])?, b.data));
@@ -785,7 +877,131 @@ impl<'f, 'a> Importer<'f, 'a> {
         if self.scene.active_camera.is_none() {
             self.scene.active_camera = self.scene.objects.iter().position(|o| matches!(o.data, ObjectData::Camera(_)));
         }
-        Ok(self.scene)
+        if let Some(sc) = sc {
+            self.collections(&sc, &by_ptr);
+            self.world(&sc);
+        }
+        Ok((self.scene, self.actions))
+    }
+
+    /// The scene's collection tree (master collection = collection 0), in
+    /// depth-first order. An object linked into several collections is placed
+    /// in the first one met.
+    fn collections(&mut self, sc: &View<'f, 'a>, objects: &HashMap<u64, usize>) {
+        let f = self.f;
+        let master_ptr = sc.ptr("master_collection");
+        let Some(master) = f.view_ptr(master_ptr, &["Collection"]) else { return };
+        let name = master.id_name();
+        self.scene.collections[0].name = if name.is_empty() { "Scene Collection".into() } else { name };
+        self.scene.collections[0].visible = collection_visible(&master);
+        let mut placed = HashSet::new();
+        let mut seen = HashSet::from([master_ptr]);
+        let mut stack = vec![(master, 0usize)];
+        while let Some((col, ci)) = stack.pop() {
+            for co in f.list(col.sub("gobject"), &["CollectionObject"]) {
+                if let Some(&oi) = objects.get(&co.ptr("ob")) {
+                    if placed.insert(oi) {
+                        self.scene.objects[oi].collection = ci;
+                    }
+                }
+            }
+            let mut children = Vec::new();
+            for cc in f.list(col.sub("children"), &["CollectionChild"]) {
+                let cp = cc.ptr("collection");
+                if !seen.insert(cp) {
+                    continue;
+                }
+                let Some(child) = f.view_ptr(cp, &["Collection"]) else { continue };
+                let idx = self.scene.add_collection(&child.id_name(), Some(ci));
+                self.scene.collections[idx].visible = collection_visible(&child);
+                children.push((child, idx));
+            }
+            // Reversed so the first child is visited next (pre-order).
+            stack.extend(children.into_iter().rev());
+        }
+    }
+
+    /// World colour and strength: the Background node when nodes are used,
+    /// else the viewport horizon colour.
+    fn world(&mut self, sc: &View<'f, 'a>) {
+        let f = self.f;
+        let Some(wo) = f.view_ptr(sc.ptr("world"), &["World"]) else { return };
+        if let (Some(r), Some(g), Some(b)) = (wo.f32("horr"), wo.f32("horg"), wo.f32("horb")) {
+            self.scene.world.color = Vec3::new(r, g, b);
+            self.scene.world.strength = 1.0;
+        }
+        if wo.num("use_nodes").unwrap_or(0.0) == 0.0 {
+            return;
+        }
+        for (name, s) in self.node_inputs(&wo, "ShaderNodeBackground") {
+            match name.as_str() {
+                "Color" => {
+                    if let Some(c) = socket_rgba(f, &s) {
+                        self.scene.world.color = Vec3::new(c[0], c[1], c[2]);
+                    }
+                }
+                "Strength" => {
+                    if let Some(v) = socket_float(f, &s) {
+                        self.scene.world.strength = v;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Name and socket of each input of the first `idname` node in the
+    /// embedded node tree of `owner` (a material or world).
+    fn node_inputs(&self, owner: &View<'f, 'a>, idname: &str) -> Vec<(String, View<'f, 'a>)> {
+        let f = self.f;
+        let Some(tree) = f.view_ptr(owner.ptr("nodetree"), &["bNodeTree"]) else { return Vec::new() };
+        let Some(node) = f.list(tree.sub("nodes"), &["bNode"]).into_iter().find(|n| n.string("idname").as_deref() == Some(idname)) else { return Vec::new() };
+        f.list(node.sub("inputs"), &["bNodeSocket"]).into_iter().map(|s| (s.string("name").unwrap_or_default(), s)).collect()
+    }
+
+    /// The object's viewport-enabled modifiers that sex-3d can evaluate.
+    fn modifiers(&self, ob: &View<'f, 'a>) -> Vec<Modifier> {
+        let f = self.f;
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        let mut p = ob.sub("modifiers").map_or(0, |l| l.ptr("first"));
+        while p != 0 && seen.insert(p) && seen.len() < 10_000 {
+            let Some(md) = f.view_own(p) else { break };
+            let head = md.sub("modifier").unwrap_or(md);
+            p = head.ptr("next");
+            if head.num("mode").is_some_and(|m| m as i64 & 1 == 0) {
+                continue; // hidden in the viewport
+            }
+            out.extend(modifier(&md));
+        }
+        out
+    }
+
+    /// Transform F-curves of the object's active action.
+    fn action(&self, ob: &View<'f, 'a>, object: &str) -> Option<BlendAction> {
+        let f = self.f;
+        let adt = f.view_ptr(ob.ptr("adt"), &["AnimData"])?;
+        let act = f.view_ptr(adt.ptr("action"), &["bAction"])?;
+        let mut fcurves = Vec::new();
+        // 4.4+ slotted actions.
+        let slot = adt.num("slot_handle");
+        let kd_n = count(act.num("strip_keyframe_data_array_num").unwrap_or(0.0));
+        for kd in f.ptr_array(act.ptr("strip_keyframe_data_array"), kd_n).into_iter().filter_map(|p| f.view_own(p)) {
+            let cb_n = count(kd.num("channelbag_array_num").unwrap_or(0.0));
+            for cb in f.ptr_array(kd.ptr("channelbag_array"), cb_n).into_iter().filter_map(|p| f.view_own(p)) {
+                if slot.is_some() && cb.num("slot_handle") != slot {
+                    continue;
+                }
+                let n = count(cb.num("fcurve_array_num").unwrap_or(0.0));
+                fcurves.extend(f.ptr_array(cb.ptr("fcurve_array"), n).into_iter().filter_map(|p| f.view_ptr(p, &["FCurve"])));
+            }
+        }
+        // Up to 4.3 (and 4.4's forward-compatible copy): the `curves` list.
+        if fcurves.is_empty() {
+            fcurves = f.list(act.sub("curves"), &["FCurve"]);
+        }
+        let curves: Vec<BlendFCurve> = fcurves.iter().filter_map(|fc| fcurve(f, fc)).collect();
+        (!curves.is_empty()).then(|| BlendAction { object: object.to_string(), action: act.id_name(), curves })
     }
 
     fn object(&mut self, ob: &View<'f, 'a>) -> Result<usize, String> {
@@ -808,7 +1024,16 @@ impl<'f, 'a> Importer<'f, 'a> {
         let mut o = Object::new(&ob.id_name(), od);
         o.transform = basis(ob);
         o.materials = self.slots(ob, mesh_view.as_ref());
-        Ok(self.scene.add_object(o))
+        if mesh_view.is_some() {
+            o.modifiers = self.modifiers(ob);
+        }
+        let hide = ob.num_any(&["visibility_flag", "restrictflag"]).unwrap_or(0.0) as i64;
+        o.visible = hide & 1 == 0;
+        let idx = self.scene.add_object(o);
+        if let Some(a) = self.action(ob, &self.scene.objects[idx].name) {
+            self.actions.push(a);
+        }
+        Ok(idx)
     }
 
     /// Material slots: the object's own link where `matbits` says so, else the mesh's.
@@ -883,15 +1108,11 @@ impl<'f, 'a> Importer<'f, 'a> {
     /// Overlay the inputs of the first Principled BSDF node, if any.
     fn principled(&self, ma: &View<'f, 'a>, m: &mut Material) {
         let f = self.f;
-        let Some(tree) = f.view_ptr(ma.ptr("nodetree"), &["bNodeTree"]) else { return };
-        let Some(node) = f.list(tree.sub("nodes"), &["bNode"]).into_iter().find(|n| n.string("idname").as_deref() == Some("ShaderNodeBsdfPrincipled")) else { return };
         let mut emission_color = None;
         let mut emission_strength = None;
-        for s in f.list(node.sub("inputs"), &["bNodeSocket"]) {
-            let name = s.string("name").unwrap_or_default();
-            let dv = s.ptr("default_value");
-            let rgba = || f.view_ptr(dv, &["bNodeSocketValueRGBA"]).and_then(|v| v.vec::<4>("value"));
-            let float = || f.view_ptr(dv, &["bNodeSocketValueFloat"]).and_then(|v| v.f32("value"));
+        for (name, s) in self.node_inputs(ma, "ShaderNodeBsdfPrincipled") {
+            let rgba = || socket_rgba(f, &s);
+            let float = || socket_float(f, &s);
             match name.as_str() {
                 "Base Color" => {
                     if let Some(c) = rgba() {
@@ -931,6 +1152,94 @@ impl<'f, 'a> Importer<'f, 'a> {
 enum Fit {
     Horizontal(f32),
     Vertical(f32),
+}
+
+fn socket_rgba(f: &BlendFile<'_>, s: &View<'_, '_>) -> Option<[f32; 4]> {
+    f.view_ptr(s.ptr("default_value"), &["bNodeSocketValueRGBA"]).and_then(|v| v.vec::<4>("value"))
+}
+
+fn socket_float(f: &BlendFile<'_>, s: &View<'_, '_>) -> Option<f32> {
+    f.view_ptr(s.ptr("default_value"), &["bNodeSocketValueFloat"]).and_then(|v| v.f32("value"))
+}
+
+/// `Collection.flag` bit 0: disabled in viewports.
+fn collection_visible(c: &View<'_, '_>) -> bool {
+    c.num("flag").unwrap_or(0.0) as i64 & 1 == 0
+}
+
+/// A non-negative integer setting, clamped to `max`.
+fn setting_u32(v: &View<'_, '_>, name: &str, default: u32, max: u32) -> u32 {
+    match v.num(name) {
+        Some(x) if x.is_finite() => x.clamp(0.0, max as f64) as u32,
+        _ => default,
+    }
+}
+
+/// A finite float setting.
+fn setting_f32(v: &View<'_, '_>, name: &str, default: f32) -> f32 {
+    v.f32(name).filter(|x| x.is_finite()).unwrap_or(default)
+}
+
+/// Map one modifier block (read as its concrete SDNA struct) to a
+/// [`Modifier`]; `None` for types or settings sex-3d cannot evaluate.
+fn modifier(md: &View<'_, '_>) -> Option<Modifier> {
+    let flags = |name: &str| md.num(name).unwrap_or(0.0) as i64;
+    Some(match md.struct_name() {
+        "MirrorModifierData" => {
+            let fl = flags("flag");
+            Modifier::Mirror { x: fl & 1 << 3 != 0, y: fl & 1 << 4 != 0, z: fl & 1 << 5 != 0, merge: fl & 1 << 7 == 0, merge_distance: setting_f32(md, "tolerance", 0.001).max(0.0) }
+        }
+        "SubsurfModifierData" => Modifier::Subdivision { levels: setting_u32(md, "levels", 1, crate::modifiers::MAX_SUBDIVISION_LEVELS), simple: flags("subdivType") == 1 },
+        "ArrayModifierData" => {
+            let ot = md.num("offset_type").map_or(2, |v| v as i64);
+            let vec = |name: &str, on: bool| if on { md.vec::<3>(name).filter(|v| v.iter().all(|x| x.is_finite())).unwrap_or([0.0; 3]) } else { [0.0; 3] };
+            Modifier::Array { count: setting_u32(md, "count", 2, 10_000).max(1), relative: vec("scale", ot & 2 != 0), constant: vec("offset", ot & 1 != 0), merge: flags("flags") & 1 != 0 }
+        }
+        "SolidifyModifierData" => Modifier::Solidify { thickness: setting_f32(md, "offset", 0.01), offset: setting_f32(md, "offset_fac", -1.0) },
+        "BevelModifierData" => {
+            let vertex_only = if md.has("affect_type") { flags("affect_type") == 0 } else { flags("flags") & 1 << 1 != 0 };
+            let lim = flags("lim_flags");
+            if vertex_only || lim & (1 << 4 | 1 << 5) != 0 {
+                return None; // vertex bevels and weight / vertex-group limits
+            }
+            let angle = if lim & 1 << 3 != 0 { setting_f32(md, "bevel_angle", 30f32.to_radians()) } else { 0.0 };
+            Modifier::Bevel { width: setting_f32(md, "value", 0.1), segments: setting_u32(md, "res", 1, 1000).max(1), angle }
+        }
+        "TriangulateModifierData" => Modifier::Triangulate,
+        "WeldModifierData" => Modifier::Weld { distance: setting_f32(md, "merge_dist", 0.001).max(0.0) },
+        "DisplaceModifierData" => {
+            // Without a texture Blender offsets by (1 - midlevel) * strength.
+            let dir = md.num("direction").map_or(3, |v| v as i64);
+            if md.ptr("texture") != 0 || !(dir == 3 || dir == 5) {
+                return None;
+            }
+            Modifier::Displace { strength: (1.0 - setting_f32(md, "midlevel", 0.5)) * setting_f32(md, "strength", 1.0) }
+        }
+        "SmoothModifierData" => Modifier::Smooth { factor: setting_f32(md, "fac", 0.5), iterations: setting_u32(md, "repeat", 1, 10_000) },
+        _ => return None,
+    })
+}
+
+/// An imported transform F-curve, or `None` for other properties.
+fn fcurve(f: &BlendFile<'_>, fc: &View<'_, '_>) -> Option<BlendFCurve> {
+    let path = f.cstr_at(fc.ptr("rna_path"))?;
+    if !ANIMATED_PATHS.contains(&path.as_str()) {
+        return None;
+    }
+    let index = count(fc.num("array_index").unwrap_or(0.0));
+    let n = count(fc.num("totvert").unwrap_or(0.0));
+    let keys: Vec<BlendKey> = if let Some(bz) = f.view_array(fc.ptr("bezt"), &["BezTriple"], n) {
+        // vec[3][3]: left handle, key, right handle.
+        bz.iter()
+            .filter_map(|b| Some(BlendKey { frame: b.num_at("vec", 3)? as f32, value: b.num_at("vec", 4)? as f32, interpolation: b.num("ipo").unwrap_or(2.0) as u8 }))
+            .collect()
+    } else if let Some(pts) = f.view_array(fc.ptr("fpt"), &["FPoint"], n) {
+        pts.iter().filter_map(|p| Some(BlendKey { frame: p.num_at("vec", 0)? as f32, value: p.num_at("vec", 1)? as f32, interpolation: INTERP_LINEAR })).collect()
+    } else {
+        Vec::new()
+    };
+    let keys: Vec<BlendKey> = keys.into_iter().filter(|k| k.frame.is_finite() && k.value.is_finite()).collect();
+    (!keys.is_empty() && index < 4).then_some(BlendFCurve { path, index, keys })
 }
 
 fn light(la: &View<'_, '_>) -> Light {
