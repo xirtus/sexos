@@ -1,10 +1,13 @@
-# Cufflinks: native Bluetooth, slices W1, W1b and W2 (2026-11-14/15)
+# Cufflinks: native Bluetooth, slices W1, W1b, W2 and W3 (2026-11-14/15)
 
 Cufflinks is SexOS's own Bluetooth stack: no BlueZ, no Linux bridge, no Tuxedo. W1
 delivers the transport, the Intel firmware load, controller bring-up, discovery and
 pairing. W1b starts it at boot. W2 adds keyboards and mice (classic HID and HID over
 GATT), bonds kept on disk, and a bounded pairing policy in place of the desktop prompt.
-Plan row: `APP_PARITY_PLAN_2026_11_14.md` section W. W2 sections: 7 to 10 below.
+W3 adds headphones: A2DP Source with our own SBC encoder, Bell's mix routed to the
+headset, and ACL flow control.
+Plan row: `APP_PARITY_PLAN_2026_11_14.md` section W. W2 sections: 7 to 10 below; W3:
+sections 11 to 14.
 
 ## 1. What W1 delivers
 
@@ -32,6 +35,7 @@ Cufflinks (`[sexusb.bt.route] region=0`).
 | SexUSB -> Cufflinks route | slot 1005 (`bt_hci::NOTIFY_SLOT`), op 0x2C8 (`OP_LINK`) |
 | Cufflinks -> Files (bonds) | `SLOT_STORAGE`, op 0x2C9 (`sex_pdx::bt_bonds`), `/system/bluetooth.bonds` |
 | HID mailbox | `bt_hci` header bytes 512..1024: 32 records of 16 bytes (Cufflinks -> SexUSB) |
+| `sex_pdx::bt_audio::SLOT` (W3: Bell's mix for a headset, Bell + Cufflinks) | 1006, region id 0x4404, 256 KiB (4 KiB header, 64,512 stereo frames at 48 kHz) |
 | New syscalls | none |
 | Firmware files | `ibt-19-0-4.{sfi,ddc}` (AX201), `ibt-0041-0041.{sfi,ddc}` (AX210, x17 R1), `ibt-0040-0041.{sfi,ddc}` (AX211) |
 
@@ -162,5 +166,110 @@ now bounded instead (`servers/cufflinks/src/pairing.rs`, TODO W2b):
 
 Next: the desktop prompt (W2b), passkey entry (most BLE keyboards ask for it: KeyboardOnly
 IO capability; today `choose()` refuses it), SDP + report protocol for classic devices with
-extra keys, a firmware pack slot for `ibt-*`, the Tatami Bluetooth page, then W3 (A2DP).
+extra keys, a firmware pack slot for `ibt-*`, the Tatami Bluetooth page, then W3 (A2DP, sections 11 to 14).
 
+
+## 11. W3: headphones (A2DP into Bell)
+
+| Piece | Where | What |
+|---|---|---|
+| SBC encoder | `sex_bt::sbc` | Our own, integer only (the SexOS target is soft-float): the A2DP spec's analysis filterbank (prototype windows in Q24, cosine matrix in Q15, subband samples in Q8), scale factors, joint-stereo decisions, the spec's bit allocation (loudness and SNR), quantization, frame packing and CRC-8. Every mode, 4/8/12/16 blocks, 4/8 subbands. Cufflinks streams 48 kHz joint stereo, 16 blocks, 8 subbands, loudness, bitpool 53 (119-byte frames) |
+| SDP | `sex_bt::sdp` | Data elements (bounded depth, element count, response size, continuation rounds), a Service Search Attribute client with continuation, `a2dp_sink()` (AVDTP PSM and versions from the record), and a small server answering peers with our A2DP Source record |
+| AVDTP | `sex_bt::avdtp` | Signaling codec with start/continue/end fragments (bounded reassembly), SEP and capability parsing, SBC capability choice (48 kHz; joint stereo, 16 blocks, 8 subbands, loudness preferred; bitpool at most 53 within the sink's range); `Source` as initiator (DISCOVER, GET_CAPABILITIES, SET_CONFIGURATION, OPEN, START, SUSPEND, CLOSE) and as acceptor (a headset that configures us; DISCOVER, GET_(ALL_)CAPABILITIES, GET_CONFIGURATION, OPEN, START, SUSPEND, CLOSE, ABORT, DELAY_REPORT; RECONFIGURE and SECURITY_CONTROL refused, unknown signals general-rejected) |
+| Media | `sex_bt::a2dp` | RTP (version 2, payload type 96, sequence, timestamp in samples) + SBC payload header, as many whole frames as the transport channel's MTU takes (5 at the default 672, 7 at 895) |
+| L2CAP | `sex_bt::l2cap` | The peer's MTU option is kept per channel (raised to the 48-byte minimum), channels can be closed (`disconnect`) |
+| Host | `sex_bt::host` | `connect_audio` (page, SSP, encrypt, SDP on PSM 1, AVDTP signaling then transport channel on the sink's PSM), `play` (PCM in, media packets out), `suspend_audio`, `resume_audio`, `close_audio`, `start_audio`, `audio_state`, `is_audio` (class of device Audio/Video with the Audio or Rendering service); notes `AudioSink`, `AudioReady`, `AudioStreaming`, `AudioSuspended`, `AudioClosed`, `AudioFailed`. A bonded headset may page us and set the stream up itself |
+| ACL flow control | `sex_bt::host` | ACL packets leave only while the controller has buffers (Read Buffer Size; LE pool or one shared pool when it reports no LE buffers); Number Of Completed Packets gives them back per link, never more than the link has out; a link's buffers come back when it disconnects. Media is further held to `MEDIA_WINDOW` (6) packets queued or in the controller |
+| Bell side | `servers/sexbell/src/sound.rs` | While Cufflinks marks the `bt_audio` sink on, each mixed period (all programs' streams and Bell's notes, after master and row volume) goes into the region and the card plays silence; when the sink goes off the speakers come back |
+| Cufflinks side | `servers/cufflinks/src/audio.rs` | Turns the sink on at `AudioReady`, off when the stream or link goes; paces by its own 1 ms tick (100 ms lead, no burst after an underrun), drops the oldest frames when Bell is more than 0.75 s ahead, suspends after 3 s of silence and resumes when sound comes, plays a short two-note chime when a headset first streams |
+| Region | `sex_pdx::bt_audio` | Bell writes frames (never over what Cufflinks has not taken; overflow counted), Cufflinks peeks and consumes; no routes, no new ops, both sides poll |
+
+Security: audio is sent only on an encrypted link to a bonded device (`play` refuses
+otherwise, and an Encryption Change to off stops it until encryption is back). AVDTP
+channels to us need a bonded or encrypted link (like HID); data on them is ignored
+until the link is encrypted. SDP to us is open to any link we let in (only bonded
+devices may page us). Every length and count from the peer is checked; malformed SDP
+fails the search, malformed AVDTP gets the spec's rejects, and random input never panics
+(host test).
+
+Pairing: a new headset found by scanning is connected only in the pairing window
+(`pairing.rs`, same rule as keyboards: first setup, nothing bonded yet, 120 s);
+otherwise `[cufflinks.audio.skip] reason=no_prompt` until the desktop prompt (W2b).
+
+## 12. W3 numbers, kernel and boot log
+
+- Kernel: 3 lines (BOOT wiring only, no audio code in ring 0): `init_bluetooth` takes
+  Bell's domain and pairs the `bt_audio` region between Bell and Cufflinks; init passes
+  Bell's id. Log: `[boot.bt.audio] bell=… cufflinks=52 slot=1006 bytes=262144 runtime_mint=0`.
+- ABI: `sex_pdx::bt_audio` (slot 1006 in both, region 0x4404); `spec/abi_inputs.sha256`
+  re-pinned for `kernel/src/boot_memory.rs` and `crates/sex-pdx/src/lib.rs`. No new
+  syscalls, no new PDX operations.
+- Boot log: `[bell.bt.route] region=1`, `[cufflinks.audio.route] ok=1 slot=1006` (both at
+  start, checked by `scripts/cufflinks_idle_gate.py`); with a headset:
+  `[cufflinks.audio.connect] addr=… name=… window=1`, `[cufflinks.audio.sink] handle=…
+  psm=0x0019 avdtp=0x0103 a2dp=0x0103 features=…`, `[cufflinks.audio] addr=… rate=48000
+  mode=JointStereo blocks=16 subbands=8 bitpool=53 frame_bytes=119 frames_per_packet=…`,
+  `[cufflinks.audio.streaming]`, `[bell.bt.sink] on=1 sinks=1 dropped=0`,
+  `[cufflinks.audio.idle] … suspend=1`, `[cufflinks.audio.suspended]`,
+  `[cufflinks.audio.closed]`, `[cufflinks.audio.stopped] handle=… frames=… dropped=…`,
+  `[cufflinks.audio.failed] code=…` (AVDTP/SDP error, or 0xF0 no sink, 0xF1 no usable
+  configuration), `[cufflinks.audio.start] … initiator=1` (a bonded headset paged us,
+  opened AVDTP and configured nothing for 2 s, so we set the stream up).
+
+## 13. W3 tests (`bash scripts/bt_host_gate.sh`)
+
+- `sbc`: frame header and length for the usual streams (`9C FD 35`, `9C BD 35`, 119
+  bytes) and other modes, refused configurations, CRC-8 against an independent bitwise
+  implementation and a damaged frame, and round trips through `tests/common/sbc_ref.rs`,
+  a floating-point decoder written separately from the spec (it shares only the
+  prototype tables): a sine at 48 kHz joint stereo comes back above 45 dB SNR, every
+  mode/subbands/allocation/blocks combination above 40 dB, a three-tone-plus-noise signal
+  above 25 dB, silence stays silent, full-scale square waves clip without bad frames.
+- `a2dp_peers`: a simulated headset behind a scripted controller with four ACL buffers:
+  page, SSP Just Works, encryption, SDP answered in two parts (continuation), DISCOVER
+  (a video sink, a busy audio sink, a free one: the free one is picked), capabilities,
+  SET_CONFIGURATION (checked byte for byte), OPEN, transport channel, START; a tone
+  played into the host is decoded by the headset (above 30 dB SNR both channels; RTP
+  sequence and timestamps checked); the controller holds its buffers and the host never
+  sends more than four, then flow resumes; bogus completions give no credit; suspend,
+  resume, encryption off and on, close; the headset reconnects by paging us with the
+  stored key and sets the stream up itself (we answer as acceptor, send no commands of
+  our own) and audio flows; strangers are refused; malformed AVDTP gets the right
+  rejects and the stream keeps going; acceptor configuration checks; fragment round
+  trip; L2CAP MTU option; SDP elements against a hand-written record, our server's
+  continuation against our client; malformed SDP (deep nesting, overruns, wrong
+  transaction, endless continuation, missing protocol list) fails cleanly; 20,000
+  random packets through every parser never panic.
+- The `sex_pdx::bt_audio` ring test, and the existing HID tests now with controllers
+  that return ACL buffers (they would stall otherwise).
+
+## 14. W3: not done, and the x17 receipt
+
+Not done (next slices):
+
+- AAC (needs FFmpeg as a library or our own encoder), mSBC/HFP (headset microphone),
+  AVRCP (play/pause and volume buttons from the headset), delay reporting, content
+  protection (SCMS-T), the tray item and the Tatami Bluetooth page.
+- 44.1 kHz-only sinks: we stream 48 kHz only (A2DP requires sinks to support both, so
+  this should not bite); a resampler would lift it.
+- With no sound card Bell renders nothing, so there is no Bluetooth audio either: Bell
+  is clocked by its card. A card-less Bell clock (render by the tick while the sink is
+  on) is the fix.
+- One headset streams at a time (the first ready one).
+- The desktop prompt (W2b) still gates new devices: after a keyboard is bonded, a new
+  headset is skipped (`reason=no_prompt`).
+- No QEMU gate for audio: QEMU has no Bluetooth controller model.
+
+x17 receipt (after section 10), with nothing bonded and Bluetooth headphones in
+pairing mode before boot:
+
+1. `[cufflinks.audio.connect] addr=… name="…" window=1`, `[cufflinks.pair] … paired=1`,
+   `[cufflinks.bonds] saved=1`.
+2. `[cufflinks.audio.sink] … psm=0x0019`, `[cufflinks.audio] … rate=48000 …`,
+   `[cufflinks.audio.streaming]`, and the two-note chime in the headphones.
+3. Play sound (Qupid or `beep`): it comes from the headphones, not the speakers;
+   `[bell.bt.sink] on=1`. After 3 s of silence `[cufflinks.audio.suspended]`; sound
+   again resumes it.
+4. Turn the headphones off: `[cufflinks.disconnected]`, `[cufflinks.audio.stopped]`,
+   `[bell.bt.sink] on=0`, sound back on the speakers. Turn them on again: they page us,
+   `[cufflinks.audio] …` again without pairing. Send any `[cufflinks.audio.failed]` line.
