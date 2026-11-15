@@ -376,6 +376,34 @@ fn camera_lens_types_and_area_light_shape() {
 }
 
 #[test]
+fn geometry_nodes_modifier_panel() {
+    use sex_3d::nodes::{InterfaceSocket, SocketType, Value};
+    let mut app = app();
+    let cube = app.doc.active().unwrap();
+    // A group extruding every face by its "Height" input.
+    let mut g = sex_3d::geometry::new_group("Extruder");
+    g.inputs.push(InterfaceSocket { name: "Height".into(), ty: SocketType::Float, default: Value::Float(1.0), min: 0.0, max: 10.0 });
+    g.nodes[0] = sex_3d::nodes::edit::group_input_node(&g);
+    let ex = g.add("GeometryNodeExtrudeMesh", [0.0, 0.0]).unwrap();
+    g.links.clear();
+    g.link(0, "Geometry", ex, "Mesh").unwrap();
+    g.link(0, "Height", ex, "Offset Scale").unwrap();
+    g.link(ex, "Mesh", 1, "Geometry").unwrap();
+    app.doc.scene.node_groups.push(g);
+    app.doc.run(&crate::ui::Op::with("object.modifier_add", "NODES"));
+    assert_eq!(app.doc.scene.objects[cube].modifiers, vec![Modifier::Nodes { group: String::new(), inputs: Vec::new() }]);
+    open_tab(&mut app, Tab::Modifiers);
+    pick(&mut app, "modgroup/0", "Extruder");
+    assert_eq!(app.doc.scene.objects[cube].modifiers, vec![Modifier::Nodes { group: "Extruder".into(), inputs: Vec::new() }]);
+    // The interface input shows, and editing it sets the modifier's value.
+    app.frame(Input::Tick);
+    set_field(&mut app, "m0/in/Height", "0.5");
+    assert_eq!(app.doc.scene.objects[cube].modifiers, vec![Modifier::Nodes { group: "Extruder".into(), inputs: vec![("Height".into(), Value::Float(0.5))] }]);
+    let m = app.doc.scene.evaluated_mesh(cube).unwrap();
+    assert_eq!((m.positions.len(), m.faces.len()), (32, 30));
+}
+
+#[test]
 fn search_hides_panels_without_matches() {
     let mut app = app();
     props_mut(&mut app).search = "scale".into();

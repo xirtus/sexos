@@ -590,9 +590,10 @@ fn set_enum(s: &mut State, d: &mut Doc, obj: Option<usize>, key: &str, v: &str) 
             }
         }
         "lens_unit" => s.fov_unit = v == "Field of View",
-        k if k.starts_with("modobj/") => {
-            // A modifier's object field (Boolean operand, Shrinkwrap target).
-            if let (Some(o), Ok(si)) = (obj, k["modobj/".len()..].parse::<usize>()) {
+        k if k.starts_with("modobj/") || k.starts_with("modgroup/") => {
+            // A modifier's object field (Boolean operand, Shrinkwrap target)
+            // or a Nodes modifier's node group.
+            if let (Some(o), Ok(si)) = (obj, k[k.find('/').unwrap_or(0) + 1..].parse::<usize>()) {
                 object::set_modifier_object(d, o, si, if v == object::NO_OBJECT { "" } else { v });
             }
         }
