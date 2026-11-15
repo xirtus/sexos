@@ -13,7 +13,7 @@ from program_web_daily_gate import wait_closed_session,require_empty_restored_se
 p=argparse.ArgumentParser(description=__doc__)
 for name in('iso','source-disk','seed-elf','out'):p.add_argument('--'+name,type=Path,required=True)
 a=p.parse_args();OUT=a.out.resolve();OUT.mkdir(exist_ok=False,parents=True)
-inputs={str(f):sha(f)for f in(a.iso,a.source_disk,a.seed_elf,Path(__file__),ROOT/'iso_root/programs/moan',ROOT/'iso_root/programs/files',ROOT/'Cargo.lock')}
+inputs={str(f):sha(f)for f in(a.iso,a.source_disk,a.seed_elf,Path(__file__),ROOT/'iso_root/programs/moan',ROOT/'iso_root/programs/loom',ROOT/'Cargo.lock')}
 for d in('apps/moan','crates/moan-core','crates/moan-export','crates/weft','crates/serenade-core','crates/sex-app','crates/sex-pdx','crates/sex-font','assets/fonts','scripts'):
  for f in(ROOT/d).rglob('*'):
   if f.is_file()and'__pycache__'not in f.parts and'target'not in f.relative_to(ROOT/d).parts:inputs[str(f)]=sha(f)

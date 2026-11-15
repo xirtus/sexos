@@ -158,7 +158,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('iso','source-disk','out'):p.add_argument('--'+name,required=True,type=Path)
     p.add_argument('--resolution',default='1280x800');a=p.parse_args();out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);assert not any(out.iterdir())
-    inputs=dict(base_revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),iso_sha256=sha(a.iso),elf_sha256=sha(ROOT/'iso_root/programs/moan'),files_elf_sha256=sha(ROOT/'iso_root/programs/files'),source_seed_sha256=sha(a.source_disk),source_sha256={})
+    inputs=dict(base_revision=subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),iso_sha256=sha(a.iso),elf_sha256=sha(ROOT/'iso_root/programs/moan'),files_elf_sha256=sha(ROOT/'iso_root/programs/loom'),source_seed_sha256=sha(a.source_disk),source_sha256={})
     for directory in ('apps/moan','crates/moan-core','crates/serenade-core','crates/moan-export','crates/weft','crates/sex-app','crates/sex-pdx','crates/sex-font','assets/fonts'):
         for f in (ROOT/directory).rglob('*'):
             if f.is_file()and '__pycache__'not in f.parts and 'target'not in f.relative_to(ROOT/directory).parts:inputs['source_sha256'][str(f.relative_to(ROOT))]=sha(f)
