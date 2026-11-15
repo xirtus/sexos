@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class PolicyTranscript(unittest.TestCase):
     def test_actual_transcript(self):
         source = ROOT / 'crates/sex-pdx/src/restricted_helper.rs'
-        rust = '#[path="' + str(source) + '"] mod wire;\nuse wire::*;\n' + r'''
+        rust = '#[path="' + str(source) + '"] mod restricted_helper;\nuse restricted_helper::*;\n' + '#[path="' + str(ROOT / 'crates/sex-pdx/src/restricted_helper_journal.rs') + '"] mod journal;\n' + r'''
 fn subject(pd:u32,task:u32)->Subject{Subject{pd,task}}
 fn auth()->Authority{Authority{caller:subject(3,3),provider_epoch:1,challenge:[100,101],reserved:subject(43,43),inactive:true}}
 fn packets()->[Packet;11]{
@@ -61,6 +61,22 @@ fn packets()->[Packet;11]{
  assert!(c.fetch([phase,4,1],2).is_none());assert!(c.fetch([phase,5,1],1).is_none());
  let ordinary=packets()[1];let phase=ordinary.wire().unwrap()[0];let mut c=ReplyCredits::new(ordinary,1,[100,101]).unwrap();c.first_delivered(1);
  for selector in [1,2]{assert!(c.fetch_delivered([phase,selector,1],1));}assert!(c.complete());assert!(c.fetch([phase,3,1],1).is_none());
+}
+
+#[test]fn kept_journal_never_restores_positive_rights_and_corruption_denies_all(){
+ use journal::*;let page=Journal::new();assert_eq!(page.address()%4096,0);
+ assert!(!page.load(Some(1),true).denied(43));assert!(page.load(Some(2),true).all_denied());assert!(page.load(Some(1),false).all_denied());
+ let mut ledger=Ledger::empty();assert!(ledger.quarantine(subject(43,1073741824),7));page.persist(&ledger);
+ let recovered=page.load(Some(2),true);assert!(recovered.denied(43));assert!(!recovered.denied(42));
+ assert!(!ledger.quarantine(subject(43,43),6));assert!(!ledger.quarantine(subject(43,43),7));assert!(ledger.denied(43));
+ assert!(ledger.quarantine(subject(43,1073741825),8));assert!(ledger.denied(43));
+ let words=ledger.words();for index in [0,1,2,3,8,9,10,511]{let mut broken=words;broken[index]^=1;assert!(Ledger::recover(&broken,Some(2)).all_denied());}
+ for prefix in 1..512{let mut partial=[0u64;512];partial[1..prefix].copy_from_slice(&words[1..prefix]);assert!(Ledger::recover(&partial,Some(2)).all_denied());}
+ assert!(Ledger::recover(&[0;512],None).all_denied());assert!(Ledger::recover(&words,Some(0)).all_denied());
+}
+#[test]fn exhausted_tombstones_fail_closed_without_overwrite(){
+ let mut ledger=journal::Ledger::empty();for n in 0..journal::CAPACITY{assert!(ledger.quarantine(subject(100+n as u32,100+n as u32),n as u64+1));}
+ assert!(!ledger.quarantine(subject(200,200),20));for n in 0..journal::CAPACITY{assert!(ledger.denied(100+n as u32));}
 }
 
 '''

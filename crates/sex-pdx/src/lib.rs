@@ -1291,6 +1291,7 @@ pub mod tray;
 pub mod window_motion;
 pub mod launch;
 pub mod restricted_helper;
+pub mod restricted_helper_journal;
 pub mod dnd;
 pub mod session_restore;
 pub mod document_view;
