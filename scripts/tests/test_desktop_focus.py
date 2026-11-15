@@ -4,7 +4,7 @@ import sys
 import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from desktop_focus import focus_surface, _completed
+from desktop_focus import focus_surface, _completed, _spindle_arrival
 
 
 def receipt(old, new, code=15, action='AccessFocusNext', release=True):
@@ -34,9 +34,48 @@ class FocusTests(unittest.TestCase):
         def key(code, pattern):
             self.assertEqual(code, 'scroll_lock'); keys.append(code); old = state['sid']
             state['shown'] = not state['shown']; state['sid'] = 153 if state['shown'] else 200
+            if not state['shown']:
+                state['trace'] += '[shell.interact.minimize] frame=9 sid=153\n'
             state['trace'] += receipt(old, state['sid'], 70, 'ToggleSpindle')
         focus_surface(153, lambda: state['trace'], key)
         self.assertEqual(len(keys), 2)
+
+    def test_first_spindle_open_waits_for_later_focus_without_second_toggle(self):
+        stream = '[shell.focus.set] id=300\n'; keys = []
+        own = (receipt(300, 300, 70, 'ToggleSpindle'))
+        def key(code, pattern):
+            nonlocal stream
+            keys.append(code); self.assertEqual(keys, ['scroll_lock'])
+            stream += own
+        def publish(_):
+            nonlocal stream
+            stream += '[shell.focus.set] id=153\n'
+        with patch('desktop_focus.time.sleep', side_effect=publish):
+            focus_surface(153, lambda: stream, key)
+        self.assertEqual(keys, ['scroll_lock'])
+
+    def test_missing_eventual_focus_fails_without_retrying_toggle(self):
+        stream = '[shell.focus.set] id=300\n'; keys = []
+        def key(code, pattern):
+            nonlocal stream
+            keys.append(code); stream += receipt(300, 300, 70, 'ToggleSpindle')
+        with patch('desktop_focus.time.monotonic', side_effect=[0, 6]):
+            with self.assertRaisesRegex(RuntimeError, 'missing eventual Spindle'):
+                focus_surface(153, lambda: stream, key)
+        self.assertEqual(keys, ['scroll_lock'])
+
+    def test_spindle_arrival_requires_positive_own_result_and_correct_focus(self):
+        asynchronous = receipt(300, 300, 70, 'ToggleSpindle') + '[shell.focus.set] id=153\n'
+        self.assertEqual(_spindle_arrival(asynchronous), 'focused')
+        self.assertEqual(_spindle_arrival(receipt(300, 153, 70, 'ToggleSpindle')), 'focused')
+        invalid = [asynchronous.replace('frame=3 sid=300', 'frame=0 sid=300'),
+                   asynchronous.replace('reason=ok', 'reason=noop'),
+                   asynchronous.replace('id=153', 'id=154'),
+                   '[shell.focus.set] id=153\n' + receipt(300, 300, 70, 'ToggleSpindle'),
+                   asynchronous + '[shell.focus.set] id=201\n',
+                   asynchronous + '[shell.kbd.ui.result] action=ToggleSpindle ok=1 reason=ok frame=3 sid=153\n']
+        for trace in invalid:
+            with self.subTest(trace=trace): self.assertIsNone(_spindle_arrival(trace))
 
     def test_current_successor_needs_no_input(self):
         focus_surface(306, lambda: '[shell.focus.set] id=306', lambda *args: self.fail())
