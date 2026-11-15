@@ -209,7 +209,7 @@ pub fn fill(m: &mut Mesh, edges: &[[u32; 2]], beauty: bool) -> Selection {
     let loops = selected_loops(m, edges);
     let mut new_faces = Vec::new();
     for lp in loops {
-        let tmp = Mesh { positions: m.positions.clone(), faces: vec![Face::new(lp.clone())], loose_edges: Vec::new() };
+        let tmp = Mesh { positions: m.positions.clone(), faces: vec![Face::new(lp.clone())], loose_edges: Vec::new(), ..Default::default() };
         for t in tmp.triangulate() {
             m.faces.push(Face::new(t.verts.to_vec()));
             new_faces.push(m.faces.len() as u32 - 1);

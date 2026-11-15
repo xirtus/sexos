@@ -138,6 +138,8 @@ fn apply(d: &mut Doc, label: &str, f: impl FnOnce(&mut Mesh, &Ctx) -> Result<Sel
     match f(&mut m, &ctx) {
         Ok(sel) => {
             d.push_undo(label);
+            // Seams, sharp edges and UV pins on edges or corners the op removed go.
+            m.prune_flags();
             d.scene.meshes[mi] = m;
             edit::after_topology(d);
             set_selection(d, &sel);

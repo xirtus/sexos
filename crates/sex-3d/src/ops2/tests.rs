@@ -231,7 +231,7 @@ fn poke_fans_from_weighted_centre() {
 // Triangles
 
 fn triangulated(m: &Mesh) -> Mesh {
-    let mut out = Mesh { positions: m.positions.clone(), faces: Vec::new(), loose_edges: Vec::new() };
+    let mut out = Mesh { positions: m.positions.clone(), faces: Vec::new(), loose_edges: Vec::new(), ..Default::default() };
     for t in m.triangulate() {
         out.faces.push(Face::new(t.verts.to_vec()));
     }
@@ -358,7 +358,7 @@ fn grid_fill_square_loop() {
     // 12 edge loop around a 3x3 grid's border, as wire edges.
     let g = primitives::grid(3, 3, 3.0);
     let border = ops1::boundary_loops(&g).remove(0);
-    let mut m = Mesh { positions: g.positions.clone(), faces: Vec::new(), loose_edges: Vec::new() };
+    let mut m = Mesh { positions: g.positions.clone(), faces: Vec::new(), loose_edges: Vec::new(), ..Default::default() };
     let n = border.len();
     let edges: Vec<[u32; 2]> = (0..n).map(|i| [border[i], border[(i + 1) % n]]).collect();
     m.loose_edges = edges.clone();

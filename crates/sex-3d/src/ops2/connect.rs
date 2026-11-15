@@ -218,7 +218,7 @@ pub fn vert_connect_concave(m: &mut Mesh, faces: &[u32]) -> Selection {
             out.push(f);
             continue;
         }
-        let tmp = Mesh { positions: m.positions.clone(), faces: vec![src.clone()], loose_edges: Vec::new() };
+        let tmp = Mesh { positions: m.positions.clone(), faces: vec![src.clone()], loose_edges: Vec::new(), ..Default::default() };
         let mut polys: Vec<Vec<Corner>> = tmp.triangulate().iter().map(|t| t.corners.iter().map(|&c| cs[c as usize]).collect()).collect();
         // Merge across internal edges while the union stays convex, longest edges first.
         loop {
