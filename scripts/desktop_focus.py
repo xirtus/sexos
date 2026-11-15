@@ -43,6 +43,13 @@ def _spindle_arrival(trace):
     if len(results) != 1:
         return None
     result = results[0]
+    minimized = re.search(r'\[shell.interact.minimize\] frame=[1-9][0-9]* sid=153\r?\n', trace[:result.start()])
+    if minimized:
+        # The own minimize cannot also certify a focused target. Refuse mixed
+        # stale/contradictory publication rather than use it to launch or restore.
+        if result[2] == '153' or re.search(r'\[shell.focus.set\] id=153\r?\n', trace[minimized.end():]):
+            return None
+        return 'minimized'
     # Existing-window activation focuses synchronously; first activation has an
     # old result SID, then the new window's later focus record. Both are real.
     focus_trace = trace if result[2] == '153' else trace[result.end():]
@@ -50,10 +57,6 @@ def _spindle_arrival(trace):
     focus = re.findall(r'\[shell.focus.set\] id=(\d+)', trace)
     if arrived and focus and focus[-1] == '153':
         return 'focused'
-    # A shown but unfocused Spindle is genuinely minimized by ToggleSpindle.
-    # Only that explicit action permits the one additional restore toggle.
-    if re.search(r'\[shell.interact.minimize\] frame=[1-9][0-9]* sid=153\r?\n', trace[:result.start()]):
-        return 'minimized'
     return None
 
 
