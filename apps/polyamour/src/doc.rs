@@ -75,6 +75,9 @@ pub struct Doc {
     pub queue: Vec<Op>,
     /// Text editor buffers: (name, text).
     pub texts: Vec<(String, String)>,
+    /// Render, output, unit and colour-management settings and per-object
+    /// flags the scene itself has no field for (Properties and Outliner).
+    pub settings: crate::settings::Settings,
 }
 
 impl Default for Doc {
@@ -105,6 +108,7 @@ impl Doc {
             want_workspace: None,
             queue: Vec::new(),
             texts: Vec::new(),
+            settings: Default::default(),
         }
     }
 

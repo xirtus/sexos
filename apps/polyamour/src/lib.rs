@@ -16,6 +16,7 @@ pub mod draw;
 pub mod editors;
 pub mod input;
 pub mod screen;
+pub mod settings;
 pub mod theme;
 pub mod ui;
 

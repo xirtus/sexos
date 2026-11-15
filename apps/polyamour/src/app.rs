@@ -287,8 +287,11 @@ impl App {
 
     /// F12: path-trace the active camera's view and show it in the Rendering workspace.
     fn render(&mut self) {
-        let settings = sex_3d::render::RenderSettings { width: 960, height: 540, samples: 16, denoise: true, ..Default::default() };
-        let r = sex_3d::render::render(&self.doc.scene, &settings);
+        // Render Properties (engine, samples, bounces, denoise, clamp) and Output
+        // Properties (resolution and %), with render visibility applied.
+        let settings = self.doc.settings.render_settings();
+        let scene = self.doc.settings.render_scene(&self.doc.scene);
+        let r = sex_3d::render::render(&scene, &settings);
         self.doc.render = Some(r.color);
         self.doc.report = format!("Rendered {}x{}, {} samples", settings.width, settings.height, settings.samples);
         self.doc.want_workspace = Some("Rendering".into());

@@ -1,0 +1,635 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! Object Properties (name, Transform, Delta Transform, Relations,
+//! Collections, Instancing, Visibility, Viewport Display) and the Modifiers
+//! tab with Blender's modifier cards.
+use super::icons::{self, Icon};
+use super::layout::{L, GAP, ROW};
+use super::Ctx;
+use crate::doc::Doc;
+use crate::draw::{Align, Rect};
+use crate::settings::RotationMode;
+use crate::theme as t;
+use crate::ui::{MenuItem, NumOpts, Op};
+use sex_3d::modifiers::Modifier;
+use sex_3d::scene::{ObjectData, Transform};
+use sex_3d::script::quat_to_euler_xyz;
+use sex_3d::{Quat, Vec3};
+
+fn inactive<R>(l: &mut L, f: impl FnOnce(&mut L) -> R) {
+    let was = l.inactive;
+    l.inactive = true;
+    let _ = f(l);
+    l.inactive = was;
+}
+
+const M: NumOpts<'static> = NumOpts { step: 0.1, unit: "m", min: f32::NEG_INFINITY, max: f32::INFINITY, slider: false, int: false };
+const PLAIN: NumOpts<'static> = NumOpts { step: 0.1, unit: "", min: f32::NEG_INFINITY, max: f32::INFINITY, slider: false, int: false };
+
+/// Rename an object the way Blender does (unique ".001" suffixes), carrying
+/// its settings along.
+pub fn rename_object(d: &mut Doc, o: usize, want: &str) {
+    let want = want.trim();
+    if want.is_empty() || d.scene.objects[o].name == want {
+        return;
+    }
+    d.push_undo("Rename");
+    let n = sex_3d::scene::unique_name(want, |n| d.scene.objects.iter().enumerate().any(|(i, x)| i != o && x.name == n));
+    let old = core::mem::replace(&mut d.scene.objects[o].name, n.clone());
+    d.settings.rename_object(&old, &n);
+    d.touch();
+}
+
+/// Parent `o` to `p` keeping its world transform (Blender's "Object (Keep
+/// Transform)"); `None` clears the parent the same way.
+pub fn set_parent(d: &mut Doc, o: usize, p: Option<usize>) {
+    if let Some(p) = p {
+        // No cycles: `p` must not be `o` or below it.
+        let mut c = Some(p);
+        let mut guard = 0;
+        while let Some(ci) = c {
+            if ci == o {
+                d.report = "Loop in parents".into();
+                return;
+            }
+            c = d.scene.objects[ci].parent;
+            guard += 1;
+            if guard > d.scene.objects.len() {
+                break;
+            }
+        }
+    }
+    if d.scene.objects[o].parent == p {
+        return;
+    }
+    d.push_undo(if p.is_some() { "Make Parent" } else { "Clear Parent" });
+    let world = d.scene.world_matrix(o);
+    let local = match p {
+        Some(p) => d.scene.world_matrix(p).inverse() * world,
+        None => world,
+    };
+    d.scene.objects[o].transform = Transform::from_matrix(&local);
+    d.scene.objects[o].parent = p;
+    d.touch();
+}
+
+pub fn object(l: &mut L, d: &mut Doc, c: &mut Ctx) {
+    let Some(o) = c.obj else {
+        l.note("No active object");
+        return;
+    };
+    // Name with the object icon (Blender's ID block).
+    let name = d.scene.objects[o].name.clone();
+    if let Some(n) = l.id_block(super::object_icon(&d.scene.objects[o].data), &name, Some("ob_name")) {
+        rename_object(d, o, &n);
+    }
+    let name = d.scene.objects[o].name.clone();
+    // Lengths show metres unless the unit system is None.
+    let lu = if d.settings.unit_system == crate::settings::UnitSystem::None { "" } else { "m" };
+    l.panel(d, "object.transform", "Transform", true, &mut |l, d| {
+        let tr = d.scene.objects[o].transform;
+        for (i, lab) in ["Location X", "Y", "Z"].iter().enumerate() {
+            let mut v = tr.location.to_array()[i];
+            if l.number(lab, &format!("loc{i}"), &mut v, NumOpts { unit: lu, ..M }) {
+                l.commit(d, "Location");
+                let mut a = tr.location.to_array();
+                a[i] = v;
+                d.scene.objects[o].transform.location = Vec3::from_array(a);
+            }
+        }
+        l.space(4);
+        let mode = d.settings.rotation_mode(&name);
+        let deg = d.settings.degrees;
+        let (unit, k) = if deg { ("°", 180.0 / core::f32::consts::PI) } else { ("", 1.0) };
+        let ang = NumOpts { step: if deg { 1.0 } else { 0.02 }, unit, ..PLAIN };
+        match mode {
+            RotationMode::EulerXyz => {
+                let e = quat_to_euler_xyz(tr.rotation);
+                for (i, lab) in ["Rotation X", "Y", "Z"].iter().enumerate() {
+                    let mut v = e[i] * k;
+                    if l.number(lab, &format!("rot{i}"), &mut v, ang) {
+                        l.commit(d, "Rotation");
+                        let mut e2 = e;
+                        e2[i] = v / k;
+                        d.scene.objects[o].transform.rotation = Quat::from_euler_xyz(e2[0], e2[1], e2[2]);
+                    }
+                }
+            }
+            RotationMode::Quaternion => {
+                let q = tr.rotation;
+                let mut a = [q.w, q.x, q.y, q.z];
+                for (i, lab) in ["Rotation W", "X", "Y", "Z"].iter().enumerate() {
+                    let mut v = a[i];
+                    if l.number(lab, &format!("quat{i}"), &mut v, NumOpts { step: 0.01, ..PLAIN }) {
+                        l.commit(d, "Rotation");
+                        a[i] = v;
+                        d.scene.objects[o].transform.rotation = Quat { w: a[0], x: a[1], y: a[2], z: a[3] }.normalize();
+                    }
+                }
+            }
+            RotationMode::AxisAngle => {
+                let q = tr.rotation.normalize();
+                let angle = 2.0 * q.w.clamp(-1.0, 1.0).acos();
+                let s = (1.0 - q.w * q.w).max(0.0).sqrt();
+                let axis = if s < 1e-5 { Vec3::Y } else { Vec3::new(q.x / s, q.y / s, q.z / s) };
+                let mut a = [angle * k, axis.x, axis.y, axis.z];
+                for (i, lab) in ["Rotation W", "X", "Y", "Z"].iter().enumerate() {
+                    let mut v = a[i];
+                    let o2 = if i == 0 { ang } else { NumOpts { step: 0.01, ..PLAIN } };
+                    if l.number(lab, &format!("aa{i}"), &mut v, o2) {
+                        l.commit(d, "Rotation");
+                        a[i] = v;
+                        let ax = Vec3::new(a[1], a[2], a[3]);
+                        let ax = if ax.length() < 1e-6 { Vec3::Y } else { ax };
+                        d.scene.objects[o].transform.rotation = Quat::from_axis_angle(ax, a[0] / k);
+                    }
+                }
+            }
+        }
+        l.enumeration("Mode", "rotation_mode", mode.label(), &["Quaternion (WXYZ)", "XYZ Euler", "XZY Euler", "YXZ Euler", "YZX Euler", "ZXY Euler", "ZYX Euler", "Axis Angle"]);
+        l.space(4);
+        for (i, lab) in ["Scale X", "Y", "Z"].iter().enumerate() {
+            let mut v = tr.scale.to_array()[i];
+            if l.number(lab, &format!("scale{i}"), &mut v, NumOpts { step: 0.05, ..PLAIN }) {
+                l.commit(d, "Scale");
+                let mut a = tr.scale.to_array();
+                a[i] = v;
+                d.scene.objects[o].transform.scale = Vec3::from_array(a);
+            }
+        }
+    });
+    l.panel(d, "object.delta", "Delta Transform", false, &mut |l, _| {
+        inactive(l, |l| {
+            let mut z = 0.0;
+            let mut one = 1.0;
+            for (i, lab) in ["Delta Location X", "Y", "Z"].iter().enumerate() {
+                l.number(lab, &format!("dloc{i}"), &mut z, M);
+            }
+            for (i, lab) in ["Delta Rotation X", "Y", "Z"].iter().enumerate() {
+                l.number(lab, &format!("drot{i}"), &mut z, NumOpts { unit: "°", ..PLAIN });
+            }
+            for (i, lab) in ["Delta Scale X", "Y", "Z"].iter().enumerate() {
+                l.number(lab, &format!("dscale{i}"), &mut one, PLAIN);
+            }
+        });
+    });
+    l.panel(d, "object.relations", "Relations", false, &mut |l, d| {
+        let cur = d.scene.objects[o].parent.map(|p| d.scene.objects[p].name.clone()).unwrap_or_default();
+        let mut items: Vec<String> = vec![String::new()];
+        items.extend(d.scene.objects.iter().enumerate().filter(|(i, _)| *i != o).map(|(_, x)| x.name.clone()));
+        let refs: Vec<&str> = items.iter().map(|s| if s.is_empty() { "(None)" } else { s.as_str() }).collect();
+        l.enumeration("Parent", "parent", &cur, &refs);
+        l.info("Parent Type", "Object");
+        inactive(l, |l| {
+            let mut v = 0;
+            l.int("Pass Index", "pass_index", &mut v, 0, 32767);
+        });
+    });
+    l.panel(d, "object.collections", "Collections", false, &mut |l, d| {
+        let ci = d.scene.objects[o].collection;
+        let cname = d.scene.collections.get(ci).map(|c| c.name.clone()).unwrap_or_default();
+        if l.band(ROW + 8) {
+            let (x, w) = l.inner();
+            let bx = Rect::new(x, l.y, w, ROW + 8);
+            l.ui.p.round_rect(bx, 4, 0x353535);
+            icons::draw(l.ui.p, Icon::Collection, x + 12, l.y + (ROW + 8) / 2);
+            l.ui.p.label(Rect::new(x + 24, l.y, w - 30, ROW + 8), &cname, t::TEXT, Align::Left);
+            l.y += ROW + 8 + GAP;
+        }
+        let names: Vec<String> = d.scene.collections.iter().map(|c| c.name.clone()).collect();
+        let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        l.enumeration("", "add_collection", "Move to Collection", &refs);
+    });
+    l.panel(d, "object.instancing", "Instancing", false, &mut |l, _| {
+        inactive(l, |l| {
+            l.expand("", &["None", "Vertices", "Faces"], 0);
+        });
+    });
+    l.panel(d, "object.motion_paths", "Motion Paths", false, &mut |l, _| l.note("Not available yet"));
+    l.panel(d, "object.visibility", "Visibility", false, &mut |l, d| {
+        inactive(l, |l| {
+            let mut t = true;
+            l.check("", "Selectable", &mut t);
+        });
+        let mut v = d.scene.objects[o].visible;
+        if l.check("Show In", "Viewports", &mut v) {
+            l.commit(d, "Show in Viewports");
+            d.scene.objects[o].visible = v;
+        }
+        let mut r = !d.settings.hide_render.contains(&name);
+        if l.check("", "Renders", &mut r) {
+            l.commit(d, "Show in Renders");
+            if r {
+                d.settings.hide_render.remove(&name);
+            } else {
+                d.settings.hide_render.insert(name.clone());
+            }
+        }
+        inactive(l, |l| {
+            let mut f = false;
+            l.check("Mask", "Shadow Catcher", &mut f);
+            l.check("", "Holdout", &mut f);
+        });
+    });
+    l.panel(d, "object.viewport_display", "Viewport Display", false, &mut |l, _| {
+        inactive(l, |l| {
+            let mut f = false;
+            l.check("Show", "Name", &mut f);
+            l.check("", "Axes", &mut f);
+            l.check("", "Wireframe", &mut f);
+            l.check("", "All Edges", &mut f);
+            l.check("", "Texture Space", &mut f);
+            let mut tt = true;
+            l.check("", "Shadow", &mut tt);
+            l.check("", "In Front", &mut f);
+            l.enumeration("Display As", "display_as", "Textured", &[]);
+            l.color("Color", [1.0, 1.0, 1.0]);
+            l.check("", "Bounds", &mut f);
+        });
+    });
+    l.panel(d, "object.line_art", "Line Art", false, &mut |l, _| inactive(l, |l| l.enumeration("Usage", "la", "Inherit", &[])));
+    l.panel(d, "object.custom_props", "Custom Properties", false, &mut |l, _| l.note("Not available yet"));
+}
+
+/// Blender's Add Modifier menu, by category. Ours are live, the rest report
+/// that they are not available yet.
+pub fn add_modifier_menu() -> Vec<MenuItem> {
+    let live = |n: &str, a: &str| MenuItem::op(n, "", Op::with("object.modifier_add", a));
+    let na = |n: &str| MenuItem::op(n, "", Op::with("properties.unavailable", &format!("{n} modifier")));
+    let cat = |items: &[(&str, &str)]| items.iter().map(|(n, a)| if a.is_empty() { na(n) } else { live(n, a) }).collect::<Vec<_>>();
+    vec![
+        MenuItem::Sub(
+            "Edit".into(),
+            cat(&[("Data Transfer", ""), ("Mesh Cache", ""), ("Mesh Sequence Cache", ""), ("UV Project", ""), ("UV Warp", ""), ("Vertex Weight Edit", ""), ("Vertex Weight Mix", ""), ("Vertex Weight Proximity", "")]),
+        ),
+        MenuItem::Sub(
+            "Generate".into(),
+            cat(&[
+                ("Array", "ARRAY"),
+                ("Bevel", "BEVEL"),
+                ("Boolean", ""),
+                ("Build", ""),
+                ("Decimate", ""),
+                ("Edge Split", ""),
+                ("Geometry Nodes", ""),
+                ("Mask", ""),
+                ("Mirror", "MIRROR"),
+                ("Multiresolution", ""),
+                ("Remesh", ""),
+                ("Screw", ""),
+                ("Skin", ""),
+                ("Solidify", "SOLIDIFY"),
+                ("Subdivision Surface", "SUBSURF"),
+                ("Triangulate", "TRIANGULATE"),
+                ("Volume to Mesh", ""),
+                ("Weld", "WELD"),
+                ("Wireframe", ""),
+            ]),
+        ),
+        MenuItem::Sub(
+            "Deform".into(),
+            cat(&[
+                ("Armature", ""),
+                ("Cast", ""),
+                ("Curve", ""),
+                ("Displace", "DISPLACE"),
+                ("Hook", ""),
+                ("Laplacian Deform", ""),
+                ("Lattice", ""),
+                ("Mesh Deform", ""),
+                ("Shrinkwrap", ""),
+                ("Simple Deform", ""),
+                ("Smooth", "SMOOTH"),
+                ("Smooth Corrective", ""),
+                ("Smooth Laplacian", ""),
+                ("Surface Deform", ""),
+                ("Warp", ""),
+                ("Wave", ""),
+            ]),
+        ),
+        MenuItem::Sub("Normals".into(), cat(&[("Normal Edit", ""), ("Weighted Normal", ""), ("Smooth by Angle", "")])),
+        MenuItem::Sub(
+            "Physics".into(),
+            cat(&[("Cloth", ""), ("Collision", ""), ("Dynamic Paint", ""), ("Explode", ""), ("Fluid", ""), ("Ocean", ""), ("Particle Instance", ""), ("Particle System", ""), ("Soft Body", "")]),
+        ),
+    ]
+}
+
+fn label_of(m: &Modifier) -> &'static str {
+    match m {
+        Modifier::Subdivision { .. } => "Subdivision",
+        other => other.name(),
+    }
+}
+
+/// Write a whole shown stack back: enabled entries live, disabled parked.
+fn write_stack(d: &mut Doc, o: usize, full: Vec<(Modifier, bool)>) {
+    let name = d.scene.objects[o].name.clone();
+    d.settings.parked.retain(|p| p.object != name);
+    let live: Vec<Modifier> = full.iter().filter(|e| e.1).map(|e| e.0.clone()).collect();
+    for (i, (m, on)) in full.into_iter().enumerate() {
+        if !on {
+            d.settings.parked.push(crate::settings::ParkedModifier { object: name.clone(), slot: i, modifier: m, stack: live.clone() });
+        }
+    }
+    d.scene.objects[o].modifiers = live;
+    d.touch();
+}
+
+/// Modifier operators on entry `i` of the shown stack.
+pub fn modifier_op(d: &mut Doc, o: usize, op: &str, i: usize) {
+    let mut full: Vec<(Modifier, bool)> = d.settings.shown_stack(&d.scene, o).into_iter().map(|(m, on, _)| (m, on)).collect();
+    if i >= full.len() {
+        return;
+    }
+    match op {
+        "object.modifier_remove" => {
+            d.push_undo("Delete Modifier");
+            let m = full.remove(i);
+            d.report = format!("Removed modifier: {}", label_of(&m.0));
+        }
+        "object.modifier_copy" => {
+            d.push_undo("Duplicate Modifier");
+            let m = full[i].clone();
+            full.insert(i + 1, m);
+        }
+        "object.modifier_move_up" | "object.modifier_move_to_first" if i > 0 => {
+            d.push_undo("Move Modifier");
+            let m = full.remove(i);
+            full.insert(if op.ends_with("first") { 0 } else { i - 1 }, m);
+        }
+        "object.modifier_move_down" | "object.modifier_move_to_last" if i + 1 < full.len() => {
+            d.push_undo("Move Modifier");
+            let m = full.remove(i);
+            let to = if op.ends_with("last") { full.len() } else { i + 1 };
+            full.insert(to, m);
+        }
+        "object.modifier_apply" => {
+            let ObjectData::Mesh(mi) = d.scene.objects[o].data else { return };
+            if !full[i].1 {
+                d.report = "Modifier is disabled, skipping apply".into();
+                return;
+            }
+            let users = d.scene.objects.iter().filter(|x| matches!(x.data, ObjectData::Mesh(m) if m == mi)).count();
+            if users > 1 {
+                d.report = "Modifiers cannot be applied to multi-user data".into();
+                return;
+            }
+            d.push_undo("Apply Modifier");
+            let first = full[..i].iter().all(|e| !e.1);
+            let (m, _) = full.remove(i);
+            d.scene.meshes[mi] = m.apply(&d.scene.meshes[mi]);
+            d.report = if first { format!("Applied modifier: {}", label_of(&m)) } else { "Applied modifier was not first, result may not be as expected".into() };
+        }
+        _ => return,
+    }
+    write_stack(d, o, full);
+}
+
+fn modifier_icon_at(l: &mut L, x: i32, y: i32) {
+    icons::draw(l.ui.p, Icon::Modifier, x, y);
+}
+
+pub fn modifiers(l: &mut L, d: &mut Doc, c: &mut Ctx) {
+    let Some(o) = c.obj else { return };
+    if !matches!(d.scene.objects[o].data, ObjectData::Mesh(_)) {
+        l.note("Modifiers need a mesh object");
+        return;
+    }
+    l.space(2);
+    if l.band(ROW) {
+        let (x, w) = l.inner();
+        let r = Rect::new(x, l.y, w, ROW);
+        l.fields.push(("add_modifier".into(), r));
+        if l.ui.dropdown(r, "     Add Modifier") {
+            l.ui.open_menu(r, "", add_modifier_menu());
+        }
+        modifier_icon_at(l, x + 12, l.y + ROW / 2);
+        l.y += ROW + 8;
+    }
+    let stack = d.settings.shown_stack(&d.scene, o);
+    let oname = d.scene.objects[o].name.clone();
+    for (si, (m, live, _)) in stack.into_iter().enumerate() {
+        let key = format!("mod/{oname}/{si}/{}", m.name());
+        let mut toggled = false;
+        let mut menu_at = None;
+        let mut remove = false;
+        let title = label_of(&m);
+        l.panel_with(
+            d,
+            &key,
+            "",
+            true,
+            &mut |l, _, r| {
+                // Icon, name, then the viewport toggle, menu and X at the right.
+                icons::draw(l.ui.p, Icon::Modifier, r.x + 6, r.y + r.h / 2);
+                let xr = Rect::new(r.right() - 20, r.y, 20, r.h);
+                let mr = Rect::new(xr.x - 26, r.y, 24, r.h);
+                let cam = Rect::new(mr.x - 26, r.y, 24, r.h);
+                let vp = Rect::new(cam.x - 25, r.y, 24, r.h);
+                let nr = Rect::new(r.x + 16, r.y, (vp.x - 4 - r.x - 16).max(10), r.h);
+                l.ui.p.round_rect(nr, 4, t::BUTTON_DARK);
+                l.ui.p.label(Rect::new(nr.x + 6, nr.y, nr.w - 8, nr.h), title, t::TEXT, Align::Left);
+                for (rr, on) in [(vp, live), (cam, live)] {
+                    if on {
+                        l.ui.p.round_rect(rr, 4, t::SELECTED);
+                    } else if l.ui.hovered(rr) {
+                        l.ui.p.round_rect(rr, 4, t::BUTTON_HOVER);
+                    }
+                }
+                icons::draw(l.ui.p, Icon::Monitor, vp.x + 12, vp.y + vp.h / 2);
+                icons::draw(l.ui.p, if live { Icon::RenderOn } else { Icon::RenderOff }, cam.x + 12, cam.y + cam.h / 2);
+                if l.ui.clicked(vp) || l.ui.clicked(cam) {
+                    toggled = true;
+                }
+                if l.ui.hovered(mr) {
+                    l.ui.p.round_rect(mr, 4, t::BUTTON_HOVER);
+                }
+                icons::draw(l.ui.p, Icon::Down, mr.x + 12, mr.y + mr.h / 2);
+                if l.ui.clicked(mr) {
+                    menu_at = Some(mr);
+                }
+                if l.ui.hovered(xr) {
+                    l.ui.p.round_rect(xr, 4, t::BUTTON_HOVER);
+                }
+                icons::draw(l.ui.p, Icon::Cross, xr.x + 10, xr.y + xr.h / 2);
+                if l.ui.clicked(xr) {
+                    remove = true;
+                }
+            },
+            &mut |l, d| {
+                let was = l.inactive;
+                l.inactive = was || !live;
+                modifier_body(l, d, o, si, &m, live);
+                l.inactive = was;
+            },
+        );
+        if toggled {
+            d.push_undo("Show in Viewport");
+            d.settings.toggle_modifier(&mut d.scene, o, si);
+            d.touch();
+        }
+        if remove {
+            modifier_op(d, o, "object.modifier_remove", si);
+        }
+        if let Some(r) = menu_at {
+            let op = |n: &str, k: &str, id: &str| MenuItem::op(n, k, Op::with(id, &si.to_string()));
+            l.ui.open_menu(
+                r,
+                "",
+                vec![
+                    op("Apply", "Ctrl A", "object.modifier_apply"),
+                    MenuItem::op("Apply as Shape Key", "", Op::with("properties.unavailable", "Apply as Shape Key")),
+                    MenuItem::op("Copy to Selected", "", Op::with("properties.unavailable", "Copy to Selected")),
+                    op("Duplicate", "Shift D", "object.modifier_copy"),
+                    op("Delete", "X", "object.modifier_remove"),
+                    MenuItem::Separator,
+                    op("Move Up", "", "object.modifier_move_up"),
+                    op("Move Down", "", "object.modifier_move_down"),
+                    op("Move to First", "", "object.modifier_move_to_first"),
+                    op("Move to Last", "", "object.modifier_move_to_last"),
+                ],
+            );
+        }
+    }
+}
+
+/// The modifier's real parameters, Blender's layout.
+fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live: bool) {
+    let mut nm = m.clone();
+    let mut ch = false;
+    let k = |s: &str| format!("m{si}/{s}");
+    match &mut nm {
+        Modifier::Subdivision { levels, simple } => {
+            let cur = if *simple { 1 } else { 0 };
+            if let Some(i) = l.expand("", &["Catmull-Clark", "Simple"], cur) {
+                *simple = i == 1;
+                ch = true;
+            }
+            ch |= l.uint("Levels Viewport", &k("levels"), levels, 0, 6);
+            inactive(l, |l| {
+                let mut r = *levels;
+                l.uint("Render", &k("levels_render"), &mut r, 0, 6);
+                let mut t = true;
+                l.check("", "Optimal Display", &mut t);
+            });
+            l.panel(d, &format!("{}/adv", k("sub")), "Advanced", false, &mut |l, _| {
+                inactive(l, |l| {
+                    let mut t = true;
+                    l.check("", "Use Limit Surface", &mut t);
+                    l.enumeration("UV Smooth", "uvs", "Keep Boundaries", &[]);
+                    l.enumeration("Boundary Smooth", "bs", "All", &[]);
+                    l.check("", "Use Creases", &mut t);
+                    let mut f = false;
+                    l.check("", "Use Custom Normals", &mut f);
+                });
+            });
+        }
+        Modifier::Mirror { x, y, z, merge, merge_distance } => {
+            if l.band(ROW) {
+                let (lr, fr) = {
+                    let (ix, iw) = l.inner();
+                    let lw = (iw as f32 * 0.4) as i32;
+                    (Rect::new(ix, l.y, lw - 8, ROW), Rect::new(ix + lw, l.y, iw - lw, ROW))
+                };
+                l.ui.p.label(lr, "Axis", t::TEXT, Align::Right);
+                let w = fr.w / 3;
+                for (i, (lab, v)) in [("X", &mut *x), ("Y", &mut *y), ("Z", &mut *z)].into_iter().enumerate() {
+                    let br = Rect::new(fr.x + i as i32 * w, fr.y, if i == 2 { fr.w - 2 * w } else { w - 1 }, ROW);
+                    if l.ui.flat_button(br, lab, *v) && !l.inactive {
+                        *v = !*v;
+                        ch = true;
+                    }
+                }
+                l.y += ROW + GAP;
+            }
+            inactive(l, |l| {
+                l.expand("Bisect", &["X", "Y", "Z"], 9);
+                l.expand("Flip", &["X", "Y", "Z"], 9);
+                l.enumeration("Mirror Object", "mo", "", &[]);
+            });
+            ch |= l.check("", "Merge", merge);
+            ch |= l.number("Distance", &k("merge_d"), merge_distance, NumOpts { step: 0.001, min: 0.0, ..M });
+            inactive(l, |l| {
+                let mut f = false;
+                l.check("", "Clipping", &mut f);
+            });
+        }
+        Modifier::Array { count, relative, constant, merge } => {
+            l.info("Fit Type", "Fixed Count");
+            ch |= l.uint("Count", &k("count"), count, 1, 1000);
+            l.panel(d, &format!("{}/rel", k("sub")), "Relative Offset", true, &mut |l, _| {
+                for (i, lab) in ["Factor X", "Y", "Z"].iter().enumerate() {
+                    ch |= l.number(lab, &k(&format!("rel{i}")), &mut relative[i], NumOpts { step: 0.05, ..PLAIN });
+                }
+            });
+            l.panel(d, &format!("{}/const", k("sub")), "Constant Offset", false, &mut |l, _| {
+                for (i, lab) in ["Distance X", "Y", "Z"].iter().enumerate() {
+                    ch |= l.number(lab, &k(&format!("const{i}")), &mut constant[i], M);
+                }
+            });
+            l.panel(d, &format!("{}/merge", k("sub")), "Merge", false, &mut |l, _| {
+                ch |= l.check("", "Merge", merge);
+            });
+        }
+        Modifier::Solidify { thickness, offset } => {
+            l.info("Mode", "Simple");
+            ch |= l.number("Thickness", &k("thick"), thickness, NumOpts { step: 0.01, ..M });
+            ch |= l.slider("Offset", &k("offset"), offset, -1.0, 1.0);
+            inactive(l, |l| {
+                let mut f = false;
+                l.check("", "Even Thickness", &mut f);
+                let mut tt = true;
+                l.check("Rim", "Fill", &mut tt);
+            });
+        }
+        Modifier::Bevel { width, segments, angle } => {
+            inactive(l, |l| {
+                l.expand("", &["Vertices", "Edges"], 1);
+                l.info("Width Type", "Offset");
+            });
+            ch |= l.number("Amount", &k("width"), width, NumOpts { step: 0.01, min: 0.0, ..M });
+            ch |= l.uint("Segments", &k("segments"), segments, 1, 1000);
+            l.info("Limit Method", "Angle");
+            let mut deg = angle.to_degrees();
+            if l.number("Angle", &k("angle"), &mut deg, NumOpts { step: 1.0, unit: "°", min: 0.0, max: 180.0, ..PLAIN }) {
+                *angle = deg.to_radians();
+                ch = true;
+            }
+        }
+        Modifier::Triangulate => {
+            inactive(l, |l| {
+                l.enumeration("Quad Method", "qm", "Shortest Diagonal", &[]);
+                l.enumeration("N-gon Method", "nm", "Beauty", &[]);
+                let mut v = 4;
+                l.uint("Minimum Vertices", "minv", &mut v, 4, 100);
+            });
+        }
+        Modifier::Weld { distance } => {
+            l.info("Mode", "All");
+            ch |= l.number("Distance", &k("dist"), distance, NumOpts { step: 0.001, min: 0.0, ..M });
+        }
+        Modifier::Displace { strength } => {
+            inactive(l, |l| {
+                l.field_button("Texture", "New");
+                l.info("Coordinates", "Local");
+            });
+            l.info("Direction", "Normal");
+            ch |= l.number("Strength", &k("strength"), strength, NumOpts { step: 0.05, ..PLAIN });
+        }
+        Modifier::Smooth { factor, iterations } => {
+            inactive(l, |l| {
+                l.expand("Axis", &["X", "Y", "Z"], 9);
+            });
+            ch |= l.number("Factor", &k("factor"), factor, NumOpts { step: 0.05, ..PLAIN });
+            ch |= l.uint("Repeat", &k("repeat"), iterations, 0, 10000);
+        }
+    }
+    if ch && live && nm != *m {
+        l.commit(d, "Modifier Property");
+        // Entry `si` of the shown stack is live: find its live index.
+        let shown = d.settings.shown_stack(&d.scene, o);
+        if let Some((_, true, li)) = shown.get(si) {
+            d.scene.objects[o].modifiers[*li] = nm;
+        }
+    }
+}
