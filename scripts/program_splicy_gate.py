@@ -50,6 +50,7 @@ os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 # Fetching the 23 MB program, decoding the clip for the timeline and exporting take longer than the usual 300 s.
 os.environ.setdefault('SEXOS_GATE_BOUND','1500')
 from quil_autosave_gate import boot
+from program_gate_geometry import maximize
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 def near(a,b,tol=8):return all(abs(((a>>s)&255)-((b>>s)&255))<=tol for s in(0,8,16))
 def mix(under,over,alpha):return sum((((over>>s)&255)*alpha+((under>>s)&255)*(255-alpha)+127)//255<<s for s in(0,8,16))
@@ -86,8 +87,9 @@ def main():
   sc=g['wait'](r'\[splicy.scan\] thumbs=(\d+) peaks=(\d+) ms=(\d+)',s,600)
   assert int(sc[1])>=6 and int(sc[2])>=550,sc[0]
   g['wait'](r'\[splicy.state\] words=11 playing=11 duration_ms=\d+ clips=2 joins=0',s,60)
-  g['focus'](int(m[3]))
-  tile=re.findall(rf'\[shell.tile.apply\] sid={m[3]} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
+  # A new window opens in a small tile beside Spindle: zoom it so the tracks are on screen.
+  (x,y,w,h),before=maximize(g,m[3])
+  g['wait'](rf'\[display.app.pixels\] target={m[1]} surface={m[3]} w=\d{{3,}} h=(?:[2-9]\d\d|\d{{4,}})',before,120);time.sleep(1)
   box=(x+8,y+36,x+w-8,y+h-8)
   img=shot('splicy-opened')
   labels=count(img,box,lambda c:near(c,LABEL));waves=count(img,box,lambda c:near(c,WAVE))
