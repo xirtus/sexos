@@ -1258,9 +1258,9 @@ fn modifier_classic(md: &View<'_, '_>) -> Option<Modifier> {
             if md.ptr("texture") != 0 || !(dir == 3 || dir == 5) {
                 return None;
             }
-            Modifier::Displace { strength: (1.0 - setting_f32(md, "midlevel", 0.5)) * setting_f32(md, "strength", 1.0) }
+            Modifier::Displace { strength: (1.0 - setting_f32(md, "midlevel", 0.5)) * setting_f32(md, "strength", 1.0), vertex_group: None, invert_vertex_group: false }
         }
-        "SmoothModifierData" => Modifier::Smooth { factor: setting_f32(md, "fac", 0.5), iterations: setting_u32(md, "repeat", 1, 10_000) },
+        "SmoothModifierData" => Modifier::Smooth { factor: setting_f32(md, "fac", 0.5), iterations: setting_u32(md, "repeat", 1, 10_000), vertex_group: None, invert_vertex_group: false },
         _ => return None,
     })
 }
@@ -1301,8 +1301,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
         "BevelModifierData" => Modifier::Bevel { width: fl("value", 0.1), segments: int("res", 1).max(1), angle: if bit("lim_flags", 1 << 3) { fl("bevel_angle", 0.5236) } else { 0.0 } },
         "TriangulateModifierData" => Modifier::Triangulate,
         "WeldModifierData" => Modifier::Weld { distance: fl("merge_dist", 0.001) },
-        "DisplaceModifierData" => Modifier::Displace { strength: fl("strength", 1.0) },
-        "SmoothModifierData" => Modifier::Smooth { factor: fl("fac", 0.5), iterations: int("repeat", 1) },
+        "DisplaceModifierData" => Modifier::Displace { strength: fl("strength", 1.0), vertex_group: None, invert_vertex_group: false },
+        "SmoothModifierData" => Modifier::Smooth { factor: fl("fac", 0.5), iterations: int("repeat", 1), vertex_group: None, invert_vertex_group: false },
         "DecimateModifierData" => Modifier::Decimate {
             mode: match flag("mode") {
                 1 => DecimateMode::Unsubdivide,
@@ -1365,6 +1365,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             factor: fl("factor", 0.7854),
             limits: v.vec::<2>("limit").unwrap_or([0.0, 1.0]),
             lock: [bit("axis", 1), bit("axis", 2), bit("axis", 4)],
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "CastModifierData" => Modifier::Cast {
             kind: match flag("type") {
@@ -1377,6 +1379,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             size: fl("size", 0.0),
             axes: [bit("flag", 1 << 1), bit("flag", 1 << 2), bit("flag", 1 << 3)],
             size_from_radius: bit("flag", 1 << 5),
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "WaveModifierData" => Modifier::Wave {
             x: bit("flag", 1 << 1),
@@ -1392,6 +1396,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             lifetime: fl("lifetime", 0.0),
             damping: fl("damp", 10.0),
             start: [fl("startx", 0.0), fl("starty", 0.0)],
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "ShrinkwrapModifierData" => Modifier::Shrinkwrap {
             target: object_name("target"),
@@ -1404,6 +1410,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             axes: [bit("projAxis", 1), bit("projAxis", 2), bit("projAxis", 4)],
             positive: bit("shrinkOpts", 1),
             negative: bit("shrinkOpts", 2),
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "LaplacianSmoothModifierData" => Modifier::LaplacianSmooth {
             iterations: int("repeat", 1),
@@ -1412,6 +1420,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             axes: [bit("flag", 1 << 1), bit("flag", 1 << 2), bit("flag", 1 << 3)],
             preserve_volume: bit("flag", 1 << 4),
             normalized: bit("flag", 1 << 5),
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "CorrectiveSmoothModifierData" => Modifier::CorrectiveSmooth {
             factor: fl("lambda", 0.5),
@@ -1419,6 +1429,8 @@ fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             scale: fl("scale", 1.0),
             length_weighted: flag("smooth_type") == 1,
             only_smooth: bit("flag", 1 << 1),
+            vertex_group: None,
+            invert_vertex_group: false,
         },
         "WeightedNormalModifierData" => Modifier::WeightedNormal { keep_sharp: bit("flag", 1) },
         _ => return None,

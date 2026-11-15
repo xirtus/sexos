@@ -498,6 +498,11 @@ fn ensure_cache(s: &mut State, d: &mut Doc) {
         fps: d.scene.fps,
         frame_current: d.scene.frame_current,
         node_groups: Vec::new(),
+        // Bone parents and constraints read the armatures.
+        armatures: d.scene.armatures.clone(),
+        armature_names: d.scene.armature_names.clone(),
+        lattices: d.scene.lattices.clone(),
+        lattice_names: d.scene.lattice_names.clone(),
     };
     let empty = ViewportScene::new(&shell);
     d.scene.selected = saved;

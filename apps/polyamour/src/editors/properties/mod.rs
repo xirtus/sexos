@@ -391,7 +391,7 @@ pub fn object_icon(data: &ObjectData) -> Icon {
         ObjectData::Mesh(_) => Icon::ObMesh,
         ObjectData::Camera(_) => Icon::ObCamera,
         ObjectData::Light(_) => Icon::ObLight,
-        ObjectData::Empty => Icon::ObEmpty,
+        ObjectData::Empty | ObjectData::Armature(_) | ObjectData::Lattice(_) => Icon::ObEmpty,
     }
 }
 

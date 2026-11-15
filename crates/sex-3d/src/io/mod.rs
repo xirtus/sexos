@@ -203,11 +203,17 @@ pub fn append_scene(scene: &mut Scene, other: Scene) -> Vec<usize> {
         scene.materials.push(m);
     }
     let mesh_ids: Vec<usize> = other.meshes.into_iter().zip(other.mesh_names).map(|(m, n)| scene.add_mesh(&n, m)).collect();
+    let arm_ids: Vec<usize> = other.armatures.into_iter().zip(other.armature_names).map(|(a, n)| scene.add_armature(&n, a)).collect();
+    let lat_ids: Vec<usize> = other.lattices.into_iter().zip(other.lattice_names).map(|(l, n)| scene.add_lattice(&n, l)).collect();
     let obj_off = scene.objects.len();
     let mut out = Vec::new();
+    let mut renamed = Vec::new();
     for mut o in other.objects {
-        if let ObjectData::Mesh(mi) = &mut o.data {
-            *mi = mesh_ids[*mi];
+        match &mut o.data {
+            ObjectData::Mesh(mi) => *mi = mesh_ids[*mi],
+            ObjectData::Armature(ai) => *ai = arm_ids[*ai],
+            ObjectData::Lattice(li) => *li = lat_ids[*li],
+            _ => {}
         }
         for slot in &mut o.materials {
             if *slot != usize::MAX {
@@ -216,7 +222,24 @@ pub fn append_scene(scene: &mut Scene, other: Scene) -> Vec<usize> {
         }
         o.parent = o.parent.map(|p| p + obj_off);
         o.collection = 0;
-        out.push(scene.add_object(o));
+        let name = o.name.clone();
+        let i = scene.add_object(o);
+        if scene.objects[i].name != name {
+            renamed.push((name, scene.objects[i].name.clone()));
+        }
+        out.push(i);
+    }
+    // Objects made unique on the way in: point the appended objects'
+    // references (modifiers, constraints) at their new names.
+    for &i in &out {
+        let o = &mut scene.objects[i];
+        for (old, new) in &renamed {
+            o.modifiers.iter_mut().for_each(|m| m.rename_object_ref(old, new));
+            o.constraints.iter_mut().for_each(|c| c.rename_object_ref(old, new));
+            for pb in &mut o.pose {
+                pb.constraints.iter_mut().for_each(|c| c.rename_object_ref(old, new));
+            }
+        }
     }
     if scene.active_camera.is_none() {
         scene.active_camera = other.active_camera.map(|c| c + obj_off);

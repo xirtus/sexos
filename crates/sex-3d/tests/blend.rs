@@ -295,8 +295,8 @@ fn modifier_stack() {
         Modifier::Bevel { width: 0.05, segments: 3, angle: 0.6 },
         Modifier::Triangulate,
         Modifier::Weld { distance: 0.02 },
-        Modifier::Displace { strength: 1.5 },
-        Modifier::Smooth { factor: 0.7, iterations: 4 },
+        Modifier::Displace { strength: 1.5, vertex_group: None, invert_vertex_group: false },
+        Modifier::Smooth { factor: 0.7, iterations: 4, vertex_group: None, invert_vertex_group: false },
     ];
     for c in EXTRAS {
         let s = import_blend(&blendgen::extras_file(c)).unwrap_or_else(|e| panic!("{c:?}: {e}"));
@@ -477,7 +477,7 @@ fn modifier_stacks_import() {
                 Modifier::Subdivision { levels: 2, simple: true },
                 Modifier::Decimate { mode: DecimateMode::Collapse, ratio: 0.25, iterations: 0, angle: 0.1, triangulate: true },
                 Modifier::Boolean { object: "Cutter".into(), operation: BooleanOp::Union },
-                Modifier::SimpleDeform { mode: SimpleDeformMode::Bend, axis: 0, factor: 0.5, limits: [0.25, 0.75], lock: [false, false, true] },
+                Modifier::SimpleDeform { mode: SimpleDeformMode::Bend, axis: 0, factor: 0.5, limits: [0.25, 0.75], lock: [false, false, true], vertex_group: None, invert_vertex_group: false },
             ],
             "ptr {ptr} big {big}"
         );

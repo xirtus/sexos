@@ -202,7 +202,8 @@ fn data_icon(data: &ObjectData) -> Icon {
         ObjectData::Mesh(_) => Icon::Mesh,
         ObjectData::Camera(_) => Icon::CameraData,
         ObjectData::Light(_) => Icon::LightData,
-        ObjectData::Empty => Icon::EmptyData,
+        // No armature/lattice UI yet: shown like empties.
+        ObjectData::Empty | ObjectData::Armature(_) | ObjectData::Lattice(_) => Icon::EmptyData,
     }
 }
 
@@ -233,7 +234,7 @@ impl Build<'_> {
             ObjectData::Mesh(_) => f.meshes,
             ObjectData::Camera(_) => f.cameras,
             ObjectData::Light(_) => f.lights,
-            ObjectData::Empty => f.empties,
+            ObjectData::Empty | ObjectData::Armature(_) | ObjectData::Lattice(_) => f.empties,
         }
     }
 

@@ -524,6 +524,8 @@ pub fn import_into(scene: &mut Scene, bytes: &[u8], resolver: Resolver) -> Resul
             ObjectData::Camera(_) => "Camera".into(),
             ObjectData::Light(_) => "Light".into(),
             ObjectData::Empty => "Empty".into(),
+            ObjectData::Armature(_) => "Armature".into(),
+            ObjectData::Lattice(_) => "Lattice".into(),
         };
         let name = node.get("name").and_then(Value::as_str).map_or(default_name, str::to_string);
         let mut o = Object::new(&name, data);

@@ -677,7 +677,7 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
             l.info("Mode", "All");
             ch |= l.number("Distance", &k("dist"), distance, NumOpts { step: 0.001, min: 0.0, ..M });
         }
-        Modifier::Displace { strength } => {
+        Modifier::Displace { strength, .. } => {
             inactive(l, |l| {
                 l.field_button("Texture", "New");
                 l.info("Coordinates", "Local");
@@ -685,7 +685,7 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
             l.info("Direction", "Normal");
             ch |= l.number("Strength", &k("strength"), strength, NumOpts { step: 0.05, ..PLAIN });
         }
-        Modifier::Smooth { factor, iterations } => {
+        Modifier::Smooth { factor, iterations, .. } => {
             inactive(l, |l| {
                 l.expand("Axis", &["X", "Y", "Z"], 9);
             });
@@ -825,7 +825,7 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
             }
             l.info("Solver", "BSP (exact in general position)");
         }
-        Modifier::SimpleDeform { mode, axis, factor, limits, lock } => {
+        Modifier::SimpleDeform { mode, axis, factor, limits, lock, .. } => {
             let modes = [SimpleDeformMode::Twist, SimpleDeformMode::Bend, SimpleDeformMode::Taper, SimpleDeformMode::Stretch];
             let cur = modes.iter().position(|x| x == mode).unwrap_or(0);
             if let Some(i) = l.expand("", &["Twist", "Bend", "Taper", "Stretch"], cur) {
@@ -853,7 +853,7 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
                 }
             });
         }
-        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius } => {
+        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius, .. } => {
             let kinds = [CastType::Sphere, CastType::Cylinder, CastType::Cuboid];
             let cur = kinds.iter().position(|x| x == kind).unwrap_or(0);
             if let Some(i) = l.expand("Shape", &["Sphere", "Cylinder", "Cuboid"], cur) {
@@ -871,7 +871,7 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
                 l.enumeration("Control Object", "cast_ob", "", &[]);
             });
         }
-        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start } => {
+        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start, .. } => {
             ch |= l.check("Motion", "X", x);
             ch |= l.check("", "Y", y);
             ch |= l.check("", "Cyclic", cyclic);
@@ -891,7 +891,7 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
                 ch |= l.number("Speed", &k("speed"), speed, NumOpts { step: 0.01, ..PLAIN });
             });
         }
-        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative } => {
+        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative, .. } => {
             let methods = [ShrinkwrapMethod::NearestSurfacePoint, ShrinkwrapMethod::Project, ShrinkwrapMethod::NearestVertex];
             let cur = methods.iter().position(|x| x == method).unwrap_or(0);
             if let Some(i) = l.expand("Wrap Method", &["Nearest Surface", "Project", "Nearest Vertex"], cur) {
@@ -911,7 +911,7 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
                 ch |= l.check("", "Positive", positive);
             }
         }
-        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized } => {
+        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized, .. } => {
             ch |= l.uint("Repeat", &k("repeat"), iterations, 0, 200);
             ch |= l.number("Factor", &k("factor"), factor, NumOpts { step: 0.05, ..PLAIN });
             ch |= l.number("Border", &k("border"), border, NumOpts { step: 0.05, ..PLAIN });
@@ -919,7 +919,7 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
             ch |= l.check("", "Preserve Volume", preserve_volume);
             ch |= l.check("", "Normalized", normalized);
         }
-        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth } => {
+        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth, .. } => {
             ch |= l.number("Factor", &k("factor"), factor, NumOpts { step: 0.05, ..PLAIN });
             ch |= l.uint("Repeat", &k("repeat"), iterations, 0, 200);
             ch |= l.number("Scale", &k("scale"), scale, NumOpts { step: 0.05, ..PLAIN });
@@ -949,6 +949,8 @@ fn modifier_body(l: &mut L, d: &mut Doc, o: usize, si: usize, m: &Modifier, live
             });
             l.note("Smooth shading, area-weighted normals");
         }
+        // Rigging modifiers have no panel yet.
+        _ => {}
     }
     if ch && live && nm != *m {
         l.commit(d, "Modifier Property");
