@@ -48,7 +48,9 @@ fn identity() -> image::Lease { image::Lease { serial:0,shell_epoch:1,files_epoc
  let hash=Sha256::digest(data).into();
  assert!(state.begin(identity(),b"replaced ELF snapshot",data.len(),hash).is_none());
  assert!(state.begin(identity(),data,data.len()+1,hash).is_none());
- let first=state.begin(identity(),data,data.len(),hash).unwrap(); assert!(state.busy());
+ assert!(state.writer_begin()); assert!(!state.writer_begin());
+ assert!(state.begin(identity(),data,data.len(),hash).is_none()); state.writer_end();
+ let first=state.begin(identity(),data,data.len(),hash).unwrap(); assert!(state.busy()); assert!(!state.writer_begin());
  // Another writer/admission cannot replace the kernel staging snapshot.
  assert!(state.begin(identity(),data,data.len(),hash).is_none());
  assert!(!state.copied(first,2,1)); assert!(state.busy());
@@ -60,6 +62,10 @@ fn identity() -> image::Lease { image::Lease { serial:0,shell_epoch:1,files_epoc
 }
 #[test] fn no_guest_pin_means_no_attestation() {
  assert!(image::attest_and_lease(identity(),b"anything").is_none()); assert!(!image::busy());
+ let writer=image::writer().unwrap(); assert!(image::busy());
+ assert!(image::writer().is_none()); assert!(image::busy());
+ assert!(image::attest_and_lease(identity(),b"anything").is_none());
+ drop(writer); assert!(!image::busy()); assert!(image::writer().is_some());
 }
 }
 ''')
@@ -70,7 +76,7 @@ fn identity() -> image::Lease { image::Lease { serial:0,shell_epoch:1,files_epoc
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         source = (ROOT / 'servers/sexfiles/src/program_store.rs').read_text()
         body = source.split('fn try_load(', 1)[1]
-        self.assertLess(body.index('restricted_image::busy()'), body.index('memory_region_view('))
+        self.assertLess(body.index('restricted_image::writer()'), body.index('memory_region_view('))
         self.assertEqual(source.count('memory_region_view(store::IMAGE_SLOT_FILES'), 1)
 
 

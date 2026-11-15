@@ -22,7 +22,7 @@ pub fn load_unbound(name:[u64;2])->u64 {
     match try_load(name,false,0) { Ok(len)=>store::loaded(len),Err(error)=>store::failed(error) }
 }
 fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u32> {
-    if crate::restricted_image::busy() { return Err(store::IMAGE_BUSY); }
+    let _writer = crate::restricted_image::writer().ok_or(store::IMAGE_BUSY)?;
     if !remember && name[0]==store::TICKET { return Err(store::NOT_FOUND); }
     let buf_va = crate::vfs::diskfs_bridge_get_buf_va();
     if buf_va == 0 || buf_va == u64::MAX { return Err(store::IO); }
