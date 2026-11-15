@@ -666,7 +666,8 @@ pub fn message(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
             turn.jobs().release(id, actor, p.nonce, now, own_epoch);
             return Err(Error::Identity);
         }
-        Ok((id, [0; 176], 0, Some((id, p.nonce))))
+        let data = turn.jobs().get(id).ok_or(Error::Identity)?.info(false)?;
+        Ok((id, data, 176, Some((id, p.nonce))))
     })();
     let (word, data, data_len, scope) = match result {
         Ok((value, data, n, scope)) => (f::reply(r.seq, f::OK, value), data, n, scope),

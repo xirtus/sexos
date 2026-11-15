@@ -116,6 +116,7 @@ fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64
  assert!(native_io::message(fs::OP,actor,req(1)));native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),0);
  // Same accepted request while SYS29 is Full does not create another job.
  assert!(native_io::message(fs::OP,actor,req(1)));FULL.store(false,Ordering::SeqCst);native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((1,fs::OK,1)));
+ let initial=unsafe{core::slice::from_raw_parts((core::ptr::addr_of!(REGION)as *const u8).add(fs::PATH_BYTES),wire::INFO_BYTES)};let initial=wire::Info::decode(initial).unwrap();assert_eq!((initial.ticket,initial.parent,initial.cookie,initial.nonce,initial.files_epoch,initial.child),(1,actor,9,[1;16],1,None));assert_eq!(initial.output_hash,[0;32]);
  let shell=Subject{pd:3,task:3};let claim=[1,actor.word(),9];let count=SENDS.load(Ordering::SeqCst);assert!(native_io::message(wire::OP_CLAIM,actor,claim));native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),count);
  assert!(native_io::message(wire::OP_CLAIM,shell,claim));FULL.store(true,Ordering::SeqCst);native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),count);FULL.store(false,Ordering::SeqCst);native_io::poll();assert_eq!(LAST.load(Ordering::SeqCst),0xd1<<56|1<<32);
  let mut descriptor=[0;176];for i in 0..22{let mut word=0;for part in 0..2{assert!(native_io::message(wire::OP_DESCRIBE_TAGGED,shell,[1,i|part<<8,1]));native_io::poll();word|=(restricted_helper::unchunk(LAST.load(Ordering::SeqCst),1,0,i as u8,part as u8).unwrap()as u64)<<(part*32);}descriptor[i as usize*8..i as usize*8+8].copy_from_slice(&word.to_le_bytes());}assert!(wire::Info::decode(&descriptor).is_some());
@@ -141,6 +142,7 @@ fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64
  assert!(native_io::message(wire::OP_CLAIM,shell,[2,actor.word(),9]));native_io::poll();assert_eq!(LAST.load(Ordering::SeqCst),0xd1<<56|2<<32);
 
  // Capacity must fail without overwriting either accepted immutable job.
+ for i in 0..n{unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION)as *mut u8).add(fs::PATH_BYTES+i),input[i])}}
  assert!(native_io::message(fs::OP,actor,req(3)));FULL.store(true,Ordering::SeqCst);native_io::poll();let before=SENDS.load(Ordering::SeqCst);
  TASK.store(100,Ordering::SeqCst);FULL.store(false,Ordering::SeqCst);native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),before);
  assert!(native_io::message(fs::OP,actor,req(4)));native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),before);
