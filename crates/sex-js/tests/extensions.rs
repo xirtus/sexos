@@ -23,17 +23,26 @@ fn api(where_: &str) -> String {
     format!("const chrome = __kaleidoscopeExt('demo', '{KEY}', {{name:'Demo', version:'1', manifest_version:3}}, {{hello:{{message:'Hi $1'}}}}, '{where_}');")
 }
 
-/// Delivers what each realm posted until both are quiet, the way the browser does.
+/// Delivers what each realm posted until both have been quiet for a while (so short
+/// timers get to fire), the way the browser does.
 fn route(page: &mut Script<Document>, bg: &mut Script<Document>) {
-    for _ in 0..50 {
+    use std::time::{Duration, Instant};
+    let start = Instant::now();
+    let mut quiet_since: Option<Instant> = None;
+    while start.elapsed() < Duration::from_secs(5) {
         let from_page: Vec<String> = page.page_mut().ext_outbox.drain(..).collect();
         let from_bg: Vec<String> = bg.page_mut().ext_outbox.drain(..).collect();
         if from_page.is_empty() && from_bg.is_empty() {
             page.dispatch("tick").unwrap();
             bg.dispatch("tick").unwrap();
-            if page.page().ext_outbox.is_empty() && bg.page().ext_outbox.is_empty() { return; }
+            if page.page().ext_outbox.is_empty() && bg.page().ext_outbox.is_empty() {
+                let since = *quiet_since.get_or_insert_with(Instant::now);
+                if since.elapsed() >= Duration::from_millis(50) { return; }
+                std::thread::sleep(Duration::from_millis(2));
+            }
             continue;
         }
+        quiet_since = None;
         for (text, from_bg) in from_page.into_iter().map(|t| (t, false)).chain(from_bg.into_iter().map(|t| (t, true))) {
             let m: serde_json::Value = serde_json::from_str(&text).unwrap();
             let to_page = |v: serde_json::Value, page: &mut Script<Document>| { page.dispatch(&format!("ext\t{v}")).unwrap(); };
@@ -70,7 +79,7 @@ fn messages_storage_and_events_cross_realms() {
         }});
         chrome.storage.onChanged.addListener((c, area) => console.log('bg saw', area, JSON.stringify(c)));", api("bg")), "bg.js").unwrap();
     page.eval(&format!("(function(){{{}
-        chrome.storage.onChanged.addListener((c, area) => console.log('page saw', area, c.saved.newValue));
+        chrome.storage.onChanged.addListener((c, area) => c.saved && console.log('page saw', area, c.saved.newValue));
         chrome.runtime.sendMessage({{kind:'add', a:2, b:3}}).then(r => console.log('sum', r.sum, r.from));
         chrome.runtime.sendMessage({{kind:'save', value:[1,2]}}, r => console.log('save', r));
         chrome.storage.local.set({{mine: true}}, () => console.log('set done', chrome.runtime.lastError === undefined));
