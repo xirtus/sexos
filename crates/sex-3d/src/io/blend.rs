@@ -168,6 +168,9 @@
 //!   {object_from, object_to, strength, falloff_radius, falloff_type, flag,
 //!   defgrp_name}` and `WeightVGEdit/Mix/ProximityModifierData`; the deform
 //!   modifiers' `defgrp_name`/`vgroup_name` and invert flags.
+//! - Geometry nodes: `NodesModifierData {node_group, settings.properties}`
+//!   and `GeometryNodeTree` groups with their nodes' settings (see
+//!   `blend/geonodes.rs`).
 //!
 //! Not imported yet: textures/images, view-layer visibility (the eye icon),
 //! drivers, NLA, library links, custom split normals, modifier textures,
@@ -179,6 +182,7 @@ use crate::scene::{AreaShape, Camera, Light, LightKind, Material, Object, Object
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
+mod geonodes;
 mod nodes;
 
 mod rig;
@@ -1131,6 +1135,7 @@ impl<'f, 'a> Importer<'f, 'a> {
         o.materials = self.slots(ob, mesh_view.as_ref());
         if mesh_view.is_some() {
             o.modifiers = modifiers(f, ob);
+            self.modifier_groups(ob);
         }
         o.constraints = rig::constraints(f, ob.sub("constraints"));
         if matches!(o.data, ObjectData::Armature(_)) {
@@ -1507,6 +1512,11 @@ fn modifier_base(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> {
             replace: bit("flag", 1 << 1),
         },
         "EdgeSplitModifierData" => Modifier::EdgeSplit { angle: fl("split_angle", 0.5236), use_angle: bit("flags", 1 << 1) },
+        "NodesModifierData" => {
+            // The group itself is imported by `Importer::modifier_groups`.
+            let (group, inputs) = geonodes::nodes_modifier(f, v);
+            Modifier::Nodes { group: f.view_ptr(group, &["bNodeTree"]).map(|t| t.id_name()).unwrap_or_default(), inputs }
+        }
         "BuildModifierData" => Modifier::Build { start: fl("start", 1.0), length: fl("length", 100.0), reverse: bit("flag", 1 << 1), random: bit("flag", 1), seed: int("seed", 0) },
         "BooleanModifierData" => Modifier::Boolean {
             object: object_name("object"),

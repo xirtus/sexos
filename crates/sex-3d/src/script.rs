@@ -2277,7 +2277,9 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
             let _ = writeln!(o, "parent {name} {}{}", quote(&scene.objects[p].name), rig::parent_options(ob));
         }
         for (slot, &m) in ob.materials.iter().enumerate() {
-            let _ = writeln!(o, "material_assign {name} {} slot={slot}", quote(&scene.materials[m].name));
+            // Empty slots (imported `None` materials) have nothing to assign.
+            let Some(mat) = scene.materials.get(m) else { continue };
+            let _ = writeln!(o, "material_assign {name} {} slot={slot}", quote(&mat.name));
         }
         for m in &ob.modifiers {
             let _ = writeln!(o, "modifier_add {name} {}{}", m.type_name(), modifier_to_options(m));
