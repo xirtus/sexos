@@ -104,6 +104,12 @@ fn credits(state:&mut provider::Provider,page:&journal::Journal,p:&mut Fake,pack
  p.full=false;credits(&mut state,&page,&mut p,q);
  for packet in packets().into_iter().skip(1){if packet.phase==Phase::Bind{p.now=1;}state.message(message(packet),&page,&mut p);credits(&mut state,&page,&mut p,packet);}
  assert!(state.sealed());assert!(state.denied(43));assert!(page.load(Some(2),true).denied(43));
+ let binding=state.binding().unwrap();assert!(state.job_live(binding,p.now));
+ p.now=provider::JOB_TICKS+1;assert!(!state.job_live(binding,p.now));
+ state.poll(&mut p,|_|false);assert!(!state.job_live(binding,p.now));
+ state.poll(&mut p,|_|true);assert!(!state.job_live(binding,p.now));
+ // Replayed final Seal/ACK must not extend or resurrect an expired job lease.
+ state.message(message(packets()[10]),&page,&mut p);credits(&mut state,&page,&mut p,packets()[10]);assert!(!state.job_live(binding,p.now));
 }
 #[test]fn provider_restart_deadline_foreign_fetch_and_epoch_never_resume_positive_state(){
  let page=journal::Journal::new();let mut p=fake();let mut state=provider::Provider::new();state.initialize(&page,&mut p);let q=packets()[0];
