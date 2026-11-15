@@ -11,4 +11,7 @@ cargo test --locked -p climax-core
 echo "=== [2/2] Target check: x86_64-sex-app.json ==="
 cargo check --target x86_64-sex-app.json -Z build-std=core,alloc -p climax-core
 
-echo "[climax_host_gate] PASS: all climax-core tests and target checks passed."
+echo "=== [3/3] Cargo test --locked -p climax --no-default-features ==="
+cargo test --locked -p climax --no-default-features
+
+echo "[climax_host_gate] PASS: all climax tests and target checks passed."

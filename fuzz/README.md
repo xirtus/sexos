@@ -21,6 +21,11 @@ Uses `libfuzzer-sys` with AddressSanitizer (`-Zsanitizer=address`) and LLVM cove
 | `fuzz_kodi_xml` | `sex-kodi` (PR #251) | Kodi addon XML unescaping, element/attribute parsing, Debian/Kodi version comparator, zip addon package unpack |
 | `fuzz_docx_office` | `crates/sex-office`<br>`wordcraft-engine` (PR #224) | DOCX OOXML ZIP part extraction, Office Pen/Canvas rendering coordinates, integer overflow checks (`x * 256`, `cx + cw`), alpha blending |
 | `fuzz_xlsx_office` | `crates/sex-office`<br>`apps/spreadeagle`<br>`gridcraft-engine` (PR #219) | XLSX OOXML ZIP part extraction, spreadsheet column name arithmetic (`col + 1` overflow checks), formula tokenization |
+| `fuzz_spreadeagle_xlsx_ods` | `apps/spreadeagle`<br>`gridcraft-engine` | Spreadeagle XLSX and ODS import engines, raw archive bytes and structured uncompressed ZIP wrapping sheets, formulas, cells, and manifest |
+| `fuzz_assuit_docx` | `apps/assuit`<br>`wordcraft-engine` | Assuit DOCX document import and layout engine, raw bytes and structured ZIP wrapping document.xml, styles, and numbering |
+| `fuzz_bodice_epub` | `crates/sex-ebook`<br>`apps/bodice` | Bodice EPUB 2/3 container, OPF package, NCX/nav TOC, XHTML chapter text reflow and page pagination |
+| `fuzz_gossip_feed` | `crates/sex-feed`<br>`apps/gossip` | Gossip RSS 2.0 / Atom feed parser, podcast enclosures, OPML import/export, subscription list and read state serialization |
+| `fuzz_swingers_bencode` | `crates/sex-torrent`<br>`apps/swingers` (PR #236) | Bencode decoding (`decode`, `decode_prefix`), integer overflow bounds, canonical round-trip verification, and torrent metainfo decoding |
 
 ## Usage
 
