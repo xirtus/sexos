@@ -46,6 +46,13 @@ class Inputs(unittest.TestCase):
   self.assertEqual(acks,[0,20,40,42,44,46,48,50]);self.assertEqual(state['value'],50)
   downs=[e['data']['key']['data']for _,data in self.d.q.events for e in data['events']if e['data']['down']]
   self.assertEqual(downs,['home','pgup','pgup','right','right','right','right','right'])
+ def test_pointer_already_reached_max_does_not_wait_for_noop_end(self):
+  state={'value':100}
+  self.d.text=lambda:f"[moan.mixer.track] track=0 name=volume x=8 y=455 w=118 h=26 value={state['value']}\n"
+  self.d.move=lambda x,y:state.update(value=200)
+  self.d.g={'wait':lambda*args:self.fail('target already achieved: no extra key receipt exists')}
+  self.assertEqual(self.d.mix(3,0,'volume',200),100)
+  self.assertEqual(self.d.q.events,[]);self.assertEqual(self.buttons,[True,False])
  def test_pointer_uses_completed_local_refresh_newest_record(self):
   self.d.text=lambda:'[moan.control] name=Master x=20 y=30\n[moan.control] name=Master x=50 y=60\n'
   self.d.click(3,'Master');self.assertEqual(self.moves,[(58,122)]);self.assertEqual(self.buttons,[True,False])
