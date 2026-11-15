@@ -167,7 +167,9 @@ impl Backend<'_> {
                     info.files.push(FileInfo { name, length: f.length, bytes_completed: done, wanted: true, priority: 0, begin_piece: (f.offset / pl) as u32, end_piece: ((f.offset + f.length).div_ceil(pl)) as u32 });
                 }
                 // The piece bitfield, base64 like Transmission's `pieces`.
-                info.pieces = (0..s.num_pieces).collect::<Vec<u32>>().chunks(8).map(|c| c.iter().fold(0u8, |b, &i| b | ((have.get(i) as u8) << (7 - i % 8)))).collect();
+                let mut bits = vec![0u8; s.num_pieces.div_ceil(8) as usize];
+                for i in 0..s.num_pieces { if have.get(i) { bits[(i / 8) as usize] |= 0x80 >> (i % 8); } }
+                info.pieces = bits;
             }
             info.trackers = job.trackers.iter().enumerate().map(|(i, u)| sex_torrent::rpc::TrackerInfo { id: i as u32, announce: u.clone(), tier: i as u32, ..Default::default() }).collect();
         }

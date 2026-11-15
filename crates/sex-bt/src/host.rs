@@ -32,7 +32,13 @@ pub mod code {
     pub const DISCONNECT: u16 = 0x0406;
     pub const EV_CONNECTION_REQUEST: u8 = 0x04;
     pub const EV_AUTHENTICATION_COMPLETE: u8 = 0x06;
+    pub const LE_CONNECTION_UPDATE: u16 = 0x2013;
 }
+
+/// The largest ACL data length we send in one packet, whatever the controller reports:
+/// the packet (type byte, 4-byte ACL header, data) must fit the SexUSB ring slot
+/// (`sex_pdx::bt_hci::MAX_PACKET`, 2044 bytes).
+pub const MAX_ACL_DATA: usize = 2044 - 5;
 
 /// Something the server should report or act on (boot log lines, desktop prompts, input).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -257,7 +263,8 @@ impl Host {
 
     fn send_l2cap(&mut self, handle: u16, cid: u16, payload: &[u8]) {
         let le = self.conns.iter().find(|c| c.handle == handle).map(|c| c.le).unwrap_or(true);
-        let mtu = if le { self.bringup.info.le_acl_mtu.max(23) } else { self.bringup.info.acl_mtu.max(23) } as usize;
+        let reported = if le { self.bringup.info.le_acl_mtu } else { self.bringup.info.acl_mtu };
+        let mtu = (reported.max(23) as usize).min(MAX_ACL_DATA);
         for p in l2cap::fragment(handle, &l2cap::frame(cid, payload), mtu) { self.acl.push_back(p); }
     }
 
@@ -588,11 +595,27 @@ impl Host {
                     }
                 }
             }
-            l2cap::CID_LE_SIGNALING => match l2cap::signal(cid, payload) {
-                Signal::Reply(r) => self.send_l2cap(handle, cid, &r),
-                Signal::Accepted { reply, .. } => self.send_l2cap(handle, cid, &reply),
-                Signal::Nothing => {}
-            },
+            l2cap::CID_LE_SIGNALING => {
+                // Only an LE link where we are central may be asked for new parameters
+                // (the peripheral asks the central); anything else is refused.
+                let le_central = self.conns.iter().find(|c| c.handle == handle).is_some_and(|c| c.le && c.central);
+                match l2cap::signal(cid, payload) {
+                    Signal::Reply(r) => self.send_l2cap(handle, cid, &r),
+                    Signal::Accepted { min, max, latency, timeout, reply } if le_central => {
+                        self.send_l2cap(handle, cid, &reply);
+                        let mut p = handle.to_le_bytes().to_vec();
+                        for v in [min, max, latency, timeout, 0, 0] { p.extend_from_slice(&v.to_le_bytes()); }
+                        self.send_command(hci::command(code::LE_CONNECTION_UPDATE, &p));
+                    }
+                    Signal::Accepted { .. } => {
+                        // Command not understood (0x0000): we are not the central here.
+                        if payload.len() >= 2 {
+                            self.send_l2cap(handle, cid, &l2cap::command(l2cap::sig::COMMAND_REJECT, payload[1], &[0, 0]));
+                        }
+                    }
+                    Signal::Nothing => {}
+                }
+            }
             l2cap::CID_ATT => {
                 // Requests from the peer's client: we serve no attributes yet.
                 if let Some(r) = att::serve(payload) { self.send_l2cap(handle, cid, &r); return; }

@@ -62,14 +62,16 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u3
     let entry = store::find(&directory[..sectors * store::SECTOR], name).ok_or(store::NOT_FOUND)?;
     if entry.len == 0 || entry.len as usize > store::IMAGE_BYTES { return Err(store::TOO_LARGE); }
     if entry.lba < store::DIRECTORY_LBA + sectors as u64 { return Err(store::CORRUPT); }
+    // One command per shared-buffer run (up to 128 KiB), copied straight into the image:
+    // a page at a time, a 26 MiB program cost 6,600 drive round trips.
+    let run = (crate::vfs::diskfs_bridge_buf_len() as usize & !(store::SECTOR - 1)).max(BLOCK_BYTES);
     let (mut lba, mut done, len) = (entry.lba, 0usize, entry.len as usize);
     while done < len {
         // The drive transfers whole sectors; the last one may be only partly the file's.
-        let bytes = (len - done).min(BLOCK_BYTES).next_multiple_of(store::SECTOR).min(BLOCK_BYTES);
-        let mut block = [0u8; BLOCK_BYTES];
-        read(lba, bytes as u64, &mut block, buf_va)?;
+        let bytes = (len - done).next_multiple_of(store::SECTOR).min(run);
+        if DiskFs::diskfs_block_read(lba * store::SECTOR as u64, bytes as u64, sex_pdx::SLOT_BUF_LEND) != 0 { return Err(store::IO); }
         let used = (len - done).min(bytes);
-        image[done..done + used].copy_from_slice(&block[..used]);
+        image[done..done + used].copy_from_slice(unsafe { core::slice::from_raw_parts(buf_va as *const u8, used) });
         done += used;
         lba += (bytes / store::SECTOR) as u64;
     }

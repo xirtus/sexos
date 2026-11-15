@@ -34,7 +34,8 @@ pub fn extent(l: &Layout) -> (i32, i32) {
 /// send one finger per report: then `count` is the slots this report carries.
 pub fn decode(l: &Layout, raw: &[u8]) -> Option<Frame> {
     let report = if l.uses_report_ids {
-        if raw.first().copied() != l.touch_report { return None; }
+        let first = *raw.first()?;
+        if Some(first) != l.touch_report { return None; }
         &raw[1..]
     } else { raw };
     let mut f = Frame::default();
@@ -96,5 +97,12 @@ pub(crate) mod tests {
         assert_eq!(extent(&l), (3000, 2000));
         // Another report id is not ours.
         assert_eq!(decode(&l, &[2, 0, 0]), None);
+    }
+
+    #[test]
+    fn empty_report_with_report_ids_is_ignored() {
+        let l = parse(&ptp_descriptor()).unwrap();
+        assert!(l.uses_report_ids);
+        assert!(decode(&l, &[]).is_none());
     }
 }

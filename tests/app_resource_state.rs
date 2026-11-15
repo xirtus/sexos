@@ -124,3 +124,60 @@ fn page(va:u64,leaf:u64,pa:u64)->PrivatePage{PrivatePage{va,leaf,expected:pa|5|(
  assert_eq!(retire_private_pages(&[p,r],|l|if l==1{leaf|0x20}else{leaf2},|_|{},|_|{}),Ok(2));
  assert_eq!(bring_in(&mut p,42,8,leaf,0xC000),Err(DENIED));
 }
+/// Drag: a VM loan takes only frames lent as given, and never a Denim marker.
+#[test]fn vm_loan_takes_present_heap_frames_and_sends_markers_to_denim(){
+ use sex_pdx::denim::out_marker;
+ let p=PrivatePage{va:0x4000,leaf:1,expected:0x9000|7|(8u64<<59)|(1<<63)};
+ // Touched pages lend as they are: accessed and dirty are the hardware's.
+ for leaf in [p.expected,p.expected|0x20,p.expected|0x60]{assert_eq!(loan(&p,leaf,true),Loan::Frame(0x9000));}
+ // A nonpresent, read-only (for a writing guest), rekeyed or moved page is refused.
+ for leaf in [p.expected&!1,p.expected^0x1000,(p.expected&!(15<<59))|(5<<59),0]{assert_eq!(loan(&p,leaf,false),Loan::Refused,"{leaf:#x}");}
+ let ro=PrivatePage{expected:p.expected&!2,..p};assert_eq!(loan(&ro,ro.expected,true),Loan::Refused);assert_eq!(loan(&ro,ro.expected,false),Loan::Frame(0x9000));
+ // Out with Denim: the leaf names the row (target 42 → 0x2a600), never a frame.
+ let mut out=p;let mut leaf=p.expected;take_out(&mut out,42,8,leaf,|_,new|{leaf=new;true}).unwrap();
+ assert_eq!(leaf,out_marker(42));
+ for writable in [false,true]{assert_eq!(loan(&out,leaf,writable),Loan::Out);assert_eq!(loan(&p,leaf,writable),Loan::Out);}
+}
+/// Drag and Denim at once, in the kernel's lock order (program table, then VMs): a frame
+/// a VM maps never goes back while the loan stands, and every page ends lent or out.
+#[test]fn vm_loans_and_denim_never_share_a_frame(){
+ use std::sync::{Arc,Mutex};
+ #[derive(Default)]struct Vms{loans:Vec<u64>}
+ struct Table{pages:Vec<(PrivatePage,u64)>,freed:Vec<u64>}
+ for round in 0..200{
+  let pages=(0..8u64).map(|i|{let p=PrivatePage{va:0x4000+i*4096,leaf:i+1,expected:(0x10000+i*4096)|7|(8u64<<59)|(1<<63)};(p,p.expected)}).collect();
+  let table=Arc::new(Mutex::new(Table{pages,freed:vec![]}));let vms=Arc::new(Mutex::new(Vms::default()));
+  let (t,v)=(table.clone(),vms.clone());
+  let drag=std::thread::spawn(move||{for i in (0..8).rev(){
+   // lend: the frame is read and the loan recorded under the table.
+   let t=t.lock().unwrap();let (p,leaf)=t.pages[i];
+   if let Loan::Frame(f)=loan(&p,leaf,true){v.lock().unwrap().loans.push(f);}
+  }});
+  let (t,v)=(table.clone(),vms.clone());
+  let denim=std::thread::spawn(move||{for i in 0..8{
+   // denim_out: the table, then `vmx::lent`, then the frame goes back.
+   let mut t=t.lock().unwrap();let frame=t.pages[i].0.expected&PHYSICAL_MASK;
+   if v.lock().unwrap().loans.contains(&frame){continue}
+   let (mut p,mut leaf)=t.pages[i];
+   if let Ok(f)=take_out(&mut p,42,8,leaf,|_,new|{leaf=new;true}){t.pages[i]=(p,leaf);t.freed.push(f);}
+   if round%3==0{drop(t);std::thread::yield_now();}
+  }});
+  drag.join().unwrap();denim.join().unwrap();
+  let (t,v)=(table.lock().unwrap(),vms.lock().unwrap());
+  for f in &v.loans{assert!(!t.freed.contains(f),"round {round}: frame {f:#x} lent and freed");}
+  assert_eq!(v.loans.len()+t.freed.len(),8,"round {round}: every page is lent or out");
+ }
+}
+/// The lock order the two tests above model is the kernel's: `vmx` takes its VM lock only
+/// inside `heap_frames`'s closure, and the program table calls into `vmx` under the table.
+#[test]fn vm_lock_is_taken_after_the_program_table(){
+ let vmx=include_str!("../kernel/src/vmx.rs");let res=include_str!("../kernel/src/app_resources.rs");
+ let lend=&vmx[vmx.find("fn lend(").unwrap()..];let lend=&lend[..lend.find("\n}\n").unwrap()];
+ let (frames,lock)=(lend.find("heap_frames(").unwrap(),lend.find("VMS.lock()").unwrap());
+ assert!(frames<lock,"lend takes VMS before the program table");
+ assert_eq!(vmx.matches("crate::app_resources::").count(),1,"vmx calls the program table only from lend");
+ assert!(!res.contains("VMS"),"app_resources reaches VMs only through vmx::lent/revoke");
+ let out=&res[res.find("pub fn denim_out(").unwrap()..];let out=&out[..out.find("\n}\n").unwrap()];
+ let (table,lent,give)=(out.find("apps_lock!()").unwrap(),out.find("crate::vmx::lent(").unwrap(),out.find("program_frames::give").unwrap());
+ assert!(table<lent&&lent<give,"denim_out checks loans under the table before the frame goes back");
+}
