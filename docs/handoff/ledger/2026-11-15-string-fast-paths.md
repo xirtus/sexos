@@ -56,3 +56,14 @@ PR274 separately advanced to 83a2b514 after its prior run passed nineteen jobs
 but the daily-use gate stopped before session-save completion. Master already
 contains the exact wait. Fresh run 43654690898 must pass all checks including
 aggregate build before merge. This branch's object/string work remains excluded.
+
+Integration follow-up: d6bbde188 merges that same PR274 head into this separate
+branch. All eight targeted differential tests still pass, and the browser builds.
+The rebuilt browser (SHA256
+4bbb9e496e3f4bc71ca53cb35e997443196dda715e15c3ce21f1e197e8902b71)
+passes off/on native output equality on the same frozen ISO, with 15,055 property
+hits, 67 concatenations and 582 comparisons enabled; native counts remain
+12 / 13,415 / 3 / 0 with domain seals. This is not a fresh integrated-ISO proof
+or a new performance measurement. Evidence and hashes are under
+`target/browser-evidence/object-string-integrated-native/{result,receipt}.json`;
+raw serial SHA256 5f19476d1c242d7db2304d8f5848feeefc003803f520ec236da41c04a42e7460.
