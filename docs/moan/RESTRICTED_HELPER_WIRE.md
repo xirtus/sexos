@@ -153,3 +153,26 @@ The role aims at file/network/parent-memory confidentiality and integrity. Own
 heap/code/worker syscalls and public metadata/serial remain callable; bounded
 process timeout does not establish global CPU/memory/disk DoS isolation. Current
 plugin host is not a completed hostile-plugin sandbox or live insert.
+
+### Files immutable job admission (kind 30)
+
+The parent sends an FS request with kind 30, empty path, offset 1 and a bounded
+payload in DATA. `MOANJOB2` is 48 bytes followed by three explicit `@/` paths:
+format byte at 8 (CLAP=0, VST3=1), zero bytes 9..12, cookie u32 at 12,
+nonce 16 bytes at 16, three u16 path lengths at 32, and zero bytes 38..48.
+Paths are at most 192 bytes each; controls, spaces, empty/dot components, aliases,
+relative paths and trailing bytes are refused. All three paths must already be
+held by the exact live parent main task. This first storage implementation admits
+only the System sexfs volume; mounted/home backends are explicitly refused.
+
+Files copies both inputs, computes their full SHA256 privately, reserves output
+space fallibly, and holds at most two jobs for at most 120 seconds. Job IDs never
+repeat within the Files epoch. A same-sequence retry must match all three request
+words and every copied payload byte. SYS29 Full retains the exact pending reply;
+actual delivery checks Files epoch and the current parent task again. Provider
+restart discards all positive jobs; the separate deny journal remains deny-only.
+
+This admission creates no child or positive file rights by itself. The reserved
+Shell controls CLAIM/DESCRIBE/LOAD/COPIED (0x4d505010..13) are not yet dispatched.
+Only a subsequent fully authenticated five-provider transaction can associate a
+job with an attested dormant helper. No generic PREPARE ticket is reused.

@@ -55,6 +55,7 @@ impl Platform for Kernel {
 pub fn initialize() {
     Turn::enter().state().initialize(&JOURNAL, &mut Kernel)
 }
+pub fn job_live(binding:sex_pdx::restricted_helper::Binding,now:u64)->bool { Turn::enter().state().job_live(binding,now) }
 pub fn pending() -> bool {
     Turn::enter().state().pending()
 }

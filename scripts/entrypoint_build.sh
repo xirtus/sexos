@@ -44,6 +44,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/lib.rs
   crates/sex-pdx/src/input_diagnostics.rs
   crates/sex-pdx/src/autofill.rs
+  crates/sex-pdx/src/restricted_job.rs
   crates/sex-pdx/src/restricted_helper.rs
   crates/sex-pdx/src/restricted_helper_journal.rs
   crates/sex-pdx/src/restricted_helper_provider.rs

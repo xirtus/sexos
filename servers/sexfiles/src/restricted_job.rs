@@ -202,6 +202,8 @@ impl Job {
     pub fn parent(&self) -> Subject {
         self.parent
     }
+    pub fn cookie(&self) -> u32 { self.cookie }
+    pub fn frames(&self) -> usize { self.frames }
     pub fn nonce(&self) -> [u8; 16] {
         self.nonce
     }
