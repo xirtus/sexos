@@ -25,6 +25,9 @@ def check(text):
         (r'\[cufflinks\.start\]', 'Cufflinks never ran'),
         (r'\[cufflinks\.transport\] ok=1 slot=1003', 'Cufflinks did not find its region'),
         (r'\[sexusb\.bt\.route\] region=1', 'SexUSB did not find the region'),
+        (r'\[boot\.bt\.audio\] bell=[1-9]\d* cufflinks=52 slot=1006 bytes=262144 runtime_mint=0', 'Bluetooth audio region not paired with Bell'),
+        (r'\[cufflinks\.audio\.route\] ok=1 slot=1006', 'Cufflinks did not find the Bell audio region'),
+        (r'\[bell\.bt\.route\] region=1', 'Bell did not find the Bluetooth audio region'),
     ]
     for pattern, why in need:
         if not re.search(pattern, text): fails.append(why)
