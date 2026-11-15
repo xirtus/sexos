@@ -24,6 +24,7 @@ pub mod proj;
 pub mod raster;
 pub mod render;
 pub mod rigview;
+pub mod sculptview;
 pub mod sidebar;
 #[cfg(test)]
 mod tests;
@@ -99,6 +100,8 @@ pub enum Modal {
     WeightGradient { stroke: Box<crate::rig::paint::Stroke>, a: (f32, f32), radial: bool },
     /// F / Shift+F: brush radius or strength from the mouse.
     BrushSize { strength: bool, x0: i32, orig: f32 },
+    /// Sculpt Mode, Vertex Paint and Texture Paint (strokes, box mask...).
+    Sculpt(Box<sculptview::SModal>),
 }
 
 pub struct State {
@@ -149,6 +152,8 @@ pub struct State {
     pub panels: [bool; 6],
     pub median_global: bool,
     dims: Option<(u64, usize, Option<Vec3>)>,
+    /// The paint colour picker (Vertex and Texture Paint).
+    pub picker: Option<crate::editors::properties::picker::Picker>,
 }
 
 pub struct WorldObj {
@@ -200,6 +205,7 @@ impl Default for State {
             panels: [true; 6],
             median_global: false,
             dims: None,
+            picker: None,
         }
     }
 }
@@ -227,7 +233,7 @@ pub fn is_modal(s: &State) -> bool {
 
 /// Whether the viewport wants more frames without input (progressive render).
 pub fn wants_tick(s: &State) -> bool {
-    s.refining
+    s.refining || sculptview::wants_tick(s)
 }
 
 fn cam_key(c: &ViewCamera) -> [u32; 8] {
@@ -465,18 +471,51 @@ fn camera_to_view(s: &State, d: &mut Doc) {
 // ---------------------------------------------------------------- caches
 
 fn ensure_cache(s: &mut State, d: &mut Doc) {
+    if !d.sculpt.live.is_empty() || d.sculpt.live_full {
+        let patched = match &mut s.cache {
+            Some((g, full, _)) if *g == d.generation => crate::sculpt::take_live(d, |oi, pos, nrm, verts| full.patch_object(oi, pos, nrm, verts)),
+            _ => crate::sculpt::take_live(d, |_, _, _, _| false),
+        };
+        if !patched {
+            crate::sculpt::touch_ours(d);
+        }
+    }
     if s.cache.as_ref().is_some_and(|c| c.0 == d.generation) {
         return;
     }
     // In Edit Mode the edited object shows its edit overlay, not an outline.
     let saved = d.scene.selected.clone();
-    if d.mode == Mode::Edit {
+    if d.mode == Mode::Edit || sculptview::active(d) {
         if let Some(a) = d.active() {
             d.scene.selected.retain(|&i| i != a);
         }
     }
     let pinned = crate::rig::shapes::pin(d);
-    let full = ViewportScene::new(&d.scene);
+    // Sculpt Mode shows a Multires object at its sculpt level.
+    let mut shown_levels = None;
+    if d.mode == Mode::Sculpt {
+        if let Some(a) = d.active() {
+            if let Some(md) = crate::sculpt::multires_of(d, a) {
+                if let sex_3d::modifiers::Modifier::Multires { levels, sculpt_levels, .. } = &mut d.scene.objects[a].modifiers[md] {
+                    shown_levels = Some((a, md, *levels));
+                    *levels = *sculpt_levels;
+                }
+            }
+        }
+    }
+    let paint_obj = if sculptview::active(d) { d.active() } else { None };
+    let dd: &Doc = d;
+    let full = ViewportScene::new_with(&dd.scene, &|oi, m, tris| {
+        if Some(oi) != paint_obj {
+            return None;
+        }
+        Some(sex_3d::render::viewport::ObjectOverlay { corner_colors: crate::sculpt::overlay_colors(dd, oi, m, tris), hide_hidden: dd.mode == Mode::Sculpt })
+    });
+    if let Some((a, md, l)) = shown_levels {
+        if let sex_3d::modifiers::Modifier::Multires { levels, .. } = &mut d.scene.objects[a].modifiers[md] {
+            *levels = l;
+        }
+    }
     crate::rig::shapes::unpin(d, pinned);
     let shell = Scene {
         name: String::new(),
@@ -676,6 +715,14 @@ fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: 
         "view3d.toggle_xray" => s.xray = !s.xray,
         "view3d.toolbar" => s.show_toolbar = !s.show_toolbar,
         "view3d.sidebar" => s.show_sidebar = !s.show_sidebar,
+        "view3d.sidebar_tab" => {
+            s.show_sidebar = true;
+            s.side_tab = match arg {
+                "TOOL" => SideTab::Tool,
+                "VIEW" => SideTab::View,
+                _ => SideTab::Item,
+            };
+        }
         "view3d.camera_to_view" => camera_to_view(s, d),
         "view3d.object_as_camera" => {
             if let Some(a) = d.active().filter(|&a| matches!(d.scene.objects[a].data, ObjectData::Camera(_))) {
@@ -878,6 +925,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         s.modal = Modal::None;
     }
     let lay = layout(s, d, r);
+    let picker_input = sculptview::picker_claims(s, ui);
     if let Some(inp) = ui.input {
         let busy = ui.st.active.is_some() || ui.st.editing.is_some();
         let header_before = modal_header(s);
@@ -910,6 +958,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         draw_all(s, d, ui, r, &lay);
         ui.input = keep;
     }
+    sculptview::picker_draw(s, d, ui, r, picker_input);
 }
 
 fn signature(s: &State, d: &Doc) -> (u64, [u32; 8], u32, [u32; 3], u8) {
@@ -927,6 +976,7 @@ fn draw_all(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, lay: &Layout) {
     let proj = Proj::new(&s.cam, r);
     overlay::scene_image(s, d, ui, r);
     rigview::draw_weights(d, ui, &proj);
+    sculptview::draw_texture(d, ui, &proj);
     if s.camera_view {
         overlay::camera_frame(s, d, ui, r);
     }
@@ -944,7 +994,8 @@ fn draw_all(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, lay: &Layout) {
     }
     overlay::modal_overlay(s, d, ui, &proj);
     rigview::draw_brush(d, ui, r);
-    if s.show_gizmo && s.show_tool_gizmo && !is_modal(s) {
+    sculptview::draw_brush(s, d, ui, r);
+    if s.show_gizmo && s.show_tool_gizmo && !is_modal(s) && !sculptview::active(d) {
         widgets::draw_tool_gizmo(s, d, ui, &proj);
     }
     if s.show_overlays && s.show_text {
@@ -1013,7 +1064,7 @@ fn handle_event(s: &mut State, d: &mut Doc, ui: &mut Ui, inp: Input, r: Rect) {
 fn left_down(s: &mut State, d: &mut Doc, ui: &mut Ui, x: i32, y: i32, mods: Mods, r: Rect) {
     let p = Proj::new(&s.cam, r);
     let (fx, fy) = (x as f32, y as f32);
-    if rigview::paint_press(s, d, &p, x, y, mods) {
+    if rigview::paint_press(s, d, &p, x, y, mods) || sculptview::press(s, d, &p, x, y, mods) {
         return;
     }
     if s.show_gizmo && s.show_tool_gizmo {
@@ -1149,6 +1200,9 @@ fn key_down(s: &mut State, d: &mut Doc, ui: &mut Ui, key: Key, mods: Mods, r: Re
     let edit_mode = rigview::mesh_edit(d);
     let m = mouse_in(ui, r);
     let q = |d: &mut Doc, id: &str, arg: &str| d.queue.push(Op::with(id, arg));
+    if sculptview::key(s, d, ui, key, mods, &Proj::new(&s.cam, r)).is_some() {
+        return true;
+    }
     if let Some(after) = rigview::key(s, d, ui, key, mods) {
         match after {
             rigview::After::Nothing => {}
@@ -1377,6 +1431,7 @@ fn handle_modal(s: &mut State, d: &mut Doc, ui: &mut Ui, inp: Input, r: Rect) {
     s.modal = match modal {
         Modal::None => Modal::None,
         m @ (Modal::WeightPaint { .. } | Modal::WeightGradient { .. } | Modal::BrushSize { .. }) => rigview::modal(d, &p, inp, m),
+        Modal::Sculpt(m) => sculptview::modal(s, d, &p, inp, *m),
         Modal::Orbit | Modal::Pan | Modal::Zoom => match inp {
             Input::Move { x, y } => {
                 let (dx, dy) = ((x - s.last.0) as f32, (y - s.last.1) as f32);

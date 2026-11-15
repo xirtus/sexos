@@ -2,7 +2,8 @@
 //! the document state polyops has no words for (animation, render and scene
 //! settings, text blocks, the current frame). That state rides in `#@` comment
 //! lines, so the file stays a valid polyops script that `sex_3d::script::run`
-//! (and the Python package) still read as a plain scene.
+//! (and the Python package) still read as a plain scene. Sculpt and paint
+//! data and the scene's images (embedded PNG) are in `persist/sculptio.rs`.
 
 use crate::doc::Doc;
 use crate::settings::{Engine, RotationMode, Settings, UnitSystem};
@@ -34,6 +35,7 @@ pub fn save(doc: &Doc) -> String {
     for (name, body) in &doc.texts {
         out.push_str(&format!("#@text {}\t{}\n", esc(name), esc(body)));
     }
+    sculptio::save(&scene, &mut out);
     trees::save(&doc.scene, &mut out);
     out
 }
@@ -41,7 +43,10 @@ pub fn save(doc: &Doc) -> String {
 /// Read a `.poly` file back into a document.
 pub fn load(text: &str) -> Result<Doc, String> {
     let mut scene = Scene::new();
+    // Images first: polyops names them in material trees (`prop:image`).
+    sculptio::load_images(&mut scene, text);
     sex_3d::script::run(&mut scene, text).map_err(|e| e.to_string())?;
+    sculptio::load(&mut scene, text);
     let mut doc = Doc::new(scene);
     let mut st = rigio::Loader::default();
     for line in text.lines() {
@@ -76,6 +81,7 @@ pub fn load(text: &str) -> Result<Doc, String> {
 }
 
 mod rigio;
+mod sculptio;
 mod trees;
 
 pub(crate) fn esc(s: &str) -> String {

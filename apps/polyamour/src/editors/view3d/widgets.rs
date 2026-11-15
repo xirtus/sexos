@@ -96,7 +96,15 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     let flags = menus::ViewFlags { toolbar: s.show_toolbar, sidebar: s.show_sidebar };
     let view = move |d: &Doc| menus::view_menu(d, &flags);
     let rig_menus = super::rigview::header_menus(d);
-    let menu_end = if let Some(extra) = &rig_menus {
+    let paint_menus = super::sculptview::header_menus(d);
+    let menu_end = if let Some(extra) = &paint_menus {
+        let mut list: Vec<(&str, &dyn Fn(&Doc) -> Vec<MenuItem>)> = vec![("View", &view)];
+        for (t, f) in extra {
+            list.push((t, f));
+        }
+        let end = header_menus(ui, hr, x, &list, d);
+        super::sculptview::tool_header(s, d, ui, Rect::new(end + 12, y, (hr.right() - end - 12 - 340).max(0), h))
+    } else if let Some(extra) = &rig_menus {
         let mut list: Vec<(&str, &dyn Fn(&Doc) -> Vec<MenuItem>)> = vec![("View", &view)];
         for (t, f) in extra {
             list.push((t, f));
@@ -187,6 +195,9 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     }
 
     // The middle: orientation, pivot, snapping, proportional editing.
+    if paint_menus.is_some() {
+        return;
+    }
     let cw = 96 + 4 + 36 + 8 + 28 + 1 + 34 + 8 + 28 + 1 + 18;
     let cx = (hr.x + hr.w / 2 - cw / 2).max(menu_end + 12);
     if cx + cw > right_start {
@@ -263,12 +274,19 @@ pub fn toolbar_tools(d: &Doc) -> Vec<Option<Tool>> {
 }
 
 pub fn toolbar_rect(d: &Doc, r: Rect) -> Rect {
+    if super::sculptview::active(d) {
+        return super::sculptview::toolbar_rect(d, r);
+    }
     let tools = toolbar_tools(d);
     let h: i32 = tools.iter().map(|t| if t.is_some() { BS + 2 } else { GAP }).sum::<i32>() + 8;
     Rect::new(r.x + 4, r.y + 6, BS + 8, h.min(r.h - 10))
 }
 
 pub fn toolbar(_s: &mut State, d: &mut Doc, ui: &mut Ui, tr: Rect, _r: Rect) {
+    if super::sculptview::active(d) {
+        super::sculptview::toolbar(d, ui, tr);
+        return;
+    }
     let mut y = tr.y + 4;
     let x = tr.x + 4;
     let mut hover_tip: Option<(Rect, &'static str)> = None;

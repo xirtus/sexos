@@ -59,10 +59,32 @@ fn mesh(l: &mut L, d: &mut Doc, o: usize, mi: usize) {
             d.report = "Adding or removing UV maps is not available yet; use UV unwrapping in Edit Mode".into();
         }
     });
-    l.panel(d, "data.color_attributes", "Color Attributes", false, &mut |l, d| {
-        let (b, _) = l.list_box(&[], 0, 3);
-        if b != 0 {
-            d.report = "Color attributes are not available yet".into();
+    l.panel(d, "data.color_attributes", "Color Attributes", true, &mut |l, d| {
+        let m = &d.scene.meshes[mi];
+        let rows: Vec<(Icon, String)> = m
+            .color_attributes
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let render = if i == m.render_color { "  (render)" } else { "" };
+                (Icon::Texture, format!("{}    {}{render}", a.name, a.domain.label()))
+            })
+            .collect();
+        let (b, picked) = l.list_box(&rows, m.active_color, 3);
+        if d.active() != Some(o) && (b != 0 || picked.is_some()) {
+            d.select_only(Some(o));
+        }
+        match b {
+            1 => d.run(&crate::ui::Op::with("geometry.color_attribute_add", "Color\tCORNER")),
+            2 => d.run(&crate::ui::Op::new("geometry.color_attribute_remove")),
+            _ => {}
+        }
+        if let Some(i) = picked {
+            d.run(&crate::ui::Op::with("geometry.color_attribute_set_active", &i.to_string()));
+        }
+        if !d.scene.meshes[mi].color_attributes.is_empty() && l.button("Set as Render Color") {
+            let a = d.scene.meshes[mi].active_color;
+            d.run(&crate::ui::Op::with("geometry.color_attribute_render_set", &a.to_string()));
         }
     });
     l.panel(d, "data.attributes", "Attributes", false, &mut |l, d| {

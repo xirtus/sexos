@@ -4,7 +4,8 @@
 //! window once into a PNG (used for docs and visual checks); `--node-demo`
 //! gives the startup material a few texture nodes and opens Shading;
 //! `--rig-demo` poses a skinned, keyed armature in the Animation workspace
-//! with the Graph Editor below.
+//! with the Graph Editor below; `--sculpt-demo` shows a sculpted sphere with
+//! a mask and face sets in the Sculpting workspace.
 use polyamour::input::Input;
 #[cfg(target_os = "hermit")]
 use polyamour::input::{Button, Key, Mods};
@@ -29,6 +30,7 @@ fn main() {
     let mut app = App::new(1600, 900);
     let mut out = None;
     let mut rig_demo = false;
+    let mut sculpt_demo = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -42,6 +44,10 @@ fn main() {
                 polyamour::nodetree::demo_textures(&mut app.doc);
                 app.doc.want_workspace = Some("Shading".into());
             }
+            "--sculpt-demo" => {
+                polyamour::sculpt::demo(&mut app.doc);
+                sculpt_demo = true;
+            }
             "--rig-demo" => {
                 polyamour::rig::demo(&mut app.doc);
                 app.doc.want_workspace = Some("Animation".into());
@@ -52,6 +58,14 @@ fn main() {
     }
     app.frame(Input::Tick);
     app.frame(Input::Tick);
+    if sculpt_demo {
+        // The Sculpting workspace's view frames the sphere, the sidebar
+        // shows the brush settings.
+        app.doc.view_ops.push(polyamour::ui::Op::new("view3d.view_selected"));
+        app.doc.view_ops.push(polyamour::ui::Op::with("view3d.sidebar_tab", "TOOL"));
+        app.frame(Input::Tick);
+        app.frame(Input::Tick);
+    }
     if rig_demo {
         use polyamour::editors::{Editor, EditorKind};
         let ws = app.active_ws;
@@ -63,7 +77,7 @@ fn main() {
         app.frame(Input::Tick);
     }
     let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [scene file]");
+        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [scene file]");
         return;
     };
     let f = std::fs::File::create(&out).expect("create png");

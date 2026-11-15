@@ -7,6 +7,11 @@
 //! Numpad 1 shows it 1:1. Image > Save As writes it as a PNG with the small
 //! encoder below (stored deflate: no compression crate on SexOS).
 //!
+//! The image browser also lists the scene's images (texture paint slots,
+//! Image > New). A scene image can be painted in 2D in Paint mode with the
+//! Texture Paint brushes (Ctrl+click sets the Clone brush's source); Image >
+//! Save writes it as a PNG next to the document.
+//!
 //! The UV Editor draws the active mesh's face-corner UVs over the 0..1 grid in
 //! Blender's UV editor colours: in Edit Mode the selected faces (Blender's
 //! default without sync selection), otherwise every face. UVs are selected
@@ -53,6 +58,31 @@ pub struct State {
     press: Option<(i32, i32, Mods, Option<(i32, i32)>)>,
     /// A running G/R/S transform.
     pub modal: Option<UvTransform>,
+    /// What the browser picked: the render or a scene image. None: the
+    /// texture being painted, else the render.
+    pub show: Option<Shown>,
+    /// Image Editor mode: View (false) or Paint.
+    pub paint: bool,
+    /// A 2D paint stroke in progress and the last texel it painted at.
+    stroke: Option<(crate::sculpt::PaintStroke, (f32, f32))>,
+    /// The Clone brush's source texel (Ctrl+click).
+    clone_src: Option<(f32, f32)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shown {
+    Render,
+    Image(usize),
+}
+
+/// The scene image the editor shows, or None for the Render Result.
+pub fn shown_image(s: &State, d: &Doc) -> Option<usize> {
+    match s.show {
+        Some(Shown::Image(i)) if i < d.scene.images.len() => Some(i),
+        Some(Shown::Render) if d.render.is_some() => None,
+        _ if d.mode == Mode::TexturePaint || d.render.is_none() => crate::sculpt::paint_image(d),
+        _ => None,
+    }
 }
 
 impl State {
@@ -71,6 +101,10 @@ impl State {
             mouse: (0, 0),
             press: None,
             modal: None,
+            show: None,
+            paint: false,
+            stroke: None,
+            clone_src: None,
         }
     }
     /// Faces whose every corner is selected.
@@ -210,7 +244,7 @@ fn image_menus(s: &State) -> (Vec<MenuItem>, Vec<MenuItem>) {
         MenuItem::op("New", "Alt N", Op::new("image.new")),
         MenuItem::op("Open...", "Alt O", Op::new("image.open")),
         MenuItem::Separator,
-        m("Save", "Alt S", "image.save_as"),
+        m("Save", "Alt S", "image.save"),
         m("Save As...", "Shift Alt S", "image.save_as"),
     ];
     (view, image)
@@ -274,20 +308,42 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     };
     x = end + 10;
     // The image datablock.
-    let name = if s.kind == EditorKind::ImageEditor && d.render.is_some() { "Render Result" } else { "" };
+    let shown = shown_image(s, d);
+    let name = if s.kind == EditorKind::ImageEditor && d.render.is_some() && shown.is_none() { "Render Result" } else { "" };
     let br = Rect::new(x, y, 36, h);
     if ui.dropdown(br, "") {
         let mut items = Vec::new();
-        if d.render.is_some() {
-            items.push(MenuItem::op("Render Result", "", Op::new("image.browse")));
-        } else {
+        if d.render.is_some() && s.kind == EditorKind::ImageEditor {
+            items.push(MenuItem::Check("Render Result".into(), shown.is_none(), anim::mail("image.show", s.id, "RENDER")));
+        }
+        for (i, img) in d.scene.images.iter().enumerate() {
+            items.push(MenuItem::Check(img.name.clone(), shown == Some(i), anim::mail("image.show", s.id, &i.to_string())));
+        }
+        if items.is_empty() {
             items.push(MenuItem::Heading("No images (F12 renders one)".into()));
         }
         ui.open_menu(br, "", items);
     }
     image_icon(ui.p, br);
     x = br.right() + 2;
-    if name.is_empty() {
+    if let Some(i) = shown {
+        let dirty = if d.sculpt.dirty_images.contains(&i) { "*" } else { "" };
+        let nr = Rect::new(x, y, 150, h);
+        ui.p.round_rect(nr, 4, t::BUTTON_DARK);
+        ui.p.label(Rect::new(nr.x + 6, nr.y, nr.w - 8, nr.h), &format!("{}{dirty}", d.scene.images[i].name), t::TEXT, Align::Left);
+        x = nr.right() + 8;
+        if s.kind == EditorKind::ImageEditor {
+            let mr = Rect::new(x, y, 96, h);
+            let mut m = s.paint as usize;
+            if ui.segmented(mr, &["View", "Paint"], &mut m) {
+                s.paint = m == 1;
+            }
+            x = mr.right() + 10;
+            if s.paint && hr.right() - x > 330 {
+                paint_header(d, ui, Rect::new(x, y, hr.right() - x, h));
+            }
+        }
+    } else if name.is_empty() {
         let nb = Rect::new(x, y, 60, h);
         if ui.button(nb, "+ New") {
             d.queue.push(Op::new("image.new"));
@@ -311,6 +367,28 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     }
 }
 
+/// Brush, colour, radius and strength for 2D painting.
+fn paint_header(d: &mut Doc, ui: &mut Ui, r: Rect) {
+    use sex_3d::paint::texture::TexBrush;
+    let mut x = r.x;
+    let br = Rect::new(x, r.y, 100, r.h);
+    if ui.dropdown(br, d.sculpt.tp.brush.label()) {
+        let items = TexBrush::ALL.iter().map(|b| MenuItem::Check(b.label().into(), d.sculpt.tp.brush == *b, Op::with("paint.texture_brush", b.label()))).collect();
+        ui.open_menu(br, "Brush", items);
+    }
+    x += 106;
+    ui.swatch(Rect::new(x, r.y + 2, 28, r.h - 4), d.sculpt.tp.color);
+    x += 34;
+    let (mut rad, mut st) = d.sculpt.radius_strength(Mode::TexturePaint);
+    if ui.number(crate::ui::id("image/paint/radius"), Rect::new(x, r.y, 100, r.h), "Radius", &mut rad, 1.0, " px") {
+        d.sculpt.set_radius(Mode::TexturePaint, rad);
+    }
+    x += 104;
+    if ui.number(crate::ui::id("image/paint/strength"), Rect::new(x, r.y, 100, r.h), "Strength", &mut st, 0.01, "") {
+        d.sculpt.set_strength(Mode::TexturePaint, st);
+    }
+}
+
 fn image_icon(p: &mut Painter, r: Rect) {
     let b = Rect::new(r.x + 5, r.y + r.h / 2 - 5, 12, 10);
     p.frame(b, t::TEXT_DIM);
@@ -331,7 +409,14 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
             }
             "image.view_zoom_in" => s.zoom *= 1.25,
             "image.view_zoom_out" => s.zoom /= 1.25,
-            "image.save_as" => save_render(s, d),
+            "image.show" => {
+                s.show = if arg == "RENDER" { Some(Shown::Render) } else { arg.parse().ok().map(Shown::Image) };
+                s.fit = true;
+            }
+            "image.save" | "image.save_as" => match shown_image(s, d) {
+                Some(i) if s.kind == EditorKind::ImageEditor || d.render.is_none() => d.run(&Op::with("image.save", &i.to_string())),
+                _ => save_render(s, d),
+            },
             _ if s.kind == EditorKind::UvEditor => uv_mail(s, d, &op, &arg),
             _ => {}
         }
@@ -387,6 +472,10 @@ fn navigate(s: &mut State, ui: &mut Ui, r: Rect) {
 }
 
 fn image_body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
+    if let Some(i) = shown_image(s, d) {
+        scene_image_body(s, d, ui, r, i);
+        return;
+    }
     let Some((w, h)) = render_rgba(s, d) else {
         ui.p.label(r, "Render Result appears here after F12", t::TEXT_DIM, Align::Center);
         return;
@@ -434,6 +523,132 @@ fn image_body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     // Sample info line like Blender's footer: size and zoom.
     let info = format!("{w} x {h}   {:.0}%", s.zoom * 100.0);
     ui.p.label(Rect::new(r.x + 10, r.bottom() - 22, 300, 20), &info, t::TEXT_DIM, Align::Left);
+}
+
+/// A scene image (linear RGBA) shown in sRGB, painted on in Paint mode.
+fn scene_image_body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, i: usize) {
+    let (w, h) = (d.scene.images[i].width, d.scene.images[i].height);
+    if w == 0 || h == 0 {
+        return;
+    }
+    if s.fit {
+        s.fit = false;
+        s.zoom = ((r.w as f32 - 40.0) / w as f32).min((r.h as f32 - 40.0) / h as f32).clamp(0.02, 64.0);
+        s.pan = (0.0, 0.0);
+    }
+    navigate(s, ui, r);
+    let geom = |s: &State| {
+        let (cx, cy) = (r.x as f32 + r.w as f32 / 2.0 + s.pan.0, r.y as f32 + r.h as f32 / 2.0 + s.pan.1);
+        (cx - w as f32 * s.zoom / 2.0, cy - h as f32 * s.zoom / 2.0)
+    };
+    if s.paint {
+        paint_events(s, d, ui, r, i, geom(s));
+    } else if s.stroke.is_some() {
+        if let Some((st, _)) = s.stroke.take() {
+            crate::sculpt::end(d, st);
+        }
+    }
+    let (dx, dy) = geom(s);
+    let dw = w as f32 * s.zoom;
+    let dh = h as f32 * s.zoom;
+    let dest = Rect::new(dx.floor() as i32, dy.floor() as i32, dw.ceil() as i32 + 1, dh.ceil() as i32 + 1);
+    // Linear to sRGB through a table: the image changes under the brush.
+    let lut: Vec<u32> = (0..=1024).map(|k| (sex_3d::render::srgb_encode(k as f32 / 1024.0) * 255.0).round() as u32).collect();
+    let enc = |c: f32| lut[(c.clamp(0.0, 1.0) * 1024.0) as usize];
+    let img = &d.scene.images[i];
+    let p = &mut *ui.p;
+    let c = dest.intersect(&p.clip()).intersect(&r);
+    let inv = 1.0 / s.zoom;
+    let pw = p.width;
+    for y in c.y..c.bottom() {
+        let sy = ((y as f32 + 0.5 - dy) * inv) as i64;
+        if sy < 0 || sy >= h as i64 {
+            continue;
+        }
+        let row = y as usize * pw;
+        for x in c.x..c.right() {
+            let sx = ((x as f32 + 0.5 - dx) * inv) as i64;
+            if sx < 0 || sx >= w as i64 {
+                continue;
+            }
+            let q = img.pixels[sy as usize * w as usize + sx as usize];
+            let px = enc(q[0]) << 16 | enc(q[1]) << 8 | enc(q[2]);
+            let a = (q[3].clamp(0.0, 1.0) * 255.0) as u32;
+            p.pixels[row + x as usize] = if a >= 255 {
+                px
+            } else {
+                let check = if ((x - dest.x) / 8 + (y - dest.y) / 8) % 2 == 0 { 0x4d4d4d } else { 0x333333 };
+                crate::draw_mix(px, check, a)
+            };
+        }
+    }
+    if s.paint {
+        // The brush circle and the clone source.
+        let rad = d.sculpt.tp.radius;
+        let (mx, my) = s.mouse;
+        if r.contains(mx, my) {
+            ui.p.ring(mx as f32, my as f32, rad, 0xffffff);
+        }
+        if let (Some((cx, cy)), sex_3d::paint::texture::TexBrush::Clone) = (s.clone_src, d.sculpt.tp.brush) {
+            let (sx, sy) = (dx + cx * s.zoom, dy + cy * s.zoom);
+            ui.p.line(sx - 6.0, sy, sx + 6.0, sy, 0xff4040);
+            ui.p.line(sx, sy - 6.0, sx, sy + 6.0, 0xff4040);
+        }
+    }
+    let info = format!("{w} x {h}   {:.0}%{}", s.zoom * 100.0, if s.paint { "   Paint" } else { "" });
+    ui.p.label(Rect::new(r.x + 10, r.bottom() - 22, 300, 20), &info, t::TEXT_DIM, Align::Left);
+}
+
+/// 2D strokes on image `i`: left-drag paints, Ctrl+click picks the clone
+/// source. `(dx, dy)` is the image's top-left on screen.
+fn paint_events(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, i: usize, (dx, dy): (f32, f32)) {
+    let Some(input) = ui.input else { return };
+    let zoom = s.zoom;
+    let tex = |x: i32, y: i32| ((x as f32 + 0.5 - dx) / zoom, (y as f32 + 0.5 - dy) / zoom);
+    let radius = (d.sculpt.tp.radius / zoom).max(0.5);
+    let clip = ui.p.clip();
+    match input {
+        Input::Move { x, y } => {
+            s.mouse = (x, y);
+            if let Some((mut st, last)) = s.stroke.take() {
+                let at = tex(x, y);
+                // Space the dabs a fifth of the radius apart.
+                let dist = ((at.0 - last.0).powi(2) + (at.1 - last.1).powi(2)).sqrt();
+                let spacing = (radius * 0.2).max(0.5);
+                let n = (dist / spacing).floor() as i32;
+                let mut prev = last;
+                for k in 1..=n {
+                    let t = k as f32 * spacing / dist;
+                    let p = (last.0 + (at.0 - last.0) * t, last.1 + (at.1 - last.1) * t);
+                    crate::sculpt::image_dab(d, &mut st, p, radius, 1.0, (p.0 - prev.0, p.1 - prev.1), false);
+                    prev = p;
+                }
+                s.stroke = Some((st, prev));
+                ui.input = None;
+            }
+        }
+        Input::Down { x, y, button: Button::Left, mods } if r.contains(x, y) && clip.contains(x, y) => {
+            ui.input = None;
+            let at = tex(x, y);
+            if mods.ctrl {
+                s.clone_src = Some(at);
+                return;
+            }
+            let Some(mut st) = crate::sculpt::begin_image(d, i) else { return };
+            if let Some(src) = s.clone_src {
+                crate::sculpt::set_clone_offset(&mut st, (src.0 - at.0, src.1 - at.1));
+            }
+            crate::sculpt::image_dab(d, &mut st, at, radius, 1.0, (0.0, 0.0), false);
+            s.stroke = Some((st, at));
+        }
+        Input::Up { button: Button::Left, .. } => {
+            if let Some((st, _)) = s.stroke.take() {
+                crate::sculpt::end(d, st);
+                ui.input = None;
+            }
+        }
+        _ => {}
+    }
 }
 
 fn save_render(s: &mut State, d: &mut Doc) {

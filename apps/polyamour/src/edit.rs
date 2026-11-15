@@ -92,6 +92,7 @@ pub fn flush(d: &mut Doc) {
 /// Drop selected/hidden indices that no longer exist (after undo).
 pub fn sanitize(d: &mut Doc) {
     crate::rig::sanitize(d);
+    crate::sculpt::sanitize(d);
     if d.mode != Mode::Edit || crate::rig::edit_armature(d).is_some() || crate::rig::edit_lattice(d).is_some() {
         return;
     }

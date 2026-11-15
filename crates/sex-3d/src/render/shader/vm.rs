@@ -93,6 +93,8 @@ pub(crate) enum Op {
     TexCoord { object: Option<usize> },
     ObjectInfo,
     Attribute { uv: bool },
+    /// The Color Attribute (Vertex Color) node: the hit's interpolated color.
+    VertexColor,
     TangentNode { axis: Option<u8> },
     CameraData,
     Wireframe { pixel: bool },
@@ -120,6 +122,7 @@ impl Op {
                 | Op::TexCoord { .. }
                 | Op::ObjectInfo
                 | Op::Attribute { .. }
+                | Op::VertexColor
                 | Op::TangentNode { .. }
                 | Op::CameraData
                 | Op::Wireframe { .. }
@@ -1013,6 +1016,11 @@ pub(crate) fn exec(ins: &Instr, ctx: &ShadeCtx, regs: &mut [V4]) {
             }
             out[3] = f4(1.0);
             n_out = 4;
+        }
+        Op::VertexColor => {
+            out[0] = [ctx.vcol[0], ctx.vcol[1], ctx.vcol[2], 1.0];
+            out[1] = f4(ctx.vcol[3]);
+            n_out = 2;
         }
         Op::TangentNode { axis } => {
             out[0] = vec4(match axis {

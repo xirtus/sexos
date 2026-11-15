@@ -257,6 +257,10 @@ fn median(s: &mut State, d: &mut Doc, ui: &mut Ui, l: &mut Layout) {
 }
 
 fn tool_tab(s: &mut State, d: &mut Doc, ui: &mut Ui, l: &mut Layout) {
+    if super::sculptview::active(d) {
+        l.y = super::sculptview::tool_panels(s, d, ui, l.x, l.w, l.y);
+        return;
+    }
     let mut open = s.panels[1];
     if panel(ui, l, "Active Tool", &mut open) {
         let r = Rect::new(l.x, l.y, l.w, 28);

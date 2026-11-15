@@ -26,6 +26,8 @@ pub(crate) struct TriShade {
     /// Index into the light list for emissive triangles, else `u32::MAX`.
     pub light: u32,
     pub object: u32,
+    /// Corner colors of the mesh's render color attribute (white without one).
+    pub col: [[f32; 4]; 3],
 }
 
 /// A material reduced to what the BSDF needs.
@@ -358,6 +360,7 @@ fn object_triangles(scene: &Scene, oi: usize, mesh_to: Option<&Mat4>, default_ma
     let slots = &scene.objects[oi].materials;
     let smooth = mesh.faces.iter().any(|f| f.smooth);
     let vn = if smooth { mesh.vertex_normals() } else { Vec::new() };
+    let offsets = if mesh.color_attributes.is_empty() { Vec::new() } else { mesh.corner_offsets() };
     for t in mesh.triangulate() {
         let face = &mesh.faces[t.face as usize];
         let p = t.verts.map(|v| mesh.positions[v as usize]);
@@ -370,7 +373,8 @@ fn object_triangles(scene: &Scene, oi: usize, mesh_to: Option<&Mat4>, default_ma
         let uv = if face.uvs.len() == face.verts.len() { t.corners.map(|c| face.uvs[c as usize]) } else { [Vec2::ZERO; 3] };
         let material = slots.get(face.material as usize).copied().filter(|&m| m < scene.materials.len()).map_or(default_mat, |m| m as u32);
         geoms.push(g);
-        shades.push(TriShade { n, uv, material, light: u32::MAX, object: oi as u32 });
+        let col = if offsets.is_empty() { [[1.0; 4]; 3] } else { t.corners.map(|c| mesh.corner_color(mesh.render_color, &offsets, t.face as usize, c as usize)) };
+        shades.push(TriShade { n, uv, material, light: u32::MAX, object: oi as u32, col });
     }
     (geoms, shades)
 }

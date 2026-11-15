@@ -134,6 +134,8 @@ pub enum ColorTarget {
     Light(usize),
     /// A colour inside a node of a node tree.
     Node(crate::nodetree::TreeRef, usize, crate::nodetree::NodeColor),
+    /// The paint brush colour of the current mode (true: the secondary one).
+    Paint(bool),
 }
 
 /// Per-frame context the panels share.

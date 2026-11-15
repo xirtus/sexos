@@ -53,6 +53,15 @@ pub fn get(d: &Doc, t: ColorTarget) -> Option<[f32; 3]> {
             _ => None,
         },
         ColorTarget::Node(r, n, c) => crate::nodetree::get_color(&d.scene, r, n, c),
+        ColorTarget::Paint(second) => {
+            let (vp, tp) = (&d.sculpt.vp, &d.sculpt.tp);
+            Some(match (d.mode == crate::doc::Mode::TexturePaint, second) {
+                (true, false) => tp.color,
+                (true, true) => tp.secondary,
+                (false, false) => vp.color,
+                (false, true) => vp.secondary,
+            })
+        }
     }
 }
 
@@ -76,6 +85,18 @@ pub fn set(d: &mut Doc, t: ColorTarget, c: [f32; 3]) {
             }
         }
         ColorTarget::Node(r, n, nc) => crate::nodetree::set_color(&mut d.scene, r, n, nc, c),
+        ColorTarget::Paint(second) => {
+            let tex = d.mode == crate::doc::Mode::TexturePaint;
+            let st = &mut d.sculpt;
+            match (tex, second) {
+                (true, false) => st.tp.color = c,
+                (true, true) => st.tp.secondary = c,
+                (false, false) => st.vp.color = c,
+                (false, true) => st.vp.secondary = c,
+            }
+            // A brush setting: nothing in the scene changed.
+            return;
+        }
     }
     d.touch();
 }

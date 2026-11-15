@@ -22,6 +22,7 @@ pub mod nodetree;
 pub mod persist;
 pub mod python;
 pub mod rig;
+pub mod sculpt;
 pub mod screen;
 pub mod settings;
 pub mod theme;

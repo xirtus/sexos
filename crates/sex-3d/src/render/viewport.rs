@@ -21,7 +21,8 @@
 //! No allocation happens per pixel or per triangle in the hot loops.
 use super::{parallel_for_each, resolve_threads};
 use super::tonemap::srgb_encode;
-use crate::math::{Aabb, Vec3};
+use crate::math::{Aabb, Mat4, Vec3};
+use crate::mesh::{Mesh, Tri};
 use crate::scene::{ObjectData, Scene};
 use std::sync::Mutex;
 
@@ -135,6 +136,19 @@ struct VTri {
     smooth: bool,
     /// Object slot in [`ViewportScene::objects`].
     obj: u32,
+    /// Index into [`ViewportScene::corner_colors`] (u32::MAX: none).
+    corners: u32,
+}
+
+/// Per-object display extras: corner colours (Vertex Paint, the sculpt mask
+/// and face sets) and hiding sculpt-hidden faces.
+#[derive(Clone, Debug, Default)]
+pub struct ObjectOverlay {
+    /// Linear RGB base colour per triangle corner, in the order of
+    /// `Mesh::triangulate` of the evaluated mesh (replaces the material).
+    pub corner_colors: Option<Vec<[[f32; 3]; 3]>>,
+    /// Leave out faces flagged in `Mesh::hidden_faces`.
+    pub hide_hidden: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -143,6 +157,12 @@ struct ObjInfo {
     index: usize,
     selected: bool,
     active: bool,
+    /// First vertex and vertex count in [`ViewportScene::positions`].
+    verts: (u32, u32),
+    /// World matrix and its normal matrix (meshes).
+    world: Mat4,
+    normal: Mat4,
+    smooth: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -166,6 +186,8 @@ pub struct ViewportScene {
     objects: Vec<ObjInfo>,
     /// Gizmos of lights, cameras and empties: (object slot, world lines).
     gizmos: Vec<(u32, Vec3, Vec<(Vec3, Vec3)>)>,
+    /// Display-space corner colours of triangles with an overlay.
+    corner_colors: Vec<[Vec3; 3]>,
     scratch: Mutex<Scratch>,
 }
 
@@ -179,6 +201,7 @@ impl Clone for ViewportScene {
             loose: self.loose.clone(),
             objects: self.objects.clone(),
             gizmos: self.gizmos.clone(),
+            corner_colors: self.corner_colors.clone(),
             scratch: Mutex::default(),
         }
     }
@@ -186,6 +209,12 @@ impl Clone for ViewportScene {
 
 impl ViewportScene {
     pub fn new(scene: &Scene) -> ViewportScene {
+        ViewportScene::new_with(scene, &|_, _, _| None)
+    }
+
+    /// [`ViewportScene::new`] with per-object extras: `overlay` gets the scene
+    /// object index, its evaluated world-space mesh and its triangles.
+    pub fn new_with(scene: &Scene, overlay: &dyn Fn(usize, &Mesh, &[Tri]) -> Option<ObjectOverlay>) -> ViewportScene {
         let mut vs = ViewportScene::default();
         for oi in 0..scene.objects.len() {
             if !scene.is_visible(oi) {
@@ -196,10 +225,11 @@ impl ViewportScene {
             match &scene.objects[oi].data {
                 ObjectData::Mesh(_) => {
                     let Some((mesh, slots)) = scene.world_mesh(oi) else { continue };
-                    vs.objects.push(ObjInfo { index: oi, selected: false, active: false });
                     let base = vs.positions.len() as u32;
+                    let smooth = mesh.faces.iter().any(|f| f.smooth);
+                    vs.objects.push(ObjInfo { index: oi, selected: false, active: false, verts: (base, mesh.positions.len() as u32), world: m, normal: m.inverse().transpose(), smooth });
                     vs.positions.extend_from_slice(&mesh.positions);
-                    if mesh.faces.iter().any(|f| f.smooth) {
+                    if smooth {
                         vs.normals.extend(mesh.vertex_normals());
                     } else {
                         vs.normals.resize(vs.positions.len(), Vec3::ZERO);
@@ -210,16 +240,29 @@ impl ViewportScene {
                         .map(|c| Vec3::new(srgb_encode(c[0]), srgb_encode(c[1]), srgb_encode(c[2])))
                         .collect();
                     let default = Vec3::splat(srgb_encode(0.8));
-                    for t in mesh.triangulate() {
+                    let tris = mesh.triangulate();
+                    let ov = overlay(oi, &mesh, &tris).unwrap_or_default();
+                    let cc = ov.corner_colors.filter(|c| c.len() == tris.len());
+                    for (ti, t) in tris.iter().enumerate() {
+                        if ov.hide_hidden && mesh.is_face_hidden(t.face as usize) {
+                            continue;
+                        }
                         let f = &mesh.faces[t.face as usize];
                         let color = colors.get(f.material as usize).copied().unwrap_or(default);
-                        vs.tris.push(VTri { v: t.verts.map(|v| v + base), color, smooth: f.smooth, obj: slot });
+                        let corners = match &cc {
+                            Some(c) => {
+                                vs.corner_colors.push(c[ti].map(|k| Vec3::new(srgb_encode(k[0]), srgb_encode(k[1]), srgb_encode(k[2]))));
+                                (vs.corner_colors.len() - 1) as u32
+                            }
+                            None => u32::MAX,
+                        };
+                        vs.tris.push(VTri { v: t.verts.map(|v| v + base), color, smooth: f.smooth, obj: slot, corners });
                     }
                     vs.edges.extend(mesh.edges().into_iter().map(|e| ([e[0] + base, e[1] + base], slot)));
                     vs.loose.extend(mesh.loose_edges.iter().map(|e| ([e[0] + base, e[1] + base], slot)));
                 }
                 data => {
-                    vs.objects.push(ObjInfo { index: oi, selected: false, active: false });
+                    vs.objects.push(ObjInfo { index: oi, selected: false, active: false, verts: (0, 0), world: m, normal: m, smooth: false });
                     let o = m.transform_point(Vec3::ZERO);
                     let lines = gizmo_lines(data).into_iter().map(|(a, b)| (m.transform_point(a), m.transform_point(b))).collect();
                     vs.gizmos.push((slot, o, lines));
@@ -240,6 +283,34 @@ impl ViewportScene {
 
     pub fn triangle_count(&self) -> usize {
         self.tris.len()
+    }
+
+    /// Vertex count of scene object `object` in the cache (None: not cached).
+    pub fn object_vertex_count(&self, object: usize) -> Option<usize> {
+        self.objects.iter().find(|o| o.index == object && o.verts.1 > 0).map(|o| o.verts.1 as usize)
+    }
+
+    /// Update the cached positions (and smooth normals) of `verts` of scene
+    /// object `object` from its evaluated mesh in object space, without a
+    /// rebuild (sculpting). `normals` are object-space vertex normals,
+    /// indexed like `positions`. False when the topology does not match.
+    pub fn patch_object(&mut self, object: usize, positions: &[Vec3], normals: &[Vec3], verts: &[u32]) -> bool {
+        let Some(o) = self.objects.iter().find(|o| o.index == object && o.verts.1 > 0).copied() else { return false };
+        if o.verts.1 as usize != positions.len() {
+            return false;
+        }
+        let base = o.verts.0 as usize;
+        for &v in verts {
+            let v = v as usize;
+            let Some(&p) = positions.get(v) else { continue };
+            self.positions[base + v] = o.world.transform_point(p);
+            if o.smooth {
+                if let Some(&n) = normals.get(v) {
+                    self.normals[base + v] = o.normal.transform_vector(n).normalize();
+                }
+            }
+        }
+        true
     }
 
     /// Render to tightly packed RGBA8 rows (top row first).
@@ -402,15 +473,16 @@ impl ViewportScene {
             return;
         }
         // Corner colours: per-vertex lighting for smooth front faces, else per face.
+        let base = self.corner_colors.get(t.corners as usize).copied().unwrap_or([t.color; 3]);
         let c = if t.smooth && front {
-            vo.map(|v| t.color * v.diff + Vec3::splat(v.add))
+            [0, 1, 2].map(|k| base[k] * vo[k].diff + Vec3::splat(vo[k].add))
         } else if t.smooth {
             let mut c = [Vec3::ZERO; 3];
             for k in 0..3 {
                 let n = -proj.rotate(self.normals[t.v[k] as usize]);
                 let e = to_eye_at(proj, p[k]);
                 let (d, a) = studio_terms(if n.dot(e) > 0.0 { n } else { fnorm }, e);
-                c[k] = t.color * d + Vec3::splat(a);
+                c[k] = base[k] * d + Vec3::splat(a);
             }
             c
         } else {
@@ -418,7 +490,7 @@ impl ViewportScene {
             // triangles of one polygon shade seamlessly.
             [0, 1, 2].map(|k| {
                 let (d, a) = studio_terms(fnorm, to_eye_at(proj, p[k]));
-                t.color * d + Vec3::splat(a)
+                base[k] * d + Vec3::splat(a)
             })
         };
         let obj = t.obj + 1;

@@ -14,12 +14,14 @@ pub(crate) mod bvh;
 mod decimate;
 mod deform;
 mod generate;
+pub mod multires;
 mod remesh;
 mod rig;
 #[cfg(test)]
 mod tests;
 
 pub use crate::ops::BooleanOp;
+pub use multires::{MultiresData, MultiresLevel, MultiresSubdiv};
 pub use rig::{Falloff, ProximityMode, WeightMixMode, WeightMixSet};
 
 /// Subdivision levels above this are clamped: each level quadruples the face
@@ -229,6 +231,10 @@ pub enum Modifier {
     /// `inputs` (interface socket name, value) for the rest; the result is
     /// realized into a mesh. Without a scene the mesh passes through.
     Nodes { group: String, inputs: Vec<(String, crate::nodes::Value)> },
+    /// Multiresolution: sculptable subdivision levels with per-level
+    /// displacement (see [`multires`]). `levels` is shown in the viewport,
+    /// `sculpt_levels` is sculpted, `render_levels` is rendered.
+    Multires { levels: u32, sculpt_levels: u32, render_levels: u32, optimal_display: bool, data: MultiresData },
 }
 
 /// What a modifier may need from outside its own mesh.
@@ -268,7 +274,7 @@ impl Modifier {
     /// Every polyops/Blender type [`Modifier::with_defaults`] knows.
     pub const TYPE_NAMES: &'static str = "Mirror, Subdivision, Array, Solidify, Bevel, Triangulate, Weld, Displace, Smooth, Decimate, Remesh, Screw, \
 Wireframe, EdgeSplit, Build, Boolean, SimpleDeform, Cast, Wave, Shrinkwrap, LaplacianSmooth, CorrectiveSmooth, WeightedNormal, \
-Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightProximity, Nodes";
+Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightProximity, Nodes, Multires";
 
     /// The name Blender shows on the modifier's panel.
     pub fn name(&self) -> &'static str {
@@ -304,6 +310,7 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
             Modifier::VertexWeightMix { .. } => "Vertex Weight Mix",
             Modifier::VertexWeightProximity { .. } => "Vertex Weight Proximity",
             Modifier::Nodes { .. } => "Geometry Nodes",
+            Modifier::Multires { .. } => "Multires",
         }
     }
 
@@ -430,6 +437,7 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
                 normalize: false,
                 mask_constant: 1.0,
             },
+            "multires" | "multiresolution" => Modifier::Multires { levels: 0, sculpt_levels: 0, render_levels: 0, optimal_display: true, data: MultiresData::default() },
             _ => return None,
         })
     }
@@ -604,6 +612,7 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
                 Some(s) if !group.is_empty() => crate::geometry::run_modifier(m, s, group, inputs, cx.owner, cx.frame, cx.depth),
                 _ => m.clone(),
             },
+            Modifier::Multires { levels, data, .. } => data.level_mesh(m, (*levels).min(data.total_levels())),
         }
     }
 }
