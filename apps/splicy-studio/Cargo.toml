@@ -1,0 +1,66 @@
+# Splicy Studio: FilmCraft's whole editor (engine and egui interface) on SexOS, painted by
+# sex-egui. Its own workspace, because FilmCraft builds against storytold's egui fork and
+# the patches below must not reach the rest of SexOS.
+[workspace]
+members = [".", "shims/eframe", "shims/filmcraft-gpu", "shims/craft-update"]
+resolver = "3"
+
+[package]
+name = "splicy-studio"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Splicy on FilmCraft: FilmCraft's editor on SexOS"
+
+[[bin]]
+name = "splicy-studio"
+path = "src/main.rs"
+
+[dependencies]
+# FilmCraft (storytold/filmcraft, MIT OR Apache-2.0), unchanged.
+filmcraft-engine = { git = "https://github.com/storytold/filmcraft", rev = "e63e1d790c8e59f208f8ff31de6f6847a1bb206b" }
+filmcraft-ui-egui = { git = "https://github.com/storytold/filmcraft", rev = "e63e1d790c8e59f208f8ff31de6f6847a1bb206b" }
+egui = "0.37"
+serde_json = "1"
+eframe = { version = "0.37", path = "shims/eframe" }
+
+sex-egui = { path = "../../crates/sex-egui" }
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+sex-std = { path = "../../crates/sex-std" }
+
+[target.'cfg(not(target_os = "hermit"))'.dependencies]
+png = "0.18"
+
+[patch.crates-io]
+# The egui FilmCraft is written against (its workspace patches crates.io egui the same way).
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+# No winit or wgpu on SexOS: eframe's App and Frame only, the window being sex-egui's.
+eframe = { path = "shims/eframe" }
+
+[patch."https://github.com/storytold/filmcraft"]
+# The wgpu compositor, never started here: FilmCraft composites on the CPU without it.
+filmcraft-gpu = { path = "shims/filmcraft-gpu" }
+
+[patch."https://github.com/storytold/craft-libs"]
+# No self-updating: the store updates programs on SexOS (and this keeps TLS out of the program).
+craft-update = { path = "shims/craft-update" }
+
+[profile.release]
+opt-level = "z"
+strip = true
+panic = "abort"
+codegen-units = 1
+lto = "fat"
+
+# Quick host builds for screenshots: `cargo build --profile shot`.
+[profile.shot]
+inherits = "release"
+opt-level = 1
+lto = false
+codegen-units = 16

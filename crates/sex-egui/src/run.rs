@@ -18,6 +18,13 @@ pub fn run_ctx(options: Options, mut update: impl FnMut(&egui::Context)) -> ! {
     run_inner(options, &mut |ctx, raw| ctx.run_pass(raw, |c| update(c)))
 }
 
+/// The loop under [`run_ui`] and [`run_ctx`], for an app that runs egui's pass itself: it
+/// gets each frame's input (to rewrite it first, as eframe's `raw_input_hook` does) and
+/// returns egui's output. Splicy Studio drives FilmCraft's eframe app through it.
+pub fn run_frames(options: Options, mut frame: impl FnMut(&egui::Context, egui::RawInput) -> egui::FullOutput) -> ! {
+    run_inner(options, &mut |ctx, raw| frame(ctx, raw))
+}
+
 /// A frame no later than this after the last when egui animates.
 const FRAME: Duration = Duration::from_millis(16);
 

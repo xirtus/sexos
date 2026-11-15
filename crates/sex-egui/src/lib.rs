@@ -37,7 +37,7 @@ pub mod raster;
 #[cfg(target_os = "hermit")]
 mod run;
 #[cfg(target_os = "hermit")]
-pub use run::{run_ctx, run_ui};
+pub use run::{run_ctx, run_frames, run_ui};
 
 /// How the window starts.
 #[derive(Clone, Debug)]

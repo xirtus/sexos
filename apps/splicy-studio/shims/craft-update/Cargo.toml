@@ -1,0 +1,13 @@
+[package]
+name = "craft-update"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "craft-update's interface without self-updating: on SexOS, programs are updated by the store"
+
+[dependencies]
+egui = "0.37"
+
+[features]
+default = []
+egui = []
