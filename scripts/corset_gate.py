@@ -116,6 +116,7 @@ def main():
   fmt('2','CORSETEX',5)
   s=len(t());q.key('ret')
   g['wait'](r'\[corset\.review\] disk=usb0 steps=5 destructive=0\n',s,60)
+  g['wait'](r'\[corset\.step\] n=5 destructive=0 text=[^\n]*\n',s,30)  # the review lists its steps after the header
   steps=re.findall(r'\[corset\.step\] n=(\d) destructive=0 text=([^\n]*)\n',t()[s:])
   assert [n for n,_ in steps]==['1','2','3','4','5'],steps
   s=len(t());q.key('ret')
