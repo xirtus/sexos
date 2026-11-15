@@ -323,7 +323,11 @@ impl App {
         let scene = crate::anim::scene_at(&self.doc.anim, &base, self.doc.frame as f32, self.doc.settings.motion_blur);
         let r = sex_3d::render::render(&scene, &settings);
         let n = r.passes.len();
-        let passes = if n > 0 { format!(", {n} passes") } else { String::new() };
+        let passes = match n {
+            0 => String::new(),
+            1 => ", 1 pass".to_string(),
+            n => format!(", {n} passes"),
+        };
         self.doc.report = format!("Rendered {}x{}, {} samples{passes}", r.color.width, r.color.height, r.samples);
         self.doc.render = Some(r.color);
         self.doc.want_workspace = Some("Rendering".into());
