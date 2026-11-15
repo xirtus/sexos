@@ -2,9 +2,10 @@
 """Files: thumbnails. A USB stick holds 50 pictures (PNG, 640x480, each its own colour)
 plus a PDF and a text file. Files, given that stick, shows it as a grid (Ctrl+G): every
 picture gets a thumbnail within the budget (THUMBS_BUDGET_MS, default 60 s on QEMU's
-software CPU), the PDF and text file get kind tiles, and the screen shows the first
-pictures' colours. A second Files run opens the same folder from the thumbnail cache:
-nothing is decoded again, and it is faster."""
+software CPU), the text file gets a kind tile, and the screen shows the first pictures'
+colours. The PDF is drawn by Vellum (`pdf --thumb`, run with no window) when the staged
+Vellum has --thumb, and otherwise keeps its kind tile. A second Files run opens the same
+folder from the thumbnail cache: nothing is decoded or drawn again, and it is faster."""
 import argparse,os,re,shutil,struct,subprocess,time,zlib
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -25,7 +26,7 @@ def make_stick(path,scratch):
  names=[]
  for i in range(N):
   n=f'IMG{i:02d}.PNG';(scratch/n).write_bytes(png(640,480,colour(i)));names.append(n)
- (scratch/'PAPER.PDF').write_bytes(b'%PDF-1.4\n%%EOF\n');(scratch/'NOTES.TXT').write_bytes(b'notes\n');names+=['PAPER.PDF','NOTES.TXT']
+ (scratch/'PAPER.PDF').write_bytes((ROOT/'tests/fixtures/pdf/find10.pdf').read_bytes());(scratch/'NOTES.TXT').write_bytes(b'notes\n');names+=['PAPER.PDF','NOTES.TXT']
  subprocess.run(['mcopy','-i',str(path),*[str(scratch/n) for n in names],'::'],check=True,env=MT)
 def ppm(path):
  data=path.read_bytes();parts=data.split(maxsplit=4);w,h=int(parts[1]),int(parts[2]);return w,h,parts[4]
@@ -42,7 +43,9 @@ def main():
  with disk.open('r+b') as f:f.truncate(1024**3)
  scratch=a.out/'host';scratch.mkdir();stick=a.out/'thumbs.img';make_stick(stick,scratch)
  import http.server,threading
- FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes()}
+ FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/pdf':(ROOT/'iso_root/programs/pdf').read_bytes()}
+ # Vellum on master may predate --thumb; the PDF tile is required once it has it.
+ drawn_pdf=b'--thumb' in FILES['/pdf']
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
    body=FILES.get(self.path)
@@ -73,7 +76,8 @@ def main():
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/loom',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  for n,dest in (('files','/bin/loom'),('pdf','/bin/pdf')):
+   m=expect(f'fetch http://10.0.2.2:{PORT}/{n} {dest}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   q.cmd('blockdev-add',{'driver':'raw','node-name':'thumbsdrive','file':{'driver':'file','filename':str(stick)}})
   s=len(t())
   for _ in range(40):
@@ -84,12 +88,17 @@ def main():
    target,surface=open_files('/media/THUMBS',N+2)
    s=len(t());ctrl('g')
    g['wait'](r'\[files.app.grid\] on=1 dir=/media/THUMBS',s,30)
-   m=g['wait'](r'\[files.app.thumbs\] dir=/media/THUMBS pictures=(\d+) made=(\d+) cached=(\d+) failed=(\d+) ms=(\d+)',s,budget/1000+120)
-   pics,made,cached,failed,ms=map(int,m.groups())
-   result[run]={'made':made,'cached':cached,'failed':failed,'ms':ms}
-   assert pics==N and failed==0,m[0]
-   if run=='first':assert made==N and ms<=budget,m[0]
-   else:assert cached==N and made==0 and ms<result['first']['ms'],m[0]
+   m=g['wait'](r'\[files.app.thumbs\] dir=/media/THUMBS pictures=(\d+) made=(\d+) cached=(\d+) failed=(\d+) ms=(\d+) documents=(\d+) drawn=(\d+) from_cache=(\d+)',s,budget/1000+120)
+   pics,made,cached,failed,ms,docs,drawn,from_cache=map(int,m.groups())
+   result[run]={'made':made,'cached':cached,'failed':failed,'ms':ms,'pdf_drawn':drawn,'pdf_cached':from_cache}
+   assert pics==N and failed==0 and docs==1,m[0]
+   if run=='first':
+    assert made==N and ms<=budget,m[0]
+    assert drawn==(1 if drawn_pdf else 0),(m[0],drawn_pdf)
+    if drawn_pdf:result['pdf_ms']=int(g['wait'](r'\[files.app.thumbs.helper\] program=pdf path=/media/THUMBS/PAPER.PDF ms=(\d+)',s,5)[1])
+   else:
+    assert cached==N and made==0 and ms<result['first']['ms'],m[0]
+    assert drawn==0 and from_cache==(1 if drawn_pdf else 0),(m[0],drawn_pdf)
    g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} w=\d+ h=\d+',s,30)
    time.sleep(2);shot=a.out/f'thumbs-{run}.ppm';q.cmd('screendump',{'filename':str(shot)})
    found=seen(shot,colours);result[run]['colours_on_screen']=sorted(colours[c] for c in found)

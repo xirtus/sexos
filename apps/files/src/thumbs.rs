@@ -5,6 +5,11 @@
 //! work between keys, and kept in Files' own folder (`thumbs/`), named by path, size and
 //! modification time; the folder opened again draws from there without decoding anything.
 //! Other files show a tile with their kind (PDF, VIDEO, TEXT, ...).
+//!
+//! Documents are drawn by their own program, one at a time, run with no window:
+//! `NAME --thumb @/in @/out 112` writes the thumbnail straight into the same cache, in
+//! the same format (u16 LE width, u16 LE height, RGB rows). A helper that is missing,
+//! fails or takes too long leaves the kind tile.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
@@ -36,12 +41,32 @@ pub enum Thumb { Picture { w: usize, h: usize, px: Vec<u32> }, Kind(&'static str
 
 /// What one folder's thumbnails took.
 #[derive(Default, Clone, Copy)]
-pub struct Tally { pub pictures: usize, pub made: usize, pub cached: usize, pub failed: usize, pub started: u64 }
+pub struct Tally { pub pictures: usize, pub made: usize, pub cached: usize, pub failed: usize, pub started: u64,
+                   /// Files a helper program draws: how many, drawn now, from the cache.
+                   pub documents: usize, pub drawn: usize, pub from_cache: usize,
+                   /// When the last picture was done: `ms` counts pictures only.
+                   pub pictures_done: u64 }
+
+/// Kinds a program draws a thumbnail of with `--thumb`, and that program.
+const HELPERS: &[(&str, &[u8])] = &[("PDF", b"pdf")];
+/// A helper run that has not ended by now is ended.
+const HELPER_MS: u64 = 20_000;
+static HELPER_RUNS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x7B00_0000);
+
+/// The helper drawing one document: (cookie, document path, cache name, started at).
+struct Helping { cookie: u32, program: &'static [u8], path: Vec<u8>, name: Vec<u8>, started: u64 }
 
 pub struct Thumbs {
     pub on: bool,
     made: BTreeMap<Vec<u8>, Thumb>,
     queue: VecDeque<(Vec<u8>, u64)>,
+    /// Documents waiting for their helper, after the pictures.
+    documents: VecDeque<(Vec<u8>, u64, &'static [u8])>,
+    helping: Option<Helping>,
+    /// Helpers found missing this run, so they are not asked again.
+    missing: Vec<&'static [u8]>,
+    /// Where Files' own folder is as an absolute path, if helpers may write there.
+    own: Option<Vec<u8>>,
     pub tally: Tally,
     /// The folder whose thumbnails are being made, logged when the queue empties.
     folder: Vec<u8>,
@@ -72,46 +97,150 @@ fn fnv(bytes: &[u8]) -> u64 { bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b|
 
 impl Thumbs {
     pub const fn new() -> Self {
-        Thumbs { on: false, made: BTreeMap::new(), queue: VecDeque::new(), tally: Tally { pictures: 0, made: 0, cached: 0, failed: 0, started: 0 }, folder: Vec::new(),
+        Thumbs { on: false, made: BTreeMap::new(), queue: VecDeque::new(), documents: VecDeque::new(), helping: None, missing: Vec::new(), own: None,
+                 tally: Tally { pictures: 0, made: 0, cached: 0, failed: 0, started: 0, documents: 0, drawn: 0, from_cache: 0, pictures_done: 0 }, folder: Vec::new(),
                  dir_ready: false, font: None, acc: Vec::new(), cover: Vec::new() }
     }
-    pub fn busy(&self) -> bool { self.on && !self.queue.is_empty() }
+    pub fn busy(&self) -> bool { self.on && (!self.queue.is_empty() || !self.documents.is_empty() || self.helping.is_some()) }
     /// Queues the pictures of a freshly listed folder that have no thumbnail yet.
     pub fn folder(&mut self, cwd: &[u8], entries: &[Entry]) {
         self.queue.clear();
+        self.documents.clear();
+        // A helper still drawing for the folder left behind is ended.
+        if let Some(h) = self.helping.take() { sex_app::launch::kill(h.cookie); }
         self.folder = cwd.to_vec();
         self.tally = Tally { started: sex_pdx::get_ticks(), ..Tally::default() };
         for e in entries {
-            if kind(&e.name, e.dir).is_some() { continue; }
-            self.tally.pictures += 1;
             let path = join(cwd, &e.name);
-            if !self.made.contains_key(&path) { self.queue.push_back((path, e.size)); }
+            match kind(&e.name, e.dir) {
+                None => {
+                    self.tally.pictures += 1;
+                    if !self.made.contains_key(&path) { self.queue.push_back((path, e.size)); }
+                }
+                Some(k) => if let Some((_, program)) = HELPERS.iter().find(|(h, _)| *h == k) {
+                    if e.size == 0 { continue; }
+                    self.tally.documents += 1;
+                    if !self.made.contains_key(&path) { self.documents.push_back((path, e.size, program)); }
+                },
+            }
         }
-        if self.on && self.queue.is_empty() && self.tally.pictures > 0 { self.report(); }
+        if self.on && !self.busy() && self.tally.pictures + self.tally.documents > 0 { self.report(); }
     }
     fn report(&self) {
         let t = &self.tally;
-        sex_pdx::serial_record!("[files.app.thumbs] dir={} pictures={} made={} cached={} failed={} ms={}",
-            crate::shown(&self.folder), t.pictures, t.made, t.cached, t.failed, sex_pdx::get_ticks().saturating_sub(t.started));
+        sex_pdx::serial_record!("[files.app.thumbs] dir={} pictures={} made={} cached={} failed={} ms={} documents={} drawn={} from_cache={}",
+            crate::shown(&self.folder), t.pictures, t.made, t.cached, t.failed,
+            if t.pictures_done != 0 { t.pictures_done } else { sex_pdx::get_ticks() }.saturating_sub(t.started), t.documents, t.drawn, t.from_cache);
+    }
+    fn cache_name(window: &mut Window, path: &[u8], size: u64) -> Vec<u8> {
+        let mtime = files::stat(window, &at(path)).map(|s| s.mtime).unwrap_or(0);
+        alloc::format!("thumbs/{:016x}-{}-{}", fnv(path), size, mtime).into_bytes()
+    }
+    fn ready(&mut self, window: &mut Window) {
+        if self.dir_ready { return; }
+        let _ = files::mkdir(window, DIR);
+        self.dir_ready = true;
+        // Files' own folder, as a helper is handed it: `/data/NAME/thumbs` is the same
+        // folder only if Files runs as `loom` and holds the whole filesystem.
+        let mut own = sex_pdx::program_store::DATA.to_vec();
+        own.extend_from_slice(b"loom");
+        let mut probe = own.clone();
+        probe.extend_from_slice(b"/thumbs");
+        self.own = files::stat(window, &at(&probe)).ok().filter(|s| s.dir).map(|_| own);
     }
     /// Makes one thumbnail. True when the grid should be drawn again.
     pub fn step(&mut self, window: &mut Window) -> bool {
-        let Some((path, size)) = self.queue.pop_front() else { return false };
-        let mtime = files::stat(window, &at(&path)).map(|s| s.mtime).unwrap_or(0);
-        let name = alloc::format!("thumbs/{:016x}-{}-{}", fnv(&path), size, mtime);
-        let thumb = match self.cached(window, name.as_bytes()) {
+        let Some((path, size)) = self.queue.pop_front() else { return self.document_step(window) };
+        let name = Self::cache_name(window, &path, size);
+        let thumb = match self.cached(window, &name) {
             Some(t) => { self.tally.cached += 1; t }
             None => match picture(window, &path, size) {
                 Some((w, h, px)) => {
                     self.tally.made += 1;
-                    self.keep(window, name.as_bytes(), w, h, &px);
+                    self.keep(window, &name, w, h, &px);
                     Thumb::Picture { w, h, px }
                 }
                 None => { self.tally.failed += 1; Thumb::Kind("PICTURE?") }
             },
         };
         self.made.insert(path, thumb);
-        if self.queue.is_empty() { self.report(); }
+        if self.queue.is_empty() { self.tally.pictures_done = sex_pdx::get_ticks(); }
+        if !self.busy() { self.report(); }
+        true
+    }
+    /// Starts the next document's helper, or looks at the one running.
+    fn document_step(&mut self, window: &mut Window) -> bool {
+        use sex_app::launch::{self, Event};
+        if let Some(h) = &self.helping {
+            let (cookie, program) = (h.cookie, h.program);
+            let ended = match launch::poll(cookie) {
+                Some(Event::Started { .. }) => return false,
+                Some(Event::Refused { code, .. }) => {
+                    // Not installed: the kind tile, and no more asking this run.
+                    if code == sex_pdx::program_store::NOT_FOUND as u32 && !self.missing.contains(&program) { self.missing.push(program); }
+                    Some(alloc::format!("refused code={}", code))
+                }
+                Some(Event::Done { status: Some(0), .. }) => None,
+                Some(Event::Done { status, .. }) => Some(alloc::format!("status={}", status.map_or(-1, |s| s as i64))),
+                None if sex_pdx::get_ticks().saturating_sub(h.started) > HELPER_MS => { launch::kill(cookie); Some(String::from("timeout")) }
+                None => { let _ = sex_pdx::sys_wait_self_ticks(2); return false; }
+            };
+            let h = self.helping.take().unwrap();
+            let ms = sex_pdx::get_ticks().saturating_sub(h.started);
+            let thumb = match ended {
+                None => self.cached(window, &h.name),
+                Some(why) => {
+                    sex_pdx::serial_record!("[files.app.thumbs.helper.failed] program={} path={} {} ms={}", crate::shown(program), crate::shown(&h.path), why, ms);
+                    None
+                }
+            };
+            if thumb.is_some() {
+                self.tally.drawn += 1;
+                sex_pdx::serial_record!("[files.app.thumbs.helper] program={} path={} ms={}", crate::shown(program), crate::shown(&h.path), ms);
+            }
+            let label = HELPERS.iter().find(|(_, p)| *p == program).map_or("FILE", |(k, _)| *k);
+            self.made.insert(h.path, thumb.unwrap_or(Thumb::Kind(label)));
+            if !self.busy() { self.report(); }
+            return true;
+        }
+        let Some((path, size, program)) = self.documents.pop_front() else { return false };
+        self.ready(window);
+        let name = Self::cache_name(window, &path, size);
+        if let Some(t) = self.cached(window, &name) {
+            self.tally.from_cache += 1;
+            self.made.insert(path, t);
+            if !self.busy() { self.report(); }
+            return true;
+        }
+        let label = HELPERS.iter().find(|(_, p)| *p == program).map_or("FILE", |(k, _)| *k);
+        let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
+        let mut line = Vec::new();
+        let started = match (&self.own, self.missing.contains(&program)) {
+            (Some(own), false) => {
+                let mut out = own.clone();
+                out.push(b'/');
+                out.extend_from_slice(&name);
+                let input = sex_pdx::launch::open_args(&path, &mut args).map(|n| args[..n].to_vec());
+                let output = sex_pdx::launch::open_args(&out, &mut args).map(|n| args[..n].to_vec());
+                match (input, output) {
+                    (Some(i), Some(o)) => {
+                        line.extend_from_slice(b"--thumb ");
+                        line.extend_from_slice(&i);
+                        line.push(b' ');
+                        line.extend_from_slice(&o);
+                        line.extend_from_slice(alloc::format!(" {}", SIDE).as_bytes());
+                        let cookie = HELPER_RUNS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        (line.len() <= sex_pdx::fs::ARGS_MAX && launch::run_hidden(program, &line, cookie).is_ok()).then_some(cookie)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        match started {
+            Some(cookie) => self.helping = Some(Helping { cookie, program, path, name, started: sex_pdx::get_ticks() }),
+            None => { self.made.insert(path, Thumb::Kind(label)); if !self.busy() { self.report(); } }
+        }
         true
     }
     fn cached(&self, window: &mut Window, name: &[u8]) -> Option<Thumb> {
@@ -123,7 +252,7 @@ impl Thumbs {
         Some(Thumb::Picture { w, h, px })
     }
     fn keep(&mut self, window: &mut Window, name: &[u8], w: usize, h: usize, px: &[u32]) {
-        if !self.dir_ready { let _ = files::mkdir(window, DIR); self.dir_ready = true; }
+        self.ready(window);
         let mut out = Vec::with_capacity(4 + px.len() * 3);
         out.extend_from_slice(&(w as u16).to_le_bytes());
         out.extend_from_slice(&(h as u16).to_le_bytes());
