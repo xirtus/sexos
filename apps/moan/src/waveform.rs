@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Timeline pixels are document content in a Weft image, not custom widgets.
 //! Clip backgrounds, waveform extrema, fade envelopes, selection and playhead.
-use crate::Session;
+use crate::{track_colors, Session};
 use alloc::{vec, vec::Vec};
 use moan_core::RATE;
 pub const WIDTH: usize = 560;
@@ -70,16 +70,10 @@ pub fn render_at(session: &Session, view: View, cursor: usize) -> (usize, Vec<u3
             let left = view.x(clip.start());
             let right = view.x(clip.end()).max(left + 1).min(WIDTH);
             for x in left..right {
-                let selected = index == session.selected;
-                let midi = clip.midi_pattern().is_some();
-                let color = if midi {
-                    [0x284c43, 0x4b345e, 0x5a402a, 0x28445a][index % 4]
-                } else if selected {
-                    0x22465A
-                } else {
-                    0x213442
-                };
-                line(&mut pixels, height, x, top + 3, top + ROW - 3, color);
+                line(
+                    &mut pixels, height, x, top + 3, top + ROW - 3,
+                    track_colors::region(index),
+                );
                 if clip.midi_pattern().is_some() {
                     continue;
                 }
@@ -124,7 +118,7 @@ pub fn render_at(session: &Session, view: View, cursor: usize) -> (usize, Vec<u3
                     x,
                     y0,
                     y1,
-                    if selected { 0x63D4CD } else { 0x91A9CE },
+                    track_colors::ink(index),
                 );
             }
             if let Some(pattern) = clip.midi_pattern() {
@@ -146,13 +140,18 @@ pub fn render_at(session: &Session, view: View, cursor: usize) -> (usize, Vec<u3
                         + 8
                         + (high - note.key) as usize * (ROW - 18) / (high - low + 1) as usize;
                     for x in view.x(start)..view.x(finish).max(view.x(start) + 1).min(WIDTH) {
-                        line(&mut pixels, height, x, y, y + 3, 0xaff4cf);
+                        line(&mut pixels, height, x, y, y + 3, track_colors::ink(index));
                     }
                 }
             }
-            line(&mut pixels, height, left, top + 2, top + ROW - 2, 0xB1C6DB);
+            let edge = if index == session.selected {
+                0xffffff
+            } else {
+                track_colors::accent(index)
+            };
+            line(&mut pixels, height, left, top + 2, top + ROW - 2, edge);
             if right < WIDTH {
-                line(&mut pixels, height, right, top + 2, top + ROW - 2, 0xB1C6DB);
+                line(&mut pixels, height, right, top + 2, top + ROW - 2, edge);
             }
         }
         if session.from < session.to {
@@ -160,7 +159,7 @@ pub fn render_at(session: &Session, view: View, cursor: usize) -> (usize, Vec<u3
                 if index == session.selected {
                     for y in top..top + ROW {
                         let p = &mut pixels[y * WIDTH + x];
-                        *p = ((*p & 0xFEFEFE) >> 1) + 0x263A3C;
+                        *p = track_colors::selection(*p);
                     }
                 }
             }

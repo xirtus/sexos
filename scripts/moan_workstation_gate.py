@@ -204,8 +204,8 @@ def main():
         arrange_start=c.command(surface,'ctrl','t');m=g['wait'](r'\[moan.timeline\] x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) start=0 span=192000',arrange_start,120)
         tile,size=viewport(g,surface,arrange_start);ox,oy=origin(tile,size);tx,ty,tw,th=map(int,m.groups());assert th==188
         def arrangement_pixels(width,height,pixels):
-            for row,colour in enumerate((0x284c43,0x4b345e,0x5a402a)):
-                if row==0:colour=((colour&0xfefefe)>>1)+0x263a3c
+            # Approved ordered track palette; selected blue remains blue.
+            for row,colour in enumerate((0x48597d,0x265e66,0x336045)):
                 xx,yy=ox+tx+round(tw*.93),oy+ty+20+row*56+4
                 actual=int.from_bytes(pixels[(yy*width+xx)*3:(yy*width+xx)*3+3],'big')
                 assert actual==colour,('actual three-track lane',row,hex(actual),hex(colour))
