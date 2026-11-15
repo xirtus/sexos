@@ -5420,6 +5420,10 @@ name = "sex-net-config"
 version = "0.1.0"
 
 [[package]]
+name = "sex-ntp"
+version = "0.1.0"
+
+[[package]]
 name = "sex-object-model"
 version = "0.1.0"
 
@@ -5729,6 +5733,7 @@ dependencies = [
  "linked_list_allocator",
  "serde",
  "sex-net",
+ "sex-ntp",
  "sex-pdx",
  "sex-rt",
  "sex-tls",
