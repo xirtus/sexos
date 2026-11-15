@@ -245,6 +245,7 @@ pub extern "C" fn trampoline_main() {
     crash_keeper.sync(&mut crate::history_disk::DiskIo);
     loop {
         crate::restricted_runtime::poll();
+        crate::restricted_io::poll();
         history.poll(pdx_reply);probes.poll(pdx_reply);documents.poll(pdx_reply);crate::fs_service::poll_replies();
         static mut SEXFILES_TRAMP_LISTEN_BUDGET: u32 = 8;
         unsafe {
@@ -260,7 +261,7 @@ pub extern "C" fn trampoline_main() {
                 d
             } else {
                 // Listen on slot 0 (self message ring — all servers use this pattern).
-                let m = if crate::restricted_runtime::pending()||crate::fs_service::replies_pending()||crate::fs_service::writes_pending()||history.pending()||probes.pending()||documents.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{documents.progress(&mut vfs::DocumentBackend);crate::fs_service::commit_when_idle();sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
+                let m = if crate::restricted_runtime::pending()||crate::restricted_io::pending()||crate::fs_service::replies_pending()||crate::fs_service::writes_pending()||history.pending()||probes.pending()||documents.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{documents.progress(&mut vfs::DocumentBackend);crate::fs_service::commit_when_idle();sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
                 crate::defer_queue::Stamped { message: (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2), caller_task: m.caller_task }
             };
         let (msg_type, msg_caller, msg_a0, msg_a1, msg_a2) = stamped.message;
@@ -271,6 +272,7 @@ pub extern "C" fn trampoline_main() {
         let caller = msg.caller_pd;
         // Before hot logs, generic replay handlers, or any app-owned operation.
         if crate::restricted_runtime::message(msg.type_id,caller,msg.caller_task,[msg.arg0,msg.arg1,msg.arg2]){continue;}
+        if crate::restricted_io::message(msg.type_id,sex_pdx::restricted_helper::Subject{pd:caller,task:msg.caller_task},[msg.arg0,msg.arg1,msg.arg2]){continue;}
         if crate::restricted_runtime::denied(caller){
             if msg.type_id==sex_pdx::fs::OP {
                 if let Some(request)=sex_pdx::fs::Request::decode(msg.arg0,msg.arg1,msg.arg2){
@@ -332,7 +334,7 @@ pub extern "C" fn trampoline_main() {
             let word=crate::fs_service::handle(caller,msg.caller_task,msg.arg0,msg.arg1,msg.arg2);
             // Nothing else owed and nothing to commit: answer and wait in one entry, so
             // the caller runs next. Otherwise the loop's top answers in order.
-            let idle=!crate::restricted_runtime::pending()&&!crate::fs_service::replies_pending()&&!crate::fs_service::writes_pending()&&!history.pending()&&!probes.pending()&&!documents.pending()&&crate::pdx::defer_empty();
+            let idle=!crate::restricted_runtime::pending()&&!crate::restricted_io::pending()&&!crate::fs_service::replies_pending()&&!crate::fs_service::writes_pending()&&!history.pending()&&!probes.pending()&&!documents.pending()&&crate::pdx::defer_empty();
             if !(idle&&sex_pdx::pdx_reply_wait(caller,word)==0){crate::fs_service::reply_later(caller,word);}
             continue;
         }

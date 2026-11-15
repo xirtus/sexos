@@ -20,6 +20,8 @@ mod restricted_image;
 mod restricted_runtime;
 mod restricted_job;
 mod restricted_storage;
+mod restricted_jobs;
+mod restricted_io;
 mod fs_service;
 mod recording_role;
 mod recording_image;
