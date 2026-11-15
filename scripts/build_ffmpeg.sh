@@ -23,6 +23,8 @@
 #   FFMPEG_SRC     an FFmpeg checkout (default: cloned at FFMPEG_TAG)
 #   FFMPEG_RECORDING=1 additionally builds FFV1 encode/decode and Matroska muxing
 #   FFMPEG_RECORDING=2 also builds Splicy's export: VP9 (libvpx, scripts/build_libvpx.sh),
+#                      AV1 (libaom, scripts/build_libaom.sh), H.264 (x264, GPL-2.0-or-later,
+#                      scripts/build_x264.sh; this profile's FFmpeg is therefore GPL),
 #                      Opus and AAC encoders, WebM and MP4 muxers
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -40,7 +42,7 @@ if [[ $FFMPEG_RECORDING != 0 ]]; then
   RECORDING_FLAGS=(--enable-encoder=ffv1 --enable-decoder=ffv1 --enable-muxer=matroska)
 fi
 if [[ $FFMPEG_RECORDING == 2 ]]; then
-  RECORDING_FLAGS+=(--enable-libvpx --enable-encoder=libvpx_vp9,opus,aac --enable-muxer=webm,mp4)
+  RECORDING_FLAGS+=(--enable-gpl --enable-libvpx --enable-libaom --enable-libx264 --enable-encoder=libvpx_vp9,libaom_av1,libx264,opus,aac --enable-muxer=webm,mp4)
 fi
 
 if [[ -z "${MUSL_INCLUDE:-}" ]]; then
@@ -76,7 +78,9 @@ sed -i 's/ -pthread -ldl$//' "$DAV1D/lib/pkgconfig/dav1d.pc"
 PKG_LIBDIR=$DAV1D/lib/pkgconfig
 if [[ $FFMPEG_RECORDING == 2 ]]; then
   MUSL_INCLUDE=$MUSL_INCLUDE bash "$ROOT/scripts/build_libvpx.sh"
-  PKG_LIBDIR=$PKG_LIBDIR:$ROOT/target/libvpx/lib/pkgconfig
+  MUSL_INCLUDE=$MUSL_INCLUDE bash "$ROOT/scripts/build_libaom.sh"
+  MUSL_INCLUDE=$MUSL_INCLUDE bash "$ROOT/scripts/build_x264.sh"
+  PKG_LIBDIR=$PKG_LIBDIR:$ROOT/target/libvpx/lib/pkgconfig:$ROOT/target/libaom/lib/pkgconfig:$ROOT/target/x264/lib/pkgconfig
 fi
 
 # musl's headers, copied so the build never depends on where they came from.
@@ -151,7 +155,7 @@ cp "$DAV1D/lib/libdav1d.a" "$SHINE/lib/libshine.a" "$OUT/lib/"
 mkdir -p "$OUT/share/licenses/shine"
 cp "$SHINE/share/licenses/shine/"* "$OUT/share/licenses/shine/"
 printf '%s\n' 1 > "$OUT/sexos-audio-export-v1"
-rm -f "$OUT/lib/libvpx.a"
-[[ $FFMPEG_RECORDING == 2 ]] && cp "$ROOT/target/libvpx/lib/libvpx.a" "$OUT/lib/"
+rm -f "$OUT/lib/libvpx.a" "$OUT/lib/libaom.a" "$OUT/lib/libx264.a"
+[[ $FFMPEG_RECORDING == 2 ]] && cp "$ROOT/target/libvpx/lib/libvpx.a" "$ROOT/target/libaom/lib/libaom.a" "$ROOT/target/x264/lib/libx264.a" "$OUT/lib/"
 printf '%s\n' "$FFMPEG_RECORDING" > "$OUT/sexos-recording-v1"
 echo "[ffmpeg] $(ls "$OUT"/lib/*.a | xargs -n1 basename | tr '\n' ' ')-> $OUT"

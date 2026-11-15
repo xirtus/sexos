@@ -187,18 +187,10 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'term-native-lua-python.ppm')})
   s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   # Without the grant, Files refuses.
-  source_hashes=denial_sources(ROOT)
-  target,task,launch_start=start('run term')
-  s=len(t());term_line('stdhello')
-  g['wait'](rf'\[files\.ticket\.denied\] requester={target}\n',s,60)
-  refusal=g['wait'](r'\[spindle\.program\.refused\] code=1\n',s,60)
-  cursor=s+refusal.end()
-  first=g['wait'](r'\[sched.active\] tick=(\d+) [^\n]*\n',cursor,60)
-  cursor+=first.end()
-  g['wait'](r'\[sched.active\] tick=(\d+) [^\n]*\n',cursor,60)
-  assert denial_sources(ROOT)==source_hashes,'source changed during denial capture'
-  proof=downstream_denial(t(),launch_start,s,len(t()),target,task,source_hashes)
-  (a.out/'ungranted-denial.json').write_text(json.dumps(proof,indent=2)+'\n')
+  target,task=start('run term')
+  s=len(t());term_line('stdhello');g['wait'](r'\[term\.native\.refused\] name=stdhello status=11\n',s,60)
+  assert '[files.console.attached]' not in t()[s:]
+  assert '[term.native.start]' not in t()[s:]
   s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[term.fatal]' not in t()
  finally:g['stop']()

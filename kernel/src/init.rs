@@ -207,6 +207,30 @@ pub fn init() {
         }
     }
 
+    // Denim, compressed memory: a program's cold heap pages packed in Denim's own
+    // memory. Optional: without it no page ever goes out.
+    let mut denim_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with("/denim")) {
+        let id=sex_pdx::denim::DENIM_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::denim::DENIM_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_DENIM_IDENTITY");denim_id=created;
+                serial_println!("[kernel.spawn.denim] id={} key={} organ=memory",created,sex_pdx::denim::DENIM_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.denim] failed={}",e);}
+        }
+    }
+
+    // Cufflinks, the Bluetooth host stack, in the Senses organ. Optional: without a
+    // controller it sleeps until SexUSB reports one.
+    let mut cufflinks_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with("/cufflinks")) {
+        let id=sex_pdx::bt_hci::CUFFLINKS_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::bt_hci::CUFFLINKS_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_CUFFLINKS_IDENTITY");cufflinks_id=created;
+                serial_println!("[kernel.spawn.cufflinks] id={} key={} organ=senses",created,sex_pdx::bt_hci::CUFFLINKS_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.cufflinks] failed={}",e);}
+        }
+    }
+
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
     // Static BOOT_DAG return edges for authenticated display-ready messages.
@@ -438,7 +462,7 @@ pub fn init() {
     // Hardware discovery and driver lease routing.
     // Includes XHCI discovery + lease to sexusb (slot SLOT_USB_HOST) when present.
     if sexdrive_id != 0 && sexdisp_id != 0 {
-        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id);
+        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id, sexinput_id);
     }
 
     // SilkBar delivery path: grant display capability independently of silk-shell.
@@ -864,6 +888,7 @@ pub fn init() {
 
     // Final BOOT_DAG memory edges precede sealing and every task admission.
     crate::boot_memory::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexfiles_id);
+    crate::boot_memory::init_bluetooth(sexusb_id, cufflinks_id, sexfiles_id);
     // UEFI firmware leaves network controllers bus-mastering (OVMF does, with or without
     // a network option ROM). The network service proves custody of a NIC only from idle,
     // so it gets its controllers as a restarted run does: bus mastering off first.
@@ -879,6 +904,8 @@ pub fn init() {
     crate::boot_memory::init_sound_rings(sexbell_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
+    // Denim's store grows with what it holds.
+    crate::service_memory::reserve(denim_id);
     crate::boot_memory::init_boot_image(sexfiles_id);
     crate::boot_memory::init_boot_facts(sexfiles_id);
     crate::boot_memory::init_web_regions(sexnet_id);
@@ -991,9 +1018,10 @@ pub fn init() {
     // Independent, exact BOOT source for the status-bar publisher. Its bounded
     // read mechanism supplies explicit snapshots; neither timer cadence nor
     // renderer fallback confers civil-time authority.
-    // Power: Shell may ask to shut down or restart, Files flushes first, the bar reads sensors.
+    // Power: Shell may ask to shut down or restart, Files flushes first, the bar and the
+    // panel (Display draws the battery) read sensors.
     for (holder,rights,role) in [(silkshell_id,sex_pdx::power::REQUEST|sex_pdx::power::SENSE,"shell"),
-        (sexfiles_id,sex_pdx::power::FLUSH,"files"),(silkbar_id,sex_pdx::power::SENSE,"bar"),
+        (sexfiles_id,sex_pdx::power::FLUSH,"files"),(silkbar_id,sex_pdx::power::SENSE,"bar"),(sexdisp_id,sex_pdx::power::SENSE,"panel"),
         (sexacpi_id,sex_pdx::power::FIRMWARE,"acpi")] {
         let Some(pd)=(holder!=0).then(||crate::ipc::DOMAIN_REGISTRY.get(holder)).flatten() else {continue};
         assert!(pd.find_capability(sex_pdx::power::SLOT as u32).is_none(),"BOOT_POWER_SLOT_COLLISION");
@@ -1001,6 +1029,12 @@ pub fn init() {
         if rights&sex_pdx::power::FLUSH!=0 {crate::hal::acpi::set_flusher(holder);}
         if rights&sex_pdx::power::FIRMWARE!=0 {crate::hal::acpi::set_firmware(holder);}
         serial_println!("[boot.power.grant] holder={} role={} slot={} rights={:#x} runtime_mint=0",holder,role,sex_pdx::power::SLOT,rights);
+    }
+    // ACPI finds the touchpad (firmware alone knows its bus and address) and tells Input.
+    if let (true,Some(pd))=(sexinput_id!=0,(sexacpi_id!=0).then(||crate::ipc::DOMAIN_REGISTRY.get(sexacpi_id)).flatten()) {
+        assert!(pd.find_capability(sex_pdx::touchpad::ROUTE_SLOT as u32).is_none(),"BOOT_TOUCHPAD_ROUTE_COLLISION");
+        pd.grant_capability(sex_pdx::touchpad::ROUTE_SLOT,crate::capability::CapabilityData::Domain(sexinput_id));
+        serial_println!("[boot.touchpad.route] from={} to={} slot={}",sexacpi_id,sexinput_id,sex_pdx::touchpad::ROUTE_SLOT);
     }
     let bar_holder=crate::ipc::DOMAIN_REGISTRY.get(silkbar_id).expect("BOOT_BAR_CLOCK_HOLDER");
     let bar_task=bar_holder.main_task.load(core::sync::atomic::Ordering::Acquire);
@@ -1034,6 +1068,9 @@ pub fn init() {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(row.target).expect("BOOT_PROGRAM_NETWORK_SUBJECT");
         assert!(pd.find_capability(sex_pdx::SLOT_NET as u32).is_none(),"BOOT_PROGRAM_NETWORK_COLLISION");
         pd.grant_capability(sex_pdx::SLOT_NET,crate::capability::CapabilityData::Domain(sexnet_id));
+        // Drag: a program run may make VMs from its own heap pages (sex_pdx::vm, syscall 110).
+        assert!(pd.find_capability(sex_pdx::vm::SLOT as u32).is_none(),"BOOT_PROGRAM_VM_COLLISION");
+        pd.grant_capability(sex_pdx::vm::SLOT,crate::capability::CapabilityData::Machine(sex_pdx::vm::Grant{holder_pd:row.target}));
         // Bell plays a program's sound from that program's own ring; the edge carries
         // only "my ring has sound" and Bell's own tone and notice calls.
         if sexbell_id!=0 {
@@ -1129,6 +1166,8 @@ pub fn init() {
                     14 => "sext",
                     15 => "kaleidoscope",
                     50 => "sexacpi",
+                    51 => "denim",
+                    52 => "cufflinks",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };

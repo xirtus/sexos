@@ -94,11 +94,13 @@ def check_manifests(tls, workspace, app, trust=None):
     if tls.get('target'):
         errors.append('unreviewed target-specific TLS dependencies')
     # Reviewed non-TLS replacements: the no_std port of naga's GLSL preprocessor, and
-    # virtio-drivers with sound capture for Bell, and ignore's parallel walker on
-    # std's Hermit target for rg and fd, and console, path_abs and clircle building
-    # on std's Hermit target for bat (no network code).
+    # virtio-drivers with sound capture for Bell, acpi with embedded-controller region
+    # handlers, Notify and whole-buffer compares for sexacpi, ignore's parallel walker on
+    # std's Hermit target for rg and fd, and console, path_abs and clircle building on
+    # std's Hermit target for bat (no network or TLS code in any of them).
     reviewed_patches = {'crates-io': {'pp-rs': {'path': 'vendor/pp-rs-0.2.1'},
                                       'virtio-drivers': {'path': 'vendor/virtio-drivers-0.13.0'},
+                                      'acpi': {'path': 'vendor/acpi-6.1.1'},
                                       'ignore': {'path': 'vendor/ignore-0.4.34'},
                                       'console': {'path': 'vendor/console-0.16.6'},
                                       'path_abs': {'path': 'vendor/path_abs-0.5.1'},
@@ -106,7 +108,13 @@ def check_manifests(tls, workspace, app, trust=None):
                                       # Chastity-only KDF wiping and bounded KDBX expansion;
                                       # neither package occurs in sex-tls's target graph.
                                       'keepass': {'path': 'vendor/keepass-0.17.0'},
-                                      'rust-argon2': {'path': 'vendor/rust-argon2-3.0.0'}}}
+                                      'rust-argon2': {'path': 'vendor/rust-argon2-3.0.0'},
+                                      # Assuit (WordCraft): Hermit-target fixes, and the PDF writer
+                                      # fork WordCraft's own workspace patches in. None does TLS.
+                                      'filetime': {'path': 'vendor/filetime-0.2.29'},
+                                      'tar': {'path': 'vendor/tar-0.4.46'},
+                                      'krilla': {'git': 'https://github.com/storytold/craft-libs',
+                                                 'rev': '6e03f65bf45181db77ba6229716e6624db9eb25b'}}}
     # Reviewed allocation-free split discovery clocks; this does not replace
     # any TLS provider or alter the required existing patch selections.
     with_neighbor_fix = {'crates-io': {**reviewed_patches['crates-io'],

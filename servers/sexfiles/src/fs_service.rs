@@ -732,8 +732,10 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         region[w::PATH_BYTES..w::PATH_BYTES + binding.args_len].copy_from_slice(&binding.args[..binding.args_len]);
         return w::reply(r.seq, w::OK, binding.args_len as u32);
     }
-    let relay_terminal = program.is_some_and(|k| unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.is_some_and(|b| holds_launch(&b)));
-    if let (Some(k), w::PREPARE, true) = (program, r.kind, relay_terminal) {
+    // A program's PREPARE is a terminal's (console_relay) unless it says it is a launch.
+    let relay = r.offset != w::PREPARE_LAUNCH;
+    if let (Some(k), w::PREPARE, true) = (program, r.kind, relay) {
+        if !unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.is_some_and(|b| holds_launch(&b)) { return w::reply(r.seq, w::DENIED, 0); }
         // A terminal's run: only `/bin/NAME`, with its own words and nothing granted.
         let name = path[..path_len].strip_prefix(sex_pdx::program_store::BIN);
         if !name.is_some_and(|n| !n.is_empty() && !n.contains(&b'/')) { return w::reply(r.seq, w::DENIED, 0); }

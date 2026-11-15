@@ -11,6 +11,33 @@ from quil_workflow_gate import palette_commands, palette_select
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def colours(data, tile):
+    """The distinct colours inside a window tile of a binary PPM (P6) screendump."""
+    fields = []
+    i = 0
+    while len(fields) < 4:
+        while data[i : i + 1].isspace():
+            i += 1
+        if data[i : i + 1] == b'#':
+            i = data.index(b'\n', i)
+            continue
+        j = i
+        while not data[j : j + 1].isspace():
+            j += 1
+        fields.append(data[i:j])
+        i = j
+    assert fields[0] == b'P6' and int(fields[3]) < 256, fields
+    width, height = int(fields[1]), int(fields[2])
+    i += 1
+    x, y, w, h = tile
+    seen = set()
+    for row in range(max(0, y + 36), min(height, y + h - 8)):
+        base = i + (row * width) * 3
+        line = data[base + max(0, x + 8) * 3 : base + min(width, x + w - 8) * 3]
+        seen.update(line[k : k + 3] for k in range(0, len(line), 3))
+    return seen
+
+
 def current_tile(text, surface, since=0):
     sid = int(surface)
     patterns = [
