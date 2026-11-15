@@ -51,6 +51,7 @@ members = [
     "crates/sex-js",
     "crates/sex-gl",
     "crates/sex-3d",
+    "apps/polyamour",
     "crates/sex-web",
     "apps/hum",
     "purple-scanout",
