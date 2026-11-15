@@ -420,8 +420,79 @@ fn define(c: &Cfg) -> Dna {
         Layout::Legacy27 | Layout::Legacy30 | Layout::Attr36 => ob.push(("float", "obmat[4][4]")),
         _ => {}
     }
-    ob.extend([("float", "parentinv[4][4]"), ("float", "constinv[4][4]"), ("short", "rotmode"), ("char", "_pad3[6]")]);
+    ob.extend([("float", "parentinv[4][4]"), ("float", "constinv[4][4]"), ("short", "rotmode"), ("char", "_pad3[6]"), ("ListBase", "modifiers")]);
+    match c.layout {
+        // 2.8x keeps the "disable in viewports" bit in `restrictflag`.
+        Layout::Legacy27 | Layout::Legacy30 => ob.extend([("short", "restrictflag"), ("char", "_pad4[6]")]),
+        _ => ob.extend([("char", "visibility_flag"), ("char", "_pad4[7]")]),
+    }
     d.def("Object", &ob);
+
+    // Modifiers: every concrete struct starts with `ModifierData modifier`.
+    d.def("ModifierData", &[("ModifierData", "*next"), ("ModifierData", "*prev"), ("int", "type"), ("int", "mode"), ("float", "execution_time"), ("short", "flag"), ("short", "ui_expand_flag"), ("char", "name[64]"), ("char", "*error"), ("char", "_pad[8]")]);
+    let md = ("ModifierData", "modifier");
+    d.def("MirrorModifierData", &[md, ("short", "axis"), ("short", "flag"), ("float", "tolerance"), ("float", "bisect_threshold"), ("char", "use_correct_order_on_merge"), ("char", "_pad[3]"), ("float", "uv_offset[2]"), ("float", "uv_offset_copy[2]"), ("Object", "*mirror_ob")]);
+    d.def("SubsurfModifierData", &[md, ("short", "subdivType"), ("short", "levels"), ("short", "renderLevels"), ("short", "flags"), ("short", "uv_smooth"), ("short", "quality"), ("short", "boundary_smooth"), ("char", "_pad[2]"), ("void", "*emCache"), ("void", "*mCache")]);
+    d.def(
+        "ArrayModifierData",
+        &[md, ("Object", "*start_cap"), ("Object", "*end_cap"), ("Object", "*curve_ob"), ("Object", "*offset_ob"), ("float", "offset[3]"), ("float", "scale[3]"), ("float", "length"), ("float", "merge_dist"), ("int", "fit_type"), ("int", "offset_type"), ("int", "flags"), ("int", "count"), ("float", "uv_offset[2]")],
+    );
+    d.def("SolidifyModifierData", &[md, ("char", "defgrp_name[64]"), ("char", "shell_defgrp_name[64]"), ("char", "rim_defgrp_name[64]"), ("float", "offset"), ("float", "offset_fac"), ("float", "offset_fac_vg"), ("float", "offset_clamp"), ("char", "mode"), ("char", "_pad[3]")]);
+    let mut bevel: Vec<(&str, &str)> = vec![md, ("float", "value"), ("int", "res"), ("short", "flags"), ("short", "val_flags"), ("short", "profile_type"), ("short", "lim_flags"), ("short", "e_flags"), ("short", "mat"), ("short", "edge_flags"), ("short", "face_str_mode")];
+    if c.layout == Layout::Legacy30 {
+        bevel.push(("char", "_pad[4]"));
+    } else {
+        bevel.extend([("char", "affect_type"), ("char", "_pad[3]")]);
+    }
+    bevel.extend([("float", "profile"), ("float", "bevel_angle"), ("float", "spread"), ("char", "defgrp_name[64]")]);
+    d.def("BevelModifierData", &bevel);
+    d.def("TriangulateModifierData", &[md, ("int", "flag"), ("int", "quad_method"), ("int", "ngon_method"), ("int", "min_vertices")]);
+    d.def("WeldModifierData", &[md, ("float", "merge_dist"), ("char", "defgrp_name[64]"), ("char", "mode"), ("char", "flag"), ("char", "_pad[2]")]);
+    d.def(
+        "DisplaceModifierData",
+        &[md, ("Tex", "*texture"), ("Object", "*map_object"), ("char", "map_bone[64]"), ("char", "defgrp_name[64]"), ("float", "midlevel"), ("int", "direction"), ("char", "uvlayer_name[64]"), ("int", "uvlayer_tmp"), ("int", "texmapping"), ("float", "strength"), ("int", "flag"), ("short", "space"), ("char", "_pad[6]")],
+    );
+    d.def("SmoothModifierData", &[md, ("float", "fac"), ("char", "defgrp_name[64]"), ("short", "flag"), ("short", "repeat")]);
+    d.def("WaveModifierData", &[md, ("float", "height"), ("float", "width"), ("float", "narrow"), ("float", "speed")]);
+
+    // Collections (2.8+).
+    d.def("CollectionObject", &[("CollectionObject", "*next"), ("CollectionObject", "*prev"), ("Object", "*ob"), ("void", "*_pad")]);
+    d.def("CollectionChild", &[("CollectionChild", "*next"), ("CollectionChild", "*prev"), ("Collection", "*collection"), ("void", "*_pad")]);
+    let col_flag = if c.layout == Layout::Legacy30 { ("short", "flag") } else { ("uchar", "flag") };
+    d.def("Collection", &[("ID", "id"), ("ID", "*owner_id"), ("ListBase", "gobject"), ("ListBase", "children"), ("char", "_pad0[4]"), ("int", "color_tag"), col_flag, ("char", "_pad1[5]")]);
+
+    // World.
+    d.def("World", &[("ID", "id"), ("AnimData", "*adt"), ("short", "colormodel"), ("short", "totex"), ("short", "texact"), ("short", "mistype"), ("float", "horr"), ("float", "horg"), ("float", "horb"), ("float", "exposure"), ("bNodeTree", "*nodetree"), ("short", "use_nodes"), ("char", "_pad[6]")]);
+
+    // Animation.
+    let mut adt: Vec<(&str, &str)> = vec![("bAction", "*action"), ("bAction", "*tmpact"), ("ListBase", "nla_tracks"), ("NlaTrack", "*act_track"), ("int", "flag"), ("int", "recalc")];
+    if c.layout == Layout::Attr50 {
+        adt.extend([("int", "slot_handle"), ("char", "last_slot_identifier[66]"), ("char", "_pad[2]")]);
+    }
+    d.def("AnimData", &adt);
+    d.def("BezTriple", &[("float", "vec[3][3]"), ("float", "tilt"), ("float", "weight"), ("float", "radius"), ("char", "ipo"), ("char", "h1"), ("char", "h2"), ("char", "f1"), ("char", "f2"), ("char", "f3"), ("char", "hide"), ("char", "easing"), ("float", "back"), ("float", "amplitude"), ("float", "period"), ("char", "auto_handle_type"), ("char", "_pad[3]")]);
+    d.def("FPoint", &[("float", "vec[2]"), ("int", "flag"), ("int", "_pad")]);
+    d.def(
+        "FCurve",
+        &[("FCurve", "*next"), ("FCurve", "*prev"), ("bActionGroup", "*grp"), ("ChannelDriver", "*driver"), ("ListBase", "modifiers"), ("BezTriple", "*bezt"), ("FPoint", "*fpt"), ("uint", "totvert"), ("int", "active_keyframe_index"), ("float", "curval"), ("short", "flag"), ("short", "extend"), ("char", "auto_smoothing"), ("char", "_pad[3]"), ("int", "array_index"), ("char", "*rna_path"), ("int", "color_mode"), ("float", "color[3]")],
+    );
+    let mut act: Vec<(&str, &str)> = vec![("ID", "id"), ("ListBase", "curves"), ("ListBase", "chanbase"), ("ListBase", "groups"), ("ListBase", "markers"), ("int", "flag"), ("int", "active_marker"), ("int", "idroot"), ("char", "_pad[4]")];
+    if c.layout == Layout::Attr50 {
+        d.def("ActionChannelbag", &[("int", "slot_handle"), ("int", "fcurve_array_num"), ("FCurve", "**fcurve_array"), ("bActionGroup", "**group_array"), ("int", "group_array_num"), ("char", "_pad[4]")]);
+        d.def("ActionStripKeyframeData", &[("ActionChannelbag", "**channelbag_array"), ("int", "channelbag_array_num"), ("char", "_pad[4]")]);
+        act.extend([
+            ("ActionLayer", "**layer_array"),
+            ("int", "layer_array_num"),
+            ("int", "layer_active_index"),
+            ("ActionSlot", "**slot_array"),
+            ("int", "slot_array_num"),
+            ("int", "last_slot_handle"),
+            ("ActionStripKeyframeData", "**strip_keyframe_data_array"),
+            ("int", "strip_keyframe_data_array_num"),
+            ("char", "_pad1[4]"),
+        ]);
+    }
+    d.def("bAction", &act);
 
     d.def("bNodeSocketValueRGBA", &[("float", "value[4]")]);
     d.def("bNodeSocketValueFloat", &[("int", "subtype"), ("float", "value"), ("float", "min"), ("float", "max")]);
@@ -444,7 +515,7 @@ fn define(c: &Cfg) -> Dna {
         &[("ID", "id"), ("AnimData", "*adt"), ("char", "type"), ("char", "dtx"), ("short", "flag"), ("float", "passepartalpha"), ("float", cs), ("float", ce), ("float", "lens"), ("float", "ortho_scale"), ("float", "drawsize"), ("float", "sensor_x"), ("float", "sensor_y"), ("float", "shiftx"), ("float", "shifty"), ("char", "sensor_fit"), ("char", "_pad[7]")],
     );
     d.def("RenderData", &[("int", "cfra"), ("int", "sfra"), ("int", "efra"), ("short", "frs_sec"), ("char", "_pad[2]"), ("int", "xsch"), ("int", "ysch"), ("float", "xasp"), ("float", "yasp"), ("float", "frs_sec_base")]);
-    d.def("Scene", &[("ID", "id"), ("AnimData", "*adt"), ("Object", "*camera"), ("World", "*world"), ("Scene", "*set"), ("ListBase", "base"), ("RenderData", "r")]);
+    d.def("Scene", &[("ID", "id"), ("AnimData", "*adt"), ("Object", "*camera"), ("World", "*world"), ("Scene", "*set"), ("ListBase", "base"), ("RenderData", "r"), ("Collection", "*master_collection")]);
     d.def("FileGlobal", &[("char", "subvstr[4]"), ("short", "subversion"), ("short", "minversion"), ("short", "minsubversion"), ("char", "_pad[6]"), ("bScreen", "*curscreen"), ("Scene", "*curscene")]);
     d
 }
@@ -720,6 +791,227 @@ fn write_mesh(w: &mut Writer, c: &Cfg, me: u64, m0: u64, m1: u64) {
 
 fn nv_f32(v: &[f32]) -> V {
     V::N(v.iter().map(|&x| x as f64).collect())
+}
+
+// ---------------------------------------------------------------------------
+// Modifiers, collections, parenting, world and animation
+
+/// Inverse of `Root`'s world matrix T(1,0,0) Rz(90°), stored as `Mid`'s parentinv.
+pub const ROOT_INV: [f64; 16] = [0., -1., 0., 0., 1., 0., 0., 0., 0., 0., 1., 0., 0., 1., 0., 1.];
+
+/// World colour and strength the extras scene should import with: the
+/// Background node, except for the 2.8-era file whose world uses no nodes.
+pub fn extras_world(c: Cfg) -> ([f32; 3], f32) {
+    if c.layout == Layout::Legacy30 {
+        ([0.05, 0.06, 0.07], 1.0)
+    } else {
+        ([0.1, 0.2, 0.3], 2.5)
+    }
+}
+
+/// F-curves written on `Anim`'s action: (rna path, index, keys (frame, value,
+/// ipo), stored as baked FPoints). Only the transform ones are imported.
+pub fn extras_curves() -> Vec<(&'static str, usize, Vec<(f64, f64, u8)>, bool)> {
+    vec![
+        ("location", 0, vec![(1., 0., 2), (10., 5., 1)], false),
+        ("hide_viewport", 0, vec![(1., 0., 0)], false),
+        ("rotation_euler", 2, vec![(1., 0., 0), (20., 3., 2)], false),
+        ("scale", 1, vec![(1., 1., 1), (2., 2., 1)], true),
+        ("location", 1, vec![], false),
+    ]
+}
+
+fn version_of(c: &Cfg) -> u32 {
+    match c.layout {
+        Layout::Legacy27 => 279,
+        Layout::Legacy30 => 300,
+        Layout::Attr36 => 306,
+        Layout::Attr42 => 402,
+        Layout::Attr50 => 500,
+    }
+}
+
+/// A ListBase of `sname` link structs whose `member` points at `targets`.
+fn links(w: &mut Writer, sname: &str, member: &str, targets: &[u64]) -> (u64, u64) {
+    let addrs: Vec<u64> = targets.iter().map(|_| w.alloc()).collect();
+    for (i, &t) in targets.iter().enumerate() {
+        let prev = if i > 0 { addrs[i - 1] } else { 0 };
+        let d = w.inst(sname, &[("next", p(addrs.get(i + 1).copied().unwrap_or(0))), ("prev", p(prev)), (member, p(t))]);
+        w.put(addrs[i], "DATA", sname, 1, d);
+    }
+    (addrs.first().copied().unwrap_or(0), addrs.last().copied().unwrap_or(0))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collection(w: &mut Writer, ptr: u64, code: &str, name: &str, flag: f64, obs: &[u64], kids: &[u64]) {
+    let (of, ol) = links(w, "CollectionObject", "ob", obs);
+    let (cf, cl) = links(w, "CollectionChild", "collection", kids);
+    let d = w.inst(
+        "Collection",
+        &[("id.name", s(&format!("GR{name}"))), ("gobject.first", p(of)), ("gobject.last", p(ol)), ("children.first", p(cf)), ("children.last", p(cl)), ("flag", n(flag))],
+    );
+    w.put(ptr, code, "Collection", 1, d);
+}
+
+/// One FCurve block at `ptr` with its keys and RNA path.
+fn fcurve(w: &mut Writer, ptr: u64, next: u64, prev: u64, path: &str, index: usize, keys: &[(f64, f64, u8)], baked: bool) {
+    let rna = w.raw(format!("{path}\0").into_bytes(), 1);
+    let mut f = vec![("next", p(next)), ("prev", p(prev)), ("array_index", n(index as f64)), ("rna_path", p(rna)), ("totvert", n(keys.len() as f64))];
+    if !keys.is_empty() {
+        let addr = w.alloc();
+        let mut data = Vec::new();
+        if baked {
+            for &(fr, v, _) in keys {
+                data.extend(w.inst("FPoint", &[("vec", nv(&[fr, v]))]));
+            }
+            w.put(addr, "DATA", "FPoint", keys.len(), data);
+            f.push(("fpt", p(addr)));
+        } else {
+            for &(fr, v, ipo) in keys {
+                data.extend(w.inst("BezTriple", &[("vec", nv(&[fr - 1., v, 0., fr, v, 0., fr + 1., v, 0.])), ("ipo", n(ipo as f64)), ("h1", n(1.)), ("h2", n(1.))]));
+            }
+            w.put(addr, "DATA", "BezTriple", keys.len(), data);
+            f.push(("bezt", p(addr)));
+        }
+    }
+    let d = w.inst("FCurve", &f);
+    w.put(ptr, "DATA", "FCurve", 1, d);
+}
+
+/// A 2.8+ scene exercising modifiers, collections, parenting, the world and
+/// object animation. Not available for `Legacy27` (no collections then).
+///
+/// Objects: `Mod` (mesh with a modifier stack, in `Props` and `Nested`),
+/// `Root` (empty at (1,0,0) turned 90° about Z, in the master collection),
+/// `Mid` (child of `Root` with its parent inverse, disabled in viewports, in
+/// `Props`), `Leaf` (child of `Mid`, identity parent inverse, in `Hidden`),
+/// `Anim` (empty with an action, in `Nested`).
+/// Collections: master -> `Props` -> `Nested` (-> `Hidden` again), master ->
+/// `Hidden` (disabled in viewports).
+pub fn extras_file(c: Cfg) -> Vec<u8> {
+    assert!(c.layout != Layout::Legacy27);
+    let mut w = Writer::new(define(&c), c.big, c.layout == Layout::Attr50, version_of(&c));
+    let id = |code: &str, name: &str| ("id.name", s(&format!("{code}{name}")));
+    let [sc, world, me, mod_ob, root, mid, leaf, anim, master, props, nested, hidden, action, adt] = [(); 14].map(|_| w.alloc());
+
+    let glob = w.alloc();
+    let g = w.inst("FileGlobal", &[("curscene", p(sc))]);
+    w.put(glob, "GLOB", "FileGlobal", 1, g);
+    let d = w.inst(
+        "Scene",
+        &[id("SC", "Extras"), ("camera", p(0)), ("world", p(world)), ("master_collection", p(master)), ("r.sfra", n(1.)), ("r.efra", n(48.)), ("r.frs_sec", n(25.)), ("r.frs_sec_base", n(1.)), ("r.xsch", n(800.)), ("r.ysch", n(600.)), ("r.xasp", n(1.)), ("r.yasp", n(1.))],
+    );
+    w.put(sc, "SC", "Scene", 1, d);
+
+    // World: viewport colour plus, from 2.9 on, a Background node.
+    let nodes = c.layout != Layout::Legacy30;
+    let mut wf = vec![id("WO", "World"), ("horr", n(0.05)), ("horg", n(0.06)), ("horb", n(0.07)), ("use_nodes", n(nodes as u8 as f64))];
+    let tree = w.alloc();
+    let (bg, s_col, s_str) = (w.alloc(), w.alloc(), w.alloc());
+    let t = w.inst("bNodeTree", &[id("NT", "Shader Nodetree"), ("nodes.first", p(bg)), ("nodes.last", p(bg))]);
+    w.put(tree, "DATA", "bNodeTree", 1, t);
+    let nd = w.inst("bNode", &[("inputs.first", p(s_col)), ("inputs.last", p(s_str)), ("name", s("Background")), ("idname", s("ShaderNodeBackground"))]);
+    w.put(bg, "DATA", "bNode", 1, nd);
+    let dv = w.add("DATA", "bNodeSocketValueRGBA", &[("value", nv(&[0.1, 0.2, 0.3, 1.0]))]);
+    let sk = w.inst("bNodeSocket", &[("next", p(s_str)), ("identifier", s("Color")), ("name", s("Color")), ("default_value", p(dv))]);
+    w.put(s_col, "DATA", "bNodeSocket", 1, sk);
+    let dv = w.add("DATA", "bNodeSocketValueFloat", &[("value", n(2.5))]);
+    let sk = w.inst("bNodeSocket", &[("prev", p(s_col)), ("identifier", s("Strength")), ("name", s("Strength")), ("default_value", p(dv))]);
+    w.put(s_str, "DATA", "bNodeSocket", 1, sk);
+    wf.push(("nodetree", p(tree)));
+    let d = w.inst("World", &wf);
+    w.put(world, "WO", "World", 1, d);
+
+    write_mesh(&mut w, &c, me, 0, 0);
+
+    // Modifier stack; the Wave, render-only, vertex-bevel and textured
+    // displace entries must be skipped.
+    let edge_bevel: Vec<(&str, V)> = if c.layout == Layout::Legacy30 { vec![("flags", n(0.))] } else { vec![("affect_type", n(1.))] };
+    let vert_bevel: Vec<(&str, V)> = if c.layout == Layout::Legacy30 { vec![("flags", n(2.))] } else { vec![("affect_type", n(0.))] };
+    let mut bevel = vec![("value", n(0.05)), ("res", n(3.)), ("lim_flags", n(8.)), ("bevel_angle", n(0.6))];
+    bevel.extend(edge_bevel);
+    let mods: Vec<(&str, Vec<(&str, V)>)> = vec![
+        ("MirrorModifierData", vec![("flag", n((1 << 3 | 1 << 5 | 1 << 6) as f64)), ("tolerance", n(0.01))]),
+        ("SubsurfModifierData", vec![("levels", n(2.)), ("renderLevels", n(3.))]),
+        ("WaveModifierData", vec![("height", n(0.5))]),
+        ("SubsurfModifierData", vec![("modifier.mode", n(2.)), ("levels", n(4.))]),
+        ("ArrayModifierData", vec![("count", n(3.)), ("offset_type", n(3.)), ("scale", nv(&[1.5, 0., 0.])), ("offset", nv(&[0., 0., 2.])), ("flags", n(1.))]),
+        ("SolidifyModifierData", vec![("offset", n(0.2)), ("offset_fac", n(0.5))]),
+        ("BevelModifierData", bevel),
+        ("BevelModifierData", vert_bevel),
+        ("TriangulateModifierData", vec![]),
+        ("WeldModifierData", vec![("merge_dist", n(0.02))]),
+        ("DisplaceModifierData", vec![("strength", n(2.)), ("midlevel", n(0.25)), ("direction", n(3.))]),
+        ("DisplaceModifierData", vec![("texture", p(0xDEAD_0)), ("strength", n(2.)), ("direction", n(3.))]),
+        ("SmoothModifierData", vec![("fac", n(0.7)), ("repeat", n(4.))]),
+    ];
+    let addrs: Vec<u64> = mods.iter().map(|_| w.alloc()).collect();
+    for (i, (sname, fields)) in mods.into_iter().enumerate() {
+        let prev = if i > 0 { addrs[i - 1] } else { 0 };
+        let mut f: Vec<(&str, V)> = vec![("modifier.mode", n(3.)), ("modifier.type", n(i as f64 + 1.)), ("modifier.name", s(sname)), ("modifier.next", p(addrs.get(i + 1).copied().unwrap_or(0))), ("modifier.prev", p(prev))];
+        f.extend(fields);
+        let d = w.inst(sname, &f);
+        w.put(addrs[i], "DATA", sname, 1, d);
+    }
+
+    // Objects.
+    let ident = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    let has_obmat = !c.new_names();
+    let hide_name = if c.layout == Layout::Legacy30 { "restrictflag" } else { "visibility_flag" };
+    // "Disable in renders" alone: bit 2 of restrictflag, bit 1 of visibility_flag.
+    let render_off = if c.layout == Layout::Legacy30 { 4. } else { 2. };
+    let object = |w: &mut Writer, ptr: u64, name: &str, ty: f64, data: u64, extra: Vec<(&str, V)>| {
+        let mut f = vec![id("OB", name), ("type", n(ty)), ("data", p(data)), ("scale", nv(&[1., 1., 1.])), ("dscale", nv(&[1., 1., 1.])), ("parentinv", nv(&ident)), ("rotmode", n(1.))];
+        if has_obmat {
+            f.push(("obmat", nv(&ident))); // stale; the loc/rot/scale basis wins
+        }
+        f.extend(extra);
+        let d = w.inst("Object", &f);
+        w.put(ptr, "OB", "Object", 1, d);
+    };
+    object(&mut w, mod_ob, "Mod", 1., me, vec![("modifiers.first", p(addrs[0])), ("modifiers.last", p(*addrs.last().unwrap())), (hide_name, n(render_off))]);
+    object(&mut w, root, "Root", 0., 0, vec![("loc", nv(&[1., 0., 0.])), ("rot", nv(&[0., 0., FRAC_PI_2]))]);
+    object(&mut w, mid, "Mid", 0., 0, vec![("loc", nv(&[0., 2., 0.])), ("parent", p(root)), ("parentinv", nv(&ROOT_INV)), (hide_name, n(1.))]);
+    object(&mut w, leaf, "Leaf", 0., 0, vec![("loc", nv(&[0., 0., 3.])), ("parent", p(mid))]);
+    object(&mut w, anim, "Anim", 0., 0, vec![("adt", p(adt))]);
+
+    // Collections.
+    collection(&mut w, master, "DATA", "Scene Collection", 0., &[root], &[props, hidden]);
+    collection(&mut w, props, "GR", "Props", 0., &[mod_ob, mid], &[nested]);
+    collection(&mut w, nested, "GR", "Nested", 0., &[anim, mod_ob], &[hidden]);
+    collection(&mut w, hidden, "GR", "Hidden", 1., &[leaf], &[]);
+
+    // Animation.
+    let curves = extras_curves();
+    let fc: Vec<u64> = curves.iter().map(|_| w.alloc()).collect();
+    let slotted = c.layout == Layout::Attr50;
+    for (i, (path, index, keys, baked)) in curves.iter().enumerate() {
+        let (next, prev) = if slotted { (0, 0) } else { (fc.get(i + 1).copied().unwrap_or(0), if i > 0 { fc[i - 1] } else { 0 }) };
+        fcurve(&mut w, fc[i], next, prev, path, *index, keys, *baked);
+    }
+    let mut af = vec![id("AC", "AnimAction")];
+    let mut adf = vec![("action", p(action))];
+    if slotted {
+        // A decoy channelbag for another slot comes first.
+        let decoy_fc = w.alloc();
+        fcurve(&mut w, decoy_fc, 0, 0, "location", 0, &[(1., 99., 1)], false);
+        let decoy_arr = w.raw(w.ptrs(&[decoy_fc]), 1);
+        let decoy = w.add("DATA", "ActionChannelbag", &[("slot_handle", n(3.)), ("fcurve_array", p(decoy_arr)), ("fcurve_array_num", n(1.))]);
+        let arr = w.raw(w.ptrs(&fc), fc.len());
+        let bag = w.add("DATA", "ActionChannelbag", &[("slot_handle", n(7.)), ("fcurve_array", p(arr)), ("fcurve_array_num", n(fc.len() as f64))]);
+        let bags = w.raw(w.ptrs(&[decoy, bag]), 2);
+        let kd = w.add("DATA", "ActionStripKeyframeData", &[("channelbag_array", p(bags)), ("channelbag_array_num", n(2.))]);
+        let kds = w.raw(w.ptrs(&[kd]), 1);
+        af.extend([("strip_keyframe_data_array", p(kds)), ("strip_keyframe_data_array_num", n(1.))]);
+        adf.push(("slot_handle", n(7.)));
+    } else {
+        af.extend([("curves.first", p(fc[0])), ("curves.last", p(*fc.last().unwrap()))]);
+    }
+    let d = w.inst("bAction", &af);
+    w.put(action, "AC", "bAction", 1, d);
+    let d = w.inst("AnimData", &adf);
+    w.put(adt, "DATA", "AnimData", 1, d);
+    w.finish()
 }
 
 // ---------------------------------------------------------------------------

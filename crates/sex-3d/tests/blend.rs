@@ -266,3 +266,155 @@ fn rotation_modes_agree() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Modifiers, collections, parenting chains, world and animation.
+
+use sex_3d::io::blend::{import_blend_full, BlendKey, INTERP_LINEAR};
+use sex_3d::modifiers::Modifier;
+
+/// 2.8+ layouts: 2.8x names (`restrictflag`, no `affect_type`, node-less
+/// world), 2.9-4.3 names, and 5.0's slotted actions.
+const EXTRAS: [Cfg; 7] = [
+    Cfg { ptr: 8, big: false, layout: Layout::Legacy30 },
+    Cfg { ptr: 4, big: true, layout: Layout::Legacy30 },
+    Cfg { ptr: 8, big: false, layout: Layout::Attr36 },
+    Cfg { ptr: 8, big: false, layout: Layout::Attr42 },
+    Cfg { ptr: 4, big: true, layout: Layout::Attr42 },
+    Cfg { ptr: 8, big: false, layout: Layout::Attr50 },
+    Cfg { ptr: 8, big: true, layout: Layout::Attr50 },
+];
+
+#[test]
+fn modifier_stack() {
+    let want = vec![
+        Modifier::Mirror { x: true, y: false, z: true, merge: true, merge_distance: 0.01 },
+        Modifier::Subdivision { levels: 2, simple: false },
+        Modifier::Array { count: 3, relative: [1.5, 0.0, 0.0], constant: [0.0, 0.0, 2.0], merge: true },
+        Modifier::Solidify { thickness: 0.2, offset: 0.5 },
+        Modifier::Bevel { width: 0.05, segments: 3, angle: 0.6 },
+        Modifier::Triangulate,
+        Modifier::Weld { distance: 0.02 },
+        Modifier::Displace { strength: 1.5 },
+        Modifier::Smooth { factor: 0.7, iterations: 4 },
+    ];
+    for c in EXTRAS {
+        let s = import_blend(&blendgen::extras_file(c)).unwrap_or_else(|e| panic!("{c:?}: {e}"));
+        let o = &s.objects[s.find_object("Mod").unwrap()];
+        assert_eq!(o.modifiers, want, "{c:?}");
+        // The stack evaluates.
+        let m = s.evaluated_mesh(s.find_object("Mod").unwrap()).unwrap();
+        assert!(m.face_count() > 0, "{c:?}");
+    }
+    // The classic test scene has no modifiers.
+    let s = import_blend(&scene_file(ALL[0])).unwrap();
+    assert!(s.objects.iter().all(|o| o.modifiers.is_empty()));
+}
+
+#[test]
+fn collections_and_visibility() {
+    for c in EXTRAS {
+        let s = import_blend(&blendgen::extras_file(c)).unwrap_or_else(|e| panic!("{c:?}: {e}"));
+        let col = |n: &str| s.collections.iter().position(|x| x.name == n).unwrap_or_else(|| panic!("{c:?}: no collection {n}"));
+        assert_eq!(s.collections.len(), 4, "{c:?}: {:?}", s.collections);
+        assert_eq!(s.collections[0].name, "Scene Collection", "{c:?}");
+        let (props, nested, hidden) = (col("Props"), col("Nested"), col("Hidden"));
+        assert_eq!(s.collections[props].parent, Some(0), "{c:?}");
+        assert_eq!(s.collections[nested].parent, Some(props), "{c:?}");
+        // Linked under both the master and Nested; the first link wins.
+        assert_eq!(s.collections[hidden].parent, Some(0), "{c:?}");
+        assert!(s.collections[props].visible && s.collections[nested].visible && !s.collections[hidden].visible, "{c:?}");
+        let ob = |n: &str| &s.objects[s.find_object(n).unwrap()];
+        assert_eq!(ob("Root").collection, 0, "{c:?}");
+        assert_eq!(ob("Mod").collection, props, "{c:?}");
+        assert_eq!(ob("Mid").collection, props, "{c:?}");
+        assert_eq!(ob("Anim").collection, nested, "{c:?}");
+        assert_eq!(ob("Leaf").collection, hidden, "{c:?}");
+        // Mid is disabled in viewports; Mod only in renders.
+        assert!(!ob("Mid").visible && ob("Mod").visible && ob("Root").visible, "{c:?}");
+        assert!(!s.is_visible(s.find_object("Leaf").unwrap()), "{c:?}");
+        assert!(s.is_visible(s.find_object("Anim").unwrap()), "{c:?}");
+    }
+}
+
+#[test]
+fn parent_chain_world_transforms() {
+    for c in EXTRAS {
+        let s = import_blend(&blendgen::extras_file(c)).unwrap();
+        let (root, mid, leaf) = (s.find_object("Root").unwrap(), s.find_object("Mid").unwrap(), s.find_object("Leaf").unwrap());
+        assert_eq!(s.objects[mid].parent, Some(root), "{c:?}");
+        assert_eq!(s.objects[leaf].parent, Some(mid), "{c:?}");
+        // Mid's parent inverse cancels Root's transform; Leaf has none.
+        let m = s.world_matrix(mid);
+        assert!(m.transform_point(Vec3::ZERO).approx_eq(Vec3::new(0.0, 2.0, 0.0), 1e-5), "{c:?}");
+        assert!(m.transform_vector(Vec3::X).approx_eq(Vec3::X, 1e-5), "{c:?}");
+        let l = s.world_matrix(leaf);
+        assert!(l.transform_point(Vec3::ZERO).approx_eq(Vec3::new(0.0, 2.0, 3.0), 1e-5), "{c:?}");
+        assert!(l.transform_vector(Vec3::Y).approx_eq(Vec3::Y, 1e-5), "{c:?}");
+        let r = s.world_matrix(root);
+        assert!(r.transform_vector(Vec3::X).approx_eq(Vec3::Y, 1e-5), "{c:?}");
+    }
+}
+
+#[test]
+fn scene_settings_and_world() {
+    for c in EXTRAS {
+        let s = import_blend(&blendgen::extras_file(c)).unwrap();
+        assert_eq!(s.name, "Extras");
+        assert_eq!((s.frame_start, s.frame_end), (1, 48), "{c:?}");
+        assert!(approx(s.fps, 25.0), "{c:?}");
+        assert_eq!(s.active_camera, None, "{c:?}");
+        let (color, strength) = blendgen::extras_world(c);
+        assert!(s.world.color.approx_eq(Vec3::from_array(color), 1e-6), "{c:?}: {:?}", s.world);
+        assert!(approx(s.world.strength, strength), "{c:?}: {:?}", s.world);
+    }
+    // The classic scene's camera is the active one and it has no world.
+    let s = import_blend(&scene_file(ALL[3])).unwrap();
+    assert_eq!(s.active_camera, s.find_object("Camera"));
+    assert_eq!(s.world, sex_3d::scene::World::default());
+}
+
+#[test]
+fn object_animation() {
+    for c in EXTRAS {
+        let bytes = blendgen::extras_file(c);
+        let (s, actions) = import_blend_full(&bytes).unwrap_or_else(|e| panic!("{c:?}: {e}"));
+        assert_eq!(s, import_blend(&bytes).unwrap());
+        assert_eq!(actions.len(), 1, "{c:?}");
+        let a = &actions[0];
+        assert_eq!((a.object.as_str(), a.action.as_str()), ("Anim", "AnimAction"), "{c:?}");
+        let key = |frame: f32, value: f32, interpolation: u8| BlendKey { frame, value, interpolation };
+        let want: Vec<(&str, usize, Vec<BlendKey>)> = vec![
+            ("location", 0, vec![key(1., 0., 2), key(10., 5., 1)]),
+            ("rotation_euler", 2, vec![key(1., 0., 0), key(20., 3., 2)]),
+            ("scale", 1, vec![key(1., 1., INTERP_LINEAR), key(2., 2., INTERP_LINEAR)]),
+        ];
+        let got: Vec<(&str, usize, Vec<BlendKey>)> = a.curves.iter().map(|f| (f.path.as_str(), f.index, f.keys.clone())).collect();
+        assert_eq!(got, want, "{c:?}");
+        // The fixture also wrote a non-transform curve and an empty one.
+        assert_eq!(blendgen::extras_curves().len(), 5);
+    }
+    let (_, actions) = import_blend_full(&scene_file(ALL[5])).unwrap();
+    assert!(actions.is_empty());
+}
+
+#[test]
+fn corrupted_extras_never_panic() {
+    let mut rng = Rng(0x0123_4567_89AB_CDEF);
+    for c in EXTRAS {
+        let full = blendgen::extras_file(c);
+        for _ in 0..300 {
+            let mut b = full.clone();
+            for _ in 0..1 + rng.next() % 3 {
+                let at = (rng.next() % b.len() as u64) as usize;
+                b[at] ^= 1 << (rng.next() % 8);
+            }
+            let at = (rng.next() % (b.len() as u64 - 8)) as usize;
+            b[at..at + 8].copy_from_slice(&rng.next().to_le_bytes());
+            let _ = import_blend_full(&b);
+        }
+        for len in (0..full.len()).step_by(13) {
+            assert!(import_blend_full(&full[..len]).is_err(), "{c:?} truncated to {len}");
+        }
+    }
+}
