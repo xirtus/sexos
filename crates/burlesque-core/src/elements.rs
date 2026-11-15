@@ -142,6 +142,7 @@ pub struct TextBox {
     pub paragraphs: Vec<Paragraph>,
     pub background: Option<Color>,
     pub padding: f32,
+    pub magic_key: Option<String>,
 }
 
 impl TextBox {
@@ -151,11 +152,17 @@ impl TextBox {
             paragraphs: Vec::new(),
             background: None,
             padding: 8.0,
+            magic_key: None,
         }
     }
 
     pub fn with_paragraph(mut self, p: Paragraph) -> Self {
         self.paragraphs.push(p);
+        self
+    }
+
+    pub fn with_magic_key(mut self, key: impl Into<String>) -> Self {
+        self.magic_key = Some(key.into());
         self
     }
 
@@ -195,6 +202,7 @@ pub struct Shape {
     pub bounds: Rect,
     pub fill: Option<Color>,
     pub stroke: Option<StrokeStyle>,
+    pub magic_key: Option<String>,
 }
 
 impl Shape {
@@ -204,6 +212,7 @@ impl Shape {
             bounds,
             fill,
             stroke,
+            magic_key: None,
         }
     }
 
@@ -213,6 +222,7 @@ impl Shape {
             bounds,
             fill,
             stroke,
+            magic_key: None,
         }
     }
 
@@ -222,6 +232,7 @@ impl Shape {
             bounds,
             fill,
             stroke,
+            magic_key: None,
         }
     }
 
@@ -235,6 +246,7 @@ impl Shape {
             bounds: Rect::new(x, y, w, h),
             fill: None,
             stroke: Some(stroke),
+            magic_key: None,
         }
     }
 
@@ -248,7 +260,13 @@ impl Shape {
             bounds: Rect::new(x, y, w, h),
             fill: Some(stroke.color),
             stroke: Some(stroke),
+            magic_key: None,
         }
+    }
+
+    pub fn with_magic_key(mut self, key: impl Into<String>) -> Self {
+        self.magic_key = Some(key.into());
+        self
     }
 }
 
@@ -273,6 +291,7 @@ pub struct ImageElement {
     pub data: Vec<u8>,
     pub fit: FitMode,
     pub decoded: Option<Image>,
+    pub magic_key: Option<String>,
 }
 
 impl ImageElement {
@@ -283,6 +302,7 @@ impl ImageElement {
             data,
             fit,
             decoded,
+            magic_key: None,
         }
     }
 
@@ -292,7 +312,13 @@ impl ImageElement {
             data: Vec::new(),
             fit,
             decoded: Some(image),
+            magic_key: None,
         }
+    }
+
+    pub fn with_magic_key(mut self, key: impl Into<String>) -> Self {
+        self.magic_key = Some(key.into());
+        self
     }
 
     pub fn ensure_decoded(&mut self) -> Option<&Image> {
@@ -346,6 +372,7 @@ pub struct TableElement {
     pub header_background: Option<Color>,
     pub border_color: Color,
     pub border_width: f32,
+    pub magic_key: Option<String>,
 }
 
 impl TableElement {
@@ -369,7 +396,13 @@ impl TableElement {
             header_background: Some(Color::rgb(0x33, 0x41, 0x55)),
             border_color: Color::rgb(0x64, 0x74, 0x8B),
             border_width: 1.5,
+            magic_key: None,
         }
+    }
+
+    pub fn with_magic_key(mut self, key: impl Into<String>) -> Self {
+        self.magic_key = Some(key.into());
+        self
     }
 
     pub fn set_cell(&mut self, row: usize, col: usize, cell: TableCell) {
@@ -389,6 +422,7 @@ pub struct CodeBlock {
     pub background: Color,
     pub text_color: Color,
     pub show_line_numbers: bool,
+    pub magic_key: Option<String>,
 }
 
 impl CodeBlock {
@@ -401,11 +435,17 @@ impl CodeBlock {
             background: Color::rgb(0x1E, 0x29, 0x3B),
             text_color: Color::rgb(0xF8, 0xFA, 0xFC),
             show_line_numbers: true,
+            magic_key: None,
         }
     }
 
     pub fn with_language(mut self, lang: impl Into<String>) -> Self {
         self.language = Some(lang.into());
+        self
+    }
+
+    pub fn with_magic_key(mut self, key: impl Into<String>) -> Self {
+        self.magic_key = Some(key.into());
         self
     }
 }
@@ -440,16 +480,118 @@ impl SlideElement {
             SlideElement::Code(c) => c.bounds = bounds,
         }
     }
+
+    pub fn magic_key(&self) -> Option<&str> {
+        match self {
+            SlideElement::TextBox(tb) => tb.magic_key.as_deref(),
+            SlideElement::Shape(s) => s.magic_key.as_deref(),
+            SlideElement::Image(img) => img.magic_key.as_deref(),
+            SlideElement::Table(t) => t.magic_key.as_deref(),
+            SlideElement::Code(c) => c.magic_key.as_deref(),
+        }
+    }
+
+    pub fn set_magic_key(&mut self, key: Option<String>) {
+        match self {
+            SlideElement::TextBox(tb) => tb.magic_key = key,
+            SlideElement::Shape(s) => s.magic_key = key,
+            SlideElement::Image(img) => img.magic_key = key,
+            SlideElement::Table(t) => t.magic_key = key,
+            SlideElement::Code(c) => c.magic_key = key,
+        }
+    }
+
+    pub fn with_magic_key(mut self, key: impl Into<String>) -> Self {
+        self.set_magic_key(Some(key.into()));
+        self
+    }
 }
 
-/// Slide transitions.
+/// Slide transitions supported by the burlesque presentations engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Transition {
     None,
+    Dissolve,
+    PushLeft,
+    PushRight,
+    WipeRight,
+    SlideUp,
+    ZoomIn,
     Fade,
     SlideLeft,
-    SlideRight,
-    Dissolve,
+    MagicMove,
+}
+
+impl Transition {
+    /// Default transition playback duration in milliseconds.
+    pub const DEFAULT_DURATION_MS: u32 = 400;
+
+    /// Return nominal animation duration in milliseconds.
+    pub fn duration_ms(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::MagicMove => 600,
+            _ => Self::DEFAULT_DURATION_MS,
+        }
+    }
+
+    /// User-visible name of the transition.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::Dissolve => "Dissolve",
+            Self::PushLeft => "PushLeft",
+            Self::PushRight => "PushRight",
+            Self::WipeRight => "WipeRight",
+            Self::SlideUp => "SlideUp",
+            Self::ZoomIn => "ZoomIn",
+            Self::Fade => "Fade",
+            Self::SlideLeft => "SlideLeft",
+            Self::MagicMove => "Magic Move",
+        }
+    }
+
+    /// Short serialized kind identifier.
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Dissolve => "dissolve",
+            Self::PushLeft => "push_left",
+            Self::PushRight => "push_right",
+            Self::WipeRight => "wipe_right",
+            Self::SlideUp => "slide_up",
+            Self::ZoomIn => "zoom_in",
+            Self::Fade => "fade",
+            Self::SlideLeft => "slide_left",
+            Self::MagicMove => "magic-move",
+        }
+    }
+
+    /// Parse transition name or loose string keyword.
+    pub fn from_str_loose(s: &str) -> Self {
+        let clean = s.trim();
+        if clean.eq_ignore_ascii_case("dissolve") {
+            Self::Dissolve
+        } else if clean.eq_ignore_ascii_case("push_left") || clean.eq_ignore_ascii_case("pushleft") || clean.eq_ignore_ascii_case("push") {
+            Self::PushLeft
+        } else if clean.eq_ignore_ascii_case("push_right") || clean.eq_ignore_ascii_case("pushright") {
+            Self::PushRight
+        } else if clean.eq_ignore_ascii_case("wipe_right") || clean.eq_ignore_ascii_case("wiperight") || clean.eq_ignore_ascii_case("wipe") {
+            Self::WipeRight
+        } else if clean.eq_ignore_ascii_case("slide_up") || clean.eq_ignore_ascii_case("slideup") {
+            Self::SlideUp
+        } else if clean.eq_ignore_ascii_case("zoom_in") || clean.eq_ignore_ascii_case("zoomin") || clean.eq_ignore_ascii_case("zoom") {
+            Self::ZoomIn
+        } else if clean.eq_ignore_ascii_case("fade") {
+            Self::Fade
+        } else if clean.eq_ignore_ascii_case("slide_left") || clean.eq_ignore_ascii_case("slideleft") {
+            Self::SlideLeft
+        } else if clean.eq_ignore_ascii_case("magic_move") || clean.eq_ignore_ascii_case("magic-move") || clean.eq_ignore_ascii_case("magicmove") {
+            Self::MagicMove
+        } else {
+            Self::None
+        }
+    }
 }
 
 impl Default for Transition {

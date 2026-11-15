@@ -1,0 +1,12 @@
+[package]
+name = "sex-torrent"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "BitTorrent engine for SexOS (Swingers, Qupid, Kaleidoscope): v1/v2/hybrid, DHT, uTP, trackers, streaming; no I/O"
+
+[dependencies]
+sha1 = { version = "=0.10.7", default-features = false }
+sha2 = { version = "=0.10.9", default-features = false }
+sex-episodes = { path = "../sex-episodes" }
+crypto-bigint = { version = "=0.5.5", default-features = false }

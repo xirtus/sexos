@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Burlesque Weft window host tests: slides, layout, editing, presenter view, PDF export, rendering.
+//! Burlesque Weft window host tests: slides, layout, editing, themes, transitions,
+//! speaker notes, presenter view, PPTX/ODP/PDF import/export, and software rendering.
 
 use burlesque::weft;
 use burlesque::weft::input::{Button, Event, Pointer, PointerKind};
 use burlesque::weft::{Response, Strings, Theme, Ui};
 use burlesque::Burlesque;
+use burlesque_core::elements::Transition;
 use burlesque_core::layout::SlideLayout;
+use burlesque_core::Theme as BurlesqueTheme;
 
 fn click_widget(ui: &mut Ui, b: &mut Burlesque, id: weft::widget::Id) {
     ui.layout();
@@ -46,6 +49,12 @@ fn test_burlesque_window_interactions() {
     assert_eq!(b.deck.slide_count(), 1);
     assert_eq!(b.current_slide, 0);
     assert_eq!(b.presenter_mode, false);
+    assert_eq!(b.theme_slug(), "burlesque_velvet");
+    assert_eq!(b.current_transition(), Transition::None);
+    assert_eq!(
+        b.deck.get_slide(0).unwrap().notes(),
+        "Welcome to Burlesque presentations on SexOS. Keynote-class themes, transitions, presenter view, and full PPTX/ODP/PDF workflows."
+    );
 
     // 2. Add Slide
     let btn_add = b.btn_add_slide;
@@ -70,39 +79,87 @@ fn test_burlesque_window_interactions() {
         SlideLayout::TwoColumn
     );
 
-    // 5. Edit Slide Title and Body
+    // 5. Edit Slide Title, Body, and Speaker Notes
     let field_title = b.field_title;
     ui.set_text(field_title, "SexOS Architecture");
     ui.set_text(b.field_body, "- Microkernel\n- PKU Domains\n---\n- Weft Toolkit\n- Zero-copy PDX");
+    ui.set_text(b.field_notes, "Explain domain protection keys and zero-copy IPC.");
     let _ = b.on_response(&mut ui, &Response::Changed(field_title));
 
     let current = b.deck.get_slide(b.current_slide).unwrap();
     assert_eq!(current.title, "SexOS Architecture");
     assert_eq!(current.elements.len(), 3); // Title, Col1, Col2
+    assert_eq!(current.notes(), "Explain domain protection keys and zero-copy IPC.");
 
-    // 6. Presenter View Toggle
+    // 6. Theme Switching and Cycling
+    let btn_theme = b.btn_theme;
+    click_widget(&mut ui, &mut b, btn_theme);
+    assert_eq!(b.theme_slug(), "editorial_light");
+
+    b.set_theme(BurlesqueTheme::midnight_slate(), &mut ui);
+    assert_eq!(b.theme_slug(), "midnight_slate");
+
+    b.set_theme(BurlesqueTheme::cyber_prism(), &mut ui);
+    assert_eq!(b.theme_slug(), "cyber_prism");
+
+    // 7. Transition Selection and Animated Playback
+    let btn_transition = b.btn_transition;
+    click_widget(&mut ui, &mut b, btn_transition);
+    assert_eq!(b.current_transition(), Transition::Dissolve);
+
+    let btn_play = b.btn_play_transition;
+    click_widget(&mut ui, &mut b, btn_play);
+    let (trans, frames) = b.play_transition(&mut ui);
+    assert_eq!(trans, Transition::Dissolve);
+    assert_eq!(frames, 8);
+
+    b.set_transition(Transition::PushLeft);
+    assert_eq!(b.current_transition(), Transition::PushLeft);
+    let (trans, frames) = b.play_transition(&mut ui);
+    assert_eq!(trans, Transition::PushLeft);
+    assert_eq!(frames, 8);
+
+    // 8. Presenter View Toggle & Speaker Notes Rendering
     let btn_pres = b.btn_presenter;
     click_widget(&mut ui, &mut b, btn_pres);
     assert_eq!(b.presenter_mode, true);
     assert!(b.presenter_session.is_some());
+    assert_eq!(
+        b.presenter_session.as_ref().unwrap().current_notes(),
+        "Explain domain protection keys and zero-copy IPC."
+    );
 
     // Toggle back
     click_widget(&mut ui, &mut b, btn_pres);
     assert_eq!(b.presenter_mode, false);
     assert!(b.presenter_session.is_none());
 
-    // 7. Delete Slide
+    // 9. PPTX Export & Import Roundtrip
+    let pptx_bytes = b.export_pptx().expect("pptx export");
+    assert!(pptx_bytes.starts_with(b"PK\x03\x04"));
+    let (imp_slides, imp_notes) = b.import_pptx(&pptx_bytes, &mut ui).expect("pptx import");
+    assert_eq!(imp_slides, 2);
+    assert!(imp_notes >= 1);
+
+    // 10. ODP Export & Import Roundtrip
+    let odp_bytes = b.export_odp().expect("odp export");
+    assert!(odp_bytes.starts_with(b"PK\x03\x04"));
+    let (imp_slides_odp, imp_notes_odp) = b.import_odp(&odp_bytes, &mut ui).expect("odp import");
+    assert_eq!(imp_slides_odp, 2);
+    assert!(imp_notes_odp >= 1);
+
+    // 11. PDF Export
+    let pdf_bytes = b.export_pdf().expect("pdf export");
+    assert!(pdf_bytes.starts_with(b"%PDF-1.4"));
+    assert!(pdf_bytes.ends_with(b"%%EOF\n") || pdf_bytes.ends_with(b"%%EOF"));
+
+    // 12. Delete Slide
     let btn_del = b.btn_delete_slide;
     click_widget(&mut ui, &mut b, btn_del);
     assert_eq!(b.deck.slide_count(), 1);
     assert_eq!(b.current_slide, 0);
 
-    // 8. PDF Export
-    let pdf_bytes = b.export_pdf().expect("pdf export");
-    assert!(pdf_bytes.starts_with(b"%PDF-1.4"));
-    assert!(pdf_bytes.ends_with(b"%%EOF\n") || pdf_bytes.ends_with(b"%%EOF"));
-
-    // 9. Paint interface into pixel buffer
+    // 13. Paint interface into pixel buffer
     let mut pixels = vec![0u32; 800 * 600];
     assert!(ui.paint(&mut pixels).is_some());
 
@@ -115,4 +172,78 @@ fn test_burlesque_window_interactions() {
         "expected rich UI rendering, got {} distinct colors",
         unique_colors.len()
     );
+}
+
+#[test]
+fn test_burlesque_magic_move_builds_rehearse_and_splicy_timeline() {
+    let mut ui = Ui::new(1280, 800, Theme::light(), Strings::new("en"));
+    let mut b = Burlesque::build(&mut ui);
+    ui.layout();
+
+    // Add second slide so Magic Move morphs hero-stat + hero-title across layouts
+    let btn_add = b.btn_add_slide;
+    click_widget(&mut ui, &mut b, btn_add);
+    assert_eq!(b.deck.slide_count(), 2);
+
+    let btn_prev = b.btn_prev;
+    click_widget(&mut ui, &mut b, btn_prev);
+    assert_eq!(b.current_slide, 0);
+
+    // Add intra-slide build step and step through it
+    let btn_add_build = b.btn_add_build;
+    click_widget(&mut ui, &mut b, btn_add_build);
+    assert_eq!(b.deck.get_slide(0).unwrap().builds.len(), 1);
+    assert_eq!(b.active_build_index, 1);
+
+    let btn_step_build = b.btn_step_build;
+    click_widget(&mut ui, &mut b, btn_step_build);
+    assert_eq!(b.active_build_index, 0);
+
+    // Activate Magic Move and play transition -> preserves 50% mid-morph preview
+    let btn_magic = b.btn_magic_move;
+    click_widget(&mut ui, &mut b, btn_magic);
+    assert_eq!(b.current_transition(), Transition::MagicMove);
+    assert_eq!(b.magic_move_preview, Some(0.5));
+
+    let (trans, frames) = b.play_transition(&mut ui);
+    assert_eq!(trans, Transition::MagicMove);
+    assert_eq!(frames, 8);
+    assert_eq!(b.magic_move_preview, Some(0.5));
+
+    // Rehearse timings across build + slide advance and commit to deck
+    let btn_rehearse = b.btn_rehearse;
+    click_widget(&mut ui, &mut b, btn_rehearse);
+    assert!(b.rehearsal_session.is_some());
+    b.rehearsal_session.as_mut().unwrap().tick(400);
+
+    let btn_next = b.btn_next;
+    click_widget(&mut ui, &mut b, btn_next); // advances build 0 -> 1
+    b.rehearsal_session.as_mut().unwrap().tick(850);
+    click_widget(&mut ui, &mut b, btn_next); // advances slide 0 -> 1
+    b.rehearsal_session.as_mut().unwrap().tick(900);
+
+    // Commit rehearsal timings
+    click_widget(&mut ui, &mut b, btn_rehearse);
+    assert!(b.rehearsal_session.is_none());
+    assert!(b.deck.get_slide(0).unwrap().rehearsed_dwell_ms.unwrap_or(0) >= 850);
+    assert!(
+        b.deck.get_slide(0).unwrap().builds[0]
+            .rehearsed_delay_ms
+            .unwrap_or(0)
+            >= 400
+    );
+
+    // Verify Splicy timeline export driver renders all frames deterministically
+    let mut rendered_frames = 0usize;
+    let (splice_tl, written, hash) =
+        burlesque::render_splicy_frames(&b.deck, 320, 180, 15, |_idx, px| {
+            assert_eq!(px.len(), 320 * 180);
+            rendered_frames += 1;
+            Ok(())
+        })
+        .expect("splicy timeline render");
+    assert_eq!(written, rendered_frames);
+    assert!(written > 20, "expected >20 rehearsed frames, got {}", written);
+    assert_eq!(splice_tl.markers.len(), 2);
+    assert_ne!(hash, 0);
 }

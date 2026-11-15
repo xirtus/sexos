@@ -13,7 +13,7 @@ The network has no IPv4 at all, so names resolve only through what IPv6 says: th
 router advertisement carries the resolver (RDNSS) and sets the O flag, so the machine
 also asks stateless DHCPv6 (an Information-Request answered here). Then
 `run +net peek http://six.test/` must look the name up over IPv6 and load the page."""
-import argparse,os,re,shutil,socket,struct,threading,time
+import argparse,json,os,re,shutil,socket,struct,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 
@@ -48,6 +48,7 @@ class Peer:
  """One end of QEMU's socket backend: length-prefixed Ethernet frames."""
  def __init__(self):
   self.server=socket.socket();self.server.bind(('127.0.0.1',0));self.server.listen(1);self.port=self.server.getsockname()[1]
+  self.trace=[]
   self.conn=None;self.lock=threading.Lock();self.log=[];self.tcp={};self.client=None;self.udp=[];self.ra_sent=0;self.rs_seen=0;self.ns_seen=0;self.dhcp6=[];self.dns=[];self.ntp=[]
   threading.Thread(target=self.serve,daemon=True).start()
  def send(self,frame):
@@ -77,6 +78,7 @@ class Peer:
     try:self.frame(frame)
     except Exception as e:self.log.append('error '+repr(e))
  def frame(self,f):
+  if len(self.trace)<256:self.trace.append(f[:256].hex())
   if f[12:14]!=b'\x86\xdd':return
   ip=f[14:];length=struct.unpack('!H',ip[4:6])[0];nh=ip[6];hop=ip[7];src=ip[8:24];dst=ip[24:40];body=ip[40:40+length]
   if nh==58:
@@ -224,5 +226,8 @@ def main():
   assert any(c['got'].startswith(b'GET /page.html HTTP/1.0\r\nHost: six.test\r\n') for c in peer.tcp.values()),[c['got'][:80] for c in peer.tcp.values()]
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'address':address,'router_solicitations':peer.rs_seen,'neighbor_solicitations':peer.ns_seen,'dhcpv6_requests':len(peer.dhcp6),'dns_questions':len(peer.dns),'peer_errors':[l for l in peer.log if l.startswith('error')]})
- finally:g['stop']()
+ finally:
+  # Retain the synthetic peer's side even when a connection assertion fails.
+  (a.out/'peer.json').write_text(json.dumps({'frames_hex':peer.trace,'errors':peer.log,'ra_sent':peer.ra_sent,'rs_seen':peer.rs_seen,'ns_seen':peer.ns_seen,'tcp':{repr(k):{n:(v.hex() if isinstance(v,bytes) else v) for n,v in c.items()} for k,c in list(peer.tcp.items())}},indent=2)+'\n')
+  g['stop']()
 if __name__=='__main__':main()
