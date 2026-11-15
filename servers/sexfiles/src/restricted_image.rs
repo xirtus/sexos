@@ -20,16 +20,29 @@ pub struct Lease {
 pub struct Staging {
     current: Option<Lease>,
     serial: u64,
+    writing: bool,
 }
 impl Staging {
     pub const fn new() -> Self {
         Self {
             current: None,
             serial: 0,
+            writing: false,
         }
     }
     pub fn busy(&self) -> bool {
-        self.current.is_some()
+        self.current.is_some() || self.writing
+    }
+    pub fn writer_begin(&mut self) -> bool {
+        if self.busy() {
+            return false;
+        }
+        self.writing = true;
+        true
+    }
+    pub fn writer_end(&mut self) {
+        assert!(self.writing, "IMAGE_WRITER_UNBALANCED");
+        self.writing = false;
     }
     /// Called only after authenticated policy admission and candidate loading.
     /// Hashes the exact region that synchronous kind3 will copy, then fences ALL
@@ -76,6 +89,23 @@ impl Staging {
 static STAGING: spin::Mutex<Staging> = spin::Mutex::new(Staging::new());
 pub fn busy() -> bool {
     STAGING.lock().busy()
+}
+/// One guard covers the complete staging write, including nested block waits.
+/// Both writers and attestation acquire the same mutex before touching state.
+/// A future concurrent dispatcher cannot overlap a writer with hashing/lease.
+#[must_use]
+pub struct Writer {
+    _local: core::marker::PhantomData<*mut ()>,
+}
+pub fn writer() -> Option<Writer> {
+    STAGING.lock().writer_begin().then(|| Writer {
+        _local: core::marker::PhantomData,
+    })
+}
+impl Drop for Writer {
+    fn drop(&mut self) {
+        STAGING.lock().writer_end();
+    }
 }
 pub fn attest_and_lease(subject: Lease, image: &[u8]) -> Option<Lease> {
     STAGING
