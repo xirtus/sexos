@@ -77,6 +77,12 @@ class FocusTests(unittest.TestCase):
         for trace in invalid:
             with self.subTest(trace=trace): self.assertIsNone(_spindle_arrival(trace))
 
+    def test_own_minimize_and_focused_target_are_contradictory(self):
+        minimized = '[shell.interact.minimize] frame=9 sid=153\n'
+        for tail in [receipt(200, 153, 70, 'ToggleSpindle'),
+                     receipt(153, 200, 70, 'ToggleSpindle') + '[shell.focus.set] id=153\n']:
+            with self.subTest(tail=tail): self.assertIsNone(_spindle_arrival(minimized + tail))
+
     def test_current_successor_needs_no_input(self):
         focus_surface(306, lambda: '[shell.focus.set] id=306', lambda *args: self.fail())
 
