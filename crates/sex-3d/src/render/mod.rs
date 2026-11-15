@@ -42,6 +42,22 @@ mod prepare;
 mod rng;
 mod sampling;
 mod shader;
+
+/// Blender's stored enum numbers for node settings, for file importers.
+pub(crate) mod shader_names {
+    /// `NodeMathOperation` number to the Math node's operation identifier.
+    pub(crate) fn math_from_file(n: i64) -> &'static str {
+        super::shader::ops::MathOp::file_name(n)
+    }
+    /// `NodeVectorMathOperation` number to the operation identifier.
+    pub(crate) fn vector_math_from_file(n: i64) -> &'static str {
+        super::shader::ops::VecOp::file_name(n)
+    }
+    /// `MA_RAMP_*` number to the Mix node's blend type identifier.
+    pub(crate) fn blend_from_file(n: i64) -> &'static str {
+        super::shader::color::Blend::from_file(n)
+    }
+}
 mod tonemap;
 pub mod viewport;
 pub mod volume;
