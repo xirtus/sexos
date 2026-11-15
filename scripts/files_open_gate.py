@@ -5,7 +5,7 @@ program opens just says so."""
 import argparse,http.server,os,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-FILES={n:(ROOT/'iso_root/programs'/n[1:]).read_bytes() for n in ('/files','/jot')}
+FILES={n:(ROOT/'iso_root/programs'/n[1:]).read_bytes() for n in ('/loom','/jot')}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -38,7 +38,7 @@ def main():
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  for n in ('files',):
+  for n in ('loom',):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{n} /bin/{n}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   expect('mkdir /0open',r'\[spindle.fs.result\] kind=3 status=0')
   expect(f'write /0open/a.txt {TEXT}',r'\[spindle.fs.result\] kind=8 status=0')

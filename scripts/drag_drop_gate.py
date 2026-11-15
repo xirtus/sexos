@@ -7,7 +7,7 @@ import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 NOTE=b'Dropped from Files into Jot.\n'
-FILES={'/files':(ROOT/'iso_root/programs/files').read_bytes(),'/jot':(ROOT/'iso_root/programs/jot').read_bytes(),'/note.txt':NOTE}
+FILES={'/loom':(ROOT/'iso_root/programs/loom').read_bytes(),'/jot':(ROOT/'iso_root/programs/jot').read_bytes(),'/note.txt':NOTE}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -46,7 +46,7 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   expect('mkdir 0gate',r'\[spindle.fs.result\] kind=3 status=0')
-  for name,dest in [('files','/bin/files'),('jot','/bin/jot'),('note.txt','0gate/note.txt')]:
+  for name,dest in [('loom','/bin/loom'),('jot','/bin/jot'),('note.txt','0gate/note.txt')]:
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} {dest}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
   s=len(t());expect('files /0gate',r'\[files.app.ready\] target=\d+ task=\d+ root=/0gate portal=0',120)
   fa=g['wait'](launch,s,30);g['wait'](r'\[files.app.list\] dir=/0gate count=1\b',s,60)
