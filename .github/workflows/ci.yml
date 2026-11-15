@@ -491,7 +491,8 @@ jobs:
   profiles:
     name: Proof builds (${{ matrix.gate }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Each proof builds the image, which now includes Gestalt (VectorCraft's engine).
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
