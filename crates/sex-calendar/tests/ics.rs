@@ -16,11 +16,11 @@ fn imports_every_event() {
     let sync = &events[0];
     assert_eq!((sync.start, sync.time, sync.utc, sync.span), (d(2026, 3, 2), Some((540, 570)), true, 1));
     assert_eq!(sync.location, "Room 4");
-    assert_eq!(sync.rule.unwrap().count, Some(4));
+    assert_eq!(sync.rule.as_ref().unwrap().count, Some(4));
     // The alarm's SUMMARY is the alarm's, not the event's.
     assert_eq!(sync.title, "Team sync");
     assert_eq!((events[1].time, events[1].span), (None, 3));
-    assert_eq!(events[2].rule.unwrap().freq, Freq::Yearly);
+    assert_eq!(events[2].rule.as_ref().unwrap().freq, Freq::Yearly);
     let lunch = &events[5];
     assert_eq!(lunch.title, "Lunch with the design team, then a long walk along the river to talk about the next release");
     assert_eq!(lunch.location, "Café, Main St; Floor 2");
@@ -29,7 +29,7 @@ fn imports_every_event() {
 
 #[test]
 fn occurrences_land_on_their_days() {
-    let c = Calendar { events: ics::import(FIXTURE).unwrap() };
+    let c = Calendar { events: ics::import(FIXTURE).unwrap(), ..Default::default() };
     assert_eq!(titles(&c, d(2026, 3, 16)), ["Birthday", "Conference", "Team sync", "Standup"]);
     assert_eq!(titles(&c, d(2026, 3, 17)), ["Conference"]);
     assert_eq!(titles(&c, d(2026, 3, 18)), ["Standup"]);

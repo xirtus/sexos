@@ -126,27 +126,27 @@ fn find_eocd<S: ByteSource + ?Sized>(src: &S) -> Result<Eocd> {
     let mut cd_offset = u32le(e, 16) as u64;
     let mut cd_end = eocd_abs;
     // zip64 locator immediately precedes the EOCD.
-    if eocd_abs >= 20 {
+    if let Some(loc_off) = eocd_abs.checked_sub(20) {
         let mut loc = [0u8; 20];
-        read_exact_at(src, eocd_abs - 20, &mut loc)?;
+        read_exact_at(src, loc_off, &mut loc)?;
         if u32le(&loc, 0) == Z64_LOC_SIG {
             let z64_off = u64le(&loc, 8);
             let mut rec = [0u8; 56];
             // The record may also be displaced by a prefix; try both.
-            // A locator too close to the start leaves no room for the record (fuzz #258).
             let guess = eocd_abs.checked_sub(20 + 56);
-            let at = if z64_off.checked_add(56).is_some_and(|e| e <= len) && {
+            let at = if z64_off.checked_add(56).map_or(false, |end| end <= len) && {
                 read_exact_at(src, z64_off, &mut rec)?;
                 u32le(&rec, 0) == Z64_EOCD_SIG
             } {
                 z64_off
-            } else {
-                let guess = guess.ok_or(Error::Corrupt("zip64 end record missing"))?;
-                read_exact_at(src, guess, &mut rec)?;
+            } else if let Some(guess_off) = guess {
+                read_exact_at(src, guess_off, &mut rec)?;
                 if u32le(&rec, 0) != Z64_EOCD_SIG {
                     return Err(Error::Corrupt("zip64 end record missing"));
                 }
-                guess
+                guess_off
+            } else {
+                return Err(Error::Corrupt("zip64 end record missing"));
             };
             count = u64le(&rec, 32);
             cd_size = u64le(&rec, 40);
@@ -162,7 +162,8 @@ pub(crate) fn open<S: ByteSource + ?Sized>(src: &S) -> Result<Vec<Entry>> {
     let eocd = find_eocd(src)?;
     // Bytes prepended to the archive (self-extractors) shift all offsets.
     let shift = eocd.cd_start as i128 - eocd.cd_offset as i128;
-    let mut r = SrcReader::new(src, eocd.cd_start, eocd.cd_start + eocd.cd_size);
+    let cd_end = eocd.cd_start.checked_add(eocd.cd_size).ok_or(Error::Corrupt("central directory size"))?;
+    let mut r = SrcReader::new(src, eocd.cd_start, cd_end);
     let mut entries = Vec::with_capacity(eocd.count.min(1 << 16) as usize);
     let mut h = [0u8; 46];
     for _ in 0..eocd.count {
@@ -266,7 +267,11 @@ pub(crate) fn extract<S: ByteSource + ?Sized>(
     if u32le(&lh, 0) != LFH_SIG {
         return Err(Error::Corrupt("local file header"));
     }
-    let start = local_offset + 30 + u16le(&lh, 26) as u64 + u16le(&lh, 28) as u64;
+    let header_len = 30u64
+        .checked_add(u16le(&lh, 26) as u64)
+        .and_then(|h| h.checked_add(u16le(&lh, 28) as u64))
+        .ok_or(Error::Corrupt("local header length"))?;
+    let start = local_offset.checked_add(header_len).ok_or(Error::Corrupt("member start out of range"))?;
     let end = start.checked_add(csize).filter(|&x| x <= src.len()).ok_or(Error::Corrupt("member data out of range"))?;
     let raw = SrcReader::new(src, start, end);
     let mut hasher = crc32fast::Hasher::new();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Document model, background canvas, and straight-alpha layer compositor.
 
+use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -95,6 +96,121 @@ impl Document {
         }
     }
 
+    /// Duplicates an existing layer, inserting the duplicate directly above it.
+    pub fn duplicate_layer(&mut self, id: u64) -> Result<u64, BatikError> {
+        let pos = self
+            .layers
+            .iter()
+            .position(|l| l.id == id)
+            .ok_or(BatikError::LayerNotFound(id))?;
+        let orig = &self.layers[pos];
+        let new_id = self.next_layer_id;
+        self.next_layer_id += 1;
+        let mut cloned = orig.clone();
+        cloned.id = new_id;
+        cloned.name = format!("{} Copy", orig.name);
+        self.layers.insert(pos + 1, cloned);
+        Ok(new_id)
+    }
+
+    /// Merges the layer `id` down into the layer beneath it.
+    pub fn merge_down(&mut self, id: u64) -> Result<Option<u64>, BatikError> {
+        let pos = self
+            .layers
+            .iter()
+            .position(|l| l.id == id)
+            .ok_or(BatikError::LayerNotFound(id))?;
+        if pos == 0 {
+            return Ok(None);
+        }
+        let top = self.layers.remove(pos);
+        let bottom = &mut self.layers[pos - 1];
+
+        if let (LayerKind::Raster(ref top_r), LayerKind::Raster(ref mut bot_r)) =
+            (&top.kind, &mut bottom.kind)
+        {
+            let top_bounds = top_r.bounds();
+            let bot_bounds = bot_r.bounds();
+            if let Some(inter) = top_bounds.intersect(&bot_bounds) {
+                for y in inter.y..inter.bottom() {
+                    let bot_row = ((y - bot_r.offset_y) as usize) * bot_r.width;
+                    let top_row = ((y - top_r.offset_y) as usize) * top_r.width;
+                    for x in inter.x..inter.right() {
+                        let bot_col = (x - bot_r.offset_x) as usize;
+                        let top_col = (x - top_r.offset_x) as usize;
+                        let bot_idx = bot_row + bot_col;
+                        let top_idx = top_row + top_col;
+                        if bot_idx < bot_r.pixels.len() && top_idx < top_r.pixels.len() {
+                            let top_p = top_r.pixels[top_idx];
+                            let top_m = match &top_r.mask {
+                                Some(m) => m.get(top_idx).copied().unwrap_or(255),
+                                None => 255,
+                            };
+                            bot_r.pixels[bot_idx] = blend_pixel(
+                                bot_r.pixels[bot_idx],
+                                top_p,
+                                top.blend_mode,
+                                top.opacity,
+                                top_m,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(Some(bottom.id))
+    }
+
+    /// Moves a layer up in stack order (drawn on top of the next layer).
+    pub fn move_layer_up(&mut self, id: u64) -> bool {
+        if let Some(pos) = self.layers.iter().position(|l| l.id == id) {
+            if pos + 1 < self.layers.len() {
+                self.layers.swap(pos, pos + 1);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Moves a layer down in stack order.
+    pub fn move_layer_down(&mut self, id: u64) -> bool {
+        if let Some(pos) = self.layers.iter().position(|l| l.id == id) {
+            if pos > 0 {
+                self.layers.swap(pos, pos - 1);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Creates a single-layer Document from an already-decoded `sex_image::Image`.
+    pub fn from_image(image: Image, limits: Limits) -> Result<Self, BatikError> {
+        let (w, h) = (image.width, image.height);
+        let mut doc = Self::new(w, h, BackgroundMode::Transparent, limits)?;
+        let raster = RasterLayer::with_pixels(w, h, image.pixels, &limits)?;
+        let layer = Layer::new_raster(1, String::from("Background"), raster, BlendMode::Normal, 255);
+        doc.add_layer(layer);
+        Ok(doc)
+    }
+
+    /// Decodes a PNG image and constructs a Document.
+    pub fn from_png(png_bytes: &[u8], limits: Limits) -> Result<Self, BatikError> {
+        let img = sex_image::decode(png_bytes, &limits)?;
+        Self::from_image(img, limits)
+    }
+
+    /// Automatically sniffs format (PSD, ORA, PNG, JPEG, WebP, GIF) and imports as a Document.
+    pub fn import_bytes(bytes: &[u8], limits: Limits) -> Result<Self, BatikError> {
+        if bytes.starts_with(b"8BPS") {
+            crate::psd::parse_psd(bytes, &limits)
+        } else if bytes.starts_with(b"PK\x03\x04") {
+            crate::ora::read_ora(bytes, &limits)
+        } else {
+            let img = sex_image::decode(bytes, &limits)?;
+            Self::from_image(img, limits)
+        }
+    }
+
     /// Renders a region of interest (ROI) into a target pixel buffer.
     pub fn render_region(&self, roi: Rect, out_buf: &mut [u32], stride: usize) {
         let clamped = match roi.clamp_to_bounds(self.width, self.height) {
@@ -127,6 +243,13 @@ impl Document {
 
         // Composite layers
         Self::composite_layer_slice(&self.layers, clamped, out_buf, stride);
+    }
+
+    /// Renders all visible layers into a freshly allocated flat RGBA buffer.
+    pub fn render_flattened(&self) -> Vec<u32> {
+        let mut out = alloc::vec![0u32; self.width * self.height];
+        self.render_region(Rect::new(0, 0, self.width, self.height), &mut out, self.width);
+        out
     }
 
     fn composite_layer_slice(layers: &[Layer], roi: Rect, out_buf: &mut [u32], stride: usize) {

@@ -308,3 +308,117 @@ pub fn blend_with_mask(
         }
     }
 }
+
+/// 3x3 Sharpen filter.
+pub fn sharpen(pixels: &[u32], width: usize, height: usize) -> Vec<u32> {
+    if width == 0 || height == 0 || pixels.len() < width * height {
+        return pixels.to_vec();
+    }
+    let mut out = pixels.to_vec();
+    for y in 0..height {
+        let row_offset = y * width;
+        let y_prev = y.saturating_sub(1);
+        let y_next = (y + 1).min(height - 1);
+        for x in 0..width {
+            let x_prev = x.saturating_sub(1);
+            let x_next = (x + 1).min(width - 1);
+
+            let (ca, cr, cg, cb) = split_argb(pixels[row_offset + x]);
+            let (_, tr, tg, tb) = split_argb(pixels[y_prev * width + x]);
+            let (_, br, bg, bb) = split_argb(pixels[y_next * width + x]);
+            let (_, lr, lg, lb) = split_argb(pixels[row_offset + x_prev]);
+            let (_, rr, rg, rb) = split_argb(pixels[row_offset + x_next]);
+
+            let calc = |c: u8, t: u8, b: u8, l: u8, r: u8| -> u8 {
+                let v = 5 * (c as i32) - (t as i32) - (b as i32) - (l as i32) - (r as i32);
+                v.clamp(0, 255) as u8
+            };
+
+            out[row_offset + x] = pack_argb(
+                ca,
+                calc(cr, tr, br, lr, rr),
+                calc(cg, tg, bg, lg, rg),
+                calc(cb, tb, bb, lb, rb),
+            );
+        }
+    }
+    out
+}
+
+/// 3x3 Emboss filter with 128 neutral bias.
+pub fn emboss(pixels: &[u32], width: usize, height: usize) -> Vec<u32> {
+    if width == 0 || height == 0 || pixels.len() < width * height {
+        return pixels.to_vec();
+    }
+    let mut out = pixels.to_vec();
+    for y in 0..height {
+        let row_offset = y * width;
+        let y_prev = y.saturating_sub(1);
+        let y_next = (y + 1).min(height - 1);
+        for x in 0..width {
+            let x_prev = x.saturating_sub(1);
+            let x_next = (x + 1).min(width - 1);
+
+            let (ca, _, _, _) = split_argb(pixels[row_offset + x]);
+            let (_, tr, tg, tb) = split_argb(pixels[y_prev * width + x_prev]);
+            let (_, br, bg, bb) = split_argb(pixels[y_next * width + x_next]);
+
+            let calc = |tl: u8, br: u8| -> u8 {
+                let v = (tl as i32) - (br as i32) + 128;
+                v.clamp(0, 255) as u8
+            };
+
+            out[row_offset + x] = pack_argb(ca, calc(tr, br), calc(tg, bg), calc(tb, bb));
+        }
+    }
+    out
+}
+
+/// 3x3 Edge detect (Laplacian filter).
+pub fn edge_detect(pixels: &[u32], width: usize, height: usize) -> Vec<u32> {
+    if width == 0 || height == 0 || pixels.len() < width * height {
+        return pixels.to_vec();
+    }
+    let mut out = pixels.to_vec();
+    for y in 0..height {
+        let row_offset = y * width;
+        let y_prev = y.saturating_sub(1);
+        let y_next = (y + 1).min(height - 1);
+        for x in 0..width {
+            let x_prev = x.saturating_sub(1);
+            let x_next = (x + 1).min(width - 1);
+
+            let (ca, cr, cg, cb) = split_argb(pixels[row_offset + x]);
+            let (_, tr, tg, tb) = split_argb(pixels[y_prev * width + x]);
+            let (_, br, bg, bb) = split_argb(pixels[y_next * width + x]);
+            let (_, lr, lg, lb) = split_argb(pixels[row_offset + x_prev]);
+            let (_, rr, rg, rb) = split_argb(pixels[row_offset + x_next]);
+            let (_, tlr, tlg, tlb) = split_argb(pixels[y_prev * width + x_prev]);
+            let (_, trr, trg, trb) = split_argb(pixels[y_prev * width + x_next]);
+            let (_, blr, blg, blb) = split_argb(pixels[y_next * width + x_prev]);
+            let (_, brr, brg, brb) = split_argb(pixels[y_next * width + x_next]);
+
+            let calc = |c: u8, t: u8, b: u8, l: u8, r: u8, tl: u8, tr: u8, bl: u8, br_val: u8| -> u8 {
+                let sum = 8 * (c as i32)
+                    - (t as i32)
+                    - (b as i32)
+                    - (l as i32)
+                    - (r as i32)
+                    - (tl as i32)
+                    - (tr as i32)
+                    - (bl as i32)
+                    - (br_val as i32);
+                sum.clamp(0, 255) as u8
+            };
+
+            out[row_offset + x] = pack_argb(
+                ca,
+                calc(cr, tr, br, lr, rr, tlr, trr, blr, brr),
+                calc(cg, tg, bg, lg, rg, tlg, trg, blg, brg),
+                calc(cb, tb, bb, lb, rb, tlb, trb, blb, brb),
+            );
+        }
+    }
+    out
+}
+
