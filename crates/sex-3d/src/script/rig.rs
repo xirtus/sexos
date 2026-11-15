@@ -194,30 +194,11 @@ fn euler_name(o: Option<EulerOrder>) -> String {
 // ---------------------------------------------------------------------------
 // Modifiers
 
-/// The vertex group fields of a modifier that has the common pair.
-fn vg_mut(m: &mut Modifier) -> Option<(&mut Option<String>, &mut bool)> {
-    match m {
-        Modifier::Displace { vertex_group, invert_vertex_group, .. }
-        | Modifier::Smooth { vertex_group, invert_vertex_group, .. }
-        | Modifier::SimpleDeform { vertex_group, invert_vertex_group, .. }
-        | Modifier::Cast { vertex_group, invert_vertex_group, .. }
-        | Modifier::Wave { vertex_group, invert_vertex_group, .. }
-        | Modifier::Shrinkwrap { vertex_group, invert_vertex_group, .. }
-        | Modifier::LaplacianSmooth { vertex_group, invert_vertex_group, .. }
-        | Modifier::CorrectiveSmooth { vertex_group, invert_vertex_group, .. }
-        | Modifier::Armature { vertex_group, invert_vertex_group, .. }
-        | Modifier::Hook { vertex_group, invert_vertex_group, .. }
-        | Modifier::Lattice { vertex_group, invert_vertex_group, .. }
-        | Modifier::Warp { vertex_group, invert_vertex_group, .. } => Some((vertex_group, invert_vertex_group)),
-        _ => None,
-    }
-}
-
 /// `vertex_group=` / `invert_vertex_group=` for every modifier that has
 /// them, then the options of the rigging modifiers. True when `m` is a
 /// rigging modifier (fully handled here).
 pub(super) fn modifier_opts(cmd: &mut Cmd, m: &mut Modifier) -> Res<bool> {
-    if let Some((g, inv)) = vg_mut(m) {
+    if let Some((g, inv)) = m.vertex_group_mut() {
         oname(cmd, "vertex_group", g);
         ob(cmd, "invert_vertex_group", inv)?;
     }
@@ -323,7 +304,7 @@ fn mat4_of(v: &[f32], key: &str) -> Res<Mat4> {
 pub(super) fn modifier_to_options(m: &Modifier) -> String {
     let mut o = String::new();
     let mut mc = m.clone();
-    if let Some((g, inv)) = vg_mut(&mut mc) {
+    if let Some((g, inv)) = mc.vertex_group_mut() {
         if g.is_some() || *inv {
             let _ = write!(o, " vertex_group={} invert_vertex_group={}", qname(g), b(*inv));
         }

@@ -463,6 +463,27 @@ Armature, Hook, Lattice, Warp, VertexWeightEdit, VertexWeightMix, VertexWeightPr
         }
     }
 
+    /// The common `vertex_group` / `invert_vertex_group` pair, for the
+    /// modifiers that have one (every deform modifier, Armature, Hook,
+    /// Lattice and Warp).
+    pub fn vertex_group_mut(&mut self) -> Option<(&mut Option<String>, &mut bool)> {
+        match self {
+            Modifier::Displace { vertex_group, invert_vertex_group, .. }
+            | Modifier::Smooth { vertex_group, invert_vertex_group, .. }
+            | Modifier::SimpleDeform { vertex_group, invert_vertex_group, .. }
+            | Modifier::Cast { vertex_group, invert_vertex_group, .. }
+            | Modifier::Wave { vertex_group, invert_vertex_group, .. }
+            | Modifier::Shrinkwrap { vertex_group, invert_vertex_group, .. }
+            | Modifier::LaplacianSmooth { vertex_group, invert_vertex_group, .. }
+            | Modifier::CorrectiveSmooth { vertex_group, invert_vertex_group, .. }
+            | Modifier::Armature { vertex_group, invert_vertex_group, .. }
+            | Modifier::Hook { vertex_group, invert_vertex_group, .. }
+            | Modifier::Lattice { vertex_group, invert_vertex_group, .. }
+            | Modifier::Warp { vertex_group, invert_vertex_group, .. } => Some((vertex_group, invert_vertex_group)),
+            _ => None,
+        }
+    }
+
     /// The vertex group masking a deform modifier that has no group logic of
     /// its own: the result is blended with the input by the group weight.
     fn mask_group(&self) -> Option<(&str, bool)> {
