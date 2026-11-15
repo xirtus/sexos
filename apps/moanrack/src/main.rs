@@ -2,6 +2,7 @@
 //! controls belong to Moan; this app makes failure containment observable.
 #![cfg_attr(feature = "sexos", no_std)]
 #![cfg_attr(feature = "sexos", no_main)]
+mod seed;
 mod status;
 #[cfg(feature = "sexos")]
 mod guest {
@@ -89,6 +90,36 @@ mod guest {
             Theme::dark(),
             Strings::new("en"),
         );
+        let mut args = [0; sex_pdx::fs::ARGS_MAX];
+        let count = files::args(&mut args);
+        if args[..count]
+            .split(|b| b.is_ascii_whitespace())
+            .any(|word| word == b"--seed-moan-ui")
+        {
+            // Developer qualification only, with an explicit user @/ folder grant.
+            // Refuse collisions: never overwrite the user's existing files.
+            let fileset = [
+                (b"@/swap.clap".as_slice(), SWAP),
+                (b"@/crash.clap".as_slice(), CRASH),
+                (b"@/hang.clap".as_slice(), HANG),
+                (b"@/gain.vst3".as_slice(), VST),
+            ];
+            let ok = fileset
+                .iter()
+                .all(|(path, _)| sex_app::files::size(&mut app.window, path).is_err())
+                && sex_app::files::size(&mut app.window, b"@/source.wav").is_err()
+                && files::mkdir(b"@/renders").is_ok()
+                && fileset
+                    .iter()
+                    .all(|(path, bytes)| write(path, bytes).is_ok())
+                && write(b"@/source.wav", &super::seed::wav()).is_ok();
+            sex_pdx::serial_record!(
+                "[moanrack.ui.seed] ok={} frames={} fixtures=4 developer_only=1",
+                ok as u8,
+                super::seed::FRAMES
+            );
+            sex_app::launch::exit(if ok { 0 } else { 2 })
+        }
         let column = app.ui.column(app.ui.root());
         app.ui
             .text(column, "Offline plugin helper", TextStyle::Title);
