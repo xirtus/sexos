@@ -514,7 +514,8 @@ fn finish(acc: &[PixelAccum], rec: &[f32], layout: &PassLayout, w: u32, h: u32, 
 /// Progressive accumulation for the interactive rendered viewport: each
 /// [`Progressive::add_sample`] adds one sample to every pixel. After `n` calls
 /// the image equals a [`render`] with `samples = n` (same seed, no denoise,
-/// no adaptive sampling).
+/// no adaptive sampling). With `noise_threshold` set, pixels that converged
+/// stop taking samples and [`Progressive::converged`] reports when all have.
 pub struct Progressive {
     scene: PreparedScene,
     settings: RenderSettings,
@@ -531,7 +532,10 @@ impl Progressive {
     }
     pub fn from_prepared(scene: PreparedScene, settings: &RenderSettings) -> Progressive {
         let n = settings.width as usize * settings.height as usize;
-        let frame = settings.frame(false);
+        let mut frame = settings.frame(false);
+        if settings.noise_threshold > 0.0 {
+            frame.adaptive = RenderSettings { samples: u32::MAX, ..*settings }.adaptive();
+        }
         let stride = frame.layout.stride.max(1);
         let mut p = Progressive { scene, settings: *settings, frame, acc: vec![PixelAccum::default(); n], rec: vec![0.0; n * stride], samples: 0 };
         p.reset();
@@ -540,6 +544,10 @@ impl Progressive {
     /// Samples accumulated so far.
     pub fn samples(&self) -> u32 {
         self.samples
+    }
+    /// True once adaptive sampling has stopped every pixel.
+    pub fn converged(&self) -> bool {
+        self.frame.adaptive.is_some() && self.acc.iter().all(|a| a.done)
     }
     /// Start over (e.g. after the view changed but the scene did not).
     pub fn reset(&mut self) {
@@ -559,7 +567,7 @@ impl Progressive {
         }
         let s = self.samples;
         let stride = self.frame.layout.stride.max(1);
-        let mut pass = vec![PixelAccum::default(); self.acc.len()];
+        let mut pass = self.acc.clone();
         let mut prec = vec![0.0f32; self.rec.len()];
         for r in prec.chunks_mut(stride) {
             self.frame.layout.init(r);
@@ -581,15 +589,7 @@ impl Progressive {
         if cancelled.load(Ordering::Relaxed) {
             return false;
         }
-        for (a, p) in self.acc.iter_mut().zip(&pass) {
-            a.color += p.color;
-            a.alpha += p.alpha;
-            a.albedo += p.albedo;
-            a.normal += p.normal;
-            a.lum_sq += p.lum_sq;
-            a.half += p.half;
-            a.n += p.n;
-        }
+        self.acc = pass;
         if self.frame.layout.stride > 0 {
             for (a, b) in self.rec.chunks_mut(stride).zip(prec.chunks(stride)) {
                 self.frame.layout.merge(a, b);

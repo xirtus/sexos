@@ -121,6 +121,28 @@ fn adaptive_sampling_stops_early_on_flat_regions() {
 }
 
 #[test]
+fn progressive_viewport_stops_when_converged() {
+    let mut s = Scene::new();
+    s.world.color = Vec3::splat(0.5);
+    add_camera(&mut s, Camera::default(), Vec3::new(0.0, -6.0, 0.0), Vec3::ZERO);
+    let st = RenderSettings { samples: 1, noise_threshold: 0.1, ..settings(8, 8, 1) };
+    let mut p = render::Progressive::new(&s, &st);
+    for _ in 0..15 {
+        p.add_sample(None);
+        assert!(!p.converged());
+    }
+    p.add_sample(None);
+    assert!(p.converged(), "a flat sky converges at the automatic minimum");
+    // Without a threshold the viewport never reports convergence.
+    let mut q = render::Progressive::new(&s, &settings(8, 8, 1));
+    for _ in 0..20 {
+        q.add_sample(None);
+    }
+    assert!(!q.converged());
+    assert_eq!(q.image(), render::render(&s, &settings(8, 8, 20)).color);
+}
+
+#[test]
 fn transparent_film_and_holdout() {
     let mut s = Scene::new();
     s.world.color = Vec3::splat(2.0);
