@@ -43,8 +43,8 @@ fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::
 
 pub enum Event {
     Key(Key),
-    /// A key went up while the window had focus (a modifier's too). Losing focus
-    /// sends none, so treat that as every key up.
+    /// A key pressed in this window went up (a modifier's too): the same key the press
+    /// delivered. When focus leaves the window, the keys still held there go up too.
     KeyUp(Key),
     Close,
     /// The window's pixel area is now this many pixels wide and high: redraw to fit.

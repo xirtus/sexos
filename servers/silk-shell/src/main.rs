@@ -10411,6 +10411,23 @@ fn dnd_send(route:u64,op:u64,m:sex_pdx::dnd::Message)->bool{
 static mut PROGRAM_KEYS:[Option<(sex_pdx::clipboard::Subject,u64)>;16]=[None;16];
 /// The key edge being handled came from the numpad (sexinput sets arg0 bit 8).
 static mut KEY_KEYPAD:bool=false;
+/// Keys held down in a program: the physical code, the key word its press delivered
+/// (the release repeats it) and where it went. A modifier is noted with no press.
+static mut PROGRAM_HELD:[Option<(u8,sex_pdx::app_key::Key,sex_pdx::clipboard::Participant)>;8]=[None;8];
+unsafe fn program_held_note(code:u8,key:sex_pdx::app_key::Key,to:sex_pdx::clipboard::Participant){
+    let slot=PROGRAM_HELD.iter().position(|e|e.is_some_and(|(c,_,_)|c==code)).or_else(||PROGRAM_HELD.iter().position(|e|e.is_none()));
+    if let Some(i)=slot{PROGRAM_HELD[i]=Some((code,key,to));}
+}
+/// Focus moves to `sid`: a program that loses it gets the releases of the keys still
+/// held in it, so nothing stays down there.
+unsafe fn program_held_release(sid:u64){
+    for e in PROGRAM_HELD.iter_mut(){
+        let Some((_,key,to))=*e else{continue};
+        if to.surface==sid{continue}
+        *e=None;
+        APP_INPUT.push(app_input::Item{destination:to,input:app_input::Input::KeyUp(key)});
+    }
+}
 unsafe fn program_keys(subject:sex_pdx::clipboard::Subject)->u64{
     PROGRAM_KEYS.iter().flatten().find(|(s,_)|*s==subject).map_or(0,|(_,f)|*f)
 }
@@ -10768,20 +10785,26 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     // A key going up, a modifier's too, reaches the program as the press's
                     // word with down=0 (walk keys, hold-to-act tools); older programs drop it.
                     if value==0 && !desktop_key{
-                        if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::KeyUp(APP_MODIFIERS.key(code).with_keypad(keypad))}){
+                        // The release repeats what the press delivered (the layout may have
+                        // changed its code); a key whose press went elsewhere sends none.
+                        let held=PROGRAM_HELD.iter_mut().find(|e|e.is_some_and(|(c,_,to)|c==code&&to.subject==destination.subject)).and_then(|e|e.take());
+                        let Some((_,key,_))=held else{return true};
+                        if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::KeyUp(key)}){
                             sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
                         }
                         app_input_poll();return true;
                     }
+                    if modifier&&value==1{program_held_note(code,APP_MODIFIERS.key(code),destination);}
                     if modifier || value!=1{return true;}
                     if desktop_key{return false;}
                     let shortcut=if APP_MODIFIERS.key(code).control{keyboard_layout::shortcut_code(code)}else{code};
                     if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(shortcut),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
                         if changed{keyboard_preedit_notice();}app_input_poll();return true;
                     }
-                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code).with_keypad(keypad))}){
+                    let key=keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code).with_keypad(keypad);
+                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(key)}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
-                    }else if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}
+                    }else{program_held_note(code,key,destination);if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}}
                     app_input_poll();return true;
                 }
             }
@@ -24073,6 +24096,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
 }
 unsafe fn try_set_focus_inner(sid: u64,refresh_children:bool) -> bool {
     launcher_focus_discard(); // A newer explicit focus supersedes a queued launcher focus.
+    program_held_release(sid);
     if sid == 0 {
         FOCUSED_SURFACE_ID = 0;
         serial_println!("[silk-shell.focus.change] from=0 to=0 (clear)");

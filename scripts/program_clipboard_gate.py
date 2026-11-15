@@ -8,7 +8,8 @@ held during a click (app_pointer mods).
 3. Quil (a document view) pastes what the program copied.
 4. A Shift-click and an Alt-click in Jot reach it with those keys in the pointer word.
 5. A key going up reaches Jot as the press's word with down=0.
-6. Numpad keys carry the keypad mark for a program that asked (Jot does)."""
+6. Numpad keys carry the keypad mark for a program that asked (Jot does).
+7. A key still held when focus leaves Jot is released in Jot."""
 import argparse,http.server,os,re,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
@@ -87,6 +88,11 @@ def main():
   for qcode,mark in (('kp_8',1),('up',0)):
    s=len(t());q.key(qcode)
    g['wait'](rf'\[shell.program.key.up\] pd={jot[1]} task={jot[2]} code=0x48 keypad={mark} status=0',s,30)
+  # 7. A key held in Jot when focus moves away is released there.
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':True,'key':{'type':'qcode','data':'w'}}}]});time.sleep(.5)
+  g['focus'](153)
+  g['wait'](rf'\[shell.program.key.up\] pd={jot[1]} task={jot[2]} code=0x11 keypad=0 status=0',s,30)
+  q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':False,'key':{'type':'qcode','data':'w'}}}]});time.sleep(.5)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'copied':len(TEXT),'pointer':words})
  finally:g['stop']()

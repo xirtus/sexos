@@ -185,6 +185,8 @@ mod shell {
     unsafe fn clip_touched(_:Subject){}
     static mut KEY_KEYPAD:bool=false;
     unsafe fn program_keys(_:Subject)->u64{0}
+    static mut PROGRAM_HELD:[Option<(u8,Key,Participant)>;8]=[None;8];
+    unsafe fn program_held_note(_:u8,_:Key,_:Participant){}
     include!(env!("APP_INPUT_PRODUCTION"));
     unsafe fn reset(){keyboard_layout::reset();KEY_REPEAT=key_repeat::Repeat::new();KEY_REPEATING=false;CAPS_AS_CTRL=false;crate::TICKS=1;POINTER_BUTTONS=0;INTERACTION=InteractionState::Idle;DISPLAY_SCALE=desktop_style::chrome::ScaleClient::new();APP_INPUT=Queue::new();CLIPBOARD_INTAKE=Intake::new();CLIPBOARD=broker::Broker::new();APP_MODIFIERS=Modifiers::new();DESKTOP_KEYS=desktop_keys::Keys::new();WM_CHORDS=wm::Chords::new();WM_ACTIONS.clear();FOCUSED_SURFACE_ID=156;COMMAND_PALETTE_OPEN=false;FOCUS_CHANGES=0;PALETTE_TOGGLES=0;for pd in [9,15,16,18]{CLIPBOARD.register(app_lifecycle::CatalogInfo{target_pd:pd,task_id:pd,surface_id:participant(pd,pd).surface,coordinator_pd:3}).unwrap();}LIVE=Some(true);SOURCE_LIVE=None;LIVE_ONCE=None;STATUS=0;SENT.clear();LIVE_QUERIES.clear();VOLUME_STEPS.clear();PLAYER_KEYS.clear();}
     #[test]fn actual_scale_shortcut_retains_admission_and_never_repeats_an_applied_step(){
