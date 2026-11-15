@@ -336,3 +336,105 @@ fn new_note_velocity_slider_preserves_earlier_note_velocities() {
         vec![96, 48]
     );
 }
+#[test]
+fn offline_job_locks_project_replacement_until_retirement_or_explicit_memory_retry() {
+    let (mut ui, mut studio) = studio();
+    studio
+        .on(&mut ui, &Response::Command("moan.library.keys".into()))
+        .unwrap();
+    let before = studio.session.encode_project().unwrap();
+    studio.plugin_status(&mut ui, moan::plugins::Status::Rendering);
+    studio.set_busy(&mut ui, true);
+    for command in [
+        "moan.new-project",
+        "moan.open-project",
+        "moan.save-project",
+        "moan.undo",
+        "moan.play",
+    ] {
+        assert_eq!(
+            studio
+                .on(&mut ui, &Response::Command(command.into()))
+                .unwrap(),
+            None
+        );
+    }
+    assert_eq!(studio.session.encode_project().unwrap(), before);
+    let render = studio
+        .buttons
+        .iter()
+        .find(|(_, name)| *name == "Offline render")
+        .unwrap()
+        .0;
+    let cancel = studio
+        .buttons
+        .iter()
+        .find(|(_, name)| *name == "Cancel render")
+        .unwrap()
+        .0;
+    assert!(!ui.is_enabled(render));
+    assert!(ui.is_enabled(cancel));
+    assert_eq!(
+        studio.on(&mut ui, &Response::Clicked(cancel)).unwrap(),
+        Some(moan::Action::CancelPlugin)
+    );
+    studio.plugin_status(&mut ui, moan::plugins::Status::WaitingForMemory);
+    assert!(ui.is_enabled(render));
+    assert_eq!(ui.text_of(render), "Retry result");
+    assert_eq!(
+        studio.on(&mut ui, &Response::Clicked(render)).unwrap(),
+        Some(moan::Action::RenderPlugin)
+    );
+    studio.plugin_status(&mut ui, moan::plugins::Status::Idle);
+    studio.set_busy(&mut ui, false);
+    assert!(!ui.is_enabled(cancel));
+    assert_eq!(studio.session.encode_project().unwrap(), before);
+}
+#[test]
+fn eight_real_strips_and_master_are_reachable_in_both_mixer_sizes() {
+    for (width, height) in [(1264, 730), (624, 410)] {
+        let mut ui = Ui::new(
+            width,
+            height,
+            Theme::dark().with_density(weft::Density::Compact),
+            Strings::new("en"),
+        );
+        let mut s = Studio::build(&mut ui);
+        for _ in 0..8 {
+            s.session.add(vec![[1000, -1000]; 100]).unwrap();
+        }
+        s.refresh(&mut ui);
+        let mix = s.buttons.iter().find(|(_, name)| *name == "Mix").unwrap().0;
+        s.on(&mut ui, &Response::Clicked(mix)).unwrap();
+        ui.layout();
+        let label = ui.find_text("MASTER").unwrap();
+        let strip = ui.parent(label).unwrap();
+        let level = ui
+            .find_kind("slider")
+            .into_iter()
+            .find(|id| ui.parent(*id) == Some(strip))
+            .unwrap();
+        let master = s
+            .buttons
+            .iter()
+            .find(|(_, name)| *name == "Master")
+            .unwrap()
+            .0;
+        s.on(&mut ui, &Response::Clicked(master)).unwrap();
+        ui.layout();
+        let rect = ui.rect(level);
+        assert!(
+            rect.w > 0.0
+                && rect.x >= 0.0
+                && rect.right() <= width as f32
+                && rect.y >= 0.0
+                && rect.bottom() <= height as f32,
+            "{width}x{height} {rect:?}"
+        );
+        assert_eq!(ui.focused(), Some(level));
+        assert_eq!(s.session.tracks.len(), 8);
+        s.set_busy(&mut ui, true);
+        s.on(&mut ui, &Response::Clicked(master)).unwrap();
+        assert_ne!(ui.focused(), Some(level));
+    }
+}

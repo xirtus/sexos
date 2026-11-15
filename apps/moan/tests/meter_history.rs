@@ -45,3 +45,17 @@ fn fill_budget_does_not_chase_a_concurrently_draining_ring() {
     assert_eq!(fill_budget(64512, 123, 1024), 123);
     assert_eq!(fill_budget(0, 999, 1024), 0);
 }
+#[test]
+fn master_reads_actual_post_gain_history_only_after_consumption() {
+    let mut history = History::new(16);
+    let mut tracks = meters();
+    let mut master = LevelMeter::new(2, 48000, 800, 18.0);
+    history.reset(0);
+    history.write(0, 0, [16384; 2]);
+    history.write(moan::MAX_TRACKS, 0, [8192; 2]);
+    history.advance_master(0, 1, &mut tracks, &mut master);
+    assert_eq!(master.snapshot()[0].peak, 0.0);
+    history.advance_master(1, 1, &mut tracks, &mut master);
+    assert_eq!(tracks[0].snapshot()[0].peak, 0.5);
+    assert_eq!(master.snapshot()[0].peak, 0.25);
+}

@@ -119,7 +119,7 @@ mod guest {
             let mut next_progress = 0;
             while at < frames {
                 let n = block.len().min(frames - at);
-                moan_core::render_processed(&mut studio.session.tracks, at, &mut block[..n]);
+                studio.session.render_processed(at, &mut block[..n]);
                 encoder
                     .push(&block[..n])
                     .map_err(|_| "Audio encoding failed; partial file retained")?;
@@ -181,6 +181,25 @@ mod guest {
         studio.refresh(&mut app.ui);
         Ok(())
     }
+    fn choose_plugin_path(app: &mut App, folder: bool) -> Result<Vec<u8>, &'static str> {
+        let mut buffer = [0u8; sex_pdx::fs::PATH_BYTES];
+        let picked = files::pick(
+            &mut app.window,
+            if folder {
+                files::Pick::Folder
+            } else {
+                files::Pick::Open
+            },
+            b"",
+            &mut buffer,
+        )
+        .map_err(|_| "Plugin selection cancelled")?;
+        let mut path = Vec::new();
+        path.try_reserve_exact(picked.len())
+            .map_err(|_| "Not enough memory for plugin selection")?;
+        path.extend_from_slice(picked);
+        Ok(path)
+    }
     extern "C" fn main() -> ! {
         let mut app = App::open(
             "Moan",
@@ -197,6 +216,11 @@ mod guest {
             app.window.task
         );
         let mut sound = Sound::open();
+        let mut plugin = moan::plugins::guest::Render::default();
+        let mut plugin_path = Vec::new();
+        let mut render_folder = Vec::new();
+        let mut render_at = 0usize;
+        let mut pending_plugin_close = false;
         let mut playing = false;
         let mut paused = false;
         let mut at = 0usize;
@@ -208,6 +232,7 @@ mod guest {
         let mut block = [[0i16; 2]; 1024];
         let mut meters: [serenade_core::LevelMeter; moan::MAX_TRACKS] =
             core::array::from_fn(|_| serenade_core::LevelMeter::new(2, RATE, 800, 18.0));
+        let mut master_meter = serenade_core::LevelMeter::new(2, RATE, 800, 18.0);
         let mut meter_due = 0u64;
         let mut status_due = 0u64;
         let mut prefill = false;
@@ -216,13 +241,67 @@ mod guest {
         let mut history =
             moan::meter_history::History::new(sex_pdx::sound_ring::FRAMES as usize * 2);
         loop {
+            if plugin.poll(weft::sexos::now()) {
+                sex_pdx::serial_record!(
+                    "[moan.plugin.state] status={:?} retired={}",
+                    plugin.status(),
+                    plugin.retired() as u8
+                );
+                studio.plugin_status(&mut app.ui, plugin.status());
+            }
+            if let Some(audio) = plugin.take_result() {
+                let frames = audio.frames.len();
+                let clipped = audio.clipped_samples;
+                studio.session.cursor = render_at;
+                match studio.session.add(audio.frames) {
+                    Ok(()) => {
+                        studio.refresh(&mut app.ui);
+                        studio.message(&mut app.ui,&format!("Offline render added as a new track; original kept · {} clipped samples",clipped));
+                        sex_pdx::serial_record!(
+                            "[moan.plugin.imported] tracks={} frames={} clipped={} format={:?}",
+                            studio.session.tracks.len(),
+                            frames,
+                            clipped,
+                            audio.format
+                        );
+                    }
+                    Err(error) => studio.message(&mut app.ui, error),
+                }
+                studio.plugin_status(&mut app.ui, plugin.status());
+            }
+            if pending_plugin_close && plugin.retired() {
+                pending_plugin_close = false;
+                if studio.request_close_with_pending(&mut app.ui, recording.is_some())
+                    == Some(Action::Quit)
+                {
+                    if let Some(sound) = &mut sound {
+                        sound.listen(false);
+                        sound.skip();
+                        sound.close();
+                    }
+                    sex_pdx::serial_record!("[moan.closed]");
+                    sex_pdx::task_finish(0);
+                }
+                moan::project_io::decline_close(&app);
+            }
+            studio.set_busy(
+                &mut app.ui,
+                playing || paused || recording.is_some() || plugin.busy(),
+            );
             // Poll the existing window with a short bound while sound is active;
             // toolkit App::next can wait indefinitely when there are no UI timers.
-            let responses = if playing || recording.is_some() {
+            let responses = if playing || recording.is_some() || plugin.busy() {
                 app.present();
                 app.ui.tick(weft::sexos::now());
                 let mut out = Vec::new();
-                if let Some(e) = app.window.next_within(4) {
+                if let Some(e) =
+                    app.window
+                        .next_within(if plugin.busy() && !playing && recording.is_none() {
+                            20
+                        } else {
+                            4
+                        })
+                {
                     out.extend(studio.handle_event(&mut app.ui, weft::sexos::event(e)));
                 }
                 for _ in 0..64 {
@@ -235,8 +314,23 @@ mod guest {
             };
             let had_responses = !responses.is_empty();
             for r in responses {
-                studio.set_busy(&mut app.ui, playing || paused || recording.is_some());
+                studio.set_busy(
+                    &mut app.ui,
+                    playing || paused || recording.is_some() || plugin.busy(),
+                );
                 let outcome = if r == Response::Close {
+                    if plugin.busy() && !plugin.retired() {
+                        plugin.cancel();
+                        pending_plugin_close = true;
+                        studio.plugin_status(&mut app.ui, plugin.status());
+                        studio.message(&mut app.ui, "Cancelling offline render before closing");
+                        moan::project_io::decline_close(&app);
+                        continue;
+                    }
+                    if plugin.busy() {
+                        plugin.cancel();
+                        studio.plugin_status(&mut app.ui, plugin.status());
+                    }
                     let action =
                         studio.request_close_with_pending(&mut app.ui, recording.is_some());
                     if action.is_none() {
@@ -249,7 +343,92 @@ mod guest {
                 match outcome {
                     Err(e) => studio.message(&mut app.ui, e),
                     Ok(action) => match action {
+                        Some(Action::ChoosePlugin) | Some(Action::ChooseRenderFolder) => {
+                            if playing || paused || recording.is_some() || plugin.busy() {
+                                studio.message(
+                                    &mut app.ui,
+                                    "Stop transport and offline render first",
+                                );
+                                continue;
+                            }
+                            let folder = action == Some(Action::ChooseRenderFolder);
+                            match choose_plugin_path(&mut app, folder) {
+                                Ok(path) => {
+                                    studio.plugin_selection(&mut app.ui, folder, &path);
+                                    if folder {
+                                        render_folder = path;
+                                    } else {
+                                        plugin_path = path;
+                                    }
+                                }
+                                Err(error) => studio.message(&mut app.ui, error),
+                            }
+                        }
+                        Some(Action::RenderPlugin) => {
+                            if plugin.status() == moan::plugins::Status::WaitingForMemory {
+                                plugin.retry_result();
+                                studio.plugin_status(&mut app.ui, plugin.status());
+                                continue;
+                            }
+                            if playing || paused || recording.is_some() {
+                                studio.message(
+                                    &mut app.ui,
+                                    "Stop transport before offline rendering",
+                                );
+                                continue;
+                            }
+                            if plugin_path.is_empty() || render_folder.is_empty() {
+                                studio.message(
+                                    &mut app.ui,
+                                    "Choose a plugin and a render folder first",
+                                );
+                                continue;
+                            }
+                            let result = (|| {
+                                let (start, pcm) = studio.session.offline_region()?;
+                                let format = if studio.plugin_format == 0 {
+                                    moan_plugin::job::Format::Clap
+                                } else {
+                                    moan_plugin::job::Format::Vst3
+                                };
+                                plugin
+                                    .start(
+                                        &plugin_path,
+                                        &render_folder,
+                                        &pcm,
+                                        format,
+                                        &[],
+                                        weft::sexos::now(),
+                                    )
+                                    .map_err(|error| error.message())?;
+                                render_at = start;
+                                Ok::<(), &'static str>(())
+                            })();
+                            match result {
+                                Ok(()) => {
+                                    studio.plugin_status(&mut app.ui, plugin.status());
+                                    studio.set_busy(&mut app.ui, true);
+                                    sex_pdx::serial_record!(
+                                        "[moan.plugin.started] format={} input_region_start={}",
+                                        studio.plugin_format,
+                                        render_at
+                                    );
+                                }
+                                Err(error) => studio.message(&mut app.ui, error),
+                            }
+                        }
+                        Some(Action::CancelPlugin) => {
+                            plugin.cancel();
+                            studio.plugin_status(&mut app.ui, plugin.status());
+                        }
                         Some(Action::Play) => {
+                            if plugin.busy() {
+                                studio.message(
+                                    &mut app.ui,
+                                    "Wait for the offline render before playback",
+                                );
+                                continue;
+                            }
                             if recording.is_some() {
                                 studio.message(&mut app.ui, "Stop recording first");
                                 continue;
@@ -279,6 +458,7 @@ mod guest {
                                     for meter in &mut meters {
                                         meter.reset();
                                     }
+                                    master_meter.reset();
                                 }
                                 playing = true;
                                 studio.message(&mut app.ui, "Playing");
@@ -308,6 +488,7 @@ mod guest {
                             for meter in &mut meters {
                                 meter.reset();
                             }
+                            master_meter.reset();
                             playing = false;
                             paused = false;
                             if let Some(s) = &mut sound {
@@ -385,6 +566,7 @@ mod guest {
                                 for meter in &mut meters {
                                     meter.reset();
                                 }
+                                master_meter.reset();
                                 lost = s.lost();
                                 lost_start = lost;
                                 sex_pdx::serial_record!(
@@ -446,6 +628,13 @@ mod guest {
                             sex_pdx::serial_record!("[moan.project.new] tracks=0 clean=1");
                         }
                         Some(Action::Quit) => {
+                            if plugin.busy() && !plugin.retired() {
+                                plugin.cancel();
+                                pending_plugin_close = true;
+                                studio.plugin_status(&mut app.ui, plugin.status());
+                                moan::project_io::decline_close(&app);
+                                continue;
+                            }
                             if let Some(s) = &mut sound {
                                 s.listen(false);
                                 s.skip();
@@ -531,7 +720,8 @@ mod guest {
                     let end = studio.session.duration().saturating_add(RATE as usize * 2);
                     let heard =
                         playback_start + s.played_total().saturating_sub(play_ring_start) as usize;
-                    let lost_meter_frames = history.advance(heard, at, &mut meters);
+                    let lost_meter_frames =
+                        history.advance_master(heard, at, &mut meters, &mut master_meter);
                     if lost_meter_frames > 0 {
                         sex_pdx::serial_record!(
                             "[moan.meter.overrun] frames={}",
@@ -547,8 +737,7 @@ mod guest {
                         let n = block.len().min(budget);
                         let start = at;
                         let mut track_offsets = [0usize; moan::MAX_TRACKS];
-                        moan_core::render_processed_observed(
-                            &mut studio.session.tracks,
+                        studio.session.render_processed_observed(
                             at,
                             &mut block[..n],
                             |track, frame| {
@@ -556,6 +745,9 @@ mod guest {
                                 track_offsets[track] += 1;
                             },
                         );
+                        for (index, frame) in block[..n].iter().enumerate() {
+                            history.write(moan::MAX_TRACKS, start + index, *frame);
+                        }
                         let written = s.write(&block[..n]);
                         assert_eq!(written, n);
                         at += written;
@@ -594,9 +786,13 @@ mod guest {
             let now = weft::sexos::now();
             if had_responses || now >= meter_due {
                 studio.publish_meters(&mut app.ui, &mut meters);
+                studio.publish_master(&mut app.ui, &mut master_meter);
                 meter_due = now.saturating_add(100);
             }
-            studio.set_busy(&mut app.ui, playing || paused || recording.is_some());
+            studio.set_busy(
+                &mut app.ui,
+                playing || paused || recording.is_some() || plugin.busy(),
+            );
         }
     }
     #[no_mangle]

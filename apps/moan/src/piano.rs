@@ -17,13 +17,19 @@ pub fn step(x: usize) -> usize {
     (x.saturating_sub(KEYBOARD).min(GRID - 1) * STEPS / GRID).min(STEPS - 1)
 }
 pub fn render(pattern: Option<&Pattern>) -> Vec<u32> {
-    let mut pixels = vec![0x121b28; WIDTH * HEIGHT];
+    render_width(pattern, WIDTH)
+}
+pub fn render_width(pattern: Option<&Pattern>, width: usize) -> Vec<u32> {
+    let width = width.clamp(160, 4096);
+    let keyboard = width * KEYBOARD / WIDTH;
+    let grid = width - keyboard;
+    let mut pixels = vec![0x121b28; width * HEIGHT];
     for y in 0..HEIGHT {
         let key = key(y);
         let black = [1, 3, 6, 8, 10].contains(&(key % 12));
-        for x in 0..WIDTH {
-            pixels[y * WIDTH + x] =
-                if y % ROW == 0 || x >= KEYBOARD && (x - KEYBOARD) * STEPS % GRID < STEPS {
+        for x in 0..width {
+            pixels[y * width + x] =
+                if y % ROW == 0 || x >= keyboard && (x - keyboard) * STEPS % grid < STEPS {
                     0x39465c
                 } else if black {
                     0x182233
@@ -38,14 +44,14 @@ pub fn render(pattern: Option<&Pattern>) -> Vec<u32> {
                 continue;
             }
             let left =
-                KEYBOARD + (note.start as u64 * GRID as u64 / pattern.frames as u64) as usize;
-            let right = KEYBOARD
-                + ((note.start + note.frames) as u64 * GRID as u64 / pattern.frames as u64)
+                keyboard + (note.start as u64 * grid as u64 / pattern.frames as u64) as usize;
+            let right = keyboard
+                + ((note.start + note.frames) as u64 * grid as u64 / pattern.frames as u64)
                     as usize;
             let y = (LOW + ROWS as u8 - 1 - note.key) as usize * ROW;
             for yy in y + 1..y + ROW {
-                for x in left..right.min(WIDTH) {
-                    pixels[yy * WIDTH + x] = if x == left || yy == y + 1 {
+                for x in left..right.min(width) {
+                    pixels[yy * width + x] = if x == left || yy == y + 1 {
                         0xaff4cf
                     } else {
                         0x388d74 + (note.velocity as u32 / 4) * 0x000100
@@ -55,12 +61,12 @@ pub fn render(pattern: Option<&Pattern>) -> Vec<u32> {
         }
     }
     let mut fonts = weft::text::Fonts::new();
-    let mut painter = weft::paint::Painter::new(&mut pixels, WIDTH, HEIGHT, 1.0);
+    let mut painter = weft::paint::Painter::new(&mut pixels, width, HEIGHT, 1.0);
     for row in 0..ROWS {
         let key = key(row * ROW);
         let black = [1, 3, 6, 8, 10].contains(&(key % 12));
         painter.fill_rect(
-            weft::Rect::new(0.0, (row * ROW) as f32, KEYBOARD as f32, ROW as f32),
+            weft::Rect::new(0.0, (row * ROW) as f32, keyboard as f32, ROW as f32),
             weft::Color(if black { 0xff182233 } else { 0xffb9c4ce }),
         );
         painter.text(

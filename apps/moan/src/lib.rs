@@ -4,6 +4,7 @@
 extern crate alloc;
 pub mod meter_history;
 pub mod piano;
+pub mod plugins;
 pub mod project;
 #[cfg(feature = "sexos")]
 pub mod project_io;
@@ -17,6 +18,7 @@ pub const MAX_TRACKS: usize = 8;
 #[derive(Clone)]
 struct Snapshot {
     revision: u64,
+    master_volume: u16,
     cursor: usize,
     from: usize,
     to: usize,
@@ -87,6 +89,7 @@ pub struct Session {
     revision: u64,
     next_revision: u64,
     saved_revision: u64,
+    master_volume: u16,
     pub tracks: Vec<Track<'static>>,
     pub selected: usize,
     pub cursor: usize,
@@ -101,6 +104,7 @@ impl Default for Session {
             revision: 0,
             next_revision: 1,
             saved_revision: 0,
+            master_volume: 100,
             tracks: Vec::new(),
             selected: 0,
             cursor: 0,
@@ -112,6 +116,36 @@ impl Default for Session {
     }
 }
 impl Session {
+    pub fn master_volume(&self) -> u16 {
+        self.master_volume
+    }
+    pub fn set_master_volume(&mut self, percent: u16) -> Result<(), &'static str> {
+        if percent > 200 {
+            return Err("Master level must be 0–200%");
+        }
+        if self.master_volume != percent {
+            self.remember();
+            self.master_volume = percent;
+        }
+        Ok(())
+    }
+    pub fn render_processed(&mut self, start: usize, out: &mut [Frame]) {
+        self.render_processed_observed(start, out, |_, _| {});
+    }
+    pub fn render_processed_observed(
+        &mut self,
+        start: usize,
+        out: &mut [Frame],
+        tap: impl FnMut(usize, Frame),
+    ) {
+        moan_core::render_processed_observed(&mut self.tracks, start, out, tap);
+        for frame in out {
+            for sample in frame {
+                *sample =
+                    (*sample as i32 * self.master_volume as i32 / 100).clamp(-32768, 32767) as i16;
+            }
+        }
+    }
     pub fn is_dirty(&self) -> bool {
         self.revision != self.saved_revision
     }
@@ -160,6 +194,7 @@ impl Session {
         }
         Snapshot {
             revision: self.revision,
+            master_volume: self.master_volume,
             cursor: self.cursor,
             from: self.from,
             to: self.to,
@@ -188,6 +223,7 @@ impl Session {
         let current = self.snapshot();
         self.redo.push(current);
         self.revision = s.revision;
+        self.master_volume = s.master_volume;
         self.cursor = s.cursor;
         self.from = s.from;
         self.to = s.to;
@@ -206,6 +242,7 @@ impl Session {
         let current = self.snapshot();
         self.undo.push(current);
         self.revision = s.revision;
+        self.master_volume = s.master_volume;
         self.cursor = s.cursor;
         self.from = s.from;
         self.to = s.to;
@@ -237,7 +274,7 @@ impl Session {
         self.remember();
         let mut t = Track::new();
         t.clips
-            .push(Clip::owned(Arc::from(pcm), self.cursor).map_err(|_| "Timeline overflow")?);
+            .push(Clip::buffer(Arc::new(pcm), self.cursor).map_err(|_| "Timeline overflow")?);
         self.tracks.push(t);
         self.selected = self.tracks.len() - 1;
         self.from = self.cursor;
@@ -261,6 +298,38 @@ impl Session {
         self.from = self.cursor;
         self.to = self.duration();
         Ok(())
+    }
+    pub fn selected_region(&self) -> Option<&Clip<'static>> {
+        let track = self.tracks.get(self.selected)?;
+        track
+            .clips
+            .iter()
+            .find(|clip| self.cursor >= clip.start() && self.cursor < clip.end())
+            .or_else(|| track.clips.first())
+    }
+    pub fn offline_region(&self) -> Result<(usize, Vec<Frame>), &'static str> {
+        if self.tracks.len() >= MAX_TRACKS {
+            return Err("Offline render needs a free track");
+        }
+        let clip = self
+            .selected_region()
+            .ok_or("Choose an audio or MIDI region")?;
+        if clip.len() == 0 || clip.len() > MAX_FRAMES {
+            return Err("Offline region must be at most 60 seconds");
+        }
+        let mut pcm = Vec::new();
+        pcm.try_reserve_exact(clip.len())
+            .map_err(|_| "Not enough memory for offline input")?;
+        pcm.resize(clip.len(), [0; 2]);
+        let mut source = clip.clone();
+        let start = source.start();
+        source.move_to(0).map_err(|_| "Region bounds")?;
+        let mut track = Track::new();
+        track.clips.push(source);
+        for (index, block) in pcm.chunks_mut(1024).enumerate() {
+            moan_core::render_processed(core::slice::from_mut(&mut track), index * 1024, block);
+        }
+        Ok((start, pcm))
     }
     pub fn midi_clip(&self) -> Option<&Clip<'static>> {
         let track = self.tracks.get(self.selected)?;
@@ -480,6 +549,10 @@ pub enum Action {
     OpenProject,
     SaveProject,
     NewProject,
+    ChoosePlugin,
+    ChooseRenderFolder,
+    RenderPlugin,
+    CancelPlugin,
     Quit,
 }
 #[derive(Clone, Copy)]
@@ -514,6 +587,14 @@ pub struct Studio {
     smart: Id,
     console: Id,
     piano_panel: Id,
+    device_panel: Id,
+    device_label: Id,
+    plugin_status: Id,
+    plugin_choice: Id,
+    plugin_folder: Id,
+    pub plugin_format: u8,
+    plugin_state: plugins::Status,
+    inspector_open: bool,
     step_panel: Id,
     pub steps: Id,
     gate: Id,
@@ -532,6 +613,11 @@ pub struct Studio {
     meter_values: Vec<Id>,
     mixer_volume: Vec<Id>,
     mixer_pan: Vec<Id>,
+    mixer_mute: Vec<Id>,
+    mixer_solo: Vec<Id>,
+    master_level: Id,
+    master_meter: Id,
+    master_readout: Id,
     pub view: waveform::View,
     transport_cursor: Option<usize>,
     viewport: Id,
@@ -663,6 +749,7 @@ impl Studio {
             "Step Sequencer",
             "Instruments",
             "Library",
+            "Region controls",
         ] {
             buttons.push((ui.button(navigation, name), name));
         }
@@ -795,13 +882,19 @@ impl Studio {
             weft::Fill::Surface,
             Layout::column().gap(4.0).padding(4.0).fill_width(),
         );
-        ui.text(console, "Mixer · Peak / RMS", TextStyle::Caption);
-        let strips = ui.group(console, Layout::row().gap(4.0).wrap().fill_width());
+        let mixer_header = ui.group(console, Layout::row().gap(6.0));
+        ui.text(mixer_header, "Mixer · Peak / RMS", TextStyle::Caption);
+        buttons.push((ui.button(mixer_header, "Master"), "Master"));
+        let mixer_scroll = ui.scroll(console);
+        ui.set_layout(mixer_scroll, Layout::column().fill());
+        let strips = ui.group(mixer_scroll, Layout::row().gap(4.0).wrap().fill_width());
         let mut meter_names = Vec::new();
         let mut meter_details = Vec::new();
         let mut meter_values = Vec::new();
         let mut mixer_volume = Vec::new();
         let mut mixer_pan = Vec::new();
+        let mut mixer_mute = Vec::new();
+        let mut mixer_solo = Vec::new();
         let mut mixer_strips = Vec::new();
         for _ in 0..MAX_TRACKS {
             let strip = ui.panel(
@@ -817,11 +910,31 @@ impl Studio {
             meter_names.push(ui.text(strip, "", TextStyle::Caption));
             meter_details.push(ui.text(strip, "P-120 / R-120", TextStyle::Caption));
             meter_values.push(ui.progress(strip, Some(0.0)));
-            ui.text(strip, "Level / Pan", TextStyle::Caption);
+            ui.text(strip, "Level", TextStyle::Caption);
             mixer_volume.push(ui.slider(strip, 0.0, 200.0, 100.0));
+            ui.text(strip, "Pan", TextStyle::Caption);
             mixer_pan.push(ui.slider(strip, -100.0, 100.0, 0.0));
+            let flags = ui.group(strip, Layout::row().gap(4.0));
+            mixer_mute.push(ui.checkbox(flags, "M", false));
+            mixer_solo.push(ui.checkbox(flags, "S", false));
             ui.set_visible(strip, false);
         }
+        let master = ui.panel(
+            strips,
+            weft::Fill::Control,
+            Layout::column()
+                .gap(3.0)
+                .padding(4.0)
+                .width(126.0)
+                .shrink(0.0),
+        );
+        ui.text(master, "MASTER", TextStyle::Caption);
+        let master_readout = ui.text(master, "P-120 R-120 dB", TextStyle::Caption);
+        let master_meter = ui.progress(master, Some(0.0));
+        ui.text(master, "Output level", TextStyle::Caption);
+        let master_level = ui.slider(master, 0.0, 200.0, 100.0);
+        ui.set_step(master_level, 1.0);
+        ui.set_label(master_level, "Master output level, 0 to 200 percent");
         let piano_panel = ui.panel(
             root,
             weft::Fill::Surface,
@@ -882,10 +995,51 @@ impl Studio {
         for name in ["Set gate", "Clear notes"] {
             buttons.push((ui.button(step_controls, name), name));
         }
+        let device_panel = ui.panel(
+            root,
+            weft::Fill::Surface,
+            Layout::column().gap(4.0).padding(6.0).fill_width(),
+        );
+        let device_label = ui.text(
+            device_panel,
+            "Instruments · choose a MIDI region or an audio region",
+            TextStyle::Caption,
+        );
+        let device_editors = ui.group(device_panel, Layout::row().gap(4.0).wrap().fill_width());
+        for name in ["Piano Roll", "Step Sequencer", "Region controls"] {
+            buttons.push((ui.button(device_editors, name), name));
+        }
+        ui.text(
+            device_panel,
+            "Offline effects · SexOS-built CLAP / VST3",
+            TextStyle::Caption,
+        );
+        let plugin_choice = ui.text(device_panel, "Plugin: none selected", TextStyle::Caption);
+        let plugin_folder = ui.text(
+            device_panel,
+            "Render folder: none selected",
+            TextStyle::Caption,
+        );
+        let plugin_controls = ui.group(device_panel, Layout::row().gap(4.0).wrap().fill_width());
+        for name in [
+            "Choose plugin",
+            "Render folder",
+            "CLAP",
+            "VST3",
+            "Offline render",
+            "Cancel render",
+        ] {
+            buttons.push((ui.button(plugin_controls, name), name));
+        }
+        let plugin_status = ui.text(
+            device_panel,
+            plugins::Status::Idle.label(),
+            TextStyle::Caption,
+        );
         let app_end = ui.text(body, "48 kHz stereo · Stop to edit", TextStyle::Caption);
         ui.set_visible(smart, false);
         ui.set_visible(piano_panel, false);
-        let studio = Self {
+        let mut studio = Self {
             export_format: 0,
             waveform,
             piano,
@@ -895,6 +1049,14 @@ impl Studio {
             smart,
             console,
             piano_panel,
+            device_panel,
+            device_label,
+            plugin_status,
+            plugin_choice,
+            plugin_folder,
+            plugin_format: 0,
+            plugin_state: plugins::Status::Idle,
+            inspector_open: false,
             step_panel,
             steps,
             gate,
@@ -913,6 +1075,11 @@ impl Studio {
             meter_values,
             mixer_volume,
             mixer_pan,
+            mixer_mute,
+            mixer_solo,
+            master_level,
+            master_meter,
+            master_readout,
             view: waveform::View::default(),
             transport_cursor: None,
             viewport: scroll,
@@ -939,7 +1106,80 @@ impl Studio {
             solo,
         };
         studio.refresh(ui);
+        studio.plugin_status(ui, plugins::Status::Idle);
         studio
+    }
+    pub fn plugin_selection(&self, ui: &mut Ui, folder: bool, path: &[u8]) {
+        let name = path
+            .split(|b| *b == b'/')
+            .filter(|part| !part.is_empty())
+            .last()
+            .unwrap_or(b"/");
+        let name: alloc::string::String = alloc::string::String::from_utf8_lossy(name)
+            .chars()
+            .take(24)
+            .collect();
+        ui.set_text(
+            if folder {
+                self.plugin_folder
+            } else {
+                self.plugin_choice
+            },
+            &format!(
+                "{}: {}",
+                if folder { "Render folder" } else { "Plugin" },
+                name
+            ),
+        );
+    }
+    pub fn plugin_status(&mut self, ui: &mut Ui, status: plugins::Status) {
+        self.plugin_state = status;
+        ui.set_text(
+            self.plugin_status,
+            if status == plugins::Status::Cancelling {
+                "Stopping offline render"
+            } else {
+                status.label()
+            },
+        );
+        for (id, name) in &self.buttons {
+            if *name == "Play" {
+                ui.set_enabled(
+                    *id,
+                    !matches!(
+                        status,
+                        plugins::Status::Rendering
+                            | plugins::Status::Cancelling
+                            | plugins::Status::WaitingForMemory
+                    ),
+                );
+            }
+            if *name == "Cancel render" {
+                ui.set_enabled(
+                    *id,
+                    matches!(
+                        status,
+                        plugins::Status::Rendering
+                            | plugins::Status::Cancelling
+                            | plugins::Status::WaitingForMemory
+                    ),
+                );
+            }
+            if *name == "Offline render" {
+                ui.set_enabled(
+                    *id,
+                    !self.busy || status == plugins::Status::WaitingForMemory,
+                );
+                ui.set_text(
+                    *id,
+                    if status == plugins::Status::WaitingForMemory {
+                        "Retry result"
+                    } else {
+                        "Offline render"
+                    },
+                );
+            }
+        }
     }
     pub fn set_busy(&mut self, ui: &mut Ui, busy: bool) {
         if self.busy == busy {
@@ -969,6 +1209,7 @@ impl Studio {
             self.reverb,
             self.mute,
             self.solo,
+            self.master_level,
         ] {
             ui.set_enabled(id, !busy);
         }
@@ -979,6 +1220,14 @@ impl Studio {
             .enumerate()
         {
             ui.set_enabled(*id, !busy && index % MAX_TRACKS < self.session.tracks.len());
+        }
+        for i in 0..MAX_TRACKS {
+            ui.set_enabled(self.mixer_mute[i], !busy && i < self.session.tracks.len());
+            ui.set_enabled(self.mixer_solo[i], !busy && i < self.session.tracks.len());
+            ui.set_enabled(
+                self.track_buttons[i],
+                !busy && i < self.session.tracks.len(),
+            );
         }
         for (id, name) in &self.buttons {
             if ![
@@ -991,6 +1240,9 @@ impl Studio {
                 "Step Sequencer",
                 "Instruments",
                 "Library",
+                "Region controls",
+                "Cancel render",
+                "Master",
             ]
             .contains(name)
             {
@@ -1012,6 +1264,7 @@ impl Studio {
         ] {
             ui.commands.set_enabled(command, !busy);
         }
+        self.plugin_status(ui, self.plugin_state);
     }
     pub fn publish_meters(
         &self,
@@ -1044,6 +1297,23 @@ impl Studio {
             }
         }
     }
+    pub fn publish_master(&self, ui: &mut Ui, meter: &mut serenade_core::LevelMeter) {
+        let value = meter.snapshot();
+        let peak = value[0].peak.max(value[1].peak);
+        let rms = value[0].rms.max(value[1].rms);
+        ui.set_value(
+            self.master_meter,
+            ((serenade_core::linear_to_dbfs(peak) + 60.0) / 60.0).clamp(0.0, 1.0),
+        );
+        ui.set_text(
+            self.master_readout,
+            &format!(
+                "P{} R{} dB",
+                serenade_core::linear_to_dbfs_approx(peak),
+                serenade_core::linear_to_dbfs_approx(rms)
+            ),
+        );
+    }
     pub fn message(&self, ui: &mut Ui, text: &str) {
         ui.set_text(self.status, text);
     }
@@ -1075,6 +1345,8 @@ impl Studio {
             }
         }
         let wide = available >= 1000.0;
+        let show_inspector = self.inspector_open
+            && matches!(self.workspace, Workspace::Arrange | Workspace::Instruments);
         let show_library = self.library_open && available >= 800.0;
         Self::visible_layout(
             ui,
@@ -1089,7 +1361,7 @@ impl Studio {
         Self::visible_layout(
             ui,
             self.smart,
-            self.workspace == Workspace::Instruments,
+            show_inspector,
             Layout::column()
                 .gap(4.0)
                 .padding(6.0)
@@ -1097,11 +1369,24 @@ impl Studio {
                 .min_width(0.0)
                 .shrink(0.0),
         );
+        let mixer_height = if self.workspace == Workspace::Mix {
+            (ui.size().1 as f32 / ui.theme().scale * 0.56).clamp(180.0, 390.0)
+        } else {
+            210.0
+        };
         Self::visible_layout(
             ui,
             self.console,
-            !short && matches!(self.workspace, Workspace::Arrange | Workspace::Mix),
-            Layout::column().gap(4.0).padding(4.0).fill_width(),
+            (!short && self.workspace == Workspace::Mix)
+                || (ui.size().1 as f32 / ui.theme().scale >= 500.0
+                    && self.workspace == Workspace::Arrange),
+            Layout::column()
+                .gap(4.0)
+                .padding(4.0)
+                .fill_width()
+                .height(mixer_height)
+                .min_height(mixer_height)
+                .shrink(0.0),
         );
         Self::visible_layout(
             ui,
@@ -1122,12 +1407,14 @@ impl Studio {
                 .height(step::HEIGHT as f32)
                 .shrink(0.0),
         );
-        let sidebar = if show_library { 156.0 } else { 0.0 }
-            + if self.workspace == Workspace::Instruments {
-                202.0
-            } else {
-                0.0
-            };
+        Self::visible_layout(
+            ui,
+            self.device_panel,
+            self.workspace == Workspace::Instruments,
+            Layout::column().gap(4.0).padding(6.0).fill_width(),
+        );
+        let sidebar =
+            if show_library { 156.0 } else { 0.0 } + if show_inspector { 202.0 } else { 0.0 };
         let width = (available - 26.0 - sidebar).max(230.0);
         ui.set_layout(
             self.arrange,
@@ -1207,12 +1494,29 @@ impl Studio {
         });
         ui.set_image(
             self.steps,
-            step::WIDTH,
+            (ui.size().0 as f32 / ui.theme().scale - 24.0).clamp(160.0, 4096.0) as usize,
             step::HEIGHT,
-            step::render(clip.and_then(Clip::midi_pattern), position),
+            step::render_width(
+                clip.and_then(Clip::midi_pattern),
+                position,
+                (ui.size().0 as f32 / ui.theme().scale - 24.0).clamp(160.0, 4096.0) as usize,
+            ),
         );
     }
     pub fn refresh(&self, ui: &mut Ui) {
+        ui.set_value(self.master_level, self.session.master_volume as f32);
+        let name = self
+            .session
+            .selected_region()
+            .and_then(Clip::midi_pattern)
+            .map_or("Audio region", |pattern| pattern.instrument.name());
+        ui.set_text(
+            self.device_label,
+            &format!(
+                "Instruments · {} · offline processing creates a new track",
+                name
+            ),
+        );
         self.refresh_steps(ui);
         let (height, pixels) = waveform::render_at(
             &self.session,
@@ -1237,6 +1541,16 @@ impl Studio {
             ui.set_text(id, &format!("{:.6}", value as f64 / RATE as f64));
         }
         for (id, name) in &self.buttons {
+            if ["CLAP", "VST3"].contains(name) {
+                ui.set_button_style(
+                    *id,
+                    if (*name == "CLAP") == (self.plugin_format == 0) {
+                        weft::ButtonStyle::Primary
+                    } else {
+                        weft::ButtonStyle::Normal
+                    },
+                );
+            }
             if let Some(format) = ["WAV", "FLAC", "MP3"].iter().position(|item| item == name) {
                 ui.set_button_style(
                     *id,
@@ -1251,9 +1565,12 @@ impl Studio {
 
         ui.set_image(
             self.piano,
-            piano::WIDTH,
+            (ui.size().0 as f32 / ui.theme().scale - 24.0).clamp(160.0, 4096.0) as usize,
             piano::HEIGHT,
-            piano::render(self.session.midi_clip().and_then(Clip::midi_pattern)),
+            piano::render_width(
+                self.session.midi_clip().and_then(Clip::midi_pattern),
+                (ui.size().0 as f32 / ui.theme().scale - 24.0).clamp(160.0, 4096.0) as usize,
+            ),
         );
         ui.set_text(
             self.piano_label,
@@ -1287,7 +1604,6 @@ impl Studio {
                     .height(waveform::ROW as f32)
                     .shrink(0.0),
             );
-            ui.set_visible(self.mixer_strips[i], i < self.session.tracks.len());
             if let Some(track) = self.session.tracks.get(i) {
                 let name = track
                     .clips
@@ -1312,6 +1628,16 @@ impl Studio {
                 );
                 ui.set_value(self.mixer_volume[i], track.volume() as f32);
                 ui.set_value(self.mixer_pan[i], track.pan() as f32);
+                ui.set_checked(self.mixer_mute[i], track.muted);
+                ui.set_checked(self.mixer_solo[i], track.solo);
+                ui.set_label(
+                    self.mixer_mute[i],
+                    &format!("Mute track {} {}", i + 1, name),
+                );
+                ui.set_label(
+                    self.mixer_solo[i],
+                    &format!("Solo track {} {}", i + 1, name),
+                );
             } else {
                 ui.set_text(self.meter_names[i], "Empty");
                 ui.set_value(self.meter_values[i], 0.0);
@@ -1465,8 +1791,18 @@ impl Studio {
                 return vec![Response::Command("moan.selection".into())];
             }
         }
+        let navigation = matches!(
+            event,
+            weft::Event::Pointer(weft::Pointer {
+                kind: weft::PointerKind::Wheel(_),
+                ..
+            }) | weft::Event::Key(_)
+        );
         let resized = matches!(event, weft::Event::Resize { .. });
         let mut responses = ui.handle(event);
+        if navigation {
+            ui.invalidate();
+        }
         if resized {
             self.layout_document(ui);
             ui.layout();
@@ -1750,21 +2086,37 @@ impl Studio {
             }
         }
         if self.busy {
+            let plugin_active = matches!(
+                self.plugin_state,
+                plugins::Status::Rendering
+                    | plugins::Status::Cancelling
+                    | plugins::Status::WaitingForMemory
+            );
+            let play_requested = matches!(r,Response::Command(command) if command=="moan.play")
+                || matches!(r,Response::Clicked(id) if self.buttons.iter().any(|(button,name)| button==id&&*name=="Play"));
+            if plugin_active && play_requested {
+                return Ok(None);
+            }
             let allowed = match r {
                 Response::Clicked(id) => self.buttons.iter().any(|(b, name)| {
                     b == id
-                        && [
-                            "Play",
-                            "Pause",
-                            "Stop",
-                            "Arrange",
-                            "Mix",
-                            "Piano Roll",
-                            "Step Sequencer",
-                            "Instruments",
-                            "Library",
-                        ]
-                        .contains(name)
+                        && ((*name == "Offline render"
+                            && self.plugin_state == plugins::Status::WaitingForMemory)
+                            || [
+                                "Play",
+                                "Pause",
+                                "Stop",
+                                "Arrange",
+                                "Mix",
+                                "Piano Roll",
+                                "Step Sequencer",
+                                "Instruments",
+                                "Library",
+                                "Region controls",
+                                "Cancel render",
+                                "Master",
+                            ]
+                            .contains(name))
                 }),
                 Response::Command(c) => [
                     "moan.play",
@@ -1798,6 +2150,11 @@ impl Studio {
             }
         }
         if let Response::Changed(id) = r {
+            if *id == self.master_level {
+                self.session.set_master_volume(ui.value(*id) as u16)?;
+                self.refresh(ui);
+                return Ok(None);
+            }
             if *id == self.gate {
                 self.note_gate = (ui.value(*id) + 0.5).clamp(1.0, 100.0) as u8;
                 return Ok(None);
@@ -1845,6 +2202,21 @@ impl Studio {
             return Ok(None);
         }
         if let Response::Toggled(id, on) = r {
+            let mute = self.mixer_mute.iter().position(|item| item == id);
+            let solo = self.mixer_solo.iter().position(|item| item == id);
+            if let Some(index) = mute.or(solo) {
+                if index >= self.session.tracks.len() {
+                    return Err("Select a real track");
+                }
+                self.session.remember();
+                if mute.is_some() {
+                    self.session.tracks[index].muted = *on;
+                } else {
+                    self.session.tracks[index].solo = *on;
+                }
+                self.refresh(ui);
+                return Ok(None);
+            }
             if self.session.selected >= self.session.tracks.len() {
                 return Err("Select a track");
             }
@@ -1942,6 +2314,14 @@ impl Studio {
             "Step Sequencer",
             "Instruments",
             "Library",
+            "Region controls",
+            "Choose plugin",
+            "Render folder",
+            "CLAP",
+            "VST3",
+            "Offline render",
+            "Cancel render",
+            "Master",
         ]
         .contains(&command)
         {
@@ -1959,6 +2339,7 @@ impl Studio {
                 None
             }
             "Show tracks" => {
+                self.inspector_open = true;
                 self.show_workspace(ui, Workspace::Instruments);
                 ui.invalidate();
                 ui.focus(Some(self.timeline));
@@ -1980,6 +2361,29 @@ impl Studio {
                 self.show_workspace(ui, Workspace::Arrange);
                 None
             }
+            "Master" => {
+                ui.focus(Some(if self.busy {
+                    self.master_meter
+                } else {
+                    self.master_level
+                }));
+                ui.invalidate();
+                None
+            }
+            "Region controls" => {
+                self.inspector_open = !self.inspector_open;
+                self.layout_document(ui);
+                ui.invalidate();
+                None
+            }
+            "CLAP" | "VST3" => {
+                self.plugin_format = if command == "CLAP" { 0 } else { 1 };
+                None
+            }
+            "Choose plugin" => Some(Action::ChoosePlugin),
+            "Render folder" => Some(Action::ChooseRenderFolder),
+            "Offline render" => Some(Action::RenderPlugin),
+            "Cancel render" => Some(Action::CancelPlugin),
             "Instruments" => {
                 self.show_workspace(ui, Workspace::Instruments);
                 None

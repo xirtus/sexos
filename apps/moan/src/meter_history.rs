@@ -4,7 +4,7 @@
 use alloc::{vec, vec::Vec};
 use moan_core::Frame;
 pub struct History {
-    tracks: [Vec<Frame>; crate::MAX_TRACKS],
+    tracks: [Vec<Frame>; crate::MAX_TRACKS + 1],
     capacity: usize,
     consumed: usize,
 }
@@ -34,6 +34,24 @@ impl History {
         produced: usize,
         meters: &mut [serenade_core::LevelMeter; crate::MAX_TRACKS],
     ) -> usize {
+        self.advance_inner(heard, produced, meters, None)
+    }
+    pub fn advance_master(
+        &mut self,
+        heard: usize,
+        produced: usize,
+        meters: &mut [serenade_core::LevelMeter; crate::MAX_TRACKS],
+        master: &mut serenade_core::LevelMeter,
+    ) -> usize {
+        self.advance_inner(heard, produced, meters, Some(master))
+    }
+    fn advance_inner(
+        &mut self,
+        heard: usize,
+        produced: usize,
+        meters: &mut [serenade_core::LevelMeter; crate::MAX_TRACKS],
+        mut master: Option<&mut serenade_core::LevelMeter>,
+    ) -> usize {
         let end = heard.min(produced);
         if end < self.consumed {
             return 0;
@@ -45,8 +63,15 @@ impl History {
             for meter in meters.iter_mut() {
                 meter.reset();
             }
+            if let Some(master) = master.as_deref_mut() {
+                master.reset();
+            }
         }
         for at in self.consumed..end {
+            if let Some(master) = master.as_deref_mut() {
+                let frame = self.tracks[crate::MAX_TRACKS][at % self.capacity];
+                master.process_frame(&[frame[0] as f32 / 32768.0, frame[1] as f32 / 32768.0]);
+            }
             for (track, meter) in self.tracks.iter().zip(meters.iter_mut()) {
                 let frame = track[at % self.capacity];
                 meter.process_frame(&[frame[0] as f32 / 32768.0, frame[1] as f32 / 32768.0]);
