@@ -393,8 +393,14 @@ pub fn revoke_under(prefix: &[u8]) -> usize {
 fn confine(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
     // `@/path` names a file or folder the person gave this run when starting it: that
     // file, or anything inside that folder (`@/` is the whole filesystem), and nothing else.
+    // A program's own folder under /data, spelled whole, is its own too: it may hand a
+    // file there to a program it starts (Loom's thumbnail helpers write into its cache
+    // that way). Other roots (the recorder's /recordings) stay reachable only by name.
+    // `/data/` is `program_store::DATA`, spelled out for the host test that lifts this.
     if path.first() == Some(&b'@') {
-        let granted = binding.args[..binding.args_len].split(|b| *b == b' ').chain(binding.picked[..binding.picked_len].split(|b| *b == b' ')).filter(|t| t.len() > 1 && t[0] == b'@').any(|token| {
+        let root = &binding.root[..binding.len];
+        let own = root.starts_with(b"/data/") && path[1..].starts_with(root) && path.get(1 + root.len()).is_some_and(|b| *b == b'/');
+        let granted = own || binding.args[..binding.args_len].split(|b| *b == b' ').chain(binding.picked[..binding.picked_len].split(|b| *b == b' ')).filter(|t| t.len() > 1 && t[0] == b'@').any(|token| {
             token == path || path.starts_with(token) && (token.ends_with(b"/") || path[token.len()] == b'/')
         });
         let abs = &path[1..];

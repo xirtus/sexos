@@ -266,7 +266,7 @@ fn key_action(calc: &mut Calc, key: sex_pdx::app_key::Key) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Calculator");
+    window.title(b"Abacus");
     let mut small = Face::new(10, 20);
     let mut big = Face::new(18, 34);
     let mut calc = Calc { core: Calculator::new(), expr: String::new(), shown: String::new(), error: false, fresh: false, scientific: false, picked: None };

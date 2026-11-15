@@ -182,6 +182,8 @@ mod shell {
     unsafe fn overview_key(_:u8,_:u64)->bool{false}
     unsafe fn screenshot_key(_:u8,_:u64)->bool{false}
     unsafe fn tray_key(_:u8,_:u64)->bool{false}
+    // The Bluetooth panel is closed in these cases; production returns false then.
+    mod bt_panel{pub fn key(_:u8,_:u64)->bool{false}}
     unsafe fn clip_touched(_:Subject){}
     static mut KEY_KEYPAD:bool=false;
     unsafe fn program_keys(_:Subject)->u64{0}

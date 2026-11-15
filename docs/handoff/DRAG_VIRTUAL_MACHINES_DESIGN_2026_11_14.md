@@ -1,6 +1,6 @@
 # Drag: virtual machines on SexOS (W7 design, awaiting Andreas's decision)
 
-Status: approved. Andreas approved the `SYS_VM` mechanism in section 3 and a kernel line
+Status: approved; D1 landed, D2 first slice landed (section 9). Andreas approved the `SYS_VM` mechanism in section 3 and a kernel line
 budget raise of about 1,200 lines for it on 2026-11-14. This is an exception to the
 "only J and L touch `kernel/`" rule in DAILY_DRIVER_NEXT_100_SLICES.md, limited to the VM
 mechanism. D1 is next; the budget row lands with the D1 code.
@@ -66,7 +66,7 @@ All of this stays out of the kernel, in a confined server per guest:
 | --- | --- | --- |
 | D0 | This design, Andreas's decision, budget row | review |
 | D1 | Landed (branch `claude/project-thread-bcyshp-drag`): kernel VMX (`kernel/src/vmx.rs`), `SYS_VM` 110 ops 0-8 (`crates/sex-pdx/src/vm.rs`), Machine cap on program rows, `apps/dragtest` | host: `scripts/drag_host_gate.sh` (record layouts, EPT/VMX encodings). QEMU: `scripts/drag_gate.py`. QEMU TCG does not emulate VMX, so CI (`--accel tcg`) proves the clean refusal; the real-mode guest (four exits on port 0xE9, HLT) runs with `--accel kvm` on a host with VMX and nested KVM. See section 8. |
-| D2 | `drag` server: Linux direct boot, serial console, virtio-blk | gate: tiny Linux (or a unikernel) guest prints a line on its serial console |
+| D2 | First slice landed (branch `claude/project-thread-bcyshp-drag-d2`): `apps/drag` on `crates/drag-vmm`: Linux direct boot (bzImage, boot protocol 2.06+, 64- and 32-bit entry), 16550 serial console, 8259 PIC + 8254 PIT, virtio-mmio virtio-blk on a file. See section 9. | host: `scripts/drag_host_gate.sh` (drag-vmm unit tests; the in-tree test guest against QEMU microvm's own 16550 and virtio-blk). QEMU: `scripts/drag_gate.py`: TCG proves loading and the clean refusal; `--accel kvm` runs the test guest, whose console lines must come back. A real Linux bzImage receipt is pending (KVM host or x17). |
 | D3 | virtio-net through SexNet, virtio-gpu 2D into a window, virtio-input | gate: guest screenshot shows its framebuffer |
 | D4 | SMP guests, x2APIC, posted interrupts, preemption fairness | bench vs bare metal |
 | D5 | AMD SVM path | gate on SVM-capable runner or x17-like receipts |
@@ -152,3 +152,94 @@ INFO/CREATE with UNAVAILABLE, and that the program closes and its row retires no
 The guest path (`--accel kvm`, auto-selected when `/dev/kvm` is usable and the host has
 vmx and pku) was not run in the cloud container this was built in (no /dev/kvm); it is
 the x17 / KVM-host receipt for D1.
+
+## 9. D2 as landed (2026-11-15): the drag program
+
+No kernel change and no ABI change: D2 is ring 3 only, on the D1 `SYS_VM` ops. The kernel
+stays at its D1 size.
+
+Where it lives:
+
+- `crates/drag-vmm` (GPL-3.0, `no_std` + `alloc`, host-testable): the VMM core. Our own code
+  from the specs (Linux boot protocol, Intel SDM, 16550/8250, 8259A, 8254, virtio 1.2); no
+  rust-vmm crate was taken, because `vm-memory`, `virtio-queue`, `linux-loader` and
+  `vm-superio` assume `std` and `/dev/kvm`-shaped memory, and what D2 needs from them is
+  small. The kernel is reached only through the `Vcpu` trait, so every exit path runs on the
+  host against a scripted vCPU.
+- `apps/drag`: the program (a program row, like `dragtest`, so it holds the Machine cap).
+  `run drag` boots the in-tree test guest; `run drag kernel=bzImage [initrd=FILE]
+  [disk=FILE] [ro] [mem=MIB] [-- words]` boots a Linux bzImage from its folder. One guest
+  per run, one vCPU: the per-guest confinement the design asks for is the program run.
+
+What drag-vmm does:
+
+| Piece | D2 |
+| --- | --- |
+| Guest RAM | One page-aligned block of the run's heap (8 MiB for the test guest, 256 MiB default, at most 2 GiB), lent at guest-physical 0 in loans of at most 4,096 pages; LEND's BUSY (pages with Denim) is retried. Every guest-physical access is bounds-checked. |
+| Loader | bzImage setup header (2.06+, `setup_sects`, `code32_start`, `init_size`, `cmdline_size`, `initrd_addr_max`, `xloadflags`), kernel at 1 MiB, zero page at 0x7000 with the header copied, `type_of_loader` 0xFF, E820 (RAM below the EBDA, EBDA and BIOS reserved, RAM from 1 MiB), command line at 0x20000, initrd at the top of RAM. 64-bit entry (2.12+ with `XLF_KERNEL_64`): long mode at load + 0x200, identity map of 4 GiB with 2 MiB pages at 0x9000, GDT at 0x500 with `__BOOT_CS` 0x10 and `__BOOT_DS` 0x18, RSI = zero page. Otherwise 32-bit flat protected mode at the load address. |
+| Exits | I/O (including `ins`/`outs` and `rep`, bounded per exit), MMIO through EPT violations (instruction fetched through the guest's page tables and decoded: `mov` 88/89/8A/8B/C6/C7 and `movzx`/`movsx`, with prefixes and REX), CPUID and MSR allow-lists, MOV CR0/3/4/8 with EFER.LMA following CR0.PG, CLTS, LMSW, MOV DR, HLT, #UD for VMCALL/XSETBV/VMX instructions/MONITOR/MWAIT, #GP for unknown MSRs and RDPMC. Triple fault, entry failure, undecodable MMIO and anything unknown stop the guest with the reason in the log. |
+| Devices | 16550A on COM1 (IRQ 4, loopback for the 8250 probe; console lines go to the log as `[drag.serial] ...` and the window, cleaned to printable ASCII), 8259A pair, 8254 (channel 0 drives IRQ 0, channel 2 and port 0x61 for TSC calibration), CMOS stub, port 0xE9, no PCI (config reads 0, Linux gets `pci=off`), virtio-mmio virtio-blk at 0xD000_0000 IRQ 5 (modern only, one queue of up to 256, FLUSH, RO, GET_ID; no indirect descriptors or event index) on a file through Files, or memory. |
+| Interrupts | PIC vectors are injected before an entry when RFLAGS.IF is set and there is no STI/MOV SS shadow; a halted guest with IF set waits for the PIT's next tick. |
+| FPU | The program keeps the guest's x87/SSE state apart from its own with FXSAVE/FXRSTOR around every `VCPU_RUN` (one asm block). The guest sees no XSAVE/AVX in CPUID. |
+| Hostile guest | Everything the guest controls is bounded: descriptor chains (length, loops, table range, indirect), ring addresses (DEVICE_NEEDS_RESET instead of a fault), sectors and lengths (IOERR), request size (1 MiB), REP counts (1,024 elements per exit), port I/O sizes, MMIO instruction bytes, console lines (200 bytes, no control bytes), notes in the log (16). No `unwrap` on guest data; the host tests feed it all of these. |
+
+Policy (`drag_vmm::policy`): CPUID is an allow-list over the host's own answer: no VMX/SMX,
+XSAVE/AVX/OSXSAVE, local APIC/x2APIC/TSC-deadline, SYSENTER, RDTSCP, PCID, PKU, MTRR,
+MCE/MCA, PMU, thermal/power, topology leaves; one logical CPU; the hypervisor bit and
+signature "SexOSDragVMM"; physical address bits at most 39 (the kernel's EPT limit). MSRs:
+EFER/FS_BASE/GS_BASE through the vCPU state, TSC from the host, a small store for PAT,
+STAR/LSTAR/CSTAR/SFMASK/KERNEL_GS_BASE, DEBUGCTL and the read-only identity MSRs, #GP for
+the rest.
+
+The D2 gate guest: no Linux kernel can be built or fetched where this was done, so the gate
+guest is `crates/drag-vmm/guest/drag_test_guest.asm` (assembled bytes in-tree, 3.5 KiB, the
+host gate checks they match the source). It is a bzImage: setup header, setup code, and a
+64-bit entry at payload + 0x200 that uses the boot-protocol entry conventions (RSI = zero
+page, `__BOOT_DS`). It prints over the 16550 (polled), checks the zero page and its E820
+count, prints its command line, finds virtio-blk from the `virtio_mmio.device=` word there
+(the form Linux reads), negotiates VERSION_1, reads sector 0 and prints its first line,
+writes sector 1 and reads it back, and halts with interrupts off. Its real-mode setup code
+does what Drag's loader does (zero page, INT 15h E820, identity tables, GDT), so the same
+bytes also boot under QEMU microvm's own loader, 16550 and virtio-blk: the host gate runs
+that under TCG.
+
+Gates and receipts:
+
+- `scripts/drag_host_gate.sh` (CI host job): D1 layouts, `cargo test -p drag-vmm` (45
+  tests: loader with synthetic bzImage headers, UART, PIC, PIT, virtio-blk queues and
+  hostile chains, decoder and page walks, policy, exit dispatch against a scripted vCPU
+  including the guest's MMIO conversation), the guest reassembled with nasm when present,
+  and `scripts/drag_guest_qemu.py` (QEMU microvm, TCG; SKIP line without qemu).
+- `scripts/drag_gate.py` (CI devices job, TCG): after `dragtest`, `run drag` must log
+  `[drag.vmm.loaded] guest=test protocol=0x20f entry=64 rip=0x100200 ... disk=128` (the
+  loader, 8 MiB of heap and the disk file all work in the real program), then
+  `[drag.vmm.refused] status=3` and close normally. With `--accel kvm` it requires the
+  guest's seven console lines, `[drag.vmm.stop] reason=halted` and
+  `[drag.disk] sector1=drag-d2 guest wrote sector one.` (the guest's write reached the
+  file).
+- Not run here: the VMX path of D2 (no /dev/kvm and no VMX in the container this was
+  built in, the same as D1's guest path). That, and a real Linux bzImage printing its boot
+  log on `[drag.serial]`, are the KVM-host / x17 receipts for D2.
+
+What remains for D2 to be "Linux boots to a shell":
+
+1. The receipts above: the test guest under `--accel kvm`, then a small bzImage
+   (`console=ttyS0`, initramfs with a shell) to its first `[drag.serial]` printk lines and
+   to userspace.
+2. Kernel mechanism gaps found while writing D2 (each small, each a kernel change for
+   Andreas's budget, none taken in this slice):
+   - Interrupt-window exiting: an interrupt that arrives while the guest has IF clear waits
+     for the next exit (the kernel's 4M-TSC time slice bounds the delay). Linux runs, but
+     timer latency is coarse.
+   - Guest SYSCALL MSRs: STAR/LSTAR/CSTAR/SFMASK/KERNEL_GS_BASE are kept by Drag but not
+     switched by the kernel (no VM-entry/exit MSR-load lists), so a guest's SYSCALL uses the
+     host's values: guest userspace system calls do not work yet, and KERNEL_GS_BASE seen by
+     guest SWAPGS is the VMM's own user GS base. Needs MSR load/store areas in the VMCS.
+   - Guest SYSENTER fields are written as 0 every entry (CPUID hides SEP, so this only
+     affects 32-bit guests).
+   - `VCPU_RUN` with `RUN_LOAD_REGS` loads only the general registers; Drag uses
+     GET/SET_REGS around exits that need more (MMIO decode, CR, EFER, injection), two extra
+     syscalls on those exits.
+3. VMM work: virtio-blk on a volume cap, not only a file; per-program consent for the
+   Machine cap through Spindle (D1 left it for D2; still open); keyboard into the UART's
+   receive queue from the window; a larger console view.
