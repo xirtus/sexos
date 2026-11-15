@@ -22,6 +22,8 @@ pub enum Category {
     Matte,
     Distort,
     Transform,
+    Keying,
+    Mask,
     // Geometry nodes
     Attribute,
     Geometry,
@@ -53,6 +55,8 @@ impl Category {
             Category::Matte => "Matte",
             Category::Distort => "Distort",
             Category::Transform => "Transform",
+            Category::Keying => "Keying",
+            Category::Mask => "Mask",
             Category::Attribute => "Attribute",
             Category::Geometry => "Geometry",
             Category::Curve => "Curve",
@@ -79,7 +83,7 @@ impl Category {
             Category::Group => 0x3b5959,
             Category::Layout => 0x6c696f,
             Category::Filter => 0x6c4a8b,
-            Category::Matte => 0x973c3c,
+            Category::Matte | Category::Keying | Category::Mask => 0x973c3c,
             Category::Distort => 0x4c9797,
             Category::Geometry | Category::Mesh | Category::Curve | Category::Point | Category::Instances | Category::Volume => 0x00a379,
             Category::Attribute => 0x001566,
@@ -1271,7 +1275,7 @@ static LEGACY: &[NodeType] = &[
 /// Every registered node type (the Add menu's).
 pub fn node_types() -> &'static [NodeType] {
     static ALL: std::sync::OnceLock<Vec<NodeType>> = std::sync::OnceLock::new();
-    ALL.get_or_init(|| TYPES.iter().chain(super::geo_registry::GEO_TYPES).copied().collect())
+    ALL.get_or_init(|| TYPES.iter().chain(super::geo_registry::GEO_TYPES).chain(super::comp_registry::COMP_TYPES).copied().collect())
 }
 
 pub use super::geo_registry::is_multi_input;
@@ -1336,6 +1340,7 @@ pub fn math_inputs(op: &str) -> usize {
 /// Hidden-by-user flags are left alone.
 pub fn update_sockets(node: &mut Node) {
     super::geo_registry::geo_update(node);
+    super::comp_registry::comp_update(node);
     let en =|node: &mut Node, id: &str, on: bool| {
         if let Some(s) = node.inputs.iter_mut().find(|s| s.identifier == id) {
             s.enabled = on;

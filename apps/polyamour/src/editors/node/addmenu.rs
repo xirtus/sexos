@@ -56,7 +56,7 @@ fn order(kind: TreeKind) -> &'static [Category] {
     use Category as C;
     match kind {
         TreeKind::Shader => &[C::Input, C::Output, C::Shader, C::Displacement, C::Color, C::Texture, C::Vector, C::Converter, C::Script, C::Group, C::Layout],
-        TreeKind::Compositor => &[C::Input, C::Output, C::Color, C::Filter, C::Converter, C::Matte, C::Distort, C::Transform, C::Utilities, C::Group, C::Layout],
+        TreeKind::Compositor => &[C::Input, C::Output, C::Color, C::Filter, C::Keying, C::Mask, C::Transform, C::Utilities, C::Vector, C::Group, C::Layout],
         TreeKind::Geometry => &[
             C::Attribute,
             C::Input,

@@ -9,6 +9,7 @@
 //! VM, the compositor, geometry nodes).
 use std::fmt;
 
+pub mod comp_registry;
 pub mod edit;
 pub mod enums;
 pub mod geo_registry;

@@ -32,6 +32,7 @@ pub mod io;
 pub mod script;
 pub mod uv;
 pub mod armature;
+pub mod compositor;
 pub mod constraints;
 pub mod lattice;
 pub mod geometry;

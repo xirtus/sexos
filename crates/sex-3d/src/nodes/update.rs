@@ -37,6 +37,7 @@ pub fn math_arity(op: &str) -> usize {
 /// Bring `n`'s socket availability in line with its properties.
 pub fn update(n: &mut Node) {
     super::geo_registry::geo_update(n);
+    super::comp_registry::comp_update(n);
     match n.idname.as_str() {
         "ShaderNodeMath" | "CompositorNodeMath" | "FunctionNodeMath" => {
             let k = math_arity(n.enum_prop("operation"));
