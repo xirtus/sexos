@@ -23,7 +23,7 @@ sexfs={path="''' + str(ROOT / 'crates/sexfs') + '''"}
 [workspace]
 ''')
             code = 'extern crate self as sex_pdx;\n'
-            for module, path in [('restricted_helper','crates/sex-pdx/src/restricted_helper.rs'), ('restricted_job','servers/sexfiles/src/restricted_job.rs'), ('storage','servers/sexfiles/src/restricted_storage.rs'), ('restricted_jobs','servers/sexfiles/src/restricted_jobs.rs'), ('wire','crates/sex-pdx/src/restricted_job.rs'), ('native_io','servers/sexfiles/src/restricted_io.rs')]:
+            for module, path in [('restricted_helper','crates/sex-pdx/src/restricted_helper.rs'), ('restricted_job','servers/sexfiles/src/restricted_job.rs'), ('storage','servers/sexfiles/src/restricted_storage.rs'), ('restricted_jobs','servers/sexfiles/src/restricted_jobs.rs'), ('wire','crates/sex-pdx/src/restricted_job.rs'), ('native_io','servers/sexfiles/src/restricted_io.rs'), ('restricted_control','servers/sexfiles/src/restricted_control.rs')]:
                 if module == 'native_io':
                     io = (ROOT / path).read_text().replace('restricted_job as wire', 'restricted_job_wire as wire')
                     code += 'mod native_io {\n' + io.replace('//!', '//') + '\n}\n'
@@ -70,6 +70,12 @@ fn request()->Vec<u8>{let mut b=Vec::new();b.extend_from_slice(b"MOANREQ1");b.ex
 pub fn setup()->Fs<'static,Disk>{let mut fs=fs();fs.mkdir(b"/renders",0).unwrap();let p=fs.create(b"/plugin",0).unwrap();fs.write(p,0,b"original-plugin",0).unwrap();let i=fs.create(b"/input",0).unwrap();fs.write(i,0,&request(),0).unwrap();fs.commit().unwrap();fs}
 fn capture(fs:&mut Fs<'static,Disk>)->(storage::Storage,Job){storage::Storage::capture(fs,[b"@/plugin",b"@/input",b"@/renders/output"],[b"/plugin",b"/input",b"/renders/output"],7,Subject{pd:42,task:99},9,[1;16]).unwrap()}
 fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64::from_le_bytes(h[i*8..i*8+8].try_into().unwrap()));let child=Subject{pd:43,task:100};let b=Binding{generation:1,coordinator_epoch:1,provider_epoch:1,previous:child,child,parent:Subject{pd:42,task:99},cookie:9,nonce:[0x0101010101010101;2],plugin_hash:words(job.plugin_hash()),input_hash:words(job.input_hash()),ticket:7};job.bind(b).unwrap();assert_eq!(job.read(child,b,true,Blob::Plugin,0,99).unwrap(),b"original-plugin");job.create(child,b,true,Blob::Output).unwrap();let mut output=request();output[..8].copy_from_slice(b"MOANPCM1");job.write(child,b,true,Blob::Output,0,output.len(),|i|output[i]).unwrap();job.seal(child,b,true).unwrap();output}
+#[test]fn control_credits_are_complete_and_epoch_scoped(){
+ let request=[7,Subject{pd:42,task:99}.word(),9];let data=core::array::from_fn(|i|i as u8);let mut c=restricted_control::Control::new(request,1,data,100).unwrap();
+ assert!(!c.fetch([7,0,1],100));assert!(!c.complete());let ack=c.reply();assert_eq!(ack,Some(0xd1<<56|7<<32));assert_eq!(c.reply(),ack);c.delivered();
+ assert!(!c.fetch([7,1,1],101));assert!(!c.fetch([7,0,2],101));assert!(!c.fetch([8,0,1],101));assert!(c.fetch([7,0,1],101));let first=c.reply();assert_eq!(first,Some(u64::from_le_bytes(data[..8].try_into().unwrap())));assert_eq!(c.reply(),first);assert!(!c.fetch([7,1,1],101));c.delivered();assert!(c.fetch([7,0,1],101));c.delivered();
+ for i in 1..22{assert!(c.fetch([7,i,1],102));c.delivered();}assert!(c.complete());assert!(!c.fetch([7,0,1],102));assert!(!c.fetch([7,22,1],102));assert!(!c.repeat_claim(request,1,102));assert!(!c.fetch([7,21,1],5100));
+}
 #[test]fn actual_native_transport_full_duplicate_and_exact_task_delivery(){
  fs_service::setup();let actor=Subject{pd:42,task:99};let p=wire::Prepare{format:0,cookie:9,nonce:[1;16],paths:[b"@/plugin",b"@/input",b"@/renders/output"]};let mut input=[0;wire::MAX];let n=p.encode(&mut input).unwrap();
  for i in 0..n{unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION) as *mut u8).add(fs::PATH_BYTES+i),input[i])}}
@@ -77,6 +83,10 @@ fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64
  assert!(native_io::message(fs::OP,actor,req(1)));native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),0);
  // Same accepted request while SYS29 is Full does not create another job.
  assert!(native_io::message(fs::OP,actor,req(1)));FULL.store(false,Ordering::SeqCst);native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((1,fs::OK,1)));
+ let shell=Subject{pd:3,task:3};let claim=[1,actor.word(),9];let count=SENDS.load(Ordering::SeqCst);assert!(native_io::message(wire::OP_CLAIM,actor,claim));native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),count);
+ assert!(native_io::message(wire::OP_CLAIM,shell,claim));FULL.store(true,Ordering::SeqCst);native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),count);FULL.store(false,Ordering::SeqCst);native_io::poll();assert_eq!(LAST.load(Ordering::SeqCst),0xd1<<56|1<<32);
+ for i in 0..22{assert!(native_io::message(wire::OP_DESCRIBE,shell,[1,i,1]));native_io::poll();}
+ assert_eq!(LAST.load(Ordering::SeqCst),0);
  assert!(native_io::message(fs::OP,actor,req(2)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((2,fs::OK,2)));
  // Capacity must fail without overwriting either accepted immutable job.
  assert!(native_io::message(fs::OP,actor,req(3)));FULL.store(true,Ordering::SeqCst);native_io::poll();let before=SENDS.load(Ordering::SeqCst);

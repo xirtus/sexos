@@ -172,7 +172,25 @@ words and every copied payload byte. SYS29 Full retains the exact pending reply;
 actual delivery checks Files epoch and the current parent task again. Provider
 restart discards all positive jobs; the separate deny journal remains deny-only.
 
-This admission creates no child or positive file rights by itself. The reserved
-Shell controls CLAIM/DESCRIBE/LOAD/COPIED (0x4d505010..13) are not yet dispatched.
+This admission creates no child or positive file rights by itself. Shell CLAIM/DESCRIBE controls (0x4d505010..11) are dispatched only for stamped
+PD3/task3. LOAD/COPIED (0x4d505012..13) remain unavailable.
 Only a subsequent fully authenticated five-provider transaction can associate a
 job with an attested dormant helper. No generic PREPARE ticket is reused.
+
+CLAIM words are `[ticket, exact_parent_subject_word, cookie]`; Files checks the
+live parent, immutable job, cookie and own current epoch. ACK0 is `0xd1 << 56 |
+ticket << 32`, a descriptive receipt, not a capability. Before issuing another
+phase Shell must receive ACK0, then fetch all 22 descriptor words in order via
+DESCRIBE `[ticket, selector, expected_Files_epoch]`. Only successfully admitted
+SYS29 replies advance the selector; exact last-selector retry is idempotent.
+Changed/stale/out-of-order selectors and an early fetch never release a word.
+The stream expires after five seconds and is fenced to current parent lifecycle
+and Files epoch on every send. Shell independently brackets the actual held
+Files epoch, so the short ACK does not substitute for a full epoch check.
+
+The 176-byte `MOANINF2` descriptor is: magic8, ticket u32, frames u32, Files
+epoch u64, nonce16, plugin SHA256, input SHA256, output SHA256 (zero until actual
+publication), parent subject u64, child subject u64, generation u64, format u32,
+cookie u32, reserved8 zero. Subject words encode PD in high32 and main task low32.
+The descriptor is an immutable descriptive snapshot; only subsequent policy
+transcript admission conveys rights. Startup and epoch changes never restore it.

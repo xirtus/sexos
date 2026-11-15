@@ -8,6 +8,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use sex_pdx::restricted_helper::Subject;
 use sex_pdx::{app_catalog as catalog, fs as f, restricted_job as wire};
 static mut JOBS: Jobs = Jobs::new();
+static mut CONTROL: Option<crate::restricted_control::Control> = None;
 static ENTERED: AtomicBool = AtomicBool::new(false);
 struct Turn;
 impl Turn {
@@ -97,7 +98,91 @@ fn status(error: Error) -> u8 {
         _ => f::INVALID,
     }
 }
+fn control(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
+    if opcode != wire::OP_CLAIM && opcode != wire::OP_DESCRIBE {
+        return false;
+    }
+    if actor != (Subject { pd: 3, task: 3 }) {
+        return true;
+    }
+    let Some(own_epoch) = epoch() else {
+        return true;
+    };
+    let now = sex_pdx::get_ticks();
+    let current = unsafe { &mut *core::ptr::addr_of_mut!(CONTROL) };
+    let mut turn = Turn::enter();
+    if let Some(c) = current.as_ref() {
+        if !c.valid(own_epoch, now)
+            || turn
+                .jobs()
+                .get(c.ticket)
+                .is_none_or(|e| !e.live(now, own_epoch) || !live(e.job.parent()))
+        {
+            *current = None;
+        }
+    }
+    if opcode == wire::OP_DESCRIBE {
+        if let Some(c) = current.as_mut() {
+            c.fetch(words, now);
+        }
+        return true;
+    }
+    if let Some(c) = current.as_mut() {
+        if c.repeat_claim(words, own_epoch, now) {
+            return true;
+        }
+        if !c.complete() {
+            return true;
+        }
+    }
+    let Some(parent) = Subject::decode(words[1]) else {
+        return true;
+    };
+    let Ok(cookie) = u32::try_from(words[2]) else {
+        return true;
+    };
+    let Ok(ticket) = u32::try_from(words[0]) else {
+        return true;
+    };
+    if !live(parent) {
+        return true;
+    }
+    let Some(e) = turn.jobs().get(ticket) else {
+        return true;
+    };
+    if e.claim(parent, cookie, now, own_epoch).is_err() {
+        return true;
+    }
+    if let Ok(info) = e.info(false) {
+        *current = crate::restricted_control::Control::new(words, own_epoch, info, now);
+    }
+    true
+}
+fn poll_control() {
+    let Some(own_epoch) = epoch() else { return };
+    let now = sex_pdx::get_ticks();
+    let current = unsafe { &mut *core::ptr::addr_of_mut!(CONTROL) };
+    let Some(c) = current.as_mut() else { return };
+    let mut turn = Turn::enter();
+    if !c.valid(own_epoch, now)
+        || turn
+            .jobs()
+            .get(c.ticket)
+            .is_none_or(|e| !e.live(now, own_epoch) || !live(e.job.parent()))
+    {
+        *current = None;
+        return;
+    }
+    if let Some(word) = c.reply() {
+        if sex_pdx::pdx_reply(3, word) == 0 {
+            c.delivered();
+        }
+    }
+}
 pub fn message(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
+    if control(opcode, actor, words) {
+        return true;
+    }
     if opcode != f::OP {
         return false;
     }
@@ -207,6 +292,7 @@ pub fn pending() -> bool {
         }
 }
 pub fn poll() {
+    poll_control();
     let Some(own_epoch) = epoch() else { return };
     let now = sex_pdx::get_ticks();
     Turn::enter().jobs().sweep(now, own_epoch, live, |binding| {
