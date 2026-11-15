@@ -78,6 +78,8 @@ fn main() {
         "cargo:rustc-link-search=native={}",
         prefix.join("lib").display()
     );
+    // The shared FFmpeg build also carries Splicy's H.264 and AV1 encoders;
+    // libavcodec references them, so they link when present.
     for name in [
         "moanaudiobridge",
         "avformat",
@@ -85,12 +87,14 @@ fn main() {
         "shine",
         "dav1d",
         "vpx",
+        "aom",
+        "x264",
         "swscale",
         "swresample",
         "avutil",
     ] {
         if !prefix.join(format!("lib/lib{name}.a")).exists()
-            && ["dav1d", "vpx", "swscale", "swresample"].contains(&name)
+            && ["dav1d", "vpx", "aom", "x264", "swscale", "swresample"].contains(&name)
         {
             continue;
         }
