@@ -363,10 +363,10 @@ pub fn parse_request(buf: &[u8]) -> Result<(Request, usize), HttpError> {
             if size > MAX_BODY || req.body.len() + size > MAX_BODY { return Err(HttpError::TooLarge); }
             at += le + 2;
             if size == 0 {
-                // Trailers until an empty line, at most MAX_HEAD bytes of them in all.
-                let start = at;
+                // Trailers until an empty line; with the head they get MAX_HEAD bytes in all.
+                let (start, budget) = (at, MAX_HEAD.saturating_sub(head_end + 4));
                 loop {
-                    let room = MAX_HEAD.saturating_sub(at - start);
+                    let room = budget.saturating_sub(at - start);
                     let rest = &buf[at..];
                     let le = find(&rest[..rest.len().min(room)], b"\r\n").ok_or(if rest.len() >= room { HttpError::TooLarge } else { HttpError::Incomplete })?;
                     at += le + 2;
