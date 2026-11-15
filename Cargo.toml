@@ -114,6 +114,7 @@ members = [
     "apps/spindle",
     "crates/sex-std",
     "apps/stdhello",
+    "apps/stdspawn",
     "apps/chello",
     "apps/stdnet",
     "apps/ssh",

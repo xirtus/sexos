@@ -70,6 +70,7 @@ crates = [
   "apps/play/Cargo.toml",
   "apps/cpp/Cargo.toml",
   "apps/stdhello/Cargo.toml",
+  "apps/stdspawn/Cargo.toml",
   "apps/stdnet/Cargo.toml",
   "apps/ssh/Cargo.toml",
   "apps/swingers/Cargo.toml",
@@ -443,6 +444,17 @@ build_std = "std,panic_abort"
 manifest = "apps/stdhello/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/stdhello"
 dest_artifact = "iso_root/programs/stdhello"
+
+# std::process and C posix_spawn/system: the child the process gate starts and the
+# checks it runs (scripts/process_gate.py).
+[[stage]]
+id = "build_stdspawn"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/stdspawn/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/stdspawn"
+dest_artifact = "iso_root/programs/stdspawn"
 
 # std::net and SystemTime in an ordinary Rust program.
 [[stage]]

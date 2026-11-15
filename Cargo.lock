@@ -6139,6 +6139,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "stdspawn"
+version = "0.1.0"
+dependencies = [
+ "sex-std",
+]
+
+[[package]]
 name = "store"
 version = "0.1.0"
 dependencies = [
