@@ -25,8 +25,11 @@ existing SYS29 authenticated one-word replies, including a fresh provider-privat
 OP_RESTARTS(0), never a packet field. Freshness is the current provider epoch,
 fresh challenge and persistent Shell generation, not a claim of remote Shell
 crash observation. Kernel sender metadata must still be exact Shell PD3/task3.
-App catalog/lifecycle grants attest the reserved inactive row (never activated or
-fully retired), exact task and retirement; payload metadata does not.
+Shell uses its held activation and catalog grants to attest reservation of a
+never-activated or fully retired row. Providers independently check exact held
+catalog subject and authenticated Shell caller; they trust that Shell reservation
+for inactivity, which a catalog/info LIVE bit alone does not establish. Payload
+metadata never supplies subject authority.
 
 No provider executes a policy operation received from a parent or plugin. Files
 alone accepts a parent job proposal through an existing explicit file grant;
@@ -112,11 +115,13 @@ recovery never silently changes it to ordinary. Partial writes therefore lose
 availability, never restrictions. A persistent Shell ledger similarly retains
 reservations/tombstones before its normal event loop.
 
-Ordinary reuse of a formerly restricted row needs a separate explicit normal-run
-bind: newer generation, real old-run retirement, different exact catalog task,
-provider scrub and fresh epochs before activation. A normal bind cannot downgrade
-a still-live restricted task. A missing ledger cannot be repaired by a plugin's
-normal-looking registration or its own guessed generation.
+A formerly restricted row is permanently excluded from ordinary allocation in
+this implementation. At most two existing rows may enter the role pool; no
+normal-transition protocol is implemented. A missing ledger cannot be repaired
+by a plugin's normal-looking registration or its own guessed generation. An
+uncertain failed fresh copy can hold a row and the existing ordered activation
+chain unavailable; only a completed restricted retry or reboot may recover that
+availability. No policy or ordinary-launch fallback removes the deny fence.
 
 ## Trusted bootstrap and ready challenge
 
@@ -148,10 +153,12 @@ file authentication against another folder grantee.
 Compile actual policy predicates and journal transitions in host tests: malformed
 and out-of-order packets, same-phase changed payload, foreign caller, epoch change,
 queue full, missing ACK, partial journal write/restart and normal downgrade fail
-closed. Guest probes must test raw Files/Net/Bell/Display/Shell routes, parent
-canary read/write, unauthorized device/lifecycle syscalls, shared-key row reuse,
-late ACKs/results and provider restart. Keep these distinct from the already
-proven offline processing/crash/timeout/reuse cases.
+closed. The current safe guest qualification covers the public restricted SDK,
+source-built CLAP/VST3 processing, the helper's own intentional crash, consented
+service restart, exact retirement/reuse and bounded capacity refusal. Parent-memory
+and cross-domain attack probes were stopped before any actual guest execution;
+they are not part of the current qualification or an isolation-completion claim.
+Keep these distinctions from earlier offline crash-containment proofs.
 
 The role aims at file/network/parent-memory confidentiality and integrity. Own
 heap/code/worker syscalls and public metadata/serial remain callable; bounded
