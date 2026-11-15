@@ -5156,6 +5156,7 @@ dependencies = [
  "sexfs",
  "sha2 0.10.9",
  "spin",
+ "zeroize",
 ]
 
 [[package]]
