@@ -8,8 +8,8 @@ The existing image pin and staging guard are separate prerequisites.
 | Provider | Held route from Shell | Guard before | Persistent/non-IPC work |
 | --- | --- | --- | --- |
 | Files (11) | program_store::SHELL_ROUTE_SLOT (256) | trampoline deferred replay dispatch, before config/FS/package/relay/recording handling | pending replies, writes, image staging, and Region258 scrub |
-| Display (2) | existing Shell Display Domain | main intake before text/pixel/window/input branches | retained scenes and periodic publication; text/pixel views are READ-only |
-| Bell (12) | existing Shell Bell Domain | intake before sound/notices | periodic sound ring consumption, microphone capture and Region260 scrub |
+| Display (1) | existing Shell Display Domain | main intake before text/pixel/window/input branches | retained scenes and periodic publication; text/pixel views are READ-only |
+| Bell (10; route12) | existing Shell Bell Domain | intake before sound/notices | periodic sound ring consumption, microphone capture and Region260 scrub |
 | Net (13) | web::SHELL_SLOT | main intake before jobs/bind/source handling | retained flows/responses and whole row Net-region scrub |
 | Shell (3) | own coordinator state | ordinary launch/window/clipboard/autofill/open/kill dispatch | generic program activation and rebirth poll |
 
