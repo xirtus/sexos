@@ -19,7 +19,7 @@ pub struct Declaration {
 pub enum AttrOp { Exists, Equals(String), Word(String), Prefix(String), Suffix(String), Contains(String), Dash(String) }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Pseudo { FirstChild, LastChild, OnlyChild, Link, Root, Empty, NthChild(i32, i32), Not(Vec<Compound>),
+pub enum Pseudo { FirstChild, LastChild, OnlyChild, Link, Root, Empty, NthChild(i32, i32), Not(Vec<Selector>), Is(Vec<Selector>), Where(Vec<Selector>),
     /// Under the pointer (or an ancestor of what is).
     Hover, Focus, FocusWithin, Checked, Disabled, Enabled }
 
@@ -38,7 +38,7 @@ pub struct Compound {
 pub enum Combinator { Descendant, Child, Next, Subsequent }
 
 /// Compounds left to right; `links[i]` joins `parts[i]` to `parts[i + 1]`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Selector {
     pub parts: Vec<Compound>,
     pub links: Vec<Combinator>,
@@ -53,6 +53,8 @@ pub struct Rule {
 
 #[derive(Default, Debug)]
 pub struct Sheet {
+    /// Adopted sheets apply only within their document/shadow tree.
+    pub scope: Option<NodeId>,
     pub rules: Vec<Rule>,
     /// `@keyframes`: each animation's frames, at offsets in thousandths.
     pub keyframes: Vec<(String, Vec<(i32, Vec<Declaration>)>)>,
@@ -351,7 +353,10 @@ fn ident_end(b: &[u8], mut i: usize) -> usize {
 
 fn unescape(s: &str) -> String { s.replace('\\', "") }
 
-pub fn parse_selector(text: &str) -> Option<Selector> {
+pub fn parse_selector(text: &str) -> Option<Selector> { parse_selector_depth(text, 0) }
+
+fn parse_selector_depth(text: &str, nesting: usize) -> Option<Selector> {
+    if nesting >= 32 { return None; }
     if text.is_empty() { return None; }
     let b = text.as_bytes();
     let mut parts = Vec::new();
@@ -379,7 +384,7 @@ pub fn parse_selector(text: &str) -> Option<Selector> {
         } else if pending.is_some() {
             return None;
         }
-        let (compound, next) = parse_compound(text, i)?;
+        let (compound, next) = parse_compound(text, i, nesting)?;
         parts.push(compound);
         i = next;
     }
@@ -393,13 +398,13 @@ fn compound_specificity(c: &Compound) -> u32 {
     if c.id.is_some() { s += 1 << 16; }
     s += (c.classes.len() as u32 + c.attrs.len() as u32) << 8;
     for p in &c.pseudo {
-        s += match p { Pseudo::Not(inner) => inner.iter().map(compound_specificity).max().unwrap_or(0), _ => 1 << 8 };
+        s += match p { Pseudo::Not(inner) | Pseudo::Is(inner) => inner.iter().map(|s| s.specificity).max().unwrap_or(0), Pseudo::Where(_) => 0, _ => 1 << 8 };
     }
     if c.tag.is_some() { s += 1; }
     s
 }
 
-fn parse_compound(text: &str, mut i: usize) -> Option<(Compound, usize)> {
+fn parse_compound(text: &str, mut i: usize, nesting: usize) -> Option<(Compound, usize)> {
     let b = text.as_bytes();
     let mut c = Compound::default();
     let start = i;
@@ -442,20 +447,19 @@ fn parse_compound(text: &str, mut i: usize) -> Option<(Compound, usize)> {
                     "root" => c.pseudo.push(Pseudo::Root),
                     "empty" => c.pseudo.push(Pseudo::Empty),
                     "nth-child" => { let (a, bb) = parse_nth(arg)?; c.pseudo.push(Pseudo::NthChild(a, bb)); }
-                    "not" => {
+                    "not" | "is" | "where" | "matches" | "-webkit-any" => {
                         let mut inner = Vec::new();
                         for part in split_top(arg, ',') {
-                            let (comp, end) = parse_compound(part.trim(), 0)?;
-                            if end != part.trim().len() { return None; }
-                            inner.push(comp);
+                            match parse_selector_depth(part.trim(), nesting + 1) {
+                                Some(sel) => inner.push(sel),
+                                None if name == "not" => return None,
+                                None => {} // :is/:where have forgiving selector lists.
+                            }
                         }
-                        c.pseudo.push(Pseudo::Not(inner));
-                    }
-                    "is" | "where" | "matches" | "-webkit-any" => {
-                        // Single-compound arguments only; the first alternative that parses stands in.
-                        let mut alts = split_top(arg, ',').into_iter().filter_map(|p| parse_compound(p.trim(), 0).filter(|(_, e)| *e == p.trim().len()));
-                        let (comp, _) = alts.next()?;
-                        merge(&mut c, comp);
+                        if inner.is_empty() && name == "not" { return None; }
+                        c.pseudo.push(match name.as_str() {
+                            "not" => Pseudo::Not(inner), "where" => Pseudo::Where(inner), _ => Pseudo::Is(inner),
+                        });
                     }
                     "hover" => c.pseudo.push(Pseudo::Hover),
                     "focus" | "focus-visible" => c.pseudo.push(Pseudo::Focus),
@@ -474,15 +478,6 @@ fn parse_compound(text: &str, mut i: usize) -> Option<(Compound, usize)> {
     }
     if i == start { return None; }
     Some((c, i))
-}
-
-fn merge(into: &mut Compound, from: Compound) {
-    if into.tag.is_none() { into.tag = from.tag; }
-    if into.id.is_none() { into.id = from.id; }
-    into.classes.extend(from.classes);
-    into.attrs.extend(from.attrs);
-    into.pseudo.extend(from.pseudo);
-    into.never |= from.never;
 }
 
 fn parse_nth(arg: &str) -> Option<(i32, i32)> {
@@ -588,7 +583,8 @@ pub fn matches_compound(dom: &Dom, node: NodeId, c: &Compound) -> bool {
                 while let Some(n) = p { index += 1; p = dom.prev_element(n); }
                 if *a == 0 { index == *b } else { let d = index - b; d % a == 0 && d / a >= 0 }
             }
-            Pseudo::Not(inner) => !inner.iter().any(|c| matches_compound(dom, node, c)),
+            Pseudo::Not(inner) => !inner.iter().any(|s| matches(dom, node, s)),
+            Pseudo::Is(inner) | Pseudo::Where(inner) => inner.iter().any(|s| matches(dom, node, s)),
             Pseudo::Hover => dom.hover.is_some_and(|h| dom.is_inclusive_ancestor(node, h)),
             Pseudo::Focus => dom.caret.is_some_and(|(f, _)| f == node),
             Pseudo::FocusWithin => dom.caret.is_some_and(|(f, _)| dom.is_inclusive_ancestor(node, f)),

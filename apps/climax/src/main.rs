@@ -35,10 +35,12 @@ mod program {
         for (name, id) in [
             ("benchmarks", climax.choices[0]),
             ("torture", climax.choices[1]),
+            ("compare_linux", climax.choices[2]),
             ("run_suite", climax.run_suite),
             ("start_step", climax.start_step),
             ("run_burst", climax.run_burst),
             ("reset", climax.reset),
+            ("reload_doc", climax.reload_doc),
         ] {
             let c = app.ui.rect(id).center();
             sex_pdx::serial_record!(
@@ -51,14 +53,88 @@ mod program {
         sex_pdx::serial_record!("[climax.frame] n={}", app.frames);
     }
 
+    fn try_load_benchmark_doc(app: &mut App, climax: &mut Climax, arg_str: &str) {
+        let mut buf = alloc::vec![0u8; 1024 * 1024];
+        let mut loaded = false;
+
+        // 1. Check if args contains a .md token
+        let mut custom_path = None;
+        for token in arg_str.split_whitespace() {
+            if token.ends_with(".md") {
+                let p = token.strip_prefix('@').unwrap_or(token);
+                custom_path = Some(p);
+                break;
+            }
+        }
+
+        if let Some(cp) = custom_path {
+            if let Ok(n) = sex_app::files::read(&mut app.window, cp.as_bytes(), &mut buf) {
+                if let Ok(md_str) = core::str::from_utf8(&buf[..n]) {
+                    let source = alloc::format!("disk:{}", cp);
+                    if climax.load_linux_doc_markdown(md_str, &source).is_ok() {
+                        loaded = true;
+                    }
+                }
+            }
+        }
+
+        // 2. Try default disk locations (short lowercase sexfiles name first, then full doc paths)
+        if !loaded {
+            for path in [
+                b"climax-vs-linux.md".as_slice(),
+                b"CLIMAX_VS_LINUX_2026_11_14.md".as_slice(),
+                b"docs/CLIMAX_VS_LINUX_2026_11_14.md".as_slice(),
+            ] {
+                if let Ok(n) = sex_app::files::read(&mut app.window, path, &mut buf) {
+                    if let Ok(md_str) = core::str::from_utf8(&buf[..n]) {
+                        if climax.load_linux_doc_markdown(md_str, "disk:climax-vs-linux.md").is_ok() {
+                            loaded = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. If not found on disk, seed climax-vs-linux.md to app-private NVMe via files::write, then read it back
+        if !loaded {
+            let embedded = climax::EMBEDDED_LINUX_DOC;
+            let _ = sex_app::files::write(&mut app.window, b"climax-vs-linux.md", embedded.as_bytes());
+            if let Ok(n) = sex_app::files::read(&mut app.window, b"climax-vs-linux.md", &mut buf) {
+                if let Ok(md_str) = core::str::from_utf8(&buf[..n]) {
+                    if climax.load_linux_doc_markdown(md_str, "disk:climax-vs-linux.md").is_ok() {
+                        loaded = true;
+                    }
+                }
+            }
+        }
+
+        // 4. Fallback to embedded doc if disk read failed
+        if !loaded {
+            let _ = climax.load_linux_doc_markdown(climax::EMBEDDED_LINUX_DOC, "embedded:docs/CLIMAX_VS_LINUX_2026_11_14.md");
+        }
+
+        let geomean = climax.linux_doc.as_ref().map(|d| d.geometric_mean_ratio_pct()).unwrap_or(0.0);
+        let rows = climax.linux_doc.as_ref().map(|d| d.comparison_rows.len()).unwrap_or(0);
+        sex_pdx::serial_record!(
+            "[climax.compare] source={} rows={} geomean_pct={:.1}",
+            climax.linux_doc_source,
+            rows,
+            geomean
+        );
+    }
+
     extern "C" fn main() -> ! {
         let mut app = App::open("Climax", Theme::light(), Strings::new("en"));
         let mut climax = Climax::build(&mut app.ui);
 
-        // Check command line arguments for --json flag
+        // Check command line arguments for flags
         let mut arg_buf = [0u8; sex_pdx::fs::ARGS_MAX];
         let args = sex_app::files::args(&mut app.window, &mut arg_buf);
         let arg_str = core::str::from_utf8(args).unwrap_or("");
+
+        try_load_benchmark_doc(&mut app, &mut climax, arg_str);
+
         if arg_str.contains("--json") {
             let res = climax.run_bench_suite(sex_pdx::get_ticks);
             sex_pdx::serial_record!("[climax.bench_json] {}", res.json_payload);
@@ -73,14 +149,28 @@ mod program {
         );
         report(&app, &climax);
 
+        let mut last_size = app.ui.size();
         loop {
-            for response in app.next() {
+            let responses = app.next();
+            if app.ui.size() != last_size {
+                last_size = app.ui.size();
+                climax.refresh(&mut app.ui);
+                app.present();
+                report(&app, &climax);
+            }
+            for response in responses {
                 if response == Response::Close {
                     sex_pdx::task_finish(0);
                 }
 
                 let run_suite_clicked = response == Response::Clicked(climax.run_suite)
                     || response == Response::Command(alloc::string::String::from("climax.run_suite"));
+                let reload_doc_clicked = response == Response::Clicked(climax.reload_doc)
+                    || response == Response::Command(alloc::string::String::from("climax.reload_doc"));
+
+                if reload_doc_clicked {
+                    try_load_benchmark_doc(&mut app, &mut climax, arg_str);
+                }
 
                 if climax.on(&mut app.ui, &response, sex_pdx::get_ticks) {
                     if run_suite_clicked {
@@ -145,4 +235,11 @@ fn main() {
         SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64
     });
     println!("JSON: {}", res.json_payload);
+    if let Some(doc) = &climax.linux_doc {
+        println!(
+            "Linux comparison loaded: {} rows, geomean advantage: {:.1}%",
+            doc.comparison_rows.len(),
+            doc.geometric_mean_ratio_pct() - 100.0
+        );
+    }
 }

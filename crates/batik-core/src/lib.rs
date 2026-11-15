@@ -22,25 +22,37 @@ pub mod error;
 pub mod filters;
 pub mod geom;
 pub mod history;
+pub mod jpeg;
 pub mod layer;
 pub mod ora;
 pub mod png;
 pub mod psd;
 pub mod selection;
+pub mod text;
 pub mod transform;
+pub mod webp;
 
-pub use adjust::{Adjustment, Curves, Levels};
+pub use adjust::{
+    auto_levels, Adjustment, AdjustmentKind, Curves, CurvesAdjustment, CurvesPreset, HueSatAdjustment, Levels,
+};
 pub use blend::{pack_argb, split_argb, BlendMode};
-pub use brush::{bucket_fill, eyedropper, Brush, PointerSample, StrokeEngine};
+pub use brush::{bucket_fill, bucket_fill_mask, eyedropper, Brush, BrushPreset, PointerSample, StrokeEngine};
 pub use document::{BackgroundMode, Document};
 pub use error::BatikError;
+pub use filters::{
+    apply_filter_stack, box_blur, edge_detect, emboss, gaussian_blur, pixelate, sharpen, unsharp_mask,
+    FilterNode, FilterSpec, FilterStack,
+};
 pub use geom::Rect;
 pub use history::{History, HistoryAction};
+pub use jpeg::encode_jpeg;
 pub use layer::{AdjustmentLayer, GroupLayer, Layer, LayerKind, RasterLayer};
 pub use ora::{read_ora, write_ora};
 pub use png::encode_rgba_png;
-pub use psd::parse_psd;
+pub use psd::{encode_psd, parse_psd};
 pub use selection::{SelectionCombine, SelectionMask};
+pub use text::TextLayer;
+pub use webp::encode_webp;
 
 /// Enforces `sex_image::Limits` on picture dimensions before allocating buffers.
 pub fn admit_limits(
