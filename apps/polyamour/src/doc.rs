@@ -193,6 +193,14 @@ pub struct Doc {
     pub generation: u64,
     /// The last F12 render, linear RGBA, and its size.
     pub render: Option<sex_3d::scene::Image>,
+    /// The compositor's Viewer node output ("Viewer Node" image).
+    pub viewer: Option<sex_3d::scene::Image>,
+    /// Bumped when `viewer` changes (backdrop caches).
+    pub viewer_gen: u64,
+    /// The Image Editor shows the Viewer Node instead of the Render Result.
+    pub show_viewer: bool,
+    /// Compositor editor: draw the Viewer Node behind the nodes.
+    pub backdrop: bool,
     /// The workspace an operator asked to show (F12 shows "Rendering").
     pub want_workspace: Option<String>,
     /// Operators queued by editors this frame, run after drawing.
@@ -276,6 +284,10 @@ impl Doc {
             report: String::new(),
             generation: 1,
             render: None,
+            viewer: None,
+            viewer_gen: 0,
+            show_viewer: false,
+            backdrop: true,
             want_workspace: None,
             queue: Vec::new(),
             texts: Vec::new(),

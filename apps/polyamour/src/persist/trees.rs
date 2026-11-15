@@ -450,7 +450,18 @@ mod tests {
         let gn = edit::make_group(tree, &[math], &mut groups).expect("group made");
         assert_eq!(edit::group_of(&tree.nodes[gn]), Some(groups.len() - 1));
         doc.scene.node_groups = groups;
-        doc.scene.compositor = Some(sex_3d::nodes::NodeTree::new("Compositing", sex_3d::nodes::TreeKind::Compositor));
+        let mut comp = sex_3d::nodes::NodeTree::new("Compositing", sex_3d::nodes::TreeKind::Compositor);
+        let rl = comp.add("CompositorNodeRLayers", [-300.0, 0.0]).unwrap();
+        let gl = comp.add("CompositorNodeGlare", [0.0, 0.0]).unwrap();
+        let co = comp.add("CompositorNodeComposite", [300.0, 0.0]).unwrap();
+        comp.nodes[gl].set_prop("glare_type", Prop::Enum("BLOOM".into()));
+        comp.nodes[gl].set_prop("threshold", Prop::Float(0.75));
+        comp.nodes[gl].set_prop("use_rotate_45", Prop::Bool(false));
+        comp.link(rl, "Image", gl, "Image").unwrap();
+        comp.link(gl, "Image", co, "Image").unwrap();
+        let cb = comp.add("CompositorNodeColorBalance", [0.0, -200.0]).unwrap();
+        comp.nodes[cb].set_prop("lift", Prop::Color([0.9, 1.0, 1.1, 1.0]));
+        doc.scene.compositor = Some(comp);
 
         let text = save(&doc);
         let back = load(&text).unwrap();

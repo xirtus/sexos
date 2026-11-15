@@ -12,6 +12,7 @@
 //! drive the whole window with synthetic input and read back its pixels.
 pub mod anim;
 pub mod app;
+pub mod compositing;
 pub mod doc;
 pub mod draw;
 pub mod edit;

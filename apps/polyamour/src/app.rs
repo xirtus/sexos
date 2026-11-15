@@ -271,6 +271,7 @@ impl App {
                 "wm.save_mainfile" | "wm.save_as_mainfile" => self.save(None),
                 "wm.export" => self.save(Some(op.arg.clone())),
                 "render.render" => self.render(),
+                "image.browse" => self.doc.show_viewer = op.arg == "Viewer Node",
                 "render.render_animation" => self.render_animation(),
                 "wm.search_menu" => {
                     let (mx, my) = self.ui.mouse;
@@ -336,8 +337,10 @@ impl App {
             1 => ", 1 pass".to_string(),
             n => format!(", {n} passes"),
         };
-        self.doc.report = format!("Rendered {}x{}, {} samples{passes}", r.color.width, r.color.height, r.samples);
-        self.doc.render = Some(r.color);
+        let (w, h, samples) = (r.color.width, r.color.height, r.samples);
+        self.doc.render = Some(r.color.clone());
+        let comp = crate::compositing::apply(&mut self.doc, &r);
+        self.doc.report = format!("Rendered {w}x{h}, {samples} samples{passes}{comp}");
         self.doc.want_workspace = Some("Rendering".into());
     }
 
@@ -351,24 +354,44 @@ impl App {
         let motion = d.settings.motion_blur;
         let frames: Vec<i32> = (d.scene.frame_start..=d.scene.frame_end).step_by(d.settings.frame_step.max(1) as usize).collect();
         let stem = if d.settings.output_path.is_empty() { "/tmp/".to_string() } else { d.settings.output_path.clone() };
-        let (mut written, mut error, mut last) = (Vec::new(), None, None);
+        let (mut written, mut error, mut last, mut viewer) = (Vec::new(), None, None, None);
         let anim = &d.anim;
+        let mut comp_scene = d.scene.clone();
+        crate::compositing::sync_passes(&mut comp_scene, settings.passes);
+        let pct = d.settings.resolution_pct as f32 / 100.0;
         sex_3d::render::render_frames(
             frames.iter().copied(),
             &settings,
             |f| crate::anim::scene_at(anim, &base, f as f32, motion),
             |f, r| {
                 let name = format!("{stem}{f:04}.png");
-                let png = crate::editors::image::encode_png(r.color.width, r.color.height, &sex_3d::render::to_display8(&r.color, &cm));
+                // Use Nodes: each frame goes through the compositor.
+                let mut color = r.color.clone();
+                if let Some(out) = crate::compositing::run(&comp_scene, &r, f, pct) {
+                    if let Err(e) = crate::compositing::write_files(&out, &cm) {
+                        error = Some(e);
+                    }
+                    if let Some(c) = out.composite {
+                        color = c;
+                    }
+                    if out.viewer.is_some() {
+                        viewer = out.viewer;
+                    }
+                }
+                let png = crate::editors::image::encode_png(color.width, color.height, &sex_3d::render::to_display8(&color, &cm));
                 match std::fs::write(&name, png) {
                     Ok(()) => written.push(name),
                     Err(e) => error = Some(format!("Cannot write {name}: {e}")),
                 }
-                last = Some(r.color);
+                last = Some(color);
                 error.is_none()
             },
             None,
         );
+        if let Some(v) = viewer {
+            self.doc.viewer = Some(v);
+            self.doc.viewer_gen += 1;
+        }
         if let Some(img) = last {
             self.doc.render = Some(img);
             self.doc.want_workspace = Some("Rendering".into());
@@ -566,5 +589,43 @@ mod tests {
         assert_eq!(app.workspaces[app.active_ws].name, "Modeling");
         app.frame(Input::key_mods(Key::PageUp, Mods::CTRL));
         assert_eq!(app.workspaces[app.active_ws].name, "Layout");
+    }
+
+    #[test]
+    fn f12_composites_through_use_nodes_and_fills_the_viewer() {
+        let mut app = App::new(1280, 720);
+        app.frame(Input::Tick);
+        app.doc.settings.resolution_x = 32;
+        app.doc.settings.resolution_y = 24;
+        app.doc.settings.resolution_pct = 100;
+        app.doc.settings.render_samples = 2;
+        app.doc.settings.denoise = false;
+        // Use Nodes creates Render Layers -> Composite.
+        assert!(crate::nodetree::use_nodes(&mut app.doc, crate::nodetree::TreeRef::Compositor));
+        let t = app.doc.scene.compositor.as_mut().unwrap();
+        assert_eq!(t.links.len(), 1);
+        let rl = t.find_type("CompositorNodeRLayers").unwrap();
+        let co = t.find_type("CompositorNodeComposite").unwrap();
+        // Render Layers -> Invert -> Composite, and a Viewer on the render.
+        let inv = t.add("CompositorNodeInvert", [0.0, 0.0]).unwrap();
+        let vw = t.add("CompositorNodeViewer", [0.0, -200.0]).unwrap();
+        t.unlink_input(co, 0);
+        t.link(rl, "Image", inv, "Color").unwrap();
+        t.link(inv, "Color", co, "Image").unwrap();
+        t.link(rl, "Image", vw, "Image").unwrap();
+        app.doc.queue.push(Op::new("render.render"));
+        app.frame(Input::Tick);
+        assert!(app.doc.report.contains("composited"), "{}", app.doc.report);
+        let comp = app.doc.render.clone().expect("render result");
+        let view = app.doc.viewer.clone().expect("viewer node image");
+        assert_eq!((comp.width, comp.height), (32, 24));
+        assert_eq!((view.width, view.height), (32, 24));
+        for (c, v) in comp.pixels.iter().zip(&view.pixels) {
+            assert!((c[0] - (1.0 - v[0])).abs() < 1e-4, "{c:?} {v:?}");
+        }
+        // The Image Editor can switch to the Viewer Node.
+        app.doc.queue.push(Op::with("image.browse", "Viewer Node"));
+        app.frame(Input::Tick);
+        assert!(app.doc.show_viewer);
     }
 }

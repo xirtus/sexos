@@ -492,6 +492,39 @@ fn scene_round_trip() {
 }
 
 #[test]
+fn compositor_tree_round_trips() {
+    use sex_3d::nodes::{NodeTree, Prop, TreeKind, Value};
+    let mut s = Scene::startup();
+    let mut t = NodeTree::new("Compositing Nodetree", TreeKind::Compositor);
+    let rl = t.add("CompositorNodeRLayers", [-300.0, 0.0]).unwrap();
+    let gl = t.add("CompositorNodeGlare", [0.0, 0.0]).unwrap();
+    let mix = t.add("CompositorNodeMixRGB", [150.0, 0.0]).unwrap();
+    let co = t.add("CompositorNodeComposite", [300.0, 0.0]).unwrap();
+    let vw = t.add("CompositorNodeViewer", [300.0, -200.0]).unwrap();
+    t.nodes[gl].set_prop("glare_type", Prop::Enum("FOG_GLOW".into()));
+    t.nodes[gl].set_prop("threshold", Prop::Float(0.5));
+    t.nodes[mix].set_prop("blend_type", Prop::Enum("SCREEN".into()));
+    t.nodes[mix].set_input("Fac", Value::Float(0.25));
+    t.nodes[mix].mute = true;
+    t.link(rl, "Image", gl, "Image").unwrap();
+    t.link(gl, "Image", mix, "Image").unwrap();
+    t.link(rl, "Image", mix, "Image_001").unwrap();
+    t.link(mix, "Image", co, "Image").unwrap();
+    t.link(gl, "Image", vw, "Image").unwrap();
+    s.compositor = Some(t);
+    let text = scene_to_polyops(&s);
+    assert!(text.contains("node_tree compositor"), "{text}");
+    let mut back = Scene::new();
+    ok(&mut back, &text);
+    assert_eq!(back.compositor, s.compositor, "--- text ---\n{text}");
+    assert_eq!(scene_to_polyops(&back), text);
+    // Commands address the compositor tree directly.
+    ok(&mut back, "polyops 1\nnode_set compositor Glare prop:glare_type BLOOM\n");
+    let c = back.compositor.as_ref().unwrap();
+    assert_eq!(c.nodes[c.find("Glare").unwrap()].enum_prop("glare_type"), "BLOOM");
+}
+
+#[test]
 fn euler_and_quaternion_agree() {
     for (x, y, z) in [(0.3f32, -0.4f32, 1.2f32), (0.0, 1.5707964, 0.7), (2.0, -1.5707964, -0.2), (0.0, 0.0, 0.0)] {
         let q = Quat::from_euler_xyz(x, y, z);

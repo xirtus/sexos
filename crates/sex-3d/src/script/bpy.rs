@@ -1415,7 +1415,12 @@ impl Session {
                     }
                     "compositor" => {
                         if on && scene.compositor.is_none() {
-                            scene.compositor = Some(crate::nodes::NodeTree::new("Compositing Nodetree", crate::nodes::TreeKind::Compositor));
+                            // Blender's default: Render Layers -> Composite.
+                            let mut t = crate::nodes::NodeTree::new("Compositing Nodetree", crate::nodes::TreeKind::Compositor);
+                            if let (Some(a), Some(b)) = (t.add("CompositorNodeRLayers", [-300.0, 300.0]), t.add("CompositorNodeComposite", [200.0, 300.0])) {
+                                let _ = t.link_sockets(a, 0, b, 0);
+                            }
+                            scene.compositor = Some(t);
                         } else if !on {
                             scene.compositor = None;
                         }

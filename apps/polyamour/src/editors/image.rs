@@ -184,7 +184,7 @@ fn render_key(img: &sex_3d::scene::Image) -> u64 {
 }
 
 fn render_rgba(s: &mut State, d: &Doc) -> Option<(u32, u32)> {
-    let img = d.render.as_ref()?;
+    let img = if d.show_viewer { d.viewer.as_ref().or(d.render.as_ref()) } else { d.render.as_ref().or(d.viewer.as_ref()) }?;
     let cm = d.settings.color_management();
     let key = render_key(img) ^ (cm.view as u64) << 3 ^ (cm.look as u64) << 9 ^ (cm.exposure.to_bits() as u64) << 17 ^ (cm.gamma.to_bits() as u64) << 31;
     if s.cache.as_ref().map(|c| c.0) != Some(key) {
@@ -274,13 +274,22 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     };
     x = end + 10;
     // The image datablock.
-    let name = if s.kind == EditorKind::ImageEditor && d.render.is_some() { "Render Result" } else { "" };
+    let name = match (s.kind == EditorKind::ImageEditor, d.render.is_some(), d.viewer.is_some()) {
+        (true, _, true) if d.show_viewer => "Viewer Node",
+        (true, true, _) => "Render Result",
+        (true, _, true) => "Viewer Node",
+        _ => "",
+    };
     let br = Rect::new(x, y, 36, h);
     if ui.dropdown(br, "") {
         let mut items = Vec::new();
         if d.render.is_some() {
-            items.push(MenuItem::op("Render Result", "", Op::new("image.browse")));
-        } else {
+            items.push(MenuItem::op("Render Result", "", Op::with("image.browse", "Render Result")));
+        }
+        if d.viewer.is_some() {
+            items.push(MenuItem::op("Viewer Node", "", Op::with("image.browse", "Viewer Node")));
+        }
+        if items.is_empty() {
             items.push(MenuItem::Heading("No images (F12 renders one)".into()));
         }
         ui.open_menu(br, "", items);

@@ -11,6 +11,8 @@ use std::fmt::Write as _;
 enum Owner {
     Material(usize),
     World,
+    /// The scene's compositing tree (Compositor > Use Nodes).
+    Compositor,
     Group(usize),
 }
 
@@ -269,6 +271,7 @@ fn tree<'s>(scene: &'s mut Scene, o: Owner) -> Res<&'s mut NodeTree> {
             m.node_tree.as_mut().ok_or_else(|| format!("material '{}' has no node tree (use node_tree first)", m.name))
         }
         Owner::World => scene.world.node_tree.as_mut().ok_or_else(|| "the world has no node tree (use node_tree first)".to_string()),
+        Owner::Compositor => scene.compositor.as_mut().ok_or_else(|| "the scene has no compositing tree (use node_tree compositor first)".to_string()),
         Owner::Group(i) => Ok(&mut scene.node_groups[i]),
     }
 }
@@ -342,6 +345,7 @@ impl Session {
         let kind = cmd.arg(0, "material NAME, world or group NAME")?;
         match kind.text.as_str() {
             "world" if !kind.quoted => Ok((Owner::World, 1)),
+            "compositor" if !kind.quoted => Ok((Owner::Compositor, 1)),
             "material" if !kind.quoted => Ok((Owner::Material(self.material(scene, cmd.arg(1, "a material")?)?), 2)),
             "group" if !kind.quoted => {
                 let name = cmd.arg(1, "a node group name")?.text.clone();
@@ -354,7 +358,7 @@ impl Session {
                 scene.node_groups.push(NodeTree::new(&name, TreeKind::Shader));
                 Ok((Owner::Group(scene.node_groups.len() - 1), 2))
             }
-            other => Err(format!("a node tree belongs to 'material NAME', 'world' or 'group NAME', not '{other}'")),
+            other => Err(format!("a node tree belongs to 'material NAME', 'world', 'compositor' or 'group NAME', not '{other}'")),
         }
     }
 
@@ -368,6 +372,7 @@ impl Session {
                     match owner {
                         Owner::Material(i) => scene.materials[i].node_tree = None,
                         Owner::World => scene.world.node_tree = None,
+                        Owner::Compositor => scene.compositor = None,
                         Owner::Group(_) => return Err("node groups cannot be removed here".into()),
                     }
                     return Ok(None);
@@ -375,6 +380,10 @@ impl Session {
                 let slot = match owner {
                     Owner::Material(i) => Some(&mut scene.materials[i].node_tree),
                     Owner::World => Some(&mut scene.world.node_tree),
+                    Owner::Compositor => {
+                        scene.compositor.get_or_insert_with(|| NodeTree::new("Compositing Nodetree", TreeKind::Compositor));
+                        None
+                    }
                     Owner::Group(_) => None,
                 };
                 if let Some(slot) = slot {
@@ -650,6 +659,10 @@ pub(super) fn write_node_trees(o: &mut String, scene: &Scene) {
     if let Some(t) = &scene.world.node_tree {
         let _ = writeln!(o, "node_tree world name={}", quote(&t.name));
         write_tree(o, scene, "world", t);
+    }
+    if let Some(t) = &scene.compositor {
+        let _ = writeln!(o, "node_tree compositor name={}", quote(&t.name));
+        write_tree(o, scene, "compositor", t);
     }
 }
 
