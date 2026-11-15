@@ -24,6 +24,8 @@ pub use sex_trust_config as trust_config;
 #[path="../servers/sexnet/src/source_denial.rs"]mod source_denial;
 use std::cell::RefCell;
 mod jobs{#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub struct Identity{pub pd:u32,pub task:u32}}
+// Restricted helper domains are refused by the network owner check; none here.
+mod restricted{pub fn denied(_pd:u32)->bool{false}}
 #[derive(Clone,Copy)]struct PdxMessage{caller_pd:u32,caller_task:u32,type_id:u64,arg0:u64,arg1:u64,arg2:u64}
 #[derive(Clone,Copy)]struct Held{slot:usize,catalog:lifecycle_wire::CatalogInfo,live:bool,catalog_error:Option<u64>,info_override:Option<Result<lifecycle_wire::LifecycleInfo,u64>>}
 struct Host{held:[Option<Held>;app_catalog::COUNT],words:usize,times:usize,trusts:usize,seconds:u64,ticks:u64,life_tick_after:Option<u64>,life_calls:usize,source_info:Vec<(u64,SourceInfo)>,queries:Vec<(&'static str,u64)>,effects:Vec<(&'static str,u64)>,reply_status:u64,replies:Vec<(u32,u64)>,logs:Vec<String>}
