@@ -110,7 +110,18 @@ def check_manifests(tls, workspace, app, trust=None):
                                       'filetime': {'path': 'vendor/filetime-0.2.29'},
                                       'tar': {'path': 'vendor/tar-0.4.46'},
                                       'krilla': {'git': 'https://github.com/storytold/craft-libs',
-                                                 'rev': '6e03f65bf45181db77ba6229716e6624db9eb25b'}}}
+                                                 'rev': '6e03f65bf45181db77ba6229716e6624db9eb25b'},
+                                      # Gestalt (VectorCraft): the hayro PDF reader fork and the
+                                      # linesweeper fork VectorCraft's workspace patches in. PDF
+                                      # parsing and path geometry; none does TLS (Andreas, 2026-11-15).
+                                      'hayro-syntax': {'git': 'https://github.com/storytold/craft-libs',
+                                                       'rev': '9be9a63782298ab59cd9b7a42ee9cba4f42a5ccb'},
+                                      'hayro-interpret': {'git': 'https://github.com/storytold/craft-libs',
+                                                          'rev': '9be9a63782298ab59cd9b7a42ee9cba4f42a5ccb'},
+                                      'hayro-jbig2': {'git': 'https://github.com/storytold/craft-libs',
+                                                      'rev': '9be9a63782298ab59cd9b7a42ee9cba4f42a5ccb'},
+                                      'linesweeper': {'git': 'https://github.com/storytold/craft-libs',
+                                                      'rev': '481f66d287b2a06845f3667a19daf35f0fe958ed'}}}
     if workspace.get('patch') and workspace.get('patch') != reviewed_patches:
         errors.append('workspace dependency replacement needs TLS policy review: patch')
     if workspace.get('replace'):
