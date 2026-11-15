@@ -41,6 +41,8 @@ SexOS is fundamentally different from Linux, macOS, or Windows:
 ### Core Desktop & System Architecture
 - **[Silk Desktop & Navigation](desktop-and-navigation.md)**: Master the Silk window manager, Atlas workspace navigation, keyboard chords, tiling layouts, and interactive screenshots.
 - **[Security, Capabilities & Collar](security-and-capabilities.md)**: Understanding PKU domain isolation, Collar capability grants, Shibari volatile secrets, and the Mesh capability graph.
+- **[Settings & Lock Screen](settings-and-lock-screen.md)**: Persistent settings (`/system/settings.toml`), typematic controls, night light, wallpaper switching, idle dimming, and the secure desktop lock screen (`Super+Esc`).
+- **[Laptop Power & Mobile Hardware](laptop-power.md)**: ACPI battery telemetry, SilkBar battery indicators, dynamic power profiles (PowerSaver, Balanced, Performance), backlight stepping, touchpad gestures/palm rejection, and lid-close LPS0 suspend.
 - **[Installation, Boot & Updates](installation-and-updates.md)**: Booting the live ISO, UEFI installation beside other operating systems, and atomic A/B system updates.
 
 ### Core Application Manuals
@@ -62,9 +64,21 @@ SexOS is fundamentally different from Linux, macOS, or Windows:
 - **[Gestalt (Vector Canvas)](apps/gestalt.md)**: Anti-aliased 2D vector drawing and graphics demonstration.
 - **[Flirt (Voice, Video & Network)](apps/flirt.md)**: Encrypted real-time voice, video calls, screen sharing, and socket explorer.
 
-### Application Suites
-- **[Creative & Professional Suite](creative-and-pro-suite.md)**: Deep dive into upcoming parity applications: **Assuit** (word processor), **Spreadeagle** (spreadsheets), **Burlesque** (presentations), **Batik** (image editor), **Polyamour** (3D modeling), **Splicy** (video editor), **Moan** (DAW audio editor), **Bodice** (e-books), and **Drag** (virtual machines).
-- **[Communication & Sharing Suite](communication-and-sharing.md)**: Connected tools: **Valentine** (mail & Matrix messaging), **Flirt** (voice & video), **Multipass** (online accounts), **Crush** (contacts), **Hookup** (phone link), and **Swingers** (BitTorrent distribution).
+### Productivity, Office & Creative Manuals
+- **[Spreadeagle (Spreadsheets)](apps/spreadeagle.md)**: Multi-sheet grid calculation, dynamic formula chains, financial modeling, and round-trip `.xlsx` editing.
+- **[Assuit (Word Processor)](apps/assuit.md)**: Rich-text typography layout, WordCraft formatting, paragraph styles, and `.docx` interchange.
+- **[Corset (Disks & Partitions)](apps/corset.md)**: GPT partition creation, 1 MiB alignment guard, BDSM volume encryption, SMART health telemetry, and safe USB ejection.
+- **[Bodice (E-Book Reader)](apps/bodice.md)**: Distraction-free digital reading for EPUB, CBZ comics, and FB2 with day/night modes and persistent positions.
+- **[Gossip (Feeds & Podcasts)](apps/gossip.md)**: RSS and Atom news reader with OPML import/export, offline reading, and podcast enclosure downloads.
+- **[Rendezvous (Maps & Navigation)](apps/rendezvous.md)**: Private vector OpenStreetMap mapping, Nominatim location search, turn-by-turn routing, and offline region tile caching.
+- **[Splicy (Video Editor & Media Export)](apps/splicy.md)**: Frame-accurate timeline editing, ripple/roll trims, transcript-based cuts, and WebM (VP9/Opus) and MP4 video export.
+- **[Batik (Raster Painting & Image Studio)](apps/batik.md)**: Multi-layer Porter-Duff blend modes, 8-bit paintable layer masks, pressure-sensitive brushes, lasso & magic wand selections, spatial/color filters, and PNG, JPEG, WebP & PSD import/export.
+- **[Burlesque (Keynote-Class Presentations)](apps/burlesque.md)**: Designer themes, live animated slide transitions, dual-pane Presenter View with speaker notes and timer, OOXML `.pptx` & OpenDocument `.odp` import/export, and vector PDF export.
+- **[Flash (Photo Booth & Camera)](apps/flash.md)**: Live 3×3 effects grid, 9 real-time Photo Booth filters, 3-second countdown timer, 4-shot burst contact sheets, Splicy WebM recording, and persistent photo library integration with **Gaze**.
+
+### Application Suites & Additional Tools
+- **[Creative & Professional Suite](creative-and-pro-suite.md)**: Deep dive into upcoming and parity tools: **Assuit**, **Spreadeagle**, **Burlesque** (presentations), **Batik** (raster painting), **Polyamour** (3D modeling), **Splicy** (video editing), **Flash** (UVC webcam capture), **Moan** (DAW audio editor), **Bodice** (e-books), **Corset** (disks & partitions), and **Climax** (hardware stress & benchmarking).
+- **[Communication & Sharing Suite](communication-and-sharing.md)**: Connected tools: **Valentine** (mail & Matrix messaging), **Flirt** (voice & video), **Multipass** (online accounts), **Crush** (contacts), **Hookup** (phone link), **Rendezvous** (maps & navigation), and **Swingers** (BitTorrent distribution).
 
 ---
 
@@ -79,11 +93,14 @@ Programs in SexOS run with strictly zero ambient authority. To run an installed 
 run jot                     # Launch Jot notepad with local sandbox
 run +net kaleidoscope       # Launch Kaleidoscope with explicit network authority
 run vellum @/document.pdf   # Launch Vellum with access to exactly one PDF file
+run spreadeagle             # Launch Spreadeagle with default welcome workbook
+run +net rendezvous        # Launch Rendezvous with map network authority
 ```
 
 ### Navigating Windows
 - **`Alt+Tab`**: Cycle through open windows with live thumbnail previews.
 - **`Super+H / J / K / L`** or **`Super+Arrows`**: Shift focus spatially between tiled windows.
 - **`Super+W`**: Open the **Atlas** Workspace Overview to view all windows across workspaces.
+- **`Super+Esc`**: Lock the screen immediately.
 - **`Super+Q`**: Close the active window.
 - **`Print`**: Activate the interactive screenshot tool.

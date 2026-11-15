@@ -223,6 +223,24 @@ text, wheel) OK; sealed `make full` green. No runtime behaviour changed.
 **Limit.** This bounds one big stack object, not total stack depth. A real
 fix is a stack high-water measurement or a stack quota separate from heap.
 
+## G-13. Batik and Burlesque creative applications (2026-11-14)
+
+**What changed.** Built `apps/batik` (raster editor & digital painting window over `batik-core` with brush/eraser/bucket/selection tools, layers, levels/invert/blur adjustments, undo/redo, and PNG/ORA file persistence) and `apps/burlesque` (presentations window over `burlesque-core` with slide management, layouts, editable fields, `PresenterSession` presenter view, `.pptx`/`.odp`/`.md` open, and `%PDF-1.4` export), both `#![forbid(unsafe_code)]` with `SEX_LAYOUT_SEED` section shuffling.
+
+**Evidence.** Host headless window tests (`apps/batik/tests/window.rs`, `apps/burlesque/tests/window.rs`) and live SexOS QEMU gates (`scripts/batik_gate.py`, `scripts/burlesque_gate.py`).
+## G-22: QEMU Comprehensive Performance Report & Bottleneck Audit (2026-11-14)
+
+**What changed.** Conducted a rigorous empirical performance and memory audit of SexOS v1.0.0 in hardware-emulated QEMU (`-M q35 -cpu max,+pku,+rdseed -smp 1 -m 512M -device VGA,xres=1280,yres=800 -device nvme`) on Apple Silicon M5 host:
+1. Measured cold boot breakdown across 3 passes: firmware & Limine handover (566.8 ms), kernel HAL/PKU/allocator ready (2,631.7 ms), userspace organ convergence (3,246.7–3,372.2 ms), and full desktop interactive readiness (6,244.9 ms).
+2. Measured 10 core system primitives and microbenchmarks across 3 passes of `apps/bench`: null syscall (0.26 µs, 2 cycles), memory query (0.08 µs, 1 cycle), yield (1.26 µs, 9 cycles), alloc & touch 32 MiB (6.59 ms/MiB), memcpy (0.71 ms/MiB), file write (390.96 ms/MiB), file read (218.82 ms/MiB), scattered 4 KiB read (201.41 µs), cached stat (0.27 µs, 2 cycles), and cross-domain synchronous PDX roundtrip (8.64 µs, 55 cycles).
+3. Evaluated large file read throughput (`run bench read-large` 16 MiB) across 3 passes: ~15,587,812 cycles/MiB, 256 NVMe device calls, ~300 ticks.
+4. Evaluated application launch latency and memory footprint across 15 real SexOS apps (`jot`, `quil`, `loom`, `gaze`, `tatami`, `pdf`, `bodice`, `gossip`, `rendezvous`, `assuit`, `spreadeagle`, `kaleidoscope`, `flash`, `sexshop`, `bench`): identified ELF fetch/scan vs frame presentation breakdown; confirmed 0 page leaks upon F11 retirement across all 15 applications.
+5. Identified and root-caused top 5 bottlenecks in codebase: heavy ELF opcode scanning (`kernel/src/app_resources.rs:430-437`) and 63 MiB program store boundary (`servers/sexfiles/src/program_store.rs`), eager 1 MiB stack allocations (`kernel/src/app_resources.rs:440-447`), synchronous unpipelined NVMe I/O (`servers/sexfiles/src/fs_service.rs` / `apps/sexdrive/src/main.rs`), synchronous PDX IPC scheduler roundtrip latency (`kernel/src/ipc/router.rs`), and serial boot organ dispatch (`kernel/src/lib.rs:270-340`).
+6. Authored comprehensive report `docs/PERFORMANCE_REPORT_2026_11_14.md` including 5 ready-to-file GitHub issue drafts with exact empirical evidence, codebase roots, and optimization plans.
+7. Provided deterministic measurement automation harness `scripts/qemu_perf_report.py`.
+
+**Evidence.** Full empirical runs logged and verified with `python3 scripts/qemu_perf_report.py --iso sexos-v1.0.0.iso --passes 3` (clean exit 0, all 15 apps evaluated and retired with 0 page leaks).
+
 ## G-15. Flash UVC webcam driver server and capture app (2026-11-14)
 
 **What changed.** Added `crates/sex-uvc` (`#![no_std]`, `#![forbid(unsafe_code)]` USB Video Class 1.1/1.5 descriptor parser, 26/34-byte Probe/Commit control negotiation, bounded `FID`/`EOF`/`ERR` payload reassembler, and `YUY2`/`NV12`/`MJPEG` frame decoders), `servers/sexuvc` (ring-3 userspace UVC webcam driver server with per-client capability grants), and `apps/flash` (camera capture app saving PNG stills and encoding WebM VP9 video directly through Splicy's `sex_media::export::Exporter` without duplicating an encoder).
@@ -512,6 +530,12 @@ gate GREEN; native `https_html_gate.py` at both sizes with six scripts on the
 page (loop sum `20100`, while countdown, `sq(12)=144`, depth-10 parentheses
 and `fact(2)`, array squares, string split/upper/indexOf/parseInt);
 conversion took 9 ticks; no pager rejections.
+
+## G-14. Climax benchmark and thermal torture application (2026-11-14)
+
+**What changed.** Built `apps/climax` (`#![forbid(unsafe_code)]`, `GPL-3.0-only` window over `climax-core` with `SEX_LAYOUT_SEED` section shuffling), exposing interactive **Benchmarks** (`Run Suite` + `--json` telemetry across Integer ARX, SHA-256, Tiled 64x64 GEMM FP32, Biquad DSP, STREAM Triad, and Sattolo Cache/DRAM Pointer-Chase Ladder) and **Thermal Torture** (`Start Step`, `Run Burst`, `Reset`, composite/subsystem score bars, `ThrottleState`, stability %, and bit-exact corruption verification).
+
+**Evidence.** Host headless window tests (`apps/climax/tests/window.rs`) and live SexOS QEMU gate (`scripts/climax_gate.py`).
 
 ## G-12: Climax benchmark and thermal throttling stress engine (2026-11-14)
 - Added `climax-core` crate providing `#![no_std] + alloc` CPU and memory microbenchmarks, sustained torture runner, thermal throttling detection, and visual report generation.
@@ -4414,3 +4438,46 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - No kernel or owned app changes. This is the engine slice, not a complete DAW;
   Weft UI, capture UX, effects, project persistence and export follow. Contract and
   next steps: `docs/handoff/MOAN_2026_11_14.md`.
+
+## G-20: Fuzz round 3 (2026-11-14)
+- Added 5 `cargo-fuzz` ASan+libFuzzer targets (`fuzz_spreadeagle_xlsx_ods`, `fuzz_assuit_docx`, `fuzz_bodice_epub`, `fuzz_gossip_feed`, `fuzz_swingers_bencode`) with seed corpora and smoke gate coverage (`18/18` targets passing in `scripts/fuzz_smoke_host_gate.sh`).
+- Executed >5.35M ASan+libFuzzer inputs across raw and structured ZIP/XML/bencode payloads; uncovered and filed Issues #301 (`sex-xml` / `Gossip` unbounded nesting stack overflow) and #302 (`sex-ebook` / `Bodice` EPUB `<spine>` amplification DoS) with committed reproducers under `fuzz/repros/round3/` without modifying target crates.
+## G-21: User guide refresh (2026-11-14)
+- Comprehensive user guide refresh across `docs/user/` documenting new apps and system subsystems:
+  - Added dedicated application guides: `spreadeagle.md` (Spreadeagle spreadsheet), `assuit.md` (Assuit rich text word processor), `corset.md` (Corset disk & partition manager), `bodice.md` (Bodice EPUB/MOBI/CBZ document reader), `gossip.md` (Gossip RSS/Atom news aggregator), `rendezvous.md` (Rendezvous offline vector maps), `splicy.md` (Splicy non-linear video editor & media export).
+  - Added system guides: `settings-and-lock-screen.md` (Tatami settings, authentication & lock screen security), `laptop-power.md` (ACPI battery telemetry, backlight stepping, power profiles, and thermal trip protection).
+  - Updated index and suite docs: `docs/user/README.md`, `docs/user/apps/tatami.md`, `docs/user/creative-and-pro-suite.md`, and `docs/user/communication-and-sharing.md`.
+- Captured and verified 10 genuine QEMU gate screenshots under `docs/user/assets/` at 1280x800 and 1024x768 resolutions (all >= 50 colors, range 975-5916 distinct colors, highly compressed PNGs):
+  `spreadeagle-sheet.png`, `assuit-document.png`, `bodice-reader.png`, `gossip-feeds.png`, `rendezvous-maps.png`, `lock-screen.png`, `tatami-settings.png`, `corset-disks.png`, `laptop-power.png`, and `splicy-export.png`.
+- Zero broken relative markdown links verified across all 32 documents (96 relative links checked).
+- Passed root allowlist check with `root-allowlist: clean`.
+
+## G-23: Batik to Pixelmator level (2026-11-15)
+- Upgraded `crates/batik-core` (`#![no_std]`, `#![forbid(unsafe_code)]`) and `apps/batik` to full Pixelmator-class raster editing & digital painting:
+  - Multi-layer stack with Porter-Duff blend modes (`Normal`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`, `ColorDodge`, `ColorBurn`, `HardLight`, `SoftLight`, `Difference`, `Exclusion`), layer visibility, opacity, duplicate, and merge-down.
+  - Non-destructive 8-bit grayscale per-layer masks (`Add Mask`, `Mask from Selection`, `Invert Mask`, and interactive `Edit Mask` painting with `HistoryAction::LayerMaskDelta` undo/redo).
+  - Pressure-sensitive brush engine with presets (`Soft Airbrush`, `Hard Round`, `Calligraphy/Chisel`, `Eraser`) and dynamic pressure taper curves (`Taper`, `Full`, `Light`).
+  - Freehand polygon `Lasso` and tolerance-configurable `Magic Wand` selections with live marching-ants canvas overlay and selection-clipped painting & filters.
+  - Spatial and color filters (`Blur`, `Sharpen`, `Emboss`, `Sepia`, `Posterize`, `Invert`, `Auto-Levels`).
+  - Pure-Rust `#![no_std]` import & export for **PNG**, **JPEG** (baseline DCT 4:4:4 encoder), **WebP** (bit-exact lossless VP8L encoder), and multi-layer **PSD** (`8BPS` v1 reader + writer preserving layers, blend modes, and layer masks), plus OpenRaster (`.ora`).
+- Verified by `scripts/batik_host_gate.sh` (36 `batik-core` tests + 7 `batik` window tests + `key_bytes.py` 0 forbidden opcodes) and live QEMU `scripts/batik_gate.py` (`PASS`) with 6 genuine screenshots in `docs/user/assets/batik-*.png` and `docs/user/apps/batik.md`.
+
+## G-24: Burlesque to Keynote level (2026-11-15)
+- Upgraded `crates/burlesque-core` (`#![no_std]`, `#![forbid(unsafe_code)]`) and `apps/burlesque` to full Keynote-class presentation authoring & delivery:
+  - 6 designer themes (`Burlesque Velvet`, `Editorial Light`, `Midnight Slate`, `Champagne Ivory`, `Cyber Prism`, `Swiss Modern`) with live switching across slide elements.
+  - Real-time software transition interpolation (`Dissolve`, `PushLeft`, `PushRight`, `WipeRight`, `SlideUp`, `ZoomIn`, `Fade`, `SlideLeft`) via `render_transition_frame`.
+  - Dual-pane Keynote Presenter View (`PresenterSession` + `render_presenter_view`) displaying Current Slide, Next Slide preview, word-wrapped **Speaker Notes**, elapsed `MM:SS` timer, progress bar, and screen blanking, plus interactive per-slide Speaker Notes editing in the authoring window.
+  - Memory-bounded **PPTX** (`import_pptx` + `export_pptx`) and **ODP** (`import_odp` + `export_odp`) import/export preserving themes, shapes, tables, transitions, and speaker notes (`ppt/notesSlides/notesSlideN.xml`, `<presentation:notes>`), alongside multi-page vector **PDF-1.4 export** (`export_pdf`, `export_pdf_with_notes`).
+- Verified by `scripts/burlesque_host_gate.sh` (15 `burlesque-core` tests + `burlesque` window tests + `key_bytes.py` 0 forbidden opcodes) and live QEMU `scripts/burlesque_gate.py` (`PASS`) with 4 genuine screenshots in `docs/user/assets/burlesque-*.png` and `docs/user/apps/burlesque.md`.
+
+## G-25: Flash to Photo Booth level (2026-11-15)
+- Upgraded `crates/sex-uvc` (`src/photobooth.rs`, `#![no_std]`, `#![forbid(unsafe_code)]`) and `apps/flash` to a Photo Booth-class camera & capture studio:
+  - 9 live `#![no_std]` integer Photo Booth filters (`Normal`, `Sepia`, `Noir`, `Thermal`, `XRay`, `PopArt`, `Mirror`, `Bulge`, `Comic`) applied across live preview, photos, timer shots, burst sheets, and Splicy WebM exports.
+  - Concurrent **3×3 Live Effects Grid** (`render_effects_grid`, `e` key / button) rendering all 9 filters simultaneously with title badges and `1`–`9` direct selection.
+  - **3-Second Countdown Timer** (`t` key / button, `3 -> 2 -> 1` visual badge + amber pips + shutter flash) and **4-Shot Burst** (`b` key / button, saving 4 individual frames + a 2×2 framed `burst-NNNN.png` Photo Booth contact sheet).
+  - Persistent `/data/flash/library/` filmstrip UI with thumbnail inspection, deletion, and one-click **Open in Gaze** (`g` key / button launching `/bin/gaze @/data/flash/library` for full folder slideshow navigation).
+- Verified by `scripts/flash_host_gate.sh` (`sex-uvc` + `photobooth_test` unit/fuzz tests, `sexuvc` + `flash` `key_bytes.py` 0 forbidden opcodes, wire smoke test) and live QEMU `scripts/flash_gate.py` (`PASS`, including Gaze opening and stepping through `/data/flash/library`) with 3 genuine screenshots in `docs/user/assets/flash-*.png` and `docs/user/apps/flash.md`.
+
+## G-26: Fuzz round 4 (2026-11-15)
+- Added 5 `cargo-fuzz` ASan+libFuzzer targets (`fuzz_kaleidoscope_ext_package`, `fuzz_kaleidoscope_ext_manifest`, `fuzz_kaleidoscope_ext_dnr`, `fuzz_burlesque_pptx`, `fuzz_batik_psd`) with seed corpora under `fuzz/seeds/` and smoke gate coverage (`23/23` targets passing in `scripts/fuzz_smoke_host_gate.sh`).
+- Executed ASan+libFuzzer campaigns across Kaleidoscope's extension loader (`crates/sex-extensions` + `crates/sex-shields`), `burlesque-core` PPTX import, and `batik-core` PSD import; isolated 8 deterministic reproducers committed under `fuzz/repros/round4/` and filed Issues #319 (`sex-extensions` CRX/ZIP 64 MiB `zune-inflate` pre-alloc bomb & empty-path smuggling), #320 (`sex-extensions` `Manifest::locale_file()` `..` path traversal), #321 (`sex-extensions` `dnr::rule` `#@#` cosmetic exception & `$badfilter`/`$important` option smuggling into `sex-shields`), #322 (`burlesque-core` PPTX `<a:pPr lvl="255"/>` overflow panic), and #323 (`batik-core` PSD composite planar OOB panic & layer `Limits`-bypass OOM) without modifying target crates.

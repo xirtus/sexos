@@ -74,7 +74,9 @@ pub struct Slide {
     pub layout: SlideLayout,
     pub elements: Vec<SlideElement>,
     pub speaker_notes: String,
+    pub notes: String,
     pub transition: Transition,
+    pub transition_duration_ms: u32,
     pub hidden: bool,
     pub background_override: Option<Background>,
 }
@@ -87,7 +89,9 @@ impl Slide {
             layout,
             elements: Vec::new(),
             speaker_notes: String::new(),
+            notes: String::new(),
             transition: Transition::None,
+            transition_duration_ms: 0,
             hidden: false,
             background_override: None,
         }
@@ -98,7 +102,29 @@ impl Slide {
     }
 
     pub fn set_speaker_notes(&mut self, notes: impl Into<String>) {
-        self.speaker_notes = notes.into();
+        let n = notes.into();
+        self.notes = n.clone();
+        self.speaker_notes = n;
+    }
+
+    pub fn set_notes(&mut self, notes: impl Into<String>) {
+        self.set_speaker_notes(notes);
+    }
+
+    pub fn notes(&self) -> &str {
+        if !self.notes.is_empty() {
+            &self.notes
+        } else {
+            &self.speaker_notes
+        }
+    }
+
+    pub fn transition_duration_ms(&self) -> u32 {
+        if self.transition_duration_ms > 0 {
+            self.transition_duration_ms
+        } else {
+            self.transition.duration_ms()
+        }
     }
 }
 
@@ -117,7 +143,7 @@ impl Deck {
         Self {
             metadata: Metadata::default(),
             aspect_ratio,
-            theme: Theme::burlesque(),
+            theme: Theme::burlesque_velvet(),
             slides: Vec::new(),
             next_slide_id: 1,
         }
@@ -126,6 +152,10 @@ impl Deck {
     pub fn with_theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
         self
+    }
+
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
     }
 
     pub fn width(&self) -> f32 {
@@ -189,9 +219,19 @@ impl Deck {
         crate::pptx::import_pptx(bytes)
     }
 
+    /// Export this deck to an OOXML PPTX container.
+    pub fn export_pptx(&self) -> Result<Vec<u8>> {
+        crate::pptx::export_pptx(self)
+    }
+
     /// Import an OpenDocument Presentation (ODP) from raw bytes.
     pub fn open_odp(bytes: &[u8]) -> Result<Self> {
         crate::odp::import_odp(bytes)
+    }
+
+    /// Export this deck to an OpenDocument Presentation (ODP) container.
+    pub fn export_odp(&self) -> Result<Vec<u8>> {
+        crate::odp::export_odp(self)
     }
 
     /// Import a Markdown presentation.
@@ -207,6 +247,11 @@ impl Deck {
     /// Export this deck to a PDF-1.4 multi-page document.
     pub fn export_pdf(&self) -> Result<Vec<u8>> {
         crate::pdf_export::export_pdf(self)
+    }
+
+    /// Export this deck to a PDF-1.4 document, optionally appending speaker notes.
+    pub fn export_pdf_with_notes(&self, include_notes: bool) -> Result<Vec<u8>> {
+        crate::pdf_export::export_pdf_with_notes(self, include_notes)
     }
 }
 

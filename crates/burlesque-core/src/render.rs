@@ -7,7 +7,7 @@ use sex_font::raster::scratch_len;
 use sex_font::{Font, GEIST_MONO, GEIST_SANS};
 use crate::deck::AspectRatio;
 use crate::elements::{
-    Background, ShapeKind, SlideElement, TextBox,
+    Background, ShapeKind, SlideElement, TextBox, Transition,
 };
 use crate::theme::Theme;
 use crate::Slide;
@@ -53,7 +53,12 @@ pub fn render_slide(
         None => canvas.clear(theme.palette.background),
     }
 
-    // 2. Elements
+    // 2. Master chrome (top accent ribbon, subtle card accents, styled slide number)
+    if theme.show_master_chrome {
+        render_master_chrome(&mut canvas, theme, slide.id, target_w, target_h, sx, sy);
+    }
+
+    // 3. Elements
     for elem in &slide.elements {
         match elem {
             SlideElement::Shape(s) => {
@@ -546,3 +551,249 @@ fn draw_v_line(target: &mut [u32], target_w: u32, target_h: u32, y0: f32, y1: f3
         }
     }
 }
+
+fn render_master_chrome(
+    canvas: &mut Canvas<'_>,
+    theme: &Theme,
+    slide_id: u64,
+    target_w: u32,
+    target_h: u32,
+    sx: f32,
+    sy: f32,
+) {
+    let w = target_w as f32;
+    let h = target_h as f32;
+    let ribbon_h = (4.0 * sy).max(2.0);
+
+    // Top accent ribbon (65% primary accent, 35% secondary accent)
+    let p_w = w * 0.65;
+    canvas.fill_rect(Rect::new(0.0, 0.0, p_w, ribbon_h), theme.palette.primary_accent);
+    canvas.fill_rect(Rect::new(p_w, 0.0, w - p_w, ribbon_h), theme.palette.secondary_accent);
+
+    // Slide number at bottom-right
+    if let Some(font) = Font::new(GEIST_SANS) {
+        let num_str = alloc::format!("{:02}", slide_id);
+        let font_sz = (14.0 * sy).max(9.0);
+        let num_w = font_sz * 1.5;
+        let num_x = w - (24.0 * sx) - num_w;
+        let num_y = h - (16.0 * sy);
+        draw_text_run(
+            &font,
+            &num_str,
+            font_sz,
+            num_x,
+            num_y,
+            theme.palette.muted,
+            false,
+            false,
+            canvas.pixels_mut(),
+            target_w,
+            target_h,
+        );
+    }
+}
+
+/// Interpolate a single transition frame from `from` buffer to `to` buffer at progress `t` (0.0..=1.0).
+pub fn render_transition_frame(
+    from: &[u32],
+    to: &[u32],
+    out: &mut [u32],
+    width: u32,
+    height: u32,
+    transition: Transition,
+    t: f32,
+) {
+    let len = match (width as usize).checked_mul(height as usize) {
+        Some(l) => l,
+        None => return,
+    };
+    if width == 0 || height == 0 || from.len() < len || to.len() < len || out.len() < len {
+        return;
+    }
+
+    let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.0 };
+    let w = width as usize;
+    let h = height as usize;
+
+    match transition {
+        Transition::None => {
+            if t < 1.0 {
+                out[..len].copy_from_slice(&from[..len]);
+            } else {
+                out[..len].copy_from_slice(&to[..len]);
+            }
+        }
+        Transition::Dissolve | Transition::Fade => {
+            let t_u32 = (t * 256.0).min(256.0) as u32;
+            let inv_u32 = 256 - t_u32;
+
+            for i in 0..len {
+                let f = from[i];
+                let d = to[i];
+
+                let fa = (f >> 24) & 0xFF;
+                let fr = (f >> 16) & 0xFF;
+                let fg = (f >> 8) & 0xFF;
+                let fb = f & 0xFF;
+
+                let da = (d >> 24) & 0xFF;
+                let dr = (d >> 16) & 0xFF;
+                let dg = (d >> 8) & 0xFF;
+                let db = d & 0xFF;
+
+                let a = ((fa * inv_u32 + da * t_u32) >> 8).min(255);
+                let r = ((fr * inv_u32 + dr * t_u32) >> 8).min(255);
+                let g = ((fg * inv_u32 + dg * t_u32) >> 8).min(255);
+                let b = ((fb * inv_u32 + db * t_u32) >> 8).min(255);
+
+                out[i] = (a << 24) | (r << 16) | (g << 8) | b;
+            }
+        }
+        Transition::PushLeft | Transition::SlideLeft => {
+            let shift_x = (((width as f32) * t) + 0.5) as usize;
+            let shift_x = shift_x.min(w);
+
+            for y in 0..h {
+                let row = y * w;
+                for x in 0..w {
+                    if x + shift_x < w {
+                        out[row + x] = from[row + x + shift_x];
+                    } else {
+                        out[row + x] = to[row + (x + shift_x - w)];
+                    }
+                }
+            }
+        }
+        Transition::PushRight => {
+            let shift_x = (((width as f32) * t) + 0.5) as usize;
+            let shift_x = shift_x.min(w);
+
+            for y in 0..h {
+                let row = y * w;
+                for x in 0..w {
+                    if x < shift_x {
+                        out[row + x] = to[row + (w - shift_x + x)];
+                    } else {
+                        out[row + x] = from[row + (x - shift_x)];
+                    }
+                }
+            }
+        }
+        Transition::WipeRight => {
+            let split_x = (((width as f32) * t) + 0.5) as usize;
+            let split_x = split_x.min(w);
+
+            for y in 0..h {
+                let row = y * w;
+                for x in 0..w {
+                    if x < split_x {
+                        out[row + x] = to[row + x];
+                    } else {
+                        out[row + x] = from[row + x];
+                    }
+                }
+            }
+        }
+        Transition::SlideUp => {
+            let shift_y = (((height as f32) * t) + 0.5) as usize;
+            let shift_y = shift_y.min(h);
+
+            for y in 0..h {
+                let out_row = y * w;
+                if y + shift_y < h {
+                    let from_row = (y + shift_y) * w;
+                    out[out_row..out_row + w].copy_from_slice(&from[from_row..from_row + w]);
+                } else {
+                    let to_row = (y + shift_y - h) * w;
+                    out[out_row..out_row + w].copy_from_slice(&to[to_row..to_row + w]);
+                }
+            }
+        }
+        Transition::ZoomIn => {
+            let scale = 0.2 + 0.8 * t;
+            let sw = (((w as f32 * scale) + 0.5) as usize).max(1);
+            let sh = (((h as f32 * scale) + 0.5) as usize).max(1);
+            let ox = (w.saturating_sub(sw)) / 2;
+            let oy = (h.saturating_sub(sh)) / 2;
+
+            let t_u32 = (t * 256.0).min(256.0) as u32;
+            let inv_u32 = 256 - t_u32;
+
+            for y in 0..h {
+                let row = y * w;
+                for x in 0..w {
+                    let f = from[row + x];
+                    if x >= ox && x < ox + sw && y >= oy && y < oy + sh {
+                        let sx = ((x - ox) * w) / sw;
+                        let sy = ((y - oy) * h) / sh;
+                        let d = to[sy.min(h - 1) * w + sx.min(w - 1)];
+
+                        let fa = (f >> 24) & 0xFF;
+                        let fr = (f >> 16) & 0xFF;
+                        let fg = (f >> 8) & 0xFF;
+                        let fb = f & 0xFF;
+
+                        let da = (d >> 24) & 0xFF;
+                        let dr = (d >> 16) & 0xFF;
+                        let dg = (d >> 8) & 0xFF;
+                        let db = d & 0xFF;
+
+                        let a = ((fa * inv_u32 + da * t_u32) >> 8).min(255);
+                        let r = ((fr * inv_u32 + dr * t_u32) >> 8).min(255);
+                        let g = ((fg * inv_u32 + dg * t_u32) >> 8).min(255);
+                        let b = ((fb * inv_u32 + db * t_u32) >> 8).min(255);
+
+                        out[row + x] = (a << 24) | (r << 16) | (g << 8) | b;
+                    } else {
+                        out[row + x] = f;
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Canvas-oriented transition helper.
+pub fn render_transition_canvas<'a>(
+    from: &Canvas<'_>,
+    to: &Canvas<'_>,
+    out: &'a mut [u32],
+    transition: Transition,
+    t: f32,
+) -> Option<Canvas<'a>> {
+    let w = from.width();
+    let h = from.height();
+    if to.width() != w || to.height() != h {
+        return None;
+    }
+    render_transition_frame(from.pixels(), to.pixels(), out, w, h, transition, t);
+    Canvas::new(out, w, h)
+}
+
+/// Render an animated slide transition between two slides into target buffer.
+pub fn render_deck_transition(
+    from_slide: &Slide,
+    to_slide: &Slide,
+    theme: &Theme,
+    aspect_ratio: AspectRatio,
+    transition: Transition,
+    t: f32,
+    out: &mut [u32],
+    width: u32,
+    height: u32,
+) {
+    let len = match (width as usize).checked_mul(height as usize) {
+        Some(l) => l,
+        None => return,
+    };
+    if width == 0 || height == 0 || out.len() < len {
+        return;
+    }
+
+    let mut buf_from = vec![0u32; len];
+    let mut buf_to = vec![0u32; len];
+    render_slide(from_slide, theme, aspect_ratio, &mut buf_from, width, height);
+    render_slide(to_slide, theme, aspect_ratio, &mut buf_to, width, height);
+    render_transition_frame(&buf_from, &buf_to, out, width, height, transition, t);
+}
+

@@ -1275,6 +1275,7 @@ pub mod virtio;
 pub mod device;
 pub mod usb_disk;
 pub mod usb_net;
+pub mod bt_hci;
 pub mod network_config;
 
 pub mod desktop_style;
@@ -1324,5 +1325,6 @@ pub mod clock_zone;
 pub mod screen_state;
 pub mod app_scroll;
 pub mod bitmap_batch;
+pub mod vm;
 pub mod stream;
 pub mod console_relay;

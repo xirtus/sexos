@@ -90,13 +90,18 @@ crates = [
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
   "apps/driftspark/Cargo.toml",
+  "servers/cufflinks/Cargo.toml",
+  "apps/dragtest/Cargo.toml",
   "apps/lurk/Cargo.toml",
   "apps/bodice/Cargo.toml",
   "apps/gossip/Cargo.toml",
   "apps/hookup/Cargo.toml",
   "apps/rendezvous/Cargo.toml",
   "servers/sexuvc/Cargo.toml",
-  "apps/flash/Cargo.toml"
+  "apps/flash/Cargo.toml",
+  "apps/climax/Cargo.toml",
+  "apps/batik/Cargo.toml",
+  "apps/burlesque/Cargo.toml"
 ]
 
 [[stage]]
@@ -549,6 +554,15 @@ manifest = "apps/driftspark/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/driftspark"
 dest_artifact = "iso_root/programs/driftspark"
 
+# Drag test: the smallest VMM, a real-mode guest through syscall 110 (sex_pdx::vm).
+[[stage]]
+id = "build_dragtest"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/dragtest/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/dragtest"
+dest_artifact = "iso_root/programs/dragtest"
+
 # Bodice: e-books (EPUB, FictionBook, comics), on sex-app with sex-ebook.
 [[stage]]
 id = "build_bodice"
@@ -733,6 +747,16 @@ manifest = "servers/sext/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sext"
 dest_artifact = "iso_root/servers/sext"
 
+# Cufflinks (Bluetooth host stack): built, not started by BOOT yet (needs a BOOT row
+# and the sex_pdx::bt_hci region grants). docs/handoff/CUFFLINKS_BLUETOOTH_2026_11_14.md
+[[stage]]
+id = "build_cufflinks"
+action = "cargo_manifest"
+manifest = "servers/cufflinks/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/cufflinks"
+dest_artifact = "iso_root/servers/cufflinks"
+rustflags = "--cfg aes_force_soft"
+
 # SexUVC: userspace USB Video Class webcam driver server
 [[stage]]
 id = "build_sexuvc"
@@ -766,6 +790,32 @@ target = "x86_64-sex-app.json"
 manifest = "apps/calendar/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/calendar"
 dest_artifact = "iso_root/programs/calendar"
+# Climax: benchmark and thermal torture suite window.
+[[stage]]
+id = "build_climax"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/climax/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/climax"
+dest_artifact = "iso_root/programs/climax"
+
+# Batik image editor and digital painting app on Weft.
+[[stage]]
+id = "build_batik"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/batik/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/batik"
+dest_artifact = "iso_root/programs/batik"
+
+# Burlesque presentations app on Weft.
+[[stage]]
+id = "build_burlesque"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/burlesque/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/burlesque"
+dest_artifact = "iso_root/programs/burlesque"
 
 [[stage]]
 id = "build_crush"

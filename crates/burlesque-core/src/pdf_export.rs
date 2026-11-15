@@ -1,16 +1,33 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Vector PDF-1.4 exporter for presentation decks.
+//!
+//! Provides multi-page PDF generation conforming to PDF-1.4:
+//! - Multi-page vector slide canvas with aspect ratio mapping
+//! - Theme backgrounds and slide master chrome (top accent ribbon, styled slide numbers)
+//! - Vector shapes: Rect, RoundedRect, Ellipse, Line, Arrow
+//! - Text boxes with bold (/F2), regular (/F1), and monospace (/F3) typography
+//! - Rich tables with header fills, borders, and styled cell text
+//! - Code blocks with dark card backgrounds, line numbers, and Courier
+//! - Embedded raster pictures (FlateDecode RGB24)
+//! - Optional Speaker Notes pages (Keynote-grade handout layout)
+//! - Robust escaping, object table, xref table, and valid %%EOF trailer
 
 use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use sex_canvas::Color;
 use crate::deck::Deck;
 use crate::elements::{Background, ShapeKind, SlideElement};
 use crate::Result;
 
 /// Export deck to a standards-compliant multi-page PDF-1.4 document.
 pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
+    export_pdf_with_notes(deck, false)
+}
+
+/// Export deck to a multi-page PDF-1.4 document, optionally generating speaker notes pages.
+pub fn export_pdf_with_notes(deck: &Deck, include_notes: bool) -> Result<Vec<u8>> {
     let mut pdf = PdfWriter::new();
 
     let page_w = deck.width();
@@ -29,19 +46,18 @@ pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
     let font_mono_id = 5;
 
     let mut next_id = 6;
-    let mut page_ids = Vec::with_capacity(num_slides);
+    let mut page_ids = Vec::with_capacity(num_slides * 2);
 
-    // Prepare page and content IDs
     struct PagePlan {
         page_id: u32,
         content_id: u32,
         content_bytes: Vec<u8>,
-        images: Vec<(u32, String, u32, u32, Vec<u8>)>, // (id, name, w, h, rgb_deflated)
+        images: Vec<(u32, String, u32, u32, Vec<u8>)>,
     }
 
-    let mut plans = Vec::with_capacity(num_slides);
+    let mut plans = Vec::with_capacity(num_slides * 2);
 
-    for slide in &deck.slides {
+    for (slide_idx, slide) in deck.slides.iter().enumerate() {
         let p_id = next_id;
         next_id += 1;
         let c_id = next_id;
@@ -63,7 +79,40 @@ pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
             format!("{:.3} {:.3} {:.3} rg 0 0 {:.1} {:.1} re f\n", bg_r, bg_g, bg_b, page_w, page_h).as_bytes(),
         );
 
-        // 2. Elements
+        // 2. Master chrome: top accent ribbon
+        if deck.theme.show_master_chrome {
+            let p_acc = deck.theme.palette.primary_accent;
+            let s_acc = deck.theme.palette.secondary_accent;
+            let ribbon_h = 4.0;
+            let split_w = page_w * 0.65;
+            content.extend_from_slice(
+                format!(
+                    "{:.3} {:.3} {:.3} rg 0 {:.1} {:.1} {:.1} re f\n",
+                    p_acc.r() as f32 / 255.0, p_acc.g() as f32 / 255.0, p_acc.b() as f32 / 255.0,
+                    page_h - ribbon_h, split_w, ribbon_h
+                ).as_bytes(),
+            );
+            content.extend_from_slice(
+                format!(
+                    "{:.3} {:.3} {:.3} rg {:.1} {:.1} {:.1} {:.1} re f\n",
+                    s_acc.r() as f32 / 255.0, s_acc.g() as f32 / 255.0, s_acc.b() as f32 / 255.0,
+                    split_w, page_h - ribbon_h, page_w - split_w, ribbon_h
+                ).as_bytes(),
+            );
+
+            // Styled slide number badge at bottom-right
+            let num_text = format!("{:02}", slide.id);
+            let mut_c = deck.theme.palette.muted;
+            content.extend_from_slice(
+                format!(
+                    "BT /F1 14 Tf {:.3} {:.3} {:.3} rg 1 0 0 1 {:.1} 24 Tm ({}) Tj ET\n",
+                    mut_c.r() as f32 / 255.0, mut_c.g() as f32 / 255.0, mut_c.b() as f32 / 255.0,
+                    page_w - 48.0, escape_pdf_string(&num_text)
+                ).as_bytes(),
+            );
+        }
+
+        // 3. Slide Elements
         for elem in &slide.elements {
             match elem {
                 SlideElement::Shape(s) => {
@@ -73,7 +122,6 @@ pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
                     let w = s.bounds.w;
                     let h = s.bounds.h;
 
-                    // Set fill / stroke colors
                     if let Some(fill) = s.fill {
                         let fr = fill.r() as f32 / 255.0;
                         let fg = fill.g() as f32 / 255.0;
@@ -102,7 +150,6 @@ pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
                                 content.extend_from_slice(format!("{:.1} {:.1} {:.1} {:.1} re {}\n", x, y, w, h, op).as_bytes());
                             }
                             ShapeKind::Ellipse => {
-                                // 4-arc cubic bezier circle/ellipse approximation
                                 let rx = w / 2.0;
                                 let ry = h / 2.0;
                                 let cx = x + rx;
@@ -176,7 +223,6 @@ pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
                         next_id += 1;
                         let img_name = format!("Im{}", images.len() + 1);
 
-                        // Extract raw RGB24 bytes and deflate
                         let mut rgb = Vec::with_capacity(decoded.width * decoded.height * 3);
                         for &px in &decoded.pixels {
                             rgb.push(((px >> 16) & 0xFF) as u8);
@@ -237,7 +283,20 @@ pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
                     let col_w = t.bounds.w / t.cols.max(1) as f32;
                     let row_h = t.bounds.h / t.rows.max(1) as f32;
 
-                    // Table border
+                    // Header row background fill if configured
+                    if t.has_header_row && t.rows > 0 {
+                        if let Some(hbg) = t.header_background {
+                            content.extend_from_slice(
+                                format!(
+                                    "{:.3} {:.3} {:.3} rg {:.1} {:.1} {:.1} {:.1} re f\n",
+                                    hbg.r() as f32 / 255.0, hbg.g() as f32 / 255.0, hbg.b() as f32 / 255.0,
+                                    t.bounds.x, page_h - t.bounds.y - row_h, t.bounds.w, row_h
+                                ).as_bytes(),
+                            );
+                        }
+                    }
+
+                    // Table outer border
                     let bc = t.border_color;
                     content.extend_from_slice(
                         format!(
@@ -261,10 +320,11 @@ pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
                             let pdf_cell_y = page_h - cy;
                             let escaped = escape_pdf_string(&cell.text);
                             let font = if cell.bold { "/F2" } else { "/F1" };
+                            let tc = cell.text_color.unwrap_or(Color::rgb(0xF8, 0xFA, 0xFC));
                             content.extend_from_slice(
                                 format!(
-                                    "BT {} 16 Tf 0.9 0.9 0.9 rg 1 0 0 1 {:.1} {:.1} Tm ({}) Tj ET\n",
-                                    font, cx, pdf_cell_y, escaped
+                                    "BT {} 16 Tf {:.3} {:.3} {:.3} rg 1 0 0 1 {:.1} {:.1} Tm ({}) Tj ET\n",
+                                    font, tc.r() as f32 / 255.0, tc.g() as f32 / 255.0, tc.b() as f32 / 255.0, cx, pdf_cell_y, escaped
                                 ).as_bytes(),
                             );
                         }
@@ -280,10 +340,62 @@ pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
             content_bytes: content,
             images,
         });
+
+        // 4. If include_notes is requested and slide has notes: generate dedicated Notes page
+        if include_notes && !slide.notes().is_empty() {
+            let note_p_id = next_id;
+            next_id += 1;
+            let note_c_id = next_id;
+            next_id += 1;
+
+            let mut note_content = Vec::new();
+            // Background
+            note_content.extend_from_slice(b"0.98 0.98 0.98 rg 0 0 1920 1080 re f\n");
+
+            // Header bar
+            note_content.extend_from_slice(b"0.12 0.16 0.23 rg 0 1000 1920 80 re f\n");
+            let title_text = if slide.title.is_empty() {
+                format!("Slide {} Notes", slide_idx + 1)
+            } else {
+                format!("Slide {}: {}", slide_idx + 1, slide.title)
+            };
+            note_content.extend_from_slice(
+                format!(
+                    "BT /F2 26 Tf 1 1 1 rg 1 0 0 1 48 1030 Tm ({}) Tj ET\n",
+                    escape_pdf_string(&title_text)
+                ).as_bytes(),
+            );
+
+            // Notes card
+            note_content.extend_from_slice(b"1 1 1 rg 48 100 1824 850 re f\n");
+            note_content.extend_from_slice(b"0.8 0.8 0.8 RG 1.5 w 48 100 1824 850 re S\n");
+
+            // Speaker notes text
+            let mut text_y = 900.0f32;
+            for line in slide.notes().lines() {
+                if text_y < 140.0 {
+                    break;
+                }
+                note_content.extend_from_slice(
+                    format!(
+                        "BT /F1 20 Tf 0.1 0.1 0.1 rg 1 0 0 1 80 {:.1} Tm ({}) Tj ET\n",
+                        text_y, escape_pdf_string(line)
+                    ).as_bytes(),
+                );
+                text_y -= 28.0;
+            }
+
+            page_ids.push(note_p_id);
+            plans.push(PagePlan {
+                page_id: note_p_id,
+                content_id: note_c_id,
+                content_bytes: note_content,
+                images: Vec::new(),
+            });
+        }
     }
 
-    // Now write PDF objects:
-    // Header
+    // Write PDF objects:
     pdf.write_header();
 
     // 1: Catalog
@@ -316,7 +428,6 @@ pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
 
     // Pages & Contents
     for plan in &plans {
-        // Page obj
         pdf.start_obj(plan.page_id);
         let mut xobj_dict = String::new();
         if !plan.images.is_empty() {
@@ -332,13 +443,11 @@ pub fn export_pdf(deck: &Deck) -> Result<Vec<u8>> {
             page_w, page_h, plan.content_id, xobj_dict
         ));
 
-        // Content stream
         pdf.start_obj(plan.content_id);
         pdf.write_str(&format!("<< /Length {} >>\nstream\n", plan.content_bytes.len()));
         pdf.write_bytes(&plan.content_bytes);
         pdf.write_str("\nendstream\nendobj\n");
 
-        // Embedded image XObjects
         for (img_id, _, w, h, deflated) in &plan.images {
             pdf.start_obj(*img_id);
             pdf.write_str(&format!(
