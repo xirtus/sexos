@@ -684,21 +684,10 @@ pub fn shading_pie() -> Vec<MenuItem> {
     ]
 }
 
-pub fn mode_items() -> Vec<MenuItem> {
-    Mode::ALL
-        .iter()
-        .map(|m| {
-            let arg = match m {
-                Mode::Object => "OBJECT",
-                Mode::Edit => "EDIT",
-                Mode::Sculpt => "SCULPT",
-                Mode::VertexPaint => "VERTEX_PAINT",
-                Mode::WeightPaint => "WEIGHT_PAINT",
-                Mode::TexturePaint => "TEXTURE_PAINT",
-            };
-            opa(m.label(), "", "object.mode_set", arg)
-        })
-        .collect()
+/// The modes the active object offers (Pose for armatures, the paint
+/// modes for meshes).
+pub fn mode_items(d: &Doc) -> Vec<MenuItem> {
+    crate::rig::modes_for(d, d.active()).into_iter().map(|m| opa(m.label(), "", "object.mode_set", m.id())).collect()
 }
 
 pub fn orientation_items(d: &Doc) -> Vec<MenuItem> {

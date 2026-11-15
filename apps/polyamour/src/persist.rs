@@ -4,7 +4,6 @@
 //! lines, so the file stays a valid polyops script that `sex_3d::script::run`
 //! (and the Python package) still read as a plain scene.
 
-use crate::anim::{Interp, Keyframe, Prop};
 use crate::doc::Doc;
 use crate::settings::{Engine, RotationMode, Settings, UnitSystem};
 use sex_3d::render::{MistFalloff, Pass, Passes, ShutterPosition, ViewTransform};
@@ -14,7 +13,8 @@ use sex_3d::scene::Scene;
 pub fn save(doc: &Doc) -> String {
     // Modifiers switched off in the viewport are parked outside the stack;
     // write them back in place so the file keeps them.
-    let mut scene = doc.scene.clone();
+    // A shape key being edited in Edit Mode goes back into its key.
+    let mut scene = crate::rig::shapes::scene_for_save(doc).unwrap_or_else(|| doc.scene.clone());
     for p in &doc.settings.parked {
         if let Some(o) = scene.objects.iter_mut().find(|o| o.name == p.object) {
             let at = p.slot.min(o.modifiers.len());
@@ -27,27 +27,7 @@ pub fn save(doc: &Doc) -> String {
     }
     out.push_str("#@polyamour 1\n");
     out.push_str(&format!("#@frame {}\n", doc.frame));
-    let a = &doc.anim;
-    out.push_str(&format!("#@anim {} {} {}\n", a.auto_key as u8, a.reverse as u8, interp_name(a.interp)));
-    for o in &a.objects {
-        for c in &o.curves {
-            for k in &c.keys {
-                out.push_str(&format!(
-                    "#@key {}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                    esc(&o.object),
-                    c.prop.path(),
-                    c.index,
-                    k.frame,
-                    k.value,
-                    interp_name(k.interp),
-                    k.left[0],
-                    k.left[1],
-                    k.right[0],
-                    k.right[1]
-                ));
-            }
-        }
-    }
+    rigio::save(doc, &mut out);
     for (k, v) in settings_pairs(&doc.settings) {
         out.push_str(&format!("#@set {k}\t{}\n", esc(&v)));
     }
@@ -63,6 +43,7 @@ pub fn load(text: &str) -> Result<Doc, String> {
     let mut scene = Scene::new();
     sex_3d::script::run(&mut scene, text).map_err(|e| e.to_string())?;
     let mut doc = Doc::new(scene);
+    let mut st = rigio::Loader::default();
     for line in text.lines() {
         let Some(rest) = line.strip_prefix("#@") else { continue };
         let (tag, body) = rest.split_once(' ').unwrap_or((rest, ""));
@@ -71,35 +52,6 @@ pub fn load(text: &str) -> Result<Doc, String> {
                 if let Ok(f) = body.trim().parse() {
                     doc.frame = f;
                 }
-            }
-            "anim" => {
-                let mut w = body.split_whitespace();
-                doc.anim.auto_key = w.next() == Some("1");
-                doc.anim.reverse = w.next() == Some("1");
-                if let Some(i) = w.next().and_then(Interp::from_arg) {
-                    doc.anim.interp = i;
-                }
-            }
-            "key" => {
-                let f: Vec<&str> = body.split('\t').collect();
-                if f.len() < 10 {
-                    continue;
-                }
-                let Some(prop) = Prop::ALL.into_iter().find(|p| p.path() == f[1]) else { continue };
-                let (Ok(index), Some(interp)) = (f[2].parse::<usize>(), Interp::from_arg(f[5])) else { continue };
-                let n: Vec<f32> = [f[3], f[4], f[6], f[7], f[8], f[9]].iter().map(|s| s.parse().unwrap_or(0.0)).collect();
-                let obj = doc.anim.entry(&unesc(f[0]));
-                let curve = match obj.curves.iter().position(|c| c.prop == prop && c.index == index) {
-                    Some(i) => &mut obj.curves[i],
-                    None => {
-                        obj.curves.push(crate::anim::FCurve::new(prop, index.min(2)));
-                        obj.curves.sort_by_key(|c| (c.prop, c.index));
-                        let i = obj.curves.iter().position(|c| c.prop == prop && c.index == index.min(2)).unwrap();
-                        &mut obj.curves[i]
-                    }
-                };
-                curve.keys.push(Keyframe { frame: n[0], value: n[1], interp, left: [n[2], n[3]], right: [n[4], n[5]], select: false });
-                curve.sort();
             }
             "set" => {
                 if let Some((k, v)) = body.split_once('\t') {
@@ -111,24 +63,20 @@ pub fn load(text: &str) -> Result<Doc, String> {
                     doc.texts.push((unesc(name), unesc(b)));
                 }
             }
-            _ => {}
+            _ => {
+                rigio::load_line(&mut doc, &mut st, tag, body);
+            }
         }
     }
+    rigio::finish(&mut doc);
     doc.settings.migrate_sensors(&mut doc.scene);
     trees::load(&mut doc.scene, text);
     doc.anim.dirty = true;
     Ok(doc)
 }
 
+mod rigio;
 mod trees;
-
-fn interp_name(i: Interp) -> &'static str {
-    match i {
-        Interp::Constant => "CONSTANT",
-        Interp::Linear => "LINEAR",
-        Interp::Bezier => "BEZIER",
-    }
-}
 
 pub(crate) fn esc(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
@@ -504,7 +452,7 @@ mod tests {
         doc.settings.time_limit = 12.5;
         doc.settings.threads = 3;
         doc.texts.push(("Text".into(), "line one\n\tline two \\ end".into()));
-        let keys_before = doc.anim.objects.iter().map(|o| o.curves.iter().map(|c| c.keys.len()).sum::<usize>()).sum::<usize>();
+        let keys_before = doc.anim.actions.iter().map(|a| a.curves.iter().map(|c| c.keys.len()).sum::<usize>()).sum::<usize>();
         assert!(keys_before > 0, "default scene has a selected object to key");
 
         let text = save(&doc);
@@ -515,10 +463,15 @@ mod tests {
         assert_eq!(back.anim.objects.len(), doc.anim.objects.len());
         for (a, b) in back.anim.objects.iter().zip(&doc.anim.objects) {
             assert_eq!(a.object, b.object);
+            assert_eq!(a.action, b.action);
+        }
+        assert_eq!(back.anim.actions.len(), doc.anim.actions.len());
+        for (a, b) in back.anim.actions.iter().zip(&doc.anim.actions) {
+            assert_eq!(a.name, b.name);
             assert_eq!(a.curves.len(), b.curves.len());
             for (ca, cb) in a.curves.iter().zip(&b.curves) {
-                assert_eq!((ca.prop, ca.index), (cb.prop, cb.index));
-                let strip = |k: &Keyframe| (k.frame, k.value, k.interp, k.left, k.right);
+                assert_eq!((&ca.path, ca.index, &ca.group), (&cb.path, cb.index, &cb.group));
+                let strip = |k: &crate::anim::Keyframe| (k.frame, k.value, k.interp, k.left, k.right, k.h1, k.key_type);
                 assert_eq!(ca.keys.iter().map(strip).collect::<Vec<_>>(), cb.keys.iter().map(strip).collect::<Vec<_>>());
             }
         }

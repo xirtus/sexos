@@ -54,6 +54,13 @@ pub enum Icon {
     Cross,
     Down,
     Dots,
+    /// A bone (Bone tab, armature data, bone lists).
+    Bone,
+    BoneConstraint,
+    ArmatureData,
+    LatticeData,
+    ShapeKey,
+    VertexGroup,
 }
 
 /// A two-pixel line.
@@ -213,6 +220,42 @@ pub fn draw_tinted(p: &mut Painter, icon: Icon, cx: i32, cy: i32, tint: Option<u
                 }
             }
             p.frame(Rect::new(cx - 6, cy - 6, 12, 12), c);
+        }
+        Icon::Bone | Icon::ArmatureData => {
+            let c = col(if icon == Icon::Bone { GREY } else { DATA });
+            // A slanted bone: two knobs and a shaft.
+            p.ring(x - 4.0, y + 4.0, 2.4, c);
+            p.ring(x + 4.0, y - 4.0, 2.4, c);
+            thick(p, x - 2.5, y + 2.5, x + 2.5, y - 2.5, c);
+        }
+        Icon::BoneConstraint => {
+            let c = col(MODIFIER);
+            p.round_frame(Rect::new(cx - 7, cy - 1, 9, 7), 3, c);
+            p.round_frame(Rect::new(cx - 1, cy - 1, 9, 7), 3, c);
+            p.ring(x - 3.0, y - 4.5, 1.8, c);
+            p.line(x - 1.5, y - 3.0, x + 3.0, y - 6.0, c);
+        }
+        Icon::LatticeData => {
+            let c = col(DATA);
+            for i in 0..3 {
+                let o = -5.0 + i as f32 * 5.0;
+                p.line(x - 5.0, y + o, x + 5.0, y + o, c);
+                p.line(x + o, y - 5.0, x + o, y + 5.0, c);
+            }
+        }
+        Icon::ShapeKey => {
+            let c = col(DATA);
+            p.line(x - 6.0, y + 4.0, x, y - 5.0, c);
+            p.line(x, y - 5.0, x + 6.0, y + 4.0, c);
+            p.line(x - 6.0, y + 4.0, x + 6.0, y + 4.0, c);
+            p.circle(x, y - 5.0, 1.8, c);
+        }
+        Icon::VertexGroup => {
+            let c = col(DATA);
+            for (dx, dy) in [(-4.0, -4.0), (4.0, -4.0), (-4.0, 4.0), (4.0, 4.0)] {
+                p.circle(x + dx, y + dy, 1.8, c);
+            }
+            p.frame(Rect::new(cx - 4, cy - 4, 9, 9), c);
         }
         Icon::Object => {
             let c = col(OBJECT);

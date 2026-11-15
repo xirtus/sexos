@@ -227,7 +227,12 @@ pub fn default_workspaces() -> Vec<Workspace> {
     );
     out.push(Workspace { name: "Shading".into(), root: l, maximized: None });
     let l = split(true, 0.78, split(false, 0.7, split(true, 0.25, area(K::View3D), area(K::View3D)), area(K::DopeSheet)), side(&mut area));
-    out.push(Workspace { name: "Animation".into(), root: l, maximized: None });
+    let mut anim = Workspace { name: "Animation".into(), root: l, maximized: None };
+    // The small view on the left looks through the camera, as in Blender.
+    if let Some(crate::editors::Editor::View3D(v)) = anim.areas_mut().into_iter().next().map(|a| &mut a.editor) {
+        v.camera_view = true;
+    }
+    out.push(anim);
     let l = split(true, 0.78, area(K::ImageEditor), side(&mut area));
     out.push(Workspace { name: "Rendering".into(), root: l, maximized: None });
     let l = split(true, 0.78, split(false, 0.8, area(K::CompositorEditor), area(K::DopeSheet)), side(&mut area));

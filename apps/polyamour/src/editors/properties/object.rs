@@ -37,6 +37,14 @@ pub fn rename_object(d: &mut Doc, o: usize, want: &str) {
     let old = core::mem::replace(&mut d.scene.objects[o].name, n.clone());
     d.settings.rename_object(&old, &n);
     d.anim.rename_object(&old, &n);
+    d.rig.rename_object(&old, &n);
+    // Constraint targets and drivers name objects too.
+    for ob in &mut d.scene.objects {
+        ob.constraints.iter_mut().for_each(|c| c.rename_object_ref(&old, &n));
+        for pb in &mut ob.pose {
+            pb.constraints.iter_mut().for_each(|c| c.rename_object_ref(&old, &n));
+        }
+    }
     // Boolean operands and Shrinkwrap targets refer to objects by name.
     for ob in &mut d.scene.objects {
         ob.modifiers.iter_mut().for_each(|m| m.rename_object_ref(&old, &n));
@@ -98,6 +106,7 @@ pub fn object(l: &mut L, d: &mut Doc, c: &mut Ctx) {
         let tr = d.scene.objects[o].transform;
         for (i, lab) in ["Location X", "Y", "Z"].iter().enumerate() {
             let mut v = tr.location.to_array()[i];
+            l.bind(d, &format!("loc{i}"), &name, "location", i);
             if l.number(lab, &format!("loc{i}"), &mut v, NumOpts { unit: lu, ..M }) {
                 l.commit(d, "Location");
                 let mut a = tr.location.to_array();
@@ -115,6 +124,7 @@ pub fn object(l: &mut L, d: &mut Doc, c: &mut Ctx) {
                 let e = quat_to_euler_xyz(tr.rotation);
                 for (i, lab) in ["Rotation X", "Y", "Z"].iter().enumerate() {
                     let mut v = e[i] * k;
+                    l.bind(d, &format!("rot{i}"), &name, "rotation_euler", i);
                     if l.number(lab, &format!("rot{i}"), &mut v, ang) {
                         l.commit(d, "Rotation");
                         let mut e2 = e;
@@ -128,6 +138,7 @@ pub fn object(l: &mut L, d: &mut Doc, c: &mut Ctx) {
                 let mut a = [q.w, q.x, q.y, q.z];
                 for (i, lab) in ["Rotation W", "X", "Y", "Z"].iter().enumerate() {
                     let mut v = a[i];
+                    l.bind(d, &format!("quat{i}"), &name, "rotation_quaternion", i);
                     if l.number(lab, &format!("quat{i}"), &mut v, NumOpts { step: 0.01, ..PLAIN }) {
                         l.commit(d, "Rotation");
                         a[i] = v;
@@ -144,6 +155,7 @@ pub fn object(l: &mut L, d: &mut Doc, c: &mut Ctx) {
                 for (i, lab) in ["Rotation W", "X", "Y", "Z"].iter().enumerate() {
                     let mut v = a[i];
                     let o2 = if i == 0 { ang } else { NumOpts { step: 0.01, ..PLAIN } };
+                    l.bind(d, &format!("aa{i}"), &name, "rotation_axis_angle", i);
                     if l.number(lab, &format!("aa{i}"), &mut v, o2) {
                         l.commit(d, "Rotation");
                         a[i] = v;
@@ -158,6 +170,7 @@ pub fn object(l: &mut L, d: &mut Doc, c: &mut Ctx) {
         l.space(4);
         for (i, lab) in ["Scale X", "Y", "Z"].iter().enumerate() {
             let mut v = tr.scale.to_array()[i];
+            l.bind(d, &format!("scale{i}"), &name, "scale", i);
             if l.number(lab, &format!("scale{i}"), &mut v, NumOpts { step: 0.05, ..PLAIN }) {
                 l.commit(d, "Scale");
                 let mut a = tr.scale.to_array();

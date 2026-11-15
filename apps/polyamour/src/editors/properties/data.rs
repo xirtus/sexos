@@ -22,7 +22,9 @@ const M: NumOpts<'static> = NumOpts { step: 0.1, unit: "m", min: 0.0, max: f32::
 pub fn data(l: &mut L, d: &mut Doc, c: &mut Ctx) {
     let Some(o) = c.obj else { return };
     match d.scene.objects[o].data.clone() {
-        ObjectData::Mesh(mi) => mesh(l, d, mi),
+        ObjectData::Mesh(mi) => mesh(l, d, o, mi),
+        ObjectData::Armature(ai) if ai < d.scene.armatures.len() => super::rigpanels::armature(l, d, o, ai),
+        ObjectData::Lattice(li) if li < d.scene.lattices.len() => super::rigpanels::lattice(l, d, li),
         ObjectData::Light(li) => light(l, d, c, o, li),
         ObjectData::Camera(cam) => camera(l, d, c, o, cam),
         ObjectData::Empty | ObjectData::Armature(_) | ObjectData::Lattice(_) => {
@@ -38,7 +40,7 @@ pub fn data(l: &mut L, d: &mut Doc, c: &mut Ctx) {
 }
 
 
-fn mesh(l: &mut L, d: &mut Doc, mi: usize) {
+fn mesh(l: &mut L, d: &mut Doc, o: usize, mi: usize) {
     let name = d.scene.mesh_names.get(mi).cloned().unwrap_or_default();
     if let Some(n) = l.id_block(Icon::Mesh, &name, Some("mesh_name")) {
         if !n.trim().is_empty() {
@@ -47,18 +49,8 @@ fn mesh(l: &mut L, d: &mut Doc, mi: usize) {
             d.scene.mesh_names[mi] = n;
         }
     }
-    l.panel(d, "data.vertex_groups", "Vertex Groups", true, &mut |l, d| {
-        let (b, _) = l.list_box(&[], 0, 3);
-        if b != 0 {
-            d.report = "Vertex groups are not available yet".into();
-        }
-    });
-    l.panel(d, "data.shape_keys", "Shape Keys", true, &mut |l, d| {
-        let (b, _) = l.list_box(&[], 0, 3);
-        if b != 0 {
-            d.report = "Shape keys are not available yet".into();
-        }
-    });
+    l.panel(d, "data.vertex_groups", "Vertex Groups", true, &mut |l, d| super::rigpanels::vertex_groups(l, d, o, mi));
+    l.panel(d, "data.shape_keys", "Shape Keys", true, &mut |l, d| super::rigpanels::shape_keys(l, d, o, mi));
     l.panel(d, "data.uv_maps", "UV Maps", true, &mut |l, d| {
         let has_uv = d.scene.meshes[mi].faces.iter().any(|f| !f.uvs.is_empty());
         let rows: Vec<(Icon, String)> = if has_uv { vec![(Icon::Texture, "UVMap".into())] } else { Vec::new() };

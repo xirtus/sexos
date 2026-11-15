@@ -82,10 +82,10 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     // Mode dropdown with its icon.
     let mr = Rect::new(hr.x, y, 124, h);
     if icon_dropdown(ui, mr, if d.mode == Mode::Edit { Icon::EditMode } else { Icon::ObjectMode }, d.mode.label()) {
-        ui.open_menu(mr, "", menus::mode_items());
+        ui.open_menu(mr, "", menus::mode_items(d));
     }
     let mut x = mr.right() + 6;
-    if d.mode == Mode::Edit {
+    if super::rigview::mesh_edit(d) {
         let sm = d.select_mode;
         let r = Rect::new(x, y, 78, h);
         if let Some(i) = icon_row(ui, r, &[(Icon::VertSel, sm == SelectMode::Vertex), (Icon::EdgeSel, sm == SelectMode::Edge), (Icon::FaceSel, sm == SelectMode::Face)]) {
@@ -95,7 +95,15 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     }
     let flags = menus::ViewFlags { toolbar: s.show_toolbar, sidebar: s.show_sidebar };
     let view = move |d: &Doc| menus::view_menu(d, &flags);
-    let menu_end = if d.mode == Mode::Edit {
+    let rig_menus = super::rigview::header_menus(d);
+    let menu_end = if let Some(extra) = &rig_menus {
+        let mut list: Vec<(&str, &dyn Fn(&Doc) -> Vec<MenuItem>)> = vec![("View", &view)];
+        for (t, f) in extra {
+            list.push((t, f));
+        }
+        let end = header_menus(ui, hr, x, &list, d);
+        weight_tool_header(d, ui, Rect::new(end + 12, y, hr.right() - end - 12, h))
+    } else if super::rigview::mesh_edit(d) {
         let list: [(&str, &dyn Fn(&Doc) -> Vec<MenuItem>); 8] = [
             ("View", &view),
             ("Select", &menus::select_menu),
@@ -599,4 +607,28 @@ pub fn nav_gizmo(s: &mut State, d: &Doc, ui: &mut Ui, nav: Rect, r: Rect) {
             }
         }
     }
+}
+
+/// Weight Paint's tool settings in the header: brush, weight, radius,
+/// strength. Returns the x after them.
+fn weight_tool_header(d: &mut Doc, ui: &mut Ui, r: Rect) -> i32 {
+    if d.mode != Mode::WeightPaint || r.w < 420 {
+        return r.x;
+    }
+    let mut x = r.x;
+    let br = Rect::new(x, r.y, 84, r.h);
+    if ui.dropdown(br, d.rig.wp.brush.label()) {
+        ui.open_menu(br, "Brush", super::rigview::weight_brush_items(d));
+    }
+    x += 90;
+    let wp = &mut d.rig.wp;
+    let mut fields: [(&str, &mut f32, f32, &str); 3] = [("Weight", &mut wp.weight, 0.01, ""), ("Radius", &mut wp.radius, 1.0, " px"), ("Strength", &mut wp.strength, 0.01, "")];
+    for (label, v, step, unit) in fields.iter_mut() {
+        let fr = Rect::new(x, r.y, 104, r.h);
+        if ui.number(crate::ui::id(&format!("wp/{label}")), fr, label, v, *step, unit) {
+            **v = if *label == "Radius" { v.clamp(1.0, 500.0) } else { v.clamp(0.0, 1.0) };
+        }
+        x += 108;
+    }
+    x
 }

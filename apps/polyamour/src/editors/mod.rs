@@ -12,6 +12,7 @@ use crate::theme as t;
 use crate::ui::{MenuItem, Op, Ui};
 
 pub mod image;
+pub mod nla;
 pub mod node;
 pub mod outliner;
 pub mod properties;
@@ -31,6 +32,8 @@ pub enum EditorKind {
     Timeline,
     DopeSheet,
     GraphEditor,
+    Drivers,
+    NlaEditor,
     TextEditor,
     PythonConsole,
     Info,
@@ -53,6 +56,8 @@ impl EditorKind {
             EditorKind::Timeline => "Timeline",
             EditorKind::DopeSheet => "Dope Sheet",
             EditorKind::GraphEditor => "Graph Editor",
+            EditorKind::Drivers => "Drivers",
+            EditorKind::NlaEditor => "Nonlinear Animation",
             EditorKind::TextEditor => "Text Editor",
             EditorKind::PythonConsole => "Python Console",
             EditorKind::Info => "Info",
@@ -80,6 +85,8 @@ impl EditorKind {
             item(K::DopeSheet),
             item(K::Timeline),
             item(K::GraphEditor),
+            item(K::Drivers),
+            item(K::NlaEditor),
             MenuItem::Separator,
             MenuItem::Heading("Scripting".into()),
             item(K::TextEditor),
@@ -98,7 +105,7 @@ impl EditorKind {
         use EditorKind as K;
         [
             K::View3D, K::ImageEditor, K::UvEditor, K::ShaderEditor, K::CompositorEditor, K::GeometryNodeEditor, K::Timeline, K::DopeSheet,
-            K::GraphEditor, K::TextEditor, K::PythonConsole, K::Info, K::Outliner, K::Properties, K::FileBrowser, K::Spreadsheet, K::Preferences,
+            K::GraphEditor, K::Drivers, K::NlaEditor, K::TextEditor, K::PythonConsole, K::Info, K::Outliner, K::Properties, K::FileBrowser, K::Spreadsheet, K::Preferences,
         ]
         .into_iter()
         .find(|k| k.label() == s)
@@ -115,6 +122,7 @@ pub enum Editor {
     Outliner(outliner::State),
     Properties(properties::State),
     Timeline(timeline::State),
+    Nla(nla::State),
     Text(text::State),
     Node(node::State),
     Image(image::State),
@@ -128,7 +136,8 @@ impl Editor {
             K::View3D => Editor::View3D(Box::default()),
             K::Outliner => Editor::Outliner(Default::default()),
             K::Properties => Editor::Properties(Default::default()),
-            K::Timeline | K::DopeSheet | K::GraphEditor => Editor::Timeline(timeline::State::new(kind)),
+            K::Timeline | K::DopeSheet | K::GraphEditor | K::Drivers => Editor::Timeline(timeline::State::new(kind)),
+            K::NlaEditor => Editor::Nla(Default::default()),
             K::TextEditor => Editor::Text(Default::default()),
             K::ShaderEditor | K::CompositorEditor | K::GeometryNodeEditor => Editor::Node(node::State::new(kind)),
             K::ImageEditor | K::UvEditor => Editor::Image(image::State::new(kind)),
@@ -141,6 +150,7 @@ impl Editor {
             Editor::Outliner(_) => EditorKind::Outliner,
             Editor::Properties(_) => EditorKind::Properties,
             Editor::Timeline(s) => s.kind,
+            Editor::Nla(_) => EditorKind::NlaEditor,
             Editor::Text(_) => EditorKind::TextEditor,
             Editor::Node(s) => s.kind,
             Editor::Image(s) => s.kind,
@@ -175,6 +185,7 @@ impl Editor {
             Editor::Outliner(s) => outliner::header(s, doc, ui, hr),
             Editor::Properties(s) => properties::header(s, doc, ui, hr),
             Editor::Timeline(s) => timeline::header(s, doc, ui, hr),
+            Editor::Nla(s) => nla::header(s, doc, ui, hr),
             Editor::Text(s) => text::header(s, doc, ui, hr),
             Editor::Node(s) => node::header(s, doc, ui, hr),
             Editor::Image(s) => image::header(s, doc, ui, hr),
@@ -188,6 +199,7 @@ impl Editor {
             Editor::Outliner(s) => outliner::body(s, doc, ui, body),
             Editor::Properties(s) => properties::body(s, doc, ui, body),
             Editor::Timeline(s) => timeline::body(s, doc, ui, body),
+            Editor::Nla(s) => nla::body(s, doc, ui, body),
             Editor::Text(s) => text::body(s, doc, ui, body),
             Editor::Node(s) => node::body(s, doc, ui, body),
             Editor::Image(s) => image::body(s, doc, ui, body),
@@ -205,6 +217,7 @@ impl Editor {
             Editor::Outliner(s) => outliner::hotkey(s, doc, input, body),
             Editor::Properties(s) => properties::hotkey(s, doc, input, body),
             Editor::Timeline(s) => timeline::hotkey(s, doc, input, body),
+            Editor::Nla(s) => nla::hotkey(s, doc, input, body),
             Editor::Text(s) => text::hotkey(s, doc, input, body),
             Editor::Node(s) => node::hotkey(s, doc, input, body),
             Editor::Image(s) => image::hotkey(s, doc, input, body),
@@ -238,7 +251,7 @@ fn body_color(k: EditorKind) -> u32 {
         K::View3D => t::VIEWPORT,
         K::Outliner => t::OUTLINER,
         K::Properties => t::PROPERTIES,
-        K::Timeline | K::DopeSheet | K::GraphEditor => t::TIMELINE,
+        K::Timeline | K::DopeSheet | K::GraphEditor | K::Drivers | K::NlaEditor => t::TIMELINE,
         K::TextEditor | K::PythonConsole | K::Info => t::TEXT_EDITOR,
         K::ShaderEditor | K::CompositorEditor | K::GeometryNodeEditor => t::NODE_BG,
         _ => t::REGION,
@@ -258,6 +271,8 @@ pub fn editor_glyph(k: EditorKind) -> &'static str {
         K::Timeline => "TL",
         K::DopeSheet => "DS",
         K::GraphEditor => "Grf",
+        K::Drivers => "Drv",
+        K::NlaEditor => "NLA",
         K::TextEditor => "Txt",
         K::PythonConsole => "Py",
         K::Info => "i",
