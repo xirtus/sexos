@@ -38,7 +38,7 @@ def main():
  launch=r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)'
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  fetched('/shuttle','/bin/shuttle');fetched('/view','/bin/view');fetched('/pic.png','pic.png')
+  fetched('/shuttle','/bin/shuttle');fetched('/view','/bin/gaze');fetched('/pic.png','pic.png')
   # Shuttle, given pic.png alone, opens it in View: the type picks the program.
   s=len(t());expect('run shuttle @pic.png',r'\[shell.launch.asked\] parent=(\d+) task=(\d+) cookie=1 network=0',240)
   opener=g['wait'](launch,s,60)
@@ -52,7 +52,7 @@ def main():
   time.sleep(3);q.cmd('screendump',{'filename':str(a.out/'launch-done.ppm')});time.sleep(.5)
   close(opener[1],opener[2],opener[3])
   # A grant Shuttle was not given is refused by Files before anything starts.
-  s=len(t());expect('run shuttle -a view',r'\[shuttle.refused\] by=files',240)
+  s=len(t());expect('run shuttle -a gaze',r'\[shuttle.refused\] by=files',240)
   assert '[files.launch.denied]' in t()[s:],'Files did not refuse the grant'
   opener=g['wait'](launch,s,30);close(opener[1],opener[2],opener[3])
   # A run Shuttle started, Shuttle can end; it ended without a status.
@@ -62,7 +62,7 @@ def main():
   g['wait'](r'\[shuttle.done\] status=None',s,90)
   close(opener[1],opener[2],opener[3])
   # A hidden helper runs with no window: framed off every workspace, never tiled or focused.
-  s=len(t());expect('run shuttle -h view @pic.png',r'\[shuttle.started\] row=(\d+) task=(\d+) kill=0 hidden=1',240)
+  s=len(t());expect('run shuttle -h gaze @pic.png',r'\[shuttle.started\] row=(\d+) task=(\d+) kill=0 hidden=1',240)
   child=g['wait'](r'\[shell.launch.placed\] target=(\d+) surface=(\d+) scene=254',s,60)
   g['wait'](r'\[view.shown\] w=\d+ h=\d+',s,120);time.sleep(3)
   log=t()[s:];assert f'[shell.tile.apply] sid={child[2]} ' not in log,'the hidden helper was tiled'

@@ -106,7 +106,7 @@ pub fn parse(desc: &[u8]) -> Option<Layout> {
                     let base = &mut bits[g.id as usize];
                     for k in 0..g.count {
                         let (page, usage) = if let Some((lo, hi)) = usage_range {
-                            let u = (lo + k as u32).min(hi);
+                            let u = lo.saturating_add(k as u32).min(hi);
                             (if lo > 0xFFFF { (lo >> 16) as u16 } else { g.page }, u as u16)
                         } else if n_usages > 0 { usages[(k as usize).min(n_usages - 1)] } else { (g.page, 0) };
                         if out.count < MAX_FIELDS && touchpad_depth.is_some() {
@@ -250,5 +250,13 @@ pub(crate) mod tests {
         for _ in 0..40 { many.extend_from_slice(&[0x81, 0x02]); }
         let l = parse(&many).unwrap();
         assert_eq!(l.count, MAX_FIELDS);
+    }
+
+    #[test]
+    fn usage_range_near_u32_max_does_not_overflow() {
+        // Touch Pad collection; 4-byte Usage Minimum 0xFFFF_FFFE, three 8-bit inputs.
+        let d = [0x05, 0x0D, 0x09, 0x05, 0xA1, 0x01, 0x1B, 0xFE, 0xFF, 0xFF, 0xFF, 0x2B, 0xFF, 0xFF, 0xFF, 0xFF,
+            0x75, 0x08, 0x95, 0x03, 0x81, 0x02, 0xC0];
+        let _ = parse(&d);
     }
 }

@@ -18,9 +18,9 @@
 //! (DONE); arg1, arg2 = the piece's bytes (DATA), or the hash (END).
 
 /// Program -> Shell.
-pub const OP_CLIP: u64 = 0x5E;
+pub const OP_CLIP: u64 = 0x60;
 /// Shell -> program.
-pub const OP_CLIPPED: u64 = 0x5F;
+pub const OP_CLIPPED: u64 = 0x61;
 
 pub const COPY: u8 = 1;
 pub const PASTE: u8 = 2;

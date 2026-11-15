@@ -116,7 +116,7 @@ impl Store {
     }
 }
 
-struct Denim { store: Store, runs: Vec<Run>, scratch: [u8; MAX_PACKED], ins: u64, outs: u64, waiting: Vec<(u32, u64, u64)> }
+struct Denim { store: Store, runs: Vec<Run>, scratch: [u8; MAX_PACKED], ins: u64, faults: u64, outs: u64, waiting: Vec<(u32, u64, u64)> }
 
 impl Denim {
     fn run(&mut self, target: u32) -> Option<&mut Run> { self.runs.iter_mut().find(|r| r.target == target) }
@@ -199,6 +199,7 @@ impl Denim {
         self.store.give(e);
         if status == d::OK {
             self.ins += 1;
+            if token != 0 { self.faults += 1; }
             if self.ins.is_power_of_two() { serial_println!("[denim.in] target={} page={:#x} fault={} ins={}", target, page, (token != 0) as u8, self.ins); }
         }
         true
@@ -223,7 +224,7 @@ pub extern "C" fn _start() -> ! {
         loop { let _ = sex_pdx::sys_wait_self_ticks(64); }
     };
     store.window = window;
-    let mut denim = Denim { store, runs: Vec::new(), scratch: [0; MAX_PACKED], ins: 0, outs: 0, waiting: Vec::new() };
+    let mut denim = Denim { store, runs: Vec::new(), scratch: [0; MAX_PACKED], ins: 0, faults: 0, outs: 0, waiting: Vec::new() };
     let targets: Vec<u32> = sex_pdx::app_catalog::INCARNATIONS.iter()
         .filter(|r| r.app == sex_pdx::app_catalog::App::Program).map(|r| r.target).collect();
     serial_println!("[denim.ready] ok=1 rows={} eager={} scan_ticks={} cold_scans={}", targets.len(), EAGER as u8, SCAN_TICKS, COLD);
@@ -250,8 +251,9 @@ pub extern "C" fn _start() -> ! {
             if denim.outs != shown_out || denim.ins != shown_in {
                 shown_out = denim.outs; shown_in = denim.ins;
                 let s = &denim.store;
-                serial_println!("[denim.round] outs={} ins={} pages_out={} slab_bytes={} store_pages={} saved_pages={} pressure={}",
-                    denim.outs, denim.ins, s.pages_out, s.used, s.grown, s.pages_out.saturating_sub(s.grown), pressure);
+                // `faults`: the pages that came back because the program touched them.
+                serial_println!("[denim.round] outs={} ins={} pages_out={} slab_bytes={} store_pages={} saved_pages={} pressure={} faults={}",
+                    denim.outs, denim.ins, s.pages_out, s.used, s.grown, s.pages_out.saturating_sub(s.grown), pressure, denim.faults);
             }
             next = now + SCAN_TICKS;
         }
