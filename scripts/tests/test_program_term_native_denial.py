@@ -92,7 +92,8 @@ class ExactTicketSourceContract(unittest.TestCase):
    ('is_some_and(|b| holds_launch(&b))','is_some_and(|_| true)'),
    ('if !crate::console_relay::may_prepare(k)','if false'),
    ('sex_pdx::console_relay::plain_args(','unreviewed_args('),
-   ('let relay = if relay_terminal { program } else { None };','let relay = program;'),
+   ('let relay = if r.kind == w::PREPARE && relay_terminal { program } else { None };','let relay = program;'),
+   ('let relay_terminal = r.offset != w::PREPARE_LAUNCH;','let relay_terminal = true;'),
    ('let by = relay;','let by = None;'),
    ('return prepare(fs, r, path, data, owner, relay);','return prepare(fs, r, path, data, owner, None);'),
   ]:

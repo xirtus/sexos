@@ -117,7 +117,7 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
             ('crates/sex-pdx/src/lib.rs','inlateout("rax") SYSCALL_GET_TICKS => ret','inlateout("rax") 99u64 => ret'),
             ('servers/sexnet/src/main.rs','let before=sex_pdx::get_ticks();','let before=0;'),
             ('servers/sexnet/src/main.rs','sex_pdx::sys_wait_self_ticks(2).expect','sex_pdx::sys_wait_self_ticks(1).expect'),
-            ('servers/sexusb/src/main.rs','let quiet = irq && !queued && !usb.changed && !slept && !usb.ether_active();',
+            ('servers/sexusb/src/main.rs','let quiet = irq && !queued && !usb.changed && !slept && !usb.ether_active() && !usb.bt_hid_active();',
              'let quiet = true;'),
         ]
         with tempfile.TemporaryDirectory()as directory:

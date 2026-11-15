@@ -204,6 +204,11 @@ impl OfflineJob {
     pub fn cookie(&self) -> u32 {
         self.job.cookie()
     }
+    /// Qualification observation only: the admitted Files ticket, its nonce and the
+    /// held provider epochs. Holding these confers nothing once this parent retires.
+    pub fn admission(&self) -> (u32, [u8; 16], u64, u64) {
+        (self.info.ticket, self.info.nonce, self.info.files_epoch, self.shell_epoch)
+    }
     pub fn status(&self) -> Status {
         self.job.status()
     }

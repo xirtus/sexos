@@ -733,8 +733,8 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         return w::reply(r.seq, w::OK, binding.args_len as u32);
     }
     // A program's PREPARE is a terminal's (console_relay) unless it says it is a launch.
-    let relay = r.offset != w::PREPARE_LAUNCH;
-    if let (Some(k), w::PREPARE, true) = (program, r.kind, relay) {
+    let relay_terminal = r.offset != w::PREPARE_LAUNCH;
+    if let (Some(k), w::PREPARE, true) = (program, r.kind, relay_terminal) {
         if !unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.is_some_and(|b| holds_launch(&b)) { return w::reply(r.seq, w::DENIED, 0); }
         // A terminal's run: only `/bin/NAME`, with its own words and nothing granted.
         let name = path[..path_len].strip_prefix(sex_pdx::program_store::BIN);
@@ -839,7 +839,8 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         let Some(owner) = current_ticket_owner(caller) else { return w::reply(r.seq, w::DENIED, 0); };
         Some(owner)
     } else { None };
-    let relay = if relay_terminal { program } else { None };
+    // Only a terminal's PREPARE (already checked for its console_relay grant) binds a launcher.
+    let relay = if r.kind == w::PREPARE && relay_terminal { program } else { None };
     let result = run(fs, r, path, data, owner, relay);
     if r.kind == w::STAT && result.is_ok() {
         let word = |i: usize| u64::from_le_bytes(data[i * 8..i * 8 + 8].try_into().unwrap());

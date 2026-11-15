@@ -63,12 +63,12 @@ def denial_sources(root):
    'sex_pdx::app_lifecycle::info(row.lifecycle_slot)==Err(sex_pdx::app_lifecycle::LIVE)' in live),
   ('current live task owner', '(binding.task!=0&&program_live(target,binding.task)).then_some(TicketOwner{target,task:binding.task})' in owner),
   ('grant-specific relay prepare',
-   'letrelay_terminal=program.is_some_and(|k|unsafe{(*core::ptr::addr_of!(BINDINGS))[k]}.is_some_and(|b|holds_launch(&b)));' in front and
-   'iflet(Some(k),w::PREPARE,true)=(program,r.kind,relay_terminal)' in front and
+   'letrelay_terminal=r.offset!=w::PREPARE_LAUNCH;' in front and
+   'iflet(Some(k),w::PREPARE,true)=(program,r.kind,relay_terminal){if!unsafe{(*core::ptr::addr_of!(BINDINGS))[k]}.is_some_and(|b|holds_launch(&b)){returnw::reply(r.seq,w::DENIED,0);}' in front and
    'if!crate::console_relay::may_prepare(k){returnw::reply(r.seq,w::PENDING,0);}' in front and
    'sex_pdx::console_relay::plain_args(' in front and 'PREPARING_FOR' not in body),
   ('explicit owner and relay forwarding',
-   'letowner=ifr.kind==w::PREPARE&&program.is_some(){letSome(owner)=current_ticket_owner(caller)else{returnw::reply(r.seq,w::DENIED,0);};Some(owner)}else{None};letrelay=ifrelay_terminal{program}else{None};letresult=run(fs,r,path,data,owner,relay);' in front and
+   'letowner=ifr.kind==w::PREPARE&&program.is_some(){letSome(owner)=current_ticket_owner(caller)else{returnw::reply(r.seq,w::DENIED,0);};Some(owner)}else{None};letrelay=ifr.kind==w::PREPARE&&relay_terminal{program}else{None};letresult=run(fs,r,path,data,owner,relay);' in front and
    'returnprepare(fs,r,path,data,owner,relay);' in run),
   ('captured exact owner and separate relay',
    'letby=relay;unsafe{PREPARED_OWNER=owner;PREPARED_LAUNCHER=by;}ifletSome(k)=by{crate::console_relay::prepared(k);}' in prepare),

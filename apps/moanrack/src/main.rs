@@ -84,6 +84,119 @@ mod guest {
             sex_pdx::serial_record!("[moanrack.paint] target={} task={} surface={} frame={} width={} height={} x={} y={} w={} h={} hash={:#018x} text_hex={}",app.window.target,app.window.task,sex_pdx::app_catalog::by_target(app.window.target).expect("status subject").surface,app.frames,w,h,view.x,view.y,view.w,view.h,view.hash,encoded);
         }
     }
+    const STALE: &[u8] = b"@/data/moanrack/stale.ticket";
+    /// Crash/restart qualification: admit a hanging helper, wait for its
+    /// authenticated Started, keep the admission where only the next parent run
+    /// can read it, then fault this parent with the helper still live.
+    fn crash_parent(app: &mut App) -> ! {
+        let fail = |why: &str| -> ! {
+            sex_pdx::serial_record!("[moanrack.parent.crash] ok=0 why={}", why);
+            sex_app::launch::exit(2)
+        };
+        let Some(nonce) = nonce() else { fail("entropy") };
+        let hex: alloc::string::String = nonce.iter().map(|b| format!("{b:02x}")).collect();
+        let plugin = format!("@/data/moanrack/{hex}.clap");
+        let input = format!("@/data/moanrack/{hex}.in");
+        let output = format!("@/data/moanrack/{hex}.out");
+        if write(plugin.as_bytes(), HANG).is_err() {
+            fail("write")
+        }
+        let pcm: Vec<[f32; 2]> = (0..1025).map(|n| [0.125, if n % 2 == 0 { 0.5 } else { -0.25 }]).collect();
+        let cookie = 0x5afe;
+        let Ok(mut job) = OfflineJob::start_with(
+            plugin.as_bytes(),
+            input.as_bytes(),
+            output.as_bytes(),
+            nonce,
+            cookie,
+            &pcm,
+            &[],
+            moan_plugin::job::Format::Clap,
+            sex_pdx::get_ticks(),
+        ) else {
+            fail("admission")
+        };
+        let child = loop {
+            job.poll(sex_pdx::get_ticks());
+            if let Some(child) = job.child_identity() {
+                break child;
+            }
+            if job.retired() {
+                fail("retired_before_start")
+            }
+            let _ = app.window.next_within(20);
+        };
+        let (ticket, nonce, files_epoch, shell_epoch) = job.admission();
+        let mut record = Vec::with_capacity(40);
+        record.extend_from_slice(&ticket.to_le_bytes());
+        record.extend_from_slice(&cookie.to_le_bytes());
+        record.extend_from_slice(&nonce);
+        record.extend_from_slice(&files_epoch.to_le_bytes());
+        record.extend_from_slice(&shell_epoch.to_le_bytes());
+        if write(STALE, &record).is_err() {
+            fail("record")
+        }
+        sex_pdx::serial_record!(
+            "[moanrack.parent.crash] ok=1 parent={} task={} ticket={} cookie={} child={} child_task={}",
+            app.window.target,
+            app.window.task,
+            ticket,
+            cookie,
+            child.row,
+            child.task
+        );
+        core::mem::forget(job);
+        unsafe { core::arch::asm!("ud2", options(noreturn)) }
+    }
+    /// A later parent holding the crashed parent's exact ticket, nonce and
+    /// epochs must get nothing: no result, no entry to release, no START.
+    fn stale_probe() -> ! {
+        let mut record = [0u8; 40];
+        if files::read_at(STALE, 0, &mut record).ok() != Some(40) {
+            sex_pdx::serial_record!("[moanrack.stale] ok=0 why=record");
+            sex_app::launch::exit(2)
+        }
+        let _ = files::remove(STALE);
+        let _ = files::sync();
+        let ticket = u32::from_le_bytes(record[0..4].try_into().unwrap());
+        let cookie = u32::from_le_bytes(record[4..8].try_into().unwrap());
+        let nonce: [u8; 16] = record[8..24].try_into().unwrap();
+        let files_epoch = u64::from_le_bytes(record[24..32].try_into().unwrap());
+        let shell_epoch = u64::from_le_bytes(record[32..40].try_into().unwrap());
+        let current = files::restricted::epoch().unwrap_or(0);
+        let result = files::restricted::result(ticket, nonce, files_epoch).is_ok();
+        let cancel = match files::restricted::cancel(ticket, nonce, files_epoch) {
+            Ok(()) => 0,
+            Err(e) => e as u32 + 1,
+        };
+        let start = match sex_pdx::restricted_job::start_words(ticket, cookie, files_epoch, shell_epoch) {
+            Some(w) => sex_pdx::pdx_call(sex_pdx::SLOT_SHELL, sex_pdx::restricted_job::OP_START, w[0], w[1], w[2]).0,
+            None => u64::MAX,
+        };
+        let (mut started, mut refused) = (0u32, 0u32);
+        let until = sex_pdx::get_ticks().saturating_add(3000);
+        while sex_pdx::get_ticks() < until {
+            while let Some(event) = sex_app::launch::poll(cookie) {
+                match event {
+                    sex_app::launch::Event::Started { .. } => started += 1,
+                    sex_app::launch::Event::Refused { .. } => refused += 1,
+                    _ => {}
+                }
+            }
+            sex_pdx::sys_yield();
+        }
+        sex_pdx::serial_record!(
+            "[moanrack.stale] ok=1 ticket={} same_files_epoch={} result={} cancel={} start={:#x} started={} refused={}",
+            ticket,
+            (current == files_epoch) as u8,
+            result as u8,
+            cancel,
+            start,
+            started,
+            refused
+        );
+        sex_app::launch::exit(0)
+    }
     extern "C" fn main() -> ! {
         let mut app = App::open(
             "Moan offline qualification",
@@ -128,6 +241,17 @@ mod guest {
                 super::seed::FRAMES
             );
             sex_app::launch::exit(if ok { 0 } else { 2 })
+        }
+        let flag = |name: &[u8]| {
+            args[..count]
+                .split(|b| b.is_ascii_whitespace())
+                .any(|word| word == name)
+        };
+        if flag(b"--crash-parent") {
+            crash_parent(&mut app)
+        }
+        if flag(b"--stale-probe") {
+            stale_probe()
         }
         let column = app.ui.column(app.ui.root());
         app.ui
