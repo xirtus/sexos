@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""A program starts another program (sex_pdx::launch): Shuttle, given one picture, opens it in View, which gets that file alone; when View is closed Shuttle hears it ended with status 0; a grant Shuttle does not hold is refused by Files; a run Shuttle started can be ended by Shuttle; and a hidden helper run gets no window on screen."""
+"""A program starts another program (sex_pdx::launch): Shuttle, given one picture, opens it in Gaze, which gets that file alone; when Gaze is closed Shuttle hears it ended with status 0; a grant Shuttle does not hold is refused by Files; a run Shuttle started can be ended by Shuttle; and a hidden helper run gets no window on screen."""
 import argparse,http.server,io,os,shutil,threading,time
 from pathlib import Path
 from PIL import Image
 ROOT=Path(__file__).resolve().parents[1]
 img=Image.new('RGB',(300,200),(40,120,200));b=io.BytesIO();img.save(b,'PNG')
-FILES={'/shuttle':(ROOT/'iso_root/programs/shuttle').read_bytes(),'/view':(ROOT/'iso_root/programs/view').read_bytes(),'/pic.png':b.getvalue()}
+FILES={'/shuttle':(ROOT/'iso_root/programs/shuttle').read_bytes(),'/gaze':(ROOT/'iso_root/programs/gaze').read_bytes(),'/pic.png':b.getvalue()}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -38,21 +38,22 @@ def main():
  launch=r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)'
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  fetched('/shuttle','/bin/shuttle');fetched('/view','/bin/view');fetched('/pic.png','pic.png')
-  # Shuttle, given pic.png alone, opens it in View: the type picks the program.
+  fetched('/shuttle','/bin/shuttle');fetched('/gaze','/bin/gaze');fetched('/pic.png','pic.png')
+  # Shuttle, given pic.png alone, opens it in Gaze: the type picks the program.
   s=len(t());expect('run shuttle @pic.png',r'\[shell.launch.asked\] parent=(\d+) task=(\d+) cookie=1 network=0',240)
   opener=g['wait'](launch,s,60)
   m=g['wait'](r'\[shuttle.started\] row=(\d+) task=(\d+) kill=0 hidden=0',s,120)
   g['wait'](r'\[view.shown\] w=\d+ h=\d+',s,120)
+  g['wait'](rf'\[view.ready\] target={m[1]} task={m[2]}\r?\n',s,120)
   child=g['wait'](rf'\[shell.program.launch\] target={m[1]} task={m[2]} surface=(\d+)',s,30)
   log=t()[s:];assert f'[files.program.bound] target={m[1]} task={m[2]}' in log,'the child was not bound'
   time.sleep(2);q.cmd('screendump',{'filename':str(a.out/'launch-shuttle.ppm')});time.sleep(.5)
-  # View ends when closed and says so; Shuttle hears status 0.
+  # Gaze ends when closed and says so; Shuttle hears status 0.
   s2=len(t());close(m[1],m[2],child[1]);g['wait'](r'\[shuttle.done\] status=Some\(0\)',s2,60)
   time.sleep(3);q.cmd('screendump',{'filename':str(a.out/'launch-done.ppm')});time.sleep(.5)
   close(opener[1],opener[2],opener[3])
   # A grant Shuttle was not given is refused by Files before anything starts.
-  s=len(t());expect('run shuttle -a view',r'\[shuttle.refused\] by=files',240)
+  s=len(t());expect('run shuttle -a gaze',r'\[shuttle.refused\] by=files',240)
   assert '[files.launch.denied]' in t()[s:],'Files did not refuse the grant'
   opener=g['wait'](launch,s,30);close(opener[1],opener[2],opener[3])
   # A run Shuttle started, Shuttle can end; it ended without a status.
@@ -62,9 +63,9 @@ def main():
   g['wait'](r'\[shuttle.done\] status=None',s,90)
   close(opener[1],opener[2],opener[3])
   # A hidden helper runs with no window: framed off every workspace, never tiled or focused.
-  s=len(t());expect('run shuttle -h view @pic.png',r'\[shuttle.started\] row=(\d+) task=(\d+) kill=0 hidden=1',240)
-  child=g['wait'](r'\[shell.launch.placed\] target=(\d+) surface=(\d+) scene=254',s,60)
-  g['wait'](r'\[view.shown\] w=\d+ h=\d+',s,120);time.sleep(3)
+  s=len(t());m=expect('run shuttle -h gaze @pic.png',r'\[shuttle.started\] row=(\d+) task=(\d+) kill=0 hidden=1',240)
+  child=g['wait'](rf'\[shell.launch.placed\] target=({m[1]}) surface=(\d+) scene=254',s,60)
+  g['wait'](r'\[view.shown\] w=\d+ h=\d+',s,120);g['wait'](rf'\[view.ready\] target={m[1]} task={m[2]}\r?\n',s,120);time.sleep(3)
   log=t()[s:];assert f'[shell.tile.apply] sid={child[2]} ' not in log,'the hidden helper was tiled'
   assert f'[shell.interact.focus] sid={child[2]}' not in log,'the hidden helper took focus'
   q.cmd('screendump',{'filename':str(a.out/'launch-hidden.ppm')});time.sleep(.5)
