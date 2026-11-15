@@ -163,7 +163,7 @@ HELD_INPUT_FUNCTIONS = {
  'document_view_sender': '2715dd56b62c3c164587b3e2e4dea49ad6e416a73f945718cf5d406c537990bc',
  'focused_clipboard_participant': 'fdc67ea118bfc1237104f056139cb5de45416b595337c18706c935a6faf32a84',
  'clipboard_live': '1a801645af4f7f94acdc55fec353ffe663a01a12968fbddd403686a63648f275',
- 'app_input_poll': 'b3338ee5a3a9fc7cb74951b2bf612791f9aeb052d960e0e78c5c269404164ec2',
+ 'app_input_poll': 'abf76e67e7896ad20509f81b2a08d473343539a8dda7d3f6ce610875f691e9d3',
  'browser_wheel_destination': '66ccbc15c66cbe2bdf13ac916a00e97382c1afd0ae56b222eeb325c2b37fa35f',
  'frame_accepts_input': '6fdf754c25b68e8f13f6d3c71c9ead28b4768d8e5948407e2c9fd638c6e9bd08',
 }

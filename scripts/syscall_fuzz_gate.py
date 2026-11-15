@@ -13,7 +13,7 @@ from install_program import install
 from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
 BUSY_SOURCE_HASHES={
- 'apps/spindle/src/main.rs':'8b3c2481c694ded160d7688853d793fef7b2b611bbd41af7d0375eeb1e26c44a',
+ 'apps/spindle/src/main.rs':'91c090754aaecdf7a0e1b0682acaf0da5462a4fa7b29aad0a659d607df9e9121',
  'apps/spindle/src/session_command.rs':'232b41e559d8ae6fb6809129827327ecae2e5c59c68d2fceced9933e9b4118ab',
 }
 BUSY_TEXT=b'The disk is saving the session for a moment'

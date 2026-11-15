@@ -136,7 +136,7 @@ struct Jot {
 }
 
 /// What a key asked for that needs the window.
-enum Ask { Nothing, Save, SaveAs, Open, Close, Escape }
+enum Ask { Nothing, Save, SaveAs, Open, Close, Escape, Copy, Paste }
 
 impl Jot {
     fn tab(&mut self) -> &mut Tab { &mut self.tabs[self.active] }
@@ -372,6 +372,7 @@ impl Jot {
         let tab = &mut self.tabs[self.active];
         let before = tab.doc.line_of(tab.doc.cursor);
         let len_before = tab.doc.len();
+        let mut then = Ask::Nothing;
         match (ctrl, code, nav) {
             (true, 0x1F, _) => return if shift { Ask::SaveAs } else { Ask::Save },
             (true, 0x18, _) => return Ask::Open,
@@ -385,9 +386,11 @@ impl Jot {
             (true, 0x15, _) => { if tab.doc.redo() { sex_pdx::serial_record!("[jot.redo] depth={} bytes={}", tab.doc.undo_tree().depth(), tab.doc.len()); } else { self.status = "Nothing to redo.".into(); } }
             (true, 0x30, _) => { self.status = if tab.doc.switch_branch() { "Redo now takes the other branch.".into() } else { "No other branch here.".into() }; }
             (true, 0x1E, _) => tab.doc.select_all(),
-            (true, 0x2E, _) => { self.clipboard = tab.doc.selected().to_vec(); self.status = format!("Copied {} bytes.", self.clipboard.len()); }
-            (true, 0x2D, _) => { self.clipboard = tab.doc.cut(); }
-            (true, 0x2F, _) => { let c = self.clipboard.clone(); tab.doc.insert(&c); tab.doc.seal(); }
+            // The system clipboard (Shell's), so other programs and Quil can paste it too;
+            // the copy kept here is for when Shell refuses.
+            (true, 0x2E, _) => { self.clipboard = tab.doc.selected().to_vec(); self.status = format!("Copied {} bytes.", self.clipboard.len()); then = Ask::Copy; }
+            (true, 0x2D, _) => { self.clipboard = tab.doc.cut(); then = Ask::Copy; }
+            (true, 0x2F, _) => return Ask::Paste,
             (true, 0x26, _) => self.numbers = !self.numbers,
             (true, 0x13, _) => {
                 self.wrap = !self.wrap;
@@ -434,7 +437,7 @@ impl Jot {
         // Colouring below the first changed line may differ now.
         let tab = &mut self.tabs[self.active];
         if tab.doc.len() != len_before || ctrl { let from = before.min(tab.doc.line_of(tab.doc.cursor)); tab.hl.invalidate(from.saturating_sub(1)); }
-        Ask::Nothing
+        then
     }
     /// Ctrl+.: the misspelt word at or before the cursor becomes the dictionary's first
     /// suggestion. One undo step.
@@ -847,6 +850,19 @@ extern "C" fn main() -> ! {
                         sex_pdx::serial_record!("[jot.closed] target={} task={}", window.target, window.task);
                         window.close()
                     }
+                }
+                Ask::Copy => {
+                    let copied = core::str::from_utf8(&jot.clipboard).ok().filter(|t| !t.is_empty()).map(|t| sex_app::clipboard::copy(&mut window, t));
+                    sex_pdx::serial_record!("[jot.clip.copy] bytes={} ok={}", jot.clipboard.len(), copied.is_some_and(|r| r.is_ok()) as u8);
+                }
+                Ask::Paste => {
+                    let pasted = sex_app::clipboard::paste(&mut window);
+                    let text = match pasted { Ok(t) => t.as_bytes().to_vec(), Err(_) => jot.clipboard.clone() };
+                    sex_pdx::serial_record!("[jot.clip.paste] bytes={} system={} err={:?}", text.len(), pasted.is_ok() as u8, pasted.err());
+                    let tab = jot.tab();
+                    let from = tab.doc.line_of(tab.doc.cursor);
+                    tab.doc.insert(&text); tab.doc.seal();
+                    tab.hl.invalidate(from.saturating_sub(1));
                 }
                 // Ctrl+E tries to leave its folder, which Files must refuse.
                 Ask::Escape => {
