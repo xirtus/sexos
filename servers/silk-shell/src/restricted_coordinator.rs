@@ -375,13 +375,38 @@ impl Coordinator {
         true
     }
     fn fail(&mut self, p: &mut impl Platform) {
-        if let Some(t) = self.transaction.as_ref() {
+        if let Some(t) = self.transaction.take() {
             if let Some(child) = t.child {
+                // Once a private copy exists, neither an activation failure nor
+                // a successful force_end request proves actual retirement.
+                // Keep cleanup and the exact parent/child relation until the
+                // lifecycle reports retired; only then publish Started/Done.
                 p.kill(child);
+                let slot = self
+                    .live
+                    .iter_mut()
+                    .find(|s| s.is_none())
+                    .expect("reserved cleanup slot");
+                *slot = Some(Live {
+                    parent: t.parent,
+                    child,
+                    ticket: t.ticket,
+                    cookie: t.cookie,
+                    generation: t.reservation.unwrap().generation,
+                    nonce: [0; 2],
+                    shell: t.shell,
+                    epochs: t.epochs,
+                    until: t.job_until,
+                    ready_until: 0,
+                    ready: false,
+                    ready_pending: false,
+                    reported: false,
+                    cancelled: true,
+                });
+            } else {
+                p.refused(t.parent, t.cookie);
             }
-            p.refused(t.parent, t.cookie);
         }
-        self.transaction = None;
     }
     pub fn cancel(
         &mut self,
