@@ -846,7 +846,8 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/sex-calc/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/sex-calc"
-dest_artifact = "iso_root/programs/abacus"
+# The old calculator; Abacus is now the Weft program above, and `sex-calc` runs it.
+dest_artifact = "iso_root/programs/sex-calc"
 
 [[stage]]
 id = "build_calendar"
