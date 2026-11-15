@@ -4,6 +4,7 @@ exclude = ["vendor/vst3-0.3.0", "vendor/com-scrape-types-0.1.1", "vendor/clap-sy
 members = [
     "kernel",
     "crates/denim",
+    "crates/sex-ntp",
     "servers/sexbell",
     "servers/sexacpi",
     "servers/denim",
@@ -184,6 +185,7 @@ members = [
     "crates/sex-uvc",
     "servers/sexuvc",
     "apps/flash",
+    "apps/splicy",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

@@ -68,7 +68,7 @@ impl Slot {
         if let Some(e) = engine { e.open_close(i); }
     }
 }
-pub struct Service { bound: [u32; PROGRAM_ROWS], slots: Vec<Slot>, sockets: Vec<Option<(Identity, u8)>>, resolving: Option<(Identity, u64)>, attached: bool, announced: bool, announced6: bool, tls_used: bool }
+pub struct Service { bound: [u32; PROGRAM_ROWS], slots: Vec<Slot>, sockets: Vec<Option<(Identity, u8)>>, resolving: Option<(Identity, u64)>, attached: bool, announced: bool, announced6: bool, tls_used: bool, pub time: crate::clock_sync::Sync }
 fn address(family: u8, bytes: &[u8]) -> Option<Address> {
     match family {
         w::FAMILY_V4 => Some(Address::V4(bytes.try_into().ok()?)),
@@ -84,10 +84,10 @@ fn program_index(target: u32) -> Option<usize> {
     sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).position(|i| i.target == target)
 }
 impl Service {
-    pub const fn new() -> Self { Self { bound: [0; PROGRAM_ROWS], slots: Vec::new(), sockets: Vec::new(), resolving: None, attached: false, announced: false, announced6: false, tls_used: false } }
+    pub const fn new() -> Self { Self { bound: [0; PROGRAM_ROWS], slots: Vec::new(), sockets: Vec::new(), resolving: None, attached: false, announced: false, announced6: false, tls_used: false, time: crate::clock_sync::Sync::new() } }
     /// The IP stack under the service was replaced (Wi-Fi came up or went down):
     /// flows, sockets and the lease note belonged to the old one. Run-Shell bindings stay.
-    pub fn reset(&mut self) { let bound = self.bound; *self = Self::new(); self.bound = bound; }
+    pub fn reset(&mut self) { self.reset_link() }
     /// A free flow for a new connection or listener (not `except`): one the stack is done
     /// with first, so a connection still finishing is left to finish; then a new one.
     fn free_slot(&mut self, engine: &mut Engine<'static>, except: Option<usize>) -> Option<usize> {
@@ -121,13 +121,31 @@ impl Service {
     /// socket is gone. Programs keep their right to the network for the next link.
     pub fn reset_link(&mut self) {
         let bound = self.bound;
+        let mut time = core::mem::replace(&mut self.time, crate::clock_sync::Sync::new());
+        time.reset();
         *self = Self::new();
         self.bound = bound;
+        self.time = time;
     }
     pub fn busy(&self) -> bool { self.slots.iter().any(|s| s.tls.is_some()) }
     /// Moves encrypted bytes between the flows and their sessions, each turn of the service.
     pub fn pump(&mut self, engine: &mut Engine<'static>) {
         for (i, slot) in self.slots.iter_mut().enumerate() { slot.pump(i, engine); }
+        if self.attached {
+            let sockets = &mut self.sockets;
+            let mut take = |e: &mut Engine<'static>| -> Option<usize> {
+                let k = match sockets.iter().position(|s| s.is_none()) { Some(k) => k, None => {
+                    if sockets.len() >= MAX_SOCKETS || sockets.try_reserve(1).is_err() { return None; }
+                    let k = e.open_add_udp().ok()?; sockets.push(None); k
+                } };
+                sockets[k] = Some((crate::clock_sync::SELF, 0));
+                Some(k)
+            };
+            let mut give = |e: &mut Engine<'static>, k: usize| { e.open_udp_close(k); };
+            self.time.turn(engine, sex_pdx::get_ticks(), &mut self.resolving, &mut take, &mut give);
+            // The socket given back is free again.
+            if matches!(self.time.idle(), true) { for s in self.sockets.iter_mut() { if s.is_some_and(|(o, _)| o == crate::clock_sync::SELF) { *s = None; } } }
+        }
     }
     fn seed_and_time() -> Option<([u8; 32], u32)> {
         let plan = sex_pdx::browser_sources::PLANS[0];
@@ -266,7 +284,8 @@ impl Service {
             }
             w::RESOLVE | w::RESOLVE_ALL => {
                 // One question at a time: another caller's waits until it is answered.
-                if self.resolving.is_some_and(|(o, at)| o != who && now.saturating_sub(at) < RESOLVE_HOLD_TICKS) { return w::reply(seq, w::BUSY, 0); }
+                // sexnet's own question for the time server steps aside for a program's.
+                if self.resolving.is_some_and(|(o, at)| o != who && o != crate::clock_sync::SELF && now.saturating_sub(at) < RESOLVE_HOLD_TICKS) { return w::reply(seq, w::BUSY, 0); }
                 // value 0 asks for the next answer to the question already sent.
                 if value != 0 {
                     self.resolving = Some((who, now));

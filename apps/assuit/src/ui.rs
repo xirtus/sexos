@@ -32,6 +32,8 @@ pub struct Ui {
     pen: Pen,
     /// Where each page sat in the last draw: (top in the stack, left, width, height, scale).
     places: Vec<(i32, i32, i32, i32, f32)>,
+    /// What Ctrl+F is being asked to find, while its prompt is open.
+    find: Option<String>,
 }
 
 const GAP: i32 = 12;
@@ -44,6 +46,7 @@ mod code {
     pub const TAB: u8 = 0x0F;
     pub const ENTER: u8 = 0x1C;
     pub const S: u8 = 0x1F;
+    pub const F: u8 = 0x21;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
 }
@@ -70,7 +73,7 @@ fn key_name(key: Key) -> Option<String> {
 
 impl Ui {
     pub fn new(book: Book, name: String) -> Ui {
-        Ui { book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new() }
+        Ui { book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None }
     }
 
     fn scale(&mut self, page: usize, width: i32) -> f32 {
@@ -156,9 +159,12 @@ impl Ui {
         canvas.fill(0, view_h, w, 1, LINE);
         let pages = self.places.len();
         let page = caret.map_or(0, |c| c.page);
-        let status = if self.message.is_empty() {
-            format!("{}{}   Page {} of {}   Ctrl+S save  Ctrl+B/I/U style  Ctrl+Z undo  Ctrl+=/- zoom",
-                self.name, if self.book.dirty() { " (changed)" } else { "" }, page + 1, pages)
+        let status = if let Some(find) = &self.find {
+            let said = if self.message.is_empty() { "Enter finds the next, Esc closes" } else { &self.message };
+            format!("Find: {find}_   {said}")
+        } else if self.message.is_empty() {
+            format!("{}{}   Page {} of {}   {} words   Ctrl+S save  Ctrl+F find  Ctrl+C/X/V copy  Ctrl+B/I/U style  Ctrl+Z undo  Ctrl+=/- zoom",
+                self.name, if self.book.dirty() { " (changed)" } else { "" }, page + 1, pages, self.book.words())
         } else {
             self.message.clone()
         };
@@ -187,10 +193,12 @@ impl Ui {
 
     /// One key: Assuit's own (save, zoom), then WordCraft's shortcut, then typed text.
     fn key(&mut self, key: Key) {
+        if self.find.is_some() { return self.find_key(key); }
         self.message.clear();
         if key.control {
             match (key.code, sex_app::typed(Key { control: false, ..key })) {
                 (code::S, _) => return self.save(),
+                (code::F, _) if !key.shift => { self.find = Some(String::new()); return; }
                 (_, Some(b'=' | b'+')) => { self.zoom = (self.zoom * 1.25).min(4.0); self.invalidate(); return; }
                 (_, Some(b'-')) => { self.zoom = (self.zoom / 1.25).max(0.25); self.invalidate(); return; }
                 (_, Some(b'0')) => { self.zoom = 1.0; self.invalidate(); return; }
@@ -212,6 +220,30 @@ impl Ui {
         if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) {
             let mut s = [0u8; 4];
             if self.book.type_text(ch.encode_utf8(&mut s)).is_ok() { self.invalidate(); }
+        }
+    }
+
+    /// A key while the find prompt is open: Enter selects the next match.
+    fn find_key(&mut self, key: Key) {
+        let Some(find) = &mut self.find else { return };
+        match key.code {
+            code::ESC => self.find = None,
+            code::BACKSPACE => { find.pop(); self.message.clear(); }
+            code::ENTER if !find.is_empty() => {
+                let what = find.clone();
+                match self.book.find_next(&what) {
+                    Ok((at, count)) => {
+                        sex_std::record(&format!("[assuit.find] what={what} match={at} of={count}"));
+                        self.message = format!("\"{what}\": match {at} of {count}");
+                    }
+                    Err(e) => {
+                        sex_std::record(&format!("[assuit.find] what={what} none"));
+                        self.message = e;
+                    }
+                }
+                // The prompt stays open: Enter again goes on to the next match.
+            }
+            _ => if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { find.push(ch); self.message.clear(); },
         }
     }
 

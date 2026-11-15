@@ -5181,6 +5181,17 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   `MOAN_FINAL_REGRESSION_2026_11_15.json`. Stronger absolute metadata fence is
   separately qualified from the earlier complete semantic pass. 14 focus/9 input
   regressions pass; no app/kernel/toolkit change from checker repairs.
+## B5: network time by SNTP (2026-11-14)
+
+- The clock comes right from the network. Once the open side is up, sexnet asks pool.ntp.org over SNTP, then again every hour, and sooner after a failure (1 min, doubling).
+- The reply is checked by `crates/sex-ntp`, a no_std codec licensed GPL-2.0-or-later OR MIT, with host tests. A reply must echo our random transmit stamp, come from a synchronized server, and arrive within 5 s. A kiss-o'-death is told apart.
+- **ABI:** syscall 76 gains `civil::SET` (`rdi = 1`, `rsi = ms`). Only the time keeper may call it, which is sexnet, recorded at boot. The kernel never writes the CMOS; later civil readings are offset.
+- New `sex_pdx::network_time` (op 0x2E9):
+  - Shell turns network time on or off from `time.network_time`, or asks for a sync now.
+  - Anyone may read the status: state, last step, and minutes since the sync.
+- sexnet's own name lookup steps aside for programs' lookups.
+- Gate `scripts/network_time_gate.py`: QEMU's RTC starts in March 2024. The IPv6 peer, which now also answers SNTP and `pool.ntp.org`, gives the host's time. Civil time lands 26 ms from the host's.
+- Not yet: TLS certificate checks still use the CMOS reading, and there is no Settings "Sync now" button or status line.
 ## G-20: Fuzz round 3 (2026-11-14)
 - Added 5 `cargo-fuzz` ASan+libFuzzer targets (`fuzz_spreadeagle_xlsx_ods`, `fuzz_assuit_docx`, `fuzz_bodice_epub`, `fuzz_gossip_feed`, `fuzz_swingers_bencode`) with seed corpora and smoke gate coverage (`18/18` targets passing in `scripts/fuzz_smoke_host_gate.sh`).
 - Executed >5.35M ASan+libFuzzer inputs across raw and structured ZIP/XML/bencode payloads; uncovered and filed Issues #301 (`sex-xml` / `Gossip` unbounded nesting stack overflow) and #302 (`sex-ebook` / `Bodice` EPUB `<spine>` amplification DoS) with committed reproducers under `fuzz/repros/round3/` without modifying target crates.

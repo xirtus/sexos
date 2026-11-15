@@ -15,22 +15,22 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 # deadline reference; USB quiet only narrows (also requires no Bluetooth HID traffic).
 APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',),
 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
-'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550',),
+'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e',),
 'kernel/src/scheduler.rs': ('0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',),
  'kernel/src/self_wait.rs': ('0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf',),
  'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
  'kernel/src/smp.rs': ('bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
  'kernel/src/interrupts.rs': ('c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
                               'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d'),
- 'kernel/src/syscalls/mod.rs': ('aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0',),
+ 'kernel/src/syscalls/mod.rs': ('aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
  'kernel/src/program_workers.rs': ('6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',),
  'crates/sex-pdx/src/lib.rs': ('8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde',
                                'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
-                               'c2895d4991c2d48d099daee3e6090063b3288f77c0ad5e9a75201c903f95c984', 'ef6e695c7535ac077e8c4adef7ded6d79425210a1fd77005940be7f823cab40a'),
+                               'c2895d4991c2d48d099daee3e6090063b3288f77c0ad5e9a75201c903f95c984', 'ef6e695c7535ac077e8c4adef7ded6d79425210a1fd77005940be7f823cab40a', 'cee8e1525fa104c2c14f398b4eee80f4f63cd0f3f06602310cdf421dc15009c1',),
  # Reviewed restricted-provider intake/polling; the exact Net2 envelope and
  # deadline owners are unchanged. See RESTRICTED_TIMER_SOURCE_REVIEW_2026_11_15.
  'servers/sexnet/src/main.rs': ('00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725',
-                              'd7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d'),
+                              'd7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d', 'fcf8299b6ce8b8acdd0bc005507036087d5569664c08d63da001dc9e694c7253',),
  'servers/sexusb/src/main.rs': ('3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81',
                                 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec')}
 
@@ -42,7 +42,7 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
 # c209 raw-master only; no speculative combined privacy/kernel cohort.
-APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4')
+APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -164,7 +164,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
  'kernel/src/cpu_account.rs': 'c2e3f65a5aa411d2872d34f87ddfb9f9d9e0f56b41e3d1eeaa7d03bb1d4777b8',
  'kernel/src/core_local.rs': '62ece205111acc3deba4a41854a9ed632ff99742a54283bce094d1295025a300',
- 'kernel/src/app_resources.rs': 'e1cd3ae3b0ff61504303d09901d2334928d63f00a29b4481baf3e6766de1ac3c',
+ 'kernel/src/app_resources.rs': '1c4de7fca3f3fc4cc6ade73eecec83c269f800a0d520069b2201466d15c761a0',
  'kernel/src/service_restart.rs': 'c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e',
  'kernel/src/crash_log.rs': '4a6a0f5312fdbec23efa0d5497b820105ba244c35cc878f27db04ba98cedc3ae',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}

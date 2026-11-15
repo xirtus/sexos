@@ -2,6 +2,7 @@
 extern crate alloc;
 extern crate self as sex_app;
 extern crate self as sex_pdx;
+#[macro_export] macro_rules! serial_record {($($t:tt)*)=>{{let _=format_args!($($t)*);}}}
 pub use moan_plugin::job;
 #[path = "../../sex-pdx/src/restricted_helper.rs"]
 pub mod restricted_helper;

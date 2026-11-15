@@ -121,8 +121,12 @@ jobs:
       run: cargo test --locked -p sex-ime
     - name: Denim page compression (compressed RAM codec)
       run: cargo test --locked -p denim
+    - name: SNTP client codec (network time)
+      run: cargo test --locked -p sex-ntp
     - name: Splicy editing core (timeline, edit by transcript, suggestions, render plan, OTIO)
       run: cargo test --locked -p sex-splice
+    - name: Splicy window (delete a sentence on screen, its frames and sound are gone)
+      run: bash scripts/splicy_host_gate.sh
     - name: Splicy export (WebM VP9+Opus, MP4 H.264+AAC, MP4 AV1+Opus) through system FFmpeg
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
@@ -269,6 +273,8 @@ jobs:
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
       run: python3 scripts/program_ipv6_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipv6"
+    - name: Network time (a clock starting in 2024 comes right by SNTP)
+      run: python3 scripts/network_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/network-time"
     - name: ssh program logs in to OpenSSH on the host
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server

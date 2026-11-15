@@ -15,8 +15,9 @@
 * Ctrl+Shift+E on A3 (Fun) filters the region to that row (the others read `~`);
   Ctrl+Shift+L turns the filter off and every row shows again.
 * Ctrl+Shift+F on B2 freezes the header row and the label column; Ctrl+S saves.
-* A third `run spreadeagle` finds the chart and the frozen panes kept; Ctrl+Page Down
-  shows the second sheet.
+* A third `run spreadeagle` finds the chart and the frozen panes kept. Ctrl+F finds "rent"
+  at A4; Ctrl+C copies it and Ctrl+V pastes it into A8; Ctrl+Z takes the paste back.
+  Ctrl+Page Down shows the second sheet.
 
 No kernel panic, page fault or std abort anywhere in the record."""
 import argparse,os,re,shutil,time
@@ -91,6 +92,17 @@ def main():
   close(o)
   s=len(t());o=opened(r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|')
   g['wait'](r'\[spreadeagle\.view\] charts=1 frozen=1,1\n',s,60)
+  # Find, copy, paste, undo.
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80});time.sleep(.5)
+  s=len(t());type_line('rent');q.key('ret')
+  g['wait'](r'\[spreadeagle\.find\] what=rent sheet=Budget cell=A4\n',s,120)
+  q.key('esc');time.sleep(.3)
+  g['chord']('ctrl','c',r'\[spreadeagle\.command\] edit\.copy\n')
+  for _ in range(4):q.key('down');time.sleep(.2)
+  s=len(t());g['chord']('ctrl','v',r'\[spreadeagle\.paste\] at=A8\n')
+  column('A',r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|Rent',s)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-paste.ppm')})
+  s=len(t());g['chord']('ctrl','z',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|Food\|Fun\|Rent\|Total\|Per year\|\|\n')
   s=len(t());g['chord']('ctrl','pgdn',r'\[spreadeagle\.column\] sheet=Notes col=A text=Welcome to Spreadeagle, the SexOS spreadsheet\.\|')
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
