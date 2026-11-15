@@ -9,6 +9,7 @@ pub mod vfs;
 pub mod spindle_history;
 mod spindle_probe;
 mod program_store;
+mod restricted_image;
 mod fs_service;
 mod config_store;
 mod password_store;

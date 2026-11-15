@@ -16,6 +16,7 @@ mod sexobject;
 mod spindle_history;
 mod spindle_probe;
 mod program_store;
+mod restricted_image;
 mod fs_service;
 mod recording_role;
 mod recording_image;

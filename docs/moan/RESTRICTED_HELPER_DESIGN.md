@@ -1,8 +1,10 @@
-# Restricted helper: design for review, not implemented
+# Restricted helper: reviewed design and partial foundation
 
 Inventory inspected at c84dc5f8 (plus the separate8b070e96 exit predicate), not a
 new kernel grant proposal. Current offline jobs prove ordinary crash containment.
-No restriction below is claimed to exist until implemented and guest-tested.
+The compiled helper digest and central staging lease are implemented as a foundation.
+No public restricted admission or five-provider policy handshake is active yet;
+no hostile-plugin containment is claimed.
 
 ## Existing entitlement inventory
 
@@ -52,18 +54,36 @@ source-authenticated policy commands, not a new generic delegation protocol.
    real filesystem resolver: reject dot segments, repeated separators, NUL, path
    aliases and input/output identity collisions. No child argument can mint this
    policy. Store an immutable single-use ticket bound to exact parent run and job.
-2. Shell consumes that ticket once, refuses RUN_NETWORK and reserves a free,
-   already-retired row. It **quarantines the entire target row before activation**.
-   Files, Display, Bell and Net each ACK quarantine for the same launch generation.
-   Missing/foreign/duplicate/stale ACK, queue full, deadline or peer restart cancels
-   launch before the kernel activation. Native code cannot execute before every
-   provider has a deny-by-default row fence. Existing parent grant does not change.
-3. Only after quarantine ACKs does Shell use existing activation/record machinery.
-   Kernel then establishes the actual new task. Shell queries its authenticated
-   custody and sends an exact target+task+parent+cookie+nonce/generation binding.
-   Until all exact-task ACKs, the row remains fully denied. A task guessed by user
-   payload cannot unquarantine it. Trusted bootstrap may poll read-only readiness;
-   plugin entry is deferred until the same binding is ready everywhere.
+2. Shell consumes the ticket once, refuses RUN_NETWORK and reserves a retired
+   row. Quarantine all providers before staging. Files derives the approved
+   SHA-256 and length at build time from exactly `iso_root/programs/moanplug`,
+   built and scanner-qualified before Files. Missing/invalid guest-build input
+   fails the build. Host models embed an inadmissible zero-length pin. Neither a
+   parent digest, filename nor the packed-store FNV grants trust. The canonical
+   binding must record this generated input and the resulting Files image.
+3. Files hashes the actual staging-region bytes against that compiled pin and
+   holds a central lease covering **both** ordinary and unbound image loaders.
+   Shell fences the Files peer epoch around synchronous `load_program` kind3,
+   which copies staging bytes into the kernel's private image snapshot. Only an
+   exact lease/epoch completion releases the writer fence. The returned exact
+   task remains dormant: fresh rows need explicit activation; reused rows need
+   an explicit subsequent rebirth commit. Hold that commit while Files, Display,
+   Bell and Net ACK the same target/task/parent/nonce/cookie/generation, and
+   Shell records its own policy. Missing, stale, duplicate or foreign ACK,
+   deadline, admission failure or restart never permits activation.
+
+   Existing `force_end` deliberately does nothing while `rebirthing` is true.
+   There is no observed dormant-image abort/unload API. A failed precommit row
+   must therefore stay quarantined/dormant, potentially unavailable until reboot;
+   do not activate an uncertain image merely to reclaim the slot. This is a
+   bounded availability limitation, not successful cleanup or a new kernel API.
+
+   Permanent Files/Net/sound/text/pixel buffers are outside the private-image
+   retirement wipe. Providers must stop stale operations and clear their writable
+   regions before ACK. Display's region view is read-only: the cryptographically
+   verified helper bootstrap must erase its own text/pixel buffers before **any**
+   native plugin entry, then complete an authenticated ready challenge. Server
+   restrictions continue to hold if plugin code bypasses its own bootstrap later.
 4. Files allows only exact new-run plugin/input reads and output create/write,
    offset+length/file/total byte caps, truncate only within budget, and completion
    sync. No relative own folder or inherited @ prefix is ambient authority. No
@@ -105,3 +125,21 @@ Confidentiality/integrity and crash containment are separate from DoS. Existing
 self memory growth, workers and serial remain callable by native code. No hard
 CPU/memory/disk/global resource sandbox is claimed without independent mechanisms
 and measured limits. Offline timeout is recovery policy, not hostile containment.
+
+## Trusted-image source choice
+
+BOOT cap101 is an immutable read-only install-image view, but the present FAT
+image does not include `programs/moanplug`, and installed boot configuration
+removes the boot.img module. It is not used as an alternate trust anchor. The
+acyclic compiled digest works for installed boots: build/scan helper, stage its
+exact ELF, derive Files digest, then build Files. There is no absent-record or
+build-input fallback to an unrestricted helper. Build provenance must preserve
+both helper and Files hashes; hashing working-tree helper source is insufficient.
+
+## Live-transport scope
+
+Offline processing is not a live insert. A proposed 256-frame/two-block budget
+(5.33/10.67ms at48kHz) concerns plugin process/transport only. Existing Bell/device
+in-flight buffering can keep sound energetic for about0.383s after Stop ACK in
+actual workstation evidence. End-to-end monitoring needs separate UI, Bell and
+device queue measurements/reduction plus CPU/latency/backpressure qualification.

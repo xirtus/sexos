@@ -5152,6 +5152,7 @@ dependencies = [
  "sex-rt",
  "sex-volumes",
  "sexfs",
+ "sha2 0.10.9",
  "spin",
 ]
 
