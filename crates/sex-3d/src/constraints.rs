@@ -1527,6 +1527,9 @@ impl Scene {
         let Some(o) = self.objects.get(idx) else { return Vec::new() };
         let ObjectData::Armature(ai) = o.data else { return Vec::new() };
         let Some(arm) = self.armatures.get(ai) else { return Vec::new() };
+        if arm.rest_position {
+            return arm.rest_matrices();
+        }
         if depth >= Self::MAX_EVAL_DEPTH {
             return crate::armature::simple_pose(arm, &o.pose);
         }

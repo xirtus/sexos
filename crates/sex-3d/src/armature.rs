@@ -145,6 +145,9 @@ pub struct Armature {
     pub bones: Vec<Bone>,
     /// Bone collection names, in order.
     pub collections: Vec<String>,
+    /// Blender's Rest Position toggle (`pose_position == 'REST'`): the
+    /// armature shows and deforms with its rest pose, ignoring the pose.
+    pub rest_position: bool,
 }
 
 /// A bone's data relative to its parent, as Blender stores it in `Bone`.
