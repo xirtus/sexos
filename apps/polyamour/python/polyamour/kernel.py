@@ -248,7 +248,7 @@ class Kernel:
         return {'id': menu_id, 'label': getattr(cls, 'bl_label', ''), 'layout': inst.layout.to_json()}
 
     def panels(self):
-        from . import rna
+        from . import app, rna
         out = []
         for pid, cls in rna.panels.items():
             out.append({'id': pid, 'label': cls.bl_label, 'space': cls.bl_space_type, 'region': cls.bl_region_type,
@@ -266,7 +266,11 @@ class Kernel:
             if isinstance(cls, type) and cls.__dict__.get('_extra_draw') and name not in extended:
                 extended.append(name)
         return {'panels': out, 'operators': ops, 'menus': menus, 'extended_menus': sorted(extended),
-                'keymaps': [list(k[:5]) + [k[5]] for k in rna.keymaps]}
+                'keymaps': [list(k[:5]) + [k[5]] for k in rna.keymaps],
+                # Handler lists with entries and pending timers, so the host
+                # only calls in when something listens.
+                'handlers': {n: len(getattr(app.handlers, n)) for n in app.handlers._names if getattr(app.handlers, n)},
+                'timers': len(app.timers._t)}
 
     def set_prop(self, panel_id, ref, value):
         refs = self.drawn.get(panel_id)
@@ -338,6 +342,9 @@ class Kernel:
             return True
         cid, kind = toks[1][1], toks[2][1]
         args = [t[1] for t in toks[3:]]
+        # The host may have changed the scene since the last call (undo, a
+        # failed call rolled back, the user's own edits): read afresh.
+        self.channel.invalidate()
         gen0 = self.channel.generation
         result = None
         error = None

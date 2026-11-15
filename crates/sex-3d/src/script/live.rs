@@ -37,6 +37,8 @@
 //! SexOS `std::process` has no pipes yet, so [`Kernel::spawn`] fails with
 //! `Unsupported` there and Polyamour falls back to the one-way batch path.
 use super::{quote, tokenize, Scene, ScriptError, Session};
+/// The JSON values calls answer with, for callers without their own copy.
+pub use serde_json as json;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -453,6 +455,23 @@ pub fn batch_command(cfg: &KernelConfig, script: &std::path::Path, ops: &std::pa
     let mut cmd = Command::new(&cfg.program);
     cmd.arg("-I").arg("-c").arg(batch_boot(&cfg.paths)).arg(ops).arg(snapshot).arg(script);
     cmd
+}
+
+/// What the script printed during a batch run. It travels in the command file
+/// as comment lines (`#> TEXT` standard output, `#! TEXT` standard error,
+/// TEXT quoted as one token), which `script::run` skips.
+pub fn batch_output(ops: &str) -> Vec<Printed> {
+    let mut out = Vec::new();
+    for line in ops.lines() {
+        let (err, rest) = match (line.strip_prefix("#> "), line.strip_prefix("#! ")) {
+            (Some(r), _) => (false, r),
+            (_, Some(r)) => (true, r),
+            _ => continue,
+        };
+        let text = tokenize(rest).ok().and_then(|t| t.into_iter().next()).map(|t| t.text).unwrap_or_default();
+        out.push(if err { Printed::Err(text) } else { Printed::Out(text) });
+    }
+    out
 }
 
 /// Apply what a batch run wrote, all or nothing (`script::run`). The stream

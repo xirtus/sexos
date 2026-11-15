@@ -371,6 +371,14 @@ class BatchChannel:
             previous(kind, value, tb)
         sys.excepthook = hook
 
+    def comment(self, tag, text):
+        """A comment line in the stream (printed text in a batch run)."""
+        if self._closed:
+            return
+        if self._out is None:
+            self._open()
+        self._out.write('%s %s\n' % (tag, quote(text) if text else '""'))
+
     def handle(self):
         self._next_handle += 1
         return Raw('$%d' % self._next_handle)
@@ -451,6 +459,11 @@ def run_batch(ops, snapshot, script, args=()):
         except (OSError, ValueError):
             pass
     channel = BatchChannel(path=ops, snapshot=snap)
+    # What the script prints rides in the command file as comment lines, so
+    # it reaches Polyamour where programs have no pipes (SexOS).
+    out, err = sys.stdout, sys.stderr
+    sys.stdout = _BatchPrinter(channel, '#>')
+    sys.stderr = _BatchPrinter(channel, '#!')
     sys.argv = [script] + list(args)
     folder = os.path.dirname(os.path.abspath(script))
     if folder not in sys.path:
@@ -467,7 +480,34 @@ def run_batch(ops, snapshot, script, args=()):
                 line = fr.lineno
         traceback.print_exc()
         channel._failure = ('line %d: ' % line if line else '') + '%s: %s' % (type(e).__name__, e)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.stdout, sys.stderr = out, err
     channel.close()
+
+
+class _BatchPrinter:
+    """A text stream writing whole lines as `#> "text"` comments."""
+
+    def __init__(self, channel, tag):
+        self._c = channel
+        self._tag = tag
+        self._buf = ''
+
+    def write(self, s):
+        self._buf += str(s)
+        while '\n' in self._buf:
+            line, self._buf = self._buf.split('\n', 1)
+            self._c.comment(self._tag, line)
+        return len(s)
+
+    def flush(self):
+        if self._buf:
+            self._c.comment(self._tag, self._buf)
+            self._buf = ''
+
+    def isatty(self):
+        return False
 
 
 def get():

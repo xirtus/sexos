@@ -535,9 +535,17 @@ fn run_python(py: &str, script: &Path, scene: &mut Scene) -> Result<RunReport, S
     std::fs::write(&snap, live::batch_snapshot(scene)).unwrap();
     let mut cfg = live::KernelConfig::host();
     cfg.program = py.to_string();
-    let out = live::batch_command(&cfg, script, &ops, &snap).output().unwrap();
-    let printed = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+    let out = live::batch_command(&cfg, script, &ops, &snap).stdout(std::process::Stdio::null()).output().unwrap();
     let text = std::fs::read_to_string(&ops).unwrap_or_default();
+    // What the script printed comes back in the command file (no pipes on SexOS).
+    let mut printed: String = live::batch_output(&text)
+        .into_iter()
+        .map(|p| match p {
+            live::Printed::Out(s) | live::Printed::Err(s) => s + "\n",
+        })
+        .collect();
+    printed += &String::from_utf8_lossy(&out.stdout);
+    printed += &String::from_utf8_lossy(&out.stderr);
     let r = live::batch_apply(scene, &text);
     if r.is_ok() {
         assert!(out.status.success(), "python failed:\n{printed}");
