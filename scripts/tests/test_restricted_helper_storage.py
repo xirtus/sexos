@@ -137,6 +137,9 @@ fn ready(job:&mut Job)->Vec<u8>{let words=|h:[u8;32]|core::array::from_fn(|i|u64
  let p2=wire::Prepare{paths:[b"@/plugin",b"@/input",b"@/renders/second"],..p};assert_eq!(p2.encode(&mut input),Some(n));for i in 0..n{unsafe{core::ptr::write_volatile((core::ptr::addr_of_mut!(REGION)as *mut u8).add(fs::PATH_BYTES+i),input[i])}}
  FULL.store(true,Ordering::SeqCst);assert!(native_io::message(fs::OP,child,child_request(9,fs::READ,b"@/plugin",15)));native_io::poll();let sent=SENDS.load(Ordering::SeqCst);JOB_LIVE.store(false,Ordering::SeqCst);FULL.store(false,Ordering::SeqCst);native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),sent);assert!(native_io::retire(child));assert_eq!(SCRUBS.load(Ordering::SeqCst),1);
  assert!(native_io::message(fs::OP,actor,req(2)));native_io::poll();assert_eq!(fs::decode_reply(LAST.load(Ordering::SeqCst)),Some((2,fs::OK,2)));
+ // A consumed proof from job1 must not block the next claimed job until timeout.
+ assert!(native_io::message(wire::OP_CLAIM,shell,[2,actor.word(),9]));native_io::poll();assert_eq!(LAST.load(Ordering::SeqCst),0xd1<<56|2<<32);
+
  // Capacity must fail without overwriting either accepted immutable job.
  assert!(native_io::message(fs::OP,actor,req(3)));FULL.store(true,Ordering::SeqCst);native_io::poll();let before=SENDS.load(Ordering::SeqCst);
  TASK.store(100,Ordering::SeqCst);FULL.store(false,Ordering::SeqCst);native_io::poll();assert_eq!(SENDS.load(Ordering::SeqCst),before);
