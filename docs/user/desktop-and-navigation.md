@@ -98,6 +98,7 @@ Silk captures the **Super** key (Windows/Command key) exclusively for desktop ma
 | `Super+N` | **Bell Drawer** | Open the notification center history pane. |
 | `Super+Shift+N` | **Night Light** | Cycle screen color temperature (Off → Low → Medium → High). |
 | `Super+B` | **Wallpaper** | Cycle through built-in high-definition desktop wallpapers. |
+| `Super+Shift+B` | **Bluetooth** | Open the Bluetooth panel: scan, pair (Enter), forget (Delete), and confirm a pairing number (Y/N). |
 | `Super+Ctrl+Space` | **Keyboard Layout** | Switch active keymap layout (US, Dvorak, Colemak, Neo). |
 | `Alt+Tab` | **Window Switcher** | Open fast card switcher showing live thumbnail previews. |
 | `Alt+=` / `Alt+-` | **Zoom Text** | Increase or decrease text scaling in the focused window. |
