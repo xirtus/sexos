@@ -17,6 +17,8 @@
 * Ctrl+Shift+F on B2 freezes the header row and the label column; Ctrl+S saves.
 * A third `run spreadeagle` finds the chart and the frozen panes kept. Ctrl+F finds "rent"
   at A4; Ctrl+C copies it and Ctrl+V pastes it into A8; Ctrl+Z takes the paste back.
+  Ctrl+H replaces "food" with "meals"; Ctrl+Shift+4 shows B2:B4 as currency; dragging
+  column A's header edge widens it.
   Ctrl+Page Down shows the second sheet.
 
 No kernel panic, page fault or std abort anywhere in the record."""
@@ -25,6 +27,7 @@ from pathlib import Path
 from install_program import install
 os.environ.setdefault('SEXOS_GATE_BOUND','1500')
 from quil_autosave_gate import boot
+from program_gate_geometry import current_tile
 ROOT=Path(__file__).resolve().parents[1]
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 COL_A=r'Item\|Rent\|Food\|Fun\|Total\|Per year\|\|'
@@ -55,7 +58,7 @@ def main():
   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]})
   return g['wait'](pattern,s,120)
  def shift(k):
-  q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':k}],'hold-time':80});time.sleep(.3)
+  q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('shift',k)),(False,(k,'shift')))for x in ks]});time.sleep(.3)
  def close(o):
   s=len(t());q.key('f11');g['wait'](r'\[spreadeagle\.closed\]\n',s,120)
   g['wait'](rf'\[app\.private\.retired\] target={o[1]} task={o[2]} ',s,180)
@@ -103,6 +106,26 @@ def main():
   column('A',r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|Rent',s)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-paste.ppm')})
   s=len(t());g['chord']('ctrl','z',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|Food\|Fun\|Rent\|Total\|Per year\|\|\n')
+  # Replace all, a number format, a wider column.
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'h'}],'hold-time':80});time.sleep(.5)
+  s=len(t());type_line('food');q.key('ret');type_line('meals');q.key('ret')
+  g['wait'](r'\[spreadeagle\.replace\] what=food with=meals cells=1\n',s,120)
+  column('A',r'Item\|meals\|Fun\|Rent\|Total\|Per year\|\|',s)
+  q.key('esc');time.sleep(.3)
+  q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('ctrl','home')),(False,('home','ctrl')))for x in ks]});time.sleep(.5)
+  q.key('right');time.sleep(.3);q.key('down');time.sleep(.3)
+  for k in('down','down'):shift(k)
+  ctrl_shift('4',r'\[spreadeagle\.column\] sheet=Budget col=B text=Cost\|\$300\.00 ?\|\$150\.00 ?\|\$40\.00 ?\|490\|5880\|\|\n')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-currency.ppm')})
+  wa=int(re.findall(r'\[spreadeagle\.columns\] A=(\d+) B=\d+\n',t())[-1])
+  rw,rh=map(int,a.resolution.split('x'));tile=current_tile(t(),SURFACE[int(o[1])])
+  def at(x,y):q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round((tile[0]+8+x)*32767/(rw-1))}},{'type':'abs','data':{'axis':'y','value':round((tile[1]+36+y)*32767/(rh-1))}}]});time.sleep(.12)
+  def btn(down):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.12)
+  s=len(t());at(48+wa-1,41);btn(True)
+  for dx in range(10,70,10):at(48+wa-1+dx,41)
+  btn(False)
+  wd=g['wait'](r'\[spreadeagle\.width\] col=A width=(\d+)\n',s,60)
+  assert int(wd[1])>wa+30,(wa,wd[0])
   s=len(t());g['chord']('ctrl','pgdn',r'\[spreadeagle\.column\] sheet=Notes col=A text=Welcome to Spreadeagle, the SexOS spreadsheet\.\|')
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
