@@ -94,8 +94,8 @@ try:
  selected=c.command(surface,'ctrl','shift','r');c.q.key('home');g['wait'](r'\[moan.selection\] track=0 ',selected,120)
  start=c.command(surface,'ctrl','t');m=g['wait'](r'\[moan.timeline\] x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) start=0 span=192000',start,120);tile,size=viewport(g,surface,start);ox,oy=origin(tile,size);tx,ty,tw,th=map(int,m.groups());assert th==188
  def arrange_pixels(width,height,pixels):
-  for row,colour in enumerate((0x284c43,0x4b345e,0x5a402a)):
-   if row==0:colour=((colour&0xfefefe)>>1)+0x263a3c
+  for row,colour in enumerate((0x384a72,0x265e66,0x336045)):
+   if row==0:colour=0x48597d
    x,y=ox+tx+round(tw*.93),oy+ty+20+row*56+4;actual=int.from_bytes(pixels[(y*width+x)*3:(y*width+x)*3+3],'big');assert actual==colour,(row,hex(actual),hex(colour))
  shots.append(c.shot(surface,'arrange-three-real-tracks',arrange_pixels,dict(tracks=3,midi_regions=3)))
  c.click(surface,'Instruments');start,_,_=c.refresh(surface);g['wait'](r'\[moan.plugin.status\] state=Idle .* text=Offline render ready',start,120)
