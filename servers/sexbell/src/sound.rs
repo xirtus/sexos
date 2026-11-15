@@ -337,7 +337,7 @@ fn sine(phase: u32) -> f32 {
 
 impl Player {
     /// A paused stream doesn't count: Bell rests until the program kicks it again.
-    fn streaming(&self) -> bool { self.streams.iter().flatten().any(|st| st.active && st.ring.load(ring::PAUSED) == 0) }
+    fn streaming(&self) -> bool { self.streams.iter().flatten().any(|st| st.active && !crate::restricted::denied(st.pd) && st.ring.load(ring::PAUSED) == 0) }
 
     /// Mixes the next period of notes and streams into `period`, noting how many
     /// frames each stream gave in `took[slot]`. False when there is nothing to play.
@@ -367,6 +367,7 @@ impl Player {
         for (i, entry) in self.streams.iter_mut().enumerate() {
             self.took[slot][i] = 0;
             let Some(st) = entry.as_mut() else { continue };
+            if crate::restricted::denied(st.pd){st.active=false;continue;}
             if !st.active { continue; }
             let r = st.ring;
             let (written, mut taken) = (r.load(ring::WRITTEN), r.load(ring::TAKEN));
@@ -430,7 +431,7 @@ impl Player {
 
     /// Rows whose program wants the microphone and may have it.
     fn listener(&self, i: usize) -> bool {
-        self.streams[i].is_some_and(|st| st.ring.load(ring::LISTEN) == 1 && settings().mic[i])
+        self.streams[i].is_some_and(|st| !crate::restricted::denied(st.pd) && st.ring.load(ring::LISTEN) == 1 && settings().mic[i])
     }
     fn listening(&self) -> bool { (0..STREAMS).any(|i| self.listener(i)) }
 
@@ -440,6 +441,7 @@ impl Player {
         let input = self.card.has_input();
         for (i, st) in self.streams.iter().enumerate() {
             let Some(st) = st else { continue };
+            if crate::restricted::denied(st.pd){continue;}
             let want = st.ring.load(ring::LISTEN) == 1;
             let mic = if !want { ring::MIC_OFF } else if !input { ring::MIC_NONE }
                 else if settings().mic[i] { ring::MIC_ON } else { ring::MIC_WAITING };
@@ -482,7 +484,7 @@ impl Player {
             if !self.card.done(self.tokens[self.first]) { break; }
             for (i, st) in self.streams.iter().enumerate() {
                 let n = self.took[self.first][i];
-                if let (Some(st), true) = (st, n > 0) { st.ring.store(ring::PLAYED, st.ring.load(ring::PLAYED) + n as u64); }
+                if let (Some(st), true) = (st, n > 0) { if crate::restricted::denied(st.pd){continue;} st.ring.store(ring::PLAYED, st.ring.load(ring::PLAYED) + n as u64); }
             }
             self.first = (self.first + 1) % IN_FLIGHT; self.flying -= 1; self.played += 1;
         }
@@ -613,6 +615,7 @@ pub fn stream(caller: u32) -> bool {
 
 /// The caller's row, its ring taken up if Bell had not yet.
 fn ring_of(p: &mut Player, caller: u32) -> Option<usize> {
+    if crate::restricted::denied(caller){return None;}
     let k = ring::index_of(caller).filter(|k| *k < STREAMS)?;
     if p.streams[k].is_none() {
         match sex_pdx::sound_ring_bell(k) {
@@ -683,7 +686,7 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
     let m = settings();
     let state = |m: &Mixer| mixer::state(m.master, m.muted, present());
     let row = |m: &Mixer, k: usize| {
-        let (playing, asked, pd, listening) = player().and_then(|p| p.streams[k].as_ref())
+        let (playing, asked, pd, listening) = player().and_then(|p| p.streams[k].as_ref()).filter(|st|!crate::restricted::denied(st.pd))
             .map_or((false, 0, 0, false), |st| (st.active, st.ring.load(ring::VOLUME).min(100) as u8, st.pd, st.ring.load(ring::MIC) == ring::MIC_ON));
         mixer::Stream { volume: m.rows[k], muted: m.rows_muted[k], playing, asked, pd, mic_allowed: m.mic[k], listening }.word()
     };
@@ -718,6 +721,7 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
             p.card.outputs()
         }
         mixer::MICROPHONE if (a as usize) < STREAMS && b <= 1 => {
+            if crate::restricted::row_denied(a as usize){return mixer::REFUSED;}
             m.mic[a as usize] = b == 1;
             sex_pdx::serial_record!("[bell.mic.leave] row={} allowed={}", a, b);
             if let Some(p) = player() { p.pump(); }
@@ -732,3 +736,12 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
 /// A short tick at the current loudness, so the person hears where a volume key put it.
 /// Played after the reply, so the card's work never comes between request and answer.
 pub fn tick() { tone(988, 45, 40); }
+
+/// Stop every periodic ring access before the provider wipes the whole grant.
+/// This also works without an audio card; backing exists independently of Player.
+pub fn quarantine(pd:u32) {
+    let _=retire(pd);
+    if let (Some(index),Some(p))=(ring::index_of(pd),player()) {
+        if index<STREAMS {p.streams[index]=None;for period in &mut p.took{period[index]=0;}}
+    }
+}
