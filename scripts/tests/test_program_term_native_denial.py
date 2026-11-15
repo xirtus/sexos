@@ -1,6 +1,7 @@
 """Synthetic negative controls; no native launch or console proof is asserted."""
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import program_term_native_gate as gate
@@ -49,7 +50,82 @@ class DownstreamRelayDenial(unittest.TestCase):
    with self.subTest(action=action),self.assertRaises(ValueError):self.prove(action)
  def test_source_contract_records_current_route(self):
   hashes=gate.denial_sources(gate.ROOT)
-  self.assertEqual(len(hashes),3)
+  self.assertEqual(set(hashes),{
+   "servers/sexfiles/src/fs_service.rs","crates/sex-app/src/lib.rs",
+   "servers/silk-shell/src/main.rs","servers/sexfiles/src/trampoline.rs"})
   self.assertTrue(all(len(digest)==64 for digest in hashes.values()))
+
+
+class ExactTicketSourceContract(unittest.TestCase):
+ def source_case(self,path,old,new):
+  names=('servers/sexfiles/src/fs_service.rs','crates/sex-app/src/lib.rs',
+         'servers/silk-shell/src/main.rs','servers/sexfiles/src/trampoline.rs')
+  with tempfile.TemporaryDirectory()as folder:
+   root=Path(folder)
+   for name in names:
+    text=(gate.ROOT/name).read_text()
+    if name==path:
+     self.assertIn(old,text,'mutation must actually change the current source')
+     text=text.replace(old,new,1)
+    target=root/name;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(text)
+   with self.assertRaisesRegex(ValueError,'legacy relay source contract changed'):
+    gate.denial_sources(root)
+ def test_owner_stamp_live_task_or_consumption_drift_refuses_contract(self):
+  path='servers/sexfiles/src/fs_service.rs'
+  cases=[
+   ('struct TicketOwner { target: u32, task: u32 }','struct TicketOwner { target: u32 }'),
+   ('sender_task != 0 && sender_task == bound_task','true'),
+   ('bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)','program_live(caller, b.task)'),
+   ('binding.task != 0 && program_live(target, binding.task)','binding.task != 0'),
+   ('c.is_subject(target, row.surface, 3) && c.task_id == task','c.is_subject(target, row.surface, 3)'),
+   ('TicketOwner { target, task: binding.task }','TicketOwner { target, task: 0 }'),
+   ('PREPARED_OWNER } != owner || (by.is_some() && by != asker)','PREPARED_OWNER }.is_some() && (by.is_some() && by != asker)'),
+   ('unsafe { PREPARED_OWNER = None; }','unsafe { PREPARED_OWNER = owner; }'),
+   ('let result = run(fs, r, path, data, owner, relay);','let result = run(fs, r, path, data, None, relay);'),
+   ('PREPARED_OWNER = owner; PREPARED_LAUNCHER = by;','PREPARED_OWNER = None; PREPARED_LAUNCHER = by;'),
+  ]
+  for old,new in cases:
+   with self.subTest(old=old):self.source_case(path,old,new)
+ def test_relay_grant_sanitizer_or_explicit_context_drift_refuses_contract(self):
+  path='servers/sexfiles/src/fs_service.rs'
+  for old,new in [
+   ('is_some_and(|b| holds_launch(&b))','is_some_and(|_| true)'),
+   ('if !crate::console_relay::may_prepare(k)','if false'),
+   ('sex_pdx::console_relay::plain_args(','unreviewed_args('),
+   ('let relay = if relay_terminal { program } else { None };','let relay = program;'),
+   ('let by = relay;','let by = None;'),
+   ('return prepare(fs, r, path, data, owner, relay);','return prepare(fs, r, path, data, owner, None);'),
+  ]:
+   with self.subTest(old=old):self.source_case(path,old,new)
+ def test_transport_caller_stamp_and_legacy_requester_cannot_drift(self):
+  self.source_case('servers/sexfiles/src/trampoline.rs',
+   'fs_service::handle(caller,msg.caller_task,msg.arg0,msg.arg1,msg.arg2)',
+   'fs_service::handle(caller,0,msg.arg0,msg.arg1,msg.arg2)')
+  self.source_case('servers/silk-shell/src/main.rs',
+   'if by_program&&!program_run(msg.caller_pd).is_some_and(|(_,task)|launch_caller_task(task,msg.caller_task)){return true}',
+   'if by_program&&false{return true}')
+  self.source_case('servers/silk-shell/src/main.rs',
+   'if by_program{msg.caller_pd as u64}else{0}','0')
+  self.source_case('servers/silk-shell/src/main.rs',
+   'current_task!=0 && current_task==caller_task','current_task!=0')
+  self.source_case('crates/sex-app/src/lib.rs',
+   'sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64',
+   'sex_pdx::program_store::OP_RUN, 0, ticket as u64')
+ def test_owner_and_sender_checks_must_precede_consumption_or_forwarding(self):
+  path='servers/sexfiles/src/fs_service.rs'
+  source=(gate.ROOT/path).read_text()
+  guard=next(line for line in source.splitlines(True)if 'if unsafe { PREPARED_OWNER } != owner' in line)
+  loaded='    unsafe { LOADED_LAUNCHER = by; }\n'
+  consumed='    let len = core::mem::take(&mut prepared.1);\n'
+  self.source_case(path,guard+loaded+consumed,consumed+guard+loaded)
+  path='servers/silk-shell/src/main.rs';source=(gate.ROOT/path).read_text()
+  start=source.index('    if msg.type_id==store::OP_RUN {')
+  end=source.index('        PROGRAM_READING=status==0;',start)
+  old=source[start:end]
+  guard=next(line for line in old.splitlines(True)if 'if by_program&&!program_run' in line)
+  self.source_case(path,old,old.replace(guard,'')+guard)
+ def test_comment_only_old_guard_does_not_qualify(self):
+  old='bound_task != 0 && program_live(target, bound_task) && (!preparing || (sender_task != 0 && sender_task == bound_task))'
+  self.source_case('servers/sexfiles/src/fs_service.rs',old,'true /* '+old+' */')
 
 if __name__=='__main__':unittest.main()
