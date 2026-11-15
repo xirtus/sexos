@@ -295,6 +295,9 @@ mod tests {
         // The .poly file keeps them.
         let text = crate::persist::save(&d);
         assert!(text.contains(" seams=") && text.contains(" sharp="), "{text}");
+        let back = crate::persist::load(&text).unwrap();
+        assert_eq!(mesh(&back).seams, mesh(&d).seams);
+        assert_eq!(mesh(&back).sharp_edges, mesh(&d).sharp_edges);
     }
 
     #[test]
@@ -341,5 +344,31 @@ mod tests {
         // Project from View without a viewport uses the front view.
         project_from_view(&mut d, None, true);
         finite_uvs(mesh(&d));
+    }
+
+    #[test]
+    fn seams_and_sharp_edges_draw_in_the_viewport() {
+        let mut app = crate::App::new(1280, 720);
+        app.doc.run(&Op::with("object.mode_set", "EDIT"));
+        app.doc.run(&Op::with("mesh.select_all", "SELECT"));
+        app.doc.run(&Op::new("mesh.mark_seam"));
+        app.doc.run(&Op::with("mesh.select_all", "DESELECT"));
+        app.frame(crate::input::Input::Tick);
+        // Lines are anti-aliased: count pixels near the theme colours.
+        let near = |app: &crate::App, c: u32| {
+            let ch = |v: u32, s: u32| (v >> s & 0xff) as i32;
+            app.painter.pixels.iter().filter(|&&p| (0..3).all(|k| (ch(p, k * 8) - ch(c, k * 8)).abs() < 40)).count()
+        };
+        let seam = 0xdb2512; // overlay::EDGE_SEAM
+        let red = near(&app, seam);
+        assert!(red > 100, "{red}");
+        app.doc.run(&Op::with("mesh.select_all", "SELECT"));
+        app.doc.run(&Op::with("mesh.mark_seam", "CLEAR"));
+        app.doc.run(&Op::new("mesh.mark_sharp"));
+        app.doc.run(&Op::with("mesh.select_all", "DESELECT"));
+        app.frame(crate::input::Input::Tick);
+        let sharp = 0x00ffff; // overlay::EDGE_SHARP
+        assert!(near(&app, seam) < red / 4, "{}", near(&app, seam));
+        assert!(near(&app, sharp) > 100, "{}", near(&app, sharp));
     }
 }

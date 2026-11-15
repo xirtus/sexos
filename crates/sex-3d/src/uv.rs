@@ -676,6 +676,44 @@ fn auto_pins(pos: &[P3]) -> (usize, usize, P2, P2, impl Fn(P3) -> P2) {
     (p1, p2, map(pos[p1]), map(pos[p2]), map)
 }
 
+/// A starting point for CG: the chart projected on its average plane,
+/// placed by the similarity that puts two pinned vertices on their pins.
+/// Exact for flat charts, close for nearly developable ones.
+fn initial_guess(pos: &[P3], tris: &[[u32; 3]], pinned: &[Option<P2>]) -> Option<Vec<P2>> {
+    let pins: Vec<(usize, P2)> = pinned.iter().enumerate().filter_map(|(i, p)| p.map(|p| (i, p))).take(2).collect();
+    let [(i1, q1), (i2, q2)] = pins[..] else { return None };
+    let mut n = [0.0; 3];
+    for t in tris {
+        let c = cross3(sub3(pos[t[1] as usize], pos[t[0] as usize]), sub3(pos[t[2] as usize], pos[t[0] as usize]));
+        n = [n[0] + c[0], n[1] + c[1], n[2] + c[2]];
+    }
+    let ln = len3(n);
+    if !(ln > 1e-300) {
+        return None;
+    }
+    let n = n.map(|x| x / ln);
+    let d = sub3(pos[i2], pos[i1]);
+    let u = sub3(d, n.map(|x| x * dot3(d, n)));
+    let lu = len3(u);
+    if !(lu > 1e-300) {
+        return None;
+    }
+    let u = u.map(|x| x / lu);
+    let v = cross3(n, u);
+    // Local coordinates have pin 1 at the origin and pin 2 at (lu, 0).
+    let (qx, qy) = (q2[0] - q1[0], q2[1] - q1[1]);
+    let (c, s) = (qx / lu, qy / lu);
+    Some(
+        pos.iter()
+            .map(|&p| {
+                let r = sub3(p, pos[i1]);
+                let (a, b) = (dot3(r, u), dot3(r, v));
+                [q1[0] + a * c - b * s, q1[1] + a * s + b * c]
+            })
+            .collect(),
+    )
+}
+
 /// Flatten one chart. `pins` are chart vertices with fixed UVs. Returns None
 /// for a closed chart (no boundary: Blender skips those and asks for seams).
 fn solve_chart(pos: &[P3], tris: &[[u32; 3]], pins: &[(u32, P2)], method: UnwrapMethod, fill_holes: bool) -> Option<Vec<P2>> {
@@ -734,7 +772,7 @@ fn solve_chart(pos: &[P3], tris: &[[u32; 3]], pins: &[(u32, P2)], method: Unwrap
         pinned[t[0] as usize] = Some([0.0, 0.5]);
         pinned[t[1] as usize] = Some([1.0, 0.5]);
     }
-    let init: Vec<P2> = pos.iter().map(|&p| map(p)).collect();
+    let init = initial_guess(&pos, &tris, &pinned).unwrap_or_else(|| pos.iter().map(|&p| map(p)).collect());
     let mut uv = lscm(nv, &tris, &angles, &pinned, &init)?;
     uv.truncate(nv0);
     if single {
@@ -838,7 +876,7 @@ pub fn uv_islands(m: &Mesh, faces: &[u32]) -> Vec<Vec<u32>> {
     for list in edges.values() {
         for i in 0..list.len() {
             for j in i + 1..list.len() {
-                let ((f, c), (g, d)) = (list[i], list[j]);
+                let ((f, c), (g, _)) = (list[i], list[j]);
                 let (ff, gg) = (&m.faces[f as usize], &m.faces[g as usize]);
                 let uv_at = |face: &crate::Face, v: u32| face.verts.iter().position(|&x| x == v).map(|k| face.uvs[k]);
                 let (a, b) = (ff.verts[c], ff.verts[(c + 1) % ff.len()]);
@@ -846,7 +884,6 @@ pub fn uv_islands(m: &Mesh, faces: &[u32]) -> Vec<Vec<u32>> {
                     (Some(ga), Some(gb)) => close(ff.uvs[c], ga) && close(ff.uvs[(c + 1) % ff.len()], gb),
                     _ => false,
                 };
-                let _ = d;
                 if ok {
                     uf.union(f, g);
                 }
@@ -1616,37 +1653,46 @@ pub fn weld(m: &mut Mesh, corners: &[Corner]) {
     }
 }
 
-/// UV > Merge > By Distance (`uv.remove_doubles`): corners of the same mesh
-/// vertex closer than `dist` go to their mean. Returns how many moved.
+/// UV > Merge > By Distance (`uv.remove_doubles`): selected UVs closer than
+/// `dist` to each other (chained) go to their mean, whatever mesh vertex
+/// they belong to. Returns how many corners moved.
 pub fn merge_by_distance(m: &mut Mesh, corners: &[Corner], dist: f32) -> usize {
-    let mut by_vert: HashMap<u32, Vec<Corner>> = HashMap::new();
-    for &(f, c) in corners {
-        by_vert.entry(m.faces[f as usize].verts[c as usize]).or_default().push((f, c));
+    let cell = dist.max(1e-9) as f64;
+    let uv_of = |m: &Mesh, c: Corner| uv2(m.faces[c.0 as usize].uvs[c.1 as usize]);
+    let key = |p: P2| ((p[0] / cell).floor() as i64, (p[1] / cell).floor() as i64);
+    let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    for (i, &c) in corners.iter().enumerate() {
+        grid.entry(key(uv_of(m, c))).or_default().push(i);
+    }
+    let mut uf = UnionFind::new(corners.len());
+    for (i, &c) in corners.iter().enumerate() {
+        let p = uv_of(m, c);
+        let k = key(p);
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for &j in grid.get(&(k.0 + dx, k.1 + dy)).map(|v| v.as_slice()).unwrap_or(&[]) {
+                    if j > i {
+                        let q = uv_of(m, corners[j]);
+                        if (p[0] - q[0]).hypot(p[1] - q[1]) <= dist as f64 {
+                            uf.union(i as u32, j as u32);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    let mut groups: HashMap<u32, Vec<Corner>> = HashMap::new();
+    for (i, &c) in corners.iter().enumerate() {
+        groups.entry(uf.find(i as u32)).or_default().push(c);
     }
     let mut moved = 0;
-    for list in by_vert.values() {
-        let mut uf = UnionFind::new(list.len());
-        for i in 0..list.len() {
-            for j in i + 1..list.len() {
-                let a = m.faces[list[i].0 as usize].uvs[list[i].1 as usize];
-                let b = m.faces[list[j].0 as usize].uvs[list[j].1 as usize];
-                if ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt() <= dist {
-                    uf.union(i as u32, j as u32);
-                }
+    for g in groups.values() {
+        if g.len() > 1 {
+            let first = uv_of(m, g[0]);
+            if g.iter().any(|&c| uv_of(m, c) != first) {
+                moved += g.len();
             }
-        }
-        let mut groups: HashMap<u32, Vec<Corner>> = HashMap::new();
-        for i in 0..list.len() {
-            groups.entry(uf.find(i as u32)).or_default().push(list[i]);
-        }
-        for g in groups.values() {
-            if g.len() > 1 {
-                let first = m.faces[g[0].0 as usize].uvs[g[0].1 as usize];
-                if g.iter().any(|&(f, c)| m.faces[f as usize].uvs[c as usize] != first) {
-                    moved += g.len();
-                }
-                weld(m, g);
-            }
+            weld(m, g);
         }
     }
     moved
@@ -1699,8 +1745,6 @@ pub fn stitch(m: &mut Mesh, faces: &[u32], selected: &[Corner]) -> usize {
             }
         }
     }
-    // Selected corners on other islands without a static partner pair among
-    // themselves too (stitching two non-static islands): fall back to welding.
     let mut stitched = 0;
     for (j, list) in &pairs {
         let src: Vec<P2> = list.iter().map(|(_, c)| uv2(m.faces[c.0 as usize].uvs[c.1 as usize])).collect();
@@ -1841,8 +1885,6 @@ mod tests {
         // Blender's classic cube cross: cut the top ring, bottom ring but one
         // edge each, and one vertical edge.
         let mut m = primitives::cube(2.0);
-        let he = m.half_edges();
-        let _ = he;
         let edges = m.edges();
         // Find an edge loop of seams that opens the cube into a cross: all
         // edges of the top face but one, all of the bottom but one, and a vertical.
