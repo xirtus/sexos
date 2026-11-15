@@ -2,7 +2,7 @@
 //! Editable project Files operations. Save-as uses exclusive CREATE; a partial
 //! save never replaces an existing project and never marks the session clean.
 use crate::{project, Studio};
-use alloc::vec::Vec;
+use alloc::{format, vec::Vec};
 use sex_app::files;
 use weft::sexos::App;
 /// An ordinary program must explicitly decline Shell's pending close, otherwise
@@ -291,6 +291,34 @@ pub fn log(app: &mut App, studio: &Studio) {
         studio.plugin_format,
         app.ui.text_of(studio.plugin_status)
     );
+    for index in 0..studio.session.tracks.len() {
+        for (name, id, checked) in [
+            ("volume", studio.mixer_volume[index], None),
+            ("pan", studio.mixer_pan[index], None),
+            (
+                "mute",
+                studio.mixer_mute[index],
+                Some(app.ui.is_checked(studio.mixer_mute[index])),
+            ),
+            (
+                "solo",
+                studio.mixer_solo[index],
+                Some(app.ui.is_checked(studio.mixer_solo[index])),
+            ),
+        ] {
+            let rect = app.ui.rect(id);
+            sex_pdx::serial_record!(
+                "[moan.mixer.track] track={} name={} x={} y={} w={} h={} value={}",
+                index,
+                name,
+                (rect.x * scale) as i32,
+                (rect.y * scale) as i32,
+                (rect.w * scale) as i32,
+                (rect.h * scale) as i32,
+                checked.map_or_else(|| app.ui.value(id) as i32, |value| value as i32)
+            );
+        }
+    }
     for (name, id) in [
         ("master_level", studio.master_level),
         ("master_meter", studio.master_meter),
@@ -305,6 +333,19 @@ pub fn log(app: &mut App, studio: &Studio) {
             (rect.h * scale) as i32,
             (app.ui.value(id) * 100.0) as i32
         );
+    }
+    if let (Some(subject), Some(view)) = (
+        sex_pdx::app_catalog::by_target(app.window.target),
+        crate::plugin_pixels::snapshot(&app.ui, studio.plugin_status, app.window.pixels()),
+    ) {
+        let encoded: alloc::string::String = view
+            .text
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let (width, height) = app.ui.size();
+        sex_pdx::serial_record!("[moan.plugin.paint] target={} task={} surface={} frame={} width={} height={} x={} y={} w={} h={} hash={:#018x} text_hex={}",app.window.target,app.window.task,subject.surface,app.frames,width,height,view.x,view.y,view.w,view.h,view.hash,encoded);
     }
     let (w, h) = app.ui.size();
     sex_pdx::serial_record!("[moan.viewport] w={} h={} frame={}", w, h, app.frames);
