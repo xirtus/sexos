@@ -120,6 +120,12 @@ fn credits(state:&mut provider::Provider,page:&journal::Journal,p:&mut Fake,pack
  p.keep=false;state.initialize(&page,&mut p);assert!(state.denied(42));assert!(state.denied(43));
 }
 
+#[test]fn cold_empty_ledger_is_committed_before_normal_publication(){
+ let page=journal::Journal::new();let mut p=fake();let mut state=provider::Provider::new();state.initialize(&page,&mut p);assert!(!state.denied(43));
+ assert!(!page.load(Some(2),true).all_denied());
+ p.epoch=2;state.initialize(&page,&mut p);assert!(!state.denied(43));assert!(!state.denied(42));
+}
+
 '''
         with tempfile.TemporaryDirectory() as d:
             path = Path(d) / 'transcript.rs'

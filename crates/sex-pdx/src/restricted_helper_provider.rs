@@ -71,6 +71,12 @@ impl Provider {
         let epoch = p.epoch();
         let kept = p.keep(journal.address());
         self.ledger = journal.load(epoch, kept);
+        // Commit even the known-empty cold state BEFORE normal publication.
+        // Otherwise an unused service's first restart sees zero bytes/epoch2
+        // and needlessly quarantines every ordinary Program row.
+        if kept {
+            journal.persist(&self.ledger);
+        }
         self.epoch = epoch;
         self.committed_generation = self.ledger.maximum_generation();
         // Recovered tombstones confer no live job, transcript or reply authority.
