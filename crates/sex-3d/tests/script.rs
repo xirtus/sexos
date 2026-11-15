@@ -109,6 +109,21 @@ fn meshes_text_and_base64() {
     ok(&mut back, &text);
     assert_eq!(back.meshes, big.meshes);
 
+    // Seams and sharp edges ride along, small (text) and big (b64).
+    for mut m in [sex_3d::primitives::cube(2.0), sex_3d::primitives::uv_sphere(16, 8, 1.0)] {
+        m.set_seam(0, 1, true);
+        m.set_seam(3, 2, true);
+        m.set_sharp(1, 0, true);
+        let mut sc = Scene::new();
+        sc.add_mesh_object("Seamed", m.clone());
+        let text = scene_to_polyops(&sc);
+        assert!(text.contains(" seams=") && text.contains(" sharp="), "{text}");
+        let mut back = Scene::new();
+        ok(&mut back, &text);
+        assert_eq!(back.meshes[0].seams, m.seams);
+        assert_eq!(back.meshes[0].sharp_edges, m.sharp_edges);
+    }
+
     // mesh_set replaces, mesh_edit changes in place.
     ok(
         &mut s,

@@ -429,7 +429,7 @@ fn bevel_by_angle(m: &Mesh, width: f32, segments: u32, angle: f32) -> Mesh {
 /// Split every face into triangles (ear clipping for n-gons), keeping UVs,
 /// material and shading.
 fn triangulate(m: &Mesh) -> Mesh {
-    let mut out = Mesh { positions: m.positions.clone(), faces: Vec::new(), loose_edges: m.loose_edges.clone() };
+    let mut out = Mesh { positions: m.positions.clone(), faces: Vec::new(), loose_edges: m.loose_edges.clone(), ..Default::default() };
     for t in m.triangulate() {
         let f = &m.faces[t.face as usize];
         let uvs = if f.uvs.len() == f.verts.len() { t.corners.iter().map(|&c| f.uvs[c as usize]).collect() } else { Vec::new() };

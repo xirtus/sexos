@@ -1358,7 +1358,26 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
     Ok(m)
 }
 
-/// Mesh data options: `verts= faces= edges= uvs= smooth= mat=`.
+/// Vertex pairs written as `a,b;c,d` (or base64 u32s when large).
+fn edge_pairs(text: &str, what: &str) -> Res<Vec<[u32; 2]>> {
+    let e = if text.starts_with("b64:") { uints(text) } else { text.split(';').filter(|s| !s.trim().is_empty()).map(uints).collect::<Res<Vec<_>>>().map(|v| v.concat()) }
+        .map_err(|e| format!("{what}: {e}"))?;
+    if e.len() % 2 != 0 {
+        return Err(format!("{what}= needs pairs of vertex indices"));
+    }
+    Ok(e.chunks_exact(2).map(|c| [c[0], c[1]]).collect())
+}
+
+fn write_pairs(o: &mut String, key: &str, pairs: &[[u32; 2]], b64: bool) {
+    if pairs.is_empty() {
+        return;
+    }
+    let flat: Vec<u32> = pairs.iter().flat_map(|e| e.iter().copied()).collect();
+    let text = if b64 { b64_u32(&flat) } else { pairs.iter().map(|e| format!("{},{}", e[0], e[1])).collect::<Vec<_>>().join(";") };
+    let _ = write!(o, " {key}={text}");
+}
+
+/// Mesh data options: `verts= faces= edges= seams= sharp= uvs= smooth= mat=`.
 fn parse_mesh(cmd: &mut Cmd, mut m: Mesh) -> Res<Mesh> {
     if let Some(v) = cmd.list("verts")? {
         if v.len() % 3 != 0 {
@@ -1370,16 +1389,13 @@ fn parse_mesh(cmd: &mut Cmd, mut m: Mesh) -> Res<Mesh> {
         m.faces = polygons(&t.text).map_err(|e| format!("faces: {e}"))?.into_iter().map(Face::new).collect();
     }
     if let Some(t) = cmd.opt("edges") {
-        let e = if t.text.starts_with("b64:") {
-            uints(&t.text)
-        } else {
-            t.text.split(';').filter(|s| !s.trim().is_empty()).map(uints).collect::<Res<Vec<_>>>().map(|v| v.concat())
-        }
-        .map_err(|e| format!("edges: {e}"))?;
-        if e.len() % 2 != 0 {
-            return Err("edges= needs pairs of vertex indices".into());
-        }
-        m.loose_edges = e.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+        m.loose_edges = edge_pairs(&t.text, "edges")?;
+    }
+    if let Some(t) = cmd.opt("seams") {
+        m.seams = edge_pairs(&t.text, "seams")?.into_iter().map(|e| crate::mesh::edge_key(e[0], e[1])).collect();
+    }
+    if let Some(t) = cmd.opt("sharp") {
+        m.sharp_edges = edge_pairs(&t.text, "sharp")?.into_iter().map(|e| crate::mesh::edge_key(e[0], e[1])).collect();
     }
     if let Some(uv) = cmd.list("uvs")? {
         let corners: usize = m.faces.iter().map(|f| f.verts.len()).sum();
@@ -1436,11 +1452,11 @@ pub fn mesh_to_options(m: &Mesh) -> String {
         };
         let _ = write!(o, " faces={faces}");
     }
-    if !m.loose_edges.is_empty() {
-        let flat: Vec<u32> = m.loose_edges.iter().flat_map(|e| e.iter().copied()).collect();
-        let edges = if b64 { b64_u32(&flat) } else { m.loose_edges.iter().map(|e| format!("{},{}", e[0], e[1])).collect::<Vec<_>>().join(";") };
-        let _ = write!(o, " edges={edges}");
-    }
+    write_pairs(&mut o, "edges", &m.loose_edges, b64);
+    let n = m.positions.len() as u32;
+    let valid = |set: &std::collections::BTreeSet<(u32, u32)>| set.iter().filter(|e| e.0 < n && e.1 < n).map(|e| [e.0, e.1]).collect::<Vec<_>>();
+    write_pairs(&mut o, "seams", &valid(&m.seams), b64);
+    write_pairs(&mut o, "sharp", &valid(&m.sharp_edges), b64);
     if m.has_uvs() {
         let uv: Vec<f32> = m.faces.iter().flat_map(|f| f.uvs.iter().flat_map(|u| [u.x, u.y])).collect();
         let _ = write!(o, " uvs={}", if b64 { b64_f32(&uv) } else { fmt_list(&uv) });

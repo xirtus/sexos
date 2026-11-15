@@ -13,6 +13,7 @@
 //! - [`render`]: the CPU path tracer.
 //! - [`io`]: glTF 2.0, OBJ, STL, PLY and .blend files.
 //! - [`script`]: the text command language the Python `polyamour` module speaks.
+//! - [`uv`]: UV unwrapping (seams, ABF++/LSCM, projections, packing) and UV editing.
 pub mod math;
 pub mod mesh;
 pub mod primitives;
@@ -23,6 +24,7 @@ pub mod ops;
 pub mod render;
 pub mod io;
 pub mod script;
+pub mod uv;
 
 pub use math::{Aabb, Mat4, Quat, Vec2, Vec3};
 pub use mesh::{Face, HalfEdgeMesh, Mesh};
