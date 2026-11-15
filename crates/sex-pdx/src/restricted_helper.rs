@@ -5,6 +5,42 @@ pub const OP_POLICY: u64 = 0x4d50_5001;
 pub const OP_ACK: u64 = 0x4d50_5002;
 pub const OP_READY: u64 = 0x4d50_5003;
 pub const OP_FETCH: u64 = 0x4d50_5004;
+pub const OP_FETCH_TAGGED: u64 = 0x4d50_5005;
+pub const OP_POLICY_TAGGED: u64 = 0x4d50_5006;
+/// Disjoint from legacy Files identity replies, whose tag is in bits24..31.
+/// Full64 words are transported as two32 chunks; context bits correlate only.
+pub fn chunk(context: u64, phase: u8, selector: u8, part: u8, value: u32) -> Option<u64> {
+    if phase > 11 || selector > 31 || part > 1 {
+        return None;
+    }
+    Some(
+        0xd5 << 56
+            | (context & 63) << 50
+            | (phase as u64) << 46
+            | (part as u64) << 45
+            | (selector as u64) << 40
+            | ((value as u64 >> 24) & 255) << 32
+            | 0xd5 << 24
+            | (value as u64 & 0xff_ffff),
+    )
+}
+pub fn is_chunk(word: u64) -> bool {
+    word >> 56 == 0xd5 && ((word >> 24) & 255) == 0xd5
+}
+pub fn unchunk(word: u64, context: u64, phase: u8, selector: u8, part: u8) -> Option<u32> {
+    if !is_chunk(word)
+        || phase > 11
+        || selector > 31
+        || part > 1
+        || ((word >> 50) & 63) != context & 63
+        || ((word >> 46) & 15) != phase as u64
+        || ((word >> 45) & 1) != part as u64
+        || ((word >> 40) & 31) != selector as u64
+    {
+        return None;
+    }
+    Some((word & 0xff_ffff) as u32 | (((word >> 32) & 255) as u32) << 24)
+}
 pub const MAX_GENERATION: u64 = (1u64 << 56) - 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -310,6 +346,10 @@ pub struct ReplyCredits {
     epoch: u64,
     challenge: [u64; 2],
     first_sent: bool,
+    tagged: bool,
+    first_low: bool,
+    part: u8,
+    last_tagged: Option<(u64, u8)>,
     next: u64,
     last: u64,
 }
@@ -324,18 +364,45 @@ impl ReplyCredits {
             epoch,
             challenge,
             first_sent: false,
+            tagged: false,
+            first_low: false,
+            part: 0,
+            last_tagged: None,
             next: 1,
             last: 0,
         })
     }
+    pub fn new_tagged(packet: Packet, epoch: u64, challenge: [u64; 2]) -> Option<Self> {
+        let mut credits = Self::new(packet, epoch, challenge)?;
+        credits.tagged = true;
+        Some(credits)
+    }
     pub fn first(&self, epoch: u64) -> Option<u64> {
-        (epoch == self.epoch).then(|| self.packet.wire().unwrap()[0])
+        if epoch != self.epoch {
+            return None;
+        }
+        let word = self.packet.wire()?[0];
+        if self.tagged {
+            chunk(
+                self.packet.generation,
+                self.packet.phase as u8,
+                0,
+                0,
+                word as u32,
+            )
+        } else {
+            Some(word)
+        }
     }
     pub fn first_delivered(&mut self, epoch: u64) -> bool {
         if epoch != self.epoch {
             return false;
         }
-        self.first_sent = true;
+        if self.tagged {
+            self.first_low = true;
+        } else {
+            self.first_sent = true;
+        }
         true
     }
     pub fn complete(&self) -> bool {
@@ -351,6 +418,12 @@ impl ReplyCredits {
     /// request = [exact phase/generation word0, selector1..4, provider-own epoch].
     /// caller identity is checked by the runtime before touching reply credits.
     pub fn fetch(&self, request: [u64; 3], epoch: u64) -> Option<u64> {
+        if self.tagged {
+            return None;
+        }
+        self.fetch_word(request, epoch)
+    }
+    fn fetch_word(&self, request: [u64; 3], epoch: u64) -> Option<u64> {
         if !self.first_sent
             || epoch != self.epoch
             || request[2] != self.epoch
@@ -377,6 +450,60 @@ impl ReplyCredits {
             self.last = self.next;
             self.next += 1;
         }
+        true
+    }
+    pub fn fetch_tagged(&self, request: [u64; 3], epoch: u64) -> Option<u64> {
+        if !self.tagged
+            || epoch != self.epoch
+            || request[2] != epoch
+            || request[0] != self.packet.wire()?[0]
+            || request[1] & !0x1ff != 0
+        {
+            return None;
+        }
+        let selector = request[1] & 255;
+        let part = ((request[1] >> 8) & 1) as u8;
+        let value = if selector == 0 {
+            if !self.first_low || part != 1 || (self.first_sent && self.last_tagged != Some((0, 1)))
+            {
+                return None;
+            }
+            self.packet.wire()?[0]
+        } else {
+            if self.last_tagged != Some((selector, part))
+                && (selector != self.next || part != self.part)
+            {
+                return None;
+            }
+            self.fetch_word([request[0], selector, request[2]], epoch)?
+        };
+        chunk(
+            self.packet.generation,
+            self.packet.phase as u8,
+            selector as u8,
+            part,
+            (value >> (part as u32 * 32)) as u32,
+        )
+    }
+    pub fn fetch_tagged_delivered(&mut self, request: [u64; 3], epoch: u64) -> bool {
+        if self.fetch_tagged(request, epoch).is_none() {
+            return false;
+        }
+        let selector = request[1] & 255;
+        let part = ((request[1] >> 8) & 1) as u8;
+        if self.last_tagged == Some((selector, part)) {
+            return true;
+        }
+        if selector == 0 {
+            self.first_sent = true;
+        } else if part == 0 {
+            self.part = 1;
+        } else {
+            self.last = self.next;
+            self.next += 1;
+            self.part = 0;
+        }
+        self.last_tagged = Some((selector, part));
         true
     }
 }

@@ -132,7 +132,11 @@ fn status(error: Error) -> u8 {
 fn control(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
     if !matches!(
         opcode,
-        wire::OP_CLAIM | wire::OP_DESCRIBE | wire::OP_LOAD | wire::OP_COPIED
+        wire::OP_CLAIM
+            | wire::OP_DESCRIBE
+            | wire::OP_DESCRIBE_TAGGED
+            | wire::OP_LOAD
+            | wire::OP_COPIED
     ) {
         return false;
     }
@@ -215,9 +219,19 @@ fn control(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
         }
         return true;
     }
-    if opcode == wire::OP_DESCRIBE && words[1] == 22 {
+    if matches!(opcode, wire::OP_DESCRIBE | wire::OP_DESCRIBE_TAGGED) && words[1] & 255 == 22 {
         if let Some(l) = loaded.as_mut() {
-            l.serial(words);
+            if opcode == wire::OP_DESCRIBE_TAGGED {
+                l.serial_tagged(words);
+            } else {
+                l.serial(words);
+            }
+        }
+        return true;
+    }
+    if opcode == wire::OP_DESCRIBE_TAGGED {
+        if let Some(c) = current.as_mut() {
+            c.fetch_tagged(words, now);
         }
         return true;
     }

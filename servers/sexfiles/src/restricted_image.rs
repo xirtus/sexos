@@ -6,7 +6,7 @@ mod approved {
     include!(concat!(env!("OUT_DIR"), "/moanplug_pin.rs"));
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Lease {
     pub serial: u64,
     pub shell_epoch: u64,
@@ -15,6 +15,18 @@ pub struct Lease {
     pub parent_task: u32,
     pub cookie: u32,
     pub nonce: [u8; 16],
+}
+
+impl core::fmt::Debug for Lease {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Lease")
+            .field("serial", &self.serial)
+            .field("shell_epoch", &self.shell_epoch)
+            .field("files_epoch", &self.files_epoch)
+            .field("parent", &self.parent)
+            .field("parent_task", &self.parent_task)
+            .finish_non_exhaustive()
+    }
 }
 
 pub struct Staging {

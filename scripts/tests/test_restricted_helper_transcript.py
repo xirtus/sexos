@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 class PolicyTranscript(unittest.TestCase):
     def test_actual_transcript(self):
         source = ROOT / 'crates/sex-pdx/src/restricted_helper.rs'
-        rust = '#[path="' + str(source) + '"] mod restricted_helper;\nuse restricted_helper::*;\n' + '#[path="' + str(ROOT / 'crates/sex-pdx/src/restricted_helper_journal.rs') + '"] mod journal;\nuse journal as restricted_helper_journal;\n' + '#[path="' + str(ROOT / 'crates/sex-pdx/src/restricted_helper_provider.rs') + '"] mod provider;\n' + r'''
+        rust = '#[path="' + str(ROOT / 'crates/sex-pdx/src/autofill.rs') + '"] mod autofill;\n' + '#[path="' + str(source) + '"] mod restricted_helper;\nuse restricted_helper::*;\n' + '#[path="' + str(ROOT / 'crates/sex-pdx/src/restricted_helper_journal.rs') + '"] mod journal;\nuse journal as restricted_helper_journal;\n' + '#[path="' + str(ROOT / 'crates/sex-pdx/src/restricted_helper_provider.rs') + '"] mod provider;\n' + r'''
 fn subject(pd:u32,task:u32)->Subject{Subject{pd,task}}
 fn auth()->Authority{Authority{caller:subject(3,3),provider_epoch:1,challenge:[100,101],reserved:subject(43,43),inactive:true}}
 fn packets()->[Packet;11]{
@@ -88,6 +88,29 @@ impl provider::Platform for Fake {
 }
 fn fake()->Fake{Fake{epoch:1,now:0,full:false,keep:true,replies:Vec::new()}}
 fn message(packet:Packet)->provider::Message{provider::Message{caller:subject(3,3),opcode:OP_POLICY,words:packet.wire().unwrap()}}
+#[test]fn tagged_words_are_disjoint_from_actual_identity_decoder_and_lossless(){
+ let spoof=autofill::identity_reply(0x40000001,0,*b"bad");assert!(autofill::identity_decode(spoof).is_some());
+ for value in [0,1,u64::MAX,spoof,0x0102030405060708]{
+  let mut joined=0;for part in 0..2{let c=chunk(7,5,1,part,(value>>(part as u32*32))as u32).unwrap();assert!(autofill::identity_decode(c).is_none());assert!(is_chunk(c));joined|=(unchunk(c,7,5,1,part).unwrap()as u64)<<(part as u32*32);assert!(unchunk(c,7,6,1,part).is_none());assert!(unchunk(c,8,5,1,part).is_none());assert!(unchunk(c,7,5,2,part).is_none());assert!(unchunk(c,7,5,1,part^1).is_none());}assert_eq!(joined,value);
+ }
+ for byte in 0..256u32{for phase in 0..12{for selector in 0..23{for part in 0..2{let c=chunk(63,phase,selector,part,byte<<24|0xa8ffff).unwrap();assert_eq!((c>>24)&255,0xd5);assert!(autofill::identity_decode(c).is_none());assert_eq!(unchunk(c,63,phase,selector,part),Some(byte<<24|0xa8ffff));}}}}
+}
+#[test]fn tagged_provider_full_credits_reject_early_parts_raw_downgrade_and_full_admission(){
+ let page=journal::Journal::new();let mut p=fake();let mut state=provider::Provider::new();state.initialize(&page,&mut p);
+ for packet in packets(){
+  if packet.phase==Phase::Bind{p.now=1;}
+  let phase=packet.wire().unwrap()[0];state.message(provider::Message{opcode:OP_POLICY_TAGGED,..message(packet)},&page,&mut p);p.full=true;state.poll(&mut p,|_|true);assert!(p.replies.is_empty());p.full=false;state.poll(&mut p,|_|true);let low=p.replies.pop().unwrap();assert_eq!(unchunk(low,packet.generation,packet.phase as u8,0,0),Some(phase as u32));assert!(autofill::identity_decode(low).is_none());
+  let first=[phase,1<<8,1];state.message(provider::Message{caller:subject(3,3),opcode:OP_FETCH_TAGGED,words:first},&page,&mut p);state.poll(&mut p,|_|true);assert_eq!(unchunk(p.replies.pop().unwrap(),packet.generation,packet.phase as u8,0,1),Some((phase>>32)as u32));
+  state.message(provider::Message{caller:subject(3,3),opcode:OP_FETCH,words:[phase,1,1]},&page,&mut p);state.poll(&mut p,|_|true);assert!(p.replies.is_empty());
+  for selector in 1..=if packet.phase==Phase::Quarantine{4}else{2}{
+   let early=[phase,selector|1<<8,1];state.message(provider::Message{caller:subject(3,3),opcode:OP_FETCH_TAGGED,words:early},&page,&mut p);state.poll(&mut p,|_|true);assert!(p.replies.is_empty());
+   let expected=match selector{1=>packet.a,2=>packet.b,3=>100,4=>101,_=>unreachable!()};let mut joined=0;
+   for part in 0..2{let request=[phase,selector|part<<8,1];state.message(provider::Message{caller:subject(3,3),opcode:OP_FETCH_TAGGED,words:request},&page,&mut p);p.full=true;state.poll(&mut p,|_|true);assert!(p.replies.is_empty());p.full=false;state.poll(&mut p,|_|true);let c=p.replies.pop().unwrap();assert!(autofill::identity_decode(c).is_none());joined|=(unchunk(c,packet.generation,packet.phase as u8,selector as u8,part as u8).unwrap()as u64)<<(part*32);}
+   assert_eq!(joined,expected);
+  }
+ }
+ assert!(state.sealed());let b=state.binding().unwrap();assert!(state.job_live(b,1));
+}
 #[test]fn staging_requires_all_hash_credits_and_rejects_expiry_or_bind(){
  let page=journal::Journal::new();let mut p=fake();let mut state=provider::Provider::new();state.initialize(&page,&mut p);
  for packet in packets().into_iter().take(9){state.message(message(packet),&page,&mut p);assert!(state.staging(p.now).is_none());credits(&mut state,&page,&mut p,packet);if packet.phase!=Phase::InputHashHi{assert!(state.staging(p.now).is_none());}}
