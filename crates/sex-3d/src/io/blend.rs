@@ -1491,7 +1491,7 @@ fn read_mesh(f: &BlendFile<'_>, me: &View<'_, '_>) -> Result<Mesh, String> {
         let p = typed(&ed, CD_MEDGE).map_or(me.ptr("medge"), |l| l.data);
         f.view_array(p, &["MEdge"], ne).and_then(|es| es.iter().map(|x| Some([x.num("v1")? as i64, x.num("v2")? as i64])).collect())
     };
-    let mut mesh = Mesh { positions, faces, loose_edges: Vec::new() };
+    let mut mesh = Mesh { positions, faces, ..Default::default() };
     if let Some(edges) = edges {
         let used: HashSet<(u32, u32)> = mesh.faces.iter().flat_map(|fc| fc.edges().map(|(a, b)| (a.min(b), a.max(b)))).collect();
         for [a, b] in edges {

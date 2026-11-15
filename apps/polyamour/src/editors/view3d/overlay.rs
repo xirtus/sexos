@@ -18,6 +18,9 @@ const EDGE_SEL: u32 = 0xffa000;
 const VERT_SEL: u32 = 0xff7a00;
 const FACE_SEL: u32 = 0xffa733;
 const WIRE_EDIT: u32 = 0x000000;
+/// Blender's theme colours for UV seams and sharp edges.
+pub const EDGE_SEAM: u32 = 0xdb2512;
+pub const EDGE_SHARP: u32 = 0x00ffff;
 
 fn blend_rgba(a: &mut [u8], b: &[u8], alpha: u32) {
     for (x, y) in a.iter_mut().zip(b) {
@@ -218,6 +221,12 @@ pub fn edit_overlay(s: &mut State, d: &Doc, ui: &mut Ui, p: &Proj) {
         let k = if a < b { (a, b) } else { (b, a) };
         sel.edges.contains(&k)
     };
+    let mesh = crate::edit::active_mesh(d).map(|(_, mi)| &d.scene.meshes[mi]);
+    let flag_col = |a: u32, b: u32| match mesh {
+        Some(m) if m.is_seam(a, b) => Some(EDGE_SEAM),
+        Some(m) if m.is_sharp(a, b) => Some(EDGE_SHARP),
+        _ => None,
+    };
     // Edges, unselected first so selected ones draw on top.
     for pass in 0..2 {
         for e in &ev.edges {
@@ -229,7 +238,8 @@ pub fn edit_overlay(s: &mut State, d: &Doc, ui: &mut Ui, p: &Proj) {
                 continue;
             }
             let (Some(a), Some(b)) = (ev.screen[e[0] as usize], ev.screen[e[1] as usize]) else { continue };
-            let col = if selected { EDGE_SEL } else { WIRE_EDIT };
+            let flagged = flag_col(e[0], e[1]);
+            let col = if selected { EDGE_SEL } else { flagged.unwrap_or(WIRE_EDIT) };
             let len = (b.0 - a.0).hypot(b.1 - a.1);
             let n = ((len / 5.0).ceil() as i32).clamp(1, 400);
             let mut run: Option<(f32, f32)> = None;
@@ -248,7 +258,7 @@ pub fn edit_overlay(s: &mut State, d: &Doc, ui: &mut Ui, p: &Proj) {
             }
             if let Some(st) = run {
                 ui.p.line(st.0, st.1, b.0, b.1, col);
-                if selected {
+                if selected || flagged.is_some() {
                     ui.p.line(st.0 + 0.5, st.1 + 0.5, b.0 + 0.5, b.1 + 0.5, col);
                 }
             }

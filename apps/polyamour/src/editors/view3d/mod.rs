@@ -611,6 +611,11 @@ fn mouse_in(ui: &Ui, r: Rect) -> (f32, f32) {
 fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: Rect) {
     let m = mouse_in(ui, r);
     match id {
+        "uv.project_from_view" => {
+            let p = Proj::new(&s.cam, r);
+            let f = move |w: Vec3| p.to_screen(w);
+            crate::uvedit::project_from_view(d, Some((&f, (r.x as f32, r.y as f32, r.w as f32, r.h as f32))), arg.contains("BOUNDS"));
+        }
         "view3d.view_all" => frame_all(s, d),
         "view3d.view_selected" => frame_bounds(s, selected_bounds(d)),
         "view3d.view_axis" => set_axis_view(s, arg),

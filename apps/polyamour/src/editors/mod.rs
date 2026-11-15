@@ -217,6 +217,7 @@ impl Editor {
     pub fn is_modal(&self) -> bool {
         match self {
             Editor::View3D(s) => view3d::is_modal(s),
+            Editor::Image(s) => image::is_modal(s),
             _ => false,
         }
     }

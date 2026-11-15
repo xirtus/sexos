@@ -528,10 +528,10 @@ pub fn edge_menu(_d: &Doc) -> Vec<MenuItem> {
         op("Loop Cut and Slide", "Ctrl R", "mesh.loopcut_slide"),
         SEP,
         op("Mark Seam", "", "mesh.mark_seam"),
-        op("Clear Seam", "", "mesh.mark_seam"),
+        opa("Clear Seam", "", "mesh.mark_seam", "CLEAR"),
         SEP,
         op("Mark Sharp", "", "mesh.mark_sharp"),
-        op("Clear Sharp", "", "mesh.mark_sharp"),
+        opa("Clear Sharp", "", "mesh.mark_sharp", "CLEAR"),
     ]
 }
 
@@ -575,10 +575,10 @@ pub fn uv_menu(_d: &Doc) -> Vec<MenuItem> {
         op("Sphere Projection", "", "uv.sphere_project"),
         SEP,
         op("Project from View", "", "uv.project_from_view"),
-        op("Project from View (Bounds)", "", "uv.project_from_view"),
+        opa("Project from View (Bounds)", "", "uv.project_from_view", "BOUNDS"),
         SEP,
         op("Mark Seam", "", "mesh.mark_seam"),
-        op("Clear Seam", "", "mesh.mark_seam"),
+        opa("Clear Seam", "", "mesh.mark_seam", "CLEAR"),
         SEP,
         op("Reset", "", "uv.reset"),
     ]

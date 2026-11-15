@@ -333,7 +333,7 @@ impl Doc {
     /// Run an operator by its Blender-style name. Unknown names are reported,
     /// not ignored, so missing features show up in the status bar.
     pub fn run(&mut self, op: &Op) {
-        if self.run_view3d(op) || crate::edit::run(self, op) {
+        if self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) {
             return;
         }
         let arg = op.arg.as_str();
@@ -569,6 +569,7 @@ pub fn is_view_op(id: &str) -> bool {
     matches!(
         id,
         "view3d.view_all"
+            | "uv.project_from_view"
             | "view3d.view_selected"
             | "view3d.view_axis"
             | "view3d.view_camera"

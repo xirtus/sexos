@@ -23,6 +23,7 @@ pub mod settings;
 pub mod theme;
 pub mod transform;
 pub mod ui;
+pub mod uvedit;
 
 pub use app::App;
 

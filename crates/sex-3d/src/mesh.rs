@@ -6,7 +6,7 @@
 //! renderer exchange. [`HalfEdgeMesh`] is the connectivity view built from it on
 //! demand for topology work: neighbours, boundaries, edge loops, manifold checks.
 use crate::math::{Aabb, Mat4, Vec2, Vec3};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Face {
@@ -43,6 +43,32 @@ pub struct Mesh {
     pub faces: Vec<Face>,
     /// Edges not used by any face (wireframe-only geometry).
     pub loose_edges: Vec<[u32; 2]>,
+    /// Edges marked as UV seams (Blender's `mesh.mark_seam`), as (low, high)
+    /// vertex pairs. Flags on pairs that are no longer edges are ignored.
+    pub seams: BTreeSet<(u32, u32)>,
+    /// Edges marked sharp (`mesh.mark_sharp`), as (low, high) vertex pairs.
+    pub sharp_edges: BTreeSet<(u32, u32)>,
+    /// Pinned UVs (the UV editor's P), as (face, corner) pairs.
+    pub uv_pins: BTreeSet<(u32, u32)>,
+}
+
+/// An undirected edge as its (low, high) vertex pair.
+pub fn edge_key(a: u32, b: u32) -> (u32, u32) {
+    if a < b {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
+/// Point a set of edge flags through a vertex `remap`, dropping edges that
+/// collapse.
+pub fn remap_edge_set(set: &BTreeSet<(u32, u32)>, remap: &[u32]) -> BTreeSet<(u32, u32)> {
+    set.iter()
+        .filter(|e| (e.0 as usize) < remap.len() && (e.1 as usize) < remap.len())
+        .map(|e| edge_key(remap[e.0 as usize], remap[e.1 as usize]))
+        .filter(|e| e.0 != e.1)
+        .collect()
 }
 
 /// One triangle of a triangulated mesh, with where it came from.
@@ -59,7 +85,40 @@ impl Mesh {
         Mesh::default()
     }
     pub fn from_faces(positions: Vec<Vec3>, faces: Vec<Vec<u32>>) -> Mesh {
-        Mesh { positions, faces: faces.into_iter().map(Face::new).collect(), loose_edges: Vec::new() }
+        Mesh { positions, faces: faces.into_iter().map(Face::new).collect(), ..Default::default() }
+    }
+    pub fn is_seam(&self, a: u32, b: u32) -> bool {
+        !self.seams.is_empty() && self.seams.contains(&edge_key(a, b))
+    }
+    pub fn is_sharp(&self, a: u32, b: u32) -> bool {
+        !self.sharp_edges.is_empty() && self.sharp_edges.contains(&edge_key(a, b))
+    }
+    /// Mark or clear edge (a, b) as a UV seam.
+    pub fn set_seam(&mut self, a: u32, b: u32, on: bool) {
+        if on {
+            self.seams.insert(edge_key(a, b));
+        } else {
+            self.seams.remove(&edge_key(a, b));
+        }
+    }
+    pub fn set_sharp(&mut self, a: u32, b: u32, on: bool) {
+        if on {
+            self.sharp_edges.insert(edge_key(a, b));
+        } else {
+            self.sharp_edges.remove(&edge_key(a, b));
+        }
+    }
+    /// Drop seam/sharp flags on vertex pairs that are no longer edges and pins
+    /// on corners that no longer exist (after topology changes that did not
+    /// go through [`Mesh::remap_vertices`]).
+    pub fn prune_flags(&mut self) {
+        if !self.seams.is_empty() || !self.sharp_edges.is_empty() {
+            let edges: std::collections::HashSet<(u32, u32)> = self.edges().into_iter().map(|e| (e[0], e[1])).collect();
+            self.seams.retain(|e| edges.contains(e));
+            self.sharp_edges.retain(|e| edges.contains(e));
+        }
+        let faces = &self.faces;
+        self.uv_pins.retain(|&(f, c)| faces.get(f as usize).is_some_and(|f| (c as usize) < f.verts.len()));
     }
     pub fn add_vertex(&mut self, p: Vec3) -> u32 {
         self.positions.push(p);
@@ -201,9 +260,13 @@ impl Mesh {
             }
             self.faces.push(nf);
         }
+        let foff = self.faces.len() as u32 - o.faces.len() as u32;
         for e in &o.loose_edges {
             self.loose_edges.push([e[0] + off, e[1] + off]);
         }
+        self.seams.extend(o.seams.iter().map(|e| (e.0 + off, e.1 + off)));
+        self.sharp_edges.extend(o.sharp_edges.iter().map(|e| (e.0 + off, e.1 + off)));
+        self.uv_pins.extend(o.uv_pins.iter().map(|p| (p.0 + foff, p.1)));
         off
     }
 
@@ -281,7 +344,9 @@ impl Mesh {
     /// collapse and consecutive duplicate corners.
     pub fn remap_vertices(&mut self, remap: &[u32]) {
         let faces = std::mem::take(&mut self.faces);
-        for mut f in faces {
+        let pins = std::mem::take(&mut self.uv_pins);
+        for (fi, mut f) in faces.into_iter().enumerate() {
+            let n_before = f.verts.len();
             let mut verts = Vec::with_capacity(f.verts.len());
             let mut uvs = Vec::new();
             for (i, &v) in f.verts.iter().enumerate() {
@@ -298,6 +363,11 @@ impl Mesh {
                 uvs.pop();
             }
             if verts.len() >= 3 {
+                // Pins survive when the face keeps all its corners.
+                if verts.len() == n_before {
+                    let nf = self.faces.len() as u32;
+                    self.uv_pins.extend(pins.range((fi as u32, 0)..(fi as u32 + 1, 0)).map(|p| (nf, p.1)));
+                }
                 f.verts = verts;
                 f.uvs = uvs;
                 self.faces.push(f);
@@ -307,6 +377,8 @@ impl Mesh {
             *e = [remap[e[0] as usize], remap[e[1] as usize]];
         }
         self.loose_edges.retain(|e| e[0] != e[1]);
+        self.seams = remap_edge_set(&self.seams, remap);
+        self.sharp_edges = remap_edge_set(&self.sharp_edges, remap);
     }
 
     /// Drop vertices no face or edge uses. Returns how many were removed.
@@ -353,6 +425,9 @@ impl Mesh {
             if e[0] >= n || e[1] >= n {
                 return Err(format!("edge {i} out of range"));
             }
+        }
+        if self.seams.iter().chain(&self.sharp_edges).any(|e| e.0 >= n || e.1 >= n) {
+            return Err("seam or sharp edge out of range".into());
         }
         if self.positions.iter().any(|p| !(p.x.is_finite() && p.y.is_finite() && p.z.is_finite())) {
             return Err("non-finite vertex position".into());
