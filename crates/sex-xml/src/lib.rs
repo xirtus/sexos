@@ -114,6 +114,9 @@ pub fn parse(text: &str) -> Node {
     let b = text.as_bytes();
     let mut stack: Vec<Node> = Vec::new();
     stack.push(Node::default());
+    // Names of elements opened past MAX_DEPTH, so their end tags close them and not an
+    // ancestor of the same name.
+    let mut flattened: Vec<String> = Vec::new();
     let mut i = 0;
     let push_text = |stack: &mut Vec<Node>, t: String| {
         if t.is_empty() { return; }
@@ -150,6 +153,10 @@ pub fn parse(text: &str) -> Node {
             let end = memchr(b'>', &b[i..]).map_or(b.len(), |n| i + n);
             let name = text[i + 2..end].trim();
             i = (end + 1).min(b.len());
+            if let Some(at) = flattened.iter().rposition(|n| n.eq_ignore_ascii_case(name)) {
+                flattened.truncate(at);
+                continue;
+            }
             // Close up to the matching element, if it is open at all.
             if let Some(at) = stack.iter().rposition(|n| n.name.eq_ignore_ascii_case(name)).filter(|at| *at > 0) {
                 while stack.len() > at {
@@ -220,6 +227,7 @@ pub fn parse(text: &str) -> Node {
                 i = memchr(b'>', &b[end.min(b.len())..]).map_or(b.len(), |n| end + n + 1);
             } else if stack.len() > MAX_DEPTH {
                 // Too deep: keep the element, empty, and let its contents join its parent.
+                flattened.push(node.name.clone());
                 stack.last_mut().unwrap().children.push(Child::Element(node));
             } else {
                 stack.push(node);
@@ -403,6 +411,16 @@ mod tests {
         assert!(depth <= MAX_DEPTH + 1, "depth {depth}");
         assert!(root.text().ends_with("end"));
         assert!(root.find("missing").is_none());
+        // End tags of flattened elements close those, not a kept ancestor of the same name.
+        let n = MAX_DEPTH * 2;
+        let doc = "<t>".repeat(n) + &"</t>".repeat(MAX_DEPTH) + "hidden" + &"</t>".repeat(n - MAX_DEPTH) + "after";
+        let root = parse(&doc);
+        let mut depth = 0;
+        let mut node = &root;
+        while let Some(c) = node.elements().find(|c| !c.children.is_empty()) { node = c; depth += 1; }
+        assert!(node.text().contains("hidden"), "hidden text stays in the deepest kept <t> (depth {depth})");
+        assert_eq!(root.children.iter().filter(|c| matches!(c, Child::Element(_))).count(), 1);
+        assert!(matches!(root.children.last(), Some(Child::Text(t)) if t == "after"));
         let repro = include_bytes!("../../../fuzz/repros/round3/gossip-xml-unbounded-depth-stack-overflow.bin");
         let _ = parse(&alloc::string::String::from_utf8_lossy(repro)).text();
     }
