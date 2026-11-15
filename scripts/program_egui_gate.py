@@ -69,7 +69,10 @@ def main():
   s=len(t());click(ox+20,oy+102);g['wait'](r'\[tassel.checked\] value=true\n',s,60)
   s=len(t());move(ox+100,oy+190)
   for _ in range(4):button('wheel-down',True);button('wheel-down',False)
-  m=g['wait'](r'\[tassel.scrolled\] first=(\d+)\n',s,60);assert int(m[1])>0,m[0]
+  try:m=g['wait'](r'\[tassel.scrolled\] first=(\d+)\n',s,60)
+  except TimeoutError:
+   print('--- egui: its own lines ---');print('\n'.join(l for l in t().splitlines() if '[egui.' in l or '[tassel.' in l or 'pointer' in l)[-6000:]);raise
+  assert int(m[1])>0,m[0]
   probe=shot('tassel-probe',tile)
   assert len(probe)>8,'the probe panel looks blank'
   close(target,task,surface)

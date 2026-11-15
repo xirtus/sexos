@@ -64,6 +64,11 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
                         Kind::Wheel { steps } => PointerKind::Wheel(steps),
                         Kind::Leave => PointerKind::Leave,
                     };
+                    if options.trace_frames {
+                        if let Kind::Wheel { steps } = p.kind {
+                            sex_std::sex_pdx::serial_record!("[egui.wheel] steps={} x={} y={} t={}", steps, p.x, p.y, start.elapsed().as_millis());
+                        }
+                    }
                     keys::pointer_events(p.x, p.y, kind, ppp, modifiers, &mut events);
                 }
                 // Drops reach egui once dnd forwarding lands (sex_app::dnd holds the bytes).
@@ -103,8 +108,8 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
         frames += 1;
         if frames == 1 || options.trace_frames {
             sex_std::sex_pdx::serial_record!(
-                "[egui.frame] n={} w={} h={} meshes={} triangles={} pixels={} ms={}",
-                frames, w, h, stats.meshes, stats.triangles, stats.pixels, began.elapsed().as_millis()
+                "[egui.frame] n={} w={} h={} meshes={} triangles={} pixels={} ms={} t={} repaint={:?}",
+                frames, w, h, stats.meshes, stats.triangles, stats.pixels, began.elapsed().as_millis(), start.elapsed().as_millis(), repaint.as_millis().min(99999)
             );
         }
         if close_asked {
