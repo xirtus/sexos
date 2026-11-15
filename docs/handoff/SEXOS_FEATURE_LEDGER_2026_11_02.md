@@ -4827,3 +4827,16 @@ Roadmap workstream B, part 2. How to cut a release: `docs/handoff/SIGNED_UPDATES
 - Exact source, runner, private-disk/program-store, WAV, project, screenshot and
   ISO/config digests are in `MOAN_STEP_RUNTIME_2026_11_15.json`. The first Step gate's
   incorrect all-notes velocity action remains preserved as an identified failure.
+
+### Round 196 workspace/live follow-up: heard mix and actual controls
+
+- Intermediate8d46 app passes four actual wide UI captures, including eight real
+  mixer strips plus master. Native horizontal faders remain a toolkit limit.
+- Nine captured-audio phases independently verify400/600 Hz, exact expected RMS
+  for live master/pan/solo/channel-level/mute/unmute, and active10 ms windows.
+  One Undo restores each live pass. Queued audio updates are explicitly bounded;
+  no instantaneous/hard-realtime or physical-latency claim.
+- Five actual-Driver input regressions pass. Three diagnosed checker failures and
+  all raw inputs remain preserved. Full digests and scope are in
+  `MOAN_WORKSPACE_LIVE_RUNTIME_2026_11_15.json`; later palette/restricted/narrow and
+  final legacy regression are separate cohorts. No kernel or toolkit edits.

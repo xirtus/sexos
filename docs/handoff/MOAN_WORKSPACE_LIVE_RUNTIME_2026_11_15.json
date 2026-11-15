@@ -1,0 +1,352 @@
+{
+  "scope": "Development1280x800 workspace/live-mix proof of8d46 app installed on a private disk over preserved v9 normalISO. Separate from canonical sealing, restricted plugin role, physical latency/microphone or later palette changes.",
+  "source_commit": "8d46f75642f1fef5b0f0997ade6b2d9d863b5dd7",
+  "evidence_directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/workspace-live-proof-v4",
+  "result_sha256": "74a187be0022a21f8a1d43e78abf83eb349af0bfeafa577a769ae7fcde330bc8",
+  "inputs_sha256": "f4903a027f1166ecfd5d335b1c4067d9cb8a7c66a1514f0020be835a9cde7f48",
+  "actual_checker_sha256": "62670424070fc3eafa044f1c08eeab33ece3c3d8428c083b5b23ced8782f77a6",
+  "maintained_runner": "scripts/moan_workspace_gate.py: same Driver/audio predicates; CLI paths replace fixed local paths. Actual source snapshot retained separately.",
+  "app_elf_sha256": "92cba051587d070a7b42884838d7ec77c318c7af3d7ebaa5337dd95309cb15f7",
+  "iso_sha256": "93d3bef41ec9608d067a20357c2e0740e9c5785798449ab16f46734ba2f631ad",
+  "source_seed_sha256": "49bc20df15e412a64472421e13fe86ff1c5165e18b2afccf160d4dc19fe68a14",
+  "seed_elf_sha256": "a7e640943845a394a8bd138f2f76a80d4a159a404fa535d7f02a2df16209a7dc",
+  "source_sha256": {
+    "apps/moan/Cargo.toml": "8c8ce802a0c1772e7cc876f283c551e55572c4320190b49b6927d6d6ce61ac21",
+    "apps/moan/build.rs": "88265209bfe235aa9729dd3958232523beba41d4c6323acdb9b0c163111f529e",
+    "apps/moan/tests/midi_project.rs": "d33c22cab47b0d7dc3707c0950b709f34536d515a94658eeaa4654f0b26600ff",
+    "apps/moan/tests/studio.rs": "7467feb85ded4381fafca91e8dfbac337de1292c05a5c2ebb3af5b06d0b72f3b",
+    "apps/moan/tests/plugins.rs": "a4048636db511f36f91b2aa5acb9887f2e1559bacf53399d0d7c31dcba1b9bba",
+    "apps/moan/tests/waveform.rs": "0ed5f0f01bd647df93ceaac3fae27d2cebd1a2bf06e0a22bda36d1be1130cd98",
+    "apps/moan/tests/mixer.rs": "eaf82292edadea47783d91e5ee8eea5e4a37789c02eb23949d1090b26a891dbc",
+    "apps/moan/tests/midi_memory.rs": "6bf210b193568e7eeb34cf722bac74f7261d8e68dd9fcb3813c8962552c90446",
+    "apps/moan/tests/projects.rs": "d92b8d737ccebf9dedc14a313d4b6bd06dfb4290aef33d7b59cef401d7e6e331",
+    "apps/moan/tests/plugin_pixels.rs": "9a8bddef62834d5fcf5f39c4754b63e2a802e8b5905a3d1ae9d28f0794afb2c6",
+    "apps/moan/tests/workstation.rs": "9862184249187045a1eced524856f1533c3c14710976528b203bdf75fc69ddfc",
+    "apps/moan/tests/meter_history.rs": "e567aaa70ae6e295237723516ca996c86511386c67b738cfd466002a6cb84e53",
+    "apps/moan/examples/preview.rs": "79fbddfa1fc46b8ec42ac0933906c0ade0eb63d96560256ccbd750006465bb4f",
+    "apps/moan/src/lib.rs": "31b4deaa5b01a1de91a48451f3d1208f147fa9c43976e8a1611cad561c1acb10",
+    "apps/moan/src/plugins.rs": "6cbbd0f124d1c07be4ab169d796e1ee2d0061564fcd3153543fc4926034f16bf",
+    "apps/moan/src/waveform.rs": "575e0ced56ad570c4c7c93f07b065814bf775fa9b04f05de568d3ce4ca0c2341",
+    "apps/moan/src/project.rs": "f79907fbbbba3f24f8aeab14ad7d2cad5833989f2f07619e4ca15c0be58050d1",
+    "apps/moan/src/piano.rs": "f2d913eda50f5b82d79cb47005e5ba5214566b7c5fbafc5d7e662cee0b6ab2f5",
+    "apps/moan/src/main.rs": "c75cbc4489d63e0794c7d634df12dd280fa5d4c7b6433bdb95f78e9a161dd971",
+    "apps/moan/src/project_io.rs": "18a44856222c23cf09001708209ace5cf8178cb04ae8d279207c1495e498ed46",
+    "apps/moan/src/plugin_pixels.rs": "d762770d54ed9c8069f86567b4ec3781784f674f8e7bd0494e1477aa04135bc7",
+    "apps/moan/src/step.rs": "568f540d44d74d54f5b24c6d783d11a36a3fa5aca00ce81e4d20544497bbab7d",
+    "apps/moan/src/meter_history.rs": "e2ce0f8e3a7ece6c91cfc081b835ba805e730307c88e2fc7d5a5165f998baf65",
+    "crates/moan-core/Cargo.toml": "a46856b45635a76bd8f316d7c1f1d40fb6a6f4642b488fcdf055df3e0d76bf2c",
+    "crates/moan-core/tests/midi.rs": "b6251208105e845a3531d04462a800f44997b56d1653563100cba639755c52c7",
+    "crates/moan-core/tests/timeline.rs": "e3b52db00bb0dd7b278f10c5a6e6307eb3522c79fc61825c2619d18605ce31b7",
+    "crates/moan-core/tests/effects.rs": "e4c85df8316d1cc0bd6e0c636d60707734a03d724e002ca4f6458f838f49d5aa",
+    "crates/moan-core/examples/effects_reference.rs": "6e0abd72a854a194d5702c7ab401ad9fac98b79feaddc93373a5e0e3343e0800",
+    "crates/moan-core/src/midi.rs": "b04b4b8db3eb976124620b5c4c072be2153d5c3c51dc00e0f8b98e03714d31aa",
+    "crates/moan-core/src/lib.rs": "e303114b6c9e46d283ded56ba617a97eb1e7ca22600fe44290865fb075843ebf",
+    "crates/moan-core/src/effects.rs": "e64e38e9739770c7bfad8261e7c9cefd1a965d891d17a5fda2e1cf8ea4affb62"
+  },
+  "result": {
+    "ok": true,
+    "scope": "Intermediate actual workspace and live-mixer UI/audio proof; no restricted-role claim.",
+    "source_commit": "8d46f75642f1fef5b0f0997ade6b2d9d863b5dd7",
+    "inputs_sha256": "f4903a027f1166ecfd5d335b1c4067d9cb8a7c66a1514f0020be835a9cde7f48",
+    "screenshots": [
+      {
+        "file": "arrange-three-real-tracks.ppm",
+        "sha256": "25b666022acd17b556aba94d2f82e035687179c8c928ead7983630386a4e0ad7",
+        "inputs_sha256": "f4903a027f1166ecfd5d335b1c4067d9cb8a7c66a1514f0020be835a9cde7f48",
+        "semantic": {
+          "tracks": 3,
+          "midi_regions": 3
+        },
+        "serial_start": 659456,
+        "serial_end": 659456,
+        "serial_prefix_sha256": "e824b97e99e7bf600eee2657b5c04a32581d223cb3397e30a03fca0478b29c66",
+        "attempts": [
+          {
+            "file": "arrange-three-real-tracks-attempt1.ppm",
+            "sha256": "25b666022acd17b556aba94d2f82e035687179c8c928ead7983630386a4e0ad7",
+            "ok": true,
+            "error": null,
+            "serial_end": 659456
+          }
+        ]
+      },
+      {
+        "file": "instruments-offline-controls.ppm",
+        "sha256": "3c77703c2666bf581b88485cf97aa39ca18f6e02b4b3be35e4baa808f0fcf123",
+        "inputs_sha256": "f4903a027f1166ecfd5d335b1c4067d9cb8a7c66a1514f0020be835a9cde7f48",
+        "semantic": {
+          "status": "Offline render ready",
+          "hosting_scope": "ordinary crash-contained offline helper; no restricted-provider claim"
+        },
+        "serial_start": 686856,
+        "serial_end": 686856,
+        "serial_prefix_sha256": "2e910b110e45235daa2320af701496714308e22e42e006a9699ff837a3703cd0",
+        "attempts": [
+          {
+            "file": "instruments-offline-controls-attempt1.ppm",
+            "sha256": "3c77703c2666bf581b88485cf97aa39ca18f6e02b4b3be35e4baa808f0fcf123",
+            "ok": true,
+            "error": null,
+            "serial_end": 686856
+          }
+        ]
+      },
+      {
+        "file": "step-shared-region.ppm",
+        "sha256": "30526360588507e09f6618120a0f13ea032df50b54c98c6e796b9b551dd8ba95",
+        "inputs_sha256": "f4903a027f1166ecfd5d335b1c4067d9cb8a7c66a1514f0020be835a9cde7f48",
+        "semantic": {
+          "track": 0,
+          "steps": [
+            1,
+            3,
+            7,
+            13
+          ],
+          "bar_labels": "bar.beat.eighth",
+          "notes": 4
+        },
+        "serial_start": 763997,
+        "serial_end": 763997,
+        "serial_prefix_sha256": "3c175de1bdb34080686050a8522e427c4068f374d2ce8bba959570a0559c2896",
+        "attempts": [
+          {
+            "file": "step-shared-region-attempt1.ppm",
+            "sha256": "30526360588507e09f6618120a0f13ea032df50b54c98c6e796b9b551dd8ba95",
+            "ok": true,
+            "error": null,
+            "serial_end": 763997
+          }
+        ]
+      },
+      {
+        "file": "mix-eight-real-tracks-master.ppm",
+        "sha256": "f1d2b0db3bf2064398af01ac2fcdc09592421dfe8aa71c03344f30c909d67030",
+        "inputs_sha256": "f4903a027f1166ecfd5d335b1c4067d9cb8a7c66a1514f0020be835a9cde7f48",
+        "semantic": {
+          "tracks": 8,
+          "master": true,
+          "controls": "native level/pan/M-S; horizontal fader toolkit boundary retained"
+        },
+        "serial_start": 908162,
+        "serial_end": 908162,
+        "serial_prefix_sha256": "d4e9bd6e53db60f5e1be1f38389dcffe3c710d080e9073f2029c13965cde747c",
+        "attempts": [
+          {
+            "file": "mix-eight-real-tracks-master-attempt1.ppm",
+            "sha256": "f1d2b0db3bf2064398af01ac2fcdc09592421dfe8aa71c03344f30c909d67030",
+            "ok": true,
+            "error": null,
+            "serial_end": 908162
+          }
+        ]
+      }
+    ],
+    "audio": [
+      {
+        "name": "baseline-0",
+        "from_frame": 14400,
+        "to_frame": 38400,
+        "expected": [
+          2.0,
+          2.0
+        ],
+        "rms": [
+          8484.372705156227,
+          11312.966401435126
+        ],
+        "hz": [
+          400.0,
+          600.0
+        ]
+      },
+      {
+        "name": "master50-live",
+        "ack_frame": 149493,
+        "from_frame": 250293,
+        "to_frame": 269493,
+        "expected": [
+          1.0,
+          1.0
+        ],
+        "rms": [
+          4242.186352578114,
+          5656.483200717563
+        ],
+        "hz": [
+          400.0,
+          600.0
+        ]
+      },
+      {
+        "name": "pan0-right-live",
+        "ack_frame": 326645,
+        "from_frame": 427445,
+        "to_frame": 446645,
+        "expected": [
+          0.5,
+          1.0
+        ],
+        "rms": [
+          2120.910610248972,
+          5656.483200717563
+        ],
+        "hz": [
+          400.0,
+          600.0
+        ]
+      },
+      {
+        "name": "baseline-1",
+        "from_frame": 694325,
+        "to_frame": 718325,
+        "expected": [
+          2.0,
+          2.0
+        ],
+        "rms": [
+          8484.372705156227,
+          11312.966401435126
+        ],
+        "hz": [
+          400.0,
+          600.0
+        ]
+      },
+      {
+        "name": "solo0-live",
+        "ack_frame": 774133,
+        "from_frame": 874933,
+        "to_frame": 894133,
+        "expected": [
+          1.0,
+          1.0
+        ],
+        "rms": [
+          4242.186352578114,
+          5656.483200717563
+        ],
+        "hz": [
+          400.0,
+          600.0
+        ]
+      },
+      {
+        "name": "track0-level50-live",
+        "ack_frame": 1020917,
+        "from_frame": 1121717,
+        "to_frame": 1140917,
+        "expected": [
+          0.5,
+          0.5
+        ],
+        "rms": [
+          2120.910610248972,
+          2827.9941920025226
+        ],
+        "hz": [
+          400.0,
+          600.0
+        ]
+      },
+      {
+        "name": "baseline-2",
+        "from_frame": 1374261,
+        "to_frame": 1398261,
+        "expected": [
+          2.0,
+          2.0
+        ],
+        "rms": [
+          8484.372705156227,
+          11312.966401435126
+        ],
+        "hz": [
+          400.0,
+          600.0
+        ]
+      },
+      {
+        "name": "mute0-live",
+        "ack_frame": 1454069,
+        "from_frame": 1554869,
+        "to_frame": 1574069,
+        "expected": [
+          1.0,
+          1.0
+        ],
+        "rms": [
+          4242.186352578114,
+          5656.483200717563
+        ],
+        "hz": [
+          400.0,
+          600.0
+        ]
+      },
+      {
+        "name": "unmute0-live",
+        "ack_frame": 1626101,
+        "from_frame": 1726901,
+        "to_frame": 1746101,
+        "expected": [
+          2.0,
+          2.0
+        ],
+        "rms": [
+          8484.372705156227,
+          11312.966401435126
+        ],
+        "hz": [
+          400.0,
+          600.0
+        ]
+      }
+    ],
+    "queue_semantics": "Only newly rendered blocks change; gate measures after2.1s ring/card tail. No instant or hard realtime guarantee.",
+    "source_edits_remained_locked": true
+  },
+  "artifacts": {
+    "instruments-offline-controls.ppm": "3c77703c2666bf581b88485cf97aa39ca18f6e02b4b3be35e4baa808f0fcf123",
+    "step-shared-region-attempt1.ppm": "30526360588507e09f6618120a0f13ea032df50b54c98c6e796b9b551dd8ba95",
+    "source-commit.txt": "6c943222b61f6823dddd1bf2c5d27c9b1818bc464ebb5cb056bb779d4b46c621",
+    "arrange-three-real-tracks-attempt1.ppm": "25b666022acd17b556aba94d2f82e035687179c8c928ead7983630386a4e0ad7",
+    "result.json": "74a187be0022a21f8a1d43e78abf83eb349af0bfeafa577a769ae7fcde330bc8",
+    "workspace-live-qemu.log": "d7700053b73ddc4e45e7bb5a7f8dd1112e01b3ac6e313cb1f6be818a4394d783",
+    "checker-input-tests.py": "3cc7780d183edaa784c47cd49eeebf4eb62526fca50718bafbe3e8db8dfec8e7",
+    "step-shared-region.json": "527742b3d1b9f5489f44d396ab4d87598523d4b056ae25e2fdc192c065f76f8b",
+    "mix-eight-real-tracks-master-attempt1.ppm": "f1d2b0db3bf2064398af01ac2fcdc09592421dfe8aa71c03344f30c909d67030",
+    "step-shared-region.ppm": "30526360588507e09f6618120a0f13ea032df50b54c98c6e796b9b551dd8ba95",
+    "workspace-live-serial.log": "4d7692c6202cce6ca2d706aa9d5eb3aa82fecc703ceb1555b9a2e4d10cc913c1",
+    "instruments-offline-controls.json": "9fda31b3bce86994eedeb780baca607e3a628d6efbda804ca74ca1e12c14534d",
+    "inputs.json": "f4903a027f1166ecfd5d335b1c4067d9cb8a7c66a1514f0020be835a9cde7f48",
+    "live.wav": "886179da83655f2f605a82809edae025c31209c171f95ff4c101176d0abe44b6",
+    "mix-eight-real-tracks-master.json": "0c2deca5dd0b024b510626dcac50f7461798b3bf615bcdbf15fa34ff8c179bf1",
+    "arrange-three-real-tracks.ppm": "25b666022acd17b556aba94d2f82e035687179c8c928ead7983630386a4e0ad7",
+    "checker-source.py": "62670424070fc3eafa044f1c08eeab33ece3c3d8428c083b5b23ced8782f77a6",
+    "nvme.img": "9e6a7f88302f5b3a443bf08d725ed742129934e429666e7c0dd55c3be164cb7d",
+    "mix-eight-real-tracks-master.ppm": "f1d2b0db3bf2064398af01ac2fcdc09592421dfe8aa71c03344f30c909d67030",
+    "instruments-offline-controls-attempt1.ppm": "3c77703c2666bf581b88485cf97aa39ca18f6e02b4b3be35e4baa808f0fcf123",
+    "arrange-three-real-tracks.json": "5afab0a780f09e0d69a75c0c51e49a0fbc320c7993d02e2a711a536c6f8aafb4"
+  },
+  "preserved_failures": [
+    {
+      "directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/workspace-live-proof-v1",
+      "reason": "Immediate adaptive slider strokes overshot intended Master100 to101 before audio.",
+      "checker_sha256": "ee78ea85e846110e7bd2f2415dddb2038afd6348d40420f379c4af1cee3b13ea",
+      "failure_note_sha256": "991c52e17156ea3a8286f7a56df5fe13af87ff41fc426b3ab8d2caad692ece53"
+    },
+    {
+      "directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/workspace-live-proof-v2",
+      "reason": "Inherited generic control refresh bypassed held Driver refresh before audio.",
+      "checker_sha256": "256c6b07beffa19189877b29d95bdc40235c40d792be08cb0ba3a31434016477",
+      "failure_note_sha256": "0cd299ae7148a5071dd33c4a2d4033af982c1aca650067f985c4928d3d69281b"
+    },
+    {
+      "directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/workspace-live-proof-v3",
+      "reason": "Odd pointer49/51 parity and partial metadata-frame fence; first live pass completed, gate incomplete.",
+      "checker_sha256": "17488e8779179a9aa0d3fa01054b570415d0592afdb549848cba9ca695cc692a",
+      "failure_note_sha256": "53734bb62ed21c993f2e5434432227766e9f3c24ef1abf76a8d5d745b1b1ad69"
+    }
+  ]
+}
