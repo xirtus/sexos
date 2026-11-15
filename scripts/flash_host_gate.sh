@@ -27,6 +27,9 @@ for seed in "" 1 2 3 4 5 6 7 8; do
   [[ "$seed" != "8" ]] || { echo "[FAIL] flash has refused key bytes"; exit 1; }
 done
 
+mkdir -p iso_root/programs
+cp target/x86_64-sex-app/release/flash iso_root/programs/flash
+
 echo "[flash.host.gate] 4/4: Running host smoke test with FakeUvcCamera..."
 python3 scripts/flash_host_smoke.py
 
