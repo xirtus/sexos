@@ -139,6 +139,85 @@ impl Default for Material {
     }
 }
 
+impl Material {
+    /// Copy the node tree's Principled BSDF (the one feeding the active
+    /// Material Output's Surface, through reroutes) back into the legacy
+    /// fields the viewport and exporters read. Linked inputs keep the field's
+    /// value, except an Image Texture on Base Color, which sets
+    /// `base_color_texture` (its image) and a white base colour. Returns
+    /// false when there is no such node.
+    pub fn sync_from_tree(&mut self) -> bool {
+        use crate::nodes::{Prop, Value};
+        let Some(t) = &self.node_tree else { return false };
+        let out = t.nodes.iter().enumerate().filter(|(_, n)| n.idname == "ShaderNodeOutputMaterial" && matches!(n.enum_prop("target"), "" | "ALL" | "CYCLES")).max_by_key(|(_, n)| n.bool_prop("is_active_output")).map(|(i, _)| i);
+        let Some(out) = out else { return false };
+        // Follow the Surface link through reroutes.
+        let source = |node: usize, sock: usize| -> Option<usize> {
+            let mut l = t.input_link(node, sock).filter(|l| !l.muted)?;
+            for _ in 0..64 {
+                if t.nodes[l.from_node].idname != "NodeReroute" {
+                    return Some(l.from_node);
+                }
+                l = t.input_link(l.from_node, 0).filter(|l| !l.muted)?;
+            }
+            None
+        };
+        let Some(si) = t.nodes[out].input("Surface") else { return false };
+        let Some(p) = source(out, si) else { return false };
+        let n = &t.nodes[p];
+        if n.idname != "ShaderNodeBsdfPrincipled" || n.mute {
+            return false;
+        }
+        let linked = |id: &str| n.input(id).is_some_and(|i| t.input_link(p, i).is_some_and(|l| !l.muted));
+        let val = |id: &str| n.input(id).map(|i| n.inputs[i].value.clone()).unwrap_or(Value::None);
+        let f = |id: &str, d: f32| match val(id) {
+            Value::None => d,
+            v => v.as_float(),
+        };
+        if let Some(bi) = n.input("Base Color") {
+            let tex = source(p, bi).filter(|&s| t.nodes[s].idname == "ShaderNodeTexImage").and_then(|s| match t.nodes[s].prop("image") {
+                Some(Prop::Id(i)) => *i,
+                _ => None,
+            });
+            match tex {
+                Some(img) => {
+                    self.base_color_texture = Some(img);
+                    self.base_color = [1.0, 1.0, 1.0, self.base_color[3]];
+                }
+                None if !linked("Base Color") => {
+                    let c = val("Base Color").as_color();
+                    self.base_color = [c[0], c[1], c[2], self.base_color[3]];
+                    self.base_color_texture = None;
+                }
+                None => {}
+            }
+        }
+        if !linked("Alpha") {
+            self.base_color[3] = f("Alpha", self.base_color[3]);
+        }
+        if !linked("Metallic") {
+            self.metallic = f("Metallic", self.metallic);
+        }
+        if !linked("Roughness") {
+            self.roughness = f("Roughness", self.roughness);
+        }
+        if !linked("IOR") {
+            self.ior = f("IOR", self.ior);
+        }
+        if !linked("Transmission Weight") {
+            self.transmission = f("Transmission Weight", self.transmission);
+        }
+        if !linked("Emission Color") {
+            let c = val("Emission Color").as_vector();
+            self.emission = Vec3::new(c[0], c[1], c[2]);
+        }
+        if !linked("Emission Strength") {
+            self.emission_strength = f("Emission Strength", self.emission_strength);
+        }
+        true
+    }
+}
+
 /// Panoramic lens projections (Blender's "Panorama Type").
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PanoramaType {

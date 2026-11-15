@@ -12,7 +12,10 @@ use crate::math::{Aabb, Mat4, Vec2, Vec3};
 use super::camera::{CameraRig, MotionChain};
 use super::volume::VolumeCoeffs;
 use crate::scene::{AreaShape, Camera, Image, LightKind, Material, ObjectData, RayVisibility, Scene};
+use super::shader::surface::{self as shading, ShadeData, WorldShader};
+use super::shader::{compile_material, compile_world, Program, RayState};
 use core::f32::consts::{FRAC_1_PI, PI, TAU};
+use std::sync::Arc;
 
 /// Per-triangle shading data (in BVH order).
 #[derive(Clone, Copy, Debug)]
@@ -36,6 +39,8 @@ pub(crate) struct ShadeMaterial {
     pub transmission: f32,
     /// Emitted radiance.
     pub emission: Vec3,
+    /// The compiled node tree, when the material uses nodes.
+    pub program: Option<Arc<Program>>,
 }
 
 impl ShadeMaterial {
@@ -50,6 +55,7 @@ impl ShadeMaterial {
             ior: if m.ior.is_finite() && m.ior > 0.0 { m.ior } else { 1.5 },
             transmission: c(m.transmission).min(1.0),
             emission: Vec3::new(c(e.x), c(e.y), c(e.z)),
+            program: None,
         }
     }
 }
@@ -88,6 +94,10 @@ pub(crate) struct Environment {
     pub strength: f32,
     /// Importance sampling over a (possibly downsampled) grid.
     dist: Option<EnvDistribution>,
+    /// The world node tree, replacing the fields above.
+    shader: Option<WorldShader>,
+    /// Average luminance of the world shader.
+    shader_avg: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -112,15 +122,36 @@ fn equirect_to_dir(u: f32, v: f32) -> Vec3 {
 }
 
 impl Environment {
-    fn new(scene: &Scene) -> Environment {
+    fn new(scene: &Scene, data: Option<&Arc<ShadeData>>) -> Environment {
         let w = &scene.world;
         let strength = if w.strength.is_finite() { w.strength.max(0.0) } else { 0.0 };
+        let program = w.node_tree.as_ref().and_then(|t| compile_world(t, &scene.node_groups));
+        if let (Some(program), Some(data)) = (program, data) {
+            let shader = WorldShader { program: Arc::new(program), data: data.clone() };
+            let (gw, gh, grid) = shader.grid();
+            let shader_avg = shading::grid_average(gw, gh, &grid);
+            let dist = if shader.constant() { None } else { shading::grid_rows(gw, gh, &grid).map(|(rows, cols)| EnvDistribution { w: gw, h: gh, rows, cols }) };
+            let color = shader.eval(Vec3::Z, RayState::camera());
+            return Environment { color, hdri: None, strength: 1.0, dist, shader: Some(shader), shader_avg };
+        }
         let hdri = w.hdri.and_then(|i| scene.images.get(i)).filter(|im| im.width > 0 && im.height > 0 && im.pixels.len() == (im.width * im.height) as usize).cloned();
         let dist = hdri.as_ref().and_then(EnvDistribution::new);
-        Environment { color: w.color * strength, hdri, strength, dist }
+        Environment { color: w.color * strength, hdri, strength, dist, shader: None, shader_avg: 0.0 }
+    }
+
+    /// Radiance towards `d` for a ray of type `ray` (the world tree's Light
+    /// Path node sees it).
+    pub fn eval_ray(&self, d: Vec3, ray: RayState) -> Vec3 {
+        match &self.shader {
+            Some(s) => s.eval(d, ray),
+            None => self.eval(d),
+        }
     }
 
     pub fn eval(&self, d: Vec3) -> Vec3 {
+        if let Some(s) = &self.shader {
+            return s.eval(d, RayState::default());
+        }
         match &self.hdri {
             Some(img) => {
                 let (u, v) = dir_to_equirect(d);
@@ -133,6 +164,9 @@ impl Environment {
 
     /// Rough average radiance, for light selection.
     fn average(&self) -> f32 {
+        if self.shader.is_some() {
+            return self.shader_avg;
+        }
         match &self.hdri {
             Some(img) => {
                 // Solid-angle weighted average over rows.
@@ -297,6 +331,11 @@ pub struct PreparedScene {
     pub(crate) any_hidden: bool,
     /// Some material has a medium (rays must track volumes).
     pub(crate) any_volume: bool,
+    /// Some node material lets light through (shadow rays shade them).
+    pub(crate) any_transparent: bool,
+    /// What node programs read (present when any material or the world
+    /// uses nodes).
+    pub(crate) shade_data: Option<Arc<ShadeData>>,
     instances: Vec<MotionInstance>,
     bounds: Aabb,
 }
@@ -340,9 +379,28 @@ impl PreparedScene {
     /// Flatten `scene` for rendering from its active camera.
     pub fn new(scene: &Scene) -> PreparedScene {
         let mut materials: Vec<ShadeMaterial> = scene.materials.iter().map(|m| ShadeMaterial::from(m, scene.images.len())).collect();
+        // Node trees replace the legacy fields.
+        for (sm, m) in materials.iter_mut().zip(&scene.materials) {
+            if let Some(t) = &m.node_tree {
+                sm.program = compile_material(t, &scene.node_groups).map(Arc::new);
+                if sm.program.is_some() {
+                    sm.emission = Vec3::ZERO;
+                }
+            }
+        }
         let default_mat = materials.len() as u32;
         materials.push(ShadeMaterial::from(&Material::default(), 0));
-        let mut material_volume: Vec<Option<VolumeCoeffs>> = scene.materials.iter().map(|m| m.volume.as_ref().map(VolumeCoeffs::from_settings)).collect();
+        let any_nodes = materials.iter().any(|m| m.program.is_some()) || scene.world.node_tree.is_some();
+        let mut shade_data = any_nodes.then(|| ShadeData::new(scene, true));
+        let mut material_volume: Vec<Option<VolumeCoeffs>> = scene
+            .materials
+            .iter()
+            .zip(&materials)
+            .map(|(m, sm)| match (&sm.program, &shade_data) {
+                (Some(p), Some(d)) => shading::volume_coeffs(p, d),
+                _ => m.volume.as_ref().map(VolumeCoeffs::from_settings),
+            })
+            .collect();
         material_volume.push(None);
         let mut material_pass_index: Vec<u32> = scene.materials.iter().map(|m| m.pass_index).collect();
         material_pass_index.push(0);
@@ -392,6 +450,19 @@ impl PreparedScene {
             instances.push(MotionInstance { bvh: ib, base, chain });
         }
         let radius = if bounds.is_empty() { 1.0 } else { (bounds.size().length() * 0.5).max(1e-3) };
+
+        let camera = match scene.active_camera.filter(|&c| c < scene.objects.len()) {
+            Some(ci) => {
+                let cam = match &scene.objects[ci].data {
+                    ObjectData::Camera(c) => *c,
+                    _ => Camera::default(),
+                };
+                let focus = cam.dof.focus_object.filter(|&f| f < scene.objects.len()).map(|f| scene.world_matrix(f).transform_point(Vec3::ZERO));
+                let motion = scene.has_motion(ci).then(|| MotionChain::from_scene(scene, ci));
+                CameraRig::new(&scene.world_matrix(ci), &cam, focus, motion)
+            }
+            None => CameraRig::new(&Mat4::look_at(Vec3::new(7.36, -6.93, 4.96), Vec3::ZERO, Vec3::Z).inverse(), &Camera::default(), None, None),
+        };
 
         // Lights and their selection weights (estimated emitted power).
         let mut lights = Vec::new();
@@ -443,7 +514,11 @@ impl PreparedScene {
             light_info.push(info);
         }
         for (prim, s) in shade.iter_mut().enumerate().take(bvh.tris.len()) {
-            let e = materials[s.material as usize].emission;
+            let mat = &materials[s.material as usize];
+            let e = match (&mat.program, &shade_data) {
+                (Some(p), Some(d)) => shading::emission_estimate(d, p, &bvh.tris[prim], s, material_pass_index.get(s.material as usize).copied().unwrap_or(0) as f32),
+                _ => mat.emission,
+            };
             if e == Vec3::ZERO {
                 continue;
             }
@@ -455,7 +530,17 @@ impl PreparedScene {
             // Two-sided emitter: power = L * A * pi per side.
             power.push(luminance(e) * area * 2.0 * PI);
         }
-        let env = Environment::new(scene);
+        // Node programs read the camera (Texture Coordinate, Camera Data).
+        if let Some(d) = shade_data.as_mut() {
+            d.camera = Some(camera.pose);
+            d.tan_half = match camera.lens {
+                super::camera::Lens::Perspective { tan_half } => tan_half,
+                _ => 0.4,
+            };
+        }
+        let shade_data = shade_data.map(Arc::new);
+        let any_transparent = materials.iter().any(|m| m.program.as_ref().is_some_and(|p| p.info.transparent));
+        let env = Environment::new(scene, shade_data.as_ref());
         let env_avg = env.average();
         let world_light = (env_avg > 0.0).then(|| {
             lights.push(LightShape::World);
@@ -466,19 +551,6 @@ impl PreparedScene {
         let area_lights = lights.iter().enumerate().filter(|(_, l)| matches!(l, LightShape::Area { .. })).map(|(i, _)| i as u32).collect();
         let light_dist = Distribution1D::new(&power);
         let world_volume = scene.world.volume.as_ref().map(VolumeCoeffs::from_settings).filter(|v| !v.is_empty());
-
-        let camera = match scene.active_camera.filter(|&c| c < scene.objects.len()) {
-            Some(ci) => {
-                let cam = match &scene.objects[ci].data {
-                    ObjectData::Camera(c) => *c,
-                    _ => Camera::default(),
-                };
-                let focus = cam.dof.focus_object.filter(|&f| f < scene.objects.len()).map(|f| scene.world_matrix(f).transform_point(Vec3::ZERO));
-                let motion = scene.has_motion(ci).then(|| MotionChain::from_scene(scene, ci));
-                CameraRig::new(&scene.world_matrix(ci), &cam, focus, motion)
-            }
-            None => CameraRig::new(&Mat4::look_at(Vec3::new(7.36, -6.93, 4.96), Vec3::ZERO, Vec3::Z).inverse(), &Camera::default(), None, None),
-        };
 
         PreparedScene {
             bvh,
@@ -500,6 +572,8 @@ impl PreparedScene {
             object_pass_index,
             any_hidden,
             any_volume: any_volume || world_volume.is_some(),
+            any_transparent,
+            shade_data,
             instances,
             bounds,
         }
@@ -638,7 +712,7 @@ impl PreparedScene {
     /// and objects hidden from shadows (at most `max_transparent` crossings).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn shadow(&self, o: Vec3, d: Vec3, tmax: f32, time: f32, stack: MediumStack, max_transparent: u32) -> Vec3 {
-        if !self.any_hidden && !self.any_volume && self.instances.is_empty() {
+        if !self.any_hidden && !self.any_volume && !self.any_transparent && self.instances.is_empty() {
             return if self.bvh.occluded(o, d, tmax) { Vec3::ZERO } else { Vec3::ONE };
         }
         let mut stack = stack;
@@ -657,7 +731,12 @@ impl PreparedScene {
             let hidden = self.object_vis.get(sh.object as usize).is_some_and(|v| v & VIS_SHADOW == 0);
             let null = self.null_surface(sh.material);
             if !hidden && !null {
-                return Vec3::ZERO;
+                // Transparent node materials let some light through.
+                let t = if self.any_transparent { self.shadow_transparency(&h, d, time) } else { Vec3::ZERO };
+                if t == Vec3::ZERO {
+                    return Vec3::ZERO;
+                }
+                tr = tr.mul_elem(t);
             }
             crossings += 1;
             if crossings > max_transparent || tr.max_elem() <= 1e-6 {
@@ -757,7 +836,13 @@ impl PreparedScene {
                 let g = &self.bvh.tris[*prim as usize];
                 let su = u1.sqrt();
                 let q = g.v0 + g.e1 * (1.0 - su) + g.e2 * (u2 * su);
-                self.area_sample(p, q, g.e1.cross(g.e2).normalize(), *area, *radiance, sel, true)
+                self.area_sample(p, q, g.e1.cross(g.e2).normalize(), *area, *radiance, sel, true).map(|mut s| {
+                    // Node emission varies over the surface: evaluate it here.
+                    if let Some(e) = self.node_emission(*prim, q, s.wi) {
+                        s.li = e;
+                    }
+                    s
+                })
             }
             LightShape::World => {
                 let (wi, pdf) = self.env.sample(u1, u2);

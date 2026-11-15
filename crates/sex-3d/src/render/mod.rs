@@ -41,6 +41,7 @@ mod integrator;
 mod prepare;
 mod rng;
 mod sampling;
+mod shader;
 mod tonemap;
 pub mod viewport;
 pub mod volume;

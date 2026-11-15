@@ -8,7 +8,9 @@
 //! Bounce limits follow Cycles: when a sampled bounce goes past a limit the
 //! ray is still traced and collects the light it hits (keeping MIS
 //! balanced), then the path ends.
-use super::bsdf::{fresnel_dielectric, Bsdf};
+use super::bsdf::{fresnel_dielectric, Bsdf, L_TRANSPARENT};
+use super::shader::surface::{self as shading, SurfaceBsdf};
+use super::shader::RayState;
 use super::camera::CameraRay;
 use super::film::{LightSlot, PassLayout, PixelFilter, SamplePasses};
 use super::prepare::{spread_attenuation, LightShape, MediumStack, PreparedScene, SceneHit, VIS_CAMERA, VIS_DIFFUSE, VIS_GLOSSY, VIS_SHADOW, VIS_TRANSMISSION, VIS_VOLUME};
@@ -344,7 +346,7 @@ pub(crate) fn trace(scene: &PreparedScene, ray: &CameraRay, time: f32, rng: &mut
 
         let h = match hit {
             None => {
-                let le = scene.env.eval(d);
+                let le = scene.env.eval_ray(d, ray_state(vis, prev_delta, depth, &bounces));
                 if depth == 0 {
                     film.camera(beta.mul_elem(le), true);
                     alpha = if s.film_transparent { 1.0 - (cam_tr.x + cam_tr.y + cam_tr.z) / 3.0 } else { 1.0 };
@@ -399,12 +401,18 @@ pub(crate) fn trace(scene: &PreparedScene, ray: &CameraRay, time: f32, rng: &mut
             break 'path;
         }
 
-        if mat.emission != Vec3::ZERO {
+        // Node materials: run the shader program at the hit.
+        let node = mat.program.as_ref().map(|prog| shading::shade_nodes(scene, prog, g, sh, &h, d, ray_state(vis, prev_delta, depth, &bounces), rng.next_u32()));
+        if depth == 0 && node.as_ref().is_some_and(|n| n.holdout >= 0.5) {
+            break 'path;
+        }
+        let emission = node.as_ref().map_or(mat.emission, |n| n.emission);
+        if emission != Vec3::ZERO {
             if depth == 0 {
-                film.camera(beta.mul_elem(mat.emission), false);
+                film.camera(beta.mul_elem(emission), false);
             } else {
                 let w = if prev_delta || sh.light == u32::MAX { 1.0 } else { power_heuristic(prev_pdf, scene.surface_light_pdf(sh.light, d, h.t, ng)) };
-                film.add(beta.mul_elem(mat.emission) * w, depth, None);
+                film.add(beta.mul_elem(emission) * w, depth, None);
             }
         }
         if terminate {
@@ -420,38 +428,47 @@ pub(crate) fn trace(scene: &PreparedScene, ray: &CameraRay, time: f32, rng: &mut
         if ns.dot(wo) <= 1e-4 {
             ns = ng;
         }
-        // Filter Glossy: blur glossy lobes after blurry bounces (Cycles).
-        let blurred;
-        let mat = if lp.filter_glossy > 0.0 && min_ray_pdf.is_finite() && lp.filter_glossy * min_ray_pdf < 1.0 {
-            let rough = ((1.0 - lp.filter_glossy * min_ray_pdf).sqrt() * 0.5).sqrt();
-            if rough > mat.roughness {
-                blurred = super::prepare::ShadeMaterial { roughness: rough, ..mat.clone() };
-                &blurred
-            } else {
-                mat
+        let (bsdf, colors, base) = match node {
+            Some(nd) => {
+                ns = nd.ns;
+                (SurfaceBsdf::Nodes(nd.bsdf), nd.colors, nd.albedo)
             }
-        } else {
-            mat
+            None => {
+                // Filter Glossy: blur glossy lobes after blurry bounces (Cycles).
+                let blurred;
+                let mat = if lp.filter_glossy > 0.0 && min_ray_pdf.is_finite() && lp.filter_glossy * min_ray_pdf < 1.0 {
+                    let rough = ((1.0 - lp.filter_glossy * min_ray_pdf).sqrt() * 0.5).sqrt();
+                    if rough > mat.roughness {
+                        blurred = super::prepare::ShadeMaterial { roughness: rough, ..mat.clone() };
+                        &blurred
+                    } else {
+                        mat
+                    }
+                } else {
+                    mat
+                };
+                let mut base = mat.base;
+                if let Some(ti) = mat.texture {
+                    let uv = sh.uv[0] * b0 + sh.uv[1] * h.u + sh.uv[2] * h.v;
+                    let c = scene.images[ti].sample(uv.x, uv.y);
+                    base = base.mul_elem(Vec3::new(c[0], c[1], c[2]));
+                }
+                let bsdf = Bsdf::new(base, mat.metallic, mat.roughness, mat.ior, mat.transmission, ns, ng, wo, outside);
+                let cos_o = ns.dot(wo);
+                let f_diff = diffuse_f(base, mat.metallic, mat.transmission, mat.ior, cos_o);
+                // Pass colours of this vertex's lobes.
+                let colors = [
+                    base * ((1.0 - mat.metallic) * (1.0 - mat.transmission)),
+                    base * mat.metallic + Vec3::splat((1.0 - mat.metallic) * fresnel_dielectric(cos_o.clamp(0.0, 1.0), mat.ior)),
+                    base * ((1.0 - mat.metallic) * mat.transmission),
+                ];
+                (SurfaceBsdf::Legacy { bsdf, f_diff, ns }, colors, base)
+            }
         };
-        let mut base = mat.base;
-        if let Some(ti) = mat.texture {
-            let uv = sh.uv[0] * b0 + sh.uv[1] * h.u + sh.uv[2] * h.v;
-            let c = scene.images[ti].sample(uv.x, uv.y);
-            base = base.mul_elem(Vec3::new(c[0], c[1], c[2]));
-        }
         if albedo.is_none() {
             albedo = Some(base);
             normal = ns;
         }
-        let bsdf = Bsdf::new(base, mat.metallic, mat.roughness, mat.ior, mat.transmission, ns, ng, wo, outside);
-        let cos_o = ns.dot(wo);
-        let f_diff = diffuse_f(base, mat.metallic, mat.transmission, mat.ior, cos_o);
-        // Pass colours of this vertex's lobes.
-        let colors = [
-            base * ((1.0 - mat.metallic) * (1.0 - mat.transmission)),
-            base * mat.metallic + Vec3::splat((1.0 - mat.metallic) * fresnel_dielectric(cos_o.clamp(0.0, 1.0), mat.ior)),
-            base * ((1.0 - mat.metallic) * mat.transmission),
-        ];
         if depth == 0 {
             alpha = 1.0;
             if data_passes {
@@ -492,8 +509,8 @@ pub(crate) fn trace(scene: &PreparedScene, ray: &CameraRay, time: f32, rng: &mut
                 let info = scene.light_info[li as usize];
                 let lvis = scene.object_vis.get(info.object as usize).copied().unwrap_or(u8::MAX);
                 if depth <= info.max_bounces && ls.pdf > 0.0 && ls.li != Vec3::ZERO && lvis & (VIS_DIFFUSE | VIS_GLOSSY) != 0 {
-                    let (f, bpdf) = bsdf.eval(wo, ls.wi);
-                    let fd = if lvis & VIS_DIFFUSE != 0 && f != Vec3::ZERO { f_diff.min(f) } else { Vec3::ZERO };
+                    let (f, f_diff, bpdf, cosf) = bsdf.eval(wo, ls.wi);
+                    let fd = if lvis & VIS_DIFFUSE != 0 && f != Vec3::ZERO { f_diff } else { Vec3::ZERO };
                     let fg = if lvis & VIS_GLOSSY != 0 && !no_gloss { (f - f_diff).max(Vec3::ZERO) } else { Vec3::ZERO };
                     if fd + fg != Vec3::ZERO {
                         let origin = offset(p, ng, ls.wi);
@@ -501,7 +518,7 @@ pub(crate) fn trace(scene: &PreparedScene, ray: &CameraRay, time: f32, rng: &mut
                         let tr = if info.cast_shadow { scene.shadow(origin, ls.wi, tmax_s, time, stack, lp.transparent_bounces) } else { Vec3::ONE };
                         if tr != Vec3::ZERO {
                             let w = if ls.delta || !info.use_mis { 1.0 } else { power_heuristic(ls.pdf, bpdf) };
-                            let k = beta.mul_elem(ls.li).mul_elem(tr) * (ns.dot(ls.wi).abs() * w / ls.pdf);
+                            let k = beta.mul_elem(ls.li).mul_elem(tr) * (cosf * w / ls.pdf);
                             if depth == 0 && light_passes {
                                 film.add(k.mul_elem(fd), 1, Some((Label::Diffuse, colors[0])));
                                 film.add(k.mul_elem(fg), 1, Some((Label::Glossy, colors[1])));
@@ -516,6 +533,19 @@ pub(crate) fn trace(scene: &PreparedScene, ray: &CameraRay, time: f32, rng: &mut
 
         // Continue the path.
         let Some(bs) = bsdf.sample(wo, rng) else { break 'path };
+        if bs.label & L_TRANSPARENT != 0 {
+            // Straight through a transparent closure: not a bounce.
+            beta = beta.mul_elem(bs.weight);
+            bounces.transparent += 1;
+            if bounces.transparent > lp.transparent_bounces || !finite(beta) || beta.max_elem() <= 0.0 {
+                break 'path;
+            }
+            o = offset(p, ng, d);
+            if tmax.is_finite() {
+                tmax -= h.t;
+            }
+            continue 'path;
+        }
         let mut weight = bs.weight;
         let label = if bs.wi.dot(ng) < 0.0 {
             Label::Transmission
@@ -523,8 +553,7 @@ pub(crate) fn trace(scene: &PreparedScene, ray: &CameraRay, time: f32, rng: &mut
             Label::Glossy
         } else {
             // Which lobe made this reflection: pick by their share of f.
-            let (f, _) = bsdf.eval(wo, bs.wi);
-            let fd = f_diff.min(f);
+            let (f, fd, _, _) = bsdf.eval(wo, bs.wi);
             let pd = if luminance(f) > 0.0 { (luminance(fd) / luminance(f)).clamp(0.0, 1.0) } else { 0.0 };
             if rng.f32() < pd {
                 weight = weight.mul_elem(safe_div(fd, f)) * (1.0 / pd);
@@ -570,6 +599,22 @@ pub(crate) fn trace(scene: &PreparedScene, ray: &CameraRay, time: f32, rng: &mut
     out.albedo = albedo.unwrap_or(Vec3::ONE);
     out.normal = normal;
     out
+}
+
+/// The Light Path node's view of the current ray.
+fn ray_state(vis: u8, prev_delta: bool, depth: u32, b: &Bounces) -> RayState {
+    use super::shader::{RAY_CAMERA, RAY_DIFFUSE, RAY_GLOSSY, RAY_REFLECT, RAY_SINGULAR, RAY_TRANSMIT, RAY_VOLUME_SCATTER};
+    let singular = if prev_delta { RAY_SINGULAR } else { 0 };
+    let flags = match vis {
+        VIS_CAMERA => RAY_CAMERA,
+        VIS_DIFFUSE => RAY_DIFFUSE | RAY_REFLECT,
+        VIS_GLOSSY => RAY_GLOSSY | RAY_REFLECT | singular,
+        VIS_TRANSMISSION => RAY_GLOSSY | RAY_TRANSMIT | singular,
+        VIS_VOLUME => RAY_VOLUME_SCATTER,
+        _ => 0,
+    };
+    let c = |x: u32| x.min(u16::MAX as u32) as u16;
+    RayState { flags, depth: c(depth), diffuse: c(b.diffuse), glossy: c(b.glossy), transparent: c(b.transparent), transmission: c(b.transmission) }
 }
 
 /// Russian roulette from the third bounce; false ends the path.
