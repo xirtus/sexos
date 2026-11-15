@@ -2,7 +2,9 @@
 //! Polyamour as a SexOS program: `run polyamour [scene.blend|.glb|.obj|.poly]`.
 //! On the host, `polyamour --screenshot out.png [scene] [workspace]` draws the
 //! window once into a PNG (used for docs and visual checks); `--node-demo`
-//! gives the startup material a few texture nodes and opens Shading.
+//! gives the startup material a few texture nodes and opens Shading;
+//! `--rig-demo` poses a skinned, keyed armature in the Animation workspace
+//! with the Graph Editor below.
 use polyamour::input::Input;
 #[cfg(target_os = "hermit")]
 use polyamour::input::{Button, Key, Mods};
@@ -26,6 +28,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new(1600, 900);
     let mut out = None;
+    let mut rig_demo = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -39,13 +42,28 @@ fn main() {
                 polyamour::nodetree::demo_textures(&mut app.doc);
                 app.doc.want_workspace = Some("Shading".into());
             }
+            "--rig-demo" => {
+                polyamour::rig::demo(&mut app.doc);
+                app.doc.want_workspace = Some("Animation".into());
+                rig_demo = true;
+            }
             p => open_arg(&mut app, p),
         }
     }
     app.frame(Input::Tick);
     app.frame(Input::Tick);
+    if rig_demo {
+        use polyamour::editors::{Editor, EditorKind};
+        let ws = app.active_ws;
+        for area in app.workspaces[ws].areas_mut() {
+            if area.editor.kind() == EditorKind::DopeSheet {
+                area.editor = Editor::new(EditorKind::GraphEditor);
+            }
+        }
+        app.frame(Input::Tick);
+    }
     let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [scene file]");
+        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [scene file]");
         return;
     };
     let f = std::fs::File::create(&out).expect("create png");

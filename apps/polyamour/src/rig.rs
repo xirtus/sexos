@@ -835,3 +835,71 @@ pub fn interp_label(k: sex_3d::mesh::KeyInterpolation) -> &'static str {
         K::BSpline => "BSpline",
     }
 }
+
+/// The `--screenshot --rig-demo` scene: a skinned column on a three-bone
+/// chain, keyed to sway, shown in Pose Mode.
+pub fn demo(doc: &mut Doc) {
+    if let Some(c) = doc.scene.find_object("Cube") {
+        doc.select_only(Some(c));
+        doc.run(&Op::new("object.delete"));
+    }
+    let (seg, rings, r, h) = (12u32, 13u32, 0.35f32, 2.4f32);
+    let mut pos = Vec::new();
+    for j in 0..rings {
+        let t = j as f32 / (rings - 1) as f32;
+        let rad = r * (1.0 - 0.35 * t);
+        for i in 0..seg {
+            let a = i as f32 / seg as f32 * std::f32::consts::TAU;
+            pos.push(Vec3::new(rad * a.cos(), rad * a.sin(), t * h));
+        }
+    }
+    let mut faces: Vec<Vec<u32>> = Vec::new();
+    for j in 0..rings - 1 {
+        for i in 0..seg {
+            let n = (i + 1) % seg;
+            faces.push(vec![j * seg + i, j * seg + n, (j + 1) * seg + n, (j + 1) * seg + i]);
+        }
+    }
+    faces.push((0..seg).rev().collect());
+    faces.push(((rings - 1) * seg..rings * seg).collect());
+    let mut mesh = sex_3d::mesh::Mesh::from_faces(pos, faces);
+    for f in &mut mesh.faces {
+        f.smooth = true;
+    }
+    let body = doc.scene.add_mesh_object("Body", mesh);
+    let mut arm = Armature::default();
+    let names = ["Root", "Spine", "Neck"];
+    for (k, n) in names.iter().enumerate() {
+        let mut b = sex_3d::armature::Bone::new(n, Vec3::new(0.0, 0.0, k as f32 * 0.8), Vec3::new(0.0, 0.0, (k + 1) as f32 * 0.8));
+        if k > 0 {
+            b.parent = Some(k - 1);
+            b.use_connect = true;
+        }
+        arm.add_bone(b);
+    }
+    let a = doc.scene.add_armature_object("Armature", arm);
+    doc.scene.selected = vec![body, a];
+    doc.scene.active_object = Some(a);
+    doc.run(&Op::with("object.parent_set", "ARMATURE_AUTO"));
+    doc.select_only(Some(a));
+    mode_set(doc, "POSE");
+    let obj = doc.scene.objects[a].name.clone();
+    let ui = doc.rig.arm_mut(&obj);
+    for n in names {
+        ui.set(n, BoneSel::ALL);
+    }
+    ui.active = Some("Spine".into());
+    ui.show_names = true;
+    for (bone, amount) in [("Spine", 0.5f32), ("Neck", 0.7)] {
+        let path = format!("pose.bones[\"{bone}\"].rotation_quaternion");
+        for (frame, sign) in [(1.0, -1.0f32), (20.0, 1.0), (40.0, -1.0)] {
+            let half = sign * amount * 0.5;
+            crate::anim::insert_key_value(doc, a, &path, 0, frame, half.cos());
+            crate::anim::insert_key_value(doc, a, &path, 1, frame, half.sin());
+        }
+    }
+    doc.scene.frame_end = 40;
+    doc.frame = 12;
+    crate::anim::evaluate(doc);
+    doc.touch();
+}
