@@ -10,11 +10,16 @@ mod autofill_routes {
  pub unsafe fn retire(subject:super::autofill::Subject){super::AUTOFILL.retire(subject)}
 }
 static mut AUTOFILL:Retired=Retired(Vec::new());
+pub mod restricted_helper { pub use super::clipboard::Subject; }
+mod restricted_routes {
+ pub unsafe fn retire(subject:super::restricted_helper::Subject){super::RESTRICTED.retire(subject)}
+}
+static mut RESTRICTED:Retired=Retired(Vec::new());
 /// Records every terminal clipboard/input retirement the cleanup performs.
 struct Retired(Vec<clipboard::Subject>);
 impl Retired{fn retire(&mut self,subject:clipboard::Subject){self.0.push(subject)}}
 static mut CLIPBOARD:Retired=Retired(Vec::new());static mut APP_INPUT:Retired=Retired(Vec::new());static mut CLIPBOARD_INTAKE:Retired=Retired(Vec::new());
-unsafe fn retired_once(){let want=vec![clipboard::Subject{pd:15,task:80}];assert_eq!(CLIPBOARD.0,want);assert_eq!(APP_INPUT.0,want);assert_eq!(CLIPBOARD_INTAKE.0,want);assert_eq!(AUTOFILL.0,want);}
+unsafe fn retired_once(){let want=vec![clipboard::Subject{pd:15,task:80}];assert_eq!(CLIPBOARD.0,want);assert_eq!(APP_INPUT.0,want);assert_eq!(CLIPBOARD_INTAKE.0,want);assert_eq!(AUTOFILL.0,want);assert_eq!(RESTRICTED.0,want);}
 pub mod app_lifecycle {
   pub const OP_APP_REBORN:u64=0x10F;
  pub const OP_APP_EXIT:u64=0x107;
@@ -60,7 +65,7 @@ unsafe fn reset(){
  HOVERED_FRAME_ID=10;HOVER_KIND=1;HOVERED_FRAME_LIGHT=1;TAB_DRAG_PENDING_FRAME_ID=10;DRAG_PENDING_TARGET=300;DRAG_PENDING_ACTIVE=true;DRAG_PENDING_KIND=3;
  INTERACTION=InteractionState::Dragging{surface_id:300};FOCUSED_SURFACE_ID=300;ACTIVE_SCENE_IDX=0;
  INFO_STATUS=0;INFO_TARGET=15;INFO_TASK=80;ACK_STATUS=0;ACKS=0;PUBLISHED=false;RETIRES=0;FOCUS_REF=300;BAR=300;
- CLIPBOARD.0.clear();APP_INPUT.0.clear();CLIPBOARD_INTAKE.0.clear();AUTOFILL.0.clear();
+ CLIPBOARD.0.clear();APP_INPUT.0.clear();CLIPBOARD_INTAKE.0.clear();AUTOFILL.0.clear();RESTRICTED.0.clear();
 }
 fn notice(caller:u32,target:u64,task:u64)->PdxMessage{PdxMessage{type_id:0x107,caller_pd:caller,arg0:target,arg1:task,arg2:0}}
 #[test]fn untrusted_hints_and_full_width_aliases_do_not_change_state(){unsafe{reset();for m in [notice(15,15,80),notice(0,15+(1<<32),80),notice(0,15,80+(1<<32)),notice(0,10,80)]{assert!(shell_lifecycle_hint(&m));assert!(!APP_CUSTODY[0].unwrap().pending);assert!(!PUBLISHED);assert_eq!(ACKS,0);}assert!(CLIPBOARD.0.is_empty()&&APP_INPUT.0.is_empty()&&CLIPBOARD_INTAKE.0.is_empty());}}

@@ -69,6 +69,11 @@ enum Stage {
     Copied,
     Activate,
 }
+/// Admission to activation. The policy walk is a few dozen Shell/Files round
+/// trips; with a busy desktop (a full-frame app repainting every ~100 ms) it
+/// took ~4.9 s in the Moan offline UI gate, so 5 s refused a healthy helper.
+const BOOTSTRAP_TICKS: u64 = 15000;
+
 struct Transaction {
     parent: Subject,
     ticket: u32,
@@ -348,7 +353,7 @@ impl Coordinator {
             return false;
         };
         let now = p.now();
-        let Some(until) = now.checked_add(5000) else {
+        let Some(until) = now.checked_add(BOOTSTRAP_TICKS) else {
             return false;
         };
         let Some(job_until) = now.checked_add(120000) else {

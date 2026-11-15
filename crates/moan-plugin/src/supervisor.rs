@@ -26,6 +26,7 @@ pub struct OfflineJob {
     child: Option<Subject>,
     invalidated: bool,
     released: bool,
+    cleanup_noted: bool,
     last_status: u64,
     cleanup: Option<files::restricted::End>,
 }
@@ -193,6 +194,7 @@ impl OfflineJob {
             child: None,
             invalidated: false,
             released: false,
+            cleanup_noted: false,
             last_status: 0,
             cleanup: None,
         })
@@ -252,12 +254,19 @@ impl OfflineJob {
             ) {
                 Ok(Some(pending)) => self.cleanup = Some(pending),
                 Ok(None) => return,
-                Err(_) => return,
+                Err(e) => {
+                    if !self.cleanup_noted {
+                        self.cleanup_noted = true;
+                        sex_pdx::serial_record!("[moan.job.cleanup] ticket={} release={} begin_err={}", self.info.ticket, release as u8, e);
+                    }
+                    return;
+                }
             }
         }
         if let Some(result) = self.cleanup.as_mut().and_then(|pending| pending.poll()) {
             self.cleanup = None;
             self.released = result.is_ok();
+            sex_pdx::serial_record!("[moan.job.cleanup] ticket={} release={} status={}", self.info.ticket, release as u8, result.err().unwrap_or(0));
         }
     }
     fn request_cancel(&self) {

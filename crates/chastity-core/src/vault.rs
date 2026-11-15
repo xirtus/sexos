@@ -141,11 +141,19 @@ impl Vault {
 
     pub fn name(&self) -> &str { self.db.meta.database_name.as_deref().unwrap_or("Vault") }
 
-    /// Every entry outside the recycle bin, by title.
+    /// Every entry outside the recycle bin (and its subgroups), by title.
     pub fn entries(&self) -> Vec<Summary> {
         let bin = self.db.meta.recyclebin_uuid;
         let mut list: Vec<Summary> = self.db.iter_all_entries()
-            .filter(|e| bin.is_none_or(|b| e.parent().id().uuid() != b))
+            .filter(|e| bin.is_none_or(|b| {
+                // Exclude the bin and every group nested inside it.
+                let mut g = Some(e.parent().id());
+                while let Some(id) = g {
+                    if id.uuid() == b { return false; }
+                    g = self.db.group(id).and_then(|x| x.parent().map(|p| p.id()));
+                }
+                true
+            }))
             .map(|e| summary(&e)).collect();
         list.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()).then(a.id.uuid().cmp(&b.id.uuid())));
         list
@@ -255,6 +263,18 @@ mod tests {
         let b2 = again.save().unwrap();
         assert_ne!(bytes, b2);
         assert_eq!(Vault::open(&b2, &mut pw("hunter2 is weak")).unwrap().entries().len(), 2);
+    }
+
+    #[test]
+    fn recycle_bin_subgroups_are_hidden() {
+        let mut v = sample();
+        let mut root = v.db.root_mut();
+        let mut bin = root.add_group();
+        let bin_id = bin.id();
+        let mut nested = bin.add_group();
+        nested.add_entry().set_unprotected(fields::TITLE, "deleted login");
+        v.db.meta.recyclebin_uuid = Some(bin_id.uuid());
+        assert_eq!(v.entries().iter().map(|s| s.title.as_str()).collect::<Vec<_>>(), ["bank", "Mail"]);
     }
 
     #[test]

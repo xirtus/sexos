@@ -187,7 +187,10 @@ def main():
         select_file('source.wav', start)
         # Import emits selection/control state; the read-only layout command
         # emits the aggregate project receipt after the completed import.
-        imported, _, _ = refresh(g, surface)
+        # The layout burst prints its project receipt BEFORE its first timeline
+        # record, which is where refresh() anchors: search from the command.
+        imported = len(text())
+        refresh(g, surface)
         g['wait'](r'\[moan.project\] tracks=1 frames=48000 ', imported, 120)
         c.click(surface, 'Instruments')
         choose_plugin('swap.clap')
@@ -213,13 +216,15 @@ def main():
             since = len(text())
             c.click(surface, 'Offline_render')
             g['wait'](r'\[moan.plugin.started\]', since, 120)
-            m = g['wait'](rf'\[shell.launch.event\] parent={target} event=Started \{{ cookie: (\d+), row: (\d+), task: (\d+) \}} sent=1', since, 120)
+            m = g['wait'](rf'\[moan.role.started\] parent={target} parent_task=\d+ cookie=(\d+) pd=(\d+) task=(\d+)', since, 120)
             children.append(tuple(map(int, m.groups())))
             return since, children[-1]
 
         start, child = begin()
         g['wait'](r'\[moan.plugin.imported\] tracks=2 frames=48000 clipped=0 format=Clap', start, 180)
         g['wait'](r'\[moanplug.rendered\] frames=48000 blocks=188 ticks=\d+ format=clap offline=1', start, 120)
+        # The import shows Finishing until Files releases the job entry.
+        g['wait'](r'\[moan.plugin.state\] status=Idle retired=1', start, 180)
         shot('clap-new-track-original-kept', 'Offline render ready')
         choose_plugin('crash.clap')
         start, child = begin()
@@ -232,19 +237,23 @@ def main():
         shot('offline-render-active', 'Offline render running')
         guard = c.command(surface, 'ctrl', 'n')
         c.click(surface, 'Cancel_render')
-        g['wait'](rf'\[shell.launch.kill\] parent={target} child={child[1]} task={child[2]} ok=1', start, 180)
+        g['wait'](rf'\[app.program.forced\] target={child[1]} task={child[2]} ', start, 180)
         g['wait'](r'\[moan.plugin.state\] status=Failed retired=1', start, 180)
         assert '[moan.project.new]' not in text()[guard:] and '[moan.plugin.imported]' not in text()[start:]
         shot('cancel-retired-project-kept', 'Offline render failed; original region unchanged')
         choose_plugin('swap.clap')
         start, child = begin()
         g['wait'](r'\[moan.plugin.imported\] tracks=3 frames=48000 clipped=0 format=Clap', start, 180)
+        # The import shows Finishing until Files releases the job entry.
+        g['wait'](r'\[moan.plugin.state\] status=Idle retired=1', start, 180)
         shot('recovery-new-editable-track', 'Offline render ready')
         choose_plugin('gain.vst3')
         c.click(surface, 'VST3')
         start, child = begin()
         g['wait'](r'\[moan.plugin.imported\] tracks=4 frames=48000 clipped=0 format=Vst3', start, 180)
         g['wait'](r'\[moanplug.rendered\].*format=vst3 offline=1', start, 120)
+        # The import shows Finishing until Files releases the job entry.
+        g['wait'](r'\[moan.plugin.state\] status=Idle retired=1', start, 180)
         shot('vst3-default-unity-format-control', 'Offline render ready')
         start = c.command(surface, 'ctrl', 'z')
         g['wait'](r'\[moan.project\] tracks=3 ', start, 120)

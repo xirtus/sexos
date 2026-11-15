@@ -70,6 +70,11 @@ pub struct Ui {
     query: String,
     selected: usize,
     message: String,
+    /// The vault holds changes the last save could not store.
+    dirty: bool,
+    /// A lock the user asked for was refused once over unsaved changes; the
+    /// next asked lock discards them.
+    discard_armed: bool,
 }
 
 impl Ui {
@@ -92,6 +97,8 @@ impl Ui {
             query: String::new(),
             selected: 0,
             message: String::new(),
+            dirty: false,
+            discard_armed: false,
         }
     }
 
@@ -114,7 +121,22 @@ impl Ui {
     }
 
     /// Drops the unlocked vault and wipes the application-owned editor buffers.
+    ///
+    /// Unsaved changes get one more save first. If that fails too, a lock the
+    /// user asked for is refused once (s retries, l again discards); idle,
+    /// close and entropy locks always lock and say what was lost.
     pub fn lock(&mut self, host: &mut dyn Host, why: &str) {
+        if self.dirty && !self.save(host) {
+            if why == "asked" && !self.discard_armed {
+                self.discard_armed = true;
+                self.message = "Unsaved changes could not be stored. s retries; l again locks and discards them.".into();
+                return;
+            }
+            host.record(&format!("[chastity.unsaved.discarded] reason={why}"));
+        }
+        let lost = self.dirty;
+        self.dirty = false;
+        self.discard_armed = false;
         self.line.zeroize();
         self.query.zeroize();
         self.screen = Screen::Unlock;
@@ -123,7 +145,11 @@ impl Ui {
             self.line.zeroize();
             self.query.zeroize();
             self.screen = Screen::Unlock;
-            self.message = format!("Locked ({why}).");
+            self.message = if lost {
+                format!("Locked ({why}); unsaved changes were lost.")
+            } else {
+                format!("Locked ({why}).")
+            };
             host.record(&format!("[chastity.local_locked] reason={why}"));
         }
     }
@@ -140,11 +166,14 @@ impl Ui {
                     "[chastity.saved] entries={} bytes={bytes}",
                     v.entries().len()
                 ));
+                self.dirty = false;
+                self.discard_armed = false;
                 true
             }
             Err(e) => {
-                self.message = format!("Not saved: {e}");
+                self.message = format!("Not saved: {e}. s retries.");
                 host.record("[chastity.save.failed]");
+                self.dirty = true;
                 false
             }
         }
@@ -261,6 +290,9 @@ impl Ui {
                         };
                     }
                     Input::Char('l') => self.lock(host, "asked"),
+                    Input::Char('s') if self.dirty => {
+                        self.save(host);
+                    }
                     Input::Char('c') => {
                         if let Some(s) = self.shown().get(self.selected) {
                             let id = s.id;
@@ -574,6 +606,8 @@ impl Ui {
         if !self.message.is_empty() {
             out.push_str("\n\n");
             out.push_str(&self.message);
+        } else if self.dirty {
+            out.push_str("\n\nUnsaved changes: s saves again.");
         }
         out
     }
@@ -632,6 +666,7 @@ mod tests {
 
     #[derive(Default)]
     struct Fake {
+        full: bool,
         file: Option<Vec<u8>>,
         records: Vec<String>,
         copied: Vec<String>,
@@ -641,6 +676,9 @@ mod tests {
             self.file.clone()
         }
         fn store(&mut self, bytes: &[u8]) -> Result<(), String> {
+            if self.full {
+                return Err("disk full".into());
+            }
             self.file = Some(bytes.to_vec());
             Ok(())
         }
@@ -729,6 +767,43 @@ mod tests {
         ui.key(&mut host, Input::Char('t'));
         assert_eq!(host.copied[0].len(), 20);
         assert_eq!(host.copied[1], "287082");
+    }
+
+    /// A failed save keeps the edit: an asked lock is refused once, s retries,
+    /// and an idle lock still locks but says the change was lost.
+    #[test]
+    fn failed_save_is_kept_and_retried() {
+        let mut host = Fake::default();
+        let mut ui = Ui::new(&mut host, Kdf::TEST_ONLY);
+        typed(&mut ui, &mut host, "tr0ub4dor&3");
+        typed(&mut ui, &mut host, "tr0ub4dor&3");
+        let first = host.file.clone();
+        host.full = true;
+        ui.key(&mut host, Input::Char('a'));
+        for v in ["Mail", "andreas", "", "", "", ""] {
+            typed(&mut ui, &mut host, v);
+        }
+        assert!(host.records.last().unwrap() == "[chastity.save.failed]" && host.file == first);
+        assert!(ui.render(&host).contains("s retries"));
+        ui.key(&mut host, Input::Char('l'));
+        assert!(ui.unlocked(), "an asked lock over unsaved changes is refused once");
+        host.full = false;
+        ui.key(&mut host, Input::Char('s'));
+        assert!(host.records.last().unwrap().starts_with("[chastity.saved] entries=1 "));
+        ui.key(&mut host, Input::Char('l'));
+        assert!(!ui.unlocked());
+
+        // Idle locks even when the retry fails, and says so.
+        typed(&mut ui, &mut host, "tr0ub4dor&3");
+        host.full = true;
+        ui.key(&mut host, Input::Char('a'));
+        for v in ["Bank", "", "", "", "", ""] {
+            typed(&mut ui, &mut host, v);
+        }
+        ui.lock(&mut host, "idle");
+        assert!(!ui.unlocked());
+        assert!(host.records.iter().any(|r| r == "[chastity.unsaved.discarded] reason=idle"));
+        assert!(ui.render(&host).contains("unsaved changes were lost"));
     }
 
     #[test]

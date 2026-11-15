@@ -625,6 +625,12 @@ pub fn message(opcode: u64, actor: Subject, words: [u64; 3]) -> bool {
                 return true;
             }
             if previous.waiting {
+                sex_pdx::serial_record!(
+                    "[files.restricted.parent.busy] pd={} seq={} pending_seq={}",
+                    actor.pd,
+                    r.seq,
+                    previous.request[0] & 0xff_ffff
+                );
                 return true;
             }
         }
