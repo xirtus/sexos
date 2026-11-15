@@ -69,9 +69,9 @@ SUITE=[
 LIVE_TEXT={'news':'npr','links':'comments','encyclopedia':'microkernel','github':'sexos'}
 def main():
  global PROGRAM
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--live',action='store_true');p.add_argument('--program',type=Path,default=PROGRAM);p.add_argument('--no-jit',action='store_true');p.add_argument('--site',action='append',choices=[r[0] for r in SUITE]);a=p.parse_args();PROGRAM=a.program.resolve()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--live',action='store_true');p.add_argument('--program',type=Path,default=PROGRAM);p.add_argument('--no-jit',action='store_true');p.add_argument('--profile-only',action='store_true',help='collect selected page departure profiles; omit auxiliary webmail, not a full site gate');p.add_argument('--site',action='append',choices=[r[0] for r in SUITE]);a=p.parse_args();PROGRAM=a.program.resolve()
  a.out.mkdir(parents=True,exist_ok=True)
- (a.out/'inputs.json').write_text(json.dumps({'runner_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'loadavg_before':os.getloadavg(),'iso_sha256':hashlib.sha256(a.iso.read_bytes()).hexdigest(),'program_sha256':hashlib.sha256(PROGRAM.read_bytes()).hexdigest(),'live':a.live,'forced_interpreter':a.no_jit,'resolution':a.resolution,'timing_scope':'initial fetch/layout/scripts plus departure cumulative VM time including host calls; not CPU time or playback','speedup_claim':False},indent=2)+'\n')
+ (a.out/'inputs.json').write_text(json.dumps({'runner_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'loadavg_before':os.getloadavg(),'iso_sha256':hashlib.sha256(a.iso.read_bytes()).hexdigest(),'program_sha256':hashlib.sha256(PROGRAM.read_bytes()).hexdigest(),'live':a.live,'profile_only':a.profile_only,'forced_interpreter':a.no_jit,'resolution':a.resolution,'timing_scope':'initial fetch/layout/scripts plus departure cumulative VM time including host calls; not CPU time or playback','speedup_claim':False},indent=2)+'\n')
  disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  rw,rh=map(int,a.resolution.split('x'))
@@ -128,23 +128,26 @@ def main():
     outcomes[-1]['physical_scroll_y']=int(m_scroll[1])
     for _ in range(30):q.key('pgdn');time.sleep(.15)
     q.cmd('screendump',{'filename':str((a.out/(name+'-scrolled.ppm')).resolve())})
-  # Webmail: sign in, follow the redirect with the new cookie, read the inbox.
-  began=time.time();s=go(f'{BASE}/mail/');loaded(s);time.sleep(1.5)
-  tile,pw,ph=live_viewport(g,ROOT,surface);bx,by,_,_=canvas_box(ROOT,tile,pw,ph);ox,oy=bx,by+BAR
-  def click(px,py):move(ox+px,oy+py);button('left',True);button('left',False);time.sleep(.3)
-  click(20,10);keys('reader');time.sleep(1)  # keys and the pointer come by different paths
-  click(20,36);keys('hunter2');time.sleep(1)
-  s=len(t());q.key('ret');stats=loaded(s)
-  assert logins==['reader'],posts
-  found=find('quarterly',1)
-  outcomes.append({'site':'webmail','url':f'{BASE}/mail/','text':'quarterly','matches':found,'seconds':round(time.time()-began,1),**stats})
-  print(outcomes[-1],flush=True)
+  if a.profile_only:
+   s=go(f'{BASE}/mail/');loaded(s)  # navigate to collect the selected page's departure counters
+  else:
+   # Webmail: sign in, follow the redirect with the new cookie, read the inbox.
+   began=time.time();s=go(f'{BASE}/mail/');loaded(s);time.sleep(1.5)
+   tile,pw,ph=live_viewport(g,ROOT,surface);bx,by,_,_=canvas_box(ROOT,tile,pw,ph);ox,oy=bx,by+BAR
+   def click(px,py):move(ox+px,oy+py);button('left',True);button('left',False);time.sleep(.3)
+   click(20,10);keys('reader');time.sleep(1)  # keys and the pointer come by different paths
+   click(20,36);keys('hunter2');time.sleep(1)
+   s=len(t());q.key('ret');stats=loaded(s)
+   assert logins==['reader'],posts
+   found=find('quarterly',1)
+   outcomes.append({'site':'webmail','url':f'{BASE}/mail/','text':'quarterly','matches':found,'seconds':round(time.time()-began,1),**stats})
+   print(outcomes[-1],flush=True)
   s=len(t());q.key('f11');g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   for outcome in outcomes:
    outcome['jit_departure_receipts']=[r for r in re.findall(r'\[web.jit.departure\] ([^\r\n]+)',text) if r.endswith('url='+outcome['url'])]
    outcome['object_cache_departure_receipts']=[r for r in re.findall(r'\[web.object-cache.departure\] ([^\r\n]+)',text) if r.endswith('url='+outcome['url'])]
   (a.out/'sites.json').write_text(json.dumps(outcomes,indent=1))
-  print({'ok':True,'sites':len(outcomes)})
+  print({'ok':True,'sites':len(outcomes),'profile_only':a.profile_only,'full_site_gate':not a.profile_only})
  finally:g['stop']()
 if __name__=='__main__':main()

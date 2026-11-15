@@ -678,6 +678,18 @@ impl Browser {
             if let Ok([hits, misses, concat, compare]) = script.guest_fast_path_stats() {
                 sex_pdx::serial_record!("[web.object-cache.departure] hits={} misses={} concat={} compare={} url={}", hits, misses, concat, compare, self.url);
             }
+            #[cfg(feature = "jit-profile")]
+            {
+                for (selector, calls, ns) in &script.page().query_profile {
+                    sex_pdx::serial_record!("[web.profile.query] calls={} elapsed_ns={} selector={:?}", calls, ns, selector);
+                }
+                let p = script.execution_profile();
+                let host_ns: u64 = p.host_ns.iter().copied().sum();
+                sex_pdx::serial_record!("[web.profile] vm_ns={} host_ns={} jit_ns={} jit_calls={} url={}", script.execution_ns(), host_ns, p.jit_ns, p.jit_calls, self.url);
+                for i in 0..128 {
+                    if p.calls[i] != 0 { sex_pdx::serial_record!("[web.profile.host] op={} calls={} elapsed_ns={}", i, p.calls[i], p.host_ns[i]); }
+                }
+            }
             let s = script.jit_stats();
             sex_pdx::serial_record!("[web.jit.departure] enabled={} compiled={} executed={} considered={} non_scalar={} cache_full={} unsupported={} hottest={} captured={} execution_ns={} url={}", self.jit_enabled as u8, s.compiled, s.executed, s.considered, s.non_scalar, s.cache_full, s.unsupported, s.hottest, s.compiled_captured, script.execution_ns(), self.url);
         }

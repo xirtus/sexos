@@ -11,6 +11,7 @@ extern crate alloc;
 
 pub mod css;
 pub mod dom;
+mod query;
 pub mod layout;
 pub mod parse;
 pub mod style;

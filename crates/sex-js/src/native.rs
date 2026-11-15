@@ -41,6 +41,8 @@ unsafe extern "C" fn sexjs_rt_realloc(ptr: *mut u8, old: usize, new: usize) -> *
 
 /// What the guest's imports reach: the instance (for its memory) and the page.
 struct Ctx {
+    #[cfg(feature = "jit-profile")]
+    profile: super::ExecutionProfile,
     instance: *mut c_void,
     page: *mut dyn Page,
     result: Vec<u8>,
@@ -62,10 +64,14 @@ unsafe extern "C" fn w2c_dom_call(ctx: *mut Ctx, op: u32, ptr: u32, len: u32) ->
     let data = unsafe { memory(ctx) };
     let page = unsafe { &mut *ctx.page };
     let Some(args) = args_of(data, ptr as i32, len as i32) else { return u32::MAX };
+    #[cfg(feature = "jit-profile")]
+    let before = page.now_ns();
     let r = if op >= BYTE_OPS { page.call_bytes(op, &args) } else {
         let Some(text) = args.iter().map(|a| core::str::from_utf8(a).ok()).collect::<Option<Vec<&str>>>() else { return u32::MAX };
         page.call(op, &text).map(String::into_bytes)
     };
+    #[cfg(feature = "jit-profile")]
+    ctx.profile.host(op, page.now_ns().saturating_sub(before));
     match r {
         Some(r) => { let n = r.len() as u32; ctx.result = r; n }
         None => u32::MAX,
@@ -140,7 +146,12 @@ unsafe extern "C" fn w2c_dom_jit_v3(ctx: *mut Ctx, pc: u32, len: u32, argv: u32,
     {
         let ctx = unsafe { &mut *ctx };
         let data = unsafe { memory(ctx) };
-        return ctx.jit.run_v3(data, pc, len, argv, argc, out) as u32;
+        #[cfg(feature = "jit-profile")]
+        let before = unsafe { (*ctx.page).now_ns() };
+        let result = ctx.jit.run_v3(data, pc, len, argv, argc, out) as u32;
+        #[cfg(feature = "jit-profile")]
+        ctx.profile.jit(unsafe { (*ctx.page).now_ns() }.saturating_sub(before));
+        return result;
     }
     #[cfg(not(feature = "baseline-jit"))]
     { let _ = (ctx, pc, len, argv, argc, out); 0 }
@@ -157,11 +168,14 @@ pub(crate) struct Native<P: Page + 'static> {
 fn trap(code: i32) -> Error { Error::Trapped(format!("native trap {code}")) }
 
 impl<P: Page + 'static> Native<P> {
+    #[cfg(feature = "jit-profile")]
+    pub fn execution_profile(&self) -> super::ExecutionProfile { unsafe { (*self.ctx).profile } }
+
     pub fn new(page: P, memory_bytes: usize) -> Result<Self, Error> {
         let page = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(page));
         let size = unsafe { sxn_size() };
         let instance = unsafe { alloc_zeroed(Layout::from_size_align(size, ALIGN).unwrap()) } as *mut c_void;
-        let ctx = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Ctx { instance, page: page as *mut dyn Page, result: Vec::new(), #[cfg(feature = "baseline-jit")] jit: super::baseline::Jit::default() }));
+        let ctx = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(Ctx { #[cfg(feature = "jit-profile")] profile: super::ExecutionProfile::default(), instance, page: page as *mut dyn Page, result: Vec::new(), #[cfg(feature = "baseline-jit")] jit: super::baseline::Jit::default() }));
         let mut me = Self { instance, ctx, page, dead: true };
         let r = unsafe { sxn_instantiate(instance, ctx as *mut c_void, memory_bytes as u64) };
         if r != 0 { return Err(Error::Engine(format!("native start trapped ({r})"))); }

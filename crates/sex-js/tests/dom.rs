@@ -1666,3 +1666,65 @@ fn baseline_string_concat_oom_retains_inputs() {
         if enabled { assert!(after[2]>before[2]); } else { assert_eq!(after,before); }
     }
 }
+
+#[cfg(feature = "jit-profile")]
+#[test]
+fn elapsed_profile_attributes_text_and_byte_host_calls() {
+    struct TimedPage(u64);
+    impl sex_js::Page for TimedPage {
+        fn call(&mut self, _: u32, _: &[&str]) -> Option<String> {
+            self.0 += 7000;
+            Some("ok".into())
+        }
+        fn call_bytes(&mut self, _: u32, _: &[&[u8]]) -> Option<Vec<u8>> {
+            self.0 += 11000;
+            Some(b"ok".to_vec())
+        }
+        fn now_ns(&mut self) -> u64 { self.0 }
+    }
+    let mut s = Script::new(TimedPage(0), Limits::default()).unwrap();
+    let before = s.execution_profile();
+    let elapsed = s.execution_ns();
+    s.eval("document.getElementById('a'); fetch('/b');", "profile.js").unwrap();
+    let after = s.execution_profile();
+    for (op, ns) in [(2,7000), (66,11000)] {
+        assert_eq!(after.calls[op] - before.calls[op], 1);
+        assert_eq!(after.host_ns[op] - before.host_ns[op], ns);
+    }
+    assert_eq!(s.execution_ns() - elapsed, after.host_ns.iter().sum::<u64>() - before.host_ns.iter().sum::<u64>());
+}
+
+#[test]
+fn selector_cache_tracks_attributes_reorder_and_inner_html() {
+    let mut s=page("<div id=root><span id=a class=x>A</span><span id=b class=x>B</span></div>");
+    s.eval(r#"
+      const root=document.getElementById('root');
+      const a=document.getElementById('a'), b=document.getElementById('b');
+      const before=root.querySelectorAll('.x');
+      for(let i=0;i<70;i++) root.querySelectorAll('span[data-n="'+i+'"]');
+      root.insertBefore(b,a);
+      console.log(root.querySelector('.x').id, before[0].id);
+      b.className='y'; console.log(root.querySelector('.x').id);
+      root.innerHTML='<i class="x">new</i>';
+      console.log(root.querySelectorAll('.x').length,root.querySelector('.x').tagName);
+      let invalid=false; try { root.querySelector('['); } catch(e) {invalid=true;}
+      console.log(invalid);
+    "#, "query-cache.js").unwrap();
+    assert_eq!(logs(&mut s),["0:b a","0:a","0:1 I","0:true"]);
+}
+
+#[test]
+fn element_matches_and_closest_test_only_the_element() {
+    let mut s=page("<section class=outer><i class=x></i><b class=x></b></section>");
+    s.eval(r#"
+      const el=document.querySelector('i');
+      console.log(el.matches('section > .x'),el.matches('b'),el.closest('.outer').tagName);
+      const detached=document.createElement('i'); detached.className='x';
+      console.log(detached.matches('i.x'),detached.closest('.x')===detached);
+      let coercions=0; el.closest({toString(){coercions++;return '.absent';}});
+      console.log(coercions);
+      let errors=0; try {el.matches('[');} catch(e){errors++;} try{el.closest('[');}catch(e){errors++;}
+      console.log(errors);
+    "#, "matches.js").unwrap();
+    assert_eq!(logs(&mut s),["0:true false SECTION","0:true true","0:1","0:2"]);
+}
