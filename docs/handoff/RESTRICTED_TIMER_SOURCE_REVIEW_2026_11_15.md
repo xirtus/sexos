@@ -18,8 +18,15 @@ Accepted new source hashes:
 - SDK root: `c2895d4991c2d48d099daee3e6090063b3288f77c0ad5e9a75201c903f95c984`
 - Net main: `d7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d`
 
-The separate passive Shell observer profile remains unchanged until the final
-native coordinator hooks have been reviewed. Existing runtime receipts retain
+The final native Shell hooks were separately reviewed at `cc4df78de` against the
+previous accepted Shell in `154816f76`. Changes add the persistent reserved pool,
+exact-task launch checks, coordinator dispatch, cleanup and its pending-work
+predicate. The diagnostic observer module, call site, public counter/held-peer
+queries and all kernel sources in its closure are unchanged. Coordinator IPC is
+ordinary service work, not part of the observer. The passive observer profile
+now pins Shell `ba86c5119dd56fd6f6a50efee4eb203e39cdd3f226002566a1af35ada0edfd39`.
+This accepts only the reviewed old-kernel root cohort; current master and its
+synthetic merge remain outside this profile. Existing runtime receipts retain
 their original source and image bindings; this review reassigns none of them.
 
 Validation: 29 source-contract, log and ACPI tests pass. The first test invocation
