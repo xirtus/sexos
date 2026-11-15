@@ -55,18 +55,26 @@ impl Ui {
     // ---- text ------------------------------------------------------------------
 
     pub fn label(&mut self, parent: Id, text: &str) -> Id {
-        self.add(parent, Kind::Label { text: text.into(), style: TextStyle::Body, wrap: false, align: Align::Start, color: None })
+        self.add(parent, Kind::Label { text: text.into(), style: TextStyle::Body, wrap: false, align: Align::Start, color: None, emphasis: None })
     }
     /// A label in another size or face.
     pub fn text(&mut self, parent: Id, text: &str, style: TextStyle) -> Id {
-        self.add(parent, Kind::Label { text: text.into(), style, wrap: false, align: Align::Start, color: None })
+        self.add(parent, Kind::Label { text: text.into(), style, wrap: false, align: Align::Start, color: None, emphasis: None })
     }
     /// A paragraph that wraps to its width.
     pub fn paragraph(&mut self, parent: Id, text: &str) -> Id {
-        self.add(parent, Kind::Label { text: text.into(), style: TextStyle::Body, wrap: true, align: Align::Start, color: None })
+        self.add(parent, Kind::Label { text: text.into(), style: TextStyle::Body, wrap: true, align: Align::Start, color: None, emphasis: None })
     }
     pub fn set_align(&mut self, id: Id, a: Align) {
         if let Kind::Label { align, .. } = &mut self.node_mut(id).kind { *align = a; }
+        self.damage_node(id);
+    }
+    /// Draws a label bold, italic or both (`None`: as its text style says).
+    pub fn set_emphasis(&mut self, id: Id, e: Option<sex_font::Style>) {
+        if let Kind::Label { emphasis, .. } = &mut self.node_mut(id).kind { if *emphasis == e { return; } *emphasis = e; } else { return; }
+        let t = self.node(id).taffy;
+        let _ = self.tree.mark_dirty(t);
+        self.layout_dirty = true;
         self.damage_node(id);
     }
     pub fn set_color(&mut self, id: Id, c: Option<Color>) {

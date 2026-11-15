@@ -36,6 +36,8 @@ mod ui;
 pub mod widget;
 
 pub use geom::{Point, Rect};
+pub use sex_font::Style as FontStyle;
+pub use text::Face;
 pub use i18n::{Arg, Strings};
 pub use input::{Button, Event, Key, Pointer, PointerKind, Shortcut};
 pub use menu::{Command, Commands, Menu, MenuItem};
