@@ -10,8 +10,8 @@
 * `stdhello count` prints until Ctrl+C in Term stops it (status 130).
 * `chello one two`: a C program on sex-libc, the same way; it is refused the network.
 * Lua 5.4 (`lua -e`, then its interactive prompt until Ctrl+D) and CPython (`python -c`).
-* A Term started with plain `run term` holds no relay grant: Files rejects its
-  legacy relay ticket downstream. Term's missing refusal feedback is not qualified."""
+* A Term started with plain `run term` holds no relay grant: Files refuses its
+  relay ticket (DENIED) and Term reports the refusal."""
 import argparse,hashlib,json,os,re,shutil,time
 from pathlib import Path
 from install_program import install
@@ -187,7 +187,7 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'term-native-lua-python.ppm')})
   s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   # Without the grant, Files refuses.
-  target,task=start('run term')
+  target,task,_=start('run term')
   s=len(t());term_line('stdhello');g['wait'](r'\[term\.native\.refused\] name=stdhello status=11\n',s,60)
   assert '[files.console.attached]' not in t()[s:]
   assert '[term.native.start]' not in t()[s:]
