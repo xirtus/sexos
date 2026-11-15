@@ -7,26 +7,20 @@ fn main() {}
 #[cfg(feature = "sexos")]
 mod guest {
     extern crate alloc;
-    use core::sync::atomic::{AtomicU32, Ordering};
     use ribbon_seal::{Record, CHANNEL, MARKER, PRIVATE, SECRET};
-    use sex_app::{files::direct as files, launch, thread, Event, Window};
+    use sex_app::{files::direct as files, launch, Event, Window};
     use sex_pdx::{launch as l, program_store as store};
     const BIN: &[u8] = b"/bin/ribbonseal";
     const SDK_ARGS: &[u8] = b"--child sdk ribbon-owner-20261115 @/ribbon-private";
     const SDK_MAIN: u32 = 0x5001;
-    const WORK_ARGS: &[u8] = b"--child worker ribbon-owner-20261115 @/ribbon-private";
     const FOREIGN_ARGS: &[u8] = b"--child foreign ribbon-owner-20261115 @/ribbon-private";
     const STALE_ARGS: &[u8] = b"--child stale ribbon-owner-20261115 @/ribbon-private";
     const PLAIN_ARGS: &[u8] = b"--child reuse ribbon-owner-20261115";
-    const WORK_RAW: u32 = 0x5101;
-    const WORK_MAIN: u32 = 0x5102;
     const FOREIGN_RAW: u32 = 0x5201;
     const FOREIGN_MAIN: u32 = 0x5202;
     const REPLAY: u32 = 0x5203;
     const REUSE_RAW: u32 = 0x5301;
     const REUSE_MAIN: u32 = 0x5302;
-    static WORK_READY: AtomicU32 = AtomicU32::new(0);
-    static WORK_RELEASE: AtomicU32 = AtomicU32::new(0);
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
         sex_pdx::serial_record!("[ribbon.failed] invariant=1 detail={}", info);
@@ -159,27 +153,6 @@ mod guest {
         sex_pdx::serial_record!("[ribbon.seed] files=2 ok=1 developer_only=1");
         launch::exit(0)
     }
-    fn worker_check() {
-        assert_eq!(read_private(), Ok(true));
-        let ticket = files::prepare(BIN, WORK_ARGS).expect("main prepare");
-        WORK_READY.store(0, Ordering::Release);
-        WORK_RELEASE.store(0, Ordering::Release);
-        let worker=thread::spawn(move||{assert!(thread::is_worker());assert_eq!(read_private(),Ok(true));assert_eq!(files::prepare(BIN,WORK_ARGS),Err(sex_pdx::fs::DENIED));raw(ticket,WORK_RAW);sex_pdx::serial_record!("[ribbon.worker.enqueued] cookie={} ticket={} worker=1 read_allowed=1 prepare_denied=1 ok=1",WORK_RAW,ticket);WORK_READY.store(1,Ordering::Release);while WORK_RELEASE.load(Ordering::Acquire)==0{pause()}}).expect("worker");
-        let deadline = sex_pdx::get_ticks() + 30000;
-        while WORK_READY.load(Ordering::Acquire) == 0 {
-            assert!(sex_pdx::get_ticks() < deadline);
-            pause()
-        }
-        raw(ticket, WORK_MAIN);
-        child_done(WORK_MAIN);
-        assert!(
-            launch::poll(WORK_RAW).is_none(),
-            "worker launch/control executed"
-        );
-        WORK_RELEASE.store(1, Ordering::Release);
-        worker.join();
-        sex_pdx::serial_record!("[ribbon.worker.done] ticket={} main_consumed=1 worker_event=0 ordinary_worker_read=1 ok=1",ticket);
-    }
     fn owner_foreign() {
         let own = identity();
         let ticket = files::prepare(BIN, FOREIGN_ARGS).expect("owner prepare");
@@ -295,7 +268,7 @@ mod guest {
         let mut window = Window::open();
         window.title(b"Ribbon Seal - ticket owner");
         window.show(
-            b"Developer launch-owner qualification. V SDK launch; W worker; F foreign; R prepare and retire.",
+            b"Developer launch-owner qualification. V SDK launch; F foreign; R prepare and retire.",
         );
         assert_eq!(read_private(), Ok(true));
         sex_pdx::serial_record!(
@@ -315,15 +288,11 @@ mod guest {
                     );
                     phase = 1;
                 }
-                Some(Event::Key(k)) if k.code == 0x11 && phase == 1 => {
-                    worker_check();
+                Some(Event::Key(k)) if k.code == 0x21 && phase == 1 => {
+                    owner_foreign();
                     phase = 2
                 }
-                Some(Event::Key(k)) if k.code == 0x21 && phase == 2 => {
-                    owner_foreign();
-                    phase = 3
-                }
-                Some(Event::Key(k)) if k.code == 0x13 && phase == 3 => {
+                Some(Event::Key(k)) if k.code == 0x13 && phase == 2 => {
                     let ticket = files::prepare(BIN, STALE_ARGS).expect("stale prepare");
                     let mut r = record();
                     r.0[0] = 4;

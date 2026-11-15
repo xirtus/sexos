@@ -65,8 +65,6 @@ def main():
   start,foreign,foreign_task,foreign_surface=launch('run ribbonseal --foreign @/ribbon-xchg','foreign');saved_start(start,foreign,foreign_task);assert owner!=foreign
   g['q'].cmd('screendump',{'filename':str(out/'parents-ready.ppm')})
   start=key(owner_surface,'v');wait(r'\[ribbon.sdk.done\] inherited_argument=1 inherited_file=1 ok=1',start,120);wait(r'\[ribbon.child\] phase=sdk target=\d+ task=\d+ args_ok=1 grant=1 ok=1',start,120);facts['sdk']=child_retired(start,0x5001)
-  start=key(owner_surface,'w');wait(r'\[ribbon.worker.enqueued\] cookie=20737 ticket=\d+ worker=1 read_allowed=1 prepare_denied=1 ok=1',start,120);wait(r'\[ribbon.worker.done\] ticket=\d+ main_consumed=1 worker_event=0 ordinary_worker_read=1 ok=1',start,120);facts['worker']=child_retired(start,0x5102)
-  assert not re.search(rf'\[shell.launch.asked\] parent={owner} task=\d+ cookie=20737 ',g['text']()[start:]),'worker request reached launch admission'
   start=key(owner_surface,'f');pending=wait(rf'\[ribbon.pending\] phase=foreign target={owner} task={owner_task} ticket=(\d+)',start,120);ticket=int(pending[1]);wait(rf'\[files.ticket.denied\] requester={foreign}',start,120)
   wait(rf'\[ribbon.foreign.done\] target={foreign} task={foreign_task} original_args=1 read_denied=1 delegation_denied=1 ok=1',start,120)
   wait(rf'\[ribbon.owner.done\] ticket={ticket} foreign_denied=1 owner_consumed=1 single_use=1 ok=1',start,120)
@@ -79,6 +77,6 @@ def main():
   g['q'].cmd('screendump',{'filename':str(out/'after-ownership.ppm')});g['q'].cmd('quit');g['proc'].wait(30)
  finally:g['stop']()
  assert all(sha(Path(name))==digest for name,digest in inputs.items()),'bound source/binary changed'
- result=dict(ok=True,scope=__doc__,production_revision=provenance['production_revision'],source_commit=(out/'source-commit.txt').read_text().strip(),inputs_sha256=sha(out/'inputs.json'),owner=dict(target=owner,task=owner_task),foreign=dict(target=foreign,task=foreign_task),reuse=dict(target=new_owner,task=new_task,old_ticket=stale_ticket),children=facts,foreign_ticket=ticket,grant_handoff_on_refusal=False,worker_file_io='existing authorized read preserved; no general membership/stale-I/O isolation claim')
+ result=dict(ok=True,scope=__doc__,production_revision=provenance['production_revision'],source_commit=(out/'source-commit.txt').read_text().strip(),inputs_sha256=sha(out/'inputs.json'),owner=dict(target=owner,task=owner_task),foreign=dict(target=foreign,task=foreign_task),reuse=dict(target=new_owner,task=new_task,old_ticket=stale_ticket),children=facts,foreign_ticket=ticket,grant_handoff_on_refusal=False,worker_scope='not tested: kernel normalizes live workers to main-run identity; preserved v3 counterexample; no worker-launch exclusion or stale-I/O isolation claim')
  (out/'result.json').write_text(json.dumps(result,indent=2)+'\n');print(json.dumps(result))
 if __name__=='__main__':main()
