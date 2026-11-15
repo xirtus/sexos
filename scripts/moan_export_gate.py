@@ -9,7 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from moan_gate_geometry import ready, discard, type_text, spindle, control as control_position
+from moan_gate_geometry import ready, discard, type_text, spindle, control as control_position, chord as native_chord
 import re
 import shutil
 import subprocess
@@ -65,8 +65,7 @@ def main():
     g=boot(a.iso.resolve(),disk,out,'moan-export',a.resolution);q=g['q'];text=g['text'];rw,rh=map(int,a.resolution.split('x'))
     def keys(value):type_text(g,value)
     def chord(*names):
-        q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':down,'key':{'type':'qcode','data':name}}}
-            for down,part in ((True,names),(False,tuple(reversed(names)))) for name in part]})
+        native_chord(g,*names)
     def say(value):
         return spindle(g,value)
     try:
@@ -100,7 +99,7 @@ def main():
             made=g['wait'](rf'\[moan.export\] format={ext} frames=192000 bytes=(\d+) synced=1',cursor,300)
             results[ext]=dict(expected_bytes=int(made[1]),expected_frames=192000)
         # Long silent gap makes Close deterministic even on fast codecs/hosts.
-        cursor=len(text());control('position');chord('ctrl','a');keys('3600');control('Tone')
+        cursor=len(text());control('Region_controls');control('position');chord('ctrl','a');keys('3600');control('Tone')
         g['wait'](r'\[moan.project\] tracks=2 frames=172896000 ',cursor,60)
         cursor=len(text());chord('ctrl','shift','1');chord('ctrl','shift','e');choose('partial.wav')
         g['wait'](r'\[moan.export.started\] format=wav frames=172992000',cursor,60)

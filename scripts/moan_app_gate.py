@@ -10,7 +10,7 @@ from install_program import install
 from quil_autosave_gate import boot
 from program_egui_gate import colours
 from sound_gate import segments
-from moan_gate_geometry import ready, control, discard, type_text, spindle
+from moan_gate_geometry import ready, control, discard, type_text, spindle, chord
 from program_gate_geometry import current_tile
 ROOT=Path(__file__).resolve().parents[1]
 def main():
@@ -33,7 +33,7 @@ def main():
   s=len(text());click('Tone');g['wait'](r'\[moan.project\] tracks=1 frames=96000 selected=0 clips=1',s,60)
   s=len(text());click('Play');g['wait'](r'\[moan.play\] tracks=1 from=0',s,60);g['wait'](r'\[moan.finished\] frames=192000',s,120)
   s=len(text());click('Tone');g['wait'](r'\[moan.project\] tracks=2 frames=96000 selected=1 clips=2',s,60)
-  click('position');q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':d,'key':{'type':'qcode','data':k}}}for d,ks in ((True,('ctrl','a')),(False,('a','ctrl')))for k in ks]});keys('1')
+  click('Region_controls');click('position');chord(g,'ctrl','a');keys('1')
   s=len(text());click('Split');g['wait'](r'\[moan.project\] tracks=2 frames=96000 selected=1 clips=3',s,60)
   s=len(text());click('Undo');g['wait'](r'\[moan.project\] tracks=2 frames=96000 selected=1 clips=2',s,60)
   if a.microphone:
