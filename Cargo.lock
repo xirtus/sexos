@@ -4404,7 +4404,7 @@ dependencies = [
 name = "polyamour"
 version = "0.1.0"
 dependencies = [
- "png",
+ "png 0.18.1",
  "sex-3d",
  "sex-office",
  "sex-std",

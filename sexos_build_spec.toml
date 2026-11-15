@@ -291,7 +291,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/term/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/term"
-dest_artifact = "iso_root/programs/term"
+dest_artifact = "iso_root/programs/spindle"
 
 [[stage]]
 id = "build_quil_editor"
