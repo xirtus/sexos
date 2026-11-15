@@ -25,8 +25,9 @@
 //!
 //! What std's Hermit port refuses on its own (`rename`, `File::set_len`,
 //! `File::sync_all`, `remove_dir_all`, `canonicalize`, a working `copy`) is in
-//! [`fs`]; why `std::process::Command` cannot start another program yet is in
-//! [`process`].
+//! [`fs`]. `std::process::Command` starts other programs as hidden helpers or in
+//! their own windows, over `sex_app::launch`; what it carries and what not (pipes) is
+//! in [`process`].
 //!
 //! A program uses it with `use sex_std as _;` (or calls [`window`] for pixels) and a
 //! normal `fn main`.

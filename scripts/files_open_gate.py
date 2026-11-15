@@ -5,7 +5,8 @@ program opens just says so."""
 import argparse,http.server,os,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
-FILES={n:(ROOT/'iso_root/programs'/p).read_bytes() for n,p in (('/files','loom'),('/jot','jot'))}
+# Files is staged as Loom; Spindle's `files` runs /bin/loom.
+FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/jot':(ROOT/'iso_root/programs/jot').read_bytes()}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -38,12 +39,12 @@ def main():
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  for n in ('files',):
-   m=expect(f'fetch http://10.0.2.2:{PORT}/{n} /bin/loom',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  for n,dest in (('files','/bin/loom'),):
+   m=expect(f'fetch http://10.0.2.2:{PORT}/{n} {dest}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   expect('mkdir /0open',r'\[spindle.fs.result\] kind=3 status=0')
   expect(f'write /0open/a.txt {TEXT}',r'\[spindle.fs.result\] kind=8 status=0')
   expect('write /0open/b.xyz no program opens this',r'\[spindle.fs.result\] kind=8 status=0')
-  s=len(t());line('loom /0open');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);sid=int(m[3])
+  s=len(t());line('files /0open');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60);sid=int(m[3])
   g['wait'](r'\[files.app.list\] dir=/0open count=2\b',s,60);g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);time.sleep(1)
   g['focus'](sid);time.sleep(.5)
   # Jot isn't in /bin yet: Files says so.

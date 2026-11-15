@@ -5,8 +5,8 @@
   println!, arguments, HashMap, std::fs (write, append, read, read_dir, metadata,
   remove, no way above its folder, create_dir_all, file types, modified), sex_std::fs
   (rename, set_len, sync, copy, canonicalize, read_dir of an empty folder,
-  remove_dir_all), Command refused as
-  Unsupported, threads with Arc/Mutex, mpsc, Instant, sleep.
+  remove_dir_all), Command of a missing
+  program refused as NotFound, threads with Arc/Mutex, mpsc, Instant, sleep.
 * `run chello one two`: C `main(argc, argv)` on sex-libc's POSIX layer: stdio streams,
   fopen/fgets/fseek/ftell, open/lseek/read, stat, rename, opendir/readdir, remove,
   errno, qsort, malloc, atexit, pread/pwrite, ftruncate/fsync, mmap (private, shared

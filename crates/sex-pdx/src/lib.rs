@@ -638,6 +638,15 @@ pub fn civil_time_ms()->Result<u64,u64>{
     if status==0{Ok(ms)}else{Err(status)}
 }
 
+/// The time keeper only (sexnet): civil time becomes `ms` since the Unix epoch.
+pub fn set_civil_time_ms(ms:u64)->Result<(),u64>{
+    let status:u64;
+    unsafe{core::arch::asm!("syscall",inlateout("rax")clock_source::civil::SYS=>status,
+        inlateout("rdi")clock_source::civil::SET=>_,inlateout("rsi")ms=>_,
+        out("rcx")_,out("r11")_,options(nostack));}
+    if status==0{Ok(())}else{Err(status)}
+}
+
 /// Inspect only this exact subject's held immutable BOOT trust-policy source.
 pub fn trust_info(slot:u64)->Result<trust_source::Info,u64>{
     let(status,a,b,c,d):(u64,u64,u64,u64,u64);
@@ -1276,6 +1285,7 @@ pub mod device;
 pub mod usb_disk;
 pub mod usb_net;
 pub mod bt_hci;
+pub mod bt_bonds;
 pub mod network_config;
 
 pub mod desktop_style;
@@ -1283,6 +1293,7 @@ pub mod pixel_region;
 pub mod sound_ring;
 pub mod sound_mixer;
 pub mod wifi_status;
+pub mod network_time;
 pub mod notify;
 pub mod desktop_look;
 pub mod window_switcher;

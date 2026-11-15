@@ -3,7 +3,9 @@
 # (AES-CMAC, f4/f5/f6/g2, P-256), the Intel firmware loader against a synthetic .sfi
 # and a scripted controller (plus the real linux-firmware images when they can be
 # fetched), a simulated controller through bring-up, scan and LE Secure Connections
-# pairing, and the sex_pdx::bt_hci ring.
+# pairing, ATT/GATT and report-map goldens, a simulated BLE keyboard (HID over GATT)
+# and classic HID mouse end to end, bonds, and the sex_pdx::bt_hci ring, HID mailbox
+# and bt_bonds store.
 # No radio here: the controller itself is only proven on hardware (x17 receipt).
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -16,5 +18,7 @@ else
 fi
 cargo test -p sex-bt --locked
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
-rustc --edition=2021 --crate-name bt_hci --test crates/sex-pdx/src/bt_hci.rs -o "$TMP/bt_hci" && "$TMP/bt_hci"
+printf '#[path = "%s/crates/sex-pdx/src/bt_hci.rs"] pub mod bt_hci;\n#[path = "%s/crates/sex-pdx/src/bt_bonds.rs"] pub mod bt_bonds;\n' \
+  "$ROOT_DIR" "$ROOT_DIR" > "$TMP/pdx_bt.rs"
+rustc --edition=2021 --crate-name pdx_bt --test "$TMP/pdx_bt.rs" -o "$TMP/pdx_bt" && "$TMP/pdx_bt"
 echo "[gate.bt.result] PASS scope=host_stack_not_radio"
