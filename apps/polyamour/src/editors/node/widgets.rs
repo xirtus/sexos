@@ -3,9 +3,8 @@
 //! on a gradient bar, add/remove, interpolation, position and colour of the
 //! active stop) and curve mapping (C/R/G/B channels, drag points, click to
 //! add a point, X deletes the selected one).
-use crate::draw::{Align, Rect};
+use crate::draw::Rect;
 use crate::input::{Button, Input};
-use crate::theme as t;
 use crate::ui::{id, MenuItem, NumOpts, Op, Ui};
 use sex_3d::nodes::{enums, ColorRamp, CurveMapping};
 
@@ -37,11 +36,10 @@ pub fn ramp(ui: &mut Ui, base: &str, r: Rect, row: i32, ramp: &mut ColorRamp, ac
     let plus = Rect::new(r.x, r.y, b, fh);
     let minus = Rect::new(r.x + b + 2, r.y, b, fh);
     if ui.button(plus, "+") {
-        let (pa, ca) = ramp.elements[*active];
+        let pa = ramp.elements[*active].0;
         let next = ramp.elements.get(*active + 1).map(|e| e.0).unwrap_or(if pa >= 1.0 { pa } else { 1.0 });
         let pos = if (next - pa).abs() < 1e-6 { ramp.elements.get(active.wrapping_sub(1)).map_or(pa * 0.5, |p| (p.0 + pa) * 0.5) } else { (pa + next) * 0.5 };
         let c = ramp.eval(pos);
-        let _ = ca;
         ramp.elements.push((pos, c));
         sort(ramp, active, pos);
         changed = true;
@@ -179,7 +177,7 @@ pub fn curve(ui: &mut Ui, base: &str, r: Rect, row: i32, cm: &mut CurveMapping, 
     if cm.curves.is_empty() {
         return changed;
     }
-    for (ci, c) in cm.curves.iter().enumerate() {
+    for ci in 0..cm.curves.len() {
         if ci != *chan && !names.is_empty() && *chan != 0 {
             continue;
         }
@@ -195,7 +193,6 @@ pub fn curve(ui: &mut Ui, base: &str, r: Rect, row: i32, cm: &mut CurveMapping, 
             }
             prev = Some(p);
         }
-        let _ = c;
     }
     let pts = cm.curves[*chan].clone();
     for (i, p) in pts.iter().enumerate() {
@@ -245,7 +242,5 @@ pub fn curve(ui: &mut Ui, base: &str, r: Rect, row: i32, cm: &mut CurveMapping, 
         }
         _ => {}
     }
-    let _ = Align::Left;
-    let _ = t::TEXT;
     changed
 }
