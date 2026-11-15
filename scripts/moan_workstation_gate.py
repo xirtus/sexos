@@ -167,7 +167,7 @@ def main():
     for relative,digest in inputs['source_sha256'].items():
         source=ROOT/relative;assert sha(source)==digest
         destination=out/'source-snapshot'/relative;destination.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,destination);assert sha(destination)==digest
-    disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk);install(disk,[(name,(ROOT/'iso_root/programs'/name).read_bytes())for name in ('moan','files')])
+    disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk);install(disk,[(name,(ROOT/'iso_root/programs'/name).read_bytes())for name in ('moan','loom')])
     wav=out/'workstation.wav';os.environ['SEXOS_GATE_DEVICES']=f'-audiodev wav,id=snd0,path={wav},out.frequency=48000,out.channels=2 -device virtio-sound-pci,audiodev=snd0'
     os.environ.setdefault('SEXOS_GATE_BOUND','1200');shots=[];g=boot(a.iso,disk,out,'workstation-save',a.resolution)
     try:

@@ -11,7 +11,7 @@ from install_program import install
 p=argparse.ArgumentParser(description=__doc__)
 for name in('iso','source-disk','out'):p.add_argument('--'+name,type=Path,required=True)
 a=p.parse_args();OUT=a.out.resolve();OUT.mkdir(exist_ok=False,parents=True)
-inputs={str(p):sha(p)for p in [a.iso,a.source_disk,Path(__file__),ROOT/'scripts/moan_workspace_gate.py',*[ROOT/'iso_root/programs'/n for n in('moan','files')]]}
+inputs={str(p):sha(p)for p in [a.iso,a.source_disk,Path(__file__),ROOT/'scripts/moan_workspace_gate.py',*[ROOT/'iso_root/programs'/n for n in('moan','loom')]]}
 for d in('apps/moan','crates/moan-core','crates/weft','crates/sex-app','crates/sex-pdx','crates/sex-font','assets/fonts','scripts'):
  for f in(ROOT/d).rglob('*'):
   if f.is_file()and'__pycache__'not in f.parts and'target'not in f.relative_to(ROOT/d).parts:inputs[str(f)]=sha(f)
@@ -33,7 +33,7 @@ def park(c,surface,target):
  c.g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} w={fresh[2][0]} h={fresh[2][1]}',fresh[0],120)
  return fresh
 
-disk=OUT/'nvme.img';shutil.copyfile(a.source_disk,disk);install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('moan','files')])
+disk=OUT/'nvme.img';shutil.copyfile(a.source_disk,disk);install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('moan','loom')])
 os.environ['SEXOS_GATE_DEVICES']=f'-audiodev wav,id=snd0,path={wav},out.frequency=48000,out.channels=2 -device virtio-sound-pci,audiodev=snd0';os.environ['SEXOS_GATE_BOUND']='900'
 g=boot(a.iso,disk,OUT,'narrow-workspaces','640x480');shots=[]
 try:

@@ -45,7 +45,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     for name in ('iso','source-disk','out'):parser.add_argument('--'+name,required=True,type=Path)
     parser.add_argument('--resolution',default='1280x800');a=parser.parse_args();out=a.out.resolve();out.mkdir(parents=True,exist_ok=True)
-    disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk);install(disk,[(name,(ROOT/'iso_root/programs'/name).read_bytes())for name in ('moan','files')]);os.environ.setdefault('SEXOS_GATE_BOUND','1200')
+    disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk);install(disk,[(name,(ROOT/'iso_root/programs'/name).read_bytes())for name in ('moan','loom')]);os.environ.setdefault('SEXOS_GATE_BOUND','1200')
     g=boot(a.iso,disk,out,'project-save',a.resolution)
     try:
         c=Controls(g,out,a.resolution);g['wait'](r'\[app.private.retired\] target=41 ',0,180)

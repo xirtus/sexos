@@ -20,7 +20,7 @@ for d in('apps/moan','crates/moan-core','crates/moan-export','crates/weft','crat
 (OUT/'inputs.json').write_text(json.dumps(inputs,indent=2)+'\n');(OUT/'source-commit.txt').write_text(subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True))
 source=ROOT/'scripts/moan_workspace_gate.py';node=next(n for n in ast.parse(source.read_text()).body if isinstance(n,ast.ClassDef)and n.name=='Driver')
 wav=OUT/'boot1.wav';ns=dict(Probe=Probe,re=re,time=time,wav=wav,viewport=viewport,origin=origin);exec(compile(ast.Module(body=[node],type_ignores=[]),str(source),'exec'),ns);Driver=ns['Driver']
-disk=OUT/'nvme.img';shutil.copyfile(a.source_disk,disk);install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('moan','files')]+[('moanrack',a.seed_elf.read_bytes())]);os.environ['SEXOS_GATE_BOUND']='1800'
+disk=OUT/'nvme.img';shutil.copyfile(a.source_disk,disk);install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('moan','loom')]+[('moanrack',a.seed_elf.read_bytes())]);os.environ['SEXOS_GATE_BOUND']='1800'
 def capture(path):os.environ['SEXOS_GATE_DEVICES']=f'-audiodev wav,id=snd0,path={path},out.frequency=48000,out.channels=2 -device virtio-sound-pci,audiodev=snd0'
 def save(c,g,fs,surface,name,trigger):
  g['wait'](r'\[files.app.question\] program=moan mode=Save',trigger,120);c.focus(fs);c.chord('ctrl','h');c.chord('ctrl','s')

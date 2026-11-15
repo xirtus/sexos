@@ -131,7 +131,7 @@ def main():
     (out/'inputs.json').write_text(json.dumps(inputs,indent=2)+'\n')
     for name,digest in inputs['source_sha256'].items():
         source=ROOT/name;assert sha(source)==digest;dest=out/'source-snapshot'/name;dest.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(source,dest)
-    disk=out/'nvme.img';shutil.copyfile(args.source_disk,disk);install(disk,[(name,(ROOT/'iso_root/programs'/name).read_bytes())for name in ('moan','files')])
+    disk=out/'nvme.img';shutil.copyfile(args.source_disk,disk);install(disk,[(name,(ROOT/'iso_root/programs'/name).read_bytes())for name in ('moan','loom')])
     wav=out/'steps.wav';os.environ['SEXOS_GATE_DEVICES']=f'-audiodev wav,id=snd0,path={wav},out.frequency=48000,out.channels=2 -device virtio-sound-pci,audiodev=snd0';os.environ.setdefault('SEXOS_GATE_BOUND','1200')
     shots=[];g=boot(args.iso,disk,out,'step-save',args.resolution)
     try:

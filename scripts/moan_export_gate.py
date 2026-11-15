@@ -58,7 +58,7 @@ def main():
     assert not any(out.iterdir()), 'fresh output directory required'
     disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
     with disk.open('r+b') as f:f.truncate(1024**3)
-    install(disk,[(name,(ROOT/'iso_root/programs'/name).read_bytes()) for name in ('moan','files')])
+    install(disk,[(name,(ROOT/'iso_root/programs'/name).read_bytes()) for name in ('moan','loom')])
     extractor=out/'sexfs-extract'
     subprocess.run(['rustc','--edition=2021','-O','-A','dead_code','-A','unused_attributes',str(ROOT/'scripts/sexfs_extract.rs'),'-o',str(extractor)],check=True)
     os.environ.setdefault('SEXOS_GATE_BOUND','1200')
