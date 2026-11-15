@@ -65,6 +65,19 @@ impl<'a, 'b> L<'a, 'b> {
         }
         d.touch();
     }
+    /// The next field `key` shows `object`'s `path[index]`: its colour
+    /// follows the animation (yellow keyed on this frame, green animated,
+    /// purple driven) and I / Alt+I / Ctrl+D over it key or drive it.
+    pub fn bind(&mut self, d: &Doc, key: &str, object: &str, path: &str, index: usize) {
+        use crate::anim::FieldState as F;
+        let color = match d.anim.field_state(object, path, index, d.frame) {
+            F::Keyed => Some(0xb59e2c),
+            F::Animated => Some(0x4b7f2c),
+            F::Driven => Some(0x6c3d9e),
+            _ => None,
+        };
+        self.ui.st.anim_fields.push((key.to_string(), format!("{object}\t{path}\t{index}"), color));
+    }
     pub fn wid(&self, key: &str) -> u64 {
         id(&format!("{}/{key}", self.prefix))
     }
@@ -151,10 +164,12 @@ impl<'a, 'b> L<'a, 'b> {
         self.fields.push((key.to_string(), fr));
         self.fields.push((label.to_string(), fr));
         let wid = self.wid(key);
+        self.ui.st.tint = self.ui.st.anim_fields.iter().rev().find(|f| f.0 == key).and_then(|f| f.2);
         let changed = self.guarded(ROW, |l| {
             l.draw_label(lr, label, hit);
             l.ui.number_ex(wid, fr, "", v, o)
         });
+        self.ui.st.tint = None;
         self.advance(ROW);
         changed
     }

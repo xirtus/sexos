@@ -266,7 +266,15 @@ pub fn begin(doc: &mut Doc) -> Option<Stroke> {
     let (oi, mi) = active_mesh(doc)?;
     let name = doc.scene.objects[oi].name.clone();
     let g = match active_group(doc, oi, mi) {
-        Some(g) => g,
+        Some(g) => {
+            let gname = doc.scene.meshes[mi].vertex_groups[g].clone();
+            if is_locked(doc, oi, &gname) {
+                doc.report = format!("Vertex group '{gname}' is locked");
+                return None;
+            }
+            doc.push_undo("Weight Paint");
+            g
+        }
         None => {
             doc.push_undo("Weight Paint");
             let g = doc.scene.meshes[mi].add_vertex_group("Group");
@@ -275,13 +283,6 @@ pub fn begin(doc: &mut Doc) -> Option<Stroke> {
         }
     };
     let gname = doc.scene.meshes[mi].vertex_groups[g].clone();
-    if is_locked(doc, oi, &gname) {
-        doc.report = format!("Vertex group '{gname}' is locked");
-        return None;
-    }
-    if active_group(doc, oi, mi).is_some() {
-        doc.push_undo("Weight Paint");
-    }
     let m = &doc.scene.meshes[mi];
     let n = m.positions.len();
     let mut adjacency = vec![Vec::new(); n];

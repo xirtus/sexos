@@ -23,6 +23,7 @@ mod overlay;
 pub mod proj;
 pub mod raster;
 pub mod render;
+pub mod rigview;
 pub mod sidebar;
 #[cfg(test)]
 mod tests;
@@ -92,6 +93,12 @@ pub enum Modal {
     Knife { pts: Vec<(f32, f32)> },
     Annotate,
     Measure,
+    /// A weight paint stroke.
+    WeightPaint { stroke: Box<crate::rig::paint::Stroke>, last: (f32, f32) },
+    /// The Gradient weight tool: dragging from `a`.
+    WeightGradient { stroke: Box<crate::rig::paint::Stroke>, a: (f32, f32), radial: bool },
+    /// F / Shift+F: brush radius or strength from the mouse.
+    BrushSize { strength: bool, x0: i32, orig: f32 },
 }
 
 pub struct State {
@@ -468,7 +475,9 @@ fn ensure_cache(s: &mut State, d: &mut Doc) {
             d.scene.selected.retain(|&i| i != a);
         }
     }
+    let pinned = crate::rig::shapes::pin(d);
     let full = ViewportScene::new(&d.scene);
+    crate::rig::shapes::unpin(d, pinned);
     let shell = Scene {
         name: String::new(),
         objects: d
@@ -764,7 +773,7 @@ fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: 
 }
 
 fn start_transform(s: &mut State, d: &mut Doc, mode: TMode, m: (f32, f32), r: Rect) {
-    if d.mode != Mode::Object && d.mode != Mode::Edit {
+    if d.mode != Mode::Object && d.mode != Mode::Edit && d.mode != Mode::Pose {
         return;
     }
     let p = Proj::new(&s.cam, r);
@@ -917,13 +926,15 @@ fn signature(s: &State, d: &Doc) -> (u64, [u32; 8], u32, [u32; 3], u8) {
 fn draw_all(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, lay: &Layout) {
     let proj = Proj::new(&s.cam, r);
     overlay::scene_image(s, d, ui, r);
+    rigview::draw_weights(d, ui, &proj);
     if s.camera_view {
         overlay::camera_frame(s, d, ui, r);
     }
     if s.show_overlays {
-        if d.mode == Mode::Edit {
+        rigview::draw(s, d, ui, &proj);
+        if rigview::mesh_edit(d) {
             overlay::edit_overlay(s, d, ui, &proj);
-        } else {
+        } else if d.mode != Mode::Edit {
             overlay::origins(d, ui, &proj);
         }
         if s.show_cursor {
@@ -932,6 +943,7 @@ fn draw_all(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, lay: &Layout) {
         overlay::annotations(s, ui, &proj);
     }
     overlay::modal_overlay(s, d, ui, &proj);
+    rigview::draw_brush(d, ui, r);
     if s.show_gizmo && s.show_tool_gizmo && !is_modal(s) {
         widgets::draw_tool_gizmo(s, d, ui, &proj);
     }
@@ -1001,6 +1013,9 @@ fn handle_event(s: &mut State, d: &mut Doc, ui: &mut Ui, inp: Input, r: Rect) {
 fn left_down(s: &mut State, d: &mut Doc, ui: &mut Ui, x: i32, y: i32, mods: Mods, r: Rect) {
     let p = Proj::new(&s.cam, r);
     let (fx, fy) = (x as f32, y as f32);
+    if rigview::paint_press(s, d, &p, x, y, mods) {
+        return;
+    }
     if s.show_gizmo && s.show_tool_gizmo {
         if let Some((mode, axis, plane)) = widgets::gizmo_hit(s, d, &p, fx, fy) {
             let space = d.orientation;
@@ -1016,7 +1031,7 @@ fn left_down(s: &mut State, d: &mut Doc, ui: &mut Ui, x: i32, y: i32, mods: Mods
             }
         }
     }
-    let edit_mode = d.mode == Mode::Edit;
+    let edit_mode = rigview::mesh_edit(d);
     match d.tool {
         Tool::Cursor => d.cursor = surface_point(s, d, &p, fx, fy),
         Tool::Annotate => {
@@ -1054,6 +1069,9 @@ fn left_down(s: &mut State, d: &mut Doc, ui: &mut Ui, x: i32, y: i32, mods: Mods
 /// A left click without a drag: select what is under the pointer.
 fn click_select(s: &mut State, d: &mut Doc, x: i32, y: i32, extend: bool, r: Rect) {
     let p = Proj::new(&s.cam, r);
+    if rigview::click(d, &p, x, y, extend) {
+        return;
+    }
     if d.mode == Mode::Edit {
         let xray = s.xray_on();
         let hit = edit_view(s, d, &p).and_then(|ev| ev.pick(d, x, y, xray));
@@ -1063,7 +1081,7 @@ fn click_select(s: &mut State, d: &mut Doc, x: i32, y: i32, extend: bool, r: Rec
         return;
     }
     ensure_cache(s, d);
-    let hit = s.cache.as_ref().and_then(|(_, vp, _)| vp.pick(&s.cam, r.w as u32, r.h as u32, (x - r.x) as f32, (y - r.y) as f32));
+    let hit = rigview::pick_object(d, &p, x, y).or_else(|| s.cache.as_ref().and_then(|(_, vp, _)| vp.pick(&s.cam, r.w as u32, r.h as u32, (x - r.x) as f32, (y - r.y) as f32)));
     match (hit, extend) {
         (Some(i), true) => d.toggle_select(i),
         (Some(i), false) => d.select_only(Some(i)),
@@ -1074,6 +1092,9 @@ fn click_select(s: &mut State, d: &mut Doc, x: i32, y: i32, extend: bool, r: Rec
 
 fn box_select(s: &mut State, d: &mut Doc, b: Rect, mode: BoxMode, r: Rect) {
     let p = Proj::new(&s.cam, r);
+    if rigview::box_select(d, &p, b, mode) {
+        return;
+    }
     if d.mode == Mode::Edit {
         let xray = s.xray_on();
         let hits = edit_view(s, d, &p).map(|ev| ev.in_box(d, b, xray)).unwrap_or_default();
@@ -1125,9 +1146,25 @@ fn popup_at(d: &mut Doc, ui: &Ui, title: &str, mut items: Vec<MenuItem>, r: Rect
 /// Keys over the view (not during a modal tool). Returns true when used.
 fn key_down(s: &mut State, d: &mut Doc, ui: &mut Ui, key: Key, mods: Mods, r: Rect) -> bool {
     use Key as K;
-    let edit_mode = d.mode == Mode::Edit;
+    let edit_mode = rigview::mesh_edit(d);
     let m = mouse_in(ui, r);
     let q = |d: &mut Doc, id: &str, arg: &str| d.queue.push(Op::with(id, arg));
+    if let Some(after) = rigview::key(s, d, ui, key, mods) {
+        match after {
+            rigview::After::Nothing => {}
+            rigview::After::Move => {
+                start_transform(s, d, TMode::Translate, m, r);
+                mark_undo_recorded(s);
+            }
+            rigview::After::Roll => {
+                start_transform(s, d, TMode::Rotate, m, r);
+                if let Modal::Transform(t) = &mut s.modal {
+                    t.roll = true;
+                }
+            }
+        }
+        return true;
+    }
     match (key, mods) {
         // ---- navigation
         (K::Num(0), mm) if mm.ctrl => run_view_op(s, d, ui, "view3d.object_as_camera", "", r),
@@ -1231,10 +1268,16 @@ fn key_down(s: &mut State, d: &mut Doc, ui: &mut Ui, key: Key, mods: Mods, r: Re
             }
         }
         (K::Char('a'), Mods::CTRL) => popup_at(d, ui, "Apply", menus::apply_items(), r),
-        (K::Char('p'), Mods::CTRL) => popup_at(d, ui, "Set Parent To", menus::parent_items(), r),
+        (K::Char('p'), Mods::CTRL) => {
+            let items = rigview::object_parent_items(d).unwrap_or_else(menus::parent_items);
+            popup_at(d, ui, "Set Parent To", items, r)
+        }
         (K::Char('p'), mm) if mm.alt => popup_at(d, ui, "Clear Parent", menus::clear_parent_items(), r),
         (K::Char('j'), Mods::CTRL) => q(d, "object.join", ""),
         (K::Char('i'), Mods::NONE) => q(d, "anim.keyframe_insert", ""),
+        (K::Char('i'), mm) if mm.alt && !mm.shift => q(d, "anim.keyframe_delete", ""),
+        (K::Char('i'), mm) if mm.alt && mm.shift => q(d, "anim.keyframes_clear", ""),
+        (K::Char('k'), Mods::NONE) => popup_at(d, ui, "Insert Keyframe Menu", rigview::keyframe_menu(d), r),
         (K::Char('o'), mm) if mm.alt => q(d, "object.origin_clear", ""),
         (K::F(2), _) => d.report = "Rename is not available yet".into(),
         (K::F(9), _) => d.report = "screen.redo_last is not available yet".into(),
@@ -1333,6 +1376,7 @@ fn handle_modal(s: &mut State, d: &mut Doc, ui: &mut Ui, inp: Input, r: Rect) {
     let modal = core::mem::replace(&mut s.modal, Modal::None);
     s.modal = match modal {
         Modal::None => Modal::None,
+        m @ (Modal::WeightPaint { .. } | Modal::WeightGradient { .. } | Modal::BrushSize { .. }) => rigview::modal(d, &p, inp, m),
         Modal::Orbit | Modal::Pan | Modal::Zoom => match inp {
             Input::Move { x, y } => {
                 let (dx, dy) = ((x - s.last.0) as f32, (y - s.last.1) as f32);

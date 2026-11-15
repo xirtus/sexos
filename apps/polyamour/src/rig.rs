@@ -14,6 +14,7 @@ pub mod armedit;
 pub mod cons;
 pub mod paint;
 pub mod pose;
+pub mod props;
 pub mod shapes;
 pub mod xform;
 #[cfg(test)]
@@ -546,6 +547,9 @@ pub fn run(doc: &mut Doc, op: &Op) -> bool {
     }
     if id.starts_with("lattice.") {
         return lattice_op(doc, op);
+    }
+    if id == "bone.set" || id == "constraint.set" {
+        return props::run(doc, op);
     }
     if id.starts_with("constraint.") || id == "object.constraint_add" || id == "pose.constraint_add" {
         return cons::run(doc, op);
