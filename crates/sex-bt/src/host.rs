@@ -158,6 +158,14 @@ impl Host {
     pub fn stop_scan(&mut self) {
         for c in controller::stop_scan(&self.bringup.info) { self.send_command(c); }
     }
+    /// Restart the LE scan only (the controller's duplicate filter forgets what it saw),
+    /// so a bonded device that went away is seen, and reconnected, when it comes back.
+    pub fn restart_le_scan(&mut self) {
+        let classic = |c: &Vec<u8>| hci::parse_command(c).is_some_and(|(o, _)| o == op::INQUIRY || o == op::INQUIRY_CANCEL);
+        let stop = controller::stop_scan(&self.bringup.info);
+        let start = controller::start_scan(&self.bringup.info, 1);
+        for c in stop.into_iter().chain(start).filter(|c| !classic(c)) { self.send_command(c); }
+    }
 
     /// Connect to an LE device (public or random address).
     pub fn connect_le(&mut self, addr: Addr, addr_type: u8) {

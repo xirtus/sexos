@@ -6,8 +6,13 @@
 //! pack region when BOOT grants one), controller bring-up, discovery and pairing.
 //!
 //! Boot log: `[cufflinks.start]`, `[cufflinks.transport]`, `[cufflinks.controller]`,
-//! `[cufflinks.firmware] ...`, `[cufflinks.ready] addr=...`, `[cufflinks.device] addr=...
-//! name=... rssi=...`, `[cufflinks.pair] ...`.
+//! `[cufflinks.firmware] ...`, `[cufflinks.ready] addr=...`, `[cufflinks.bonds] ...`,
+//! `[cufflinks.device] addr=... name=... rssi=...`, `[cufflinks.pair] ...`,
+//! `[cufflinks.hid] addr=... keyboard=1 pointer=0 ...`.
+//!
+//! W2: keyboards and mice (classic HID boot protocol, HID over GATT) send their input
+//! through the region's HID mailbox to SexUSB, which hands it to Input with USB's own.
+//! Bonds are kept by Files (`store.rs`); who may pair is decided in `pairing.rs`.
 //!
 //! BOOT starts it as domain `bt_hci::CUFFLINKS_PD` (Senses organ) with the HCI region
 //! shared with SexUSB, the firmware pack and a route to Files. With no controller it
@@ -17,12 +22,16 @@
 #![no_main]
 extern crate alloc;
 
+mod pairing;
+mod store;
+
 use alloc::boxed::Box;
 use sex_bt::hci::{self, Event};
+use sex_bt::hid::Input;
 use sex_bt::host::{Host, Note};
 use sex_bt::intel::{self, Loader, Outcome};
 use sex_bt::report::Transport;
-use sex_pdx::bt_hci::{self, Shared};
+use sex_pdx::bt_hci::{self, HidInput, Shared};
 use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 use sex_pdx::serial_record as log;
 
@@ -155,39 +164,114 @@ fn load_intel_firmware(ring: &Shared, generation: u32, packet: &mut [u8]) -> boo
     false
 }
 
+/// The HID devices connected now: connection handle -> the small device number SexUSB
+/// keys their held keys by.
+struct HidDevices { slots: [Option<u16>; 8] }
+
+impl HidDevices {
+    fn id(&self, handle: u16) -> Option<u8> { self.slots.iter().position(|s| *s == Some(handle)).map(|i| i as u8 + 1) }
+    fn add(&mut self, handle: u16) -> Option<u8> {
+        if let Some(id) = self.id(handle) { return Some(id); }
+        let at = self.slots.iter().position(|s| s.is_none())?;
+        self.slots[at] = Some(handle);
+        Some(at as u8 + 1)
+    }
+    fn remove(&mut self, handle: u16) -> Option<u8> {
+        let id = self.id(handle)?;
+        self.slots[id as usize - 1] = None;
+        Some(id)
+    }
+    fn count(&self) -> u32 { self.slots.iter().filter(|s| s.is_some()).count() as u32 }
+}
+
+fn push_input(ring: &Shared, input: HidInput) {
+    // SexUSB drains the mailbox every pass while HID links are up; wait briefly if full.
+    for _ in 0..100 { if ring.hid_push(input) { return; } let _ = sex_pdx::sys_wait_self_ticks(1); }
+    log!("[cufflinks.hid.dropped]");
+}
+
 fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
     let mut h = Host::new(Box::new(random));
     let mut scanning = false;
+    let mut policy = pairing::Policy::new(0, 1);
+    let mut tried: alloc::vec::Vec<sex_bt::hci::Addr> = alloc::vec::Vec::new();
+    let mut hid = HidDevices { slots: [None; 8] };
+    ring.set_hid_links(0);
     while still(ring, generation) {
         let mut moved = false;
         while let Some(p) = h.poll() { send(ring, &p, false); moved = true; }
         while let Some(n) = ring.rx_pop(packet) { h.on_packet(&packet[..n]); moved = true; }
+        let now = sex_pdx::get_ticks();
         while let Some(n) = h.note() {
             moved = true;
             match n {
                 Note::Ready(i) => {
                     log!("[cufflinks.ready] addr={} hci={} lmp_subversion={:#06x} manufacturer={} le={} ssp={} ext_scan={}",
                         i.addr, i.hci_version, i.lmp_subversion, i.manufacturer, i.le() as u8, i.ssp() as u8, i.le_extended_advertising() as u8);
+                    h.set_bonds(store::load());
+                    policy = pairing::Policy::new(now, h.bonds.len());
+                    log!("[cufflinks.pairing] bonds={} window_s={}", h.bonds.len(), policy.window_seconds(now));
                     if !scanning { h.scan(8); scanning = true; }
                 }
-                Note::Device(f) => log!("[cufflinks.device] addr={} type={} name=\"{}\" rssi={} class={:#08x} appearance={:#06x}",
-                    f.addr, if f.transport == Transport::Le { "le" } else { "classic" }, f.name.as_deref().unwrap_or(""),
-                    f.rssi.unwrap_or(127), f.class.unwrap_or(0), f.appearance.unwrap_or(0)),
+                Note::Device(f) => {
+                    log!("[cufflinks.device] addr={} type={} name=\"{}\" rssi={} class={:#08x} appearance={:#06x}",
+                        f.addr, if f.transport == Transport::Le { "le" } else { "classic" }, f.name.as_deref().unwrap_or(""),
+                        f.rssi.unwrap_or(127), f.class.unwrap_or(0), f.appearance.unwrap_or(0));
+                    // A new keyboard or mouse: only inside the pairing window (see pairing.rs).
+                    let new = h.bonds.le_for(&f.addr).is_none() && h.bonds.classic_for(&f.addr).is_none();
+                    if new && Host::is_hid(&f) && f.connectable && !tried.contains(&f.addr) {
+                        if policy.connect_new(now) {
+                            tried.push(f.addr);
+                            log!("[cufflinks.hid.connect] addr={} name=\"{}\" window=1", f.addr, f.name.as_deref().unwrap_or(""));
+                            h.connect_hid(&f);
+                        } else {
+                            log!("[cufflinks.hid.skip] addr={} reason=no_prompt", f.addr);
+                            tried.push(f.addr);
+                        }
+                    }
+                }
                 Note::Connected { handle, addr, le } => log!("[cufflinks.connected] handle={:#06x} addr={} le={}", handle, addr, le as u8),
-                Note::Disconnected { handle, reason } => log!("[cufflinks.disconnected] handle={:#06x} reason={:#04x}", handle, reason),
-                // No desktop prompt until W2: numeric comparison is answered yes and logged.
+                Note::Disconnected { handle, reason } => {
+                    log!("[cufflinks.disconnected] handle={:#06x} reason={:#04x}", handle, reason);
+                    if let Some(device) = hid.remove(handle) {
+                        push_input(ring, HidInput::Gone { device });
+                        ring.set_hid_links(hid.count());
+                        // Look for it again: a bonded device reconnects when it advertises.
+                        h.restart_le_scan();
+                    }
+                }
                 Note::Compare { handle, addr, value } => {
-                    log!("[cufflinks.pair] addr={} compare={:06} accepted=auto", addr, value);
-                    h.confirm(handle, true);
+                    // TODO(W2b): ask the desktop (pairing.rs). Until then: the window decides.
+                    let yes = policy.accept_compare(now);
+                    if yes { log!("[cufflinks.pair] addr={} compare={:06} accepted=auto window=1", addr, value); }
+                    else { log!("[cufflinks.pair] addr={} compare={:06} accepted=0 reason=no_prompt", addr, value); }
+                    h.confirm(handle, yes);
                 }
                 Note::Paired { addr, le } => log!("[cufflinks.pair] addr={} le={} paired=1", addr, le as u8),
                 Note::PairingFailed { addr, reason } => log!("[cufflinks.pair] addr={} paired=0 reason={:#04x}", addr, reason),
                 Note::Encrypted { handle } => log!("[cufflinks.encrypted] handle={:#06x}", handle),
                 Note::Refused { opcode, status } => log!("[cufflinks.refused] opcode={:#06x} status={:#04x}", opcode, status),
                 Note::Failed(e) => { log!("[cufflinks.failed] step=bringup reason={:?}", e); return; }
+                Note::BondsChanged => { store::save(&h.bonds); }
+                Note::HidReady { handle, addr, le, keyboard, pointer, boot } => {
+                    let device = hid.add(handle).unwrap_or(0);
+                    ring.set_hid_links(hid.count());
+                    log!("[cufflinks.hid] addr={} handle={:#06x} device={} le={} keyboard={} pointer={} boot={}",
+                        addr, handle, device, le as u8, keyboard as u8, pointer as u8, boot as u8);
+                }
+                Note::HidFailed { handle, code } => log!("[cufflinks.hid.failed] handle={:#06x} code={:#04x}", handle, code),
+                Note::Input { handle, input } => {
+                    let Some(device) = hid.id(handle) else { continue };
+                    push_input(ring, match input {
+                        Input::Keys { modifiers, keys } => HidInput::Keys { device, modifiers, keys: Input::packed_keys(&keys) },
+                        Input::Pointer { buttons, dx, dy, wheel } => HidInput::Pointer { device, buttons, dx, dy, wheel },
+                    });
+                }
             }
         }
-        if !moved { let _ = sex_pdx::sys_wait_self_ticks(1); }
+        if !moved { serve(); let _ = sex_pdx::sys_wait_self_ticks(1); }
     }
+    for device in 1..=8 { if hid.slots[device as usize - 1].is_some() { push_input(ring, HidInput::Gone { device }); } }
+    ring.set_hid_links(0);
     log!("[cufflinks.gone] generation={}", generation);
 }
