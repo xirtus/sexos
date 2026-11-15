@@ -188,3 +188,31 @@ correctly rejected it. The corrected action has a real native Weft regression.
 Instrument recipe algorithms are fixed by project version 2. A future DSP change
 must preserve the v2 renderer or add an explicit versioned recipe migration; it
 must not reclassify valid older projects as corruption because a new bake differs.
+
+## Current qualified workflow checkpoint: workspaces and offline effects
+
+This dated checkpoint supersedes the candidate-status column above for the
+specific tested workflows. It does not upgrade unimplemented reference features.
+The app source is8d46f756; its later palette and restricted-role revisions require
+separate evidence. `MOAN_WORKSPACE_LIVE_RUNTIME_2026_11_15.json` binds the actual
+four workspace screenshots and independently captured live mix. The parent-owned
+`MOAN_OFFLINE_UI_RUNTIME_2026_11_15.json` binds six exact model/RGB GUI captures and
+sample-by-sample project extraction over the preserved v9 normal image.
+
+| Workflow reference | Current Moan status | Concrete remaining boundary |
+|---|---|---|
+| Logic/Audacity workspace composition | Implemented shared Arrange, Mix, Piano Roll, Step Sequencer and focused Instruments panel, fixed transport, optional library/region controls | Horizontal native faders; richer vertical strips, custom workspaces/themes and per-track color polish remain separate |
+| Logic/SoundCraft musical editing | Implemented bounded notes, velocity/duration, transpose/quantize, step input and actual original synth/sampler playback; saved notes reopen cold | External MIDI devices/files, velocity lanes, expressive controllers, notation and user sample mapping missing |
+| Logic/Live step workflows | Implemented persisted16-step eighth-note editor with one rational BPM clock; captured onset/gate/velocity proof | Repeat/skip/direction/randomization, probability, scene launch and Live Loops missing |
+| Logic/SoundCraft listening while mixing | Implemented safe live master/track level, pan, M/S with captured level/pitch/continuity checks; one undo per live pass | Changes affect newly rendered blocks after queued audio; routing, buses/sends/VCA, automation and delay compensation missing |
+| SoundCraft/Logic third-party effects | Implemented user-picked offline CLAP/VST3 effect job and new editable rendered track; actual swap, crash recovery, cancellation, reuse and saved original/result PCM verified | Ordinary helper crash containment only; hostile restricted provider role pending. No live insert, external instrument/MIDI ports, LV2/AU, descriptor-driven named controls or arbitrary desktop binary support |
+| Audacity4 trim/stretch/repair | Partial existing selection/cut/split/fade/drag plus original waveform/MIDI regions | Edge handles, warp/stretch, direct sample drawing and spectral repair missing |
+| Logic/SoundCraft takes and automation | Missing beyond one bounded capture per recording operation | Comping/playlists, punch, monitoring, automation lanes and Write/Touch/Latch/Trim remain missing |
+| Audacity4 repeat/annotation/export | Real WAV/FLAC/MP3 mix export implemented in existing pipeline | Repeat-range transport, markers/memory locations, label export, stems and batch export missing |
+
+The wide accumulator now applies master gain before final i16 saturation. Host
+regression verifies two overloaded positive/negative tracks retain headroom when
+master is lowered, unity stays byte-identical, and project-loaded export uses the
+same path. Nonunity master metadata uses bounded project v3, while unity audio-only
+v1 and MIDI v2 stay compatible. A nonunity-v3 cold-reopen audio gate is not claimed
+by the current unity-project GUI or live-control proof.
