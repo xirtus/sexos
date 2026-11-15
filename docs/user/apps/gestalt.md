@@ -47,10 +47,11 @@ The strip on the left shows the tools; click one or press its key.
 | Ctrl+Shift+1 … 4 | Pathfinder: unite, minus front, intersect, exclude |
 | Ctrl+=, Ctrl+-, Ctrl+0, Ctrl+1 | Zoom in, out, fit the artboard, 100% |
 | Wheel | Scroll |
+| Shift-drag, Alt-drag | Constrain; copy (Selection) or draw from the centre (shapes) |
 | Ctrl+S | Save |
 | Ctrl+E, Ctrl+Shift+E | Export PNG, PDF beside the drawing |
 
 ## Not yet
 
 VectorCraft's panels (Layers, Appearance, Swatches, Properties), its menus and Image Trace come
-with its egui interface. Shift- and Alt-drags (constrain, copy) wait for pointer modifiers.
+with its egui interface.

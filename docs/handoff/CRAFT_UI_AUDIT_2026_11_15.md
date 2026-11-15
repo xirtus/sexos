@@ -210,7 +210,7 @@ snapping) and `.ai` files from real users as its first two gaps.
 | ~~The whole app (V4): SVG open, edit, save; paths and nodes; text; PNG/PDF export~~ | fixed 2026-11-15 (office thread) |
 | ~~SVG as the native file format, Inkscape-style, with `.ai` and PDF import~~ | fixed 2026-11-15 |
 | Panels: Layers, Appearance, Swatches, Properties with artboards | office thread (T), with egui on sex-app |
-| Shift- and Alt-drags (constrain, copy) | after the shell's pointer modifiers (PR #299) |
+| ~~Shift- and Alt-drags (constrain, copy)~~ | fixed 2026-11-15 with PR #299's pointer modifiers |
 | Image Trace, Shape Builder polish, `.ai` files from real users | office thread (T) |
 
 ## Splicy and FilmCraft (Premiere, Kdenlive, Shotcut, Scarlet)

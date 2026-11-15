@@ -354,6 +354,9 @@ impl Ui {
     fn pointer(&mut self, p: Pointer, w: i32, h: i32) -> bool {
         let (x, y) = (p.x as i32, p.y as i32);
         let at = self.to_doc((x - STRIP_W) as f64, y as f64);
+        // Shift constrains, Alt copies or draws from the centre, as the tools define them.
+        use sex_std::sex_pdx::app_pointer::{ALT, CONTROL, SHIFT};
+        let mods = Mods { shift: p.mods & SHIFT != 0, alt: p.mods & ALT != 0, ctrl: p.mods & CONTROL != 0, ..NONE };
         match p.kind {
             Kind::Wheel { steps } => {
                 self.origin.y -= steps as f64 * 48.0 / self.zoom;
@@ -372,7 +375,7 @@ impl Ui {
                 }
                 if button != 0 { return false; }
                 self.pressed = Some(Press::Tool);
-                let _ = self.d.pointer(PointerKind::Down, at, NONE, self.zoom);
+                let _ = self.d.pointer(PointerKind::Down, at, mods, self.zoom);
                 true
             }
             Kind::Move => match self.pressed {
@@ -380,11 +383,11 @@ impl Ui {
                     self.origin = Point::new(o.x - (x - x0) as f64 / self.zoom, o.y - (y - y0) as f64 / self.zoom);
                     true
                 }
-                Some(Press::Tool) => { let _ = self.d.pointer(PointerKind::Drag, at, NONE, self.zoom); true }
+                Some(Press::Tool) => { let _ = self.d.pointer(PointerKind::Drag, at, mods, self.zoom); true }
                 None if x >= STRIP_W && y < h - STATUS_H => {
                     // Hover: the pen's rubber band, Smart Guides' hints.
                     let before = self.d.overlays_len(self.zoom);
-                    let _ = self.d.pointer(PointerKind::Move, at, NONE, self.zoom);
+                    let _ = self.d.pointer(PointerKind::Move, at, mods, self.zoom);
                     before > 0 || self.d.overlays_len(self.zoom) > 0
                 }
                 None => false,
@@ -392,7 +395,7 @@ impl Ui {
             Kind::Up { .. } => match self.pressed.take() {
                 Some(Press::Tool) => {
                     let objects = self.d.objects();
-                    let _ = self.d.pointer(PointerKind::Up, at, NONE, self.zoom);
+                    let _ = self.d.pointer(PointerKind::Up, at, mods, self.zoom);
                     sex_std::record(&format!("[gestalt.gesture] tool={} objects={} selected={}{}", self.d.tool_id(), self.d.objects(), self.d.selected(),
                         self.d.selection_bounds().map_or(String::new(), |b| format!(" box={:.0},{:.0},{:.0},{:.0}", b.x0, b.y0, b.width(), b.height()))));
                     if self.d.objects() != objects { self.message.clear(); }
