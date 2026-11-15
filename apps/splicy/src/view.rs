@@ -88,8 +88,11 @@ pub fn areas(w: i32, h: i32) -> Areas {
 pub fn timecode(t: Micros, fps: (u32, u32)) -> String {
     let t = t.max(0);
     let (num, den) = (fps.0.max(1) as i128, fps.1.max(1) as i128);
-    let secs = t / SECOND;
-    let ff = (t % SECOND) as i128 * num / (den * SECOND as i128);
+    // Non-drop-frame: count frames, then split by the nominal rate (30 for 29.97), so
+    // the label always names the frame the edit and the export are on.
+    let frames = t as i128 * num / (den * SECOND as i128);
+    let nominal = ((num + den - 1) / den).max(1);
+    let (secs, ff) = (frames / nominal, frames % nominal);
     format!("{:02}:{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60, ff)
 }
 

@@ -258,7 +258,7 @@ fn timeline_shows_filmstrips_waveforms_ruler_and_playhead() {
     assert_eq!(lib.thumb(ed.transcript.media, 740 * MS).unwrap().at, 500 * MS);
     assert_eq!(lib.thumb(ed.transcript.media, 760 * MS).unwrap().at, 1000 * MS);
     assert_eq!(view::timecode(61 * SECOND + 500 * MS, (30, 1)), "00:01:01:15");
-    assert_eq!(view::timecode(3600 * SECOND, (30000, 1001)), "01:00:00:00");
+    assert_eq!(view::timecode(60 * SECOND, (30000, 1001)), "00:00:59:28", "frame 1798, non-drop");
     assert_eq!(view::ruler_step(10_000, 110), 2 * SECOND);
 
     ed.place(3, false);
