@@ -208,7 +208,8 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
     let mut sound = audio::Audio::new();
     // Classic links from bonded devices that may be headsets: if one opens AVDTP but
     // sets no stream up within two seconds, we do (handle, since).
-    let mut quiet: alloc::vec::Vec<(u16, u64)> = alloc::vec::Vec::new();
+    // (handle, since, signaling open): the 2 s setup window starts when AVDTP signaling opens.
+    let mut quiet: alloc::vec::Vec<(u16, u64, bool)> = alloc::vec::Vec::new();
     while still(ring, generation) {
         let mut moved = false;
         while let Some(p) = h.poll() { send(ring, &p, false); moved = true; }
@@ -253,7 +254,7 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
                 }
                 Note::Connected { handle, addr, le } => {
                     log!("[cufflinks.connected] handle={:#06x} addr={} le={}", handle, addr, le as u8);
-                    if !le { quiet.push((handle, now)); }
+                    if !le { quiet.push((handle, now, false)); }
                 }
                 Note::Disconnected { handle, reason } => {
                     log!("[cufflinks.disconnected] handle={:#06x} reason={:#04x}", handle, reason);
@@ -307,7 +308,14 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
             }
         }
         // A bonded headset that paged us and opened AVDTP without setting a stream up.
-        quiet.retain(|&(handle, since)| {
+        quiet.retain_mut(|q| {
+            let (handle, since, open) = *q;
+            if !open {
+                // Wait for the headset's signaling channel (for at most 30 s), then give
+                // it 2 s to set a stream up itself.
+                if h.audio_state(handle).is_some() { *q = (handle, now, true); return true; }
+                return now.saturating_sub(since) < 30_000;
+            }
             if now.saturating_sub(since) < 2_000 { return true; }
             if h.audio_state(handle) == Some(sex_bt::avdtp::State::Idle) {
                 log!("[cufflinks.audio.start] handle={:#06x} initiator=1", handle);

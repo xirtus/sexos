@@ -770,3 +770,20 @@ fn random_bytes_never_panic() {
         if next() % 64 == 0 { src = avdtp::Source::new(672); client.start(); }
     }
 }
+
+#[test]
+fn media_waiting_for_buffers_is_dropped_when_encryption_goes_off() {
+    let (mut h, mut c, handle) = streaming();
+    c.hold = true;
+    let pcm = tone(96_000);
+    let mut at = 0;
+    for _ in 0..10 { at += h.play(handle, &pcm[at..]); pump(&mut h, &mut c); }
+    assert!(at > 0 && c.outstanding == ACL_BUFFERS, "controller full, media queued in the host");
+    let frames = c.hs.frames;
+    c.ev(hci::ev::ENCRYPTION_CHANGE, &[0, handle as u8, 0, 0]);
+    pump(&mut h, &mut c);
+    // Buffers come back: what was queued must not go out on the unencrypted link.
+    c.hold = false;
+    for _ in 0..5 { c.release(); pump(&mut h, &mut c); }
+    assert_eq!(c.hs.frames, frames, "no media after encryption went off");
+}

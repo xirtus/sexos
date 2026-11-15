@@ -606,6 +606,10 @@ impl Host {
                     // Encryption turned off: nothing more is trusted on this link
                     // (HID input and AVDTP are ignored, audio stops) until it is back on.
                     if let Some(c) = self.conn(handle) { c.encrypted = false; }
+                    // Nothing already queued for the link goes out in the clear either
+                    // (media waiting for controller buffers): re-securing the link takes
+                    // HCI commands, not ACL data.
+                    self.acl.retain(|p| !hci::parse_acl(p).is_some_and(|(h, _, _)| h == handle));
                 } else if status != 0 {
                     // The stored key was refused (the device forgot us): pair again.
                     let le_bonded = self.conns.iter().find(|c| c.handle == handle).filter(|c| c.le && c.central && c.smp.is_none()).map(|c| c.addr);
