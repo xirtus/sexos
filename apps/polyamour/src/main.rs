@@ -107,7 +107,7 @@ fn main() {
     if let Some(p) = std::env::args().nth(1) {
         open_arg(&mut app, &p);
     }
-    let mut mods = Mods::NONE;
+    let mut mods;
     let mut last_ws = String::from("Layout");
     // A Ctrl+left press stands in for the middle button until it is released.
     let mut emulated_middle = false;
