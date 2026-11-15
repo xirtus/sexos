@@ -83,6 +83,8 @@ pub struct Document {
     pub modules_wanted: Vec<String>,
     /// The page's import map: (bare specifier, or a prefix ending in `/`, address).
     pub import_map: Vec<(String, String)>,
+    /// The browser's compiled-script cache, shared by its pages (see [`crate::CodeCache`]).
+    pub code_cache: Option<alloc::rc::Rc<core::cell::RefCell<crate::CodeCache>>>,
 }
 
 /// What a page asked of its WebSockets.
@@ -192,7 +194,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new() }
+        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -282,6 +284,8 @@ impl Page for Document {
         let text = |i: usize| a.get(i).and_then(|b| core::str::from_utf8(b).ok()).unwrap_or("");
         match operation {
             op::SOURCE_MUTED => return Some(if self.source_muted(text(0)) { b"1".to_vec() } else { b"0".to_vec() }),
+            op::CODE_GET => return self.code_cache.as_ref()?.borrow_mut().lookup(a.first()?, a.get(1)?, a.get(2)?),
+            op::CODE_PUT => { self.code_cache.as_ref()?.borrow_mut().store(a.first()?.to_vec()); return None; }
             op::CLASSIC_SCRIPT => {
                 if self.classic_scripts.len() >= 64 { return None; }
                 let node = self.element(Some(&text(0)))?;
