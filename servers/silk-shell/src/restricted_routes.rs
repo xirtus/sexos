@@ -395,14 +395,25 @@ impl Platform for Kernel {
                 *slot = Some((child.pd, child.task));
             }
         }
-        send_event(
+        let delivered = send_event(
             parent,
             sex_pdx::launch::Event::Started {
                 cookie,
                 row: child.pd,
                 task: child.task,
             },
-        )
+        );
+        if delivered {
+            sex_pdx::serial_record!(
+                "[moan.role.started] parent={} parent_task={} cookie={} pd={} task={}",
+                parent.pd,
+                parent.task,
+                cookie,
+                child.pd,
+                child.task
+            );
+        }
+        delivered
     }
     fn refused(&mut self, parent: Subject, cookie: u32) {
         refuse(parent, cookie)

@@ -367,7 +367,9 @@ launch, file, network or kill authority.
 
 Metadata-only native witnesses are `moan.role.reserved`, `moan.role.policy`
 (service/phase/subject/generation only, after all accepted reply credits),
-`moan.role.copied`, `moan.role.active`, and `moan.role.ready`. Trusted bootstrap
+`moan.role.copied`, `moan.role.active`, and `moan.role.ready`.
+`moan.role.started` binds exact parent/task/cookie to child/task only after the
+actual authenticated Started message is accepted, never merely queued locally. Trusted bootstrap
 emits `moanplug.bootstrap` only after full owned Display grant erasure and exact
 private-input hash validation, then `moanplug.native` after the authenticated
 Ready acknowledgment and before plugin entry. No nonce, challenge, input hash,
