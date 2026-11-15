@@ -92,10 +92,14 @@ pub fn poll() {
         .state()
         .poll(&mut Kernel, |effect| match effect {
             Effect::Scrub(subject) => scrub(subject),
-            // No ACK/ready can activate an unimplemented positive rights path.
-            Effect::Install(_) => false,
-            Effect::Expire(_) => true,
+            // Install associates private buffers provisionally; data access still
+            // requires the exact committed lease after all Seal reply credits.
+            Effect::Install(binding) => crate::restricted_io::install(binding),
+            Effect::Expire(binding) => crate::restricted_io::expire(binding),
         })
+}
+pub fn scrub_retired(subject: Subject) -> bool {
+    scrub(subject)
 }
 fn scrub(subject: Subject) -> bool {
     if Kernel.catalog(subject.pd) != Some(subject) {

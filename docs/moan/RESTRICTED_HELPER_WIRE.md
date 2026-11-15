@@ -214,3 +214,42 @@ The final receipt is `0xd3 << 56 | ticket << 32`. The coordinator is trusted to
 send COPIED only after its synchronous kind3 returns. A missed/unknown copy does
 not time out the staging fence open: this may quarantine image loading until
 reboot. COPY success alone grants no file rights and does not activate a helper.
+
+### Helper data and result publication
+
+After exact COPY receipt admission, Seal's Install associates the job once with
+the exact new child main task. That association is provisional until the shared
+Provider's complete committed unexpired lease is true. Every child request and
+actual reply send checks that lease, Files epoch, exact current child and parent,
+and the job deadline. No positive map is recovered on restart.
+
+The allowlist is ARGS, STAT/READ of fixed virtual `@/plugin`, `@/request`,
+`@/result`, CREATE/TRUNCATE(0)/append-WRITE of `@/result`, and empty-path SYNC.
+These names select private captured buffers, not ambient paths or parent grants.
+All other operations, aliases and paths refuse. Kind30/offset5/empty body returns
+the exact bound descriptor for trusted bootstrap. WRITE is copied once via
+volatile reads into a bounded fallible zeroizing buffer; parser operations never
+borrow an exclusive Rust slice over memory hostile native code can mutate.
+
+SYNC validates the complete output header/nonce/frame count/finiteness, rechecks
+the stable destination directory object, creates a fresh object only, and checks
+current lifecycle/lease before each bounded write and around commit. Only then
+is output marked published. The private output remains the authority for its
+full SHA256. In-flight disk writes may finish on revocation; they never receive
+successful result publication, and no existing output object is overwritten.
+
+Parent RESULT uses offset `(ticket << 8) | 2` and nonce16 in DATA, yielding the
+176-byte descriptor with the sealed output hash. CANCEL/RELEASE are the same
+scope with action3/4 and retire private maps. Published disk output is retained;
+releasing a job never deletes an already created user-selected output. The
+parent must verify physical output against that descriptor before import.
+
+Child response caches contain at most two bounded zeroizing payloads. Exact
+same-sequence request words/path/payload fingerprint retries are idempotent;
+the fingerprint only compares duplicate content and conveys no authority. Full
+reply admission retains the response. Revocation drops it before delivery.
+Retirement drops exact-run responses and private input buffers, scrubs the full
+Files grant, and only then permits the existing Files custody ACK. SYS29 itself
+is target-directed, not task-addressed; the existing all-provider retirement
+barrier prevents row reuse until this cleanup. This is part of the argument,
+not a new syscall guarantee. Previously delivered data cannot be recalled.

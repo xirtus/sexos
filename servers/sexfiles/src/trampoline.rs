@@ -288,6 +288,7 @@ pub extern "C" fn trampoline_main() {
         if msg.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((notice,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|notice| {
+                    assert!(crate::restricted_io::retire(sex_pdx::restricted_helper::Subject{pd:notice.target_pd,task:notice.task_id}),"RESTRICTED_RETIRE_SCRUB");
                     history.retire(notice.target_pd);probes.retire(notice.target_pd);
                     crate::recording_runtime::retire(notice.target_pd,notice.task_id);
                     assert!(documents.retire(notice.target_pd,&mut vfs::DocumentBackend),"DOCUMENT_SNAPSHOT_RETIRE_SCRUB");
