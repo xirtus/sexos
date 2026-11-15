@@ -142,6 +142,60 @@ impl Book {
         self.run("selection.set", json!({ "range": cell }))?;
         self.run("edit.clearContents", json!({})).map(|_| ())
     }
+    /// Bold, italic and underline of the cell's font.
+    pub fn font(&self, row: u32, col: u32) -> (bool, bool, bool) {
+        let Ok(d) = self.session.doc() else { return (false, false, false) };
+        let Some(sheet) = d.wb.active() else { return (false, false, false) };
+        let f = &d.wb.styles.get(sheet.style_id(CellRef::new(row, col))).font;
+        (f.bold, f.italic, f.underline != gridcraft_engine::model::Underline::None)
+    }
+
+    /// Runs `id` on `range`, as the command would run on cells dragged over.
+    fn run_on(&mut self, range: Range, id: &str, params: Json) -> Result<Json, String> {
+        self.select(range)?;
+        self.run(id, params)
+    }
+    /// Copies (or cuts) `range` to the workbook's clipboard; returns the copied text,
+    /// tab-separated, as the system clipboard would get it.
+    pub fn copy(&mut self, range: Range, cut: bool) -> Result<String, String> {
+        let r = self.run_on(range, if cut { "edit.cut" } else { "edit.copy" }, json!({}))?;
+        Ok(r.get("text").and_then(Json::as_str).unwrap_or_default().to_string())
+    }
+    /// Pastes the clipboard with its top-left corner at (`row`, `col`); a cut moves its cells.
+    /// Returns the cells pasted, as A1:B2.
+    pub fn paste(&mut self, row: u32, col: u32) -> Result<String, String> {
+        let r = self.run_on(Range::cell(row, col), "edit.paste", json!({}))?;
+        Ok(r.get("pasted").and_then(Json::as_str).unwrap_or_default().to_string())
+    }
+    /// Empties every cell of `range` (values and formulas; formats stay).
+    pub fn clear_range(&mut self, range: Range) -> Result<(), String> {
+        self.run_on(range, "edit.clearContents", json!({})).map(|_| ())
+    }
+    /// Copies the top row of `range` down through it (Ctrl+D), or its left column right (Ctrl+R).
+    pub fn fill(&mut self, range: Range, down: bool) -> Result<(), String> {
+        self.run_on(range, if down { "edit.fillDown" } else { "edit.fillRight" }, json!({})).map(|_| ())
+    }
+    /// AutoSum: a SUM of the numbers above (or left of) the cell. Returns the formula.
+    pub fn auto_sum(&mut self, row: u32, col: u32) -> Result<String, String> {
+        let r = self.run_on(Range::cell(row, col), "formulas.autoSum", json!({}))?;
+        Ok(r.get("formula").and_then(Json::as_str).unwrap_or_default().to_string())
+    }
+    /// Turns bold, italic or underline on or off over `range` (`style` is "bold", "italic"
+    /// or "underline"), as the first cell decides. Returns whether it is now on.
+    pub fn toggle_style(&mut self, range: Range, style: &str) -> Result<bool, String> {
+        let r = self.run_on(range, &format!("home.{style}"), json!({}))?;
+        Ok(r.get("on").and_then(Json::as_bool).unwrap_or(false))
+    }
+    /// The next cell after (`row`, `col`) whose text holds `what`, on any sheet, wrapping
+    /// round: (sheet, row, col, how many cells match). The found sheet becomes the active one.
+    pub fn find(&mut self, row: u32, col: u32, what: &str) -> Result<(usize, u32, u32, usize), String> {
+        self.select(Range::cell(row, col))?;
+        let r = self.run("edit.find", json!({ "what": what, "within": "workbook" }))?;
+        let cell = r.get("cell").and_then(Json::as_str).ok_or("no cell")?;
+        let at = CellRef::parse(cell).ok_or("bad cell")?;
+        let n = |k: &str| r.get(k).and_then(Json::as_u64).unwrap_or(0) as usize;
+        Ok((n("sheet"), at.row, at.col, n("count")))
+    }
     pub fn undo(&mut self) -> Result<(), String> { self.run("edit.undo", json!({})).map(|_| ()) }
     pub fn redo(&mut self) -> Result<(), String> { self.run("edit.redo", json!({})).map(|_| ()) }
 
@@ -501,4 +555,44 @@ mod tests {
         assert_eq!(Range { r0: 3, c0: 1, r1: 0, c1: 0 }.a1(), "A1:B4");
         assert!(Range { r0: 3, c0: 1, r1: 0, c1: 0 }.contains(2, 1));
     }
+
+    #[test]
+    fn copy_paste_fill_sum_style_and_find() {
+        let path = temp("clip.xlsx");
+        std::fs::write(&path, WELCOME).unwrap();
+        let (mut book, _) = Book::open(&path).unwrap();
+        // Copy A1:B2 to D1: both rows arrive.
+        assert_eq!(book.copy(Range { r0: 0, c0: 0, r1: 1, c1: 1 }, false).unwrap(), "Item\tCost\nRent\t1200\n");
+        assert_eq!(book.paste(0, 3).unwrap(), "D1:E2");
+        assert_eq!(book.shown(1, 4).text, "1200");
+        // Cut moves: the source empties.
+        book.copy(Range::cell(1, 4), true).unwrap();
+        book.paste(9, 4).unwrap();
+        assert_eq!(book.shown(1, 4).text, "");
+        assert_eq!(book.shown(9, 4).text, "1200");
+        // Clear a whole range.
+        book.clear_range(Range { r0: 0, c0: 3, r1: 9, c1: 4 }).unwrap();
+        assert!((0..10).all(|r| book.shown(r, 3).text.is_empty() && book.shown(r, 4).text.is_empty()));
+        // Fill down copies the top cell.
+        book.set(0, 6, "7").unwrap();
+        book.fill(Range { r0: 0, c0: 6, r1: 2, c1: 6 }, true).unwrap();
+        assert_eq!(book.shown(2, 6).text, "7");
+        // AutoSum under a column of numbers.
+        book.set(1, 7, "2").unwrap();
+        book.set(2, 7, "3").unwrap();
+        assert_eq!(book.auto_sum(3, 7).unwrap(), "=SUM(H2:H3)");
+        assert_eq!(book.shown(3, 7).text, "5");
+        // Bold on, then off again.
+        assert!(book.toggle_style(Range { r0: 0, c0: 0, r1: 0, c1: 1 }, "bold").unwrap());
+        assert_eq!(book.font(0, 1), (true, false, false));
+        assert!(!book.toggle_style(Range::cell(0, 0), "bold").unwrap());
+        assert!(book.toggle_style(Range::cell(0, 0), "underline").unwrap());
+        assert_eq!(book.font(0, 0), (false, false, true));
+        // Find moves on from the cursor and across sheets.
+        let (sheet, row, col, n) = book.find(0, 0, "Fun").unwrap();
+        assert_eq!((sheet, row, col), (0, 3, 0));
+        assert!(n >= 1);
+        assert!(book.find(0, 0, "no such text anywhere").is_err());
+    }
+
 }
