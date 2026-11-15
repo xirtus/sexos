@@ -54,6 +54,12 @@ static mut DEVICE_READ_BYTES: u64 = 0;
 static mut READ_IO: [w::ReadIoStats; 64] = [w::ReadIoStats::ZERO; 64];
 const _: () = assert!(w::PROGRAM_INDEX_BASE + PROGRAM_ROWS <= 64);
 fn client_cache(index: usize) -> Option<&'static [u8]> {
+    if let Some(k)=index.checked_sub(w::PROGRAM_INDEX_BASE) {
+        if let Some(row)=sex_pdx::app_catalog::INCARNATIONS.iter().filter(|r|r.app==sex_pdx::app_catalog::App::Program).nth(k) {
+            if crate::restricted_runtime::denied(row.target){return None;}
+        }
+    }
+
     let regions = unsafe { &mut *core::ptr::addr_of_mut!(REGIONS) };
     let slot = regions.get_mut(index)?;
     if *slot == 0 {
@@ -328,6 +334,7 @@ pub fn loaded(path: &[u8]) {
 /// Shell's word that the file just read runs as `target`'s `task`. Its folder is made
 /// here, so the program finds it waiting.
 pub fn bind(target: u32, task: u32) {
+    if crate::restricted_runtime::denied(target){return;}
     if sex_pdx::desktop_recording::ENABLED&&target==sex_pdx::desktop_recording::TARGET{return;}
     let Some(index) = program_index(target) else { return };
     unsafe { READ_IO[w::PROGRAM_INDEX_BASE + index] = w::ReadIoStats::ZERO; }
@@ -1096,4 +1103,36 @@ pub fn autofill_identity(subject:sex_pdx::autofill::Subject,part:usize)->u64{
         if name.len()<=16 {for (i,out) in bytes.iter_mut().enumerate(){if let Some(v)=name.get(part*3+i){*out=*v;}}}
     }}}
     sex_pdx::autofill::identity_reply(subject.task,part,bytes)
+}
+
+/// Stop ambient authority and retained old-run acknowledgments before the row's
+/// whole shared region is erased. Called by the sole policy dispatcher turn.
+pub fn quarantine_program(target:u32)->bool {
+    let Some(index)=program_index(target) else{return false};
+    unsafe {
+        let bindings=&mut *core::ptr::addr_of_mut!(BINDINGS);
+        if let Some(binding)=bindings[index].as_mut(){wipe_restricted_bytes(&mut binding.root);wipe_restricted_bytes(&mut binding.args);wipe_restricted_bytes(&mut binding.picked);binding.task=0;binding.len=0;binding.args_len=0;binding.picked_len=0;}
+        bindings[index]=None;
+        let picks=&mut *core::ptr::addr_of_mut!(PICKS);
+        if let Some(pick)=picks[index].as_mut(){wipe_restricted_bytes(&mut pick.hint);pick.hint_len=0;pick.ticket=0;pick.answer=Answer::Cancelled;}
+        picks[index]=None;
+        let offers=&mut *core::ptr::addr_of_mut!(OFFERS);
+        if let Some((_,data,n))=offers[index].as_mut(){wipe_restricted_bytes(data);*n=0;}
+        offers[index]=None;
+        for entry in (&mut *core::ptr::addr_of_mut!(REPLIES)).iter_mut(){if entry.0==target{*entry=(0,0);}}
+        if PREPARED_LAUNCHER==Some(index){
+            let prepared=&mut *core::ptr::addr_of_mut!(PREPARED);
+            wipe_restricted_bytes(&mut prepared.0);prepared.1=0;
+            let args=&mut *core::ptr::addr_of_mut!(PREPARED_ARGS);
+            wipe_restricted_bytes(&mut args.0);args.1=0;PREPARED_LAUNCHER=None;
+        }
+        READ_IO[w::PROGRAM_INDEX_BASE+index]=w::ReadIoStats::ZERO;
+    }
+    crate::vfs::retire_app_subject(target);
+    true
+}
+
+fn wipe_restricted_bytes(bytes:&mut [u8]) {
+    for byte in bytes{unsafe{core::ptr::write_volatile(byte,0)}}
+    core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }

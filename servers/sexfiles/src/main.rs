@@ -17,6 +17,7 @@ mod spindle_history;
 mod spindle_probe;
 mod program_store;
 mod restricted_image;
+mod restricted_runtime;
 mod fs_service;
 mod recording_role;
 mod recording_image;
