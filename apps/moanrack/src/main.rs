@@ -2,6 +2,7 @@
 //! controls belong to Moan; this app makes failure containment observable.
 #![cfg_attr(feature = "sexos", no_std)]
 #![cfg_attr(feature = "sexos", no_main)]
+mod status;
 #[cfg(feature = "sexos")]
 mod guest {
     extern crate alloc;
@@ -65,6 +66,23 @@ mod guest {
         }
         files::sync().map_err(|_| ())
     }
+    fn present_status(app: &mut App, id: weft::widget::Id, painted: &mut u64) {
+        app.present();
+        if app.frames == *painted {
+            return;
+        }
+        *painted = app.frames;
+        if let Some(view) = super::status::snapshot(&app.ui, id, app.window.pixels()) {
+            let encoded: alloc::string::String = view
+                .text
+                .as_bytes()
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect();
+            let (w, h) = app.ui.size();
+            sex_pdx::serial_record!("[moanrack.paint] target={} task={} surface={} frame={} width={} height={} x={} y={} w={} h={} hash={:#018x} text_hex={}",app.window.target,app.window.task,sex_pdx::app_catalog::by_target(app.window.target).expect("status subject").surface,app.frames,w,h,view.x,view.y,view.w,view.h,view.hash,encoded);
+        }
+    }
     extern "C" fn main() -> ! {
         let mut app = App::open(
             "Moan offline qualification",
@@ -93,7 +111,8 @@ mod guest {
         let mut selected = 0;
         let mut resume_at: Option<u64> = None;
         let mut size = (0, 0);
-        app.present();
+        let mut painted = 0;
+        present_status(&mut app, status, &mut painted);
         sex_pdx::serial_record!(
             "[moanrack.ready] target={} task={}",
             app.window.target,
@@ -102,7 +121,7 @@ mod guest {
         loop {
             if app.ui.size() != size {
                 size = app.ui.size();
-                app.present();
+                present_status(&mut app, status, &mut painted);
                 for (i, id) in buttons.iter().chain(core::iter::once(&alive)).enumerate() {
                     let r = app.ui.rect(*id).center();
                     sex_pdx::serial_record!(
@@ -255,7 +274,7 @@ mod guest {
                     }
                 }
             }
-            app.present();
+            present_status(&mut app, status, &mut painted);
         }
     }
     #[no_mangle]
