@@ -246,7 +246,10 @@ mod program {
         type Error = &'static str;
         fn frame(&mut self, pixels: &[u32], at: Micros) -> Result<(), Self::Error> {
             let n = ((at as i128 * self.fps.0 as i128 + (self.fps.1 as i128 * SECOND as i128) / 2) / (self.fps.1 as i128 * SECOND as i128)) as u64;
-            self.ex.picture(pixels, n).map_err(|_| "The encoder refused a picture.")?;
+            self.ex.picture(pixels, n).map_err(|e| {
+                sex_pdx::serial_record!("[splicy.export.picture.error] frame={} error={:?} pixels={}", n, e, pixels.len());
+                "The encoder refused a picture."
+            })?;
             drain(self.ex, self.window, self.path)?;
             if let Some(feed) = self.feed.as_deref_mut() {
                 let until = ((at as u64 * RATE as u64 / SECOND as u64) + RATE as u64 / 10).min(self.total);
@@ -449,6 +452,9 @@ mod program {
                 Ok(_) => files::write(&mut self.window, out, b"").map_err(|_| "Cannot replace the old export.")?,
                 Err(_) => files::create(&mut self.window, out).map_err(|_| "Cannot create the export file.")?,
             }
+            // The file's header is ready as soon as the encoder starts: write it before the
+            // first picture, which the encoder takes only with nothing left to write.
+            drain(&mut ex, &mut self.window, out)?;
             let wp: *mut Window = &mut self.window;
             let mut feed = if self.has_sound {
                 let dec = open_decoder(&self.path, self.len).ok();
