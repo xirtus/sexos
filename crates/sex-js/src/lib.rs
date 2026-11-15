@@ -172,7 +172,33 @@ impl Default for Limits {
 /// The first op whose arguments are bytes rather than text.
 pub const BYTE_OPS: u32 = 64;
 
+/// Opt-in elapsed-time attribution. Slot 127 collects unknown operations.
+/// This is wall time, including preemption, not a CPU sampling profile.
+#[cfg(feature = "jit-profile")]
+#[derive(Clone, Copy)]
+pub struct ExecutionProfile {
+    pub calls: [u64; 128],
+    pub host_ns: [u64; 128],
+    pub jit_calls: u64,
+    pub jit_ns: u64,
+}
+#[cfg(feature = "jit-profile")]
+impl Default for ExecutionProfile {
+    fn default() -> Self { Self { calls: [0; 128], host_ns: [0; 128], jit_calls: 0, jit_ns: 0 } }
+}
+#[cfg(feature = "jit-profile")]
+impl ExecutionProfile {
+    fn host(&mut self, op: u32, ns: u64) {
+        let i = (op as usize).min(127);
+        self.calls[i] = self.calls[i].saturating_add(1);
+        self.host_ns[i] = self.host_ns[i].saturating_add(ns);
+    }
+    fn jit(&mut self, ns: u64) { self.jit_calls = self.jit_calls.saturating_add(1); self.jit_ns = self.jit_ns.saturating_add(ns); }
+}
+
 struct State<P> {
+    #[cfg(feature = "jit-profile")]
+    profile: ExecutionProfile,
     page: P,
     result: Vec<u8>,
     limits: StoreLimits,
@@ -294,7 +320,7 @@ impl<P: Page + 'static> Script<P> {
         let engine = Engine::new(&config);
         let module = Module::new(&engine, wasm).map_err(|x| Error::Engine(format!("{x}")))?;
         let store_limits = StoreLimitsBuilder::new().memory_size(limits.memory_bytes).memories(1).tables(4).table_elements(100_000).instances(1).build();
-        let mut store = Store::new(&engine, State { page, result: Vec::new(), limits: store_limits, #[cfg(feature = "baseline-jit")] jit: baseline::Jit::default() });
+        let mut store = Store::new(&engine, State { #[cfg(feature = "jit-profile")] profile: ExecutionProfile::default(), page, result: Vec::new(), limits: store_limits, #[cfg(feature = "baseline-jit")] jit: baseline::Jit::default() });
         store.limiter(|s| &mut s.limits);
         let mut linker = Linker::<State<P>>::new(&engine);
         link(&mut linker).map_err(|_| e("link"))?;
@@ -436,6 +462,14 @@ impl<P: Page + 'static> Script<P> {
         }
     }
 
+    #[cfg(feature = "jit-profile")]
+    pub fn execution_profile(&self) -> ExecutionProfile {
+        match &self.vm {
+            Vm::Wasmi(w) => w.store.data().profile,
+            #[cfg(sexjs_native)] Vm::Native(v) => v.execution_profile(),
+        }
+    }
+
     /// Guest own-property cache hits and misses; separate from native JIT code.
     #[cfg(feature = "baseline-jit")]
     pub fn own_property_cache_stats(&mut self) -> Result<[u64; 2], Error> {
@@ -468,10 +502,14 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let Some(m) = mem(&c) else { return -1 };
         let (data, state) = m.data_and_store_mut(&mut c);
         let Some(args) = args_of(data, ptr, len) else { return -1 };
+        #[cfg(feature = "jit-profile")]
+        let before = state.page.now_ns();
         let r = if op as u32 >= BYTE_OPS { state.page.call_bytes(op as u32, &args) } else {
             let Some(text) = args.iter().map(|a| core::str::from_utf8(a).ok()).collect::<Option<Vec<&str>>>() else { return -1 };
             state.page.call(op as u32, &text).map(String::into_bytes)
         };
+        #[cfg(feature = "jit-profile")]
+        state.profile.host(op as u32, state.page.now_ns().saturating_sub(before));
         match r {
             Some(r) => { let n = r.len() as i32; state.result = r; n }
             None => -1,
@@ -497,7 +535,12 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         {
             let Some(m) = mem(&c) else { return 0 };
             let (data, state) = m.data_and_store_mut(&mut c);
-            return state.jit.run_v3(data, pc as u32, len as u32, argv as u32, argc as u32, out as u32) as i32;
+            #[cfg(feature = "jit-profile")]
+            let before = state.page.now_ns();
+            let result = state.jit.run_v3(data, pc as u32, len as u32, argv as u32, argc as u32, out as u32) as i32;
+            #[cfg(feature = "jit-profile")]
+            state.profile.jit(state.page.now_ns().saturating_sub(before));
+            return result;
         }
         #[cfg(not(feature = "baseline-jit"))]
         { let _ = (&mut c, pc, len, argv, argc, out); 0 }

@@ -40,4 +40,5 @@ sex-shields = { path = "../../crates/sex-shields" }
 sex-extensions = { path = "../../crates/sex-extensions" }
 
 [features]
+jit-profile = ["baseline-jit", "sex-js/jit-profile"]
 baseline-jit = ["sex-js/baseline-jit"]

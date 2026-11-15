@@ -1666,3 +1666,30 @@ fn baseline_string_concat_oom_retains_inputs() {
         if enabled { assert!(after[2]>before[2]); } else { assert_eq!(after,before); }
     }
 }
+
+#[cfg(feature = "jit-profile")]
+#[test]
+fn elapsed_profile_attributes_text_and_byte_host_calls() {
+    struct TimedPage(u64);
+    impl sex_js::Page for TimedPage {
+        fn call(&mut self, _: u32, _: &[&str]) -> Option<String> {
+            self.0 += 7000;
+            Some("ok".into())
+        }
+        fn call_bytes(&mut self, _: u32, _: &[&[u8]]) -> Option<Vec<u8>> {
+            self.0 += 11000;
+            Some(b"ok".to_vec())
+        }
+        fn now_ns(&mut self) -> u64 { self.0 }
+    }
+    let mut s = Script::new(TimedPage(0), Limits::default()).unwrap();
+    let before = s.execution_profile();
+    let elapsed = s.execution_ns();
+    s.eval("document.getElementById('a'); fetch('/b');", "profile.js").unwrap();
+    let after = s.execution_profile();
+    for (op, ns) in [(2,7000), (66,11000)] {
+        assert_eq!(after.calls[op] - before.calls[op], 1);
+        assert_eq!(after.host_ns[op] - before.host_ns[op], ns);
+    }
+    assert_eq!(s.execution_ns() - elapsed, after.host_ns.iter().sum::<u64>() - before.host_ns.iter().sum::<u64>());
+}
