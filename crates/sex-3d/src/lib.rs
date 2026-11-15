@@ -18,6 +18,7 @@
 //! - [`armature`]: armatures, bones, poses and armature deformation (LBS/DQS, auto weights).
 //! - [`constraints`]: object and bone constraints, IK and pose evaluation.
 //! - [`lattice`]: lattices and lattice deformation.
+//! - [`physics`]: rigid bodies, cloth, soft bodies, particles, force fields, smoke and the point cache.
 pub mod math;
 pub mod mesh;
 pub mod primitives;
@@ -35,6 +36,7 @@ pub mod armature;
 pub mod constraints;
 pub mod lattice;
 pub mod geometry;
+pub mod physics;
 
 pub use math::{Aabb, Mat4, Quat, Vec2, Vec3};
 pub use mesh::{Face, HalfEdgeMesh, Mesh};

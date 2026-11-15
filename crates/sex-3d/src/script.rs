@@ -127,6 +127,7 @@ use std::fmt::{self, Write as _};
 
 mod rig;
 mod nodes;
+mod physics;
 
 /// The language version this module reads and writes (`polyops 1`).
 pub const VERSION: u32 = 1;
@@ -987,6 +988,7 @@ impl Session {
                 Ok(Some(if self.object(scene, t).is_ok() { "1" } else { "0" }.into()))
             }
             name if rig::COMMANDS.contains(&name) => self.rig_command(scene, cmd),
+            name if physics::COMMANDS.contains(&name) => self.physics_command(scene, cmd),
             "node_tree" | "node_interface" | "node_add" | "node_socket" | "node_set" | "node_link" | "node_unlink" | "node_remove" => self.node_command(scene, cmd),
             other => Err(format!("unknown command '{other}'")),
         }
@@ -1677,7 +1679,7 @@ fn name_of<T: PartialEq + Copy>(names: &[(&'static str, T)], v: T) -> &'static s
 }
 
 fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
-    if rig::modifier_opts(cmd, &mut m)? {
+    if rig::modifier_opts(cmd, &mut m)? || physics::modifier_opts(cmd, &mut m)? {
         return Ok(m);
     }
     fn arr3(cmd: &mut Cmd, key: &str, into: &mut [f32; 3]) -> Res<()> {
@@ -2003,7 +2005,7 @@ pub fn mesh_to_options(m: &Mesh) -> String {
 }
 
 fn modifier_to_options(m: &Modifier) -> String {
-    modifier_base_options(m) + &rig::modifier_to_options(m)
+    modifier_base_options(m) + &rig::modifier_to_options(m) + &physics::modifier_to_options(m)
 }
 
 fn modifier_base_options(m: &Modifier) -> String {
@@ -2210,6 +2212,7 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
         rig::write_mesh_extras(&mut o, n, m);
     }
     rig::write_data(&mut o, scene);
+    physics::write_scene(&mut o, scene);
     for ob in &scene.objects {
         let t = &ob.transform;
         let place = format!(
@@ -2309,6 +2312,7 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
             }
         }
         rig::write_object_rig(&mut o, ob);
+        physics::write_object(&mut o, ob);
     }
     nodes::write_node_trees(&mut o, scene);
     let names = |v: &[usize]| v.iter().map(|&i| format!(" {}", quote(&scene.objects[i].name))).collect::<String>();

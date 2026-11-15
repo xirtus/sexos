@@ -507,6 +507,8 @@ pub struct Object {
     /// The local transform one frame later, for motion blur (linear motion
     /// from `transform`); `None` means static.
     pub motion: Option<Transform>,
+    /// Rigid body, rigid body constraint and force field settings.
+    pub physics: crate::physics::ObjectPhysics,
 }
 
 impl Object {
@@ -528,6 +530,7 @@ impl Object {
             holdout: false,
             pass_index: 0,
             motion: None,
+            physics: crate::physics::ObjectPhysics::default(),
         }
     }
 }
@@ -585,6 +588,8 @@ pub struct Scene {
     pub armature_names: Vec<String>,
     pub lattices: Vec<crate::lattice::Lattice>,
     pub lattice_names: Vec<String>,
+    /// Gravity, the rigid body world and the simulation caches.
+    pub physics: crate::physics::ScenePhysics,
 }
 
 impl Default for Scene {
@@ -611,6 +616,7 @@ impl Default for Scene {
             armature_names: Vec::new(),
             lattices: Vec::new(),
             lattice_names: Vec::new(),
+            physics: crate::physics::ScenePhysics::default(),
         }
     }
 }

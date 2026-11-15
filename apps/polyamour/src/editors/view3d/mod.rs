@@ -513,6 +513,7 @@ fn ensure_cache(s: &mut State, d: &mut Doc) {
         armature_names: d.scene.armature_names.clone(),
         lattices: d.scene.lattices.clone(),
         lattice_names: d.scene.lattice_names.clone(),
+        physics: d.scene.physics.clone(),
     };
     let empty = ViewportScene::new(&shell);
     d.scene.selected = saved;
