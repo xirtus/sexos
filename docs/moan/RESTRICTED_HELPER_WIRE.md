@@ -277,3 +277,21 @@ This bootstrap intentionally cannot run through the intermediate ordinary launch
 adapter. The prior crash-contained helper/GUI proofs retain their original source
 and binary bindings. The new coordinator and adapter must be wired and qualified
 as a new cohort before this restricted helper replaces that intermediate path.
+
+### Shell's durable helper pool
+
+Shell reserves at most two of the eight existing activation-capable Program rows.
+Its private KEEP ledger contains deny tombstones only. Reservation and new-task
+binding are committed before remote policy/activation; generation never repeats.
+Normal launch/open allocation excludes reserved rows permanently until reboot.
+There is no implicit post-plugin downgrade to ordinary application authority.
+Unknown, missing or malformed restart state refuses normal Program allocation.
+
+Recovery restores deny fences before replay/adoption. Previously reserved live
+runs are force-ended using Shell's already held lifecycle grants; ordinary new
+launches remain blocked until those rows report fully cleaned READY/REUSABLE.
+An uncertain dormant/rebirthing row remains quarantined and can block this
+recovery until reboot. Restricted rows are never adopted as ordinary windows.
+All their Shell requests are rejected before generic handlers, except exact-run
+legacy OP_EXIT; the coordinator's authenticated Ready handler must run before
+that deny gate. No public reserve/launch request is dispatched by this pool alone.
