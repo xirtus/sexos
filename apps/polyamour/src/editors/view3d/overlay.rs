@@ -37,6 +37,7 @@ pub fn scene_image(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         backface_culling: s.backface_culling,
         threads: 0,
         background: Some(BG),
+        ..ViewportSettings::default()
     };
     match s.shading {
         Shading::Solid => {

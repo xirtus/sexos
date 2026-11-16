@@ -40,6 +40,7 @@ mod film;
 mod integrator;
 mod physics;
 mod prepare;
+pub(crate) mod raster;
 mod rng;
 mod sampling;
 pub(crate) mod shader;
@@ -61,13 +62,17 @@ pub(crate) mod shader_names {
         super::shader::color::Blend::from_file(n)
     }
 }
+mod shadow;
 mod tonemap;
 pub mod viewport;
+pub mod workbench;
 pub mod volume;
 
 pub use denoise::{denoise, denoise_images, DenoiseSettings};
 pub use film::{MistFalloff, MistSettings, Pass, Passes, BACKGROUND_DEPTH};
 pub use prepare::PreparedScene;
+pub use raster::RasterCamera;
+pub use workbench::{render_workbench, Workbench, WorkbenchRender};
 pub use tonemap::{display, srgb_decode, srgb_encode, to_display8, to_srgb8, to_srgb8_with, ColorManagement, Look, ViewTransform};
 pub use volume::VolumeCoeffs;
 

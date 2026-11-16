@@ -440,6 +440,13 @@ pub struct Aabb {
     pub max: Vec3,
 }
 
+impl Default for Aabb {
+    /// The empty box.
+    fn default() -> Self {
+        Aabb::EMPTY
+    }
+}
+
 impl Aabb {
     pub const EMPTY: Aabb = Aabb { min: Vec3::splat(f32::INFINITY), max: Vec3::splat(f32::NEG_INFINITY) };
     pub fn grow(&mut self, p: Vec3) {
