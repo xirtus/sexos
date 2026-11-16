@@ -5,9 +5,11 @@
 //! zero-ambient-authority `wasmi 2.0` sandbox.
 //!
 //! Each guest module exports:
-//! - `memory`: linear memory (grown automatically by host if needed).
+//! - `memory`: linear memory. For each call the host adds pages after the guest's own
+//!   memory and puts the input frame, output frame and parameters there, so they never
+//!   overlap the guest's data, stack or heap. A guest takes more memory only through
+//!   `memory.grow` (as every wasm allocator does), never by treating `memory.size` as its own.
 //! - `process_frame(in_ptr: i32, out_ptr: i32, width: i32, height: i32, params_ptr: i32, params_len: i32) -> i32`
-//! - Optional global `__heap_base: i32` for scratch buffer placement.
 //!
 //! The host exposes strictly two pure imports under `"env"`:
 //! - `env::log(ptr: i32, len: i32)`: writes bounded UTF-8 logs into [`FxCallReport::log`].
@@ -19,7 +21,7 @@ use alloc::{
     vec::Vec,
 };
 use wasmi::{
-    Caller, Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, TrapCode, Val,
+    Caller, Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, TrapCode,
 };
 
 /// Default fuel budget per frame call (~10 ms CPU budget on modern hardware, matching Rook).
@@ -293,19 +295,13 @@ impl FrameFxHost {
             .get_typed_func::<(i32, i32, i32, i32, i32, i32), i32>(&store, "process_frame")
             .map_err(|_| FxError::MissingProcessFrame)?;
 
-        // Guest buffer placement:
-        // If guest exports global `__heap_base: i32`, place scratch buffers starting at
-        // `(__heap_base as usize).max(4096)`. Otherwise place scratch buffers starting
-        // after offset 65536 (1st WASM page reserved for guest stack/globals).
-        let base_offset: usize = instance
-            .get_global(&store, "__heap_base")
-            .and_then(|g| match g.get(&store) {
-                Val::I32(val) if val >= 0 => Some((val as usize).max(4096)),
-                _ => None,
-            })
-            .unwrap_or(65536);
-
-        let in_ptr = base_offset;
+        // Guest buffer placement: frames and parameters go in pages the host adds after
+        // the guest's own memory, never inside it. A guest's allocator (dlmalloc, talc,
+        // wee_alloc) only hands out memory it obtained with `memory.grow` itself, so its
+        // heap, stack and data never overlap these buffers, and anything the guest
+        // allocates during the call lands in pages after them.
+        let current_bytes = memory.data(&store).len();
+        let in_ptr = current_bytes;
         let out_ptr = in_ptr.checked_add(frame_size).ok_or(FxError::FrameTooLarge)?;
         let params_ptr = out_ptr.checked_add(frame_size).ok_or(FxError::FrameTooLarge)?;
         let total_needed = params_ptr.checked_add(params_bytes_len).ok_or(FxError::FrameTooLarge)?;
@@ -314,21 +310,10 @@ impl FrameFxHost {
             return Err(FxError::FrameTooLarge);
         }
 
-        // Grow memory by exact 64 KiB pages if needed
-        let current_bytes = memory.data(&store).len();
-        if current_bytes < total_needed {
-            let needed = total_needed - current_bytes;
-            let pages_needed = (needed + 65535) / 65536;
-            let new_size = current_bytes
-                .checked_add(pages_needed * 65536)
-                .ok_or(FxError::FrameTooLarge)?;
-            if new_size > self.limits.max_memory_bytes {
-                return Err(FxError::FrameTooLarge);
-            }
-            memory
-                .grow(&mut store, pages_needed as u64)
-                .map_err(|_| FxError::MemoryOutOfBounds)?;
-        }
+        let pages_needed = (total_needed - current_bytes).div_ceil(65536).max(1);
+        memory
+            .grow(&mut store, pages_needed as u64)
+            .map_err(|_| FxError::MemoryOutOfBounds)?;
 
         // Write input frame and params into linear memory
         {
@@ -675,23 +660,24 @@ mod tests {
     }
 
     #[test]
-    fn test_heap_base_placement() {
-        // Module exporting __heap_base at 8192
+    fn buffers_sit_after_the_guests_own_memory() {
+        // A guest whose heap starts at __heap_base (8192) writes all over its heap during
+        // the call, as an allocating plugin would. The frame it was given must be intact,
+        // so it can still copy it out, and the buffers must start after its one page.
         let wat = r#"(module
             (global (export "__heap_base") i32 (i32.const 8192))
             (memory (export "memory") 1)
             (func (export "process_frame")
                 (param $in i32) (param $out i32) (param $w i32) (param $h i32) (param $p i32) (param $plen i32)
                 (result i32)
-                ;; Verify that in_ptr == 8192
-                (if (i32.ne (local.get $in) (i32.const 8192))
-                    (then (return (i32.const 101)))
-                )
-                ;; Verify that out_ptr == 8192 + 4 = 8196
-                (if (i32.ne (local.get $out) (i32.const 8196))
-                    (then (return (i32.const 102)))
-                )
-                ;; Copy pixel
+                (if (i32.lt_u (local.get $in) (i32.const 65536)) (then (return (i32.const 101))))
+                (if (i32.ne (local.get $out) (i32.add (local.get $in) (i32.const 4))) (then (return (i32.const 102))))
+                ;; Scribble over the guest's whole heap.
+                (memory.fill (i32.const 8192) (i32.const 0xAA) (i32.const 57344))
+                ;; Memory the guest grows for itself comes after the host's buffers.
+                (if (i32.lt_u (i32.mul (memory.grow (i32.const 1)) (i32.const 65536))
+                              (i32.add (local.get $p) (i32.mul (local.get $plen) (i32.const 4))))
+                    (then (return (i32.const 103))))
                 (i32.store (local.get $out) (i32.load (local.get $in)))
                 (i32.const 0)
             )
@@ -699,12 +685,12 @@ mod tests {
 
         let wasm = wat::parse_str(wat).expect("valid wat");
         let mut host = FrameFxHost::new(FxLimits::default());
-        host.register_wasm("heap_base_test", 1, &wasm).expect("registered");
+        host.register_wasm("placement", 1, &wasm).expect("registered");
 
         let frame_in = [1, 2, 3, 4];
         let mut frame_out = [0u8; 4];
-        let res = host.process_frame("heap_base_test", 1, 1, &frame_in, &mut frame_out, &[], 0);
-        assert!(res.is_ok());
+        let res = host.process_frame("placement", 1, 1, &frame_in, &mut frame_out, &[0.5], 0);
+        assert!(res.is_ok(), "{res:?}");
         assert_eq!(frame_out, [1, 2, 3, 4]);
     }
 
