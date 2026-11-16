@@ -495,3 +495,626 @@ fn container_layout() {
         assert!(codes.contains(id), "no {} block", String::from_utf8_lossy(id));
     }
 }
+
+// ---------------------------------------------------------------------------
+// Modifiers, constraints, shape keys, lattices, Grease Pencil and physics.
+
+use sex_3d::constraints::{Constraint, ConstraintKind, LimitDistanceMode, RotationMix, Space, StretchPlane, StretchVolume, Target, TrackAxis, TransformChannel, TransformMix, TransformationMix, VolumeMode};
+use sex_3d::grease_pencil::{CapType, FillStyle, GpFrame, GpLayer, GpMaterial, GpPoint, GpStroke, GreasePencil, KeyframeType, LayerBlend, LineMode};
+use sex_3d::lattice::Lattice;
+use sex_3d::math::Mat4;
+use sex_3d::mesh::{KeyInterpolation, ShapeKey};
+use sex_3d::modifiers::{BooleanOp, CastType, DecimateMode, Falloff, Modifier, ProximityMode, RemeshMode, ShrinkwrapMethod, SimpleDeformMode, WeightMixMode, WeightMixSet};
+use sex_3d::physics::props::{entries, set_value, Props, RefKind, Value as PValue};
+use sex_3d::physics::{PhysicsModifier, RigidBody, RigidBodyConstraint, RigidBodyWorld};
+
+fn export_import(s: &Scene) -> Scene {
+    let bytes = export_blend(s, &[], BlendExport::default());
+    import_blend_full(&bytes).expect("written file imports").0
+}
+
+/// A scene with the objects modifiers and constraints refer to: "Rig" (an
+/// armature with bones "Root" and "Tip"), "Goal", "Pole", "Cage" (a
+/// lattice) and "Body" (a mesh with vertex groups "Upper" and "Lower").
+fn rig_scene() -> Scene {
+    let mut s = Scene::new();
+    let mut arm = Armature::default();
+    let r = arm.add_bone(Bone::new("Root", Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0)));
+    let mut tip = Bone::new("Tip", Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.0, 2.0));
+    tip.parent = Some(r);
+    arm.add_bone(tip);
+    s.add_armature_object("Rig", arm);
+    s.add_object(Object::new("Goal", ObjectData::Empty));
+    s.add_object(Object::new("Pole", ObjectData::Empty));
+    s.add_lattice_object("Cage", Lattice::new(2, 2, 2));
+    let mut m = test_mesh();
+    m.vertex_groups = vec!["Upper".into(), "Lower".into()];
+    s.add_mesh_object("Body", m);
+    s
+}
+
+/// Every modifier type (Multires aside) with non-default settings.
+fn every_modifier() -> Vec<Modifier> {
+    let vg = || Some("Upper".to_string());
+    let inv = Mat4::translation(Vec3::new(0.0, 0.0, -1.0));
+    vec![
+        Modifier::Mirror { x: false, y: true, z: true, merge: false, merge_distance: 0.01 },
+        Modifier::Subdivision { levels: 2, simple: true },
+        Modifier::Array { count: 3, relative: [0.0, 1.5, 0.0], constant: [0.25, 0.0, 0.5], merge: true },
+        Modifier::Solidify { thickness: 0.2, offset: 0.5 },
+        Modifier::Bevel { width: 0.05, segments: 3, angle: 0.5 },
+        Modifier::Triangulate,
+        Modifier::Weld { distance: 0.01 },
+        Modifier::Displace { strength: 0.25, vertex_group: vg(), invert_vertex_group: true },
+        Modifier::Smooth { factor: 0.75, iterations: 3, vertex_group: vg(), invert_vertex_group: true },
+        Modifier::Decimate { mode: DecimateMode::Planar, ratio: 0.5, iterations: 2, angle: 0.2, triangulate: true },
+        Modifier::Remesh { mode: RemeshMode::Smooth, voxel_size: 0.25, octree_depth: 5, scale: 0.75, smooth_shade: true },
+        Modifier::Screw { axis: 1, angle: 3.0, steps: 8, screw_offset: 0.5, iterations: 2, merge: true, merge_distance: 0.05, flip: true, smooth_shade: false },
+        Modifier::Wireframe { thickness: 0.05, offset: 0.5, even: false, relative: true, boundary: true, replace: false },
+        Modifier::EdgeSplit { angle: 0.75, use_angle: false },
+        Modifier::Build { start: 10.0, length: 50.0, reverse: true, random: true, seed: 7 },
+        Modifier::Boolean { object: "Goal".into(), operation: BooleanOp::Union },
+        Modifier::SimpleDeform { mode: SimpleDeformMode::Bend, axis: 0, factor: 0.5, limits: [0.25, 0.75], lock: [true, false, true], vertex_group: vg(), invert_vertex_group: true },
+        Modifier::Cast { kind: CastType::Cuboid, factor: 0.25, radius: 2.0, size: 1.5, axes: [true, false, true], size_from_radius: true, vertex_group: vg(), invert_vertex_group: true },
+        Modifier::Wave {
+            x: false,
+            y: true,
+            cyclic: false,
+            normals: true,
+            falloff: 1.0,
+            height: 0.25,
+            width: 2.0,
+            narrowness: 1.0,
+            speed: 0.5,
+            time_offset: 2.0,
+            lifetime: 10.0,
+            damping: 5.0,
+            start: [0.5, -0.5],
+            vertex_group: vg(),
+            invert_vertex_group: true,
+        },
+        Modifier::Shrinkwrap { target: "Goal".into(), method: ShrinkwrapMethod::Project, offset: 0.1, axes: [false, true, true], positive: true, negative: true, vertex_group: vg(), invert_vertex_group: true },
+        Modifier::LaplacianSmooth { iterations: 3, factor: 0.5, border: 0.25, axes: [true, false, true], preserve_volume: false, normalized: false, vertex_group: vg(), invert_vertex_group: true },
+        Modifier::CorrectiveSmooth { factor: 0.25, iterations: 7, scale: 2.0, length_weighted: true, only_smooth: true, vertex_group: vg(), invert_vertex_group: true },
+        Modifier::WeightedNormal { keep_sharp: true },
+        Modifier::Armature {
+            object: "Rig".into(),
+            use_vertex_groups: false,
+            use_bone_envelopes: true,
+            use_deform_preserve_volume: true,
+            use_multi_modifier: true,
+            vertex_group: vg(),
+            invert_vertex_group: true,
+        },
+        Modifier::Hook {
+            object: "Rig".into(),
+            subtarget: "Tip".into(),
+            falloff_type: Falloff::Smooth,
+            falloff_radius: 2.0,
+            center: [0.0, 0.0, 1.0],
+            matrix_inverse: inv,
+            strength: 0.5,
+            use_falloff_uniform: true,
+            vertex_indices: vec![0, 2],
+            vertex_group: None,
+            invert_vertex_group: false,
+        },
+        Modifier::Lattice { object: "Cage".into(), strength: 0.8, vertex_group: vg(), invert_vertex_group: true },
+        Modifier::Warp { object_from: "Goal".into(), object_to: "Pole".into(), strength: 0.5, falloff_type: Falloff::Sphere, falloff_radius: 3.0, use_volume_preserve: true, vertex_group: vg(), invert_vertex_group: true },
+        Modifier::VertexWeightEdit {
+            vertex_group: "Upper".into(),
+            default_weight: 0.25,
+            use_add: true,
+            add_threshold: 0.1,
+            use_remove: true,
+            remove_threshold: 0.2,
+            falloff_type: Falloff::Linear,
+            invert_falloff: true,
+            normalize: true,
+            mask_constant: 0.5,
+        },
+        Modifier::VertexWeightMix {
+            vertex_group_a: "Upper".into(),
+            vertex_group_b: "Lower".into(),
+            default_weight_a: 0.25,
+            default_weight_b: 0.5,
+            mix_mode: WeightMixMode::Average,
+            mix_set: WeightMixSet::Or,
+            invert_vertex_group_a: true,
+            invert_vertex_group_b: true,
+            normalize: true,
+            mask_constant: 0.75,
+        },
+        Modifier::VertexWeightProximity {
+            vertex_group: "Lower".into(),
+            target: "Goal".into(),
+            proximity_mode: ProximityMode::Object,
+            use_proximity_geometry: [true, true, false],
+            min_dist: 0.5,
+            max_dist: 2.0,
+            falloff_type: Falloff::Step,
+            invert_falloff: true,
+            normalize: true,
+            mask_constant: 0.25,
+        },
+    ]
+}
+
+#[test]
+fn modifiers_round_trip() {
+    let mut s = rig_scene();
+    let (bi, _) = obj(&s, "Body");
+    s.objects[bi].modifiers = every_modifier();
+    let r = export_import(&s);
+    let (_, o) = obj(&r, "Body");
+    assert_eq!(o.modifiers.len(), s.objects[bi].modifiers.len());
+    for (a, b) in s.objects[bi].modifiers.iter().zip(&o.modifiers) {
+        assert_eq!(a, b);
+    }
+}
+
+#[test]
+fn nodes_modifier_round_trip() {
+    let mut s = rig_scene();
+    let mut g = NodeTree::new("Displace", TreeKind::Geometry);
+    let sock = |name: &str, ty: SocketType, default: Value, max: f32| InterfaceSocket { name: name.into(), ty, default, min: 0.0, max };
+    g.inputs.push(sock("Geometry", SocketType::Geometry, Value::None, 0.0));
+    g.inputs.push(sock("Amount", SocketType::Float, Value::Float(1.0), 10.0));
+    g.inputs.push(sock("Count", SocketType::Int, Value::Int(2), 100.0));
+    g.inputs.push(sock("Flip", SocketType::Bool, Value::Bool(false), 1.0));
+    g.inputs.push(sock("Offset", SocketType::Vector, Value::Vector([0.0; 3]), 1.0));
+    g.inputs.push(sock("Tint", SocketType::Color, Value::Color([1.0; 4]), 1.0));
+    g.outputs.push(sock("Geometry", SocketType::Geometry, Value::None, 0.0));
+    let gi = g.nodes.len();
+    let go = gi + 1;
+    let (n_in, n_out) = (sex_3d::nodes::edit::group_input_node(&g), sex_3d::nodes::edit::group_output_node(&g));
+    g.nodes.push(n_in);
+    g.nodes.push(n_out);
+    let sub = g.add("GeometryNodeSubdivisionSurface", [0.0, 0.0]).unwrap();
+    g.nodes[sub].set_prop("uv_smooth", Prop::Enum("SMOOTH_ALL".into()));
+    g.link(gi, "Geometry", sub, "Mesh").unwrap();
+    g.link(sub, "Mesh", go, "Geometry").unwrap();
+    s.node_groups.push(g);
+    let (bi, _) = obj(&s, "Body");
+    let inputs = vec![
+        ("Amount".to_string(), Value::Float(2.5)),
+        ("Count".to_string(), Value::Int(4)),
+        ("Flip".to_string(), Value::Bool(true)),
+        ("Offset".to_string(), Value::Vector([0.5, 0.0, -0.5])),
+        ("Tint".to_string(), Value::Color([0.25, 0.5, 0.75, 1.0])),
+    ];
+    s.objects[bi].modifiers = vec![Modifier::Nodes { group: "Displace".into(), inputs: inputs.clone() }, Modifier::Subdivision { levels: 1, simple: false }];
+    let r = export_import(&s);
+    let (_, o) = obj(&r, "Body");
+    let Modifier::Nodes { group, inputs: got } = &o.modifiers[0] else { panic!("{:?}", o.modifiers) };
+    assert_eq!(group, "Displace");
+    assert_eq!(got, &inputs);
+    let g = r.node_groups.iter().find(|g| g.name == "Displace").expect("group read back");
+    assert_eq!(g.kind, TreeKind::Geometry);
+    assert_eq!(g.inputs.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["Geometry", "Amount", "Count", "Flip", "Offset", "Tint"]);
+    let n = g.nodes.iter().find(|n| n.idname == "GeometryNodeSubdivisionSurface").unwrap();
+    assert_eq!(n.enum_prop("uv_smooth"), "SMOOTH_ALL");
+    assert_eq!(g.links.len(), 2);
+    assert_eq!(o.modifiers[1], Modifier::Subdivision { levels: 1, simple: false });
+}
+
+/// Every constraint type with non-default settings.
+fn every_constraint(bone: bool) -> Vec<Constraint> {
+    let t = || if bone { Target { object: "Rig".into(), subtarget: "Root".into(), head_tail: 0.5 } } else { Target::object("Goal") };
+    let kinds = vec![
+        ConstraintKind::CopyLocation { target: t(), use_xyz: [true, false, true], invert: [false, true, false], use_offset: true },
+        ConstraintKind::CopyRotation { target: t(), use_xyz: [false, true, true], invert: [true, false, false], mix: RotationMix::Before, euler_order: Some(EulerOrder::ZXY) },
+        ConstraintKind::CopyScale { target: t(), use_xyz: [true, true, false], power: 0.5, use_make_uniform: true, use_offset: true, use_add: true },
+        ConstraintKind::CopyTransforms { target: t(), mix: TransformMix::AfterSplit },
+        ConstraintKind::LimitDistance { target: t(), distance: 2.5, mode: LimitDistanceMode::OnSurface },
+        ConstraintKind::LimitLocation { use_min: [true, false, true], min: [-1.0, 0.0, -2.0], use_max: [false, true, false], max: [0.0, 3.0, 0.0] },
+        ConstraintKind::LimitRotation { use_limit: [true, false, true], min: [-0.5, 0.0, -1.0], max: [0.5, 0.0, 1.0], euler_order: Some(EulerOrder::YZX) },
+        ConstraintKind::LimitScale { use_min: [true, true, false], min: [0.5, 0.25, 0.0], use_max: [false, false, true], max: [0.0, 0.0, 2.0] },
+        ConstraintKind::MaintainVolume { mode: VolumeMode::SingleAxis, free_axis: 2, volume: 1.5 },
+        ConstraintKind::Transformation {
+            target: t(),
+            map_from: TransformChannel::Rotation,
+            map_to: TransformChannel::Scale,
+            from_min: [-1.0, -1.0, -1.0],
+            from_max: [1.0, 1.0, 1.0],
+            to_min: [0.5, 0.5, 0.5],
+            to_max: [2.0, 2.0, 2.0],
+            map: [2, 1, 0],
+            use_motion_extrapolate: true,
+            mix: TransformationMix::Multiply,
+            to_euler_order: Some(EulerOrder::XZY),
+        },
+        ConstraintKind::ChildOf { target: t(), use_location: [true, false, true], use_rotation: [false, true, true], use_scale: [true, true, false], inverse: Mat4::translation(Vec3::new(0.0, 0.0, -1.0)) },
+        ConstraintKind::TrackTo { target: t(), track_axis: TrackAxis::NegY, up_axis: 0, use_target_z: true },
+        ConstraintKind::DampedTrack { target: t(), track_axis: TrackAxis::NegX },
+        ConstraintKind::LockedTrack { target: t(), track_axis: TrackAxis::Z, lock_axis: 0 },
+        ConstraintKind::StretchTo { target: t(), rest_length: 1.5, bulge: 2.0, use_bulge_min: true, bulge_min: 0.5, use_bulge_max: true, bulge_max: 1.5, bulge_smooth: 0.25, volume: StretchVolume::Z, keep_axis: StretchPlane::Z },
+        ConstraintKind::Floor { target: t(), floor_location: TrackAxis::NegZ, offset: 0.25, use_rotation: true },
+        ConstraintKind::Armature { targets: vec![(Target::bone("Rig", "Root"), 0.25), (Target::bone("Rig", "Tip"), 0.75)], use_deform_preserve_volume: true, use_bone_envelopes: true },
+        ConstraintKind::Ik { target: t(), pole_target: Some(Target::object("Pole")), pole_angle: 0.5, chain_count: 2, iterations: 250, use_tail: false, use_stretch: false, weight: 0.5 },
+    ];
+    kinds
+        .into_iter()
+        .enumerate()
+        .map(|(k, kind)| {
+            let mut c = Constraint::new(kind);
+            c.influence = 0.25 + k as f32 / 40.0;
+            c.mute = k % 3 == 0;
+            c.owner_space = if bone { Space::Pose } else { Space::Local };
+            c.target_space = if k % 2 == 0 { Space::LocalWithParent } else { Space::World };
+            c
+        })
+        .collect()
+}
+
+#[test]
+fn constraints_round_trip() {
+    let mut s = rig_scene();
+    let (gi, _) = obj(&s, "Pole");
+    // Armature and IK constraints belong to bones.
+    let mut cons: Vec<Constraint> = every_constraint(false).into_iter().filter(|c| !matches!(c.kind, ConstraintKind::Armature { .. } | ConstraintKind::Ik { .. })).collect();
+    cons[0].target_space = Space::Custom;
+    cons[0].space_object = "Rig".into();
+    cons[0].space_subtarget = "Root".into();
+    s.objects[gi].constraints = cons;
+    let (ri, _) = obj(&s, "Rig");
+    let mut pb = PoseBone::new("Tip");
+    pb.constraints = every_constraint(true);
+    s.objects[ri].pose = vec![pb];
+    let r = export_import(&s);
+    let (_, o) = obj(&r, "Pole");
+    assert_eq!(o.constraints.len(), s.objects[gi].constraints.len());
+    for (a, b) in s.objects[gi].constraints.iter().zip(&o.constraints) {
+        assert_eq!(a, b);
+    }
+    let (_, rig) = obj(&r, "Rig");
+    let tip = rig.pose.iter().find(|p| p.name == "Tip").expect("pose bone Tip");
+    let want = &s.objects[ri].pose[0].constraints;
+    assert_eq!(tip.constraints.len(), want.len());
+    for (a, b) in want.iter().zip(&tip.constraints) {
+        assert_eq!(a, b);
+    }
+}
+
+#[test]
+fn shape_keys_round_trip() {
+    let mut s = Scene::new();
+    let mut m = test_mesh();
+    let basis = m.positions.clone();
+    let up: Vec<Vec3> = basis.iter().map(|p| *p + Vec3::new(0.0, 0.0, 1.0)).collect();
+    let side: Vec<Vec3> = basis.iter().map(|p| *p + Vec3::new(0.5, 0.0, 0.0)).collect();
+    let mut k1 = ShapeKey::new("Up", up);
+    k1.value = 0.5;
+    k1.slider_min = -1.0;
+    k1.slider_max = 2.0;
+    k1.vertex_group = Some("Tip".into());
+    k1.frame = 10.0;
+    let mut k2 = ShapeKey::new("Side", side);
+    k2.relative_key = 1;
+    k2.mute = true;
+    k2.interpolation = KeyInterpolation::BSpline;
+    k2.frame = 20.0;
+    m.shape_keys = vec![ShapeKey::new("Basis", basis), k1, k2];
+    s.add_mesh_object("Keyed", m);
+    let r = export_import(&s);
+    let (_, o) = obj(&r, "Keyed");
+    let ObjectData::Mesh(mi) = o.data else { panic!() };
+    let got = &r.meshes[mi];
+    let want = &s.meshes[0];
+    assert_eq!(got.vertex_groups, want.vertex_groups);
+    assert_eq!(got.weights, want.weights);
+    assert_eq!(got.shape_keys.len(), 3);
+    for (a, b) in want.shape_keys.iter().zip(&got.shape_keys) {
+        assert_eq!((&a.name, a.relative_key, &a.vertex_group, a.mute, a.interpolation), (&b.name, b.relative_key, &b.vertex_group, b.mute, b.interpolation));
+        assert!(approx(a.value, b.value) && approx(a.slider_min, b.slider_min) && approx(a.slider_max, b.slider_max), "{}", a.name);
+        assert!(approx(a.frame, b.frame), "{}: {} vs {}", a.name, a.frame, b.frame);
+        assert_eq!(a.positions.len(), b.positions.len());
+        assert!(a.positions.iter().zip(&b.positions).all(|(p, q)| approx3(*p, *q)), "{}", a.name);
+    }
+}
+
+#[test]
+fn lattice_round_trip() {
+    let mut s = Scene::new();
+    let mut l = Lattice::new(3, 2, 4);
+    l.interpolation_u = KeyInterpolation::Linear;
+    l.interpolation_v = KeyInterpolation::Cardinal;
+    l.interpolation_w = KeyInterpolation::CatmullRom;
+    l.use_outside = true;
+    l.points[5] += Vec3::new(0.1, 0.2, 0.3);
+    let i = s.add_lattice_object("Cage", l.clone());
+    s.objects[i].transform.location = Vec3::new(1.0, 2.0, 3.0);
+    let r = export_import(&s);
+    let (_, o) = obj(&r, "Cage");
+    let ObjectData::Lattice(li) = o.data else { panic!("{:?}", o.data) };
+    assert!(approx3(o.transform.location, Vec3::new(1.0, 2.0, 3.0)));
+    let g = &r.lattices[li];
+    assert_eq!((g.points_u, g.points_v, g.points_w, g.use_outside), (3, 2, 4, true));
+    assert_eq!((g.interpolation_u, g.interpolation_v, g.interpolation_w), (l.interpolation_u, l.interpolation_v, l.interpolation_w));
+    assert_eq!(g.points.len(), 24);
+    assert!(g.points.iter().zip(&l.points).all(|(p, q)| approx3(*p, *q)));
+    assert_eq!(r.lattice_names[li], s.lattice_names[0]);
+}
+
+#[test]
+fn grease_pencil_round_trip() {
+    let mut s = Scene::new();
+    let mut g = GreasePencil::default();
+    let mut ink = GpMaterial::new("Ink", [0.1, 0.2, 0.3, 1.0]);
+    ink.mode = LineMode::Dots;
+    ink.pass_index = 2;
+    ink.use_stroke_holdout = true;
+    ink.lock = true;
+    let mut fill = GpMaterial::fill("Paint", [1.0, 0.5, 0.0, 1.0]);
+    fill.fill_style = FillStyle::Gradient;
+    fill.mix_factor = 0.25;
+    fill.use_fill_holdout = true;
+    fill.hide = true;
+    g.materials = vec![ink, fill];
+    g.vertex_groups = vec!["Hand".into()];
+    g.onion.before = 2;
+    g.onion.after = 3;
+    g.onion.opacity = 0.4;
+    let mut p0 = GpPoint::new(Vec3::new(0.0, 0.0, 0.0), 0.02);
+    p0.opacity = 0.75;
+    p0.vertex_color = [1.0, 0.0, 0.0, 0.5];
+    p0.weights = vec![(0, 0.5)];
+    let mut p1 = GpPoint::new(Vec3::new(1.0, 0.0, 0.5), 0.01);
+    p1.select = true;
+    let p2 = GpPoint::new(Vec3::new(1.0, 0.0, 1.0), 0.02);
+    let mut st = GpStroke::new(vec![p0, p1, p2], 0);
+    st.cyclic = true;
+    st.end_cap = CapType::Flat;
+    st.softness = 0.25;
+    st.select = true;
+    let mut fs = GpStroke::new(vec![GpPoint::new(Vec3::ZERO, 0.005), GpPoint::new(Vec3::new(1.0, 0.0, 0.0), 0.005), GpPoint::new(Vec3::new(0.5, 0.0, 1.0), 0.005)], 1);
+    fs.fill_color = [0.0, 1.0, 0.0, 0.5];
+    let mut l = GpLayer::new("Ink");
+    l.opacity = 0.8;
+    l.tint_color = [1.0, 0.0, 0.0];
+    l.tint_factor = 0.25;
+    l.use_lights = true;
+    l.transform.location = Vec3::new(0.0, 0.0, 1.0);
+    l.frames = vec![
+        GpFrame { frame: 1, drawing: sex_3d::grease_pencil::Drawing { strokes: vec![st, fs] }, key_type: KeyframeType::Keyframe, select: false },
+        GpFrame { frame: 5, drawing: Default::default(), key_type: KeyframeType::Breakdown, select: true },
+    ];
+    let mut paper = GpLayer::new("Paper");
+    paper.hide = true;
+    paper.lock = true;
+    paper.blend = LayerBlend::Multiply;
+    paper.masks = vec!["Ink".into()];
+    paper.use_masks = true;
+    g.layers = vec![l, paper];
+    g.active_layer = 1;
+    let gi = s.add_grease_pencil_object("Sketch", g);
+    s.objects[gi].transform.location = Vec3::new(0.0, 2.0, 0.0);
+    let r = export_import(&s);
+    let (_, o) = obj(&r, "Sketch");
+    let ObjectData::GreasePencil(ri) = o.data else { panic!("{:?}", o.data) };
+    let (a, b) = (&s.grease_pencils[0], &r.grease_pencils[ri]);
+    assert_eq!(r.grease_pencil_names[ri], s.grease_pencil_names[0]);
+    assert!(approx3(o.transform.location, Vec3::new(0.0, 2.0, 0.0)));
+    // GP materials stay with the drawing, not the scene's materials.
+    assert!(r.materials.iter().all(|m| m.name != "Ink" && m.name != "Paint"));
+    assert_eq!(a.materials, b.materials);
+    assert_eq!((&a.vertex_groups, a.active_layer), (&b.vertex_groups, b.active_layer));
+    assert_eq!((a.onion.before, a.onion.after), (b.onion.before, b.onion.after));
+    assert!(approx(a.onion.opacity, b.onion.opacity));
+    assert_eq!(a.layers.len(), b.layers.len());
+    for (x, y) in a.layers.iter().zip(&b.layers) {
+        assert_eq!((&x.name, x.hide, x.lock, x.use_lights, x.blend, &x.masks, x.use_masks), (&y.name, y.hide, y.lock, y.use_lights, y.blend, &y.masks, y.use_masks));
+        assert!(approx(x.opacity, y.opacity) && approx(x.tint_factor, y.tint_factor) && x.tint_color == y.tint_color, "{}", x.name);
+        assert!(approx3(x.transform.location, y.transform.location));
+        assert_eq!(x.frames.len(), y.frames.len());
+        for (f, h) in x.frames.iter().zip(&y.frames) {
+            assert_eq!((f.frame, f.key_type, f.select), (h.frame, h.key_type, h.select));
+            assert_eq!(f.drawing.strokes.len(), h.drawing.strokes.len());
+            for (s0, s1) in f.drawing.strokes.iter().zip(&h.drawing.strokes) {
+                assert_eq!((s0.cyclic, s0.material, s0.start_cap, s0.end_cap, s0.select), (s1.cyclic, s1.material, s1.start_cap, s1.end_cap, s1.select));
+                assert!(approx(s0.softness, s1.softness) && s0.fill_color == s1.fill_color);
+                assert_eq!(s0.points.len(), s1.points.len());
+                for (p, q) in s0.points.iter().zip(&s1.points) {
+                    assert!(approx3(p.position, q.position));
+                    assert!(approx(p.radius, q.radius), "radius {} vs {}", p.radius, q.radius);
+                    assert!(approx(p.opacity, q.opacity) && p.vertex_color == q.vertex_color && p.select == q.select);
+                    assert_eq!(p.weights, q.weights);
+                }
+            }
+        }
+    }
+}
+
+/// Change every property of `p` away from its value (numbers within their
+/// range, the next enum item, references to `refs`).
+fn perturb(p: &mut dyn Props, refs: &dyn Fn(RefKind) -> String) {
+    for e in entries(p) {
+        let v = match &e.value {
+            PValue::F(x) => {
+                let (lo, hi) = e.range.map_or((f32::MIN, f32::MAX), |r| if r.min < r.max { (r.min, r.max) } else { (f32::MIN, f32::MAX) });
+                let mut y = (x * 0.5 + 0.375).clamp(lo, hi);
+                if (y - x).abs() < 1e-6 {
+                    y = if hi < 1e30 { (lo + hi) * 0.5 } else { x + 1.0 };
+                }
+                PValue::F(y)
+            }
+            PValue::I(i) => PValue::I(i + 1),
+            PValue::B(b) => PValue::B(!b),
+            PValue::E(i, _) => PValue::E((i + 1) % e.items.len().max(1), ""),
+            PValue::V3(v) => PValue::V3([v[0] + 0.25, v[1] - 0.25, v[2] + 0.5]),
+            PValue::S(_) => match e.reference {
+                Some(k) => PValue::S(refs(k)),
+                None => continue,
+            },
+        };
+        set_value(p, e.id, &v);
+    }
+}
+
+/// Properties of `a` and `b` that differ, as "id: a vs b".
+fn props_diffs(a: &mut dyn Props, b: &mut dyn Props) -> Vec<String> {
+    let eb = entries(b);
+    let mut out = Vec::new();
+    for x in entries(a) {
+        let Some(y) = eb.iter().find(|y| y.id == x.id) else {
+            out.push(format!("{}: missing", x.id));
+            continue;
+        };
+        let same = match (&x.value, &y.value) {
+            (PValue::F(p), PValue::F(q)) => approx(*p, *q),
+            (PValue::V3(p), PValue::V3(q)) => (0..3).all(|i| approx(p[i], q[i])),
+            (PValue::E(i, _), PValue::E(j, _)) => i == j,
+            (p, q) => p == q,
+        };
+        if !same {
+            out.push(format!("{}: {:?} vs {:?}", x.id, x.value, y.value));
+        }
+    }
+    out
+}
+
+fn physics_refs(k: RefKind) -> String {
+    match k {
+        RefKind::Object => "Goal".into(),
+        RefKind::Collection => "Props".into(),
+        RefKind::VertexGroup => "Upper".into(),
+        _ => String::new(),
+    }
+}
+
+#[test]
+fn physics_round_trip() {
+    let mut s = rig_scene();
+    s.add_collection("Props", None);
+    let mut w = RigidBodyWorld::default();
+    perturb(&mut w, &physics_refs);
+    s.physics.rigidbody_world = Some(w);
+    perturb(&mut s.physics.gravity, &physics_refs);
+    let (bi, _) = obj(&s, "Body");
+    let mut rb = RigidBody::default();
+    perturb(&mut rb, &physics_refs);
+    s.objects[bi].physics.rigid_body = Some(rb);
+    let mut field = sex_3d::physics::FieldSettings::default();
+    perturb(&mut field, &physics_refs);
+    s.objects[bi].physics.field = Some(field);
+    let mut mods = Vec::new();
+    for key in ["collision", "cloth", "softbody", "particlesystem"] {
+        let mut m = PhysicsModifier::with_defaults(key).unwrap();
+        perturb(m.props(), &physics_refs);
+        // Stored as whole numbers (`short`).
+        if let PhysicsModifier::SoftBody(sb) = &mut m {
+            sb.plastic = 5.0;
+            sb.spring_length = 3.0;
+        }
+        mods.push(Modifier::Physics(m));
+    }
+    s.objects[bi].modifiers = mods;
+    let (gi, _) = obj(&s, "Goal");
+    let mut c = RigidBodyConstraint::default();
+    perturb(&mut c, &physics_refs);
+    c.object1 = "Body".into();
+    c.object2 = "Pole".into();
+    s.objects[gi].physics.rigid_body_constraint = Some(c);
+    // Every fluid type on its own mesh, every field type on its own empty.
+    let fluid_types = entries(PhysicsModifier::with_defaults("fluid").unwrap().props()).into_iter().find(|e| e.id == "fluid_type").unwrap().items.len();
+    for k in 0..fluid_types {
+        let pi = s.add_mesh_object(&format!("Tank{k}"), test_mesh());
+        let mut fluid = PhysicsModifier::with_defaults("fluid").unwrap();
+        set_value(fluid.props(), "fluid_type", &PValue::E(k, ""));
+        perturb(fluid.props(), &physics_refs);
+        set_value(fluid.props(), "fluid_type", &PValue::E(k, ""));
+        s.objects[pi].modifiers = vec![Modifier::Physics(fluid)];
+    }
+    let joint_types = entries(&mut RigidBodyConstraint::default()).into_iter().find(|e| e.id == "type").unwrap().items.len();
+    for k in 0..joint_types {
+        let ji = s.add_object(Object::new(&format!("Joint{k}"), ObjectData::Empty));
+        let mut c = RigidBodyConstraint::default();
+        set_value(&mut c, "type", &PValue::E(k, ""));
+        perturb(&mut c, &physics_refs);
+        set_value(&mut c, "type", &PValue::E(k, ""));
+        c.object1 = "Body".into();
+        c.object2 = "Pole".into();
+        s.objects[ji].physics.rigid_body_constraint = Some(c);
+    }
+    // A hair system next to the emitter.
+    let hi = s.add_mesh_object("Hairy", test_mesh());
+    let mut hair = PhysicsModifier::with_defaults("particlesystem").unwrap();
+    set_value(hair.props(), "type", &PValue::E(1, ""));
+    perturb(hair.props(), &physics_refs);
+    set_value(hair.props(), "type", &PValue::E(1, ""));
+    s.objects[hi].modifiers = vec![Modifier::Physics(hair)];
+    let field_types = entries(&mut sex_3d::physics::FieldSettings::default()).into_iter().find(|e| e.id == "type").map_or(0, |e| e.items.len());
+    assert!(field_types > 1);
+    for k in 0..field_types {
+        let fi = s.add_object(Object::new(&format!("Field{k}"), ObjectData::Empty));
+        let mut f = sex_3d::physics::FieldSettings::default();
+        set_value(&mut f, "type", &PValue::E(k, ""));
+        perturb(&mut f, &physics_refs);
+        set_value(&mut f, "type", &PValue::E(k, ""));
+        s.objects[fi].physics.field = Some(f);
+    }
+
+    let r = export_import(&s);
+    let mut diffs = Vec::new();
+    let mut cmp = |what: &str, a: &mut dyn Props, b: &mut dyn Props| diffs.extend(props_diffs(a, b).into_iter().map(|d| format!("{what}.{d}")));
+    let (mut sw, mut rw) = (s.physics.rigidbody_world.clone().unwrap(), r.physics.rigidbody_world.clone().expect("rigid body world"));
+    cmp("world", &mut sw, &mut rw);
+    let (mut sg, mut rg) = (s.physics.gravity.clone(), r.physics.gravity.clone());
+    cmp("gravity", &mut sg, &mut rg);
+    let (_, ob) = obj(&r, "Body");
+    let mut a = s.objects[bi].physics.rigid_body.clone().unwrap();
+    let mut b = ob.physics.rigid_body.clone().expect("rigid body");
+    cmp("rigid_body", &mut a, &mut b);
+    let mut a = s.objects[bi].physics.field.clone().unwrap();
+    let mut b = ob.physics.field.clone().expect("field");
+    cmp("field", &mut a, &mut b);
+    assert_eq!(ob.modifiers.len(), 4, "{:?}", ob.modifiers.iter().map(|m| m.name()).collect::<Vec<_>>());
+    for (x, y) in s.objects[bi].modifiers.iter().zip(&ob.modifiers) {
+        let (Modifier::Physics(x), Modifier::Physics(y)) = (x, y) else { panic!("{y:?}") };
+        let (mut x, mut y) = (x.clone(), y.clone());
+        let what = x.name();
+        cmp(what, x.props(), y.props());
+    }
+    let (_, og) = obj(&r, "Goal");
+    let mut a = s.objects[gi].physics.rigid_body_constraint.clone().unwrap();
+    let mut b = og.physics.rigid_body_constraint.clone().expect("rigid body constraint");
+    cmp("rbc", &mut a, &mut b);
+    for k in 0..fluid_types {
+        let name = format!("Tank{k}");
+        let (si, _) = obj(&s, &name);
+        let (_, op) = obj(&r, &name);
+        let (Modifier::Physics(x), Some(Modifier::Physics(y))) = (&s.objects[si].modifiers[0], op.modifiers.first()) else { panic!("{name}: {:?}", op.modifiers) };
+        let (mut x, mut y) = (x.clone(), y.clone());
+        cmp(&name, x.props(), y.props());
+    }
+    for k in 0..joint_types {
+        let name = format!("Joint{k}");
+        let (si, _) = obj(&s, &name);
+        let (_, oj) = obj(&r, &name);
+        let mut a = s.objects[si].physics.rigid_body_constraint.clone().unwrap();
+        let mut b = oj.physics.rigid_body_constraint.clone().unwrap_or_else(|| panic!("{name}: no constraint"));
+        cmp(&name, &mut a, &mut b);
+        assert_eq!((b.object1.as_str(), b.object2.as_str()), ("Body", "Pole"));
+    }
+    {
+        let (si, _) = obj(&s, "Hairy");
+        let (_, oh) = obj(&r, "Hairy");
+        let (Modifier::Physics(x), Some(Modifier::Physics(y))) = (&s.objects[si].modifiers[0], oh.modifiers.first()) else { panic!("{:?}", oh.modifiers) };
+        let (mut x, mut y) = (x.clone(), y.clone());
+        cmp("Hair", x.props(), y.props());
+    }
+    for k in 0..field_types {
+        let name = format!("Field{k}");
+        let (si, _) = obj(&s, &name);
+        let (_, of) = obj(&r, &name);
+        let mut a = s.objects[si].physics.field.clone().unwrap();
+        let mut b = of.physics.field.clone().unwrap_or_else(|| panic!("{name}: no field"));
+        // Vortex inflow and drag's quadratic term are Blender's `f_flow`,
+        // the same member as Flow.
+        if entries(&mut a).iter().any(|e| e.id == "inflow" || e.id == "quadratic_drag") {
+            b.flow = a.flow;
+        }
+        cmp(&name, &mut a, &mut b);
+    }
+    assert!(diffs.is_empty(), "{} physics settings changed:\n{}", diffs.len(), diffs.join("\n"));
+}

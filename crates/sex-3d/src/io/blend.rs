@@ -198,7 +198,11 @@ mod physics;
 mod rig;
 mod sdna42;
 mod write;
+mod write_geonodes;
+mod write_gpencil;
 mod write_nodes;
+mod write_physics;
+mod write_rig;
 
 pub use export::{export_blend, BlendExport};
 
@@ -946,6 +950,10 @@ impl<'f, 'a> Importer<'f, 'a> {
         }
 
         for (old, ma) in self.id_blocks(b"MA") {
+            // Grease Pencil materials belong to their bGPdata.
+            if ma.ptr("gp_style") != 0 {
+                continue;
+            }
             let m = self.material(&ma);
             let idx = self.scene.add_material(m);
             self.materials.insert(old, idx);
