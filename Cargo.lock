@@ -1399,6 +1399,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
 
 [[package]]
+name = "crossdress"
+version = "0.1.0"
+dependencies = [
+ "drag-vmm",
+ "sex-app",
+ "sex-crossdress",
+ "sex-pdx",
+]
+
+[[package]]
 name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5462,6 +5472,15 @@ name = "sex-config"
 version = "0.1.0"
 dependencies = [
  "argon2",
+]
+
+[[package]]
+name = "sex-crossdress"
+version = "0.1.0"
+dependencies = [
+ "drag-vmm",
+ "libc",
+ "sex-pdx",
 ]
 
 [[package]]

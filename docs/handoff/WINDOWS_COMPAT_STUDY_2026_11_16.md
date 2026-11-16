@@ -1,6 +1,7 @@
 # Windows programs and plugins on SexOS: options, costs, recommendation
 
-Status: study for Andreas's decision (2026-11-16). Report only, no code.
+Status: decided 2026-11-16. Andreas chose Option B, named Crossdress, and started it
+("start it now, build proof"). CW1 landed: `docs/handoff/CROSSDRESS_2026_11_16.md`.
 Asked in the Splicy thread: before any Windows work, find out whether there is a better
 way to run Windows plugins (VST2/VST3/CLAP/OFX `.dll`) and apps than a Wine bridge,
 Bottles, a yabridge-style host or a VM, and whether porting Wine can work well without

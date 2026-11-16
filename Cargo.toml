@@ -44,6 +44,8 @@ members = [
     "apps/dragtest",
     "apps/drag",
     "crates/drag-vmm",
+    "crates/sex-crossdress",
+    "apps/crossdress",
     "apps/fuzz",
     "apps/play",
     "apps/cpp",

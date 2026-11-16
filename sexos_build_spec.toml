@@ -99,6 +99,7 @@ crates = [
   "servers/cufflinks/Cargo.toml",
   "apps/dragtest/Cargo.toml",
   "apps/drag/Cargo.toml",
+  "apps/crossdress/Cargo.toml",
   "apps/lurk/Cargo.toml",
   "apps/bodice/Cargo.toml",
   "apps/gossip/Cargo.toml",
@@ -631,6 +632,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/drag/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/drag"
 dest_artifact = "iso_root/programs/drag"
+
+# Crossdress (CW1): 64-bit Windows programs in a Drag cell (sex-crossdress).
+[[stage]]
+id = "build_crossdress"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/crossdress/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/crossdress"
+dest_artifact = "iso_root/programs/crossdress"
 
 # Bodice: e-books (EPUB, FictionBook, comics), on sex-app with sex-ebook.
 [[stage]]
