@@ -46,6 +46,8 @@ pub struct Session {
     seq: u32,
     sent_at: u64,
     len: usize,
+    /// How many programs the file being written names.
+    programs: usize,
     restore: Restore,
     text: [u8; FILE_MAX],
     text_len: usize,
@@ -68,7 +70,7 @@ fn region() -> Option<&'static mut [u8]> {
 
 impl Session {
     pub const fn new() -> Self {
-        Self { on: false, submitted: None, asked: [None; 4], runs: [None; r::MAX_RUNS], dirty: false, changed_at: 0, io: Io::Idle, seq: 0x7A0000, sent_at: 0, len: 0,
+        Self { on: false, submitted: None, asked: [None; 4], runs: [None; r::MAX_RUNS], dirty: false, changed_at: 0, io: Io::Idle, seq: 0x7A0000, sent_at: 0, len: 0, programs: 0,
             restore: Restore::NotYet, text: [0; FILE_MAX], text_len: 0, next: 0, waiting: None, retries: 0, typed: [None; TYPED], restoring: false }
     }
     /// The boot terminal keeps the session; a later one, or one started again late, does not restore.
@@ -170,10 +172,12 @@ impl Session {
             let Some(region) = region() else { return false };
             let data = &mut region[f::PATH_BYTES..f::PATH_BYTES + FILE_MAX];
             let mut n = 0;
+            let mut programs = 0;
             for (_, _, line) in self.runs.iter().flatten() {
-                if let Some(k) = line.entry().encode(&mut data[n..]) { n += k; }
+                if let Some(k) = line.entry().encode(&mut data[n..]) { n += k; programs += 1; }
             }
             self.len = n;
+            self.programs = programs;
             self.dirty = false;
             if self.send(f::CREATE, 0, 0) { self.io = Io::Create; } else { self.dirty = true; }
         }
@@ -239,7 +243,7 @@ impl Session {
                 else if self.send(f::WRITE, 0, self.len as u64) { self.io = Io::Write; }
             }
             Io::Write if status == f::OK => { if self.send(f::SYNC, 0, 0) { self.io = Io::Sync; } }
-            Io::Sync => { sex_pdx::serial_record!("[spindle.session.saved] bytes={} status={}", self.len, status); }
+            Io::Sync => { sex_pdx::serial_record!("[spindle.session.saved] bytes={} programs={} status={}", self.len, self.programs, status); }
             _ => { sex_pdx::serial_record!("[spindle.session.save.failed] status={}", status); self.dirty = true; self.changed_at = sex_pdx::get_ticks(); }
         }
         false
