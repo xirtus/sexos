@@ -234,7 +234,7 @@ impl Pane {
         true
     }
     /// What the window shows for this pane: the glide while one runs, else its pixels.
-    fn shown(&self) -> &[u32] { if self.glide.left != 0 { &self.glide.shown } else { &self.buf } }
+    fn shown(&self) -> &[u32] { if self.glide.active() && !self.glide.shown.is_empty() { &self.glide.shown } else { &self.buf } }
     /// Scrolls the view `lines` back (negative: forward), gliding there over a few frames.
     fn scroll_smoothly(&mut self, lines: isize) {
         let before = self.screen.view_offset() as isize;
@@ -243,13 +243,9 @@ impl Pane {
         if moved == 0 { return; }
         let px = moved as i32 * self.painter.cell_h as i32;
         let h = self.height as i32;
-        // Further than a screen there is nothing to keep in sight: jump.
-        let left = self.glide.left + px;
-        if left.abs() >= h { self.glide = Glide::default(); return; }
-        // What is on screen now is where the glide starts from.
-        self.glide.from = self.shown().to_vec();
-        self.glide.left = left;
-        self.glide.span = left;
+        let on_screen = self.shown().to_vec();
+        if !self.glide.retarget(px, &on_screen, h) { return; }
+        let left = self.glide.left;
         sex_pdx::serial_record!("[term.glide] lines={} px={}", moved, left);
     }
     /// What the current mode shows over the screen: hint labels, or a status line.
@@ -1502,6 +1498,9 @@ impl Spindle {
             sex_pdx::serial_record!("[term.panes] tabs={} active={} focus={} zoomed={} {}", self.tabs.len(), self.tabs.active, tab.focus, tab.zoomed as u8, rects.join(" "));
         }
         let layout: Vec<(PaneId, Rect)> = layout.into_iter().map(|(id, r)| (id, self.inner(r))).collect();
+        // A pane out of sight (another tab, or zoomed past) stops gliding, so the loop
+        // does not keep waking for it.
+        for (id, pane) in self.panes.iter_mut() { if !layout.iter().any(|(l, _)| l == id) && (pane.glide.active() || !pane.glide.shown.is_empty()) { pane.glide = Glide::default(); } }
         for (id, r) in &layout {
             let Some(pane) = self.panes.get_mut(id) else { continue };
             if relayout { pane.resize(r.w, r.h); pane.screen.mark_all_dirty(); }

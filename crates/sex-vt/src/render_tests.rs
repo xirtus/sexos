@@ -121,7 +121,7 @@ fn a_glide_starts_on_the_old_frame_and_ends_on_the_new_one() {
     let old: alloc::vec::Vec<u32> = (10..15).collect();
     let new: alloc::vec::Vec<u32> = (8..13).collect();
     for (span, from, now) in [(2, &old, &new), (-2, &new, &old)] {
-        let mut g = Glide { left: span, span, from: from.clone(), shown: alloc::vec::Vec::new() };
+        let mut g = Glide { left: span, span, from: from.clone(), shown: alloc::vec::Vec::new(), shown_left: 0 };
         g.compose(now, w, h);
         assert_eq!(&g.shown, from, "starts where the screen was");
         // Halfway, the rows are still one continuous run of text.
@@ -145,4 +145,25 @@ fn a_long_glide_eases_out_within_a_few_frames() {
     while g.left != 0 { g.step(); assert!(g.left < last); last = g.left; frames += 1; }
     // About 150 ms at 60 frames a second.
     assert!(frames <= 12, "{frames} frames");
+}
+
+#[test]
+fn a_second_scroll_mid_glide_continues_from_what_is_shown() {
+    use super::render::Glide;
+    // One pixel per row and each row holds its line number: what is shown must stay one
+    // continuous run, and the second scroll must start exactly where the screen is.
+    let (w, h) = (1usize, 200usize);
+    let frame = |top: u32| -> alloc::vec::Vec<u32> { (top..top + h as u32).collect() };
+    let mut g = Glide::default();
+    assert!(g.retarget(60, &frame(1000), h as i32));
+    g.compose(&frame(940), w, h);
+    g.step();
+    let before = g.shown.clone();
+    assert!(before.windows(2).all(|p| p[1] == p[0] + 1));
+    assert!(g.retarget(60, &before, h as i32));
+    g.compose(&frame(880), w, h);
+    assert_eq!(g.shown, before, "the second scroll starts where the screen was");
+    while g.active() { g.step(); g.compose(&frame(880), w, h); assert!(g.shown.windows(2).all(|p| p[1] == p[0] + 1), "{:?}", &g.shown[..4]); }
+    g.compose(&frame(880), w, h);
+    assert_eq!(g.shown, frame(880));
 }

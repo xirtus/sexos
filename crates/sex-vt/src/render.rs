@@ -243,12 +243,21 @@ fn blend(bg: u32, fg: u32, a: u8) -> u32 {
 /// text still has to come down). Rows beyond the new frame come from `from`, what was
 /// on screen when the glide (re)started, `span` pixels before the end.
 #[derive(Default)]
-pub struct Glide { pub left: i32, pub span: i32, pub from: alloc::vec::Vec<u32>, pub shown: alloc::vec::Vec<u32> }
+pub struct Glide {
+    pub left: i32,
+    pub span: i32,
+    pub from: alloc::vec::Vec<u32>,
+    pub shown: alloc::vec::Vec<u32>,
+    /// The `left` that `shown` was composed with: [`Glide::step`] moves `left` on to the
+    /// next frame before the window has shown this one.
+    pub shown_left: i32,
+}
 
 impl Glide {
     /// Composes the frame `now` (the pane's pixels) offset by what is left into `shown`.
     pub fn compose(&mut self, now: &[u32], w: usize, h: usize) {
         self.shown.resize(w * h, 0);
+        self.shown_left = self.left;
         for y in 0..h {
             // The new frame moved by `left` too much: row y shows its row y + left, and
             // past its edge, the old frame's (which was `span` further along).
@@ -257,6 +266,19 @@ impl Glide {
             let at = at.clamp(0, h as i32 - 1) as usize;
             self.shown[y * w..y * w + w].copy_from_slice(&rows[at * w..at * w + w]);
         }
+    }
+    /// Whether a glide is on screen.
+    pub fn active(&self) -> bool { self.left != 0 }
+    /// Scrolls `px` more from what is on screen now (`on_screen`, `h` rows tall): a glide
+    /// from there, or false when the move is a screen or more and should just jump.
+    pub fn retarget(&mut self, px: i32, on_screen: &[u32], h: i32) -> bool {
+        // The window shows the frame composed with `shown_left`, not the stepped `left`.
+        let left = if self.active() { self.shown_left } else { 0 } + px;
+        if left == 0 || left.abs() >= h { *self = Glide::default(); return false; }
+        self.from = on_screen.to_vec();
+        self.left = left;
+        self.span = left;
+        true
     }
     /// One frame further: most of what is left goes, so the scroll eases out.
     pub fn step(&mut self) { self.left -= self.left * 5 / 8 + self.left.signum(); if self.left.abs() < 2 { self.left = 0; } }
