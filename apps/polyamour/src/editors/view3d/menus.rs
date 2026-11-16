@@ -172,7 +172,7 @@ pub fn add_menu(d: &Doc) -> Vec<MenuItem> {
         sub("Metaball", vec![op("Ball", "", "object.metaball_add")]),
         op("Text", "", "object.text_add"),
         sub("Volume", vec![op("Empty", "", "object.volume_add")]),
-        sub("Grease Pencil", vec![op("Blank", "", "object.grease_pencil_add")]),
+        sub("Grease Pencil", crate::gpencil::add_menu_items()),
         SEP,
         sub("Armature", vec![op("Single Bone", "", "object.armature_add")]),
         op("Lattice", "", "object.add"),

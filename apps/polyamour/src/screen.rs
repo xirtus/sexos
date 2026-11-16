@@ -193,8 +193,21 @@ fn layout(n: &mut Node, r: Rect, path: &mut Vec<bool>, borders: &mut Vec<Border>
 }
 
 /// Blender's default workspaces, in tab order.
-pub const WORKSPACES: [&str; 11] =
-    ["Layout", "Modeling", "Sculpting", "UV Editing", "Texture Paint", "Shading", "Animation", "Rendering", "Compositing", "Geometry Nodes", "Scripting"];
+pub const WORKSPACES: [&str; 13] = [
+    "Layout",
+    "Modeling",
+    "Sculpting",
+    "UV Editing",
+    "Texture Paint",
+    "Shading",
+    "Animation",
+    "Rendering",
+    "Compositing",
+    "Geometry Nodes",
+    "Scripting",
+    "2D Animation",
+    "Video Editing",
+];
 
 /// Build the default workspaces with their area layouts (proportions measured
 /// from Blender's factory startup at 1920x1080).
@@ -246,6 +259,25 @@ pub fn default_workspaces() -> Vec<Workspace> {
         side(&mut area),
     );
     out.push(Workspace { name: "Scripting".into(), root: l, maximized: None });
+    // 2D Animation: the view over a Grease Pencil Dope Sheet.
+    let l = split(true, 0.78, split(false, 0.78, area(K::View3D), area(K::DopeSheet)), side(&mut area));
+    let mut ws = Workspace { name: "2D Animation".into(), root: l, maximized: None };
+    for a in ws.areas_mut() {
+        if let crate::editors::Editor::Timeline(t) = &mut a.editor {
+            t.ds_mode = crate::editors::timeline::DsMode::GreasePencil;
+        }
+    }
+    out.push(ws);
+    // Video Editing: preview and properties over the strip timeline.
+    let l = split(false, 0.55, split(true, 0.7, area(K::Sequencer), area(K::Properties)), area(K::Sequencer));
+    let mut ws = Workspace { name: "Video Editing".into(), root: l, maximized: None };
+    for (i, a) in ws.areas_mut().into_iter().filter(|a| matches!(a.editor, crate::editors::Editor::Sequencer(_))).enumerate() {
+        if let crate::editors::Editor::Sequencer(s) = &mut a.editor {
+            s.view = if i == 0 { 2 } else { 1 };
+            s.show_sidebar = i == 1;
+        }
+    }
+    out.push(ws);
     out
 }
 

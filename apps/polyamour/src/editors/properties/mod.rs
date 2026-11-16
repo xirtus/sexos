@@ -49,6 +49,8 @@ pub enum Tab {
     BoneConstraints,
     Material,
     Texture,
+    /// Grease Pencil visual effects.
+    Effects,
 }
 
 impl Tab {
@@ -71,6 +73,7 @@ impl Tab {
             Tab::BoneConstraints => "Bone Constraints",
             Tab::Material => "Material",
             Tab::Texture => "Texture",
+            Tab::Effects => "Visual Effects",
         }
     }
     fn icon(self, data: Icon) -> Icon {
@@ -92,6 +95,7 @@ impl Tab {
             Tab::BoneConstraints => Icon::BoneConstraint,
             Tab::Material => Icon::Material,
             Tab::Texture => Icon::Texture,
+            Tab::Effects => Icon::ShaderFx,
         }
     }
 }
@@ -110,6 +114,10 @@ pub fn tabs_for(d: &Doc, obj: Option<usize>) -> Vec<Option<Tab>> {
         if matches!(data, ObjectData::Lattice(_)) {
             v.push(Some(Tab::Modifiers));
         }
+        let gp = matches!(data, ObjectData::GreasePencil(_));
+        if gp {
+            v.extend([Some(Tab::Modifiers), Some(Tab::Effects)]);
+        }
         if mesh || armature || matches!(data, ObjectData::Empty | ObjectData::Lattice(_)) {
             v.push(Some(Tab::Physics));
         }
@@ -117,7 +125,7 @@ pub fn tabs_for(d: &Doc, obj: Option<usize>) -> Vec<Option<Tab>> {
         if armature {
             v.extend([Some(Tab::Bone), Some(Tab::BoneConstraints)]);
         }
-        if mesh {
+        if mesh || gp {
             v.push(Some(Tab::Material));
         }
     }
@@ -136,6 +144,8 @@ pub enum ColorTarget {
     Node(crate::nodetree::TreeRef, usize, crate::nodetree::NodeColor),
     /// The paint brush colour of the current mode (true: the secondary one).
     Paint(bool),
+    /// A colour field of a Grease Pencil or sequencer settings panel.
+    Prop(crate::gpencil::ui::PropColor),
 }
 
 /// Per-frame context the panels share.
@@ -277,6 +287,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         Some(ObjectData::Light(_)) => Icon::LightData,
         Some(ObjectData::Armature(_)) => Icon::ArmatureData,
         Some(ObjectData::Lattice(_)) => Icon::LatticeData,
+        Some(ObjectData::GreasePencil(_)) => Icon::GreasePencilData,
         _ => Icon::EmptyData,
     };
     let mut y = tr.y + 6;
@@ -329,6 +340,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     };
     let top = l.y;
     context_path(&mut l, d, tab, obj);
+    let gp_obj = obj.is_some_and(|o| matches!(d.scene.objects[o].data, ObjectData::GreasePencil(_)));
     match tab {
         Tab::Tool => {
             if !rigpanels::tool(&mut l, d) {
@@ -342,7 +354,9 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         Tab::World => tabs::world(&mut l, d, &mut ctx),
         Tab::Collection => tabs::collection(&mut l, d),
         Tab::Object => object::object(&mut l, d, &mut ctx),
+        Tab::Modifiers if gp_obj => crate::gpencil::panels::modifiers(&mut l, d, &mut ctx),
         Tab::Modifiers => object::modifiers(&mut l, d, &mut ctx),
+        Tab::Effects => crate::gpencil::panels::effects(&mut l, d, &mut ctx),
         Tab::Particles => tabs::particles(&mut l, d),
         Tab::Physics => tabs::physics(&mut l, d),
         Tab::Constraints => match obj {
@@ -361,6 +375,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
             }
         }
         Tab::Data => data::data(&mut l, d, &mut ctx),
+        Tab::Material if gp_obj => crate::gpencil::panels::material(&mut l, d, &mut ctx),
         Tab::Material => data::material(&mut l, d, &mut ctx),
         Tab::Texture => tabs::texture(&mut l, d),
     }
@@ -383,6 +398,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         Tab::Data => "data",
         Tab::Material => "material",
         Tab::Texture => "texture",
+        Tab::Effects => "shaderfx",
     };
     crate::python::properties_panels(&mut l, d, context);
     let content_h = l.y - top + 12;
@@ -427,7 +443,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
 /// The breadcrumb Blender shows at the top of object tabs ("Cube > Cube").
 fn context_path(l: &mut L, d: &Doc, tab: Tab, obj: Option<usize>) {
     let Some(o) = obj else { return };
-    if !matches!(tab, Tab::Object | Tab::Modifiers | Tab::Particles | Tab::Physics | Tab::Constraints | Tab::Data | Tab::Bone | Tab::BoneConstraints | Tab::Material) || l.dry {
+    if !matches!(tab, Tab::Object | Tab::Modifiers | Tab::Effects | Tab::Particles | Tab::Physics | Tab::Constraints | Tab::Data | Tab::Bone | Tab::BoneConstraints | Tab::Material) || l.dry {
         return;
     }
     let ob = &d.scene.objects[o];
@@ -442,6 +458,8 @@ fn context_path(l: &mut L, d: &Doc, tab: Tab, obj: Option<usize>) {
         (Tab::Data, ObjectData::Mesh(mi)) => Some((Icon::Mesh, d.scene.mesh_names.get(*mi).cloned().unwrap_or_default())),
         (Tab::Data, ObjectData::Camera(_)) => Some((Icon::CameraData, ob.name.clone())),
         (Tab::Data, ObjectData::Light(_)) => Some((Icon::LightData, ob.name.clone())),
+        (Tab::Data, ObjectData::GreasePencil(g)) => Some((Icon::GreasePencilData, d.scene.grease_pencil_names.get(*g).cloned().unwrap_or_default())),
+        (Tab::Effects, _) => Some((Icon::ShaderFx, "Visual Effects".into())),
         (Tab::Material, _) => ob.materials.first().and_then(|&m| d.scene.materials.get(m)).map(|m| (Icon::Material, m.name.clone())),
         _ => None,
     };

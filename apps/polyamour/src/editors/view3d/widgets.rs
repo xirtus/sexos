@@ -97,7 +97,15 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     let view = move |d: &Doc| menus::view_menu(d, &flags);
     let rig_menus = super::rigview::header_menus(d);
     let paint_menus = super::sculptview::header_menus(d);
-    let menu_end = if let Some(extra) = &paint_menus {
+    let gp_menus = super::gpview::header_menus(d);
+    let menu_end = if let Some(extra) = &gp_menus {
+        let mut list: Vec<(&str, &dyn Fn(&Doc) -> Vec<MenuItem>)> = vec![("View", &view)];
+        for (t, f) in extra {
+            list.push((t, f));
+        }
+        let end = header_menus(ui, hr, x, &list, d);
+        super::gpview::tool_header(s, d, ui, Rect::new(end + 12, y, (hr.right() - end - 12 - 340).max(0), h))
+    } else if let Some(extra) = &paint_menus {
         let mut list: Vec<(&str, &dyn Fn(&Doc) -> Vec<MenuItem>)> = vec![("View", &view)];
         for (t, f) in extra {
             list.push((t, f));
@@ -274,6 +282,9 @@ pub fn toolbar_tools(d: &Doc) -> Vec<Option<Tool>> {
 }
 
 pub fn toolbar_rect(d: &Doc, r: Rect) -> Rect {
+    if super::gpview::active(d) {
+        return super::gpview::toolbar_rect(d, r);
+    }
     if super::sculptview::active(d) {
         return super::sculptview::toolbar_rect(d, r);
     }
@@ -283,6 +294,10 @@ pub fn toolbar_rect(d: &Doc, r: Rect) -> Rect {
 }
 
 pub fn toolbar(_s: &mut State, d: &mut Doc, ui: &mut Ui, tr: Rect, _r: Rect) {
+    if super::gpview::active(d) {
+        super::gpview::toolbar(d, ui, tr);
+        return;
+    }
     if super::sculptview::active(d) {
         super::sculptview::toolbar(d, ui, tr);
         return;

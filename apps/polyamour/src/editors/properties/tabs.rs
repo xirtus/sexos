@@ -349,11 +349,17 @@ pub fn output(l: &mut L, d: &mut Doc) {
             }
         });
     });
-    l.panel(d, "output.post_processing", "Post Processing", false, &mut |l, _| {
+    l.panel(d, "output.post_processing", "Post Processing", false, &mut |l, d| {
         inactive(l, |l| {
             let mut t = true;
             l.check("Pipeline", "Compositing", &mut t);
-            l.check("", "Sequencer", &mut t);
+        });
+        let mut sq = d.scene.sequence_editor.as_ref().is_none_or(|q| q.use_sequencer);
+        if l.check("", "Sequencer", &mut sq) {
+            l.commit(d, "Sequencer");
+            crate::seqedit::seq(d).use_sequencer = sq;
+        }
+        inactive(l, |l| {
             let mut v = 1.0;
             l.number("Dither", "dither", &mut v, NumOpts::default());
         });

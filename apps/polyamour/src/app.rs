@@ -351,7 +351,10 @@ impl App {
         let settings = sex_3d::render::RenderSettings { frame: self.doc.frame, ..self.doc.settings.render_settings() };
         let base = self.doc.settings.render_scene(&self.doc.scene);
         let scene = crate::anim::scene_at(&self.doc.anim, &base, self.doc.frame as f32, self.doc.settings.motion_blur);
+        let settings = crate::seqedit::with_depth(&scene, settings);
         let r = sex_3d::render::render(&scene, &settings);
+        // Grease Pencil over the render, then the sequencer's output when it is on.
+        let r = crate::seqedit::post_render(&scene, self.doc.frame, &settings, r, &|f| crate::anim::scene_at(&self.doc.anim, &base, f as f32, self.doc.settings.motion_blur));
         let n = r.passes.len();
         let passes = match n {
             0 => String::new(),
@@ -367,8 +370,8 @@ impl App {
     /// frame as `<output path><frame>.png`, colour managed as on screen.
     fn render_animation(&mut self) {
         let d = &self.doc;
-        let settings = d.settings.render_settings();
         let base = d.settings.render_scene(&d.scene);
+        let settings = crate::seqedit::with_depth(&base, d.settings.render_settings());
         let cm = d.settings.color_management();
         let motion = d.settings.motion_blur;
         let frames: Vec<i32> = (d.scene.frame_start..=d.scene.frame_end).step_by(d.settings.frame_step.max(1) as usize).collect();
@@ -380,6 +383,8 @@ impl App {
             &settings,
             |f| crate::anim::scene_at(anim, &base, f as f32, motion),
             |f, r| {
+                let scene_at = |f: i32| crate::anim::scene_at(anim, &base, f as f32, motion);
+                let r = crate::seqedit::post_render(&scene_at(f), f, &settings, r, &scene_at);
                 let name = format!("{stem}{f:04}.png");
                 let png = crate::editors::image::encode_png(r.color.width, r.color.height, &sex_3d::render::to_display8(&r.color, &cm));
                 match std::fs::write(&name, png) {
@@ -409,6 +414,7 @@ fn add_menu_items() -> Vec<MenuItem> {
     vec![
         MenuItem::Sub("Mesh".into(), vec![p("Plane", "plane"), p("Cube", "cube"), p("Circle", "circle"), p("UV Sphere", "uv_sphere"), p("Ico Sphere", "ico_sphere"), p("Cylinder", "cylinder"), p("Cone", "cone"), p("Torus", "torus"), MenuItem::Separator, p("Grid", "grid")]),
         MenuItem::op("Empty", "", Op::new("object.empty_add")),
+        MenuItem::Sub("Grease Pencil".into(), crate::gpencil::add_menu_items()),
         MenuItem::Separator,
         MenuItem::op("Camera", "", Op::new("object.camera_add")),
         MenuItem::Sub(

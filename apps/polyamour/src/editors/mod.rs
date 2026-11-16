@@ -16,6 +16,7 @@ pub mod nla;
 pub mod node;
 pub mod outliner;
 pub mod properties;
+pub mod sequencer;
 pub mod simple;
 pub mod text;
 pub mod timeline;
@@ -42,6 +43,7 @@ pub enum EditorKind {
     FileBrowser,
     Spreadsheet,
     Preferences,
+    Sequencer,
 }
 
 impl EditorKind {
@@ -66,6 +68,7 @@ impl EditorKind {
             EditorKind::FileBrowser => "File Browser",
             EditorKind::Spreadsheet => "Spreadsheet",
             EditorKind::Preferences => "Preferences",
+            EditorKind::Sequencer => "Video Sequencer",
         }
     }
     /// Blender's editor-type menu, grouped as it groups them.
@@ -80,6 +83,7 @@ impl EditorKind {
             item(K::CompositorEditor),
             item(K::ShaderEditor),
             item(K::GeometryNodeEditor),
+            item(K::Sequencer),
             MenuItem::Separator,
             MenuItem::Heading("Animation".into()),
             item(K::DopeSheet),
@@ -105,7 +109,7 @@ impl EditorKind {
         use EditorKind as K;
         [
             K::View3D, K::ImageEditor, K::UvEditor, K::ShaderEditor, K::CompositorEditor, K::GeometryNodeEditor, K::Timeline, K::DopeSheet,
-            K::GraphEditor, K::Drivers, K::NlaEditor, K::TextEditor, K::PythonConsole, K::Info, K::Outliner, K::Properties, K::FileBrowser, K::Spreadsheet, K::Preferences,
+            K::GraphEditor, K::Drivers, K::NlaEditor, K::TextEditor, K::PythonConsole, K::Info, K::Outliner, K::Properties, K::FileBrowser, K::Spreadsheet, K::Preferences, K::Sequencer,
         ]
         .into_iter()
         .find(|k| k.label() == s)
@@ -127,6 +131,7 @@ pub enum Editor {
     Node(node::State),
     Image(image::State),
     Simple(simple::State),
+    Sequencer(Box<sequencer::State>),
 }
 
 impl Editor {
@@ -142,6 +147,7 @@ impl Editor {
             K::ShaderEditor | K::CompositorEditor | K::GeometryNodeEditor => Editor::Node(node::State::new(kind)),
             K::ImageEditor | K::UvEditor => Editor::Image(image::State::new(kind)),
             K::PythonConsole | K::Info | K::FileBrowser | K::Spreadsheet | K::Preferences => Editor::Simple(simple::State::new(kind)),
+            K::Sequencer => Editor::Sequencer(Box::default()),
         }
     }
     pub fn kind(&self) -> EditorKind {
@@ -155,6 +161,7 @@ impl Editor {
             Editor::Node(s) => s.kind,
             Editor::Image(s) => s.kind,
             Editor::Simple(s) => s.kind,
+            Editor::Sequencer(_) => EditorKind::Sequencer,
         }
     }
 
@@ -190,6 +197,7 @@ impl Editor {
             Editor::Node(s) => node::header(s, doc, ui, hr),
             Editor::Image(s) => image::header(s, doc, ui, hr),
             Editor::Simple(s) => simple::header(s, doc, ui, hr),
+            Editor::Sequencer(s) => sequencer::header(s, doc, ui, hr),
         }
         ui.p.pop_clip();
         let body = Rect::new(body.x, body.y + 1, body.w, body.h - 1);
@@ -204,6 +212,7 @@ impl Editor {
             Editor::Node(s) => node::body(s, doc, ui, body),
             Editor::Image(s) => image::body(s, doc, ui, body),
             Editor::Simple(s) => simple::body(s, doc, ui, body),
+            Editor::Sequencer(s) => sequencer::body(s, doc, ui, body),
         }
         ui.p.pop_clip();
         ui.p.pop_clip();
@@ -222,6 +231,7 @@ impl Editor {
             Editor::Node(s) => node::hotkey(s, doc, input, body),
             Editor::Image(s) => image::hotkey(s, doc, input, body),
             Editor::Simple(s) => simple::hotkey(s, doc, input, body),
+            Editor::Sequencer(s) => sequencer::hotkey(s, doc, input, body),
         }
     }
 
@@ -232,6 +242,7 @@ impl Editor {
             Editor::View3D(s) => view3d::is_modal(s),
             Editor::Image(s) => image::is_modal(s),
             Editor::Node(s) => node::is_modal(s),
+            Editor::Sequencer(s) => sequencer::is_modal(s),
             _ => false,
         }
     }
@@ -281,6 +292,7 @@ pub fn editor_glyph(k: EditorKind) -> &'static str {
         K::FileBrowser => "Fil",
         K::Spreadsheet => "Spr",
         K::Preferences => "Prf",
+        K::Sequencer => "Seq",
     }
 }
 

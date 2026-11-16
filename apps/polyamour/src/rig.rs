@@ -438,6 +438,7 @@ pub fn modes_for(doc: &Doc, oi: Option<usize>) -> Vec<Mode> {
         ObjectData::Mesh(_) => vec![Mode::Object, Mode::Edit, Mode::Sculpt, Mode::VertexPaint, Mode::WeightPaint, Mode::TexturePaint],
         ObjectData::Armature(_) => vec![Mode::Object, Mode::Edit, Mode::Pose],
         ObjectData::Lattice(_) => vec![Mode::Object, Mode::Edit],
+        ObjectData::GreasePencil(_) => crate::gpencil::MODES.to_vec(),
         _ => vec![Mode::Object],
     }
 }
@@ -452,6 +453,11 @@ pub fn mode_set(doc: &mut Doc, arg: &str) {
         "WEIGHT_PAINT" => Mode::WeightPaint,
         "TEXTURE_PAINT" => Mode::TexturePaint,
         "POSE" => Mode::Pose,
+        "PAINT_GREASE_PENCIL" | "PAINT_GPENCIL" | "DRAW" => Mode::Draw,
+        "SCULPT_GREASE_PENCIL" | "SCULPT_GPENCIL" => Mode::Sculpt,
+        "WEIGHT_GREASE_PENCIL" | "WEIGHT_GPENCIL" => Mode::WeightPaint,
+        "VERTEX_GREASE_PENCIL" | "VERTEX_GPENCIL" => Mode::VertexPaint,
+        "EDIT_GPENCIL" => Mode::Edit,
         "TOGGLE_EDIT" => {
             if doc.mode == Mode::Edit {
                 // Tab from Edit Mode returns to Pose Mode on armatures that
@@ -529,7 +535,8 @@ fn leave_mode(doc: &mut Doc) {
 pub fn sanitize(doc: &mut Doc) {
     match doc.mode {
         Mode::Pose if pose_object(doc).is_none() => doc.mode = Mode::Object,
-        Mode::WeightPaint if !doc.active().is_some_and(|a| is_mesh(doc, a)) => doc.mode = Mode::Object,
+        Mode::WeightPaint if !doc.active().is_some_and(|a| is_mesh(doc, a)) && crate::gpencil::active_gp(doc).is_none() => doc.mode = Mode::Object,
+        Mode::Draw if crate::gpencil::active_gp(doc).is_none() => doc.mode = Mode::Object,
         _ => {}
     }
 }

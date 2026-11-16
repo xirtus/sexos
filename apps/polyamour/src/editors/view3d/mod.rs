@@ -17,6 +17,7 @@
 //! right-click context menus, the modal G/R/S transforms and Edit Mode's
 //! modal tools (extrude, inset, bevel, loop cut, knife). Alt is not delivered
 //! by SexOS's Shell yet: every Alt shortcut also has a menu entry.
+pub mod gpview;
 pub mod icons;
 pub mod menus;
 mod overlay;
@@ -102,6 +103,8 @@ pub enum Modal {
     BrushSize { strength: bool, x0: i32, orig: f32 },
     /// Sculpt Mode, Vertex Paint and Texture Paint (strokes, box mask...).
     Sculpt(Box<sculptview::SModal>),
+    /// Grease Pencil drawing, brushes and edit tools.
+    Gp(Box<gpview::GModal>),
 }
 
 pub struct State {
@@ -154,6 +157,9 @@ pub struct State {
     dims: Option<(u64, usize, Option<Vec3>)>,
     /// The paint colour picker (Vertex and Texture Paint).
     pub picker: Option<crate::editors::properties::picker::Picker>,
+    /// Distance along the view of the surface under each pixel (Solid
+    /// shading), for Grease Pencil depth tests and Surface placement.
+    pub gp_depth: Vec<f32>,
 }
 
 pub struct WorldObj {
@@ -206,6 +212,7 @@ impl Default for State {
             median_global: false,
             dims: None,
             picker: None,
+            gp_depth: Vec::new(),
         }
     }
 }
@@ -277,6 +284,7 @@ fn modal_header(s: &State) -> Option<String> {
         Modal::LoopCut { cuts, .. } => Some(format!("Number of Cuts: {cuts}   (wheel or Page Up/Down; click to cut, Esc to cancel)")),
         Modal::Knife { pts } => Some(format!("Knife: click to add cut points ({}), Enter to cut, Esc to cancel", pts.len())),
         Modal::BoxWait => Some("Box Select: drag to select".into()),
+        Modal::Gp(m) => gpview::header(m),
         _ => None,
     }
 }
@@ -996,9 +1004,10 @@ fn draw_all(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, lay: &Layout) {
         overlay::annotations(s, ui, &proj);
     }
     overlay::modal_overlay(s, d, ui, &proj);
+    gpview::draw(s, d, ui);
     rigview::draw_brush(d, ui, r);
     sculptview::draw_brush(s, d, ui, r);
-    if s.show_gizmo && s.show_tool_gizmo && !is_modal(s) && !sculptview::active(d) {
+    if s.show_gizmo && s.show_tool_gizmo && !is_modal(s) && !sculptview::active(d) && !gpview::active(d) {
         widgets::draw_tool_gizmo(s, d, ui, &proj);
     }
     if s.show_overlays && s.show_text {
@@ -1067,7 +1076,7 @@ fn handle_event(s: &mut State, d: &mut Doc, ui: &mut Ui, inp: Input, r: Rect) {
 fn left_down(s: &mut State, d: &mut Doc, ui: &mut Ui, x: i32, y: i32, mods: Mods, r: Rect) {
     let p = Proj::new(&s.cam, r);
     let (fx, fy) = (x as f32, y as f32);
-    if rigview::paint_press(s, d, &p, x, y, mods) || sculptview::press(s, d, &p, x, y, mods) {
+    if gpview::press(s, d, x, y, mods) || rigview::paint_press(s, d, &p, x, y, mods) || sculptview::press(s, d, &p, x, y, mods) {
         return;
     }
     if s.show_gizmo && s.show_tool_gizmo {
@@ -1203,6 +1212,9 @@ fn key_down(s: &mut State, d: &mut Doc, ui: &mut Ui, key: Key, mods: Mods, r: Re
     let edit_mode = rigview::mesh_edit(d);
     let m = mouse_in(ui, r);
     let q = |d: &mut Doc, id: &str, arg: &str| d.queue.push(Op::with(id, arg));
+    if gpview::key(s, d, ui, key, mods) {
+        return true;
+    }
     if sculptview::key(s, d, ui, key, mods, &Proj::new(&s.cam, r)).is_some() {
         return true;
     }
@@ -1435,6 +1447,7 @@ fn handle_modal(s: &mut State, d: &mut Doc, ui: &mut Ui, inp: Input, r: Rect) {
         Modal::None => Modal::None,
         m @ (Modal::WeightPaint { .. } | Modal::WeightGradient { .. } | Modal::BrushSize { .. }) => rigview::modal(d, &p, inp, m),
         Modal::Sculpt(m) => sculptview::modal(s, d, &p, inp, *m),
+        Modal::Gp(m) => gpview::modal(s, d, inp, *m),
         Modal::Orbit | Modal::Pan | Modal::Zoom => match inp {
             Input::Move { x, y } => {
                 let (dx, dy) = ((x - s.last.0) as f32, (y - s.last.1) as f32);

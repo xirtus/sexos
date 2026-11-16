@@ -13,6 +13,7 @@
 //! (Graph) or sets the keyframe type (Dope Sheet), E extends, Shift+D
 //! duplicates, X deletes, T / V / Shift+E open the interpolation, handle and
 //! extrapolation menus, Home frames everything.
+mod gpsheet;
 pub mod side;
 
 use super::header_menus;
@@ -43,6 +44,7 @@ pub enum DsMode {
     DopeSheet,
     Action,
     ShapeKey,
+    GreasePencil,
 }
 
 impl DsMode {
@@ -51,6 +53,7 @@ impl DsMode {
             DsMode::DopeSheet => "Dope Sheet",
             DsMode::Action => "Action Editor",
             DsMode::ShapeKey => "Shape Key Editor",
+            DsMode::GreasePencil => "Grease Pencil",
         }
     }
 }
@@ -126,6 +129,8 @@ pub struct State {
     pub active: Option<Row>,
     pub(crate) open: HashMap<String, bool>,
     pub(crate) undo_for: Option<Option<u64>>,
+    /// Grease Pencil mode: a key drag or scrub (press x, frames moved, scrubbing).
+    gp_drag: Option<(i32, i32, bool)>,
 }
 
 impl State {
@@ -155,6 +160,7 @@ impl State {
             active: None,
             open: HashMap::new(),
             undo_for: None,
+            gp_drag: None,
         }
     }
     fn fx(&self, frame: f32) -> f32 {
@@ -357,7 +363,7 @@ fn mode_items(s: &State) -> Vec<MenuItem> {
             MenuItem::Check("Graph Editor".into(), s.kind == EditorKind::GraphEditor, anim::mail("mode.graph", s.id, "")),
             MenuItem::Check("Drivers".into(), s.kind == EditorKind::Drivers, anim::mail("mode.drivers", s.id, "")),
         ],
-        _ => [DsMode::DopeSheet, DsMode::Action, DsMode::ShapeKey].iter().map(|m| MenuItem::Check(m.label().into(), s.ds_mode == *m, anim::mail("mode.ds", s.id, m.label()))).collect(),
+        _ => [DsMode::DopeSheet, DsMode::Action, DsMode::ShapeKey, DsMode::GreasePencil].iter().map(|m| MenuItem::Check(m.label().into(), s.ds_mode == *m, anim::mail("mode.ds", s.id, m.label()))).collect(),
     }
 }
 
@@ -899,6 +905,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
                 s.ds_mode = match arg.as_str() {
                     "Action Editor" => DsMode::Action,
                     "Shape Key Editor" => DsMode::ShapeKey,
+                    "Grease Pencil" => DsMode::GreasePencil,
                     _ => DsMode::DopeSheet,
                 }
             }
@@ -915,6 +922,10 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
             "menu.extrapolation" => d.menu = Some(crate::ui::Popup::new("Extrapolation", extrapolation_items(s.prefix()), s.mouse.0, s.mouse.1)),
             _ => {}
         }
+    }
+    if s.kind == EditorKind::DopeSheet && s.ds_mode == DsMode::GreasePencil {
+        gpsheet::body(s, d, ui, r);
+        return;
     }
     if let Some(p) = ui.input.and_then(|i| i.pos()) {
         s.mouse = p;
@@ -1910,6 +1921,9 @@ fn channel_click(s: &mut State, d: &mut Doc, rows: &[Row], x: i32, y: i32, exten
 
 pub fn hotkey(s: &mut State, d: &mut Doc, i: &Input, _r: Rect) -> bool {
     let Input::Key { key, mods, .. } = *i else { return false };
+    if s.kind == EditorKind::DopeSheet && s.ds_mode == DsMode::GreasePencil {
+        return gpsheet::hotkey(s, d, key, mods);
+    }
     let p = s.prefix();
     let popup = |d: &mut Doc, s: &State, title: &str, items: Vec<MenuItem>| d.menu = Some(crate::ui::Popup::new(title, items, s.mouse.0 - 20, s.mouse.1 - 10));
     let over_chan = s.chan_rect.contains(s.mouse.0, s.mouse.1);
