@@ -138,3 +138,16 @@ fn carry_on_survives_an_error_and_clear_history_drops_the_pick() {
     assert_eq!(a.picked, None);
     assert_eq!(typed(&mut ui, &mut a, "1+1"), vec!["2".to_string()]);
 }
+
+#[test]
+fn a_sum_sent_from_a_notification_starts_afresh() {
+    let mut ui = Ui::new(560, 720, Theme::light(), Strings::new("en"));
+    let mut a = Abacus::build(&mut ui);
+    typed(&mut ui, &mut a, "6*7");
+    // Half-typed work in the line is replaced, and `-5` after an answer would carry
+    // on, but a reply that starts with a number starts afresh.
+    ui.set_text(a.expr, "99+");
+    match a.work_out(&mut ui, "12-5") { Note::Result { value, .. } => assert_eq!(value, "7"), _ => panic!("no answer") }
+    assert_eq!(a.result_text(&ui), "7");
+    assert!(matches!(a.work_out(&mut ui, "1/0"), Note::Error(_)));
+}

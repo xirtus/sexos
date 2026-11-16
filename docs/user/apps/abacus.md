@@ -9,6 +9,9 @@ memory. The old `sex-calc` name still starts it.
 - **From Spindle**: `run abacus` (or `run sex-calc`). Spindle's own `calc <expr>`
   command works sums out in the terminal.
 - **From Voyeur**: press **Super+D** and type `abacus`.
+- **In the panel**: `run abacus tray` also puts an **=** item in the panel. Its menu
+  shows the last answer, clears, goes back to Scientific, or asks for a sum: type one
+  into the notification that comes up and press **Enter** to have it worked out.
 
 ## Modes
 

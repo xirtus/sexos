@@ -308,7 +308,8 @@ impl Abacus {
         Note::Memory(v)
     }
 
-    fn clear(&mut self, ui: &mut Ui) {
+    /// Clears the expression line and the result (the **C** key).
+    pub fn clear(&mut self, ui: &mut Ui) {
         ui.set_text(self.expr, "");
         ui.set_text(self.result, "0");
         ui.set_color(self.result, None);
@@ -357,6 +358,14 @@ impl Abacus {
             }
         }
         Some(self.show_memory(ui))
+    }
+
+    /// Starts afresh with `text` and works it out (a sum sent from elsewhere, such as
+    /// a reply to a notification).
+    pub fn work_out(&mut self, ui: &mut Ui, text: &str) -> Note {
+        self.clear(ui);
+        ui.set_text(self.expr, text);
+        self.equals(ui)
     }
 
     /// Works out the expression line.
