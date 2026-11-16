@@ -116,6 +116,7 @@ run_stage() {
             --release
         done
       fi
+      mkdir -p "$(dirname "$dst")"
       cp "$src" "$dst"
       ;;
     copy_file)

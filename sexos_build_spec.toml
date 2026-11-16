@@ -481,14 +481,16 @@ manifest = "apps/tassel/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/tassel"
 dest_artifact = "iso_root/programs/tassel"
 
-# Abacus, the calculator: the first program on the Weft toolkit (crates/weft).
+# The Weft calculator (apps/abacus), the first program on the Weft toolkit. The shipped
+# Abacus is apps/sex-calc (build_sex_calc) for now, so this one is built for the Weft
+# gate (scripts/program_weft_gate.py), which installs it on its test disk, and not shipped.
 [[stage]]
 id = "build_abacus"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/abacus/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/abacus"
-dest_artifact = "iso_root/programs/abacus"
+dest_artifact = "target/weft-gate/abacus"
 
 # SSH client: log in to other machines (keys, known hosts, exec and shell).
 [[stage]]

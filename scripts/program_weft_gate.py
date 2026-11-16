@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Weft on SexOS (crates/weft): Abacus, the calculator, is a no_std program built on it.
 
-`run abacus` paints its window with Weft. Typed digits go to its expression line, a
+`run weft-abacus` (the Weft calculator, installed on the test disk under that name
+because the shipped Abacus is still apps/sex-calc) paints its window with Weft. Typed digits go to its expression line, a
 click on the keypad's + key adds to it and Enter works it out; keypad clicks alone
 work out 7 × 6; a division by zero shows an error; Ctrl+Shift+P opens the command
 palette, where typing finds Radians and Enter runs it. Each step is read back from the
@@ -16,8 +17,8 @@ ROOT=Path(__file__).resolve().parents[1]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- elf=(ROOT/'iso_root/programs/abacus').read_bytes();assert elf[:4]==b'\x7fELF'
- install(disk,[('abacus',elf)])
+ elf=(ROOT/'target/weft-gate/abacus').read_bytes();assert elf[:4]==b'\x7fELF'
+ install(disk,[('weft-abacus',elf)])
  rw,rh=map(int,a.resolution.split('x'))
  g=boot(a.iso,disk,a.out,'weft',a.resolution);t=g['text'];q=g['q']
  def keys(names):
@@ -31,7 +32,7 @@ def main():
  def click(x,y):move(x,y);button('left',True);button('left',False)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
-  s=len(t());run('run abacus')
+  s=len(t());run('run weft-abacus')
   m=g['wait'](r'\[abacus.ready\] target=(\d+) task=(\d+) keys=(\d+)',s,300);target,task=m[1],m[2];assert int(m[3])==30,m[0]
   g['wait'](r'\[abacus.frame\] n=1\n',s,300)
   launch=g['wait'](rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',s,60);surface=int(launch[1])
