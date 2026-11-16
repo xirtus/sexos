@@ -53,7 +53,7 @@ pub fn find(screen: &Screen) -> Vec<Hint> {
         let mut chars: Vec<char> = Vec::new();
         let mut at: Vec<(usize, usize)> = Vec::new();
         for r in first..=last {
-            for c in 0..screen.cols() { chars.push(screen.visible(c, r).ch); at.push((c, r)); }
+            for c in 0..screen.cols() { let ch = screen.visible(c, r).ch; if ch == crate::SPACER { continue; } chars.push(ch); at.push((c, r)); }
         }
         for (kind, a, b) in scan(&chars) { found.push((kind, chars[a..b].iter().collect(), at[a], at[b - 1])); }
         row = last + 1;

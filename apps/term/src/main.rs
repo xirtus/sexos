@@ -36,7 +36,7 @@ use sex_app::{files, Event, Nav, Window};
 use sex_pdx::app_pointer::Kind;
 use sex_pdx::stream::{Side, Stream};
 use sex_vt::keys::{self, Key, Mods};
-use sex_vt::render::{cell_for_height, Cache, Painter};
+use sex_vt::render::{cell_for_height, Cache, Faces, Painter};
 use sex_vt::{Parser, Screen};
 mod shell_host;
 use spindle_panes::{Divider, PaneId, Rect, Split, Tabs, Toward};
@@ -48,6 +48,21 @@ const MODULE_MAX: usize = 8 << 20;
 const CONFIG: &[u8] = b"spindle.conf";
 const STREAM_RING: usize = 64 * 1024;
 static mut CACHE: Cache = Cache::new();
+/// Bold and italic Geist Mono and the Noto fallbacks (CJK, emoji, symbols), parsed once
+/// for every pane.
+static mut FACES: core::mem::MaybeUninit<Faces> = core::mem::MaybeUninit::uninit();
+static mut FACES_READY: bool = false;
+fn painter(cw: usize, ch: usize) -> Painter {
+    // SAFETY: one thread; FACES is written once, before FACES_READY is set.
+    unsafe {
+        if !FACES_READY {
+            FACES_READY = Faces::embedded_into(&mut *core::ptr::addr_of_mut!(FACES));
+            if !FACES_READY { sex_pdx::serial_record!("[term.faces] parsed=0"); }
+        }
+        let p = Painter::new(cw, ch);
+        if FACES_READY { p.with_faces((*core::ptr::addr_of!(FACES)).assume_init_ref()) } else { p }
+    }
+}
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -144,7 +159,7 @@ struct Pane {
 impl Pane {
     fn new(width: usize, height: usize, cell_h: usize) -> Pane {
         let (cw, ch) = cell_for_height(cell_h);
-        let painter = Painter::new(cw, ch);
+        let painter = painter(cw, ch);
         let (width, height) = (width.max(32), height.max(32));
         let (cols, rows) = painter.grid(width, height);
         Pane {
@@ -184,7 +199,7 @@ impl Pane {
         if h == self.cell_h { return; }
         self.cell_h = h;
         let (cw, ch) = cell_for_height(h);
-        self.painter = Painter::new(cw, ch);
+        self.painter = painter(cw, ch);
         let (w, h) = (self.width, self.height);
         self.width = 0;
         self.resize(w, h);
@@ -1243,7 +1258,7 @@ impl Spindle {
         let (cw, ch) = cell_for_height(14);
         let mut s = Spindle {
             panes: BTreeMap::new(), tabs: Tabs::new(1), next_id: 2, width: width.max(64), height: height.max(64), cell_h,
-            clipboard: Vec::new(), relayout: true, dragging: None, resizing: false, title: String::new(), painter: Painter::new(cw, ch),
+            clipboard: Vec::new(), relayout: true, dragging: None, resizing: false, title: String::new(), painter: painter(cw, ch),
             config: Default::default(), theme: sex_vt::theme::MOCHA, config_stamp: None, config_checked: 0,
         };
         let area = s.area();

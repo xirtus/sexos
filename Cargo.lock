@@ -5898,6 +5898,7 @@ dependencies = [
  "miniz_oxide 0.8.9",
  "regex-automata",
  "sex-font",
+ "sex-shape",
  "vte",
 ]
 
