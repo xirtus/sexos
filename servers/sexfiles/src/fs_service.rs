@@ -360,7 +360,15 @@ pub fn bind(target: u32, task: u32) {
     if let Some(cache) = client_cache(w::PROGRAM_INDEX_BASE + index) { w::stat_cache::forget(cache, None); }
     unsafe { (*core::ptr::addr_of_mut!(OFFERS))[index] = None; }
     bindings[index] = Some(Binding { task, root, len, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
-    crate::console_relay::bound(unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_LAUNCHER)) }, index, target, task);
+    let launcher = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_LAUNCHER)) };
+    // A pipe run's working folder: its starter held it (SET_CWD checked), and it is the
+    // run's own from now on, as a path the person picked for it would be.
+    if let (Some(id), Some(b)) = (launcher, bindings[index].as_mut()) {
+        if let Some(cwd) = crate::console_relay::cwd_grant(id) {
+            if !grant_picked(b, &cwd[1..]) { sex_pdx::serial_record!("[files.pipe.cwd.denied] row={} why=full", index); }
+        }
+    }
+    crate::console_relay::bound(launcher, index, target, task);
     unsafe { (*core::ptr::addr_of_mut!(PICKS))[index] = None; }
     sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
 }
@@ -423,6 +431,18 @@ fn confine(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Opt
         n += 1 + part.len();
     }
     Some(n)
+}
+/// A pipe run's working folder (`console_relay::SET_CWD`): a folder `binding` holds, as
+/// its absolute path. Refused when it is not a folder that exists, or when it holds a
+/// space or a NUL: grants are kept as space-separated words, so `x @/ y` would otherwise
+/// hand the child the whole filesystem.
+fn held_folder(binding: &Binding, path: &[u8], out: &mut [u8; w::PATH_BYTES]) -> Option<usize> {
+    let n = confine(binding, path, out)?;
+    if out[..n].iter().any(|b| *b == b' ' || *b == 0) { return None; }
+    let state = unsafe { &mut *core::ptr::addr_of_mut!(STATE) };
+    if matches!(state, State::Untried) { *state = bring_up(); }
+    let State::Ready(fs) = state else { return None };
+    match fs.open(&out[..n]) { Ok(st) if st.kind == Kind::Dir => Some(n), _ => None }
 }
 /// The picker portal: questions from programs, answers from the run showing the picker.
 fn picker(program: Option<usize>, r: w::Request, path: &[u8], data: &mut [u8]) -> (u8, u32) {
@@ -615,7 +635,8 @@ pub fn handle(caller: u32, a: u64, offset: u64, length: u64) -> u64 {
             // attached to it (`console_relay`). Any program may PREPARE a run of its own
             // (`sex_pdx::launch`); `program_prepare` lets it pass on only what it holds.
             if r.kind == sex_pdx::console_relay::KIND {
-                return crate::console_relay::handle(k, bound.map_or(false, |b| holds_launch(&b)), r, PROGRAM_INDEX_BASE_PLUS(k));
+                let Some(b) = bound else { return w::reply(r.seq, w::DENIED, 0) };
+                return crate::console_relay::handle(k, holds_launch(&b), r, PROGRAM_INDEX_BASE_PLUS(k), |path, out| held_folder(&b, path, out));
             }
             // Packages only for a run the person started with `run +pkg` (see `program_package`).
             if r.kind == sex_pdx::package::KIND && !bound.is_some_and(|b| holds_packages(&b)) {
@@ -745,8 +766,12 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
         region[w::PATH_BYTES..w::PATH_BYTES + binding.args_len].copy_from_slice(&binding.args[..binding.args_len]);
         return w::reply(r.seq, w::OK, binding.args_len as u32);
     }
-    // A program's PREPARE is a terminal's (console_relay) unless it says it is a launch.
-    let relay = r.offset != w::PREPARE_LAUNCH;
+    // A program's PREPARE is a terminal's (console_relay) unless it says it is a launch,
+    // or a launch whose streams it holds (a pipe run).
+    let relay = !matches!(r.offset & 0xFF, w::PREPARE_LAUNCH | w::PREPARE_PIPED);
+    // Who asks, and for which relay: set afresh by every PREPARE, so one that was refused
+    // leaves nothing behind for the next.
+    if r.kind == w::PREPARE { unsafe { PREPARING_ROW = program; PREPARING_FOR = None; } }
     if let (Some(k), w::PREPARE, true) = (program, r.kind, relay) {
         if !unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.is_some_and(|b| holds_launch(&b)) { return w::reply(r.seq, w::DENIED, 0); }
         // A terminal's run: only `/bin/NAME`, with its own words and nothing granted.
@@ -775,6 +800,13 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
                 sex_pdx::serial_record!("[files.launch.denied] row={}", k);
                 return w::reply(r.seq, w::DENIED, 0);
             };
+            if r.offset != w::PREPARE_LAUNCH {
+                // A pipe run: its starter's slot holds its streams (console_relay).
+                let Some((slot, word)) = sex_pdx::console_relay::split_pipe_prepare(r.offset) else { return w::reply(r.seq, w::INVALID, 0) };
+                let id = crate::console_relay::relay_id(k, slot);
+                if let Err(status) = crate::console_relay::may_prepare(id) { return w::reply(r.seq, status, 0); }
+                unsafe { PREPARING_FOR = Some(relay_pipe(id, word)); }
+            }
             n
         } else if r.kind == w::RENAME {
             let Some(split) = raw[..path_len].iter().position(|b| *b == 0) else { return w::reply(r.seq, w::NAME, 0) };
@@ -876,11 +908,17 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
 /// One path waiting for Shell to ask for it, and the ticket that names it.
 static mut PREPARED: ([u8; w::PATH_BYTES], usize, u32) = ([0; w::PATH_BYTES], 0, 0);
 static mut PREPARED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
-/// The terminal relay (`console_relay::relay_id`: program row and slot) a PREPARE in
-/// progress is for; None for Spindle.
+/// The relay (`console_relay::relay_id`: program row and slot) a PREPARE in progress is
+/// for, a pipe run's stdio word above [`PIPE_AT`] (`relay_pipe`); None for a run with no relay.
 static mut PREPARING_FOR: Option<usize> = None;
-/// Who prepared the waiting ticket: a terminal's relay (row and slot), or None for Spindle.
-static mut PREPARED_LAUNCHER: Option<usize> = None;
+/// The program row a PREPARE in progress comes from; None for Spindle.
+static mut PREPARING_ROW: Option<usize> = None;
+/// Who prepared the waiting ticket: the relay its run is attached to (row and slot), if
+/// any, and the program row that prepared it (None for Spindle). Only that row may start it.
+static mut PREPARED_LAUNCHER: (Option<usize>, Option<usize>) = (None, None);
+/// `PREPARING_FOR`'s packing of a pipe run: the relay, and its stdio word plus one above it.
+const PIPE_AT: u32 = 16;
+fn relay_pipe(id: usize, word: u8) -> usize { id | (word as usize + 1) << PIPE_AT }
 /// The terminal relay the program just read was prepared by, until Shell binds it.
 static mut LOADED_LAUNCHER: Option<usize> = None;
 static mut NEXT_TICKET: u32 = 0;
@@ -946,9 +984,9 @@ pub fn read_ticket(ticket: u64, requester: u32, image: &mut [u8]) -> (Program, O
     unsafe { (*core::ptr::addr_of_mut!(LOADED)).1 = 0; *core::ptr::addr_of_mut!(LOADED_LAUNCHER) = None; }
     let prepared = unsafe { &mut *core::ptr::addr_of_mut!(PREPARED) };
     if prepared.1 == 0 || prepared.2 as u64 != ticket { return (Program::Absent, None); }
-    let by = unsafe { PREPARED_LAUNCHER };
+    let (by, row) = unsafe { PREPARED_LAUNCHER };
     let asker = if requester == 0 { None } else { match program_index(requester) { Some(k) => Some(k), None => return (Program::Absent, None) } };
-    if by.map(|id| id / sex_pdx::console_relay::SLOTS) != asker { sex_pdx::serial_record!("[files.ticket.denied] requester={}", requester); return (Program::Absent, None); }
+    if row != asker { sex_pdx::serial_record!("[files.ticket.denied] requester={}", requester); return (Program::Absent, None); }
     unsafe { LOADED_LAUNCHER = by; }
     let len = core::mem::take(&mut prepared.1);
     unsafe { *core::ptr::addr_of_mut!(LOADED_ARGS) = *core::ptr::addr_of!(PREPARED_ARGS); }
@@ -1064,8 +1102,13 @@ fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u
             let ticket = unsafe { NEXT_TICKET = NEXT_TICKET % 0xFF_FFFE + 1; NEXT_TICKET };
             prepared.2 = ticket;
             let by = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(PREPARING_FOR)) };
-            unsafe { PREPARED_LAUNCHER = by; }
-            if let Some(k) = by { crate::console_relay::prepared(k); }
+            let row = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(PREPARING_ROW)) };
+            let relay = by.map(|v| v & ((1 << PIPE_AT) - 1));
+            unsafe { PREPARED_LAUNCHER = (relay, row); }
+            if let (Some(id), Some(v)) = (relay, by) {
+                let pipe = (v >> PIPE_AT).checked_sub(1).map(|w| w as u8);
+                crate::console_relay::prepared(id, pipe);
+            }
             // A program a package installed: what it asks for and what the person said.
             let note = path.strip_prefix(sex_pdx::program_store::BIN).and_then(|name| crate::packages::note(fs, name));
             match note { Some(n) => n.encode(data), None => data[..sex_pdx::package::NOTE_BYTES].fill(0) }
