@@ -811,8 +811,9 @@ fn light_incidence(l: &LightShape, p: Vec3) -> Option<(Vec3, Vec3, f32)> {
     }
 }
 
-/// GTAO-lite: horizon search in four rotated directions over the depth
-/// buffer; returns visibility (1 = open).
+/// GTAO-lite: horizon search in two directions over the depth buffer,
+/// rotated per pixel and per sample (the accumulation averages the
+/// rotations, as EEVEE's does); returns visibility (1 = open).
 #[allow(clippy::too_many_arguments)]
 fn gtao(depth: &[f32], normals: &[Vec3], l: &Layout, cam: &RasterCamera, x: usize, y: usize, radius: f32, h: u32) -> f32 {
     let i = l.index(x, y);
@@ -829,7 +830,7 @@ fn gtao(depth: &[f32], normals: &[Vec3], l: &Layout, cam: &RasterCamera, x: usiz
     let r_px = r_px.min(64.0);
     let rot = (h & 0xffff) as f32 / 65536.0 * PI;
     let jit = ((h >> 16) & 0xff) as f32 / 256.0;
-    const DIRS: usize = 4;
+    const DIRS: usize = 2;
     const STEPS: usize = 6;
     let mut occ = 0.0;
     for d in 0..DIRS {
