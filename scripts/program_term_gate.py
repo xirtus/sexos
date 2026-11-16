@@ -74,7 +74,7 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'spindle-pipelines.ppm')})
   # Themes and settings (P7): `theme nord` saves spindle.conf; the window reloads it.
   s=len(t());term_line('theme nord');g['wait'](r'\[term\.theme\.saved\] name=nord ok=1',s,30)
-  g['wait'](r'\[term\.config\] theme=nord font=18 padding=4 ',s,30);time.sleep(1)
+  g['wait'](r'\[term\.config\] theme=nord font=geist-mono size=18 padding=4 ',s,30);time.sleep(1)
   q.cmd('screendump',{'filename':str(a.out/'spindle-theme-nord.ppm')})
   s=len(t());term_line('theme mocha');g['wait'](r'\[term\.config\] theme=mocha ',s,30)
   # A Wasm program behind the stream: Rust std's println and stdin.
