@@ -10,6 +10,12 @@ PIN=97f188efc3dc90315b79a2af1f477c0c18d85e82
 OUT=${SHINE_OUT:-$ROOT/target/shine}
 SRC=${SHINE_SRC:-$OUT/work/source}
 mkdir -p "$OUT/work" "$OUT/lib" "$OUT/include/shine" "$OUT/lib/pkgconfig" "$OUT/share/licenses/shine"
+# A checkout restored from a CI cache (target/ is cached) may be another branch's: start
+# again from a fresh clone rather than fail.
+if [[ -d "$SRC/.git" && $(git -C "$SRC" rev-parse HEAD 2>/dev/null) != "$PIN" ]]; then
+  echo "Shine: cached source is not $PIN; cloning again" >&2
+  rm -rf "$SRC"
+fi
 if [[ ! -d "$SRC/.git" ]]; then
   git clone -q --depth=1 --branch 3.1.1 https://github.com/toots/shine.git "$SRC"
 fi
