@@ -186,6 +186,8 @@ fn weft_event(e: Event) -> weft::input::Event {
             text: k.char(),
         }),
         Event::Close => E::Close,
+        // Weft has no release event; the caller drops releases first.
+        Event::KeyUp(_) => unreachable!("key releases are skipped before mapping"),
         Event::Drop { kind, x, y } => E::Drop { kind, x, y },
         Event::DragEnded { target } => E::DragEnded { target },
         Event::Resize { width, height } => E::Resize {
@@ -408,6 +410,9 @@ pub fn main() {
                     }
                     continue;
                 }
+            }
+            if let Event::KeyUp(_) = event {
+                continue;
             }
             for response in view.ui.handle(weft_event(event)) {
                 if let Response::Clicked(id) = response {
