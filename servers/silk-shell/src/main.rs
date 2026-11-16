@@ -17516,6 +17516,8 @@ unsafe fn launcher_focus_existing(target:u32,frame:u64,chosen:Option<launcher::L
     let mut ok=true;
     if from!=ACTIVE_SCENE_IDX{ok=reparent_frame_to_scene(fid,ACTIVE_SCENE_IDX,"launcher_bring_here");}
     if ok&&frame_is_minimized(fid){ok=restore_minimized_frame_inner(fid,false);}
+    // A group's background tab is Visible but hidden: switch to it first.
+    if ok&&layouts_glue::behind(frame).is_some(){ok=layouts_glue::show(frame);}
     else if ok&&!matches!(lifecycle_state(frame),Some(LifecycleState::Visible)){
         ok=set_lifecycle_state(frame,LifecycleState::Visible);
         if let Some((x,y,w,h))=get_surface_bounds(frame){
@@ -23991,6 +23993,14 @@ unsafe fn switch_to_tab(frame_id: u32, tab_index: u32) -> bool {
     if surface_is_alive(old_surface_id) {
         pdx_call(SLOT_DISPLAY, 0xEE, old_surface_id, 0, 0);
     }
+    // The shown tab's display slot is recreated empty; as on restore, a
+    // fresh viewport sequence makes its live client repaint.
+    for (index,frame) in app_catalog::document_views().map(|i|i.frame()).enumerate(){
+        if new_surface_id==frame {DOCUMENT_VIEWS[index].refresh();}
+    }
+    for (index,frame) in app_catalog::spindle_views().map(|i|i.frame()).enumerate(){
+        if new_surface_id==frame {SPINDLE_VIEWS[index].refresh();}
+    }
 
     // Show new surface at captured geometry.
     pdx_call(SLOT_DISPLAY, 0xEC, new_surface_id,
@@ -24885,7 +24895,8 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
 /// SilkBar intercept is handled separately by handle_silkbar_click().
 unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     let focused = FOCUSED_SURFACE_ID;
-    if point_in_surface(x, y, focused) {
+    // A group's background tab keeps its old bounds but is not on screen.
+    if point_in_surface(x, y, focused) && layouts_glue::behind(focused).is_none() {
         // Chrome check: rim/tab-strip takes priority over content area.
         if let Some(chrome_target) = hit_test_surface_chrome(x, y, focused) {
             if let HitTarget::FrameChrome { frame_id, kind } = chrome_target {
@@ -24914,7 +24925,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     }
     for entry in APP_CUSTODY.iter().flatten() {
         let sid=entry.shell_surface().unwrap_or(entry.surface);
-        if entry.dead || sid == focused || !point_in_surface(x,y,sid) { continue; }
+        if entry.dead || sid == focused || !point_in_surface(x,y,sid) || layouts_glue::behind(sid).is_some() { continue; }
         if let Some(fid) = frame_for_surface(sid) {
             if frame_accepts_input(fid) {
                 if let Some(chrome) = hit_test_surface_chrome(x,y,sid) { return chrome; }
@@ -24925,7 +24936,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_BELL_PLACEHOLDER, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                    SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
     for &sid in &z_order {
-        if sid == focused { continue; }
+        if sid == focused || layouts_glue::behind(sid).is_some() { continue; }
         if !surface_is_alive(sid) {
             serial_println!("[shell.hit_test.skip] id={} reason=dead", sid);
             continue;

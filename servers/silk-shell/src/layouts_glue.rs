@@ -63,7 +63,35 @@ pub unsafe fn tile(t: &wm::Tiling, frames: &[u32], rects: &mut [wm::Rect]) {
 /// From sync_scene_visibility: whether tab `ti` of frame `fid` is a group's
 /// tab in the background, which stays hidden when its workspace shows.
 pub unsafe fn tab_hidden(fid: u32, ti: usize) -> bool {
-    frame(fid).map_or(false, |f| f.tab_count > 1 && ti != f.active_tab as usize)
+    frame(fid).map_or(false, |f| layouts::hidden(f.tab_count, f.active_tab, ti))
+}
+
+/// From pointer hit-testing, the launcher and tab switching: the frame and
+/// tab index of `sid` when it is a group's background tab. A hidden tab
+/// keeps its old bounds and a Visible lifecycle, so callers must not treat
+/// it as on screen.
+pub unsafe fn behind(sid: u64) -> Option<(u32, usize)> {
+    for f in (*core::ptr::addr_of!(FRAMES)).iter().flatten() {
+        if let Some(ti) = layouts::behind(f.tabs.iter().map(|t| t.map(|t| t.surface_id)), f.tab_count, f.active_tab, sid) {
+            return Some((f.frame_id, ti));
+        }
+        if f.tabs.iter().flatten().any(|t| t.surface_id == sid) { return None; }
+    }
+    None
+}
+
+/// From the launcher: bring `sid` to the front of its group when it is a
+/// background tab, recreating its surface through the Shell's tab switch.
+/// True when `sid` is already its frame's shown tab.
+pub unsafe fn show(sid: u64) -> bool {
+    match behind(sid) {
+        Some((fid, ti)) => {
+            let ok = crate::switch_to_tab(fid, ti as u32);
+            sex_pdx::serial_record!("[shell.group] show frame={} tab={} sid={} ok={}", fid, ti, sid, ok as u8);
+            ok
+        }
+        None => true,
+    }
 }
 
 /// Main loop: a workspace switch reports the layout, tree and groups the

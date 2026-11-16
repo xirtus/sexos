@@ -228,3 +228,21 @@ fn each_workspace_remembers_its_layout_and_tree() {
     // Out of range workspaces use the last one rather than panic.
     assert!(d.entered(99, true));
 }
+
+#[test]
+fn background_tabs_are_only_a_groups_unshown_tabs() {
+    assert!(!hidden(1, 0, 0));
+    assert!(!hidden(3, 1, 1));
+    assert!(hidden(3, 1, 0) && hidden(3, 1, 2));
+    let ids = [Some(7u64), Some(8), Some(9), None];
+    assert_eq!(behind(ids, 3, 1, 7), Some(0));
+    assert_eq!(behind(ids, 3, 1, 9), Some(2));
+    assert_eq!(behind(ids, 3, 1, 8), None);
+    assert_eq!(behind(ids, 3, 1, 42), None);
+    assert_eq!(behind([Some(7u64), None], 1, 0, 7), None);
+    // After a tab switch the old active tab is the one behind.
+    let mut active = cycle(1, 3, 1);
+    assert_eq!(behind(ids, 3, active, 8), Some(1));
+    active = cycle(active, 3, 1);
+    assert_eq!(behind(ids, 3, active, 7), None);
+}

@@ -222,6 +222,17 @@ pub fn cycle(active: u8, count: u8, step: i8) -> u8 {
     ((active as i16 + step as i16).rem_euclid(count as i16)) as u8
 }
 
+/// Whether tab `ti` of a group of `count` whose shown tab is `active` is in
+/// the background: hidden behind the active tab, never drawn, hit or focused.
+pub fn hidden(count: u8, active: u8, ti: usize) -> bool { count > 1 && ti != active as usize }
+
+/// The index of `sid` among a frame's tab surfaces `ids` when it is one of
+/// the group's background tabs; `None` for the shown tab or a stranger.
+pub fn behind(ids: impl IntoIterator<Item = Option<u64>>, count: u8, active: u8, sid: u64) -> Option<usize> {
+    let ti = ids.into_iter().position(|t| t == Some(sid))?;
+    if hidden(count, active, ti) { Some(ti) } else { None }
+}
+
 /// The window Super+G pulls into the focused one's group: the one before
 /// it in tiling order, or for the first window the one after it.
 pub fn join_target(order: &[u32], focused: u32) -> Option<u32> {
