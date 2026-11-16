@@ -632,6 +632,17 @@ mod guest {
                             studio.message(&mut app.ui, "New editable project");
                             sex_pdx::serial_record!("[moan.project.new] tracks=0 clean=1");
                         }
+                        Some(Action::DownloadMusePack(kind)) => {
+                            let label = match kind {
+                                moan_gen::pack::ModelPackKind::TurboLiteGguf => "lite",
+                                moan_gen::pack::ModelPackKind::StudioXlGguf => "studio",
+                            };
+                            studio.message(
+                                &mut app.ui,
+                                "Muse model pack staged; place verified GGUF pack in @/data/moan/muse or connect ACE bridge",
+                            );
+                            sex_pdx::serial_record!("[moan.muse.pack] kind={}", label);
+                        }
                         Some(Action::Quit) => {
                             if plugin.busy() && !plugin.retired() {
                                 plugin.cancel();

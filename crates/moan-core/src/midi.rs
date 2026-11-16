@@ -12,6 +12,8 @@ pub enum Instrument {
     SilkTriangle = 0,
     SatinPulse = 1,
     VelvetSampler = 2,
+    ArielFormant = 3,
+    PrismWavetable = 4,
 }
 impl Instrument {
     pub fn name(self) -> &'static str {
@@ -19,6 +21,8 @@ impl Instrument {
             Self::SilkTriangle => "Silk Keys",
             Self::SatinPulse => "Satin Bass",
             Self::VelvetSampler => "Velvet Kit",
+            Self::ArielFormant => "Ariel Voice",
+            Self::PrismWavetable => "Prism Synth",
         }
     }
 }
@@ -29,6 +33,8 @@ impl TryFrom<u8> for Instrument {
             0 => Ok(Self::SilkTriangle),
             1 => Ok(Self::SatinPulse),
             2 => Ok(Self::VelvetSampler),
+            3 => Ok(Self::ArielFormant),
+            4 => Ok(Self::PrismWavetable),
             _ => Err(Error::Instrument),
         }
     }
@@ -146,46 +152,77 @@ impl Pattern {
         mix.try_reserve_exact(self.frames as usize)
             .map_err(|_| Error::Memory)?;
         mix.resize(self.frames as usize, [0; 2]);
-        // The kit is original PCM, sampled at variable pitch rather than an
-        // oscillator masquerading as a sampler. No downloaded/copied audio.
-        let kit = if self.instrument == Instrument::VelvetSampler {
-            Some(velvet_sample()?)
+        if self.instrument == Instrument::PrismWavetable {
+            let params = crate::wavetable::PrismParams::default();
+            for note in &self.notes {
+                let note_frames = crate::wavetable::render_prism_note(note.key, note.velocity, note.frames, &params)?;
+                for (offset, f) in note_frames.into_iter().enumerate() {
+                    let target = &mut mix[(note.start as usize) + offset];
+                    for c in 0..2 {
+                        target[c] += f[c] as i32;
+                    }
+                }
+            }
+        } else if self.instrument == Instrument::ArielFormant {
+            let vocal_params = crate::vocal::VoiceParams::default();
+            for note in &self.notes {
+                let note_hz = 440.0 * crate::dsp_math::exp2_f32((note.key as f32 - 69.0) / 12.0);
+                let note_ms = (note.frames as f32 * 1000.0 / RATE as f32).max(10.0);
+                let mut p = vocal_params.clone();
+                p.f0 = note_hz;
+                p.rate_ms = note_ms;
+                let (pcm, _) = crate::vocal::synthesize("AA", &p).map_err(|_| Error::Memory)?;
+                let len = (note.frames as usize).min(pcm.len());
+                let vel = note.velocity as i32;
+                for offset in 0..len {
+                    let target = &mut mix[(note.start as usize) + offset];
+                    for c in 0..2 {
+                        target[c] += pcm[offset][c] as i32 * vel / 127;
+                    }
+                }
+            }
         } else {
-            None
-        };
-        for note in &self.notes {
-            for offset in 0..note.frames {
-                let value = match &kit {
-                    Some(sample) => {
-                        let at = offset as u64 * STEPS[note.key as usize] as u64 / STEPS[60] as u64;
-                        sample.get(at as usize).map_or(0, |v| v[0] as i32)
-                    }
-                    None => {
-                        let phase = (offset as u64 * STEPS[note.key as usize] as u64) as u32;
-                        if self.instrument == Instrument::SatinPulse {
-                            if phase < 0x6000_0000 {
-                                6000
-                            } else {
-                                -6000
-                            }
-                        } else {
-                            let x = (phase >> 16) as i32;
-                            let triangle = if x < 32768 {
-                                x * 2 - 32768
-                            } else {
-                                98303 - x * 2
-                            };
-                            triangle * 8000 / 32768
+            // The kit is original PCM, sampled at variable pitch rather than an
+            // oscillator masquerading as a sampler. No downloaded/copied audio.
+            let kit = if self.instrument == Instrument::VelvetSampler {
+                Some(velvet_sample()?)
+            } else {
+                None
+            };
+            for note in &self.notes {
+                for offset in 0..note.frames {
+                    let value = match &kit {
+                        Some(sample) => {
+                            let at = offset as u64 * STEPS[note.key as usize] as u64 / STEPS[60] as u64;
+                            sample.get(at as usize).map_or(0, |v| v[0] as i32)
                         }
+                        None => {
+                            let phase = (offset as u64 * STEPS[note.key as usize] as u64) as u32;
+                            if self.instrument == Instrument::SatinPulse {
+                                if phase < 0x6000_0000 {
+                                    6000
+                                } else {
+                                    -6000
+                                }
+                            } else {
+                                let x = (phase >> 16) as i32;
+                                let triangle = if x < 32768 {
+                                    x * 2 - 32768
+                                } else {
+                                    98303 - x * 2
+                                };
+                                triangle * 8000 / 32768
+                            }
+                        }
+                    };
+                    let attack = (offset as i64 * 65536 / 48).min(65536);
+                    let release = ((note.frames - 1 - offset) as i64 * 65536 / 240).min(65536);
+                    let value = (value as i64 * note.velocity as i64 / 127 * attack / 65536 * release
+                        / 65536) as i32;
+                    let target = &mut mix[(note.start + offset) as usize];
+                    for c in target {
+                        *c += value;
                     }
-                };
-                let attack = (offset as i64 * 65536 / 48).min(65536);
-                let release = ((note.frames - 1 - offset) as i64 * 65536 / 240).min(65536);
-                let value = (value as i64 * note.velocity as i64 / 127 * attack / 65536 * release
-                    / 65536) as i32;
-                let target = &mut mix[(note.start + offset) as usize];
-                for c in target {
-                    *c += value;
                 }
             }
         }
