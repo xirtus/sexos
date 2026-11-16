@@ -21,7 +21,7 @@ const SOCK_HIDDEN: i64 = 1 << 1;
 const SOCK_UNAVAIL: i64 = 1 << 3;
 
 /// `eNodeSocketDatatype`.
-fn sock_type(t: SocketType) -> i64 {
+pub(super) fn sock_type(t: SocketType) -> i64 {
     match t {
         SocketType::Float => 0,
         SocketType::Vector => 1,
@@ -243,7 +243,7 @@ impl W {
         let socks: Vec<(Vec<u64>, Vec<u64>)> = t.nodes.iter().map(|n| (n.inputs.iter().map(|_| self.addr()).collect(), n.outputs.iter().map(|_| self.addr()).collect())).collect();
         let mut first_output = std::collections::HashSet::new();
         for (ni, n) in t.nodes.iter().enumerate() {
-            let set = self.settings(n, ids);
+            let set = self.settings(n, &t.nodes, ids);
             let mut b = self.rec("bNode");
             self.p(&mut b, "next", node_addrs.get(ni + 1).copied().unwrap_or(0));
             self.p(&mut b, "prev", if ni > 0 { node_addrs[ni - 1] } else { 0 });
@@ -422,7 +422,7 @@ impl W {
 
     /// `CurveMapping` with `n` curves in file order and clip rect `clip`
     /// (xmin, ymin, xmax, ymax).
-    fn curve_mapping(&mut self, c: &CurveMapping, n: usize, clip: [f32; 4]) -> u64 {
+    pub(super) fn curve_mapping(&mut self, c: &CurveMapping, n: usize, clip: [f32; 4]) -> u64 {
         let mut m = self.rec("CurveMapping");
         self.i(&mut m, "flag", 1); // CUMA_DO_CLIP
         for (k, v) in ["xmin", "ymin", "xmax", "ymax"].iter().zip(clip) {
@@ -483,7 +483,7 @@ impl W {
         r
     }
 
-    fn settings(&mut self, n: &Node, ids: &Ids) -> Settings {
+    fn settings(&mut self, n: &Node, nodes: &[Node], ids: &Ids) -> Settings {
         let mut s = Settings { c: [0.0; 4], storage: None, ramp: None, curve: None, id: 0 };
         let e = |k: &str| n.enum_prop(k).to_string();
         let image = |k: &str| match n.prop(k) {
@@ -712,6 +712,12 @@ impl W {
                 s.storage = Some(r);
             }
             _ if id.starts_with("CompositorNode") => self.comp_settings(n, ids, &mut s),
+            _ if id.starts_with("GeometryNode") || id.starts_with("FunctionNode") => {
+                let (st, c) = self.geo_settings(n, nodes);
+                s.storage = st;
+                s.c[0] = c[0] as f64;
+                s.c[1] = c[1] as f64;
+            }
             _ => {}
         }
         s

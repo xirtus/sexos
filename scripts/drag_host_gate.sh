@@ -27,4 +27,25 @@ else
   echo "[drag.host.gate] SKIP no nasm: test guest not reassembled"
 fi
 python3 "$ROOT_DIR/scripts/drag_guest_qemu.py"
+# Crossdress CW1: the PE loader, the cell (page tables, GDT/IDT/TSS, stubs), the KERNEL32
+# subset and exception dispatch against a scripted vCPU; then the test .exe in a real
+# VT-x/SVM cell on Linux KVM (tests/kvm.rs, SKIP without a usable /dev/kvm).
+(cd "$ROOT_DIR" && cargo test --locked -p sex-crossdress -- --nocapture 2>&1 | grep -E '^\[crossdress|^test result|FAILED|panicked' ; exit "${PIPESTATUS[0]}")
+CROSS="$ROOT_DIR/crates/sex-crossdress/test"
+if command -v clang >/dev/null && command -v lld-link >/dev/null && command -v llvm-dlltool >/dev/null; then
+  bash "$CROSS/build.sh" "$TEST_DIR/hello.exe"
+  # The checked-in .exe is byte-exact only for the LLVM major it was built with
+  # (test/LLVM_MAJOR). Another LLVM must still build it, and that build must pass in the
+  # KVM cell too (SKIP without a usable /dev/kvm).
+  llvm_major=$(clang --version | sed -n 's/.*clang version \([0-9]*\)\..*/\1/p' | head -1)
+  if [[ "$llvm_major" == "$(cat "$CROSS/LLVM_MAJOR")" ]]; then
+    cmp "$TEST_DIR/hello.exe" "$CROSS/hello.exe" || { echo "[drag.host.gate] FAIL hello.exe is not what hello.c builds to"; exit 1; }
+    echo "[drag.host.gate] crossdress test program matches its source"
+  else
+    echo "[drag.host.gate] crossdress test program rebuilt with LLVM $llvm_major (checked in: LLVM $(cat "$CROSS/LLVM_MAJOR")); running the rebuild"
+    (cd "$ROOT_DIR" && CROSSDRESS_EXE="$TEST_DIR/hello.exe" cargo test --locked -p sex-crossdress --test kvm -- --nocapture 2>&1 | grep -E '^\[crossdress\.kvm\] (stop|SKIP|exe)|^test result|FAILED|panicked' ; exit "${PIPESTATUS[0]}")
+  fi
+else
+  echo "[drag.host.gate] SKIP no clang/lld-link: crossdress test program not rebuilt"
+fi
 echo "[drag.host.gate] PASS"

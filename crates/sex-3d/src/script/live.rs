@@ -202,9 +202,10 @@ impl Kernel {
     /// Start a kernel process. Fails with `Unsupported` where programs cannot
     /// be connected by pipes (SexOS today).
     pub fn spawn(cfg: &KernelConfig) -> io::Result<Kernel> {
-        let mut boot = String::from("import sys\nsys.path[:0] = ");
+        // One line: SexOS passes a run's arguments as a single line.
+        let mut boot = String::from("import sys;sys.path[:0]=");
         boot += &format!("{:?}", cfg.paths);
-        boot += "\nimport polyamour.kernel as k\nk.main()\n";
+        boot += ";import polyamour.kernel as k;k.main()";
         let mut cmd = Command::new(&cfg.program);
         cmd.arg("-u").arg("-I").arg("-c").arg(&boot).env("POLYAMOUR_LIVE", "1").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         if let Some(a) = &cfg.addons {
@@ -447,7 +448,7 @@ pub fn batch_snapshot(scene: &Scene) -> String {
 /// SCRIPT [SCRIPT-ARGS...]. `paths` go in front of `sys.path` (empty on SexOS,
 /// where the package is frozen into `python`).
 pub fn batch_boot(paths: &[String]) -> String {
-    format!("import sys\nsys.path[:0] = {paths:?}\nfrom polyamour import polyops\npolyops.run_batch(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:])\n")
+    format!("import sys;sys.path[:0]={paths:?};from polyamour import polyops;polyops.run_batch(sys.argv[1],sys.argv[2],sys.argv[3],sys.argv[4:])")
 }
 
 /// A `Command` for a batch run of `script` (see [`batch_snapshot`]).

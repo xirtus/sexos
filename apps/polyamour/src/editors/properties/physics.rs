@@ -17,7 +17,7 @@ use crate::theme as t;
 use crate::ui::{MenuItem, NumOpts, Op};
 use sex_3d::modifiers::Modifier;
 use sex_3d::physics::props::{self, Entry, Node, RefKind, Value};
-use sex_3d::physics::PhysicsModifier;
+use sex_3d::physics::{FluidType, PhysicsModifier};
 use sex_3d::scene::ObjectData;
 
 fn queue(d: &mut Doc, id: &str, arg: &str) {
@@ -127,8 +127,30 @@ fn entry(l: &mut L, d: &mut Doc, t: Target, e: &Entry) {
     l.inactive = was;
 }
 
+/// Whether `t` is a fluid domain (its Cache panel bakes with the fluid
+/// operators).
+fn is_fluid_domain(d: &Doc, t: Target) -> bool {
+    match t {
+        Target::Modifier(o, s) => matches!(d.scene.objects.get(o).and_then(|o| o.modifiers.get(s)), Some(Modifier::Physics(PhysicsModifier::Fluid(f))) if f.fluid_type == FluidType::Domain),
+        _ => false,
+    }
+}
+
 /// The bake buttons and status under a Cache panel's settings.
 fn cache_buttons(l: &mut L, d: &mut Doc, t: Target) {
+    if is_fluid_domain(d, t) {
+        let Some(key) = t.cache_key(&d.scene) else { return };
+        let (info, baked, outdated, _) = d.scene.physics.caches.status(&key);
+        l.note(&if outdated { format!("{info} (outdated)") } else { info });
+        if baked {
+            if l.button("Free All") {
+                queue(d, "fluid.free_all", &key);
+            }
+        } else if l.button("Bake All") {
+            queue(d, "fluid.bake_all", &key);
+        }
+        return;
+    }
     let Some(key) = t.cache_key(&d.scene) else {
         l.note("Not simulated with the current settings");
         return;
@@ -293,6 +315,7 @@ pub fn physics(l: &mut L, d: &mut Doc) {
             Modifier::Physics(PhysicsModifier::Cloth(_)) => Some((k, "Cloth")),
             Modifier::Physics(PhysicsModifier::SoftBody(_)) => Some((k, "Soft Body")),
             Modifier::Physics(PhysicsModifier::Fluid(_)) => Some((k, "Fluid")),
+            Modifier::Physics(PhysicsModifier::DynamicPaint(_)) => Some((k, "Dynamic Paint")),
             _ => None,
         })
         .collect();

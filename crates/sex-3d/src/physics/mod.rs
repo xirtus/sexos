@@ -9,6 +9,9 @@
 //! * [`particles`]: particle systems (emitter and hair).
 //! * [`field`]: force fields and gravity.
 //! * [`fluid`]: smoke and fire.
+//! * [`liquid`]: the Fluid domain's Liquid type (FLIP/APIC particles and
+//!   the liquid surface mesh).
+//! * [`dynamic_paint`]: Dynamic Paint canvases and brushes.
 //! * [`collision`]: Collision objects as the simulations see them.
 //!
 //! Settings live on the scene ([`ScenePhysics`]: gravity, the rigid body
@@ -23,7 +26,9 @@ pub mod cloth;
 pub mod collision;
 pub mod disk;
 pub mod field;
+pub mod dynamic_paint;
 pub mod fluid;
+pub mod liquid;
 pub mod particles;
 pub mod props;
 pub mod rigid;
@@ -70,6 +75,7 @@ pub enum PhysicsModifier {
     Collision(CollisionSettings),
     ParticleSystem(Box<ParticleSystem>),
     Fluid(Box<FluidSettings>),
+    DynamicPaint(Box<DynamicPaintSettings>),
 }
 
 impl PhysicsModifier {
@@ -81,6 +87,7 @@ impl PhysicsModifier {
             PhysicsModifier::Collision(_) => "Collision",
             PhysicsModifier::ParticleSystem(_) => "ParticleSystem",
             PhysicsModifier::Fluid(_) => "Fluid",
+            PhysicsModifier::DynamicPaint(_) => "DynamicPaint",
         }
     }
 
@@ -92,6 +99,7 @@ impl PhysicsModifier {
             "collision" => PhysicsModifier::Collision(CollisionSettings::default()),
             "particlesystem" => PhysicsModifier::ParticleSystem(Box::default()),
             "fluid" => PhysicsModifier::Fluid(Box::default()),
+            "dynamicpaint" | "dynamic_paint" => PhysicsModifier::DynamicPaint(Box::default()),
             _ => return None,
         })
     }
@@ -103,6 +111,7 @@ impl PhysicsModifier {
             PhysicsModifier::Collision(s) => s,
             PhysicsModifier::ParticleSystem(s) => &mut **s,
             PhysicsModifier::Fluid(s) => &mut **s,
+            PhysicsModifier::DynamicPaint(s) => &mut **s,
         }
     }
 
@@ -115,6 +124,10 @@ impl PhysicsModifier {
         match self {
             PhysicsModifier::Cloth(s) => cloth::modifier_eval(m, scene, cx.owner, slot, &cloth::cloth_key(&o.name, slot), s.point_cache.frame_start),
             PhysicsModifier::SoftBody(s) => cloth::modifier_eval(m, scene, cx.owner, slot, &cloth::softbody_key(&o.name, slot), s.point_cache.frame_start),
+            PhysicsModifier::Fluid(s) if s.fluid_type == FluidType::Domain && s.domain_type == DomainType::Liquid => {
+                liquid::modifier_mesh(scene, cx.owner, &fluid::key(&o.name, slot), s).unwrap_or_else(|| m.clone())
+            }
+            PhysicsModifier::DynamicPaint(s) => dynamic_paint::modifier_eval(m, scene, &dynamic_paint::key(&o.name, slot), s),
             _ => m.clone(),
         }
     }
@@ -146,9 +159,10 @@ pub fn sims(scene: &Scene) -> Vec<SimInfo> {
                 PhysicsModifier::Cloth(s) => (cloth::cloth_key(&o.name, slot), s.point_cache.clone()),
                 PhysicsModifier::SoftBody(s) => (cloth::softbody_key(&o.name, slot), s.point_cache.clone()),
                 PhysicsModifier::ParticleSystem(s) if s.settings.kind == ParticleType::Emitter => (particles::key(&o.name, slot), s.point_cache.clone()),
-                PhysicsModifier::Fluid(s) if s.fluid_type == FluidType::Domain && s.domain_type == DomainType::Gas => {
+                PhysicsModifier::Fluid(s) if s.fluid_type == FluidType::Domain => {
                     (fluid::key(&o.name, slot), PointCacheSettings { frame_start: s.cache_frame_start, frame_end: s.cache_frame_end, use_disk_cache: false })
                 }
+                PhysicsModifier::DynamicPaint(s) if s.use_canvas => (dynamic_paint::key(&o.name, slot), PointCacheSettings { frame_start: s.frame_start, frame_end: s.frame_end, use_disk_cache: false }),
                 _ => continue,
             };
             out.push(SimInfo { key, object: Some(i), slot, start: pc.frame_start, end: pc.frame_end, disk: pc.use_disk_cache });
@@ -192,7 +206,7 @@ fn hash_environment(h: &mut impl Hasher, scene: &Scene) {
             props::hash_into(&mut f.clone(), h);
         }
         for md in &o.modifiers {
-            if let Modifier::Physics(p @ (PhysicsModifier::Collision(_) | PhysicsModifier::Fluid(_))) = md {
+            if let Modifier::Physics(p @ (PhysicsModifier::Collision(_) | PhysicsModifier::Fluid(_) | PhysicsModifier::DynamicPaint(_))) = md {
                 o.name.hash(h);
                 props::hash_into(p.clone().props(), h);
             }
@@ -227,6 +241,12 @@ pub fn update(scene: &Scene) -> UpdateReport {
 }
 
 pub fn update_limited(scene: &Scene, max_steps: usize) -> UpdateReport {
+    update_inner(scene, max_steps, false)
+}
+
+/// `baking`: also step the fluid domains whose Cache Type (Modular, All)
+/// only simulates when baked.
+fn update_inner(scene: &Scene, max_steps: usize, baking: bool) -> UpdateReport {
     let mut rep = UpdateReport::default();
     let caches = &scene.physics.caches;
     let frame = scene.frame_current;
@@ -329,6 +349,51 @@ pub fn update_limited(scene: &Scene, max_steps: usize) -> UpdateReport {
                         },
                     ));
                 }
+                PhysicsModifier::Fluid(s) if s.fluid_type == FluidType::Domain && s.domain_type == DomainType::Liquid => {
+                    let key = fluid::key(&o.name, slot);
+                    // Modular and All only simulate when baked.
+                    if s.cache_type != FluidCacheType::Replay && !baking {
+                        if caches.validate(&key, sig) {
+                            rep.invalidated += 1;
+                        }
+                        continue;
+                    }
+                    rep.add(drive(
+                        caches,
+                        &key,
+                        sig,
+                        init,
+                        s.cache_frame_start,
+                        s.cache_frame_end,
+                        frame,
+                        max_steps,
+                        true,
+                        &|| liquid::initial(scene, i, s).map(SimFrame::Liquid),
+                        &|prev, _| match prev {
+                            SimFrame::Liquid(lf) => liquid::step(scene, i, s, lf).map(SimFrame::Liquid),
+                            _ => None,
+                        },
+                    ));
+                }
+                PhysicsModifier::DynamicPaint(s) if s.use_canvas => {
+                    let key = dynamic_paint::key(&o.name, slot);
+                    rep.add(drive(
+                        caches,
+                        &key,
+                        sig,
+                        init,
+                        s.frame_start,
+                        s.frame_end,
+                        frame,
+                        max_steps,
+                        false,
+                        &|| dynamic_paint::initial(scene, i, s).map(SimFrame::Paint),
+                        &|prev, _| match prev {
+                            SimFrame::Paint(pf) => dynamic_paint::step(scene, i, s, pf).map(SimFrame::Paint),
+                            _ => None,
+                        },
+                    ));
+                }
                 PhysicsModifier::Fluid(s) if s.fluid_type == FluidType::Domain && s.domain_type == DomainType::Gas => {
                     let key = fluid::key(&o.name, slot);
                     rep.add(drive(
@@ -368,6 +433,8 @@ fn frame_bytes(f: &SimFrame) -> usize {
         SimFrame::Points(p) => p.bytes(),
         SimFrame::Particles(p) => p.bytes(),
         SimFrame::Fluid(f) => f.bytes(),
+        SimFrame::Liquid(f) => f.bytes(),
+        SimFrame::Paint(f) => f.bytes(),
     }
 }
 
@@ -413,6 +480,7 @@ fn drive(
     let prepare = |f: SimFrame| -> SimFrame {
         match (&f, resume_only) {
             (SimFrame::Fluid(ff), true) => SimFrame::Fluid(fluid::display_copy(ff)),
+            (SimFrame::Liquid(lf), true) => SimFrame::Liquid(lf.display_copy()),
             _ => f,
         }
     };
@@ -488,7 +556,7 @@ pub fn bake(scene: &mut Scene, keys: &[String], pose: &mut dyn FnMut(&mut Scene,
     for f in start..=end {
         scene.frame_current = f;
         pose(scene, f);
-        update(scene);
+        update_inner(scene, usize::MAX, true);
     }
     scene.frame_current = saved;
     pose(scene, saved);

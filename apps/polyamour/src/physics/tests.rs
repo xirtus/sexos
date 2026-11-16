@@ -42,13 +42,11 @@ fn toggles_add_and_remove() {
     assert!(has_kind(&d.scene.objects[c], "CLOTH"));
     run(&mut d, "physics.toggle", "CLOTH");
     assert!(!has_kind(&d.scene.objects[c], "CLOTH"));
-    for k in ["FORCE_FIELD", "COLLISION", "SOFT_BODY", "FLUID", "RIGID_BODY", "RIGID_BODY_CONSTRAINT"] {
+    for k in ["FORCE_FIELD", "COLLISION", "SOFT_BODY", "FLUID", "DYNAMIC_PAINT", "RIGID_BODY", "RIGID_BODY_CONSTRAINT"] {
         run(&mut d, "physics.toggle", k);
         assert!(has_kind(&d.scene.objects[c], k), "{k}");
     }
     assert!(d.scene.physics.rigidbody_world.is_some(), "a rigid body brings the world");
-    run(&mut d, "physics.toggle", "DYNAMIC_PAINT");
-    assert!(d.report.contains("not available"));
     run(&mut d, "ed.undo", "");
     run(&mut d, "ed.undo", "");
     assert!(d.scene.objects[c].physics.rigid_body.is_none() && d.scene.objects[c].physics.rigid_body_constraint.is_none());
@@ -259,10 +257,18 @@ fn physics_tab_buttons_and_panels() {
     click(&mut app, r);
     app.frame(Input::Tick);
     assert!(props_mut(&mut app).field("Friction").is_some());
-    // Dynamic Paint is greyed: clicking does nothing.
+    // Dynamic Paint: the modifier and its Canvas toggle.
     let r = props_mut(&mut app).field("Dynamic Paint").unwrap();
     click(&mut app, r);
-    assert!(!app.doc.queue.iter().any(|o| o.arg == "DYNAMIC_PAINT"));
+    assert!(has_kind(&app.doc.scene.objects[c], "DYNAMIC_PAINT"));
+    app.frame(Input::Tick);
+    // The Canvas checkbox sits below the fold; toggle it as the button does.
+    assert!(props_mut(&mut app).field("Canvas").is_some(), "Canvas toggle drawn");
+    run(&mut app.doc, "dpaint.type_toggle", "CANVAS");
+    app.frame(Input::Tick);
+    let on = app.doc.scene.objects[c].modifiers.iter().any(|m| matches!(m, Modifier::Physics(PhysicsModifier::DynamicPaint(d)) if d.use_canvas));
+    assert!(on, "the Canvas toggle sets use_canvas");
+    assert!(props_mut(&mut app).field("Surface Type").is_some(), "canvas panels drawn");
     // Scene tab: gravity and the world.
     props_mut(&mut app).tab = Tab::Scene;
     app.frame(Input::Tick);
@@ -272,4 +278,50 @@ fn physics_tab_buttons_and_panels() {
     run(&mut app.doc, "object.particle_system_add", "");
     app.frame(Input::Tick);
     assert!(props_mut(&mut app).field("Number").is_some());
+}
+
+#[test]
+fn quick_liquid_bake_and_free() {
+    let mut d = Doc::default();
+    let c = cube(&d);
+    d.scene.objects[c].transform.scale = Vec3::splat(0.5);
+    d.select_only(Some(c));
+    run(&mut d, "object.quick_liquid", "");
+    let dom = d.active().unwrap();
+    assert_eq!(d.scene.objects[dom].name, "Liquid Domain");
+    let Some(Modifier::Physics(PhysicsModifier::Fluid(f))) = d.scene.objects[dom].modifiers.last_mut() else { panic!() };
+    assert_eq!(f.domain_type, DomainType::Liquid);
+    assert!(f.closed_borders().iter().all(|&b| b), "Quick Liquid closes the borders");
+    f.resolution_max = 12;
+    f.cache_frame_end = 6;
+    assert!(!d.scene.objects[c].visible, "the flow hides");
+    let key = ph::fluid::key("Liquid Domain", d.scene.objects[dom].modifiers.len() - 1);
+    run(&mut d, "fluid.bake_all", "");
+    assert!(d.report.starts_with("Baked 1"), "{}", d.report);
+    let (_, baked, _, frames) = d.scene.physics.caches.status(&key);
+    assert!(baked && frames == 6);
+    d.scene.frame_current = 4;
+    let m = d.scene.evaluated_mesh(dom).unwrap();
+    assert!(m.faces.len() > 20, "the domain shows the liquid");
+    run(&mut d, "fluid.free_all", "");
+    assert_eq!(d.scene.physics.caches.status(&key).3, 0);
+    // The Physics tab draws the liquid panels.
+    let mut app = App::new(1200, 900);
+    app.doc = d;
+    props_mut(&mut app).tab = Tab::Physics;
+    app.frame(Input::Tick);
+    assert!(props_mut(&mut app).field("Domain Type").is_some());
+}
+
+#[test]
+fn liquid_demo_runs() {
+    let mut d = Doc::default();
+    liquid_demo(&mut d);
+    let dom = d.scene.find_object("Liquid Domain").unwrap();
+    let m = d.scene.evaluated_mesh(dom).unwrap();
+    assert!(m.faces.len() > 500, "liquid surface at frame 24");
+    let pool = d.scene.find_object("Pool").unwrap();
+    let pm = d.scene.evaluated_mesh(pool).unwrap();
+    assert!(pm.positions.iter().any(|p| p.z.abs() > 1e-4), "the ball ripples the pool");
+    assert!(pm.positions.iter().all(|p| p.z.abs() < 0.3), "the waves stay stable");
 }

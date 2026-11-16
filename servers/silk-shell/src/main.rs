@@ -37,6 +37,8 @@ mod reader_glue;
 mod bt_panel;
 mod decorations;
 mod decorations_glue;
+mod tray_items;
+mod tray_items_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -222,6 +224,12 @@ unsafe fn app_input_poll(){
             if browser_input_participant(item.destination)&&status==0{
                 sex_pdx::serial_input_record!(("[shell.browser.input] down=1 slot={} accepted=1 payload=redacted",item.destination.route); ("[shell.browser.input] code={} down=1 slot={} accepted=1",key.code,item.destination.route));
             }
+        },
+        app_input::Input::KeyUp(key)=>{
+            let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,key.wire(),0,EV_KEY);
+            if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
+            APP_INPUT.pop();
+            sex_pdx::serial_record!("[shell.program.key.up] pd={} task={} code={:#x} keypad={} status={}",item.destination.subject.pd,item.destination.subject.task,key.code,key.keypad as u8,status);
         },
         app_input::Input::Resize(wire)=>{
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,wire,0,app_input::RESIZE_CLASS);
@@ -10420,6 +10428,50 @@ fn dnd_send(route:u64,op:u64,m:sex_pdx::dnd::Message)->bool{
 }
 // ── The clipboard for ordinary programs (sex_pdx::program_clipboard) ─────
 /// The program the person last pressed a key or clicked in, and when.
+/// The extra keys each program run asked for (`app_key::OP_KEYS`), by pd and task.
+static mut PROGRAM_KEYS:[Option<(sex_pdx::clipboard::Subject,u64)>;16]=[None;16];
+/// The key edge being handled came from the numpad (sexinput sets arg0 bit 8).
+static mut KEY_KEYPAD:bool=false;
+/// Keys held down in a program: the physical code, the key word its press delivered
+/// (the release repeats it) and where it went. A modifier is noted with no press.
+static mut PROGRAM_HELD:[Option<(u8,sex_pdx::app_key::Key,sex_pdx::clipboard::Participant)>;8]=[None;8];
+unsafe fn program_held_note(code:u8,key:sex_pdx::app_key::Key,to:sex_pdx::clipboard::Participant){
+    let slot=PROGRAM_HELD.iter().position(|e|e.is_some_and(|(c,_,_)|c==code)).or_else(||PROGRAM_HELD.iter().position(|e|e.is_none()));
+    if let Some(i)=slot{PROGRAM_HELD[i]=Some((code,key,to));}
+}
+/// Focus moves to `sid`: a program that loses it gets the releases of the keys still
+/// held in it, so nothing stays down there.
+unsafe fn program_held_release(sid:u64){
+    for e in PROGRAM_HELD.iter_mut(){
+        let Some((_,key,to))=*e else{continue};
+        if to.surface==sid{continue}
+        *e=None;
+        APP_INPUT.push(app_input::Item{destination:to,input:app_input::Input::KeyUp(key)});
+    }
+}
+unsafe fn program_keys(subject:sex_pdx::clipboard::Subject)->u64{
+    PROGRAM_KEYS.iter().flatten().find(|(s,_)|*s==subject).map_or(0,|(_,f)|*f)
+}
+/// A program asks for desktop keys or numpad marks; only a running program can.
+unsafe fn shell_keys_message(msg:&sex_pdx::PdxMessage)->bool{
+    use sex_pdx::app_key::{OP_KEYS,DESKTOP_KEYS,KEYPAD};
+    if msg.type_id!=OP_KEYS{return false}
+    let subject=sex_pdx::clipboard::Subject{pd:msg.caller_pd,task:msg.caller_task};
+    let program=APP_CUSTODY.iter().flatten().any(|e|e.target==subject.pd&&e.task==subject.task&&!e.dead&&!e.retired
+        &&app_catalog::by_surface(e.target,e.surface).is_some_and(|r|r.app==app_catalog::App::Program));
+    let flags=msg.arg0&(DESKTOP_KEYS|KEYPAD);
+    if !program||msg.arg0!=flags||msg.arg1!=0||msg.arg2!=0{
+        sex_pdx::serial_record!("[shell.keys.denied] caller={} task={}",subject.pd,subject.task);return true
+    }
+    // Replace this run's entry, else a free one, else one of a program that ended.
+    let live=|s:&sex_pdx::clipboard::Subject|APP_CUSTODY.iter().flatten().any(|e|e.target==s.pd&&e.task==s.task&&!e.dead&&!e.retired);
+    let slot=PROGRAM_KEYS.iter().position(|e|e.is_some_and(|(s,_)|s==subject))
+        .or_else(||PROGRAM_KEYS.iter().position(|e|e.is_none()))
+        .or_else(||PROGRAM_KEYS.iter().position(|e|e.is_some_and(|(s,_)|!live(&s))));
+    if let Some(i)=slot{PROGRAM_KEYS[i]=Some((subject,flags));}
+    sex_pdx::serial_record!("[shell.keys.wanted] pd={} task={} flags={} ok={}",subject.pd,subject.task,flags,slot.is_some() as u8);
+    true
+}
 static mut CLIP_TOUCH:Option<(sex_pdx::clipboard::Subject,u64)>=None;
 /// A copy being put together, and whose.
 static mut CLIP_FROM:Option<sex_pdx::clipboard::Subject>=None;
@@ -10708,6 +10760,8 @@ unsafe fn key_repeat_poll() {
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     // Accessibility first: magnifier/filter chords, sticky, slow and bounce keys.
     if access_glue::key(code,value){return true;}
+    // Typing into a notification's reply field, Esc on a program tray menu (slice S2).
+    if tray_items_glue::key(code,value){return true;}
     let code=if CAPS_AS_CTRL && code==0x3a {0x1d} else {code};
     // A keyboard's own typematic press of the repeating key is dropped; any
     // other press stops the repeat until it reaches a program itself.
@@ -10750,15 +10804,34 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     app_input_poll();return true;
                 }
                 if let Some(destination)=focused_program_participant(){
+                    let wants=program_keys(destination.subject);
+                    let keypad=KEY_KEYPAD&&wants&sex_pdx::app_key::KEYPAD!=0;
+                    // F11 always stays Shell's way out of a program that takes the rest.
+                    let desktop_key=matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59)
+                        &&(code==0x57||wants&sex_pdx::app_key::DESKTOP_KEYS==0);
+                    // A key going up, a modifier's too, reaches the program as the press's
+                    // word with down=0 (walk keys, hold-to-act tools); older programs drop it.
+                    if value==0 && !desktop_key{
+                        // The release repeats what the press delivered (the layout may have
+                        // changed its code); a key whose press went elsewhere sends none.
+                        let held=PROGRAM_HELD.iter_mut().find(|e|e.is_some_and(|(c,_,to)|c==code&&to.subject==destination.subject)).and_then(|e|e.take());
+                        let Some((_,key,_))=held else{return true};
+                        if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::KeyUp(key)}){
+                            sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
+                        }
+                        app_input_poll();return true;
+                    }
+                    if modifier&&value==1{program_held_note(code,APP_MODIFIERS.key(code),destination);}
                     if modifier || value!=1{return true;}
-                    if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
+                    if desktop_key{return false;}
                     let shortcut=if APP_MODIFIERS.key(code).control{keyboard_layout::shortcut_code(code)}else{code};
                     if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(shortcut),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
                         if changed{keyboard_preedit_notice();}app_input_poll();return true;
                     }
-                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code))}){
+                    let key=keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code).with_keypad(keypad);
+                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(key)}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
-                    }else if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}
+                    }else{program_held_note(code,key,destination);if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}}
                     app_input_poll();return true;
                 }
             }
@@ -11029,6 +11102,7 @@ pub unsafe fn media_streaming_ask()->bool{
 }
 /// The volume from settings to Bell; false if Bell did not take the request.
 pub unsafe fn volume_restore(volume:u8)->bool{
+    if net_time_owed()||TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000){return false}
     let (status,_)=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::SET_MASTER,volume.min(100) as u64,0);
     status==0&&MEDIA_ASKS.push(media_keys::Ask::Restore)
 }
@@ -11060,7 +11134,20 @@ static mut TRAY_OWED_VOLUME: Option<u8> = None;
 static mut TRAY_OWED_MUTE: bool = false;
 /// Whether an answer from Bell or sexnet may still be on its way to Shell.
 unsafe fn tray_answer_owed() -> bool {
-    MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000)
+    MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000) || net_time_owed()
+}
+/// sexnet still owes the answer to network time on/off (`config_watch`).
+pub static mut NET_TIME_ASKED: Option<u64> = None;
+pub unsafe fn net_time_owed() -> bool { NET_TIME_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000) }
+/// The kernel keeps one unread answer for Shell: Bell's and sexnet's must not overlap.
+pub unsafe fn answer_owed() -> bool { tray_answer_owed() }
+/// sexnet's answer to network time on/off.
+unsafe fn net_time_receive(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id != 1 || NET_TIME_ASKED.is_none() || msg.caller_pd != TRAY_SEXNET_PD || msg.arg0 >> 56 == sex_pdx::wifi_status::TAG >> 56 { return false; }
+    NET_TIME_ASKED = None;
+    sex_pdx::serial_record!("[shell.network_time.answer] ok={}", (msg.arg0 == sex_pdx::network_time::OK) as u8);
+    tray_send_owed();
+    true
 }
 /// Sends a waiting volume or mute click once nothing else is owed.
 unsafe fn tray_send_owed() {
@@ -11092,7 +11179,7 @@ unsafe fn tray_refresh() {
 }
 unsafe fn tray_ask_wifi() {
     let now = sex_pdx::get_ticks();
-    if !TRAY_WIFI_DUE || MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
+    if !TRAY_WIFI_DUE || MEDIA_ASKS.pending() || net_time_owed() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
     TRAY_WIFI_DUE = false;
     let status = pdx_call(sex_pdx::SLOT_NET, sex_pdx::wifi_status::OP, sex_pdx::wifi_status::STATE, 0, 0).0;
     TRAY_WIFI_ASKED = (status == 0).then_some(now);
@@ -11101,6 +11188,13 @@ unsafe fn tray_ask_wifi() {
 unsafe fn tray_tick() {
     let lost = MEDIA_ASKS.expire(sex_pdx::get_ticks());
     if lost != 0 { sex_pdx::serial_record!("[shell.media.lost] asks={}", lost); }
+    // Another answer filled Shell's one reply slot and sexnet's was dropped: ask again
+    // now rather than at the next 30 s look.
+    if TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) >= 5_000) {
+        TRAY_WIFI_ASKED = None; TRAY_WIFI_DUE = true;
+        sex_pdx::serial_record!("[shell.tray.wifi.lost]");
+        tray_ask_wifi();
+    }
     // The first look waits for boot to settle (Bell, sexnet and the bar up).
     if TRAY_REFRESHED.is_none() && sex_pdx::get_ticks() < 8_000 { return; }
     tray_send_owed();
@@ -11253,6 +11347,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
             event_class, scancode, value, arg0, arg1, event_class));
     }
 
+    if event_class==EV_KEY {KEY_KEYPAD=arg0>>8&1==1;}
     if event_class==EV_KEY && desktop_shortcut(scancode,value){return;}
 
     if event_class == EV_KEY {
@@ -16812,6 +16907,8 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     let Some(text) = assembler.push(msg.arg0, msg.arg1, msg.arg2) else { return true };
     NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = text;
     NOTIFY_TOTAL += 1;
+    // Buttons and a reply field its program gave for it (slice S2).
+    tray_items_glue::notification(&text);
     // Panel line: "Sender: summary".
     let name = notify_sender_name(text.sender);
     let mut line = [0u8; sex_pdx::notify::TEXT_MAX];
@@ -24076,6 +24173,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
 }
 unsafe fn try_set_focus_inner(sid: u64,refresh_children:bool) -> bool {
     launcher_focus_discard(); // A newer explicit focus supersedes a queued launcher focus.
+    program_held_release(sid);
     if sid == 0 {
         FOCUSED_SURFACE_ID = 0;
         serial_println!("[silk-shell.focus.change] from=0 to=0 (clear)");
@@ -24894,6 +24992,8 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
     if TRAY_VIEW.menu != sex_pdx::tray::Menu::None && py >= desktop_bar_height() { tray_click(px, py); return (HitTarget::None, true); }
     if bt_panel::click(px, py, desktop_width(), desktop_bar_height()) { return (HitTarget::None, true); }
+    // Program tray items, their menus and notification cards (slice S2).
+    if tray_items_glue::press(px, py) { return (HitTarget::None, true); }
     // Title bar buttons, double-click maximise and the window menu (slice S1).
     if decorations_glue::press(px, py) { return (HitTarget::None, true); }
     let old_focus = FOCUSED_SURFACE_ID;
@@ -26207,7 +26307,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); }
+        unsafe { decorations_glue::poll(); tray_items_glue::poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         #[cfg(sexos_input_payload_proof)]
@@ -26890,7 +26990,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() || restricted_routes::pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() || tray_items_glue::busy() || restricted_routes::pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -26900,7 +27000,7 @@ pub extern "C" fn _start() -> ! {
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); tray_items_glue::display_restarted(); continue; }
         // The kernel: the power button or the lid. Read the sensors now.
         if msg.type_id == sex_pdx::power::OP_EVENT && msg.caller_pd == 0 { unsafe { LAPTOP_NEXT_POLL = 0; laptop_poll(); } continue; }
         // The kernel's critical-memory word: the poll above acts on it.
@@ -26912,16 +27012,19 @@ pub extern "C" fn _start() -> ! {
             if shell_launch_message(&msg) { continue; }
             if shell_dnd_message(&msg) { continue; }
             if shell_clip_message(&msg) { continue; }
+            if shell_keys_message(&msg) { continue; }
             if config_watch::receive(&msg) { continue; }
             if lock::receive(&msg) { continue; }
             if autofill_routes::receive(&mut msg) {continue;}
             if bt_panel::receive(&msg) { continue; }
             if reader_glue::receive(&msg) { continue; }
+            if tray_items_glue::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
             if media_keys_receive(&msg) { continue; }
             if tray_receive(&msg) { continue; }
+            if net_time_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }
@@ -27202,6 +27305,7 @@ pub extern "C" fn _start() -> ! {
                         }
 
                         // ── Event-class dispatch ──
+                        if event_class==EV_KEY {KEY_KEYPAD=msg.arg0>>8&1==1;}
                         if event_class==EV_KEY && desktop_shortcut(scancode,value) {
                             mutated=true;
                         } else if event_class == EV_KEY && value == 1 {

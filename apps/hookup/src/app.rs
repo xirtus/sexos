@@ -266,7 +266,7 @@ pub fn main() {
         let mut redraw = drain(&mut app, &rx);
         match window.next_within(100) {
             Some(Event::Close) => break,
-            Some(Event::Drop { .. } | Event::DragEnded { .. }) => {}
+            Some(Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_)) => {}
             Some(Event::Resize { .. }) => redraw = true,
             Some(Event::Key(k)) => { app.key(k); redraw = true; }
             Some(Event::Pointer(p)) => {

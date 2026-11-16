@@ -38,6 +38,13 @@ pub const DISK_ASKS: u8 = 33;
 /// Answers one question: `offset` the row, `length` the ticket, with [`YES`] set to let
 /// the run use the disk.
 pub const DISK_ANSWER: u8 = 34;
+// Files reads one request-kind byte from every client, so these kinds must not land on
+// another protocol's (the restricted job kind once shared 30 with DISKS).
+const _: () = {
+    let others = [crate::restricted_job::KIND, crate::package::KIND, crate::console_relay::KIND];
+    let mut i = 0;
+    while i < others.len() { assert!(others[i] < DISKS || others[i] > DISK_ANSWER); i += 1; }
+};
 pub const YES: u64 = 1 << 32;
 
 /// Sectors are 512 bytes; one DISK_IO moves at most this many.

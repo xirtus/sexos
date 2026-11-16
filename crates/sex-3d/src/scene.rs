@@ -97,6 +97,51 @@ pub struct Material {
     /// Principled Volume's inputs). A material with a volume renders with no
     /// surface: its faces only bound the medium.
     pub volume: Option<VolumeSettings>,
+    /// EEVEE's material settings (Blender's Settings panel).
+    pub eevee: MaterialEevee,
+}
+
+/// How EEVEE renders a material's transparency (Blender's Render Method).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RenderMethod {
+    /// Stochastic (hashed) transparency in the opaque pass: order
+    /// independent, it converges over the samples.
+    Dithered,
+    /// Sorted back to front and composited over the opaque surfaces.
+    #[default]
+    Blended,
+}
+
+impl RenderMethod {
+    pub fn label(self) -> &'static str {
+        match self {
+            RenderMethod::Dithered => "Dithered",
+            RenderMethod::Blended => "Blended",
+        }
+    }
+    pub const ALL: [RenderMethod; 2] = [RenderMethod::Dithered, RenderMethod::Blended];
+}
+
+/// EEVEE material options (Blender's Material > Settings).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MaterialEevee {
+    pub render_method: RenderMethod,
+    /// Backface Culling: Camera (hide faces pointing away from the view).
+    pub backface_culling: bool,
+    /// Backface Culling: Shadow (back faces cast no shadow).
+    pub backface_culling_shadow: bool,
+    /// Transparent Shadows: shadows follow the surface's transparency.
+    pub transparent_shadows: bool,
+    /// Raytraced Transmission (screen-space refraction of what is behind).
+    pub screen_refraction: bool,
+    /// Thickness for the refraction (0: march the depth buffer).
+    pub refraction_depth: f32,
+}
+
+impl Default for MaterialEevee {
+    fn default() -> Self {
+        MaterialEevee { render_method: RenderMethod::Blended, backface_culling: false, backface_culling_shadow: false, transparent_shadows: true, screen_refraction: false, refraction_depth: 0.0 }
+    }
 }
 
 /// Principled Volume inputs, for homogeneous media in the path tracer.
@@ -135,6 +180,7 @@ impl Default for Material {
             node_tree: None,
             pass_index: 0,
             volume: None,
+            eevee: MaterialEevee::default(),
         }
     }
 }
@@ -402,11 +448,17 @@ pub struct Light {
     /// Multiple importance sampling: when off, only light sampling sees the
     /// light (rays never hit it).
     pub use_mis: bool,
+    /// EEVEE contact shadows: screen-space rays towards the light catch
+    /// occluders the shadow map misses, within `distance`; surfaces thinner
+    /// than `thickness` are assumed.
+    pub contact_shadow: bool,
+    pub contact_shadow_distance: f32,
+    pub contact_shadow_thickness: f32,
 }
 
 impl Default for Light {
     fn default() -> Self {
-        Light { kind: LightKind::Point, color: Vec3::ONE, power: 1000.0, radius: 0.1, shape: AreaShape::Square, size_y: 1.0, spread: core::f32::consts::PI, max_bounces: 1024, cast_shadow: true, use_mis: true }
+        Light { kind: LightKind::Point, color: Vec3::ONE, power: 1000.0, radius: 0.1, shape: AreaShape::Square, size_y: 1.0, spread: core::f32::consts::PI, max_bounces: 1024, cast_shadow: true, use_mis: true, contact_shadow: false, contact_shadow_distance: 0.2, contact_shadow_thickness: 0.2 }
     }
 }
 

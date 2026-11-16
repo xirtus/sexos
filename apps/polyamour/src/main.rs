@@ -8,7 +8,9 @@
 //! a mask and face sets in the Sculpting workspace; `--gp-demo` draws Grease
 //! Pencil objects in Draw Mode in the 2D Animation workspace; `--seq-demo`
 //! shows a small edit in the Video Editing workspace; `--physics-demo` steps
-//! falling boxes, a draped cloth, particles and smoke to frame 40.
+//! falling boxes, a draped cloth, particles and smoke to frame 40;
+//! `--liquid-demo` steps a liquid dam break (with an obstacle, a tap and a
+//! drain) and a Dynamic Paint ripple to frame 24.
 use polyamour::input::Input;
 #[cfg(target_os = "hermit")]
 use polyamour::input::{Button, Key, Mods};
@@ -27,6 +29,18 @@ fn open_arg(app: &mut App, path: &str) {
     }
 }
 
+/// Blender's `--python FILE` and `--python-expr EXPR`: run a script once the
+/// window is up, through the live kernel where pipes work (batch otherwise).
+fn run_python_arg(app: &mut App, flag: &str, value: &str) {
+    match flag {
+        "--python" => match std::fs::read_to_string(value) {
+            Ok(src) => polyamour::python::run_script(&mut app.doc, value, &src),
+            Err(e) => app.doc.report = format!("Cannot open {value}: {e}"),
+        },
+        _ => polyamour::python::run_script(&mut app.doc, "<expr>", value),
+    }
+}
+
 #[cfg(not(target_os = "hermit"))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -36,6 +50,7 @@ fn main() {
     let mut sculpt_demo = false;
     let mut physics_demo = false;
     let mut gp_demo = false;
+    let mut python: Vec<(String, String)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -57,6 +72,10 @@ fn main() {
                 polyamour::physics::demo(&mut app.doc);
                 physics_demo = true;
             }
+            "--liquid-demo" => {
+                polyamour::physics::liquid_demo(&mut app.doc);
+                physics_demo = true;
+            }
             "--gp-demo" => {
                 polyamour::gpencil::demo(&mut app.doc);
                 gp_demo = true;
@@ -67,10 +86,18 @@ fn main() {
                 app.doc.want_workspace = Some("Animation".into());
                 rig_demo = true;
             }
+            f @ ("--python" | "--python-expr") => {
+                if let Some(v) = it.next() {
+                    python.push((f.to_string(), v.clone()));
+                }
+            }
             p => open_arg(&mut app, p),
         }
     }
     app.frame(Input::Tick);
+    for (f, v) in &python {
+        run_python_arg(&mut app, f, v);
+    }
     app.frame(Input::Tick);
     if sculpt_demo {
         // The Sculpting workspace's view frames the sphere, the sidebar
@@ -118,7 +145,7 @@ fn main() {
         app.frame(Input::Tick);
     }
     let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--gp-demo] [--seq-demo] [scene file]");
+        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--liquid-demo] [--gp-demo] [--seq-demo] [--python FILE] [--python-expr EXPR] [scene file]");
         return;
     };
     let f = std::fs::File::create(&out).expect("create png");
@@ -127,12 +154,36 @@ fn main() {
     enc.write_header().unwrap().write_image_data(&app.painter.to_rgba()).unwrap();
 }
 
-/// Shell's key codes (PS/2 set 1) to Blender's key names.
+/// Shell's key codes (PS/2 set 1) to Blender's key names. `keypad`: Shell marks
+/// numpad keys (asked for with `want_keys(KEYPAD)`), so the grey cursor block that
+/// shares their codes is told apart.
 #[cfg(target_os = "hermit")]
-fn key_of(code: u8, ctrl: bool, ch: Option<char>) -> Option<Key> {
+fn key_of(code: u8, keypad: bool, ctrl: bool, ch: Option<char>) -> Option<Key> {
+    if keypad {
+        return Some(match code {
+            0x47 => Key::Num(7),
+            0x48 => Key::Num(8),
+            0x49 => Key::Num(9),
+            0x4A => Key::NumMinus,
+            0x4B => Key::Num(4),
+            0x4C => Key::Num(5),
+            0x4D => Key::Num(6),
+            0x4E => Key::NumPlus,
+            0x4F => Key::Num(1),
+            0x50 => Key::Num(2),
+            0x51 => Key::Num(3),
+            0x52 => Key::Num(0),
+            0x53 => Key::NumDot,
+            0x37 => Key::NumStar,
+            0x35 => Key::NumSlash,
+            0x1C => Key::NumEnter,
+            _ => return None,
+        });
+    }
     Some(match code {
-        // Programs get the grey Page Up/Down on the numpad's codes; with Ctrl
-        // they are Blender's workspace switch, alone the numpad views.
+        // Without the keypad mark (an older Shell), the grey Page Up/Down share the
+        // numpad's codes: with Ctrl they are Blender's workspace switch, alone the
+        // numpad views.
         0x49 if ctrl => Key::PageUp,
         0x51 if ctrl => Key::PageDown,
         0x01 => Key::Esc,
@@ -180,10 +231,22 @@ fn main() {
     use sex_std::sex_pdx::app_pointer::Kind;
     let window = sex_std::window();
     window.title(b"Polyamour");
+    // Tab (Edit Mode), F1-F10 and F12 (Render), backtick (view pie) and a numpad
+    // told apart from the grey keys, as in Blender.
+    window.want_keys(sex_std::sex_pdx::app_key::DESKTOP_KEYS | sex_std::sex_pdx::app_key::KEYPAD);
     let (w, h) = window.size();
     let mut app = App::new(w.max(640), h.max(400));
-    if let Some(p) = std::env::args().nth(1) {
-        open_arg(&mut app, &p);
+    let mut python: Vec<(String, String)> = Vec::new();
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--python" | "--python-expr" => {
+                if let Some(v) = args.next() {
+                    python.push((a.clone(), v));
+                }
+            }
+            p => open_arg(&mut app, p),
+        }
     }
     let mut mods;
     let mut last_ws = String::from("Layout");
@@ -199,6 +262,14 @@ fn main() {
     show(&app, window);
     let (target, task) = sex_std::identity();
     sex_std::sex_pdx::serial_record!("[polyamour.ready] target={} task={} size={}x{}", target, task, app.painter.width, app.painter.height);
+    for (f, v) in &python {
+        run_python_arg(&mut app, f, v);
+        let mode = if app.doc.python.live() { "live" } else { "batch" };
+        sex_std::sex_pdx::serial_record!("[polyamour.python] mode={} objects={} why={}", mode, app.doc.scene.objects.len(), app.doc.python.unavailable_reason().replace('\n', " | "));
+        sex_std::sex_pdx::serial_record!("[polyamour.report] {}", app.doc.report);
+        app.frame(Input::Tick);
+        show(&app, window);
+    }
     while !app.quit {
         let ev = if app.doc.playing {
             window.next_within(1000 / 24)
@@ -223,12 +294,12 @@ fn main() {
             Some(Event::Key(k)) => {
                 mods = Mods { shift: k.shift, ctrl: k.control, alt: k.alt };
                 let text = sex_std::sex_app::text(k);
-                // The Shell keeps F1-F12, Tab and Insert for itself, so
-                // F12 (Render Image) has a stand-in until programs can ask for them.
+                // Ctrl+Shift+R stays a stand-in for F12 (Render Image) where Shell
+                // keeps the function keys.
                 if k.control && k.shift && k.code == 0x13 {
                     Some(Input::Key { key: Key::F(12), mods: Mods::NONE, text: None })
                 } else {
-                    key_of(k.code, k.control, text).map(|key| Input::Key { key, mods, text })
+                    key_of(k.code, k.keypad, k.control, text).map(|key| Input::Key { key, mods, text })
                 }
             }
             Some(Event::Pointer(p)) => {

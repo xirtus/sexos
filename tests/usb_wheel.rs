@@ -164,7 +164,9 @@ fn batch(report:HidPointerRawReport,last:&mut u8)->Vec<(u64,u64,u64)> {
  for _ in 0..16 {let mut calls=0;poll_input_delivery(&mut keys,&mut pointer,|a,b,c|{calls+=1;sent.push((a,b,c));Ok(true)});assert_eq!(calls,4);}
  for raw in 128..192 {assert!(arrival.ps2(&mut keys,raw));}
  while keys.len>0 {poll_input_delivery(&mut keys,&mut pointer,|a,b,c|{sent.push((a,b,c));Ok(true)});}
- assert_eq!(&sent[..192],&(0..192).map(|raw|((raw&127)as u64,(raw<128)as u64,EV_KEY)).collect::<Vec<_>>());assert!(sent.iter().all(|e|e.2==EV_KEY));
+ // Numpad codes (0x37, 0x47..=0x53) carry the keypad mark in bit 8.
+ let keypad=|code:u64|(matches!(code,0x37|0x47..=0x53) as u64)<<8;
+ assert_eq!(&sent[..192],&(0..192).map(|raw|((raw&127)as u64|keypad((raw&127)as u64),(raw<128)as u64,EV_KEY)).collect::<Vec<_>>());assert!(sent.iter().all(|e|e.2==EV_KEY));
 }
 #[test]fn upstream_usb_old_click_barrier_survives_full_before_later_key(){
  let _lock=USB_TEST_LOCK.lock().unwrap();unsafe{POINTER_OUTBOX=UsbPointerOutbox::new();KEYBOARD_OUTBOX=UsbPointerOutbox::new();INPUT_ARRIVAL=0;}
@@ -223,6 +225,16 @@ fn batch(report:HidPointerRawReport,last:&mut u8)->Vec<(u64,u64,u64)> {
  // Media usages: mute and volume, then play/pause, stop, previous, next (a headset's buttons via Cufflinks).
  assert_eq!([0x7f,0x80,0x81,0xe8,0xe9,0xea,0xeb].map(hid_to_ps2),[Some(0x75),Some(0x77),Some(0x76),Some(0x78),Some(0x7a),Some(0x7f),Some(0x7c)]);
 }
+#[test]fn numpad_keys_are_marked_and_grey_keys_and_usb_follow_suit(){
+ let mut keys=KeyboardOutbox::new();let mut arrival=InputArrival::new();
+ // Numpad 8, grey Up (E0 48), numpad Enter (E0 1C), Enter.
+ for raw in [0x48,0xE0,0x48,0xE0,0x1C,0x1C] {assert!(arrival.ps2(&mut keys,raw));}
+ let(mut key,mut mods)=(0,0);assert!(keys.usb(0x60,0,&mut key,&mut mods));assert!(keys.usb(0x52,0,&mut key,&mut mods));
+ let mut pointer=PointerOutbox::new();let mut sent=Vec::new();
+ while keys.len>0 {poll_input_delivery(&mut keys,&mut pointer,|a,b,c|{sent.push((a,b,c));Ok(true)});}
+ // USB keypad 8 (0x60) then grey Up (0x52): the release of one and the press of the other.
+ assert_eq!(sent,[(0x148,1,EV_KEY),(0x48,1,EV_KEY),(0x11C,1,EV_KEY),(0x1C,1,EV_KEY),(0x148,1,EV_KEY),(0x148,0,EV_KEY),(0x48,1,EV_KEY)]);
+}
 
 #[test]
 fn actual_keyboard_outbox_diagnostics_do_not_disclose_key_identity_in_normal_builds() {
@@ -234,7 +246,8 @@ fn actual_keyboard_outbox_diagnostics_do_not_disclose_key_identity_in_normal_bui
         assert!(arrival.ps2(&mut keys,raw));
         let mut delivered=Vec::new();
         keys.poll(&mut 4,|code,down,class|{delivered.push((code,down,class));Ok(true)});
-        assert_eq!(delivered,vec![(raw,1,EV_KEY)],"logging must never change delivery");
+        let keypad=if matches!(raw,0x37|0x47..=0x53) {0x100} else {0};
+        assert_eq!(delivered,vec![(raw|keypad,1,EV_KEY)],"logging must never change delivery");
         let log=KEY_LOG.with(|log|log.borrow().clone());
         assert!(!log.is_empty());
         if !input_diagnostics::PAYLOAD_PROOF {

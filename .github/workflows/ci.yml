@@ -23,7 +23,8 @@ jobs:
   host:
     name: Host regressions
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 23 min warm; a cold cargo cache (after a red master) needs more.
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -224,8 +225,10 @@ jobs:
       run: bash scripts/batik_host_gate.sh
     - name: Power off and restart through ACPI (host half)
       run: bash scripts/power_host_gate.sh
-    - name: Drag VM ABI layouts and VMX/EPT encodings (host half)
-      run: bash scripts/drag_host_gate.sh
+    - name: Drag VM ABI layouts and VMX/EPT encodings (host half), Crossdress cell on KVM when the runner has it
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        bash scripts/drag_host_gate.sh
     - name: Laptop power model (embedded controller, battery, backlight, thermal, _CRS)
       run: cargo test --locked -p sex-laptop
     - name: Touchpad model (I2C HID, report descriptors, contacts, gestures)
@@ -410,7 +413,7 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
         python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" --out "$RUNNER_TEMP/sexos-fuzz"
-    - name: Drag VM syscall 110 refused cleanly without VMX (QEMU TCG; the guest path needs --accel kvm)
+    - name: Drag VM syscall 110 and Crossdress refused cleanly without VMX (QEMU TCG; the guest paths need --accel kvm)
       run: |
         truncate -s 1G "$RUNNER_TEMP/drag-source.img"
         python3 scripts/drag_gate.py --accel tcg --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drag-source.img" --out "$RUNNER_TEMP/sexos-drag"
@@ -439,7 +442,7 @@ jobs:
   media:
     name: Browser media streaming and seeking
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -533,7 +536,7 @@ jobs:
   programs:
     name: Programs, packages and ports
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -693,6 +696,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/decor-source.img"
         python3 scripts/window_decorations_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/decor-source.img" --out "$RUNNER_TEMP/sexos-desktop/decorations"
+    - name: Program tray items (a menu row reaches the program) and a notification's inline reply
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/tray-items-source.img"
+        python3 scripts/tray_items_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-items-source.img" --out "$RUNNER_TEMP/sexos-desktop/tray-items"
     - name: Magnifier and colour filters (accessibility)
       run: |
         truncate -s 256M "$RUNNER_TEMP/access-source.img"
@@ -799,9 +806,12 @@ jobs:
   recording:
     name: Lossless encoder guest proof
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 100
     steps:
     - uses: actions/checkout@v4
+      with:
+        # Splicy Studio lives in its own repository (xirtus/Splicy), at apps/splicy-studio.
+        submodules: true
     - uses: ./.github/actions/setup
       with:
         recording: "true"
@@ -826,6 +836,14 @@ jobs:
         bash scripts/build_splicy.sh
         truncate -s 1G "$RUNNER_TEMP/splicy-source.img"
         python3 scripts/program_splicy_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --require-export --out "$RUNNER_TEMP/recording/splicy"
+    - name: FilmCraft's editing engine runs on SexOS (edit, undo, WAV and H.264 export)
+      run: |
+        bash scripts/build_splicy_probe.sh
+        python3 scripts/program_splicy_probe_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-probe"
+    - name: Splicy Studio opens a clip and its transcript in FilmCraft's editor in a SexOS window
+      run: |
+        bash scripts/build_splicy_studio.sh
+        python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"
     - name: Preserve encoder evidence
       if: always()
       uses: actions/upload-artifact@v4
