@@ -36,7 +36,7 @@ use sex_app::{files, Event, Nav, Window};
 use sex_pdx::app_pointer::Kind;
 use sex_pdx::stream::{Side, Stream};
 use sex_vt::keys::{self, Key, Mods};
-use sex_vt::render::{cell_for_height, Cache, Faces, Painter};
+use sex_vt::render::{cell_for_height, Cache, Faces, Glide, Painter};
 use sex_vt::{Parser, Screen};
 mod shell_host;
 use spindle_panes::{Divider, PaneId, Rect, Split, Tabs, Toward};
@@ -154,7 +154,10 @@ struct Pane {
     last_click: (u64, usize, usize),
     /// A carriage return was the last byte fed, so a following newline is not doubled.
     after_cr: bool,
+    /// Smooth scrolling: the view already moved, and what is shown glides after it.
+    glide: Glide,
 }
+
 
 impl Pane {
     fn new(width: usize, height: usize, cell_h: usize) -> Pane {
@@ -165,7 +168,7 @@ impl Pane {
         Pane {
             screen: Screen::new(cols, rows), parser: Parser::new(), painter, width, height, buf: vec![0; width * height], cell_h, closed: false,
             cwd: Vec::new(), line: Vec::new(), at: 0, history: Vec::new(), recall: None,
-            job: None, drag: None, focused_drawn: false, osc_title: None, osc_cwd: None, progress: None, mode: Mode::Normal, prompt_at: (0, 0), slot: 0, engine: spindle_shell::Engine::new(), shell_wait: None, last_click: (0, usize::MAX, usize::MAX), after_cr: false,
+            job: None, drag: None, focused_drawn: false, osc_title: None, osc_cwd: None, progress: None, mode: Mode::Normal, prompt_at: (0, 0), slot: 0, engine: spindle_shell::Engine::new(), shell_wait: None, last_click: (0, usize::MAX, usize::MAX), after_cr: false, glide: Glide::default(),
         }
     }
     /// Program output: lone newlines become CR LF, as a terminal's output processing does.
@@ -188,6 +191,7 @@ impl Pane {
         self.width = width;
         self.height = height;
         self.buf = vec![self.screen.theme().bg; width * height];
+        self.glide = Glide::default();
         let (cols, rows) = self.painter.grid(self.width, self.height);
         self.screen.resize(cols, rows);
         if let Some(Job { runner: Runner::Guest(g), .. }) = &self.job { g.stream.set_size(cols as u32, rows as u32); }
@@ -208,7 +212,8 @@ impl Pane {
     fn draw(&mut self, focused: bool) -> bool {
         if let Some(t) = self.screen.take_title() { self.osc_title = Some(String::from_utf8_lossy(t).into_owned()); }
         let dirty = self.screen.take_dirty();
-        if !dirty.iter().any(|d| *d) && self.focused_drawn == focused { return false; }
+        let gliding = self.glide.left != 0 || !self.glide.shown.is_empty();
+        if !dirty.iter().any(|d| *d) && self.focused_drawn == focused && !gliding { return false; }
         let dirty = if self.focused_drawn != focused { Vec::new() } else { dirty };
         self.focused_drawn = focused;
         let (w, h) = (self.width, self.height);
@@ -218,7 +223,34 @@ impl Pane {
         let used = self.screen.rows() * self.painter.cell_h;
         if used < h { let bg = self.screen.theme().bg; self.buf[used * w..h * w].fill(bg); }
         self.draw_mode(cache);
+        if self.glide.left != 0 {
+            self.glide.compose(&self.buf, w, h);
+            self.glide.step();
+        } else if !self.glide.shown.is_empty() {
+            // The glide ended: the pane's own pixels are shown again.
+            self.glide.shown = Vec::new();
+            self.glide.from = Vec::new();
+        }
         true
+    }
+    /// What the window shows for this pane: the glide while one runs, else its pixels.
+    fn shown(&self) -> &[u32] { if self.glide.left != 0 { &self.glide.shown } else { &self.buf } }
+    /// Scrolls the view `lines` back (negative: forward), gliding there over a few frames.
+    fn scroll_smoothly(&mut self, lines: isize) {
+        let before = self.screen.view_offset() as isize;
+        self.screen.scroll_view(lines);
+        let moved = self.screen.view_offset() as isize - before;
+        if moved == 0 { return; }
+        let px = moved as i32 * self.painter.cell_h as i32;
+        let h = self.height as i32;
+        // Further than a screen there is nothing to keep in sight: jump.
+        let left = self.glide.left + px;
+        if left.abs() >= h { self.glide = Glide::default(); return; }
+        // What is on screen now is where the glide starts from.
+        self.glide.from = self.shown().to_vec();
+        self.glide.left = left;
+        self.glide.span = left;
+        sex_pdx::serial_record!("[term.glide] lines={} px={}", moved, left);
     }
     /// What the current mode shows over the screen: hint labels, or a status line.
     fn draw_mode(&mut self, cache: &mut Cache) {
@@ -1058,7 +1090,7 @@ impl Pane {
         let (col, row) = ((p.x.max(0) as usize) / cw, (p.y.max(0) as usize) / ch);
         let at = self.screen.point_at(col, row);
         match p.kind {
-            Kind::Wheel { steps } => self.screen.scroll_view(steps as isize * 3),
+            Kind::Wheel { steps } => self.scroll_smoothly(steps as isize * 3),
             Kind::Down { button: 0 } => {
                 let now = sex_pdx::get_ticks();
                 let double = now.saturating_sub(self.last_click.0) < 400 && (self.last_click.1, self.last_click.2) == (col, row);
@@ -1452,7 +1484,8 @@ impl Spindle {
         }
         for id in gone { self.close_pane(id); }
     }
-    fn running(&self) -> bool { self.panes.values().any(|p| p.job.is_some()) }
+    /// A program runs or a pane is gliding: the loop wakes every frame.
+    fn running(&self) -> bool { self.panes.values().any(|p| p.job.is_some() || p.glide.left != 0 || !p.glide.shown.is_empty()) }
 
     fn draw(&mut self, window: &mut Window) {
         let area = self.area();
@@ -1480,7 +1513,7 @@ impl Spindle {
             for row in 0..ph {
                 let at = (r.y + row) * w + r.x;
                 if at + pw > pixels.len() { break; }
-                pixels[at..at + pw].copy_from_slice(&pane.buf[row * pane.width..row * pane.width + pw]);
+                pixels[at..at + pw].copy_from_slice(&pane.shown()[row * pane.width..row * pane.width + pw]);
             }
         }
         if changed {

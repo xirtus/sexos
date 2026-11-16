@@ -237,3 +237,27 @@ fn blend(bg: u32, fg: u32, a: u8) -> u32 {
     let mix = |s: u32| (((fg >> s) & 0xFF) * a + ((bg >> s) & 0xFF) * (255 - a)) / 255;
     mix(16) << 16 | mix(8) << 8 | mix(0)
 }
+
+/// A scroll in progress, drawn over a few frames instead of in one jump. The view has
+/// already moved; `left` pixels of the move are still to be shown (positive when the
+/// text still has to come down). Rows beyond the new frame come from `from`, what was
+/// on screen when the glide (re)started, `span` pixels before the end.
+#[derive(Default)]
+pub struct Glide { pub left: i32, pub span: i32, pub from: alloc::vec::Vec<u32>, pub shown: alloc::vec::Vec<u32> }
+
+impl Glide {
+    /// Composes the frame `now` (the pane's pixels) offset by what is left into `shown`.
+    pub fn compose(&mut self, now: &[u32], w: usize, h: usize) {
+        self.shown.resize(w * h, 0);
+        for y in 0..h {
+            // The new frame moved by `left` too much: row y shows its row y + left, and
+            // past its edge, the old frame's (which was `span` further along).
+            let src = y as i32 + self.left;
+            let (rows, at): (&[u32], i32) = if src >= 0 && (src as usize) < h { (now, src) } else { (&self.from, src - self.span) };
+            let at = at.clamp(0, h as i32 - 1) as usize;
+            self.shown[y * w..y * w + w].copy_from_slice(&rows[at * w..at * w + w]);
+        }
+    }
+    /// One frame further: most of what is left goes, so the scroll eases out.
+    pub fn step(&mut self) { self.left -= self.left * 5 / 8 + self.left.signum(); if self.left.abs() < 2 { self.left = 0; } }
+}
