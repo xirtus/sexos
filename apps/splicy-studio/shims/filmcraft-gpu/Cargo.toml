@@ -3,8 +3,8 @@ name = "filmcraft-gpu"
 version = "0.20.1"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "FilmCraft's GPU compositor interface with no GPU behind it: FilmCraft composites on the CPU"
+description = "The GPU compositor interface with no GPU behind it: Splicy composites on the CPU"
 
 [dependencies]
 eframe = { version = "0.37", path = "../eframe" }
-filmcraft-render = { git = "https://github.com/storytold/filmcraft", rev = "e63e1d790c8e59f208f8ff31de6f6847a1bb206b" }
+filmcraft-render = { path = "../../core/crates/render" }

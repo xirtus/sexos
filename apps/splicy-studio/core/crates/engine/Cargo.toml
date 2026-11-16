@@ -1,0 +1,57 @@
+[package]
+name = "filmcraft-engine"
+description = "Splicy engine façade: session, command registry, history, media pool"
+version = "0.20.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+
+[features]
+default = []
+# Speech-to-text with Whisper (candle, CPU). Off by default and in wasm builds.
+whisper = ["filmcraft-speech/whisper"]
+# Speech-model downloads over HTTPS.
+speech-download = ["filmcraft-speech/download"]
+# Natural voices for Text to Speech: Kokoro-82M on candle (CPU) and their download.
+neural-voices = ["filmcraft-tts/kokoro", "speech-download"]
+
+[dependencies]
+filmcraft-time = {path = "../time"}
+filmcraft-geom = {path = "../geom"}
+filmcraft-color = {path = "../color"}
+filmcraft-frame = {path = "../frame"}
+filmcraft-media = {path = "../media"}
+craft-media = {version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "156b491b91f3693f4fce53bf69bb97791f51198f", default-features = false, features = ["mxf"]}
+filmcraft-codecs = {path = "../codecs"}
+filmcraft-project = {path = "../project"}
+filmcraft-edit = {path = "../edit"}
+filmcraft-render = {path = "../render"}
+filmcraft-scopes = {path = "../scopes"}
+filmcraft-text = {path = "../text"}
+filmcraft-audio-dsp = {path = "../audio-dsp"}
+filmcraft-export = {path = "../export"}
+filmcraft-format = {path = "../format"}
+filmcraft-interchange = {path = "../interchange"}
+filmcraft-captions = {path = "../captions"}
+filmcraft-speech = {path = "../speech"}
+filmcraft-tts = {path = "../tts"}
+serde = {version = "1", features = ["derive", "rc"]}
+serde_json = {version = "1"}
+thiserror = {version = "2"}
+log = {version = "0.4"}
+roxmltree = {version = "0.21"}
+chrono = {version = "0.4.45", default-features = false, features = ["std"]}
+craft-docpath = {version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "47107f660191de2f0b425569506f4daa4faadac9"}
+web-time = "1"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+needless_range_loop = "allow"
+type_complexity = "allow"

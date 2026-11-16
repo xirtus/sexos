@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Splicy Studio on SexOS: FilmCraft's editor in a SexOS window, painted by sex-egui.
+"""Splicy Studio on SexOS: Splicy's full editor in a SexOS window, painted by sex-egui.
 
 `run splicy-studio @talk.webm @talk.words` imports the clip Splicy's own gate uses (VP9 and
-Opus, decoded by FilmCraft's pure-Rust decoders), makes it a sequence, and turns
-talk.words into the clip's FilmCraft transcript (11 words), which the Text panel's
-Transcript tab edits. FilmCraft's own interface shows it: menus, Program monitor with
+Opus, decoded by Splicy's pure-Rust decoders), makes it a sequence, and turns
+talk.words into the clip's transcript (11 words), which the Text panel's
+Transcript tab edits. Splicy's interface shows it: menus, Program monitor with
 the picture, project bin, timeline with filmstrip and waveform.
 The window is zoomed and photographed (splicy-studio.png); the picture must hold
-FilmCraft's dark panels, its blue accent, and a lit Program monitor. Then a click on the
+Splicy's dark panels, its blue accent, and a lit Program monitor. Then a click on the
 Program monitor's play button must keep frames coming. Build it first:
 scripts/build_splicy_studio.sh."""
 import argparse,http.server,os,re,shutil,subprocess,sys,tempfile,threading,time
@@ -49,7 +49,7 @@ threading.Thread(target=server.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 # Fetching a 28 MiB program and painting a full editor on the CPU take longer than 300 s.
 os.environ.setdefault('SEXOS_GATE_BOUND','2400')
-# FilmCraft holds its project, decoded frames and caches: about 180 MiB for the demo
+# Splicy holds its project, decoded frames and caches: about 180 MiB for the demo
 # project, more than the default 512 MiB guest leaves a program.
 os.environ.setdefault('SEXOS_GATE_MEMORY','4G')
 from quil_autosave_gate import boot
@@ -91,8 +91,8 @@ def main():
   dark=sum(n for (r,g2,b),n in colours.items() if max(r,g2,b)<60)
   blue=sum(n for (r,g2,b),n in colours.items() if b>180 and r<90 and 80<g2<160)
   print('--- splicy-studio colours ---',[(f'{r:02x}{g2:02x}{b:02x}',n) for (r,g2,b),n in colours.most_common(12)],file=sys.stderr)
-  assert dark>total//2,f'FilmCraft dark panels: {dark} of {total}'
-  assert blue>20,f'FilmCraft blue accent: {blue} pixels'
+  assert dark>total//2,f'Splicy dark panels: {dark} of {total}'
+  assert blue>20,f'Splicy blue accent: {blue} pixels'
   assert len(colours)>200,f'only {len(colours)} colours: not an editor'
   text=t();assert 'KERNEL PANIC' not in text and 'KERNEL PAGE FAULT' not in text and '[splicy.fatal]' not in text
   print({'ok':True,'first_frame':first[0],'tile':(x,y,w,h),'dark':dark,'blue':blue,'colours':len(colours)})

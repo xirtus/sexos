@@ -22,16 +22,16 @@ pub mod app {
 
 pub mod suite {
     use super::app::App;
-    pub const FILMCRAFT: App = App {
-        id: "ai.storyteller.filmcraft",
-        name: "FilmCraft",
+    pub const SPLICY: App = App {
+        id: "os.sex.splicy",
+        name: "Splicy",
         tagline: "Video editor",
-        repo: "storytold/filmcraft",
+        repo: "xirtus/sexos",
         former_ids: &[],
         former_names: &[],
         icon_png: None,
         accent: None,
-        developer: "Storyteller",
+        developer: "SexOS",
     };
 }
 

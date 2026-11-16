@@ -1,6 +1,7 @@
-//! Splicy Studio: FilmCraft's editor (github.com/storytold/filmcraft, MIT OR Apache-2.0)
-//! on SexOS. FilmCraft's engine and egui interface run unchanged; sex-egui gives them the
-//! window, keys, pointer and a CPU painter, the way eframe does on a desktop.
+//! Splicy Studio: the SexOS video editor. Its editing core (core/: engine and egui
+//! interface, which began as FilmCraft's MIT OR Apache-2.0 code) carries only Splicy's name;
+//! sex-egui gives it the window, keys, pointer and a CPU painter, the way eframe does on a
+//! desktop.
 //!
 //! On the host, `splicy-studio shot.png [WIDTH HEIGHT]` runs the same app through a few
 //! frames and paints the last one with sex-egui's painter: what the window would show.
@@ -12,10 +13,10 @@ use filmcraft_engine::Session;
 use filmcraft_ui_egui::FilmcraftApp;
 use serde_json::{Value, json};
 
-/// FilmCraft's session. With `--demo` it holds FilmCraft's demo project. Otherwise each
+/// The editing session. With `--demo` it holds the demo project. Otherwise each
 /// media file named (`run splicy-studio @talk.webm @talk.words`) is imported, the first
 /// gets a sequence of its own, and a `.words` transcript (`START_MS END_MS WORD` lines,
-/// Splicy's format) becomes that clip's FilmCraft transcript, which the Text panel's
+/// Splicy's format) becomes that clip's transcript, which the Text panel's
 /// Transcript tab edits: select words, then extract (ripple delete) or lift.
 fn session() -> Session {
     let mut session = Session::default();
@@ -59,7 +60,7 @@ fn session() -> Session {
     session
 }
 
-/// Splicy's `.words` lines as a FilmCraft transcript (times in FilmCraft's ticks).
+/// Splicy's `.words` lines as an engine transcript (times in the engine's ticks).
 fn transcript(text: &str) -> Value {
     let tick = |ms: i64| ms * (filmcraft_time::TICKS_PER_SECOND as i64 / 1000);
     let words: Vec<Value> = text
@@ -111,7 +112,7 @@ fn main() {
     let start = std::time::Instant::now();
     let mut pixels = vec![0u32; width * height];
     let mut stats = Default::default();
-    // FilmCraft loads its fonts and lays its docks out over the first frames.
+    // The interface loads its fonts and lays its docks out over the first frames.
     for _ in 0..12 {
         let raw = sex_egui::raw_input(width, height, 1.0, ctx.zoom_factor(), start.elapsed().as_secs_f64(), Vec::new());
         let output = pass(&mut app, &mut frame, &ctx, raw);

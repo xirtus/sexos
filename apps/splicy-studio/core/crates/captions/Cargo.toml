@@ -1,0 +1,26 @@
+[package]
+name = "filmcraft-captions"
+description = "Splicy captions: SRT, WebVTT, SCC, MCC, EBU STL and TTML/IMSC1/DFXP import/export, caption layout and burn-in rasterisation"
+version = "0.20.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+
+[dependencies]
+filmcraft-time = {path = "../time"}
+filmcraft-color = {path = "../color"}
+filmcraft-project = {path = "../project"}
+filmcraft-text = {path = "../text"}
+craft-captions = {version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "47107f660191de2f0b425569506f4daa4faadac9"}
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+needless_range_loop = "allow"
+type_complexity = "allow"

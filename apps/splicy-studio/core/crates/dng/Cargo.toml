@@ -1,0 +1,35 @@
+[package]
+name = "filmcraft-dng"
+description = "Clean-room DNG / CinemaDNG camera RAW decoder (TIFF container, lossless JPEG, DNG colour pipeline)"
+version = "0.20.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+rust-version = "1.95"
+
+[features]
+default = ["threads"]
+threads = ["dep:rayon"]
+# A small DNG and lossless JPEG writer for synthesising test files (not used by the app).
+writer = []
+# serde derives on the raw settings (`ProcessOptions`) for UI state and project files.
+serde = ["dep:serde"]
+
+[dependencies]
+rayon = {version = "1", optional = true}
+# Baseline (lossy) JPEG for Compression 34892 tiles: the JPEG decoder the workspace already uses
+# (crates/codecs, crates/media), pure Rust.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+serde = {version = "1", features = ["derive", "rc"], optional = true}
+thiserror = {version = "2"}
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+needless_range_loop = "allow"
+type_complexity = "allow"

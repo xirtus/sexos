@@ -1,0 +1,1186 @@
+//! Effect presets (Premiere's Presets bin): one or more configured effects — parameters,
+//! keyframes and masks — saved under a name and applied to clips.
+//!
+//! - **Keyframes.** Times are stored relative to the in point of the clip the preset was saved
+//!   from, with that clip's length (`source_duration`, media ticks). Applying re-times them per
+//!   [`KeyframeMode`]: *Scale* stretches them over the target clip, *Anchor to In Point* keeps their
+//!   distance from the target's in point, *Anchor to Out Point* their distance from its out point.
+//!   Saving with `keyframes: "none"` stores every parameter as its value at the playhead.
+//! - **Geometry.** Point parameters and mask paths are in clip pixels; they are scaled by the
+//!   target / source frame-size ratio so a preset made on 4K media lands in the same place on HD.
+//! - **Intrinsic effects** (Motion, Opacity, Time Remapping) replace the target clip's own instance;
+//!   standard effects are added at the end of the clip's effects, like `effects.apply`.
+//! - **Library.** Built-in presets are authored in code ([`builtin_presets`]); user presets persist
+//!   in `<data dir>/effect-presets.json`. Preset files (export/import) are JSON:
+//!   `{"format": "splicy.effect-presets", "version": 1, "presets": [EffectPreset…]}`.
+//!
+//! Commands: `presets.list`, `presets.save`, `presets.apply` (undoable), `presets.delete`,
+//! `presets.rename`, `presets.export`, `presets.import`.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use filmcraft_geom::{Affine, Vec2};
+use filmcraft_project::{ClipId, EffectInstance, Keyframe, Mask, MaskPath, Param, ParamValue, TrackItem, TrackKind};
+use filmcraft_time::{TICKS_PER_SECOND, Tick};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use crate::commands::{CommandSpec, always, bad, clip_p, has_seq, str_p};
+use crate::{EngineError, Result, Session};
+
+pub const FILE_FORMAT: &str = "splicy.effect-presets";
+const LIBRARY_FILE: &str = "effect-presets.json";
+/// Premiere `.prfpset` (and Splicy `.json`) files dropped in this folder are detected and
+/// loaded automatically on start-up (and by `presets.scan`).
+pub const LIBRARY_DIR: &str = "Effect Presets";
+const LIBRARY_INDEX: &str = "effect-preset-library.json";
+
+/// How a preset's keyframes are placed on the target clip.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KeyframeMode {
+    #[default]
+    Scale,
+    AnchorToIn,
+    AnchorToOut,
+}
+
+impl KeyframeMode {
+    pub fn from_name(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().replace([' ', '_', '-'], "").as_str() {
+            "scale" => Some(KeyframeMode::Scale),
+            "anchorin" | "anchortoin" | "anchortoinpoint" | "in" => Some(KeyframeMode::AnchorToIn),
+            "anchorout" | "anchortoout" | "anchortooutpoint" | "out" => Some(KeyframeMode::AnchorToOut),
+            _ => None,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            KeyframeMode::Scale => "Scale",
+            KeyframeMode::AnchorToIn => "Anchor to In Point",
+            KeyframeMode::AnchorToOut => "Anchor to Out Point",
+        }
+    }
+}
+
+/// A saved effect preset.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EffectPreset {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default)]
+    pub keyframes: KeyframeMode,
+    /// Length (media ticks) of the clip the preset was saved from; keyframe times are relative to its in point.
+    pub source_duration: Tick,
+    /// Frame size (clip pixels) of the clip the preset was saved from.
+    #[serde(default = "hd")]
+    pub source_size: (u32, u32),
+    pub effects: Vec<EffectInstance>,
+    /// Built-in (not saved, cannot be deleted).
+    #[serde(skip)]
+    pub builtin: bool,
+}
+
+/// Default 1080p HD dimensions.
+fn hd() -> (u32, u32) {
+    (1920, 1080)
+}
+
+#[derive(Serialize, Deserialize)]
+struct PresetFile {
+    format: String,
+    version: u32,
+    presets: Vec<EffectPreset>,
+}
+
+/// One preset file loaded by the native library scan.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct LibraryFile {
+    /// Modification time (nanoseconds since the epoch) and length: cheap change detection.
+    stamp: String,
+    /// The (unique) preset names this file contributed, so a changed or removed file can be
+    /// replaced without touching presets the user saved or imported by hand.
+    names: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LibraryIndexFile {
+    format: String,
+    version: u32,
+    files: BTreeMap<String, LibraryFile>,
+}
+
+const LIBRARY_INDEX_FORMAT: &str = "splicy.effect-preset-library";
+
+/// What one library scan did.
+#[derive(Clone, Debug, Default)]
+pub struct ScanReport {
+    pub files: usize,
+    /// Presets added or refreshed (including re-imports of changed files).
+    pub imported: usize,
+    /// Library presets removed because their file disappeared or changed.
+    pub removed: usize,
+    /// Presets inside those files that Splicy cannot apply (third-party plugins).
+    pub skipped: usize,
+    /// Presets that apply but dropped parameters the built-in effect does not expose.
+    pub warnings: usize,
+    /// The loaded preset list or the file index changed.
+    pub changed: bool,
+    pub errors: Vec<String>,
+}
+
+impl ScanReport {
+    pub fn json(&self) -> Value {
+        json!({
+            "files": self.files,
+            "imported": self.imported,
+            "removed": self.removed,
+            "skipped": self.skipped,
+            "warnings": self.warnings,
+            "changed": self.changed,
+            "errors": self.errors,
+        })
+    }
+}
+
+/// User presets (+ where they persist) and the file-backed preset library.
+#[derive(Default)]
+pub struct PresetLibrary {
+    pub user: Vec<EffectPreset>,
+    dir: Option<PathBuf>,
+    /// Files under `<data dir>/Effect Presets` and the presets each contributed.
+    library: BTreeMap<String, LibraryFile>,
+    user_load_failed: bool,
+}
+
+impl PresetLibrary {
+    /// Persist user presets in `data_dir`, load them, and detect the preset library
+    /// (`<data dir>/Effect Presets`, scanned recursively for `.prfpset` and Splicy `.json`).
+    pub fn set_dir(&mut self, data_dir: &Path) {
+        self.dir = Some(data_dir.to_path_buf());
+        let path = data_dir.join(LIBRARY_FILE);
+        if let Ok(bytes) = std::fs::read(&path) {
+            match parse_file(&bytes) {
+                Ok(p) => self.user = p,
+                Err(e) => {
+                    log::warn!("{}: {e}", path.display());
+                    let mut backup = path.with_extension("json.unreadable");
+                    let mut n = 1u32;
+                    while backup.exists() {
+                        backup = path.with_extension(format!("json.unreadable.{n}"));
+                        n += 1;
+                    }
+                    if let Err(e) = std::fs::rename(&path, &backup) {
+                        log::warn!("{}: {e}", backup.display());
+                        self.user_load_failed = true;
+                    }
+                }
+            }
+        }
+        let index_path = data_dir.join(LIBRARY_INDEX);
+        if let Ok(bytes) = std::fs::read(&index_path) {
+            match serde_json::from_slice::<LibraryIndexFile>(&bytes) {
+                Ok(f) if f.format == LIBRARY_INDEX_FORMAT && f.version <= 1 => self.library = f.files,
+                Ok(_) => log::warn!("{}: unsupported preset library index", index_path.display()),
+                Err(e) => log::warn!("{}: {e}", index_path.display()),
+            }
+        }
+        let report = self.scan_library();
+        // Only rewrite the (possibly multi-megabyte) user file when the library actually
+        // contributed or removed presets; a plain start-up must not touch it.
+        if (report.imported > 0 || report.removed > 0)
+            && let Err(e) = self.persist()
+        {
+            log::warn!("{e}");
+        }
+        if report.changed
+            && let Err(e) = self.persist_index()
+        {
+            log::warn!("{e}");
+        }
+        for e in report.errors {
+            log::warn!("{e}");
+        }
+    }
+
+    /// Re-scan the preset library now (`presets.scan`; the Effects panel also does this when its
+    /// Presets folder is opened).
+    pub fn rescan(&mut self) -> ScanReport {
+        let report = self.scan_library();
+        let mut errors = report.errors.clone();
+        if (report.imported > 0 || report.removed > 0)
+            && let Err(e) = self.persist()
+        {
+            errors.push(e);
+        }
+        if report.changed
+            && let Err(e) = self.persist_index()
+        {
+            errors.push(e);
+        }
+        ScanReport { errors, ..report }
+    }
+
+    fn persist(&self) -> std::result::Result<(), String> {
+        if self.user_load_failed {
+            return Err("refusing to persist presets while user file failed to load (preserved on disk)".into());
+        }
+        let Some(d) = &self.dir else { return Ok(()) };
+        let _ = std::fs::create_dir_all(d);
+        let bytes = file_bytes(&self.user);
+        filmcraft_format::atomic_write(&d.join(LIBRARY_FILE), &bytes).map_err(|e| e.to_string())
+    }
+
+    fn persist_index(&self) -> std::result::Result<(), String> {
+        let Some(d) = &self.dir else { return Ok(()) };
+        let _ = std::fs::create_dir_all(d);
+        let f = LibraryIndexFile { format: LIBRARY_INDEX_FORMAT.into(), version: 1, files: self.library.clone() };
+        let bytes = serde_json::to_vec_pretty(&f).map_err(|e| e.to_string())?;
+        filmcraft_format::atomic_write(&d.join(LIBRARY_INDEX), &bytes).map_err(|e| e.to_string())
+    }
+
+    /// The preset library folder, creating it so users can drop files into it.
+    pub fn library_dir(&self) -> Option<PathBuf> {
+        let d = self.dir.as_ref()?.join(LIBRARY_DIR);
+        let _ = std::fs::create_dir_all(&d);
+        Some(d)
+    }
+
+    /// The file a library preset came from (None for built-in and hand-imported presets).
+    pub fn source_of(&self, name: &str) -> Option<&str> {
+        self.library.iter().find(|(_, f)| f.names.iter().any(|n| n == name)).map(|(path, _)| path.as_str())
+    }
+
+    pub fn is_library_preset(&self, name: &str) -> bool {
+        self.source_of(name).is_some()
+    }
+
+    /// Scan `<data dir>/Effect Presets` recursively. Unchanged files with all their presets still
+    /// loaded are skipped; changed files replace exactly the presets they contributed; files that
+    /// disappeared take their presets with them.
+    fn scan_library(&mut self) -> ScanReport {
+        let mut report = ScanReport::default();
+        let Some(dir) = self.library_dir() else { return report };
+        let mut files = Vec::new();
+        let mut unreadable = Vec::new();
+        collect_preset_files(&dir, 0, &mut files, &mut unreadable);
+        for u in &unreadable {
+            report.errors.push(format!("{}: cannot read directory", u.display()));
+        }
+        files.sort();
+        report.files = files.len();
+
+        let mut seen: BTreeMap<String, LibraryFile> = BTreeMap::new();
+        for path in files {
+            let Some(key) = path.to_str().map(str::to_string) else { continue };
+            let Some(stamp) = file_stamp(&path) else {
+                report.errors.push(format!("{}: cannot read file information", path.display()));
+                if let Some(old) = self.library.get(&key) {
+                    seen.insert(key, old.clone());
+                }
+                continue;
+            };
+            if let Some(old) = self.library.get(&key)
+                && old.stamp == stamp
+                && old.names.iter().all(|n| self.user.iter().any(|p| p.name == *n))
+            {
+                seen.insert(key, old.clone());
+                continue;
+            }
+            if std::fs::metadata(&path).map(|m| m.len() > crate::prfpset::MAX_BYTES).unwrap_or(false) {
+                report.errors.push(format!("{}: file is too large for a preset", path.display()));
+                if let Some(old) = self.library.get(&key) {
+                    seen.insert(key, old.clone());
+                }
+                continue;
+            }
+            let bytes = match std::fs::read(&path) {
+                Ok(b) => b,
+                Err(e) => {
+                    // Keep the old entry: a temporarily unreadable file should not delete presets.
+                    report.errors.push(format!("{}: {e}", path.display()));
+                    if let Some(old) = self.library.get(&key) {
+                        seen.insert(key, old.clone());
+                    }
+                    continue;
+                }
+            };
+            if bytes.len() as u64 > crate::prfpset::MAX_BYTES {
+                report.errors.push(format!("{}: file is too large for a preset", path.display()));
+                if let Some(old) = self.library.get(&key) {
+                    seen.insert(key, old.clone());
+                }
+                continue;
+            }
+            let parsed = match parse_file_detailed(&bytes) {
+                Ok(p) => p,
+                Err(e) => {
+                    report.errors.push(format!("{}: {e}", path.display()));
+                    if let Some(old) = self.library.get(&key) {
+                        seen.insert(key, old.clone());
+                    }
+                    continue;
+                }
+            };
+            if let Some(old) = self.library.get(&key) {
+                for name in &old.names {
+                    let before = self.user.len();
+                    self.user.retain(|p| p.name != *name);
+                    if self.user.len() < before {
+                        report.removed += 1;
+                    }
+                }
+            }
+            let mut names = Vec::new();
+            report.warnings += parsed.warnings.len();
+            for preset in parsed.presets {
+                let name = unique_preset_name(&self.user, &preset.name);
+                let mut preset = preset;
+                preset.name = name.clone();
+                names.push(name);
+                self.user.push(preset);
+            }
+            report.imported += names.len();
+            report.skipped += parsed.skipped.len();
+            if names.is_empty() && !parsed.skipped.is_empty() {
+                report.errors.push(format!(
+                    "{}: no supported effects ({} preset{} skipped)",
+                    path.display(),
+                    parsed.skipped.len(),
+                    if parsed.skipped.len() == 1 { "" } else { "s" }
+                ));
+            }
+            seen.insert(key, LibraryFile { stamp, names });
+        }
+
+        for (key, file) in &self.library {
+            if !seen.contains_key(key) && unreadable.iter().any(|u| Path::new(key).starts_with(u)) {
+                seen.insert(key.clone(), file.clone());
+            }
+        }
+        let missing: Vec<String> = self.library.keys().filter(|k| !seen.contains_key(*k)).cloned().collect();
+        for key in missing {
+            if let Some(old) = self.library.remove(&key) {
+                report.changed = true;
+                for name in old.names {
+                    let before = self.user.len();
+                    self.user.retain(|p| p.name != name);
+                    if self.user.len() < before {
+                        report.removed += 1;
+                    }
+                }
+            }
+        }
+        if self.library != seen {
+            report.changed = true;
+        }
+        self.library = seen;
+        report
+    }
+
+    /// Built-in and user presets (user presets shadow built-ins of the same name).
+    pub fn all(&self) -> Vec<EffectPreset> {
+        let mut v: Vec<EffectPreset> = builtin_presets().into_iter().filter(|b| !self.user.iter().any(|u| u.name == b.name)).collect();
+        v.extend(self.user.iter().cloned());
+        v
+    }
+    pub fn find(&self, name: &str) -> Option<EffectPreset> {
+        let needle = name.trim();
+        // 1. Exact match in user presets or built-in presets
+        if let Some(p) = self.user.iter().find(|p| p.name == needle) {
+            return Some(p.clone());
+        }
+        if let Some(b) = builtin_presets().into_iter().find(|p| p.name == needle) {
+            return Some(b);
+        }
+
+        // 2. Case-insensitive exact match
+        if let Some(p) = self.user.iter().find(|p| p.name.eq_ignore_ascii_case(needle)) {
+            return Some(p.clone());
+        }
+        if let Some(b) = builtin_presets().into_iter().find(|p| p.name.eq_ignore_ascii_case(needle)) {
+            return Some(b);
+        }
+
+        // Helper to normalize path separators: replace "/", "\", "->" with " ▸ " and trim
+        let normalize = |s: &str| -> String {
+            s.replace(['/', '\\'], " ▸ ").replace("->", " ▸ ").split('▸').map(str::trim).filter(|seg| !seg.is_empty()).collect::<Vec<_>>().join(" ▸ ")
+        };
+        let norm_needle = normalize(needle);
+        if norm_needle.is_empty() {
+            return None;
+        }
+
+        // 3. Match normalized path
+        if let Some(p) = self.user.iter().find(|p| normalize(&p.name).eq_ignore_ascii_case(&norm_needle)) {
+            return Some(p.clone());
+        }
+
+        // 4. Match leaf name (e.g. "DROP SHADOW" or "Glow" or "LENS DISTORTION -25")
+        if !norm_needle.contains('▸') {
+            let leaf_hits: Vec<_> = self
+                .user
+                .iter()
+                .filter(|p| {
+                    let p_norm = normalize(&p.name);
+                    p_norm.rsplit('▸').next().unwrap_or(&p_norm).trim().eq_ignore_ascii_case(&norm_needle)
+                })
+                .collect();
+            if let [p] = leaf_hits.as_slice() {
+                return Some((*p).clone());
+            }
+        }
+
+        // 5. Unambiguous path-suffix match only (e.g. "EFFECTS ▸ DROP SHADOW")
+        let n_norm = format!(" ▸ {}", norm_needle.to_ascii_lowercase());
+        let hits: Vec<_> = self.user.iter().filter(|p| normalize(&p.name).to_ascii_lowercase().ends_with(&n_norm)).collect();
+        if let [p] = hits.as_slice() {
+            return Some((*p).clone());
+        }
+
+        None
+    }
+}
+
+/// Ensure a preset name does not collide with existing presets by appending a counter.
+fn unique_preset_name(existing: &[EffectPreset], base: &str) -> String {
+    let base = base.trim();
+    let base = if base.is_empty() { "Preset" } else { base };
+    if !existing.iter().any(|p| p.name == base) {
+        return base.to_string();
+    }
+    for n in 2..10_000u32 {
+        let candidate = format!("{base} ({n})");
+        if !existing.iter().any(|p| p.name == candidate) {
+            return candidate;
+        }
+    }
+    format!("{base} ({})", existing.len() + 2)
+}
+
+/// Compute a fingerprint based on file modification timestamp and size.
+fn file_stamp(path: &Path) -> Option<String> {
+    let md = std::fs::metadata(path).ok()?;
+    let len = md.len();
+    let mtime = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+    Some(format!("{mtime}-{len}"))
+}
+
+/// Recursively discover preset files within a directory, collecting unreadable folders.
+fn collect_preset_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>, unreadable: &mut Vec<PathBuf>) {
+    if depth > 8 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        unreadable.push(dir.to_path_buf());
+        return;
+    };
+    for entry in entries {
+        let Ok(entry) = entry else {
+            unreadable.push(dir.to_path_buf());
+            continue;
+        };
+        let Ok(kind) = entry.file_type() else { continue };
+        // Never follow links: a linked folder could point back up the tree.
+        if kind.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if kind.is_dir() {
+            collect_preset_files(&path, depth + 1, out, unreadable);
+            continue;
+        }
+        if !kind.is_file() {
+            continue;
+        }
+        let supported = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("prfpset") || e.eq_ignore_ascii_case("json"));
+        if supported {
+            out.push(path);
+        }
+    }
+}
+
+/// Serialize a slice of effect presets into formatted JSON bytes.
+fn file_bytes(presets: &[EffectPreset]) -> Vec<u8> {
+    let f = PresetFile { format: FILE_FORMAT.into(), version: 1, presets: presets.to_vec() };
+    serde_json::to_vec_pretty(&f).unwrap_or_default()
+}
+
+/// Whether `path` or `bytes` represents an effect preset file (Premiere `.prfpset` XML or Splicy JSON).
+pub fn is_preset_file(path: &Path, bytes: &[u8]) -> bool {
+    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("prfpset")) {
+        return true;
+    }
+    let trimmed = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    let head = &trimmed[..trimmed.len().min(1024)];
+    let s = match std::str::from_utf8(head) {
+        Ok(s) => s,
+        // A character cut by the 1024-byte window is not an encoding error.
+        Err(e) if e.error_len().is_none() => std::str::from_utf8(&head[..e.valid_up_to()]).unwrap_or(""),
+        Err(_) => return false,
+    }
+    .trim_start();
+    if s.starts_with('<') && s.contains("<PremiereData") {
+        return true;
+    }
+    if s.starts_with('{') && s.contains(FILE_FORMAT) {
+        return true;
+    }
+    false
+}
+
+/// Read a preset file, detecting Premiere `.prfpset` XML and Splicy JSON by content (the
+/// extension is not trusted). The XML path reports presets it had to skip and parameters the
+/// target effects do not have.
+pub fn parse_file_detailed(bytes: &[u8]) -> std::result::Result<crate::prfpset::PrfpsetImport, String> {
+    if bytes.len() as u64 > crate::prfpset::MAX_BYTES {
+        return Err(format!("preset file is too large ({} MB; the limit is {} MB)", bytes.len() / (1024 * 1024), crate::prfpset::MAX_BYTES / (1024 * 1024)));
+    }
+    let text = std::str::from_utf8(bytes).map_err(|_| "effect presets must be UTF-8 text".to_string())?;
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let trimmed = text.trim_start();
+    if trimmed.starts_with('<') {
+        if !trimmed.contains("<PremiereData") {
+            return Err("not an effect preset file (unrecognised XML document)".into());
+        }
+        return crate::prfpset::parse_prfpset(text);
+    }
+    if !trimmed.starts_with('{') {
+        return Err("not an effect preset file (expected Premiere XML or Splicy JSON)".into());
+    }
+    let f: PresetFile = serde_json::from_str(text).map_err(|e| format!("not an effect preset file: {e}"))?;
+    if f.format != FILE_FORMAT {
+        return Err(format!("not an effect preset file (format `{}`)", f.format));
+    }
+    if f.version > 1 {
+        return Err(format!("preset file version {} is newer than this build reads (1)", f.version));
+    }
+    for p in &f.presets {
+        if p.effects.iter().any(|e| e.def().is_none()) {
+            return Err(format!("preset `{}` uses an effect this build doesn't have", p.name));
+        }
+    }
+    Ok(crate::prfpset::PrfpsetImport { presets: f.presets, skipped: Vec::new(), warnings: Vec::new() })
+}
+
+/// Backwards-compatible form of [`parse_file_detailed`] for callers that only need the presets.
+pub fn parse_file(bytes: &[u8]) -> std::result::Result<Vec<EffectPreset>, String> {
+    Ok(parse_file_detailed(bytes)?.presets)
+}
+
+// ---------------------------------------------------------------- built-ins
+
+/// Helper to construct a keyframe at seconds offset.
+fn kf(t_secs: f64, v: ParamValue) -> Keyframe {
+    Keyframe::new(Tick((t_secs * TICKS_PER_SECOND as f64).round() as i64), v)
+}
+
+/// A fresh instance of a built-in effect (a bare instance named `id` if the registry lacks it,
+/// which the preset tests rule out).
+pub(crate) fn effect_instance(id: &str) -> EffectInstance {
+    filmcraft_project::find_effect(id).map(|d| d.instance()).unwrap_or_else(|| EffectInstance {
+        effect: id.to_string(),
+        enabled: true,
+        params: Default::default(),
+        masks: Vec::new(),
+        post_fader: false,
+        essential: false,
+        layer: None,
+    })
+}
+
+/// Construct an effect instance with initial parameter overrides.
+fn effect(id: &str, params: &[(&str, ParamValue)]) -> EffectInstance {
+    let mut e = effect_instance(id);
+    for (k, v) in params {
+        if let Some(p) = e.params.get_mut(*k) {
+            p.value = v.clone();
+        }
+    }
+    e
+}
+
+/// Apply animated keyframes to an effect parameter.
+fn animate(e: &mut EffectInstance, param: &str, keys: Vec<Keyframe>) {
+    if let Some(p) = e.params.get_mut(param) {
+        p.value = keys[0].value.clone();
+        p.keyframes = keys;
+    }
+}
+
+/// Helper to build a built-in effect preset definition.
+fn preset(name: &str, description: &str, keyframes: KeyframeMode, secs: f64, effects: Vec<EffectInstance>) -> EffectPreset {
+    EffectPreset {
+        name: name.into(),
+        description: description.into(),
+        keyframes,
+        source_duration: Tick((secs * TICKS_PER_SECOND as f64) as i64),
+        source_size: hd(),
+        effects,
+        builtin: true,
+    }
+}
+
+/// Presets that ship with Splicy (original work: parameter values chosen by us).
+pub fn builtin_presets() -> Vec<EffectPreset> {
+    let f = ParamValue::Float;
+    let mut blur_in = effect("gaussian_blur", &[]);
+    animate(&mut blur_in, "blurriness", vec![kf(0.0, f(60.0)), kf(1.0, f(0.0))]);
+    let mut blur_out = effect("gaussian_blur", &[]);
+    animate(&mut blur_out, "blurriness", vec![kf(9.0, f(0.0)), kf(10.0, f(60.0))]);
+    let mut fade_in = effect("opacity", &[]);
+    animate(&mut fade_in, "opacity", vec![kf(0.0, f(0.0)), kf(1.0, f(100.0))]);
+    let mut fade_out = effect("opacity", &[]);
+    animate(&mut fade_out, "opacity", vec![kf(9.0, f(100.0)), kf(10.0, f(0.0))]);
+    let mut mosaic_in = effect("mosaic", &[]);
+    animate(&mut mosaic_in, "horizontal", vec![kf(0.0, f(8.0)), kf(1.0, f(400.0))]);
+    animate(&mut mosaic_in, "vertical", vec![kf(0.0, f(5.0)), kf(1.0, f(225.0))]);
+    // soft oval vignette: darken outside an inverted, heavily feathered ellipse
+    let mut vignette = effect("brightness_contrast", &[("brightness", f(-60.0))]);
+    let mut m = Mask::new("Mask (1)", MaskPath::ellipse(Vec2::new(960.0, 540.0), Vec2::new(900.0, 520.0)));
+    m.inverted = true;
+    m.feather.value = f(320.0);
+    vignette.masks.push(m);
+    let mut spotlight = effect("brightness_contrast", &[("brightness", f(18.0)), ("contrast", f(10.0))]);
+    let mut m = Mask::new("Mask (1)", MaskPath::ellipse(Vec2::new(960.0, 540.0), Vec2::new(420.0, 420.0)));
+    m.feather.value = f(160.0);
+    spotlight.masks.push(m);
+    let warm =
+        effect("tint", &[("black", ParamValue::Color([0.08, 0.04, 0.02, 1.0])), ("white", ParamValue::Color([1.0, 0.93, 0.8, 1.0])), ("amount", f(35.0))]);
+    let mut pip = effect("motion", &[("scale", f(35.0)), ("position", ParamValue::Vec2(Vec2::new(1530.0, 270.0)))]);
+    pip.enabled = true;
+    vec![
+        preset("Blur In", "Gaussian Blur from 60 to 0 over the first second", KeyframeMode::AnchorToIn, 10.0, vec![blur_in]),
+        preset("Blur Out", "Gaussian Blur from 0 to 60 over the last second", KeyframeMode::AnchorToOut, 10.0, vec![blur_out]),
+        preset("Fade In", "Opacity 0 → 100 % over the first second", KeyframeMode::AnchorToIn, 10.0, vec![fade_in]),
+        preset("Fade Out", "Opacity 100 → 0 % over the last second", KeyframeMode::AnchorToOut, 10.0, vec![fade_out]),
+        preset("Mosaic In", "Large blocks resolving to the picture over the first second", KeyframeMode::AnchorToIn, 10.0, vec![mosaic_in]),
+        preset("Soft Vignette", "Darkens outside a feathered oval mask", KeyframeMode::Scale, 10.0, vec![vignette]),
+        preset("Spotlight", "Brightens inside a feathered circular mask", KeyframeMode::Scale, 10.0, vec![spotlight]),
+        preset("Warm Tint", "Warm highlights, brown shadows", KeyframeMode::Scale, 10.0, vec![warm]),
+        preset("PiP 35% Upper Right", "Picture-in-picture: 35 % scale in the upper right", KeyframeMode::Scale, 10.0, vec![pip]),
+    ]
+}
+
+// ---------------------------------------------------------------- save / apply
+
+/// Every parameter of an effect instance (its own and its masks').
+fn params_mut(e: &mut EffectInstance) -> Vec<&mut Param> {
+    let mut v: Vec<&mut Param> = e.params.values_mut().collect();
+    for m in &mut e.masks {
+        v.extend(m.params_mut());
+    }
+    v
+}
+
+/// Media length of a track item.
+fn media_len(it: &TrackItem) -> Tick {
+    Tick((it.duration.0 as f64 * it.speed.abs()).round() as i64)
+}
+
+/// Build a preset from effects of a clip. `mt` = the clip's media time at the playhead.
+pub fn capture(it: &TrackItem, idx: &[usize], name: &str, description: &str, mode: Option<KeyframeMode>, mt: Tick, size: (u32, u32)) -> EffectPreset {
+    let mut effects: Vec<EffectInstance> = idx.iter().filter_map(|i| it.effects.get(*i).cloned()).collect();
+    for e in &mut effects {
+        e.essential = false;
+        for p in params_mut(e) {
+            match mode {
+                None => {
+                    // without keyframes: the value at the playhead
+                    p.value = p.value_at(mt);
+                    p.keyframes.clear();
+                }
+                Some(_) => {
+                    for k in &mut p.keyframes {
+                        k.time -= it.source_in;
+                    }
+                }
+            }
+        }
+    }
+    EffectPreset {
+        name: name.to_string(),
+        description: description.to_string(),
+        keyframes: mode.unwrap_or_default(),
+        source_duration: media_len(it),
+        source_size: size,
+        effects,
+        builtin: false,
+    }
+}
+
+/// Map a preset keyframe time (relative to the source in point) onto `target`.
+pub fn retime(rel: Tick, mode: KeyframeMode, source_len: Tick, target: &TrackItem) -> Tick {
+    let tin = target.source_in;
+    let tlen = media_len(target);
+    match mode {
+        KeyframeMode::AnchorToIn => tin + rel,
+        KeyframeMode::AnchorToOut => tin + tlen - (source_len - rel),
+        KeyframeMode::Scale => {
+            if source_len.0 <= 0 {
+                tin + rel
+            } else {
+                tin + Tick((rel.0 as i128 * tlen.0 as i128 / source_len.0 as i128) as i64)
+            }
+        }
+    }
+}
+
+/// Scale geometric parameter values to fit target sequence dimensions.
+fn scale_value(v: &mut ParamValue, sx: f64, sy: f64) {
+    match v {
+        ParamValue::Vec2(p) if !p.x.is_nan() => *p = Vec2::new(p.x * sx, p.y * sy),
+        ParamValue::Path(path) => *path = path.transformed(&Affine::scale(sx, sy)),
+        _ => {}
+    }
+}
+
+/// The preset's effects prepared for `target` (keyframes re-timed, geometry scaled).
+pub fn instantiate(p: &EffectPreset, target: &TrackItem, size: (u32, u32)) -> Vec<EffectInstance> {
+    let sx = size.0 as f64 / p.source_size.0.max(1) as f64;
+    let sy = size.1 as f64 / p.source_size.1.max(1) as f64;
+    let geometric = (sx - 1.0).abs() > 1e-9 || (sy - 1.0).abs() > 1e-9;
+    let mut out = p.effects.clone();
+    for e in &mut out {
+        // Point params scale only when they are positions (the def kind says so)
+        let point_ids: Vec<String> = e
+            .def()
+            .map(|d| d.params.iter().filter(|q| matches!(q.kind, filmcraft_project::ParamKind::Point)).map(|q| q.id.to_string()).collect())
+            .unwrap_or_default();
+        for (id, prm) in e.params.iter_mut() {
+            for k in &mut prm.keyframes {
+                k.time = retime(k.time, p.keyframes, p.source_duration, target);
+            }
+            prm.keyframes.sort_by_key(|k| k.time);
+            prm.keyframes.dedup_by_key(|k| k.time);
+            if geometric && point_ids.contains(id) {
+                scale_value(&mut prm.value, sx, sy);
+                for k in &mut prm.keyframes {
+                    scale_value(&mut k.value, sx, sy);
+                }
+            }
+        }
+        for m in &mut e.masks {
+            for prm in m.params_mut() {
+                for k in &mut prm.keyframes {
+                    k.time = retime(k.time, p.keyframes, p.source_duration, target);
+                }
+                prm.keyframes.sort_by_key(|k| k.time);
+                prm.keyframes.dedup_by_key(|k| k.time);
+                if geometric {
+                    scale_value(&mut prm.value, sx, sy);
+                    for k in &mut prm.keyframes {
+                        scale_value(&mut k.value, sx, sy);
+                    }
+                }
+            }
+            if geometric {
+                // feather / expansion are lengths: scale by the mean factor
+                let s = (sx * sy).sqrt();
+                for prm in [&mut m.feather, &mut m.expansion] {
+                    if let ParamValue::Float(v) = &mut prm.value {
+                        *v *= s;
+                    }
+                    for k in &mut prm.keyframes {
+                        if let ParamValue::Float(v) = &mut k.value {
+                            *v *= s;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Keep `old`'s keyframes that lie outside the span `new` animates, so presets keyframing the same
+/// parameter at different times (Fade In, then Fade Out) add up instead of replacing each other.
+fn merge_keyframes(new: &mut EffectInstance, old: &EffectInstance) {
+    for (id, p) in new.params.iter_mut() {
+        let (Some(first), Some(last)) = (p.keyframes.first().map(|k| k.time), p.keyframes.last().map(|k| k.time)) else { continue };
+        let Some(o) = old.params.get(id) else { continue };
+        p.keyframes.extend(o.keyframes.iter().filter(|k| k.time < first || k.time > last).cloned());
+        p.keyframes.sort_by_key(|k| k.time);
+    }
+}
+
+/// Put preset effects on a clip: intrinsic ones replace the clip's instance (keeping its keyframes
+/// outside the span the preset animates), others are added at the end, like `effects.apply`.
+pub fn put_effects(it: &mut TrackItem, effects: Vec<EffectInstance>) {
+    for mut e in effects {
+        let intrinsic = e.def().is_some_and(|d| d.intrinsic);
+        if intrinsic && let Some(slot) = it.effects.iter_mut().find(|x| x.effect == e.effect) {
+            merge_keyframes(&mut e, slot);
+            *slot = e;
+            continue;
+        }
+        it.effects.push(e);
+    }
+}
+
+// ---------------------------------------------------------------- commands
+
+type Run = fn(&mut Session, &Value) -> Result<Value>;
+
+/// Helper to construct an engine CommandSpec.
+fn spec(
+    id: &'static str,
+    label: &'static str,
+    params: &'static str,
+    enabled: fn(&Session) -> std::result::Result<(), String>,
+    run: Run,
+    journal: bool,
+) -> CommandSpec {
+    CommandSpec { id, label, menu: &[], shortcut: None, params, enabled, run, journal, named: crate::commands::NamedKeys::NONE }
+}
+
+/// Return the command specifications for preset management.
+pub(crate) fn commands() -> Vec<CommandSpec> {
+    vec![
+        spec("presets.list", "List Effect Presets", "{}", always, list, false),
+        spec(
+            "presets.save",
+            "Save Preset",
+            r#"{"clip":id?,"effects":[index]?,"name":str,"description":str?,"keyframes":"scale"|"anchorIn"|"anchorOut"|"none"?}"#,
+            has_seq,
+            save,
+            true,
+        ),
+        spec("presets.apply", "Apply Preset", r#"{"preset":str,"clips":[id]?}"#, has_seq, apply, true),
+        spec("presets.delete", "Delete Preset", r#"{"name":str}"#, always, delete, true),
+        spec("presets.rename", "Rename Preset", r#"{"name":str,"to":str}"#, always, rename, true),
+        spec("presets.export", "Export Presets", r#"{"path":str,"names":[str]?}"#, always, export, false),
+        spec("presets.import", "Import Presets", r#"{"path":str}"#, always, import, true),
+        spec("presets.scan", "Scan Preset Library", "{}", always, scan, false),
+    ]
+}
+
+/// Format an effect preset as a JSON value.
+fn preset_json(p: &EffectPreset) -> Value {
+    json!({
+        "name": p.name,
+        "description": p.description,
+        "builtin": p.builtin,
+        "keyframes": p.keyframes.label(),
+        "effects": p.effects.iter().map(|e| e.def().map(|d| d.name).unwrap_or(e.effect.as_str()).to_string()).collect::<Vec<_>>(),
+        "animated": p.effects.iter().any(|e| e.is_animated()),
+        "masks": p.effects.iter().map(|e| e.masks.len()).sum::<usize>(),
+    })
+}
+
+/// Engine command handler to list all presets.
+fn list(s: &mut Session, _: &Value) -> Result<Value> {
+    let presets: Vec<Value> = s
+        .presets
+        .all()
+        .iter()
+        .map(|p| {
+            let mut v = preset_json(p);
+            if let Some(source) = s.presets.source_of(&p.name) {
+                v["source"] = json!(source);
+            }
+            v
+        })
+        .collect();
+    Ok(json!({"presets": presets}))
+}
+
+/// Retrieve the source or sequence dimensions for a clip item.
+fn clip_size(s: &Session, it: &TrackItem) -> (u32, u32) {
+    filmcraft_render::source_size(&s.project, it.item).or_else(|| s.active_sequence().map(|q| (q.settings.width, q.settings.height))).unwrap_or(hd())
+}
+
+/// Engine command handler to save an effect preset from selected clip.
+fn save(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = str_p(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad("presets.save", "need a `name`"))?.to_string();
+    let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
+    let clip = clip_p(p, "clip")
+        .or_else(|| s.state.selection.iter().copied().find(|c| seq.find_item(*c).and_then(|(t, _)| seq.track(t)).is_some_and(|t| t.kind == TrackKind::Video)))
+        .or_else(|| s.state.selection.first().copied())
+        .ok_or_else(|| bad("presets.save", "select a clip"))?;
+    let (_, it) = seq.find_item(clip).ok_or_else(|| bad("presets.save", "no such clip"))?;
+    let idx: Vec<usize> = match p.get("effects").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(|v| v.as_u64().map(|n| n as usize)).filter(|i| *i < it.effects.len()).collect(),
+        // default: the standard (non-intrinsic, non-layer) effects
+        None => (0..it.effects.len())
+            .filter(|i| {
+                let e = &it.effects[*i];
+                e.def().is_some_and(|d| !d.intrinsic) && !filmcraft_project::graphic::is_layer(e) && !e.essential
+            })
+            .collect(),
+    };
+    if idx.is_empty() {
+        return Err(bad("presets.save", "no effects to save (pass `effects`)"));
+    }
+    let mode = match str_p(p, "keyframes") {
+        None => Some(KeyframeMode::Scale),
+        Some(k) if k.eq_ignore_ascii_case("none") => None,
+        Some(k) => Some(KeyframeMode::from_name(k).ok_or_else(|| bad("presets.save", format!("unknown keyframe mode `{k}`")))?),
+    };
+    let mt = it.source_time_at(s.playhead().clamp(it.start, it.end() - Tick(1)));
+    let size = clip_size(s, it);
+    let preset = capture(it, &idx, &name, str_p(p, "description").unwrap_or(""), mode, mt, size);
+    let out = preset_json(&preset);
+    if s.presets.is_library_preset(&name) {
+        return Err(bad("presets.save", format!("`{name}` is part of the preset library and cannot be overwritten")));
+    }
+    s.presets.user.retain(|x| x.name != name);
+    s.presets.user.push(preset);
+    s.presets.persist().map_err(EngineError::Other)?;
+    Ok(out)
+}
+
+/// Engine command handler to apply an effect preset to clips.
+fn apply(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = str_p(p, "preset").or_else(|| str_p(p, "name")).ok_or_else(|| bad("presets.apply", "need `preset`"))?;
+    let preset = s.presets.find(name).ok_or_else(|| bad("presets.apply", format!("no preset `{name}`")))?;
+    let clips: Vec<ClipId> = match p.get("clips").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(|v| v.as_u64().map(ClipId)).collect(),
+        None => s.state.selection.clone(),
+    };
+    if clips.is_empty() {
+        return Err(bad("presets.apply", "select clips first"));
+    }
+    let has_video = preset.effects.iter().any(|e| e.def().is_some_and(|d| d.kind != filmcraft_project::EffectKind::Audio));
+    let has_audio = preset.effects.iter().any(|e| e.def().is_some_and(|d| d.kind == filmcraft_project::EffectKind::Audio));
+    let sizes: Vec<(ClipId, (u32, u32))> = {
+        let seq = s.active_sequence().ok_or(EngineError::NoSequence)?;
+        clips.iter().filter_map(|c| seq.find_item(*c).map(|(_, it)| (*c, clip_size(s, it)))).collect()
+    };
+    let label = format!("Apply Preset {}", preset.name);
+    let n = s.edit_sequence(&label, |q, _, _| {
+        let mut n = 0;
+        for t in q.all_tracks_mut() {
+            let is_audio_track = t.kind == TrackKind::Audio;
+            if (is_audio_track && !has_audio) || (!is_audio_track && !has_video) {
+                continue;
+            }
+            for it in t.items.iter_mut().filter(|i| clips.contains(&i.id)) {
+                let size = sizes.iter().find(|(c, _)| *c == it.id).map(|x| x.1).unwrap_or(hd());
+                let fx: Vec<_> = instantiate(&preset, it, size)
+                    .into_iter()
+                    .filter(|e| e.def().is_some_and(|d| (d.kind == filmcraft_project::EffectKind::Audio) == is_audio_track))
+                    .collect();
+                if !fx.is_empty() {
+                    put_effects(it, fx);
+                    n += 1;
+                }
+            }
+        }
+        if n == 0 {
+            return Err(bad("presets.apply", "the preset doesn't fit the selected clips (video/audio)"));
+        }
+        Ok(n)
+    })?;
+    Ok(json!({"applied": n}))
+}
+
+/// Engine command handler to delete a user preset.
+fn delete(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = str_p(p, "name").ok_or_else(|| bad("presets.delete", "need `name`"))?;
+    if let Some(source) = s.presets.source_of(name) {
+        return Err(bad("presets.delete", format!("`{name}` comes from {source}; delete or move that file to remove it from the preset library")));
+    }
+    let before = s.presets.user.len();
+    s.presets.user.retain(|x| x.name != name);
+    if s.presets.user.len() == before {
+        return Err(bad(
+            "presets.delete",
+            if builtin_presets().iter().any(|b| b.name == name) { "built-in presets cannot be deleted" } else { "no such preset" },
+        ));
+    }
+    s.presets.persist().map_err(EngineError::Other)?;
+    Ok(Value::Null)
+}
+
+/// Engine command handler to rename a user preset.
+fn rename(s: &mut Session, p: &Value) -> Result<Value> {
+    let name = str_p(p, "name").ok_or_else(|| bad("presets.rename", "need `name`"))?;
+    if let Some(source) = s.presets.source_of(name) {
+        return Err(bad("presets.rename", format!("`{name}` comes from {source}; rename the preset in Premiere and re-import it")));
+    }
+    let to = str_p(p, "to").map(str::trim).filter(|t| !t.is_empty()).ok_or_else(|| bad("presets.rename", "need `to`"))?.to_string();
+    if s.presets.user.iter().any(|x| x.name == to) {
+        return Err(bad("presets.rename", format!("a preset named `{to}` exists")));
+    }
+    let pr = s.presets.user.iter_mut().find(|x| x.name == name).ok_or_else(|| bad("presets.rename", "no such user preset"))?;
+    pr.name = to;
+    s.presets.persist().map_err(EngineError::Other)?;
+    Ok(Value::Null)
+}
+
+/// Engine command handler to export presets to a file.
+fn export(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_p(p, "path").ok_or_else(|| bad("presets.export", "need `path`"))?;
+    let all = s.presets.all();
+    let chosen: Vec<EffectPreset> = match p.get("names").and_then(Value::as_array) {
+        Some(n) => {
+            let names: Vec<&str> = n.iter().filter_map(Value::as_str).collect();
+            let v: Vec<EffectPreset> = all.into_iter().filter(|x| names.contains(&x.name.as_str())).collect();
+            if v.len() != names.len() {
+                return Err(bad("presets.export", "unknown preset name"));
+            }
+            v
+        }
+        None => s.presets.user.clone(),
+    };
+    if chosen.is_empty() {
+        return Err(bad("presets.export", "no presets to export"));
+    }
+    // through the host: atomic on the desktop, a download on the web (no filesystem there)
+    s.services.write_file(path, &file_bytes(&chosen)).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    Ok(json!({"path": path, "count": chosen.len()}))
+}
+
+/// Add `incoming` to `library`, each replacing the entry with the same key in place (a file with
+/// many presets used to rescan the growing library once per preset).
+pub(crate) fn merge_by_key<T>(library: &mut Vec<T>, incoming: Vec<T>, key: impl Fn(&T) -> String) {
+    // Drop the library's duplicates of imported keys, keeping the first, so the replacement lands where `find` looks.
+    let imported: std::collections::HashSet<String> = incoming.iter().map(&key).collect();
+    let mut kept = std::collections::HashSet::new();
+    library.retain(|x| {
+        let k = key(x);
+        !imported.contains(&k) || kept.insert(k)
+    });
+    let mut index: std::collections::HashMap<String, usize> = library.iter().enumerate().map(|(i, x)| (key(x), i)).collect();
+    for item in incoming {
+        match index.get(&key(&item)) {
+            Some(&i) => {
+                if let Some(slot) = library.get_mut(i) {
+                    *slot = item;
+                }
+            }
+            None => {
+                index.insert(key(&item), library.len());
+                library.push(item);
+            }
+        }
+    }
+}
+
+/// Import presets from raw bytes directly into the user preset store.
+pub fn import_bytes(s: &mut Session, path: &str, bytes: &[u8]) -> std::result::Result<Value, String> {
+    let parsed = parse_file_detailed(bytes)?;
+    if parsed.presets.is_empty() {
+        let detail = parsed
+            .skipped
+            .iter()
+            .take(8)
+            .map(|sk| if sk.effects.is_empty() { sk.name.clone() } else { format!("{} ({})", sk.name, sk.effects.join(", ")) })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let more = if parsed.skipped.len() > 8 { format!(" and {} more", parsed.skipped.len() - 8) } else { String::new() };
+        let suffix = if detail.is_empty() { String::new() } else { format!(": {detail}{more}") };
+        return Err(format!("{path}: no supported effects in this preset file{suffix}"));
+    }
+    let mut names = Vec::new();
+    let mut incoming = Vec::with_capacity(parsed.presets.len());
+    for mut pr in parsed.presets {
+        if s.presets.is_library_preset(&pr.name) {
+            let mut combined = s.presets.user.clone();
+            combined.extend(incoming.iter().cloned());
+            pr.name = unique_preset_name(&combined, &pr.name);
+        }
+        names.push(pr.name.clone());
+        incoming.push(pr);
+    }
+    merge_by_key(&mut s.presets.user, incoming, |x| x.name.clone());
+    s.presets.persist()?;
+    let skipped: Vec<Value> = parsed.skipped.iter().map(|sk| json!({"name": sk.name, "effects": sk.effects, "reason": sk.reason})).collect();
+    Ok(json!({
+        "imported": names,
+        "skipped": skipped,
+        "warning_count": parsed.warnings.len(),
+        "warnings": parsed.warnings.iter().take(100).cloned().collect::<Vec<_>>(),
+    }))
+}
+
+/// Engine command handler to import preset files into the library.
+fn import(s: &mut Session, p: &Value) -> Result<Value> {
+    let path = str_p(p, "path").ok_or_else(|| bad("presets.import", "need `path`"))?;
+    if let Ok(size) = s.services.file_size(path)
+        && size > crate::prfpset::MAX_BYTES
+    {
+        return Err(bad(
+            "presets.import",
+            format!("{path}: file is too large ({} MB; the limit is {} MB)", size / (1024 * 1024), crate::prfpset::MAX_BYTES / (1024 * 1024)),
+        ));
+    }
+    let bytes = s.services.read_file(path).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+
+    let parsed = parse_file_detailed(&bytes).map_err(|e| EngineError::Other(format!("{path}: {e}")))?;
+    let indexable =
+        std::path::Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("prfpset") || e.eq_ignore_ascii_case("json"));
+    if indexable
+        && !parsed.presets.is_empty()
+        && let Some(lib_dir) = s.presets.library_dir()
+        && let Some(fname) = std::path::Path::new(path).file_name()
+    {
+        let src = std::path::Path::new(path);
+        let src_canon = src.canonicalize().unwrap_or_else(|_| src.to_path_buf());
+        let lib_canon = lib_dir.canonicalize().unwrap_or_else(|_| lib_dir.clone());
+        let in_library = src_canon.starts_with(&lib_canon);
+        let mut dest = if in_library { src_canon.clone() } else { lib_dir.join(fname) };
+        if !in_library {
+            let stem = dest.file_stem().and_then(|s| s.to_str()).unwrap_or("presets").to_string();
+            let ext = dest.extension().and_then(|e| e.to_str()).unwrap_or("prfpset").to_string();
+            let mut n = 2u32;
+            while dest.exists() && std::fs::read(&dest).map(|b| b != bytes).unwrap_or(true) {
+                dest = lib_dir.join(format!("{stem} ({n}).{ext}"));
+                n += 1;
+            }
+        }
+        if in_library || std::fs::write(&dest, &bytes).is_ok() {
+            let _ = s.presets.rescan();
+            let dest_canon = dest.canonicalize().unwrap_or_else(|_| dest.clone());
+            let names = s
+                .presets
+                .library
+                .iter()
+                .find(|(k, _)| {
+                    let p = std::path::Path::new(k);
+                    p == dest || p == dest_canon || p.canonicalize().map(|c| c == dest_canon).unwrap_or(false)
+                })
+                .map(|(_, f)| f.names.clone())
+                .unwrap_or_default();
+            return Ok(json!({
+                "imported": names,
+                "skipped": parsed.skipped.iter().map(|sk| json!({
+                    "name": sk.name,
+                    "effects": sk.effects,
+                    "reason": sk.reason
+                })).collect::<Vec<_>>(),
+                "warning_count": parsed.warnings.len(),
+                "warnings": parsed.warnings.iter().take(100).cloned().collect::<Vec<_>>(),
+            }));
+        }
+    }
+    import_bytes(s, path, &bytes).map_err(EngineError::Other)
+}
+
+/// Engine command handler to trigger a preset library rescan.
+fn scan(s: &mut Session, _: &Value) -> Result<Value> {
+    let report = s.presets.rescan();
+    Ok(report.json())
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::merge_by_key;
+
+    #[test]
+    fn merge_replaces_by_key_and_keeps_new_entries_in_order() {
+        let mut lib = vec![("a", 1), ("b", 1)];
+        merge_by_key(&mut lib, vec![("b", 2), ("c", 1), ("c", 2), ("d", 1)], |x| x.0.to_string());
+        assert_eq!(lib, vec![("a", 1), ("b", 2), ("c", 2), ("d", 1)]);
+        // A duplicate already in the library is dropped for an imported key; the first entry is replaced.
+        let mut lib = vec![("a", 1), ("b", 1), ("b", 9)];
+        merge_by_key(&mut lib, vec![("b", 2)], |x| x.0.to_string());
+        assert_eq!(lib, vec![("a", 1), ("b", 2)]);
+        // many distinct names: 200k imports all land
+        let mut lib: Vec<(String, u32)> = Vec::new();
+        merge_by_key(&mut lib, (0..200_000).map(|i| (format!("preset {i}"), i)).collect(), |x| x.0.clone());
+        assert_eq!(lib.len(), 200_000);
+    }
+}

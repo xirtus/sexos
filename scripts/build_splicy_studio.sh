@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
-# Builds Splicy Studio: FilmCraft's editor (engine and egui interface) on sex-egui, for
+# Builds Splicy Studio: Splicy's editor (core/: engine and egui interface) on sex-egui, for
 # SexOS's standard library (x86_64-sex-std.json). Its own workspace (apps/splicy-studio),
 # size-optimised with fat LTO to fit the 32 MiB program image.
 # Output: apps/splicy-studio/target/x86_64-sex-std/release/splicy-studio.
