@@ -36,6 +36,7 @@ mod bsdf;
 mod bvh;
 mod camera;
 mod denoise;
+pub mod eevee;
 mod film;
 mod integrator;
 mod physics;
@@ -69,6 +70,7 @@ pub mod workbench;
 pub mod volume;
 
 pub use denoise::{denoise, denoise_images, DenoiseSettings};
+pub use eevee::{render_eevee, Eevee, EeveeScene, EeveeSettings};
 pub use film::{MistFalloff, MistSettings, Pass, Passes, BACKGROUND_DEPTH};
 pub use prepare::PreparedScene;
 pub use raster::RasterCamera;

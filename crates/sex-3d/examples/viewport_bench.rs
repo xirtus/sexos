@@ -112,8 +112,39 @@ fn main() {
     }
 }
 
-#[allow(unused_variables)]
-fn extra_solid(vs: &ViewportScene, view: &ViewCamera, w: u32, h: u32, frames: u32, name: &str) {}
+/// Solid with the heavier Workbench options.
+fn extra_solid(vs: &ViewportScene, view: &ViewCamera, w: u32, h: u32, frames: u32, name: &str) {
+    use sex_3d::render::workbench::{Lighting, Workbench};
+    let mut buf = Vec::new();
+    let opts = [
+        ("MatCap", Workbench { lighting: Lighting::MatCap, ..Workbench::viewport_defaults() }),
+        ("shadow + cavity", Workbench { shadow: true, cavity: true, ..Workbench::viewport_defaults() }),
+        ("X-ray", Workbench { xray: true, ..Workbench::viewport_defaults() }),
+    ];
+    for (label, wb) in opts {
+        let st = ViewportSettings { width: w, height: h, threads: 0, workbench: wb, ..ViewportSettings::default() };
+        let ms = time_ms(frames, || vs.draw_into(view, &st, &mut buf));
+        println!("[{name}] Solid {label} {w}x{h}: {ms:.2} ms/frame");
+    }
+}
 
-#[allow(unused_variables)]
-fn extra_material(scene: &Scene, view: &ViewCamera, w: u32, h: u32, frames: u32, name: &str) {}
+/// Material Preview with the rasterized engine (look dev): one TAA sample
+/// per frame at full resolution.
+fn extra_material(scene: &Scene, view: &ViewCamera, w: u32, h: u32, frames: u32, name: &str) {
+    use sex_3d::render::{Eevee, EeveeScene, EeveeSettings, RasterCamera};
+    let t = Instant::now();
+    let es = EeveeScene::new(scene, true);
+    let prep = t.elapsed().as_secs_f64() * 1e3;
+    let st = EeveeSettings { width: w, height: h, samples: frames + 1, lookdev: true, ..EeveeSettings::default() };
+    let mut e = Eevee::new(es, &st);
+    e.set_view(RasterCamera::from_view(view, w, h));
+    let t = Instant::now();
+    e.add_sample();
+    let first = t.elapsed().as_secs_f64() * 1e3;
+    let t = Instant::now();
+    for _ in 0..frames {
+        e.add_sample();
+    }
+    let ms = t.elapsed().as_secs_f64() * 1e3 / frames as f64;
+    println!("[{name}] Material Preview (EEVEE {w}x{h}, 1 sample/frame): prepare {prep:.1} ms, first sample {first:.1} ms, {ms:.2} ms/frame, {:.0} ms to 16 samples", first + ms * 15.0);
+}

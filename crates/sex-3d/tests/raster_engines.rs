@@ -224,3 +224,219 @@ fn workbench_render_engine() {
     assert_eq!(t.pixels[0][3], 0.0);
     assert!(t.pixels[17 * 60 + 30][3] > 0.99);
 }
+
+// ------------------------------------------------------------------ EEVEE
+
+use sex_3d::nodes::{NodeTree, TreeKind, Value};
+use sex_3d::render::{render_eevee, EeveeSettings, RenderSettings};
+use sex_3d::scene::{Image, Light, LightKind};
+
+/// A material tree: `build` returns (node, output socket) for the Surface.
+fn node_material(build: impl FnOnce(&mut NodeTree) -> (usize, &'static str)) -> Material {
+    let mut t = NodeTree::new("Shader Nodetree", TreeKind::Shader);
+    let out = t.add("ShaderNodeOutputMaterial", [300.0, 0.0]).unwrap();
+    let (n, s) = build(&mut t);
+    t.link(n, s, out, "Surface").unwrap();
+    Material { node_tree: Some(t), ..Material::default() }
+}
+
+fn diffuse(c: f32) -> Material {
+    node_material(|t| {
+        let d = t.add("ShaderNodeBsdfDiffuse", [0.0, 0.0]).unwrap();
+        t.nodes[d].set_input("Color", Value::Color([c, c, c, 1.0]));
+        (d, "BSDF")
+    })
+}
+
+fn emission(color: [f32; 4], strength: f32) -> Material {
+    node_material(|t| {
+        let e = t.add("ShaderNodeEmission", [0.0, 0.0]).unwrap();
+        t.nodes[e].set_input("Color", Value::Color(color));
+        t.nodes[e].set_input("Strength", Value::Float(strength));
+        (e, "Emission")
+    })
+}
+
+/// Emission mixed half and half with a Transparent BSDF.
+fn half_transparent(color: [f32; 4]) -> Material {
+    node_material(|t| {
+        let e = t.add("ShaderNodeEmission", [0.0, 0.0]).unwrap();
+        t.nodes[e].set_input("Color", Value::Color(color));
+        let tr = t.add("ShaderNodeBsdfTransparent", [0.0, 0.0]).unwrap();
+        let mix = t.add("ShaderNodeMixShader", [0.0, 0.0]).unwrap();
+        t.nodes[mix].set_input("Fac", Value::Float(0.5));
+        t.link(e, "Emission", mix, "Shader").unwrap();
+        t.link(tr, "BSDF", mix, "Shader_001").unwrap();
+        (mix, "Shader")
+    })
+}
+
+fn add_sun(s: &mut Scene, from: Vec3, power: f32, angle: f32) {
+    let mut o = Object::new("Sun", ObjectData::Light(Light { kind: LightKind::Sun, power, radius: angle, ..Default::default() }));
+    o.transform = Transform::from_matrix(&Mat4::look_at(from, Vec3::ZERO, Vec3::Z).inverse());
+    s.add_object(o);
+}
+
+fn eevee(w: u32, h: u32, samples: u32) -> EeveeSettings {
+    EeveeSettings { width: w, height: h, samples, ao: false, volumetrics: false, ..EeveeSettings::default() }
+}
+
+fn px(img: &Image, x: u32, y: u32) -> [f32; 4] {
+    img.pixels[(y * img.width + x) as usize]
+}
+
+/// A diffuse sphere on a floor under a sun, black world: EEVEE's direct
+/// light and shadow agree with the path tracer's direct lighting.
+#[test]
+fn eevee_sun_and_shadow_match_the_path_tracer() {
+    let mut s = Scene::new();
+    s.world.color = Vec3::ZERO;
+    s.world.strength = 1.0;
+    let m = s.add_material(diffuse(0.8));
+    let mut sphere = primitives::uv_sphere(64, 32, 1.0);
+    for f in &mut sphere.faces {
+        f.smooth = true;
+    }
+    let o = s.add_mesh_object("Sphere", sphere);
+    s.objects[o].materials.push(m);
+    s.objects[o].transform.location = Vec3::new(0.0, 0.0, 1.0);
+    let p = s.add_mesh_object("Floor", primitives::plane(12.0));
+    s.objects[p].materials.push(m);
+    add_sun(&mut s, Vec3::new(2.0, -1.0, 3.0), 3.0, 0.002);
+    add_camera(&mut s, Vec3::new(0.0, -8.0, 5.0), Vec3::new(0.0, 0.0, 0.5), 0.6);
+    let (w, h) = (96, 64);
+    let pt = sex_3d::render::render(&s, &RenderSettings { width: w, height: h, samples: 64, max_bounces: 0, denoise: false, ..RenderSettings::default() }).color;
+    let ee = render_eevee(&s, &EeveeSettings { soft_shadows: false, ..eevee(w, h, 8) });
+    let (mut sum, mut bad) = (0.0f64, 0);
+    let (mut shadow_pt, mut shadow_ee) = (0, 0);
+    for (a, b) in pt.pixels.iter().zip(&ee.pixels) {
+        let d = (0..3).map(|c| (a[c] - b[c]).abs()).fold(0.0f32, f32::max);
+        sum += d as f64;
+        bad += (d > 0.12 * a[1].max(0.2)) as usize;
+        // Floor in the sphere's shadow (lit floor is ~0.8 * 3 * cos / pi).
+        shadow_pt += (a[1] < 0.05) as usize;
+        shadow_ee += (b[1] < 0.05) as usize;
+    }
+    let n = pt.pixels.len();
+    let mean = sum / n as f64;
+    assert!(mean < 0.03, "mean difference {mean}");
+    assert!(bad < n / 25, "{bad} of {n} pixels differ");
+    assert!(shadow_pt > n / 50, "the path tracer shows a shadow ({shadow_pt})");
+    assert!((shadow_ee as f64 - shadow_pt as f64).abs() < 0.2 * shadow_pt as f64, "shadow pixels: eevee {shadow_ee} vs path tracer {shadow_pt}");
+}
+
+/// Emission shows at its exact radiance.
+#[test]
+fn eevee_emission() {
+    let mut s = Scene::new();
+    s.world.color = Vec3::ZERO;
+    let m = s.add_material(emission([1.0, 0.5, 0.25, 1.0], 2.0));
+    let o = s.add_mesh_object("Plane", primitives::plane(4.0));
+    s.objects[o].materials.push(m);
+    add_camera(&mut s, Vec3::new(0.0, 0.0, 3.0), Vec3::ZERO, 0.5);
+    let img = render_eevee(&s, &eevee(32, 32, 4));
+    let c = px(&img, 16, 16);
+    assert!((c[0] - 2.0).abs() < 1e-3 && (c[1] - 1.0).abs() < 1e-3 && (c[2] - 0.5).abs() < 1e-3 && (c[3] - 1.0).abs() < 1e-4, "{c:?}");
+}
+
+/// Blended transparent surfaces composite back to front, whatever the
+/// order of the objects.
+#[test]
+fn eevee_alpha_blend_order() {
+    for flip in [false, true] {
+        let mut s = Scene::new();
+        s.world.color = Vec3::ZERO;
+        let red = s.add_material(half_transparent([1.0, 0.0, 0.0, 1.0]));
+        let blue = s.add_material(half_transparent([0.0, 0.0, 1.0, 1.0]));
+        let add = |s: &mut Scene, mat: usize, z: f32| {
+            let o = s.add_mesh_object("Pane", primitives::plane(4.0));
+            s.objects[o].materials.push(mat);
+            s.objects[o].transform.location = Vec3::new(0.0, 0.0, z);
+        };
+        if flip {
+            add(&mut s, blue, 0.0);
+            add(&mut s, red, 1.0);
+        } else {
+            add(&mut s, red, 1.0);
+            add(&mut s, blue, 0.0);
+        }
+        add_camera(&mut s, Vec3::new(0.0, 0.0, 4.0), Vec3::ZERO, 0.4);
+        let c = px(&render_eevee(&s, &EeveeSettings { film_transparent: true, ..eevee(16, 16, 2) }), 8, 8);
+        // Front red over back blue over black: 0.5 red + 0.25 blue.
+        assert!((c[0] - 0.5).abs() < 0.02 && (c[2] - 0.25).abs() < 0.02 && c[1].abs() < 0.01, "flip {flip}: {c:?}");
+        assert!((c[3] - 0.75).abs() < 0.02, "coverage {c:?}");
+    }
+}
+
+/// A plane lit by a sun at several angles has no shadow acne: every floor
+/// pixel gets the same light.
+#[test]
+fn eevee_shadow_maps_are_acne_free() {
+    for elevation in [80.0f32, 45.0, 20.0] {
+        let mut s = Scene::new();
+        s.world.color = Vec3::ZERO;
+        let m = s.add_material(diffuse(0.8));
+        let o = s.add_mesh_object("Floor", primitives::plane(40.0));
+        s.objects[o].materials.push(m);
+        let e = elevation.to_radians();
+        add_sun(&mut s, Vec3::new(e.cos() * 0.6, e.cos() * 0.8, e.sin()) * 10.0, 3.0, 0.02);
+        add_camera(&mut s, Vec3::new(0.0, -6.0, 3.0), Vec3::ZERO, 0.8);
+        let img = render_eevee(&s, &EeveeSettings { film_transparent: true, ..eevee(64, 48, 4) });
+        let expect = 0.8 * 3.0 * e.sin() / core::f32::consts::PI;
+        let mut floor = 0;
+        for (i, p) in img.pixels.iter().enumerate() {
+            if p[3] > 0.999 {
+                floor += 1;
+                assert!((p[1] - expect).abs() < 0.03 * expect, "elevation {elevation}: pixel {i} = {} (want {expect})", p[1]);
+            }
+        }
+        assert!(floor > 1000, "{floor}");
+    }
+}
+
+/// A checker texture node reaches the deferred shading: two albedos.
+#[test]
+fn eevee_checker_texture_is_visible() {
+    let mut s = Scene::new();
+    s.world.color = Vec3::ONE;
+    s.world.strength = 1.0;
+    let m = s.add_material(node_material(|t| {
+        let d = t.add("ShaderNodeBsdfDiffuse", [0.0, 0.0]).unwrap();
+        let c = t.add("ShaderNodeTexChecker", [0.0, 0.0]).unwrap();
+        t.nodes[c].set_input("Color1", Value::Color([0.8, 0.8, 0.8, 1.0]));
+        t.nodes[c].set_input("Color2", Value::Color([0.2, 0.2, 0.2, 1.0]));
+        t.nodes[c].set_input("Scale", Value::Float(12.0));
+        t.link(c, "Color", d, "Color").unwrap();
+        (d, "BSDF")
+    }));
+    let o = s.add_mesh_object("Plane", primitives::plane(4.0));
+    s.objects[o].materials.push(m);
+    add_camera(&mut s, Vec3::new(0.0, 0.0, 3.0), Vec3::ZERO, 0.5);
+    let img = render_eevee(&s, &eevee(48, 48, 4));
+    let (mut light, mut dark) = (0, 0);
+    for p in &img.pixels {
+        if (p[1] - 0.8).abs() < 0.08 {
+            light += 1;
+        } else if (p[1] - 0.2).abs() < 0.05 {
+            dark += 1;
+        }
+    }
+    let n = img.pixels.len();
+    assert!(light > n / 4 && dark > n / 4, "light {light} dark {dark} of {n}");
+}
+
+/// Material Preview's studio lighting shows the material colour, and the
+/// image does not depend on the thread count.
+#[test]
+fn eevee_lookdev() {
+    let mut s = monkey_scene();
+    add_camera(&mut s, Vec3::new(9.0, -9.0, 6.0), Vec3::ZERO, 0.6);
+    let st = EeveeSettings { lookdev: true, threads: 1, ..eevee(80, 45, 2) };
+    let a = render_eevee(&s, &st);
+    let b = render_eevee(&s, &EeveeSettings { threads: 3, ..st });
+    assert_eq!(a.pixels, b.pixels);
+    assert!(sex_3d::render::eevee::mean_luminance(&a) > 0.05);
+    // The red monkey is redder than it is green.
+    let reddish = a.pixels.iter().filter(|p| p[0] > 2.0 * p[1] + 0.02).count();
+    assert!(reddish > 20, "{reddish}");
+}

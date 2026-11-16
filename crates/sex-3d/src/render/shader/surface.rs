@@ -87,6 +87,32 @@ impl ShadeData {
     }
 }
 
+/// A node tree equivalent to a material's legacy Principled fields (for the
+/// rasterized engines, which shade everything through node programs).
+pub(crate) fn legacy_tree(m: &crate::scene::Material) -> crate::nodes::NodeTree {
+    use crate::nodes::{NodeTree, Prop, Value};
+    let mut t = NodeTree::default_material(&m.name);
+    if let Some(p) = t.find_type("ShaderNodeBsdfPrincipled") {
+        let c = m.base_color;
+        let n = &mut t.nodes[p];
+        n.set_input("Base Color", Value::Color([c[0], c[1], c[2], 1.0]));
+        n.set_input("Metallic", Value::Float(m.metallic));
+        n.set_input("Roughness", Value::Float(m.roughness));
+        n.set_input("IOR", Value::Float(m.ior));
+        n.set_input("Transmission Weight", Value::Float(m.transmission));
+        let e = m.emission;
+        n.set_input("Emission Color", Value::Color([e.x, e.y, e.z, 1.0]));
+        n.set_input("Emission Strength", Value::Float(m.emission_strength));
+        if let Some(img) = m.base_color_texture {
+            if let Some(i) = t.add("ShaderNodeTexImage", [-500.0, 300.0]) {
+                t.nodes[i].set_prop("image", Prop::Id(Some(img)));
+                let _ = t.link(i, "Color", p, "Base Color");
+            }
+        }
+    }
+    t
+}
+
 /// The BSDF at a surface hit: the legacy Principled fields or node closures.
 pub(crate) enum SurfaceBsdf {
     Legacy { bsdf: Bsdf, f_diff: Vec3, ns: Vec3 },
