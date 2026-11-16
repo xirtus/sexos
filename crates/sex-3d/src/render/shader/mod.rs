@@ -105,6 +105,8 @@ pub(crate) struct ProgramInfo {
     /// Principled alpha < 1, volume-only materials).
     pub transparent: bool,
     pub volume: bool,
+    /// Some closure scatters below the surface (EEVEE blurs it).
+    pub subsurface: bool,
     /// The program reads the UV tangent (Normal Map, Tangent node in UV mode).
     pub uv_tangent: bool,
 }

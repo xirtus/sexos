@@ -133,6 +133,28 @@ fn set_light(l: &mut L, d: &mut Doc, o: usize, nl: Light, label: &str) {
     }
 }
 
+/// EEVEE's Contact Shadows: a short screen-space trace that catches the
+/// contact a shadow map misses.
+fn contact_shadow_panel(l: &mut L, d: &mut Doc, o: usize, li: Light) {
+    let mut hit = None;
+    l.panel_with(d, "data.light.contact_shadow", "", false, &mut |l, _, r| hit = super::tabs::check_header(l, "Contact Shadows", li.contact_shadow, r), &mut |l, d| {
+        let was = l.inactive;
+        l.inactive = was || !li.contact_shadow;
+        let mut v = li.contact_shadow_distance;
+        if l.number("Distance", "light_cs_dist", &mut v, NumOpts { step: 0.01, unit: "m", min: 0.0, max: 1000.0, ..NumOpts::default() }) {
+            set_light(l, d, o, Light { contact_shadow_distance: v, ..li }, "Contact Shadow Distance");
+        }
+        let mut v = li.contact_shadow_thickness;
+        if l.number("Thickness", "light_cs_thick", &mut v, NumOpts { step: 0.01, unit: "m", min: 0.0, max: 100.0, ..NumOpts::default() }) {
+            set_light(l, d, o, Light { contact_shadow_thickness: v, ..li }, "Contact Shadow Thickness");
+        }
+        l.inactive = was;
+    });
+    if let Some(v) = hit {
+        set_light(l, d, o, Light { contact_shadow: v, ..li }, "Contact Shadows");
+    }
+}
+
 fn light(l: &mut L, d: &mut Doc, c: &mut Ctx, o: usize, li: Light) {
     let name = d.scene.objects[o].name.clone();
     l.id_block(Icon::LightData, &name, None);
@@ -215,6 +237,7 @@ fn light(l: &mut L, d: &mut Doc, c: &mut Ctx, o: usize, li: Light) {
             set_light(l, d, o, Light { use_mis: t, ..li }, "Multiple Importance");
         }
     });
+    contact_shadow_panel(l, d, o, li);
     if let LightKind::Spot { angle, blend } = li.kind {
         l.panel(d, "data.spot_shape", "Beam Shape", true, &mut |l, d| {
             let mut deg = angle.to_degrees();
@@ -633,15 +656,44 @@ pub fn material(l: &mut L, d: &mut Doc, c: &mut Ctx) {
         l.panel(d, "material.displacement", "Displacement", false, &mut |l, _| l.info("Displacement", "Default"));
     }
     l.panel(d, "material.settings", "Settings", false, &mut |l, d| {
-        let mut v = !d.scene.materials[mi].double_sided;
-        if l.check("", "Backface Culling", &mut v) {
+        use sex_3d::scene::RenderMethod;
+        let ee = d.scene.materials[mi].eevee;
+        let mut v = ee.backface_culling;
+        if l.check("Backface Culling", "Camera", &mut v) {
             l.commit(d, "Backface Culling");
-            d.scene.materials[mi].double_sided = !v;
+            let m = &mut d.scene.materials[mi];
+            m.eevee.backface_culling = v;
+            m.double_sided = !v;
         }
-        inactive(l, |l| {
-            l.enumeration("Blend Mode", "blend", "Dithered", &[]);
-            l.enumeration("Shadow Mode", "shadow", "Opaque", &[]);
-        });
+        let mut v = ee.backface_culling_shadow;
+        if l.check("", "Shadow", &mut v) {
+            l.commit(d, "Backface Culling Shadow");
+            d.scene.materials[mi].eevee.backface_culling_shadow = v;
+        }
+        let cur = RenderMethod::ALL.iter().position(|&r| r == ee.render_method).unwrap_or(0);
+        if let Some(i) = l.expand("Render Method", &RenderMethod::ALL.map(|r| r.label()), cur) {
+            if i != cur {
+                l.commit(d, "Render Method");
+                d.scene.materials[mi].eevee.render_method = RenderMethod::ALL[i];
+            }
+        }
+        let mut v = ee.transparent_shadows;
+        if l.check("", "Transparent Shadows", &mut v) {
+            l.commit(d, "Transparent Shadows");
+            d.scene.materials[mi].eevee.transparent_shadows = v;
+        }
+        let mut v = ee.screen_refraction;
+        if l.check("", "Raytraced Transmission", &mut v) {
+            l.commit(d, "Raytraced Transmission");
+            d.scene.materials[mi].eevee.screen_refraction = v;
+        }
+        if ee.screen_refraction {
+            let mut t = ee.refraction_depth;
+            if l.number("Thickness", "mat_refraction_depth", &mut t, NumOpts { step: 0.01, unit: "m", min: 0.0, max: 100.0, ..NumOpts::default() }) {
+                l.commit(d, "Refraction Thickness");
+                d.scene.materials[mi].eevee.refraction_depth = t;
+            }
+        }
     });
     l.panel(d, "material.line_art", "Line Art", false, &mut |l, _| l.note("Not available yet"));
     l.panel(d, "material.viewport_display", "Viewport Display", false, &mut |l, d| {

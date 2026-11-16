@@ -257,6 +257,30 @@ fn settings_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("workbench_shadow", b(s.workbench.shadow)),
         ("workbench_cavity", b(s.workbench.cavity)),
         ("workbench_outline", b(s.workbench.outline)),
+        ("workbench_studio", s.workbench.studio.to_string()),
+        ("workbench_dof", b(s.workbench.dof)),
+        ("workbench_viewport_samples", s.workbench_viewport_samples.to_string()),
+        ("eevee_volumetric_steps", s.eevee_volumetric_steps.to_string()),
+        ("eevee_volumetric_shadows", b(s.eevee_volumetric_shadows)),
+        ("eevee_ssr", b(s.eevee_ssr)),
+        ("eevee_ssr_max_roughness", s.eevee_ssr_max_roughness.to_string()),
+        ("eevee_ssr_thickness", s.eevee_ssr_thickness.to_string()),
+        ("eevee_ssr_fade", s.eevee_ssr_fade.to_string()),
+        ("eevee_bloom", b(s.eevee_bloom)),
+        ("eevee_bloom_threshold", s.eevee_bloom_threshold.to_string()),
+        ("eevee_bloom_knee", s.eevee_bloom_knee.to_string()),
+        ("eevee_bloom_radius", s.eevee_bloom_radius.to_string()),
+        ("eevee_bloom_color", join(s.eevee_bloom_color)),
+        ("eevee_bloom_intensity", s.eevee_bloom_intensity.to_string()),
+        ("eevee_bloom_clamp", s.eevee_bloom_clamp.to_string()),
+        ("eevee_dof_max_size", s.eevee_dof_max_size.to_string()),
+        ("eevee_dof_jitter", b(s.eevee_dof_jitter)),
+        ("eevee_sss_samples", s.eevee_sss_samples.to_string()),
+        ("lookdev_world", s.lookdev_world.to_string()),
+        ("lookdev_rotation", s.lookdev_rotation.to_string()),
+        ("lookdev_strength", s.lookdev_strength.to_string()),
+        ("lookdev_opacity", s.lookdev_opacity.to_string()),
+        ("viewport_half_res_navigation", b(s.viewport_half_res_navigation)),
     ]
 }
 
@@ -267,6 +291,12 @@ fn set_setting(s: &mut Settings, key: &str, v: &str) {
         }
     }
     let flag = |dst: &mut bool| *dst = v == "1";
+    let rgb = |dst: &mut [f32; 3]| {
+        let c: Vec<f32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+        if let [r, g, b] = c[..] {
+            *dst = [r, g, b];
+        }
+    };
     let list = |v: &str| -> Vec<String> {
         // Split on commas not preceded by a backslash.
         let mut out = Vec::new();
@@ -430,12 +460,31 @@ fn set_setting(s: &mut Settings, key: &str, v: &str) {
         "workbench_lighting" => s.workbench.lighting = Lighting::ALL.into_iter().find(|l| l.label() == v).unwrap_or_default(),
         "workbench_matcap" => p(&mut s.workbench.matcap, v),
         "workbench_color" => s.workbench.color = ColorType::ALL.into_iter().find(|c| c.label() == v).unwrap_or_default(),
-        "workbench_single_color" => {
-            let c: Vec<f32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
-            if let [r, g, b] = c[..] {
-                s.workbench.single_color = [r, g, b];
-            }
-        }
+        "workbench_single_color" => rgb(&mut s.workbench.single_color),
+        "workbench_studio" => p(&mut s.workbench.studio, v),
+        "workbench_dof" => flag(&mut s.workbench.dof),
+        "workbench_viewport_samples" => p(&mut s.workbench_viewport_samples, v),
+        "eevee_volumetric_steps" => p(&mut s.eevee_volumetric_steps, v),
+        "eevee_volumetric_shadows" => flag(&mut s.eevee_volumetric_shadows),
+        "eevee_ssr" => flag(&mut s.eevee_ssr),
+        "eevee_ssr_max_roughness" => p(&mut s.eevee_ssr_max_roughness, v),
+        "eevee_ssr_thickness" => p(&mut s.eevee_ssr_thickness, v),
+        "eevee_ssr_fade" => p(&mut s.eevee_ssr_fade, v),
+        "eevee_bloom" => flag(&mut s.eevee_bloom),
+        "eevee_bloom_threshold" => p(&mut s.eevee_bloom_threshold, v),
+        "eevee_bloom_knee" => p(&mut s.eevee_bloom_knee, v),
+        "eevee_bloom_radius" => p(&mut s.eevee_bloom_radius, v),
+        "eevee_bloom_color" => rgb(&mut s.eevee_bloom_color),
+        "eevee_bloom_intensity" => p(&mut s.eevee_bloom_intensity, v),
+        "eevee_bloom_clamp" => p(&mut s.eevee_bloom_clamp, v),
+        "eevee_dof_max_size" => p(&mut s.eevee_dof_max_size, v),
+        "eevee_dof_jitter" => flag(&mut s.eevee_dof_jitter),
+        "eevee_sss_samples" => p(&mut s.eevee_sss_samples, v),
+        "lookdev_world" => p(&mut s.lookdev_world, v),
+        "lookdev_rotation" => p(&mut s.lookdev_rotation, v),
+        "lookdev_strength" => p(&mut s.lookdev_strength, v),
+        "lookdev_opacity" => p(&mut s.lookdev_opacity, v),
+        "viewport_half_res_navigation" => flag(&mut s.viewport_half_res_navigation),
         "workbench_specular" => flag(&mut s.workbench.specular),
         "workbench_shadow" => flag(&mut s.workbench.shadow),
         "workbench_cavity" => flag(&mut s.workbench.cavity),
@@ -513,6 +562,24 @@ mod tests {
         doc.settings.mist_falloff = MistFalloff::Linear;
         doc.settings.time_limit = 12.5;
         doc.settings.threads = 3;
+        doc.settings.eevee_ssr = true;
+        doc.settings.eevee_ssr_thickness = 0.35;
+        doc.settings.eevee_bloom = true;
+        doc.settings.eevee_bloom_color = [1.0, 0.5, 0.25];
+        doc.settings.eevee_bloom_radius = 4.5;
+        doc.settings.eevee_dof_max_size = 42.0;
+        doc.settings.eevee_dof_jitter = true;
+        doc.settings.eevee_sss_samples = 11;
+        doc.settings.eevee_volumetric_steps = 48;
+        doc.settings.eevee_volumetric_shadows = true;
+        doc.settings.lookdev_world = 3;
+        doc.settings.lookdev_rotation = 1.25;
+        doc.settings.lookdev_opacity = 0.5;
+        doc.settings.viewport_half_res_navigation = true;
+        doc.settings.workbench.single_color = [0.2, 0.4, 0.6];
+        doc.settings.workbench.studio = 2;
+        doc.settings.workbench.dof = true;
+        doc.settings.workbench_viewport_samples = 16;
         doc.texts.push(("Text".into(), "line one\n\tline two \\ end".into()));
         let keys_before = doc.anim.actions.iter().map(|a| a.curves.iter().map(|c| c.keys.len()).sum::<usize>()).sum::<usize>();
         assert!(keys_before > 0, "default scene has a selected object to key");

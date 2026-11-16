@@ -32,7 +32,7 @@ VERSION=(3,13)
 MODULES='''
 importlib._bootstrap importlib._bootstrap_external zipimport
 abc codecs io _collections_abc _sitebuiltins genericpath ntpath posixpath os site stat
-importlib importlib.util importlib.machinery importlib._abc runpy
+importlib importlib.util importlib.machinery importlib._abc runpy pkgutil
 encodings encodings.aliases encodings.utf_8 encodings.utf_8_sig encodings.ascii encodings.latin_1
 __future__ _colorize _opcode_metadata _weakrefset _compat_pickle _pydecimal
 argparse ast base64 bisect calendar collections contextlib copy copyreg

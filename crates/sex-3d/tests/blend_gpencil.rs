@@ -185,7 +185,7 @@ fn legacy_grease_pencil_imports() {
         w.put(ma_ink, "MA", "Material", 1, m);
         let st = w.inst(
             "MaterialGPencilStyle",
-            &[("fill_rgba", nv(&[1.0, 0.5, 0.0, 1.0])), ("mix_rgba", nv(&[0.0, 0.0, 1.0, 1.0])), ("flag", n((1 << 9 | 1 << 11) as f64)), ("fill_style", n(1.)), ("gradient_type", n(1.)), ("mix_factor", n(0.25))],
+            &[("fill_rgba", nv(&[1.0, 0.5, 0.0, 1.0])), ("mix_rgba", nv(&[0.0, 0.0, 1.0, 1.0])), ("flag", n((1 << 9 | 1 << 14) as f64)), ("fill_style", n(1.)), ("gradient_type", n(1.)), ("mix_factor", n(0.25))],
         );
         w.put(st_fill, "DATA", "MaterialGPencilStyle", 1, st);
         let m = w.inst("Material", &[("id.name", s("MAFill")), ("gp_style", p(st_fill))]);

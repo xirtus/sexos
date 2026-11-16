@@ -147,6 +147,17 @@ pub enum ColorTarget {
     Paint(bool),
     /// A colour field of a Grease Pencil or sequencer settings panel.
     Prop(crate::gpencil::ui::PropColor),
+    /// A colour in the render settings.
+    Setting(SettingColor),
+}
+
+/// Colours of the render settings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingColor {
+    /// Workbench: Color > Single.
+    WorkbenchSingle,
+    /// EEVEE: Bloom > Color.
+    Bloom,
 }
 
 /// Per-frame context the panels share.
@@ -348,7 +359,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
                 tabs::tool(&mut l, d)
             }
         }
-        Tab::Render => tabs::render(&mut l, d),
+        Tab::Render => tabs::render(&mut l, d, &mut ctx),
         Tab::Output => tabs::output(&mut l, d),
         Tab::ViewLayer => tabs::view_layer(&mut l, d),
         Tab::Scene => tabs::scene(&mut l, d),
@@ -546,6 +557,12 @@ fn set_enum(s: &mut State, d: &mut Doc, obj: Option<usize>, key: &str, v: &str) 
             if let Some(t) = sex_3d::render::workbench::CavityType::ALL.into_iter().find(|t| t.label() == v) {
                 d.push_undo("Cavity Type");
                 d.settings.workbench.cavity_type = t;
+            }
+        }
+        "workbench_studio" => {
+            if let Some(i) = sex_3d::render::workbench::STUDIO_LIGHTS.iter().position(|m| *m == v) {
+                d.push_undo("Studio Light");
+                d.settings.workbench.studio = i;
             }
         }
         "eevee_shadow_resolution" => {

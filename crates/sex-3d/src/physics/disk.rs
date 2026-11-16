@@ -5,7 +5,9 @@
 //! file I/O; this module only encodes and decodes.
 use super::cache::{file_stem, Caches, SimFrame};
 use super::cloth::PointsFrame;
+use super::dynamic_paint::PaintFrame;
 use super::fluid::FluidFrame;
+use super::liquid::LiquidFrame;
 use super::particles::{Alive, Particle, ParticlesFrame};
 use super::rigid::{BodyState, RigidFrame};
 use crate::math::{Mat4, Quat, Vec3};
@@ -173,6 +175,43 @@ fn encode_frame(w: &mut W, f: &SimFrame) {
                 None => w.u32(0),
             }
         }
+        SimFrame::Liquid(f) => {
+            w.u32(4);
+            for r in f.res {
+                w.u32(r as u32);
+            }
+            w.v3(f.min);
+            w.f(f.dx);
+            w.v3s(&f.mesh.positions);
+            w.u32(f.mesh.faces.len() as u32);
+            for fc in &f.mesh.faces {
+                w.u32(fc.verts.len() as u32);
+                for &v in &fc.verts {
+                    w.u32(v);
+                }
+            }
+            w.u32(f.count as u32);
+            w.f(f.particle_volume);
+            match &f.particles {
+                Some(p) => {
+                    w.u32(1);
+                    w.v3s(p);
+                }
+                None => w.u32(0),
+            }
+        }
+        SimFrame::Paint(p) => {
+            w.u32(5);
+            w.u32(p.color.len() as u32);
+            for c in p.color.iter() {
+                for &x in c {
+                    w.f(x);
+                }
+            }
+            w.fs(&p.wet);
+            w.fs(&p.value);
+            w.fs(&p.vel);
+        }
     }
 }
 
@@ -224,6 +263,42 @@ fn decode_frame(r: &mut R) -> Option<SimFrame> {
             }
             let flame = if r.u32()? == 1 { Some(Arc::new(r.fs()?)) } else { None };
             SimFrame::Fluid(FluidFrame { res, min, dx, density: Arc::new(density), flame, state: None })
+        }
+        4 => {
+            let res = [r.u32()? as usize, r.u32()? as usize, r.u32()? as usize];
+            let (min, dx) = (r.v3()?, r.f()?);
+            let positions = r.v3s()?;
+            let nf = r.u32()? as usize;
+            if nf > r.0.len() {
+                return None;
+            }
+            let mut faces = Vec::with_capacity(nf);
+            for _ in 0..nf {
+                let k = r.u32()? as usize;
+                if k > 64 {
+                    return None;
+                }
+                let verts = (0..k).map(|_| r.u32().filter(|&v| (v as usize) < positions.len())).collect::<Option<Vec<u32>>>()?;
+                let mut fc = crate::mesh::Face::new(verts);
+                fc.smooth = true;
+                faces.push(fc);
+            }
+            let mut mesh = crate::mesh::Mesh::new();
+            mesh.positions = positions;
+            mesh.faces = faces;
+            let count = r.u32()? as usize;
+            let particle_volume = r.f()?;
+            let particles = if r.u32()? == 1 { Some(Arc::new(r.v3s()?)) } else { None };
+            SimFrame::Liquid(LiquidFrame { res, min, dx, mesh: Arc::new(mesh), particles, count, particle_volume, state: None })
+        }
+        5 => {
+            let n = r.u32()? as usize;
+            if n > r.0.len() {
+                return None;
+            }
+            let color = (0..n).map(|_| Some([r.f()?, r.f()?, r.f()?, r.f()?])).collect::<Option<Vec<_>>>()?;
+            let (wet, value, vel) = (r.fs()?, r.fs()?, r.fs()?);
+            SimFrame::Paint(PaintFrame { color: Arc::new(color), wet: Arc::new(wet), value: Arc::new(value), vel: Arc::new(vel) })
         }
         _ => return None,
     })

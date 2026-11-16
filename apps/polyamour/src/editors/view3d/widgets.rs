@@ -171,6 +171,7 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
             MenuItem::Check("Cavity".into(), s.solid.cavity, Op::with("view3d.solid", "cavity")),
             MenuItem::Check("Outline".into(), s.solid.outline, Op::with("view3d.solid", "outline")),
             MenuItem::Separator,
+            lookdev_menu(&d.settings),
             MenuItem::op("Wireframe", "", Op::with("view3d.shading", "WIREFRAME")),
             MenuItem::op("Solid", "", Op::with("view3d.shading", "SOLID")),
             MenuItem::op("Material Preview", "", Op::with("view3d.shading", "MATERIAL")),
@@ -689,4 +690,28 @@ fn solid_color_menu(s: &State) -> MenuItem {
     use sex_3d::render::workbench::ColorType;
     let items = ColorType::ALL.iter().map(|c| MenuItem::Check(c.label().into(), s.solid.color == *c, Op::with("view3d.solid", &format!("color:{}", c.label())))).collect();
     MenuItem::Sub(format!("Color: {}", s.solid.color.label()), items)
+}
+
+/// Material Preview: the studio world, its rotation, strength and opacity.
+fn lookdev_menu(st: &crate::settings::Settings) -> MenuItem {
+    use sex_3d::render::STUDIO_WORLDS;
+    let op = |a: String| Op::with("view3d.lookdev", &a);
+    let mut items: Vec<MenuItem> = STUDIO_WORLDS.iter().enumerate().map(|(i, w)| MenuItem::Check((*w).into(), st.lookdev_world == i, op(format!("world:{i}")))).collect();
+    items.push(MenuItem::Separator);
+    items.push(MenuItem::Heading("Rotation".into()));
+    let deg = st.lookdev_rotation.to_degrees();
+    for r in [0.0f32, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0] {
+        items.push(MenuItem::Check(format!("{r}\u{b0}"), (deg - r).abs() < 0.5, op(format!("rotation:{r}"))));
+    }
+    items.push(MenuItem::Separator);
+    items.push(MenuItem::Heading("Strength".into()));
+    for v in [0.5f32, 1.0, 1.5, 2.0] {
+        items.push(MenuItem::Check(format!("{v:.1}"), (st.lookdev_strength - v).abs() < 1e-3, op(format!("strength:{v}"))));
+    }
+    items.push(MenuItem::Separator);
+    items.push(MenuItem::Heading("World Opacity".into()));
+    for v in [0.0f32, 0.25, 0.5, 0.75, 1.0] {
+        items.push(MenuItem::Check(format!("{:.0}%", v * 100.0), (st.lookdev_opacity - v).abs() < 1e-3, op(format!("opacity:{v}"))));
+    }
+    MenuItem::Sub(format!("Material Preview: {}", STUDIO_WORLDS.get(st.lookdev_world).copied().unwrap_or(STUDIO_WORLDS[0])), items)
 }

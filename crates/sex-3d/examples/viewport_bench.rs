@@ -147,4 +147,19 @@ fn extra_material(scene: &Scene, view: &ViewCamera, w: u32, h: u32, frames: u32,
     }
     let ms = t.elapsed().as_secs_f64() * 1e3 / frames as f64;
     println!("[{name}] Material Preview (EEVEE {w}x{h}, 1 sample/frame): prepare {prep:.1} ms, first sample {first:.1} ms, {ms:.2} ms/frame, {:.0} ms to 16 samples", first + ms * 15.0);
+
+    // Rendered EEVEE with the screen-space effects on: reflections, bloom,
+    // depth of field (gather filter) and soft shadows from the scene's light.
+    let es = EeveeScene::new(scene, false);
+    let lens = sex_3d::render::Lens { aperture: 0.05, focus: view.distance };
+    let st = EeveeSettings { width: w, height: h, samples: frames + 1, ssr: true, bloom: true, lens: Some(lens), ..EeveeSettings::default() };
+    let mut e = Eevee::new(es, &st);
+    e.set_view(RasterCamera::from_view(view, w, h));
+    e.add_sample();
+    let t = Instant::now();
+    for _ in 0..frames {
+        e.add_sample();
+    }
+    let ms = t.elapsed().as_secs_f64() * 1e3 / frames as f64;
+    println!("[{name}] Rendered (EEVEE {w}x{h}, raytracing + bloom + DOF): {ms:.2} ms/frame");
 }

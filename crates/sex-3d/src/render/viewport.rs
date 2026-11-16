@@ -531,10 +531,10 @@ impl ViewportScene {
                     let (mut diff, mut add, mut bdiff, mut badd) = (0.0, 0.0, f32::NAN, 0.0);
                     if n != Vec3::ZERO && studio {
                         let e = to_eye_at(&cam, v);
-                        (diff, add) = workbench::studio_terms(n, e, wb.specular);
+                        (diff, add) = workbench::studio_terms(n, e, wb);
                         // Back faces see the reversed normal (when it faces the eye).
                         if (-n).dot(e) > 0.0 {
-                            (bdiff, badd) = workbench::studio_terms(-n, e, wb.specular);
+                            (bdiff, badd) = workbench::studio_terms(-n, e, wb);
                         }
                     }
                     *o = VertOut { v, s: sv, n, diff, add, bdiff, badd };
@@ -959,11 +959,11 @@ impl ViewportScene {
                 let terms: [(f32, f32); 3] = if t.smooth && front {
                     [0, 1, 2].map(|k| (vo[k].diff, vo[k].add))
                 } else if t.smooth {
-                    [0, 1, 2].map(|k| if vo[k].bdiff.is_nan() { workbench::studio_terms(fnorm, to_eye_at(cam, p[k]), wb.specular) } else { (vo[k].bdiff, vo[k].badd) })
+                    [0, 1, 2].map(|k| if vo[k].bdiff.is_nan() { workbench::studio_terms(fnorm, to_eye_at(cam, p[k]), wb) } else { (vo[k].bdiff, vo[k].badd) })
                 } else {
                     // Flat: the face normal, but the view direction per corner, so the
                     // triangles of one polygon shade seamlessly.
-                    [0, 1, 2].map(|k| workbench::studio_terms(fnorm, to_eye_at(cam, p[k]), wb.specular))
+                    [0, 1, 2].map(|k| workbench::studio_terms(fnorm, to_eye_at(cam, p[k]), wb))
                 };
                 if textured {
                     (KIND_TEX_STUDIO, terms.map(|(d, a)| Vec3::new(d, a, 0.0)))
