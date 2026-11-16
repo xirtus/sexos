@@ -345,6 +345,9 @@ mod tests {
         e
     }
 
+    /// Windows x64 arguments 1-4 into a guest register file.
+    fn args(g: &mut Regs, a: [u64; 4]) { g.rcx = a[0]; g.rdx = a[1]; g.r8 = a[2]; g.r9 = a[3]; }
+
     fn import(p: &Process, name: &str) -> u32 {
         CALL | (FIRST_IMPORT as u32 + p.imports.iter().position(|i| i.1 == name).unwrap() as u32)
     }
@@ -390,7 +393,7 @@ mod tests {
         cpu.steps.push_back(|r| {
             assert_eq!(r.rax, 0x14, "GetStdHandle(STD_OUTPUT_HANDLE) answered");
             let mut e = out_exit(r, unsafe { CALLS[1] });
-            e.regs.rcx = r.rax; e.regs.rdx = STACK_TOP - 0x100; e.regs.r8 = 3; e.regs.r9 = STACK_TOP - 0x110;
+            args(&mut e.regs, [r.rax, STACK_TOP - 0x100, 3, STACK_TOP - 0x110]);
             e
         });
         cpu.steps.push_back(|r| { assert_eq!(r.rax, 1, "WriteFile succeeded"); let mut e = out_exit(r, unsafe { CALLS[2] }); e.regs.rcx = 7; e });
@@ -493,7 +496,7 @@ mod tests {
         let mut p = load();
         let mut regs = p.initial_state().regs;
         let va = |p: &mut Process, regs: &mut Regs, a: u64, size: u64, kind: u64, prot: u64| {
-            regs.rcx = a; regs.rdx = size; regs.r8 = kind; regs.r9 = prot;
+            args(regs, [a, size, kind, prot]);
             let i = p.imports.iter().position(|i| i.1 == "VirtualAlloc").unwrap();
             match win32::call(p, i, regs, &mut Out::default()) { win32::Outcome::Return(v) => v, _ => panic!() }
         };

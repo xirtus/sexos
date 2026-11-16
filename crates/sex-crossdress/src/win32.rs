@@ -87,7 +87,8 @@ fn set_last_error(p: &mut Process, code: u32) { let _ = p.cell.write_u32(process
 pub fn call(p: &mut Process, index: usize, regs: &mut Regs, host: &mut impl Host) -> Outcome {
     let (dll, name, api) = p.imports[index].clone();
     let Some(api) = api else { return Outcome::Stop(Stop::Unimplemented { dll, name }) };
-    let (a1, a2, a3, a4) = (regs.rcx, regs.rdx, regs.r8, regs.r9);
+    // The guest's Windows x64 arguments (a guest register file, not SexOS IPC).
+    let (a1, a2, a3, a4) = { let g = &*regs; (g.rcx, g.rdx, g.r8, g.r9) };
     Outcome::Return(match api {
         Api::GetStdHandle => match a1 as u32 as i32 { -10 => STDIN, -11 => STDOUT, -12 => STDERR, _ => { set_last_error(p, ERROR_INVALID_HANDLE); u64::MAX } },
         Api::WriteFile => {
