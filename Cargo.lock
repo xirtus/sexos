@@ -1636,8 +1636,8 @@ name = "denim-server"
 version = "0.1.0"
 dependencies = [
  "denim",
- "linked_list_allocator",
  "sex-pdx",
+ "talc",
 ]
 
 [[package]]
