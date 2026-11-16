@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Abacus, the SexOS calculator, built on Weft: a keypad, an expression line you can
-//! type into, a history to reuse answers from, menus, the command palette and
-//! keyboard shortcuts. The window code lives here so tests drive it on the host.
+//! type into, a memory (MC MR M+ M−), a history to reuse answers from (Up and Down
+//! pick one, Enter puts it in), scientific functions in degrees or radians (Ctrl+D
+//! switches), menus, the command palette and keyboard shortcuts. After an answer, a
+//! sum that starts with an operator carries on from it. The window code lives here
+//! so tests drive it on the host.
 #![no_std]
 extern crate alloc;
 
@@ -18,7 +21,8 @@ use weft::widget::{Column, Id, Layout, Rows, TextStyle};
 use weft::{Align, ButtonStyle, Response, Ui};
 
 /// The keypad, row by row: what each key shows.
-pub const KEYS: [[&str; 5]; 6] = [
+pub const KEYS: [[&str; 5]; 7] = [
+    ["MC", "MR", "M+", "M−", "±"],
     ["C", "⌫", "(", ")", "%"],
     ["sin", "cos", "tan", "√", "^"],
     ["7", "8", "9", "÷", "π"],
@@ -35,10 +39,40 @@ pub struct Abacus {
     pub ans: f64,
     pub angle: Angle,
     pub past: Vec<(String, String)>,
+    pub memory: f64,
+    /// The small line above the result that shows the memory.
+    pub mem_line: Id,
+    /// The past answer picked with Up and Down, 0 the newest.
+    pub picked: Option<usize>,
+    /// The result on screen was just worked out: a sum that starts with an operator
+    /// carries on from it.
+    pub fresh: bool,
 }
 
+/// Functions and constants the Functions menu puts in the expression line.
+pub const INSERTS: [(&str, &str, &str); 9] = [
+    ("abacus.fn.asin", "Arcsine", "asin("),
+    ("abacus.fn.acos", "Arccosine", "acos("),
+    ("abacus.fn.atan", "Arctangent", "atan("),
+    ("abacus.fn.exp", "Exponential (eˣ)", "exp("),
+    ("abacus.fn.abs", "Absolute Value", "abs("),
+    ("abacus.fn.fact", "Factorial (n!)", "!"),
+    ("abacus.fn.mod", "Remainder (mod)", " mod "),
+    ("abacus.fn.e", "Euler's Number (e)", "e"),
+    ("abacus.fn.mem", "Memory Value", "mem"),
+];
+
 /// Something worth a line in the serial record.
-pub enum Note { Result { expr: String, value: String }, Error(String) }
+pub enum Note {
+    Result { expr: String, value: String },
+    Error(String),
+    /// The memory changed to this value.
+    Memory(String),
+    /// Past answer `index` (0 the newest) went into the expression line.
+    Recall { index: usize, value: String },
+    /// Angles are now in degrees (`true`) or radians.
+    Angle(bool),
+}
 
 impl Abacus {
     pub fn build(ui: &mut Ui) -> Abacus {
@@ -48,16 +82,35 @@ impl Abacus {
             Command::new("abacus.clear-history", "Clear History").icon("trash"),
             Command::new("abacus.degrees", "Degrees").checked(true).keywords("angle"),
             Command::new("abacus.radians", "Radians").checked(false).keywords("angle"),
+            Command::new("abacus.angle", "Switch Degrees and Radians").shortcut("Ctrl+D").keywords("angle deg rad"),
+            Command::new("abacus.square", "Square (x²)").keywords("power"),
+            Command::new("abacus.recip", "Reciprocal (1/x)").keywords("inverse"),
+            Command::new("abacus.negate", "Change Sign (±)").keywords("negative minus"),
+            Command::new("abacus.mem-clear", "Memory Clear").keywords("mc"),
+            Command::new("abacus.mem-recall", "Memory Recall").keywords("mr"),
+            Command::new("abacus.mem-add", "Memory Add").keywords("m+"),
+            Command::new("abacus.mem-sub", "Memory Subtract").keywords("m-"),
+            Command::new("abacus.older", "Older Answer").shortcut("Up").hidden(),
+            Command::new("abacus.newer", "Newer Answer").shortcut("Down").hidden(),
             Command::new("abacus.about", "About Abacus").icon("info"),
         ] { ui.commands.add(c); }
+        for (id, label, _) in INSERTS { ui.commands.add(Command::new(id, label).keywords("function insert")); }
+        let mut functions = Menu::new("Functions").command("abacus.square").command("abacus.recip").command("abacus.negate").separator();
+        for (id, _, _) in INSERTS { functions = functions.command(id); }
         let root = ui.root();
         ui.set_layout(root, Layout::column());
         ui.menubar(root, vec![
             Menu::new("Edit").command("abacus.copy").command("weft.paste").separator().command("abacus.clear").command("abacus.clear-history"),
-            Menu::new("View").command("abacus.degrees").command("abacus.radians").separator().command("weft.palette"),
+            functions,
+            Menu::new("Memory").command("abacus.mem-clear").command("abacus.mem-recall").command("abacus.mem-add").command("abacus.mem-sub"),
+            Menu::new("View").command("abacus.degrees").command("abacus.radians").command("abacus.angle").separator().command("weft.palette"),
             Menu::new("Help").command("abacus.about"),
         ]);
         let body = ui.group(root, Layout::column().gap(10.0).padding(12.0).fill());
+        let mem_line = ui.text(body, "", TextStyle::Caption);
+        ui.set_align(mem_line, Align::End);
+        ui.set_layout(mem_line, Layout::default().fill_width());
+        ui.set_label(mem_line, "Memory");
         let result = ui.text(body, "0", TextStyle::Display);
         ui.set_align(result, Align::End);
         ui.set_layout(result, Layout::default().fill_width());
@@ -72,16 +125,26 @@ impl Abacus {
             for k in row {
                 let b = ui.button(pad, k);
                 ui.set_layout(b, Layout::default().fill_width().min_height(40.0));
-                match k { "=" => ui.set_button_style(b, ButtonStyle::Primary), "C" => ui.set_button_style(b, ButtonStyle::Danger), "⌫" => ui.set_label(b, "Backspace"), _ => {} }
+                match k {
+                    "=" => ui.set_button_style(b, ButtonStyle::Primary),
+                    "C" => ui.set_button_style(b, ButtonStyle::Danger),
+                    "⌫" => ui.set_label(b, "Backspace"),
+                    "MC" => ui.set_label(b, "Memory clear"),
+                    "MR" => ui.set_label(b, "Memory recall"),
+                    "M+" => ui.set_label(b, "Memory add"),
+                    "M−" => ui.set_label(b, "Memory subtract"),
+                    "±" => ui.set_label(b, "Change sign"),
+                    _ => {}
+                }
                 keys.push((b, k));
             }
         }
         let side = ui.column(split);
         ui.text(side, "History", TextStyle::Caption);
         let history = ui.list_with(side, alloc::boxed::Box::new(Rows::default()), vec![Column::new("Sum", 150.0), Column::new("Answer", 100.0).right()]);
-        ui.set_tooltip(history, "Double-click or Enter to reuse an answer");
+        ui.set_tooltip(history, "Up and Down pick an answer, Enter puts it in");
         ui.focus(Some(expr));
-        Abacus { result, expr, history, keys, ans: 0.0, angle: Angle::Degrees, past: Vec::new() }
+        Abacus { result, expr, history, keys, ans: 0.0, angle: Angle::Degrees, past: Vec::new(), memory: 0.0, mem_line, picked: None, fresh: false }
     }
 
     fn put(&mut self, ui: &mut Ui, text: &str) {
@@ -89,15 +152,79 @@ impl Abacus {
         t.push_str(text);
         ui.set_text(self.expr, &t);
         ui.focus(Some(self.expr));
+        self.unpick(ui);
+    }
+
+    fn unpick(&mut self, ui: &mut Ui) {
+        if self.picked.take().is_some() { ui.select_row(self.history, None); }
+    }
+
+    /// The expression line in brackets with something around it, or `ans` when empty.
+    fn wrap(&mut self, ui: &mut Ui, before: &str, after: &str) {
+        let t = String::from(ui.text_of(self.expr).trim());
+        let inner = if t.is_empty() { String::from("ans") } else { t };
+        ui.set_text(self.expr, &format!("{before}({inner}){after}"));
+        ui.focus(Some(self.expr));
+        self.fresh = false;
+        self.unpick(ui);
+    }
+
+    /// What the expression line works out to, or the last answer when it is empty.
+    fn value_now(&self, ui: &Ui) -> Option<f64> {
+        let t = ui.text_of(self.expr).trim();
+        if t.is_empty() { return Some(self.ans); }
+        calc::eval_with(t, self.ans, self.memory, self.angle).ok()
+    }
+
+    fn show_memory(&mut self, ui: &mut Ui) -> Note {
+        let v = calc::format(self.memory);
+        ui.set_text(self.mem_line, &if self.memory == 0.0 { String::new() } else { format!("M = {v}") });
+        Note::Memory(v)
+    }
+
+    fn clear(&mut self, ui: &mut Ui) {
+        ui.set_text(self.expr, "");
+        ui.set_text(self.result, "0");
+        ui.set_color(self.result, None);
+        ui.focus(Some(self.expr));
+        self.fresh = false;
+        self.unpick(ui);
+    }
+
+    /// Up (`older`) or Down: picks a past answer in the history.
+    fn pick(&mut self, ui: &mut Ui, older: bool) {
+        let n = self.past.len();
+        if n == 0 { return; }
+        self.picked = match (self.picked, older) {
+            (None, true) => Some(0),
+            (None, false) => None,
+            (Some(i), true) => Some((i + 1).min(n - 1)),
+            (Some(0), false) => None,
+            (Some(i), false) => Some(i - 1),
+        };
+        ui.select_row(self.history, self.picked);
+    }
+
+    /// Puts past answer `index` into the expression line.
+    fn recall(&mut self, ui: &mut Ui, index: usize) -> Option<Note> {
+        let (_, v) = self.past.get(index).cloned()?;
+        // A negative answer goes in brackets so it stays one value in what follows.
+        let text = if v.starts_with('-') { format!("({v})") } else { v.clone() };
+        self.put(ui, &text);
+        self.fresh = false;
+        Some(Note::Recall { index, value: v })
     }
 
     /// Works out the expression line.
     pub fn equals(&mut self, ui: &mut Ui) -> Note {
         // Typing goes on in the expression line whatever was clicked.
         ui.focus(Some(self.expr));
-        let expr = String::from(ui.text_of(self.expr).trim());
+        let mut expr = String::from(ui.text_of(self.expr).trim());
         if expr.is_empty() { return Note::Error("empty".into()); }
-        match calc::eval(&expr, self.ans, self.angle) {
+        // Straight after an answer, `+8` means `ans+8`.
+        if core::mem::take(&mut self.fresh) && expr.starts_with(['+', '-', '*', '/', '^', '%', '!', '×', '÷', '−']) { expr.insert_str(0, "ans"); }
+        self.unpick(ui);
+        match calc::eval_with(&expr, self.ans, self.memory, self.angle) {
             Ok(v) => {
                 self.ans = v;
                 let value = calc::format(v);
@@ -107,15 +234,11 @@ impl Abacus {
                 self.past.truncate(500);
                 ui.set_rows(self.history, Rows(self.past.iter().map(|(e, v)| vec![e.clone(), format!("= {v}")]).collect()));
                 ui.set_text(self.expr, "");
+                self.fresh = true;
                 Note::Result { expr, value }
             }
             Err(e) => {
-                let msg = match e {
-                    calc::Error::DivideByZero => String::from("Can't divide by zero"),
-                    calc::Error::Domain => String::from("Out of range"),
-                    calc::Error::Unknown(n) => format!("Unknown: {n}"),
-                    calc::Error::Syntax(_) => String::from("Check the sum"),
-                };
+                let msg = e.message();
                 ui.set_text(self.result, &msg);
                 let danger = ui.theme().palette.danger;
                 ui.set_color(self.result, Some(danger));
@@ -127,13 +250,19 @@ impl Abacus {
     /// Acts on one response; returns a note for the record, if any.
     pub fn on(&mut self, ui: &mut Ui, r: &Response) -> Option<Note> {
         match r {
-            Response::Submitted(id) if *id == self.expr => return Some(self.equals(ui)),
+            Response::Submitted(id) if *id == self.expr => {
+                // Enter on a picked answer puts it in; otherwise it works the sum out.
+                if let Some(i) = self.picked { return self.recall(ui, i); }
+                return Some(self.equals(ui));
+            }
             Response::Clicked(id) => {
                 let k = self.keys.iter().find(|(b, _)| b == id)?.1;
                 match k {
                     "=" => return Some(self.equals(ui)),
-                    "C" => { ui.set_text(self.expr, ""); ui.set_text(self.result, "0"); ui.set_color(self.result, None); ui.focus(Some(self.expr)); }
+                    "C" => self.clear(ui),
                     "⌫" => { let mut t = String::from(ui.text_of(self.expr)); t.pop(); ui.set_text(self.expr, &t); ui.focus(Some(self.expr)); }
+                    "MC" | "MR" | "M+" | "M−" => return self.memory_key(ui, k),
+                    "±" => self.wrap(ui, "-", ""),
                     "sin" | "cos" | "tan" | "ln" | "log" => { let s = format!("{k}("); self.put(ui, &s); }
                     "√" => self.put(ui, "√("),
                     "ans" => self.put(ui, "ans"),
@@ -141,17 +270,30 @@ impl Abacus {
                     k => self.put(ui, k),
                 }
             }
-            Response::Activated(id, row) if *id == self.history => {
-                if let Some((_, v)) = self.past.get(*row).cloned() { self.put(ui, &v); }
-            }
+            Response::Activated(id, row) if *id == self.history => return self.recall(ui, *row),
             Response::Command(c) => match c.as_str() {
-                "abacus.clear" => { ui.set_text(self.expr, ""); ui.set_text(self.result, "0"); ui.set_color(self.result, None); }
+                "abacus.clear" => self.clear(ui),
+                "abacus.older" | "abacus.newer" => self.pick(ui, c == "abacus.older"),
+                "abacus.square" => self.wrap(ui, "", "^2"),
+                "abacus.recip" => self.wrap(ui, "1/", ""),
+                "abacus.negate" => self.wrap(ui, "-", ""),
+                "abacus.mem-clear" => return self.memory_key(ui, "MC"),
+                "abacus.mem-recall" => return self.memory_key(ui, "MR"),
+                "abacus.mem-add" => return self.memory_key(ui, "M+"),
+                "abacus.mem-sub" => return self.memory_key(ui, "M−"),
+                "abacus.angle" => {
+                    let deg = self.angle != Angle::Degrees;
+                    self.set_angle(ui, deg);
+                    return Some(Note::Angle(deg));
+                }
+                id if id.starts_with("abacus.fn.") => {
+                    if let Some((_, _, text)) = INSERTS.iter().find(|i| i.0 == id) { self.put(ui, text); }
+                }
                 "abacus.clear-history" => { self.past.clear(); ui.set_rows(self.history, Rows::default()); }
                 "abacus.degrees" | "abacus.radians" => {
-                    self.angle = if c == "abacus.degrees" { Angle::Degrees } else { Angle::Radians };
-                    ui.commands.set_checked("abacus.degrees", self.angle == Angle::Degrees);
-                    ui.commands.set_checked("abacus.radians", self.angle == Angle::Radians);
-                    ui.toast(if self.angle == Angle::Degrees { "Angles in degrees" } else { "Angles in radians" }, None, 2000);
+                    let deg = c == "abacus.degrees";
+                    self.set_angle(ui, deg);
+                    return Some(Note::Angle(deg));
                 }
                 "abacus.about" => { ui.message("Abacus", "The SexOS calculator, built on Weft.", &["OK"], 0, 0); }
                 _ => {}
@@ -159,6 +301,34 @@ impl Abacus {
             _ => {}
         }
         None
+    }
+
+    fn set_angle(&mut self, ui: &mut Ui, degrees: bool) {
+        self.angle = if degrees { Angle::Degrees } else { Angle::Radians };
+        ui.commands.set_checked("abacus.degrees", degrees);
+        ui.commands.set_checked("abacus.radians", !degrees);
+        ui.toast(if degrees { "Angles in degrees" } else { "Angles in radians" }, None, 2000);
+    }
+
+    /// MC, MR, M+ and M−.
+    fn memory_key(&mut self, ui: &mut Ui, k: &str) -> Option<Note> {
+        // Typing goes on in the expression line whatever was clicked.
+        ui.focus(Some(self.expr));
+        match k {
+            "MC" => self.memory = 0.0,
+            "MR" => {
+                let v = calc::format(self.memory);
+                let text = if v.starts_with('-') { format!("({v})") } else { v };
+                self.fresh = false;
+                self.put(ui, &text);
+                return None;
+            }
+            _ => {
+                let v = self.value_now(ui)?;
+                if k == "M+" { self.memory += v } else { self.memory -= v }
+            }
+        }
+        Some(self.show_memory(ui))
     }
 
     /// Text for Copy Result.

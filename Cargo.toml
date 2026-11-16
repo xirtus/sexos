@@ -132,8 +132,6 @@ members = [
     "apps/swingers",
     "apps/needle",
     "apps/pdf",
-    "crates/sex-calc-core",
-    "apps/sex-calc",
     "crates/sex-calendar",
     "crates/climax-core",
     "apps/batik",

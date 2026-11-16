@@ -3,8 +3,9 @@
 //!
 //! Serial record: `[abacus.ready] target= task= keys=`, then after `[abacus.layout] w= h=`
 //! (again after each resize) one `[abacus.key] n= x= y=` per keypad key (in `abacus::KEYS` order) (window pixels, for gates), `[abacus.result] expr= value=`,
-//! `[abacus.error] what=`, `[abacus.command] id=` and `[abacus.frame] n=` for the first
-//! frame.
+//! `[abacus.error] what=`, `[abacus.memory] value=`, `[abacus.recall] index= value=`,
+//! `[abacus.mode] angle=deg|rad`, `[abacus.command] id=` and `[abacus.frame] n=` for the
+//! first frame.
 #![cfg_attr(feature = "sexos", no_std)]
 #![cfg_attr(feature = "sexos", no_main)]
 
@@ -45,6 +46,9 @@ mod program {
                 match calc.on(&mut app.ui, &r) {
                     Some(Note::Result { expr, value }) => sex_pdx::serial_record!("[abacus.result] expr={} value={}", ascii(&expr), value),
                     Some(Note::Error(what)) => sex_pdx::serial_record!("[abacus.error] what={}", what),
+                    Some(Note::Memory(value)) => sex_pdx::serial_record!("[abacus.memory] value={}", value),
+                    Some(Note::Recall { index, value }) => sex_pdx::serial_record!("[abacus.recall] index={} value={}", index, value),
+                    Some(Note::Angle(deg)) => sex_pdx::serial_record!("[abacus.mode] angle={}", if deg { "deg" } else { "rad" }),
                     None => {}
                 }
             }

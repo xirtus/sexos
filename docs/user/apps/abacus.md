@@ -1,48 +1,69 @@
 # Abacus (Calculator)
 
-> **Identity Note**: **Abacus** (`apps/sex-calc`, `/bin/abacus`, function key **F9**) is the native SexOS mathematical calculation suite, named under Andreas's classical computing instruments theme.
-
-**Abacus** provides exact rational arithmetic, scientific computation, and programmer base conversions. Designed for precision, Abacus avoids floating-point rounding errors when calculating exact fractions, ratios, and currencies.
-
----
+**Abacus** (`apps/abacus`, `/bin/abacus`) is the SexOS calculator, built on the Weft
+toolkit. Type a sum or click the keypad, reuse past answers, and keep a number in
+memory. The old `sex-calc` name still starts it.
 
 ## Launching Abacus
 
-- **Global Shortcut**: Press **`F9`** to summon the floating Abacus window.
-- **From Spindle**: Run `run abacus` or use the built-in `calc <expr>` command.
-- **From Voyeur**: Press **`Super+D`** and type math equations directly (e.g., `42 * 1337`).
+- **From Spindle**: `run abacus` (or `run sex-calc`). Spindle's own `calc <expr>`
+  command works sums out in the terminal.
+- **From Voyeur**: press **Super+D** and type `abacus`.
 
----
+## Typing sums
 
-## Operating Modes
+Type into the expression line and press **Enter**. Abacus understands:
 
-Press **`Tab`** in Abacus to switch between operational modes:
+- `+ - * / ^`, and `× ÷ −` as the keypad shows them; brackets; a leading minus.
+- `%` as percent (`200*15%` is 30) and `mod` for the remainder (`7 mod 3` is 1).
+- `!` for factorials (`5!`), and sums written without `*` (`2pi`, `3(4+1)`).
+- Constants: `pi` (or `π`), `e`, `ans` (the last answer) and `mem` (the memory).
+- Functions: `sqrt` (or `√`), `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ln`,
+  `log`, `exp`, `abs`, `round`, `floor`, `ceil`. `sin 30` works without brackets.
+- Angles in degrees (the default) or radians. In degrees, `sin(180)` is exactly 0
+  and `tan(90)` is refused.
 
-### 1. Standard & Exact Arithmetic
-- Standard operations: `+`, `-`, `*`, `/`, `%` (modulo), `**` (exponentiation).
-- **Exact Rational Results**: Computes fractions and currency exactly without binary floating-point drift (e.g., `0.1 + 0.2 = 0.3`).
-- **Parentheses**: Full expression nesting: `((12 + 8) * 3) / 2`.
+Straight after an answer, a sum that starts with an operator carries on from it:
+`+8` means `ans+8`. A sum that starts with a number starts afresh.
 
-### 2. Scientific Math
-- **Trigonometric Functions**: `sin(x)`, `cos(x)`, `tan(x)`, `asin(x)`, `acos(x)`, `atan(x)`.
-- **Logarithms & Powers**: `ln(x)`, `log10(x)`, `log2(x)`, `exp(x)`, `sqrt(x)`.
-- **Constants**: Built-in definitions for `pi` (3.14159...) and `e` (2.71828...).
+When something is wrong, the result line says what: *Brackets don't match*, *Can't
+divide by zero*, *Out of range*, *Too big*, *Unknown: name* or *Check the sum*.
 
-### 3. Programmer & Radix Conversion
-- **Base Conversions**: Convert numbers dynamically between Decimal, Hexadecimal (`hex`), Binary (`bin`), and Octal (`oct`).
-  - Example: `255 in hex` → `0xFF`
-  - Example: `0b101010 in dec` → `42`
-- **Bitwise Operations**: `AND` (`&`), `OR` (`|`), `XOR` (`^`), `NOT` (`~`), bit shifts (`<<`, `>>`).
+## The keypad
 
----
+| Row | Keys |
+| --- | --- |
+| Memory | **MC** clear, **MR** recall, **M+** add, **M−** subtract, **±** change sign |
+| Editing | **C** clear, **⌫** backspace, `(` `)` `%` |
+| Functions | `sin` `cos` `tan` `√` `^` |
+| Numbers | `0`–`9`, `.`, `÷ × − +`, `π`, `ln`, `log`, `ans`, **=** |
 
-## Keyboard Controls
+M+ and M− use what the expression line works out to, or the last answer when the line
+is empty. The line above the result shows the memory while it holds a value.
 
-| Key | Action | Description |
-|---|---|---|
-| **`Enter`** | **Calculate** | Evaluate the entered expression and append result to history tape. |
-| **`Up / Down`** | **History Recall** | Cycle through previous equations and recalled answers (`ans`). |
-| **`Esc`** | **Clear** | Clear current input line. |
-| **`Tab`** | **Switch Mode** | Cycle between Standard, Scientific, and Programmer modes. |
-| **`Ctrl+C`** | **Copy Result** | Copy evaluated answer to the system clipboard. |
-| **`Q`** | **Quit** | Close Abacus. |
+## Menus
+
+- **Edit**: Copy Result (**Ctrl+Shift+C**), Paste, Clear (**Esc**), Clear History.
+- **Functions**: Square (x²), Reciprocal (1/x), Change Sign, and functions and
+  constants to put in the expression line (asin, acos, atan, exp, abs, n!, mod, e, mem).
+- **Memory**: Memory Clear, Recall, Add and Subtract.
+- **View**: Degrees, Radians, Switch Degrees and Radians (**Ctrl+D**), and the command
+  palette (**Ctrl+Shift+P**), which finds every command by name.
+
+## History
+
+Every answer goes into the History list beside the keypad. **Up** and **Down** pick a
+past answer and **Enter** puts it into the expression line; so does a double-click.
+Negative answers go in with brackets, so they stay one value.
+
+## Keys
+
+| Key | Does |
+| --- | --- |
+| **Enter** | Work the sum out (or put in the picked answer) |
+| **Esc** | Clear |
+| **Up / Down** | Pick a past answer |
+| **Ctrl+D** | Switch degrees and radians |
+| **Ctrl+Shift+C** | Copy the result |
+| **Ctrl+Shift+P** | Command palette |
+| **F11** | Close (Shell) |
