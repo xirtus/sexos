@@ -60,6 +60,9 @@ itself), so the same cell runs under KVM in CI. EAX says what the call is.
   bitmap, the stub bytes, user copies honouring page rights, KERNEL32 calls end to end
   against a scripted vCPU, a page fault dispatched to a handler and resumed from the
   edited CONTEXT, unhandled and ring-0 faults, and VirtualAlloc reserve/commit/refuse.
+- The `.exe` rebuild is byte-compared only with the LLVM major it was built with
+  (`test/LLVM_MAJOR`, 18). With another LLVM (CI has 21) the gate runs that rebuild in the
+  KVM cell instead, so both builds must pass.
 - `tests/kvm.rs`: the test `.exe` in a real VT-x/SVM cell on Linux KVM, through the same
   `Process`. It must print `crossdress: all checks passed`, exit 0 and handle five
   exceptions. It prints SKIP where `/dev/kvm` is not usable (this cloud container has
