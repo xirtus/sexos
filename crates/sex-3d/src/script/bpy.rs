@@ -349,6 +349,33 @@ impl State {
     pub fn action_mut(&mut self, name: &str) -> Option<&mut Action> {
         self.actions.iter_mut().find(|a| a.name == name)
     }
+    /// The objects' actions (`animation_data.action`) for a .blend file,
+    /// with Blender's `BEZT_IPO_*` interpolation numbers and the handles.
+    pub fn blend_actions(&self) -> Vec<crate::io::blend::BlendAction> {
+        use crate::io::blend::{BlendAction, BlendFCurve, BlendKey};
+        const IPO: [&str; 13] = ["CONSTANT", "LINEAR", "BEZIER", "BACK", "BOUNCE", "CIRC", "CUBIC", "ELASTIC", "EXPO", "QUAD", "QUART", "QUINT", "SINE"];
+        self.anim
+            .iter()
+            .filter_map(|(object, action)| {
+                let a = self.action(action)?;
+                let curves = a
+                    .fcurves
+                    .iter()
+                    .filter(|c| !c.keys.is_empty())
+                    .map(|c| BlendFCurve {
+                        path: c.data_path.clone(),
+                        index: c.index as usize,
+                        keys: c
+                            .keys
+                            .iter()
+                            .map(|k| BlendKey { frame: k.co[0], value: k.co[1], interpolation: IPO.iter().position(|i| *i == k.interpolation).unwrap_or(2) as u8, handles: Some([k.handle_left, k.handle_right]) })
+                            .collect(),
+                    })
+                    .collect();
+                Some(BlendAction { object: object.clone(), action: a.name.clone(), curves, parent_inverse: None })
+            })
+            .collect()
+    }
     fn prop_f(&self, k: &str, d: f32) -> f32 {
         self.props.get(k).and_then(|v| v.parse().ok()).unwrap_or(d)
     }
@@ -2859,7 +2886,14 @@ impl Session {
                 if path.is_empty() {
                     return Err("save_mainfile needs filepath= (Polyamour scripts have no open file path)".into());
                 }
-                std::fs::write(&path, scene_to_polyops(scene)).map_err(|e| format!("cannot write {path}: {e}"))?;
+                // A `.blend` name writes a .blend file, anything else polyops.
+                let bytes = if path.to_ascii_lowercase().ends_with(".blend") {
+                    let opts = io::blend::BlendExport { width: self.bpy.prop_f("render.resolution_x", 1920.0).max(1.0) as u32, height: self.bpy.prop_f("render.resolution_y", 1080.0).max(1.0) as u32 };
+                    io::blend::export_blend(scene, &self.bpy.blend_actions(), opts)
+                } else {
+                    scene_to_polyops(scene).into_bytes()
+                };
+                std::fs::write(&path, bytes).map_err(|e| format!("cannot write {path}: {e}"))?;
                 self.bpy.files_written.push(path);
                 return Ok(true);
             }

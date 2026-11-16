@@ -268,7 +268,10 @@ impl App {
                     self.doc.report = "New file".into();
                 }
                 "wm.quit_blender" => self.quit = true,
-                "wm.save_mainfile" | "wm.save_as_mainfile" => self.save(None),
+                "wm.save_mainfile" => self.save(None),
+                // Save As with a file name: `.blend` writes a .blend file.
+                "wm.save_as_mainfile" if !op.arg.is_empty() => self.save_as(&op.arg),
+                "wm.save_as_mainfile" => self.save(None),
                 "wm.export" => self.save(Some(op.arg.clone())),
                 "render.render" => self.render(),
                 "image.browse" => self.doc.show_viewer = op.arg == "Viewer Node",
@@ -320,6 +323,27 @@ impl App {
                 self.doc.report = format!("Saved \"{}\"", wrote.join(", "));
             }
             Err(e) => self.doc.report = e,
+        }
+    }
+
+    /// Save under `name`: a .blend file when it ends in `.blend`, Polyamour's
+    /// own format otherwise.
+    fn save_as(&mut self, name: &str) {
+        let bytes = if name.to_ascii_lowercase().ends_with(".blend") {
+            let mut scene = self.doc.scene.clone();
+            scene.frame_current = self.doc.frame;
+            let opts = sex_3d::io::blend::BlendExport { width: self.doc.settings.resolution_x, height: self.doc.settings.resolution_y };
+            sex_3d::io::blend::export_blend(&scene, &crate::anim::blend_actions(&self.doc), opts)
+        } else {
+            crate::persist::save(&self.doc).into_bytes()
+        };
+        match std::fs::write(name, &bytes) {
+            Ok(()) => {
+                self.doc.path = Some(name.to_string());
+                self.doc.dirty = false;
+                self.doc.report = format!("Saved \"{name}\"");
+            }
+            Err(e) => self.doc.report = format!("Cannot write {name}: {e}"),
         }
     }
 
@@ -589,6 +613,40 @@ mod tests {
         assert_eq!(app.workspaces[app.active_ws].name, "Modeling");
         app.frame(Input::key_mods(Key::PageUp, Mods::CTRL));
         assert_eq!(app.workspaces[app.active_ws].name, "Layout");
+    }
+
+    #[test]
+    fn save_as_blend_writes_a_blend_file() {
+        let mut app = App::new(1280, 720);
+        app.frame(Input::Tick);
+        let name = app.doc.scene.objects[0].name.clone();
+        let mut a = crate::anim::Action::new("Move");
+        a.curve_mut("location", 0).insert(1.0, 0.0, crate::anim::Interp::Linear);
+        a.curve_mut("location", 0).insert(10.0, 3.0, crate::anim::Interp::Linear);
+        app.doc.anim.actions.push(a);
+        let o = app.doc.anim.entry(&name);
+        app.doc.anim.objects[o].action = Some(app.doc.anim.actions.len() - 1);
+        let path = std::env::temp_dir().join(format!("polyamour-save-{}.blend", std::process::id()));
+        let path = path.to_string_lossy().to_string();
+        app.doc.queue.push(Op::with("wm.save_as_mainfile", &path));
+        app.frame(Input::Tick);
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{e}: {}", app.doc.report));
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.doc.path.as_deref(), Some(path.as_str()));
+        let (scene, actions) = sex_3d::io::blend::import_blend_full(&bytes).unwrap();
+        let names = |s: &sex_3d::Scene| s.objects.iter().map(|o| o.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&scene), names(&app.doc.scene));
+        let act = actions.iter().find(|x| x.object == name).expect("action written");
+        assert_eq!(act.action, "Move");
+        assert_eq!(act.curves[0].keys.len(), 2);
+        assert_eq!(act.curves[0].keys[1].interpolation, sex_3d::io::blend::INTERP_LINEAR);
+        // Plain Save still writes Polyamour's own format, next to it.
+        app.doc.queue.push(Op::new("wm.save_mainfile"));
+        app.frame(Input::Tick);
+        let poly = path.replace(".blend", ".poly");
+        let text = std::fs::read(&poly).unwrap_or_else(|e| panic!("{e}: {}", app.doc.report));
+        let _ = std::fs::remove_file(&poly);
+        assert!(text.starts_with(b"polyops "));
     }
 
     #[test]

@@ -1610,6 +1610,49 @@ pub fn adopt_blend_actions(doc: &mut Doc, actions: &[sex_3d::io::blend::BlendAct
     doc.anim.dirty = true;
 }
 
+/// The objects' active actions for writing a .blend: every curve with its
+/// keys, interpolation (Blender's `BEZT_IPO_*` numbers) and handles. Easing
+/// modes, extrapolation, F-curve modifiers, NLA and drivers are not carried.
+pub fn blend_actions(doc: &Doc) -> Vec<sex_3d::io::blend::BlendAction> {
+    use sex_3d::io::blend::{BlendAction, BlendFCurve, BlendKey};
+    let ipo = |i: Interp| -> u8 {
+        match i {
+            Interp::Constant => 0,
+            Interp::Linear => 1,
+            Interp::Bezier => 2,
+            Interp::Back => 3,
+            Interp::Bounce => 4,
+            Interp::Circ => 5,
+            Interp::Cubic => 6,
+            Interp::Elastic => 7,
+            Interp::Expo => 8,
+            Interp::Quad => 9,
+            Interp::Quart => 10,
+            Interp::Quint => 11,
+            Interp::Sine => 12,
+        }
+    };
+    let mut out = Vec::new();
+    for oa in &doc.anim.objects {
+        let Some(a) = oa.action.and_then(|i| doc.anim.actions.get(i)) else { continue };
+        if doc.scene.find_object(&oa.object).is_none() {
+            continue;
+        }
+        let curves = a
+            .curves
+            .iter()
+            .filter(|c| !c.keys.is_empty())
+            .map(|c| BlendFCurve {
+                path: c.path.clone(),
+                index: c.index,
+                keys: c.keys.iter().map(|k| BlendKey { frame: k.frame, value: k.value, interpolation: ipo(k.interp), handles: Some([k.left, k.right]) }).collect(),
+            })
+            .collect();
+        out.push(BlendAction { object: oa.object.clone(), action: a.name.clone(), curves, parent_inverse: None });
+    }
+    out
+}
+
 /// Whether `oi` is a mesh with shape keys (the Shape Key Editor's object).
 pub fn has_shape_keys(scene: &Scene, oi: usize) -> bool {
     matches!(scene.objects.get(oi).map(|o| &o.data), Some(ObjectData::Mesh(mi)) if scene.meshes.get(*mi).is_some_and(|m| m.shape_keys.len() > 1))
