@@ -352,7 +352,7 @@ impl App {
         }
     }
 
-    /// F12: path-trace the active camera's view and show it in the Rendering workspace.
+    /// F12: render the active camera's view with the chosen engine and show it in the Rendering workspace.
     fn render(&mut self) {
         // Render Properties (engine, samples, bounces, denoise, clamp) and Output
         // Properties (resolution and %), with render visibility applied.
@@ -360,7 +360,7 @@ impl App {
         let base = self.doc.settings.render_scene(&self.doc.scene);
         let scene = crate::anim::scene_at(&self.doc.anim, &base, self.doc.frame as f32, self.doc.settings.motion_blur);
         sex_3d::physics::update(&scene);
-        let r = sex_3d::render::render(&scene, &settings);
+        let r = self.doc.settings.render_with_engine(&scene, &settings);
         let n = r.passes.len();
         let passes = match n {
             0 => String::new(),
@@ -384,7 +384,7 @@ impl App {
         let stem = if d.settings.output_path.is_empty() { "/tmp/".to_string() } else { d.settings.output_path.clone() };
         let (mut written, mut error, mut last) = (Vec::new(), None, None);
         let anim = &d.anim;
-        sex_3d::render::render_frames(
+        d.settings.render_frames(
             frames.iter().copied(),
             &settings,
             |f| {
@@ -402,7 +402,6 @@ impl App {
                 last = Some(r.color);
                 error.is_none()
             },
-            None,
         );
         if let Some(img) = last {
             self.doc.render = Some(img);

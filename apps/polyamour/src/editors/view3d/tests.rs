@@ -264,6 +264,45 @@ fn rendered_shading_refines_on_tick() {
     assert!(s.render.as_ref().is_some_and(|r| r.samples() >= 2));
 }
 
+#[test]
+fn material_preview_and_rendered_engines() {
+    use crate::settings::Engine;
+    let (mut app, _) = setup();
+    view(&mut app).shading = super::Shading::Material;
+    app.frame(Input::Tick);
+    app.frame(Input::Tick);
+    let s = view(&mut app);
+    let rv = s.render.as_ref().expect("material preview renders");
+    assert!(rv.samples() >= 1 && rv.activity() == "Rendering");
+    // At the viewport's resolution, not a fraction of it.
+    assert_eq!((rv.w as i32, rv.h as i32), (s.rect.w, s.rect.h));
+    assert!(rv.rgba.chunks_exact(4).any(|p| p[0] != p[2]), "shaded, not blank");
+    for engine in [Engine::Eevee, Engine::Workbench] {
+        app.doc.settings.engine = engine;
+        view(&mut app).shading = super::Shading::Rendered;
+        app.frame(Input::Tick);
+        app.frame(Input::Tick);
+        let rv = view(&mut app).render.as_ref().expect("rendered view");
+        assert!(rv.samples() >= 1, "{engine:?}");
+    }
+}
+
+#[test]
+fn solid_shading_options_from_the_menu() {
+    use sex_3d::render::workbench::{ColorType, Lighting};
+    let (mut app, _) = setup();
+    app.doc.queue.push(crate::ui::Op::with("view3d.solid", "lighting:Flat"));
+    app.doc.queue.push(crate::ui::Op::with("view3d.solid", "color:Random"));
+    app.doc.queue.push(crate::ui::Op::with("view3d.solid", "cavity"));
+    app.frame(Input::Tick);
+    let w = view(&mut app).solid;
+    assert_eq!((w.lighting, w.color, w.cavity), (Lighting::Flat, ColorType::Random, true));
+    app.doc.queue.push(crate::ui::Op::with("view3d.solid", "matcap:2"));
+    app.frame(Input::Tick);
+    let w = view(&mut app).solid;
+    assert_eq!((w.lighting, w.matcap), (Lighting::MatCap, 2));
+}
+
 /// Writes screenshots of a few states when POLYAMOUR_SHOTS names a folder.
 #[test]
 fn screenshots_on_request() {

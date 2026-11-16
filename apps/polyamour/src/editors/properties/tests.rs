@@ -322,6 +322,40 @@ fn render_tab_sampling_and_color_management() {
 }
 
 #[test]
+fn eevee_and_workbench_engines_drive_f12() {
+    use crate::settings::Engine;
+    let mut app = app();
+    open_tab(&mut app, Tab::Render);
+    pick(&mut app, "engine", "EEVEE");
+    assert_eq!(app.doc.settings.engine, Engine::Eevee);
+    app.frame(Input::Tick);
+    set_field(&mut app, "eevee_samples", "2");
+    assert_eq!(app.doc.settings.eevee_render_samples, 2);
+    pick(&mut app, "eevee_shadow_resolution", "512");
+    assert_eq!(app.doc.settings.eevee_shadow_resolution, 512);
+    app.doc.settings.resolution_pct = 5;
+    app.frame(Input::key(Key::F(12)));
+    let img = app.doc.render.as_ref().expect("rendered");
+    assert_eq!((img.width, img.height), (96, 54));
+    assert!(app.doc.report.contains("2 samples"), "{}", app.doc.report);
+    // The lit cube is in the middle of the frame.
+    let c = img.pixels[27 * 96 + 48];
+    assert!(c[0] > 0.02 && c[3] > 0.99, "{c:?}");
+    app.doc.render = None;
+    pick(&mut app, "engine", "Workbench");
+    assert_eq!(app.doc.settings.engine, Engine::Workbench);
+    app.frame(Input::Tick);
+    app.doc.settings.workbench_samples = 2;
+    pick(&mut app, "workbench_cavity_type", "Both");
+    assert_eq!(app.doc.settings.workbench.cavity_type, sex_3d::render::workbench::CavityType::Both);
+    app.frame(Input::key(Key::F(12)));
+    let img = app.doc.render.as_ref().expect("rendered");
+    assert_eq!((img.width, img.height), (96, 54));
+    app.frame(Input::key_mods(Key::Char('z'), Mods::CTRL));
+    assert_eq!(app.doc.settings.workbench.cavity_type, sex_3d::render::workbench::CavityType::World);
+}
+
+#[test]
 fn ctrl_f12_renders_the_frame_range_to_files() {
     let mut app = app();
     let dir = std::env::temp_dir().join(format!("polyamour-anim-{}", std::process::id()));

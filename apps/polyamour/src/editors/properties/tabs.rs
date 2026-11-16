@@ -10,6 +10,7 @@ use crate::doc::Doc;
 use crate::draw::Rect;
 use crate::settings::{Engine, UnitSystem};
 use crate::ui::{MenuItem, NumOpts, Op};
+use sex_3d::render::workbench::{CavityType, ColorType, Lighting, MATCAPS};
 use sex_3d::render::{Look, MistFalloff, Pass, ShutterPosition, ViewTransform};
 use sex_3d::scene::ObjectData;
 
@@ -205,21 +206,98 @@ pub fn render(l: &mut L, d: &mut Doc) {
         }
         Engine::Workbench => {
             l.space(4);
-            l.panel(d, "render.wb.sampling", "Sampling", true, &mut |l, _| {
-                l.info("Render", "1 Sample (direct light)");
-                inactive(l, |l| l.enumeration("Viewport", "wb_vp", "8 Samples", &[]));
+            l.panel(d, "render.wb.sampling", "Sampling", true, &mut |l, d| {
+                set_uint!(l, d, "Render", "wb_samples", workbench_samples, 1, 64, "Workbench Samples");
             });
-            l.panel(d, "render.wb.lighting", "Lighting", true, &mut |l, _| {
-                inactive(l, |l| {
-                    l.expand("", &["Studio", "Flat", "MatCap"], 0);
-                });
+            l.panel(d, "render.wb.lighting", "Lighting", true, &mut |l, d| {
+                let cur = Lighting::ALL.iter().position(|&v| v == d.settings.workbench.lighting).unwrap_or(0);
+                if let Some(i) = l.expand("", &Lighting::ALL.map(|v| v.label()), cur) {
+                    if i != cur {
+                        l.commit(d, "Lighting");
+                        d.settings.workbench.lighting = Lighting::ALL[i];
+                    }
+                }
+                if d.settings.workbench.lighting == Lighting::MatCap {
+                    let m = MATCAPS.get(d.settings.workbench.matcap).copied().unwrap_or(MATCAPS[0]);
+                    l.enumeration("MatCap", "workbench_matcap", m, &MATCAPS);
+                }
             });
-            l.panel(d, "render.wb.color", "Color", true, &mut |l, _| {
-                inactive(l, |l| {
-                    l.expand("", &["Material", "Object", "Attribute", "Single", "Random", "Texture"], 0);
-                });
+            l.panel(d, "render.wb.color", "Color", true, &mut |l, d| {
+                let cur = ColorType::ALL.iter().position(|&v| v == d.settings.workbench.color).unwrap_or(0);
+                if let Some(i) = l.expand("", &ColorType::ALL.map(|v| v.label()), cur) {
+                    if i != cur {
+                        l.commit(d, "Color");
+                        d.settings.workbench.color = ColorType::ALL[i];
+                    }
+                }
+            });
+            l.panel(d, "render.wb.options", "Options", true, &mut |l, d| {
+                let mut wb = d.settings.workbench;
+                let mut changed = None;
+                if wb.lighting == Lighting::Studio && l.check("", "Specular Lighting", &mut wb.specular) {
+                    changed = Some("Specular Lighting");
+                }
+                if l.check("", "Shadow", &mut wb.shadow) {
+                    changed = Some("Shadow");
+                }
+                if wb.shadow && l.slider("Intensity", "wb_shadow_int", &mut wb.shadow_intensity, 0.0, 1.0) {
+                    changed = Some("Shadow Intensity");
+                }
+                if l.check("", "Cavity", &mut wb.cavity) {
+                    changed = Some("Cavity");
+                }
+                if wb.cavity {
+                    l.enumeration("Type", "workbench_cavity_type", wb.cavity_type.label(), &CavityType::ALL.map(|v| v.label()));
+                    if wb.cavity_type != CavityType::Screen {
+                        changed = changed.or(l.slider("Ridge", "wb_cav_ridge", &mut wb.cavity_ridge, 0.0, 2.5).then_some("Cavity Ridge"));
+                        changed = changed.or(l.slider("Valley", "wb_cav_valley", &mut wb.cavity_valley, 0.0, 2.5).then_some("Cavity Valley"));
+                    }
+                    if wb.cavity_type != CavityType::World {
+                        changed = changed.or(l.slider("Curvature Ridge", "wb_curv_ridge", &mut wb.curvature_ridge, 0.0, 2.0).then_some("Curvature Ridge"));
+                        changed = changed.or(l.slider("Curvature Valley", "wb_curv_valley", &mut wb.curvature_valley, 0.0, 2.0).then_some("Curvature Valley"));
+                    }
+                }
+                if l.check("", "Outline", &mut wb.outline) {
+                    changed = Some("Outline");
+                }
+                if let Some(label) = changed {
+                    l.commit(d, label);
+                    d.settings.workbench = wb;
+                }
             });
             l.panel(d, "render.wb.film", "Film", false, &mut |l, d| {
+                set_check!(l, d, "", "Transparent", film_transparent, "Transparent Film");
+            });
+        }
+        Engine::Eevee => {
+            l.space(4);
+            l.panel(d, "render.eevee.sampling", "Sampling", true, &mut |l, d| {
+                set_uint!(l, d, "Viewport", "eevee_vp_samples", eevee_viewport_samples, 1, 4096, "Viewport Samples");
+                set_uint!(l, d, "Render", "eevee_samples", eevee_render_samples, 1, 4096, "Render Samples");
+                l.panel(d, "render.eevee.sampling.shadows", "Shadows", true, &mut |l, d| {
+                    let res = ["512", "1024", "2048", "4096"];
+                    let cur = d.settings.eevee_shadow_resolution.to_string();
+                    l.enumeration("Resolution", "eevee_shadow_resolution", &cur, &res);
+                    set_uint!(l, d, "Cascades", "eevee_cascades", eevee_shadow_cascades, 1, 4, "Shadow Cascades");
+                    set_check!(l, d, "", "Soft Shadows", eevee_soft_shadows, "Soft Shadows");
+                });
+            });
+            check_panel(l, d, "render.eevee.shadows", "Shadows", false, |d| d.settings.eevee_shadows, |d, v| d.settings.eevee_shadows = v, &mut |l, _| {
+                l.info("Method", "Shadow maps");
+            });
+            l.panel(d, "render.eevee.raytracing", "Raytracing", false, &mut |l, _| {
+                l.info("Method", "Light probes");
+                l.note("Screen-space and ray-traced reflections are off");
+            });
+            check_panel(l, d, "render.eevee.ao", "Ambient Occlusion", false, |d| d.settings.eevee_ao, |d, v| d.settings.eevee_ao = v, &mut |l, d| {
+                set_num!(l, d, "Distance", "eevee_ao_distance", eevee_ao_distance, NumOpts { step: 0.05, unit: "m", min: 0.0, max: 100.0, ..NumOpts::default() }, "AO Distance");
+            });
+            check_panel(l, d, "render.eevee.volumes", "Volumes", false, |d| d.settings.eevee_volumetrics, |d, v| d.settings.eevee_volumetrics = v, &mut |l, d| {
+                set_num!(l, d, "End", "eevee_vol_end", eevee_volumetric_end, NumOpts { step: 1.0, unit: "m", min: 0.0, ..NumOpts::default() }, "Volume End");
+                l.info("World", "Homogeneous");
+            });
+            l.panel(d, "render.eevee.film", "Film", false, &mut |l, d| {
+                set_num!(l, d, "Filter Size", "filter_w", filter_width, NumOpts { step: 0.1, unit: "px", min: 0.0, max: 10.0, ..NumOpts::default() }, "Filter Size");
                 set_check!(l, d, "", "Transparent", film_transparent, "Transparent Film");
             });
         }

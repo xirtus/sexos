@@ -627,6 +627,7 @@ pub fn is_view_op(id: &str) -> bool {
             | "view3d.select_box"
             | "view3d.shading"
             | "view3d.overlay"
+            | "view3d.solid"
             | "transform.translate"
             | "transform.rotate"
             | "transform.resize"

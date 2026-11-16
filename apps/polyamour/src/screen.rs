@@ -225,7 +225,14 @@ pub fn default_workspaces() -> Vec<Workspace> {
         split(true, 0.2, split(false, 0.5, area(K::FileBrowser), area(K::ImageEditor)), split(false, 0.55, area(K::View3D), area(K::ShaderEditor))),
         side(&mut area),
     );
-    out.push(Workspace { name: "Shading".into(), root: l, maximized: None });
+    let mut shading = Workspace { name: "Shading".into(), root: l, maximized: None };
+    // Its viewport previews materials, as in Blender.
+    for a in shading.areas_mut() {
+        if let crate::editors::Editor::View3D(v) = &mut a.editor {
+            v.shading = crate::editors::view3d::Shading::Material;
+        }
+    }
+    out.push(shading);
     let l = split(true, 0.78, split(false, 0.7, split(true, 0.25, area(K::View3D), area(K::View3D)), area(K::DopeSheet)), side(&mut area));
     let mut anim = Workspace { name: "Animation".into(), root: l, maximized: None };
     // The small view on the left looks through the camera, as in Blender.
