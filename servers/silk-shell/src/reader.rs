@@ -198,8 +198,13 @@ impl Tree {
         let nodes = &mut self.nodes;
         a11y::scan(bytes, |n| {
             let entry = (n.id, n.role, n.disabled, n.label.to_vec(), n.value.to_vec());
-            if let Some(e) = nodes.iter_mut().find(|e| e.0 == n.id) { *e = entry; }
-            else if nodes.len() < limit { nodes.push(entry); }
+            // Kept in order of last update: when full, the node not updated the
+            // longest (a row scrolled away long ago) makes room, so a long
+            // scrolled list never fills the tree. Updates name the focused node,
+            // so it is never the one dropped.
+            if let Some(i) = nodes.iter().position(|e| e.0 == n.id) { nodes.remove(i); }
+            else if nodes.len() >= limit { nodes.remove(0); }
+            nodes.push(entry);
         });
         let moved = head.focus != self.focus && !first;
         self.focus = head.focus;

@@ -185,3 +185,16 @@ fn tree_pieces_need_a_start() {
     for &[a, b, c] in &pieces[1..] { assert_eq!(t.piece(&a11y::Piece::decode(a, b, c).unwrap()), None); }
     assert_eq!(t.len(), 0);
 }
+
+#[test]
+fn a_long_scrolled_list_never_fills_the_tree() {
+    // Rows scroll through one at a time: each update names a new focused row.
+    let mut t = Tree::new();
+    t.apply(&update(true, 1, &[(1, 0, "List", "")]));
+    for row in 2..(Tree::MAX_NODES as u64 + 500) {
+        t.apply(&update(false, row, &[(row, 9, &format!("Row {row}"), "")]));
+        assert!(t.len() <= Tree::MAX_NODES);
+    }
+    let last = Tree::MAX_NODES as u64 + 499;
+    assert!(focused(&t).starts_with(&format!("Row {last}")), "{}", focused(&t));
+}

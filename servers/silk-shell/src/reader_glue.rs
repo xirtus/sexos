@@ -145,7 +145,17 @@ unsafe fn set_off_voice(target: u32, task: u32) {
 
 /// Hook in `program_refused`: true when the refused run was the voice (Spindle did not
 /// ask for it, so it is not told).
+static mut REFUSING_OTHER: bool = false;
+/// Refuses a run someone else asked for while the voice may be loading (Shell is busy
+/// with it): that refusal is theirs, not the voice's.
+pub unsafe fn refuse_other(code: u32) {
+    REFUSING_OTHER = true;
+    crate::program_refused(code);
+    REFUSING_OTHER = false;
+}
+
 pub unsafe fn voice_refused(code: u32) -> bool {
+    if REFUSING_OTHER { return false; }
     let Voice::Starting { tries, .. } = VOICE_STATE else { return false };
     if crate::LAUNCH_ASKER.is_some() { return false; }
     VOICE_STATE = Voice::Off { tries: tries + 1 };

@@ -17820,7 +17820,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
         if !app_catalog::is_spindle(msg.caller_pd)&&!by_program{return true}
         if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
-            sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true;
+            sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");reader_glue::refuse_other(store::NO_FREE_ROW);return true;
         }
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;
