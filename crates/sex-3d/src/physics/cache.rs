@@ -23,6 +23,9 @@ pub enum SimFrame {
     Points(super::cloth::PointsFrame),
     Particles(super::particles::ParticlesFrame),
     Fluid(super::fluid::FluidFrame),
+    Liquid(super::liquid::LiquidFrame),
+    /// Dynamic Paint canvas values per vertex.
+    Paint(super::dynamic_paint::PaintFrame),
 }
 
 /// What the cache of one simulation holds.

@@ -245,7 +245,8 @@ pub unsafe extern "C" fn poll(fds: *mut pollfd, n: usize, timeout: c_int) -> c_i
 /// `F_GETFL` and `F_SETFL` (`O_NONBLOCK` on sockets); other commands succeed.
 #[no_mangle]
 pub unsafe extern "C" fn fcntl(fd: c_int, cmd: c_int, mut ap: ...) -> c_int {
-    let arg = if cmd == 4 { unsafe { ap.next_arg::<c_int>() } } else { 0 };
+    // F_DUPFD (0), F_SETFL (4) and F_DUPFD_CLOEXEC (1030) take an int.
+    let arg = if matches!(cmd, 0 | 4 | 1030) { unsafe { ap.next_arg::<c_int>() } } else { 0 };
     ret(unsafe { sys_fcntl(fd, cmd, arg) } as i64) as c_int
 }
 

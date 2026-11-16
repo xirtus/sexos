@@ -639,6 +639,22 @@ pub extern "C" fn sys_dup(fd: i32) -> i32 {
 
 #[no_mangle]
 pub extern "C" fn sys_fcntl(fd: i32, cmd: i32, arg: i32) -> i32 {
+    // F_DUPFD (0) and F_DUPFD_CLOEXEC (1030, how CPython's os.dup asks): a copy on
+    // the lowest free number at or above `arg`.
+    if cmd == 0 || cmd == 1030 {
+        let mut below = Vec::new();
+        let d = loop {
+            let d = sys_dup(fd);
+            if d < 0 || d >= arg {
+                break d;
+            }
+            below.push(d);
+        };
+        for b in below {
+            sys_close(b);
+        }
+        return d;
+    }
     let entry = table().get(fd as usize).map(|o| o.as_ref().map(|o| match o { Open::Socket(s) => Some(s.clone()), _ => None }));
     match (entry, cmd) {
         (Some(Some(Some(s))), abi::F_GETFL) => if net::nonblocking(&s) { abi::O_NONBLOCK } else { 0 },

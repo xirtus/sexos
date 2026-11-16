@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Scene data for the `.blend` writer (see `write.rs` for the format).
 use super::write::{Rec, W};
+use super::write_rig::StackExtras;
 use super::BlendAction;
 use crate::armature::{Armature, InheritScale, PoseBone, RotationMode};
 use crate::math::EulerOrder;
-use crate::nodes::{NodeTree, Prop, TreeKind, Value};
+use crate::nodes::{NodeTree, Prop, Value};
 use crate::mesh::Mesh;
+use crate::modifiers::Modifier;
+use crate::physics::PhysicsModifier;
 use crate::scene::{AreaShape, Camera, Light, LightKind, Material, ObjectData, PanoramaType, ParentType, Scene, SensorFit, World};
 use std::collections::{HashMap, HashSet};
 
@@ -77,9 +80,19 @@ pub(super) struct Ids {
     pub(super) groups: Vec<u64>,
     pub(super) world: u64,
     pub(super) actions: Vec<u64>,
+    pub(super) lattices: Vec<u64>,
+    pub(super) gpencils: Vec<u64>,
+    /// Per Grease Pencil data: its materials (`MA` IDs with `gp_style`).
+    pub(super) gp_materials: Vec<Vec<u64>>,
+    /// Per mesh: its shape key `Key` (0 without shape keys).
+    pub(super) keys: Vec<u64>,
+    /// `ParticleSettings` IDs by (object, modifier index).
+    pub(super) particles: HashMap<(usize, usize), u64>,
+    pub(super) object_by_name: HashMap<String, u64>,
+    pub(super) collection_by_name: HashMap<String, u64>,
 }
 
-fn euler_mode(o: EulerOrder) -> i64 {
+pub(super) fn euler_mode(o: EulerOrder) -> i64 {
     match o {
         EulerOrder::XYZ => 1,
         EulerOrder::XZY => 2,
@@ -166,6 +179,7 @@ impl W {
         let tree = scene.compositor.as_ref().map(|_| self.addr()).unwrap_or(0);
         self.p(&mut sc, "nodetree", tree);
         self.i(&mut sc, "use_nodes", scene.compositor.is_some() as i64);
+        self.scene_physics(&mut sc, &scene.physics, ids);
         self.put(b"SC", ids.scene, &[sc]);
 
         let ts = self.rec("ToolSettings");
@@ -282,8 +296,10 @@ impl W {
         let name = names.unique("OB", &o.name);
         let mut r = self.id("Object", "OB", &name);
         let (ty, data) = match &o.data {
-            // Grease Pencil is not written yet: saved as an empty.
-            ObjectData::Empty | ObjectData::Lattice(_) | ObjectData::GreasePencil(_) => (0, 0),
+            // Empties keep the DNA defaults: plain axes of size 1.
+            ObjectData::Empty => (0, 0),
+            ObjectData::Lattice(l) => (22, ids.lattices.get(*l).copied().unwrap_or(0)),
+            ObjectData::GreasePencil(g) => (26, ids.gpencils.get(*g).copied().unwrap_or(0)),
             ObjectData::Mesh(m) => (1, ids.meshes.get(*m).copied().unwrap_or(0)),
             ObjectData::Light(_) => (10, ids.obdata[oi]),
             ObjectData::Camera(_) => (11, ids.obdata[oi]),
@@ -323,10 +339,15 @@ impl W {
         }
         self.i(&mut r, "restrictflag", vis);
         self.i(&mut r, "index", o.pass_index.min(32767) as i64);
-        // Material slots linked to the data, as Blender's default.
-        let n = o.materials.len();
+        // Material slots linked to the data, as Blender's default (Grease
+        // Pencil objects: the data's own materials).
+        let gp_mats = match o.data {
+            ObjectData::GreasePencil(g) => ids.gp_materials.get(g).cloned(),
+            _ => None,
+        };
+        let n = gp_mats.as_ref().map_or(o.materials.len(), |m| m.len());
         if n > 0 {
-            let mats = self.ptrs(&vec![0u64; n]);
+            let mats = self.ptrs(&gp_mats.unwrap_or_else(|| vec![0u64; n]));
             let bits = self.raw(vec![0u8; n]);
             self.p(&mut r, "mat", mats);
             self.p(&mut r, "matbits", bits);
@@ -341,9 +362,42 @@ impl W {
         if let Some(a) = adt {
             self.p(&mut r, "adt", a);
         }
+        // Modifiers, constraints and physics (their blocks follow the object's).
+        let mut extras = StackExtras::default();
+        self.modifier_stack(scene, oi, ids, &mut extras);
+        self.listbase(&mut r, "modifiers", &extras.modifiers);
+        let cons = self.constraints(&o.constraints, ids);
+        self.listbase(&mut r, "constraints", &cons);
+        let collision = o.modifiers.iter().find_map(|m| match m {
+            Modifier::Physics(PhysicsModifier::Collision(c)) => Some(c),
+            _ => None,
+        });
+        self.object_physics(&mut r, &o.physics, collision, ids);
+        if let Some(sb) = o.modifiers.iter().find_map(|m| match m {
+            Modifier::Physics(PhysicsModifier::SoftBody(s)) => Some(s),
+            _ => None,
+        }) {
+            self.soft_body(&mut r, sb, ids);
+        }
+        self.listbase(&mut r, "particlesystem", &extras.particle_systems);
+        // Show Emitter (render): OB_DUPLI_FLAG_VIEWPORT 1, OB_DUPLI_FLAG_RENDER 2.
+        let emitters: Vec<bool> = o.modifiers.iter().filter_map(|m| match m {
+            Modifier::Physics(PhysicsModifier::ParticleSystem(p)) => Some(p.settings.use_render_emitter),
+            _ => None,
+        }).collect();
+        if !emitters.is_empty() {
+            self.i(&mut r, "duplicator_visibility_flag", 1 | (emitters.iter().all(|e| *e) as i64) << 1);
+        }
+        let psys: Vec<Rec> = extras.pending_psys.drain(..).map(|(_, r)| r).collect();
+        self.chain(psys, &extras.particle_systems);
+        if let ObjectData::Mesh(m) = o.data {
+            if scene.meshes.get(m).is_some_and(|m| !m.shape_keys.is_empty()) {
+                self.i(&mut r, "shapenr", 1);
+            }
+        }
         self.put(b"OB", ids.objects[oi], &[r]);
         if let (Some(pa), ObjectData::Armature(ai)) = (pose, &o.data) {
-            self.pose(pa, &o.pose, scene.armatures.get(*ai));
+            self.pose(pa, &o.pose, scene.armatures.get(*ai), ids);
         }
         if let (Some(a), Some(act)) = (adt, action) {
             let mut ad = self.rec("AnimData");
@@ -353,7 +407,7 @@ impl W {
         }
     }
 
-    fn pose(&mut self, addr: u64, pose: &[PoseBone], arm: Option<&Armature>) {
+    fn pose(&mut self, addr: u64, pose: &[PoseBone], arm: Option<&Armature>, ids: &Ids) {
         // One channel per bone: posed values where the object has them.
         let names: Vec<String> = match arm {
             Some(a) => a.bones.iter().map(|b| b.name.clone()).collect(),
@@ -369,7 +423,10 @@ impl W {
             .iter()
             .map(|n| {
                 let pb = pose.iter().find(|p| &p.name == n).cloned().unwrap_or_else(|| PoseBone::new(n));
-                self.pose_channel(&pb)
+                let mut c = self.pose_channel(&pb);
+                let cons = self.constraints(&pb.constraints, ids);
+                self.listbase(&mut c, "constraints", &cons);
+                c
             })
             .collect();
         self.chain(recs, &addrs);
@@ -422,7 +479,7 @@ impl W {
 
     // ------------------------------------------------------------- Meshes
 
-    pub(super) fn mesh(&mut self, addr: u64, name: &str, m: &Mesh, slots: &[u64]) {
+    pub(super) fn mesh(&mut self, addr: u64, name: &str, m: &Mesh, slots: &[u64], key: u64) {
         self.start_id();
         let mut r = self.id("Mesh", "ME", name);
         let nv = m.positions.len();
@@ -531,6 +588,7 @@ impl W {
         let mat_addr = if slots.is_empty() { 0 } else { self.addr() };
         self.p(&mut r, "mat", mat_addr);
         self.i(&mut r, "totcol", slots.len() as i64);
+        self.p(&mut r, "key", key);
         self.put(b"ME", addr, &[r]);
 
         // Data blocks.
@@ -919,7 +977,46 @@ pub(super) fn assign_ids(w: &mut W, scene: &Scene, actions: &[&BlendAction]) -> 
     let collections = many(scene.collections.len());
     let groups = many(scene.node_groups.len());
     let actions = many(actions.len());
-    Ids { scene: w.addr(), objects, obdata, meshes, materials, images, armatures, collections, groups, world: w.addr(), actions }
+    let lattices = many(scene.lattices.len());
+    let gpencils = many(scene.grease_pencils.len());
+    let gp_materials = scene.grease_pencils.iter().map(|g| many(g.materials.len())).collect();
+    let keys = scene.meshes.iter().map(|m| if m.shape_keys.is_empty() { 0 } else { w.addr() }).collect();
+    let mut particles = HashMap::new();
+    for (oi, o) in scene.objects.iter().enumerate() {
+        for (k, m) in o.modifiers.iter().enumerate() {
+            if let Modifier::Physics(PhysicsModifier::ParticleSystem(_)) = m {
+                particles.insert((oi, k), w.addr());
+            }
+        }
+    }
+    let mut object_by_name = HashMap::new();
+    for (o, &a) in scene.objects.iter().zip(&objects) {
+        object_by_name.entry(o.name.clone()).or_insert(a);
+    }
+    let mut collection_by_name = HashMap::new();
+    for (c, &a) in scene.collections.iter().zip(&collections).skip(1) {
+        collection_by_name.entry(c.name.clone()).or_insert(a);
+    }
+    Ids {
+        scene: w.addr(),
+        objects,
+        obdata,
+        meshes,
+        materials,
+        images,
+        armatures,
+        collections,
+        groups,
+        world: w.addr(),
+        actions,
+        lattices,
+        gpencils,
+        gp_materials,
+        keys,
+        particles,
+        object_by_name,
+        collection_by_name,
+    }
 }
 
 /// A material's tree: its own, or one built from its fields (Principled BSDF,
@@ -977,6 +1074,15 @@ impl W {
         self.f(&mut r, "metallic", &[m.metallic]);
         self.f(&mut r, "roughness", &[m.roughness]);
         self.i(&mut r, "index", m.pass_index.min(32767) as i64);
+        // EEVEE: Render Method (MA_SURFACE_METHOD_DEFERRED 0 / FORWARD 1),
+        // blend_flag MA_BL_CULL_BACKFACE, _SS_REFRACTION, _CULL_BACKFACE_SHADOW,
+        // _TRANSPARENT_SHADOW, and the refraction thickness.
+        let e = &m.eevee;
+        self.i(&mut r, "surface_render_method", (e.render_method == crate::scene::RenderMethod::Blended) as i64);
+        let keep = self.get(&r, "blend_flag") & !(1 | 4 | 8 | 16);
+        let bf = [(e.backface_culling, 1), (e.screen_refraction, 4), (e.backface_culling_shadow, 8), (e.transparent_shadows, 16)].iter().fold(keep, |a, &(on, b)| if on { a | b } else { a });
+        self.i(&mut r, "blend_flag", bf);
+        self.f(&mut r, "refract_depth", &[e.refraction_depth]);
         self.i(&mut r, "use_nodes", 1);
         let tree = self.addr();
         self.p(&mut r, "nodetree", tree);
@@ -1042,7 +1148,31 @@ pub(super) fn export_blend_checked(scene: &Scene, actions: &[BlendAction], opts:
             .find(|o| matches!(o.data, ObjectData::Mesh(k) if k == mi))
             .map(|o| o.materials.iter().map(|&k| ids.materials.get(k).copied().unwrap_or(0)).collect())
             .unwrap_or_default();
-        w.mesh(ids.meshes[mi], &name, m, &slots);
+        w.mesh(ids.meshes[mi], &name, m, &slots, ids.keys[mi]);
+        if ids.keys[mi] != 0 {
+            let kname = names.unique("KE", &format!("Key {name}"));
+            w.shape_key(ids.keys[mi], &kname, m, ids.meshes[mi]);
+        }
+    }
+    for (li, l) in scene.lattices.iter().enumerate() {
+        let name = names.unique("LT", scene.lattice_names.get(li).map_or("Lattice", |s| s.as_str()));
+        w.lattice(ids.lattices[li], &name, l);
+    }
+    for (gi, g) in scene.grease_pencils.iter().enumerate() {
+        let name = names.unique("GD", scene.grease_pencil_names.get(gi).map_or("GPencil", |s| s.as_str()));
+        w.gpencil(ids.gpencils[gi], &name, g, &ids.gp_materials[gi], &ids);
+        for (k, m) in g.materials.iter().enumerate() {
+            let mname = names.unique("MA", &m.name);
+            w.gp_material(ids.gp_materials[gi][k], &mname, m, &ids);
+        }
+    }
+    for (oi, o) in scene.objects.iter().enumerate() {
+        for (k, m) in o.modifiers.iter().enumerate() {
+            if let (Modifier::Physics(PhysicsModifier::ParticleSystem(ps)), Some(&a)) = (m, ids.particles.get(&(oi, k))) {
+                let name = names.unique("PA", if ps.settings.name.is_empty() { "ParticleSettings" } else { &ps.settings.name });
+                w.particle_settings(a, &name, &ps.settings, &ids);
+            }
+        }
     }
     for (oi, o) in scene.objects.iter().enumerate() {
         match &o.data {
@@ -1067,9 +1197,6 @@ pub(super) fn export_blend_checked(scene: &Scene, actions: &[BlendAction], opts:
     }
     w.world(ids.world, &scene.world, &ids);
     for (gi, g) in scene.node_groups.iter().enumerate() {
-        if g.kind == TreeKind::Geometry {
-            continue;
-        }
         w.start_id();
         w.node_tree_at(ids.groups[gi], b"NT", g, "NodeGroup", false, &ids);
     }
@@ -1091,13 +1218,13 @@ pub(super) fn export_blend_checked(scene: &Scene, actions: &[BlendAction], opts:
 mod tests {
     use super::*;
     use crate::nodes::registry::{new_node, node_types, update_sockets};
-    use crate::nodes::{enums, Node};
+    use crate::nodes::{enums, Node, SocketType, TreeKind};
 
     /// Every registered node of `kind` (no group nodes) in one tree.
     fn every_node(kind: TreeKind) -> NodeTree {
         let mut t = NodeTree::new("All", kind);
         for ty in node_types().iter().filter(|t| t.tree == kind) {
-            if matches!(ty.idname, "ShaderNodeGroup" | "NodeGroupInput" | "NodeGroupOutput" | "CompositorNodeGroup") {
+            if matches!(ty.idname, "ShaderNodeGroup" | "NodeGroupInput" | "NodeGroupOutput" | "CompositorNodeGroup" | "GeometryNodeGroup") {
                 continue;
             }
             t.nodes.push((ty.build)());
@@ -1135,21 +1262,209 @@ mod tests {
         out
     }
 
+    /// `t` as a geometry node group used by a Nodes modifier (the importer
+    /// reads the groups that something uses).
+    fn use_geometry_group(s: &mut Scene, mut t: NodeTree) {
+        t.name = "Geo".into();
+        s.node_groups.push(t);
+        let o = s.add_mesh_object("Host", crate::Mesh::new());
+        s.objects[o].modifiers.push(crate::modifiers::Modifier::Nodes { group: "Geo".into(), inputs: Vec::new() });
+    }
+
     fn round_trip(s: &Scene) -> Scene {
         let (bytes, missing) = export_blend_checked(s, &[], BlendExport::default());
         assert!(missing.is_empty(), "unresolved members: {missing:?}");
         super::super::import_blend(&bytes).expect("imports")
     }
 
-    /// Every shader and compositor node writes only members the SDNA has,
-    /// reads back as the same type, and keeps its default properties.
+    /// Every shader, compositor and geometry node writes only members the
+    /// SDNA has, reads back as the same type, and keeps its default
+    /// properties.
     #[test]
     fn every_node_round_trips() {
-        let s = scene_with(every_node(TreeKind::Shader), every_node(TreeKind::Compositor));
+        let mut s = scene_with(every_node(TreeKind::Shader), every_node(TreeKind::Compositor));
+        use_geometry_group(&mut s, every_node(TreeKind::Geometry));
         let r = round_trip(&s);
         let mut diffs = prop_diffs(s.materials[0].node_tree.as_ref().unwrap(), r.materials[0].node_tree.as_ref().unwrap());
         diffs.extend(prop_diffs(s.compositor.as_ref().unwrap(), r.compositor.as_ref().unwrap()));
+        diffs.extend(prop_diffs(&s.node_groups[0], &r.node_groups[0]));
         assert!(diffs.is_empty(), "{} props changed:\n{}", diffs.len(), diffs.join("\n"));
+    }
+
+    /// Modifiers, constraints, shape keys, lattices, Grease Pencil and
+    /// physics write only members the writer's SDNA has.
+    #[test]
+    fn every_kind_writes_known_members() {
+        use crate::constraints::Constraint;
+        use crate::modifiers::Modifier;
+        let mut s = Scene::new();
+        let mut m = crate::Mesh::new();
+        m.positions = vec![crate::Vec3::ZERO, crate::Vec3::new(1.0, 0.0, 0.0), crate::Vec3::new(0.0, 1.0, 0.0)];
+        m.faces = vec![crate::Face::new(vec![0, 1, 2])];
+        m.vertex_groups = vec!["G".into()];
+        m.weights = vec![vec![(0, 1.0)], vec![], vec![]];
+        m.shape_keys = vec![crate::mesh::ShapeKey::new("Basis", m.positions.clone()), crate::mesh::ShapeKey::new("Key", m.positions.clone())];
+        let o = s.add_mesh_object("Body", m);
+        for ty in [
+            "mirror", "subsurf", "array", "solidify", "bevel", "triangulate", "weld", "displace", "smooth", "decimate", "remesh", "screw", "wireframe", "edgesplit", "build", "boolean",
+            "simpledeform", "cast", "wave", "shrinkwrap", "laplaciansmooth", "correctivesmooth", "weightednormal", "nodes", "armature", "hook", "lattice", "warp", "vertexweightedit",
+            "vertexweightmix", "vertexweightproximity", "multires", "cloth", "softbody", "collision", "particlesystem", "fluid",
+        ] {
+            s.objects[o].modifiers.push(Modifier::with_defaults(ty).unwrap_or_else(|| panic!("{ty}")));
+        }
+        for ty in [
+            "copylocation", "copyrotation", "copyscale", "copytransforms", "limitdistance", "limitlocation", "limitrotation", "limitscale", "maintainvolume", "transformation", "childof",
+            "trackto", "dampedtrack", "lockedtrack", "stretchto", "floor", "armature", "ik",
+        ] {
+            s.objects[o].constraints.push(Constraint::with_defaults(ty, false).unwrap());
+        }
+        s.objects[o].physics.rigid_body = Some(Default::default());
+        s.objects[o].physics.rigid_body_constraint = Some(Default::default());
+        s.objects[o].physics.field = Some(Default::default());
+        s.physics.rigidbody_world = Some(Default::default());
+        s.add_lattice_object("Cage", crate::lattice::Lattice::new(2, 3, 2));
+        let mut g = crate::grease_pencil::GreasePencil::blank();
+        g.materials.push(crate::grease_pencil::GpMaterial::fill("Fill", [1.0; 4]));
+        g.vertex_groups.push("G".into());
+        let mut p = crate::grease_pencil::GpPoint::new(crate::Vec3::ZERO, 0.01);
+        p.weights = vec![(0, 0.5)];
+        g.layers[0].frames.push(crate::grease_pencil::GpFrame {
+            frame: 1,
+            drawing: crate::grease_pencil::Drawing { strokes: vec![crate::grease_pencil::GpStroke::new(vec![p.clone(), p], 0)] },
+            key_type: Default::default(),
+            select: false,
+        });
+        g.layers.push(crate::grease_pencil::GpLayer::new("Masked"));
+        g.layers[1].masks = vec!["Layer".into()];
+        s.add_grease_pencil_object("Sketch", g);
+        let r = round_trip(&s);
+        assert_eq!(r.objects.len(), 3);
+    }
+
+    /// Geometry node settings (storage, `custom1`/`custom2`): every choice
+    /// the importer knows survives a round trip, and zones keep their
+    /// pairing and items.
+    #[test]
+    fn geometry_node_settings_round_trip() {
+        const DOM: &[&str] = &["POINT", "EDGE", "FACE", "CORNER", "CURVE", "INSTANCE"];
+        const DT: &[&str] = &["FLOAT", "INT", "FLOAT_VECTOR", "FLOAT_COLOR", "BYTE_COLOR", "BOOLEAN", "FLOAT2", "INT8", "QUATERNION", "FLOAT4X4"];
+        const ST: &[&str] = &["FLOAT", "INT", "BOOLEAN", "VECTOR", "RGBA", "ROTATION", "MATRIX", "STRING", "GEOMETRY", "OBJECT", "COLLECTION", "MATERIAL", "IMAGE", "MENU"];
+        let cases: &[(&str, &str, &[&str])] = &[
+            ("GeometryNodeMeshCylinder", "fill_type", &["NONE", "NGON", "TRIANGLE_FAN"]),
+            ("GeometryNodeMeshCone", "fill_type", &["NONE", "NGON", "TRIANGLE_FAN"]),
+            ("GeometryNodeMeshCircle", "fill_type", &["NONE", "NGON", "TRIANGLE_FAN"]),
+            ("GeometryNodeMeshLine", "mode", &["END_POINTS", "OFFSET"]),
+            ("GeometryNodeMeshLine", "count_mode", &["TOTAL", "RESOLUTION"]),
+            ("GeometryNodeExtrudeMesh", "mode", &["VERTICES", "EDGES", "FACES"]),
+            ("GeometryNodeStoreNamedAttribute", "data_type", DT),
+            ("GeometryNodeStoreNamedAttribute", "domain", DOM),
+            ("GeometryNodeInputNamedAttribute", "data_type", DT),
+            ("GeometryNodeCaptureAttribute", "domain", DOM),
+            ("GeometryNodeViewer", "data_type", DT),
+            ("GeometryNodeViewer", "domain", &["AUTO", "POINT", "FACE"]),
+            ("GeometryNodeAccumulateField", "domain", DOM),
+            ("GeometryNodeSampleIndex", "domain", DOM),
+            ("GeometryNodeSampleIndex", "data_type", DT),
+            ("GeometryNodeRaycast", "mapping", &["INTERPOLATED", "NEAREST"]),
+            ("GeometryNodeProximity", "target_element", &["POINTS", "EDGES", "FACES"]),
+            ("GeometryNodeDeleteGeometry", "mode", &["ALL", "EDGE_FACE", "ONLY_FACE"]),
+            ("GeometryNodeDeleteGeometry", "domain", DOM),
+            ("GeometryNodeSeparateGeometry", "domain", DOM),
+            ("GeometryNodeDuplicateElements", "domain", DOM),
+            ("GeometryNodeMergeByDistance", "mode", &["ALL", "CONNECTED"]),
+            ("GeometryNodeObjectInfo", "transform_space", &["ORIGINAL", "RELATIVE"]),
+            ("GeometryNodeCollectionInfo", "transform_space", &["ORIGINAL", "RELATIVE"]),
+            ("GeometryNodeMeshToPoints", "mode", &["VERTICES", "EDGES", "FACES", "CORNERS"]),
+            ("GeometryNodeCurvePrimitiveCircle", "mode", &["POINTS", "RADIUS"]),
+            ("GeometryNodeCurvePrimitiveLine", "mode", &["POINTS", "DIRECTION"]),
+            ("GeometryNodeCurveArc", "mode", &["POINTS", "RADIUS"]),
+            ("GeometryNodeCurvePrimitiveQuadrilateral", "mode", &["RECTANGLE", "PARALLELOGRAM", "TRAPEZOID", "KITE", "POINTS"]),
+            ("GeometryNodeCurvePrimitiveBezierSegment", "mode", &["POSITION", "OFFSET"]),
+            ("GeometryNodeCurveToPoints", "mode", &["EVALUATED", "COUNT", "LENGTH"]),
+            ("GeometryNodeFillCurve", "mode", &["TRIANGLES", "NGONS"]),
+            ("GeometryNodeFilletCurve", "mode", &["BEZIER", "POLY"]),
+            ("GeometryNodeResampleCurve", "mode", &["EVALUATED", "COUNT", "LENGTH"]),
+            ("GeometryNodeTrimCurve", "mode", &["FACTOR", "LENGTH"]),
+            ("GeometryNodeSetCurveHandlePositions", "mode", &["LEFT", "RIGHT"]),
+            ("GeometryNodeCurveSetHandles", "handle_type", &["FREE", "AUTO", "VECTOR", "ALIGN"]),
+            ("GeometryNodeCurveSetHandles", "mode", &["LEFT_RIGHT", "LEFT", "RIGHT"]),
+            ("GeometryNodeCurveSplineType", "spline_type", &["CATMULL_ROM", "POLY", "BEZIER", "NURBS"]),
+            ("GeometryNodeSampleCurve", "mode", &["FACTOR", "LENGTH"]),
+            ("GeometryNodeSubdivisionSurface", "uv_smooth", &["NONE", "PRESERVE_CORNERS", "PRESERVE_BOUNDARIES", "SMOOTH_ALL"]),
+            ("GeometryNodeSubdivisionSurface", "boundary_smooth", &["ALL", "PRESERVE_CORNERS"]),
+            ("GeometryNodeSwitch", "input_type", ST),
+            ("GeometryNodeIndexSwitch", "data_type", ST),
+            ("GeometryNodeMenuSwitch", "data_type", ST),
+            ("FunctionNodeRandomValue", "data_type", &["FLOAT", "INT", "FLOAT_VECTOR", "BOOLEAN"]),
+            ("FunctionNodeCompare", "operation", &["LESS_THAN", "LESS_EQUAL", "GREATER_THAN", "GREATER_EQUAL", "EQUAL", "NOT_EQUAL", "BRIGHTER", "DARKER"]),
+            ("FunctionNodeCompare", "mode", &["ELEMENT", "LENGTH", "AVERAGE", "DOT_PRODUCT", "DIRECTION"]),
+            ("FunctionNodeCombineColor", "mode", &["RGB", "HSV", "HSL"]),
+            ("FunctionNodeSeparateColor", "mode", &["RGB", "HSV", "HSL"]),
+            ("GeometryNodeAttributeStatistic", "data_type", &["FLOAT", "FLOAT_VECTOR"]),
+            ("GeometryNodeAttributeStatistic", "domain", DOM),
+            ("GeometryNodeBlurAttribute", "data_type", &["FLOAT", "INT", "FLOAT_VECTOR", "FLOAT_COLOR"]),
+            ("GeometryNodeFieldAtIndex", "domain", DOM),
+            ("GeometryNodeFieldAtIndex", "data_type", DT),
+            ("GeometryNodeFieldOnDomain", "domain", DOM),
+            ("GeometryNodeSampleNearest", "domain", &["POINT", "EDGE", "FACE", "CORNER"]),
+            ("GeometryNodeSortElements", "domain", &["POINT", "EDGE", "FACE"]),
+            ("GeometryNodeSetShadeSmooth", "domain", &["EDGE", "FACE"]),
+            ("GeometryNodeScaleElements", "domain", &["EDGE", "FACE"]),
+            ("GeometryNodeScaleElements", "scale_mode", &["UNIFORM", "SINGLE_AXIS"]),
+            ("GeometryNodeAttributeDomainSize", "component", &["MESH", "POINTCLOUD", "CURVE", "INSTANCES"]),
+            ("GeometryNodeDistributePointsOnFaces", "distribute_method", &["RANDOM", "POISSON"]),
+            ("GeometryNodeTriangulate", "quad_method", &["BEAUTY", "FIXED", "FIXED_ALTERNATE", "SHORTEST_DIAGONAL", "LONGEST_DIAGONAL"]),
+            ("GeometryNodeTriangulate", "ngon_method", &["BEAUTY", "CLIP"]),
+            ("GeometryNodeMeshBoolean", "operation", &["INTERSECT", "UNION", "DIFFERENCE"]),
+            ("GeometryNodeMeshBoolean", "solver", &["EXACT", "FLOAT"]),
+            ("FunctionNodeBooleanMath", "operation", &["AND", "OR", "NOT", "NAND", "NOR", "XNOR", "XOR", "IMPLY", "NIMPLY"]),
+            ("FunctionNodeFloatToInt", "rounding_mode", &["ROUND", "FLOOR", "CEILING", "TRUNCATE"]),
+        ];
+        let mut t = NodeTree::new("Geo", TreeKind::Geometry);
+        for (idname, prop, choices) in cases {
+            for c in *choices {
+                let mut n = new_node(idname).unwrap_or_else(|| panic!("no node {idname}"));
+                n.set_prop(prop, Prop::Enum((*c).to_string()));
+                update_sockets(&mut n);
+                t.nodes.push(n);
+            }
+        }
+        // Value inputs and flags.
+        let mut n = new_node("FunctionNodeInputInt").unwrap();
+        n.set_prop("integer", Prop::Int(-7));
+        t.nodes.push(n);
+        let mut n = new_node("FunctionNodeInputBool").unwrap();
+        n.set_prop("boolean", Prop::Bool(true));
+        t.nodes.push(n);
+        let mut n = new_node("FunctionNodeInputVector").unwrap();
+        n.set_prop("vector", Prop::Vector([1.0, -2.0, 3.5]));
+        t.nodes.push(n);
+        let mut n = new_node("FunctionNodeInputColor").unwrap();
+        n.set_prop("value", Prop::Color([0.1, 0.2, 0.3, 0.4]));
+        t.nodes.push(n);
+        let mut n = new_node("FunctionNodeInputString").unwrap();
+        n.set_prop("string", Prop::String("hello".into()));
+        t.nodes.push(n);
+        let mut n = new_node("GeometryNodeSampleIndex").unwrap();
+        n.set_prop("clamp", Prop::Bool(true));
+        t.nodes.push(n);
+        // A repeat zone with a second state item.
+        let rin = t.nodes.len();
+        t.nodes.push(new_node("GeometryNodeRepeatInput").unwrap());
+        t.nodes.push(new_node("GeometryNodeRepeatOutput").unwrap());
+        t.nodes[rin + 1].name = "Repeat Output".into();
+        t.nodes[rin].set_prop("paired_output", Prop::String("Repeat Output".into()));
+        crate::nodes::geo_registry::add_zone_item(&mut t, rin, rin + 1, "Count", SocketType::Int);
+        let mut s = Scene::new();
+        use_geometry_group(&mut s, t);
+        let r = round_trip(&s);
+        let (a, b) = (&s.node_groups[0], &r.node_groups[0]);
+        let mut diffs = prop_diffs(a, b);
+        diffs.sort();
+        diffs.dedup();
+        assert!(diffs.is_empty(), "{} props changed:\n{}", diffs.len(), diffs.join("\n"));
+        let out = &b.nodes[rin + 1];
+        assert_eq!(out.inputs.iter().map(|s| s.identifier.as_str()).filter(|i| i.starts_with("Item_")).collect::<Vec<_>>(), ["Item_0", "Item_1"]);
     }
 
     /// Every choice of every enum property survives a round trip.
@@ -1157,7 +1472,8 @@ mod tests {
     fn every_enum_choice_round_trips() {
         let mut shader = NodeTree::new("Enums", TreeKind::Shader);
         let mut comp = NodeTree::new("Enums", TreeKind::Compositor);
-        for kind in [TreeKind::Shader, TreeKind::Compositor] {
+        let mut geo = NodeTree::new("Enums", TreeKind::Geometry);
+        for kind in [TreeKind::Shader, TreeKind::Compositor, TreeKind::Geometry] {
             for ty in node_types().iter().filter(|t| t.tree == kind) {
                 let n: Node = (ty.build)();
                 for (k, v) in &n.props {
@@ -1172,19 +1488,21 @@ mod tests {
                         let mut m = new_node(ty.idname).unwrap();
                         m.set_prop(k, Prop::Enum((*item).to_string()));
                         update_sockets(&mut m);
-                        if kind == TreeKind::Shader {
-                            shader.nodes.push(m);
-                        } else {
-                            comp.nodes.push(m);
+                        match kind {
+                            TreeKind::Shader => shader.nodes.push(m),
+                            TreeKind::Compositor => comp.nodes.push(m),
+                            _ => geo.nodes.push(m),
                         }
                     }
                 }
             }
         }
-        let s = scene_with(shader, comp);
+        let mut s = scene_with(shader, comp);
+        use_geometry_group(&mut s, geo);
         let r = round_trip(&s);
         let mut diffs = prop_diffs(s.materials[0].node_tree.as_ref().unwrap(), r.materials[0].node_tree.as_ref().unwrap());
         diffs.extend(prop_diffs(s.compositor.as_ref().unwrap(), r.compositor.as_ref().unwrap()));
+        diffs.extend(prop_diffs(&s.node_groups[0], &r.node_groups[0]));
         diffs.sort();
         diffs.dedup();
         assert!(diffs.is_empty(), "{} props changed:\n{}", diffs.len(), diffs.join("\n"));

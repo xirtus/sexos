@@ -259,10 +259,11 @@ fn constraint_kind(f: &BlendFile<'_>, d: &View<'_, '_>) -> Option<ConstraintKind
         }
         "bRotateLikeConstraint" => {
             let fg = flag("flag");
+            // ROTLIKE_MIX_REPLACE 0, OFFSET 1 (legacy), ADD 2, BEFORE 3, AFTER 4.
             let mix = match flag("mix_mode") {
-                1 => RotationMix::Add,
-                2 => RotationMix::Before,
-                3 => RotationMix::After,
+                1 | 2 => RotationMix::Add,
+                3 => RotationMix::Before,
+                4 => RotationMix::After,
                 _ if fg & 128 != 0 => RotationMix::Add,
                 _ => RotationMix::Replace,
             };
@@ -274,13 +275,15 @@ fn constraint_kind(f: &BlendFile<'_>, d: &View<'_, '_>) -> Option<ConstraintKind
         }
         "bTransLikeConstraint" => K::CopyTransforms {
             target: t(),
+            // TRANSLIKE_MIX_BEFORE 1, AFTER 2, BEFORE_SPLIT 3, AFTER_SPLIT 4,
+            // BEFORE_FULL 5, AFTER_FULL 6.
             mix: match flag("mix_mode") {
-                1 => TransformMix::BeforeFull,
-                2 => TransformMix::AfterFull,
+                1 => TransformMix::Before,
+                2 => TransformMix::After,
                 3 => TransformMix::BeforeSplit,
                 4 => TransformMix::AfterSplit,
-                5 => TransformMix::Before,
-                6 => TransformMix::After,
+                5 => TransformMix::BeforeFull,
+                6 => TransformMix::AfterFull,
                 _ => TransformMix::Replace,
             },
         },
@@ -320,7 +323,8 @@ fn constraint_kind(f: &BlendFile<'_>, d: &View<'_, '_>) -> Option<ConstraintKind
                 2 => VolumeMode::SingleAxis,
                 _ => VolumeMode::Strict,
             },
-            free_axis: axis3(num("free_axis")),
+            // The free axis is `flag` (SAMEVOL_X/Y/Z) in the DNA.
+            free_axis: axis3(d.num_any(&["free_axis", "flag"]).unwrap_or(1.0)),
             volume: fl("volume", 1.0),
         },
         "bTransformConstraint" => {
@@ -412,9 +416,10 @@ fn constraint_kind(f: &BlendFile<'_>, d: &View<'_, '_>) -> Option<ConstraintKind
                     3 => StretchVolume::None,
                     _ => StretchVolume::XZ,
                 },
+                // PLANE_X 0, SWING_Y 1, PLANE_Z 2.
                 keep_axis: match flag("plane") {
+                    1 => StretchPlane::SwingY,
                     2 => StretchPlane::Z,
-                    3 => StretchPlane::SwingY,
                     _ => StretchPlane::X,
                 },
             }
@@ -468,11 +473,11 @@ pub(super) fn modifier_vertex_group(v: &View<'_, '_>) -> Option<(String, bool)> 
     let flag = |name: &str| v.num(name).unwrap_or(0.0) as i64;
     let (name, inv) = match v.struct_name() {
         "DisplaceModifierData" => ("defgrp_name", flag("flag") & 1 != 0),
-        "SmoothModifierData" => ("defgrp_name", flag("flag") & 1 << 4 != 0),
+        "SmoothModifierData" => ("defgrp_name", flag("flag") & 1 != 0),
         "SimpleDeformModifierData" => ("vgroup_name", flag("flag") & 1 != 0),
-        "CastModifierData" => ("defgrp_name", flag("flag") & 1 << 6 != 0),
-        "WaveModifierData" => ("defgrp_name", flag("flag") & 1 << 5 != 0),
-        "ShrinkwrapModifierData" => ("vgroup_name", flag("shrinkOpts") & 1 << 4 != 0),
+        "CastModifierData" => ("defgrp_name", flag("flag") & 1 != 0),
+        "WaveModifierData" => ("defgrp_name", flag("flag") & 1 != 0),
+        "ShrinkwrapModifierData" => ("vgroup_name", flag("shrinkOpts") & 1 << 6 != 0),
         "LaplacianSmoothModifierData" => ("defgrp_name", flag("flag") & 1 << 6 != 0),
         "CorrectiveSmoothModifierData" => ("defgrp_name", flag("flag") & 1 != 0),
         "ArmatureModifierData" => ("defgrp_name", flag("deformflag") & 16 != 0),
@@ -545,8 +550,9 @@ pub(super) fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> 
                 use_remove: ef & 1 << 4 != 0,
                 remove_threshold: fl("rem_threshold", 0.01),
                 falloff_type: Falloff::from_blender(flag("falloff_type"), true),
-                invert_falloff: ef & 1 << 6 != 0,
-                normalize: ef & 1 << 7 != 0,
+                // MOD_WVG_EDIT_WEIGHTS_NORMALIZE 1, MOD_WVG_INVERT_FALLOFF 2.
+                invert_falloff: ef & 1 << 1 != 0,
+                normalize: ef & 1 != 0,
                 mask_constant: fl("mask_constant", 1.0),
             }
         }
@@ -570,7 +576,8 @@ pub(super) fn modifier(f: &BlendFile<'_>, v: &View<'_, '_>) -> Option<Modifier> 
             Modifier::VertexWeightProximity {
                 vertex_group: st("defgrp_name"),
                 target: ob("proximity_ob_target"),
-                proximity_mode: if flag("proximity_mode") == 0 { ProximityMode::Object } else { ProximityMode::Geometry },
+                // MOD_WVG_PROXIMITY_OBJECT 1, GEOMETRY 2.
+                proximity_mode: if flag("proximity_mode") == 2 { ProximityMode::Geometry } else { ProximityMode::Object },
                 use_proximity_geometry: [pf & 1 != 0, pf & 2 != 0, pf & 4 != 0],
                 min_dist: fl("min_dist", 0.0),
                 max_dist: fl("max_dist", 1.0),

@@ -176,9 +176,11 @@ fn scene(size: (usize, usize), consent: Option<&Consent>, pending: bool) -> Scen
         actions,
     }
 }
-fn weft_event(e: Event) -> weft::input::Event {
+/// Weft's event for a Shell event; key releases have none.
+fn weft_event(e: Event) -> Option<weft::input::Event> {
     use weft::input::{Button, Event as E, Key, Pointer, PointerKind as K};
-    match e {
+    Some(match e {
+        Event::KeyUp(_) => return None,
         Event::Key(k) => E::Key(Key {
             code: k.code,
             shift: k.shift,
@@ -211,7 +213,7 @@ fn weft_event(e: Event) -> weft::input::Event {
                 kind,
             })
         }
-    }
+    })
 }
 fn epoch() -> Option<u64> {
     let mut b = [0; 8];
@@ -409,7 +411,8 @@ pub fn main() {
                     continue;
                 }
             }
-            for response in view.ui.handle(weft_event(event)) {
+            let Some(event) = weft_event(event) else { continue };
+            for response in view.ui.handle(event) {
                 if let Response::Clicked(id) = response {
                     if let Some((_, key)) = view.actions.iter().find(|(button, _)| *button == id) {
                         model.key(&mut host, *key);
