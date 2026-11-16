@@ -180,7 +180,13 @@ fn the_test_program_runs_in_a_kvm_cell() {
         println!("[crossdress.kvm] SKIP no usable /dev/kvm: the cell did not run on hardware here");
         return;
     };
-    let mut proc = WinProcess::load(Ram::new(64 << 20).unwrap(), sex_crossdress::TEST_EXE).unwrap();
+    // CROSSDRESS_EXE runs another build of the test program (the gate's rebuild with the
+    // runner's own LLVM) instead of the checked-in one.
+    let exe = match std::env::var_os("CROSSDRESS_EXE") {
+        Some(path) => { println!("[crossdress.kvm] exe={}", path.to_string_lossy()); std::fs::read(path).expect("CROSSDRESS_EXE") }
+        None => sex_crossdress::TEST_EXE.to_vec(),
+    };
+    let mut proc = WinProcess::load(Ram::new(64 << 20).unwrap(), &exe).unwrap();
     let vm = ioctl(kvm, KVM_CREATE_VM, 0) as RawFd;
     assert!(vm >= 0, "KVM_CREATE_VM");
     let _ = ioctl(vm, KVM_SET_TSS_ADDR, 0xFFFB_D000);
