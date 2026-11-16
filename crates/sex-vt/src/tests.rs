@@ -323,3 +323,18 @@ fn replay_keeps_soft_wrapped_lines_whole() {
     let again = run(8, 3, &s.replay(4096));
     assert_eq!(again.row_text(0), "abcdefg");
 }
+
+/// Detached right after the last column filled: what the run writes next wraps, as it
+/// would have on the screen it left.
+#[test]
+fn replay_keeps_a_pending_wrap() {
+    for bytes in [&b"abcd"[..], b"\x1b[?1049habcd"] {
+        let s = run(4, 3, bytes);
+        let mut again = Screen::new(4, 3);
+        let mut p = Parser::new();
+        again.feed(&mut p, &s.replay(4096));
+        again.feed(&mut p, b"e");
+        assert_eq!(again.row_text(0), "abcd");
+        assert_eq!(again.row_text(1), "e");
+    }
+}

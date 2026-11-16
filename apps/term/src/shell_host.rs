@@ -116,8 +116,16 @@ impl Host for TermHost<'_> {
         if slot >= c::SLOTS { return Err(String::from("too many panes are running programs in this window")); }
         let args = request.args.join(" ");
         let label = if args.is_empty() { request.name.clone() } else { format!("{} {}", request.name, args) };
+        // Input piped in (`a | b &`) waits in the run's input ring, then its end; the
+        // ring holds it all or the job does not start.
+        let input = request.input.as_deref();
+        if input.is_some_and(|i| i.len() > c::INPUT_BYTES) { return Err(format!("a background job takes at most {} bytes of piped input", c::INPUT_BYTES)); }
         direct::relay::release_at(slot).map_err(why)?;
         direct::relay::start_at(slot, request.name.as_bytes(), args.as_bytes()).map_err(why)?;
+        if let Some(input) = input {
+            if direct::relay::put_at(slot, input).map_err(why)? < input.len() { return Err(String::from("its input did not fit")); }
+            direct::relay::hang_up_at(slot).map_err(why)?;
+        }
         let yarn = direct::relay::detach_at(slot, label.as_bytes(), b"").map_err(why)?;
         sex_pdx::serial_record!("[term.yarn.background] name={} yarn={}", request.name, yarn);
         Ok(yarn)

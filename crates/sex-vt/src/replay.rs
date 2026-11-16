@@ -48,8 +48,14 @@ impl Screen {
     pub fn replay(&self, max: usize) -> Vec<u8> {
         let mut out = Vec::new();
         let (x, y) = (self.x.min(self.cols.saturating_sub(1)), self.y.min(self.rows.saturating_sub(1)));
+        if self.alternate() { out.extend_from_slice(b"\x1b[?1049h\x1b[H\x1b[2J"); }
+        // The modes first: what follows only places the cursor, which they must not move.
+        for (on, mode) in [(self.app_cursor, "1"), (self.bracketed_paste, "2004"), (!self.cursor_visible, "25")] {
+            if on { out.extend_from_slice(format!("\x1b[?{}{}", mode, if mode == "25" { "l" } else { "h" }).as_bytes()); }
+        }
+        if self.mouse != 0 { out.extend_from_slice(format!("\x1b[?{}h", self.mouse).as_bytes()); }
+        if self.mouse_sgr { out.extend_from_slice(b"\x1b[?1006h"); }
         if self.alternate() {
-            out.extend_from_slice(b"\x1b[?1049h\x1b[H\x1b[2J");
             for (r, line) in self.lines.iter().enumerate() {
                 let text = encode(line);
                 if text.is_empty() { continue; }
@@ -77,11 +83,17 @@ impl Screen {
             out.push(b'\r');
             if x > 0 { out.extend_from_slice(format!("\x1b[{}C", x).as_bytes()); }
         }
-        for (on, mode) in [(self.app_cursor, "1"), (self.bracketed_paste, "2004"), (!self.cursor_visible, "25")] {
-            if on { out.extend_from_slice(format!("\x1b[?{}{}", mode, if mode == "25" { "l" } else { "h" }).as_bytes()); }
+        // A character just filled the last column: the next one wraps first. Placing the
+        // cursor forgets that, so the last column's character is written again last.
+        if self.pending_wrap && x + 1 == self.cols {
+            let line = if self.alternate() { self.lines.get(y) } else { self.abs_line(self.history.len() + y) };
+            if let Some(cell) = line.and_then(|l| l.cells.get(x)).filter(|c| c.ch != SPACER) {
+                let mut b = [0u8; 4];
+                out.extend_from_slice(&sgr(cell));
+                out.extend_from_slice(cell.ch.encode_utf8(&mut b).as_bytes());
+                out.extend_from_slice(b"\x1b[0m");
+            }
         }
-        if self.mouse != 0 { out.extend_from_slice(format!("\x1b[?{}h", self.mouse).as_bytes()); }
-        if self.mouse_sgr { out.extend_from_slice(b"\x1b[?1006h"); }
         out
     }
 }

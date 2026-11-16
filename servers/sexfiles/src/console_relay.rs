@@ -42,9 +42,12 @@ struct Relay {
     pipe: Option<u8>,
     /// Streams the starter stopped reading (`CLOSE_READ`): bit 0 stdout, bit 1 stderr.
     deaf: u8,
+    /// The relay that prepared its run, while that run is still to be bound and the
+    /// relay moved (a yarn, or a terminal that adopted the yarn): Shell binds it here.
+    origin: Option<usize>,
 }
 impl Relay {
-    const fn new() -> Relay { Relay { state: c::NONE, child: None, code: 0, interrupt: false, hung_up: false, mode: 0, size: c::Size { cols: 0, rows: 0, changes: 0 }, rings: None, pipe: None, deaf: 0 } }
+    const fn new() -> Relay { Relay { state: c::NONE, child: None, code: 0, interrupt: false, hung_up: false, mode: 0, size: c::Size { cols: 0, rows: 0, changes: 0 }, rings: None, pipe: None, deaf: 0, origin: None } }
 }
 struct Rings {
     input: c::Ring<{ c::INPUT_BYTES }>,
@@ -65,10 +68,10 @@ static mut RINGS: [Rings; ROWS] = [const { Rings::new() }; ROWS];
 static mut POOL: c::Pool<ROWS> = c::Pool::new();
 /// Runs that went on without their window: no more than there are program rows.
 static mut YARNS: [Relay; ROWS] = [const { Relay::new() }; ROWS];
-/// Each yarn's name (0: the place is free), label, the relay it left, and when (ticks).
+/// Each yarn's name (0: the place is free), label, and when it left its window (ticks).
 #[derive(Clone, Copy)]
-struct YarnMeta { name: u32, label: [u8; c::LABEL_BYTES], label_len: u8, from: usize, since: u64 }
-static mut META: [YarnMeta; ROWS] = [YarnMeta { name: 0, label: [0; c::LABEL_BYTES], label_len: 0, from: 0, since: 0 }; ROWS];
+struct YarnMeta { name: u32, label: [u8; c::LABEL_BYTES], label_len: u8, since: u64 }
+static mut META: [YarnMeta; ROWS] = [YarnMeta { name: 0, label: [0; c::LABEL_BYTES], label_len: 0, since: 0 }; ROWS];
 static mut NEXT_YARN: u32 = 0;
 /// How long a yarn's run may take to start before it counts as never started.
 const START_TICKS: u64 = 20_000;
@@ -82,10 +85,11 @@ fn relay(id: usize) -> &'static mut Relay {
 fn all() -> core::ops::Range<usize> { 0..RELAYS_N + ROWS }
 /// The yarn named `name`, as a relay id.
 fn yarn_named(name: u32) -> Option<usize> { (name != 0).then(|| (0..ROWS).find(|y| meta(*y).name == name).map(|y| RELAYS_N + y)).flatten() }
-/// A yarn that left relay `from` before its run started: the older of the two, so Shell
+/// Where the run relay `id` prepared is now: a run that left it before Shell bound it
+/// (as a yarn, perhaps adopted since) is older than one prepared there after, so Shell
 /// binds (or fails) it first.
-fn yarn_starting_from(from: usize) -> Option<usize> {
-    (0..ROWS).find(|y| meta(*y).name != 0 && meta(*y).from == from && relay(RELAYS_N + y).state == c::STARTING).map(|y| RELAYS_N + y)
+fn moved_from(id: usize) -> usize {
+    all().find(|j| { let r = relay(*j); r.state == c::STARTING && r.origin == Some(id) }).unwrap_or(id)
 }
 fn rings(i: usize) -> &'static mut Rings { unsafe { &mut (*core::ptr::addr_of_mut!(RINGS))[i] } }
 fn pool() -> &'static mut c::Pool<ROWS> { unsafe { &mut *core::ptr::addr_of_mut!(POOL) } }
@@ -150,8 +154,9 @@ pub fn bound(launcher: Option<usize>, index: usize, target: u32, task: u32) {
     // A terminal that ran in this row is gone with its slots (it cannot be the launcher).
     for slot in 0..c::SLOTS { reset(relay_id(index, slot)); relays()[relay_id(index, slot)].size = c::Size::default(); }
     let Some(id) = launcher else { return };
-    let id = yarn_starting_from(id).unwrap_or(id);
+    let id = moved_from(id);
     let r = relay(id);
+    r.origin = None;
     r.child = Some((index, target, task));
     r.state = c::RUNNING;
     match r.pipe {
@@ -162,7 +167,7 @@ pub fn bound(launcher: Option<usize>, index: usize, target: u32, task: u32) {
 }
 /// The run relay `id` prepared could not be loaded.
 pub fn not_started(id: usize) {
-    let r = relay(yarn_starting_from(id).unwrap_or(id));
+    let r = relay(moved_from(id));
     if r.state == c::STARTING { r.state = c::ENDED; r.code = c::NOT_STARTED; }
 }
 /// A run that went away without saying how it ended.
@@ -348,10 +353,11 @@ fn yarn_op(k: usize, op: u64, slot: usize, r: w::Request, data: &mut [u8]) -> u6
                 out.push_over(&data[label..label + dump + pending]);
             }
             moved.interrupt = false;
+            if moved.state == c::STARTING && moved.origin.is_none() { moved.origin = Some(id); }
             let m = meta(y);
             m.label[..label].copy_from_slice(&data[..label]);
             m.label_len = label as u8;
-            *m = YarnMeta { name, from: id, since: sex_pdx::get_ticks(), ..*m };
+            *m = YarnMeta { name, since: sex_pdx::get_ticks(), ..*m };
             *relay(RELAYS_N + y) = moved;
             sex_pdx::serial_record!("[files.yarn.detached] terminal_row={} slot={} yarn={} dump={}", k, slot, name, dump);
             w::reply(r.seq, w::OK, name)
