@@ -220,6 +220,55 @@ model as Moan's restricted `moanplug` helper (PR #347). In Option B the bridge's
 half runs in the cell and its app half is our CLAP/VST3 host code. One host per plugin
 (isolation) or one per vendor (shared state) is a setting.
 
+### 3.7 Baseline: Wine + yabridge on Linux (what we measure ourselves against)
+
+Andreas asked (2026-11-16) for Wine + yabridge to be the baseline, since it is how Linux
+musicians run Windows VST2/VST3 plugins today. How it works:
+
+- `yabridgectl sync` puts a small native Linux "chainloader" library (a `.so`, `.vst3`
+  or `.clap`) next to each Windows plugin. The DAW loads it like any Linux plugin.
+- The chainloader loads yabridge's plugin bridge, which starts `yabridge-host.exe`, a
+  Winelib program, in the plugin's Wine prefix. The host loads the Windows `.dll`.
+- The two halves exchange VST2/VST3/CLAP calls as serialized messages over Unix
+  sockets. Since yabridge 4, audio buffers go through shared memory, so the per-buffer
+  cost is one wakeup each way.
+- "Plugin groups" put several plugins in one host process, so plugins from one vendor
+  can share state and memory.
+- The plugin's editor is a Wine window reparented into the DAW's X11 window (X11 only,
+  no native Wayland).
+- Formats: VST2, VST3 and CLAP (CLAP since yabridge 5.1). Licence: GPL-3.0-or-later,
+  the same as ours.
+- Known limits: results depend on the Wine version (some plugins need wine-staging or
+  an older Wine), iLok/PACE plugins do not run, DPI and focus quirks, and installers
+  and licence managers (Native Access, Waves Central) are hit and miss.
+
+**Video (OFX) has no baseline.** No yabridge exists for OFX. Linux Resolve, Natron and
+Nuke load only native Linux OFX builds, and Windows OFX packs (Boris FX, Red Giant,
+NewBlue) mostly need CUDA, OpenCL, D3D or Metal anyway. A Windows OFX bridge would be
+new work, and is only worth it for CPU-rendered effects.
+
+**What we take from yabridge.** Its layout is the right one, and Option B keeps it:
+
+| yabridge on Linux | SexOS (Option B) |
+|---|---|
+| chainloader `.so` in the DAW | the plugin host side in Moan's `moanplug` sandbox and in Splicy |
+| `yabridge-host.exe` in Wine | the same host program, built as a Windows binary, in a Drag cell |
+| Unix sockets + shared-memory audio | shared-memory rings (lent pages, zero-copy) + wait/wake |
+| plugin groups | several plugins in one cell, a per-vendor setting |
+| X11 reparenting for the editor | `winesex.drv` gives the plugin window as a child of the Moan/Splicy Silk surface |
+| Wine prefix | a per-prefix folder grant (`C:`), no access to the rest of the system |
+
+Because yabridge is GPL-3, we can port its code directly: its message types for
+VST2/VST3/CLAP, its threading model (it mirrors the plugin's audio, GUI and host
+callback threads) and its many per-plugin workarounds. Only the transport (sockets to
+shared-memory rings) and the editor embedding change. CW8 becomes "port yabridge".
+
+**Benchmark.** The baseline is measured on the same machine: the x17 R1 dual-boots
+Linux, so the same plugins can run in Linux (Wine + yabridge in a DAW) and in SexOS
+(Moan). We compare three things: which plugins load and open their editor (a shared
+compatibility list), DSP load at 64 and 128 samples, and round-trip latency. The goal
+is to match yabridge's compatibility list and beat its per-buffer overhead.
+
 ## 4. Comparison
 
 | | A: Wine in-SAS | **B: Wine in Drag cell** | C: Linux guest + Wine | D: Windows guest | E: own Win32 |
@@ -252,12 +301,14 @@ Drag D4 (performance) and on a GL/Vulkan path for D2D/D3D UIs; the first slices 
 | CW5 | wineserver as a SexOS server over PDX: handles, processes (CreateProcess = Shell launch), registry, message queues | `reg`, `start`, two processes sharing an event |
 | CW6 | `winesex.drv`: Silk windows, input, clipboard, cursor, DPI; GDI | `notepad.exe`, `winemine` in Silk windows |
 | CW7 | `winebell.drv` (mmdevapi/WASAPI on Bell) | a Windows player plays sound |
-| CW8 | Plugin bridge: VST3 and VST2 (then CLAP) Windows host in a cell, shared-memory audio ring, plugin editor window embedded in Moan; OFX for Splicy (CPU plugins) | free closed plugins (TDR Nova, Valhalla Supermassive, Voxengo SPAN) process audio, UI opens |
+| CW8 | Port yabridge (section 3.7): its VST2/VST3/CLAP host in a cell, shared-memory transport instead of sockets, plugin groups, editor embedded in Moan | free closed plugins (TDR Nova, Valhalla Supermassive, Voxengo SPAN) process audio and open their UI; compared with Wine + yabridge on the x17 R1's Linux |
+| CW8b | OFX bridge for Splicy, built the yabridge way (new: no Linux baseline exists), CPU-rendered effects only | a free Windows OFX effect renders a frame identical to Windows |
 | CW9 | WoW64 in cells: 32-bit plugins and apps | a 32-bit VST2 processes audio |
 | CW10 | Graphics: wined3d on a SexOS GL (Mesa llvmpipe first), then DXVK when Vulkan exists | a D2D plugin UI; a D3D11 sample |
 | CW11 | Apps: wine-mono (.NET), MSI installers, fonts, file associations in Files | an installer runs end to end |
 
 Rough size: CW1 to CW8 (plugins that draw with GDI or software) about 25 to 35 slices;
+porting yabridge rather than writing a bridge from scratch is what keeps CW8 small.
 CW9 to CW11 another 20 or more, and the D3D part is gated on the GPU work. Wine
 compatibility after that is open-ended, as it is on Linux, but most of it is upstream
 Wine improving and us updating.
