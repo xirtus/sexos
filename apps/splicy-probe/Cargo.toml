@@ -1,0 +1,18 @@
+[package]
+name = "splicy-probe"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+description = "FilmCraft's editing engine running headless on SexOS: the first step of Splicy on FilmCraft"
+
+[[bin]]
+name = "splicy-probe"
+path = "src/main.rs"
+
+[dependencies]
+# FilmCraft (storytold/filmcraft, MIT OR Apache-2.0): the editor Splicy is built on.
+filmcraft-engine = { git = "https://github.com/storytold/filmcraft", rev = "e63e1d790c8e59f208f8ff31de6f6847a1bb206b" }
+serde_json = "1"
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+sex-std = { path = "../../crates/sex-std" }

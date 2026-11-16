@@ -256,10 +256,12 @@ impl PointerOutbox {
 
 // Key custody is separate from pointer capacity. A retained key edge never
 // expires on Full: dropping a modifier suffix could leave Shell holding Control.
+// `keypad`: the key is on the numpad; Shell gets it in bit 8 of the code word, so
+// programs that ask can tell numpad 8 from the grey Up arrow (both code 0x48).
 #[derive(Clone,Copy)]
-struct KeyEdge { code:u8, down:u8, source:u8, modifiers:u8 }
+struct KeyEdge { code:u8, down:u8, source:u8, modifiers:u8, keypad:bool }
 impl KeyEdge {
-    const fn empty()->Self {Self{code:0,down:0,source:0,modifiers:0}}
+    const fn empty()->Self {Self{code:0,down:0,source:0,modifiers:0,keypad:false}}
 }
 /// `extended`: the last PS/2 byte was the E0 prefix. `skip`: bytes left of a Pause
 /// (E1) sequence, which has no key code.
@@ -290,7 +292,9 @@ impl KeyboardOutbox {
         let extended=core::mem::replace(&mut self.extended,false);
         // E0 2A / E0 36 are fake shifts around extended keys: no key of their own.
         if extended && matches!(raw&0x7f,0x2A|0x36) {return true;}
-        let mut edge=KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0};
+        let mut edge=KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0,keypad:false};
+        // Numpad: 7 8 9 - 4 5 6 + 1 2 3 0 . and * plain; / and Enter after E0.
+        edge.keypad=if extended {matches!(edge.code,0x35|0x1C)} else {matches!(edge.code,0x37|0x47..=0x53)};
         // Media keys share their byte with D, C and B: give them their own codes
         // (sex_pdx::app_key::KEY_MUTE, KEY_VOLUME_DOWN, KEY_VOLUME_UP), and the player
         // keys share G, J, P and Q's (KEY_PLAY_PAUSE, KEY_STOP, KEY_NEXT, KEY_PREVIOUS).
@@ -304,24 +308,26 @@ impl KeyboardOutbox {
     /// old modifiers), modifier changes, then presses of new usages, all retained whole.
     fn usb(&mut self,keys:u64,modifiers:u8,last_keys:&mut u64,last_modifiers:&mut u8)->bool {
         let mut edges=[KeyEdge::empty();20];let mut count=0;
-        let mut add=|code:u8,down:u8,mods:u8|{
-            edges[count]=KeyEdge{code,down,source:2,modifiers:mods};count+=1;
+        let mut add=|code:u8,down:u8,mods:u8,keypad:bool|{
+            edges[count]=KeyEdge{code,down,source:2,modifiers:mods,keypad};count+=1;
         };
+        // USB keypad usages: / * - + Enter 1-9 0 . and =.
+        let keypad=|usage:u8|matches!(usage,0x54..=0x63|0x67);
         let held=|set:u64,usage:u8|usage!=0 && (0..6).any(|i|(set>>(i*8)) as u8==usage);
         for i in 0..6 {
             let old=(*last_keys>>(i*8)) as u8;
             if old!=0 && !held(keys,old) {
-                if let Some(code)=hid_to_ps2(old) {add(code,0,*last_modifiers);}
+                if let Some(code)=hid_to_ps2(old) {add(code,0,*last_modifiers,keypad(old));}
             }
         }
         let codes=[0x1d,0x2a,0x38,0x5b,0x61,0x36,0x64,0x5c];
         let changed=modifiers^*last_modifiers;
-        for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)==0 {add(codes[bit],0,modifiers);}}
-        for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)!=0 {add(codes[bit],1,modifiers);}}
+        for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)==0 {add(codes[bit],0,modifiers,false);}}
+        for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)!=0 {add(codes[bit],1,modifiers,false);}}
         for i in 0..6 {
             let new=(keys>>(i*8)) as u8;
             if new!=0 && !held(*last_keys,new) {
-                if let Some(code)=hid_to_ps2(new) {add(code,1,modifiers);}
+                if let Some(code)=hid_to_ps2(new) {add(code,1,modifiers,keypad(new));}
             }
         }
         if !self.push(&edges[..count]) {return false;}
@@ -335,7 +341,7 @@ impl KeyboardOutbox {
     fn poll(&mut self,budget:&mut usize,mut send:impl FnMut(u64,u64,u64)->Result<bool,u64>)->bool {
         while self.len>0 && *budget>0 {
             let edge=self.edges[self.head];*budget-=1;
-            match send(edge.code as u64,edge.down as u64,EV_KEY) {
+            match send(edge.code as u64|(edge.keypad as u64)<<8,edge.down as u64,EV_KEY) {
                 Ok(true)=>{
                     sex_pdx::serial_input_record!(("[sexinput.key.send] source={} dst=6 ok=1 err=0 payload=redacted", edge.source); ("[sexinput.key.send] code={} down={} mod={} source={} dst=6 ok=1 err=0",edge.code,edge.down,edge.modifiers,edge.source));
                     if edge.source==1 {

@@ -1,0 +1,13 @@
+[package]
+name = "sex-crossdress"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Crossdress CW1: unmodified 64-bit Windows programs in a Drag cell (a VT-x guest with no guest OS): PE loader, cell page tables/GDT/IDT/TSS, exception stubs, TEB/PEB, KERNEL32 subset, vectored exception dispatch"
+
+[dependencies]
+sex-pdx = { path = "../sex-pdx" }
+drag-vmm = { path = "../drag-vmm" }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2"

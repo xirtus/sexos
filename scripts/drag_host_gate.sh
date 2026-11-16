@@ -27,4 +27,16 @@ else
   echo "[drag.host.gate] SKIP no nasm: test guest not reassembled"
 fi
 python3 "$ROOT_DIR/scripts/drag_guest_qemu.py"
+# Crossdress CW1: the PE loader, the cell (page tables, GDT/IDT/TSS, stubs), the KERNEL32
+# subset and exception dispatch against a scripted vCPU; then the test .exe in a real
+# VT-x/SVM cell on Linux KVM (tests/kvm.rs, SKIP without a usable /dev/kvm).
+(cd "$ROOT_DIR" && cargo test --locked -p sex-crossdress -- --nocapture 2>&1 | grep -E '^\[crossdress|^test result|FAILED|panicked' ; exit "${PIPESTATUS[0]}")
+CROSS="$ROOT_DIR/crates/sex-crossdress/test"
+if command -v clang >/dev/null && command -v lld-link >/dev/null && command -v llvm-dlltool >/dev/null; then
+  bash "$CROSS/build.sh" "$TEST_DIR/hello.exe"
+  cmp "$TEST_DIR/hello.exe" "$CROSS/hello.exe" || { echo "[drag.host.gate] FAIL hello.exe is not what hello.c builds to"; exit 1; }
+  echo "[drag.host.gate] crossdress test program matches its source"
+else
+  echo "[drag.host.gate] SKIP no clang/lld-link: crossdress test program not rebuilt"
+fi
 echo "[drag.host.gate] PASS"

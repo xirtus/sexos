@@ -44,6 +44,8 @@ members = [
     "apps/dragtest",
     "apps/drag",
     "crates/drag-vmm",
+    "crates/sex-crossdress",
+    "apps/crossdress",
     "apps/fuzz",
     "apps/play",
     "apps/cpp",
@@ -196,6 +198,7 @@ members = [
     "servers/sexuvc",
     "apps/flash",
     "apps/splicy",
+    "apps/splicy-probe",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
@@ -364,3 +367,82 @@ opt-level = 3
 [profile.dev.package.naga]
 opt-level = 2
 
+# Splicy on FilmCraft: size-optimised and stripped so the program fits the loader's limit.
+[profile.release.package.splicy-probe]
+strip = true
+[profile.release.package.craft-audio]
+opt-level = "s"
+[profile.release.package.craft-captions]
+opt-level = "s"
+[profile.release.package.craft-csv]
+opt-level = "s"
+[profile.release.package.craft-docpath]
+opt-level = "s"
+[profile.release.package.craft-jpeg]
+opt-level = "s"
+[profile.release.package.craft-media]
+opt-level = "s"
+[profile.release.package.craft-offcrypto]
+opt-level = "s"
+[profile.release.package.craft-opc]
+opt-level = "s"
+[profile.release.package.craft-sheet]
+opt-level = "s"
+[profile.release.package.craft-timeline]
+opt-level = "s"
+[profile.release.package.craft-video]
+opt-level = "s"
+[profile.release.package.craft-xls]
+opt-level = "s"
+[profile.release.package.craft-zip]
+opt-level = "s"
+[profile.release.package.filmcraft-audio-dsp]
+opt-level = "s"
+[profile.release.package.filmcraft-bitstream]
+opt-level = "s"
+[profile.release.package.filmcraft-captions]
+opt-level = "s"
+[profile.release.package.filmcraft-cfb]
+opt-level = "s"
+[profile.release.package.filmcraft-codecs]
+opt-level = "s"
+[profile.release.package.filmcraft-color]
+opt-level = "s"
+[profile.release.package.filmcraft-dng]
+opt-level = "s"
+[profile.release.package.filmcraft-dnx]
+opt-level = "s"
+[profile.release.package.filmcraft-edit]
+opt-level = "s"
+[profile.release.package.filmcraft-engine]
+opt-level = "s"
+[profile.release.package.filmcraft-export]
+opt-level = "s"
+[profile.release.package.filmcraft-format]
+opt-level = "s"
+[profile.release.package.filmcraft-frame]
+opt-level = "s"
+[profile.release.package.filmcraft-geom]
+opt-level = "s"
+[profile.release.package.filmcraft-interchange]
+opt-level = "s"
+[profile.release.package.filmcraft-isobmff]
+opt-level = "s"
+[profile.release.package.filmcraft-matroska]
+opt-level = "s"
+[profile.release.package.filmcraft-media]
+opt-level = "s"
+[profile.release.package.filmcraft-project]
+opt-level = "s"
+[profile.release.package.filmcraft-render]
+opt-level = "s"
+[profile.release.package.filmcraft-scopes]
+opt-level = "s"
+[profile.release.package.filmcraft-speech]
+opt-level = "s"
+[profile.release.package.filmcraft-text]
+opt-level = "s"
+[profile.release.package.filmcraft-time]
+opt-level = "s"
+[profile.release.package.filmcraft-tts]
+opt-level = "s"

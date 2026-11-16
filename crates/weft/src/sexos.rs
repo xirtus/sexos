@@ -24,7 +24,7 @@ pub fn now() -> u64 { sex_pdx::get_ticks() }
 /// end of a drag this window started, read with `sex_app::dnd`).
 pub fn event(e: AppEvent) -> Option<Event> {
     Some(match e {
-        AppEvent::Drop { .. } | AppEvent::DragEnded { .. } => return None,
+        AppEvent::Drop { .. } | AppEvent::DragEnded { .. } | AppEvent::KeyUp(_) => return None,
         AppEvent::Key(k) => Event::Key(Key { code: k.code, shift: k.shift, control: k.control, text: k.char() }),
         AppEvent::Close => Event::Close,
         AppEvent::Resize { width, height } => Event::Resize { width: width as u32, height: height as u32 },
