@@ -22,6 +22,9 @@ server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
 threading.Thread(target=server.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 os.environ.setdefault('SEXOS_GATE_BOUND','2400')
+# FilmCraft holds its project, decoded frames and caches: about 180 MiB for the demo
+# project, more than the default 512 MiB guest leaves a program.
+os.environ.setdefault('SEXOS_GATE_MEMORY','4G')
 from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 def main():

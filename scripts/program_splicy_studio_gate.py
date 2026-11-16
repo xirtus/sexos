@@ -49,6 +49,9 @@ threading.Thread(target=server.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 # Fetching a 28 MiB program and painting a full editor on the CPU take longer than 300 s.
 os.environ.setdefault('SEXOS_GATE_BOUND','2400')
+# FilmCraft holds its project, decoded frames and caches: about 180 MiB for the demo
+# project, more than the default 512 MiB guest leaves a program.
+os.environ.setdefault('SEXOS_GATE_MEMORY','4G')
 from quil_autosave_gate import boot
 from program_gate_geometry import maximize
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
