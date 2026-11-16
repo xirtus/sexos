@@ -20,6 +20,8 @@ pub const PAIR_MS: u64 = 3_000;
 pub const CARD_MS: u64 = 30_000;
 /// Cards waiting behind the one shown.
 pub const CARD_QUEUE: usize = 4;
+/// Action lists waiting for their notifications, from all programs.
+pub const PENDING: usize = 4;
 pub const OUTBOX: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,6 +52,8 @@ struct Pending {
     placeholder: Line<{ pt::ACTION_BYTES }>,
     /// When committed; None while it is still being sent.
     at: Option<u64>,
+    /// Arrival order: a sender's lists pair with its notifications oldest first.
+    seq: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,7 +117,8 @@ pub enum Key { Pass, Taken, Typed, Sent { pd: u32, tag: u32, len: usize }, Left,
 pub struct Tray {
     items: [Option<Item>; pt::MAX_ITEMS],
     next_order: u32,
-    pending: [Option<Pending>; 4],
+    pending: [Option<Pending>; PENDING],
+    next_seq: u32,
     /// Index 0 shows; the rest wait.
     cards: [Option<Card>; CARD_QUEUE],
     /// The open menu's item (pd, id) and the row under the pointer.
@@ -122,6 +127,10 @@ pub struct Tray {
     hover: Option<(u32, u8)>,
     reply: ReplyView,
     shift: [bool; 2],
+    /// Super held (left, right): its chords belong to the desktop.
+    sup: [bool; 2],
+    /// The screen the view was last laid out for.
+    screen: Option<Screen>,
     outbox: [Option<Out>; OUTBOX],
     /// Sections Display has not been sent since they changed.
     dirty: u8,
@@ -129,8 +138,20 @@ pub struct Tray {
 
 impl Tray {
     pub const fn new() -> Self {
-        Self { items: [None; pt::MAX_ITEMS], next_order: 0, pending: [None; 4], cards: [None; CARD_QUEUE], menu: None, hover: None,
-            reply: ReplyView { active: false, text: Line::EMPTY }, shift: [false; 2], outbox: [None; OUTBOX], dirty: 0 }
+        Self { items: [None; pt::MAX_ITEMS], next_order: 0, pending: [None; PENDING], next_seq: 0, cards: [None; CARD_QUEUE], menu: None, hover: None,
+            reply: ReplyView { active: false, text: Line::EMPTY }, shift: [false; 2], sup: [false; 2], screen: None, outbox: [None; OUTBOX], dirty: 0 }
+    }
+
+    /// The screen the view is laid out for. When it changed (a new display
+    /// scale or resolution), every section is sent again: icons, menu, tip
+    /// and card sit where the new screen puts them, as presses find them.
+    /// True when it changed.
+    pub fn set_screen(&mut self, s: &Screen) -> bool {
+        if self.screen.as_ref() == Some(s) { return false; }
+        let first = self.screen.is_none();
+        self.screen = Some(*s);
+        if !first { self.mark_all(); }
+        !first
     }
 
     fn mark(&mut self, s: Section) { self.dirty |= s.bit(); }
@@ -196,13 +217,18 @@ impl Tray {
 
     /// A program's `OP_NOTIFY_ACTIONS`. False when refused.
     pub fn actions_msg(&mut self, pd: u32, task: u32, msg: ActionsMsg, now: u64) -> bool {
-        let slot = self.pending.iter().position(|p| p.is_some_and(|p| p.pd == pd));
+        // The list this program is still sending, if any; committed ones
+        // wait for their notifications and are never written again.
+        let slot = self.pending.iter().position(|p| p.is_some_and(|p| p.pd == pd && p.at.is_none()));
         match msg {
             ActionsMsg::Begin { tag, actions, reply } => {
+                // A list begun again restarts; otherwise a free slot, or the
+                // oldest list (any program's) makes room.
                 let Some(i) = slot.or_else(|| self.pending.iter().position(|p| p.is_none()))
-                    .or_else(|| (0..self.pending.len()).min_by_key(|&i| self.pending[i].map_or(0, |p| p.at.unwrap_or(0)))) else { return false };
+                    .or_else(|| (0..self.pending.len()).min_by_key(|&i| self.pending[i].map_or(0, |p| p.seq))) else { return false };
+                self.next_seq = self.next_seq.wrapping_add(1);
                 self.pending[i] = Some(Pending { pd, task, tag, actions: actions.min(pt::MAX_ACTIONS as u8), reply,
-                    labels: [Line::EMPTY; pt::MAX_ACTIONS], placeholder: Line::EMPTY, at: None });
+                    labels: [Line::EMPTY; pt::MAX_ACTIONS], placeholder: Line::EMPTY, at: None, seq: self.next_seq });
                 true
             }
             ActionsMsg::Text { field, part, len, a, b } => {
@@ -221,7 +247,11 @@ impl Tray {
     /// A notification Bell forwarded from `sender`. When that program gave
     /// actions for it, a card is made: Some((tag, place in the queue)).
     pub fn notification(&mut self, sender: u32, text: &[u8], from: &[u8], now: u64) -> Option<(u32, usize)> {
-        let i = self.pending.iter().position(|p| p.is_some_and(|p| p.pd == sender && p.at.is_some_and(|t| now.saturating_sub(t) <= PAIR_MS)))?;
+        // The sender's oldest committed list still in time: lists and
+        // notifications pair in the order they were sent.
+        let i = (0..self.pending.len())
+            .filter(|&i| self.pending[i].is_some_and(|p| p.pd == sender && p.at.is_some_and(|t| now.saturating_sub(t) <= PAIR_MS)))
+            .min_by_key(|&i| self.pending[i].map_or(0, |p| p.seq))?;
         let p = self.pending[i].take()?;
         let view = CardView { actions: p.actions, reply: p.reply, from: Line::new(from), text: Line::new(text), labels: p.labels,
             placeholder: if p.reply && p.placeholder.is_empty() { Line::new(b"Reply") } else { p.placeholder } };
@@ -412,11 +442,14 @@ impl Tray {
     }
 
     /// A key, before programs see it. Typing goes to the reply field while it
-    /// is active; Esc closes an open menu. Modifiers and releases pass.
+    /// is active; Esc closes an open menu. Modifiers, releases and anything
+    /// pressed with Super held (the desktop's chords) pass.
     pub fn key(&mut self, code: u8, value: u64, now: u64) -> Key {
         let down = value != 0;
-        match code { 0x2A => self.shift[0] = down, 0x36 => self.shift[1] = down, _ => {} }
+        match code { 0x2A => self.shift[0] = down, 0x36 => self.shift[1] = down, 0x5B => self.sup[0] = down, 0x5C => self.sup[1] = down, _ => {} }
         if matches!(code, 0x2A | 0x36 | 0x1D | 0x38 | 0x3A | 0x5B | 0x5C | 0x61 | 0x64) || !down { return Key::Pass; }
+        // Super chords (lock, terminal, workspaces) stay the desktop's.
+        if self.sup[0] || self.sup[1] { return Key::Pass; }
         if self.menu.is_some() && code == 0x01 { self.menu = None; self.mark(Section::Menu); return Key::MenuClosed; }
         if !self.reply_active() { return Key::Pass; }
         match code {

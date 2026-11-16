@@ -338,3 +338,70 @@ fn display_never_shows_a_half_sent_section() {
     }
     assert_eq!(CardLayout::new(300, 24, 1, 1, true), None);
 }
+
+#[test]
+fn two_action_lists_pair_with_their_notifications_in_order() {
+    let mut t = Tray::new();
+    // Both lists are sent before Bell forwards the first notification.
+    ask(&mut t, PD, TASK, 1, &[b"One"], None, 1_000);
+    ask(&mut t, PD, TASK, 2, &[b"Two", b"Too"], Some(b"Say"), 1_010);
+    assert_eq!(t.notification(PD, b"First", b"p", 1_100), Some((1, 0)));
+    assert_eq!(t.notification(PD, b"Second", b"p", 1_200), Some((2, 1)));
+    let c = t.card().unwrap();
+    assert_eq!((c.tag, c.view.actions, c.view.reply, c.view.labels[0].as_bytes(), c.view.text.as_bytes()), (1, 1, false, &b"One"[..], &b"First"[..]));
+    let l = CardLayout::new(1280, 24, 1, 1, false).unwrap();
+    assert_eq!(t.press(&screen(), l.close.0 + 2, l.close.1 + 2, 1_300), Press::CardClosed { pd: PD, tag: 1 });
+    let c = t.card().unwrap();
+    assert_eq!((c.tag, c.view.actions, c.view.reply, c.view.labels[1].as_bytes(), c.view.text.as_bytes()), (2, 2, true, &b"Too"[..], &b"Second"[..]));
+    // A third notification has no list left: no card.
+    assert_eq!(t.notification(PD, b"Third", b"p", 1_400), None);
+    // Each list keeps its own time: an old one goes, a newer one still pairs.
+    ask(&mut t, PD, TASK, 3, &[b"a"], None, 2_000);
+    ask(&mut t, PD, TASK, 4, &[b"b"], None, 4_000);
+    t.tick(2_000 + PAIR_MS + 1);
+    assert_eq!(t.notification(PD, b"Late", b"p", 2_000 + PAIR_MS + 2), Some((4, 1)));
+    // Room for four lists in all; a fifth makes room by dropping the oldest.
+    for tag in 10..15 { ask(&mut t, 60 + tag, 1, tag, &[b"x"], None, 10_000); }
+    assert_eq!(t.notification(70, b"x", b"p", 10_001), None, "oldest list made room");
+    assert_eq!(t.notification(71, b"x", b"p", 10_001).map(|r| r.0), Some(11));
+}
+
+#[test]
+fn super_chords_pass_while_a_reply_field_is_active() {
+    let s = screen();
+    let mut t = Tray::new();
+    ask(&mut t, PD, TASK, 1, &[], Some(b"Reply"), 0);
+    t.notification(PD, b"Hi", b"p", 0);
+    let f = CardLayout::new(s.width, s.bar, s.scale, 0, true).unwrap().field.unwrap();
+    assert_eq!(t.press(&s, f.0 + 1, f.1 + 1, 0), Press::ReplyFocused { pd: PD, tag: 1 });
+    for sup in [0x5B, 0x5C] {
+        assert_eq!(t.key(sup, 1, 0), Key::Pass);
+        assert_eq!(t.key(0x01, 1, 0), Key::Pass, "Super+Escape locks");
+        assert_eq!(t.key(0x1C, 1, 0), Key::Pass, "Super+Enter opens a terminal");
+        assert_eq!(t.key(0x02, 1, 0), Key::Pass);
+        assert_eq!(t.key(sup, 0, 0), Key::Pass);
+    }
+    assert!(t.reply_active() && t.reply_text().is_empty());
+    type_text(&mut t, "ok");
+    assert_eq!(t.reply_text(), b"ok");
+}
+
+#[test]
+fn a_new_screen_sends_everything_again() {
+    let s = screen();
+    let mut t = Tray::new();
+    let mut r = Receiver::new();
+    add(&mut t, PD, TASK, 0, b"A", &[b"Row"]);
+    assert!(!t.set_screen(&s), "the first screen is not a change");
+    display(&mut t, &s, &mut r);
+    assert_eq!(t.dirty(), 0);
+    assert!(!t.set_screen(&s));
+    assert_eq!(t.dirty(), 0);
+    // Scale 2: everything goes again, and Display shows the icon where a press finds it.
+    let big = Screen { width: 2560, height: 1600, bar: 48, scale: 2, right: 2048, left: 1512, y: 0, size: 48, gap: 8 };
+    assert!(t.set_screen(&big));
+    assert_eq!(t.dirty(), Section::ALL.iter().fold(0, |d, s| d | s.bit()));
+    display(&mut t, &big, &mut r);
+    let ic = r.shown.icons[0];
+    assert!(matches!(t.press(&big, ic.x as usize + 1, ic.y as usize + 1, 0), Press::MenuOpened { .. }));
+}

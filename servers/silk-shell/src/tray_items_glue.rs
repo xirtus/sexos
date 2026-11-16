@@ -152,10 +152,15 @@ pub unsafe fn poll() {
         let gone = tray().retain(alive, now);
         if gone != 0 { sex_pdx::serial_record!("[shell.tray_items.cleanup] gone={} items={} cards={}", gone, tray().items().count(), tray().queued()); }
     }
+    let s = screen();
     let p = (crate::POINTER_X, crate::POINTER_Y);
-    if p != LAST_POINTER {
+    // A new display scale or resolution moves everything: Display is sent
+    // it all again, laid out as presses will find it.
+    let moved = s.is_some_and(|s| tray().set_screen(&s));
+    if moved { sex_pdx::serial_record!("[shell.tray_items.screen] relayout=1 width={} height={} scale={}", s.unwrap().width, s.unwrap().height, s.unwrap().scale); }
+    if p != LAST_POINTER || moved {
         LAST_POINTER = p;
-        if let Some(s) = screen() { tray().pointer(&s, p.0.max(0) as usize, p.1.max(0) as usize); }
+        if let Some(s) = s { tray().pointer(&s, p.0.max(0) as usize, p.1.max(0) as usize); }
     }
     flush();
 }
