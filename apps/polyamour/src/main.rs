@@ -238,7 +238,7 @@ fn main() {
     for (f, v) in &python {
         run_python_arg(&mut app, f, v);
         let mode = if app.doc.python.live() { "live" } else { "batch" };
-        sex_std::sex_pdx::serial_record!("[polyamour.python] mode={} objects={}", mode, app.doc.scene.objects.len());
+        sex_std::sex_pdx::serial_record!("[polyamour.python] mode={} objects={} why={}", mode, app.doc.scene.objects.len(), app.doc.python.unavailable_reason());
         sex_std::sex_pdx::serial_record!("[polyamour.report] {}", app.doc.report);
         app.frame(Input::Tick);
         show(&app, window);

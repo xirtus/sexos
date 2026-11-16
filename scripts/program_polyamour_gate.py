@@ -59,7 +59,9 @@ def main():
     q.cmd('send-key',{'keys':[{'type':'qcode','data':k}for k in qcodes(ch)],'hold-time':40});time.sleep(.05)
    q.key('ret')
    o=g['wait'](r'\[polyamour\.ready\] target=(\d+) task=(\d+) size=(\d+)x(\d+)\n',s,900)
-   m=g['wait'](r'\[polyamour\.python\] mode=(\w+) objects=(\d+)\n',s,600)
+   m=g['wait'](r'\[polyamour\.python\] mode=(\w+) objects=(\d+) why=([^\n]*)\n',s,600)
+   if (m[1],m[2])!=('live','4'):
+    time.sleep(2);print('\n'.join(l for l in t()[s:].splitlines() if re.search(r'polyamour|python|std\.|spawn|pipe|process',l))[-6000:])
    assert (m[1],m[2])==('live','4'),m[0]
    g['focus'](SURFACE[int(o[1])]);time.sleep(1.5)
    q.cmd('screendump',{'filename':str(a.out/'polyamour-python.ppm')})
