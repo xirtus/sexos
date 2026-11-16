@@ -218,4 +218,6 @@ fn batch(report:HidPointerRawReport,last:&mut u8)->Vec<(u64,u64,u64)> {
  assert_eq!(sent,vec![(0x1e,1,EV_KEY),(0x1f,1,EV_KEY),(0x1e,0,EV_KEY),(0x1f,0,EV_KEY)]);
  // Digits and arrows reach their PS/2 set-1 codes (arrows as their keypad twins).
  assert_eq!([0x1e,0x27,0x52,0x51,0x50,0x4f].map(hid_to_ps2),[Some(0x02),Some(0x0b),Some(0x48),Some(0x50),Some(0x4b),Some(0x4d)]);
+ // Media usages: mute and volume, then play/pause, stop, previous, next (a headset's buttons via Cufflinks).
+ assert_eq!([0x7f,0x80,0x81,0xe8,0xe9,0xea,0xeb].map(hid_to_ps2),[Some(0x75),Some(0x77),Some(0x76),Some(0x78),Some(0x7a),Some(0x7f),Some(0x7c)]);
 }
