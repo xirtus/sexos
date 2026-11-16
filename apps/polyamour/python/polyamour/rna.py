@@ -222,11 +222,24 @@ def RemoveProperty(cls, attr=''):
         delattr(cls, attr)
 
 
+def own_annotations(c):
+    """A class's own annotations. Python 3.14 evaluates them lazily: the class
+    dict then holds an annotate function and no `__annotations__` until asked."""
+    ann = c.__dict__.get('__annotations__')
+    if ann is None and ('__annotate_func__' in c.__dict__ or '__annotate__' in c.__dict__):
+        try:
+            import annotationlib
+            ann = annotationlib.get_annotations(c)
+        except Exception:
+            ann = None
+    return ann or {}
+
+
 def _class_props(cls):
     """(name, _PropDef) of a class, its bases first, from annotations and attributes."""
     out = {}
     for c in reversed(cls.__mro__):
-        for k, v in c.__dict__.get('__annotations__', {}).items():
+        for k, v in own_annotations(c).items():
             if isinstance(v, _PropDef):
                 out[k] = v
         for k, v in c.__dict__.items():

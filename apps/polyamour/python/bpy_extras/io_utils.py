@@ -3,7 +3,7 @@
 import os
 
 from mathutils import Matrix, Vector
-from polyamour.rna import BoolProperty, EnumProperty, StringProperty
+from polyamour.rna import BoolProperty, EnumProperty, StringProperty, own_annotations
 
 
 class ImportHelper:
@@ -41,12 +41,10 @@ _AXES = (('X', 'X', ''), ('Y', 'Y', ''), ('Z', 'Z', ''), ('-X', '-X', ''), ('-Y'
 
 def orientation_helper(axis_forward='Y', axis_up='Z'):
     def wrapper(cls):
-        ann = cls.__dict__.get('__annotations__')
-        if ann is None:
-            ann = {}
-            cls.__annotations__ = ann
+        ann = dict(own_annotations(cls))
         ann['axis_forward'] = EnumProperty(name='Forward', items=_AXES, default=axis_forward)
         ann['axis_up'] = EnumProperty(name='Up', items=_AXES, default=axis_up)
+        cls.__annotations__ = ann
         return cls
     return wrapper
 
