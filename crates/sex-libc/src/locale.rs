@@ -36,6 +36,22 @@ pub extern "C" fn isupper_l(c: c_int, _l: locale_t) -> c_int { ascii(c, u8::is_a
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub extern "C" fn iswlower_l(c: u32, _l: locale_t) -> c_int { char::from_u32(c).is_some_and(|c| c.is_lowercase()) as c_int }
 
+// The `<wctype.h>` tests over Unicode (eSpeak NG reads text with them).
+fn wide(c: u32, test: fn(char) -> bool) -> c_int { char::from_u32(c).is_some_and(test) as c_int }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn iswalpha(c: u32) -> c_int { wide(c, char::is_alphabetic) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn iswalnum(c: u32) -> c_int { wide(c, char::is_alphanumeric) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn iswlower(c: u32) -> c_int { wide(c, char::is_lowercase) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn iswupper(c: u32) -> c_int { wide(c, char::is_uppercase) }
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn iswspace(c: u32) -> c_int { wide(c, char::is_whitespace) }
+/// Printable and not a letter, digit or space: punctuation and symbols, as in musl.
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub extern "C" fn iswpunct(c: u32) -> c_int { wide(c, |c| !c.is_alphanumeric() && !c.is_whitespace() && !c.is_control()) }
+
 // The plain `<ctype.h>` tests, in the C locale (musl's header turns some into macros;
 // these are the functions behind them, for code that takes their address).
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
@@ -343,6 +359,22 @@ pub unsafe extern "C" fn wcstol(s: *const wchar_t, end: *mut *mut wchar_t, base:
     }
     let mut stop: *mut c_char = core::ptr::null_mut();
     let v = unsafe { crate::stdlib::strtol(narrow.as_ptr(), &mut stop, base) };
+    if !end.is_null() { unsafe { *end = s.add(stop.offset_from(narrow.as_ptr()) as usize) as *mut wchar_t }; }
+    v
+}
+/// `strtod` over wide characters, the same way as [`wcstol`].
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn wcstod(s: *const wchar_t, end: *mut *mut wchar_t) -> f64 {
+    let mut narrow = [0 as c_char; 80];
+    let mut n = 0;
+    while n < narrow.len() - 1 {
+        let c = unsafe { *s.add(n) };
+        if !(1..128).contains(&c) { break; }
+        narrow[n] = c as c_char;
+        n += 1;
+    }
+    let mut stop: *mut c_char = core::ptr::null_mut();
+    let v = unsafe { crate::stdlib::strtod(narrow.as_ptr(), &mut stop) };
     if !end.is_null() { unsafe { *end = s.add(stop.offset_from(narrow.as_ptr()) as usize) as *mut wchar_t }; }
     v
 }
