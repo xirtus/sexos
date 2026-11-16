@@ -23,7 +23,8 @@ jobs:
   host:
     name: Host regressions
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 23 min warm; a cold cargo cache (after a red master) needs more.
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
