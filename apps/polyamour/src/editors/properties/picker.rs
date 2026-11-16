@@ -2,7 +2,7 @@
 //! Blender's colour picker popover: a hue/saturation wheel, a value strip,
 //! RGB or HSV sliders and a hex field. Wheel and hex work in display (sRGB)
 //! space, the RGB sliders in scene-linear values, as in Blender.
-use super::ColorTarget;
+use super::{ColorTarget, SettingColor};
 use crate::doc::Doc;
 use crate::draw::{Align, Rect};
 use crate::input::{Button, Input};
@@ -63,6 +63,8 @@ pub fn get(d: &Doc, t: ColorTarget) -> Option<[f32; 3]> {
             })
         }
         ColorTarget::Prop(p) => crate::gpencil::ui::get_color(d, p),
+        ColorTarget::Setting(SettingColor::WorkbenchSingle) => Some(d.settings.workbench.single_color),
+        ColorTarget::Setting(SettingColor::Bloom) => Some(d.settings.eevee_bloom_color),
     }
 }
 
@@ -102,6 +104,8 @@ pub fn set(d: &mut Doc, t: ColorTarget, c: [f32; 3]) {
             crate::gpencil::ui::set_color(d, p, c);
             return;
         }
+        ColorTarget::Setting(SettingColor::WorkbenchSingle) => d.settings.workbench.single_color = c,
+        ColorTarget::Setting(SettingColor::Bloom) => d.settings.eevee_bloom_color = c,
     }
     d.touch();
 }

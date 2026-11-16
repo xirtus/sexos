@@ -35,7 +35,7 @@ def wait_closed_session(g,start,target,task):
  target,task=int(target),int(task)
  g['wait'](rf'\[app.private.retired\] target={target} task={task} pages=\d+ reusable=1(?:\r?\n|$)',start,120)
  ended=g['wait'](rf'\[spindle.session.ended\] target={target} task={task}(?:\r?\n|$)',start,120)
- g['wait'](r'\[spindle.session.saved\] bytes=0 status=0(?:\r?\n|$)',start+ended.end(),120)
+ g['wait'](r'\[spindle.session.saved\] bytes=0 status=0(?: programs=\d+)?(?:\r?\n|$)',start+ended.end(),120)
 
 def require_empty_restored_session(g):
  session=g['wait'](r'\[spindle.session.read\] status=(\d+) programs=(\d+)',0,120)

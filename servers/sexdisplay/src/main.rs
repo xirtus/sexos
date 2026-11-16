@@ -144,6 +144,7 @@ mod glyphs;
 mod lock_screen;
 mod bt_panel;
 mod window_menu;
+mod program_tray;
 mod bitmap_binding;
 mod bitmap_transaction;
 mod bitmap_stores;
@@ -2251,6 +2252,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
             draw_atlas_frame_previews_pass(fb,w,h,total,scene);
         }
         draw_launcher_panel(fb,w,h,total,scene);
+        program_tray::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_tray_menu(fb,w,h,total,scene);
         bt_panel::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_window_switcher(fb,w,h,total,scene);
@@ -4627,6 +4629,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 sex_pdx::window_menu::OP_WINDOW_MENU => { if window_menu::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
+                sex_pdx::program_tray::OP_TRAY_VIEW => { if program_tray::receive(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) { needs_full_redraw = true; } }
                 sex_pdx::window_motion::OP_MOTION => {
                     // Only the Shell turns animations on or off and hints a workspace slide.
                     if msg.caller_pd == 3 {

@@ -120,7 +120,7 @@
 use crate::math::{Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
 use crate::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
-use crate::scene::{unique_name, AreaShape, Camera, Light, LightKind, Material, Object, ObjectData, PanoramaType, Scene, SensorFit, Transform, VolumeSettings};
+use crate::scene::{unique_name, AreaShape, Camera, Light, LightKind, Material, MaterialEevee, Object, ObjectData, PanoramaType, RenderMethod, Scene, SensorFit, Transform, VolumeSettings};
 use base64::Engine;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Write as _};
@@ -1318,6 +1318,9 @@ impl Session {
                     "max_bounces" => l.max_bounces.to_string(),
                     "cast_shadow" => (l.cast_shadow as u8).to_string(),
                     "use_mis" => (l.use_mis as u8).to_string(),
+                    "contact_shadow" => (l.contact_shadow as u8).to_string(),
+                    "contact_shadow_distance" => fmt_f(l.contact_shadow_distance),
+                    "contact_shadow_thickness" => fmt_f(l.contact_shadow_thickness),
                     _ => return Err(format!("unknown property '{prop}' for light '{}'", o.name)),
                 },
                 ObjectData::Camera(c) => match prop.as_str() {
@@ -1370,7 +1373,7 @@ fn scale_of(v: &[f32]) -> Res<Vec3> {
 }
 
 fn set_light_opts(cmd: &mut Cmd, l: &mut Light) -> Res<()> {
-    for key in ["power", "color", "radius", "angle", "blend", "size", "shape", "size_y", "spread", "max_bounces", "cast_shadow", "use_mis"] {
+    for key in ["power", "color", "radius", "angle", "blend", "size", "shape", "size_y", "spread", "max_bounces", "cast_shadow", "use_mis", "contact_shadow", "contact_shadow_distance", "contact_shadow_thickness"] {
         if let Some(t) = cmd.opt(key) {
             set_light_prop(l, key, std::slice::from_ref(&t))?;
         }
@@ -1406,6 +1409,10 @@ fn set_light_prop(l: &mut Light, prop: &str, args: &[Token]) -> Res<()> {
             l.use_mis = boolean(&word()?)?;
             return Ok(());
         }
+        "contact_shadow" => {
+            l.contact_shadow = boolean(&word()?)?;
+            return Ok(());
+        }
         "max_bounces" => {
             l.max_bounces = uint(&word()?)?;
             return Ok(());
@@ -1426,6 +1433,8 @@ fn set_light_prop(l: &mut Light, prop: &str, args: &[Token]) -> Res<()> {
         ("size", LightKind::Area { size }) => *size = one()?,
         ("size_y", _) => l.size_y = one()?,
         ("spread", _) => l.spread = one()?,
+        ("contact_shadow_distance", _) => l.contact_shadow_distance = one()?,
+        ("contact_shadow_thickness", _) => l.contact_shadow_thickness = one()?,
         ("angle" | "blend", _) => return Err(format!("{prop} is only for spot lights")),
         ("size", _) => return Err("size is only for area lights".into()),
         _ => return Err(format!("unknown light property '{prop}'")),
@@ -1609,7 +1618,44 @@ fn set_material_render_opts(cmd: &mut Cmd, m: &mut Material) -> Res<()> {
     if let Some(v) = cmd.u("pass_index")? {
         m.pass_index = v;
     }
+    if let Some(t) = cmd.opt("render_method") {
+        let w = t.text.to_ascii_lowercase();
+        m.eevee.render_method = RenderMethod::ALL.into_iter().find(|r| r.label().eq_ignore_ascii_case(&w)).ok_or_else(|| format!("unknown render method '{w}' (dithered, blended)"))?;
+    }
+    if let Some(v) = cmd.b("backface_culling")? {
+        m.eevee.backface_culling = v;
+    }
+    if let Some(v) = cmd.b("backface_culling_shadow")? {
+        m.eevee.backface_culling_shadow = v;
+    }
+    if let Some(v) = cmd.b("transparent_shadows")? {
+        m.eevee.transparent_shadows = v;
+    }
+    if let Some(v) = cmd.b("screen_refraction")? {
+        m.eevee.screen_refraction = v;
+    }
+    if let Some(v) = cmd.f("refraction_depth")? {
+        m.eevee.refraction_depth = v;
+    }
     set_volume_opts(cmd, &mut m.volume)
+}
+
+/// EEVEE material options that differ from the defaults, as ` key=value`s.
+fn eevee_material_opts(e: &MaterialEevee) -> String {
+    let d = MaterialEevee::default();
+    let mut out = String::new();
+    if e.render_method != d.render_method {
+        out += &format!(" render_method={}", e.render_method.label().to_ascii_lowercase());
+    }
+    for (key, a, b) in [("backface_culling", e.backface_culling, d.backface_culling), ("backface_culling_shadow", e.backface_culling_shadow, d.backface_culling_shadow), ("transparent_shadows", e.transparent_shadows, d.transparent_shadows), ("screen_refraction", e.screen_refraction, d.screen_refraction)] {
+        if a != b {
+            out += &format!(" {key}={}", a as u8);
+        }
+    }
+    if e.refraction_depth != d.refraction_depth {
+        out += &format!(" refraction_depth={}", fmt_f(e.refraction_depth));
+    }
+    out
 }
 
 /// `volume=none` or `volume_density=` etc. (any of them creates the volume).
@@ -2211,9 +2257,10 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
             fmt_f(m.transmission),
             m.double_sided as u8
         );
-        if m.pass_index != 0 || m.volume.is_some() {
+        let ee = eevee_material_opts(&m.eevee);
+        if m.pass_index != 0 || m.volume.is_some() || !ee.is_empty() {
             let pi = if m.pass_index != 0 { format!(" pass_index={}", m.pass_index) } else { String::new() };
-            let _ = writeln!(o, "material_set {}{pi}{}", quote(&m.name), volume_opts(&m.volume));
+            let _ = writeln!(o, "material_set {}{pi}{}{ee}", quote(&m.name), volume_opts(&m.volume));
         }
     }
     for (m, n) in scene.meshes.iter().zip(&scene.mesh_names) {
@@ -2268,6 +2315,15 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
                 }
                 if !l.use_mis {
                     extra += " use_mis=0";
+                }
+                if l.contact_shadow {
+                    extra += " contact_shadow=1";
+                }
+                if l.contact_shadow_distance != d.contact_shadow_distance {
+                    extra += &format!(" contact_shadow_distance={}", fmt_f(l.contact_shadow_distance));
+                }
+                if l.contact_shadow_thickness != d.contact_shadow_thickness {
+                    extra += &format!(" contact_shadow_thickness={}", fmt_f(l.contact_shadow_thickness));
                 }
                 writeln!(o, "light_add {kind} name={name} power={} color={} radius={}{extra}{place}", fmt_f(l.power), fmt_list(&l.color.to_array()), fmt_f(l.radius))
             }

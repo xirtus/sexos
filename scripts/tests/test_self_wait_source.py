@@ -91,11 +91,24 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
         two_expiries=BASE+EXPIRY+EXPIRY.replace('deadline=102 now=103 count=16','deadline=103 now=104 count=32')+RETURN
         self.assertFalse(self.check(two_expiries)['ok'])
 
+    def test_idle_input_and_denim_need_their_reviewed_waits_and_role(self):
+        idle='[scheduler.self_wait.park] task=4 ticks=32 deadline=200 count=2\n'
+        self.assertFalse(inspect(SAMPLED+idle)['ok'])
+        self.assertTrue(self.check(SAMPLED+idle)['ok'])
+        self.assertFalse(self.check(SAMPLED+idle.replace('ticks=32','ticks=33'))['ok'])
+        denim='[scheduler.self_wait.park] task=51 ticks=64 deadline=200 count=64\n[scheduler.self_wait.expired] task=51 deadline=200 now=200 count=128\n'
+        role='[kernel.spawn.denim] id=51 key=14 organ=memory\n'
+        self.assertFalse(self.check(SAMPLED+denim)['ok'])
+        self.assertTrue(self.check(role+SAMPLED+denim)['ok'])
+        for bad in (role.replace('key=14','key=15'),role+role,''):
+            self.assertFalse(self.check(bad+SAMPLED+denim)['ok'])
+        self.assertFalse(self.check(role+SAMPLED+denim.replace('ticks=64','ticks=63'))['ok'])
+
     def test_quiet_usb_32_is_only_allowed_with_exact_reviewed_predicate(self):
         usb='[scheduler.self_wait.park] task=5 ticks=32 deadline=200 count=2\n'
         self.assertFalse(inspect(SAMPLED+usb)['ok'])
         self.assertTrue(self.check(SAMPLED+usb)['ok'])
-        for bad in (usb.replace('ticks=32','ticks=31'),usb.replace('task=5','task=4')):
+        for bad in (usb.replace('ticks=32','ticks=31'),usb.replace('task=5','task=7')):
             self.assertFalse(self.check(SAMPLED+bad)['ok'])
 
     def test_changed_cancellation_interrupt_clock_quiet_and_deadline_sources_fail_closed(self):

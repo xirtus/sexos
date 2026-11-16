@@ -57,7 +57,7 @@ def wait_fuzz_start(g,line,calls,seed,send,*,timeout=120,clock=time.monotonic,pa
    return started,start,retries
   refused=busy_refusal(trace,line)
   if refused is not None:
-   saved=re.search(r'\[spindle.session.saved\] bytes=0 status=0(?:\n|$)',trace[refused:])
+   saved=re.search(r'\[spindle.session.saved\] bytes=0 status=0(?: programs=\d+)?(?:\n|$)',trace[refused:])
    if saved:
     # Recheck the entire attempt, including the save interval, before resending.
     assert not SIDE_EFFECT.search(trace),'late admission prevents retry'

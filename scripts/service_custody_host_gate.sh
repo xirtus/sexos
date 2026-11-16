@@ -247,6 +247,12 @@ printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/app_catalog.rs"] pub mod app
 rustc --edition=2021 -A dead_code --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/decorations_pdx.rs" -o "$TEST_DIR/libdecorations_pdx.rlib"
 rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libdecorations_pdx.rlib" --test tests/decorations.rs -o "$TEST_DIR/decorations"
 "$TEST_DIR/decorations"
+# Program tray items and notification actions (S2), built against a sex_pdx
+# of only the wire and layouts they use.
+printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/program_tray.rs"] pub mod program_tray;\n' "$ROOT_DIR" > "$TEST_DIR/tray_items_pdx.rs"
+rustc --edition=2021 -A dead_code --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/tray_items_pdx.rs" -o "$TEST_DIR/libtray_items_pdx.rlib"
+rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libtray_items_pdx.rlib" --test tests/tray_items.rs -o "$TEST_DIR/tray-items"
+"$TEST_DIR/tray-items"
 # Whisper, the screen reader: built against a sex_pdx of only the wires it uses.
 printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/speech_voice.rs"] pub mod speech_voice;\n#[path = "%s/crates/sex-pdx/src/a11y.rs"] pub mod a11y;\n' "$ROOT_DIR" "$ROOT_DIR" > "$TEST_DIR/reader_pdx.rs"
 rustc --edition=2021 --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/reader_pdx.rs" -o "$TEST_DIR/libreader_pdx.rlib"

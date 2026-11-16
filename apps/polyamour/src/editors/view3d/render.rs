@@ -7,10 +7,13 @@
 //! studio environment instead of the scene's world and lights. Rendered
 //! uses the scene's engine: EEVEE and Workbench at the viewport's
 //! resolution, the path tracer at a quarter of it. EEVEE keeps its prepared
-//! scene while only the view moves.
+//! scene while only the view moves, and can render at half resolution while
+//! it does (Performance > Viewport). Looking through the scene camera keeps
+//! its depth of field; Workbench refines its anti-aliasing (and depth of
+//! field) up to the viewport samples.
 use crate::settings::{Engine, Settings};
 use sex_3d::render::viewport::{ViewCamera, ViewportScene, ViewportSettings};
-use sex_3d::render::{srgb_encode, to_display8, ColorManagement, Eevee, EeveeScene, Progressive, RasterCamera};
+use sex_3d::render::{srgb_encode, to_display8, ColorManagement, Eevee, EeveeScene, Lens, Progressive, RasterCamera, WorkbenchFrames};
 use sex_3d::scene::{Camera, Object, ObjectData, Scene};
 use sex_3d::{Mat4, Vec3};
 
@@ -20,7 +23,7 @@ pub const DOWNSCALE: u32 = 4;
 enum Backend {
     Path(Box<Progressive>),
     Eevee(Box<Eevee>),
-    Workbench { scene: Box<ViewportScene>, done: bool },
+    Workbench { scene: Box<ViewportScene>, frames: Box<WorkbenchFrames> },
 }
 
 pub struct RenderView {
@@ -81,7 +84,13 @@ impl RenderView {
     pub fn refresh(slot: &mut Option<RenderView>, scene: &Scene, settings: &Settings, generation: u64, view: &ViewCamera, camera_view: bool, vw: i32, vh: i32, preview: bool) -> bool {
         let engine = if preview { Engine::Eevee } else { settings.engine };
         let (vw, vh) = (vw.max(1) as u32, vh.max(1) as u32);
-        let (w, h) = if engine == Engine::PathTracer { ((vw / DOWNSCALE).max(1), (vh / DOWNSCALE).max(1)) } else { (vw, vh) };
+        // Half resolution while the view moves (EEVEE), full once it stops.
+        let navigating = engine == Engine::Eevee && settings.viewport_half_res_navigation && slot.as_ref().is_some_and(|r| r.view_key.0 != cam_key(view));
+        let (w, h) = match engine {
+            Engine::PathTracer => ((vw / DOWNSCALE).max(1), (vh / DOWNSCALE).max(1)),
+            _ if navigating => (vw.div_ceil(2), vh.div_ceil(2)),
+            _ => (vw, vh),
+        };
         let scene_key = (generation, engine, preview, camera_view);
         let view_key = (cam_key(view), w, h, if preview { 0 } else { settings_key(settings) });
         let cm = if preview { Default::default() } else { settings.color_management() };
@@ -94,12 +103,12 @@ impl RenderView {
                     rs.noise_threshold = if settings.viewport_noise_threshold { settings.viewport_adaptive_threshold.max(0.0) } else { 0.0 };
                     Backend::Path(Box::new(Progressive::new(&s, &rs)))
                 }
-                Engine::Eevee => Backend::Eevee(Box::new(Eevee::new(EeveeScene::new(scene, preview), &eevee_settings(settings, w, h, preview)))),
+                Engine::Eevee => Backend::Eevee(Box::new(Eevee::new(EeveeScene::new(scene, preview), &eevee_settings(scene, settings, w, h, preview, camera_view)))),
                 Engine::Workbench => {
                     let mut s = scene.clone();
                     s.selected.clear();
                     s.active_object = None;
-                    Backend::Workbench { scene: Box::new(ViewportScene::new(&s)), done: false }
+                    Backend::Workbench { scene: Box::new(ViewportScene::new(&s)), frames: Box::default() }
                 }
             };
             *slot = Some(RenderView { scene_key, view_key, backend, rgba: vec![0; (w * h * 4) as usize], w, h, target: 1, cm });
@@ -108,12 +117,12 @@ impl RenderView {
         rv.cm = cm;
         rv.target = match engine {
             Engine::PathTracer => settings.viewport_samples.max(1),
-            Engine::Eevee => eevee_settings(settings, w, h, preview).samples,
-            Engine::Workbench => 1,
+            Engine::Eevee => eevee_settings(scene, settings, w, h, preview, camera_view).samples,
+            Engine::Workbench => settings.workbench_viewport_samples.max(1),
         };
         if let Backend::Eevee(e) = &mut rv.backend {
             // The prepared scene stays; view, size and settings restart sampling.
-            e.set_settings(&eevee_settings(settings, w, h, preview));
+            e.set_settings(&eevee_settings(scene, settings, w, h, preview, camera_view));
             e.set_view(RasterCamera::from_view(view, w, h));
             rv.view_key = view_key;
             rv.w = w;
@@ -129,10 +138,11 @@ impl RenderView {
                     e.add_sample();
                     rv.rgba = to_display8(&e.image(), &rv.cm);
                 }
-                Backend::Workbench { scene: vs, done } => {
+                Backend::Workbench { scene: vs, frames } => {
                     let st = ViewportSettings { width: w, height: h, threads: settings.threads as usize, workbench: settings.workbench, overlays: false, background: Some(world_bg(scene)), ..ViewportSettings::default() };
-                    vs.draw_into(view, &st, &mut rv.rgba);
-                    *done = true;
+                    let lens = if settings.workbench.dof { camera_lens(scene, camera_view, w, h) } else { None };
+                    frames.add_sample(vs, &RasterCamera::from_view(view, w, h), Some(view), &st, lens);
+                    frames.rgba8(&mut rv.rgba);
                 }
             }
         }
@@ -143,7 +153,7 @@ impl RenderView {
         match &self.backend {
             Backend::Path(p) => p.samples(),
             Backend::Eevee(e) => e.samples(),
-            Backend::Workbench { done, .. } => *done as u32,
+            Backend::Workbench { frames, .. } => frames.samples(),
         }
     }
 
@@ -159,7 +169,7 @@ impl RenderView {
         match &self.backend {
             Backend::Path(p) => p.samples() < self.target && !p.converged(),
             Backend::Eevee(e) => e.wants_samples(),
-            Backend::Workbench { done, .. } => !done,
+            Backend::Workbench { frames, .. } => frames.samples() < self.target,
         }
     }
 }
@@ -170,9 +180,16 @@ fn world_bg(scene: &Scene) -> [f32; 3] {
     [w.x, w.y, w.z].map(|c| srgb_encode(c.clamp(0.0, 1.0)))
 }
 
+/// The active camera's depth of field, when the view looks through it.
+fn camera_lens(scene: &Scene, camera_view: bool, w: u32, h: u32) -> Option<Lens> {
+    scene.active_camera.filter(|_| camera_view).and_then(|c| Lens::from_camera(scene, c, w, h))
+}
+
 /// EEVEE's viewport settings; Material Preview uses the studio environment.
-fn eevee_settings(settings: &Settings, w: u32, h: u32, preview: bool) -> sex_3d::render::EeveeSettings {
+/// Looking through the scene camera keeps its depth of field.
+fn eevee_settings(scene: &Scene, settings: &Settings, w: u32, h: u32, preview: bool, camera_view: bool) -> sex_3d::render::EeveeSettings {
     let mut st = settings.eevee_settings(w, h, true);
+    st.lens = camera_lens(scene, camera_view, w, h);
     if preview {
         st.lookdev = true;
         st.film_transparent = false;
