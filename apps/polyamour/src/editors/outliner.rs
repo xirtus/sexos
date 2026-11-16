@@ -121,6 +121,8 @@ pub struct Filters {
     pub cameras: bool,
     pub lights: bool,
     pub empties: bool,
+    /// Grease Pencil and other kinds (Blender's "Others").
+    pub others: bool,
 }
 
 impl Default for Filters {
@@ -140,6 +142,7 @@ impl Default for Filters {
             cameras: true,
             lights: true,
             empties: true,
+            others: true,
         }
     }
 }
@@ -204,6 +207,7 @@ fn data_icon(data: &ObjectData) -> Icon {
         ObjectData::Light(_) => Icon::LightData,
         // No armature/lattice UI yet: shown like empties.
         ObjectData::Empty | ObjectData::Armature(_) | ObjectData::Lattice(_) => Icon::EmptyData,
+        ObjectData::GreasePencil(_) => Icon::GreasePencilData,
     }
 }
 
@@ -235,6 +239,7 @@ impl Build<'_> {
             ObjectData::Camera(_) => f.cameras,
             ObjectData::Light(_) => f.lights,
             ObjectData::Empty | ObjectData::Armature(_) | ObjectData::Lattice(_) => f.empties,
+            ObjectData::GreasePencil(_) => f.others,
         }
     }
 
@@ -551,6 +556,7 @@ fn filter_menu(f: &Filters) -> Vec<MenuItem> {
         c("Cameras", f.cameras, "cameras"),
         c("Lights", f.lights, "lights"),
         c("Empties", f.empties, "empties"),
+        c("Others", f.others, "others"),
     ]
 }
 
@@ -814,6 +820,7 @@ pub fn run_op(s: &mut State, d: &mut Doc, op: &Op) {
                 "meshes" => &mut f.meshes,
                 "cameras" => &mut f.cameras,
                 "lights" => &mut f.lights,
+                "others" => &mut f.others,
                 _ => &mut f.empties,
             };
             *b = !*b;

@@ -62,6 +62,7 @@ pub fn get(d: &Doc, t: ColorTarget) -> Option<[f32; 3]> {
                 (false, true) => vp.secondary,
             })
         }
+        ColorTarget::Prop(p) => crate::gpencil::ui::get_color(d, p),
     }
 }
 
@@ -95,6 +96,10 @@ pub fn set(d: &mut Doc, t: ColorTarget, c: [f32; 3]) {
                 (false, true) => st.vp.secondary = c,
             }
             // A brush setting: nothing in the scene changed.
+            return;
+        }
+        ColorTarget::Prop(p) => {
+            crate::gpencil::ui::set_color(d, p, c);
             return;
         }
     }

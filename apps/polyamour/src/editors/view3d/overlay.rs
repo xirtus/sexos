@@ -47,6 +47,13 @@ pub fn scene_image(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
                 shell.draw_into(&s.cam, &settings, &mut s.buf2);
                 blend_rgba(&mut s.buf, &s.buf2, 128);
             }
+            // Grease Pencil over the shaded image, depth tested (in object order).
+            s.gp_depth = sex_3d::grease_pencil::raster::viewport_depth_to_distance(&full.last_depth(), s.cam.ortho);
+            let mut buf = core::mem::take(&mut s.buf);
+            let depth = core::mem::take(&mut s.gp_depth);
+            super::gpview::composite(s, d, &mut buf, r.w as u32, r.h as u32, (!s.xray).then_some(depth.as_slice()));
+            s.gp_depth = depth;
+            s.buf = buf;
             ui.p.blit_rgba(r, &s.buf, r.w as usize, r.h as usize);
         }
         Shading::Wireframe => {
@@ -54,6 +61,9 @@ pub fn scene_image(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
             ensure_world(s, d);
             let Some((_, _, shell)) = &s.cache else { return };
             shell.draw_into(&s.cam, &settings, &mut s.buf);
+            let mut buf = core::mem::take(&mut s.buf);
+            super::gpview::composite(s, d, &mut buf, r.w as u32, r.h as u32, None);
+            s.buf = buf;
             ui.p.blit_rgba(r, &s.buf, r.w as usize, r.h as usize);
             let p = Proj::new(&s.cam, r);
             let edit_obj = if d.mode == Mode::Edit { d.active() } else { None };
@@ -80,7 +90,10 @@ pub fn scene_image(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         Shading::Material | Shading::Rendered => {
             ui.p.fill(r, t::VIEWPORT);
             if let Some(rv) = &s.render {
-                blit_scaled(ui.p, r, &rv.rgba, rv.w as usize, rv.h as usize);
+                let mut img = rv.rgba.clone();
+                let (w, h) = (rv.w, rv.h);
+                super::gpview::composite(s, d, &mut img, w as u32, h as u32, None);
+                blit_scaled(ui.p, r, &img, w as usize, h as usize);
             }
         }
     }

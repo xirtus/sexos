@@ -5,9 +5,10 @@
 //! gives the startup material a few texture nodes and opens Shading;
 //! `--rig-demo` poses a skinned, keyed armature in the Animation workspace
 //! with the Graph Editor below; `--sculpt-demo` shows a sculpted sphere with
-//! a mask and face sets in the Sculpting workspace.
-//! `--physics-demo` steps falling boxes, a
-//! draped cloth, particles and smoke to frame 40 with the Physics tab open.
+//! a mask and face sets in the Sculpting workspace; `--gp-demo` draws Grease
+//! Pencil objects in Draw Mode in the 2D Animation workspace; `--seq-demo`
+//! shows a small edit in the Video Editing workspace; `--physics-demo` steps
+//! falling boxes, a draped cloth, particles and smoke to frame 40.
 use polyamour::input::Input;
 #[cfg(target_os = "hermit")]
 use polyamour::input::{Button, Key, Mods};
@@ -34,6 +35,7 @@ fn main() {
     let mut rig_demo = false;
     let mut sculpt_demo = false;
     let mut physics_demo = false;
+    let mut gp_demo = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -55,6 +57,11 @@ fn main() {
                 polyamour::physics::demo(&mut app.doc);
                 physics_demo = true;
             }
+            "--gp-demo" => {
+                polyamour::gpencil::demo(&mut app.doc);
+                gp_demo = true;
+            }
+            "--seq-demo" => polyamour::seqedit::demo(&mut app.doc),
             "--rig-demo" => {
                 polyamour::rig::demo(&mut app.doc);
                 app.doc.want_workspace = Some("Animation".into());
@@ -71,6 +78,17 @@ fn main() {
         app.doc.view_ops.push(polyamour::ui::Op::new("view3d.view_selected"));
         app.doc.view_ops.push(polyamour::ui::Op::with("view3d.sidebar_tab", "TOOL"));
         app.frame(Input::Tick);
+        app.frame(Input::Tick);
+    }
+    if gp_demo {
+        // Look at the drawing from the front, as the 2D Animation workspace does.
+        app.doc.view_ops.push(polyamour::ui::Op::with("view3d.view_axis", "FRONT"));
+        // Frame both drawings (keeping the cat active).
+        let act = app.doc.scene.active_object;
+        app.doc.scene.selected = app.doc.scene.objects.iter().enumerate().filter(|(_, o)| matches!(o.data, sex_3d::scene::ObjectData::GreasePencil(_))).map(|(i, _)| i).collect();
+        app.doc.view_ops.push(polyamour::ui::Op::new("view3d.view_selected"));
+        app.frame(Input::Tick);
+        app.doc.scene.selected = act.into_iter().collect();
         app.frame(Input::Tick);
     }
     if rig_demo {
@@ -93,7 +111,7 @@ fn main() {
         app.frame(Input::Tick);
     }
     let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [scene file]");
+        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--gp-demo] [--seq-demo] [scene file]");
         return;
     };
     let f = std::fs::File::create(&out).expect("create png");

@@ -21,6 +21,8 @@
 //! - [`sculpt`]: Sculpt Mode: brushes, strokes, masks, face sets, dynamic topology, filters.
 //! - [`paint`]: Vertex Paint and Texture Paint: color blending, brushes, image painting.
 //! - [`physics`]: rigid bodies, cloth, soft bodies, particles, force fields, smoke and the point cache.
+//! - [`grease_pencil`]: Grease Pencil data, drawing tools, modifiers, effects and rasterizer.
+//! - [`sequencer`]: the Video Sequencer: strips, edit operations and frame compositing.
 pub mod math;
 pub mod mesh;
 pub mod primitives;
@@ -42,6 +44,9 @@ pub mod geometry;
 pub mod sculpt;
 pub mod paint;
 pub mod physics;
+pub mod grease_pencil;
+pub mod sequencer;
+pub mod props;
 
 pub use math::{Aabb, Mat4, Quat, Vec2, Vec3};
 pub use mesh::{Face, HalfEdgeMesh, Mesh};

@@ -282,7 +282,8 @@ impl W {
         let name = names.unique("OB", &o.name);
         let mut r = self.id("Object", "OB", &name);
         let (ty, data) = match &o.data {
-            ObjectData::Empty | ObjectData::Lattice(_) => (0, 0),
+            // Grease Pencil is not written yet: saved as an empty.
+            ObjectData::Empty | ObjectData::Lattice(_) | ObjectData::GreasePencil(_) => (0, 0),
             ObjectData::Mesh(m) => (1, ids.meshes.get(*m).copied().unwrap_or(0)),
             ObjectData::Light(_) => (10, ids.obdata[oi]),
             ObjectData::Camera(_) => (11, ids.obdata[oi]),

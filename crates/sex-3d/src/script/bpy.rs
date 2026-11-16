@@ -655,6 +655,7 @@ fn object_type(o: &Object) -> &'static str {
         ObjectData::Light(_) => "LIGHT",
         ObjectData::Armature(_) => "ARMATURE",
         ObjectData::Lattice(_) => "LATTICE",
+        ObjectData::GreasePencil(_) => "GREASEPENCIL",
     }
 }
 
@@ -664,6 +665,7 @@ fn data_name(scene: &Scene, o: &Object) -> J {
         ObjectData::Mesh(m) => json!(scene.mesh_names[m]),
         ObjectData::Armature(a) => json!(scene.armature_names[a]),
         ObjectData::Lattice(l) => json!(scene.lattice_names[l]),
+        ObjectData::GreasePencil(g) => json!(scene.grease_pencil_names[g]),
         ObjectData::Camera(_) | ObjectData::Light(_) => json!(o.name),
     }
 }

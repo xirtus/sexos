@@ -127,6 +127,7 @@ use std::fmt::{self, Write as _};
 
 mod rig;
 mod nodes;
+mod gp;
 pub mod bpy;
 pub mod live;
 mod physics;
@@ -992,6 +993,7 @@ impl Session {
                 Ok(Some(if self.object(scene, t).is_ok() { "1" } else { "0" }.into()))
             }
             name if rig::COMMANDS.contains(&name) => self.rig_command(scene, cmd),
+            name if gp::COMMANDS.contains(&name) => self.gp_command(scene, cmd),
             name if bpy::COMMANDS.contains(&name) => self.bpy_command(scene, cmd),
             name if physics::COMMANDS.contains(&name) => self.physics_command(scene, cmd),
             "node_tree" | "node_interface" | "node_add" | "node_socket" | "node_set" | "node_link" | "node_unlink" | "node_remove" => self.node_command(scene, cmd),
@@ -1286,12 +1288,14 @@ impl Session {
                 ObjectData::Light(_) => "LIGHT",
                 ObjectData::Armature(_) => "ARMATURE",
                 ObjectData::Lattice(_) => "LATTICE",
+                ObjectData::GreasePencil(_) => "GREASEPENCIL",
             }
             .into(),
             "data" => match o.data {
                 ObjectData::Mesh(m) => quote(&scene.mesh_names[m]),
                 ObjectData::Armature(a) => quote(&scene.armature_names[a]),
                 ObjectData::Lattice(l) => quote(&scene.lattice_names[l]),
+                ObjectData::GreasePencil(g) => quote(&scene.grease_pencil_names[g]),
                 _ => "none".into(),
             },
             "vertex_count" | "face_count" => match o.data {
@@ -2218,6 +2222,7 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
     }
     rig::write_data(&mut o, scene);
     physics::write_scene(&mut o, scene);
+    gp::write_data(&mut o, scene);
     for ob in &scene.objects {
         let t = &ob.transform;
         let place = format!(
@@ -2229,12 +2234,12 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
             if ob.visible { "" } else { " visible=0" }
         );
         let name = quote(&ob.name);
-        if let Some(l) = rig::object_line(scene, ob, &place) {
+        if let Some(l) = rig::object_line(scene, ob, &place).or_else(|| gp::object_line(scene, ob, &place)) {
             let _ = writeln!(o, "{l}");
             continue;
         }
         let _ = match &ob.data {
-            ObjectData::Armature(_) | ObjectData::Lattice(_) => Ok(()),
+            ObjectData::Armature(_) | ObjectData::Lattice(_) | ObjectData::GreasePencil(_) => Ok(()),
             ObjectData::Empty => writeln!(o, "add_empty {name}{place}"),
             ObjectData::Mesh(m) => writeln!(o, "add_object {name} data={}{place}", quote(&scene.mesh_names[*m])),
             ObjectData::Light(l) => {
@@ -2318,8 +2323,10 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
         }
         rig::write_object_rig(&mut o, ob);
         physics::write_object(&mut o, ob);
+        gp::write_object(&mut o, ob);
     }
     nodes::write_node_trees(&mut o, scene);
+    gp::write_sequencer(&mut o, scene);
     let names = |v: &[usize]| v.iter().map(|&i| format!(" {}", quote(&scene.objects[i].name))).collect::<String>();
     let _ = writeln!(o, "select{}", names(&scene.selected));
     let one = |i: Option<usize>| i.map(|i| quote(&scene.objects[i].name)).unwrap_or_else(|| "none".into());

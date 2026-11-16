@@ -21,6 +21,8 @@ pub enum Mode {
     TexturePaint,
     /// Armatures: posing bones.
     Pose,
+    /// Grease Pencil: drawing strokes.
+    Draw,
 }
 
 impl Mode {
@@ -33,9 +35,10 @@ impl Mode {
             Mode::WeightPaint => "Weight Paint",
             Mode::TexturePaint => "Texture Paint",
             Mode::Pose => "Pose Mode",
+            Mode::Draw => "Draw Mode",
         }
     }
-    pub const ALL: [Mode; 7] = [Mode::Object, Mode::Edit, Mode::Sculpt, Mode::VertexPaint, Mode::WeightPaint, Mode::TexturePaint, Mode::Pose];
+    pub const ALL: [Mode; 8] = [Mode::Object, Mode::Edit, Mode::Sculpt, Mode::VertexPaint, Mode::WeightPaint, Mode::TexturePaint, Mode::Pose, Mode::Draw];
     /// The `object.mode_set` argument.
     pub fn id(self) -> &'static str {
         match self {
@@ -46,6 +49,7 @@ impl Mode {
             Mode::WeightPaint => "WEIGHT_PAINT",
             Mode::TexturePaint => "TEXTURE_PAINT",
             Mode::Pose => "POSE",
+            Mode::Draw => "PAINT_GREASE_PENCIL",
         }
     }
 }
@@ -249,6 +253,8 @@ pub struct Doc {
     pub python: crate::python::Python,
     /// Simulation stepping state (physics.rs).
     pub sim: crate::physics::SimState,
+    /// Grease Pencil tool settings and caches (gpencil.rs).
+    pub gp: crate::gpencil::GpState,
 }
 
 impl Default for Doc {
@@ -316,6 +322,7 @@ impl Doc {
             view_ops: Vec::new(),
             python: Default::default(),
             sim: Default::default(),
+            gp: Default::default(),
         }
     }
 
@@ -402,7 +409,7 @@ impl Doc {
     /// Run an operator by its Blender-style name. Unknown names are reported,
     /// not ignored, so missing features show up in the status bar.
     pub fn run(&mut self, op: &Op) {
-        if crate::sculpt::run(self, op) || crate::rig::run(self, op) || self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) || crate::python::run(self, op) || crate::physics::run(self, op) {
+        if crate::sculpt::run(self, op) || crate::gpencil::run(self, op) || crate::seqedit::run(self, op) || crate::rig::run(self, op) || self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) || crate::python::run(self, op) || crate::physics::run(self, op) {
             return;
         }
         let arg = op.arg.as_str();
