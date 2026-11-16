@@ -54,5 +54,13 @@ def main():
   time.sleep(1.5);q.cmd('screendump',{'filename':str(a.out/'splicy-probe.ppm')})
   assert 'KERNEL PANIC' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'exports':ex})
+ except BaseException:
+  # How far the engine got, and the memory it held, for the next fix.
+  import re as _re,sys as _sys
+  keep=_re.compile(r'splicy\.probe|boot\.program\.arena|boot\.paging\.genesis|memory\.pressure|oom|panic|denied|FULL')
+  lines=[l for l in t().splitlines() if keep.search(l)]
+  mem=[l for l in t().splitlines() if '[app.program.memory]' in l]
+  print('--- splicy-probe: program lines ---',*lines[-60:],*mem[-3:],sep='\n',file=_sys.stderr)
+  raise
  finally:g['stop']()
 if __name__=='__main__':main()
