@@ -158,7 +158,7 @@ def _sampled(count,initial):
 # Only this actual reviewed Shell/API/kernel cohort is admitted; future merge
 # combinations need independent review and an exact new fingerprint.
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
- 'servers/silk-shell/src/main.rs': 'f01aaf60ae8546baf8ffd3ab85023d82589d8fa88fbef18b1cc1d3c031b8213e',
+ 'servers/silk-shell/src/main.rs': 'f228b62d5ed82a3b199140542a11e044c6da832c46224b6a7309e616511bee44',
  'crates/sex-pdx/src/system_stats.rs': '6f77139bfab17ed0f01a7a30b59854596ac53e679171a004b88be54ee00dc197',
  'crates/sex-pdx/src/crash_log.rs': '98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
