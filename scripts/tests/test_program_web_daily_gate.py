@@ -10,7 +10,7 @@ import program_web_daily_gate as gate
 RETIRED='[app.private.retired] target=42 task=57 pages=8 reusable=1\n'
 OBSERVED_RETIRED='[app.private.retired] target=42 task=42 pages=13260 reusable=1\n'
 ENDED='[spindle.session.ended] target=42 task=57\n'
-SAVED='[spindle.session.saved] bytes=0 status=0\n'
+SAVED='[spindle.session.saved] bytes=0 status=0 programs=0\n'
 
 
 def guest(trace):
