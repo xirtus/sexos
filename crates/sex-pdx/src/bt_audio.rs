@@ -18,6 +18,12 @@
 //!   has not taken: frames that do not fit are dropped and counted in `DROPPED`.
 //! - `TAKEN` (Cufflinks): frames taken out.
 //! - `SINKS` (Cufflinks): how many times a headset became ready, for the log.
+//! - `MASTER` (Bell): the master volume, [`MASTER_VALID`] | muted << 8 | volume
+//!   (0..=100), written whenever Bell answers a mixer request, so Cufflinks can mirror
+//!   it to a headset that does AVRCP absolute volume.
+//! - `HEADSET_VOLUME` (Cufflinks): nonzero while that headset applies the volume
+//!   itself; Bell then leaves the master volume out of the mix it sends here (mute
+//!   still silences it), so the volume is not applied twice.
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -38,6 +44,10 @@ const W_WRITTEN: usize = 8;
 const W_TAKEN: usize = 12;
 const W_DROPPED: usize = 16;
 const W_SINKS: usize = 20;
+const W_MASTER: usize = 24;
+const W_HEADSET_VOLUME: usize = 28;
+/// Set in `MASTER` once Bell has written it (a zeroed region says nothing).
+pub const MASTER_VALID: u32 = 1 << 31;
 
 /// The region, seen from either side. `base` must be [`BYTES`] long and 4-byte aligned.
 #[derive(Clone, Copy)]
@@ -65,6 +75,19 @@ impl Shared {
     /// Bell: whether its mix should go to a headset now.
     pub fn sink(&self) -> bool { self.load(W_MAGIC) == MAGIC && self.load(W_SINK) != 0 }
     pub fn sinks(&self) -> u32 { self.load(W_SINKS) }
+
+    /// Bell: the master volume (0..=100) and mute, as the person set them.
+    pub fn set_master(&self, volume: u8, muted: bool) { self.store(W_MASTER, MASTER_VALID | (muted as u32) << 8 | volume.min(100) as u32); }
+    /// Cufflinks: the master volume and mute, once Bell has written them.
+    pub fn master(&self) -> Option<(u8, bool)> {
+        let w = self.load(W_MASTER);
+        (w & MASTER_VALID != 0).then(|| (((w & 0xFF) as u8).min(100), w & 1 << 8 != 0))
+    }
+    /// Cufflinks: the headset applies the master volume itself (true) or not.
+    pub fn set_headset_volume(&self, on: bool) { self.store(W_HEADSET_VOLUME, on as u32); }
+    /// Bell: whether the mix going here should leave the master volume out (only while
+    /// the sink is on).
+    pub fn headset_volume(&self) -> bool { self.sink() && self.load(W_HEADSET_VOLUME) != 0 }
     pub fn dropped(&self) -> u32 { self.load(W_DROPPED) }
 
     /// Frames waiting for Cufflinks. A `TAKEN` ahead of `WRITTEN` or more than a ring
@@ -154,5 +177,15 @@ mod tests {
         let mut two = [[0i16; 2]; 2];
         assert_eq!(s.peek(&mut two), 2);
         assert_eq!(two, [[1, -2], [300, -400]]);
+        // The master volume, and the headset applying it, only while the sink is on.
+        assert_eq!(s.master(), None);
+        s.set_master(250, true);
+        assert_eq!(s.master(), Some((100, true)));
+        s.set_master(35, false);
+        assert_eq!(s.master(), Some((35, false)));
+        s.set_headset_volume(true);
+        assert!(s.headset_volume());
+        s.set_sink(false);
+        assert!(!s.headset_volume());
     }
 }
