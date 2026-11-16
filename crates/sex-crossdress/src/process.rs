@@ -245,10 +245,9 @@ impl WinProcess {
         // Windows reports a breakpoint at the int3 itself.
         if vector == 3 { ctx.rip = ctx.rip.wrapping_sub(1); }
         // Back to ring 3 whatever happens next.
-        let mut st = State::default();
-        cpu.get_state(&mut st).map_err(Stop::Hypervisor)?;
-        let user = self.cell.user_state(0, 0, TEB_VA);
-        st.segments = user.segments;
+        // The whole ring-3 state, descriptor tables included, so nothing depends on how
+        // the hypervisor reports the ring-0 state it stopped in.
+        let mut st = self.cell.user_state(ctx.rip, ctx.rsp, TEB_VA);
         st.regs = ctx;
         cpu.set_state(&st).map_err(Stop::Hypervisor)?;
         *regs = ctx;

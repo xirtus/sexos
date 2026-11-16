@@ -149,6 +149,8 @@ impl Kvm {
         for (i, at) in SEG_AT.iter().enumerate() { st.segments[i] = seg_from_kvm(&s[*at..*at + 24]); }
         st.gdtr_base = Self::u64_at(&s, 192);
         st.idtr_base = Self::u64_at(&s, 208);
+        st.gdtr_limit = u16::from_le_bytes([s[200], s[201]]) as u32;
+        st.idtr_limit = u16::from_le_bytes([s[216], s[217]]) as u32;
         st.cr0 = Self::u64_at(&s, 224);
         st.guest_cr3 = Self::u64_at(&s, 240);
         st.cr4 = Self::u64_at(&s, 248);
