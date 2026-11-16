@@ -10,6 +10,12 @@ PIN=97f188efc3dc90315b79a2af1f477c0c18d85e82
 OUT=${SHINE_OUT:-$ROOT/target/shine}
 SRC=${SHINE_SRC:-$OUT/work/source}
 mkdir -p "$OUT/work" "$OUT/lib" "$OUT/include/shine" "$OUT/lib/pkgconfig" "$OUT/share/licenses/shine"
+# A restored cache can leave a source folder that is not its own repository (git -C
+# then answers for the enclosing sexos checkout) or holds another commit: clone afresh.
+if [[ -d "$SRC" ]] && { [[ $(git -C "$SRC" rev-parse --show-toplevel 2>/dev/null) != "$(cd "$SRC" && pwd -P)" ]] \
+    || [[ $(git -C "$SRC" rev-parse HEAD 2>/dev/null) != "$PIN" ]]; }; then
+  rm -rf "$SRC"
+fi
 if [[ ! -d "$SRC/.git" ]]; then
   git clone -q --depth=1 --branch 3.1.1 https://github.com/toots/shine.git "$SRC"
 fi
