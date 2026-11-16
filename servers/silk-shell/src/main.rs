@@ -13,6 +13,14 @@ mod desktop_content;
 mod linen_text_delivery;
 mod launcher;
 mod clipboard;
+mod autofill;
+use autofill as autofill_broker;
+mod autofill_routes;
+mod restricted_pool;
+mod restricted_coordinator;
+mod restricted_routes;
+#[cfg(sexos_input_payload_proof)]
+mod wait_observer;
 mod app_input;
 mod wm;
 mod launcher_search;
@@ -212,8 +220,14 @@ unsafe fn app_input_poll(){
             APP_INPUT.pop();
             if status==0{clip_touched(item.destination.subject);}
             if browser_input_participant(item.destination)&&status==0{
-                sex_pdx::serial_record!("[shell.browser.input] code={} down=1 slot={} accepted=1",key.code,item.destination.route);
+                sex_pdx::serial_input_record!(("[shell.browser.input] down=1 slot={} accepted=1 payload=redacted",item.destination.route); ("[shell.browser.input] code={} down=1 slot={} accepted=1",key.code,item.destination.route));
             }
+        },
+        app_input::Input::KeyUp(key)=>{
+            let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,key.wire(),0,EV_KEY);
+            if status==sex_pdx::ERR_SERVICE_NOT_READY{return}
+            APP_INPUT.pop();
+            sex_pdx::serial_record!("[shell.program.key.up] pd={} task={} code={:#x} keypad={} status={}",item.destination.subject.pd,item.destination.subject.task,key.code,key.keypad as u8,status);
         },
         app_input::Input::Resize(wire)=>{
             let(status,_)=pdx_call(item.destination.route,OP_HID_EVENT,wire,0,app_input::RESIZE_CLASS);
@@ -268,6 +282,7 @@ unsafe fn shell_program_reborn(msg: &sex_pdx::PdxMessage) {
     if let Some(entry)=APP_CUSTODY.iter_mut().flatten().find(|e|e.target==target) {
         if sex_pdx::app_lifecycle::catalog(entry.slot).is_ok_and(|c|c.task_id==task) {
             if entry.task!=task {
+                autofill_routes::retire(sex_pdx::autofill::Subject{pd:entry.target,task:entry.task});
                 *entry=app_custody::Entry::new(entry.slot,target,task,entry.surface);
                 // The old run's frame is Destroyed; the new run registers afresh.
                 let frame=entry.shell_surface().unwrap_or(entry.surface);
@@ -382,8 +397,10 @@ unsafe fn shell_lifecycle_poll() {
             APP_CUSTODY[i] = Some(entry);
         }
         if !entry.retired {
+            restricted_routes::retire(sex_pdx::restricted_helper::Subject{pd:entry.target,task:entry.task});
             let subject=sex_pdx::clipboard::Subject{pd:entry.target,task:entry.task};
             CLIPBOARD.retire(subject);
+            autofill_routes::retire(sex_pdx::autofill::Subject{pd:subject.pd,task:subject.task});
             APP_INPUT.retire(subject);
             CLIPBOARD_INTAKE.retire(subject);
             let mut removed = shell_retire_app_surface(entry.surface);
@@ -1186,7 +1203,7 @@ unsafe fn maybe_run_linen_keyboard_route_proof() {
     let _ = try_set_focus(SURFACE_ID_LINEN);
     // Inject minimal key sequence via normal shell->linen route.
     for sc in [0x24u64, 0x25u64, 0x1Cu64] {
-        serial_println!("[silk-shell.key.route] target=linen sid={} code={} down=1", SURFACE_ID_LINEN, sc);
+        sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] target=linen sid={} code={} down=1", SURFACE_ID_LINEN, sc));
         pdx_call(sex_pdx::SLOT_LINEN, OP_HID_EVENT, sc, 1, EV_KEY);
     }
     LINEN_KEYBOARD_ROUTE_PROOF_DONE = true;
@@ -1208,13 +1225,13 @@ unsafe fn maybe_run_bell_keyboard_detail_proof() {
         return;
     }
     // Drive existing Bell keyboard handlers (proof lane, same helpers used by key route).
-    serial_println!("[bell.key.recv] code={} down=1 mod=0", 0x24);
+    sex_pdx::serial_input_record!(("[bell.key.recv] payload=redacted"); ("[bell.key.recv] code={} down=1 mod=0", 0x24));
     bell_select_next_row();
     serial_println!("[bell.keyboard.detail.proof] stage=1 action=next_event ok=1 reason=ok");
-    serial_println!("[bell.key.recv] code={} down=1 mod=0", 0x25);
+    sex_pdx::serial_input_record!(("[bell.key.recv] payload=redacted"); ("[bell.key.recv] code={} down=1 mod=0", 0x25));
     bell_select_prev_row();
     serial_println!("[bell.keyboard.detail.proof] stage=2 action=prev_event ok=1 reason=ok");
-    serial_println!("[bell.key.recv] code={} down=1 mod=0", 0x1C);
+    sex_pdx::serial_input_record!(("[bell.key.recv] payload=redacted"); ("[bell.key.recv] code={} down=1 mod=0", 0x1C));
     bell_emit_selected_event_detail_proof();
     let detail_ok = BELL_DETAIL_OPEN;
     serial_println!(
@@ -1222,10 +1239,10 @@ unsafe fn maybe_run_bell_keyboard_detail_proof() {
         detail_ok as u8,
         if detail_ok { "ok" } else { "no_event_or_unsupported" }
     );
-    serial_println!("[bell.key.recv] code={} down=1 mod=0", 0x01);
+    sex_pdx::serial_input_record!(("[bell.key.recv] payload=redacted"); ("[bell.key.recv] code={} down=1 mod=0", 0x01));
     bell_close_detail();
     serial_println!("[bell.keyboard.detail.proof] stage=4 action=close_detail ok=1 reason=ok");
-    serial_println!("[bell.key.recv] code={} down=1 mod=0", 0x1A);
+    sex_pdx::serial_input_record!(("[bell.key.recv] payload=redacted"); ("[bell.key.recv] code={} down=1 mod=0", 0x1A));
     let lane_ok = bell_cycle_lane();
     serial_println!(
         "[bell.keyboard.detail.proof] stage=5 action=lane_cycle ok={} reason={}",
@@ -1364,7 +1381,7 @@ unsafe fn maybe_run_atlas_scene_keyboard_proof() {
         (3u8, 0x1Eu8, "next_accent"),
         (4u8, 0x2Cu8, "prev_accent"),
     ] {
-        serial_println!("[atlas.key.recv] code={} down=1 mod=0", sc);
+        sex_pdx::serial_input_record!(("[atlas.key.recv] payload=redacted"); ("[atlas.key.recv] code={} down=1 mod=0", sc));
         let ok = handle_atlas_keyboard(sc);
         serial_println!(
             "[atlas.scene.keyboard.proof] stage={} action={} ok={} reason={}",
@@ -1374,7 +1391,7 @@ unsafe fn maybe_run_atlas_scene_keyboard_proof() {
             if ok { "ok" } else { "action_reject" }
         );
     }
-    serial_println!("[atlas.key.recv] code={} down=1 mod=0", 0x1C);
+    sex_pdx::serial_input_record!(("[atlas.key.recv] payload=redacted"); ("[atlas.key.recv] code={} down=1 mod=0", 0x1C));
     let apply_ok = handle_atlas_keyboard(0x1C);
     serial_println!(
         "[atlas.scene.keyboard.proof] stage=5 action=apply_commit ok={} reason={}",
@@ -1384,7 +1401,7 @@ unsafe fn maybe_run_atlas_scene_keyboard_proof() {
     if !ATLAS_MODE_ENABLED {
         atlas_toggle();
     }
-    serial_println!("[atlas.key.recv] code={} down=1 mod=0", 0x01);
+    sex_pdx::serial_input_record!(("[atlas.key.recv] payload=redacted"); ("[atlas.key.recv] code={} down=1 mod=0", 0x01));
     let close_ok = handle_atlas_keyboard(0x01);
     serial_println!(
         "[atlas.scene.keyboard.proof] stage=6 action=close_back ok={} reason={}",
@@ -3793,8 +3810,8 @@ unsafe fn silk_text_sink_key(scancode: u8, value: u64) -> bool {
     static mut SILK_KEY_ROUTE_BUDGET: u32 = 32;
     if SILK_KEY_ROUTE_BUDGET > 0 {
         SILK_KEY_ROUTE_BUDGET -= 1;
-        serial_println!("[silk.key.route] surface={} code={} printable={}",
-            SILK_TEXT_SINK_SID, scancode, printable.is_some() as u8);
+        sex_pdx::serial_input_record!(("[silk.key.route] payload=redacted"); ("[silk.key.route] surface={} code={} printable={}",
+            SILK_TEXT_SINK_SID, scancode, printable.is_some() as u8));
     }
     if scancode == 0x0E {
         if SILK_TEXT_LEN > 0 {
@@ -3808,8 +3825,7 @@ unsafe fn silk_text_sink_key(scancode: u8, value: u64) -> bool {
         if SILK_TEXT_LEN < SILK_TEXT_SINK_CAP {
             SILK_TEXT_BUF[SILK_TEXT_LEN] = ch;
             SILK_TEXT_LEN += 1;
-            serial_println!("[silk.text.append] surface={} len={} ch={}",
-                SILK_TEXT_SINK_SID, SILK_TEXT_LEN, ch as char);
+            sex_pdx::serial_input_record!(("[silk.text.append] surface={} len={} payload=redacted",SILK_TEXT_SINK_SID,SILK_TEXT_LEN); ("[silk.text.append] surface={} len={} ch={}",SILK_TEXT_SINK_SID,SILK_TEXT_LEN,ch as char));
             let ok = silk_text_sink_redraw();
             if ok && !SILK_TEXT_PROOF_DONE_EMITTED {
                 SILK_TEXT_PROOF_DONE_EMITTED = true;
@@ -4710,13 +4726,13 @@ unsafe fn maybe_run_collar_keyboard_grants_proof() {
         COLLAR_KEYBOARD_GRANTS_PROOF_DONE = true;
         return;
     }
-    serial_println!("[collar.key.recv] code={} down=1 mod=0", 0x24);
+    sex_pdx::serial_input_record!(("[collar.key.recv] payload=redacted"); ("[collar.key.recv] code={} down=1 mod=0", 0x24));
     collar_select_next_grant();
     serial_println!("[collar.keyboard.grants.proof] stage=1 action=next_grant ok=1 reason=ok");
-    serial_println!("[collar.key.recv] code={} down=1 mod=0", 0x25);
+    sex_pdx::serial_input_record!(("[collar.key.recv] payload=redacted"); ("[collar.key.recv] code={} down=1 mod=0", 0x25));
     collar_select_prev_grant();
     serial_println!("[collar.keyboard.grants.proof] stage=2 action=prev_grant ok=1 reason=ok");
-    serial_println!("[collar.key.recv] code={} down=1 mod=0", 0x1C);
+    sex_pdx::serial_input_record!(("[collar.key.recv] payload=redacted"); ("[collar.key.recv] code={} down=1 mod=0", 0x1C));
     let detail_ok = collar_emit_selected_grant_detail();
     serial_println!(
         "[collar.keyboard.grants.proof] stage=3 action=detail ok={} reason={}",
@@ -4726,7 +4742,7 @@ unsafe fn maybe_run_collar_keyboard_grants_proof() {
     let grant_id = collar_grant_at_visible_index(COLLAR_SELECTED_GRANT_IDX).map(|g| g.grant_id).unwrap_or(0);
     serial_println!("[collar.grant.action] action=skip grant_id={} ok=1 reason=policy_preserved_no_auto_grant", grant_id);
     serial_println!("[collar.keyboard.grants.proof] stage=4 action=approve_or_reject ok=1 reason=skipped_policy_preserved");
-    serial_println!("[collar.key.recv] code={} down=1 mod=0", 0x01);
+    sex_pdx::serial_input_record!(("[collar.key.recv] payload=redacted"); ("[collar.key.recv] code={} down=1 mod=0", 0x01));
     let close_ok = toggle_collar();
     serial_println!(
         "[collar.keyboard.grants.proof] stage=5 action=close_back ok={} reason={}",
@@ -5541,7 +5557,7 @@ unsafe fn document_view_poll() {
             .flatten()
             .any(|e| e.target == target && !e.dead && !e.close_pending);
         let inset=incarnation.shell_surface.is_some();
-        let origin=get_surface_bounds(frame).map(|(x,y,_,_)|if inset{(x.saturating_add(8),y.saturating_add(36))}else{(x,y)});
+        let origin=get_surface_bounds(frame).and_then(|(x,y,w,h)|if inset{desktop_content::child_origin(frame,incarnation.surface,x,y,w,h)}else{Some((x,y))});
         DOCUMENT_VIEWS[i].poll(live, desktop_content_ready(frame), |n| {
             let a = n.args();
             let (s, _) = raw_pdx_call(slot, sex_pdx::document_view::OP, a[0], a[1], a[2]);
@@ -5720,7 +5736,7 @@ unsafe fn adopt_running_apps() {
     let mut adopted = 0u32;
     for index in 0..APP_CUSTODY.len() {
         let Some(entry) = APP_CUSTODY[index].as_ref() else { continue };
-        if entry.dead || entry.close_pending { continue; }
+        if entry.dead || entry.close_pending || restricted_pool::reserved(entry.target) { continue; }
         if sex_pdx::app_lifecycle::info(entry.slot) != Err(sex_pdx::app_lifecycle::LIVE) { continue; }
         // A row the person never opened is running but has no window: leave it be.
         let Some(row) = app_catalog::by_target(entry.target) else { continue };
@@ -10410,6 +10426,50 @@ fn dnd_send(route:u64,op:u64,m:sex_pdx::dnd::Message)->bool{
 }
 // ── The clipboard for ordinary programs (sex_pdx::program_clipboard) ─────
 /// The program the person last pressed a key or clicked in, and when.
+/// The extra keys each program run asked for (`app_key::OP_KEYS`), by pd and task.
+static mut PROGRAM_KEYS:[Option<(sex_pdx::clipboard::Subject,u64)>;16]=[None;16];
+/// The key edge being handled came from the numpad (sexinput sets arg0 bit 8).
+static mut KEY_KEYPAD:bool=false;
+/// Keys held down in a program: the physical code, the key word its press delivered
+/// (the release repeats it) and where it went. A modifier is noted with no press.
+static mut PROGRAM_HELD:[Option<(u8,sex_pdx::app_key::Key,sex_pdx::clipboard::Participant)>;8]=[None;8];
+unsafe fn program_held_note(code:u8,key:sex_pdx::app_key::Key,to:sex_pdx::clipboard::Participant){
+    let slot=PROGRAM_HELD.iter().position(|e|e.is_some_and(|(c,_,_)|c==code)).or_else(||PROGRAM_HELD.iter().position(|e|e.is_none()));
+    if let Some(i)=slot{PROGRAM_HELD[i]=Some((code,key,to));}
+}
+/// Focus moves to `sid`: a program that loses it gets the releases of the keys still
+/// held in it, so nothing stays down there.
+unsafe fn program_held_release(sid:u64){
+    for e in PROGRAM_HELD.iter_mut(){
+        let Some((_,key,to))=*e else{continue};
+        if to.surface==sid{continue}
+        *e=None;
+        APP_INPUT.push(app_input::Item{destination:to,input:app_input::Input::KeyUp(key)});
+    }
+}
+unsafe fn program_keys(subject:sex_pdx::clipboard::Subject)->u64{
+    PROGRAM_KEYS.iter().flatten().find(|(s,_)|*s==subject).map_or(0,|(_,f)|*f)
+}
+/// A program asks for desktop keys or numpad marks; only a running program can.
+unsafe fn shell_keys_message(msg:&sex_pdx::PdxMessage)->bool{
+    use sex_pdx::app_key::{OP_KEYS,DESKTOP_KEYS,KEYPAD};
+    if msg.type_id!=OP_KEYS{return false}
+    let subject=sex_pdx::clipboard::Subject{pd:msg.caller_pd,task:msg.caller_task};
+    let program=APP_CUSTODY.iter().flatten().any(|e|e.target==subject.pd&&e.task==subject.task&&!e.dead&&!e.retired
+        &&app_catalog::by_surface(e.target,e.surface).is_some_and(|r|r.app==app_catalog::App::Program));
+    let flags=msg.arg0&(DESKTOP_KEYS|KEYPAD);
+    if !program||msg.arg0!=flags||msg.arg1!=0||msg.arg2!=0{
+        sex_pdx::serial_record!("[shell.keys.denied] caller={} task={}",subject.pd,subject.task);return true
+    }
+    // Replace this run's entry, else a free one, else one of a program that ended.
+    let live=|s:&sex_pdx::clipboard::Subject|APP_CUSTODY.iter().flatten().any(|e|e.target==s.pd&&e.task==s.task&&!e.dead&&!e.retired);
+    let slot=PROGRAM_KEYS.iter().position(|e|e.is_some_and(|(s,_)|s==subject))
+        .or_else(||PROGRAM_KEYS.iter().position(|e|e.is_none()))
+        .or_else(||PROGRAM_KEYS.iter().position(|e|e.is_some_and(|(s,_)|!live(&s))));
+    if let Some(i)=slot{PROGRAM_KEYS[i]=Some((subject,flags));}
+    sex_pdx::serial_record!("[shell.keys.wanted] pd={} task={} flags={} ok={}",subject.pd,subject.task,flags,slot.is_some() as u8);
+    true
+}
 static mut CLIP_TOUCH:Option<(sex_pdx::clipboard::Subject,u64)>=None;
 /// A copy being put together, and whose.
 static mut CLIP_FROM:Option<sex_pdx::clipboard::Subject>=None;
@@ -10740,15 +10800,34 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
                     app_input_poll();return true;
                 }
                 if let Some(destination)=focused_program_participant(){
+                    let wants=program_keys(destination.subject);
+                    let keypad=KEY_KEYPAD&&wants&sex_pdx::app_key::KEYPAD!=0;
+                    // F11 always stays Shell's way out of a program that takes the rest.
+                    let desktop_key=matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59)
+                        &&(code==0x57||wants&sex_pdx::app_key::DESKTOP_KEYS==0);
+                    // A key going up, a modifier's too, reaches the program as the press's
+                    // word with down=0 (walk keys, hold-to-act tools); older programs drop it.
+                    if value==0 && !desktop_key{
+                        // The release repeats what the press delivered (the layout may have
+                        // changed its code); a key whose press went elsewhere sends none.
+                        let held=PROGRAM_HELD.iter_mut().find(|e|e.is_some_and(|(c,_,to)|c==code&&to.subject==destination.subject)).and_then(|e|e.take());
+                        let Some((_,key,_))=held else{return true};
+                        if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::KeyUp(key)}){
+                            sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
+                        }
+                        app_input_poll();return true;
+                    }
+                    if modifier&&value==1{program_held_note(code,APP_MODIFIERS.key(code),destination);}
                     if modifier || value!=1{return true;}
-                    if matches!(code,0x0f|0x29|0x3b..=0x44|0x46|0x52|0x57|0x58|0x59){return false;}
+                    if desktop_key{return false;}
                     let shortcut=if APP_MODIFIERS.key(code).control{keyboard_layout::shortcut_code(code)}else{code};
                     if let Some(changed)=keyboard_layout::compose(APP_MODIFIERS.key(shortcut),code,|k|{APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(k)});}){
                         if changed{keyboard_preedit_notice();}app_input_poll();return true;
                     }
-                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code))}){
+                    let key=keyboard_layout::typing(APP_MODIFIERS.key(shortcut),code).with_keypad(keypad);
+                    if !APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Key(key)}){
                         sex_pdx::serial_record!("[shell.app.input.full] capacity=32 pd={} task={} accepted=0",destination.subject.pd,destination.subject.task);
-                    }else if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}
+                    }else{program_held_note(code,key,destination);if !KEY_REPEATING{KEY_REPEAT.press(code,sex_pdx::get_ticks());}}
                     app_input_poll();return true;
                 }
             }
@@ -11019,6 +11098,7 @@ pub unsafe fn media_streaming_ask()->bool{
 }
 /// The volume from settings to Bell; false if Bell did not take the request.
 pub unsafe fn volume_restore(volume:u8)->bool{
+    if net_time_owed()||TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000){return false}
     let (status,_)=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::SET_MASTER,volume.min(100) as u64,0);
     status==0&&MEDIA_ASKS.push(media_keys::Ask::Restore)
 }
@@ -11029,7 +11109,7 @@ unsafe fn player_key(code:u8){
     let focused=focused_program_participant().map_or(0,|p|p.subject.pd as u64);
     let (status,_)=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::LAST_PLAYER,focused,0);
     if status==0{MEDIA_ASKS.push(media_keys::Ask::Player(code));}
-    sex_pdx::serial_record!("[shell.media.key] code={:#x} focused={} status={:#x}",code,focused,status);
+    sex_pdx::serial_input_record!(("[shell.media.key] payload=redacted"); ("[shell.media.key] code={:#x} focused={} status={:#x}",code,focused,status));
 }
 // ── Panel tray ───────────────────────────────────────────────────────────
 // Network, volume and battery icons in the bar; their click opens quick
@@ -11050,7 +11130,20 @@ static mut TRAY_OWED_VOLUME: Option<u8> = None;
 static mut TRAY_OWED_MUTE: bool = false;
 /// Whether an answer from Bell or sexnet may still be on its way to Shell.
 unsafe fn tray_answer_owed() -> bool {
-    MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000)
+    MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000) || net_time_owed()
+}
+/// sexnet still owes the answer to network time on/off (`config_watch`).
+pub static mut NET_TIME_ASKED: Option<u64> = None;
+pub unsafe fn net_time_owed() -> bool { NET_TIME_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 5_000) }
+/// The kernel keeps one unread answer for Shell: Bell's and sexnet's must not overlap.
+pub unsafe fn answer_owed() -> bool { tray_answer_owed() }
+/// sexnet's answer to network time on/off.
+unsafe fn net_time_receive(msg: &sex_pdx::PdxMessage) -> bool {
+    if msg.type_id != 1 || NET_TIME_ASKED.is_none() || msg.caller_pd != TRAY_SEXNET_PD || msg.arg0 >> 56 == sex_pdx::wifi_status::TAG >> 56 { return false; }
+    NET_TIME_ASKED = None;
+    sex_pdx::serial_record!("[shell.network_time.answer] ok={}", (msg.arg0 == sex_pdx::network_time::OK) as u8);
+    tray_send_owed();
+    true
 }
 /// Sends a waiting volume or mute click once nothing else is owed.
 unsafe fn tray_send_owed() {
@@ -11082,7 +11175,7 @@ unsafe fn tray_refresh() {
 }
 unsafe fn tray_ask_wifi() {
     let now = sex_pdx::get_ticks();
-    if !TRAY_WIFI_DUE || MEDIA_ASKS.pending() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
+    if !TRAY_WIFI_DUE || MEDIA_ASKS.pending() || net_time_owed() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
     TRAY_WIFI_DUE = false;
     let status = pdx_call(sex_pdx::SLOT_NET, sex_pdx::wifi_status::OP, sex_pdx::wifi_status::STATE, 0, 0).0;
     TRAY_WIFI_ASKED = (status == 0).then_some(now);
@@ -11091,6 +11184,13 @@ unsafe fn tray_ask_wifi() {
 unsafe fn tray_tick() {
     let lost = MEDIA_ASKS.expire(sex_pdx::get_ticks());
     if lost != 0 { sex_pdx::serial_record!("[shell.media.lost] asks={}", lost); }
+    // Another answer filled Shell's one reply slot and sexnet's was dropped: ask again
+    // now rather than at the next 30 s look.
+    if TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) >= 5_000) {
+        TRAY_WIFI_ASKED = None; TRAY_WIFI_DUE = true;
+        sex_pdx::serial_record!("[shell.tray.wifi.lost]");
+        tray_ask_wifi();
+    }
     // The first look waits for boot to settle (Bell, sexnet and the bar up).
     if TRAY_REFRESHED.is_none() && sex_pdx::get_ticks() < 8_000 { return; }
     tray_send_owed();
@@ -11239,25 +11339,22 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
     static mut HID_RECV_DRAIN_BUDGET: u32 = 64;
     if HID_RECV_DRAIN_BUDGET > 0 {
         HID_RECV_DRAIN_BUDGET -= 1;
-        serial_println!(
-            "[silk-shell.hid.recv] class={} code={} value={} a0={} a1={} a2={}",
-            event_class, scancode, value, arg0, arg1, event_class
-        );
+        sex_pdx::serial_input_record!(("[silk-shell.hid.recv] payload=redacted"); ("[silk-shell.hid.recv] class={} code={} value={} a0={} a1={} a2={}",
+            event_class, scancode, value, arg0, arg1, event_class));
     }
 
+    if event_class==EV_KEY {KEY_KEYPAD=arg0>>8&1==1;}
     if event_class==EV_KEY && desktop_shortcut(scancode,value){return;}
 
     if event_class == EV_KEY {
         static mut KEY_RECV_DRAIN_BUDGET: u32 = 64;
         if KEY_RECV_DRAIN_BUDGET > 0 {
             KEY_RECV_DRAIN_BUDGET -= 1;
-            serial_println!(
-                "[silk-shell.key.recv] code={} down={} mod={} focused={}",
+            sex_pdx::serial_input_record!(("[silk-shell.key.recv] payload=redacted"); ("[silk-shell.key.recv] code={} down={} mod={} focused={}",
                 scancode,
                 value,
                 SPINDLE_CTRL_DOWN as u8,
-                FOCUSED_SURFACE_ID
-            );
+                FOCUSED_SURFACE_ID));
         }
 
         if scancode == 0x43 && value == 0 {
@@ -11309,10 +11406,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut KEYTRACE_BUDGET: u32 = 64;
                 if KEYTRACE_BUDGET > 0 {
                     KEYTRACE_BUDGET -= 1;
-                    serial_println!(
-                        "[keyboard.cursor.debug.keytrace] key={:#04x} pressed={} ok=1",
-                        scancode, value
-                    );
+                    sex_pdx::serial_input_record!(("[keyboard.cursor.debug.keytrace] payload=redacted"); ("[keyboard.cursor.debug.keytrace] key={:#04x} pressed={} ok=1",
+                        scancode, value));
                 }
                 const CURSOR_STEP: i32 = 32;
                 match scancode {
@@ -11335,10 +11430,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         send_cursor_checked(old_x + dx, old_y + dy, "keyboard_cursor_debug");
                         if KEYBOARD_CURSOR_MOVE_BUDGET > 0 {
                             KEYBOARD_CURSOR_MOVE_BUDGET -= 1;
-                            serial_println!(
-                                "[keyboard.cursor.debug.move] key={:#04x} dx={} dy={} old_x={} old_y={} new_x={} new_y={} ok=1",
-                                scancode, dx, dy, old_x, old_y, POINTER_X, POINTER_Y
-                            );
+                            sex_pdx::serial_input_record!(("[keyboard.cursor.debug.move] payload=redacted"); ("[keyboard.cursor.debug.move] key={:#04x} dx={} dy={} old_x={} old_y={} new_x={} new_y={} ok=1",
+                                scancode, dx, dy, old_x, old_y, POINTER_X, POINTER_Y));
                         }
                         if !KEYBOARD_CURSOR_DEBUG_DONE {
                             serial_println!("[keyboard.cursor.debug.done] ok=1");
@@ -11351,9 +11444,9 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                         if pointer_ready {
                             handle_hid_event(EV_BTN, 1, 1);
                             handle_hid_event(EV_BTN, 1, 0);
-                            serial_println!("[keyboard.cursor.debug.click] key={:#04x} button=1 ok=1", scancode);
+                            sex_pdx::serial_input_record!(("[keyboard.cursor.debug.click] payload=redacted"); ("[keyboard.cursor.debug.click] key={:#04x} button=1 ok=1", scancode));
                         } else {
-                            serial_println!("[keyboard.cursor.debug.click] key={:#04x} button=1 ok=0 reason=pointer_not_ready", scancode);
+                            sex_pdx::serial_input_record!(("[keyboard.cursor.debug.click] payload=redacted"); ("[keyboard.cursor.debug.click] key={:#04x} button=1 ok=0 reason=pointer_not_ready", scancode));
                         }
                         return;
                     }
@@ -11372,10 +11465,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut SPINDLE_DRAIN_ROUTE_BUDGET: u32 = 32;
                 if SPINDLE_DRAIN_ROUTE_BUDGET > 0 {
                     SPINDLE_DRAIN_ROUTE_BUDGET -= 1;
-                    serial_println!(
-                        "[silk-shell.key.route] target=spindle sid={} code={} down={}",
-                        SURFACE_ID_SPINDLE, scancode, value
-                    );
+                    sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] target=spindle sid={} code={} down={}",
+                        SURFACE_ID_SPINDLE, scancode, value));
                 }
                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, spindle_key_word(scancode), value, EV_KEY);
                 return;
@@ -11392,10 +11483,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut QUIL_DRAIN_ROUTE_BUDGET: u32 = 32;
                 if QUIL_DRAIN_ROUTE_BUDGET > 0 {
                     QUIL_DRAIN_ROUTE_BUDGET -= 1;
-                    serial_println!(
-                        "[silk-shell.key.route] target=quil sid={} code={} down={}",
-                        FOCUSED_SURFACE_ID, scancode, value
-                    );
+                    sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] target=quil sid={} code={} down={}",
+                        FOCUSED_SURFACE_ID, scancode, value));
                 }
                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                 return;
@@ -11412,12 +11501,10 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut MESH_DRAIN_ROUTE_BUDGET: u32 = 32;
                 if MESH_DRAIN_ROUTE_BUDGET > 0 {
                     MESH_DRAIN_ROUTE_BUDGET -= 1;
-                    serial_println!(
-                        "[silk-shell.key.route] target=mesh sid={} code={} down={}",
-                        SURFACE_ID_MESH, scancode, value
-                    );
+                    sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] target=mesh sid={} code={} down={}",
+                        SURFACE_ID_MESH, scancode, value));
                 }
-                serial_println!("[mesh.key.recv] code={} down={} mod={}", scancode, value, SPINDLE_CTRL_DOWN as u8);
+                sex_pdx::serial_input_record!(("[mesh.key.recv] payload=redacted"); ("[mesh.key.recv] code={} down={} mod={}", scancode, value, SPINDLE_CTRL_DOWN as u8));
                 match scancode {
                     0x24 => { // J: next node
                         let old = MESH_SELECTED_ROW;
@@ -11464,12 +11551,10 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut BELL_DRAIN_ROUTE_BUDGET: u32 = 32;
                 if BELL_DRAIN_ROUTE_BUDGET > 0 {
                     BELL_DRAIN_ROUTE_BUDGET -= 1;
-                    serial_println!(
-                        "[silk-shell.key.route] target=bell sid={} code={} down={}",
-                        SURFACE_ID_BELL_PLACEHOLDER, scancode, value
-                    );
+                    sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] target=bell sid={} code={} down={}",
+                        SURFACE_ID_BELL_PLACEHOLDER, scancode, value));
                 }
-                serial_println!("[bell.key.recv] code={} down={} mod=0", scancode, value);
+                sex_pdx::serial_input_record!(("[bell.key.recv] payload=redacted"); ("[bell.key.recv] code={} down={} mod=0", scancode, value));
                 match scancode {
                     0x24 => {
                         serial_println!("[bell.keyboard.next] sid={}", FOCUSED_SURFACE_ID);
@@ -11503,12 +11588,10 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut COLLAR_DRAIN_ROUTE_BUDGET: u32 = 32;
                 if COLLAR_DRAIN_ROUTE_BUDGET > 0 {
                     COLLAR_DRAIN_ROUTE_BUDGET -= 1;
-                    serial_println!(
-                        "[silk-shell.key.route] target=collar sid={} code={} down={}",
-                        SURFACE_ID_COLLAR, scancode, value
-                    );
+                    sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] target=collar sid={} code={} down={}",
+                        SURFACE_ID_COLLAR, scancode, value));
                 }
-                serial_println!("[collar.key.recv] code={} down={} mod=0", scancode, value);
+                sex_pdx::serial_input_record!(("[collar.key.recv] payload=redacted"); ("[collar.key.recv] code={} down={} mod=0", scancode, value));
                 match scancode {
                     0x24 => {
                         collar_select_next_grant();
@@ -11535,10 +11618,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut ATLAS_DRAIN_ROUTE_BUDGET: u32 = 32;
                 if ATLAS_DRAIN_ROUTE_BUDGET > 0 {
                     ATLAS_DRAIN_ROUTE_BUDGET -= 1;
-                    serial_println!(
-                        "[silk-shell.key.route] target=atlas code={} down={}",
-                        scancode, value
-                    );
+                    sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] target=atlas code={} down={}",
+                        scancode, value));
                 }
                 if value == 1 {
                     handle_atlas_keyboard(scancode);
@@ -11564,17 +11645,13 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut KBD_UI_CONSUME_DRAIN_BUDGET: u32 = 32;
                 if KBD_UI_CONSUME_DRAIN_BUDGET > 0 {
                     KBD_UI_CONSUME_DRAIN_BUDGET -= 1;
-                    serial_println!(
-                        "[shell.kbd.ui.consume] scancode={} action={} down={} consumed={} path=handle_hid_event_drain",
-                        scancode, action_name(action), value, 1
-                    );
+                    sex_pdx::serial_input_record!(("[shell.kbd.ui.consume] payload=redacted"); ("[shell.kbd.ui.consume] scancode={} action={} down={} consumed={} path=handle_hid_event_drain",
+                        scancode, action_name(action), value, 1));
                 }
-                serial_println!(
-                    "[shell.kbd.ui.action] scancode={} action={} focused={} frame={} sid={}",
+                sex_pdx::serial_input_record!(("[shell.kbd.ui.action] payload=redacted"); ("[shell.kbd.ui.action] scancode={} action={} focused={} frame={} sid={}",
                     scancode, action_name(action), FOCUSED_SURFACE_ID,
                     frame_for_surface(FOCUSED_SURFACE_ID).unwrap_or(0),
-                    FOCUSED_SURFACE_ID
-                );
+                    FOCUSED_SURFACE_ID));
                 // Dispatch accessibility / window actions in-line so they work
                 // even during linen_sync_reply or input drain.
                 let kbd_ui_focus_old = FOCUSED_SURFACE_ID;
@@ -11679,10 +11756,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     FOCUSED_SURFACE_ID
                 );
                 if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
-                    serial_println!(
-                        "[shell.interact.stage.key_route] key={} shell_consumed=1 focused={} routed=0 ok=1",
-                        scancode, FOCUSED_SURFACE_ID
-                    );
+                    sex_pdx::serial_input_record!(("[shell.interact.stage.key_route] payload=redacted"); ("[shell.interact.stage.key_route] key={} shell_consumed=1 focused={} routed=0 ok=1",
+                        scancode, FOCUSED_SURFACE_ID));
                     shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
                     shell_interaction_contract_try_done();
                 }
@@ -11701,10 +11776,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut KEY_ROUTE_DRAIN_BUDGET: u32 = 32;
                 if KEY_ROUTE_DRAIN_BUDGET > 0 {
                     KEY_ROUTE_DRAIN_BUDGET -= 1;
-                    serial_println!(
-                        "[silk-shell.key.route] owner=quil sid={} scancode={:#x}",
-                        FOCUSED_SURFACE_ID, scancode
-                    );
+                    sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] owner=quil sid={} scancode={:#x}",
+                        FOCUSED_SURFACE_ID, scancode));
                 }
                 // AP9: key route liveness guard
                 {
@@ -11713,10 +11786,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 }
                 pdx_call(SLOT_QUIL, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                 if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
-                    serial_println!(
-                        "[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
-                        scancode, FOCUSED_SURFACE_ID
-                    );
+                    sex_pdx::serial_input_record!(("[shell.interact.stage.key_route] payload=redacted"); ("[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
+                        scancode, FOCUSED_SURFACE_ID));
                     shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
                     shell_interaction_contract_try_done();
                 }
@@ -11724,10 +11795,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut KEY_ROUTE_DRAIN_BUDGET_LINEN: u32 = 32;
                 if KEY_ROUTE_DRAIN_BUDGET_LINEN > 0 {
                     KEY_ROUTE_DRAIN_BUDGET_LINEN -= 1;
-                    serial_println!(
-                        "[silk-shell.key.route] owner=linen sid={} scancode={:#x}",
-                        SURFACE_ID_LINEN, scancode
-                    );
+                    sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] owner=linen sid={} scancode={:#x}",
+                        SURFACE_ID_LINEN, scancode));
                 }
                 // AP9: key route liveness guard
                 {
@@ -11736,10 +11805,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 }
                 pdx_call(sex_pdx::SLOT_LINEN, OP_HID_EVENT, scancode as u64, value, EV_KEY);
                 if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
-                    serial_println!(
-                        "[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
-                        scancode, SURFACE_ID_LINEN
-                    );
+                    sex_pdx::serial_input_record!(("[shell.interact.stage.key_route] payload=redacted"); ("[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
+                        scancode, SURFACE_ID_LINEN));
                     shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
                     shell_interaction_contract_try_done();
                 }
@@ -11747,10 +11814,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 static mut SPINDLE_ROUTE_DRAIN_BUDGET: u32 = 32;
                 if SPINDLE_ROUTE_DRAIN_BUDGET > 0 {
                     SPINDLE_ROUTE_DRAIN_BUDGET -= 1;
-                    serial_println!(
-                        "[silk-shell.key.route] target=spindle sid={} code={} down={}",
-                        SURFACE_ID_SPINDLE, scancode, value
-                    );
+                    sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] target=spindle sid={} code={} down={}",
+                        SURFACE_ID_SPINDLE, scancode, value));
                 }
                 // AP9: key route liveness guard
                 {
@@ -11759,10 +11824,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                 }
                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, spindle_key_word(scancode), value, EV_KEY);
                 if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
-                    serial_println!(
-                        "[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
-                        scancode, SURFACE_ID_SPINDLE
-                    );
+                    sex_pdx::serial_input_record!(("[shell.interact.stage.key_route] payload=redacted"); ("[shell.interact.stage.key_route] key={} shell_consumed=0 focused={} routed=1 ok=1",
+                        scancode, SURFACE_ID_SPINDLE));
                     shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_KEY);
                     shell_interaction_contract_try_done();
                 }
@@ -11775,10 +11838,8 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
                     }
                 }
                 if SHELL_INTERACTION_CONTRACT_PROOF_ENABLED {
-                    serial_println!(
-                        "[shell.interact.stage.no_focus_key] key={} focused={} ignored_or_consumed=1 ok=1",
-                        scancode, FOCUSED_SURFACE_ID
-                    );
+                    sex_pdx::serial_input_record!(("[shell.interact.stage.no_focus_key] payload=redacted"); ("[shell.interact.stage.no_focus_key] key={} focused={} ignored_or_consumed=1 ok=1",
+                        scancode, FOCUSED_SURFACE_ID));
                     shell_interaction_contract_mark_stage(SHELL_INTERACTION_STAGE_NO_FOCUS_KEY);
                     shell_interaction_contract_try_done();
                 }
@@ -13369,7 +13430,7 @@ unsafe fn handle_atlas_keyboard(scancode: u8) -> bool {
         _ => {
             static mut ATLAS_KEY_BUDGET: u32 = 4;
             let b = &mut ATLAS_KEY_BUDGET;
-            if *b > 0 { *b -= 1; serial_println!("[shell.atlas.key] scancode={:#x} noop", scancode); }
+            if *b > 0 { *b -= 1; sex_pdx::serial_input_record!(("[shell.atlas.key] payload=redacted"); ("[shell.atlas.key] scancode={:#x} noop", scancode)); }
         }
     }
     true
@@ -17539,6 +17600,7 @@ static mut PROGRAM_REBIRTH: Option<usize> = None;
 /// What each program row can do right now, from the rows' own held grants.
 fn program_rows()->impl Iterator<Item=(&'static app_catalog::Incarnation,usize,u64)>{
     app_catalog::INCARNATIONS.iter().filter(|row|row.app==app_catalog::App::Program&&row.ordinal!=0)
+        .filter(|row|restricted_pool::normal()&&!restricted_routes::busy()&&!restricted_pool::reserved(row.target))
         .filter(|row|!sex_pdx::desktop_recording::ENABLED||row.target!=sex_pdx::desktop_recording::TARGET)
         .filter_map(|row|{let slot=row.activation_slot?;let info=sex_pdx::app_lifecycle::activation(slot,false).ok()?;Some((row,slot,info.state))})
 }
@@ -17603,6 +17665,7 @@ static mut PROGRAM_NETWORK: bool = false;
 /// Files may then serve the program its own folder, and the network service talk to
 /// it if the person asked, for this run alone.
 fn program_bind(target:u32,task:u32){
+    unsafe{autofill_routes::bound(target,task); }
     attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
     let network=unsafe{core::mem::take(&mut PROGRAM_NETWORK)};
@@ -17707,6 +17770,13 @@ unsafe fn launch_report(now:u64){
         let Some(run)=*slot else{continue};
         let Some(at)=run.ended else{continue};
         if run.status.is_none()&&now.saturating_sub(at)<LAUNCH_STATUS_GRACE{continue}
+        if restricted_pool::reserved(run.child){
+            let child=sex_pdx::restricted_helper::Subject{pd:run.child,task:run.child_task};
+            if !restricted_routes::retired(child)||restricted_routes::holds_done(child){continue}
+            let parent=sex_pdx::restricted_helper::Subject{pd:run.parent,task:run.parent_task};
+            if program_run(run.parent).is_some_and(|(_,task)|task==run.parent_task)&&!restricted_routes::send_event(parent,sex_pdx::launch::Event::Done{cookie:run.cookie,row:run.child,task:run.child_task,status:run.status}){continue}
+            *slot=None;continue;
+        }
         *slot=None;
         if program_run(run.parent).is_some_and(|(_,t)|t==run.parent_task){
             launch_send(run.parent,sex_pdx::launch::Event::Done{cookie:run.cookie,row:run.child,task:run.child_task,status:run.status});
@@ -17726,6 +17796,14 @@ unsafe fn launch_poll(){
 }
 /// Shell must not sleep while an ended child's status may still come.
 fn launch_waiting()->bool{unsafe{LAUNCH_RUNS.iter().flatten().any(|r|r.ended.is_some())}}
+/// Launch/control requests belong to the exact active main task, not an old run.
+fn launch_caller_task(current_task:u32,caller_task:u32)->bool{
+    current_task!=0 && current_task==caller_task
+}
+/// Match the kernel-stamped exact child run, including delayed exit messages.
+fn launch_exit_subject(child:u32,child_task:u32,status:Option<u32>,caller:u32,caller_task:u32)->bool{
+    child==caller && child_task==caller_task && status.is_none()
+}
 /// A program's `OP_LAUNCH`, `OP_KILL` or `OP_EXIT`.
 unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
     use sex_pdx::{launch,program_store as store};
@@ -17734,12 +17812,13 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
     if msg.type_id==launch::OP_EXIT{
         let mut matched=false;
         for run in LAUNCH_RUNS.iter_mut().flatten(){
-            if run.child==msg.caller_pd&&run.status.is_none(){run.status=Some(msg.arg0 as u32);matched=true;}
+            if launch_exit_subject(run.child,run.child_task,run.status,msg.caller_pd,msg.caller_task){run.status=Some(msg.arg0 as u32);matched=true;}
         }
         if matched{sex_pdx::serial_record!("[shell.launch.exit] child={} sender_task={} status={}",msg.caller_pd,msg.caller_task,msg.arg0 as u32);launch_report(sex_pdx::get_ticks());}
         return true;
     }
     let Some((_,task))=program_run(msg.caller_pd)else{sex_pdx::serial_record!("[shell.launch.stale] caller={} op={:#x}",msg.caller_pd,msg.type_id);return true};
+    if !launch_caller_task(task,msg.caller_task){return true}
     let caller=msg.caller_pd;
     match msg.type_id{
         launch::OP_KILL=>{
@@ -17759,7 +17838,7 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
             if flags&!(store::RUN_NETWORK|store::RUN_HIDDEN)!=0||msg.arg2>u32::MAX as u64{refuse(store::NOT_A_PROGRAM,"flags");return true}
             if network&&!NETWORK_RUNS.contains(&Some((caller,task))){refuse(store::NOT_ALLOWED,"network");return true}
             if LAUNCH_RUNS.iter().flatten().count()>=launch::MAX_RUNS{refuse(store::NO_FREE_ROW,"runs");return true}
-            if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0{refuse(store::IMAGE_BUSY,"busy");return true}
+            if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0{refuse(store::IMAGE_BUSY,"busy");return true}
             if program_free_row().is_none(){refuse(store::NO_FREE_ROW,"no_free_row");return true}
             // Files loads a program's ticket only for the program that prepared it.
             let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,store::TICKET,ticket,caller as u64);
@@ -17812,7 +17891,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
     }
     if msg.type_id==store::OP_SPAWN {
         if !app_catalog::is_spindle(msg.caller_pd){return true}
-        if PROGRAM_READING||RECORD_SPAWN_LEFT!=0{sex_pdx::serial_record!("[shell.records.denied] reason=busy");return true}
+        if PROGRAM_READING||restricted_routes::busy()||RECORD_SPAWN_LEFT!=0{sex_pdx::serial_record!("[shell.records.denied] reason=busy");return true}
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,0);
         PROGRAM_READING=status==0;
         RECORD_SPAWN_WANTED=if status==0{msg.arg2}else{0};
@@ -17826,7 +17905,8 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         // A terminal's ticket (sex_pdx::console_relay): Files starts it only for the program that prepared it.
         let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
         if !app_catalog::is_spindle(msg.caller_pd)&&!by_program{return true}
-        if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
+        if by_program&&!program_run(msg.caller_pd).is_some_and(|(_,task)|launch_caller_task(task,msg.caller_task)){return true}
+        if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
             sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");reader_glue::refuse_other(store::NO_FREE_ROW);return true;
         }
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
@@ -18708,7 +18788,7 @@ unsafe fn maybe_run_app_launcher_help_proof() {
         ("Esc", "close_palette"),
     ];
     for (k, a) in keys.iter() {
-        serial_println!("[launcher.help.keys] key={} action={}", k, a);
+        sex_pdx::serial_input_record!(("[launcher.help.keys] payload=redacted"); ("[launcher.help.keys] key={} action={}", k, a));
     }
     serial_println!("[launcher.help.keys.count] count={} ok=1", keys.len());
     let mut ok_rows: u8 = 0;
@@ -21649,9 +21729,13 @@ unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
         }
     }
     shell_request_app_close(surface_id);
-    // A document app may decline a Close to keep unsaved work. Its window
-    // stays until it agrees and dies; retirement then removes its tabs.
-    if APP_CUSTODY.iter().flatten().any(|e|e.owns_surface(surface_id)&&sex_pdx::app_catalog::is_document_app(e.target)&&e.close_pending&&!e.dead) {
+    // Document and ordinary programs may decline Close for unsaved work. Keep
+    // their surfaces until attested retirement; a decline restores input to the
+    // existing dialog. Programs that ignore Close retain the five-second fence.
+    if APP_CUSTODY.iter().flatten().any(|e|e.owns_surface(surface_id)
+        && (app_catalog::is_document_app(e.target)
+            || app_catalog::by_surface(e.target,e.surface).is_some_and(|row|row.app==app_catalog::App::Program))
+        &&e.close_pending&&!e.dead) {
         sex_pdx::serial_record!("[silk.close.deferred] sid={} reason=app_decides",surface_id);
         return true;
     }
@@ -24083,6 +24167,7 @@ unsafe fn try_set_focus(sid: u64) -> bool {
 }
 unsafe fn try_set_focus_inner(sid: u64,refresh_children:bool) -> bool {
     launcher_focus_discard(); // A newer explicit focus supersedes a queued launcher focus.
+    program_held_release(sid);
     if sid == 0 {
         FOCUSED_SURFACE_ID = 0;
         serial_println!("[silk-shell.focus.change] from=0 to=0 (clear)");
@@ -25835,6 +25920,8 @@ pub extern "C" fn _start() -> ! {
         .expect("shell display-ready inbox full");
     serial_println!("[display.ready.accepted] client=silk-shell caller=1 version=1");
     sex_rt::heap_init();
+    restricted_pool::initialize();
+    sex_pdx::serial_record!("[input.payload.mode] component=shell mode={}",sex_pdx::input_diagnostics::mode());
     // Started again after a crash: notices to apps carry sequence numbers the apps
     // check, so number them after every earlier run's.
     let restarts = sex_pdx::crash_log::restarts() as u64;
@@ -26200,6 +26287,8 @@ pub extern "C" fn _start() -> ! {
                 }
             }
         }
+        restricted_pool::recover();
+        restricted_routes::poll();
         unsafe { program_rebirth_poll(); launch_poll(); }
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
@@ -26208,11 +26297,13 @@ pub extern "C" fn _start() -> ! {
         unsafe { key_repeat_poll(); }
         unsafe { access_glue::poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
-        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
         unsafe { decorations_glue::poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
+        #[cfg(sexos_input_payload_proof)]
+        wait_observer::poll();
         if shell_ready_publisher.poll() {
             serial_println!("[silk-shell.ready.notify] to=sexinput");
         }
@@ -26885,16 +26976,17 @@ pub extern "C" fn _start() -> ! {
         // drained burst instead of one IPC per HID event.
         config_watch::poll();
         lock::poll();
-        let msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
+        let mut msg = match pop_startup_message().or_else(|| pdx_try_listen_raw(0)) {
             Some(m) => m,
             None => {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() || restricted_routes::pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
+                if let Some(t)=unsafe{autofill_routes::wake()}{let _=sex_pdx::sys_wait_self_ticks(t);continue;}
                 if let Some(t) = lock::next_wake() { let _ = sex_pdx::sys_wait_self_ticks(t.min(60_000) + 1); continue; }
                 pdx_listen_raw(0)
             }
@@ -26907,11 +26999,15 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id == sex_pdx::program_memory::OP_PRESSURE && msg.caller_pd == 0 { unsafe { MEMORY_LAST_LOOK = 0; } continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
+            if restricted_routes::receive(&msg){continue;}
+            if restricted_pool::blocks(&msg){continue;}
             if shell_launch_message(&msg) { continue; }
             if shell_dnd_message(&msg) { continue; }
             if shell_clip_message(&msg) { continue; }
+            if shell_keys_message(&msg) { continue; }
             if config_watch::receive(&msg) { continue; }
             if lock::receive(&msg) { continue; }
+            if autofill_routes::receive(&mut msg) {continue;}
             if bt_panel::receive(&msg) { continue; }
             if reader_glue::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
@@ -26919,6 +27015,7 @@ pub extern "C" fn _start() -> ! {
             if notification_receive(&msg) { continue; }
             if media_keys_receive(&msg) { continue; }
             if tray_receive(&msg) { continue; }
+            if net_time_receive(&msg) { continue; }
             if spindle_history_status_receive(&msg) {continue;}
             if workspace_refresh_receive(&msg) { continue; }
             if shell_close_declined_receive(&msg) { continue; }
@@ -27162,14 +27259,10 @@ pub extern "C" fn _start() -> ! {
                         let r = &mut HID_RAW_BUDGET;
                         if *r > 0 {
                             *r -= 1;
-                            serial_println!(
-                                "[silk-shell.hid.raw] class={} a0={:#x} a1={:#x} a2={:#x} caller={}",
-                                event_class, msg.arg0, msg.arg1, msg.arg2, msg.caller_pd
-                            );
-                            serial_println!(
-                                "[silk-shell.hid.recv] class={} code={} value={} a0={} a1={} a2={}",
-                                event_class, scancode, value, msg.arg0, msg.arg1, msg.arg2
-                            );
+                            sex_pdx::serial_input_record!(("[silk-shell.hid.raw] payload=redacted"); ("[silk-shell.hid.raw] class={} a0={:#x} a1={:#x} a2={:#x} caller={}",
+                                event_class, msg.arg0, msg.arg1, msg.arg2, msg.caller_pd));
+                            sex_pdx::serial_input_record!(("[silk-shell.hid.recv] payload=redacted"); ("[silk-shell.hid.recv] class={} code={} value={} a0={} a1={} a2={}",
+                                event_class, scancode, value, msg.arg0, msg.arg1, msg.arg2));
                         }
                     }
 
@@ -27187,24 +27280,23 @@ pub extern "C" fn _start() -> ! {
                             static mut KEY_RECV_BUDGET: u32 = 4;
                             if KEY_RECV_BUDGET > 0 {
                                 KEY_RECV_BUDGET -= 1;
-                                serial_println!("[shell.key.ev_key.received code={:#x} value={}]", scancode, value);
-                                serial_println!(
-                                    "[silk-shell.key.recv] code={} down={} mod={} focused={}",
+                                sex_pdx::serial_input_record!(("[shell.key.ev_key.received] payload=redacted"); ("[shell.key.ev_key.received code={:#x} value={}]", scancode, value));
+                                sex_pdx::serial_input_record!(("[silk-shell.key.recv] payload=redacted"); ("[silk-shell.key.recv] code={} down={} mod={} focused={}",
                                     scancode,
                                     value,
                                     SPINDLE_CTRL_DOWN as u8,
-                                    FOCUSED_SURFACE_ID
-                                );
+                                    FOCUSED_SURFACE_ID));
                             }
                             // [usb.keyboard.shell.recv] — one-shot proof marker
                             static mut USB_KBD_SHELL_RECV_EMITTED: bool = false;
                             if !USB_KBD_SHELL_RECV_EMITTED {
                                 USB_KBD_SHELL_RECV_EMITTED = true;
-                                serial_println!("[usb.keyboard.shell.recv] key={} ok=1", scancode);
+                                sex_pdx::serial_input_record!(("[usb.keyboard.shell.recv] payload=redacted"); ("[usb.keyboard.shell.recv] key={} ok=1", scancode));
                             }
                         }
 
                         // ── Event-class dispatch ──
+                        if event_class==EV_KEY {KEY_KEYPAD=msg.arg0>>8&1==1;}
                         if event_class==EV_KEY && desktop_shortcut(scancode,value) {
                             mutated=true;
                         } else if event_class == EV_KEY && value == 1 {
@@ -27219,10 +27311,8 @@ pub extern "C" fn _start() -> ! {
                                     static mut MAIN_KEYTRACE_BUDGET: u32 = 64;
                                     if MAIN_KEYTRACE_BUDGET > 0 {
                                         MAIN_KEYTRACE_BUDGET -= 1;
-                                        serial_println!(
-                                            "[keyboard.cursor.debug.keytrace] key={:#04x} pressed=1 ok=1",
-                                            scancode
-                                        );
+                                        sex_pdx::serial_input_record!(("[keyboard.cursor.debug.keytrace] payload=redacted"); ("[keyboard.cursor.debug.keytrace] key={:#04x} pressed=1 ok=1",
+                                            scancode));
                                     }
                                     const KBD_CURSOR_STEP: i32 = 32;
                                     match scancode {
@@ -27243,10 +27333,8 @@ pub extern "C" fn _start() -> ! {
                                             send_cursor_checked(old_x + kdx, old_y + kdy, "keyboard_cursor_debug");
                                             if KEYBOARD_CURSOR_MOVE_BUDGET > 0 {
                                                 KEYBOARD_CURSOR_MOVE_BUDGET -= 1;
-                                                serial_println!(
-                                                    "[keyboard.cursor.debug.move] key={:#04x} dx={} dy={} old_x={} old_y={} new_x={} new_y={} ok=1",
-                                                    scancode, kdx, kdy, old_x, old_y, POINTER_X, POINTER_Y
-                                                );
+                                                sex_pdx::serial_input_record!(("[keyboard.cursor.debug.move] payload=redacted"); ("[keyboard.cursor.debug.move] key={:#04x} dx={} dy={} old_x={} old_y={} new_x={} new_y={} ok=1",
+                                                    scancode, kdx, kdy, old_x, old_y, POINTER_X, POINTER_Y));
                                             }
                                             if !KEYBOARD_CURSOR_DEBUG_DONE {
                                                 serial_println!("[keyboard.cursor.debug.done] ok=1");
@@ -27270,7 +27358,7 @@ pub extern "C" fn _start() -> ! {
                                     let b = &mut KEY_ROUTE_BUDGET;
                                     if *b > 0 {
                                         *b -= 1;
-                                        serial_println!("[silk-shell.key.route] owner=quil sid={} scancode={:#x}", FOCUSED_SURFACE_ID, scancode);
+                                        sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] owner=quil sid={} scancode={:#x}", FOCUSED_SURFACE_ID, scancode));
                                     }
                                 }
                                 // AP9: key route liveness guard
@@ -27286,7 +27374,7 @@ pub extern "C" fn _start() -> ! {
                                     let b = &mut KEY_ROUTE_BUDGET_LINEN;
                                     if *b > 0 {
                                         *b -= 1;
-                                        serial_println!("[silk-shell.key.route] owner=linen sid={} scancode={:#x}", SURFACE_ID_LINEN, scancode);
+                                        sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] owner=linen sid={} scancode={:#x}", SURFACE_ID_LINEN, scancode));
                                     }
                                 }
                                 // AP9: key route liveness guard
@@ -27381,7 +27469,7 @@ pub extern "C" fn _start() -> ! {
                                     || scancode == 0x01 || scancode == 0x0E
                                     || scancode == 0x1A || scancode == 0x1B)
                             {
-                                serial_println!("[bell.key.recv] code={} down={} mod=0", scancode, value);
+                                sex_pdx::serial_input_record!(("[bell.key.recv] payload=redacted"); ("[bell.key.recv] code={} down={} mod=0", scancode, value));
                                 match scancode {
                                     0x24 => {
                                         serial_println!("[bell.keyboard.next] sid={}", FOCUSED_SURFACE_ID);
@@ -27411,7 +27499,7 @@ pub extern "C" fn _start() -> ! {
                                 && (scancode == 0x24 || scancode == 0x25 || scancode == 0x1C
                                     || scancode == 0x01 || scancode == 0x0E)
                             {
-                                serial_println!("[collar.key.recv] code={} down={} mod=0", scancode, value);
+                                sex_pdx::serial_input_record!(("[collar.key.recv] payload=redacted"); ("[collar.key.recv] code={} down={} mod=0", scancode, value));
                                 match scancode {
                                     0x24 => {
                                         collar_select_next_grant();
@@ -27438,7 +27526,7 @@ pub extern "C" fn _start() -> ! {
                                     || scancode == 0x59 || scancode == 0x01 || scancode == 0x57
                                     || scancode == 0x0E)
                             {
-                                serial_println!("[mesh.key.recv] code={} down={} mod={}", scancode, value, SPINDLE_CTRL_DOWN as u8);
+                                sex_pdx::serial_input_record!(("[mesh.key.recv] payload=redacted"); ("[mesh.key.recv] code={} down={} mod={}", scancode, value, SPINDLE_CTRL_DOWN as u8));
                                 match scancode {
                                     // ── J: next node ──
                                     0x24 => {
@@ -27515,18 +27603,16 @@ pub extern "C" fn _start() -> ! {
                                 }
                                 // Forward key event to Spindle PD 12 via SLOT_SPINDLE
                                 pdx_call(SLOT_SPINDLE, OP_HID_EVENT, spindle_key_word(scancode), 1, EV_KEY);
-                                serial_println!("[spindle.input.recv] scancode={:#x}", scancode);
+                                sex_pdx::serial_input_record!(("[spindle.input.recv] payload=redacted"); ("[spindle.input.recv] scancode={:#x}", scancode));
                                 unsafe {
                                     static mut SPINDLE_ROUTE_BUDGET: u32 = 32;
                                     let b = &mut SPINDLE_ROUTE_BUDGET;
                                     if *b > 0 {
                                         *b -= 1;
-                                        serial_println!(
-                                            "[silk-shell.key.route] target=spindle sid={} code={} down={}",
+                                        sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] target=spindle sid={} code={} down={}",
                                             SURFACE_ID_SPINDLE,
                                             scancode,
-                                            value
-                                        );
+                                            value));
                                     }
                                 }
                                 // Priority: Ctrl chords → Spiderweb → vi-normal → insert.
@@ -27607,10 +27693,8 @@ pub extern "C" fn _start() -> ! {
                                 static mut MAIN_DISPATCH_QUIL_TEXT_BUDGET: u32 = 32;
                                 if MAIN_DISPATCH_QUIL_TEXT_BUDGET > 0 {
                                     MAIN_DISPATCH_QUIL_TEXT_BUDGET -= 1;
-                                    serial_println!(
-                                        "[silk-shell.key.route] target=quil sid={} code={} down={}",
-                                        FOCUSED_SURFACE_ID, scancode, value
-                                    );
+                                    sex_pdx::serial_input_record!(("[silk-shell.key.route] payload=redacted"); ("[silk-shell.key.route] target=quil sid={} code={} down={}",
+                                        FOCUSED_SURFACE_ID, scancode, value));
                                 }
                                 // AP9: key route liveness guard
                                 {
@@ -27655,18 +27739,12 @@ pub extern "C" fn _start() -> ! {
                                 let kbd_ui_focus_old = FOCUSED_SURFACE_ID;
                                 let kbd_ui_frame = frame_for_surface(kbd_ui_focus_old).unwrap_or(0);
                                 let kbd_ui_sid = kbd_ui_focus_old;
-                                serial_println!(
-                                    "[shell.kbd.ui.consume] scancode={} action={} down={} consumed={}",
-                                    scancode, action_name(action), value, 1
-                                );
-                                serial_println!(
-                                    "[shell.key.action] scancode={} action={} focused={}",
-                                    scancode, action_name(action), FOCUSED_SURFACE_ID
-                                );
-                                serial_println!(
-                                    "[shell.kbd.ui.action] scancode={} action={} focused={} frame={} sid={}",
-                                    scancode, action_name(action), kbd_ui_focus_old, kbd_ui_frame, kbd_ui_sid
-                                );
+                                sex_pdx::serial_input_record!(("[shell.kbd.ui.consume] payload=redacted"); ("[shell.kbd.ui.consume] scancode={} action={} down={} consumed={}",
+                                    scancode, action_name(action), value, 1));
+                                sex_pdx::serial_input_record!(("[shell.key.action] payload=redacted"); ("[shell.key.action] scancode={} action={} focused={}",
+                                    scancode, action_name(action), FOCUSED_SURFACE_ID));
+                                sex_pdx::serial_input_record!(("[shell.kbd.ui.action] payload=redacted"); ("[shell.kbd.ui.action] scancode={} action={} focused={} frame={} sid={}",
+                                    scancode, action_name(action), kbd_ui_focus_old, kbd_ui_frame, kbd_ui_sid));
                                 match action {
                                     SurfaceAction::FocusToggle => {
                                         let current = FOCUSED_SURFACE_ID;

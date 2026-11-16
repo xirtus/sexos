@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""Real Shell geometry and screendump helpers for program gates."""
+"""Real Shell geometry for program gates; never click outside a tiled client.
+
+Maximize once after launching a fresh program, then wait for that program's
+updated layout/paint receipt before using client-relative control coordinates.
+The helper does not treat the Shell resize admission as proof of client paint.
+"""
 import re
 from pathlib import Path
 from quil_workflow_gate import palette_commands, palette_select

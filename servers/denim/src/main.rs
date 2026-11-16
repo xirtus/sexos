@@ -21,13 +21,54 @@ use sex_pdx::denim as d;
 use sex_pdx::program_memory as m;
 use sex_pdx::serial_println;
 
+// Denim's own bookkeeping (a byte and an entry per page of every run it watches) starts
+// in this static heap and grows from the service's arena when a big program needs more:
+// a fixed heap ran out at about 170 MiB of program heap and stopped Denim.
 const HEAP_BYTES: usize = 2 * 1024 * 1024;
 #[repr(align(4096))]
 #[allow(dead_code)]
 struct HeapBytes([u8; HEAP_BYTES]);
 static mut HEAP: HeapBytes = HeapBytes([0; HEAP_BYTES]);
+
+/// Denim runs on one task; the lock only satisfies talc.
+struct Lock(core::sync::atomic::AtomicBool);
+unsafe impl talc::lock_api::RawMutex for Lock {
+    #[allow(clippy::declare_interior_mutable_const)]
+    const INIT: Self = Lock(core::sync::atomic::AtomicBool::new(false));
+    type GuardMarker = talc::lock_api::GuardSend;
+    fn lock(&self) { while !self.try_lock() { core::hint::spin_loop(); } }
+    fn try_lock(&self) -> bool {
+        self.0.compare_exchange(false, true, core::sync::atomic::Ordering::Acquire, core::sync::atomic::Ordering::Relaxed).is_ok()
+    }
+    unsafe fn unlock(&self) { self.0.store(false, core::sync::atomic::Ordering::Release); }
+}
+
+/// More heap from the service arena, claimed as a new span. The slab store grows from
+/// the same arena between allocations, so each span stands alone; within one acquire
+/// the grows follow each other and make one contiguous span.
+#[derive(Debug)]
+struct Arena;
+unsafe impl talc::source::Source for Arena {
+    fn acquire<B: talc::base::binning::Binning>(talc: &mut talc::base::Talc<Self, B>, layout: core::alloc::Layout) -> Result<(), ()> {
+        let bytes = layout.size().checked_add(layout.align()).and_then(|b| b.checked_add(4096)).ok_or(())? as u64;
+        // At least 1 MiB at a time, so a growing table does not cost a call per step.
+        let pages = bytes.div_ceil(m::PAGE).max(256);
+        let (mut start, mut left) = (0u64, pages);
+        while left > 0 {
+            let n = left.min(m::MAX_PAGES_PER_CALL);
+            let got = m::grow(n).map_err(|e| serial_println!("[denim.heap.refused] bytes={} status={}", layout.size(), e))?;
+            let first = got.base + (got.pages - n) * m::PAGE;
+            if start == 0 { start = first }
+            else if first != start + (pages - left) * m::PAGE { return Err(()) }
+            left -= n;
+        }
+        serial_println!("[denim.heap.grown] pages={}", pages);
+        unsafe { talc.claim(start as *mut u8, (pages * m::PAGE) as usize) }.map(|_| ()).ok_or(())
+    }
+}
+
 #[global_allocator]
-static ALLOCATOR: linked_list_allocator::LockedHeap = linked_list_allocator::LockedHeap::empty();
+static ALLOCATOR: talc::TalcLock<Lock, Arena> = talc::TalcLock::new(Arena);
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -217,7 +258,7 @@ impl Denim {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    unsafe { ALLOCATOR.lock().init(core::ptr::addr_of_mut!(HEAP) as *mut u8, HEAP_BYTES); }
+    unsafe { ALLOCATOR.lock().claim(core::ptr::addr_of_mut!(HEAP) as *mut u8, HEAP_BYTES); }
     let mut store = Store { free: Default::default(), window: 0, used: 0, pages_out: 0, grown: 0 };
     let Some(window) = store.page() else {
         serial_println!("[denim.ready] ok=0 reason=no_memory");

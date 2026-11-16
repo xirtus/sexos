@@ -1,0 +1,11 @@
+[package]
+name="moanplug"
+version="0.1.0"
+edition="2021"
+license.workspace=true
+[dependencies]
+moan-plugin={path="../../crates/moan-plugin",features=["sexos"]}
+sex-app={path="../../crates/sex-app"}
+sex-pdx={path="../../crates/sex-pdx"}
+
+sha2 = { version="=0.10.9", default-features=false, features=["force-soft"] }

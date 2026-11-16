@@ -1,0 +1,96 @@
+{
+  "source_revision": "154816f76d30abe2d09b028d63bd33224bd34bac",
+  "scope": "Integrated host/build foundation. Earlier QEMU proof remains a distinct source cohort; no completed hostile sandbox, live insert or final Moan UI claim.",
+  "validation": {
+    "rust_tests": 88,
+    "focused_receipt_runtime_tests": 59,
+    "trust_boundary_tests": 13,
+    "python_tests": 1336,
+    "python_seconds": 127.196,
+    "logs": [
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/target/root-helper-pin-154816f7-host/sexos-root-midi-step-plugin-host.log",
+        "sha256": "a3f8ae3b400134818b603461c705dcf603002bd130c9de5cd655b4718370a139"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/target/root-helper-pin-154816f7-host/sexos-root-plugin-trust-foundation-tests.log",
+        "sha256": "c4adb471a46d1b5eac2f7b1be174a3af8f121418d39cc4c5787b35a8c40169c1"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/target/root-helper-pin-154816f7-host/sexos-consumed-input-tests-final.log",
+        "sha256": "b205414afe336c2f75cd1c7b5418a345d0ab03efc6a81fff1a0c3198390a0f43"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/target/root-helper-pin-154816f7-host/sexos-root-plugin-foundation-python.log",
+        "sha256": "ed697a4c5cb04c185104da315bd4c330293f82561b25a86eb339718f3858cb91"
+      }
+    ],
+    "rust_source_revision": "18325d391ea26e2729ad6e1393e4ed23907dc417",
+    "python_source_revision": "154816f76d30abe2d09b028d63bd33224bd34bac",
+    "focused_receipt_runtime_source_revision": "2f1b15f206b4f74a1ea0a103c6d5e0c067ac4a9f"
+  },
+  "guest_build_checks": {
+    "scope": "Canonical guest release builds and byte scanner only; not a sealed ISO or QEMU policy proof",
+    "source": "154816f76d30abe2d09b028d63bd33224bd34bac",
+    "helper": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/iso_root/programs/moanplug",
+      "bytes": 96704,
+      "sha256": "42888a6eee5ddbac7c535e1906b47a56ddfcce4514188d693529646f7236ed9f",
+      "preserved_path": "/Users/xmacbookm5/Projects/sexos-plan/target/root-helper-pin-154816f7-host/helper"
+    },
+    "files": {
+      "path": "/Users/xmacbookm5/Projects/sexos-plan/target/x86_64-sex/release/sexfiles",
+      "bytes": 1507056,
+      "sha256": "c6f62bc03f2421416fba2dfa6de6cfa82111cf0973e0c53bf557fae9ce121209",
+      "preserved_path": "/Users/xmacbookm5/Projects/sexos-plan/target/root-helper-pin-154816f7-host/files"
+    },
+    "generated_pin_files": [
+      "target/x86_64-sex/release/build/sexfiles-3cad8e9f5c5db226/out/moanplug_pin.rs"
+    ],
+    "logs": [
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/target/root-helper-pin-154816f7-host/sexos-root-moanplug-build.log",
+        "sha256": "378319d0cd8b5374bb49d2e47000ccde992ca94c7f2e604e6a882174741f3614"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/target/root-helper-pin-154816f7-host/sexos-root-moanplug-scan.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "/Users/xmacbookm5/Projects/sexos-plan/target/root-helper-pin-154816f7-host/sexos-root-files-helper-pin-build.log",
+        "sha256": "8c9203798c143ca3cd5d77ac270b367f8901c10686569fea98a9598511699394"
+      }
+    ]
+  },
+  "earlier_qemu": {
+    "source": "59067a245f9c2c9a48b36e10abc3c142f955d964",
+    "directory": "/Users/xmacbookm5/Projects/sexos-moan-plugin-host/target/plugin-visible-status-59067a24-v8",
+    "result_sha256": "06a788ed5e3b5550268ad97297acf93555a53e5335a5f7f7fdedd6848245dca1",
+    "inputs_sha256": "bc9d956e07b44c64fd7d8745ef740b8098982059332606818c45b05f031dedbd",
+    "verified_raw_artifacts": 60,
+    "programs": {
+      "moanplug": {
+        "path": "/Users/xmacbookm5/Projects/sexos-moan-plugin-host/target/plugin-visible-status-59067a24-v8/programs/moanplug",
+        "sha256": "42888a6eee5ddbac7c535e1906b47a56ddfcce4514188d693529646f7236ed9f"
+      },
+      "moanrack": {
+        "path": "/Users/xmacbookm5/Projects/sexos-moan-plugin-host/target/plugin-visible-status-59067a24-v8/programs/moanrack",
+        "sha256": "b03e9f7eda2efbef1c346ab0eceec3ec0b9c046b281eb73153e7c6d0c7f76c0b"
+      }
+    },
+    "scope": "offline CLAP/VST3 helper crash containment; no hostile-plugin or ordinary OS binary compatibility claim",
+    "claims": [
+      "CLAP channel processing and VST3 parameterized gain",
+      "Final-block CLAP restart rejects output",
+      "Actual child crash and timeout, exact-task reuse, parent recovery",
+      "Window wait retains authenticated receipts",
+      "Visible Weft status model and rendered pixels"
+    ]
+  },
+  "pending": [
+    "Final workspace/mixer/plugin UI source cohort and QEMU screenshots",
+    "Userspace restricted provider policy, immutable job snapshots and hostile route probes",
+    "Combined final regression and exact-head CI green before merge",
+    "JIT object and string inline caches after Moan"
+  ]
+}

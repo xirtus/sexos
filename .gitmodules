@@ -1,0 +1,3 @@
+[submodule "apps/splicy-studio"]
+	path = apps/splicy-studio
+	url = https://github.com/xirtus/Splicy
