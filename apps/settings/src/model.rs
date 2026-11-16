@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(step_value(delay, 400, true, false), 425);
         assert_eq!(step_value(delay, 400, false, true), 150);
         let wall = sex_config::key(id::WALLPAPER).unwrap();
-        assert_eq!(step_value(wall, 0, false, false), 4, "choices wrap");
+        assert_eq!(step_value(wall, 0, false, false), sex_config::WALLPAPERS.len() as i32 - 1, "choices wrap");
         let accent = sex_config::key(id::ACCENT).unwrap();
         assert_eq!(step_value(accent, 0x3D7EFF, true, false), 0x14B8A6);
         assert_eq!(step_value(accent, 0x123456, true, false), 0x3D7EFF, "custom goes to the first");
