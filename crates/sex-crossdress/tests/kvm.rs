@@ -149,6 +149,8 @@ impl Kvm {
         for (i, at) in SEG_AT.iter().enumerate() { st.segments[i] = seg_from_kvm(&s[*at..*at + 24]); }
         st.gdtr_base = Self::u64_at(&s, 192);
         st.idtr_base = Self::u64_at(&s, 208);
+        st.gdtr_limit = u16::from_le_bytes([s[200], s[201]]) as u32;
+        st.idtr_limit = u16::from_le_bytes([s[216], s[217]]) as u32;
         st.cr0 = Self::u64_at(&s, 224);
         st.guest_cr3 = Self::u64_at(&s, 240);
         st.cr4 = Self::u64_at(&s, 248);
@@ -178,7 +180,13 @@ fn the_test_program_runs_in_a_kvm_cell() {
         println!("[crossdress.kvm] SKIP no usable /dev/kvm: the cell did not run on hardware here");
         return;
     };
-    let mut proc = WinProcess::load(Ram::new(64 << 20).unwrap(), sex_crossdress::TEST_EXE).unwrap();
+    // CROSSDRESS_EXE runs another build of the test program (the gate's rebuild with the
+    // runner's own LLVM) instead of the checked-in one.
+    let exe = match std::env::var_os("CROSSDRESS_EXE") {
+        Some(path) => { println!("[crossdress.kvm] exe={}", path.to_string_lossy()); std::fs::read(path).expect("CROSSDRESS_EXE") }
+        None => sex_crossdress::TEST_EXE.to_vec(),
+    };
+    let mut proc = WinProcess::load(Ram::new(64 << 20).unwrap(), &exe).unwrap();
     let vm = ioctl(kvm, KVM_CREATE_VM, 0) as RawFd;
     assert!(vm >= 0, "KVM_CREATE_VM");
     let _ = ioctl(vm, KVM_SET_TSS_ADDR, 0xFFFB_D000);
@@ -200,7 +208,7 @@ fn the_test_program_runs_in_a_kvm_cell() {
     let stop = proc.run(&mut cpu, &mut console);
     let text = String::from_utf8_lossy(&console.text);
     for line in text.lines() { println!("[crossdress.kvm.out] {line}"); }
-    println!("[crossdress.kvm] stop={stop:?} counters={:?}", proc.counters);
+    println!("[crossdress.kvm] stop={stop:?} counters={:?} last_fault={:?}", proc.counters, proc.last_fault);
     assert_eq!(stop, Stop::Exited(0), "the program finished cleanly");
     assert!(text.contains(sex_crossdress::TEST_PASS), "every check in the program passed");
     assert_eq!(proc.counters.handled, 5, "five hardware exceptions went through the vectored handler");
