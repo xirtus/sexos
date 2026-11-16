@@ -145,6 +145,23 @@ pub(crate) struct Closures {
     pub vol_emit: Vec3,
     /// Henyey-Greenstein anisotropy, scatter-weighted.
     pub vol_g: f32,
+    /// The part of the diffuse lobes' weight that is subsurface scattering
+    /// (the path tracer renders it as diffuse; EEVEE blurs it in screen
+    /// space) and its scattering radius (world units, weighted by it).
+    pub sss_weight: Vec3,
+    pub sss_radius: Vec3,
+}
+
+impl Closures {
+    /// Record `weight` of the diffuse lobes as subsurface with `radius`.
+    fn add_sss(&mut self, weight: Vec3, radius: Vec3) {
+        let (a, b) = (self.sss_weight.max_elem(), weight.max_elem());
+        if b <= 0.0 {
+            return;
+        }
+        self.sss_radius = (self.sss_radius * a + radius * b) / (a + b);
+        self.sss_weight += weight;
+    }
 }
 
 fn v3(r: V4) -> Vec3 {
@@ -1200,7 +1217,9 @@ fn closure(kind: ClosureKind, ins: &[Reg], w: Vec3, ctx: &ShadeCtx, regs: &[V4],
         }
         ClosureKind::Subsurface => {
             // Approximation: subsurface scattering renders as diffuse.
-            out.lobes.push(bsdf::diffuse(w.mul_elem(c(0)), nrm(6), 0.0));
+            let wc = w.mul_elem(c(0));
+            out.lobes.push(bsdf::diffuse(wc, nrm(6), 0.0));
+            out.add_sss(wc, c(2) * f(1).max(0.0));
         }
         ClosureKind::Hair => {
             // Approximation: a rough glossy lobe along the tangent.
@@ -1415,6 +1434,8 @@ fn principled(ins: &[Reg], w: Vec3, ctx: &ShadeCtx, regs: &[V4], out: &mut Closu
     let base_w = w.mul_elem(base);
     if base_w.max_elem() > MIN_WEIGHT {
         out.lobes.push(bsdf::diffuse(base_w, n, 0.0));
+        if subsurface > 0.0 {
+            out.add_sss(base_w * subsurface, c(7) * f(8).max(0.0));
+        }
     }
-    let _ = subsurface;
 }
