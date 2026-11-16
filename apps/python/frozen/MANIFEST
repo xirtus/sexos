@@ -18,6 +18,7 @@ importlib.util module
 importlib.machinery module
 importlib._abc module
 runpy module
+pkgutil module
 encodings package
 encodings.aliases module
 encodings.utf_8 module
