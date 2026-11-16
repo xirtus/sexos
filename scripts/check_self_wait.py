@@ -239,6 +239,9 @@ def passive_observer_joins(text,root,core,topology,identity,seals,expiries):
 
 
 SHELL_TASK=3
+# Idle sexinput sleeps 32 ticks (touchpad::wait_bound, IDLE_WAIT_TICKS) like sexusb.
+# Denim (BOOT pd/task 51) scans every 64 ticks, 8 while a program waits on a page.
+DENIM_TASK=51
 SHELL_AUTOFILL_MAX_TICKS=1000
 
 
@@ -276,9 +279,9 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
   # Shell (3) wakes itself for password autofill (silk-shell autofill_routes::wake):
   # 100 ticks while a page identity is held, at most 1000 toward a transaction deadline.
   shell=source_ok and int(p[1])==SHELL_TASK and 1<=int(p[2])<=SHELL_AUTOFILL_MAX_TICKS
-  if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
+  if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),(4,32),(DENIM_TASK,64),(DENIM_TASK,8))if source_ok else())+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
  for e in expiries:
-  if int(e[1])not in(13,2,1,6,4,5)+((SHELL_TASK,)if source_ok else())+selected+((50,)if acpi['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry: task=%s deadline=%s now=%s'%(e[1],e[2],e[3]))
+  if int(e[1])not in(13,2,1,6,4,5)+((SHELL_TASK,DENIM_TASK)if source_ok else())+selected+((50,)if acpi['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry: task=%s deadline=%s now=%s'%(e[1],e[2],e[3]))
  for r in returns:
   if int(r[2])<int(r[1]):errors.append('backward Ring3 clock')
  for group,index in [(parks,4),(expiries,4),(returns,3)]:
