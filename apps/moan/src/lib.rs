@@ -2103,12 +2103,12 @@ impl Studio {
         app.ui.tick(weft::sexos::now());
         let mut out = Vec::new();
         if let Some(event) = event {
-            out.extend(self.handle_event(&mut app.ui, weft::sexos::event(event)));
+            if let Some(ev) = weft::sexos::event(event) { out.extend(self.handle_event(&mut app.ui, ev)); }
             for _ in 0..64 {
                 let Some(event) = app.window.poll() else {
                     break;
                 };
-                out.extend(self.handle_event(&mut app.ui, weft::sexos::event(event)));
+                if let Some(ev) = weft::sexos::event(event) { out.extend(self.handle_event(&mut app.ui, ev)); }
             }
         }
         app.present();

@@ -303,11 +303,11 @@ mod guest {
                             4
                         })
                 {
-                    out.extend(studio.handle_event(&mut app.ui, weft::sexos::event(e)));
+                    if let Some(ev) = weft::sexos::event(e) { out.extend(studio.handle_event(&mut app.ui, ev)); }
                 }
                 for _ in 0..64 {
                     let Some(e) = app.window.poll() else { break };
-                    out.extend(studio.handle_event(&mut app.ui, weft::sexos::event(e)));
+                    if let Some(ev) = weft::sexos::event(e) { out.extend(studio.handle_event(&mut app.ui, ev)); }
                 }
                 out
             } else {

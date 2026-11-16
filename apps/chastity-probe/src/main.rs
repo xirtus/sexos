@@ -101,7 +101,7 @@ extern "C" fn main() -> ! {
             sex_app::Event::Key(k) if k.control && k.code == 0x17 => {
                 alloc::vec![Response::Clicked(forged)]
             }
-            _ => app.ui.handle(weft::sexos::event(input)),
+            _ => weft::sexos::event(input).map_or_else(alloc::vec::Vec::new, |e| app.ui.handle(e)),
         };
         for r in responses {
             match r {
