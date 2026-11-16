@@ -336,6 +336,23 @@ print('connections=%d requests=%d alpn=%s'%(conns,reqs,alpn),flush=True)
 "#;
     fn openssl(dir: &std::path::Path, args: &[&str]) { assert!(Command::new("openssl").args(args).current_dir(dir).stderr(Stdio::null()).status().unwrap().success(), "{:?}", args); }
 
+    /// `openssl s_server -www` on a port it binds itself, already listening when this
+    /// returns. Picking a free port first and handing it over races the other tests
+    /// doing the same: a client could reach another test's server and fail its handshake.
+    fn s_server(dir: &std::path::Path, args: &[&str]) -> (std::process::Child, u16) {
+        let mut server = Command::new("openssl").current_dir(dir).args(["s_server", "-www", "-accept", "127.0.0.1:0"]).args(args)
+            .stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap();
+        let mut out = BufReader::new(server.stdout.take().unwrap());
+        let port = loop {
+            let mut line = String::new();
+            assert!(out.read_line(&mut line).unwrap() > 0, "s_server ended before listening");
+            if let Some(at) = line.trim().strip_prefix("ACCEPT ") { break at.rsplit(':').next().unwrap().parse().unwrap(); }
+        };
+        // Keep reading what it prints, so a write never meets a closed pipe.
+        std::thread::spawn(move || { let _ = std::io::copy(&mut out, &mut std::io::sink()); });
+        (server, port)
+    }
+
     /// A root and a leaf for `host`, signed with `key` ("ec:P-256", "ec:P-384" or "rsa:2048").
     fn chain(dir: &std::path::Path, host: &str, key: &str) {
         std::fs::create_dir_all(dir).unwrap();
@@ -376,14 +393,10 @@ print('connections=%d requests=%d alpn=%s'%(conns,reqs,alpn),flush=True)
             chain(&dir, &host, key);
             // A second on, so a certificate made this second is already valid.
             let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32 + 1;
-            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
             let suite_flag = if *version == "-tls1_3" { "-ciphersuites" } else { "-cipher" };
-            let mut server = Command::new("openssl").current_dir(&dir).args(["s_server", "-quiet", "-www", "-accept", &format!("{port}"), "-cert", "leaf.pem", "-key", "leaf.key",
-                version, suite_flag, suite, "-groups", group, "-naccept", "1"]).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+            let (mut server, port) = s_server(&dir, &["-cert", "leaf.pem", "-key", "leaf.key", version, suite_flag, suite, "-groups", group, "-naccept", "1"]);
             let began = Instant::now();
-            let mut socket = loop {
-                match TcpStream::connect(("127.0.0.1", port)) { Ok(s) => break s, Err(_) if began.elapsed() < Duration::from_secs(10) => std::thread::sleep(Duration::from_millis(20)), Err(e) => panic!("{e}") }
-            };
+            let mut socket = TcpStream::connect(("127.0.0.1", port)).unwrap();
             socket.set_nonblocking(true).unwrap();
             let mut session = Session::start(&host, &mut [n as u8 + 1; 32], seconds).unwrap();
             let request = format!("GET / HTTP/1.0\r\nHost: {host}\r\n\r\n");
@@ -501,13 +514,9 @@ print('served=%d alpn=%s'%(served,alpn),flush=True)
         chain(&dir.join("other"), "other.sexos.test", "ec:P-256");
         // A self-signed leaf that no test root (and no public root) signed.
         openssl(&dir, &["req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-keyout", "leaf.key", "-out", "leaf.pem", "-days", "30", "-subj", "/CN=stranger.sexos.test", "-addext", "subjectAltName=DNS:stranger.sexos.test"]);
-        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let mut server = Command::new("openssl").current_dir(&dir).args(["s_server", "-quiet", "-www", "-accept", &format!("{port}"), "-cert", "leaf.pem", "-key", "leaf.key", "-naccept", "1"])
-            .stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let (mut server, port) = s_server(&dir, &["-cert", "leaf.pem", "-key", "leaf.key", "-naccept", "1"]);
         let began = Instant::now();
-        let mut socket = loop {
-            match TcpStream::connect(("127.0.0.1", port)) { Ok(s) => break s, Err(_) if began.elapsed() < Duration::from_secs(10) => std::thread::sleep(Duration::from_millis(20)), Err(e) => panic!("{e}") }
-        };
+        let mut socket = TcpStream::connect(("127.0.0.1", port)).unwrap();
         socket.set_nonblocking(true).unwrap();
         let seconds = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() as u32;
         let mut session = Session::start("stranger.sexos.test", &mut [9; 32], seconds).unwrap();
