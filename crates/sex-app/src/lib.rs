@@ -116,6 +116,14 @@ impl Window {
         bytes[..n].copy_from_slice(&name[..n]);
         let words = (u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap()));
         call(SLOT_DISPLAY, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1);
+        // Shell too, for the screen reader, which says it when the window has focus.
+        // A full queue loses only the spoken name ("Program" is said instead).
+        for _ in 0..100 {
+            match pdx_call_checked(SLOT_SHELL, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1) {
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                _ => break,
+            }
+        }
         sex_pdx::system_stats::set_name(name);
     }
     /// Replaces the window's text. Longer text than the region holds is cut.

@@ -54,7 +54,32 @@ fn new_speech_interrupts_old() {
 }
 
 fn snap<'a>(focus: u64, title: Option<&'a [u8]>, launcher: Option<(u8, &'a [u8])>, notices: usize) -> Snapshot<'a> {
-    Snapshot { focus, title, launcher, notices }
+    Snapshot { focus, title, title_due: false, now: 0, launcher, notices }
+}
+
+#[test]
+fn a_program_window_title_is_awaited_briefly() {
+    let mut w = Watch::new();
+    look(&mut w, snap(153, Some(b"Spindle"), None, 0));
+    let due = |now| Snapshot { focus: 41, title: None, title_due: true, now, launcher: None, notices: 0 };
+    // Focus moved to a program whose title has not come: wait for it.
+    assert!(look(&mut w, due(1000)).is_empty());
+    assert!(w.waiting());
+    assert!(look(&mut w, due(1000 + reader::TITLE_WAIT_MS - 1)).is_empty());
+    // It came: say it, once.
+    let named = Snapshot { title: Some(b"Abacus"), title_due: false, ..due(1200) };
+    assert_eq!(look(&mut w, named), vec![Say::Title(b"Abacus")]);
+    assert!(!w.waiting());
+    assert!(look(&mut w, named).is_empty());
+    // A program that never names its window is called what Display calls it.
+    look(&mut w, snap(153, Some(b"Spindle"), None, 0));
+    let late = |now| Snapshot { focus: 42, ..due(now) };
+    assert!(look(&mut w, late(5000)).is_empty());
+    assert_eq!(look(&mut w, late(5000 + reader::TITLE_WAIT_MS)), vec![Say::Title(reader::UNTITLED)]);
+    // Focus left before the title came: the wait is for the new window.
+    assert!(look(&mut w, due(9000)).is_empty());
+    assert!(look(&mut w, snap(153, Some(b"Spindle"), None, 0)).len() == 1);
+    assert!(!w.waiting());
 }
 fn look<'a>(w: &mut Watch, s: Snapshot<'a>) -> Vec<Say<'a>> {
     let mut out = [None, None];
@@ -128,7 +153,9 @@ fn tree_follows_focus_across_updates() {
     let full = update(true, 1, &[(1, 133, "", ""), (2, 17, "Expression", ""), (3, 18, "7", ""), (4, 18, "8", "")]);
     let mut last = None;
     for [a, b, c] in a11y::pieces(&full) { last = t.piece(&a11y::Piece::decode(a, b, c).unwrap()).or(last); }
-    assert_eq!(last, Some(Applied::FocusMoved));
+    // The first tree only says where focus is; it is not a move to announce.
+    assert_eq!(last, Some(Applied::Same));
+    assert_eq!(t.focus(), 1);
     assert_eq!(t.len(), 4);
     assert_eq!(focused(&t), "");
     // An update with only the focus: the node is remembered from the full tree.

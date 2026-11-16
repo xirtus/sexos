@@ -36,7 +36,9 @@ static mut WATCH: Watch = Watch::new();
 static mut ASKERS: [Option<(u32, u32, Option<bool>)>; 16] = [None; 16];
 /// Trees of programs that send them, by (pd, task).
 static mut TREES: Vec<(u32, u32, Tree)> = Vec::new();
-
+/// Titles programs gave their windows (`OP_APP_TITLE`, as Display gets them):
+/// (surface, row, task, sixteen bytes, length).
+static mut TITLES: [(u64, u32, u32, [u8; 16], u8); 16] = [(0, 0, 0, [0; 16], 0); 16];
 
 /// Super+Alt+R: the reader on or off.
 pub unsafe fn set(on: bool) {
@@ -70,10 +72,11 @@ pub unsafe fn say(text: &[u8]) {
 /// The Shell must keep running (not wait for a message) while this is true.
 pub fn busy() -> bool {
     unsafe {
+        if ASKERS.iter().flatten().any(|a| a.2 != Some(ON)) { return true; }
         if !ON { return false; }
         let speech = &*core::ptr::addr_of!(SPEECH);
-        let tell = ASKERS.iter().flatten().any(|a| a.2 != Some(ON));
-        (speech.pending() && matches!(VOICE_STATE, Voice::Running { .. })) || matches!(VOICE_STATE, Voice::Off { tries } if tries < START_TRIES) || tell
+        (speech.pending() && matches!(VOICE_STATE, Voice::Running { .. })) || matches!(VOICE_STATE, Voice::Off { tries } if tries < START_TRIES)
+            || (*core::ptr::addr_of!(WATCH)).waiting()
     }
 }
 
@@ -165,22 +168,40 @@ unsafe fn send_speech() {
     }
 }
 
-/// The name a window shows in its title bar (Display's `surface_title`).
-fn title(sid: u64, buf: &mut [u8; 16]) -> Option<usize> {
-    if sid == 200 { return Some(reader::join(&[b"Linen"], buf)); }
-    let row = app_catalog::INCARNATIONS.iter().find(|r| r.surface == sid || r.shell_surface == Some(sid))?;
+/// The name a window shows in its title bar (Display's `surface_title`): Some(length),
+/// or Err(true) for a program window whose run has not named it yet.
+fn title(sid: u64, buf: &mut [u8; 16]) -> Result<usize, bool> {
+    if sid == 200 { return Ok(reader::join(&[b"Linen"], buf)); }
+    let row = app_catalog::INCARNATIONS.iter().find(|r| r.surface == sid || r.shell_surface == Some(sid)).ok_or(false)?;
     let name: &[u8] = match row.app {
         app_catalog::App::Quil => b"Quil",
         app_catalog::App::Spindle => b"Spindle",
         app_catalog::App::Browser => b"Browser",
         app_catalog::App::Program => {
-            let own = sex_pdx::system_stats::name(row.target);
-            let n = own.iter().position(|&c| c == 0).unwrap_or(16);
-            if n > 0 && own[..n].iter().all(|b| (32..127).contains(b)) { buf[..n].copy_from_slice(&own[..n]); return Some(n); }
-            b"Program"
+            let task = crate::running_task(row.target).ok_or(false)?;
+            let titles = unsafe { &*core::ptr::addr_of!(TITLES) };
+            let t = titles.iter().find(|t| t.0 == sid && t.1 == row.target && t.2 == task && t.4 != 0).ok_or(true)?;
+            &t.3[..t.4 as usize]
         }
     };
-    Some(reader::join(&[name], buf))
+    Ok(reader::join(&[name], buf))
+}
+
+/// A program names its window (`OP_APP_TITLE`, what `sex_app::Window::title` sends
+/// Display too). Taken only from the program row that owns the surface, as Display does.
+unsafe fn title_receive(msg: &sex_pdx::PdxMessage) {
+    let (pd, surface) = (msg.caller_pd, msg.arg0);
+    if !app_catalog::by_surface(pd, surface).is_some_and(|r| r.app == app_catalog::App::Program && r.shell_surface.is_none()) { return; }
+    let mut bytes = [0u8; 16];
+    bytes[..8].copy_from_slice(&msg.arg1.to_le_bytes());
+    bytes[8..].copy_from_slice(&msg.arg2.to_le_bytes());
+    let len = bytes.iter().position(|b| *b == 0).unwrap_or(16);
+    if len == 0 || !bytes[..len].iter().all(|b| (32..127).contains(b)) { return; }
+    let titles = &mut *core::ptr::addr_of_mut!(TITLES);
+    let slot = titles.iter().position(|t| t.0 == surface)
+        .or_else(|| titles.iter().position(|t| t.0 == 0 || crate::running_task(t.1) != Some(t.2)))
+        .unwrap_or(0);
+    titles[slot] = (surface, pd, msg.caller_task, bytes, len as u8);
 }
 
 /// The program row whose window `sid` is.
@@ -197,7 +218,8 @@ unsafe fn look() {
         let item = &crate::COMMAND_LIST[i];
         Some((i as u8, crate::launcher_row_title(item.command, item.name).as_bytes()))
     } else { None };
-    let snapshot = Snapshot { focus, title: title_len.map(|n| &tb[..n]), launcher, notices: crate::NOTIFY_TOTAL };
+    let snapshot = Snapshot { focus, title: title_len.ok().map(|n| &tb[..n]), title_due: title_len == Err(true), now: sex_pdx::get_ticks(),
+        launcher, notices: crate::NOTIFY_TOTAL };
     let mut out = [None, None];
     (*core::ptr::addr_of_mut!(WATCH)).look(&snapshot, &mut out);
     let mut text = [0u8; voice::MAX_TEXT];
@@ -231,6 +253,8 @@ unsafe fn tell_askers() {
 
 /// A program's `OP_A11Y`. True when it was one.
 pub unsafe fn receive(msg: &sex_pdx::PdxMessage) -> bool {
+    // Kept whether or not the reader is on: a window is named once, when it opens.
+    if msg.type_id == sex_pdx::app_lifecycle::OP_APP_TITLE { title_receive(msg); return true; }
     if msg.type_id != a11y::OP_A11Y { return false; }
     let (pd, task) = (msg.caller_pd, msg.caller_task);
     if app_catalog::by_target(pd).is_none() || crate::running_task(pd) != Some(task) { return true; }

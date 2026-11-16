@@ -6,7 +6,9 @@
 //! decides the words. While on, the Shell speaks:
 //!
 //! * the focused window's title, each time focus moves (Alt+Tab steps move focus, so
-//!   each switcher selection is spoken);
+//!   each switcher selection is spoken). A program's title is the one it gave its
+//!   window (`sex_app::Window::title` tells Shell as well as Display); the reader
+//!   waits up to [`TITLE_WAIT_MS`] for it after the window first takes focus;
 //! * the launcher's selected entry as it opens and as the selection moves;
 //! * each notification as it is posted, summary then body;
 //! * inside a program built on Weft, the focused control's name and role, from the
@@ -56,11 +58,21 @@ pub struct Snapshot<'a> {
     pub focus: u64,
     /// Its title, if it is a window with one.
     pub title: Option<&'a [u8]>,
+    /// It is a program's window whose title has not arrived yet (a program names its
+    /// window just after Shell shows it): the reader waits a little for it.
+    pub title_due: bool,
+    /// Milliseconds since boot.
+    pub now: u64,
     /// The launcher's selected row and its name, while the launcher is open.
     pub launcher: Option<(u8, &'a [u8])>,
     /// Notifications posted since the Shell started.
     pub notices: usize,
 }
+
+/// What a program's window is called when it gives no title in time (Display's name).
+pub const UNTITLED: &[u8] = b"Program";
+/// How long the reader waits for a program to name its newly focused window.
+pub const TITLE_WAIT_MS: u64 = 500;
 
 /// One thing to say.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,18 +85,20 @@ pub enum Say<'a> {
 
 /// Remembers what was last spoken about, so only changes are spoken.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Watch { focus: u64, launcher: Option<u8>, notices: usize, primed: bool }
+pub struct Watch { focus: u64, launcher: Option<u8>, notices: usize, primed: bool, waiting: Option<(u64, u64)> }
 
 impl Watch {
-    pub const fn new() -> Self { Self { focus: 0, launcher: None, notices: 0, primed: false } }
+    pub const fn new() -> Self { Self { focus: 0, launcher: None, notices: 0, primed: false, waiting: None } }
     /// Starts over: the next look takes the screen as it is and says nothing of it.
     pub fn reset(&mut self) { self.primed = false; }
+    /// Waiting for a focused program's title: look again soon.
+    pub fn waiting(&self) -> bool { self.waiting.is_some() }
     /// What changed since the last look, newest last. The launcher's selection wins
     /// over the focus move it causes (the launcher is not a window to name).
     pub fn look<'a>(&mut self, s: &Snapshot<'a>, out: &mut [Option<Say<'a>>; 2]) {
         *out = [None, None];
         if !self.primed {
-            *self = Self { focus: s.focus, launcher: s.launcher.map(|l| l.0), notices: s.notices, primed: true };
+            *self = Self { focus: s.focus, launcher: s.launcher.map(|l| l.0), notices: s.notices, primed: true, waiting: None };
             return;
         }
         let mut n = 0;
@@ -98,13 +112,23 @@ impl Watch {
             if selected != self.launcher && !name.is_empty() { out[n] = Some(Say::Launcher(name)); }
             self.launcher = selected;
             self.focus = s.focus;
+            self.waiting = None;
             return;
         }
         self.launcher = None;
-        if s.focus != self.focus {
-            self.focus = s.focus;
-            if let Some(title) = s.title.filter(|t| !t.is_empty()) { out[n] = Some(Say::Title(title)); }
-        }
+        if s.focus == self.focus { self.waiting = None; return; }
+        let say = match s.title.filter(|t| !t.is_empty()) {
+            Some(title) => Some(title),
+            None if s.title_due => {
+                let since = match self.waiting { Some((f, at)) if f == s.focus => at, _ => { self.waiting = Some((s.focus, s.now)); s.now } };
+                if s.now.saturating_sub(since) < TITLE_WAIT_MS { return; }
+                Some(UNTITLED)
+            }
+            None => None,
+        };
+        self.focus = s.focus;
+        self.waiting = None;
+        if let Some(title) = say { out[n] = Some(Say::Title(title)); }
     }
 }
 
@@ -166,6 +190,9 @@ impl Tree {
     /// One whole encoded update.
     pub fn apply(&mut self, bytes: &[u8]) -> Applied {
         let Some(head) = a11y::scan(bytes, |_| {}) else { return Applied::Refused };
+        // The first tree is where focus already was, not a move to announce (the
+        // window's title was just said).
+        let first = self.nodes.is_empty();
         if head.full { self.nodes.clear(); }
         let limit = self.limit;
         let nodes = &mut self.nodes;
@@ -174,7 +201,7 @@ impl Tree {
             if let Some(e) = nodes.iter_mut().find(|e| e.0 == n.id) { *e = entry; }
             else if nodes.len() < limit { nodes.push(entry); }
         });
-        let moved = head.focus != self.focus;
+        let moved = head.focus != self.focus && !first;
         self.focus = head.focus;
         if moved { Applied::FocusMoved } else { Applied::Same }
     }
