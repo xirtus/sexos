@@ -147,6 +147,7 @@ impl Window {
             if let Some(p) = sex_pdx::app_pointer::Pointer::decode(m.arg0, m.arg1, m.arg2) { return Some(Event::Pointer(p)); }
         }
         if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
+        if let Some(on) = sex_pdx::a11y::decode_state(m.type_id, m.arg0, m.arg1) { a11y::told(on); return None; }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
@@ -195,6 +196,49 @@ impl Window {
 /// Starting other programs, and opening files in the program for their type. A run
 /// started here gets only grants this run holds; Shell reports it started, was refused,
 /// or ended (see [`sex_pdx::launch`]).
+/// The screen reader ([`sex_pdx::a11y`]): a program asks Shell once whether one is on,
+/// and sends its accessibility tree only while Shell says so. Toolkits (Weft) do this.
+pub mod a11y {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    use sex_pdx::a11y as wire;
+    /// 0: not asked, 1: asked (no answer yet, or off), 2: on.
+    static STATE: AtomicU8 = AtomicU8::new(0);
+    /// Set when Shell's answer changes; taken by [`changed`].
+    static CHANGED: AtomicU8 = AtomicU8::new(0);
+    pub(crate) fn told(on: bool) {
+        let new = if on { 2 } else { 1 };
+        if STATE.swap(new, Ordering::AcqRel) != new { CHANGED.store(1, Ordering::Release); }
+    }
+    /// Asks Shell whether a screen reader is on; its answers come with the window's
+    /// events (read with [`on`] and [`changed`]).
+    pub fn ask() {
+        let _ = STATE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
+        let [a, b, c] = wire::ask();
+        let _ = send(a, b, c);
+    }
+    /// True once [`ask`] was called.
+    pub fn asked() -> bool { STATE.load(Ordering::Acquire) != 0 }
+    /// True while a screen reader is on (Shell said so).
+    pub fn on() -> bool { STATE.load(Ordering::Acquire) == 2 }
+    /// True once after Shell's answer changed.
+    pub fn changed() -> bool { CHANGED.swap(0, Ordering::AcqRel) != 0 }
+    /// Sends one encoded tree update to Shell, if a reader is on. False if it could not.
+    pub fn send_update(bytes: &[u8]) -> bool {
+        if !on() || bytes.len() > wire::MAX_UPDATE { return false; }
+        wire::pieces(bytes).all(|[a, b, c]| send(a, b, c))
+    }
+    fn send(a: u64, b: u64, c: u64) -> bool {
+        for _ in 0..1000 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, wire::OP_A11Y, a, b, c) {
+                Ok(_) => return true,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+}
+
 /// Drag and drop between programs ([`sex_pdx::dnd`]).
 pub mod dnd {
     use super::{files, Event, Window};
