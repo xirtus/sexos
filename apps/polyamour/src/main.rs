@@ -42,6 +42,13 @@ fn run_python_arg(app: &mut App, flag: &str, value: &str) {
 }
 
 #[cfg(not(target_os = "hermit"))]
+fn print_usage() {
+    eprintln!(
+        "usage: polyamour [--screenshot out.png] [--workspace Name] [--wasm FILE.wasm] [--python FILE.py] [--python-expr EXPR] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--liquid-demo] [--gp-demo] [--seq-demo] [scene file]"
+    );
+}
+
+#[cfg(not(target_os = "hermit"))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new(1600, 900);
@@ -51,9 +58,14 @@ fn main() {
     let mut physics_demo = false;
     let mut gp_demo = false;
     let mut python: Vec<(String, String)> = Vec::new();
+    let mut wasm_files: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
+            "-h" | "--help" => {
+                print_usage();
+                return;
+            }
             "--screenshot" => out = it.next().cloned(),
             "--workspace" => {
                 if let Some(w) = it.next() {
@@ -91,12 +103,22 @@ fn main() {
                     python.push((f.to_string(), v.clone()));
                 }
             }
+            "--wasm" => {
+                if let Some(v) = it.next() {
+                    wasm_files.push(v.clone());
+                }
+            }
+            // macOS Finder passes `-psn_0_...` when launching `.app` bundles.
+            p if p.starts_with("-psn_") => {}
             p => open_arg(&mut app, p),
         }
     }
     app.frame(Input::Tick);
     for (f, v) in &python {
         run_python_arg(&mut app, f, v);
+    }
+    for w in &wasm_files {
+        polyamour::python::run_wasm_file(&mut app.doc, std::path::Path::new(w), &[]);
     }
     app.frame(Input::Tick);
     if sculpt_demo {
@@ -137,21 +159,25 @@ fn main() {
         }
         app.frame(Input::Tick);
     }
-    // Let progressive views (Material Preview, Rendered) settle.
-    for _ in 0..64 {
-        if !app.wants_tick() {
-            break;
+    if let Some(out) = out {
+        // Let progressive views (Material Preview, Rendered) settle.
+        for _ in 0..64 {
+            if !app.wants_tick() {
+                break;
+            }
+            app.frame(Input::Tick);
         }
-        app.frame(Input::Tick);
-    }
-    let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--liquid-demo] [--gp-demo] [--seq-demo] [--python FILE] [--python-expr EXPR] [scene file]");
+        let f = std::fs::File::create(&out).expect("create png");
+        let mut enc = png::Encoder::new(std::io::BufWriter::new(f), app.painter.width as u32, app.painter.height as u32);
+        enc.set_color(png::ColorType::Rgba);
+        enc.write_header().unwrap().write_image_data(&app.painter.to_rgba()).unwrap();
         return;
-    };
-    let f = std::fs::File::create(&out).expect("create png");
-    let mut enc = png::Encoder::new(std::io::BufWriter::new(f), app.painter.width as u32, app.painter.height as u32);
-    enc.set_color(png::ColorType::Rgba);
-    enc.write_header().unwrap().write_image_data(&app.painter.to_rgba()).unwrap();
+    }
+    if let Err(e) = polyamour::desktop::run(app) {
+        eprintln!("polyamour: {e}");
+        print_usage();
+        std::process::exit(1);
+    }
 }
 
 /// Shell's key codes (PS/2 set 1) to Blender's key names. `keypad`: Shell marks
@@ -237,12 +263,18 @@ fn main() {
     let (w, h) = window.size();
     let mut app = App::new(w.max(640), h.max(400));
     let mut python: Vec<(String, String)> = Vec::new();
+    let mut wasm_files: Vec<String> = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--python" | "--python-expr" => {
                 if let Some(v) = args.next() {
                     python.push((a.clone(), v));
+                }
+            }
+            "--wasm" => {
+                if let Some(v) = args.next() {
+                    wasm_files.push(v);
                 }
             }
             p => open_arg(&mut app, p),
@@ -267,6 +299,12 @@ fn main() {
         let mode = if app.doc.python.live() { "live" } else { "batch" };
         sex_std::sex_pdx::serial_record!("[polyamour.python] mode={} objects={} why={}", mode, app.doc.scene.objects.len(), app.doc.python.unavailable_reason().replace('\n', " | "));
         sex_std::sex_pdx::serial_record!("[polyamour.report] {}", app.doc.report);
+        app.frame(Input::Tick);
+        show(&app, window);
+    }
+    for w in &wasm_files {
+        polyamour::python::run_wasm_file(&mut app.doc, std::path::Path::new(w), &[]);
+        sex_std::sex_pdx::serial_record!("[polyamour.wasm] file={} objects={} report={}", w, app.doc.scene.objects.len(), app.doc.report);
         app.frame(Input::Tick);
         show(&app, window);
     }

@@ -577,10 +577,16 @@ fn apply_polyops(d: &mut Doc, name: &str, ops: &str) {
     let mut work = d.scene.clone();
     match sex_3d::script::run(&mut work, ops) {
         Ok(rep) => {
-            d.push_undo("Run Script");
-            d.scene = work;
-            d.touch();
-            d.anim.dirty = true;
+            if work != d.scene {
+                d.push_undo("Run Script");
+                d.scene = work;
+                crate::edit::sanitize(d);
+                d.touch();
+                d.anim.dirty = true;
+            }
+            if !rep.panels.is_empty() {
+                crate::python::register_polyops_panels(d, &rep.panels, None);
+            }
             for r in &rep.replies {
                 anim::report(d, ReportKind::Output, r);
             }
