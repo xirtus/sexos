@@ -39,6 +39,8 @@ mod decorations;
 mod decorations_glue;
 mod tray_items;
 mod tray_items_glue;
+mod layouts;
+mod layouts_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -8842,6 +8844,7 @@ unsafe fn tile_active_scene_frames() {
     let tiling = wm_tiling();
     let mut rects = [wm::Rect::default(); MAX_FRAMES];
     wm::tile(&tiling, wm_work_area(), &mut rects[..count]);
+    layouts_glue::tile(&tiling, &order[..count], &mut rects[..count]);
     static mut WM_LAYOUT_RECORD_BUDGET: u32 = 256;
     if WM_LAYOUT_RECORD_BUDGET > 0 {
         WM_LAYOUT_RECORD_BUDGET -= 1;
@@ -10704,7 +10707,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
             None => false,
         },
         A::Swap(dir) => match wm_neighbour(dir, true) {
-            Some((a, b, _)) if WM_ORDER.swap(a, b) => { tile_active_scene_frames(); true }
+            Some((a, b, _)) if WM_ORDER.swap(a, b) => { layouts_glue::swapped(a, b); tile_active_scene_frames(); true }
             _ => false,
         },
         A::Close => close_focused_tab_or_frame_safe(),
@@ -10743,6 +10746,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Lock => lock::lock(),
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
         A::Bluetooth => bt_panel::toggle(),
+        A::Group | A::Ungroup | A::NextTab | A::PrevTab | A::ToggleDwindle => layouts_glue::action(action),
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
         action, done as u8, before.0, ACTIVE_SCENE_IDX, before.1, FOCUSED_SURFACE_ID, wm_tiling().layout.name());
@@ -12830,10 +12834,12 @@ unsafe fn sync_scene_visibility() {
     for f in FRAMES.iter() {
         if let Some(frame) = f {
             let in_active = frame.scene_id == ACTIVE_SCENE_IDX;
-            for tab in frame.tabs.iter() {
+            for (ti, tab) in frame.tabs.iter().enumerate() {
                 if let Some(t) = tab {
                     let sid = t.surface_id;
-                    if surface_is_alive(sid) && in_active && frame.flags & FRAME_FLAG_MINIMIZED == 0 {
+                    // A group's background tabs stay hidden (slice S3).
+                    let behind = layouts_glue::tab_hidden(frame.frame_id, ti);
+                    if surface_is_alive(sid) && in_active && frame.flags & FRAME_FLAG_MINIMIZED == 0 && !behind {
                         // Re-activate surface on display.
                         let bounds = get_surface_bounds(sid);
                         if let Some((rx, ry, rw, rh)) = bounds {
@@ -12841,7 +12847,7 @@ unsafe fn sync_scene_visibility() {
                                 (ry as u64) << 32 | rx as u64,
                                 (rh as u64) << 32 | rw as u64);
                         }
-                    } else if surface_is_alive(sid) && (!in_active || frame.flags & FRAME_FLAG_MINIMIZED != 0) {
+                    } else if surface_is_alive(sid) && (!in_active || frame.flags & FRAME_FLAG_MINIMIZED != 0 || behind) {
                         // Hide surface on display.
                         pdx_call(SLOT_DISPLAY, 0xEE, sid, 0, 0);
                     }
@@ -17510,6 +17516,8 @@ unsafe fn launcher_focus_existing(target:u32,frame:u64,chosen:Option<launcher::L
     let mut ok=true;
     if from!=ACTIVE_SCENE_IDX{ok=reparent_frame_to_scene(fid,ACTIVE_SCENE_IDX,"launcher_bring_here");}
     if ok&&frame_is_minimized(fid){ok=restore_minimized_frame_inner(fid,false);}
+    // A group's background tab is Visible but hidden: switch to it first.
+    if ok&&layouts_glue::behind(frame).is_some(){ok=layouts_glue::show(frame);}
     else if ok&&!matches!(lifecycle_state(frame),Some(LifecycleState::Visible)){
         ok=set_lifecycle_state(frame,LifecycleState::Visible);
         if let Some((x,y,w,h))=get_surface_bounds(frame){
@@ -23985,6 +23993,14 @@ unsafe fn switch_to_tab(frame_id: u32, tab_index: u32) -> bool {
     if surface_is_alive(old_surface_id) {
         pdx_call(SLOT_DISPLAY, 0xEE, old_surface_id, 0, 0);
     }
+    // The shown tab's display slot is recreated empty; as on restore, a
+    // fresh viewport sequence makes its live client repaint.
+    for (index,frame) in app_catalog::document_views().map(|i|i.frame()).enumerate(){
+        if new_surface_id==frame {DOCUMENT_VIEWS[index].refresh();}
+    }
+    for (index,frame) in app_catalog::spindle_views().map(|i|i.frame()).enumerate(){
+        if new_surface_id==frame {SPINDLE_VIEWS[index].refresh();}
+    }
 
     // Show new surface at captured geometry.
     pdx_call(SLOT_DISPLAY, 0xEC, new_surface_id,
@@ -24879,7 +24895,8 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
 /// SilkBar intercept is handled separately by handle_silkbar_click().
 unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     let focused = FOCUSED_SURFACE_ID;
-    if point_in_surface(x, y, focused) {
+    // A group's background tab keeps its old bounds but is not on screen.
+    if point_in_surface(x, y, focused) && layouts_glue::behind(focused).is_none() {
         // Chrome check: rim/tab-strip takes priority over content area.
         if let Some(chrome_target) = hit_test_surface_chrome(x, y, focused) {
             if let HitTarget::FrameChrome { frame_id, kind } = chrome_target {
@@ -24908,7 +24925,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     }
     for entry in APP_CUSTODY.iter().flatten() {
         let sid=entry.shell_surface().unwrap_or(entry.surface);
-        if entry.dead || sid == focused || !point_in_surface(x,y,sid) { continue; }
+        if entry.dead || sid == focused || !point_in_surface(x,y,sid) || layouts_glue::behind(sid).is_some() { continue; }
         if let Some(fid) = frame_for_surface(sid) {
             if frame_accepts_input(fid) {
                 if let Some(chrome) = hit_test_surface_chrome(x,y,sid) { return chrome; }
@@ -24919,7 +24936,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     let z_order = [SURFACE_ID_QUIL, SURFACE_ID_MESH, SURFACE_ID_COLLAR, SURFACE_ID_BELL_PLACEHOLDER, SURFACE_ID_LINEN, SURFACE_ID_TEST4,
                    SURFACE_ID_TEST3, SURFACE_ID_STATIC, SURFACE_ID_APP];
     for &sid in &z_order {
-        if sid == focused { continue; }
+        if sid == focused || layouts_glue::behind(sid).is_some() { continue; }
         if !surface_is_alive(sid) {
             serial_println!("[shell.hit_test.skip] id={} reason=dead", sid);
             continue;
@@ -26307,7 +26324,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); tray_items_glue::poll(); }
+        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         #[cfg(sexos_input_payload_proof)]

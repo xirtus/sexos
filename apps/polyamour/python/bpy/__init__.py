@@ -6,10 +6,10 @@ so Blender scripts and add-ons (`import bpy`, `bpy.ops.mesh.primitive_cube_add()
 import sys
 
 import polyamour as _pa
-from polyamour import Color, Euler, Matrix, Quaternion, Vector, context, data, flush, ops, polyops  # noqa: F401
+from polyamour import Color, Euler, Matrix, Quaternion, Vector, context, data, flush, mesh_get, ops, polyops, ui_panel, ui_prop  # noqa: F401
 
 from . import app, msgbus, path, props, types, utils  # noqa: F401
 
 sys.modules[__name__ + '.ops'] = ops
 
-__all__ = ['app', 'context', 'data', 'msgbus', 'ops', 'path', 'props', 'types', 'utils']
+__all__ = ['app', 'context', 'data', 'mesh_get', 'msgbus', 'ops', 'path', 'props', 'types', 'ui_panel', 'ui_prop', 'utils']
