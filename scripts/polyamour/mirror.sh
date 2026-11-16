@@ -20,10 +20,13 @@ trap 'rm -rf "$WORK"' EXIT
 PATHS=(apps/polyamour crates/sex-3d scripts/polyamour scripts/program_polyamour_gate.py)
 for f in "$ROOT"/docs/handoff/POLYAMOUR_*; do PATHS+=("docs/handoff/$(basename "$f")"); done
 
-git -C "$ROOT" rev-parse --verify "$REF^{commit}" >/dev/null
+SHA=$(git -C "$ROOT" rev-parse --verify "$REF^{commit}")
 git clone -q --no-local --no-checkout "$ROOT" "$WORK/mirror"
 cd "$WORK/mirror"
-git checkout -q -B main "$(git -C "$ROOT" rev-parse "$REF")"
+# A clone carries only the source's branches and tags; REF may be a remote-tracking
+# ref or a bare commit, so fetch it by name into a ref the clone owns.
+git fetch -q "$ROOT" "$SHA:refs/heads/mirror-source"
+git checkout -q -B main "$SHA"
 args=()
 for p in "${PATHS[@]}"; do args+=(--path "$p"); done
 git filter-repo --force --refs main "${args[@]}" >/dev/null
