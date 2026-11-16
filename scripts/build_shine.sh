@@ -10,6 +10,11 @@ PIN=97f188efc3dc90315b79a2af1f477c0c18d85e82
 OUT=${SHINE_OUT:-$ROOT/target/shine}
 SRC=${SHINE_SRC:-$OUT/work/source}
 mkdir -p "$OUT/work" "$OUT/lib" "$OUT/include/shine" "$OUT/lib/pkgconfig" "$OUT/share/licenses/shine"
+# A restored build cache can leave $SRC/.git without its objects; git then walks up
+# to this repository and reports its HEAD. Re-clone the default checkout in that case.
+if [[ -z ${SHINE_SRC:-} && -e "$SRC" ]] && [[ $(git -C "$SRC" rev-parse --show-toplevel 2>/dev/null) != "$(cd "$SRC" && pwd -P)" ]]; then
+  rm -rf "$SRC"
+fi
 if [[ ! -d "$SRC/.git" ]]; then
   git clone -q --depth=1 --branch 3.1.1 https://github.com/toots/shine.git "$SRC"
 fi
