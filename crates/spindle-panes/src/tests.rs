@@ -130,3 +130,11 @@ fn config_reads_settings_and_reports_problems() {
     assert_eq!(t, "# x\ntheme = latte\npadding = 2\n");
     assert_eq!(config::with_setting("", "theme", "nord"), "theme = nord\n");
 }
+
+#[test]
+fn config_picks_the_font() {
+    assert_eq!(config::parse("").font, "geist-mono");
+    assert_eq!(config::parse("font = JetBrains Mono\n").font, "jetbrains-mono");
+    let c = config::parse("font = comic-sans\n");
+    assert_eq!((c.font.as_str(), c.problems.len()), ("geist-mono", 1));
+}

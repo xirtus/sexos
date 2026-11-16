@@ -6,6 +6,8 @@
 //! ```text
 //! theme = nord            # mocha latte gruvbox nord solarized-dark solarized-light
 //!                         # tokyo-night dracula high-contrast
+//! font = jetbrains-mono    # geist-mono (the default) or jetbrains-mono, with
+//!                         # coding ligatures
 //! font-size = 18          # pixels per row, 10 to 48
 //! padding = 6             # pixels around each pane's text
 //! scrollback = 10000      # lines kept per pane
@@ -19,6 +21,8 @@ use alloc::vec::Vec;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Config {
     pub theme: String,
+    /// One of [`FONT_NAMES`].
+    pub font: String,
     pub font_size: usize,
     pub padding: usize,
     pub scrollback: usize,
@@ -31,11 +35,13 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Config {
-        Config { theme: String::from("mocha"), font_size: 18, padding: 4, scrollback: 10_000, colors: Vec::new(), problems: Vec::new() }
+        Config { theme: String::from("mocha"), font: String::from("geist-mono"), font_size: 18, padding: 4, scrollback: 10_000, colors: Vec::new(), problems: Vec::new() }
     }
 }
 
 pub const THEME_NAMES: [&str; 9] = ["mocha", "latte", "gruvbox", "nord", "solarized-dark", "solarized-light", "tokyo-night", "dracula", "high-contrast"];
+
+pub const FONT_NAMES: [&str; 2] = ["geist-mono", "jetbrains-mono"];
 
 fn color(v: &str) -> Option<u32> {
     let h = v.strip_prefix('#').or_else(|| v.strip_prefix("0x")).unwrap_or(v);
@@ -70,6 +76,13 @@ impl Config {
                 match THEME_NAMES.iter().find(|t| t.chars().filter(|c| c.is_ascii_alphanumeric()).eq(want.chars())) {
                     Some(t) => self.theme = String::from(*t),
                     None => self.problems.push(bad("is not a theme")),
+                }
+            }
+            "font" => {
+                let want: String = v.chars().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).collect();
+                match FONT_NAMES.iter().find(|t| t.chars().filter(|c| c.is_ascii_alphanumeric()).eq(want.chars())) {
+                    Some(t) => self.font = String::from(*t),
+                    None => self.problems.push(bad("must be geist-mono or jetbrains-mono")),
                 }
             }
             "font-size" => match num(10, 48) { Some(x) => self.font_size = x, None => self.problems.push(bad("must be 10 to 48")) },
