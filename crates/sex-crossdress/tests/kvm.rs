@@ -200,7 +200,7 @@ fn the_test_program_runs_in_a_kvm_cell() {
     let stop = proc.run(&mut cpu, &mut console);
     let text = String::from_utf8_lossy(&console.text);
     for line in text.lines() { println!("[crossdress.kvm.out] {line}"); }
-    println!("[crossdress.kvm] stop={stop:?} counters={:?}", proc.counters);
+    println!("[crossdress.kvm] stop={stop:?} counters={:?} last_fault={:?}", proc.counters, proc.last_fault);
     assert_eq!(stop, Stop::Exited(0), "the program finished cleanly");
     assert!(text.contains(sex_crossdress::TEST_PASS), "every check in the program passed");
     assert_eq!(proc.counters.handled, 5, "five hardware exceptions went through the vectored handler");
