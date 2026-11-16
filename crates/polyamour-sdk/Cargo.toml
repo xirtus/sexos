@@ -1,0 +1,10 @@
+[package]
+name = "polyamour-sdk"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Pure-Rust no_std SDK (mathutils + bpy-style polyops 1 client) for Polyamour .wasm add-ons and procedural generators"
+
+[dependencies]
+base64 = { version = "0.23", default-features = false, features = ["alloc"] }
+libm = "0.2"

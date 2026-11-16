@@ -10,14 +10,16 @@ did, as in Blender.
 
 | Piece | Where |
 |---|---|
-| polyops interpreter, scene writer | `crates/sex-3d/src/script.rs` (+ `script/{rig,nodes}.rs`) |
+| polyops interpreter, scene writer, `SessionLimits` | `crates/sex-3d/src/script.rs` (+ `script/{rig,nodes,gp,physics}.rs`) |
 | bpy commands (dumps, Blender-idname operators, keyframes, registry, reports, noise) | `crates/sex-3d/src/script/bpy.rs` |
 | Live channel, batch fallback | `crates/sex-3d/src/script/live.rs` |
+| Pure-Rust `#![no_std]` guest SDK & `wasm32` transport | `crates/polyamour-sdk/` |
+| Sandboxed `.wasm` add-on host (`wasmi` + `SessionLimits`) | `crates/polyamour-wasm/` (+ compiled `wasm32` guest `guests/spiral_rust/`) |
 | The kernel | `apps/polyamour/python/polyamour/kernel.py` |
 | Python API | `apps/polyamour/python/{polyamour,bpy,bpy_extras,mathutils,bmesh}/` |
-| App integration (console, Run Script, add-ons, panels, F3, handlers) | `apps/polyamour/src/python.rs`, `editors/{simple,text}.rs`, hooks in `app.rs`, `doc.rs`, `editors/view3d/sidebar.rs`, `editors/properties/mod.rs` |
+| App integration (console, Run Script, `.py` & `.wasm` add-ons, panels, F3, handlers, macOS/Linux window) | `apps/polyamour/src/{python,desktop}.rs`, `editors/{simple,text}.rs`, hooks in `app.rs`, `doc.rs`, `editors/view3d/sidebar.rs`, `editors/properties/mod.rs` |
 | Templates (ours) and examples | `apps/polyamour/python/templates/`, `apps/polyamour/python/examples/` |
-| Tests | `crates/sex-3d/tests/python_live.rs` (10), `crates/sex-3d/tests/script.rs` (`python_*`, 4), `apps/polyamour/src/python.rs` (4), `editors/simple.rs` (console, 2) |
+| Tests | `crates/sex-3d/tests/python_live.rs` (11), `crates/sex-3d/tests/script.rs`, `crates/polyamour-wasm/src/lib.rs`, `apps/polyamour/src/python.rs` (5), `editors/simple.rs` (console, 2) |
 | Freezing into SexOS's `python` | `scripts/python_freeze.py` (`POLYAMOUR` list) -> `apps/python/frozen/` |
 
 ## The live protocol (`sex_3d::script::live`)
@@ -88,7 +90,10 @@ What a SexOS program can do today (`patches/rust-std/process_sexos.rs`, over
   `/data/polyamour/run`.
 
 Consequences for Polyamour on SexOS: `Kernel::spawn` fails with `Unsupported`
-(no pipes), and Polyamour uses the **batch path**:
+(no pipes), and Polyamour uses the **batch path** for `.py` scripts, while
+**sandboxed `.wasm` add-ons** (`crates/polyamour-wasm`) run in-process via
+`wasmi` with full bi-directional `polyops` queries and sidebar UI panels even
+without pipes or Python:
 
 1. `live::batch_snapshot(&scene)` writes the replies to the start-of-run reads
    (`ids`, `dump_scene`, `op_list`, every object, material, material node tree,
@@ -105,10 +110,10 @@ Consequences for Polyamour on SexOS: `Kernel::spawn` fails with `Unsupported`
 
 Batch limits: reads see the scene as it was when the script started (a script
 cannot read back an object it just made, e.g. `context.active_object` after an
-operator, or a new material's node tree); the console, add-ons, script panels,
-handlers and timers need the live kernel and say so. Info and the status bar
-say "Python runs scripts in batch mode: live Python needs pipes between
-programs, which this system does not have yet".
+operator, or a new material's node tree); the console, Python add-ons, Python
+`bpy.types.Panel` panels, handlers and timers need the live kernel and say so.
+Info and the status bar say "Python runs scripts in batch mode: live Python
+needs pipes between programs, which this system does not have yet".
 
 **Dropping the live channel in later:** the protocol only needs a line
 transport (`trait Wire { send, recv, diagnostics, close }`). When SexOS gets
@@ -135,21 +140,26 @@ side polling with `try_wait` for liveness) would carry the same protocol;
   traceback in red. Each line that changed the scene is one undo step. Without
   live Python the console falls back to polyops lines.
 * **Add-ons** (Preferences > Add-ons): add-ons are `.py` modules or package
-  folders with `bl_info` (or `blender_manifest.toml`) in the add-ons folder:
-  `/data/polyamour/addons` on SexOS, `$XDG_DATA_HOME/polyamour/addons` or
+  folders with `bl_info` (or `blender_manifest.toml`) **or pure-Rust `.wasm`
+  modules** (`wasm:<stem>`) in the add-ons folder: `/data/polyamour/addons` on
+  SexOS, `$XDG_DATA_HOME/polyamour/addons` or
   `~/.local/share/polyamour/addons` on a host (`POLYAMOUR_DATA` overrides).
-  The checkbox enables/disables (`register()`/`unregister()`), the list is kept
-  in `addons_enabled.txt` next to it and enabled again at the next start.
+  The checkbox enables/disables (`register()`/`unregister()` for `.py`, or
+  sandboxed `polyamour_wasm::run_wasm_addon` for `.wasm`), the list is kept in
+  `addons_enabled.txt` next to it and enabled again at the next start.
+  `polyamour --wasm FILE.wasm` also runs a `.wasm` add-on at launch.
 * **F3** lists script operators after the built-in entries; running one is
   `bpy.ops.X.Y('INVOKE_DEFAULT')` (poll, invoke, execute, modal).
-* **Script panels**: `bl_space_type='VIEW_3D'`, `bl_region_type='UI'` panels
-  appear as sidebar (N) tabs by `bl_category` (default "Misc");
+* **Script & WASM panels**: `bl_space_type='VIEW_3D'`, `bl_region_type='UI'`
+  Python panels and declarative `ui_panel` / `ui_prop` panels appear as sidebar
+  (N) tabs by `bl_category` / `category=` (default "Misc");
   `bl_space_type='PROPERTIES'` panels appear under the tab of their
-  `bl_context`. `draw()` is recorded into a layout description (rows, columns,
-  boxes, splits, labels, props with kind/min/max/enum items, operator buttons
-  with properties, menus, lists) that Polyamour draws with its own widgets;
-  editing a prop sends `set_prop`, a button runs the operator. Sub-panels
-  (`bl_parent_id`), `poll()`, `HIDE_HEADER`, `DEFAULT_CLOSED` are honoured.
+  `bl_context`. Python `draw()` is recorded into a layout description;
+  declarative `ui_panel`s (`float`, `int`, `bool`, `vec3`, `color`, `string`,
+  `button`) are drawn directly by Polyamour's native widgets, and pressing a
+  WASM panel button re-invokes the `.wasm` guest with `key=value` arguments as
+  one undo step. Sub-panels (`bl_parent_id`), `poll()`, `HIDE_HEADER`,
+  `DEFAULT_CLOSED` are honoured.
 * **Handlers**: `frame_change_pre/post` run when the frame changes (only when a
   handler is registered), `depsgraph_update_post` after a call changed
   something; `load_*`/`save_*` can be called with `handler NAME`.
@@ -171,7 +181,10 @@ side polling with `try_wait` for liveness) would carry the same protocol;
   `copy()`, `to_mesh()`.
 * Meshes: `from_pydata`, vertices/edges/polygons/loops/loop_triangles with
   `foreach_get/set`, normals, uv layers, attributes (lite), materials,
-  `transform`, `update/validate`, shape keys, select/hide flags, seams, sharp.
+  `transform`, `update/validate`, shape keys, select/hide flags, seams, sharp,
+  plus direct `bpy.mesh_get(target, evaluated=False)` returning unpacked
+  `(verts, faces, edges, uvs, smooth, mat, seams, sharp)` dicts (base or
+  post-modifier stack) and `bpy.ui_panel` / `bpy.ui_prop`.
 * Animation: actions, fcurves (`evaluate`, keyframe points with handles and
   interpolation), groups; `scene.frame_set` runs handlers.
 * Rigging: armatures, `edit_bones` (head/tail/roll/matrix, Blender's
@@ -206,9 +219,10 @@ side polling with `try_wait` for liveness) would carry the same protocol;
 
 ## Missing compared with Blender's Python API
 
-* No pipes on SexOS: live features (console, add-ons, panels, handlers,
-  timers, read-after-write) need the host build until SexOS has pipes or the
-  file `Wire` is written; batch reads see the start-of-run scene.
+* No pipes on SexOS: live Python features (console, `.py` add-ons, Python
+  `bpy.types.Panel` panels, handlers, timers, Python read-after-write) need the
+  host build until SexOS has pipes or the file `Wire` is written; batch reads
+  see the start-of-run scene (`.wasm` add-ons run in-process without pipes).
 * `gpu`, `blf`, `bgl`, `aud`, `imbuf`, `freestyle`, `bl_math`, `idprop`
   modules; drawing callbacks (`SpaceView3D.draw_handler_add`) are accepted but
   never called.
@@ -240,18 +254,24 @@ side polling with `try_wait` for liveness) would carry the same protocol;
 ```rust
 pub const VERSION: u32 = 1;
 pub fn run(scene: &mut Scene, src: &str) -> Result<RunReport, ScriptError>;
+pub fn run_with_limits(scene: &mut Scene, src: &str, limits: SessionLimits) -> Result<RunReport, ScriptError>;
 pub fn scene_to_polyops(scene: &Scene) -> String;
-pub fn mesh_to_options(m: &Mesh) -> String;        // " verts=... faces=... uvs=..."
+pub fn mesh_to_options(m: &Mesh) -> String;        // " verts=... faces=... uvs=... seams=... sharp=..."
+pub fn mesh_from_options(line: &str) -> Result<Mesh, String>;
 pub fn quote(s: &str) -> String;                   // a name as one token
 pub fn quat_to_euler_xyz(q: Quat) -> [f32; 3];     // Blender XYZ Euler
+pub struct SessionLimits { max_commands, max_created_objects, max_reply_bytes, max_mesh_vertices, max_mesh_faces }
+pub struct AddonPanel { id: String, label: String, category: String, props: Vec<AddonProp> }
 pub struct RunReport { version, commands, created: Vec<String>, replies: Vec<String>,
-                       render: BTreeMap<String, String>, complete: bool }
+                       render: BTreeMap<String, String>, panels: Vec<AddonPanel>, complete: bool }
 pub struct ScriptError { line: usize, message: String }   // Display: "line N: message"
-pub struct Session;  // new(), exec_line(&mut scene, line), take_replies(), finish()
+pub struct Session;  // new(), with_limits(limits), exec_line(&mut scene, line), take_replies(), take_panels(), finish()
 ```
 
-`Session` is the line-at-a-time engine under `run` and under the live
-channel (feed a line, take its reply lines, send them back).
+`Session` is the line-at-a-time engine under `run` and under the live/WASM
+channels (feed a line, take its reply lines, send them back); `SessionLimits::sandboxed()`
+bounds host command count, net datablock creations, monotonic reply bytes, and
+pre/post-modifier mesh vertex/face counts.
 
 ## The language
 
@@ -301,6 +321,7 @@ selected one (Blender's rule).
 | `light_add point\|sun\|spot\|area [name=] power= color=r,g,b radius= angle= blend= size=` | light object (spot: angle/blend, area: size) |
 | `camera_add [name=] fov= \| lens= ortho_scale= near= far= active=0\|1` | camera; becomes the scene camera if there is none (or `active=1`) |
 | `mesh_set OBJ\|MESH [mesh options]` | replace a mesh's data (every user sees it) |
+| `mesh_get OBJ\|MESH [evaluated=0\|1]` | query returning `[verts=] [faces=] [edges=] [uvs=] [smooth=] [mat=] [seams=] [sharp=]`; `evaluated=1` evaluates the object's modifier stack (`Scene::evaluated_mesh`) with pre/post `SessionLimits` bounds |
 | `mesh_edit OBJ\|MESH OP ... [indices=i,j] [center=x,y,z]` | `translate_verts dx dy dz`, `scale_verts s\|sx sy sz`, `rotate_verts rx ry rz`, `set_verts verts=...`, `flip_normals`, `shade_smooth`, `shade_flat`, `weld [dist]`, `set_material SLOT [faces=...]` |
 | `set OBJ.PROP VALUES` | `location`, `rotation_euler`, `rotation_quaternion` (w x y z), `scale`, `visible`, `name`, `collection`, `parent`; lights `power color radius angle blend size`; cameras `fov lens near far ortho_scale` (`none` = perspective). Values as `1 2 3` or `1,2,3` |
 | `get OBJ.PROP` | the same plus `type`, `data`, `vertex_count`, `face_count`, `materials`, `modifiers`, `matrix_world` |
@@ -316,7 +337,9 @@ selected one (Blender's rule).
 | `collection_new NAME [parent=C] [visible=] [as=]` / `collection_set C [name=] [parent=C\|none] [visible=]` / `link OBJ C` | collections (an object is in one) |
 | `world color=r,g,b strength=` / `scene name= frame_start= frame_end= fps=` | world, scene settings |
 | `render key=value...` | stored into `RunReport::render` |
-| `get` `list objects\|meshes\|materials\|collections\|selected` `exists OBJ` `ping` | queries |
+| `ui_panel ID [label=TEXT] [category=TAB]` | register or update a declarative 3D View Sidebar panel (`RunReport::panels`) |
+| `ui_prop PANEL KEY [type=float\|int\|bool\|vec3\|color\|string\|button] [label=TEXT] [default=VAL] [min=F] [max=F]` | append or update a typed control in `PANEL`; `min`/`max` are validated on `float`/`int` |
+| `get` `mesh_get` `list objects\|meshes\|materials\|collections\|selected` `exists OBJ` `ping` | queries |
 | `ids`, `dump_object/mesh/material/tree/scene/armature/lattice/image/action OBJ`, `eval_mesh`, `op_list`, `op_poll`, `op IDNAME [opts]`, `noise KIND POINTS`, ... | the bpy commands of `script/bpy.rs` (JSON replies), used by the Python package |
 
 `scene_to_polyops` uses `scene`, `world`, `collection_new/_set`, `material_new`,

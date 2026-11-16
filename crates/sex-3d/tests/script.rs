@@ -859,3 +859,87 @@ fn node_command_errors() {
         assert!(e.message.contains(want), "{src}: {e}");
     }
 }
+
+#[test]
+fn mesh_get_base_and_evaluated_roundtrip() {
+    let mut s = Scene::startup();
+    let r = ok(
+        &mut s,
+        "polyops 1\n\
+         add_primitive cube name=SubCube size=2 as=$c\n\
+         modifier_add $c Subdivision levels=2\n\
+         @base mesh_get $c\n\
+         @eval mesh_get $c evaluated=1\n\
+         end\n",
+    );
+    assert_eq!(r.replies.len(), 2);
+    let base_payload = r.replies[0].strip_prefix("@base ok ").expect("base reply");
+    let eval_payload = r.replies[1].strip_prefix("@eval ok ").expect("eval reply");
+    assert!(eval_payload.contains("verts=b64:"));
+
+    let base_mesh = script::mesh_from_options(base_payload).expect("decode base mesh");
+    let eval_mesh = script::mesh_from_options(eval_payload).expect("decode eval mesh");
+    assert_eq!(base_mesh.vertex_count(), 8);
+    assert_eq!(base_mesh.face_count(), 6);
+    assert_eq!(eval_mesh.face_count(), 96);
+    assert!(eval_mesh.vertex_count() > 64);
+}
+
+#[test]
+fn declarative_ui_panels_and_validation() {
+    let mut s = Scene::startup();
+    let r = ok(
+        &mut s,
+        "polyops 1\n\
+         ui_panel stairs_gen label=\"Spiral Staircase\" category=Addons\n\
+         ui_prop stairs_gen steps kind=int label=Steps default=24 min=3 max=256\n\
+         ui_prop stairs_gen radius kind=float label=Radius default=1.5 min=0.1 max=50\n\
+         ui_prop stairs_gen build kind=button label=\"Generate Stairs\"\n\
+         end\n",
+    );
+    assert_eq!(r.panels.len(), 1);
+    let p = &r.panels[0];
+    assert_eq!(p.id, "stairs_gen");
+    assert_eq!(p.label, "Spiral Staircase");
+    assert_eq!(p.category, "Addons");
+    assert_eq!(p.props.len(), 3);
+    assert_eq!(p.props[0].kind, script::AddonPropKind::Int);
+    assert_eq!(p.props[2].kind, script::AddonPropKind::Button);
+
+    let bad = err("polyops 1\nui_prop missing_panel x kind=float\nend\n");
+    assert!(bad.message.contains("no ui_panel named 'missing_panel'"), "{bad}");
+}
+
+#[test]
+fn session_limits_enforce_host_caps() {
+    use sex_3d::script::{run_with_limits, SessionLimits};
+
+    let mut s = Scene::startup();
+    let before = s.clone();
+
+    // 1. Oversized primitive grid rejected before allocation
+    let mesh_cap = SessionLimits {
+        max_mesh_vertices: Some(500),
+        max_mesh_faces: Some(500),
+        ..SessionLimits::sandboxed()
+    };
+    let e = run_with_limits(
+        &mut s,
+        "polyops 1\nadd_primitive grid x_subdivisions=100 y_subdivisions=100\nend\n",
+        mesh_cap,
+    )
+    .unwrap_err();
+    assert!(e.message.contains("exceeding limit"), "{e}");
+    assert_eq!(s, before);
+
+    // 2. Stacked subdivision evaluated mesh bomb rejected
+    let e2 = run_with_limits(
+        &mut s,
+        "polyops 1\nmodifier_add Cube Subdivision levels=5\n@q mesh_get Cube evaluated=1\nend\n",
+        mesh_cap,
+    )
+    .unwrap_err();
+    assert!(e2.message.contains("exceeding limit"), "{e2}");
+    assert_eq!(s, before);
+}
+

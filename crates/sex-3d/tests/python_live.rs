@@ -639,3 +639,26 @@ fn save_as_mainfile_writes_blend_files() {
     let c = a.curves.iter().find(|c| c.path == "location" && c.index == 0).unwrap();
     assert_eq!(c.keys.iter().map(|k| (k.frame, k.value)).collect::<Vec<_>>(), [(1.0, 1.0), (20.0, 5.0)]);
 }
+
+#[test]
+fn python_mesh_get_and_ui_panel() {
+    let Some(mut k) = kernel() else { return };
+    let mut s = Scene::startup();
+    let r = exec(
+        &mut k,
+        &mut s,
+        r#"
+import bpy
+cube = bpy.data.objects['Cube']
+mod = cube.modifiers.new(name='Sub', type='SUBSURF')
+mod.levels = 2
+base = bpy.mesh_get(cube, evaluated=False)
+ev = bpy.mesh_get(cube, evaluated=True)
+bpy.ui_panel('py_polyops_panel', label='Python Polyops Panel', category='PyTools')
+bpy.ui_prop('py_polyops_panel', 'steps', kind='int', label='Steps', default=8, min=1, max=64)
+print(len(base['verts']), len(base['faces']), len(ev['faces']))
+"#,
+    );
+    assert_eq!(r.text().trim(), "8 6 96");
+}
+
