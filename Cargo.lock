@@ -4376,6 +4376,8 @@ version = "0.1.0"
 dependencies = [
  "moan-core",
  "moan-export",
+ "moan-gen",
+ "moan-modular",
  "moan-plugin",
  "serenade-core",
  "sex-app",
@@ -4397,6 +4399,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "moan-gen"
+version = "0.1.0"
+dependencies = [
+ "moan-core",
+ "sex-app",
+ "sex-http",
+ "sex-pdx",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "moan-modular"
+version = "0.1.0"
+dependencies = [
+ "moan-core",
+]
+
+[[package]]
 name = "moan-plugin"
 version = "0.1.0"
 dependencies = [
@@ -4415,6 +4435,17 @@ dependencies = [
  "moan-core",
  "sex-app",
  "sex-pdx",
+]
+
+[[package]]
+name = "moangen"
+version = "0.1.0"
+dependencies = [
+ "moan-core",
+ "moan-gen",
+ "sex-app",
+ "sex-pdx",
+ "sha2 0.10.9",
 ]
 
 [[package]]

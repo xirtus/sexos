@@ -5,9 +5,27 @@
 //! No allocation in render: the caller supplies a block and the playhead.
 #![no_std]
 extern crate alloc;
+pub mod arp;
+pub mod audio_to_midi;
+pub mod automation;
+pub mod dsp_math;
 pub mod effects;
 pub mod midi;
+pub mod phonemes;
+pub mod pronounce;
+pub mod studio_presets;
+pub mod vocal;
+pub mod warp;
+pub mod wavetable;
 use alloc::{sync::Arc, vec::Vec};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct VocalClip {
+    pub text: alloc::string::String,
+    pub params: vocal::VoiceParams,
+    pub spans: Vec<vocal::PhraseSpan>,
+}
+
 #[derive(Clone, Debug)]
 enum Source<'a> {
     Borrowed(&'a [Frame]),
@@ -15,6 +33,10 @@ enum Source<'a> {
     Buffer(Arc<Vec<Frame>>),
     Midi {
         pattern: Arc<midi::Pattern>,
+        pcm: Arc<Vec<Frame>>,
+    },
+    Vocal {
+        utterance: Arc<VocalClip>,
         pcm: Arc<Vec<Frame>>,
     },
 }
@@ -25,6 +47,7 @@ impl Source<'_> {
             Self::Owned(v) => v,
             Self::Buffer(v) => v,
             Self::Midi { pcm, .. } => pcm,
+            Self::Vocal { pcm, .. } => pcm,
         }
     }
 }
@@ -46,6 +69,7 @@ pub enum Error {
     Range,
     Gain,
     Pan,
+    Memory,
 }
 impl<'a> Clip<'a> {
     pub fn new(source: &'a [Frame], start: usize) -> Result<Self, Error> {
@@ -107,6 +131,55 @@ impl<'a> Clip<'a> {
     pub fn midi_pattern(&self) -> Option<&midi::Pattern> {
         match &self.source {
             Source::Midi { pattern, .. } => Some(pattern),
+            _ => None,
+        }
+    }
+    /// Synthesize a vocal clip from lyrics and VoiceParams, storing source + karaoke spans.
+    pub fn vocal(
+        text: &str,
+        params: vocal::VoiceParams,
+        start: usize,
+    ) -> Result<Clip<'static>, vocal::Error> {
+        let (pcm, spans) = vocal::synthesize(text, &params)?;
+        start.checked_add(pcm.len()).ok_or(vocal::Error::Range)?;
+        let utterance = Arc::new(VocalClip {
+            text: alloc::string::String::from(text),
+            params,
+            spans,
+        });
+        Ok(Clip {
+            len: pcm.len(),
+            source: Source::Vocal { utterance, pcm },
+            offset: 0,
+            start,
+            gain: 100,
+            fade_in: 0,
+            fade_out: 0,
+        })
+    }
+    /// Construct a vocal clip from an existing VocalClip and its pre-baked PCM.
+    pub fn vocal_with_pcm(
+        utterance: VocalClip,
+        pcm: Arc<Vec<Frame>>,
+        start: usize,
+    ) -> Result<Clip<'static>, vocal::Error> {
+        start.checked_add(pcm.len()).ok_or(vocal::Error::Range)?;
+        Ok(Clip {
+            len: pcm.len(),
+            source: Source::Vocal {
+                utterance: Arc::new(utterance),
+                pcm,
+            },
+            offset: 0,
+            start,
+            gain: 100,
+            fade_in: 0,
+            fade_out: 0,
+        })
+    }
+    pub fn vocal_clip(&self) -> Option<&VocalClip> {
+        match &self.source {
+            Source::Vocal { utterance, .. } => Some(utterance),
             _ => None,
         }
     }
@@ -236,6 +309,7 @@ pub struct Track<'a> {
     pan: i16,
     pub muted: bool,
     pub solo: bool,
+    pub distortion: Option<effects::Distortion>,
 }
 impl Default for Track<'_> {
     fn default() -> Self {
@@ -247,6 +321,7 @@ impl Default for Track<'_> {
             pan: 0,
             muted: false,
             solo: false,
+            distortion: None,
         }
     }
 }
@@ -257,6 +332,9 @@ impl<'a> Track<'a> {
     /// Flush tails after edits, changing projects, or restarting transport.
     pub fn reset_effects(&mut self) {
         self.effects.reset();
+        if let Some(dist) = &mut self.distortion {
+            dist.reset();
+        }
         self.processed_until = None;
     }
     pub fn volume(&self) -> u16 {
@@ -280,6 +358,24 @@ impl<'a> Track<'a> {
         }
         self.pan = pan;
         Ok(())
+    }
+    /// Process a buffer through the track's distortion, effects rack, volume, and pan.
+    pub fn process(&mut self, frames: &mut [Frame]) {
+        for f in frames {
+            let mut sample = f.map(|v| v as i64);
+            if let Some(dist) = &mut self.distortion {
+                sample = dist.frame(sample);
+            }
+            sample = self.effects.frame(sample);
+            let balance = [100 - self.pan.max(0) as i64, 100 + self.pan.min(0) as i64];
+            for c in 0..2 {
+                sample[c] = sample[c]
+                    .saturating_mul(self.volume as i64)
+                    .saturating_mul(balance[c])
+                    / 10000;
+            }
+            *f = sample.map(|v| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16);
+        }
     }
 }
 
@@ -352,6 +448,9 @@ pub fn render_processed_observed_master(
     for t in tracks.iter_mut() {
         if t.processed_until != Some(start) {
             t.effects.reset();
+            if let Some(dist) = &mut t.distortion {
+                dist.reset();
+            }
         }
     }
     for (i, dest) in out.iter_mut().enumerate() {
@@ -367,6 +466,9 @@ pub fn render_processed_observed_master(
                 for c in 0..2 {
                     sum[c] = sum[c].saturating_add(f[c]);
                 }
+            }
+            if let Some(dist) = &mut t.distortion {
+                sum = dist.frame(sum);
             }
             let f = t.effects.frame(sum);
             if t.muted || (solo && !t.solo) {

@@ -8,8 +8,10 @@ use moan_core::{
     Clip, Track, RATE,
 };
 pub const MAGIC: &[u8; 8] = b"MOANPRJ\0";
-pub const VERSION: u16 = 3;
+pub const VERSION: u16 = 4;
+pub const V3_VERSION: u16 = 3;
 pub const MIDI_VERSION: u16 = 2;
+pub const V4_VERSION: u16 = 4;
 pub const HEADER: usize = 64;
 pub const MAX_BYTES: usize = 96 * 1024 * 1024;
 pub const MAX_CLIPS: usize = 1024;
@@ -46,6 +48,9 @@ impl Writer {
         self.0.extend_from_slice(b);
         Ok(())
     }
+    fn u8(&mut self, v: u8) -> Result<(), Error> {
+        self.bytes(&[v])
+    }
     fn u16(&mut self, v: u16) -> Result<(), Error> {
         self.bytes(&v.to_le_bytes())
     }
@@ -54,6 +59,9 @@ impl Writer {
     }
     fn u64(&mut self, v: usize) -> Result<(), Error> {
         self.bytes(&(v as u64).to_le_bytes())
+    }
+    fn f32(&mut self, v: f32) -> Result<(), Error> {
+        self.bytes(&v.to_le_bytes())
     }
 }
 struct Reader<'a> {
@@ -67,6 +75,12 @@ impl<'a> Reader<'a> {
         self.at = end;
         Ok(out)
     }
+    fn u8(&mut self) -> Result<u8, Error> {
+        Ok(self.bytes(1)?[0])
+    }
+    fn i16(&mut self) -> Result<i16, Error> {
+        Ok(i16::from_le_bytes(self.bytes(2)?.try_into().unwrap()))
+    }
     fn u16(&mut self) -> Result<u16, Error> {
         Ok(u16::from_le_bytes(self.bytes(2)?.try_into().unwrap()))
     }
@@ -76,6 +90,9 @@ impl<'a> Reader<'a> {
     fn u64(&mut self) -> Result<usize, Error> {
         usize::try_from(u64::from_le_bytes(self.bytes(8)?.try_into().unwrap()))
             .map_err(|_| Error::Limit)
+    }
+    fn f32(&mut self) -> Result<f32, Error> {
+        Ok(f32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
     }
     fn zero(&mut self) -> Result<(), Error> {
         if self.u16()? != 0 {
@@ -126,8 +143,26 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
     }
     let mut w = Writer(Vec::new());
     w.bytes(MAGIC)?;
-    let version = if session.master_volume != 100 {
+    let has_v4 = sources.iter().any(|s| s.vocal_clip().is_some())
+        || sources.iter().any(|s| {
+            if let Some(p) = s.midi_pattern() {
+                matches!(
+                    p.instrument,
+                    moan_core::midi::Instrument::ArielFormant
+                        | moan_core::midi::Instrument::PrismWavetable
+                )
+            } else {
+                false
+            }
+        })
+        || session.tracks.iter().any(|t| t.distortion.is_some())
+        || !session.rack.nodes.is_empty()
+        || !session.muse_crate.is_empty();
+
+    let version = if has_v4 {
         VERSION
+    } else if session.master_volume != 100 {
+        V3_VERSION
     } else if sources.iter().any(|source| source.midi_pattern().is_some()) {
         MIDI_VERSION
     } else {
@@ -220,6 +255,93 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
             w.u32(outgoing)?;
         }
     }
+    if version >= 4 {
+        w.bytes(b"EXT4")?;
+        // 1. Vocal sources metadata
+        let vocal_sources: Vec<(usize, &moan_core::VocalClip)> = sources
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, s)| s.vocal_clip().map(|v| (idx, v)))
+            .collect();
+        w.u16(vocal_sources.len() as u16)?;
+        for (idx, vocal) in vocal_sources {
+            w.u16(idx as u16)?;
+            let text_bytes = vocal.text.as_bytes();
+            w.u16(text_bytes.len() as u16)?;
+            w.bytes(text_bytes)?;
+            w.f32(vocal.params.f0)?;
+            w.f32(vocal.params.rate_ms)?;
+            w.f32(vocal.params.formant_scale)?;
+            w.f32(vocal.params.vibrato_depth)?;
+            w.f32(vocal.params.vibrato_rate)?;
+            w.f32(vocal.params.tremolo_depth)?;
+            w.f32(vocal.params.tremolo_rate)?;
+            w.f32(vocal.params.aspiration)?;
+            w.f32(vocal.params.tilt)?;
+            w.f32(vocal.params.effort)?;
+            w.f32(vocal.params.gain)?;
+            w.u16(vocal.spans.len() as u16)?;
+            for span in &vocal.spans {
+                w.u32(span.byte_start)?;
+                w.u32(span.byte_end)?;
+                w.u32(span.start_frame)?;
+                w.u32(span.end_frame)?;
+            }
+        }
+        // 2. Track distortions
+        w.u16(session.tracks.len() as u16)?;
+        for track in &session.tracks {
+            if let Some(dist) = &track.distortion {
+                w.u8(1)?;
+                let (drive, tilt, bias, mix, cutoff, mode) = dist.parameters();
+                w.u16(drive)?;
+                w.bytes(&tilt.to_le_bytes())?;
+                w.bytes(&bias.to_le_bytes())?;
+                w.u16(mix)?;
+                w.u16(cutoff)?;
+                w.u8(mode as u8)?;
+            } else {
+                w.u8(0)?;
+            }
+        }
+        // 3. Track automation lanes count
+        w.u16(session.tracks.len() as u16)?;
+        for _ in &session.tracks {
+            w.u16(0)?;
+        }
+        // 4. EuropaRack PatchGraph
+        if !session.rack.nodes.is_empty() {
+            let patch_bytes = moan_modular::serialize::encode_patch(&session.rack)
+                .map_err(|_| Error::Metadata)?;
+            w.u32(patch_bytes.len())?;
+            w.bytes(&patch_bytes)?;
+        } else {
+            w.u32(0)?;
+        }
+        // 5. Muse Crate takes / provenance
+        w.u16(session.muse_crate.len() as u16)?;
+        for take in &session.muse_crate {
+            w.u64(take.id as usize)?;
+            w.u16(take.title.len() as u16)?;
+            w.bytes(take.title.as_bytes())?;
+            w.u16(take.prompt.len() as u16)?;
+            w.bytes(take.prompt.as_bytes())?;
+            w.u16(take.lyrics.len() as u16)?;
+            w.bytes(take.lyrics.as_bytes())?;
+            w.u16(take.bpm)?;
+            w.u16(take.key_scale.len() as u16)?;
+            w.bytes(take.key_scale.as_bytes())?;
+            w.u8(take.role as u8)?;
+            w.u16(take.active_version as u16)?;
+            w.u16(take.lrc.len() as u16)?;
+            for line in &take.lrc {
+                w.u32(line.timestamp_ms as usize)?;
+                w.u32(line.frame_offset)?;
+                w.u16(line.text.len() as u16)?;
+                w.bytes(line.text.as_bytes())?;
+            }
+        }
+    }
     let length = w.0.len();
     w.0[16..24].copy_from_slice(&(length as u64).to_le_bytes());
     let checksum = hash(&w.0);
@@ -257,7 +379,7 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
         return Err(Error::Header);
     }
     let version = r.u16()?;
-    if ![1, MIDI_VERSION, VERSION].contains(&version) {
+    if ![1, MIDI_VERSION, V3_VERSION, VERSION].contains(&version) {
         return Err(Error::Version);
     }
     r.zero()?;
@@ -440,13 +562,154 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
             clips,
         });
     }
-    if r.at != bytes.len() || used.iter().any(|used| !*used) {
+    if used.iter().any(|used| !*used) {
+        return Err(Error::Metadata);
+    }
+    let mut vocal_metadata: Vec<(usize, moan_core::VocalClip)> = Vec::new();
+    let mut track_distortions: Vec<Option<moan_core::effects::Distortion>> = Vec::new();
+    let mut rack = moan_modular::PatchGraph::new();
+    let mut muse_crate = Vec::new();
+
+    if version >= 4 {
+        if r.bytes(4)? != b"EXT4" {
+            return Err(Error::Metadata);
+        }
+        // 1. Vocal sources metadata
+        let vocal_count = r.u16()? as usize;
+        for _ in 0..vocal_count {
+            let source_idx = r.u16()? as usize;
+            let text_len = r.u16()? as usize;
+            let text = alloc::string::String::from(
+                core::str::from_utf8(r.bytes(text_len)?).map_err(|_| Error::Metadata)?,
+            );
+            let params = moan_core::vocal::VoiceParams {
+                f0: r.f32()?,
+                rate_ms: r.f32()?,
+                formant_scale: r.f32()?,
+                vibrato_depth: r.f32()?,
+                vibrato_rate: r.f32()?,
+                tremolo_depth: r.f32()?,
+                tremolo_rate: r.f32()?,
+                aspiration: r.f32()?,
+                tilt: r.f32()?,
+                effort: r.f32()?,
+                gain: r.f32()?,
+            };
+            let span_count = r.u16()? as usize;
+            let mut spans = Vec::new();
+            spans.try_reserve(span_count).map_err(|_| Error::Memory)?;
+            for _ in 0..span_count {
+                spans.push(moan_core::vocal::PhraseSpan {
+                    byte_start: r.u32()?,
+                    byte_end: r.u32()?,
+                    start_frame: r.u32()?,
+                    end_frame: r.u32()?,
+                });
+            }
+            vocal_metadata.push((
+                source_idx,
+                moan_core::VocalClip {
+                    text,
+                    params,
+                    spans,
+                },
+            ));
+        }
+        // 2. Track distortions
+        let dist_count = r.u16()? as usize;
+        for _ in 0..dist_count {
+            let has = r.u8()?;
+            if has != 0 {
+                let drive = r.u16()?;
+                let tilt = r.i16()?;
+                let bias = r.i16()?;
+                let mix = r.u16()?;
+                let cutoff = r.u16()?;
+                let mode_u8 = r.u8()?;
+                let mode = match mode_u8 {
+                    0 => moan_core::effects::DistortionMode::Symmetric,
+                    1 => moan_core::effects::DistortionMode::Asymmetric,
+                    2 => moan_core::effects::DistortionMode::HardClip,
+                    _ => moan_core::effects::DistortionMode::Foldback,
+                };
+                let dist = moan_core::effects::Distortion::new(drive, tilt, bias, mix, cutoff, mode)
+                    .map_err(|_| Error::Effect)?;
+                track_distortions.push(Some(dist));
+            } else {
+                track_distortions.push(None);
+            }
+        }
+        // 3. Track automation lanes count
+        let auto_tracks = r.u16()? as usize;
+        for _ in 0..auto_tracks {
+            let _lanes = r.u16()?;
+        }
+        // 4. EuropaRack PatchGraph
+        let rack_len = r.u32()?;
+        if rack_len > 0 {
+            let patch_bytes = r.bytes(rack_len)?;
+            rack = moan_modular::serialize::decode_patch(patch_bytes)
+                .map_err(|_| Error::Metadata)?;
+        }
+        // 5. Muse Crate takes / provenance
+        let takes_count = r.u16()? as usize;
+        for _ in 0..takes_count {
+            let id = r.u64()? as u64;
+            let title_len = r.u16()? as usize;
+            let title = alloc::string::String::from(
+                core::str::from_utf8(r.bytes(title_len)?).map_err(|_| Error::Metadata)?,
+            );
+            let prompt_len = r.u16()? as usize;
+            let prompt = alloc::string::String::from(
+                core::str::from_utf8(r.bytes(prompt_len)?).map_err(|_| Error::Metadata)?,
+            );
+            let lyrics_len = r.u16()? as usize;
+            let lyrics = alloc::string::String::from(
+                core::str::from_utf8(r.bytes(lyrics_len)?).map_err(|_| Error::Metadata)?,
+            );
+            let bpm = r.u16()?;
+            let key_len = r.u16()? as usize;
+            let key_scale = alloc::string::String::from(
+                core::str::from_utf8(r.bytes(key_len)?).map_err(|_| Error::Metadata)?,
+            );
+            let role_u8 = r.u8()?;
+            let role = match role_u8 {
+                0 => moan_gen::job::StemRole::Vocals,
+                1 => moan_gen::job::StemRole::Drums,
+                2 => moan_gen::job::StemRole::Bass,
+                3 => moan_gen::job::StemRole::Chords,
+                4 => moan_gen::job::StemRole::Fx,
+                _ => moan_gen::job::StemRole::Other,
+            };
+            let active_version = r.u16()? as usize;
+            let lrc_len = r.u16()? as usize;
+            let mut lrc = Vec::new();
+            for _ in 0..lrc_len {
+                let timestamp_ms = r.u32()? as u32;
+                let frame_offset = r.u32()?;
+                let line_len = r.u16()? as usize;
+                let line_text = alloc::string::String::from(
+                    core::str::from_utf8(r.bytes(line_len)?).map_err(|_| Error::Metadata)?,
+                );
+                lrc.push(moan_gen::lrc::LrcLine {
+                    timestamp_ms,
+                    frame_offset,
+                    text: line_text,
+                });
+            }
+            let mut take = moan_gen::stems::TakeCrate::new(id, &title, &prompt, &lyrics, bpm, &key_scale, role);
+            take.active_version = active_version;
+            take.lrc = lrc;
+            muse_crate.push(take);
+        }
+    }
+    if r.at != bytes.len() {
         return Err(Error::Metadata);
     }
     // All structure is validated before PCM allocations or mutating any session.
     let mut audio: Vec<Clip<'static>> = Vec::new();
     audio.try_reserve(sources).map_err(|_| Error::Memory)?;
-    for (bytes, pattern) in source_bytes.into_iter().zip(source_patterns) {
+    for (src_idx, (bytes, pattern)) in source_bytes.into_iter().zip(source_patterns).enumerate() {
         if let Some(pattern) = pattern {
             let clip = Clip::midi(pattern, 0).map_err(|_| Error::Memory)?;
             if clip
@@ -472,7 +735,12 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
                 i16::from_le_bytes([b[2], b[3]]),
             ]);
         }
-        audio.push(Clip::buffer(Arc::new(pcm), 0).map_err(|_| Error::Source)?);
+        let pcm_arc = Arc::new(pcm);
+        if let Some((_, vocal)) = vocal_metadata.iter().find(|(idx, _)| *idx == src_idx) {
+            audio.push(Clip::vocal_with_pcm(vocal.clone(), pcm_arc, 0).map_err(|_| Error::Source)?);
+        } else {
+            audio.push(Clip::buffer(pcm_arc, 0).map_err(|_| Error::Source)?);
+        }
     }
     let mut session = Session::default();
     session.selected = selected;
@@ -480,12 +748,15 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
     session.cursor = cursor;
     session.from = from;
     session.to = to;
-    for spec in specs {
+    for (t_idx, spec) in specs.into_iter().enumerate() {
         let mut track = Track::new();
         track.set_volume(spec.volume).map_err(|_| Error::Metadata)?;
         track.set_pan(spec.pan).map_err(|_| Error::Metadata)?;
         track.muted = spec.flags & 1 != 0;
         track.solo = spec.flags & 2 != 0;
+        if let Some(dist) = track_distortions.get(t_idx).and_then(|d| d.clone()) {
+            track.distortion = Some(dist);
+        }
         if spec.fx & 1 != 0 {
             track.effects.eq = Some(
                 Equalizer::new(spec.eq[0], spec.eq[1], spec.eq[2]).map_err(|_| Error::Effect)?,
@@ -512,5 +783,7 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
         }
         session.tracks.push(track);
     }
+    session.rack = rack;
+    session.muse_crate = muse_crate;
     Ok(session)
 }
