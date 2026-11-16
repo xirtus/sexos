@@ -255,8 +255,9 @@ pub fn extract_metadata(bytes: &[u8], mtime_raw: Option<u64>) -> PhotoMeta {
 pub fn exposure_line(exif: &gaze_codecs::Exif) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     if let Some(t) = exif.exposure_time.filter(|t| t.num > 0 && t.den > 0) {
-        parts.push(if t.num >= t.den {
-            let secs = t.num as f64 / t.den as f64;
+        // As cameras show it: 0.3 s and slower in seconds, faster as 1/N (exact when it is).
+        let secs = t.num as f64 / t.den as f64;
+        parts.push(if secs >= 0.3 {
             if secs == (secs as u64) as f64 { format!("{} s", secs as u64) } else { format!("{:.1} s", secs) }
         } else {
             format!("1/{} s", (t.den as u64 + t.num as u64 / 2) / t.num as u64)

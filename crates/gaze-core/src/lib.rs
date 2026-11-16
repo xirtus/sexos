@@ -347,6 +347,11 @@ mod tests {
         assert_eq!(metadata::exposure_line(&long).as_deref(), Some("2.5 s \u{b7} f/8"));
         let odd = gaze_codecs::Exif { exposure_time: r(10, 1250), focal_length: r(0, 0), ..Default::default() };
         assert_eq!(metadata::exposure_line(&odd).as_deref(), Some("1/125 s"));
+        // Slow but under a second: seconds, not a rounded 1/N (4/5 s is not 1/1 s).
+        for ((num, den), want) in [((4, 5), "0.8 s"), ((3, 5), "0.6 s"), ((1, 3), "0.3 s"), ((1, 4), "1/4 s")] {
+            let e = gaze_codecs::Exif { exposure_time: r(num, den), ..Default::default() };
+            assert_eq!(metadata::exposure_line(&e).as_deref(), Some(want));
+        }
         assert_eq!(metadata::exposure_line(&gaze_codecs::Exif::default()), None);
 
         // A catalog line written before lens and exposure were kept (13 columns).
