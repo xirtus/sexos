@@ -10,6 +10,12 @@
 //! of its own whose stdin, stdout and stderr it handed over, with an environment and a
 //! working folder. Then the slot also keeps a stderr ring and the environment block, and
 //! the child's working folder becomes a grant of the child's when Shell binds it.
+//!
+//! A terminal's run can also outlive its window as a yarn (`console_relay::DETACH`): its
+//! relay moves out of the terminal's row into the yarns, with the rings, and the run goes
+//! on writing into an output ring that keeps its newest bytes. A terminal adopts it into
+//! one of its slots later, in the same window or another (`ADOPT`). Relay ids past the
+//! terminals' (`RELAYS_N` on) are the yarns'.
 
 use sex_pdx::console_relay as c;
 use sex_pdx::fs as w;
@@ -57,7 +63,30 @@ impl Rings {
 static mut RELAYS: [Relay; RELAYS_N] = [const { Relay::new() }; RELAYS_N];
 static mut RINGS: [Rings; ROWS] = [const { Rings::new() }; ROWS];
 static mut POOL: c::Pool<ROWS> = c::Pool::new();
+/// Runs that went on without their window: no more than there are program rows.
+static mut YARNS: [Relay; ROWS] = [const { Relay::new() }; ROWS];
+/// Each yarn's name (0: the place is free), label, the relay it left, and when (ticks).
+#[derive(Clone, Copy)]
+struct YarnMeta { name: u32, label: [u8; c::LABEL_BYTES], label_len: u8, from: usize, since: u64 }
+static mut META: [YarnMeta; ROWS] = [YarnMeta { name: 0, label: [0; c::LABEL_BYTES], label_len: 0, from: 0, since: 0 }; ROWS];
+static mut NEXT_YARN: u32 = 0;
+/// How long a yarn's run may take to start before it counts as never started.
+const START_TICKS: u64 = 20_000;
 fn relays() -> &'static mut [Relay; RELAYS_N] { unsafe { &mut *core::ptr::addr_of_mut!(RELAYS) } }
+fn meta(y: usize) -> &'static mut YarnMeta { unsafe { &mut (*core::ptr::addr_of_mut!(META))[y] } }
+/// Relay `id`: a terminal's slot below `RELAYS_N`, yarn `id - RELAYS_N` from there.
+fn relay(id: usize) -> &'static mut Relay {
+    if id < RELAYS_N { &mut relays()[id] } else { unsafe { &mut (*core::ptr::addr_of_mut!(YARNS))[id - RELAYS_N] } }
+}
+/// Every relay id, terminals' first.
+fn all() -> core::ops::Range<usize> { 0..RELAYS_N + ROWS }
+/// The yarn named `name`, as a relay id.
+fn yarn_named(name: u32) -> Option<usize> { (name != 0).then(|| (0..ROWS).find(|y| meta(*y).name == name).map(|y| RELAYS_N + y)).flatten() }
+/// A yarn that left relay `from` before its run started: the older of the two, so Shell
+/// binds (or fails) it first.
+fn yarn_starting_from(from: usize) -> Option<usize> {
+    (0..ROWS).find(|y| meta(*y).name != 0 && meta(*y).from == from && relay(RELAYS_N + y).state == c::STARTING).map(|y| RELAYS_N + y)
+}
 fn rings(i: usize) -> &'static mut Rings { unsafe { &mut (*core::ptr::addr_of_mut!(RINGS))[i] } }
 fn pool() -> &'static mut c::Pool<ROWS> { unsafe { &mut *core::ptr::addr_of_mut!(POOL) } }
 
@@ -66,11 +95,12 @@ pub fn relay_id(k: usize, slot: usize) -> usize { k * c::SLOTS + slot.min(c::SLO
 
 /// Forget relay `id`'s run and give back its rings; its size stays.
 fn reset(id: usize) {
-    let r = &mut relays()[id];
+    let r = relay(id);
     if let Some(i) = r.rings.take() { pool().give(i); }
     let size = r.size;
     *r = Relay::new();
     r.size = size;
+    if id >= RELAYS_N { meta(id - RELAYS_N).name = 0; }
 }
 
 /// Whether relay `id` may prepare a run: none is attached to it now (`PENDING` if one
@@ -84,10 +114,13 @@ pub fn may_prepare(id: usize) -> Result<(), u8> {
     // Ended runs whose terminal never released them hold pairs: the oldest output is
     // the least wanted, but any ended run will do. A pipe run's output not yet read is
     // its starter's data, as a file would be: it is taken last, and never while unread.
+    // An ended yarn's last output is the person's to read: it goes after those, the
+    // oldest first.
     let unread = |r: &Relay| r.pipe.is_some() && r.rings.is_some_and(|i| !rings(i).output.is_empty() || !rings(i).error.is_empty());
     let ended = |r: &Relay| r.state == c::ENDED && r.rings.is_some();
     let idle = relays().iter().position(|r| ended(r) && r.pipe.is_none())
-        .or_else(|| relays().iter().position(|r| ended(r) && !unread(r)));
+        .or_else(|| relays().iter().position(|r| ended(r) && !unread(r)))
+        .or_else(|| (RELAYS_N..RELAYS_N + ROWS).filter(|y| { refresh(relay(*y)); ended(relay(*y)) }).min_by_key(|y| meta(y - RELAYS_N).name));
     match idle { Some(other) => { reset(other); Ok(()) } None => Err(w::UNAVAILABLE) }
 }
 /// Relay `id` prepared a run: the next one Shell binds for it is attached. `pipe` is
@@ -111,23 +144,25 @@ pub fn cwd_grant(id: usize) -> Option<&'static [u8]> {
 /// prepared it, if one did. A row bound again is no longer anyone's attached run, nor
 /// the terminal it was: that terminal's slots are forgotten.
 pub fn bound(launcher: Option<usize>, index: usize, target: u32, task: u32) {
-    for r in relays().iter_mut() {
+    for r in all().map(relay) {
         if r.child.is_some_and(|(i, ..)| i == index) && r.state == c::RUNNING { r.state = c::ENDED; r.code = c::CRASHED; r.child = None; }
     }
     // A terminal that ran in this row is gone with its slots (it cannot be the launcher).
     for slot in 0..c::SLOTS { reset(relay_id(index, slot)); relays()[relay_id(index, slot)].size = c::Size::default(); }
     let Some(id) = launcher else { return };
-    let r = &mut relays()[id];
+    let id = yarn_starting_from(id).unwrap_or(id);
+    let r = relay(id);
     r.child = Some((index, target, task));
     r.state = c::RUNNING;
     match r.pipe {
         Some(word) => sex_pdx::serial_record!("[files.pipe.attached] starter_row={} slot={} target={} task={} stdio={:#x}", id / c::SLOTS, id % c::SLOTS, target, task, word),
+        None if id >= RELAYS_N => sex_pdx::serial_record!("[files.yarn.started] yarn={} target={} task={}", meta(id - RELAYS_N).name, target, task),
         None => sex_pdx::serial_record!("[files.console.attached] terminal_row={} slot={} target={} task={}", id / c::SLOTS, id % c::SLOTS, target, task),
     }
 }
 /// The run relay `id` prepared could not be loaded.
 pub fn not_started(id: usize) {
-    let r = &mut relays()[id];
+    let r = relay(yarn_starting_from(id).unwrap_or(id));
     if r.state == c::STARTING { r.state = c::ENDED; r.code = c::NOT_STARTED; }
 }
 /// A run that went away without saying how it ended.
@@ -138,7 +173,14 @@ fn refresh(r: &mut Relay) {
 }
 /// The relay whose attached run is program row `k`.
 fn terminal_of(k: usize) -> Option<usize> {
-    relays().iter().position(|r| r.state == c::RUNNING && r.child.is_some_and(|(i, ..)| i == k))
+    all().find(|id| { let r = relay(*id); r.state == c::RUNNING && r.child.is_some_and(|(i, ..)| i == k) })
+}
+/// A yarn's state as YARNS reports it: a run that never started in time never will.
+fn yarn_record(y: usize) -> c::Yarn {
+    let (m, r) = (meta(y), relay(RELAYS_N + y));
+    refresh(r);
+    if r.state == c::STARTING && sex_pdx::get_ticks().saturating_sub(m.since) > START_TICKS { r.state = c::ENDED; r.code = c::NOT_STARTED; }
+    c::Yarn { name: m.name, state: r.state, code: r.code, target: r.child.map_or(0, |(_, t, _)| t), label: m.label, label_len: m.label_len }
 }
 
 /// One request from program row `k` (`launcher`: it holds `+launch`). `slot` is its region.
@@ -153,7 +195,8 @@ pub fn handle(k: usize, launcher: bool, r: w::Request, slot: u64, confine: impl 
     match op {
         c::ATTACHED | c::WRITE | c::READ | c::EXIT | c::SIZE | c::SET_MODE | c::POLL | c::WRITE_ERR | c::ENV if at == 0 => {
             let Some(t) = terminal_of(k) else { return w::reply(r.seq, w::UNSUPPORTED, 0) };
-            let relay = &mut relays()[t];
+            let detached = t >= RELAYS_N;
+            let relay = self::relay(t);
             let Some(ri) = relay.rings else { return w::reply(r.seq, w::UNSUPPORTED, 0) };
             let ring = rings(ri);
             match op {
@@ -161,6 +204,8 @@ pub fn handle(k: usize, launcher: bool, r: w::Request, slot: u64, confine: impl 
                 c::WRITE => {
                     if core::mem::take(&mut relay.interrupt) { return w::reply(r.seq, c::INTERRUPTED, 0); }
                     if relay.deaf & 1 != 0 { return w::reply(r.seq, c::HUNG_UP, 0); }
+                    // No window: the oldest output makes room, and the run goes on.
+                    if detached { ring.output.push_over(&data[..want]); return w::reply(r.seq, w::OK, want as u32); }
                     w::reply(r.seq, w::OK, ring.output.push(&data[..want]) as u32)
                 }
                 c::WRITE_ERR => {
@@ -192,7 +237,7 @@ pub fn handle(k: usize, launcher: bool, r: w::Request, slot: u64, confine: impl 
                 c::SET_MODE => {
                     if r.length > c::MODES as u64 { return w::reply(r.seq, w::INVALID, 0); }
                     let before = core::mem::replace(&mut relay.mode, r.length as u8);
-                    if before != relay.mode { sex_pdx::serial_record!("[files.console.mode] terminal_row={} slot={} mode={}", t / c::SLOTS, t % c::SLOTS, relay.mode); }
+                    if before != relay.mode && !detached { sex_pdx::serial_record!("[files.console.mode] terminal_row={} slot={} mode={}", t / c::SLOTS, t % c::SLOTS, relay.mode); }
                     w::reply(r.seq, w::OK, before as u32)
                 }
                 _ => {
@@ -201,6 +246,10 @@ pub fn handle(k: usize, launcher: bool, r: w::Request, slot: u64, confine: impl 
                     w::reply(r.seq, w::OK, 0)
                 }
             }
+        }
+        c::DETACH | c::ADOPT | c::YARNS | c::YARN_STOP => {
+            if !launcher { return w::reply(r.seq, w::DENIED, 0); }
+            yarn_op(k, op, at, r, data)
         }
         c::PUT | c::TAKE | c::INTERRUPT | c::HANG_UP | c::RELEASE | c::SET_SIZE | c::TAKE_ERR | c::SET_ENV | c::SET_CWD | c::CLOSE_READ => {
             let id = relay_id(k, at);
@@ -275,5 +324,71 @@ pub fn handle(k: usize, launcher: bool, r: w::Request, slot: u64, confine: impl 
             }
         }
         _ => w::reply(r.seq, w::DENIED, 0),
+    }
+}
+
+/// A terminal's yarn requests (`console_relay::DETACH` and the rest) for its `slot`.
+fn yarn_op(k: usize, op: u64, slot: usize, r: w::Request, data: &mut [u8]) -> u64 {
+    let id = relay_id(k, slot);
+    match op {
+        c::DETACH => {
+            let here = relay(id);
+            refresh(here);
+            if here.pipe.is_some() || !matches!(here.state, c::RUNNING | c::STARTING) { return w::reply(r.seq, w::NOT_FOUND, 0); }
+            let Some((dump, label)) = c::split_detach(r.length) else { return w::reply(r.seq, w::INVALID, 0) };
+            if label + dump + c::OUTPUT_BYTES > data.len() { return w::reply(r.seq, w::INVALID, 0); }
+            let Some(y) = (0..ROWS).find(|y| meta(*y).name == 0) else { return w::reply(r.seq, w::UNAVAILABLE, 0) };
+            let name = unsafe { NEXT_YARN = NEXT_YARN % 0xFFFF_FFFE + 1; NEXT_YARN };
+            let mut moved = core::mem::replace(here, Relay::new());
+            here.size = moved.size;
+            // The screen it left first, then what the terminal had not taken yet.
+            if let Some(ri) = moved.rings {
+                let out = &mut rings(ri).output;
+                let pending = out.pop(&mut data[label + dump..label + dump + c::OUTPUT_BYTES]);
+                out.push_over(&data[label..label + dump + pending]);
+            }
+            moved.interrupt = false;
+            let m = meta(y);
+            m.label[..label].copy_from_slice(&data[..label]);
+            m.label_len = label as u8;
+            *m = YarnMeta { name, from: id, since: sex_pdx::get_ticks(), ..*m };
+            *relay(RELAYS_N + y) = moved;
+            sex_pdx::serial_record!("[files.yarn.detached] terminal_row={} slot={} yarn={} dump={}", k, slot, name, dump);
+            w::reply(r.seq, w::OK, name)
+        }
+        c::ADOPT => {
+            let here = relay(id);
+            refresh(here);
+            if matches!(here.state, c::RUNNING | c::STARTING) { return w::reply(r.seq, w::PENDING, 0); }
+            let Some(y) = yarn_named(r.length as u32) else { return w::reply(r.seq, w::NOT_FOUND, 0) };
+            reset(id);
+            let size = relay(id).size;
+            let mut moved = core::mem::replace(relay(y), Relay::new());
+            meta(y - RELAYS_N).name = 0;
+            // The run hears of its new window's size as of any resize.
+            if size.known() { moved.size.set(size.cols, size.rows); }
+            *relay(id) = moved;
+            sex_pdx::serial_record!("[files.yarn.adopted] terminal_row={} slot={} yarn={}", k, slot, r.length);
+            w::reply(r.seq, w::OK, 0)
+        }
+        c::YARNS => {
+            let room = (r.length as usize).min(data.len()) / c::YARN_BYTES;
+            let mut n = 0;
+            for y in (0..ROWS).filter(|y| meta(*y).name != 0) {
+                if n == room { break; }
+                yarn_record(y).encode(&mut data[n * c::YARN_BYTES..]);
+                n += 1;
+            }
+            w::reply(r.seq, w::OK, n as u32)
+        }
+        _ => {
+            let Some(y) = yarn_named(r.length as u32) else { return w::reply(r.seq, w::NOT_FOUND, 0) };
+            let record = yarn_record(y - RELAYS_N);
+            let t = relay(y);
+            if matches!(t.state, c::RUNNING | c::STARTING) { t.interrupt = true; t.hung_up = true; }
+            else { reset(y); }
+            sex_pdx::serial_record!("[files.yarn.stop] yarn={} state={}", r.length, record.state);
+            w::reply(r.seq, w::OK, record.target)
+        }
     }
 }

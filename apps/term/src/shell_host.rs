@@ -9,11 +9,18 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use sex_app::files::{self, direct};
-use spindle_shell::{DirEntry, EntryKind, Host, Value};
+use spindle_shell::{DirEntry, EntryKind, ExternalRequest, Host, JobId, JobInfo, JobState, Value};
+use sex_pdx::console_relay as c;
 
 pub struct TermHost<'a> {
     pub cwd: &'a mut Vec<u8>,
+    /// The pane's console relay slot (`console_relay::SLOTS` or more: none), through
+    /// which a background job starts before it goes on as a yarn.
+    pub slot: u8,
 }
+
+/// Jobs `kill` already asked to stop: asked again, Shell stops them.
+static mut KILLED: Vec<JobId> = Vec::new();
 
 fn rel(path: &str) -> &[u8] { path.trim_start_matches('/').as_bytes() }
 fn why(e: files::Error) -> String { String::from_utf8_lossy(files::message(e)).into_owned() }
@@ -100,6 +107,53 @@ impl Host for TermHost<'_> {
         if name == "greet" { return true; }
         let wasm = format!("{}/{}.wasm", String::from_utf8_lossy(self.cwd), name.trim_end_matches(".wasm"));
         direct::stat(wasm.trim_start_matches('/').as_bytes()).is_ok() || program_like(name)
+    }
+    /// `cmd &`: the program starts in the pane's slot and at once goes on as a yarn (a
+    /// run no window shows), whose name is the job's number. `fg` and `attach` bring it
+    /// into a pane; closing a window leaves its programs as yarns the same way.
+    fn spawn_job(&mut self, request: &ExternalRequest) -> Result<JobId, String> {
+        let slot = self.slot as usize;
+        if slot >= c::SLOTS { return Err(String::from("too many panes are running programs in this window")); }
+        let args = request.args.join(" ");
+        let label = if args.is_empty() { request.name.clone() } else { format!("{} {}", request.name, args) };
+        direct::relay::release_at(slot).map_err(why)?;
+        direct::relay::start_at(slot, request.name.as_bytes(), args.as_bytes()).map_err(why)?;
+        let yarn = direct::relay::detach_at(slot, label.as_bytes(), b"").map_err(why)?;
+        sex_pdx::serial_record!("[term.yarn.background] name={} yarn={}", request.name, yarn);
+        Ok(yarn)
+    }
+    fn jobs(&self) -> Vec<JobInfo> {
+        direct::relay::yarns().unwrap_or_default().into_iter().map(|y| JobInfo {
+            id: y.name,
+            command: String::from_utf8_lossy(y.label()).into_owned(),
+            state: match (y.state, y.code) {
+                (c::ENDED, c::NOT_STARTED) => JobState::Done(127),
+                (c::ENDED, c::CRASHED) => JobState::Done(-1),
+                (c::ENDED, code) => JobState::Done(code as i32),
+                _ => JobState::Running,
+            },
+        }).collect()
+    }
+    fn job_foreground(&mut self, id: JobId) -> Result<(), String> {
+        if (self.slot as usize) >= c::SLOTS { return Err(String::from("too many panes are running programs in this window")); }
+        if self.jobs().iter().any(|j| j.id == id) { Ok(()) } else { Err(String::from("no such job")) }
+    }
+    /// `kill N`: Ctrl+C and the end of input for the job; a second `kill` of a job that
+    /// runs on regardless has Shell stop it, as a second Ctrl+C does. An ended job is
+    /// forgotten.
+    fn kill_job(&mut self, id: JobId) -> Result<(), String> {
+        let running = self.jobs().iter().any(|j| j.id == id && j.state == JobState::Running);
+        let target = direct::relay::yarn_stop(id).map_err(|e| if e == files::NOT_FOUND { String::from("no such job") } else { why(e) })?;
+        // SAFETY: one thread runs the shell.
+        let asked = unsafe { &mut *core::ptr::addr_of_mut!(KILLED) };
+        let again = asked.contains(&id);
+        if running && !again { asked.push(id); }
+        if running && again && target != 0 {
+            let ok = direct::relay::stop(target).is_ok();
+            sex_pdx::serial_record!("[term.yarn.kill] yarn={} target={} ok={}", id, target, ok as u8);
+        }
+        sex_pdx::serial_record!("[term.yarn.stop] yarn={} running={} again={}", id, running as u8, again as u8);
+        Ok(())
     }
     fn external_names(&self) -> Vec<String> {
         let mut names: Vec<String> = ["greet", "python", "lua", "rg", "fd", "stdhello", "chello"].iter().map(|s| String::from(*s)).collect();

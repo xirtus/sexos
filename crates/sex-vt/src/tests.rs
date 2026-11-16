@@ -278,3 +278,48 @@ fn the_vtcheck_fixture_matches_its_expected_screen() {
     for (x, y, fg, bg) in check::COLORS { assert_eq!(colors(&s.visible(x, y)), (fg, bg), "cell {x},{y}"); }
     assert_eq!(s.cursor(), (0, 6));
 }
+
+/// A screen fed another's replay looks the same: text, colours, cursor and modes.
+#[test]
+fn replay_draws_the_same_screen_again() {
+    let s = run(20, 4, b"one\r\n\x1b[1;31mred\x1b[0m plain \x1b[48;2;1;2;3mbg\x1b[0m\r\nthree\r\nfour\r\nfive\x1b[?1h\x1b[?2004h");
+    let again = run(20, 4, &s.replay(4096));
+    assert_eq!(again.text(), s.text());
+    assert_eq!(again.cursor(), s.cursor());
+    for col in 0..12 { assert_eq!(again.visible(col, 0), s.visible(col, 0), "col {}", col); }
+    assert!(again.app_cursor && again.bracketed_paste);
+    // The history came too.
+    assert_eq!(again.history_len(), s.history_len());
+    assert_eq!(again.line_text(0), "one");
+}
+
+#[test]
+fn replay_keeps_the_newest_lines_within_its_bytes() {
+    let mut text = Vec::new();
+    for i in 0..200 { text.extend_from_slice(alloc::format!("line {}\r\n", i).as_bytes()); }
+    text.extend_from_slice(b"$ ");
+    let s = run(30, 10, &text);
+    let bytes = s.replay(200);
+    assert!(bytes.len() <= 200, "{}", bytes.len());
+    let again = run(30, 10, &bytes);
+    assert_eq!(again.row_text(9), "$");
+    assert_eq!(again.cursor(), (2, 9));
+    assert_eq!(again.row_text(8), "line 199");
+}
+
+#[test]
+fn replay_of_a_full_screen_program_is_its_alternate_screen() {
+    let s = run(20, 5, b"shell\r\n\x1b[?1049h\x1b[2;3Hmenu\x1b[5;1H\x1b[7mstatus\x1b[0m\x1b[3;4H");
+    let again = run(20, 5, &s.replay(4096));
+    assert!(again.alternate());
+    assert_eq!(again.text(), s.text());
+    assert_eq!(again.cursor(), (3, 2));
+    assert_eq!(again.visible(0, 4).flags & INVERSE, INVERSE);
+}
+
+#[test]
+fn replay_keeps_soft_wrapped_lines_whole() {
+    let s = run(4, 3, b"abcdefg\r\n");
+    let again = run(8, 3, &s.replay(4096));
+    assert_eq!(again.row_text(0), "abcdefg");
+}

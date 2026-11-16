@@ -88,8 +88,9 @@ struct Guest {
 /// (through Files, `sex_pdx::console_relay`).
 enum Runner { Guest(Guest), Native(Native) }
 /// A program of its own: when it started, its terminal mode (`console_relay::RAW` and the
-/// rest, from TAKE), its target, and when Ctrl+C last interrupted it.
-struct Native { since: u64, mode: u8, target: u32, interrupted_at: Option<u64>, stopping: bool }
+/// rest, from TAKE), its target, when Ctrl+C last interrupted it, and its command line
+/// (a yarn's label if it outlives the window).
+struct Native { since: u64, mode: u8, target: u32, interrupted_at: Option<u64>, stopping: bool, label: String }
 struct Job {
     name: String,
     runner: Runner,
@@ -107,7 +108,7 @@ const START_MS: u64 = 20_000;
 struct ShellWait { capture: bool, output: Vec<u8>, line: String }
 
 /// Commands of the terminal itself, before the shell: they draw on its screen or close it.
-const OWN: &[&[u8]] = &[b"theme", b"help", b"clear", b"history", b"colors", b"vtcheck", b"snapshot", b"exit", b"write", b"cat"];
+const OWN: &[&[u8]] = &[b"theme", b"help", b"clear", b"history", b"colors", b"vtcheck", b"snapshot", b"exit", b"write", b"cat", b"attach"];
 
 /// A way of reading the scrollback that takes the keys for a while.
 enum Mode {
@@ -456,7 +457,7 @@ impl Pane {
             let text = if cmd == b"help" && args == [b"commands"] { String::from("help") } else { text };
             sex_pdx::serial_record!("[term.shell] {}", text);
             let cols = self.screen.cols();
-            let step = self.engine.run(&text, &mut shell_host::TermHost { cwd: &mut self.cwd }, cols);
+            let step = self.engine.run(&text, &mut shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot }, cols);
             self.shell_step(step, text);
             return;
         }
@@ -545,10 +546,69 @@ impl Pane {
                 sex_pdx::serial_record!("[term.snapshot] rows={} history={}", self.screen.rows(), self.screen.history_len());
             }
             b"exit" => { sex_pdx::serial_record!("[term.pane.closed] how=exit"); self.closed = true; }
+            // A program that went on without its window (or `cmd &`) comes back here.
+            b"attach" => match args.first().map(|a| core::str::from_utf8(a).ok().and_then(|a| a.trim_start_matches('%').parse::<u32>().ok())) {
+                Some(None) => self.say("\x1b[31mattach: expected a number\x1b[0m (type jobs)\n"),
+                Some(Some(n)) => { self.attach(Some(n)); }
+                None => { self.attach(None); }
+            },
             _ => { let _ = window; self.start_program(cmd, args) }
         }
     }
-    /// The pane is closing: whatever runs in it is told to stop and loses its input.
+    /// The pane or its window is closing: a program of its own goes on as a yarn, which
+    /// `attach` (or `fg`) brings back in any Spindle window; a Wasm guest stops.
+    fn leave(&mut self) {
+        let slot = self.slot as usize;
+        if let Some(Job { runner: Runner::Native(n), name, .. }) = &self.job {
+            if !n.stopping {
+                let screen = self.screen.replay(sex_pdx::console_relay::OUTPUT_BYTES / 2);
+                match files::direct::relay::detach_at(slot, n.label.as_bytes(), &screen) {
+                    Ok(yarn) => {
+                        sex_pdx::serial_record!("[term.yarn.detached] name={} yarn={} bytes={}", name, yarn, screen.len());
+                        self.job = None;
+                        return;
+                    }
+                    Err(e) => sex_pdx::serial_record!("[term.yarn.refused] name={} status={}", name, e),
+                }
+            }
+        }
+        self.stop();
+    }
+    /// Yarn `name` (the newest still running when None) runs in this pane again: the
+    /// screen it left, then what it wrote since. False when it could not.
+    fn attach(&mut self, name: Option<u32>) -> bool {
+        use sex_pdx::console_relay as c;
+        let slot = self.slot as usize;
+        if slot >= c::SLOTS {
+            self.say("\x1b[31mattach: too many panes are running programs in this window\x1b[0m (open a new window)\n");
+            return false;
+        }
+        let yarns = match files::direct::relay::yarns() { Ok(y) => y, Err(e) => { self.fail("attach", e); return false; } };
+        let pick = match name {
+            Some(n) => yarns.iter().find(|y| y.name == n),
+            None => yarns.iter().rev().find(|y| y.state != c::ENDED).or(yarns.last()),
+        };
+        let Some(y) = pick.copied() else {
+            match name {
+                Some(n) => self.say(&format!("\x1b[31mattach: there is no job {}\x1b[0m (type jobs)\n", n)),
+                None => self.say("attach: no program is running without its window\n"),
+            }
+            return false;
+        };
+        let label = String::from_utf8_lossy(y.label()).into_owned();
+        let job = String::from(label.split(' ').next().unwrap_or("?"));
+        match files::direct::relay::adopt_at(slot, y.name) {
+            Ok(()) => {
+                sex_pdx::serial_record!("[term.yarn.attached] name={} yarn={} state={}", job, y.name, y.state);
+                self.job = Some(Job { name: job, runner: Runner::Native(Native { since: sex_pdx::get_ticks(), mode: 0, target: y.target, interrupted_at: None, stopping: false, label }), line: Vec::new(), pending: Vec::new(), eof: false });
+                self.native_size();
+                true
+            }
+            Err(sex_pdx::fs::PENDING) => { self.say("\x1b[31mattach: a program is still running here\x1b[0m\n"); false }
+            Err(e) => { self.fail("attach", e); false }
+        }
+    }
+    /// Whatever runs in the pane is told to stop and loses its input.
     fn stop(&mut self) {
         let Some(job) = self.job.take() else { return };
         sex_pdx::serial_record!("[term.job.stop] name={}", job.name);
@@ -575,11 +635,16 @@ impl Pane {
                 self.out(out.text.as_bytes());
                 self.shell_wait = None;
             }
-            Step::WaitJob { print, .. } => {
-                // Background jobs come with Yarn sessions; nothing is ever waiting.
+            Step::WaitJob { print, job, capture } => {
+                // `fg`: the background job (a yarn) runs in this pane until it ends.
                 self.out(print.as_bytes());
-                let step = self.engine.resume(spindle_shell::ExternalResult { output: Vec::new(), exit_code: 1 }, &mut shell_host::TermHost { cwd: &mut self.cwd });
-                self.shell_step(step, line);
+                sex_pdx::serial_record!("[term.shell.fg] job={} capture={}", job, capture as u8);
+                self.shell_wait = Some(ShellWait { capture, output: Vec::new(), line });
+                if !self.attach(Some(job)) {
+                    let step = self.engine.resume(spindle_shell::ExternalResult { output: Vec::new(), exit_code: 1 }, &mut shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot });
+                    let line = self.shell_wait.take().map(|w| w.line).unwrap_or_default();
+                    return self.shell_step(step, line);
+                }
             }
             Step::RunExternal { print, request } => {
                 self.out(print.as_bytes());
@@ -591,7 +656,7 @@ impl Pane {
                 self.start_program(name.as_bytes(), &args);
                 if self.job.is_none() {
                     // It did not start: the shell hears it failed.
-                    let step = self.engine.resume(spindle_shell::ExternalResult { output: Vec::new(), exit_code: 127 }, &mut shell_host::TermHost { cwd: &mut self.cwd });
+                    let step = self.engine.resume(spindle_shell::ExternalResult { output: Vec::new(), exit_code: 127 }, &mut shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot });
                     let line = self.shell_wait.take().map(|w| w.line).unwrap_or_default();
                     return self.shell_step(step, line);
                 }
@@ -723,7 +788,7 @@ impl Pane {
         if let Some(w) = self.shell_wait.take() {
             let output = if w.capture { w.output } else { Vec::new() };
             if !w.capture && !self.after_cr && self.screen.cursor().0 != 0 { self.say("\n"); }
-            let step = self.engine.resume(spindle_shell::ExternalResult { output, exit_code: code as i32 }, &mut shell_host::TermHost { cwd: &mut self.cwd });
+            let step = self.engine.resume(spindle_shell::ExternalResult { output, exit_code: code as i32 }, &mut shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot });
             self.shell_step(step, w.line);
             if self.job.is_some() { return; }
         }
@@ -742,13 +807,14 @@ impl Pane {
         }
         let words = args.join(&b' ');
         let n = String::from_utf8_lossy(cmd).into_owned();
+        let label = if words.is_empty() { n.clone() } else { format!("{} {}", n, String::from_utf8_lossy(&words)) };
         // A general launch ticket is not permission to attach a terminal console: the
         // relay's own answer (no grant, or a run still going) comes first.
         let slot = self.slot as usize;
         match files::direct::relay::release_at(slot).and_then(|_| files::direct::relay::start_at(slot, cmd, &words)) {
             Ok(()) => {
                 sex_pdx::serial_record!("[term.native.start] name={}", n);
-                self.job = Some(Job { name: n, runner: Runner::Native(Native { since: sex_pdx::get_ticks(), mode: 0, target: 0, interrupted_at: None, stopping: false }), line: Vec::new(), pending: Vec::new(), eof: false });
+                self.job = Some(Job { name: n, runner: Runner::Native(Native { since: sex_pdx::get_ticks(), mode: 0, target: 0, interrupted_at: None, stopping: false, label }), line: Vec::new(), pending: Vec::new(), eof: false });
                 self.native_size();
             }
             Err(e) if { sex_pdx::serial_record!("[term.native.refused] name={} status={}", n, e); false } => {}
@@ -877,7 +943,7 @@ impl Pane {
     fn complete_shell(&mut self) -> bool {
         let Ok(text) = core::str::from_utf8(&self.line) else { return false };
         let text = String::from(text);
-        let host = shell_host::TermHost { cwd: &mut self.cwd };
+        let host = shell_host::TermHost { cwd: &mut self.cwd, slot: self.slot };
         let hits = self.engine.complete(&text, self.at, &host);
         let Some(first) = hits.first() else { return false };
         let range = first.replace.clone();
@@ -1244,13 +1310,16 @@ fn colors() -> String {
     s
 }
 
-const BUILTINS: &[&[u8]] = &[b"cat", b"cd", b"clear", b"colors", b"echo", b"exit", b"greet", b"help", b"history", b"ls", b"mkdir", b"mv", b"pwd", b"rm", b"snapshot", b"touch", b"vtcheck", b"write"];
+const BUILTINS: &[&[u8]] = &[b"attach", b"cat", b"cd", b"clear", b"colors", b"echo", b"exit", b"greet", b"help", b"history", b"ls", b"mkdir", b"mv", b"pwd", b"rm", b"snapshot", b"touch", b"vtcheck", b"write"];
 const HELP: &str = "\x1b[1mSpindle\x1b[0m: the SexOS terminal. Each pane has its own command line.\n\
   ls cd pwd cat mkdir rm mv touch write FILE TEXT   files in this folder\n\
   echo history clear colors vtcheck snapshot exit\n\
   NAME [ARGS]    runs NAME.wasm from this folder (a WASI command-line program), else\n\
                  the program NAME (python, lua, rg, fd...) with this pane as its console\n\
   greet [NAME]   a built-in Rust program, compiled to Wasm\n\
+  NAME ARGS &    runs the program in the background; jobs lists, fg N brings one here,\n\
+                 kill N stops one. Closing a pane or the window leaves its program running:\n\
+  attach [N]     shows job N (the newest when no N) here again, with the screen it left\n\
 Keys: Tab completes, Up/Down recall, Ctrl+Shift+C/V copy/paste, Shift+PgUp/PgDn scroll,\n\
   Ctrl+=/- text size, Ctrl+C stop, Ctrl+D end input (closes an idle pane), Ctrl+L clear.\n\
 Tabs: Ctrl+Shift+T new, Ctrl+PgUp/PgDn switch, Ctrl+Shift+PgUp/PgDn move, Ctrl+Shift+1..9 pick,\n\
@@ -1384,7 +1453,7 @@ impl Spindle {
     }
     /// Closes a pane, stopping what runs in it. The window closes with its last pane.
     fn close_pane(&mut self, id: PaneId) {
-        if let Some(mut pane) = self.panes.remove(&id) { pane.stop(); }
+        if let Some(mut pane) = self.panes.remove(&id) { pane.leave(); }
         let area = self.area();
         self.tabs.remove_pane(id, area);
         sex_pdx::serial_record!("[term.pane.gone] pane={} panes={} tabs={}", id, self.panes.len(), self.tabs.len());
@@ -1453,7 +1522,7 @@ impl Spindle {
         if y < self.bar_h() {
             if let Kind::Down { button } = p.kind {
                 if let Some(i) = self.tab_at(x) {
-                    if button == 1 { let panes = self.tabs.close(i); for id in panes { if let Some(mut pane) = self.panes.remove(&id) { pane.stop(); } } if self.tabs.is_empty() { sex_pdx::task_finish(0) } }
+                    if button == 1 { let panes = self.tabs.close(i); for id in panes { if let Some(mut pane) = self.panes.remove(&id) { pane.leave(); } } if self.tabs.is_empty() { sex_pdx::task_finish(0) } }
                     else { self.tabs.select(i); }
                     self.relayout = true;
                 } else if button == 0 { self.open_tab(); }
@@ -1591,6 +1660,11 @@ extern "C" fn main() -> ! {
     let given: Vec<u8> = files::args(&mut window, &mut args).split(|b| *b == b' ')
         .filter(|w| !w.is_empty() && *w != sex_pdx::console_relay::GRANT_TOKEN).collect::<Vec<_>>().join(&b' ');
     let term = spindle.focused();
+    // Programs left running when their windows closed (yarns): say how to get them back.
+    if let Ok(yarns) = files::direct::relay::yarns() {
+        let running = yarns.iter().filter(|y| y.state != sex_pdx::console_relay::ENDED).count();
+        if running > 0 { term.say(&format!("{} program{} kept running after {} window closed: type \x1b[1mjobs\x1b[0m, then \x1b[1mattach N\x1b[0m.\n", running, if running == 1 { "" } else { "s" }, if running == 1 { "its" } else { "their" })); }
+    }
     term.show_prompt();
     if !given.is_empty() {
         term.line = given.clone();
@@ -1609,7 +1683,12 @@ extern "C" fn main() -> ! {
         let event = if spindle.running() { window.next_within(16) } else { window.next_within(1000) };
         spindle.check_config(false);
         match event {
-            Some(Event::Close) => { sex_pdx::serial_record!("[term.closed] how=window"); window.close() }
+            Some(Event::Close) => {
+                // Programs of their own go on as yarns: `attach` in any Spindle window.
+                for pane in spindle.panes.values_mut() { pane.leave(); }
+                sex_pdx::serial_record!("[term.closed] how=window");
+                window.close()
+            }
             Some(Event::Resize { width, height }) => { spindle.width = width.max(64); spindle.height = height.max(64); spindle.relayout = true; }
             Some(Event::Key(key)) => if !spindle.key(&mut window, key) { if let Some(t) = spindle.focused().key(&mut window, key) { spindle.clipboard = t; } },
             Some(Event::Pointer(p)) => spindle.pointer(p),
