@@ -154,12 +154,36 @@ fn main() {
     enc.write_header().unwrap().write_image_data(&app.painter.to_rgba()).unwrap();
 }
 
-/// Shell's key codes (PS/2 set 1) to Blender's key names.
+/// Shell's key codes (PS/2 set 1) to Blender's key names. `keypad`: Shell marks
+/// numpad keys (asked for with `want_keys(KEYPAD)`), so the grey cursor block that
+/// shares their codes is told apart.
 #[cfg(target_os = "hermit")]
-fn key_of(code: u8, ctrl: bool, ch: Option<char>) -> Option<Key> {
+fn key_of(code: u8, keypad: bool, ctrl: bool, ch: Option<char>) -> Option<Key> {
+    if keypad {
+        return Some(match code {
+            0x47 => Key::Num(7),
+            0x48 => Key::Num(8),
+            0x49 => Key::Num(9),
+            0x4A => Key::NumMinus,
+            0x4B => Key::Num(4),
+            0x4C => Key::Num(5),
+            0x4D => Key::Num(6),
+            0x4E => Key::NumPlus,
+            0x4F => Key::Num(1),
+            0x50 => Key::Num(2),
+            0x51 => Key::Num(3),
+            0x52 => Key::Num(0),
+            0x53 => Key::NumDot,
+            0x37 => Key::NumStar,
+            0x35 => Key::NumSlash,
+            0x1C => Key::NumEnter,
+            _ => return None,
+        });
+    }
     Some(match code {
-        // Programs get the grey Page Up/Down on the numpad's codes; with Ctrl
-        // they are Blender's workspace switch, alone the numpad views.
+        // Without the keypad mark (an older Shell), the grey Page Up/Down share the
+        // numpad's codes: with Ctrl they are Blender's workspace switch, alone the
+        // numpad views.
         0x49 if ctrl => Key::PageUp,
         0x51 if ctrl => Key::PageDown,
         0x01 => Key::Esc,
@@ -207,6 +231,9 @@ fn main() {
     use sex_std::sex_pdx::app_pointer::Kind;
     let window = sex_std::window();
     window.title(b"Polyamour");
+    // Tab (Edit Mode), F1-F10 and F12 (Render), backtick (view pie) and a numpad
+    // told apart from the grey keys, as in Blender.
+    window.want_keys(sex_std::sex_pdx::app_key::DESKTOP_KEYS | sex_std::sex_pdx::app_key::KEYPAD);
     let (w, h) = window.size();
     let mut app = App::new(w.max(640), h.max(400));
     let mut python: Vec<(String, String)> = Vec::new();
@@ -267,12 +294,12 @@ fn main() {
             Some(Event::Key(k)) => {
                 mods = Mods { shift: k.shift, ctrl: k.control, alt: k.alt };
                 let text = sex_std::sex_app::text(k);
-                // The Shell keeps F1-F12, Tab and Insert for itself, so
-                // F12 (Render Image) has a stand-in until programs can ask for them.
+                // Ctrl+Shift+R stays a stand-in for F12 (Render Image) where Shell
+                // keeps the function keys.
                 if k.control && k.shift && k.code == 0x13 {
                     Some(Input::Key { key: Key::F(12), mods: Mods::NONE, text: None })
                 } else {
-                    key_of(k.code, k.control, text).map(|key| Input::Key { key, mods, text })
+                    key_of(k.code, k.keypad, k.control, text).map(|key| Input::Key { key, mods, text })
                 }
             }
             Some(Event::Pointer(p)) => {
