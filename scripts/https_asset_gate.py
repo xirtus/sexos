@@ -4,6 +4,8 @@
 Never builds. Endpoint sockets are public lab fixtures, not a forwarding proxy.
 State-publication ACKs are joined to raw framebuffer pixels, never called pixels.
 """
+from input_payload_profile import assert_payload_proof, require_payload_proof
+from native_text_metrics import source_metrics, font_sources, cell_rgb
 from clock_source_evidence import browser_clock_sources
 import argparse,ast,hashlib,json,os,re,shutil,socket,subprocess,time
 from pathlib import Path
@@ -37,6 +39,7 @@ SOURCE_FILES=(
  'kernel/src/app_resources.rs','kernel/src/init.rs','servers/silk-shell/src/main.rs','servers/sexinput/src/main.rs',
  'servers/sexdisplay/src/main.rs','servers/sexdisplay/src/bitmap_transaction.rs',
  'servers/sexdisplay/src/surface_lifecycle.rs','servers/sexdisplay/src/surface_groups.rs')
+SOURCE_FILES=tuple(dict.fromkeys((*SOURCE_FILES,*font_sources(Path(__file__).resolve().parents[1]))))
 RUNNER_FILES=('scripts/https_asset_gate.py','scripts/check_https_asset.py','scripts/https_document_gate.py',
  'scripts/tls_exchange_gate.py','scripts/tls_responsiveness_gate.py','scripts/network_contention_gate.py',
  'scripts/check_disk_persistence.py','scripts/check_dns_capture.py','scripts/check_tcp_capture.py',
@@ -160,11 +163,11 @@ HELD_INPUT_FUNCTIONS = {
  'document_view_sender': '2715dd56b62c3c164587b3e2e4dea49ad6e416a73f945718cf5d406c537990bc',
  'focused_clipboard_participant': 'fdc67ea118bfc1237104f056139cb5de45416b595337c18706c935a6faf32a84',
  'clipboard_live': '1a801645af4f7f94acdc55fec353ffe663a01a12968fbddd403686a63648f275',
- 'app_input_poll': '970f4b0fc88564dcb1b55d2690b3a4868a8feb74e5ddddcd2dd565db463e4030',
+ 'app_input_poll': '1ffd4fe777027a6663d07283c97c6858a0fdba36d782da34f424f85d535fd576',
  'browser_wheel_destination': '66ccbc15c66cbe2bdf13ac916a00e97382c1afd0ae56b222eeb325c2b37fa35f',
  'frame_accepts_input': '6fdf754c25b68e8f13f6d3c71c9ead28b4768d8e5948407e2c9fd638c6e9bd08',
 }
-HELD_INPUT_DEPENDENCIES = ('crates/sex-pdx/src/app_catalog.rs',
+HELD_INPUT_DEPENDENCIES = ('crates/sex-pdx/src/input_diagnostics.rs','crates/sex-pdx/build.rs','crates/sex-pdx/src/app_catalog.rs',
  'crates/sex-pdx/src/app_lifecycle.rs','crates/sex-pdx/src/clipboard.rs',
  'servers/silk-shell/src/app_custody.rs','servers/silk-shell/src/app_input.rs',
  'servers/silk-shell/src/browser_input.rs')
@@ -206,13 +209,14 @@ def source_contract(root):
    raise ValueError('actual stamped custody task guard changed')
  for literal in ('(raw * (screen_dim - 1) / TABLET_RAW_MAX).clamp(0, screen_dim - 1)','const TABLET_RAW_MAX: i32 = 32767;','[shell.abs.normalize] raw_x={} raw_y={} sx={} sy={} accepted={} reason={}'):
   if literal not in shell:raise ValueError('source-bound pointer normalization changed')
- input_source=sources['servers/sexinput/src/main.rs'].decode();physical='sex_pdx::serial_record!("[sexinput.ps2.scancode] raw={:#x}", scancode);'
+ sources['crates/sex-pdx/src/input_diagnostics.rs']=(root/'crates/sex-pdx/src/input_diagnostics.rs').read_bytes()
+ input_source=sources['servers/sexinput/src/main.rs'].decode();physical='sex_pdx::serial_input_record!(("[sexinput.ps2.scancode] payload=redacted"); ("[sexinput.ps2.scancode] raw={:#x}", scancode));'
  retained='input_arrival.ps2(&mut keyboard_outbox,scancode)'
  if physical not in input_source or retained not in input_source or input_source.index(physical)>=input_source.index(retained):raise ValueError('physical PS2 make receipt must be atomic and precede retained key admission')
- for literal in ('code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8','send(edge.code as u64,edge.down as u64,EV_KEY)','poll_input_delivery(&mut keyboard_outbox,&mut pointer_outbox,send_shell_hid_event)','pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2)'):
+ for literal in ('code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8','send(edge.code as u64|(edge.keypad as u64)<<8,edge.down as u64,EV_KEY)','poll_input_delivery(&mut keyboard_outbox,&mut pointer_outbox,send_shell_hid_event)','pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2)'):
   if literal not in input_source:raise ValueError('retained physical key must drain through the actual held Shell route: '+literal)
  if 'min(4)'not in view or '0x00303860u32'not in display:raise ValueError('source-bound fit/background contract changed')
- return dict(source_sha256={**{n:hashlib.sha256(data).hexdigest()for n,data in sources.items()},**https.palette_source_hashes(root)},font=font_from_source(display),base=list(BASE),pixel_hash=hex(PIXEL_HASH),body_hash=hex(fingerprint(BODY)),body_sha256=hashlib.sha256(BODY).hexdigest())
+ return dict(source_sha256={**{n:hashlib.sha256(data).hexdigest()for n,data in sources.items()},**https.palette_source_hashes(root),**font_sources(root)},metrics=source_metrics(root),font=font_from_source(display),color=0xcdd6f4,background=0x303860,base=list(BASE),pixel_hash=hex(PIXEL_HASH),body_hash=hex(fingerprint(BODY)),body_sha256=hashlib.sha256(BODY).hexdigest())
 
 def binding_check(root,iso,path):
  result=frozen_binding(root,iso,path);held=json.loads(Path(path).read_text())
@@ -368,24 +372,24 @@ def inspect_trace(trace,mode,wire,raw,host_start,host_end,contract,dns):
   elif not re.search(r'\[browser.tls.cleanup\] ticket=2 outcome=Cancelled authenticated=1 document=0 tls_payload=0 positive_release=1',trace[progress.end():]):raise ValueError('partial clear lacks positive network cleanup')
  return dict(ok=True,resources=len(intents),released=len(released),decoded=len(decoded))
 
-def image_geometry(tile,mode='Fit'):
+def image_geometry(tile,mode='Fit',metrics=None):
  if mode not in ('Fit','Actual'):raise ValueError('unknown image mode')
- factor=2 if tile['w']>=256 else 1;cols=min(79,max(0,(tile['w']-16)//(6*factor)-1));chrome=4 if cols>=30 else 5
- top=36+chrome*9*factor+8;aw=tile['w']-16;ah=tile['h']-top-8
+ m=metrics or source_metrics();inset=m['inset'];factor=2 if tile['w']>=m['scale_threshold'] else 1;cols=min(79,max(0,(tile['w']-2*inset)//(m['advance']*factor)-1));chrome=4 if cols>=30 else 5
+ top=m['top']+chrome*m['line']*factor+inset;aw=tile['w']-2*inset;ah=tile['h']-top-inset
  scale=min(aw//48,ah//48,4)if mode=='Fit'else 1
  if cols<1 or scale<1 or 48*scale>aw or 48*scale>ah:raise ValueError('actual Browser viewport cannot fit fixture')
- return dict(x=8+(aw-48*scale)//2,y=top+(ah-48*scale)//2,width=48,height=48,scale=scale,mode=mode,cols=cols,chrome_rows=chrome)
+ return dict(x=inset+(aw-48*scale)//2,y=top+(ah-48*scale)//2,width=48,height=48,scale=scale,mode=mode,cols=cols,chrome_rows=chrome)
 
 PRESENT_LAYOUT=r'\[browser.asset.presentation.layout\] generation=(\d+) mode=(Fit|Actual) viewport=(\d+) ticket=(\d+) sequence=(\d+) x=(\d+) y=(\d+) width=(\d+) height=(\d+) scale=(\d+) hash=(0x[0-9a-f]+)'
 PRESENT_READY=r'\[browser.asset.presentation.ready\] generation=(\d+) mode=(Fit|Actual) viewport=(\d+) ticket=(\d+) sequence=(\d+) hash=(0x[0-9a-f]+) positive_ack=1 pixels=unconfirmed'
 PRESENT_INTENT=r'\[browser.asset.presentation.intent\] generation=(\d+) mode=(Fit|Actual) viewport=(\d+) ticket=(\d+) network=0'
 PRESENT_TEXT=r'\[browser.asset.presentation.text\] generation=(\d+) viewport=(\d+) sequence=(\d+) bytes=(\d+) rows=(\d+) positive_ack=1'
 
-def geometry(trace,require_ack=True):
+def geometry(trace,require_ack=True,metrics=None):
  tile,viewport=https.viewport(trace)
  layouts=records(trace,'[browser.asset.presentation.layout]',PRESENT_LAYOUT)
  current=layouts[-1]if layouts else None;mode=current[2]if current and int(current[3])==viewport else 'Fit'
- expected=image_geometry(tile,mode);expected.update(viewport=viewport,tile=tile)
+ expected=image_geometry(tile,mode,metrics);expected.update(viewport=viewport,tile=tile)
  if not require_ack:return expected
  if not current:raise ValueError('current image presentation layout missing')
  m=current;generation=int(m[1]);ticket=int(m[4]);sequence=int(m[5]);g=expected
@@ -396,7 +400,7 @@ def geometry(trace,require_ack=True):
  text_acks=records(trace,'[browser.asset.presentation.text]',PRESENT_TEXT)
  text_ack=next((a for a in text_acks if tuple(map(int,a.groups()[:2]))==(generation,viewport)),None)
  if not text_ack or text_ack.start()>oldlayout.start():raise ValueError('bitmap precedes current-generation text clearing')
- frame=asset_text(tile,mode,'Publishing image');text_seq,nbytes,nrows=map(int,text_ack.groups()[2:])
+ frame=asset_text(tile,mode,'Publishing image',metrics);text_seq,nbytes,nrows=map(int,text_ack.groups()[2:])
  if(nbytes,nrows)!=(frame['bytes'],frame['rows']):raise ValueError('presentation text extent differs')
  if not re.search(rf'\[browser.asset.text.applied\] viewport={viewport} sequence={text_seq} bytes={nbytes} rows={nrows} positive_ack=1 pixels=unconfirmed',trace[:text_ack.start()])or not re.search(rf'\[display.text.committed\] target=15 surface=300 paint={text_seq} bytes={nbytes} changed=[01] pixels=unconfirmed',trace[:text_ack.start()]):raise ValueError('text ACK lacks legacy/display-owned commit')
  ready=records(trace,'[browser.asset.presentation.ready]',PRESENT_READY)
@@ -410,30 +414,31 @@ def geometry(trace,require_ack=True):
  expected.update(generation=generation,ticket=ticket,sequence=sequence)
  return expected
 
-def asset_text(tile,mode,status='Image ready'):
- g=image_geometry(tile,mode);scale=2 if tile['w']>=256 else 1;cols=g['cols'];rows=min(24,max(0,1+(tile['h']-36-7*scale)//(9*scale)),512//(cols+1))
+def asset_text(tile,mode,status='Image ready',metrics=None):
+ m=metrics or source_metrics();g=image_geometry(tile,mode,m);scale=2 if tile['w']>=m['scale_threshold'] else 1;cols=g['cols'];rows=min(24,max(0,1+(tile['h']-m['top']-m['glyph_height']*scale)//(m['line']*scale)),512//(cols+1))
  lines=['QOI / controlled HTTPS lab root',status,('Fit'if mode=='Fit'else'1:1')+f' 48x48 / {g["scale"]}x']
  lines+=['F Fit  A 1:1  G fetch  Q clear']if g['chrome_rows']==4 else ['F Fit  A 1:1','G fetch  Q clear']
  return dict(lines=[line[:cols].ljust(cols)for line in(lines+['']*rows)[:rows]],rows=rows,cols=cols,bytes=rows*(cols+1)-1,scale=scale,chrome_rows=g['chrome_rows'])
 
 def verify_pixels(trace,ppm,visible=True,resolution=None,contract=None):
  """Full source-derived RGBA box, guard, old-box erasure and complete chrome."""
- g=geometry(trace,visible);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1)
+ contract=contract or source_contract(Path(__file__).resolve().parents[1]);m=contract.get('metrics') or source_metrics()
+ g=geometry(trace,visible,m);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1)
  if resolution and(width,height)!=tuple(resolution):raise ValueError('framebuffer resolution differs')
  tile=g['tile'];data=decode_fixture(BODY);checked=colored=erased=0
- if tile['x']<0 or tile['y']<50 or tile['w']<=0 or tile['h']<=0 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual Browser frame lies outside framebuffer')
+ if tile['x']<0 or tile['y']<m['bar'] or tile['w']<=0 or tile['h']<=0 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual Browser frame lies outside framebuffer')
  coordinates={(tile['x']+x,tile['y']+y)for y in range(g['y']-1,g['y']+48*g['scale']+1)for x in range(g['x']-1,g['x']+48*g['scale']+1)}
  # Inspect every historic image rectangle intersecting the CURRENT owned image
  # area. Pixels outside this live Browser body may belong to another surface.
- top=36+g['chrome_rows']*9*(2 if tile['w']>=256 else 1)+8
- for m in re.finditer(PRESENT_LAYOUT,trace):
-  prior=trace[:m.start()];old_tile,_=https.viewport(prior);x,y,_,_,scale=map(int,m.groups()[5:10])
+ inset=m['inset'];top=m['top']+g['chrome_rows']*m['line']*(2 if tile['w']>=m['scale_threshold'] else 1)+inset
+ for prior_layout in re.finditer(PRESENT_LAYOUT,trace):
+  prior=trace[:prior_layout.start()];old_tile,_=https.viewport(prior);x,y,_,_,scale=map(int,prior_layout.groups()[5:10])
   for sy in range(old_tile['y']+y,old_tile['y']+y+48*scale):
    for sx in range(old_tile['x']+x,old_tile['x']+x+48*scale):
-    if tile['x']+8<=sx<tile['x']+tile['w']-8 and tile['y']+top<=sy<tile['y']+tile['h']-8:coordinates.add((sx,sy))
+    if tile['x']+inset<=sx<tile['x']+tile['w']-inset and tile['y']+top<=sy<tile['y']+tile['h']-inset:coordinates.add((sx,sy))
  for sx,sy in coordinates:
   lx=sx-tile['x'];ly=sy-tile['y']
-  if not(8<=lx<tile['w']-8 and 36<=ly<tile['h']-8):continue
+  if not(inset<=lx<tile['w']-inset and m['top']<=ly<tile['h']-inset):continue
   inside=g['x']<=lx<g['x']+48*g['scale']and g['y']<=ly<g['y']+48*g['scale'];expected=BASE
   if visible and inside:
    at=(((ly-g['y'])//g['scale'])*48+(lx-g['x'])//g['scale'])*4;r,green,b,a=data[at:at+4];expected=tuple((fg*a+bg*(255-a)+127)//255 for fg,bg in zip((r,green,b),BASE));colored+=expected!=BASE
@@ -442,19 +447,16 @@ def verify_pixels(trace,ppm,visible=True,resolution=None,contract=None):
   if actual!=expected:raise ValueError(f'RGBA/old rectangle/guard pixel differs local=({lx},{ly}) wanted={expected} actual={actual}')
  text_pixels=0
  if visible:
-  contract=contract or source_contract(Path(__file__).resolve().parents[1]);frame=asset_text(tile,g['mode']);color=(0xcd,0xd6,0xf4);scale=frame['scale']
+  frame=asset_text(tile,g['mode'],metrics=m);scale=frame['scale'];cw=m['advance']*scale;ch=m['line']*scale
   for row,line in enumerate(frame['lines'][:frame['chrome_rows']]):
    for column,char in enumerate(line+' '):
-    bitmap=glyph(contract['font'],char)
-    for gy in range(9):
-     for gx in range(6):
-      on=gy<7 and gx<5 and bool(bitmap[gy]&(1<<(4-gx)))
-      for dy in range(scale):
-       for dx in range(scale):
-        sx=tile['x']+8+(column*6+gx)*scale+dx;sy=tile['y']+36+(row*9+gy)*scale+dy
-        if sx>=tile['x']+tile['w']-8 or sy>=tile['y']+tile['h']-8:continue
-        actual=tuple(pixels[(sy*width+sx)*3:(sy*width+sx)*3+3]);text_pixels+=1
-        if actual!=(color if on else BASE):raise ValueError('complete image status/metrics/help glyph or padding differs')
+    cell=cell_rgb(contract,char,scale)
+    for cy in range(ch):
+     for cx in range(cw):
+      sx=tile['x']+inset+column*cw+cx;sy=tile['y']+m['top']+row*ch+cy
+      if sx>=tile['x']+tile['w']-inset or sy>=tile['y']+tile['h']-inset:continue
+      at=(cy*cw+cx)*3;wanted=cell[at:at+3];actual=pixels[(sy*width+sx)*3:(sy*width+sx)*3+3];text_pixels+=1
+      if actual!=wanted:raise ValueError(f'complete image status/metrics/help glyph or padding differs row={row} column={column} pixel=({sx},{sy}) wanted={tuple(wanted)} actual={tuple(actual)}')
  if not checked or visible and not colored:raise ValueError('no complete visible image evidence')
  return dict(ok=True,checked_pixels=checked,colored_pixels=colored,erased_pixels=erased,text_pixels=text_pixels,geometry=g,visible=visible)
 
@@ -525,6 +527,7 @@ def capture_key_action(q,code,pattern,text,wait,record):
  result=wait(pattern,start);action.update(serial_end=len(text()),host_end=time.monotonic());return result
 
 def verify_key_actions(trace,frames,actions,mode,resolution,*,root=None):
+ assert_payload_proof(trace)
  """Actual QMP window -> pre-forward PS2 make -> handler; return may race.
 
  Shell logs accepted after pdx_call. Its callee may already have run: the
@@ -609,6 +612,17 @@ def verify_parking(trace,frames,actions,resolution):
   checks.append(dict(capture=shot['name'],x=sx,y=sy,receipt_offset=start+receipt[-1].start()));previous=boundary
  return dict(ok=True,captures=len(checks),checks=checks)
 
+def browser_wait_tasks(trace):
+ # This asset gate already proves the fixed BOOT Browser15/surface300 route.
+ # Require its actual BOOT receipts rather than discovering arbitrary wait IDs.
+ markers=list(re.finditer(re.escape('[kernel.spawn.kaleidoscope'),trace))
+ spawn=list(re.finditer(r'^\[kernel.spawn.kaleidoscope\] id=15 domain_id=15\r?\n',trace,re.M))
+ handoff=list(re.finditer(r'^\[bootgraph.boot.handoff\] target=kaleidoscope id=15 entry=0x[0-9a-f]+\r?\n',trace,re.M))
+ handoff_markers=list(re.finditer(r'^\[bootgraph.boot.handoff\] target=kaleidoscope\b',trace,re.M))
+ seals=list(re.finditer(r'^\[boot.self_wait.sealed\] ',trace,re.M))
+ if len(markers)!=len(spawn)or len(spawn)!=1 or len(handoff_markers)!=len(handoff)or len(handoff)!=1 or len(seals)!=1 or not(spawn[0].start()<seals[0].start()<handoff[0].start()):raise ValueError('missing exact BOOT Browser15 spawn/seal/handoff identity')
+ return (15,)
+
 def verify_evidence(root,iso,binding,evidence):
  evidence=Path(evidence);bound=binding_check(root,iso,binding);manifest=json.loads((evidence/'manifest.json').read_text());contract=source_contract(root)
  if manifest['binding']!=bound or manifest['source_sha256']!=contract['source_sha256']or manifest['keylog_enabled']is not False:raise ValueError('evidence/source/image binding differs')
@@ -638,7 +652,7 @@ def verify_evidence(root,iso,binding,evidence):
   if shot['name']=='cleared-image'and '[browser.asset.cleared]'not in prefix:raise ValueError('erasure frame lacks positive CLEAR')
   shots.append(verify_pixels(prefix,(evidence/shot['file']).read_bytes(),shot['visible'],tuple(map(int,manifest['resolution'].split('x'))),contract))
  if mode=='ready'and shots[0]['geometry']['viewport']==shots[-1]['geometry']['viewport']:raise ValueError('actual viewport/scale transition missing')
- authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace);target=target_check(Path(root))
+ authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace,browser_tasks=browser_wait_tasks(trace),source_root=root);target=target_check(Path(root))
  if not all(r['ok']for r in(authority,waiting,target)):raise ValueError('native authority/self-wait/non-Unix target check failed')
  return dict(ok=True,binding=bound,mode=mode,wire=wire,trace=joins,pixels=shots,pointer_parking=parking,key_actions=key_actions,authority=authority,self_wait=waiting,target=target,scope=SCOPE)
 
@@ -691,6 +705,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);boot_key('down');boot_key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus_surface(300,text,key)
   boundary=len(text());key('g',r'\[shell.browser.input\] code=34 down=1 slot=43 accepted=1');wait(r'\[browser.asset.intent\] accepted=1 explicit=1 public_internet=0',boundary)
   if a.mode=='ready':

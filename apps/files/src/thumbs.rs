@@ -48,7 +48,7 @@ pub struct Tally { pub pictures: usize, pub made: usize, pub cached: usize, pub 
                    pub pictures_done: u64 }
 
 /// Kinds a program draws a thumbnail of with `--thumb`, and that program.
-const HELPERS: &[(&str, &[u8])] = &[("PDF", b"vellum")];
+const HELPERS: &[(&str, &[u8])] = &[("PDF", b"vellum"), ("RAW", b"gaze")];
 /// A helper run that has not ended by now is ended.
 const HELPER_MS: u64 = 20_000;
 static HELPER_RUNS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x7B00_0000);
@@ -85,6 +85,8 @@ pub fn kind(name: &[u8], dir: bool) -> Option<&'static str> {
     Some(match &e[..ext.len()] {
         b"png" | b"jpg" | b"jpeg" | b"gif" | b"webp" => return None,
         b"pdf" => "PDF",
+        // Camera RAW: Gaze draws the embedded preview.
+        b"dng" | b"cr2" | b"cr3" | b"nef" | b"arw" | b"orf" | b"rw2" | b"pef" | b"raf" => "RAW",
         b"mp4" | b"webm" | b"mkv" | b"mov" | b"avi" | b"m4v" => "VIDEO",
         b"mp3" | b"ogg" | b"opus" | b"flac" | b"wav" | b"m4a" => "AUDIO",
         b"txt" | b"md" | b"rs" | b"toml" | b"json" | b"csv" | b"log" | b"html" | b"css" | b"js" => "TEXT",

@@ -167,3 +167,15 @@ fn bounce_keys_drop_quick_second_presses() {
     assert_eq!(key(&mut a, 0x30, 0, 1140).0, Verdict::Pass);
     assert_eq!(key(&mut a, 0x1E, 1, 1050 + access::BOUNCE_MS + 1).0, Verdict::Pass);
 }
+
+#[test]
+fn reader_chord_toggles_the_screen_reader() {
+    let mut a = Access::new();
+    assert_eq!(chord(&mut a, code::R), Verdict::Chord(Change::Reader(true)));
+    let mut text = [0u8; 64];
+    let n = a.notice(Change::Reader(true), &mut text);
+    assert_eq!(&text[..n], b"Screen reader on");
+    assert_eq!(chord(&mut a, code::R), Verdict::Chord(Change::Reader(false)));
+    // R alone is typed as usual.
+    assert_eq!(key(&mut a, code::R, 1, 0).0, Verdict::Pass);
+}

@@ -11,6 +11,7 @@ pub mod thread;
 pub mod tls;
 pub mod sound;
 pub mod mailbox;
+pub mod autofill;
 pub mod settings;
 
 /// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
@@ -37,12 +38,15 @@ const NET: u32 = 13;
 /// reaches its inbox wakes it at once.
 const MAILBOX_LOOK_TICKS: u64 = 4;
 
-fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) || launch::is_event(m) }
+fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) || launch::is_event(m) || restricted_status::is_event(m) }
 /// A message from Shell: keys, pointer, resizes and closes for the main task's window.
-fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::is_event(m) }
+fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::is_event(m) && !restricted_status::is_event(m) }
 
 pub enum Event {
     Key(Key),
+    /// A key pressed in this window went up (a modifier's too): the same key the press
+    /// delivered. When focus leaves the window, the keys still held there go up too.
+    KeyUp(Key),
     Close,
     /// The window's pixel area is now this many pixels wide and high: redraw to fit.
     Resize { width: usize, height: usize },
@@ -105,6 +109,12 @@ impl Window {
     /// The width and height of the window's pixel area, as Shell last reported it
     /// (see [`Event::Resize`]). Pixels shown beyond it are cut off.
     pub fn size(&self) -> (usize, usize) { self.size }
+    /// Asks Shell for keys it otherwise keeps (`sex_pdx::app_key::DESKTOP_KEYS`: Tab,
+    /// backtick, F1-F10, F12, Scroll Lock, Insert; F11 stays Shell's) and/or numpad marks
+    /// (`KEYPAD`: [`Key::keypad`]). Lasts for this run; ask again to change it.
+    pub fn want_keys(&self, flags: u64) -> bool {
+        sex_pdx::pdx_call_checked(SLOT_SHELL, sex_pdx::app_key::OP_KEYS, flags, 0, 0).is_ok()
+    }
     /// Shows the first `width` by `height` pixels in the window instead of its text.
     pub fn show_pixels(&mut self, width: usize, height: usize) {
         call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, 0);
@@ -116,6 +126,14 @@ impl Window {
         bytes[..n].copy_from_slice(&name[..n]);
         let words = (u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap()));
         call(SLOT_DISPLAY, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1);
+        // Shell too, for the screen reader, which says it when the window has focus.
+        // A full queue loses only the spoken name ("Program" is said instead).
+        for _ in 0..100 {
+            match pdx_call_checked(SLOT_SHELL, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1) {
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                _ => break,
+            }
+        }
         sex_pdx::system_stats::set_name(name);
     }
     /// Replaces the window's text. Longer text than the region holds is cut.
@@ -134,6 +152,13 @@ impl Window {
         }
     }
     fn event(&mut self, m: &sex_pdx::PdxMessage) -> Option<Event> {
+        // Autofill protocol packets belong to its explicit SDK consumer, never
+        // to toolkit key handling. Preserve them without formatting arguments.
+        if m.caller_pd==SHELL && m.caller_task==SHELL && sex_pdx::autofill::response(m.type_id) {mailbox::put(*m);return None;}
+        // Launch receipts belong to their explicit supervisor, not UI dispatch.
+        // is_shell excludes these from the UI mailbox scan, so they are stashed once.
+        if launch::is_event(m) { mailbox::put(*m); return None; }
+        if restricted_status::is_event(m) { mailbox::put(*m); return None; }
         // Another task's answer, taken while this one waited: it looks in the mailbox.
         if is_answer(m) { mailbox::put(*m); return None; }
         if m.caller_pd != SHELL { return None; }
@@ -147,7 +172,9 @@ impl Window {
             if let Some(p) = sex_pdx::app_pointer::Pointer::decode(m.arg0, m.arg1, m.arg2) { return Some(Event::Pointer(p)); }
         }
         if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
+        if let Some(on) = sex_pdx::a11y::decode_state(m.type_id, m.arg0, m.arg1) { a11y::told(on); return None; }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
+        if m.type_id == 0x202 { if let Some(k) = Key::decode_release(m.arg0, m.arg1, m.arg2) { return Some(Event::KeyUp(k)); } }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
     }
@@ -164,11 +191,13 @@ impl Window {
     /// The next key or close if one is already waiting, otherwise `None` at once.
     pub fn poll(&mut self) -> Option<Event> {
         if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take(); }
-        while let Some(m) = mailbox::take(is_shell) {
+        while let Some(m) = mailbox::take(|m|is_shell(m)&&!sex_pdx::autofill::response(m.type_id)) {
             if let Some(event) = self.event(&m) { return Some(event); }
         }
-        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
-            if let Some(event) = self.event(&m) { return Some(event); }
+        while let Some(mut m) = sex_pdx::pdx_try_listen_raw(0) {
+            let event=self.event(&m);
+            if sex_pdx::autofill::response(m.type_id){autofill::erase_message(&mut m);}
+            if let Some(event)=event{return Some(event);}
         }
         None
     }
@@ -195,6 +224,49 @@ impl Window {
 /// Starting other programs, and opening files in the program for their type. A run
 /// started here gets only grants this run holds; Shell reports it started, was refused,
 /// or ended (see [`sex_pdx::launch`]).
+/// The screen reader ([`sex_pdx::a11y`]): a program asks Shell once whether one is on,
+/// and sends its accessibility tree only while Shell says so. Toolkits (Weft) do this.
+pub mod a11y {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    use sex_pdx::a11y as wire;
+    /// 0: not asked, 1: asked (no answer yet, or off), 2: on.
+    static STATE: AtomicU8 = AtomicU8::new(0);
+    /// Set when Shell's answer changes; taken by [`changed`].
+    static CHANGED: AtomicU8 = AtomicU8::new(0);
+    pub(crate) fn told(on: bool) {
+        let new = if on { 2 } else { 1 };
+        if STATE.swap(new, Ordering::AcqRel) != new { CHANGED.store(1, Ordering::Release); }
+    }
+    /// Asks Shell whether a screen reader is on; its answers come with the window's
+    /// events (read with [`on`] and [`changed`]).
+    pub fn ask() {
+        let _ = STATE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
+        let [a, b, c] = wire::ask();
+        let _ = send(a, b, c);
+    }
+    /// True once [`ask`] was called.
+    pub fn asked() -> bool { STATE.load(Ordering::Acquire) != 0 }
+    /// True while a screen reader is on (Shell said so).
+    pub fn on() -> bool { STATE.load(Ordering::Acquire) == 2 }
+    /// True once after Shell's answer changed.
+    pub fn changed() -> bool { CHANGED.swap(0, Ordering::AcqRel) != 0 }
+    /// Sends one encoded tree update to Shell, if a reader is on. False if it could not.
+    pub fn send_update(bytes: &[u8]) -> bool {
+        if !on() || bytes.len() > wire::MAX_UPDATE { return false; }
+        wire::pieces(bytes).all(|[a, b, c]| send(a, b, c))
+    }
+    fn send(a: u64, b: u64, c: u64) -> bool {
+        for _ in 0..1000 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, wire::OP_A11Y, a, b, c) {
+                Ok(_) => return true,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+}
+
 /// Drag and drop between programs ([`sex_pdx::dnd`]).
 pub mod dnd {
     use super::{files, Event, Window};
@@ -253,6 +325,8 @@ pub mod dnd {
     /// Takes back a drag before the button comes up.
     pub fn cancel() { let _ = send(d::Message::Cancel); }
 }
+
+pub mod restricted_status;
 
 /// The system clipboard, shared with every program and Quil, through Shell
 /// ([`sex_pdx::program_clipboard`]). Shell takes a copy or a paste only while this
@@ -344,7 +418,7 @@ pub mod launch {
     pub use l::Event;
     use sex_pdx::program_store as store;
 
-    pub(crate) fn is_event(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && m.type_id == l::OP_EVENT }
+    pub(crate) fn is_event(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && m.caller_task == SHELL && m.type_id == l::OP_EVENT }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Error {
         /// Files refused: no such program, or a grant this run does not hold (a `files` code).
@@ -356,6 +430,7 @@ pub mod launch {
     }
     /// Starts `/bin/NAME` (or `@/path` of a program file this run holds) with `args`.
     /// `network` only works for a run that has the network. Events for it carry `cookie`.
+    /// Call from the program's main task; launch/control requests are run-scoped.
     pub fn run(name: &[u8], args: &[u8], network: bool, cookie: u32) -> Result<(), Error> {
         start(name, args, if network { store::RUN_NETWORK } else { 0 }, cookie)
     }
@@ -437,6 +512,7 @@ pub mod files {
     pub use w::{message, NOT_FOUND};
 
     fn region() -> Result<&'static mut [u8], Error> {
+        direct::restricted::region_ready()?;
         let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?;
         Ok(unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) })
     }
@@ -444,6 +520,7 @@ pub mod files {
     static REGION_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     /// What Files last said about `path`, if nothing has changed since: no call at all.
     fn cached(path: &[u8]) -> Option<direct::Stat> {
+        direct::restricted::region_ready().ok()?;
         let mut at = REGION_AT.load(Ordering::Relaxed);
         if at == 0 { at = region().ok()?.as_ptr() as u64; REGION_AT.store(at, Ordering::Relaxed); }
         let cache = unsafe { core::slice::from_raw_parts((at as usize + w::CACHE_AT) as *const u8, w::CACHE_BYTES) };
@@ -607,6 +684,9 @@ pub mod files {
     /// the mailbox, where `Window::next` finds them.
     pub mod direct {
         use super::{exchange, w, Error, Hold};
+
+        /// Epoch-bound immutable offline jobs; never uses ordinary launch tickets.
+        pub mod restricted { include!("restricted_files.rs"); }
 
         /// What Files knows of a file or folder.
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -784,6 +864,14 @@ pub mod files {
             }
         }
 
+        /// Exact private job metadata for the attested restricted bootstrap.
+        /// Failure never implies permission to run through an ambient fallback.
+        pub fn restricted_boot()->Result<sex_pdx::restricted_job::Info,Error>{
+            exchange(None,sex_pdx::restricted_job::KIND,b"",sex_pdx::restricted_job::BOOT_INFO,0,|_|{},|n,d|{
+                if n as usize!=sex_pdx::restricted_job::INFO_BYTES{return None}
+                sex_pdx::restricted_job::Info::decode(&d[..n as usize])
+            })?.ok_or(w::INVALID)
+        }
         /// The words typed after the program's name, if it was started with any.
         pub fn args(out: &mut [u8; w::ARGS_MAX]) -> usize { args_into(None, out) }
         /// Reads up to `out.len()` bytes from byte `offset`; fewer at the file's end.

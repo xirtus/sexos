@@ -374,7 +374,7 @@ pub extern "C" fn _start() -> ! {
                 Kind::Wheel { steps } if app.edit.is_none() => app.picked = (app.picked as i32 - steps as i32).clamp(0, app.shown.len().saturating_sub(1) as i32) as usize,
                 _ => continue,
             },
-            Event::Drop { .. } | Event::DragEnded { .. } => continue,
+            Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_) => continue,
             Event::Resize { .. } => {}
         }
         render(&mut window, &app, &mut small, &mut tiny, &mut big);

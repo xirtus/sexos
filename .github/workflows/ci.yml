@@ -45,6 +45,14 @@ jobs:
       run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
+    - name: Velvet game rules and Weft input integration
+      run: cargo test --locked -p velvet --no-default-features
+    - name: Moan Weft app and project editing
+      run: cargo test --locked -p moan --no-default-features
+    - name: Moan native FFmpeg WAV, FLAC and Shine MP3 export oracle
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+        bash scripts/moan_export_host_gate.sh
     - name: Moan timeline, edits and mixer on the host
       run: bash scripts/moan_host_gate.sh
     - name: Bell sound rate conversion on the host
@@ -61,6 +69,12 @@ jobs:
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
       run: cargo test --locked -p sex-html
+    - name: Leather SDK sample models and real Weft widgets
+      run: cargo test --locked -p leather-samples --no-default-features
+    - name: Live autofill capability broker and SDK (host transport)
+      run: bash scripts/autofill_host_gate.sh
+    - name: Chastity encrypted vault and Weft UI
+      run: bash scripts/chastity_host_gate.sh
     - name: Shields ad and tracker filters (Kaleidoscope, Qupid)
       run: cargo test --locked -p sex-shields
     - name: Browser extensions (manifests, match patterns, CRX/ZIP, declarativeNetRequest)
@@ -107,10 +121,11 @@ jobs:
       run: bash scripts/burlesque_host_gate.sh
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
-    - name: Whisper voice (eSpeak NG speech, stop, determinism) and its Shell wire
+    - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport
       run: |
         cargo test --locked -p sex-speech
         cargo test --locked -p sex-pdx --test speech_voice
+        cargo test --locked -p sex-pdx --test a11y
     - name: Denim page compression (compressed RAM codec)
       run: cargo test --locked -p denim
     - name: SNTP client codec (network time)
@@ -209,8 +224,10 @@ jobs:
       run: bash scripts/batik_host_gate.sh
     - name: Power off and restart through ACPI (host half)
       run: bash scripts/power_host_gate.sh
-    - name: Drag VM ABI layouts and VMX/EPT encodings (host half)
-      run: bash scripts/drag_host_gate.sh
+    - name: Drag VM ABI layouts and VMX/EPT encodings (host half), Crossdress cell on KVM when the runner has it
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        bash scripts/drag_host_gate.sh
     - name: Laptop power model (embedded controller, battery, backlight, thermal, _CRS)
       run: cargo test --locked -p sex-laptop
     - name: Touchpad model (I2C HID, report descriptors, contacts, gestures)
@@ -395,7 +412,7 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
         python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" --out "$RUNNER_TEMP/sexos-fuzz"
-    - name: Drag VM syscall 110 refused cleanly without VMX (QEMU TCG; the guest path needs --accel kvm)
+    - name: Drag VM syscall 110 and Crossdress refused cleanly without VMX (QEMU TCG; the guest paths need --accel kvm)
       run: |
         truncate -s 1G "$RUNNER_TEMP/drag-source.img"
         python3 scripts/drag_gate.py --accel tcg --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drag-source.img" --out "$RUNNER_TEMP/sexos-drag"
@@ -424,7 +441,7 @@ jobs:
   media:
     name: Browser media streaming and seeking
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -558,10 +575,34 @@ jobs:
         python3 scripts/sdl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/sdl"
     - name: SDL2 game (demo score, window, sound, keys)
       run: python3 scripts/driftspark_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/driftspark"
-    - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
-      run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
+    - name: Weft programs
+      run: python3 scripts/program_weft_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/weft"
     - name: Moan edited multitrack mix through Bell (stereo waveform proof)
       run: python3 scripts/moan_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan"
+    - name: Moan EQ, compressor and decaying reverb through Bell
+      run: python3 scripts/moan_gate.py --effects --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-effects"
+    - name: Moan Weft window, editing and sound
+      run: python3 scripts/moan_app_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-app"
+    - name: Moan microphone permission and captured track
+      run: python3 scripts/moan_app_gate.py --microphone --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-capture"
+    - name: Velvet playable games
+      run: python3 scripts/velvet_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/velvet"
+    - name: Leather SDK hello, text editor, image viewer and fetch windows
+      run: python3 scripts/leather_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/leather"
+    - name: Chastity vault UI and encrypted snapshot across reboot
+      run: python3 scripts/program_chastity_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity" --input-privacy
+    - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
+      run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
+    - name: egui programs
+      run: python3 scripts/program_egui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/egui"
+    - name: Moan actual WAV, FLAC and MP3 Files exports
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+        python3 scripts/moan_export_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-export"
+    - name: Moan editable project waveform save and reopen across reboot
+      run: python3 scripts/moan_project_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-project"
+    - name: Live autofill two-app consent and encrypted vault across reboot
+      run: python3 scripts/chastity_autofill_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity-autofill"
     - name: Climax benchmark and thermal torture app
       run: python3 scripts/climax_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/climax"
     - name: Programs run programs (std::process, posix_spawn, waitpid, kill, system)
@@ -582,7 +623,8 @@ jobs:
     - name: E-book and feed models (EPUB, FictionBook, CBZ, reflow, RSS, Atom, OPML) on the host
       run: cargo test --locked -p sex-xml -p sex-ebook -p sex-feed
     - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/reading-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/reading-build.log"; exit 1)
+      run: |
+        ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/reading-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/reading-build.log"; exit 1)
     - name: Bodice opens an EPUB, turns pages and reopens at the saved page
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-reading.img"
@@ -610,7 +652,8 @@ jobs:
     - name: Hookup protocol (KDE Connect) on the host, against the Python test peer; map tiles, search and routes
       run: cargo test --locked -p sex-kdeconnect -p sex-map
     - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/places-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/places-build.log"; exit 1)
+      run: |
+        ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/places-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/places-build.log"; exit 1)
     - name: Hookup pairs with a test phone, receives and sends files, media keys
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-places.img"
@@ -648,10 +691,18 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/switcher-source.img"
         python3 scripts/window_switcher_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/switcher-source.img" --out "$RUNNER_TEMP/sexos-desktop/switcher"
+    - name: Window decorations (title bar buttons, window menu, double-click maximise, close ends the program)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/decor-source.img"
+        python3 scripts/window_decorations_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/decor-source.img" --out "$RUNNER_TEMP/sexos-desktop/decorations"
     - name: Magnifier and colour filters (accessibility)
       run: |
         truncate -s 256M "$RUNNER_TEMP/access-source.img"
         python3 scripts/access_view_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/access-source.img" --out "$RUNNER_TEMP/sexos-desktop/access"
+    - name: Whisper screen reader (Super+Alt+R, spoken window titles and a Weft button)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/reader-source.img"
+        python3 scripts/screen_reader_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/reader-source.img" --out "$RUNNER_TEMP/sexos-desktop/reader"
     - name: Clipboard history on Super+V
       run: |
         truncate -s 256M "$RUNNER_TEMP/cliphist-source.img"
@@ -698,7 +749,7 @@ jobs:
 
   build:
     if: always()
-    needs: [host, truth, boot, desktop, devices, programs, media, editor, profiles, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places]
+    needs: [host, truth, boot, desktop, devices, programs, media, editor, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places]
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -750,9 +801,12 @@ jobs:
   recording:
     name: Lossless encoder guest proof
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 100
     steps:
     - uses: actions/checkout@v4
+      with:
+        # Splicy Studio lives in its own repository (xirtus/Splicy), at apps/splicy-studio.
+        submodules: true
     - uses: ./.github/actions/setup
       with:
         recording: "true"
@@ -777,6 +831,14 @@ jobs:
         bash scripts/build_splicy.sh
         truncate -s 1G "$RUNNER_TEMP/splicy-source.img"
         python3 scripts/program_splicy_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --require-export --out "$RUNNER_TEMP/recording/splicy"
+    - name: FilmCraft's editing engine runs on SexOS (edit, undo, WAV and H.264 export)
+      run: |
+        bash scripts/build_splicy_probe.sh
+        python3 scripts/program_splicy_probe_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-probe"
+    - name: Splicy Studio opens a clip and its transcript in FilmCraft's editor in a SexOS window
+      run: |
+        bash scripts/build_splicy_studio.sh
+        python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"
     - name: Preserve encoder evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -884,4 +946,55 @@ jobs:
         path: |
           ${{ runner.temp }}/productivity-build.log
           ${{ runner.temp }}/sexos-productivity
+        if-no-files-found: ignore
+
+  # Deliberately unsafe fixture-only image; every other job builds normal flags.
+  input-payload-proof:
+    name: Diagnostic keyboard payload proof (UNSAFE)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build and freeze diagnostic image, then rebuild normal image
+      run: bash scripts/build_input_payload_proof.sh "$RUNNER_TEMP/input-payload-proof"
+    - name: Strict physical-key oracles on the labeled diagnostic image only
+      run: |
+        evidence="$RUNNER_TEMP/input-payload-proof"
+        runner="$evidence/frozen/source/scripts"
+        iso="$evidence/frozen/tested.iso"
+        binding="$evidence/frozen/source-binding.json"
+        # The GREEN canonical boot formats this disk; preserve its real workspace.
+        python3 - "$evidence" "$RUNNER_TEMP/input-proof-seed.img" <<'PYSEED'
+        import hashlib, json, sys
+        from pathlib import Path
+        evidence, seed = map(Path, sys.argv[1:])
+        sys.path.insert(0, str(evidence / 'frozen/source/scripts'))
+        from https_import_gate import workspace
+        source = evidence / 'diagnostic-build/nvme.img'
+        data = source.read_bytes()
+        manifest = workspace(data)  # Reject missing/corrupt canonical workspace metadata.
+        with seed.open('xb') as output:
+            output.write(data)
+        digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest(seed) != digest(source):
+            raise ValueError('controlled diagnostic seed copy differs')
+        seed.chmod(0o444)
+        receipt = dict(source=str(source), seed=str(seed), bytes=len(data),
+                       source_sha256=digest(source), seed_sha256=digest(seed),
+                       iso_sha256=digest(evidence / 'frozen/tested.iso'),
+                       boot_serial_sha256=digest(evidence / 'diagnostic-build/serial.log'),
+                       boot_report_sha256=digest(evidence / 'diagnostic-build/report.md'),
+                       workspace=manifest)
+        (evidence / 'controlled-seed.json').write_text(json.dumps(receipt, indent=2) + '\n')
+        PYSEED
+        python3 "$runner/https_asset_gate.py" --iso "$iso" --binding "$binding" --source-disk "$RUNNER_TEMP/input-proof-seed.img" --out "$evidence/https-asset"
+        python3 "$runner/connected_desktop_gate.py" --iso "$iso" --binding "$binding" --source-disk "$RUNNER_TEMP/input-proof-seed.img" --out "$evidence/connected-desktop"
+        python3 "$runner/browser_reserve_gate.py" --iso "$iso" --binding "$binding" --source-disk "$RUNNER_TEMP/input-proof-seed.img" --out "$evidence/browser-reserve"
+    - name: Preserve labeled diagnostic and normal evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: UNSAFE-keyboard-payload-proof-never-private-input
+        path: ${{ runner.temp }}/input-payload-proof
         if-no-files-found: ignore

@@ -59,6 +59,7 @@ pub enum AuthLayer {
 pub struct SerialWriter;
 
 mod serial_record_buffer;
+pub mod input_diagnostics;
 
 /// A complete bounded line uses one raw-print invocation. On the current BSP
 /// syscall entry masks interrupts, so timer diagnostics cannot split its fields.
@@ -331,11 +332,11 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
             continue;
         }
         unsafe {
-            if PDX_LISTEN_WRAPPER_BUDGET > 0 {
+            if PDX_LISTEN_WRAPPER_BUDGET > 0 && !autofill::request(type_id) && !autofill::response(type_id) {
                 PDX_LISTEN_WRAPPER_BUDGET -= 1;
                 serial_println!(
-                    "[pdx.listen.raw.wrapper] type={:#x} caller={} a0={:#x} a1={:#x}",
-                    type_id, caller_pd, arg0, arg1
+                    "[pdx.listen.raw.wrapper] type={:#x} caller={} task={} payload=redacted",
+                    type_id, caller_pd, caller_task
                 );
             }
         }
@@ -1300,10 +1301,15 @@ pub mod notify;
 pub mod desktop_look;
 pub mod access_view;
 pub mod window_switcher;
+pub mod window_menu;
 pub mod screenshot;
 pub mod tray;
 pub mod window_motion;
 pub mod launch;
+pub mod restricted_helper;
+pub mod restricted_job;
+pub mod restricted_helper_journal;
+pub mod restricted_helper_provider;
 pub mod dnd;
 pub mod program_clipboard;
 pub mod session_restore;
@@ -1329,6 +1335,7 @@ pub mod home_lock;
 pub mod disks;
 pub mod web;
 pub mod accounts;
+pub mod autofill;
 pub mod organs;
 pub mod text_selection;
 pub mod text_encoding;
@@ -1342,6 +1349,7 @@ pub mod screen_state;
 pub mod app_scroll;
 pub mod bitmap_batch;
 pub mod speech_voice;
+pub mod a11y;
 pub mod vm;
 pub mod stream;
 pub mod console_relay;

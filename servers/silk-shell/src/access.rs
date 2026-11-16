@@ -11,6 +11,7 @@
 //! * Super+Alt+8 magnifier on/off, Super+Alt+= / Super+Alt+- zoom in/out
 //! * Super+Alt+C next colour filter, Super+Alt+I inverted colours on/off
 //! * Super+Alt+S sticky keys, Super+Alt+K slow keys, Super+Alt+B bounce keys
+//! * Super+Alt+R the screen reader, Whisper (`reader.rs`), on/off
 //! * Shift pressed five times in a row: sticky keys on/off
 //!
 //! Display draws the magnifier and filters (`sex_pdx::access_view`); this
@@ -36,6 +37,7 @@ pub mod code {
     pub const S: u8 = 0x1F;
     pub const K: u8 = 0x25;
     pub const B: u8 = 0x30;
+    pub const R: u8 = 0x13;
 }
 
 /// Zoom steps and filters mirror `sex_pdx::access_view` (kept here so this
@@ -66,6 +68,8 @@ pub enum Change {
     StickyKeys(bool),
     SlowKeys(bool),
     BounceKeys(bool),
+    /// The screen reader on or off.
+    Reader(bool),
 }
 
 /// What [`Access::key`] decided.
@@ -108,6 +112,7 @@ pub struct Access {
     pub sticky: bool,
     pub slow: bool,
     pub bounce: bool,
+    pub reader: bool,
     super_down: u8,
     alt_down: u8,
     /// Sticky keys: each latchable modifier's state, and whether the
@@ -132,7 +137,7 @@ impl Access {
     pub const fn new() -> Self {
         Self {
             zoom: ZOOM_ONE, last_zoom: 8, filter: 0, last_filter: 1,
-            sticky: false, slow: false, bounce: false,
+            sticky: false, slow: false, bounce: false, reader: false,
             super_down: 0, alt_down: 0,
             latch: [Latch::Off; 6], down: [false; 6], chorded: [false; 6], applied: None, shift_taps: 0,
             pending: None, accepted: None, released: None, bounced: None,
@@ -277,6 +282,7 @@ impl Access {
             code::S => self.set_sticky(!self.sticky),
             code::K => { self.slow = !self.slow; self.pending = None; self.accepted = None; Change::SlowKeys(self.slow) }
             code::B => { self.bounce = !self.bounce; self.released = None; self.bounced = None; Change::BounceKeys(self.bounce) }
+            code::R => { self.reader = !self.reader; Change::Reader(self.reader) }
             _ => return None,
         })
     }
@@ -298,6 +304,7 @@ impl Access {
             Change::StickyKeys(on) => { put(b"Sticky keys "); put(if on { b"on" } else { b"off" }); }
             Change::SlowKeys(on) => { put(b"Slow keys "); put(if on { b"on" } else { b"off" }); }
             Change::BounceKeys(on) => { put(b"Bounce keys "); put(if on { b"on" } else { b"off" }); }
+            Change::Reader(on) => { put(b"Screen reader "); put(if on { b"on" } else { b"off" }); }
         }
         n
     }
