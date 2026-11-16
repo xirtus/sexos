@@ -803,10 +803,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 100
     steps:
+    # Splicy Studio (apps/splicy-studio) is a submodule from xirtus/Splicy. Its own step
+    # fetches it, so a repository CI cannot read fails that step alone, not the checkout.
     - uses: actions/checkout@v4
-      with:
-        # Splicy Studio lives in its own repository (xirtus/Splicy), at apps/splicy-studio.
-        submodules: true
     - uses: ./.github/actions/setup
       with:
         recording: "true"
@@ -836,7 +835,11 @@ jobs:
         bash scripts/build_splicy_probe.sh
         python3 scripts/program_splicy_probe_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-probe"
     - name: Splicy Studio opens a clip and its transcript in FilmCraft's editor in a SexOS window
+      env:
+        SPLICY_TOKEN: ${{ secrets.SPLICY_READ_TOKEN }}
       run: |
+        if [[ -n "${SPLICY_TOKEN:-}" ]]; then git config --global url."https://x-access-token:${SPLICY_TOKEN}@github.com/xirtus/Splicy".insteadOf https://github.com/xirtus/Splicy; fi
+        git submodule update --init apps/splicy-studio || { echo "::error::cannot read github.com/xirtus/Splicy: make it public or add a SPLICY_READ_TOKEN secret"; exit 1; }
         bash scripts/build_splicy_studio.sh
         python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"
     - name: Preserve encoder evidence
