@@ -6,6 +6,8 @@
 # Output: apps/splicy-studio/target/x86_64-sex-std/release/splicy-studio.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Splicy lives in its own repository (github.com/xirtus/Splicy), checked out here as a submodule.
+[[ -f apps/splicy-studio/Cargo.toml ]] || git submodule update --init apps/splicy-studio
 src="$(python3 scripts/sex_std_source.py)"
 bin=apps/splicy-studio/target/x86_64-sex-std/release/splicy-studio
 build() {

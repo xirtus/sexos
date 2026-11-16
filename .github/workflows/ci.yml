@@ -738,6 +738,9 @@ jobs:
     timeout-minutes: 100
     steps:
     - uses: actions/checkout@v4
+      with:
+        # Splicy Studio lives in its own repository (xirtus/Splicy), at apps/splicy-studio.
+        submodules: true
     - uses: ./.github/actions/setup
       with:
         recording: "true"
