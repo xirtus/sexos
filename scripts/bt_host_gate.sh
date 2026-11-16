@@ -11,7 +11,10 @@
 # suspend/resume/close, malformed peers), and the sex_pdx::bt_audio ring. W2b: the
 # sex_pdx::bt_ui panel protocol (region snapshot and commands, panel lines through the
 # Display wire, the panel model's keys, clicks and comparison dialog) and Cufflinks's
-# pairing policy (tests/cufflinks_pairing.rs).
+# pairing policy (tests/cufflinks_pairing.rs). W3b: AVRCP with a simulated headset
+# (buttons as keys, absolute volume both ways, unencrypted links ignored, hostile and
+# random AVCTP frames; crates/sex-bt/tests/avrcp_peers.rs), Cufflinks's button and
+# volume mapping (tests/cufflinks_remote.rs) and the bt_audio master-volume words.
 # No radio here: the controller itself is only proven on hardware (x17 receipt).
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -29,4 +32,6 @@ printf '#[path = "%s/crates/sex-pdx/src/bt_hci.rs"] pub mod bt_hci;\n#[path = "%
 rustc --edition=2021 --crate-name pdx_bt --test "$TMP/pdx_bt.rs" -o "$TMP/pdx_bt" && "$TMP/pdx_bt"
 # W2b: the pairing policy (prompt vs first-setup window) as Cufflinks compiles it.
 rustc --edition=2021 -A dead_code --test tests/cufflinks_pairing.rs -o "$TMP/cufflinks_pairing" && "$TMP/cufflinks_pairing"
+# W3b: the headset's buttons and volume as Cufflinks compiles them.
+rustc --edition=2021 -A dead_code --test tests/cufflinks_remote.rs -o "$TMP/cufflinks_remote" && "$TMP/cufflinks_remote"
 echo "[gate.bt.result] PASS scope=host_stack_not_radio"

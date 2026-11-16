@@ -13,6 +13,7 @@
 
 extern crate alloc;
 
+pub mod media;
 pub mod view;
 pub mod words;
 
@@ -240,6 +241,13 @@ impl Editor {
     pub fn caret_time(&self) -> Option<Micros> {
         let playing = self.transcript.playing(self.timeline());
         playing.iter().find(|(i, _)| *i >= self.caret).or(playing.last()).map(|(_, t)| *t)
+    }
+
+    /// The word playing at timeline time `t`, or the last one that started before it.
+    pub fn word_at_time(&self, t: Micros) -> Option<usize> {
+        let playing = self.transcript.playing(self.timeline());
+        let i = playing.partition_point(|(_, at)| *at <= t);
+        playing.get(i.checked_sub(1)?).map(|(w, _)| *w)
     }
 
     /// The timeline times where two pieces of the source meet because something between

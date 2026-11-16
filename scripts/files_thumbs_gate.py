@@ -45,9 +45,9 @@ def main():
  with disk.open('r+b') as f:f.truncate(1024**3)
  scratch=a.out/'host';scratch.mkdir();stick=a.out/'thumbs.img';make_stick(stick,scratch)
  import http.server,threading
- FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/pdf':(ROOT/'iso_root/programs/vellum').read_bytes()}
+ FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/vellum':(ROOT/'iso_root/programs/vellum').read_bytes()}
  # Vellum on master may predate --thumb; the PDF tile is required once it has it.
- drawn_pdf=b'--thumb' in FILES['/pdf']
+ drawn_pdf=b'--thumb' in FILES['/vellum']
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
    body=FILES.get(self.path)
@@ -78,7 +78,7 @@ def main():
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  for n,dest in (('files','/bin/loom'),('pdf','/bin/vellum')):
+  for n,dest in (('files','/bin/loom'),('vellum','/bin/vellum')):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{n} {dest}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   q.cmd('blockdev-add',{'driver':'raw','node-name':'thumbsdrive','file':{'driver':'file','filename':str(stick)}})
   s=len(t())

@@ -13,10 +13,9 @@
 //! File and Orphan Data work), the search field, the filter popover and the
 //! New Collection button.
 //!
-//! SexOS's Shell delivers no Alt yet: Alt+A also works as A pressed while
-//! everything is selected (deselect), and Alt+H as Shift+H. Shell also turns
-//! Ctrl+left-click into a middle click (orbit emulation); a middle press with
-//! Ctrl held counts as Ctrl+click here.
+//! Alt+A deselects (A pressed while everything is selected does too) and
+//! Alt+H unhides (Shift+H also works). A middle press with Ctrl held counts as
+//! Ctrl+click here.
 use super::properties::icons::{self, Icon};
 use crate::doc::Doc;
 use crate::draw::{Align, Rect};
@@ -122,6 +121,8 @@ pub struct Filters {
     pub cameras: bool,
     pub lights: bool,
     pub empties: bool,
+    /// Grease Pencil and other kinds (Blender's "Others").
+    pub others: bool,
 }
 
 impl Default for Filters {
@@ -141,6 +142,7 @@ impl Default for Filters {
             cameras: true,
             lights: true,
             empties: true,
+            others: true,
         }
     }
 }
@@ -203,7 +205,9 @@ fn data_icon(data: &ObjectData) -> Icon {
         ObjectData::Mesh(_) => Icon::Mesh,
         ObjectData::Camera(_) => Icon::CameraData,
         ObjectData::Light(_) => Icon::LightData,
-        ObjectData::Empty => Icon::EmptyData,
+        // No armature/lattice UI yet: shown like empties.
+        ObjectData::Empty | ObjectData::Armature(_) | ObjectData::Lattice(_) => Icon::EmptyData,
+        ObjectData::GreasePencil(_) => Icon::GreasePencilData,
     }
 }
 
@@ -234,7 +238,8 @@ impl Build<'_> {
             ObjectData::Mesh(_) => f.meshes,
             ObjectData::Camera(_) => f.cameras,
             ObjectData::Light(_) => f.lights,
-            ObjectData::Empty => f.empties,
+            ObjectData::Empty | ObjectData::Armature(_) | ObjectData::Lattice(_) => f.empties,
+            ObjectData::GreasePencil(_) => f.others,
         }
     }
 
@@ -551,6 +556,7 @@ fn filter_menu(f: &Filters) -> Vec<MenuItem> {
         c("Cameras", f.cameras, "cameras"),
         c("Lights", f.lights, "lights"),
         c("Empties", f.empties, "empties"),
+        c("Others", f.others, "others"),
     ]
 }
 
@@ -814,6 +820,7 @@ pub fn run_op(s: &mut State, d: &mut Doc, op: &Op) {
                 "meshes" => &mut f.meshes,
                 "cameras" => &mut f.cameras,
                 "lights" => &mut f.lights,
+                "others" => &mut f.others,
                 _ => &mut f.empties,
             };
             *b = !*b;

@@ -234,6 +234,15 @@ rustc --edition=2021 -A dead_code --test tests/launcher_search.rs -o "$TEST_DIR/
 rustc --edition=2021 -A dead_code --test tests/notify.rs -o "$TEST_DIR/notify"
 "$TEST_DIR/notify"
 rustc --edition=2021 -A dead_code --test tests/desktop_look.rs -o "$TEST_DIR/desktop-look"
+rustc --edition=2021 -A dead_code --test tests/access_view.rs -o "$TEST_DIR/access-view"
+"$TEST_DIR/access-view" --test-threads=1
+rustc --edition=2021 -A dead_code --test tests/access_keys.rs -o "$TEST_DIR/access-keys"
+"$TEST_DIR/access-keys"
+# Whisper, the screen reader: built against a sex_pdx of only the wires it uses.
+printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/speech_voice.rs"] pub mod speech_voice;\n#[path = "%s/crates/sex-pdx/src/a11y.rs"] pub mod a11y;\n' "$ROOT_DIR" "$ROOT_DIR" > "$TEST_DIR/reader_pdx.rs"
+rustc --edition=2021 --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/reader_pdx.rs" -o "$TEST_DIR/libreader_pdx.rlib"
+rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libreader_pdx.rlib" --test tests/screen_reader.rs -o "$TEST_DIR/screen-reader"
+"$TEST_DIR/screen-reader"
 rustc --edition=2021 -A dead_code --test tests/window_switcher.rs -o "$TEST_DIR/window-switcher"
 "$TEST_DIR/window-switcher"
 rustc --edition=2021 -A dead_code --test tests/screenshot.rs -o "$TEST_DIR/screenshot"

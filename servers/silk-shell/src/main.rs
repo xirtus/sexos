@@ -22,6 +22,10 @@ mod idle_media;
 mod lock;
 mod keyboard_layout;
 mod key_repeat;
+mod access;
+mod access_glue;
+mod reader;
+mod reader_glue;
 mod bt_panel;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
@@ -10738,6 +10742,8 @@ unsafe fn key_repeat_poll() {
     if !delivered{KEY_REPEAT.cancel();}
 }
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
+    // Accessibility first: magnifier/filter chords, sticky, slow and bounce keys.
+    if access_glue::key(code,value){return true;}
     let code=if CAPS_AS_CTRL && code==0x3a {0x1d} else {code};
     // A keyboard's own typematic press of the repeating key is dropped; any
     // other press stops the repeat until it reaches a program itself.
@@ -17682,6 +17688,7 @@ static mut PROGRAM_NETWORK: bool = false;
 /// Files may then serve the program its own folder, and the network service talk to
 /// it if the person asked, for this run alone.
 fn program_bind(target:u32,task:u32){
+    attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
     let network=unsafe{core::mem::take(&mut PROGRAM_NETWORK)};
     if network{let _=pdx_call(sex_pdx::web::SHELL_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
@@ -17690,6 +17697,7 @@ fn program_bind(target:u32,task:u32){
 /// Tells whoever asked why: the program that started the run, or Spindle, where the
 /// person who typed `run` is looking.
 fn program_refused(code:u32){
+    if unsafe{reader_glue::voice_refused(code)}{return}
     if let Some((parent,_,cookie))=unsafe{LAUNCH_ASKER.take()}{unsafe{LAUNCH_HIDDEN=false;}launch_send(parent,sex_pdx::launch::Event::Refused{cookie,code});return}
     let _=pdx_call(spindle_route_slot(),sex_pdx::program_store::OP_REFUSED,code as u64,0,0);
 }
@@ -17749,6 +17757,7 @@ fn launch_send(parent:u32,event:sex_pdx::launch::Event){
     sex_pdx::serial_record!("[shell.launch.event] parent={} event={:?} sent={}",parent,event,(status==0)as u8);
 }
 unsafe fn launch_started(target:u32,task:u32,network:bool){
+    if reader_glue::voice_started(target,task){return}
     if network{if let Some(slot)=NETWORK_RUNS.iter_mut().find(|s|s.is_none()){*slot=Some((target,task));}}
     let hidden=core::mem::take(&mut LAUNCH_HIDDEN);
     let scene=PROGRAM_SCENE.take();
@@ -17837,13 +17846,45 @@ unsafe fn shell_launch_message(msg:&sex_pdx::PdxMessage)->bool{
             if LAUNCH_RUNS.iter().flatten().count()>=launch::MAX_RUNS{refuse(store::NO_FREE_ROW,"runs");return true}
             if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0{refuse(store::IMAGE_BUSY,"busy");return true}
             if program_free_row().is_none(){refuse(store::NO_FREE_ROW,"no_free_row");return true}
-            let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,store::TICKET,ticket,0);
+            // Files loads a program's ticket only for the program that prepared it.
+            let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,store::TICKET,ticket,caller as u64);
             if status!=0{refuse(store::IMAGE_BUSY,"files_busy");return true}
             PROGRAM_READING=true;PROGRAM_NETWORK=network;LAUNCH_ASKER=Some((caller,task,cookie));LAUNCH_HIDDEN=flags&store::RUN_HIDDEN!=0;
             sex_pdx::serial_record!("[shell.launch.asked] parent={} task={} cookie={} network={}",caller,task,cookie,network as u8);
         },
     }
     true
+}
+/// The terminal (target, task) whose ticket is being read, until its run is bound.
+static mut PROGRAM_LAUNCHER: Option<(u32,u32)> = None;
+/// Runs a terminal started attached to it (`sex_pdx::console_relay`): (run target, run
+/// task, terminal target, terminal task). Only that terminal may stop the run.
+static mut ATTACHED_RUNS: [Option<(u32,u32,u32,u32)>;16] = [None;16];
+/// The task `target`'s row runs now, if it runs.
+fn running_task(target:u32)->Option<u32>{
+    let row=app_catalog::by_target(target)?;
+    let c=sex_pdx::app_lifecycle::catalog(row.lifecycle_slot).ok()?;
+    (c.target_pd==target&&sex_pdx::app_lifecycle::info(row.lifecycle_slot)==Err(sex_pdx::app_lifecycle::LIVE)).then_some(c.task_id)
+}
+fn attached_record(target:u32,task:u32){
+    let runs=unsafe{&mut *core::ptr::addr_of_mut!(ATTACHED_RUNS)};
+    // The row's earlier run is no one's now.
+    for r in runs.iter_mut(){if r.is_some_and(|r|r.0==target){*r=None;}}
+    let Some((by,by_task))=(unsafe{core::mem::take(&mut *core::ptr::addr_of_mut!(PROGRAM_LAUNCHER))})else{return};
+    let free=runs.iter().position(|r|r.is_none_or(|r|running_task(r.0)!=Some(r.1)||running_task(r.2)!=Some(r.3)));
+    if let Some(i)=free{runs[i]=Some((target,task,by,by_task));}
+}
+/// A terminal's second Ctrl+C: its attached run did not end, so it is ended the way a
+/// program that ignores Close is (`app_lifecycle::force_end`). Only the terminal run that
+/// started it may ask, while both still run.
+unsafe fn attached_stop(caller:u32,target:u64){
+    let runs=&mut *core::ptr::addr_of_mut!(ATTACHED_RUNS);
+    let found=runs.iter().flatten().copied().find(|r|r.0 as u64==target&&r.2==caller);
+    let ok=found.is_some_and(|r|running_task(r.2)==Some(r.3)&&running_task(r.0)==Some(r.1));
+    let Some(r)=found.filter(|_|ok)else{sex_pdx::serial_record!("[shell.attached.stop.denied] caller={} target={}",caller,target);return};
+    let Some(row)=app_catalog::by_target(r.0)else{return};
+    let result=sex_pdx::app_lifecycle::force_end(row.lifecycle_slot);
+    sex_pdx::serial_record!("[shell.attached.stop] terminal={} target={} task={} ok={}",caller,r.0,r.1,result.is_ok() as u8);
 }
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
 unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
@@ -17862,16 +17903,21 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         RECORD_SPAWN_WANTED=if status==0{msg.arg2}else{0};
         return true;
     }
+    if msg.type_id==store::OP_STOP_ATTACHED {
+        if matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program)){attached_stop(msg.caller_pd,msg.arg0);}
+        return true;
+    }
     if msg.type_id==store::OP_RUN {
         // A terminal's ticket (sex_pdx::console_relay): Files starts it only for the program that prepared it.
         let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
         if !app_catalog::is_spindle(msg.caller_pd)&&!by_program{return true}
         if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
-            sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true;
+            sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");reader_glue::refuse_other(store::NO_FREE_ROW);return true;
         }
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;
         PROGRAM_NETWORK=status==0&&!by_program&&msg.arg2&store::RUN_NETWORK!=0;
+        PROGRAM_LAUNCHER=if status==0&&by_program{running_task(msg.caller_pd).map(|t|(msg.caller_pd,t))}else{None};
         // A restored run's workspace, and the ticket Spindle keeps the session by: Spindle's runs only.
         PROGRAM_TICKET=if by_program{0}else{msg.arg1};PROGRAM_SCENE=if by_program{None}else{sex_pdx::session_restore::scene_of(msg.arg2).filter(|s|(*s as usize)<ATLAS_MAX_SCENES)};
         if status!=0{sex_pdx::serial_record!("[shell.program.denied] reason=files_busy status={}",status);}
@@ -26243,6 +26289,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { program_resize_flush(); }
         // Held keys: the repeat goes ahead of the queue drain below.
         unsafe { key_repeat_poll(); }
+        unsafe { access_glue::poll(); }
+        unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
         // Retain failed notification attempts while continuing normal receives.
@@ -26925,7 +26973,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -26948,6 +26996,7 @@ pub extern "C" fn _start() -> ! {
             if config_watch::receive(&msg) { continue; }
             if lock::receive(&msg) { continue; }
             if bt_panel::receive(&msg) { continue; }
+            if reader_glue::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }

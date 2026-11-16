@@ -826,7 +826,7 @@ fn rich_scene() -> Scene {
     cam.transform.rotation = Quat::from_axis_angle(Vec3::X, 1.3);
     let cam = s.add_object(cam);
     // A light under the camera (child of a turned frame).
-    let mut spot = Object::new("Spot", ObjectData::Light(Light { kind: LightKind::Spot { angle: 1.0, blend: 0.25 }, power: 250.0, color: Vec3::new(1.0, 0.9, 0.8), radius: 0.0 }));
+    let mut spot = Object::new("Spot", ObjectData::Light(Light { kind: LightKind::Spot { angle: 1.0, blend: 0.25 }, power: 250.0, color: Vec3::new(1.0, 0.9, 0.8), radius: 0.0, ..Default::default() }));
     spot.parent = Some(cam);
     spot.transform.location = Vec3::new(0.5, 0.0, 0.0);
     spot.transform.rotation = Quat::from_axis_angle(Vec3::Y, 0.3);
@@ -1017,4 +1017,157 @@ fn export_files_names_main_file_first() {
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].0, format!("out.{}", f.extension()));
     }
+}
+
+// ---------------------------------------------------------------------------
+// glTF skins.
+
+/// World-space positions of object `i`'s evaluated (deformed) mesh.
+fn deformed_world(s: &Scene, i: usize) -> Vec<Vec3> {
+    let m = s.evaluated_mesh(i).unwrap();
+    let w = s.world_matrix(i);
+    m.positions.iter().map(|&p| w.transform_point(p)).collect()
+}
+
+/// A posed two-bone rig skinning a cylinder, plus an empty on the tip bone.
+fn skinned_scene() -> Scene {
+    use sex_3d::armature::{Armature, Bone, PoseBone};
+    let mut s = Scene::new();
+    let mut arm = Armature::default();
+    let root = arm.add_bone(Bone::new("Root", Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0)));
+    let mut tip = Bone::new("Tip", Vec3::new(0.0, 0.0, 1.0), Vec3::new(0.0, 0.2, 2.0));
+    tip.parent = Some(root);
+    tip.roll = 0.3;
+    arm.add_bone(tip);
+    let a = s.add_armature_object("Rig", arm);
+    s.objects[a].transform.location = Vec3::new(0.5, 0.0, 0.0);
+    s.objects[a].transform.rotation = Quat::from_axis_angle(Vec3::Z, 0.4);
+
+    let mut mesh = primitives::cylinder(8, 0.2, 2.0);
+    let (r, t) = (mesh.add_vertex_group("Root"), mesh.add_vertex_group("Tip"));
+    for v in 0..mesh.positions.len() {
+        let wt = ((mesh.positions[v].z + 1.0) / 2.0).clamp(0.0, 1.0);
+        mesh.set_weight(v, r, 1.0 - wt);
+        mesh.set_weight(v, t, wt);
+    }
+    let m = s.add_mesh_object("Body", mesh);
+    s.objects[m].transform.location = Vec3::new(0.0, 0.0, 1.0);
+    assert!(s.parent_with_armature(m, a, sex_3d::scene::ArmatureWeights::None));
+
+    let mut pr = PoseBone::new("Root");
+    pr.location = Vec3::new(0.1, 0.0, 0.0);
+    pr.rotation_quaternion = Quat::from_axis_angle(Vec3::Z, 0.3);
+    let mut pt = PoseBone::new("Tip");
+    pt.rotation_quaternion = Quat::from_axis_angle(Vec3::X, 0.8);
+    s.objects[a].pose = vec![pr, pt];
+
+    let e = s.add_object(Object::new("Hat", ObjectData::Empty));
+    s.objects[e].transform.location = Vec3::new(0.2, 0.3, 2.5);
+    assert!(s.parent_to_bone(e, a, "Tip", true));
+    s
+}
+
+#[test]
+fn gltf_skin_round_trip() {
+    let s = skinned_scene();
+    let body = s.find_object("Body").unwrap();
+    let rest: Vec<Vec3> = {
+        let m = mesh_of(&s, body);
+        let w = s.world_matrix(body);
+        m.positions.iter().map(|&p| w.transform_point(p)).collect()
+    };
+    let posed = deformed_world(&s, body);
+    assert!(rest.iter().zip(&posed).any(|(a, b)| !a.approx_eq(*b, 1e-2)), "the pose deforms the mesh");
+    for format in [Format::Glb, Format::Gltf] {
+        let bytes = export(&s, format).unwrap();
+        let back = import(&bytes, format, &no_files).unwrap();
+        let rig = back.find_object("Rig").unwrap();
+        let arm = back.armature_of(rig).expect("Rig is an armature");
+        assert_eq!(arm.bones.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["Root", "Tip"]);
+        assert_eq!(arm.bones[1].parent, Some(0));
+        let orig = s.armature_of(s.find_object("Rig").unwrap()).unwrap();
+        for (a, b) in arm.bones.iter().zip(&orig.bones) {
+            assert!(a.head.approx_eq(b.head, 1e-4) && a.rest_matrix().approx_eq(&b.rest_matrix(), 1e-4), "{} rest", a.name);
+        }
+        // Same posed bones in world space.
+        let (wa, wb) = (back.world_matrix(rig), s.world_matrix(s.find_object("Rig").unwrap()));
+        for (pa, pb) in back.pose_matrices(rig).iter().zip(&s.pose_matrices(s.find_object("Rig").unwrap())) {
+            assert!((wa * *pa).approx_eq(&(wb * *pb), 1e-4));
+        }
+        // The skinned mesh: under the rig, deformed the same way.
+        let bi = back.find_object("Body").unwrap();
+        let o = &back.objects[bi];
+        assert_eq!((o.parent, o.parent_type), (Some(rig), sex_3d::scene::ParentType::Armature));
+        assert!(matches!(&o.modifiers[..], [sex_3d::modifiers::Modifier::Armature { object, .. }] if object == "Rig"));
+        assert_eq!(mesh_of(&back, bi).vertex_groups, ["Root", "Tip"]);
+        let got = deformed_world(&back, bi);
+        assert_eq!(got.len(), posed.len());
+        for p in &posed {
+            assert!(got.iter().any(|q| q.approx_eq(*p, 1e-3)), "{p:?} missing");
+        }
+        // The bone-parented empty keeps its place and its bone.
+        let hat = back.find_object("Hat").unwrap();
+        assert_eq!(back.objects[hat].parent_bone, "Tip");
+        assert!(back.world_matrix(hat).approx_eq(&s.world_matrix(s.find_object("Hat").unwrap()), 1e-4));
+    }
+}
+
+/// A hand-written skin without a host node: joint J1 at +Y turned 90° about
+/// glTF Z, inverse bind matrices given, the mesh node's transform ignored.
+#[test]
+fn gltf_skin_import_deforms_like_the_spec() {
+    let mut bin = Vec::new();
+    for v in [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0] {
+        bin.extend_from_slice(&v.to_le_bytes());
+    }
+    bin.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0]);
+    for v in [1.0f32, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0] {
+        bin.extend_from_slice(&v.to_le_bytes());
+    }
+    let ibm = [1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 1.0];
+    for v in ibm {
+        bin.extend_from_slice(&v.to_le_bytes());
+    }
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bin);
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    let json = format!(
+        r#"{{
+  "asset": {{"version": "2.0"}},
+  "scenes": [{{"nodes": [0, 1]}}],
+  "nodes": [
+    {{"name": "Skinned", "mesh": 0, "skin": 0, "translation": [5, 0, 0]}},
+    {{"name": "J0", "children": [2]}},
+    {{"name": "J1", "translation": [0, 1, 0], "rotation": [0, 0, {h}, {h}]}}
+  ],
+  "skins": [{{"name": "Skel", "joints": [1, 2], "inverseBindMatrices": 3}}],
+  "meshes": [{{"primitives": [{{"attributes": {{"POSITION": 0, "JOINTS_0": 1, "WEIGHTS_0": 2}}}}]}}],
+  "buffers": [{{"byteLength": {}, "uri": "data:application/octet-stream;base64,{b64}"}}],
+  "bufferViews": [
+    {{"buffer": 0, "byteLength": 36}}, {{"buffer": 0, "byteOffset": 36, "byteLength": 12}},
+    {{"buffer": 0, "byteOffset": 48, "byteLength": 48}}, {{"buffer": 0, "byteOffset": 96, "byteLength": 128}}
+  ],
+  "accessors": [
+    {{"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0,0,0], "max": [1,2,0]}},
+    {{"bufferView": 1, "componentType": 5121, "count": 3, "type": "VEC4"}},
+    {{"bufferView": 2, "componentType": 5126, "count": 3, "type": "VEC4"}},
+    {{"bufferView": 3, "componentType": 5126, "count": 2, "type": "MAT4"}}
+  ]
+}}"#,
+        bin.len()
+    );
+    let s = import(json.as_bytes(), Format::Gltf, &no_files).unwrap();
+    let names: Vec<&str> = s.objects.iter().map(|o| o.name.as_str()).collect();
+    assert_eq!(names, ["Skinned", "Skel"]);
+    let rig = 1;
+    assert_eq!(s.world_matrix(rig), sex_3d::math::Mat4::IDENTITY);
+    let arm = s.armature_of(rig).unwrap();
+    assert_eq!(arm.bones.iter().map(|b| b.name.as_str()).collect::<Vec<_>>(), ["J0", "J1"]);
+    // Bind pose: J0 at the origin reaching J1's head one unit up (scene Z).
+    assert!(arm.bones[0].tail.approx_eq(Vec3::new(0.0, 0.0, 1.0), 1e-5));
+    assert!(arm.bones[1].head.approx_eq(Vec3::new(0.0, 0.0, 1.0), 1e-5));
+    assert_eq!(s.objects[rig].pose.len(), 1, "only J1 is posed");
+    assert_eq!(mesh_of(&s, 0).vertex_groups, ["J0", "J1"]);
+    // glTF: J1 * IBM1 * (0,2,0) = (-1,1,0), scene (-1,0,1).
+    let got = deformed_world(&s, 0);
+    same_point_set(&got, &[Vec3::ZERO, Vec3::X, Vec3::new(-1.0, 0.0, 1.0)], 1e-5);
 }

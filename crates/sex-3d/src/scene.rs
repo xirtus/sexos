@@ -27,6 +27,11 @@ impl Transform {
         let (location, rotation, scale) = m.to_trs();
         Transform { location, rotation, scale }
     }
+    /// Linear location/scale and spherical rotation interpolation; `t`
+    /// outside 0..1 extrapolates.
+    pub fn lerp(&self, o: &Transform, t: f32) -> Transform {
+        Transform { location: self.location.lerp(o.location, t), rotation: self.rotation.slerp(o.rotation, t), scale: self.scale.lerp(o.scale, t) }
+    }
 }
 
 /// Linear-light RGBA image (textures, HDRIs, render results).
@@ -82,6 +87,36 @@ pub struct Material {
     /// 0 = opaque, 1 = fully transmissive (glass).
     pub transmission: f32,
     pub double_sided: bool,
+    /// Shader node tree (Use Nodes). When set, the renderer shades from the
+    /// tree and the fields above mirror its Principled BSDF for the viewport
+    /// and exporters.
+    pub node_tree: Option<crate::nodes::NodeTree>,
+    /// Blender's material "Pass Index" (the Material Index render pass).
+    pub pass_index: u32,
+    /// Homogeneous volume inside closed meshes using this material (a
+    /// Principled Volume's inputs). A material with a volume renders with no
+    /// surface: its faces only bound the medium.
+    pub volume: Option<VolumeSettings>,
+}
+
+/// Principled Volume inputs, for homogeneous media in the path tracer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VolumeSettings {
+    /// Scattering colour (linear RGB).
+    pub color: Vec3,
+    pub density: f32,
+    /// Henyey-Greenstein anisotropy, -1 (back) to 1 (forward).
+    pub anisotropy: f32,
+    /// Extra absorption tint: black absorbs only what `color` does not scatter.
+    pub absorption_color: Vec3,
+    pub emission_color: Vec3,
+    pub emission_strength: f32,
+}
+
+impl Default for VolumeSettings {
+    fn default() -> Self {
+        VolumeSettings { color: Vec3::splat(0.5), density: 1.0, anisotropy: 0.0, absorption_color: Vec3::ZERO, emission_color: Vec3::ONE, emission_strength: 0.0 }
+    }
 }
 
 impl Default for Material {
@@ -97,7 +132,141 @@ impl Default for Material {
             ior: 1.5,
             transmission: 0.0,
             double_sided: false,
+            node_tree: None,
+            pass_index: 0,
+            volume: None,
         }
+    }
+}
+
+impl Material {
+    /// Copy the node tree's Principled BSDF (the one feeding the active
+    /// Material Output's Surface, through reroutes) back into the legacy
+    /// fields the viewport and exporters read. Linked inputs keep the field's
+    /// value, except an Image Texture on Base Color, which sets
+    /// `base_color_texture` (its image) and a white base colour. Returns
+    /// false when there is no such node.
+    pub fn sync_from_tree(&mut self) -> bool {
+        use crate::nodes::{Prop, Value};
+        let Some(t) = &self.node_tree else { return false };
+        let out = t.nodes.iter().enumerate().filter(|(_, n)| n.idname == "ShaderNodeOutputMaterial" && matches!(n.enum_prop("target"), "" | "ALL" | "CYCLES")).max_by_key(|(_, n)| n.bool_prop("is_active_output")).map(|(i, _)| i);
+        let Some(out) = out else { return false };
+        // Follow the Surface link through reroutes.
+        let source = |node: usize, sock: usize| -> Option<usize> {
+            let mut l = t.input_link(node, sock).filter(|l| !l.muted)?;
+            for _ in 0..64 {
+                if t.nodes[l.from_node].idname != "NodeReroute" {
+                    return Some(l.from_node);
+                }
+                l = t.input_link(l.from_node, 0).filter(|l| !l.muted)?;
+            }
+            None
+        };
+        let Some(si) = t.nodes[out].input("Surface") else { return false };
+        let Some(p) = source(out, si) else { return false };
+        let n = &t.nodes[p];
+        if n.idname != "ShaderNodeBsdfPrincipled" || n.mute {
+            return false;
+        }
+        let linked = |id: &str| n.input(id).is_some_and(|i| t.input_link(p, i).is_some_and(|l| !l.muted));
+        let val = |id: &str| n.input(id).map(|i| n.inputs[i].value.clone()).unwrap_or(Value::None);
+        let f = |id: &str, d: f32| match val(id) {
+            Value::None => d,
+            v => v.as_float(),
+        };
+        if let Some(bi) = n.input("Base Color") {
+            let tex = source(p, bi).filter(|&s| t.nodes[s].idname == "ShaderNodeTexImage").and_then(|s| match t.nodes[s].prop("image") {
+                Some(Prop::Id(i)) => *i,
+                _ => None,
+            });
+            match tex {
+                Some(img) => {
+                    self.base_color_texture = Some(img);
+                    self.base_color = [1.0, 1.0, 1.0, self.base_color[3]];
+                }
+                None if !linked("Base Color") => {
+                    let c = val("Base Color").as_color();
+                    self.base_color = [c[0], c[1], c[2], self.base_color[3]];
+                    self.base_color_texture = None;
+                }
+                None => {}
+            }
+        }
+        if !linked("Alpha") {
+            self.base_color[3] = f("Alpha", self.base_color[3]);
+        }
+        if !linked("Metallic") {
+            self.metallic = f("Metallic", self.metallic);
+        }
+        if !linked("Roughness") {
+            self.roughness = f("Roughness", self.roughness);
+        }
+        if !linked("IOR") {
+            self.ior = f("IOR", self.ior);
+        }
+        if !linked("Transmission Weight") {
+            self.transmission = f("Transmission Weight", self.transmission);
+        }
+        if !linked("Emission Color") {
+            let c = val("Emission Color").as_vector();
+            self.emission = Vec3::new(c[0], c[1], c[2]);
+        }
+        if !linked("Emission Strength") {
+            self.emission_strength = f("Emission Strength", self.emission_strength);
+        }
+        true
+    }
+}
+
+/// Panoramic lens projections (Blender's "Panorama Type").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PanoramaType {
+    #[default]
+    Equirectangular,
+    FisheyeEquidistant,
+    FisheyeEquisolid,
+}
+
+/// Which sensor dimension the focal length refers to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SensorFit {
+    /// The sensor width spans the larger image dimension.
+    #[default]
+    Auto,
+    Horizontal,
+    Vertical,
+}
+
+/// The lens type, as Blender's camera "Type".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CameraType {
+    Perspective,
+    Orthographic,
+    Panoramic,
+}
+
+/// Thin-lens depth of field.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DepthOfField {
+    pub enabled: bool,
+    /// Focus on this object's origin (index into [`Scene::objects`]) instead
+    /// of `focus_distance`.
+    pub focus_object: Option<usize>,
+    /// Metres along the view axis.
+    pub focus_distance: f32,
+    /// F-stop: the aperture diameter is the focal length over this.
+    pub fstop: f32,
+    /// Polygonal bokeh with this many blades (fewer than 3: round).
+    pub blades: u32,
+    /// Blade rotation in radians.
+    pub rotation: f32,
+    /// Anamorphic squeeze (1 = round bokeh).
+    pub ratio: f32,
+}
+
+impl Default for DepthOfField {
+    fn default() -> Self {
+        DepthOfField { enabled: false, focus_object: None, focus_distance: 10.0, fstop: 2.8, blades: 0, rotation: 0.0, ratio: 1.0 }
     }
 }
 
@@ -107,14 +276,87 @@ pub struct Camera {
     pub fov_y: f32,
     /// `Some(height)` for orthographic cameras.
     pub ortho_scale: Option<f32>,
+    /// Clip start and end (metres).
     pub near: f32,
     pub far: f32,
+    /// `Some` makes the camera panoramic (overrides perspective/orthographic).
+    pub panorama: Option<PanoramaType>,
+    /// Sensor size in millimetres (Blender: 36 x 24).
+    pub sensor_width: f32,
+    pub sensor_height: f32,
+    pub sensor_fit: SensorFit,
+    /// Lens shift, in units of the larger frame dimension.
+    pub shift_x: f32,
+    pub shift_y: f32,
+    /// Fisheye field of view (radians) and equisolid focal length (mm).
+    pub fisheye_fov: f32,
+    pub fisheye_lens: f32,
+    /// Equirectangular ranges (radians).
+    pub latitude_min: f32,
+    pub latitude_max: f32,
+    pub longitude_min: f32,
+    pub longitude_max: f32,
+    pub dof: DepthOfField,
 }
 
 impl Default for Camera {
     fn default() -> Self {
         // Blender's default 50 mm lens on a 36 mm sensor, as a vertical FOV at 16:9.
-        Camera { fov_y: 2.0 * (18.0f32 / 50.0 * 9.0 / 16.0).atan(), ortho_scale: None, near: 0.1, far: 1000.0 }
+        Camera {
+            fov_y: 2.0 * (18.0f32 / 50.0 * 9.0 / 16.0).atan(),
+            ortho_scale: None,
+            near: 0.1,
+            far: 1000.0,
+            panorama: None,
+            sensor_width: 36.0,
+            sensor_height: 24.0,
+            sensor_fit: SensorFit::Auto,
+            shift_x: 0.0,
+            shift_y: 0.0,
+            fisheye_fov: core::f32::consts::PI,
+            fisheye_lens: 10.5,
+            latitude_min: -core::f32::consts::FRAC_PI_2,
+            latitude_max: core::f32::consts::FRAC_PI_2,
+            longitude_min: -core::f32::consts::PI,
+            longitude_max: core::f32::consts::PI,
+            dof: DepthOfField::default(),
+        }
+    }
+}
+
+impl Camera {
+    pub fn camera_type(&self) -> CameraType {
+        if self.panorama.is_some() {
+            CameraType::Panoramic
+        } else if self.ortho_scale.is_some() {
+            CameraType::Orthographic
+        } else {
+            CameraType::Perspective
+        }
+    }
+
+    /// Tangent of half the vertical field of view for focal length `mm` at
+    /// frame `aspect` (width / height), following the sensor fit.
+    fn tan_half_y_for(&self, mm: f32, aspect: f32) -> f32 {
+        let mm = mm.max(1e-3);
+        let aspect = if aspect > 0.0 && aspect.is_finite() { aspect } else { 1.0 };
+        match self.sensor_fit {
+            SensorFit::Auto if aspect >= 1.0 => self.sensor_width * 0.5 / mm / aspect,
+            SensorFit::Auto => self.sensor_width * 0.5 / mm,
+            SensorFit::Horizontal => self.sensor_width * 0.5 / mm / aspect,
+            SensorFit::Vertical => self.sensor_height * 0.5 / mm,
+        }
+    }
+
+    /// Focal length in millimetres matching `fov_y` at frame `aspect`.
+    pub fn focal_length(&self, aspect: f32) -> f32 {
+        let t = (self.fov_y * 0.5).tan().max(1e-6);
+        self.tan_half_y_for(1.0, aspect) / t
+    }
+
+    /// Set `fov_y` from a focal length in millimetres at frame `aspect`.
+    pub fn set_focal_length(&mut self, mm: f32, aspect: f32) {
+        self.fov_y = 2.0 * self.tan_half_y_for(mm, aspect).atan();
     }
 }
 
@@ -129,6 +371,16 @@ pub enum LightKind {
     Area { size: f32 },
 }
 
+/// Area light outline (Blender's "Shape").
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AreaShape {
+    #[default]
+    Square,
+    Rectangle,
+    Disk,
+    Ellipse,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Light {
     pub kind: LightKind,
@@ -138,11 +390,54 @@ pub struct Light {
     pub power: f32,
     /// Soft shadow radius for point/spot, angular diameter (radians) for sun.
     pub radius: f32,
+    /// Area light outline; `Square`/`Disk` use the kind's `size` both ways,
+    /// `Rectangle`/`Ellipse` take `size_y` as the second dimension.
+    pub shape: AreaShape,
+    pub size_y: f32,
+    /// Area light emission spread (radians, pi = Lambertian).
+    pub spread: f32,
+    /// Paths with more bounces than this do not see the light.
+    pub max_bounces: u32,
+    pub cast_shadow: bool,
+    /// Multiple importance sampling: when off, only light sampling sees the
+    /// light (rays never hit it).
+    pub use_mis: bool,
 }
 
 impl Default for Light {
     fn default() -> Self {
-        Light { kind: LightKind::Point, color: Vec3::ONE, power: 1000.0, radius: 0.1 }
+        Light { kind: LightKind::Point, color: Vec3::ONE, power: 1000.0, radius: 0.1, shape: AreaShape::Square, size_y: 1.0, spread: core::f32::consts::PI, max_bounces: 1024, cast_shadow: true, use_mis: true }
+    }
+}
+
+impl Light {
+    /// Area light extent (x, y) in metres, after the shape.
+    pub fn area_size(&self) -> (f32, f32) {
+        let s = match self.kind {
+            LightKind::Area { size } => size,
+            _ => 0.0,
+        };
+        match self.shape {
+            AreaShape::Square | AreaShape::Disk => (s, s),
+            AreaShape::Rectangle | AreaShape::Ellipse => (s, self.size_y),
+        }
+    }
+}
+
+/// Which kinds of rays see an object (Blender's Object > Visibility > Ray Visibility).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RayVisibility {
+    pub camera: bool,
+    pub diffuse: bool,
+    pub glossy: bool,
+    pub transmission: bool,
+    pub volume_scatter: bool,
+    pub shadow: bool,
+}
+
+impl Default for RayVisibility {
+    fn default() -> Self {
+        RayVisibility { camera: true, diffuse: true, glossy: true, transmission: true, volume_scatter: true, shadow: true }
     }
 }
 
@@ -153,6 +448,36 @@ pub enum ObjectData {
     Mesh(usize),
     Camera(Camera),
     Light(Light),
+    /// Index into [`Scene::armatures`].
+    Armature(usize),
+    /// Index into [`Scene::lattices`].
+    Lattice(usize),
+    /// Index into [`Scene::grease_pencils`].
+    GreasePencil(usize),
+}
+
+/// Which vertex groups [`Scene::parent_with_armature`] creates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArmatureWeights {
+    /// Plain armature parenting with the modifier, no groups.
+    None,
+    Empty,
+    Envelope,
+    Automatic,
+}
+
+/// How an object hangs off its parent (Blender's `partype`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ParentType {
+    /// Plain object parenting.
+    #[default]
+    Object,
+    /// Armature parenting (`PARSKEL`): object parenting, deformation comes
+    /// from an Armature modifier.
+    Armature,
+    /// Parented to the bone `Object::parent_bone` of an armature parent:
+    /// follows the posed bone, at its tail (or root with Relative Parenting).
+    Bone,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -160,6 +485,13 @@ pub struct Object {
     pub name: String,
     pub transform: Transform,
     pub parent: Option<usize>,
+    pub parent_type: ParentType,
+    /// Bone name for [`ParentType::Bone`].
+    pub parent_bone: String,
+    /// Object constraints, evaluated after parenting.
+    pub constraints: Vec<crate::constraints::Constraint>,
+    /// Armature objects: the pose (bones without an entry are at rest).
+    pub pose: Vec<crate::armature::PoseBone>,
     pub data: ObjectData,
     /// Non-destructive modifier stack, applied top to bottom.
     pub modifiers: Vec<Modifier>,
@@ -168,11 +500,45 @@ pub struct Object {
     pub materials: Vec<usize>,
     pub collection: usize,
     pub visible: bool,
+    /// Ray visibility for the path tracer.
+    pub visibility: RayVisibility,
+    /// Render as a hole in the image (alpha 0).
+    pub holdout: bool,
+    /// Blender's object "Pass Index" (the Object Index render pass).
+    pub pass_index: u32,
+    /// The local transform one frame later, for motion blur (linear motion
+    /// from `transform`); `None` means static.
+    pub motion: Option<Transform>,
+    /// Rigid body, rigid body constraint and force field settings.
+    pub physics: crate::physics::ObjectPhysics,
+    /// Grease Pencil objects: their modifier stack and visual effects.
+    pub gp_modifiers: Vec<crate::grease_pencil::GpModifier>,
+    pub shader_fx: Vec<crate::grease_pencil::GpEffect>,
 }
 
 impl Object {
     pub fn new(name: &str, data: ObjectData) -> Object {
-        Object { name: name.into(), transform: Transform::default(), parent: None, data, modifiers: Vec::new(), materials: Vec::new(), collection: 0, visible: true }
+        Object {
+            name: name.into(),
+            transform: Transform::default(),
+            parent: None,
+            parent_type: ParentType::Object,
+            parent_bone: String::new(),
+            constraints: Vec::new(),
+            pose: Vec::new(),
+            data,
+            modifiers: Vec::new(),
+            materials: Vec::new(),
+            collection: 0,
+            visible: true,
+            visibility: RayVisibility::default(),
+            holdout: false,
+            pass_index: 0,
+            motion: None,
+            physics: crate::physics::ObjectPhysics::default(),
+            gp_modifiers: Vec::new(),
+            shader_fx: Vec::new(),
+        }
     }
 }
 
@@ -190,11 +556,15 @@ pub struct World {
     pub strength: f32,
     /// Equirectangular environment image in [`Scene::images`].
     pub hdri: Option<usize>,
+    /// World shader node tree; when set it replaces colour/strength/HDRI.
+    pub node_tree: Option<crate::nodes::NodeTree>,
+    /// A homogeneous medium filling the whole world.
+    pub volume: Option<VolumeSettings>,
 }
 
 impl Default for World {
     fn default() -> Self {
-        World { color: Vec3::splat(0.05), strength: 1.0, hdri: None }
+        World { color: Vec3::splat(0.05), strength: 1.0, hdri: None, node_tree: None, volume: None }
     }
 }
 
@@ -214,6 +584,24 @@ pub struct Scene {
     pub frame_start: i32,
     pub frame_end: i32,
     pub fps: f32,
+    /// The current frame, for modifiers that animate (Wave, Build).
+    pub frame_current: i32,
+    /// Node groups (Blender's node group data-blocks), shared by trees.
+    pub node_groups: Vec<crate::nodes::NodeTree>,
+    /// The compositing node tree (Compositor's Use Nodes).
+    pub compositor: Option<crate::nodes::NodeTree>,
+    /// Armature data, shared by armature objects like meshes.
+    pub armatures: Vec<crate::armature::Armature>,
+    pub armature_names: Vec<String>,
+    pub lattices: Vec<crate::lattice::Lattice>,
+    pub lattice_names: Vec<String>,
+    /// Gravity, the rigid body world and the simulation caches.
+    pub physics: crate::physics::ScenePhysics,
+    /// Grease Pencil data, shared by Grease Pencil objects like meshes.
+    pub grease_pencils: Vec<crate::grease_pencil::GreasePencil>,
+    pub grease_pencil_names: Vec<String>,
+    /// The Video Sequencer's strips (Blender's `sequence_editor`).
+    pub sequence_editor: Option<crate::sequencer::Sequencer>,
 }
 
 impl Default for Scene {
@@ -233,6 +621,17 @@ impl Default for Scene {
             frame_start: 1,
             frame_end: 250,
             fps: 24.0,
+            frame_current: 1,
+            node_groups: Vec::new(),
+            compositor: None,
+            armatures: Vec::new(),
+            armature_names: Vec::new(),
+            lattices: Vec::new(),
+            lattice_names: Vec::new(),
+            physics: crate::physics::ScenePhysics::default(),
+            grease_pencils: Vec::new(),
+            grease_pencil_names: Vec::new(),
+            sequence_editor: None,
         }
     }
 }
@@ -313,6 +712,11 @@ impl Scene {
         }
         self.active_camera = self.active_camera.and_then(|c| (c != idx).then(|| fix(c)));
         self.active_object = self.active_object.and_then(|c| (c != idx).then(|| fix(c)));
+        for ob in &mut self.objects {
+            if let ObjectData::Camera(c) = &mut ob.data {
+                c.dof.focus_object = c.dof.focus_object.and_then(|f| (f != idx).then(|| fix(f)));
+            }
+        }
         self.selected.retain(|&s| s != idx);
         for s in &mut self.selected {
             *s = fix(*s);
@@ -320,28 +724,219 @@ impl Scene {
         o
     }
 
-    /// Object-to-world matrix through the parent chain.
-    pub fn world_matrix(&self, idx: usize) -> Mat4 {
-        let mut m = self.objects[idx].transform.matrix();
+    /// Object-to-world matrix at `time` frames after the current one, with
+    /// each object in the parent chain moving linearly towards its
+    /// [`Object::motion`] transform (extrapolating outside 0..1).
+    pub fn world_matrix_at(&self, idx: usize, time: f32) -> Mat4 {
+        let local = |i: usize| {
+            let o = &self.objects[i];
+            match o.motion {
+                Some(m) if time != 0.0 => o.transform.lerp(&m, time).matrix(),
+                _ => o.transform.matrix(),
+            }
+        };
+        let mut m = local(idx);
         let mut p = self.objects[idx].parent;
         let mut guard = 0;
         while let Some(pi) = p {
-            m = self.objects[pi].transform.matrix() * m;
+            m = local(pi) * m;
             p = self.objects[pi].parent;
             guard += 1;
             if guard > self.objects.len() {
-                break; // parent cycle
+                break;
             }
         }
         m
     }
 
-    /// The object's mesh after its modifier stack, in object space.
-    pub fn evaluated_mesh(&self, idx: usize) -> Option<Mesh> {
-        match self.objects[idx].data {
-            ObjectData::Mesh(mi) => Some(crate::modifiers::apply_stack(&self.meshes[mi], &self.objects[idx].modifiers)),
+    /// True when the object or one of its parents moves (has a
+    /// [`Object::motion`] different from its transform).
+    pub fn has_motion(&self, idx: usize) -> bool {
+        let mut i = Some(idx);
+        let mut guard = 0;
+        while let Some(c) = i {
+            if self.objects[c].motion.is_some_and(|m| m != self.objects[c].transform) {
+                return true;
+            }
+            i = self.objects[c].parent;
+            guard += 1;
+            if guard > self.objects.len() {
+                break;
+            }
+        }
+        false
+    }
+
+    /// Object-to-world matrix through the parent chain.
+    ///
+    /// Bone parents follow the posed bone and object constraints are applied
+    /// after parenting (see [`crate::constraints`]).
+    pub fn world_matrix(&self, idx: usize) -> Mat4 {
+        self.world_matrix_depth(idx, 0)
+    }
+
+    pub fn add_armature(&mut self, name: &str, a: crate::armature::Armature) -> usize {
+        let n = unique_name(name, |n| self.armature_names.iter().any(|x| x == n));
+        self.armatures.push(a);
+        self.armature_names.push(n);
+        self.armatures.len() - 1
+    }
+
+    pub fn add_armature_object(&mut self, name: &str, a: crate::armature::Armature) -> usize {
+        let ai = self.add_armature(name, a);
+        self.add_object(Object::new(name, ObjectData::Armature(ai)))
+    }
+
+    pub fn add_lattice(&mut self, name: &str, l: crate::lattice::Lattice) -> usize {
+        let n = unique_name(name, |n| self.lattice_names.iter().any(|x| x == n));
+        self.lattices.push(l);
+        self.lattice_names.push(n);
+        self.lattices.len() - 1
+    }
+
+    pub fn add_lattice_object(&mut self, name: &str, l: crate::lattice::Lattice) -> usize {
+        let li = self.add_lattice(name, l);
+        self.add_object(Object::new(name, ObjectData::Lattice(li)))
+    }
+
+    pub fn add_grease_pencil(&mut self, name: &str, g: crate::grease_pencil::GreasePencil) -> usize {
+        let n = unique_name(name, |n| self.grease_pencil_names.iter().any(|x| x == n));
+        self.grease_pencils.push(g);
+        self.grease_pencil_names.push(n);
+        self.grease_pencils.len() - 1
+    }
+
+    pub fn add_grease_pencil_object(&mut self, name: &str, g: crate::grease_pencil::GreasePencil) -> usize {
+        let gi = self.add_grease_pencil(name, g);
+        self.add_object(Object::new(name, ObjectData::GreasePencil(gi)))
+    }
+
+    /// The Grease Pencil data of object `idx`.
+    pub fn grease_pencil_of(&self, idx: usize) -> Option<&crate::grease_pencil::GreasePencil> {
+        match self.objects.get(idx)?.data {
+            ObjectData::GreasePencil(g) => self.grease_pencils.get(g),
             _ => None,
         }
+    }
+
+    pub fn grease_pencil_of_mut(&mut self, idx: usize) -> Option<&mut crate::grease_pencil::GreasePencil> {
+        match self.objects.get(idx)?.data {
+            ObjectData::GreasePencil(g) => self.grease_pencils.get_mut(g),
+            _ => None,
+        }
+    }
+
+    /// The armature data of object `idx`, if it is an armature.
+    pub fn armature_of(&self, idx: usize) -> Option<&crate::armature::Armature> {
+        match self.objects.get(idx)?.data {
+            ObjectData::Armature(a) => self.armatures.get(a),
+            _ => None,
+        }
+    }
+
+    /// Parent `child` to bone `bone` of armature object `armature` (Ctrl+P
+    /// > Bone). With `keep_transform` the child stays where it is.
+    pub fn parent_to_bone(&mut self, child: usize, armature: usize, bone: &str, keep_transform: bool) -> bool {
+        if child == armature || self.armature_of(armature).and_then(|a| a.find(bone)).is_none() {
+            return false;
+        }
+        let world = self.world_matrix(child);
+        let o = &mut self.objects[child];
+        o.parent = Some(armature);
+        o.parent_type = ParentType::Bone;
+        o.parent_bone = bone.to_string();
+        if keep_transform {
+            let p = self.parent_matrix_depth(child, 0).unwrap_or(Mat4::IDENTITY);
+            self.objects[child].transform = Transform::from_matrix(&(p.inverse() * world));
+        }
+        true
+    }
+
+    /// Ctrl+P > "With Empty Groups" / "With Envelope Weights" / "With
+    /// Automatic Weights": parent mesh object `child` to armature object
+    /// `armature` (keeping its transform), add an Armature modifier and
+    /// create the vertex groups.
+    pub fn parent_with_armature(&mut self, child: usize, armature: usize, weights: ArmatureWeights) -> bool {
+        let ObjectData::Mesh(mi) = self.objects[child].data else { return false };
+        let Some(arm) = self.armature_of(armature).cloned() else { return false };
+        if child == armature {
+            return false;
+        }
+        let world = self.world_matrix(child);
+        let arm_world = self.world_matrix(armature);
+        let arm_to_mesh = world.inverse() * arm_world;
+        {
+            let mesh = &mut self.meshes[mi];
+            match weights {
+                ArmatureWeights::Empty => crate::armature::empty_groups(mesh, &arm),
+                ArmatureWeights::Envelope => crate::armature::envelope_weights(mesh, &arm, &arm_to_mesh),
+                ArmatureWeights::Automatic => crate::armature::auto_weights(mesh, &arm, &arm_to_mesh),
+                ArmatureWeights::None => {}
+            }
+        }
+        let name = self.objects[armature].name.clone();
+        let o = &mut self.objects[child];
+        o.parent = Some(armature);
+        o.parent_type = ParentType::Armature;
+        o.parent_bone.clear();
+        o.transform = Transform::from_matrix(&(arm_world.inverse() * world));
+        if !o.modifiers.iter().any(|m| matches!(m, Modifier::Armature { object, .. } if *object == name)) {
+            let mut md = Modifier::with_defaults("Armature").expect("armature modifier");
+            if let Modifier::Armature { object, .. } = &mut md {
+                *object = name;
+            }
+            o.modifiers.insert(0, md);
+        }
+        true
+    }
+
+    /// The object's mesh after its modifier stack, in object space.
+    pub fn evaluated_mesh(&self, idx: usize) -> Option<Mesh> {
+        self.evaluated_mesh_depth(idx, 0)
+    }
+
+    /// Apply `stack` to `mesh` as if it were object `idx`'s stack: at the
+    /// current frame, with other objects (Boolean, Shrinkwrap) resolved by
+    /// name to their evaluated meshes in this object's space.
+    pub fn apply_modifiers(&self, idx: usize, mesh: &Mesh, stack: &[Modifier]) -> Mesh {
+        self.apply_modifiers_depth(idx, mesh, stack, 0)
+    }
+
+    /// Objects referring to each other (A booleans B, B shrinkwraps to A)
+    /// are cut off at this depth instead of recursing forever.
+    const MAX_MODIFIER_DEPTH: u32 = 4;
+
+    pub(crate) fn evaluated_mesh_depth(&self, idx: usize, depth: u32) -> Option<Mesh> {
+        match self.objects[idx].data {
+            ObjectData::Mesh(mi) => Some(self.apply_modifiers_depth(idx, &self.meshes[mi], &self.objects[idx].modifiers, depth)),
+            _ => None,
+        }
+    }
+
+    fn apply_modifiers_depth(&self, idx: usize, mesh: &Mesh, stack: &[Modifier], depth: u32) -> Mesh {
+        let lookup = |name: &str| -> Option<Mesh> {
+            let j = self.find_object(name)?;
+            if j == idx || depth >= Self::MAX_MODIFIER_DEPTH {
+                return None;
+            }
+            let mut m = self.evaluated_mesh_depth(j, depth + 1)?;
+            m.transform(&(self.world_matrix(idx).inverse() * self.world_matrix(j)));
+            Some(m)
+        };
+        // Shape keys come first (Blender evaluates the key block before the
+        // modifier stack); Corrective Smooth's rest shape stays the Basis.
+        let keyed;
+        let (input, rest) = if mesh.shape_keys.len() > 1 {
+            let mut m = mesh.clone();
+            m.positions = mesh.evaluated_shape();
+            m.shape_keys.clear();
+            keyed = m;
+            (&keyed, Some(mesh.positions.as_slice()))
+        } else {
+            (mesh, None)
+        };
+        let cx = crate::modifiers::EvalContext { frame: self.frame_current as f32, object: Some(&lookup), rest, scene: Some(self), owner: idx, depth };
+        crate::modifiers::apply_stack_with(input, stack, &cx)
     }
 
     /// Evaluated mesh in world space with face materials resolved to scene

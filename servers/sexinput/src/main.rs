@@ -507,6 +507,10 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
         0x7F => 0x75, // Mute: sex_pdx::app_key::KEY_MUTE
         0x80 => 0x77, // Volume Up: KEY_VOLUME_UP
         0x81 => 0x76, // Volume Down: KEY_VOLUME_DOWN
+        // The player keys, as the reserved usages keyboards (and Cufflinks, for a
+        // Bluetooth headset's AVRCP buttons) send them: KEY_PLAY_PAUSE, KEY_STOP,
+        // KEY_PREVIOUS, KEY_NEXT.
+        0xE8 => 0x78, 0xE9 => 0x7A, 0xEA => 0x7F, 0xEB => 0x7C,
         _ => return None,
     })
 }

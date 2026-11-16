@@ -125,6 +125,14 @@ impl Window {
         bytes[..n].copy_from_slice(&name[..n]);
         let words = (u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap()));
         call(SLOT_DISPLAY, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1);
+        // Shell too, for the screen reader, which says it when the window has focus.
+        // A full queue loses only the spoken name ("Program" is said instead).
+        for _ in 0..100 {
+            match pdx_call_checked(SLOT_SHELL, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1) {
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                _ => break,
+            }
+        }
         sex_pdx::system_stats::set_name(name);
     }
     /// Replaces the window's text. Longer text than the region holds is cut.
@@ -156,6 +164,7 @@ impl Window {
             if let Some(p) = sex_pdx::app_pointer::Pointer::decode(m.arg0, m.arg1, m.arg2) { return Some(Event::Pointer(p)); }
         }
         if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
+        if let Some(on) = sex_pdx::a11y::decode_state(m.type_id, m.arg0, m.arg1) { a11y::told(on); return None; }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
         if m.type_id == 0x202 { if let Some(k) = Key::decode_release(m.arg0, m.arg1, m.arg2) { return Some(Event::KeyUp(k)); } }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
@@ -205,6 +214,49 @@ impl Window {
 /// Starting other programs, and opening files in the program for their type. A run
 /// started here gets only grants this run holds; Shell reports it started, was refused,
 /// or ended (see [`sex_pdx::launch`]).
+/// The screen reader ([`sex_pdx::a11y`]): a program asks Shell once whether one is on,
+/// and sends its accessibility tree only while Shell says so. Toolkits (Weft) do this.
+pub mod a11y {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    use sex_pdx::a11y as wire;
+    /// 0: not asked, 1: asked (no answer yet, or off), 2: on.
+    static STATE: AtomicU8 = AtomicU8::new(0);
+    /// Set when Shell's answer changes; taken by [`changed`].
+    static CHANGED: AtomicU8 = AtomicU8::new(0);
+    pub(crate) fn told(on: bool) {
+        let new = if on { 2 } else { 1 };
+        if STATE.swap(new, Ordering::AcqRel) != new { CHANGED.store(1, Ordering::Release); }
+    }
+    /// Asks Shell whether a screen reader is on; its answers come with the window's
+    /// events (read with [`on`] and [`changed`]).
+    pub fn ask() {
+        let _ = STATE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
+        let [a, b, c] = wire::ask();
+        let _ = send(a, b, c);
+    }
+    /// True once [`ask`] was called.
+    pub fn asked() -> bool { STATE.load(Ordering::Acquire) != 0 }
+    /// True while a screen reader is on (Shell said so).
+    pub fn on() -> bool { STATE.load(Ordering::Acquire) == 2 }
+    /// True once after Shell's answer changed.
+    pub fn changed() -> bool { CHANGED.swap(0, Ordering::AcqRel) != 0 }
+    /// Sends one encoded tree update to Shell, if a reader is on. False if it could not.
+    pub fn send_update(bytes: &[u8]) -> bool {
+        if !on() || bytes.len() > wire::MAX_UPDATE { return false; }
+        wire::pieces(bytes).all(|[a, b, c]| send(a, b, c))
+    }
+    fn send(a: u64, b: u64, c: u64) -> bool {
+        for _ in 0..1000 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, wire::OP_A11Y, a, b, c) {
+                Ok(_) => return true,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+}
+
 /// Drag and drop between programs ([`sex_pdx::dnd`]).
 pub mod dnd {
     use super::{files, Event, Window};
@@ -376,6 +428,12 @@ pub mod launch {
     pub fn run_with(name: &[u8], args: &[u8], network: bool, hidden: bool, cookie: u32) -> Result<(), Error> {
         start(name, args, if network { store::RUN_NETWORK } else { 0 } | if hidden { store::RUN_HIDDEN } else { 0 }, cookie)
     }
+    /// Asks Shell to start a run Files already prepared (its `ticket`), as [`run_with`] does.
+    pub fn start_ticket(ticket: u32, network: bool, hidden: bool, cookie: u32) -> Result<(), Error> {
+        let flags = if network { store::RUN_NETWORK } else { 0 } | if hidden { store::RUN_HIDDEN } else { 0 };
+        sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_LAUNCH, ticket as u64, flags, cookie as u64).map_err(|_| Error::Shell)?;
+        Ok(())
+    }
     fn start(name: &[u8], args: &[u8], flags: u64, cookie: u32) -> Result<(), Error> {
         let mut path = [0u8; 64];
         let path: &[u8] = if name.first() == Some(&b'@') { name }
@@ -474,7 +532,14 @@ pub mod files {
     /// Shell tells Files where a new run lives just as the run starts, so a first request
     /// can beat it there. A refusal is retried briefly; a program never bound stays refused.
     /// `fill` writes the data area before the request goes; `take` reads it after the answer.
-    fn exchange<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+    fn exchange<R>(hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+                   fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
+        exchange_tries(hold, kind, path, offset, length, 50, fill, take)
+    }
+    /// As `exchange`, asking again at most `retries` times while Files says DENIED (a
+    /// lock another program holds). A refusal that stands is asked once (`retries` 0).
+    #[allow(clippy::too_many_arguments)]
+    fn exchange_tries<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64, retries: u32,
                    fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
         if path.len() > w::PATH_BYTES { return Err(w::NAME); }
         let _turn = Turn::take();
@@ -484,7 +549,7 @@ pub mod files {
             region[..path.len()].copy_from_slice(path);
             fill(&mut region[w::PATH_BYTES..]);
             match once(&mut hold, kind, path.len(), offset, length) {
-                Err(w::DENIED) if tries < 50 => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
+                Err(w::DENIED) if tries < retries => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
                 Ok(value) => return Ok(take(value, &region[w::PATH_BYTES..])),
                 Err(e) => return Err(e),
             }
@@ -657,13 +722,62 @@ pub mod files {
         }
 
         /// A console attached to a terminal, and a terminal's side of it
-        /// (`sex_pdx::console_relay`): bytes through Files, no window.
+        /// (`sex_pdx::console_relay`): bytes through Files, no window. A terminal names
+        /// the slot (tab or pane, below `c::SLOTS`) of each call in the `*_at` forms; the
+        /// plain forms are slot 0.
         pub mod relay {
             use super::{exchange, w, Error};
             use sex_pdx::console_relay as c;
             fn op(offset: u64, length: u64) -> Result<u32, Error> { exchange(None, c::KIND, b"", offset, length, |_| {}, |n, _| n) }
-            /// Whether this run's console belongs to a terminal.
+            /// Whether this run's console belongs to a terminal (or its streams to the
+            /// program that started it: see [`attached_word`]).
             pub fn attached() -> bool { op(c::ATTACHED, 0).is_ok() }
+            /// None when nothing holds this run's console; 0 for a terminal; for a pipe
+            /// run, `c::PIPE_RUN` | its stdio word (`c::stream`).
+            pub fn attached_word() -> Option<u32> { op(c::ATTACHED, 0).ok() }
+            /// A pipe run's stderr: how many bytes its starter's ring took.
+            pub fn write_err(bytes: &[u8]) -> Result<usize, Error> {
+                let n = bytes.len().min(c::ERROR_BYTES);
+                exchange(None, c::KIND, b"", c::WRITE_ERR, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
+            }
+            /// A pipe run's environment block from byte `at` on (`c::ENV`); 0 at its end.
+            pub fn env(at: usize, out: &mut [u8]) -> Result<usize, Error> {
+                let want = out.len();
+                exchange(None, c::KIND, b"", c::ENV, at as u64, |_| {}, |n, d| { let n = (n as usize).min(want).min(d.len()); out[..n].copy_from_slice(&d[..n]); n })
+            }
+
+            /// Starter: prepares a pipe run of program file `path` (`/bin/NAME`, or `@/path`
+            /// this run holds) with `args`, attached to this run's `slot`, its streams as
+            /// the stdio word says (`c::stdio`). The ticket, for `launch::start_ticket`.
+            pub fn prepare_piped(path: &[u8], args: &[u8], slot: usize, word: u8) -> Result<u32, Error> {
+                if args.len() > w::ARGS_MAX || slot >= c::SLOTS { return Err(w::NAME); }
+                exchange(None, w::PREPARE, path, c::pipe_prepare(slot, word), args.len() as u64, |d| d[..args.len()].copy_from_slice(args), |ticket, _| ticket)
+            }
+            /// Starter, before the start: more `KEY=VALUE\0` entries for the run in `slot`.
+            pub fn set_env_at(slot: usize, entries: &[u8]) -> Result<(), Error> {
+                let n = entries.len();
+                if n > c::ENV_BYTES { return Err(w::INVALID); }
+                exchange(None, c::KIND, b"", c::at_slot(c::SET_ENV, slot), n as u64, |d| d[..n].copy_from_slice(entries), |_, _| ())
+            }
+            /// Starter, before the start: the run's working folder, as this run names it.
+            pub fn set_cwd_at(slot: usize, path: &[u8]) -> Result<(), Error> {
+                let n = path.len();
+                if n > w::PATH_BYTES { return Err(w::NAME); }
+                exchange(None, c::KIND, b"", c::at_slot(c::SET_CWD, slot), n as u64, |d| d[..n].copy_from_slice(path), |_, _| ())
+            }
+            /// Starter: the state of the run in `slot` and up to `out.len()` bytes of its
+            /// stdout (or stderr, `err`).
+            pub fn take_into(slot: usize, err: bool, out: &mut [u8]) -> Result<(c::Status, usize), Error> {
+                let cap = out.len().min(if err { c::ERROR_BYTES } else { c::OUTPUT_BYTES });
+                let op = if err { c::TAKE_ERR } else { c::TAKE };
+                exchange(None, c::KIND, b"", c::at_slot(op, slot), (c::STATUS_BYTES + cap) as u64, |_| {}, |n, d| {
+                    let n = (n as usize).min(cap);
+                    out[..n].copy_from_slice(&d[c::STATUS_BYTES..c::STATUS_BYTES + n]);
+                    (c::Status::decode(d), n)
+                })
+            }
+            /// Starter: it reads no more of the run's stdout (`mask` 1) or stderr (2).
+            pub fn close_read_at(slot: usize, mask: u8) -> Result<(), Error> { op(c::at_slot(c::CLOSE_READ, slot), (mask & 3) as u64).map(|_| ()) }
             /// Output: how many bytes the terminal took (fewer when it is behind).
             pub fn write(bytes: &[u8]) -> Result<usize, Error> {
                 let n = bytes.len().min(c::OUTPUT_BYTES);
@@ -675,37 +789,61 @@ pub mod files {
                 let want = out.len().min(c::INPUT_BYTES);
                 exchange(None, c::KIND, b"", c::READ, want as u64, |_| {}, |n, d| { let n = (n as usize).min(want); out[..n].copy_from_slice(&d[..n]); n })
             }
+            /// How many input bytes wait, taking none. `Err(c::INTERRUPTED)` (once) after
+            /// Ctrl+C, `Err(c::HUNG_UP)` at the end of input: a long computation's look.
+            pub fn poll() -> Result<usize, Error> { op(c::POLL, 0).map(|n| n as usize) }
+            /// The terminal's size in cells and how often it changed (0 by 0: not known).
+            pub fn size() -> Result<c::Size, Error> {
+                exchange(None, c::KIND, b"", c::SIZE, c::SIZE_BYTES as u64, |_| {}, |_, d| c::Size::decode(d))
+            }
+            /// This run's terminal mode (`c::RAW`, `c::NO_ECHO`, `c::NO_SIGNALS`); the one before.
+            pub fn set_mode(mode: u8) -> Result<u8, Error> { op(c::SET_MODE, (mode & c::MODES) as u64).map(|m| m as u8) }
             /// The run ends with `code`.
             pub fn exit(code: u32) { let _ = op(c::EXIT, code as u64); }
 
             /// Terminal: prepares `/bin/NAME` with `args` (only plain words reach it) and asks
             /// Shell to start it attached here. Needs the `+launch` grant (Spindle's `spindle` command).
-            pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> {
+            pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> { start_at(0, name, args) }
+            pub fn start_at(slot: usize, name: &[u8], args: &[u8]) -> Result<(), Error> {
                 let bin = sex_pdx::program_store::BIN;
                 let mut path = alloc::vec::Vec::with_capacity(bin.len() + name.len());
                 path.extend_from_slice(bin); path.extend_from_slice(name);
                 let n = args.len().min(w::ARGS_MAX);
-                let ticket = exchange(None, w::PREPARE, &path, 0, n as u64, |d| d[..n].copy_from_slice(&args[..n]), |t, _| t)?;
+                let ticket = exchange(None, w::PREPARE, &path, c::at_slot(0, slot), n as u64, |d| d[..n].copy_from_slice(&args[..n]), |t, _| t)?;
                 sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64, 0)
                     .map(|_| ()).map_err(|_| w::UNAVAILABLE)
             }
             /// Terminal: input for the run; how many bytes it took.
-            pub fn put(bytes: &[u8]) -> Result<usize, Error> {
+            pub fn put(bytes: &[u8]) -> Result<usize, Error> { put_at(0, bytes) }
+            pub fn put_at(slot: usize, bytes: &[u8]) -> Result<usize, Error> {
                 let n = bytes.len().min(c::INPUT_BYTES);
-                exchange(None, c::KIND, b"", c::PUT, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
+                exchange(None, c::KIND, b"", c::at_slot(c::PUT, slot), n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
             }
             /// Terminal: the run's state and its output since the last call.
-            pub fn take() -> Result<(c::Status, alloc::vec::Vec<u8>), Error> {
+            pub fn take() -> Result<(c::Status, alloc::vec::Vec<u8>), Error> { take_at(0) }
+            pub fn take_at(slot: usize) -> Result<(c::Status, alloc::vec::Vec<u8>), Error> {
                 let want = c::STATUS_BYTES + c::OUTPUT_BYTES;
-                exchange(None, c::KIND, b"", c::TAKE, want as u64, |_| {}, |n, d| {
+                exchange(None, c::KIND, b"", c::at_slot(c::TAKE, slot), want as u64, |_| {}, |n, d| {
                     let n = (n as usize).min(c::OUTPUT_BYTES);
                     (c::Status::decode(d), d[c::STATUS_BYTES..c::STATUS_BYTES + n].to_vec())
                 })
             }
-            pub fn interrupt() -> Result<(), Error> { op(c::INTERRUPT, 0).map(|_| ()) }
-            pub fn hang_up() -> Result<(), Error> { op(c::HANG_UP, 0).map(|_| ()) }
+            pub fn interrupt() -> Result<(), Error> { interrupt_at(0) }
+            pub fn interrupt_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::INTERRUPT, slot), 0).map(|_| ()) }
+            pub fn hang_up() -> Result<(), Error> { hang_up_at(0) }
+            pub fn hang_up_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::HANG_UP, slot), 0).map(|_| ()) }
             /// Terminal: forget the run that ended, so another can start.
-            pub fn release() -> Result<(), Error> { op(c::RELEASE, 0).map(|_| ()) }
+            pub fn release() -> Result<(), Error> { release_at(0) }
+            pub fn release_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::RELEASE, slot), 0).map(|_| ()) }
+            /// Terminal: its size in cells, for the run to read (on start and on every resize).
+            pub fn set_size(cols: u16, rows: u16) -> Result<(), Error> { set_size_at(0, cols, rows) }
+            pub fn set_size_at(slot: usize, cols: u16, rows: u16) -> Result<(), Error> { op(c::at_slot(c::SET_SIZE, slot), c::size_word(cols, rows)).map(|_| ()) }
+            /// Terminal: stop the run with `target` (TAKE's `Status::target`) that it started,
+            /// when Ctrl+C did not end it: Shell ends it as it ends a program ignoring Close.
+            pub fn stop(target: u32) -> Result<(), Error> {
+                sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_STOP_ATTACHED, target as u64, 0, 0)
+                    .map(|_| ()).map_err(|_| w::UNAVAILABLE)
+            }
         }
 
         /// The words typed after the program's name, if it was started with any.
@@ -927,6 +1065,78 @@ pub mod files {
     /// Answers a question with `path` (`@/...`), or cancels it with `None`.
     pub fn answer(window: &mut Window, q: &Question, path: Option<&[u8]>) -> Result<(), Error> {
         request(window, w::ANSWER, path.unwrap_or(b""), q.row as u64, q.ticket as u64).map(|_| ())
+    }
+
+    /// Raw removable disks (`sex_pdx::disks`), for a program that reshapes them. The first
+    /// read or write of a disk asks the person (the Files app shows the question, naming
+    /// the disk); until they answer it fails with `PENDING`, and with `DENIED` if they said
+    /// no. The system disk is never opened.
+    pub mod disks {
+        use super::{exchange, exchange_tries, request, Error, Window};
+        use alloc::string::String;
+        use alloc::vec::Vec;
+        use sex_pdx::disks as d;
+        pub use d::{FLAG_GRANTED, FLAG_READ_ONLY, FLAG_SYSTEM, IO_SECTORS, KIND_IMAGE, KIND_SYSTEM, KIND_USB, SECTOR};
+
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct Disk { pub id: u16, pub flags: u8, pub sectors: u64, pub name: String, pub product: String }
+        impl Disk {
+            pub fn system(&self) -> bool { self.flags & FLAG_SYSTEM != 0 }
+            pub fn read_only(&self) -> bool { self.flags & FLAG_READ_ONLY != 0 }
+        }
+        pub fn list(window: &mut Window) -> Result<Vec<Disk>, Error> {
+            exchange(Some(window), d::DISKS, b"", 0, 0, |_| {}, |used, data| {
+                let data = &data[..(used as usize).min(data.len())];
+                let mut out = Vec::new();
+                let mut at = 0;
+                while let Some((e, next)) = d::Entry::decode(data, at) {
+                    out.push(Disk { id: e.id, flags: e.flags, sectors: e.sectors, name: String::from_utf8_lossy(e.name).into_owned(), product: String::from_utf8_lossy(e.product).into_owned() });
+                    at = next;
+                }
+                out
+            })
+        }
+        /// Sectors from `lba` into `out` (whole sectors, at most `IO_SECTORS`).
+        pub fn read(window: &mut Window, disk: u16, lba: u64, out: &mut [u8]) -> Result<(), Error> {
+            let n = out.len() / SECTOR;
+            if n == 0 || out.len() % SECTOR != 0 || n as u64 > IO_SECTORS { return Err(sex_pdx::fs::INVALID); }
+            exchange_tries(Some(window), d::DISK_IO, b"", lba, d::io(disk, false, n as u32), 0, |_| {}, |_, data| out.copy_from_slice(&data[..out.len()]))
+        }
+        /// `data` (whole sectors, at most `IO_SECTORS`) to the disk from `lba`.
+        pub fn write(window: &mut Window, disk: u16, lba: u64, data: &[u8]) -> Result<(), Error> {
+            let n = data.len() / SECTOR;
+            if n == 0 || data.len() % SECTOR != 0 || n as u64 > IO_SECTORS { return Err(sex_pdx::fs::INVALID); }
+            exchange_tries(Some(window), d::DISK_IO, b"", lba, d::io(disk, true, n as u32), 0, |r| r[..data.len()].copy_from_slice(data), |_, _| ())
+        }
+        /// Everything written so far is on the medium.
+        pub fn flush(window: &mut Window, disk: u16) -> Result<(), Error> { request(window, d::DISK_IO, b"", 0, d::io(disk, true, 0)).map(|_| ()) }
+        /// Ends this run's use of the disk: Files mounts what it holds now.
+        pub fn done(window: &mut Window, disk: u16) -> Result<(), Error> { request(window, d::DISK_DONE, b"", 0, disk as u64).map(|_| ()) }
+
+        /// A question waiting for the person: may `program` use `disk`?
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct Question { pub row: u8, pub ticket: u32, pub program: Vec<u8>, pub disk: Vec<u8> }
+        /// Questions waiting. Only a run given the whole filesystem may ask.
+        pub fn questions(window: &mut Window) -> Result<Vec<Question>, Error> {
+            exchange(Some(window), d::DISK_ASKS, b"", 0, 0, |_| {}, |used, r| {
+                let used = (used as usize).min(r.len());
+                let mut out = Vec::new();
+                let mut at = 0;
+                while at + 6 <= used {
+                    let ticket = u32::from_le_bytes(r[at + 1..at + 5].try_into().unwrap_or([0; 4]));
+                    let n = r[at + 5] as usize;
+                    let program = r[at + 6..at + 6 + n].to_vec();
+                    let k = r[at + 6 + n] as usize;
+                    let disk = r[at + 7 + n..at + 7 + n + k].to_vec();
+                    out.push(Question { row: r[at], ticket, program, disk });
+                    at += 7 + n + k;
+                }
+                out
+            })
+        }
+        pub fn answer(window: &mut Window, q: &Question, yes: bool) -> Result<(), Error> {
+            request(window, d::DISK_ANSWER, b"", q.row as u64, q.ticket as u64 | if yes { d::YES } else { 0 }).map(|_| ())
+        }
     }
 }
 

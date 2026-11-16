@@ -105,6 +105,24 @@ fn wide_characters_take_two_cells() {
 }
 
 #[test]
+fn zero_width_characters_take_no_cell() {
+    for c in ['\u{301}', '\u{200D}', '\u{FE0F}', '\u{1F3FD}', '\u{20E3}', '\u{5B0}'] { assert_eq!(sex_shape::cells::width(c as u32), 0, "{c:?}"); }
+    for (c, w) in [('a', 1), ('é', 1), ('─', 1), ('日', 2), ('😀', 2)] { assert_eq!(sex_shape::cells::width(c as u32), w, "{c:?}"); }
+    // Against the unicode-width crate: nothing it gives a cell to takes none here. (It
+    // also gives no cell to some spacing vowel signs, which a grid draws in their own.)
+    use unicode_width::UnicodeWidthChar;
+    let mut differ = Vec::new();
+    for s in (0x300..=0x2FFFFu32).filter(|s| !(0xD800..0xE000).contains(s)) {
+        let c = char::from_u32(s).unwrap();
+        // Skin-tone modifiers join the emoji before them, as terminals draw them.
+        let known = (0x1F3FB..=0x1F3FF).contains(&s);
+        if !known && sex_shape::cells::is_zero_width(s) && c.width().is_some_and(|w| w > 0) { differ.push(s); }
+    }
+    // A few marks of historic scripts (Egyptian hieroglyph format controls) differ.
+    assert!(differ.len() < 40, "{:x?}", &differ[..differ.len().min(40)]);
+}
+
+#[test]
 fn wide_cells_move_together_in_right_to_left_rows() {
     // "日" takes two cells (the same offset twice); in a Hebrew row the pair moves as one.
     let text = "שלום 日 x";

@@ -54,6 +54,8 @@ impl App {
     pub fn open(title: &str, theme: Theme, strings: Strings) -> App {
         let mut window = Window::open();
         window.title(title.as_bytes());
+        // The screen reader gets the tree only if the person turned one on.
+        sex_app::a11y::ask();
         let (w, h) = window.size();
         let ui = Ui::new(w as u32, h as u32, theme, strings);
         App { window, ui, frames: 0 }
@@ -75,7 +77,11 @@ impl App {
     /// nothing, after a timer).
     pub fn next(&mut self) -> Vec<Response> {
         self.present();
-        let wait = self.ui.tick(now());
+        self.a11y_send();
+        let mut wait = self.ui.tick(now());
+        // Shell's answer to "is a reader on" arrives with no event of its own: look
+        // again now and then while none is, so the tree goes out soon after one starts.
+        if sex_app::a11y::asked() && !sex_app::a11y::on() { wait = Some(wait.map_or(A11Y_LOOK_MS, |w| w.min(A11Y_LOOK_MS))); }
         let e = match wait { Some(ms) => self.window.next_within(ms.max(1)), None => Some(self.window.next()) };
         self.ui.tick(now());
         let mut out = Vec::new();
@@ -88,6 +94,22 @@ impl App {
             }
         }
         self.present();
+        self.a11y_send();
         out
     }
+
+    /// While a screen reader is on: the whole tree when it starts, then what changed
+    /// (`sex_pdx::a11y`). Nothing is built or sent while none is.
+    pub fn a11y_send(&mut self) {
+        let changed = sex_app::a11y::changed();
+        if !sex_app::a11y::on() { return; }
+        let update = if changed { Some(self.ui.a11y_tree()) } else { self.ui.a11y_update() };
+        if let Some(u) = update {
+            let bytes = crate::a11y::encode(&u);
+            if !sex_app::a11y::send_update(&bytes) { sex_pdx::serial_record!("[weft.a11y.send.failed] bytes={}", bytes.len()); }
+        }
+    }
 }
+
+/// How often a window looks for Shell's "a reader is on" while none is (ms).
+const A11Y_LOOK_MS: u64 = 500;

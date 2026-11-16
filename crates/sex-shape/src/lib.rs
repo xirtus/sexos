@@ -16,6 +16,7 @@ mod arabic_forms;
 pub mod bidi;
 mod bidi_classes;
 mod wide_table;
+mod zero_table;
 pub mod cells;
 #[cfg(feature = "shaping")]
 pub mod shape;

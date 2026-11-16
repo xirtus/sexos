@@ -7,7 +7,9 @@ std's `unsupported` module, which never calls the program's library, so no answe
 crates/sex-std could make `Command` work. This script copies the toolchain's `library/`
 (rust-src) to target/sex-std-src/library and adds one file,
 patches/rust-std/process_sexos.rs, as std/src/sys/process/sexos.rs, chosen for
-`target_os = "hermit"`. Nothing else in std changes. The build trace points cargo's
+`target_os = "hermit"`, and puts patches/rust-std/paths_sexos.rs in place of
+std/src/sys/paths/hermit.rs (the working folder: `current_dir`, `set_current_dir`),
+whose arm then takes `chdir` from it. Nothing else in std changes. The build trace points cargo's
 `-Z build-std` at the copy (`__CARGO_TESTS_ONLY_SRC_ROOT`) and std then builds as usual.
 
 Prints the copy's `library` path. Does nothing when the copy is already current."""
@@ -15,6 +17,12 @@ import hashlib,os,shutil,subprocess,sys
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 OVERLAY=ROOT/'patches/rust-std/process_sexos.rs'
+PATHS=ROOT/'patches/rust-std/paths_sexos.rs'
+PATHS_ANCHOR='''            pub use super::hermit::{getcwd, temp_dir};
+            pub use super::unsupported::{chdir, SplitPaths, split_paths, JoinPathsError, join_paths, current_exe, home_dir};'''
+PATHS_ARM='''            // SexOS: the working folder (patches/rust-std/paths_sexos.rs).
+            pub use super::hermit::{chdir, getcwd, temp_dir};
+            pub use super::unsupported::{SplitPaths, split_paths, JoinPathsError, join_paths, current_exe, home_dir};'''
 ANCHOR="""    _ => {
         mod unsupported;
         use unsupported as imp;
@@ -32,11 +40,13 @@ def main():
  mod=source/'std/src/sys/process/mod.rs'
  if not mod.exists():raise SystemExit(f'rust-src is missing: {mod} (rustup component add rust-src)')
  overlay=OVERLAY.read_bytes();original=mod.read_text()
- stamp=hashlib.sha256(str(source).encode()+original.encode()+overlay+Path(__file__).read_bytes()).hexdigest()
+ paths_mod=source/'std/src/sys/paths/mod.rs';paths_original=paths_mod.read_text();paths=PATHS.read_bytes()
+ stamp=hashlib.sha256(str(source).encode()+original.encode()+overlay+paths_original.encode()+paths+Path(__file__).read_bytes()).hexdigest()
  library=out/'library';mark=out/'stamp'
  if mark.exists() and mark.read_text()==stamp and (library/'std/src/sys/process/sexos.rs').exists():
   print(library);return
  if original.count(ANCHOR)!=1:raise SystemExit(f'{mod}: std changed; update scripts/sex_std_source.py for this toolchain')
+ if paths_original.count(PATHS_ANCHOR)!=1:raise SystemExit(f'{paths_mod}: std changed; update scripts/sex_std_source.py for this toolchain')
  shutil.rmtree(out,ignore_errors=True);out.mkdir(parents=True)
  try:subprocess.run(['cp','-al',str(source),str(library)],check=True,stderr=subprocess.DEVNULL)
  except subprocess.CalledProcessError:
@@ -45,6 +55,10 @@ def main():
  target=library/'std/src/sys/process/mod.rs';target.unlink()
  target.write_text(original.replace(ANCHOR,ARM+ANCHOR))
  (library/'std/src/sys/process/sexos.rs').write_bytes(overlay)
+ target=library/'std/src/sys/paths/mod.rs';target.unlink()
+ target.write_text(paths_original.replace(PATHS_ANCHOR,PATHS_ARM))
+ target=library/'std/src/sys/paths/hermit.rs';target.unlink()
+ target.write_bytes(paths)
  mark.write_text(stamp)
  print(library)
 if __name__=='__main__':main()

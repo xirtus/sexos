@@ -19,6 +19,10 @@ pub enum Mode {
     VertexPaint,
     WeightPaint,
     TexturePaint,
+    /// Armatures: posing bones.
+    Pose,
+    /// Grease Pencil: drawing strokes.
+    Draw,
 }
 
 impl Mode {
@@ -30,9 +34,24 @@ impl Mode {
             Mode::VertexPaint => "Vertex Paint",
             Mode::WeightPaint => "Weight Paint",
             Mode::TexturePaint => "Texture Paint",
+            Mode::Pose => "Pose Mode",
+            Mode::Draw => "Draw Mode",
         }
     }
-    pub const ALL: [Mode; 6] = [Mode::Object, Mode::Edit, Mode::Sculpt, Mode::VertexPaint, Mode::WeightPaint, Mode::TexturePaint];
+    pub const ALL: [Mode; 8] = [Mode::Object, Mode::Edit, Mode::Sculpt, Mode::VertexPaint, Mode::WeightPaint, Mode::TexturePaint, Mode::Pose, Mode::Draw];
+    /// The `object.mode_set` argument.
+    pub fn id(self) -> &'static str {
+        match self {
+            Mode::Object => "OBJECT",
+            Mode::Edit => "EDIT",
+            Mode::Sculpt => "SCULPT",
+            Mode::VertexPaint => "VERTEX_PAINT",
+            Mode::WeightPaint => "WEIGHT_PAINT",
+            Mode::TexturePaint => "TEXTURE_PAINT",
+            Mode::Pose => "POSE",
+            Mode::Draw => "PAINT_GREASE_PENCIL",
+        }
+    }
 }
 
 /// Edit-mode select mode (1, 2, 3 keys).
@@ -52,6 +71,9 @@ pub struct EditSelection {
     pub faces: BTreeSet<u32>,
     /// The active element (drawn white), the last one clicked.
     pub active: Option<Elem>,
+    /// Elements in the order they were clicked (Blender's select history),
+    /// for Merge at First/Last, Connect Vertex Path and Shortest Path.
+    pub history: Vec<Elem>,
 }
 
 /// One edit-mode element.
@@ -158,6 +180,9 @@ pub enum BoxMode {
 pub struct Doc {
     pub scene: Scene,
     pub undo: UndoStack,
+    /// Animation and settings for each undo/redo step, in step with `undo`.
+    side_undo: Vec<Side>,
+    side_redo: Vec<Side>,
     pub mode: Mode,
     pub select_mode: SelectMode,
     pub edit: EditSelection,
@@ -172,6 +197,14 @@ pub struct Doc {
     pub generation: u64,
     /// The last F12 render, linear RGBA, and its size.
     pub render: Option<sex_3d::scene::Image>,
+    /// The compositor's Viewer node output ("Viewer Node" image).
+    pub viewer: Option<sex_3d::scene::Image>,
+    /// Bumped when `viewer` changes (backdrop caches).
+    pub viewer_gen: u64,
+    /// The Image Editor shows the Viewer Node instead of the Render Result.
+    pub show_viewer: bool,
+    /// Compositor editor: draw the Viewer Node behind the nodes.
+    pub backdrop: bool,
     /// The workspace an operator asked to show (F12 shows "Rendering").
     pub want_workspace: Option<String>,
     /// Operators queued by editors this frame, run after drawing.
@@ -182,6 +215,11 @@ pub struct Doc {
     pub anim: crate::anim::Anim,
     /// Report history, clipboard and editor mailbox (anim.rs).
     pub info: crate::anim::Info,
+    /// Rigging UI state: bone and lattice point selection, active vertex
+    /// group and shape key, weight paint brush (rig.rs).
+    pub rig: crate::rig::RigState,
+    /// Sculpt, Vertex Paint and Texture Paint settings and sessions (sculpt.rs).
+    pub sculpt: crate::sculpt::SculptState,
     /// Render, output, unit and colour-management settings and per-object
     /// flags the scene itself has no field for (Properties and Outliner).
     pub settings: crate::settings::Settings,
@@ -211,11 +249,27 @@ pub struct Doc {
     /// Operators that act on a 3D view (navigation, modal tools), queued for
     /// the viewport that asked for them.
     pub view_ops: Vec<Op>,
+    /// The Python kernel, script panels, operators and add-ons (python.rs).
+    pub python: crate::python::Python,
+    /// Simulation stepping state (physics.rs).
+    pub sim: crate::physics::SimState,
+    /// Grease Pencil tool settings and caches (gpencil.rs).
+    pub gp: crate::gpencil::GpState,
 }
 
 impl Default for Doc {
     fn default() -> Self {
-        Doc::new(Scene::startup())
+        // Blender's startup material and world use nodes.
+        let mut s = Scene::startup();
+        for m in &mut s.materials {
+            if m.node_tree.is_none() {
+                m.node_tree = Some(crate::nodetree::seed_material_tree(m));
+            }
+        }
+        if s.world.node_tree.is_none() {
+            s.world.node_tree = Some(crate::nodetree::seed_world_tree(&s.world));
+        }
+        Doc::new(s)
     }
 }
 
@@ -228,6 +282,8 @@ impl Doc {
         Doc {
             scene,
             undo: UndoStack::new(),
+            side_undo: Vec::new(),
+            side_redo: Vec::new(),
             mode: Mode::Object,
             select_mode: SelectMode::Vertex,
             edit: EditSelection::default(),
@@ -238,11 +294,17 @@ impl Doc {
             report: String::new(),
             generation: 1,
             render: None,
+            viewer: None,
+            viewer_gen: 0,
+            show_viewer: false,
+            backdrop: true,
             want_workspace: None,
             queue: Vec::new(),
             texts: Vec::new(),
             anim: Default::default(),
             info: Default::default(),
+            rig: Default::default(),
+            sculpt: Default::default(),
             settings: Default::default(),
             cursor: Vec3::ZERO,
             cursor_rotation: Vec3::ZERO,
@@ -258,13 +320,48 @@ impl Doc {
             edit_hidden: BTreeSet::new(),
             menu: None,
             view_ops: Vec::new(),
+            python: Default::default(),
+            sim: Default::default(),
+            gp: Default::default(),
         }
     }
 
     /// Record an undo step named `label` before changing the scene.
     pub fn push_undo(&mut self, label: &str) {
         self.undo.push(label, &self.scene);
+        self.side_undo.push(self.side());
+        if self.side_undo.len() > self.undo.max_steps {
+            self.side_undo.remove(0);
+        }
+        self.side_redo.clear();
         self.dirty = true;
+    }
+    /// Record a step made of `changes` (already applied; each holds the
+    /// values from before), e.g. a sculpt stroke: only what it touched.
+    pub fn push_undo_patch(&mut self, label: &str, changes: Vec<sex_3d::undo::Change>) {
+        if changes.is_empty() {
+            return;
+        }
+        self.undo.push_changes(label, changes);
+        self.side_undo.push(self.side());
+        if self.side_undo.len() > self.undo.max_steps {
+            self.side_undo.remove(0);
+        }
+        self.side_redo.clear();
+        self.dirty = true;
+    }
+    fn side(&self) -> Side {
+        Side { actions: self.anim.actions.clone(), anim: self.anim.objects.clone(), rig: self.rig.clone(), settings: self.settings.clone(), texts: self.texts.clone() }
+    }
+    fn restore_side(&mut self, s: Side) -> Side {
+        let now = self.side();
+        self.anim.actions = s.actions;
+        self.anim.objects = s.anim;
+        self.anim.dirty = true;
+        self.rig = s.rig;
+        self.settings = s.settings;
+        self.texts = s.texts;
+        now
     }
     /// The scene changed: caches must rebuild.
     pub fn touch(&mut self) {
@@ -312,14 +409,20 @@ impl Doc {
     /// Run an operator by its Blender-style name. Unknown names are reported,
     /// not ignored, so missing features show up in the status bar.
     pub fn run(&mut self, op: &Op) {
-        if self.run_view3d(op) || crate::edit::run(self, op) {
+        if crate::sculpt::run(self, op) || crate::gpencil::run(self, op) || crate::seqedit::run(self, op) || crate::rig::run(self, op) || self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) || crate::python::run(self, op) || crate::physics::run(self, op) {
             return;
         }
         let arg = op.arg.as_str();
         match op.id.as_str() {
             "ed.undo" => {
                 match self.undo.undo(&mut self.scene) {
-                    Some(l) => self.report = format!("Undo {l}"),
+                    Some(l) => {
+                        if let Some(side) = self.side_undo.pop() {
+                            let now = self.restore_side(side);
+                            self.side_redo.push(now);
+                        }
+                        self.report = format!("Undo {l}")
+                    }
                     None => self.report = "Nothing to undo".into(),
                 }
                 crate::edit::sanitize(self);
@@ -327,12 +430,19 @@ impl Doc {
             }
             "ed.redo" => {
                 match self.undo.redo(&mut self.scene) {
-                    Some(l) => self.report = format!("Redo {l}"),
+                    Some(l) => {
+                        if let Some(side) = self.side_redo.pop() {
+                            let now = self.restore_side(side);
+                            self.side_undo.push(now);
+                        }
+                        self.report = format!("Redo {l}")
+                    }
                     None => self.report = "Nothing to redo".into(),
                 }
                 crate::edit::sanitize(self);
                 self.touch();
             }
+            "mesh.primitive_monkey_add" => self.run(&Op::with("mesh.primitive_add", "monkey")),
             "mesh.primitive_add" => {
                 let (label, mesh) = match arg {
                     "plane" => ("Plane", primitives::plane(2.0)),
@@ -344,6 +454,7 @@ impl Doc {
                     "cone" => ("Cone", primitives::cone(32, 1.0, 0.0, 2.0)),
                     "torus" => ("Torus", primitives::torus(48, 12, 1.0, 0.25)),
                     "grid" => ("Grid", primitives::grid(10, 10, 2.0)),
+                    "monkey" => ("Monkey", primitives::monkey()),
                     _ => return self.unknown(op),
                 };
                 self.push_undo(&format!("Add {label}"));
@@ -375,6 +486,27 @@ impl Doc {
             }
             "object.empty_add" => {
                 self.add_object("Empty", ObjectData::Empty, "Add Empty");
+            }
+            "object.armature_add" => {
+                self.push_undo("Add Armature");
+                if self.mode != Mode::Object {
+                    crate::rig::mode_set(self, "OBJECT");
+                }
+                // Blender's default bone: one unit up the Z axis.
+                let mut arm = sex_3d::armature::Armature::default();
+                arm.add_bone(sex_3d::armature::Bone::new("Bone", Vec3::ZERO, Vec3::Z));
+                let i = self.scene.add_armature_object("Armature", arm);
+                self.scene.objects[i].transform.location = self.cursor;
+                self.select_only(Some(i));
+            }
+            "object.add" if arg == "LATTICE" || arg.is_empty() => {
+                self.push_undo("Add Lattice");
+                if self.mode != Mode::Object {
+                    crate::rig::mode_set(self, "OBJECT");
+                }
+                let i = self.scene.add_lattice_object("Lattice", sex_3d::lattice::Lattice::new(2, 2, 2));
+                self.scene.objects[i].transform.location = self.cursor;
+                self.select_only(Some(i));
             }
             "object.select_all" => {
                 let all: Vec<usize> = (0..self.scene.objects.len()).collect();
@@ -446,18 +578,8 @@ impl Doc {
             }
             "object.modifier_add" => {
                 let Some(a) = self.active() else { return };
-                let m = match arg {
-                    "SUBSURF" => Modifier::Subdivision { levels: 1, simple: false },
-                    "MIRROR" => Modifier::Mirror { x: true, y: false, z: false, merge: true, merge_distance: 0.001 },
-                    "ARRAY" => Modifier::Array { count: 2, relative: [1.0, 0.0, 0.0], constant: [0.0; 3], merge: false },
-                    "SOLIDIFY" => Modifier::Solidify { thickness: 0.01, offset: -1.0 },
-                    "BEVEL" => Modifier::Bevel { width: 0.1, segments: 1, angle: 30f32.to_radians() },
-                    "TRIANGULATE" => Modifier::Triangulate,
-                    "WELD" => Modifier::Weld { distance: 0.001 },
-                    "DISPLACE" => Modifier::Displace { strength: 1.0 },
-                    "SMOOTH" => Modifier::Smooth { factor: 0.5, iterations: 1 },
-                    _ => return self.unknown(op),
-                };
+                // Blender identifiers: SUBSURF, DECIMATE, SIMPLE_DEFORM, ...
+                let Some(m) = Modifier::with_defaults(arg) else { return self.unknown(op) };
                 if !matches!(self.scene.objects[a].data, ObjectData::Mesh(_)) {
                     self.report = "Modifiers need a mesh object".into();
                     return;
@@ -466,36 +588,7 @@ impl Doc {
                 self.scene.objects[a].modifiers.push(m);
                 self.touch();
             }
-            "object.mode_set" => {
-                let want = match arg {
-                    "EDIT" => Mode::Edit,
-                    "SCULPT" => Mode::Sculpt,
-                    "VERTEX_PAINT" => Mode::VertexPaint,
-                    "WEIGHT_PAINT" => Mode::WeightPaint,
-                    "TEXTURE_PAINT" => Mode::TexturePaint,
-                    "TOGGLE_EDIT" => {
-                        if self.mode == Mode::Edit {
-                            Mode::Object
-                        } else {
-                            Mode::Edit
-                        }
-                    }
-                    _ => Mode::Object,
-                };
-                if want != Mode::Object && !self.active().is_some_and(|a| matches!(self.scene.objects[a].data, ObjectData::Mesh(_))) {
-                    self.report = "Active object is not a mesh".into();
-                    return;
-                }
-                if want == Mode::Edit && self.mode != Mode::Edit {
-                    // A fresh mesh in Blender enters Edit Mode all selected.
-                    self.edit = EditSelection::default();
-                    self.edit_hidden.clear();
-                    self.mode = want;
-                    crate::edit::select_all(self, "SELECT");
-                }
-                self.mode = want;
-                self.touch();
-            }
+            "object.mode_set" => crate::rig::mode_set(self, arg),
             "object.location_clear" | "object.rotation_clear" | "object.scale_clear" => {
                 self.push_undo("Clear Transform");
                 for i in self.scene.selected.clone() {
@@ -536,6 +629,7 @@ pub fn is_view_op(id: &str) -> bool {
     matches!(
         id,
         "view3d.view_all"
+            | "uv.project_from_view"
             | "view3d.view_selected"
             | "view3d.view_axis"
             | "view3d.view_camera"
@@ -552,6 +646,7 @@ pub fn is_view_op(id: &str) -> bool {
             | "view3d.select_box"
             | "view3d.shading"
             | "view3d.overlay"
+            | "view3d.solid"
             | "transform.translate"
             | "transform.rotate"
             | "transform.resize"
@@ -564,6 +659,11 @@ pub fn is_view_op(id: &str) -> bool {
             | "mesh.bevel"
             | "mesh.loopcut_slide"
             | "mesh.knife_tool"
+            | "mesh.rip_move"
+            | "mesh.rip_move_fill"
+            | "mesh.rip_edge_move"
+            | "mesh.extrude_manifold"
+            | "mesh.extrude_region_shrink_fatten"
             | "object.move_to_collection_menu"
     )
 }
@@ -926,6 +1026,16 @@ fn circle(n: u32, r: f32) -> sex_3d::Mesh {
     }
     m.add_face(&(0..n).collect::<Vec<_>>());
     m
+}
+
+/// The document state outside the scene that undo restores with it.
+#[derive(Clone)]
+struct Side {
+    actions: Vec<crate::anim::Action>,
+    anim: Vec<crate::anim::ObjectAnim>,
+    rig: crate::rig::RigState,
+    settings: crate::settings::Settings,
+    texts: Vec<(String, String)>,
 }
 
 #[cfg(test)]
