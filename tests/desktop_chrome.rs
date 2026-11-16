@@ -15,12 +15,15 @@ fn approved_geometry_has_one_separator_and_contiguous_workarea() {
         assert_eq!((m.bar(),m.title()),(bar,title));
         assert_eq!(m.workarea(1280,800),Rect{x:0,y:bar,w:1280,h:800-bar});
         assert_eq!(m.body(640,480),body);
-        for i in 0..3 {
+        for i in 0..4 {
             let r=m.control(i).unwrap();assert_eq!((r.w,r.h),(target,target));
             assert!(r.y+r.h<=title);
             if i>0 {assert_eq!(m.control(i-1).unwrap().x+target,r.x);}
         }
-        assert_eq!(m.control(3),None);
+        assert_eq!(m.control(4),None);
+        // Tabs and the title start right of the four buttons.
+        assert_eq!(m.controls_end(),m.control(3).unwrap().x+target+scale);
+        assert_eq!(m.title_x(),m.px(109));
     }
 }
 #[test]

@@ -5276,3 +5276,8 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Buttons reach the desktop as ordinary media keys: Cufflinks sends them through the HID mailbox as keyboard usages (0xE8..0xEB play/pause, stop, previous, next; 0x80/0x81/0x7F volume and mute), Input maps them to the player keys the Shell already handles. No Shell change.
 - Volume: Bell publishes its master volume in the `bt_audio` header; Cufflinks mirrors it to the headset and turns the headset's own volume changes into one volume key press each (no loop: echoes within half a step press nothing); Bell leaves master gain out of the headset mix while the headset applies it.
 - Verified by `scripts/bt_host_gate.sh` (`avrcp_peers.rs`: 8 tests incl. hostile and random frames; `tests/cufflinks_remote.rs`) and `scripts/usb_wheel_host_gate.sh`. Hardware receipt pending (`CUFFLINKS_BLUETOOTH_2026_11_14.md` section 21).
+
+## Q: Gaze photo details and RAW thumbnails in Loom (2026-11-16)
+- Gaze's details panel shows Lens and Exposure (shutter, aperture, ISO, focal length as one line, e.g. `1/250 s · f/2.8 · ISO 400 · 35 mm`) next to Camera, Date, Place and GPS. `crates/gaze-core` keeps them in the library catalog as two extra columns after the recipe, so older catalogs still load.
+- `gaze --thumb @IN @OUT SIZE` (`apps/view/src/thumb.rs`) opens no window and writes a thumbnail in Vellum's `--thumb` format, upright by EXIF orientation, camera RAW files from their embedded preview. Loom uses it for DNG, CR2, CR3, NEF, ARW, ORF, RW2, PEF and RAF files (`HELPERS` in `apps/files/src/thumbs.rs`).
+- Verified by `cargo test -p gaze-core` and `scripts/files_thumbs_gate.py` (the stick gains a NEF whose sideways preview must come back 84x112).

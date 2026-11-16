@@ -1301,6 +1301,7 @@ pub mod notify;
 pub mod desktop_look;
 pub mod access_view;
 pub mod window_switcher;
+pub mod window_menu;
 pub mod screenshot;
 pub mod tray;
 pub mod window_motion;

@@ -28,7 +28,7 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 ab8817143b15e29969990957e5c465b5a703ee4812ae21c399de2ce55fa83aa2  crates/sex-pdx/src/desktop_recording.rs
 
-801e34b49d8bd9daf55068e6f75398599193e2d9b702a0f2a8680dbff16d2f85  crates/sex-pdx/src/desktop_style.rs
+d17ef036e0f28ec8199e709913df79689f31bacdf4d84e951fbe0da540269383  crates/sex-pdx/src/desktop_style.rs
 
 4519de04eef091b40d15e00f40bc2ec7911f916a9ac3e28ebf4fd05613f1beca  crates/sex-pdx/src/device.rs
 
@@ -58,7 +58,7 @@ a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d  crates/sex-pdx
 
 c802a7c131bc32914f6573342aa1f5045dfa1781f86bc05a1be4c0b546cda9dc  crates/sex-pdx/src/input_diagnostics.rs
 
-f00f44669af45f707a4a24ec15f70321ed9ed04565007c9e1b093b42fdd39e96  crates/sex-pdx/src/lib.rs
+3766c55f455e02199154d9cdbe28c5fc93a454f91a2459fe04e2eafaf8abd24b  crates/sex-pdx/src/lib.rs
 
 b02d602feb5f239687f1a450e8c0ec2b932c366df85ae4f2a5dc67df3f5edcef  crates/sex-pdx/src/memory_region.rs
 

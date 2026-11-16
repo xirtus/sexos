@@ -143,6 +143,7 @@ mod text_transaction;
 mod glyphs;
 mod lock_screen;
 mod bt_panel;
+mod window_menu;
 mod bitmap_binding;
 mod bitmap_transaction;
 mod bitmap_stores;
@@ -234,6 +235,8 @@ const FRAME_LIGHT_GAP_PX: usize = 3;
 const FRAME_LIGHT_CLOSE_COLOR: u32 = 0x00FF4444;
 const FRAME_LIGHT_MINIMIZE_COLOR: u32 = 0x00FFCC44;
 const FRAME_LIGHT_ZOOM_COLOR: u32 = 0x0044FF44;
+/// Fourth title bar button: float / tile (slice S1).
+const FRAME_LIGHT_FLOAT_COLOR: u32 = 0x0089B4FA;
 
 /// Base alpha for the disabled close light (close_allowed=0, non-interactive).
 /// V1: close is disabled for all frames; red renders at reduced alpha to
@@ -503,10 +506,10 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             }
             // Tab strip: glass background with tab color overlay.
             if surf.tab_count > 0
-                && lx >= scene.metrics.px(74)as usize
+                && lx >= scene.metrics.controls_end()as usize
                 && lx < rim_right
             {
-                let exclusion=scene.metrics.px(74)as usize;
+                let exclusion=scene.metrics.controls_end()as usize;
                 let available = rim_right.saturating_sub(exclusion);
                 let slot_w = available / surf.tab_count as usize;
                 if slot_w > 0 {
@@ -525,7 +528,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             if let Some(fg)=toolbar_title_fg_at_scaled(lx,ly,surf.surface_id,c,scene.metrics.scale()){c=fg;}
             // Natural 10px circular marks inside the shared 24px targets.
             // Painting and pointer targets share the same transformed boxes.
-            for index in 0..3 {
+            for index in 0..sex_pdx::desktop_style::chrome::CONTROLS {
                 let r=scene.metrics.control(index).unwrap();
                 let size=scene.metrics.px(10)as usize;
                 let left=r.x as usize+(r.w as usize-size)/2;
@@ -534,7 +537,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                 let dx=(2*(lx-left)+1)as i32-size as i32;
                 let dy=(2*(ly-top)+1)as i32-size as i32;
                 if dx*dx+dy*dy>=(size*size)as i32 {continue;}
-                let color=match index{0=>scene.tokens.close_light_color,1=>scene.tokens.minimize_light_color,_=>scene.tokens.zoom_light_color};
+                let color=match index{0=>scene.tokens.close_light_color,1=>scene.tokens.minimize_light_color,2=>scene.tokens.zoom_light_color,_=>FRAME_LIGHT_FLOAT_COLOR};
                 let disabled=index==0&&!close_allowed;
                 let hovered=light_hovered&&hovered_light_kind as u32==index;
                 let alpha=if disabled{80}else if hovered{255}else{224};
@@ -1587,7 +1590,7 @@ fn toolbar_title_fg_at(lx: usize, ly: usize, surface_id: u64, background: u32) -
     toolbar_title_fg_at_scaled(lx,ly,surface_id,background,sex_pdx::desktop_style::ui_scale())
 }
 fn toolbar_title_fg_at_scaled(lx: usize, ly: usize, surface_id: u64, background: u32, ui_scale:u32) -> Option<u32>{
-    let title_x = sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(85)as usize;
+    let title_x = sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).title_x()as usize;
     let line_h=glyphs::UI_H*ui_scale as usize;
     let title_y = (sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).title()as usize).saturating_sub(line_h) / 2;
     if lx + 2 < title_x || ly < title_y || ly >= title_y + line_h { return None; }
@@ -2220,6 +2223,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         draw_tray_menu(fb,w,h,total,scene);
         bt_panel::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_window_switcher(fb,w,h,total,scene);
+        window_menu::draw(fb,w,h,total,scene.metrics.scale());
         draw_screenshot_ui(fb,w,h,total,scene);
     }
     // Locked: the lock surface covers everything the passes above painted.
@@ -4591,6 +4595,7 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+                sex_pdx::window_menu::OP_WINDOW_MENU => { if window_menu::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
                 sex_pdx::window_motion::OP_MOTION => {
                     // Only the Shell turns animations on or off and hints a workspace slide.
                     if msg.caller_pd == 3 {
