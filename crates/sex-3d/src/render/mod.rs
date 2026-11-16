@@ -70,7 +70,7 @@ pub mod workbench;
 pub mod volume;
 
 pub use denoise::{denoise, denoise_images, DenoiseSettings};
-pub use eevee::{render_eevee, Eevee, EeveeScene, EeveeSettings};
+pub use eevee::{render_eevee, Eevee, EeveeScene, EeveeSettings, Lens, STUDIO_WORLDS};
 pub use film::{MistFalloff, MistSettings, Pass, Passes, BACKGROUND_DEPTH};
 pub use prepare::PreparedScene;
 pub use raster::RasterCamera;

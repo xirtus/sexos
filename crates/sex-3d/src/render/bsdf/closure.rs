@@ -544,6 +544,20 @@ impl ClosureBsdf {
         (f, pdf)
     }
 
+    /// `eval` of the lobes other than Lambert/Oren-Nayar diffuse and
+    /// translucent (EEVEE integrates those over area lights exactly).
+    pub fn eval_non_lambert(&self, wo: Vec3, wi: Vec3) -> Vec3 {
+        let above = wi.dot(self.ng) > 0.0;
+        let mut f = Vec3::ZERO;
+        for l in &self.lobes {
+            if l.is_delta() || matches!(l.kind, LobeKind::Diffuse { .. } | LobeKind::Translucent) || (l.n.dot(wi) > 0.0) != above {
+                continue;
+            }
+            f += l.weight.mul_elem(l.eval(wo, wi).0);
+        }
+        f
+    }
+
     /// `eval` with the diffuse lobes' share of `f` separately.
     pub fn eval_split(&self, wo: Vec3, wi: Vec3) -> (Vec3, Vec3, f32) {
         if self.sel_total <= 0.0 {
