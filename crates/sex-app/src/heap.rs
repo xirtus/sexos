@@ -144,7 +144,14 @@ unsafe impl talc::source::Source for Window {
         let got = match talc.source.limit.as_mut() {
             Some(limit) => limit.ask(need.max(STEP_PAGES)).or_else(|| limit.ask(need)),
             None => ask(need.max(STEP_PAGES)).or_else(|| ask(need)),
-        }.ok_or(())?;
+        };
+        let Some(got) = got else {
+            // Why the window said no, once, for whoever reads the serial record. The
+            // line is formatted on the stack: the heap is the thing that just failed.
+            let why = memory::grow(need.min(memory::MAX_PAGES_PER_CALL)).err().unwrap_or(0);
+            sex_pdx::serial_record!("[app.heap.refused] bytes={} pages={} held={} status={}", layout.size(), need, held(), why);
+            return Err(());
+        };
         let end = got
             .base
             .checked_add(got.pages.checked_mul(memory::PAGE).ok_or(())?)
