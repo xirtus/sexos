@@ -8,7 +8,9 @@
 //! a mask and face sets in the Sculpting workspace; `--gp-demo` draws Grease
 //! Pencil objects in Draw Mode in the 2D Animation workspace; `--seq-demo`
 //! shows a small edit in the Video Editing workspace; `--physics-demo` steps
-//! falling boxes, a draped cloth, particles and smoke to frame 40.
+//! falling boxes, a draped cloth, particles and smoke to frame 40;
+//! `--liquid-demo` steps a liquid dam break (with an obstacle, a tap and a
+//! drain) and a Dynamic Paint ripple to frame 24.
 use polyamour::input::Input;
 #[cfg(target_os = "hermit")]
 use polyamour::input::{Button, Key, Mods};
@@ -55,6 +57,10 @@ fn main() {
             }
             "--physics-demo" => {
                 polyamour::physics::demo(&mut app.doc);
+                physics_demo = true;
+            }
+            "--liquid-demo" => {
+                polyamour::physics::liquid_demo(&mut app.doc);
                 physics_demo = true;
             }
             "--gp-demo" => {
@@ -118,7 +124,7 @@ fn main() {
         app.frame(Input::Tick);
     }
     let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--gp-demo] [--seq-demo] [scene file]");
+        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--liquid-demo] [--gp-demo] [--seq-demo] [scene file]");
         return;
     };
     let f = std::fs::File::create(&out).expect("create png");

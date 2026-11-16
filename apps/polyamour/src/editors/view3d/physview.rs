@@ -2,7 +2,9 @@
 //! What the simulations add to the 3D view, drawn over the shaded image:
 //! particles (Point, Circle, Cross and Axis display; As Rendered shows
 //! points too, or the instances' origins), hair as polylines, and a smoke
-//! domain's cached density as soft dots inside its box. Cloth and soft
+//! domain's cached density as soft dots inside its box, a liquid domain's
+//! FLIP particles (Show FLIP Particles) as dots; the liquid surface itself
+//! is the domain's mesh (its Fluid modifier's output). Cloth and soft
 //! bodies need nothing here: their modifiers deform the mesh the viewport
 //! already draws, and rigid bodies move their objects.
 use super::proj::Proj;
@@ -17,6 +19,7 @@ const HAIR: u32 = 0xc89a5a;
 const SMOKE: u32 = 0xdadada;
 const FLAME: u32 = 0xff8a2a;
 const DOMAIN: u32 = 0x5a7aa0;
+const LIQUID: u32 = 0x4aa0ff;
 
 /// Draw particles, hair and smoke.
 pub fn draw(d: &Doc, ui: &mut Ui, p: &Proj) {
@@ -96,6 +99,18 @@ fn smoke(d: &Doc, ui: &mut Ui, p: &Proj) {
         }
         let key = fluid::key(&scene.objects[oi].name, slot);
         let Some(f) = scene.physics.caches.frame_at(&key, scene.frame_current.min(s.cache_frame_end)) else { continue };
+        if let SimFrame::Liquid(lf) = &*f {
+            // Show FLIP Particles: the liquid's particles as dots.
+            if let Some(pts) = &lf.particles {
+                let stride = (pts.len() / 20000).max(1);
+                for q in pts.iter().step_by(stride) {
+                    if let Some((x, y)) = p.to_screen(*q) {
+                        ui.p.fill_alpha(crate::draw::Rect::new(x as i32 - 1, y as i32 - 1, 2, 2), LIQUID, 200);
+                    }
+                }
+            }
+            continue;
+        }
         let SimFrame::Fluid(ff) = &*f else { continue };
         let [nx, ny, nz] = ff.res;
         // At most ~24 dots per axis.
