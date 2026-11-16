@@ -148,6 +148,7 @@ mod bitmap_binding;
 mod bitmap_transaction;
 mod bitmap_stores;
 mod fill_damage;
+mod wallpaper_mark;
 mod damage;
 static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
 static mut BITMAP_STORES: bitmap_stores::Stores<{sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser)}> = bitmap_stores::Stores::UNBOUND;
@@ -721,6 +722,7 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
 fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot){
     let focused=scene.focus;
     let back=bg(y,h);
+    let mark=wallpaper_mark::span(y,w,h);
     let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
     let mut x=x0;
     while x<x1{
@@ -730,14 +732,21 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
             if let Some(source)=source{
                 if fast_content_run(fb,x,end,y,w,h,source,scene){x=end;continue;}
             }else{
-                unsafe{core::slice::from_raw_parts_mut(fb.add(y*w+x),end-x).fill(back);}
+                match mark{
+                    // The SexOS wallpaper's lips: this run crosses them.
+                    Some((m0,m1)) if x<m1&&end>m0=>for px in x..end{
+                        unsafe{core::ptr::write_volatile(fb.add(y*w+px),wallpaper_mark::pixel(px,y,w,h,back));}
+                    },
+                    _=>unsafe{core::slice::from_raw_parts_mut(fb.add(y*w+x),end-x).fill(back);},
+                }
                 x=end;continue;
             }
         }
         while x<end{
+            let under=if mark.is_some(){wallpaper_mark::pixel(x,y,w,h,back)}else{back};
             let color=if let Some(row)=row.as_mut(){
-                composite_pixel_source(x,y,w,h,back,row.source(x),scene)
-            }else{composite_pixel(x,y,w,h,back,focused,scene)};
+                composite_pixel_source(x,y,w,h,under,row.source(x),scene)
+            }else{composite_pixel(x,y,w,h,under,focused,scene)};
             unsafe{core::ptr::write_volatile(fb.add(y*w+x),color);}
             x+=1;
         }
@@ -1227,11 +1236,6 @@ fn phase5_palette_dot_at(x: usize, y: usize, bar: &SilkBar) -> Option<u32> {
 }
 
 fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) -> u32 {
-    const R6_BAR_ALPHA: u8 = 196;
-    const R6_EDGE_ALPHA: u8 = 72;
-    const BAR_TOP_HIGHLIGHT: u32 = 0x00A8D8FF;
-    const BAR_BOTTOM_DARK_EDGE: u32 = 0x000B1220;
-    const BAR_CRYSTAL_TINT: u32 = 0x001C2A54;
     // Selected-window option indicators (display-only, no action behavior).
     // Rendered as small colored dots between launcher and workspace indicators.
     // Each dot is 3x3 px at a fixed position, colored by option bit.
@@ -1288,19 +1292,46 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
         // Active events → bright dot
         return 0x00FFD700; // gold
     }
-    // Launcher button with rounded-illusion border (model position)
+    // Launcher button: the SexOS lips (sex_pdx::brand) on the bar's own glass,
+    // where other systems put their own mark.
     let (lx, ly, lw, lh) = module_rect(bar, ModuleSlot::Launcher);
     if in_rect(x, y, lx, ly, lw, lh) {
-        let x2 = lx + 2;
-        let y2 = ly + 2;
-        let xw = lx + lw - 2;
-        let yh = ly + lh - 2;
-        if x < x2 || x >= xw || y < y2 || y >= yh {
-            return glass_over_bg(DEFAULT_THEME.panel_glow, x, y, R6_EDGE_ALPHA, scene);
-        }
-        let launcher_body = glass_over_bg(0x005CAEE8, x, y, 200, scene);
-        return alpha_blend_xrgb_over_xrgb(0x0082D6FF, launcher_body, 64);
+        let body = bar_body(x, y, scene);
+        return launcher_mark_at(x - lx, y - ly, lw, lh).map_or(body, |(color, cover)| sex_pdx::brand::blend(color, body, cover));
     }
+    bar_body(x, y, scene)
+}
+
+/// The lips in the launcher button, cached for the button's size: 5/6 of its
+/// width, centred. (colour, coverage) at a point inside the button.
+const LAUNCHER_MARK_CAP: usize = 64;
+static mut LAUNCHER_MARK: [u8; LAUNCHER_MARK_CAP * LAUNCHER_MARK_CAP] = [0; LAUNCHER_MARK_CAP * LAUNCHER_MARK_CAP];
+static mut LAUNCHER_MARK_KEY: (usize, usize) = (0, 0);
+#[allow(static_mut_refs)]
+fn launcher_mark_at(x: usize, y: usize, bw: usize, bh: usize) -> Option<(u32, u8)> {
+    use sex_pdx::brand;
+    let mw = (sex_pdx::brand::fit_width(bw as u32 * 5 / 6, bh as u32) as usize).min(LAUNCHER_MARK_CAP);
+    let mh = brand::height_for(mw as u32) as usize;
+    if mw < 8 { return None; }
+    unsafe {
+        if LAUNCHER_MARK_KEY != (bw, bh) {
+            for row in 0..mh { brand::coverage_row(mw as u32, row as u32, &mut LAUNCHER_MARK[row * mw..(row + 1) * mw]); }
+            LAUNCHER_MARK_KEY = (bw, bh);
+        }
+        let (left, top) = ((bw - mw) / 2, (bh - mh) / 2);
+        if x < left || y < top || x >= left + mw || y >= top + mh { return None; }
+        let cover = LAUNCHER_MARK[(y - top) * mw + (x - left)];
+        (cover != 0).then(|| (brand::color_at(brand::Tone::Bright, (x - left) as u32, mw as u32), cover))
+    }
+}
+
+/// The bar's own glass at (x, y), with its top highlight and bottom glow.
+fn bar_body(x: usize, y: usize, scene: &scene::SceneSnapshot) -> u32 {
+    const R6_BAR_ALPHA: u8 = 196;
+    const R6_EDGE_ALPHA: u8 = 72;
+    const BAR_TOP_HIGHLIGHT: u32 = 0x00A8D8FF;
+    const BAR_BOTTOM_DARK_EDGE: u32 = 0x000B1220;
+    const BAR_CRYSTAL_TINT: u32 = 0x001C2A54;
     // Bar body: glass translucency over desktop background,
     // with subtle bottom-edge glow falloff.
     let bar_bottom=(scene.metrics.bar()as usize);

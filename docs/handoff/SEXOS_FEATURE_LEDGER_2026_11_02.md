@@ -4512,3 +4512,9 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Gaze's details panel shows Lens and Exposure (shutter, aperture, ISO, focal length as one line, e.g. `1/250 s · f/2.8 · ISO 400 · 35 mm`) next to Camera, Date, Place and GPS. `crates/gaze-core` keeps them in the library catalog as two extra columns after the recipe, so older catalogs still load.
 - `gaze --thumb @IN @OUT SIZE` (`apps/view/src/thumb.rs`) opens no window and writes a thumbnail in Vellum's `--thumb` format, upright by EXIF orientation, camera RAW files from their embedded preview. Loom uses it for DNG, CR2, CR3, NEF, ARW, ORF, RW2, PEF and RAF files (`HELPERS` in `apps/files/src/thumbs.rs`).
 - Verified by `cargo test -p gaze-core` and `scripts/files_thumbs_gate.py` (the stick gains a NEF whose sideways preview must come back 84x112).
+
+## Brand: the SexOS lips (2026-11-16)
+- Andreas' prototype logo (rose-gold lips on charcoal) traced into a vector: `assets/brand/sexos-lips.svg` (plus bright, mono, badge and wallpaper SVGs and PNG sizes). `scripts/brand/lips.py` is the one source of the shape and writes the SVGs and `crates/sex-pdx/src/brand_lips.rs`.
+- `sex_pdx::brand` draws the same outline natively at any size (integer scanline fill, 4 sub-rows, exact horizontal coverage, no allocation), so the kernel, Display and programs share one mark.
+- Silkbar: the launcher button is the lips on the bar's glass instead of the blue square. Wallpaper: the default is now "SexOS" (warm charcoal with the lips at 26% width, centred); the old navy theme gradient is kept as "Midnight". Boot screen: a charcoal header with the lips and the title. Lock screen: charcoal with the lips above "Locked". README and website carry the mark.
+- Verified by `tests/brand.rs`, `tests/desktop_look.rs` (both now run in `scripts/service_custody_host_gate.sh`) and `scripts/desktop_look_gate.py` (Super+B still steps SexOS → Dusk).

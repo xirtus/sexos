@@ -1331,6 +1331,7 @@ pub mod disks;
 pub mod web;
 pub mod accounts;
 pub mod organs;
+pub mod brand;
 pub mod text_selection;
 pub mod text_encoding;
 pub mod clipboard;

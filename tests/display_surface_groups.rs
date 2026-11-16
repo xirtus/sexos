@@ -42,6 +42,8 @@ static mut TEST_BLEND_BACKGROUND:Option<u32>=None;
 fn glass_over_bg(c:u32,_x:usize,_y:usize,_a:u8)->u32{unsafe{TEST_GLASS_BACKGROUND.unwrap_or(c)}}
 fn alpha_blend_xrgb_over_xrgb(c:u32,_b:u32,_a:u8)->u32{unsafe{TEST_BLEND_BACKGROUND.unwrap_or(c)}}
 fn pulse_alpha(base:u8,_a:u8,_f:u64,_p:u64)->u8{base}
+// The SexOS wallpaper mark is off here: the reference compositor draws plain gradients.
+mod wallpaper_mark{pub fn span(_:usize,_:usize,_:usize)->Option<(usize,usize)>{None}pub fn pixel(_:usize,_:usize,_:usize,_:usize,back:u32)->u32{back}}
 include!(env!("DISPLAY_COMPOSITION_SOURCE"));
 include!("fixtures/compositor_reference.rs");
 #[test]fn printable_rom_preserves_case_and_rejects_every_unsupported_byte(){
