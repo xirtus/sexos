@@ -12,19 +12,19 @@ use crate::math::{EulerOrder, Quat, Vec3};
 const LAYER_HIDE: i64 = 1 << 0;
 const LAYER_LOCKED: i64 = 1 << 1;
 const LAYER_USE_MASK: i64 = 1 << 13;
-const LAYER_USE_LIGHTS: i64 = 1 << 15;
+const LAYER_USE_LIGHTS: i64 = 1 << 11;
 // eGPDstroke_Flag / eGPDspoint_Flag / eGPDframe_Flag
-const STROKE_SELECT: i64 = 1 << 0;
+const STROKE_SELECT: i64 = 1 << 3;
 const STROKE_CYCLIC: i64 = 1 << 7;
 const POINT_SELECT: i64 = 1 << 0;
 const FRAME_SELECT: i64 = 1 << 1;
 // eMaterialGPencilStyle_Flag
-const MAT_LOCKED: i64 = 1 << 0;
 const MAT_HIDE: i64 = 1 << 1;
+const MAT_LOCKED: i64 = 1 << 2;
 const MAT_STROKE_SHOW: i64 = 1 << 8;
 const MAT_FILL_SHOW: i64 = 1 << 9;
-const MAT_STROKE_HOLDOUT: i64 = 1 << 10;
-const MAT_FILL_HOLDOUT: i64 = 1 << 11;
+const MAT_STROKE_HOLDOUT: i64 = 1 << 13;
+const MAT_FILL_HOLDOUT: i64 = 1 << 14;
 
 fn int(v: &View<'_, '_>, name: &str) -> i64 {
     v.num(name).unwrap_or(0.0) as i64
@@ -100,7 +100,9 @@ fn stroke(f: &BlendFile<'_>, s: &View<'_, '_>) -> GpStroke {
     let cap = |i: usize| if s.num_at("caps", i).unwrap_or(0.0) as i64 == 1 { CapType::Flat } else { CapType::Round };
     out.start_cap = cap(0);
     out.end_cap = cap(1);
-    out.softness = 1.0 - fl(s, "hardeness", 1.0).clamp(0.0, 1.0);
+    // The hardness is `gradient_f` in the file (`hardness` at runtime).
+    let hardness = s.num_any(&["gradient_f", "hardness", "hardeness"]).map_or(1.0, |x| x as f32);
+    out.softness = 1.0 - if hardness.is_finite() { hardness.clamp(0.0, 1.0) } else { 1.0 };
     out.fill_color = s.vec::<4>("vert_color_fill").unwrap_or(out.fill_color);
     out.fill_opacity = fl(s, "fill_opacity_fac", 1.0);
     out.uv_rotation = fl(s, "uv_rotation", 0.0);

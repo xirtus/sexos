@@ -303,6 +303,45 @@ fn solid_shading_options_from_the_menu() {
     assert_eq!((w.lighting, w.matcap), (Lighting::MatCap, 2));
 }
 
+#[test]
+fn material_preview_world_and_workbench_viewport_samples() {
+    use crate::settings::Engine;
+    let (mut app, _) = setup();
+    app.doc.queue.push(crate::ui::Op::with("view3d.lookdev", "world:2"));
+    app.doc.queue.push(crate::ui::Op::with("view3d.lookdev", "opacity:0.25"));
+    app.doc.queue.push(crate::ui::Op::with("view3d.lookdev", "rotation:90"));
+    app.frame(Input::Tick);
+    let st = &app.doc.settings;
+    assert_eq!((st.lookdev_world, st.lookdev_opacity), (2, 0.25));
+    assert!((st.lookdev_rotation - core::f32::consts::FRAC_PI_2).abs() < 1e-5);
+    // Workbench in the Rendered view refines up to its viewport samples.
+    app.doc.settings.engine = Engine::Workbench;
+    app.doc.settings.workbench_viewport_samples = 3;
+    view(&mut app).shading = super::Shading::Rendered;
+    for _ in 0..6 {
+        app.frame(Input::Tick);
+    }
+    let rv = view(&mut app).render.as_ref().expect("rendered view");
+    assert_eq!(rv.samples(), 3);
+    assert!(!view(&mut app).refining, "done at the target");
+}
+
+#[test]
+fn half_resolution_while_navigating() {
+    let (mut app, _) = setup();
+    app.doc.settings.viewport_half_res_navigation = true;
+    view(&mut app).shading = super::Shading::Material;
+    app.frame(Input::Tick);
+    let full = view(&mut app).rect;
+    view(&mut app).cam.yaw += 0.3;
+    app.frame(Input::Tick);
+    let rv = view(&mut app).render.as_ref().unwrap();
+    assert_eq!((rv.w as i32, rv.h as i32), ((full.w + 1) / 2, (full.h + 1) / 2));
+    app.frame(Input::Tick);
+    let rv = view(&mut app).render.as_ref().unwrap();
+    assert_eq!((rv.w as i32, rv.h as i32), (full.w, full.h), "full resolution once the view stops");
+}
+
 /// Writes screenshots of a few states when POLYAMOUR_SHOTS names a folder.
 #[test]
 fn screenshots_on_request() {

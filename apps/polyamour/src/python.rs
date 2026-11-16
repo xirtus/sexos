@@ -102,6 +102,11 @@ impl Python {
         self.dir.clone().unwrap_or_else(data_dir)
     }
 
+    /// Why the live kernel cannot run here (empty while it can).
+    pub fn unavailable_reason(&self) -> &str {
+        self.unavailable.as_deref().unwrap_or("")
+    }
+
     /// Whether the live kernel runs (or has not been tried yet).
     pub fn live(&self) -> bool {
         self.unavailable.is_none()
@@ -361,7 +366,11 @@ fn batch(d: &mut Doc, name: &str, src: &str) -> Result<(), String> {
     let _ = std::fs::remove_file(&ops);
     std::fs::write(&script, src).map_err(|e| format!("cannot write {}: {e}", script.display()))?;
     std::fs::write(&snap, live::batch_snapshot(&d.scene)).map_err(|e| format!("cannot write {}: {e}", snap.display()))?;
-    let mut cmd = live::batch_command(&config(), &script, &ops, &snap);
+    // The child works in the run folder (on SexOS, Files hands it that folder),
+    // so the files go by their names.
+    let name_of = |p: &std::path::Path| PathBuf::from(p.file_name().unwrap_or_default());
+    let mut cmd = live::batch_command(&config(), &name_of(&script), &name_of(&ops), &name_of(&snap));
+    cmd.current_dir(&dir);
     cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     let status = cmd.status().map_err(|e| format!("cannot run python: {e}"))?;
     let text = std::fs::read_to_string(&ops).unwrap_or_default();

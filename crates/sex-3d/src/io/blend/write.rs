@@ -47,12 +47,32 @@
 //!   object `AnimData`: given handles as aligned handles, otherwise
 //!   auto-clamped ones placed here (Blender recomputes them on the next edit).
 //! - `Image` IDs with their pixels packed as PNG.
+//! - The modifier stack (`write_rig.rs`, `write_physics.rs`): every
+//!   Polyamour modifier but Multires as its `*ModifierData`, the Nodes
+//!   modifier with its geometry node group and an `IDProperty` group of
+//!   input values; object and pose-bone constraints (`bConstraint` and the
+//!   type's data struct); shape keys (`Key` ID with `KeyBlock`s); vertex
+//!   groups.
+//! - `Lattice` IDs (`BPoint`s), Grease Pencil as Blender 4.2 saves it
+//!   (legacy `bGPdata` layers, frames, strokes, points and weights, with
+//!   its materials' `MaterialGPencilStyle`, `write_gpencil.rs`); empties
+//!   keep the DNA's display defaults (plain axes, size 1).
+//! - Physics: the scene's gravity and `RigidBodyWorld`, the object's
+//!   `RigidBodyOb`, `RigidBodyCon`, `PartDeflect` (force field and
+//!   collision) and `SoftBody`, the Cloth, Collision, Soft Body, Particle
+//!   System (`ParticleSystem` + `ParticleSettings` ID) and Fluid modifiers
+//!   with empty point caches.
+//! - Geometry and function node storage (`write_geonodes.rs`), with the
+//!   repeat/simulation zone, index switch, menu switch and capture
+//!   attribute item arrays.
 //!
-//! Not written: modifiers, constraints, shape keys, lattices (as empties),
-//! geometry node groups, NLA and drivers, view-layer visibility, volume
-//! materials, nodes newer than 4.2 (Gabor Texture) and UI data (windows,
-//! screens, workspaces: Blender's loader keeps its current UI for a file
-//! saved without one).
+//! Not written: the Multires modifier (its displacement needs `CD_MDISPS`),
+//! Grease Pencil modifiers, effects and layer groups, lattice vertex groups,
+//! baked caches, the sequencer (the reader does not read it either), NLA and
+//! drivers, view-layer visibility, volume materials, nodes newer than 4.2
+//! (Gabor Texture, the Transform node's mode) and UI data (windows, screens,
+//! workspaces: Blender's loader keeps its current UI for a file saved
+//! without one).
 //!
 //! # Not verified against Blender
 //!
@@ -277,6 +297,21 @@ impl W {
             _ => return false,
         }
         true
+    }
+
+    /// The current value of numeric member `path` (its DNA default unless
+    /// set since); 0 when it does not resolve.
+    pub(super) fn get(&self, r: &Rec, path: &str) -> i64 {
+        let Some((off, m)) = self.locate(r.s, path) else { return 0 };
+        let d = &r.data[off..];
+        match m.prim {
+            Prim::I8 => d[0] as i8 as i64,
+            Prim::U8 => d[0] as i64,
+            Prim::I16 => i16::from_le_bytes([d[0], d[1]]) as i64,
+            Prim::U16 => u16::from_le_bytes([d[0], d[1]]) as i64,
+            Prim::I32 | Prim::U32 => i32::from_le_bytes([d[0], d[1], d[2], d[3]]) as i64,
+            _ => 0,
+        }
     }
 
     /// Set a member; an unknown path is recorded in `missing`.
