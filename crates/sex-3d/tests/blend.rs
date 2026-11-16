@@ -883,7 +883,7 @@ fn rigging_imports() {
             ),
         );
         w.put(mods[1], "DATA", "HookModifierData", 1, b);
-        let b = w.inst("SmoothModifierData", &with(2, vec![("fac", n(0.5)), ("repeat", n(2.)), ("defgrp_name", s("Upper")), ("flag", n((1 << 4) as f64))]));
+        let b = w.inst("SmoothModifierData", &with(2, vec![("fac", n(0.5)), ("repeat", n(2.)), ("defgrp_name", s("Upper")), ("flag", n(1.)) /* MOD_SMOOTH_INVERT_VGROUP */]));
         w.put(mods[2], "DATA", "SmoothModifierData", 1, b);
         let b = w.inst(
             "WeightVGMixModifierData",

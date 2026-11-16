@@ -112,7 +112,10 @@ pub(super) fn scene(f: &BlendFile<'_>, sc: &View<'_, '_>, ph: &mut ScenePhysics)
     let fl_ = flags(&rw, "flag");
     w.enabled = fl_ & 1 == 0;
     w.use_split_impulse = fl_ & 4 != 0;
-    int(&rw, "substeps_per_frame", &mut w.substeps_per_frame);
+    // `steps_per_second` in the file (`substeps_per_frame` at runtime).
+    if let Some(x) = rw.num_any(&["steps_per_second", "substeps_per_frame"]).filter(|x| x.is_finite()) {
+        w.substeps_per_frame = x as i32;
+    }
     int(&rw, "num_solver_iterations", &mut w.solver_iterations);
     fl(&rw, "time_scale", &mut w.time_scale);
     w.collection = id_ref(f, rw.ptr("group"), &["Collection", "Group"]);
@@ -233,6 +236,8 @@ pub(super) fn object(f: &BlendFile<'_>, ob: &View<'_, '_>) -> ObjectPhysics {
             s.use_min_distance = fl_ & 256 != 0;
             s.use_radial_max = fl_ & 512 != 0;
             s.use_radial_min = fl_ & 1024 != 0;
+            // PFIELD_VISIBILITY: absorbed by collision objects.
+            s.use_absorption = fl_ & (1 << 13) != 0;
             if pd.has("flag") {
                 s.apply_to_location = fl_ & (1 << 14) != 0;
                 s.apply_to_rotation = fl_ & (1 << 15) != 0;
@@ -278,8 +283,9 @@ fn collision(f: &BlendFile<'_>, ob: &View<'_, '_>) -> CollisionSettings {
     let fl_ = flags(&pd, "flag");
     c.use_particle_kill = fl_ & 16 != 0;
     if pd.has("flag") {
-        c.use_culling = fl_ & (1 << 16) != 0;
-        c.use_normal = fl_ & (1 << 17) != 0;
+        // PFIELD_CLOTH_USE_CULLING, PFIELD_CLOTH_USE_NORMAL.
+        c.use_culling = fl_ & (1 << 19) != 0;
+        c.use_normal = fl_ & (1 << 20) != 0;
     }
     fl(&pd, "pdef_damp", &mut c.damping_factor);
     fl(&pd, "pdef_rdamp", &mut c.damping_random);
@@ -367,6 +373,12 @@ fn softbody(f: &BlendFile<'_>, ob: &View<'_, '_>) -> SoftBodySettings {
     if let Some(b) = sb.num("secondspring") {
         s.bend = b as f32;
     }
+    if let Some(l) = sb.num("springpreload") {
+        s.spring_length = l as f32;
+    }
+    int(&sb, "minloops", &mut s.step_min);
+    int(&sb, "maxloops", &mut s.step_max);
+    s.collision_collection = id_ref(f, sb.ptr("collision_group"), &["Collection", "Group"]);
     s.vertex_group_goal = sb.string("namedVG_Softgoal").unwrap_or_default();
     s.vertex_group_mass = sb.string("namedVG_Mass").unwrap_or_default();
     // Object.softflag: 2 goal, 4 edges, 512 self collision.
@@ -375,6 +387,8 @@ fn softbody(f: &BlendFile<'_>, ob: &View<'_, '_>) -> SoftBodySettings {
         s.use_goal = sf & 2 != 0;
         s.use_edges = sf & 4 != 0;
         s.use_self_collision = sf & 512 != 0;
+        s.use_face_collision = sf & (1 << 10) != 0;
+        s.use_edge_collision = sf & (1 << 11) != 0;
     }
     effector_weights(f, sb.ptr("effector_weights"), &mut s.effector_weights);
     let pc = match sb.ptr("pointcache") {
@@ -487,6 +501,27 @@ fn particle_system(f: &BlendFile<'_>, ps: &View<'_, '_>) -> ParticleSystem {
     fl(&pa, "childflat", &mut s.child_roundness);
     fl(&pa, "clumpfac", &mut s.clump_factor);
     fl(&pa, "rough1", &mut s.roughness_1);
+    fl(&pa, "clength", &mut s.child_length);
+    if let Some(v) = pa.vec::<2>("draw_line") {
+        (s.line_length_tail, s.line_length_head) = (v[0], v[1]);
+    }
+    // ParticleSettings.flag: PART_UNBORN 1 << 5, PART_DIED 1 << 6,
+    // PART_TRAND 1 << 7, PART_EDISTR 1 << 8.
+    if pa.has("flag") {
+        let pf = flags(&pa, "flag");
+        s.show_unborn = pf & (1 << 5) != 0;
+        s.use_dead = pf & (1 << 6) != 0;
+        s.use_emit_random = pf & (1 << 7) != 0;
+        s.use_even_distribution = pf & (1 << 8) != 0;
+    }
+    // ParticleSettings.draw: PART_DRAW_ROTATE_OB 1 << 7, PART_DRAW_RAND_GR
+    // 1 << 10, PART_DRAW_NO_SCALE_OB 1 << 16.
+    if pa.has("draw") {
+        let d = flags(&pa, "draw");
+        s.use_rotation_instance = d & (1 << 7) != 0;
+        s.use_collection_pick_random = d & (1 << 10) != 0;
+        s.use_scale_instance = d & (1 << 16) == 0;
+    }
     effector_weights(f, pa.ptr("effector_weights"), &mut s.effector_weights);
     sys.settings = s;
     sys
@@ -505,8 +540,13 @@ fn fluid(f: &BlendFile<'_>, md: &View<'_, '_>) -> Option<FluidSettings> {
         int(&d, "maxres", &mut s.resolution_max);
         fl(&d, "time_scale", &mut s.time_scale);
         fl(&d, "cfl_condition", &mut s.cfl_condition);
-        int(&d, "timesteps_max", &mut s.timesteps_max);
-        int(&d, "timesteps_min", &mut s.timesteps_min);
+        // `timesteps_maximum`/`minimum` in 4.2 DNA.
+        if let Some(x) = d.num_any(&["timesteps_maximum", "timesteps_max"]) {
+            s.timesteps_max = x as i32;
+        }
+        if let Some(x) = d.num_any(&["timesteps_minimum", "timesteps_min"]) {
+            s.timesteps_min = x as i32;
+        }
         fl(&d, "alpha", &mut s.alpha);
         fl(&d, "beta", &mut s.beta);
         fl(&d, "vorticity", &mut s.vorticity);
@@ -560,7 +600,15 @@ pub(super) fn modifier(f: &BlendFile<'_>, ob: &View<'_, '_>, md: &View<'_, '_>, 
         "ClothModifierData" => PhysicsModifier::Cloth(Box::new(cloth(f, md, groups))),
         "SoftbodyModifierData" => PhysicsModifier::SoftBody(Box::new(softbody(f, ob))),
         "CollisionModifierData" => PhysicsModifier::Collision(collision(f, ob)),
-        "ParticleSystemModifierData" => PhysicsModifier::ParticleSystem(Box::new(particle_system(f, &f.view_ptr(md.ptr("psys"), &["ParticleSystem"])?))),
+        "ParticleSystemModifierData" => {
+            let mut ps = particle_system(f, &f.view_ptr(md.ptr("psys"), &["ParticleSystem"])?);
+            // Show Emitter in renders: Object.duplicator_visibility_flag
+            // OB_DUPLI_FLAG_RENDER.
+            if ob.has("duplicator_visibility_flag") {
+                ps.settings.use_render_emitter = flags(ob, "duplicator_visibility_flag") & 2 != 0;
+            }
+            PhysicsModifier::ParticleSystem(Box::new(ps))
+        }
         "FluidModifierData" => PhysicsModifier::Fluid(Box::new(fluid(f, md)?)),
         _ => return None,
     };
