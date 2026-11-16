@@ -12,17 +12,27 @@
 //! drive the whole window with synthetic input and read back its pixels.
 pub mod anim;
 pub mod app;
+pub mod compositing;
 pub mod doc;
 pub mod draw;
 pub mod edit;
+pub mod edit_ops;
+pub mod gpencil;
 pub mod editors;
 pub mod input;
+pub mod nodetree;
 pub mod persist;
+pub mod python;
+pub mod physics;
+pub mod rig;
+pub mod sculpt;
+pub mod seqedit;
 pub mod screen;
 pub mod settings;
 pub mod theme;
 pub mod transform;
 pub mod ui;
+pub mod uvedit;
 
 pub use app::App;
 

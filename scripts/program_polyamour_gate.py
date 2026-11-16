@@ -5,6 +5,7 @@
 * Ctrl+Page Down switches to Modeling and Ctrl+Page Up back to Layout (workspace tabs).
 * Ctrl+Shift+R (F12's stand-in: the Shell keeps F12) path-traces the startup scene with sex-3d and shows the Rendering workspace.
 * Ctrl+S saves the scene as untitled.poly (polyops text) in the program's folder.
+* Ctrl+Page Up twice goes from Rendering through Animation to Shading, whose Shader Editor shows the startup material's node tree.
 * F11 closes it.
 
 No kernel panic, page fault or std abort anywhere in the record."""
@@ -35,11 +36,14 @@ def main():
   q.cmd('screendump',{'filename':str(a.out/'polyamour-layout.ppm')})
   s=len(t());chord('ctrl','pgdn');g['wait'](r'\[polyamour\.workspace\] Modeling\n',s,120)
   s=len(t());chord('ctrl','pgup');g['wait'](r'\[polyamour\.workspace\] Layout\n',s,120)
-  s=len(t());chord('ctrl','shift','r');g['wait'](r'\[polyamour\.op\] render\.render\n',s,120)
-  g['wait'](r'\[polyamour\.report\] Rendered 960x540, \d+ samples\n',s,900)
+  s=len(t());chord('ctrl','shift','r');g['wait'](r'\[polyamour\.op\] render\.render\n',s,900)
+  g['wait'](r'\[polyamour\.report\] Rendered 960x540, \d+ samples(?:, \d+ pass(?:es)?)?\n',s,900)
   g['wait'](r'\[polyamour\.workspace\] Rendering\n',s,60)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'polyamour-render.ppm')})
   s=len(t());chord('ctrl','s');g['wait'](r'\[polyamour\.report\] Saved "untitled\.poly"\n',s,120)
+  s=len(t());chord('ctrl','pgup');g['wait'](r'\[polyamour\.workspace\] Animation\n',s,120)
+  s=len(t());chord('ctrl','pgup');g['wait'](r'\[polyamour\.workspace\] Shading\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'polyamour-shading.ppm')})
   s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={o[1]} task={o[2]} ',s,180)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True})

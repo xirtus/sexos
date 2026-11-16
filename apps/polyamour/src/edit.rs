@@ -66,15 +66,18 @@ pub fn flush_mesh(m: &Mesh, sel: &mut EditSelection, mode: SelectMode, hidden: &
             sel.edges = sel.faces.iter().flat_map(|&f| m.faces[f as usize].edges().map(|(a, b)| ekey(a, b)).collect::<Vec<_>>()).collect();
         }
     }
-    let ok = match sel.active {
-        Some(Elem::Vert(v)) => sel.verts.contains(&v),
-        Some(Elem::Edge(a, b)) => sel.edges.contains(&(a, b)),
-        Some(Elem::Face(f)) => sel.faces.contains(&f),
-        None => true,
+    let has = |sel: &EditSelection, e: Elem| match e {
+        Elem::Vert(v) => sel.verts.contains(&v),
+        Elem::Edge(a, b) => sel.edges.contains(&(a, b)),
+        Elem::Face(f) => sel.faces.contains(&f),
     };
-    if !ok {
-        sel.active = None;
+    if let Some(a) = sel.active {
+        if !has(sel, a) {
+            sel.active = None;
+        }
     }
+    let history = core::mem::take(&mut sel.history);
+    sel.history = history.into_iter().filter(|&e| has(sel, e)).collect();
 }
 
 pub fn flush(d: &mut Doc) {
@@ -88,7 +91,9 @@ pub fn flush(d: &mut Doc) {
 
 /// Drop selected/hidden indices that no longer exist (after undo).
 pub fn sanitize(d: &mut Doc) {
-    if d.mode != Mode::Edit {
+    crate::rig::sanitize(d);
+    crate::sculpt::sanitize(d);
+    if d.mode != Mode::Edit || crate::rig::edit_armature(d).is_some() || crate::rig::edit_lattice(d).is_some() || crate::gpencil::active_gp(d).is_some() {
         return;
     }
     let Some((_, mi)) = active_mesh(d) else {
@@ -168,6 +173,7 @@ pub fn select_elem(d: &mut Doc, e: Option<Elem>, extend: bool) {
         if let Some(e) = e {
             add_elem(&mut d.edit, e);
             d.edit.active = Some(e);
+            d.edit.history.push(e);
         }
         flush(d);
         return;
@@ -191,9 +197,12 @@ pub fn select_elem(d: &mut Doc, e: Option<Elem>, extend: bool) {
             }
         }
         d.edit.active = None;
+        d.edit.history.retain(|&h| h != e);
     } else {
         add_elem(&mut d.edit, e);
         d.edit.active = Some(e);
+        d.edit.history.retain(|&h| h != e);
+        d.edit.history.push(e);
     }
     flush(d);
 }
@@ -238,7 +247,7 @@ pub fn select_set(d: &mut Doc, hits: Vec<Elem>, mode: crate::doc::BoxMode) {
 }
 
 /// Vertex adjacency through edges.
-fn adjacency(m: &Mesh) -> Vec<Vec<u32>> {
+pub(crate) fn adjacency(m: &Mesh) -> Vec<Vec<u32>> {
     let mut adj = vec![Vec::new(); m.positions.len()];
     for e in m.edges() {
         adj[e[0] as usize].push(e[1]);
@@ -263,7 +272,7 @@ fn linked(m: &Mesh, seeds: &[u32], hidden: &BTreeSet<u32>) -> BTreeSet<u32> {
 }
 
 /// Select the vertices in `verts` in whatever the select mode chooses.
-fn select_verts_as_mode(d: &mut Doc, verts: &BTreeSet<u32>, add: bool) {
+pub(crate) fn select_verts_as_mode(d: &mut Doc, verts: &BTreeSet<u32>, add: bool) {
     let Some((_, mi)) = active_mesh(d) else { return };
     let m = &d.scene.meshes[mi];
     let mut s = if add { d.edit.clone() } else { EditSelection::default() };
@@ -315,7 +324,7 @@ fn mesh_mut(d: &mut Doc) -> Option<&mut Mesh> {
     d.scene.meshes.get_mut(mi)
 }
 
-fn after_topology(d: &mut Doc) {
+pub(crate) fn after_topology(d: &mut Doc) {
     if let Some((_, mi)) = active_mesh(d) {
         let nv = d.scene.meshes[mi].positions.len() as u32;
         d.edit_hidden.retain(|&v| v < nv);
@@ -898,6 +907,7 @@ fn add_primitive(d: &mut Doc, arg: &str) -> bool {
         "cone" => sex_3d::primitives::cone(32, 1.0, 0.0, 2.0),
         "torus" => sex_3d::primitives::torus(48, 12, 1.0, 0.25),
         "grid" => sex_3d::primitives::grid(10, 10, 2.0),
+        "monkey" => sex_3d::primitives::monkey(),
         _ => return false,
     };
     d.push_undo("Add Primitive");
@@ -1070,7 +1080,10 @@ pub fn run(d: &mut Doc, op: &Op) -> bool {
         }
         "mesh.vertices_smooth" => smooth_verts(d),
         "mesh.bridge_edge_loops" => bridge(d),
-        _ => return false,
+        "mesh.primitive_monkey_add" => {
+            add_primitive(d, "monkey");
+        }
+        _ => return crate::edit_ops::run(d, op),
     }
     true
 }

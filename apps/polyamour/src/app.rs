@@ -28,6 +28,25 @@ pub struct App {
     pub op_log: Vec<String>,
 }
 
+/// Enter the mode a workspace stands for. Returns true when the mode changed.
+pub fn workspace_mode(doc: &mut Doc, name: &str) -> bool {
+    use crate::doc::Mode;
+    let before = doc.mode;
+    let want = match name {
+        "Sculpting" => Some("SCULPT"),
+        "Texture Paint" => Some("TEXTURE_PAINT"),
+        _ if matches!(doc.mode, Mode::Sculpt | Mode::TexturePaint | Mode::VertexPaint) => Some("OBJECT"),
+        _ => None,
+    };
+    if let Some(m) = want {
+        let mesh = doc.active().is_some_and(|a| matches!(doc.scene.objects[a].data, sex_3d::scene::ObjectData::Mesh(_)));
+        if mesh || m == "OBJECT" {
+            crate::rig::mode_set(doc, m);
+        }
+    }
+    doc.mode != before
+}
+
 impl App {
     pub fn new(width: usize, height: usize) -> App {
         App {
@@ -51,11 +70,22 @@ impl App {
             crate::persist::load(&String::from_utf8_lossy(bytes))?
         } else {
             let fmt = sex_3d::io::Format::from_path(name).or_else(|| sex_3d::io::Format::sniff(bytes)).ok_or_else(|| format!("{name}: unknown file type"))?;
-            Doc::new(sex_3d::io::import(bytes, fmt, resolver).map_err(|e| e.to_string())?)
+            if fmt == sex_3d::io::Format::Blend {
+                let (scene, actions) = sex_3d::io::blend::import_blend_full(bytes)?;
+                let mut doc = Doc::new(scene);
+                crate::anim::adopt_blend_actions(&mut doc, &actions);
+                doc
+            } else {
+                Doc::new(sex_3d::io::import(bytes, fmt, resolver).map_err(|e| e.to_string())?)
+            }
         };
         self.doc = doc;
         self.doc.path = Some(name.to_string());
         self.doc.report = format!("Opened {name}");
+        if name.ends_with(".poly") {
+            // Disk Cache bakes from the `cache` folder next to the file.
+            crate::physics::load_disk_caches(&self.doc);
+        }
         Ok(())
     }
 
@@ -79,6 +109,7 @@ impl App {
         crate::anim::tick(&mut self.doc);
         let mut input = Some(input);
         let had_popup = self.popup.is_some();
+        let ws_before = self.active_ws;
 
         // 1. An open menu sees everything first.
         if let (Some(pop), Some(inp)) = (&mut self.popup, &input) {
@@ -146,13 +177,16 @@ impl App {
         }
         let ran = self.run_queue();
         let ran = crate::anim::tick(&mut self.doc) || ran;
+        let ran = crate::python::tick(&mut self.doc) || ran;
         if let Some(name) = self.doc.want_workspace.take() {
             if let Some(i) = self.workspaces.iter().position(|w| w.name == name) {
                 self.active_ws = i;
             }
         }
+        // Workspaces carry a mode, like Blender's (Sculpting: Sculpt Mode).
+        let switched = self.active_ws != ws_before && workspace_mode(&mut self.doc, &self.workspaces[self.active_ws].name);
         // Something changed after the widgets drew: draw again so the screen is current.
-        if ran || had_popup != self.popup.is_some() {
+        if ran || switched || had_popup != self.popup.is_some() {
             self.draw(None);
             // A menu an editor asked for while handling ops in that redraw.
             if let Some(p) = self.ui.open_popup.take().or_else(|| self.doc.menu.take()) {
@@ -167,7 +201,7 @@ impl App {
     /// Whether an editor in the active workspace wants `Input::Tick` events
     /// (a viewport refining a progressive render).
     pub fn wants_tick(&self) -> bool {
-        self.workspaces[self.active_ws].areas().iter().any(|a| a.editor.wants_tick())
+        self.workspaces[self.active_ws].areas().iter().any(|a| a.editor.wants_tick()) || self.doc.python.wants_tick() || crate::physics::pending(&self.doc)
     }
 
     /// Draw the whole window, returning the event if no widget took it.
@@ -201,6 +235,7 @@ impl App {
             (Key::Char('n'), Mods::CTRL) => Op::new("wm.read_homefile"),
             (Key::Char('q'), Mods::CTRL) => Op::new("wm.quit_blender"),
             (Key::F(12), Mods::NONE) => Op::new("render.render"),
+            (Key::F(12), Mods::CTRL) => Op::new("render.render_animation"),
             (Key::F(3), Mods::NONE) => Op::new("wm.search_menu"),
             (Key::Space, Mods::CTRL) => Op::new("screen.screen_full_area"),
             (Key::PageUp, Mods::CTRL) => Op::with("screen.workspace_cycle", "PREV"),
@@ -259,12 +294,24 @@ impl App {
                     self.doc.report = "New file".into();
                 }
                 "wm.quit_blender" => self.quit = true,
-                "wm.save_mainfile" | "wm.save_as_mainfile" => self.save(None),
+                "wm.save_mainfile" => self.save(None),
+                // Save As with a file name: `.blend` writes a .blend file.
+                "wm.save_as_mainfile" if !op.arg.is_empty() => self.save_as(&op.arg),
+                "wm.save_as_mainfile" => self.save(None),
                 "wm.export" => self.save(Some(op.arg.clone())),
                 "render.render" => self.render(),
+                "image.browse" => self.doc.show_viewer = op.arg == "Viewer Node",
+                "render.render_animation" => self.render_animation(),
                 "wm.search_menu" => {
                     let (mx, my) = self.ui.mouse;
-                    self.popup = Some(Popup::new("Search", search_items(), mx - 100, my - 10));
+                    let mut items = search_items();
+                    // Operators scripts and add-ons registered.
+                    let script = crate::python::search_items(&self.doc);
+                    if !script.is_empty() {
+                        items.push(MenuItem::Separator);
+                        items.extend(script);
+                    }
+                    self.popup = Some(Popup::new("Search", items, mx - 100, my - 10));
                 }
                 _ => self.doc.run(&op),
             }
@@ -298,6 +345,10 @@ impl App {
                 if ext.is_none() {
                     self.doc.path = wrote.first().cloned();
                     self.doc.dirty = false;
+                    if let Err(e) = crate::physics::write_disk_caches(&self.doc) {
+                        self.doc.report = e;
+                        return;
+                    }
                 }
                 self.doc.report = format!("Saved \"{}\"", wrote.join(", "));
             }
@@ -305,16 +356,115 @@ impl App {
         }
     }
 
-    /// F12: path-trace the active camera's view and show it in the Rendering workspace.
+    /// Save under `name`: a .blend file when it ends in `.blend`, Polyamour's
+    /// own format otherwise.
+    fn save_as(&mut self, name: &str) {
+        let bytes = if name.to_ascii_lowercase().ends_with(".blend") {
+            let mut scene = self.doc.scene.clone();
+            scene.frame_current = self.doc.frame;
+            let opts = sex_3d::io::blend::BlendExport { width: self.doc.settings.resolution_x, height: self.doc.settings.resolution_y };
+            sex_3d::io::blend::export_blend(&scene, &crate::anim::blend_actions(&self.doc), opts)
+        } else {
+            crate::persist::save(&self.doc).into_bytes()
+        };
+        match std::fs::write(name, &bytes) {
+            Ok(()) => {
+                self.doc.path = Some(name.to_string());
+                self.doc.dirty = false;
+                self.doc.report = format!("Saved \"{name}\"");
+            }
+            Err(e) => self.doc.report = format!("Cannot write {name}: {e}"),
+        }
+    }
+
+    /// F12: render the active camera's view with the chosen engine and show it in the Rendering workspace.
     fn render(&mut self) {
         // Render Properties (engine, samples, bounces, denoise, clamp) and Output
         // Properties (resolution and %), with render visibility applied.
-        let settings = self.doc.settings.render_settings();
-        let scene = self.doc.settings.render_scene(&self.doc.scene);
-        let r = sex_3d::render::render(&scene, &settings);
-        self.doc.render = Some(r.color);
-        self.doc.report = format!("Rendered {}x{}, {} samples", settings.width, settings.height, settings.samples);
+        let settings = sex_3d::render::RenderSettings { frame: self.doc.frame, ..self.doc.settings.render_settings() };
+        let base = self.doc.settings.render_scene(&self.doc.scene);
+        let scene = crate::anim::scene_at(&self.doc.anim, &base, self.doc.frame as f32, self.doc.settings.motion_blur);
+        sex_3d::physics::update(&scene);
+        let settings = crate::seqedit::with_depth(&scene, settings);
+        let r = self.doc.settings.render_with_engine(&scene, &settings);
+        // Grease Pencil over the render, then the sequencer's output when it is on.
+        let r = crate::seqedit::post_render(&scene, self.doc.frame, &settings, r, &|f| crate::anim::scene_at(&self.doc.anim, &base, f as f32, self.doc.settings.motion_blur));
+        let n = r.passes.len();
+        let passes = match n {
+            0 => String::new(),
+            1 => ", 1 pass".to_string(),
+            n => format!(", {n} passes"),
+        };
+        let (w, h, samples) = (r.color.width, r.color.height, r.samples);
+        self.doc.render = Some(r.color.clone());
+        let comp = crate::compositing::apply(&mut self.doc, &r);
+        self.doc.report = format!("Rendered {w}x{h}, {samples} samples{passes}{comp}");
         self.doc.want_workspace = Some("Rendering".into());
+    }
+
+    /// Ctrl F12: render the frame range (Output Properties), writing each
+    /// frame as `<output path><frame>.png`, colour managed as on screen.
+    fn render_animation(&mut self) {
+        let d = &self.doc;
+        let base = d.settings.render_scene(&d.scene);
+        let settings = crate::seqedit::with_depth(&base, d.settings.render_settings());
+        let cm = d.settings.color_management();
+        let motion = d.settings.motion_blur;
+        let frames: Vec<i32> = (d.scene.frame_start..=d.scene.frame_end).step_by(d.settings.frame_step.max(1) as usize).collect();
+        let stem = if d.settings.output_path.is_empty() { "/tmp/".to_string() } else { d.settings.output_path.clone() };
+        let (mut written, mut error, mut last, mut viewer) = (Vec::new(), None, None, None);
+        let anim = &d.anim;
+        let mut comp_scene = d.scene.clone();
+        crate::compositing::sync_passes(&mut comp_scene, settings.passes);
+        let pct = d.settings.resolution_pct as f32 / 100.0;
+        d.settings.render_frames(
+            frames.iter().copied(),
+            &settings,
+            |f| {
+                let s = crate::anim::scene_at(anim, &base, f as f32, motion);
+                sex_3d::physics::update(&s);
+                s
+            },
+            |f, r| {
+                let scene_at = |f: i32| crate::anim::scene_at(anim, &base, f as f32, motion);
+                let r = crate::seqedit::post_render(&scene_at(f), f, &settings, r, &scene_at);
+                let name = format!("{stem}{f:04}.png");
+                // Use Nodes: each frame goes through the compositor.
+                let mut color = r.color.clone();
+                if let Some(out) = crate::compositing::run(&comp_scene, &r, f, pct) {
+                    if let Err(e) = crate::compositing::write_files(&out, &cm) {
+                        error = Some(e);
+                    }
+                    if let Some(c) = out.composite {
+                        color = c;
+                    }
+                    if out.viewer.is_some() {
+                        viewer = out.viewer;
+                    }
+                }
+                let png = crate::editors::image::encode_png(color.width, color.height, &sex_3d::render::to_display8(&color, &cm));
+                match std::fs::write(&name, png) {
+                    Ok(()) => written.push(name),
+                    Err(e) => error = Some(format!("Cannot write {name}: {e}")),
+                }
+                last = Some(color);
+                error.is_none()
+            },
+        );
+        if let Some(v) = viewer {
+            self.doc.viewer = Some(v);
+            self.doc.viewer_gen += 1;
+        }
+        if let Some(img) = last {
+            self.doc.render = Some(img);
+            self.doc.want_workspace = Some("Rendering".into());
+        }
+        self.doc.report = match (error, written.as_slice()) {
+            (Some(e), _) => e,
+            (None, []) => "No frames to render".into(),
+            (None, [one]) => format!("Rendered 1 frame to \"{one}\""),
+            (None, w) => format!("Rendered {} frames to \"{}\" .. \"{}\"", w.len(), w[0], w[w.len() - 1]),
+        };
     }
 }
 
@@ -323,6 +473,7 @@ fn add_menu_items() -> Vec<MenuItem> {
     vec![
         MenuItem::Sub("Mesh".into(), vec![p("Plane", "plane"), p("Cube", "cube"), p("Circle", "circle"), p("UV Sphere", "uv_sphere"), p("Ico Sphere", "ico_sphere"), p("Cylinder", "cylinder"), p("Cone", "cone"), p("Torus", "torus"), MenuItem::Separator, p("Grid", "grid")]),
         MenuItem::op("Empty", "", Op::new("object.empty_add")),
+        MenuItem::Sub("Grease Pencil".into(), crate::gpencil::add_menu_items()),
         MenuItem::Separator,
         MenuItem::op("Camera", "", Op::new("object.camera_add")),
         MenuItem::Sub(
@@ -502,5 +653,77 @@ mod tests {
         assert_eq!(app.workspaces[app.active_ws].name, "Modeling");
         app.frame(Input::key_mods(Key::PageUp, Mods::CTRL));
         assert_eq!(app.workspaces[app.active_ws].name, "Layout");
+    }
+
+    #[test]
+    fn save_as_blend_writes_a_blend_file() {
+        let mut app = App::new(1280, 720);
+        app.frame(Input::Tick);
+        let name = app.doc.scene.objects[0].name.clone();
+        let mut a = crate::anim::Action::new("Move");
+        a.curve_mut("location", 0).insert(1.0, 0.0, crate::anim::Interp::Linear);
+        a.curve_mut("location", 0).insert(10.0, 3.0, crate::anim::Interp::Linear);
+        app.doc.anim.actions.push(a);
+        let o = app.doc.anim.entry(&name);
+        app.doc.anim.objects[o].action = Some(app.doc.anim.actions.len() - 1);
+        let path = std::env::temp_dir().join(format!("polyamour-save-{}.blend", std::process::id()));
+        let path = path.to_string_lossy().to_string();
+        app.doc.queue.push(Op::with("wm.save_as_mainfile", &path));
+        app.frame(Input::Tick);
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("{e}: {}", app.doc.report));
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(app.doc.path.as_deref(), Some(path.as_str()));
+        let (scene, actions) = sex_3d::io::blend::import_blend_full(&bytes).unwrap();
+        let names = |s: &sex_3d::Scene| s.objects.iter().map(|o| o.name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(&scene), names(&app.doc.scene));
+        let act = actions.iter().find(|x| x.object == name).expect("action written");
+        assert_eq!(act.action, "Move");
+        assert_eq!(act.curves[0].keys.len(), 2);
+        assert_eq!(act.curves[0].keys[1].interpolation, sex_3d::io::blend::INTERP_LINEAR);
+        // Plain Save still writes Polyamour's own format, next to it.
+        app.doc.queue.push(Op::new("wm.save_mainfile"));
+        app.frame(Input::Tick);
+        let poly = path.replace(".blend", ".poly");
+        let text = std::fs::read(&poly).unwrap_or_else(|e| panic!("{e}: {}", app.doc.report));
+        let _ = std::fs::remove_file(&poly);
+        assert!(text.starts_with(b"polyops "));
+    }
+
+    #[test]
+    fn f12_composites_through_use_nodes_and_fills_the_viewer() {
+        let mut app = App::new(1280, 720);
+        app.frame(Input::Tick);
+        app.doc.settings.resolution_x = 32;
+        app.doc.settings.resolution_y = 24;
+        app.doc.settings.resolution_pct = 100;
+        app.doc.settings.render_samples = 2;
+        app.doc.settings.denoise = false;
+        // Use Nodes creates Render Layers -> Composite.
+        assert!(crate::nodetree::use_nodes(&mut app.doc, crate::nodetree::TreeRef::Compositor));
+        let t = app.doc.scene.compositor.as_mut().unwrap();
+        assert_eq!(t.links.len(), 1);
+        let rl = t.find_type("CompositorNodeRLayers").unwrap();
+        let co = t.find_type("CompositorNodeComposite").unwrap();
+        // Render Layers -> Invert -> Composite, and a Viewer on the render.
+        let inv = t.add("CompositorNodeInvert", [0.0, 0.0]).unwrap();
+        let vw = t.add("CompositorNodeViewer", [0.0, -200.0]).unwrap();
+        t.unlink_input(co, 0);
+        t.link(rl, "Image", inv, "Color").unwrap();
+        t.link(inv, "Color", co, "Image").unwrap();
+        t.link(rl, "Image", vw, "Image").unwrap();
+        app.doc.queue.push(Op::new("render.render"));
+        app.frame(Input::Tick);
+        assert!(app.doc.report.contains("composited"), "{}", app.doc.report);
+        let comp = app.doc.render.clone().expect("render result");
+        let view = app.doc.viewer.clone().expect("viewer node image");
+        assert_eq!((comp.width, comp.height), (32, 24));
+        assert_eq!((view.width, view.height), (32, 24));
+        for (c, v) in comp.pixels.iter().zip(&view.pixels) {
+            assert!((c[0] - (1.0 - v[0])).abs() < 1e-4, "{c:?} {v:?}");
+        }
+        // The Image Editor can switch to the Viewer Node.
+        app.doc.queue.push(Op::with("image.browse", "Viewer Node"));
+        app.frame(Input::Tick);
+        assert!(app.doc.show_viewer);
     }
 }
