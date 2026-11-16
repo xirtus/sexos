@@ -1284,12 +1284,14 @@ impl Session {
                 ObjectData::Light(_) => "LIGHT",
                 ObjectData::Armature(_) => "ARMATURE",
                 ObjectData::Lattice(_) => "LATTICE",
+                ObjectData::GreasePencil(_) => "GREASEPENCIL",
             }
             .into(),
             "data" => match o.data {
                 ObjectData::Mesh(m) => quote(&scene.mesh_names[m]),
                 ObjectData::Armature(a) => quote(&scene.armature_names[a]),
                 ObjectData::Lattice(l) => quote(&scene.lattice_names[l]),
+                ObjectData::GreasePencil(g) => quote(&scene.grease_pencil_names[g]),
                 _ => "none".into(),
             },
             "vertex_count" | "face_count" => match o.data {
@@ -2231,7 +2233,7 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
             continue;
         }
         let _ = match &ob.data {
-            ObjectData::Armature(_) | ObjectData::Lattice(_) => Ok(()),
+            ObjectData::Armature(_) | ObjectData::Lattice(_) | ObjectData::GreasePencil(_) => Ok(()),
             ObjectData::Empty => writeln!(o, "add_empty {name}{place}"),
             ObjectData::Mesh(m) => writeln!(o, "add_object {name} data={}{place}", quote(&scene.mesh_names[*m])),
             ObjectData::Light(l) => {

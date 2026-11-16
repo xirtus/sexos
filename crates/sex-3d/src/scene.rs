@@ -452,6 +452,8 @@ pub enum ObjectData {
     Armature(usize),
     /// Index into [`Scene::lattices`].
     Lattice(usize),
+    /// Index into [`Scene::grease_pencils`].
+    GreasePencil(usize),
 }
 
 /// Which vertex groups [`Scene::parent_with_armature`] creates.
@@ -507,6 +509,9 @@ pub struct Object {
     /// The local transform one frame later, for motion blur (linear motion
     /// from `transform`); `None` means static.
     pub motion: Option<Transform>,
+    /// Grease Pencil objects: their modifier stack and visual effects.
+    pub gp_modifiers: Vec<crate::grease_pencil::GpModifier>,
+    pub shader_fx: Vec<crate::grease_pencil::GpEffect>,
 }
 
 impl Object {
@@ -528,6 +533,8 @@ impl Object {
             holdout: false,
             pass_index: 0,
             motion: None,
+            gp_modifiers: Vec::new(),
+            shader_fx: Vec::new(),
         }
     }
 }
@@ -585,6 +592,11 @@ pub struct Scene {
     pub armature_names: Vec<String>,
     pub lattices: Vec<crate::lattice::Lattice>,
     pub lattice_names: Vec<String>,
+    /// Grease Pencil data, shared by Grease Pencil objects like meshes.
+    pub grease_pencils: Vec<crate::grease_pencil::GreasePencil>,
+    pub grease_pencil_names: Vec<String>,
+    /// The Video Sequencer's strips (Blender's `sequence_editor`).
+    pub sequence_editor: Option<crate::sequencer::Sequencer>,
 }
 
 impl Default for Scene {
@@ -611,6 +623,9 @@ impl Default for Scene {
             armature_names: Vec::new(),
             lattices: Vec::new(),
             lattice_names: Vec::new(),
+            grease_pencils: Vec::new(),
+            grease_pencil_names: Vec::new(),
+            sequence_editor: None,
         }
     }
 }
@@ -776,6 +791,33 @@ impl Scene {
     pub fn add_lattice_object(&mut self, name: &str, l: crate::lattice::Lattice) -> usize {
         let li = self.add_lattice(name, l);
         self.add_object(Object::new(name, ObjectData::Lattice(li)))
+    }
+
+    pub fn add_grease_pencil(&mut self, name: &str, g: crate::grease_pencil::GreasePencil) -> usize {
+        let n = unique_name(name, |n| self.grease_pencil_names.iter().any(|x| x == n));
+        self.grease_pencils.push(g);
+        self.grease_pencil_names.push(n);
+        self.grease_pencils.len() - 1
+    }
+
+    pub fn add_grease_pencil_object(&mut self, name: &str, g: crate::grease_pencil::GreasePencil) -> usize {
+        let gi = self.add_grease_pencil(name, g);
+        self.add_object(Object::new(name, ObjectData::GreasePencil(gi)))
+    }
+
+    /// The Grease Pencil data of object `idx`.
+    pub fn grease_pencil_of(&self, idx: usize) -> Option<&crate::grease_pencil::GreasePencil> {
+        match self.objects.get(idx)?.data {
+            ObjectData::GreasePencil(g) => self.grease_pencils.get(g),
+            _ => None,
+        }
+    }
+
+    pub fn grease_pencil_of_mut(&mut self, idx: usize) -> Option<&mut crate::grease_pencil::GreasePencil> {
+        match self.objects.get(idx)?.data {
+            ObjectData::GreasePencil(g) => self.grease_pencils.get_mut(g),
+            _ => None,
+        }
     }
 
     /// The armature data of object `idx`, if it is an armature.

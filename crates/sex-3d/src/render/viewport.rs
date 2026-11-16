@@ -526,6 +526,13 @@ impl ViewportScene {
 
     /// The object (scene index) under pixel (`x`, `y`): meshes by ray cast,
     /// lights, cameras and empties within 8 pixels of their origin.
+    /// The depth buffer of the last [`ViewportScene::draw_into`]: per pixel
+    /// the depth key (1/distance in perspective, view z in ortho; larger is
+    /// closer, -inf where nothing was drawn). Empty if never drawn.
+    pub fn last_depth(&self) -> Vec<f32> {
+        self.scratch.lock().map(|s| s.depth.clone()).unwrap_or_default()
+    }
+
     pub fn pick(&self, view: &ViewCamera, width: u32, height: u32, x: f32, y: f32) -> Option<usize> {
         let (o, d) = view.ray(x, y, width, height);
         let mut best: Option<(f32, u32)> = None;

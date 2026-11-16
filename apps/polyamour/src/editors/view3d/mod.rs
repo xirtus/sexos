@@ -552,6 +552,9 @@ fn ensure_cache(s: &mut State, d: &mut Doc) {
         armature_names: d.scene.armature_names.clone(),
         lattices: d.scene.lattices.clone(),
         lattice_names: d.scene.lattice_names.clone(),
+        grease_pencils: Vec::new(),
+        grease_pencil_names: Vec::new(),
+        sequence_editor: None,
     };
     let empty = ViewportScene::new(&shell);
     d.scene.selected = saved;

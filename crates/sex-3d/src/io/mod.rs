@@ -205,6 +205,10 @@ pub fn append_scene(scene: &mut Scene, other: Scene) -> Vec<usize> {
     let mesh_ids: Vec<usize> = other.meshes.into_iter().zip(other.mesh_names).map(|(m, n)| scene.add_mesh(&n, m)).collect();
     let arm_ids: Vec<usize> = other.armatures.into_iter().zip(other.armature_names).map(|(a, n)| scene.add_armature(&n, a)).collect();
     let lat_ids: Vec<usize> = other.lattices.into_iter().zip(other.lattice_names).map(|(l, n)| scene.add_lattice(&n, l)).collect();
+    let gp_ids: Vec<usize> = other.grease_pencils.into_iter().zip(other.grease_pencil_names).map(|(g, n)| scene.add_grease_pencil(&n, g)).collect();
+    if scene.sequence_editor.is_none() {
+        scene.sequence_editor = other.sequence_editor;
+    }
     let obj_off = scene.objects.len();
     let mut out = Vec::new();
     let mut renamed = Vec::new();
@@ -213,6 +217,7 @@ pub fn append_scene(scene: &mut Scene, other: Scene) -> Vec<usize> {
             ObjectData::Mesh(mi) => *mi = mesh_ids[*mi],
             ObjectData::Armature(ai) => *ai = arm_ids[*ai],
             ObjectData::Lattice(li) => *li = lat_ids[*li],
+            ObjectData::GreasePencil(gi) => *gi = gp_ids[*gi],
             _ => {}
         }
         for slot in &mut o.materials {

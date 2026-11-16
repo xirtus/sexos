@@ -61,6 +61,24 @@ pub enum Icon {
     LatticeData,
     ShapeKey,
     VertexGroup,
+    /// Grease Pencil object / data: a pencil.
+    ObGreasePencil,
+    GreasePencilData,
+    /// Visual effects (shader FX): a sparkle.
+    ShaderFx,
+    /// A Grease Pencil layer: a sheet with a stroke.
+    GpLayer,
+    /// Video strips: a film frame.
+    Strip,
+}
+
+/// A pencil pointing down-left.
+fn pencil(p: &mut Painter, x: f32, y: f32, c: u32) {
+    thick(p, x - 2.5, y + 2.5, x + 4.5, y - 4.5, c);
+    thick(p, x - 1.0, y + 4.0, x + 6.0, y - 3.0, c);
+    p.line(x - 2.5, y + 2.5, x - 6.0, y + 6.0, c);
+    p.line(x - 1.0, y + 4.0, x - 6.0, y + 6.0, c);
+    p.circle(x - 5.2, y + 5.2, 1.0, c);
 }
 
 /// A two-pixel line.
@@ -320,6 +338,36 @@ pub fn draw_tinted(p: &mut Painter, icon: Icon, cx: i32, cy: i32, tint: Option<u
             for dx in [-4.0, 0.0, 4.0] {
                 p.circle(x + dx, y, 1.3, col(LIGHT));
             }
+        }
+        Icon::ObGreasePencil => pencil(p, x, y, col(OBJECT)),
+        Icon::GreasePencilData => pencil(p, x, y, col(DATA)),
+        Icon::ShaderFx => {
+            let c = col(MODIFIER);
+            p.line(x, y - 6.0, x, y + 6.0, c);
+            p.line(x - 6.0, y, x + 6.0, y, c);
+            p.line(x - 3.5, y - 3.5, x + 3.5, y + 3.5, c);
+            p.line(x - 3.5, y + 3.5, x + 3.5, y - 3.5, c);
+            p.circle(x, y, 2.0, c);
+        }
+        Icon::GpLayer => {
+            let c = col(LIGHT);
+            p.round_frame(Rect::new(cx - 6, cy - 5, 13, 11), 2, c);
+            for i in 0..6 {
+                let t0 = i as f32 / 6.0;
+                let t1 = (i + 1) as f32 / 6.0;
+                let f = |t: f32| (x - 4.0 + 8.0 * t, y + 2.0 - 3.5 * (t * core::f32::consts::PI).sin());
+                let (a, b) = (f(t0), f(t1));
+                p.line(a.0, a.1, b.0, b.1, c);
+            }
+        }
+        Icon::Strip => {
+            let c = col(0x9fb9e8);
+            p.round_frame(Rect::new(cx - 7, cy - 5, 15, 11), 1, c);
+            for k in 0..4 {
+                p.fill(Rect::new(cx - 5 + k * 4, cy - 4, 2, 1), c);
+                p.fill(Rect::new(cx - 5 + k * 4, cy + 4, 2, 1), c);
+            }
+            p.fill(Rect::new(cx - 4, cy - 2, 9, 5), c);
         }
     }
 }
