@@ -155,6 +155,8 @@ impl Window {
             if let Some(p) = sex_pdx::app_pointer::Pointer::decode(m.arg0, m.arg1, m.arg2) { return Some(Event::Pointer(p)); }
         }
         if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
+        // Tray items and notification answers wait for `tray::take` or `next_any`.
+        if m.type_id == sex_pdx::program_tray::OP_TRAY_EVENT { tray::receive(m); return None; }
         if let Some(on) = sex_pdx::a11y::decode_state(m.type_id, m.arg0, m.arg1) { a11y::told(on); return None; }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
@@ -191,8 +193,112 @@ impl Window {
             let _ = sex_pdx::sys_wait_self_ticks((end - now).clamp(1, 64));
         }
     }
+    /// The next window event or tray event ([`tray::Event`]), waiting for one. For
+    /// programs with tray items or notifications with actions; [`Window::next`]
+    /// leaves tray events for [`tray::take`].
+    pub fn next_any(&mut self) -> Any {
+        loop {
+            if let Some(t) = tray::take() { return Any::Tray(t); }
+            if let Some(e) = self.poll() { return Any::Window(e); }
+            if let Some(t) = tray::take() { return Any::Tray(t); }
+            let _ = sex_pdx::sys_wait_self_ticks(MAILBOX_LOOK_TICKS);
+        }
+    }
     /// Ends the program. Nothing it saved is lost: files are on disk once written.
     pub fn close(self) -> ! { launch::exit(0) }
+}
+
+/// What [`Window::next_any`] returns.
+pub enum Any { Window(Event), Tray(tray::Event) }
+
+/// Tray items and notification actions (slice S2): a program puts a small item
+/// in the panel, with a tooltip and a menu, and posts notifications with up to
+/// three buttons and an inline reply field. The Shell tells the program what
+/// was clicked, chosen or replied as [`tray::Event`]s ([`Window::next_any`], or
+/// [`tray::take`] after [`Window::next`]). See [`sex_pdx::program_tray`].
+pub mod tray {
+    use sex_pdx::program_tray as pt;
+    pub use pt::{GONE_CLOSED, GONE_EXPIRED, GONE_REPLACED, MAX_ACTIONS, MAX_ROWS, REPLY_MAX};
+
+    /// A reply typed into a notification's field.
+    pub type Reply = pt::Line<{ pt::REPLY_MAX }>;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Event {
+        /// Item `item` (it has no menu) was clicked.
+        Activated { item: u8 },
+        /// Row `row` of item `item`'s menu was chosen.
+        MenuChosen { item: u8, row: u8 },
+        /// Button `action` of the notification posted with `tag` was pressed.
+        NotificationAction { tag: u32, action: u8 },
+        /// Text was replied to the notification posted with `tag`.
+        NotificationReply { tag: u32, text: Reply },
+        /// The notification went away unanswered (`GONE_CLOSED`, `GONE_EXPIRED`, `GONE_REPLACED`).
+        NotificationGone { tag: u32, why: u8 },
+    }
+
+    const QUEUE: usize = 8;
+    static mut EVENTS: [Option<Event>; QUEUE] = [None; QUEUE];
+    static mut REPLY: pt::ReplyAssembler = pt::ReplyAssembler::new();
+
+    fn send(op: u64, w: [u64; 3]) -> bool {
+        for _ in 0..1000 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, op, w[0], w[1], w[2]) {
+                Ok(_) => return true,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+
+    /// Adds item `id` (0 or 1) to the panel, or replaces it: up to three
+    /// characters on a tile of `colour` (0xRRGGBB), a tooltip of up to 32
+    /// characters, and up to eight menu rows of 16 characters. An item with
+    /// no rows tells [`Event::Activated`] when clicked.
+    pub fn add(id: u8, label: &[u8], colour: u32, tooltip: &[u8], menu: &[&[u8]]) -> bool {
+        pt::item_calls(id, label, colour, tooltip, menu, |w| send(pt::OP_TRAY_ITEM, w))
+    }
+    /// Takes item `id` out of the panel. Items also go when the program ends.
+    pub fn remove(id: u8) -> bool { send(pt::OP_TRAY_ITEM, pt::ItemMsg::Remove { id }.wire()) }
+
+    /// Posts a notification through Bell ([`sex_pdx::notify::post`]) with up to three
+    /// buttons and, when `reply` holds the field's hint (e.g. `b"Reply"`), an inline
+    /// reply field. The answer comes back with `tag`. Bell's mute and per-program
+    /// rules still apply; a dropped notification is never answered.
+    pub fn notify_with_actions(tag: u32, summary: &[u8], body: &[u8], urgency: u8, actions: &[&[u8]], reply: Option<&[u8]>) -> bool {
+        pt::actions_calls(tag, actions, reply, |w| send(pt::OP_NOTIFY_ACTIONS, w)) && sex_pdx::notify::post(summary, body, urgency)
+    }
+
+    /// The oldest tray event not yet taken.
+    pub fn take() -> Option<Event> {
+        let q = unsafe { &mut *core::ptr::addr_of_mut!(EVENTS) };
+        let e = q[0].take()?;
+        q.copy_within(1.., 0);
+        q[QUEUE - 1] = None;
+        Some(e)
+    }
+
+    fn put(e: Event) {
+        let q = unsafe { &mut *core::ptr::addr_of_mut!(EVENTS) };
+        // A full queue loses the newest; read events often.
+        if let Some(slot) = q.iter_mut().find(|s| s.is_none()) { *slot = Some(e); }
+    }
+
+    /// An `OP_TRAY_EVENT` from the Shell.
+    pub(crate) fn receive(m: &sex_pdx::PdxMessage) {
+        let Some(e) = pt::Event::decode(m.arg0, m.arg1, m.arg2) else { return };
+        match e {
+            pt::Event::Activated { item } => put(Event::Activated { item }),
+            pt::Event::Menu { item, row } => put(Event::MenuChosen { item, row }),
+            pt::Event::Action { tag, action } => put(Event::NotificationAction { tag, action }),
+            pt::Event::Gone { tag, why } => put(Event::NotificationGone { tag, why }),
+            pt::Event::Reply { .. } => {
+                let r = unsafe { &mut *core::ptr::addr_of_mut!(REPLY) };
+                if let Some((tag, text)) = r.push(e) { put(Event::NotificationReply { tag, text }); }
+            }
+        }
+    }
 }
 
 /// Files in the program's own folder. Paths are relative to it; `..` is refused.

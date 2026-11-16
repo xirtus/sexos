@@ -1303,6 +1303,7 @@ pub mod window_switcher;
 pub mod window_menu;
 pub mod screenshot;
 pub mod tray;
+pub mod program_tray;
 pub mod window_motion;
 pub mod launch;
 pub mod dnd;

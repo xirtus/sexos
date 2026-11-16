@@ -29,6 +29,8 @@ mod reader_glue;
 mod bt_panel;
 mod decorations;
 mod decorations_glue;
+mod tray_items;
+mod tray_items_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -10698,6 +10700,8 @@ unsafe fn key_repeat_poll() {
 unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     // Accessibility first: magnifier/filter chords, sticky, slow and bounce keys.
     if access_glue::key(code,value){return true;}
+    // Typing into a notification's reply field, Esc on a program tray menu (slice S2).
+    if tray_items_glue::key(code,value){return true;}
     let code=if CAPS_AS_CTRL && code==0x3a {0x1d} else {code};
     // A keyboard's own typematic press of the repeating key is dropped; any
     // other press stops the repeat until it reaches a program itself.
@@ -16842,6 +16846,8 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     let Some(text) = assembler.push(msg.arg0, msg.arg1, msg.arg2) else { return true };
     NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = text;
     NOTIFY_TOTAL += 1;
+    // Buttons and a reply field its program gave for it (slice S2).
+    tray_items_glue::notification(&text);
     // Panel line: "Sender: summary".
     let name = notify_sender_name(text.sender);
     let mut line = [0u8; sex_pdx::notify::TEXT_MAX];
@@ -24901,6 +24907,8 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
     if TRAY_VIEW.menu != sex_pdx::tray::Menu::None && py >= desktop_bar_height() { tray_click(px, py); return (HitTarget::None, true); }
     if bt_panel::click(px, py, desktop_width(), desktop_bar_height()) { return (HitTarget::None, true); }
+    // Program tray items, their menus and notification cards (slice S2).
+    if tray_items_glue::press(px, py) { return (HitTarget::None, true); }
     // Title bar buttons, double-click maximise and the window menu (slice S1).
     if decorations_glue::press(px, py) { return (HitTarget::None, true); }
     let old_focus = FOCUSED_SURFACE_ID;
@@ -26210,7 +26218,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); }
+        unsafe { decorations_glue::poll(); tray_items_glue::poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {
@@ -26891,7 +26899,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() || tray_items_glue::busy() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -26900,7 +26908,7 @@ pub extern "C" fn _start() -> ! {
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); tray_items_glue::display_restarted(); continue; }
         // The kernel: the power button or the lid. Read the sensors now.
         if msg.type_id == sex_pdx::power::OP_EVENT && msg.caller_pd == 0 { unsafe { LAPTOP_NEXT_POLL = 0; laptop_poll(); } continue; }
         // The kernel's critical-memory word: the poll above acts on it.
@@ -26914,6 +26922,7 @@ pub extern "C" fn _start() -> ! {
             if lock::receive(&msg) { continue; }
             if bt_panel::receive(&msg) { continue; }
             if reader_glue::receive(&msg) { continue; }
+            if tray_items_glue::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }

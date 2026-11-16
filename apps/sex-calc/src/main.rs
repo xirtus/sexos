@@ -263,6 +263,48 @@ fn key_action(calc: &mut Calc, key: sex_pdx::app_key::Key) {
     }
 }
 
+/// The tray item's menu.
+const TRAY_MENU: &[&[u8]] = &[b"Show answer", b"Clear", b"Scientific", b"Ask me a sum"];
+
+/// A click on the tray item's menu, or an answer to the sum notification.
+fn tray_event(calc: &mut Calc, event: sex_app::tray::Event, asked: &mut u32) {
+    use sex_app::tray::Event as T;
+    match event {
+        T::MenuChosen { item, row } => {
+            let label = TRAY_MENU.get(row as usize).map_or("?", |l| core::str::from_utf8(l).unwrap_or("?"));
+            sex_pdx::serial_record!("[calc.tray.menu] item={} row={} label={}", item, row, label);
+            match row {
+                0 => {
+                    let answer = if calc.shown.is_empty() { String::from("nothing yet") } else { calc.shown.clone() };
+                    sex_pdx::notify::post(b"Abacus", answer.as_bytes(), sex_pdx::notify::URGENCY_NORMAL);
+                }
+                1 => calc.act(Act::Clear),
+                2 => calc.act(Act::Sci),
+                3 => {
+                    *asked += 1;
+                    let posted = sex_app::tray::notify_with_actions(*asked, b"Abacus", b"Reply with a sum to work out", sex_pdx::notify::URGENCY_NORMAL,
+                        &[b"Clear"], Some(b"Type a sum"));
+                    sex_pdx::serial_record!("[calc.notify.ask] tag={} posted={}", *asked, posted as u8);
+                }
+                _ => {}
+            }
+        }
+        T::Activated { item } => { sex_pdx::serial_record!("[calc.tray.activated] item={}", item); }
+        T::NotificationReply { tag, text } => {
+            let typed = core::str::from_utf8(text.as_bytes()).unwrap_or("");
+            calc.act(Act::Clear);
+            calc.put(typed);
+            calc.equals();
+            sex_pdx::serial_record!("[calc.notify.reply] tag={} text={} answer={} error={}", tag, typed, calc.shown, calc.error as u8);
+        }
+        T::NotificationAction { tag, action } => {
+            sex_pdx::serial_record!("[calc.notify.action] tag={} action={}", tag, action);
+            if action == 0 { calc.act(Act::Clear); }
+        }
+        T::NotificationGone { tag, why } => { sex_pdx::serial_record!("[calc.notify.gone] tag={} why={}", tag, why); }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
@@ -272,8 +314,21 @@ pub extern "C" fn _start() -> ! {
     let mut calc = Calc { core: Calculator::new(), expr: String::new(), shown: String::new(), error: false, fresh: false, scientific: false, picked: None };
     render(&mut window, &calc, &mut small, &mut big);
     sex_pdx::serial_record!("[calc.ready] target={} task={}", window.target, window.task);
+    // `abacus tray`: an item in the panel whose menu works the calculator and
+    // asks for a sum by a notification with an inline reply (slice S2).
+    let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
+    let tray = sex_app::files::args(&mut window, &mut args).split(|b| *b == b' ').any(|w| w == b"tray");
+    if tray {
+        let ok = sex_app::tray::add(0, b"=", ACCENT, b"Abacus: the last answer", TRAY_MENU);
+        sex_pdx::serial_record!("[calc.tray.ready] target={} task={} item={} rows={}", window.target, window.task, ok as u8, TRAY_MENU.len());
+    }
+    let mut asked = 0u32;
     loop {
-        match window.next() {
+        let event = match window.next_any() {
+            sex_app::Any::Window(e) => e,
+            sex_app::Any::Tray(t) => { tray_event(&mut calc, t, &mut asked); render(&mut window, &calc, &mut small, &mut big); continue; }
+        };
+        match event {
             Event::Close => { sex_pdx::serial_record!("[calc.closed] target={} task={}", window.target, window.task); window.close() }
             Event::Key(key) => key_action(&mut calc, key),
             Event::Pointer(p) if matches!(p.kind, Kind::Down { button: 0 }) => {
