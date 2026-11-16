@@ -107,9 +107,9 @@ def main():
         time.sleep(2)
         tile, before = maximize(g, surface)
         lay = wait(r'\[abacus.layout\] w=(\d+) h=(\d+)\n', before, 60); at = before + t()[before:].index(lay[0])
-        wait(r'\[abacus.key\] n=29 x=(-?\d+) y=(-?\d+)\n', at, 60); time.sleep(1)
+        wait(r'\[abacus.key\] n=34 x=(-?\d+) y=(-?\d+)\n', at, 60); time.sleep(1)
         pos = {int(n): (int(x), int(y)) for n, x, y in re.findall(r'\[abacus.key\] n=(\d+) x=(-?\d+) y=(-?\d+)', t()[at:])}
-        x, y = pos[10]  # abacus::KEYS row 3: 7 8 9 ÷ π
+        x, y = pos[15]  # abacus::KEYS row 4: 7 8 9 ÷ π
         g['focus'](surface); time.sleep(.5)
         s = len(t()); move(tile[0] + 8 + x, tile[1] + 36 + y); button(True)
         heard.append(said('7 button', s))

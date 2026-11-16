@@ -116,3 +116,25 @@ fn memory_sign_recall_and_carry_on() {
     let mut px = vec![0u32; 560 * 720];
     assert!(ui.paint(&mut px).is_some());
 }
+
+#[test]
+fn carry_on_survives_an_error_and_clear_history_drops_the_pick() {
+    let mut ui = Ui::new(560, 720, Theme::light(), Strings::new("en"));
+    let mut a = Abacus::build(&mut ui);
+    assert_eq!(typed(&mut ui, &mut a, "6*7"), vec!["42".to_string()]);
+    assert!(typed(&mut ui, &mut a, "+1/0").is_empty());
+    assert_eq!(ui.text_of(a.expr), "ans+1/0");
+    // Put right: the 0 becomes a 2.
+    let mut rs = ui.handle(Event::Key(Key::new(code::BACKSPACE)));
+    rs.extend(ui.handle(Event::Key(Key::typed('2'))));
+    rs.extend(ui.handle(Event::Key(Key::new(code::ENTER))));
+    assert_eq!(run(&mut ui, &mut a, rs), vec!["42.5".to_string()]);
+    // A picked answer that Clear History removed no longer swallows Enter.
+    ui.focus(Some(a.expr));
+    let rs = ui.handle(Event::Key(Key::new(code::UP)));
+    run(&mut ui, &mut a, rs);
+    assert_eq!(a.picked, Some(0));
+    run(&mut ui, &mut a, vec![Response::Command("abacus.clear-history".into())]);
+    assert_eq!(a.picked, None);
+    assert_eq!(typed(&mut ui, &mut a, "1+1"), vec!["2".to_string()]);
+}

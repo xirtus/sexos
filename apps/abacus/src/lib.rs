@@ -221,8 +221,12 @@ impl Abacus {
         ui.focus(Some(self.expr));
         let mut expr = String::from(ui.text_of(self.expr).trim());
         if expr.is_empty() { return Note::Error("empty".into()); }
-        // Straight after an answer, `+8` means `ans+8`.
-        if core::mem::take(&mut self.fresh) && expr.starts_with(['+', '-', '*', '/', '^', '%', '!', '×', '÷', '−']) { expr.insert_str(0, "ans"); }
+        // Straight after an answer, `+8` means `ans+8`. The line shows that too, so a
+        // sum put right after an error still carries on.
+        if core::mem::take(&mut self.fresh) && expr.starts_with(['+', '-', '*', '/', '^', '%', '!', '×', '÷', '−']) {
+            expr.insert_str(0, "ans");
+            ui.set_text(self.expr, &expr);
+        }
         self.unpick(ui);
         match calc::eval_with(&expr, self.ans, self.memory, self.angle) {
             Ok(v) => {
@@ -252,7 +256,7 @@ impl Abacus {
         match r {
             Response::Submitted(id) if *id == self.expr => {
                 // Enter on a picked answer puts it in; otherwise it works the sum out.
-                if let Some(i) = self.picked { return self.recall(ui, i); }
+                if let Some(i) = self.picked { if i < self.past.len() { return self.recall(ui, i); } self.unpick(ui); }
                 return Some(self.equals(ui));
             }
             Response::Clicked(id) => {
@@ -289,7 +293,7 @@ impl Abacus {
                 id if id.starts_with("abacus.fn.") => {
                     if let Some((_, _, text)) = INSERTS.iter().find(|i| i.0 == id) { self.put(ui, text); }
                 }
-                "abacus.clear-history" => { self.past.clear(); ui.set_rows(self.history, Rows::default()); }
+                "abacus.clear-history" => { self.past.clear(); self.picked = None; ui.set_rows(self.history, Rows::default()); }
                 "abacus.degrees" | "abacus.radians" => {
                     let deg = c == "abacus.degrees";
                     self.set_angle(ui, deg);
