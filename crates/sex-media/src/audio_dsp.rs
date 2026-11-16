@@ -331,6 +331,11 @@ impl AudioDsp {
         let filters_changed = next.bass_db != self.cfg.bass_db
             || next.voice_db != self.cfg.voice_db
             || next.treble_db != self.cfg.treble_db;
+        // A band at 0 dB is bypassed and its delay line stops; one switched on again
+        // starts from silence instead of replaying old samples.
+        if (next.bass_db == 0) != (self.cfg.bass_db == 0) { self.bass_state.reset(); }
+        if (next.voice_db == 0) != (self.cfg.voice_db == 0) { self.voice_state.reset(); }
+        if (next.treble_db == 0) != (self.cfg.treble_db == 0) { self.treble_state.reset(); }
         self.cfg = next;
         self.target_gain = next.boost_percent as f32 * 0.01;
         if filters_changed {
@@ -524,7 +529,8 @@ impl AudioDsp {
             1.0 + gate_ramp * (lift - 1.0)
         } else if self.env > 0.50 {
             // Gentle downward taming on sudden explosions above -6 dBFS.
-            0.50 + (self.env - 0.50) * 0.45 / self.env
+            // Output level 0.50 + 0.45 * (env - 0.50), as a gain: 1.0 at the threshold.
+            (0.50 + (self.env - 0.50) * 0.45) / self.env
         } else {
             1.0
         }

@@ -87,3 +87,34 @@ use audio_dsp::*;
     assert!(out_fc[0][0] > out_bl[0][0] * 2, "centre channel (+3.2 dB lift) must outweigh surround");
 }
 
+
+#[test] fn audio_dsp_compression_has_no_step_at_its_threshold() {
+    let mut cfg = AudioDspConfig::default();
+    cfg.dialogue_drc = true;
+    let level = |v: i16| {
+        let mut dsp = AudioDsp::new(48_000, cfg);
+        let mut f = vec![[v, v]; 48_000];
+        dsp.process_stereo_frames(&mut f);
+        f[47_999][0] as i32
+    };
+    let (below, above) = (level(16_380), level(16_400));
+    assert!((above - below).abs() < 100, "steady levels just either side of the threshold: {below} vs {above}");
+    assert!(level(30_000) < 30_000, "loud peaks are still tamed");
+}
+
+#[test] fn audio_dsp_band_switched_back_on_starts_from_silence() {
+    let mut cfg = AudioDspConfig::default();
+    cfg.set_bands(8, 0, 0);
+    let mut dsp = AudioDsp::new(48_000, cfg);
+    let mut loud: Vec<[i16; 2]> = (0..10_000).map(|i| { let s = if i % 200 < 100 { 12_000 } else { -12_000 }; [s, s] }).collect();
+    dsp.process_stereo_frames(&mut loud);
+    let mut flat = cfg;
+    flat.set_bands(0, 0, 0);
+    dsp.set_config(flat);
+    let mut silence = vec![[0i16; 2]; 48_000];
+    dsp.process_stereo_frames(&mut silence);
+    dsp.set_config(cfg);
+    let mut after = vec![[0i16; 2]; 64];
+    dsp.process_stereo_frames(&mut after);
+    assert!(after.iter().all(|f| f[0].abs() < 50 && f[1].abs() < 50), "old samples replayed: {:?}", &after[..4]);
+}
