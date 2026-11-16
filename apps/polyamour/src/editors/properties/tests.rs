@@ -154,10 +154,59 @@ fn add_modifier_menu_adds_subdivision_and_levels_edit_it() {
     let (x, y) = menu_item_y(&mut app, &pop, "Generate");
     app.frame(Input::Move { x, y });
     let sub = app.popup.as_ref().unwrap().sub.as_ref().unwrap().1.as_ref().clone();
-    let (x, y) = menu_item_y(&mut app, &sub, "Boolean");
+    let (x, y) = menu_item_y(&mut app, &sub, "Skin");
     click(&mut app, x, y);
-    assert!(app.doc.report.contains("Boolean modifier is not available"), "{}", app.doc.report);
+    assert!(app.doc.report.contains("Skin modifier is not available"), "{}", app.doc.report);
     assert_eq!(app.doc.scene.objects[cube].modifiers.len(), 1);
+}
+
+#[test]
+fn ported_modifiers_menu_panels_and_object_fields() {
+    use sex_3d::modifiers::{BooleanOp, DecimateMode, SimpleDeformMode};
+    let mut app = app();
+    let cube = app.doc.active().unwrap();
+    app.doc.scene.add_mesh_object("Cutter", sex_3d::primitives::cube(1.0));
+    open_tab(&mut app, Tab::Modifiers);
+    // Deform > Simple Deform from the Add Modifier menu.
+    let r = field(&app, "add_modifier");
+    click_rect(&mut app, r);
+    let pop = app.popup.clone().unwrap();
+    let (x, y) = menu_item_y(&mut app, &pop, "Deform");
+    app.frame(Input::Move { x, y });
+    let sub = app.popup.as_ref().unwrap().sub.as_ref().expect("Deform submenu").1.as_ref().clone();
+    let (x, y) = menu_item_y(&mut app, &sub, "Simple Deform");
+    click(&mut app, x, y);
+    assert!(matches!(app.doc.scene.objects[cube].modifiers[0], Modifier::SimpleDeform { mode: SimpleDeformMode::Twist, axis: 2, .. }));
+    super::object::modifier_op(&mut app.doc, cube, "object.modifier_remove", 0);
+    // Decimate's ratio and Boolean's object dropdown.
+    app.doc.run(&crate::ui::Op::with("object.modifier_add", "DECIMATE"));
+    app.doc.run(&crate::ui::Op::with("object.modifier_add", "BOOLEAN"));
+    app.frame(Input::Tick);
+    set_field(&mut app, "m0/ratio", "0.5");
+    assert!(matches!(app.doc.scene.objects[cube].modifiers[0], Modifier::Decimate { mode: DecimateMode::Collapse, ratio, .. } if ratio == 0.5));
+    let r = field(&app, "modobj/1");
+    click_rect(&mut app, r);
+    let pop = app.popup.clone().expect("object dropdown");
+    let (x, y) = menu_item_y(&mut app, &pop, "Cutter");
+    click(&mut app, x, y);
+    app.frame(Input::Tick);
+    assert_eq!(app.doc.scene.objects[cube].modifiers[1], Modifier::Boolean { object: "Cutter".into(), operation: BooleanOp::Difference });
+    // Renaming the operand keeps the modifier pointing at it.
+    let cutter = app.doc.scene.find_object("Cutter").unwrap();
+    super::rename_object(&mut app.doc, cutter, "Knife");
+    assert_eq!(app.doc.scene.objects[cube].modifiers[1].object_ref(), Some("Knife"));
+    // Every ported modifier adds and draws (one at a time: stacked, they
+    // multiply the geometry).
+    for id in ["REMESH", "SCREW", "WIREFRAME", "EDGE_SPLIT", "BUILD", "CAST", "WAVE", "SHRINKWRAP", "LAPLACIANSMOOTH", "CORRECTIVE_SMOOTH", "WEIGHTED_NORMAL"] {
+        app.doc.run(&crate::ui::Op::with("object.modifier_add", id));
+        app.frame(Input::Tick);
+        assert_eq!(app.doc.scene.objects[cube].modifiers.len(), 3, "{id}");
+        super::object::modifier_op(&mut app.doc, cube, "object.modifier_remove", 2);
+    }
+    // Wave follows the timeline's frame.
+    app.doc.frame = 40;
+    app.frame(Input::Tick);
+    assert_eq!(app.doc.scene.frame_current, 40);
 }
 
 #[test]
@@ -205,7 +254,7 @@ fn material_base_color_edit_changes_the_material() {
     // Esc closes the picker; then Roughness typed.
     app.frame(Input::key(Key::Esc));
     assert!(props(&app).picker.is_none());
-    set_field(&mut app, "roughness", "0.1");
+    set_field(&mut app, "Roughness", "0.1");
     assert!((app.doc.scene.materials[mi].roughness - 0.1).abs() < 1e-6);
     app.frame(Input::key_mods(Key::Char('z'), Mods::CTRL));
     assert_eq!(app.doc.scene.materials[mi].roughness, 0.5);
@@ -243,6 +292,149 @@ fn light_and_camera_data() {
     let ObjectData::Camera(c) = app.doc.scene.objects[cam].data else { panic!() };
     let f = super::data::focal_from_fov_y(c.fov_y, 36.0, 16.0 / 9.0);
     assert!((f - 35.0).abs() < 1e-3, "{f}");
+}
+
+/// Pick `value` for the dropdown `key` as its menu would.
+fn pick(app: &mut App, key: &str, value: &str) {
+    app.doc.queue.push(crate::ui::Op::with("properties.set", &format!("{key}={value}")));
+    app.frame(Input::Tick);
+}
+
+#[test]
+fn render_tab_sampling_and_color_management() {
+    use sex_3d::render::{Look, ViewTransform};
+    let mut app = app();
+    open_tab(&mut app, Tab::Render);
+    set_field(&mut app, "min_samples", "8");
+    set_field(&mut app, "time_limit", "3");
+    set_field(&mut app, "threshold", "0.05");
+    let st = &app.doc.settings;
+    assert_eq!((st.adaptive_min_samples, st.time_limit), (8, 3.0));
+    let rs = st.render_settings();
+    assert_eq!((rs.min_samples, rs.time_limit, rs.noise_threshold), (8, 3.0, 0.05));
+    pick(&mut app, "view_transform", "Khronos PBR Neutral");
+    pick(&mut app, "look", "Punchy");
+    let cm = app.doc.settings.color_management();
+    assert_eq!((cm.view, cm.look), (ViewTransform::KhronosPbrNeutral, Look::Punchy));
+    app.frame(Input::key_mods(Key::Char('z'), Mods::CTRL));
+    assert_eq!(app.doc.settings.look, "None", "look change is one undo step");
+    assert_eq!(app.doc.settings.view_transform, ViewTransform::KhronosPbrNeutral);
+}
+
+#[test]
+fn eevee_and_workbench_engines_drive_f12() {
+    use crate::settings::Engine;
+    let mut app = app();
+    open_tab(&mut app, Tab::Render);
+    pick(&mut app, "engine", "EEVEE");
+    assert_eq!(app.doc.settings.engine, Engine::Eevee);
+    app.frame(Input::Tick);
+    set_field(&mut app, "eevee_samples", "2");
+    assert_eq!(app.doc.settings.eevee_render_samples, 2);
+    pick(&mut app, "eevee_shadow_resolution", "512");
+    assert_eq!(app.doc.settings.eevee_shadow_resolution, 512);
+    app.doc.settings.resolution_pct = 5;
+    app.frame(Input::key(Key::F(12)));
+    let img = app.doc.render.as_ref().expect("rendered");
+    assert_eq!((img.width, img.height), (96, 54));
+    assert!(app.doc.report.contains("2 samples"), "{}", app.doc.report);
+    // The lit cube is in the middle of the frame.
+    let c = img.pixels[27 * 96 + 48];
+    assert!(c[0] > 0.02 && c[3] > 0.99, "{c:?}");
+    app.doc.render = None;
+    pick(&mut app, "engine", "Workbench");
+    assert_eq!(app.doc.settings.engine, Engine::Workbench);
+    app.frame(Input::Tick);
+    app.doc.settings.workbench_samples = 2;
+    pick(&mut app, "workbench_cavity_type", "Both");
+    assert_eq!(app.doc.settings.workbench.cavity_type, sex_3d::render::workbench::CavityType::Both);
+    app.frame(Input::key(Key::F(12)));
+    let img = app.doc.render.as_ref().expect("rendered");
+    assert_eq!((img.width, img.height), (96, 54));
+    app.frame(Input::key_mods(Key::Char('z'), Mods::CTRL));
+    assert_eq!(app.doc.settings.workbench.cavity_type, sex_3d::render::workbench::CavityType::World);
+}
+
+#[test]
+fn ctrl_f12_renders_the_frame_range_to_files() {
+    let mut app = app();
+    let dir = std::env::temp_dir().join(format!("polyamour-anim-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let st = &mut app.doc.settings;
+    st.output_path = format!("{}/f", dir.display());
+    st.resolution_pct = 2;
+    st.render_samples = 1;
+    st.motion_blur = true;
+    app.doc.scene.frame_start = 3;
+    app.doc.scene.frame_end = 4;
+    app.frame(Input::key_mods(Key::F(12), Mods::CTRL));
+    assert!(app.doc.report.contains("Rendered 2 frames"), "{}", app.doc.report);
+    for f in ["f0003.png", "f0004.png"] {
+        let bytes = std::fs::read(dir.join(f)).unwrap();
+        assert_eq!(&bytes[1..4], b"PNG");
+    }
+    assert!(app.doc.render.is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn camera_lens_types_and_area_light_shape() {
+    use sex_3d::scene::{AreaShape, LightKind, PanoramaType};
+    let mut app = app();
+    let cam = app.doc.scene.find_object("Camera").unwrap();
+    app.doc.select_only(Some(cam));
+    app.frame(Input::Tick);
+    open_tab(&mut app, Tab::Data);
+    set_field(&mut app, "shift_x", "0.1");
+    pick(&mut app, "lens_type", "Panoramic");
+    pick(&mut app, "panorama_type", "Fisheye Equidistant");
+    pick(&mut app, "sensor_fit", "Vertical");
+    let ObjectData::Camera(c) = app.doc.scene.objects[cam].data else { panic!() };
+    assert_eq!(c.panorama, Some(PanoramaType::FisheyeEquidistant));
+    assert_eq!(c.shift_x, 0.1);
+    assert_eq!(c.sensor_fit, sex_3d::scene::SensorFit::Vertical);
+    pick(&mut app, "lens_type", "Orthographic");
+    let ObjectData::Camera(c) = app.doc.scene.objects[cam].data else { panic!() };
+    assert!(c.panorama.is_none() && c.ortho_scale.is_some());
+
+    let light = app.doc.scene.find_object("Light").unwrap();
+    if let ObjectData::Light(l) = &mut app.doc.scene.objects[light].data {
+        l.kind = LightKind::Area { size: 1.0 };
+    }
+    app.doc.select_only(Some(light));
+    app.frame(Input::Tick);
+    pick(&mut app, "area_shape", "Rectangle");
+    set_field(&mut app, "area_size_y", "0.25");
+    let ObjectData::Light(l) = app.doc.scene.objects[light].data else { panic!() };
+    assert_eq!((l.shape, l.size_y), (AreaShape::Rectangle, 0.25));
+}
+
+#[test]
+fn geometry_nodes_modifier_panel() {
+    use sex_3d::nodes::{InterfaceSocket, SocketType, Value};
+    let mut app = app();
+    let cube = app.doc.active().unwrap();
+    // A group extruding every face by its "Height" input.
+    let mut g = sex_3d::geometry::new_group("Extruder");
+    g.inputs.push(InterfaceSocket { name: "Height".into(), ty: SocketType::Float, default: Value::Float(1.0), min: 0.0, max: 10.0 });
+    g.nodes[0] = sex_3d::nodes::edit::group_input_node(&g);
+    let ex = g.add("GeometryNodeExtrudeMesh", [0.0, 0.0]).unwrap();
+    g.links.clear();
+    g.link(0, "Geometry", ex, "Mesh").unwrap();
+    g.link(0, "Height", ex, "Offset Scale").unwrap();
+    g.link(ex, "Mesh", 1, "Geometry").unwrap();
+    app.doc.scene.node_groups.push(g);
+    app.doc.run(&crate::ui::Op::with("object.modifier_add", "NODES"));
+    assert_eq!(app.doc.scene.objects[cube].modifiers, vec![Modifier::Nodes { group: String::new(), inputs: Vec::new() }]);
+    open_tab(&mut app, Tab::Modifiers);
+    pick(&mut app, "modgroup/0", "Extruder");
+    assert_eq!(app.doc.scene.objects[cube].modifiers, vec![Modifier::Nodes { group: "Extruder".into(), inputs: Vec::new() }]);
+    // The interface input shows, and editing it sets the modifier's value.
+    app.frame(Input::Tick);
+    set_field(&mut app, "m0/in/Height", "0.5");
+    assert_eq!(app.doc.scene.objects[cube].modifiers, vec![Modifier::Nodes { group: "Extruder".into(), inputs: vec![("Height".into(), Value::Float(0.5))] }]);
+    let m = app.doc.scene.evaluated_mesh(cube).unwrap();
+    assert_eq!((m.positions.len(), m.faces.len()), (32, 30));
 }
 
 #[test]

@@ -4,7 +4,7 @@
 //! them with `cargo test --release -p sex-3d --test render -- --ignored --nocapture`.
 use sex_3d::math::{Mat4, Quat, Vec3};
 use sex_3d::primitives;
-use sex_3d::render::viewport::{self, ViewCamera, ViewportScene, ViewportSettings};
+use sex_3d::render::viewport::{self, ObjectOverlay, ViewCamera, ViewportScene, ViewportSettings};
 use sex_3d::render::{self, DenoiseSettings, PreparedScene, Progressive, RenderResult, RenderSettings};
 use sex_3d::scene::{Camera, Image, Light, LightKind, Material, Object, ObjectData, Scene, Transform};
 use std::sync::atomic::AtomicBool;
@@ -41,7 +41,7 @@ fn rmse(a: &Image, b: &Image) -> f64 {
 }
 
 fn settings(w: u32, h: u32, spp: u32) -> RenderSettings {
-    RenderSettings { width: w, height: h, samples: spp, max_bounces: 6, threads: 0, denoise: false, clamp: 0.0, seed: 0 }
+    RenderSettings { width: w, height: h, samples: spp, max_bounces: 6, threads: 0, denoise: false, clamp: 0.0, seed: 0, light_paths: sex_3d::render::LightPaths::unlimited(), ..RenderSettings::default() }
 }
 
 /// Lambertian sphere (ior 1: no specular) filling the view under a uniform world.
@@ -367,6 +367,40 @@ fn viewport_draws_the_startup_cube() {
     assert_ne!(ortho[(45 * 160 + 80) * 4..][..3], corner[..3]);
     let inside = viewport::draw(&s, &ViewCamera { distance: 0.5, ..view }, &st);
     assert_eq!(inside.len(), px.len());
+}
+
+#[test]
+fn viewport_patches_and_corner_colors() {
+    let mut s = Scene::startup();
+    let cube = s.find_object("Cube").unwrap();
+    let st = ViewportSettings { width: 160, height: 90, threads: 2, ..ViewportSettings::default() };
+    let view = ViewCamera::default();
+    let mut vs = ViewportScene::new(&s);
+    let before = vs.draw(&view, &st);
+    // Moving vertices through a patch matches a full rebuild.
+    let mi = match s.objects[cube].data {
+        ObjectData::Mesh(mi) => mi,
+        _ => unreachable!(),
+    };
+    for p in &mut s.meshes[mi].positions {
+        *p = *p * 0.5;
+    }
+    let all: Vec<u32> = (0..s.meshes[mi].positions.len() as u32).collect();
+    let normals = s.meshes[mi].vertex_normals();
+    assert_eq!(vs.object_vertex_count(cube), Some(s.meshes[mi].positions.len()));
+    assert!(vs.patch_object(cube, &s.meshes[mi].positions, &normals, &all));
+    let patched = vs.draw(&view, &st);
+    assert_ne!(patched, before);
+    assert_eq!(patched, ViewportScene::new(&s).draw(&view, &st));
+    assert!(!vs.patch_object(cube, &s.meshes[mi].positions[..3], &normals, &[0]));
+    // Corner colours replace the material; hidden faces can be left out.
+    s.meshes[mi].hidden_faces = vec![true; s.meshes[mi].faces.len()];
+    let red = ViewportScene::new_with(&s, &|o, _, tris| (o == cube).then(|| ObjectOverlay { corner_colors: Some(vec![[[1.0, 0.0, 0.0]; 3]; tris.len()]), hide_hidden: false }));
+    let px = red.draw(&view, &st);
+    let c = &px[(45 * 160 + 80) * 4..][..3];
+    assert!(c[0] as u32 > 2 * c[1].max(c[2]) as u32 && c[0] > 60, "{c:?}");
+    let hidden = ViewportScene::new_with(&s, &|_, _, _| Some(ObjectOverlay { corner_colors: None, hide_hidden: true }));
+    assert!(hidden.triangle_count() < red.triangle_count());
 }
 
 #[test]

@@ -193,8 +193,21 @@ fn layout(n: &mut Node, r: Rect, path: &mut Vec<bool>, borders: &mut Vec<Border>
 }
 
 /// Blender's default workspaces, in tab order.
-pub const WORKSPACES: [&str; 11] =
-    ["Layout", "Modeling", "Sculpting", "UV Editing", "Texture Paint", "Shading", "Animation", "Rendering", "Compositing", "Geometry Nodes", "Scripting"];
+pub const WORKSPACES: [&str; 13] = [
+    "Layout",
+    "Modeling",
+    "Sculpting",
+    "UV Editing",
+    "Texture Paint",
+    "Shading",
+    "Animation",
+    "Rendering",
+    "Compositing",
+    "Geometry Nodes",
+    "Scripting",
+    "2D Animation",
+    "Video Editing",
+];
 
 /// Build the default workspaces with their area layouts (proportions measured
 /// from Blender's factory startup at 1920x1080).
@@ -225,9 +238,21 @@ pub fn default_workspaces() -> Vec<Workspace> {
         split(true, 0.2, split(false, 0.5, area(K::FileBrowser), area(K::ImageEditor)), split(false, 0.55, area(K::View3D), area(K::ShaderEditor))),
         side(&mut area),
     );
-    out.push(Workspace { name: "Shading".into(), root: l, maximized: None });
+    let mut shading = Workspace { name: "Shading".into(), root: l, maximized: None };
+    // Its viewport previews materials, as in Blender.
+    for a in shading.areas_mut() {
+        if let crate::editors::Editor::View3D(v) = &mut a.editor {
+            v.shading = crate::editors::view3d::Shading::Material;
+        }
+    }
+    out.push(shading);
     let l = split(true, 0.78, split(false, 0.7, split(true, 0.25, area(K::View3D), area(K::View3D)), area(K::DopeSheet)), side(&mut area));
-    out.push(Workspace { name: "Animation".into(), root: l, maximized: None });
+    let mut anim = Workspace { name: "Animation".into(), root: l, maximized: None };
+    // The small view on the left looks through the camera, as in Blender.
+    if let Some(crate::editors::Editor::View3D(v)) = anim.areas_mut().into_iter().next().map(|a| &mut a.editor) {
+        v.camera_view = true;
+    }
+    out.push(anim);
     let l = split(true, 0.78, area(K::ImageEditor), side(&mut area));
     out.push(Workspace { name: "Rendering".into(), root: l, maximized: None });
     let l = split(true, 0.78, split(false, 0.8, area(K::CompositorEditor), area(K::DopeSheet)), side(&mut area));
@@ -241,6 +266,25 @@ pub fn default_workspaces() -> Vec<Workspace> {
         side(&mut area),
     );
     out.push(Workspace { name: "Scripting".into(), root: l, maximized: None });
+    // 2D Animation: the view over a Grease Pencil Dope Sheet.
+    let l = split(true, 0.78, split(false, 0.78, area(K::View3D), area(K::DopeSheet)), side(&mut area));
+    let mut ws = Workspace { name: "2D Animation".into(), root: l, maximized: None };
+    for a in ws.areas_mut() {
+        if let crate::editors::Editor::Timeline(t) = &mut a.editor {
+            t.ds_mode = crate::editors::timeline::DsMode::GreasePencil;
+        }
+    }
+    out.push(ws);
+    // Video Editing: preview and properties over the strip timeline.
+    let l = split(false, 0.55, split(true, 0.7, area(K::Sequencer), area(K::Properties)), area(K::Sequencer));
+    let mut ws = Workspace { name: "Video Editing".into(), root: l, maximized: None };
+    for (i, a) in ws.areas_mut().into_iter().filter(|a| matches!(a.editor, crate::editors::Editor::Sequencer(_))).enumerate() {
+        if let crate::editors::Editor::Sequencer(s) = &mut a.editor {
+            s.view = if i == 0 { 2 } else { 1 };
+            s.show_sidebar = i == 1;
+        }
+    }
+    out.push(ws);
     out
 }
 
