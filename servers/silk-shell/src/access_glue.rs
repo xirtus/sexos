@@ -32,6 +32,7 @@ pub unsafe fn poll() {
     let mut events = access::Events::new();
     let access = &mut *core::ptr::addr_of_mut!(ACCESS);
     if access.poll(sex_pdx::get_ticks(), &mut events) { replay(&events); }
+    crate::reader_glue::poll();
 }
 
 unsafe fn replay(events: &access::Events) {
@@ -44,6 +45,7 @@ unsafe fn apply(change: access::Change) {
     let status = match change {
         access::Change::View { zoom, filter } =>
             crate::pdx_call(sex_pdx::SLOT_DISPLAY, sex_pdx::access_view::OP_ACCESS_VIEW, zoom as u64, filter as u64, 0).0,
+        access::Change::Reader(on) => { crate::reader_glue::set(on); 0 }
         _ => 0,
     };
     let mut text = [0u8; 64];

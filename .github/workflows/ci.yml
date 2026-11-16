@@ -107,10 +107,11 @@ jobs:
       run: bash scripts/burlesque_host_gate.sh
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
-    - name: Whisper voice (eSpeak NG speech, stop, determinism) and its Shell wire
+    - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport
       run: |
         cargo test --locked -p sex-speech
         cargo test --locked -p sex-pdx --test speech_voice
+        cargo test --locked -p sex-pdx --test a11y
     - name: Denim page compression (compressed RAM codec)
       run: cargo test --locked -p denim
     - name: SNTP client codec (network time)
@@ -652,6 +653,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/access-source.img"
         python3 scripts/access_view_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/access-source.img" --out "$RUNNER_TEMP/sexos-desktop/access"
+    - name: Whisper screen reader (Super+Alt+R, spoken window titles and a Weft button)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/reader-source.img"
+        python3 scripts/screen_reader_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/reader-source.img" --out "$RUNNER_TEMP/sexos-desktop/reader"
     - name: Clipboard history on Super+V
       run: |
         truncate -s 256M "$RUNNER_TEMP/cliphist-source.img"

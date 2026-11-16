@@ -24,6 +24,8 @@ mod keyboard_layout;
 mod key_repeat;
 mod access;
 mod access_glue;
+mod reader;
+mod reader_glue;
 mod bt_panel;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
@@ -17604,6 +17606,7 @@ fn program_bind(target:u32,task:u32){
 /// Tells whoever asked why: the program that started the run, or Spindle, where the
 /// person who typed `run` is looking.
 fn program_refused(code:u32){
+    if unsafe{reader_glue::voice_refused(code)}{return}
     if let Some((parent,_,cookie))=unsafe{LAUNCH_ASKER.take()}{unsafe{LAUNCH_HIDDEN=false;}launch_send(parent,sex_pdx::launch::Event::Refused{cookie,code});return}
     let _=pdx_call(spindle_route_slot(),sex_pdx::program_store::OP_REFUSED,code as u64,0,0);
 }
@@ -17663,6 +17666,7 @@ fn launch_send(parent:u32,event:sex_pdx::launch::Event){
     sex_pdx::serial_record!("[shell.launch.event] parent={} event={:?} sent={}",parent,event,(status==0)as u8);
 }
 unsafe fn launch_started(target:u32,task:u32,network:bool){
+    if reader_glue::voice_started(target,task){return}
     if network{if let Some(slot)=NETWORK_RUNS.iter_mut().find(|s|s.is_none()){*slot=Some((target,task));}}
     let hidden=core::mem::take(&mut LAUNCH_HIDDEN);
     let scene=PROGRAM_SCENE.take();
@@ -17817,7 +17821,7 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         let by_program=msg.arg0==store::TICKET&&matches!(app_catalog::app_of(msg.caller_pd),Some(app_catalog::App::Program));
         if !app_catalog::is_spindle(msg.caller_pd)&&!by_program{return true}
         if PROGRAM_READING||PROGRAM_REBIRTH.is_some()||program_free_row().is_none(){
-            sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");program_refused(store::NO_FREE_ROW);return true;
+            sex_pdx::serial_record!("[shell.program.denied] reason=no_free_row");reader_glue::refuse_other(store::NO_FREE_ROW);return true;
         }
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;
@@ -26877,7 +26881,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -26899,6 +26903,7 @@ pub extern "C" fn _start() -> ! {
             if config_watch::receive(&msg) { continue; }
             if lock::receive(&msg) { continue; }
             if bt_panel::receive(&msg) { continue; }
+            if reader_glue::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }

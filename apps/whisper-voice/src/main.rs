@@ -22,6 +22,8 @@ mod voice {
     use std::collections::VecDeque;
 
     /// Shell's PD, the only sender the voice listens to.
+    /// How long the sound ring may refuse every frame before an utterance is dropped.
+    const STALL_MS: u64 = 1500;
     const SHELL: u32 = 3;
 
     pub struct Voice {
@@ -69,19 +71,32 @@ mod voice {
             let (mut peak, mut hash) = (0u16, 0xcbf2_9ce4_8422_2325u64);
             let mut frames: Vec<[i16; 2]> = Vec::new();
             let mut sound = self.sound.take();
+            let mut stalled = false;
             let result = speak(text, wpm, &mut |pcm: &[i16]| {
                 for &s in pcm {
                     peak = peak.max(s.unsigned_abs());
                     hash = (hash ^ s as u16 as u64).wrapping_mul(0x100_0000_01b3);
                 }
                 self.take_messages();
+                if stalled { return; }
                 let Some(sound) = sound.as_mut() else { return };
                 frames.clear();
                 frames.extend(pcm.iter().map(|&s| [s, s]));
                 let mut at = 0;
+                let mut since = pdx::get_ticks();
                 while at < frames.len() {
-                    at += sound.write(&frames[at..]);
+                    let wrote = sound.write(&frames[at..]);
+                    at += wrote;
+                    if wrote > 0 { since = pdx::get_ticks(); }
                     if at < frames.len() {
+                        // A ring nobody drains (no sound device, mixer stopped) must not
+                        // hang the reader: after a while this utterance goes unplayed,
+                        // and the next one tries again.
+                        if pdx::get_ticks().saturating_sub(since) > STALL_MS {
+                            stalled = true;
+                            pdx::serial_record!("[whisper.voice.stalled] after_ms={}", STALL_MS);
+                            return;
+                        }
                         let _ = pdx::sys_wait_self_ticks(5);
                         self.take_messages();
                         if self.quit || self.waiting.front().is_some_and(|p| wire::Gather::starts(p[0])) { return; }
@@ -90,7 +105,7 @@ mod voice {
             });
             match result {
                 Ok(spoken) => {
-                    if spoken.stopped {
+                    if spoken.stopped || stalled {
                         // Drop what is queued but not yet heard.
                         if let Some(s) = sound.as_mut() { s.skip(); }
                     }
