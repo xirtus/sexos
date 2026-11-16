@@ -253,8 +253,8 @@ impl Probe {
 pub(crate) fn studio(d: Vec3) -> Vec3 {
     let d = d.normalize();
     let up = d.y;
-    let sky = Vec3::new(0.62, 0.66, 0.72);
-    let horizon = Vec3::new(0.42, 0.42, 0.42);
+    let sky = Vec3::new(0.42, 0.45, 0.5);
+    let horizon = Vec3::new(0.28, 0.28, 0.28);
     let floor = Vec3::new(0.16, 0.145, 0.13);
     let mut c = if up >= 0.0 { horizon + (sky - horizon) * up.powf(0.6) } else { horizon + (floor - horizon) * (-up).powf(0.35) };
     let soft = |axis: Vec3, radius: f32, edge: f32| {

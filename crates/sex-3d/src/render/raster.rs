@@ -548,7 +548,7 @@ impl<P: Copy + Send + Sync> Bins<P> {
         }
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub fn count(&self) -> usize {
         self.pieces.iter().map(|p| p.tris.len()).sum()
     }

@@ -469,6 +469,21 @@ impl ViewportScene {
     /// Draw from any camera (`view` places the floor grid; without it there
     /// is none).
     pub fn draw_camera(&self, cam: &RasterCamera, view: Option<&ViewCamera>, s: &ViewportSettings, out: &mut Vec<u8>) {
+        self.draw_impl(cam, view, s, None, out);
+    }
+
+    /// The overlays (grid, gizmos, wires, selection outlines) of
+    /// [`ViewportScene::draw_into`] over `image` (RGBA, `s.width` x
+    /// `s.height`) instead of the Solid surfaces: Material Preview and
+    /// Rendered shading. The surfaces still hide what is behind them.
+    pub fn draw_over(&self, view: &ViewCamera, s: &ViewportSettings, image: &[u8], out: &mut Vec<u8>) {
+        let cam = RasterCamera::from_view(view, s.width, s.height);
+        let under = (image.len() >= s.width as usize * s.height as usize * 4).then_some(image);
+        let st = ViewportSettings { workbench: Workbench { xray: false, shadow: false, cavity: false, outline: false, ..s.workbench }, ..*s };
+        self.draw_impl(&cam, Some(view), &st, under, out);
+    }
+
+    fn draw_impl(&self, cam: &RasterCamera, view: Option<&ViewCamera>, s: &ViewportSettings, under: Option<&[u8]>, out: &mut Vec<u8>) {
         let (w, h) = (s.width as usize, s.height as usize);
         out.resize(w * h * 4, 0);
         if w == 0 || h == 0 {
@@ -642,6 +657,12 @@ impl ViewportScene {
                         let o = (y - y0) * w + x;
                         let li = layout.index(x, y);
                         let id = ids[li];
+                        if let Some(u) = under {
+                            let i = (y * w + x) * 4;
+                            rgba[o * 4..o * 4 + 4].copy_from_slice(&u[i..i + 4]);
+                            objs[o] = if id == NO_ID { 0 } else { bins.get(id).1.obj };
+                            continue;
+                        }
                         if id == NO_ID {
                             rgba[o * 4..o * 4 + 4].copy_from_slice(&bgb);
                             objs[o] = 0;

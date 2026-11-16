@@ -170,7 +170,9 @@ impl EeveeScene {
             }
         }
         let (probe, background) = if lookdev {
-            (Probe::build(threads, &probe::studio), None)
+            // The studio never changes: prefilter it once.
+            static STUDIO: std::sync::OnceLock<Probe> = std::sync::OnceLock::new();
+            (STUDIO.get_or_init(|| Probe::build(threads, &probe::studio)).clone(), None)
         } else {
             let env = &prep.env;
             let probe = Probe::build(threads, &|d| env.eval_ray(d, RayState::camera()));
