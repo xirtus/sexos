@@ -131,6 +131,12 @@ impl PhotoLibrary {
             if meta.camera.is_some() {
                 rec.meta.camera = meta.camera;
             }
+            if meta.lens.is_some() {
+                rec.meta.lens = meta.lens;
+            }
+            if meta.exposure.is_some() {
+                rec.meta.exposure = meta.exposure;
+            }
             return idx;
         }
         if self.photos.len() >= MAX_PHOTOS {
@@ -381,8 +387,10 @@ impl PhotoLibrary {
                 escape_field(&p.meta.format_name)
             };
 
+            let opt = |v: &Option<String>| v.as_deref().map(escape_field).unwrap_or_else(|| "-".to_string());
+            // Lens and exposure come after the recipe, so older catalogs (13 columns) still load.
             out.push_str(&format!(
-                "PHOTO\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "PHOTO\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 escape_field(&p.path),
                 p.favorite as u8,
                 p.meta.width,
@@ -394,7 +402,9 @@ impl PhotoLibrary {
                 place_s,
                 region_s,
                 cam_s,
-                p.recipe.encode_compact()
+                p.recipe.encode_compact(),
+                opt(&p.meta.lens),
+                opt(&p.meta.exposure)
             ));
         }
 
@@ -486,6 +496,8 @@ impl PhotoLibrary {
                         Some(unescape_field(cols[11]))
                     };
                     let recipe = EditRecipe::decode_compact(cols[12]);
+                    let extra = |i: usize| cols.get(i).filter(|c| **c != "-" && !c.is_empty()).map(|c| unescape_field(c));
+                    let (lens, exposure) = (extra(13), extra(14));
 
                     let mut rec = PhotoRecord::new(
                         &path,
@@ -498,6 +510,8 @@ impl PhotoLibrary {
                             place,
                             place_region,
                             camera,
+                            lens,
+                            exposure,
                         },
                     );
                     rec.favorite = favorite;

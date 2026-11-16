@@ -4,7 +4,9 @@ plus a PDF and a text file. Files, given that stick, shows it as a grid (Ctrl+G)
 picture gets a thumbnail within the budget (THUMBS_BUDGET_MS, default 60 s on QEMU's
 software CPU), the text file gets a kind tile, and the screen shows the first pictures'
 colours. The PDF is drawn by Vellum (`vellum --thumb`, run with no window) when the staged
-Vellum has --thumb, and otherwise keeps its kind tile. A second Files run opens the same
+Vellum has --thumb, and otherwise keeps its kind tile. A camera RAW file (NEF, its JPEG
+preview stored sideways with EXIF orientation 6) is drawn by Gaze (`gaze --thumb`) the
+same way, upright. A second Files run opens the same
 folder from the thumbnail cache: nothing is decoded or drawn again, and it is faster."""
 import argparse,os,re,shutil,struct,subprocess,time,zlib
 from pathlib import Path
@@ -20,6 +22,15 @@ def png(w,h,rgb):
  raw=b''.join(band if h//3<=y<2*h//3 else row for y in range(h))
  def chunk(t,d):return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d))
  return b'\x89PNG\r\n\x1a\n'+chunk(b'IHDR',struct.pack('>IIBBBBB',w,h,8,2,0,0,0))+chunk(b'IDAT',zlib.compress(raw,6))+chunk(b'IEND',b'')
+def nef(jpeg):
+ """A NEF-shaped TIFF: Nikon's make, orientation 6, and the preview JPEG in IFD0."""
+ make,model=b'NIKON CORPORATION\0',b'NIKON Z 6_2\0'
+ entries=5;ifd=8;data=ifd+2+entries*12+4
+ at_make=data;at_model=at_make+len(make);at_jpeg=at_model+len(model)
+ e=lambda tag,typ,count,val:struct.pack('<HHI',tag,typ,count)+val
+ body=struct.pack('<H',entries)+e(0x010f,2,len(make),struct.pack('<I',at_make))+e(0x0110,2,len(model),struct.pack('<I',at_model))\
+  +e(0x0112,3,1,struct.pack('<HH',6,0))+e(0x0201,4,1,struct.pack('<I',at_jpeg))+e(0x0202,4,1,struct.pack('<I',len(jpeg)))+struct.pack('<I',0)
+ return b'II*\0'+struct.pack('<I',ifd)+body+make+model+jpeg
 def make_stick(path,scratch):
  subprocess.run(['truncate','-s','64M',str(path)],check=True)
  subprocess.run(['mkfs.vfat','-F','32','-n','THUMBS',str(path)],check=True,capture_output=True)
@@ -27,6 +38,7 @@ def make_stick(path,scratch):
  for i in range(N):
   n=f'IMG{i:02d}.PNG';(scratch/n).write_bytes(png(640,480,colour(i)));names.append(n)
  (scratch/'PAPER.PDF').write_bytes((ROOT/'tests/fixtures/pdf/find10.pdf').read_bytes());(scratch/'NOTES.TXT').write_bytes(b'notes\n');names+=['PAPER.PDF','NOTES.TXT']
+ (scratch/'PHOTO.NEF').write_bytes(nef((ROOT/'crates/sex-image/tests/fixtures/big.jpg').read_bytes()));names.append('PHOTO.NEF')
  subprocess.run(['mcopy','-i',str(path),*[str(scratch/n) for n in names],'::'],check=True,env=MT)
 def ppm(path):
  data=path.read_bytes();parts=data.split(maxsplit=4);w,h=int(parts[1]),int(parts[2]);return w,h,parts[4]
@@ -45,9 +57,11 @@ def main():
  with disk.open('r+b') as f:f.truncate(1024**3)
  scratch=a.out/'host';scratch.mkdir();stick=a.out/'thumbs.img';make_stick(stick,scratch)
  import http.server,threading
- FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/vellum':(ROOT/'iso_root/programs/vellum').read_bytes()}
+ FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes(),'/vellum':(ROOT/'iso_root/programs/vellum').read_bytes(),'/gaze':(ROOT/'iso_root/programs/gaze').read_bytes()}
  # Vellum on master may predate --thumb; the PDF tile is required once it has it.
  drawn_pdf=b'--thumb' in FILES['/vellum']
+ drawn_raw=b'[gaze.thumb]' in FILES['/gaze']
+ helpers=int(drawn_pdf)+int(drawn_raw)
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
    body=FILES.get(self.path)
@@ -78,7 +92,7 @@ def main():
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  for n,dest in (('files','/bin/loom'),('vellum','/bin/vellum')):
+  for n,dest in (('files','/bin/loom'),('vellum','/bin/vellum'),('gaze','/bin/gaze')):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{n} {dest}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   q.cmd('blockdev-add',{'driver':'raw','node-name':'thumbsdrive','file':{'driver':'file','filename':str(stick)}})
   s=len(t())
@@ -87,26 +101,31 @@ def main():
    except RuntimeError:time.sleep(.5)
   g['wait'](r'\[files\.media\.mounted\] name=THUMBS format=FAT32 [^\n]*source=usb',s,120)
   for run in ('first','again'):
-   target,surface=open_files('/media/THUMBS',N+2)
+   target,surface=open_files('/media/THUMBS',N+3)
    s=len(t());ctrl('g')
    g['wait'](r'\[files.app.grid\] on=1 dir=/media/THUMBS',s,30)
    m=g['wait'](r'\[files.app.thumbs\] dir=/media/THUMBS pictures=(\d+) made=(\d+) cached=(\d+) failed=(\d+) ms=(\d+) documents=(\d+) drawn=(\d+) from_cache=(\d+)',s,budget/1000+120)
    pics,made,cached,failed,ms,docs,drawn,from_cache=map(int,m.groups())
    result[run]={'made':made,'cached':cached,'failed':failed,'ms':ms,'pdf_drawn':drawn,'pdf_cached':from_cache}
-   assert pics==N and failed==0 and docs==1,m[0]
+   assert pics==N and failed==0 and docs==2,m[0]
    if run=='first':
     assert made==N and ms<=budget,m[0]
-    assert drawn==(1 if drawn_pdf else 0),(m[0],drawn_pdf)
+    assert drawn==helpers,(m[0],drawn_pdf,drawn_raw)
     if drawn_pdf:result['pdf_ms']=int(g['wait'](r'\[files.app.thumbs.helper\] program=vellum path=/media/THUMBS/PAPER.PDF ms=(\d+)',s,5)[1])
+    if drawn_raw:
+     result['raw_ms']=int(g['wait'](r'\[files.app.thumbs.helper\] program=gaze path=/media/THUMBS/PHOTO.NEF ms=(\d+)',s,5)[1])
+     # 1200x900 stored, orientation 6: upright it is 900x1200, so 84x112 in a 112 tile.
+     tw,th=map(int,g['wait'](r'\[gaze.thumb\] w=(\d+) h=(\d+)',s,5).groups());result['raw_thumb']=(tw,th)
+     assert (tw,th)==(84,112),(tw,th)
    else:
     assert cached==N and made==0 and ms<result['first']['ms'],m[0]
-    assert drawn==0 and from_cache==(1 if drawn_pdf else 0),(m[0],drawn_pdf)
+    assert drawn==0 and from_cache==helpers,(m[0],drawn_pdf,drawn_raw)
    g['wait'](rf'\[display.app.pixels\] target={target} surface={surface} w=\d+ h=\d+',s,30)
    time.sleep(2);shot=a.out/f'thumbs-{run}.ppm';q.cmd('screendump',{'filename':str(shot)})
    found=seen(shot,colours);result[run]['colours_on_screen']=sorted(colours[c] for c in found)
    # The first row of tiles is IMG00, IMG01, ... (folders first, then by name).
    assert {0,1,2}<=set(colours[c] for c in found),result[run]
-   # End moves to the last tile, PAPER.PDF: Vellum's drawing of its first page is
+   # End moves to the last tiles, PAPER.PDF and PHOTO.NEF: Vellum's drawing of the PDF's first page is
    # mostly white paper, which no picture, kind tile or label here has.
    q.key('end');time.sleep(2);shot=a.out/f'thumbs-{run}-pdf.ppm';q.cmd('screendump',{'filename':str(shot)})
    white=paper(shot);result[run]['pdf_white_px']=white

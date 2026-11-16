@@ -79,8 +79,8 @@ include!("fixtures/compositor_reference.rs");
 #[test]fn actual_toolbar_titles_keep_lowercase_at_natural_13px_metrics(){
  for (sid,title)in[(200,&b"Linen"[..]),(201,&b"Quil"[..]),(300,&b"Browser"[..]),(306,&b"Spindle"[..]),(308,&b"Quil"[..]),(309,&b"Quil"[..]),(310,&b"Quil"[..]),(311,&b"Quil"[..]),(312,&b"Quil"[..])]{
   let end=glyphs::ui_width(title,1).unwrap();let mut count=0;
-  for y in 0..26{for x in 81..85+end+4{
-   let alpha=if(5..21).contains(&y){glyphs::ui_coverage(title,x as i32-85,y-5,1).unwrap()}else{0};
+  for y in 0..26{for x in 105..109+end+4{
+   let alpha=if(5..21).contains(&y){glyphs::ui_coverage(title,x as i32-109,y-5,1).unwrap()}else{0};
    let expected=(alpha!=0).then(||coverage_blend(desktop_style::contrast_ink(0),0,alpha));
    assert_eq!(toolbar_title_fg_at(x,y,sid,0),expected);count+=expected.is_some()as usize;
   }}assert!(count>60);
@@ -380,6 +380,7 @@ fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::Sce
 fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{DAMAGE_ORDER.push("launcher");}}
 mod lock_screen{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize)->bool{false}}
 mod bt_panel{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
+mod window_menu{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32){}}
 fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_tray_menu(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
@@ -450,7 +451,7 @@ fn glyph_footprint_covers_all_actual_ink_and_erases_empty_or_shorter_replacement
   SURFACES=[SURFACE_EMPTY;MAX_SURFACES];FRAME_GROUPS=FrameGroups::new();
   SURFACES[0]=Surface{owner_pd:owner,surface_id:sid,x:100,y:100,w:400,h:300,active:true,tab_count:1,chrome_flags:1,..SURFACE_EMPTY};
   let mut ink=0;let pixel_scene_6=capture_scene(1000,800,sid);
- for y in 0..28{for x in 62..112{if let Some(color)=toolbar_title_fg_at(x,y,sid,DISPLAY_TOKENS.active_tab_color){ink+=1;assert_eq!(composite_pixel(x+100,y+100,1000,800,0,sid, &pixel_scene_6),color);}}}assert!(ink>0);
+ for y in 0..28{for x in 86..136{if let Some(color)=toolbar_title_fg_at(x,y,sid,DISPLAY_TOKENS.active_tab_color){ink+=1;assert_eq!(composite_pixel(x+100,y+100,1000,800,0,sid, &pixel_scene_6),color);}}}assert!(ink>0);
  }
 }}
 #[test]fn visual_family_style_does_not_replace_exact_surface_ownership(){
@@ -769,12 +770,12 @@ fn reference_contrast(a:u32,b:u32)->f64{
    FOCUSED_SURFACE_ID=sid;
    let expected=desktop_style::contrast_ink(background);let mut glyph_pixels=0;assert!(reference_contrast(expected,background)>=4.5);
    let mut framebuffer=vec![0xdeadbeef;w*h];DAMAGE_ORDER.clear();
-   redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,damage::Rect{x:183,y:105,right:269,bottom:121});
+   redraw_surface_damage(framebuffer.as_mut_ptr(),w,h,damage::Rect{x:207,y:105,right:293,bottom:121});
    let pixel_scene_13=capture_scene(w,h,sid);
 
  for y in 105..121{
     let mut row=pixel_scene_13.groups.row_winners(&pixel_scene_13.surfaces,sid,y,w,h).unwrap();
-    for x in 183..269{
+    for x in 207..293{
      let foreground=toolbar_title_fg_at(x-100,y-100,sid,background);
      let want=foreground.unwrap_or(background);
      // Contrast applies to the nominal ink; antialiased edge pixels have

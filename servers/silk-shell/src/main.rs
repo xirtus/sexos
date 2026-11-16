@@ -27,6 +27,8 @@ mod access_glue;
 mod reader;
 mod reader_glue;
 mod bt_panel;
+mod decorations;
+mod decorations_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -8511,7 +8513,7 @@ fn chrome_metrics()->sex_pdx::desktop_style::chrome::Metrics {
 fn desktop_bar_height()->i32 {chrome_metrics().bar()as i32}
 fn frame_height()->i32 {chrome_metrics().title()as i32}
 fn frame_rim()->i32 {chrome_metrics().px(sex_pdx::desktop_style::chrome::RESIZE)as i32}
-fn frame_controls_end()->i32 {chrome_metrics().px(74)as i32}
+fn frame_controls_end()->i32 {chrome_metrics().controls_end()as i32}
 fn desktop_height() -> i32 {
     DESKTOP_HEIGHT.load(core::sync::atomic::Ordering::Acquire) as i32
 }
@@ -9080,6 +9082,8 @@ const FRAME_LIGHT_CLOSE: u32 = 1;
 const FRAME_LIGHT_MINIMIZE: u32 = 2;
 /// Green zoom light — zoom/maximize frame (future action).
 const FRAME_LIGHT_ZOOM: u32 = 3;
+/// Fourth title bar button: float / tile (decorations_glue.rs acts on it).
+const FRAME_LIGHT_FLOAT: u32 = 4;
 
 /// Width and height of each frame light square in pixels (fits within 4px rim).
 const FRAME_LIGHT_SIZE_PX: i32 = SILK_CHROME_TEMPLATE_DEFAULT.light_size_px;
@@ -10924,6 +10928,8 @@ unsafe fn screenshot_key(code: u8, value: u64) -> bool {
 }
 /// A button while the selection shows: true when the selection took it.
 unsafe fn screenshot_button(button: u8, pressed: bool) -> bool {
+    // The window menu: a right click on a title bar opens it (slice S1).
+    if decorations_glue::button(button, pressed) { return true; }
     if !SCREENSHOT.is_open() { return false; }
     if button == 1 {
         if pressed { SCREENSHOT.press(POINTER_X, POINTER_Y); screenshot_ui(true); }
@@ -22448,7 +22454,7 @@ unsafe fn frame_light_at(frame_id: u32, x: i32, y: i32) -> u32 {
     if frame_has_top_bar(frame_id) {
         let (lx,ly)=(x-sx,y-sy);
         if lx<0||ly<0||lx>=_sw as i32||ly>=_sh as i32{return FRAME_LIGHT_NONE;}
-        for index in 0..3 {
+        for index in 0..sex_pdx::desktop_style::chrome::CONTROLS {
             if chrome_metrics().control(index).unwrap().contains(lx as u32,ly as u32){return index+1;}
         }
         FRAME_LIGHT_NONE
@@ -23756,6 +23762,7 @@ unsafe fn frame_chrome_operation(frame_id: u32) -> Option<linen_text_delivery::O
             FRAME_LIGHT_CLOSE => 0,
             FRAME_LIGHT_MINIMIZE => 1,
             FRAME_LIGHT_ZOOM => 2,
+            FRAME_LIGHT_FLOAT => 3,
             _ => 3,
         }
     } else { 3 };
@@ -24894,6 +24901,8 @@ unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTar
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
     if TRAY_VIEW.menu != sex_pdx::tray::Menu::None && py >= desktop_bar_height() { tray_click(px, py); return (HitTarget::None, true); }
     if bt_panel::click(px, py, desktop_width(), desktop_bar_height()) { return (HitTarget::None, true); }
+    // Title bar buttons, double-click maximise and the window menu (slice S1).
+    if decorations_glue::press(px, py) { return (HitTarget::None, true); }
     let old_focus = FOCUSED_SURFACE_ID;
     serial_println!("[shell.click_focus.down] x={} y={} buttons={:#x}", px, py, buttons_val);
     // ── Atlas intercept: if Atlas mode is enabled, hit-test scene cards ──
@@ -26201,6 +26210,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
+        unsafe { decorations_glue::poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         if shell_ready_publisher.poll() {

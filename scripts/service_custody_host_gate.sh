@@ -238,6 +238,12 @@ rustc --edition=2021 -A dead_code --test tests/access_view.rs -o "$TEST_DIR/acce
 "$TEST_DIR/access-view" --test-threads=1
 rustc --edition=2021 -A dead_code --test tests/access_keys.rs -o "$TEST_DIR/access-keys"
 "$TEST_DIR/access-keys"
+# Window decorations (S1): title bar buttons, double click and the window menu,
+# built against a sex_pdx of only the modules they use.
+printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;\n#[path = "%s/crates/sex-pdx/src/desktop_style.rs"] pub mod desktop_style;\n#[path = "%s/crates/sex-pdx/src/window_menu.rs"] pub mod window_menu;\n' "$ROOT_DIR" "$ROOT_DIR" "$ROOT_DIR" > "$TEST_DIR/decorations_pdx.rs"
+rustc --edition=2021 -A dead_code --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/decorations_pdx.rs" -o "$TEST_DIR/libdecorations_pdx.rlib"
+rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libdecorations_pdx.rlib" --test tests/decorations.rs -o "$TEST_DIR/decorations"
+"$TEST_DIR/decorations"
 # Whisper, the screen reader: built against a sex_pdx of only the wires it uses.
 printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/speech_voice.rs"] pub mod speech_voice;\n#[path = "%s/crates/sex-pdx/src/a11y.rs"] pub mod a11y;\n' "$ROOT_DIR" "$ROOT_DIR" > "$TEST_DIR/reader_pdx.rs"
 rustc --edition=2021 --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/reader_pdx.rs" -o "$TEST_DIR/libreader_pdx.rlib"
