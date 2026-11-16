@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Suno Studio Clip Settings: On Beat, Transpose, and Speed warping.
+//! Muse Clip Settings: On Beat, Transpose, and Speed warping.
 //! Implements non-destructive windowed overlap-add (WSOLA) pitch-shifting and time-stretching.
 
 use crate::{

@@ -3,7 +3,7 @@ name = "moan-gen"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "Moan's opt-in ACE-Step 1.5 & Suno Studio 1.1/2.0 generative engine, model-pack manager and 4-tier supervisor"
+description = "Moan's opt-in ACE-Step 1.5 & Muse generative engine, model-pack manager and 4-tier supervisor"
 
 [features]
 default = []

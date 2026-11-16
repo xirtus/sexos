@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Comprehensive Integration Test Suite for Unified Moan DAW + Suno Studio 1.1/2.0 + Ariel + EuropaRack.
+//! Comprehensive Integration Test Suite for Unified Moan DAW + Muse + Ariel + EuropaRack.
 //!
 //! Tests:
 //! 1. Default pure DAW state (`muse_enabled == false`) + byte-exact MOANPRJ v1/v2/v3 serialization.
 //! 2. Opt-in Muse lifecycle: RAM tier recommendation, pack downloads, endpoint connect, Tier 0 synth, and clean disable.
-//! 3. Full Suno Studio workflows: Create Song, Add Layer, Replace Section crossfading, Extract Stems, Studio 2.0 Chat commands.
+//! 3. Full Muse workflows: Create Song, Add Layer, Replace Section crossfading, Extract Stems, Studio 2.0 Chat commands.
 //! 4. Ariel vocal synth: Klatt formants, English/Japanese pronunciation, live karaoke highlight, MIDI singing.
 //! 5. EuropaRack: Workspace::EuropaRack, factory presets, dark room brightness rendering, and Bake Rack to Track.
 //! 6. Studio 2.0 Clip Settings: WSOLA Transpose/Speed warp, offline Extract MIDI, visual curve strip, and MOANPRJ v4 round-trip.
@@ -13,7 +13,7 @@ extern crate alloc;
 
 use alloc::{string::String, sync::Arc};
 use moan::{
-    europarack_ui, studio_rack_ui, Action, Session, Studio, Workspace,
+    europarack_ui, studio_rack_ui, Session, Studio, Workspace,
 };
 use moan_core::{
     effects::{Distortion, DistortionMode, Equalizer},
@@ -23,7 +23,7 @@ use moan_core::{
 };
 use moan_gen::{
     job::StemRole,
-    pack::{ModelPackKind, ModelPackState},
+    pack::ModelPackState,
 };
 use moan_modular::presets::FactoryPatch;
 use weft::{Response, Strings, Theme, Ui};
@@ -92,48 +92,8 @@ fn test_2_opt_in_muse_setup_lifecycle() {
     assert!(s.muse_setup_open);
     assert!(!s.muse_config.enabled);
 
-    // 3. Test "Download Lite Pack" action
-    let action = s
-        .on(
-            &mut ui,
-            &Response::Clicked(s.muse_ui.download_lite_btn),
-        )
-        .unwrap();
-    assert_eq!(
-        action,
-        Some(Action::DownloadMusePack(ModelPackKind::TurboLiteGguf))
-    );
-    assert!(s.muse_config.enabled);
-    assert!(!s.muse_setup_open);
-    assert!(matches!(
-        s.muse_pack_state,
-        ModelPackState::Downloading {
-            kind: ModelPackKind::TurboLiteGguf,
-            ..
-        }
-    ));
-
-    // 4. Test "Disable Muse" returns cleanly to pure DAW
-    s.on(&mut ui, &Response::Command("moan.muse.disable".into()))
-        .unwrap();
-    assert!(!s.muse_config.enabled);
-    assert!(!s.muse_setup_open);
-
-    // 5. Test "Connect ACE Endpoint"
-    s.muse_pack_state = ModelPackState::NotInstalled;
-    s.on(&mut ui, &Response::Command("moan.muse.toggle".into()))
-        .unwrap();
-    s.on(
-        &mut ui,
-        &Response::Clicked(s.muse_ui.connect_endpoint_btn),
-    )
-    .unwrap();
-    assert!(s.muse_config.enabled);
-    assert!(matches!(
-        s.muse_pack_state,
-        ModelPackState::EndpointConnected { .. }
-    ));
-
+    // 3. Only the built-in synth is offered until model packs and a Muse
+    //    server are really wired up on SexOS.
     // 6. Test "Use Built-in Synth (0 MB)"
     s.on(&mut ui, &Response::Command("moan.muse.disable".into()))
         .unwrap();
@@ -155,11 +115,11 @@ fn test_2_opt_in_muse_setup_lifecycle() {
 }
 
 #[test]
-fn test_3_suno_studio_workflows() {
+fn test_3_muse_studio_workflows() {
     let (mut ui, mut s) = test_studio();
     s.muse_config.enabled = true;
 
-    // 1. "Create Song" via Suno Studio Tier 0 engine
+    // 1. "Create Song" via Muse Tier 0 engine
     s.muse_ui.prompt_input = String::from("driving electro synth");
     ui.set_text(s.muse_ui.prompt_field, "driving electro synth");
     s.on(&mut ui, &Response::Clicked(s.muse_ui.primary_action_btn))

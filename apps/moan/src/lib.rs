@@ -724,7 +724,6 @@ pub enum Action {
     RenderPlugin,
     CancelPlugin,
     Quit,
-    DownloadMusePack(moan_gen::pack::ModelPackKind),
 }
 #[derive(Clone, Copy)]
 enum Drag {
@@ -1274,9 +1273,6 @@ impl Studio {
         buttons.push((studio_rack_ui.extract_midi_btn, "Extract MIDI"));
         buttons.push((studio_rack_ui.arp_btn, "Arpeggiate"));
 
-        buttons.push((muse_ui.download_lite_btn, "Download Lite Pack (~2.4 GB)"));
-        buttons.push((muse_ui.download_xl_btn, "Download Studio XL (~7.7 GB)"));
-        buttons.push((muse_ui.connect_endpoint_btn, "Connect ACE Endpoint"));
         buttons.push((muse_ui.tier0_synth_btn, "Use Built-in Synth (0 MB)"));
         buttons.push((muse_ui.cancel_setup_btn, "Cancel Muse Setup"));
         buttons.push((muse_ui.disable_muse_btn, "Disable Muse"));
@@ -2834,9 +2830,6 @@ impl Studio {
             "Cancel render",
             "Master",
             "Disable Muse",
-            "Download Lite Pack (~2.4 GB)",
-            "Download Studio XL (~7.7 GB)",
-            "Connect ACE Endpoint",
             "Use Built-in Synth (0 MB)",
             "Cancel Muse Setup",
             "Cycle Role",
@@ -2930,43 +2923,6 @@ impl Studio {
                 self.muse_config.enabled = false;
                 self.muse_setup_open = false;
                 self.show_workspace(ui, Workspace::Arrange);
-                self.layout_document(ui);
-                None
-            }
-            "Download Lite Pack (~2.4 GB)" => {
-                self.muse_pack_state = moan_gen::pack::ModelPackState::Downloading {
-                    kind: moan_gen::pack::ModelPackKind::TurboLiteGguf,
-                    file_index: 0,
-                    bytes_received: 0,
-                    bytes_total: moan_gen::pack::ModelPackKind::TurboLiteGguf.total_bytes(),
-                };
-                self.muse_config.enabled = true;
-                self.muse_setup_open = false;
-                self.layout_document(ui);
-                Some(Action::DownloadMusePack(
-                    moan_gen::pack::ModelPackKind::TurboLiteGguf,
-                ))
-            }
-            "Download Studio XL (~7.7 GB)" => {
-                self.muse_pack_state = moan_gen::pack::ModelPackState::Downloading {
-                    kind: moan_gen::pack::ModelPackKind::StudioXlGguf,
-                    file_index: 0,
-                    bytes_received: 0,
-                    bytes_total: moan_gen::pack::ModelPackKind::StudioXlGguf.total_bytes(),
-                };
-                self.muse_config.enabled = true;
-                self.muse_setup_open = false;
-                self.layout_document(ui);
-                Some(Action::DownloadMusePack(
-                    moan_gen::pack::ModelPackKind::StudioXlGguf,
-                ))
-            }
-            "Connect ACE Endpoint" => {
-                self.muse_pack_state = moan_gen::pack::ModelPackState::EndpointConnected {
-                    url: alloc::string::String::from("http://127.0.0.1:8080"),
-                };
-                self.muse_config.enabled = true;
-                self.muse_setup_open = false;
                 self.layout_document(ui);
                 None
             }

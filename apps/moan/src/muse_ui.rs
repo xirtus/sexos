@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Opt-In Muse (Suno Studio 1.1 & 2.0) Weft Integration.
+//! Opt-In Muse Weft integration (built-in Tier 0 generation).
 //!
 //! Provides the dual-mode architecture (Pure Classic DAW default vs Opt-In Muse),
 //! the Enable Muse setup card with RAM probe and pack download options,
@@ -20,9 +20,6 @@ use weft::{Id, Layout, TextStyle, Ui};
 pub struct MuseUi {
     pub setup_card: Id,
     pub setup_ram_label: Id,
-    pub download_lite_btn: Id,
-    pub download_xl_btn: Id,
-    pub connect_endpoint_btn: Id,
     pub tier0_synth_btn: Id,
     pub cancel_setup_btn: Id,
     pub disable_muse_btn: Id,
@@ -73,7 +70,7 @@ impl MuseUi {
         );
         ui.text(
             setup_card,
-            "✨ Enable Muse (ACE-Step 1.5) · Generative Music Studio",
+            "✨ Enable Muse · Generative Music Studio",
             TextStyle::Heading,
         );
         let setup_ram_label = ui.text(
@@ -83,9 +80,6 @@ impl MuseUi {
         );
 
         let setup_btns = ui.group(setup_card, Layout::row().gap(6.0).wrap().fill_width());
-        let download_lite_btn = ui.button(setup_btns, "Download Lite Pack (~2.4 GB)");
-        let download_xl_btn = ui.button(setup_btns, "Download Studio XL (~7.7 GB)");
-        let connect_endpoint_btn = ui.button(setup_btns, "Connect ACE Endpoint");
         let tier0_synth_btn = ui.button(setup_btns, "Use Built-in Synth (0 MB)");
         let cancel_setup_btn = ui.button(setup_btns, "Cancel Muse Setup");
         let disable_muse_btn = ui.button(setup_btns, "Disable Muse");
@@ -146,7 +140,7 @@ impl MuseUi {
         );
         ui.text(
             muse_workspace,
-            "✨ Moan Muse · Full Suno Studio Songwriting Canvas",
+            "✨ Moan Muse · Songwriting Canvas",
             TextStyle::Heading,
         );
         let ws_tier_badge = ui.text(
@@ -172,9 +166,6 @@ impl MuseUi {
         Self {
             setup_card,
             setup_ram_label,
-            download_lite_btn,
-            download_xl_btn,
-            connect_endpoint_btn,
             tier0_synth_btn,
             cancel_setup_btn,
             disable_muse_btn,

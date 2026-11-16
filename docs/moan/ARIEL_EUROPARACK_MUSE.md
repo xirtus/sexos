@@ -7,10 +7,20 @@ This document is the architectural specification and user guide covering:
 2. **Ariel Formant Synthesizer (`crates/moan-core/src/vocal.rs`, `phonemes.rs`, `pronounce.rs`)**: Parallel-formant speech and singing synthesis, full directive DSL, phoneme engines, karaoke synchronization, and Piano Roll MIDI singing.
 3. **EuropaRack Modular Patchbay (`crates/moan-modular`)**: 64-frame block scheduler, 16-channel polyphonic 1V/oct CV/Gate/Audio/MIDI routing, cycle feedback stabilization, 19 built-in modules, Dark Room mode, and sub-patch selection interchange.
 4. **Studio 2.0 Core DSP & Composition Tools (`crates/moan-core`)**: Prism Wavetable, multi-mode Distortion, visual Parametric EQ curves, WSOLA Warping (Transpose, Speed, On Beat), offline Extract MIDI, Musical Typing + Arpeggiator, and Track Automation.
-5. **Muse Generative Engine (`crates/moan-gen`, `apps/moangen`, `scripts/start_moan_ace_bridge.sh`)**: 4-tier hardware budget, ephemeral worker execution, Suno Studio 1.1 + 2.0 workflows, Natural-Language Studio Chat Bar, and host bridge CLI.
+5. **Muse Generative Engine (`crates/moan-gen`, `apps/moangen`, `scripts/start_moan_ace_bridge.sh`)**: 4-tier hardware budget, ephemeral worker execution, Muse workflows, Natural-Language Studio Chat Bar, and host bridge CLI.
 6. **`MOANPRJ` v4 Compatibility & Serialization**: Preserving byte-identical v1/v2/v3 projects and security rules for persistent metadata.
 
 ---
+
+## Status (2026-11-16)
+
+What runs in Moan on SexOS today: Ariel, EuropaRack, the Studio 2.0 DSP tools and
+**Tier 0** Muse generation (pure Rust, no model). Tiers 1 to 3 are groundwork only:
+`crates/moan-gen` has the request/response codecs and tier selection, and
+`scripts/start_moan_ace_bridge.sh` can fetch the open ACE-Step 1.5 weights and serve them on
+a host, but Moan does not yet talk to a Muse server or run a local model, so its setup card
+offers only the built-in synth. The dialog below is the target design. Moan's UI shows only
+our own names ("Muse"), never a third-party product or model name.
 
 ## 1. Dual-Mode Design: Classic DAW vs. Opt-In Muse
 
@@ -333,9 +343,9 @@ To ensure the DAW never competes with generative models for RAM during playback 
 [ Moan DAW Auditions Audio & Seamlessly Places Takes on Timeline ]
 ```
 
-### 5.3 Suno Studio 1.1 + 2.0 Generative Workflows
+### 5.3 Muse Generative Workflows
 
-Moan Studio implements the full suite of Suno Studio generative paradigms (`crates/moan-gen/src/job.rs`):
+Moan Studio implements the full suite of Muse generative paradigms (`crates/moan-gen/src/job.rs`):
 
 1. **Create Song (`MuseMode::CreateSong`)**:
    Generates a full composition from a text prompt and optional lyrics, specifying BPM, key/scale, time signature, duration, batch count, and optional Chain-of-Thought reasoning (`thinking_cot`).

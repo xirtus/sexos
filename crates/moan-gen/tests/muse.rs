@@ -115,7 +115,7 @@ fn test_ram_tier_selection_across_hardware() {
     let sel_remote = select_tier(2048, &uninstalled, true, None);
     assert_eq!(sel_remote.tier, RamTier::Tier1RemoteBridge);
     assert_eq!(sel_remote.estimated_peak_mb, 8);
-    assert!(sel_remote.badge_text.contains("Remote ACE Bridge"));
+    assert!(sel_remote.badge_text.contains("Remote Muse server"));
 
     // User preference override
     let sel_pref = select_tier(32768, &installed_studio, false, Some(RamTier::Tier0Featherweight));

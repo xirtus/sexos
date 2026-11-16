@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Moan Muse: Opt-In Generative Music Engine, Model-Pack Lifecycle & 4-Tier Supervisor.
 //!
-//! Provides ACE-Step 1.5 & Suno Studio 1.1/2.0 generative workflows, 4-tier adaptive
+//! Provides ACE-Step 1.5 & Muse generative workflows, 4-tier adaptive
 //! RAM supervision (from < 2 MiB offline Tier 0 to 7.7 GB local Studio XL), pure `#![no_std]`
 //! RIFF WAV/JSON codecs, and sample-accurate stem model.
 

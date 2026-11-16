@@ -55,7 +55,7 @@ pub fn select_tier(
             RamTier::Tier1RemoteBridge if endpoint_healthy => {
                 return TierSelection {
                     tier: RamTier::Tier1RemoteBridge,
-                    badge_text: "⚡ Remote ACE Bridge (Preferred)",
+                    badge_text: "⚡ Remote Muse server (Preferred)",
                     estimated_peak_mb: 8,
                     reason: "User preferred remote bridge with verified healthy endpoint",
                 };
@@ -100,9 +100,9 @@ pub fn select_tier(
     if endpoint_healthy {
         TierSelection {
             tier: RamTier::Tier1RemoteBridge,
-            badge_text: "⚡ Remote ACE Bridge",
+            badge_text: "⚡ Remote Muse server",
             estimated_peak_mb: 8,
-            reason: "Connected to remote ACE endpoint with zero local model RAM overhead",
+            reason: "Connected to a remote Muse server with zero local model RAM overhead",
         }
     } else if available_ram_mb >= 20480
         && matches!(pack, ModelPackState::Installed { kind: ModelPackKind::StudioXlGguf, .. })

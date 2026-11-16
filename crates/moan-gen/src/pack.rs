@@ -121,8 +121,8 @@ impl ModelPackKind {
     /// Name of the pack.
     pub fn label(&self) -> &'static str {
         match self {
-            Self::TurboLiteGguf => "ACE-Step 1.5 Turbo-Lite GGUF (~2.4 GB)",
-            Self::StudioXlGguf => "Suno Studio / ACE-Step XL Studio GGUF (~7.7 GB)",
+            Self::TurboLiteGguf => "Muse Lite model pack (~2.4 GB)",
+            Self::StudioXlGguf => "Muse Studio XL model pack (~7.7 GB)",
         }
     }
 

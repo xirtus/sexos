@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Prism Wavetable: Suno Studio 2.0 dual morphing wavetable synthesizer.
+//! Prism Wavetable: Muse dual morphing wavetable synthesizer.
 //! Features Basic Analog, Harmonic/Formant, and Digital/FM tables with phase warp,
 //! resonant lowpass filter, and visual curve rendering for Weft UI.
 

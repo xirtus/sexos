@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Stem Model, Take History, Version Switcher (< Version 1 / 2 >), and Suno Studio TakeCrate.
+//! Stem Model, Take History, Version Switcher (< Version 1 / 2 >), and Muse TakeCrate.
 //!
 //! Stores generated takes, variations, separated multi-track stems, and timed lyrics,
-//! supporting Suno Studio's left Takes strip, version switching, Remix, and Insert All.
+//! supporting Muse left Takes strip, version switching, Remix, and Insert All.
 
 use alloc::{string::String, sync::Arc, vec::Vec};
 use moan_core::{Frame, RATE};
@@ -41,7 +41,7 @@ pub struct TakeVersion {
     pub created_at_ms: u64,
 }
 
-/// A take container in Suno Studio's left takes strip.
+/// A take container in Muse left takes strip.
 #[derive(Clone, Debug)]
 pub struct TakeCrate {
     pub id: u64,
@@ -112,7 +112,7 @@ impl TakeCrate {
         Ok(version_index)
     }
 
-    /// Switch active version (Suno Studio `< Version 1 / 2 >` switcher).
+    /// Switch active version (Muse `< Version 1 / 2 >` switcher).
     pub fn switch_version(&mut self, version_idx: usize) -> Result<(), MuseError> {
         if version_idx >= self.versions.len() {
             return Err(MuseError::InvalidParameters("Version index out of bounds"));
@@ -138,7 +138,7 @@ impl TakeCrate {
         }
     }
 
-    /// Suno Studio `↻ Remix`: construct a fresh generation request from active parameters.
+    /// Muse `↻ Remix`: construct a fresh generation request from active parameters.
     pub fn remix(&self) -> MuseMode {
         let duration_frames = self.active_audio().map(|a| a.len()).unwrap_or(48000 * 30);
         MuseMode::CreateSong {
@@ -154,7 +154,7 @@ impl TakeCrate {
         }
     }
 
-    /// Suno Studio `← Insert All`: returns all active stems ready to be placed on Moan tracks.
+    /// Muse `← Insert All`: returns all active stems ready to be placed on Moan tracks.
     pub fn insert_all(&self) -> Vec<(StemRole, Arc<Vec<Frame>>)> {
         self.active_stems().to_vec()
     }

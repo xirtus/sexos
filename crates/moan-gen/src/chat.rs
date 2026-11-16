@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Suno Studio 2.0 Natural-Language Chat Bar Parser.
+//! Muse Natural-Language Chat Bar Parser.
 //!
 //! Parses natural language prompts, slash commands, and context-sensitive edit intents
 //! into structured `StudioChatCommand` actions (Muse generation, MIDI clips, device presets,
@@ -9,7 +9,7 @@ use alloc::{string::String, vec::Vec};
 use moan_core::RATE;
 use crate::job::{MuseMode, StemRole};
 
-/// Parsed studio chat action dispatched by Moan's Suno Studio 2.0 bar.
+/// Parsed studio chat action dispatched by Moan's Muse bar.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StudioChatCommand {
     /// Execute a full generative Muse job (Create, AddLayer, Replace, Extend, Cover, etc.).
@@ -33,7 +33,7 @@ pub enum StudioChatCommand {
     SetSessionTempoBpm(u16),
 }
 
-/// Parse user input from Suno Studio's natural language command bar.
+/// Parse user input from Muse natural language command bar.
 pub fn parse_studio_chat(
     input: &str,
     has_selection: bool,

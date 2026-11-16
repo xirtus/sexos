@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Standalone `#![no_std]` Suno Studio 2.0 Musical Typing keyboard, scale quantization,
+//! Standalone `#![no_std]` Muse Musical Typing keyboard, scale quantization,
 //! chord expansion, and 48 kHz arpeggiator engine.
 
 extern crate alloc;

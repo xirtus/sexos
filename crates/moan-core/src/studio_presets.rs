@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 extern crate alloc;
 
-// Suno Studio 2.0 Natural-Language Preset Designer & Genre Style Blueprint Catalog.
+// Muse Natural-Language Preset Designer & Genre Style Blueprint Catalog.
 //
 // Provides deterministic natural-language sound design for the Studio Chat Bar,
 // converting prompt descriptions into concrete synthesizer and FX specifications,
@@ -14,7 +14,7 @@ extern crate alloc;
 // 1. Concrete Parameter Structs & Patch Specs
 // ============================================================================
 
-/// Synthesizer patch specification for Suno Studio 2.0 synth engines.
+/// Synthesizer patch specification for Muse synth engines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SynthPatchSpec {
     pub name: &'static str,
@@ -920,7 +920,7 @@ pub fn snare_pattern_16(hits: u8) -> u16 {
     }
 }
 
-/// Genre & Song Structure Blueprint for Suno Studio 2.0 Chat and Muse Generation.
+/// Genre & Song Structure Blueprint for Muse Chat and Muse Generation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SongBlueprint {
     pub genre: &'static str,

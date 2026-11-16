@@ -6,7 +6,7 @@
 //! - AddLayer: context-aware overdub conditioned on Moan's reference mix window
 //! - ReplaceSection: inpainting with equal-power crossfade splicing (non-selected frames stay bit-identical!)
 //! - Extend: seamless musical continuation
-//! - Cover: Suno Studio "Mouth Beat" / hummed mic-to-instrument transformation
+//! - Cover: Muse "Mouth Beat" / hummed mic-to-instrument transformation
 //! - Vocal2Bgm: full backing arrangement around dry vocals
 //! - ExtractStems: 6-stem separation (Vocals, Drums, Bass, Chords, FX, Other)
 //! - MidiToAudio: MIDI guide to rich studio audio
@@ -366,7 +366,7 @@ impl Tier0Engine {
         })
     }
 
-    /// Suno Studio "Mouth Beat" / hummed mic-to-instrument transformation or style cover.
+    /// Muse "Mouth Beat" / hummed mic-to-instrument transformation or style cover.
     pub fn cover(
         &self,
         nonce: [u8; 16],
@@ -527,7 +527,7 @@ impl Tier0Engine {
         })
     }
 
-    /// Suno Studio 2.0 MIDI-as-Prompt: bakes MIDI guide and renders studio audio.
+    /// Muse MIDI-as-Prompt: bakes MIDI guide and renders studio audio.
     pub fn midi_to_audio(
         &self,
         nonce: [u8; 16],

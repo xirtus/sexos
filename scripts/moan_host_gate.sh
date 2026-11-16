@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-3.0-only
 set -euo pipefail
 cd "$(dirname "$0")/.."
-cargo test --locked -p moan-core
+cargo test --locked -p moan-core -p moan-modular -p moan-gen
+cargo test --locked -p moangen --no-default-features
 # Qualify the waveform checks against the real DSP before booting QEMU.
 MOAN_TEST_DIR="$(mktemp -d)"
 trap 'rm -rf "$MOAN_TEST_DIR"' EXIT

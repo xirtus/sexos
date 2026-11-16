@@ -93,7 +93,7 @@ impl MuseError {
     }
 }
 
-/// Suno Studio 1.1 / 2.0 stem categories.
+/// Muse stem categories.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum StemRole {
     Vocals,
@@ -147,7 +147,7 @@ impl StemRole {
     }
 }
 
-/// Generative mode corresponding to Suno Studio 1.1 + 2.0 workflows.
+/// Generative mode corresponding to Muse workflows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MuseMode {
     /// Full song creation from prompt and optional lyrics.
@@ -162,11 +162,11 @@ pub enum MuseMode {
         thinking_cot: bool,
         batch_count: u8,
     },
-    /// Suno Studio context-aware overdub conditioned on Moan's rendered reference mix window.
+    /// Muse context-aware overdub conditioned on Moan's rendered reference mix window.
     AddLayer {
         role: StemRole,
     },
-    /// Suno Studio timeline Replace inpainting with smooth equal-power crossfade splicing.
+    /// Muse timeline Replace inpainting with smooth equal-power crossfade splicing.
     ReplaceSection {
         from_frame: usize,
         to_frame: usize,
@@ -176,7 +176,7 @@ pub enum MuseMode {
         from_frame: usize,
         extra_frames: usize,
     },
-    /// Suno Studio "Mouth Beat" / hummed mic-to-instrument transformation or style cover.
+    /// Muse "Mouth Beat" / hummed mic-to-instrument transformation or style cover.
     Cover {
         style_strength_pct: u8,
     },
@@ -184,7 +184,7 @@ pub enum MuseMode {
     Vocal2Bgm,
     /// Splits audio into StemRole::{Vocals, Drums, Bass, Chords, Fx, Other}.
     ExtractStems,
-    /// Suno Studio 2.0 MIDI-as-Prompt: bakes MIDI guide and renders studio audio.
+    /// Muse MIDI-as-Prompt: bakes MIDI guide and renders studio audio.
     MidiToAudio,
     /// Extracts detected_bpm, detected_key, caption, and timed LRC lyrics.
     UnderstandAudio,
