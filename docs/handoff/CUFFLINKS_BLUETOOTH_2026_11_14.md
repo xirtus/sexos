@@ -1,4 +1,4 @@
-# Cufflinks: native Bluetooth, slices W1, W1b, W2, W3 and W2b (2026-11-14/15)
+# Cufflinks: native Bluetooth, slices W1, W1b, W2, W3, W2b and W3b (2026-11-14/15)
 
 Cufflinks is SexOS's own Bluetooth stack: no BlueZ, no Linux bridge, no Tuxedo. W1
 delivers the transport, the Intel firmware load, controller bring-up, discovery and
@@ -7,9 +7,10 @@ GATT), bonds kept on disk, and a bounded pairing policy in place of the desktop 
 W3 adds headphones: A2DP Source with our own SBC encoder, Bell's mix routed to the
 headset, and ACL flow control. W2b adds the desktop: the Shell's Bluetooth panel
 (Super+Shift+B) with scan, pair, forget and the numeric-comparison prompt, which
-replaces the pairing window as the normal way to pair.
+replaces the pairing window as the normal way to pair. W3b adds the headset's buttons
+and volume (AVRCP).
 Plan row: `APP_PARITY_PLAN_2026_11_14.md` section W. W2 sections: 7 to 10 below; W3:
-sections 11 to 14; W2b: sections 15 to 18.
+sections 11 to 14; W2b: sections 15 to 18; W3b: sections 19 to 21.
 
 ## 1. What W1 delivers
 
@@ -255,7 +256,7 @@ otherwise `[cufflinks.audio.skip] reason=no_prompt` until the desktop prompt (W2
 Not done (next slices):
 
 - AAC (needs FFmpeg as a library or our own encoder), mSBC/HFP (headset microphone),
-  AVRCP (play/pause and volume buttons from the headset), delay reporting, content
+  ~~AVRCP (play/pause and volume buttons from the headset)~~ (W3b, section 19), delay reporting, content
   protection (SCMS-T), the tray item and the Tatami Bluetooth page.
 - 44.1 kHz-only sinks: we stream 48 kHz only (A2DP requires sinks to support both, so
   this should not bite); a resampler would lift it.
@@ -378,3 +379,72 @@ x17 receipt (after section 14):
 5. A device that tries to pair by itself while the panel is closed: the panel opens with
    the question; leave it 30 s: `accepted=0 reason=timeout`.
 
+## 19. W3b: headset buttons and volume (AVRCP)
+
+Roles, as a phone has them: we are AVRCP **Target** (category 1) for the headset's
+PASS THROUGH buttons, and **Controller** (category 2) for absolute volume (AVRCP 1.4:
+we register for EVENT_VOLUME_CHANGED and send SetAbsoluteVolume).
+
+| Piece | Where | What |
+|---|---|---|
+| AVCTP/AVRCP | `sex_bt::avrcp` | AVCTP single packets (start/continue/end fragments dropped: nothing we accept needs more than the 48-byte minimum MTU, so no reassembly to grow), AV/C frames, AVRCP vendor-dependent PDUs (SIG company id, AVRCP fragments refused, parameter length checked against the frame). `Remote`: as target, PASS THROUGH play, pause, stop, forward, backward, volume up/down, mute -> `Out::Key` (others NOT IMPLEMENTED), UNIT/SUBUNIT INFO, GetCapabilities (company id; no events), other PDUs REJECTED, other profile ids answered with IPID; as controller, the volume registration (again after each CHANGED, only on its own label), SetAbsoluteVolume (nothing sent when the headset is at that volume already). One packet in gives at most one packet out, never more than 515 bytes; frames over 512 bytes are dropped |
+| SDP | `sex_bt::sdp` | Our server also lists an AVRCP Target record (0x110C, features 0x0001) and a Controller record (0x110E/0x110F, features 0x0002), AVCTP 1.4 on PSM 0x17, AVRCP 1.4 |
+| Host | `sex_bt::host` | Opens AVCTP (PSM 0x17) once a stream is ready (`AudioReady`) unless the headset has one, and accepts the headset's (same rule as AVDTP: bonded or encrypted to open; a second channel replaces the first). AVRCP starts, and data on the channel counts, only on an encrypted classic link to a bonded device: before encryption nothing is taken or sent, and an Encryption Change to off stops it again. Notes `RemoteReady`, `RemoteKey`, `RemoteVolume { volume, changed }`, `RemoteNoVolume`, `RemoteClosed`; `remote_volume`, `set_remote_volume` |
+| Buttons | `servers/cufflinks/src/remote.rs`, `main.rs` | The headset gets a device number in the HID mailbox (its handle with bit 15 set, apart from a HID device on the same link) and its buttons go as keyboard snapshots: play/pause, stop, previous, next as the reserved keyboard usages 0xE8, 0xE9, 0xEA, 0xEB (the media usages some keyboards send), volume up/down and mute as 0x80, 0x81, 0x7F. A press with no release is let go after 2 s. SexUSB merges them like any keyboard; Input maps 0xE8..0xEB to `KEY_PLAY_PAUSE`, `KEY_STOP`, `KEY_PREVIOUS`, `KEY_NEXT` (4 lines in `servers/sexinput/src/main.rs`); the Shell's existing media keys do the rest. No new Shell protocol, no Shell change |
+| Volume | `remote.rs`, `sex_pdx::bt_audio`, `servers/sexbell/src/sound.rs` | Bell's master volume is the one volume. Bell writes master and mute into the `bt_audio` header (`MASTER`) whenever it answers a mixer request; Cufflinks sends it to the headset (0..100 -> 0..127, rounded both ways so it maps back exactly) whenever it changes. The headset's own buttons (a CHANGED) become one volume key press toward it (the Shell's 5% step, its OSD and tick); the new master goes back to the headset, which so snaps to the system's step. A headset volume within half a step of the master (our own setting echoed back) presses nothing, so there is no loop. While the streaming headset does absolute volume Cufflinks sets `HEADSET_VOLUME` and Bell leaves the master volume out of the mix it sends there (mute still silences it), so the volume is applied once, by the headset. A headset without absolute volume keeps its own volume; its VOL UP/DOWN buttons, if it sends them, are volume keys |
+
+Kernel and ABI: none. `sex_pdx::bt_audio` gains two header words (`MASTER`,
+`HEADSET_VOLUME`) inside the existing 4 KiB header; the region, its size and slot are
+unchanged, and `bt_audio.rs` is not an ABI input, so `spec/abi_inputs.sha256` is not
+re-pinned. No new syscalls, PDX operations or routes.
+
+## 20. W3b boot log and tests
+
+- Log: `[cufflinks.remote] addr=… handle=… device=… followed=1`,
+  `[cufflinks.remote.key] handle=… key=PlayPause pressed=1`,
+  `[cufflinks.remote.volume] handle=… headset=… changed=…` (the headset's volume),
+  `… set=…` (sent to it), `… key=0x80` (a headset button became a volume key),
+  `… absolute=0` (no absolute volume), `[cufflinks.audio.volume] headset=1`,
+  `[cufflinks.remote.closed]`.
+- `crates/sex-bt/tests/avrcp_peers.rs` (in `bash scripts/bt_host_gate.sh`): a bonded
+  headset pages us, the link is encrypted, it opens AVCTP; its PLAY, PAUSE, FORWARD,
+  BACKWARD and STOP presses and releases come out as keys and are ACCEPTED, REWIND is
+  NOT IMPLEMENTED; absolute volume both ways (INTERIM, CHANGED and our re-registration,
+  a stale CHANGED ignored, SetAbsoluteVolume, no echo, clamping, nothing while
+  encryption is off); a headset that refuses the registration or has no AVRCP profile:
+  `RemoteNoVolume`, no SetAbsoluteVolume, its volume buttons as keys; an unencrypted
+  link (the headset opens AVCTP early): buttons and volume ignored and nothing sent
+  until encryption, ignored again when it goes off; 23 hostile frames (AVCTP fragments,
+  lying lengths, cut-short frames, other companies, AVRCP fragments, other profile ids,
+  frames too long to echo, responses to nothing) each get the exact bounded answer or
+  none; 200,000 random packets into `Remote` (at most one answer each, at most 515
+  bytes, volumes in range) and 3,000 through the host never panic; our SDP records.
+  `a2dp_peers.rs` checks that AVCTP opens after the stream and the volume registration
+  arrives.
+- `tests/cufflinks_remote.rs` (same gate): the volume scales round-trip for 0..100,
+  buttons to snapshots, a lost release let go after 2 s, the first headset followed,
+  volume both ways with no loop, nothing without absolute volume.
+- `tests/usb_wheel.rs` (`scripts/usb_wheel_host_gate.sh`): Input maps the media usages.
+- The `sex_pdx::bt_audio` ring test covers the two new words.
+
+## 21. W3b: not done, and the x17 receipt
+
+Not done: PLAY and PAUSE are one toggle (we offer no PLAYBACK_STATUS events, so the
+headset alternates them by its own guess); no AVRCP browsing, track metadata or player
+events as target; a headset's sweep of several volume steps in one CHANGED moves the
+master one step (then the headset is snapped back to it); fragmented AVCTP is dropped
+rather than reassembled; one headset's buttons are followed at a time (the first);
+without Bell's region (or before Bell has answered a mixer request) the headset's
+volume is not mirrored. QEMU has no Bluetooth controller: on hardware only.
+
+x17 receipt (after section 18), with bonded headphones that do AVRCP 1.4:
+
+1. Connect them: `[cufflinks.remote] … followed=1`, `[cufflinks.remote.volume] …
+   headset=…`, then `… set=…` with the system volume, `[cufflinks.audio.volume]
+   headset=1`.
+2. Play music (Qupid); press the headset's play/pause: `[cufflinks.remote.key] …
+   PlayPause pressed=1`, the music pauses; press again, it plays. Next/previous too.
+3. Press the headset's volume up: `[cufflinks.remote.volume] … changed=1`, `… key=0x80`,
+   the Shell's volume OSD moves 5%, then `… set=…`. Press the keyboard's volume keys:
+   the headset gets louder or quieter (`… set=…`), without the OSD bouncing back.
+4. Send the lines if the volume jumps around (a loop) or a button does nothing.

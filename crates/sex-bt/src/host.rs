@@ -15,6 +15,11 @@
 //! [`Host::play`] encodes PCM into RTP media packets, only on an encrypted link to a
 //! bonded device and only as fast as the controller frees ACL buffers.
 //!
+//! Headset buttons and volume (AVRCP on AVCTP, PSM 0x17): once a stream is ready we
+//! open the control channel (a headset may open it first); passthrough buttons come out
+//! as [`Note::RemoteKey`], the headset's absolute volume as [`Note::RemoteVolume`], and
+//! [`Host::set_remote_volume`] sets it. Only on an encrypted link to a bonded device.
+//!
 //! ACL flow control: ACL packets go to the controller only while it has buffers free
 //! (Read Buffer Size, then Number Of Completed Packets gives them back), per pool
 //! (classic, LE, or one shared pool).
@@ -22,6 +27,7 @@
 use crate::a2dp;
 use crate::att;
 use crate::avdtp::{self, Source};
+use crate::avrcp::{self, Remote};
 use crate::sbc;
 use crate::sdp;
 use crate::bonds::{Bonds, LeBond};
@@ -91,6 +97,15 @@ pub enum Note {
     AudioClosed { handle: u16 },
     /// Audio setup stopped: an AVDTP or SDP error code, or `avdtp::error::NO_*`.
     AudioFailed { handle: u16, code: u16 },
+    /// AVRCP is up on a secure link: the headset's buttons may come.
+    RemoteReady { handle: u16, addr: Addr },
+    /// A headset button went down or up.
+    RemoteKey { handle: u16, key: avrcp::Key, pressed: bool },
+    /// The headset's absolute volume (0..=127); `changed` when its own buttons moved it.
+    RemoteVolume { handle: u16, volume: u8, changed: bool },
+    /// The headset does no absolute volume (its volume buttons come as keys, if at all).
+    RemoteNoVolume { handle: u16 },
+    RemoteClosed { handle: u16 },
 }
 
 /// Media packets a stream may have queued or in the controller at once (about 100 ms
@@ -137,12 +152,14 @@ struct Conn {
     audio: Option<Box<Audio>>,
     /// ACL packets sent and not yet completed by the controller.
     outstanding: u16,
+    /// The AVCTP control channel (our cid) and its AVRCP.
+    remote: Option<(u16, Remote)>,
 }
 
 impl Conn {
     fn new(handle: u16, addr: Addr, addr_type: u8, le: bool, central: bool, hid: bool) -> Conn {
         Conn { handle, addr, addr_type, le, central, rx: Reassembly::default(), smp: None, ltk: None, encrypted: false, hid,
-            chans: Channels::default(), gatt: None, hid_ready: false, audio_wanted: false, audio: None, outstanding: 0 }
+            chans: Channels::default(), gatt: None, hid_ready: false, audio_wanted: false, audio: None, outstanding: 0, remote: None }
     }
 }
 
@@ -351,6 +368,51 @@ impl Host {
     /// Set a stream up on a link whose headset opened AVDTP signaling but has not
     /// configured a stream itself (we become initiator).
     pub fn start_audio(&mut self, handle: u16) { self.with_source(handle, |s| s.start()); }
+
+    /// The headset's absolute volume, when it does absolute volume.
+    pub fn remote_volume(&self, handle: u16) -> Option<u8> {
+        self.conns.iter().find(|c| c.handle == handle)?.remote.as_ref()?.1.absolute_volume()
+    }
+    /// Set the headset's absolute volume (0..=127); nothing unless it does absolute volume
+    /// and the link is secure, or when it is at that volume already.
+    pub fn set_remote_volume(&mut self, handle: u16, volume: u8) {
+        if !self.secure(handle) { return; }
+        let out = self.conn(handle).and_then(|c| c.remote.as_mut()).map(|r| r.1.set_volume(volume)).unwrap_or_default();
+        self.remote_out(handle, out);
+    }
+
+    /// A classic link that is encrypted and to a bonded device: the only kind that may
+    /// drive buttons or volume (an address alone proves nothing).
+    fn secure(&self, handle: u16) -> bool {
+        self.conns.iter().find(|c| c.handle == handle).is_some_and(|c| !c.le && c.encrypted && self.bonds.classic_for(&c.addr).is_some())
+    }
+
+    /// AVRCP on a secure link: register for the headset's volume (once).
+    fn remote_start(&mut self, handle: u16) {
+        if !self.secure(handle) { return; }
+        let Some(c) = self.conn(handle) else { return };
+        let addr = c.addr;
+        let Some((_, r)) = c.remote.as_mut().filter(|r| !r.1.started) else { return };
+        let resumed = r.resumed;
+        let out = r.start();
+        // Announced once per channel: a resume after encryption came back only registers again.
+        if !resumed { self.notes.push_back(Note::RemoteReady { handle, addr }); }
+        self.remote_out(handle, out);
+    }
+
+    fn remote_out(&mut self, handle: u16, out: Vec<avrcp::Out>) {
+        for o in out {
+            match o {
+                avrcp::Out::Send(p) => {
+                    let Some(remote) = self.conn(handle).and_then(|c| { let l = c.remote.as_ref()?.0; c.chans.by_local(l).filter(|ch| ch.open).map(|ch| ch.remote) }) else { continue };
+                    self.send_l2cap(handle, remote, &p);
+                }
+                avrcp::Out::Key { key, pressed } => self.notes.push_back(Note::RemoteKey { handle, key, pressed }),
+                avrcp::Out::Volume { volume, changed } => self.notes.push_back(Note::RemoteVolume { handle, volume, changed }),
+                avrcp::Out::NoVolume => self.notes.push_back(Note::RemoteNoVolume { handle }),
+            }
+        }
+    }
 
     fn with_source(&mut self, handle: u16, f: impl FnOnce(&mut Source) -> Vec<avdtp::Out>) {
         let Some(a) = self.conn(handle).and_then(|c| c.audio.as_mut()) else { return };
@@ -621,7 +683,10 @@ impl Host {
                 } else if status == 0 {
                     // Encryption turned off: nothing more is trusted on this link
                     // (HID input and AVDTP are ignored, audio stops) until it is back on.
-                    if let Some(c) = self.conn(handle) { c.encrypted = false; }
+                    if let Some(c) = self.conn(handle) {
+                        c.encrypted = false;
+                        if let Some(r) = c.remote.as_mut() { r.1.suspend(); }
+                    }
                     // Nothing already queued for the link goes out in the clear either
                     // (media waiting for controller buffers): re-securing the link takes
                     // HCI commands, not ACL data.
@@ -674,6 +739,8 @@ impl Host {
         let Some(c) = self.conn(handle) else { return };
         c.encrypted = true;
         let (le, central, hid) = (c.le, c.central, c.hid);
+        // AVCTP opened before encryption (a bonded headset may): its AVRCP starts now.
+        self.remote_start(handle);
         if le {
             if !central {
                 // Responder: hand over the keys the initiator asked for.
@@ -722,6 +789,21 @@ impl Host {
                 ChanEvent::Send(p) => self.send_l2cap(handle, l2cap::CID_SIGNALING, &p),
                 ChanEvent::Open { psm, local } if psm == sdp::PSM || psm == avdtp::PSM => self.audio_chan_open(handle, psm, local),
                 ChanEvent::Closed { psm, local } if psm == sdp::PSM || psm == avdtp::PSM => self.audio_chan_closed(handle, local),
+                ChanEvent::Open { psm: avrcp::PSM, local } => {
+                    let Some(c) = self.conn(handle) else { return };
+                    // One control channel per link: a second one (both sides opened at
+                    // once) replaces the first.
+                    let old = c.remote.replace((local, Remote::new())).map(|r| r.0).filter(|l| *l != local);
+                    if let Some(l) = old { self.close_chan(handle, l); }
+                    self.remote_start(handle);
+                }
+                ChanEvent::Closed { psm: avrcp::PSM, local } => {
+                    let Some(c) = self.conn(handle) else { return };
+                    if c.remote.as_ref().is_some_and(|r| r.0 == local) {
+                        c.remote = None;
+                        self.notes.push_back(Note::RemoteClosed { handle });
+                    }
+                }
                 ChanEvent::Open { psm, .. } => {
                     let Some(c) = self.conn(handle) else { return };
                     // We opened control: interrupt next. Both open: boot protocol, then input.
@@ -778,7 +860,11 @@ impl Host {
                 let (addr, frames) = (c.addr, p.frames_per_packet() as u8);
                 a.packets = Some(p);
                 let out = a.source.media_opened();
+                // The headset's buttons and volume: open AVRCP's control channel unless
+                // the headset has (or is opening) one.
+                let control = c.chans.by_psm(avrcp::PSM).is_none().then(|| c.chans.connect(avrcp::PSM));
                 self.notes.push_back(Note::AudioReady { handle, addr, config, frames_per_packet: frames });
+                if let Some(p) = control { self.send_l2cap(handle, l2cap::CID_SIGNALING, &p); }
                 self.avdtp_out(handle, out);
             }
             None => {
@@ -824,7 +910,7 @@ impl Host {
         let Some(c) = self.conn(handle) else { return };
         let ours = c.audio.as_mut().and_then(|a| a.sdp.as_mut()).filter(|(l, _)| *l == cid);
         let Some((_, client)) = ours else {
-            let r = sdp::serve(payload, &[sdp::a2dp_source_record()]);
+            let r = sdp::serve(payload, &[sdp::a2dp_source_record(), sdp::avrcp_target_record(), sdp::avrcp_controller_record()]);
             self.send_l2cap(handle, remote, &r);
             return;
         };
@@ -852,6 +938,15 @@ impl Host {
                 self.notes.push_back(Note::AudioFailed { handle, code });
             }
         }
+    }
+
+    fn on_avctp(&mut self, handle: u16, cid: u16, payload: &[u8]) {
+        // Buttons and volume only from a bonded, encrypted headset (no spoofed presses).
+        if !self.secure(handle) { return; }
+        let Some(c) = self.conn(handle) else { return };
+        let Some((_, r)) = c.remote.as_mut().filter(|r| r.0 == cid) else { return };
+        let out = r.on_packet(payload);
+        self.remote_out(handle, out);
     }
 
     fn on_avdtp(&mut self, handle: u16, cid: u16, payload: &[u8]) {
@@ -927,11 +1022,11 @@ impl Host {
                 // HID channels to us: only from a bonded device, on an encrypted link or one
                 // that will be (the link key is known). Input on them is ignored until the
                 // link is encrypted, so a peer that only spoofs the address injects nothing.
-                // The same for AVDTP (a bonded headset reconnecting); SDP (what we offer) is
-                // open to any link we let in.
+                // The same for AVDTP and AVCTP (a bonded headset reconnecting); SDP (what we
+                // offer) is open to any link we let in.
                 let allow = move |psm: u16| -> Result<(), u16> {
                     if psm == sdp::PSM { return Ok(()); }
-                    if psm != hidp::PSM_CONTROL && psm != hidp::PSM_INTERRUPT && psm != avdtp::PSM { return Err(l2cap::PSM_NOT_SUPPORTED); }
+                    if psm != hidp::PSM_CONTROL && psm != hidp::PSM_INTERRUPT && psm != avdtp::PSM && psm != avrcp::PSM { return Err(l2cap::PSM_NOT_SUPPORTED); }
                     if bonded || encrypted { Ok(()) } else { Err(l2cap::SECURITY_BLOCK) }
                 };
                 for (code, id, data) in l2cap::commands(payload) {
@@ -975,13 +1070,14 @@ impl Host {
                 self.gatt_out(handle, out);
             }
             cid => {
-                // Classic HID channels.
+                // Classic dynamic channels: SDP, AVDTP, AVCTP, HID.
                 let Some(c) = self.conns.iter().find(|c| c.handle == handle) else { return };
                 let Some(ch) = c.chans.by_local(cid).copied() else { return };
                 if ch.psm == sdp::PSM { return self.on_sdp(handle, cid, ch.remote, payload); }
                 if !c.encrypted { return; }
                 match ch.psm {
                     avdtp::PSM => self.on_avdtp(handle, cid, payload),
+                    avrcp::PSM => self.on_avctp(handle, cid, payload),
                     hidp::PSM_INTERRUPT => {
                         if let Some(input) = hidp::input(payload) { self.notes.push_back(Note::Input { handle, input }); }
                     }
