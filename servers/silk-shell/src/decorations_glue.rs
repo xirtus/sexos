@@ -50,15 +50,17 @@ unsafe fn menu_open(frame: u32, sid: u64, x: i32, y: i32) {
     let current = (*core::ptr::addr_of!(crate::FRAMES)).iter().flatten().find(|f| f.frame_id == frame).map_or(crate::ACTIVE_SCENE_IDX, |f| f.scene_id);
     let menu = sex_pdx::window_menu::Menu::new(x, y, crate::frame_is_zoomed(frame), flags & crate::FRAME_FLAG_FLOATING != 0,
         crate::WORKSPACE_COUNT.min(sex_pdx::window_menu::MAX_WORKSPACES), current);
-    let menus = &mut *core::ptr::addr_of_mut!(MENU);
-    menus.open(frame, menu);
-    menu_send();
     let (w, h) = (crate::desktop_width().max(0) as usize, crate::desktop_height().max(0) as usize);
-    match menus.layout(w, h, scale()) {
-        Some(l) => { sex_pdx::serial_record!("[shell.decor.menu] open=1 frame={} sid={} rows={} x={} y={} w={} h={} row_h={} pad={}",
-            frame, sid, l.rows, l.panel.0, l.panel.1, l.panel.2, l.panel.3, l.row_h, l.pad); }
-        None => { sex_pdx::serial_record!("[shell.decor.menu] open=1 frame={} sid={} rows=0", frame, sid); }
-    }
+    // A screen that cannot hold the menu gets none, rather than an invisible
+    // modal menu that swallows clicks.
+    let Some(l) = sex_pdx::window_menu::Layout::new(&menu, w, h, scale()) else {
+        sex_pdx::serial_record!("[shell.decor.menu] open=0 frame={} sid={} reason=no_room", frame, sid);
+        return;
+    };
+    (*core::ptr::addr_of_mut!(MENU)).open(frame, menu);
+    menu_send();
+    sex_pdx::serial_record!("[shell.decor.menu] open=1 frame={} sid={} rows={} x={} y={} w={} h={} row_h={} pad={}",
+        frame, sid, l.rows, l.panel.0, l.panel.1, l.panel.2, l.panel.3, l.row_h, l.pad);
 }
 
 /// Runs a button's or a menu row's action on `frame` with the existing paths.

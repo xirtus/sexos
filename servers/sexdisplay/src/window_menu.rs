@@ -68,7 +68,8 @@ fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0:
 pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32) {
     let Some(menu) = (unsafe { SHOWN }) else { return };
     let Some(l) = Layout::new(&menu, w, h, scale) else { return };
-    let s = scale.max(1) as usize;
+    let scale = l.scale;
+    let s = scale as usize;
     let (x, y, pw, ph) = l.panel;
     fill(fb, w, h, total, l.panel, RIM);
     fill(fb, w, h, total, (x + s, y + s, pw - 2 * s, ph - 2 * s), BG);

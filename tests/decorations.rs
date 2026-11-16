@@ -177,3 +177,14 @@ fn window_menu_press_and_hover() {
     assert_eq!(menu.press(5, 5, w, h, 1), Press::Dismiss);
     assert!(!menu.close());
 }
+
+#[test]
+fn menu_shrinks_to_fit_a_short_screen_at_large_scale() {
+    // 1280x800 at 3x: nine workspaces need 816 px at 3x, so 2x is used.
+    let m = Menu::new(0, 0, false, false, 9, 0);
+    let l = Layout::new(&m, 1280, 800, 3).unwrap();
+    assert_eq!(l.scale, 2);
+    assert!(l.panel.1 + l.panel.3 <= 800);
+    assert_eq!(Layout::new(&m, 1280, 800, 1).unwrap().scale, 1);
+    assert_eq!(Layout::new(&m, 3840, 2400, 3).unwrap().scale, 3);
+}

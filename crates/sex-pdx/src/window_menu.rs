@@ -118,6 +118,9 @@ pub struct Layout {
     pub rows: usize,
     pub row_h: usize,
     pub pad: usize,
+    /// The scale the menu is drawn at: the UI scale, or less when the
+    /// screen is too short for the menu at the UI scale.
+    pub scale: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,17 +131,20 @@ impl Layout {
     pub const ROW: usize = 24;
     pub const PAD: usize = 4;
 
-    /// None when the screen cannot hold the menu.
+    /// None when the screen cannot hold the menu even at scale 1. A screen
+    /// too small for the UI scale (800 px tall at 3x) gets a smaller menu.
     pub fn new(menu: &Menu, width: usize, height: usize, scale: u32) -> Option<Self> {
-        let s = scale.clamp(1, 3) as usize;
-        let (w, row_h, pad) = (Self::WIDTH * s, Self::ROW * s, Self::PAD * s);
         let rows = menu.rows();
-        let h = rows * row_h + 2 * pad;
-        if width < w || height < h { return None; }
-        // Kept on screen: a menu opened near the right or bottom edge moves in.
-        let x = (menu.x as usize).min(width - w);
-        let y = (menu.y as usize).min(height - h);
-        Some(Self { panel: (x, y, w, h), rows, row_h, pad })
+        (1..=scale.clamp(1, 3)).rev().find_map(|scale| {
+            let s = scale as usize;
+            let (w, row_h, pad) = (Self::WIDTH * s, Self::ROW * s, Self::PAD * s);
+            let h = rows * row_h + 2 * pad;
+            if width < w || height < h { return None; }
+            // Kept on screen: a menu opened near the right or bottom edge moves in.
+            let x = (menu.x as usize).min(width - w);
+            let y = (menu.y as usize).min(height - h);
+            Some(Self { panel: (x, y, w, h), rows, row_h, pad, scale })
+        })
     }
 
     pub fn row(&self, index: usize) -> Rect {
