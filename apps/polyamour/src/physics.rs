@@ -117,7 +117,7 @@ pub const KINDS: [(&str, &str); 8] = [
 
 fn modifier_slot(o: &Object, kind: &str) -> Option<usize> {
     o.modifiers.iter().position(|m| match m {
-        Modifier::Physics(p) => matches!((kind, p), ("COLLISION", PhysicsModifier::Collision(_)) | ("CLOTH", PhysicsModifier::Cloth(_)) | ("SOFT_BODY", PhysicsModifier::SoftBody(_)) | ("FLUID", PhysicsModifier::Fluid(_))),
+        Modifier::Physics(p) => matches!((kind, p), ("COLLISION", PhysicsModifier::Collision(_)) | ("CLOTH", PhysicsModifier::Cloth(_)) | ("SOFT_BODY", PhysicsModifier::SoftBody(_)) | ("FLUID", PhysicsModifier::Fluid(_)) | ("DYNAMIC_PAINT", PhysicsModifier::DynamicPaint(_))),
         _ => false,
     })
 }
@@ -136,7 +136,7 @@ pub fn has_kind(o: &Object, kind: &str) -> bool {
 /// fields and rigid body constraints).
 pub fn kind_allowed(o: &Object, kind: &str) -> bool {
     match o.data {
-        ObjectData::Mesh(_) => kind != "DYNAMIC_PAINT",
+        ObjectData::Mesh(_) => true,
         _ => matches!(kind, "FORCE_FIELD" | "RIGID_BODY_CONSTRAINT"),
     }
 }
@@ -168,10 +168,6 @@ fn toggle(doc: &mut Doc, kind: &str) -> bool {
         doc.report = "No active object".into();
         return true;
     };
-    if kind == "DYNAMIC_PAINT" {
-        doc.report = "Dynamic Paint is not available".into();
-        return true;
-    }
     let label = KINDS.iter().find(|k| k.0 == kind).map_or(kind, |k| k.1);
     if !kind_allowed(&doc.scene.objects[i], kind) {
         doc.report = format!("{label} needs a mesh object");
@@ -201,6 +197,7 @@ fn toggle(doc: &mut Doc, kind: &str) -> bool {
                 "CLOTH" => PhysicsModifier::with_defaults("cloth"),
                 "SOFT_BODY" => PhysicsModifier::with_defaults("softbody"),
                 "FLUID" => PhysicsModifier::with_defaults("fluid"),
+                "DYNAMIC_PAINT" => PhysicsModifier::with_defaults("dynamicpaint"),
                 _ => None,
             };
             if let Some(m) = m {
@@ -249,7 +246,7 @@ pub fn rigid_body_menu() -> Vec<MenuItem> {
 
 /// Object > Quick Effects.
 pub fn quick_effects_menu() -> Vec<MenuItem> {
-    vec![MenuItem::op("Quick Fur", "", Op::new("object.quick_fur")), MenuItem::op("Quick Smoke", "", Op::new("object.quick_smoke"))]
+    vec![MenuItem::op("Quick Fur", "", Op::new("object.quick_fur")), MenuItem::op("Quick Smoke", "", Op::new("object.quick_smoke")), MenuItem::op("Quick Liquid", "", Op::new("object.quick_liquid"))]
 }
 
 /// The physics operators. Returns false for anything else.
@@ -337,6 +334,14 @@ pub fn run(doc: &mut Doc, op: &Op) -> bool {
             true
         }
         "object.quick_smoke" => quick_smoke(doc),
+        "object.quick_liquid" => quick_liquid(doc),
+        "fluid.bake_all" | "fluid.bake_data" | "fluid.bake_mesh" => fluid_bake(doc, arg),
+        "fluid.free_all" | "fluid.free_data" | "fluid.free_mesh" => fluid_free(doc, arg),
+        "fluid.pause_bake" => {
+            doc.report = "Nothing is baking".into();
+            true
+        }
+        "dpaint.type_toggle" => dpaint_toggle(doc, arg),
         "object.quick_fur" => quick_fur(doc),
         _ => false,
     }
@@ -640,6 +645,146 @@ fn quick_smoke(doc: &mut Doc) -> bool {
     true
 }
 
+/// The fluid domains an operator acts on: the one named by `arg`
+/// ("OBJECT" or a cache key), else the active object's.
+fn fluid_keys(doc: &Doc, arg: &str) -> Vec<String> {
+    if !arg.is_empty() {
+        if let Some(i) = doc.scene.find_object(arg) {
+            return ph::fluid::domains(&doc.scene).into_iter().filter(|d| d.0 == i).map(|d| ph::fluid::key(&doc.scene.objects[i].name, d.1)).collect();
+        }
+        return vec![arg.to_string()];
+    }
+    let Some(i) = doc.active() else { return Vec::new() };
+    ph::fluid::domains(&doc.scene).into_iter().filter(|d| d.0 == i).map(|d| ph::fluid::key(&doc.scene.objects[i].name, d.1)).collect()
+}
+
+/// Fluid > Cache > Bake All (and Bake Data / Bake Mesh, which bake both).
+fn fluid_bake(doc: &mut Doc, arg: &str) -> bool {
+    let keys = fluid_keys(doc, arg);
+    if keys.is_empty() {
+        doc.report = "No fluid domain".into();
+        return true;
+    }
+    bake(doc, keys, false)
+}
+
+/// Fluid > Cache > Free All (Free Data / Free Mesh).
+fn fluid_free(doc: &mut Doc, arg: &str) -> bool {
+    let keys = fluid_keys(doc, arg);
+    if keys.is_empty() {
+        doc.report = "No fluid domain".into();
+        return true;
+    }
+    free(doc, keys, false)
+}
+
+/// Dynamic Paint > Add/Remove Canvas or Brush (`CANVAS`, `BRUSH`).
+fn dpaint_toggle(doc: &mut Doc, arg: &str) -> bool {
+    let Some(i) = doc.active() else { return true };
+    let Some(slot) = modifier_slot(&doc.scene.objects[i], "DYNAMIC_PAINT") else {
+        doc.report = "No Dynamic Paint modifier".into();
+        return true;
+    };
+    let canvas = !arg.eq_ignore_ascii_case("BRUSH");
+    doc.push_undo(if canvas { "Toggle Canvas" } else { "Toggle Brush" });
+    if let Modifier::Physics(PhysicsModifier::DynamicPaint(s)) = &mut doc.scene.objects[i].modifiers[slot] {
+        if canvas {
+            s.use_canvas = !s.use_canvas;
+            s.ui_type = ph::DpUiType::Canvas;
+            s.frame_end = s.frame_end.min(doc.scene.frame_end.max(s.frame_start));
+        } else {
+            s.use_brush = !s.use_brush;
+            s.ui_type = ph::DpUiType::Brush;
+        }
+    }
+    doc.touch();
+    true
+}
+
+fn selection_bounds(doc: &Doc, sel: &[usize]) -> (Vec3, Vec3) {
+    let (mut lo, mut hi) = (Vec3::new(f32::INFINITY, f32::INFINITY, f32::INFINITY), Vec3::new(f32::NEG_INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY));
+    for &i in sel {
+        let m = doc.scene.world_matrix(i);
+        if let Some(mesh) = doc.scene.evaluated_mesh(i) {
+            for p in &mesh.positions {
+                let w = m.transform_point(*p);
+                lo = lo.min(w);
+                hi = hi.max(w);
+            }
+        }
+    }
+    if !lo.x.is_finite() {
+        (lo, hi) = (Vec3::new(-1.0, -1.0, -1.0), Vec3::new(1.0, 1.0, 1.0));
+    }
+    (lo, hi)
+}
+
+/// Quick Liquid: the selected meshes become Geometry liquid flows, inside a new closed Liquid Domain with room around and below,
+/// shaded smooth with a water-like glass material (Blender's operator).
+fn quick_liquid(doc: &mut Doc) -> bool {
+    let sel = mesh_selection(doc);
+    if sel.is_empty() {
+        doc.report = "Select at least one mesh object".into();
+        return true;
+    }
+    doc.push_undo("Quick Liquid");
+    let (lo, hi) = selection_bounds(doc, &sel);
+    for &i in &sel {
+        let mut f = FluidSettings::new(FluidType::Flow);
+        f.flow_type = ph::FlowType::Liquid;
+        f.flow_behavior = ph::FlowBehavior::Geometry;
+        f.surface_distance = 0.0;
+        let o = &mut doc.scene.objects[i];
+        o.modifiers.push(Modifier::Physics(PhysicsModifier::Fluid(Box::new(f))));
+        // Blender shows them as wire; here they are hidden (the liquid takes
+        // their place from the start frame).
+        o.visible = false;
+    }
+    let mesh = sex_3d::primitives::cube(2.0);
+    let d = doc.scene.add_mesh_object("Liquid Domain", mesh);
+    let center = (lo + hi) * 0.5 + Vec3::new(0.0, 0.0, -1.0);
+    let half = (hi - lo) * 0.5 + Vec3::new(1.0, 1.0, 2.0);
+    let mut f = FluidSettings::new(FluidType::Domain);
+    f.domain_type = DomainType::Liquid;
+    f.use_collision_border_front = true;
+    f.use_collision_border_back = true;
+    f.use_collision_border_right = true;
+    f.use_collision_border_left = true;
+    f.use_collision_border_top = true;
+    f.use_collision_border_bottom = true;
+    f.display_thickness = 0.02;
+    f.cache_frame_end = doc.scene.frame_end.min(f.cache_frame_end);
+    let mat = liquid_material(&mut doc.scene);
+    let o = &mut doc.scene.objects[d];
+    o.transform.location = center;
+    o.transform.scale = half;
+    o.modifiers.push(Modifier::Physics(PhysicsModifier::Fluid(Box::new(f))));
+    o.materials = vec![mat];
+    if let ObjectData::Mesh(mi) = o.data {
+        for face in &mut doc.scene.meshes[mi].faces {
+            face.smooth = true;
+        }
+    }
+    doc.select_only(Some(d));
+    doc.report = "Added a liquid domain".into();
+    doc.touch();
+    true
+}
+
+/// "Liquid Domain Material": clear water (glass, IOR 1.33, a faint blue
+/// absorption tint).
+fn liquid_material(scene: &mut Scene) -> usize {
+    let mut m = sex_3d::scene::Material::default();
+    m.name = "Liquid Domain Material".into();
+    m.base_color = [0.8, 0.9, 1.0, 1.0];
+    m.transmission = 1.0;
+    m.roughness = 0.0;
+    m.metallic = 0.0;
+    m.ior = 1.33;
+    scene.materials.push(m);
+    scene.materials.len() - 1
+}
+
 /// `--physics-demo`: boxes falling on a passive ground next to a cloth
 /// draped over a sphere, a particle emitter and a smoke column, stepped
 /// to frame 40 in the Physics tab.
@@ -688,5 +833,76 @@ pub fn demo(doc: &mut Doc) {
     doc.scene.frame_current = 40;
     ph::update(&doc.scene);
     doc.sim.last = None;
+    doc.touch();
+}
+
+/// `--liquid-demo`: a dam break in a closed Quick Liquid domain, the water
+/// column hitting an obstacle block while a tap pours in from above and a
+/// drain takes water away; a red ball and a Dynamic Paint canvas ripple
+/// next to it. Stepped to frame 24 in the Physics tab, the domain active.
+pub fn liquid_demo(doc: &mut Doc) {
+    if let Some(c) = doc.scene.find_object("Cube") {
+        doc.select_only(Some(c));
+        doc.run(&Op::new("object.delete"));
+    }
+    let scene = &mut doc.scene;
+    let floor = scene.add_mesh_object("Floor", sex_3d::primitives::plane(14.0));
+    scene.objects[floor].transform.location = Vec3::new(0.0, 0.0, -0.02);
+    let col = scene.add_mesh_object("Water", sex_3d::primitives::cube(1.0));
+    scene.objects[col].transform.location = Vec3::new(-1.5, 0.0, 0.75);
+    scene.objects[col].transform.scale = Vec3::new(1.0, 2.0, 1.5);
+    doc.select_only(Some(col));
+    quick_liquid(doc);
+    let scene = &mut doc.scene;
+    let d = scene.find_object("Liquid Domain").expect("domain");
+    // The domain: x ∈ [-2, 2], y ∈ [-1, 1], z ∈ [0, 2].
+    scene.objects[d].transform.location = Vec3::new(0.0, 0.0, 1.0);
+    scene.objects[d].transform.scale = Vec3::new(2.0, 1.0, 1.0);
+    if let Some(Modifier::Physics(PhysicsModifier::Fluid(s))) = scene.objects[d].modifiers.last_mut() {
+        s.resolution_max = 48;
+        s.cache_frame_end = 80;
+    }
+    let block = scene.add_mesh_object("Obstacle", sex_3d::primitives::cube(1.0));
+    scene.objects[block].transform.location = Vec3::new(0.6, 0.0, 0.3);
+    scene.objects[block].transform.scale = Vec3::new(0.4, 0.8, 0.6);
+    let mut e = FluidSettings::new(FluidType::Effector);
+    e.effector_type = ph::EffectorType::Collision;
+    scene.objects[block].modifiers.push(Modifier::Physics(PhysicsModifier::Fluid(Box::new(e))));
+    let tap = scene.add_mesh_object("Tap", sex_3d::primitives::ico_sphere(2, 0.18));
+    scene.objects[tap].transform.location = Vec3::new(1.4, 0.0, 1.6);
+    let mut f = FluidSettings::new(FluidType::Flow);
+    f.flow_type = ph::FlowType::Liquid;
+    f.flow_behavior = ph::FlowBehavior::Inflow;
+    f.surface_distance = 0.0;
+    f.use_initial_velocity = true;
+    f.velocity_coord = [-1.5, 0.0, -1.0];
+    scene.objects[tap].modifiers.push(Modifier::Physics(PhysicsModifier::Fluid(Box::new(f))));
+    let drain = scene.add_mesh_object("Drain", sex_3d::primitives::cube(1.0));
+    scene.objects[drain].transform.location = Vec3::new(1.75, 0.0, 0.08);
+    scene.objects[drain].transform.scale = Vec3::new(0.5, 2.0, 0.16);
+    let mut f = FluidSettings::new(FluidType::Flow);
+    f.flow_type = ph::FlowType::Liquid;
+    f.flow_behavior = ph::FlowBehavior::Outflow;
+    f.surface_distance = 0.0;
+    scene.objects[drain].modifiers.push(Modifier::Physics(PhysicsModifier::Fluid(Box::new(f))));
+    scene.objects[drain].visible = false;
+    // Dynamic Paint: a ball rippling a pool surface.
+    let canvas = scene.add_mesh_object("Pool", sex_3d::primitives::grid(40, 40, 2.4));
+    scene.objects[canvas].transform.location = Vec3::new(0.0, 3.2, 0.3);
+    let dp = ph::DynamicPaintSettings { use_canvas: true, surface_type: ph::DpSurfaceType::Wave, frame_end: 80, ..Default::default() };
+    scene.objects[canvas].modifiers.push(Modifier::Physics(PhysicsModifier::DynamicPaint(Box::new(dp))));
+    let ball = scene.add_mesh_object("Ball", sex_3d::primitives::uv_sphere(24, 12, 0.3));
+    scene.objects[ball].transform.location = Vec3::new(0.0, 3.2, 0.4);
+    let red = scene.add_material(sex_3d::scene::Material { name: "Red".into(), base_color: [0.8, 0.1, 0.05, 1.0], ..Default::default() });
+    scene.objects[ball].materials.push(red);
+    let br = ph::DynamicPaintSettings { ui_type: ph::DpUiType::Brush, use_brush: true, ..Default::default() };
+    scene.objects[ball].modifiers.push(Modifier::Physics(PhysicsModifier::DynamicPaint(Box::new(br))));
+    doc.scene.frame_end = 80;
+    doc.select_only(Some(d));
+    doc.frame = 24;
+    doc.scene.frame_current = 24;
+    ph::update(&doc.scene);
+    doc.sim.last = None;
+    doc.report = "Liquid demo".into();
     doc.touch();
 }

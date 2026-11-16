@@ -5,7 +5,8 @@
 //! with the shared tiled rasterizer, and filtered lookups (rotated
 //! percentage-closer filtering over a disk, with normal-offset and
 //! slope-scaled bias so lit surfaces do not shadow themselves).
-use super::raster::{Bins, Facing, Layout, RasterCamera};
+use super::parallel_for_each;
+use super::raster::{raster_tile, Bins, Facing, Layout, RasterCamera, TILE_PX};
 use crate::math::Vec3;
 
 #[derive(Clone, Debug)]
@@ -52,6 +53,42 @@ impl ShadowMap {
         });
         let mut depth = Vec::new();
         bins.depth_only(&mut depth, threads);
+        let texel = 1.0 / cam.scale;
+        ShadowMap { cam, layout, depth, texel }
+    }
+
+    /// [`ShadowMap::render`] where texels of triangle `i` can be dropped:
+    /// `keep(i, barycentrics, x, y)` decides per texel (stochastic
+    /// transparent shadows).
+    pub fn render_masked(cam: RasterCamera, threads: usize, count: usize, bins: &mut Bins<u32>, tri: impl Fn(usize) -> Option<([Vec3; 3], bool)> + Sync, keep: impl Fn(u32, [f32; 3], usize, usize) -> bool + Sync) -> ShadowMap {
+        let layout = Layout::new(cam.width as usize, cam.height as usize);
+        let pieces = (threads * 2).clamp(1, 64).min(count.div_ceil(2048).max(1));
+        bins.begin(layout, pieces);
+        let n = bins.pieces.len();
+        let per = count.div_ceil(n);
+        // The flag asks for the mask on that triangle (top bit of the payload).
+        bins.setup(threads, |k, piece| {
+            for i in k * per..((k + 1) * per).min(count) {
+                let Some((p, masked)) = tri(i) else { continue };
+                cam.clip_emit(p.map(|q| cam.to_view(q)), |v, b| {
+                    piece.push(v, b, Facing::Both, i as u32 | (masked as u32) << 31);
+                });
+            }
+        });
+        let mut depth = vec![0.0; layout.len()];
+        let b = &*bins;
+        parallel_for_each(depth.chunks_mut(TILE_PX).enumerate(), threads, |(t, d)| {
+            d.fill(f32::NEG_INFINITY);
+            let rect = layout.tile_rect(t);
+            b.for_tile(t, |_, st, &src| {
+                raster_tile(st, rect, |k, x, y| {
+                    let z = st.z.at(x, y);
+                    if z > d[k] && (src >> 31 == 0 || keep(src & 0x7fff_ffff, st.bary(x, y), x, y)) {
+                        d[k] = z;
+                    }
+                });
+            });
+        });
         let texel = 1.0 / cam.scale;
         ShadowMap { cam, layout, depth, texel }
     }

@@ -118,7 +118,21 @@ pub(super) fn geo_props(f: &BlendFile<'_>, bn: &View<'_, '_>, n: &mut Node) {
         "GeometryNodeStoreNamedAttribute" => from("NodeGeometryStoreNamedAttribute", &[("data_type", "data_type", dt), ("domain", "domain", dom)]),
         "GeometryNodeInputNamedAttribute" => from("NodeGeometryInputNamedAttribute", &[("data_type", "data_type", dt)]),
         "GeometryNodeCaptureAttribute" => from("NodeGeometryAttributeCapture", &[("domain", "domain", dom)]),
-        "GeometryNodeViewer" => from("NodeGeometryViewer", &[("data_type", "data_type", dt)]),
+        "GeometryNodeViewer" => {
+            from("NodeGeometryViewer", &[("data_type", "data_type", dt)]);
+            // AttrDomain::Auto is -1.
+            if let Some(d) = storage("NodeGeometryViewer").and_then(|s| s.num("domain")) {
+                n.set_prop("domain", if d < 0.0 { e("AUTO") } else { domain(d) });
+            }
+        }
+        "GeometryNodeSubdivisionSurface" => from(
+            "NodeGeometrySubdivisionSurface",
+            &[
+                ("uv_smooth", "uv_smooth", &modes(&["NONE", "PRESERVE_CORNERS", "PRESERVE_CORNERS_AND_JUNCTIONS", "PRESERVE_CORNERS_JUNCTIONS_AND_CONCAVE", "PRESERVE_BOUNDARIES", "SMOOTH_ALL"])),
+                ("boundary_smooth", "boundary_smooth", &modes(&["ALL", "PRESERVE_CORNERS"])),
+            ],
+        ),
+        "FunctionNodeCombineColor" | "FunctionNodeSeparateColor" => from("NodeCombSepColor", &[("mode", "mode", &modes(&["RGB", "HSV", "HSL"]))]),
         "GeometryNodeAccumulateField" => from("NodeAccumulateField", &[("data_type", "data_type", dt), ("domain", "domain", dom)]),
         "GeometryNodeSampleIndex" => {
             from("NodeGeometrySampleIndex", &[("data_type", "data_type", dt), ("domain", "domain", dom)]);
@@ -138,7 +152,7 @@ pub(super) fn geo_props(f: &BlendFile<'_>, bn: &View<'_, '_>, n: &mut Node) {
         "GeometryNodeMeshToPoints" => from("NodeGeometryMeshToPoints", &[("mode", "mode", &modes(&["VERTICES", "EDGES", "FACES", "CORNERS"]))]),
         "GeometryNodeCurvePrimitiveCircle" => from("NodeGeometryCurvePrimitiveCircle", &[("mode", "mode", &modes(&["POINTS", "RADIUS"]))]),
         "GeometryNodeCurvePrimitiveLine" => from("NodeGeometryCurvePrimitiveLine", &[("mode", "mode", &modes(&["POINTS", "DIRECTION"]))]),
-        "GeometryNodeCurveArc" => from("NodeGeometryCurveArc", &[("mode", "mode", &modes(&["POINTS", "RADIUS"]))]),
+        "GeometryNodeCurveArc" => from("NodeGeometryCurvePrimitiveArc", &[("mode", "mode", &modes(&["POINTS", "RADIUS"]))]),
         "GeometryNodeCurvePrimitiveQuadrilateral" => from("NodeGeometryCurvePrimitiveQuad", &[("mode", "mode", &modes(&["RECTANGLE", "PARALLELOGRAM", "TRAPEZOID", "KITE", "POINTS"]))]),
         "GeometryNodeCurvePrimitiveBezierSegment" => from("NodeGeometryCurvePrimitiveBezierSegment", &[("mode", "mode", &modes(&["POSITION", "OFFSET"]))]),
         "GeometryNodeCurveToPoints" => from("NodeGeometryCurveToPoints", &[("mode", "mode", &modes(&["EVALUATED", "COUNT", "LENGTH"]))]),

@@ -1613,7 +1613,7 @@ extern "C" fn main() -> ! {
             Some(Event::Resize { width, height }) => { spindle.width = width.max(64); spindle.height = height.max(64); spindle.relayout = true; }
             Some(Event::Key(key)) => if !spindle.key(&mut window, key) { if let Some(t) = spindle.focused().key(&mut window, key) { spindle.clipboard = t; } },
             Some(Event::Pointer(p)) => spindle.pointer(p),
-            Some(Event::Drop { .. } | Event::DragEnded { .. }) => {}
+            Some(Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_)) => {}
             None => {}
         }
         spindle.pump();

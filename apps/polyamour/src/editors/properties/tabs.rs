@@ -5,12 +5,12 @@
 //! Blender greys properties that do not apply.
 use super::icons::Icon;
 use super::layout::{L, ROW};
-use super::{ColorTarget, Ctx};
+use super::{ColorTarget, Ctx, SettingColor};
 use crate::doc::Doc;
 use crate::draw::Rect;
 use crate::settings::{Engine, UnitSystem};
 use crate::ui::{MenuItem, NumOpts, Op};
-use sex_3d::render::workbench::{CavityType, ColorType, Lighting, MATCAPS};
+use sex_3d::render::workbench::{CavityType, ColorType, Lighting, MATCAPS, STUDIO_LIGHTS};
 use sex_3d::render::{Look, MistFalloff, Pass, ShutterPosition, ViewTransform};
 use sex_3d::scene::ObjectData;
 
@@ -23,7 +23,7 @@ fn inactive<R>(l: &mut L, f: impl FnOnce(&mut L) -> R) {
 
 /// A sub-panel whose header carries a checkbox before its title (Denoise,
 /// Gravity, ...). Returns the new checkbox value when it was clicked.
-fn check_header(l: &mut L, title: &str, value: bool, r: Rect) -> Option<bool> {
+pub(super) fn check_header(l: &mut L, title: &str, value: bool, r: Rect) -> Option<bool> {
     let mut v = value;
     let tw = l.ui.p.text_width(title) + 24;
     let cr = Rect::new(r.x - 4, r.y, tw.min(r.w + 4), r.h);
@@ -100,7 +100,21 @@ fn check_panel(l: &mut L, d: &mut Doc, key: &str, title: &str, open: bool, get: 
     }
 }
 
-pub fn render(l: &mut L, d: &mut Doc) {
+/// Motion Blur (both engines): shutter position and length.
+fn motion_blur_panel(l: &mut L, d: &mut Doc) {
+    check_panel(l, d, "render.motion_blur", "Motion Blur", false, |d| d.settings.motion_blur, |d, v| d.settings.motion_blur = v, &mut |l, d| {
+        let pos = ["Start on Frame", "Center on Frame", "End on Frame"];
+        let cur = match d.settings.shutter_position {
+            ShutterPosition::Start => pos[0],
+            ShutterPosition::Center => pos[1],
+            ShutterPosition::End => pos[2],
+        };
+        l.enumeration("Position", "shutter_position", cur, &pos);
+        set_num!(l, d, "Shutter", "shutter", shutter, NumOpts { step: 0.05, min: 0.0, max: 2.0, ..NumOpts::default() }, "Shutter");
+    });
+}
+
+pub fn render(l: &mut L, d: &mut Doc, c: &mut Ctx) {
     let engine = d.settings.engine;
     l.space(4);
     l.enumeration("Render Engine", "engine", engine.label(), &Engine::ALL.map(|e| e.label()));
@@ -164,16 +178,7 @@ pub fn render(l: &mut L, d: &mut Doc) {
                 l.info("Integration", "Delta tracking");
                 l.info("Max Steps", "Unbiased");
             });
-            check_panel(l, d, "render.motion_blur", "Motion Blur", false, |d| d.settings.motion_blur, |d, v| d.settings.motion_blur = v, &mut |l, d| {
-                let pos = ["Start on Frame", "Center on Frame", "End on Frame"];
-                let cur = match d.settings.shutter_position {
-                    ShutterPosition::Start => pos[0],
-                    ShutterPosition::Center => pos[1],
-                    ShutterPosition::End => pos[2],
-                };
-                l.enumeration("Position", "shutter_position", cur, &pos);
-                set_num!(l, d, "Shutter", "shutter", shutter, NumOpts { step: 0.05, min: 0.0, max: 2.0, ..NumOpts::default() }, "Shutter");
-            });
+            motion_blur_panel(l, d);
             l.panel(d, "render.film", "Film", false, &mut |l, d| {
                 set_num!(l, d, "Exposure", "film_exposure", exposure, NumOpts { step: 0.1, min: -10.0, max: 10.0, ..NumOpts::default() }, "Exposure");
                 l.panel(d, "render.film.pixel_filter", "Pixel Filter", true, &mut |l, d| {
@@ -207,6 +212,7 @@ pub fn render(l: &mut L, d: &mut Doc) {
         Engine::Workbench => {
             l.space(4);
             l.panel(d, "render.wb.sampling", "Sampling", true, &mut |l, d| {
+                set_uint!(l, d, "Viewport", "wb_vp_samples", workbench_viewport_samples, 1, 64, "Workbench Viewport Samples");
                 set_uint!(l, d, "Render", "wb_samples", workbench_samples, 1, 64, "Workbench Samples");
             });
             l.panel(d, "render.wb.lighting", "Lighting", true, &mut |l, d| {
@@ -216,6 +222,10 @@ pub fn render(l: &mut L, d: &mut Doc) {
                         l.commit(d, "Lighting");
                         d.settings.workbench.lighting = Lighting::ALL[i];
                     }
+                }
+                if d.settings.workbench.lighting == Lighting::Studio {
+                    let m = STUDIO_LIGHTS.get(d.settings.workbench.studio).copied().unwrap_or(STUDIO_LIGHTS[0]);
+                    l.enumeration("Studio Light", "workbench_studio", m, &STUDIO_LIGHTS);
                 }
                 if d.settings.workbench.lighting == Lighting::MatCap {
                     let m = MATCAPS.get(d.settings.workbench.matcap).copied().unwrap_or(MATCAPS[0]);
@@ -228,6 +238,11 @@ pub fn render(l: &mut L, d: &mut Doc) {
                     if i != cur {
                         l.commit(d, "Color");
                         d.settings.workbench.color = ColorType::ALL[i];
+                    }
+                }
+                if d.settings.workbench.color == ColorType::Single {
+                    if let Some(r) = l.color("Color", d.settings.workbench.single_color) {
+                        c.open_picker = Some((ColorTarget::Setting(SettingColor::WorkbenchSingle), r));
                     }
                 }
             });
@@ -260,6 +275,9 @@ pub fn render(l: &mut L, d: &mut Doc) {
                 if l.check("", "Outline", &mut wb.outline) {
                     changed = Some("Outline");
                 }
+                if l.check("", "Depth of Field", &mut wb.dof) {
+                    changed = Some("Depth of Field");
+                }
                 if let Some(label) = changed {
                     l.commit(d, label);
                     d.settings.workbench = wb;
@@ -285,20 +303,49 @@ pub fn render(l: &mut L, d: &mut Doc) {
             check_panel(l, d, "render.eevee.shadows", "Shadows", false, |d| d.settings.eevee_shadows, |d, v| d.settings.eevee_shadows = v, &mut |l, _| {
                 l.info("Method", "Shadow maps");
             });
-            l.panel(d, "render.eevee.raytracing", "Raytracing", false, &mut |l, _| {
-                l.info("Method", "Light probes");
-                l.note("Screen-space and ray-traced reflections are off");
+            check_panel(l, d, "render.eevee.raytracing", "Raytracing", false, |d| d.settings.eevee_ssr, |d, v| d.settings.eevee_ssr = v, &mut |l, d| {
+                l.info("Method", "Screen-Trace");
+                set_num!(l, d, "Max Roughness", "eevee_ssr_rough", eevee_ssr_max_roughness, NumOpts { step: 0.05, min: 0.0, max: 1.0, ..NumOpts::default() }, "Max Roughness");
+                l.panel(d, "render.eevee.raytracing.screen_trace", "Screen Tracing", true, &mut |l, d| {
+                    set_num!(l, d, "Thickness", "eevee_ssr_thick", eevee_ssr_thickness, NumOpts { step: 0.05, unit: "m", min: 0.0, max: 10.0, ..NumOpts::default() }, "Thickness");
+                    set_num!(l, d, "Edge Fading", "eevee_ssr_fade", eevee_ssr_fade, NumOpts { step: 0.01, min: 0.0, max: 0.5, ..NumOpts::default() }, "Edge Fading");
+                });
             });
             check_panel(l, d, "render.eevee.ao", "Ambient Occlusion", false, |d| d.settings.eevee_ao, |d, v| d.settings.eevee_ao = v, &mut |l, d| {
                 set_num!(l, d, "Distance", "eevee_ao_distance", eevee_ao_distance, NumOpts { step: 0.05, unit: "m", min: 0.0, max: 100.0, ..NumOpts::default() }, "AO Distance");
             });
             check_panel(l, d, "render.eevee.volumes", "Volumes", false, |d| d.settings.eevee_volumetrics, |d, v| d.settings.eevee_volumetrics = v, &mut |l, d| {
                 set_num!(l, d, "End", "eevee_vol_end", eevee_volumetric_end, NumOpts { step: 1.0, unit: "m", min: 0.0, ..NumOpts::default() }, "Volume End");
+                set_uint!(l, d, "Steps", "eevee_vol_steps", eevee_volumetric_steps, 1, 256, "Volume Steps");
+                set_check!(l, d, "", "Volumetric Shadows", eevee_volumetric_shadows, "Volumetric Shadows");
                 l.info("World", "Homogeneous");
             });
+            l.panel(d, "render.eevee.sss", "Subsurface Scattering", false, &mut |l, d| {
+                set_uint!(l, d, "Samples", "eevee_sss_samples", eevee_sss_samples, 1, 32, "Subsurface Samples");
+            });
+            check_panel(l, d, "render.eevee.bloom", "Bloom", false, |d| d.settings.eevee_bloom, |d, v| d.settings.eevee_bloom = v, &mut |l, d| {
+                set_num!(l, d, "Threshold", "eevee_bloom_threshold", eevee_bloom_threshold, NumOpts { step: 0.1, min: 0.0, max: 1000.0, ..NumOpts::default() }, "Bloom Threshold");
+                set_num!(l, d, "Knee", "eevee_bloom_knee", eevee_bloom_knee, NumOpts { step: 0.05, min: 0.0, max: 1.0, ..NumOpts::default() }, "Bloom Knee");
+                set_num!(l, d, "Radius", "eevee_bloom_radius", eevee_bloom_radius, NumOpts { step: 0.1, min: 0.0, max: 10.0, ..NumOpts::default() }, "Bloom Radius");
+                if let Some(r) = l.color("Color", d.settings.eevee_bloom_color) {
+                    c.open_picker = Some((ColorTarget::Setting(SettingColor::Bloom), r));
+                }
+                set_num!(l, d, "Intensity", "eevee_bloom_intensity", eevee_bloom_intensity, NumOpts { step: 0.01, min: 0.0, max: 10.0, ..NumOpts::default() }, "Bloom Intensity");
+                set_num!(l, d, "Clamp", "eevee_bloom_clamp", eevee_bloom_clamp, NumOpts { step: 1.0, min: 0.0, max: 1000.0, ..NumOpts::default() }, "Bloom Clamp");
+            });
+            l.panel(d, "render.eevee.dof", "Depth of Field", false, &mut |l, d| {
+                set_num!(l, d, "Max Size", "eevee_dof_max", eevee_dof_max_size, NumOpts { step: 1.0, unit: "px", min: 0.0, max: 2000.0, ..NumOpts::default() }, "DOF Max Size");
+                set_check!(l, d, "", "Jitter Camera", eevee_dof_jitter, "Jitter Camera");
+            });
+            motion_blur_panel(l, d);
             l.panel(d, "render.eevee.film", "Film", false, &mut |l, d| {
                 set_num!(l, d, "Filter Size", "filter_w", filter_width, NumOpts { step: 0.1, unit: "px", min: 0.0, max: 10.0, ..NumOpts::default() }, "Filter Size");
                 set_check!(l, d, "", "Transparent", film_transparent, "Transparent Film");
+            });
+            l.panel(d, "render.eevee.performance", "Performance", false, &mut |l, d| {
+                l.panel(d, "render.eevee.performance.viewport", "Viewport", true, &mut |l, d| {
+                    set_check!(l, d, "Navigation", "Half Resolution", viewport_half_res_navigation, "Half Resolution Navigation");
+                });
             });
         }
     }

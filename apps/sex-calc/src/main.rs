@@ -291,7 +291,7 @@ pub extern "C" fn _start() -> ! {
                     calc.recall(i);
                 } else { continue; }
             }
-            Event::Pointer(_) | Event::Drop { .. } | Event::DragEnded { .. } => continue,
+            Event::Pointer(_) | Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_) => continue,
             Event::Resize { .. } => {}
         }
         render(&mut window, &calc, &mut small, &mut big);

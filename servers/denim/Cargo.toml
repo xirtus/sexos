@@ -11,4 +11,4 @@ path = "src/main.rs"
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx" }
 denim = { path = "../../crates/denim" }
-linked_list_allocator = "0.10.5"
+talc = { version = "5.1.1", default-features = false }
