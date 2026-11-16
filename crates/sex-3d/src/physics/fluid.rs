@@ -82,20 +82,20 @@ pub fn domains(scene: &Scene) -> Vec<(usize, usize, &FluidSettings)> {
     out
 }
 
-struct Grid {
-    n: [usize; 3],
-    min: Vec3,
-    dx: f32,
+pub(super) struct Grid {
+    pub(super) n: [usize; 3],
+    pub(super) min: Vec3,
+    pub(super) dx: f32,
 }
 
 impl Grid {
-    fn cells(&self) -> usize {
+    pub(super) fn cells(&self) -> usize {
         self.n[0] * self.n[1] * self.n[2]
     }
-    fn idx(&self, i: usize, j: usize, k: usize) -> usize {
+    pub(super) fn idx(&self, i: usize, j: usize, k: usize) -> usize {
         i + self.n[0] * (j + self.n[1] * k)
     }
-    fn center(&self, i: usize, j: usize, k: usize) -> Vec3 {
+    pub(super) fn center(&self, i: usize, j: usize, k: usize) -> Vec3 {
         self.min + Vec3::new(i as f32 + 0.5, j as f32 + 0.5, k as f32 + 0.5) * self.dx
     }
     /// Size of the staggered grid for axis `a`.
@@ -122,7 +122,7 @@ fn domain_grid(scene: &Scene, obj: usize, s: &FluidSettings) -> Option<Grid> {
 
 /// Trilinear sample of a grid of size `n` whose samples sit at
 /// `(i + off.x, j + off.y, k + off.z)` in cell units.
-fn sample(q: &[f32], n: [usize; 3], p: Vec3, off: Vec3) -> f32 {
+pub(super) fn sample(q: &[f32], n: [usize; 3], p: Vec3, off: Vec3) -> f32 {
     let x = (p.x - off.x).clamp(0.0, (n[0] - 1) as f32);
     let y = (p.y - off.y).clamp(0.0, (n[1] - 1) as f32);
     let z = (p.z - off.z).clamp(0.0, (n[2] - 1) as f32);
@@ -528,7 +528,7 @@ impl Solver<'_> {
 
 /// A mesh rasterised onto the grid: per cell 0 (outside), 1 (surface band)
 /// or `volume` (inside).
-fn rasterize(g: &Grid, mesh: &TriMesh, band: f32, volume: f32, plane: bool) -> Vec<f32> {
+pub(super) fn rasterize(g: &Grid, mesh: &TriMesh, band: f32, volume: f32, plane: bool) -> Vec<f32> {
     let mut out = vec![0.0f32; g.cells()];
     let b = mesh.bounds();
     if b.is_empty() {
@@ -588,7 +588,7 @@ fn rasterize(g: &Grid, mesh: &TriMesh, band: f32, volume: f32, plane: bool) -> V
     out
 }
 
-fn world_trimesh(scene: &Scene, i: usize) -> Option<TriMesh> {
+pub(super) fn world_trimesh(scene: &Scene, i: usize) -> Option<TriMesh> {
     let (m, _) = scene.world_mesh(i)?;
     let tris: Vec<[u32; 3]> = m.triangulate().iter().map(|t| t.verts).collect();
     if tris.is_empty() {
