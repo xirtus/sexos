@@ -176,8 +176,8 @@ fn main() {
     let gone = Command::new("stdspawn").args(["big", "500000", "0"]).stdout(Stdio::piped()).spawn().and_then(|mut c| { drop(c.stdout.take()); c.wait() });
     check("stdout dropped early", gone.as_ref().is_ok_and(|s| s.success()), format!("{gone:?}"));
 
-    // Writing to a child that ended is a broken pipe.
-    let ended = Command::new("stdspawn").args(["exit", "0"]).stdin(Stdio::piped()).spawn().map(|mut c| { let _ = c.wait(); c.stdin.take().map(|mut i| i.write_all(b"late")) });
+    // Writing to a child that ended is a broken pipe. (wait() closes stdin, so take it first.)
+    let ended = Command::new("stdspawn").args(["exit", "0"]).stdin(Stdio::piped()).spawn().map(|mut c| { let stdin = c.stdin.take(); let _ = c.wait(); stdin.map(|mut i| i.write_all(b"late")) });
     check("stdin of an ended child", matches!(ended, Ok(Some(Err(ref e))) if e.kind() == ErrorKind::BrokenPipe), format!("{ended:?}"));
 
     // Null stdin is at its end at once.
