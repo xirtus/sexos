@@ -72,6 +72,10 @@ pub trait Host {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counters { pub exits: u64, pub calls: u64, pub exceptions: u64, pub handled: u64 }
 
+/// A hardware exception as the cell's stub reported it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Fault { pub vector: u8, pub error: u64, pub rip: u64, pub cr2: u64 }
+
 /// An exception being handed to the vectored handlers.
 struct Dispatch { context: u64, pointers: u64, next_handler: usize, code: u32, address: u64 }
 
@@ -84,6 +88,8 @@ pub struct WinProcess {
     pub handlers: Vec<u64>,
     pub next_alloc: u64,
     pub counters: Counters,
+    /// The last hardware exception a stub reported, for diagnostics.
+    pub last_fault: Option<Fault>,
     dispatch: Vec<Dispatch>,
     initial: State,
 }
@@ -170,7 +176,7 @@ impl WinProcess {
         initial.regs.rcx = PEB_VA;
         Ok(WinProcess {
             cell, image, base, entry, imports, handlers: Vec::new(), next_alloc: ALLOC_BASE,
-            counters: Counters::default(), dispatch: Vec::new(), initial,
+            counters: Counters::default(), last_fault: None, dispatch: Vec::new(), initial,
         })
     }
 
@@ -228,6 +234,7 @@ impl WinProcess {
         let frame = self.cell.frame(regs.rsp).ok_or(Stop::CellFault { vector, rip: regs.rip })?;
         if frame.cs & 3 != 3 { return Err(Stop::CellFault { vector, rip: frame.rip }); }
         self.counters.exceptions += 1;
+        self.last_fault = Some(Fault { vector, error: frame.error, rip: frame.rip, cr2: frame.cr2 });
         // The thread's registers at the fault: the stub changed only RAX and RSP.
         let mut ctx = *regs;
         ctx.rax = frame.rax;
@@ -238,10 +245,9 @@ impl WinProcess {
         // Windows reports a breakpoint at the int3 itself.
         if vector == 3 { ctx.rip = ctx.rip.wrapping_sub(1); }
         // Back to ring 3 whatever happens next.
-        let mut st = State::default();
-        cpu.get_state(&mut st).map_err(Stop::Hypervisor)?;
-        let user = self.cell.user_state(0, 0, TEB_VA);
-        st.segments = user.segments;
+        // The whole ring-3 state, descriptor tables included, so nothing depends on how
+        // the hypervisor reports the ring-0 state it stopped in.
+        let mut st = self.cell.user_state(ctx.rip, ctx.rsp, TEB_VA);
         st.regs = ctx;
         cpu.set_state(&st).map_err(Stop::Hypervisor)?;
         *regs = ctx;
