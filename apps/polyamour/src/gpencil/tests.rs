@@ -13,6 +13,7 @@ use crate::ui::Op;
 use sex_3d::grease_pencil::tools::{EraseMode, Primitive};
 use sex_3d::grease_pencil::view::DrawPlane;
 use sex_3d::grease_pencil::GpStroke;
+use sex_3d::scene::ObjectData;
 use sex_3d::Vec3;
 
 fn view(app: &mut App) -> &mut View {
@@ -300,4 +301,25 @@ fn f12_composites_grease_pencil_over_the_render() {
     let r = crate::seqedit::post_render(&scene, 1, &st, r, &|_| scene.clone());
     let changed = before.pixels.iter().zip(&r.color.pixels).filter(|(a, b)| a != b).count();
     assert!(changed > 20, "the drawing covers part of the frame ({changed} px)");
+}
+
+#[test]
+fn poly_file_keeps_grease_pencil_and_sequencer() {
+    let mut d = crate::doc::Doc::default();
+    g::add_object(&mut d, "MONKEY");
+    let oi = d.active().unwrap();
+    d.run(&Op::with("object.gpencil_modifier_add", "OFFSET"));
+    d.run(&Op::with("object.shaderfx_add", "FX_RIM"));
+    crate::seqedit::demo(&mut d);
+    let text = crate::persist::save(&d);
+    let back = crate::persist::load(&text).expect("load .poly");
+    let name = d.scene.objects[oi].name.clone();
+    let ob = back.scene.objects.iter().find(|o| o.name == name).expect("object kept");
+    let (ObjectData::GreasePencil(a), ObjectData::GreasePencil(b)) = (&d.scene.objects[oi].data, &ob.data) else {
+        panic!("grease pencil data lost")
+    };
+    assert_eq!(d.scene.grease_pencils[*a], back.scene.grease_pencils[*b]);
+    assert_eq!(ob.gp_modifiers, d.scene.objects[oi].gp_modifiers);
+    assert_eq!(ob.shader_fx, d.scene.objects[oi].shader_fx);
+    assert_eq!(back.scene.sequence_editor, d.scene.sequence_editor);
 }
