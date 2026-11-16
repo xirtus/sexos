@@ -167,3 +167,81 @@ fn a_second_scroll_mid_glide_continues_from_what_is_shown() {
     g.compose(&frame(880), w, h);
     assert_eq!(g.shown, frame(880));
 }
+
+#[cfg(feature = "ligatures")]
+mod ligatures {
+    use super::*;
+    use crate::render::Family;
+
+    fn jetbrains() -> &'static Faces { Box::leak(Faces::boxed(Family::JetBrainsMono).expect("JetBrains Mono parses")) }
+    /// The pixels of `cols` cells drawn from `bytes` with `faces`.
+    fn draw(faces: &'static Faces, cols: usize, bytes: &[u8]) -> (alloc::vec::Vec<u32>, usize, usize, usize, u32) {
+        let (cw, ch) = cell_for_height(18);
+        let s = screen(cols, 1, bytes);
+        let (stride, mut px) = (cols * cw, alloc::vec![0u32; cols * cw * ch]);
+        Painter::new(cw, ch).with_faces(faces).draw(&s, &[], &mut cache(), &mut px, stride, false);
+        (px, stride, cw, ch, s.theme().bg)
+    }
+    fn cells(px: &[u32], stride: usize, cw: usize, ch: usize, from: usize, n: usize) -> alloc::vec::Vec<u32> {
+        (0..ch).flat_map(|y| px[y * stride + from * cw..][..n * cw].iter().copied()).collect()
+    }
+
+    #[test]
+    fn arrows_and_comparisons_become_ligatures_in_jetbrains_mono() {
+        let f = jetbrains();
+        for lig in ["->", "=>", "!=", "<=", "==", "&&", "::"] {
+            // Each cell of the pair against the same character drawn without its
+            // neighbour: the font joined them when either differs.
+            let (a, stride, cw, ch, _) = draw(f, 4, lig.as_bytes());
+            let (first, ..) = draw(f, 4, &lig.as_bytes()[..1]);
+            let (second, ..) = draw(f, 4, std::format!(" {}", &lig[1..]).as_bytes());
+            let joined = cells(&a, stride, cw, ch, 0, 1) != cells(&first, stride, cw, ch, 0, 1)
+                || cells(&a, stride, cw, ch, 1, 1) != cells(&second, stride, cw, ch, 1, 1);
+            assert!(joined, "{lig} is drawn as two characters");
+        }
+    }
+
+    #[test]
+    fn a_ligature_is_drawn_across_the_cell_boundary() {
+        let (px, stride, cw, ch, bg) = draw(jetbrains(), 4, b"->");
+        // The arrow's shaft runs on through the edge between its two cells.
+        let edge = (0..ch).filter(|y| px[y * stride + cw - 1] != bg && px[y * stride + cw] != bg).count();
+        assert!(edge > 0, "-> has a gap at its middle");
+        assert!(ink(&px, stride, cw, ch, 0, 0, bg) > 4 && ink(&px, stride, cw, ch, 1, 0, bg) > 4);
+    }
+
+    #[test]
+    fn geist_mono_draws_no_ligatures() {
+        let (a, stride, cw, ch, _) = draw(faces(), 4, b"->");
+        let (b, ..) = draw(faces(), 4, b"-");
+        assert_eq!(cells(&a, stride, cw, ch, 0, 1), cells(&b, stride, cw, ch, 0, 1));
+    }
+
+    #[test]
+    fn plain_text_in_jetbrains_mono_is_drawn_as_characters() {
+        // Letters are never shaped: "ab" is "a" then "b".
+        let f = jetbrains();
+        let (a, stride, cw, ch, _) = draw(f, 4, b"ab");
+        let (b, ..) = draw(f, 4, b"a");
+        assert_eq!(cells(&a, stride, cw, ch, 0, 1), cells(&b, stride, cw, ch, 0, 1));
+    }
+
+    #[test]
+    fn a_full_frame_with_ligatures_draws_in_under_eight_milliseconds() {
+        let (cw, ch) = cell_for_height(18);
+        let (cols, rows) = (160, 48);
+        let mut bytes = alloc::vec::Vec::new();
+        for r in 0..rows { bytes.extend_from_slice(std::format!("\x1b[3{}m{:03} fn main() -> u8 {{ if a != b && c => d {{}} }} // ok {}\r\n", r % 8, r, "=".repeat(80)).as_bytes()); }
+        let s = screen(cols, rows, &bytes);
+        let (stride, mut px) = (cols * cw, alloc::vec![0u32; cols * cw * rows * ch]);
+        let mut c = cache();
+        let mut p = Painter::new(cw, ch).with_faces(jetbrains());
+        p.draw(&s, &[], &mut c, &mut px, stride, false);
+        let frames = 20;
+        let start = std::time::Instant::now();
+        for _ in 0..frames { p.draw(&s, &[], &mut c, &mut px, stride, false); }
+        let per = start.elapsed() / frames;
+        std::println!("full frame with ligatures {}x{} cells: {:?}", cols, rows, per);
+        if !cfg!(debug_assertions) { assert!(per.as_micros() < 8_000, "{per:?} a frame"); }
+    }
+}

@@ -26,6 +26,12 @@ pub static GEIST_SANS_BOLD_ITALIC: &[u8] = include_bytes!("../../../assets/fonts
 pub static GEIST_MONO_BOLD: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-Bold.ttf");
 pub static GEIST_MONO_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-Italic.ttf");
 pub static GEIST_MONO_BOLD_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-BoldItalic.ttf");
+/// JetBrains Mono, SIL Open Font License 1.1 (assets/fonts/jetbrains/OFL.txt): Spindle's
+/// other terminal font, the one with coding ligatures.
+pub static JETBRAINS_MONO: &[u8] = include_bytes!("../../../assets/fonts/jetbrains/JetBrainsMono-Regular.ttf");
+pub static JETBRAINS_MONO_BOLD: &[u8] = include_bytes!("../../../assets/fonts/jetbrains/JetBrainsMono-Bold.ttf");
+pub static JETBRAINS_MONO_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/jetbrains/JetBrainsMono-Italic.ttf");
+pub static JETBRAINS_MONO_BOLD_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/jetbrains/JetBrainsMono-BoldItalic.ttf");
 
 /// Weight and slant of a face.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -259,4 +265,12 @@ pub fn draw_cell(font: &Font, scalar: u32, w: usize, h: usize, acc: &mut [i32], 
     let Some(glyph) = font.glyph(scalar) else { return false };
     let (size, x, baseline) = cell_layout(font, w, h);
     font.draw(glyph, size, x, baseline, w, h, acc, out)
+}
+
+/// [`draw_cell`] for a glyph found by shaping (a ligature's part), drawn `shift` cells to
+/// the right of the bitmap: a glyph that reaches into the cells before its own (as
+/// coding ligatures do) gives each of them its part this way.
+pub fn draw_cell_glyph(font: &Font, glyph: GlyphId, shift: usize, w: usize, h: usize, acc: &mut [i32], out: &mut [u8]) -> bool {
+    let (size, x, baseline) = cell_layout(font, w, h);
+    font.draw(glyph, size, x + (shift * w) as i32 * FX, baseline, w, h, acc, out)
 }
