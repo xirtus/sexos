@@ -104,6 +104,13 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
             self.assertFalse(self.check(bad+SAMPLED+denim)['ok'])
         self.assertFalse(self.check(role+SAMPLED+denim.replace('ticks=64','ticks=63'))['ok'])
 
+    def test_sex_pdx_module_list_is_outside_the_wait_fingerprint(self):
+        from check_self_wait import wait_fingerprint
+        name='crates/sex-pdx/src/lib.rs';data=(ROOT/name).read_bytes()
+        self.assertIn(wait_fingerprint(name,data),APPROVED_TIMED_WAIT_SOURCES[name])
+        self.assertIn(wait_fingerprint(name,data+b'\npub mod another_service;\n'),APPROVED_TIMED_WAIT_SOURCES[name])
+        self.assertNotIn(wait_fingerprint(name,data+b'\npub fn f()->u64{0}\n'),APPROVED_TIMED_WAIT_SOURCES[name])
+
     def test_quiet_usb_32_is_only_allowed_with_exact_reviewed_predicate(self):
         usb='[scheduler.self_wait.park] task=5 ticks=32 deadline=200 count=2\n'
         self.assertFalse(inspect(SAMPLED+usb)['ok'])

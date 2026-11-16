@@ -47,8 +47,16 @@ class PassiveProof(unittest.TestCase):
                 p=root/file;p.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/file,p)
             self.assertTrue(self.inspect(root=root)['ok'])
             for file in gate.PASSIVE_OBSERVER_SOURCES:
-                p=root/file;original=p.read_bytes();p.write_bytes(original+b'\n// unreviewed\n')
-                self.assertFalse(self.inspect(root=root)['ok'],file);p.write_bytes(original)
+                p=root/file;original=p.read_bytes()
+                if file=='servers/silk-shell/src/main.rs':
+                    # Only the Shell's wait fingerprint is pinned: unrelated edits pass,
+                    # a new wait/yield/listen line or a second observer call does not.
+                    p.write_bytes(original+b'\n// unrelated\n');self.assertTrue(self.inspect(root=root)['ok'],file)
+                    for extra in (b'\nfn f(){sys_yield();}\n',b'\nfn f(){wait_observer::poll();}\n'):
+                        p.write_bytes(original+extra);self.assertFalse(self.inspect(root=root)['ok'],extra)
+                else:
+                    p.write_bytes(original+b'\n// unreviewed\n');self.assertFalse(self.inspect(root=root)['ok'],file)
+                p.write_bytes(original)
     def test_both_samples_need_post_expiry_offset_and_before_tick(self):
         for trace in (TRACE.replace(EXPIRY,''),TRACE.replace('deadline=200 now=200','deadline=200 now=199'),
                       TRACE.replace('deadline=200 now=200','deadline=0 now=0'),

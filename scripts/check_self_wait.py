@@ -26,7 +26,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'kernel/src/program_workers.rs': ('6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',),
  'crates/sex-pdx/src/lib.rs': ('8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde',
                                'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
-                               'c2895d4991c2d48d099daee3e6090063b3288f77c0ad5e9a75201c903f95c984', 'ef6e695c7535ac077e8c4adef7ded6d79425210a1fd77005940be7f823cab40a', 'cee8e1525fa104c2c14f398b4eee80f4f63cd0f3f06602310cdf421dc15009c1', '1b7fe3f1752da8d10ea2f2ea6df5c387ff9ec9969a4287be64fb6e878f4a4d75', '562ccc2f5cf8cf755e68925f0a65a699fd9e968ac78a44bfe4c7dc84f464e7ab', 'f00f44669af45f707a4a24ec15f70321ed9ed04565007c9e1b093b42fdd39e96', '3766c55f455e02199154d9cdbe28c5fc93a454f91a2459fe04e2eafaf8abd24b', '74a5f4ccbd9aeeb574ff5c9d8f7008b486d89e214ef405ef589711dfda71904b',),
+                               'c2895d4991c2d48d099daee3e6090063b3288f77c0ad5e9a75201c903f95c984', 'ef6e695c7535ac077e8c4adef7ded6d79425210a1fd77005940be7f823cab40a', 'cee8e1525fa104c2c14f398b4eee80f4f63cd0f3f06602310cdf421dc15009c1', '1b7fe3f1752da8d10ea2f2ea6df5c387ff9ec9969a4287be64fb6e878f4a4d75', '562ccc2f5cf8cf755e68925f0a65a699fd9e968ac78a44bfe4c7dc84f464e7ab', 'f00f44669af45f707a4a24ec15f70321ed9ed04565007c9e1b093b42fdd39e96', '3766c55f455e02199154d9cdbe28c5fc93a454f91a2459fe04e2eafaf8abd24b', '74a5f4ccbd9aeeb574ff5c9d8f7008b486d89e214ef405ef589711dfda71904b',
+                               # wait fingerprint (wait_fingerprint), 2026-11-16
+                               'wait-v1:0f64f51bb2e99d980f283c55f402b56e3f5da5a1d22b814ac98b4b1867b8a3d2',),
  # Reviewed restricted-provider intake/polling; the exact Net2 envelope and
  # deadline owners are unchanged. See RESTRICTED_TIMER_SOURCE_REVIEW_2026_11_15.
  'servers/sexnet/src/main.rs': ('00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725',
@@ -44,6 +46,27 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
 # c209 raw-master only; no speculative combined privacy/kernel cohort.
 APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
+
+
+# Files that change for reasons unrelated to waiting are pinned by a wait
+# fingerprint instead of their whole bytes, so unrelated edits need no re-pin:
+# - sex-pdx lib.rs: everything except bare `pub mod x;` module declarations and blank lines.
+# - silk-shell main.rs: exactly one `mod wait_observer;` and one
+#   `wait_observer::poll();`, plus every line that waits, yields, listens or
+#   reaches wait_observer, in order (whitespace removed).
+SHELL_WAIT_LINE=re.compile(r'wait_observer|sys_wait_self_ticks|pdx_listen|pdx_try_listen|sys_yield|sched_yield|wait_for_message')
+def wait_fingerprint(name,data):
+    text=data.decode()
+    if name=='crates/sex-pdx/src/lib.rs':
+        kept=[l.rstrip() for l in text.splitlines() if l.strip() and not re.fullmatch(r'\s*pub\s+mod\s+\w+\s*;\s*',l)]
+        return 'wait-v1:'+hashlib.sha256('\n'.join(kept).encode()).hexdigest()
+    if name=='servers/silk-shell/src/main.rs':
+        flat=re.sub(r'\s+','',text)
+        if flat.count('modwait_observer;')!=1 or flat.count('wait_observer::poll();')!=1 or flat.count('wait_observer::')!=1:
+            raise ValueError('changed Shell wait_observer module/call')
+        kept=[re.sub(r'\s+','',l) for l in text.splitlines() if SHELL_WAIT_LINE.search(l)]
+        return 'wait-v1:'+hashlib.sha256('\n'.join(kept).encode()).hexdigest()
+    return hashlib.sha256(data).hexdigest()
 
 
 def deadline_source_closure(root):
@@ -78,7 +101,7 @@ def source_contract(root):
         for name,approved in APPROVED_TIMED_WAIT_SOURCES.items():
             path=(root/name).resolve(strict=True)
             if not path.is_relative_to(root) or not path.is_file():raise ValueError('source escapes root: '+name)
-            data=path.read_bytes();digest=hashlib.sha256(data).hexdigest();sources[name]=digest
+            data=path.read_bytes();digest=wait_fingerprint(name,data);sources[name]=digest
             if digest not in approved:raise ValueError('unreviewed timed-wait source: '+name)
             texts[name]=re.sub(r'\s+','',data.decode())
         closure=deadline_source_closure(root)
@@ -198,7 +221,7 @@ def _sampled(count,initial):
 # Only this actual reviewed Shell/API/kernel cohort is admitted; future merge
 # combinations need independent review and an exact new fingerprint.
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
- 'servers/silk-shell/src/main.rs': 'd6bbeb8a85b3eefff17a33fba43c8dedd92604e1a91409c64c55b7374f58c307',
+ 'servers/silk-shell/src/main.rs': 'wait-v1:4498ab1ca18598a6dcf3e4c8b64a0a3ce3f90ead7c3a136f125492802ee68235',
  'crates/sex-pdx/src/system_stats.rs': '6f77139bfab17ed0f01a7a30b59854596ac53e679171a004b88be54ee00dc197',
  'crates/sex-pdx/src/crash_log.rs': '98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
@@ -218,7 +241,7 @@ def passive_observer_source(root,core):
         for name,expected in PASSIVE_OBSERVER_SOURCES.items():
             path=(root/name).resolve(strict=True)
             if not path.is_relative_to(root)or not path.is_file()or path.stat().st_size>2*1024*1024:raise ValueError('invalid passive observer source')
-            digest=hashlib.sha256(path.read_bytes()).hexdigest();result['source_sha256'][name]=digest
+            digest=wait_fingerprint(name,path.read_bytes());result['source_sha256'][name]=digest
             if digest!=expected:raise ValueError('unreviewed passive observer source: '+name)
         result['core_source_sha256']=core['source_sha256']
         result.update(ok=True,conditions=['diagnostic-only-Shell-main-loop-call','public-counter-indexes-current-pd-not-query-target',
