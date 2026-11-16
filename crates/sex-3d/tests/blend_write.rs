@@ -292,6 +292,7 @@ fn materials_round_trip() {
     assert!(approx(red.metallic, 0.25) && approx(red.roughness, 0.3) && approx(red.ior, 1.45), "{red:?}");
     assert!(approx3(red.emission, Vec3::new(1.0, 0.5, 0.0)) && approx(red.emission_strength, 2.0));
     assert_eq!(red.pass_index, 3);
+    assert_eq!(red.eevee, sex_3d::scene::MaterialEevee::default());
     let green = r.materials.iter().find(|m| m.name == "Green").unwrap();
     let t = green.node_tree.as_ref().expect("tree");
     assert!(approx(green.roughness, 0.9));
@@ -1025,6 +1026,15 @@ fn physics_round_trip() {
         set_value(fluid.props(), "fluid_type", &PValue::E(k, ""));
         s.objects[pi].modifiers = vec![Modifier::Physics(fluid)];
     }
+    // A liquid domain, every liquid setting changed (Border Collisions included).
+    let li = s.add_mesh_object("Pool", test_mesh());
+    let mut liquid = PhysicsModifier::with_defaults("fluid").unwrap();
+    set_value(liquid.props(), "fluid_type", &PValue::E(0, ""));
+    set_value(liquid.props(), "domain_type", &PValue::E(1, ""));
+    perturb(liquid.props(), &physics_refs);
+    set_value(liquid.props(), "fluid_type", &PValue::E(0, ""));
+    set_value(liquid.props(), "domain_type", &PValue::E(1, ""));
+    s.objects[li].modifiers = vec![Modifier::Physics(liquid)];
     let joint_types = entries(&mut RigidBodyConstraint::default()).into_iter().find(|e| e.id == "type").unwrap().items.len();
     for k in 0..joint_types {
         let ji = s.add_object(Object::new(&format!("Joint{k}"), ObjectData::Empty));
@@ -1087,6 +1097,13 @@ fn physics_round_trip() {
         let (mut x, mut y) = (x.clone(), y.clone());
         cmp(&name, x.props(), y.props());
     }
+    for name in ["Pool"] {
+        let (si, _) = obj(&s, name);
+        let (_, op) = obj(&r, name);
+        let (Modifier::Physics(x), Some(Modifier::Physics(y))) = (&s.objects[si].modifiers[0], op.modifiers.first()) else { panic!("{name}: {:?}", op.modifiers) };
+        let (mut x, mut y) = (x.clone(), y.clone());
+        cmp(name, x.props(), y.props());
+    }
     for k in 0..joint_types {
         let name = format!("Joint{k}");
         let (si, _) = obj(&s, &name);
@@ -1117,4 +1134,15 @@ fn physics_round_trip() {
         cmp(&name, &mut a, &mut b);
     }
     assert!(diffs.is_empty(), "{} physics settings changed:\n{}", diffs.len(), diffs.join("\n"));
+}
+
+#[test]
+fn eevee_material_settings_round_trip() {
+    use sex_3d::scene::{MaterialEevee, RenderMethod};
+    let mut s = Scene::new();
+    let e = MaterialEevee { render_method: RenderMethod::Dithered, backface_culling: true, backface_culling_shadow: true, transparent_shadows: false, screen_refraction: true, refraction_depth: 0.25 };
+    s.materials.push(Material { name: "Glass".into(), eevee: e.clone(), ..Material::default() });
+    let r = export_import(&s);
+    let m = r.materials.iter().find(|m| m.name == "Glass").expect("material");
+    assert_eq!(m.eevee, e);
 }

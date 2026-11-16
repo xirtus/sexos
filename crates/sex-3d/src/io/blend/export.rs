@@ -1074,6 +1074,15 @@ impl W {
         self.f(&mut r, "metallic", &[m.metallic]);
         self.f(&mut r, "roughness", &[m.roughness]);
         self.i(&mut r, "index", m.pass_index.min(32767) as i64);
+        // EEVEE: Render Method (MA_SURFACE_METHOD_DEFERRED 0 / FORWARD 1),
+        // blend_flag MA_BL_CULL_BACKFACE, _SS_REFRACTION, _CULL_BACKFACE_SHADOW,
+        // _TRANSPARENT_SHADOW, and the refraction thickness.
+        let e = &m.eevee;
+        self.i(&mut r, "surface_render_method", (e.render_method == crate::scene::RenderMethod::Blended) as i64);
+        let keep = self.get(&r, "blend_flag") & !(1 | 4 | 8 | 16);
+        let bf = [(e.backface_culling, 1), (e.screen_refraction, 4), (e.backface_culling_shadow, 8), (e.transparent_shadows, 16)].iter().fold(keep, |a, &(on, b)| if on { a | b } else { a });
+        self.i(&mut r, "blend_flag", bf);
+        self.f(&mut r, "refract_depth", &[e.refraction_depth]);
         self.i(&mut r, "use_nodes", 1);
         let tree = self.addr();
         self.p(&mut r, "nodetree", tree);

@@ -1314,6 +1314,19 @@ impl<'f, 'a> Importer<'f, 'a> {
         if let Some(v) = ma.f32("roughness") {
             m.roughness = v;
         }
+        // EEVEE settings (4.2 DNA; see export.rs).
+        if let Some(v) = ma.num("surface_render_method") {
+            m.eevee.render_method = if v == 1.0 { crate::scene::RenderMethod::Blended } else { crate::scene::RenderMethod::Dithered };
+        }
+        if let Some(b) = ma.num("blend_flag").map(|b| b as i64) {
+            m.eevee.backface_culling = b & 1 != 0;
+            m.eevee.screen_refraction = b & 4 != 0;
+            m.eevee.backface_culling_shadow = b & 8 != 0;
+            m.eevee.transparent_shadows = b & 16 != 0;
+        }
+        if let Some(v) = ma.f32("refract_depth").filter(|v| v.is_finite()) {
+            m.eevee.refraction_depth = v;
+        }
         if ma.num("use_nodes") != Some(0.0) {
             self.principled(ma, &mut m);
             if let Some(tree) = self.f.view_ptr(ma.ptr("nodetree"), &["bNodeTree"]) {

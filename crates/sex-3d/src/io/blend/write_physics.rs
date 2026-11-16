@@ -354,6 +354,59 @@ impl W {
                 self.i(&mut d, "diss_speed", s.dissolve_speed.round() as i64);
                 self.i(&mut d, "cache_frame_start", s.cache_frame_start as i64);
                 self.i(&mut d, "cache_frame_end", s.cache_frame_end as i64);
+                // Liquid (and the domain flags both kinds share).
+                for (k, v) in [
+                    ("flip_ratio", s.flip_ratio),
+                    ("particle_radius", s.particle_radius),
+                    ("particle_randomness", s.particle_randomness),
+                    ("particle_band_width", s.particle_band_width),
+                    ("fractions_distance", s.fractions_distance),
+                    ("fractions_threshold", s.fractions_threshold),
+                    ("mesh_particle_radius", s.mesh_particle_radius),
+                    ("mesh_concave_upper", s.mesh_concave_upper),
+                    ("mesh_concave_lower", s.mesh_concave_lower),
+                    ("viscosity_base", s.viscosity_base),
+                    ("surface_tension", s.surface_tension),
+                    ("viscosity_value", s.viscosity_value),
+                    ("clipping", s.clipping),
+                ] {
+                    self.f(&mut d, k, &[v]);
+                }
+                for (k, v) in [
+                    ("sys_particle_maximum", s.sys_particle_maximum),
+                    ("particle_number", s.particle_number),
+                    ("particle_maximum", s.particle_max),
+                    ("particle_minimum", s.particle_min),
+                    ("mesh_scale", s.mesh_scale),
+                    ("mesh_smoothen_pos", s.mesh_smoothen_pos),
+                    ("mesh_smoothen_neg", s.mesh_smoothen_neg),
+                    ("viscosity_exponent", s.viscosity_exponent),
+                    ("cache_frame_offset", s.cache_frame_offset),
+                ] {
+                    self.i(&mut d, k, v as i64);
+                }
+                self.f(&mut d, "gravity", &s.gravity);
+                self.i(&mut d, "simulation_method", (s.simulation_method == SimulationMethod::Apic) as i64);
+                self.i(&mut d, "mesh_generator", (s.mesh_generator == MeshGenerator::Union) as i64);
+                self.i(&mut d, "cache_type", match s.cache_type {
+                    FluidCacheType::Replay => 0,
+                    FluidCacheType::Modular => 1,
+                    FluidCacheType::All => 2,
+                });
+                // FLUID_DOMAIN_PARTICLE_FLIP.
+                let pt = self.get(&d, "particle_type") & !1;
+                self.i(&mut d, "particle_type", pt | s.use_flip_particles as i64);
+                // FLUID_DOMAIN_BORDER_FRONT .. _BOTTOM.
+                self.i(&mut d, "border_collisions", bits(&[
+                    (s.use_collision_border_front, 2),
+                    (s.use_collision_border_back, 4),
+                    (s.use_collision_border_right, 8),
+                    (s.use_collision_border_left, 16),
+                    (s.use_collision_border_top, 32),
+                    (s.use_collision_border_bottom, 64),
+                ]));
+                let fl = self.get(&d, "flags") & !DOMAIN_FLAGS.iter().fold(0, |m, &(b, _)| m | b);
+                self.i(&mut d, "flags", fl | bits(&domain_flags(s).map(|(b, on)| (on, b))));
                 let ew = self.effector_weights(&s.effector_weights, ids);
                 self.p(&mut d, "effector_weights", ew);
                 let pc = self.point_cache(&PointCacheSettings { frame_start: s.cache_frame_start, frame_end: s.cache_frame_end, use_disk_cache: true }, &mut d, "ptcaches");
@@ -520,4 +573,24 @@ fn constraint_type(v: i64) -> ConstraintType {
         7 => ConstraintType::Motor,
         _ => ConstraintType::Point,
     }
+}
+
+/// `FluidDomainSettings.flags` bits Polyamour keeps (FLUID_DOMAIN_USE_*).
+pub(super) const DOMAIN_FLAGS: [(i64, &str); 10] = [
+    (1 << 2, "use_dissolve_smoke"),
+    (1 << 3, "use_dissolve_smoke_log"),
+    (1 << 6, "use_speed_vectors"),
+    (1 << 8, "use_fractions"),
+    (1 << 9, "delete_in_obstacle"),
+    (1 << 10, "use_diffusion"),
+    (1 << 11, "use_mesh"),
+    (1 << 12, "cache_resumable"),
+    (1 << 13, "use_adaptive_timesteps"),
+    (1 << 14, "use_viscosity"),
+];
+
+/// Each [`DOMAIN_FLAGS`] bit with its setting.
+pub(super) fn domain_flags(s: &FluidSettings) -> [(i64, bool); 10] {
+    let v = [s.use_dissolve_smoke, s.use_dissolve_smoke_log, s.use_speed_vectors, s.use_fractions, s.delete_in_obstacle, s.use_diffusion, s.use_mesh, s.cache_resumable, s.use_adaptive_timesteps, s.use_viscosity];
+    core::array::from_fn(|i| (DOMAIN_FLAGS[i].0, v[i]))
 }

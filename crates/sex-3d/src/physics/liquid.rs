@@ -1297,7 +1297,11 @@ pub fn step(scene: &Scene, obj: usize, s: &FluidSettings, prev: &LiquidFrame) ->
     let steps = if s.use_adaptive_timesteps {
         let vmax = solver.st.vel.iter().fold(0.0f32, |m, v| m.max(v.abs().max_elem())) + gravity.length() * dt_frame;
         let need = (vmax * dt_frame / (s.cfl_condition.max(0.1) * g.dx)).ceil() as i32;
-        need.clamp(s.timesteps_min.max(1), s.timesteps_max.max(1)) as usize
+        {
+            // Minimum and Maximum are edited separately: order them first.
+            let (lo, hi) = (s.timesteps_min.max(1), s.timesteps_max.max(1));
+            need.clamp(lo.min(hi), lo.max(hi)) as usize
+        }
     } else {
         s.timesteps_min.max(1) as usize
     };

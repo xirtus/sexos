@@ -560,6 +560,70 @@ fn fluid(f: &BlendFile<'_>, md: &View<'_, '_>) -> Option<FluidSettings> {
         int(&d, "cache_frame_start", &mut s.cache_frame_start);
         int(&d, "cache_frame_end", &mut s.cache_frame_end);
         effector_weights(f, d.ptr("effector_weights"), &mut s.effector_weights);
+        for (k, v) in [
+            ("flip_ratio", &mut s.flip_ratio),
+            ("particle_radius", &mut s.particle_radius),
+            ("particle_randomness", &mut s.particle_randomness),
+            ("particle_band_width", &mut s.particle_band_width),
+            ("fractions_distance", &mut s.fractions_distance),
+            ("fractions_threshold", &mut s.fractions_threshold),
+            ("mesh_particle_radius", &mut s.mesh_particle_radius),
+            ("mesh_concave_upper", &mut s.mesh_concave_upper),
+            ("mesh_concave_lower", &mut s.mesh_concave_lower),
+            ("viscosity_base", &mut s.viscosity_base),
+            ("surface_tension", &mut s.surface_tension),
+            ("viscosity_value", &mut s.viscosity_value),
+            ("clipping", &mut s.clipping),
+        ] {
+            fl(&d, k, v);
+        }
+        for (k, v) in [
+            ("sys_particle_maximum", &mut s.sys_particle_maximum),
+            ("particle_number", &mut s.particle_number),
+            ("particle_maximum", &mut s.particle_max),
+            ("particle_minimum", &mut s.particle_min),
+            ("mesh_scale", &mut s.mesh_scale),
+            ("mesh_smoothen_pos", &mut s.mesh_smoothen_pos),
+            ("mesh_smoothen_neg", &mut s.mesh_smoothen_neg),
+            ("viscosity_exponent", &mut s.viscosity_exponent),
+            ("cache_frame_offset", &mut s.cache_frame_offset),
+        ] {
+            int(&d, k, v);
+        }
+        if let Some(g) = d.vec::<3>("gravity") {
+            s.gravity = g;
+        }
+        s.simulation_method = if flags(&d, "simulation_method") == 1 { SimulationMethod::Apic } else { SimulationMethod::Flip };
+        s.mesh_generator = if flags(&d, "mesh_generator") == 1 { MeshGenerator::Union } else { MeshGenerator::Improved };
+        s.cache_type = match flags(&d, "cache_type") {
+            1 => FluidCacheType::Modular,
+            2 => FluidCacheType::All,
+            _ => FluidCacheType::Replay,
+        };
+        if let Some(p) = d.num("particle_type") {
+            s.use_flip_particles = p as i64 & 1 != 0;
+        }
+        if let Some(b) = d.num("border_collisions").map(|b| b as i64) {
+            s.use_collision_border_front = b & 2 != 0;
+            s.use_collision_border_back = b & 4 != 0;
+            s.use_collision_border_right = b & 8 != 0;
+            s.use_collision_border_left = b & 16 != 0;
+            s.use_collision_border_top = b & 32 != 0;
+            s.use_collision_border_bottom = b & 64 != 0;
+        }
+        if let Some(b) = d.num("flags").map(|b| b as i64) {
+            let on = |bit: i64| b & bit != 0;
+            s.use_dissolve_smoke = on(1 << 2);
+            s.use_dissolve_smoke_log = on(1 << 3);
+            s.use_speed_vectors = on(1 << 6);
+            s.use_fractions = on(1 << 8);
+            s.delete_in_obstacle = on(1 << 9);
+            s.use_diffusion = on(1 << 10);
+            s.use_mesh = on(1 << 11);
+            s.cache_resumable = on(1 << 12);
+            s.use_adaptive_timesteps = on(1 << 13);
+            s.use_viscosity = on(1 << 14);
+        }
     }
     if let Some(fw) = f.view_ptr(md.ptr("flow"), &["FluidFlowSettings"]) {
         s.flow_type = match flags(&fw, "type") {
