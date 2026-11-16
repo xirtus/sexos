@@ -653,7 +653,7 @@ def verify_evidence(root,iso,binding,evidence):
   shots.append(verify_pixels(prefix,(evidence/shot['file']).read_bytes(),shot['visible'],tuple(map(int,manifest['resolution'].split('x'))),contract))
  if mode=='ready'and shots[0]['geometry']['viewport']==shots[-1]['geometry']['viewport']:raise ValueError('actual viewport/scale transition missing')
  authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace,browser_tasks=browser_wait_tasks(trace),source_root=root);target=target_check(Path(root))
- if not all(r['ok']for r in(authority,waiting,target)):raise ValueError('native authority/self-wait/non-Unix target check failed')
+ if not all(r['ok']for r in(authority,waiting,target)):raise ValueError('native authority/self-wait/non-Unix target check failed: '+json.dumps({n:r.get('errors')for n,r in(('authority',authority),('self_wait',waiting),('target',target))if not r['ok']}))
  return dict(ok=True,binding=bound,mode=mode,wire=wire,trace=joins,pixels=shots,pointer_parking=parking,key_actions=key_actions,authority=authority,self_wait=waiting,target=target,scope=SCOPE)
 
 def main():
