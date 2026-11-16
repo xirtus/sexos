@@ -829,6 +829,8 @@ fn struct_of(m: &Modifier) -> Option<(&'static str, i64)> {
         Modifier::WeightedNormal { .. } => ("WeightedNormalModifierData", 54),
         Modifier::Weld { .. } => ("WeldModifierData", 55),
         Modifier::Physics(P::Fluid(_)) => ("FluidModifierData", 56),
+        // Dynamic Paint canvases and brushes are not written yet.
+        Modifier::Physics(P::DynamicPaint(_)) => return None,
         Modifier::Nodes { .. } => ("NodesModifierData", 57),
         Modifier::Multires { .. } => return None,
     })

@@ -586,10 +586,20 @@ fn fluid(f: &BlendFile<'_>, md: &View<'_, '_>) -> Option<FluidSettings> {
         if let Some(v) = fw.vec::<3>("vel_coord") {
             s.velocity_coord = v;
         }
+        int(&fw, "subframes", &mut s.subframes);
+        let b = flags(&fw, "flags");
+        s.use_absolute = b & 2 != 0;
+        s.use_initial_velocity = b & 4 != 0;
+        s.use_plane_init = b & 32 != 0;
+        s.use_inflow = b & 64 != 0;
     }
     if let Some(e) = f.view_ptr(md.ptr("effector"), &["FluidEffectorSettings"]) {
         s.effector_type = if flags(&e, "type") == 1 { EffectorType::Guide } else { EffectorType::Collision };
         fl(&e, "surface_distance", &mut s.effector_surface_distance);
+        int(&e, "subframes", &mut s.subframes);
+        let b = flags(&e, "flags");
+        s.use_effector = b & 2 != 0;
+        s.use_plane_init = b & 4 != 0;
     }
     Some(s)
 }

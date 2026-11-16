@@ -279,6 +279,8 @@ impl W {
                 self.p(r, "psys", a);
             }
             PhysicsModifier::Fluid(s) => self.fluid(r, s, ids),
+            // Not written yet (struct_of skips it).
+            PhysicsModifier::DynamicPaint(_) => {}
         }
     }
 
@@ -386,6 +388,10 @@ impl W {
                 }
                 self.f(&mut fw, "color", &s.smoke_color);
                 self.f(&mut fw, "vel_coord", &s.velocity_coord);
+                self.i(&mut fw, "subframes", s.subframes as i64);
+                // FLUID_FLOW_ABSOLUTE, _INITVELOCITY, _USE_PLANE_INIT, _USE_INFLOW.
+                let fl = self.get(&fw, "flags") & !(2 | 4 | 32 | 64);
+                self.i(&mut fw, "flags", fl | bits(&[(s.use_absolute, 2), (s.use_initial_velocity, 4), (s.use_plane_init, 32), (s.use_inflow, 64)]));
                 let a = self.data(&[fw]);
                 self.p(r, "flow", a);
             }
@@ -394,6 +400,10 @@ impl W {
                 let mut e = self.rec("FluidEffectorSettings");
                 self.i(&mut e, "type", (s.effector_type == EffectorType::Guide) as i64);
                 self.f(&mut e, "surface_distance", &[s.effector_surface_distance]);
+                self.i(&mut e, "subframes", s.subframes as i64);
+                // FLUID_EFFECTOR_USE_EFFEC, _USE_PLANE_INIT.
+                let fl = self.get(&e, "flags") & !(2 | 4);
+                self.i(&mut e, "flags", fl | bits(&[(s.use_effector, 2), (s.use_plane_init, 4)]));
                 let a = self.data(&[e]);
                 self.p(r, "effector", a);
             }
