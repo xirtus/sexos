@@ -1341,6 +1341,7 @@ pub mod screen_state;
 pub mod app_scroll;
 pub mod bitmap_batch;
 pub mod speech_voice;
+pub mod a11y;
 pub mod vm;
 pub mod stream;
 pub mod console_relay;
