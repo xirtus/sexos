@@ -240,6 +240,11 @@ pub struct UiState {
     pub open_popup: Option<Popup>,
     /// Status-bar hint for what is under the pointer.
     pub hint: String,
+    /// Background of the next number field (keyed / animated / driven).
+    pub tint: Option<u32>,
+    /// Animatable fields drawn this frame: (field key, "object\tpath\tindex",
+    /// tint).
+    pub anim_fields: Vec<(String, String, Option<u32>)>,
 }
 
 /// One frame's widget context.
@@ -381,7 +386,19 @@ impl<'a> Ui<'a> {
         let hover = self.hovered(r);
         let editing = matches!(&self.st.editing, Some((e, _)) if *e == wid);
         let dragging = self.st.active == Some(wid);
-        if o.slider && !editing {
+        let tint = self.st.tint.take();
+        if let (Some(c), false) = (tint, editing) {
+            self.p.round_rect(r, 4, c);
+            if o.slider {
+                let f = ((*value - o.min) / (o.max - o.min)).clamp(0.0, 1.0);
+                let fw = (r.w as f32 * f).round() as i32;
+                if fw > 0 {
+                    self.p.push_clip(Rect::new(r.x, r.y, fw, r.h));
+                    self.p.round_rect_alpha(r, 4, 0xffffff, 40);
+                    self.p.pop_clip();
+                }
+            }
+        } else if o.slider && !editing {
             self.p.round_rect(r, 4, if hover || dragging { t::BUTTON_DARK_HOVER } else { t::BUTTON_DARK });
             let f = ((*value - o.min) / (o.max - o.min)).clamp(0.0, 1.0);
             let fw = (r.w as f32 * f).round() as i32;

@@ -4412,6 +4412,775 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   Weft UI, capture UX, effects, project persistence and export follow. Contract and
   next steps: `docs/handoff/MOAN_2026_11_14.md`.
 
+## ChatGPT round 172: Moan per-track EQ, compressor and reverb (2026-11-14)
+- `moan-core::effects`: three-band EQ, stereo-linked peak compression and a small
+  Schroeder reverb. No allocation during processing, validated controls and bounded
+  integer arithmetic. `render_processed` keeps per-track state, drains tails after
+  clips end and flushes state on seeks; muted tracks advance silently.
+- 21 host integration tests pass, plus an actual DSP-rendered host WAV qualifies
+  the waveform checker. Guest release build and forbidden-instruction scan pass.
+- The guest `moan-probe fx` and CI `moan_gate.py --effects` check compressed stereo
+  pitch/level and a decaying reverb tail. QEMU validation awaits CI; no playback
+  claim is based on compilation or the host reference alone.
+- This slice stacks on round 171 (#244); no kernel, Weft or owned app changes.
+  The DAW window, capture UX, persistence and export remain future slices.
+
+## ChatGPT round 177: Moan workstation window (2026-11-14)
+- Actual Weft app: multitrack clip timeline table, Play/Pause/Stop, microphone
+  capture with the existing grant flow, split/cut/fade/gain, track volume/pan,
+  mute/solo, EQ/compressor/reverb presets and twelve-level undo/redo. Shared owned
+  PCM supports editing without self-references or sample copies at each split.
+- PCM WAV import and streaming exclusive-create WAV export through Files' picker;
+  sync is required for success. Eight tracks, sixty seconds per imported/captured
+  source. Capture gaps retain timing, and Stop drains unread frames first.
+- 21 engine tests plus eight project/UI tests; guest build and instruction scan
+  pass locally. Window visually checked on host. QEMU window/playback/edit/capture
+  gates added, pending CI. Weft #220 and Moan #244/#246 are dependencies.
+- Remaining: FFmpeg FLAC/MP3 export, persistent projects and graphical waveforms.
+  No kernel, shell, toolkit or Claude-owned app code was edited.
+## ChatGPT round 174: Velvet original games pack (2026-11-14)
+- `apps/velvet`: three playable games on shared Weft widgets: Snags (safe-first-click
+  minefield with flags/flood reveal), Mingle (4x4 number merging) and Twin Flames
+  (matching pairs). Pointer and keyboard controls, clear win/loss, score/turns and
+  New Game. No borrowed art, game engine, custom widget drawing or kernel changes.
+- Twelve host tests cover game rules, real Weft pointer/shortcut responses and the
+  default 640x400 layout. Host previews of all games were rendered and inspected.
+  Guest release build and forbidden-instruction scan pass.
+- Build/install stage and CI host/QEMU gates added. `scripts/velvet_gate.py` plays
+  through real pointer and keyboard paths, checks rendered windows and closes via
+  Shell; QEMU evidence awaits CI. No guest validation claim based on compilation.
+- Depends on Weft PR #220; no Weft/toolkit/shell or other owned-app files changed.
+  Contract, commands and evidence: `docs/handoff/VELVET_2026_11_14.md`.
+
+## ChatGPT round 175: Leather Weft SDK template and runnable samples (2026-11-14)
+- Complete independent hello template in `sdk/leather/hello`; four real Weft sample
+  windows in `apps/leather-samples`: Greeting, Stitch line-oriented UTF-8 editor,
+  Lantern bounded image viewer and Postcard HTTP(S) fetch through the held grant.
+- Copy/build/install tutorial: `docs/sdk/LEATHER_WEFT_TUTORIAL.md`. No custom widgets,
+  kernel changes or changes to Claude-owned apps. Depends on Weft PR #220.
+- Host tests exercise document limits/Unicode and actual Weft controls/painting.
+  All four guest binaries build; `scripts/leather_gate.py` checks greet, edit/save/
+  sync/reload hashes, image decode, network fixture hash, screenshots and clean close.
+  Guest runtime validation remains pending until that QEMU gate passes in CI.
+
+## ChatGPT round 176: Abacus programmer, conversion and scientific extras (2026-11-14)
+- Actual Weft mode buttons/menus for Scientific, Programmer and Convert. Exact
+  unsigned 8/16/32/64-bit wrapping integer parser with bitwise ops, shifts and radix
+  formats; dimension-checked length/mass/time/temperature/storage conversion.
+- Scientific hyperbolic/exp/log2/cbrt/trunc functions, finite-result/input bounds.
+  Session history recalls mode and programmer context; Recall Last is in palette.
+- Ten host tests cover existing functions/keypad and extras, real widgets/history.
+  Guest build and instruction scan required; extended `program_weft_gate.py` uses
+  actual palette/keyboard controls, checks results/errors and retains screenshots.
+  QEMU runtime result remains pending CI. Depends on Weft #220; no kernel changes.
+- Details: `docs/handoff/ABACUS_EXTRAS_2026_11_14.md`.
+
+## ChatGPT round 173: Chastity vault and Weft window (2026-11-14)
+- `apps/chastity`: actual Weft unlock/create/import UI, add/load/delete entries,
+  secure generator, encrypted snapshot saves, explicit and idle lock. Secret
+  credential input is intercepted before toolkit history; only masks enter Weft.
+  Shibari holds the unlocked master secret in the app domain and wipes on lock.
+- `crates/chastity-core`: Argon2id + XChaCha20-Poly1305 authenticated file, bounded
+  inputs/KDF cost, zeroizing plaintext/key storage and exact-run one-use autofill
+  authorization API. Live cross-app routing/consent is an explicit follow-up.
+- Password-only KDBX4 import supports Argon2id/d, AES/ChaCha20, gzip and protected
+  ChaCha20 XML; unsupported variants/attachments/custom fields are refused. Tested
+  against an independently generated, fictional pykeepass fixture.
+- Thirteen core and four UI tests pass locally; guest release and key-byte scan pass.
+  Independent review identified plaintext-reallocation/workspace gaps; fixed with
+  explicit zeroizing Argon2/decompression workspaces, pre-sized secret buffers,
+  detached in-place AEAD and a masked XML DOM view. Post-fix read-only review reported no blocking findings.
+  A real UI QEMU reboot/persistence/wrong-password gate is wired into Programs CI;
+  runtime validation is pending before merge. Independent review fixes are included.
+- Snapshots require a new filename (existing files are never replaced). Exact
+  compatibility, security boundary and limitations: `CHASTITY_2026_11_14.md`.
+- Round175 review follow-up: editor startup loads supplied documents; unseen paths
+  use exclusive CREATE, and replacement requires a successfully loaded/currently
+  created exact route. Seven host tests include preservation of an existing unseen
+  file; QEMU gate attempts a blocked overwrite and verifies the original hash.
+- Round176 review follow-up: programmer keypad glyphs normalize to ASCII; tiny
+  conversion values are retained; bounded Weft scroll makes all controls reachable
+  at 640x400. Thirteen host tests now include actual operators and compact Tab/
+  scroll access. QEMU clicks the focused button's current scrolled coordinates.
+- Round176 shortcut follow-up: Recall Last uses supported Ctrl+Up, verified through
+  actual Weft key dispatch (fourteen host tests). Guest gate now uses that chord.
+
+## ChatGPT round 178: handoff apps integrated and reviewed (2026-11-14)
+- All five handoff workstreams have app implementations: Moan workstation #253
+  (engine #244, effects #246), Chastity vault #256, Velvet games #250, Leather SDK
+  #249 and Abacus extras #254. Feature PRs remain separate and depend on Weft #220.
+- `codex/handoff-integration` combines the app commits and review follow-ups on
+  current master plus the unchanged Weft dependency. All 79 app/core tests and
+  1,191 repository Python regressions pass locally. A single combined guest build
+  produces Moan, Chastity, Velvet, Abacus and the four Leather samples; all eight
+  pass the forbidden-instruction scan. Workspace members and stage IDs are unique.
+- Independent review fixes: Moan response-batch busy state, empty-track selection
+  and unread capture drain; Chastity explicit wiped Argon workspaces, bounded
+  plaintext buffers/decompression and expired grants; Leather loaded-route save
+  safety and startup load; Abacus Unicode keypad, tiny conversions, compact-window
+  scrolling and the supported history-recall shortcut. No remaining review blocker.
+- QEMU: round 171's edited stereo playback gate passed in the earlier #244 run.
+  New heads/integrated app gates still require CI; no app PR was merged. Integrated
+  Programs CI allows 60 minutes for the expanded set of real boots and interactions.
+- No kernel diff against current master. Original dirty checkout preserved; app,
+  dependency and integration work used separate worktrees.
+- Remaining scope is explicit: Moan FFmpeg FLAC/MP3 export, project persistence and
+  graphical waveforms; Chastity live cross-app autofill transport/consent routing.
+  Chastity's tested authorization API is not claimed as a deployed IPC service.
+
+## ChatGPT round 182: unblock the Weft dependency's CI (2026-11-14)
+- PR #265 reconciles #220 with current master, replacing the invalid unquoted
+  `Abacus: typing` workflow name and retaining egui/Weft gates in the split job
+  layout alongside current master gates. YAML parses before dispatch.
+- The egui manifest now scopes the existing `sex-std` runtime dependency to the
+  Hermit guest target, matching its runtime code. This prevents x86 register
+  assembly from entering Apple Silicon host tests; no renderer/widget changes.
+- 47 Weft/egui/Abacus host tests pass, and the guest standard-library target passes
+  a release compile check. Full QEMU CI is queued; no dependency PR was merged.
+## ChatGPT round 181: real Moan WAV/FLAC/MP3 export (2026-11-14)
+- `crates/moan-export`: bounded FFmpeg audio encoder with ordered, acknowledged
+  output and explicit seek patches. Native PCM/WAV and FLAC plus pinned Shine3.1.1
+  MP3,192kbps. Encoders run in the caller's organ; callbacks never perform IPC.
+- Existing Moan export uses actual codecs through its Files Save picker, exclusive
+  create, partial retention, Close polling, exact writes and final sync. Standard
+  Weft format controls come from the coordinated editable-project workstream.
+- Default guest/native FFmpeg7.1.2 source pins match. Shine GNU Library GPL2 sec3
+  expressly permits the GPL3 selection; original licence, GPL3 and provenance
+  notice retained beside downloaded source and built archives. No kernel or
+  Qupid changes. Both FFmpeg profiles include export; cache markers prevent stale
+  archives silently disabling codecs.
+- Four native tests pass with real ffprobe/decode oracles: exact WAV/FLAC PCM,
+  MP3 pitch/level/duration,13-byte short acknowledgements, seek/header patches,
+  bounded frames/output, invalid acknowledgements and abort. Full guest Moan links
+  successfully (about11MiB) and passes forbidden-instruction scan. QEMU all3format
+  Files-export and Close/partial gate passed in actual local QEMU: lossless PCM
+  exact, real Shine MP3 validated, 4140-byte cancellation partial retained. Exact
+  hashes/scope: `evidence/MOAN_EXPORT_QEMU_2026_11_14.json`; final CI still required.
+- Contract, source/license references and exact evidence commands:
+  `docs/handoff/MOAN_EXPORT_2026_11_14.md`.
+## ChatGPT round 180: Moan editable projects and graphical waveform editing (2026-11-14)
+- Self-contained versioned `.moan` codec preserves shared source IDs/PCM, clips,
+  positions, gains/fades, tracks, mixer/effect settings and selection. Bounded
+  preflight validates malformed data before PCM allocation or session replacement.
+- Actual Weft waveform image content, clamped pointer selection/cut/clip dragging,
+  zoom/fit/pan controls, overlay ownership and compact-window scrolling. Saved
+  revision baselines survive undo/redo; reopening starts clean with fresh history.
+- Runtime uses existing Files/Shell-held routes for startup/open and exclusive
+  save-as plus sync. Cancel/Discard protects unsaved edits and active recording;
+  Close during export/I/O no longer bypasses that guard. No toolkit/kernel edits.
+- 28 Moan host tests pass; real FFmpeg-enabled guest build and instruction scan
+  pass. New QEMU gate saves an edited project, reboots, reopens exact bytes, edits/
+  undoes and retains waveform screenshots. Runtime result remains pending CI.
+- Details and exact format/bounds: `docs/handoff/MOAN_2026_11_14.md` round180.
+
+## ChatGPT round 183: repair integrated build and gate failures (2026-11-14)
+- First integrated CI passed host regressions and all three kernel model shards,
+  but image jobs stopped on the unchanged loader's forbidden-instruction scan:
+  RG contained a CALL displacement matching WRPKRU bytes. Its build script now
+  honors `SEX_LAYOUT_SEED` using the existing Play section-shuffle approach;
+  seed 1 passes the scanner and eight native functional fixtures. The scanner
+  and kernel are unchanged.
+- Tassel's wheel gate clicked outside a 550x144 client. A shared Shell maximize
+  helper now supplies actual tile geometry; Tassel, Velvet, Leather, Abacus and
+  all three Moan gates wait for fresh client layout/control receipts before
+  interaction. Pointer offsets use the measured x8/y34 client origin. Moan's
+  waveform scales to the initial tiled client and maps pointer coordinates to
+  the resized timeline.
+- Unsaved Moan Close explicitly declines Shell's timed force-close while its
+  Cancel-default prompt is open, including during project I/O. Project gate
+  checks that Cancel remains alive beyond the existing five-second timeout.
+- Current combined host suite: 127 tests pass across Moan app/core, Velvet,
+  Leather, Abacus, Weft and sex-egui. Workflow YAML parses; no kernel diff.
+  Fresh-head QEMU results are still required. No PR merged on partial results.
+- Chastity's earlier custom vault is being replaced with the requested canonical
+  KDBX foundation at `37471138`, retaining `sha2@0.11.1` release opt-level `s`.
+  Its original gate has not yet produced a boot result; neither KDBX runtime nor
+  live autofill is claimed proven by host tests.
+
+## ChatGPT round 179: live Chastity autofill and consent (2026-11-14)
+- Reused user canonical37471138 (KDBX/TOTP/generator/keyboard model), replacing
+  round173 custom vault. Weft provides real screen/controls/layout and consent;
+  no duplicate vault format. Canonical std target and sha2@0.11.1 opt="s" retained.
+- Existing-capability Shell broker, Files-attested labels, exact kernel caller/run,
+  focused request/approval, random provider epoch, bounded register-only chunks,
+  one-use consent, replay/runreuse/expiry/closure fences. No kernel edits.
+- Local Lock wipes owned buffers immediately; provider revocation is ACK/retry
+  fenced before visible completion or unlock, even at full native intake/transport.
+  Small550x144 tiles cannot approve hidden scope; full context/resize rechecked.
+-30 canonical app/core and17 routing/native-wrapper host tests pass; std guest
+  builds/scans. Scoped fail-closed entropy covers all KDBX random values. Header/KDF
+  preflight precedes allocations. Reviewed Argon2 wiping, bounded decompression and
+  shared cumulative attachment budget are included.
+- Optional Multipass restore adapter removed: legacy HTTP credential copies are
+  not hardened. Reusable live SDK + real separate fixture app only; no browser fill claim.
+- Updated canonical probe/reboot and two-app consent gates await native QEMU/CI
+  proof using updated Shell/Files. Full canonical two-boot vault gate passed;
+  actual Close retires the run after local wipe (dead custody cannot receive ACK).
+  Final live2app consent gate also passes: default deny, visible allow once, reused
+  consumer run and Lock unavailable. Exact artifacts/hashes in CHASTITY_RUNTIME_2026_11_14.md.
+  Final file admission897ff617 bounds reads before allocation and preserves existing
+  unreadable/oversized vaults as locked; fournew host tests and final two-bootbaseline pass.
+  Remote CI remains pending; no merges until all relevant checks green.
+- Details: CHASTITY_2026_11_14.md and CHASTITY_AUTOFILL_2026_11_14.md.
+
+## ChatGPT round 184: canonical vault boots and integrated runtime fixes (2026-11-14)
+- Reused canonical Chastity commit37471138, including KDBX4, TOTP, generator and
+  original host coverage; preserved sha2@0.11.1 release opt-level `s`. Replaced
+  the earlier custom vault and removed the optional Multipass credential adapter.
+- Scoped vendored rust-argon2 wipes owned workspace/staging; scoped keepass bounds
+  decompression and cumulative attachments to16MiB, and wipes selected KDBX4
+  staging. Original licences, archive provenance, patch scope and remaining
+  erasure/model-allocation limits are recorded beside each vendor. Allocation-free
+  outer-header admission caps KDF work before keepass performs it. Chastity-only
+  entropy fails closed; salts, IVs, UUIDs and generated passwords use it.
+- Native integration:153 app/core tests,17 actual production transport/native
+  wrapper tests,22 Shell cleanup tests and compiled negative controls pass.
+  Final Moan guest+PKU scan pass using pinned FFmpeg/Shine archives. Shell and
+  Files build for their actual no-SSE target with Files software AES.
+- Chastity's previously unbooted canonical gate completed its actual two-boot
+  sequence with all three vendor patches: six target probes, real32MiB/4pass KDF,
+  create/add/generator/TOTP, acknowledged Lock, wrong-password refusal, persisted
+  reopen/search and actual Close retirement. Subsequent presentation/gate changes
+  and live two-app consent are undergoing final reruns; no broad runtime claim.
+- Actual Moan boot exposed a Shell Close defect: ordinary program surfaces were
+  removed before unsaved dialogs could be used. Narrow Program deferral now keeps
+  the existing surface until decline or attested retirement; the existing five-
+  second force fence remains. Live Chastity Close instead retires the run after
+  wiping because close-pending custody cannot receive a revocation ACK; visible
+  Lock continues to require that ACK. Reviewed queued-data/reused-run tests pass.
+- Gates now click actual freshly painted Weft confirmation controls: Shell owns
+  raw Tab, so it cannot serve as client focus traversal. Moan/Abacus/Chastity gates
+  use measured viewport origins, preserving product input policy.
+- Merged current upstream masterbfb95ce0 locally, retaining its newly implemented
+  calculator and console relay. No kernel diff. Workflow YAML and84 ABI pins
+  verify. Updated exact TLS patch policy after the Python suite found two vault-
+  patch admission failures; all21 focused TLS policy tests now pass, including
+  override-negative regressions. A final exact-head CI run remains required.
+- Local boot ISO proof is deliberately scoped: verified unchanged upstream kernel,
+  replayed boot metadata, exact updated Shell/Files modules and installed app ELFs;
+  the embedded installer payload was not replaced. This is not install-media proof.
+- No PR merged on incomplete or queued checks. Original dirty checkout untouched.
+
+## ChatGPT round 185: finish runtime proof and required dependency checks (2026-11-14)
+- All four final Moan local QEMU gates pass: app playback/split/undo/dirty Close;
+  exact edited-project save, two-boot held-route reopen and clean undo baseline;
+  actual WAV/FLAC/MP3 Files export with independent decoding and cancellation;
+  microphone permission/capture/stop with149504 frames and zero lost. QEMU input
+  is simulated silence, not physical microphone fidelity. Export/project docs
+  record exact app/image/input hashes and the development-image proof boundary.
+- Final Chastity file-admission two-boot gate and visible two-app consent gate
+  pass. Only NotFound can select Create: unreadable/oversized existing vaults
+  remain locked, and file reads allocate at most16MiB before a one-byte overflow
+  probe.30 core/UI plus17 actual transport tests pass. Compile-time guard rejects
+  a Hermit build missing its secure random backend; configured build/scanner pass.
+- Sealed build trace now parses rustflags as TOML, preserving quoted cfg values.
+  A regression executes the actual trace with recording Cargo for literal,
+  escaped, empty and absent flags. This closes the gap between manually verified
+  entropy flags and CI's image-build invocation. TLS patch-policy negatives and
+  architectural/target/TLS checks pass; the prior1192-test Python suite and the
+  new sealed-trace regression pass.
+- CI now runs the previously excluded dependency regressions using separately
+  locked manifests and the same local Argon2 patch:68 Argon2 unit tests,21 vectors,
+  seven bounded expansion/cumulative-attachment tests. All96 pass under the pinned
+  nightly. Removed an unused upstream dev-only rustfmt edge that selected removed
+  nightly features; production dependency graph unchanged. Full Chastity host gate
+  (30 application/core +96 dependency tests) passes in the integration checkout.
+- Actual Abacus/Weft gate now passes: real first paint is reported before blocking
+  for input; positive frame counts are accepted; mixed QMP key chords are serialized.
+  Pointer/typed arithmetic, scientific/programmer commands, fullu64 hex, unit
+  conversion/rejection, history recall, screenshot and Close retirement pass.
+- Current master794e746d is reconciled locally; its added tests/gate determinism
+  changes do not alter the kernel ABI. No kernel source diff. The superseded root
+  CI candidates were cancelled; their results are not accepted as final green CI.
+  A fresh exact-head full run is required before merging.
+
+## ChatGPT round 186: redact keyboard diagnostics by default (2026-11-14)
+- Normal Input, Shell, USB and SDK diagnostics omit keyboard payloads while
+  preserving delivery, routing and admission metadata. An explicit unsafe build
+  profile retains the strict physical-input gate records; the profile builder
+  freezes diagnostic evidence and restores/rebuilds normal artifacts.
+- The user explicitly authorized the reviewed logging-only kernel exception.
+  Exactly three PS/2 startup/overflow log sites retain their counters, event/type
+  and reason metadata, redact scancodes normally, and disclose them only under
+  `sexos_input_payload_proof`. No queue, wake, interrupt or capability behavior
+  changes. Kernel source grows by 9 nonblank lines to 19,273/21,500.
+- A regression compiles the actual six cfg-guarded statements in both modes,
+  checks three distinct scancodes and exact metadata, and rejects removed/swapped
+  guards. Both tests and all six kernel guardrail tests pass. The 85 ABI source
+  hashes are re-pinned; wire definitions are unchanged.
+- The earlier normal v3 two-boot vault gate passed 12 protected typing intervals
+  without userspace payload records. Its unchanged kernel and consumed startup
+  budget cannot establish kernel privacy. After the authorized exception, both
+  normal/proof kernels built successfully. Normal v4 passed the actual two-boot
+  vault gate and all 12 protected intervals; each boot recorded all 16 redacted
+  port and 16 redacted enqueue events with no raw kernel payloads anywhere.
+  The UNSAFE diagnostic boot's public make/break sequence was independently
+  qualified; its first small driver had an incorrect counter expectation, retained
+  as a failure artifact. Runtime drop was not induced; actual guarded drop-site
+  statements pass host tests in both modes. Exact hashes/scope are in the v4
+  privacy manifest. Graft evidence does not replace canonical sealed/full CI.
+- All 1,208 Python regressions pass after the kernel/profile/audit changes. The shared FFmpeg link list now
+  includes optional static Shine after avcodec; a real Web guest build and the
+  unchanged instruction scanner pass against the export-enabled codec profile.
+- Moan core PR #244 merged only after independently verified 16/16 successful checks
+  including the final build aggregator and exact head. All remaining merges
+  remain gated on complete exact-head CI. The original dirty checkout is untouched.
+
+## ChatGPT round 187: reconcile current desktop APIs (2026-11-14)
+- Reconciled the integration with upstream master `1dc3382f`, retaining both the
+  live autofill poll/pending/identity paths and upstream launch, drag, session,
+  tray and window-motion behavior. The upstream five-line kernel init grant is
+  inherited unchanged; the only authored kernel change remains round 186's
+  separately approved diagnostic redaction.
+- Preserved the complete Moan engine, effects, projects, waveform, recording and
+  FFmpeg export implementation when reconciling the already merged base engine.
+  Workspace/lock/spec and CI retain the union of upstream and handoff programs:
+  146 workspace members, 17 workflow jobs, all 16 dependencies of the aggregator,
+  and the sha2 0.11.1 size-optimization exception. All 85 ABI source pins verify.
+- Upstream introduced Drop and DragEnded window events. Weft forwards their
+  metadata as application events; its generic widgets deliberately leave them
+  unhandled. A real focused-field regression verifies no text, focus, activation
+  or size changes. The egui loop explicitly ignores these unsupported events;
+  Chastity's private adapter forwards them without synthesizing keyboard input.
+  All 33 Weft host tests and guest checks of both adapters and Chastity pass.
+- Reused the upstream author's four-line compatibility fix from PR #290 for
+  Bodice, Gossip, Hookup and Rendezvous. No feature work in those owned apps was
+  taken over. That PR was not merged by this task.
+- The reconciled source passes all 1,208 Python regressions and the actual autofill
+  broker/SDK host transport gate. Canonical normal/diagnostic images, strict input
+  gates and full exact-head CI remain required. The original dirty checkout and
+  historical boot artifacts remain untouched.
+
+## ChatGPT round 188: canonical app proof and native checker repair (2026-11-14)
+- All nine requested app gates pass on the canonical normal image built from
+  `11a94a53`: Moan app/project/export/microphone; Chastity vault and live autofill;
+  Abacus extras; Velvet; and Leather samples. Exact inputs and output hashes were
+  rechecked independently. Moan reopens the exact 768,228-byte edited project after
+  reboot; WAV/FLAC decode sample-exactly and real MP3 passes its signal oracle.
+  Microphone permission/stop/wipe passes with simulated silence, not physical
+  fidelity. Both vault boots and all 12 protected typing intervals pass; the full
+  serial traces contain all 16 redacted read/enqueue records and no raw kernel key records.
+- `CANONICAL_APP_RUNTIME_2026_11_14.json` records exact image/ELF/serial/artifact
+  hashes and limitations. The initial vault launcher stopped before boot because
+  LLVM tools were missing from its command PATH; its original failure is retained.
+  The corrected environment passes without changing source or runtime assertions.
+- The first canonical diagnostic build/boot passes, but all three newly required
+  strict gates expose stale checker assumptions: old title/text origin and bitmap
+  font, an unformatted input disk, and a hardcoded palette count. Original failed
+  frames, serial, bindings and driver output remain unchanged. The captured image
+  now passes every image/guard pixel and every antialiased glyph pixel under the
+  corrected source-selected oracle; that offline check is not a full-gate pass.
+- Native text checks retain approved 26/34-pixel logical title/body metrics and
+  derive source layout, including the renderer's 160-column cap. Every Geist
+  coverage pixel, blank cell, padding and erasure pixel is checked exactly; partial
+  alpha is not skipped. New negatives corrupt partial/zero coverage, old offsets
+  and far-right padding. A compiled production Rust asset-view harness independently
+  checks 24 view/mode combinations and rejects an unapproved title mutation.
+- Literal Rust include assets now enter before/after build source capture and the
+  frozen snapshot: 54 previously omitted inputs, including the actual fonts.
+  Bounds, path confinement, internal aliases, mutation during build and real frozen
+  Rust compilation have regressions. This closes an evidence gap; old snapshots
+  are not retroactively relabeled as complete. Existing TLS vendor checks remain.
+- The diagnostic job copies the genuinely formatted disk from its GREEN canonical
+  boot, verifies the existing workspace/checksums, records hashes and makes the
+  source seed readonly. It never synthesizes headers. Palette checks use the exact
+  declared source count while retaining Browser row 10 and all action/pixel checks.
+- All 1,232 Python regressions pass after the combined repairs. Shared repairs are
+  propagated to component branches alongside the upstream author's four-line Drop
+  compatibility fix. A new font-complete canonical freeze and exact-head full CI
+  remain required. No additional PR has merged; the original dirty tree is untouched.
+
+
+## ChatGPT round 189: deterministic CI repairs and real lifecycle proof (2026-11-14)
+- Reproduced the IPv6 CI failure with the real Engine and a deterministic clock:
+  an unresolved IPv4 BOOT connection monopolized smoltcp's shared neighbor
+  discovery window. The pinned 0.14.0 vendor patch uses separate IPv4/IPv6
+  discovery windows, retaining each family's existing one-second limit and the
+  pending IPv4 connection. Only the neighbor implementation and its caller differ
+  from the verified upstream archive. All 77 Engine and seven neighbor tests pass;
+  the unchanged full IPv6 gate passes on its first patched runtime attempt.
+- Native gates now use the approved 28-pixel desktop bar and accept the exact
+  source-selected typed PCI model label. The TLS manifest policy admits only the
+  exact reviewed smoltcp patch path, preserving existing TLS patch restrictions.
+- Timer evidence distinguishes observed joins from inferred joins. An inference
+  requires an unambiguous single-core trace, the actual Net task, an enclosing
+  pair of progressing Net ticks, and exact fingerprints of the complete reviewed
+  kernel Rust tree and causal userspace sources. SMP, unknown sources, extra
+  writers, ambiguous records and premature expiry reject inference. The original
+  exact observed park/expiry/return path remains accepted. No kernel logic changed.
+- Reading and Phone workflow build commands retain their actual newlines through
+  YAML literal block scalars; parser and shell-syntax regressions cover the defect.
+- The egui gate waits for actual client scanout after the frame receipt. Its real
+  run reproduced two three-color captures before a 1,089-color frame; thresholds,
+  triangle counts, controls and retirement checks remain unchanged.
+- Daily Web now waits for its matching run END, private retirement and a durable
+  empty session before reboot. The corrected real two-boot gate passes count 1
+  then exactly count 2, with no restored duplicate run. All original failed
+  evidence is retained, including the initial retirement-format checker failure.
+- Term's unchanged full native runtime gate passes. Its ungranted launch is
+  proven denied by the exact ordered Files/Shell/Spindle ticket receipts, followed
+  by two progressing scheduler observations without a child or relay. Term's
+  missing user-facing refusal feedback remains explicitly unqualified; positive
+  Std, C, Lua and Python gates retain their assertions.
+- These are bounded repairs with negative controls, not retries of unchanged
+  failing logic. Only PR #244 has merged. A minimal prerequisite PR against master
+  is being validated separately from the unmerged Weft/Tassel foundation. Fresh
+  canonical images and all exact-head CI checks remain required before merges.
+- The user-approved kernel change remains exactly nine added logging lines in
+  interrupts.rs relative to current master; it only redacts normal PS/2 payloads.
+  Diagnostic records retain the explicit proof profile. The original dirty
+  checkout and all historical image/source bindings remain untouched.
+
+## ChatGPT round 190: source wiring, lifecycle admission and Quil pixels (2026-11-14)
+- All 1,286 Python regressions pass after integration of master ba8ebc28 and the
+  final Quil/Fuzz repairs. The Display/Linen source gates retain readiness/FIFO
+  order and all twelve original polls while admitting only the exact optional
+  mutable receive and autofill broker poll. Both baseline variants and twenty
+  negative mutations are exercised; the actual 10/56/20 Rust host tests pass.
+- Fuzz's fourth launch was explicitly refused while Spindle saved its session.
+  The gate now recognizes only the exact current command's complete busy frame,
+  with no admission side effects, then a later durable empty-session save before
+  resubmitting the identical command. The original deadline and two-retry bound
+  remain. All four real 20,000-operation seeds pass on normal v3, including all
+  112 protocol operations and retirement. This successful run needed zero retries;
+  the retry path has retained historical replay and six negative-control tests.
+- Canonical v3 builds and its 60-second diagnostic boot pass. Its frozen closure
+  contains 1,836 production inputs; normal ISO is 5d5533803ef52cca123c73643360530b1becdc5b8fb61c1a3254c3f2e958c61c,
+  diagnostic ISO da426781caa8e9463678f72dbbd601052a45a4eeb57ddf2c2d805228d22d0d7f.
+  Both contain the actual patched Net ELF 7c388c3f1eb848ac226c91e853ffbf39c8ef2cf2b35b9a8fecb9183e0439cae1.
+  HTTPS assets pass all nine strict pixel states; independent quiesced browser
+  reserve passes ten captures and 105 physical key events. Original bindings stay
+  immutable. These two passes do not qualify the failed connected session.
+- Connected v3 exposes two concrete defects: Quil's oracle still expected bitmap
+  glyphs, and Shell's document viewport receipt used y+36 while the actual owned
+  child used the approved y+34. The production fix derives the logging origin
+  from the same bounded four-child layout sent to Display; it changes no route,
+  grant or kernel code. A compiled production-expression harness covers all three
+  UI scales and rejects the old hardcoded expression and foreign child identity.
+- Quil's oracle checks every antialiased RGB pixel, padding and full body erasure
+  against source-selected Mono/fallback coverage and exact integer blending.
+  A temporary host harness links locked sex-font for non-ASCII and wide cells;
+  bidi/formatting claims are rejected. Sixteen pixel tests cover partial, zero and
+  solid coverage corruption, stale antialias ink, 255/256 width policy and Unicode.
+  Corrected analysis of the original capture is explicitly not a new QEMU pass.
+- Master ba8's media profile2 (VP9/Opus/AAC) and the handoff Shine profile coexist.
+  A new separate prefix builds with its source/license/archive/tool receipts.
+  Optional vpx linking is retained after avcodec/shine/dav1d; Mac libvpx uses a
+  build-local llvm-readelf alias. Profile0 and profile2 Moan/Web link checks pass
+  the unchanged instruction scanner. The bounded seed2 layout qualification and
+  the explicitly reconstructed seed0 displacement evidence are retained honestly.
+- Fresh v4 image/connected/three-codec export proof remains pending. Its baseline
+  is explicitly ba8, not the subsequent c209 laptop-power kernel changes. Those
+  upstream changes are reconciled separately into prerequisite PR #296, including
+  a fresh causal timer-source review before admitting any new tree fingerprints.
+  Component repair sets remain staged and tested locally. Only #244 has merged;
+  exact-head full CI and its aggregator remain mandatory. Original dirty checkout
+  and historical artifacts remain untouched; authored kernel delta stays +9 logs.
+
+## ChatGPT round 191: all nine normal v4 gates and author coordination (2026-11-14)
+- All nine app gates pass on normal v4 (production011af342, reviewed ba8 baseline):
+  Moan app/project/export/microphone, Chastity vault/privacy, live generic SDK
+  autofill, Abacus extras, Velvet, and Leather. Root independently verifies image,
+  staged/extracted ELF comparisons, other-app artifacts and twelve protected vault
+  intervals. `CANONICAL_APP_RUNTIME_V4_2026_11_14.json` records exact receipts and
+  limitations; historical cohorts remain unchanged.
+- WAV/FLAC decode to exactly 192,000 stereo frames and expected PCM; real MP3
+  decodes to 191,855 frames and passes signal checks. Close synchronizes a 32,812
+  byte partial without a success receipt. The 768,228-byte project reopens across
+  reboot with two tracks/three clips. Microphone captures 145,408 frames, lost0,
+  using simulated silence: no physical fidelity claim.
+- Both vault boots show exactly 32 redacted kernel startup records and zero raw
+  PS/2 payload records; all twelve observed protected intervals pass. Live consent
+  remains default deny/allow once, rejects reused-run authority, and is unavailable
+  after locking. These are two real generic programs, not integrated Multipass or
+  Valentine sign-in adapters.
+- All 1,292 Python regressions pass (131.765s). A separately reviewed raw-c209
+  source cohort admits only its exact init/SDK declaration/tree hashes. Its six
+  deadline owners are unchanged; no future combined logging/broker cohort is
+  admitted. No kernel source edit is part of that checker review.
+- The first v4 strict capture passes all nine image states but samples ACPI50/64,
+  previously unrecognized. Exact ACPI main/power source pairs plus the unique prior
+  BOOT role now admit that interval only; Net inference remains unchanged. A new
+  checker freeze verifies all 1,847 production hashes and identical ISO/kernel.
+- The corrected-checker capture again passes all nine image states, but lacks a
+  qualifying Net timer continuation: its sole sampled Net expiry follows its last
+  sampled Net return. Rejection is retained, not retried for sampling coincidence.
+  A diagnostic-only passive userspace stats observer is being reviewed as a new,
+  explicitly different continuation witness. No new kernel instrumentation or
+  blanket strict acceptance claim is made.
+- User coordination takes precedence: preserve author PR292's Web daily script if
+  integrating second; author PR295 owns queued launches during session save, so
+  our Fuzz retry workaround is being removed from future integrated cohorts.
+  PR293/295 restore early Term refusal and supersede the downstream-only oracle.
+  Exact author changes are tested in an isolated compatibility preview, never by
+  editing their branches or importing PR245's unrelated Denim kernel work.
+- Both IPv6 halves pass together: 78 Engine and seven neighbor tests. The separate
+  counterfactual keeps PR245's reset-debt regression green but fails our active
+  unanswered-ARP regression against untouched upstream smoltcp, then both pass
+  with the reviewed per-family patch. Both fixes remain necessary.
+- Compatibility review also finds that unheld +launch passes generic argument
+  validation before a child's binding trusts it as a relay grant. This is an exact
+  host predicate/source-flow finding, not a reproduced guest exploit. Separately,
+  PR292's Needle failure is a focus-helper race: pending open focus acknowledges a
+  queued Tab, so F11 closes Quil. Needle and the author Web script stay unchanged;
+  the shared helper repair will preserve normal input-payload redaction.
+- PR296 a68e57da/run43641321530 is queued while dependency reconciliation proceeds.
+  Only PR244 has merged. All merges still require every exact-head leaf and final
+  aggregator green. Original dirty checkout and frozen failure artifacts remain
+  untouched; our authored kernel change remains the approved nine logging lines.
+
+
+## ChatGPT round 193: frozen v5 strict workflows and causal checker repairs (2026-11-14)
+
+- Diagnostic production remains c84dc5f8 on reviewed ba8ebc28. The tested ISO is
+  7c71deec260745122520f97b0495ba57a459080c79b1c434d5907661d1d7483b.
+  All 1,848 production files remain identical across separate checker freezes;
+  no new kernel instrumentation or production rebuild was used to fix checkers.
+- HTTPS asset, Browser reserve and connected desktop now all pass. Connected
+  desktop proves 15 live and two cold frames across two actual boots of the same
+  image and terminal disk, exact 2,049-byte document recovery, durable Spindle
+  history and all three ordered app retirements on both boots. This is finite
+  representative acceptance, not sustained alpha or physical/SMP qualification.
+- Actual failures exposed five checker/input assumptions: the reader's bottom
+  resize rim was counted as Browser background; selected ASCII still used a ROM
+  mask; workspace clicks used old coordinates; local Alt+Tab visited only two MRU
+  frames; and clipboard replay recognized only Alt+Tab focus. Each original run,
+  serial, capture, disk, PCAP and binding remains immutable. No unchanged-logic
+  retry or transformed trace was accepted. Final checker is 4fd16236a.
+- Source-bound content clipping retains exact last-content-pixel corruption
+  rejection. ASCII selected text now checks every antialias blend, highlight,
+  padding and stale spare cell. Non-ASCII remains explicitly legacy-scalar-ROM;
+  these changes do not qualify native Unicode shaping.
+- Connected input now reuses current workspace geometry and causal shared focus.
+  Clipboard joins bind the exact positive target result after its specific make,
+  with paired Input edges. Wrong-target, pre-make target, later wrong-reason or
+  zero-frame result, missing-release and wrong-action controls reject. Independent
+  agent review caught and closed mixed-receipt ambiguities before final QEMU.
+- Focused validation: 116 reader/HTTP/HTTPS/wheel, 59 clipboard/connected, 56
+  workspace/launcher/origin, 34 focus/connected, then 70 final exact-target tests
+  pass (sets overlap). Original failed captures also pass independent diagnostic
+  replay under the corrected predicates, without relabeling the failed runs.
+- The optional passive observer independently qualifies on the unchanged actual
+  HTTPS trace: sampled Net expiry at tick 709, then first-epoch Ring3 syscall count
+  483 at 774 to 695 at 1041. This is later continuation, not an exact two-tick envelope
+  or exclusive timer wake cause. The original HTTPS gate passed its existing
+  return-envelope proof; both evidence classes remain separately reported.
+- See CANONICAL_STRICT_RUNTIME_V5_2026_11_14.json for result and binding digests.
+  Normal v4's nine app proofs remain independently qualified; they are not carried
+  wholesale to v5 because normal Shell's ELF changed. Only our PR244 has merged.
+- Moan now has parallel workstation/MIDI and CLAP/VST3 work. ArtCraft SoundCraft is
+  the confirmed reference alongside Audacity 4, Logic and released Ableton 12.
+  Candidate additions require their own audible-signal/reboot/crash gates and
+  screenshots. Crash containment alone is not hostile plugin isolation. Separate
+  minimal exact-child-task exit authentication is under host qualification.
+- User coordination remains: keep author 292/293/295 separate, never push their
+  branches, preserve author 292's exact daily gate after landing, remove our Fuzz
+  workaround and superseded Term oracle. Actual 293 has landed; 292/295 remain open.
+  All new merges require every exact-head leaf plus final aggregator green.
+
+
+## ChatGPT round 194: exact child exits and Moan workspaces (2026-11-15)
+
+- Imported separate 8b070e96 as 0b9364569: OP_EXIT status mutation now matches both
+  kernel-stamped child domain and task. The compiled production predicate rejects
+  an old-task exit for a reused domain. No kernel change. Updated only the exact
+  reviewed passive-observer Shell pin; all 85 ABI pins remain exact.
+- Full root host suite passes 1,311 tests in 167.161 s. Canonical PIC/PIE guest Shell
+  compiles and passes unchanged byte scan. A default-flags preliminary compile is
+  preserved separately and is not represented as the canonical artifact.
+- New normal production c327f9ec6 passes a 60 s GREEN_MASTER gate and freezes all 1,848
+  production files. ISO 73b662002041b1acf8ec42249d1fd8e7220bdba96500257f02cdbcf82da02afc;
+  Shell fcd4f73d6228a4adeb0e197e1e4537a0b3eb92e1ab10eb5d37417cf1ffb44294.
+  This remains the ba8 kernel cohort, without later master/Denim imports.
+- Actual combined CLAP/VST3 gate passes on that image with preserved 924844ee1
+  helper binaries: four processed jobs, actual invalid-opcode child crash,
+  timeout/kill, new-task reuse, responsive parent and clean parent retirement.
+  Root independently verifies 22 raw artifact digests and the image. See
+  LAUNCH_EXIT_RUNTIME_V6_2026_11_15.json. This qualifies valid exits; no queued
+  stale-task guest injection, hostile sandbox or integrated Moan UI is claimed.
+- Reviewer caught a final-block CLAP restart request incorrectly returning audio;
+  separate 77d2efff adds post-callback/process rejection and atomic callback flags.
+  Also imported 4954023f as d66866fca: Window polling preserves exact 3/3 launch
+  events instead of dropping them. Twelve classifier/exit/privacy controls and
+  seventeen autofill tests pass. Corrected helpers need a fresh source cohort;
+  those fixes are not assigned to the older passing binaries.
+- User supplied Logic arrangement/mixer/sampler/drum references and explicitly
+  requested Step Sequencer and same-project workspaces. See
+  MOAN_WORKSPACES_TARGET_2026_11_15.md. Agents are replacing the stacked-form UI
+  with compact Arrange/Mix/Piano Roll/Step Sequencer/Instruments views, real data,
+  shared transport/selection/undo and docked/floating panels. MIDI gate exposed
+  real audio underruns; feeder/consumed-clock corrections precede new screenshots.
+- Actual author 245 landed 23090514, including the exact author 292 Daily script.
+  Both IPv6 halves pass 78 Engine tests on the local actual-master reconciliation.
+  Root independently recomputes the complete 139 to 140 file kernel trees and reads
+  all 8 actual changes; no kernel edits are authored. A separate raw-only Denim
+  source/role auxiliary profile is reviewed on that master cohort, never combined
+  speculatively with root privacy/Shell changes or old runtime evidence.
+- PR 296 a68/run 43641321530 reaches 16 successes but service_custody fails: isolated
+  transport testing loses the workspace smoltcp patch and resolves upstream,
+  correctly failing custody. Agent is repairing isolated dependency custody with
+  the exact reviewed 134 file / two changed file vendor selection. Original failed job
+  and truth artifacts preserved. No merge; all exact-head leaves and aggregator
+  remain required, with author branches kept separate.
+## ChatGPT round 192: Moan MIDI workstation first slice (2026-11-15)
+
+- Original bounded synth/sampler patterns and MIDI sources, compact note-only undo,
+  no allocation/file I/O/cache rebuild in audio fill, and a v2 project codec retaining
+  exact audio-only v1 encoding and v1 decoding. Limits: eight tracks, 60s/source,
+  128 notes/source and 32 voices. No kernel or shared-toolkit edits.
+- Fixed transport and shared-project Arrange/Mix/Piano Roll/Instruments workspaces,
+  aligned real track headers/colored regions, optional library/inspector, readable
+  pitches and actual Serenade Peak/RMS after Bell consumption. No fake channels or
+  unsupported vertical fader/plugin controls. Step Sequencer remains next work.
+- The first actual run exposed real 1024-frame feeder underruns. The fix snapshots
+  room once and fills at most 64 preallocated blocks, prefills while paused, throttles
+  UI updates, and measures playhead/meters from actual consumed frames. Recording
+  preallocates the one-minute buffer and drains bounded batches.
+- 68 Moan/core tests, six audio-oracle tests, actual guest build and unchanged
+  forbidden-byte scanner pass. Fresh two-boot `workstation-proof-v3` passes six
+  exact screenshots, continuous 220/440 Hz synth/velocity, actual sampler octave
+  energy/decay scaling, independently extracted 2,304,490 B three-track MIDI project,
+  cold reopen/edit/undo-clean and durable retirement. No prompt Stop-silence claim
+  yet. Initial v1/v2 failures and source snapshots remain untouched.
+- Full artifact/source/ELF/ISO/disk/runner digests are tracked in
+  `MOAN_WORKSTATION_RUNTIME_2026_11_15.json`; parity/source/license audit and toolkit
+  limitations are in `MOAN_WORKSTATION_PARITY_2026_11_14.md`. References are not
+  claims of full Audacity/Logic/Ableton/ArtCraft SoundCraft parity. Offline external
+  plugins remain a separately owned boundary, not live insert hosting.
+
+
+### Round 192 follow-up: real Step Sequencer and bounded Stop
+
+- Shared-project 16-step eighth-note editor with real pitch rows, next-note
+  velocity/gate, explicit Set gate, consumed-frame playhead and persisted notes.
+  One rational BPM clock; no scene launch or decorative tempo controls.
+- 71 host and five onset/Stop checker tests pass. Actual 1280×800 two-boot gate
+  verifies nonuniform onset timing, note gates, C4 pitch/velocity energy and exact
+  four-note 768,186 B project persistence. Verified 64,512-frame prefill is cancelled:
+  last energetic output 0.383s after Stop ACK, within the existing card-tail bound.
+- Identical ELF passes actual 640×480 editor/hit areas and audible timing using a
+  distinct config-derived development ISO. All 83 extracted production ELFs match;
+  boot replay LBA metadata is verified. No canonical/installer qualification claim.
+- Exact source, runner, private-disk/program-store, WAV, project, screenshot and
+  ISO/config digests are in `MOAN_STEP_RUNTIME_2026_11_15.json`. The first Step gate's
+  incorrect all-notes velocity action remains preserved as an identified failure.
+
+## ChatGPT round 195: integrated plugin and trust foundation (2026-11-15)
+
+- Integrated the bounded CLAP/VST3 ELF loader, disposable child supervisor,
+  explicit offline region adapter, final-block restart rejection, fallible audio
+  buffers, retained result retry and per-parent unique job cookies with MIDI/Step.
+  All 88 Rust tests pass at `18325d391`; the subsequent Files trust foundation at
+  `154816f76` passes 1,336 Python tests. The 59 receipt/runtime controls and 13
+  trust-boundary controls also pass independently.
+- Canonical guest release helper passes the unchanged byte scanner. Files builds
+  with a software SHA-256/length pin matching that exact helper. All staging writers
+  and attestation share a guard, including nested block waits and error cleanup.
+  These are build checks; no combined image or active restricted-role claim.
+- Helper staging now precedes Files. Explicit generated-input receipts bind the
+  helper before/after the consuming build to its staged Files ELF. The master gate
+  revalidates them before boot; the freezer validates and archives both artifacts
+  separately from source inputs. See MOAN_GENERATED_INPUT_BINDING_2026_11_15.md.
+- Independently verified all 60 raw v8 plugin proof artifacts and both preserved
+  binaries. Actual QEMU source `59067a245` qualifies DSP, final-block restart denial,
+  crash/timeout/exact-task reuse, retained Window receipts and visible model/pixels.
+  This earlier cohort proves crash containment, not hostile plugin authority or the
+  later Files pin/guard. Exact digests: MOAN_PLUGIN_FOUNDATION_2026_11_15.json.
+- Provider isolation remains unexposed. Review found Files/Net lack reverse Shell
+  routes on this kernel. The userspace protocol is being revised around actual
+  authenticated one-word replies, provider freshness challenges, persistent deny
+  fences and immutable bounded job snapshots; no kernel grant is invented.
+- User confirms Drag/Denim repairs remain with their authors. PR296 already has
+  actual293/245 and retains the complementary IPv6 half; its new 21 jobs remain
+  queued at the last verified snapshot. No merge without exact-head leaves and
+  aggregator green plus final compatibility review. Finish Moan before JIT object
+  and string inline caches.
+
+### Round 195 canonical foundation follow-up
+
+- Fresh source `2cbdadf53` passes the complete sealed build and 60-second QEMU
+  GREEN_MASTER gate. The frozen normal ISO is
+  `93d3bef41ec9608d067a20357c2e0740e9c5785798449ab16f46734ba2f631ad`.
+  All 1,949 production source copies and both generated helper/Files artifacts
+  independently match their sealed digests; before/after source manifests agree.
+- The real build trace produces the expected completed helper-to-Files receipt,
+  and the freezer archives both under generated-inputs. Full metadata is in
+  CANONICAL_HELPER_FOUNDATION_RUNTIME_V9_2026_11_15.json. This normal boot qualifies
+  the foundation pipeline; it does not transfer earlier plugin runtime proofs to
+  this new image or claim final GUI/hostile-role/live-insert acceptance.
+
+## ChatGPT round 196: actual offline Instruments controls (2026-11-15)
+
+- App `8d46f7564` with runner `5bb5f0d4a` passes the actual Instruments UI gate on
+  the frozen v9 normal image. Real Files pickers select audio, module and output
+  folder. CLAP swaps asymmetric stereo, a real invalid-opcode child crash leaves
+  Moan usable, cancellation preserves the project, recovery adds another region,
+  and VST3 default unity verifies format/UI plumbing. Parameterized non-bypass
+  VST3 processing remains separately qualified by the native helper gate.
+- Six exact visible-label/model/RGB screenshots pass. Undo/Redo restores editable
+  imports. Saved four-track project is 768,328 B; an independent archive parser
+  compares every PCM sample, including the untouched original and channel swaps.
+  Children reuse one domain with distinct exact tasks. All raw result/artifact,
+  source, ELF, disk, project and screenshot digests are recorded separately in
+  MOAN_OFFLINE_UI_RUNTIME_2026_11_15.json. No hostile authority/live insert claim.
+- Preserved preflight failure found missing staged helper; reused the exact v9
+  binary only after independently matching 184 helper/SDK/vendor sources. A real
+  failed run waited for aggregate import telemetry not emitted by Import; the
+  runner now explicitly requests that state and keeps the original assertion.
+  The next run exercised all processing paths but failed on three cursor pixels
+  overlapping the status strip. All 64 failed captures remain. The passing run
+  removes that bottom-right move and retains the exact RGB oracle. Later source
+  audit finds its attempted corner parking was rejected by Shell; that run does
+  not qualify cursor parking. The maintained checker now requires actual accepted
+  mid-bar movement before capture, without cropping/relaxing any pixel predicate.
+- Review also reproduced post-saturation master attenuation: two 24,000-sample
+  tracks at 50% yielded 16,383. The fix applies gain to the wide bus before its
+  final clamp, preserving unity and per-track taps. Both polarities and the
+  independent counterexample pass. All 101 integrated Rust tests pass. Playback
+  now permits level/pan/M/S/master changes for future blocks with one bounded undo
+  checkpoint; source edits remain locked. The existing queue/card delay remains.
+- Shared restricted transcript/journal/provider ACK machinery is independently
+  reviewed and host tested; actual server hooks and immutable file jobs remain in
+  progress. No kernel edits beyond the approved logging exception; author fixes
+  remain separate. JIT object/string inline caches follow the Moan milestone.
+### Round 196 workspace/live follow-up: heard mix and actual controls
+
+- Intermediate8d46 app passes four actual wide UI captures, including eight real
+  mixer strips plus master. Native horizontal faders remain a toolkit limit.
+- Nine captured-audio phases independently verify400/600 Hz, exact expected RMS
+  for live master/pan/solo/channel-level/mute/unmute, and active10 ms windows.
+  One Undo restores each live pass. Queued audio updates are explicitly bounded;
+  no instantaneous/hard-realtime or physical-latency claim.
+- Five actual-Driver input regressions pass. Three diagnosed checker failures and
+  all raw inputs remain preserved. Full digests and scope are in
+  `MOAN_WORKSPACE_LIVE_RUNTIME_2026_11_15.json`; later palette/restricted/narrow and
+  final legacy regression are separate cohorts. No kernel or toolkit edits.
+
+### Round 196 palette/responsive follow-up
+
+- One eight-track identity colors real audio/MIDI fills and ink, header swatches
+  and mixer names; selection retains hue. No audio/project format change.
+- Actual palette ELF passes two wide screenshots (four exact audio regions,
+  headers/ink and eight full-AA expected mixer labels) and four 640×480 screenshots
+  (real Step/Piano note, actual mixer controls and exact Instruments status).
+- Narrow development image preserves all 84 production ELFs from v9, with only
+  config and replayed boot metadata changed; no canonical/installer claim.
+- 101 host tests/default-seed guest scan pass. Exact digests and original checker
+  failures are in `MOAN_TRACK_COLORS_RUNTIME_2026_11_15.json`. Existing 8d46 audio
+  artifacts remain historical; final legacy regression is recorded separately.
+
+### Round 196 final colored-build regression follow-up
+
+- The same colored ELF passes actual app/audio/split/undo, project cold reopen,
+  real WAV/FLAC/MP3 decode and partial Close cancellation, plus QEMU microphone
+  consent/Stop. No physical microphone or latency claim.
+- Supplemental v3/master 50/three 200% tracks reopens cold; captured 400/600 Hz peaks
+  retain headroom. Every exported sample equals independently expected 3× original
+  PCM plus the exact silence tail. Internal/whole-file hashes are both verified.
+- Exact cases, source revisions, archives, screenshots and failures are bound in
+  `MOAN_FINAL_REGRESSION_2026_11_15.json`. Stronger absolute metadata fence is
+  separately qualified from the earlier complete semantic pass. 14 focus/9 input
+  regressions pass; no app/kernel/toolkit change from checker repairs.
 ## B5: network time by SNTP (2026-11-14)
 
 - The clock comes right from the network. Once the open side is up, sexnet asks pool.ntp.org over SNTP, then again every hour, and sooner after a failure (1 min, doubling).
@@ -4498,8 +5267,20 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Added 4 `cargo-fuzz` ASan+libFuzzer targets (`fuzz_bt_gatt`, `fuzz_bt_hid_touch`, `fuzz_bt_hid_pointer`, `fuzz_swingers_rpc`) with 30 seed corpus inputs under `fuzz/seeds/` and full smoke-gate coverage (`27/27` targets passing in `scripts/fuzz_smoke_host_gate.sh`).
 - Executed ASan+libFuzzer campaigns across Bluetooth HCI/L2CAP/ATT/SMP/GATT parsing around `cufflinks` (`crates/sex-bt`, `servers/cufflinks`), HID report descriptor & gesture/pointer parsers (`crates/sex-hid-touch`, `servers/sexusb/src/hid.rs`), and Swingers' Transmission RPC (`crates/sex-torrent/src/rpc.rs`, `apps/swingers`); isolated 11 deterministic reproducers committed under `fuzz/repros/round5/` and filed Issues #332 (`cufflinks`/`sex-bt` oversized ACL fragment livelock & L2CAP LE Connection Parameter Update role / dropped `HCI_LE_Connection_Update`), #333 (`sex-hid-touch` empty-report slice OOB panic in `touch::decode` & usage-range `u32` overflow in `descriptor::parse`), #334 (`sex-hid-touch` signed `i32` arithmetic overflow panics in `gesture::Recognizer::feed`), #335 (`sexusb`/`hid` 4.29B-iteration `Report Count` hang & bit-offset overflow panics in `parse_pointer`), #336 (`swingers`/`sex-torrent` Transmission RPC DNS-rebinding `Host` whitelist bypass & unbounded chunked-trailer scan), and #337 (`swingers`/`sex-torrent` `torrent-add` mixed-case `MAGNET:` local-file read fallthrough & BEP 52 v2 symlink 16M-piece memory amplification) without modifying target crates.
 
+## H-PIPES: Pipes, environment and working folder for child programs (2026-11-15)
+- `std::process`: `Stdio::piped()` for stdin, stdout and stderr, captured `output()`, the environment (`env`, inherited, `env_clear`) and `current_dir`; `std::env::current_dir`/`set_current_dir`. C: `posix_spawn` `envp`, `system()` hands on `environ`, `getcwd`/`chdir`.
+- Bytes go through Files' relay slots (`console_relay` pipe runs, `fs::PREPARE_PIPED`); the working folder becomes a grant of the child's. No kernel change. Files loads a ticket only for the program row that prepared it (Shell's `OP_LAUNCH` names the launcher).
+- Details and what is left out: `docs/handoff/ledger/2026-11-15-pipes-env-cwd.md`. Gate: `scripts/process_gate.py` (stdspawn 24 checks, chello 16).
 ## W3b: Cufflinks headset buttons and volume (AVRCP) (2026-11-15)
 - `crates/sex-bt/src/avrcp.rs`: AVCTP/AVRCP on PSM 0x17, opened after A2DP (or by the headset), only on encrypted links to bonded devices. We are target for PASS THROUGH buttons and controller for absolute volume (EVENT_VOLUME_CHANGED, SetAbsoluteVolume); SDP lists our AVRCP Target and Controller records. Fragments dropped, lengths bounded, one answer per packet.
 - Buttons reach the desktop as ordinary media keys: Cufflinks sends them through the HID mailbox as keyboard usages (0xE8..0xEB play/pause, stop, previous, next; 0x80/0x81/0x7F volume and mute), Input maps them to the player keys the Shell already handles. No Shell change.
 - Volume: Bell publishes its master volume in the `bt_audio` header; Cufflinks mirrors it to the headset and turns the headset's own volume changes into one volume key press each (no loop: echoes within half a step press nothing); Bell leaves master gain out of the headset mix while the headset applies it.
 - Verified by `scripts/bt_host_gate.sh` (`avrcp_peers.rs`: 8 tests incl. hostile and random frames; `tests/cufflinks_remote.rs`) and `scripts/usb_wheel_host_gate.sh`. Hardware receipt pending (`CUFFLINKS_BLUETOOTH_2026_11_14.md` section 21).
+## CW1: Crossdress, Windows programs in Drag cells (2026-11-16)
+- `run crossdress [FILE.exe]` runs an unmodified 64-bit Windows program in a Drag cell, a SYS_VM guest with its own page tables and no guest OS. The PE is loaded at its preferred base (`crates/sex-crossdress`), with the TEB in GS, a PEB, import thunks that exit to the host, and the hardware exceptions dispatched to the program's vectored handlers. A small KERNEL32 subset runs in the host until Wine's own DLLs take over (CW3). No kernel change, and the WRPKRU byte check is untouched because Windows code never runs in SexOS's address space.
+- The test program is a real Windows exe (clang + lld-link, no SDK). Gates: `scripts/drag_host_gate.sh` (17 unit tests, a deterministic rebuild of the exe, and `tests/kvm.rs` running it on Linux KVM where the runner has /dev/kvm) and `scripts/drag_gate.py` (TCG: loaded, then refused cleanly). Design: `docs/handoff/WINDOWS_COMPAT_STUDY_2026_11_16.md`, `docs/handoff/CROSSDRESS_2026_11_16.md`.
+
+## Q: Gaze photo details and RAW thumbnails in Loom (2026-11-16)
+- Gaze's details panel shows Lens and Exposure (shutter, aperture, ISO, focal length as one line, e.g. `1/250 s · f/2.8 · ISO 400 · 35 mm`) next to Camera, Date, Place and GPS. `crates/gaze-core` keeps them in the library catalog as two extra columns after the recipe, so older catalogs still load.
+- `gaze --thumb @IN @OUT SIZE` (`apps/view/src/thumb.rs`) opens no window and writes a thumbnail in Vellum's `--thumb` format, upright by EXIF orientation, camera RAW files from their embedded preview. Loom uses it for DNG, CR2, CR3, NEF, ARW, ORF, RW2, PEF and RAF files (`HELPERS` in `apps/files/src/thumbs.rs`).
+- Verified by `cargo test -p gaze-core` and `scripts/files_thumbs_gate.py` (the stick gains a NEF whose sideways preview must come back 84x112).

@@ -18,12 +18,9 @@ const EDGE_SEL: u32 = 0xffa000;
 const VERT_SEL: u32 = 0xff7a00;
 const FACE_SEL: u32 = 0xffa733;
 const WIRE_EDIT: u32 = 0x000000;
-
-fn blend_rgba(a: &mut [u8], b: &[u8], alpha: u32) {
-    for (x, y) in a.iter_mut().zip(b) {
-        *x = ((*x as u32 * (255 - alpha) + *y as u32 * alpha) / 255) as u8;
-    }
-}
+/// Blender's theme colours for UV seams and sharp edges.
+pub const EDGE_SEAM: u32 = 0xdb2512;
+pub const EDGE_SHARP: u32 = 0x00ffff;
 
 pub fn scene_image(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     let settings = ViewportSettings {
@@ -34,23 +31,31 @@ pub fn scene_image(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         backface_culling: s.backface_culling,
         threads: 0,
         background: Some(BG),
+        workbench: sex_3d::render::Workbench { xray: s.xray, ..s.solid },
+        ..ViewportSettings::default()
     };
     match s.shading {
         Shading::Solid => {
             ensure_cache(s, d);
-            let Some((_, full, shell)) = &s.cache else { return };
+            let Some((_, full, _)) = &s.cache else { return };
             full.draw_into(&s.cam, &settings, &mut s.buf);
-            if s.xray {
-                shell.draw_into(&s.cam, &settings, &mut s.buf2);
-                blend_rgba(&mut s.buf, &s.buf2, 128);
-            }
+            // Grease Pencil over the shaded image, depth tested (in object order).
+            s.gp_depth = sex_3d::grease_pencil::raster::viewport_depth_to_distance(&full.last_depth(), s.cam.ortho);
+            let mut buf = core::mem::take(&mut s.buf);
+            let depth = core::mem::take(&mut s.gp_depth);
+            super::gpview::composite(s, d, &mut buf, r.w as u32, r.h as u32, (!s.xray).then_some(depth.as_slice()));
+            s.gp_depth = depth;
+            s.buf = buf;
             ui.p.blit_rgba(r, &s.buf, r.w as usize, r.h as usize);
         }
         Shading::Wireframe => {
             ensure_cache(s, d);
             ensure_world(s, d);
             let Some((_, _, shell)) = &s.cache else { return };
-            shell.draw_into(&s.cam, &settings, &mut s.buf);
+            shell.draw_into(&s.cam, &ViewportSettings { workbench: Default::default(), ..settings }, &mut s.buf);
+            let mut buf = core::mem::take(&mut s.buf);
+            super::gpview::composite(s, d, &mut buf, r.w as u32, r.h as u32, None);
+            s.buf = buf;
             ui.p.blit_rgba(r, &s.buf, r.w as usize, r.h as usize);
             let p = Proj::new(&s.cam, r);
             let edit_obj = if d.mode == Mode::Edit { d.active() } else { None };
@@ -76,11 +81,45 @@ pub fn scene_image(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         }
         Shading::Material | Shading::Rendered => {
             ui.p.fill(r, t::VIEWPORT);
-            if let Some(rv) = &s.render {
-                blit_scaled(ui.p, r, &rv.rgba, rv.w as usize, rv.h as usize);
+            if s.show_overlays && s.render.is_some() {
+                // Grid, gizmos, wires and selection outlines over the render,
+                // Grease Pencil on top.
+                ensure_cache(s, d);
+                let (w, h) = (r.w.max(1) as usize, r.h.max(1) as usize);
+                let mut img = {
+                    let Some(rv) = &s.render else { return };
+                    if (rv.w as usize, rv.h as usize) == (w, h) { rv.rgba.clone() } else { scale_rgba(&rv.rgba, rv.w as usize, rv.h as usize, w, h) }
+                };
+                super::gpview::composite(s, d, &mut img, w as u32, h as u32, None);
+                let Some((_, full, _)) = &s.cache else { return };
+                let st = ViewportSettings { wireframe: false, ..settings };
+                full.draw_over(&s.cam, &st, &img, &mut s.buf);
+                ui.p.blit_rgba(r, &s.buf, w, h);
+            } else if let Some(rv) = &s.render {
+                let mut img = rv.rgba.clone();
+                let (w, h) = (rv.w, rv.h);
+                super::gpview::composite(s, d, &mut img, w as u32, h as u32, None);
+                blit_scaled(ui.p, r, &img, w as usize, h as usize);
             }
         }
     }
+}
+
+/// Nearest-pixel resize of an RGBA image.
+fn scale_rgba(src: &[u8], sw: usize, sh: usize, dw: usize, dh: usize) -> Vec<u8> {
+    let mut out = vec![0u8; dw * dh * 4];
+    if sw == 0 || sh == 0 || src.len() < sw * sh * 4 {
+        return out;
+    }
+    for y in 0..dh {
+        let sy = (y * sh / dh).min(sh - 1);
+        for x in 0..dw {
+            let sx = (x * sw / dw).min(sw - 1);
+            let (i, o) = ((sy * sw + sx) * 4, (y * dw + x) * 4);
+            out[o..o + 4].copy_from_slice(&src[i..i + 4]);
+        }
+    }
+    out
 }
 
 /// Bilinear upscale of a small RGBA image into `r`.
@@ -218,6 +257,12 @@ pub fn edit_overlay(s: &mut State, d: &Doc, ui: &mut Ui, p: &Proj) {
         let k = if a < b { (a, b) } else { (b, a) };
         sel.edges.contains(&k)
     };
+    let mesh = crate::edit::active_mesh(d).map(|(_, mi)| &d.scene.meshes[mi]);
+    let flag_col = |a: u32, b: u32| match mesh {
+        Some(m) if m.is_seam(a, b) => Some(EDGE_SEAM),
+        Some(m) if m.is_sharp(a, b) => Some(EDGE_SHARP),
+        _ => None,
+    };
     // Edges, unselected first so selected ones draw on top.
     for pass in 0..2 {
         for e in &ev.edges {
@@ -229,7 +274,8 @@ pub fn edit_overlay(s: &mut State, d: &Doc, ui: &mut Ui, p: &Proj) {
                 continue;
             }
             let (Some(a), Some(b)) = (ev.screen[e[0] as usize], ev.screen[e[1] as usize]) else { continue };
-            let col = if selected { EDGE_SEL } else { WIRE_EDIT };
+            let flagged = flag_col(e[0], e[1]);
+            let col = if selected { EDGE_SEL } else { flagged.unwrap_or(WIRE_EDIT) };
             let len = (b.0 - a.0).hypot(b.1 - a.1);
             let n = ((len / 5.0).ceil() as i32).clamp(1, 400);
             let mut run: Option<(f32, f32)> = None;
@@ -248,7 +294,7 @@ pub fn edit_overlay(s: &mut State, d: &Doc, ui: &mut Ui, p: &Proj) {
             }
             if let Some(st) = run {
                 ui.p.line(st.0, st.1, b.0, b.1, col);
-                if selected {
+                if selected || flagged.is_some() {
                     ui.p.line(st.0 + 0.5, st.1 + 0.5, b.0 + 0.5, b.1 + 0.5, col);
                 }
             }
@@ -400,7 +446,7 @@ pub fn text_info(s: &State, d: &Doc, ui: &mut Ui, r: Rect, lay: &Layout) {
     shadow_text(ui.p, x, y, &line, t::TEXT);
     y += lh;
     if let (true, Some(rv)) = (matches!(s.shading, Shading::Material | Shading::Rendered), &s.render) {
-        let st = if rv.samples() >= rv.target { format!("Sample {}/{}", rv.samples(), rv.target) } else { format!("Sample {}/{}  Path Tracing", rv.samples(), rv.target) };
+        let st = if rv.samples() >= rv.target { format!("Sample {}/{}", rv.samples(), rv.target) } else { format!("Sample {}/{}  {}", rv.samples(), rv.target, rv.activity()) };
         shadow_text(ui.p, x, y, &st, t::TEXT);
         y += lh;
     }

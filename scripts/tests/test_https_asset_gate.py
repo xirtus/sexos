@@ -5,6 +5,7 @@ from source_boot_fixture import complete
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import https_asset_gate as gate
+from check_desktop_pixels import draw_cell, cell_coverage
 import test_tls_exchange_gate as fixture
 ROOT=Path(__file__).resolve().parents[2]
 UTC=fixture.UTC
@@ -49,14 +50,8 @@ def ppm(trace,visible=True,shift=(0,0),resolution=(1280,800)):
   frame=gate.asset_text(tile,g['mode']);font=gate.font_from_source((ROOT/'servers/sexdisplay/src/main.rs').read_text());scale=frame['scale']
   for row,line in enumerate(frame['lines'][:frame['chrome_rows']]):
    for column,char in enumerate(line):
-    bitmap=gate.glyph(font,char)
-    for gy,bits in enumerate(bitmap):
-     for gx in range(5):
-      if bits&(1<<(4-gx)):
-       for dy in range(scale):
-        for dx in range(scale):
-         px=tile['x']+8+(column*6+gx)*scale+dx;py=tile['y']+36+(row*9+gy)*scale+dy
-         if 0<=px<width and 0<=py<height:raw[(py*width+px)*3:(py*width+px)*3+3]=b'\xcd\xd6\xf4'
+    px=tile['x']+8+column*6*scale;py=tile['y']+gate.source_metrics()['top']+row*9*scale
+    draw_cell(raw,width,px,py,char,scale,b'\xcd\xd6\xf4',font,clip=(0,0,width,height))
  return f'P6\n{width} {height}\n255\n'.encode()+raw
 
 def metadata(mode='ready'):
@@ -109,7 +104,7 @@ class AssetFixture(unittest.TestCase):
   c=gate.source_contract(ROOT);self.assertEqual(set(c['source_sha256']),set(gate.SOURCE_FILES)|set(gate.HELD_INPUT_DEPENDENCIES)|set(gate.https.palette_source_hashes(ROOT)));self.assertEqual(c['pixel_hash'],hex(gate.PIXEL_HASH))
  def test_contract_rejects_disconnected_raw_key_retention_or_held_drain(self):
   path=ROOT/'servers/sexinput/src/main.rs';read=Path.read_bytes;original=read(path)
-  for old,new in [(b'sex_pdx::serial_record!("[sexinput.ps2.scancode]',b'serial_println!("[sexinput.ps2.scancode]'),(b'input_arrival.ps2(&mut keyboard_outbox,scancode)',b'fake_key_admission(scancode)'),(b'code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8',b'code:raw as u8,down:1'),(b'send(edge.code as u64,edge.down as u64,EV_KEY)',b'send(edge.code as u64,edge.down as u64,2)')]:
+  for old,new in [(b'sex_pdx::serial_input_record!(("[sexinput.ps2.scancode]',b'serial_println!("[sexinput.ps2.scancode]'),(b'input_arrival.ps2(&mut keyboard_outbox,scancode)',b'fake_key_admission(scancode)'),(b'code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8',b'code:raw as u8,down:1'),(b'send(edge.code as u64,edge.down as u64,EV_KEY)',b'send(edge.code as u64,edge.down as u64,2)')]:
    self.assertIn(old,original);mutated=original.replace(old,new)
    with patch.object(Path,'read_bytes',lambda p:mutated if p==path else read(p)):
     with self.assertRaises(ValueError):gate.source_contract(ROOT)
@@ -175,6 +170,20 @@ class AssetActualEndpoint(unittest.TestCase):
   self.exercise_open_client('wrong-mime',extra=True)
 
 class AssetPixels(unittest.TestCase):
+ def test_maximized_view_starts_at_approved_bar_and_rejects_overlap(self):
+  text=image_trace(1280,772,x=0,y=28)
+  self.assertTrue(gate.verify_pixels(text,ppm(text))['ok'])
+  invalid=image_trace(1280,772,x=0,y=27)
+  with self.assertRaisesRegex(ValueError,'outside framebuffer'):gate.verify_pixels(invalid,ppm(invalid))
+ def test_partial_coverage_and_zero_coverage_pixels_are_mandatory(self):
+  font=gate.font_from_source((ROOT/'servers/sexdisplay/src/main.rs').read_text())
+  for w,h in ((240,375),(566,375)):
+   text=image_trace(w,h);image=ppm(text);g=gate.geometry(text);scale=gate.asset_text(g['tile'],g['mode'])['scale']
+   coverage=cell_coverage(font,'Q',scale);cw=6*scale
+   for choose in (lambda a:0<a<255,lambda a:a==0):
+    i=next(i for i,a in enumerate(coverage)if choose(a));x=g['tile']['x']+8+i%cw;y=g['tile']['y']+gate.source_metrics()['top']+i//cw
+    at=image.index(b'\n255\n')+5+(y*1280+x)*3;bad=bytearray(image);bad[at]^=1
+    with self.assertRaisesRegex(ValueError,'glyph'):gate.verify_pixels(text,bytes(bad))
  def test_complete_scaled_image_at_both_framebuffer_profiles_and_small_tile(self):
   for resolution,w,h in [((1280,800),512,219),((1280,800),1200,700),((1024,768),960,680),((1280,800),120,219)]:
    text=image_trace(w,h,y=60 if h==680 else 100);r=gate.verify_pixels(text,ppm(text,resolution=resolution),True,resolution);self.assertGreater(r['colored_pixels'],100);self.assertGreater(r['checked_pixels'],48*48)
@@ -182,7 +191,7 @@ class AssetPixels(unittest.TestCase):
   text=image_trace();image=ppm(text)
   for dx,dy in [(8,0),(0,36),(-1,0),(0,-1)]:
    with self.assertRaises(ValueError):gate.verify_pixels(text,ppm(text,shift=(dx,dy)))
-  for old,new in [('scale=1','scale=3'),('hash='+hex(gate.PIXEL_HASH),'hash=0x123'),('positive_ack=1 pixels=unconfirmed','positive_ack=0 pixels=unconfirmed'),('[browser.asset.text.applied]','[absent.text.applied]'),('origin=held_shell','origin=foreign')]:
+  for old,new in [(f"scale={gate.geometry(text)['scale']}",'scale=3'),('hash='+hex(gate.PIXEL_HASH),'hash=0x123'),('positive_ack=1 pixels=unconfirmed','positive_ack=0 pixels=unconfirmed'),('[browser.asset.text.applied]','[absent.text.applied]'),('origin=held_shell','origin=foreign')]:
    with self.assertRaises((AssertionError,ValueError)):gate.verify_pixels(text.replace(old,new),image)
   bad=bytearray(image);g=gate.geometry(text);at=image.index(b'\n255\n')+5+((g['tile']['y']+g['y'])*1280+g['tile']['x']+g['x'])*3;bad[at]^=1
   with self.assertRaises(ValueError):gate.verify_pixels(text,bytes(bad))
@@ -255,7 +264,7 @@ class AssetTrace(unittest.TestCase):
 def staged_frames():
  trace='[browser.asset.intent] accepted=1 explicit=1 public_internet=0\n';frames=[];viewports=set()
  def append(name,visible):frames.append(dict(name=name,file=name+'.ppm',visible=visible,serial_end=len(trace),serial_sha256=hashlib.sha256(trace.encode()).hexdigest()))
- def image(name,generation,paint,mode='Fit',viewport=7,w=512,h=219,ticket=2,source=False):
+ def image(name,generation,paint,mode='Fit',viewport=7,w=512,h=217,ticket=2,source=False):
   nonlocal trace
   addition=image_trace(w,h,ticket=ticket,viewport=viewport,paint=paint,generation=generation,mode=mode,source=source)
   if viewport in viewports:addition=''.join(addition.splitlines(True)[2:])
@@ -295,10 +304,17 @@ def changed_stages(trace,frames,change):
  return result,out
 
 class RetainedPresentation(unittest.TestCase):
+ def test_actual_566_by_375_source_geometry_rejects_old_text_origin(self):
+  g=gate.image_geometry(dict(w=566,h=375))
+  self.assertEqual((g['x'],g['y'],g['scale']),(187,144,4))
+  trace=image_trace(566,375)
+  gate.geometry(trace)
+  with self.assertRaisesRegex(ValueError,'source geometry'):
+   gate.geometry(trace.replace('y=144 width=48','y=145 width=48'))
  def test_centered_actual_and_fit_use_shared_chrome_at_both_scales(self):
   for tile in [dict(w=512,h=219),dict(w=1200,h=680),dict(w=192,h=310),dict(w=250,h=310)]:
    for mode in ('Fit','Actual'):
-    g=gate.image_geometry(tile,mode);factor=2 if tile['w']>=256 else 1;top=44+g['chrome_rows']*9*factor
+    g=gate.image_geometry(tile,mode);factor=2 if tile['w']>=256 else 1;top=gate.source_metrics()['top']+8+g['chrome_rows']*9*factor
     self.assertEqual(g['x'],8+(tile['w']-16-48*g['scale'])//2);self.assertEqual(g['y'],top+(tile['h']-top-8-48*g['scale'])//2)
     self.assertEqual(g['scale'],1 if mode=='Actual'else min((tile['w']-16)//48,(tile['h']-top-8)//48,4))
     frame=gate.asset_text(tile,mode);self.assertLessEqual(frame['bytes'],512);self.assertEqual(frame['chrome_rows'],4 if g['cols']>=30 else 5)
@@ -329,16 +345,18 @@ class RetainedPresentation(unittest.TestCase):
  def test_full_chrome_help_and_metric_glyphs_are_mandatory(self):
   trace=image_trace(1200,680,y=60);image=ppm(trace);g=gate.geometry(trace);frame=gate.asset_text(g['tile'],g['mode']);offset=image.index(b'\n255\n')+5
   for row in (0,1,2,3):
-   bad=bytearray(image);y=g['tile']['y']+36+row*9*frame['scale']
+   bad=bytearray(image);y=g['tile']['y']+gate.source_metrics()['top']+row*9*frame['scale']
    for py in range(y,y+9*frame['scale']):
     start=offset+(py*1280+g['tile']['x']+8)*3;bad[start:start+frame['cols']*6*frame['scale']*3]=bytes(gate.BASE)*(frame['cols']*6*frame['scale'])
    with self.assertRaisesRegex(ValueError,'glyph'):gate.verify_pixels(trace,bytes(bad))
  def test_old_fit_rectangle_outside_actual_must_erase_every_pixel(self):
   old=image_trace(1200,680,y=60);trace=old+'[shell.browser.input] code=30 down=1 slot=43 accepted=1\n[browser.asset.presentation.intent] generation=5 mode=Actual viewport=7 ticket=2 network=0\n'+''.join(image_trace(1200,680,y=60,mode='Actual',generation=5,paint=10,source=False).splitlines(True)[2:]);image=ppm(trace);self.assertTrue(gate.verify_pixels(trace,image)['ok']);previous=ppm(old);g=gate.geometry(trace);width,_,before=gate.ppm_rgb(previous,min_width=1,min_height=1);offset=image.index(b'\n255\n')+5
+  prior=gate.geometry(old);px=prior['tile']['x']+prior['x'];py=prior['tile']['y']+prior['y'];span=48*prior['scale']
   for i in range(0,len(before),3):
    x=(i//3)%width;y=(i//3)//width
-   if tuple(before[i:i+3])not in (gate.BASE,(0xcd,0xd6,0xf4))and not(g['tile']['x']+g['x']<=x<g['tile']['x']+g['x']+48 and g['tile']['y']+g['y']<=y<g['tile']['y']+g['y']+48):
+   if px<=x<px+span and py<=y<py+span and tuple(before[i:i+3])!=gate.BASE and not(g['tile']['x']+g['x']<=x<g['tile']['x']+g['x']+48 and g['tile']['y']+g['y']<=y<g['tile']['y']+g['y']+48):
     bad=bytearray(image);bad[offset+i:offset+i+3]=before[i:i+3]
+    self.assertNotEqual(bytes(bad),image)
     with self.assertRaisesRegex(ValueError,'old rectangle'):gate.verify_pixels(trace,bytes(bad))
     break
   else:self.fail('negative control lacked old rectangle pixel')
@@ -358,7 +376,8 @@ def zoom_path():
  return count,code,path
 
 def key_fixture(mode='ready',post=True,compact=False):
- trace='';actions=[];tick=1;menu_k=0;count,menu_code,path=zoom_path();zoom=['grave_accent']+[menu_code]*len(path)+['ret']
+ from input_payload_profile import PROOF_RECEIPTS
+ trace=PROOF_RECEIPTS;actions=[];tick=1;menu_k=0;count,menu_code,path=zoom_path();zoom=['grave_accent']+[menu_code]*len(path)+['ret']
  if compact:
   for code in ('down','ret'):actions.append(dict(key=code,code=gate.KEY_CODES[code],kind='boot',transport='send-key',serial_start=0,serial_qmp_return=0,serial_end=0,host_start=tick,host_qmp_return=tick+.1,host_end=tick+.2));tick+=1
  keys=['g','a','f','i','q','g']+zoom+['a']+zoom+['f']if mode=='ready'else['g','q']if mode=='partial-clear'else['g','f11']if mode=='partial-close'else['g']

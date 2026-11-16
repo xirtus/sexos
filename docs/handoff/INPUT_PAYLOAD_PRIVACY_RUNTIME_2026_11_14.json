@@ -1,0 +1,27 @@
+{
+  "source_head": "9d339240",
+  "image_kind": "local boot-preserving graft; not canonical sealed-build provenance",
+  "base_iso_sha256": "4cb7e33127e88bb44d9b2f13139ddc41f58c4db80a41b56b5f8bd298286547b5",
+  "iso_sha256": "6e897064162ae60f8eb90c5f73b5d9e3d2f8f4f2e071ef33895b42c42a6eacaa",
+  "kernel_sha256": "561790a09ae36f95498a64996bd44f93e76facc5abb9f17788c915ad63281715",
+  "kernel_changed": false,
+  "protected_intervals": 12,
+  "all_userspace_safe": true,
+  "kernel_payload_interval_lines": 0,
+  "complete_keyboard_privacy_proven": false,
+  "reason": "kernel first-sixteen raw PS2 source policy remains unchanged; clean interval cannot prove source safety",
+  "serial_sha256": {
+    "chastity1-serial.log": "bbea5d33549b77aa06d60afda9e45dfa6eab7258b80dcaa4f517ea99d11c9dba",
+    "chastity2-serial.log": "4de1784cabba14ecb126cdd4682a91a9d88f05dce507406b70cb4a0c99d38f12"
+  },
+  "audit_sha256": "4d6526c572fd91cbeb9323e90a02a45f6754831d119d0a9485e704fe8f1fc747",
+  "diagnostic": {
+    "iso_sha256": "d6dcec597bffb1ffc7783edb3fb3dac812ffce0982f103715249c5e92f759762",
+    "scope": "UNSAFE public fixture only; local graft not sealed build",
+    "startup_proof_receipts": true,
+    "actual_h_admitted_code": 35,
+    "dns_tcp_capture_ok": true,
+    "full_http_gate": "FAIL unchanged body pixel oracle row11/12/14/15",
+    "serial_sha256": "842305a66b1ea56d62f8e37307d62abf75a6296df5626737a720b0f49671255d"
+  }
+}

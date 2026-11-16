@@ -17,6 +17,11 @@
 //! output and input go through Files to that terminal, Ctrl+C there ends it (at its next
 //! read or write, sleep or [`crate::terminal::interrupted`] look) and Ctrl+D ends its
 //! input. Its size and mode (raw, echo) are the terminal's: see [`crate::terminal`].
+//!
+//! A run another program started with its streams handed over (`Stdio::piped()`,
+//! `crate::process`) is a pipe run: each piped stream goes through Files to that
+//! program, each null one reads nothing and drops what is written, and an inherited one
+//! is the run's own console as above.
 use sex_app::{Event, Window};
 use sex_pdx::text_region::BYTES as SHOWN;
 use std::sync::Mutex;
@@ -141,11 +146,61 @@ fn hidden() -> bool { HIDDEN.load(std::sync::atomic::Ordering::Acquire) }
 
 /// Whether a terminal holds this run's console: asked of Files once.
 fn attached() -> bool {
-    use std::sync::atomic::{AtomicU8, Ordering};
-    static ATTACHED: AtomicU8 = AtomicU8::new(0);
+    use std::sync::atomic::Ordering;
     match ATTACHED.load(Ordering::Acquire) {
-        0 => { let yes = sex_app::files::direct::relay::attached(); ATTACHED.store(1 + yes as u8, Ordering::Release); yes }
+        0 => {
+            let yes = sex_app::files::direct::relay::attached_word() == Some(0);
+            ATTACHED.store(1 + yes as u8, Ordering::Release);
+            yes
+        }
         n => n == 2,
+    }
+}
+/// 0: not asked yet; 1: no terminal; 2: a terminal holds the console.
+static ATTACHED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// A pipe run's stdio word with `PIPE_RUN` above it; 0 for any other run.
+static PIPES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Streams whose reader went away (`HUNG_UP` on a write): bit 0 stdout, bit 1 stderr.
+static DEAF: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+/// This run is a pipe run (its starter said `+piped`; Files' ATTACHED agrees): `word` is
+/// its stdio word. No terminal holds its console.
+pub(crate) fn set_pipes(word: u8) {
+    use std::sync::atomic::Ordering;
+    PIPES.store(sex_pdx::console_relay::PIPE_RUN | word as u32, Ordering::Release);
+    ATTACHED.store(1, Ordering::Release);
+}
+fn piped_run() -> bool { PIPES.load(std::sync::atomic::Ordering::Acquire) != 0 }
+/// What stream `n` (0 stdin, 1 stdout, 2 stderr) is in a pipe run; None for other runs.
+fn pipe_stream(n: u32) -> Option<u8> {
+    let p = PIPES.load(std::sync::atomic::Ordering::Acquire);
+    (p != 0).then(|| sex_pdx::console_relay::stream(p as u8, n))
+}
+/// All of `bytes` to the starter's ring for `stream` (0 stdout, 1 stderr), waiting
+/// while it is full. A starter that stopped reading drops them, as a closed pipe would.
+fn pipe_write(stream: usize, bytes: &[u8]) {
+    use sex_app::files::direct::relay;
+    use std::sync::atomic::Ordering;
+    let (mut done, mut round) = (0, 0);
+    while done < bytes.len() && DEAF.load(Ordering::Relaxed) & (1 << stream) == 0 {
+        let sent = if stream == 0 { relay::write(&bytes[done..]) } else { relay::write_err(&bytes[done..]) };
+        match sent {
+            Ok(0) => { sex_app::thread::pause(round); round += 1; }
+            Ok(n) => { done += n; round = 0; }
+            Err(_) => { DEAF.fetch_or(1 << stream, Ordering::Relaxed); }
+        }
+    }
+}
+/// Input from the starter: waits for some; 0 once it closed the child's stdin.
+fn pipe_read(out: &mut [u8], wait: bool) -> usize {
+    let mut round = 0;
+    let want = out.len().min(sex_pdx::console_relay::INPUT_BYTES);
+    loop {
+        match sex_app::files::direct::relay::read(&mut out[..want]) {
+            Ok(0) if wait && want > 0 => { sex_app::thread::pause(round); round += 1; }
+            Ok(n) => return n,
+            Err(_) => return 0,
+        }
     }
 }
 /// Ctrl+C in the terminal: the run ends as a terminal's interrupt would end it.
@@ -224,6 +279,11 @@ pub(crate) fn interrupt_point() {
 }
 
 pub(crate) fn write(stream: usize, bytes: &[u8]) {
+    match pipe_stream(1 + stream as u32) {
+        Some(sex_pdx::console_relay::PIPED) => return pipe_write(stream, bytes),
+        Some(sex_pdx::console_relay::NULL) => return,
+        _ => {}
+    }
     let Ok(mut c) = CONSOLE.lock() else { return };
     for &b in bytes {
         if b == b'\n' { c.record(stream); } else if c.lines[stream].len() < 400 { c.lines[stream].push(b); } else { c.record(stream); c.lines[stream].push(b); }
@@ -262,6 +322,11 @@ static TYPING: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 /// Reads typed input into `out`: what is left of the last line, or the next line.
 /// 0 when the window was closed.
 pub(crate) fn read(out: &mut [u8]) -> usize {
+    match pipe_stream(0) {
+        Some(sex_pdx::console_relay::PIPED) => return pipe_read(out, true),
+        Some(sex_pdx::console_relay::NULL) => return 0,
+        _ => {}
+    }
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
     if pending.is_empty() && !taken() && attached() {
         if closed() { return 0; }
@@ -289,6 +354,11 @@ fn closed() -> bool { CONSOLE.lock().map(|c| c.closed).unwrap_or(true) }
 /// the window was closed. Takes the keys already waiting, without waiting for more.
 /// A program that took the window for itself reads its keys there, so never.
 pub(crate) fn input_ready() -> bool {
+    match pipe_stream(0) {
+        Some(sex_pdx::console_relay::PIPED) => return !matches!(sex_app::files::direct::relay::poll(), Ok(0)),
+        Some(sex_pdx::console_relay::NULL) => return true,
+        _ => {}
+    }
     if taken() { return false; }
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
     if !pending.is_empty() || closed() { return true; }
@@ -366,7 +436,8 @@ fn take(event: Event) -> Option<Vec<u8>> {
 /// it and closes the window, with how the program ended as its last line.
 /// The run ends with `code`: a terminal holding its console is told.
 pub(crate) fn ended(code: i32) {
-    if !taken() && attached() { sex_app::files::direct::relay::exit(code as u32 & 0xFFFF); }
+    // A pipe run's starter reads to the end of its output once it hears this.
+    if piped_run() || !taken() && attached() { sex_app::files::direct::relay::exit(code as u32 & 0xFFFF); }
 }
 pub(crate) fn finish(how: &str) {
     flush();

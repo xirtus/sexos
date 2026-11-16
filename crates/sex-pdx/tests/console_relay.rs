@@ -87,3 +87,39 @@ fn pool_hands_out_each_pair_once() {
     p.give(7); // out of range: ignored
     assert_eq!(p.free(), 0);
 }
+#[test]
+fn pipe_prepare_round_trip() {
+    let word = stdio(PIPED, NULL, INHERIT);
+    assert_eq!(stream(word, 0), PIPED);
+    assert_eq!(stream(word, 1), NULL);
+    assert_eq!(stream(word, 2), INHERIT);
+    for slot in 0..SLOTS {
+        let offset = pipe_prepare(slot, word);
+        assert_eq!(split_pipe_prepare(offset), Some((slot, word)));
+        // Never a terminal's PREPARE (low byte 0) nor a plain launch's.
+        assert_eq!(offset & 0xFF, sex_pdx::fs::PREPARE_PIPED);
+    }
+    assert_eq!(split_pipe_prepare(sex_pdx::fs::PREPARE_LAUNCH), None);
+    assert_eq!(split_pipe_prepare(at_slot(0, 3)), None);
+    assert_eq!(split_pipe_prepare(pipe_prepare(0, 0) | (SLOTS as u64) << SLOT_SHIFT), None);
+    assert_eq!(split_pipe_prepare(pipe_prepare(0, 0) | 1 << 40), None);
+}
+#[test]
+fn env_block_reads_in_pieces() {
+    let (cwd, env) = (b"@/data/a/work".as_slice(), b"A=1\0LANG=C.UTF-8\0".as_slice());
+    let mut whole = Vec::new();
+    let mut piece = [0u8; 5];
+    loop {
+        let n = env_block(cwd, env, whole.len(), &mut piece);
+        if n == 0 { break; }
+        whole.extend_from_slice(&piece[..n]);
+    }
+    assert_eq!(whole, b"@/data/a/work\0A=1\0LANG=C.UTF-8\0");
+    let (folder, entries) = split_env_block(&whole);
+    assert_eq!(folder, b"@/data/a/work");
+    assert_eq!(entries.collect::<Vec<_>>(), vec![b"A=1".as_slice(), b"LANG=C.UTF-8".as_slice()]);
+    let (folder, entries) = split_env_block(b"\0");
+    assert!(folder.is_empty());
+    assert_eq!(entries.count(), 0);
+    assert_eq!(split_env_block(b"").0, b"");
+}

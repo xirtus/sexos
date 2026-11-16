@@ -1,15 +1,15 @@
 # SPDX-License-Identifier: GPL-3.0-only
-"""bpy for Polyamour: the `polyamour` module under Blender's name, so simple
-Blender scripts (`import bpy`, `bpy.ops.mesh.primitive_cube_add(...)`,
-`bpy.data.objects['Cube']`, `bpy.context.active_object`) run unchanged.
-
-`import bpy.types` and `from bpy.types import Object` work too: the submodule
-is registered under its Blender name."""
+"""bpy for Polyamour: the `polyamour` package under Blender's module names,
+so Blender scripts and add-ons (`import bpy`, `bpy.ops.mesh.primitive_cube_add()`,
+`bpy.data.objects['Cube']`, `from bpy.types import Operator`,
+`from bpy.props import IntProperty`, `bpy.utils.register_class`) run unchanged."""
 import sys
 
 import polyamour as _pa
-from polyamour import Color, Euler, Vector, context, data, flush, ops, polyops, types  # noqa: F401
+from polyamour import Color, Euler, Matrix, Quaternion, Vector, context, data, flush, ops, polyops  # noqa: F401
 
-__all__ = _pa.__all__
+from . import app, msgbus, path, props, types, utils  # noqa: F401
 
-sys.modules[__name__ + '.types'] = _pa.types
+sys.modules[__name__ + '.ops'] = ops
+
+__all__ = ['app', 'context', 'data', 'msgbus', 'ops', 'path', 'props', 'types', 'utils']

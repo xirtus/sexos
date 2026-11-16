@@ -10,7 +10,8 @@ use crate::doc::Doc;
 use crate::draw::Rect;
 use crate::settings::{Engine, UnitSystem};
 use crate::ui::{MenuItem, NumOpts, Op};
-use sex_3d::render::ViewTransform;
+use sex_3d::render::workbench::{CavityType, ColorType, Lighting, MATCAPS};
+use sex_3d::render::{Look, MistFalloff, Pass, ShutterPosition, ViewTransform};
 use sex_3d::scene::ObjectData;
 
 fn inactive<R>(l: &mut L, f: impl FnOnce(&mut L) -> R) {
@@ -49,6 +50,56 @@ pub fn tool(l: &mut L, d: &mut Doc) {
     });
 }
 
+/// A number row bound to a `d.settings` field, with undo.
+macro_rules! set_num {
+    ($l:expr, $d:expr, $label:expr, $key:expr, $field:ident, $opts:expr, $undo:expr) => {{
+        let mut v = $d.settings.$field;
+        if $l.number($label, $key, &mut v, $opts) {
+            $l.commit($d, $undo);
+            $d.settings.$field = v;
+        }
+    }};
+}
+
+/// An unsigned integer row bound to a `d.settings` field, with undo.
+macro_rules! set_uint {
+    ($l:expr, $d:expr, $label:expr, $key:expr, $field:ident, $min:expr, $max:expr, $undo:expr) => {{
+        let mut v = $d.settings.$field;
+        if $l.uint($label, $key, &mut v, $min, $max) {
+            $l.commit($d, $undo);
+            $d.settings.$field = v;
+        }
+    }};
+}
+
+/// A checkbox bound to a `d.settings` field, with undo.
+macro_rules! set_check {
+    ($l:expr, $d:expr, $heading:expr, $label:expr, $field:ident, $undo:expr) => {{
+        let mut v = $d.settings.$field;
+        if $l.check($heading, $label, &mut v) {
+            $l.commit($d, $undo);
+            $d.settings.$field = v;
+        }
+    }};
+}
+
+/// A sub-panel with a checkbox in its header bound to a `d.settings` field;
+/// the body is drawn inactive while it is off.
+fn check_panel(l: &mut L, d: &mut Doc, key: &str, title: &str, open: bool, get: fn(&Doc) -> bool, set: fn(&mut Doc, bool), body: &mut dyn FnMut(&mut L, &mut Doc)) {
+    let on = get(d);
+    let mut hit = None;
+    l.panel_with(d, key, "", open, &mut |l, _, r| hit = check_header(l, title, on, r), &mut |l, d| {
+        let was = l.inactive;
+        l.inactive = was || !get(d);
+        body(l, d);
+        l.inactive = was;
+    });
+    if let Some(v) = hit {
+        l.commit(d, title);
+        set(d, v);
+    }
+}
+
 pub fn render(l: &mut L, d: &mut Doc) {
     let engine = d.settings.engine;
     l.space(4);
@@ -59,143 +110,208 @@ pub fn render(l: &mut L, d: &mut Doc) {
             l.space(4);
             l.panel(d, "render.sampling", "Sampling", true, &mut |l, d| {
                 l.panel(d, "render.sampling.viewport", "Viewport", true, &mut |l, d| {
-                    inactive(l, |l| {
-                        let mut v = d.settings.noise_threshold;
-                        l.check("Noise Threshold", "", &mut v);
-                    });
-                    let mut v = d.settings.viewport_samples;
-                    if l.uint("Max Samples", "vp_samples", &mut v, 1, 65536) {
-                        l.commit(d, "Viewport Samples");
-                        d.settings.viewport_samples = v;
-                    }
-                    let mut v = d.settings.viewport_denoise;
-                    if l.check("", "Denoise", &mut v) {
-                        l.commit(d, "Viewport Denoise");
-                        d.settings.viewport_denoise = v;
-                    }
+                    set_check!(l, d, "Noise Threshold", "", viewport_noise_threshold, "Viewport Noise Threshold");
+                    let was = l.inactive;
+                    l.inactive = was || !d.settings.viewport_noise_threshold;
+                    set_num!(l, d, "", "vp_threshold", viewport_adaptive_threshold, NumOpts { step: 0.001, min: 0.0, max: 1.0, ..NumOpts::default() }, "Viewport Noise Threshold");
+                    l.inactive = was;
+                    set_uint!(l, d, "Max Samples", "vp_samples", viewport_samples, 1, 65536, "Viewport Samples");
+                    set_check!(l, d, "", "Denoise", viewport_denoise, "Viewport Denoise");
                 });
                 l.panel(d, "render.sampling.render", "Render", true, &mut |l, d| {
-                    inactive(l, |l| {
-                        let mut v = d.settings.noise_threshold;
-                        l.check("Noise Threshold", "", &mut v);
-                    });
-                    let mut v = d.settings.render_samples;
-                    if l.uint("Max Samples", "render_samples", &mut v, 1, 65536) {
-                        l.commit(d, "Render Samples");
-                        d.settings.render_samples = v;
-                    }
-                    inactive(l, |l| {
-                        let mut t = 0.0;
-                        l.number("Time Limit", "time_limit", &mut t, NumOpts { unit: "s", ..NumOpts::default() });
-                    });
-                    let on = d.settings.denoise;
-                    let mut hit = None;
-                    l.panel_with(d, "render.sampling.render.denoise", "", true, &mut |l, _, r| hit = check_header(l, "Denoise", on, r), &mut |l, d| {
-                        let was = l.inactive;
-                        l.inactive = !d.settings.denoise;
+                    set_check!(l, d, "Noise Threshold", "", noise_threshold, "Noise Threshold");
+                    let was = l.inactive;
+                    l.inactive = was || !d.settings.noise_threshold;
+                    set_num!(l, d, "", "threshold", adaptive_threshold, NumOpts { step: 0.001, min: 0.0, max: 1.0, ..NumOpts::default() }, "Noise Threshold");
+                    l.inactive = was;
+                    set_uint!(l, d, "Max Samples", "render_samples", render_samples, 1, 65536, "Render Samples");
+                    let was = l.inactive;
+                    l.inactive = was || !d.settings.noise_threshold;
+                    set_uint!(l, d, "Min Samples", "min_samples", adaptive_min_samples, 0, 4096, "Min Samples");
+                    l.inactive = was;
+                    set_num!(l, d, "Time Limit", "time_limit", time_limit, NumOpts { step: 1.0, unit: "s", min: 0.0, ..NumOpts::default() }, "Time Limit");
+                    check_panel(l, d, "render.sampling.render.denoise", "Denoise", true, |d| d.settings.denoise, |d, v| d.settings.denoise = v, &mut |l, _| {
                         l.info("Denoiser", "Built-in");
                         l.info("Passes", "Albedo and Normal");
-                        l.inactive = was;
                     });
-                    if let Some(v) = hit {
-                        l.commit(d, "Denoise");
-                        d.settings.denoise = v;
-                    }
-                    let mut seed = d.settings.seed;
-                    if l.uint("Seed", "seed", &mut seed, 0, u32::MAX / 2) {
-                        l.commit(d, "Seed");
-                        d.settings.seed = seed;
-                    }
+                });
+                l.panel(d, "render.sampling.advanced", "Advanced", false, &mut |l, d| {
+                    l.info("Pattern", "Sobol-Burley");
+                    set_uint!(l, d, "Seed", "seed", seed, 0, u32::MAX / 2, "Seed");
+                    set_check!(l, d, "", "Use Animated Seed", animated_seed, "Animated Seed");
                 });
             });
             l.panel(d, "render.light_paths", "Light Paths", false, &mut |l, d| {
                 l.panel(d, "render.light_paths.bounces", "Max Bounces", true, &mut |l, d| {
-                    let mut v = d.settings.max_bounces;
-                    if l.uint("Total", "bounces", &mut v, 0, 1024) {
-                        l.commit(d, "Max Bounces");
-                        d.settings.max_bounces = v;
-                    }
-                    inactive(l, |l| {
-                        for (n, k) in [("Diffuse", 4u32), ("Glossy", 4), ("Transmission", 12), ("Volume", 0), ("Transparent", 8)] {
-                            let mut v = k;
-                            l.uint(n, n, &mut v, 0, 1024);
-                        }
-                    });
+                    set_uint!(l, d, "Total", "bounces", max_bounces, 0, 1024, "Max Bounces");
+                    set_uint!(l, d, "Diffuse", "diffuse_bounces", diffuse_bounces, 0, 1024, "Diffuse Bounces");
+                    set_uint!(l, d, "Glossy", "glossy_bounces", glossy_bounces, 0, 1024, "Glossy Bounces");
+                    set_uint!(l, d, "Transmission", "transmission_bounces", transmission_bounces, 0, 1024, "Transmission Bounces");
+                    set_uint!(l, d, "Volume", "volume_bounces", volume_bounces, 0, 1024, "Volume Bounces");
+                    set_uint!(l, d, "Transparent", "transparent_bounces", transparent_bounces, 0, 1024, "Transparent Bounces");
                 });
                 l.panel(d, "render.light_paths.clamping", "Clamping", true, &mut |l, d| {
-                    inactive(l, |l| {
-                        let mut v = 0.0;
-                        l.number("Direct Light", "clamp_direct", &mut v, NumOpts { min: 0.0, ..NumOpts::default() });
-                    });
-                    let mut v = d.settings.clamp_indirect;
-                    if l.number("Indirect Light", "clamp_indirect", &mut v, NumOpts { step: 0.5, min: 0.0, ..NumOpts::default() }) {
-                        l.commit(d, "Clamp Indirect");
-                        d.settings.clamp_indirect = v;
-                    }
+                    set_num!(l, d, "Direct Light", "clamp_direct", clamp_direct, NumOpts { step: 0.5, min: 0.0, ..NumOpts::default() }, "Clamp Direct");
+                    set_num!(l, d, "Indirect Light", "clamp_indirect", clamp_indirect, NumOpts { step: 0.5, min: 0.0, ..NumOpts::default() }, "Clamp Indirect");
                 });
+                l.panel(d, "render.light_paths.caustics", "Caustics", true, &mut |l, d| {
+                    set_num!(l, d, "Filter Glossy", "filter_glossy", filter_glossy, NumOpts { step: 0.1, min: 0.0, max: 10.0, ..NumOpts::default() }, "Filter Glossy");
+                    set_check!(l, d, "Caustics", "Reflective", caustics_reflective, "Reflective Caustics");
+                    set_check!(l, d, "", "Refractive", caustics_refractive, "Refractive Caustics");
+                });
+            });
+            l.panel(d, "render.volumes", "Volumes", false, &mut |l, _| {
+                l.info("Integration", "Delta tracking");
+                l.info("Max Steps", "Unbiased");
+            });
+            check_panel(l, d, "render.motion_blur", "Motion Blur", false, |d| d.settings.motion_blur, |d, v| d.settings.motion_blur = v, &mut |l, d| {
+                let pos = ["Start on Frame", "Center on Frame", "End on Frame"];
+                let cur = match d.settings.shutter_position {
+                    ShutterPosition::Start => pos[0],
+                    ShutterPosition::Center => pos[1],
+                    ShutterPosition::End => pos[2],
+                };
+                l.enumeration("Position", "shutter_position", cur, &pos);
+                set_num!(l, d, "Shutter", "shutter", shutter, NumOpts { step: 0.05, min: 0.0, max: 2.0, ..NumOpts::default() }, "Shutter");
             });
             l.panel(d, "render.film", "Film", false, &mut |l, d| {
-                let mut v = d.settings.exposure;
-                if l.number("Exposure", "film_exposure", &mut v, NumOpts { step: 0.1, min: -10.0, max: 10.0, ..NumOpts::default() }) {
-                    l.commit(d, "Exposure");
-                    d.settings.exposure = v;
-                }
-                inactive(l, |l| {
-                    l.info("Pixel Filter", "Blackman-Harris");
-                    let mut w = 1.5;
-                    l.number("Width", "filter_w", &mut w, NumOpts { unit: "px", ..NumOpts::default() });
-                    let mut t = false;
-                    l.check("", "Transparent", &mut t);
+                set_num!(l, d, "Exposure", "film_exposure", exposure, NumOpts { step: 0.1, min: -10.0, max: 10.0, ..NumOpts::default() }, "Exposure");
+                l.panel(d, "render.film.pixel_filter", "Pixel Filter", true, &mut |l, d| {
+                    l.info("Type", "Blackman-Harris");
+                    set_num!(l, d, "Width", "filter_w", filter_width, NumOpts { step: 0.1, unit: "px", min: 0.01, max: 10.0, ..NumOpts::default() }, "Filter Width");
                 });
+                set_check!(l, d, "", "Transparent", film_transparent, "Transparent Film");
             });
-            l.panel(d, "render.performance", "Performance", false, &mut |l, _| {
-                l.info("Threads", "Auto-Detect");
+            l.panel(d, "render.performance", "Performance", false, &mut |l, d| {
+                l.panel(d, "render.performance.threads", "Threads", true, &mut |l, d| {
+                    let modes = ["Auto-Detect", "Fixed"];
+                    let cur = if d.settings.threads == 0 { 0 } else { 1 };
+                    if let Some(i) = l.expand("Threads Mode", &modes, cur) {
+                        if i != cur {
+                            l.commit(d, "Threads Mode");
+                            d.settings.threads = if i == 0 { 0 } else { std::thread::available_parallelism().map_or(1, |n| n.get()) as u32 };
+                        }
+                    }
+                    let was = l.inactive;
+                    l.inactive = was || d.settings.threads == 0;
+                    let mut v = if d.settings.threads == 0 { std::thread::available_parallelism().map_or(1, |n| n.get()) as u32 } else { d.settings.threads };
+                    if l.uint("Threads", "threads", &mut v, 1, 1024) && d.settings.threads != 0 {
+                        l.commit(d, "Threads");
+                        d.settings.threads = v;
+                    }
+                    l.inactive = was;
+                });
                 l.info("Tiles", "Whole frame");
             });
         }
         Engine::Workbench => {
             l.space(4);
-            l.panel(d, "render.wb.sampling", "Sampling", true, &mut |l, _| {
-                l.info("Render", "1 Sample (direct light)");
-                inactive(l, |l| l.enumeration("Viewport", "wb_vp", "8 Samples", &[]));
+            l.panel(d, "render.wb.sampling", "Sampling", true, &mut |l, d| {
+                set_uint!(l, d, "Render", "wb_samples", workbench_samples, 1, 64, "Workbench Samples");
             });
-            l.panel(d, "render.wb.lighting", "Lighting", true, &mut |l, _| {
-                inactive(l, |l| {
-                    l.expand("", &["Studio", "Flat", "MatCap"], 0);
+            l.panel(d, "render.wb.lighting", "Lighting", true, &mut |l, d| {
+                let cur = Lighting::ALL.iter().position(|&v| v == d.settings.workbench.lighting).unwrap_or(0);
+                if let Some(i) = l.expand("", &Lighting::ALL.map(|v| v.label()), cur) {
+                    if i != cur {
+                        l.commit(d, "Lighting");
+                        d.settings.workbench.lighting = Lighting::ALL[i];
+                    }
+                }
+                if d.settings.workbench.lighting == Lighting::MatCap {
+                    let m = MATCAPS.get(d.settings.workbench.matcap).copied().unwrap_or(MATCAPS[0]);
+                    l.enumeration("MatCap", "workbench_matcap", m, &MATCAPS);
+                }
+            });
+            l.panel(d, "render.wb.color", "Color", true, &mut |l, d| {
+                let cur = ColorType::ALL.iter().position(|&v| v == d.settings.workbench.color).unwrap_or(0);
+                if let Some(i) = l.expand("", &ColorType::ALL.map(|v| v.label()), cur) {
+                    if i != cur {
+                        l.commit(d, "Color");
+                        d.settings.workbench.color = ColorType::ALL[i];
+                    }
+                }
+            });
+            l.panel(d, "render.wb.options", "Options", true, &mut |l, d| {
+                let mut wb = d.settings.workbench;
+                let mut changed = None;
+                if wb.lighting == Lighting::Studio && l.check("", "Specular Lighting", &mut wb.specular) {
+                    changed = Some("Specular Lighting");
+                }
+                if l.check("", "Shadow", &mut wb.shadow) {
+                    changed = Some("Shadow");
+                }
+                if wb.shadow && l.slider("Intensity", "wb_shadow_int", &mut wb.shadow_intensity, 0.0, 1.0) {
+                    changed = Some("Shadow Intensity");
+                }
+                if l.check("", "Cavity", &mut wb.cavity) {
+                    changed = Some("Cavity");
+                }
+                if wb.cavity {
+                    l.enumeration("Type", "workbench_cavity_type", wb.cavity_type.label(), &CavityType::ALL.map(|v| v.label()));
+                    if wb.cavity_type != CavityType::Screen {
+                        changed = changed.or(l.slider("Ridge", "wb_cav_ridge", &mut wb.cavity_ridge, 0.0, 2.5).then_some("Cavity Ridge"));
+                        changed = changed.or(l.slider("Valley", "wb_cav_valley", &mut wb.cavity_valley, 0.0, 2.5).then_some("Cavity Valley"));
+                    }
+                    if wb.cavity_type != CavityType::World {
+                        changed = changed.or(l.slider("Curvature Ridge", "wb_curv_ridge", &mut wb.curvature_ridge, 0.0, 2.0).then_some("Curvature Ridge"));
+                        changed = changed.or(l.slider("Curvature Valley", "wb_curv_valley", &mut wb.curvature_valley, 0.0, 2.0).then_some("Curvature Valley"));
+                    }
+                }
+                if l.check("", "Outline", &mut wb.outline) {
+                    changed = Some("Outline");
+                }
+                if let Some(label) = changed {
+                    l.commit(d, label);
+                    d.settings.workbench = wb;
+                }
+            });
+            l.panel(d, "render.wb.film", "Film", false, &mut |l, d| {
+                set_check!(l, d, "", "Transparent", film_transparent, "Transparent Film");
+            });
+        }
+        Engine::Eevee => {
+            l.space(4);
+            l.panel(d, "render.eevee.sampling", "Sampling", true, &mut |l, d| {
+                set_uint!(l, d, "Viewport", "eevee_vp_samples", eevee_viewport_samples, 1, 4096, "Viewport Samples");
+                set_uint!(l, d, "Render", "eevee_samples", eevee_render_samples, 1, 4096, "Render Samples");
+                l.panel(d, "render.eevee.sampling.shadows", "Shadows", true, &mut |l, d| {
+                    let res = ["512", "1024", "2048", "4096"];
+                    let cur = d.settings.eevee_shadow_resolution.to_string();
+                    l.enumeration("Resolution", "eevee_shadow_resolution", &cur, &res);
+                    set_uint!(l, d, "Cascades", "eevee_cascades", eevee_shadow_cascades, 1, 4, "Shadow Cascades");
+                    set_check!(l, d, "", "Soft Shadows", eevee_soft_shadows, "Soft Shadows");
                 });
             });
-            l.panel(d, "render.wb.color", "Color", true, &mut |l, _| {
-                inactive(l, |l| {
-                    l.expand("", &["Material", "Object", "Attribute", "Single", "Random", "Texture"], 0);
-                });
+            check_panel(l, d, "render.eevee.shadows", "Shadows", false, |d| d.settings.eevee_shadows, |d, v| d.settings.eevee_shadows = v, &mut |l, _| {
+                l.info("Method", "Shadow maps");
             });
-            l.panel(d, "render.wb.film", "Film", false, &mut |l, _| {
-                inactive(l, |l| {
-                    let mut t = false;
-                    l.check("", "Transparent", &mut t);
-                });
+            l.panel(d, "render.eevee.raytracing", "Raytracing", false, &mut |l, _| {
+                l.info("Method", "Light probes");
+                l.note("Screen-space and ray-traced reflections are off");
+            });
+            check_panel(l, d, "render.eevee.ao", "Ambient Occlusion", false, |d| d.settings.eevee_ao, |d, v| d.settings.eevee_ao = v, &mut |l, d| {
+                set_num!(l, d, "Distance", "eevee_ao_distance", eevee_ao_distance, NumOpts { step: 0.05, unit: "m", min: 0.0, max: 100.0, ..NumOpts::default() }, "AO Distance");
+            });
+            check_panel(l, d, "render.eevee.volumes", "Volumes", false, |d| d.settings.eevee_volumetrics, |d, v| d.settings.eevee_volumetrics = v, &mut |l, d| {
+                set_num!(l, d, "End", "eevee_vol_end", eevee_volumetric_end, NumOpts { step: 1.0, unit: "m", min: 0.0, ..NumOpts::default() }, "Volume End");
+                l.info("World", "Homogeneous");
+            });
+            l.panel(d, "render.eevee.film", "Film", false, &mut |l, d| {
+                set_num!(l, d, "Filter Size", "filter_w", filter_width, NumOpts { step: 0.1, unit: "px", min: 0.0, max: 10.0, ..NumOpts::default() }, "Filter Size");
+                set_check!(l, d, "", "Transparent", film_transparent, "Transparent Film");
             });
         }
     }
     l.panel(d, "render.color_management", "Color Management", false, &mut |l, d| {
         l.info("Display Device", "sRGB");
-        let vt = match d.settings.view_transform {
-            ViewTransform::Standard => "Standard",
-            ViewTransform::AgX => "AgX",
-        };
-        l.enumeration("View Transform", "view_transform", vt, &["Standard", "Khronos PBR Neutral", "AgX", "Filmic", "Filmic Log", "False Color", "Raw"]);
-        let look = d.settings.look.clone();
-        l.enumeration("Look", "look", &look, &["None", "Punchy", "Very High Contrast", "High Contrast", "Medium High Contrast", "Base Contrast", "Medium Low Contrast", "Low Contrast", "Very Low Contrast"]);
-        let mut v = d.settings.exposure;
-        if l.number("Exposure", "cm_exposure", &mut v, NumOpts { step: 0.1, min: -32.0, max: 32.0, ..NumOpts::default() }) {
-            l.commit(d, "Exposure");
-            d.settings.exposure = v;
-        }
-        let mut v = d.settings.gamma;
-        if l.number("Gamma", "cm_gamma", &mut v, NumOpts { step: 0.05, min: 0.0, max: 5.0, ..NumOpts::default() }) {
-            l.commit(d, "Gamma");
-            d.settings.gamma = v;
-        }
+        l.enumeration("View Transform", "view_transform", d.settings.view_transform.label(), &ViewTransform::ALL.map(|v| v.label()));
+        let look = Look::from_label(&d.settings.look).unwrap_or_default().label();
+        let was = l.inactive;
+        l.inactive = was || matches!(d.settings.view_transform, ViewTransform::FalseColor | ViewTransform::Raw);
+        l.enumeration("Look", "look", look, &Look::ALL.map(|v| v.label()));
+        l.inactive = was;
+        set_num!(l, d, "Exposure", "cm_exposure", exposure, NumOpts { step: 0.1, min: -32.0, max: 32.0, ..NumOpts::default() }, "Exposure");
+        set_num!(l, d, "Gamma", "cm_gamma", gamma, NumOpts { step: 0.05, min: 0.0, max: 5.0, ..NumOpts::default() }, "Gamma");
         l.info("Sequencer", "sRGB");
         l.panel(d, "render.color_management.curves", "Curves", false, &mut |l, _| l.note("Not available yet"));
     });
@@ -225,10 +341,19 @@ pub fn output(l: &mut L, d: &mut Doc) {
             let mut a = 1.0;
             l.number("Aspect X", "aspect_x", &mut a, NumOpts::default());
             l.number("Y", "aspect_y", &mut a, NumOpts::default());
-            let mut f = false;
-            l.check("", "Render Region", &mut f);
-            l.check("", "Crop to Render Region", &mut f);
         });
+        set_check!(l, d, "", "Render Region", use_border, "Render Region");
+        let was = l.inactive;
+        l.inactive = was || !d.settings.use_border;
+        set_check!(l, d, "", "Crop to Render Region", crop_to_border, "Crop to Render Region");
+        for (i, (n, k)) in [("Region Min X", "border_min_x"), ("Y", "border_min_y"), ("Max X", "border_max_x"), ("Y", "border_max_y")].into_iter().enumerate() {
+            let mut v = d.settings.border[i];
+            if l.number(n, k, &mut v, NumOpts { step: 0.01, min: 0.0, max: 1.0, slider: true, ..NumOpts::default() }) {
+                l.commit(d, "Render Region");
+                d.settings.border[i] = v;
+            }
+        }
+        l.inactive = was;
         l.space(4);
         let fps = d.scene.fps;
         let cur = FPS.iter().find(|f| f.split(' ').next().and_then(|n| n.parse::<f32>().ok()).is_some_and(|n| (n - fps).abs() < 0.01)).map(|s| s.to_string()).unwrap_or_else(|| format!("Custom ({fps} fps)"));
@@ -302,15 +427,33 @@ pub fn output(l: &mut L, d: &mut Doc) {
             }
         });
     });
-    l.panel(d, "output.post_processing", "Post Processing", false, &mut |l, _| {
+    l.panel(d, "output.post_processing", "Post Processing", false, &mut |l, d| {
         inactive(l, |l| {
             let mut t = true;
             l.check("Pipeline", "Compositing", &mut t);
-            l.check("", "Sequencer", &mut t);
+        });
+        let mut sq = d.scene.sequence_editor.as_ref().is_none_or(|q| q.use_sequencer);
+        if l.check("", "Sequencer", &mut sq) {
+            l.commit(d, "Sequencer");
+            crate::seqedit::seq(d).use_sequencer = sq;
+        }
+        inactive(l, |l| {
             let mut v = 1.0;
             l.number("Dither", "dither", &mut v, NumOpts::default());
         });
     });
+}
+
+/// A View Layer pass checkbox; several passes toggle together (Denoising
+/// Data is albedo and normal).
+fn pass_check(l: &mut L, d: &mut Doc, heading: &str, label: &str, passes: &[Pass]) {
+    let mut v = passes.iter().all(|p| d.settings.passes.contains(*p));
+    if l.check(heading, label, &mut v) {
+        l.commit(d, &format!("{label} Pass"));
+        for p in passes {
+            d.settings.passes.set(*p, v);
+        }
+    }
 }
 
 pub fn view_layer(l: &mut L, d: &mut Doc) {
@@ -327,36 +470,34 @@ pub fn view_layer(l: &mut L, d: &mut Doc) {
     });
     l.panel(d, "vl.passes", "Passes", true, &mut |l, d| {
         l.panel(d, "vl.passes.data", "Data", true, &mut |l, d| {
-            inactive(l, |l| {
-                let mut t = true;
-                l.check("Include", "Combined", &mut t);
-            });
-            let st = &d.settings;
-            let (mut z, mut n, mut dn) = (st.pass_z, st.pass_normal, st.pass_denoising);
-            if l.check("", "Z", &mut z) {
-                l.commit(d, "Z Pass");
-                d.settings.pass_z = z;
-            }
-            inactive(l, |l| {
-                let mut f = false;
-                l.check("", "Mist", &mut f);
-                l.check("", "Position", &mut f);
-            });
-            if l.check("", "Normal", &mut n) {
-                l.commit(d, "Normal Pass");
-                d.settings.pass_normal = n;
-            }
-            if l.check("", "Denoising Data", &mut dn) {
-                l.commit(d, "Denoising Data");
-                d.settings.pass_denoising = dn;
-            }
+            pass_check(l, d, "Include", "Combined", &[Pass::Combined]);
+            pass_check(l, d, "", "Z", &[Pass::Depth]);
+            pass_check(l, d, "", "Mist", &[Pass::Mist]);
+            pass_check(l, d, "", "Position", &[Pass::Position]);
+            pass_check(l, d, "", "Normal", &[Pass::Normal]);
+            pass_check(l, d, "", "UV", &[Pass::Uv]);
+            pass_check(l, d, "", "Denoising Data", &[Pass::DenoisingAlbedo, Pass::DenoisingNormal]);
+            pass_check(l, d, "Indexes", "Object Index", &[Pass::ObjectIndex]);
+            pass_check(l, d, "", "Material Index", &[Pass::MaterialIndex]);
         });
-        l.panel(d, "vl.passes.light", "Light", false, &mut |l, _| {
+        l.panel(d, "vl.passes.light", "Light", false, &mut |l, d| {
+            pass_check(l, d, "Diffuse", "Direct", &[Pass::DiffuseDirect]);
+            pass_check(l, d, "", "Indirect", &[Pass::DiffuseIndirect]);
+            pass_check(l, d, "", "Color", &[Pass::DiffuseColor]);
+            pass_check(l, d, "Glossy", "Direct", &[Pass::GlossyDirect]);
+            pass_check(l, d, "", "Indirect", &[Pass::GlossyIndirect]);
+            pass_check(l, d, "", "Color", &[Pass::GlossyColor]);
+            pass_check(l, d, "Transmission", "Direct", &[Pass::TransmissionDirect]);
+            pass_check(l, d, "", "Indirect", &[Pass::TransmissionIndirect]);
+            pass_check(l, d, "", "Color", &[Pass::TransmissionColor]);
+            pass_check(l, d, "Volume", "Direct", &[Pass::VolumeDirect]);
+            pass_check(l, d, "", "Indirect", &[Pass::VolumeIndirect]);
+            pass_check(l, d, "Other", "Emission", &[Pass::Emission]);
+            pass_check(l, d, "", "Environment", &[Pass::Environment]);
+            pass_check(l, d, "", "Ambient Occlusion", &[Pass::AmbientOcclusion]);
             inactive(l, |l| {
                 let mut f = false;
-                for n in ["Diffuse", "Glossy", "Transmission", "Emission", "Environment", "Ambient Occlusion", "Shadow Catcher"] {
-                    l.check("", n, &mut f);
-                }
+                l.check("", "Shadow Catcher", &mut f);
             });
         });
         l.panel(d, "vl.passes.cryptomatte", "Cryptomatte", false, &mut |l, _| {
@@ -410,32 +551,32 @@ pub fn scene(l: &mut L, d: &mut Doc) {
             l.enumeration("Temperature", "temp_unit", "Kelvin", &[]);
         });
     });
-    let on = d.settings.gravity_on;
-    let mut hit = None;
-    l.panel_with(d, "scene.gravity", "", true, &mut |l, _, r| hit = check_header(l, "Gravity", on, r), &mut |l, d| {
-        let was = l.inactive;
-        l.inactive = !d.settings.gravity_on;
-        for (i, n) in ["Gravity X", "Y", "Z"].iter().enumerate() {
-            let mut v = d.settings.gravity[i];
-            if l.number(n, &format!("gravity{i}"), &mut v, NumOpts { step: 0.1, unit: "m/s²", ..NumOpts::default() }) {
-                l.commit(d, "Gravity");
-                d.settings.gravity[i] = v;
-            }
-        }
-        l.inactive = was;
-    });
-    if let Some(v) = hit {
-        l.commit(d, "Gravity");
-        d.settings.gravity_on = v;
-    }
-    for (k, t) in [("scene.simulation", "Simulation"), ("scene.audio", "Audio"), ("scene.keying_sets", "Keying Sets"), ("scene.rigid_body", "Rigid Body World")] {
+    super::physics::gravity_panel(l, d);
+    for (k, t) in [("scene.simulation", "Simulation"), ("scene.audio", "Audio"), ("scene.keying_sets", "Keying Sets")] {
         l.panel(d, k, t, false, &mut |l, _| l.note("Not available yet"));
     }
+    super::physics::world_panel(l, d);
 }
 
 pub fn world(l: &mut L, d: &mut Doc, c: &mut Ctx) {
     l.id_block(Icon::World, "World", None);
+    if d.scene.world.node_tree.is_some() {
+        super::nodepanel::world(l, d, &mut c.open_picker);
+    } else {
+        world_legacy(l, d, c);
+    }
+    l.panel(d, "world.viewport_display", "Viewport Display", false, &mut |l, d| {
+        let w = d.scene.world.color;
+        if let Some(r) = l.color("Color", [w.x, w.y, w.z]) {
+            c.open_picker = Some((ColorTarget::World, r));
+        }
+    });
+}
+
+/// The World tab without a node tree: colour, strength and Use Nodes.
+fn world_legacy(l: &mut L, d: &mut Doc, c: &mut Ctx) {
     l.panel(d, "world.surface", "Surface", true, &mut |l, d| {
+        super::nodepanel::use_nodes_button(l, d, crate::nodetree::TreeRef::World);
         l.info("Surface", "Background");
         match d.scene.world.hdri {
             Some(i) => {
@@ -455,7 +596,42 @@ pub fn world(l: &mut L, d: &mut Doc, c: &mut Ctx) {
             d.scene.world.strength = v;
         }
     });
-    l.panel(d, "world.volume", "Volume", false, &mut |l, _| l.info("Volume", "None"));
+    l.panel(d, "world.volume", "Volume", false, &mut |l, d| {
+        let mut on = d.scene.world.volume.is_some();
+        if l.check("", "Volume Scatter", &mut on) {
+            l.commit(d, "World Volume");
+            d.scene.world.volume = on.then(sex_3d::scene::VolumeSettings::default);
+        }
+        if let Some(v) = d.scene.world.volume.clone() {
+            let mut density = v.density;
+            if l.number("Density", "world_vol_density", &mut density, NumOpts { step: 0.001, min: 0.0, max: 1e5, ..NumOpts::default() }) {
+                l.commit(d, "Volume Density");
+                if let Some(v) = &mut d.scene.world.volume {
+                    v.density = density;
+                }
+            }
+            let mut a = v.anisotropy;
+            if l.number("Anisotropy", "world_vol_aniso", &mut a, NumOpts { step: 0.05, min: -1.0, max: 1.0, slider: true, ..NumOpts::default() }) {
+                l.commit(d, "Volume Anisotropy");
+                if let Some(v) = &mut d.scene.world.volume {
+                    v.anisotropy = a;
+                }
+            }
+        }
+    });
+    l.panel(d, "world.mist", "Mist Pass", false, &mut |l, d| {
+        set_num!(l, d, "Start", "mist_start", mist_start, NumOpts { step: 0.1, unit: "m", min: 0.0, ..NumOpts::default() }, "Mist Start");
+        set_num!(l, d, "Depth", "mist_depth", mist_depth, NumOpts { step: 0.1, unit: "m", min: 0.0, ..NumOpts::default() }, "Mist Depth");
+        let falloff = match d.settings.mist_falloff {
+            MistFalloff::Quadratic => "Quadratic",
+            MistFalloff::Linear => "Linear",
+            MistFalloff::InverseQuadratic => "Inverse Quadratic",
+        };
+        l.enumeration("Falloff", "mist_falloff", falloff, &["Quadratic", "Linear", "Inverse Quadratic"]);
+    });
+    l.panel(d, "world.ao", "Ambient Occlusion", false, &mut |l, d| {
+        set_num!(l, d, "Distance", "ao_distance", ao_distance, NumOpts { step: 0.1, unit: "m", min: 0.0, ..NumOpts::default() }, "AO Distance");
+    });
     l.panel(d, "world.viewport_display", "Viewport Display", false, &mut |l, d| {
         let w = d.scene.world.color;
         if let Some(r) = l.color("Color", [w.x, w.y, w.z]) {
@@ -509,32 +685,11 @@ pub fn collection(l: &mut L, d: &mut Doc) {
 }
 
 pub fn particles(l: &mut L, d: &mut Doc) {
-    l.space(4);
-    let (b, _) = l.list_box(&[], 0, 3);
-    if b != 0 {
-        d.report = "Particle systems are not available yet".into();
-    }
+    super::physics::particles(l, d);
 }
 
 pub fn physics(l: &mut L, d: &mut Doc) {
-    l.space(4);
-    l.panel(d, "physics.enable", "Enable Physics For:", true, &mut |l, d| {
-        let names = ["Force Field", "Collision", "Cloth", "Dynamic Paint", "Soft Body", "Fluid", "Rigid Body", "Rigid Body Constraint"];
-        for pair in names.chunks(2) {
-            if !l.band(ROW) {
-                continue;
-            }
-            let (x, w) = l.inner();
-            let half = (w - 4) / 2;
-            for (i, n) in pair.iter().enumerate() {
-                let r = Rect::new(x + i as i32 * (half + 4), l.y, half, ROW);
-                if l.ui.button(r, n) {
-                    d.report = format!("{n} physics is not available yet");
-                }
-            }
-            l.y += ROW + super::layout::GAP;
-        }
-    });
+    super::physics::physics(l, d);
 }
 
 pub fn constraints(l: &mut L, _d: &mut Doc) {

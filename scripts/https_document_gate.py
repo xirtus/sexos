@@ -4,6 +4,7 @@
 The host is the endpoint itself, with deliberately public laboratory fixtures.
 No proxy, key log, public-Internet trust or transport-EOF inference is used.
 """
+from input_payload_profile import require_payload_proof
 from clock_source_evidence import browser_clock_sources
 import browser_source_evidence as source_evidence
 import argparse,ast,hashlib,json,math,os,re,shutil,socket,ssl,subprocess,threading,time
@@ -190,20 +191,15 @@ def frame_pixels(ppm,expected,contract,resolution=None):
  """Pure complete text-band oracle; separate caller binds authenticated receipt."""
  width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=expected['tile'];factor=expected['scale'];color=contract['color'].to_bytes(3,'big');checked=ink=mismatches=0
  if resolution and(width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
- if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
- columns=min(80,max(0,(tile['w']-2*contract['inset'])//(contract['advance']*factor)));band_rows=min(contract['max_rows'],max(0,(tile['h']-contract['top']+contract['line']*factor-1)//(contract['line']*factor)))
+ if tile['x']<0 or tile['y']<contract.get('bar',50) or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
+ content_bottom=tile['y']+tile['h']-contract.get('content_bottom_inset',0)
+ columns=min(contract.get('renderer_max_columns',80),max(0,(tile['w']-2*contract['inset'])//(contract['advance']*factor)));band_rows=min(contract['max_rows'],max(0,(content_bottom-tile['y']-contract['top']+contract['line']*factor-1)//(contract['line']*factor)))
  for row in range(band_rows):
   line=expected['lines'][row]if row<expected['rows']else b''
   for column in range(columns):
-   bitmap=glyph(contract['font'],chr(line[column]))if column<len(line)else(0,)*7
-   for gy in range(contract['line']):
-    for gx in range(contract['advance']):
-     on=gy<contract['glyph_height']and gx<5 and bool(bitmap[gy]&(1<<(4-gx)))
-     for dy in range(factor):
-      py=tile['y']+contract['top']+(row*contract['line']+gy)*factor+dy
-      if py>=tile['y']+tile['h']:continue
-      for dx in range(factor):
-       px=tile['x']+contract['inset']+(column*contract['advance']+gx)*factor+dx;actual=pixels[(py*width+px)*3:(py*width+px)*3+3]==color;checked+=1;ink+=on;mismatches+=actual!=on
+   char=chr(line[column])if column<len(line)else' '
+   c,i,m=http.check_text_cell(pixels,width,tile['x']+contract['inset']+column*contract['advance']*factor,tile['y']+contract['top']+row*contract['line']*factor,char,factor,contract,content_bottom)
+   checked+=c;ink+=i;mismatches+=m
  if mismatches or not ink:raise ValueError('whole HTTPS reader glyph/padding/stale-erasure mismatches='+str(mismatches))
  return dict(ok=True,errors=[],checked_pixels=checked,expected_ink_pixels=ink,geometry={k:v for k,v in expected.items()if k not in('starts','lines')},expected_rows=[line.decode('ascii')for line in expected['lines']])
 
@@ -285,7 +281,7 @@ def status_geometry(trace,expected,mode,contract):
  label=(b'certificate rejected'if mode=='wrong-name'else b'invalid document')if expected=='Unavailable'else LABELS[expected]
  status=(b'\n\nHTTPS / lab root: '+label+b'\nB fetch V read Q clear').ljust(64,b' ')
  if len(status)!=64:raise ValueError('controlled TLS panel exceeds64bytes')
- data=preceding+status;scale=2 if w>=contract['scale_threshold']else 1;cols=min(80,max(1,(w-2*contract['inset'])//(contract['advance']*scale)));starts=[0];column=0
+ data=preceding+status;scale=2 if w>=contract['scale_threshold']else 1;cols=min(contract.get('renderer_max_columns',80),max(1,(w-2*contract['inset'])//(contract['advance']*scale)));starts=[0];column=0
  for index,byte in enumerate(data):
   if byte==10:starts.append(index+1);column=0
   else:
@@ -307,16 +303,12 @@ def verify_status_pixels(trace,ppm,expected,mode,contract,resolution=None):
  try:
   g=status_geometry(trace,expected,mode,contract);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=g['tile'];scale=g['scale'];color=contract['color'].to_bytes(3,'big');checked=ink=mismatch=0
   if resolution and(width,height)!=tuple(resolution):raise ValueError('wrong framebuffer resolution')
-  if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('peer tile outside framebuffer')
+  if tile['x']<0 or tile['y']<contract.get('bar',50) or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('peer tile outside framebuffer')
   for row in g['rows']:
    for col in range(g['columns']):
-    bits=glyph(contract['font'],row['text'][col])if col<len(row['text'])else(0,)*7
-    for gy in range(contract['line']):
-     for gx in range(contract['advance']):
-      on=gy<7 and gx<5 and bool(bits[gy]&(1<<(4-gx)))
-      for dy in range(scale):
-       for dx in range(scale):
-        px=row['x']+(col*contract['advance']+gx)*scale+dx;py=row['y']+gy*scale+dy;actual=pixels[(py*width+px)*3:(py*width+px)*3+3]==color;mismatch+=actual!=on;checked+=1;ink+=on
+    char=row['text'][col]if col<len(row['text'])else' '
+    c,i,m=http.check_text_cell(pixels,width,row['x']+col*contract['advance']*scale,row['y'],char,scale,contract)
+    mismatch+=m;checked+=c;ink+=i
   if mismatch or not ink:raise ValueError('whole peer glyph/padding/trailing-erasure mismatches='+str(mismatch))
   return dict(ok=True,errors=[],expected=expected,geometry=g,checked_pixels=checked,expected_ink_pixels=ink)
  except(ValueError,KeyError,IndexError,UnicodeError)as exc:return dict(ok=False,errors=[str(exc)],expected=expected)
@@ -371,6 +363,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start);focus_surface(300,text,key);palette_select(key,'ZoomToggle',palette_commands(root))
   boundary=len(text());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',boundary);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',boundary)
   boundary=len(text());q.key('b');wait(r'\[shell.browser.input\] code=48 down=1 slot=43 accepted=1',boundary);wait(r'\[browser.https.intent\] accepted=1 explicit=1 public_internet=0',boundary)
@@ -419,7 +412,7 @@ def main():
    try:proc.wait(timeout=5)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
- manifest['host_utc_end']=host_end;(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=inspect_wire(raw,peer.rows,a.mode);dns=dns_capture(raw,'echo',attempts=peer.attempts,expected=peer.dns)if peer.dns else dict(ok=False,errors=['actual controlled DNS absent']);document=inspect_document(trace,a.mode,wire,dns,raw,host_start,host_end,contract,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ manifest['host_utc_end']=host_end;(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=inspect_wire(raw,peer.rows,a.mode);dns=dns_capture(raw,'echo',attempts=peer.attempts,expected=peer.dns)if peer.dns else dict(ok=False,errors=['actual controlled DNS absent']);document=inspect_document(trace,a.mode,wire,dns,raw,host_start,host_end,contract,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace,source_root=root)
  (out/'peer-exchanges.json').write_text(json.dumps(dict(tls=peer.rows,dns=peer.dns,dns_send_attempts=peer.attempts,keylog_enabled=False,scope='Actual endpoint public HTTP fixture observations; no private TLS or entropy material.'),indent=2)+'\n');result=dict(ok=failure is None and not peer.errors and all(r['ok']for r in(wire,dns,document,authority,waiting)),error=failure,server_errors=peer.errors,mode=a.mode,binding=binding,wire=wire,dns=dns,document=document,authority=authority,self_wait=waiting,pixels=pixels,actions=actions,cleanup=cleanup,scope=SCOPE);(out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  if not result['ok']:raise RuntimeError(json.dumps(result))
  print(json.dumps(dict(ok=True,mode=a.mode,document=document['joins'])))

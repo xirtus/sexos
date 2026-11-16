@@ -63,6 +63,16 @@ static int spawn_checks(void) {
     r = posix_spawn(&pid, "stdspawn", &fa, NULL, five, NULL);
     posix_spawn_file_actions_destroy(&fa);
     check("file actions are ENOSYS", r == ENOSYS);
+    /* envp reaches the child: `stdspawn envis K V` ends with 0 when K is V there. */
+    char *envis[] = { "stdspawn", "envis", "CHELLO_ENV", "from C", NULL };
+    char *envp[] = { "CHELLO_ENV=from C", "OTHER=1", NULL };
+    r = posix_spawnp(&pid, "stdspawn", NULL, NULL, envis, envp);
+    check("posix_spawn envp", r == 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    /* system() hands on environ (setenv's copy). */
+    setenv("CHELLO_ENV", "set here", 1);
+    check("system() hands on environ", (st = system("stdspawn envis CHELLO_ENV 'set here'")) != -1 && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    char cwd[256];
+    check("getcwd", getcwd(cwd, sizeof cwd) != NULL && strcmp(cwd, "/") == 0);
     check("getpid", getpid() > 0);
     printf("passed %d/%d\n", passed, total);
     fprintf(stderr, "[chello.spawn.%s] passed=%d/%d\n", passed == total ? "ok" : "fail", passed, total);

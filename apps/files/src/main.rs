@@ -15,10 +15,12 @@ extern crate alloc;
 
 mod archive;
 mod compare;
+mod diskimg;
 mod dupes;
 mod jobs;
 mod loom;
 mod meta;
+mod places;
 mod rename;
 mod search;
 mod thumbs;
@@ -56,6 +58,7 @@ const KEY_X: u8 = 0x2D;
 const KEY_V: u8 = 0x2F;
 const KEY_Z: u8 = 0x2C;
 const KEY_N: u8 = 0x31;
+const KEY_Y: u8 = 0x15;
 const KEY_T: u8 = 0x14;
 const KEY_R: u8 = 0x13;
 const KEY_H: u8 = 0x23;
@@ -91,6 +94,8 @@ struct App {
     input: Option<(Input, Vec<u8>)>,
     status: String,
     question: Option<Question>,
+    /// A program asking to use a whole disk raw (Corset): Y allows, N refuses.
+    disk_ask: Option<files::disks::Question>,
     /// This run can see questions: it holds the whole filesystem.
     portal: bool,
     /// Copying, moving, deleting or checking in the background.
@@ -228,7 +233,7 @@ impl App {
 
     fn render(&mut self, window: &mut Window) {
         if self.loom_render(window) { return; }
-        if self.thumbs.on && self.input.is_none() && self.search.is_none() && self.question.is_none() {
+        if self.thumbs.on && self.input.is_none() && self.search.is_none() && self.question.is_none() && self.disk_ask.is_none() {
             let mut head = format!("Files  {}", shown(&self.cwd));
             if let Some(q) = &self.found { head = format!("Found {} for \"{}\" in {}", self.entries.len(), shown(q), shown(&self.cwd)); }
             let mut foot = String::new();
@@ -254,6 +259,9 @@ impl App {
         if let Some(q) = &self.question {
             let what = match q.mode { Pick::Open => "open a file: Enter chooses it", Pick::Save => "save a file: Ctrl+S names it here", Pick::Folder => "pick a folder: Ctrl+S chooses this one" };
             t.push_str(&format!(">> {} asks to {}. Esc says no.\n", shown(&q.program), what));
+        }
+        if let Some(q) = &self.disk_ask {
+            t.push_str(&format!(">> {} asks to use the whole disk {} directly: it can change or erase everything on it until it closes. Y allows, N refuses.\n", shown(&q.program), shown(&q.disk)));
         }
         t.push('\n');
         if self.entries.is_empty() { t.push_str("  (empty)\n"); }
@@ -645,7 +653,8 @@ impl App {
         }
     }
     fn poll_questions(&mut self, window: &mut Window) -> bool {
-        if !self.portal || self.question.is_some() { return false; }
+        let disk = self.poll_disk_asks(window);
+        if !self.portal || self.question.is_some() { return disk; }
         match files::questions(window) {
             Ok(mut qs) if !qs.is_empty() => {
                 let q = qs.remove(0);
@@ -653,12 +662,40 @@ impl App {
                 self.question = Some(q);
                 true
             }
-            Ok(_) => false,
-            Err(_) => { self.portal = false; false }
+            Ok(_) => disk,
+            Err(_) => { self.portal = false; disk }
         }
+    }
+    /// A program asking for a whole disk (`sex_pdx::disks`): shown until answered.
+    fn poll_disk_asks(&mut self, window: &mut Window) -> bool {
+        if !self.portal || self.disk_ask.is_some() { return false; }
+        match files::disks::questions(window) {
+            Ok(mut qs) if !qs.is_empty() => {
+                let q = qs.remove(0);
+                sex_pdx::serial_record!("[files.app.disk.question] program={} disk={}", shown(&q.program), shown(&q.disk));
+                self.disk_ask = Some(q);
+                true
+            }
+            _ => false,
+        }
+    }
+    /// Y or N to a disk question; any other key goes on as usual.
+    fn disk_key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) -> bool {
+        if self.input.is_some() || key.control || !matches!(key.code, KEY_Y | KEY_N) { return false; }
+        let Some(q) = self.disk_ask.take() else { return false };
+        let yes = key.code == KEY_Y;
+        match files::disks::answer(window, &q, yes) {
+            Ok(()) => {
+                sex_pdx::serial_record!("[files.app.disk.answered] program={} disk={} yes={}", shown(&q.program), shown(&q.disk), yes as u8);
+                self.status = if yes { format!("{} may use {} until it closes.", shown(&q.program), shown(&q.disk)) } else { format!("Told {} no.", shown(&q.program)) };
+            }
+            Err(e) => self.status = format!("Couldn't answer: {}.", shown(files::message(e))),
+        }
+        true
     }
 
     fn key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) {
+        if self.disk_key(window, key) { return; }
         let before = self.confirm.is_some();
         self.key_inner(window, key);
         let again = matches!(self.confirm, Some(_)) && (key.code == KEY_E && key.control || matches!(sex_app::nav(key), Some(Nav::Delete)) && key.shift);
@@ -814,7 +851,7 @@ pub extern "C" fn _start() -> ! {
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
-    let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, portal,
+    let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
                         job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     let start = app.root.clone();

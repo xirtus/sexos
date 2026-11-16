@@ -69,7 +69,7 @@ impl ByteSource for FileSource {
 }
 
 /// Writes a new file through Files, piece by piece.
-struct FileSink { path: Vec<u8>, offset: u64 }
+pub(crate) struct FileSink { pub(crate) path: Vec<u8>, pub(crate) offset: u64 }
 impl Sink for FileSink {
     fn write_all(&mut self, data: &[u8]) -> Result<(), IoError> {
         let n = direct::write_at(&self.path, self.offset, data).map_err(|_| IoError("couldn't write"))?;
@@ -80,7 +80,7 @@ impl Sink for FileSink {
 }
 
 /// Makes `dir` and every folder above it that is missing, up to `top` (which exists).
-fn mkdirs(top: &[u8], rel: &str, made: &mut BTreeSet<String>) -> Result<(), IoError> {
+pub(crate) fn mkdirs(top: &[u8], rel: &str, made: &mut BTreeSet<String>) -> Result<(), IoError> {
     let mut so_far = String::new();
     for part in rel.split('/').filter(|p| !p.is_empty()) {
         if !so_far.is_empty() { so_far.push('/'); }
@@ -142,13 +142,13 @@ pub struct Inside {
 }
 
 /// How an operation with a progress line ended.
-enum End { Done, Stopped, Failed(String) }
+pub(crate) enum End { Done, Stopped, Failed(String) }
 
 /// Key polling and redrawing while a long archive operation runs.
-struct Ticker { verb: &'static str, what: String, last: u64, pct: u64, closing: bool, started: u64 }
+pub(crate) struct Ticker { verb: &'static str, what: String, last: u64, pct: u64, closing: bool, started: u64 }
 impl Ticker {
-    fn new(verb: &'static str, what: &[u8]) -> Self { Ticker { verb, what: shown(what).into(), last: 0, pct: 101, closing: false, started: sex_pdx::get_ticks() } }
-    fn tick(&mut self, app: &mut App, window: &mut Window, p: Progress) -> Flow {
+    pub(crate) fn new(verb: &'static str, what: &[u8]) -> Self { Ticker { verb, what: shown(what).into(), last: 0, pct: 101, closing: false, started: sex_pdx::get_ticks() } }
+    pub(crate) fn tick(&mut self, app: &mut App, window: &mut Window, p: Progress) -> Flow {
         let pct = if p.total == 0 { 0 } else { p.done.min(p.total) * 100 / p.total };
         if pct / 10 != self.pct / 10 { sex_pdx::serial_record!("[files.app.archive.progress] kind={} pct={} done={} total={}", self.verb, pct, p.done, p.total); }
         self.pct = pct;
@@ -172,7 +172,7 @@ impl Ticker {
         Flow::Continue
     }
     /// The window was closed during the operation: it has been cleaned up, so go.
-    fn finish(&self, window: &mut Window) {
+    pub(crate) fn finish(&self, window: &mut Window) {
         if self.closing { let _ = files::sync(window); sex_pdx::serial_record!("[files.app.closed]"); sex_pdx::task_finish(0); }
     }
 }

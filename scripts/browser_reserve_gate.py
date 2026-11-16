@@ -11,6 +11,7 @@ Host monotonic intervals are observations including QMP/transport/polling delay.
 The exhausted launcher is independently checked against every visible glyph.
 No public TLS handshake, arbitrary restart, runtime grants, process VAS or POSIX.
 """
+from input_payload_profile import assert_payload_proof, require_payload_proof
 import argparse
 # Browser private heap (sex-rt/src/heap.rs HEAP_BYTES) and the bytes it keeps
 # for its whole life: the page-link table (16 x 16 B) and history (8 x 64 B).
@@ -260,7 +261,11 @@ def verify(trace,result,root,mode='quiesced'):
 
 
 def palette(c):
- c['key']('grave_accent',r'\[shell.palette.open\] ok=1 selected=0 count=11'+END)
+ from quil_workflow_gate import palette_commands
+ commands=palette_commands(c.get('root',ROOT))
+ if len(commands)<=10 or commands[10]!=('FocusBrowser','Open Browser'):
+  raise ValueError('source Browser palette row10 changed')
+ c['key']('grave_accent',rf'\[shell.palette.open\] ok=1 selected=0 count={len(commands)}'+END)
  for old in range(10):c['key']('j',rf'\[shell.palette.select\] old={old} new={old+1}'+END)
 def launch(c,row):
  """Use index10 and return the fresh launch start; row includes actual held task."""
@@ -372,6 +377,7 @@ def echo_peer():
   if worker.is_alive():errors.append('startup echo worker did not stop')
 
 def verify_keys(trace,actions):
+ assert_payload_proof(trace)
  previous=0;count=0
  for action in actions:
   if action.get('kind')!='key':continue
@@ -607,6 +613,7 @@ def native(root,iso,binding,seed,out,resolution='1280x800',model='e1000e',mode='
     time.sleep(.05)
    q=QMP(sock)
    if resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);hardware_keys(q,('down',));hardware_keys(q,('ret',))
+   require_payload_proof(dict(text=text,wait=wait))
    wait(r'\[shell.app.registered.reply\] target=15 task=\d+ surface=300 committed=1'+END)
    wait(r'\[net.source.binding.held\] target=31 [^\n]*'+END)
    result=run(dict(root=root,text=text,wait=wait,key=key,capture=capture,actions=actions),mode);result.update(ok=True,frames=frames)

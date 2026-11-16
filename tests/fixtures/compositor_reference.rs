@@ -99,13 +99,13 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                         }
                         // Tab strip: glass background with tab color overlay.
                         if surf.tab_count > 0
-                            && lx >= 74
+                            && lx >= 98
                             && lx < rim_right
                         {
-                            let available = rim_right.saturating_sub(74);
+                            let available = rim_right.saturating_sub(98);
                             let slot_w = available / surf.tab_count as usize;
                             if slot_w > 0 {
-                                let tab_idx = (lx - 74) / slot_w;
+                                let tab_idx = (lx - 98) / slot_w;
                                 let tab_color = if tab_idx == surf.active_tab as usize {
                                     DISPLAY_TOKENS.active_tab_color
                                 } else {
@@ -120,11 +120,11 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                         if let Some(fg)=toolbar_title_fg_at(lx,ly,surf.surface_id,c){c=fg;}
                         // New accepted default controls, independent literal1x
                     // circle centers/radii. Keep the two-pass reference search.
-                    for (kind,cx) in [(0u8,13i32),(1,37),(2,61)] {
+                    for (kind,cx) in [(0u8,13i32),(1,37),(2,61),(3,85)] {
                         let dx=2*lx as i32+1-2*cx;let dy=2*ly as i32+1-26;
                         let distance=dx*dx+dy*dy;
                         if distance>=100 {continue;}
-                        let fill=match kind {0=>DISPLAY_TOKENS.close_light_color,1=>DISPLAY_TOKENS.minimize_light_color,_=>DISPLAY_TOKENS.zoom_light_color};
+                        let fill=match kind {0=>DISPLAY_TOKENS.close_light_color,1=>DISPLAY_TOKENS.minimize_light_color,2=>DISPLAY_TOKENS.zoom_light_color,_=>FRAME_LIGHT_FLOAT_COLOR};
                         let ink=if distance>=64{desktop_style::contrast_ink(c)}else{fill};
                         let alpha=if kind==0&&!close_allowed{80u32}else if light_hovered&&hovered_light_kind==kind{255}else{224};
                         let mut mixed=ink&0xff00_0000;

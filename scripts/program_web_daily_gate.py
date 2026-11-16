@@ -22,16 +22,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
   self.end_headers();self.wfile.write(body)
  def log_message(self,*a):pass
 class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
-server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
-threading.Thread(target=server.serve_forever,daemon=True).start()
-os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
-os.environ.setdefault('SEXOS_GATE_BOUND','1200')
 from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus','?':None}
+
+def wait_closed_session(g,start,target,task):
+ """Power off only after the run ended and its removal is durable.
+
+ Shell's ENDED notice can precede complete private retirement. Join both
+ exact identities from this Close, then require a later successful session
+ SYNC, not the application's earlier profile-save receipt.
+ """
+ target,task=int(target),int(task)
+ g['wait'](rf'\[app.private.retired\] target={target} task={task} pages=\d+ reusable=1(?:\r?\n|$)',start,120)
+ ended=g['wait'](rf'\[spindle.session.ended\] target={target} task={task}(?:\r?\n|$)',start,120)
+ g['wait'](r'\[spindle.session.saved\] bytes=0 status=0(?:\r?\n|$)',start+ended.end(),120)
+
+def require_empty_restored_session(g):
+ session=g['wait'](r'\[spindle.session.read\] status=(\d+) programs=(\d+)',0,120)
+ assert tuple(map(int,session.groups()))==(0,0),'closed program remained in the restored session: '+session[0]
+ assert '[spindle.session.restore]'not in g['text'](),'unexpected automatic program restoration'
+
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
+ server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
+ threading.Thread(target=server.serve_forever,daemon=True).start()
+ os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
+ os.environ.setdefault('SEXOS_GATE_BOUND','1200')
  base=f'http://10.0.2.2:{PORT}/site/daily';start=f'{base}/start.html'
  def session(tag):
   g=boot(a.iso,disk,a.out,tag,a.resolution);t=g['text'];q=g['q']
@@ -43,8 +61,10 @@ def main():
     else:q.key(KEYS.get(k,k))
     time.sleep(.06)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
+  if tag=='boot2':require_empty_restored_session(g)
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch http://10.0.2.2:{PORT}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
+  if tag=='boot2':assert '[spindle.session.restore]'not in t(),'unexpected automatic program restoration before explicit launch'
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {start}');q.key('ret')
   m=g['wait'](r'\[web.console\] level=0 daily count (\d+) cookie (\S+) extra (\S+)',s,300)
   r=g['wait'](r'\[web.ready\] target=(\d+) task=(\d+)',s,120)
@@ -77,9 +97,7 @@ def main():
   z=g['chord']('ctrl','equal',r'\[web.zoom\] percent=110 height=(\d+)')
   s=len(t());q.key('f11');g['wait'](r'\[web.profile.saved\] files=\d+ history=\d+ bookmarks=1',s,60)
   g['wait'](rf'\[web.closed\] target={target} task={task}',s,60)
-  # Spindle keeps open programs for session restore and saves a moment after one ends:
-  # wait for the save with nothing open, or the next boot reopens Kaleidoscope by itself.
-  g['wait'](r'\[spindle.session.saved\] bytes=0 status=0',s,60)
+  wait_closed_session(g,s,target,task)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'boot1':'ok','zoom_height':z[1]})
  finally:g['stop']()

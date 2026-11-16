@@ -11,9 +11,12 @@
 //! applies at the start of its next draw, before anything else runs them.
 mod data;
 pub mod icons;
-mod layout;
+pub mod layout;
+pub mod nodepanel;
 mod object;
-mod picker;
+mod physics;
+pub mod picker;
+pub mod rigpanels;
 mod tabs;
 
 pub use object::{rename_object, set_parent};
@@ -43,8 +46,12 @@ pub enum Tab {
     Physics,
     Constraints,
     Data,
+    Bone,
+    BoneConstraints,
     Material,
     Texture,
+    /// Grease Pencil visual effects.
+    Effects,
 }
 
 impl Tab {
@@ -63,8 +70,11 @@ impl Tab {
             Tab::Physics => "Physics",
             Tab::Constraints => "Object Constraints",
             Tab::Data => "Data",
+            Tab::Bone => "Bone",
+            Tab::BoneConstraints => "Bone Constraints",
             Tab::Material => "Material",
             Tab::Texture => "Texture",
+            Tab::Effects => "Visual Effects",
         }
     }
     fn icon(self, data: Icon) -> Icon {
@@ -82,8 +92,11 @@ impl Tab {
             Tab::Physics => Icon::Physics,
             Tab::Constraints => Icon::Constraint,
             Tab::Data => data,
+            Tab::Bone => Icon::Bone,
+            Tab::BoneConstraints => Icon::BoneConstraint,
             Tab::Material => Icon::Material,
             Tab::Texture => Icon::Texture,
+            Tab::Effects => Icon::ShaderFx,
         }
     }
 }
@@ -95,14 +108,25 @@ pub fn tabs_for(d: &Doc, obj: Option<usize>) -> Vec<Option<Tab>> {
         v.push(Some(Tab::Object));
         let data = &d.scene.objects[o].data;
         let mesh = matches!(data, ObjectData::Mesh(_));
+        let armature = matches!(data, ObjectData::Armature(_));
         if mesh {
             v.extend([Some(Tab::Modifiers), Some(Tab::Particles)]);
         }
-        if mesh || matches!(data, ObjectData::Empty) {
+        if matches!(data, ObjectData::Lattice(_)) {
+            v.push(Some(Tab::Modifiers));
+        }
+        let gp = matches!(data, ObjectData::GreasePencil(_));
+        if gp {
+            v.extend([Some(Tab::Modifiers), Some(Tab::Effects)]);
+        }
+        if mesh || armature || matches!(data, ObjectData::Empty | ObjectData::Lattice(_)) {
             v.push(Some(Tab::Physics));
         }
         v.extend([Some(Tab::Constraints), Some(Tab::Data)]);
-        if mesh {
+        if armature {
+            v.extend([Some(Tab::Bone), Some(Tab::BoneConstraints)]);
+        }
+        if mesh || gp {
             v.push(Some(Tab::Material));
         }
     }
@@ -117,6 +141,12 @@ pub enum ColorTarget {
     Emission(usize),
     World,
     Light(usize),
+    /// A colour inside a node of a node tree.
+    Node(crate::nodetree::TreeRef, usize, crate::nodetree::NodeColor),
+    /// The paint brush colour of the current mode (true: the secondary one).
+    Paint(bool),
+    /// A colour field of a Grease Pencil or sequencer settings panel.
+    Prop(crate::gpencil::ui::PropColor),
 }
 
 /// Per-frame context the panels share.
@@ -144,6 +174,9 @@ pub struct State {
     /// Last frame's property buttons by key/label, and the tab buttons.
     pub fields: Vec<(String, Rect)>,
     pub tab_rects: Vec<(Tab, Rect)>,
+    /// Last frame's animatable fields (see [`L::bind`]) and the pointer.
+    pub anim_fields: Vec<(String, String, Option<u32>)>,
+    pub mouse: (i32, i32),
 }
 
 impl State {
@@ -170,6 +203,8 @@ impl Default for State {
             undo_for: None,
             fields: Vec::new(),
             tab_rects: Vec::new(),
+            anim_fields: Vec::new(),
+            mouse: (0, 0),
         }
     }
 }
@@ -225,6 +260,8 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     }
     d.settings.validate_parked(&d.scene);
     run_queued(s, d);
+    ui.st.anim_fields.clear();
+    s.mouse = ui.mouse();
     let obj = ctx_object(s, d);
     let tabs = tabs_for(d, obj);
     if !tabs.contains(&Some(s.tab)) {
@@ -249,6 +286,9 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         Some(ObjectData::Mesh(_)) => Icon::Mesh,
         Some(ObjectData::Camera(_)) => Icon::CameraData,
         Some(ObjectData::Light(_)) => Icon::LightData,
+        Some(ObjectData::Armature(_)) => Icon::ArmatureData,
+        Some(ObjectData::Lattice(_)) => Icon::LatticeData,
+        Some(ObjectData::GreasePencil(_)) => Icon::GreasePencilData,
         _ => Icon::EmptyData,
     };
     let mut y = tr.y + 6;
@@ -301,8 +341,13 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     };
     let top = l.y;
     context_path(&mut l, d, tab, obj);
+    let gp_obj = obj.is_some_and(|o| matches!(d.scene.objects[o].data, ObjectData::GreasePencil(_)));
     match tab {
-        Tab::Tool => tabs::tool(&mut l, d),
+        Tab::Tool => {
+            if !rigpanels::tool(&mut l, d) {
+                tabs::tool(&mut l, d)
+            }
+        }
         Tab::Render => tabs::render(&mut l, d),
         Tab::Output => tabs::output(&mut l, d),
         Tab::ViewLayer => tabs::view_layer(&mut l, d),
@@ -310,17 +355,57 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         Tab::World => tabs::world(&mut l, d, &mut ctx),
         Tab::Collection => tabs::collection(&mut l, d),
         Tab::Object => object::object(&mut l, d, &mut ctx),
+        Tab::Modifiers if gp_obj => crate::gpencil::panels::modifiers(&mut l, d, &mut ctx),
         Tab::Modifiers => object::modifiers(&mut l, d, &mut ctx),
+        Tab::Effects => crate::gpencil::panels::effects(&mut l, d, &mut ctx),
         Tab::Particles => tabs::particles(&mut l, d),
         Tab::Physics => tabs::physics(&mut l, d),
-        Tab::Constraints => tabs::constraints(&mut l, d),
+        Tab::Constraints => match obj {
+            Some(o) => rigpanels::constraints(&mut l, d, o, None),
+            None => tabs::constraints(&mut l, d),
+        },
+        Tab::Bone => {
+            if let Some(o) = obj {
+                rigpanels::bone(&mut l, d, o)
+            }
+        }
+        Tab::BoneConstraints => {
+            if let Some(o) = obj {
+                let b = crate::rig::active_bone(d, o).unwrap_or_default();
+                rigpanels::constraints(&mut l, d, o, Some(b))
+            }
+        }
         Tab::Data => data::data(&mut l, d, &mut ctx),
+        Tab::Material if gp_obj => crate::gpencil::panels::material(&mut l, d, &mut ctx),
         Tab::Material => data::material(&mut l, d, &mut ctx),
         Tab::Texture => tabs::texture(&mut l, d),
     }
+    // Panels scripts and add-ons registered for this tab (bl_context).
+    let context = match tab {
+        Tab::Tool => "tool",
+        Tab::Render => "render",
+        Tab::Output => "output",
+        Tab::ViewLayer => "view_layer",
+        Tab::Scene => "scene",
+        Tab::World => "world",
+        Tab::Collection => "collection",
+        Tab::Object => "object",
+        Tab::Modifiers => "modifier",
+        Tab::Particles => "particle",
+        Tab::Physics => "physics",
+        Tab::Constraints => "constraint",
+        Tab::Bone => "bone",
+        Tab::BoneConstraints => "bone_constraint",
+        Tab::Data => "data",
+        Tab::Material => "material",
+        Tab::Texture => "texture",
+        Tab::Effects => "shaderfx",
+    };
+    crate::python::properties_panels(&mut l, d, context);
     let content_h = l.y - top + 12;
     s.undo_for = if l.ui.st.active.is_none() { None } else { l.undo_for };
     s.fields = core::mem::take(&mut l.fields);
+    s.anim_fields = l.ui.st.anim_fields.clone();
     s.content_h = content_h;
     s.mat_slot = ctx.mat_slot;
     s.fov_unit = ctx.fov_unit;
@@ -359,7 +444,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
 /// The breadcrumb Blender shows at the top of object tabs ("Cube > Cube").
 fn context_path(l: &mut L, d: &Doc, tab: Tab, obj: Option<usize>) {
     let Some(o) = obj else { return };
-    if !matches!(tab, Tab::Object | Tab::Modifiers | Tab::Particles | Tab::Physics | Tab::Constraints | Tab::Data | Tab::Material) || l.dry {
+    if !matches!(tab, Tab::Object | Tab::Modifiers | Tab::Effects | Tab::Particles | Tab::Physics | Tab::Constraints | Tab::Data | Tab::Bone | Tab::BoneConstraints | Tab::Material) || l.dry {
         return;
     }
     let ob = &d.scene.objects[o];
@@ -374,6 +459,8 @@ fn context_path(l: &mut L, d: &Doc, tab: Tab, obj: Option<usize>) {
         (Tab::Data, ObjectData::Mesh(mi)) => Some((Icon::Mesh, d.scene.mesh_names.get(*mi).cloned().unwrap_or_default())),
         (Tab::Data, ObjectData::Camera(_)) => Some((Icon::CameraData, ob.name.clone())),
         (Tab::Data, ObjectData::Light(_)) => Some((Icon::LightData, ob.name.clone())),
+        (Tab::Data, ObjectData::GreasePencil(g)) => Some((Icon::GreasePencilData, d.scene.grease_pencil_names.get(*g).cloned().unwrap_or_default())),
+        (Tab::Effects, _) => Some((Icon::ShaderFx, "Visual Effects".into())),
         (Tab::Material, _) => ob.materials.first().and_then(|&m| d.scene.materials.get(m)).map(|m| (Icon::Material, m.name.clone())),
         _ => None,
     };
@@ -391,7 +478,8 @@ pub fn object_icon(data: &ObjectData) -> Icon {
         ObjectData::Mesh(_) => Icon::ObMesh,
         ObjectData::Camera(_) => Icon::ObCamera,
         ObjectData::Light(_) => Icon::ObLight,
-        ObjectData::Empty => Icon::ObEmpty,
+        ObjectData::Empty | ObjectData::Armature(_) | ObjectData::Lattice(_) => Icon::ObEmpty,
+        ObjectData::GreasePencil(_) => Icon::ObGreasePencil,
     }
 }
 
@@ -418,6 +506,11 @@ fn run_queued(s: &mut State, d: &mut Doc) {
                 }
             }
             "properties.unavailable" => d.report = format!("{} is not available yet", op.arg),
+            "properties.shape_key_set" => {
+                if let Some(o) = obj {
+                    rigpanels::shape_key_set(d, o, &op.arg);
+                }
+            }
             id if id.starts_with("object.modifier_") => {
                 if let Some(o) = obj {
                     object::modifier_op(d, o, id, op.arg.parse().unwrap_or(0));
@@ -433,12 +526,59 @@ fn run_queued(s: &mut State, d: &mut Doc) {
 /// Enum properties picked from dropdowns.
 fn set_enum(s: &mut State, d: &mut Doc, obj: Option<usize>, key: &str, v: &str) {
     use crate::settings::{Engine, RotationMode, UnitSystem};
-    use sex_3d::render::ViewTransform;
+    use sex_3d::render::{MistFalloff, ShutterPosition, ViewTransform};
+    use sex_3d::scene::{AreaShape, PanoramaType, SensorFit};
     let st = &mut d.settings;
     match key {
-        "engine" => st.engine = if v == Engine::Workbench.label() { Engine::Workbench } else { Engine::PathTracer },
-        "view_transform" => st.view_transform = if v == "Standard" { ViewTransform::Standard } else if v == "AgX" { ViewTransform::AgX } else { return d.report = format!("{v} view transform is not available yet") },
-        "look" => st.look = v.into(),
+        "engine" => {
+            if let Some(e) = Engine::from_label(v) {
+                d.push_undo("Render Engine");
+                d.settings.engine = e;
+            }
+        }
+        "workbench_matcap" => {
+            if let Some(i) = sex_3d::render::workbench::MATCAPS.iter().position(|m| *m == v) {
+                d.push_undo("MatCap");
+                d.settings.workbench.matcap = i;
+            }
+        }
+        "workbench_cavity_type" => {
+            if let Some(t) = sex_3d::render::workbench::CavityType::ALL.into_iter().find(|t| t.label() == v) {
+                d.push_undo("Cavity Type");
+                d.settings.workbench.cavity_type = t;
+            }
+        }
+        "eevee_shadow_resolution" => {
+            if let Ok(r) = v.parse() {
+                d.push_undo("Shadow Resolution");
+                d.settings.eevee_shadow_resolution = r;
+            }
+        }
+        "view_transform" => {
+            let Some(t) = ViewTransform::from_label(v) else { return d.report = format!("{v} view transform is not available") };
+            d.push_undo("View Transform");
+            d.settings.view_transform = t;
+        }
+        "look" => {
+            d.push_undo("Look");
+            d.settings.look = v.into();
+        }
+        "shutter_position" => {
+            d.push_undo("Shutter Position");
+            d.settings.shutter_position = match v {
+                "Start on Frame" => ShutterPosition::Start,
+                "End on Frame" => ShutterPosition::End,
+                _ => ShutterPosition::Center,
+            };
+        }
+        "mist_falloff" => {
+            d.push_undo("Mist Falloff");
+            d.settings.mist_falloff = match v {
+                "Linear" => MistFalloff::Linear,
+                "Inverse Quadratic" => MistFalloff::InverseQuadratic,
+                _ => MistFalloff::Quadratic,
+            };
+        }
         "units" => st.unit_system = UnitSystem::ALL.into_iter().find(|u| u.label() == v).unwrap_or(UnitSystem::Metric),
         "rotation_units" => st.degrees = v == "Degrees",
         "file_format" => st.file_format = v.into(),
@@ -491,30 +631,120 @@ fn set_enum(s: &mut State, d: &mut Doc, obj: Option<usize>, key: &str, v: &str) 
         "lens_type" => {
             if let Some(o) = obj {
                 let aspect = d.settings.resolution_y as f32 / d.settings.resolution_x.max(1) as f32;
-                if let ObjectData::Camera(c) = &mut d.scene.objects[o].data {
-                    let ortho = v == "Orthographic";
-                    if v == "Panoramic" {
-                        return d.report = "Panoramic cameras are not available yet".into();
-                    }
-                    if ortho != c.ortho_scale.is_some() {
-                        let mut nc = *c;
-                        nc.ortho_scale = if ortho { Some(6.0 * aspect.min(1.0)) } else { None };
-                        d.push_undo("Lens Type");
-                        if let ObjectData::Camera(c) = &mut d.scene.objects[o].data {
-                            *c = nc;
+                if let ObjectData::Camera(c) = &d.scene.objects[o].data {
+                    let mut nc = *c;
+                    match v {
+                        "Orthographic" => {
+                            nc.panorama = None;
+                            if nc.ortho_scale.is_none() {
+                                nc.ortho_scale = Some(6.0 * aspect.min(1.0));
+                            }
                         }
+                        "Panoramic" => {
+                            nc.ortho_scale = None;
+                            nc.panorama = Some(nc.panorama.unwrap_or_default());
+                        }
+                        _ => {
+                            nc.ortho_scale = None;
+                            nc.panorama = None;
+                        }
+                    }
+                    if nc != *c {
+                        d.push_undo("Lens Type");
+                        d.scene.objects[o].data = ObjectData::Camera(nc);
+                    }
+                }
+            }
+        }
+        "panorama_type" | "sensor_fit" | "dof_focus_object" => {
+            if let Some(o) = obj {
+                let focus = d.scene.find_object(v);
+                if let ObjectData::Camera(c) = &d.scene.objects[o].data {
+                    let mut nc = *c;
+                    match key {
+                        "panorama_type" => {
+                            nc.panorama = Some(match v {
+                                "Fisheye Equidistant" => PanoramaType::FisheyeEquidistant,
+                                "Fisheye Equisolid" => PanoramaType::FisheyeEquisolid,
+                                _ => PanoramaType::Equirectangular,
+                            })
+                        }
+                        "sensor_fit" => {
+                            nc.sensor_fit = match v {
+                                "Horizontal" => SensorFit::Horizontal,
+                                "Vertical" => SensorFit::Vertical,
+                                _ => SensorFit::Auto,
+                            }
+                        }
+                        _ => nc.dof.focus_object = focus.filter(|f| *f != o),
+                    }
+                    if nc != *c {
+                        d.push_undo("Camera");
+                        d.scene.objects[o].data = ObjectData::Camera(nc);
+                    }
+                }
+            }
+        }
+        "area_shape" => {
+            if let Some(o) = obj {
+                if let ObjectData::Light(l) = &d.scene.objects[o].data {
+                    let mut nl = *l;
+                    nl.shape = match v {
+                        "Rectangle" => AreaShape::Rectangle,
+                        "Disk" => AreaShape::Disk,
+                        "Ellipse" => AreaShape::Ellipse,
+                        _ => AreaShape::Square,
+                    };
+                    if nl != *l {
+                        d.push_undo("Light Shape");
+                        d.scene.objects[o].data = ObjectData::Light(nl);
                     }
                 }
             }
         }
         "lens_unit" => s.fov_unit = v == "Field of View",
+        k if k.starts_with("modobj/") || k.starts_with("modgroup/") => {
+            // A modifier's object field (Boolean operand, Shrinkwrap target)
+            // or a Nodes modifier's node group.
+            if let (Some(o), Ok(si)) = (obj, k[k.find('/').unwrap_or(0) + 1..].parse::<usize>()) {
+                object::set_modifier_object(d, o, si, if v == object::NO_OBJECT { "" } else { v });
+            }
+        }
         _ => d.report = format!("{key} cannot be set yet"),
     }
     d.dirty = true;
     d.touch();
 }
 
-pub fn hotkey(s: &mut State, _d: &mut Doc, input: &Input, _r: Rect) -> bool {
+/// The animatable field under the pointer: "object\tpath\tindex".
+fn anim_field_at(s: &State) -> Option<String> {
+    let (x, y) = s.mouse;
+    s.anim_fields.iter().find(|f| s.field(&f.0).is_some_and(|r| r.contains(x, y))).map(|f| f.1.clone())
+}
+
+pub fn hotkey(s: &mut State, d: &mut Doc, input: &Input, _r: Rect) -> bool {
+    if let Input::Key { key: Key::Char(c @ ('i' | 'd')), mods, .. } = *input {
+        if let Some(target) = anim_field_at(s) {
+            // I keys every component, as Blender's "all" default.
+            let all = |t: &str| {
+                let mut p: Vec<&str> = t.split('\t').collect();
+                p.truncate(2);
+                format!("{}\t-1", p.join("\t"))
+            };
+            let op = match (c, mods.ctrl, mods.alt, mods.shift) {
+                ('i', false, false, false) => Some(Op::with("anim.keyframe_insert_button", &all(&target))),
+                ('i', false, true, false) => Some(Op::with("anim.keyframe_delete_button", &all(&target))),
+                ('i', false, true, true) => Some(Op::with("anim.keyframe_clear_button", &all(&target))),
+                ('d', true, false, false) => Some(Op::with("anim.driver_button_add", &target)),
+                ('d', true, true, false) => Some(Op::with("anim.driver_button_remove", &target)),
+                _ => None,
+            };
+            if let Some(op) = op {
+                d.queue.push(op);
+                return true;
+            }
+        }
+    }
     match *input {
         Input::Key { key: Key::Char('f'), mods: Mods::CTRL, .. } => {
             s.focus_search = true;

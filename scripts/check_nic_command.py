@@ -109,9 +109,9 @@ def inspect(text, expected=1, preparation=False, ethernet=False, network_config=
                 if (holder,slot,vendor,product)!=(g[0],g[1],g[5],g[6])or identities[0].start()<seal:errors.append('identity differs from held BOOT lease')
                 if phases and identities[0].start()>phases[0].start():errors.append('device model selected after preparation began')
                 model=QEMU_MODELS.get(product,'INVALID')
-                marker=rf'\[sexnet.ether.ready\] model={model} region=2 budget=262144 used=221184 descriptors=96/8 buffer=2048 polling=cooperative timing_verified=([01]) network=0 dns=0 tcp=0 http=0 tls=0'
-                readiness=list(re.finditer(marker,text))
-                if len(readiness)!=1:errors.append('missing exact model/budget/offline runtime readiness')
+                marker=rf'^\[sexnet.ether.ready\] model=(?:{model}|Pci\({model}\)) region=2 budget=262144 used=221184 descriptors=96/8 buffer=2048 polling=cooperative timing_verified=([01]) network=0 dns=0 tcp=0 http=0 tls=0\r?$'
+                readiness=list(re.finditer(marker,text,re.M))
+                if len(readiness)!=1 or text.count('[sexnet.ether.ready]')!=1:errors.append('missing exact model/budget/offline runtime readiness')
                 elif model=='I82574'and readiness[0].group(1)!='1':errors.append('82574 timing register was not verified')
             if len(applied)==6 and len(driver)in(6,7) and len(phases)==4:
                 before=tuple(map(int,applied[3].groups()));query=tuple(map(int,applied[4].groups()));enable=tuple(map(int,applied[5].groups()))

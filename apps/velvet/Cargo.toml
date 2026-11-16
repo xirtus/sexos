@@ -1,0 +1,15 @@
+[package]
+name = "velvet"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Velvet: three small original games on Weft"
+
+[features]
+default = ["sexos"]
+sexos = ["dep:sex-pdx", "dep:sex-app", "weft/sexos"]
+
+[dependencies]
+weft = { path = "../../crates/weft" }
+sex-pdx = { path = "../../crates/sex-pdx", optional = true }
+sex-app = { path = "../../crates/sex-app", optional = true }

@@ -1,0 +1,48 @@
+{
+  "source_commit": "75c938df12edd2acdde25b88f635c0ddddfdcc9e",
+  "image_kind": "local boot-preserving graft, not canonical sealed-build provenance",
+  "approved_kernel_scope": "three PS2 log sites only, +9 nonblank lines; actual source compiled in both modes",
+  "kernel_source_sha256": "c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d",
+  "kernel_build_target": "x86_64-sex.json",
+  "normal_kernel_rustflags": "-C link-arg=-Tkernel/linker.ld",
+  "proof_kernel_rustflags": "-C link-arg=-Tkernel/linker.ld --cfg sexos_input_payload_proof",
+  "normal_kernel_sha256": "f8282677e1b55513f1f43403c8cabaee26f7b42eb2a20950d56b95ac3c3067a8",
+  "proof_kernel_sha256": "69bb9e2645df71d91dda7a3b6c2af9798f76098904ad35ce41b0baaeaa0a40df",
+  "normal_iso_sha256": "760fcc6e98cbf6f92e48a57cf9df4ef95c3a0d4b61cd2b935b2d76d17c9c63d1",
+  "proof_iso_sha256": "61eafa56e959933b026af87c5946341debe11192bfa464c50860f005d0c9b4a8",
+  "normal_gate": "PASS two boots, probe6/6, create/entry/TOTP/Lock/wrong-password/reboot/unlock/search/clipboard refusal/retirement",
+  "protected_intervals": 12,
+  "all_protected_intervals_safe": true,
+  "audit_sha256": "a89c286f13962919b9dfba585ba837f02667c8e14917816373b261b0bd93b4c6",
+  "boots": {
+    "chastity1-serial.log": {
+      "sha256": "5296a44a1adea55cd9d22f8dc1895bf7dc6cb3ddc21632af6f23217b7c18631d",
+      "redacted_kernel_records": 32,
+      "port_first16_verified": true,
+      "enqueue_first16_verified": true,
+      "raw_kernel_payload_records": 0,
+      "runtime_drop_observed": false
+    },
+    "chastity2-serial.log": {
+      "sha256": "0e72f99efed3c193133fa5eabf0e7bfb4e979ed47ef38907c8a7b9003cb232f4",
+      "redacted_kernel_records": 32,
+      "port_first16_verified": true,
+      "enqueue_first16_verified": true,
+      "raw_kernel_payload_records": 0,
+      "runtime_drop_observed": false
+    }
+  },
+  "diagnostic": {
+    "recorded_sequence_validation": "PASS",
+    "scope": "UNSAFE public key a only; exact recorded make/enqueue/CLI ACK/break/enqueue/key-up sequence",
+    "first_key": "ScrollLock focus helper (n=1/2)",
+    "public_a_key": "n=3/4",
+    "normal_privacy_audit_refuses_proof_kernel": true,
+    "original_driver": "FAIL timeout: incorrectly expected a at n=1; raw original log retained",
+    "serial_sha256": "6dfcfa0683ca69e67529c4b9918ad9f4aedfdabec1852c5892d47036c5733d24"
+  },
+  "drop_branch_evidence": "actual source guarded-statement host regression in both modes; no runtime ring-full drop induced",
+  "complete_keyboard_privacy_proven": false,
+  "scope": "reviewed diagnostic sites and exercised vault input only; no blanket application logging, erasure, hardware, or physical containment claim",
+  "prior_v3_manifest_preserved": "INPUT_PAYLOAD_PRIVACY_RUNTIME_2026_11_14.json"
+}

@@ -377,6 +377,18 @@ assert_eq!(e.open_global6(),Some(OUR6));assert_eq!(e.open_router6(),Some(PEER_LL
  e.open_shutdown(flow);let fin=run6(&mut e,&mut now,4).into_iter().find(|s|s.next==6).expect("FIN");assert_eq!(fin.body[13]&1,1);
  e.open_close(flow);assert_eq!(e.open_state(flow),OpenState::Open);assert!(!e.open_idle(flow));
 }
+#[test]fn unresolved_ipv4_discovery_cannot_starve_a_new_ipv6_connection(){
+ let(mut e,mut now)=slaac();
+ // The fixed BOOT HTTP client precedes program sockets in SocketSet. This
+ // IPv6-only link deliberately has no IPv4 gateway answering its ARP.
+ e.begin_client(1).unwrap();
+ let first=tick(&mut e,&mut now).expect("IPv4 neighbor request");gateway_query(&first,BASELINE);
+ let flow=e.open_add_flow().unwrap();e.open_connect(flow,Address::V6(PEER6),7).unwrap();
+ let packets=run6(&mut e,&mut now,4000);
+ let syn=packets.iter().find(|s|s.next==6&&s.body[13]&2!=0).expect("IPv6 SYN must progress despite unanswered IPv4 ARP");
+ assert_eq!((syn.src,syn.dst),(OUR6,PEER6));
+ assert_eq!(e.client_state(),State::SynSent,"IPv4 retry remains live, not cancelled to manufacture IPv6 progress");
+}
 #[test]fn ipv4_needs_a_lease_and_ipv6_a_global_address(){
  let(mut e,_)=attached();let flow=e.open_add_flow().unwrap();
  assert_eq!(e.open_connect(flow,Address::V4([10,0,2,2]),80),Err(Error::Config));
