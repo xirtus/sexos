@@ -1,6 +1,6 @@
 //! Bounded immutable offline-job request. Bytes are copied from the client's
 //! grant before decoding; decoding alone conveys no file or launch authority.
-pub const KIND: u8 = 30;
+pub const KIND: u8 = 42;
 pub const PREPARE: u64 = 1;
 pub const RESULT: u64 = 2;
 pub const CANCEL: u64 = 3;
