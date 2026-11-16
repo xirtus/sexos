@@ -338,7 +338,7 @@ selected one (Blender's rule).
 | `world color=r,g,b strength=` / `scene name= frame_start= frame_end= fps=` | world, scene settings |
 | `render key=value...` | stored into `RunReport::render` |
 | `ui_panel ID [label=TEXT] [category=TAB]` | register or update a declarative 3D View Sidebar panel (`RunReport::panels`) |
-| `ui_prop PANEL KEY [type=float\|int\|bool\|vec3\|color\|string\|button] [label=TEXT] [default=VAL] [min=F] [max=F]` | append or update a typed control in `PANEL`; `min`/`max` are validated on `float`/`int` |
+| `ui_prop PANEL KEY [kind=float\|int\|bool\|vec3\|color\|string\|button] [label=TEXT] [default=VAL] [min=F] [max=F]` | append or update a typed control in `PANEL`; `min`/`max` are validated on `float`/`int` |
 | `get` `mesh_get` `list objects\|meshes\|materials\|collections\|selected` `exists OBJ` `ping` | queries |
 | `ids`, `dump_object/mesh/material/tree/scene/armature/lattice/image/action OBJ`, `eval_mesh`, `op_list`, `op_poll`, `op IDNAME [opts]`, `noise KIND POINTS`, ... | the bpy commands of `script/bpy.rs` (JSON replies), used by the Python package |
 

@@ -616,7 +616,8 @@ mod tests {
         assert!((math(SmoothMin, 1.0, 1.0, 0.6) - 0.9).abs() < 1e-6);
         assert!((math(SmoothMax, 1.0, 1.0, 0.6) - 1.1).abs() < 1e-6);
         assert_eq!(m(LessThan, 1.0, 2.0), 1.0);
-        assert_eq!(m(Arcsine, 2.0, 0.0), FRAC_PI_2);
+        // asin(1) may round to either neighbour of pi/2 depending on the platform's libm.
+        assert!((m(Arcsine, 2.0, 0.0) - FRAC_PI_2).abs() < 1e-6);
         assert!((m(Degrees, PI, 0.0) - 180.0).abs() < 1e-4);
         for (i, name) in ["ADD", "SUBTRACT", "MULTIPLY", "DIVIDE", "SINE"].iter().enumerate() {
             assert_eq!(MathOp::file_name(i as i64), *name);

@@ -17,7 +17,7 @@ REF=${1:-origin/master}
 URL=${2:-https://github.com/xirtus/polyamour}
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
-PATHS=(apps/polyamour crates/sex-3d scripts/polyamour scripts/program_polyamour_gate.py)
+PATHS=(apps/polyamour crates/sex-3d crates/polyamour-sdk crates/polyamour-wasm scripts/polyamour scripts/program_polyamour_gate.py)
 for f in "$ROOT"/docs/handoff/POLYAMOUR_*; do PATHS+=("docs/handoff/$(basename "$f")"); done
 
 SHA=$(git -C "$ROOT" rev-parse --verify "$REF^{commit}")
