@@ -377,7 +377,7 @@ impl App {
         }
     }
 
-    /// F12: path-trace the active camera's view and show it in the Rendering workspace.
+    /// F12: render the active camera's view with the chosen engine and show it in the Rendering workspace.
     fn render(&mut self) {
         // Render Properties (engine, samples, bounces, denoise, clamp) and Output
         // Properties (resolution and %), with render visibility applied.
@@ -386,7 +386,7 @@ impl App {
         let scene = crate::anim::scene_at(&self.doc.anim, &base, self.doc.frame as f32, self.doc.settings.motion_blur);
         sex_3d::physics::update(&scene);
         let settings = crate::seqedit::with_depth(&scene, settings);
-        let r = sex_3d::render::render(&scene, &settings);
+        let r = self.doc.settings.render_with_engine(&scene, &settings);
         // Grease Pencil over the render, then the sequencer's output when it is on.
         let r = crate::seqedit::post_render(&scene, self.doc.frame, &settings, r, &|f| crate::anim::scene_at(&self.doc.anim, &base, f as f32, self.doc.settings.motion_blur));
         let n = r.passes.len();
@@ -417,7 +417,7 @@ impl App {
         let mut comp_scene = d.scene.clone();
         crate::compositing::sync_passes(&mut comp_scene, settings.passes);
         let pct = d.settings.resolution_pct as f32 / 100.0;
-        sex_3d::render::render_frames(
+        d.settings.render_frames(
             frames.iter().copied(),
             &settings,
             |f| {
@@ -450,7 +450,6 @@ impl App {
                 last = Some(color);
                 error.is_none()
             },
-            None,
         );
         if let Some(v) = viewer {
             self.doc.viewer = Some(v);

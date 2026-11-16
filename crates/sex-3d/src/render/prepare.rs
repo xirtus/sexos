@@ -141,6 +141,14 @@ impl Environment {
         Environment { color: w.color * strength, hdri, strength, dist, shader: None, shader_avg: 0.0 }
     }
 
+    /// Whether the world is the same colour in every direction.
+    pub fn is_constant(&self) -> bool {
+        match &self.shader {
+            Some(s) => s.constant(),
+            None => self.hdri.is_none(),
+        }
+    }
+
     /// Radiance towards `d` for a ray of type `ray` (the world tree's Light
     /// Path node sees it).
     pub fn eval_ray(&self, d: Vec3, ray: RayState) -> Vec3 {
@@ -346,6 +354,15 @@ pub struct PreparedScene {
     bounds: Aabb,
 }
 
+/// World-space triangles for the rasterized engines, in object order.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct RasterGeometry {
+    pub tris: Vec<TriGeom>,
+    pub shade: Vec<TriShade>,
+    /// (scene object index or u32::MAX for particles, first, end) per object.
+    pub ranges: Vec<(u32, usize, usize)>,
+}
+
 /// What a ray hit.
 pub(crate) enum SceneHit {
     Tri(Hit),
@@ -386,19 +403,38 @@ fn object_triangles(scene: &Scene, oi: usize, mesh_to: Option<&Mat4>, default_ma
 impl PreparedScene {
     /// Flatten `scene` for rendering from its active camera.
     pub fn new(scene: &Scene) -> PreparedScene {
+        Self::build(scene, false).0
+    }
+
+    /// What the rasterized engines need: everything but the BVH (moving
+    /// objects are placed at the current frame), every material compiled
+    /// to a node program (legacy materials through an equivalent
+    /// Principled tree), and the world-space triangles in object order with
+    /// each object's range.
+    pub(crate) fn new_raster(scene: &Scene) -> (PreparedScene, RasterGeometry) {
+        let (p, g) = Self::build(scene, true);
+        (p, g.unwrap_or_default())
+    }
+
+    fn build(scene: &Scene, raster: bool) -> (PreparedScene, Option<RasterGeometry>) {
         let mut materials: Vec<ShadeMaterial> = scene.materials.iter().map(|m| ShadeMaterial::from(m, scene.images.len())).collect();
         // Node trees replace the legacy fields.
         for (sm, m) in materials.iter_mut().zip(&scene.materials) {
             if let Some(t) = &m.node_tree {
                 sm.program = compile_material(t, &scene.node_groups).map(Arc::new);
-                if sm.program.is_some() {
-                    sm.emission = Vec3::ZERO;
-                }
+            } else if raster {
+                sm.program = compile_material(&shading::legacy_tree(m), &scene.node_groups).map(Arc::new);
+            }
+            if sm.program.is_some() {
+                sm.emission = Vec3::ZERO;
             }
         }
         let default_mat = materials.len() as u32;
         materials.push(ShadeMaterial::from(&Material::default(), 0));
-        let any_nodes = materials.iter().any(|m| m.program.is_some()) || scene.world.node_tree.is_some();
+        if raster {
+            materials[default_mat as usize].program = compile_material(&shading::legacy_tree(&Material::default()), &scene.node_groups).map(Arc::new);
+        }
+        let any_nodes = raster || materials.iter().any(|m| m.program.is_some()) || scene.world.node_tree.is_some();
         let mut shade_data = any_nodes.then(|| ShadeData::new(scene, true));
         let mut material_volume: Vec<Option<VolumeCoeffs>> = scene
             .materials
@@ -441,8 +477,23 @@ impl PreparedScene {
             geoms.extend(g);
             shades.extend(s);
         }
+        let mut ranges = Vec::new();
+        if raster && !geoms.is_empty() {
+            ranges.push((u32::MAX, 0, geoms.len()));
+        }
         for oi in 0..scene.objects.len() {
             if !scene.is_visible(oi) || !matches!(scene.objects[oi].data, ObjectData::Mesh(_)) || hidden_emitters[oi] {
+                continue;
+            }
+            if raster {
+                let (g, s) = object_triangles(scene, oi, Some(&scene.world_matrix(oi)), default_mat);
+                let start = geoms.len();
+                geoms.extend(g);
+                shades.extend(s);
+                if let Some(&dm) = domain_mat.get(&oi) {
+                    shades[start..].iter_mut().for_each(|x| x.material = dm);
+                }
+                ranges.push((oi as u32, start, geoms.len()));
                 continue;
             }
             if let Some(&dm) = domain_mat.get(&oi) {
@@ -460,10 +511,19 @@ impl PreparedScene {
             geoms.extend(g);
             shades.extend(s);
         }
+        let raster_geo = raster.then(|| RasterGeometry { tris: core::mem::take(&mut geoms), shade: core::mem::take(&mut shades), ranges });
         let (bvh, order) = Bvh::build(geoms);
         let mut shade: Vec<TriShade> = order.iter().map(|&i| shades[i as usize]).collect();
+        let mut bounds_raster = Aabb::EMPTY;
+        if let Some(g) = &raster_geo {
+            for t in &g.tris {
+                bounds_raster.grow(t.v0);
+                bounds_raster.grow(t.v0 + t.e1);
+                bounds_raster.grow(t.v0 + t.e2);
+            }
+        }
         let mut instances = Vec::new();
-        let mut bounds = bvh.bounds();
+        let mut bounds = if raster { bounds_raster } else { bvh.bounds() };
         for oi in moving {
             let (g, s) = object_triangles(scene, oi, None, default_mat);
             if g.is_empty() {
@@ -586,7 +646,7 @@ impl PreparedScene {
         let light_dist = Distribution1D::new(&power);
         let world_volume = scene.world.volume.as_ref().map(VolumeCoeffs::from_settings).filter(|v| !v.is_empty());
 
-        PreparedScene {
+        let p = PreparedScene {
             bvh,
             shade,
             materials,
@@ -612,7 +672,8 @@ impl PreparedScene {
             shade_data,
             instances,
             bounds,
-        }
+        };
+        (p, raster_geo)
     }
 
     /// World-space bounds of the renderable geometry.

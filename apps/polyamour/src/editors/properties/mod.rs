@@ -530,7 +530,30 @@ fn set_enum(s: &mut State, d: &mut Doc, obj: Option<usize>, key: &str, v: &str) 
     use sex_3d::scene::{AreaShape, PanoramaType, SensorFit};
     let st = &mut d.settings;
     match key {
-        "engine" => st.engine = if v == Engine::Workbench.label() { Engine::Workbench } else { Engine::PathTracer },
+        "engine" => {
+            if let Some(e) = Engine::from_label(v) {
+                d.push_undo("Render Engine");
+                d.settings.engine = e;
+            }
+        }
+        "workbench_matcap" => {
+            if let Some(i) = sex_3d::render::workbench::MATCAPS.iter().position(|m| *m == v) {
+                d.push_undo("MatCap");
+                d.settings.workbench.matcap = i;
+            }
+        }
+        "workbench_cavity_type" => {
+            if let Some(t) = sex_3d::render::workbench::CavityType::ALL.into_iter().find(|t| t.label() == v) {
+                d.push_undo("Cavity Type");
+                d.settings.workbench.cavity_type = t;
+            }
+        }
+        "eevee_shadow_resolution" => {
+            if let Ok(r) = v.parse() {
+                d.push_undo("Shadow Resolution");
+                d.settings.eevee_shadow_resolution = r;
+            }
+        }
         "view_transform" => {
             let Some(t) = ViewTransform::from_label(v) else { return d.report = format!("{v} view transform is not available") };
             d.push_undo("View Transform");

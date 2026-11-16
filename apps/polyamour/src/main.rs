@@ -110,6 +110,13 @@ fn main() {
         }
         app.frame(Input::Tick);
     }
+    // Let progressive views (Material Preview, Rendered) settle.
+    for _ in 0..64 {
+        if !app.wants_tick() {
+            break;
+        }
+        app.frame(Input::Tick);
+    }
     let Some(out) = out else {
         eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--gp-demo] [--seq-demo] [scene file]");
         return;

@@ -7,6 +7,7 @@
 
 use crate::doc::Doc;
 use crate::settings::{Engine, RotationMode, Settings, UnitSystem};
+use sex_3d::render::workbench::{ColorType, Lighting};
 use sex_3d::render::{MistFalloff, Pass, Passes, ShutterPosition, ViewTransform};
 use sex_3d::scene::Scene;
 
@@ -177,7 +178,7 @@ fn view_key(v: ViewTransform) -> &'static str {
 fn settings_pairs(s: &Settings) -> Vec<(&'static str, String)> {
     let b = |v: bool| (v as u8).to_string();
     vec![
-        ("engine", match s.engine { Engine::PathTracer => "PATH", Engine::Workbench => "WORKBENCH" }.into()),
+        ("engine", match s.engine { Engine::PathTracer => "PATH", Engine::Workbench => "WORKBENCH", Engine::Eevee => "EEVEE" }.into()),
         ("viewport_samples", s.viewport_samples.to_string()),
         ("render_samples", s.render_samples.to_string()),
         ("noise_threshold", b(s.noise_threshold)),
@@ -237,6 +238,25 @@ fn settings_pairs(s: &Settings) -> Vec<(&'static str, String)> {
         ("rotation_mode", s.rotation_mode.iter().map(|(n, r)| format!("{}={}", esc(n).replace([',', '='], "_"), rot_name(*r))).collect::<Vec<_>>().join(",")),
         ("sensor", s.sensor.iter().map(|(n, v)| format!("{}={v}", esc(n).replace([',', '='], "_"))).collect::<Vec<_>>().join(",")),
         ("active_collection", s.active_collection.to_string()),
+        ("eevee_viewport_samples", s.eevee_viewport_samples.to_string()),
+        ("eevee_render_samples", s.eevee_render_samples.to_string()),
+        ("eevee_shadows", b(s.eevee_shadows)),
+        ("eevee_shadow_resolution", s.eevee_shadow_resolution.to_string()),
+        ("eevee_soft_shadows", b(s.eevee_soft_shadows)),
+        ("eevee_shadow_cascades", s.eevee_shadow_cascades.to_string()),
+        ("eevee_ao", b(s.eevee_ao)),
+        ("eevee_ao_distance", s.eevee_ao_distance.to_string()),
+        ("eevee_volumetrics", b(s.eevee_volumetrics)),
+        ("eevee_volumetric_end", s.eevee_volumetric_end.to_string()),
+        ("workbench_samples", s.workbench_samples.to_string()),
+        ("workbench_lighting", s.workbench.lighting.label().into()),
+        ("workbench_matcap", s.workbench.matcap.to_string()),
+        ("workbench_color", s.workbench.color.label().into()),
+        ("workbench_single_color", join(s.workbench.single_color)),
+        ("workbench_specular", b(s.workbench.specular)),
+        ("workbench_shadow", b(s.workbench.shadow)),
+        ("workbench_cavity", b(s.workbench.cavity)),
+        ("workbench_outline", b(s.workbench.outline)),
     ]
 }
 
@@ -274,7 +294,13 @@ fn set_setting(s: &mut Settings, key: &str, v: &str) {
         out
     };
     match key {
-        "engine" => s.engine = if v == "WORKBENCH" { Engine::Workbench } else { Engine::PathTracer },
+        "engine" => {
+            s.engine = match v {
+                "WORKBENCH" => Engine::Workbench,
+                "EEVEE" => Engine::Eevee,
+                _ => Engine::PathTracer,
+            }
+        }
         "viewport_samples" => p(&mut s.viewport_samples, v),
         "render_samples" => p(&mut s.render_samples, v),
         "noise_threshold" => flag(&mut s.noise_threshold),
@@ -390,6 +416,30 @@ fn set_setting(s: &mut Settings, key: &str, v: &str) {
             }
         }
         "active_collection" => p(&mut s.active_collection, v),
+        "eevee_viewport_samples" => p(&mut s.eevee_viewport_samples, v),
+        "eevee_render_samples" => p(&mut s.eevee_render_samples, v),
+        "eevee_shadows" => flag(&mut s.eevee_shadows),
+        "eevee_shadow_resolution" => p(&mut s.eevee_shadow_resolution, v),
+        "eevee_soft_shadows" => flag(&mut s.eevee_soft_shadows),
+        "eevee_shadow_cascades" => p(&mut s.eevee_shadow_cascades, v),
+        "eevee_ao" => flag(&mut s.eevee_ao),
+        "eevee_ao_distance" => p(&mut s.eevee_ao_distance, v),
+        "eevee_volumetrics" => flag(&mut s.eevee_volumetrics),
+        "eevee_volumetric_end" => p(&mut s.eevee_volumetric_end, v),
+        "workbench_samples" => p(&mut s.workbench_samples, v),
+        "workbench_lighting" => s.workbench.lighting = Lighting::ALL.into_iter().find(|l| l.label() == v).unwrap_or_default(),
+        "workbench_matcap" => p(&mut s.workbench.matcap, v),
+        "workbench_color" => s.workbench.color = ColorType::ALL.into_iter().find(|c| c.label() == v).unwrap_or_default(),
+        "workbench_single_color" => {
+            let c: Vec<f32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+            if let [r, g, b] = c[..] {
+                s.workbench.single_color = [r, g, b];
+            }
+        }
+        "workbench_specular" => flag(&mut s.workbench.specular),
+        "workbench_shadow" => flag(&mut s.workbench.shadow),
+        "workbench_cavity" => flag(&mut s.workbench.cavity),
+        "workbench_outline" => flag(&mut s.workbench.outline),
         _ => {}
     }
 }
@@ -445,7 +495,11 @@ mod tests {
         doc.frame = 12;
         crate::anim::insert_keys(&mut doc, 12, None);
         doc.settings.render_samples = 99;
-        doc.settings.engine = Engine::Workbench;
+        doc.settings.engine = Engine::Eevee;
+        doc.settings.eevee_render_samples = 33;
+        doc.settings.eevee_soft_shadows = false;
+        doc.settings.workbench.lighting = Lighting::MatCap;
+        doc.settings.workbench.color = ColorType::Random;
         doc.settings.hide_render.insert("Cube, the first".into());
         doc.settings.diffuse_bounces = 7;
         doc.settings.caustics_refractive = false;

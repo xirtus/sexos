@@ -8,27 +8,33 @@
 //! like Blender's); renaming through the Outliner or Properties carries them
 //! over with [`Settings::rename_object`].
 use sex_3d::modifiers::Modifier;
-use sex_3d::render::{ColorManagement, LightPaths, Look, MistFalloff, MistSettings, MotionBlur, Pass, Passes, RenderBorder, RenderSettings, ShutterPosition, ViewTransform};
+use sex_3d::render::{ColorManagement, EeveeSettings, LightPaths, Look, MistFalloff, MistSettings, MotionBlur, Pass, Passes, RenderBorder, RenderResult, RenderSettings, ShutterPosition, ViewTransform, Workbench, WorkbenchRender};
 use sex_3d::scene::Scene;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Render engines, named plainly (Blender's are EEVEE, Workbench and Cycles).
+/// Render engines (Blender's are EEVEE, Workbench and Cycles).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Engine {
+    /// The rasterized engine shading node trees per pixel (EEVEE).
+    Eevee,
+    /// The Solid view's engine (Workbench).
+    Workbench,
     /// sex-3d's CPU path tracer (Cycles' place).
     PathTracer,
-    /// Fast direct-light preview (Workbench's place).
-    Workbench,
 }
 
 impl Engine {
     pub fn label(self) -> &'static str {
         match self {
-            Engine::PathTracer => "Path Tracer",
+            Engine::Eevee => "EEVEE",
             Engine::Workbench => "Workbench",
+            Engine::PathTracer => "Path Tracer",
         }
     }
-    pub const ALL: [Engine; 2] = [Engine::PathTracer, Engine::Workbench];
+    pub const ALL: [Engine; 3] = [Engine::Eevee, Engine::Workbench, Engine::PathTracer];
+    pub fn from_label(v: &str) -> Option<Engine> {
+        Engine::ALL.into_iter().find(|e| e.label() == v)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,6 +166,21 @@ pub struct Settings {
     pub parked: Vec<ParkedModifier>,
     /// Outliner's active collection (Blender adds new objects there).
     pub active_collection: usize,
+    /// EEVEE: samples for the viewport and for F12.
+    pub eevee_viewport_samples: u32,
+    pub eevee_render_samples: u32,
+    pub eevee_shadows: bool,
+    /// Shadow map resolution (cube faces and sun cascades).
+    pub eevee_shadow_resolution: u32,
+    pub eevee_soft_shadows: bool,
+    pub eevee_shadow_cascades: u32,
+    pub eevee_ao: bool,
+    pub eevee_ao_distance: f32,
+    pub eevee_volumetrics: bool,
+    pub eevee_volumetric_end: f32,
+    /// Workbench (F12): shading options and anti-aliasing samples.
+    pub workbench: Workbench,
+    pub workbench_samples: u32,
 }
 
 impl Default for Settings {
@@ -230,6 +251,18 @@ impl Default for Settings {
             sensor: BTreeMap::new(),
             parked: Vec::new(),
             active_collection: 0,
+            eevee_viewport_samples: 16,
+            eevee_render_samples: 64,
+            eevee_shadows: true,
+            eevee_shadow_resolution: 1024,
+            eevee_soft_shadows: true,
+            eevee_shadow_cascades: 3,
+            eevee_ao: true,
+            eevee_ao_distance: 0.2,
+            eevee_volumetrics: true,
+            eevee_volumetric_end: 100.0,
+            workbench: Workbench::default(),
+            workbench_samples: 8,
         }
     }
 }
@@ -291,7 +324,7 @@ impl Settings {
                 border,
                 ..self.path_tracer(width, height)
             },
-            Engine::Workbench => RenderSettings { width, height, samples: 1, max_bounces: 0, denoise: false, clamp: 0.0, seed: self.seed, film_transparent: self.film_transparent, border, light_paths: LightPaths::unlimited(), ..Default::default() },
+            Engine::Workbench | Engine::Eevee => RenderSettings { width, height, samples: 1, max_bounces: 0, denoise: false, clamp: 0.0, seed: self.seed, film_transparent: self.film_transparent, border, light_paths: LightPaths::unlimited(), ..Default::default() },
         }
     }
 
@@ -299,6 +332,67 @@ impl Settings {
     /// progressively up to [`Settings::viewport_samples`]).
     pub fn viewport_render_settings(&self, w: u32, h: u32) -> RenderSettings {
         RenderSettings { samples: 1, denoise: false, ..self.path_tracer(w, h) }
+    }
+
+    /// EEVEE's settings at `width` x `height`, for the viewport or F12.
+    pub fn eevee_settings(&self, width: u32, height: u32, viewport: bool) -> EeveeSettings {
+        EeveeSettings {
+            width,
+            height,
+            samples: if viewport { self.eevee_viewport_samples } else { self.eevee_render_samples }.max(1),
+            shadows: self.eevee_shadows,
+            shadow_resolution: self.eevee_shadow_resolution.clamp(64, 8192),
+            soft_shadows: self.eevee_soft_shadows,
+            shadow_cascades: self.eevee_shadow_cascades.clamp(1, 4),
+            ao: self.eevee_ao,
+            ao_distance: self.eevee_ao_distance.max(0.0),
+            volumetrics: self.eevee_volumetrics,
+            volumetric_end: self.eevee_volumetric_end.max(0.0),
+            filter_size: self.filter_width.max(0.0),
+            film_transparent: self.film_transparent,
+            lookdev: false,
+            lookdev_blur: 0.5,
+            threads: self.threads as usize,
+        }
+    }
+
+    /// Workbench's settings for an F12 render.
+    pub fn workbench_render(&self) -> WorkbenchRender {
+        let (width, height) = self.output_size();
+        WorkbenchRender { width, height, samples: self.workbench_samples.max(1), shading: self.workbench, film_transparent: self.film_transparent, backface_culling: false, threads: self.threads as usize }
+    }
+
+    /// Render `scene` with the chosen engine (F12); `rs` (from
+    /// [`Settings::render_settings`]) gives the size and frame.
+    pub fn render_with_engine(&self, scene: &Scene, rs: &RenderSettings) -> RenderResult {
+        let raster = |color, samples| RenderResult { color, samples, complete: true, ..Default::default() };
+        match self.engine {
+            Engine::PathTracer => sex_3d::render::render(scene, rs),
+            Engine::Eevee => {
+                let st = self.eevee_settings(rs.width, rs.height, false);
+                raster(sex_3d::render::render_eevee(scene, &st), st.samples)
+            }
+            Engine::Workbench => {
+                let st = WorkbenchRender { width: rs.width, height: rs.height, ..self.workbench_render() };
+                raster(sex_3d::render::render_workbench(scene, &st), st.samples)
+            }
+        }
+    }
+
+    /// [`sex_3d::render::render_frames`] with the chosen engine.
+    pub fn render_frames(&self, frames: impl IntoIterator<Item = i32>, rs: &RenderSettings, mut scene_at: impl FnMut(i32) -> Scene, mut on_frame: impl FnMut(i32, RenderResult) -> bool) -> usize {
+        if self.engine == Engine::PathTracer {
+            return sex_3d::render::render_frames(frames, rs, scene_at, on_frame, None);
+        }
+        let mut n = 0;
+        for f in frames {
+            let r = self.render_with_engine(&scene_at(f), &RenderSettings { frame: f, ..*rs });
+            n += 1;
+            if !on_frame(f, r) {
+                break;
+            }
+        }
+        n
     }
 
     /// Colour management for display.

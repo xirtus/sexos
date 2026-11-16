@@ -164,6 +164,13 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
             MenuItem::Check("Backface Culling".into(), s.backface_culling, Op::with("view3d.overlay", "backface")),
             MenuItem::Check("X-Ray".into(), s.xray, Op::new("view3d.toggle_xray")),
             MenuItem::Separator,
+            solid_lighting_menu(s),
+            solid_color_menu(s),
+            MenuItem::Check("Specular Lighting".into(), s.solid.specular, Op::with("view3d.solid", "specular")),
+            MenuItem::Check("Shadow".into(), s.solid.shadow, Op::with("view3d.solid", "shadow")),
+            MenuItem::Check("Cavity".into(), s.solid.cavity, Op::with("view3d.solid", "cavity")),
+            MenuItem::Check("Outline".into(), s.solid.outline, Op::with("view3d.solid", "outline")),
+            MenuItem::Separator,
             MenuItem::op("Wireframe", "", Op::with("view3d.shading", "WIREFRAME")),
             MenuItem::op("Solid", "", Op::with("view3d.shading", "SOLID")),
             MenuItem::op("Material Preview", "", Op::with("view3d.shading", "MATERIAL")),
@@ -664,4 +671,22 @@ fn weight_tool_header(d: &mut Doc, ui: &mut Ui, r: Rect) -> i32 {
         x += 108;
     }
     x
+}
+
+/// Solid shading: Lighting (Studio, Flat, MatCap and the matcaps).
+fn solid_lighting_menu(s: &State) -> MenuItem {
+    use sex_3d::render::workbench::{Lighting, MATCAPS};
+    let mut items: Vec<MenuItem> = Lighting::ALL.iter().map(|l| MenuItem::Check(l.label().into(), s.solid.lighting == *l, Op::with("view3d.solid", &format!("lighting:{}", l.label())))).collect();
+    items.push(MenuItem::Separator);
+    for (i, m) in MATCAPS.iter().enumerate() {
+        items.push(MenuItem::Check(format!("MatCap {m}"), s.solid.lighting == Lighting::MatCap && s.solid.matcap == i, Op::with("view3d.solid", &format!("matcap:{i}"))));
+    }
+    MenuItem::Sub(format!("Lighting: {}", s.solid.lighting.label()), items)
+}
+
+/// Solid shading: Color (Material, Object, Attribute, Single, Random, Texture).
+fn solid_color_menu(s: &State) -> MenuItem {
+    use sex_3d::render::workbench::ColorType;
+    let items = ColorType::ALL.iter().map(|c| MenuItem::Check(c.label().into(), s.solid.color == *c, Op::with("view3d.solid", &format!("color:{}", c.label())))).collect();
+    MenuItem::Sub(format!("Color: {}", s.solid.color.label()), items)
 }

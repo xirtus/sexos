@@ -144,9 +144,10 @@ pub struct State {
     /// World-space points and edges of every visible mesh object.
     world: Option<(u64, Vec<WorldObj>)>,
     buf: Vec<u8>,
-    buf2: Vec<u8>,
     edit_view: Option<(u64, [u32; 8], Rect, raster::EditView)>,
     render: Option<render::RenderView>,
+    /// Solid shading options (lighting, colour, shadow, cavity, outline).
+    pub solid: sex_3d::render::Workbench,
     /// Material Preview / Rendered still adding samples.
     pub refining: bool,
     pub annotations: Vec<Vec<Vec3>>,
@@ -201,9 +202,9 @@ impl Default for State {
             cache: None,
             world: None,
             buf: Vec::new(),
-            buf2: Vec::new(),
             edit_view: None,
             render: None,
+            solid: sex_3d::render::Workbench::viewport_defaults(),
             refining: false,
             annotations: Vec::new(),
             measure: None,
@@ -757,6 +758,27 @@ fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: 
                 "MATERIAL" => Shading::Material,
                 "RENDERED" => Shading::Rendered,
                 _ => Shading::Solid,
+            }
+        }
+        "view3d.solid" => {
+            use sex_3d::render::workbench::{ColorType, Lighting};
+            let w = &mut s.solid;
+            match arg.split_once(':') {
+                Some(("lighting", v)) => w.lighting = Lighting::ALL.into_iter().find(|l| l.label() == v).unwrap_or(w.lighting),
+                Some(("matcap", v)) => {
+                    w.matcap = v.parse().unwrap_or(w.matcap);
+                    w.lighting = Lighting::MatCap;
+                }
+                Some(("color", v)) => w.color = ColorType::ALL.into_iter().find(|c| c.label() == v).unwrap_or(w.color),
+                _ => {
+                    let f = match arg {
+                        "shadow" => &mut w.shadow,
+                        "cavity" => &mut w.cavity,
+                        "outline" => &mut w.outline,
+                        _ => &mut w.specular,
+                    };
+                    *f = !*f;
+                }
             }
         }
         "view3d.overlay" => {
