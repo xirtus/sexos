@@ -12,7 +12,12 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=ROOT/'iso_root');p.add_argument('--out',type=Path,required=True);a=p.parse_args()
  img=a.out;img.parent.mkdir(parents=True,exist_ok=True)
  pack=a.root/'firmware'/'wifi.pack'
- sectors=SECTORS_WITH_FIRMWARE if pack.is_file() and pack.stat().st_size>1<<20 else SECTORS
+ # Everything copied in, plus room for FAT tables and the loader: the larger slot when the
+ # small one cannot hold it (the firmware pack, or modules outgrowing 12 MiB when the
+ # firmware could not be fetched).
+ files=[a.root/'sexos-kernel']+[f for sub in ('servers','apps') for f in (a.root/sub).iterdir() if f.is_file()]+([pack] if pack.is_file() else [])
+ need=sum(f.stat().st_size for f in files)+(1<<20)
+ sectors=SECTORS if need<=SECTORS*512 and not (pack.is_file() and pack.stat().st_size>1<<20) else SECTORS_WITH_FIRMWARE
  with img.open('wb') as f:f.truncate(sectors*512)
  run=lambda *c:subprocess.run(c,check=True,capture_output=True)
  run('mformat','-i',str(img),'-T',str(sectors),'-h','64','-s','32','-v','SEXOS','::')
