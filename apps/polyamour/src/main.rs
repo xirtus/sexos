@@ -29,6 +29,18 @@ fn open_arg(app: &mut App, path: &str) {
     }
 }
 
+/// Blender's `--python FILE` and `--python-expr EXPR`: run a script once the
+/// window is up, through the live kernel where pipes work (batch otherwise).
+fn run_python_arg(app: &mut App, flag: &str, value: &str) {
+    match flag {
+        "--python" => match std::fs::read_to_string(value) {
+            Ok(src) => polyamour::python::run_script(&mut app.doc, value, &src),
+            Err(e) => app.doc.report = format!("Cannot open {value}: {e}"),
+        },
+        _ => polyamour::python::run_script(&mut app.doc, "<expr>", value),
+    }
+}
+
 #[cfg(not(target_os = "hermit"))]
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -38,6 +50,7 @@ fn main() {
     let mut sculpt_demo = false;
     let mut physics_demo = false;
     let mut gp_demo = false;
+    let mut python: Vec<(String, String)> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -73,10 +86,18 @@ fn main() {
                 app.doc.want_workspace = Some("Animation".into());
                 rig_demo = true;
             }
+            f @ ("--python" | "--python-expr") => {
+                if let Some(v) = it.next() {
+                    python.push((f.to_string(), v.clone()));
+                }
+            }
             p => open_arg(&mut app, p),
         }
     }
     app.frame(Input::Tick);
+    for (f, v) in &python {
+        run_python_arg(&mut app, f, v);
+    }
     app.frame(Input::Tick);
     if sculpt_demo {
         // The Sculpting workspace's view frames the sphere, the sidebar
@@ -124,7 +145,7 @@ fn main() {
         app.frame(Input::Tick);
     }
     let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--liquid-demo] [--gp-demo] [--seq-demo] [scene file]");
+        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--liquid-demo] [--gp-demo] [--seq-demo] [--python FILE] [--python-expr EXPR] [scene file]");
         return;
     };
     let f = std::fs::File::create(&out).expect("create png");
@@ -188,8 +209,17 @@ fn main() {
     window.title(b"Polyamour");
     let (w, h) = window.size();
     let mut app = App::new(w.max(640), h.max(400));
-    if let Some(p) = std::env::args().nth(1) {
-        open_arg(&mut app, &p);
+    let mut python: Vec<(String, String)> = Vec::new();
+    let mut args = std::env::args().skip(1);
+    while let Some(a) = args.next() {
+        match a.as_str() {
+            "--python" | "--python-expr" => {
+                if let Some(v) = args.next() {
+                    python.push((a.clone(), v));
+                }
+            }
+            p => open_arg(&mut app, p),
+        }
     }
     let mut mods;
     let mut last_ws = String::from("Layout");
@@ -205,6 +235,14 @@ fn main() {
     show(&app, window);
     let (target, task) = sex_std::identity();
     sex_std::sex_pdx::serial_record!("[polyamour.ready] target={} task={} size={}x{}", target, task, app.painter.width, app.painter.height);
+    for (f, v) in &python {
+        run_python_arg(&mut app, f, v);
+        let mode = if app.doc.python.live() { "live" } else { "batch" };
+        sex_std::sex_pdx::serial_record!("[polyamour.python] mode={} objects={}", mode, app.doc.scene.objects.len());
+        sex_std::sex_pdx::serial_record!("[polyamour.report] {}", app.doc.report);
+        app.frame(Input::Tick);
+        show(&app, window);
+    }
     while !app.quit {
         let ev = if app.doc.playing {
             window.next_within(1000 / 24)
