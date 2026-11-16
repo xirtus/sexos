@@ -31,7 +31,8 @@ def main():
  g=boot(a.iso,disk,a.out,'splicy-probe',a.resolution);t=g['text'];q=g['q']
  def keys(text):
   for k in text:
-   if k==':':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'semicolon'}],'hold-time':80})
+   if k=='@':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'2'}],'hold-time':80})
+   elif k==':':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'semicolon'}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)
  def expect(text,pattern,timeout=120):
