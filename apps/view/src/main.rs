@@ -9,6 +9,8 @@
 //!   persistent catalog (`/data/gaze/library.gaze`), user albums, offline reverse-geocoded
 //!   smart search by date & place (strictly faces-free), and non-destructive crop,
 //!   filmic EV exposure, and shared `batik-core` filter presets & stacks (`E`).
+//! * `gaze --thumb @IN @OUT SIZE`: no window; writes a thumbnail for Loom (the
+//!   `thumb` module), camera RAW previews included.
 #![no_std]
 #![no_main]
 
@@ -16,6 +18,7 @@ extern crate alloc;
 
 mod canvas;
 mod studio;
+mod thumb;
 
 use alloc::vec::Vec;
 use gaze_core::apply_edits;
@@ -534,6 +537,15 @@ fn switch_viewer_to_studio(
 }
 
 extern "C" fn app_main() -> ! {
+    // `--thumb` runs hidden for Loom: no window, one picture, then the run ends.
+    {
+        let mut buf = [0u8; sex_pdx::fs::ARGS_MAX];
+        let n = files::direct::args(&mut buf);
+        let words: Vec<Vec<u8>> = buf[..n].split(|b| *b == b' ').filter(|w| !w.is_empty()).map(|w| w.to_vec()).collect();
+        if let Some(status) = thumb::run(&words) {
+            sex_app::launch::exit(status);
+        }
+    }
     let mut window = Window::open();
     window.title(b"Gaze");
 

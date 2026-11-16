@@ -1991,6 +1991,8 @@ impl GazeStudio {
             ("Place", place_val.as_str()),
             ("GPS", gps_val.as_str()),
             ("Camera", cam_val.as_str()),
+            ("Lens", rec.meta.lens.as_deref().unwrap_or("Unknown")),
+            ("Exposure", rec.meta.exposure.as_deref().unwrap_or("Unknown")),
             ("Albums", albums_val.as_str()),
         ];
 
