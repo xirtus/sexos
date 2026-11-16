@@ -153,6 +153,92 @@ impl fmt::Display for ScriptError {
 
 impl std::error::Error for ScriptError {}
 
+/// Property widget type declared by a script or WASM add-on via `ui_prop`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddonPropKind {
+    Float,
+    Int,
+    Bool,
+    Vec3,
+    Color,
+    String,
+    Button,
+}
+
+/// One declarative UI control inside an [`AddonPanel`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct AddonProp {
+    pub key: String,
+    pub kind: AddonPropKind,
+    pub label: String,
+    pub default: Option<String>,
+    pub min: Option<f32>,
+    pub max: Option<f32>,
+}
+
+/// Declarative operator/add-on panel registered via `ui_panel` and `ui_prop`,
+/// rendered natively by Polyamour's 3D View Sidebar without widget FFI.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AddonPanel {
+    pub id: String,
+    pub label: String,
+    pub category: String,
+    pub props: Vec<AddonProp>,
+}
+
+/// Per-session host compute, datablock, mesh-size and output caps so untrusted
+/// scripts and `.wasm` add-ons cannot exhaust host CPU or RAM via host calls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SessionLimits {
+    /// Maximum commands executed in this session (`None` = unlimited).
+    pub max_commands: Option<usize>,
+    /// Maximum objects/datablocks created in this session (`None` = unlimited).
+    pub max_created_objects: Option<usize>,
+    /// Maximum cumulative reply bytes produced across the session (`None` = unlimited).
+    pub max_reply_bytes: Option<usize>,
+    /// Maximum vertices in any created, edited or `mesh_get` mesh (`None` = unlimited).
+    pub max_mesh_vertices: Option<usize>,
+    /// Maximum faces in any created, edited or `mesh_get` mesh (`None` = unlimited).
+    pub max_mesh_faces: Option<usize>,
+}
+
+impl SessionLimits {
+    pub const fn unlimited() -> Self {
+        Self {
+            max_commands: None,
+            max_created_objects: None,
+            max_reply_bytes: None,
+            max_mesh_vertices: None,
+            max_mesh_faces: None,
+        }
+    }
+
+    /// Default caps for confined `.wasm` add-ons and untrusted script runs.
+    pub const fn sandboxed() -> Self {
+        Self {
+            max_commands: Some(10_000),
+            max_created_objects: Some(2_048),
+            max_reply_bytes: Some(16 << 20),
+            max_mesh_vertices: Some(200_000),
+            max_mesh_faces: Some(200_000),
+        }
+    }
+
+    fn check_mesh(&self, verts: usize, faces: usize, what: &str) -> Result<(), String> {
+        if let Some(max_v) = self.max_mesh_vertices {
+            if verts > max_v {
+                return Err(format!("{what} has {verts} vertices, exceeding limit of {max_v}"));
+            }
+        }
+        if let Some(max_f) = self.max_mesh_faces {
+            if faces > max_f {
+                return Err(format!("{what} has {faces} faces, exceeding limit of {max_f}"));
+            }
+        }
+        Ok(())
+    }
+}
+
 /// What a successful run did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RunReport {
@@ -167,6 +253,8 @@ pub struct RunReport {
     /// `render key=value` settings, stored for the caller (the scene has no
     /// render settings of its own yet).
     pub render: BTreeMap<String, String>,
+    /// Declarative UI panels registered by `ui_panel` and `ui_prop`.
+    pub panels: Vec<AddonPanel>,
     /// True when the stream ended with `end`. A Python-produced stream that is
     /// not complete was cut short (the interpreter died) and should not be trusted.
     pub complete: bool,
@@ -175,8 +263,14 @@ pub struct RunReport {
 /// Run a polyops program against `scene`, all or nothing: on error the scene is
 /// left untouched and the error names the line.
 pub fn run(scene: &mut Scene, src: &str) -> Result<RunReport, ScriptError> {
+    run_with_limits(scene, src, SessionLimits::unlimited())
+}
+
+/// Like [`run`], enforcing [`SessionLimits`] on host commands, creations,
+/// mesh sizes, and reply output.
+pub fn run_with_limits(scene: &mut Scene, src: &str, limits: SessionLimits) -> Result<RunReport, ScriptError> {
     let mut work = scene.clone();
-    let mut session = Session::new();
+    let mut session = Session::with_limits(limits);
     for line in src.lines() {
         session.exec_line(&mut work, line)?;
     }
@@ -488,6 +582,60 @@ enum Handle {
     Lattice(usize),
 }
 
+fn scene_datablock_count(scene: &Scene) -> usize {
+    scene.objects.len()
+        + scene.meshes.len()
+        + scene.materials.len()
+        + scene.collections.len()
+        + scene.armatures.len()
+        + scene.lattices.len()
+        + scene.node_groups.len()
+}
+
+/// Conservative upper bound on `(vertices, faces)` produced by evaluating
+/// `stack` on `base`, checked BEFORE running modifiers when [`SessionLimits`]
+/// bounds mesh sizes so stacked Subdivision/Array modifiers cannot OOM the host.
+fn estimate_evaluated_bounds(base: &Mesh, stack: &[Modifier]) -> (usize, usize) {
+    let mut v = base.vertex_count().max(1);
+    let mut f = base.face_count();
+    for m in stack {
+        match m {
+            Modifier::Subdivision { levels, .. } => {
+                let mult = 4usize.saturating_pow(*levels);
+                f = f.saturating_mul(mult);
+                v = v.saturating_add(f.saturating_mul(2));
+            }
+            Modifier::Array { count, .. } => {
+                let c = (*count as usize).max(1);
+                v = v.saturating_mul(c);
+                f = f.saturating_mul(c);
+            }
+            Modifier::Mirror { x, y, z, .. } => {
+                let mult = 1usize << (*x as usize + *y as usize + *z as usize);
+                v = v.saturating_mul(mult);
+                f = f.saturating_mul(mult);
+            }
+            Modifier::Solidify { .. } => {
+                v = v.saturating_mul(2);
+                f = f.saturating_mul(3);
+            }
+            Modifier::Screw { steps, iterations, .. } => {
+                let mult = (*steps as usize).max(1).saturating_mul((*iterations as usize).max(1));
+                v = v.saturating_mul(mult);
+                f = f.saturating_mul(mult);
+            }
+            Modifier::Remesh { octree_depth, .. } => {
+                let side = 1usize.checked_shl(*octree_depth).unwrap_or(usize::MAX);
+                let cells = side.saturating_mul(side).saturating_mul(6);
+                v = v.max(cells);
+                f = f.max(cells);
+            }
+            _ => {}
+        }
+    }
+    (v, f)
+}
+
 /// The line-at-a-time interpreter behind [`run`]. Feed it lines with
 /// [`Session::exec_line`]; it keeps handles and the header state between lines.
 #[derive(Debug, Default)]
@@ -497,6 +645,9 @@ pub struct Session {
     report: RunReport,
     header: bool,
     ended: bool,
+    limits: SessionLimits,
+    reply_bytes: usize,
+    created_datablocks: usize,
     /// What Blender keeps outside the scene (mode, selection, actions...), for the live `bpy` API.
     pub bpy: bpy::State,
 }
@@ -504,6 +655,20 @@ pub struct Session {
 impl Session {
     pub fn new() -> Session {
         Session::default()
+    }
+
+    /// Create a [`Session`] enforcing [`SessionLimits`] on host compute and memory.
+    pub fn with_limits(limits: SessionLimits) -> Session {
+        Session { limits, ..Session::default() }
+    }
+
+    pub fn limits(&self) -> SessionLimits {
+        self.limits
+    }
+
+    /// Cumulative bytes of replies emitted across this session (unaffected by [`Session::take_replies`]).
+    pub fn reply_bytes(&self) -> usize {
+        self.reply_bytes
     }
 
     /// Execute one line. Errors carry this line's number.
@@ -516,6 +681,11 @@ impl Session {
     /// Reply lines produced so far, taken out of the report (for a live channel).
     pub fn take_replies(&mut self) -> Vec<String> {
         std::mem::take(&mut self.report.replies)
+    }
+
+    /// Declarative UI panels registered since the last call, taken out of the report.
+    pub fn take_panels(&mut self) -> Vec<AddonPanel> {
+        std::mem::take(&mut self.report.panels)
     }
 
     /// The report; fails when no `polyops` header was seen.
@@ -564,6 +734,11 @@ impl Session {
             self.report.version = v;
             return Ok(());
         }
+        if let Some(max_cmds) = self.limits.max_commands {
+            if self.report.commands >= max_cmds {
+                return Err(format!("command limit exceeded ({max_cmds})"));
+            }
+        }
         let mut cmd = Cmd { name, pos: Vec::new(), opts: Vec::new() };
         for t in toks {
             match t.key.clone() {
@@ -576,18 +751,35 @@ impl Session {
                 None => cmd.pos.push(t),
             }
         }
-        let query = matches!(cmd.name.as_str(), "get" | "list" | "exists" | "ping");
+        let before_db = scene_datablock_count(scene);
+        let before_created = self.report.created.len();
+        let query = matches!(cmd.name.as_str(), "get" | "mesh_get" | "list" | "exists" | "ping");
         let reply = self.command(scene, &mut cmd)?;
         cmd.done()?;
+        let db_growth = scene_datablock_count(scene).saturating_sub(before_db);
+        let obj_growth = self.report.created.len().saturating_sub(before_created);
+        self.created_datablocks = self.created_datablocks.saturating_add(db_growth.max(obj_growth));
+        if let Some(max_obj) = self.limits.max_created_objects {
+            if self.created_datablocks > max_obj {
+                return Err(format!("created datablock limit exceeded ({max_obj})"));
+            }
+        }
         self.report.commands += 1;
         let prefix = id.as_ref().map(|i| format!("@{i} ")).unwrap_or_default();
         // Queries always answer; other commands only when asked with @ID (a
         // creating command then answers with the unique name it gave).
         if query || id.is_some() {
-            match reply {
-                Some(r) if !r.is_empty() => self.report.replies.push(format!("{prefix}ok {r}")),
-                _ => self.report.replies.push(format!("{prefix}ok")),
+            let formatted = match reply {
+                Some(r) if !r.is_empty() => format!("{prefix}ok {r}"),
+                _ => format!("{prefix}ok"),
+            };
+            self.reply_bytes = self.reply_bytes.saturating_add(formatted.len());
+            if let Some(max_bytes) = self.limits.max_reply_bytes {
+                if self.reply_bytes > max_bytes {
+                    return Err(format!("reply output limit exceeded ({max_bytes} bytes)"));
+                }
             }
+            self.report.replies.push(formatted);
         }
         Ok(())
     }
@@ -719,7 +911,7 @@ impl Session {
             "mesh_new" => {
                 cmd.max_args(1)?;
                 let name = cmd.arg(0, "a mesh name")?.text.clone();
-                let m = parse_mesh(cmd, Mesh::new())?;
+                let m = parse_mesh(cmd, Mesh::new(), &self.limits)?;
                 let i = scene.add_mesh(&name, m);
                 self.bind(cmd, Handle::Mesh(i))?;
                 Ok(Some(quote(&scene.mesh_names[i])))
@@ -727,7 +919,7 @@ impl Session {
             "add_mesh" => {
                 cmd.max_args(1)?;
                 let name = given_name(cmd, true).unwrap_or_else(|| "Mesh".into());
-                let m = parse_mesh(cmd, Mesh::new())?;
+                let m = parse_mesh(cmd, Mesh::new(), &self.limits)?;
                 let i = scene.add_mesh_object(&name, m);
                 self.created(scene, cmd, i).map(Some)
             }
@@ -794,7 +986,7 @@ impl Session {
             "mesh_set" => {
                 cmd.max_args(1)?;
                 let mi = self.mesh(scene, cmd.arg(0, "an object or mesh")?)?;
-                let m = parse_mesh(cmd, Mesh::new())?;
+                let m = parse_mesh(cmd, Mesh::new(), &self.limits)?;
                 scene.meshes[mi] = m;
                 Ok(None)
             }
@@ -987,6 +1179,87 @@ impl Session {
                 };
                 Ok(Some(names.join(" ")))
             }
+            "mesh_get" => {
+                cmd.max_args(1)?;
+                let target = cmd.arg(0, "an object or mesh")?.clone();
+                let evaluated = cmd.b("evaluated")?.unwrap_or(false);
+                if evaluated {
+                    let oi = self.object(scene, &target)?;
+                    let mi = match scene.objects[oi].data {
+                        ObjectData::Mesh(m) => m,
+                        _ => return Err(format!("object '{}' has no mesh", scene.objects[oi].name)),
+                    };
+                    let (est_v, est_f) = estimate_evaluated_bounds(&scene.meshes[mi], &scene.objects[oi].modifiers);
+                    self.limits.check_mesh(est_v, est_f, "evaluated mesh estimate")?;
+                    let eval_mesh = scene
+                        .evaluated_mesh(oi)
+                        .ok_or_else(|| format!("object '{}' has no mesh", scene.objects[oi].name))?;
+                    self.limits.check_mesh(eval_mesh.vertex_count(), eval_mesh.face_count(), "evaluated mesh")?;
+                    Ok(Some(mesh_to_options(&eval_mesh).trim_start().to_string()))
+                } else {
+                    let mi = self.mesh(scene, &target)?;
+                    let base = &scene.meshes[mi];
+                    self.limits.check_mesh(base.vertex_count(), base.face_count(), "mesh")?;
+                    Ok(Some(mesh_to_options(base).trim_start().to_string()))
+                }
+            }
+            "ui_panel" => {
+                cmd.max_args(1)?;
+                let id = cmd.arg(0, "a panel id")?.text.clone();
+                if id.is_empty() {
+                    return Err("panel id cannot be empty".into());
+                }
+                let label = cmd.opt("label").map(|t| t.text).unwrap_or_else(|| id.clone());
+                let category = cmd.opt("category").map(|t| t.text).unwrap_or_else(|| "Tool".into());
+                if let Some(existing) = self.report.panels.iter_mut().find(|p| p.id == id) {
+                    existing.label = label;
+                    existing.category = category;
+                } else {
+                    self.report.panels.push(AddonPanel { id: id.clone(), label, category, props: Vec::new() });
+                }
+                Ok(Some(quote(&id)))
+            }
+            "ui_prop" => {
+                cmd.max_args(2)?;
+                let panel_id = cmd.arg(0, "a panel id")?.text.clone();
+                let key = cmd.arg(1, "a property key")?.text.clone();
+                if key.is_empty() {
+                    return Err("property key cannot be empty".into());
+                }
+                let kind_str = cmd.opt("kind").map(|t| t.text.to_ascii_lowercase()).unwrap_or_else(|| "float".into());
+                let kind = match kind_str.as_str() {
+                    "float" => AddonPropKind::Float,
+                    "int" => AddonPropKind::Int,
+                    "bool" => AddonPropKind::Bool,
+                    "vec3" => AddonPropKind::Vec3,
+                    "color" => AddonPropKind::Color,
+                    "string" => AddonPropKind::String,
+                    "button" => AddonPropKind::Button,
+                    k => return Err(format!("unknown ui_prop kind '{k}' (float, int, bool, vec3, color, string, button)")),
+                };
+                let label = cmd.opt("label").map(|t| t.text).unwrap_or_else(|| key.clone());
+                let default = cmd.opt("default").map(|t| t.text);
+                let min = cmd.f("min")?;
+                let max = cmd.f("max")?;
+                if let (Some(lo), Some(hi)) = (min, max) {
+                    if lo > hi {
+                        return Err(format!("ui_prop min ({lo}) cannot exceed max ({hi})"));
+                    }
+                }
+                let panel = self
+                    .report
+                    .panels
+                    .iter_mut()
+                    .find(|p| p.id == panel_id)
+                    .ok_or_else(|| format!("no ui_panel named '{panel_id}'"))?;
+                let prop = AddonProp { key: key.clone(), kind, label, default, min, max };
+                if let Some(existing) = panel.props.iter_mut().find(|p| p.key == key) {
+                    *existing = prop;
+                } else {
+                    panel.props.push(prop);
+                }
+                Ok(None)
+            }
             "exists" => {
                 cmd.max_args(1)?;
                 let t = cmd.arg(0, "an object")?;
@@ -1036,38 +1309,57 @@ impl Session {
         cmd.max_args(1)?;
         let kind = cmd.arg(0, "a primitive type")?.text.to_ascii_lowercase();
         let (mesh, default_name) = match kind.as_str() {
-            "cube" => (p::cube(cmd.f("size")?.unwrap_or(2.0)), "Cube"),
-            "plane" => (p::plane(cmd.f("size")?.unwrap_or(2.0)), "Plane"),
+            "cube" => {
+                self.limits.check_mesh(8, 6, "primitive cube")?;
+                (p::cube(cmd.f("size")?.unwrap_or(2.0)), "Cube")
+            }
+            "plane" => {
+                self.limits.check_mesh(4, 1, "primitive plane")?;
+                (p::plane(cmd.f("size")?.unwrap_or(2.0)), "Plane")
+            }
             "grid" => {
-                let (x, y) = (cmd.u("x_subdivisions")?.unwrap_or(10), cmd.u("y_subdivisions")?.unwrap_or(10));
-                (p::grid(x.min(4096), y.min(4096), cmd.f("size")?.unwrap_or(2.0)), "Grid")
+                let (x, y) = (cmd.u("x_subdivisions")?.unwrap_or(10).min(4096), cmd.u("y_subdivisions")?.unwrap_or(10).min(4096));
+                let est_v = (x as usize + 1).saturating_mul(y as usize + 1);
+                let est_f = (x as usize).saturating_mul(y as usize);
+                self.limits.check_mesh(est_v, est_f, "primitive grid")?;
+                (p::grid(x, y, cmd.f("size")?.unwrap_or(2.0)), "Grid")
             }
             "uv_sphere" | "sphere" => {
-                let (s, r) = (cmd.u("segments")?.unwrap_or(32), cmd.u("rings")?.unwrap_or(16));
-                (p::uv_sphere(s.min(4096), r.min(4096), cmd.f("radius")?.unwrap_or(1.0)), "Sphere")
+                let (s, r) = (cmd.u("segments")?.unwrap_or(32).min(4096), cmd.u("rings")?.unwrap_or(16).min(4096));
+                let est_v = (s as usize + 1).saturating_mul(r as usize + 1);
+                let est_f = (s as usize).saturating_mul(r as usize);
+                self.limits.check_mesh(est_v, est_f, "primitive uv_sphere")?;
+                (p::uv_sphere(s, r, cmd.f("radius")?.unwrap_or(1.0)), "Sphere")
             }
             "ico_sphere" | "icosphere" => {
                 let sub = cmd.u("subdivisions")?.unwrap_or(2);
                 if sub > 8 {
                     return Err("subdivisions must be 8 or fewer".into());
                 }
+                let est_f = 20usize.saturating_mul(4usize.saturating_pow(sub));
+                self.limits.check_mesh(est_f / 2 + 2, est_f, "primitive ico_sphere")?;
                 (p::ico_sphere(sub, cmd.f("radius")?.unwrap_or(1.0)), "Icosphere")
             }
             "cylinder" => {
                 let s = cmd.u("segments")?.unwrap_or(32).min(4096);
+                self.limits.check_mesh(s as usize * 2, s as usize + 2, "primitive cylinder")?;
                 (p::cylinder(s, cmd.f("radius")?.unwrap_or(1.0), cmd.f("depth")?.unwrap_or(2.0)), "Cylinder")
             }
             "cone" => {
                 let s = cmd.u("segments")?.unwrap_or(32).min(4096);
+                self.limits.check_mesh(s as usize * 2, s as usize + 2, "primitive cone")?;
                 let (r1, r2) = (cmd.f("radius1")?.unwrap_or(1.0), cmd.f("radius2")?.unwrap_or(0.0));
                 (p::cone(s, r1, r2, cmd.f("depth")?.unwrap_or(2.0)), "Cone")
             }
             "torus" => {
                 let (a, b) = (cmd.u("major_segments")?.unwrap_or(48).min(4096), cmd.u("minor_segments")?.unwrap_or(12).min(4096));
+                let est = (a as usize).saturating_mul(b as usize);
+                self.limits.check_mesh(est, est, "primitive torus")?;
                 (p::torus(a, b, cmd.f("major_radius")?.unwrap_or(1.0), cmd.f("minor_radius")?.unwrap_or(0.25)), "Torus")
             }
             k => return Err(format!("unknown primitive '{k}' (cube, plane, grid, uv_sphere, ico_sphere, cylinder, cone, torus)")),
         };
+        self.limits.check_mesh(mesh.vertex_count(), mesh.face_count(), "primitive mesh")?;
         let name = given_name(cmd, false).unwrap_or_else(|| default_name.into());
         let i = scene.add_mesh_object(&name, mesh);
         self.created(scene, cmd, i).map(Some)
@@ -1962,15 +2254,28 @@ fn write_pairs(o: &mut String, key: &str, pairs: &[[u32; 2]], b64: bool) {
 }
 
 /// Mesh data options: `verts= faces= edges= seams= sharp= uvs= smooth= mat=`.
-fn parse_mesh(cmd: &mut Cmd, mut m: Mesh) -> Res<Mesh> {
-    if let Some(v) = cmd.list("verts")? {
+fn parse_mesh(cmd: &mut Cmd, mut m: Mesh, limits: &SessionLimits) -> Res<Mesh> {
+    if let Some(t) = cmd.opt("verts") {
+        if let Some(max_v) = limits.max_mesh_vertices {
+            if let Some(b64) = t.text.strip_prefix("b64:") {
+                // 3 * f32 = 12 bytes -> 16 base64 chars per vertex
+                let approx_verts = b64.trim().len() / 16;
+                if approx_verts > max_v {
+                    return Err(format!("verts= exceeds vertex limit of {max_v}"));
+                }
+            }
+        }
+        let v = floats(&t.text).map_err(|e| format!("verts: {e}"))?;
         if v.len() % 3 != 0 {
             return Err(format!("verts= holds {} numbers, not a multiple of 3", v.len()));
         }
+        limits.check_mesh(v.len() / 3, 0, "mesh")?;
         m.positions = v.chunks_exact(3).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
     }
     if let Some(t) = cmd.opt("faces") {
-        m.faces = polygons(&t.text).map_err(|e| format!("faces: {e}"))?.into_iter().map(Face::new).collect();
+        let polys = polygons(&t.text).map_err(|e| format!("faces: {e}"))?;
+        limits.check_mesh(m.positions.len(), polys.len(), "mesh")?;
+        m.faces = polys.into_iter().map(Face::new).collect();
     }
     if let Some(t) = cmd.opt("edges") {
         m.loose_edges = edge_pairs(&t.text, "edges")?;
@@ -2021,6 +2326,26 @@ fn parse_mesh(cmd: &mut Cmd, mut m: Mesh) -> Res<Mesh> {
 
 // ---------------------------------------------------------------------------
 // Writing scenes
+
+/// Decode a [`mesh_to_options`] / `mesh_get` payload back into a [`Mesh`].
+pub fn mesh_from_options(src: &str) -> Result<Mesh, String> {
+    let toks = tokenize(src)?;
+    let mut cmd = Cmd { name: "mesh_get".into(), pos: Vec::new(), opts: Vec::new() };
+    for t in toks {
+        match t.key.clone() {
+            Some(k) => {
+                if cmd.opts.iter().any(|o| o.0 == k) {
+                    return Err(format!("option '{k}' given twice"));
+                }
+                cmd.opts.push((k, Token { key: None, ..t }, false));
+            }
+            None => return Err(format!("unexpected positional token '{}' in mesh options", t.text)),
+        }
+    }
+    let mesh = parse_mesh(&mut cmd, Mesh::new(), &SessionLimits::unlimited())?;
+    cmd.done()?;
+    Ok(mesh)
+}
 
 /// Mesh data options for `mesh_new` / `add_mesh` / `mesh_set`.
 pub fn mesh_to_options(m: &Mesh) -> String {

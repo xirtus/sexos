@@ -219,7 +219,7 @@ def read_commands(text):
 QUERIES = frozenset((
     'ids', 'dump_object', 'dump_mesh', 'dump_material', 'dump_tree', 'dump_scene', 'dump_armature',
     'dump_lattice', 'dump_image', 'dump_action', 'eval_mesh', 'op_poll', 'op_list', 'noise',
-    'get', 'list', 'exists', 'ping',
+    'get', 'mesh_get', 'list', 'exists', 'ping',
 ))
 
 
@@ -238,10 +238,13 @@ def _line(command, args, opts):
 
 
 def _parse_reply(rest):
-    """`ok` reply text -> JSON value (`=json ...`) or a list of token texts."""
+    """`ok` reply text -> JSON value (`=json ...`), option dict (`k=v ...`), or list of token texts."""
     if rest.startswith('=json '):
         return json.loads(rest[6:])
-    return [t[1] for t in tokenize(rest)]
+    toks = tokenize(rest)
+    if toks and all(t[0] is not None for t in toks):
+        return {t[0]: t[1] for t in toks}
+    return [t[1] for t in toks]
 
 
 class LiveChannel:
