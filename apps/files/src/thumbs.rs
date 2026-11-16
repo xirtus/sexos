@@ -48,7 +48,7 @@ pub struct Tally { pub pictures: usize, pub made: usize, pub cached: usize, pub 
                    pub pictures_done: u64 }
 
 /// Kinds a program draws a thumbnail of with `--thumb`, and that program.
-const HELPERS: &[(&str, &[u8])] = &[("PDF", b"pdf")];
+const HELPERS: &[(&str, &[u8])] = &[("PDF", b"vellum")];
 /// A helper run that has not ended by now is ended.
 const HELPER_MS: u64 = 20_000;
 static HELPER_RUNS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x7B00_0000);

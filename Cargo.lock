@@ -5831,6 +5831,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-speech"
+version = "0.1.0"
+
+[[package]]
 name = "sex-splice"
 version = "0.1.0"
 
@@ -7686,6 +7690,15 @@ dependencies = [
  "sex-pdx",
  "taffy",
  "tiny-skia 0.11.4",
+]
+
+[[package]]
+name = "whisper-voice"
+version = "0.1.0"
+dependencies = [
+ "sex-libc",
+ "sex-speech",
+ "sex-std",
 ]
 
 [[package]]

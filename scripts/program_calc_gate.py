@@ -15,7 +15,7 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- install(disk,[('abacus',(ROOT/'iso_root/programs/abacus').read_bytes())])
+ install(disk,[('abacus',(ROOT/'iso_root/programs/sex-calc').read_bytes())])
  rw,rh=map(int,a.resolution.split('x'))
  g=boot(a.iso,disk,a.out,'calc',a.resolution);t=g['text'];q=g['q']
  def keys(text):
