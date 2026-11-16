@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0", "vendor/acpi-6.1.1"]
+exclude = ["vendor/vst3-0.3.0", "vendor/com-scrape-types-0.1.1", "vendor/clap-sys-0.5.0", "vendor/keepass-0.17.0", "vendor/rust-argon2-3.0.0", "vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0", "vendor/smoltcp-0.14.0", "vendor/acpi-6.1.1"]
 members = [
     "kernel",
     "crates/denim",
@@ -44,6 +44,8 @@ members = [
     "apps/dragtest",
     "apps/drag",
     "crates/drag-vmm",
+    "crates/sex-crossdress",
+    "apps/crossdress",
     "apps/fuzz",
     "apps/play",
     "apps/cpp",
@@ -52,6 +54,10 @@ members = [
     "crates/sex-egui",
     "crates/weft",
     "apps/abacus",
+    "apps/velvet",
+    "apps/leather-samples",
+    "apps/chastity",
+    "apps/chastity-probe",
     "apps/tassel",
     "crates/sex-html",
     "crates/sex-js",
@@ -77,6 +83,7 @@ members = [
     "crates/shuttle",
     "crates/sex-ime",
     "crates/shibari",
+    "crates/chastity-core",
     "crates/sex-multipass",
     "crates/sex-mail",
     "crates/sexfs",
@@ -165,7 +172,13 @@ members = [
     "crates/aftercare-core",
     "apps/corset",
     "crates/moan-core",
+    "crates/moan-plugin",
+    "crates/moan-export",
     "apps/moan-probe",
+    "apps/moan",
+    "apps/moanplug",
+    "apps/moanrack",
+    "apps/ribbon-seal",
     "crates/sex-xml",
     "crates/sex-ebook",
     "apps/bodice",
@@ -183,6 +196,7 @@ members = [
     "servers/sexuvc",
     "apps/flash",
     "apps/splicy",
+    "apps/splicy-probe",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
@@ -319,6 +333,12 @@ opt-level = 3
 opt-level = 3
 # naga's GLSL front end runs in programs: its preprocessor, made no_std (vendor/pp-rs-0.2.1).
 [patch.crates-io]
+# Independent bounded ARP/IPv6 discovery clocks (see vendored provenance).
+smoltcp = { path = "vendor/smoltcp-0.14.0" }
+# Bounded expanded payloads and KDBX4 staging cleanup.
+keepass = { path = "vendor/keepass-0.17.0" }
+# Wipe Argon2 workspace and explicit staging (see vendor provenance/scope).
+rust-argon2 = { path = "vendor/rust-argon2-3.0.0" }
 pp-rs = { path = "vendor/pp-rs-0.2.1" }
 # Bell captures sound: virtio-snd input transfers added (vendor/virtio-drivers-0.13.0/SEXOS_CHANGES.md).
 virtio-drivers = { path = "vendor/virtio-drivers-0.13.0" }
@@ -344,3 +364,83 @@ krilla = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf4518
 opt-level = 3
 [profile.dev.package.naga]
 opt-level = 2
+
+# Splicy on FilmCraft: size-optimised and stripped so the program fits the loader's limit.
+[profile.release.package.splicy-probe]
+strip = true
+[profile.release.package.craft-audio]
+opt-level = "s"
+[profile.release.package.craft-captions]
+opt-level = "s"
+[profile.release.package.craft-csv]
+opt-level = "s"
+[profile.release.package.craft-docpath]
+opt-level = "s"
+[profile.release.package.craft-jpeg]
+opt-level = "s"
+[profile.release.package.craft-media]
+opt-level = "s"
+[profile.release.package.craft-offcrypto]
+opt-level = "s"
+[profile.release.package.craft-opc]
+opt-level = "s"
+[profile.release.package.craft-sheet]
+opt-level = "s"
+[profile.release.package.craft-timeline]
+opt-level = "s"
+[profile.release.package.craft-video]
+opt-level = "s"
+[profile.release.package.craft-xls]
+opt-level = "s"
+[profile.release.package.craft-zip]
+opt-level = "s"
+[profile.release.package.filmcraft-audio-dsp]
+opt-level = "s"
+[profile.release.package.filmcraft-bitstream]
+opt-level = "s"
+[profile.release.package.filmcraft-captions]
+opt-level = "s"
+[profile.release.package.filmcraft-cfb]
+opt-level = "s"
+[profile.release.package.filmcraft-codecs]
+opt-level = "s"
+[profile.release.package.filmcraft-color]
+opt-level = "s"
+[profile.release.package.filmcraft-dng]
+opt-level = "s"
+[profile.release.package.filmcraft-dnx]
+opt-level = "s"
+[profile.release.package.filmcraft-edit]
+opt-level = "s"
+[profile.release.package.filmcraft-engine]
+opt-level = "s"
+[profile.release.package.filmcraft-export]
+opt-level = "s"
+[profile.release.package.filmcraft-format]
+opt-level = "s"
+[profile.release.package.filmcraft-frame]
+opt-level = "s"
+[profile.release.package.filmcraft-geom]
+opt-level = "s"
+[profile.release.package.filmcraft-interchange]
+opt-level = "s"
+[profile.release.package.filmcraft-isobmff]
+opt-level = "s"
+[profile.release.package.filmcraft-matroska]
+opt-level = "s"
+[profile.release.package.filmcraft-media]
+opt-level = "s"
+[profile.release.package.filmcraft-project]
+opt-level = "s"
+[profile.release.package.filmcraft-render]
+opt-level = "s"
+[profile.release.package.filmcraft-scopes]
+opt-level = "s"
+[profile.release.package.filmcraft-speech]
+opt-level = "s"
+[profile.release.package.filmcraft-text]
+opt-level = "s"
+[profile.release.package.filmcraft-time]
+opt-level = "s"
+[profile.release.package.filmcraft-tts]
+opt-level = "s"

@@ -178,7 +178,7 @@ impl UsbPointerOutbox {
                     self.pop();return true;
                 }
                 Err(error) => {
-                    sex_pdx::serial_record!("[sexusb.input.rejected] op={} arg0={} arg1={} arg2={} reason=transport error={} admitted=0",op,a,b,c,error);
+                    sex_pdx::serial_record!("[sexusb.input.rejected] op={} reason=transport error={} admitted=0 payload=redacted",op,error);
                     self.pop();return true;
                 }
             }
@@ -244,7 +244,7 @@ fn send_report_to_sexinput(op:u64,arg0:u64,arg1:u64,arg2:u64)->Result<bool,u64> 
             Ok(true) => {if !keyboard{record_wheel_admission(arg2);}return Ok(true);}
             Ok(false)|Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{}
             Err(error)=>{
-                sex_pdx::serial_record!("[sexusb.input.rejected] op={} arg0={} arg1={} arg2={} reason=transport error={} admitted=0",op,arg0,arg1,arg2,error);
+                sex_pdx::serial_record!("[sexusb.input.rejected] op={} reason=transport error={} admitted=0 payload=redacted",op,error);
                 return Err(error);
             }
         }
@@ -257,7 +257,7 @@ fn send_report_to_sexinput(op:u64,arg0:u64,arg1:u64,arg2:u64)->Result<bool,u64> 
         }
     }
     {
-        sex_pdx::serial_record!("[sexusb.input.rejected] op={} arg0={} arg1={} arg2={} reason=outbox_full_or_sequence admitted=0",op,arg0,arg1,arg2);
+        sex_pdx::serial_record!("[sexusb.input.rejected] op={} reason=outbox_full_or_sequence admitted=0 payload=redacted",op);
         Err(sex_pdx::ERR_SERVICE_NOT_READY)
     }
 }
@@ -309,6 +309,7 @@ fn send_report_once(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u6
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.init.start]");
+    sex_pdx::serial_record!("[input.payload.mode] component=sexusb mode=redacted");
     let limit = sex_pdx::memory_region_info(SLOT_USB_HOST).map(|info| info.length).unwrap_or(0).min(0x10000);
     let mut cap = u64::MAX;
     for _ in 0..3 {

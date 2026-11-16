@@ -1,0 +1,29 @@
+{
+  "scope": "parent crash with a live restricted helper; stale admission after restart; clean helper slot reuse",
+  "files_cleanup": "[files.app.cleanup] target=42 task=42 handles=0 caps=0",
+  "stale": {
+    "ticket": "1",
+    "same_files_epoch": "1",
+    "result": "0",
+    "cancel": "0",
+    "start": "0x0",
+    "started": "0",
+    "refused": "0",
+    "row": 42,
+    "task": 1073741824,
+    "reused_parent_row": true
+  },
+  "fresh": {
+    "parent": 42,
+    "task": 1073741825,
+    "child": 43,
+    "child_task": 1073741826,
+    "reused_helper_row": true
+  },
+  "ok": true,
+  "parent": 42,
+  "task": 42,
+  "ticket": 1,
+  "child": 43,
+  "child_task": 43
+}

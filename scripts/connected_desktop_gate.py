@@ -4,6 +4,7 @@
 This finite workflow does not replace alpha_session's 1800s/12-cycle policy.
 All app input is real QMP hardware, never an injected application operation.
 """
+from input_payload_profile import assert_payload_proof, require_payload_proof
 import argparse,gzip,hashlib,json,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
 import clipboard_workflow_gate as clip
@@ -16,6 +17,7 @@ import spindle_durable_reboot_gate as history
 import tls_exchange_gate as tls
 import tls_responsiveness_gate as desktop
 from desktop_close_gate import QMP
+from desktop_focus import focus_surface
 from check_document_disk import recover,fnv
 from check_desktop_pixels import final_view,verify as linen_pixels
 from check_quil_ui_pixels import view as quil_view,verify as quil_pixels
@@ -35,7 +37,7 @@ SCOPE=('Representative connected session, not full alpha acceptance: one live bo
        'All authority remains existing BOOT routes in GLOBAL_VAS. No publicweb/publicCA, arbitrary endpoint, Unix/POSIX, sustained1800s alpha, power-loss/crash, physical/SMP or hostile-isolation claim.')
 sha=launch.sha
 KEY_CODES={char:code for base,letters in((0x10,'qwertyuiop'),(0x1e,'asdfghjkl'),(0x2c,'zxcvbnm'),(2,'1234567890'))for code,char in enumerate(letters,base)}
-KEY_CODES.update(ctrl=0x1d,shift=0x2a,alt=0x38,tab=0x0f,ret=0x1c,spc=0x39,grave_accent=0x29,up=0x48,down=0x50,end=0x4f,home=0x47,f11=0x57)
+KEY_CODES.update(ctrl=0x1d,shift=0x2a,alt=0x38,tab=0x0f,ret=0x1c,spc=0x39,grave_accent=0x29,up=0x48,down=0x50,end=0x4f,home=0x47,f11=0x57,scroll_lock=0x46)
 
 def source_contract(root):
  root=Path(root);parts=dict(text=clip.source_contract(root),wheel=http.load_wheel_contract(root),image=asset.source_contract(root),launcher=launch.source_contract(root),quil=readability.source_contract(root),import_view=storage.source_contract(root));hashes={}
@@ -82,6 +84,7 @@ def history_join(trace,expected,recovery=False):
  return dict(handle=handle,receipt=receipt.start(),effect=effect.start(),generation=expected['generation'])
 
 def verify_keys(trace,actions):
+ assert_payload_proof(trace)
  previous=0;makes=[]
  for action in actions:
   if action['kind']!='key':continue
@@ -473,7 +476,7 @@ def replay_boot(root,iso,binding,out,c=None):
    if end<action['serial_end']or frame['anchor']!=action['after']:raise ValueError('wheel pixel frame predates actual input/retained anchor')
   pixels.append(verify_frame(prefix,(out/frame['screenshot']).read_bytes(),frame,c,tuple(map(int,m['resolution'].split('x'))),joined['document']));previous=end
  parks=[a for a in actions if a['kind']=='park'];asset.verify_parking(trace,frames,parks,tuple(map(int,m['resolution'].split('x'))))
- for check in(nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True),wait_check(trace)):
+ for check in(nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True),wait_check(trace,source_root=root)):
   if not check['ok']:raise ValueError('connected NIC/self-wait regression: '+str(check.get('errors')))
  return dict(ok=True,acceptance='representative_connected_only',full_alpha_acceptance=False,binding=bound,boots=1,frames=len(frames),recovery=cold,wire=wire,keys=keys,wheel=wheel,joins=joined,scope=SCOPE)
 
@@ -510,11 +513,9 @@ def run_boot(root,iso,binding,seed,out,c,model,resolution_text,recovery=False,ex
   wait(rf'\[sexinput.ps2.scancode\] raw={hex(KEY_CODES[keys[0]]|0x80)}(?=\n|$)',start)
   found=wait(pattern,start)if pattern else None;event.update(serial_end=len(text()),host_end=time.monotonic());return found
  def focus(sid):
-  for _ in range(24):
-   current=re.findall(r'\[shell.focus.set\] id=(\d+)',text())
-   if current and int(current[-1])==sid:return
-   key('alt','tab',pattern=r'\[shell.app.switch\] old=\d+ new=\d+ live=1 shortcut=alt_tab')
-  raise ValueError('bounded actual AltTab failed to focus '+str(sid))
+  # Alt+Tab toggles the two most recent frames; accessibility Tab traverses
+  # every live frame and observes completed make/action/release causality.
+  focus_surface(sid,text,lambda name,pattern:key(name,pattern=pattern))
  def picture(name,kind,anchor=0,mode=None):
   nonlocal park_phase
   launch.pointer_park(q,resolution,text,wait,actions.append,park_phase);park_phase+=1;actions[-1].update(capture=name,serial_end=len(text()));path=out/(name+'.ppm');deadline=time.monotonic()+30;error='no complete frame';frame=dict(name=name,kind=kind,anchor=anchor,requested_anchor=anchor if kind in('reader','copied')else None,mode=mode,screenshot=path.name)
@@ -558,6 +559,7 @@ def run_boot(root,iso,binding,seed,out,c,model,resolution_text,recovery=False,ex
    time.sleep(.02)
   q=QMP(sock)
   if resolution_text=='1024x768':wait(r'SexOS compact 1024x768',timeout=15);q.key('down');q.key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');wait(r'\[linen.disk.publish.done\]');wait(r'\[spindle.history.receipt\] target=12 task=12 kind=(?:loaded|missing) [^\n]*error=\d+')
   if not recovery:
    focus(201);key('ctrl','n',pattern=r'\[quil.new.ok\] bytes=0');focus(300);key('g',pattern=r'\[browser.asset.authenticated\] ticket=2 ')
@@ -580,12 +582,12 @@ def run_boot(root,iso,binding,seed,out,c,model,resolution_text,recovery=False,ex
    launcher('Open')
    for index,char in enumerate(COMMAND,1):key('spc'if char==' 'else char,pattern=rf'\[spindle.cursor.view\] target=12 sequence=\d+ pos={index} len={index}(?=\s|$)')
    key('ret',pattern=r'\[spindle.instance.command\] target=12 task=12 name=echo ok=1');wait(r'\[spindle.history.receipt\] target=12 task=12 kind=saved [^\n]*error=0');key('up',pattern=rf'\[spindle.history.nav\] dir=up idx=0 len={len(COMMAND)} ok=1');picture('spindle-recalled','spindle')
-   start=len(text());launch.pointer_click(q,c['launcher']['workspace_x'][1]+10,c['launcher']['workspace_y']+10,resolution,text,wait,actions.append);wait(r'\[shell.scene.switch\] from=0 to=1',start);launcher('BringHere');picture('spindle-brought','spindle')
+   start=len(text());launch.pointer_click(q,*launch.workspace_point(text(),1,c['launcher']),resolution,text,wait,actions.append);wait(r'\[shell.scene.switch\] from=0 to=1',start);launcher('BringHere');picture('spindle-brought','spindle')
   else:
    reopen();picture('quil-cold','quil');launcher('Open');key('up',pattern=rf'\[spindle.history.nav\] dir=up idx=0 len={len(COMMAND)} ok=1');picture('spindle-cold','spindle')
   close(12,153)
   if not recovery:
-   start=len(text());launch.pointer_click(q,c['launcher']['workspace_x'][0]+10,c['launcher']['workspace_y']+10,resolution,text,wait,actions.append);wait(r'\[shell.scene.switch\] from=1 to=0',start)
+   start=len(text());launch.pointer_click(q,*launch.workspace_point(text(),0,c['launcher']),resolution,text,wait,actions.append);wait(r'\[shell.scene.switch\] from=1 to=0',start)
   close(15,300);close(9,201)
  except Exception as exc:failure=clip.failure_summary(exc)
  finally:

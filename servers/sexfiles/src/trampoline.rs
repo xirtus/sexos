@@ -18,6 +18,7 @@ fn hot_log() -> bool {
 #[no_mangle]
 pub extern "C" fn trampoline_main() {
     serial_println!("[sexfiles.trampoline.enter] ok=1");
+    crate::restricted_runtime::initialize();
     crate::recording_runtime::initialize();
     assert!(crate::proof::run_memory_authority_negative_proof(),
         "SEXFILES_MEMORY_AUTHORITY_NEGATIVE_FAILED");
@@ -243,6 +244,8 @@ pub extern "C" fn trampoline_main() {
     crash_keeper.load(&mut crate::history_disk::DiskIo);
     crash_keeper.sync(&mut crate::history_disk::DiskIo);
     loop {
+        crate::restricted_runtime::poll();
+        crate::restricted_io::poll();
         history.poll(pdx_reply);probes.poll(pdx_reply);documents.poll(pdx_reply);crate::fs_service::poll_replies();
         static mut SEXFILES_TRAMP_LISTEN_BUDGET: u32 = 8;
         unsafe {
@@ -258,7 +261,7 @@ pub extern "C" fn trampoline_main() {
                 d
             } else {
                 // Listen on slot 0 (self message ring — all servers use this pattern).
-                let m = if crate::fs_service::replies_pending()||crate::fs_service::writes_pending()||history.pending()||probes.pending()||documents.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{documents.progress(&mut vfs::DocumentBackend);crate::fs_service::commit_when_idle();sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
+                let m = if crate::restricted_runtime::pending()||crate::restricted_io::pending()||crate::fs_service::replies_pending()||crate::fs_service::writes_pending()||history.pending()||probes.pending()||documents.pending(){match sex_pdx::pdx_try_listen_raw(0){Some(m)=>m,None=>{documents.progress(&mut vfs::DocumentBackend);crate::fs_service::commit_when_idle();sex_pdx::sys_yield();continue}}}else{pdx_listen_raw(0)};
                 crate::defer_queue::Stamped { message: (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2), caller_task: m.caller_task }
             };
         let (msg_type, msg_caller, msg_a0, msg_a1, msg_a2) = stamped.message;
@@ -267,12 +270,25 @@ pub extern "C" fn trampoline_main() {
             arg0: msg_a0, arg1: msg_a1, arg2: msg_a2,
         };
         let caller = msg.caller_pd;
+        // Before hot logs, generic replay handlers, or any app-owned operation.
+        if crate::restricted_runtime::message(msg.type_id,caller,msg.caller_task,[msg.arg0,msg.arg1,msg.arg2]){continue;}
+        if crate::restricted_io::message(msg.type_id,sex_pdx::restricted_helper::Subject{pd:caller,task:msg.caller_task},[msg.arg0,msg.arg1,msg.arg2]){continue;}
+        if crate::restricted_runtime::denied(caller){
+            if msg.type_id==sex_pdx::fs::OP {
+                if let Some(request)=sex_pdx::fs::Request::decode(msg.arg0,msg.arg1,msg.arg2){
+                    crate::fs_service::reply_later(caller,sex_pdx::fs::reply(request.seq,sex_pdx::fs::DENIED,0));
+                }
+            }
+            continue;
+        }
+
         if let Some((n,acked))=app_custody.reborn(&mut sex_pdx::app_lifecycle::KernelAuthority,msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2]){
             sex_pdx::serial_record!("[files.app.reborn.ack] target={} task={} ok={}",n.target_pd,n.task_id,acked as u8);continue;
         }
         if msg.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT {
             if let Some((notice,acked))=app_custody.receive(&mut sex_pdx::app_lifecycle::KernelAuthority,
                 msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2],|notice| {
+                    assert!(crate::restricted_io::retire(sex_pdx::restricted_helper::Subject{pd:notice.target_pd,task:notice.task_id}),"RESTRICTED_RETIRE_SCRUB");
                     history.retire(notice.target_pd);probes.retire(notice.target_pd);
                     crate::recording_runtime::retire(notice.target_pd,notice.task_id);
                     assert!(documents.retire(notice.target_pd,&mut vfs::DocumentBackend),"DOCUMENT_SNAPSHOT_RETIRE_SCRUB");
@@ -317,11 +333,17 @@ pub extern "C" fn trampoline_main() {
         if msg.type_id==sex_pdx::config::OP{let word=crate::config_store::handle(caller,msg.arg0,msg.arg1);crate::fs_service::reply_later(caller,word);continue;}
         if msg.type_id==sex_pdx::bt_bonds::OP{if let Some(word)=crate::bt_bonds::handle(caller,msg.arg0,msg.arg1){crate::fs_service::reply_later(caller,word);}continue;}
         if msg.type_id==sex_pdx::fs::OP{
-            let word=crate::fs_service::handle(caller,msg.arg0,msg.arg1,msg.arg2);
+            let word=crate::fs_service::handle(caller,msg.caller_task,msg.arg0,msg.arg1,msg.arg2);
             // Nothing else owed and nothing to commit: answer and wait in one entry, so
             // the caller runs next. Otherwise the loop's top answers in order.
-            let idle=!crate::fs_service::replies_pending()&&!crate::fs_service::writes_pending()&&!history.pending()&&!probes.pending()&&!documents.pending()&&crate::pdx::defer_empty();
+            let idle=!crate::restricted_runtime::pending()&&!crate::restricted_io::pending()&&!crate::fs_service::replies_pending()&&!crate::fs_service::writes_pending()&&!history.pending()&&!probes.pending()&&!documents.pending()&&crate::pdx::defer_empty();
             if !(idle&&sex_pdx::pdx_reply_wait(caller,word)==0){crate::fs_service::reply_later(caller,word);}
+            continue;
+        }
+        if msg.type_id==sex_pdx::autofill::IDENTIFY {
+            if caller==3&&msg.caller_task==3&&msg.arg1<6&&msg.arg2==0 {
+                if let Some(subject)=sex_pdx::autofill::Subject::decode(msg.arg0){let word=crate::fs_service::autofill_identity(subject,msg.arg1 as usize);crate::fs_service::reply_later(caller,word);}
+            }
             continue;
         }
         if msg.type_id==sex_pdx::dnd::OP_GIVE{

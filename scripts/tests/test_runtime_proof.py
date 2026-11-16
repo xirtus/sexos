@@ -279,7 +279,7 @@ if row_get 'bad[$(exit 99)]'; then exit 5; fi
 
 
 class HarnessTests(unittest.TestCase):
-    def run_fake(self, mode, extra_lines=(), persistence=False):
+    def run_fake(self, mode, extra_lines=(), persistence=False, startup_delay=0):
         with tempfile.TemporaryDirectory() as temp:
             work = Path(temp)
             # Exercise the unchanged production gate inside its own minimal
@@ -304,8 +304,12 @@ import os, pathlib, signal, sys, time
 args = sys.argv[1:]
 log = args[args.index('-serial') + 1].removeprefix('file:')
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+ordinal = len(pathlib.Path(os.environ['FAKE_COMMANDS']).read_text().splitlines())
+delays = os.environ['FAKE_STARTUP_DELAY'].split(',')
+time.sleep(float(delays[min(ordinal - 1, len(delays) - 1)]))
 print('CURRENT_QEMU_DIAGNOSTIC', flush=True)
 pathlib.Path(log).write_text(pathlib.Path(os.environ['FIXTURE']).read_text())
+pathlib.Path(os.environ['FAKE_READY'] + '.' + str(ordinal)).write_text('published')
 if os.environ['FAKE_MODE'] == 'exit_7':
     sys.exit(7)
 if os.environ['FAKE_MODE'] == 'exit_0':
@@ -320,8 +324,35 @@ while True:
             for name in ["qemu-command.txt", "qemu.log", "serial.boot_a.log", "serial.boot_b.log",
                          "report.md", "provenance.json"]:
                 (gate / name).write_text("STALE_PREVIOUS_RUN\n")
+            # This tests the process mode AFTER complete fixture publication,
+            # not host Python startup latency. A private clock shim fences each
+            # fake boot's publication before the unchanged one-second probe sleep.
+            # Without this, a loaded host may terminate the interpreter before it
+            # emits either diagnostics or the exit status the case intends to test.
+            # The production gate/clock and all exit-status checks stay unchanged.
+            tools = work / "fake-tools"
+            tools.mkdir()
+            clock = tools / "sleep"
+            clock.write_text("""#!/usr/bin/env python3
+import os, pathlib, sys, time
+commands = pathlib.Path(os.environ['FAKE_COMMANDS'])
+ordinal = len(commands.read_text().splitlines())
+ready = pathlib.Path(os.environ['FAKE_READY'] + '.' + str(ordinal))
+deadline = time.monotonic() + 5
+while not ready.exists():
+    if time.monotonic() >= deadline:
+        sys.exit('fake process did not publish its fixture before clock deadline')
+    time.sleep(0.005)
+time.sleep(float(sys.argv[1]))
+""")
+            clock.chmod(0o755)
             env = dict(os.environ, GATE_DIR=str(gate), QEMU_BIN=str(fake),
                        ISO=str(image), FIXTURE=str(fixture), FAKE_MODE=mode,
+                       FAKE_STARTUP_DELAY=(",".join(map(str, startup_delay))
+                                           if isinstance(startup_delay, tuple) else str(startup_delay)),
+                       FAKE_READY=str(work / "fake-ready"),
+                       FAKE_COMMANDS=str(gate / "qemu-command.txt"),
+                       PATH=str(tools) + os.pathsep + os.environ["PATH"],
                        SEXOS_PERSISTENCE_REBOOT_PROOF="1" if persistence else "0")
             result = subprocess.run(["bash", str(source / "scripts/master_runtime_gate.sh"),
                                      "--skip-build", "--no-nvme", "--probe", "1", "--keep-log"],
@@ -335,7 +366,9 @@ while True:
                 self.assertNotIn("STALE_PREVIOUS_RUN", content)
             boot_count = 2 if persistence and mode == "running" else 1
             self.assertEqual(len(commands.splitlines()), boot_count)
-            self.assertEqual(diagnostics.count("CURRENT_QEMU_DIAGNOSTIC"), boot_count)
+            self.assertEqual(diagnostics.count("CURRENT_QEMU_DIAGNOSTIC"), boot_count,
+                             diagnostics + result.stdout + result.stderr)
+            self.assertEqual(len(list(work.glob("fake-ready.*"))), boot_count)
             if persistence and mode == "running":
                 for name in ["serial.boot_a.log", "serial.boot_b.log"]:
                     self.assertIn("[sexdisplay.ready]", (gate / name).read_text())
@@ -358,6 +391,17 @@ while True:
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("early_exit:7", report)
         self.assertIn("RED_MASTER", report)
+
+    def test_delayed_fake_nonzero_exit_still_exercises_exit_status(self):
+        result, report, _ = self.run_fake("exit_7", startup_delay=2)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("early_exit:7", report)
+        self.assertIn("RED_MASTER", report)
+
+    def test_delayed_second_fake_boot_needs_its_own_publication(self):
+        result, report, _ = self.run_fake("running", persistence=True, startup_delay=(0, 2))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("GREEN_MASTER", report)
 
     def test_qemu_early_clean_exit_is_incomplete_observation(self):
         result, report, _ = self.run_fake("exit_0")

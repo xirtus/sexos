@@ -905,7 +905,10 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
     };
     let read_n = PS2_PORT60_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
     if read_n <= 16 {
+        #[cfg(sexos_input_payload_proof)]
         serial_println!("[ps2.port60.read] n={} sc={:#x}", read_n, scancode);
+        #[cfg(not(sexos_input_payload_proof))]
+        serial_println!("[ps2.port60.read] n={} payload=redacted", read_n);
     }
 
     // Push into lock-free global queue; discard if full (to prevent blocking Ring-0)
@@ -913,12 +916,18 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
         wake_input_listener();
         let enq_n = PS2_ENQUEUE_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if enq_n <= 16 {
+            #[cfg(sexos_input_payload_proof)]
             serial_println!("[ps2.input_ring.enqueue] n={} type=0x201 sc={:#x}", enq_n, scancode);
+            #[cfg(not(sexos_input_payload_proof))]
+            serial_println!("[ps2.input_ring.enqueue] n={} type=0x201 payload=redacted", enq_n);
         }
     } else {
         let drop_n = PS2_DROP_LOG_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
         if drop_n <= 16 {
+            #[cfg(sexos_input_payload_proof)]
             serial_println!("[ps2.input_ring.drop] reason=ring_full sc={:#x}", scancode);
+            #[cfg(not(sexos_input_payload_proof))]
+            serial_println!("[ps2.input_ring.drop] reason=ring_full payload=redacted");
         }
     }
     

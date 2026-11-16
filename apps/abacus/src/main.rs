@@ -4,8 +4,8 @@
 //! Serial record: `[abacus.ready] target= task= keys=`, then after `[abacus.layout] w= h=`
 //! (again after each resize) one `[abacus.key] n= x= y=` per keypad key (in `abacus::KEYS` order) (window pixels, for gates), `[abacus.result] expr= value=`,
 //! `[abacus.error] what=`, `[abacus.memory] value=`, `[abacus.recall] index= value=`,
-//! `[abacus.mode] angle=deg|rad`, `[abacus.command] id=` and `[abacus.frame] n=` for the
-//! first frame.
+//! `[abacus.mode] angle=deg|rad`, `[abacus.command] id=`, `[abacus.frame] n=` for the
+//! first frame and `[abacus.closed] target= task=` when the window closes.
 #![cfg_attr(feature = "sexos", no_std)]
 #![cfg_attr(feature = "sexos", no_main)]
 
@@ -40,7 +40,7 @@ mod program {
             if app.window.size() != laid { laid = app.window.size(); keys(&app, &calc, laid); }
             if !reported && app.frames > 0 { reported = true; sex_pdx::serial_record!("[abacus.frame] n={}", app.frames); }
             for r in out {
-                if r == Response::Close { sex_pdx::task_finish(0); }
+                if r == Response::Close { sex_pdx::serial_record!("[abacus.closed] target={} task={}", target, task); sex_pdx::task_finish(0); }
                 if let Response::Command(c) = &r { sex_pdx::serial_record!("[abacus.command] id={}", c); }
                 if let Response::Command(c) = &r { if c == "abacus.copy" { let t = alloc::string::String::from(calc.result_text(&app.ui)); app.ui.set_clipboard(&t); } }
                 match calc.on(&mut app.ui, &r) {

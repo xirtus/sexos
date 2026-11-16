@@ -7,6 +7,7 @@ description = "egui on SexOS: a program window's keys, pointer and pixels drivin
 
 [dependencies]
 egui = { version = "0.37.0", default-features = false, features = ["default_fonts", "monochrome_emoji_fonts"] }
+[target.'cfg(target_os = "hermit")'.dependencies]
 sex-std = { path = "../sex-std" }
 
 [dev-dependencies]

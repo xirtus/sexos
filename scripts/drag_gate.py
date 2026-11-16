@@ -19,7 +19,14 @@ into 8 MiB of its own heap and makes `drag-test.img` in its folder for virtio-bl
   banner, the zero page and command line it was given, the disk's first line read over
   virtio-blk, its write to sector 1 read back, `done`; then `[drag.vmm.stop]
   reason=halted` and `[drag.disk] sector1=...` shows the write reached the file.
-`--require-guest` fails unless the guest path ran."""
+Crossdress CW1 (`run crossdress`, crates/sex-crossdress) runs last: a 64-bit Windows
+program (the built-in test .exe) loaded into a Drag cell, a SYS_VM guest with no OS:
+- tcg: `[crossdress.loaded] base=0x140000000 ... imports=7` (the PE was parsed and the
+  cell built inside SexOS), then `[crossdress.refused] status=3`.
+- kvm: the program's console lines come back as `[crossdress.out] ...`, ending with
+  `crossdress: all checks passed`, and `[crossdress.stop] reason=exited code=0x0 ...
+  handled=5` (five hardware exceptions through its vectored handler).
+`--require-guest` fails unless the guest paths ran."""
 import argparse,os,re,shutil,time
 from pathlib import Path
 from install_program import install
@@ -43,7 +50,8 @@ def main():
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  elf=ROOT/'iso_root/programs/dragtest';assert elf.read_bytes()[:4]==b'\x7fELF'
  drag=ROOT/'iso_root/programs/drag';assert drag.read_bytes()[:4]==b'\x7fELF'
- install(disk,[('dragtest',elf.read_bytes()),('drag',drag.read_bytes())])
+ crossdress=ROOT/'iso_root/programs/crossdress';assert crossdress.read_bytes()[:4]==b'\x7fELF'
+ install(disk,[('dragtest',elf.read_bytes()),('drag',drag.read_bytes()),('crossdress',crossdress.read_bytes())])
  g=boot(a.iso,disk,a.out,'drag',a.resolution);t=g['text'];q=g['q']
  def run(line):
   g['focus'](153);time.sleep(.5)
@@ -98,8 +106,30 @@ def main():
   surface=int(re.findall(rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',t())[-1])
   s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11')
   g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120)
-  text=t();assert 'KERNEL PANIC' not in text and '[drag.fatal]' not in text and 'panicked' not in text
+  # Crossdress CW1: a Windows program in a Drag cell.
+  s=len(t());run('run crossdress')
+  start=g['wait'](r'\[crossdress\.start\] target=(\d+) task=(\d+)',s,180);target,task=int(start[1]),int(start[2])
+  g['wait'](r'\[crossdress\.loaded\] base=0x140000000 entry=0x14000[0-9a-f]+ imports=7 ',s,180)
+  end=g['wait'](r'\[crossdress\.(stop|refused|fail)\][^\n]*\n',s,240)
+  text=t()[s:]
+  assert end[1]!='fail',f'crossdress failed: {end[0].strip()}'
+  if end[1]=='stop':
+   out=re.findall(r'\[crossdress\.out\] ([^\n]*)',text)
+   assert 'crossdress: hello from a Windows program' in out,f'program output: {out!r}'
+   assert not [l for l in out if l.startswith('FAIL')],f'program checks failed: {out!r}'
+   assert any(l.startswith('crossdress: all checks passed') for l in out),f'program output: {out!r}'
+   assert re.search(r'\[crossdress\.stop\] reason=exited code=0x0 [^\n]*handled=5',text),end[0]
+   cw1='guest'
+  else:
+   assert '[crossdress.refused] status=3 ' in text,'crossdress refusal was not UNAVAILABLE'
+   assert path=='refused','dragtest ran a guest but crossdress was refused'
+   cw1='refused'
+  if a.require_guest:assert cw1=='guest','--require-guest: the Windows program did not run'
+  surface=int(re.findall(rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',t())[-1])
+  s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11')
+  g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120)
+  text=t();assert 'KERNEL PANIC' not in text and '[drag.fatal]' not in text and '[crossdress.fatal]' not in text and 'panicked' not in text
   reason=re.search(r'\[drag\] vmx=(\w+)(?: reason=(\w+))?',text)
-  print({'ok':True,'accel':accel,'path':path,'d2':d2,'vmx':reason[1],'reason':reason[2]})
+  print({'ok':True,'accel':accel,'path':path,'d2':d2,'crossdress':cw1,'vmx':reason[1],'reason':reason[2]})
  finally:g['stop']()
 if __name__=='__main__':main()
