@@ -308,16 +308,17 @@ impl DofBlur {
 /// of confusion covers it. Out-of-focus foreground spreads over what is
 /// behind it; background never spreads over sharper foreground.
 pub(super) fn depth_of_field(color: &mut Vec<[f32; 4]>, depth: &[f32], layout: &Layout, cam: &RasterCamera, p: &DofBlur, sample: u32, threads: usize, scratch: &mut Vec<[f32; 4]>) {
-    let n = layout.len();
-    let mut coc = vec![0.0f32; n];
-    let mut dist = vec![0.0f32; n];
-    for i in 0..n {
-        coc[i] = p.coc(cam, depth[i]);
-        dist[i] = if depth[i] == f32::NEG_INFINITY { f32::INFINITY } else { cam.depth_of(depth[i]) };
-    }
+    // Circle of confusion and view depth per pixel.
+    let mut cd = vec![[0.0f32; 2]; layout.len()];
+    parallel_for_each(cd.chunks_mut(TILE_PX).enumerate(), threads, |(t, out)| {
+        for (k, o) in out.iter_mut().enumerate() {
+            let key = depth[t * TILE_PX + k];
+            *o = [p.coc(cam, key), if key == f32::NEG_INFINITY { f32::INFINITY } else { cam.depth_of(key) }];
+        }
+    });
     // Largest CoC per tile, dilated over the tiles it can reach.
     let tiles = layout.tiles();
-    let tmax: Vec<f32> = (0..tiles).map(|t| coc[t * TILE_PX..(t + 1) * TILE_PX].iter().copied().fold(0.0, f32::max)).collect();
+    let tmax: Vec<f32> = (0..tiles).map(|t| cd[t * TILE_PX..(t + 1) * TILE_PX].iter().map(|c| c[0]).fold(0.0, f32::max)).collect();
     let global = tmax.iter().copied().fold(0.0, f32::max);
     if global < 0.5 {
         return;
@@ -347,20 +348,30 @@ pub(super) fn depth_of_field(color: &mut Vec<[f32; 4]>, depth: &[f32], layout: &
     scratch.clear();
     scratch.extend_from_slice(color);
     let src = &scratch[..];
-    const RINGS: usize = 4;
+    const RINGS: usize = 3;
+    // Unit tap directions, ring after ring (8 per ring and ring index).
+    let dirs: Vec<(f32, f32)> = (1..=RINGS)
+        .flat_map(|ring| {
+            let count = 8 * ring;
+            (0..count).map(move |j| {
+                let a = (j as f32 + 0.5 * (ring & 1) as f32) * TAU / count as f32;
+                (a.cos(), a.sin())
+            })
+        })
+        .collect();
     parallel_for_each(color.chunks_mut(TILE_PX).enumerate(), threads, |(t, col)| {
         let r = dil[t];
         if r < 0.5 {
             return;
         }
-        let rings = ((r / 3.0).ceil() as usize).clamp(1, RINGS);
+        let rings = ((r / 4.0).ceil() as usize).clamp(1, RINGS);
         let ntaps = 1 + 4 * rings * (rings + 1);
         let (x0, y0, x1, y1) = layout.tile_rect(t);
         for y in y0..y1 {
             for x in x0..x1 {
                 let k = (y % TILE) * TILE + x % TILE;
                 let i = t * TILE_PX + k;
-                let (cc, dc) = (coc[i], dist[i]);
+                let [cc, dc] = cd[i];
                 let h = hash2(x as u32, y as u32, sample.wrapping_mul(0x7feb_352d));
                 let rot = rand01(h) * TAU;
                 let rj = rand01(h.wrapping_mul(0x846c_a68b));
@@ -369,7 +380,7 @@ pub(super) fn depth_of_field(color: &mut Vec<[f32; 4]>, depth: &[f32], layout: &
                 // Each tap stands for this much of the disk (in pixels²/π).
                 let tap_area = r * r / ntaps as f32;
                 let mut add = |q: usize, s: f32| {
-                    let (cq, dq) = (coc[q], dist[q]);
+                    let [cq, dq] = cd[q];
                     let c = &src[q];
                     let front = dq < dc - 0.02 * dc.min(1e6);
                     if front {
@@ -394,12 +405,16 @@ pub(super) fn depth_of_field(color: &mut Vec<[f32; 4]>, depth: &[f32], layout: &
                     }
                 };
                 add(i, 0.0);
+                let (sr, cr) = rot.sin_cos();
+                let mut di = 0;
                 for ring in 1..=rings {
                     let count = 8 * ring;
                     let rad = (ring as f32 - 0.5 + rj) / rings as f32 * r;
-                    for j in 0..count {
-                        let a = rot + (j as f32 + 0.5 * (ring & 1) as f32) * TAU / count as f32;
-                        let (qx, qy) = (x as f32 + 0.5 + a.cos() * rad, y as f32 + 0.5 + a.sin() * rad);
+                    for _ in 0..count {
+                        let (ux, uy) = dirs[di];
+                        di += 1;
+                        let (dx, dy) = (ux * cr - uy * sr, ux * sr + uy * cr);
+                        let (qx, qy) = (x as f32 + 0.5 + dx * rad, y as f32 + 0.5 + dy * rad);
                         if !(qx >= 0.0 && qy >= 0.0 && qx < layout.w as f32 && qy < layout.h as f32) {
                             continue;
                         }
@@ -431,108 +446,131 @@ pub(super) struct BloomParams {
     pub clamp: f32,
 }
 
-struct Img {
+#[derive(Default)]
+pub(super) struct Img {
     w: usize,
     h: usize,
     px: Vec<Vec3>,
 }
 
 impl Img {
-    #[inline]
-    fn at(&self, x: isize, y: isize) -> Vec3 {
-        let x = x.clamp(0, self.w as isize - 1) as usize;
-        let y = y.clamp(0, self.h as isize - 1) as usize;
-        self.px[y * self.w + x]
-    }
     /// Bilinear sample at continuous pixel coordinates (centres at +0.5).
     #[inline]
     fn bilinear(&self, x: f32, y: f32) -> Vec3 {
+        // Floor of values above -1 without a libm call.
         let (fx, fy) = (x - 0.5, y - 0.5);
-        let (x0, y0) = (fx.floor(), fy.floor());
-        let (tx, ty) = (fx - x0, fy - y0);
-        let (x0, y0) = (x0 as isize, y0 as isize);
-        let a = self.at(x0, y0) * (1.0 - tx) + self.at(x0 + 1, y0) * tx;
-        let b = self.at(x0, y0 + 1) * (1.0 - tx) + self.at(x0 + 1, y0 + 1) * tx;
+        let (x0, y0) = ((fx + 1.0) as isize - 1, (fy + 1.0) as isize - 1);
+        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let xa = x0.clamp(0, self.w as isize - 1) as usize;
+        let xb = (x0 + 1).clamp(0, self.w as isize - 1) as usize;
+        let ra = y0.clamp(0, self.h as isize - 1) as usize * self.w;
+        let rb = (y0 + 1).clamp(0, self.h as isize - 1) as usize * self.w;
+        let p = &self.px;
+        let a = p[ra + xa] * (1.0 - tx) + p[ra + xb] * tx;
+        let b = p[rb + xa] * (1.0 - tx) + p[rb + xb] * tx;
         a * (1.0 - ty) + b * ty
     }
-    /// Half size, 2x2 box (with a tent around it).
-    fn down(&self, threads: usize) -> Img {
+    /// Half size with a 4x4 tent (weights 1 2 2 1 each way), into `out`
+    /// (its memory is reused between samples).
+    fn down_into(&self, out: &mut Img, threads: usize) {
         let (w, h) = (self.w.div_ceil(2).max(1), self.h.div_ceil(2).max(1));
-        let mut px = vec![Vec3::ZERO; w * h];
+        out.w = w;
+        out.h = h;
+        out.px.resize(w * h, Vec3::ZERO);
+        let px = &mut out.px;
+        let cl = |v: isize, n: usize| v.clamp(0, n as isize - 1) as usize;
+        let xs: Vec<[usize; 4]> = (0..w).map(|x| core::array::from_fn(|k| cl(2 * x as isize - 1 + k as isize, self.w))).collect();
+        const WT: [f32; 4] = [1.0, 2.0, 2.0, 1.0];
         parallel_for_each(px.chunks_mut(w).enumerate(), threads, |(y, row)| {
+            let rows: [usize; 4] = core::array::from_fn(|k| cl(2 * y as isize - 1 + k as isize, self.h) * self.w);
             for (x, o) in row.iter_mut().enumerate() {
-                let (sx, sy) = (2 * x as isize, 2 * y as isize);
-                // 4x4 tent: inner 2x2 weighted 4, ring weighted 1/2/1.
-                let mut s = (self.at(sx, sy) + self.at(sx + 1, sy) + self.at(sx, sy + 1) + self.at(sx + 1, sy + 1)) * 4.0;
-                s += (self.at(sx - 1, sy) + self.at(sx - 1, sy + 1) + self.at(sx + 2, sy) + self.at(sx + 2, sy + 1) + self.at(sx, sy - 1) + self.at(sx + 1, sy - 1) + self.at(sx, sy + 2) + self.at(sx + 1, sy + 2)) * 2.0;
-                s += self.at(sx - 1, sy - 1) + self.at(sx + 2, sy - 1) + self.at(sx - 1, sy + 2) + self.at(sx + 2, sy + 2);
+                let mut s = Vec3::ZERO;
+                for (r, wy) in rows.iter().zip(WT) {
+                    let line = &self.px[*r..];
+                    let c = xs[x];
+                    s += (line[c[0]] + line[c[3]] + (line[c[1]] + line[c[2]]) * 2.0) * wy;
+                }
                 *o = s * (1.0 / 36.0);
             }
         });
-        Img { w, h, px }
     }
 }
 
 /// Add bloom (a soft glow of the parts brighter than the threshold) to the
 /// sample, as EEVEE's: prefilter with a soft knee, a pyramid of blurs whose
 /// depth the radius sets, then add `color * intensity` of it.
-pub(super) fn bloom(color: &mut [[f32; 4]], layout: &Layout, p: &BloomParams, threads: usize) {
+pub(super) fn bloom(color: &mut [[f32; 4]], layout: &Layout, p: &BloomParams, threads: usize, levels: &mut Vec<Img>) {
     let (w, h) = (layout.w, layout.h);
     if w < 2 || h < 2 || p.intensity <= 0.0 {
         return;
     }
-    // Prefilter at full size, row-major.
     let knee = p.knee.max(1e-5);
-    let mut base = Img { w, h, px: vec![Vec3::ZERO; w * h] };
-    parallel_for_each(base.px.chunks_mut(w).enumerate(), threads, |(y, row)| {
-        for (x, o) in row.iter_mut().enumerate() {
-            let c = color[layout.index(x, y)];
-            let mut v = Vec3::new(c[0], c[1], c[2]);
-            if !(v.x.is_finite() && v.y.is_finite() && v.z.is_finite()) {
-                continue;
-            }
-            if p.clamp > 0.0 {
-                let m = v.max_elem();
-                if m > p.clamp {
-                    v = v * (p.clamp / m);
-                }
-            }
-            let br = v.max_elem();
-            let rq = (br - p.threshold + knee).clamp(0.0, 2.0 * knee);
-            let rq = rq * rq / (4.0 * knee + 1e-5);
-            let contrib = (rq.max(br - p.threshold)) / br.max(1e-5);
-            *o = v * contrib.max(0.0);
-        }
-    });
     let maxdim = w.max(h) as f32;
     let logm = maxdim.log2() + p.radius.max(0.0) - 8.0;
     let iters = (logm.floor() as i32).clamp(1, 12) as usize;
     let spread = (0.5 + logm - iters as f32).clamp(0.5, 1.5);
-    let mut pyr = vec![base.down(threads)];
-    for _ in 1..iters {
-        let last = pyr.last().map(|l| l.down(threads));
-        match last {
-            Some(n) if n.w >= 2 && n.h >= 2 => pyr.push(n),
-            _ => break,
+    levels.resize_with(iters + 1, Img::default);
+    // Prefiltered at half size (each texel averages 2x2 pixels).
+    let prefilter = |c: [f32; 4]| -> Vec3 {
+        let mut v = Vec3::new(c[0], c[1], c[2]);
+        if !(v.x.is_finite() && v.y.is_finite() && v.z.is_finite()) {
+            return Vec3::ZERO;
         }
+        if p.clamp > 0.0 {
+            let m = v.max_elem();
+            if m > p.clamp {
+                v = v * (p.clamp / m);
+            }
+        }
+        let br = v.max_elem();
+        let rq = (br - p.threshold + knee).clamp(0.0, 2.0 * knee);
+        let rq = rq * rq / (4.0 * knee + 1e-5);
+        let contrib = (rq.max(br - p.threshold)) / br.max(1e-5);
+        v * contrib.max(0.0)
+    };
+    let half = &mut levels[1];
+    let (hw, hh) = (w.div_ceil(2), h.div_ceil(2));
+    half.w = hw;
+    half.h = hh;
+    half.px.resize(hw * hh, Vec3::ZERO);
+    parallel_for_each(half.px.chunks_mut(hw).enumerate(), threads, |(y, row)| {
+        let (y0, y1) = (2 * y, (2 * y + 1).min(h - 1));
+        for (x, o) in row.iter_mut().enumerate() {
+            let (x0, x1) = (2 * x, (2 * x + 1).min(w - 1));
+            let s = prefilter(color[layout.index(x0, y0)]) + prefilter(color[layout.index(x1, y0)]) + prefilter(color[layout.index(x0, y1)]) + prefilter(color[layout.index(x1, y1)]);
+            *o = s * 0.25;
+        }
+    });
+    // Down: level k + 1 is level k halved (stop at 2 pixels).
+    let mut n = 2;
+    while n <= iters {
+        let (a, b) = levels.split_at_mut(n);
+        let src = &a[n - 1];
+        if src.w < 4 || src.h < 4 {
+            break;
+        }
+        src.down_into(&mut b[0], threads);
+        n += 1;
     }
-    // Upsample: each level adds a tent-filtered copy of the one below.
-    while pyr.len() > 1 {
-        let low = pyr.pop().unwrap_or(Img { w: 1, h: 1, px: vec![Vec3::ZERO] });
-        let Some(high) = pyr.last_mut() else { break };
+    // Up: each level adds a tent-filtered copy of the one below.
+    for k in (2..n).rev() {
+        let (a, b) = levels.split_at_mut(k);
+        let (low, high) = (&b[0], &mut a[k - 1]);
         let (hw, sx, sy) = (high.w, low.w as f32 / high.w as f32, low.h as f32 / high.h as f32);
         parallel_for_each(high.px.chunks_mut(hw).enumerate(), threads, |(y, row)| {
             for (x, o) in row.iter_mut().enumerate() {
                 let (cx, cy) = ((x as f32 + 0.5) * sx, (y as f32 + 0.5) * sy);
-                let d = spread;
-                let mut s = low.bilinear(cx, cy) * 4.0;
-                s += (low.bilinear(cx - d, cy) + low.bilinear(cx + d, cy) + low.bilinear(cx, cy - d) + low.bilinear(cx, cy + d)) * 2.0;
-                s += low.bilinear(cx - d, cy - d) + low.bilinear(cx + d, cy - d) + low.bilinear(cx - d, cy + d) + low.bilinear(cx + d, cy + d);
-                *o += s * (1.0 / 16.0);
+                // A tent from four bilinear taps on the diagonals.
+                let d = spread * 0.75;
+                let s = low.bilinear(cx - d, cy - d) + low.bilinear(cx + d, cy - d) + low.bilinear(cx - d, cy + d) + low.bilinear(cx + d, cy + d);
+                *o += s * 0.25;
             }
         });
     }
-    let top = &pyr[0];
+    if n < 2 {
+        return;
+    }
+    let top = &levels[1];
     let (sx, sy) = (top.w as f32 / w as f32, top.h as f32 / h as f32);
     let tint = p.color * p.intensity;
     parallel_for_each(color.chunks_mut(TILE_PX).enumerate(), threads, |(t, col)| {
@@ -560,9 +598,9 @@ mod tests {
         c[layout.index(32, 32)] = [500.0, 500.0, 500.0, 1.0];
         let p = BloomParams { threshold: 0.8, knee: 0.5, radius: 6.5, color: Vec3::ONE, intensity: 0.05, clamp: 0.0 };
         let mut a = c.clone();
-        bloom(&mut a, &layout, &p, 1);
+        bloom(&mut a, &layout, &p, 1, &mut Vec::new());
         let mut b = c.clone();
-        bloom(&mut b, &layout, &p, 3);
+        bloom(&mut b, &layout, &p, 3, &mut Vec::new());
         assert_eq!(a, b);
         assert!(a[layout.index(36, 32)][0] > 0.1 + 1e-3);
         // Far corners get (almost) nothing; the dim pixels stay below threshold.

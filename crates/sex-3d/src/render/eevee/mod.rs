@@ -516,6 +516,7 @@ struct Scratch {
     spec: Vec<SpecPx>,
     sss: Vec<SssPx>,
     post: Vec<[f32; 4]>,
+    bloom: Vec<post::Img>,
     transparent_order: Vec<(f32, u32)>,
 }
 
@@ -996,7 +997,7 @@ impl Eevee {
         }
         if st.bloom {
             let p = post::BloomParams { threshold: st.bloom_threshold, knee: st.bloom_knee, radius: st.bloom_radius, color: Vec3::new(st.bloom_color[0], st.bloom_color[1], st.bloom_color[2]).max(Vec3::ZERO), intensity: st.bloom_intensity.max(0.0), clamp: st.bloom_clamp.max(0.0) };
-            post::bloom(&mut scr.color, &layout, &p, threads);
+            post::bloom(&mut scr.color, &layout, &p, threads, &mut scr.bloom);
         }
     }
 }
