@@ -9,7 +9,7 @@ import syscall_fuzz_gate as gate
 
 LINE='run fuzz 20000 4 proto'
 START='[fuzz.start] target=42 task=57 calls=20000 seed=4 proto=1 ops=112\n'
-SAVE='[spindle.session.saved] bytes=0 status=0\n'
+SAVE='[spindle.session.saved] bytes=0 status=0 programs=0\n'
 
 def busy(line=LINE):
     body=b'The disk is saving the session for a moment. Try again.\n'

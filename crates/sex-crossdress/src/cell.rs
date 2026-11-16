@@ -57,6 +57,11 @@ pub const TSS_SEL: u16 = 0x40;
 const GDT_LIMIT: u32 = 10 * 8 - 1;
 const IDT_LIMIT: u32 = 32 * 16 - 1;
 /// TSS: 104 bytes, then an I/O bitmap for ports 0-255 and its terminating byte.
+/// RFLAGS for ring-3 code: IF, the reserved bit, and IOPL 3. IOPL 3 lets the thunks' `out`
+/// reach the hypervisor without the TSS I/O bitmap check, which faulted (#GP) under Linux
+/// KVM on CI. Every port access exits the cell anyway, and only port 0xE0 is answered;
+/// `cli`/`sti` in a cell change only the cell's own (unused) interrupt flag.
+pub const USER_RFLAGS: u64 = 0x3202;
 const TSS_IOMAP: u64 = 104;
 const TSS_LIMIT: u32 = 104 + 32;
 
@@ -275,7 +280,7 @@ impl Cell {
         let seg = |selector: u16, access: u32, base: u64, limit: u32| Segment { base, limit, access, selector, _pad: [0; 3] };
         let data = seg(USER_DS, 0xC0F3, 0, 0xFFFF_FFFF);
         State {
-            regs: sex_pdx::vm::Regs { rip, rsp, rflags: 0x202, ..Default::default() },
+            regs: sex_pdx::vm::Regs { rip, rsp, rflags: USER_RFLAGS, ..Default::default() },
             cr0: 0x8001_0033, // PG | WP | NE | ET | MP | PE
             guest_cr3: self.guest_root,
             cr4: 0x620,       // OSXMMEXCPT | OSFXSR | PAE

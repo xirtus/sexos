@@ -223,7 +223,7 @@ pub fn read_context(c: &[u8], regs: &mut Regs) {
     for (at, f) in GPRS { *f(regs) = q(at); }
     regs.rip = q(0xF8);
     let flags = u32::from_le_bytes([c[0x44], c[0x45], c[0x46], c[0x47]]) as u64;
-    regs.rflags = (flags & 0x0DD5) | 0x202;
+    regs.rflags = (flags & 0x0DD5) | crate::cell::USER_RFLAGS;
 }
 
 #[cfg(test)]
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn context_round_trips_and_flags_are_tamed() {
-        let regs = Regs { rax: 1, rbx: 2, rcx: 3, rdx: 4, rsi: 5, rdi: 6, rbp: 7, r8: 8, r9: 9, r10: 10, r11: 11, r12: 12, r13: 13, r14: 14, r15: 15, rsp: 16, rip: 17, rflags: 0x246 };
+        let regs = Regs { rax: 1, rbx: 2, rcx: 3, rdx: 4, rsi: 5, rdi: 6, rbp: 7, r8: 8, r9: 9, r10: 10, r11: 11, r12: 12, r13: 13, r14: 14, r15: 15, rsp: 16, rip: 17, rflags: 0x3246 };
         let mut c = [0u8; CONTEXT_SIZE as usize];
         write_context(&mut c, &regs);
         assert_eq!(&c[0xF8..0x100], &17u64.to_le_bytes(), "Rip");
@@ -242,7 +242,7 @@ mod tests {
         assert_eq!(back, regs);
         c[0x44..0x48].copy_from_slice(&0x0003_3000u32.to_le_bytes()); // IOPL 3, VM, RF
         read_context(&c, &mut back);
-        assert_eq!(back.rflags, 0x202, "a handler cannot raise IOPL or enter v8086 mode");
+        assert_eq!(back.rflags, crate::cell::USER_RFLAGS, "a handler cannot enter v8086 mode or change IOPL");
     }
 
     #[test]
