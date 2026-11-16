@@ -114,6 +114,17 @@ impl<'f, 'a> Importer<'f, 'a> {
             "CompositorNodeOutputFile" => {
                 if let Some(s) = storage("NodeImageMultiFile") {
                     n.set_prop("base_path", Prop::String(s.string("base_path").unwrap_or_default()));
+                    if let Some(fm) = s.sub("format") {
+                        // R_IMF_PLANES_*: BW 8, RGB 24, RGBA 32; R_IMF_CHAN_DEPTH_16 is 1 << 4.
+                        let planes = match fm.num("planes").unwrap_or(32.0) as i64 {
+                            8 => "BW",
+                            24 => "RGB",
+                            _ => "RGBA",
+                        };
+                        n.set_prop("color_mode", Prop::Enum(planes.into()));
+                        let depth = if fm.num("depth").unwrap_or(0.0) as i64 == 1 << 4 { "16" } else { "8" };
+                        n.set_prop("color_depth", Prop::Enum(depth.into()));
+                    }
                 }
                 // One slot per input, from each socket's storage.
                 let slots: Vec<String> = f

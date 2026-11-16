@@ -53,7 +53,7 @@ use std::collections::HashMap;
 const NODE_HIDDEN: i64 = 1 << 3;
 const NODE_DO_OUTPUT: i64 = 1 << 6;
 const NODE_MUTED: i64 = 1 << 9;
-const NODE_CUSTOM_COLOR: i64 = 1 << 17;
+const NODE_CUSTOM_COLOR: i64 = 1 << 15;
 const SOCK_HIDDEN: i64 = 1 << 1;
 const NODE_LINK_MUTED: i64 = 1 << 4;
 
@@ -237,6 +237,8 @@ fn dims_name(d: f64) -> Prop {
 
 const NOISE_TYPES: [&str; 5] = ["MULTIFRACTAL", "FBM", "HYBRID_MULTIFRACTAL", "RIDGED_MULTIFRACTAL", "HETERO_TERRAIN"];
 const DISTRIBUTIONS: [&str; 5] = ["SHARP", "BECKMANN", "GGX", "ASHIKHMIN_SHIRLEY", "MULTI_GGX"];
+/// `SHD_SUBSURFACE_*` by value (0..2 are deprecated methods Blender versions to Burley).
+const SSS_METHODS: [&str; 6] = ["BURLEY", "BURLEY", "BURLEY", "BURLEY", "RANDOM_WALK", "RANDOM_WALK_SKIN"];
 
 pub(super) fn color_ramp(f: &BlendFile<'_>, ptr: u64) -> Option<ColorRamp> {
     let cb = f.view_ptr(ptr, &["ColorBand"])?;
@@ -493,7 +495,8 @@ impl<'f, 'a> Importer<'f, 'a> {
             "ShaderNodeVectorMath" => n.set_prop("operation", e(vector_math_from_file(c1 as i64))),
             "ShaderNodeMix" => {
                 if let Some(s) = storage(&["NodeShaderMix"]) {
-                    n.set_prop("data_type", pick(&["FLOAT", "VECTOR", "RGBA"], s.num("data_type").unwrap_or(2.0)));
+                    let dt = s.num("data_type").unwrap_or(2.0);
+                    n.set_prop("data_type", if dt == 14.0 { e("ROTATION") } else { pick(&["FLOAT", "VECTOR", "RGBA"], dt) });
                     n.set_prop("factor_mode", pick(&["UNIFORM", "NON_UNIFORM"], s.num("factor_mode").unwrap_or(0.0)));
                     n.set_prop("clamp_factor", Prop::Bool(s.num("clamp_factor").unwrap_or(1.0) != 0.0));
                     n.set_prop("clamp_result", Prop::Bool(s.num("clamp_result").unwrap_or(0.0) != 0.0));
@@ -559,10 +562,20 @@ impl<'f, 'a> Importer<'f, 'a> {
             }
             "ShaderNodeBsdfPrincipled" => {
                 n.set_prop("distribution", e(if c1 == 2.0 { "GGX" } else { "MULTI_GGX" }));
-                n.set_prop("subsurface_method", pick(&["CUBIC", "GAUSSIAN", "BURLEY", "RANDOM_WALK_SKIN", "RANDOM_WALK", "RANDOM_WALK"], c2 as f64));
+                // SHD_SUBSURFACE_*: BURLEY 3, RANDOM_WALK 4, RANDOM_WALK_SKIN 5 (older
+                // cubic/gaussian/compatible values read as Burley, as Blender versions them).
+                n.set_prop("subsurface_method", pick(&SSS_METHODS, c2 as f64));
             }
             "ShaderNodeBsdfGlossy" | "ShaderNodeBsdfAnisotropic" | "ShaderNodeBsdfGlass" | "ShaderNodeBsdfRefraction" => n.set_prop("distribution", pick(&DISTRIBUTIONS, c1)),
             "ShaderNodeBsdfToon" => n.set_prop("component", pick(&["DIFFUSE", "GLOSSY"], c1)),
+            "ShaderNodeBsdfHair" => n.set_prop("component", pick(&["Reflection", "Transmission"], c1)),
+            "ShaderNodeSubsurfaceScattering" => n.set_prop("falloff", pick(&SSS_METHODS, c1)),
+            "ShaderNodeBsdfHairPrincipled" => {
+                if let Some(s) = storage(&["NodeShaderHairPrincipled"]) {
+                    n.set_prop("model", pick(&["CHIANG", "HUANG"], s.num("model").unwrap_or(0.0)));
+                    n.set_prop("parametrization", pick(&super::write_nodes::HAIR_PARAMETRIZATION, s.num("parametrization").unwrap_or(0.0)));
+                }
+            }
             "ShaderNodeBsdfSheen" => n.set_prop("distribution", pick(&["ASHIKHMIN", "MICROFIBER"], c1)),
             "ShaderNodeAmbientOcclusion" => {
                 n.set_prop("samples", Prop::Int(c1.max(1.0) as i32));

@@ -675,7 +675,8 @@ pub fn scene_file(c: Cfg) -> Vec<u8> {
         } else {
             w.add("DATA", "bNodeSocketValueFloat", &[("value", n(val[0])), ("max", n(1.))])
         };
-        let ident = name.replace(' ', "_");
+        // Blender names a template socket's identifier after the socket.
+        let ident = name.to_string();
         let sk = w.inst("bNodeSocket", &[("next", p(next.unwrap_or(0))), ("identifier", s(&ident)), ("name", s(name)), ("default_value", p(dv))]);
         w.put(ptr, "DATA", "bNodeSocket", 1, sk);
     }
@@ -1444,7 +1445,7 @@ pub fn nodes_file(c: Cfg) -> Vec<u8> {
     noisen.storage = noise;
     noisen.parent = Some(10);
     let mut invert = Nd::new("Invert", "ShaderNodeInvert", vec![Sk("Fac".into(), "Fac".into(), 0, Dv::F(1.0), 2), sk("Color", "Color", 2, Dv::C([0.0, 0.0, 0.0, 1.0]))], vec![sk("Color", "Color", 2, Dv::No)]);
-    invert.flag = (1 << 9) | (1 << 3) | (1 << 17);
+    invert.flag = (1 << 9) | (1 << 3) | (1 << 15);
     invert.color = [0.1, 0.2, 0.3];
     let mut curve = Nd::new("RGB Curves", "ShaderNodeRGBCurve", vec![sk("Fac", "Fac", 0, Dv::F(1.0))], vec![sk("Color", "Color", 2, Dv::No)]);
     curve.storage = curves_ptr;

@@ -383,13 +383,13 @@ fn object_animation() {
         assert_eq!(actions.len(), 1, "{c:?}");
         let a = &actions[0];
         assert_eq!((a.object.as_str(), a.action.as_str()), ("Anim", "AnimAction"), "{c:?}");
-        let key = |frame: f32, value: f32, interpolation: u8| BlendKey { frame, value, interpolation };
+        let key = |frame: f32, value: f32, interpolation: u8| BlendKey { frame, value, interpolation, handles: None };
         let want: Vec<(&str, usize, Vec<BlendKey>)> = vec![
             ("location", 0, vec![key(1., 0., 2), key(10., 5., 1)]),
             ("rotation_euler", 2, vec![key(1., 0., 0), key(20., 3., 2)]),
             ("scale", 1, vec![key(1., 1., INTERP_LINEAR), key(2., 2., INTERP_LINEAR)]),
         ];
-        let got: Vec<(&str, usize, Vec<BlendKey>)> = a.curves.iter().map(|f| (f.path.as_str(), f.index, f.keys.clone())).collect();
+        let got: Vec<(&str, usize, Vec<BlendKey>)> = a.curves.iter().map(|f| (f.path.as_str(), f.index, f.keys.iter().map(|k| BlendKey { handles: None, ..*k }).collect())).collect();
         assert_eq!(got, want, "{c:?}");
         // The fixture also wrote a non-transform curve and an empty one.
         assert_eq!(blendgen::extras_curves().len(), 5);

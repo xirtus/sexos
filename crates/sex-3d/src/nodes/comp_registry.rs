@@ -928,6 +928,8 @@ const KUWAHARA: Items = &[("CLASSIC", "Classic"), ("ANISOTROPIC", "Anisotropic")
 const PREFILTER: Items = &[("NONE", "None"), ("FAST", "Fast"), ("ACCURATE", "Accurate")];
 const UV_FILTER: Items = &[("NEAREST", "Nearest"), ("ANISOTROPIC", "Anisotropic")];
 const FILE_FORMATS: Items = &[("PNG", "PNG")];
+const FILE_PLANES: Items = &[("BW", "BW"), ("RGB", "RGB"), ("RGBA", "RGBA")];
+const FILE_DEPTHS: Items = &[("8", "8"), ("16", "16")];
 
 /// Dropdown choices of compositor node properties (empty when unknown).
 pub fn comp_items(idname: &str, prop: &str) -> Items {
@@ -967,6 +969,8 @@ pub fn comp_items(idname: &str, prop: &str) -> Items {
         ("CompositorNodeDenoise", "prefilter") => PREFILTER,
         ("CompositorNodeMapUV", "filter_type") => UV_FILTER,
         ("CompositorNodeOutputFile", "file_format") => FILE_FORMATS,
+        ("CompositorNodeOutputFile", "color_mode") => FILE_PLANES,
+        ("CompositorNodeOutputFile", "color_depth") => FILE_DEPTHS,
         _ => &[],
     }
 }
