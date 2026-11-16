@@ -39,6 +39,8 @@ mod decorations;
 mod decorations_glue;
 mod tray_items;
 mod tray_items_glue;
+mod layouts;
+mod layouts_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -8842,6 +8844,7 @@ unsafe fn tile_active_scene_frames() {
     let tiling = wm_tiling();
     let mut rects = [wm::Rect::default(); MAX_FRAMES];
     wm::tile(&tiling, wm_work_area(), &mut rects[..count]);
+    layouts_glue::tile(&tiling, &order[..count], &mut rects[..count]);
     static mut WM_LAYOUT_RECORD_BUDGET: u32 = 256;
     if WM_LAYOUT_RECORD_BUDGET > 0 {
         WM_LAYOUT_RECORD_BUDGET -= 1;
@@ -10704,7 +10707,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
             None => false,
         },
         A::Swap(dir) => match wm_neighbour(dir, true) {
-            Some((a, b, _)) if WM_ORDER.swap(a, b) => { tile_active_scene_frames(); true }
+            Some((a, b, _)) if WM_ORDER.swap(a, b) => { layouts_glue::swapped(a, b); tile_active_scene_frames(); true }
             _ => false,
         },
         A::Close => close_focused_tab_or_frame_safe(),
@@ -10743,6 +10746,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Lock => lock::lock(),
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
         A::Bluetooth => bt_panel::toggle(),
+        A::Group | A::Ungroup | A::NextTab | A::PrevTab | A::ToggleDwindle => layouts_glue::action(action),
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
         action, done as u8, before.0, ACTIVE_SCENE_IDX, before.1, FOCUSED_SURFACE_ID, wm_tiling().layout.name());
@@ -12830,10 +12834,12 @@ unsafe fn sync_scene_visibility() {
     for f in FRAMES.iter() {
         if let Some(frame) = f {
             let in_active = frame.scene_id == ACTIVE_SCENE_IDX;
-            for tab in frame.tabs.iter() {
+            for (ti, tab) in frame.tabs.iter().enumerate() {
                 if let Some(t) = tab {
                     let sid = t.surface_id;
-                    if surface_is_alive(sid) && in_active && frame.flags & FRAME_FLAG_MINIMIZED == 0 {
+                    // A group's background tabs stay hidden (slice S3).
+                    let behind = layouts_glue::tab_hidden(frame.frame_id, ti);
+                    if surface_is_alive(sid) && in_active && frame.flags & FRAME_FLAG_MINIMIZED == 0 && !behind {
                         // Re-activate surface on display.
                         let bounds = get_surface_bounds(sid);
                         if let Some((rx, ry, rw, rh)) = bounds {
@@ -12841,7 +12847,7 @@ unsafe fn sync_scene_visibility() {
                                 (ry as u64) << 32 | rx as u64,
                                 (rh as u64) << 32 | rw as u64);
                         }
-                    } else if surface_is_alive(sid) && (!in_active || frame.flags & FRAME_FLAG_MINIMIZED != 0) {
+                    } else if surface_is_alive(sid) && (!in_active || frame.flags & FRAME_FLAG_MINIMIZED != 0 || behind) {
                         // Hide surface on display.
                         pdx_call(SLOT_DISPLAY, 0xEE, sid, 0, 0);
                     }
@@ -26307,7 +26313,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); tray_items_glue::poll(); }
+        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         #[cfg(sexos_input_payload_proof)]

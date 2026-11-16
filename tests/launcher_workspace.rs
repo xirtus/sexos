@@ -11,6 +11,8 @@ use launcher::{Evidence,LiveAction};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]pub enum Admission{Accepted,Full,Rejected(u64)}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]pub enum LatestPoll{Idle,Deferred,Applied(Operation),Rejected(u64)}
 mod linen_text_delivery{pub use crate::{Admission,LatestPoll};}
+// No tab groups here: every tab of a shown frame shows.
+mod layouts_glue{pub unsafe fn tab_hidden(_:u32,_:usize)->bool{false}}
 pub const ERR_SERVICE_NOT_READY:u64=9;
 static mut NOW:u64=0;
 pub fn get_ticks()->u64{unsafe{NOW}}
