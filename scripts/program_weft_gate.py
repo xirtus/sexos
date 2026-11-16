@@ -25,7 +25,7 @@ def main():
   for k in names:q.key(k);time.sleep(.08)
  def run(line):
   g['focus'](153);time.sleep(.5)
-  keys(['spc' if k==' ' else k for k in line]);q.key('ret')
+  keys([{' ':'spc','-':'minus'}.get(k,k) for k in line]);q.key('ret')
  def move(x,y):
   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.3)
  def button(name,down):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':name}}]});time.sleep(.2)
