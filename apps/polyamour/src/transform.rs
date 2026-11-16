@@ -243,6 +243,8 @@ struct VertOrig {
 enum Targets {
     Objects(Vec<ObjOrig>),
     Verts(VertOrig),
+    /// Bones (Edit and Pose Mode) and lattice points (rig.rs).
+    Rig(crate::rig::xform::Targets),
 }
 
 /// What a key did to a running transform.
@@ -284,6 +286,8 @@ pub struct Modal {
     pub xf: Xf,
     /// Header text ("D: 2.0000 m (2, 0, 0) along global X").
     pub header: String,
+    /// Ctrl+R in armature Edit Mode: the rotation rolls the bones.
+    pub roll: bool,
 }
 
 fn basis_of(m: &Mat4) -> [Vec3; 3] {
@@ -340,7 +344,11 @@ impl Modal {
     /// Start a transform of the selection, or None when nothing is selected.
     pub fn start(d: &Doc, mode: TMode, proj: &Proj, mouse: (f32, f32)) -> Option<Modal> {
         let pivot = d.pivot;
-        let (targets, points) = if d.mode == Mode::Edit {
+        let rig = d.mode == Mode::Pose || crate::rig::edit_armature(d).is_some() || crate::rig::edit_lattice(d).is_some();
+        let (targets, points) = if rig {
+            let (t, pts) = crate::rig::xform::start(d)?;
+            (Targets::Rig(t), pts)
+        } else if d.mode == Mode::Edit {
             let (oi, mi) = crate::edit::active_mesh(d)?;
             let sel = crate::edit::selected_verts(d);
             if sel.is_empty() {
@@ -401,6 +409,7 @@ impl Modal {
             undo_recorded: false,
             xf: Xf::Move(Vec3::ZERO),
             header: String::new(),
+            roll: false,
         };
         m.last_angle = m.screen_angle(proj, mouse);
         m.update_weights(d);
@@ -707,6 +716,7 @@ impl Modal {
                     }
                 }
             }
+            Targets::Rig(t) => t.restore(d),
         }
         d.touch();
     }
@@ -756,6 +766,27 @@ impl Modal {
                     ob.transform = t;
                 }
             }
+            Targets::Rig(t) => {
+                if self.roll {
+                    if let Xf::Rot(_, ang) = xf {
+                        t.roll(d, ang);
+                    }
+                } else {
+                    let individual = self.pivot == Pivot::IndividualOrigins;
+                    let affine = |pivot: Vec3| -> Mat4 {
+                        let c = if individual { pivot } else { center };
+                        match xf {
+                            Xf::Move(dv) => Mat4::translation(dv),
+                            Xf::Rot(axis, ang) => Mat4::translation(c) * Mat4::from_trs(Vec3::ZERO, Quat::from_axis_angle(axis, ang), Vec3::ONE) * Mat4::translation(-c),
+                            Xf::Scale(f) => {
+                                let cols = [Vec3::X, Vec3::Y, Vec3::Z].map(|a| scale_vec(f, a, 1.0));
+                                Mat4::translation(c) * Mat4::from_mat3(sex_3d::math::Mat3::from_cols(cols[0], cols[1], cols[2]), Vec3::ZERO) * Mat4::translation(-c)
+                            }
+                        }
+                    };
+                    t.apply(d, &affine, individual, matches!(xf, Xf::Move(_)));
+                }
+            }
             Targets::Verts(v) => {
                 let Some(m) = d.scene.meshes.get_mut(v.mesh) else { return };
                 if m.positions.len() != v.orig.len() {
@@ -780,9 +811,12 @@ impl Modal {
     pub fn confirm(&mut self, d: &mut Doc, proj: &Proj) {
         if !self.undo_recorded {
             self.restore(d);
-            d.push_undo(self.mode.undo_label());
+            d.push_undo(if self.roll { "Roll" } else { self.mode.undo_label() });
         }
         self.apply(d, proj);
+        if d.mode == Mode::Pose {
+            crate::anim::autokey_bones(d);
+        }
     }
 
     fn header_text(&self, d: &Doc) -> String {
@@ -817,6 +851,10 @@ impl Modal {
                     None => format!("Dx: {:.4} m   Dy: {:.4} m   Dz: {:.4} m ({:.4} m)", dv.x, dv.y, dv.z, dv.length()),
                 },
             },
+            Xf::Rot(_, ang) if self.roll => {
+                let v = typed.clone().unwrap_or_else(|| format!("{:.2}°", ang.to_degrees()));
+                format!("Roll: {v}")
+            }
             Xf::Rot(_, ang) => {
                 let v = typed.clone().unwrap_or_else(|| format!("{:.2}°", ang.to_degrees()));
                 match self.constraint {

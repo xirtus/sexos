@@ -203,8 +203,12 @@ static mut LAST_PLAYED: Option<usize> = None;
 fn played() -> &'static mut [u32; STREAMS] { unsafe { &mut *core::ptr::addr_of_mut!(PLAYED) } }
 fn last_played() -> &'static mut Option<usize> { unsafe { &mut *core::ptr::addr_of_mut!(LAST_PLAYED) } }
 
-/// Master gain in 1/65536, 0 while muted.
-fn master_gain() -> u32 { let m = settings(); if m.muted { 0 } else { mixer::master_gain(m.master) } }
+/// Master gain in 1/65536, 0 while muted. A headset doing AVRCP absolute volume
+/// applies the master volume itself (Cufflinks mirrors it there): full scale for it.
+fn master_gain() -> u32 {
+    let m = settings();
+    if m.muted { 0 } else if bt_ring().is_some_and(|b| b.headset_volume()) { 65536 } else { mixer::master_gain(m.master) }
+}
 
 #[derive(Clone, Copy)]
 /// A program's stream; `frac` is where between two of its frames the next output
@@ -527,6 +531,9 @@ static mut BT_ON: bool = false;
 fn bt_ring() -> Option<sex_pdx::bt_audio::Shared> { unsafe { *core::ptr::addr_of!(BT) } }
 fn bt_was_on() -> bool { unsafe { *core::ptr::addr_of!(BT_ON) } }
 
+/// The master volume for Cufflinks (a headset with absolute volume follows it).
+fn bt_publish() { if let Some(b) = bt_ring() { let m = settings(); b.set_master(m.master, m.muted); } }
+
 fn bt_init() {
     use sex_pdx::bt_audio as b;
     let ok = sex_pdx::memory_region_info(b::SLOT).ok().filter(|i| i.region_id == b::REGION_ID && i.length == b::BYTES
@@ -534,6 +541,7 @@ fn bt_init() {
         .and_then(|_| sex_pdx::memory_region_full_view(b::SLOT, m::QUERY_VIEW | m::READ | m::WRITE).ok())
         .filter(|v| v.virtual_address != 0 && v.length >= b::BYTES);
     if let Some(v) = ok { unsafe { *core::ptr::addr_of_mut!(BT) = Some(b::Shared::at(v.virtual_address as *mut u8)) }; }
+    bt_publish();
     sex_pdx::serial_record!("[bell.bt.route] region={}", ok.is_some() as u8);
 }
 
@@ -757,6 +765,7 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
         }
         _ => return mixer::REFUSED,
     };
+    bt_publish();
     sex_pdx::serial_record!("[bell.mixer] action={} master={} muted={} reply={:#x}", action, m.master, m.muted as u8, reply);
     reply
 }

@@ -32,6 +32,11 @@ fn main() {
     let left = ui.column(split);
     ui.text(left, "Weft widgets", TextStyle::Title);
     ui.paragraph(left, "Buttons, fields, checks, switches, radios, sliders and progress bars, laid out by taffy and painted with sex-font text.");
+    let styles = ui.row(left);
+    for (t, e) in [("Regular", weft::FontStyle::REGULAR), ("Bold", weft::FontStyle::BOLD), ("Italic", weft::FontStyle::ITALIC), ("Bold italic", weft::FontStyle::BOLD_ITALIC)] {
+        let l = ui.label(styles, t); ui.set_emphasis(l, Some(e));
+    }
+    let m = ui.text(styles, "mono bold", TextStyle::Mono); ui.set_emphasis(m, Some(weft::FontStyle::BOLD));
     let row = ui.row(left);
     let b = ui.button(row, "Primary"); ui.set_button_style(b, weft::ButtonStyle::Primary);
     ui.button(row, "Normal");

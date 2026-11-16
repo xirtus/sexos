@@ -10,10 +10,25 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use sex_font::{Font, GlyphId};
+use sex_font::{Font, GlyphId, Style, Synthetic};
 
+/// A typeface: Geist Sans or Geist Mono, regular, bold, italic or both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Face { Sans, Mono }
+pub struct Face { pub mono: bool, pub style: Style }
+
+#[allow(non_upper_case_globals)]
+impl Face {
+    pub const Sans: Face = Face { mono: false, style: Style::REGULAR };
+    pub const Mono: Face = Face { mono: true, style: Style::REGULAR };
+    /// This face in bold.
+    pub const fn bold(self) -> Face { Face { mono: self.mono, style: Style { bold: true, italic: self.style.italic } } }
+    /// This face in italic.
+    pub const fn italic(self) -> Face { Face { mono: self.mono, style: Style { bold: self.style.bold, italic: true } } }
+    /// This face with `style`.
+    pub const fn with(self, style: Style) -> Face { Face { mono: self.mono, style } }
+    /// Font id of the Geist file: 0..4 Sans, 4..8 Mono.
+    fn id(self) -> u8 { (self.mono as u8) * 4 + self.style.index() as u8 }
+}
 
 /// One drawn glyph: coverage bytes and where they sit relative to the pen.
 pub struct Glyph {
@@ -27,14 +42,14 @@ pub struct Glyph {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct Key { font: u8, glyph: u16, size: u32, phase: u8 }
+struct Key { font: u8, glyph: u16, size: u32, phase: u8, style: u8 }
 
 /// Subpixel positions a glyph is drawn at: quarter pixels.
 const PHASES: i32 = 4;
 
 pub struct Fonts {
-    sans: Font<'static>,
-    mono: Font<'static>,
+    /// The eight Geist faces, by [`Face::id`].
+    geist: [Font<'static>; 8],
     #[cfg(feature = "fallback-fonts")]
     fallback: Option<alloc::boxed::Box<sex_font::fallback::Fallback<'static>>>,
     cache: BTreeMap<Key, Glyph>,
@@ -53,8 +68,10 @@ impl Default for Fonts {
 impl Fonts {
     pub fn new() -> Fonts {
         Fonts {
-            sans: Font::new(sex_font::GEIST_SANS).expect("Geist Sans parses"),
-            mono: Font::new(sex_font::GEIST_MONO).expect("Geist Mono parses"),
+            geist: core::array::from_fn(|i| {
+                let style = Style { bold: i & 1 != 0, italic: i & 2 != 0 };
+                Font::new(sex_font::geist(i >= 4, style)).expect("Geist parses")
+            }),
             #[cfg(feature = "fallback-fonts")]
             fallback: sex_font::fallback::Fallback::embedded().map(alloc::boxed::Box::new),
             cache: BTreeMap::new(),
@@ -63,12 +80,11 @@ impl Fonts {
         }
     }
 
-    fn primary(&self, face: Face) -> &Font<'static> { match face { Face::Sans => &self.sans, Face::Mono => &self.mono } }
+    fn primary(&self, face: Face) -> &Font<'static> { &self.geist[face.id() as usize] }
 
     fn font(&self, id: u8) -> Option<&Font<'static>> {
         match id {
-            0 => Some(&self.sans),
-            1 => Some(&self.mono),
+            0..=7 => Some(&self.geist[id as usize]),
             #[cfg(feature = "fallback-fonts")]
             n => self.fallback.as_ref().and_then(|f| f.font(n - 10)),
             #[cfg(not(feature = "fallback-fonts"))]
@@ -76,11 +92,12 @@ impl Fonts {
         }
     }
 
-    /// Which font draws `c` in `face`, and its glyph.
+    /// Which font draws `c` in `face`, and its glyph. Geist fonts come in every
+    /// style; the fallbacks are regular and get a synthetic one (see [`Self::synth`]).
     fn resolve(&self, face: Face, c: char) -> Option<(u8, GlyphId)> {
-        let first = match face { Face::Sans => 0u8, Face::Mono => 1 };
+        let first = face.id();
         if let Some(g) = self.primary(face).glyph(c as u32) { return Some((first, g)); }
-        let other = 1 - first;
+        let other = Face { mono: !face.mono, style: face.style }.id();
         if let Some(g) = self.font(other).and_then(|f| f.glyph(c as u32)) { return Some((other, g)); }
         #[cfg(feature = "fallback-fonts")]
         if let Some(fb) = &self.fallback {
@@ -88,6 +105,9 @@ impl Fonts {
         }
         None
     }
+
+    /// The synthetic style font `id` needs to draw `face`: none for Geist.
+    fn synth(id: u8, face: Face) -> Synthetic { if id < 8 { Synthetic::NONE } else { Synthetic::for_style(face.style) } }
 
     /// Size in sex-font's units (1/64 pixel per em) for `px` pixels.
     fn units(px: f32) -> u32 { (px * 64.0 + 0.5).max(64.0) as u32 }
@@ -112,7 +132,7 @@ impl Fonts {
         for c in text.chars() {
             let r = self.resolve(face, c);
             let mut adv = match r {
-                Some((id, g)) => self.font(id).map_or(0, |f| f.advance(g, s)),
+                Some((id, g)) => self.font(id).map_or(0, |f| f.advance_synthetic(g, s, Self::synth(id, face))),
                 // Missing glyphs take the width of a box.
                 None => (px * 0.6 * 256.0) as i32,
             };
@@ -136,14 +156,16 @@ impl Fonts {
     pub fn glyph(&mut self, face: Face, c: char, px: f32, phase: u8) -> Option<&Glyph> {
         let (id, g) = self.resolve(face, c)?;
         let size = Self::units(px);
-        let key = Key { font: id, glyph: g.0, size, phase };
+        let synth = Self::synth(id, face);
+        let key = Key { font: id, glyph: g.0, size, phase, style: if id < 8 { 0 } else { face.style.index() as u8 } };
         if !self.cache.contains_key(&key) {
             if self.cached_bytes > CACHE_BYTES { self.cache.clear(); self.cached_bytes = 0; }
             let font = self.font(id)?;
             let asc = font.ascender(size) / 256 + 2;
             let desc = -font.descender(size) / 256 + 2;
-            let adv = font.advance(g, size) / 256;
-            let pad = (px as i32) / 3 + 2;
+            let adv = font.advance_synthetic(g, size, synth) / 256;
+            // Room for overhang, and for a synthetic lean (about a fifth of the ascent).
+            let pad = (px as i32) / 3 + 2 + if synth.slant != 0 { asc / 4 } else { 0 };
             let w = (adv + 2 * pad).max(1) as usize;
             let h = (asc + desc).max(1) as usize;
             let need = sex_font::raster::scratch_len(w, h);
@@ -151,7 +173,7 @@ impl Fonts {
             if acc.len() < need { acc.resize(need, 0); }
             let mut coverage = vec![0u8; w * h];
             let x = pad * 256 + phase as i32 * 256 / PHASES;
-            let drawn = self.font(id).map_or(false, |font| font.draw(g, size, x, asc * 256, w, h, &mut acc[..need], &mut coverage));
+            let drawn = self.font(id).map_or(false, |font| font.draw_synthetic(g, size, x, asc * 256, w, h, &mut acc[..need], &mut coverage, synth));
             self.acc = acc;
             if !drawn { return None; }
             self.cached_bytes += coverage.len() + 32;
@@ -234,6 +256,17 @@ mod tests {
         assert!(f.measure(Face::Sans, 28.0, "Hello") > w * 1.9);
         let g = f.glyph(Face::Sans, 'H', 14.0, 0).unwrap();
         assert!(g.coverage.iter().filter(|c| **c > 128).count() > 10);
+    }
+    #[test]
+    fn bold_and_italic_faces() {
+        let mut f = Fonts::new();
+        let ink = |f: &mut Fonts, face: Face| f.glyph(face, 'n', 20.0, 0).unwrap().coverage.iter().map(|c| *c as u32).sum::<u32>();
+        let (r, b) = (ink(&mut f, Face::Sans), ink(&mut f, Face::Sans.bold()));
+        assert!(b as f32 > r as f32 * 1.3, "{r} {b}");
+        assert!(f.measure(Face::Sans.bold(), 14.0, "Hello") > f.measure(Face::Sans, 14.0, "Hello"));
+        assert!(ink(&mut f, Face::Mono.bold().italic()) > ink(&mut f, Face::Mono));
+        // Each face caches its own glyphs.
+        assert_ne!(ink(&mut f, Face::Sans.italic()), r);
     }
     #[test]
     fn wraps_at_spaces() {

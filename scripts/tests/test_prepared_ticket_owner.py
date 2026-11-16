@@ -40,16 +40,16 @@ static mut LIVE:[bool;2]=[true,true];
 static mut PREPARED:([u8;64],usize,u32)=([0;64],0,0);
 static mut PREPARED_ARGS:([u8;64],usize)=([0;64],0);
 static mut PREPARED_OWNER:Option<TicketOwner>=None;
-static mut PREPARED_LAUNCHER:Option<usize>=None;
+static mut PREPARED_LAUNCHER:(Option<usize>,Option<usize>)=(None,None);
 static mut LOADED:([u8;32],usize)=([0;32],0);
 static mut LOADED_ARGS:([u8;64],usize)=([0;64],0);
 static mut LOADED_LAUNCHER:Option<usize>=None;
 fn program_index(pd:u32)->Option<usize>{match pd{42=>Some(0),43=>Some(1),_=>None}}
 fn program_live(pd:u32,task:u32)->bool{program_index(pd).is_some_and(|k|unsafe{CURRENT[k]==task&&LIVE[k]})}
 fn read_program(_: &[u8],_: &mut[u8],_:bool)->Program{Program::Loaded(1)}
-unsafe fn seed(owner:Option<TicketOwner>,relay:Option<usize>){
+unsafe fn seed(owner:Option<TicketOwner>,relay:Option<usize>,row:Option<usize>){
  PREPARED.0[..8].copy_from_slice(b"/bin/app");PREPARED.1=8;PREPARED.2=7;
- PREPARED_OWNER=owner;PREPARED_LAUNCHER=relay;
+ PREPARED_OWNER=owner;PREPARED_LAUNCHER=(relay,row);
  PREPARED_ARGS.0[..10].copy_from_slice(b"@/old-only");PREPARED_ARGS.1=10;
  LOADED_ARGS.1=0;LOADED_LAUNCHER=None;
 }
@@ -59,24 +59,24 @@ fn denied(requester:u32){assert!(matches!(read_ticket(7,requester,&mut[]).0,Prog
 #[test]fn exact_current_parent_spindle_and_terminal_work_but_foreign_or_reused_tasks_do_not(){unsafe{
  let owner=Some(TicketOwner{target:42,task:77});
  // A generic ticket cannot be consumed under Spindle's requester0 or another app.
- seed(owner,None);denied(0);denied(43);denied(99);
+ seed(owner,None,Some(0));denied(0);denied(43);denied(99);
  assert!(matches!(read_ticket(7,42,&mut[]).0,Program::Loaded(1)));
  assert_eq!(LOADED_ARGS.1,10);assert!(LOADED_LAUNCHER.is_none());
  assert!(matches!(read_ticket(7,42,&mut[]).0,Program::Absent));
  // Exact old parent becomes invalid when the row changes tasks, even if bound anew.
- seed(owner,Some(0));CURRENT[0]=99;denied(42);
+ seed(owner,Some(5),Some(0));CURRENT[0]=99;denied(42);
  BINDINGS[0]=Some(Binding{task:99});denied(42);
  CURRENT[0]=77;BINDINGS[0]=Some(Binding{task:77});
  assert!(matches!(read_ticket(7,42,&mut[]).0,Program::Loaded(1)));
- assert_eq!(LOADED_LAUNCHER,Some(0));
+ assert_eq!(LOADED_LAUNCHER,Some(5));
  // Liveness, missing bindings and reserved zero identity fail closed.
- seed(owner,None);LIVE[0]=false;denied(42);LIVE[0]=true;
+ seed(owner,None,Some(0));LIVE[0]=false;denied(42);LIVE[0]=true;
  BINDINGS[0]=None;denied(42);BINDINGS[0]=Some(Binding{task:0});CURRENT[0]=0;denied(42);
  BINDINGS[0]=Some(Binding{task:77});CURRENT[0]=77;
- // Relay metadata is never allowed to override exact task ownership.
- seed(owner,Some(1));denied(42);
- seed(None,None);denied(42);assert!(matches!(read_ticket(7,0,&mut[]).0,Program::Loaded(1)));
- seed(owner,None);assert!(matches!(read_ticket((1u64<<32)|7,42,&mut[]).0,Program::Absent));
+ // Only the program row that prepared the ticket may start it, whatever its relay.
+ seed(owner,Some(1),Some(1));denied(42);seed(owner,Some(0),None);denied(42);
+ seed(None,None,None);denied(42);assert!(matches!(read_ticket(7,0,&mut[]).0,Program::Loaded(1)));
+ seed(owner,None,Some(0));assert!(matches!(read_ticket((1u64<<32)|7,42,&mut[]).0,Program::Absent));
 }}
 #[test]fn stale_main_calls_cannot_mint_or_control_launches_and_worker_data_io_still_works(){
  assert!(bound_sender(42,77,77,true));assert!(!bound_sender(42,99,77,true));
@@ -102,10 +102,11 @@ fn denied(requester:u32){assert!(matches!(read_ticket(7,requester,&mut[]).0,Prog
         self.assertIn('bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)', handle)
         request = function(source, 'fn handle_request(')
         self.assertIn('current_ticket_owner(caller)', request)
-        self.assertIn('run(fs, r, path, data, owner, relay)', request)
+        self.assertIn('run(fs, r, path, data, owner)', request)
         prepare = function(source, 'fn prepare(')
         self.assertIn('PREPARED_OWNER = owner', prepare)
-        self.assertNotIn('PREPARING_FOR', source)  # no stale implicit context after failed prepare
+        # Every PREPARE sets its context afresh, so a refused one leaves nothing for the next.
+        self.assertIn('if r.kind == w::PREPARE { unsafe { PREPARING_ROW = program; PREPARING_FOR = None; } }', request)
         trampoline = (ROOT / 'servers/sexfiles/src/trampoline.rs').read_text()
         self.assertIn('fs_service::handle(caller,msg.caller_task,msg.arg0,msg.arg1,msg.arg2)', trampoline)
         shell = (ROOT / 'servers/silk-shell/src/main.rs').read_text()

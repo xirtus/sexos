@@ -99,6 +99,11 @@ pub const OFFER: u8 = 29;
 /// grants it holds. Without it a program's PREPARE is a terminal's (`console_relay`), which
 /// needs the terminal grant.
 pub const PREPARE_LAUNCH: u64 = 1;
+/// PREPARE's `offset` (low byte) for a program starting a run whose standard streams,
+/// environment or working folder it hands over (`console_relay::pipe_prepare` adds its
+/// slot and stdio word). The same checks as `PREPARE_LAUNCH`; the run is attached to the
+/// starter's relay slot.
+pub const PREPARE_PIPED: u64 = 2;
 /// Completed file-payload device reads charged only to this live client's READ requests.
 /// Empty path/offset/length; data is three little-endian u64 values. Metadata
 /// reads are excluded; controller/host caches are outside this measurement.

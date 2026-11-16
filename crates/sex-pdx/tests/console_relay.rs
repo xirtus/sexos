@@ -21,8 +21,105 @@ fn grants_and_paths_dropped() {
 }
 #[test]
 fn status_round_trip() {
-    let s = Status { state: ENDED, code: 3, target: 42 };
+    let s = Status { state: ENDED, mode: RAW | NO_ECHO, code: 3, target: 42, task: 7 };
     let mut b = [0; STATUS_BYTES];
     s.encode(&mut b);
     assert_eq!(Status::decode(&b), s);
+}
+#[test]
+fn status_reads_as_before_modes() {
+    // A status written before modes and tasks existed: byte 1 and bytes 12..16 were 0.
+    let mut b = [0u8; STATUS_BYTES];
+    b[0] = RUNNING;
+    b[4..8].copy_from_slice(&5u32.to_le_bytes());
+    b[8..12].copy_from_slice(&40u32.to_le_bytes());
+    assert_eq!(Status::decode(&b), Status { state: RUNNING, mode: 0, code: 5, target: 40, task: 0 });
+    // Unknown mode bits are dropped.
+    b[1] = 0xF0 | RAW;
+    assert_eq!(Status::decode(&b).mode, RAW);
+}
+#[test]
+fn slot_in_offset() {
+    for op in [ATTACHED, WRITE, READ, EXIT, PUT, TAKE, INTERRUPT, HANG_UP, RELEASE, SIZE, SET_MODE, POLL, SET_SIZE] {
+        assert!(op < 1 << SLOT_SHIFT);
+        // Slot 0 is the operation alone: callers from before slots keep working.
+        assert_eq!(at_slot(op, 0), op);
+        assert_eq!(split(op), Some((op, 0)));
+        for slot in 0..SLOTS { assert_eq!(split(at_slot(op, slot)), Some((op, slot))); }
+    }
+    assert_eq!(split(at_slot(TAKE, SLOTS)), None);
+    assert_eq!(split(1 << 40 | TAKE), None);
+    assert_eq!(at_slot(PUT, 3), 0x304);
+}
+#[test]
+fn size_words() {
+    assert_eq!(size_word(80, 24), 80 | 24 << 16);
+    assert_eq!(split_size(size_word(132, 50)), Some((132, 50)));
+    assert_eq!(split_size(1 << 32), None);
+    let mut s = Size::default();
+    assert!(!s.known());
+    s.set(80, 24);
+    s.set(80, 24);
+    assert_eq!(s, Size { cols: 80, rows: 24, changes: 1 });
+    s.set(100, 30);
+    assert!(s.known() && s.changes == 2);
+    let mut b = [0u8; SIZE_BYTES];
+    s.encode(&mut b);
+    assert_eq!(Size::decode(&b), s);
+    assert_eq!(Size::decode(&b[..4]), Size::default());
+}
+#[test]
+fn mode_bits_distinct() {
+    assert_eq!(RAW & NO_ECHO, 0);
+    assert_eq!((RAW | NO_ECHO) & NO_SIGNALS, 0);
+    assert_eq!(MODES, 7);
+}
+#[test]
+fn pool_hands_out_each_pair_once() {
+    let mut p = Pool::<3>::new();
+    assert_eq!(p.free(), 3);
+    let (a, b, c) = (p.take().unwrap(), p.take().unwrap(), p.take().unwrap());
+    assert_eq!((a, b, c), (0, 1, 2));
+    assert_eq!(p.take(), None);
+    p.give(1);
+    assert_eq!(p.free(), 1);
+    assert_eq!(p.take(), Some(1));
+    p.give(7); // out of range: ignored
+    assert_eq!(p.free(), 0);
+}
+#[test]
+fn pipe_prepare_round_trip() {
+    let word = stdio(PIPED, NULL, INHERIT);
+    assert_eq!(stream(word, 0), PIPED);
+    assert_eq!(stream(word, 1), NULL);
+    assert_eq!(stream(word, 2), INHERIT);
+    for slot in 0..SLOTS {
+        let offset = pipe_prepare(slot, word);
+        assert_eq!(split_pipe_prepare(offset), Some((slot, word)));
+        // Never a terminal's PREPARE (low byte 0) nor a plain launch's.
+        assert_eq!(offset & 0xFF, sex_pdx::fs::PREPARE_PIPED);
+    }
+    assert_eq!(split_pipe_prepare(sex_pdx::fs::PREPARE_LAUNCH), None);
+    assert_eq!(split_pipe_prepare(at_slot(0, 3)), None);
+    assert_eq!(split_pipe_prepare(pipe_prepare(0, 0) | (SLOTS as u64) << SLOT_SHIFT), None);
+    assert_eq!(split_pipe_prepare(pipe_prepare(0, 0) | 1 << 40), None);
+}
+#[test]
+fn env_block_reads_in_pieces() {
+    let (cwd, env) = (b"@/data/a/work".as_slice(), b"A=1\0LANG=C.UTF-8\0".as_slice());
+    let mut whole = Vec::new();
+    let mut piece = [0u8; 5];
+    loop {
+        let n = env_block(cwd, env, whole.len(), &mut piece);
+        if n == 0 { break; }
+        whole.extend_from_slice(&piece[..n]);
+    }
+    assert_eq!(whole, b"@/data/a/work\0A=1\0LANG=C.UTF-8\0");
+    let (folder, entries) = split_env_block(&whole);
+    assert_eq!(folder, b"@/data/a/work");
+    assert_eq!(entries.collect::<Vec<_>>(), vec![b"A=1".as_slice(), b"LANG=C.UTF-8".as_slice()]);
+    let (folder, entries) = split_env_block(b"\0");
+    assert!(folder.is_empty());
+    assert_eq!(entries.count(), 0);
+    assert_eq!(split_env_block(b"").0, b"");
 }

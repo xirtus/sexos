@@ -30,6 +30,11 @@ impl TextStyle {
     pub fn size(self, body: f32) -> f32 {
         match self { TextStyle::Body | TextStyle::Mono => body, TextStyle::Caption => body * 0.86, TextStyle::Heading => body * 1.15, TextStyle::Title => body * 1.45, TextStyle::Display => body * 2.4 }
     }
+    /// The face: Mono for code, bold Sans for headings and titles, else Sans.
+    pub fn face(self) -> crate::text::Face {
+        use crate::text::Face;
+        match self { TextStyle::Mono => Face::Mono, TextStyle::Heading | TextStyle::Title => Face::Sans.bold(), _ => Face::Sans }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,7 +210,8 @@ pub(crate) struct MenuRowState {
 
 pub(crate) enum Kind {
     Panel { fill: Fill, border: bool, radius: f32 },
-    Label { text: String, style: TextStyle, wrap: bool, align: Align, color: Option<Color> },
+    /// `emphasis` overrides the weight and slant `style` gives.
+    Label { text: String, style: TextStyle, wrap: bool, align: Align, color: Option<Color>, emphasis: Option<sex_font::Style> },
     Button { text: String, icon: Option<String>, style: ButtonStyle },
     Field(Box<FieldState>),
     Check { text: String, on: bool, switch: bool },

@@ -1163,6 +1163,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "corset"
+version = "0.1.0"
+dependencies = [
+ "corset-core",
+ "sex-app",
+ "sex-pdx",
+ "sex-volumes",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "corset-core"
 version = "0.1.0"
 dependencies = [
@@ -2131,12 +2142,16 @@ name = "files"
 version = "0.1.0"
 dependencies = [
  "loom-core",
+ "loom-remote",
  "sex-app",
  "sex-archive",
  "sex-config",
+ "sex-diskimage",
  "sex-font",
  "sex-image",
  "sex-pdx",
+ "sex-ssh",
+ "sex-volumes",
  "sha2 0.10.9",
 ]
 
@@ -3658,6 +3673,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom-remote"
+version = "0.1.0"
+dependencies = [
+ "hmac 0.12.1",
+ "sex-http",
+ "sex-ssh",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "lopdf"
 version = "0.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4323,7 +4348,9 @@ version = "0.1.0"
 dependencies = [
  "hayro",
  "sex-font",
+ "sex-image",
  "sex-std",
+ "vellum-edit",
 ]
 
 [[package]]
@@ -4571,7 +4598,7 @@ dependencies = [
 name = "polyamour"
 version = "0.1.0"
 dependencies = [
- "png",
+ "png 0.18.1",
  "sex-3d",
  "sex-office",
  "sex-std",
@@ -5666,6 +5693,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-diskimage"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide 0.9.1",
+ "sex-archive",
+ "sex-disk",
+]
+
+[[package]]
 name = "sex-ebook"
 version = "0.1.0"
 dependencies = [
@@ -6002,6 +6038,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-speech"
+version = "0.1.0"
+
+[[package]]
 name = "sex-splice"
 version = "0.1.0"
 
@@ -6098,7 +6138,10 @@ version = "0.1.0"
 name = "sex-vt"
 version = "0.1.0"
 dependencies = [
+ "miniz_oxide 0.8.9",
+ "regex-automata",
  "sex-font",
+ "sex-shape",
  "vte",
 ]
 
@@ -6562,6 +6605,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "spindle-panes"
+version = "0.1.0"
+
+[[package]]
+name = "spindle-shell"
+version = "0.1.0"
+dependencies = [
+ "sex-shape",
+]
+
+[[package]]
 name = "spinning_top"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6881,6 +6935,8 @@ dependencies = [
  "sex-pdx",
  "sex-vt",
  "sex-wasm",
+ "spindle-panes",
+ "spindle-shell",
 ]
 
 [[package]]
@@ -7867,6 +7923,15 @@ dependencies = [
  "sex-pdx",
  "taffy",
  "tiny-skia 0.11.4",
+]
+
+[[package]]
+name = "whisper-voice"
+version = "0.1.0"
+dependencies = [
+ "sex-libc",
+ "sex-speech",
+ "sex-std",
 ]
 
 [[package]]

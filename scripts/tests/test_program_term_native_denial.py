@@ -79,10 +79,12 @@ class ExactTicketSourceContract(unittest.TestCase):
    ('binding.task != 0 && program_live(target, binding.task)','binding.task != 0'),
    ('c.is_subject(target, row.surface, 3) && c.task_id == task','c.is_subject(target, row.surface, 3)'),
    ('TicketOwner { target, task: binding.task }','TicketOwner { target, task: 0 }'),
-   ('PREPARED_OWNER } != owner || (by.is_some() && by != asker)','PREPARED_OWNER }.is_some() && (by.is_some() && by != asker)'),
+   ('PREPARED_OWNER } != owner || row != asker','PREPARED_OWNER }.is_some() && row != asker'),
+   ('PREPARED_OWNER } != owner || row != asker','PREPARED_OWNER } != owner'),
    ('unsafe { PREPARED_OWNER = None; }','unsafe { PREPARED_OWNER = owner; }'),
-   ('let result = run(fs, r, path, data, owner, relay);','let result = run(fs, r, path, data, None, relay);'),
-   ('PREPARED_OWNER = owner; PREPARED_LAUNCHER = by;','PREPARED_OWNER = None; PREPARED_LAUNCHER = by;'),
+   ('let result = run(fs, r, path, data, owner);','let result = run(fs, r, path, data, None);'),
+   ('PREPARED_OWNER = owner; PREPARED_LAUNCHER = (relay, row);','PREPARED_OWNER = None; PREPARED_LAUNCHER = (relay, row);'),
+   ('PREPARED_OWNER = owner; PREPARED_LAUNCHER = (relay, row);','PREPARED_OWNER = owner; PREPARED_LAUNCHER = (relay, None);'),
   ]
   for old,new in cases:
    with self.subTest(old=old):self.source_case(path,old,new)
@@ -90,12 +92,12 @@ class ExactTicketSourceContract(unittest.TestCase):
   path='servers/sexfiles/src/fs_service.rs'
   for old,new in [
    ('is_some_and(|b| holds_launch(&b))','is_some_and(|_| true)'),
-   ('if !crate::console_relay::may_prepare(k)','if false'),
+   ('if let Err(status) = crate::console_relay::may_prepare(relay) { return w::reply(r.seq, status, 0); }','let _ = status;'),
    ('sex_pdx::console_relay::plain_args(','unreviewed_args('),
-   ('let relay = if r.kind == w::PREPARE && relay_terminal { program } else { None };','let relay = program;'),
-   ('let relay_terminal = r.offset != w::PREPARE_LAUNCH;','let relay_terminal = true;'),
-   ('let by = relay;','let by = None;'),
-   ('return prepare(fs, r, path, data, owner, relay);','return prepare(fs, r, path, data, owner, None);'),
+   ('let relay = !matches!(r.offset & 0xFF, w::PREPARE_LAUNCH | w::PREPARE_PIPED);','let relay = false;'),
+   ('if r.kind == w::PREPARE { unsafe { PREPARING_ROW = program; PREPARING_FOR = None; } }','if r.kind == w::PREPARE { unsafe { PREPARING_ROW = program; } }'),
+   ('let row = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(PREPARING_ROW)) };','let row = None;'),
+   ('return prepare(fs, r, path, data, owner);','return prepare(fs, r, path, data, None);'),
   ]:
    with self.subTest(old=old):self.source_case(path,old,new)
  def test_transport_caller_stamp_and_legacy_requester_cannot_drift(self):

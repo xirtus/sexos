@@ -642,8 +642,8 @@ fn measure(kind: &Kind, fonts: &Fonts, theme: &Theme, known: Size<Option<f32>>, 
     let pad = theme.padding();
     let body = theme.font_size;
     let r = match kind {
-        Kind::Label { text, style, wrap, .. } => {
-            let face = if *style == TextStyle::Mono { Face::Mono } else { Face::Sans };
+        Kind::Label { text, style, wrap, emphasis, .. } => {
+            let face = emphasis.map_or(style.face(), |e| style.face().with(e));
             let size = text_px(theme, *style);
             let limit = known.width.or(match avail.width { AvailableSpace::Definite(w) => Some(w), _ => None });
             if *wrap {

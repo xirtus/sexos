@@ -7,6 +7,7 @@ extern crate self as sex_pdx;
 fn bar_height()->usize{28}
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/desktop_look.rs"]pub mod desktop_look;
+#[path="../crates/sex-pdx/src/access_view.rs"]pub mod access_view;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 pub use memory_region::MemoryRegionInfo;

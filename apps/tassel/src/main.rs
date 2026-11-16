@@ -20,7 +20,8 @@ fn main() {
             {
                 // A fixed layout, so the gate knows where each widget is (points from
                 // the window's top-left): button 10,10 100x28; field 10,50 200x28;
-                // checkbox 10,90; a scrolling list of 60 lines at 10,130 300x120.
+                // checkbox 10,90; a scrolling list of 60 lines at 230,10 300x120, beside them,
+                // so it fits a short tile.
                 let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h));
                 if ui.put(at(10.0, 10.0, 100.0, 28.0), egui::Button::new("Click me")).clicked() {
                     clicks += 1;
@@ -34,7 +35,7 @@ fn main() {
                 if ui.put(at(10.0, 90.0, 200.0, 24.0), egui::Checkbox::new(&mut checked, "Checked")).changed() {
                     sex_egui::record(&format!("[tassel.checked] value={checked}"));
                 }
-                let mut list = ui.new_child(egui::UiBuilder::new().max_rect(at(10.0, 130.0, 300.0, 120.0)));
+                let mut list = ui.new_child(egui::UiBuilder::new().max_rect(at(230.0, 10.0, 300.0, 120.0)));
                 let first = egui::ScrollArea::vertical().id_salt("lines").auto_shrink([false, false]).show(&mut list, |ui| {
                     let mut first = None;
                     for i in 0..60 {

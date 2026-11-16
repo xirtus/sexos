@@ -31,15 +31,81 @@ pub unsafe extern "C" fn _start() -> ! {
     words.extend(args::split(&line[..n]));
     // Started as a hidden helper (`crate::process`): no window, nobody to close one.
     if words.get(1).is_some_and(|w| w == crate::process::HIDDEN_WORD) { words.remove(1); console::hide(); }
+    // Started with streams, an environment or a working folder handed over: Files holds
+    // them for this run (`console_relay`), and says so (a word alone proves nothing).
+    if words.get(1).is_some_and(|w| w == crate::process::PIPED_WORD) {
+        words.remove(1);
+        if let Some(word) = files::relay::attached_word().filter(|w| w & sex_pdx::console_relay::PIPE_RUN != 0) {
+            console::set_pipes(word as u8);
+            take_env_block();
+        }
+    }
     let owned: Vec<std::ffi::CString> = words.into_iter().map(|w| std::ffi::CString::new(w).unwrap_or_default()).collect();
     let mut argv: Vec<*const c_char> = owned.iter().map(|s| s.as_ptr()).collect();
     argv.push(core::ptr::null());
-    let env: [*const c_char; 1] = [core::ptr::null()];
+    let block = ENV_BLOCK.get().map(|b| b.as_slice()).unwrap_or(&[]);
+    let (folder, entries) = sex_pdx::console_relay::split_env_block(block);
+    if !folder.is_empty() && path::set_cwd(folder).is_err() { sex_pdx::serial_record!("[std.cwd.refused]"); }
+    let env_owned: Vec<std::ffi::CString> = entries.filter_map(|e| std::ffi::CString::new(e).ok()).collect();
+    let mut env: Vec<*const c_char> = env_owned.iter().map(|s| s.as_ptr()).collect();
+    env.push(core::ptr::null());
     let argc = owned.len() as i32;
-    // Both live for the whole run: std keeps pointers into them.
+    // All live for the whole run: std keeps pointers into them.
     std::mem::forget(owned);
+    std::mem::forget(env_owned);
     let argv = argv.leak();
-    unsafe { runtime_entry(argc, argv.as_ptr(), Box::leak(Box::new(env)).as_ptr()) }
+    unsafe { runtime_entry(argc, argv.as_ptr(), env.leak().as_ptr()) }
+}
+
+/// The environment block the starter handed this run (`console_relay::ENV`): the working
+/// folder, a NUL, then `KEY=VALUE` entries each ended by a NUL. Empty for other runs.
+static ENV_BLOCK: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+fn take_env_block() {
+    let mut block = Vec::new();
+    let mut piece = vec![0u8; sex_pdx::console_relay::ENV_BYTES];
+    while block.len() < sex_pdx::console_relay::ENV_BYTES + w::PATH_BYTES + 1 {
+        match files::relay::env(block.len(), &mut piece) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => block.extend_from_slice(&piece[..n]),
+        }
+    }
+    let _ = ENV_BLOCK.set(block);
+}
+
+/// The environment this run started with, `KEY=VALUE` entries each ended by a NUL, from
+/// byte `at` on: what fits in `out[..len]`, as a count. sex-libc's `environ` starts from it.
+#[no_mangle]
+pub unsafe extern "C" fn sys_sexos_env(at: usize, out: *mut u8, len: usize) -> isize {
+    let block = ENV_BLOCK.get().map(|b| b.as_slice()).unwrap_or(&[]);
+    let entries = block.iter().position(|b| *b == 0).map_or(&[][..], |end| &block[end + 1..]);
+    let rest = entries.get(at..).unwrap_or(&[]);
+    let n = rest.len().min(len);
+    if n > 0 && !out.is_null() { unsafe { core::ptr::copy_nonoverlapping(rest.as_ptr(), out, n) }; }
+    n as isize
+}
+/// The working folder as the program sees it (`/notes`, `@/abs/path`), into `out[..len]`
+/// with a NUL after it. Its length, or `-ERANGE` when it does not fit.
+#[no_mangle]
+pub unsafe extern "C" fn sys_sexos_getcwd(out: *mut u8, len: usize) -> isize {
+    let shown = path::cwd_shown();
+    if out.is_null() || shown.len() + 1 > len { return -(errno::ERANGE as isize); }
+    unsafe { core::ptr::copy_nonoverlapping(shown.as_ptr(), out, shown.len()); *out.add(shown.len()) = 0; }
+    shown.len() as isize
+}
+/// The working folder becomes `path` (from the one before), a folder that exists.
+#[no_mangle]
+pub unsafe extern "C" fn sys_sexos_chdir(path: *const u8, len: usize) -> i32 {
+    if path.is_null() { return -errno::EFAULT; }
+    let asked = unsafe { core::slice::from_raw_parts(path, len) };
+    let to = match path::resolve(asked) { Ok(p) => p, Err(path::Refused::AboveFolder) => return -errno::EACCES, Err(_) => return -errno::EINVAL };
+    // The program's own folder always is one.
+    match if to.is_empty() { Ok(None) } else { files::stat(&to).map(Some) } {
+        Ok(None) => {}
+        Ok(Some(st)) if st.dir => {}
+        Ok(Some(_)) => return -errno::ENOTDIR,
+        Err(e) => return errno_of(e),
+    }
+    match path::set_cwd(asked) { Ok(_) => 0, Err(_) => -errno::EACCES }
 }
 
 #[no_mangle]
@@ -124,7 +190,7 @@ fn sleep_ms(ms: u64) {
 
 #[no_mangle]
 pub extern "C" fn sys_usleep(usecs: u64) {
-    if usecs < 1000 { sex_pdx::sys_yield(); } else { sleep_ms(usecs.div_ceil(1000)); }
+    if usecs < 1000 { sex_pdx::sys_yield(); } else { console::interrupt_point(); sleep_ms(usecs.div_ceil(1000)); }
 }
 #[no_mangle]
 pub unsafe extern "C" fn sys_nanosleep(req: *const timespec) -> i32 {
@@ -549,6 +615,16 @@ pub unsafe extern "C" fn sys_pwrite(fd: i32, buf: *const u8, len: usize, offset:
 #[no_mangle]
 pub extern "C" fn sys_isatty(fd: i32) -> i32 { matches!(table().get(fd as usize), Some(Some(Open::Console(_)))) as i32 }
 
+/// The console's terminal mode (`sex_pdx::console_relay::RAW`, `NO_ECHO`,
+/// `NO_SIGNALS`) for the C library's termios: `mode` < 0 asks, else sets it. Returns the
+/// mode (before, when setting), `-ENOTTY` for a descriptor that is not the console.
+#[no_mangle]
+pub extern "C" fn sys_console_mode(fd: i32, mode: i32) -> i32 {
+    if !matches!(table().get(fd as usize), Some(Some(Open::Console(_)))) { return -errno::ENOTTY; }
+    let before = console::mode() as i32;
+    if mode >= 0 { console::set_mode(mode as u8); }
+    before
+}
 #[no_mangle]
 pub extern "C" fn sys_dup(fd: i32) -> i32 {
     let copy = match table().get(fd as usize) {
@@ -652,6 +728,15 @@ pub extern "C" fn sys_getsockopt(s: i32, level: i32, name: i32, value: *mut core
 pub extern "C" fn sys_setsockopt(s: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: abi::socklen_t) -> i32 { on_sock!(s, k => net::set_option(&k, level, name, value, len)) }
 #[no_mangle]
 pub extern "C" fn sys_ioctl(s: i32, cmd: i32, argp: *mut core::ffi::c_void) -> i32 {
+    // The console's size in cells, as `struct winsize` (rows, columns, then pixels, 0).
+    const TIOCGWINSZ: i32 = 0x5413;
+    if cmd == TIOCGWINSZ {
+        if !matches!(table().get(s as usize), Some(Some(Open::Console(_)))) { return -errno::ENOTTY; }
+        if argp.is_null() { return -errno::EFAULT; }
+        let (cols, rows, _) = console::size();
+        unsafe { *(argp as *mut [u16; 4]) = [rows, cols, 0, 0]; }
+        return 0;
+    }
     if cmd != abi::FIONBIO { return -errno::EINVAL; }
     if argp.is_null() { return -errno::EFAULT; }
     let on = unsafe { *(argp as *const i32) } != 0;

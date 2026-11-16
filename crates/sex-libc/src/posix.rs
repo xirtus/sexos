@@ -32,6 +32,10 @@ struct HStat {
 }
 
 extern "C" {
+    /// The environment this run was started with, from byte `at` (crates/sex-std).
+    fn sys_sexos_env(at: usize, out: *mut u8, len: usize) -> isize;
+    fn sys_sexos_getcwd(out: *mut u8, len: usize) -> isize;
+    fn sys_sexos_chdir(path: *const u8, len: usize) -> i32;
     fn sys_open(name: *const c_char, flags: i32, mode: i32) -> i32;
     fn sys_close(fd: i32) -> i32;
     fn sys_read(fd: i32, buf: *mut u8, len: usize) -> isize;
@@ -43,6 +47,8 @@ extern "C" {
     fn sys_mkdir(name: *const i8, mode: u32) -> i32;
     fn sys_rmdir(name: *const c_char) -> i32;
     fn sys_isatty(fd: i32) -> i32;
+    fn sys_ioctl(fd: i32, cmd: i32, argp: *mut c_void) -> i32;
+    fn sys_console_mode(fd: i32, mode: i32) -> i32;
     fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> i64;
     fn sys_clock_gettime(clock: i32, tp: *mut [i64; 2]) -> i32;
     fn sys_exit(status: i32) -> !;
@@ -75,6 +81,16 @@ pub(crate) fn log_line(bytes: &[u8]) {
 /// Runs a C program's `main` with `argv`, then ends the program as `exit` does.
 pub fn run(main: unsafe extern "C" fn(c_int, *mut *mut c_char) -> c_int, argv: &mut [*mut c_char]) -> ! {
     unsafe {
+        // `environ` starts as the environment the starter handed over (empty for a run
+        // the person started).
+        let mut entries = alloc::vec::Vec::new();
+        let mut piece = [0u8; 1024];
+        loop {
+            let n = sys_sexos_env(entries.len(), piece.as_mut_ptr(), piece.len());
+            if n <= 0 { break; }
+            entries.extend_from_slice(&piece[..n as usize]);
+        }
+        if !entries.is_empty() { crate::env_seed(&entries); }
         crate::cxx::run_constructors();
         let argc = argv.iter().position(|p| p.is_null()).unwrap_or(argv.len()) as c_int;
         let code = main(argc, argv.as_mut_ptr());
@@ -114,6 +130,53 @@ pub unsafe extern "C" fn fsync(fd: c_int) -> c_int { ret(unsafe { sys_fsync(fd) 
 pub unsafe extern "C" fn ftruncate(fd: c_int, size: i64) -> c_int { ret(unsafe { sys_ftruncate(fd, size) } as i64) as c_int }
 #[no_mangle]
 pub unsafe extern "C" fn isatty(fd: c_int) -> c_int { unsafe { sys_isatty(fd) } }
+
+// ---- the terminal ------------------------------------------------------------------------
+// termios over the console's mode (`sex_pdx::console_relay`): ICANON, ECHO and ISIG
+// choose a raw or cooked keyboard, echo and Ctrl+C; the terminal does the rest as a
+// terminal emulator does. The other flags are kept as the program set them.
+
+use crate::posix_util::Termios;
+static mut TERMIOS: Termios = Termios::cooked();
+
+#[no_mangle]
+pub unsafe extern "C" fn tcgetattr(fd: c_int, t: *mut Termios) -> c_int {
+    let mode = unsafe { sys_console_mode(fd, -1) };
+    if mode < 0 { set_errno(-mode); return -1; }
+    if t.is_null() { set_errno(14); return -1; }
+    unsafe { *t = (*core::ptr::addr_of!(TERMIOS)).with_mode(mode as u8); }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn tcsetattr(fd: c_int, _when: c_int, t: *const Termios) -> c_int {
+    if t.is_null() { set_errno(14); return -1; }
+    let wanted = unsafe { *t };
+    let r = unsafe { sys_console_mode(fd, wanted.mode() as i32) };
+    if r < 0 { set_errno(-r); return -1; }
+    unsafe { *core::ptr::addr_of_mut!(TERMIOS) = wanted; }
+    0
+}
+#[no_mangle]
+pub unsafe extern "C" fn cfmakeraw(t: *mut Termios) { if let Some(t) = unsafe { t.as_mut() } { t.make_raw(); } }
+#[no_mangle]
+pub unsafe extern "C" fn cfgetospeed(t: *const Termios) -> u32 { unsafe { t.as_ref() }.map_or(0, |t| t.c_ospeed) }
+#[no_mangle]
+pub unsafe extern "C" fn cfgetispeed(t: *const Termios) -> u32 { unsafe { t.as_ref() }.map_or(0, |t| t.c_ispeed) }
+#[no_mangle]
+pub unsafe extern "C" fn cfsetospeed(t: *mut Termios, speed: u32) -> c_int { if let Some(t) = unsafe { t.as_mut() } { t.c_ospeed = speed; } 0 }
+#[no_mangle]
+pub unsafe extern "C" fn cfsetispeed(t: *mut Termios, speed: u32) -> c_int { if let Some(t) = unsafe { t.as_mut() } { t.c_ispeed = speed; } 0 }
+/// `ioctl` for what a terminal program asks: TIOCGWINSZ (the console's size in cells),
+/// TCGETS and TCSETS* (termios), FIONBIO (sockets). Anything else is ENOTTY or EINVAL.
+#[no_mangle]
+pub unsafe extern "C" fn ioctl(fd: c_int, request: core::ffi::c_ulong, mut ap: ...) -> c_int {
+    let arg = unsafe { ap.next_arg::<*mut c_void>() };
+    match request as u32 {
+        0x5401 => unsafe { tcgetattr(fd, arg.cast()) },
+        0x5402..=0x5404 => unsafe { tcsetattr(fd, 0, arg.cast()) },
+        r => ret(unsafe { sys_ioctl(fd, r as i32, arg) } as i64) as c_int,
+    }
+}
 #[no_mangle]
 pub unsafe extern "C" fn unlink(path: *const c_char) -> c_int { ret(unsafe { sys_unlink(path) } as i64) as c_int }
 #[no_mangle]
@@ -133,16 +196,19 @@ pub unsafe extern "C" fn access(path: *const c_char, _mode: c_int) -> c_int {
     let mut st: HStat = unsafe { core::mem::zeroed() };
     ret(unsafe { sys_stat(path, &mut st) } as i64) as c_int
 }
+/// The working folder: `/` (the program's own folder), a folder in it, or a granted
+/// folder `@/abs/path` the starter handed over.
 #[no_mangle]
 pub unsafe extern "C" fn getcwd(buf: *mut c_char, size: usize) -> *mut c_char {
     if buf.is_null() || size < 2 { set_errno(crate::ERANGE); return null_mut(); }
-    unsafe { *buf = b'/' as c_char; *buf.add(1) = 0; }
+    let r = unsafe { sys_sexos_getcwd(buf.cast(), size) };
+    if r < 0 { set_errno(-r as c_int); return null_mut(); }
     buf
 }
-/// The program's folder is its only folder.
 #[no_mangle]
 pub unsafe extern "C" fn chdir(path: *const c_char) -> c_int {
-    if unsafe { c_str(path) } == b"/" { 0 } else { set_errno(crate::ENOSYS); -1 }
+    let p = unsafe { c_str(path) };
+    ret(unsafe { sys_sexos_chdir(p.as_ptr(), p.len()) } as i64) as c_int
 }
 #[no_mangle]
 pub unsafe extern "C" fn sleep(seconds: u32) -> u32 { unsafe { sys_usleep(seconds as u64 * 1_000_000) }; 0 }
@@ -405,6 +471,24 @@ pub unsafe extern "C" fn tmpnam(buf: *mut c_char) -> *mut c_char {
     let out = if buf.is_null() { core::ptr::addr_of_mut!(NAME).cast::<c_char>() } else { buf };
     unsafe { core::ptr::copy_nonoverlapping(name.as_ptr().cast(), out, 20) };
     out
+}
+
+/// `mkstemp`: replaces the template's trailing `XXXXXX` and creates that file in the
+/// program's folder, exclusively.
+#[no_mangle]
+pub unsafe extern "C" fn mkstemp(template: *mut c_char) -> c_int {
+    let len = unsafe { c_str(template) }.len();
+    let name = unsafe { core::slice::from_raw_parts_mut(template.cast::<u8>(), len) };
+    if len < 6 || name[len - 6..].iter().any(|&b| b != b'X') { set_errno(crate::EINVAL); return -1; }
+    for _ in 0..100 {
+        let n = (unsafe { TEMP_COUNT = TEMP_COUNT.wrapping_add(1); TEMP_COUNT } as u64) ^ ((clock().1 as u64) << 12);
+        for (i, b) in name[len - 6..].iter_mut().enumerate() { *b = b"0123456789abcdefghijklmnopqrstuv"[((n >> (5 * i)) & 31) as usize]; }
+        let fd = unsafe { sys_open(template, 0o2 | 0o100 | 0o200, 0o600) };
+        if fd >= 0 { return fd; }
+        if fd != -17 { set_errno(-fd); return -1; }
+    }
+    set_errno(17);
+    -1
 }
 
 /// A stream on a new file in the program's folder, removed when the stream closes.

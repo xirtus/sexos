@@ -17,12 +17,16 @@
 //! right-click context menus, the modal G/R/S transforms and Edit Mode's
 //! modal tools (extrude, inset, bevel, loop cut, knife). Alt is not delivered
 //! by SexOS's Shell yet: every Alt shortcut also has a menu entry.
+pub mod gpview;
 pub mod icons;
 pub mod menus;
 mod overlay;
+mod physview;
 pub mod proj;
 pub mod raster;
 pub mod render;
+pub mod rigview;
+pub mod sculptview;
 pub mod sidebar;
 #[cfg(test)]
 mod tests;
@@ -92,6 +96,16 @@ pub enum Modal {
     Knife { pts: Vec<(f32, f32)> },
     Annotate,
     Measure,
+    /// A weight paint stroke.
+    WeightPaint { stroke: Box<crate::rig::paint::Stroke>, last: (f32, f32) },
+    /// The Gradient weight tool: dragging from `a`.
+    WeightGradient { stroke: Box<crate::rig::paint::Stroke>, a: (f32, f32), radial: bool },
+    /// F / Shift+F: brush radius or strength from the mouse.
+    BrushSize { strength: bool, x0: i32, orig: f32 },
+    /// Sculpt Mode, Vertex Paint and Texture Paint (strokes, box mask...).
+    Sculpt(Box<sculptview::SModal>),
+    /// Grease Pencil drawing, brushes and edit tools.
+    Gp(Box<gpview::GModal>),
 }
 
 pub struct State {
@@ -130,9 +144,10 @@ pub struct State {
     /// World-space points and edges of every visible mesh object.
     world: Option<(u64, Vec<WorldObj>)>,
     buf: Vec<u8>,
-    buf2: Vec<u8>,
     edit_view: Option<(u64, [u32; 8], Rect, raster::EditView)>,
     render: Option<render::RenderView>,
+    /// Solid shading options (lighting, colour, shadow, cavity, outline).
+    pub solid: sex_3d::render::Workbench,
     /// Material Preview / Rendered still adding samples.
     pub refining: bool,
     pub annotations: Vec<Vec<Vec3>>,
@@ -142,6 +157,11 @@ pub struct State {
     pub panels: [bool; 6],
     pub median_global: bool,
     dims: Option<(u64, usize, Option<Vec3>)>,
+    /// The paint colour picker (Vertex and Texture Paint).
+    pub picker: Option<crate::editors::properties::picker::Picker>,
+    /// Distance along the view of the surface under each pixel (Solid
+    /// shading), for Grease Pencil depth tests and Surface placement.
+    pub gp_depth: Vec<f32>,
 }
 
 pub struct WorldObj {
@@ -182,9 +202,9 @@ impl Default for State {
             cache: None,
             world: None,
             buf: Vec::new(),
-            buf2: Vec::new(),
             edit_view: None,
             render: None,
+            solid: sex_3d::render::Workbench::viewport_defaults(),
             refining: false,
             annotations: Vec::new(),
             measure: None,
@@ -193,6 +213,8 @@ impl Default for State {
             panels: [true; 6],
             median_global: false,
             dims: None,
+            picker: None,
+            gp_depth: Vec::new(),
         }
     }
 }
@@ -220,7 +242,7 @@ pub fn is_modal(s: &State) -> bool {
 
 /// Whether the viewport wants more frames without input (progressive render).
 pub fn wants_tick(s: &State) -> bool {
-    s.refining
+    s.refining || sculptview::wants_tick(s)
 }
 
 fn cam_key(c: &ViewCamera) -> [u32; 8] {
@@ -264,6 +286,7 @@ fn modal_header(s: &State) -> Option<String> {
         Modal::LoopCut { cuts, .. } => Some(format!("Number of Cuts: {cuts}   (wheel or Page Up/Down; click to cut, Esc to cancel)")),
         Modal::Knife { pts } => Some(format!("Knife: click to add cut points ({}), Enter to cut, Esc to cancel", pts.len())),
         Modal::BoxWait => Some("Box Select: drag to select".into()),
+        Modal::Gp(m) => gpview::header(m),
         _ => None,
     }
 }
@@ -458,17 +481,52 @@ fn camera_to_view(s: &State, d: &mut Doc) {
 // ---------------------------------------------------------------- caches
 
 fn ensure_cache(s: &mut State, d: &mut Doc) {
+    if !d.sculpt.live.is_empty() || d.sculpt.live_full {
+        let patched = match &mut s.cache {
+            Some((g, full, _)) if *g == d.generation => crate::sculpt::take_live(d, |oi, pos, nrm, verts| full.patch_object(oi, pos, nrm, verts)),
+            _ => crate::sculpt::take_live(d, |_, _, _, _| false),
+        };
+        if !patched {
+            crate::sculpt::touch_ours(d);
+        }
+    }
     if s.cache.as_ref().is_some_and(|c| c.0 == d.generation) {
         return;
     }
     // In Edit Mode the edited object shows its edit overlay, not an outline.
     let saved = d.scene.selected.clone();
-    if d.mode == Mode::Edit {
+    if d.mode == Mode::Edit || sculptview::active(d) {
         if let Some(a) = d.active() {
             d.scene.selected.retain(|&i| i != a);
         }
     }
-    let full = ViewportScene::new(&d.scene);
+    let pinned = crate::rig::shapes::pin(d);
+    // Sculpt Mode shows a Multires object at its sculpt level.
+    let mut shown_levels = None;
+    if d.mode == Mode::Sculpt {
+        if let Some(a) = d.active() {
+            if let Some(md) = crate::sculpt::multires_of(d, a) {
+                if let sex_3d::modifiers::Modifier::Multires { levels, sculpt_levels, .. } = &mut d.scene.objects[a].modifiers[md] {
+                    shown_levels = Some((a, md, *levels));
+                    *levels = *sculpt_levels;
+                }
+            }
+        }
+    }
+    let paint_obj = if sculptview::active(d) { d.active() } else { None };
+    let dd: &Doc = d;
+    let full = ViewportScene::new_with(&dd.scene, &|oi, m, tris| {
+        if Some(oi) != paint_obj {
+            return None;
+        }
+        Some(sex_3d::render::viewport::ObjectOverlay { corner_colors: crate::sculpt::overlay_colors(dd, oi, m, tris), hide_hidden: dd.mode == Mode::Sculpt })
+    });
+    if let Some((a, md, l)) = shown_levels {
+        if let sex_3d::modifiers::Modifier::Multires { levels, .. } = &mut d.scene.objects[a].modifiers[md] {
+            *levels = l;
+        }
+    }
+    crate::rig::shapes::unpin(d, pinned);
     let shell = Scene {
         name: String::new(),
         objects: d
@@ -496,6 +554,18 @@ fn ensure_cache(s: &mut State, d: &mut Doc) {
         frame_start: d.scene.frame_start,
         frame_end: d.scene.frame_end,
         fps: d.scene.fps,
+        frame_current: d.scene.frame_current,
+        node_groups: Vec::new(),
+        compositor: None,
+        // Bone parents and constraints read the armatures.
+        armatures: d.scene.armatures.clone(),
+        armature_names: d.scene.armature_names.clone(),
+        lattices: d.scene.lattices.clone(),
+        lattice_names: d.scene.lattice_names.clone(),
+        physics: d.scene.physics.clone(),
+        grease_pencils: Vec::new(),
+        grease_pencil_names: Vec::new(),
+        sequence_editor: None,
     };
     let empty = ViewportScene::new(&shell);
     d.scene.selected = saved;
@@ -611,6 +681,11 @@ fn mouse_in(ui: &Ui, r: Rect) -> (f32, f32) {
 fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: Rect) {
     let m = mouse_in(ui, r);
     match id {
+        "uv.project_from_view" => {
+            let p = Proj::new(&s.cam, r);
+            let f = move |w: Vec3| p.to_screen(w);
+            crate::uvedit::project_from_view(d, Some((&f, (r.x as f32, r.y as f32, r.w as f32, r.h as f32))), arg.contains("BOUNDS"));
+        }
         "view3d.view_all" => frame_all(s, d),
         "view3d.view_selected" => frame_bounds(s, selected_bounds(d)),
         "view3d.view_axis" => set_axis_view(s, arg),
@@ -654,6 +729,14 @@ fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: 
         "view3d.toggle_xray" => s.xray = !s.xray,
         "view3d.toolbar" => s.show_toolbar = !s.show_toolbar,
         "view3d.sidebar" => s.show_sidebar = !s.show_sidebar,
+        "view3d.sidebar_tab" => {
+            s.show_sidebar = true;
+            s.side_tab = match arg {
+                "TOOL" => SideTab::Tool,
+                "VIEW" => SideTab::View,
+                _ => SideTab::Item,
+            };
+        }
         "view3d.camera_to_view" => camera_to_view(s, d),
         "view3d.object_as_camera" => {
             if let Some(a) = d.active().filter(|&a| matches!(d.scene.objects[a].data, ObjectData::Camera(_))) {
@@ -675,6 +758,27 @@ fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: 
                 "MATERIAL" => Shading::Material,
                 "RENDERED" => Shading::Rendered,
                 _ => Shading::Solid,
+            }
+        }
+        "view3d.solid" => {
+            use sex_3d::render::workbench::{ColorType, Lighting};
+            let w = &mut s.solid;
+            match arg.split_once(':') {
+                Some(("lighting", v)) => w.lighting = Lighting::ALL.into_iter().find(|l| l.label() == v).unwrap_or(w.lighting),
+                Some(("matcap", v)) => {
+                    w.matcap = v.parse().unwrap_or(w.matcap);
+                    w.lighting = Lighting::MatCap;
+                }
+                Some(("color", v)) => w.color = ColorType::ALL.into_iter().find(|c| c.label() == v).unwrap_or(w.color),
+                _ => {
+                    let f = match arg {
+                        "shadow" => &mut w.shadow,
+                        "cavity" => &mut w.cavity,
+                        "outline" => &mut w.outline,
+                        _ => &mut w.specular,
+                    };
+                    *f = !*f;
+                }
             }
         }
         "view3d.overlay" => {
@@ -712,6 +816,22 @@ fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: 
                 mark_undo_recorded(s);
             }
         }
+        "mesh.extrude_region_shrink_fatten" => extrude_move(s, d, m, r),
+        "mesh.extrude_manifold" => {
+            if d.mode == Mode::Edit {
+                if let Some(n) = crate::edit_ops::extrude_manifold(d) {
+                    move_after_op(s, d, m, r, Some(n));
+                }
+            }
+        }
+        "mesh.rip_move" | "mesh.rip_move_fill" | "mesh.rip_edge_move" => {
+            if d.mode == Mode::Edit {
+                let ok = if id == "mesh.rip_edge_move" { crate::edit_ops::rip_edge(d) } else { crate::edit_ops::rip(d, id == "mesh.rip_move_fill") };
+                if ok {
+                    move_after_op(s, d, m, r, None);
+                }
+            }
+        }
         "mesh.inset" => start_mesh_tool(s, d, MeshToolKind::Inset, m, r),
         "mesh.bevel" => start_mesh_tool(s, d, MeshToolKind::Bevel, m, r),
         "mesh.loopcut_slide" => {
@@ -735,7 +855,7 @@ fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: 
 }
 
 fn start_transform(s: &mut State, d: &mut Doc, mode: TMode, m: (f32, f32), r: Rect) {
-    if d.mode != Mode::Object && d.mode != Mode::Edit {
+    if d.mode != Mode::Object && d.mode != Mode::Edit && d.mode != Mode::Pose {
         return;
     }
     let p = Proj::new(&s.cam, r);
@@ -760,6 +880,20 @@ fn extrude_move(s: &mut State, d: &mut Doc, m: (f32, f32), r: Rect) {
         return;
     }
     let Some(dir) = edit::extrude(d) else { return };
+    let p = Proj::new(&s.cam, r);
+    if let Some(mut t) = transform::Modal::start(d, TMode::Translate, &p, m) {
+        if let Some(n) = dir {
+            t.constraint = Constraint::Dir(n);
+        }
+        t.undo_recorded = true;
+        t.apply(d, &p);
+        s.modal = Modal::Transform(Box::new(t));
+    }
+}
+
+/// Start a move of what an edit operator just made (it recorded its own
+/// undo step), along `dir` when given.
+fn move_after_op(s: &mut State, d: &mut Doc, m: (f32, f32), r: Rect, dir: Option<Vec3>) {
     let p = Proj::new(&s.cam, r);
     if let Some(mut t) = transform::Modal::start(d, TMode::Translate, &p, m) {
         if let Some(n) = dir {
@@ -826,6 +960,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         s.modal = Modal::None;
     }
     let lay = layout(s, d, r);
+    let picker_input = sculptview::picker_claims(s, ui);
     if let Some(inp) = ui.input {
         let busy = ui.st.active.is_some() || ui.st.editing.is_some();
         let header_before = modal_header(s);
@@ -843,7 +978,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     // Rendered shading adds one sample per frame.
     s.refining = false;
     if matches!(s.shading, Shading::Material | Shading::Rendered) {
-        s.refining = render::RenderView::refresh(&mut s.render, &d.scene, d.generation, &s.cam, r.w, r.h, s.shading == Shading::Material);
+        s.refining = render::RenderView::refresh(&mut s.render, &d.scene, &d.settings, d.generation, &s.cam, s.camera_view, r.w, r.h, s.shading == Shading::Material);
     } else {
         s.render = None;
     }
@@ -858,6 +993,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         draw_all(s, d, ui, r, &lay);
         ui.input = keep;
     }
+    sculptview::picker_draw(s, d, ui, r, picker_input);
 }
 
 fn signature(s: &State, d: &Doc) -> (u64, [u32; 8], u32, [u32; 3], u8) {
@@ -874,13 +1010,17 @@ fn signature(s: &State, d: &Doc) -> (u64, [u32; 8], u32, [u32; 3], u8) {
 fn draw_all(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, lay: &Layout) {
     let proj = Proj::new(&s.cam, r);
     overlay::scene_image(s, d, ui, r);
+    physview::draw(d, ui, &proj);
+    rigview::draw_weights(d, ui, &proj);
+    sculptview::draw_texture(d, ui, &proj);
     if s.camera_view {
         overlay::camera_frame(s, d, ui, r);
     }
     if s.show_overlays {
-        if d.mode == Mode::Edit {
+        rigview::draw(s, d, ui, &proj);
+        if rigview::mesh_edit(d) {
             overlay::edit_overlay(s, d, ui, &proj);
-        } else {
+        } else if d.mode != Mode::Edit {
             overlay::origins(d, ui, &proj);
         }
         if s.show_cursor {
@@ -889,7 +1029,10 @@ fn draw_all(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, lay: &Layout) {
         overlay::annotations(s, ui, &proj);
     }
     overlay::modal_overlay(s, d, ui, &proj);
-    if s.show_gizmo && s.show_tool_gizmo && !is_modal(s) {
+    gpview::draw(s, d, ui);
+    rigview::draw_brush(d, ui, r);
+    sculptview::draw_brush(s, d, ui, r);
+    if s.show_gizmo && s.show_tool_gizmo && !is_modal(s) && !sculptview::active(d) && !gpview::active(d) {
         widgets::draw_tool_gizmo(s, d, ui, &proj);
     }
     if s.show_overlays && s.show_text {
@@ -958,6 +1101,9 @@ fn handle_event(s: &mut State, d: &mut Doc, ui: &mut Ui, inp: Input, r: Rect) {
 fn left_down(s: &mut State, d: &mut Doc, ui: &mut Ui, x: i32, y: i32, mods: Mods, r: Rect) {
     let p = Proj::new(&s.cam, r);
     let (fx, fy) = (x as f32, y as f32);
+    if gpview::press(s, d, x, y, mods) || rigview::paint_press(s, d, &p, x, y, mods) || sculptview::press(s, d, &p, x, y, mods) {
+        return;
+    }
     if s.show_gizmo && s.show_tool_gizmo {
         if let Some((mode, axis, plane)) = widgets::gizmo_hit(s, d, &p, fx, fy) {
             let space = d.orientation;
@@ -973,7 +1119,7 @@ fn left_down(s: &mut State, d: &mut Doc, ui: &mut Ui, x: i32, y: i32, mods: Mods
             }
         }
     }
-    let edit_mode = d.mode == Mode::Edit;
+    let edit_mode = rigview::mesh_edit(d);
     match d.tool {
         Tool::Cursor => d.cursor = surface_point(s, d, &p, fx, fy),
         Tool::Annotate => {
@@ -1011,6 +1157,9 @@ fn left_down(s: &mut State, d: &mut Doc, ui: &mut Ui, x: i32, y: i32, mods: Mods
 /// A left click without a drag: select what is under the pointer.
 fn click_select(s: &mut State, d: &mut Doc, x: i32, y: i32, extend: bool, r: Rect) {
     let p = Proj::new(&s.cam, r);
+    if rigview::click(d, &p, x, y, extend) {
+        return;
+    }
     if d.mode == Mode::Edit {
         let xray = s.xray_on();
         let hit = edit_view(s, d, &p).and_then(|ev| ev.pick(d, x, y, xray));
@@ -1020,7 +1169,7 @@ fn click_select(s: &mut State, d: &mut Doc, x: i32, y: i32, extend: bool, r: Rec
         return;
     }
     ensure_cache(s, d);
-    let hit = s.cache.as_ref().and_then(|(_, vp, _)| vp.pick(&s.cam, r.w as u32, r.h as u32, (x - r.x) as f32, (y - r.y) as f32));
+    let hit = rigview::pick_object(d, &p, x, y).or_else(|| s.cache.as_ref().and_then(|(_, vp, _)| vp.pick(&s.cam, r.w as u32, r.h as u32, (x - r.x) as f32, (y - r.y) as f32)));
     match (hit, extend) {
         (Some(i), true) => d.toggle_select(i),
         (Some(i), false) => d.select_only(Some(i)),
@@ -1031,6 +1180,9 @@ fn click_select(s: &mut State, d: &mut Doc, x: i32, y: i32, extend: bool, r: Rec
 
 fn box_select(s: &mut State, d: &mut Doc, b: Rect, mode: BoxMode, r: Rect) {
     let p = Proj::new(&s.cam, r);
+    if rigview::box_select(d, &p, b, mode) {
+        return;
+    }
     if d.mode == Mode::Edit {
         let xray = s.xray_on();
         let hits = edit_view(s, d, &p).map(|ev| ev.in_box(d, b, xray)).unwrap_or_default();
@@ -1082,9 +1234,31 @@ fn popup_at(d: &mut Doc, ui: &Ui, title: &str, mut items: Vec<MenuItem>, r: Rect
 /// Keys over the view (not during a modal tool). Returns true when used.
 fn key_down(s: &mut State, d: &mut Doc, ui: &mut Ui, key: Key, mods: Mods, r: Rect) -> bool {
     use Key as K;
-    let edit_mode = d.mode == Mode::Edit;
+    let edit_mode = rigview::mesh_edit(d);
     let m = mouse_in(ui, r);
     let q = |d: &mut Doc, id: &str, arg: &str| d.queue.push(Op::with(id, arg));
+    if gpview::key(s, d, ui, key, mods) {
+        return true;
+    }
+    if sculptview::key(s, d, ui, key, mods, &Proj::new(&s.cam, r)).is_some() {
+        return true;
+    }
+    if let Some(after) = rigview::key(s, d, ui, key, mods) {
+        match after {
+            rigview::After::Nothing => {}
+            rigview::After::Move => {
+                start_transform(s, d, TMode::Translate, m, r);
+                mark_undo_recorded(s);
+            }
+            rigview::After::Roll => {
+                start_transform(s, d, TMode::Rotate, m, r);
+                if let Modal::Transform(t) = &mut s.modal {
+                    t.roll = true;
+                }
+            }
+        }
+        return true;
+    }
     match (key, mods) {
         // ---- navigation
         (K::Num(0), mm) if mm.ctrl => run_view_op(s, d, ui, "view3d.object_as_camera", "", r),
@@ -1123,7 +1297,8 @@ fn key_down(s: &mut State, d: &mut Doc, ui: &mut Ui, key: Key, mods: Mods, r: Re
         (K::Char('s'), Mods::SHIFT) => popup_at(d, ui, "Snap", menus::snap_items(), r),
         (K::Char('a'), Mods::SHIFT) => popup_at(d, ui, "Add", menus::add_menu(d), r),
         (K::Tab, Mods::NONE) => q(d, "object.mode_set", "TOGGLE_EDIT"),
-        (K::Tab, Mods::CTRL) => popup_at(d, ui, "Mode", menus::mode_items(), r),
+        (K::Tab, Mods::CTRL) if d.active().is_some_and(|a| crate::rig::is_armature(d, a)) => q(d, "object.mode_set", "TOGGLE_POSE"),
+        (K::Tab, Mods::CTRL) => popup_at(d, ui, "Mode", menus::mode_items(d), r),
         // ---- transforms (both modes)
         (K::Char('g'), Mods::NONE) => start_transform(s, d, TMode::Translate, m, r),
         (K::Char('r'), Mods::NONE) => start_transform(s, d, TMode::Rotate, m, r),
@@ -1187,10 +1362,16 @@ fn key_down(s: &mut State, d: &mut Doc, ui: &mut Ui, key: Key, mods: Mods, r: Re
             }
         }
         (K::Char('a'), Mods::CTRL) => popup_at(d, ui, "Apply", menus::apply_items(), r),
-        (K::Char('p'), Mods::CTRL) => popup_at(d, ui, "Set Parent To", menus::parent_items(), r),
+        (K::Char('p'), Mods::CTRL) => {
+            let items = rigview::object_parent_items(d).unwrap_or_else(menus::parent_items);
+            popup_at(d, ui, "Set Parent To", items, r)
+        }
         (K::Char('p'), mm) if mm.alt => popup_at(d, ui, "Clear Parent", menus::clear_parent_items(), r),
         (K::Char('j'), Mods::CTRL) => q(d, "object.join", ""),
         (K::Char('i'), Mods::NONE) => q(d, "anim.keyframe_insert", ""),
+        (K::Char('i'), mm) if mm.alt && !mm.shift => q(d, "anim.keyframe_delete", ""),
+        (K::Char('i'), mm) if mm.alt && mm.shift => q(d, "anim.keyframes_clear", ""),
+        (K::Char('k'), Mods::NONE) => popup_at(d, ui, "Insert Keyframe Menu", rigview::keyframe_menu(d), r),
         (K::Char('o'), mm) if mm.alt => q(d, "object.origin_clear", ""),
         (K::F(2), _) => d.report = "Rename is not available yet".into(),
         (K::F(9), _) => d.report = "screen.redo_last is not available yet".into(),
@@ -1289,6 +1470,9 @@ fn handle_modal(s: &mut State, d: &mut Doc, ui: &mut Ui, inp: Input, r: Rect) {
     let modal = core::mem::replace(&mut s.modal, Modal::None);
     s.modal = match modal {
         Modal::None => Modal::None,
+        m @ (Modal::WeightPaint { .. } | Modal::WeightGradient { .. } | Modal::BrushSize { .. }) => rigview::modal(d, &p, inp, m),
+        Modal::Sculpt(m) => sculptview::modal(s, d, &p, inp, *m),
+        Modal::Gp(m) => gpview::modal(s, d, inp, *m),
         Modal::Orbit | Modal::Pan | Modal::Zoom => match inp {
             Input::Move { x, y } => {
                 let (dx, dy) = ((x - s.last.0) as f32, (y - s.last.1) as f32);

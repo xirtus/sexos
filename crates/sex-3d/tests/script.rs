@@ -109,6 +109,21 @@ fn meshes_text_and_base64() {
     ok(&mut back, &text);
     assert_eq!(back.meshes, big.meshes);
 
+    // Seams and sharp edges ride along, small (text) and big (b64).
+    for mut m in [sex_3d::primitives::cube(2.0), sex_3d::primitives::uv_sphere(16, 8, 1.0)] {
+        m.set_seam(0, 1, true);
+        m.set_seam(3, 2, true);
+        m.set_sharp(1, 0, true);
+        let mut sc = Scene::new();
+        sc.add_mesh_object("Seamed", m.clone());
+        let text = scene_to_polyops(&sc);
+        assert!(text.contains(" seams=") && text.contains(" sharp="), "{text}");
+        let mut back = Scene::new();
+        ok(&mut back, &text);
+        assert_eq!(back.meshes[0].seams, m.seams);
+        assert_eq!(back.meshes[0].sharp_edges, m.sharp_edges);
+    }
+
     // mesh_set replaces, mesh_edit changes in place.
     ok(
         &mut s,
@@ -187,8 +202,8 @@ fn materials_modifiers_parents_collections() {
             Modifier::Bevel { width: 0.05, segments: 3, angle: 30f32.to_radians() },
             Modifier::Solidify { thickness: 0.2, offset: -1.0 },
             Modifier::Weld { distance: 0.01 },
-            Modifier::Displace { strength: 0.3 },
-            Modifier::Smooth { factor: 1.0, iterations: 4 },
+            Modifier::Displace { strength: 0.3, vertex_group: None, invert_vertex_group: false },
+            Modifier::Smooth { factor: 1.0, iterations: 4, vertex_group: None, invert_vertex_group: false },
         ]
     );
     let ci = s.find_object("Cube").unwrap();
@@ -477,6 +492,39 @@ fn scene_round_trip() {
 }
 
 #[test]
+fn compositor_tree_round_trips() {
+    use sex_3d::nodes::{NodeTree, Prop, TreeKind, Value};
+    let mut s = Scene::startup();
+    let mut t = NodeTree::new("Compositing Nodetree", TreeKind::Compositor);
+    let rl = t.add("CompositorNodeRLayers", [-300.0, 0.0]).unwrap();
+    let gl = t.add("CompositorNodeGlare", [0.0, 0.0]).unwrap();
+    let mix = t.add("CompositorNodeMixRGB", [150.0, 0.0]).unwrap();
+    let co = t.add("CompositorNodeComposite", [300.0, 0.0]).unwrap();
+    let vw = t.add("CompositorNodeViewer", [300.0, -200.0]).unwrap();
+    t.nodes[gl].set_prop("glare_type", Prop::Enum("FOG_GLOW".into()));
+    t.nodes[gl].set_prop("threshold", Prop::Float(0.5));
+    t.nodes[mix].set_prop("blend_type", Prop::Enum("SCREEN".into()));
+    t.nodes[mix].set_input("Fac", Value::Float(0.25));
+    t.nodes[mix].mute = true;
+    t.link(rl, "Image", gl, "Image").unwrap();
+    t.link(gl, "Image", mix, "Image").unwrap();
+    t.link(rl, "Image", mix, "Image_001").unwrap();
+    t.link(mix, "Image", co, "Image").unwrap();
+    t.link(gl, "Image", vw, "Image").unwrap();
+    s.compositor = Some(t);
+    let text = scene_to_polyops(&s);
+    assert!(text.contains("node_tree compositor"), "{text}");
+    let mut back = Scene::new();
+    ok(&mut back, &text);
+    assert_eq!(back.compositor, s.compositor, "--- text ---\n{text}");
+    assert_eq!(scene_to_polyops(&back), text);
+    // Commands address the compositor tree directly.
+    ok(&mut back, "polyops 1\nnode_set compositor Glare prop:glare_type BLOOM\n");
+    let c = back.compositor.as_ref().unwrap();
+    assert_eq!(c.nodes[c.find("Glare").unwrap()].enum_prop("glare_type"), "BLOOM");
+}
+
+#[test]
 fn euler_and_quaternion_agree() {
     for (x, y, z) in [(0.3f32, -0.4f32, 1.2f32), (0.0, 1.5707964, 0.7), (2.0, -1.5707964, -0.2), (0.0, 0.0, 0.0)] {
         let q = Quat::from_euler_xyz(x, y, z);
@@ -508,46 +556,61 @@ fn tmp(name: &str) -> PathBuf {
     d.join(name)
 }
 
-/// Run a Python script against `scene` the way Polyamour does: the scene as
-/// POLYAMOUR_SCENE, the commands back through POLYAMOUR_OPS (or stdout).
-fn run_python(py: &str, script: &Path, scene: &mut Scene, via_stdout: bool) -> Result<RunReport, ScriptError> {
+/// Run a Python script against `scene` on the batch path (the one SexOS uses):
+/// a snapshot of the scene for reads, the commands back through a file, all
+/// passed as arguments; then applied all or nothing.
+fn run_python(py: &str, script: &Path, scene: &mut Scene) -> Result<RunReport, ScriptError> {
+    use sex_3d::script::live;
     let tag = script.file_stem().unwrap().to_string_lossy().to_string();
-    let snap = tmp(&format!("{tag}.scene.polyops"));
+    let snap = tmp(&format!("{tag}.snapshot.json"));
     let ops = tmp(&format!("{tag}.ops.polyops"));
-    std::fs::write(&snap, scene_to_polyops(scene)).unwrap();
-    let mut cmd = Command::new(py);
-    cmd.arg("-I").arg("-c").arg("import sys, runpy; sys.path[:0] = [sys.argv[1]]; sys.argv = sys.argv[2:]; runpy.run_path(sys.argv[0], run_name='__main__')");
-    cmd.arg(package_dir()).arg(script).env("POLYAMOUR_SCENE", &snap).env_remove("POLYAMOUR_OPS");
-    if !via_stdout {
-        cmd.env("POLYAMOUR_OPS", &ops);
-    }
-    let out = cmd.output().unwrap();
-    // The script's own output: stderr, plus stdout when commands went to the file.
-    let mut stderr = String::from_utf8_lossy(&out.stderr).to_string();
-    let text = if via_stdout {
-        String::from_utf8(out.stdout).unwrap()
-    } else {
-        stderr += &String::from_utf8_lossy(&out.stdout);
-        std::fs::read_to_string(&ops).unwrap()
-    };
-    let r = run(scene, &text);
+    let _ = std::fs::remove_file(&ops);
+    std::fs::write(&snap, live::batch_snapshot(scene)).unwrap();
+    let mut cfg = live::KernelConfig::host();
+    cfg.program = py.to_string();
+    let out = live::batch_command(&cfg, script, &ops, &snap).stdout(std::process::Stdio::null()).output().unwrap();
+    let text = std::fs::read_to_string(&ops).unwrap_or_default();
+    // What the script printed comes back in the command file (no pipes on SexOS).
+    let mut printed: String = live::batch_output(&text)
+        .into_iter()
+        .map(|p| match p {
+            live::Printed::Out(s) | live::Printed::Err(s) => s + "\n",
+        })
+        .collect();
+    printed += &String::from_utf8_lossy(&out.stdout);
+    printed += &String::from_utf8_lossy(&out.stderr);
+    let r = live::batch_apply(scene, &text);
     if r.is_ok() {
-        assert!(out.status.success(), "python failed:\n{stderr}");
+        assert!(out.status.success(), "python failed:\n{printed}");
     }
     r.map(|mut rep| {
-        rep.replies.push(stderr);
+        rep.replies.push(printed);
         rep
     })
+}
+
+/// Run an example on a live kernel (it reads back what it made); the kernel
+/// is returned for its session state (render settings, reports).
+fn run_live(path: &Path, scene: &mut Scene) -> (String, sex_3d::script::live::Kernel) {
+    use sex_3d::script::live::{Kernel, KernelConfig, NoHost};
+    let mut k = Kernel::spawn(&KernelConfig::host()).expect("start the kernel");
+    let src = std::fs::read_to_string(path).unwrap();
+    let name = path.file_name().unwrap().to_string_lossy().to_string();
+    let r = k.call(scene, &mut NoHost, "exec", &[&name, &src]);
+    if let Err(e) = &r.result {
+        panic!("{name}: {e}\n{}\n{}", e.traceback, r.text());
+    }
+    (r.text(), k)
 }
 
 #[test]
 fn python_spiral_staircase() {
     let Some(py) = python() else { return };
     let mut s = Scene::startup();
-    let r = run_python(py, &package_dir().join("examples/spiral_staircase.py"), &mut s, false).unwrap();
-    assert!(r.complete);
-    assert!(r.replies.last().unwrap().contains("staircase: 32 objects"), "{:?}", r.replies);
-    assert_eq!(r.render.get("resolution_x").map(String::as_str), Some("1280"));
+    let _ = py;
+    let (printed, k) = run_live(&package_dir().join("examples/spiral_staircase.py"), &mut s);
+    assert!(printed.contains("staircase: 32 objects"), "{printed}");
+    assert_eq!(k.session.bpy.props.get("render.resolution_x").map(String::as_str), Some("1280"));
     assert_eq!(s.objects.len(), 3 + 24 + 5);
     let pole = s.find_object("Pole").unwrap();
     let stairs = s.collections.iter().position(|c| c.name == "Staircase").unwrap();
@@ -592,8 +655,8 @@ fn python_spiral_staircase() {
 fn python_plain_bpy_script() {
     let Some(py) = python() else { return };
     let mut s = Scene::startup();
-    let r = run_python(py, &package_dir().join("examples/blender_pyramid.py"), &mut s, true).unwrap();
-    assert!(r.complete);
+    let _ = py;
+    let (_, k) = run_live(&package_dir().join("examples/blender_pyramid.py"), &mut s);
     assert!(s.find_object("Cube").is_none(), "the default cube is deleted");
     let names: Vec<&str> = s.objects.iter().map(|o| o.name.as_str()).collect();
     assert_eq!(names, ["Light", "Camera", "Pyramid", "Ball", "Sun"]);
@@ -623,7 +686,7 @@ fn python_plain_bpy_script() {
     let want = Quat::from_euler_xyz(45f32.to_radians(), 0.0, 30f32.to_radians()).rotate(Vec3::Z);
     assert!(close(sun_x, want));
     assert_eq!(s.active_object, s.find_object("Pyramid"));
-    assert_eq!(r.render.get("engine").map(String::as_str), Some("CYCLES"));
+    assert_eq!(k.session.bpy.props.get("render.engine").map(String::as_str), Some("CYCLES"));
 }
 
 #[test]
@@ -633,9 +696,9 @@ fn python_failure_applies_nothing() {
     std::fs::write(&script, "import bpy\nbpy.ops.mesh.primitive_cube_add()\nbpy.data.objects['Missing']\n").unwrap();
     let mut s = Scene::startup();
     let before = s.clone();
-    let e = run_python(py, &script, &mut s, false).unwrap_err();
-    assert!(e.message.contains("script aborted: KeyError"), "{e}");
-    assert_eq!(e.line, 3);
+    let e = run_python(py, &script, &mut s).unwrap_err();
+    // The message names the script's line.
+    assert!(e.message.contains("script aborted: line 3: KeyError"), "{e}");
     assert_eq!(s, before);
 }
 
@@ -650,7 +713,7 @@ fn python_reads_the_scene_snapshot() {
          cube = bpy.data.objects['Cube']\n\
          assert cube.type == 'MESH' and cube.active_material.name == 'Material', cube.active_material\n\
          assert len(cube.data.vertices) == 8 and len(cube.data.polygons) == 6\n\
-         assert bpy.context.active_object is cube\n\
+         assert bpy.context.active_object == cube\n\
          assert cam.name == 'Camera' and abs(cam.data.lens - 50) < 1e-3, cam.data.lens\n\
          assert abs(bpy.data.objects['Light'].location.z - 5.9) < 1e-5\n\
          cube.location.z += 1\n\
@@ -661,12 +724,138 @@ fn python_reads_the_scene_snapshot() {
     )
     .unwrap();
     let mut s = Scene::startup();
-    let r = run_python(py, &script, &mut s, false).unwrap();
-    assert!(r.replies.last().unwrap().contains("['Cube', 'Light', 'Camera', 'Copy']"), "{:?}", r.replies);
+    let r = run_python(py, &script, &mut s).unwrap();
+    // Batch reads see the scene as it was when the script started.
+    assert!(r.replies.last().unwrap().contains("['Cube', 'Light', 'Camera']"), "{:?}", r.replies);
     assert!(close(obj(&s, "Cube").transform.location, Vec3::new(0.0, 0.0, 1.0)));
     assert_eq!(obj(&s, "Copy").data, obj(&s, "Cube").data);
     assert_eq!(obj(&s, "Copy").materials, vec![0], "a new user of the mesh gets its materials");
     let ObjectData::Mesh(m) = obj(&s, "Cube").data else { panic!() };
     assert_eq!(s.meshes[m].positions[0], Vec3::splat(-2.0));
     assert_eq!(s.materials[0].roughness, 0.9);
+}
+
+// --- Shader node trees ------------------------------------------------------------
+
+const NODES: &str = "polyops 1\n\
+     material_new Wood as=$m\n\
+     add_empty Probe\n\
+     node_tree group Half\n\
+     node_interface group Half input In float default=1 min=0 max=10\n\
+     node_interface group Half output Out float\n\
+     node_add group Half NodeGroupInput name=In location=-200,0\n\
+     node_add group Half ShaderNodeMath name=Mul\n\
+     node_set group Half Mul prop:operation MULTIPLY\n\
+     node_set group Half Mul in:Value_001 0.5\n\
+     node_add group Half NodeGroupOutput name=Out location=200,0\n\
+     node_link group Half In Socket_0 Mul Value\n\
+     node_link group Half Mul Value Out Socket_1\n\
+     node_tree material $m\n\
+     node_add material $m ShaderNodeOutputMaterial location=300,0\n\
+     node_add material $m ShaderNodeBsdfPrincipled label=Shiny width=240 select=1\n\
+     node_set material $m \"Principled BSDF\" \"in:Base Color\" 0.8,0.2,0.1\n\
+     node_set material $m \"Principled BSDF\" hide:in:Weight 1\n\
+     node_add material $m ShaderNodeValToRGB name=Ramp\n\
+     node_set material $m Ramp prop:color_ramp CONSTANT;RGB;0,0,0,0,1;0.5,1,0.5,0,1\n\
+     node_add material $m ShaderNodeRGBCurve name=Curves\n\
+     node_set material $m Curves prop:mapping 0,0,1,0.5;0,0,1,1;0,0,1,1;0,0,1,1\n\
+     node_add material $m ShaderNodeTexCoord name=Coords\n\
+     node_set material $m Coords prop:object Probe\n\
+     node_add material $m ShaderNodeGroup name=G\n\
+     node_set material $m G prop:node_tree Half\n\
+     node_set material $m G in:Socket_0 0.25\n\
+     node_add material $m NodeFrame name=Box label=Textures color=0.1,0.2,0.3\n\
+     node_set material $m Ramp parent Box\n\
+     node_add material $m ShaderNodeMix name=Mix mute=1 hide=1\n\
+     node_set material $m Mix prop:blend_type MULTIPLY\n\
+     node_add material $m ShaderNodeFromTheFuture name=Future unknown=1\n\
+     node_socket material $m Future in Thing float name=\"The Thing\"\n\
+     node_socket material $m Future out Out color\n\
+     node_set material $m Future in:Thing 2\n\
+     node_set material $m Future prop:flavour SOUR type=enum\n\
+     node_link material $m Future Out Mix A_Color\n\
+     node_link material $m Ramp Color \"Principled BSDF\" \"Base Color\"\n\
+     node_link material $m G Socket_1 \"Principled BSDF\" Roughness muted=1\n\
+     node_link material $m \"Principled BSDF\" BSDF \"Material Output\" Surface\n\
+     node_tree material $m active=Ramp\n\
+     node_tree world name=Sky\n\
+     node_add world ShaderNodeBackground\n\
+     node_set world Background in:Strength 3\n\
+     node_add world ShaderNodeOutputWorld\n\
+     node_link world Background Background \"World Output\" Surface\n";
+
+#[test]
+fn node_trees_from_commands() {
+    use sex_3d::nodes::{Prop, Value};
+    let mut s = Scene::startup();
+    ok(&mut s, NODES);
+    let m = s.materials.iter().find(|m| m.name == "Wood").unwrap();
+    let t = m.node_tree.as_ref().unwrap();
+    assert_eq!(t.nodes.len(), 9);
+    let n = |name: &str| &t.nodes[t.find(name).unwrap_or_else(|| panic!("no {name}"))];
+    let p = n("Principled BSDF");
+    assert_eq!((p.label.as_str(), p.width, p.select), ("Shiny", 240.0, true));
+    assert_eq!(p.inputs[p.input("Base Color").unwrap()].value, Value::Color([0.8, 0.2, 0.1, 1.0]));
+    assert!(p.inputs[p.input("Weight").unwrap()].hide);
+    let Some(Prop::Ramp(r)) = n("Ramp").prop("color_ramp") else { panic!() };
+    assert_eq!((r.interpolation.as_str(), r.elements.len(), r.elements[1]), ("CONSTANT", 2, (0.5, [1.0, 0.5, 0.0, 1.0])));
+    let Some(Prop::Curve(c)) = n("Curves").prop("mapping") else { panic!() };
+    assert_eq!(c.curves[0], vec![[0.0, 0.0], [1.0, 0.5]]);
+    assert_eq!(n("Coords").prop("object"), Some(&Prop::Id(s.find_object("Probe"))));
+    let g = n("G");
+    assert_eq!(g.prop("node_tree"), Some(&Prop::Id(Some(0))));
+    assert_eq!((g.inputs.len(), g.outputs.len(), g.inputs[0].value.clone()), (1, 1, Value::Float(0.25)));
+    assert_eq!(n("Ramp").parent, t.find("Box"));
+    assert_eq!(n("Box").color, Some([0.1, 0.2, 0.3]));
+    assert!(n("Mix").mute && n("Mix").hide);
+    let f = n("Future");
+    assert_eq!((f.inputs[0].name.as_str(), f.inputs[0].value.clone()), ("The Thing", Value::Float(2.0)));
+    assert_eq!(f.prop("flavour"), Some(&Prop::Enum("SOUR".into())));
+    assert_eq!(t.links.len(), 4);
+    assert!(t.links.iter().any(|l| l.muted && l.to_node == t.find("Principled BSDF").unwrap()));
+    assert_eq!(t.active, t.find("Ramp"));
+    let half = &s.node_groups[0];
+    assert_eq!((half.name.as_str(), half.inputs[0].default.clone(), half.inputs[0].max), ("Half", Value::Float(1.0), 10.0));
+    assert_eq!(half.links.len(), 2);
+    let w = s.world.node_tree.as_ref().unwrap();
+    assert_eq!((w.name.as_str(), w.nodes.len(), w.links.len()), ("Sky", 2, 1));
+
+    // Written back and run again: the same trees, and the same text.
+    let text = scene_to_polyops(&s);
+    let mut back = Scene::new();
+    ok(&mut back, &text);
+    assert_eq!(back, s, "--- text ---\n{text}");
+    assert_eq!(scene_to_polyops(&back), text);
+
+    // Interface changes reach the Group nodes that use the group.
+    ok(&mut s, "polyops 1\nnode_interface group Half input Gain float default=2\n");
+    let t = s.materials.iter().find(|m| m.name == "Wood").unwrap().node_tree.as_ref().unwrap();
+    let g = &t.nodes[t.find("G").unwrap()];
+    assert_eq!(g.inputs.len(), 2);
+    assert_eq!(g.inputs[0].value, Value::Float(0.25), "kept by name");
+    assert_eq!(g.inputs[1].value, Value::Float(2.0));
+}
+
+#[test]
+fn node_command_errors() {
+    let base = "polyops 1\nnode_tree material Material\n";
+    for (src, want) in [
+        ("node_add material Material ShaderNodeNope", "unknown node type"),
+        ("node_add material Nope ShaderNodeMath", "no material"),
+        ("node_add world ShaderNodeMath", "no node tree"),
+        ("node_add group Nope ShaderNodeMath", "no node group"),
+        ("node_add material Material ShaderNodeMath\nnode_set material Material Math in:Nope 1", "no input socket"),
+        ("node_add material Material ShaderNodeMath\nnode_set material Material Math in:Value red", "not a finite number"),
+        ("node_add material Material ShaderNodeMath\nnode_set material Material Math prop:nope 1", "no property"),
+        ("node_add material Material ShaderNodeMath\nnode_set material Material Math wobble 1", "cannot set"),
+        ("node_add material Material ShaderNodeMath\nnode_link material Material Math Value Math Value", "itself"),
+        ("node_add material Material ShaderNodeMath\nnode_add material Material ShaderNodeMath\nnode_link material Material Math Value Math.001 Value\nnode_link material Material Math.001 Value Math Value", "cycle"),
+        ("node_add material Material NodeFrame\nnode_add material Material NodeFrame\nnode_set material Material Frame parent Frame.001\nnode_set material Material Frame.001 parent Frame", "cycle"),
+        ("node_interface material Material input X float", "group"),
+        ("node_set material Material Math prop:operation ADD", "no node named"),
+        ("node_tree object Cube", "material NAME"),
+    ] {
+        let e = err(&format!("{base}{src}\n"));
+        assert!(e.message.contains(want), "{src}: {e}");
+    }
 }

@@ -180,8 +180,8 @@ impl<'a> Draw<'a> {
                 if c.a() > 0 { if *radius > 0.0 { p.fill_round(r, *radius, c); } else { p.fill_rect(r, c); } }
                 if *border { p.stroke_round(r, *radius, t.border_width(), pal.border); }
             }
-            Kind::Label { text, style, wrap, align, color } => {
-                let face = if *style == TextStyle::Mono { Face::Mono } else { Face::Sans };
+            Kind::Label { text, style, wrap, align, color, emphasis } => {
+                let face = emphasis.map_or(style.face(), |e| style.face().with(e));
                 let size = text_px(t, *style);
                 let c = if !n.enabled { pal.text_disabled } else { color.unwrap_or(if *style == TextStyle::Caption { pal.text_dim } else { pal.text }) };
                 let s = t.scale;

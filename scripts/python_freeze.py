@@ -8,8 +8,9 @@ same bytes CPython's Programs/_freeze_module.py would put in Python/frozen_modul
 apps/python/build.rs turns the folder into CPython's frozen-module tables.
 
 It also freezes POLYAMOUR, Polyamour's scripting API (apps/polyamour/python: the
-`polyamour` package and its `bpy` and `mathutils` aliases), so every SexOS Python
-script can `import bpy` without anything installed in its folder.
+`polyamour` package with its kernel, and `bpy`, `bpy_extras`, `mathutils` and
+`bmesh`), so every SexOS Python script can `import bpy` without anything
+installed in its folder. Every module of those packages must be listed.
 
 Bytecode belongs to one CPython release series, so this must run under the same
 3.13 series as vendor/cpython-3.13.18 (an installed CPython 3.13's own Lib folder
@@ -43,13 +44,22 @@ warnings weakref this
 hashlib hmac secrets socket selectors _compression gzip urllib urllib.parse ipaddress encodings.idna encodings.punycode stringprep
 sqlite3 sqlite3.dbapi2 sqlite3.dump
 ssl
+codeop
 '''.split()
 # SexOS's own versions, from apps/python/lib (ssl: TLS through the network service).
 OWN={'ssl'}
 
 # Polyamour's scripting API, compiled from apps/polyamour/python rather than Lib/.
 POLYAMOUR_DIR=ROOT/'apps/polyamour/python'
-POLYAMOUR='polyamour polyamour.polyops polyamour.types bpy mathutils'.split()
+POLYAMOUR='''
+polyamour polyamour.polyops polyamour._base polyamour._arrays polyamour.mesh polyamour.anim polyamour.rig
+polyamour.shading polyamour.types polyamour.scene polyamour.rna polyamour.ops polyamour.app
+polyamour.addons polyamour.kernel
+bpy bpy.types bpy.props bpy.app bpy.utils bpy.path bpy.msgbus
+bpy_extras bpy_extras.io_utils bpy_extras.object_utils bpy_extras.view3d_utils
+mathutils mathutils.geometry mathutils.kdtree mathutils.bvhtree mathutils.noise mathutils.interpolate
+bmesh bmesh.types bmesh.ops bmesh.utils bmesh.geometry bmesh._remote
+'''.split()
 
 def main():
     if sys.version_info[:2]!=VERSION:raise SystemExit(f'run this with Python {VERSION[0]}.{VERSION[1]}')

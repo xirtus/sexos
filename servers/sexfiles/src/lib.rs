@@ -31,6 +31,7 @@ mod updater;
 mod packages;
 mod console_relay;
 mod volumes;
+mod fs_disks;
 mod home;
 mod document;
 mod document_journal;

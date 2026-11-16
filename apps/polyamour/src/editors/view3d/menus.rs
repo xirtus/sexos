@@ -172,7 +172,7 @@ pub fn add_menu(d: &Doc) -> Vec<MenuItem> {
         sub("Metaball", vec![op("Ball", "", "object.metaball_add")]),
         op("Text", "", "object.text_add"),
         sub("Volume", vec![op("Empty", "", "object.volume_add")]),
-        sub("Grease Pencil", vec![op("Blank", "", "object.grease_pencil_add")]),
+        sub("Grease Pencil", crate::gpencil::add_menu_items()),
         SEP,
         sub("Armature", vec![op("Single Bone", "", "object.armature_add")]),
         op("Lattice", "", "object.add"),
@@ -331,6 +331,9 @@ pub fn object_menu(_d: &Doc) -> Vec<MenuItem> {
         op("Shade Flat", "", "object.shade_flat"),
         SEP,
         sub("Animation", vec![op("Insert Keyframe", "I", "anim.keyframe_insert"), op("Clear Keyframes...", "Alt I", "anim.keyframe_clear_v3d")]),
+        sub("Rigid Body", crate::physics::rigid_body_menu()),
+        SEP,
+        sub("Quick Effects", crate::physics::quick_effects_menu()),
         SEP,
         sub("Convert", vec![opa("Mesh", "", "object.convert", "MESH"), op("Curve", "", "object.convert_curve")]),
         SEP,
@@ -520,18 +523,18 @@ pub fn edge_menu(_d: &Doc) -> Vec<MenuItem> {
         op("Subdivide Edge-Ring", "", "mesh.subdivide_edgering"),
         op("Un-Subdivide", "", "mesh.unsubdivide"),
         SEP,
-        op("Rotate Edge CW", "", "mesh.edge_rotate"),
-        op("Rotate Edge CCW", "", "mesh.edge_rotate"),
+        opa("Rotate Edge CW", "", "mesh.edge_rotate", "CW"),
+        opa("Rotate Edge CCW", "", "mesh.edge_rotate", "CCW"),
         SEP,
         op("Edge Slide", "", "transform.edge_slide"),
         op("Offset Edge Slide", "", "mesh.offset_edge_loops_slide"),
         op("Loop Cut and Slide", "Ctrl R", "mesh.loopcut_slide"),
         SEP,
         op("Mark Seam", "", "mesh.mark_seam"),
-        op("Clear Seam", "", "mesh.mark_seam"),
+        opa("Clear Seam", "", "mesh.mark_seam", "CLEAR"),
         SEP,
         op("Mark Sharp", "", "mesh.mark_sharp"),
-        op("Clear Sharp", "", "mesh.mark_sharp"),
+        opa("Clear Sharp", "", "mesh.mark_sharp", "CLEAR"),
     ]
 }
 
@@ -575,10 +578,10 @@ pub fn uv_menu(_d: &Doc) -> Vec<MenuItem> {
         op("Sphere Projection", "", "uv.sphere_project"),
         SEP,
         op("Project from View", "", "uv.project_from_view"),
-        op("Project from View (Bounds)", "", "uv.project_from_view"),
+        opa("Project from View (Bounds)", "", "uv.project_from_view", "BOUNDS"),
         SEP,
         op("Mark Seam", "", "mesh.mark_seam"),
-        op("Clear Seam", "", "mesh.mark_seam"),
+        opa("Clear Seam", "", "mesh.mark_seam", "CLEAR"),
         SEP,
         op("Reset", "", "uv.reset"),
     ]
@@ -684,21 +687,10 @@ pub fn shading_pie() -> Vec<MenuItem> {
     ]
 }
 
-pub fn mode_items() -> Vec<MenuItem> {
-    Mode::ALL
-        .iter()
-        .map(|m| {
-            let arg = match m {
-                Mode::Object => "OBJECT",
-                Mode::Edit => "EDIT",
-                Mode::Sculpt => "SCULPT",
-                Mode::VertexPaint => "VERTEX_PAINT",
-                Mode::WeightPaint => "WEIGHT_PAINT",
-                Mode::TexturePaint => "TEXTURE_PAINT",
-            };
-            opa(m.label(), "", "object.mode_set", arg)
-        })
-        .collect()
+/// The modes the active object offers (Pose for armatures, the paint
+/// modes for meshes).
+pub fn mode_items(d: &Doc) -> Vec<MenuItem> {
+    crate::rig::modes_for(d, d.active()).into_iter().map(|m| opa(m.label(), "", "object.mode_set", m.id())).collect()
 }
 
 pub fn orientation_items(d: &Doc) -> Vec<MenuItem> {

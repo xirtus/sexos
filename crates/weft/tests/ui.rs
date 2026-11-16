@@ -305,6 +305,52 @@ fn the_accessibility_tree_names_roles_states_and_round_trips() {
 }
 
 #[test]
+fn the_shell_reads_the_tree_weft_sends() {
+    use accesskit::Role;
+    // sex_pdx::a11y names AccessKit's roles by number: they must be these.
+    let names = [(Role::Button, "button"), (Role::DefaultButton, "button"), (Role::TextInput, "text field"), (Role::PasswordInput, "password field"),
+        (Role::CheckBox, "check box"), (Role::Switch, "switch"), (Role::RadioButton, "radio button"), (Role::Slider, "slider"), (Role::Tab, "tab"),
+        (Role::TabList, "tab list"), (Role::ListBox, "list"), (Role::ListBoxOption, "list item"), (Role::MenuItem, "menu item"), (Role::Menu, "menu"),
+        (Role::MenuBar, "menu bar"), (Role::MenuItemCheckBox, "check menu item"), (Role::Dialog, "dialog"), (Role::ProgressIndicator, "progress bar"),
+        (Role::Tree, "tree"), (Role::TreeItem, "tree item"), (Role::Table, "table"), (Role::Row, "row"), (Role::Status, "status"), (Role::Tooltip, "tooltip"),
+        (Role::Image, "image"), (Role::Label, ""), (Role::Window, ""), (Role::GenericContainer, "")];
+    for (role, name) in names { assert_eq!(sex_pdx::a11y::role_name(role as u8), name, "{role:?}"); }
+    assert_eq!(sex_pdx::a11y::MAGIC, a11y::MAGIC);
+    assert_eq!(sex_pdx::a11y::VERSION, a11y::VERSION);
+
+    let mut ui = ui();
+    let root = ui.root();
+    let col = ui.column(root);
+    let ok = ui.button(col, "OK");
+    let field = ui.field(col, "hello", "Name");
+    ui.slider(col, 0.0, 10.0, 3.0);
+    ui.focus(Some(ok));
+    let full = ui.a11y_tree();
+    let bytes = a11y::encode(&full);
+    let mut seen = Vec::new();
+    let head = sex_pdx::a11y::scan(&bytes, |n| seen.push((n.id, n.role, String::from_utf8(n.label.to_vec()).unwrap()))).unwrap();
+    assert_eq!(head.root, Some(1));
+    assert_eq!(head.focus, a11y::node_id(ok).0);
+    assert_eq!(seen.len(), full.nodes.len());
+    let wire = a11y::decode(&bytes).unwrap();
+    for (s, w) in seen.iter().zip(&wire.nodes) { assert_eq!((s.0, s.1, s.2.as_str()), (w.id, w.role, w.label.as_str())); }
+    let focused = seen.iter().find(|s| s.0 == head.focus).unwrap();
+    let mut said = [0u8; 64];
+    let n = sex_pdx::a11y::speak(&sex_pdx::a11y::NodeText { id: focused.0, role: focused.1, hidden: false, disabled: false, label: focused.2.as_bytes(), value: b"" }, &mut said);
+    assert_eq!(&said[..n], b"OK button");
+    // The pieces carry the same bytes; cut ones are refused.
+    let mut back = Vec::new();
+    for [x, y, z] in sex_pdx::a11y::pieces(&bytes) { back.extend_from_slice(sex_pdx::a11y::Piece::decode(x, y, z).unwrap().data()); }
+    assert_eq!(back, bytes);
+    assert!(sex_pdx::a11y::scan(&bytes[..bytes.len() - 1], |_| {}).is_none());
+    // A focus move alone: the update scans and names the new focus.
+    ui.focus(Some(field));
+    let upd = a11y::encode(&ui.a11y_update().unwrap());
+    let head = sex_pdx::a11y::scan(&upd, |_| {}).unwrap();
+    assert_eq!(head.focus, a11y::node_id(field).0);
+}
+
+#[test]
 fn layout_hides_invisible_widgets_and_scroll_views_scroll() {
     let mut ui = ui();
     let root = ui.root();
