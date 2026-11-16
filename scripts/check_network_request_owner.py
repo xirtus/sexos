@@ -17,7 +17,7 @@ def check(root,out):
   if result.returncode!=(101 if rejected else 0):raise RuntimeError(name+': '+result.stdout)
   if rejected:print('[network.request.owner.mutant] rejected='+name)
   else:print(result.stdout,end='')
- print('[network.request.owner.host] PASS typed_dispatches=5 cases=7 mutants=2 legacy_cached_reads_unchanged=1')
+ print('[network.request.owner.host] PASS typed_dispatches=5 cases=8 mutants=2 legacy_cached_reads_unchanged=1')
 def main():
  p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=Path(__file__).resolve().parents[1]);p.add_argument('--out',type=Path);a=p.parse_args();root=a.root.resolve()
  if a.out:a.out.mkdir(parents=True,exist_ok=False);check(root,a.out.resolve())

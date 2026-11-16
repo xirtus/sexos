@@ -1,0 +1,9 @@
+LIBRARY KERNEL32.dll
+EXPORTS
+GetStdHandle
+WriteFile
+ExitProcess
+AddVectoredExceptionHandler
+VirtualAlloc
+GetCurrentThreadId
+GetTickCount64

@@ -1,0 +1,39 @@
+{
+  "scope": "Normal sealed compile/package only; no QEMU or sandbox crash/restart/isolation/installer qualification.",
+  "source_commit": "dfb03d9375ba0ba44e18b975a307a700a26094ad",
+  "evidence_directory": "/Users/xmacbookm5/Projects/sexos-plan/target/restricted-parent-build-only-dfb03d937",
+  "result_sha256": "836f1a7a81809fa566a2fd07124efcab5f50b16c13ff5b272ba9de087b26967c",
+  "production_source_count": 1981,
+  "source_manifest_sha256": "4fd4d9c22f7ec35d2767d70bb22ecd70a3f9e7c0c35efaf41bf34623385c4ebc",
+  "iso_sha256": "655d76f2f66ad497ebdf31f148259759020069c55167ade6c90522d10ae7a210",
+  "iso_bytes": 311666688,
+  "production_elf_count": 84,
+  "consumed_inputs": {
+    "build_sexfiles": {
+      "artifact": {
+        "bytes": 1618376,
+        "sha256": "f41a4809300e9f989d222eed3ac496b287d969929825423042b39aab2c687410"
+      },
+      "complete": true,
+      "inputs": {
+        "iso_root/programs/moanplug": {
+          "bytes": 126912,
+          "sha256": "1da037d2100cb6e4bebf3113debe22ad75d98f421f0180b28f6567bee45dd1ae"
+        }
+      },
+      "manifest": "servers/sexfiles/Cargo.toml",
+      "output": "iso_root/servers/sexfiles",
+      "stage": "build_sexfiles"
+    }
+  },
+  "local_checks": {
+    "python_tests": 1376,
+    "python_log": "/tmp/sexos-root-restricted-full-python-v2.log",
+    "moan_host_tests": 60,
+    "moan_log": "/tmp/sexos-root-moan-cleanup-ui-host-v2.log",
+    "plugin_host_tests": 29,
+    "plugin_log": "/tmp/sexos-root-restricted-supervisor-all-host-final.log"
+  },
+  "runtime_gates": "not run: automatic security review stopped gate agent twice",
+  "merge": "held: missing runtime qualification, unreviewed current-master kernel source and author-owned Fuzz save race in current PR296 CI"
+}

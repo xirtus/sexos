@@ -24,10 +24,12 @@ pub fn now() -> u64 { sex_pdx::get_ticks() }
 /// end of a drag this window started, read with `sex_app::dnd`).
 pub fn event(e: AppEvent) -> Option<Event> {
     Some(match e {
-        AppEvent::Drop { .. } | AppEvent::DragEnded { .. } => return None,
+        AppEvent::Drop { .. } | AppEvent::DragEnded { .. } | AppEvent::KeyUp(_) => return None,
         AppEvent::Key(k) => Event::Key(Key { code: k.code, shift: k.shift, control: k.control, text: k.char() }),
         AppEvent::Close => Event::Close,
         AppEvent::Resize { width, height } => Event::Resize { width: width as u32, height: height as u32 },
+        AppEvent::Drop { kind, x, y } => Event::Drop { kind, x, y },
+        AppEvent::DragEnded { target } => Event::DragEnded { target },
         AppEvent::Pointer(p) => {
             let button = |b: u8| match b { 1 => Button::Middle, 2 => Button::Right, _ => Button::Left };
             let kind = match p.kind {

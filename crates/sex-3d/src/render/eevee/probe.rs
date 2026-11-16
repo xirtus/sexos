@@ -246,6 +246,50 @@ impl Probe {
     }
 }
 
+/// The look-dev worlds Material Preview offers (Blender's studio HDRIs, as
+/// procedural stand-ins of the same character).
+pub const STUDIO_WORLDS: [&str; 8] = ["Studio", "Forest", "City", "Courtyard", "Interior", "Night", "Sunrise", "Sunset"];
+
+/// Look-dev world `i` (see [`STUDIO_WORLDS`]) in view space (y up).
+pub(crate) fn studio_world(i: usize, d: Vec3) -> Vec3 {
+    // (zenith, horizon, ground, sun direction, sun colour, sun size, sun strength)
+    let sky = |d: Vec3, zenith: Vec3, horizon: Vec3, ground: Vec3, sun: Vec3, sun_col: Vec3, size: f32, strength: f32| {
+        let d = d.normalize();
+        let up = d.y;
+        let mut c = if up >= 0.0 { horizon + (zenith - horizon) * up.powf(0.5) } else { horizon * 0.6 + (ground - horizon * 0.6) * (-up).powf(0.3) };
+        let cos = d.dot(sun.normalize()).clamp(-1.0, 1.0);
+        let ang = cos.acos();
+        c += sun_col * (strength * (1.0 - (ang / size).clamp(0.0, 1.0)).powi(2));
+        // A wide glow around the sun.
+        c += sun_col * (0.15 * strength.sqrt() * cos.max(0.0).powi(8));
+        c
+    };
+    let v = Vec3::new;
+    match i {
+        1 => {
+            // Forest: green-filtered sky, dappled ground, a high sun.
+            let mut c = sky(d, v(0.30, 0.42, 0.35), v(0.20, 0.26, 0.16), v(0.06, 0.08, 0.04), v(0.3, 0.8, 0.2), v(1.0, 0.95, 0.8), 0.08, 30.0);
+            let n = ((d.x * 23.0).sin() * (d.z * 17.0).sin() * (d.y * 11.0).cos()).abs();
+            c = c * (0.7 + 0.3 * n);
+            c
+        }
+        2 => sky(d, v(0.35, 0.45, 0.6), v(0.45, 0.45, 0.45), v(0.12, 0.12, 0.13), v(-0.5, 0.45, -0.6), v(1.0, 0.9, 0.75), 0.06, 40.0),
+        3 => sky(d, v(0.45, 0.6, 0.85), v(0.55, 0.55, 0.5), v(0.22, 0.2, 0.17), v(0.6, 0.7, 0.3), v(1.0, 0.97, 0.9), 0.05, 60.0),
+        4 => {
+            // Interior: warm walls, a window on one side.
+            let dn = d.normalize();
+            let mut c = v(0.18, 0.15, 0.12) + v(0.05, 0.05, 0.05) * dn.y.max(0.0);
+            let win = dn.dot(v(-0.9, 0.3, -0.3).normalize());
+            c += v(1.6, 1.7, 1.9) * ((win - 0.85) / 0.05).clamp(0.0, 1.0);
+            c
+        }
+        5 => sky(d, v(0.01, 0.015, 0.04), v(0.04, 0.04, 0.06), v(0.01, 0.01, 0.01), v(0.3, 0.6, 0.5), v(0.7, 0.8, 1.0), 0.03, 8.0),
+        6 => sky(d, v(0.3, 0.4, 0.65), v(0.9, 0.6, 0.4), v(0.1, 0.08, 0.07), v(0.8, 0.08, -0.3), v(1.0, 0.7, 0.4), 0.06, 50.0),
+        7 => sky(d, v(0.18, 0.2, 0.4), v(1.0, 0.45, 0.2), v(0.08, 0.05, 0.04), v(-0.7, 0.05, -0.5), v(1.0, 0.5, 0.2), 0.07, 40.0),
+        _ => studio(d),
+    }
+}
+
 /// Our studio environment for Material Preview, in view space (x right,
 /// y up, z towards the viewer): a soft sky-to-floor gradient with a large
 /// key softbox above left, a fill on the right, a rim strip behind and a

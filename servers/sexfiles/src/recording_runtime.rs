@@ -381,7 +381,7 @@ pub fn message(msg: &crate::pdx::ReplayMsg) -> bool {
         Check::Live => {}
     }
     let word = match scope(admitted) {
-        Check::Live => fs::handle(wire::TARGET, msg.arg0, msg.arg1, msg.arg2),
+        Check::Live => fs::handle(wire::TARGET, msg.caller_task, msg.arg0, msg.arg1, msg.arg2),
         Check::Wait => f::reply(sequence, f::PENDING, 0),
         Check::Invalid => f::reply(sequence, f::DENIED, 0),
     };

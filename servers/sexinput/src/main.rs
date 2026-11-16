@@ -256,10 +256,12 @@ impl PointerOutbox {
 
 // Key custody is separate from pointer capacity. A retained key edge never
 // expires on Full: dropping a modifier suffix could leave Shell holding Control.
+// `keypad`: the key is on the numpad; Shell gets it in bit 8 of the code word, so
+// programs that ask can tell numpad 8 from the grey Up arrow (both code 0x48).
 #[derive(Clone,Copy)]
-struct KeyEdge { code:u8, down:u8, source:u8, modifiers:u8 }
+struct KeyEdge { code:u8, down:u8, source:u8, modifiers:u8, keypad:bool }
 impl KeyEdge {
-    const fn empty()->Self {Self{code:0,down:0,source:0,modifiers:0}}
+    const fn empty()->Self {Self{code:0,down:0,source:0,modifiers:0,keypad:false}}
 }
 /// `extended`: the last PS/2 byte was the E0 prefix. `skip`: bytes left of a Pause
 /// (E1) sequence, which has no key code.
@@ -290,7 +292,9 @@ impl KeyboardOutbox {
         let extended=core::mem::replace(&mut self.extended,false);
         // E0 2A / E0 36 are fake shifts around extended keys: no key of their own.
         if extended && matches!(raw&0x7f,0x2A|0x36) {return true;}
-        let mut edge=KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0};
+        let mut edge=KeyEdge{code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8,source:1,modifiers:0,keypad:false};
+        // Numpad: 7 8 9 - 4 5 6 + 1 2 3 0 . and * plain; / and Enter after E0.
+        edge.keypad=if extended {matches!(edge.code,0x35|0x1C)} else {matches!(edge.code,0x37|0x47..=0x53)};
         // Media keys share their byte with D, C and B: give them their own codes
         // (sex_pdx::app_key::KEY_MUTE, KEY_VOLUME_DOWN, KEY_VOLUME_UP), and the player
         // keys share G, J, P and Q's (KEY_PLAY_PAUSE, KEY_STOP, KEY_NEXT, KEY_PREVIOUS).
@@ -304,24 +308,26 @@ impl KeyboardOutbox {
     /// old modifiers), modifier changes, then presses of new usages, all retained whole.
     fn usb(&mut self,keys:u64,modifiers:u8,last_keys:&mut u64,last_modifiers:&mut u8)->bool {
         let mut edges=[KeyEdge::empty();20];let mut count=0;
-        let mut add=|code:u8,down:u8,mods:u8|{
-            edges[count]=KeyEdge{code,down,source:2,modifiers:mods};count+=1;
+        let mut add=|code:u8,down:u8,mods:u8,keypad:bool|{
+            edges[count]=KeyEdge{code,down,source:2,modifiers:mods,keypad};count+=1;
         };
+        // USB keypad usages: / * - + Enter 1-9 0 . and =.
+        let keypad=|usage:u8|matches!(usage,0x54..=0x63|0x67);
         let held=|set:u64,usage:u8|usage!=0 && (0..6).any(|i|(set>>(i*8)) as u8==usage);
         for i in 0..6 {
             let old=(*last_keys>>(i*8)) as u8;
             if old!=0 && !held(keys,old) {
-                if let Some(code)=hid_to_ps2(old) {add(code,0,*last_modifiers);}
+                if let Some(code)=hid_to_ps2(old) {add(code,0,*last_modifiers,keypad(old));}
             }
         }
         let codes=[0x1d,0x2a,0x38,0x5b,0x61,0x36,0x64,0x5c];
         let changed=modifiers^*last_modifiers;
-        for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)==0 {add(codes[bit],0,modifiers);}}
-        for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)!=0 {add(codes[bit],1,modifiers);}}
+        for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)==0 {add(codes[bit],0,modifiers,false);}}
+        for bit in 0..8 {if changed&(1<<bit)!=0 && modifiers&(1<<bit)!=0 {add(codes[bit],1,modifiers,false);}}
         for i in 0..6 {
             let new=(keys>>(i*8)) as u8;
             if new!=0 && !held(*last_keys,new) {
-                if let Some(code)=hid_to_ps2(new) {add(code,1,modifiers);}
+                if let Some(code)=hid_to_ps2(new) {add(code,1,modifiers,keypad(new));}
             }
         }
         if !self.push(&edges[..count]) {return false;}
@@ -335,15 +341,15 @@ impl KeyboardOutbox {
     fn poll(&mut self,budget:&mut usize,mut send:impl FnMut(u64,u64,u64)->Result<bool,u64>)->bool {
         while self.len>0 && *budget>0 {
             let edge=self.edges[self.head];*budget-=1;
-            match send(edge.code as u64,edge.down as u64,EV_KEY) {
+            match send(edge.code as u64|(edge.keypad as u64)<<8,edge.down as u64,EV_KEY) {
                 Ok(true)=>{
-                    sex_pdx::serial_record!("[sexinput.key.send] code={} down={} mod={} source={} dst=6 ok=1 err=0",edge.code,edge.down,edge.modifiers,edge.source);
+                    sex_pdx::serial_input_record!(("[sexinput.key.send] source={} dst=6 ok=1 err=0 payload=redacted", edge.source); ("[sexinput.key.send] code={} down={} mod={} source={} dst=6 ok=1 err=0",edge.code,edge.down,edge.modifiers,edge.source));
                     if edge.source==1 {
-                        if edge.down==1 {sex_pdx::serial_record!("[input.keyboard.keydown.ok] code={} source=ps2",edge.code);}
-                        else {sex_pdx::serial_record!("[input.keyboard.keyup.ok] code={} source=ps2",edge.code);}
+                        if edge.down==1 {sex_pdx::serial_input_record!(("[input.keyboard.keydown.ok] source=ps2 payload=redacted"); ("[input.keyboard.keydown.ok] code={} source=ps2",edge.code));}
+                        else {sex_pdx::serial_input_record!(("[input.keyboard.keyup.ok] source=ps2 payload=redacted"); ("[input.keyboard.keyup.ok] code={} source=ps2",edge.code));}
                     }else{
-                        if edge.down==1 {sex_pdx::serial_record!("[input.keyboard.keydown.ok] code={} source=usb",edge.code);}
-                        else {sex_pdx::serial_record!("[input.keyboard.keyup.ok] code={} source=usb",edge.code);}
+                        if edge.down==1 {sex_pdx::serial_input_record!(("[input.keyboard.keydown.ok] source=usb payload=redacted"); ("[input.keyboard.keydown.ok] code={} source=usb",edge.code));}
+                        else {sex_pdx::serial_input_record!(("[input.keyboard.keyup.ok] source=usb payload=redacted"); ("[input.keyboard.keyup.ok] code={} source=usb",edge.code));}
                     }
                     self.edges[self.head]=KeyEdge::empty();self.orders[self.head]=0;self.head=(self.head+1)%self.edges.len();self.len-=1;
                 }
@@ -512,6 +518,7 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexinput.init.start]");
+    sex_pdx::serial_record!("[input.payload.mode] component=sexinput mode={}",sex_pdx::input_diagnostics::mode());
     sex_rt::heap_init();
     serial_println!("[sexinput] Normalizer Starting...");
     // USB_HID_POINTER_PRODUCER_V1 contract: 0x260 raw path expects abs coords
@@ -877,7 +884,7 @@ pub extern "C" fn _start() -> ! {
                     let rem = &mut KBD_RECV_BUDGET;
                     if *rem > 0 {
                         *rem -= 1;
-                        serial_println!("[sexinput.kbd.recv] key=0x{:x} mod=0x{:x}", keycode, modifiers);
+                        sex_pdx::serial_input_record!(("[sexinput.kbd.recv] source=usb payload=redacted"); ("[sexinput.kbd.recv] key=0x{:x} mod=0x{:x}", keycode, modifiers));
                     }
                 }
                 // Dev-only keyboard cursor fallback (SEXOS_KEYBOARD_CURSOR=1).
@@ -898,7 +905,7 @@ pub extern "C" fn _start() -> ! {
                             let rem = &mut KBD_CURSOR_KEY_BUDGET_USB;
                             if *rem > 0 {
                                 *rem -= 1;
-                                serial_println!("[keyboard_cursor.key] code=0x{:x} dx={} dy={}", keycode, dx, dy);
+                                sex_pdx::serial_input_record!(("[keyboard_cursor.key] payload=redacted"); ("[keyboard_cursor.key] code=0x{:x} dx={} dy={}", keycode, dx, dy));
                             }
                         }
                         pdx_call(SLOT_SHELL, OP_HID_EVENT, dx as u64, dy as u64, EV_REL);
@@ -917,7 +924,7 @@ pub extern "C" fn _start() -> ! {
                     &mut *core::ptr::addr_of_mut!(LAST_USB_KEY),
                     &mut *core::ptr::addr_of_mut!(LAST_USB_MODIFIERS))};
                 if !retained {
-                    sex_pdx::serial_record!("[sexinput.key.rejected] source=usb key={} modifiers={} reason=outbox_full_or_sequence admitted=0",keycode,modifiers);
+                    sex_pdx::serial_input_record!(("[sexinput.key.rejected] source=usb admitted=0 payload=redacted"); ("[sexinput.key.rejected] source=usb key={} modifiers={} reason=outbox_full_or_sequence admitted=0",keycode,modifiers));
                 }
             }
             }
@@ -929,14 +936,14 @@ pub extern "C" fn _start() -> ! {
             // Kernel RawInput is type 0x201, arg0 = scancode
             if req.type_id == 0x201 {
                 let scancode = req.arg0;
-                sex_pdx::serial_record!("[sexinput.ps2.scancode] raw={:#x}", scancode);
+                sex_pdx::serial_input_record!(("[sexinput.ps2.scancode] payload=redacted"); ("[sexinput.ps2.scancode] raw={:#x}", scancode));
 
                 // 2. Normalize and forward to silk-shell (SLOT_SHELL = 6)
                 // Typed event via 0x202: arg0=code(break-bit stripped), arg1=1(press)/0(release), arg2=EV_KEY
                 let value = if scancode & 0x80 == 0 { 1 } else { 0 };
                 let code = (scancode & 0x7F) as u64;
                 if !input_arrival.ps2(&mut keyboard_outbox,scancode) {
-                    sex_pdx::serial_record!("[sexinput.key.rejected] source=ps2 raw={} reason=noncanonical_or_full admitted=0",scancode);
+                    sex_pdx::serial_input_record!(("[sexinput.key.rejected] source=ps2 admitted=0 payload=redacted"); ("[sexinput.key.rejected] source=ps2 raw={} reason=noncanonical_or_full admitted=0",scancode));
                 }
 
                 // 2b. Dev-only keyboard cursor fallback (SEXOS_KEYBOARD_CURSOR=1).
@@ -957,7 +964,7 @@ pub extern "C" fn _start() -> ! {
                             let rem = &mut KBD_CURSOR_KEY_BUDGET;
                             if *rem > 0 {
                                 *rem -= 1;
-                                serial_println!("[keyboard_cursor.key] code=0x{:x} dx={} dy={}", code, dx, dy);
+                                sex_pdx::serial_input_record!(("[keyboard_cursor.key] payload=redacted"); ("[keyboard_cursor.key] code=0x{:x} dx={} dy={}", code, dx, dy));
                             }
                         }
                         pdx_call(SLOT_SHELL, OP_HID_EVENT, dx as u64, dy as u64, EV_REL);

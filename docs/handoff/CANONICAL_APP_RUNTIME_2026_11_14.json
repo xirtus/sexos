@@ -1,0 +1,148 @@
+{
+  "source_checkpoint": "11a94a536ea0c4ba9f39d39348bb3db76dcf1bc3",
+  "normal_iso_sha256": "ba079b43a96fa6dffd602bdac0d468c597d8bdd80596004bb7200a52938f177c",
+  "normal_image": "canonical normal rebuild by build_input_payload_proof.sh, then exercised directly",
+  "scope": "Actual app behavior on the identified image; GitHub full CI remains required. Initial diagnostic source snapshot omitted literal font assets, so it is not accepted as a complete font-bound source closure.",
+  "gates": {
+    "moan": {
+      "app": {
+        "ok": true,
+        "tone_seconds": 2.03,
+        "edited_tracks": 2,
+        "split_undo": true,
+        "microphone": false
+      },
+      "project": {
+        "ok": true,
+        "bytes": 768228,
+        "hash": "0xe166f756ce3b4f54",
+        "tracks": 2,
+        "clips": 3,
+        "reboot_reopen": true,
+        "pointer_cut": true,
+        "edit_undo_baseline": true
+      },
+      "export": {
+        "ok": true,
+        "formats": {
+          "wav": {
+            "expected_bytes": 768044,
+            "expected_frames": 192000,
+            "codec": "pcm_s16le",
+            "decoded_frames": 192000,
+            "bytes": 768044,
+            "sha256": "1937c53402ede53692125291dfdd597145f4b1a7d1ea2f6555f0376b56e48bfa",
+            "decoded_sha256": "0cc03b924009e6f982b8de5daaf1228b20e93a0f1e36d04eaed96ddf01ba6cb3"
+          },
+          "flac": {
+            "expected_bytes": 74099,
+            "expected_frames": 192000,
+            "codec": "flac",
+            "decoded_frames": 192000,
+            "bytes": 74099,
+            "sha256": "204c25ef7820fc2950122554263dca01df76a0b95824e975b24969a1e54d3bff",
+            "decoded_sha256": "0cc03b924009e6f982b8de5daaf1228b20e93a0f1e36d04eaed96ddf01ba6cb3"
+          },
+          "mp3": {
+            "expected_bytes": 96788,
+            "expected_frames": 192000,
+            "codec": "mp3",
+            "decoded_frames": 191855,
+            "bytes": 96788,
+            "sha256": "34ceb8c8461a409c260faee5fc4c3e8d3ef1c663b0e3d18f52102b19a5bdf6c4",
+            "decoded_sha256": "aaa039229fd3e97911c92a0fd54d3a4471d32dd4bd2375712b0198b1fad48019"
+          }
+        },
+        "close_cancelled": true,
+        "partial_bytes": 24620
+      },
+      "microphone": {
+        "ok": true,
+        "tone_seconds": null,
+        "edited_tracks": 2,
+        "split_undo": true,
+        "microphone": true
+      }
+    },
+    "chastity_vault": {
+      "ok": true,
+      "kdf": {
+        "memory_mib": 32,
+        "save_ms": 1012,
+        "open_ms": 955
+      },
+      "clipboard": "refused (ordinary programs)"
+    },
+    "chastity_autofill": {
+      "ok": true,
+      "persisted_vault": true,
+      "denied_first": true,
+      "approved_once": true,
+      "consumer_run_changed": true,
+      "locked_unavailable": true,
+      "secret_serial_leak": false
+    },
+    "other_apps": {
+      "abacus": {
+        "ok": true,
+        "colours": 1304
+      },
+      "velvet": {
+        "ok": true,
+        "opened": 24,
+        "colours": {
+          "snags": 512,
+          "mingle": 552,
+          "twins": 477
+        }
+      },
+      "leather": {
+        "ok": true,
+        "apps": [
+          "hello",
+          "stitch",
+          "lantern",
+          "postcard"
+        ],
+        "text_bytes": 26,
+        "http_bytes": 29
+      }
+    }
+  },
+  "privacy": {
+    "intervals": 12,
+    "userspace_and_kernel_safe": true,
+    "redacted_first16_read_and_enqueue_per_boot": true,
+    "serial_sha256": {
+      "chastity1-serial.log": "fdafcc541f3e6305024c03ced491f693b4dc010cab0a6e7c51241840e24a7169",
+      "chastity2-serial.log": "0d89be5ed35410aedc904d15ea3f88cf6235553894fcdb9258cb86be44bd36a6"
+    },
+    "audit_sha256": "a89c286f13962919b9dfba585ba837f02667c8e14917816373b261b0bd93b4c6"
+  },
+  "manifests": {
+    "moan_inputs_sha256": "8dcda27e73bfff4c4a1b8a901843ccfa7c50637b7efdb0f717a31b0d72115b7d",
+    "moan_results_sha256": "d2343ef6623d33b5290e59390a05d476e5c8a80a374ad7440ee75979675e0f38",
+    "other_inputs_sha256": "60499182d115fc1fac9d3134eab89d3033669ecbcaa2fe18d4caea2ddc55282f",
+    "other_results_sha256": "d0243e5cf271a906388c0762e202cc68bd78d19a238b510b39e3d75a1ace798e",
+    "vault_driver_sha256": "9606a8a8ea09049dcb1f507cd4a798fd458a7d879fba482b63221025b7f0799d",
+    "autofill_driver_sha256": "68758ea3093210e13b4e19cbb6456760b63ed0638e160b7a9bbefa0d94a0810f"
+  },
+  "limitations": [
+    "QEMU microphone backend provides silence; physical microphone fidelity is not tested.",
+    "The initial vault launcher stopped before boot because llvm-readelf was absent from PATH; its original log is retained.",
+    "Normal 60-second runtime reused the built ISO with --skip-build; it is runtime evidence, not a separate sealed build.",
+    "All three original diagnostic gate failures are preserved; corrected full gates require a fresh font-complete build/freeze."
+  ],
+  "artifact_directory": "/Users/xmacbookm5/Projects/sexos-plan/target/canonical-input-proof-11a94a53-v1",
+  "complete_ci_green": false,
+  "staged_elf_sha256": {
+    "iso_root/sexos-kernel": "03eb22a07f8e801d803f6a526e213ad661f60f057c00a737b6fc5cd6f7d217c0",
+    "iso_root/servers/silk-shell": "6e4d3c2b9a718a66a27e2e45157993f1465183ce8c776f9fe5d5ea77662237d8",
+    "iso_root/servers/sexinput": "dc356bbaf842eff6a081531acad543f00bd181fa3e4802a8d5dda62424364d0b",
+    "iso_root/servers/sexusb": "06b67497771d363bbea953c315581549fac3e0672b1946ae6ca74ad8819728a7",
+    "iso_root/servers/sexfiles": "ff3feefdc7d80c07c08623e32537d304ca2ca72a58801cbc3e00c7547e700af0",
+    "iso_root/programs/chastity": "22899d435593caf1ce0d6aae68584ebe75e0385d4d2b3f96286572b0f4cc2245",
+    "iso_root/programs/chastity-probe": "c8fa08b63c5edc969c209ec7ad45ed9de92e47ff7ba1704a2cacbe349b4a3c7d",
+    "iso_root/programs/moan": "4b81ed1903c07104cb3b5bc73a4f100184700d1124287c79b1578e5c09c4b798"
+  }
+}

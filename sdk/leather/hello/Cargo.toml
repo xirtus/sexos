@@ -1,0 +1,12 @@
+[package]
+name = "leather-greeting"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+# This copyable template has its own workspace. After moving it to apps/NAME,
+# remove [workspace] and change each ../../../crates path to ../../crates.
+[workspace]
+[dependencies]
+weft = { path = "../../../crates/weft", features = ["sexos"] }
+sex-app = { path = "../../../crates/sex-app" }
+sex-pdx = { path = "../../../crates/sex-pdx" }
