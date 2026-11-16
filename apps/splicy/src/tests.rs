@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 use crate::view::{self, View, SELECT};
+use crate::media::{Library, Peaks, Thumb};
 use crate::{words, Editor};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -194,10 +195,10 @@ fn painting_shows_the_picture_selection_and_cuts_at_any_size() {
     ed.place(5, true);
     let picture: Vec<u32> = alloc::vec![0x00ff0000; 64 * 36];
     let mut view = View::default();
-    for (w, h) in [(900usize, 600usize), (320, 200), (40, 30)] {
+    for (w, h) in [(1280usize, 800usize), (640, 400), (40, 30)] {
         let mut px = alloc::vec![0u32; w * h];
-        view.paint(&mut px, w, h, &ed, Some((&picture, 64, 36)), 3 * SECOND, "");
-        if w >= 320 {
+        view.paint(&mut px, w, h, &ed, &Library::default(), Some((&picture, 64, 36)), 3 * SECOND, "");
+        if w >= 640 {
             let a = view::areas(w as i32, h as i32).player;
             assert_eq!(px[(a.y + a.h / 2) as usize * w + (a.x + a.w / 2) as usize], 0x00ff0000, "picture in the player");
             assert!(px.contains(&SELECT), "selection drawn at {w}x{h}");
@@ -205,11 +206,11 @@ fn painting_shows_the_picture_selection_and_cuts_at_any_size() {
     }
     ed.delete().unwrap();
     let mut px = alloc::vec![0u32; 900 * 600];
-    view.paint(&mut px, 900, 600, &ed, None, 0, "Exported talk.webm");
+    view.paint(&mut px, 900, 600, &ed, &Library::default(), None, 0, "Exported talk.webm");
     assert!(!px.contains(&SELECT), "nothing selected after the cut");
-    let strip = view::areas(900, 600).strip;
-    let join_x = strip.x + strip.w / 4; // 2 s of 8 s
-    assert_eq!(px[(strip.y + 2) as usize * 900 + join_x as usize], view::ACCENT, "join marked on the strip");
+    let tracks = view::areas(900, 600).tracks;
+    let join_x = tracks.x + (2 * SECOND / view.us_per_px(ed.timeline(), 900)) as i32;
+    assert_eq!(px[(tracks.y + 30) as usize * 900 + join_x as usize], view::ACCENT, "join marked on the tracks");
 }
 
 #[test]
@@ -222,12 +223,92 @@ fn a_wheel_scroll_stays_until_the_caret_moves() {
     let mut ed = Editor::open("long.webm", 130 * SECOND, (30, 1), true, words::parse(&text).unwrap());
     let mut view = View::default();
     let mut px = alloc::vec![0u32; 800 * 600];
-    view.paint(&mut px, 800, 600, &ed, None, 0, "");
+    view.paint(&mut px, 800, 600, &ed, &Library::default(), None, 0, "");
     assert_eq!(view.scroll, 0);
     view.scroll = 120;
-    view.paint(&mut px, 800, 600, &ed, None, 0, "");
+    view.paint(&mut px, 800, 600, &ed, &Library::default(), None, 0, "");
     assert_eq!(view.scroll, 120, "the scroll stays while the caret is still");
     ed.move_caret(1, false);
-    view.paint(&mut px, 800, 600, &ed, None, 0, "");
+    view.paint(&mut px, 800, 600, &ed, &Library::default(), None, 0, "");
     assert_eq!(view.scroll, 0, "moving the caret brings it back into view");
+}
+
+/// A library for the talk: a picture every half second whose colour says when it was
+/// taken, and sound that swells and fades every second.
+fn talk_library(ed: &Editor) -> Library {
+    let media = ed.transcript.media;
+    let mut lib = Library::default();
+    for i in 0..20u32 {
+        let colour = 0x00102030 + i * 0x0a0806;
+        lib.add_thumb(media, Thumb { at: i as Micros * 500 * MS, w: 16, h: 9, px: alloc::vec![colour; 16 * 9] });
+    }
+    let pcm: Vec<[i16; 2]> = (0..48_000 * 10).map(|n| {
+        let swell = (n % 48_000) as i32 * 2 - 48_000;
+        let v = (24_000 - swell.abs() / 2) as i16;
+        [v, if n % 2 == 0 { v } else { -v }]
+    }).collect();
+    lib.peaks.insert(media, Peaks::from_pcm(&pcm, 48_000, 10 * MS));
+    lib
+}
+
+#[test]
+fn timeline_shows_filmstrips_waveforms_ruler_and_playhead() {
+    let mut ed = talk();
+    let lib = talk_library(&ed);
+    assert_eq!(lib.thumb(ed.transcript.media, 740 * MS).unwrap().at, 500 * MS);
+    assert_eq!(lib.thumb(ed.transcript.media, 760 * MS).unwrap().at, 1000 * MS);
+    assert_eq!(view::timecode(61 * SECOND + 500 * MS, (30, 1)), "00:01:01:15");
+    assert_eq!(view::timecode(60 * SECOND, (30000, 1001)), "00:00:59:28", "frame 1798, non-drop");
+    assert_eq!(view::ruler_step(10_000, 110), 2 * SECOND);
+
+    ed.place(3, false);
+    ed.select_sentence();
+    ed.delete().unwrap();
+    let mut view = View::default();
+    let (w, h) = (1280usize, 800usize);
+    let mut px = alloc::vec![0u32; w * h];
+    ed.suggest_cleanup();
+    let picture: Vec<u32> = (0..320 * 180).map(|i| {
+        let (x, y) = ((i % 320) as u32, (i / 320) as u32);
+        (x * 255 / 320) << 16 | (y * 255 / 180) << 8 | 0x60
+    }).collect();
+    view.paint(&mut px, w, h, &ed, &lib, Some((&picture, 320, 180)), 3 * SECOND, "");
+    let a = view::areas(w as i32, h as i32);
+    let upp = view.us_per_px(ed.timeline(), w as i32);
+    let row = |y: i32| &px[y as usize * w + a.tracks.x as usize..(y as usize + 1) * w];
+
+    // Picture track: each clip's filmstrip starts with the picture at its first frame,
+    // so the clip after the cut opens on the 4.0 s picture, not the 2.0 s one.
+    let vy = a.tracks.y + 4 + 40;
+    let x_at = |t: Micros| (t / upp) as usize;
+    assert_eq!(row(vy)[x_at(0) + 3], 0x00102030, "the first clip opens on the 0 s picture");
+    assert_eq!(row(vy)[x_at(2 * SECOND) + 3], 0x00102030 + 8 * 0x0a0806, "after the join: the 4.0 s picture");
+
+    // Sound track: the waveform is lighter than its clip and taller where it is louder.
+    let sound_top = a.tracks.y + 4 + view::row_height(sex_splice::TrackKind::Video, 2, a.tracks.h - 8);
+    let wave = |x: usize| (sound_top..sound_top + 46).filter(|y| row(*y)[x] == sex_office::mix(view::SOUND_COLOURS[0], 0xffffff, 110)).count();
+    assert!(wave(x_at(500 * MS)) > wave(x_at(10 * MS)) + 10, "louder mid-second than at its start");
+
+    // Ruler labels and the playhead.
+    assert!(row(a.ruler.y + 2).contains(&view::PLAYHEAD));
+    assert_eq!(row(a.tracks.y + 10)[x_at(3 * SECOND)], view::PLAYHEAD);
+
+    // Zoom in around the playhead and back out to fit.
+    view.zoom_by(ed.timeline(), w as i32, 1, 3 * SECOND);
+    assert_eq!(view.zoom, upp / 2);
+    view.zoom_by(ed.timeline(), w as i32, -1, 3 * SECOND);
+    assert_eq!(view.zoom, 0);
+
+    // A click on the tracks moves to that time, and the transcript follows.
+    let t = view.time_at(ed.timeline(), w as i32, h as i32, a.tracks.x + x_at(2600 * MS) as i32, a.tracks.y + 10).unwrap();
+    assert!((t - 2600 * MS).abs() <= upp);
+    assert_eq!(ed.word_at_time(t), Some(7), "2.6 s on the edit is 4.6 s of source: \"this\"");
+
+    if let Ok(path) = std::env::var("SPLICY_SHOT") {
+        let mut ppm = alloc::format!("P6\n{w} {h}\n255\n").into_bytes();
+        for p in &px {
+            ppm.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]);
+        }
+        std::fs::write(path, ppm).unwrap();
+    }
 }

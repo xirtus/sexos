@@ -12,11 +12,14 @@
 //! - suspend, resume, close; encryption off stops the audio;
 //! - the headset goes away and pages us later: the stored link key, the headset sets
 //!   the stream up itself (we are acceptor) and audio flows again;
-//! - malformed SDP and AVDTP from the peer: rejects and failures, never a panic.
+//! - malformed SDP and AVDTP from the peer: rejects and failures, never a panic;
+//! - once the stream is ready the host opens AVRCP's control channel and registers for
+//!   the headset's volume (the AVRCP side itself is in `avrcp_peers.rs`).
 mod common;
 use common::sbc_ref::Decoder;
 use sex_bt::a2dp;
 use sex_bt::avdtp::{self, category, kind, signal};
+use sex_bt::avrcp;
 use sex_bt::hci::{self, op as hop, Addr};
 use sex_bt::host::{code, Host, Note};
 use sex_bt::l2cap::{self, ChanEvent, Channels, Reassembly};
@@ -69,13 +72,15 @@ struct Headset {
     sdp_requests: usize,
     /// Only record what arrives (the malformed-input test).
     quiet: bool,
+    /// AVCTP packets it got on the control channel.
+    avctp: Vec<Vec<u8>>,
 }
 
 impl Headset {
     fn new() -> Headset {
         Headset { chans: Channels::default(), link_key: None, signal: None, media: None, commands: vec![], config: None, streaming: false,
             decoder: Decoder::new(), left: vec![], right: vec![], seqs: vec![], stamps: vec![], frames: 0, initiator: false, label: 0,
-            replies: vec![], raw: vec![], sdp_requests: 0, quiet: false }
+            replies: vec![], raw: vec![], sdp_requests: 0, quiet: false, avctp: vec![] }
     }
 }
 
@@ -265,7 +270,7 @@ impl Controller {
             let (cid, payload) = l2cap::parse_frame(&f).unwrap();
             if cid == l2cap::CID_SIGNALING {
                 for (c, id, d) in l2cap::commands(payload) {
-                    let allow = |psm: u16| if psm == avdtp::PSM || psm == sdp::PSM { Ok(()) } else { Err(l2cap::PSM_NOT_SUPPORTED) };
+                    let allow = |psm: u16| if psm == avdtp::PSM || psm == sdp::PSM || psm == avrcp::PSM { Ok(()) } else { Err(l2cap::PSM_NOT_SUPPORTED) };
                     let e = self.hs.chans.on_command(c, id, d, &allow).unwrap_or_default();
                     self.chan_events(e);
                 }
@@ -276,6 +281,7 @@ impl Controller {
                 sdp::PSM => self.sdp(ch.remote, payload),
                 avdtp::PSM if Some(cid) == self.hs.signal => self.hs_signal(payload),
                 avdtp::PSM => self.hs_media(payload),
+                avrcp::PSM => self.hs.avctp.push(payload.to_vec()),
                 psm => panic!("psm {psm:#x}"),
             }
             return;
@@ -437,6 +443,12 @@ fn streaming() -> (Host, Controller, u16) {
     // No HID channels on a headset; SDP was closed after the search.
     assert!(c.hs.chans.by_psm(0x0011).is_none() && c.hs.chans.by_psm(sdp::PSM).is_none());
     assert_eq!(h.streaming().collect::<Vec<_>>(), [handle]);
+    // AVRCP's control channel after the stream, and a volume registration on it.
+    assert!(c.hs.chans.by_psm(avrcp::PSM).is_some_and(|ch| ch.open));
+    assert!(notes.iter().any(|n| matches!(n, Note::RemoteReady { handle: h2, .. } if *h2 == handle)), "{notes:?}");
+    let reg = avrcp::parse(&c.hs.avctp[0]).unwrap();
+    assert_eq!(avrcp::parse_vendor(reg.msg), Some((avrcp::ctype::NOTIFY, avrcp::pdu::REGISTER_NOTIFICATION, &[avrcp::pdu::EVENT_VOLUME_CHANGED, 0, 0, 0, 0][..])));
+    c.hs.avctp.clear();
     (h, c, handle)
 }
 
