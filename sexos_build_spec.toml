@@ -108,7 +108,8 @@ crates = [
   "apps/flash/Cargo.toml",
   "apps/climax/Cargo.toml",
   "apps/batik/Cargo.toml",
-  "apps/burlesque/Cargo.toml"
+  "apps/burlesque/Cargo.toml",
+  "apps/corset/Cargo.toml"
 ]
 
 [[stage]]
@@ -334,6 +335,7 @@ manifest = "apps/talk/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/talk"
 dest_artifact = "iso_root/programs/flirt"
 
+# Gaze (View): an ordinary std program, as JPEG XL and SVG need the standard library.
 [[stage]]
 id = "build_view"
 action = "cargo_manifest"
@@ -667,6 +669,15 @@ build_std = "std,panic_abort"
 manifest = "apps/aftercare/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/aftercare"
 dest_artifact = "iso_root/programs/aftercare"
+
+# Corset: disks and partitions (crates/corset-core) on removable disks Files hands it.
+[[stage]]
+id = "build_corset"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/corset/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/corset"
+dest_artifact = "iso_root/programs/corset"
 
 # Hookup: the phone link (KDE Connect protocol, crates/sex-kdeconnect) over std::net.
 [[stage]]

@@ -418,6 +418,12 @@ pub mod launch {
     pub fn run_with(name: &[u8], args: &[u8], network: bool, hidden: bool, cookie: u32) -> Result<(), Error> {
         start(name, args, if network { store::RUN_NETWORK } else { 0 } | if hidden { store::RUN_HIDDEN } else { 0 }, cookie)
     }
+    /// Asks Shell to start a run Files already prepared (its `ticket`), as [`run_with`] does.
+    pub fn start_ticket(ticket: u32, network: bool, hidden: bool, cookie: u32) -> Result<(), Error> {
+        let flags = if network { store::RUN_NETWORK } else { 0 } | if hidden { store::RUN_HIDDEN } else { 0 };
+        sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_LAUNCH, ticket as u64, flags, cookie as u64).map_err(|_| Error::Shell)?;
+        Ok(())
+    }
     fn start(name: &[u8], args: &[u8], flags: u64, cookie: u32) -> Result<(), Error> {
         let mut path = [0u8; 64];
         let path: &[u8] = if name.first() == Some(&b'@') { name }
@@ -516,7 +522,14 @@ pub mod files {
     /// Shell tells Files where a new run lives just as the run starts, so a first request
     /// can beat it there. A refusal is retried briefly; a program never bound stays refused.
     /// `fill` writes the data area before the request goes; `take` reads it after the answer.
-    fn exchange<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+    fn exchange<R>(hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+                   fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
+        exchange_tries(hold, kind, path, offset, length, 50, fill, take)
+    }
+    /// As `exchange`, asking again at most `retries` times while Files says DENIED (a
+    /// lock another program holds). A refusal that stands is asked once (`retries` 0).
+    #[allow(clippy::too_many_arguments)]
+    fn exchange_tries<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64, retries: u32,
                    fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
         if path.len() > w::PATH_BYTES { return Err(w::NAME); }
         let _turn = Turn::take();
@@ -526,7 +539,7 @@ pub mod files {
             region[..path.len()].copy_from_slice(path);
             fill(&mut region[w::PATH_BYTES..]);
             match once(&mut hold, kind, path.len(), offset, length) {
-                Err(w::DENIED) if tries < 50 => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
+                Err(w::DENIED) if tries < retries => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
                 Ok(value) => return Ok(take(value, &region[w::PATH_BYTES..])),
                 Err(e) => return Err(e),
             }
@@ -706,8 +719,55 @@ pub mod files {
             use super::{exchange, w, Error};
             use sex_pdx::console_relay as c;
             fn op(offset: u64, length: u64) -> Result<u32, Error> { exchange(None, c::KIND, b"", offset, length, |_| {}, |n, _| n) }
-            /// Whether this run's console belongs to a terminal.
+            /// Whether this run's console belongs to a terminal (or its streams to the
+            /// program that started it: see [`attached_word`]).
             pub fn attached() -> bool { op(c::ATTACHED, 0).is_ok() }
+            /// None when nothing holds this run's console; 0 for a terminal; for a pipe
+            /// run, `c::PIPE_RUN` | its stdio word (`c::stream`).
+            pub fn attached_word() -> Option<u32> { op(c::ATTACHED, 0).ok() }
+            /// A pipe run's stderr: how many bytes its starter's ring took.
+            pub fn write_err(bytes: &[u8]) -> Result<usize, Error> {
+                let n = bytes.len().min(c::ERROR_BYTES);
+                exchange(None, c::KIND, b"", c::WRITE_ERR, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
+            }
+            /// A pipe run's environment block from byte `at` on (`c::ENV`); 0 at its end.
+            pub fn env(at: usize, out: &mut [u8]) -> Result<usize, Error> {
+                let want = out.len();
+                exchange(None, c::KIND, b"", c::ENV, at as u64, |_| {}, |n, d| { let n = (n as usize).min(want).min(d.len()); out[..n].copy_from_slice(&d[..n]); n })
+            }
+
+            /// Starter: prepares a pipe run of program file `path` (`/bin/NAME`, or `@/path`
+            /// this run holds) with `args`, attached to this run's `slot`, its streams as
+            /// the stdio word says (`c::stdio`). The ticket, for `launch::start_ticket`.
+            pub fn prepare_piped(path: &[u8], args: &[u8], slot: usize, word: u8) -> Result<u32, Error> {
+                if args.len() > w::ARGS_MAX || slot >= c::SLOTS { return Err(w::NAME); }
+                exchange(None, w::PREPARE, path, c::pipe_prepare(slot, word), args.len() as u64, |d| d[..args.len()].copy_from_slice(args), |ticket, _| ticket)
+            }
+            /// Starter, before the start: more `KEY=VALUE\0` entries for the run in `slot`.
+            pub fn set_env_at(slot: usize, entries: &[u8]) -> Result<(), Error> {
+                let n = entries.len();
+                if n > c::ENV_BYTES { return Err(w::INVALID); }
+                exchange(None, c::KIND, b"", c::at_slot(c::SET_ENV, slot), n as u64, |d| d[..n].copy_from_slice(entries), |_, _| ())
+            }
+            /// Starter, before the start: the run's working folder, as this run names it.
+            pub fn set_cwd_at(slot: usize, path: &[u8]) -> Result<(), Error> {
+                let n = path.len();
+                if n > w::PATH_BYTES { return Err(w::NAME); }
+                exchange(None, c::KIND, b"", c::at_slot(c::SET_CWD, slot), n as u64, |d| d[..n].copy_from_slice(path), |_, _| ())
+            }
+            /// Starter: the state of the run in `slot` and up to `out.len()` bytes of its
+            /// stdout (or stderr, `err`).
+            pub fn take_into(slot: usize, err: bool, out: &mut [u8]) -> Result<(c::Status, usize), Error> {
+                let cap = out.len().min(if err { c::ERROR_BYTES } else { c::OUTPUT_BYTES });
+                let op = if err { c::TAKE_ERR } else { c::TAKE };
+                exchange(None, c::KIND, b"", c::at_slot(op, slot), (c::STATUS_BYTES + cap) as u64, |_| {}, |n, d| {
+                    let n = (n as usize).min(cap);
+                    out[..n].copy_from_slice(&d[c::STATUS_BYTES..c::STATUS_BYTES + n]);
+                    (c::Status::decode(d), n)
+                })
+            }
+            /// Starter: it reads no more of the run's stdout (`mask` 1) or stderr (2).
+            pub fn close_read_at(slot: usize, mask: u8) -> Result<(), Error> { op(c::at_slot(c::CLOSE_READ, slot), (mask & 3) as u64).map(|_| ()) }
             /// Output: how many bytes the terminal took (fewer when it is behind).
             pub fn write(bytes: &[u8]) -> Result<usize, Error> {
                 let n = bytes.len().min(c::OUTPUT_BYTES);
@@ -995,6 +1055,78 @@ pub mod files {
     /// Answers a question with `path` (`@/...`), or cancels it with `None`.
     pub fn answer(window: &mut Window, q: &Question, path: Option<&[u8]>) -> Result<(), Error> {
         request(window, w::ANSWER, path.unwrap_or(b""), q.row as u64, q.ticket as u64).map(|_| ())
+    }
+
+    /// Raw removable disks (`sex_pdx::disks`), for a program that reshapes them. The first
+    /// read or write of a disk asks the person (the Files app shows the question, naming
+    /// the disk); until they answer it fails with `PENDING`, and with `DENIED` if they said
+    /// no. The system disk is never opened.
+    pub mod disks {
+        use super::{exchange, exchange_tries, request, Error, Window};
+        use alloc::string::String;
+        use alloc::vec::Vec;
+        use sex_pdx::disks as d;
+        pub use d::{FLAG_GRANTED, FLAG_READ_ONLY, FLAG_SYSTEM, IO_SECTORS, KIND_IMAGE, KIND_SYSTEM, KIND_USB, SECTOR};
+
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct Disk { pub id: u16, pub flags: u8, pub sectors: u64, pub name: String, pub product: String }
+        impl Disk {
+            pub fn system(&self) -> bool { self.flags & FLAG_SYSTEM != 0 }
+            pub fn read_only(&self) -> bool { self.flags & FLAG_READ_ONLY != 0 }
+        }
+        pub fn list(window: &mut Window) -> Result<Vec<Disk>, Error> {
+            exchange(Some(window), d::DISKS, b"", 0, 0, |_| {}, |used, data| {
+                let data = &data[..(used as usize).min(data.len())];
+                let mut out = Vec::new();
+                let mut at = 0;
+                while let Some((e, next)) = d::Entry::decode(data, at) {
+                    out.push(Disk { id: e.id, flags: e.flags, sectors: e.sectors, name: String::from_utf8_lossy(e.name).into_owned(), product: String::from_utf8_lossy(e.product).into_owned() });
+                    at = next;
+                }
+                out
+            })
+        }
+        /// Sectors from `lba` into `out` (whole sectors, at most `IO_SECTORS`).
+        pub fn read(window: &mut Window, disk: u16, lba: u64, out: &mut [u8]) -> Result<(), Error> {
+            let n = out.len() / SECTOR;
+            if n == 0 || out.len() % SECTOR != 0 || n as u64 > IO_SECTORS { return Err(sex_pdx::fs::INVALID); }
+            exchange_tries(Some(window), d::DISK_IO, b"", lba, d::io(disk, false, n as u32), 0, |_| {}, |_, data| out.copy_from_slice(&data[..out.len()]))
+        }
+        /// `data` (whole sectors, at most `IO_SECTORS`) to the disk from `lba`.
+        pub fn write(window: &mut Window, disk: u16, lba: u64, data: &[u8]) -> Result<(), Error> {
+            let n = data.len() / SECTOR;
+            if n == 0 || data.len() % SECTOR != 0 || n as u64 > IO_SECTORS { return Err(sex_pdx::fs::INVALID); }
+            exchange_tries(Some(window), d::DISK_IO, b"", lba, d::io(disk, true, n as u32), 0, |r| r[..data.len()].copy_from_slice(data), |_, _| ())
+        }
+        /// Everything written so far is on the medium.
+        pub fn flush(window: &mut Window, disk: u16) -> Result<(), Error> { request(window, d::DISK_IO, b"", 0, d::io(disk, true, 0)).map(|_| ()) }
+        /// Ends this run's use of the disk: Files mounts what it holds now.
+        pub fn done(window: &mut Window, disk: u16) -> Result<(), Error> { request(window, d::DISK_DONE, b"", 0, disk as u64).map(|_| ()) }
+
+        /// A question waiting for the person: may `program` use `disk`?
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct Question { pub row: u8, pub ticket: u32, pub program: Vec<u8>, pub disk: Vec<u8> }
+        /// Questions waiting. Only a run given the whole filesystem may ask.
+        pub fn questions(window: &mut Window) -> Result<Vec<Question>, Error> {
+            exchange(Some(window), d::DISK_ASKS, b"", 0, 0, |_| {}, |used, r| {
+                let used = (used as usize).min(r.len());
+                let mut out = Vec::new();
+                let mut at = 0;
+                while at + 6 <= used {
+                    let ticket = u32::from_le_bytes(r[at + 1..at + 5].try_into().unwrap_or([0; 4]));
+                    let n = r[at + 5] as usize;
+                    let program = r[at + 6..at + 6 + n].to_vec();
+                    let k = r[at + 6 + n] as usize;
+                    let disk = r[at + 7 + n..at + 7 + n + k].to_vec();
+                    out.push(Question { row: r[at], ticket, program, disk });
+                    at += 7 + n + k;
+                }
+                out
+            })
+        }
+        pub fn answer(window: &mut Window, q: &Question, yes: bool) -> Result<(), Error> {
+            request(window, d::DISK_ANSWER, b"", q.row as u64, q.ticket as u64 | if yes { d::YES } else { 0 }).map(|_| ())
+        }
     }
 }
 

@@ -9,8 +9,9 @@
 //! * The program is `/bin/NAME`, a bare `NAME`, or `@/path` of a program file this run
 //!   holds; `posix_spawnp` does no `PATH` search (programs live in one store). The
 //!   started run is a hidden helper: no window, output in the serial record.
-//! * `argv[1..]` become its arguments; `argv[0]` and `envp` are not passed on (a run has
-//!   no environment). Spawn attributes (process groups, signal masks, scheduling) are
+//! * `argv[1..]` become its arguments; `argv[0]` is not passed on. `envp` is the child's
+//!   environment (through Files, as `std::process` hands one over; `system` hands on
+//!   `environ`). Spawn attributes (process groups, signal masks, scheduling) are
 //!   accepted and ignored. File actions are not supported: `posix_spawn` with any
 //!   returns ENOSYS, since there are no descriptors to hand on between runs.
 //! * A pid is the child's task. `waitpid` takes one, or -1 (or 0) for any child, and
@@ -31,7 +32,9 @@ use alloc::vec::Vec;
 
 extern "C" {
     // crates/sex-std/src/process.rs.
-    fn sys_process_spawn(program: *const u8, program_len: usize, args: *const u8, args_len: usize, flags: u32, task: *mut u32) -> i64;
+    fn sys_process_spawn_with(program: *const u8, program_len: usize, args: *const u8, args_len: usize, flags: u32,
+                              stdio: u32, env: *const u8, env_len: usize, cwd: *const u8, cwd_len: usize,
+                              task: *mut u32, slot: *mut i32) -> i64;
     fn sys_process_wait(id: i64, block: i32, status: *mut i32, task: *mut u32) -> i32;
     fn sys_process_kill(id: i64) -> i32;
     fn sys_process_forget(id: i64);
@@ -48,16 +51,32 @@ pub struct FileActions { pad0: [c_int; 2], actions: *mut c_void, pad: [c_int; 16
 #[repr(C)]
 pub struct SpawnAttr { flags: c_int, pgrp: c_int, def: [u64; 16], mask: [u64; 16], prio: c_int, pol: c_int, func: *mut c_void, pad: [u8; 56] }
 
-/// Starts `program` with `words`; the child's task, or an error number.
-fn start(program: &[u8], words: &[&[u8]]) -> Result<u32, c_int> {
+/// `envp` (a NULL-ended list of `KEY=VALUE`) as NUL-ended entries; empty for none.
+unsafe fn env_entries(envp: *const *const c_char) -> Vec<u8> {
+    let mut env = Vec::new();
+    if envp.is_null() { return env; }
+    let mut i = 0;
+    while unsafe { !(*envp.add(i)).is_null() } {
+        env.extend_from_slice(unsafe { c_str(*envp.add(i)) });
+        env.push(0);
+        i += 1;
+    }
+    env
+}
+
+/// Starts `program` with `words` and the environment `env`; the child's task, or an
+/// error number.
+fn start(program: &[u8], words: &[&[u8]], env: &[u8]) -> Result<u32, c_int> {
     let mut args = Vec::new();
     for w in words { args.extend_from_slice(w); args.push(0); }
-    let mut task = 0u32;
-    let r = unsafe { sys_process_spawn(program.as_ptr(), program.len(), args.as_ptr(), args.len(), 0, &mut task) };
+    let (mut task, mut slot) = (0u32, -1i32);
+    let r = unsafe {
+        sys_process_spawn_with(program.as_ptr(), program.len(), args.as_ptr(), args.len(), 0, 0, env.as_ptr(), env.len(), core::ptr::null(), 0, &mut task, &mut slot)
+    };
     if r < 0 { Err(-r as c_int) } else { Ok(task) }
 }
 
-unsafe fn spawn(pid: *mut c_int, path: *const c_char, actions: *const FileActions, argv: *const *const c_char) -> c_int {
+unsafe fn spawn(pid: *mut c_int, path: *const c_char, actions: *const FileActions, argv: *const *const c_char, envp: *const *const c_char) -> c_int {
     if path.is_null() { return crate::EINVAL; }
     if !actions.is_null() && unsafe { !(*actions).actions.is_null() } { return crate::ENOSYS; }
     let program = unsafe { c_str(path) };
@@ -70,7 +89,7 @@ unsafe fn spawn(pid: *mut c_int, path: *const c_char, actions: *const FileAction
             i += 1;
         }
     }
-    match start(program, &words) {
+    match start(program, &words, &unsafe { env_entries(envp) }) {
         Ok(task) => { if !pid.is_null() { unsafe { *pid = task as c_int } } 0 }
         Err(e) => e,
     }
@@ -78,14 +97,14 @@ unsafe fn spawn(pid: *mut c_int, path: *const c_char, actions: *const FileAction
 
 #[no_mangle]
 pub unsafe extern "C" fn posix_spawn(pid: *mut c_int, path: *const c_char, actions: *const FileActions, _attr: *const SpawnAttr,
-                                     argv: *const *const c_char, _envp: *const *const c_char) -> c_int {
-    unsafe { spawn(pid, path, actions, argv) }
+                                     argv: *const *const c_char, envp: *const *const c_char) -> c_int {
+    unsafe { spawn(pid, path, actions, argv, envp) }
 }
 /// As `posix_spawn`: a bare name is already looked up in the program store.
 #[no_mangle]
 pub unsafe extern "C" fn posix_spawnp(pid: *mut c_int, file: *const c_char, actions: *const FileActions, _attr: *const SpawnAttr,
-                                      argv: *const *const c_char, _envp: *const *const c_char) -> c_int {
-    unsafe { spawn(pid, file, actions, argv) }
+                                      argv: *const *const c_char, envp: *const *const c_char) -> c_int {
+    unsafe { spawn(pid, file, actions, argv, envp) }
 }
 
 #[no_mangle]
@@ -170,7 +189,8 @@ pub unsafe extern "C" fn system(command: *const c_char) -> c_int {
     let words = command_words(unsafe { c_str(command) });
     let Some((program, rest)) = words.split_first() else { return wait_status(Some(127)) };
     let rest: Vec<&[u8]> = rest.iter().map(|w| w.as_slice()).collect();
-    let task = match start(program, &rest) { Ok(task) => task, Err(_) => return wait_status(Some(127)) };
+    let env = unsafe { env_entries(crate::environ as *const *const c_char) };
+    let task = match start(program, &rest, &env) { Ok(task) => task, Err(_) => return wait_status(Some(127)) };
     let (mut code, mut t) = (0i32, 0u32);
     let r = unsafe { sys_process_wait(task as i64, 1, &mut code, &mut t) };
     unsafe { sys_process_forget(task as i64) };
