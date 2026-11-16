@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Runs the CW1 test program in a real VT-x/SVM cell on Linux KVM, through the same
-//! `Process` the SexOS program uses. KVM stands in for SexOS's SYS_VM: both give the
+//! `WinProcess` the SexOS program uses. KVM stands in for SexOS's SYS_VM: both give the
 //! host one exit at a time with the guest's registers, and both run guest code natively.
 //! Skipped (with a SKIP line) where /dev/kvm is missing or not usable, as in QEMU TCG
 //! containers; CI makes /dev/kvm usable where the runner has it.
@@ -8,7 +8,7 @@
 
 use drag_vmm::memory::Ram;
 use drag_vmm::vmm::Vcpu;
-use sex_crossdress::process::{Host, Process, Stop};
+use sex_crossdress::process::{Host, WinProcess, Stop};
 use sex_pdx::vm::{exit, Exit, Regs, Segment, State, IO_IN};
 use std::os::fd::RawFd;
 
@@ -178,7 +178,7 @@ fn the_test_program_runs_in_a_kvm_cell() {
         println!("[crossdress.kvm] SKIP no usable /dev/kvm: the cell did not run on hardware here");
         return;
     };
-    let mut proc = Process::load(Ram::new(64 << 20).unwrap(), sex_crossdress::TEST_EXE).unwrap();
+    let mut proc = WinProcess::load(Ram::new(64 << 20).unwrap(), sex_crossdress::TEST_EXE).unwrap();
     let vm = ioctl(kvm, KVM_CREATE_VM, 0) as RawFd;
     assert!(vm >= 0, "KVM_CREATE_VM");
     let _ = ioctl(vm, KVM_SET_TSS_ADDR, 0xFFFB_D000);

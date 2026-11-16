@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! One Windows process in a cell: the image at its preferred base, a PEB, one thread
+//! One Windows process (a guest program inside a VM, not a SexOS process) in a cell: the image at its preferred base, a PEB, one thread
 //! (TEB in GS, its stack), one import thunk per imported function, and the exit loop.
 //!
 //! An import thunk is 8 bytes of user code, `mov eax, CALL|n; out 0xE0, eax; ret`. The
@@ -75,7 +75,7 @@ pub struct Counters { pub exits: u64, pub calls: u64, pub exceptions: u64, pub h
 /// An exception being handed to the vectored handlers.
 struct Dispatch { context: u64, pointers: u64, next_handler: usize, code: u32, address: u64 }
 
-pub struct Process {
+pub struct WinProcess {
     pub cell: Cell,
     pub image: Image,
     pub base: u64,
@@ -93,10 +93,10 @@ pub enum LoadError { Pe(pe::Error), Cell(cell::Error), TooManyImports }
 impl From<pe::Error> for LoadError { fn from(e: pe::Error) -> Self { LoadError::Pe(e) } }
 impl From<cell::Error> for LoadError { fn from(e: cell::Error) -> Self { LoadError::Cell(e) } }
 
-impl Process {
+impl WinProcess {
     /// Loads a 64-bit Windows executable into a fresh cell over `ram`. The image goes at
     /// its preferred base: a cell is its own address space, so /FIXED images load too.
-    pub fn load(ram: Ram, file: &[u8]) -> Result<Process, LoadError> {
+    pub fn load(ram: Ram, file: &[u8]) -> Result<WinProcess, LoadError> {
         let image = Image::parse(file)?;
         if image.is_dll() { return Err(LoadError::Pe(pe::Error::NotPe)); }
         let base = image.preferred_base;
@@ -168,7 +168,7 @@ impl Process {
         let entry = base + image.entry_rva as u64;
         let mut initial = cell.user_state(entry, rsp, TEB_VA);
         initial.regs.rcx = PEB_VA;
-        Ok(Process {
+        Ok(WinProcess {
             cell, image, base, entry, imports, handlers: Vec::new(), next_alloc: ALLOC_BASE,
             counters: Counters::default(), dispatch: Vec::new(), initial,
         })
@@ -348,11 +348,11 @@ mod tests {
     /// Windows x64 arguments 1-4 into a guest register file.
     fn args(g: &mut Regs, a: [u64; 4]) { g.rcx = a[0]; g.rdx = a[1]; g.r8 = a[2]; g.r9 = a[3]; }
 
-    fn import(p: &Process, name: &str) -> u32 {
+    fn import(p: &WinProcess, name: &str) -> u32 {
         CALL | (FIRST_IMPORT as u32 + p.imports.iter().position(|i| i.1 == name).unwrap() as u32)
     }
 
-    fn load() -> Process { Process::load(Ram::new(16 << 20).unwrap(), crate::TEST_EXE).unwrap() }
+    fn load() -> WinProcess { WinProcess::load(Ram::new(16 << 20).unwrap(), crate::TEST_EXE).unwrap() }
 
     #[test]
     fn the_test_program_loads_at_its_base_with_bound_imports() {
@@ -495,7 +495,7 @@ mod tests {
     fn virtual_alloc_reserves_commits_and_refuses() {
         let mut p = load();
         let mut regs = p.initial_state().regs;
-        let va = |p: &mut Process, regs: &mut Regs, a: u64, size: u64, kind: u64, prot: u64| {
+        let va = |p: &mut WinProcess, regs: &mut Regs, a: u64, size: u64, kind: u64, prot: u64| {
             args(regs, [a, size, kind, prot]);
             let i = p.imports.iter().position(|i| i.1 == "VirtualAlloc").unwrap();
             match win32::call(p, i, regs, &mut Out::default()) { win32::Outcome::Return(v) => v, _ => panic!() }

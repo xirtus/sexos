@@ -102,7 +102,7 @@ pub enum Error {
 pub struct Cell {
     pub ram: Ram,
     next_gpa: u64,
-    pml4: u64,
+    guest_root: u64,
     maps: Vec<Map>,
     /// Address ranges reserved without memory (Windows MEM_RESERVE): (va, bytes).
     reserved: Vec<(u64, u64)>,
@@ -113,13 +113,13 @@ fn overlaps(a: u64, alen: u64, b: u64, blen: u64) -> bool { a < b + blen && b < 
 impl Cell {
     /// A cell over `ram`, with the ring-0 pieces in place.
     pub fn new(ram: Ram) -> Result<Cell, Error> {
-        let mut c = Cell { ram, next_gpa: PAGE, pml4: 0, maps: Vec::new(), reserved: Vec::new() };
-        c.pml4 = c.page()?;
+        let mut c = Cell { ram, next_gpa: PAGE, guest_root: 0, maps: Vec::new(), reserved: Vec::new() };
+        c.guest_root = c.page()?;
         c.build_system()?;
         Ok(c)
     }
 
-    pub fn cr3(&self) -> u64 { self.pml4 }
+    pub fn cr3(&self) -> u64 { self.guest_root }
     pub fn maps(&self) -> &[Map] { &self.maps }
     pub fn free_bytes(&self) -> u64 { self.ram.len().saturating_sub(self.next_gpa) }
 
@@ -136,7 +136,7 @@ impl Cell {
 
     /// The page-table entry for `va`, making the tables above it.
     fn pte(&mut self, va: u64) -> Result<u64, Error> {
-        let mut table = self.pml4;
+        let mut table = self.guest_root;
         for level in (1..4).rev() {
             let slot = table + 8 * ((va >> (12 + 9 * level)) & 511);
             let e = self.ram.read_u64(slot).map_err(|_| Error::OutOfMemory)?;
@@ -277,7 +277,7 @@ impl Cell {
         State {
             regs: sex_pdx::vm::Regs { rip, rsp, rflags: 0x202, ..Default::default() },
             cr0: 0x8001_0033, // PG | WP | NE | ET | MP | PE
-            guest_cr3: self.pml4,
+            guest_cr3: self.guest_root,
             cr4: 0x620,       // OSXMMEXCPT | OSFXSR | PAE
             efer: 0xD00,      // NXE | LMA | LME
             segments: [

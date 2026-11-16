@@ -20,7 +20,7 @@ use alloc::vec::Vec;
 use drag_vmm::memory::{self, Ram};
 use drag_vmm::vmm::Vcpu;
 use sex_app::{files, Event, Window};
-use sex_crossdress::process::{Host, Process, Stop};
+use sex_crossdress::process::{Host, WinProcess, Stop};
 use sex_pdx::vm::{self, Exit, State};
 
 #[panic_handler]
@@ -163,7 +163,7 @@ fn stop_line(stop: &Stop) -> (&'static str, u64) {
 
 fn windows(p: &mut Program, exe: &[u8]) -> Result<Stop, (&'static str, u64)> {
     let ram = Ram::new(CELL_MIB << 20).ok_or(("cell_ram", CELL_MIB as u64))?;
-    let mut proc = Process::load(ram, exe).map_err(|_| ("load", 0))?;
+    let mut proc = WinProcess::load(ram, exe).map_err(|_| ("load", 0))?;
     sex_pdx::serial_record!("[crossdress.loaded] base={:#x} entry={:#x} imports={} sections={} cell_mib={}",
         proc.base, proc.entry, proc.imports.len(), proc.image.sections.len(), CELL_MIB);
     match vm::info() {

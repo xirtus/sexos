@@ -5,7 +5,7 @@
 //! scaffolding: from CW3 on, KERNEL32 and NTDLL are Wine's own PE DLLs running in the
 //! cell, and the host side shrinks to Wine's Unix calls.
 use crate::cell::{Access, Frame, PAGE};
-use crate::process::{self, Host, Process, Stop};
+use crate::process::{self, Host, WinProcess, Stop};
 use sex_pdx::vm::Regs;
 
 // TEB (x64).
@@ -81,10 +81,10 @@ pub fn lookup(dll: &str, name: &str) -> Option<Api> {
 
 pub enum Outcome { Return(u64), Stop(Stop) }
 
-fn set_last_error(p: &mut Process, code: u32) { let _ = p.cell.write_u32(process::TEB_VA + TEB_LAST_ERROR, code); }
+fn set_last_error(p: &mut WinProcess, code: u32) { let _ = p.cell.write_u32(process::TEB_VA + TEB_LAST_ERROR, code); }
 
 /// Runs import `index` with the Windows x64 arguments in `regs`.
-pub fn call(p: &mut Process, index: usize, regs: &mut Regs, host: &mut impl Host) -> Outcome {
+pub fn call(p: &mut WinProcess, index: usize, regs: &mut Regs, host: &mut impl Host) -> Outcome {
     let (dll, name, api) = p.imports[index].clone();
     let Some(api) = api else { return Outcome::Stop(Stop::Unimplemented { dll, name }) };
     // The guest's Windows x64 arguments (a guest register file, not SexOS IPC).
@@ -129,8 +129,8 @@ const MEM_COMMIT: u32 = 0x1000;
 const MEM_RESERVE: u32 = 0x2000;
 
 /// VirtualAlloc: reserve and/or commit, at an address or anywhere above ALLOC_BASE.
-fn virtual_alloc(p: &mut Process, address: u64, size: u64, kind: u32, protect: u32) -> u64 {
-    let fail = |p: &mut Process, e| { set_last_error(p, e); 0 };
+fn virtual_alloc(p: &mut WinProcess, address: u64, size: u64, kind: u32, protect: u32) -> u64 {
+    let fail = |p: &mut WinProcess, e| { set_last_error(p, e); 0 };
     if size == 0 || size > 1 << 40 || kind & !(MEM_COMMIT | MEM_RESERVE) != 0 || kind == 0 { return fail(p, ERROR_INVALID_PARAMETER); }
     let access = match protect {
         0x01 => None,                           // PAGE_NOACCESS
