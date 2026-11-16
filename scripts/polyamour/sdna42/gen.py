@@ -25,7 +25,35 @@ NodeBoxMask NodeEllipseMask NodeCMPCombSepColor NodeDBlurData NodeBilateralBlurD
 NodeColorspill NodeDefocus NodeLensDist NodeTranslateData NodeSunBeams NodeDenoise NodeAntiAliasingData NodeSetAlpha
 NodeConvertColorSpace NodeBokehImage NodeDilateErode TexMapping NodeImageMultiFile NodeImageMultiFileSocket NodeMask
 NodeKeyingScreenData NodeCryptomatte CryptomatteEntry NodePlaneTrackDeformData NodeTrackPosData NodeImageLayer
-NodeHueSat NodeScriptDict NodeFrame""".split()
+NodeHueSat NodeScriptDict NodeFrame
+ModifierData MirrorModifierData SubsurfModifierData ArrayModifierData SolidifyModifierData BevelModifierData
+TriangulateModifierData WeldModifierData DisplaceModifierData SmoothModifierData DecimateModifierData RemeshModifierData
+ScrewModifierData WireframeModifierData EdgeSplitModifierData BuildModifierData BooleanModifierData SimpleDeformModifierData
+CastModifierData WaveModifierData ShrinkwrapModifierData LaplacianSmoothModifierData CorrectiveSmoothModifierData
+WeightedNormalModifierData ArmatureModifierData HookModifierData LatticeModifierData WarpModifierData
+WeightVGEditModifierData WeightVGMixModifierData WeightVGProximityModifierData NodesModifierData IDProperty IDPropertyData
+ClothModifierData ClothSimSettings ClothCollSettings SoftbodyModifierData CollisionModifierData ParticleSystemModifierData
+ParticleSystem ParticleSettings FluidModifierData FluidDomainSettings FluidFlowSettings FluidEffectorSettings PointCache
+EffectorWeights SoftBody SoftBody_Shared PartDeflect RigidBodyOb RigidBodyCon RigidBodyWorld RigidBodyWorld_Shared
+bConstraint bConstraintTarget bLocateLikeConstraint bRotateLikeConstraint bSizeLikeConstraint bTransLikeConstraint
+bDistLimitConstraint bLocLimitConstraint bRotLimitConstraint bSizeLimitConstraint bSameVolumeConstraint
+bTransformConstraint bChildOfConstraint bTrackToConstraint bDampTrackConstraint bLockTrackConstraint
+bStretchToConstraint bMinMaxConstraint bArmatureConstraint bKinematicConstraint
+Key KeyBlock Lattice BPoint
+bGPdata bGPDlayer bGPDframe bGPDstroke bGPDspoint bGPDlayer_Mask MaterialGPencilStyle
+NodeGeometryAttributeCapture NodeGeometryAttributeCaptureItem NodeGeometryCollectionInfo NodeGeometryCurveFill
+NodeGeometryCurveFillet NodeGeometryCurvePrimitiveArc NodeGeometryCurvePrimitiveBezierSegment
+NodeGeometryCurvePrimitiveCircle NodeGeometryCurvePrimitiveLine NodeGeometryCurvePrimitiveQuad
+NodeGeometryCurveResample NodeGeometryCurveSample NodeGeometryCurveSetHandles NodeGeometryCurveSplineType
+NodeGeometryCurveToPoints NodeGeometryCurveTrim NodeGeometryDeleteGeometry NodeGeometryDuplicateElements
+NodeGeometryExtrudeMesh NodeGeometryInputNamedAttribute NodeGeometryMergeByDistance NodeGeometryMeshCircle
+NodeGeometryMeshCone NodeGeometryMeshCylinder NodeGeometryMeshLine NodeGeometryMeshToPoints NodeGeometryObjectInfo
+NodeGeometryProximity NodeGeometryRaycast NodeGeometryRepeatInput NodeGeometryRepeatOutput NodeRepeatItem
+NodeGeometrySampleIndex NodeGeometrySeparateGeometry NodeGeometrySetCurveHandlePositions NodeGeometrySimulationInput
+NodeGeometrySimulationOutput NodeSimulationItem NodeGeometryStoreNamedAttribute NodeGeometrySubdivisionSurface
+NodeGeometryViewer NodeAccumulateField NodeSwitch NodeIndexSwitch IndexSwitchItem NodeMenuSwitch NodeEnumDefinition
+NodeEnumItem NodeRandomValue NodeFunctionCompare NodeInputBool NodeInputInt NodeInputVector NodeInputColor
+NodeInputString NodeInputRotation""".split()
 
 PRIMS = {'char', 'uchar', 'short', 'ushort', 'int', 'long', 'ulong', 'float', 'double', 'int64_t', 'uint64_t', 'void', 'int8_t', 'bool'}
 
@@ -244,6 +272,12 @@ ROOT_DEFAULTS = [('Scene', '_DNA_DEFAULT_Scene'), ('ToolSettings', '_DNA_DEFAULT
                  ('Camera', '_DNA_DEFAULT_Camera'), ('Lamp', '_DNA_DEFAULT_Light'), ('World', '_DNA_DEFAULT_World'),
                  ('Material', '_DNA_DEFAULT_Material'), ('Mesh', '_DNA_DEFAULT_Mesh'), ('Collection', '_DNA_DEFAULT_Collection'),
                  ('Image', '_DNA_DEFAULT_Image'), ('bArmature', '_DNA_DEFAULT_bArmature'), ('bAction', '_DNA_DEFAULT_bAction')]
+# Every other written struct with a `_DNA_DEFAULT_<name>` macro (modifiers,
+# Lattice, ParticleSettings, the cloth and fluid settings, ...).
+covered = {st for st, _ in ROOT_DEFAULTS} | {'Light'}
+for t in need:
+    if t not in covered and f'_DNA_DEFAULT_{t}' in macros:
+        ROOT_DEFAULTS.append((t, f'_DNA_DEFAULT_{t}'))
 for st, mac in ROOT_DEFAULTS:
     if mac in macros:
         walk_struct(st, '', macros[mac])

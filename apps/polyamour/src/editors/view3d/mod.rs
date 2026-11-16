@@ -781,6 +781,19 @@ fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: 
                 }
             }
         }
+        "view3d.lookdev" => {
+            // Material Preview's studio world: which one, how it is turned,
+            // how bright, and how much of it shows behind the scene.
+            let st = &mut d.settings;
+            let num = |v: &str, cur: f32| v.parse::<f32>().ok().filter(|x| x.is_finite()).unwrap_or(cur);
+            match arg.split_once(':') {
+                Some(("world", v)) => st.lookdev_world = v.parse::<usize>().unwrap_or(st.lookdev_world).min(sex_3d::render::STUDIO_WORLDS.len() - 1),
+                Some(("rotation", v)) => st.lookdev_rotation = num(v, st.lookdev_rotation.to_degrees()).to_radians(),
+                Some(("strength", v)) => st.lookdev_strength = num(v, st.lookdev_strength).max(0.0),
+                Some(("opacity", v)) => st.lookdev_opacity = num(v, st.lookdev_opacity).clamp(0.0, 1.0),
+                _ => {}
+            }
+        }
         "view3d.overlay" => {
             let f = match arg {
                 "floor" => &mut s.show_floor,

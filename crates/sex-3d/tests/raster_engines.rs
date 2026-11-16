@@ -225,6 +225,35 @@ fn workbench_render_engine() {
     assert!(t.pixels[17 * 60 + 30][3] > 0.99);
 }
 
+#[test]
+fn workbench_studio_lights_and_depth_of_field() {
+    let mut s = monkey_scene();
+    let c = add_camera(&mut s, Vec3::new(9.0, -9.0, 6.0), Vec3::ZERO, 0.6);
+    let base = WorkbenchRender { width: 120, height: 68, samples: 8, threads: 1, ..WorkbenchRender::default() };
+    let plain = sex_3d::render::render_workbench(&s, &base);
+    // Each studio rig lights the scene differently.
+    let mut seen = vec![plain.pixels.clone()];
+    for studio in 1..sex_3d::render::workbench::STUDIO_LIGHTS.len() {
+        let img = sex_3d::render::render_workbench(&s, &WorkbenchRender { shading: Workbench { studio, ..Workbench::default() }, ..base });
+        assert!(!seen.contains(&img.pixels), "studio {studio}");
+        seen.push(img.pixels);
+    }
+    // Depth of field: nothing without a camera aperture, a softer image with one.
+    let dof = WorkbenchRender { shading: Workbench { dof: true, ..Workbench::default() }, ..base };
+    assert_eq!(sex_3d::render::render_workbench(&s, &dof).pixels, plain.pixels);
+    if let ObjectData::Camera(cam) = &mut s.objects[c].data {
+        cam.dof.enabled = true;
+        cam.dof.focus_distance = 4.0;
+        cam.dof.fstop = 0.05;
+    }
+    let blurred = sex_3d::render::render_workbench(&s, &dof);
+    assert_ne!(blurred.pixels, plain.pixels);
+    // The strongest step between neighbours shrinks: edges are spread out.
+    let edge = |im: &Image| im.pixels.chunks_exact(im.width as usize).flat_map(|r| r.windows(2).map(|p| (p[0][1] - p[1][1]).abs())).fold(0.0f32, f32::max);
+    assert!(edge(&blurred) < edge(&plain) * 0.6, "{} vs {}", edge(&blurred), edge(&plain));
+    assert_eq!(sex_3d::render::render_workbench(&s, &WorkbenchRender { threads: 4, ..dof }).pixels, blurred.pixels);
+}
+
 // ------------------------------------------------------------------ EEVEE
 
 use sex_3d::nodes::{NodeTree, TreeKind, Value};
@@ -439,4 +468,400 @@ fn eevee_lookdev() {
     // The red monkey is redder than it is green.
     let reddish = a.pixels.iter().filter(|p| p[0] > 2.0 * p[1] + 0.02).count();
     assert!(reddish > 20, "{reddish}");
+}
+
+// ------------------------------------------------- EEVEE effects
+
+use sex_3d::render::Lens;
+use sex_3d::scene::RenderMethod;
+
+/// A Principled BSDF with some inputs set.
+fn principled(inputs: &[(&str, Value)]) -> Material {
+    let inputs: Vec<(String, Value)> = inputs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+    node_material(move |t| {
+        let p = t.add("ShaderNodeBsdfPrincipled", [0.0, 0.0]).unwrap();
+        for (k, v) in inputs {
+            t.nodes[p].set_input(&k, v);
+        }
+        (p, "BSDF")
+    })
+}
+
+fn glossy(c: f32, rough: f32) -> Material {
+    node_material(|t| {
+        let g = t.add("ShaderNodeBsdfGlossy", [0.0, 0.0]).unwrap();
+        t.nodes[g].set_input("Color", Value::Color([c, c, c, 1.0]));
+        t.nodes[g].set_input("Roughness", Value::Float(rough));
+        (g, "BSDF")
+    })
+}
+
+/// A material with only a Principled Volume (no surface).
+fn volume_material(color: [f32; 4], density: f32) -> Material {
+    let mut t = NodeTree::new("Shader Nodetree", TreeKind::Shader);
+    let out = t.add("ShaderNodeOutputMaterial", [300.0, 0.0]).unwrap();
+    let v = t.add("ShaderNodeVolumePrincipled", [0.0, 0.0]).unwrap();
+    t.nodes[v].set_input("Color", Value::Color(color));
+    t.nodes[v].set_input("Density", Value::Float(density));
+    t.link(v, "Volume", out, "Volume").unwrap();
+    Material { node_tree: Some(t), ..Material::default() }
+}
+
+fn add_plane(s: &mut Scene, mat: usize, size: f32, at: Vec3) -> usize {
+    let o = s.add_mesh_object("Plane", primitives::plane(size));
+    s.objects[o].materials.push(mat);
+    s.objects[o].transform.location = at;
+    o
+}
+
+fn add_cube(s: &mut Scene, mat: usize, size: f32, at: Vec3) -> usize {
+    let o = s.add_mesh_object("Cube", primitives::cube(size));
+    s.objects[o].materials.push(mat);
+    s.objects[o].transform.location = at;
+    o
+}
+
+fn lum(p: [f32; 4]) -> f32 {
+    0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]
+}
+
+/// Bloom spreads energy around a bright emitter and leaves the image
+/// alone without one; deterministic across thread counts.
+#[test]
+fn eevee_bloom_glows_around_bright_emitters() {
+    let mut s = Scene::new();
+    s.world.color = Vec3::ZERO;
+    let m = s.add_material(emission([1.0, 0.8, 0.6, 1.0], 60.0));
+    add_plane(&mut s, m, 0.25, Vec3::ZERO);
+    add_camera(&mut s, Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, 0.6);
+    let base = EeveeSettings { threads: 1, ..eevee(96, 96, 2) };
+    let off = render_eevee(&s, &base);
+    let on = render_eevee(&s, &EeveeSettings { bloom: true, ..base });
+    assert_eq!(on.pixels, render_eevee(&s, &EeveeSettings { bloom: true, threads: 4, ..base }).pixels);
+    // Ten pixels beside the emitter: black without bloom, glowing with it.
+    let (a, b) = (px(&off, 48, 30), px(&on, 48, 30));
+    assert!(lum(a) < 1e-4 && lum(b) > 0.01, "{a:?} {b:?}");
+    let energy = |im: &Image| im.pixels.iter().map(|p| lum(*p) as f64).sum::<f64>();
+    assert!(energy(&on) > energy(&off) * 1.02, "{} vs {}", energy(&on), energy(&off));
+    // A dim scene below the threshold does not glow.
+    let mut dim = s.clone();
+    dim.materials[m] = emission([0.5, 0.5, 0.5, 1.0], 1.0);
+    let (d0, d1) = (render_eevee(&dim, &base), render_eevee(&dim, &EeveeSettings { bloom: true, ..base }));
+    let diff = d0.pixels.iter().zip(&d1.pixels).map(|(a, b)| (a[0] - b[0]).abs()).fold(0.0f32, f32::max);
+    assert!(diff < 0.01, "{diff}");
+}
+
+/// Two emissive cards at different depths: the camera focused on the near
+/// one blurs the far one's edges and keeps the near one's sharp, with the
+/// gather filter and with the jittered camera.
+#[test]
+fn eevee_depth_of_field_blurs_out_of_focus_edges() {
+    let mut s = Scene::new();
+    s.world.color = Vec3::ZERO;
+    let m = s.add_material(emission([1.0, 1.0, 1.0, 1.0], 1.0));
+    add_plane(&mut s, m, 1.0, Vec3::new(-1.2, 0.0, 5.0));
+    add_plane(&mut s, m, 1.0, Vec3::new(1.2, 0.0, 0.0));
+    let c = add_camera(&mut s, Vec3::new(0.0, 0.0, 10.0), Vec3::ZERO, 0.5);
+    let (w, h) = (256u32, 128u32);
+    // Intermediate pixels across the row through both cards, per card.
+    let soft = |im: &Image| {
+        let y = h / 2;
+        let (mut near, mut far) = (0, 0);
+        for x in 0..w {
+            let v = px(im, x, y)[1];
+            if v > 0.1 && v < 0.9 {
+                if x < w / 2 {
+                    near += 1
+                } else {
+                    far += 1
+                }
+            }
+        }
+        (near, far)
+    };
+    let pinhole = render_eevee(&s, &eevee(w, h, 16));
+    let (n0, f0) = soft(&pinhole);
+    assert!(n0 <= 4 && f0 <= 4, "pinhole edges {n0} {f0}");
+    if let ObjectData::Camera(cam) = &mut s.objects[c].data {
+        cam.dof.enabled = true;
+        cam.dof.focus_distance = 5.0;
+        cam.dof.fstop = 0.1;
+    }
+    let lens = Lens::from_camera(&s, c, w, h).expect("lens");
+    assert!((lens.focus - 5.0).abs() < 1e-4);
+    for jitter in [false, true] {
+        let st = EeveeSettings { dof_jitter: jitter, threads: 2, ..eevee(w, h, 32) };
+        let img = render_eevee(&s, &st);
+        let (n, f) = soft(&img);
+        assert!(n <= 5, "jitter {jitter}: near card edges stay sharp ({n})");
+        assert!(f >= 8, "jitter {jitter}: far card edges blur ({f})");
+        if !jitter {
+            assert_eq!(img.pixels, render_eevee(&s, &EeveeSettings { threads: 5, ..st }).pixels);
+        }
+    }
+}
+
+/// A red emissive cube above a mirror-like floor in a black world: only
+/// screen-space reflections show it in the floor.
+#[test]
+fn eevee_ssr_reflects_objects_in_a_glossy_floor() {
+    let mut s = Scene::new();
+    s.world.color = Vec3::ZERO;
+    let floor = s.add_material(glossy(0.9, 0.05));
+    let red = s.add_material(emission([1.0, 0.05, 0.05, 1.0], 2.0));
+    add_plane(&mut s, floor, 20.0, Vec3::ZERO);
+    add_cube(&mut s, red, 1.0, Vec3::new(0.0, 1.5, 0.5));
+    add_camera(&mut s, Vec3::new(0.0, -7.0, 1.2), Vec3::new(0.0, 0.0, 0.4), 0.6);
+    let (w, h) = (128u32, 96u32);
+    let base = EeveeSettings { threads: 1, ..eevee(w, h, 8) };
+    let off = render_eevee(&s, &base);
+    let on = render_eevee(&s, &EeveeSettings { ssr: true, ..base });
+    assert_eq!(on.pixels, render_eevee(&s, &EeveeSettings { ssr: true, threads: 3, ..base }).pixels);
+    let red_px = |im: &Image| im.pixels.iter().filter(|p| p[0] > 0.3 && p[1] < 0.2).count();
+    // The cube itself, then the cube plus its reflection.
+    let (a, b) = (red_px(&off), red_px(&on));
+    assert!(a > 50, "{a}");
+    assert!(b as f32 > a as f32 * 1.4, "reflection adds red pixels: {a} -> {b}");
+    // Rough floors beyond the limit keep the probe (black here).
+    let mut rough = s.clone();
+    rough.materials[floor] = glossy(0.9, 0.8);
+    let r = render_eevee(&rough, &EeveeSettings { ssr: true, ..base });
+    assert!(red_px(&r) < a + a / 5, "{}", red_px(&r));
+}
+
+/// A square area light close over a diffuse floor matches the path
+/// tracer's direct light (the integral over the light, not a point).
+#[test]
+fn eevee_area_light_matches_the_path_tracer() {
+    for (shape, size_y) in [(sex_3d::scene::AreaShape::Square, 1.0), (sex_3d::scene::AreaShape::Ellipse, 1.2)] {
+        let mut s = Scene::new();
+        s.world.color = Vec3::ZERO;
+        let m = s.add_material(diffuse(0.8));
+        add_plane(&mut s, m, 8.0, Vec3::ZERO);
+        let mut l = Object::new("Area", ObjectData::Light(Light { kind: LightKind::Area { size: 2.5 }, shape, size_y, power: 150.0, ..Default::default() }));
+        l.transform.location = Vec3::new(0.3, 0.0, 0.8);
+        s.add_object(l);
+        add_camera(&mut s, Vec3::new(0.0, -0.01, 7.0), Vec3::ZERO, 0.9);
+        let (w, h) = (64, 48);
+        let pt = sex_3d::render::render(&s, &RenderSettings { width: w, height: h, samples: 2048, max_bounces: 0, denoise: false, ..RenderSettings::default() }).color;
+        let ee = render_eevee(&s, &eevee(w, h, 16));
+        let (mut sum, mut ref_sum) = (0.0f64, 0.0f64);
+        let mut bad = 0;
+        for (a, b) in pt.pixels.iter().zip(&ee.pixels) {
+            sum += (a[1] - b[1]).abs() as f64;
+            ref_sum += a[1] as f64;
+            bad += ((a[1] - b[1]).abs() > 0.08 * a[1].max(0.05)) as usize;
+        }
+        let rel = sum / ref_sum.max(1e-9);
+        assert!(rel < 0.03, "{shape:?}: mean relative difference {rel}");
+        assert!(bad < pt.pixels.len() / 20, "{shape:?}: {bad} pixels differ");
+    }
+}
+
+/// Subsurface scattering carries light past the terminator of a sphere
+/// lit from the side, and keeps the lit side's energy about the same.
+#[test]
+fn eevee_subsurface_scattering_softens_the_terminator() {
+    let make = |weight: f32| {
+        let mut s = Scene::new();
+        s.world.color = Vec3::ZERO;
+        let m = s.add_material(principled(&[
+            ("Base Color", Value::Color([0.9, 0.9, 0.9, 1.0])),
+            ("Subsurface Weight", Value::Float(weight)),
+            ("Subsurface Radius", Value::Vector([1.0, 0.4, 0.2])),
+            ("Subsurface Scale", Value::Float(0.25)),
+            ("Roughness", Value::Float(1.0)),
+            ("Specular IOR Level", Value::Float(0.0)),
+        ]));
+        let mut sph = primitives::uv_sphere(64, 32, 1.0);
+        for f in &mut sph.faces {
+            f.smooth = true;
+        }
+        let o = s.add_mesh_object("Sphere", sph);
+        s.objects[o].materials.push(m);
+        add_sun(&mut s, Vec3::new(10.0, 0.0, 0.0), 3.0, 0.002);
+        add_camera(&mut s, Vec3::new(0.0, -6.0, 0.0), Vec3::ZERO, 0.5);
+        s
+    };
+    let st = EeveeSettings { film_transparent: true, shadows: false, threads: 1, ..eevee(96, 96, 8) };
+    let plain = render_eevee(&make(0.0), &st);
+    let sss = render_eevee(&make(1.0), &st);
+    assert_eq!(sss.pixels, render_eevee(&make(1.0), &EeveeSettings { threads: 6, ..st }).pixels);
+    // Dark-side pixels of the sphere near the terminator receive light.
+    let (mut dark_plain, mut dark_sss) = (0.0f64, 0.0f64);
+    for (a, b) in plain.pixels.iter().zip(&sss.pixels) {
+        if a[3] > 0.99 && lum(*a) < 0.01 {
+            dark_plain += lum(*a) as f64;
+            dark_sss += lum(*b) as f64;
+        }
+    }
+    assert!(dark_sss > dark_plain + 0.5, "{dark_plain} -> {dark_sss}");
+    // Red scatters farthest.
+    let red: f64 = sss.pixels.iter().zip(&plain.pixels).filter(|(_, a)| a[3] > 0.99 && lum(**a) < 0.01).map(|(b, _)| (b[0] - b[2]) as f64).sum();
+    assert!(red > 0.0, "{red}");
+    let total = |im: &Image| im.pixels.iter().map(|p| lum(*p) as f64).sum::<f64>();
+    let (t0, t1) = (total(&plain), total(&sss));
+    assert!((t1 - t0).abs() < 0.15 * t0, "energy {t0} vs {t1}");
+}
+
+/// Dithered (hashed) transparency converges to the blended result, back
+/// faces disappear with backface culling, and transparent shadows let part
+/// of the light through.
+#[test]
+fn eevee_dithered_alpha_culling_and_transparent_shadows() {
+    // Dithered vs blended.
+    let mut s = Scene::new();
+    s.world.color = Vec3::ZERO;
+    let pane = s.add_material(half_transparent([1.0, 0.0, 0.0, 1.0]));
+    let back = s.add_material(emission([0.0, 0.0, 1.0, 1.0], 1.0));
+    add_plane(&mut s, pane, 2.0, Vec3::new(0.0, 0.0, 1.0));
+    add_plane(&mut s, back, 6.0, Vec3::ZERO);
+    add_camera(&mut s, Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, 0.5);
+    let st = EeveeSettings { threads: 1, ..eevee(48, 48, 64) };
+    let blended = px(&render_eevee(&s, &st), 24, 24);
+    s.materials[pane].eevee.render_method = RenderMethod::Dithered;
+    let img = render_eevee(&s, &st);
+    assert_eq!(img.pixels, render_eevee(&s, &EeveeSettings { threads: 3, ..st }).pixels);
+    let mean = |c: usize| (20..28).flat_map(|y| (20..28).map(move |x| (x, y))).map(|(x, y)| px(&img, x, y)[c]).sum::<f32>() / 64.0;
+    assert!((mean(0) - blended[0]).abs() < 0.06 && (mean(2) - blended[2]).abs() < 0.06, "dithered {} {} vs blended {blended:?}", mean(0), mean(2));
+
+    // Backface culling: a card turned away from the camera.
+    let mut s = Scene::new();
+    s.world.color = Vec3::ZERO;
+    let m = s.add_material(emission([1.0, 1.0, 1.0, 1.0], 1.0));
+    let o = add_plane(&mut s, m, 2.0, Vec3::ZERO);
+    s.objects[o].transform.rotation = sex_3d::math::Quat::from_axis_angle(Vec3::X, core::f32::consts::PI);
+    add_camera(&mut s, Vec3::new(0.0, 0.0, 4.0), Vec3::ZERO, 0.5);
+    let st = eevee(32, 32, 2);
+    assert!(px(&render_eevee(&s, &st), 16, 16)[1] > 0.9);
+    s.materials[m].eevee.backface_culling = true;
+    assert!(px(&render_eevee(&s, &st), 16, 16)[1] < 1e-4);
+
+    // Transparent shadows: a half-transparent black pane under a sun.
+    let mut s = Scene::new();
+    s.world.color = Vec3::ZERO;
+    let floor = s.add_material(diffuse(0.8));
+    let pane = s.add_material(half_transparent([0.0, 0.0, 0.0, 1.0]));
+    add_plane(&mut s, floor, 12.0, Vec3::ZERO);
+    add_plane(&mut s, pane, 1.0, Vec3::new(0.0, 0.0, 1.0));
+    add_sun(&mut s, Vec3::new(10.0, 0.0, 10.0), 3.0, 0.002);
+    add_camera(&mut s, Vec3::new(0.0, -0.01, 8.0), Vec3::ZERO, 0.5);
+    let st = EeveeSettings { soft_shadows: false, ..eevee(64, 64, 32) };
+    let lit = 0.8 * 3.0 * core::f32::consts::FRAC_1_SQRT_2 / core::f32::consts::PI;
+    // The shadow lands about one unit towards -x: sample its middle.
+    let cam = sex_3d::render::RasterCamera::from_camera(&s.world_matrix(s.active_camera.unwrap()), &Camera { fov_y: 0.5, ..Camera::default() }, 64, 64);
+    let (sx, sy, _) = cam.project(cam.to_view(Vec3::new(-1.0, 0.0, 0.0))).unwrap();
+    let v = px(&render_eevee(&s, &st), sx as u32, sy as u32)[1];
+    assert!((v - 0.5 * lit).abs() < 0.1 * lit, "transparent shadow {v} vs {}", 0.5 * lit);
+    s.materials[pane].eevee.transparent_shadows = false;
+    let v = px(&render_eevee(&s, &st), sx as u32, sy as u32)[1];
+    assert!(v < 0.05 * lit, "opaque shadow {v}");
+}
+
+/// Contact shadows find occluders without shadow maps.
+#[test]
+fn eevee_contact_shadows() {
+    let make = |contact: bool| {
+        let mut s = Scene::new();
+        s.world.color = Vec3::ZERO;
+        let m = s.add_material(diffuse(0.8));
+        add_plane(&mut s, m, 12.0, Vec3::ZERO);
+        add_cube(&mut s, m, 1.0, Vec3::new(0.0, 0.0, 0.5));
+        let mut o = Object::new("Sun", ObjectData::Light(Light { kind: LightKind::Sun, power: 3.0, radius: 0.002, contact_shadow: contact, contact_shadow_distance: 2.0, contact_shadow_thickness: 0.5, ..Default::default() }));
+        o.transform = Transform::from_matrix(&Mat4::look_at(Vec3::new(6.0, 2.0, 4.0), Vec3::ZERO, Vec3::Z).inverse());
+        s.add_object(o);
+        add_camera(&mut s, Vec3::new(1.0, -6.0, 6.0), Vec3::ZERO, 0.7);
+        s
+    };
+    let st = EeveeSettings { shadows: false, threads: 1, ..eevee(96, 72, 4) };
+    let (a, b) = (render_eevee(&make(false), &st), render_eevee(&make(true), &st));
+    assert_eq!(b.pixels, render_eevee(&make(true), &EeveeSettings { threads: 3, ..st }).pixels);
+    let darker = a.pixels.iter().zip(&b.pixels).filter(|(p, q)| q[1] < p[1] * 0.5).count();
+    assert!(darker > 80, "{darker}");
+}
+
+/// Motion blur smears a moving object over the shutter.
+#[test]
+fn eevee_motion_blur() {
+    let mut s = Scene::new();
+    s.world.color = Vec3::ZERO;
+    let m = s.add_material(emission([1.0, 1.0, 1.0, 1.0], 1.0));
+    let o = add_plane(&mut s, m, 1.0, Vec3::new(-1.0, 0.0, 0.0));
+    let mut moved = s.objects[o].transform;
+    moved.location.x += 2.0;
+    s.objects[o].motion = Some(moved);
+    add_camera(&mut s, Vec3::new(0.0, 0.0, 6.0), Vec3::ZERO, 0.6);
+    let partial = |im: &Image| im.pixels.iter().filter(|p| p[1] > 0.1 && p[1] < 0.9).count();
+    let st = EeveeSettings { threads: 1, ..eevee(96, 64, 32) };
+    let still = render_eevee(&s, &st);
+    let blur = render_eevee(&s, &EeveeSettings { motion_blur: Some((-0.25, 0.25)), ..st });
+    assert_eq!(blur.pixels, render_eevee(&s, &EeveeSettings { motion_blur: Some((-0.25, 0.25)), threads: 4, ..st }).pixels);
+    assert!(partial(&blur) > 3 * partial(&still).max(10), "{} vs {}", partial(&blur), partial(&still));
+    // Same energy (the card keeps its size).
+    let e = |im: &Image| im.pixels.iter().map(|p| p[1] as f64).sum::<f64>();
+    assert!((e(&blur) - e(&still)).abs() < 0.05 * e(&still));
+}
+
+/// An object with a volume material absorbs what is behind it and
+/// scatters light it receives.
+#[test]
+fn eevee_object_volumes() {
+    let mut s = Scene::new();
+    s.world.color = Vec3::ZERO;
+    let back = s.add_material(emission([1.0, 1.0, 1.0, 1.0], 1.0));
+    let fog = s.add_material(volume_material([0.8, 0.8, 0.8, 1.0], 1.5));
+    add_plane(&mut s, back, 10.0, Vec3::ZERO);
+    add_cube(&mut s, fog, 1.5, Vec3::new(0.0, 0.0, 1.5));
+    add_camera(&mut s, Vec3::new(0.0, 0.0, 6.0), Vec3::ZERO, 0.6);
+    let st = EeveeSettings { volumetrics: true, threads: 1, ..eevee(64, 64, 4) };
+    let img = render_eevee(&s, &st);
+    assert_eq!(img.pixels, render_eevee(&s, &EeveeSettings { threads: 3, ..st }).pixels);
+    let (inside, outside) = (px(&img, 32, 32)[1], px(&img, 3, 3)[1]);
+    assert!((outside - 1.0).abs() < 0.01, "{outside}");
+    assert!(inside < 0.4, "attenuated through 1.5 m of density 1.5: {inside}");
+    // Lit by a sun in front of a black background, it scatters light.
+    s.materials[back] = diffuse(0.0);
+    add_sun(&mut s, Vec3::new(0.0, 0.0, 10.0), 3.0, 0.01);
+    let img = render_eevee(&s, &st);
+    assert!(px(&img, 32, 32)[1] > 0.05 && px(&img, 3, 3)[1] < 0.01, "{:?}", px(&img, 32, 32));
+    // Nothing with Volumes unchecked.
+    let img = render_eevee(&s, &EeveeSettings { volumetrics: false, ..st });
+    assert!(px(&img, 32, 32)[1] < 0.01);
+}
+
+/// Everything on at once renders the same image with any thread count.
+#[test]
+fn eevee_effects_are_thread_independent() {
+    let mut s = monkey_scene();
+    let c = add_camera(&mut s, Vec3::new(9.0, -9.0, 6.0), Vec3::ZERO, 0.6);
+    if let ObjectData::Camera(cam) = &mut s.objects[c].data {
+        cam.dof.enabled = true;
+        cam.dof.focus_distance = 12.0;
+        cam.dof.fstop = 0.5;
+    }
+    let floor = s.add_material(glossy(0.7, 0.1));
+    let p = s.find_object("Plane").unwrap();
+    s.objects[p].materials = vec![floor];
+    let glow = s.add_material(emission([1.0, 0.9, 0.5, 1.0], 20.0));
+    add_cube(&mut s, glow, 0.4, Vec3::new(2.0, 1.0, 0.0));
+    let skin = s.add_material(principled(&[("Subsurface Weight", Value::Float(1.0)), ("Subsurface Scale", Value::Float(0.2))]));
+    let suz = s.find_object("Suzanne").unwrap();
+    s.objects[suz].materials = vec![skin];
+    let fog = s.add_material(volume_material([0.5, 0.6, 0.9, 1.0], 0.5));
+    add_cube(&mut s, fog, 1.0, Vec3::new(-2.0, 1.0, 0.0));
+    let li = s.find_object("Light").unwrap();
+    if let ObjectData::Light(l) = &mut s.objects[li].data {
+        l.kind = LightKind::Area { size: 1.0 };
+        l.contact_shadow = true;
+    }
+    let mv = s.find_object("Cube").unwrap();
+    let mut t = s.objects[mv].transform;
+    t.location.z += 0.5;
+    s.objects[mv].motion = Some(t);
+    let st = EeveeSettings { ssr: true, bloom: true, motion_blur: Some((-0.25, 0.25)), volumetric_shadows: true, threads: 1, ..eevee(120, 68, 3) };
+    let a = render_eevee(&s, &st);
+    assert!(sex_3d::render::eevee::mean_luminance(&a) > 0.01);
+    for threads in [2, 5] {
+        assert_eq!(a.pixels, render_eevee(&s, &EeveeSettings { threads, ..st }).pixels, "{threads} threads");
+    }
 }

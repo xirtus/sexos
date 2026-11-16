@@ -192,8 +192,10 @@ impl<'a> Compiler<'a> {
                     ClosureKind::Principled { .. } => {
                         info.emission |= !(zero(ins[25]) || zero(ins[26]));
                         info.transparent |= !is_one(ins[4]);
+                        info.subsurface |= !zero(ins[6]);
                     }
                     ClosureKind::Transparent => info.transparent = true,
+                    ClosureKind::Subsurface => info.subsurface = true,
                     _ => {}
                 },
             }

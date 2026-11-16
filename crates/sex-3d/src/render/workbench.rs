@@ -17,7 +17,8 @@
 //! anti-aliased by accumulating jittered samples, as a linear image.
 use super::raster::RasterCamera;
 use super::tonemap::{srgb_decode, srgb_encode};
-use super::viewport::{ViewportScene, ViewportSettings};
+use super::eevee::Lens;
+use super::viewport::{ViewCamera, ViewportScene, ViewportSettings};
 use crate::math::Vec3;
 use crate::scene::{Image, Scene};
 use std::sync::OnceLock;
@@ -91,6 +92,8 @@ impl CavityType {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Workbench {
     pub lighting: Lighting,
+    /// Index into [`STUDIO_LIGHTS`] (the rig of [`Lighting::Studio`]).
+    pub studio: usize,
     /// Index into [`MATCAPS`].
     pub matcap: usize,
     pub color: ColorType,
@@ -116,6 +119,8 @@ pub struct Workbench {
     pub curvature_valley: f32,
     /// Dark outline around objects.
     pub outline: bool,
+    /// Depth of field of the active camera (renders and camera views).
+    pub dof: bool,
 }
 
 impl Default for Workbench {
@@ -124,6 +129,7 @@ impl Default for Workbench {
     fn default() -> Self {
         Workbench {
             lighting: Lighting::Studio,
+            studio: 0,
             matcap: 0,
             color: ColorType::Material,
             single_color: [0.8, 0.8, 0.8],
@@ -140,6 +146,7 @@ impl Default for Workbench {
             curvature_ridge: 1.0,
             curvature_valley: 1.0,
             outline: false,
+            dof: false,
         }
     }
 }
@@ -151,21 +158,39 @@ impl Workbench {
     }
 }
 
+/// Names of the studio light rigs (Blender's Studio lighting presets).
+pub const STUDIO_LIGHTS: [&str; 4] = ["Default", "Basic", "Outdoor", "Rim Light"];
+
+/// A studio rig in view space: key and fill directions, then the weights of
+/// ambient, facing ratio, key, fill, rim and specular.
+struct Rig {
+    key: Vec3,
+    fill: Vec3,
+    w: [f32; 6],
+}
+
+const RIGS: [Rig; 4] = [
+    Rig { key: Vec3 { x: -0.408, y: 0.571, z: 0.712 }, fill: Vec3 { x: 0.6, y: -0.48, z: 0.64 }, w: [0.22, 0.42, 0.38, 0.12, 0.12, 0.18] },
+    Rig { key: Vec3 { x: 0.0, y: 0.6, z: 0.8 }, fill: Vec3 { x: -0.8, y: 0.0, z: 0.6 }, w: [0.3, 0.3, 0.4, 0.15, 0.05, 0.12] },
+    Rig { key: Vec3 { x: 0.48, y: 0.8, z: 0.36 }, fill: Vec3 { x: 0.0, y: 1.0, z: 0.0 }, w: [0.25, 0.15, 0.62, 0.2, 0.06, 0.25] },
+    Rig { key: Vec3 { x: -0.3, y: 0.3, z: 0.906 }, fill: Vec3 { x: 0.0, y: -0.6, z: 0.8 }, w: [0.15, 0.4, 0.3, 0.1, 0.45, 0.15] },
+];
+
 /// Solid-mode studio lighting in view space for unit `n` and `v` facing the
 /// viewer: (factor on the base colour, white added on top).
 #[inline]
-pub(crate) fn studio_terms(n: Vec3, v: Vec3, specular: bool) -> (f32, f32) {
-    const KEY: Vec3 = Vec3 { x: -0.408, y: 0.571, z: 0.712 };
-    const FILL: Vec3 = Vec3 { x: 0.6, y: -0.48, z: 0.64 };
+pub(crate) fn studio_terms(n: Vec3, v: Vec3, wb: &Workbench) -> (f32, f32) {
+    let r = &RIGS[wb.studio.min(RIGS.len() - 1)];
+    let w = r.w;
     let nv = n.dot(v).max(0.0);
-    let diffuse = 0.22 + 0.42 * nv + 0.38 * n.dot(KEY).max(0.0) + 0.12 * n.dot(FILL).max(0.0);
-    let spec = if specular {
-        let h = (KEY + v).normalize();
-        0.18 * n.dot(h).max(0.0).powi(32)
+    let diffuse = w[0] + w[1] * nv + w[2] * n.dot(r.key).max(0.0) + w[3] * n.dot(r.fill).max(0.0);
+    let spec = if wb.specular {
+        let h = (r.key + v).normalize();
+        w[5] * n.dot(h).max(0.0).powi(32)
     } else {
         0.0
     };
-    let rim = 0.12 * (1.0 - nv).powi(4);
+    let rim = w[4] * (1.0 - nv).powi(4);
     (diffuse, spec + rim)
 }
 
@@ -347,30 +372,83 @@ pub fn render_workbench(scene: &Scene, s: &WorkbenchRender) -> Image {
             };
             RasterCamera::from_camera(&scene.world_matrix(ci), &c, w, h)
         }
-        None => RasterCamera::from_view(&super::viewport::ViewCamera::default(), w, h),
+        None => RasterCamera::from_view(&ViewCamera::default(), w, h),
     };
     let world = scene.world.color * if scene.world.strength.is_finite() { scene.world.strength.max(0.0) } else { 0.0 };
     let bg = [srgb_encode(world.x.clamp(0.0, 1.0)), srgb_encode(world.y.clamp(0.0, 1.0)), srgb_encode(world.z.clamp(0.0, 1.0))];
     let vst = ViewportSettings { width: w, height: h, wireframe: false, grid: false, backface_culling: s.backface_culling, threads: s.threads, background: Some(bg), workbench: s.shading, transparent: s.film_transparent, overlays: false };
-    let n = (w * h) as usize;
-    let mut acc = vec![[0.0f32; 4]; n];
-    let mut buf = Vec::new();
-    let samples = s.samples.max(1);
-    for i in 0..samples {
+    let lens = scene.active_camera.filter(|_| s.shading.dof).and_then(|ci| Lens::from_camera(scene, ci, w, h));
+    let mut frames = WorkbenchFrames::default();
+    for _ in 0..s.samples.max(1) {
+        frames.add_sample(&vs, &cam, None, &vst, lens);
+    }
+    let inv = 1.0 / frames.samples as f32;
+    let pixels = frames.acc.iter().map(|a| a.map(|c| c * inv)).collect();
+    Image { name: "Render".into(), width: w, height: h, pixels }
+}
+
+/// Workbench anti-aliasing (and depth of field) one frame at a time: the
+/// jittered frames [`render_workbench`] averages, for a progressive view.
+#[derive(Default)]
+pub struct WorkbenchFrames {
+    /// Sums of linear premultiplied RGBA.
+    acc: Vec<[f32; 4]>,
+    buf: Vec<u8>,
+    samples: u32,
+}
+
+impl WorkbenchFrames {
+    pub fn samples(&self) -> u32 {
+        self.samples
+    }
+
+    /// Start over (the view or the scene changed).
+    pub fn reset(&mut self) {
+        self.samples = 0;
+    }
+
+    /// Draw and add the next jittered frame of `cam` (`view` places the
+    /// floor grid when `st` shows it; `lens` adds depth of field).
+    pub fn add_sample(&mut self, vs: &ViewportScene, cam: &RasterCamera, view: Option<&ViewCamera>, st: &ViewportSettings, lens: Option<Lens>) {
+        let n = (st.width.max(1) * st.height.max(1)) as usize;
+        if self.samples == 0 || self.acc.len() != n {
+            self.acc.clear();
+            self.acc.resize(n, [0.0; 4]);
+            self.samples = 0;
+        }
+        let i = self.samples;
         let (jx, jy) = jitter(i);
-        vs.draw_camera(&cam.jittered(jx, jy), None, &vst, &mut buf);
-        for (a, p) in acc.iter_mut().zip(buf.chunks_exact(4)) {
+        let mut c = cam.jittered(jx, jy);
+        if let Some(l) = lens {
+            l.jitter(&mut c, i);
+        }
+        vs.draw_camera(&c, view, st, &mut self.buf);
+        for (a, p) in self.acc.iter_mut().zip(self.buf.chunks_exact(4)) {
             let alpha = p[3] as f32 / 255.0;
             for c in 0..3 {
                 a[c] += srgb_decode(p[c] as f32 / 255.0) * alpha;
             }
             a[3] += alpha;
         }
+        self.samples += 1;
     }
-    let inv = 1.0 / samples as f32;
-    let pixels = acc
-        .into_iter()
-        .map(|a| [a[0] * inv, a[1] * inv, a[2] * inv, a[3] * inv])
-        .collect();
-    Image { name: "Render".into(), width: w, height: h, pixels }
+
+    /// The average so far as display RGBA8 (straight alpha, sRGB).
+    pub fn rgba8(&self, out: &mut Vec<u8>) {
+        if self.samples == 1 && self.buf.len() == self.acc.len() * 4 {
+            out.clone_from(&self.buf);
+            return;
+        }
+        let inv = 1.0 / self.samples.max(1) as f32;
+        out.clear();
+        out.reserve(self.acc.len() * 4);
+        for a in &self.acc {
+            let alpha = a[3] * inv;
+            let k = if alpha > 0.0 { inv / alpha } else { 0.0 };
+            for c in 0..3 {
+                out.push((srgb_encode((a[c] * k).clamp(0.0, 1.0)) * 255.0 + 0.5) as u8);
+            }
+            out.push((alpha.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+        }
+    }
 }

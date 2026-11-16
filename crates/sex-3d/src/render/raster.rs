@@ -228,7 +228,10 @@ impl RasterCamera {
             }
             if ia != ib {
                 let s = (near - a.0.z) / (b.0.z - a.0.z);
-                poly[n] = (a.0.lerp(b.0, s), [a.1[0] + (b.1[0] - a.1[0]) * s, a.1[1] + (b.1[1] - a.1[1]) * s]);
+                // Exactly on the near plane (rounding must not put it in front).
+                let mut q = a.0.lerp(b.0, s);
+                q.z = near;
+                poly[n] = (q, [a.1[0] + (b.1[0] - a.1[0]) * s, a.1[1] + (b.1[1] - a.1[1]) * s]);
                 n += 1;
             }
         }
@@ -555,6 +558,7 @@ impl<P: Copy + Send + Sync> Bins<P> {
 
     /// Depth test and write the nearest triangle id per pixel (larger depth
     /// keys win; ties keep the first). Buffers are resized and cleared.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn visibility(&self, depth: &mut Vec<f32>, ids: &mut Vec<u32>, threads: usize) {
         let l = self.layout;
         depth.resize(l.len(), 0.0);

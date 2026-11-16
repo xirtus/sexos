@@ -178,9 +178,40 @@ pub struct Settings {
     pub eevee_ao_distance: f32,
     pub eevee_volumetrics: bool,
     pub eevee_volumetric_end: f32,
+    /// Volumes: ray-march steps through object volumes, and volume shadows.
+    pub eevee_volumetric_steps: u32,
+    pub eevee_volumetric_shadows: bool,
+    /// Raytracing (screen space): reflections and their limits.
+    pub eevee_ssr: bool,
+    pub eevee_ssr_max_roughness: f32,
+    pub eevee_ssr_thickness: f32,
+    pub eevee_ssr_fade: f32,
+    /// Bloom.
+    pub eevee_bloom: bool,
+    pub eevee_bloom_threshold: f32,
+    pub eevee_bloom_knee: f32,
+    pub eevee_bloom_radius: f32,
+    pub eevee_bloom_color: [f32; 3],
+    pub eevee_bloom_intensity: f32,
+    pub eevee_bloom_clamp: f32,
+    /// Depth of Field: Max Size (px) and Jitter Camera.
+    pub eevee_dof_max_size: f32,
+    pub eevee_dof_jitter: bool,
+    /// Subsurface Scattering: samples.
+    pub eevee_sss_samples: u32,
+    /// Material Preview: studio world (index into `STUDIO_WORLDS`), its
+    /// rotation (radians), strength and opacity behind the scene.
+    pub lookdev_world: usize,
+    pub lookdev_rotation: f32,
+    pub lookdev_strength: f32,
+    pub lookdev_opacity: f32,
+    /// Performance > Viewport: render at half resolution while navigating.
+    pub viewport_half_res_navigation: bool,
     /// Workbench (F12): shading options and anti-aliasing samples.
     pub workbench: Workbench,
     pub workbench_samples: u32,
+    /// Workbench anti-aliasing samples in the Rendered viewport.
+    pub workbench_viewport_samples: u32,
 }
 
 impl Default for Settings {
@@ -261,8 +292,30 @@ impl Default for Settings {
             eevee_ao_distance: 0.2,
             eevee_volumetrics: true,
             eevee_volumetric_end: 100.0,
+            eevee_volumetric_steps: 64,
+            eevee_volumetric_shadows: false,
+            eevee_ssr: false,
+            eevee_ssr_max_roughness: 0.5,
+            eevee_ssr_thickness: 0.2,
+            eevee_ssr_fade: 0.075,
+            eevee_bloom: false,
+            eevee_bloom_threshold: 0.8,
+            eevee_bloom_knee: 0.5,
+            eevee_bloom_radius: 6.5,
+            eevee_bloom_color: [1.0; 3],
+            eevee_bloom_intensity: 0.05,
+            eevee_bloom_clamp: 0.0,
+            eevee_dof_max_size: 100.0,
+            eevee_dof_jitter: false,
+            eevee_sss_samples: 7,
+            lookdev_world: 0,
+            lookdev_rotation: 0.0,
+            lookdev_strength: 1.0,
+            lookdev_opacity: 1.0,
+            viewport_half_res_navigation: false,
             workbench: Workbench::default(),
             workbench_samples: 8,
+            workbench_viewport_samples: 8,
         }
     }
 }
@@ -348,11 +401,31 @@ impl Settings {
             ao_distance: self.eevee_ao_distance.max(0.0),
             volumetrics: self.eevee_volumetrics,
             volumetric_end: self.eevee_volumetric_end.max(0.0),
+            volumetric_steps: self.eevee_volumetric_steps.clamp(1, 256),
+            volumetric_shadows: self.eevee_volumetric_shadows,
+            ssr: self.eevee_ssr,
+            ssr_max_roughness: self.eevee_ssr_max_roughness.clamp(0.0, 1.0),
+            ssr_thickness: self.eevee_ssr_thickness.max(0.0),
+            ssr_fade: self.eevee_ssr_fade.clamp(0.0, 0.5),
+            bloom: self.eevee_bloom,
+            bloom_threshold: self.eevee_bloom_threshold.max(0.0),
+            bloom_knee: self.eevee_bloom_knee.clamp(0.0, 1.0),
+            bloom_radius: self.eevee_bloom_radius.clamp(0.0, 10.0),
+            bloom_color: self.eevee_bloom_color.map(|c| c.max(0.0)),
+            bloom_intensity: self.eevee_bloom_intensity.max(0.0),
+            bloom_clamp: self.eevee_bloom_clamp.max(0.0),
+            dof_max_size: self.eevee_dof_max_size.max(0.0),
+            dof_jitter: self.eevee_dof_jitter,
+            sss_samples: self.eevee_sss_samples.clamp(1, 32),
+            motion_blur: self.motion_blur.then(|| MotionBlur { shutter: self.shutter, position: self.shutter_position }.interval()),
             filter_size: self.filter_width.max(0.0),
             film_transparent: self.film_transparent,
-            lookdev: false,
-            lookdev_blur: 0.5,
+            lookdev_world: self.lookdev_world,
+            lookdev_rotation: self.lookdev_rotation,
+            lookdev_strength: self.lookdev_strength.max(0.0),
+            lookdev_opacity: self.lookdev_opacity.clamp(0.0, 1.0),
             threads: self.threads as usize,
+            ..EeveeSettings::default()
         }
     }
 
