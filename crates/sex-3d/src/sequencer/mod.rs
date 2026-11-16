@@ -5,6 +5,7 @@
 //! duplicate, delete, meta strips, mute, lock) and, in [`render`], the
 //! composited frame.
 pub mod render;
+pub mod visit;
 #[cfg(test)]
 mod tests;
 

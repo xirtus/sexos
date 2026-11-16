@@ -43,6 +43,7 @@ pub mod sculpt;
 pub mod paint;
 pub mod grease_pencil;
 pub mod sequencer;
+pub mod props;
 
 pub use math::{Aabb, Mat4, Quat, Vec2, Vec3};
 pub use mesh::{Face, HalfEdgeMesh, Mesh};

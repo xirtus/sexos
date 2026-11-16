@@ -33,6 +33,8 @@ pub enum Change {
     Image { image: usize, x: u32, y: u32, w: u32, h: u32, pixels: Vec<[f32; 4]> },
     /// One modifier of an object (Multires displacements).
     Modifier { object: usize, index: usize, data: Box<Modifier> },
+    /// A whole Grease Pencil data-block (a stroke drawn, erased or sculpted).
+    GreasePencil { gp: usize, data: Box<crate::grease_pencil::GreasePencil> },
 }
 
 fn swap_sparse<T>(dst: &mut [T], idx: &[u32], vals: &mut [T]) {
@@ -105,6 +107,11 @@ impl Change {
                     std::mem::swap(md, data.as_mut());
                 }
             }
+            Change::GreasePencil { gp, data } => {
+                if let Some(g) = scene.grease_pencils.get_mut(*gp) {
+                    std::mem::swap(g, data.as_mut());
+                }
+            }
         }
     }
 
@@ -120,6 +127,7 @@ impl Change {
             Change::Mesh { data, .. } => data.positions.len() * 12 + data.corner_count() * 4 + data.faces.len() * 40,
             Change::Image { pixels, .. } => pixels.len() * 16,
             Change::Modifier { .. } => 64,
+            Change::GreasePencil { data, .. } => data.point_count() * 48 + 256,
         }
     }
 }

@@ -660,3 +660,73 @@ fn samples_and_layers() {
     g.layers[0].group = Some(0);
     assert!(!g.layer_visible(0));
 }
+
+#[test]
+fn polyops_round_trip() {
+    use crate::sequencer::{Effect, Sequencer, Strip, StripKind, StripModifier};
+    let mut scene = Scene::new();
+    let mut g = sample_cat();
+    g.vertex_groups.push("Ears".into());
+    g.groups.push(LayerGroup { name: "Head".into(), parent: None, hide: false, lock: true, expanded: true, color_tag: 3 });
+    g.layers[0].group = Some(0);
+    g.layers[1].opacity = 0.5;
+    g.layers[1].blend = LayerBlend::Multiply;
+    g.layers[1].transform.location = Vec3::new(0.0, 0.5, 0.0);
+    g.layers[1].masks = vec!["Fills".into()];
+    g.layers[1].frames[0].key_type = KeyframeType::Breakdown;
+    g.layers[1].ensure_key(10, true);
+    g.layers[1].frames[1].drawing.strokes[0].points[0].set_weight(0, 0.25);
+    g.layers[1].frames[1].drawing.strokes[0].cyclic = true;
+    g.layers[1].frames[1].drawing.strokes[0].end_cap = CapType::Flat;
+    g.materials[0].mode = LineMode::Dots;
+    g.onion.enabled = true;
+    g.onion.before = 3;
+    g.depth_order = DepthOrder::Location3D;
+    let oi = scene.add_grease_pencil_object("Cat", g);
+    scene.objects[oi].transform.location = Vec3::new(1.0, 2.0, 3.0);
+    for (id, _) in modifiers::TYPES {
+        let mut m = GpModifier::new(id).unwrap();
+        m.influence.layer = "Lines".into();
+        if let GpModKind::Dash { segments, .. } = &mut m.kind {
+            segments.push(Default::default());
+            segments[1].gap = 4;
+        }
+        if let GpModKind::Simplify(s) = &mut m.kind {
+            *s = SimplifyMode::Sample { length: 0.25 };
+        }
+        scene.objects[oi].gp_modifiers.push(m);
+    }
+    for (id, _) in effects::TYPES {
+        scene.objects[oi].shader_fx.push(effects::GpEffect::new(id).unwrap());
+    }
+    let mut q = Sequencer::default();
+    let a = q.add(Strip::new("Red", StripKind::Color { color: [1.0, 0.0, 0.0] }, 1, 1.0, 50.0));
+    let b = q.add(Strip::new("Pics", StripKind::Image { directory: "//img".into(), files: vec!["a.png".into(), "b c.png".into()] }, 2, 10.0, 2.0));
+    q.add_effect(Effect::new("WIPE").unwrap(), &[a, b], 3, 1.0);
+    let mut t = Strip::new("Title", StripKind::Text(Default::default()), 4, 1.0, 20.0);
+    t.modifiers.push(StripModifier::new("CURVES").unwrap());
+    t.opacity = 0.75;
+    q.add(t);
+    q.add(Strip::new("Snd", StripKind::Sound { path: "a.wav".into(), volume: 0.5, pan: 0.0, waveform: Vec::new() }, 5, 1.0, 30.0));
+    q.add(Strip::new("Inner", StripKind::Adjustment, 6, 1.0, 5.0));
+    q.select_all(Some(false));
+    let inner = q.find("Inner").unwrap();
+    q.strips[inner].select = true;
+    q.make_meta();
+    q.channel_mut(2).lock = true;
+    q.use_sequencer = false;
+    scene.sequence_editor = Some(q);
+
+    let text = crate::script::scene_to_polyops(&scene);
+    let mut back = Scene::new();
+    crate::script::run(&mut back, &text).unwrap_or_else(|e| panic!("{e}\n{text}"));
+    assert_eq!(back.grease_pencil_names, scene.grease_pencil_names);
+    assert_eq!(back.grease_pencils, scene.grease_pencils);
+    let bo = back.find_object("Cat").unwrap();
+    assert_eq!(back.objects[bo].gp_modifiers, scene.objects[oi].gp_modifiers);
+    assert_eq!(back.objects[bo].shader_fx, scene.objects[oi].shader_fx);
+    assert_eq!(back.objects[bo].transform.location, Vec3::new(1.0, 2.0, 3.0));
+    assert_eq!(back.sequence_editor, scene.sequence_editor);
+    // And again: the text is stable.
+    assert_eq!(crate::script::scene_to_polyops(&back), text);
+}

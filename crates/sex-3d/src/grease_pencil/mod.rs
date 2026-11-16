@@ -32,6 +32,7 @@ pub mod raster;
 pub mod sculpt;
 pub mod tools;
 pub mod view;
+pub mod visit;
 #[cfg(test)]
 mod tests;
 

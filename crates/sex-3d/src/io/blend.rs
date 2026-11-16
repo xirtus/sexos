@@ -183,6 +183,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 mod geonodes;
+mod gpencil;
 mod nodes;
 
 mod rig;
@@ -860,6 +861,7 @@ struct Importer<'f, 'a> {
     meshes: HashMap<u64, usize>,
     armatures: HashMap<u64, usize>,
     lattices: HashMap<u64, usize>,
+    gpencils: HashMap<u64, usize>,
     /// Imported `IM` and `NT` blocks by old address.
     images: HashMap<u64, usize>,
     groups: HashMap<u64, usize>,
@@ -878,6 +880,7 @@ impl<'f, 'a> Importer<'f, 'a> {
             images: HashMap::new(),
             groups: HashMap::new(),
             lattices: HashMap::new(),
+            gpencils: HashMap::new(),
             render: Render { width: 1920.0, height: 1080.0 },
             actions: Vec::new(),
         }
@@ -1105,6 +1108,15 @@ impl<'f, 'a> Importer<'f, 'a> {
                 let name = lt.id_name();
                 let i = *self.lattices.entry(data).or_insert_with(|| self.scene.add_lattice(&name, rig::lattice(f, &lt)));
                 ObjectData::Lattice(i)
+            }),
+            // OB_GPENCIL_LEGACY: bGPdata (2.8 to 4.2).
+            26 => f.view_ptr(data, &["bGPdata"]).map_or(ObjectData::Empty, |gd| {
+                let name = gd.id_name();
+                let n = count(ob.num("totcol").unwrap_or(0.0)).min(32767);
+                let mats = f.ptr_array(ob.ptr("mat"), n);
+                let groups = rig::group_names(f, ob.sub("defbase"));
+                let i = *self.gpencils.entry(data).or_insert_with(|| self.scene.add_grease_pencil(&name, gpencil::legacy(f, &gd, &mats, groups)));
+                ObjectData::GreasePencil(i)
             }),
             25 => f.view_ptr(data, &["bArmature"]).map_or(ObjectData::Empty, |ar| {
                 let name = ar.id_name();
