@@ -44,6 +44,9 @@ fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::
 
 pub enum Event {
     Key(Key),
+    /// A key pressed in this window went up (a modifier's too): the same key the press
+    /// delivered. When focus leaves the window, the keys still held there go up too.
+    KeyUp(Key),
     Close,
     /// The window's pixel area is now this many pixels wide and high: redraw to fit.
     Resize { width: usize, height: usize },
@@ -106,6 +109,12 @@ impl Window {
     /// The width and height of the window's pixel area, as Shell last reported it
     /// (see [`Event::Resize`]). Pixels shown beyond it are cut off.
     pub fn size(&self) -> (usize, usize) { self.size }
+    /// Asks Shell for keys it otherwise keeps (`sex_pdx::app_key::DESKTOP_KEYS`: Tab,
+    /// backtick, F1-F10, F12, Scroll Lock, Insert; F11 stays Shell's) and/or numpad marks
+    /// (`KEYPAD`: [`Key::keypad`]). Lasts for this run; ask again to change it.
+    pub fn want_keys(&self, flags: u64) -> bool {
+        sex_pdx::pdx_call_checked(SLOT_SHELL, sex_pdx::app_key::OP_KEYS, flags, 0, 0).is_ok()
+    }
     /// Shows the first `width` by `height` pixels in the window instead of its text.
     pub fn show_pixels(&mut self, width: usize, height: usize) {
         call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, 0);
@@ -165,6 +174,7 @@ impl Window {
         if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
         if let Some(on) = sex_pdx::a11y::decode_state(m.type_id, m.arg0, m.arg1) { a11y::told(on); return None; }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
+        if m.type_id == 0x202 { if let Some(k) = Key::decode_release(m.arg0, m.arg1, m.arg2) { return Some(Event::KeyUp(k)); } }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
     }

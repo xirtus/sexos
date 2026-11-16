@@ -4,7 +4,9 @@
 use sex_pdx::{app_key::Key, clipboard::{Action,Participant,Subject}};
 pub const CAPACITY:usize=32;
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
-pub enum Input { Key(Key), Clipboard(Action), Scroll(sex_pdx::app_scroll::Scroll),
+pub enum Input { Key(Key),
+    /// A key going up in a program window (`app_key::Key::decode_release`).
+    KeyUp(Key), Clipboard(Action), Scroll(sex_pdx::app_scroll::Scroll),
     /// A program window's pixel area changed: `pixel_region::resize_wire(width, height)`.
     Resize(u64),
     /// Mouse input over a program window: `app_pointer::Pointer::wire`.

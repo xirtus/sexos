@@ -590,7 +590,7 @@ pub extern "C" fn _start() -> ! {
                 Kind::Wheel { steps } if app.view == View::Month => app.select(app.selected.add_days(if steps > 0 { -7 } else { 7 })),
                 _ => continue,
             },
-            Event::Drop { .. } | Event::DragEnded { .. } => continue,
+            Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_) => continue,
             Event::Resize { .. } => {}
         }
         app.tick(&mut window);

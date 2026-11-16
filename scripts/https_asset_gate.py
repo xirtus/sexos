@@ -163,7 +163,7 @@ HELD_INPUT_FUNCTIONS = {
  'document_view_sender': '2715dd56b62c3c164587b3e2e4dea49ad6e416a73f945718cf5d406c537990bc',
  'focused_clipboard_participant': 'fdc67ea118bfc1237104f056139cb5de45416b595337c18706c935a6faf32a84',
  'clipboard_live': '1a801645af4f7f94acdc55fec353ffe663a01a12968fbddd403686a63648f275',
- 'app_input_poll': 'abf76e67e7896ad20509f81b2a08d473343539a8dda7d3f6ce610875f691e9d3',
+ 'app_input_poll': '1ffd4fe777027a6663d07283c97c6858a0fdba36d782da34f424f85d535fd576',
  'browser_wheel_destination': '66ccbc15c66cbe2bdf13ac916a00e97382c1afd0ae56b222eeb325c2b37fa35f',
  'frame_accepts_input': '6fdf754c25b68e8f13f6d3c71c9ead28b4768d8e5948407e2c9fd638c6e9bd08',
 }
@@ -213,7 +213,7 @@ def source_contract(root):
  input_source=sources['servers/sexinput/src/main.rs'].decode();physical='sex_pdx::serial_input_record!(("[sexinput.ps2.scancode] payload=redacted"); ("[sexinput.ps2.scancode] raw={:#x}", scancode));'
  retained='input_arrival.ps2(&mut keyboard_outbox,scancode)'
  if physical not in input_source or retained not in input_source or input_source.index(physical)>=input_source.index(retained):raise ValueError('physical PS2 make receipt must be atomic and precede retained key admission')
- for literal in ('code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8','send(edge.code as u64,edge.down as u64,EV_KEY)','poll_input_delivery(&mut keyboard_outbox,&mut pointer_outbox,send_shell_hid_event)','pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2)'):
+ for literal in ('code:(raw&0x7f)as u8,down:(raw&0x80==0)as u8','send(edge.code as u64|(edge.keypad as u64)<<8,edge.down as u64,EV_KEY)','poll_input_delivery(&mut keyboard_outbox,&mut pointer_outbox,send_shell_hid_event)','pdx_call_checked(SLOT_SHELL, OP_HID_EVENT, arg0, arg1, arg2)'):
   if literal not in input_source:raise ValueError('retained physical key must drain through the actual held Shell route: '+literal)
  if 'min(4)'not in view or '0x00303860u32'not in display:raise ValueError('source-bound fit/background contract changed')
  return dict(source_sha256={**{n:hashlib.sha256(data).hexdigest()for n,data in sources.items()},**https.palette_source_hashes(root),**font_sources(root)},metrics=source_metrics(root),font=font_from_source(display),color=0xcdd6f4,background=0x303860,base=list(BASE),pixel_hash=hex(PIXEL_HASH),body_hash=hex(fingerprint(BODY)),body_sha256=hashlib.sha256(BODY).hexdigest())

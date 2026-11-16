@@ -79,7 +79,7 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
                     keys::pointer_events(p.x, p.y, kind, ppp, modifiers, &mut events);
                 }
                 // Drops reach egui once dnd forwarding lands (sex_app::dnd holds the bytes).
-                WinEvent::Drop { .. } | WinEvent::DragEnded { .. } => {}
+                WinEvent::Drop { .. } | WinEvent::DragEnded { .. } | WinEvent::KeyUp(_) => {}
             }
             next = window.poll();
         }
