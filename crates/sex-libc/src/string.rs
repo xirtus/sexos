@@ -195,6 +195,12 @@ pub unsafe extern "C" fn strndup(s: *const c_char, max: usize) -> *mut c_char {
     d
 }
 
+/// `strtok`: one saved position per program (use `strtok_r` from threads).
+#[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
+pub unsafe extern "C" fn strtok(s: *mut c_char, delim: *const c_char) -> *mut c_char {
+    static mut SAVE: *mut c_char = null_mut();
+    unsafe { strtok_r(s, delim, core::ptr::addr_of_mut!(SAVE)) }
+}
 #[cfg_attr(any(target_os = "none", target_os = "hermit"), no_mangle)]
 pub unsafe extern "C" fn strtok_r(s: *mut c_char, delim: *const c_char, save: *mut *mut c_char) -> *mut c_char {
     let mut p = if s.is_null() { unsafe { *save } } else { s };

@@ -26,11 +26,11 @@ KEYS={' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal',',':'comma',';':'s
 SHIFTED={'"':'apostrophe','|':'backslash','~':'grave_accent','>':'dot',':':'semicolon','_':'minus','!':'1','@':'2'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
- term=(ROOT/'iso_root/programs/term').read_bytes();assert term[:4]==b'\x7fELF'
+ term=(ROOT/'iso_root/programs/spindle').read_bytes();assert term[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  std=(ROOT/'iso_root/programs/stdhello').read_bytes()
- install(disk,[('term',term),('stdhello',std)])
+ install(disk,[('spindle',term),('stdhello',std)])
  g=boot(a.iso,disk,a.out,'term',a.resolution);t=g['text'];q=g['q']
  def keys(text):
   for k in text:
@@ -44,7 +44,7 @@ def main():
   s=len(t());term_line('snapshot');g['wait'](r'\[term\.snapshot\] rows=\d+',s,60)
   return dict((int(r),row) for r,row in re.findall(r'\[term\.row\] r=(\d+) ([^\n]*)\n',t()[s:]))
  def start():
-  s=len(t());spindle('run term')
+  s=len(t());spindle('run spindle')
   m=g['wait'](r'\[term\.ready\] target=(\d+) task=(\d+) cols=(\d+) rows=(\d+)',s,240)
   target,task,cols,rows=map(int,m.groups());assert cols>=40 and rows>=10,m[0]
   g['wait'](rf'\[display\.app\.title\] target={target} ',s,60);time.sleep(1)

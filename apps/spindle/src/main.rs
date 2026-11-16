@@ -1033,7 +1033,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         // A Spindle terminal window (apps/term), allowed to start programs whose console it is.
         b"spindle" => {
-            unsafe{fs_commands::FS.submit_program_granted(b"term",args,0,0,sex_pdx::console_relay::GRANT_TOKEN,sb);}
+            unsafe{fs_commands::FS.submit_program_granted(b"spindle",args,0,0,sex_pdx::console_relay::GRANT_TOKEN,sb);}
             true
         }
         b"spawn" if args.split(|b|*b==b' ').next().is_some_and(|w|w.contains(&b'/')) => {
