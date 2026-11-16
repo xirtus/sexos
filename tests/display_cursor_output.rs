@@ -31,6 +31,8 @@ pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 use surface_lifecycle::{Surface,MAX_SURFACES,SURFACE_EMPTY,TEXT_BUF_CAP,TEXT_MAX_ROWS,TEXT_LEGACY_COLS};
 use surface_groups::FrameGroups;
 use silkbar_model::{DEFAULT_THEME,DEFAULT_SILK_BAR};
+// The SexOS wallpaper mark is off here: the reference compositor draws plain gradients.
+mod wallpaper_mark{pub fn span(_:usize,_:usize,_:usize)->Option<(usize,usize)>{None}pub fn pixel(_:usize,_:usize,_:usize,_:usize,back:u32)->u32{back}}
 include!(env!("DISPLAY_CURSOR_SOURCE"));
 const W:usize=128;const H:usize=112;
 const MENU_OLD:u32=0x004488aa;const MENU_NEW:u32=0x00aa8844;
