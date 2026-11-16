@@ -238,6 +238,10 @@ def passive_observer_joins(text,root,core,topology,identity,seals,expiries):
     return fail('no strictly increasing post-expiry Net counter pair')
 
 
+SHELL_TASK=3
+SHELL_AUTOFILL_MAX_TICKS=1000
+
+
 def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  errors=[]
  source=source_contract(source_root)if source_root is not None else None
@@ -269,9 +273,12 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
   # sexdrive main task (2) waits 1 tick for NVMe completions. Park records
   # are sampled (first four, then powers of two), so either may appear.
   # Idle Display (1) and SilkBar (6) sleep 8 ticks; polled sexinput (4) and sexusb (5) sleep 1.
-  if (int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+tuple((task,2)for task in selected)+auxiliary or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline')
+  # Shell (3) wakes itself for password autofill (silk-shell autofill_routes::wake):
+  # 100 ticks while a page identity is held, at most 1000 toward a transaction deadline.
+  shell=source_ok and int(p[1])==SHELL_TASK and 1<=int(p[2])<=SHELL_AUTOFILL_MAX_TICKS
+  if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
  for e in expiries:
-  if int(e[1])not in(13,2,1,6,4,5)+selected+((50,)if acpi['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry')
+  if int(e[1])not in(13,2,1,6,4,5)+((SHELL_TASK,)if source_ok else())+selected+((50,)if acpi['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry: task=%s deadline=%s now=%s'%(e[1],e[2],e[3]))
  for r in returns:
   if int(r[2])<int(r[1]):errors.append('backward Ring3 clock')
  for group,index in [(parks,4),(expiries,4),(returns,3)]:
