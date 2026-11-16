@@ -74,7 +74,7 @@ pub use eevee::{render_eevee, Eevee, EeveeScene, EeveeSettings, Lens, STUDIO_WOR
 pub use film::{MistFalloff, MistSettings, Pass, Passes, BACKGROUND_DEPTH};
 pub use prepare::PreparedScene;
 pub use raster::RasterCamera;
-pub use workbench::{render_workbench, Workbench, WorkbenchRender};
+pub use workbench::{render_workbench, Workbench, WorkbenchFrames, WorkbenchRender};
 pub use tonemap::{display, srgb_decode, srgb_encode, to_display8, to_srgb8, to_srgb8_with, ColorManagement, Look, ViewTransform};
 pub use volume::VolumeCoeffs;
 

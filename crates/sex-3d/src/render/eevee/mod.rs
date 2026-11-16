@@ -99,6 +99,20 @@ impl Lens {
         let aperture = c.focal_length(aspect) * 1e-3 / (2.0 * dof.fstop);
         (aperture.is_finite() && aperture > 0.0).then_some(Lens { aperture, focus: if focus.is_finite() { focus.max(1e-3) } else { 10.0 } })
     }
+
+    /// Move `view` to point `i` of a sequence over the aperture, keeping the
+    /// focus plane in place (depth of field by averaging such views).
+    pub fn jitter(&self, view: &mut RasterCamera, i: u32) {
+        if view.ortho {
+            return;
+        }
+        let (u, v) = (radical_inverse2(i.wrapping_add(1)), unit(hash2(i, 0x6a09_e667, 7)));
+        let (r, a) = (u.sqrt() * self.aperture, v * TAU);
+        let (ax, ay) = (r * a.cos(), r * a.sin());
+        view.eye = view.eye + view.right * ax + view.up * ay;
+        view.cx += ax * view.scale / self.focus;
+        view.cy -= ay * view.scale / self.focus;
+    }
 }
 
 /// EEVEE's Render Properties.
@@ -625,13 +639,8 @@ impl Eevee {
         let mut view = cam.jittered(jx, jy);
         // Jittered camera depth of field: a point on the aperture per
         // sample, the focus plane kept in place.
-        if let (Some(l), true, false) = (self.settings.lens, self.settings.dof_jitter, cam.ortho) {
-            let (u, v) = (radical_inverse2(s.wrapping_add(1)), unit(hash2(s, 0x6a09_e667, 7)));
-            let (r, a) = (u.sqrt() * l.aperture, v * TAU);
-            let (ax, ay) = (r * a.cos(), r * a.sin());
-            view.eye = view.eye + view.right * ax + view.up * ay;
-            view.cx += ax * view.scale / l.focus;
-            view.cy -= ay * view.scale / l.focus;
+        if let (Some(l), true) = (self.settings.lens, self.settings.dof_jitter) {
+            l.jitter(&mut view, s);
         }
         self.render_sample(&view, s);
         if self.accum.len() != layout.len() {

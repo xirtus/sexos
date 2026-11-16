@@ -225,6 +225,35 @@ fn workbench_render_engine() {
     assert!(t.pixels[17 * 60 + 30][3] > 0.99);
 }
 
+#[test]
+fn workbench_studio_lights_and_depth_of_field() {
+    let mut s = monkey_scene();
+    let c = add_camera(&mut s, Vec3::new(9.0, -9.0, 6.0), Vec3::ZERO, 0.6);
+    let base = WorkbenchRender { width: 120, height: 68, samples: 8, threads: 1, ..WorkbenchRender::default() };
+    let plain = sex_3d::render::render_workbench(&s, &base);
+    // Each studio rig lights the scene differently.
+    let mut seen = vec![plain.pixels.clone()];
+    for studio in 1..sex_3d::render::workbench::STUDIO_LIGHTS.len() {
+        let img = sex_3d::render::render_workbench(&s, &WorkbenchRender { shading: Workbench { studio, ..Workbench::default() }, ..base });
+        assert!(!seen.contains(&img.pixels), "studio {studio}");
+        seen.push(img.pixels);
+    }
+    // Depth of field: nothing without a camera aperture, a softer image with one.
+    let dof = WorkbenchRender { shading: Workbench { dof: true, ..Workbench::default() }, ..base };
+    assert_eq!(sex_3d::render::render_workbench(&s, &dof).pixels, plain.pixels);
+    if let ObjectData::Camera(cam) = &mut s.objects[c].data {
+        cam.dof.enabled = true;
+        cam.dof.focus_distance = 4.0;
+        cam.dof.fstop = 0.05;
+    }
+    let blurred = sex_3d::render::render_workbench(&s, &dof);
+    assert_ne!(blurred.pixels, plain.pixels);
+    // The strongest step between neighbours shrinks: edges are spread out.
+    let edge = |im: &Image| im.pixels.chunks_exact(im.width as usize).flat_map(|r| r.windows(2).map(|p| (p[0][1] - p[1][1]).abs())).fold(0.0f32, f32::max);
+    assert!(edge(&blurred) < edge(&plain) * 0.6, "{} vs {}", edge(&blurred), edge(&plain));
+    assert_eq!(sex_3d::render::render_workbench(&s, &WorkbenchRender { threads: 4, ..dof }).pixels, blurred.pixels);
+}
+
 // ------------------------------------------------------------------ EEVEE
 
 use sex_3d::nodes::{NodeTree, TreeKind, Value};
