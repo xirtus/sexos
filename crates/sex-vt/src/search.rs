@@ -55,6 +55,7 @@ impl Screen {
                 let Some(line) = self.abs_line(r) else { break };
                 let keep = if r == last { line.cells.iter().rposition(|c| c.ch != ' ').map_or(0, |i| i + 1) } else { line.cells.len() };
                 for (col, c) in line.cells[..keep].iter().enumerate() {
+                    if c.ch == crate::SPACER { continue; }
                     offsets.push(text.len());
                     cells.push(Point { row: r, col });
                     text.push(c.ch);

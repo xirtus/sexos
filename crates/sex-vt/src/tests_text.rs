@@ -416,3 +416,72 @@ fn themes_change_default_and_named_colours() {
     assert!(crate::theme::Theme::named("latte").unwrap().is_light());
     assert_eq!(crate::theme::parse_color("#0a0B0c"), Some(0x0A0B0C));
 }
+
+// ---- Wide and zero-width characters ----
+
+#[test]
+fn wide_characters_take_two_cells() {
+    let s = run(10, 2, "a日b😀c".as_bytes());
+    assert_eq!(s.row_text(0), "a日b😀c");
+    assert_eq!(s.cursor(), (7, 0));
+    assert_eq!(s.visible(1, 0).ch, '日');
+    assert_ne!(s.visible(1, 0).flags & WIDE, 0);
+    assert_eq!(s.visible(2, 0).ch, SPACER);
+    assert_eq!(s.visible(3, 0).ch, 'b');
+}
+
+#[test]
+fn combining_marks_and_joiners_take_no_cell() {
+    // e + combining acute, a heart with VS16, a waving hand with a skin tone.
+    let s = run(10, 1, "e\u{301}x\u{2764}\u{FE0F}y\u{1F44B}\u{1F3FD}z".as_bytes());
+    assert_eq!(s.row_text(0), "ex\u{2764}y\u{1F44B}z");
+    assert_eq!(s.cursor(), (7, 0));
+}
+
+#[test]
+fn wide_character_at_the_edge_wraps_whole() {
+    let s = run(4, 2, "abc日".as_bytes());
+    assert_eq!(s.row_text(0), "abc");
+    assert_eq!(s.row_text(1), "日");
+    assert_eq!(s.visible(0, 1).ch, '日');
+    // Copying joins the soft-wrapped line without the spacer.
+    let mut s = s;
+    s.select(Point { row: 0, col: 0 }, Point { row: 1, col: 1 });
+    assert_eq!(s.selection_text(), "abc日");
+}
+
+#[test]
+fn writing_over_half_a_wide_character_blanks_the_other_half() {
+    let mut s = run(6, 1, "日本".as_bytes());
+    // Cursor to column 2 (the first cell of 本) and back to 1 (the spacer of 日).
+    feed(&mut s, b"\x1b[1;2Hx");
+    assert_eq!(s.row_text(0), " x本");
+    assert_eq!(s.visible(0, 0).flags & WIDE, 0);
+    feed(&mut s, b"\x1b[1;3Hy");
+    assert_eq!(s.row_text(0), " xy");
+}
+
+#[test]
+fn search_and_hints_skip_spacers() {
+    let mut s = run(20, 1, "日本 https://a.io/x".as_bytes());
+    let found = s.search("本 http", false, true);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].start.col, 2);
+    let hints = hints::find(&s);
+    assert_eq!(hints.len(), 1);
+    assert_eq!(hints[0].text, "https://a.io/x");
+    assert_eq!(hints[0].col, 5);
+    let _ = &mut s;
+}
+
+#[test]
+fn inserting_shifts_wide_characters_whole() {
+    let mut s = run(6, 1, "日a".as_bytes());
+    feed(&mut s, b"\x1b[1;1H\x1b[4hX");
+    assert_eq!(s.row_text(0), "X日a");
+    assert_ne!(s.visible(1, 0).flags & WIDE, 0);
+    assert_eq!(s.visible(2, 0).ch, SPACER);
+    // Inserting inside a pair cuts it: both halves become blanks.
+    feed(&mut s, b"\x1b[1;3HY");
+    assert_eq!(s.row_text(0), "X Y a");
+}

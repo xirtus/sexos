@@ -440,6 +440,13 @@ pub struct Aabb {
     pub max: Vec3,
 }
 
+impl Default for Aabb {
+    /// The empty box.
+    fn default() -> Self {
+        Aabb::EMPTY
+    }
+}
+
 impl Aabb {
     pub const EMPTY: Aabb = Aabb { min: Vec3::splat(f32::INFINITY), max: Vec3::splat(f32::NEG_INFINITY) };
     pub fn grow(&mut self, p: Vec3) {
@@ -464,6 +471,335 @@ impl Aabb {
         }
         let d = self.size();
         2.0 * (d.x * d.y + d.y * d.z + d.z * d.x)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 3x3 matrices, Euler orders and helpers for rigging (Blender's math_matrix /
+// math_rotation semantics: column-major, `m[col][row]`).
+
+/// Column-major 3x3 matrix: `cols[c]` is column `c` (the image of axis `c`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mat3 {
+    pub cols: [Vec3; 3],
+}
+
+impl Default for Mat3 {
+    fn default() -> Self {
+        Mat3::IDENTITY
+    }
+}
+
+impl Mat3 {
+    pub const IDENTITY: Mat3 = Mat3 { cols: [Vec3::X, Vec3::Y, Vec3::Z] };
+    pub const ZERO: Mat3 = Mat3 { cols: [Vec3::ZERO, Vec3::ZERO, Vec3::ZERO] };
+    pub fn from_cols(x: Vec3, y: Vec3, z: Vec3) -> Mat3 {
+        Mat3 { cols: [x, y, z] }
+    }
+    /// Element at `row`, `col`.
+    pub fn get(&self, row: usize, col: usize) -> f32 {
+        self.cols[col][row]
+    }
+    pub fn diagonal(s: Vec3) -> Mat3 {
+        Mat3::from_cols(Vec3::new(s.x, 0.0, 0.0), Vec3::new(0.0, s.y, 0.0), Vec3::new(0.0, 0.0, s.z))
+    }
+    pub fn mul_vec(&self, v: Vec3) -> Vec3 {
+        self.cols[0] * v.x + self.cols[1] * v.y + self.cols[2] * v.z
+    }
+    pub fn transpose(&self) -> Mat3 {
+        let c = &self.cols;
+        Mat3::from_cols(Vec3::new(c[0].x, c[1].x, c[2].x), Vec3::new(c[0].y, c[1].y, c[2].y), Vec3::new(c[0].z, c[1].z, c[2].z))
+    }
+    pub fn determinant(&self) -> f32 {
+        self.cols[0].dot(self.cols[1].cross(self.cols[2]))
+    }
+    /// Inverse; identity when singular.
+    pub fn inverse(&self) -> Mat3 {
+        let [a, b, c] = self.cols;
+        let det = self.determinant();
+        if det.abs() < 1e-30 {
+            return Mat3::IDENTITY;
+        }
+        Mat3::from_cols(b.cross(c) / det, c.cross(a) / det, a.cross(b) / det).transpose()
+    }
+    /// Rotation by `angle` radians about `axis` (right-handed; Blender's
+    /// `axis_angle_normalized_to_mat3`).
+    pub fn from_axis_angle(axis: Vec3, angle: f32) -> Mat3 {
+        let a = axis.normalize();
+        let (s, c) = angle.sin_cos();
+        let t = 1.0 - c;
+        Mat3::from_cols(
+            Vec3::new(t * a.x * a.x + c, t * a.x * a.y + s * a.z, t * a.x * a.z - s * a.y),
+            Vec3::new(t * a.x * a.y - s * a.z, t * a.y * a.y + c, t * a.y * a.z + s * a.x),
+            Vec3::new(t * a.x * a.z + s * a.y, t * a.y * a.z - s * a.x, t * a.z * a.z + c),
+        )
+    }
+    pub fn from_quat(q: Quat) -> Mat3 {
+        let q = q.normalize();
+        Mat3::from_cols(q.rotate(Vec3::X), q.rotate(Vec3::Y), q.rotate(Vec3::Z))
+    }
+    /// Rotation of a matrix with orthogonal (possibly scaled) columns.
+    pub fn to_quat(&self) -> Quat {
+        let mut n = self.normalized();
+        if n.determinant() < 0.0 {
+            n.cols[0] = -n.cols[0];
+        }
+        let (x, y, z) = (n.cols[0], n.cols[1], n.cols[2]);
+        let tr = x.x + y.y + z.z;
+        let q = if tr > 0.0 {
+            let s4 = (tr + 1.0).sqrt() * 2.0;
+            Quat { w: 0.25 * s4, x: (y.z - z.y) / s4, y: (z.x - x.z) / s4, z: (x.y - y.x) / s4 }
+        } else if x.x > y.y && x.x > z.z {
+            let s4 = (1.0 + x.x - y.y - z.z).max(0.0).sqrt() * 2.0;
+            Quat { w: (y.z - z.y) / s4, x: 0.25 * s4, y: (y.x + x.y) / s4, z: (z.x + x.z) / s4 }
+        } else if y.y > z.z {
+            let s4 = (1.0 + y.y - x.x - z.z).max(0.0).sqrt() * 2.0;
+            Quat { w: (z.x - x.z) / s4, x: (y.x + x.y) / s4, y: 0.25 * s4, z: (z.y + y.z) / s4 }
+        } else {
+            let s4 = (1.0 + z.z - x.x - y.y).max(0.0).sqrt() * 2.0;
+            Quat { w: (x.y - y.x) / s4, x: (z.x + x.z) / s4, y: (z.y + y.z) / s4, z: 0.25 * s4 }
+        };
+        let q = q.normalize();
+        // Blender keeps w >= 0.
+        if q.w < 0.0 {
+            Quat { x: -q.x, y: -q.y, z: -q.z, w: -q.w }
+        } else {
+            q
+        }
+    }
+    /// Columns scaled to unit length (zero columns stay zero).
+    pub fn normalized(&self) -> Mat3 {
+        Mat3 { cols: self.cols.map(|c| c.normalize()) }
+    }
+    /// Column lengths (Blender's `mat3_to_size`).
+    pub fn scale(&self) -> Vec3 {
+        Vec3::new(self.cols[0].length(), self.cols[1].length(), self.cols[2].length())
+    }
+    /// Euler angles (radians, indexed by axis) for rotation `order`, of the
+    /// normalized matrix.
+    pub fn to_euler(&self, order: EulerOrder) -> [f32; 3] {
+        let m = self.normalized();
+        let [i, j, k] = order.axes();
+        let s = if order.is_cyclic() { 1.0 } else { -1.0 };
+        let sj = (-s * m.get(k, i)).clamp(-1.0, 1.0);
+        let mut e = [0.0f32; 3];
+        let cj = (m.get(k, j).powi(2) + m.get(k, k).powi(2)).sqrt();
+        e[j] = sj.asin();
+        if cj > 1e-6 {
+            e[i] = (s * m.get(k, j)).atan2(m.get(k, k));
+            e[k] = (s * m.get(j, i)).atan2(m.get(i, i));
+        } else {
+            e[i] = (-s * m.get(j, k)).atan2(m.get(j, j));
+            e[k] = 0.0;
+        }
+        e
+    }
+    pub fn from_euler(e: [f32; 3], order: EulerOrder) -> Mat3 {
+        Mat3::from_quat(Quat::from_euler(e, order))
+    }
+    pub fn to_mat4(&self) -> Mat4 {
+        let c = &self.cols;
+        Mat4 { cols: [[c[0].x, c[0].y, c[0].z, 0.0], [c[1].x, c[1].y, c[1].z, 0.0], [c[2].x, c[2].y, c[2].z, 0.0], [0.0, 0.0, 0.0, 1.0]] }
+    }
+    pub fn approx_eq(&self, o: &Mat3, eps: f32) -> bool {
+        (0..3).all(|i| self.cols[i].approx_eq(o.cols[i], eps))
+    }
+}
+
+impl Mul for Mat3 {
+    type Output = Mat3;
+    fn mul(self, b: Mat3) -> Mat3 {
+        Mat3 { cols: b.cols.map(|c| self.mul_vec(c)) }
+    }
+}
+
+impl Mul<f32> for Mat3 {
+    type Output = Mat3;
+    fn mul(self, s: f32) -> Mat3 {
+        Mat3 { cols: self.cols.map(|c| c * s) }
+    }
+}
+
+impl Add for Mat3 {
+    type Output = Mat3;
+    fn add(self, b: Mat3) -> Mat3 {
+        Mat3 { cols: [self.cols[0] + b.cols[0], self.cols[1] + b.cols[1], self.cols[2] + b.cols[2]] }
+    }
+}
+
+/// Euler rotation orders, named like Blender's `rotation_mode`: the axes in
+/// the order they are applied (XYZ = X first, so the matrix is `Rz Ry Rx`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum EulerOrder {
+    #[default]
+    XYZ,
+    XZY,
+    YXZ,
+    YZX,
+    ZXY,
+    ZYX,
+}
+
+impl EulerOrder {
+    pub const ALL: [EulerOrder; 6] = [EulerOrder::XYZ, EulerOrder::XZY, EulerOrder::YXZ, EulerOrder::YZX, EulerOrder::ZXY, EulerOrder::ZYX];
+    /// Axis indices in application order.
+    pub fn axes(self) -> [usize; 3] {
+        match self {
+            EulerOrder::XYZ => [0, 1, 2],
+            EulerOrder::XZY => [0, 2, 1],
+            EulerOrder::YXZ => [1, 0, 2],
+            EulerOrder::YZX => [1, 2, 0],
+            EulerOrder::ZXY => [2, 0, 1],
+            EulerOrder::ZYX => [2, 1, 0],
+        }
+    }
+    fn is_cyclic(self) -> bool {
+        matches!(self, EulerOrder::XYZ | EulerOrder::YZX | EulerOrder::ZXY)
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            EulerOrder::XYZ => "XYZ",
+            EulerOrder::XZY => "XZY",
+            EulerOrder::YXZ => "YXZ",
+            EulerOrder::YZX => "YZX",
+            EulerOrder::ZXY => "ZXY",
+            EulerOrder::ZYX => "ZYX",
+        }
+    }
+    pub fn from_name(s: &str) -> Option<EulerOrder> {
+        EulerOrder::ALL.into_iter().find(|o| o.name().eq_ignore_ascii_case(s))
+    }
+    /// Blender's `rotmode` numbers 1..=6 (0 is quaternion, -1 axis-angle).
+    pub fn from_blender(mode: i64) -> Option<EulerOrder> {
+        EulerOrder::ALL.get(usize::try_from(mode - 1).ok()?).copied()
+    }
+}
+
+const BASIS: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
+
+impl Quat {
+    pub fn new(w: f32, x: f32, y: f32, z: f32) -> Quat {
+        Quat { x, y, z, w }
+    }
+    pub fn dot(self, o: Quat) -> f32 {
+        self.x * o.x + self.y * o.y + self.z * o.z + self.w * o.w
+    }
+    /// Rotation from Euler angles (radians, indexed by axis) in `order`.
+    pub fn from_euler(e: [f32; 3], order: EulerOrder) -> Quat {
+        let [a, b, c] = order.axes();
+        Quat::from_axis_angle(BASIS[c], e[c]) * Quat::from_axis_angle(BASIS[b], e[b]) * Quat::from_axis_angle(BASIS[a], e[a])
+    }
+    pub fn to_euler(self, order: EulerOrder) -> [f32; 3] {
+        Mat3::from_quat(self).to_euler(order)
+    }
+    /// (unit axis, angle); identity gives (+Y, 0) like Blender's default.
+    pub fn to_axis_angle(self) -> (Vec3, f32) {
+        let q = self.normalize();
+        let s = (q.x * q.x + q.y * q.y + q.z * q.z).sqrt();
+        if s < 1e-8 {
+            return (Vec3::Y, 0.0);
+        }
+        (Vec3::new(q.x, q.y, q.z) / s, 2.0 * s.atan2(q.w))
+    }
+    /// The smallest rotation taking direction `a` onto direction `b`.
+    pub fn from_rotation_arc(a: Vec3, b: Vec3) -> Quat {
+        let (a, b) = (a.normalize(), b.normalize());
+        let d = a.dot(b);
+        if d < -0.999_999 {
+            return Quat::from_axis_angle(a.any_orthonormal(), core::f32::consts::PI);
+        }
+        let c = a.cross(b);
+        Quat { x: c.x, y: c.y, z: c.z, w: 1.0 + d }.normalize()
+    }
+}
+
+impl Mat4 {
+    pub fn from_mat3(m: Mat3, t: Vec3) -> Mat4 {
+        let mut o = m.to_mat4();
+        o.cols[3] = [t.x, t.y, t.z, 1.0];
+        o
+    }
+    /// The upper-left 3x3 block.
+    pub fn mat3(&self) -> Mat3 {
+        Mat3::from_cols(self.col3(0), self.col3(1), self.col3(2))
+    }
+    /// Column `i` (0..3) as a vector (axis `i`, or the translation for 3).
+    pub fn col3(&self, i: usize) -> Vec3 {
+        Vec3::new(self.cols[i][0], self.cols[i][1], self.cols[i][2])
+    }
+    pub fn set_col3(&mut self, i: usize, v: Vec3) {
+        self.cols[i][0] = v.x;
+        self.cols[i][1] = v.y;
+        self.cols[i][2] = v.z;
+    }
+    pub fn translation_part(&self) -> Vec3 {
+        self.col3(3)
+    }
+    /// Copy with the 3x3 block replaced.
+    pub fn with_mat3(&self, m: Mat3) -> Mat4 {
+        let mut o = *self;
+        for i in 0..3 {
+            o.set_col3(i, m.cols[i]);
+        }
+        o
+    }
+    /// Column lengths of the 3x3 block (Blender's `mat4_to_size`).
+    pub fn scale_part(&self) -> Vec3 {
+        self.mat3().scale()
+    }
+    /// Blender's `interp_m4_m4m4`: location lerp, rotation slerp, scale lerp.
+    pub fn interpolate(&self, o: &Mat4, t: f32) -> Mat4 {
+        if t <= 0.0 {
+            return *self;
+        }
+        if t >= 1.0 {
+            return *o;
+        }
+        let (la, ra, sa) = self.to_trs();
+        let (lb, rb, sb) = o.to_trs();
+        Mat4::from_trs(la.lerp(lb, t), ra.slerp(rb, t), sa.lerp(sb, t))
+    }
+    /// Location, normalized rotation and column scale; the rotation block
+    /// is `rot * diag(scale)`.
+    pub fn to_loc_mat3_scale(&self) -> (Vec3, Mat3, Vec3) {
+        let m = self.mat3();
+        let s = m.scale();
+        let mut r = m.normalized();
+        let mut s = s;
+        if r.determinant() < 0.0 {
+            r.cols[0] = -r.cols[0];
+            s.x = -s.x;
+        }
+        (self.translation_part(), r, s)
+    }
+    pub fn from_loc_mat3_scale(l: Vec3, r: Mat3, s: Vec3) -> Mat4 {
+        Mat4::from_mat3(Mat3::from_cols(r.cols[0] * s.x, r.cols[1] * s.y, r.cols[2] * s.z), l)
+    }
+    /// Scale the three axis columns (Blender's `rescale_m4`).
+    pub fn rescale(&self, s: Vec3) -> Mat4 {
+        let mut o = *self;
+        o.set_col3(0, self.col3(0) * s.x);
+        o.set_col3(1, self.col3(1) * s.y);
+        o.set_col3(2, self.col3(2) * s.z);
+        o
+    }
+    pub fn approx_eq(&self, o: &Mat4, eps: f32) -> bool {
+        self.cols.iter().flatten().zip(o.cols.iter().flatten()).all(|(a, b)| (a - b).abs() <= eps)
+    }
+    /// Every element times `s` (for weighted matrix sums).
+    pub fn scaled(&self, s: f32) -> Mat4 {
+        let mut o = *self;
+        o.cols.iter_mut().flatten().for_each(|v| *v *= s);
+        o
+    }
+    pub fn add_mat(&self, b: &Mat4) -> Mat4 {
+        let mut o = *self;
+        for c in 0..4 {
+            for r in 0..4 {
+                o.cols[c][r] += b.cols[c][r];
+            }
+        }
+        o
     }
 }
 

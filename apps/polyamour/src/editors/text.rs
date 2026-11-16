@@ -4,12 +4,11 @@
 //! text-editor colours, a caret with Shift selection, the usual editing keys,
 //! an in-program clipboard, per-text undo, and Run Script.
 //!
-//! Run Script (the header button, Text > Run Script, or Ctrl+Enter standing in
-//! for Alt+P, which SexOS's Shell does not deliver yet) runs a text that starts
-//! with `polyops 1` in-process; anything else runs as Python: the script and the
-//! current scene are written to files, `python` runs it with `POLYAMOUR_OPS`
-//! naming the command file it writes, and the commands are applied as one undo
-//! step. Errors go to the Info editor and the status bar.
+//! Run Script (the header button, Text > Run Script, Alt+P, or Ctrl+Enter)
+//! runs a text that starts with `polyops 1` in-process; anything else runs as
+//! Python in the document's kernel (python.rs): one undo step, and on an
+//! error nothing changes and the error with its line goes to the Info editor
+//! and the status bar. Templates > Python offers our own starting points.
 use super::header_menus;
 use crate::anim::{self, ReportKind};
 use crate::doc::Doc;
@@ -45,7 +44,12 @@ const BUILTINS: &[&str] = &[
 
 /// Example scripts offered in Templates.
 pub const TEMPLATES: &[(&str, &str, &str)] = &[
-    ("Blender Pyramid", "blender_pyramid.py", include_str!("../../python/examples/blender_pyramid.py")),
+    ("Operator Simple", "operator_simple.py", include_str!("../../python/templates/operator_simple.py")),
+    ("UI Panel Simple", "ui_panel_simple.py", include_str!("../../python/templates/ui_panel_simple.py")),
+    ("Add-on Add Object", "addon_add_object.py", include_str!("../../python/templates/addon_add_object.py")),
+    ("Bmesh Simple", "bmesh_simple.py", include_str!("../../python/templates/bmesh_simple.py")),
+    ("Handlers and Timers", "driver_handler.py", include_str!("../../python/templates/driver_handler.py")),
+    ("Pyramid", "blender_pyramid.py", include_str!("../../python/examples/blender_pyramid.py")),
     ("Spiral Staircase", "spiral_staircase.py", include_str!("../../python/examples/spiral_staircase.py")),
     (
         "Polyops: Add Shapes",
@@ -386,7 +390,7 @@ fn text_menu(s: &State) -> Vec<MenuItem> {
         MenuItem::Separator,
         m(s, "Save", "", "text.save"),
         MenuItem::Separator,
-        m(s, "Run Script", "Ctrl Enter", "text.run_script"),
+        m(s, "Run Script", "Alt P", "text.run_script"),
     ]
 }
 
@@ -559,17 +563,14 @@ fn run_current(s: &mut State, d: &mut Doc) {
     run_script(d, &name, &src);
 }
 
-/// Run a text: polyops in-process, otherwise Python in a child process.
+/// Run a text: polyops in-process, otherwise Python (python.rs).
 pub fn run_script(d: &mut Doc, name: &str, src: &str) {
     let first = src.lines().map(str::trim).find(|l| !l.is_empty() && !l.starts_with('#')).unwrap_or("");
     if first.starts_with("polyops") {
         apply_polyops(d, name, src);
         return;
     }
-    match run_python(d, name, src) {
-        Ok(ops) => apply_polyops(d, name, &ops),
-        Err(e) => anim::report(d, ReportKind::Error, &format!("{name}: {e}")),
-    }
+    crate::python::run_script(d, name, src);
 }
 
 fn apply_polyops(d: &mut Doc, name: &str, ops: &str) {
@@ -588,46 +589,6 @@ fn apply_polyops(d: &mut Doc, name: &str, ops: &str) {
         }
         Err(e) => anim::report(d, ReportKind::Error, &format!("{name}: {e}")),
     }
-}
-
-/// Run `src` with Python and return the polyops it produced.
-fn run_python(d: &mut Doc, name: &str, src: &str) -> Result<String, String> {
-    let dir = std::env::temp_dir().join(format!("polyamour-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    let script = dir.join(if name.ends_with(".py") { name.to_string() } else { format!("{name}.py") });
-    let scene = dir.join("scene.poly");
-    let ops = dir.join("ops.poly");
-    let _ = std::fs::remove_file(&ops);
-    std::fs::write(&script, src).map_err(|e| format!("cannot write {}: {e}", script.display()))?;
-    std::fs::write(&scene, sex_3d::script::scene_to_polyops(&d.scene)).map_err(|e| format!("cannot write {}: {e}", scene.display()))?;
-    #[cfg(target_os = "hermit")]
-    let mut cmd = std::process::Command::new("python");
-    #[cfg(not(target_os = "hermit"))]
-    let mut cmd = {
-        let mut c = std::process::Command::new("python3");
-        let pkg = concat!(env!("CARGO_MANIFEST_DIR"), "/python");
-        let path = match std::env::var("PYTHONPATH") {
-            Ok(p) if !p.is_empty() => format!("{pkg}:{p}"),
-            _ => pkg.to_string(),
-        };
-        c.env("PYTHONPATH", path);
-        c
-    };
-    cmd.arg(&script).env("POLYAMOUR_SCENE", &scene).env("POLYAMOUR_OPS", &ops);
-    let out = cmd.output().map_err(|e| format!("cannot run python: {e}"))?;
-    let printed = String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
-    for l in printed.lines() {
-        d.info.reports.push(anim::Report { kind: ReportKind::Output, text: l.to_string() });
-    }
-    let text = std::fs::read_to_string(&ops).unwrap_or_default();
-    if let Some(abort) = text.lines().find(|l| l.starts_with("abort")) {
-        return Err(abort.trim_start_matches("abort").trim().trim_matches('"').to_string());
-    }
-    if !text.lines().any(|l| l.trim() == "end") {
-        let last = printed.lines().filter(|l| !l.trim().is_empty()).last().unwrap_or("the script stopped early").to_string();
-        return Err(last);
-    }
-    Ok(text)
 }
 
 // ---------------------------------------------------------------- body
@@ -889,6 +850,10 @@ pub fn hotkey(s: &mut State, d: &mut Doc, i: &Input, _r: Rect) -> bool {
         let nl = (s.caret.0 as i32 + dl).clamp(0, lines as i32 - 1) as usize;
         (nl, want.min(line_len(&text, nl)))
     };
+    if key == Key::Char('p') && mods.alt && !mods.ctrl {
+        run_current(s, d);
+        return true;
+    }
     match (key, mods.ctrl) {
         (Key::Enter | Key::NumEnter, true) => run_current(s, d),
         (Key::Enter | Key::NumEnter, false) => {

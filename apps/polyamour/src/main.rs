@@ -1,7 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Polyamour as a SexOS program: `run polyamour [scene.blend|.glb|.obj|.poly]`.
 //! On the host, `polyamour --screenshot out.png [scene] [workspace]` draws the
-//! window once into a PNG (used for docs and visual checks).
+//! window once into a PNG (used for docs and visual checks); `--node-demo`
+//! gives the startup material a few texture nodes and opens Shading;
+//! `--rig-demo` poses a skinned, keyed armature in the Animation workspace
+//! with the Graph Editor below; `--sculpt-demo` shows a sculpted sphere with
+//! a mask and face sets in the Sculpting workspace; `--gp-demo` draws Grease
+//! Pencil objects in Draw Mode in the 2D Animation workspace; `--seq-demo`
+//! shows a small edit in the Video Editing workspace; `--physics-demo` steps
+//! falling boxes, a draped cloth, particles and smoke to frame 40.
 use polyamour::input::Input;
 #[cfg(target_os = "hermit")]
 use polyamour::input::{Button, Key, Mods};
@@ -25,6 +32,10 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut app = App::new(1600, 900);
     let mut out = None;
+    let mut rig_demo = false;
+    let mut sculpt_demo = false;
+    let mut physics_demo = false;
+    let mut gp_demo = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -34,13 +45,80 @@ fn main() {
                     app.doc.want_workspace = Some(w.clone());
                 }
             }
+            "--node-demo" => {
+                polyamour::nodetree::demo_textures(&mut app.doc);
+                app.doc.want_workspace = Some("Shading".into());
+            }
+            "--sculpt-demo" => {
+                polyamour::sculpt::demo(&mut app.doc);
+                sculpt_demo = true;
+            }
+            "--physics-demo" => {
+                polyamour::physics::demo(&mut app.doc);
+                physics_demo = true;
+            }
+            "--gp-demo" => {
+                polyamour::gpencil::demo(&mut app.doc);
+                gp_demo = true;
+            }
+            "--seq-demo" => polyamour::seqedit::demo(&mut app.doc),
+            "--rig-demo" => {
+                polyamour::rig::demo(&mut app.doc);
+                app.doc.want_workspace = Some("Animation".into());
+                rig_demo = true;
+            }
             p => open_arg(&mut app, p),
         }
     }
     app.frame(Input::Tick);
     app.frame(Input::Tick);
+    if sculpt_demo {
+        // The Sculpting workspace's view frames the sphere, the sidebar
+        // shows the brush settings.
+        app.doc.view_ops.push(polyamour::ui::Op::new("view3d.view_selected"));
+        app.doc.view_ops.push(polyamour::ui::Op::with("view3d.sidebar_tab", "TOOL"));
+        app.frame(Input::Tick);
+        app.frame(Input::Tick);
+    }
+    if gp_demo {
+        // Look at the drawing from the front, as the 2D Animation workspace does.
+        app.doc.view_ops.push(polyamour::ui::Op::with("view3d.view_axis", "FRONT"));
+        // Frame both drawings (keeping the cat active).
+        let act = app.doc.scene.active_object;
+        app.doc.scene.selected = app.doc.scene.objects.iter().enumerate().filter(|(_, o)| matches!(o.data, sex_3d::scene::ObjectData::GreasePencil(_))).map(|(i, _)| i).collect();
+        app.doc.view_ops.push(polyamour::ui::Op::new("view3d.view_selected"));
+        app.frame(Input::Tick);
+        app.doc.scene.selected = act.into_iter().collect();
+        app.frame(Input::Tick);
+    }
+    if rig_demo {
+        use polyamour::editors::{Editor, EditorKind};
+        let ws = app.active_ws;
+        for area in app.workspaces[ws].areas_mut() {
+            if area.editor.kind() == EditorKind::DopeSheet {
+                area.editor = Editor::new(EditorKind::GraphEditor);
+            }
+        }
+        app.frame(Input::Tick);
+    }
+    if physics_demo {
+        let ws = app.active_ws;
+        for area in app.workspaces[ws].areas_mut() {
+            if let polyamour::editors::Editor::Properties(s) = &mut area.editor {
+                s.tab = polyamour::editors::properties::Tab::Physics;
+            }
+        }
+        app.frame(Input::Tick);
+    }
+    // Let progressive views (Material Preview, Rendered) settle.
+    for _ in 0..64 {
+        if !app.wants_tick() {
+            break;
+        }
+        app.frame(Input::Tick);
+    }
     let Some(out) = out else {
-        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [scene file]");
+        eprintln!("usage: polyamour --screenshot out.png [--workspace Name] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--gp-demo] [--seq-demo] [scene file]");
         return;
     };
     let f = std::fs::File::create(&out).expect("create png");
@@ -107,7 +185,7 @@ fn main() {
     if let Some(p) = std::env::args().nth(1) {
         open_arg(&mut app, &p);
     }
-    let mut mods = Mods::NONE;
+    let mut mods;
     let mut last_ws = String::from("Layout");
     // A Ctrl+left press stands in for the middle button until it is released.
     let mut emulated_middle = false;
@@ -143,7 +221,7 @@ fn main() {
             }
             Some(Event::Resize { width, height }) => Some(Input::Resize { width, height }),
             Some(Event::Key(k)) => {
-                mods = Mods { shift: k.shift, ctrl: k.control, alt: false };
+                mods = Mods { shift: k.shift, ctrl: k.control, alt: k.alt };
                 let text = sex_std::sex_app::text(k);
                 // The Shell keeps F1-F12, Tab and Insert for itself, so
                 // F12 (Render Image) has a stand-in until programs can ask for them.
@@ -155,19 +233,24 @@ fn main() {
             }
             Some(Event::Pointer(p)) => {
                 let (x, y) = (p.x as i32, p.y as i32);
+                // Keys held during the click ride in the pointer word.
+                {
+                    use sex_std::sex_pdx::app_pointer::{ALT, CONTROL, SHIFT};
+                    mods = Mods { shift: p.mods & SHIFT != 0, ctrl: p.mods & CONTROL != 0, alt: p.mods & ALT != 0 };
+                }
                 let button = |b: u8| match b {
                     1 => Button::Middle,
                     2 => Button::Right,
                     _ => Button::Left,
                 };
-                // Laptops without a middle button: Alt is not delivered yet, so
-                // Ctrl+left drag stands in for middle-drag orbit.
+                // Blender's "Emulate 3 Button Mouse": Alt+left drag is middle drag
+                // (orbit; Shift pans, Ctrl zooms), for laptops without a middle button.
                 Some(match p.kind {
                     Kind::Move => Input::Move { x, y },
                     Kind::Down { button: b } => {
-                        emulated_middle = b == 0 && mods.ctrl;
+                        emulated_middle = b == 0 && mods.alt;
                         let b = if emulated_middle { Button::Middle } else { button(b) };
-                        Input::Down { x, y, button: b, mods }
+                        Input::Down { x, y, button: b, mods: if emulated_middle { Mods { alt: false, ..mods } } else { mods } }
                     }
                     Kind::Up { button: b } => {
                         let b = if b == 0 && emulated_middle { Button::Middle } else { button(b) };

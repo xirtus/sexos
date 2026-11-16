@@ -82,10 +82,10 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     // Mode dropdown with its icon.
     let mr = Rect::new(hr.x, y, 124, h);
     if icon_dropdown(ui, mr, if d.mode == Mode::Edit { Icon::EditMode } else { Icon::ObjectMode }, d.mode.label()) {
-        ui.open_menu(mr, "", menus::mode_items());
+        ui.open_menu(mr, "", menus::mode_items(d));
     }
     let mut x = mr.right() + 6;
-    if d.mode == Mode::Edit {
+    if super::rigview::mesh_edit(d) {
         let sm = d.select_mode;
         let r = Rect::new(x, y, 78, h);
         if let Some(i) = icon_row(ui, r, &[(Icon::VertSel, sm == SelectMode::Vertex), (Icon::EdgeSel, sm == SelectMode::Edge), (Icon::FaceSel, sm == SelectMode::Face)]) {
@@ -95,7 +95,31 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     }
     let flags = menus::ViewFlags { toolbar: s.show_toolbar, sidebar: s.show_sidebar };
     let view = move |d: &Doc| menus::view_menu(d, &flags);
-    let menu_end = if d.mode == Mode::Edit {
+    let rig_menus = super::rigview::header_menus(d);
+    let paint_menus = super::sculptview::header_menus(d);
+    let gp_menus = super::gpview::header_menus(d);
+    let menu_end = if let Some(extra) = &gp_menus {
+        let mut list: Vec<(&str, &dyn Fn(&Doc) -> Vec<MenuItem>)> = vec![("View", &view)];
+        for (t, f) in extra {
+            list.push((t, f));
+        }
+        let end = header_menus(ui, hr, x, &list, d);
+        super::gpview::tool_header(s, d, ui, Rect::new(end + 12, y, (hr.right() - end - 12 - 340).max(0), h))
+    } else if let Some(extra) = &paint_menus {
+        let mut list: Vec<(&str, &dyn Fn(&Doc) -> Vec<MenuItem>)> = vec![("View", &view)];
+        for (t, f) in extra {
+            list.push((t, f));
+        }
+        let end = header_menus(ui, hr, x, &list, d);
+        super::sculptview::tool_header(s, d, ui, Rect::new(end + 12, y, (hr.right() - end - 12 - 340).max(0), h))
+    } else if let Some(extra) = &rig_menus {
+        let mut list: Vec<(&str, &dyn Fn(&Doc) -> Vec<MenuItem>)> = vec![("View", &view)];
+        for (t, f) in extra {
+            list.push((t, f));
+        }
+        let end = header_menus(ui, hr, x, &list, d);
+        weight_tool_header(d, ui, Rect::new(end + 12, y, hr.right() - end - 12, h))
+    } else if super::rigview::mesh_edit(d) {
         let list: [(&str, &dyn Fn(&Doc) -> Vec<MenuItem>); 8] = [
             ("View", &view),
             ("Select", &menus::select_menu),
@@ -140,6 +164,13 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
             MenuItem::Check("Backface Culling".into(), s.backface_culling, Op::with("view3d.overlay", "backface")),
             MenuItem::Check("X-Ray".into(), s.xray, Op::new("view3d.toggle_xray")),
             MenuItem::Separator,
+            solid_lighting_menu(s),
+            solid_color_menu(s),
+            MenuItem::Check("Specular Lighting".into(), s.solid.specular, Op::with("view3d.solid", "specular")),
+            MenuItem::Check("Shadow".into(), s.solid.shadow, Op::with("view3d.solid", "shadow")),
+            MenuItem::Check("Cavity".into(), s.solid.cavity, Op::with("view3d.solid", "cavity")),
+            MenuItem::Check("Outline".into(), s.solid.outline, Op::with("view3d.solid", "outline")),
+            MenuItem::Separator,
             MenuItem::op("Wireframe", "", Op::with("view3d.shading", "WIREFRAME")),
             MenuItem::op("Solid", "", Op::with("view3d.shading", "SOLID")),
             MenuItem::op("Material Preview", "", Op::with("view3d.shading", "MATERIAL")),
@@ -179,6 +210,9 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     }
 
     // The middle: orientation, pivot, snapping, proportional editing.
+    if paint_menus.is_some() {
+        return;
+    }
     let cw = 96 + 4 + 36 + 8 + 28 + 1 + 34 + 8 + 28 + 1 + 18;
     let cx = (hr.x + hr.w / 2 - cw / 2).max(menu_end + 12);
     if cx + cw > right_start {
@@ -255,12 +289,26 @@ pub fn toolbar_tools(d: &Doc) -> Vec<Option<Tool>> {
 }
 
 pub fn toolbar_rect(d: &Doc, r: Rect) -> Rect {
+    if super::gpview::active(d) {
+        return super::gpview::toolbar_rect(d, r);
+    }
+    if super::sculptview::active(d) {
+        return super::sculptview::toolbar_rect(d, r);
+    }
     let tools = toolbar_tools(d);
     let h: i32 = tools.iter().map(|t| if t.is_some() { BS + 2 } else { GAP }).sum::<i32>() + 8;
     Rect::new(r.x + 4, r.y + 6, BS + 8, h.min(r.h - 10))
 }
 
 pub fn toolbar(_s: &mut State, d: &mut Doc, ui: &mut Ui, tr: Rect, _r: Rect) {
+    if super::gpview::active(d) {
+        super::gpview::toolbar(d, ui, tr);
+        return;
+    }
+    if super::sculptview::active(d) {
+        super::sculptview::toolbar(d, ui, tr);
+        return;
+    }
     let mut y = tr.y + 4;
     let x = tr.x + 4;
     let mut hover_tip: Option<(Rect, &'static str)> = None;
@@ -599,4 +647,46 @@ pub fn nav_gizmo(s: &mut State, d: &Doc, ui: &mut Ui, nav: Rect, r: Rect) {
             }
         }
     }
+}
+
+/// Weight Paint's tool settings in the header: brush, weight, radius,
+/// strength. Returns the x after them.
+fn weight_tool_header(d: &mut Doc, ui: &mut Ui, r: Rect) -> i32 {
+    if d.mode != Mode::WeightPaint || r.w < 420 {
+        return r.x;
+    }
+    let mut x = r.x;
+    let br = Rect::new(x, r.y, 84, r.h);
+    if ui.dropdown(br, d.rig.wp.brush.label()) {
+        ui.open_menu(br, "Brush", super::rigview::weight_brush_items(d));
+    }
+    x += 90;
+    let wp = &mut d.rig.wp;
+    let mut fields: [(&str, &mut f32, f32, &str); 3] = [("Weight", &mut wp.weight, 0.01, ""), ("Radius", &mut wp.radius, 1.0, " px"), ("Strength", &mut wp.strength, 0.01, "")];
+    for (label, v, step, unit) in fields.iter_mut() {
+        let fr = Rect::new(x, r.y, 104, r.h);
+        if ui.number(crate::ui::id(&format!("wp/{label}")), fr, label, v, *step, unit) {
+            **v = if *label == "Radius" { v.clamp(1.0, 500.0) } else { v.clamp(0.0, 1.0) };
+        }
+        x += 108;
+    }
+    x
+}
+
+/// Solid shading: Lighting (Studio, Flat, MatCap and the matcaps).
+fn solid_lighting_menu(s: &State) -> MenuItem {
+    use sex_3d::render::workbench::{Lighting, MATCAPS};
+    let mut items: Vec<MenuItem> = Lighting::ALL.iter().map(|l| MenuItem::Check(l.label().into(), s.solid.lighting == *l, Op::with("view3d.solid", &format!("lighting:{}", l.label())))).collect();
+    items.push(MenuItem::Separator);
+    for (i, m) in MATCAPS.iter().enumerate() {
+        items.push(MenuItem::Check(format!("MatCap {m}"), s.solid.lighting == Lighting::MatCap && s.solid.matcap == i, Op::with("view3d.solid", &format!("matcap:{i}"))));
+    }
+    MenuItem::Sub(format!("Lighting: {}", s.solid.lighting.label()), items)
+}
+
+/// Solid shading: Color (Material, Object, Attribute, Single, Random, Texture).
+fn solid_color_menu(s: &State) -> MenuItem {
+    use sex_3d::render::workbench::ColorType;
+    let items = ColorType::ALL.iter().map(|c| MenuItem::Check(c.label().into(), s.solid.color == *c, Op::with("view3d.solid", &format!("color:{}", c.label())))).collect();
+    MenuItem::Sub(format!("Color: {}", s.solid.color.label()), items)
 }

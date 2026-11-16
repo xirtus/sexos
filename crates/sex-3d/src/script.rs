@@ -31,13 +31,106 @@
 //! line-at-a-time engine underneath, for a live channel. [`scene_to_polyops`]
 //! writes a scene back out as commands; running that text on [`Scene::new`]
 //! rebuilds an equal scene (images and textures excepted).
+//!
+//! ## Rigging commands
+//!
+//! Vertex groups, shape keys, armatures, poses, constraints and lattices
+//! (see `script/rig.rs`). Lists of three booleans are written `1,0,1`;
+//! enum values are Blender's identifiers in lower case.
+//!
+//! * `vgroup MESH NAME indices=0,1,2 weights=1,0.5,0.25 remove=7,8` creates
+//!   the group when missing and sets weights (one weight for all, or one
+//!   per index; `weights=` alone covers every vertex). `vgroup_remove MESH NAME`.
+//! * `shape_key MESH NAME verts=... value= slider_min= slider_max=
+//!   relative_key=KEY vertex_group=G|none mute= interpolation=linear|cardinal|catmull_rom|bspline
+//!   frame= from_mix=` creates the key when missing (the first key is the
+//!   Basis) and sets its options. `shape_key_remove MESH NAME`,
+//!   `shape_key_settings MESH use_relative= eval_time=`.
+//! * `armature_new NAME as=$h`; `add_armature NAME data=ARM` (placement
+//!   options as for `add_object`; without `data=` a new armature is made).
+//! * `bone ARM NAME head=x,y,z tail=x,y,z roll= parent=BONE|none use_connect=
+//!   use_deform= use_inherit_rotation= inherit_scale=full|fix_shear|average|none|none_legacy|aligned
+//!   use_local_location= use_relative_parent= envelope_distance= envelope_weight=
+//!   head_radius= tail_radius= use_envelope_multiply= bbone_segments=` creates or edits a bone
+//!   (armature space, like edit bones). `bone_collection ARM NAME BONE...`.
+//! * `lattice_new NAME points=u,v,w interpolation=t[,t,t] use_outside= verts=...`,
+//!   `lattice_set LATTICE ...` and `add_lattice NAME data=LATTICE`.
+//! * `parent CHILD PARENT bone=BONE type=object|armature|bone keep_transform=`;
+//!   `parent_with_armature MESH ARMATURE weights=none|empty|envelope|automatic`
+//!   (Ctrl+P > With ... Weights).
+//! * `pose_bone OBJ BONE location= rotation_mode=quaternion|axis_angle|xyz|...
+//!   quaternion=w,x,y,z euler=x,y,z axis_angle=a,x,y,z scale= ik_lock=
+//!   ik_stiffness= ik_stretch= ik_limit= ik_min= ik_max=`.
+//! * `constraint_add OBJ TYPE [bone=BONE] ...` (types `copy_location`,
+//!   `copy_rotation`, `copy_scale`, `copy_transforms`, `limit_distance`,
+//!   `limit_location`, `limit_rotation`, `limit_scale`, `maintain_volume`,
+//!   `transform`, `child_of`, `track_to`, `damped_track`, `locked_track`,
+//!   `stretch_to`, `floor`, `armature`, `ik`) replies with the index;
+//!   `constraint_set OBJ INDEX [bone=] ...`, `constraint_remove OBJ INDEX [bone=]`,
+//!   `constraint_target OBJ INDEX TARGET subtarget= weight= [bone=]` (Armature
+//!   constraint targets) and `constraint_set_inverse OBJ INDEX [bone=] clear=`
+//!   (Child Of). Common options: `name= influence= mute= owner_space= target_space=`
+//!   (`world`, `pose`, `local_with_parent`, `local`, `custom`) `space_object=
+//!   space_subtarget= target= subtarget= head_tail=`; the type's own options
+//!   use Blender's Python names (`use_xyz=`, `invert=`, `mix_mode=`, `euler_order=`,
+//!   `track_axis=track_negative_z`, `up_axis=y`, `rest_length=`, `pole_target=`,
+//!   `pole_subtarget=`, `pole_angle=`, `chain_count=`, `inverse_matrix=` 16 numbers
+//!   column-major, ...).
+//! * Modifiers: every deform modifier takes `vertex_group=NAME|none` and
+//!   `invert_vertex_group=`; `Armature`, `Hook`, `Lattice`, `Warp`,
+//!   `VertexWeightEdit`, `VertexWeightMix` and `VertexWeightProximity` take
+//!   their fields by name (`falloff_type=smooth`, `mix_mode=avg`, ...).
+//!
+//! # Shader node trees
+//!
+//! A tree belongs to an OWNER, written `material NAME`, `world` or
+//! `group NAME` (a node group in `Scene::node_groups`). Nodes are named by
+//! their unique name in the tree, sockets by identifier (`Base Color`,
+//! `Value_001`, `Socket_0`) or, failing that, by name.
+//!
+//! * `node_tree OWNER [name=TREE] [clear=1] [active=NODE|none] [remove=1]`
+//!   creates the owner's tree (and a group of that name) if missing; replies
+//!   with the tree name.
+//! * `node_interface group NAME input|output SOCKET TYPE [default=V] [min=]
+//!   [max=]` adds a group socket; Group nodes using the group follow.
+//!   TYPE is `float int bool vector color string shader geometry object
+//!   collection image material texture rotation matrix menu virtual`.
+//! * `node_add OWNER IDNAME [name=] [label=] [location=x,y] [width=] [mute=1]
+//!   [hide=1] [select=1] [color=r,g,b] [unknown=1]` adds a node of a
+//!   registered type (`ShaderNodeMath`); `unknown=1` allows an unregistered
+//!   idname with no sockets, which `node_socket OWNER NODE in|out ID TYPE
+//!   [name=]` then adds. Replies with the node's unique name.
+//! * `node_set OWNER NODE TARGET VALUE [type=T]`: TARGET is `prop:NAME`
+//!   (`prop:operation MULTIPLY`, `prop:use_clamp 1`, `prop:image NAME`,
+//!   `prop:node_tree GROUP`, `prop:color_ramp
+//!   LINEAR;RGB;0,0,0,0,1;1,1,1,1,1`, `prop:mapping x,y,x,y;x,y,...` one
+//!   curve per `;` part; `type=` (enum bool int float vector color string
+//!   ramp curve image object group collection material) adds a property the
+//!   node type does not have), `in:SOCKET` / `out:SOCKET` (a number, a list,
+//!   a quoted string, or an object/image name), `hide:in:SOCKET` /
+//!   `hide:out:SOCKET`, `parent FRAME|none`, `name`, or one of the `node_add`
+//!   options. Image names that do not resolve leave the slot empty.
+//! * `node_link OWNER FROM FROM_SOCKET TO TO_SOCKET [muted=1]` replaces any
+//!   link into TO_SOCKET; `node_unlink OWNER NODE INPUT`; `node_remove OWNER
+//!   NODE`.
+//!
+//! [`scene_to_polyops`] writes groups (interfaces first), then material and
+//! world trees, after the objects, writing only properties and socket values
+//! that differ from a new node's.
 use crate::math::{Quat, Vec2, Vec3};
 use crate::mesh::{Face, Mesh};
-use crate::modifiers::Modifier;
-use crate::scene::{unique_name, Camera, Light, LightKind, Material, Object, ObjectData, Scene, Transform};
+use crate::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
+use crate::scene::{unique_name, AreaShape, Camera, Light, LightKind, Material, Object, ObjectData, PanoramaType, Scene, SensorFit, Transform, VolumeSettings};
 use base64::Engine;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{self, Write as _};
+
+mod rig;
+mod nodes;
+mod gp;
+pub mod bpy;
+pub mod live;
+mod physics;
 
 /// The language version this module reads and writes (`polyops 1`).
 pub const VERSION: u32 = 1;
@@ -180,6 +273,11 @@ fn tokenize(line: &str) -> Result<Vec<Token>, String> {
                     }
                 }
                 '=' if tok.key.is_none() && !tok.quoted && is_ident(&tok.text) => tok.key = Some(std::mem::take(&mut tok.text)),
+                // Nodes modifier inputs: `input:Name=v`, `input:"Some Name"=v`.
+                '=' if tok.key.is_none() && tok.text.starts_with("input:") => {
+                    tok.key = Some(std::mem::take(&mut tok.text));
+                    tok.quoted = false;
+                }
                 c => tok.text.push(c),
             }
         }
@@ -386,6 +484,8 @@ enum Handle {
     Mesh(usize),
     Material(usize),
     Collection(usize),
+    Armature(usize),
+    Lattice(usize),
 }
 
 /// The line-at-a-time interpreter behind [`run`]. Feed it lines with
@@ -397,6 +497,8 @@ pub struct Session {
     report: RunReport,
     header: bool,
     ended: bool,
+    /// What Blender keeps outside the scene (mode, selection, actions...), for the live `bpy` API.
+    pub bpy: bpy::State,
 }
 
 impl Session {
@@ -602,6 +704,7 @@ impl Session {
                 if let Some(s) = cmd.f("strength")? {
                     scene.world.strength = s;
                 }
+                set_volume_opts(cmd, &mut scene.world.volume)?;
                 Ok(None)
             }
             "render" => {
@@ -675,6 +778,11 @@ impl Session {
                 if let Some(v) = cmd.f("far")? {
                     cam.far = v;
                 }
+                for key in CAMERA_OPTS {
+                    if let Some(t) = cmd.opt(key) {
+                        set_camera_prop(&mut cam, key, std::slice::from_ref(&t))?;
+                    }
+                }
                 let i = scene.add_object(Object::new(&name, ObjectData::Camera(cam)));
                 let make_active = cmd.b("active")?;
                 let r = self.created(scene, cmd, i)?;
@@ -694,11 +802,7 @@ impl Session {
             "set" => self.set(scene, cmd),
             "get" => self.get(scene, cmd).map(Some),
             "parent" => {
-                cmd.max_args(2)?;
-                let child = self.object(scene, cmd.arg(0, "a child object")?)?;
-                let p = cmd.arg(1, "a parent object or none")?.clone();
-                let keep = cmd.b("keep_transform")?.unwrap_or(false);
-                self.set_parent(scene, child, &p, keep)?;
+                self.parent_command(scene, cmd)?;
                 Ok(None)
             }
             "material_new" => {
@@ -707,6 +811,7 @@ impl Session {
                 let name = unique_name(&base, |n| scene.materials.iter().any(|m| m.name == n));
                 let mut m = Material { name, ..Material::default() };
                 set_material_opts(cmd, &mut m)?;
+                set_material_render_opts(cmd, &mut m)?;
                 let i = scene.add_material(m);
                 self.bind(cmd, Handle::Material(i))?;
                 Ok(Some(quote(&scene.materials[i].name)))
@@ -719,6 +824,7 @@ impl Session {
                     scene.materials[i].name = unique_name(&n.text, taken);
                 }
                 set_material_opts(cmd, &mut scene.materials[i])?;
+                set_material_render_opts(cmd, &mut scene.materials[i])?;
                 Ok(None)
             }
             "material_assign" => {
@@ -886,6 +992,11 @@ impl Session {
                 let t = cmd.arg(0, "an object")?;
                 Ok(Some(if self.object(scene, t).is_ok() { "1" } else { "0" }.into()))
             }
+            name if rig::COMMANDS.contains(&name) => self.rig_command(scene, cmd),
+            name if gp::COMMANDS.contains(&name) => self.gp_command(scene, cmd),
+            name if bpy::COMMANDS.contains(&name) => self.bpy_command(scene, cmd),
+            name if physics::COMMANDS.contains(&name) => self.physics_command(scene, cmd),
+            "node_tree" | "node_interface" | "node_add" | "node_socket" | "node_set" | "node_link" | "node_unlink" | "node_remove" => self.node_command(scene, cmd),
             other => Err(format!("unknown command '{other}'")),
         }
     }
@@ -1101,6 +1212,13 @@ impl Session {
                 }
                 let new = unique_name(&new, |n| scene.objects.iter().enumerate().any(|(j, x)| j != i && x.name == n));
                 scene.objects[i].name = new.clone();
+                for ob in &mut scene.objects {
+                    ob.modifiers.iter_mut().for_each(|m| m.rename_object_ref(&old, &new));
+                    ob.constraints.iter_mut().for_each(|c| c.rename_object_ref(&old, &new));
+                    for pb in &mut ob.pose {
+                        pb.constraints.iter_mut().for_each(|c| c.rename_object_ref(&old, &new));
+                    }
+                }
                 self.rename_handles(&old, &new);
             }
             "collection" => {
@@ -1110,6 +1228,26 @@ impl Session {
             "parent" => {
                 let p = one()?.clone();
                 self.set_parent(scene, i, &p, false)?;
+            }
+            "visible_camera" => o.visibility.camera = boolean(&one()?.text)?,
+            "visible_diffuse" => o.visibility.diffuse = boolean(&one()?.text)?,
+            "visible_glossy" => o.visibility.glossy = boolean(&one()?.text)?,
+            "visible_transmission" => o.visibility.transmission = boolean(&one()?.text)?,
+            "visible_volume_scatter" => o.visibility.volume_scatter = boolean(&one()?.text)?,
+            "visible_shadow" => o.visibility.shadow = boolean(&one()?.text)?,
+            "holdout" => o.holdout = boolean(&one()?.text)?,
+            "pass_index" => o.pass_index = uint(&one()?.text)?,
+            "motion" if matches!(args.as_slice(), [t] if t.is_word("none")) => o.motion = None,
+            "motion_location" => o.motion.get_or_insert(o.transform).location = vec3_of(&v()?, "motion_location")?,
+            "motion_rotation_quaternion" => o.motion.get_or_insert(o.transform).rotation = quat_of(&v()?)?,
+            "motion_scale" => o.motion.get_or_insert(o.transform).scale = scale_of(&v()?)?,
+            "focus_object" => {
+                let t = one()?.clone();
+                let f = if t.is_word("none") { None } else { Some(self.object(scene, &t)?) };
+                match &mut scene.objects[i].data {
+                    ObjectData::Camera(c) => c.dof.focus_object = f,
+                    _ => return Err("focus_object is only for cameras".into()),
+                }
             }
             _ => match &mut o.data {
                 ObjectData::Light(l) => set_light_prop(l, &prop, &args)?,
@@ -1135,15 +1273,29 @@ impl Session {
             "name" => quote(&o.name),
             "collection" => quote(&scene.collections[o.collection].name),
             "parent" => o.parent.map(|p| quote(&scene.objects[p].name)).unwrap_or_else(|| "none".into()),
+            "visible_camera" => (o.visibility.camera as u8).to_string(),
+            "visible_diffuse" => (o.visibility.diffuse as u8).to_string(),
+            "visible_glossy" => (o.visibility.glossy as u8).to_string(),
+            "visible_transmission" => (o.visibility.transmission as u8).to_string(),
+            "visible_volume_scatter" => (o.visibility.volume_scatter as u8).to_string(),
+            "visible_shadow" => (o.visibility.shadow as u8).to_string(),
+            "holdout" => (o.holdout as u8).to_string(),
+            "pass_index" => o.pass_index.to_string(),
             "type" => match o.data {
                 ObjectData::Empty => "EMPTY",
                 ObjectData::Mesh(_) => "MESH",
                 ObjectData::Camera(_) => "CAMERA",
                 ObjectData::Light(_) => "LIGHT",
+                ObjectData::Armature(_) => "ARMATURE",
+                ObjectData::Lattice(_) => "LATTICE",
+                ObjectData::GreasePencil(_) => "GREASEPENCIL",
             }
             .into(),
             "data" => match o.data {
                 ObjectData::Mesh(m) => quote(&scene.mesh_names[m]),
+                ObjectData::Armature(a) => quote(&scene.armature_names[a]),
+                ObjectData::Lattice(l) => quote(&scene.lattice_names[l]),
+                ObjectData::GreasePencil(g) => quote(&scene.grease_pencil_names[g]),
                 _ => "none".into(),
             },
             "vertex_count" | "face_count" => match o.data {
@@ -1154,12 +1306,18 @@ impl Session {
                 _ => "0".into(),
             },
             "materials" => o.materials.iter().map(|&m| quote(&scene.materials[m].name)).collect::<Vec<_>>().join(" "),
-            "modifiers" => o.modifiers.iter().map(|m| m.name()).collect::<Vec<_>>().join(" "),
+            "modifiers" => o.modifiers.iter().map(|m| m.type_name()).collect::<Vec<_>>().join(" "),
             _ => match &o.data {
                 ObjectData::Light(l) => match prop.as_str() {
                     "power" => fmt_f(l.power),
                     "color" => fmt_vals(&l.color.to_array()),
                     "radius" => fmt_f(l.radius),
+                    "shape" => shape_name(l.shape).into(),
+                    "size_y" => fmt_f(l.size_y),
+                    "spread" => fmt_f(l.spread),
+                    "max_bounces" => l.max_bounces.to_string(),
+                    "cast_shadow" => (l.cast_shadow as u8).to_string(),
+                    "use_mis" => (l.use_mis as u8).to_string(),
                     _ => return Err(format!("unknown property '{prop}' for light '{}'", o.name)),
                 },
                 ObjectData::Camera(c) => match prop.as_str() {
@@ -1168,7 +1326,8 @@ impl Session {
                     "near" => fmt_f(c.near),
                     "far" => fmt_f(c.far),
                     "ortho_scale" => c.ortho_scale.map(fmt_f).unwrap_or_else(|| "none".into()),
-                    _ => return Err(format!("unknown property '{prop}' for camera '{}'", o.name)),
+                    "focus_object" => c.dof.focus_object.and_then(|f| scene.objects.get(f)).map(|f| quote(&f.name)).unwrap_or_else(|| "none".into()),
+                    p => camera_opt_value(c, p).ok_or_else(|| format!("unknown property '{prop}' for camera '{}'", o.name))?,
                 },
                 _ => return Err(format!("unknown property '{prop}' for '{}'", o.name)),
             },
@@ -1211,7 +1370,7 @@ fn scale_of(v: &[f32]) -> Res<Vec3> {
 }
 
 fn set_light_opts(cmd: &mut Cmd, l: &mut Light) -> Res<()> {
-    for key in ["power", "color", "radius", "angle", "blend", "size"] {
+    for key in ["power", "color", "radius", "angle", "blend", "size", "shape", "size_y", "spread", "max_bounces", "cast_shadow", "use_mis"] {
         if let Some(t) = cmd.opt(key) {
             set_light_prop(l, key, std::slice::from_ref(&t))?;
         }
@@ -1219,7 +1378,40 @@ fn set_light_opts(cmd: &mut Cmd, l: &mut Light) -> Res<()> {
     Ok(())
 }
 
+fn shape_name(s: AreaShape) -> &'static str {
+    match s {
+        AreaShape::Square => "square",
+        AreaShape::Rectangle => "rectangle",
+        AreaShape::Disk => "disk",
+        AreaShape::Ellipse => "ellipse",
+    }
+}
+
 fn set_light_prop(l: &mut Light, prop: &str, args: &[Token]) -> Res<()> {
+    let word = || match args {
+        [t] => Ok(t.text.to_ascii_lowercase()),
+        _ => Err(format!("{prop} takes one value")),
+    };
+    match prop {
+        "shape" => {
+            let w = word()?;
+            l.shape = [AreaShape::Square, AreaShape::Rectangle, AreaShape::Disk, AreaShape::Ellipse].into_iter().find(|s| shape_name(*s) == w).ok_or_else(|| format!("unknown area shape '{w}' (square, rectangle, disk, ellipse)"))?;
+            return Ok(());
+        }
+        "cast_shadow" => {
+            l.cast_shadow = boolean(&word()?)?;
+            return Ok(());
+        }
+        "use_mis" => {
+            l.use_mis = boolean(&word()?)?;
+            return Ok(());
+        }
+        "max_bounces" => {
+            l.max_bounces = uint(&word()?)?;
+            return Ok(());
+        }
+        _ => {}
+    }
     let v = values(args)?;
     let one = || match v.as_slice() {
         [x] => Ok(*x),
@@ -1232,6 +1424,8 @@ fn set_light_prop(l: &mut Light, prop: &str, args: &[Token]) -> Res<()> {
         ("angle", LightKind::Spot { angle, .. }) => *angle = one()?,
         ("blend", LightKind::Spot { blend, .. }) => *blend = one()?,
         ("size", LightKind::Area { size }) => *size = one()?,
+        ("size_y", _) => l.size_y = one()?,
+        ("spread", _) => l.spread = one()?,
         ("angle" | "blend", _) => return Err(format!("{prop} is only for spot lights")),
         ("size", _) => return Err("size is only for area lights".into()),
         _ => return Err(format!("unknown light property '{prop}'")),
@@ -1239,10 +1433,115 @@ fn set_light_prop(l: &mut Light, prop: &str, args: &[Token]) -> Res<()> {
     Ok(())
 }
 
+/// Camera options beyond fov/lens/near/far/ortho_scale.
+const CAMERA_OPTS: [&str; 19] = [
+    "sensor_width",
+    "sensor_height",
+    "sensor_fit",
+    "shift_x",
+    "shift_y",
+    "panorama",
+    "fisheye_fov",
+    "fisheye_lens",
+    "latitude_min",
+    "latitude_max",
+    "longitude_min",
+    "longitude_max",
+    "dof",
+    "focus_distance",
+    "fstop",
+    "blades",
+    "aperture_rotation",
+    "aperture_ratio",
+    "lens_type",
+];
+
+fn panorama_name(p: Option<PanoramaType>) -> &'static str {
+    match p {
+        None => "none",
+        Some(PanoramaType::Equirectangular) => "equirectangular",
+        Some(PanoramaType::FisheyeEquidistant) => "fisheye_equidistant",
+        Some(PanoramaType::FisheyeEquisolid) => "fisheye_equisolid",
+    }
+}
+
+fn fit_name(f: SensorFit) -> &'static str {
+    match f {
+        SensorFit::Auto => "auto",
+        SensorFit::Horizontal => "horizontal",
+        SensorFit::Vertical => "vertical",
+    }
+}
+
+/// A camera option's value as text, for `get` and saving.
+fn camera_opt_value(c: &Camera, key: &str) -> Option<String> {
+    Some(match key {
+        "sensor_width" => fmt_f(c.sensor_width),
+        "sensor_height" => fmt_f(c.sensor_height),
+        "sensor_fit" => fit_name(c.sensor_fit).into(),
+        "shift_x" => fmt_f(c.shift_x),
+        "shift_y" => fmt_f(c.shift_y),
+        "panorama" => panorama_name(c.panorama).into(),
+        "fisheye_fov" => fmt_f(c.fisheye_fov),
+        "fisheye_lens" => fmt_f(c.fisheye_lens),
+        "latitude_min" => fmt_f(c.latitude_min),
+        "latitude_max" => fmt_f(c.latitude_max),
+        "longitude_min" => fmt_f(c.longitude_min),
+        "longitude_max" => fmt_f(c.longitude_max),
+        "dof" => (c.dof.enabled as u8).to_string(),
+        "focus_distance" => fmt_f(c.dof.focus_distance),
+        "fstop" => fmt_f(c.dof.fstop),
+        "blades" => c.dof.blades.to_string(),
+        "aperture_rotation" => fmt_f(c.dof.rotation),
+        "aperture_ratio" => fmt_f(c.dof.ratio),
+        _ => return None,
+    })
+}
+
 fn set_camera_prop(c: &mut Camera, prop: &str, args: &[Token]) -> Res<()> {
     if prop == "ortho_scale" && matches!(args, [t] if t.is_word("none")) {
         c.ortho_scale = None;
         return Ok(());
+    }
+    let word = || match args {
+        [t] => Ok(t.text.to_ascii_lowercase()),
+        _ => Err(format!("{prop} takes one value")),
+    };
+    match prop {
+        "panorama" => {
+            let w = word()?;
+            c.panorama = [None, Some(PanoramaType::Equirectangular), Some(PanoramaType::FisheyeEquidistant), Some(PanoramaType::FisheyeEquisolid)].into_iter().find(|p| panorama_name(*p) == w).ok_or_else(|| format!("unknown panorama type '{w}'"))?;
+            return Ok(());
+        }
+        "sensor_fit" => {
+            let w = word()?;
+            c.sensor_fit = [SensorFit::Auto, SensorFit::Horizontal, SensorFit::Vertical].into_iter().find(|f| fit_name(*f) == w).ok_or_else(|| format!("unknown sensor fit '{w}' (auto, horizontal, vertical)"))?;
+            return Ok(());
+        }
+        "dof" => {
+            c.dof.enabled = boolean(&word()?)?;
+            return Ok(());
+        }
+        "blades" => {
+            c.dof.blades = uint(&word()?)?;
+            return Ok(());
+        }
+        "lens_type" => {
+            match word()?.as_str() {
+                "perspective" => {
+                    c.ortho_scale = None;
+                    c.panorama = None;
+                }
+                "orthographic" => {
+                    c.panorama = None;
+                    c.ortho_scale = Some(c.ortho_scale.unwrap_or(6.0 * 9.0 / 16.0));
+                }
+                "panoramic" => c.panorama = Some(c.panorama.unwrap_or_default()),
+                w => return Err(format!("unknown lens type '{w}' (perspective, orthographic, panoramic)")),
+            }
+            return Ok(());
+        }
+        _ => {}
     }
     let v = match values(args)?.as_slice() {
         [x] => *x,
@@ -1254,6 +1553,20 @@ fn set_camera_prop(c: &mut Camera, prop: &str, args: &[Token]) -> Res<()> {
         "near" => c.near = v,
         "far" => c.far = v,
         "ortho_scale" => c.ortho_scale = Some(v),
+        "sensor_width" => c.sensor_width = v,
+        "sensor_height" => c.sensor_height = v,
+        "shift_x" => c.shift_x = v,
+        "shift_y" => c.shift_y = v,
+        "fisheye_fov" => c.fisheye_fov = v,
+        "fisheye_lens" => c.fisheye_lens = v,
+        "latitude_min" => c.latitude_min = v,
+        "latitude_max" => c.latitude_max = v,
+        "longitude_min" => c.longitude_min = v,
+        "longitude_max" => c.longitude_max = v,
+        "focus_distance" => c.dof.focus_distance = v,
+        "fstop" => c.dof.fstop = v,
+        "aperture_rotation" => c.dof.rotation = v,
+        "aperture_ratio" => c.dof.ratio = v,
         _ => return Err(format!("unknown camera property '{prop}'")),
     }
     Ok(())
@@ -1291,28 +1604,121 @@ fn set_material_opts(cmd: &mut Cmd, m: &mut Material) -> Res<()> {
     Ok(())
 }
 
+/// Render-only material options: pass index and the volume.
+fn set_material_render_opts(cmd: &mut Cmd, m: &mut Material) -> Res<()> {
+    if let Some(v) = cmd.u("pass_index")? {
+        m.pass_index = v;
+    }
+    set_volume_opts(cmd, &mut m.volume)
+}
+
+/// `volume=none` or `volume_density=` etc. (any of them creates the volume).
+fn set_volume_opts(cmd: &mut Cmd, vol: &mut Option<VolumeSettings>) -> Res<()> {
+    if let Some(t) = cmd.opt("volume") {
+        if t.is_word("none") {
+            *vol = None;
+        } else {
+            return Err("volume takes none; set volume_density= etc. instead".into());
+        }
+    }
+    let set = |vol: &mut Option<VolumeSettings>, f: &dyn Fn(&mut VolumeSettings)| f(vol.get_or_insert_with(VolumeSettings::default));
+    if let Some(c) = cmd.v3("volume_color")? {
+        set(vol, &|v| v.color = c);
+    }
+    if let Some(d) = cmd.f("volume_density")? {
+        set(vol, &|v| v.density = d);
+    }
+    if let Some(g) = cmd.f("volume_anisotropy")? {
+        set(vol, &|v| v.anisotropy = g);
+    }
+    if let Some(c) = cmd.v3("volume_absorption_color")? {
+        set(vol, &|v| v.absorption_color = c);
+    }
+    if let Some(c) = cmd.v3("volume_emission_color")? {
+        set(vol, &|v| v.emission_color = c);
+    }
+    if let Some(e) = cmd.f("volume_emission_strength")? {
+        set(vol, &|v| v.emission_strength = e);
+    }
+    Ok(())
+}
+
+fn volume_opts(v: &Option<VolumeSettings>) -> String {
+    match v {
+        None => String::new(),
+        Some(v) => format!(
+            " volume_color={} volume_density={} volume_anisotropy={} volume_absorption_color={} volume_emission_color={} volume_emission_strength={}",
+            fmt_list(&v.color.to_array()),
+            fmt_f(v.density),
+            fmt_f(v.anisotropy),
+            fmt_list(&v.absorption_color.to_array()),
+            fmt_list(&v.emission_color.to_array()),
+            fmt_f(v.emission_strength)
+        ),
+    }
+}
+
 /// A modifier with Blender's defaults, by polyops or Blender type name.
 fn default_modifier(ty: &str) -> Res<Modifier> {
-    Ok(match ty.to_ascii_lowercase().as_str() {
-        "mirror" => Modifier::Mirror { x: true, y: false, z: false, merge: true, merge_distance: 0.001 },
-        "subdivision" | "subsurf" | "subdivision_surface" => Modifier::Subdivision { levels: 1, simple: false },
-        "array" => Modifier::Array { count: 2, relative: [1.0, 0.0, 0.0], constant: [0.0; 3], merge: false },
-        "solidify" => Modifier::Solidify { thickness: 0.01, offset: -1.0 },
-        "bevel" => Modifier::Bevel { width: 0.1, segments: 1, angle: 30f32.to_radians() },
-        "triangulate" => Modifier::Triangulate,
-        "weld" => Modifier::Weld { distance: 0.001 },
-        "displace" => Modifier::Displace { strength: 1.0 },
-        "smooth" => Modifier::Smooth { factor: 0.5, iterations: 1 },
-        _ => return Err(format!("unknown modifier type '{ty}' (Mirror, Subdivision, Array, Solidify, Bevel, Triangulate, Weld, Displace, Smooth)")),
-    })
+    Modifier::with_defaults(ty).ok_or_else(|| format!("unknown modifier type '{ty}' ({})", Modifier::TYPE_NAMES))
+}
+
+/// Pick one of `names` (case-insensitive) for option `key`.
+fn choice<T: Copy>(cmd: &mut Cmd, key: &str, names: &[(&str, T)], into: &mut T) -> Res<()> {
+    if let Some(t) = cmd.opt(key) {
+        let w = t.text.to_ascii_lowercase();
+        *into = names.iter().find(|(n, _)| *n == w).map(|(_, v)| *v).ok_or_else(|| {
+            let all: Vec<&str> = names.iter().map(|(n, _)| *n).collect();
+            format!("{key}: '{}' is not one of {}", t.text, all.join(", "))
+        })?;
+    }
+    Ok(())
+}
+
+const AXES: [(&str, u8); 3] = [("x", 0), ("y", 1), ("z", 2)];
+const DECIMATE_MODES: [(&str, DecimateMode); 3] = [("collapse", DecimateMode::Collapse), ("unsubdivide", DecimateMode::Unsubdivide), ("planar", DecimateMode::Planar)];
+const REMESH_MODES: [(&str, RemeshMode); 3] = [("blocks", RemeshMode::Blocks), ("smooth", RemeshMode::Smooth), ("voxel", RemeshMode::Voxel)];
+const BOOLEAN_OPS: [(&str, BooleanOp); 3] = [("intersect", BooleanOp::Intersect), ("union", BooleanOp::Union), ("difference", BooleanOp::Difference)];
+const DEFORM_MODES: [(&str, SimpleDeformMode); 4] = [("twist", SimpleDeformMode::Twist), ("bend", SimpleDeformMode::Bend), ("taper", SimpleDeformMode::Taper), ("stretch", SimpleDeformMode::Stretch)];
+const CAST_TYPES: [(&str, CastType); 3] = [("sphere", CastType::Sphere), ("cylinder", CastType::Cylinder), ("cuboid", CastType::Cuboid)];
+const WRAP_METHODS: [(&str, ShrinkwrapMethod); 3] = [("nearest_surface", ShrinkwrapMethod::NearestSurfacePoint), ("project", ShrinkwrapMethod::Project), ("nearest_vertex", ShrinkwrapMethod::NearestVertex)];
+
+fn name_of<T: PartialEq + Copy>(names: &[(&'static str, T)], v: T) -> &'static str {
+    names.iter().find(|(_, x)| *x == v).map_or("", |(n, _)| n)
 }
 
 fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
+    if rig::modifier_opts(cmd, &mut m)? || physics::modifier_opts(cmd, &mut m)? {
+        return Ok(m);
+    }
     fn arr3(cmd: &mut Cmd, key: &str, into: &mut [f32; 3]) -> Res<()> {
         if let Some(v) = cmd.v3(key)? {
             *into = v.to_array();
         }
         Ok(())
+    }
+    fn f(cmd: &mut Cmd, key: &str, into: &mut f32) -> Res<()> {
+        *into = cmd.f(key)?.unwrap_or(*into);
+        Ok(())
+    }
+    fn u(cmd: &mut Cmd, key: &str, into: &mut u32) -> Res<()> {
+        *into = cmd.u(key)?.unwrap_or(*into);
+        Ok(())
+    }
+    fn b(cmd: &mut Cmd, key: &str, into: &mut bool) -> Res<()> {
+        *into = cmd.b(key)?.unwrap_or(*into);
+        Ok(())
+    }
+    fn bools3(cmd: &mut Cmd, keys: [&str; 3], into: &mut [bool; 3]) -> Res<()> {
+        for (k, v) in keys.iter().zip(into.iter_mut()) {
+            b(cmd, k, v)?;
+        }
+        Ok(())
+    }
+    fn s(cmd: &mut Cmd, key: &str, into: &mut String) {
+        if let Some(t) = cmd.opt(key) {
+            *into = t.text;
+        }
     }
     match &mut m {
         Modifier::Mirror { x, y, z, merge, merge_distance } => {
@@ -1349,16 +1755,167 @@ fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
         }
         Modifier::Triangulate => {}
         Modifier::Weld { distance } => *distance = cmd.f("distance")?.unwrap_or(*distance),
-        Modifier::Displace { strength } => *strength = cmd.f("strength")?.unwrap_or(*strength),
-        Modifier::Smooth { factor, iterations } => {
+        Modifier::Displace { strength, .. } => *strength = cmd.f("strength")?.unwrap_or(*strength),
+        Modifier::Smooth { factor, iterations, .. } => {
             *factor = cmd.f("factor")?.unwrap_or(*factor);
             *iterations = cmd.u("iterations")?.unwrap_or(*iterations);
         }
+        Modifier::Decimate { mode, ratio, iterations, angle, triangulate } => {
+            choice(cmd, "mode", &DECIMATE_MODES, mode)?;
+            f(cmd, "ratio", ratio)?;
+            u(cmd, "iterations", iterations)?;
+            f(cmd, "angle", angle)?;
+            b(cmd, "triangulate", triangulate)?;
+        }
+        Modifier::Remesh { mode, voxel_size, octree_depth, scale, smooth_shade } => {
+            choice(cmd, "mode", &REMESH_MODES, mode)?;
+            f(cmd, "voxel_size", voxel_size)?;
+            u(cmd, "octree_depth", octree_depth)?;
+            if *octree_depth > 12 {
+                return Err("remesh octree_depth must be 12 or less".into());
+            }
+            f(cmd, "scale", scale)?;
+            b(cmd, "smooth_shade", smooth_shade)?;
+        }
+        Modifier::Screw { axis, angle, steps, screw_offset, iterations, merge, merge_distance, flip, smooth_shade } => {
+            choice(cmd, "axis", &AXES, axis)?;
+            f(cmd, "angle", angle)?;
+            u(cmd, "steps", steps)?;
+            f(cmd, "screw_offset", screw_offset)?;
+            u(cmd, "iterations", iterations)?;
+            if *steps > 10_000 || *iterations > 10_000 {
+                return Err("screw steps and iterations must be 10000 or fewer".into());
+            }
+            b(cmd, "merge", merge)?;
+            f(cmd, "merge_distance", merge_distance)?;
+            b(cmd, "flip", flip)?;
+            b(cmd, "smooth_shade", smooth_shade)?;
+        }
+        Modifier::Wireframe { thickness, offset, even, relative, boundary, replace } => {
+            f(cmd, "thickness", thickness)?;
+            f(cmd, "offset", offset)?;
+            b(cmd, "even", even)?;
+            b(cmd, "relative", relative)?;
+            b(cmd, "boundary", boundary)?;
+            b(cmd, "replace", replace)?;
+        }
+        Modifier::EdgeSplit { angle, use_angle } => {
+            f(cmd, "angle", angle)?;
+            b(cmd, "use_angle", use_angle)?;
+        }
+        Modifier::Build { start, length, reverse, random, seed } => {
+            f(cmd, "start", start)?;
+            f(cmd, "length", length)?;
+            b(cmd, "reverse", reverse)?;
+            b(cmd, "random", random)?;
+            u(cmd, "seed", seed)?;
+        }
+        Modifier::Boolean { object, operation } => {
+            s(cmd, "object", object);
+            choice(cmd, "operation", &BOOLEAN_OPS, operation)?;
+        }
+        Modifier::SimpleDeform { mode, axis, factor, limits, lock, .. } => {
+            choice(cmd, "mode", &DEFORM_MODES, mode)?;
+            choice(cmd, "axis", &AXES, axis)?;
+            f(cmd, "factor", factor)?;
+            if let Some(l) = cmd.list("limits")? {
+                if l.len() != 2 {
+                    return Err("limits= takes two numbers".into());
+                }
+                *limits = [l[0], l[1]];
+            }
+            bools3(cmd, ["lock_x", "lock_y", "lock_z"], lock)?;
+        }
+        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius, .. } => {
+            choice(cmd, "type", &CAST_TYPES, kind)?;
+            f(cmd, "factor", factor)?;
+            f(cmd, "radius", radius)?;
+            f(cmd, "size", size)?;
+            bools3(cmd, ["x", "y", "z"], axes)?;
+            b(cmd, "size_from_radius", size_from_radius)?;
+        }
+        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start, .. } => {
+            b(cmd, "x", x)?;
+            b(cmd, "y", y)?;
+            b(cmd, "cyclic", cyclic)?;
+            b(cmd, "normals", normals)?;
+            f(cmd, "falloff", falloff)?;
+            f(cmd, "height", height)?;
+            f(cmd, "width", width)?;
+            f(cmd, "narrowness", narrowness)?;
+            f(cmd, "speed", speed)?;
+            f(cmd, "time_offset", time_offset)?;
+            f(cmd, "lifetime", lifetime)?;
+            f(cmd, "damping", damping)?;
+            if let Some(l) = cmd.list("start")? {
+                if l.len() != 2 {
+                    return Err("start= takes two numbers".into());
+                }
+                *start = [l[0], l[1]];
+            }
+        }
+        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative, .. } => {
+            s(cmd, "target", target);
+            choice(cmd, "method", &WRAP_METHODS, method)?;
+            f(cmd, "offset", offset)?;
+            bools3(cmd, ["x", "y", "z"], axes)?;
+            b(cmd, "positive", positive)?;
+            b(cmd, "negative", negative)?;
+        }
+        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized, .. } => {
+            u(cmd, "iterations", iterations)?;
+            f(cmd, "factor", factor)?;
+            f(cmd, "border", border)?;
+            bools3(cmd, ["x", "y", "z"], axes)?;
+            b(cmd, "preserve_volume", preserve_volume)?;
+            b(cmd, "normalized", normalized)?;
+        }
+        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth, .. } => {
+            f(cmd, "factor", factor)?;
+            u(cmd, "iterations", iterations)?;
+            f(cmd, "scale", scale)?;
+            b(cmd, "length_weighted", length_weighted)?;
+            b(cmd, "only_smooth", only_smooth)?;
+        }
+        Modifier::WeightedNormal { keep_sharp } => b(cmd, "keep_sharp", keep_sharp)?,
+        Modifier::Nodes { group, inputs } => {
+            s(cmd, "group", group);
+            let keys: Vec<String> = cmd.opts.iter().filter(|o| o.0.starts_with("input:")).map(|o| o.0.clone()).collect();
+            for k in keys {
+                let Some(t) = cmd.opt(&k) else { continue };
+                let name = k["input:".len()..].to_string();
+                let v = node_value(&t);
+                match inputs.iter_mut().find(|x| x.0 == name) {
+                    Some(x) => x.1 = v,
+                    None => inputs.push((name, v)),
+                }
+            }
+        }
+        _ => {}
     }
     Ok(m)
 }
 
-/// Mesh data options: `verts= faces= edges= uvs= smooth= mat=`.
+/// Vertex pairs written as `a,b;c,d` (or base64 u32s when large).
+fn edge_pairs(text: &str, what: &str) -> Res<Vec<[u32; 2]>> {
+    let e = if text.starts_with("b64:") { uints(text) } else { text.split(';').filter(|s| !s.trim().is_empty()).map(uints).collect::<Res<Vec<_>>>().map(|v| v.concat()) }
+        .map_err(|e| format!("{what}: {e}"))?;
+    if e.len() % 2 != 0 {
+        return Err(format!("{what}= needs pairs of vertex indices"));
+    }
+    Ok(e.chunks_exact(2).map(|c| [c[0], c[1]]).collect())
+}
+
+fn write_pairs(o: &mut String, key: &str, pairs: &[[u32; 2]], b64: bool) {
+    if pairs.is_empty() {
+        return;
+    }
+    let flat: Vec<u32> = pairs.iter().flat_map(|e| e.iter().copied()).collect();
+    let text = if b64 { b64_u32(&flat) } else { pairs.iter().map(|e| format!("{},{}", e[0], e[1])).collect::<Vec<_>>().join(";") };
+    let _ = write!(o, " {key}={text}");
+}
+
+/// Mesh data options: `verts= faces= edges= seams= sharp= uvs= smooth= mat=`.
 fn parse_mesh(cmd: &mut Cmd, mut m: Mesh) -> Res<Mesh> {
     if let Some(v) = cmd.list("verts")? {
         if v.len() % 3 != 0 {
@@ -1370,16 +1927,13 @@ fn parse_mesh(cmd: &mut Cmd, mut m: Mesh) -> Res<Mesh> {
         m.faces = polygons(&t.text).map_err(|e| format!("faces: {e}"))?.into_iter().map(Face::new).collect();
     }
     if let Some(t) = cmd.opt("edges") {
-        let e = if t.text.starts_with("b64:") {
-            uints(&t.text)
-        } else {
-            t.text.split(';').filter(|s| !s.trim().is_empty()).map(uints).collect::<Res<Vec<_>>>().map(|v| v.concat())
-        }
-        .map_err(|e| format!("edges: {e}"))?;
-        if e.len() % 2 != 0 {
-            return Err("edges= needs pairs of vertex indices".into());
-        }
-        m.loose_edges = e.chunks_exact(2).map(|c| [c[0], c[1]]).collect();
+        m.loose_edges = edge_pairs(&t.text, "edges")?;
+    }
+    if let Some(t) = cmd.opt("seams") {
+        m.seams = edge_pairs(&t.text, "seams")?.into_iter().map(|e| crate::mesh::edge_key(e[0], e[1])).collect();
+    }
+    if let Some(t) = cmd.opt("sharp") {
+        m.sharp_edges = edge_pairs(&t.text, "sharp")?.into_iter().map(|e| crate::mesh::edge_key(e[0], e[1])).collect();
     }
     if let Some(uv) = cmd.list("uvs")? {
         let corners: usize = m.faces.iter().map(|f| f.verts.len()).sum();
@@ -1436,11 +1990,11 @@ pub fn mesh_to_options(m: &Mesh) -> String {
         };
         let _ = write!(o, " faces={faces}");
     }
-    if !m.loose_edges.is_empty() {
-        let flat: Vec<u32> = m.loose_edges.iter().flat_map(|e| e.iter().copied()).collect();
-        let edges = if b64 { b64_u32(&flat) } else { m.loose_edges.iter().map(|e| format!("{},{}", e[0], e[1])).collect::<Vec<_>>().join(";") };
-        let _ = write!(o, " edges={edges}");
-    }
+    write_pairs(&mut o, "edges", &m.loose_edges, b64);
+    let n = m.positions.len() as u32;
+    let valid = |set: &std::collections::BTreeSet<(u32, u32)>| set.iter().filter(|e| e.0 < n && e.1 < n).map(|e| [e.0, e.1]).collect::<Vec<_>>();
+    write_pairs(&mut o, "seams", &valid(&m.seams), b64);
+    write_pairs(&mut o, "sharp", &valid(&m.sharp_edges), b64);
     if m.has_uvs() {
         let uv: Vec<f32> = m.faces.iter().flat_map(|f| f.uvs.iter().flat_map(|u| [u.x, u.y])).collect();
         let _ = write!(o, " uvs={}", if b64 { b64_f32(&uv) } else { fmt_list(&uv) });
@@ -1460,7 +2014,12 @@ pub fn mesh_to_options(m: &Mesh) -> String {
 }
 
 fn modifier_to_options(m: &Modifier) -> String {
+    modifier_base_options(m) + &rig::modifier_to_options(m) + &physics::modifier_to_options(m)
+}
+
+fn modifier_base_options(m: &Modifier) -> String {
     let b = |v: bool| v as u8;
+    let f = |v: f32| fmt_f(v);
     match m {
         Modifier::Mirror { x, y, z, merge, merge_distance } => format!(" x={} y={} z={} merge={} merge_distance={}", b(*x), b(*y), b(*z), b(*merge), fmt_f(*merge_distance)),
         Modifier::Subdivision { levels, simple } => format!(" levels={levels} simple={}", b(*simple)),
@@ -1469,8 +2028,145 @@ fn modifier_to_options(m: &Modifier) -> String {
         Modifier::Bevel { width, segments, angle } => format!(" width={} segments={segments} angle={}", fmt_f(*width), fmt_f(*angle)),
         Modifier::Triangulate => String::new(),
         Modifier::Weld { distance } => format!(" distance={}", fmt_f(*distance)),
-        Modifier::Displace { strength } => format!(" strength={}", fmt_f(*strength)),
-        Modifier::Smooth { factor, iterations } => format!(" factor={} iterations={iterations}", fmt_f(*factor)),
+        Modifier::Displace { strength, .. } => format!(" strength={}", fmt_f(*strength)),
+        Modifier::Smooth { factor, iterations, .. } => format!(" factor={} iterations={iterations}", fmt_f(*factor)),
+        Modifier::Decimate { mode, ratio, iterations, angle, triangulate } => {
+            format!(" mode={} ratio={} iterations={iterations} angle={} triangulate={}", name_of(&DECIMATE_MODES, *mode), f(*ratio), f(*angle), b(*triangulate))
+        }
+        Modifier::Remesh { mode, voxel_size, octree_depth, scale, smooth_shade } => {
+            format!(" mode={} voxel_size={} octree_depth={octree_depth} scale={} smooth_shade={}", name_of(&REMESH_MODES, *mode), f(*voxel_size), f(*scale), b(*smooth_shade))
+        }
+        Modifier::Screw { axis, angle, steps, screw_offset, iterations, merge, merge_distance, flip, smooth_shade } => format!(
+            " axis={} angle={} steps={steps} screw_offset={} iterations={iterations} merge={} merge_distance={} flip={} smooth_shade={}",
+            name_of(&AXES, *axis),
+            f(*angle),
+            f(*screw_offset),
+            b(*merge),
+            f(*merge_distance),
+            b(*flip),
+            b(*smooth_shade)
+        ),
+        Modifier::Wireframe { thickness, offset, even, relative, boundary, replace } => {
+            format!(" thickness={} offset={} even={} relative={} boundary={} replace={}", f(*thickness), f(*offset), b(*even), b(*relative), b(*boundary), b(*replace))
+        }
+        Modifier::EdgeSplit { angle, use_angle } => format!(" angle={} use_angle={}", f(*angle), b(*use_angle)),
+        Modifier::Build { start, length, reverse, random, seed } => format!(" start={} length={} reverse={} random={} seed={seed}", f(*start), f(*length), b(*reverse), b(*random)),
+        Modifier::Boolean { object, operation } => format!(" object={} operation={}", quote(object), name_of(&BOOLEAN_OPS, *operation)),
+        Modifier::SimpleDeform { mode, axis, factor, limits, lock, .. } => format!(
+            " mode={} axis={} factor={} limits={} lock_x={} lock_y={} lock_z={}",
+            name_of(&DEFORM_MODES, *mode),
+            name_of(&AXES, *axis),
+            f(*factor),
+            fmt_list(limits),
+            b(lock[0]),
+            b(lock[1]),
+            b(lock[2])
+        ),
+        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius, .. } => format!(
+            " type={} factor={} radius={} size={} x={} y={} z={} size_from_radius={}",
+            name_of(&CAST_TYPES, *kind),
+            f(*factor),
+            f(*radius),
+            f(*size),
+            b(axes[0]),
+            b(axes[1]),
+            b(axes[2]),
+            b(*size_from_radius)
+        ),
+        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start, .. } => format!(
+            " x={} y={} cyclic={} normals={} falloff={} height={} width={} narrowness={} speed={} time_offset={} lifetime={} damping={} start={}",
+            b(*x),
+            b(*y),
+            b(*cyclic),
+            b(*normals),
+            f(*falloff),
+            f(*height),
+            f(*width),
+            f(*narrowness),
+            f(*speed),
+            f(*time_offset),
+            f(*lifetime),
+            f(*damping),
+            fmt_list(start)
+        ),
+        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative, .. } => format!(
+            " target={} method={} offset={} x={} y={} z={} positive={} negative={}",
+            quote(target),
+            name_of(&WRAP_METHODS, *method),
+            f(*offset),
+            b(axes[0]),
+            b(axes[1]),
+            b(axes[2]),
+            b(*positive),
+            b(*negative)
+        ),
+        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized, .. } => format!(
+            " iterations={iterations} factor={} border={} x={} y={} z={} preserve_volume={} normalized={}",
+            f(*factor),
+            f(*border),
+            b(axes[0]),
+            b(axes[1]),
+            b(axes[2]),
+            b(*preserve_volume),
+            b(*normalized)
+        ),
+        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth, .. } => {
+            format!(" factor={} iterations={iterations} scale={} length_weighted={} only_smooth={}", f(*factor), f(*scale), b(*length_weighted), b(*only_smooth))
+        }
+        Modifier::WeightedNormal { keep_sharp } => format!(" keep_sharp={}", b(*keep_sharp)),
+        Modifier::Nodes { group, inputs } => {
+            let mut o = format!(" group={}", quote(group));
+            for (name, v) in inputs {
+                let text = match v {
+                    crate::nodes::Value::Float(x) => {
+                        let t = fmt_f(*x);
+                        if t.contains(['.', 'e', 'i', 'N']) {
+                            t
+                        } else {
+                            t + ".0"
+                        }
+                    }
+                    crate::nodes::Value::Int(i) => i.to_string(),
+                    crate::nodes::Value::Bool(x) => x.to_string(),
+                    crate::nodes::Value::Vector(x) => fmt_list(x),
+                    crate::nodes::Value::Color(x) => fmt_list(x),
+                    crate::nodes::Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+                    _ => continue,
+                };
+                let key = if is_ident(name) { name.clone() } else { format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\"")) };
+                let _ = write!(o, " input:{key}={text}");
+            }
+            o
+        }
+        _ => String::new(),
+    }
+}
+
+/// A Nodes modifier input value as polyops writes it: a quoted string,
+/// `true`/`false`, a whole number (Int), a number with a point (Float),
+/// three numbers (Vector) or four (Color).
+fn node_value(t: &Token) -> crate::nodes::Value {
+    use crate::nodes::Value;
+    if t.quoted {
+        return Value::String(t.text.clone());
+    }
+    let s = t.text.trim();
+    match s {
+        "true" => return Value::Bool(true),
+        "false" => return Value::Bool(false),
+        _ => {}
+    }
+    if !s.contains(',') {
+        if let Ok(i) = s.parse::<i32>() {
+            return Value::Int(i);
+        }
+    }
+    let nums: Option<Vec<f32>> = s.split(',').map(|x| x.trim().parse::<f32>().ok()).collect();
+    match nums.as_deref() {
+        Some([x]) => Value::Float(*x),
+        Some([x, y, z]) => Value::Vector([*x, *y, *z]),
+        Some([r, g, b, a]) => Value::Color([*r, *g, *b, *a]),
+        _ => Value::String(t.text.clone()),
     }
 }
 
@@ -1483,7 +2179,7 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
     let _ = writeln!(o, "# Polyamour scene: {} objects, {} meshes, {} materials", scene.objects.len(), scene.meshes.len(), scene.materials.len());
     let _ = writeln!(o, "scene name={} frame_start={} frame_end={} fps={}", quote(&scene.name), scene.frame_start, scene.frame_end, fmt_f(scene.fps));
     let w = &scene.world;
-    let _ = writeln!(o, "world color={} strength={}", fmt_list(&w.color.to_array()), fmt_f(w.strength));
+    let _ = writeln!(o, "world color={} strength={}{}", fmt_list(&w.color.to_array()), fmt_f(w.strength), volume_opts(&w.volume));
     // Collection 0 exists in every scene; create the others, then fix parents
     // (a parent may come later in the list).
     for (i, c) in scene.collections.iter().enumerate() {
@@ -1515,10 +2211,18 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
             fmt_f(m.transmission),
             m.double_sided as u8
         );
+        if m.pass_index != 0 || m.volume.is_some() {
+            let pi = if m.pass_index != 0 { format!(" pass_index={}", m.pass_index) } else { String::new() };
+            let _ = writeln!(o, "material_set {}{pi}{}", quote(&m.name), volume_opts(&m.volume));
+        }
     }
     for (m, n) in scene.meshes.iter().zip(&scene.mesh_names) {
         let _ = writeln!(o, "mesh_new {}{}", quote(n), mesh_to_options(m));
+        rig::write_mesh_extras(&mut o, n, m);
     }
+    rig::write_data(&mut o, scene);
+    physics::write_scene(&mut o, scene);
+    gp::write_data(&mut o, scene);
     for ob in &scene.objects {
         let t = &ob.transform;
         let place = format!(
@@ -1530,7 +2234,12 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
             if ob.visible { "" } else { " visible=0" }
         );
         let name = quote(&ob.name);
+        if let Some(l) = rig::object_line(scene, ob, &place).or_else(|| gp::object_line(scene, ob, &place)) {
+            let _ = writeln!(o, "{l}");
+            continue;
+        }
         let _ = match &ob.data {
+            ObjectData::Armature(_) | ObjectData::Lattice(_) | ObjectData::GreasePencil(_) => Ok(()),
             ObjectData::Empty => writeln!(o, "add_empty {name}{place}"),
             ObjectData::Mesh(m) => writeln!(o, "add_object {name} data={}{place}", quote(&scene.mesh_names[*m])),
             ObjectData::Light(l) => {
@@ -1540,10 +2249,37 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
                     LightKind::Spot { angle, blend } => ("spot", format!(" angle={} blend={}", fmt_f(angle), fmt_f(blend))),
                     LightKind::Area { size } => ("area", format!(" size={}", fmt_f(size))),
                 };
+                let d = Light::default();
+                let mut extra = extra;
+                if l.shape != d.shape {
+                    extra += &format!(" shape={}", shape_name(l.shape));
+                }
+                if l.size_y != d.size_y {
+                    extra += &format!(" size_y={}", fmt_f(l.size_y));
+                }
+                if l.spread != d.spread {
+                    extra += &format!(" spread={}", fmt_f(l.spread));
+                }
+                if l.max_bounces != d.max_bounces {
+                    extra += &format!(" max_bounces={}", l.max_bounces);
+                }
+                if !l.cast_shadow {
+                    extra += " cast_shadow=0";
+                }
+                if !l.use_mis {
+                    extra += " use_mis=0";
+                }
                 writeln!(o, "light_add {kind} name={name} power={} color={} radius={}{extra}{place}", fmt_f(l.power), fmt_list(&l.color.to_array()), fmt_f(l.radius))
             }
             ObjectData::Camera(c) => {
-                let ortho = c.ortho_scale.map(|s| format!(" ortho_scale={}", fmt_f(s))).unwrap_or_default();
+                let mut ortho = c.ortho_scale.map(|s| format!(" ortho_scale={}", fmt_f(s))).unwrap_or_default();
+                let d = Camera::default();
+                for key in CAMERA_OPTS {
+                    let (a, b) = (camera_opt_value(c, key), camera_opt_value(&d, key));
+                    if let (Some(a), true) = (&a, a != b) {
+                        ortho += &format!(" {key}={a}");
+                    }
+                }
                 writeln!(o, "camera_add name={name} fov={} near={} far={}{ortho} active=0{place}", fmt_f(c.fov_y), fmt_f(c.near), fmt_f(c.far))
             }
         };
@@ -1551,15 +2287,46 @@ pub fn scene_to_polyops(scene: &Scene) -> String {
     for ob in &scene.objects {
         let name = quote(&ob.name);
         if let Some(p) = ob.parent {
-            let _ = writeln!(o, "parent {name} {}", quote(&scene.objects[p].name));
+            let _ = writeln!(o, "parent {name} {}{}", quote(&scene.objects[p].name), rig::parent_options(ob));
         }
         for (slot, &m) in ob.materials.iter().enumerate() {
-            let _ = writeln!(o, "material_assign {name} {} slot={slot}", quote(&scene.materials[m].name));
+            // Empty slots (imported `None` materials) have nothing to assign.
+            let Some(mat) = scene.materials.get(m) else { continue };
+            let _ = writeln!(o, "material_assign {name} {} slot={slot}", quote(&mat.name));
         }
         for m in &ob.modifiers {
-            let _ = writeln!(o, "modifier_add {name} {}{}", m.name(), modifier_to_options(m));
+            let _ = writeln!(o, "modifier_add {name} {}{}", m.type_name(), modifier_to_options(m));
         }
+        let target = |prop: &str| quote(&format!("{}.{prop}", ob.name));
+        let vis = &ob.visibility;
+        for (prop, on) in [("visible_camera", vis.camera), ("visible_diffuse", vis.diffuse), ("visible_glossy", vis.glossy), ("visible_transmission", vis.transmission), ("visible_volume_scatter", vis.volume_scatter), ("visible_shadow", vis.shadow)] {
+            if !on {
+                let _ = writeln!(o, "set {} 0", target(prop));
+            }
+        }
+        if ob.holdout {
+            let _ = writeln!(o, "set {} 1", target("holdout"));
+        }
+        if ob.pass_index != 0 {
+            let _ = writeln!(o, "set {} {}", target("pass_index"), ob.pass_index);
+        }
+        if let Some(m) = &ob.motion {
+            let r = m.rotation;
+            let _ = writeln!(o, "set {} {}", target("motion_location"), fmt_vals(&m.location.to_array()));
+            let _ = writeln!(o, "set {} {}", target("motion_rotation_quaternion"), fmt_vals(&[r.w, r.x, r.y, r.z]));
+            let _ = writeln!(o, "set {} {}", target("motion_scale"), fmt_vals(&m.scale.to_array()));
+        }
+        if let ObjectData::Camera(c) = &ob.data {
+            if let Some(f) = c.dof.focus_object.and_then(|f| scene.objects.get(f)) {
+                let _ = writeln!(o, "set {} {}", target("focus_object"), quote(&f.name));
+            }
+        }
+        rig::write_object_rig(&mut o, ob);
+        physics::write_object(&mut o, ob);
+        gp::write_object(&mut o, ob);
     }
+    nodes::write_node_trees(&mut o, scene);
+    gp::write_sequencer(&mut o, scene);
     let names = |v: &[usize]| v.iter().map(|&i| format!(" {}", quote(&scene.objects[i].name))).collect::<String>();
     let _ = writeln!(o, "select{}", names(&scene.selected));
     let one = |i: Option<usize>| i.map(|i| quote(&scene.objects[i].name)).unwrap_or_else(|| "none".into());
