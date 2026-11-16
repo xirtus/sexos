@@ -63,10 +63,10 @@ def wiring(source):
  poll='        poll_source_denials(source_denials);'
  pending='||source_denials.pending_reply().is_some();'
  if source.count(poll)!=1 or source.count(pending)!=1:raise ValueError('denial poll/pending not in actual idle loop')
- a=source.index(poll);b=source.index('let reply_pending=',a);c=source.index('let pending=preparing||polling||reply_pending||seed.busy();',b) if 'let pending=preparing||polling||reply_pending||seed.busy();' in source[b:] else -1
+ a=source.index(poll);b=source.index('let reply_pending=',a);c=source.index('let pending=restriction.pending()||preparing||polling||reply_pending||seed.busy();',b) if 'let pending=restriction.pending()||preparing||polling||reply_pending||seed.busy();' in source[b:] else -1
  if c<0:raise ValueError('denial pending not driving timed receive loop')
  if not a<b<source.index(pending,b)<c:raise ValueError('denial poll/pending ordering')
- if not source[c:].startswith('let pending=preparing||polling||reply_pending||seed.busy();\n        let req = if pending {'):raise ValueError('pending work bypasses actual receive branch')
+ if not source[c:].startswith('let pending=restriction.pending()||preparing||polling||reply_pending||seed.busy();\n        let req = if pending {'):raise ValueError('pending work bypasses actual receive branch')
  exit_start=source.index('if req.type_id==sex_pdx::app_lifecycle::OP_APP_EXIT')
  exit_body=block(source,exit_start)
  closure=exit_body.index('|notice| {');end=exit_body.index('}) {',closure)

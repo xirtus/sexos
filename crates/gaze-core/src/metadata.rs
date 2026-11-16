@@ -161,6 +161,10 @@ pub struct PhotoMeta {
     /// Region + continent tokens for rich offline smart search, e.g. `"Ile-de-France Europe"`.
     pub place_region: Option<String>,
     pub camera: Option<String>,
+    /// Lens model, e.g. `"EF 50mm f/1.8"`.
+    pub lens: Option<String>,
+    /// Shutter, aperture, ISO and focal length in one line, e.g. `"1/250 s · f/2.8 · ISO 400 · 35 mm"`.
+    pub exposure: Option<String>,
 }
 
 /// Extracts dimensions, format, date taken, GPS, offline-resolved place, and camera model
@@ -226,8 +230,10 @@ pub fn extract_metadata(bytes: &[u8], mtime_raw: Option<u64>) -> PhotoMeta {
             }
             (_, Some(md)) if !md.trim().is_empty() => Some(md.trim().to_string()),
             (Some(mk), None) if !mk.trim().is_empty() => Some(mk.trim().to_string()),
-            _ => exif.software.filter(|s| !s.trim().is_empty()),
+            _ => exif.software.clone().filter(|s| !s.trim().is_empty()),
         };
+        meta.lens = exif.lens.as_deref().map(str::trim).filter(|l| !l.is_empty()).map(String::from);
+        meta.exposure = exposure_line(&exif);
     }
 
     // Also inspect uncompressed PNG tEXt / iTXt metadata chunks if PNG
@@ -243,6 +249,30 @@ pub fn extract_metadata(bytes: &[u8], mtime_raw: Option<u64>) -> PhotoMeta {
     }
 
     meta
+}
+
+/// Shutter, aperture, ISO and focal length, whichever the photo records, as one line.
+pub fn exposure_line(exif: &gaze_codecs::Exif) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(t) = exif.exposure_time.filter(|t| t.num > 0 && t.den > 0) {
+        // As cameras show it: 0.3 s and slower in seconds, faster as 1/N (exact when it is).
+        let secs = t.num as f64 / t.den as f64;
+        parts.push(if secs >= 0.3 {
+            if secs == (secs as u64) as f64 { format!("{} s", secs as u64) } else { format!("{:.1} s", secs) }
+        } else {
+            format!("1/{} s", (t.den as u64 + t.num as u64 / 2) / t.num as u64)
+        });
+    }
+    if let Some(f) = exif.f_number.and_then(|f| f.to_f64()).filter(|f| *f > 0.0) {
+        parts.push(if f == (f as u64) as f64 { format!("f/{}", f as u64) } else { format!("f/{:.1}", f) });
+    }
+    if let Some(iso) = exif.iso.filter(|i| *i > 0) {
+        parts.push(format!("ISO {}", iso));
+    }
+    if let Some(mm) = exif.focal_length.and_then(|f| f.to_f64()).filter(|f| *f > 0.0) {
+        parts.push(if mm == (mm as u64) as f64 { format!("{} mm", mm as u64) } else { format!("{:.1} mm", mm) });
+    }
+    if parts.is_empty() { None } else { Some(parts.join(" \u{b7} ")) }
 }
 
 fn scan_png_text_chunks(bytes: &[u8], meta: &mut PhotoMeta) {

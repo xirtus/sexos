@@ -10,6 +10,7 @@ from unittest.mock import patch
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts'));sys.path.insert(0,str(Path(__file__).resolve().parent))
 import browser_reserve_gate as p
+from input_payload_profile import PROOF_RECEIPTS
 import browser_source_evidence as e
 from test_browser_source_evidence import inventory,clock,success
 
@@ -27,7 +28,7 @@ def cleanup_lines(row):
  return text+f'[sext.app.pool.ready] target={t} task={k} bytes=8192 zeroed=8192 workspace_records=0 reused=1 zero_owner=sext ok=1\n'
 
 def fixture(mode='quiesced'):
- text=inventory(e.FUTURE_PLANS,True);at=text.index('[net.source.binding.held]')
+ text=PROOF_RECEIPTS+inventory(e.FUTURE_PLANS,True);at=text.index('[net.source.binding.held]')
  text=text[:at]+'[boot.app.catalog.complete] rows=3 actual_grants=1 runtime_mint=0\n[boot.memory.authority.sealed] runtime_alloc=0 runtime_map=capability_leaf runtime_mint=0\n[bootgraph.boot.handoff] target=sexdisplay id=1 entry=0x4000\n'+text[at:]
  result={'evidence_version':2,'mode':mode,'chain':[]};tasks={15:150,30:300,31:310}
  for i,base in enumerate(ROWS):
@@ -219,7 +220,7 @@ class BrowserReserve(unittest.TestCase):
   frame=dict(serial_end=2,serial_sha256=p.sha('ab'.encode()));self.assertEqual(p.frame_prefix('abcd',frame),'ab');frame['serial_end']=3
   with self.assertRaises(ValueError):p.frame_prefix('abcd',frame)
  def test_key_release_and_fresh_hardware_order_required(self):
-  text='[sexinput.ps2.scancode] raw=0x26\n[sexinput.ps2.scancode] raw=0xa6\n';action=dict(kind='key',key='l',start=0,end=len(text),transport='input-send-event')
+  text=PROOF_RECEIPTS+'[sexinput.ps2.scancode] raw=0x26\n[sexinput.ps2.scancode] raw=0xa6\n';action=dict(kind='key',key='l',start=0,end=len(text),transport='input-send-event')
   self.assertTrue(p.verify_keys(text,[action])['ok'])
   for bad in[text.replace('raw=0xa6','raw=0x26'),text.replace('raw=0x26','raw=0x24')]:
    with self.assertRaises(ValueError):p.verify_keys(bad,[dict(action,end=len(bad))])
@@ -257,5 +258,53 @@ class CapturedPaintBoundaries(unittest.TestCase):
    with self.subTest(changed=changed),self.assertRaises(ValueError):p.resize_evidence(changed,row,0,len(changed),geometry,actions)
   for invalid in ([],actions*2,[dict(kind='key',key='ret',start=len(view+zoom),end=len(text))]):
    with self.subTest(actions=invalid),self.assertRaises(ValueError):p.resize_evidence(text,row,0,len(text),geometry,invalid)
+
+
+class SourceBoundBrowserPalette(unittest.TestCase):
+ def catalog(self,commands):
+  from test_palette_commands import catalog
+  directory=tempfile.TemporaryDirectory();self.addCleanup(directory.cleanup)
+  root=Path(directory.name);path=root/'servers/silk-shell/src/main.rs'
+  path.parent.mkdir(parents=True);path.write_text(catalog(commands));return root
+ def test_exact_catalog_count_and_browser_action_stay_bound(self):
+  import re
+  from test_palette_commands import ACTUAL
+  for commands in(ACTUAL,ACTUAL+(('FutureCommand','Future command'),)):
+   root=self.catalog(commands);calls=[]
+   def key(code,pattern):
+    index=len(calls)
+    receipt=(f'[shell.palette.open] ok=1 selected=0 count={len(commands)}\n' if index==0 else
+             f'[shell.palette.select] old={index-1} new={index}\n')
+    self.assertIsNotNone(re.search(pattern,receipt));calls.append(code)
+   p.palette(dict(root=root,key=key))
+   self.assertEqual(calls,['grave_accent']+['j']*10)
+ def test_wrong_or_partial_open_receipt_never_advances(self):
+  import re
+  from test_palette_commands import ACTUAL
+  root=self.catalog(ACTUAL);count=len(ACTUAL)
+  for receipt in('[shell.palette.open] ok=1 selected=0 count=11\n',
+                  f'[shell.palette.open] ok=1 selected=0 count={count}0\n',
+                  f'[shell.palette.open] ok=1 selected=1 count={count}\n',
+                  f'[shell.palette.open] ok=1 selected=0 count={count}'):
+   calls=[]
+   def key(code,pattern):
+    calls.append(code)
+    if re.search(pattern,receipt) is None:raise TimeoutError('receipt mismatch')
+   with self.subTest(receipt=receipt),self.assertRaises(TimeoutError):p.palette(dict(root=root,key=key))
+   self.assertEqual(calls,['grave_accent'])
+ def test_changed_browser_row_and_malformed_catalog_fail_before_input(self):
+  from test_palette_commands import ACTUAL
+  changed=ACTUAL[:10]+(ACTUAL[11],ACTUAL[10])+ACTUAL[12:]
+  root=self.catalog(changed);calls=[]
+  with self.assertRaises(ValueError):p.palette(dict(root=root,key=lambda *args:calls.append(args)))
+  self.assertEqual(calls,[])
+  root=self.catalog(ACTUAL);path=root/'servers/silk-shell/src/main.rs'
+  original=path.read_text()
+  malformed=original.replace(f'[CommandDef; {len(ACTUAL)}]',f'[CommandDef; {len(ACTUAL)+1}]')
+  self.assertNotEqual(original,malformed)
+  path.write_text(malformed)
+  with self.assertRaises(ValueError):p.palette(dict(root=root,key=lambda *args:calls.append(args)))
+  self.assertEqual(calls,[])
+
 
 if __name__=='__main__':unittest.main()

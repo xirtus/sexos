@@ -95,6 +95,10 @@ pub enum Event {
     Resize { width: u32, height: u32 },
     /// The person asked to close the window.
     Close,
+    /// A Shell drop in window pixels; the platform keeps its payload bytes.
+    Drop { kind: u8, x: i16, y: i16 },
+    /// A drag started by this window ended; zero means no target accepted it.
+    DragEnded { target: u32 },
 }
 
 /// A key chord: `Ctrl+Shift+P`, `F2`, `Ctrl+W`.

@@ -1,0 +1,15 @@
+[package]
+name = "crossdress"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[[bin]]
+name = "crossdress"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
+drag-vmm = { path = "../../crates/drag-vmm" }
+sex-crossdress = { path = "../../crates/sex-crossdress" }

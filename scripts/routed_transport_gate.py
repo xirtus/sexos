@@ -330,7 +330,7 @@ def main():
    (out/(name+'.pcap')).write_bytes(raw)
  result=dict(ok=False,error=failure,observations=evidence,completed_flows=len(rows),scope='Normal immutable BOOT config with actual diagnostic listener off-subnet TCP through its on-link gateway. Full captures/sequence checks plus NIC/ownership receipts; no off-link app DNS/HTTP policy expansion, public routing, TLS or physical/SMP/hostile containment proof.')
  if failure is None:
-  result['routing']=inspect_routing(captures,args.mode);result['capture']=tcp_check(pcap(captures,exclude_port=SILENT_PORT),rows);result['authority']=nic_check(text(),expected=1,preparation=True,ethernet=True,network_config=True,routing=True);result['self_wait']=wait_check(text());result['custody']=custody(text(),captures)
+  result['routing']=inspect_routing(captures,args.mode);result['capture']=tcp_check(pcap(captures,exclude_port=SILENT_PORT),rows);result['authority']=nic_check(text(),expected=1,preparation=True,ethernet=True,network_config=True,routing=True);result['self_wait']=wait_check(text(),source_root=Path(__file__).resolve().parents[1]);result['custody']=custody(text(),captures)
   result['ok']=all(result[key]['ok']for key in ['routing','capture','authority','self_wait','custody'])
   if args.mode=='silence':result['ok']=result['ok']and evidence.get('silence',{}).get('listener_timeout_observed',False)
   try:bound_source(iso,binding_path)

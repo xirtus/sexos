@@ -30,6 +30,7 @@ pub fn put(m: PdxMessage) {
         *next += 1;
         let at = slots.iter().position(Option::is_none)
             .unwrap_or_else(|| slots.iter().enumerate().min_by_key(|(_, s)| s.map_or(0, |s| s.0)).map_or(0, |(i, _)| i));
+        erase_slot(&mut slots[at]);
         slots[at] = Some((*next, m));
     })
 }
@@ -40,6 +41,15 @@ pub fn take(wanted: impl Fn(&PdxMessage) -> bool) -> Option<PdxMessage> {
         let at = slots.iter().enumerate()
             .filter_map(|(i, s)| s.filter(|s| wanted(&s.1)).map(|s| (i, s.0)))
             .min_by_key(|(_, order)| *order)?.0;
-        slots[at].take().map(|s| s.1)
+        let m=slots[at].as_ref().map(|s|s.1);
+        erase_slot(&mut slots[at]);
+        m
     })
+}
+
+// A consumed/overwritten autofill packet must not linger in an empty slot's
+// inactive enum payload. Erase all message registers before clearing the slot.
+fn erase_slot(slot:&mut Option<(u64,PdxMessage)>) {
+    if let Some((order,message))=slot.as_mut(){crate::autofill::erase_message(message);unsafe{core::ptr::write_volatile(order,0);}}
+    *slot=None;
 }

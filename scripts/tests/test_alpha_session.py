@@ -3,6 +3,7 @@ import pathlib
 import sys
 import threading
 import unittest
+import re
 sys.path.insert(0,str(pathlib.Path(__file__).resolve().parents[1]))
 from check_alpha_session import session_errors,boot_lifecycle_errors,quil_close_errors,terminal_pending_errors
 from alpha_session import save_receipt,watch_save,submit_save
@@ -181,20 +182,21 @@ class SaveObservationTests(unittest.TestCase):
         trace=[]
         class Qmp:
             def cmd(self,operation,args):trace.append((operation,args))
-        def wait(pattern,start):trace.append(('wait',pattern,start))
+        def wait(pattern,start):
+            trace.append(('wait',pattern,start));return re.search(pattern,'[input.keyboard.keyup.ok] source=ps2 payload=redacted\n') if 'keyup' in pattern else None
         submit_save(Qmp(),wait,42);trace.append(('refresh',))
         self.assertEqual(trace[0][0],'input-send-event')
         self.assertNotIn('hold-time',trace[0][1])
         self.assertEqual([(e['data']['key']['data'],e['data']['down'])for e in trace[0][1]['events']],
             [('ctrl',True),('s',True),('s',False),('ctrl',False)])
-        self.assertIn('0x9d',trace[2][1]);self.assertEqual(trace[2][2],42)
+        self.assertIn('keyup',trace[2][1]);self.assertEqual(trace[2][2],42);self.assertIn('keyup',trace[3][1]);self.assertGreater(trace[3][2],42)
         self.assertEqual(trace[-1],('refresh',))
     def test_missing_control_break_aborts_before_navigation(self):
         trace=[]
         class Qmp:
             def cmd(self,operation,args):trace.append(operation)
         def wait(pattern,start):
-            if '0x9d'in pattern:raise TimeoutError('Control release absent')
+            if 'keyup' in pattern:raise TimeoutError('Chord release admission absent')
         with self.assertRaises(TimeoutError):
             submit_save(Qmp(),wait,42)
             trace.append('refresh')

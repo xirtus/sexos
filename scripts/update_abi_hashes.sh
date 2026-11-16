@@ -3,7 +3,10 @@
 # input, so unrelated ABI edits in parallel branches merge without conflicts.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-mapfile -t inputs < <(sed -n '/^ABI_INPUTS=(/,/^)/{/^ *[a-z]/p}' scripts/entrypoint_build.sh | tr -d ' ')
+mapfile -t inputs < <(sed -n '/^ABI_INPUTS=(/,/^)/{
+/^ *[a-z]/p
+}' scripts/entrypoint_build.sh | tr -d ' ')
+(( ${#inputs[@]} > 0 )) || { echo "no ABI inputs found" >&2; exit 1; }
 # A blank line between pins keeps edits to neighbouring files in separate
 # merge hunks, so they merge cleanly; edits to the same file still conflict.
 sha256sum "${inputs[@]}" | sort -k2 | sed 's/$/\n/' > spec/abi_inputs.sha256

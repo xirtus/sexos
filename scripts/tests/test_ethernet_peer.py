@@ -35,6 +35,21 @@ def trace(rows):
  return t
 
 class EthernetEvidence(unittest.TestCase):
+ def test_exact_device_paired_historical_and_typed_pci_models(self):
+  for model,product,device in [('I82540',4110,'100e'),('I82574',4307,'10d3'),('I82576',4297,'10c9')]:
+   base=initialized().replace('product=4307',f'product={product}').replace('device=10d3',f'device={device}').replace('0x10D3','0x'+device.upper()).replace('model=I82574','model='+model)
+   if model!='I82574':base=base.replace('timing_verified=1','timing_verified=0')
+   if model=='I82576':base=base.replace('[sexnet.ether.phase] from=Enable to=Link failure=None','[sexnet.ether.phase] from=Enable to=Queues failure=None\n[sexnet.ether.phase] from=Queues to=Link failure=None')
+   for label in (model,'Pci('+model+')'):
+    with self.subTest(model=model,label=label):self.assertTrue(inspect(base.replace('model='+model,'model='+label),ethernet=True)['ok'])
+   for label in ('Pci(I82540)'if model!='I82540'else'Pci(I82574)','Usb','Usb('+model+')','Pci(Pci('+model+'))','Pci('+model,'Pci('+model+'))','Pci( '+model+')',model+'suffix'):
+    with self.subTest(model=model,label=label):self.assertFalse(inspect(base.replace('model='+model,'model='+label),ethernet=True)['ok'])
+ def test_typed_pci_readiness_cannot_hide_suffix_duplicate_budget_or_timing_failure(self):
+  base=initialized().replace('model=I82574','model=Pci(I82574)')
+  for old,new in [('tls=0\n','tls=0 suffix\n'),('used=221184','used=221185'),('descriptors=96/8','descriptors=97/8'),('budget=262144','budget=262145'),('timing_verified=1','timing_verified=0'),('network=0','network=1'),('polling=cooperative','polling=busy')]:
+   with self.subTest(new=new):self.assertFalse(inspect(base.replace(old,new),ethernet=True)['ok'])
+  ready=next(line for line in base.splitlines(True)if line.startswith('[sexnet.ether.ready]'))
+  for extra in (ready,ready.replace('Pci(I82574)','Usb')):self.assertFalse(inspect(base+extra,ethernet=True)['ok'])
  def test_exact_lease_initialization_bus_master_and_full_duplex_bytes(self):
   rows=exchanges();self.assertTrue(validate(trace(rows),rows,MAC)['ok']);self.assertFalse(inspect(initialized(),preparation=True)['ok'])
  def test_identity_or_bus_master_order_model_budget_and_online_claim_fail(self):

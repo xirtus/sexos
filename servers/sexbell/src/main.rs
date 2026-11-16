@@ -3,6 +3,7 @@
 extern crate alloc;
 mod paging_probe;
 mod sound;
+mod restricted;
 mod resample;
 mod jack;
 mod hda;
@@ -564,6 +565,9 @@ unsafe fn retire_app_resources(target:u32)->usize {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let mut restriction=sex_pdx::restricted_helper_provider::Provider::new();
+    restriction.initialize(&restricted::JOURNAL,&mut restricted::Kernel);
+    restricted::publish(&restriction);
     serial_println!("[sexbell.init.start]");
     serial_println!("[bell.boot]");
     // The paging check runs on the first start only: its pages keep what it wrote.
@@ -604,15 +608,27 @@ pub extern "C" fn _start() -> ! {
             exit_probe_pending = false;
             paging_probe::exit_reuse();
         }
-        // While sound plays, keep feeding the card between messages.
+        // While sound plays or policy waits, keep maintenance bounded.
         let msg = loop {
-            if !sound::busy() { break paging_probe::next_message(); }
+            restriction.poll(&mut restricted::Kernel,|effect|match effect {
+                sex_pdx::restricted_helper_provider::Effect::Scrub(subject)=>{
+                    unsafe{retire_app_resources(subject.pd);}
+                    sound::quarantine(subject.pd);
+                    restricted::scrub(subject)
+                },
+                sex_pdx::restricted_helper_provider::Effect::Install(_)|sex_pdx::restricted_helper_provider::Effect::Expire(_)=>true,
+            });
+            restricted::publish(&restriction);
+            if !sound::busy()&&!restriction.pending() { break paging_probe::next_message(); }
             // Feed the card first, so a steady inbox can't starve playback.
             sound::pump();
             if let Some(m) = paging_probe::try_next_message() { break m; }
-            if sound::busy() { let _ = sex_pdx::sys_wait_self_ticks(1); }
+            if sound::busy()||restriction.pending() { let _ = sex_pdx::sys_wait_self_ticks(1); }
         };
         paging_probe::check_retained();
+        if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:msg.caller_pd,task:msg.caller_task},opcode:msg.type_id,words:[msg.arg0,msg.arg1,msg.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}
+        if restricted::denied(msg.caller_pd){continue;}
+
         if let Some((n,acked))=app_custody.reborn(&mut sex_pdx::app_lifecycle::KernelAuthority,msg.type_id,msg.caller_pd as u64,[msg.arg0,msg.arg1,msg.arg2]){
             sex_pdx::serial_record!("[bell.app.reborn.ack] target={} task={} ok={}",n.target_pd,n.task_id,acked as u8);continue;
         }

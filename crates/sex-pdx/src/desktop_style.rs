@@ -124,6 +124,8 @@ pub mod chrome {
     pub const INNER_GAP: u32 = 6;
     pub const FLOAT_RADIUS: u32 = 12;
     pub const TILE_RADIUS: u32 = 10;
+    /// Title bar buttons, left to right: close, minimise, maximise, float.
+    pub const CONTROLS: u32 = 4;
 
     pub const fn clamp_scale(scale: u32) -> u32 {
         if scale < 1 { 1 } else if scale > MAX_SCALE { MAX_SCALE } else { scale }
@@ -183,13 +185,17 @@ pub mod chrome {
             Rect { x, y, w:width.saturating_sub(side.saturating_mul(2)),
                 h:height.saturating_sub(top.saturating_add(side)) }
         }
-        /// Close/minimize/zoom have equal disjoint targets. Callers must
+        /// Close/minimize/zoom/float have equal disjoint targets. Callers must
         /// intersect with the actual frame before accepting a hit.
         pub const fn control(self, index: u32) -> Option<Rect> {
-            if index>=3 {return None;}
+            if index>=CONTROLS {return None;}
             Some(Rect { x:self.px(1+index*TARGET), y:self.px(1),
                 w:self.px(TARGET), h:self.px(TARGET) })
         }
+        /// The tab strip starts one logical pixel right of the last control.
+        pub const fn controls_end(self) -> u32 { self.px(2+CONTROLS*TARGET) }
+        /// The window title starts after the controls.
+        pub const fn title_x(self) -> u32 { self.px(13+CONTROLS*TARGET) }
     }
 }
 
