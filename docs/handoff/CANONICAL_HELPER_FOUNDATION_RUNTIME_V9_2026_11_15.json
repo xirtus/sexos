@@ -1,0 +1,40 @@
+{
+  "scope": "Canonical normal 60-second boot plus generated helper consumption evidence; no final Moan GUI, plugin runtime on this new image, hostile role or live-insert qualification.",
+  "production_revision": "2cbdadf53680a8cb56095c78665203c063f951fe",
+  "directory": "/Users/xmacbookm5/Projects/sexos-plan/target/plugin-foundation-normal-2cbd-v9",
+  "frozen_directory": "/Users/xmacbookm5/Projects/sexos-plan/target/plugin-foundation-normal-2cbd-v9/frozen",
+  "production_files": 1949,
+  "source_binding_sha256": "82c09fe2eca0ae7b1db5fa16a40fdaf3f9bb153dbb96bed54a712f18fadd6520",
+  "iso_sha256": "93d3bef41ec9608d067a20357c2e0740e9c5785798449ab16f46734ba2f631ad",
+  "kernel_sha256": "a743f9571d5c675533f20f42792e452b248eda2cd919f138325f1bba045a5698",
+  "consumed_build_inputs": {
+    "build_sexfiles": {
+      "artifact": {
+        "bytes": 1507056,
+        "sha256": "c6f62bc03f2421416fba2dfa6de6cfa82111cf0973e0c53bf557fae9ce121209"
+      },
+      "complete": true,
+      "inputs": {
+        "iso_root/programs/moanplug": {
+          "bytes": 96704,
+          "sha256": "42888a6eee5ddbac7c535e1906b47a56ddfcce4514188d693529646f7236ed9f"
+        }
+      },
+      "manifest": "servers/sexfiles/Cargo.toml",
+      "output": "iso_root/servers/sexfiles",
+      "stage": "build_sexfiles"
+    }
+  },
+  "artifacts": {
+    "provenance.json": "d9b09637bc5ffcffd7de884f2d2d810f1492c98167851ad79acb846c6d97317d",
+    "report.md": "f459400a80830720b617ace04925ebc68064b17bbc71fc849ed255cf9f27facc",
+    "serial.log": "8549376005f150940dd11628261733fb93299c7f87dbcab262f852bdc6438b84",
+    "qemu-command.txt": "9b5c9494af6331f3ad385b489fc4135f0ff129db960e3b94703963165d79e7fb",
+    "build-sources.before.json": "e51f18f55f40d9d8f96b73f0caac3953a50e313476d355717c654f6316721182",
+    "build-sources.after.json": "e51f18f55f40d9d8f96b73f0caac3953a50e313476d355717c654f6316721182",
+    "build-consumed-inputs.json": "81d8971d65a6634ddb2298b7ce9bcfdc41afd9f440f9bbe077c03efe54d5bf9c"
+  },
+  "result": "GREEN_MASTER",
+  "probe_seconds": 60,
+  "review": "All frozen source and generated artifact digests independently checked; before/after manifests identical. Source remains ba8 kernel plus approved logging patch; no newer Drag/Denim kernel imports."
+}

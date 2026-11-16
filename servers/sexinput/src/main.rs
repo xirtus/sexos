@@ -343,13 +343,13 @@ impl KeyboardOutbox {
             let edge=self.edges[self.head];*budget-=1;
             match send(edge.code as u64|(edge.keypad as u64)<<8,edge.down as u64,EV_KEY) {
                 Ok(true)=>{
-                    sex_pdx::serial_record!("[sexinput.key.send] code={} down={} mod={} source={} dst=6 ok=1 err=0",edge.code,edge.down,edge.modifiers,edge.source);
+                    sex_pdx::serial_input_record!(("[sexinput.key.send] source={} dst=6 ok=1 err=0 payload=redacted", edge.source); ("[sexinput.key.send] code={} down={} mod={} source={} dst=6 ok=1 err=0",edge.code,edge.down,edge.modifiers,edge.source));
                     if edge.source==1 {
-                        if edge.down==1 {sex_pdx::serial_record!("[input.keyboard.keydown.ok] code={} source=ps2",edge.code);}
-                        else {sex_pdx::serial_record!("[input.keyboard.keyup.ok] code={} source=ps2",edge.code);}
+                        if edge.down==1 {sex_pdx::serial_input_record!(("[input.keyboard.keydown.ok] source=ps2 payload=redacted"); ("[input.keyboard.keydown.ok] code={} source=ps2",edge.code));}
+                        else {sex_pdx::serial_input_record!(("[input.keyboard.keyup.ok] source=ps2 payload=redacted"); ("[input.keyboard.keyup.ok] code={} source=ps2",edge.code));}
                     }else{
-                        if edge.down==1 {sex_pdx::serial_record!("[input.keyboard.keydown.ok] code={} source=usb",edge.code);}
-                        else {sex_pdx::serial_record!("[input.keyboard.keyup.ok] code={} source=usb",edge.code);}
+                        if edge.down==1 {sex_pdx::serial_input_record!(("[input.keyboard.keydown.ok] source=usb payload=redacted"); ("[input.keyboard.keydown.ok] code={} source=usb",edge.code));}
+                        else {sex_pdx::serial_input_record!(("[input.keyboard.keyup.ok] source=usb payload=redacted"); ("[input.keyboard.keyup.ok] code={} source=usb",edge.code));}
                     }
                     self.edges[self.head]=KeyEdge::empty();self.orders[self.head]=0;self.head=(self.head+1)%self.edges.len();self.len-=1;
                 }
@@ -518,6 +518,7 @@ fn hid_to_ps2(hid: u8) -> Option<u8> {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexinput.init.start]");
+    sex_pdx::serial_record!("[input.payload.mode] component=sexinput mode={}",sex_pdx::input_diagnostics::mode());
     sex_rt::heap_init();
     serial_println!("[sexinput] Normalizer Starting...");
     // USB_HID_POINTER_PRODUCER_V1 contract: 0x260 raw path expects abs coords
@@ -883,7 +884,7 @@ pub extern "C" fn _start() -> ! {
                     let rem = &mut KBD_RECV_BUDGET;
                     if *rem > 0 {
                         *rem -= 1;
-                        serial_println!("[sexinput.kbd.recv] key=0x{:x} mod=0x{:x}", keycode, modifiers);
+                        sex_pdx::serial_input_record!(("[sexinput.kbd.recv] source=usb payload=redacted"); ("[sexinput.kbd.recv] key=0x{:x} mod=0x{:x}", keycode, modifiers));
                     }
                 }
                 // Dev-only keyboard cursor fallback (SEXOS_KEYBOARD_CURSOR=1).
@@ -904,7 +905,7 @@ pub extern "C" fn _start() -> ! {
                             let rem = &mut KBD_CURSOR_KEY_BUDGET_USB;
                             if *rem > 0 {
                                 *rem -= 1;
-                                serial_println!("[keyboard_cursor.key] code=0x{:x} dx={} dy={}", keycode, dx, dy);
+                                sex_pdx::serial_input_record!(("[keyboard_cursor.key] payload=redacted"); ("[keyboard_cursor.key] code=0x{:x} dx={} dy={}", keycode, dx, dy));
                             }
                         }
                         pdx_call(SLOT_SHELL, OP_HID_EVENT, dx as u64, dy as u64, EV_REL);
@@ -923,7 +924,7 @@ pub extern "C" fn _start() -> ! {
                     &mut *core::ptr::addr_of_mut!(LAST_USB_KEY),
                     &mut *core::ptr::addr_of_mut!(LAST_USB_MODIFIERS))};
                 if !retained {
-                    sex_pdx::serial_record!("[sexinput.key.rejected] source=usb key={} modifiers={} reason=outbox_full_or_sequence admitted=0",keycode,modifiers);
+                    sex_pdx::serial_input_record!(("[sexinput.key.rejected] source=usb admitted=0 payload=redacted"); ("[sexinput.key.rejected] source=usb key={} modifiers={} reason=outbox_full_or_sequence admitted=0",keycode,modifiers));
                 }
             }
             }
@@ -935,14 +936,14 @@ pub extern "C" fn _start() -> ! {
             // Kernel RawInput is type 0x201, arg0 = scancode
             if req.type_id == 0x201 {
                 let scancode = req.arg0;
-                sex_pdx::serial_record!("[sexinput.ps2.scancode] raw={:#x}", scancode);
+                sex_pdx::serial_input_record!(("[sexinput.ps2.scancode] payload=redacted"); ("[sexinput.ps2.scancode] raw={:#x}", scancode));
 
                 // 2. Normalize and forward to silk-shell (SLOT_SHELL = 6)
                 // Typed event via 0x202: arg0=code(break-bit stripped), arg1=1(press)/0(release), arg2=EV_KEY
                 let value = if scancode & 0x80 == 0 { 1 } else { 0 };
                 let code = (scancode & 0x7F) as u64;
                 if !input_arrival.ps2(&mut keyboard_outbox,scancode) {
-                    sex_pdx::serial_record!("[sexinput.key.rejected] source=ps2 raw={} reason=noncanonical_or_full admitted=0",scancode);
+                    sex_pdx::serial_input_record!(("[sexinput.key.rejected] source=ps2 admitted=0 payload=redacted"); ("[sexinput.key.rejected] source=ps2 raw={} reason=noncanonical_or_full admitted=0",scancode));
                 }
 
                 // 2b. Dev-only keyboard cursor fallback (SEXOS_KEYBOARD_CURSOR=1).
@@ -963,7 +964,7 @@ pub extern "C" fn _start() -> ! {
                             let rem = &mut KBD_CURSOR_KEY_BUDGET;
                             if *rem > 0 {
                                 *rem -= 1;
-                                serial_println!("[keyboard_cursor.key] code=0x{:x} dx={} dy={}", code, dx, dy);
+                                sex_pdx::serial_input_record!(("[keyboard_cursor.key] payload=redacted"); ("[keyboard_cursor.key] code=0x{:x} dx={} dy={}", code, dx, dy));
                             }
                         }
                         pdx_call(SLOT_SHELL, OP_HID_EVENT, dx as u64, dy as u64, EV_REL);

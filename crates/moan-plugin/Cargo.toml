@@ -1,0 +1,16 @@
+[package]
+name = "moan-plugin"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+[features]
+default = []
+sexos = ["dep:sex-app", "dep:sex-pdx", "dep:sex-libc"]
+[dependencies]
+vst3 = { path = "../../vendor/vst3-0.3.0" }
+clap-sys = { path = "../../vendor/clap-sys-0.5.0" }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
+[target.'cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "hermit")))'.dependencies]
+sex-libc = { path = "../sex-libc", optional = true }
+sex-app = { path = "../sex-app", optional = true }
+sex-pdx = { path = "../sex-pdx", optional = true }

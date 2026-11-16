@@ -1,0 +1,37 @@
+[package]
+name = "leather-samples"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Copyable Leather SDK applications on Weft"
+
+[features]
+default = ["sexos"]
+sexos = ["weft/sexos", "dep:sex-app", "dep:sex-pdx", "dep:sex-image"]
+
+[dependencies]
+weft = { path = "../../crates/weft" }
+sex-app = { path = "../../crates/sex-app", optional = true }
+sex-pdx = { path = "../../crates/sex-pdx", optional = true }
+sex-image = { path = "../../crates/sex-image", optional = true }
+
+[[bin]]
+name = "leather-hello"
+path = "src/bin/hello.rs"
+required-features = ["sexos"]
+test = false
+[[bin]]
+name = "leather-stitch"
+path = "src/bin/stitch.rs"
+required-features = ["sexos"]
+test = false
+[[bin]]
+name = "leather-lantern"
+path = "src/bin/lantern.rs"
+required-features = ["sexos"]
+test = false
+[[bin]]
+name = "leather-postcard"
+path = "src/bin/postcard.rs"
+required-features = ["sexos"]
+test = false

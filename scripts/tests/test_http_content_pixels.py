@@ -3,30 +3,46 @@ import sys,unittest,hashlib
 from unittest.mock import patch
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from http_content_gate import BODY,load_pixel_contract,http_status_geometry,verify_http_pixels
-from check_desktop_pixels import glyph
+from http_content_gate import BODY,load_pixel_contract,http_status_geometry,verify_http_pixels,check_text_cell
+from check_desktop_pixels import glyph,draw_cell,cell_coverage
 ROOT=Path(__file__).resolve().parents[2]
 
 class HttpPixels(unittest.TestCase):
  @classmethod
  def setUpClass(cls):cls.contract=load_pixel_contract(ROOT)
- def trace(self,length=105,w=640,h=640):
-  return f'[shell.tile.apply] sid=300 x=600 y=100 w={w} h={h}\n[browser.preview.layout] bytes={length} newline=1 cached_or_sample=1\n[browser.net.job.view] state=Verified web=0\n'
+ def trace(self,length=105,w=640,h=640,x=600,y=100):
+  return f'[shell.tile.apply] sid=300 x={x} y={y} w={w} h={h}\n[browser.preview.layout] bytes={length} newline=1 cached_or_sample=1\n[browser.net.job.view] state=Verified web=0\n'
  def framebuffer(self,text,view='Ready',body=BODY,shift=0):
-  g=http_status_geometry(text,view,body,self.contract);pixels=bytearray(1280*800*3)
+  g=http_status_geometry(text,view,body,self.contract);pixels=bytearray(self.contract['background'].to_bytes(3,'big')*(1280*800))
   for row in g['rows']:
    for column,char in enumerate(row['text']):
-    for gy,bits in enumerate(glyph(self.contract['font'],char)):
-     for gx in range(5):
-      if not bits&(1<<(4-gx)):continue
-      for dy in range(g['scale']):
-       for dx in range(g['scale']):
-        x=row['x']+(column*self.contract['advance']+gx)*g['scale']+dx;y=row['y']+gy*g['scale']+dy+shift;pixels[(y*1280+x)*3:(y*1280+x)*3+3]=self.contract['color'].to_bytes(3,'big')
+    draw_cell(pixels,1280,row['x']+column*self.contract['advance']*g['scale'],row['y']+shift,char,g['scale'],self.contract['color'].to_bytes(3,'big'),self.contract['font'])
   return b'P6\n1280 800\n255\n'+pixels
  def test_shared_codec_and_facade_are_both_in_the_pixel_source_closure(self):
-  for name in ('crates/sex-http/src/codec.rs','crates/sex-http/src/lib.rs','crates/sex-http/Cargo.toml','apps/kaleidoscope/src/http_wire.rs','crates/sex-net-config/src/lib.rs','crates/sex-pdx/src/text_encoding.rs'):
+  for name in ('crates/sex-http/src/codec.rs','crates/sex-http/src/lib.rs','crates/sex-http/Cargo.toml','apps/kaleidoscope/src/http_wire.rs','crates/sex-net-config/src/lib.rs','crates/sex-pdx/src/text_encoding.rs','scripts/native_text_metrics.py'):
    self.assertEqual(self.contract['source_sha256'][name],hashlib.sha256((ROOT/name).read_bytes()).hexdigest())
   self.assertEqual(self.contract['wire_max_body'],12288);self.assertEqual(self.contract['wire_max_headers'],1024)
+ def test_shared_renderer_origin_is_34_and_old_36_pixel_origin_fails(self):
+  self.assertEqual((self.contract['title'],self.contract['inset'],self.contract['top']),(26,8,34))
+  text=self.trace();geometry=http_status_geometry(text,'Ready',BODY,self.contract)
+  for row in geometry['rows']:self.assertEqual(row['y'],100+34+row['row']*9*geometry['scale'])
+  self.assertTrue(verify_http_pixels(text,self.framebuffer(text),'Ready',BODY,self.contract)['ok'])
+  self.assertFalse(verify_http_pixels(text,self.framebuffer(text,shift=2),'Ready',BODY,self.contract)['ok'])
+ def test_all_antialias_pixels_and_zero_coverage_padding_are_exact_at_both_scales(self):
+  color=self.contract['color'].to_bytes(3,'big');background=self.contract['background'].to_bytes(3,'big')
+  for scale in (1,2):
+   coverage=cell_coverage(self.contract['font'],'Q',scale);width=6*scale
+   raw=bytearray(channel for alpha in coverage for channel in ((fg*alpha+bg*(255-alpha))//255 for fg,bg in zip(color,background)))
+   self.assertEqual(check_text_cell(raw,width,0,0,'Q',scale,self.contract)[2],0)
+   for index in (next(i for i,a in enumerate(coverage)if 0<a<255),next(i for i,a in enumerate(coverage)if a==0)):
+    bad=raw.copy();bad[index*3]=(bad[index*3]+1)%256
+    self.assertEqual(check_text_cell(bad,width,0,0,'Q',scale,self.contract)[2],1)
+ def test_archived_rom_profile_remains_explicit_and_unknown_profiles_fail(self):
+  contract=dict(self.contract);contract.pop('text_raster');color=contract['color'].to_bytes(3,'big');bits=glyph(contract['font'],'Q')
+  raw=bytearray(channel for y in range(9)for x in range(6)for channel in (color if y<7 and x<5 and bits[y]&(1<<(4-x))else b'\0\0\0'))
+  self.assertEqual(check_text_cell(raw,6,0,0,'Q',1,contract)[2],0)
+  contract['text_raster']='unknown'
+  with self.assertRaisesRegex(ValueError,'unknown frozen'):check_text_cell(raw,6,0,0,'Q',1,contract)
  def test_actual_utf8_reader_body_and_footer_contracts_cannot_silently_drift(self):
   self.assertEqual(self.contract['reader_encoding'],'utf-8-scalars');self.assertEqual(self.contract['reader_replacement'],0xfffd)
   actual=Path.read_text
@@ -56,6 +72,14 @@ class HttpPixels(unittest.TestCase):
   for view in ('Ready','Unavailable','Cancelled','Uncertain'):
    with self.subTest(view=view):
     text=self.trace();result=verify_http_pixels(text,self.framebuffer(text,view),view,BODY,self.contract);self.assertTrue(result['ok'],result)
+ def test_maximized_status_at_actual_bar28_and_above_bar_rejection(self):
+  self.assertEqual(self.contract['bar'],28)
+  text=self.trace(w=1280,h=772,x=0,y=28);image=self.framebuffer(text)
+  self.assertTrue(verify_http_pixels(text,image,'Ready',BODY,self.contract)['ok'])
+  bad=verify_http_pixels(text.replace('y=28','y=27'),image,'Ready',BODY,self.contract)
+  self.assertFalse(bad['ok']);self.assertIn('outside framebuffer',' '.join(bad['errors']))
+  archived=dict(self.contract);archived.pop('bar')
+  self.assertFalse(verify_http_pixels(text,image,'Ready',BODY,archived)['ok'])
  def test_ready_prefix_without_full_body_cannot_pass(self):
   text=self.trace();self.assertFalse(verify_http_pixels(text,self.framebuffer(text,body=BODY[:-1]),'Ready',BODY,self.contract)['ok'])
  def test_previous_ready_body_must_be_erased_for_failure_or_cancel(self):

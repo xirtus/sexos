@@ -1,0 +1,68 @@
+{
+  "production_cohort": {
+    "production_git_revision": "c327f9ec64dfc65dab12f06c6a65c8fc1475f318",
+    "iso_sha256": "73b662002041b1acf8ec42249d1fd8e7220bdba96500257f02cdbcf82da02afc",
+    "binding_sha256": "7c2a67f74f738dc14cdf4ad82b19a2cf4a2d06f6bc92b4fda8a3f65f70f590ed",
+    "shell_sha256": "fcd4f73d6228a4adeb0e197e1e4537a0b3eb92e1ab10eb5d37417cf1ffb44294",
+    "normal_image": true,
+    "sealed_green_build": true,
+    "source_files": 1848,
+    "scope": "New ba8 normal cohort with exact-child exit-subject correction; no later master/Denim kernel imported. App runtime probes pending."
+  },
+  "sealed_binding": {
+    "path": "/Users/xmacbookm5/Projects/sexos-plan/target/exit-identity-proof-c327f9ec-v6/frozen/source-binding.json",
+    "bytes": 676208,
+    "sha256": "7c2a67f74f738dc14cdf4ad82b19a2cf4a2d06f6bc92b4fda8a3f65f70f590ed"
+  },
+  "plugin_build_source_commit": "924844ee15ac5e8eac9265b797b198e204ad5560",
+  "plugin_input_binding": {
+    "path": "/Users/xmacbookm5/Projects/sexos-moan-plugin-host/target/plugin-proof-c327-v6/inputs.json",
+    "bytes": 802,
+    "sha256": "1de29c9b543071533b59f5100760c1068d4d11e8c1156631eb4de29e03638dd2"
+  },
+  "plugin_result": {
+    "path": "/Users/xmacbookm5/Projects/sexos-moan-plugin-host/target/plugin-proof-c327-v6/result.json",
+    "bytes": 2447,
+    "sha256": "3349dbfefdaa03446fc6a2e8963d82dc41b90bce91779c2584053260a26b29b9"
+  },
+  "plugin_serial": {
+    "path": "/Users/xmacbookm5/Projects/sexos-moan-plugin-host/target/plugin-proof-c327-v6/moan-plugins-serial.log",
+    "bytes": 648479,
+    "sha256": "b566f32594e510dd3bc4dcb8d2aafbfd62edf2e6b478cef60ad854338b137500"
+  },
+  "plugin_runtime_summary": {
+    "ok": true,
+    "scope": "offline CLAP/VST3 helper crash containment; no hostile-plugin or ordinary OS binary compatibility claim",
+    "processed_runs": 4,
+    "crash_recovered": true,
+    "timeout_recovered": true,
+    "parent": 42,
+    "task": 42
+  },
+  "raw_artifacts_independently_verified": 22,
+  "preserved_programs": {
+    "moanrack": {
+      "path": "/Users/xmacbookm5/Projects/sexos-moan-plugin-host/target/plugin-proof-c327-v6/programs/moanrack",
+      "bytes": 2149976,
+      "sha256": "23d75e985c3e798b5bbc12f1de0a3c029b58db31996c3892b363b26e53c01208"
+    },
+    "moanplug": {
+      "path": "/Users/xmacbookm5/Projects/sexos-moan-plugin-host/target/plugin-proof-c327-v6/programs/moanplug",
+      "bytes": 95024,
+      "sha256": "2b350b3f5bba9708088e2fe3b96903889640a644e1e84323e902188ce7abdb34"
+    }
+  },
+  "exact_stale_task_exit": {
+    "host_production_predicate": "PASS valid / old-task-same-PD / wrong-PD / repeated-status",
+    "actual_queued_stale_exit_guest_injection": false,
+    "valid_new_shell_exit_runtime": true
+  },
+  "later_sdk_window_fix": {
+    "source_commit": "d66866fca",
+    "host_window_exit_privacy_tests": 12,
+    "host_autofill_tests": 17,
+    "scope": "Later SDK event-preservation fix is not assigned to these old helper binaries; fresh corrected-helper gate remains pending."
+  },
+  "normal_nine_app_proofs_carried": false,
+  "scope": "Actual canonical normal c327 image,60sGREENbuild and separate preserved helper payloads. Four processed jobs around crash/timeout/new-task reuse plus clean parent exit. Exact-child exit-source correction qualified for valid guest behavior; stale-exit rejection is a compiled production host negative. No hostile isolation, full Moan adapter, later master/Denim or full alpha claim."
+}

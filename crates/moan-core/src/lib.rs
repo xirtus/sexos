@@ -5,13 +5,35 @@
 //! No allocation in render: the caller supplies a block and the playhead.
 #![no_std]
 extern crate alloc;
-use alloc::vec::Vec;
+pub mod effects;
+pub mod midi;
+use alloc::{sync::Arc, vec::Vec};
+#[derive(Clone, Debug)]
+enum Source<'a> {
+    Borrowed(&'a [Frame]),
+    Owned(Arc<[Frame]>),
+    Buffer(Arc<Vec<Frame>>),
+    Midi {
+        pattern: Arc<midi::Pattern>,
+        pcm: Arc<Vec<Frame>>,
+    },
+}
+impl Source<'_> {
+    fn frames(&self) -> &[Frame] {
+        match self {
+            Self::Borrowed(v) => v,
+            Self::Owned(v) => v,
+            Self::Buffer(v) => v,
+            Self::Midi { pcm, .. } => pcm,
+        }
+    }
+}
 pub const RATE: u32 = 48_000;
 pub type Frame = [i16; 2];
 
 #[derive(Clone, Debug)]
 pub struct Clip<'a> {
-    source: &'a [Frame],
+    source: Source<'a>,
     offset: usize,
     len: usize,
     start: usize,
@@ -29,7 +51,7 @@ impl<'a> Clip<'a> {
     pub fn new(source: &'a [Frame], start: usize) -> Result<Self, Error> {
         start.checked_add(source.len()).ok_or(Error::Range)?;
         Ok(Self {
-            source,
+            source: Source::Borrowed(source),
             offset: 0,
             len: source.len(),
             start,
@@ -37,6 +59,92 @@ impl<'a> Clip<'a> {
             fade_in: 0,
             fade_out: 0,
         })
+    }
+    /// Shared immutable owned PCM for editable projects without self-references.
+    pub fn owned(source: Arc<[Frame]>, start: usize) -> Result<Clip<'static>, Error> {
+        start.checked_add(source.len()).ok_or(Error::Range)?;
+        Ok(Clip {
+            len: source.len(),
+            source: Source::Owned(source),
+            offset: 0,
+            start,
+            gain: 100,
+            fade_in: 0,
+            fade_out: 0,
+        })
+    }
+    /// Keep a completed recording/render buffer without copying its PCM into a
+    /// second large allocation. Undo snapshots share this immutable allocation.
+    pub fn buffer(source: Arc<Vec<Frame>>, start: usize) -> Result<Clip<'static>, Error> {
+        start.checked_add(source.len()).ok_or(Error::Range)?;
+        Ok(Clip {
+            len: source.len(),
+            source: Source::Buffer(source),
+            offset: 0,
+            start,
+            gain: 100,
+            fade_in: 0,
+            fade_out: 0,
+        })
+    }
+    /// Editable MIDI source with an immutable audio cache, built outside render.
+    pub fn midi(pattern: midi::Pattern, start: usize) -> Result<Clip<'static>, midi::Error> {
+        let pcm = pattern.bake()?;
+        start.checked_add(pcm.len()).ok_or(midi::Error::Range)?;
+        Ok(Clip {
+            len: pcm.len(),
+            source: Source::Midi {
+                pattern: Arc::new(pattern),
+                pcm,
+            },
+            offset: 0,
+            start,
+            gain: 100,
+            fade_in: 0,
+            fade_out: 0,
+        })
+    }
+    pub fn midi_pattern(&self) -> Option<&midi::Pattern> {
+        match &self.source {
+            Source::Midi { pattern, .. } => Some(pattern),
+            _ => None,
+        }
+    }
+    /// Share a rebaked source while retaining every clip's trim, position and fades.
+    pub fn replace_midi_source(&mut self, source: &Clip<'_>) -> Result<(), midi::Error> {
+        if self.midi_pattern().is_none()
+            || source.midi_pattern().is_none()
+            || self.source_frames().len() != source.source_frames().len()
+        {
+            return Err(midi::Error::Range);
+        }
+        if let Source::Midi { pattern, pcm } = &source.source {
+            self.source = Source::Midi {
+                pattern: pattern.clone(),
+                pcm: pcm.clone(),
+            };
+            Ok(())
+        } else {
+            Err(midi::Error::Range)
+        }
+    }
+    /// Immutable source view, shared by project clips; never mutable audio.
+    pub fn source_frames(&self) -> &[Frame] {
+        self.source.frames()
+    }
+    pub fn source_offset(&self) -> usize {
+        self.offset
+    }
+    pub fn fades(&self) -> (usize, usize) {
+        (self.fade_in, self.fade_out)
+    }
+    pub fn gain(&self) -> u16 {
+        self.gain
+    }
+    pub fn move_to(&mut self, start: usize) -> Result<(), Error> {
+        start.checked_add(self.len).ok_or(Error::Range)?;
+        self.start = start;
+        Ok(())
     }
     pub fn start(&self) -> usize {
         self.start
@@ -115,11 +223,14 @@ impl<'a> Clip<'a> {
                 scale = scale * envelope / 65536;
             }
         }
-        self.source[self.offset + i].map(|v| v as i64 * scale / 65536)
+        self.source.frames()[self.offset + i].map(|v| v as i64 * scale / 65536)
     }
 }
 
+#[derive(Clone)]
 pub struct Track<'a> {
+    pub effects: effects::Rack,
+    processed_until: Option<usize>,
     pub clips: Vec<Clip<'a>>,
     volume: u16,
     pan: i16,
@@ -130,6 +241,8 @@ impl Default for Track<'_> {
     fn default() -> Self {
         Self {
             clips: Vec::new(),
+            effects: effects::Rack::default(),
+            processed_until: None,
             volume: 100,
             pan: 0,
             muted: false,
@@ -140,6 +253,17 @@ impl Default for Track<'_> {
 impl<'a> Track<'a> {
     pub fn new() -> Self {
         Self::default()
+    }
+    /// Flush tails after edits, changing projects, or restarting transport.
+    pub fn reset_effects(&mut self) {
+        self.effects.reset();
+        self.processed_until = None;
+    }
+    pub fn volume(&self) -> u16 {
+        self.volume
+    }
+    pub fn pan(&self) -> i16 {
+        self.pan
     }
     pub fn set_volume(&mut self, percent: u16) -> Result<(), Error> {
         if percent > 400 {
@@ -159,7 +283,7 @@ impl<'a> Track<'a> {
     }
 }
 
-/// Render an arbitrary block, including silence, with one final saturating PCM
+/// Render a dry block (effects bypassed), including silence, with one final saturating PCM
 /// conversion after all clips/tracks are summed. Splitting blocks does not change
 /// samples. Positions beyond usize's timeline limit render silence.
 pub fn render(tracks: &[Track<'_>], start: usize, out: &mut [Frame]) {
@@ -191,5 +315,84 @@ pub fn render(tracks: &[Track<'_>], start: usize, out: &mut [Frame]) {
             }
         }
         *dest = mix.map(|v| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16);
+    }
+}
+
+/// Stateful per-track effects, before volume/balance and final summing. Sequential
+/// blocks preserve tails; a discontinuous start resets all filter/delay state.
+/// Muted/non-solo tracks still advance their DSP but do not enter the output.
+/// Pausing means making no calls. Empty blocks do not alter DSP or position.
+/// This processes indefinitely beyond clip ends so reverberation can decay.
+pub fn render_processed(tracks: &mut [Track<'_>], start: usize, out: &mut [Frame]) {
+    render_processed_observed(tracks, start, out, |_, _| {});
+}
+/// Tap the actual post-effects/post-fader track samples once, without a second DSP
+/// pass or allocation. The caller may feed a preallocated meter; muted tracks tap silence.
+pub fn render_processed_observed(
+    tracks: &mut [Track<'_>],
+    start: usize,
+    out: &mut [Frame],
+    sample: impl FnMut(usize, Frame),
+) {
+    render_processed_observed_master(tracks, start, out, 100, sample);
+}
+/// Scale the wide accumulated bus before its single final i16 saturation.
+/// Unity preserves the existing renderer and track tap semantics exactly.
+pub fn render_processed_observed_master(
+    tracks: &mut [Track<'_>],
+    start: usize,
+    out: &mut [Frame],
+    master_percent: u16,
+    mut sample: impl FnMut(usize, Frame),
+) {
+    if out.is_empty() {
+        return;
+    }
+    let solo = tracks.iter().any(|t| t.solo && !t.muted);
+    for t in tracks.iter_mut() {
+        if t.processed_until != Some(start) {
+            t.effects.reset();
+        }
+    }
+    for (i, dest) in out.iter_mut().enumerate() {
+        *dest = [0; 2];
+        let Some(at) = start.checked_add(i) else {
+            continue;
+        };
+        let mut mix = [0i64; 2];
+        for (index, t) in tracks.iter_mut().enumerate() {
+            let mut sum = [0i64; 2];
+            for clip in &t.clips {
+                let f = clip.sample(at);
+                for c in 0..2 {
+                    sum[c] = sum[c].saturating_add(f[c]);
+                }
+            }
+            let f = t.effects.frame(sum);
+            if t.muted || (solo && !t.solo) {
+                sample(index, [0; 2]);
+                continue;
+            }
+            let balance = [100 - t.pan.max(0) as i64, 100 + t.pan.min(0) as i64];
+            let mut post = [0i64; 2];
+            for c in 0..2 {
+                post[c] = f[c]
+                    .saturating_mul(t.volume as i64)
+                    .saturating_mul(balance[c])
+                    / 10000;
+                mix[c] = mix[c].saturating_add(post[c]);
+            }
+            sample(
+                index,
+                post.map(|v| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16),
+            );
+        }
+        *dest = mix.map(|v| {
+            (v.saturating_mul(master_percent as i64) / 100).clamp(i16::MIN as i64, i16::MAX as i64)
+                as i16
+        });
+    }
+    for t in tracks {
+        t.processed_until = start.checked_add(out.len());
     }
 }

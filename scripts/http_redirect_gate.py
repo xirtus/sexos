@@ -4,6 +4,7 @@
 Loopback sockets are explicit peer fixtures. Every guest request, endpoint,
 redirect framing byte, fresh DNS generation and cleanup barrier is checked.
 """
+from input_payload_profile import require_payload_proof
 import argparse,hashlib,json,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
 from desktop_close_gate import QMP
@@ -170,6 +171,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret');actions.append(dict(action='actual_compact_boot_menu'))
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[linen.disk.publish.done\]');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus();start=len(text());q.key('h')
   if a.mode in('cancel-retry','close'):
    wait(r'\[browser.http.redirect.released\] ticket=2 status=302 path=/guide positive_release=1 document_bytes=0',start)

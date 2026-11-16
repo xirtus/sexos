@@ -1,0 +1,390 @@
+{
+  "scope": "Final colored Moan ELF semantic legacy regression plus separately qualified absolute metadata fence and full nonunity-v3 cold playback/export. Development app/private disks over preserved v9 normal ISO; no canonical image, installer, physical microphone/latency or restricted-plugin-role claim.",
+  "app_elf_sha256": "a2f6a58ae424d683ac620a00e5fba8f4ee813bfc86f1bd8b3329a30089f48a0b",
+  "iso_sha256": "93d3bef41ec9608d067a20357c2e0740e9c5785798449ab16f46734ba2f631ad",
+  "cases": {
+    "legacy_semantics": {
+      "directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/final-legacy-palette-v2",
+      "source_commit": "0e0d0c6b7cad72d53f46ed10c9c72c275f4a9138",
+      "inputs_sha256": "fd1b1b2023d647f6f14472d17bbe2bde19925314f601d8a05c7eaebb84a20d36",
+      "result_sha256": "d69f548a7c66f407cad9fb05d9253564de88aec0f24eea590753bcd520213e19",
+      "result": {
+        "ok": true,
+        "inputs_sha256": "fd1b1b2023d647f6f14472d17bbe2bde19925314f601d8a05c7eaebb84a20d36",
+        "gates": {
+          "app": {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "/Users/xmacbookm5/Projects/sexos-moan-workstation/scripts/moan_app_gate.py",
+              "--iso",
+              "/Users/xmacbookm5/Projects/sexos-plan/target/plugin-foundation-normal-2cbd-v9/frozen/tested.iso",
+              "--source-disk",
+              "/Users/xmacbookm5/Projects/sexos-browser-playback/target/browser-evidence/seed.img",
+              "--out",
+              "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/final-legacy-palette-v2/app"
+            ],
+            "exit": 0,
+            "log_sha256": "c0fb8bad6da30546b423c19c45ce99aa266102e7f676ac8cf5ce821d40039fc7"
+          },
+          "project": {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "/Users/xmacbookm5/Projects/sexos-moan-workstation/scripts/moan_project_gate.py",
+              "--iso",
+              "/Users/xmacbookm5/Projects/sexos-plan/target/plugin-foundation-normal-2cbd-v9/frozen/tested.iso",
+              "--source-disk",
+              "/Users/xmacbookm5/Projects/sexos-browser-playback/target/browser-evidence/seed.img",
+              "--out",
+              "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/final-legacy-palette-v2/project"
+            ],
+            "exit": 0,
+            "log_sha256": "51fb76ae134454733d6b8bc692ab21f38a34b7cd933b8f11b1ed5e4ee78552fe"
+          },
+          "export": {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "/Users/xmacbookm5/Projects/sexos-moan-workstation/scripts/moan_export_gate.py",
+              "--iso",
+              "/Users/xmacbookm5/Projects/sexos-plan/target/plugin-foundation-normal-2cbd-v9/frozen/tested.iso",
+              "--source-disk",
+              "/Users/xmacbookm5/Projects/sexos-browser-playback/target/browser-evidence/seed.img",
+              "--out",
+              "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/final-legacy-palette-v2/export"
+            ],
+            "exit": 0,
+            "log_sha256": "478fd5c50cb9b2934876bed0e03a4ff8dcf399c59411ac04dbd9252a8b1a15ae"
+          },
+          "microphone": {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "/Users/xmacbookm5/Projects/sexos-moan-workstation/scripts/moan_app_gate.py",
+              "--iso",
+              "/Users/xmacbookm5/Projects/sexos-plan/target/plugin-foundation-normal-2cbd-v9/frozen/tested.iso",
+              "--source-disk",
+              "/Users/xmacbookm5/Projects/sexos-browser-playback/target/browser-evidence/seed.img",
+              "--out",
+              "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/final-legacy-palette-v2/microphone",
+              "--microphone"
+            ],
+            "exit": 0,
+            "log_sha256": "2421fb71e6468829b8ced6506802d58b6d9c70b6b0422a1625df9505aaaea4c3"
+          }
+        },
+        "scope": "Final palette ELF legacy regression; new app installed on private copied disks over preserved v9 normal ISO. Microphone is QEMU silence/consent lifecycle, not physical capture quality or latency."
+      },
+      "artifacts": {
+        "source-commit.txt": "02befaf66bc1519c7878213410d41482dac857675400d9a870da1c76c27bae1f",
+        "result.json": "d69f548a7c66f407cad9fb05d9253564de88aec0f24eea590753bcd520213e19",
+        "project.log": "51fb76ae134454733d6b8bc692ab21f38a34b7cd933b8f11b1ed5e4ee78552fe",
+        "runner-source.py": "bda2e333184177fb75a878c27f0123732129e5058836c70ba04e9089375eaa48",
+        "microphone.log": "2421fb71e6468829b8ced6506802d58b6d9c70b6b0422a1625df9505aaaea4c3",
+        "export.log": "478fd5c50cb9b2934876bed0e03a4ff8dcf399c59411ac04dbd9252a8b1a15ae",
+        "inputs.json": "fd1b1b2023d647f6f14472d17bbe2bde19925314f601d8a05c7eaebb84a20d36",
+        "progress.json": "1e28acf35889bfbc335b0a1b35840df367d7e28a33a850d5a8220a01fafe74b8",
+        "app.log": "c0fb8bad6da30546b423c19c45ce99aa266102e7f676ac8cf5ce821d40039fc7",
+        "microphone/moan-app-qemu.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "microphone/moan.ppm": "3397122ce5a478d496121bd4d37476e181164136954174543d76648797d6d83e",
+        "microphone/moan-app-serial.log": "dcf16cd6cf7525cc4518b97641687da0c12e030722c93d38fe088b5627d6a678",
+        "microphone/nvme.img": "8a3d8a125da1efc27d7a07d949f143a24d2def0ebe17633cf85b90bced60ac2f",
+        "app/moan-app-qemu.log": "d7700053b73ddc4e45e7bb5a7f8dd1112e01b3ac6e313cb1f6be818a4394d783",
+        "app/moan.ppm": "47c2944e8493f2e5fa76f06c5dc93ff37aebadb2a237e6c8b74cf01da5967837",
+        "app/moan-app-serial.log": "4260728af76a9ae3dbe1398e4b8d3c7e91eab6eccea3ce43dce950d66fa2f684",
+        "app/moan-app.wav": "6c3e7cef3f207a38fb9588f0cea72b488d1f947b1f5f0cb4ca25e08e0b5b0dac",
+        "app/nvme.img": "8f728a03d615fb0905e63c74787dff957d8bb678b6dcdc31ba1fbf30ef8a46a2",
+        "project/project-reopen-qemu.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "project/edited-waveform.ppm": "56b5b644be8c9a216c64973c151071f3e5049422fe78b6995a35f1625564ef73",
+        "project/project-save-serial.log": "2b23a633205816683240b4328340e83466da74fe1c55d60d5fe7e8967fcd2723",
+        "project/result.json": "7c6c9207c9e9bf1b94ebdbc982d99ed6cefe2f24fcaf5eccb0536e881d6ffed0",
+        "project/project-reopen-serial.log": "fab65abacf427308c70a0710882e6af7d5b4920fdd5647dab6a2dd03e33c9599",
+        "project/reopened-edit-undo.ppm": "31ef5bb045d715fecd5049482a73a2a6d84975805e6b757a4acc0d97cab52528",
+        "project/reopened-waveform.ppm": "e578ea90db40e2831ccd1206aff34251a1f10058139cfe1cc1e3c87e88e5f77c",
+        "project/project-save-qemu.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "project/nvme.img": "2299a92d612b57a624848154c2f389c206d7e0e6e3491baf80a8915996ac72c6",
+        "export/export.wav": "1937c53402ede53692125291dfdd597145f4b1a7d1ea2f6555f0376b56e48bfa",
+        "export/result.json": "8a13104f8743f37f9cbc7929b3498bf77c9465e22db1e03434ea8d8b853c4438",
+        "export/export.flac": "204c25ef7820fc2950122554263dca01df76a0b95824e975b24969a1e54d3bff",
+        "export/partial.wav": "6154da27f76a13480e20cb7eb051f95f10ca7fbee49287d76360aa4586c2d506",
+        "export/sexfs-extract": "48c9e43ac5f53fb33b1176c8f949d8efab62eabc817cbe57f9ce7f1442c5de43",
+        "export/after-export.ppm": "0f0518bfb6fdfbc210f9652eece59163f42b60227749f588fae18c1347977b70",
+        "export/export.mp3": "34ceb8c8461a409c260faee5fc4c3e8d3ef1c663b0e3d18f52102b19a5bdf6c4",
+        "export/moan-export-serial.log": "c55843d854cf5b7a7b2f6fa1ec4dd1957241c885e22d23d905e5898b2087db3c",
+        "export/moan-export-qemu.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "export/nvme.img": "fdf2e6d6ee586767ca92bfabab5eb7c5d8834378d5f7ab560513b0a0c1d30826"
+      },
+      "app_source_sha256": {
+        "apps/moan/Cargo.toml": "8c8ce802a0c1772e7cc876f283c551e55572c4320190b49b6927d6d6ce61ac21",
+        "apps/moan/build.rs": "88265209bfe235aa9729dd3958232523beba41d4c6323acdb9b0c163111f529e",
+        "apps/moan/tests/midi_project.rs": "d33c22cab47b0d7dc3707c0950b709f34536d515a94658eeaa4654f0b26600ff",
+        "apps/moan/tests/studio.rs": "7467feb85ded4381fafca91e8dfbac337de1292c05a5c2ebb3af5b06d0b72f3b",
+        "apps/moan/tests/plugins.rs": "a4048636db511f36f91b2aa5acb9887f2e1559bacf53399d0d7c31dcba1b9bba",
+        "apps/moan/tests/waveform.rs": "e49ffca7481330d8490da175db7ab6128c3ae860f5c661ed3705b518132b7a62",
+        "apps/moan/tests/mixer.rs": "eaf82292edadea47783d91e5ee8eea5e4a37789c02eb23949d1090b26a891dbc",
+        "apps/moan/tests/midi_memory.rs": "6bf210b193568e7eeb34cf722bac74f7261d8e68dd9fcb3813c8962552c90446",
+        "apps/moan/tests/projects.rs": "d92b8d737ccebf9dedc14a313d4b6bd06dfb4290aef33d7b59cef401d7e6e331",
+        "apps/moan/tests/plugin_pixels.rs": "9a8bddef62834d5fcf5f39c4754b63e2a802e8b5905a3d1ae9d28f0794afb2c6",
+        "apps/moan/tests/workstation.rs": "9862184249187045a1eced524856f1533c3c14710976528b203bdf75fc69ddfc",
+        "apps/moan/tests/meter_history.rs": "e567aaa70ae6e295237723516ca996c86511386c67b738cfd466002a6cb84e53",
+        "apps/moan/examples/preview.rs": "79fbddfa1fc46b8ec42ac0933906c0ade0eb63d96560256ccbd750006465bb4f",
+        "apps/moan/src/track_colors.rs": "dc40304c6c2fd29b502c565c483db501a538f93d0d6fdd840c6e456a9b4fee50",
+        "apps/moan/src/lib.rs": "709bdcc68ce6e21930d80efbc1c11b07a20baad4c3d0ae6ecc023261c57aef8a",
+        "apps/moan/src/plugins.rs": "6cbbd0f124d1c07be4ab169d796e1ee2d0061564fcd3153543fc4926034f16bf",
+        "apps/moan/src/waveform.rs": "41ed33c5127254d531355b4e639154fcee60c2855ed2e870f3a2a6987803455a",
+        "apps/moan/src/project.rs": "f79907fbbbba3f24f8aeab14ad7d2cad5833989f2f07619e4ca15c0be58050d1",
+        "apps/moan/src/piano.rs": "f2d913eda50f5b82d79cb47005e5ba5214566b7c5fbafc5d7e662cee0b6ab2f5",
+        "apps/moan/src/main.rs": "c75cbc4489d63e0794c7d634df12dd280fa5d4c7b6433bdb95f78e9a161dd971",
+        "apps/moan/src/project_io.rs": "18a44856222c23cf09001708209ace5cf8178cb04ae8d279207c1495e498ed46",
+        "apps/moan/src/plugin_pixels.rs": "d762770d54ed9c8069f86567b4ec3781784f674f8e7bd0494e1477aa04135bc7",
+        "apps/moan/src/step.rs": "568f540d44d74d54f5b24c6d783d11a36a3fa5aca00ce81e4d20544497bbab7d",
+        "apps/moan/src/meter_history.rs": "e2ce0f8e3a7ece6c91cfc081b835ba805e730307c88e2fc7d5a5165f998baf65",
+        "crates/moan-core/Cargo.toml": "a46856b45635a76bd8f316d7c1f1d40fb6a6f4642b488fcdf055df3e0d76bf2c",
+        "crates/moan-core/tests/midi.rs": "b6251208105e845a3531d04462a800f44997b56d1653563100cba639755c52c7",
+        "crates/moan-core/tests/timeline.rs": "e3b52db00bb0dd7b278f10c5a6e6307eb3522c79fc61825c2619d18605ce31b7",
+        "crates/moan-core/tests/effects.rs": "e4c85df8316d1cc0bd6e0c636d60707734a03d724e002ca4f6458f838f49d5aa",
+        "crates/moan-core/examples/effects_reference.rs": "6e0abd72a854a194d5702c7ab401ad9fac98b79feaddc93373a5e0e3343e0800",
+        "crates/moan-core/src/midi.rs": "b04b4b8db3eb976124620b5c4c072be2153d5c3c51dc00e0f8b98e03714d31aa",
+        "crates/moan-core/src/lib.rs": "e303114b6c9e46d283ded56ba617a97eb1e7ca22600fe44290865fb075843ebf",
+        "crates/moan-core/src/effects.rs": "e64e38e9739770c7bfad8261e7c9cefd1a965d891d17a5fda2e1cf8ea4affb62"
+      },
+      "project": {
+        "ok": true,
+        "bytes": 768228,
+        "hash": "0x26d79930fc61db10",
+        "tracks": 2,
+        "clips": 3,
+        "reboot_reopen": true,
+        "pointer_cut": true,
+        "edit_undo_baseline": true
+      },
+      "export": {
+        "ok": true,
+        "formats": {
+          "wav": {
+            "expected_bytes": 768044,
+            "expected_frames": 192000,
+            "codec": "pcm_s16le",
+            "decoded_frames": 192000,
+            "bytes": 768044,
+            "sha256": "1937c53402ede53692125291dfdd597145f4b1a7d1ea2f6555f0376b56e48bfa",
+            "decoded_sha256": "0cc03b924009e6f982b8de5daaf1228b20e93a0f1e36d04eaed96ddf01ba6cb3"
+          },
+          "flac": {
+            "expected_bytes": 74099,
+            "expected_frames": 192000,
+            "codec": "flac",
+            "decoded_frames": 192000,
+            "bytes": 74099,
+            "sha256": "204c25ef7820fc2950122554263dca01df76a0b95824e975b24969a1e54d3bff",
+            "decoded_sha256": "0cc03b924009e6f982b8de5daaf1228b20e93a0f1e36d04eaed96ddf01ba6cb3"
+          },
+          "mp3": {
+            "expected_bytes": 96788,
+            "expected_frames": 192000,
+            "codec": "mp3",
+            "decoded_frames": 191855,
+            "bytes": 96788,
+            "sha256": "34ceb8c8461a409c260faee5fc4c3e8d3ef1c663b0e3d18f52102b19a5bdf6c4",
+            "decoded_sha256": "aaa039229fd3e97911c92a0fd54d3a4471d32dd4bd2375712b0198b1fad48019"
+          }
+        },
+        "close_cancelled": true,
+        "partial_bytes": 24620
+      },
+      "fence_limit": "This first complete semantic pass preceded the checker absolute-offset correction; its independent audio/codec/reboot/cancel results remain real. The corrected fence is separately qualified below."
+    },
+    "absolute_fence_app": {
+      "directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/final-legacy-absolute-v1",
+      "source_commit": "5bcd554ba24dabf3ec54b92dad9a15de6103899f",
+      "inputs_sha256": "38f324ac5f6f23a9f35329c5479b34a8f2d90c7513469fbdea23edb4c81ffb4c",
+      "result_sha256": "aa5146e440a01a4a2c041534c11a27a9a4c17518b5ba398ab8cf481133f9fd53",
+      "result": {
+        "ok": true,
+        "inputs_sha256": "38f324ac5f6f23a9f35329c5479b34a8f2d90c7513469fbdea23edb4c81ffb4c",
+        "gates": {
+          "app": {
+            "command": [
+              "/opt/homebrew/opt/python@3.15/bin/python3.15",
+              "/Users/xmacbookm5/Projects/sexos-moan-workstation/scripts/moan_app_gate.py",
+              "--iso",
+              "/Users/xmacbookm5/Projects/sexos-plan/target/plugin-foundation-normal-2cbd-v9/frozen/tested.iso",
+              "--source-disk",
+              "/Users/xmacbookm5/Projects/sexos-browser-playback/target/browser-evidence/seed.img",
+              "--out",
+              "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/final-legacy-absolute-v1/app"
+            ],
+            "exit": 0,
+            "log_sha256": "c0fb8bad6da30546b423c19c45ce99aa266102e7f676ac8cf5ce821d40039fc7"
+          }
+        },
+        "scope": "Fresh actual app qualification of corrected absolute metadata fence. Earlier full four-gate semantic regression remains separately bound; no new project/export/microphone claim in this one app run."
+      },
+      "artifacts": {
+        "source-commit.txt": "8ec4125c1735c5928d33dbcd1ac544fa652d73d708e297ec67f849e161c7f2fe",
+        "result.json": "aa5146e440a01a4a2c041534c11a27a9a4c17518b5ba398ab8cf481133f9fd53",
+        "runner-source.py": "e519d7ce69a2f6a2b74bed3e1e234420815c82452c3ca7ecfdbd5701e67c1c9f",
+        "inputs.json": "38f324ac5f6f23a9f35329c5479b34a8f2d90c7513469fbdea23edb4c81ffb4c",
+        "progress.json": "cdfa89c3ca5545905e8584a513fd6d1d0188486c9fd6fc96dbc1af870c620ab5",
+        "app.log": "c0fb8bad6da30546b423c19c45ce99aa266102e7f676ac8cf5ce821d40039fc7",
+        "app/moan-app-qemu.log": "d7700053b73ddc4e45e7bb5a7f8dd1112e01b3ac6e313cb1f6be818a4394d783",
+        "app/moan.ppm": "6388042ab19fa879bb0a64736e73834086c71c8f26b79f686fa6b5cb8f0b5451",
+        "app/moan-app-serial.log": "8f9fde3dcce64c4682351a8dc3a1aeedf93a70a708ea5276bb06ecec24ffe1ab",
+        "app/moan-app.wav": "6c3e7cef3f207a38fb9588f0cea72b488d1f947b1f5f0cb4ca25e08e0b5b0dac",
+        "app/nvme.img": "747586938ece6c6c55a566b9dcf830a091d0891bc69ef37343543ccd612df047"
+      },
+      "app_source_sha256": {
+        "apps/moan/Cargo.toml": "8c8ce802a0c1772e7cc876f283c551e55572c4320190b49b6927d6d6ce61ac21",
+        "apps/moan/build.rs": "88265209bfe235aa9729dd3958232523beba41d4c6323acdb9b0c163111f529e",
+        "apps/moan/tests/midi_project.rs": "d33c22cab47b0d7dc3707c0950b709f34536d515a94658eeaa4654f0b26600ff",
+        "apps/moan/tests/studio.rs": "7467feb85ded4381fafca91e8dfbac337de1292c05a5c2ebb3af5b06d0b72f3b",
+        "apps/moan/tests/plugins.rs": "a4048636db511f36f91b2aa5acb9887f2e1559bacf53399d0d7c31dcba1b9bba",
+        "apps/moan/tests/waveform.rs": "e49ffca7481330d8490da175db7ab6128c3ae860f5c661ed3705b518132b7a62",
+        "apps/moan/tests/mixer.rs": "eaf82292edadea47783d91e5ee8eea5e4a37789c02eb23949d1090b26a891dbc",
+        "apps/moan/tests/midi_memory.rs": "6bf210b193568e7eeb34cf722bac74f7261d8e68dd9fcb3813c8962552c90446",
+        "apps/moan/tests/projects.rs": "d92b8d737ccebf9dedc14a313d4b6bd06dfb4290aef33d7b59cef401d7e6e331",
+        "apps/moan/tests/plugin_pixels.rs": "9a8bddef62834d5fcf5f39c4754b63e2a802e8b5905a3d1ae9d28f0794afb2c6",
+        "apps/moan/tests/workstation.rs": "9862184249187045a1eced524856f1533c3c14710976528b203bdf75fc69ddfc",
+        "apps/moan/tests/meter_history.rs": "e567aaa70ae6e295237723516ca996c86511386c67b738cfd466002a6cb84e53",
+        "apps/moan/examples/preview.rs": "79fbddfa1fc46b8ec42ac0933906c0ade0eb63d96560256ccbd750006465bb4f",
+        "apps/moan/src/track_colors.rs": "dc40304c6c2fd29b502c565c483db501a538f93d0d6fdd840c6e456a9b4fee50",
+        "apps/moan/src/lib.rs": "709bdcc68ce6e21930d80efbc1c11b07a20baad4c3d0ae6ecc023261c57aef8a",
+        "apps/moan/src/plugins.rs": "6cbbd0f124d1c07be4ab169d796e1ee2d0061564fcd3153543fc4926034f16bf",
+        "apps/moan/src/waveform.rs": "41ed33c5127254d531355b4e639154fcee60c2855ed2e870f3a2a6987803455a",
+        "apps/moan/src/project.rs": "f79907fbbbba3f24f8aeab14ad7d2cad5833989f2f07619e4ca15c0be58050d1",
+        "apps/moan/src/piano.rs": "f2d913eda50f5b82d79cb47005e5ba5214566b7c5fbafc5d7e662cee0b6ab2f5",
+        "apps/moan/src/main.rs": "c75cbc4489d63e0794c7d634df12dd280fa5d4c7b6433bdb95f78e9a161dd971",
+        "apps/moan/src/project_io.rs": "18a44856222c23cf09001708209ace5cf8178cb04ae8d279207c1495e498ed46",
+        "apps/moan/src/plugin_pixels.rs": "d762770d54ed9c8069f86567b4ec3781784f674f8e7bd0494e1477aa04135bc7",
+        "apps/moan/src/step.rs": "568f540d44d74d54f5b24c6d783d11a36a3fa5aca00ce81e4d20544497bbab7d",
+        "apps/moan/src/meter_history.rs": "e2ce0f8e3a7ece6c91cfc081b835ba805e730307c88e2fc7d5a5165f998baf65",
+        "crates/moan-core/Cargo.toml": "a46856b45635a76bd8f316d7c1f1d40fb6a6f4642b488fcdf055df3e0d76bf2c",
+        "crates/moan-core/tests/midi.rs": "b6251208105e845a3531d04462a800f44997b56d1653563100cba639755c52c7",
+        "crates/moan-core/tests/timeline.rs": "e3b52db00bb0dd7b278f10c5a6e6307eb3522c79fc61825c2619d18605ce31b7",
+        "crates/moan-core/tests/effects.rs": "e4c85df8316d1cc0bd6e0c636d60707734a03d724e002ca4f6458f838f49d5aa",
+        "crates/moan-core/examples/effects_reference.rs": "6e0abd72a854a194d5702c7ab401ad9fac98b79feaddc93373a5e0e3343e0800",
+        "crates/moan-core/src/midi.rs": "b04b4b8db3eb976124620b5c4c072be2153d5c3c51dc00e0f8b98e03714d31aa",
+        "crates/moan-core/src/lib.rs": "e303114b6c9e46d283ded56ba617a97eb1e7ca22600fe44290865fb075843ebf",
+        "crates/moan-core/src/effects.rs": "e64e38e9739770c7bfad8261e7c9cefd1a965d891d17a5fda2e1cf8ea4affb62"
+      }
+    },
+    "master_v3_cold": {
+      "directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/master-project-palette-v4",
+      "source_commit": "4734682c5458612ebd1d7317a744300405df166c",
+      "inputs_sha256": "b28e61d54f8da8c28b5597dbbcccdf048af500e3ea3cdefbb3547aea31f07343",
+      "result_sha256": "1b0c636a1e3a2365f9fbff04bd271dc9d6eb66f7b169efd74616014b6ba76fa0",
+      "result": {
+        "ok": true,
+        "scope": "Persist nonunity projectv3 then hear/export overloaded wide mix after cold boot.",
+        "inputs_sha256": "b28e61d54f8da8c28b5597dbbcccdf048af500e3ea3cdefbb3547aea31f07343",
+        "source_commit": "4734682c5458612ebd1d7317a744300405df166c",
+        "version": 3,
+        "master": 50,
+        "track_volume": 200,
+        "tracks": 3,
+        "source_frames": 576000,
+        "project_bytes": 6912274,
+        "project_sha256": "03687aece53554b915bbf028bd6fd94f75ebcee6cbe9bf0798c8118c4632356e",
+        "project_hash": "0x2075abddd222d090",
+        "cold_playback": [
+          {
+            "channel": 0,
+            "rms": 12726.559057734341,
+            "expected_rms": 12727.922061357855,
+            "hz": 400.0,
+            "peak": 17997,
+            "minimum": -17997
+          },
+          {
+            "channel": 1,
+            "rms": 16969.449602152687,
+            "expected_rms": 16970.56274847714,
+            "hz": 600.0,
+            "peak": 24000,
+            "minimum": -24000
+          }
+        ],
+        "export_frames": 672000,
+        "export_sha256": "80101eab5d909034d79988bd573a1ef43ca17fd0f436e26977773a3dc4cecb65",
+        "decoded_sha256": "4c0d5ed7b25e4e152b9f4c991ac973a4b22682f43f3c9ec6d69d824f52d7b76d"
+      },
+      "artifacts": {
+        "master-50-cold.ppm": "c42eb87613e6cce7b76996d5bad75391f1f5ac26ec39f7d33cfbf7206da3ab25",
+        "master-save-qemu.log": "d7700053b73ddc4e45e7bb5a7f8dd1112e01b3ac6e313cb1f6be818a4394d783",
+        "master-reopen-serial.log": "36d6092b00a233cf39bc6dd60ebe833196a40ab525a2f727e3394109ca5e265f",
+        "source-commit.txt": "9a7232e40ee9125cfe2fdb020b819bf98b45a36607d790948f33a512756c27e3",
+        "headroom.wav": "80101eab5d909034d79988bd573a1ef43ca17fd0f436e26977773a3dc4cecb65",
+        "master-50-cold.png": "3ded701d79184f869f4a4e5864baa82bd446328648abdff64140fc828bbd061d",
+        "result.json": "1b0c636a1e3a2365f9fbff04bd271dc9d6eb66f7b169efd74616014b6ba76fa0",
+        "headroom.moan": "03687aece53554b915bbf028bd6fd94f75ebcee6cbe9bf0798c8118c4632356e",
+        "boot1.wav": "895e429630482ea611b8befab4f804fd7b428fcb6ce608b7b9aa6162a42d7e28",
+        "sexfs-extract": "48c9e43ac5f53fb33b1176c8f949d8efab62eabc817cbe57f9ce7f1442c5de43",
+        "master-reopen-qemu.log": "d7700053b73ddc4e45e7bb5a7f8dd1112e01b3ac6e313cb1f6be818a4394d783",
+        "master-save-serial.log": "dce5e5c8a7407446a2b9a95422a51250aeee5f9bbc4f0985ecc1373201225399",
+        "inputs.json": "b28e61d54f8da8c28b5597dbbcccdf048af500e3ea3cdefbb3547aea31f07343",
+        "live.wav": "7d852c03b66eb8f1aa94b2ec78a5a1f8d5cbcb6ed1ebf47dc34e2e0527340e9f",
+        "checker-source.py": "0a6e9485c7e4014947dfb01c86ca520ba1082f5c042d374746808f414b4e10b5",
+        "nvme.img": "135da56c02416cb55e974809b8c626bad5f4edefdd137d405c9dc77be9329054",
+        "cold-play.wav": "94b9327f164a721195eaa0fe11fe2e756e25c0f8a0b7c4e8089d91e7967a7241"
+      },
+      "app_source_sha256": {
+        "apps/moan/Cargo.toml": "8c8ce802a0c1772e7cc876f283c551e55572c4320190b49b6927d6d6ce61ac21",
+        "apps/moan/build.rs": "88265209bfe235aa9729dd3958232523beba41d4c6323acdb9b0c163111f529e",
+        "apps/moan/tests/midi_project.rs": "d33c22cab47b0d7dc3707c0950b709f34536d515a94658eeaa4654f0b26600ff",
+        "apps/moan/tests/studio.rs": "7467feb85ded4381fafca91e8dfbac337de1292c05a5c2ebb3af5b06d0b72f3b",
+        "apps/moan/tests/plugins.rs": "a4048636db511f36f91b2aa5acb9887f2e1559bacf53399d0d7c31dcba1b9bba",
+        "apps/moan/tests/waveform.rs": "e49ffca7481330d8490da175db7ab6128c3ae860f5c661ed3705b518132b7a62",
+        "apps/moan/tests/mixer.rs": "eaf82292edadea47783d91e5ee8eea5e4a37789c02eb23949d1090b26a891dbc",
+        "apps/moan/tests/midi_memory.rs": "6bf210b193568e7eeb34cf722bac74f7261d8e68dd9fcb3813c8962552c90446",
+        "apps/moan/tests/projects.rs": "d92b8d737ccebf9dedc14a313d4b6bd06dfb4290aef33d7b59cef401d7e6e331",
+        "apps/moan/tests/plugin_pixels.rs": "9a8bddef62834d5fcf5f39c4754b63e2a802e8b5905a3d1ae9d28f0794afb2c6",
+        "apps/moan/tests/workstation.rs": "9862184249187045a1eced524856f1533c3c14710976528b203bdf75fc69ddfc",
+        "apps/moan/tests/meter_history.rs": "e567aaa70ae6e295237723516ca996c86511386c67b738cfd466002a6cb84e53",
+        "apps/moan/examples/preview.rs": "79fbddfa1fc46b8ec42ac0933906c0ade0eb63d96560256ccbd750006465bb4f",
+        "apps/moan/src/track_colors.rs": "dc40304c6c2fd29b502c565c483db501a538f93d0d6fdd840c6e456a9b4fee50",
+        "apps/moan/src/lib.rs": "709bdcc68ce6e21930d80efbc1c11b07a20baad4c3d0ae6ecc023261c57aef8a",
+        "apps/moan/src/plugins.rs": "6cbbd0f124d1c07be4ab169d796e1ee2d0061564fcd3153543fc4926034f16bf",
+        "apps/moan/src/waveform.rs": "41ed33c5127254d531355b4e639154fcee60c2855ed2e870f3a2a6987803455a",
+        "apps/moan/src/project.rs": "f79907fbbbba3f24f8aeab14ad7d2cad5833989f2f07619e4ca15c0be58050d1",
+        "apps/moan/src/piano.rs": "f2d913eda50f5b82d79cb47005e5ba5214566b7c5fbafc5d7e662cee0b6ab2f5",
+        "apps/moan/src/main.rs": "c75cbc4489d63e0794c7d634df12dd280fa5d4c7b6433bdb95f78e9a161dd971",
+        "apps/moan/src/project_io.rs": "18a44856222c23cf09001708209ace5cf8178cb04ae8d279207c1495e498ed46",
+        "apps/moan/src/plugin_pixels.rs": "d762770d54ed9c8069f86567b4ec3781784f674f8e7bd0494e1477aa04135bc7",
+        "apps/moan/src/step.rs": "568f540d44d74d54f5b24c6d783d11a36a3fa5aca00ce81e4d20544497bbab7d",
+        "apps/moan/src/meter_history.rs": "e2ce0f8e3a7ece6c91cfc081b835ba805e730307c88e2fc7d5a5165f998baf65",
+        "crates/moan-core/Cargo.toml": "a46856b45635a76bd8f316d7c1f1d40fb6a6f4642b488fcdf055df3e0d76bf2c",
+        "crates/moan-core/tests/midi.rs": "b6251208105e845a3531d04462a800f44997b56d1653563100cba639755c52c7",
+        "crates/moan-core/tests/timeline.rs": "e3b52db00bb0dd7b278f10c5a6e6307eb3522c79fc61825c2619d18605ce31b7",
+        "crates/moan-core/tests/effects.rs": "e4c85df8316d1cc0bd6e0c636d60707734a03d724e002ca4f6458f838f49d5aa",
+        "crates/moan-core/examples/effects_reference.rs": "6e0abd72a854a194d5702c7ab401ad9fac98b79feaddc93373a5e0e3343e0800",
+        "crates/moan-core/src/midi.rs": "b04b4b8db3eb976124620b5c4c072be2153d5c3c51dc00e0f8b98e03714d31aa",
+        "crates/moan-core/src/lib.rs": "e303114b6c9e46d283ded56ba617a97eb1e7ca22600fe44290865fb075843ebf",
+        "crates/moan-core/src/effects.rs": "e64e38e9739770c7bfad8261e7c9cefd1a965d891d17a5fda2e1cf8ea4affb62"
+      }
+    }
+  },
+  "preserved_failures": [
+    {
+      "directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/final-legacy-palette-v1",
+      "checker_sha256": null,
+      "note_sha256": "78b0094cbc13ced6eaa5c417b5ddab36380293f44fca597d82848f673151d5a7"
+    },
+    {
+      "directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/master-project-palette-v1",
+      "checker_sha256": "e939fba791b795e14e19bf41b0d357f723d5d79795425955cd8bb59dd8f8a1e2",
+      "note_sha256": "60e2fd4e55999e583d3607ea18dff1aa54a02b163f55adcd5acd731d6f4bc171"
+    },
+    {
+      "directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/master-project-palette-v2",
+      "checker_sha256": "bb9a2f30843b04d094c05a4627afa5d8da985e40a0338af22b16e539d64f2112",
+      "note_sha256": "f57dfdfb28fa6f62687b7805c253626af4118e8267a0df1ad1d1f81d2280389c"
+    },
+    {
+      "directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/master-project-palette-v3",
+      "checker_sha256": "a9b99f17e2bbbe86b64ad1f146e176b819af227d8f2de4f37dd6d33e430e48ff",
+      "note_sha256": "bb8d4f70ef212ef27a1f0c3e29a6473f03bf7a4a52e3f65201f1fcd61e81417e"
+    }
+  ],
+  "absolute_offset_negative": {
+    "before_sha256": "ff71a5ff256f85eb1875001093728d3d34544b5cbdbdefd224bbc09c9d4ea5c7",
+    "after_sha256": "3d05864adaa7a067c6dd8f488b76741afad7cdf90e6cdbe6566339424de57b0f",
+    "scope": "Faithful relative-match fixture failed both refresh implementations before correction; passes after converting to absolute offsets."
+  }
+}

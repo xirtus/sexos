@@ -1,0 +1,174 @@
+{
+  "scope": "Actual intermediate Moan Instruments/offline effect UI. Distinct frozen OS, product app and developer runner cohorts; no completed hostile-plugin sandbox or live insert claim.",
+  "app_revision": "8d46f75642f1fef5b0f0997ade6b2d9d863b5dd7",
+  "runner_revision": "5bb5f0d4a092120d1edde41fde8d1d0d97f5e56d",
+  "normal_os_revision": "2cbdadf53680a8cb56095c78665203c063f951fe",
+  "directory": "/Users/xmacbookm5/Projects/sexos-moan-plugin-gate/target/plugin-gui-8d46-v4",
+  "result_sha256": "07f4e252981db8d8abf66f498b43527ee1e96fdbfcba8fd2dcff2b102e796796",
+  "inputs_sha256": "abc0507ecb1ffff57b07577fc091c7fa559ced0b828a806acb7c2200bcdafc83",
+  "artifact_custody_sha256": "9c23dab20aed8c0e2dc14db85764181faaaa91def48d60dca77c7502da72709d",
+  "programs": {
+    "files": "adb99920a0dc00be8c6cb7e04f8fcc536043645885e0851d6abd651be254e81c",
+    "moan": "92cba051587d070a7b42884838d7ec77c318c7af3d7ebaa5337dd95309cb15f7",
+    "moanplug": "42888a6eee5ddbac7c535e1906b47a56ddfcce4514188d693529646f7236ed9f",
+    "moanrack": "a7e640943845a394a8bd138f2f76a80d4a159a404fa535d7f02a2df16209a7dc"
+  },
+  "independently_verified_raw_artifacts": 27,
+  "immutable_input_files": 1976,
+  "claims": {
+    "ok": true,
+    "scope": "Actual Moan offline controls qualification; no live/hostile sandbox claim.",
+    "archive": {
+      "ok": true,
+      "tracks": 4,
+      "frames": 48000,
+      "pcm_sha256": [
+        "e618b70b7929c3814c96d0c3145525d620b94b9eadade67627e03ee83f41ddf0",
+        "8e51b07cb1abb0d914f94b20e66b5c4bba1906c8fa388e30709c44d590405f9e",
+        "e618b70b7929c3814c96d0c3145525d620b94b9eadade67627e03ee83f41ddf0",
+        "e618b70b7929c3814c96d0c3145525d620b94b9eadade67627e03ee83f41ddf0"
+      ],
+      "original_preserved": true,
+      "clap_non_bypass_swap": true,
+      "vst3_default_unity_plumbing": true
+    },
+    "screenshots": [
+      {
+        "file": "clap-new-track-original-kept.ppm",
+        "sha256": "4aa339dc3106e51edda1fa3349f5ea88a5490f5bef3075f196135c9d6ce6ebc4",
+        "proof": {
+          "ok": true,
+          "checked_pixels": 23788,
+          "colours": 175,
+          "text": "Offline render ready",
+          "frame": 50,
+          "hash": "bb334ee9a1236757"
+        }
+      },
+      {
+        "file": "crash-original-project-alive.ppm",
+        "sha256": "f238eb0d964283e25dbce233e96bf9e332db967158f0de5e7fb944bdb1293914",
+        "proof": {
+          "ok": true,
+          "checked_pixels": 23788,
+          "colours": 210,
+          "text": "Offline render failed; original region unchanged",
+          "frame": 74,
+          "hash": "2647671d3025131c"
+        }
+      },
+      {
+        "file": "offline-render-active.ppm",
+        "sha256": "94516f361fa01d4a98654eaa78fdfb473c899615430117e7c826913336be3b03",
+        "proof": {
+          "ok": true,
+          "checked_pixels": 23788,
+          "colours": 175,
+          "text": "Offline render running",
+          "frame": 95,
+          "hash": "be70a1670e37bcc0"
+        }
+      },
+      {
+        "file": "cancel-retired-project-kept.ppm",
+        "sha256": "64d6fc46a3ede367b0722efd595bded413ec55f60e11da3e093443a771d20c07",
+        "proof": {
+          "ok": true,
+          "checked_pixels": 23788,
+          "colours": 210,
+          "text": "Offline render failed; original region unchanged",
+          "frame": 114,
+          "hash": "2647671d3025131c"
+        }
+      },
+      {
+        "file": "recovery-new-editable-track.ppm",
+        "sha256": "600934e03889780ae468b8ded114f6d8866b74cc05b71221c8e5f7f17e83bdcc",
+        "proof": {
+          "ok": true,
+          "checked_pixels": 23788,
+          "colours": 175,
+          "text": "Offline render ready",
+          "frame": 137,
+          "hash": "bb334ee9a1236757"
+        }
+      },
+      {
+        "file": "vst3-default-unity-format-control.ppm",
+        "sha256": "3545d280019fd173196d50282430bacb9f45e302e06e76d0d96f760c40cfacf1",
+        "proof": {
+          "ok": true,
+          "checked_pixels": 23788,
+          "colours": 175,
+          "text": "Offline render ready",
+          "frame": 168,
+          "hash": "bb334ee9a1236757"
+        }
+      }
+    ],
+    "children": [
+      [
+        1347158017,
+        44,
+        44
+      ],
+      [
+        1347158018,
+        44,
+        1073741825
+      ],
+      [
+        1347158019,
+        44,
+        1073741826
+      ],
+      [
+        1347158020,
+        44,
+        1073741827
+      ],
+      [
+        1347158021,
+        44,
+        1073741828
+      ]
+    ],
+    "crash_recovered": true,
+    "cancel_retired": true,
+    "editable_import_undo_redo": true,
+    "no_hostile_sandbox_claim": true,
+    "no_live_insert_claim": true
+  },
+  "archive": {
+    "path": "/Users/xmacbookm5/Projects/sexos-moan-plugin-gate/target/plugin-gui-8d46-v4/offline.moan",
+    "bytes": 768328,
+    "sha256": "b81652adabac50c0c9cbb257c4afa61279447c3b306bff2c67c02b0a891b5761"
+  },
+  "normal_iso_sha256": "93d3bef41ec9608d067a20357c2e0740e9c5785798449ab16f46734ba2f631ad",
+  "os_source_binding_sha256": "82c09fe2eca0ae7b1db5fa16a40fdaf3f9bb153dbb96bed54a712f18fadd6520",
+  "helper_reuse": {
+    "source": "v9 frozen generated-inputs helper",
+    "sha256": "42888a6eee5ddbac7c535e1906b47a56ddfcce4514188d693529646f7236ed9f",
+    "matching_source_sdk_vendor_files": 184,
+    "preflight_failure_preserved": true
+  },
+  "seed_build_receipt_sha256": "a97d98dedce6bb98db7de735cba9c69836d4c58d35e1b5a5ec7703c561cbe9cb",
+  "preserved_failed_runs": [
+    "plugin-gui-8d46-v1 (preflight missing staged helper)",
+    "plugin-gui-8d46-v2 (missing explicit import state query)",
+    "plugin-gui-8d46-v3 (three cursor pixels in protected strip)"
+  ],
+  "remaining": [
+    "workspace/live mixer QEMU proof",
+    "restricted service policies and immutable job snapshots plus hostile route/restart probes",
+    "final combined root image project/export/microphone/cancel regression",
+    "JIT inline caches for objects/strings after Moan"
+  ],
+  "cursor_procedure_review": {
+    "scope": "All six exact RGB captures remain valid; corner parking was not accepted",
+    "rejected_corner_moves": 6,
+    "actual_procedure": "Bottom-right cursor move removed; cursor remains at preceding control when corner jump is rejected",
+    "maintained_fix": "Use mid-bar320,10 and require fresh Shell acceptance; not assigned to this older runtime",
+    "original_trace_sha256": "403e1e3c7083f1ee09dd1f23ab2861b2dc74bab9746242ae33029173ca027aa5"
+  }
+}

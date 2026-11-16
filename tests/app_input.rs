@@ -126,6 +126,7 @@ pub const ERR_CAP_INVALID:u64=0xffff_ffff_ffff_fffc;
 pub static mut TICKS:u64=1;
 pub fn get_ticks()->u64{unsafe{TICKS}}
 #[macro_export] macro_rules! serial_record {($($arg:tt)*)=>{{let _=format_args!($($arg)*);}}}
+#[macro_export] macro_rules! serial_input_record {(($($public:tt)*); ($($private:tt)*))=>{{let _=format_args!($($public)*);let _=format_args!($($private)*);}}}
 mod shell {
     use super::*;
     mod clipboard {pub use crate::clipboard::*;pub use crate::broker::Admission;}
