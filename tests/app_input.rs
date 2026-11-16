@@ -143,6 +143,8 @@ mod shell {
     static mut CAPS_AS_CTRL:bool=false;
     // Accessibility aids (access.rs) have their own host test: here they pass every key.
     mod access_glue{pub unsafe fn key(_:u8,_:u64)->bool{false}}
+    // Program tray items and notification replies (tray_items.rs) have their own host test.
+    mod tray_items_glue{pub unsafe fn key(_:u8,_:u64)->bool{false}}
     enum InteractionState{Idle,Dragging}
     static mut INTERACTION:InteractionState=InteractionState::Idle;
     static mut POINTER_BUTTONS:u8=0;

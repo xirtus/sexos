@@ -33,6 +33,9 @@ unsafe fn title_at(x: i32, y: i32) -> Option<(u32, u64, TitleHit)> {
     }
 }
 
+/// Whether the window menu shows (it takes every press while it does).
+pub unsafe fn menu_shown() -> bool { (*core::ptr::addr_of!(MENU)).is_open() }
+
 unsafe fn menu_send() {
     let word = (*core::ptr::addr_of!(MENU)).wire();
     let _ = crate::pdx_call(sex_pdx::SLOT_DISPLAY, sex_pdx::window_menu::OP_WINDOW_MENU, word, 0, 0);
