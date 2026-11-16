@@ -846,7 +846,9 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/sex-calc/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/sex-calc"
-dest_artifact = "iso_root/programs/abacus"
+# The Weft Abacus (build_abacus) owns programs/abacus; the older calculator stays
+# under its own name so program_calc_gate can still install and test it.
+dest_artifact = "iso_root/programs/sex-calc"
 
 [[stage]]
 id = "build_calendar"
