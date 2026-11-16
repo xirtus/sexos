@@ -10,8 +10,11 @@ cd "$(dirname "$0")/.."
 [[ -f apps/splicy-studio/Cargo.toml ]] || git submodule update --init apps/splicy-studio
 src="$(python3 scripts/sex_std_source.py)"
 bin=apps/splicy-studio/target/x86_64-sex-std/release/splicy-studio
+# Splicy's lock pins our own crates by path (../../crates), so it goes stale whenever one of
+# them gains a dependency. Build without --locked: cargo keeps every pinned version and only
+# adds what those path crates now need.
 build() {
-  (cd apps/splicy-studio && SEX_LAYOUT_SEED="$1" __CARGO_TESTS_ONLY_SRC_ROOT="$src" RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie" cargo build --locked --release \
+  (cd apps/splicy-studio && SEX_LAYOUT_SEED="$1" __CARGO_TESTS_ONLY_SRC_ROOT="$src" RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie" cargo build --release \
     -Z build-std=std,panic_abort -Z build-std-features=compiler-builtins-mem \
     --target ../../x86_64-sex-std.json)
 }
