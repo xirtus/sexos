@@ -439,6 +439,7 @@ pub const RENAMED: &[(&[u8], &[u8])] = &[
     (b"pdf", b"vellum"),
     (b"sex-calc", b"abacus"),
     (b"calendar", b"date"),
+    (b"term", b"spindle"),
     (b"view", b"gaze"),
     (b"settings", b"tatami"),
 ];

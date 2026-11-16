@@ -88,6 +88,7 @@ crates = [
   "apps/aftercare/Cargo.toml",
   "apps/crush/Cargo.toml",
   "apps/lua/Cargo.toml",
+  "apps/whisper-voice/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
   "apps/bat/Cargo.toml",
@@ -291,7 +292,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/term/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/term"
-dest_artifact = "iso_root/programs/term"
+dest_artifact = "iso_root/programs/spindle"
 
 [[stage]]
 id = "build_quil_editor"
@@ -538,6 +539,17 @@ build_std = "std,panic_abort"
 manifest = "apps/lua/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/lua"
 dest_artifact = "iso_root/programs/lua"
+
+# Whisper's voice: eSpeak NG 1.52.0 (vendor/espeak-ng-1.52.0, GPL-3.0-or-later) with its
+# English data compiled in (crates/sex-speech), on sex-libc; speaks what Shell sends.
+[[stage]]
+id = "build_whisper_voice"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/whisper-voice/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/whisper-voice"
+dest_artifact = "iso_root/programs/whisper-voice"
 
 # ripgrep 15.2.0 (vendor/ripgrep-15.2.0) and fd 10.5.2 (vendor/fd-10.5.2), upstream
 # source on the published crates (grep, ignore, globset, regex, clap, ...).
@@ -846,7 +858,8 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/sex-calc/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/sex-calc"
-dest_artifact = "iso_root/programs/abacus"
+# The old calculator; Abacus is now the Weft program above, and `sex-calc` runs it.
+dest_artifact = "iso_root/programs/sex-calc"
 
 [[stage]]
 id = "build_calendar"
