@@ -67,9 +67,10 @@ pub enum Event {
 
 pub enum Auth { Ed25519(keys::Ed25519), Password(String) }
 
-/// What to run once the session is open.
+/// What to run once the session is open. `Subsystem` names a server subsystem
+/// such as `sftp` (RFC 4254 section 6.5); its bytes flow like a command's.
 #[derive(Clone, Debug)]
-pub enum Run { Exec(String), Shell { term: String, cols: u32, rows: u32 } }
+pub enum Run { Exec(String), Shell { term: String, cols: u32, rows: u32 }, Subsystem(String) }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum Stage { Version, Kex, HostKey, Auth, Open, Session, Done }
@@ -425,6 +426,7 @@ impl Client {
         let mut w = Writer::new();
         match run {
             Run::Exec(cmd) => { w.byte(98).u32(self.remote_channel).string(b"exec").byte(1).string(cmd.as_bytes()); }
+            Run::Subsystem(name) => { w.byte(98).u32(self.remote_channel).string(b"subsystem").byte(1).string(name.as_bytes()); }
             Run::Shell { term, cols, rows } => {
                 let mut pty = Writer::new();
                 pty.byte(98).u32(self.remote_channel).string(b"pty-req").byte(0).string(term.as_bytes()).u32(cols).u32(rows).u32(0).u32(0).string(&[0]);

@@ -39,6 +39,7 @@ pub fn commit_when_idle() {
     if !writes_pending() || sex_pdx::get_ticks().saturating_sub(unsafe { LAST_WRITE }) < COMMIT_DELAY { return; }
     if let State::Ready(fs) = unsafe { &mut *core::ptr::addr_of_mut!(STATE) } { commit_writes(fs); }
 }
+pub(crate) fn commit_now(fs: &mut Fs<'static, Disk>) { commit_writes(fs) }
 fn commit_writes(fs: &mut Fs<'static, Disk>) {
     let bytes = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(UNCOMMITTED), 0) };
     // Home's own commit first: its blocks then go out with the system's.
@@ -315,6 +316,10 @@ static mut BINDINGS: [Option<Binding>; PROGRAM_ROWS] = [None; PROGRAM_ROWS];
 static mut LOADED: ([u8; 32], usize) = ([0; 32], 0);
 /// The arguments typed with the program last read.
 static mut LOADED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
+/// The target of program row `k`.
+fn program_target(k: usize) -> u32 {
+    sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).nth(k).map_or(0, |i| i.target)
+}
 fn program_index(target: u32) -> Option<usize> {
     sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).position(|i| i.target == target)
 }
@@ -706,6 +711,15 @@ fn handle_request(index: usize, program: Option<usize>, r: w::Request) -> u64 {
     }
     if matches!(r.kind, w::PICK | w::PICKED | w::PICKS | w::ANSWER) {
         let (status, value) = picker(program, r, &path[..path_len], &mut region[w::PATH_BYTES..]);
+        return w::reply(r.seq, status, value);
+    }
+    if (sex_pdx::disks::DISKS..=sex_pdx::disks::DISK_ANSWER).contains(&r.kind) {
+        // Raw removable disks (`fs_disks`): the run, and whether it may answer questions.
+        let bindings = unsafe { &*core::ptr::addr_of!(BINDINGS) };
+        let run = program.and_then(|k| bindings[k].map(|b| (k, program_target(k), b.task)));
+        let whole = program.is_none_or(|k| bindings[k].is_some_and(|b| b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/")));
+        let name = |k: usize| bindings.get(k).copied().flatten().map_or(alloc::vec::Vec::new(), |b| b.root[sex_pdx::program_store::DATA.len().min(b.len)..b.len].to_vec());
+        let (status, value) = crate::fs_disks::handle(fs, run, whole, &name, r, &mut region[w::PATH_BYTES..w::CACHE_AT]);
         return w::reply(r.seq, status, value);
     }
     if matches!(r.kind, sex_pdx::home_lock::SETUP | sex_pdx::home_lock::UNLOCK | sex_pdx::home_lock::LOCK | sex_pdx::home_lock::STATE | sex_pdx::home_lock::CHANGE) {

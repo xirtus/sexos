@@ -1098,6 +1098,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "corset"
+version = "0.1.0"
+dependencies = [
+ "corset-core",
+ "sex-app",
+ "sex-pdx",
+ "sex-volumes",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "corset-core"
 version = "0.1.0"
 dependencies = [
@@ -2066,12 +2077,16 @@ name = "files"
 version = "0.1.0"
 dependencies = [
  "loom-core",
+ "loom-remote",
  "sex-app",
  "sex-archive",
  "sex-config",
+ "sex-diskimage",
  "sex-font",
  "sex-image",
  "sex-pdx",
+ "sex-ssh",
+ "sex-volumes",
  "sha2 0.10.9",
 ]
 
@@ -3545,6 +3560,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "loom-remote"
+version = "0.1.0"
+dependencies = [
+ "hmac 0.12.1",
+ "sex-http",
+ "sex-ssh",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "lopdf"
 version = "0.47.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4156,7 +4181,9 @@ version = "0.1.0"
 dependencies = [
  "hayro",
  "sex-font",
+ "sex-image",
  "sex-std",
+ "vellum-edit",
 ]
 
 [[package]]
@@ -5456,6 +5483,15 @@ version = "0.1.0"
 dependencies = [
  "ed25519-compact",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "sex-diskimage"
+version = "0.1.0"
+dependencies = [
+ "miniz_oxide 0.9.1",
+ "sex-archive",
+ "sex-disk",
 ]
 
 [[package]]

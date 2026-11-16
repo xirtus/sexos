@@ -91,6 +91,8 @@ jobs:
       run: cargo test --locked -p vellum-edit
     - name: Gaze decoders (EXIF orientation, JPEG XL, SVG, RAW previews) on the host
       run: cargo test --locked -p gaze-codecs --all-features
+    - name: Vellum app (annotation geometry, form order, thumbnails) on the host
+      run: cargo test --locked -p pdf
     - name: Image codecs (WebP, animated GIF, AVIF, HEIC, 4-quadrant fidelity, 50k fuzzer) on the host
       run: bash scripts/sex_codecs_host_gate.sh
     - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
@@ -135,6 +137,8 @@ jobs:
       run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Corset disks, GPT editor, FAT32/exFAT/SexFS formatters, SMART and BDSM encryption on the host
       run: bash scripts/corset_host_gate.sh
+    - name: Corset plans (step sentences, typed-name confirmation, re-read before apply, write order) on the host
+      run: cargo test --locked -p corset --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
       run: cargo test --locked -p sex-net --lib
     - name: HTTP/2 client (HPACK, 50 streams) against a real h2 server, plain and over TLS
@@ -149,6 +153,15 @@ jobs:
         sudo usermod -p '*' "$USER"
         cargo test --locked -p sex-wg
         cargo test --locked -p sex-ssh
+    - name: Loom network places (SFTP via real OpenSSH, WebDAV, S3 with SigV4) on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server openssh-sftp-server
+        sudo usermod -p '*' "$USER"
+        cargo test --locked -p loom-remote
+    - name: Disk and CD images (ISO/UDF/qcow2/VHD/VHDX/VMDK, partitions) on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xorriso genisoimage udftools qemu-utils gdisk fdisk dosfstools e2fsprogs
+        cargo test --locked -p sex-diskimage
     - name: BitTorrent engine (sex-torrent) goldens and protocol tests on the host
       run: cargo test --locked -p sex-torrent
     - name: Swingers downloads from and seeds to aria2 on the host
@@ -346,12 +359,14 @@ jobs:
       run: python3 scripts/files_eject_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-eject"
     - name: Files thumbnails for a folder of 50 pictures, cached
       run: python3 scripts/files_thumbs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-thumbs"
-    - name: Files archives, batch rename, ratings, duplicates, disk usage and compare
+    - name: Files archives, disk and CD images, SFTP and WebDAV places, batch rename, ratings, duplicates, disk usage and compare
       run: python3 scripts/files_loom_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-loom"
     - name: ext4 stick written from SexOS, e2fsck clean
       run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"
     - name: Encrypted home unlocks with its password, unreadable without it
       run: python3 scripts/files_home_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-home"
+    - name: Corset partitions a blank USB disk (GPT, FAT32 and exFAT), Files mounts both; system disk writes refused
+      run: python3 scripts/corset_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-corset"
     - name: Files opens a file in its program
       run: python3 scripts/files_open_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-open"
     - name: Power cuts while Files writes (QEMU killed, disk checked each time)
@@ -851,7 +866,12 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-pdf.img"
         python3 scripts/program_pdf_find_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-pdf.img" --out "$RUNNER_TEMP/sexos-productivity/pdf-find"
-    - name: View pictures, turns, zoom, animated WebP and a folder slideshow
+    - name: Vellum highlights, notes, fills a form, saves an incremental update; pdf --thumb
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-pdf-edit.img"
+        python3 -m pip install --quiet --user --break-system-packages pypdf==6.1.3 || true
+        python3 scripts/program_pdf_edit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-pdf-edit.img" --out "$RUNNER_TEMP/sexos-productivity/pdf-edit"
+    - name: View pictures, turns, zoom, animated WebP, a folder slideshow, EXIF upright and details, SVG, --thumb
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
         truncate -s 256M "$RUNNER_TEMP/blank-view.img"
