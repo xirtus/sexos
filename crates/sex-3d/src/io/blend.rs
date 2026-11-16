@@ -8,6 +8,10 @@
 //! DNA member names and flag values noted below). Everything is bounds-checked: corrupt or
 //! truncated input yields `Err`, never a panic.
 //!
+//! [`export_blend`] writes Blender 4.2 files (`blend/write.rs` documents the
+//! format, what is written and what is left out); its struct tables are
+//! generated from Blender 4.2's GPL DNA headers, which the reader does not use.
+//!
 //! # Format knowledge this reader relies on
 //!
 //! **Container.** A file is either raw, gzip-compressed (magic `1f 8b`, Blender
@@ -70,7 +74,7 @@
 //!     also have direct `mvert`/`medge`/`mpoly`/`mloop`/`mloopuv` pointers, and
 //!     pre-2.63 files only `MFace {v1..v4, mat_nr, flag}` tessfaces.
 //!   - Attribute layout (3.5 .. 5.x): generic layers by name: `position` (float3,
-//!     type 48) on points, `.edge_verts` (int2, 53) on edges, `.corner_vert`
+//!     type 48) on points, `.edge_verts` (int2, 46) and `sharp_edge` (bool) on edges, `.corner_vert`
 //!     (int, 11) on corners, `material_index` (int) and `sharp_face` (bool, 50)
 //!     on faces, UV maps as float2 (49) corner layers whose names do not start
 //!     with `.`; face sizes come from the `face_offset_indices` /
@@ -92,8 +96,10 @@
 //!   (along the fitted axis), `clip_start`/`clipsta`, `clip_end`/`clipend`.
 //! - `Scene`: `id`, `camera`, `world`, `master_collection` (2.8+), `r`
 //!   (`RenderData`: `xsch`, `ysch`, `xasp`, `yasp`, `sfra`, `efra`, `frs_sec`,
-//!   `frs_sec_base`). The current scene is `FileGlobal.curscene` in the `GLOB`
-//!   block, else the first `SC` block.
+//!   `frs_sec_base`), and when `use_nodes` is set the embedded compositing
+//!   tree `nodetree` (node settings in `blend/compnodes.rs`). The current
+//!   scene is `FileGlobal.curscene` in the `GLOB` block, else the first `SC`
+//!   block.
 //! - `World`: `horr horg horb` (viewport colour) and, when `use_nodes` is set,
 //!   the `ShaderNodeBackground` node's `Color` and `Strength` inputs.
 //! - `Collection` (2.8+): `id`, `gobject` (ListBase of `CollectionObject {ob}`),
@@ -182,11 +188,18 @@ use crate::scene::{AreaShape, Camera, Light, LightKind, Material, Object, Object
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
+mod compnodes;
 mod geonodes;
+mod export;
 mod nodes;
 mod physics;
 
 mod rig;
+mod sdna42;
+mod write;
+mod write_nodes;
+
+pub use export::{export_blend, BlendExport};
 
 /// Largest decompressed file accepted (guards against decompression bombs).
 const MAX_DECOMPRESSED: u64 = 4 << 30;
@@ -232,6 +245,10 @@ pub struct BlendKey {
     /// Interpolation towards the next key: [`INTERP_CONSTANT`],
     /// [`INTERP_LINEAR`], [`INTERP_BEZIER`] or a Blender easing mode.
     pub interpolation: u8,
+    /// Bezier handles as absolute (frame, value) points, left then right;
+    /// `None` for sampled points, and when writing, for handles the writer
+    /// should place itself (auto-clamped).
+    pub handles: Option<[[f32; 2]; 2]>,
 }
 
 /// One animated channel: element `index` of the property `path`.
@@ -978,6 +995,7 @@ impl<'f, 'a> Importer<'f, 'a> {
             self.collections(&sc, &by_ptr);
             self.world(&sc);
             physics::scene(f, &sc, &mut self.scene.physics);
+            self.compositor(&sc);
         }
         self.resolve_object_refs(&by_ptr);
         Ok((self.scene, self.actions))
@@ -1052,13 +1070,35 @@ impl<'f, 'a> Importer<'f, 'a> {
         }
     }
 
+    /// The compositing tree (`Scene.nodetree`, used when `Scene.use_nodes`).
+    fn compositor(&mut self, sc: &View<'f, 'a>) {
+        if sc.num("use_nodes").unwrap_or(0.0) == 0.0 {
+            return;
+        }
+        if let Some(tree) = self.f.view_ptr(sc.ptr("nodetree"), &["bNodeTree"]) {
+            if let Some(mut t) = self.node_tree(&tree) {
+                t.kind = crate::nodes::TreeKind::Compositor;
+                if t.name.is_empty() || t.name == "Shader Nodetree" {
+                    t.name = "Compositing Nodetree".into();
+                }
+                self.scene.compositor = Some(t);
+            }
+        }
+    }
+
     /// Name and socket of each input of the first `idname` node in the
     /// embedded node tree of `owner` (a material or world).
     fn node_inputs(&self, owner: &View<'f, 'a>, idname: &str) -> Vec<(String, View<'f, 'a>)> {
         let f = self.f;
         let Some(tree) = f.view_ptr(owner.ptr("nodetree"), &["bNodeTree"]) else { return Vec::new() };
         let Some(node) = f.list(tree.sub("nodes"), &["bNode"]).into_iter().find(|n| n.string("idname").as_deref() == Some(idname)) else { return Vec::new() };
-        f.list(node.sub("inputs"), &["bNodeSocket"]).into_iter().map(|s| (s.string("name").unwrap_or_default(), s)).collect()
+        f.list(node.sub("inputs"), &["bNodeSocket"]).into_iter().map(|s| {
+            // By identifier: 4.x Principled panels reuse short names (the
+            // coat's "Roughness", the emission's "Color").
+            let id = s.string("identifier").filter(|i| !i.is_empty()).or_else(|| s.string("name")).unwrap_or_default();
+            (id, s)
+        })
+        .collect()
     }
 
     /// Transform F-curves of the object's active action.
@@ -1125,7 +1165,8 @@ impl<'f, 'a> Importer<'f, 'a> {
         let mut o = Object::new(&ob.id_name(), od);
         o.transform = basis(ob);
         // visibility_flag: OB_HIDE_CAMERA 1<<3 .. OB_HIDE_SHADOW 1<<8, OB_HOLDOUT 1<<9.
-        if let Some(v) = ob.num("visibility_flag") {
+        // `visibility_flag` is the runtime name of the file's `restrictflag`.
+        if let Some(v) = ob.num_any(&["visibility_flag", "restrictflag"]) {
             let v = v as i64;
             let shown = |bit: i64| v & (1 << bit) == 0;
             o.visibility = sex_vis(shown(3), shown(4), shown(5), shown(6), shown(7), shown(8));
@@ -1356,10 +1397,14 @@ fn fcurve(f: &BlendFile<'_>, fc: &View<'_, '_>) -> Option<BlendFCurve> {
     let keys: Vec<BlendKey> = if let Some(bz) = f.view_array(fc.ptr("bezt"), &["BezTriple"], n) {
         // vec[3][3]: left handle, key, right handle.
         bz.iter()
-            .filter_map(|b| Some(BlendKey { frame: b.num_at("vec", 3)? as f32, value: b.num_at("vec", 4)? as f32, interpolation: b.num("ipo").unwrap_or(2.0) as u8 }))
+            .filter_map(|b| {
+                let v = |k: usize| b.num_at("vec", k).map(|x| x as f32);
+                let handles = (|| Some([[v(0)?, v(1)?], [v(6)?, v(7)?]]))();
+                Some(BlendKey { frame: v(3)?, value: v(4)?, interpolation: b.num("ipo").unwrap_or(2.0) as u8, handles })
+            })
             .collect()
     } else if let Some(pts) = f.view_array(fc.ptr("fpt"), &["FPoint"], n) {
-        pts.iter().filter_map(|p| Some(BlendKey { frame: p.num_at("vec", 0)? as f32, value: p.num_at("vec", 1)? as f32, interpolation: INTERP_LINEAR })).collect()
+        pts.iter().filter_map(|p| Some(BlendKey { frame: p.num_at("vec", 0)? as f32, value: p.num_at("vec", 1)? as f32, interpolation: INTERP_LINEAR, handles: None })).collect()
     } else {
         Vec::new()
     };
@@ -1633,7 +1678,8 @@ fn light(la: &View<'_, '_>) -> Light {
     if let (Some(r), Some(g), Some(b)) = (la.f32("r"), la.f32("g"), la.f32("b")) {
         l.color = Vec3::new(r, g, b);
     }
-    if let Some(e) = la.f32("energy") {
+    // 4.x files keep the power in `energy_new` (`energy` is the deprecated copy).
+    if let Some(e) = la.f32("energy_new").or_else(|| la.f32("energy")) {
         l.power = e;
     }
     match l.kind {
@@ -1882,10 +1928,15 @@ fn read_mesh(f: &BlendFile<'_>, me: &View<'_, '_>) -> Result<Mesh, String> {
     };
     let mut mesh = Mesh { positions, faces, ..Default::default() };
     rig::mesh_extras(f, me, &vd, &mut mesh);
+    // Sharp edges: the 3.5+ `sharp_edge` bool attribute.
+    let sharp_edge = named(&ed, "sharp_edge").and_then(|l| f.raw_array(l.data, 1, ne));
     if let Some(edges) = edges {
         let used: HashSet<(u32, u32)> = mesh.faces.iter().flat_map(|fc| fc.edges().map(|(a, b)| (a.min(b), a.max(b)))).collect();
-        for [a, b] in edges {
+        for (k, [a, b]) in edges.into_iter().enumerate() {
             let (a, b) = (vert(a)?, vert(b)?);
+            if a != b && sharp_edge.is_some_and(|sh| sh.get(k).is_some_and(|&x| x != 0)) {
+                mesh.sharp_edges.insert((a.min(b), a.max(b)));
+            }
             if a != b && !used.contains(&(a.min(b), a.max(b))) {
                 mesh.loose_edges.push([a, b]);
             }

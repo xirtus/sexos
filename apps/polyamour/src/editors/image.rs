@@ -79,7 +79,7 @@ pub enum Shown {
 pub fn shown_image(s: &State, d: &Doc) -> Option<usize> {
     match s.show {
         Some(Shown::Image(i)) if i < d.scene.images.len() => Some(i),
-        Some(Shown::Render) if d.render.is_some() => None,
+        Some(Shown::Render) if d.render.is_some() || d.viewer.is_some() => None,
         _ if d.mode == Mode::TexturePaint || d.render.is_none() => crate::sculpt::paint_image(d),
         _ => None,
     }
@@ -218,7 +218,7 @@ fn render_key(img: &sex_3d::scene::Image) -> u64 {
 }
 
 fn render_rgba(s: &mut State, d: &Doc) -> Option<(u32, u32)> {
-    let img = d.render.as_ref()?;
+    let img = if d.show_viewer { d.viewer.as_ref().or(d.render.as_ref()) } else { d.render.as_ref().or(d.viewer.as_ref()) }?;
     let cm = d.settings.color_management();
     let key = render_key(img) ^ (cm.view as u64) << 3 ^ (cm.look as u64) << 9 ^ (cm.exposure.to_bits() as u64) << 17 ^ (cm.gamma.to_bits() as u64) << 31;
     if s.cache.as_ref().map(|c| c.0) != Some(key) {
@@ -309,12 +309,20 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
     x = end + 10;
     // The image datablock.
     let shown = shown_image(s, d);
-    let name = if s.kind == EditorKind::ImageEditor && d.render.is_some() && shown.is_none() { "Render Result" } else { "" };
+    let name = match (s.kind == EditorKind::ImageEditor && shown.is_none(), d.render.is_some(), d.viewer.is_some()) {
+        (true, _, true) if d.show_viewer => "Viewer Node",
+        (true, true, _) => "Render Result",
+        (true, _, true) => "Viewer Node",
+        _ => "",
+    };
     let br = Rect::new(x, y, 36, h);
     if ui.dropdown(br, "") {
         let mut items = Vec::new();
         if d.render.is_some() && s.kind == EditorKind::ImageEditor {
-            items.push(MenuItem::Check("Render Result".into(), shown.is_none(), anim::mail("image.show", s.id, "RENDER")));
+            items.push(MenuItem::Check("Render Result".into(), shown.is_none() && !d.show_viewer, anim::mail("image.show", s.id, "RENDER")));
+        }
+        if d.viewer.is_some() && s.kind == EditorKind::ImageEditor {
+            items.push(MenuItem::Check("Viewer Node".into(), shown.is_none() && d.show_viewer, anim::mail("image.show", s.id, "VIEWER")));
         }
         for (i, img) in d.scene.images.iter().enumerate() {
             items.push(MenuItem::Check(img.name.clone(), shown == Some(i), anim::mail("image.show", s.id, &i.to_string())));
@@ -410,7 +418,10 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
             "image.view_zoom_in" => s.zoom *= 1.25,
             "image.view_zoom_out" => s.zoom /= 1.25,
             "image.show" => {
-                s.show = if arg == "RENDER" { Some(Shown::Render) } else { arg.parse().ok().map(Shown::Image) };
+                s.show = if arg == "RENDER" || arg == "VIEWER" { Some(Shown::Render) } else { arg.parse().ok().map(Shown::Image) };
+                if arg == "RENDER" || arg == "VIEWER" {
+                    d.show_viewer = arg == "VIEWER";
+                }
                 s.fit = true;
             }
             "image.save" | "image.save_as" => match shown_image(s, d) {

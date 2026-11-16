@@ -609,3 +609,33 @@ fn live_old_examples_still_run() {
         vec![Modifier::Subdivision { levels: 2, simple: false }, Modifier::Mirror { x: false, y: true, z: false, merge: true, merge_distance: 0.001 }]
     );
 }
+
+#[test]
+fn save_as_mainfile_writes_blend_files() {
+    let Some(mut k) = kernel() else { return };
+    let mut s = Scene::startup();
+    let path = std::env::temp_dir().join(format!("sex3d-live-{}.blend", std::process::id()));
+    let src = format!(
+        "import bpy\n\
+         bpy.ops.mesh.primitive_cube_add(size=2, location=(1, 2, 3))\n\
+         ob = bpy.context.active_object\n\
+         ob.name = 'Saved'\n\
+         ob.keyframe_insert(data_path='location', index=0, frame=1)\n\
+         ob.location = (5, 2, 3)\n\
+         ob.keyframe_insert(data_path='location', index=0, frame=20)\n\
+         bpy.context.scene.render.resolution_x = 640\n\
+         bpy.context.scene.render.resolution_y = 480\n\
+         assert bpy.ops.wm.save_as_mainfile(filepath={:?}) == {{'FINISHED'}}\n",
+        path.to_string_lossy()
+    );
+    exec(&mut k, &mut s, &src);
+    let bytes = std::fs::read(&path).expect("the .blend was written");
+    let _ = std::fs::remove_file(&path);
+    assert!(bytes.starts_with(b"BLENDER-v402"));
+    let (r, actions) = sex_3d::io::blend::import_blend_full(&bytes).unwrap();
+    let ob = obj(&r, "Saved");
+    assert!(matches!(ob.data, ObjectData::Mesh(m) if r.meshes[m].vertex_count() == 8));
+    let a = actions.iter().find(|a| a.object == "Saved").expect("the action");
+    let c = a.curves.iter().find(|c| c.path == "location" && c.index == 0).unwrap();
+    assert_eq!(c.keys.iter().map(|k| (k.frame, k.value)).collect::<Vec<_>>(), [(1.0, 1.0), (20.0, 5.0)]);
+}

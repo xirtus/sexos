@@ -170,6 +170,12 @@ const GABOR_TYPES: Items = &[("2D", "2D"), ("3D", "3D")];
 
 /// The choices for `prop` on a node of type `idname`; empty when unknown.
 pub fn items(idname: &str, prop: &str) -> Items {
+    if idname.starts_with("CompositorNode") {
+        let c = super::comp_registry::comp_items(idname, prop);
+        if !c.is_empty() {
+            return c;
+        }
+    }
     match (idname, prop) {
         ("ShaderNodeMath" | "CompositorNodeMath" | "FunctionNodeMath" | "GeometryNodeMath", "operation") => MATH_OPS,
         ("ShaderNodeVectorMath" | "GeometryNodeVectorMath", "operation") => VECTOR_MATH_OPS,

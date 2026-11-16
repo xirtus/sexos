@@ -367,6 +367,8 @@ pub fn use_nodes(d: &mut Doc, r: TreeRef) -> bool {
                 let _ = t.link_sockets(a, 0, b, 0);
             }
             d.scene.compositor = Some(t);
+            let passes = d.settings.render_settings().passes;
+            crate::compositing::sync_passes(&mut d.scene, passes);
         }
         TreeRef::Group(_) => return false,
     }

@@ -103,6 +103,8 @@ pub struct State {
     curve_chan: HashMap<String, usize>,
     curve_sel: HashMap<String, usize>,
     drag_key: u64,
+    /// Compositor backdrop: (viewer generation, colour key, w, h, RGBA8).
+    backdrop: Option<(u64, u64, u32, u32, Vec<u8>)>,
 }
 
 impl State {
@@ -140,6 +142,7 @@ impl State {
             curve_chan: HashMap::new(),
             curve_sel: HashMap::new(),
             drag_key: 1,
+            backdrop: None,
         }
     }
     fn next_key(&mut self) -> u64 {
@@ -355,7 +358,9 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
             if ui.checkbox(Rect::new(x, y, 90, h), "Use Nodes", &mut on) {
                 d.queue.push(anim::mail("node.use_nodes_toggle", s.id, ""));
             }
-            ui.flat_button(Rect::new(x + 100, y, 70, h), "Backdrop", false);
+            if ui.flat_button(Rect::new(x + 100, y, 70, h), "Backdrop", d.backdrop) {
+                d.backdrop = !d.backdrop;
+            }
         }
     }
 }
@@ -959,6 +964,42 @@ fn draw_grid(s: &State, p: &mut Painter, r: Rect) {
     }
 }
 
+/// The Viewer node's image behind the compositor's nodes, fitted to the
+/// canvas and colour managed like the Image Editor.
+fn draw_backdrop(s: &mut State, d: &Doc, p: &mut Painter, r: Rect) {
+    let Some(img) = d.viewer.as_ref() else { return };
+    if img.width == 0 || img.height == 0 || r.w <= 0 || r.h <= 0 {
+        return;
+    }
+    let cm = d.settings.color_management();
+    let key = (cm.view as u64) << 3 ^ (cm.look as u64) << 9 ^ (cm.exposure.to_bits() as u64) << 17 ^ (cm.gamma.to_bits() as u64) << 31;
+    if s.backdrop.as_ref().map(|b| (b.0, b.1)) != Some((d.viewer_gen, key)) {
+        s.backdrop = Some((d.viewer_gen, key, img.width, img.height, sex_3d::render::to_display8(img, &cm)));
+    }
+    let Some((_, _, w, h, rgba)) = &s.backdrop else { return };
+    let (w, h) = (*w as usize, *h as usize);
+    let zoom = (r.w as f32 / w as f32).min(r.h as f32 / h as f32);
+    let (dw, dh) = (((w as f32 * zoom) as usize).max(1), ((h as f32 * zoom) as usize).max(1));
+    let mut scaled = vec![0u8; dw * dh * 4];
+    for y in 0..dh {
+        let sy = ((y as f32 + 0.5) / zoom) as usize;
+        for x in 0..dw {
+            let sx = ((x as f32 + 0.5) / zoom) as usize;
+            let si = (sy.min(h - 1) * w + sx.min(w - 1)) * 4;
+            let di = (y * dw + x) * 4;
+            // Dim it like Blender's backdrop so nodes stay readable.
+            for c in 0..3 {
+                scaled[di + c] = (rgba[si + c] as u32 * 3 / 4) as u8;
+            }
+            scaled[di + 3] = 255;
+        }
+    }
+    let dest = Rect::new(r.x + (r.w - dw as i32) / 2, r.y + (r.h - dh as i32) / 2, dw as i32, dh as i32);
+    p.push_clip(r);
+    p.blit_rgba(dest, &scaled, dw, dh);
+    p.pop_clip();
+}
+
 fn empty_state(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect, tref: Option<TreeRef>) {
     let (cx, cy) = r.center();
     let b = Rect::new(cx - 60, cy - 12, 120, 24);
@@ -998,6 +1039,9 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     let (side, canvas) = if s.sidebar && r.w > SIDEBAR_W + 100 { r.take_right(SIDEBAR_W) } else { (Rect::default(), r) };
     s.view = View { center: s.center, zoom: s.zoom, region: canvas };
     draw_grid(s, ui.p, canvas);
+    if s.kind == EditorKind::CompositorEditor && d.backdrop {
+        draw_backdrop(s, d, ui.p, canvas);
+    }
     s.fields.clear();
     let tref = tree_ref(s, d);
     let Some(mut tr) = tref.and_then(|r| r.get(&d.scene)).cloned() else {
