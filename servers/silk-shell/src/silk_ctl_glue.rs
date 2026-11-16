@@ -72,9 +72,9 @@ unsafe fn layouts() -> [u8; ATLAS_MAX_SCENES] {
 
 /// Queues one line of the answer tagged `tag` for `pd`.
 unsafe fn say(pd: u32, task: u32, tag: u16, line: &[u8], last: bool, failed: bool) -> bool {
-    let need = line.len().min(wire::LINE_MAX).div_ceil(wire::PIECE).max(1);
+    let need = sc::line_pieces(line.len());
     // The answer's end must always fit, so other lines leave room for it.
-    if LEN + need + if last { 0 } else { 8 } > OUT_MAX {
+    if LEN + need + if last { 0 } else { sc::END_ROOM } > OUT_MAX {
         sex_pdx::serial_record!("[shell.silk.out.full] pd={} tag={} queued={} dropped=1", pd, tag, { LEN });
         return false;
     }
@@ -84,6 +84,8 @@ unsafe fn say(pd: u32, task: u32, tag: u16, line: &[u8], last: bool, failed: boo
     }
     true
 }
+/// Outbox pieces free now.
+unsafe fn free() -> usize { OUT_MAX - LEN }
 unsafe fn end(pd: u32, task: u32, tag: u16, line: &Line, ok: bool) { say(pd, task, tag, line.as_bytes(), true, !ok); }
 fn line(args: core::fmt::Arguments) -> Line { let mut l = Line::new(); let _ = core::fmt::Write::write_fmt(&mut l, args); l }
 
@@ -117,6 +119,12 @@ unsafe fn act_on(pd: u32, task: u32, tag: u16, act: Act, wins: &[Win]) -> bool {
     match act {
         Act::List => {
             let focus = crate::FOCUSED_SURFACE_ID;
+            // The whole list or none of it: never an `ok` after lost lines.
+            if !sc::fit(free(), wins.iter().map(|w| sc::window_line(w, w.sid == focus).as_bytes().len())).1 {
+                sex_pdx::serial_record!("[shell.silk.out.full] pd={} tag={} queued={} answer=windows busy=1", pd, tag, { LEN });
+                end(pd, task, tag, &sc::busy_line("windows"), false);
+                return false;
+            }
             for w in wins {
                 let l = sc::window_line(w, w.sid == focus);
                 if WINDOW_BUDGET > 0 { WINDOW_BUDGET -= 1; sex_pdx::serial_record!("[shell.silk.window] {}", core::str::from_utf8(l.as_bytes()).unwrap_or("?")); }
@@ -159,10 +167,14 @@ unsafe fn act_on(pd: u32, task: u32, tag: u16, act: Act, wins: &[Win]) -> bool {
             true
         }
         Act::Float { frame, sid, on, shown } => {
-            if crate::frame_is_zoomed(frame) { crate::toggle_zoom_frame(frame); }
+            let zoomed = crate::frame_is_zoomed(frame);
+            if zoomed { crate::toggle_zoom_frame(frame); }
             crate::set_frame_floating(frame, on);
             if on && shown { crate::wm_place_floating(frame, 60); }
             if shown { crate::tile_active_scene_frames(); }
+            // Unzooming puts the surface back on the display; a window on
+            // another workspace is hidden again, as a workspace switch does.
+            else if zoomed { crate::sync_scene_visibility(); }
             sex_pdx::serial_record!("[shell.silk.float] frame={} sid={} on={} shown={} ok=1", frame, sid, on as u8, shown as u8);
             end(pd, task, tag, &line(format_args!("ok float frame={} on={}", frame, on as u8)), true);
             true
@@ -174,11 +186,19 @@ unsafe fn act_on(pd: u32, task: u32, tag: u16, act: Act, wins: &[Win]) -> bool {
             ok
         }
         Act::Events { since } => {
-            let mut count = 0;
-            for e in watch().since(since) { say(pd, task, tag, e.line().as_bytes(), false, false); count += 1; }
-            end(pd, task, tag, &line(format_args!("ok events={} last={}", count, watch().last())), true);
-            sex_pdx::serial_record!("[shell.silk.events] pd={} since={} events={} last={}", pd, since, count, watch().last());
-            true
+            // As many as fit; `last=` names only what was sent.
+            let (room, all) = sc::fit(free(), watch().since(since).map(|e| e.line().as_bytes().len()));
+            let (mut count, mut last) = (0, since);
+            for e in watch().since(since).take(room) {
+                if !say(pd, task, tag, e.line().as_bytes(), false, false) { break; }
+                count += 1;
+                last = e.seq;
+            }
+            let all = all && count == room;
+            if all { last = watch().last(); }
+            end(pd, task, tag, &sc::events_end(count, last, all), all);
+            sex_pdx::serial_record!("[shell.silk.events] pd={} since={} events={} last={} all={}", pd, since, count, last, all as u8);
+            all
         }
         Act::Follow { count } => {
             let last = watch().last();
@@ -217,10 +237,14 @@ unsafe fn observe() {
     let focus = crate::FOCUSED_SURFACE_ID;
     let focus_frame = crate::frame_for_surface(focus).unwrap_or(0);
     let before = watch().last();
-    if watch().observe(&seen[..n], focus, focus_frame, crate::ACTIVE_SCENE_IDX, &layouts()) == 0 { return; }
-    for e in watch().since(before) {
-        if EVENT_BUDGET > 0 { EVENT_BUDGET -= 1; sex_pdx::serial_record!("[shell.silk.event] {}", core::str::from_utf8(e.line().as_bytes()).unwrap_or("?")); }
+    if watch().observe(&seen[..n], focus, focus_frame, crate::ACTIVE_SCENE_IDX, &layouts()) != 0 {
+        for e in watch().since(before) {
+            if EVENT_BUDGET > 0 { EVENT_BUDGET -= 1; sex_pdx::serial_record!("[shell.silk.event] {}", core::str::from_utf8(e.line().as_bytes()).unwrap_or("?")); }
+        }
     }
+    // Every look, not only one that saw a change: a feed stopped by a full
+    // outbox catches up once it drains.
+    if !feeds().behind(watch().last()) { return; }
     for slot in feeds().iter_mut() {
         let Some(f) = slot.as_mut() else { continue };
         let mut done = false;

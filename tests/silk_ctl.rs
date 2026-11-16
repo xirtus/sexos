@@ -207,3 +207,57 @@ fn feeds_count_down_and_are_replaced_per_caller() {
     assert_eq!(f.retain(|pd, _| pd != 12), 1);
     assert!(!f.any());
 }
+
+#[test]
+fn answers_fit_the_outbox_whole_or_say_so() {
+    assert_eq!(line_pieces(0), 1);
+    assert_eq!(line_pieces(16), 1);
+    assert_eq!(line_pieces(17), 2);
+    assert_eq!(line_pieces(500), END_ROOM);
+    assert_eq!(END_ROOM, wire::LINE_MAX.div_ceil(wire::PIECE));
+    // Each 20-byte line takes two pieces; the end keeps END_ROOM back.
+    assert_eq!(fit(END_ROOM + 6, [20, 20, 20]), (3, true));
+    assert_eq!(fit(END_ROOM + 5, [20, 20, 20]), (2, false));
+    assert_eq!(fit(END_ROOM, [20]), (0, false));
+    assert_eq!(fit(END_ROOM, []), (0, true));
+    assert_eq!(fit(END_ROOM - 1, []), (0, false));
+    // The first line that does not fit stops it: no later, shorter line skips ahead.
+    assert_eq!(fit(END_ROOM + 3, [50, 10]), (0, false));
+    let busy = busy_line("windows");
+    assert!(busy.as_bytes().starts_with(b"error busy windows"));
+    assert!(busy.as_bytes().len() <= wire::LINE_MAX);
+}
+
+#[test]
+fn events_name_only_what_was_delivered() {
+    let mut w = Watch::<4, 2, 8>::new();
+    w.observe(&[], 0, 0, 0, &[0, 0]);
+    for i in 1..=5u32 { w.observe(&[(i, i as u64, 0)], 0, 0, 0, &[0, 0]); }
+    let all: Vec<_> = w.since(0).collect();
+    let lens: Vec<_> = all.iter().map(|e| e.line().as_bytes().len()).collect();
+    let per = line_pieces(lens[0]);
+    // Room for three events and the end: three go out, the end names the third.
+    let (n, whole) = fit(END_ROOM + 3 * per, lens.iter().copied());
+    assert_eq!((n, whole), (3, false));
+    let last = all[n - 1].seq;
+    let end = events_end(n, last, whole);
+    assert_eq!(end.as_bytes(), format!("error overflow events=3 last={} (more waiting; ask again with since)", last).as_bytes());
+    // Asking again from there gets the rest, whole.
+    let rest: Vec<_> = w.since(last).map(|e| e.line().as_bytes().len()).collect();
+    assert_eq!(fit(END_ROOM + 10 * per, rest.iter().copied()), (rest.len(), true));
+    assert_eq!(events_end(rest.len(), w.last(), true).as_bytes(), format!("ok events={} last={}", rest.len(), w.last()).as_bytes());
+}
+
+#[test]
+fn a_feed_left_behind_catches_up_without_a_new_change() {
+    let mut f = Feeds::<2>::new();
+    assert!(!f.behind(9));
+    f.start(5, 1, 0x10, 3, 4).unwrap();
+    assert!(!f.behind(4), "caught up when it started");
+    // Two events came, but the outbox took none: it is behind until sent.
+    assert!(f.behind(6));
+    for slot in f.iter_mut() { if let Some(x) = slot.as_mut() { x.sent(5); } }
+    assert!(f.behind(6));
+    for slot in f.iter_mut() { if let Some(x) = slot.as_mut() { x.sent(6); } }
+    assert!(!f.behind(6));
+}

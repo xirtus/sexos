@@ -15,7 +15,7 @@
 //! the pointer, the overview, `silk`) is seen the same way.
 
 use core::fmt::Write;
-use sex_pdx::silk_ctl::{Request, LAYOUTS, LINE_MAX};
+use sex_pdx::silk_ctl::{Request, LAYOUTS, LINE_MAX, PIECE};
 
 /// A window as `silk windows` shows it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +79,51 @@ pub fn window_line(w: &Win, focused: bool) -> Line {
 pub fn list_end(count: usize, scene: u8, focus_frame: u32) -> Line {
     let mut l = Line::new();
     let _ = write!(l, "ok windows={} ws={} focus={}", count, scene as u32 + 1, focus_frame);
+    l
+}
+
+// ── Room in the outbox ─────────────────────────────────────────────────────
+
+/// The outbox pieces one line of `len` bytes takes.
+pub const fn line_pieces(len: usize) -> usize {
+    let len = if len < LINE_MAX { len } else { LINE_MAX };
+    let n = len.div_ceil(PIECE);
+    if n == 0 { 1 } else { n }
+}
+/// Pieces every answer keeps back for its last line, so it always ends.
+pub const END_ROOM: usize = line_pieces(LINE_MAX);
+
+/// How many of an answer's lines (their lengths, in order) fit in `free`
+/// outbox pieces with room left for its last line, and whether all did.
+/// An answer that does not wholly fit is never ended with `ok`.
+pub fn fit(free: usize, lens: impl IntoIterator<Item = usize>) -> (usize, bool) {
+    let mut left = free.saturating_sub(END_ROOM);
+    let (mut n, mut all) = (0, true);
+    for len in lens {
+        let need = line_pieces(len);
+        if need > left { all = false; break; }
+        left -= need;
+        n += 1;
+    }
+    if free < END_ROOM { all = false; }
+    (n, all)
+}
+
+/// The single line of an answer that did not fit at all.
+pub fn busy_line(what: &str) -> Line {
+    let mut l = Line::new();
+    let _ = write!(l, "error busy {} (the answer queue is full; try again)", what);
+    l
+}
+
+/// The last line of `silk events`: `delivered` events were sent, the newest
+/// of them `last` (or the newest there is, when `all` were sent). When some
+/// did not fit it says so and names only what was sent, so `events since
+/// LAST` picks up the rest.
+pub fn events_end(delivered: usize, last: u32, all: bool) -> Line {
+    let mut l = Line::new();
+    if all { let _ = write!(l, "ok events={} last={}", delivered, last); }
+    else { let _ = write!(l, "error overflow events={} last={} (more waiting; ask again with since)", delivered, last); }
     l
 }
 
@@ -277,6 +322,9 @@ impl<const N: usize> Feeds<N> {
     }
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Option<Feed>> { self.feeds.iter_mut() }
     pub fn any(&self) -> bool { self.feeds.iter().any(|f| f.is_some()) }
+    /// Whether a feed still has kept events after `last` to send (one left
+    /// behind when the outbox was full catches up on a later look).
+    pub fn behind(&self, last: u32) -> bool { self.feeds.iter().flatten().any(|f| f.after != last) }
 }
 
 impl Feed {
