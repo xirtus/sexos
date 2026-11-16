@@ -2,7 +2,7 @@
 //! A program's console attached to a terminal program: one more request kind on the
 //! Files protocol (`fs`), with the operation in `offset` and bytes in the data area.
 //!
-//! The person opens a terminal window with Spindle's `spindle` command (`run +launch term`): its run then
+//! The person opens a terminal window with Spindle's `spindle` command (`run +launch spindle`): its run then
 //! holds [`GRANT_TOKEN`], which only Spindle can put in a run's arguments. Such a run may
 //! PREPARE `/bin/NAME` with arguments, as Spindle does; Files drops any `+` grant or `@`
 //! path the terminal put among them, and the run gets no network. Shell starts the ticket
