@@ -8,6 +8,8 @@ b5d5f4102cca0c37231785b9f48c68181e251a7478248c10544d863cf2eeafdb  crates/sex-pdx
 
 4918d7d03ca42713f932e7e5c66172044b848ff4e8b13f59d1395c18e7cbe7f8  crates/sex-pdx/src/app_scroll.rs
 
+04debd4d22549b231a185652da74a91bad4dcb48b540ea8662b4dc681ca97d91  crates/sex-pdx/src/autofill.rs
+
 7c9d30efb3618edebc483d9eae64275c4f8ccb77d6aaf2f810d31d88c142e14c  crates/sex-pdx/src/bitmap_batch.rs
 
 6f2eb55b2138052fc43c9f40c4026cb1129ac88b285938359491ce23ff61f3b7  crates/sex-pdx/src/browser_sources.rs
@@ -54,7 +56,9 @@ e1a8e5b73c48cfd4cc079510a2c51eacd7f371f00dffabb5968962ca9f462e30  crates/sex-pdx
 
 a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d  crates/sex-pdx/src/history_recovery.rs
 
-1a77963c0903e0da948d02e5d38ff646a18dd12d427519854e85bfda3c97cf76  crates/sex-pdx/src/lib.rs
+c802a7c131bc32914f6573342aa1f5045dfa1781f86bc05a1be4c0b546cda9dc  crates/sex-pdx/src/input_diagnostics.rs
+
+3766c55f455e02199154d9cdbe28c5fc93a454f91a2459fe04e2eafaf8abd24b  crates/sex-pdx/src/lib.rs
 
 b02d602feb5f239687f1a450e8c0ec2b932c366df85ae4f2a5dc67df3f5edcef  crates/sex-pdx/src/memory_region.rs
 
@@ -71,6 +75,14 @@ eac0c2eb5f726f3cfac35fc4ce3f4d3d8eb64fedb7879de9d2f9620ab2a48994  crates/sex-pdx
 04d0affed34c207205ad2e350eb785e6fb52f9f0e35b8420277091c9b8cf773c  crates/sex-pdx/src/program_memory.rs
 
 5bc3ee6bd49ee000237f379acdd27de3415a1e6943342513dec04d58d826100e  crates/sex-pdx/src/program_store.rs
+
+4aee96dcddd65ed1ba98d45f655ed74c9b936ee652f1a1672de20c6ccecc9841  crates/sex-pdx/src/restricted_helper.rs
+
+e6a3818cd7a8c278367b538850ebe11aa284021e66dcb9631dacc330e2863726  crates/sex-pdx/src/restricted_helper_journal.rs
+
+d578a2029dabed915a9f5455ebc1de75820f6f34f59d6a33abc36fade1f5355a  crates/sex-pdx/src/restricted_helper_provider.rs
+
+43adf797d79213ee14585620045ba15904d3ad88940d8832fc24f572ce84ffca  crates/sex-pdx/src/restricted_job.rs
 
 93d33d6a62bf030a19ffdfe31883f76c873f02a93eff525f4bb9dd308a2f3ec7  crates/sex-pdx/src/screen_capture.rs
 
@@ -144,7 +156,7 @@ ddda6ecb6219bb1cdad31c61a5401719eaecee79c8e3e218b44034ca45a2cc8f  kernel/src/clo
 
 cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/history_recovery.rs
 
-dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d  kernel/src/interrupts.rs
+c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d  kernel/src/interrupts.rs
 
 c7d42c2df1965a3b94bce554e10d5047c4269994c942f524b60b9de7b94a470a  kernel/src/ipc.rs
 

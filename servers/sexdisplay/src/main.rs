@@ -156,6 +156,7 @@ static mut FRAME_GROUPS: surface_groups::FrameGroups = surface_groups::FrameGrou
 use surface_lifecycle::{Surface, MAX_SURFACES, TEXT_BUF_CAP, TEXT_MAX_ROWS, TEXT_LEGACY_COLS, SURFACE_EMPTY};
 static mut SURFACES: [Surface; MAX_SURFACES] = [SURFACE_EMPTY; MAX_SURFACES];
 mod scene;
+mod restricted;
 mod frame_output;
 mod virtio_gpu;
 mod intel;
@@ -4006,6 +4007,9 @@ fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, pub
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    let mut restriction=sex_pdx::restricted_helper_provider::Provider::new();
+    restriction.initialize(&restricted::JOURNAL,&mut restricted::Kernel);
+    restricted::publish(&restriction);
     // Resolve BOOT metadata before the first pixel write, including compact modes.
     let geometry=sex_pdx::display_boot::geometry().expect("BOOT_DISPLAY_GEOMETRY");
     let address=sex_pdx::display_boot::framebuffer().expect("BOOT_DISPLAY_FRAMEBUFFER");
@@ -4146,6 +4150,11 @@ pub extern "C" fn _start() -> ! {
 
     // 2. Listen for runtime FB handoff and SilkBar updates
     loop {
+        restriction.poll(&mut restricted::Kernel,|effect|match effect {
+            sex_pdx::restricted_helper_provider::Effect::Scrub(subject)=>restricted::quiet(subject),
+            sex_pdx::restricted_helper_provider::Effect::Install(_)|sex_pdx::restricted_helper_provider::Effect::Expire(_)=>true,
+        });
+        restricted::publish(&restriction);
         // Consume the Shell's committed UiIR records strictly in order. This
         // first stream is observed and checked; it drives no rendering yet.
         while let Some(stream)=uiir.as_mut() {
@@ -4482,6 +4491,10 @@ pub extern "C" fn _start() -> ! {
                     silkbar_model::OP_SILKBAR_UPDATE=>256,_=>512,
                 };
             }
+
+            if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:msg.caller_pd,task:msg.caller_task},opcode:msg.type_id,words:[msg.arg0,msg.arg1,msg.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}
+            // Includes capture, inline text, region pixels, and window mutation.
+            if restricted::denied(msg.caller_pd){continue;}
 
             if msg.type_id==sex_pdx::screen_capture::OP{
                 if unsafe{SCREEN_CAPTURE.request(msg,&lifecycle,sex_pdx::get_ticks(),FB_W as usize,FB_H as usize)}{pending_paint.request_full();}

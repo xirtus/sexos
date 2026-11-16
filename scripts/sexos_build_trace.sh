@@ -44,6 +44,18 @@ is_allowed_crate() {
   grep -Fxq "$value" <<<"$allowed_crates_raw"
 }
 
+# Rust cfg values may contain quotes; parse the TOML string rather than grep it.
+stage_rustflags() {
+  python3 - "$1" <<'PYFLAGS'
+import sys, tomllib
+with open(sys.argv[1], 'rb') as source:
+    value = tomllib.load(source)['stage'][0].get('rustflags', '')
+if not isinstance(value, str) or '\n' in value or '\r' in value:
+    raise SystemExit('invalid stage rustflags')
+print(value)
+PYFLAGS
+}
+
 run_stage() {
   local stage="$1"
   local action
@@ -53,6 +65,7 @@ run_stage() {
   case "$action" in
     prep_iso_root)
       rm -rf iso_root 2>/dev/null || true
+      rm -rf target/build-consumed-inputs
       mkdir -p iso_root/servers iso_root/apps iso_root/programs iso_root/boot/limine
       ;;
     copy_limine)
@@ -65,7 +78,7 @@ run_stage() {
       pkg="$(rg -n '^package\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       src="$(rg -n '^source_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       dst="$(rg -n '^dest_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
-      extra_rustflags="$(rg -n '^rustflags\s*=\s*"[^"]*"' "$stage" | sed -E 's/.*"([^"]*)".*/\1/' || true)"
+      extra_rustflags="$(stage_rustflags "$stage")"
       is_allowed_crate "$pkg" || { echo "[FAIL] package not in whitelist: $pkg"; exit 1; }
       RUSTFLAGS="-C link-arg=-Tkernel/linker.ld ${extra_rustflags:-}" cargo build --locked \
         -Z build-std=core,compiler_builtins,alloc \
@@ -80,12 +93,13 @@ run_stage() {
       manifest="$(rg -n '^manifest\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       src="$(rg -n '^source_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       dst="$(rg -n '^dest_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
-      extra_rustflags="$(rg -n '^rustflags\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+      extra_rustflags="$(stage_rustflags "$stage")"
       # A stage may name its own target (programs use SSE; kernel and servers don't).
       stage_target="$(rg -n '^target\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       # Ordinary programs (x86_64-sex-std.json) build the whole standard library.
       stage_std="$(rg -n '^build_std\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       is_allowed_crate "$manifest" || { echo "[FAIL] manifest not in whitelist: $manifest"; exit 1; }
+      python3 scripts/build_input_receipt.py begin "$stage"
       # Their std is the toolchain's with SexOS's std::process added (scripts/sex_std_source.py).
       if [[ ${stage_target:-$TARGET} == x86_64-sex-std.json ]]; then
         export __CARGO_TESTS_ONLY_SRC_ROOT
@@ -117,6 +131,7 @@ run_stage() {
         done
       fi
       cp "$src" "$dst"
+      python3 scripts/build_input_receipt.py finish "$stage"
       ;;
     copy_file)
       local src dst

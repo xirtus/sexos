@@ -11,6 +11,7 @@ pub mod thread;
 pub mod tls;
 pub mod sound;
 pub mod mailbox;
+pub mod autofill;
 pub mod settings;
 
 /// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
@@ -37,9 +38,9 @@ const NET: u32 = 13;
 /// reaches its inbox wakes it at once.
 const MAILBOX_LOOK_TICKS: u64 = 4;
 
-fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) || launch::is_event(m) }
+fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) || launch::is_event(m) || restricted_status::is_event(m) }
 /// A message from Shell: keys, pointer, resizes and closes for the main task's window.
-fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::is_event(m) }
+fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::is_event(m) && !restricted_status::is_event(m) }
 
 pub enum Event {
     Key(Key),
@@ -142,6 +143,13 @@ impl Window {
         }
     }
     fn event(&mut self, m: &sex_pdx::PdxMessage) -> Option<Event> {
+        // Autofill protocol packets belong to its explicit SDK consumer, never
+        // to toolkit key handling. Preserve them without formatting arguments.
+        if m.caller_pd==SHELL && m.caller_task==SHELL && sex_pdx::autofill::response(m.type_id) {mailbox::put(*m);return None;}
+        // Launch receipts belong to their explicit supervisor, not UI dispatch.
+        // is_shell excludes these from the UI mailbox scan, so they are stashed once.
+        if launch::is_event(m) { mailbox::put(*m); return None; }
+        if restricted_status::is_event(m) { mailbox::put(*m); return None; }
         // Another task's answer, taken while this one waited: it looks in the mailbox.
         if is_answer(m) { mailbox::put(*m); return None; }
         if m.caller_pd != SHELL { return None; }
@@ -173,11 +181,13 @@ impl Window {
     /// The next key or close if one is already waiting, otherwise `None` at once.
     pub fn poll(&mut self) -> Option<Event> {
         if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take(); }
-        while let Some(m) = mailbox::take(is_shell) {
+        while let Some(m) = mailbox::take(|m|is_shell(m)&&!sex_pdx::autofill::response(m.type_id)) {
             if let Some(event) = self.event(&m) { return Some(event); }
         }
-        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
-            if let Some(event) = self.event(&m) { return Some(event); }
+        while let Some(mut m) = sex_pdx::pdx_try_listen_raw(0) {
+            let event=self.event(&m);
+            if sex_pdx::autofill::response(m.type_id){autofill::erase_message(&mut m);}
+            if let Some(event)=event{return Some(event);}
         }
         None
     }
@@ -306,6 +316,8 @@ pub mod dnd {
     pub fn cancel() { let _ = send(d::Message::Cancel); }
 }
 
+pub mod restricted_status;
+
 /// The system clipboard, shared with every program and Quil, through Shell
 /// ([`sex_pdx::program_clipboard`]). Shell takes a copy or a paste only while this
 /// window has focus and right after the person pressed a key or clicked in it, so call
@@ -396,7 +408,7 @@ pub mod launch {
     pub use l::Event;
     use sex_pdx::program_store as store;
 
-    pub(crate) fn is_event(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && m.type_id == l::OP_EVENT }
+    pub(crate) fn is_event(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && m.caller_task == SHELL && m.type_id == l::OP_EVENT }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Error {
         /// Files refused: no such program, or a grant this run does not hold (a `files` code).
@@ -408,6 +420,7 @@ pub mod launch {
     }
     /// Starts `/bin/NAME` (or `@/path` of a program file this run holds) with `args`.
     /// `network` only works for a run that has the network. Events for it carry `cookie`.
+    /// Call from the program's main task; launch/control requests are run-scoped.
     pub fn run(name: &[u8], args: &[u8], network: bool, cookie: u32) -> Result<(), Error> {
         start(name, args, if network { store::RUN_NETWORK } else { 0 }, cookie)
     }
@@ -489,6 +502,7 @@ pub mod files {
     pub use w::{message, NOT_FOUND};
 
     fn region() -> Result<&'static mut [u8], Error> {
+        direct::restricted::region_ready()?;
         let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?;
         Ok(unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) })
     }
@@ -496,6 +510,7 @@ pub mod files {
     static REGION_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     /// What Files last said about `path`, if nothing has changed since: no call at all.
     fn cached(path: &[u8]) -> Option<direct::Stat> {
+        direct::restricted::region_ready().ok()?;
         let mut at = REGION_AT.load(Ordering::Relaxed);
         if at == 0 { at = region().ok()?.as_ptr() as u64; REGION_AT.store(at, Ordering::Relaxed); }
         let cache = unsafe { core::slice::from_raw_parts((at as usize + w::CACHE_AT) as *const u8, w::CACHE_BYTES) };
@@ -659,6 +674,9 @@ pub mod files {
     /// the mailbox, where `Window::next` finds them.
     pub mod direct {
         use super::{exchange, w, Error, Hold};
+
+        /// Epoch-bound immutable offline jobs; never uses ordinary launch tickets.
+        pub mod restricted { include!("restricted_files.rs"); }
 
         /// What Files knows of a file or folder.
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -836,6 +854,14 @@ pub mod files {
             }
         }
 
+        /// Exact private job metadata for the attested restricted bootstrap.
+        /// Failure never implies permission to run through an ambient fallback.
+        pub fn restricted_boot()->Result<sex_pdx::restricted_job::Info,Error>{
+            exchange(None,sex_pdx::restricted_job::KIND,b"",sex_pdx::restricted_job::BOOT_INFO,0,|_|{},|n,d|{
+                if n as usize!=sex_pdx::restricted_job::INFO_BYTES{return None}
+                sex_pdx::restricted_job::Info::decode(&d[..n as usize])
+            })?.ok_or(w::INVALID)
+        }
         /// The words typed after the program's name, if it was started with any.
         pub fn args(out: &mut [u8; w::ARGS_MAX]) -> usize { args_into(None, out) }
         /// Reads up to `out.len()` bytes from byte `offset`; fewer at the file's end.

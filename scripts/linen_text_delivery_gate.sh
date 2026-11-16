@@ -25,7 +25,10 @@ assert 'bell_frame_id' not in function('toggle_command_palette')
 assert 'minimize_frame(COMMAND_PALETTE_FRAME_ID);' in function('toggle_command_palette')
 assert 'PALETTE_VISIBILITY.set(' in function('toggle_command_palette')
 assert 'set_frame_minimized(COMMAND_PALETTE_FRAME_ID,false)' in function('palette_show')
-assert 'shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll();' in s
+required_polls = 'shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll();'
+# The broker adds one exact zero-argument poll; original delivery order stays fixed.
+with_broker = required_polls.replace('clipboard_poll(); app_input_poll();', 'clipboard_poll(); autofill_routes::poll(); app_input_poll();')
+assert required_polls in s or with_broker in s
 assert 'linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send()' in s
 Path(sys.argv[2]).write_text('\n'.join(parts))
 PYCODE

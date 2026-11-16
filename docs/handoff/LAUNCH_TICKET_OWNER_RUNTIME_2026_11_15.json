@@ -1,0 +1,31 @@
+{
+  "status": "PASS",
+  "scope": "Development graft, ordinary main-run/foreign-PD ticket routing; no sealed cohort, installer, restricted-role, provider restart, independent stale-task predicate or worker exclusion claim",
+  "runtime_source": "ec2cc405e0ac89a29d93f338056dad4c67534c4c",
+  "fixture_runner_source": "aa3fbdc528d59944ec3cc62b62f023b4b0a8874b",
+  "source_iso_sha256": "93d3bef41ec9608d067a20357c2e0740e9c5785798449ab16f46734ba2f631ad",
+  "iso_sha256": "1befc936cf724d3bf829ae7dcae5607ad148826f90ae54e54983b1c936d527a9",
+  "fixture_sha256": "70ba7a60bd5b1b3c93a787c009712ad20df9607740b4bff065e81952b759ed04",
+  "evidence_directory": "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-proof-v4",
+  "result_sha256": "e37e6b53574d9117be7faf8b0973cced6c48fb11030f551e3b4c88247f0a01fb",
+  "files": {
+    "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-proof-v4/source-commit.txt": "9b7fd609058021075a55b16f162f3b8402cc761c1cf4dc5495ef010a83fc4198",
+    "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-proof-v4/result.json": "e37e6b53574d9117be7faf8b0973cced6c48fb11030f551e3b4c88247f0a01fb",
+    "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-proof-v4/runner-source.py": "51809c13490f9d2c901d79db2474bb6f14d6777e9bc2e1dea8cbdca7527f6d71",
+    "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-proof-v4/parents-ready.ppm": "59e05c03974f02284c9cf3cf62b460554b45765cb2498963e77d90960ca55526",
+    "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-proof-v4/ticket-owner-qemu.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-proof-v4/inputs.json": "79c759436f1ea64477f21b2190b8ce9a529802f28c70841b2f3a6a2e16437fac",
+    "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-proof-v4/nvme.img": "3fd73c31827d6494b1b10d83798d21fc2ca4a47ce6ced2eda90816412d6b4722",
+    "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-proof-v4/after-ownership.ppm": "f0f14aa3c78a2ac58d7cf52e5a439f150101b2d4d33fe446599e3f934b337c6c",
+    "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-proof-v4/ticket-owner-serial.log": "7d53faa802e83e0566d2649a0fca7398a7cca005893e83fcf5d617170206ff78"
+  },
+  "provenance_file": "/Users/xmacbookm5/Projects/sexos-launch-owner/target/launch-owner-runtime/provenance-v4.json",
+  "provenance_sha256": "97505da31d0bf323d0caba291dc23d17e2f230c3c469c053cb6b3d62edacdb54",
+  "preserved_failures": {
+    "v1": "fixture expected DENIED; actual ungranted read path returns NAME before I/O",
+    "v2": "worker PREPARE denial assertion failed without assertion value diagnostics",
+    "v3": "exact Ok(6) vs Err(11) isolated kernel intentional live-worker -> main-task normalization"
+  },
+  "normal_worker_limit": "kernel/src/ipc/sender.rs27-33 aliases live worker task to main run. Actual v3 shows worker private read AND PREPARE succeed. This proof does not claim independent worker provenance or worker launch exclusion.",
+  "row_reuse_limit": "New Spindle PREPARE/global-slot replacement and cleanup also participate; actual same-row/new-task stale denial is composite. Existing production-method host counterexample isolates owner task comparison."
+}

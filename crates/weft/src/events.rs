@@ -53,6 +53,8 @@ impl Ui {
             Event::Pointer(p) => self.on_pointer(p),
             Event::Resize { width, height } => self.resize(width, height),
             Event::Close => self.out.push(Response::Close),
+            // Drop payloads belong to the application, not a focused widget.
+            Event::Drop { .. } | Event::DragEnded { .. } => {},
         }
         self.layout();
         core::mem::take(&mut self.out)

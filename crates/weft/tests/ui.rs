@@ -8,6 +8,25 @@ use weft::{a11y, DialogValue, Response, Strings, TabEvent, Theme, Ui};
 
 fn ui() -> Ui { Ui::new(800, 600, Theme::light(), Strings::new("en")) }
 
+#[test]
+fn application_drag_notifications_do_not_edit_or_activate_widgets() {
+    let mut ui = ui();
+    let root = ui.root();
+    let field = ui.field(root, "kept", "Name");
+    let _button = ui.button(root, "Accept");
+    ui.handle(Event::Key(Key::new(code::TAB)));
+    assert_eq!(ui.focused(), Some(field));
+    for event in [Event::Drop { kind: 1, x: 10, y: 20 },
+                  Event::Drop { kind: 2, x: -1, y: i16::MAX },
+                  Event::DragEnded { target: 0 },
+                  Event::DragEnded { target: u32::MAX }] {
+        assert!(ui.handle(event).is_empty());
+        assert_eq!(ui.focused(), Some(field));
+        assert_eq!(ui.text_of(field), "kept");
+        assert_eq!(ui.size(), (800, 600));
+    }
+}
+
 fn press(ui: &mut Ui, k: Key) -> Vec<Response> { ui.handle(Event::Key(k)) }
 fn typed(ui: &mut Ui, s: &str) -> Vec<Response> { s.chars().flat_map(|c| ui.handle(Event::Key(Key::typed(c)))).collect() }
 fn pointer(ui: &mut Ui, x: f32, y: f32, kind: PointerKind) -> Vec<Response> { ui.handle(Event::Pointer(Pointer { x, y, kind })) }

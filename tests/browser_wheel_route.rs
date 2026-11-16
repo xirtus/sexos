@@ -49,6 +49,7 @@ pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 pub const ERR_CAP_INVALID:u64=u64::MAX-2;
 pub fn get_ticks()->u64{1}
 #[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{unsafe{crate::LOG.push(format!($($arg)*));}}}}
+#[macro_export]macro_rules! serial_input_record{(($($public:tt)*); ($($private:tt)*))=>{{let _=format_args!($($private)*);serial_record!($($public)*);}}}
 macro_rules! serial_println{($($arg:tt)*)=>{serial_record!($($arg)*)}}
 static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
 static mut APP_INPUT:Queue=Queue::new();

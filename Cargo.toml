@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0", "vendor/acpi-6.1.1"]
+exclude = ["vendor/vst3-0.3.0", "vendor/com-scrape-types-0.1.1", "vendor/clap-sys-0.5.0", "vendor/keepass-0.17.0", "vendor/rust-argon2-3.0.0", "vendor/embedded-tls-0.19.0", "vendor/pp-rs-0.2.1", "vendor/image-webp-0.2.4", "vendor/virtio-drivers-0.13.0", "vendor/smoltcp-0.14.0", "vendor/acpi-6.1.1"]
 members = [
     "kernel",
     "crates/denim",
@@ -52,6 +52,10 @@ members = [
     "crates/sex-egui",
     "crates/weft",
     "apps/abacus",
+    "apps/velvet",
+    "apps/leather-samples",
+    "apps/chastity",
+    "apps/chastity-probe",
     "apps/tassel",
     "crates/sex-html",
     "crates/sex-js",
@@ -77,6 +81,7 @@ members = [
     "crates/shuttle",
     "crates/sex-ime",
     "crates/shibari",
+    "crates/chastity-core",
     "crates/sex-multipass",
     "crates/sex-mail",
     "crates/sexfs",
@@ -167,7 +172,13 @@ members = [
     "crates/aftercare-core",
     "apps/corset",
     "crates/moan-core",
+    "crates/moan-plugin",
+    "crates/moan-export",
     "apps/moan-probe",
+    "apps/moan",
+    "apps/moanplug",
+    "apps/moanrack",
+    "apps/ribbon-seal",
     "crates/sex-xml",
     "crates/sex-ebook",
     "apps/bodice",
@@ -321,6 +332,12 @@ opt-level = 3
 opt-level = 3
 # naga's GLSL front end runs in programs: its preprocessor, made no_std (vendor/pp-rs-0.2.1).
 [patch.crates-io]
+# Independent bounded ARP/IPv6 discovery clocks (see vendored provenance).
+smoltcp = { path = "vendor/smoltcp-0.14.0" }
+# Bounded expanded payloads and KDBX4 staging cleanup.
+keepass = { path = "vendor/keepass-0.17.0" }
+# Wipe Argon2 workspace and explicit staging (see vendor provenance/scope).
+rust-argon2 = { path = "vendor/rust-argon2-3.0.0" }
 pp-rs = { path = "vendor/pp-rs-0.2.1" }
 # Bell captures sound: virtio-snd input transfers added (vendor/virtio-drivers-0.13.0/SEXOS_CHANGES.md).
 virtio-drivers = { path = "vendor/virtio-drivers-0.13.0" }
@@ -346,3 +363,4 @@ krilla = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf4518
 opt-level = 3
 [profile.dev.package.naga]
 opt-level = 2
+
