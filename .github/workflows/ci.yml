@@ -23,7 +23,8 @@ jobs:
   host:
     name: Host regressions
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 23 min warm; a cold cargo cache (after a red master) needs more.
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -535,7 +536,7 @@ jobs:
   programs:
     name: Programs, packages and ports
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -695,6 +696,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/decor-source.img"
         python3 scripts/window_decorations_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/decor-source.img" --out "$RUNNER_TEMP/sexos-desktop/decorations"
+    - name: Program tray items (a menu row reaches the program) and a notification's inline reply
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/tray-items-source.img"
+        python3 scripts/tray_items_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-items-source.img" --out "$RUNNER_TEMP/sexos-desktop/tray-items"
     - name: Magnifier and colour filters (accessibility)
       run: |
         truncate -s 256M "$RUNNER_TEMP/access-source.img"
