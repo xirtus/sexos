@@ -66,20 +66,24 @@ pub fn row(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, sce
             if !s.active || s.w == 0 || s.h == 0 || (s.surface_id == focus) != (pass == 0) { continue; }
             if s.surface_id == CURSOR { continue; }
             if !scene.groups.independent(s) { continue; }
+            // The compositor's own clamped rectangle, so shape and pixels agree.
+            let (rx, ry, rw, rh) = scene.groups.rect(s, w, h);
+            if rw == 0 || rh == 0 { continue; }
+            let (sx, sy, sw, sh) = (rx as i32, ry as i32, rw as u32, rh as u32);
             if s.owner_pd == SHELL_PD && s.surface_id == LAUNCHER_OVERLAY {
-                overlay = Some(Win { id: s.surface_id, x: s.x, y: s.y, w: s.w, h: s.h, ..Win::EMPTY });
+                overlay = Some(Win { id: s.surface_id, x: sx, y: sy, w: sw, h: sh, ..Win::EMPTY });
                 continue;
             }
             let focused = pass == 0;
             // A window filling the screen keeps square corners and casts nothing.
-            let full = s.x <= 0 && s.y <= bar && s.x + s.w as i32 >= w as i32 && s.y + s.h as i32 >= h as i32;
+            let full = sx <= 0 && sy <= bar && sx + sw as i32 >= w as i32 && sy + sh as i32 >= h as i32;
             let shadow = if full { Shadow { spread: 0, offset_y: 0, alpha: 0 } }
                 else if focused { shape::FOCUSED.scaled(scale) } else { shape::RESTING.scaled(scale) };
             let reach = shadow.reach() as i32;
-            if yi < s.y - reach || yi >= s.y + s.h as i32 + reach { continue; }
+            if yi < sy - reach || yi >= sy + sh as i32 + reach { continue; }
             if n < MAX_SURFACES {
-                wins[n] = Win { id: s.surface_id, x: s.x, y: s.y, w: s.w, h: s.h,
-                    r: if full { 0 } else { shape::radius(scale, s.w, s.h) }, shadow, focused };
+                wins[n] = Win { id: s.surface_id, x: sx, y: sy, w: sw, h: sh,
+                    r: if full { 0 } else { shape::radius(scale, sw, sh) }, shadow, focused };
                 n += 1;
             }
         }
@@ -138,11 +142,20 @@ pub fn row(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, sce
                     let cover = wins[t].cover(xi, yi);
                     let over = if wins[t].focused { 0 } else { shade_under(xi, Some(t)) };
                     if cover == 255 { shape::darken(cur, over) } else {
-                        let next = wins[t + 1..].iter().position(|v| v.holds(xi, yi)).map(|i| i + t + 1);
-                        let under = match next {
-                            Some(b) => shape::darken(crate::composite_pixel_selected(xi as usize, y, w, h, wall(x), scene.focus, Some(wins[b].id), scene), shade_under(xi, Some(b))),
-                            None => shape::darken(wall(x), shade_under(xi, None)),
+                        // Down the stack: each window below with its own corner coverage.
+                        let mut layers = [(0u32, 0u8); 4];
+                        let mut depth = 0;
+                        let mut from = t + 1;
+                        let mut under = loop {
+                            let Some(b) = wins[from..].iter().position(|v| v.holds(xi, yi)).map(|i| i + from) else {
+                                break shape::darken(wall(x), shade_under(xi, None));
+                            };
+                            let c = shape::darken(crate::composite_pixel_selected(x, y, w, h, wall(x), scene.focus, Some(wins[b].id), scene), shade_under(xi, Some(b)));
+                            let k = wins[b].cover(xi, yi);
+                            if k == 255 || depth == layers.len() { break c; }
+                            layers[depth] = (c, k); depth += 1; from = b + 1;
                         };
+                        while depth > 0 { depth -= 1; let (c, k) = layers[depth]; under = shape::blend(c, under, k); }
                         shape::darken(shape::blend(cur, under, cover), over)
                     }
                 }
