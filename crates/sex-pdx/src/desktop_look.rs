@@ -2,7 +2,8 @@
 //!
 //! The Shell sends `OP_DESKTOP_LOOK` with the wallpaper and the night light
 //! level; Display keeps them here and paints every frame with them. The
-//! wallpaper is a vertical gradient; night light warms the finished frame by
+//! wallpaper is a vertical gradient, and the first one, the SexOS wallpaper,
+//! also carries the lips mark (`brand.rs`) in its middle; night light warms the finished frame by
 //! scaling green and blue down, the way redshift/gammastep and Plasma's Night
 //! Color do, so programs need not know about it.
 
@@ -11,14 +12,20 @@ use core::sync::atomic::{AtomicU8, Ordering};
 /// Shell -> Display. arg0 = wallpaper index, arg1 = night light level.
 pub const OP_DESKTOP_LOOK: u64 = 0x2DA;
 
-/// Gradients (top, bottom). Index 0 is the theme's own background.
-pub const WALLPAPERS: [(&str, u32, u32); 5] = [
-    ("Theme", 0, 0),
+/// Gradients (top, bottom). Index 0, the default, is the SexOS wallpaper:
+/// warm charcoal (`brand::WALL_TOP`/`WALL_BOTTOM`) with the lips mark on it.
+/// Append only: settings files keep the index by name (`sex_config::WALLPAPERS`).
+pub const WALLPAPERS: [(&str, u32, u32); 6] = [
+    ("SexOS", 0x00332E2F, 0x001C1919),
     ("Dusk", 0x002A1B3D, 0x00A8505A),
     ("Forest", 0x000F2A20, 0x004E7A4A),
     ("Ocean", 0x00081A33, 0x00287A9A),
     ("Slate", 0x001C1E26, 0x004A4E5C),
+    // The desktop theme's own navy gradient, the default before the lips.
+    ("Midnight", 0x00081424, 0x001E1E2E),
 ];
+/// The wallpaper that carries the mark.
+pub const MARK_WALLPAPER: u8 = 0;
 /// Night light off, low, medium, high.
 pub const NIGHT_LEVELS: u8 = 4;
 
@@ -44,11 +51,10 @@ pub fn take_night_change() -> bool {
 
 /// The chosen gradient, or None for the theme's own.
 pub fn wallpaper() -> Option<(u32, u32)> {
-    match WALLPAPERS.get(wallpaper_index() as usize) {
-        Some(&(_, top, bottom)) if wallpaper_index() != 0 => Some((top, bottom)),
-        _ => None,
-    }
+    WALLPAPERS.get(wallpaper_index() as usize).map(|&(_, top, bottom)| (top, bottom))
 }
+/// True when the wallpaper on screen carries the lips mark.
+pub fn shows_mark() -> bool { wallpaper_index() == MARK_WALLPAPER }
 
 /// Green and blue kept per level, out of 256: about 4500 K, 3700 K, 2900 K.
 const KEEP: [(u32, u32); NIGHT_LEVELS as usize] = [(256, 256), (236, 200), (218, 156), (198, 112)];

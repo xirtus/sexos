@@ -423,16 +423,13 @@ fn prefs_body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     let x = content.x + 14;
     let w = content.w - 28;
     let mut y = content.y + 10;
-    if !d.python.live() || !s.scanned {
-        if !s.scanned {
-            s.scanned = true;
-            crate::python::scan_addons(d);
-        }
-        if let Some(why) = d.python.unavailable.clone() {
-            ui.p.label(Rect::new(x, y, w, 22), "Add-ons need live Python, which cannot run here:", t::TEXT, Align::Left);
-            ui.p.label(Rect::new(x, y + 22, w, 22), &why, t::TEXT_DIM, Align::Left);
-            return;
-        }
+    if !s.scanned {
+        s.scanned = true;
+        crate::python::scan_addons(d);
+    }
+    if let Some(why) = d.python.unavailable.clone() {
+        ui.p.label(Rect::new(x, y, w, 20), &format!("Python add-ons unavailable ({why}); .wasm add-ons run in-process."), t::TEXT_DIM, Align::Left);
+        y += 24;
     }
     let folder = crate::python::addons_dir(d).display().to_string();
     if ui.button(Rect::new(x + w - 90, y, 90, 22), "Refresh") {
@@ -441,7 +438,7 @@ fn prefs_body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     ui.p.label(Rect::new(x, y, w - 100, 22), &format!("Add-ons folder: {folder}"), t::TEXT_DIM, Align::Left);
     y += 32;
     if d.python.addons.is_empty() {
-        ui.p.label(Rect::new(x, y, w, 22), "No add-ons found. Put a .py file with bl_info (or a package folder) into the add-ons folder.", t::TEXT_DIM, Align::Left);
+        ui.p.label(Rect::new(x, y, w, 22), "No add-ons found. Put a .py file with bl_info, a package folder, or a .wasm add-on into the add-ons folder.", t::TEXT_DIM, Align::Left);
         return;
     }
     let addons = d.python.addons.clone();

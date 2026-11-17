@@ -1,0 +1,17 @@
+[package]
+name = "spiral_rust"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+
+[dependencies]
+polyamour-sdk = { path = "../../../polyamour-sdk" }
+libm = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+strip = true
+panic = "abort"
+
+[workspace]

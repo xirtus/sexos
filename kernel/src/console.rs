@@ -75,10 +75,14 @@ fn copy_tail(log: &Log, out: &mut [u8]) -> usize {
 
 const MAX_COLS: usize = 320;
 const MAX_ROWS: usize = 160;
-const BOOT_BG: u32 = 0x10141a;
-const BOOT_FG: u32 = 0xc8d0dc;
-const BAR_BG: u32 = 0x2a3a5a;
+// SexOS colours (sex_pdx::brand): warm charcoal, the lips in rose-gold.
+const BOOT_BG: u32 = 0x1a1718;
+const BOOT_FG: u32 = 0xd8d0ce;
+const BAR_BG: u32 = sex_pdx::brand::CHARCOAL;
 const BAR_FG: u32 = 0xffffff;
+const BAR_DIM: u32 = 0xe2a084;
+/// Text rows the header (the lips and the title) takes.
+const HEADER_ROWS: usize = 4;
 const NOTE_BG: u32 = 0x5a3a10;
 const STOP_BG: u32 = 0x4a0c14;
 const STOP_FG: u32 = 0xffffff;
@@ -165,16 +169,27 @@ pub fn init(fb: &limine::framebuffer::Framebuffer) {
     s.scale = scale_for(f.height);
     s.cols = (((f.width - 8) / s.cell_w()) as usize).min(MAX_COLS);
     s.rows = (((f.height - 8) / s.cell_h()) as usize).min(MAX_ROWS);
-    if s.cols < 20 || s.rows < 6 { return; }
+    if s.cols < 20 || s.rows < HEADER_ROWS + 6 { return; }
     f.fill(0, 0, f.width, f.height, BOOT_BG);
-    let mut title = [b' '; MAX_COLS];
-    let text = b" SexOS is starting. Each line below is a step; if it stops, the last line says where.";
-    title[..text.len().min(MAX_COLS)].copy_from_slice(&text[..text.len().min(MAX_COLS)]);
-    s.put_row_text(0, &title);
-    f.fill(0, 0, f.width, 4 + s.cell_h(), BAR_BG);
-    s.draw_row(&f, 0, BAR_FG, BAR_BG);
-    s.top = 1;
-    s.row = 1;
+    // The header: the SexOS lips, and beside them what this screen is.
+    let header_h = HEADER_ROWS as u32 * s.cell_h();
+    let mark_h = header_h - s.cell_h();
+    let mark_w = mark_h * sex_pdx::brand::DESIGN_W / sex_pdx::brand::DESIGN_H;
+    let (mark_x, mark_y) = (4 + s.cell_w(), 4 + (header_h - mark_h) / 2);
+    let text_col = ((mark_x + mark_w) / s.cell_w()) as usize + 2;
+    f.fill(0, 0, f.width, 4 + header_h, BAR_BG);
+    for (row, text, fg) in [(0, &b""[..], BAR_FG), (1, &b"SexOS is starting."[..], BAR_FG),
+        (2, &b"Each line below is a step; if it stops, the last line says where."[..], BAR_DIM), (3, &b""[..], BAR_FG)] {
+        let mut line = [b' '; MAX_COLS];
+        let n = text.len().min(MAX_COLS.saturating_sub(text_col));
+        line[text_col.min(MAX_COLS)..text_col.min(MAX_COLS) + n].copy_from_slice(&text[..n]);
+        s.put_row_text(row, &line);
+        s.draw_row(&f, row, fg, BAR_BG);
+    }
+    sex_pdx::brand::draw(mark_w, sex_pdx::brand::Tone::Rich, |_, _| BAR_BG,
+        |x, y, c| f.fill(mark_x + x, mark_y + y, 1, 1, c & 0x00ff_ffff));
+    s.top = HEADER_ROWS;
+    s.row = HEADER_ROWS;
     s.col = 0;
     s.fb = Some(f);
     SHOWING.store(true, Ordering::Release);

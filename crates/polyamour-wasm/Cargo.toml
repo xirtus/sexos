@@ -1,0 +1,14 @@
+[package]
+name = "polyamour-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Sandboxed WebAssembly add-on host and interactive Session bridge for Polyamour (sex-3d + sex-wasm)"
+
+[dependencies]
+sex-3d = { path = "../sex-3d" }
+sex-wasm = { path = "../sex-wasm" }
+polyamour-sdk = { path = "../polyamour-sdk" }
+
+[dev-dependencies]
+wat = "1"

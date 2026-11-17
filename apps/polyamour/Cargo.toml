@@ -12,9 +12,12 @@ path = "src/main.rs"
 [dependencies]
 sex-3d = { path = "../../crates/sex-3d" }
 sex-office = { path = "../../crates/sex-office" }
+polyamour-wasm = { path = "../../crates/polyamour-wasm" }
 
 [target.'cfg(target_os = "hermit")'.dependencies]
 sex-std = { path = "../../crates/sex-std" }
 
 [target.'cfg(not(target_os = "hermit"))'.dependencies]
 png = "0.18"
+winit = "0.30"
+softbuffer = "0.4"
