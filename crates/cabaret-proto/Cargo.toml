@@ -1,0 +1,10 @@
+[package]
+name = "cabaret-proto"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Cabaret control plane: OBS WebSocket v5 (port 4455), USB HID Stream Deck codec, window.obsstudio browser bridge, obspython/obslua line-RPC, and headless JSON CLI schema"
+
+[dependencies]
+libm = "0.2"
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }

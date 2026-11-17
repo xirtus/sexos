@@ -1,0 +1,30 @@
+[package]
+name = "cabaret"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Cabaret: the SexOS live video broadcast studio and recorder with full OBS + OmaBroadcast parity"
+
+[[bin]]
+name = "cabaret"
+path = "src/main.rs"
+
+[features]
+default = ["sexos"]
+sexos = ["dep:sex-pdx", "dep:sex-app", "dep:sex-media", "dep:sex-uvc", "dep:shibari", "weft/sexos"]
+
+[dependencies]
+weft = { path = "../../crates/weft" }
+sex-color = { path = "../../crates/sex-color" }
+cabaret-core = { path = "../../crates/cabaret-core" }
+cabaret-plugins = { path = "../../crates/cabaret-plugins" }
+cabaret-proto = { path = "../../crates/cabaret-proto" }
+sex-splice = { path = "../../crates/sex-splice" }
+sex-wasm = { path = "../../crates/sex-wasm" }
+burlesque-core = { path = "../../crates/burlesque-core" }
+libm = "0.2"
+sex-pdx = { path = "../../crates/sex-pdx", optional = true }
+sex-app = { path = "../../crates/sex-app", optional = true }
+sex-media = { path = "../../crates/sex-media", optional = true }
+sex-uvc = { path = "../../crates/sex-uvc", optional = true }
+shibari = { path = "../../crates/shibari", optional = true }

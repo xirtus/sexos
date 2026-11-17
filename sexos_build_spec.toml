@@ -115,7 +115,9 @@ crates = [
   "apps/climax/Cargo.toml",
   "apps/batik/Cargo.toml",
   "apps/burlesque/Cargo.toml",
-  "apps/corset/Cargo.toml"
+  "apps/corset/Cargo.toml",
+  "apps/filigree/Cargo.toml",
+  "apps/cabaret/Cargo.toml"
 ]
 
 [[stage]]
@@ -999,6 +1001,24 @@ target = "x86_64-sex-app.json"
 manifest = "apps/crush/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/crush"
 dest_artifact = "iso_root/programs/crush"
+
+# Filigree: font manager, specimen comparator, and Spindle typography bridge on Weft.
+[[stage]]
+id = "build_filigree"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/filigree/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/filigree"
+dest_artifact = "iso_root/programs/filigree"
+
+# Cabaret: live video broadcast studio and recorder on Weft.
+[[stage]]
+id = "build_cabaret"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/cabaret/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/cabaret"
+dest_artifact = "iso_root/programs/cabaret"
 
 [[stage]]
 id = "copy_limine_cfg"

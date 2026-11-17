@@ -838,6 +838,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e93abca9e28e0a1b9877922aacb20576e05d4679ffa78c3d6dc22a26a216659"
 
 [[package]]
+name = "cabaret"
+version = "0.1.0"
+dependencies = [
+ "burlesque-core",
+ "cabaret-core",
+ "cabaret-plugins",
+ "cabaret-proto",
+ "libm",
+ "sex-app",
+ "sex-color",
+ "sex-media",
+ "sex-pdx",
+ "sex-splice",
+ "sex-uvc",
+ "sex-wasm",
+ "shibari",
+ "weft",
+]
+
+[[package]]
+name = "cabaret-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "sex-canvas",
+ "sex-color",
+ "sex-font",
+ "sex-image",
+]
+
+[[package]]
+name = "cabaret-plugins"
+version = "0.1.0"
+dependencies = [
+ "cabaret-core",
+ "libm",
+ "sex-color",
+ "sex-wasm",
+]
+
+[[package]]
+name = "cabaret-proto"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "calendar"
 version = "0.1.0"
 dependencies = [
@@ -2484,6 +2533,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "filigree"
+version = "0.1.0"
+dependencies = [
+ "filigree-core",
+ "libm",
+ "sex-app",
+ "sex-font",
+ "sex-pdx",
+ "weft",
+]
+
+[[package]]
+name = "filigree-core"
+version = "0.1.0"
+dependencies = [
+ "sex-archive",
+ "sex-font",
+ "sha2 0.10.9",
+ "ttf-parser",
+]
+
+[[package]]
 name = "filmcraft-audio-dsp"
 version = "0.20.1"
 source = "git+https://github.com/storytold/filmcraft?rev=e63e1d790c8e59f208f8ff31de6f6847a1bb206b#e63e1d790c8e59f208f8ff31de6f6847a1bb206b"
@@ -3020,6 +3091,7 @@ dependencies = [
  "batik-core",
  "gaze-codecs",
  "libm",
+ "sex-color",
  "sex-image",
 ]
 
@@ -6988,6 +7060,14 @@ dependencies = [
  "heic-rs",
  "image-webp 0.2.4",
  "rusty_av1d",
+ "sex-image",
+]
+
+[[package]]
+name = "sex-color"
+version = "0.1.0"
+dependencies = [
+ "libm",
  "sex-image",
 ]
 

@@ -203,8 +203,12 @@ members = [
     "crates/polyamour-sdk",
     "crates/polyamour-wasm",
     "crates/sex-color",
+    "crates/cabaret-core",
+    "crates/cabaret-proto",
+    "crates/cabaret-plugins",
     "crates/filigree-core",
     "apps/filigree",
+    "apps/cabaret",
 ]
 [workspace.package]
 license = "GPL-3.0-only"
