@@ -262,7 +262,7 @@ fn note_latency(task: &Task) {
 }
 /// Logs the latency counters; the timekeeper calls it every couple of seconds.
 // IPC_PROFILE_TEMP: cycle split of a round trip (removed before merge).
-pub static PROF: [AtomicU64; 64] = [const { AtomicU64::new(0) }; 64];
+pub static PROF: [AtomicU64; 96] = [const { AtomicU64::new(0) }; 96];
 #[inline(always)] pub fn tsc() -> u64 { unsafe { core::arch::x86_64::_rdtsc() } }
 #[inline(always)] pub fn prof(i: usize, since: u64) { PROF[2 * i].fetch_add(1, Ordering::Relaxed); PROF[2 * i + 1].fetch_add(tsc().wrapping_sub(since), Ordering::Relaxed); }
 pub static USER_SINCE: [AtomicU64; 128] = [const { AtomicU64::new(0) }; 128];
@@ -278,7 +278,7 @@ pub fn report_prof() {
     let mut line = alloc::string::String::new();
     for (i, c) in SYSNUM.iter().enumerate() { let n = c.load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" s{}={}", i, n)); } }
     let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" handoffs={}", HANDOFFS.load(Ordering::Relaxed)));
-    for i in 0..32 { let n = PROF[2 * i].load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" b{}={}x{}", i, n, PROF[2 * i + 1].load(Ordering::Relaxed) / n)); } }
+    for i in 0..48 { let n = PROF[2 * i].load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" b{}={}x{}", i, n, PROF[2 * i + 1].load(Ordering::Relaxed) / n)); } }
     serial_println!("[ipc.prof]{}", line);
 }
 pub fn report_latency() {
@@ -420,6 +420,7 @@ impl Scheduler {
         if !lean { self.retry_admission(); }
         prof(4, t_ra);
         // Deadline work first while it is within its share of this core, else last.
+        let t_sel = tsc();
         let early = !self.budget.exhausted();
         let next_task = if early { self.deadline.take() } else { ptr::null_mut() };
         let next_task = if next_task.is_null() { self.take_handoff() } else { next_task };
@@ -480,6 +481,7 @@ impl Scheduler {
                 next_task = self.attempt_steal();
             }
         }
+        prof(35, t_sel);
         // Phase 1: explicit NoRunnable.
         // Do not touch current_task/current_pd until a real next task exists.
         if next_task.is_null() {
@@ -506,10 +508,13 @@ impl Scheduler {
             return ScheduleDecision::NoRunnable;
         }
 
+        let t_acc = tsc();
         note_latency(unsafe { &*next_task });
         crate::cpu_account::switch(self.core_id, Some(unsafe { (*next_task).context.pd_id as u32 }));
         self.budget.switched(crate::interrupts::TICKS.load(Ordering::Relaxed), unsafe { core::arch::x86_64::_rdtsc() },
             unsafe { (*next_task).deadline_us.load(Ordering::Relaxed) } != 0);
+        prof(32, t_acc);
+        let t_so = tsc();
         // A concrete next task has exclusive dispatch custody. Outgoing custody
         // remains SwitchingOut until the assembly's post-stack-release callback.
         let old_task = self.current_task.load(Ordering::Acquire);
@@ -519,6 +524,7 @@ impl Scheduler {
         }
         let replaced = self.current_task.swap(next_task, Ordering::AcqRel);
         assert_eq!(replaced, old_task);
+        prof(36, t_so);
 
         unsafe {
             if TASK_LIFECYCLE_LOG_BUDGET
@@ -540,14 +546,18 @@ impl Scheduler {
             let next_pd_ptr = (*next_task).context.pd_ptr as *mut crate::capability::ProtectionDomain;
 
             // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
+            let t_bd = tsc();
             crate::program_records::before_dispatch((*next_task).context.pd_id);
             crate::program_tenancy::before_dispatch((*next_task).context.pd_id);
+            prof(33, t_bd);
+            let t_sp = tsc();
             if !self.ran_task.swap(true, Ordering::Relaxed) {
                 serial_println!("[smp.core.first_task] core={} pd={} tsc={}", self.core_id, (*next_task).context.pd_id, core::arch::x86_64::_rdtsc());
             }
             core.set_pd(next_pd_ptr);
             note_dispatch((*next_task).context.pd_id);
             crate::ipc::recv::deliver(next_task);
+            prof(34, t_sp);
         }
 
         if SCHED_PICK_NEXT_LOG_BUDGET
