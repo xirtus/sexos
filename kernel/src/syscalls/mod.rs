@@ -425,7 +425,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         // Ambient physical allocation/mapping and runtime capability minting
         // are unavailable. Boot regions are queried through54/55 only.
         30 | 31 | 50 | 51 => u64::MAX,
-        40 => 0, // historical shared-buffer failure convention
+        40 => { if rdi == 0x5E4B { crate::scheduler::report_prof(); } 0 }, // historical shared-buffer failure convention; IPC_PROFILE_TEMP
 
         32 => { // SYSCALL_YIELD — cooperative scheduling fallback
             // When the preemptive LAPIC timer does not fire (QEMU limitation),

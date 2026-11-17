@@ -35,7 +35,7 @@ jobs:
     - name: Profile lines
       if: always()
       run: |
-        for d in "$RUNNER_TEMP"/b/*; do echo "== $d"; grep -ahE '\[bench\] |\[ipc\.prof\]|\[sched\.latency|p99' "$d"/*.log "$d"/*serial* 2>/dev/null | tail -8; cat "$d"/*.json 2>/dev/null; ls "$d"; done
+        for d in "$RUNNER_TEMP"/b/*; do echo "== $d"; grep -ahE '\[bench\] |\[ipc\.prof\]|\[sched\.latency|p99' "$d"/*.log "$d"/*serial* 2>/dev/null | grep -v "^\[sched" | tail -12; cat "$d"/*.json 2>/dev/null; ls "$d"; done
     - uses: actions/upload-artifact@v4
       if: always()
       with:

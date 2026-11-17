@@ -95,10 +95,13 @@ fn run(window: &mut Window, r: &mut Report) -> Result<(), &'static str> {
     // Files keeps polling while a write waits to be committed; make it durable first so
     // the trips measure the call path, not that.
     files::sync(window).map_err(|_| "sync failed")?;
+    let prof = || unsafe { core::arch::asm!("syscall", inlateout("rax") 40u64 => _, in("rdi") 0x5E4Bu64, out("rcx") _, out("r11") _, options(nostack)); }; // IPC_PROFILE_TEMP
+    prof();
     let n = 2_000;
     let t = tsc();
     for _ in 0..n { files::ping(window).map_err(|_| "ping failed")?; }
     r.add("ipc_roundtrip", n, tsc() - t, "trip");
+    prof();
     Ok(())
 }
 
