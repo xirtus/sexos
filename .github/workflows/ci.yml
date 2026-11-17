@@ -496,7 +496,9 @@ jobs:
   profiles:
     name: Proof builds (${{ matrix.gate }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # A Cargo.lock change (crates added or removed) misses the exact build cache and
+    # rebuilds cold, which takes ~45 minutes here; 40 left such PRs no way to pass.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
