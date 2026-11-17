@@ -31,11 +31,12 @@ const DIR: &[u8] = b"thumbs";
 /// Pictures larger than this are not read for a thumbnail.
 const FILE_MAX: u64 = 48 * 1024 * 1024;
 
-const BG: u32 = 0x1B1D22;
-const TILE: u32 = 0x2A2D34;
-const PICKED: u32 = 0x3D6FD6;
-const TEXT: u32 = 0xE6E8EC;
-const DIM: u32 = 0x9AA0AA;
+// The grid is drawn in the dark theme's tokens (`sex_theme`) whatever the theme, as
+// picture grids are, so pictures read true; the accent follows Settings.
+const BG: u32 = 0x1C1A20; // Dark window
+const TILE: u32 = 0x26232B; // Dark surface
+const TEXT: u32 = 0xF1EEF4; // Dark text
+const DIM: u32 = 0xB3ADB9; // Dark text_dim
 /// Side of a file or folder icon in a tile.
 const ICON: usize = 80;
 
@@ -78,6 +79,8 @@ pub struct Thumbs {
     cover: Vec<u8>,
     /// File icons drawn so far, by icon name: `ICON` square `0xAARRGGBB` pixels.
     icons: BTreeMap<&'static str, Vec<u32>>,
+    /// The picked tile: Settings' accent in the dark theme, read when a folder is listed.
+    picked: u32,
 }
 
 pub fn kind(name: &[u8], dir: bool) -> Option<&'static str> {
@@ -105,11 +108,13 @@ impl Thumbs {
     pub const fn new() -> Self {
         Thumbs { on: false, made: BTreeMap::new(), queue: VecDeque::new(), documents: VecDeque::new(), helping: None, missing: Vec::new(), own: None,
                  tally: Tally { pictures: 0, made: 0, cached: 0, failed: 0, started: 0, documents: 0, drawn: 0, from_cache: 0, pictures_done: 0 }, folder: Vec::new(),
-                 dir_ready: false, font: None, acc: Vec::new(), cover: Vec::new(), icons: BTreeMap::new() }
+                 dir_ready: false, font: None, acc: Vec::new(), cover: Vec::new(), icons: BTreeMap::new(), picked: 0xDB4B7E }
     }
     pub fn busy(&self) -> bool { self.on && (!self.queue.is_empty() || !self.documents.is_empty() || self.helping.is_some()) }
     /// Queues the pictures of a freshly listed folder that have no thumbnail yet.
     pub fn folder(&mut self, cwd: &[u8], entries: &[Entry]) {
+        let accent = sex_app::settings::appearance().map_or(sex_theme::DEFAULT_ACCENT, |(_, a)| a as u32);
+        self.picked = sex_theme::tokens(sex_theme::Mode::Dark, accent).accent & 0xFF_FFFF;
         self.queue.clear();
         self.documents.clear();
         // A helper still drawing for the folder left behind is ended.
@@ -289,7 +294,7 @@ impl Thumbs {
             let (c, r) = ((i - first) % cols, (i - first) / cols);
             let (x0, y0) = (8 + c * CELL_W, HEAD + r * CELL_H);
             let box_w = CELL_W - 8;
-            fill(px, width, x0, y0, box_w, CELL_H - 6, if i == cursor { PICKED } else { TILE });
+            fill(px, width, x0, y0, box_w, CELL_H - 6, if i == cursor { self.picked } else { TILE });
             let inner = (x0 + (box_w - SIDE) / 2, y0 + 4);
             match (kind(&e.name, e.dir), self.made.get(&join(cwd, &e.name))) {
                 (_, Some(Thumb::Picture { w, h, px: t })) => {
@@ -297,7 +302,7 @@ impl Thumbs {
                     for y in 0..*h { px[(oy + y) * width + ox..(oy + y) * width + ox + w].copy_from_slice(&t[y * w..y * w + w]); }
                 }
                 (_, made) => {
-                    let tile = if i == cursor { PICKED } else { TILE };
+                    let tile = if i == cursor { self.picked } else { TILE };
                     // A picture that would not decode says so under its icon.
                     let failed = match made { Some(Thumb::Kind(k)) if k.ends_with('?') => Some(*k), _ => None };
                     let icon = self.icon(sex_icons::file_for(&e.name, e.dir));

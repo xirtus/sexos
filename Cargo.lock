@@ -2472,6 +2472,7 @@ dependencies = [
  "sex-image",
  "sex-pdx",
  "sex-ssh",
+ "sex-theme",
  "sex-volumes",
  "sha2 0.10.9",
 ]
@@ -6948,6 +6949,7 @@ version = "0.1.0"
 dependencies = [
  "sex-fetch",
  "sex-pdx",
+ "sex-theme",
  "talc",
  "zeroize",
 ]
@@ -7115,6 +7117,7 @@ name = "sex-graphics"
 version = "0.1.0"
 dependencies = [
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -7413,6 +7416,13 @@ dependencies = [
 [[package]]
 name = "sex-textedit"
 version = "0.1.0"
+
+[[package]]
+name = "sex-theme"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
 
 [[package]]
 name = "sex-time"
@@ -9910,6 +9920,7 @@ dependencies = [
  "sex-font",
  "sex-icons",
  "sex-pdx",
+ "sex-theme",
  "taffy",
  "tiny-skia 0.11.4",
 ]

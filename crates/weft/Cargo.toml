@@ -22,6 +22,7 @@ tiny-skia = { version = "0.11.4", default-features = false, features = ["no-std-
 libm = "0.2"
 sex-font = { path = "../sex-font" }
 sex-icons = { path = "../sex-icons" }
+sex-theme = { path = "../sex-theme" }
 sex-app = { path = "../sex-app", optional = true }
 sex-pdx = { path = "../sex-pdx", optional = true }
 

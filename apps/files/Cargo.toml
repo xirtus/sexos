@@ -15,6 +15,7 @@ sex-config = { path = "../../crates/sex-config" }
 sex-image = { path = "../../crates/sex-image" }
 sex-font = { path = "../../crates/sex-font" }
 sex-icons = { path = "../../crates/sex-icons" }
+sex-theme = { path = "../../crates/sex-theme" }
 sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
 sex-archive = { path = "../../crates/sex-archive" }
 loom-core = { path = "../../crates/loom-core" }

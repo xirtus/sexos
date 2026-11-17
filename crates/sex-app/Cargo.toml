@@ -11,6 +11,7 @@ heap = []
 [dependencies]
 zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
 sex-pdx = { path = "../sex-pdx" }
+sex-theme = { path = "../sex-theme" }
 sex-fetch = { path = "../sex-fetch" }
 # The program's heap allocator (MIT, no_std). Its memory comes from the kernel's
 # per-run program window: see sex_app::heap.
