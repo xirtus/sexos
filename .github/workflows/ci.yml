@@ -766,7 +766,7 @@ jobs:
 
   build:
     if: always()
-    needs: [host, truth, boot, desktop, devices, programs, media, editor, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places]
+    needs: [host, truth, boot, desktop, devices, programs, media, editor, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks]
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -1016,8 +1016,7 @@ jobs:
         path: ${{ runner.temp }}/input-payload-proof
         if-no-files-found: ignore
 
-  # Leak gate (WS2). Not in `build`'s needs yet: it reports while the leaks it finds
-  # are fixed, then joins the required set.
+  # Leak gate (WS2): every program and restartable service gives its memory back.
   leaks:
     name: Leak gate (programs open/close, services restart)
     runs-on: ubuntu-latest
