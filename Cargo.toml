@@ -453,18 +453,14 @@ opt-level = "s"
 opt-level = "s"
 
 # Big programs (#305), named by their build stage (sexos_build_spec.toml `profile`).
-# lean: document programs. Whole-program LTO and size-tuned code: Spreadeagle
-# 12.2 -> 10.3 MiB. Package overrides above (wasmi, sex-html at opt-level 3) still win.
+# lean: document programs, size-tuned code and no symbols (Spreadeagle 12.2 -> about
+# 10.5 MiB). No LTO: fat LTO saved only 3.5% more and added ~13 min to every CI build.
+# Package overrides above (wasmi, sex-html at opt-level 3) still win.
 [profile.lean]
 inherits = "release"
 opt-level = "s"
-lto = "fat"
-codegen-units = 1
 strip = true
-# lean-fast: programs whose work is pixels (3D, video, the browser): LTO and one
-# codegen unit, keeping opt-level 3.
+# lean-fast: programs whose work is pixels (3D, video, the browser): opt-level 3, no symbols.
 [profile.lean-fast]
 inherits = "release"
-lto = "fat"
-codegen-units = 1
 strip = true
