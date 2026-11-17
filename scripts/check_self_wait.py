@@ -30,7 +30,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
                                'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
                                'c2895d4991c2d48d099daee3e6090063b3288f77c0ad5e9a75201c903f95c984', 'ef6e695c7535ac077e8c4adef7ded6d79425210a1fd77005940be7f823cab40a', 'cee8e1525fa104c2c14f398b4eee80f4f63cd0f3f06602310cdf421dc15009c1', '1b7fe3f1752da8d10ea2f2ea6df5c387ff9ec9969a4287be64fb6e878f4a4d75', '562ccc2f5cf8cf755e68925f0a65a699fd9e968ac78a44bfe4c7dc84f464e7ab', 'f00f44669af45f707a4a24ec15f70321ed9ed04565007c9e1b093b42fdd39e96', '3766c55f455e02199154d9cdbe28c5fc93a454f91a2459fe04e2eafaf8abd24b', '74a5f4ccbd9aeeb574ff5c9d8f7008b486d89e214ef405ef589711dfda71904b',
                                # wait fingerprint (wait_fingerprint), 2026-11-16
-                               'wait-v1:0f64f51bb2e99d980f283c55f402b56e3f5da5a1d22b814ac98b4b1867b8a3d2',),
+                               'wait-v1:0f64f51bb2e99d980f283c55f402b56e3f5da5a1d22b814ac98b4b1867b8a3d2',
+                               # BLOCK_MAX_RUN 512 KiB + BLOCK_CMD_RUN (no wait change), 2026-11-17
+                               'wait-v1:aa1083137f9cf350f5a1fe54038943fa82596df2b4c8737d6e4f4fe2e4598946',),
  # Reviewed restricted-provider intake/polling; the exact Net2 envelope and
  # deadline owners are unchanged. See RESTRICTED_TIMER_SOURCE_REVIEW_2026_11_15.
  'servers/sexnet/src/main.rs': ('00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725',

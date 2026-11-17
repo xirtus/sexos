@@ -87,7 +87,7 @@ jobs:
     - name: egui backend (input mapping, CPU rasterizer, whole frames of the egui demo)
       run: cargo test --locked -p sex-egui
     - name: Weft toolkit and Abacus (layout, input, menus, palette, dialogs, tabs, accessibility)
-      run: cargo test --locked -p weft && cargo test --locked -p abacus --no-default-features
+      run: cargo test --locked -p weft --features color-emoji && cargo test --locked -p abacus --no-default-features
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Spreadeagle workbook engine and office painting (host)
@@ -96,8 +96,8 @@ jobs:
       run: cargo test --locked -p sex-disk --lib
     - name: Keyboard layouts, dead keys and Compose
       run: cargo test --locked -p sex-keymap
-    - name: Fallback fonts reach Cyrillic, Greek, CJK, emoji and symbols; bold and italic faces
-      run: cargo test --locked -p sex-font --test fallback --test styles
+    - name: Fonts (fallbacks, colour emoji, bold and italic, hinting, darkening, gamma), icon set and theme tokens
+      run: cargo test --locked -p sex-font -p sex-icons -p sex-theme && python3 scripts/brand/icons.py --check
     - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
       run: cargo test --locked -p sex-shape --features shaping
     - name: Shuttle userspace font fallback, RTL/BiDi shaping and font picker on the host
@@ -300,6 +300,10 @@ jobs:
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
+    - name: Boot time to the desktop (3 cold boots, #309)
+      run: python3 scripts/boot_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/boot-time"
+    - name: Big programs start time (#305)
+      run: python3 scripts/program_start_gate.py --programs spreadeagle,kaleidoscope,assuit --runs 2 --max-ms 60000 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/big-starts"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
       run: python3 scripts/program_ipv6_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipv6"
     - name: Network time (a clock starting in 2024 comes right by SNTP)
@@ -772,7 +776,7 @@ jobs:
 
   build:
     if: always()
-    needs: [host, truth, boot, desktop, devices, programs, media, editor, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places]
+    needs: [host, truth, boot, desktop, devices, programs, media, editor, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks]
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -1029,8 +1033,7 @@ jobs:
         path: ${{ runner.temp }}/input-payload-proof
         if-no-files-found: ignore
 
-  # Leak gate (WS2). Not in `build`'s needs yet: it reports while the leaks it finds
-  # are fixed, then joins the required set.
+  # Leak gate (WS2): every program and restartable service gives its memory back.
   leaks:
     name: Leak gate (programs open/close, services restart)
     runs-on: ubuntu-latest

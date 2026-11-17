@@ -2517,9 +2517,11 @@ dependencies = [
  "sex-config",
  "sex-diskimage",
  "sex-font",
+ "sex-icons",
  "sex-image",
  "sex-pdx",
  "sex-ssh",
+ "sex-theme",
  "sex-volumes",
  "sha2 0.10.9",
 ]
@@ -7019,6 +7021,7 @@ version = "0.1.0"
 dependencies = [
  "sex-fetch",
  "sex-pdx",
+ "sex-theme",
  "talc",
  "zeroize",
 ]
@@ -7194,6 +7197,7 @@ name = "sex-graphics"
 version = "0.1.0"
 dependencies = [
  "sex-pdx",
+ "sex-theme",
 ]
 
 [[package]]
@@ -7218,6 +7222,14 @@ version = "0.1.0"
 [[package]]
 name = "sex-i2c-dw"
 version = "0.1.0"
+
+[[package]]
+name = "sex-icons"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "sex-font",
+]
 
 [[package]]
 name = "sex-image"
@@ -7486,6 +7498,13 @@ name = "sex-textedit"
 version = "0.1.0"
 
 [[package]]
+name = "sex-theme"
+version = "0.1.0"
+dependencies = [
+ "libm",
+]
+
+[[package]]
 name = "sex-time"
 version = "0.1.0"
 dependencies = [
@@ -7599,6 +7618,7 @@ version = "0.1.0"
 dependencies = [
  "aes 0.8.4",
  "hmac 0.12.1",
+ "miniz_oxide 0.8.9",
  "p256",
  "sha1 0.10.7",
  "sha2 0.10.9",
@@ -7635,6 +7655,7 @@ dependencies = [
  "sex-font",
  "sex-gpu-intel",
  "sex-graphics",
+ "sex-icons",
  "sex-pdx",
  "sex-rt",
  "sex-shape",
@@ -9980,7 +10001,9 @@ dependencies = [
  "png 0.18.1",
  "sex-app",
  "sex-font",
+ "sex-icons",
  "sex-pdx",
+ "sex-theme",
  "taffy",
  "tiny-skia 0.11.4",
 ]
