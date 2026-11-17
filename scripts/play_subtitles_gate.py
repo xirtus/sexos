@@ -62,7 +62,10 @@ def main():
   g['wait'](r'\[play.caption\] at_ms=\d+ text=Hello from SexOS',s,60)
   # The picture with the caption, made big (Super+F): white text with a dark outline
   # in the bottom of the picture, gone once subtitles are turned off with S.
-  g['focus'](int(launch[3]));time.sleep(.4)
+  # Paused at once, so the 2.5 s cue is still on screen however slow the guest is
+  # (the controls band then shows too; captions sit above it).
+  g['focus'](int(launch[3]));time.sleep(.2)
+  ps=len(t());q.key('spc');g['wait'](r'\[play.paused\] 1',ps,30)
   q.cmd('send-key',{'keys':[{'type':'qcode','data':'meta_l'},{'type':'qcode','data':'f'}],'hold-time':80});time.sleep(.8)
   def shot(name):
    path=out/f'{name}.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5)
@@ -83,6 +86,7 @@ def main():
   ss=len(t());q.key('s');g['wait'](r'\[play.subtitles\] on=0',ss,30);time.sleep(.6)
   off=shot('no-caption')
   q.key('s');g['wait'](r'\[play.subtitles\] on=1',ss,30)
+  ps=len(t());q.key('spc');g['wait'](r'\[play.paused\] 0',ps,30)
   assert on[1]>50 and on[1]>3*max(off[1],1),f'caption edge pixels: shown={on} hidden={off}'
   ss=len(t());q.key('a');tr=g['wait'](r'\[play.audio.track\] track=(\d+) of=(\d+) ok=(\d)',ss,30)
   assert tr.groups()==('1','2','1'),tr[0]
