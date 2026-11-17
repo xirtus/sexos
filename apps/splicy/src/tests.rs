@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use crate::view::{self, View, SELECT};
+use crate::cache::{CacheConfig, CachedFrame, FrameCache};
+use crate::compositor::{composite_cpu, BlendMode, LayerInput, LayerTransform, QualityMode};
 use crate::media::{Library, Peaks, Thumb};
-use crate::{words, Editor};
+use crate::view::{self, View, SELECT};
+use crate::vu::{VuStrip, VU_AMBER, VU_BG, VU_GREEN, VU_PEAK, VU_STRIP_H};
+use crate::{words, AuditionMode, Editor};
 use alloc::string::String;
 use alloc::vec::Vec;
 use sex_splice::export::{export_pictures, sound_pieces, Frames, Pictures};
@@ -311,4 +314,244 @@ fn timeline_shows_filmstrips_waveforms_ruler_and_playhead() {
         }
         std::fs::write(path, ppm).unwrap();
     }
+}
+
+#[test]
+fn frame_cache_dual_limits_low_memory_mode_and_evict_media() {
+    assert_eq!(CacheConfig::standard().max_entries, 256);
+    assert_eq!(CacheConfig::standard().max_bytes, 128 * 1024 * 1024);
+    assert_eq!(CacheConfig::low_memory().max_entries, 64);
+    assert_eq!(CacheConfig::low_memory().max_bytes, 16 * 1024 * 1024);
+
+    // Test dual-limit eviction (entries limit AND byte limit)
+    // 3 entries max, 300 bytes max
+    let mut cache = FrameCache::new(CacheConfig { max_entries: 3, max_bytes: 300 });
+
+    // Each frame is 5x5 pixels = 25 pixels = 100 bytes
+    let make_frame = |media: u32, source_us: Micros| -> CachedFrame {
+        CachedFrame::new(media, source_us, 5, 5, false, alloc::vec![0x00ffffff; 25])
+    };
+
+    cache.insert(make_frame(1, 1000 * MS));
+    cache.insert(make_frame(1, 2000 * MS));
+    cache.insert(make_frame(1, 3000 * MS));
+    assert_eq!(cache.len(), 3);
+    assert_eq!(cache.total_bytes, 300);
+    assert_eq!(cache.evictions, 0);
+
+    // Touch frame 1 (at 1000 MS), making frame 2 (at 2000 MS) the LRU entry
+    assert!(cache.get(1, 1000 * MS, 50 * MS, false).is_some());
+    assert_eq!(cache.hits, 1);
+
+    // Insert frame 4: should evict frame 2
+    cache.insert(make_frame(1, 4000 * MS));
+    assert_eq!(cache.len(), 3);
+    assert_eq!(cache.total_bytes, 300);
+    assert_eq!(cache.evictions, 1);
+    assert!(cache.get(1, 2000 * MS, 50 * MS, false).is_none(), "frame 2 was evicted as LRU");
+    assert_eq!(cache.misses, 1);
+    assert!(cache.get(1, 1000 * MS, 50 * MS, false).is_some(), "frame 1 survived because touched");
+
+    // Single frame exceeding max_bytes must be refused cleanly without panic
+    let oversized = CachedFrame::new(1, 5000 * MS, 10, 10, false, alloc::vec![0; 100]); // 400 bytes > 300 bytes
+    cache.insert(oversized);
+    assert_eq!(cache.len(), 3);
+    assert_eq!(cache.total_bytes, 300);
+
+    // Test low memory mode live eviction
+    let mut big_cache = FrameCache::default(); // Standard: 256 entries
+    for i in 0..70 {
+        big_cache.insert(make_frame(1, i * 100 * MS));
+    }
+    assert_eq!(big_cache.len(), 70);
+    // Toggling low memory mode (64 entries limit) must immediately evict excess 6 entries
+    big_cache.set_low_memory_mode(true);
+    assert_eq!(big_cache.len(), 64);
+    assert_eq!(big_cache.evictions, 6);
+    assert_eq!(big_cache.config, CacheConfig::low_memory());
+
+    // Switch back to standard mode
+    big_cache.set_low_memory_mode(false);
+    assert_eq!(big_cache.config, CacheConfig::standard());
+
+    // Test evict_media: purge all frames of a closed clip
+    big_cache.insert(make_frame(2, 100 * MS));
+    big_cache.insert(make_frame(2, 200 * MS));
+    assert!(big_cache.get(2, 100 * MS, 10, false).is_some());
+    let before_evict = big_cache.evictions;
+    big_cache.evict_media(2);
+    assert_eq!(big_cache.evictions, before_evict + 2);
+    assert!(big_cache.get(2, 100 * MS, 10, false).is_none());
+}
+
+#[test]
+fn compositor_quarter_vs_full_res_dimensions_and_blending() {
+    let w = 320usize;
+    let h = 180usize;
+
+    let red_layer_px = alloc::vec![0x00ff0000; w * h];
+    let layer = LayerInput {
+        pixels: &red_layer_px,
+        width: w,
+        height: h,
+        transform: LayerTransform::default(),
+    };
+
+    // Full-res on paused
+    let full = composite_cpu(w, h, QualityMode::PausedFull, 0x00000000, &[layer]);
+    assert_eq!(full.width, 320);
+    assert_eq!(full.height, 180);
+    assert_eq!(full.pixels.len(), 320 * 180);
+    assert_eq!(full.pixels[0], 0x00ff0000);
+
+    let layer_quarter = LayerInput {
+        pixels: &red_layer_px,
+        width: w,
+        height: h,
+        transform: LayerTransform::default(),
+    };
+
+    // Quarter-res on playback
+    let quarter = composite_cpu(w, h, QualityMode::PlaybackQuarter, 0x00000000, &[layer_quarter]);
+    assert_eq!(quarter.width, 80);
+    assert_eq!(quarter.height, 45);
+    assert_eq!(quarter.pixels.len(), 80 * 45);
+    assert_eq!(quarter.pixels[0], 0x00ff0000);
+
+    // 16x fewer pixels during playback!
+    assert_eq!(full.pixels.len() / quarter.pixels.len(), 16);
+
+    // Test Opacity blending: 50% opacity red over black
+    let half_alpha_transform = LayerTransform {
+        opacity_per_mille: 500,
+        ..LayerTransform::default()
+    };
+    let half_red = LayerInput {
+        pixels: &red_layer_px,
+        width: 10,
+        height: 10,
+        transform: half_alpha_transform,
+    };
+    let blended_half = composite_cpu(10, 10, QualityMode::PausedFull, 0x00000000, &[half_red]);
+    let r_ch = (blended_half.pixels[0] >> 16) & 0xff;
+    assert!((120..=135).contains(&r_ch), "50% opacity red should have ~127 red value, got {r_ch}");
+
+    // Test Blend Modes:
+    let fg_px = [0x00404040];
+    let multiply_layer = LayerInput {
+        pixels: &fg_px,
+        width: 1,
+        height: 1,
+        transform: LayerTransform {
+            blend: BlendMode::Multiply,
+            ..LayerTransform::default()
+        },
+    };
+    let mult_out = composite_cpu(1, 1, QualityMode::PausedFull, 0x00808080, &[multiply_layer]);
+    // 0x40 (64) * 0x80 (128) / 255 = 32 (0x20)
+    let mult_val = mult_out.pixels[0] & 0xff;
+    assert!((30..=34).contains(&mult_val), "multiply result ~32, got {mult_val}");
+
+    let add_layer = LayerInput {
+        pixels: &[0x00505050],
+        width: 1,
+        height: 1,
+        transform: LayerTransform {
+            blend: BlendMode::Add,
+            ..LayerTransform::default()
+        },
+    };
+    let add_out = composite_cpu(1, 1, QualityMode::PausedFull, 0x00505050, &[add_layer]);
+    assert_eq!(add_out.pixels[0], 0x00a0a0a0);
+}
+
+#[test]
+fn vu_meter_strip_areas_decay_mute_and_canvas_paint() {
+    let (w, h) = (1280, 800);
+    let a_off = view::areas_with_vu(w, h, false);
+    let a_on = view::areas_with_vu(w, h, true);
+
+    // show_vu == true carves VU_STRIP_H out of bottom timeline height,
+    // NEVER reducing player.w by a single pixel!
+    assert_eq!(a_off.player.w, a_on.player.w, "player.w must stay completely identical");
+    assert_eq!(a_off.player.h, a_on.player.h, "player.h must stay completely identical");
+    assert_eq!(a_off.player.x, a_on.player.x);
+    assert_eq!(a_off.player.y, a_on.player.y);
+    assert_eq!(a_on.vu.h, VU_STRIP_H);
+    assert_eq!(a_on.vu.y, a_on.status.y - VU_STRIP_H);
+    assert_eq!(a_on.tracks.h, a_off.tracks.h - VU_STRIP_H);
+
+    // Test Peak-hold decay and mute handling
+    let ed = talk();
+    let lib = talk_library(&ed);
+    let mut vu = VuStrip::default();
+
+    // At 500 ms in talk_library, audio is loud (~200)
+    vu.update_from_library(ed.timeline(), &lib, 500 * MS, 50 * MS);
+    assert!(!vu.tracks.is_empty());
+    let initial_level = vu.tracks[0].level;
+    let initial_hold = vu.tracks[0].peak_hold;
+    assert!(initial_level > 100, "audio active, level = {initial_level}");
+    assert_eq!(initial_level, initial_hold);
+
+    // Muting the audio track drops level to 0 and decays peak_hold by 6 each update
+    let mut muted_tl = ed.timeline().clone();
+    let audio_track = muted_tl.tracks.iter_mut().find(|t| t.kind == sex_splice::TrackKind::Audio).unwrap();
+    audio_track.muted = true;
+
+    vu.update_from_library(&muted_tl, &lib, 500 * MS, 50 * MS);
+    assert_eq!(vu.tracks[0].level, 0, "muted track must produce 0 level");
+    assert_eq!(vu.tracks[0].peak_hold, initial_hold.saturating_sub(6), "peak hold decays smoothly by 6");
+
+    vu.update_from_library(&muted_tl, &lib, 500 * MS, 50 * MS);
+    assert_eq!(vu.tracks[0].peak_hold, initial_hold.saturating_sub(12));
+
+    // Test clipping indicator >= 248
+    let mut hot_vu = VuStrip::default();
+    hot_vu.tracks.push(crate::vu::TrackMeter {
+        name: String::from("A1"),
+        level: 250,
+        peak_hold: 250,
+        clipping: true,
+    });
+    assert!(hot_vu.tracks[0].clipping);
+
+    // Paint VU strip pixels on canvas
+    let mut px = alloc::vec![0u32; (w * h) as usize];
+    let mut view = View::default();
+    view.vu.visible = true;
+    view.paint(&mut px, w as usize, h as usize, &ed, &lib, None, 500 * MS, "");
+
+    // Verify VU strip area contains meter pixels (VU_BG, VU_LINE, green/amber)
+    let vu_row_start = (a_on.vu.y + 12) as usize * w as usize;
+    let vu_slice = &px[vu_row_start..vu_row_start + w as usize];
+    assert!(vu_slice.contains(&VU_BG), "VU background painted");
+    assert!(vu_slice.contains(&VU_GREEN) || vu_slice.contains(&VU_AMBER) || vu_slice.contains(&VU_PEAK), "VU level segments painted");
+}
+
+#[test]
+fn audition_cycle_and_nearest_join_removed_range() {
+    let mut ed = talk();
+    assert_eq!(ed.audition, AuditionMode::HearJoin);
+
+    // Cycle audition toggles between HearJoin and HearRemoved
+    assert_eq!(ed.cycle_audition(), AuditionMode::HearRemoved);
+    assert_eq!(ed.audition, AuditionMode::HearRemoved);
+    assert_eq!(ed.cycle_audition(), AuditionMode::HearJoin);
+    assert_eq!(ed.audition, AuditionMode::HearJoin);
+
+    // Before any cut, there are no joins with cut content
+    assert_eq!(ed.removed_at_nearest_join(), None);
+
+    // Delete "This part goes." (words 3..=5, runs 2.0 s to 4.0 s)
+    ed.place(4, false); // caret on "part"
+    ed.select_sentence();
+    assert!(ed.delete().unwrap());
+
+    // Join is created at 2.0 s where 2.0 s..4.0 s of source was removed
+    let (media, removed_range) = ed.removed_at_nearest_join().expect("removed range at nearest join");
+    assert_eq!(media, ed.transcript.media);
+    assert_eq!(removed_range.start, 2 * SECOND);
+    assert_eq!(removed_range.end, 4 * SECOND);
+    assert_eq!(removed_range.len(), 2 * SECOND);
 }
