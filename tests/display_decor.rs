@@ -6,6 +6,9 @@
 //! write a picture of the test desktop.
 #![allow(dead_code)]
 extern crate self as sex_graphics;
+extern crate self as sex_pdx;
+#[path = "../crates/sex-pdx/src/window_motion.rs"]
+pub mod window_motion;
 #[path = "../crates/sex-graphics/src/window_shape.rs"]
 pub mod window_shape;
 
@@ -204,6 +207,27 @@ fn off_screen_origin_uses_the_drawn_rectangle() {
     assert_eq!(fb[150 * W + 90], 0x00_445566);
     assert!(dark(fb[150 * W + 101]) < dark(bg(150, H)));
     assert_ne!(fb[199 * W + 99], 0x00_445566);
+}
+
+#[test]
+fn an_opening_window_fades_in_with_its_shadow() {
+    let _g = lock();
+    decor::set_effects(true);
+    let scene = desktop();
+    decor::opened(3, 1000);
+    decor::set_now(1000);
+    let start = render(&scene);
+    // Fully transparent at the start: the tile under it shows (plus no shadow).
+    assert_eq!(start[200 * W + 300], 0x00_2A2B3C);
+    decor::set_now(1000 + window_motion::DURATION / 4);
+    let mid = render(&scene)[200 * W + 300];
+    assert!(mid != 0x00_2A2B3C && mid != 0x00_F5E0DC, "half way {mid:06x}");
+    decor::set_now(1000 + window_motion::DURATION);
+    assert_eq!(render(&scene)[200 * W + 300], 0x00_F5E0DC);
+    decor::opened(3, 2000);
+    assert!(decor::clear_fades());
+    decor::set_now(2000);
+    assert_eq!(render(&scene)[200 * W + 300], 0x00_F5E0DC);
 }
 
 #[test]

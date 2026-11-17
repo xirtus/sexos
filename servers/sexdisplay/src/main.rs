@@ -151,6 +151,7 @@ mod bitmap_stores;
 mod fill_damage;
 mod wallpaper_mark;
 mod decor;
+mod pacing;
 mod damage;
 static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
 static mut BITMAP_STORES: bitmap_stores::Stores<{sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser)}> = bitmap_stores::Stores::UNBOUND;
@@ -200,9 +201,12 @@ impl Drop for SceneLease {
 static mut FOCUSED_SURFACE_ID: u64 = 0;
 /// Window animations (sex_pdx::window_motion): opens, tiling moves, workspace slides.
 static mut MOTION: sex_pdx::window_motion::Motion<32> = sex_pdx::window_motion::Motion::new();
+/// Animation frames at 60 Hz (pacing.rs).
+static mut PACER: pacing::Pacer = pacing::Pacer::new();
 /// Draws moving windows at their tweened geometry in this frame's scene.
 fn motion_place(scene: &mut scene::SceneSnapshot) {
     let now = sex_pdx::get_ticks();
+    decor::set_now(now);
     let motion = unsafe { &*core::ptr::addr_of!(MOTION) };
     if motion.active(now) {
         scene.place(|s| motion.current(s.surface_id, now).map(|g| (g.x, g.y, g.w, g.h)));
@@ -4638,6 +4642,7 @@ pub extern "C" fn _start() -> ! {
                     if msg.caller_pd == 3 {
                         let motion = unsafe { &mut *core::ptr::addr_of_mut!(MOTION) };
                         motion.set_enabled(msg.arg0 != 0);
+                        if msg.arg0 == 0 && decor::clear_fades() { needs_full_redraw = true; }
                         // arg2 bit 0: plain look (square corners, no shadows).
                         if decor::set_effects(msg.arg2 & 1 == 0) { needs_full_redraw = true; }
                         let dir = msg.arg1 as u8 as i8;
@@ -5052,7 +5057,7 @@ pub extern "C" fn _start() -> ! {
                                 let motion = &mut *core::ptr::addr_of_mut!(MOTION);
                                 let now = sex_pdx::get_ticks();
                                 match before {
-                                    None => motion.opened(surface_id, to, now),
+                                    None => { motion.opened(surface_id, to, now); if motion.enabled() { decor::opened(surface_id, now); } }
                                     Some((bx, by, bw, bh, _)) => {
                                         let far = (bx - to.x).abs() > 24 || (by - to.y).abs() > 24 || bw.abs_diff(to.w) > 24 || bh.abs_diff(to.h) > 24;
                                         if far { motion.moved(surface_id, Geom { x: bx, y: by, w: bw, h: bh }, to, now); } else { motion.forget(surface_id); }
@@ -5570,15 +5575,22 @@ pub extern "C" fn _start() -> ! {
         // On the damage path: each frame redraws only where moving windows
         // pass, and the frame after the last tween ends lands them exactly.
         let motion = unsafe { &mut *core::ptr::addr_of_mut!(MOTION) };
-        let motion_damage = motion.span().map(|(l, t, r, b)| {
+        let pacer = unsafe { &mut *core::ptr::addr_of_mut!(PACER) };
+        let animating = motion.active(motion_now);
+        // 60 Hz: between paced frames the moving windows are not redrawn.
+        let paced = !animating || pacer.due(motion_now);
+        let motion_damage = motion.span().filter(|_| paced).map(|(l, t, r, b)| {
             let pad = 16;
             damage::Rect { x: (l - pad).max(0) as usize, y: (t - pad).max(0) as usize, right: (r + pad).max(0) as usize, bottom: (b + pad).max(0) as usize }
         });
         if let Some(rect) = motion_damage { pending_paint.request_damage(rect, w, h, bar_height()); }
-        if motion.active(motion_now) {
+        if animating {
+            if paced {
             static mut MOTION_FRAME_BUDGET: u32 = 96;
             unsafe { if MOTION_FRAME_BUDGET > 0 { MOTION_FRAME_BUDGET -= 1; sex_pdx::serial_record!("[display.motion.frame] tick={} progress={}", motion_now, motion.progress(motion_now).unwrap_or(1024)); } }
+            }
         } else if motion_damage.is_some() {
+            pacer.stop();
             motion.clear_finished(motion_now);
             sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
         }
@@ -5596,6 +5608,12 @@ pub extern "C" fn _start() -> ! {
         // Only this completed publication discharges the retained requirements.
         // The service performs no intake during prepare/publish/receipt handling.
         pending_paint.complete(published.is_some());
+        if animating && paced && published.is_some() {
+            if let Some(ms) = pacer.presented(motion_now) {
+                static mut FRAME_TIME_BUDGET: u32 = 600;
+                unsafe { if FRAME_TIME_BUDGET > 0 { FRAME_TIME_BUDGET -= 1; sex_pdx::serial_record!("[display.frame.time] ms={} p99={}", ms, pacer.percentile(99).unwrap_or(0)); } }
+            }
+        }
         if let Some(frame)=published.as_ref(){
             if frame.plan.clock_dirty(){unsafe{LAST_REDRAWN_CLOCK_CANON_SS=frame.canon_ss;}}
             if primary_receipt_pending&&frame.plan.is_full(){
@@ -5626,7 +5644,7 @@ pub extern "C" fn _start() -> ! {
         loop_iter = loop_iter.wrapping_add(1);
         // Nothing arrived and nothing was painted: sleep until a message or the
         // next clock check, so an idle desktop does not spin.
-        if drained==0 && plan.is_empty() { let _=sex_pdx::sys_wait_self_ticks(8); }
+        if drained==0 && plan.is_empty() { let _=sex_pdx::sys_wait_self_ticks(if animating { pacer.wait(sex_pdx::get_ticks()).clamp(1, 8) } else { 8 }); }
         else { sex_pdx::sys_yield(); }
     }
 }

@@ -740,6 +740,11 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/motion-source.img"
         python3 scripts/window_motion_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/motion-source.img" --out "$RUNNER_TEMP/sexos-desktop/motion"
+    - name: Frame time during workspace slides (60 Hz pacing, p99 < 20 ms on KVM, 4 cores) and a desktop screenshot
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        truncate -s 256M "$RUNNER_TEMP/frames-source.img"
+        python3 scripts/frame_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/frames-source.img" --out "$RUNNER_TEMP/sexos-desktop/frame-time"
     - name: Programs starting programs
       run: |
         truncate -s 256M "$RUNNER_TEMP/launch-source.img"

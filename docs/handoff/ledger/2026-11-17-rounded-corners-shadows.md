@@ -34,3 +34,18 @@ close, vsync pacing and a frame-time gate, launcher/overlay blur.
 - Shell hit masks: a click in a see-through rounded corner falls through to
   what is drawn there (`hit_test_at` checks `animations::in_shape` with the
   same `window_shape` math Display draws with).
+
+## Fade-in, 60 Hz pacing and the frame-time gate
+
+- Opening windows fade in (with their shadow) over the motion tween's 180 ms
+  while they rise; `decor::opened`/`fade`, cleared when animations go off.
+  Closing windows still vanish at once (Display drops a destroyed surface's
+  pixels; a close fade needs a retained snapshot, next).
+- `servers/sexdisplay/src/pacing.rs`: animation frames on a 60 Hz grid
+  (16/17/17 ms) from the timer (virtio-gpu has no vblank); between frames
+  Display sleeps until the next one is due instead of spinning. Each paced
+  frame logs `[display.frame.time] ms=N p99=M`.
+- `scripts/frame_time_gate.py` (Desktop CI job): 4 cores, workspace slides,
+  p99 < 20 ms enforced on KVM (falls back to TCG without the threshold when
+  the runner has no KVM or cannot boot SexOS on it). Saves desktop.png and
+  prints it base64 in the job log.
