@@ -53,6 +53,9 @@ pub struct App {
     /// Tray item and notification events (`sex_app::tray`) taken while waiting; the
     /// program drains them after [`App::next`].
     pub tray: Vec<sex_app::tray::Event>,
+    /// The settings generation the theme was last read at, and when to look again.
+    settings_seen: Option<u64>,
+    theme_look: u64,
 }
 
 impl App {
@@ -62,8 +65,30 @@ impl App {
         // The screen reader gets the tree only if the person turned one on.
         sex_app::a11y::ask();
         let (w, h) = window.size();
+        // Settings' theme and accent, so every program matches (`sex_theme`).
+        let settings_seen = sex_app::settings::generation().ok();
+        let theme = match sex_app::settings::appearance() { Ok((t, a)) => theme.with_settings(t, a), Err(_) => theme };
         let ui = Ui::new(w as u32, h as u32, theme, strings);
-        App { window, ui, frames: 0, tray: Vec::new() }
+        App { window, ui, frames: 0, tray: Vec::new(), settings_seen, theme_look: now().saturating_add(THEME_LOOK_MS) }
+    }
+
+    /// Follows a theme or accent change in Settings, looking at most every
+    /// [`THEME_LOOK_MS`]. True when the theme changed.
+    fn follow_settings(&mut self) -> bool {
+        if now() < self.theme_look { return false; }
+        self.theme_look = now().saturating_add(THEME_LOOK_MS);
+        let Ok(g) = sex_app::settings::generation() else { return false };
+        if self.settings_seen == Some(g) { return false; }
+        self.settings_seen = Some(g);
+        if let Ok((t, a)) = sex_app::settings::appearance() {
+            let theme = self.ui.theme().clone().with_settings(t, a);
+            if theme != *self.ui.theme() {
+                sex_pdx::serial_record!("[weft.theme] mode={} accent={:06x}", t, a as u32 & 0xFF_FFFF);
+                self.ui.set_theme(theme);
+                return true;
+            }
+        }
+        false
     }
 
     /// Paints if anything changed and shows the pixels.
@@ -111,6 +136,8 @@ impl App {
             let e = self.window.poll();
             while let Some(t) = sex_app::tray::take() { self.tray.push(t); }
             if e.is_some() || !self.tray.is_empty() { return e; }
+            // A new theme repaints at once, as a timer would.
+            if self.follow_settings() { return None; }
             let wait = match end {
                 Some(end) => { let n = now(); if n >= end { return None; } (end - n).clamp(1, 4) }
                 None => 4,
@@ -131,6 +158,9 @@ impl App {
         }
     }
 }
+
+/// How often a window looks whether Settings' theme changed (ms).
+const THEME_LOOK_MS: u64 = 1000;
 
 /// How often a window looks for Shell's "a reader is on" while none is (ms).
 const A11Y_LOOK_MS: u64 = 500;

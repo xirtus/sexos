@@ -6,7 +6,7 @@ use sexfs::*;
 use std::collections::{BTreeMap, HashMap};
 
 #[derive(Clone, Default)]
-struct Disk { blocks: HashMap<u64, Box<[u8; BLOCK]>>, volatile: Vec<(u64, Box<[u8; BLOCK]>)> , size: u64, writes: u64, flushes: u64, crash_flush: Option<u64>, crash_at: Option<u64>, seed: u64, fail_reads: bool, runs: usize, run_cmds: u64, data_bytes: u64 }
+struct Disk { blocks: HashMap<u64, Box<[u8; BLOCK]>>, volatile: Vec<(u64, Box<[u8; BLOCK]>)> , size: u64, writes: u64, flushes: u64, crash_flush: Option<u64>, crash_at: Option<u64>, seed: u64, fail_reads: bool, runs: usize, run_cmds: u64, data_bytes: u64, ahead_on: bool, held: Option<(u64, Vec<u8>)>, ahead_served: u64 }
 impl Device for Disk {
     fn blocks(&self) -> u64 { self.size }
     fn run_blocks(&self) -> usize { self.runs.max(1) }
@@ -14,7 +14,30 @@ impl Device for Disk {
         self.read(block, out)?; self.data_bytes += BLOCK as u64; Ok(())
     }
     fn read_data_run(&mut self, first: u64, out: &mut [u8]) -> std::result::Result<(), ()> {
+        if let Some((at, data)) = &self.held {
+            let n = (out.len() / BLOCK) as u64;
+            if first >= *at && first + n <= at + (data.len() / BLOCK) as u64 {
+                let from = ((first - at) as usize) * BLOCK;
+                out.copy_from_slice(&data[from..from + out.len()]);
+                self.ahead_served += 1;
+                return Ok(());
+            }
+        }
         self.read_run(first, out)?; self.data_bytes += out.len() as u64; Ok(())
+    }
+    fn read_data_ahead(&mut self, first: u64, out: &mut [u8], ahead: usize) -> std::result::Result<(), ()> {
+        if !self.ahead_on || self.held.as_ref().is_some_and(|(at, d)| first >= *at && first + (out.len() / BLOCK) as u64 <= at + (d.len() / BLOCK) as u64) {
+            return self.read_data_run(first, out);
+        }
+        assert!(out.len() / BLOCK + ahead <= self.runs.max(1), "readahead stays inside one run");
+        self.run_cmds += 1;
+        for (i, c) in out.chunks_exact_mut(BLOCK).enumerate() { self.read(first + i as u64, c.try_into().unwrap())?; }
+        let next = first + (out.len() / BLOCK) as u64;
+        let mut kept = vec![0u8; ahead * BLOCK];
+        for (i, c) in kept.chunks_exact_mut(BLOCK).enumerate() { self.read(next + i as u64, c.try_into().unwrap())?; }
+        self.data_bytes += (out.len() + kept.len()) as u64;
+        self.held = Some((next, kept));
+        Ok(())
     }
     // Runs still land block by block, so a power cut can tear a run anywhere.
     fn write_run(&mut self, first: u64, data: &[u8]) -> std::result::Result<(), ()> {
@@ -36,6 +59,7 @@ impl Device for Disk {
         Ok(())
     }
     fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> std::result::Result<(), ()> {
+        self.held = None;
         self.writes += 1;
         if self.crash_at == Some(self.writes) { self.crash(); return Err(()); }
         if self.crash_at.is_some_and(|c| self.writes > c) { return Err(()); }
@@ -268,6 +292,41 @@ fn repeated_file_reads_reach_device_without_counting_metadata_or_holes() {
     // A partial payload read incurs a full block, not a fictitious one-byte command.
     assert_eq!(fs.read(id, 1, &mut back[..1]).unwrap(), 1);
     assert_eq!(fs.device().data_bytes - before, BLOCK as u64);
+}
+#[test]
+fn sequential_reads_fetch_ahead_in_one_command() {
+    let mut fs = fresh(40960);
+    fs.device().runs = 128;
+    fs.device().ahead_on = true;
+    let id = fs.create(b"seq", 1).unwrap();
+    let data = bytes_of(17, 4 << 20);
+    for (i, chunk) in data.chunks(512 * 1024).enumerate() { fs.write(id, i as u64 * 512 * 1024, chunk, 1).unwrap(); }
+    fs.commit().unwrap();
+    let mut back = vec![0u8; 65536];
+    for pass in 0..2 {
+        let (cmds, bytes) = (fs.device().run_cmds, fs.device().data_bytes);
+        for (i, chunk) in data.chunks(65536).enumerate() {
+            assert_eq!(fs.read(id, i as u64 * 65536, &mut back).unwrap(), back.len());
+            assert!(back == chunk, "pass {pass} chunk {i}");
+        }
+        let reads = fs.device().run_cmds - cmds;
+        // 64 requests of 64 KiB: the first reads only itself, then each 512 KiB run carries 8.
+        assert!(reads <= 16, "{reads} device commands for 4 MiB read sequentially");
+        // Readahead never reads past the file, so every byte comes off the device once.
+        assert_eq!(fs.device().data_bytes - bytes, data.len() as u64);
+    }
+    assert!(fs.device().ahead_served > 0);
+    // A write drops what was read ahead; the next read sees the new bytes.
+    fs.read(id, 0, &mut back).unwrap(); fs.read(id, 65536, &mut back).unwrap();
+    let patch = bytes_of(23, 65536);
+    fs.write(id, 131072, &patch, 2).unwrap();
+    fs.read(id, 131072, &mut back).unwrap();
+    assert!(back == patch);
+    // A random reader is not sequential: no readahead, one command per request.
+    let cmds = fs.device().run_cmds;
+    for i in [7u64, 3, 40, 12] { fs.read(id, i * 65536, &mut back).unwrap(); }
+    assert_eq!(fs.device().run_cmds - cmds, 4);
+    fs.verify().unwrap();
 }
 #[test]
 fn deleting_gives_all_space_back_after_commit() {
