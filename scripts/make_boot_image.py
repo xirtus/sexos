@@ -5,9 +5,12 @@ import argparse,subprocess,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 # 12 MiB: room for today's kernel and modules. With Wi-Fi firmware in the pack it takes
-# the whole 32 MiB slot the disk keeps for it (sex_pdx::fs::BOOT_SECTORS).
+# 32 MiB, and more in 4 MiB steps once the system outgrows that. Install copies the
+# image's files into a 256 MiB system slot (sex_disk::install::SLOT_SECTORS), so only the
+# old MBR layout's 32 MiB boot slot (sex_pdx::fs::BOOT_SECTORS) ever bounded it.
 SECTORS=24576
 SECTORS_WITH_FIRMWARE=65536
+STEP=8192
 def main():
  p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=ROOT/'iso_root');p.add_argument('--out',type=Path,required=True);a=p.parse_args()
  img=a.out;img.parent.mkdir(parents=True,exist_ok=True)
@@ -18,6 +21,8 @@ def main():
  files=[a.root/'sexos-kernel']+[f for sub in ('servers','apps') for f in (a.root/sub).iterdir() if f.is_file()]+([pack] if pack.is_file() else [])
  need=sum(f.stat().st_size for f in files)+(1<<20)
  sectors=SECTORS if need<=SECTORS*512 and not (pack.is_file() and pack.stat().st_size>1<<20) else SECTORS_WITH_FIRMWARE
+ # FAT tables, directories and the UEFI loader take up to about 1 MiB more than `need`.
+ if sectors==SECTORS_WITH_FIRMWARE and need+(1<<20)>sectors*512:sectors=-(-(need+(1<<20))//(STEP*512))*STEP
  with img.open('wb') as f:f.truncate(sectors*512)
  def run(*c):
   r=subprocess.run(c,capture_output=True,text=True)
