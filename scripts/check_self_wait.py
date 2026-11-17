@@ -58,7 +58,9 @@ APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95
     # WS2 kernel heap counters (SYS_STATS OP_KERNEL), unused slab.rs removed, 2026-11-17
     '95ef2223d462a85888843a0700105ff4538f044360df25138dde638253e06fb5',
     # entry hardening + security audit (stream 2), 2026-11-18
-    '24a9360f565da793ccaa3f9dda02c0540af671c7d7f997ea81d9286a28ce9865')
+    '24a9360f565da793ccaa3f9dda02c0540af671c7d7f997ea81d9286a28ce9865',
+    # BOOT loader refuses key instructions and W+X code (stream 2), 2026-11-18
+    'bdaa310d6ed632686c4284e34dcee8f2264ef16010014a6caac0013b998cf5bb')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 

@@ -328,6 +328,19 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
         }
     }
 
+    // BOOT services keep the programs' rule (sex_pdx::program_code): no code segment that is
+    // also writable, and no WRPKRU/XRSTOR/XRSTORS in code, checked on the relocated bytes.
+    for i in 0..ph_count {
+        let ph = unsafe { &*(elf_data.as_ptr().add(ph_start + i * ph_size) as *const ProgramHeader) };
+        if ph.p_type != PT_LOAD || ph.p_flags & PF_X == 0 { continue; }
+        if ph.p_flags & PF_W != 0 { return Err("ELF: writable and executable segment"); }
+        let at = load_base.as_u64() + ph.p_vaddr.saturating_sub(min_vaddr);
+        let code = unsafe { core::slice::from_raw_parts(at as *const u8, ph.p_memsz as usize) };
+        if let Some(offset) = sex_pdx::program_code::Scan::new().feed(code, false) {
+            serial_println!("[boot.service.rejected] reason=key_instruction segment={} offset={:#x}", i, offset);
+            return Err("ELF: code holds a protection-key instruction");
+        }
+    }
     let relocated_entry = header.entry.saturating_sub(min_vaddr);
     Ok(load_base + relocated_entry)
 }

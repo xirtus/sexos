@@ -116,23 +116,25 @@ run_stage() {
         --manifest-path "$manifest" \
         --target "${stage_target:-$TARGET}" \
         --release
-      # Programs: the loader refuses code holding WRPKRU/XRSTOR bytes at any offset.
-      # A displacement that holds them by chance moves when the program links with its
-      # read-only data in another order (programs that read SEX_LAYOUT_SEED).
-      if [[ ${stage_target:-$TARGET} == x86_64-sex-app.json || ${stage_target:-$TARGET} == x86_64-sex-std.json ]]; then
-        local seed=0
-        while ! python3 scripts/key_bytes.py "$src"; do
+      # Programs and BOOT services alike: the loaders refuse code holding WRPKRU/XRSTOR
+      # bytes at any offset. A displacement that holds them by chance moves when the
+      # binary links with its sections in another order: programs read SEX_LAYOUT_SEED
+      # in build.rs, services get the same shuffle as link arguments.
+      local seed=0 shuffle=""
+      while ! python3 scripts/key_bytes.py "$src"; do
           seed=$((seed + 1))
           [[ $seed -le 24 ]] || { echo "[FAIL] $src holds a refused instruction at every layout tried"; exit 1; }
           echo "[layout] $src: linking again with SEX_LAYOUT_SEED=$seed"
-          SEX_LAYOUT_SEED=$seed RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-}" cargo build --locked \
+          if [[ ${stage_target:-$TARGET} != x86_64-sex-app.json && ${stage_target:-$TARGET} != x86_64-sex-std.json ]]; then
+            shuffle="-C link-arg=--shuffle-sections=.rodata*=$seed -C link-arg=--shuffle-sections=.text*=$seed"
+          fi
+          SEX_LAYOUT_SEED=$seed RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-} $shuffle" cargo build --locked \
             -Z build-std="${stage_std:-core,compiler_builtins,alloc}" \
             -Z build-std-features=compiler-builtins-mem \
             --manifest-path "$manifest" \
             --target "${stage_target:-$TARGET}" \
             --release
-        done
-      fi
+      done
       cp "$src" "$dst"
       python3 scripts/build_input_receipt.py finish "$stage"
       ;;

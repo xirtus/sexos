@@ -31,6 +31,7 @@ hal/x86_64.rs +27).
 | S12 | Meltdown and Meltdown-PK on CPUs without `RDCL_NO` | Info | Reported at boot |
 | S13 | Unused user-accessible per-core page on key 15 | Low | Open: `core_local.rs` owner (WS4) |
 | S14 | Cross-domain branch-target injection between programs | Info | Open: decision for Phase 5/6 |
+| S15 | BOOT services and bridges were never scanned for WRPKRU/XRSTOR/XRSTORS | High | Fixed |
 
 Checked and fine: syscall and interrupt returns restore every general register from
 the saved user frame (no kernel register contents reach ring 3); the GDT has no
@@ -201,6 +202,31 @@ mispredicts. Enhanced IBRS protects the kernel, not one user domain from another
 Options: IBPB when switching between domains of different trust (thousands of
 cycles per switch on most parts), or STIBP plus core placement. This belongs with
 the Phase 5 placement and Phase 6 isolation work.
+
+### S15. BOOT services and bridges could hold key instructions (fixed)
+
+Programs have been checked for WRPKRU, XRSTOR and XRSTORS since the program loader
+was written, at load and when they seal JIT code. BOOT services, including driver
+servers that run Tuxedo bridges, went through the older BOOT loader
+(`kernel/src/elf.rs`), which checked nothing. A service binary holding `0F 01 EF`
+anywhere in its code (a compiler can make it by chance) gives anyone who can steer
+that service's control flow every key.
+
+Fix:
+- the BOOT loader refuses a module with a writable and executable segment, and
+  scans each code segment's final, relocated bytes with the same
+  `sex_pdx::program_code::Scan` the program loader uses; a hit logs
+  `[boot.service.rejected]` and the service does not start;
+- the build trace runs `scripts/key_bytes.py` on every Cargo-built boot module, not
+  only programs, and relinks a hit with shuffled sections (services get the
+  shuffle as link arguments, programs keep `SEX_LAYOUT_SEED`).
+
+Today's services were built and scanned before the refusal was turned on: no hits
+and no writable-and-executable segments in the 16 that build on their own (sexfiles,
+sexnet, Kaleidoscope and Cufflinks need the full build trace and are checked by CI).
+The byte check holds only while code cannot change: services have no
+writable-and-executable memory, and only programs can turn pages into code
+(`SYS_PROGRAM_CODE`, which scans).
 
 ## Kernel stacks
 

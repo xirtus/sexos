@@ -205,8 +205,11 @@ except through program records.
 - No ambient authority: a global address, slot 0 and ring 0 grant nothing.
   Slot 0 reaches three caller-scoped bridge operations only (BOOT display query,
   bounded serial record, own init argument; `capability_slot.rs`).
-- Code loaded into programs may not contain `WRPKRU`, `XRSTOR` or `XRSTORS`
-  (`sex_pdx::program_code`), so a program cannot open other keys.
+- No ring-3 code may contain `WRPKRU`, `XRSTOR` or `XRSTORS`, so it cannot open
+  other keys: the program loader checks programs and code they seal
+  (`sex_pdx::program_code`), the BOOT loader checks every service and refuses a
+  segment that is both writable and executable (`kernel/src/elf.rs`), and the build
+  relinks a binary whose layout made those bytes by chance (`scripts/key_bytes.py`).
 - Organs: a PKU key belongs to a group of trusted services (section 2). Services in
   one organ are not isolated from each other in memory; capabilities still separate
   their authority.
