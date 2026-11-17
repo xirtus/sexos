@@ -41,6 +41,8 @@ mod tray_items;
 mod tray_items_glue;
 mod layouts;
 mod layouts_glue;
+mod silk_ctl;
+mod silk_ctl_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -11131,6 +11133,8 @@ static mut TRAY_REFRESHED: Option<u64> = None;
 /// one undelivered reply per PD, so Bell and sexnet are asked one after the other.
 static mut TRAY_WIFI_ASKED: Option<u64> = None;
 static mut TRAY_WIFI_DUE: bool = false;
+/// A refused ask is tried again from this tick on (the main loop's tray look).
+static mut TRAY_WIFI_RETRY: u64 = 0;
 /// A volume or mute click made while another answer was owed to Shell: sent once that
 /// answer is in. The kernel keeps one unread reply per domain, so a second answer
 /// arriving before Shell reads the first is lost (and the tray would show the old state).
@@ -11183,10 +11187,13 @@ unsafe fn tray_refresh() {
 }
 unsafe fn tray_ask_wifi() {
     let now = sex_pdx::get_ticks();
-    if !TRAY_WIFI_DUE || MEDIA_ASKS.pending() || net_time_owed() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
+    if !TRAY_WIFI_DUE || now < TRAY_WIFI_RETRY || MEDIA_ASKS.pending() || net_time_owed() || TRAY_WIFI_ASKED.is_some_and(|t| now.saturating_sub(t) < 5_000) { return; }
     TRAY_WIFI_DUE = false;
     let status = pdx_call(sex_pdx::SLOT_NET, sex_pdx::wifi_status::OP, sex_pdx::wifi_status::STATE, 0, 0).0;
     TRAY_WIFI_ASKED = (status == 0).then_some(now);
+    // Refused (sexnet not taking calls yet): still due, asked again shortly
+    // rather than at the next 30 s look.
+    if status != 0 { TRAY_WIFI_DUE = true; TRAY_WIFI_RETRY = now + 500; sex_pdx::serial_record!("[shell.tray.wifi.retry] status={:#x}", status); }
 }
 /// Every 30 s, and every 2 s while a tray menu shows.
 unsafe fn tray_tick() {
@@ -11199,6 +11206,8 @@ unsafe fn tray_tick() {
         sex_pdx::serial_record!("[shell.tray.wifi.lost]");
         tray_ask_wifi();
     }
+    // A look put off while Bell or network time owed Shell an answer, or refused.
+    if TRAY_WIFI_DUE { tray_ask_wifi(); }
     // The first look waits for boot to settle (Bell, sexnet and the bar up).
     if TRAY_REFRESHED.is_none() && sex_pdx::get_ticks() < 8_000 { return; }
     tray_send_owed();
@@ -26324,7 +26333,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); }
+        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         #[cfg(sexos_input_payload_proof)]
@@ -27007,7 +27016,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() || tray_items_glue::busy() || restricted_routes::pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() || tray_items_glue::busy() || silk_ctl_glue::busy() || restricted_routes::pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -27036,6 +27045,7 @@ pub extern "C" fn _start() -> ! {
             if bt_panel::receive(&msg) { continue; }
             if reader_glue::receive(&msg) { continue; }
             if tray_items_glue::receive(&msg) { continue; }
+            if silk_ctl_glue::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }

@@ -10,7 +10,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use sex_font::{Font, GlyphId, Style, Synthetic};
+use sex_font::{Font, GlyphId, Render, Style, Synthetic};
 
 /// A typeface: Geist Sans or Geist Mono, regular, bold, italic or both.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -42,7 +42,7 @@ pub struct Glyph {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct Key { font: u8, glyph: u16, size: u32, phase: u8, style: u8 }
+struct Key { font: u8, glyph: u16, size: u32, phase: u8, style: u8, dark: bool }
 
 /// Subpixel positions a glyph is drawn at: quarter pixels.
 const PHASES: i32 = 4;
@@ -152,12 +152,19 @@ impl Fonts {
     }
 
     /// The glyph for `c` at `px` with the pen `phase` quarters of a pixel right of a
-    /// whole pixel, drawn on first use.
+    /// whole pixel, drawn on first use, for dark ink (stems darkened).
     pub fn glyph(&mut self, face: Face, c: char, px: f32, phase: u8) -> Option<&Glyph> {
+        self.glyph_for(face, c, px, phase, 0)
+    }
+
+    /// [`Fonts::glyph`] for ink of colour `ink` (`0xRRGGBB`): light hinting at small
+    /// sizes, and stem darkening only for dark ink (`sex_font::Render::ui_for`).
+    pub fn glyph_for(&mut self, face: Face, c: char, px: f32, phase: u8, ink: u32) -> Option<&Glyph> {
         let (id, g) = self.resolve(face, c)?;
         let size = Self::units(px);
         let synth = Self::synth(id, face);
-        let key = Key { font: id, glyph: g.0, size, phase, style: if id < 8 { 0 } else { face.style.index() as u8 } };
+        let render = Render::ui_for(ink);
+        let key = Key { font: id, glyph: g.0, size, phase, style: if id < 8 { 0 } else { face.style.index() as u8 }, dark: render.darken };
         if !self.cache.contains_key(&key) {
             if self.cached_bytes > CACHE_BYTES { self.cache.clear(); self.cached_bytes = 0; }
             let font = self.font(id)?;
@@ -173,7 +180,7 @@ impl Fonts {
             if acc.len() < need { acc.resize(need, 0); }
             let mut coverage = vec![0u8; w * h];
             let x = pad * 256 + phase as i32 * 256 / PHASES;
-            let drawn = self.font(id).map_or(false, |font| font.draw_synthetic(g, size, x, asc * 256, w, h, &mut acc[..need], &mut coverage, synth));
+            let drawn = self.font(id).map_or(false, |font| font.draw_rendered(g, size, x, asc * 256, w, h, &mut acc[..need], &mut coverage, synth, render));
             self.acc = acc;
             if !drawn { return None; }
             self.cached_bytes += coverage.len() + 32;
