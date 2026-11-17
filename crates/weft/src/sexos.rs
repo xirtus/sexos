@@ -50,6 +50,9 @@ pub struct App {
     pub ui: Ui,
     /// Frames painted, for gates and logs.
     pub frames: u64,
+    /// Tray item and notification events (`sex_app::tray`) taken while waiting; the
+    /// program drains them after [`App::next`].
+    pub tray: Vec<sex_app::tray::Event>,
 }
 
 impl App {
@@ -60,7 +63,7 @@ impl App {
         sex_app::a11y::ask();
         let (w, h) = window.size();
         let ui = Ui::new(w as u32, h as u32, theme, strings);
-        App { window, ui, frames: 0 }
+        App { window, ui, frames: 0, tray: Vec::new() }
     }
 
     /// Paints if anything changed and shows the pixels.
@@ -84,7 +87,7 @@ impl App {
         // Shell's answer to "is a reader on" arrives with no event of its own: look
         // again now and then while none is, so the tree goes out soon after one starts.
         if sex_app::a11y::asked() && !sex_app::a11y::on() { wait = Some(wait.map_or(A11Y_LOOK_MS, |w| w.min(A11Y_LOOK_MS))); }
-        let e = match wait { Some(ms) => self.window.next_within(ms.max(1)), None => Some(self.window.next()) };
+        let e = self.wait(wait);
         self.ui.tick(now());
         let mut out = Vec::new();
         if let Some(e) = e {
@@ -98,6 +101,22 @@ impl App {
         self.present();
         self.a11y_send();
         out
+    }
+
+    /// The next window event, or `None` once `ms` passed or a tray event came in
+    /// (kept in [`App::tray`]).
+    fn wait(&mut self, ms: Option<u64>) -> Option<AppEvent> {
+        let end = ms.map(|ms| now().saturating_add(ms.max(1)));
+        loop {
+            let e = self.window.poll();
+            while let Some(t) = sex_app::tray::take() { self.tray.push(t); }
+            if e.is_some() || !self.tray.is_empty() { return e; }
+            let wait = match end {
+                Some(end) => { let n = now(); if n >= end { return None; } (end - n).clamp(1, 4) }
+                None => 4,
+            };
+            let _ = sex_pdx::sys_wait_self_ticks(wait);
+        }
     }
 
     /// While a screen reader is on: the whole tree when it starts, then what changed

@@ -84,7 +84,6 @@ crates = [
   "apps/needle/Cargo.toml",
   "apps/chello/Cargo.toml",
   "apps/pdf/Cargo.toml",
-  "apps/sex-calc/Cargo.toml",
   "apps/calendar/Cargo.toml",
   "apps/spreadeagle/Cargo.toml",
   "apps/polyamour/Cargo.toml",
@@ -957,15 +956,6 @@ target = "x86_64-sex-app.json"
 manifest = "apps/flash/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/flash"
 dest_artifact = "iso_root/programs/flash"
-
-[[stage]]
-id = "build_sex_calc"
-action = "cargo_manifest"
-target = "x86_64-sex-app.json"
-manifest = "apps/sex-calc/Cargo.toml"
-source_artifact = "target/x86_64-sex-app/release/sex-calc"
-# The old calculator; Abacus is now the Weft program above, and `sex-calc` runs it.
-dest_artifact = "iso_root/programs/sex-calc"
 
 [[stage]]
 id = "build_calendar"
