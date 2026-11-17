@@ -6,6 +6,7 @@ compatibility layer, and every Linux-code bridge has a row in docs/BRIDGE_LEDGER
 """
 from pathlib import Path
 import re
+import subprocess
 import tomllib
 import unittest
 
@@ -101,6 +102,20 @@ class BridgeLedger(unittest.TestCase):
                     missing.append(rel)
         self.assertEqual(missing, [],
                          "Linux-code bridges need a row with their REA replacement in docs/BRIDGE_LEDGER.md")
+
+
+class NoBackupFiles(unittest.TestCase):
+    """Editor/script backups (`main.rs.bak.foo_v1`) belong in git history, not the tree."""
+
+    SOURCE_DIRS = ("kernel/", "servers/", "apps/", "crates/", "scripts/")
+
+    def test_no_bak_files_in_source_dirs(self):
+        try:
+            tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.splitlines()
+        except (OSError, subprocess.CalledProcessError):
+            tracked = [str(p.relative_to(ROOT)) for d in self.SOURCE_DIRS for p in (ROOT / d).rglob("*.bak*")]
+        bak = [p for p in tracked if p.startswith(self.SOURCE_DIRS) and re.search(r"\.bak(\.|$|_)|\.bak\d", Path(p).name)]
+        self.assertEqual(bak, [], "delete backup files; git keeps the history")
 
 
 if __name__ == "__main__":
