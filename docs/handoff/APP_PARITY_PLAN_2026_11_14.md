@@ -454,6 +454,34 @@ Write set: new modules in `servers/silk-shell/src/` (C owns `main.rs`; hooks und
 | S7 | Screen reader (proposed **Whisper**): reads the AccessKit tree (M8), speech by espeak-ng (GPL-3.0) as a confined program, focus tracking, review keys; Tatami Accessibility page | gate: focusing a button speaks its label (audio buffer contains speech frames; text log equals label) |
 | S8 | Magnifier, high contrast, sticky/slow keys, on-screen keyboard | gate: magnifier zooms 2× around pointer |
 
+**S4 notes (2026-11-16).** The `silk` command is in: Spindle's `silk windows | focus FRAME |
+move FRAME WS | layout WS master|dwindle|monocle|grid | float FRAME | close FRAME | events
+[since SEQ] | events follow [COUNT]` sends one `sex_pdx::silk_ctl` request (`OP_SILK_CTL`
+0x2EE) to the Shell, which answers with `key=value` text lines in `OP_SILK_OUT` (0x2EF) plain
+calls, ending in an `ok ...` or `error ...` line. The Shell never waits on Spindle and never
+uses Spindle's reply slot. Events (opened, closed, focused, moved, workspace, layout) come from
+comparing the frames, focus, workspace and layouts on every main loop turn, are kept in a
+32-event ring with sequence numbers, and a `follow` feed pushes them live until its count
+or Esc. Only a live Spindle run, or a run a Spindle terminal started attached to it, may call.
+Pure logic: `servers/silk-shell/src/silk_ctl.rs` (host test `tests/silk_ctl.rs`); glue:
+`silk_ctl_glue.rs`; gate: `scripts/silk_ctl_gate.py`.
+
+*Wasm layout plugins are not in the Shell yet, on purpose.* `crates/sex-wasm` would run them
+(wasmi, `no_std` + `alloc`, with fuel limits), but not inside the Shell: (1) the Shell's heap
+starts at a 128 KiB arena and wasmi's engine, a compiled module and even one 64 KiB linear-memory
+page would be most of it; (2) the interpreter is roughly what makes the `wasm` program near the
+1 MiB image limit, and the Shell is already the largest server; (3) the Shell would have to
+read the plugin file through Files itself and run guest code inside the tile path of the
+desktop's single loop, so a slow plugin (even fuel-bounded) stalls input and drawing, and an
+interpreter fault ends the desktop. The plan instead: a plugin runs in its own confined run
+(the `wasm` host with a `layout` export, `layout(n, w, h) -> ptr` writing `n` rectangles into
+its memory, fuel-limited per call). The Shell sends it the tile count and work area as a plain
+call when a workspace with `silk layout WS plugin:PATH` retiles, keeps tiling with the
+workspace's previous layout meanwhile, and applies the rectangles the plugin sends back as its
+own program-initiated call (checked: inside the work area, one per window, sizes at least the
+minimum), so the Shell never waits on the plugin. `silk layout WS plugin:PATH` answers that
+plugins are not in this build until then.
+
 ### T. Office suite: Gingham, Brocade, Burlesque and the Craft apps (8)
 
 Write set: new `apps/gingham`, `apps/brocade`, `apps/burlesque`, new `crates/sex-office`.

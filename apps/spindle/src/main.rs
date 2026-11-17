@@ -105,6 +105,7 @@ mod volume_command;
 mod wifi_command;
 mod calc_command;
 mod complete;
+mod silk_command;
 static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
 static mut HISTORY_IO:history_persistence::Client=history_persistence::Client::new();
 
@@ -867,6 +868,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  capture FILE.png   save whole desktop (first terminal)");
             sb.push(b"  beep [HZ] [MS] [VOL]  play a note on the sound card");
             sb.push(b"  volume [N|+N|-N|mute|list]  sound volume (ROW N for one program)");
+            sb.push(b"  silk windows|focus|move|layout|float|close|events  script the desktop (silk alone: usage)");
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  crashes      what stopped, this start and earlier ones");
             sb.push(b"  about        Spindle version + identity");
@@ -1490,6 +1492,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"fetch" => {unsafe{let fs=&*core::ptr::addr_of!(fs_commands::FS);fetch_command::FETCH.start(args,sb,|p,o|fs.join(p,o));}true},
         b"update" => {unsafe{update_command::UPDATE.start(args,sb);}true},
         b"pkg" => {unsafe{pkg_command::PKG.command(args,sb);}true},
+        b"silk" => {unsafe{(*core::ptr::addr_of_mut!(silk_command::SILK)).command(args,sb);}true},
         b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
         // Loom (formerly Files), given a folder (the whole filesystem by default) to look after.
         b"loom" | b"files" => {
@@ -2865,6 +2868,7 @@ pub extern "C" fn _start() -> ! {
             }
             continue;
         }
+        if unsafe{(*core::ptr::addr_of_mut!(silk_command::SILK)).receive(&msg,sb)} {unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1 && unsafe{(*core::ptr::addr_of_mut!(volume_command::VOLUME)).receive(msg.caller_pd,msg.arg0,sb)} {unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1 && unsafe{(*core::ptr::addr_of_mut!(wifi_command::WIFI)).receive(msg.caller_pd,msg.arg0,sb)} {unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1 && msg.caller_pd==13 {
@@ -2919,6 +2923,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             if value != 1 { continue; }
+            if scancode==0x01&&unsafe{(*core::ptr::addr_of!(silk_command::SILK)).following()}{unsafe{(*core::ptr::addr_of_mut!(silk_command::SILK)).stop(sb);content_render(&line,sb);}continue;}
             if scancode==0x01&&unsafe{capture_command::CAPTURE.busy()}{unsafe{capture_command::CAPTURE.cancel(sb);content_render(&line,sb);}continue;}
             // Ctrl chords edit the line; they never insert text.
             if (msg.arg0 >> 9) & 1 == 1 {
