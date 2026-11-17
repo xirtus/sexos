@@ -48,6 +48,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Rounded window corners and soft shadows (Display decoration pass) on the host
       run: bash scripts/display_decor_host_gate.sh
+    - name: Deadline scheduling class (earliest first, share of each window) on the host
+      run: bash scripts/scheduler_deadline_host_gate.sh
     - name: Velvet game rules and Weft input integration
       run: cargo test --locked -p velvet --no-default-features
     - name: Moan Weft app and project editing
@@ -294,6 +296,11 @@ jobs:
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
+    - name: IPC round trip and null call, 1 and 4 cores (bench)
+      run: |
+        SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/program_bench_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bench-1"
+        SEXOS_GATE_CORES=4 SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/program_bench_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bench-4"
+        grep -ahE '\[bench\] name=(null_syscall|ipc_roundtrip)' "$RUNNER_TEMP"/sexos-runtime/bench-*/* 2>/dev/null || true
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
       run: python3 scripts/program_ipv6_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipv6"
     - name: Network time (a clock starting in 2024 comes right by SNTP)
