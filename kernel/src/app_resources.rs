@@ -26,10 +26,13 @@ struct App {
     image_pages:usize,grown:usize,stack_pages:usize,
     /// Heap pages Denim holds compressed (their leaves are its marker).
     out:usize,
+    /// Stack pages committed on the run's first touch, below the `STACK_COMMIT` it
+    /// starts with (`stack_fault`). Kept apart so heap pages stay the manifest's last.
+    stack:alloc::vec::Vec<PrivatePage>,
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
     pages:alloc::vec::Vec::new(),count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,stack_pages:0,out:0,last_hint:[0;6],hinted:0,kicked:false}}}
+    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,stack_pages:0,out:0,stack:alloc::vec::Vec::new(),last_hint:[0;6],hinted:0,kicked:false}}}
 impl App {
     /// Sets manifest entry `i`, growing the manifest by one when `i` is its end.
     fn put(&mut self,i:usize,page:PrivatePage){
@@ -58,7 +61,7 @@ static TERMINAL:[AtomicBool;MAX_APPS]=[const{AtomicBool::new(false)};MAX_APPS];
 /// The live run of an app row and the pages its manifest holds, for the system monitor.
 pub fn held_pages(target:u32)->Option<(u32,u64)>{
     let i=TARGETS.iter().position(|t|t.load(Ordering::Acquire)==target)?;
-    let apps=apps_lock!()?;Some((apps[i].task,apps[i].count as u64))
+    let apps=apps_lock!()?;Some((apps[i].task,(apps[i].count+apps[i].stack.len()) as u64))
 }
 fn boot(){assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),crate::ipc::BootPhase::RegistryBuild as u8,"APP_GENESIS_AFTER_SEAL");}
 pub fn plan_boot_apps(targets:&[u32]){
@@ -361,6 +364,8 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
 /// A run's stack when its file names none, and the most one may ask for.
 const STACK_DEFAULT:u64=1<<20;
 const STACK_MAX:u64=256<<20;
+/// Stack pages a run starts with (64 KiB); the rest of its stack is committed on touch.
+const STACK_COMMIT:usize=16;
 pub(crate) fn checked_program_image(len:usize,source:Option<ImageSource>)->Result<crate::boot_memory::ImageCopy,u64>{
     let copy=crate::boot_memory::program_image(len).ok_or(INVALID)?;
     if source.is_some_and(|approved|!approved.matches(&copy)){return Err(DENIED)}
@@ -439,9 +444,12 @@ fn load_program(app:&mut App,elf:&[u8],task:u32)->Result<(),u64>{
     }
     // The stack: at the arena's top, sized by the file (`-z stack-size`) or 1 MiB, with
     // an unmapped guard page below it, so an overflow faults instead of reaching the heap.
+    // Only its top `STACK_COMMIT` is there at the start; the rest comes page by page as
+    // the run first touches it (`stack_fault`), so a big stack costs only what is used.
     let stack_pages=(if parsed.stack==0{STACK_DEFAULT}else{parsed.stack.min(STACK_MAX)}).div_ceil(4096) as usize;
     if image_pages+stack_pages+1>app.arena_pages{fail(app,count,"stack_room");return Err(DENIED)}
-    for index in app.arena_pages-stack_pages..app.arena_pages{
+    app.stack=alloc::vec::Vec::new();
+    for index in app.arena_pages-stack_pages.min(STACK_COMMIT)..app.arena_pages{
         let va=app.arena+(index*4096) as u64;
         let (Some(leaf),Some(frame))=(crate::boot_memory::arena_leaf(va,app.pkey),crate::program_frames::take())else{
             fail(app,count,"no_memory");return Err(DENIED)};
@@ -453,7 +461,7 @@ fn load_program(app:&mut App,elf:&[u8],task:u32)->Result<(),u64>{
     let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
     let main=target.main_task.load(Ordering::Acquire);
     unsafe{(*main).rearm(task,entry,rsp,target);}
-    crate::serial_println!("[app.program.loaded] target={} task={} bytes={} pages={} entry={:#x} stack_pages={}",app.target,task,len,count,entry,stack_pages);
+    crate::serial_println!("[app.program.loaded] target={} task={} bytes={} pages={} entry={:#x} stack_pages={} stack_committed={}",app.target,task,len,count,entry,stack_pages,stack_pages.min(STACK_COMMIT));
     Ok(())
 }
 /// More memory for the calling program's current run: the arena's next pages after its
@@ -537,6 +545,28 @@ pub fn heap_frames<R>(pd:&ProtectionDomain,va:u64,pages:usize,writable:bool,out:
         match loan(p,pte,writable){Loan::Frame(f)=>out.push(f),Loan::Out=>return Err(RECALL),Loan::Refused=>return Err(v::DENIED)}
     }
     then(out)
+}
+/// A touch of the calling run's stack below what is committed: a zeroed page there, as
+/// `grow` gives the heap (Some(true)). The guard page under the stack stays unmapped: a
+/// touch there is an overflow (Some(false)), and the run ends as for any bad fault.
+/// None: not a stack page of a live run, or no memory for one.
+pub fn stack_fault(pd:&ProtectionDomain,va:u64)->Option<bool>{
+    let mut apps=apps_lock!()?;
+    let app=apps.iter_mut().find(|a|a.ready&&a.target==pd.id)?;
+    live(app,pd).ok()?;
+    let (va,top)=(va&!0xFFF,app.arena+(app.arena_pages*4096) as u64);
+    let low=top-(app.stack_pages*4096) as u64;
+    if va==low-4096{return Some(false)}
+    if va<low||va>=top{return None}
+    let leaf=crate::boot_memory::arena_leaf(va,app.pkey)?;
+    if unsafe{core::ptr::read_volatile(leaf as *const u64)}!=0||app.stack.try_reserve(1).is_err(){return None}
+    let frame=crate::program_frames::take()?;
+    let page=PrivatePage{va,leaf,expected:frame|7|((app.pkey as u64)<<59)|(1<<63)};
+    app.stack.push(page);
+    // The leaf was clear, so no core holds a translation for it.
+    crate::program_tenancy::grant(app.target,page);
+    x86_64::instructions::tlb::flush(VirtAddr::new(va));
+    Some(true)
 }
 pub fn live_run(pd:&ProtectionDomain)->Result<u32,u64>{
     let apps=apps_lock!().ok_or(RETRY)?;
@@ -675,8 +705,8 @@ pub fn force_end(pd:&ProtectionDomain,slot:u64)->u64{
 }
 fn end_forced(app:&mut App){
     let id=app.target;crate::program_tenancy::release(id);
-    for page in &app.pages[..app.count]{unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};}
-    crate::smp::tlb::flush_pages(app.count,app.pages[..app.count].iter().map(|p|p.va));
+    for page in app.pages[..app.count].iter().chain(&app.stack){unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};}
+    crate::smp::tlb::flush_pages(app.count+app.stack.len(),app.pages[..app.count].iter().chain(&app.stack).map(|p|p.va));
     app.forced=true;
     crate::program_workers::end(id);
     crate::serial_println!("[app.program.forced] target={} task={} pages={}",app.target,app.task,app.count);
@@ -725,8 +755,10 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
             |leaf|crate::program_tenancy::read(id,leaf),
             |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
             |_|{})?};
+        if !app.forced&&!app.stack.is_empty(){retire_private_pages(&app.stack,|leaf|crate::program_tenancy::read(id,leaf),
+            |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},|_|{})?;}
         // One shootdown for the whole run, before any frame is reused.
-        if !app.forced{crate::smp::tlb::flush_pages(app.count,app.pages[..app.count].iter().map(|p|p.va));}
+        if !app.forced{crate::smp::tlb::flush_pages(app.count+app.stack.len(),app.pages[..app.count].iter().chain(&app.stack).map(|p|p.va));}
         if app.reusable{
             // The row keeps its authority and its BOOT frames for the next run; frames
             // lent to this run's arena go back for any program to use.
@@ -736,6 +768,7 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
                 if sex_pdx::denim::is_out(app.pages[i].expected){continue}
                 if app.in_arena(va){crate::program_frames::give(frame)}else{crate::boot_memory::zero_frame(frame)}
             }
+            for page in core::mem::take(&mut app.stack){crate::program_frames::give(page.expected&PHYSICAL_MASK)}
             app.count=0;app.out=0;
             // Release the manifest's capacity too: a large run must not pin its heap after it ends.
             app.pages=alloc::vec::Vec::new();

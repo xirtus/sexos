@@ -19,6 +19,11 @@ mod program_workers {
  pub fn is_worker(t:*mut super::scheduler::Task)->bool{WORKERS.with(|w|w.borrow().contains(&(t as usize)))}
  pub fn find(_:u32,pick:impl Fn(*mut super::scheduler::Task)->bool)->Option<*mut super::scheduler::Task>{WORKERS.with(|w|w.borrow().iter().map(|&t|t as *mut super::scheduler::Task).find(|&t|pick(t)))}
 }
+/// The row's lazy stack (`app_resources::stack_fault`): not a stack page unless a test says.
+mod app_resources {
+ thread_local!{pub static STACK:std::cell::Cell<Option<bool>>=const{std::cell::Cell::new(None)};}
+ pub fn stack_fault(_:&super::capability::ProtectionDomain,_:u64)->Option<bool>{STACK.with(|s|s.get())}
+}
 pub const SLOT_SEXT:u64=2;
 #[macro_export] macro_rules! serial_println { ($($arg:tt)*) => { let _ = format_args!($($arg)*); }; }
 use pagefault::{is_canonical_fault_address,PageFaultError,PageFaultRequest,OP_PAGE_FAULT};
@@ -239,4 +244,21 @@ fn a_worker_touching_a_denim_page_comes_back_through_denim(){
  assert_eq!(RESUMES.load(Ordering::Relaxed),1);
  assert!(!unsafe{(*main).state.snapshot()}.exited);
  program_workers::WORKERS.with(|w|w.borrow_mut().clear());
+}
+
+/// A touch of the main task's uncommitted stack is committed in place and the task goes
+/// on at once, with no pager; a touch of the guard page under it is refused (the run ends).
+#[test]
+fn the_main_task_stack_grows_on_touch_down_to_its_guard_page(){
+ let _serial=SERIAL.lock().unwrap_or_else(|e|e.into_inner());
+ let _task=setup();
+ app_resources::STACK.with(|s|s.set(Some(true)));
+ assert_eq!(forward(0x7000_0123,6,7),Ok(0));
+ assert_eq!(RESUMES.load(Ordering::Relaxed),1);
+ assert!(ROUTE.with(|r|r.borrow().invocations.is_empty()),"the pager heard a stack touch");
+ let _task=setup();
+ app_resources::STACK.with(|s|s.set(Some(false)));
+ assert_eq!(forward(0x6fff_f123,6,7),Err(DENIED));
+ assert_eq!(RESUMES.load(Ordering::Relaxed),0);
+ app_resources::STACK.with(|s|s.set(None));
 }

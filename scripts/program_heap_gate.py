@@ -82,12 +82,18 @@ def main():
    assert int(re.findall(rf'\[heaptest\.ok\] target={after["target"]} task={after["task"]} [^\n]*pressure=(\d+)',t())[-1])==0,'pressure not normal after Close'
   assert after['free']+after['held']>=big['free']+big['held']-64,f"pages leaked: {big} then {after}"
   # A deep call fits the 4 MiB stack; running past it hits the guard page and ends
-  # only that run, never the machine.
-  deep=started();s=len(t());g['focus'](SURFACE[deep['target']]);time.sleep(.5);q.key('s')
+  # only that run, never the machine. The run starts with 64 KiB of its stack (#306):
+  # the rest comes page by page as the deep call touches it.
+  deep=started()
+  m=re.findall(rf'\[app\.program\.loaded\] target={deep["target"]} task={deep["task"]} [^\n]*stack_pages=(\d+) stack_committed=(\d+)',t())
+  assert m and m[-1]==('1024','16'),f'stack not lazy: {m}'
+  s=len(t());g['focus'](SURFACE[deep['target']]);time.sleep(.5);q.key('s')
   g['wait'](rf'\[heaptest\.deep\] target={deep["target"]} task={deep["task"]} frames=20 ',s,120)
   s=len(t());q.key('o')
   g['wait'](rf'\[heaptest\.overflow\] target={deep["target"]} task={deep["task"]}\n',s,60)
+  g['wait'](rf'\[app\.program\.stack_overflow\] target={deep["target"]} task={deep["task"]} ',s,120)
   g['wait'](rf'fault\.kill \[paging\.fault\.terminal\] pd={deep["target"]} ',s,120)
+  g['wait'](rf'\[crash\.record\] seq=\d+ kind=3 pd={deep["target"]} ',s,60)
   text=t();assert 'KERNEL PANIC'not in text and '[heaptest.fatal]'not in text and '[heaptest.fail]'not in text
   print({'ok':True,'runs':runs,'side_by_side':live,'all':big,'after':after})
  finally:g['stop']()

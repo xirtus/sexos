@@ -46,6 +46,17 @@ pub unsafe fn forward_page_fault(fault_addr: u64, error_code: u64, pd_id: u64) -
     let current = SCHEDULERS[core.core_id as usize].current_task.load(Ordering::Acquire);
     let task = if denim && crate::program_workers::is_worker(current) { current } else { target_task(pd.id)? };
     if current != task || !is_live_fault(task) { return Err(DENIED); }
+    // The main task's stack grows on touch, down to its guard page.
+    if !denim && !crate::program_workers::is_worker(current) {
+        match crate::app_resources::stack_fault(pd, fault_addr) {
+            Some(true) => { crate::scheduler::resume_resolved_fault(task); return Ok(0); }
+            Some(false) => {
+                crate::serial_println!("[app.program.stack_overflow] target={} task={} addr={:#x}", pd.id, (*task).id, fault_addr);
+                return Err(DENIED);
+            }
+            None => {}
+        }
+    }
     let pager = if denim { sex_pdx::denim::DENIM_PD } else {
         let cap = pd.find_capability(sex_pdx::SLOT_SEXT as u32).ok_or(DENIED)?;
         match cap.data {
