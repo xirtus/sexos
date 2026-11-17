@@ -34,7 +34,11 @@ impl Win {
     const EMPTY: Self = Self { id: 0, x: 0, y: 0, w: 0, h: 0, r: 0, shadow: Shadow { spread: 0, offset_y: 0, alpha: 0 }, focused: false, fade: 255 };
     fn holds(&self, x: i32, y: i32) -> bool { x >= self.x && y >= self.y && x < self.x + self.w as i32 && y < self.y + self.h as i32 }
     fn cover(&self, x: i32, y: i32) -> u8 { shape::coverage(x - self.x, y - self.y, self.w, self.h, self.r) }
-    fn shade(&self, x: i32, y: i32) -> u8 { shape::shadow_alpha(x - self.x, y - self.y, self.w, self.h, self.r, self.shadow) }
+    fn shade(&self, x: i32, y: i32) -> u8 {
+        let reach = self.shadow.reach() as i32;
+        if x < self.x - reach || x >= self.x + self.w as i32 + reach { return 0; }
+        shape::shadow_alpha(x - self.x, y - self.y, self.w, self.h, self.r, self.shadow)
+    }
 }
 
 /// Largest distance any decoration reaches past a window, at `scale`.
@@ -84,8 +88,23 @@ pub fn fade(surface: u64) -> u8 {
 
 const WORDS: usize = crate::MAX_FB_W / 64;
 
+/// CPU timestamp for the frame-cost report (0 where there is none).
+pub fn cycles_now() -> u64 {
+    #[cfg(target_arch = "x86_64")] { unsafe { core::arch::x86_64::_rdtsc() } }
+    #[cfg(not(target_arch = "x86_64"))] { 0 }
+}
+/// Cycles spent in this pass since the last call.
+static mut CYCLES: u64 = 0;
+pub fn take_cycles() -> u64 { unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(CYCLES)) } }
+
 /// Decorate framebuffer row `y` between `x0` and `x1`.
 pub fn row(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, scene: &crate::scene::SceneSnapshot) {
+    let start = cycles_now();
+    decorate(fb, y, x0, x1, w, h, scene);
+    unsafe { CYCLES = CYCLES.wrapping_add(cycles_now().wrapping_sub(start)); }
+}
+
+fn decorate(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, scene: &crate::scene::SceneSnapshot) {
     if !effects() || x0 >= x1 || x1 > w || w > crate::MAX_FB_W || y >= h { return; }
     let scale = scene.metrics.scale().max(1);
     let bar = scene.metrics.bar() as i32;

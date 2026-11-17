@@ -118,6 +118,12 @@ def main():
             wait(r'\[display.motion\] on=1 dir=-1', mark)
             wait(r'\[display.motion.end\]', mark, timeout=60); time.sleep(.5)
         times = [int(v) for v in re.findall(r'\[display\.frame\.time\] ms=(\d+)', text()[start:])]
+        # Where each paced frame's time went: render ms, render and decoration kilocycles.
+        costs = [tuple(int(v) for v in m) for m in re.findall(r'\[display\.frame\.cost\] render_ms=(\d+) render_kcyc=(\d+) decor_kcyc=(\d+) full=(\d)', text()[start:])]
+        render_kcyc = sum(c[1] for c in costs); decor_kcyc = sum(c[2] for c in costs)
+        cost = dict(frames=len(costs), render_ms=[c[0] for c in costs][:24], full_frames=sum(c[3] for c in costs),
+                    decor_share_pct=(decor_kcyc * 100 // render_kcyc) if render_kcyc else None)
+        print('[frame_time.cost] ' + json.dumps(cost), flush=True)
         if len(times) < a.slides: raise RuntimeError('too few paced frames: %r' % times)
         p99 = percentile(times, 99); p50 = percentile(times, 50)
         # The grid may catch up with a short interval after a late frame, but
@@ -125,7 +131,7 @@ def main():
         if kvm and p50 < 15: raise RuntimeError('frames not paced at 60 Hz: %r' % times)
         if kvm and p99 >= LIMIT_MS: raise RuntimeError('frame time p99 %d ms >= %d ms: %r' % (p99, LIMIT_MS, times))
         result = dict(ok=True, accel='kvm' if kvm else 'tcg', threshold_enforced=kvm, limit_ms=LIMIT_MS, frames=len(times),
-                      p50_ms=p50, p99_ms=p99, max_ms=max(times), slides=a.slides,
+                      p50_ms=p50, p99_ms=p99, max_ms=max(times), slides=a.slides, cost=cost,
                       scope='QEMU 1280x800, 4 cores: paced workspace-slide frame intervals; p99 < 20 ms enforced on KVM only')
         (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n'); print(json.dumps(result))
     except Exception as e:
