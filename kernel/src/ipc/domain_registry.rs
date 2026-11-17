@@ -6,6 +6,8 @@ use core::sync::atomic::{AtomicPtr, Ordering};
 
 use super::{BootPhase, BOOT_PHASE, MAX_DOMAINS};
 
+const _: () = assert!(MAX_DOMAINS.is_power_of_two());
+
 pub struct DomainRegistry {
     pub domains: [AtomicPtr<ProtectionDomain>; MAX_DOMAINS],
 }
@@ -19,7 +21,9 @@ impl DomainRegistry {
     }
 
     pub fn get(&self, id: u32) -> Option<&'static ProtectionDomain> {
-        let slot = self.domains.get(id as usize)?;
+        if id as usize >= MAX_DOMAINS { return None; }
+        // Spectre v1 (audit S10): mask after the branch so a mispredicted check cannot load past the table.
+        let slot = &self.domains[id as usize & (MAX_DOMAINS - 1)];
         let ptr = slot.load(Ordering::Acquire);
         // Registry insertions accept only kernel-owned, permanently live PDs.
         let pd = unsafe { ptr.as_ref() }?;

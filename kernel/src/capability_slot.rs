@@ -37,7 +37,7 @@ pub fn decode_bridge_op(number: u64) -> Option<BridgeOp> {
 
 pub fn decode_domain_id(raw: u64) -> Option<u32> {
     if raw < crate::ipc::MAX_DOMAINS as u64 {
-        Some(raw as u32)
+        Some((raw as usize & (crate::ipc::MAX_DOMAINS - 1)) as u32) // Spectre v1 mask (audit S10)
     } else {
         None
     }
