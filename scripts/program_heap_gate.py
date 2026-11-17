@@ -81,7 +81,10 @@ def main():
   # Close gave the memory back, so pressure is normal again. Pages Denim packed for the
   # run go back over its next rounds, as it finds the run gone and empties its store.
   if big['free']<1024:
-   try:g['wait'](r'\[memory\.pressure\] level=0 ',s0,120)
+   # Denim taking pages out can already bring it down before Close: count from the
+   # last time it went critical.
+   crit=t()[:s0].rfind('[memory.pressure] level=2 ')
+   try:g['wait'](r'\[memory\.pressure\] level=0 ',crit,120)
    except TimeoutError:
     print('\n'.join(re.findall(r'[^\n]*\[(?:memory\.pressure|denim\.round|denim\.ready|service\.memory)\][^\n]*',t()[s0:])[-40:]))
     raise AssertionError('pressure never fell after Close')
