@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Cabaret on a SexOS window (`#[cfg(feature = "sexos")]`) or headless OmaTools CLI
+//! Cabaret on a SexOS window (`#[cfg(feature = "sexos")]`) or headless CLI
 //! (`#[cfg(not(feature = "sexos"))]`).
 #![cfg_attr(feature = "sexos", no_std)]
 #![cfg_attr(feature = "sexos", no_main)]
@@ -11,6 +11,7 @@ mod program {
     use sex_pdx::app_key::DESKTOP_KEYS;
     use sex_pdx::desktop_recording::OP_STUDIO_WINDOW_FLAGS;
     use sex_pdx::{pdx_call_checked, SLOT_DISPLAY};
+    use alloc::vec::Vec;
     use weft::sexos::App;
     use weft::{Response, Strings, Theme};
 
@@ -42,8 +43,34 @@ mod program {
             runtime.virtual_cam_ring.device_name()
         );
 
+        // While live, frames advance on a ~30 fps tick even when nobody touches the
+        // window; otherwise the window waits for input like any other.
+        const FRAME_MS: u64 = 33;
+        let mut last_frame = weft::sexos::now();
         loop {
-            let out = app.next();
+            let out = if cabaret.studio.wants_frames() {
+                app.present();
+                app.ui.tick(weft::sexos::now());
+                let mut out = Vec::new();
+                if let Some(e) = app.window.next_within(FRAME_MS) {
+                    if let Some(ev) = weft::sexos::event(e) { out.extend(app.ui.handle(ev)); }
+                }
+                for _ in 0..64 {
+                    let Some(e) = app.window.poll() else { break };
+                    if let Some(ev) = weft::sexos::event(e) { out.extend(app.ui.handle(ev)); }
+                }
+                let now = weft::sexos::now();
+                let dt = now.saturating_sub(last_frame);
+                if dt >= FRAME_MS {
+                    cabaret.studio.step_frame(dt.min(1000) as u32);
+                    cabaret.refresh_all(&mut app.ui);
+                    last_frame = now;
+                }
+                out
+            } else {
+                last_frame = weft::sexos::now();
+                app.next()
+            };
             for r in out {
                 if r == Response::Close {
                     sex_pdx::serial_record!("[cabaret.closed] target={} task={}", target, task);

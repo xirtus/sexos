@@ -12,7 +12,6 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
-use loom_core::journal::UndoJournal;
 use sex_app::files::Pick;
 use sex_app::Window;
 
@@ -40,7 +39,6 @@ pub struct Loom {
     pub image: Option<diskimg::Inside>,
     pub places: places::Places,
     pub actions: actions::Registry,
-    pub journal: UndoJournal,
     pub mode: Mode,
     pub prompt: Option<(Prompt, Vec<u8>)>,
     pub marks: Option<compare::Marks>,
@@ -53,7 +51,6 @@ impl Loom {
             image: None,
             places: places::Places::default(),
             actions: actions::Registry::new(),
-            journal: UndoJournal::default(),
             mode: Mode::None,
             prompt: None,
             marks: None,

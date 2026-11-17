@@ -1752,6 +1752,12 @@ impl CabaretStudio {
         Ok(handoff)
     }
 
+    /// Whether something live needs frames even with no input: a stream, a recording
+    /// or the virtual camera.
+    pub fn wants_frames(&self) -> bool {
+        self.stream_active || self.recording.state == RecordingState::Recording || self.virtual_cam.active
+    }
+
     /// Advances clocks, live animations, active outputs, DSK transitions, and delay buffers.
     pub fn step_frame(&mut self, dt_ms: u32) {
         self.clock_ms = self.clock_ms.saturating_add(dt_ms as u64);

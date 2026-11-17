@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Omanta custom context actions, Collar launch planner, and transactional undo journal wiring
+//! Custom context actions and the Collar launch planner
 //! for Loom (`apps/files`). Pure `#![no_std]` + `alloc`.
 
 use alloc::format;
@@ -10,13 +10,11 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use loom_core::actions::{
     builtin_actions, parse_actions, plan_collar_launch, ActionError, CollarLaunchPlan, UserAction,
 };
-use loom_core::journal::{
-    ConflictKind, FileOp, FsProbe, PathMeta, PlannedAction, TransferProgress, UndoPlan,
-};
+use loom_core::journal::TransferProgress;
 use sex_app::files;
 use sex_app::Window;
 
-use crate::{at, base, shown, App, ENTER, ESC};
+use crate::{at, shown, App, ENTER, ESC};
 
 /// Directory holding user-defined `.toml` context actions on SexOS.
 pub const ACTIONS_DIR: &[u8] = b"/data/loom/actions";
@@ -176,21 +174,6 @@ impl Palette {
     }
 }
 
-/// Read-only `FsProbe` backed by `sex_app::files::stat` for `UndoJournal` conflict pre-checks.
-pub struct WindowFsProbe<'a>(pub &'a mut Window);
-
-impl FsProbe for WindowFsProbe<'_> {
-    fn stat(&mut self, path: &[u8]) -> Option<PathMeta> {
-        let st = files::stat(self.0, &at(path)).ok()?;
-        Some(PathMeta {
-            exists: true,
-            is_dir: st.dir,
-            size: st.size,
-            mtime: st.mtime,
-        })
-    }
-}
-
 pub fn action_error_label(err: ActionError) -> &'static str {
     match err {
         ActionError::ActionDisabled => "action is disabled",
@@ -206,20 +189,6 @@ pub fn action_error_label(err: ActionError) -> &'static str {
         ActionError::UnsupportedExtension => "unsupported file extension",
         ActionError::MismatchedParentDir => "items are not in the same folder",
     }
-}
-
-pub fn format_conflicts(plan: &UndoPlan) -> String {
-    let mut parts = Vec::new();
-    for c in plan.conflicts.iter().take(3) {
-        let kind = match c.kind {
-            ConflictKind::DestinationExists => "already exists",
-            ConflictKind::SourceMissing => "missing",
-            ConflictKind::ModifiedSinceRecord => "modified since recorded",
-            ConflictKind::KindMismatch => "type changed",
-        };
-        parts.push(format!("{} ({})", shown(base(&c.path)), kind));
-    }
-    parts.join(", ")
 }
 
 pub fn format_transfer_eta(tp: &TransferProgress) -> String {
@@ -330,67 +299,5 @@ impl App {
                 self.status = format!("Couldn't start {}: {}.", action.name, plan.program);
             }
         }
-    }
-
-    pub(crate) fn journal_record(&mut self, op: FileOp) {
-        self.loom.journal.record(op, sex_pdx::get_ticks());
-    }
-
-    pub(crate) fn journal_check_undo(&mut self, window: &mut Window) -> Result<Option<u64>, String> {
-        let plan = {
-            let mut probe = WindowFsProbe(window);
-            self.loom.journal.plan_undo(&mut probe)
-        };
-        let Some(plan) = plan else {
-            return Ok(None);
-        };
-        if !plan.is_clean() {
-            return Err(format!(
-                "Undo blocked by conflict: {}.",
-                format_conflicts(&plan)
-            ));
-        }
-        Ok(Some(plan.entry_id))
-    }
-
-    pub(crate) fn journal_redo(&mut self, window: &mut Window) {
-        let plan = {
-            let mut probe = WindowFsProbe(window);
-            self.loom.journal.plan_redo(&mut probe)
-        };
-        let Some(plan) = plan else {
-            self.status = "Nothing to redo.".into();
-            return;
-        };
-        if !plan.is_clean() {
-            self.status = format!("Redo blocked by conflict: {}.", format_conflicts(&plan));
-            return;
-        }
-        for act in &plan.actions {
-            let res = match act {
-                PlannedAction::Move { from, to } => self.move_path(window, from, to),
-                PlannedAction::CreateDir { path } => files::mkdir(window, &at(path)),
-                PlannedAction::RemoveFileOrTree { path } => self.remove_all(window, path),
-                PlannedAction::RemoveEmptyDir { path } => files::remove(window, &at(path)),
-                PlannedAction::Copy { from, to } => {
-                    let job = crate::jobs::Job::copy(window, from, to);
-                    self.start(window, job, None, Some(base(to).to_vec()));
-                    self.loom.journal.commit_redo(plan.entry_id);
-                    return;
-                }
-                PlannedAction::ExtractArchive { .. } => {
-                    self.status = "Redo archive extract is not supported directly.".into();
-                    return;
-                }
-            };
-            if let Err(e) = res {
-                self.status = format!("Couldn't redo: {}.", shown(files::message(e)));
-                return;
-            }
-        }
-        self.loom.journal.commit_redo(plan.entry_id);
-        let _ = files::sync(window);
-        self.load(window);
-        self.status = "Redone.".into();
     }
 }
