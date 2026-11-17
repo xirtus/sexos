@@ -176,6 +176,30 @@ pub fn header(s: &mut State, d: &mut Doc, ui: &mut Ui, hr: Rect) {
             MenuItem::op("Solid", "", Op::with("view3d.shading", "SOLID")),
             MenuItem::op("Material Preview", "", Op::with("view3d.shading", "MATERIAL")),
             MenuItem::op("Rendered", "", Op::with("view3d.shading", "RENDERED")),
+            MenuItem::Separator,
+            MenuItem::Heading("Inspection".into()),
+            MenuItem::Check(
+                "Textured Studio".into(),
+                s.shading_preset == Some(sex_3d::render::ShadingPreset::TexturedStudio),
+                Op::with("view3d.shading_preset", "textured_studio"),
+            ),
+            MenuItem::Check(
+                "Clay Matcap".into(),
+                s.shading_preset == Some(sex_3d::render::ShadingPreset::ClayMatcap),
+                Op::with("view3d.shading_preset", "clay_matcap"),
+            ),
+            MenuItem::Check(
+                "World Normals".into(),
+                s.shading_preset == Some(sex_3d::render::ShadingPreset::WorldNormals),
+                Op::with("view3d.shading_preset", "world_normals"),
+            ),
+            MenuItem::Check(
+                "Wireframe Overlay".into(),
+                s.shading_preset == Some(sex_3d::render::ShadingPreset::WireframeOverlay),
+                Op::with("view3d.shading_preset", "wireframe_overlay"),
+            ),
+            MenuItem::Check("Shadow Catcher".into(), s.shadow_catcher, Op::new("view3d.shadow_catcher")),
+            MenuItem::Check("Turntable Orbit".into(), s.turntable.active, Op::new("view3d.turntable")),
         ];
         open_tagged(ui, shading_arrow, items, at);
     }

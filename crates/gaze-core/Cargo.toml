@@ -13,4 +13,5 @@ std = []
 sex-image = { path = "../sex-image" }
 gaze-codecs = { path = "../gaze-codecs", default-features = false }
 batik-core = { path = "../batik-core", default-features = false }
+sex-color = { path = "../sex-color" }
 libm = "0.2"

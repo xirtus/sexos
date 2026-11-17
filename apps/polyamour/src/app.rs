@@ -495,6 +495,19 @@ fn search_items() -> Vec<MenuItem> {
         MenuItem::op("Save", "Ctrl S", Op::new("wm.save_mainfile")),
         MenuItem::op("Undo", "Ctrl Z", Op::new("ed.undo")),
         MenuItem::op("Redo", "Shift Ctrl Z", Op::new("ed.redo")),
+        MenuItem::op("Photo to Mesh", "", Op::new("object.photo_to_mesh")),
+        MenuItem::op("Orient Upright", "", Op::new("object.orient_upright")),
+        MenuItem::op("Place on Bed", "", Op::new("object.place_on_bed")),
+        MenuItem::op("Scale to Height (50 mm)", "", Op::with("object.scale_to_height_mm", "50")),
+        MenuItem::op("Decimate QEM (50%)", "", Op::with("object.decimate_qem", "0.5")),
+        MenuItem::op("Inspect Manifold", "", Op::new("object.inspect_manifold")),
+        MenuItem::op("Repair for Printing", "", Op::new("object.repair_for_printing")),
+        MenuItem::op("Shading: Textured Studio", "", Op::with("view3d.shading_preset", "textured_studio")),
+        MenuItem::op("Shading: Clay Matcap", "", Op::with("view3d.shading_preset", "clay_matcap")),
+        MenuItem::op("Shading: World Normals", "", Op::with("view3d.shading_preset", "world_normals")),
+        MenuItem::op("Shading: Wireframe Overlay", "", Op::with("view3d.shading_preset", "wireframe_overlay")),
+        MenuItem::op("Toggle Shadow Catcher", "", Op::new("view3d.shadow_catcher")),
+        MenuItem::op("Toggle Turntable Orbit", "", Op::new("view3d.turntable")),
     ]
 }
 

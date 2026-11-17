@@ -21,7 +21,7 @@ mod studio;
 mod thumb;
 
 use alloc::vec::Vec;
-use gaze_core::apply_edits;
+use gaze_core::apply_full_develop;
 use sex_app::{files, Event, Window};
 use sex_image::view as look;
 use sex_image::{Animation, Error, Image, Limits};
@@ -347,10 +347,13 @@ impl ViewerState {
             Err(e) => fail(window, files::message(e)),
             Ok(len) if len == buffer.len() => fail(window, b"That file is larger than 4 MiB."),
             Ok(len) => {
-                // If this photo has a non-destructive recipe in library.gaze, apply it for display!
-                if let Some(recipe) = studio.recipe_for_path(path).filter(|r| !r.is_identity()) {
+                // If this photo has a non-destructive edit/develop recipe in library.gaze or sidecar, apply it!
+                if let Some((recipe, dev)) = studio
+                    .recipes_for_path(path)
+                    .filter(|(r, d)| !r.is_identity() || !d.is_identity())
+                {
                     if let Ok(raw_img) = sex_image::decode(&buffer[..len], &SHRINKABLE) {
-                        if let Ok(edited_img) = apply_edits(&raw_img, recipe) {
+                        if let Ok(edited_img) = apply_full_develop(&raw_img, recipe, dev) {
                             let (ew, eh) = (edited_img.width, edited_img.height);
                             self.still = Some(edited_img);
                             self.shown = len;
@@ -415,8 +418,8 @@ impl ViewerState {
             return;
         }
         let has_recipe = studio
-            .recipe_for_path(&self.current_path)
-            .map_or(false, |r| !r.is_identity());
+            .recipes_for_path(&self.current_path)
+            .map_or(false, |(r, d)| !r.is_identity() || !d.is_identity());
         if self.look.plain() && !has_recipe {
             present(window, self.bytes());
             return;

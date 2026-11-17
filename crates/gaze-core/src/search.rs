@@ -8,7 +8,9 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use crate::develop::film_stock_slug;
 use crate::library::PhotoRecord;
+use crate::sidecar::{ColorLabel, CullFlag};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Season {
@@ -43,6 +45,12 @@ pub enum QueryToken {
     Album(String),
     Favorite,
     Edited,
+    StarsMin(u8),
+    Flag(CullFlag),
+    Keepers,
+    Label(ColorLabel),
+    Keyword(String),
+    Film(String),
     Text(String),
 }
 
@@ -100,6 +108,61 @@ impl SmartQuery {
                 if !rest.is_empty() {
                     tokens.push(QueryToken::Album(rest.to_string()));
                 }
+                continue;
+            }
+
+            if let Some(rest) = lower
+                .strip_prefix("stars:")
+                .or_else(|| lower.strip_prefix("star:"))
+                .or_else(|| lower.strip_prefix("rating:"))
+                .or_else(|| lower.strip_prefix("stars>="))
+            {
+                let digits = rest.trim_start_matches(">=");
+                if let Ok(s) = digits.parse::<u8>() {
+                    tokens.push(QueryToken::StarsMin(s.min(5)));
+                    continue;
+                }
+            }
+
+            if let Some(rest) = lower.strip_prefix("flag:") {
+                tokens.push(QueryToken::Flag(CullFlag::from_slug(rest)));
+                continue;
+            }
+
+            if let Some(rest) = lower.strip_prefix("label:") {
+                tokens.push(QueryToken::Label(ColorLabel::from_slug(rest)));
+                continue;
+            }
+
+            if let Some(rest) = lower
+                .strip_prefix("kw:")
+                .or_else(|| lower.strip_prefix("tag:"))
+            {
+                if !rest.is_empty() {
+                    tokens.push(QueryToken::Keyword(rest.to_string()));
+                }
+                continue;
+            }
+
+            if let Some(rest) = lower.strip_prefix("film:") {
+                if !rest.is_empty() {
+                    tokens.push(QueryToken::Film(rest.to_string()));
+                }
+                continue;
+            }
+
+            if matches!(lower.as_str(), "pick" | "picked") {
+                tokens.push(QueryToken::Flag(CullFlag::Pick));
+                continue;
+            }
+
+            if matches!(lower.as_str(), "reject" | "rejected") {
+                tokens.push(QueryToken::Flag(CullFlag::Reject));
+                continue;
+            }
+
+            if matches!(lower.as_str(), "keeper" | "keepers") {
+                tokens.push(QueryToken::Keepers);
                 continue;
             }
 
@@ -188,13 +251,27 @@ fn match_token(token: &QueryToken, record: &PhotoRecord, album_names: &[&str]) -
         QueryToken::HasGps => record.meta.gps.is_some() || record.meta.place.is_some(),
         QueryToken::Album(needle) => album_names.iter().any(|a| contains_ci(Some(a), needle)),
         QueryToken::Favorite => record.favorite,
-        QueryToken::Edited => !record.recipe.is_identity(),
+        QueryToken::Edited => record.is_edited(),
+        QueryToken::StarsMin(min_s) => record.stars >= *min_s,
+        QueryToken::Flag(flag) => record.flag == *flag,
+        QueryToken::Keepers => record.is_keeper(),
+        QueryToken::Label(lbl) => record.color_label == *lbl,
+        QueryToken::Keyword(needle) => record.keywords.iter().any(|k| contains_ci(Some(k), needle)),
+        QueryToken::Film(needle) => record.develop.film_stock.map_or(false, |f| {
+            contains_ci(Some(f.name()), needle) || contains_ci(Some(film_stock_slug(f)), needle)
+        }),
         QueryToken::Text(needle) => {
             contains_ci(record.meta.place.as_deref(), needle)
                 || contains_ci(record.meta.place_region.as_deref(), needle)
                 || contains_ci(Some(&record.name), needle)
                 || contains_ci(record.meta.camera.as_deref(), needle)
+                || contains_ci(record.meta.lens.as_deref(), needle)
                 || contains_ci(Some(&record.meta.format_name), needle)
+                || record.keywords.iter().any(|k| contains_ci(Some(k), needle))
+                || record
+                    .develop
+                    .film_stock
+                    .map_or(false, |f| contains_ci(Some(f.name()), needle))
                 || album_names.iter().any(|a| contains_ci(Some(a), needle))
                 || record
                     .meta

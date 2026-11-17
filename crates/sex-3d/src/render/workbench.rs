@@ -19,7 +19,7 @@ use super::raster::RasterCamera;
 use super::tonemap::{srgb_decode, srgb_encode};
 use super::eevee::Lens;
 use super::viewport::{ViewCamera, ViewportScene, ViewportSettings};
-use crate::math::Vec3;
+use crate::math::{Aabb, Vec3};
 use crate::scene::{Image, Scene};
 use std::sync::OnceLock;
 
@@ -121,6 +121,8 @@ pub struct Workbench {
     pub outline: bool,
     /// Depth of field of the active camera (renders and camera views).
     pub dof: bool,
+    /// Encode world-space surface normals as RGB `(n * 0.5 + 0.5)`.
+    pub world_normals: bool,
 }
 
 impl Default for Workbench {
@@ -147,6 +149,7 @@ impl Default for Workbench {
             curvature_valley: 1.0,
             outline: false,
             dof: false,
+            world_normals: false,
         }
     }
 }
@@ -156,6 +159,171 @@ impl Workbench {
     pub fn viewport_defaults() -> Workbench {
         Workbench { outline: true, ..Workbench::default() }
     }
+}
+
+/// High-level viewport inspection presets (Omamesh-style).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShadingPreset {
+    TexturedStudio,
+    ClayMatcap,
+    WorldNormals,
+    WireframeOverlay,
+}
+
+impl ShadingPreset {
+    pub const ALL: [ShadingPreset; 4] = [
+        ShadingPreset::TexturedStudio,
+        ShadingPreset::ClayMatcap,
+        ShadingPreset::WorldNormals,
+        ShadingPreset::WireframeOverlay,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ShadingPreset::TexturedStudio => "Textured Studio",
+            ShadingPreset::ClayMatcap => "Clay Matcap",
+            ShadingPreset::WorldNormals => "World Normals",
+            ShadingPreset::WireframeOverlay => "Wireframe Overlay",
+        }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            ShadingPreset::TexturedStudio => "textured_studio",
+            ShadingPreset::ClayMatcap => "clay_matcap",
+            ShadingPreset::WorldNormals => "world_normals",
+            ShadingPreset::WireframeOverlay => "wireframe_overlay",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        let key = name.trim().to_ascii_lowercase().replace(['-', ' '], "_");
+        match key.as_str() {
+            "textured_studio" | "textured" | "studio" => Some(ShadingPreset::TexturedStudio),
+            "clay_matcap" | "clay" | "matcap" => Some(ShadingPreset::ClayMatcap),
+            "world_normals" | "normals" | "normal" => Some(ShadingPreset::WorldNormals),
+            "wireframe_overlay" | "wireframe" | "wire" => Some(ShadingPreset::WireframeOverlay),
+            _ => None,
+        }
+    }
+
+    pub fn shows_wireframe(self) -> bool {
+        matches!(self, ShadingPreset::WireframeOverlay)
+    }
+
+    pub fn apply_to_workbench(self, wb: &mut Workbench) {
+        match self {
+            ShadingPreset::TexturedStudio => {
+                wb.lighting = Lighting::Studio;
+                wb.studio = 0;
+                wb.color = ColorType::Texture;
+                wb.specular = true;
+                wb.shadow = true;
+                wb.cavity = false;
+                wb.world_normals = false;
+            }
+            ShadingPreset::ClayMatcap => {
+                wb.lighting = Lighting::MatCap;
+                wb.matcap = 0;
+                wb.color = ColorType::Single;
+                wb.single_color = [0.82, 0.78, 0.74];
+                wb.specular = false;
+                wb.shadow = true;
+                wb.cavity = true;
+                wb.cavity_type = CavityType::Screen;
+                wb.world_normals = false;
+            }
+            ShadingPreset::WorldNormals => {
+                wb.lighting = Lighting::Flat;
+                wb.color = ColorType::Material;
+                wb.specular = false;
+                wb.shadow = false;
+                wb.cavity = false;
+                wb.world_normals = true;
+            }
+            ShadingPreset::WireframeOverlay => {
+                wb.lighting = Lighting::Studio;
+                wb.color = ColorType::Material;
+                wb.specular = true;
+                wb.world_normals = false;
+            }
+        }
+    }
+
+    pub fn apply_to_viewport(self, settings: &mut ViewportSettings) {
+        self.apply_to_workbench(&mut settings.workbench);
+        settings.wireframe = self.shows_wireframe();
+    }
+}
+
+/// Attenuate a ground-plane background pixel (`1.0` = unshadowed, `< 1.0` =
+/// shadowed) for a shadow catcher on `z = 0`.
+pub fn shadow_catcher_attenuation(world_pos: Vec3, caster_bounds: Aabb, light_dir: Vec3, shadow_lit: f32, intensity: f32) -> f32 {
+    if caster_bounds.is_empty() || intensity <= 0.0 || !intensity.is_finite() {
+        return 1.0;
+    }
+    if light_dir.z.is_finite() && light_dir.z <= 0.0 {
+        return 1.0;
+    }
+    let eff_intensity = intensity.clamp(0.0, 1.0);
+    let occl = (1.0 - shadow_lit.clamp(0.0, 1.0)).clamp(0.0, 1.0);
+    let center = caster_bounds.center();
+    let extent = caster_bounds.size().length().max(0.5);
+    let dist_xy = (world_pos.x - center.x).hypot(world_pos.y - center.y);
+    let fade = 1.0 - smoothstep(extent * 5.0, extent * 8.0, dist_xy);
+    (1.0 - eff_intensity * occl * fade).clamp(0.0, 1.0)
+}
+
+/// State and stepper for turntable inspection around `+Z`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TurntableState {
+    pub active: bool,
+    /// Angular speed in radians per second.
+    pub angular_speed_rad: f32,
+    /// Accumulated turntable angle in radians within `[0, TAU)`.
+    pub angle_rad: f32,
+}
+
+impl Default for TurntableState {
+    fn default() -> Self {
+        TurntableState {
+            active: false,
+            angular_speed_rad: core::f32::consts::TAU / 8.0,
+            angle_rad: 0.0,
+        }
+    }
+}
+
+impl TurntableState {
+    /// Advance `angle_rad` by `dt_secs` if active and return the signed delta.
+    pub fn step(&mut self, dt_secs: f32) -> f32 {
+        if !self.active || !dt_secs.is_finite() || dt_secs <= 0.0 || !self.angular_speed_rad.is_finite() {
+            return 0.0;
+        }
+        let delta = self.angular_speed_rad * dt_secs;
+        self.angle_rad = (self.angle_rad + delta).rem_euclid(core::f32::consts::TAU);
+        delta
+    }
+}
+
+/// Advance an orbit/turntable yaw angle (radians) by `angular_speed_rad * dt_secs`,
+/// wrapping into `(-PI, PI]`.
+pub fn step_turntable_angle(angle_rad: f32, angular_speed_rad: f32, dt_secs: f32) -> f32 {
+    if !angle_rad.is_finite() || !angular_speed_rad.is_finite() || !dt_secs.is_finite() {
+        return angle_rad;
+    }
+    let next = (angle_rad + angular_speed_rad * dt_secs).rem_euclid(core::f32::consts::TAU);
+    if next > core::f32::consts::PI {
+        next - core::f32::consts::TAU
+    } else {
+        next
+    }
+}
+
+/// Step a [`ViewCamera`]'s turntable orbit around `+Z` by `dt_secs` and return the new yaw.
+pub fn step_turntable_camera(cam: &mut ViewCamera, angular_speed_rad: f32, dt_secs: f32) -> f32 {
+    cam.yaw = step_turntable_angle(cam.yaw, angular_speed_rad, dt_secs);
+    cam.yaw
 }
 
 /// Names of the studio light rigs (Blender's Studio lighting presets).
@@ -376,7 +544,7 @@ pub fn render_workbench(scene: &Scene, s: &WorkbenchRender) -> Image {
     };
     let world = scene.world.color * if scene.world.strength.is_finite() { scene.world.strength.max(0.0) } else { 0.0 };
     let bg = [srgb_encode(world.x.clamp(0.0, 1.0)), srgb_encode(world.y.clamp(0.0, 1.0)), srgb_encode(world.z.clamp(0.0, 1.0))];
-    let vst = ViewportSettings { width: w, height: h, wireframe: false, grid: false, backface_culling: s.backface_culling, threads: s.threads, background: Some(bg), workbench: s.shading, transparent: s.film_transparent, overlays: false };
+    let vst = ViewportSettings { width: w, height: h, wireframe: false, grid: false, backface_culling: s.backface_culling, threads: s.threads, background: Some(bg), workbench: s.shading, transparent: s.film_transparent, overlays: false, ..ViewportSettings::default() };
     let lens = scene.active_camera.filter(|_| s.shading.dof).and_then(|ci| Lens::from_camera(scene, ci, w, h));
     let mut frames = WorkbenchFrames::default();
     for _ in 0..s.samples.max(1) {
@@ -452,3 +620,66 @@ impl WorkbenchFrames {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shading_preset_roundtrip_and_apply() {
+        for preset in ShadingPreset::ALL {
+            assert_eq!(ShadingPreset::from_name(preset.id()), Some(preset));
+            assert_eq!(ShadingPreset::from_name(preset.label()), Some(preset));
+        }
+
+        let mut st = ViewportSettings::default();
+        ShadingPreset::ClayMatcap.apply_to_viewport(&mut st);
+        assert_eq!(st.workbench.lighting, Lighting::MatCap);
+        assert_eq!(st.workbench.matcap, 0);
+        assert_eq!(st.workbench.color, ColorType::Single);
+        assert!(!st.wireframe);
+        assert!(!st.workbench.world_normals);
+
+        ShadingPreset::WorldNormals.apply_to_viewport(&mut st);
+        assert!(st.workbench.world_normals);
+        assert!(!st.wireframe);
+
+        ShadingPreset::WireframeOverlay.apply_to_viewport(&mut st);
+        assert!(st.wireframe);
+        assert!(!st.workbench.world_normals);
+
+        ShadingPreset::TexturedStudio.apply_to_viewport(&mut st);
+        assert_eq!(st.workbench.lighting, Lighting::Studio);
+        assert_eq!(st.workbench.color, ColorType::Texture);
+        assert!(!st.wireframe);
+    }
+
+    #[test]
+    fn shadow_catcher_attenuation_behaves_physically() {
+        let bounds = Aabb { min: Vec3::new(-1.0, -1.0, 0.0), max: Vec3::new(1.0, 1.0, 2.0) };
+        let ldir = Vec3::new(0.5, -0.5, 0.7).normalize();
+        assert!((shadow_catcher_attenuation(Vec3::ZERO, bounds, ldir, 1.0, 0.55) - 1.0).abs() < 1e-6);
+        let dark = shadow_catcher_attenuation(Vec3::ZERO, bounds, ldir, 0.0, 0.55);
+        assert!((dark - 0.45).abs() < 1e-4, "dark={dark}");
+        assert_eq!(shadow_catcher_attenuation(Vec3::new(1000.0, 0.0, 0.0), bounds, ldir, 0.0, 0.55), 1.0);
+        assert_eq!(shadow_catcher_attenuation(Vec3::ZERO, Aabb::EMPTY, ldir, 0.0, 0.55), 1.0);
+    }
+
+    #[test]
+    fn turntable_stepper_advances_and_wraps() {
+        let mut cam = ViewCamera::default();
+        let start = cam.yaw;
+        let next = step_turntable_camera(&mut cam, 1.0, 0.25);
+        assert!((next - (start + 0.25)).abs() < 1e-5);
+        assert_eq!(cam.yaw, next);
+
+        let wrapped = step_turntable_angle(3.0, 1.0, 1.0);
+        assert!(wrapped <= core::f32::consts::PI && wrapped > -core::f32::consts::PI);
+
+        let mut ts = TurntableState { active: true, angular_speed_rad: core::f32::consts::FRAC_PI_2, angle_rad: 0.0 };
+        let delta = ts.step(1.0);
+        assert!((delta - core::f32::consts::FRAC_PI_2).abs() < 1e-6);
+        assert!((ts.angle_rad - core::f32::consts::FRAC_PI_2).abs() < 1e-6);
+    }
+}
+

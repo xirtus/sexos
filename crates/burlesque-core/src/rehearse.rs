@@ -297,7 +297,7 @@ impl VideoTimeline {
                 progress,
             } => {
                 if let (Some(from_s), Some(to_s)) = (deck.get_slide(*from_slide_idx), deck.get_slide(*to_slide_idx)) {
-                    if *transition == Transition::MagicMove {
+                    if *transition == Transition::MagicMove || *transition == Transition::Morph {
                         render_magic_move_frame(
                             from_s,
                             to_s,

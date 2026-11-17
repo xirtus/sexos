@@ -255,6 +255,10 @@ pub struct Doc {
     pub sim: crate::physics::SimState,
     /// Grease Pencil tool settings and caches (gpencil.rs).
     pub gp: crate::gpencil::GpState,
+    /// Last manifold inspection result reported by `inspect_manifold` / `repair_for_printing`.
+    pub last_manifold: Option<sex_3d::print_prep::ManifoldReport>,
+    /// Last 3D-printing metrics computed by `omatools`.
+    pub last_print_metrics: Option<sex_3d::print_prep::PrintMetrics>,
 }
 
 impl Default for Doc {
@@ -323,6 +327,8 @@ impl Doc {
             python: Default::default(),
             sim: Default::default(),
             gp: Default::default(),
+            last_manifold: None,
+            last_print_metrics: None,
         }
     }
 
@@ -409,7 +415,7 @@ impl Doc {
     /// Run an operator by its Blender-style name. Unknown names are reported,
     /// not ignored, so missing features show up in the status bar.
     pub fn run(&mut self, op: &Op) {
-        if crate::sculpt::run(self, op) || crate::gpencil::run(self, op) || crate::seqedit::run(self, op) || crate::rig::run(self, op) || self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) || crate::python::run(self, op) || crate::physics::run(self, op) {
+        if crate::sculpt::run(self, op) || crate::gpencil::run(self, op) || crate::seqedit::run(self, op) || crate::rig::run(self, op) || crate::omatools::run(self, op) || self.run_view3d(op) || crate::edit::run(self, op) || crate::uvedit::run(self, op) || crate::nodetree::run(self, op) || crate::python::run(self, op) || crate::physics::run(self, op) {
             return;
         }
         let arg = op.arg.as_str();
@@ -645,6 +651,9 @@ pub fn is_view_op(id: &str) -> bool {
             | "view3d.view_center_cursor"
             | "view3d.select_box"
             | "view3d.shading"
+            | "view3d.shading_preset"
+            | "view3d.shadow_catcher"
+            | "view3d.turntable"
             | "view3d.overlay"
             | "view3d.solid"
             | "view3d.lookdev"

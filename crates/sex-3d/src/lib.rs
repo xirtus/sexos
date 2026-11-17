@@ -47,6 +47,8 @@ pub mod physics;
 pub mod grease_pencil;
 pub mod sequencer;
 pub mod props;
+pub mod print_prep;
+pub mod photo_to_mesh;
 
 pub use math::{Aabb, Mat4, Quat, Vec2, Vec3};
 pub use mesh::{Face, HalfEdgeMesh, Mesh};

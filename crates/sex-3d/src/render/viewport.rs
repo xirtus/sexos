@@ -127,11 +127,28 @@ pub struct ViewportSettings {
     pub transparent: bool,
     /// Gizmos of lights, cameras and empties, loose edges and selection outlines.
     pub overlays: bool,
+    /// Attenuate the ground plane (`z = 0`) where scene geometry casts shadows.
+    pub shadow_catcher: bool,
+    /// Darkness factor of ground shadow-catcher attenuation in `0..=1`.
+    pub shadow_catcher_intensity: f32,
 }
 
 impl Default for ViewportSettings {
     fn default() -> Self {
-        ViewportSettings { width: 1280, height: 720, wireframe: false, grid: true, backface_culling: false, threads: 0, background: None, workbench: Workbench::default(), transparent: false, overlays: true }
+        ViewportSettings {
+            width: 1280,
+            height: 720,
+            wireframe: false,
+            grid: true,
+            backface_culling: false,
+            threads: 0,
+            background: None,
+            workbench: Workbench::default(),
+            transparent: false,
+            overlays: true,
+            shadow_catcher: false,
+            shadow_catcher_intensity: 0.55,
+        }
     }
 }
 
@@ -479,7 +496,7 @@ impl ViewportScene {
     pub fn draw_over(&self, view: &ViewCamera, s: &ViewportSettings, image: &[u8], out: &mut Vec<u8>) {
         let cam = RasterCamera::from_view(view, s.width, s.height);
         let under = (image.len() >= s.width as usize * s.height as usize * 4).then_some(image);
-        let st = ViewportSettings { workbench: Workbench { xray: false, shadow: false, cavity: false, outline: false, ..s.workbench }, ..*s };
+        let st = ViewportSettings { shadow_catcher: false, workbench: Workbench { xray: false, shadow: false, cavity: false, outline: false, ..s.workbench }, ..*s };
         self.draw_impl(&cam, Some(view), &st, under, out);
     }
 
@@ -505,7 +522,7 @@ impl ViewportScene {
 
         // 2. Vertex stage over the visible objects' vertices.
         sc.verts.resize(self.positions.len(), VertOut::default());
-        let studio = wb.lighting == Lighting::Studio;
+        let studio = wb.lighting == Lighting::Studio && !wb.world_normals;
         {
             let vchunk = 8192;
             let mut jobs: Vec<(usize, &mut [VertOut])> = Vec::new();
@@ -618,7 +635,9 @@ impl ViewportScene {
         }
 
         // Shadow map from the light direction (kept while the geometry is).
-        let shadow = if wb.shadow && !xray && !self.bounds.is_empty() {
+        let want_surface_shadow = wb.shadow && !wb.world_normals;
+        let want_ground_shadow = s.shadow_catcher && !wb.world_normals;
+        let shadow = if (want_surface_shadow || want_ground_shadow) && !xray && !self.bounds.is_empty() {
             let dir = wb.light_direction.normalize();
             let key = (self.generation, dir.to_array().map(f32::to_bits), self.positions.len());
             if sc.shadow.as_ref().is_none_or(|(k, _)| *k != key) {
@@ -664,7 +683,25 @@ impl ViewportScene {
                             continue;
                         }
                         if id == NO_ID {
-                            rgba[o * 4..o * 4 + 4].copy_from_slice(&bgb);
+                            let mut att = 1.0f32;
+                            if want_ground_shadow {
+                                if let Some(sm) = shadow {
+                                    if let Some(wp) = ground_hit_z0(&cam, x, y) {
+                                        let rot = ((x.wrapping_mul(1973).wrapping_add(y.wrapping_mul(9277))) & 1023) as f32 * (core::f32::consts::TAU / 1024.0);
+                                        let lit = sm.lit(wp, Vec3::Z, 2.5, rot);
+                                        att = workbench::shadow_catcher_attenuation(wp, self.bounds, wb.light_direction, lit, s.shadow_catcher_intensity);
+                                    }
+                                }
+                            }
+                            if att < 1.0 {
+                                if s.transparent {
+                                    rgba[o * 4..o * 4 + 4].copy_from_slice(&[0, 0, 0, to_byte(1.0 - att)]);
+                                } else {
+                                    rgba[o * 4..o * 4 + 4].copy_from_slice(&[to_byte(bg[0] * att), to_byte(bg[1] * att), to_byte(bg[2] * att), 255]);
+                                }
+                            } else {
+                                rgba[o * 4..o * 4 + 4].copy_from_slice(&bgb);
+                            }
                             objs[o] = 0;
                             if let Some(n) = nrm.as_deref_mut() {
                                 n[o] = Vec3::ZERO;
@@ -677,7 +714,7 @@ impl ViewportScene {
                             continue;
                         }
                         let packed = colors[li];
-                        if packed != 0 && shadow.is_none() && nrm.is_none() {
+                        if packed != 0 && !(shadow.is_some() && want_surface_shadow) && nrm.is_none() {
                             // Interpolated while rasterizing.
                             objs[o] = packed >> 24;
                             let [r, g, b, _] = packed.to_le_bytes();
@@ -695,12 +732,14 @@ impl ViewportScene {
                         if let Some(n) = nrm.as_deref_mut() {
                             n[o] = self.pixel_normal(p.src, tri.bary(x, y), verts, &cam);
                         }
-                        if let Some(sm) = shadow {
-                            let wp = cam.to_world(cam.unproject(x, y, depth[li]));
-                            let [a, b2, c2] = self.tris[p.src as usize].v.map(|v| self.positions[v as usize]);
-                            let ng = (b2 - a).cross(c2 - a).normalize();
-                            let lit = sm.lit(wp, ng, 1.0, 0.0);
-                            c = c * (1.0 - wb.shadow_intensity.clamp(0.0, 1.0) * (1.0 - lit));
+                        if want_surface_shadow {
+                            if let Some(sm) = shadow {
+                                let wp = cam.to_world(cam.unproject(x, y, depth[li]));
+                                let [a, b2, c2] = self.tris[p.src as usize].v.map(|v| self.positions[v as usize]);
+                                let ng = (b2 - a).cross(c2 - a).normalize();
+                                let lit = sm.lit(wp, ng, 1.0, 0.0);
+                                c = c * (1.0 - wb.shadow_intensity.clamp(0.0, 1.0) * (1.0 - lit));
+                            }
                         }
                         rgba[o * 4..o * 4 + 4].copy_from_slice(&[to_byte(c.x), to_byte(c.y), to_byte(c.z), 255]);
                     }
@@ -847,8 +886,30 @@ impl ViewportScene {
             KIND_TEX_STUDIO => tex(self) * c.x + Vec3::splat(c.y),
             KIND_TEX_FLAT => tex(self),
             KIND_MATCAP => c.mul_elem(workbench::matcap(wb.matcap, self.pixel_normal(p.src, b, verts, cam))),
-            _ => tex(self).mul_elem(workbench::matcap(wb.matcap, self.pixel_normal(p.src, b, verts, cam))),
+            KIND_TEX_MATCAP => tex(self).mul_elem(workbench::matcap(wb.matcap, self.pixel_normal(p.src, b, verts, cam))),
+            _ => self.pixel_world_normal(p.src, b, cam) * 0.5 + Vec3::splat(0.5),
         }
+    }
+
+    /// World-space unit normal facing the viewer at barycentrics `b` of
+    /// triangle `src`.
+    #[inline]
+    fn pixel_world_normal(&self, src: u32, b: [f32; 3], cam: &RasterCamera) -> Vec3 {
+        let t = &self.tris[src as usize];
+        let p = t.v.map(|i| self.positions[i as usize]);
+        let mut fnorm = (p[1] - p[0]).cross(p[2] - p[0]).normalize();
+        let to_eye_w = if cam.ortho { cam.back } else { (cam.eye - p[0]).normalize() };
+        if fnorm.dot(to_eye_w) < 0.0 {
+            fnorm = -fnorm;
+        }
+        if !t.smooth {
+            return fnorm;
+        }
+        let n = self.normals[t.v[0] as usize] * b[0]
+            + self.normals[t.v[1] as usize] * b[1]
+            + self.normals[t.v[2] as usize] * b[2];
+        let n = if n.dot(fnorm) < 0.0 { -n } else { n }.normalize();
+        if n == Vec3::ZERO { fnorm } else { n }
     }
 
     /// View-space unit normal facing the viewer at barycentrics `b` of
@@ -953,26 +1014,30 @@ impl ViewportScene {
         }
         let base = self.base_colors(t, wb);
         let textured = wb.color == ColorType::Texture && t.tex != NONE && t.corners == NONE;
-        let (kind, c) = match wb.lighting {
-            Lighting::Studio => {
-                // Corner lighting: per vertex for smooth front faces, else per face.
-                let terms: [(f32, f32); 3] = if t.smooth && front {
-                    [0, 1, 2].map(|k| (vo[k].diff, vo[k].add))
-                } else if t.smooth {
-                    [0, 1, 2].map(|k| if vo[k].bdiff.is_nan() { workbench::studio_terms(fnorm, to_eye_at(cam, p[k]), wb) } else { (vo[k].bdiff, vo[k].badd) })
-                } else {
-                    // Flat: the face normal, but the view direction per corner, so the
-                    // triangles of one polygon shade seamlessly.
-                    [0, 1, 2].map(|k| workbench::studio_terms(fnorm, to_eye_at(cam, p[k]), wb))
-                };
-                if textured {
-                    (KIND_TEX_STUDIO, terms.map(|(d, a)| Vec3::new(d, a, 0.0)))
-                } else {
-                    (KIND_COLOR, [0, 1, 2].map(|k| base[k] * terms[k].0 + Vec3::splat(terms[k].1)))
+        let (kind, c) = if wb.world_normals {
+            (KIND_WORLD_NORMAL, [Vec3::ZERO; 3])
+        } else {
+            match wb.lighting {
+                Lighting::Studio => {
+                    // Corner lighting: per vertex for smooth front faces, else per face.
+                    let terms: [(f32, f32); 3] = if t.smooth && front {
+                        [0, 1, 2].map(|k| (vo[k].diff, vo[k].add))
+                    } else if t.smooth {
+                        [0, 1, 2].map(|k| if vo[k].bdiff.is_nan() { workbench::studio_terms(fnorm, to_eye_at(cam, p[k]), wb) } else { (vo[k].bdiff, vo[k].badd) })
+                    } else {
+                        // Flat: the face normal, but the view direction per corner, so the
+                        // triangles of one polygon shade seamlessly.
+                        [0, 1, 2].map(|k| workbench::studio_terms(fnorm, to_eye_at(cam, p[k]), wb))
+                    };
+                    if textured {
+                        (KIND_TEX_STUDIO, terms.map(|(d, a)| Vec3::new(d, a, 0.0)))
+                    } else {
+                        (KIND_COLOR, [0, 1, 2].map(|k| base[k] * terms[k].0 + Vec3::splat(terms[k].1)))
+                    }
                 }
+                Lighting::Flat => (if textured { KIND_TEX_FLAT } else { KIND_COLOR }, base),
+                Lighting::MatCap => (if textured { KIND_TEX_MATCAP } else { KIND_MATCAP }, base),
             }
-            Lighting::Flat => (if textured { KIND_TEX_FLAT } else { KIND_COLOR }, base),
-            Lighting::MatCap => (if textured { KIND_TEX_MATCAP } else { KIND_MATCAP }, base),
         };
         let data = SolidTri { c, obj: t.obj + 1, src: ti as u32, kind };
         if all_inside {
@@ -1059,11 +1124,33 @@ pub(crate) fn light_camera(dir: Vec3, bounds: Aabb, res: u32) -> RasterCamera {
     RasterCamera { eye, right, up, back, ortho: true, scale: half / r, cx: half, cy: half, near: 1e-4, width: res, height: res }
 }
 
+/// Intersect the ray through pixel `(x, y)` with the `z = 0` ground plane.
+#[inline]
+fn ground_hit_z0(cam: &RasterCamera, x: usize, y: usize) -> Option<Vec3> {
+    let (ro, rd) = if cam.ortho {
+        let px = x as f32 + 0.5 - cam.cx;
+        let py = cam.cy - (y as f32 + 0.5);
+        (cam.eye + cam.right * (px / cam.scale) + cam.up * (py / cam.scale), -cam.back)
+    } else {
+        let vd = cam.view_dir(x, y);
+        (cam.eye, (cam.right * vd.x + cam.up * vd.y + cam.back * vd.z).normalize())
+    };
+    if rd.z.abs() <= 1e-4 {
+        return None;
+    }
+    let t = -ro.z / rd.z;
+    if !cam.ortho && (t <= cam.near || ro.z <= 0.0) {
+        return None;
+    }
+    Some(ro + rd * t)
+}
+
 const KIND_COLOR: u8 = 0;
 const KIND_TEX_STUDIO: u8 = 1;
 const KIND_TEX_FLAT: u8 = 2;
 const KIND_MATCAP: u8 = 3;
 const KIND_TEX_MATCAP: u8 = 4;
+const KIND_WORLD_NORMAL: u8 = 5;
 
 /// What the Solid resolve needs of a triangle: corner values (lit colours,
 /// base colours for MatCap, or diffuse/add factors over a texture), the
@@ -1355,3 +1442,51 @@ fn gizmo_lines(data: &ObjectData) -> Vec<(Vec3, Vec3)> {
     }
     l
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::primitives;
+    use crate::render::workbench::ShadingPreset;
+
+    #[test]
+    fn world_normals_preset_renders_world_axis_colors() {
+        let mut s = Scene::new();
+        let mut cube = primitives::cube(2.0);
+        for p in &mut cube.positions {
+            p.z += 1.0;
+        }
+        s.add_mesh_object("Cube", cube);
+        let vs = ViewportScene::new(&s);
+        let cam = ViewCamera { target: Vec3::new(0.0, 0.0, 1.0), distance: 6.0, yaw: -0.6, pitch: 0.5, ..ViewCamera::default() };
+        let mut st = ViewportSettings { width: 96, height: 72, grid: false, overlays: false, threads: 1, background: Some([0.0; 3]), ..ViewportSettings::default() };
+        ShadingPreset::WorldNormals.apply_to_viewport(&mut st);
+        let img = vs.draw(&cam, &st);
+        // Must have strongly blue-dominant top face (+Z -> (0.5, 0.5, 1.0)) and distinct faces.
+        let top_face = img.chunks_exact(4).filter(|p| p[2] > 230 && p[0] > 100 && p[0] < 160).count();
+        assert!(top_face > 20, "expected world +Z face pixels, found {top_face}");
+        // Must stay thread-count independent.
+        let mt = vs.draw(&cam, &ViewportSettings { threads: 4, ..st });
+        assert_eq!(img, mt);
+    }
+
+    #[test]
+    fn shadow_catcher_darkens_ground_plane_shadow_without_floor_mesh() {
+        let mut s = Scene::new();
+        let mut cube = primitives::cube(2.0);
+        for p in &mut cube.positions {
+            p.z += 1.0;
+        }
+        s.add_mesh_object("Cube", cube);
+        let vs = ViewportScene::new(&s);
+        let cam = ViewCamera { target: Vec3::new(0.0, 0.0, 0.5), distance: 8.0, yaw: 0.4, pitch: 0.55, ..ViewCamera::default() };
+        let base = ViewportSettings { width: 120, height: 80, grid: false, overlays: false, threads: 1, background: Some([0.6, 0.6, 0.6]), ..ViewportSettings::default() };
+        let no_sc = vs.draw(&cam, &base);
+        let with_sc = vs.draw(&cam, &ViewportSettings { shadow_catcher: true, shadow_catcher_intensity: 0.7, ..base });
+        let darkened = no_sc.chunks_exact(4).zip(with_sc.chunks_exact(4)).filter(|(a, b)| b[0] + 20 < a[0]).count();
+        assert!(darkened > 30, "expected ground shadow catcher pixels, got {darkened}");
+        // Multi-threaded determinism check.
+        assert_eq!(with_sc, vs.draw(&cam, &ViewportSettings { threads: 5, shadow_catcher: true, shadow_catcher_intensity: 0.7, ..base }));
+    }
+}
+

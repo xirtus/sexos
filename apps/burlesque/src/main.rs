@@ -23,9 +23,11 @@ mod program {
 
         let builds_count = b.deck.get_slide(b.current_slide).map(|s| s.builds.len()).unwrap_or(0);
         let rehearse_active = if b.rehearsal_session.is_some() { 1 } else { 0 };
+        let light_table = if b.light_table_mode { 1 } else { 0 };
+        let review_issues = b.last_review.as_ref().map(|r| r.issues.len()).unwrap_or(0);
 
         sex_pdx::serial_record!(
-            "[burlesque.state] slides={} current={} presenter={} theme={} transition={} builds={} rehearse={}",
+            "[burlesque.state] slides={} current={} presenter={} theme={} transition={} builds={} rehearse={} light_table={} review={}",
             b.deck.slide_count(),
             b.current_slide,
             if b.presenter_mode { 1 } else { 0 },
@@ -33,6 +35,8 @@ mod program {
             b.current_transition().kind_str(),
             builds_count,
             rehearse_active,
+            light_table,
+            review_issues,
         );
 
         for (name, id) in &b.controls {
@@ -162,6 +166,20 @@ mod program {
         }
     }
 
+    fn import_keynote_file(app: &mut App, b: &mut Burlesque) {
+        let mut file_buf = alloc::vec![0u8; 4 * 1024 * 1024];
+        if let Ok(n) = sex_app::files::read(&mut app.window, b"deck.key", &mut file_buf) {
+            let bytes = &file_buf[..n];
+            if let Ok((slides, notes)) = b.import_keynote(bytes, &mut app.ui) {
+                sex_pdx::serial_record!(
+                    "[burlesque.imported] fmt=key slides={} notes={}",
+                    slides,
+                    notes
+                );
+            }
+        }
+    }
+
     fn run_transition(app: &mut App, b: &mut Burlesque) {
         let mut transition = b.current_transition();
         if transition == burlesque_core::Transition::None {
@@ -180,13 +198,16 @@ mod program {
             b.current_slide
         };
 
-        if transition == burlesque_core::Transition::MagicMove {
+        if matches!(
+            transition,
+            burlesque_core::Transition::MagicMove | burlesque_core::Transition::Morph
+        ) {
             let from_slide = b.deck.get_slide(b.current_slide);
             let to_slide = b.deck.get_slide(next_idx);
             if let (Some(sf), Some(st)) = (from_slide, to_slide) {
                 for f in 1..=frames {
                     let t = f as f32 / frames as f32;
-                    burlesque_core::render_magic_move_frame(
+                    burlesque_core::morph::render_morph_frame(
                         sf,
                         st,
                         &b.deck.theme,
@@ -307,6 +328,10 @@ mod program {
                     import_odp_file(app, burlesque);
                     changed = true;
                     continue;
+                } else if cmd == "burlesque.import-key" {
+                    import_keynote_file(app, burlesque);
+                    changed = true;
+                    continue;
                 } else if cmd == "burlesque.play-transition" {
                     run_transition(app, burlesque);
                     changed = true;
@@ -353,7 +378,7 @@ mod program {
         let mut app = App::open("Burlesque", Theme::light(), Strings::new("en"));
         let mut burlesque = Burlesque::build(&mut app.ui);
 
-        // Check launch args if any (.pptx, .odp, .md)
+        // Check launch args if any (.pptx, .odp, .key, .md)
         let mut args_buf = [0u8; sex_pdx::fs::ARGS_MAX];
         let args = sex_app::files::args(&mut app.window, &mut args_buf);
         if !args.is_empty() {
@@ -367,6 +392,8 @@ mod program {
                         ("pptx", Deck::open_pptx(data).ok())
                     } else if path.ends_with(".odp") {
                         ("odp", Deck::open_odp(data).ok())
+                    } else if path.ends_with(".key") {
+                        ("key", Deck::open_keynote(data).ok())
                     } else if path.ends_with(".md") {
                         ("md", core::str::from_utf8(data).ok().and_then(|s| Deck::from_markdown(s).ok()))
                     } else {
@@ -377,6 +404,7 @@ mod program {
                         let slides_count = deck.slide_count();
                         burlesque.deck = deck;
                         burlesque.current_slide = 0;
+                        burlesque.selected_slides = alloc::vec![0];
                         burlesque.sync_fields_to_current_slide(&mut app.ui);
                         burlesque.refresh_preview(&mut app.ui);
                         if !fmt.is_empty() {
@@ -556,6 +584,20 @@ fn main() {
             w, h, fps, written, hash
         );
         return;
+    }
+    match burlesque::cli::run_headless_cli(&args) {
+        Ok(Some(outcome)) => {
+            println!("{}", outcome.stdout);
+            if outcome.exit_code != 0 {
+                std::process::exit(outcome.exit_code);
+            }
+            return;
+        }
+        Ok(None) => {}
+        Err(err) => {
+            eprintln!("burlesque: {}", err);
+            std::process::exit(1);
+        }
     }
     println!("Burlesque: Weft presentations app for SexOS.");
 }

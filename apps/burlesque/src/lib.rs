@@ -12,6 +12,10 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use burlesque_core::animation::{BuildEffect, BuildStep};
+use burlesque_core::builds::{
+    duplicate_slides, render_build_timeline_strip, render_light_table, reorder_slides,
+    toggle_slides_skipped, BuildTimeline,
+};
 use burlesque_core::deck::{AspectRatio, Deck, Slide};
 use burlesque_core::elements::{Paragraph, Shape, ShapeKind, SlideElement, StrokeStyle, TextBox, TextRun, Transition};
 use burlesque_core::layout::SlideLayout;
@@ -19,9 +23,12 @@ use burlesque_core::pdf_export::export_pdf;
 use burlesque_core::presenter::{render_presenter_view, PresenterSession};
 use burlesque_core::rehearse::{render_rehearsal_hud, RehearsalSession, VideoTimeline};
 use burlesque_core::render::{render_magic_move_frame, render_slide, render_slide_at_build, render_transition_frame};
+use burlesque_core::review::{render_review_toast, review_deck, ReviewReport};
 use burlesque_core::theme::Theme;
 use sex_canvas::Rect;
 
+#[cfg(not(feature = "sexos"))]
+pub mod cli;
 pub mod ui_backend;
 pub use ui_backend as weft;
 
@@ -38,6 +45,13 @@ pub struct Burlesque {
     pub rehearsal_session: Option<RehearsalSession>,
     pub active_build_index: usize,
     pub magic_move_preview: Option<f32>,
+    pub morph_enabled: bool,
+    pub light_table_mode: bool,
+    pub timeline_visible: bool,
+    pub selected_slides: Vec<usize>,
+    pub last_review: Option<ReviewReport>,
+    pub review_toast: String,
+    pub show_review_toast: bool,
 
     // Widget IDs
     pub preview_id: Id,
@@ -51,6 +65,14 @@ pub struct Burlesque {
     pub btn_theme: Id,
     pub btn_transition: Id,
     pub btn_magic_move: Id,
+    pub btn_morph: Id,
+    pub btn_light_table: Id,
+    pub btn_timeline: Id,
+    pub btn_dup_slide: Id,
+    pub btn_skip_slide: Id,
+    pub btn_move_slide_left: Id,
+    pub btn_move_slide_right: Id,
+    pub btn_review: Id,
     pub btn_add_build: Id,
     pub btn_step_build: Id,
     pub btn_rehearse: Id,
@@ -68,6 +90,8 @@ pub struct Burlesque {
     pub field_notes: Id,
 
     pub slide_list: Id,
+    pub timeline_label: Id,
+    pub review_label: Id,
     pub status_label: Id,
 
     pub controls: Vec<(&'static str, Id)>,
@@ -103,13 +127,21 @@ impl Burlesque {
             Command::new("burlesque.import-pptx", "Import PPTX"),
             Command::new("burlesque.save-odp", "Save ODP"),
             Command::new("burlesque.import-odp", "Import ODP"),
+            Command::new("burlesque.import-key", "Import Keynote (.key)"),
             Command::new("burlesque.presenter", "Presenter View").shortcut("F5"),
             Command::new("burlesque.add-slide", "Add Slide").shortcut("Ctrl+N"),
             Command::new("burlesque.delete-slide", "Delete Slide"),
+            Command::new("burlesque.duplicate-slide", "Duplicate Slide"),
+            Command::new("burlesque.skip-slide", "Skip/Unskip Slide"),
+            Command::new("burlesque.move-slide-left", "Move Slide Earlier"),
+            Command::new("burlesque.move-slide-right", "Move Slide Later"),
             Command::new("burlesque.prev", "Previous Slide").shortcut("Left"),
             Command::new("burlesque.next", "Next Slide").shortcut("Right"),
             Command::new("burlesque.add-build", "Add Build Step"),
             Command::new("burlesque.step-build", "Step Build Animation"),
+            Command::new("burlesque.timeline", "Toggle Build Timeline"),
+            Command::new("burlesque.light-table", "Toggle Light Table"),
+            Command::new("burlesque.review", "Review Deck Lint"),
             Command::new("burlesque.layout-title", "Title Layout"),
             Command::new("burlesque.layout-body", "Title and Body Layout"),
             Command::new("burlesque.layout-twocol", "Two Column Layout"),
@@ -122,6 +154,7 @@ impl Burlesque {
             Command::new("burlesque.theme-swiss", "Swiss Modern"),
             Command::new("burlesque.cycle-transition", "Cycle Transition"),
             Command::new("burlesque.magic-move", "Magic Move Transition"),
+            Command::new("burlesque.toggle-morph", "Toggle Morph Transition"),
             Command::new("burlesque.transition-none", "No Transition"),
             Command::new("burlesque.transition-dissolve", "Dissolve Transition"),
             Command::new("burlesque.transition-push", "Push Transition"),
@@ -134,7 +167,7 @@ impl Burlesque {
         }
 
         let root = ui.root();
-        ui.set_layout(root, Layout::column());
+        ui.set_layout(root, Layout::column().gap(3.0).padding(4.0));
 
         // Menu Bar
         ui.menubar(
@@ -147,11 +180,16 @@ impl Burlesque {
                     .command("burlesque.import-pptx")
                     .command("burlesque.save-odp")
                     .command("burlesque.import-odp")
+                    .command("burlesque.import-key")
                     .separator()
                     .command("weft.close"),
                 Menu::new("Slide")
                     .command("burlesque.add-slide")
                     .command("burlesque.delete-slide")
+                    .command("burlesque.duplicate-slide")
+                    .command("burlesque.skip-slide")
+                    .command("burlesque.move-slide-left")
+                    .command("burlesque.move-slide-right")
                     .separator()
                     .command("burlesque.add-build")
                     .command("burlesque.step-build")
@@ -174,6 +212,7 @@ impl Burlesque {
                 Menu::new("Transition")
                     .command("burlesque.cycle-transition")
                     .separator()
+                    .command("burlesque.toggle-morph")
                     .command("burlesque.magic-move")
                     .command("burlesque.transition-none")
                     .command("burlesque.transition-dissolve")
@@ -184,12 +223,16 @@ impl Burlesque {
                     .command("burlesque.play-transition"),
                 Menu::new("View")
                     .command("burlesque.presenter")
-                    .command("burlesque.rehearse"),
+                    .command("burlesque.rehearse")
+                    .command("burlesque.light-table")
+                    .command("burlesque.timeline")
+                    .command("burlesque.review"),
             ],
         );
 
         // Top Toolbar row 1: Slides & Navigation & Presentation modes
         let row_nav = ui.row(root);
+        ui.set_layout(row_nav, Layout::row().height(30.0).gap(4.0).padding(2.0));
         let btn_prev = ui.button(row_nav, "Prev");
         let btn_next = ui.button(row_nav, "Next");
 
@@ -212,6 +255,7 @@ impl Burlesque {
 
         // Top Toolbar row 2: Layouts & Format Import/Export
         let row_actions = ui.row(root);
+        ui.set_layout(row_actions, Layout::row().height(30.0).gap(4.0).padding(2.0));
         let btn_layout_title = ui.button(row_actions, "Title");
         let btn_layout_body = ui.button(row_actions, "Body");
         let btn_layout_twocol = ui.button(row_actions, "2-Col");
@@ -233,13 +277,31 @@ impl Burlesque {
         let btn_export_pdf = ui.button(row_actions, "Export PDF");
         let btn_export_webm = ui.button(row_actions, "Export WebM");
 
+        // Top Toolbar row 3: OmaShow Morph, Light-Table, Build Timeline, and Deck Review
+        let row_oma = ui.row(root);
+        ui.set_layout(row_oma, Layout::row().height(30.0).gap(4.0).padding(2.0));
+        let btn_morph = ui.button(row_oma, "Morph");
+        let btn_light_table = ui.button(row_oma, "Light Table");
+        let btn_timeline = ui.button(row_oma, "Timeline");
+
+        ui.separator(row_oma);
+
+        let btn_dup_slide = ui.button(row_oma, "Dup");
+        let btn_skip_slide = ui.button(row_oma, "Skip");
+        let btn_move_slide_left = ui.button(row_oma, "Move <");
+        let btn_move_slide_right = ui.button(row_oma, "Move >");
+
+        ui.separator(row_oma);
+
+        let btn_review = ui.button(row_oma, "Review");
+
         // Main Workspace: Sidebar on left (slide list + text fields), Preview on right
         let workspace = ui.row(root);
-        ui.set_layout(workspace, Layout::row().height(384.0));
+        ui.set_layout(workspace, Layout::row().height(372.0).gap(6.0).padding(2.0));
 
         // Sidebar
         let sidebar = ui.column(workspace);
-        ui.set_layout(sidebar, Layout::column().width(240.0).height(372.0));
+        ui.set_layout(sidebar, Layout::column().width(240.0).height(368.0));
         ui.label(sidebar, "Slides:");
         let slide_list = ui.list(sidebar, &["1: Burlesque Presentations"]);
         ui.set_layout(slide_list, Layout::default().width(220.0).height(110.0));
@@ -262,7 +324,7 @@ impl Burlesque {
 
         // Preview container
         let preview_col = ui.column(workspace);
-        ui.set_layout(preview_col, Layout::column().width(656.0).height(372.0));
+        ui.set_layout(preview_col, Layout::column().width(656.0).height(368.0));
         let first_slide = deck.get_slide(0).expect("first slide");
         render_slide(
             first_slide,
@@ -284,6 +346,8 @@ impl Burlesque {
             Layout::default().width(preview_w as f32).height(preview_h as f32),
         );
 
+        let timeline_label = ui.label(root, "Timeline: no builds");
+        let review_label = ui.label(root, "Review: ready");
         let status_label = ui.label(root, "Slide 1 of 1 | Presenter: Off | Theme: Burlesque Velvet | Transition: None");
 
         let controls = vec![
@@ -297,6 +361,14 @@ impl Burlesque {
             ("theme", btn_theme),
             ("transition", btn_transition),
             ("magic_move", btn_magic_move),
+            ("morph", btn_morph),
+            ("light_table", btn_light_table),
+            ("timeline", btn_timeline),
+            ("dup_slide", btn_dup_slide),
+            ("skip_slide", btn_skip_slide),
+            ("move_slide_left", btn_move_slide_left),
+            ("move_slide_right", btn_move_slide_right),
+            ("review", btn_review),
             ("add_build", btn_add_build),
             ("step_build", btn_step_build),
             ("rehearse", btn_rehearse),
@@ -318,6 +390,13 @@ impl Burlesque {
             rehearsal_session: None,
             active_build_index: 0,
             magic_move_preview: None,
+            morph_enabled: false,
+            light_table_mode: false,
+            timeline_visible: false,
+            selected_slides: vec![0],
+            last_review: None,
+            review_toast: String::new(),
+            show_review_toast: false,
             preview_id,
             btn_add_slide,
             btn_delete_slide,
@@ -329,6 +408,14 @@ impl Burlesque {
             btn_theme,
             btn_transition,
             btn_magic_move,
+            btn_morph,
+            btn_light_table,
+            btn_timeline,
+            btn_dup_slide,
+            btn_skip_slide,
+            btn_move_slide_left,
+            btn_move_slide_right,
+            btn_review,
             btn_add_build,
             btn_step_build,
             btn_rehearse,
@@ -344,6 +431,8 @@ impl Burlesque {
             field_body,
             field_notes,
             slide_list,
+            timeline_label,
+            review_label,
             status_label,
             controls,
             preview_w,
@@ -395,7 +484,8 @@ impl Burlesque {
             Transition::PushLeft => Transition::WipeRight,
             Transition::WipeRight => Transition::ZoomIn,
             Transition::ZoomIn => Transition::MagicMove,
-            Transition::MagicMove => Transition::None,
+            Transition::MagicMove => Transition::Morph,
+            Transition::Morph => Transition::None,
             _ => Transition::None,
         };
         self.set_transition(next);
@@ -403,6 +493,7 @@ impl Burlesque {
     }
 
     pub fn set_transition(&mut self, transition: Transition) {
+        self.morph_enabled = matches!(transition, Transition::Morph | Transition::MagicMove);
         if let Some(slide) = self.deck.get_slide_mut(self.current_slide) {
             slide.transition = transition;
         }
@@ -411,6 +502,61 @@ impl Burlesque {
                 slide.transition = transition;
             }
         }
+    }
+
+    pub fn toggle_morph_transition(&mut self, ui: &mut Ui) -> bool {
+        self.light_table_mode = false;
+        self.morph_enabled = !self.morph_enabled;
+        if self.morph_enabled {
+            self.set_transition(Transition::Morph);
+            self.magic_move_preview = Some(0.5);
+            ui.set_text(self.btn_morph, "Morph: ON");
+        } else {
+            if matches!(self.current_transition(), Transition::Morph | Transition::MagicMove) {
+                self.set_transition(Transition::None);
+            }
+            self.magic_move_preview = None;
+            ui.set_text(self.btn_morph, "Morph");
+        }
+        self.refresh_preview(ui);
+        self.morph_enabled
+    }
+
+    pub fn toggle_light_table(&mut self, ui: &mut Ui) -> bool {
+        self.presenter_mode = false;
+        self.presenter_session = None;
+        self.rehearsal_session = None;
+        self.magic_move_preview = None;
+        self.light_table_mode = !self.light_table_mode;
+        if self.light_table_mode && self.selected_slides.is_empty() {
+            self.selected_slides.push(self.current_slide);
+        }
+        ui.set_text(
+            self.btn_light_table,
+            if self.light_table_mode { "Light Table*" } else { "Light Table" },
+        );
+        self.refresh_preview(ui);
+        self.light_table_mode
+    }
+
+    pub fn toggle_timeline(&mut self, ui: &mut Ui) -> bool {
+        self.timeline_visible = !self.timeline_visible;
+        ui.set_text(
+            self.btn_timeline,
+            if self.timeline_visible { "Timeline*" } else { "Timeline" },
+        );
+        self.refresh_preview(ui);
+        self.timeline_visible
+    }
+
+    pub fn run_deck_review(&mut self, ui: &mut Ui) -> ReviewReport {
+        let report = review_deck(&self.deck);
+        self.review_toast = report.summary_line();
+        self.last_review = Some(report.clone());
+        self.show_review_toast = true;
+        ui.set_text(self.review_label, &self.review_toast);
+        self.refresh_preview(ui);
+        report
     }
 
     pub fn play_transition(&mut self, ui: &mut Ui) -> (Transition, usize) {
@@ -431,7 +577,7 @@ impl Burlesque {
             self.current_slide
         };
 
-        if transition == Transition::MagicMove {
+        if transition == Transition::MagicMove || transition == Transition::Morph {
             let from_slide = self.deck.get_slide(self.current_slide);
             let to_slide = self.deck.get_slide(next_idx);
             if let (Some(sf), Some(st)) = (from_slide, to_slide) {
@@ -507,6 +653,15 @@ impl Burlesque {
                     self.preview_h,
                 );
             }
+        } else if self.light_table_mode {
+            render_light_table(
+                &self.deck,
+                &self.selected_slides,
+                self.current_slide,
+                &mut self.preview_buf,
+                self.preview_w,
+                self.preview_h,
+            );
         } else if let Some(frac) = self.magic_move_preview {
             let next_idx = if self.current_slide + 1 < self.deck.slide_count() {
                 self.current_slide + 1
@@ -554,6 +709,25 @@ impl Burlesque {
             }
         }
 
+        if self.timeline_visible && !self.presenter_mode && self.rehearsal_session.is_none() && !self.light_table_mode {
+            if let Some(slide) = self.deck.get_slide(self.current_slide) {
+                render_build_timeline_strip(
+                    slide,
+                    self.active_build_index,
+                    &mut self.preview_buf,
+                    self.preview_w,
+                    self.preview_h,
+                    58,
+                );
+            }
+        }
+
+        if self.show_review_toast {
+            if let Some(ref report) = self.last_review {
+                render_review_toast(report, &mut self.preview_buf, self.preview_w, self.preview_h);
+            }
+        }
+
         ui.set_image(
             self.preview_id,
             self.preview_w as usize,
@@ -565,28 +739,48 @@ impl Burlesque {
     }
 
     pub fn update_status(&self, ui: &mut Ui) {
-        let builds_info = if let Some(s) = self.deck.get_slide(self.current_slide) {
-            if s.builds.is_empty() {
+        let (builds_info, timeline_summary) = if let Some(s) = self.deck.get_slide(self.current_slide) {
+            let tl = BuildTimeline::from_slide(s).format_strip_summary();
+            let bi = if s.builds.is_empty() {
                 String::new()
             } else {
                 format!(" | Builds: {}/{}", self.active_build_index, s.builds.len())
-            }
+            };
+            (bi, tl)
         } else {
-            String::new()
+            (String::new(), String::from("Timeline: no builds"))
         };
+        ui.set_text(self.timeline_label, &timeline_summary);
+
+        if self.show_review_toast && !self.review_toast.is_empty() {
+            ui.set_text(self.review_label, &self.review_toast);
+        }
+
         let morph_info = if self.magic_move_preview.is_some() {
             " | MORPH 50%"
         } else {
             ""
         };
+        let lt_info = if self.light_table_mode {
+            " | LIGHT-TABLE"
+        } else {
+            ""
+        };
+        let skip_info = if self.deck.get_slide(self.current_slide).map(|s| s.hidden).unwrap_or(false) {
+            " [SKIP]"
+        } else {
+            ""
+        };
         let text = format!(
-            "Slide {} of {} | Presenter: {} | Theme: {} | Transition: {}{}{}{}",
+            "Slide {} of {}{} | Presenter: {} | Theme: {} | Transition: {}{}{}{}{}",
             self.current_slide + 1,
             self.deck.slide_count(),
+            skip_info,
             if self.presenter_mode { "ON" } else { "Off" },
             self.deck.theme.name,
             self.current_transition().name(),
             morph_info,
+            lt_info,
             builds_info,
             if self.rehearsal_session.is_some() { " | REHEARSAL" } else { "" },
         );
@@ -615,7 +809,11 @@ impl Burlesque {
                 } else {
                     &s.title
                 };
-                format!("{}: {}", i + 1, t)
+                if s.hidden {
+                    format!("{}: [SKIP] {}", i + 1, t)
+                } else {
+                    format!("{}: {}", i + 1, t)
+                }
             })
             .collect();
         let rows = Rows(names.into_iter().map(|s| vec![s]).collect());
@@ -624,6 +822,7 @@ impl Burlesque {
 
     pub fn toggle_presenter_mode(&mut self, ui: &mut Ui) {
         self.magic_move_preview = None;
+        self.light_table_mode = false;
         self.presenter_mode = !self.presenter_mode;
         if self.presenter_mode {
             let mut session = PresenterSession::new(self.deck.clone());
@@ -634,6 +833,14 @@ impl Burlesque {
             self.presenter_session = None;
         }
         self.refresh_preview(ui);
+    }
+
+    fn active_selection(&self) -> Vec<usize> {
+        if self.light_table_mode && !self.selected_slides.is_empty() {
+            self.selected_slides.clone()
+        } else {
+            vec![self.current_slide]
+        }
     }
 
     pub fn on_response(&mut self, ui: &mut Ui, response: &Response) -> bool {
@@ -676,6 +883,22 @@ impl Burlesque {
                 command = Some("burlesque.export-webm");
             } else if *id == self.btn_magic_move {
                 command = Some("burlesque.magic-move");
+            } else if *id == self.btn_morph {
+                command = Some("burlesque.toggle-morph");
+            } else if *id == self.btn_light_table {
+                command = Some("burlesque.light-table");
+            } else if *id == self.btn_timeline {
+                command = Some("burlesque.timeline");
+            } else if *id == self.btn_dup_slide {
+                command = Some("burlesque.duplicate-slide");
+            } else if *id == self.btn_skip_slide {
+                command = Some("burlesque.skip-slide");
+            } else if *id == self.btn_move_slide_left {
+                command = Some("burlesque.move-slide-left");
+            } else if *id == self.btn_move_slide_right {
+                command = Some("burlesque.move-slide-right");
+            } else if *id == self.btn_review {
+                command = Some("burlesque.review");
             } else if *id == self.btn_add_build {
                 command = Some("burlesque.add-build");
             } else if *id == self.btn_step_build {
@@ -723,6 +946,7 @@ impl Burlesque {
                 sync_slide_elements(slide, aspect, &title, "Content for this slide");
                 slide.set_speaker_notes(format!("Notes for slide {}", n));
                 self.current_slide = self.deck.slide_count() - 1;
+                self.selected_slides = vec![self.current_slide];
                 self.active_build_index = 0;
                 if let Some(ref mut session) = self.presenter_session {
                     session.deck = self.deck.clone();
@@ -739,6 +963,7 @@ impl Burlesque {
                     if self.current_slide >= self.deck.slide_count() {
                         self.current_slide = self.deck.slide_count().saturating_sub(1);
                     }
+                    self.selected_slides = vec![self.current_slide];
                     self.active_build_index = 0;
                     if let Some(ref mut session) = self.presenter_session {
                         session.deck = self.deck.clone();
@@ -751,10 +976,69 @@ impl Burlesque {
                     false
                 }
             }
+            "burlesque.duplicate-slide" => {
+                self.magic_move_preview = None;
+                let sel = self.active_selection();
+                let created = duplicate_slides(&mut self.deck, &sel);
+                if let Some(&first_new) = created.first() {
+                    self.current_slide = first_new;
+                    self.selected_slides = created;
+                    self.active_build_index = 0;
+                    self.sync_fields_to_current_slide(ui);
+                    self.refresh_preview(ui);
+                    true
+                } else {
+                    false
+                }
+            }
+            "burlesque.skip-slide" => {
+                let sel = self.active_selection();
+                if toggle_slides_skipped(&mut self.deck, &sel) > 0 {
+                    self.refresh_slide_list(ui);
+                    self.refresh_preview(ui);
+                    true
+                } else {
+                    false
+                }
+            }
+            "burlesque.move-slide-left" => {
+                if self.current_slide > 0 {
+                    let sel = self.active_selection();
+                    let min_sel = sel.iter().copied().min().unwrap_or(self.current_slide);
+                    let target = min_sel.saturating_sub(1);
+                    let moved = reorder_slides(&mut self.deck, &sel, target);
+                    if let Some(&first) = moved.first() {
+                        self.current_slide = first;
+                        self.selected_slides = moved;
+                        self.sync_fields_to_current_slide(ui);
+                        self.refresh_preview(ui);
+                        return true;
+                    }
+                }
+                false
+            }
+            "burlesque.move-slide-right" => {
+                let len = self.deck.slide_count();
+                if self.current_slide + 1 < len {
+                    let sel = self.active_selection();
+                    let max_sel = sel.iter().copied().max().unwrap_or(self.current_slide);
+                    let target = (max_sel + 2).min(len);
+                    let moved = reorder_slides(&mut self.deck, &sel, target);
+                    if let Some(&first) = moved.first() {
+                        self.current_slide = first;
+                        self.selected_slides = moved;
+                        self.sync_fields_to_current_slide(ui);
+                        self.refresh_preview(ui);
+                        return true;
+                    }
+                }
+                false
+            }
             "burlesque.prev" => {
                 self.magic_move_preview = None;
                 if self.current_slide > 0 {
                     self.current_slide -= 1;
+                    self.selected_slides = vec![self.current_slide];
                     self.active_build_index = 0;
                     if let Some(ref mut session) = self.presenter_session {
                         session.prev_slide();
@@ -778,6 +1062,7 @@ impl Burlesque {
                 }
                 if self.current_slide + 1 < self.deck.slide_count() {
                     self.current_slide += 1;
+                    self.selected_slides = vec![self.current_slide];
                     self.active_build_index = 0;
                     if let Some(ref mut session) = self.presenter_session {
                         session.next_slide();
@@ -861,7 +1146,7 @@ impl Burlesque {
             }
             "burlesque.cycle-transition" => {
                 let next = self.cycle_transition();
-                self.magic_move_preview = (next == Transition::MagicMove).then_some(0.5);
+                self.magic_move_preview = matches!(next, Transition::MagicMove | Transition::Morph).then_some(0.5);
                 self.refresh_preview(ui);
                 true
             }
@@ -901,6 +1186,22 @@ impl Burlesque {
                 self.refresh_preview(ui);
                 true
             }
+            "burlesque.toggle-morph" => {
+                self.toggle_morph_transition(ui);
+                true
+            }
+            "burlesque.light-table" => {
+                self.toggle_light_table(ui);
+                true
+            }
+            "burlesque.timeline" => {
+                self.toggle_timeline(ui);
+                true
+            }
+            "burlesque.review" => {
+                self.run_deck_review(ui);
+                true
+            }
             "burlesque.add-build" => {
                 self.magic_move_preview = None;
                 if let Some(slide) = self.deck.get_slide_mut(self.current_slide) {
@@ -930,6 +1231,7 @@ impl Burlesque {
             }
             "burlesque.rehearse" => {
                 self.magic_move_preview = None;
+                self.light_table_mode = false;
                 if self.rehearsal_session.is_some() {
                     let session = self.rehearsal_session.take().unwrap();
                     session.apply_to_deck(&mut self.deck);
@@ -971,6 +1273,7 @@ impl Burlesque {
         let notes = deck.slides.iter().filter(|s| !s.notes().is_empty()).count();
         self.deck = deck;
         self.current_slide = 0;
+        self.selected_slides = vec![0];
         self.sync_fields_to_current_slide(ui);
         self.refresh_preview(ui);
         Ok((slides, notes))
@@ -986,6 +1289,19 @@ impl Burlesque {
         let notes = deck.slides.iter().filter(|s| !s.notes().is_empty()).count();
         self.deck = deck;
         self.current_slide = 0;
+        self.selected_slides = vec![0];
+        self.sync_fields_to_current_slide(ui);
+        self.refresh_preview(ui);
+        Ok((slides, notes))
+    }
+
+    pub fn import_keynote(&mut self, bytes: &[u8], ui: &mut Ui) -> Result<(usize, usize), burlesque_core::Error> {
+        let deck = Deck::open_keynote(bytes)?;
+        let slides = deck.slide_count();
+        let notes = deck.slides.iter().filter(|s| !s.notes().is_empty()).count();
+        self.deck = deck;
+        self.current_slide = 0;
+        self.selected_slides = vec![0];
         self.sync_fields_to_current_slide(ui);
         self.refresh_preview(ui);
         Ok((slides, notes))

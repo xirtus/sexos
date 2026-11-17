@@ -491,7 +491,7 @@ impl EditRecipe {
     }
 }
 
-fn encode_filter_node(node: &FilterNode) -> Option<String> {
+pub(crate) fn encode_filter_node(node: &FilterNode) -> Option<String> {
     let en = if node.enabled { '1' } else { '0' };
     let body = match &node.spec {
         FilterSpec::BoxBlur { radius } => format!("boxblur.{}", radius),
@@ -524,7 +524,7 @@ fn encode_filter_node(node: &FilterNode) -> Option<String> {
     Some(format!("{}.{}", en, body))
 }
 
-fn decode_filter_node(s: &str) -> Option<FilterNode> {
+pub(crate) fn decode_filter_node(s: &str) -> Option<FilterNode> {
     let (en_s, rest) = s.split_once('.')?;
     let enabled = en_s == "1";
     let parts: Vec<&str> = rest.split('.').collect();

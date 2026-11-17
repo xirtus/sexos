@@ -341,6 +341,21 @@ pub fn object_menu(_d: &Doc) -> Vec<MenuItem> {
         SEP,
         op("Delete", "X", "object.delete"),
         op("Delete Globally", "", "object.delete"),
+        SEP,
+        sub(
+            "Print & Scan",
+            vec![
+                op("Photo to Mesh", "", "object.photo_to_mesh"),
+                SEP,
+                op("Orient Upright", "", "object.orient_upright"),
+                op("Place on Bed", "", "object.place_on_bed"),
+                opa("Scale to Height (50 mm)", "", "object.scale_to_height_mm", "50"),
+                opa("Decimate QEM (50%)", "", "object.decimate_qem", "0.5"),
+                SEP,
+                op("Inspect Manifold", "", "object.inspect_manifold"),
+                op("Repair for Printing", "", "object.repair_for_printing"),
+            ],
+        ),
     ]
 }
 

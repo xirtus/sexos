@@ -505,6 +505,18 @@ impl SlideElement {
         self.set_magic_key(Some(key.into()));
         self
     }
+
+    pub fn morph_key(&self) -> Option<&str> {
+        self.magic_key()
+    }
+
+    pub fn set_morph_key(&mut self, key: Option<String>) {
+        self.set_magic_key(key);
+    }
+
+    pub fn with_morph_key(self, key: impl Into<String>) -> Self {
+        self.with_magic_key(key)
+    }
 }
 
 /// Slide transitions supported by the burlesque presentations engine.
@@ -520,6 +532,7 @@ pub enum Transition {
     Fade,
     SlideLeft,
     MagicMove,
+    Morph,
 }
 
 impl Transition {
@@ -530,7 +543,7 @@ impl Transition {
     pub fn duration_ms(&self) -> u32 {
         match self {
             Self::None => 0,
-            Self::MagicMove => 600,
+            Self::MagicMove | Self::Morph => 600,
             _ => Self::DEFAULT_DURATION_MS,
         }
     }
@@ -548,6 +561,7 @@ impl Transition {
             Self::Fade => "Fade",
             Self::SlideLeft => "SlideLeft",
             Self::MagicMove => "Magic Move",
+            Self::Morph => "Morph",
         }
     }
 
@@ -564,6 +578,7 @@ impl Transition {
             Self::Fade => "fade",
             Self::SlideLeft => "slide_left",
             Self::MagicMove => "magic-move",
+            Self::Morph => "morph",
         }
     }
 
@@ -588,6 +603,8 @@ impl Transition {
             Self::SlideLeft
         } else if clean.eq_ignore_ascii_case("magic_move") || clean.eq_ignore_ascii_case("magic-move") || clean.eq_ignore_ascii_case("magicmove") {
             Self::MagicMove
+        } else if clean.eq_ignore_ascii_case("morph") {
+            Self::Morph
         } else {
             Self::None
         }
