@@ -117,7 +117,7 @@ jobs:
     - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
       run: cargo test --locked -p sex-archive --features std
     - name: Polyamour 3D core (meshes, modifiers, booleans, path tracer, glTF/OBJ/STL/PLY/.blend, polyops + Python API)
-      run: cargo test --locked --release -p sex-3d -p polyamour
+      run: bash scripts/polyamour/check_wasm_guest.sh && cargo test --locked --release -p sex-3d -p polyamour -p polyamour-sdk -p polyamour-wasm
     - name: Burlesque presentations engine (PPTX, ODP, presenter view, PDF export) on the host
       run: bash scripts/burlesque_host_gate.sh
     - name: Pinyin input method
@@ -700,6 +700,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/tray-items-source.img"
         python3 scripts/tray_items_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-items-source.img" --out "$RUNNER_TEMP/sexos-desktop/tray-items"
+    - name: Tabbed window groups (three windows grouped, tabs cycled), dwindle layout and per-workspace layout memory
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/groups-source.img"
+        python3 scripts/window_groups_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/groups-source.img" --out "$RUNNER_TEMP/sexos-desktop/groups"
     - name: Magnifier and colour filters (accessibility)
       run: |
         truncate -s 256M "$RUNNER_TEMP/access-source.img"
@@ -862,7 +866,7 @@ jobs:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Calculator arithmetic and calendar model on the host
-      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-dav -p sex-vcard -p sex-vt -p spindle-panes -p spindle-shell -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay && cargo test --locked --release -p sex-vt --features render render_tests
+      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-dav -p sex-vcard -p sex-vt -p spindle-panes -p spindle-shell -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay && cargo test --locked --release -p sex-vt --features render,ligatures render_tests
     - name: Build the image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
     - name: Calculator typed, clicked and recalled

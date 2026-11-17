@@ -15,6 +15,9 @@ miniz_oxide = { version = "0.8", default-features = false, features = ["with-all
 # Character widths: wide (two cells) and zero-width (combining) characters.
 sex-shape = { path = "../sex-shape" }
 sex-font = { path = "../sex-font", optional = true }
+# MIT, no_std without its default `std` feature: OpenType shaping (a Rust HarfBuzz), for
+# the contextual alternates JetBrains Mono's ligatures are made of.
+rustybuzz = { version = "0.20", default-features = false, optional = true }
 # MIT/Apache-2.0, no_std + alloc without default features: regular expressions for
 # scrollback search (the lazy DFA and PikeVM behind its `meta` regex).
 regex-automata = { version = "0.4", default-features = false, features = ["alloc", "syntax", "meta", "nfa-pikevm", "hybrid", "unicode-case", "unicode-perl"], optional = true }
@@ -25,3 +28,6 @@ default = ["regex"]
 regex = ["dep:regex-automata"]
 # Drawing cells into a program's pixels with Geist Mono.
 render = ["dep:sex-font"]
+# JetBrains Mono's coding ligatures (`->`, `=>`, `!=`): runs of punctuation shaped with
+# rustybuzz, each glyph kept in its cell and the ink that reaches back drawn there too.
+ligatures = ["render", "dep:rustybuzz"]

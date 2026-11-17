@@ -13,6 +13,8 @@
 pub mod anim;
 pub mod app;
 pub mod compositing;
+#[cfg(not(target_os = "hermit"))]
+pub mod desktop;
 pub mod doc;
 pub mod draw;
 pub mod edit;

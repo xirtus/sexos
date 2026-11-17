@@ -36,7 +36,7 @@ use sex_app::{files, Event, Nav, Window};
 use sex_pdx::app_pointer::Kind;
 use sex_pdx::stream::{Side, Stream};
 use sex_vt::keys::{self, Key, Mods};
-use sex_vt::render::{cell_for_height, Cache, Faces, Glide, Painter};
+use sex_vt::render::{cell_for_height, Cache, Faces, Family, Glide, Painter};
 use sex_vt::{Parser, Screen};
 mod shell_host;
 use spindle_panes::{Divider, PaneId, Rect, Split, Tabs, Toward};
@@ -48,19 +48,26 @@ const MODULE_MAX: usize = 8 << 20;
 const CONFIG: &[u8] = b"spindle.conf";
 const STREAM_RING: usize = 64 * 1024;
 static mut CACHE: Cache = Cache::new();
-/// Bold and italic Geist Mono and the Noto fallbacks (CJK, emoji, symbols), parsed once
-/// for every pane.
-static mut FACES: core::mem::MaybeUninit<Faces> = core::mem::MaybeUninit::uninit();
-static mut FACES_READY: bool = false;
+/// Each font family's cuts (regular, bold, italic) and the Noto fallbacks (CJK, emoji,
+/// symbols), parsed once for every pane when the family is first used: Geist Mono, and
+/// JetBrains Mono with its ligatures when `font = jetbrains-mono`.
+static mut FACES: [core::mem::MaybeUninit<Faces>; 2] = [const { core::mem::MaybeUninit::uninit() }; 2];
+/// Per family: 0 not tried, 1 parsed, 2 failed.
+static mut FACES_STATE: [u8; 2] = [0; 2];
+/// The family new painters draw with.
+static mut FAMILY: Family = Family::GeistMono;
 fn painter(cw: usize, ch: usize) -> Painter {
-    // SAFETY: one thread; FACES is written once, before FACES_READY is set.
+    // SAFETY: one thread; a slot is written once, before its state says it is parsed.
     unsafe {
-        if !FACES_READY {
-            FACES_READY = Faces::embedded_into(&mut *core::ptr::addr_of_mut!(FACES));
-            if !FACES_READY { sex_pdx::serial_record!("[term.faces] parsed=0"); }
+        let family = FAMILY;
+        let i = family as usize;
+        if FACES_STATE[i] == 0 {
+            let ok = Faces::family_into(&mut (*core::ptr::addr_of_mut!(FACES))[i], family);
+            FACES_STATE[i] = if ok { 1 } else { 2 };
+            sex_pdx::serial_record!("[term.faces] font={} parsed={}", family.name(), ok as u8);
         }
         let p = Painter::new(cw, ch);
-        if FACES_READY { p.with_faces((*core::ptr::addr_of!(FACES)).assume_init_ref()) } else { p }
+        if FACES_STATE[i] == 1 { p.with_faces((*core::ptr::addr_of!(FACES))[i].assume_init_ref()) } else { p }
     }
 }
 
@@ -196,6 +203,12 @@ impl Pane {
         self.screen.resize(cols, rows);
         if let Some(Job { runner: Runner::Guest(g), .. }) = &self.job { g.stream.set_size(cols as u32, rows as u32); }
         if let Some(Job { runner: Runner::Native(_), .. }) = &self.job { self.native_size(); }
+        self.screen.mark_all_dirty();
+    }
+    /// Draws with the font family now chosen, at the same size.
+    fn new_font(&mut self) {
+        let (cw, ch) = cell_for_height(self.cell_h);
+        self.painter = painter(cw, ch);
         self.screen.mark_all_dirty();
     }
     /// A new text size: `h` pixels per cell.
@@ -1314,7 +1327,14 @@ impl Spindle {
             }
         }
         for p in &config.problems { sex_pdx::serial_record!("[term.config.problem] {}", p); }
-        sex_pdx::serial_record!("[term.config] theme={} font={} padding={} scrollback={} colors={} problems={}", theme.name, config.font_size, config.padding, config.scrollback, config.colors.len(), config.problems.len());
+        sex_pdx::serial_record!("[term.config] theme={} font={} size={} padding={} scrollback={} colors={} problems={}", theme.name, config.font, config.font_size, config.padding, config.scrollback, config.colors.len(), config.problems.len());
+        let family = Family::named(&config.font).unwrap_or_default();
+        // SAFETY: one thread; painters read FAMILY only when they are made.
+        if unsafe { FAMILY } != family {
+            unsafe { FAMILY = family; }
+            for pane in self.panes.values_mut() { pane.new_font(); }
+            self.painter = painter(self.painter.cell_w, self.painter.cell_h);
+        }
         self.theme = theme;
         for pane in self.panes.values_mut() { pane.screen.set_theme(theme); pane.screen.set_history_max(config.scrollback); }
         let step = config.font_size as isize - self.cell_h as isize;
