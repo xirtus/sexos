@@ -223,7 +223,14 @@ proven elsewhere.
   capability is checked against it on use (one compare). Cheaper and smaller than seL4's
   CDT, and enough for our "revoke everything an incarnation held" needs.
 - **Incarnation death revokes.** A domain's exit bumps the generation of its endpoints
-  and of every capability it minted. Servers then never need liveness syscalls.
+  and of every capability it minted, so no *new* call can arrive from a dead caller.
+- **In-flight requests are cancelled too.** A badge already delivered survives revocation,
+  so the badge carries the caller's incarnation generation, and the caller's death
+  invalidates every outstanding one-shot reply capability for it (as seL4 cancels a
+  reply object when its caller goes away). A server with deferred work (Files'
+  restricted I/O) checks before completing that its reply capability is still live: a
+  read of a kernel-published, read-only generation word, not a syscall. With both
+  pieces, servers need no liveness syscalls.
 - **Slots stored inline** (32 bytes each, no `Box`), with rights bits on every
   capability (read, write, grant, call, receive) checked in one place.
 
@@ -231,8 +238,13 @@ proven elsewhere.
 
 - **Protection views** (decision D2). One global translation (VA → PA identical
   everywhere: still a single address space), but up to N per-core *permission views*:
-  page-table roots that share every lower-level table and differ only in which 2 MiB/1 GiB
-  subtrees are user-accessible. Each view is tagged with a PCID, so switching views is a
+  page-table hierarchies with identical leaf translations. Permission bits live in the
+  entry that points at a subtree, so each view has **private copies of every table level
+  that holds a differing bit** (PML4, and the PDPT/PD pages above any 1 GiB/2 MiB span
+  whose user bit differs between views); everything below those entries (the PT pages,
+  and whole subtrees whose permissions are the same in all views) is shared. A private
+  PD page is 4 KiB per 1 GiB of differing range, so the cost stays small. Each view is
+  tagged with a PCID, so switching views is a
   CR3 write with no flush. Uses:
   - Shared-key program rows each get their own view: no more turn-taking, no full TLB
     flush, and they can run on any core at the same time.
