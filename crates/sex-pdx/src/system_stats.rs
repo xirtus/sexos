@@ -13,6 +13,9 @@ pub const OP_NAME: u64 = 2;
 pub const OP_NEXT: u64 = 3;
 /// rsi, rdx = sixteen bytes of the caller's own name.
 pub const OP_SET_NAME: u64 = 4;
+/// The kernel's own memory, for leak gates: rsi = heap bytes in use, rdx = heap bytes
+/// mapped, r10 = live heap blocks, r8 = most heap bytes ever in use, r9 = free frames.
+pub const OP_KERNEL: u64 = 5;
 pub const OK: u64 = 0;
 pub const INVALID: u64 = 1;
 pub const NONE: u64 = 2;
@@ -37,20 +40,28 @@ pub struct Overview { pub tsc: u64, pub cores: u64, pub idle_cycles: u64, pub fr
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Domain { pub pd: u32, pub cycles: u64, pub pages: u64, pub task: u32, pub syscalls: u64 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Kernel { pub heap_used: u64, pub heap_mapped: u64, pub heap_blocks: u64, pub heap_peak: u64, pub free_frames: u64 }
+
 #[cfg(target_arch = "x86_64")]
-fn call(op: u64, a: u64, b: u64) -> (u64, [u64; 4]) {
-    let (status, r1, r2, r3, r4): (u64, u64, u64, u64, u64);
+fn call(op: u64, a: u64, b: u64) -> (u64, [u64; 5]) {
+    let (status, r1, r2, r3, r4, r5): (u64, u64, u64, u64, u64, u64);
     unsafe { core::arch::asm!("syscall", inlateout("rax") SYS_STATS => status,
         in("rdi") op, inlateout("rsi") a => r1, inlateout("rdx") b => r2,
-        lateout("r10") r3, lateout("r8") r4, out("rcx") _, out("r11") _, options(nostack)); }
-    (status, [r1, r2, r3, r4])
+        lateout("r10") r3, lateout("r8") r4, inlateout("r9") 0u64 => r5, out("rcx") _, out("r11") _, options(nostack)); }
+    (status, [r1, r2, r3, r4, r5])
 }
 #[cfg(not(target_arch = "x86_64"))]
-fn call(_op: u64, _a: u64, _b: u64) -> (u64, [u64; 4]) { (INVALID, [0; 4]) }
+fn call(_op: u64, _a: u64, _b: u64) -> (u64, [u64; 5]) { (INVALID, [0; 5]) }
 
 pub fn overview() -> Option<Overview> {
     let (s, r) = call(OP_OVERVIEW, 0, 0);
     (s == OK).then_some(Overview { tsc: r[0], cores: r[1], idle_cycles: r[2], free_pages: r[3] })
+}
+/// The kernel heap and the machine's free frames; see `OP_KERNEL`.
+pub fn kernel() -> Option<Kernel> {
+    let (s, r) = call(OP_KERNEL, 0, 0);
+    (s == OK).then_some(Kernel { heap_used: r[0], heap_mapped: r[1], heap_blocks: r[2], heap_peak: r[3], free_frames: r[4] })
 }
 pub fn domain(pd: u32) -> Option<Domain> {
     let (s, r) = call(OP_DOMAIN, pd as u64, 0);

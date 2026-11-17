@@ -13,6 +13,10 @@ const STEP: usize = 4 * 1024 * 1024;
 static TABLES: AtomicBool = AtomicBool::new(false);
 /// How far the heap may grow, set once its page tables are made.
 static LIMIT: AtomicUsize = AtomicUsize::new(0);
+/// Blocks handed out and not yet freed, and the most bytes ever in use: a leak shows
+/// as a count that climbs across open/close cycles (SYS_STATS `OP_KERNEL`).
+static LIVE: AtomicUsize = AtomicUsize::new(0);
+static PEAK: AtomicUsize = AtomicUsize::new(0);
 
 pub struct KernelHeap(spin::Mutex<Heap>);
 impl KernelHeap {
@@ -23,15 +27,26 @@ impl KernelHeap {
 unsafe impl GlobalAlloc for KernelHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let mut heap = self.0.lock();
-        if let Ok(p) = heap.allocate_first_fit(layout) { return p.as_ptr(); }
-        if grow(&mut heap, layout) {
-            if let Ok(p) = heap.allocate_first_fit(layout) { return p.as_ptr(); }
-        }
-        core::ptr::null_mut()
+        let mut got = heap.allocate_first_fit(layout);
+        if got.is_err() && grow(&mut heap, layout) { got = heap.allocate_first_fit(layout); }
+        let Ok(p) = got else { return core::ptr::null_mut() };
+        LIVE.fetch_add(1, Ordering::Relaxed);
+        PEAK.fetch_max(heap.used(), Ordering::Relaxed);
+        p.as_ptr()
     }
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if let Some(p) = NonNull::new(ptr) { self.0.lock().deallocate(p, layout); }
+        if let Some(p) = NonNull::new(ptr) { self.0.lock().deallocate(p, layout); LIVE.fetch_sub(1, Ordering::Relaxed); }
     }
+}
+
+/// SYS_STATS `OP_KERNEL`: bytes in use, bytes mapped, live blocks, most bytes ever in
+/// use, and the machine's free frames.
+pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
+    let (used, size) = { let h = crate::ALLOCATOR.lock(); (h.used(), h.size()) };
+    regs.rsi = used as u64; regs.rdx = size as u64;
+    regs.r10 = LIVE.load(Ordering::Relaxed) as u64; regs.r8 = PEAK.load(Ordering::Relaxed) as u64;
+    regs.r9 = crate::memory::allocator::debug_global_free_frames();
+    sex_pdx::system_stats::OK
 }
 
 /// Maps pages past the heap's top, from the page allocator, and hands them to the heap.
