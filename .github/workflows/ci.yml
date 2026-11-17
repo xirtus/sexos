@@ -980,7 +980,14 @@ jobs:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Build and freeze diagnostic image, then rebuild normal image
-      run: bash scripts/build_input_payload_proof.sh "$RUNNER_TEMP/input-payload-proof"
+      run: |
+        # The script sends every phase to its own log; show their tails when it fails.
+        bash scripts/build_input_payload_proof.sh "$RUNNER_TEMP/input-payload-proof" || {
+          for f in "$RUNNER_TEMP"/input-payload-proof/*.log "$RUNNER_TEMP"/input-payload-proof/diagnostic-build/*.log "$RUNNER_TEMP"/input-payload-proof/diagnostic-build/*.md; do
+            [[ -f "$f" ]] && { echo "=== $f"; tail -60 "$f"; }
+          done
+          exit 1
+        }
     - name: Strict physical-key oracles on the labeled diagnostic image only
       run: |
         evidence="$RUNNER_TEMP/input-payload-proof"
