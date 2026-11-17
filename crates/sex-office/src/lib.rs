@@ -57,11 +57,11 @@ impl<'a> Canvas<'a> {
         if w == 0 { return; }
         let h = picture.len() / w;
         let left = x.max(clip.0).max(0);
-        let right = (x + w as i32).min(clip.0 + clip.2).min(self.width as i32);
+        let right = x.saturating_add(w.min(i32::MAX as usize) as i32).min(clip.0.saturating_add(clip.2)).min(self.width as i32);
         if left >= right { return; }
         for py in 0..h as i32 {
-            let sy = y + py;
-            if sy < clip.1.max(0) || sy >= (clip.1 + clip.3).min(self.height as i32) { continue; }
+            let sy = y.saturating_add(py);
+            if sy < clip.1.max(0) || sy >= clip.1.saturating_add(clip.3).min(self.height as i32) { continue; }
             let src = py as usize * w + (left - x) as usize;
             let dst = sy as usize * self.stride + left as usize;
             let n = (right - left) as usize;
@@ -78,6 +78,7 @@ impl<'a> Canvas<'a> {
 
 /// `over` on `under` by `alpha` out of 255, per channel.
 pub fn mix(under: u32, over: u32, alpha: u32) -> u32 {
+    let alpha = alpha.min(255);
     let ch = |s: u32| {
         let (u, o) = ((under >> s) & 0xff, (over >> s) & 0xff);
         ((o * alpha + u * (255 - alpha) + 127) / 255) << s
@@ -135,39 +136,62 @@ impl Pen {
 
     /// How wide `text` is, in pixels.
     pub fn measure(&mut self, text: &str) -> i32 {
-        text.chars().map(|c| self.glyph(c).advance).sum::<i32>() / 256
+        let w = text.chars().map(|c| i64::from(self.glyph(c).advance)).sum::<i64>() / 256;
+        w.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
     }
 
     /// Draws `text` with its top-left at (`x`, `y`), clipped to `clip` (x, width) when
     /// given. Returns the pen's end x.
     pub fn text(&mut self, canvas: &mut Canvas, x: i32, y: i32, text: &str, color: u32, clip: Option<(i32, i32)>) -> i32 {
-        let (cx0, cx1) = clip.map_or((i32::MIN, i32::MAX), |(cx, cw)| (cx, cx + cw));
-        let baseline = y + self.ascent;
-        let mut pen = x * 256;
+        // Pen positions are 24.8 fixed point in i64 so far-off (scrolled or
+        // hostile) coordinates cannot overflow; drawing clips to i32 pixels.
+        let (cx0, cx1) = clip.map_or((i32::MIN, i32::MAX), |(cx, cw)| (cx, cx.saturating_add(cw)));
+        let baseline = y.saturating_add(self.ascent);
+        let mut pen = i64::from(x) * 256;
+        let px_of = |v: i64| v.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
         for c in text.chars() {
-            let at = pen / 256;
+            let at = px_of(pen / 256);
             let g = self.glyph(c);
             let advance = g.advance;
             if at >= cx1 { break; }
             for gy in 0..g.h {
                 for gx in 0..g.w {
                     let a = g.cover[gy * g.w + gx] as u32;
-                    let px = at + g.left + gx as i32;
+                    let px = at.saturating_add(g.left).saturating_add(gx as i32);
                     if a == 0 || px < cx0 || px >= cx1 { continue; }
-                    let py = baseline + g.top + gy as i32;
+                    let py = baseline.saturating_add(g.top).saturating_add(gy as i32);
                     // Re-borrow: `g` lives in `self`, the canvas does not.
                     canvas.blend(px, py, color, a);
                 }
             }
-            pen += advance;
+            pen += i64::from(advance);
         }
-        pen / 256
+        px_of(pen / 256)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #281: far-off coordinates, wide clips and alpha > 255 must not panic.
+    #[test]
+    fn text_survives_huge_coordinates() {
+        let mut px = vec![0u32; 20 * 20];
+        let mut canvas = Canvas::new(&mut px, 20, 20);
+        let mut pen = Pen::sans(12);
+        // The fuzz reproducer: x = 10_000_000, y = 0, "overflow".
+        let end = pen.text(&mut canvas, 10_000_000, 0, "overflow", 0xffffff, None);
+        assert!(end > 10_000_000);
+        pen.text(&mut canvas, i32::MAX, i32::MAX, "overflow", 0xffffff, Some((i32::MAX, i32::MAX)));
+        pen.text(&mut canvas, i32::MIN, i32::MIN, "overflow", 0xffffff, Some((i32::MIN, i32::MAX)));
+        let long = "W".repeat(200_000);
+        assert!(pen.measure(&long) > 0);
+        assert_eq!(pen.text(&mut canvas, i32::MAX - 4, 0, &long, 1, None), i32::MAX);
+        assert_eq!(mix(0, 0xffffff, u32::MAX), 0xffffff);
+        canvas.blit(i32::MAX, i32::MAX, &[1; 4], 2, (i32::MAX, i32::MAX, i32::MAX, i32::MAX));
+        assert!(px.iter().all(|p| *p == 0));
+    }
 
     #[test]
     fn text_leaves_ink_inside_its_clip_only() {

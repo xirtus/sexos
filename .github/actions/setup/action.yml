@@ -91,4 +91,6 @@ runs:
       git -C limine remote add origin https://github.com/limine-bootloader/limine.git
       git -C limine fetch -q --depth=1 origin ca3a5b20d2501e3819983c5cf838c70c30ee532a
       git -C limine checkout -q --detach FETCH_HEAD
+      # Limine 7.13.3's BIOS countdown can hang before the kernel (see the script).
+      python3 scripts/patch_limine_bios.py limine
       make -C limine limine
