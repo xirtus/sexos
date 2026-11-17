@@ -477,7 +477,10 @@ def replay_boot(root,iso,binding,out,c=None):
   pixels.append(verify_frame(prefix,(out/frame['screenshot']).read_bytes(),frame,c,tuple(map(int,m['resolution'].split('x'))),joined['document']));previous=end
  parks=[a for a in actions if a['kind']=='park'];asset.verify_parking(trace,frames,parks,tuple(map(int,m['resolution'].split('x'))))
  for check in(nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True),wait_check(trace,source_root=root)):
-  if not check['ok']:raise ValueError('connected NIC/self-wait regression: '+str(check.get('errors')))
+  if not check['ok']:
+   # Name the sampled counts so a CI log alone shows which envelope was missing.
+   detail={k:check.get(k) for k in('browser_tasks','boot_tasks','parks_observed','expiries_observed','returns_observed','passive_continuation_joins','up_topology','net_boot_identity')if k in check}
+   raise ValueError('connected NIC/self-wait regression: '+str(check.get('errors'))+' '+json.dumps(detail,default=str))
  return dict(ok=True,acceptance='representative_connected_only',full_alpha_acceptance=False,binding=bound,boots=1,frames=len(frames),recovery=cold,wire=wire,keys=keys,wheel=wheel,joins=joined,scope=SCOPE)
 
 
