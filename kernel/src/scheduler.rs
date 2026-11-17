@@ -357,7 +357,7 @@ impl Scheduler {
     pub fn tick(&self) -> ScheduleDecision {
         // A call's partner runs at once: housekeeping waits for an ordinary turn, at most
         // HANDOFF_STREAK switches away (and core 0's timer polls every tick anyway).
-        let lean = !self.handoff.load(Ordering::Acquire).is_null();
+        let lean = !self.handoff.load(Ordering::Acquire).is_null() && self.handoff_streak.load(Ordering::Relaxed) < HANDOFF_STREAK;
         self.lean.store(lean, Ordering::Relaxed);
         if !lean { poll_paging_exit_notifications(); }
         if SCHED_TICK_ENTER_LOG_BUDGET
@@ -932,6 +932,7 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
             log_wake_event("local_resume", current);
             crate::ipc::recv::deliver(current);
             crate::cpu_account::switch(sched.core_id, Some((*current).context.pd_id as u32));
+            sched.budget.switched(crate::interrupts::TICKS.load(Ordering::Relaxed), core::arch::x86_64::_rdtsc(), (*current).deadline_us.load(Ordering::Relaxed) != 0);
             finish_last_runnable_proof(current);
             return &(*current).context;
         }
@@ -945,6 +946,8 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
             leave_dead_task(sched, current);
         }
         crate::cpu_account::switch(sched.core_id, None);
+        // Idle time is no one's deadline work.
+        sched.budget.switched(crate::interrupts::TICKS.load(Ordering::Relaxed), core::arch::x86_64::_rdtsc(), false);
         if !polled && !current.is_null() && (*current).deliver.load(Ordering::Relaxed) {
             polled = true;
             poll_for_partner(sched, current);
