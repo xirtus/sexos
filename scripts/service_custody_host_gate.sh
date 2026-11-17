@@ -234,6 +234,9 @@ rustc --edition=2021 -A dead_code --test tests/launcher_search.rs -o "$TEST_DIR/
 rustc --edition=2021 -A dead_code --test tests/notify.rs -o "$TEST_DIR/notify"
 "$TEST_DIR/notify"
 rustc --edition=2021 -A dead_code --test tests/desktop_look.rs -o "$TEST_DIR/desktop-look"
+"$TEST_DIR/desktop-look"
+rustc --edition=2021 -A dead_code --test tests/brand.rs -o "$TEST_DIR/brand"
+"$TEST_DIR/brand"
 rustc --edition=2021 -A dead_code --test tests/access_view.rs -o "$TEST_DIR/access-view"
 "$TEST_DIR/access-view" --test-threads=1
 rustc --edition=2021 -A dead_code --test tests/access_keys.rs -o "$TEST_DIR/access-keys"
@@ -250,6 +253,9 @@ printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/program_tray.rs"] pub mod pr
 rustc --edition=2021 -A dead_code --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/tray_items_pdx.rs" -o "$TEST_DIR/libtray_items_pdx.rlib"
 rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libtray_items_pdx.rlib" --test tests/tray_items.rs -o "$TEST_DIR/tray-items"
 "$TEST_DIR/tray-items"
+# Tabbed window groups, the dwindle split tree and per-workspace layout memory (S3).
+rustc --edition=2021 -A dead_code --test tests/window_groups.rs -o "$TEST_DIR/window-groups"
+"$TEST_DIR/window-groups"
 # Whisper, the screen reader: built against a sex_pdx of only the wires it uses.
 printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/speech_voice.rs"] pub mod speech_voice;\n#[path = "%s/crates/sex-pdx/src/a11y.rs"] pub mod a11y;\n' "$ROOT_DIR" "$ROOT_DIR" > "$TEST_DIR/reader_pdx.rs"
 rustc --edition=2021 --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/reader_pdx.rs" -o "$TEST_DIR/libreader_pdx.rlib"

@@ -61,7 +61,7 @@ impl Key {
 }
 
 /// Wallpapers, in `sex_pdx::desktop_look::WALLPAPERS` order.
-pub const WALLPAPERS: &[&str] = &["theme", "dusk", "forest", "ocean", "slate"];
+pub const WALLPAPERS: &[&str] = &["sexos", "dusk", "forest", "ocean", "slate", "midnight"];
 /// Keyboard layouts. Workstream A appends its layouts here.
 pub const LAYOUTS: &[&str] = &["us"];
 /// Time zones by IANA name. Append-only; `sex-time` holds their rules.
@@ -377,7 +377,7 @@ mod tests {
                 seen.push(k.section());
             }
         }
-        assert_eq!(WALLPAPERS.len(), 5);
+        assert_eq!(WALLPAPERS.len(), 6);
     }
 
     #[test]

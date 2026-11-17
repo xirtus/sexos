@@ -700,6 +700,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/tray-items-source.img"
         python3 scripts/tray_items_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-items-source.img" --out "$RUNNER_TEMP/sexos-desktop/tray-items"
+    - name: Tabbed window groups (three windows grouped, tabs cycled), dwindle layout and per-workspace layout memory
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/groups-source.img"
+        python3 scripts/window_groups_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/groups-source.img" --out "$RUNNER_TEMP/sexos-desktop/groups"
     - name: Magnifier and colour filters (accessibility)
       run: |
         truncate -s 256M "$RUNNER_TEMP/access-source.img"
