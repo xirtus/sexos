@@ -58,7 +58,11 @@ APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95
     # Denim D3 (restart RESET, worker faults, store holes), 2026-11-17: no deadline reference
     '760225b10352362611d59ea08997c879e287e4aad16fe54c4a37762b442de1fe',
     # Denim D3-D5 and lazy program stacks (#306), 2026-11-17: no deadline reference
-    'eebfb8992af089755f4cfe73f1e37afca0a6f6cf8996cff06e44384ab98574ab')
+    'eebfb8992af089755f4cfe73f1e37afca0a6f6cf8996cff06e44384ab98574ab',
+    # WS2 kernel heap counters (SYS_STATS OP_KERNEL), unused slab.rs removed, 2026-11-17
+    '95ef2223d462a85888843a0700105ff4538f044360df25138dde638253e06fb5',
+    # Denim D3-D5 and lazy stacks merged with WS2 OP_KERNEL, 2026-11-17: no deadline reference
+    'f1d7714407d0cbd6a07f066a3b64a6ec418138848d2589b32436196014c9e226')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -278,10 +282,10 @@ def _task_ordinals_ok(records):
 # combinations need independent review and an exact new fingerprint.
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
  'servers/silk-shell/src/main.rs': 'wait-v1:4498ab1ca18598a6dcf3e4c8b64a0a3ce3f90ead7c3a136f125492802ee68235',
- 'crates/sex-pdx/src/system_stats.rs': 'd81e717c52cbbfa3b98fe0eb513d1558af825c9ca722e9508abb32eef29891cb',
+ 'crates/sex-pdx/src/system_stats.rs': '2f41c001a47809131a3b47adfbf3a799de5bc0da44f86098a6d7b307aadb437f',
  'crates/sex-pdx/src/crash_log.rs': '98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
- 'kernel/src/cpu_account.rs': 'eb562d1dc57c44d817f6bd004e9103f1ca93a956d7358157ae534ec282913873',
+ 'kernel/src/cpu_account.rs': 'afd6376602c6d2f3bffcb9c35f854eba6487ddb09bd6caad8255ac1f659797d0',
  'kernel/src/core_local.rs': '62ece205111acc3deba4a41854a9ed632ff99742a54283bce094d1295025a300',
  'kernel/src/app_resources.rs': '61ad468a6efb75291e43bb6efd5b580b430ec00187c62509bae73d8bf3d32f40',
  'kernel/src/service_restart.rs': '0900a46c2424b1329a3ad9ca3b1a8b282cc03cb01f8d7d8ef373d36904bac5a4',

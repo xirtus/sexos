@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A working session, repeated for hours: files, downloads, the Browser, programs side by side, a notepad, background programs. Any crash, hang or leak ends it with evidence.
 
-Each round also reads free program memory from Monitor (a leak shows as a fall of more
+Each round also reads free program memory from Monitor and the kernel heap from Swatch (a leak shows as a fall of more
 than --leak-pages below the best of the first rounds), times one key typed into Spindle
 (--max-key-ms), and reads back every note saved so far. With --inject (an ISO built
 with SEXOS_CRASH_PROBE=1) each round stops one restartable service in turn, as a fault
@@ -14,7 +14,7 @@ ROOT=Path(__file__).resolve().parents[1]
 # The system monitor (Mesh, formerly Monitor); it logs [monitor.*] either way.
 MESH='mesh' if (ROOT/'iso_root/programs/mesh').exists() else 'monitor'
 PAGE=b'<html><head><title>Soak</title></head><body><p>Still here.</p><a href="/">again</a></body></html>'
-FILES={'/':PAGE,'/jot':(ROOT/'iso_root/programs/jot').read_bytes(),'/fortune':(ROOT/'iso_root/programs/fortune').read_bytes(),'/hum':(ROOT/'iso_root/programs/hum').read_bytes(),'/'+MESH:(ROOT/'iso_root/programs'/MESH).read_bytes(),'/blob':bytes(i%251 for i in range(200_000))}
+FILES={'/':PAGE,'/jot':(ROOT/'iso_root/programs/jot').read_bytes(),'/fortune':(ROOT/'iso_root/programs/fortune').read_bytes(),'/hum':(ROOT/'iso_root/programs/hum').read_bytes(),'/'+MESH:(ROOT/'iso_root/programs'/MESH).read_bytes(),'/swatch':(ROOT/'iso_root/programs/swatch').read_bytes(),'/blob':bytes(i%251 for i in range(200_000))}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -29,7 +29,7 @@ from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--hours',type=float,default=2.0)
- p.add_argument('--inject',action='store_true');p.add_argument('--leak-pages',type=int,default=256);p.add_argument('--max-key-ms',type=float,default=3000.0);p.add_argument('--warmup',type=int,default=3);a=p.parse_args()
+ p.add_argument('--inject',action='store_true');p.add_argument('--leak-pages',type=int,default=256);p.add_argument('--max-key-ms',type=float,default=3000.0);p.add_argument('--warmup',type=int,default=3);p.add_argument('--leak-blocks',type=int,default=256);a=p.parse_args()
  os.environ['SEXOS_GATE_BOUND']=str(int(a.hours*3600)+1800)
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
@@ -60,6 +60,10 @@ def main():
   m=g['wait'](r'\[monitor\.sample\] [^\n]*free_pages=(\d+)',s,60)
   g['focus'](sid);time.sleep(.3);s=len(t());q.key('f11');g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
   return int(m[1])
+ def kernel_memory():
+  # Swatch (background, ends itself): kernel heap blocks/bytes and free frames.
+  m=expect('spawn swatch 1',r'\[swatch\.sample\] heap_used=(\d+) heap_mapped=\d+ heap_blocks=(\d+) heap_peak=\d+ free_frames=(\d+)',60);time.sleep(1.5)
+  return dict(heap_used=int(m[1]),heap_blocks=int(m[2]),free_frames=int(m[3]))
  # Services that start again in place, and their crash_log names.
  # Denim (compressed memory) too: a run with pages out then ends, and the Shell says which.
  VICTIMS=[('Files',11),('Network',13),('Bell',10),('Input',4),('Shell',3),('Display',1),('Denim',51)]
@@ -74,7 +78,7 @@ def main():
  rounds=[];began=time.monotonic()
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  for name in ('jot','fortune','hum',MESH):fetched('/'+name,'/bin/'+name)
+  for name in ('jot','fortune','hum',MESH,'swatch'):fetched('/'+name,'/bin/'+name)
   census0=None
   while time.monotonic()-began<a.hours*3600:
    n=len(rounds)+1;r0=time.monotonic()
@@ -103,11 +107,14 @@ def main():
    for bad in ('KERNEL PANIC','panicked at'):assert bad not in t(),bad
    # `stopall force` ends background records by taking their pages; nothing else may fault.
    killed=[int(p) for p in re.findall(r'fault.kill \[paging.fault.terminal\] pd=(\d+)',t()) if int(p)<1024];assert not killed,f'killed: {killed}'
-   info['key_ms']=key_ms();info['free_pages']=free_pages();rounds.append(round(time.monotonic()-r0,1));info['seconds']=rounds[-1]
+   info['key_ms']=key_ms();info['free_pages']=free_pages();info.update(kernel_memory());rounds.append(round(time.monotonic()-r0,1));info['seconds']=rounds[-1]
    record['rounds'].append(info);save(True)
    assert info['key_ms']<=a.max_key_ms,f"round {n}: a key took {info['key_ms']} ms"
    best=max(r['free_pages'] for r in record['rounds'][:a.warmup])
    if n>a.warmup:assert best-info['free_pages']<=a.leak_pages,f"round {n}: free program memory {info['free_pages']} pages, {best-info['free_pages']} below the first rounds' {best}"
+   # The kernel's own heap must not climb either (live blocks, against the first rounds' most).
+   most=max(r['heap_blocks'] for r in record['rounds'][:a.warmup])
+   if n>a.warmup:assert info['heap_blocks']-most<=a.leak_blocks,f"round {n}: kernel heap {info['heap_blocks']} blocks, {info['heap_blocks']-most} over the first rounds' {most}"
    print(f'[soak] round={n} seconds={rounds[-1]} elapsed_min={round((time.monotonic()-began)/60,1)}',flush=True)
   q.cmd('screendump',{'filename':str(a.out/'end.ppm')});time.sleep(.5)
   print({'ok':True,'rounds':len(rounds),'hours':round((time.monotonic()-began)/3600,2),'slowest':max(rounds),'fastest':min(rounds)})
