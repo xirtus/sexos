@@ -5,6 +5,9 @@ name: Kernel models and nightly fuzzing
 #   models  proptest model-based tests (reply credits, run queue, IPC ring)
 #   loom    every interleaving of the lock-free run queue and IPC ring
 #   kani    bounded proofs of the same structures
+#   isolation  cross-domain matrix on the booted image per backend (KVM+PKU when the
+#           runner has it, TCG+PKU, TCG without PKU): reads/writes/exec of another
+#           program's pages, a dead incarnation's pages, and a WRPKRU program refused
 # On pull requests and master pushes that touch a modelled file these run small;
 # nightly (03:15 UTC) they run deep, and a seeded syscall + protocol fuzz run of
 # the booted image (scripts/syscall_fuzz_gate.py) runs for hours. Seeds come from
@@ -19,6 +22,8 @@ name: Kernel models and nightly fuzzing
       - 'kernel/src/ipc_ring.rs'
       - 'tests/model_*.rs'
       - 'fuzz/models/**'
+      - 'apps/fuzz/**'
+      - 'scripts/isolation_matrix_gate.py'
       - '.github/workflows/assurance.yml'
   push:
     branches: [master]
@@ -122,6 +127,40 @@ jobs:
       with:
         working-directory: fuzz/models
         args: ${{ env.DEEP == 'true' && '--output-format terse' || '--output-format terse --harness run_queue_is_a_bounded_fifo --harness ipc_ring_is_a_bounded_fifo --harness reply_needs_an_invocation' }}
+
+  isolation:
+    name: Cross-domain isolation matrix
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Let QEMU use KVM when the runner has it
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+        grep -qw pku /proc/cpuinfo && echo "host PKU: yes" || echo "host PKU: no (kvm-pku will be skipped)"
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - name: Isolation matrix
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/iso-source.img"
+        python3 scripts/isolation_matrix_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/iso-source.img" \
+          --out "$RUNNER_TEMP/sexos-isolation" | tee "$RUNNER_TEMP/isolation.txt"
+    - name: Matrix summary
+      if: always()
+      run: grep -E '^\||isolation\.' "$RUNNER_TEMP/isolation.txt" >> "$GITHUB_STEP_SUMMARY" || true
+    - name: Preserve evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: isolation-${{ github.run_id }}
+        path: |
+          ${{ runner.temp }}/sexos-isolation/isolation.json
+          ${{ runner.temp }}/sexos-isolation/*/*.log
+          ${{ runner.temp }}/isolation.txt
+        if-no-files-found: ignore
+        retention-days: 30
 
   syscall-fuzz:
     name: Booted syscall and protocol fuzz (long)

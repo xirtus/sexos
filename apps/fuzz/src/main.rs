@@ -97,7 +97,9 @@ pub extern "C" fn _start() -> ! {
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let args = sex_app::files::args(&mut window, &mut args);
     let mut words = args.split(|&b| b == b' ').filter(|w| !w.is_empty());
-    let calls = parse(words.next(), 20_000).min(10_000_000);
+    let first = words.next();
+    if first == Some(&b"iso"[..]) { isolation(window, words.next(), words.next()); }
+    let calls = parse(first, 20_000).min(10_000_000);
     let seed = parse(words.next(), 1).max(1);
     let proto = words.next() == Some(&b"proto"[..]);
     sex_pdx::serial_record!("[fuzz.start] target={} task={} calls={} seed={} proto={} ops={}", window.target, window.task, calls, seed, proto as u8, OPS.len());
@@ -167,6 +169,78 @@ pub extern "C" fn _start() -> ! {
             window.close()
         }
     }
+}
+
+/// Isolation matrix probes (scripts/isolation_matrix_gate.py, kernel plan phase 7).
+/// `run fuzz iso hold` stays open and names addresses in its own memory: a code
+/// address (`iso_target_code`, which only returns), a data page and a stack slot.
+/// `run fuzz iso OP ADDR` (OP = read, write, exec; ADDR hex) touches that address once.
+/// The gate passes a hold's addresses to a second run, which must then be ended by
+/// the kernel; `[fuzz.iso.breach]` means the touch went through. `own` proves the
+/// probe itself works on this run's own memory.
+fn isolation(mut window: Window, op: Option<&[u8]>, addr: Option<&[u8]>) -> ! {
+    let hex = |w: Option<&[u8]>| w.and_then(|w| core::str::from_utf8(w).ok())
+        .and_then(|t| u64::from_str_radix(t.trim_start_matches("0x"), 16).ok());
+    // Keeps the marker the gate patches into WRPKRU in this file's code.
+    core::hint::black_box(iso_key_marker as *const () as usize);
+    match (op, hex(addr)) {
+        (Some(b"hold"), _) => {
+            let stack_slot = core::hint::black_box([0x5Au8; 64]);
+            let data = core::ptr::addr_of_mut!(ISO_DATA) as u64;
+            unsafe { core::ptr::write_volatile(data as *mut u8, 0x5A); }
+            sex_pdx::serial_record!("[fuzz.iso.hold] target={} task={} code={:#x} data={:#x} stack={:#x}",
+                window.target, window.task, iso_target_code as *const () as usize, data, stack_slot.as_ptr() as u64);
+            window.show(b"Isolation probe: holding. F11 closes.");
+            loop {
+                if let Event::Close = window.next() {
+                    let kept = unsafe { core::ptr::read_volatile(data as *const u8) };
+                    sex_pdx::serial_record!("[fuzz.iso.closed] target={} task={} data_byte={:#x}", window.target, window.task, kept);
+                    core::hint::black_box(stack_slot);
+                    window.close()
+                }
+            }
+        }
+        (Some(b"own"), _) => {
+            let data = core::ptr::addr_of_mut!(ISO_DATA) as u64;
+            unsafe { core::ptr::write_volatile(data as *mut u8, 0x33); }
+            let back = unsafe { core::ptr::read_volatile(data as *const u8) };
+            iso_target_code();
+            sex_pdx::serial_record!("[fuzz.iso.own] target={} task={} ok={}", window.target, window.task, (back == 0x33) as u8);
+        }
+        (Some(op @ (b"read" | b"write" | b"exec")), Some(addr)) => {
+            let name = core::str::from_utf8(op).unwrap_or("?");
+            sex_pdx::serial_record!("[fuzz.iso.try] target={} task={} op={} addr={:#x}", window.target, window.task, name, addr);
+            let seen = unsafe {
+                match op {
+                    b"read" => core::ptr::read_volatile(addr as *const u8) as u64,
+                    b"write" => { core::ptr::write_volatile(addr as *mut u8, 0xA5); 0xA5 }
+                    _ => { let f: extern "C" fn() = core::mem::transmute(addr as usize); f(); 0 }
+                }
+            };
+            sex_pdx::serial_record!("[fuzz.iso.breach] target={} task={} op={} addr={:#x} byte={:#x}", window.target, window.task, name, addr, seen);
+        }
+        _ => sex_pdx::serial_record!("[fuzz.iso.usage] target={} task={}", window.target, window.task),
+    }
+    window.show(b"Isolation probe done. F11 closes.");
+    loop {
+        if let Event::Close = window.next() { window.close() }
+    }
+}
+
+static mut ISO_DATA: [u8; 4096] = [0; 4096];
+
+/// Code another run may try to execute: it only returns.
+#[inline(never)]
+#[no_mangle]
+extern "C" fn iso_target_code() { core::hint::black_box(()); }
+
+/// Never called. Its body is one 7-byte NOP whose operand spells "KEYH"
+/// (0F 1F 80 4B 45 59 48); the gate overwrites it with WRPKRU (0F 01 EF) plus a
+/// 4-byte NOP in a copy of this file, and the loader must refuse that copy.
+#[inline(never)]
+#[no_mangle]
+extern "C" fn iso_key_marker() {
+    unsafe { core::arch::asm!(".byte 0x0f, 0x1f, 0x80, 0x4b, 0x45, 0x59, 0x48", options(nomem, nostack, preserves_flags)); }
 }
 
 struct Text { buf: [u8; 256], len: usize }

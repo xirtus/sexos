@@ -30,6 +30,19 @@ nightly (03:15 UTC), plus a seeded 1M-call syscall and protocol fuzz of the boot
 image (`scripts/syscall_fuzz_gate.py`). The seed is the run number; replay a failing
 one with workflow_dispatch.
 
+## Isolation matrix (booted image)
+
+`scripts/isolation_matrix_gate.py` (CI job `isolation` in assurance.yml) boots once per
+backend: KVM with host PKU (`-cpu host`, skipped when the runner lacks /dev/kvm or
+PKU), TCG with PKU, TCG without PKU. `run fuzz iso hold` (program B) names its code,
+data and stack addresses; `run fuzz iso read|write|exec ADDR` (program A) touches one
+and must be ended by the kernel, B untouched. Also: B's pages after B has ended, and a
+copy of the fuzz program with WRPKRU patched over its `KEYH` marker NOP must be
+refused at load. Known gaps are written down as `gap` cells, not hidden: no-PKU has no
+data isolation until protection views (stream 6), and PKU does not stop instruction
+fetch, so calling B's code is a gap everywhere until views. Revoked grants and dead
+incarnation badges are `pending` until authority v2 (stream 3) and IPC v2 (stream 4).
+
 ## Findings
 
 - **Reply table entries outlive their counts.** A caller keeps its slot in a callee's
