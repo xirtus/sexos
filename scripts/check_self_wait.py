@@ -383,7 +383,12 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  if active and not observed and not inferred and source_ok and topology['ok'] and net_identity['ok'] and valid_seal:
   continued,observer=passive_observer_joins(text,source_root,source,topology,net_identity,seals,expiries)
  joined=observed+inferred
- if active and(not parks or not expiries or not returns or(not joined and not continued)):errors.append('missing actual park→timer expiry→user return join or reviewed UP equivalent')
+ if active and(not parks or not expiries or not returns or(not joined and not continued)):
+  net_expiries=[(int(e[2]),int(e[3]),int(e[4]))for e in expiries if int(e[1])==13][:6]
+  errors.append('missing actual park→timer expiry→user return join or reviewed UP equivalent'
+                +' (parks=%d expiries=%d net_expiries=%s returns=%d first_returns=%s source_ok=%s topology=%s net_identity=%s seal=%s observer=%s)'%(
+                len(parks),len(expiries),net_expiries,len(returns),[(int(r[1]),int(r[2]),int(r[3]))for r in returns][:6],
+                source_ok,topology['ok'],net_identity['ok'],valid_seal,observer.get('errors',observer.get('source_contract',{}).get('errors'))))
  if not active and(any(int(p[1])==13 for p in parks)or any(int(e[1])==13 for e in expiries)or returns):
   if not returns or any(not text[r.end():].startswith(' device=0 reply_pending=1')for r in returns):errors.append('unsupported NIC unexpectedly entered device polling without retained reply work')
  if re.search(r'TIMED_WAIT_WITHOUT_ATTACHED_OWNER|BOOT_SELF_WAIT_AUTHORITY|SELF_WAIT_FRONTEND_PROBE|KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|panicked at',text):errors.append('guest self-wait failure')
