@@ -36,7 +36,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'servers/sexnet/src/main.rs': ('00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725',
                               'd7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d', 'fcf8299b6ce8b8acdd0bc005507036087d5569664c08d63da001dc9e694c7253',
                               # first 32 timed returns logged, 2026-11-17
-                              '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b',),
+                              '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b',
+                              # Wi-Fi firmware pack inflate (#393 28152d0c): firmware load only, Net2 envelope unchanged
+                              'd8c2e2f7efca9a4bb6c8bc6f43e1739cb368759a3daa6cb23796f02f76cd199c',),
  'servers/sexusb/src/main.rs': ('3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81',
                                 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec',
                                 # 2026-11-17 Qupid/#183 merge: USB audio pump only, quiet predicate unchanged
