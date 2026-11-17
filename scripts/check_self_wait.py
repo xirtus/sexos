@@ -56,7 +56,9 @@ APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95
     # per-task self-wait sampling, 2026-11-17
     'a897c8b8c617cfef1ec3a7fad038f32f8530b232cf698f9ea896a89950d5a0ec',
     # Denim D3 (restart RESET, worker faults, store holes), 2026-11-17: no deadline reference
-    '760225b10352362611d59ea08997c879e287e4aad16fe54c4a37762b442de1fe')
+    '760225b10352362611d59ea08997c879e287e4aad16fe54c4a37762b442de1fe',
+    # Denim D3-D5 and lazy program stacks (#306), 2026-11-17: no deadline reference
+    'eebfb8992af089755f4cfe73f1e37afca0a6f6cf8996cff06e44384ab98574ab')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -276,12 +278,12 @@ def _task_ordinals_ok(records):
 # combinations need independent review and an exact new fingerprint.
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
  'servers/silk-shell/src/main.rs': 'wait-v1:4498ab1ca18598a6dcf3e4c8b64a0a3ce3f90ead7c3a136f125492802ee68235',
- 'crates/sex-pdx/src/system_stats.rs': '6f77139bfab17ed0f01a7a30b59854596ac53e679171a004b88be54ee00dc197',
+ 'crates/sex-pdx/src/system_stats.rs': 'd81e717c52cbbfa3b98fe0eb513d1558af825c9ca722e9508abb32eef29891cb',
  'crates/sex-pdx/src/crash_log.rs': '98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
- 'kernel/src/cpu_account.rs': 'c2e3f65a5aa411d2872d34f87ddfb9f9d9e0f56b41e3d1eeaa7d03bb1d4777b8',
+ 'kernel/src/cpu_account.rs': 'eb562d1dc57c44d817f6bd004e9103f1ca93a956d7358157ae534ec282913873',
  'kernel/src/core_local.rs': '62ece205111acc3deba4a41854a9ed632ff99742a54283bce094d1295025a300',
- 'kernel/src/app_resources.rs': '7172fb3a2c778b7a6f372fb211c0a52be85ff653876393e93ca478023d757bd3',
+ 'kernel/src/app_resources.rs': '61ad468a6efb75291e43bb6efd5b580b430ec00187c62509bae73d8bf3d32f40',
  'kernel/src/service_restart.rs': '0900a46c2424b1329a3ad9ca3b1a8b282cc03cb01f8d7d8ef373d36904bac5a4',
  'kernel/src/crash_log.rs': '5c8b5bec1ca425afc7d626c0f970aa5080ccb727cfe339bbbd33048431d6581f',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
