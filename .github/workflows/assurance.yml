@@ -181,6 +181,9 @@ jobs:
         echo "seed=$seed" >> "$GITHUB_OUTPUT"; echo "proto=$proto" >> "$GITHUB_OUTPUT"
         echo "Syscall fuzz: calls=${{ inputs.calls || '1000000' }} seed=$seed proto_seed=$proto (replay with workflow_dispatch)" | tee -a "$GITHUB_STEP_SUMMARY"
     - name: Fuzz
+      env:
+        # The boot helper ends a guest after SEXOS_GATE_BOUND seconds (default 300).
+        SEXOS_GATE_BOUND: '19000'
       run: |
         truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
         python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" \
