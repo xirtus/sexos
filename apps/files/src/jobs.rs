@@ -13,6 +13,8 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicU64, Ordering};
+use loom_core::journal::TransferProgress;
 use sex_app::files;
 use sex_app::Window;
 use sha2::{Digest, Sha256};
@@ -21,6 +23,7 @@ use crate::{at, base, human, join, parent, shown};
 
 /// How much one step moves: one round trip to Files each way.
 const PIECE: usize = 192 * 1024;
+static TRANSFER_IDS: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind { Copy, Move, Delete, Sum }
@@ -53,12 +56,14 @@ pub struct Job {
     pub done: u64,
     pub total: u64,
     removed: u64,
+    items_done: u32,
     started_at: u64,
     hash: Option<Sha256>,
     buf: Vec<u8>,
     /// Steps after this many remain only removing the source of a move: past the
     /// point where cancelling could keep both copies safe.
     pub committed: bool,
+    pub transfer: TransferProgress,
 }
 
 fn ticks() -> u64 { sex_pdx::get_ticks() }
@@ -87,8 +92,11 @@ fn walk(window: &mut Window, from: &[u8], pre: bool, out: &mut Vec<(Vec<u8>, boo
 
 impl Job {
     fn new(kind: Kind, what: &[u8], from: &[u8], to: &[u8]) -> Self {
+        let started_at = ticks();
+        let tid = TRANSFER_IDS.fetch_add(1, Ordering::Relaxed);
         Job { kind, what: what.to_vec(), from: from.to_vec(), to: to.to_vec(), steps: VecDeque::new(), made: Vec::new(), open_part: None,
-              done: 0, total: 0, removed: 0, started_at: ticks(), hash: None, buf: Vec::new(), committed: false }
+              done: 0, total: 0, removed: 0, items_done: 0, started_at, hash: None, buf: Vec::new(), committed: false,
+              transfer: TransferProgress::new(tid, what, 0, 1, started_at) }
     }
 
     fn plan_copy(&mut self, window: &mut Window, from: &[u8], to: &[u8]) -> Result<(), u8> {
@@ -102,6 +110,8 @@ impl Job {
                 self.steps.push_back(Step::CopyFile { from: path, part: part_name(&dest), to: dest, size, offset: 0, started: false });
             }
         }
+        self.transfer.bytes_total = self.total;
+        self.transfer.items_total = self.steps.len() as u32;
         Ok(())
     }
     fn plan_remove(&mut self, window: &mut Window, path: &[u8]) -> Result<(), u8> {
@@ -122,6 +132,7 @@ impl Job {
         let mut job = Job::new(Kind::Move, base(to), from, to);
         job.plan_copy(window, from, to)?;
         job.plan_remove(window, from)?;
+        job.transfer.items_total = job.steps.len() as u32;
         Ok(job)
     }
     /// Deletes each of `paths` and everything inside them, for good.
@@ -129,6 +140,8 @@ impl Job {
         let mut job = Job::new(Kind::Delete, what, b"", b"");
         for p in paths { job.plan_remove(window, p)?; }
         job.total = job.steps.len() as u64;
+        job.transfer.bytes_total = job.total;
+        job.transfer.items_total = job.steps.len() as u32;
         Ok(job)
     }
     /// Reads a file through and gives its SHA-256.
@@ -137,6 +150,8 @@ impl Job {
         if st.dir { return Err(sex_pdx::fs::IS_DIR); }
         let mut job = Job::new(Kind::Sum, base(path), path, b"");
         job.total = st.size;
+        job.transfer.bytes_total = st.size;
+        job.transfer.items_total = 1;
         job.hash = Some(Sha256::new());
         job.steps.push_back(Step::Sum { path: path.to_vec(), size: st.size, offset: 0 });
         Ok(job)
@@ -145,13 +160,20 @@ impl Job {
     /// Does one piece of work. Call again until it is not `Running`.
     pub fn step(&mut self, window: &mut Window) -> Outcome {
         match self.step_inner(window) {
-            Ok(true) => Outcome::Running,
-            Ok(false) => Outcome::Done(self.kind, self.summary()),
+            Ok(true) => {
+                self.transfer.update(self.done, self.items_done, ticks());
+                Outcome::Running
+            }
+            Ok(false) => {
+                self.transfer.complete();
+                Outcome::Done(self.kind, self.summary())
+            }
             Err(e) => {
                 let why = shown(files::message(e)).into();
                 // A copy that failed is cleaned like a cancelled one; a move keeps
                 // its source whenever the copy did not finish.
                 if self.kind != Kind::Delete && self.kind != Kind::Sum && !self.committed { self.undo_made(window); }
+                self.transfer.fail();
                 Outcome::Failed(self.kind, why)
             }
         }
@@ -164,6 +186,7 @@ impl Job {
                 let path = core::mem::take(path);
                 files::mkdir(window, &at(&path))?;
                 self.made.push(path);
+                self.items_done = self.items_done.saturating_add(1);
                 self.steps.pop_front();
             }
             Step::CopyFile { from, part, to, size, offset, started } => {
@@ -188,6 +211,7 @@ impl Job {
                     files::rename(window, &at(part), &at(to))?;
                     self.made.push(core::mem::take(to));
                     self.open_part = None;
+                    self.items_done = self.items_done.saturating_add(1);
                     self.steps.pop_front();
                     // The copy is whole: what is left of a move only removes the source.
                     if self.kind == Kind::Move && !self.steps.iter().any(|s| matches!(s, Step::CopyFile { .. } | Step::MakeDir(_))) {
@@ -200,6 +224,7 @@ impl Job {
                 let path = core::mem::take(path);
                 files::remove(window, &at(&path))?;
                 self.removed += 1;
+                self.items_done = self.items_done.saturating_add(1);
                 if self.kind == Kind::Delete { self.done += 1; }
                 self.steps.pop_front();
             }
@@ -213,7 +238,10 @@ impl Job {
                     *offset += n as u64;
                     self.done += n as u64;
                 }
-                if *offset >= *size { self.steps.pop_front(); }
+                if *offset >= *size {
+                    self.items_done = self.items_done.saturating_add(1);
+                    self.steps.pop_front();
+                }
             }
         }
         if self.steps.is_empty() { let _ = files::sync(window); return Ok(false); }
@@ -237,6 +265,7 @@ impl Job {
             Kind::Delete => format!("Stopped deleting: {} items were already gone.", self.removed),
             Kind::Sum => format!("Stopped checking {}.", label),
         };
+        self.transfer.cancel();
         self.steps.clear();
         let _ = files::sync(window);
         s
@@ -252,7 +281,11 @@ impl Job {
     }
     fn elapsed_ms(&self) -> u64 { ticks().saturating_sub(self.started_at).max(1) }
     fn rate(&self) -> String {
-        let per_s = self.done * 1000 / self.elapsed_ms();
+        let per_s = if self.transfer.throughput_bps > 0 {
+            self.transfer.throughput_bps
+        } else {
+            self.done * 1000 / self.elapsed_ms()
+        };
         format!("{}/s", human(per_s))
     }
 
@@ -267,7 +300,7 @@ impl Job {
 
     /// The progress line, with a bar.
     pub fn progress(&self) -> String {
-        let pct = if self.total == 0 { 100 } else { (self.done.min(self.total) * 100 / self.total) as usize };
+        let pct = (self.transfer.fraction_permille() / 10) as usize;
         let filled = pct / 5;
         let mut bar = String::from("[");
         for i in 0..20 { bar.push(if i < filled { '#' } else { '.' }); }
@@ -275,10 +308,17 @@ impl Job {
         let verb = match self.kind { Kind::Copy => "Copying", Kind::Move => "Moving", Kind::Delete => "Deleting", Kind::Sum => "Checking" };
         let amount = match self.kind {
             Kind::Delete => format!("{} of {} items", self.done, self.total),
-            _ => format!("{} of {}, {}", human(self.done), human(self.total), self.rate()),
+            _ => {
+                let eta = crate::actions::format_transfer_eta(&self.transfer);
+                if eta.is_empty() {
+                    format!("{} of {}, {}", human(self.done), human(self.total), self.rate())
+                } else {
+                    format!("{} of {}, {} {}", human(self.done), human(self.total), self.rate(), eta)
+                }
+            }
         };
         let stop = if self.finishing() { "finishing" } else { "Esc stops" };
         format!("{} {} {} {}%  {}  ({})", verb, shown(&self.what), bar, pct, amount, stop)
     }
-    pub fn percent(&self) -> u64 { if self.total == 0 { 100 } else { self.done.min(self.total) * 100 / self.total } }
+    pub fn percent(&self) -> u64 { (self.transfer.fraction_permille() / 10) as u64 }
 }

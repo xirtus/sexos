@@ -108,6 +108,11 @@ impl App {
         let changed = preview.changes();
         sex_pdx::serial_record!("[files.app.renamed] dir={} mask={} files={} moves={}", shown(&dir), shown(&mask), changed, done.len());
         for l in preview.lines.iter().filter(|l| l.changed()).take(20) { sex_pdx::serial_record!("[files.app.renamed.file] from={} to={}", shown(&l.from), shown(&l.to)); }
+        let renames: Vec<loom_core::journal::MovePair> = done
+            .iter()
+            .map(|m| loom_core::journal::MovePair::new(&join(&dir, &m.from), &join(&dir, &m.to)))
+            .collect();
+        self.journal_record(loom_core::journal::FileOp::RenameBatch { renames });
         let undo: Vec<(Vec<u8>, Vec<u8>)> = rn::undo(&done).into_iter().map(|m| (m.from, m.to)).collect();
         self.undo.push(Undo::Renamed { dir, moves: undo });
         self.load(window);

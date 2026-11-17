@@ -13,6 +13,7 @@
 #![no_main]
 extern crate alloc;
 
+mod actions;
 mod archive;
 mod compare;
 mod diskimg;
@@ -285,7 +286,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+0..5 rate  Ctrl+Shift+G tags\nCtrl+Shift+R rename all  Ctrl+Shift+D duplicates  Ctrl+U disk usage  Ctrl+Shift+C compare\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+Y redo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+0..5 rate  Ctrl+Shift+G tags\nCtrl+Shift+R rename all  Ctrl+Shift+D duplicates  Ctrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
         window.show(t.as_bytes());
     }
 
@@ -329,6 +330,12 @@ impl App {
                 if kind == Kind::Move { self.meta_moved(window, &job.from, &job.to); }
                 if kind == Kind::Copy || kind == Kind::Move {
                     sex_pdx::serial_record!("[files.app.pasted] from={} to={} cut={}", shown(&job.from), shown(&job.to), (kind == Kind::Move) as u8);
+                    let op = if kind == Kind::Move {
+                        loom_core::journal::FileOp::move_one(&job.from, &job.to)
+                    } else {
+                        loom_core::journal::FileOp::copy(&job.from, &job.to)
+                    };
+                    self.journal_record(op);
                 }
                 if let Some(u) = self.job_undo.take() { self.undo.push(u); }
                 self.status = summary;
@@ -429,6 +436,12 @@ impl App {
                 sex_pdx::serial_record!("[files.app.pasted] from={} to={} cut={}", shown(&from), shown(&to), cut as u8);
                 if cut { self.meta_moved(window, &from, &to); }
                 self.status = format!("{} {}.", if cut { "Moved" } else { "Copied" }, shown(base(&to)));
+                let op = if cut {
+                    loom_core::journal::FileOp::move_one(&from, &to)
+                } else {
+                    loom_core::journal::FileOp::copy(&from, &to)
+                };
+                self.journal_record(op);
                 self.undo.push(if cut { Undo::Moved { from: from.clone(), to: to.clone() } } else { Undo::Copied { to: to.clone() } });
                 if cut { self.clip = None; }
                 let _ = files::sync(window);
@@ -453,6 +466,9 @@ impl App {
                 sex_pdx::serial_record!("[files.app.trashed] from={} to={}", shown(&path), shown(&to));
                 self.meta_moved(window, &path, &to);
                 self.status = format!("Moved {} to the trash. Ctrl+Z puts it back.", shown(base(&path)));
+                self.journal_record(loom_core::journal::FileOp::Trash {
+                    items: alloc::vec![loom_core::journal::TrashItem::new(&path, &to)],
+                });
                 self.undo.push(Undo::Trashed { from: path, to, info: note });
                 let _ = files::sync(window);
                 self.load(window);
@@ -525,11 +541,24 @@ impl App {
         let Ok(n) = files::read(window, &at(&note), &mut buf) else { self.status = "Where this came from isn't known.".into(); return };
         let back = buf[..n].to_vec();
         match files::rename(window, &at(&path), &at(&back)) {
-            Ok(()) => { let _ = files::remove(window, &at(&note)); self.meta_moved(window, &path, &back); sex_pdx::serial_record!("[files.app.restored] from={} to={}", shown(&path), shown(&back)); self.status = format!("Restored {}.", shown(&back)); self.undo.push(Undo::Moved { from: path, to: back }); let _ = files::sync(window); self.load(window); }
+            Ok(()) => {
+                let _ = files::remove(window, &at(&note));
+                self.meta_moved(window, &path, &back);
+                sex_pdx::serial_record!("[files.app.restored] from={} to={}", shown(&path), shown(&back));
+                self.status = format!("Restored {}.", shown(&back));
+                self.journal_record(loom_core::journal::FileOp::move_one(&path, &back));
+                self.undo.push(Undo::Moved { from: path, to: back });
+                let _ = files::sync(window);
+                self.load(window);
+            }
             Err(e) => self.status = format!("Couldn't restore: {}.", shown(files::message(e))),
         }
     }
     fn undo(&mut self, window: &mut Window) {
+        let journal_id = match self.journal_check_undo(window) {
+            Ok(id) => id,
+            Err(conflict) => { self.status = conflict; return; }
+        };
         let Some(step) = self.undo.pop() else { self.status = "Nothing to undo.".into(); return };
         let result = match &step {
             Undo::Moved { from, to } => self.move_path(window, to, from),
@@ -539,7 +568,14 @@ impl App {
             Undo::Renamed { dir, moves } => { let (dir, moves) = (dir.clone(), moves.clone()); self.rename_undo(window, &dir, &moves) }
         };
         match result {
-            Ok(()) => { self.meta_undone(window, &step); sex_pdx::serial_record!("[files.app.undone] left={}", self.undo.len()); self.status = "Undone.".into(); let _ = files::sync(window); self.load(window); }
+            Ok(()) => {
+                if let Some(id) = journal_id { self.loom.journal.commit_undo(id); }
+                self.meta_undone(window, &step);
+                sex_pdx::serial_record!("[files.app.undone] left={}", self.undo.len());
+                self.status = "Undone.".into();
+                let _ = files::sync(window);
+                self.load(window);
+            }
             Err(e) => { self.status = format!("Couldn't undo: {}.", shown(files::message(e))); self.undo.push(step); }
         }
     }
@@ -624,14 +660,27 @@ impl App {
             Input::Rename(from) => {
                 let to = join(&parent(&from), &text);
                 match files::rename(window, &at(&from), &at(&to)) {
-                    Ok(()) => { self.meta_moved(window, &from, &to); self.status = format!("Renamed to {}.", shown(&text)); self.undo.push(Undo::Moved { from, to }); self.load(window); self.select(&text); }
+                    Ok(()) => {
+                        self.meta_moved(window, &from, &to);
+                        self.status = format!("Renamed to {}.", shown(&text));
+                        self.journal_record(loom_core::journal::FileOp::move_one(&from, &to));
+                        self.undo.push(Undo::Moved { from, to });
+                        self.load(window);
+                        self.select(&text);
+                    }
                     Err(e) => self.status = format!("Couldn't rename: {}.", shown(files::message(e))),
                 }
             }
             Input::NewFolder => {
                 let path = join(&self.cwd, &text);
                 match files::mkdir(window, &at(&path)) {
-                    Ok(()) => { self.status = format!("Made {}.", shown(&text)); self.undo.push(Undo::Made { path }); self.load(window); self.select(&text); }
+                    Ok(()) => {
+                        self.status = format!("Made {}.", shown(&text));
+                        self.journal_record(loom_core::journal::FileOp::CreateDir { path: path.clone() });
+                        self.undo.push(Undo::Made { path });
+                        self.load(window);
+                        self.select(&text);
+                    }
                     Err(e) => self.status = format!("Couldn't make the folder: {}.", shown(files::message(e))),
                 }
             }
@@ -720,7 +769,7 @@ impl App {
         }
         if self.job.is_some() {
             if key.code == ESC { self.stop_job(window); return; }
-            let changes = key.control && matches!(key.code, KEY_V | KEY_Z | KEY_N | KEY_R | KEY_E | KEY_I)
+            let changes = key.control && matches!(key.code, KEY_V | KEY_Z | KEY_Y | KEY_N | KEY_R | KEY_E | KEY_I)
                 || matches!(sex_app::nav(key), Some(Nav::Delete)) || key.code == F2;
             if changes { self.status = "Busy with the job below: wait for it, or Esc stops it.".into(); return; }
         }
@@ -734,6 +783,7 @@ impl App {
                 },
                 KEY_V => self.paste(window),
                 KEY_Z => self.undo(window),
+                KEY_Y => self.journal_redo(window),
                 KEY_N => self.input = Some((Input::NewFolder, Vec::new())),
                 KEY_T => { let t = join(&disk_root(&self.cwd), TRASH); self.go(window, t); }
                 KEY_R => self.restore(window),
@@ -854,6 +904,7 @@ pub extern "C" fn _start() -> ! {
     let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
                         job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
+    app.loom.actions.load(&mut window);
     let start = app.root.clone();
     app.go(&mut window, start);
     // A locked home asks for its password first: Files opened at login unlocks it.

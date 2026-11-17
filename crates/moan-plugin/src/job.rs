@@ -338,12 +338,14 @@ mod request_tests {
 pub enum Format {
     Clap,
     Vst3,
+    Lv2,
 }
 impl Format {
     pub fn token(self) -> &'static [u8] {
         match self {
             Self::Clap => b"clap",
             Self::Vst3 => b"vst3",
+            Self::Lv2 => b"lv2",
         }
     }
 }

@@ -12,10 +12,11 @@
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use loom_core::journal::UndoJournal;
 use sex_app::files::Pick;
 use sex_app::Window;
 
-use crate::{archive, compare, diskimg, places, dupes, meta, rename, shown, usage, App, BACKSPACE, ENTER, ESC};
+use crate::{actions, archive, compare, diskimg, places, dupes, meta, rename, shown, usage, App, BACKSPACE, ENTER, ESC};
 
 // Letters and digits, PS/2 set 1, used with Ctrl (and Shift).
 pub const KEY_A: u8 = 0x1E;
@@ -25,11 +26,12 @@ const KEY_D: u8 = 0x20;
 const KEY_C: u8 = 0x2E;
 const KEY_G: u8 = 0x22;
 const KEY_U: u8 = 0x16;
+const KEY_O: u8 = 0x18;
 const KEY_P: u8 = 0x19;
 /// `1`..`5` are 0x02..0x06; `0` is 0x0B.
 const KEY_0: u8 = 0x0B;
 
-pub enum Mode { None, Rename(rename::State), Dupes(dupes::State), Usage(usage::State) }
+pub enum Mode { None, Rename(rename::State), Dupes(dupes::State), Usage(usage::State), Actions(actions::Palette) }
 pub enum Prompt { Tags(Vec<u8>), Compare }
 
 pub struct Loom {
@@ -37,12 +39,26 @@ pub struct Loom {
     pub inside: Option<archive::Inside>,
     pub image: Option<diskimg::Inside>,
     pub places: places::Places,
+    pub actions: actions::Registry,
+    pub journal: UndoJournal,
     pub mode: Mode,
     pub prompt: Option<(Prompt, Vec<u8>)>,
     pub marks: Option<compare::Marks>,
 }
 impl Loom {
-    pub fn new() -> Self { Loom { meta: meta::Meta::new(), inside: None, image: None, places: places::Places::default(), mode: Mode::None, prompt: None, marks: None } }
+    pub fn new() -> Self {
+        Loom {
+            meta: meta::Meta::new(),
+            inside: None,
+            image: None,
+            places: places::Places::default(),
+            actions: actions::Registry::new(),
+            journal: UndoJournal::default(),
+            mode: Mode::None,
+            prompt: None,
+            marks: None,
+        }
+    }
     /// Work is waiting between keys.
     pub fn busy(&self) -> bool {
         match &self.mode { Mode::Dupes(d) => d.busy(), Mode::Usage(u) => u.busy(), _ => false }
@@ -71,6 +87,7 @@ impl App {
             Mode::Rename(_) => { self.rename_key(window, key); return true; }
             Mode::Dupes(_) => { self.dupes_key(window, key); return true; }
             Mode::Usage(_) => { self.usage_key(window, key); return true; }
+            Mode::Actions(_) => { self.actions_key(window, key); return true; }
             Mode::None => {}
         }
         if self.loom.inside.is_some() { return self.archive_key(window, key); }
@@ -88,6 +105,7 @@ impl App {
                 },
                 KEY_A => self.make_zip(window),
                 KEY_X => self.extract_any(window),
+                KEY_O => self.actions_open(window),
                 KEY_P => self.places_open(window),
                 _ => return false,
             }
@@ -128,6 +146,7 @@ impl App {
         if let Mode::Usage(_) = self.loom.mode { return self.usage_render(window); }
         let text = match self.loom.mode {
             Mode::Rename(_) => self.rename_render(),
+            Mode::Actions(_) => self.actions_render(),
             Mode::Dupes(_) => {
                 let mut t = self.dupes_render().unwrap_or_default();
                 if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }

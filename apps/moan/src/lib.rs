@@ -420,6 +420,142 @@ impl Session {
             .map_err(|_| "Extract MIDI failed")?;
         self.add_midi(pattern)
     }
+    /// Runs 1-click OmaAudio voice cleanup on the selected track's active region.
+    pub fn apply_voice_cleanup(
+        &mut self,
+        preset: moan_core::voice_cleanup::VoicePreset,
+    ) -> Result<(), &'static str> {
+        let region = self
+            .selected_region()
+            .ok_or("Choose an audio region to clean")?;
+        let start = region.start();
+        let offset = region.source_offset();
+        let len = region.len();
+        let gain = region.gain();
+        let (fade_in, fade_out) = region.fades();
+        let mut pcm = region.source_frames()[offset..offset + len].to_vec();
+        let mut chain = moan_core::voice_cleanup::VoiceCleanupChain::from_preset(preset);
+        chain.process_frames(&mut pcm);
+        self.remember();
+        let track = &mut self.tracks[self.selected];
+        if let Some(c) = track.clips.iter_mut().find(|c| c.start() == start) {
+            let mut next = Clip::buffer(Arc::new(pcm), start).map_err(|_| "Timeline overflow")?;
+            let _ = next.set_gain(gain);
+            let _ = next.set_fades(fade_in.min(next.len()), fade_out.min(next.len()));
+            *c = next;
+        }
+        Ok(())
+    }
+    /// Measures ITU-R BS.1770-4 / EBU R128 loudness & 4x True-Peak across the rendered mix.
+    pub fn measure_loudness(&mut self) -> moan_core::loudness::LoudnessMeasurement {
+        let dur = self.duration().min(project::MAX_TIMELINE);
+        if dur == 0 {
+            return moan_core::loudness::measure_frames(&[]);
+        }
+        let mut mix = vec![[0i16; 2]; dur];
+        self.render_processed(0, &mut mix);
+        moan_core::loudness::measure_frames(&mix)
+    }
+    /// Measures ITU-R BS.1770-4 / EBU R128 loudness on the selected region without modifying it.
+    pub fn measure_selected_loudness(&self) -> Option<moan_core::loudness::LoudnessMeasurement> {
+        let region = self.selected_region()?;
+        let offset = region.source_offset();
+        let len = region.len();
+        Some(moan_core::loudness::measure_frames(
+            &region.source_frames()[offset..offset + len],
+        ))
+    }
+    /// Normalizes the selected region to an EBU R128 / streaming delivery target (`-14`, `-16`, `-23` LUFS).
+    pub fn normalize_to_target(
+        &mut self,
+        target: moan_core::loudness::DeliveryTarget,
+    ) -> Result<moan_core::loudness::NormalizationReport, &'static str> {
+        let region = self
+            .selected_region()
+            .ok_or("Choose an audio region to normalize")?;
+        let start = region.start();
+        let offset = region.source_offset();
+        let len = region.len();
+        let gain = region.gain();
+        let (fade_in, fade_out) = region.fades();
+        let mut pcm = region.source_frames()[offset..offset + len].to_vec();
+        let report = moan_core::loudness::normalize_to_target(&mut pcm, target)
+            .map_err(|_| "Loudness normalization failed")?;
+        self.remember();
+        let track = &mut self.tracks[self.selected];
+        if let Some(c) = track.clips.iter_mut().find(|c| c.start() == start) {
+            let mut next = Clip::buffer(Arc::new(pcm), start).map_err(|_| "Timeline overflow")?;
+            let _ = next.set_gain(gain);
+            let _ = next.set_fades(fade_in.min(next.len()), fade_out.min(next.len()));
+            *c = next;
+        }
+        Ok(report)
+    }
+    /// Applies phase-locked elastic time-stretching and pitch-shifting to the selected region.
+    pub fn apply_elastic_stretch(
+        &mut self,
+        tempo_ratio: f32,
+        pitch_semitones: f32,
+        formant_preserve: bool,
+    ) -> Result<(), &'static str> {
+        let region = self
+            .selected_region()
+            .ok_or("Choose an audio region to stretch")?;
+        let start = region.start();
+        let offset = region.source_offset();
+        let len = region.len();
+        let gain = region.gain();
+        let (fade_in, fade_out) = region.fades();
+        let stretcher = if formant_preserve {
+            moan_core::stretch::ElasticStretch::vocal(tempo_ratio, pitch_semitones)
+        } else {
+            moan_core::stretch::ElasticStretch::new(tempo_ratio, pitch_semitones)
+        }
+        .map_err(|_| "Invalid stretch parameter")?;
+        let stretched = stretcher
+            .process_frames(&region.source_frames()[offset..offset + len])
+            .map_err(|_| "Elastic stretch failed")?;
+        if stretched.is_empty()
+            || stretched.len() > MAX_FRAMES
+            || start
+                .checked_add(stretched.len())
+                .is_none_or(|end| end > project::MAX_TIMELINE)
+        {
+            return Err("Stretched audio exceeds timeline bounds");
+        }
+        self.remember();
+        let track = &mut self.tracks[self.selected];
+        if let Some(c) = track.clips.iter_mut().find(|c| c.start() == start) {
+            let mut next =
+                Clip::buffer(Arc::new(stretched), start).map_err(|_| "Timeline overflow")?;
+            let _ = next.set_gain(gain);
+            let _ = next.set_fades(fade_in.min(next.len()), fade_out.min(next.len()));
+            *c = next;
+        }
+        Ok(())
+    }
+    /// Builds an [`InterchangeTimeline`](moan_core::interchange::InterchangeTimeline) with loudness metadata.
+    pub fn interchange_timeline(
+        &mut self,
+        name: &str,
+    ) -> moan_core::interchange::InterchangeTimeline {
+        let mut tl = moan_core::interchange::InterchangeTimeline::from_tracks(name, &self.tracks);
+        if self.duration() > 0 {
+            let m = self.measure_loudness();
+            tl.loudness.integrated_lufs = Some(m.integrated_lufs);
+            tl.loudness.true_peak_dbtp = Some(m.true_peak_dbtp);
+            tl.loudness.loudness_range_lu = Some(m.loudness_range_lu);
+        }
+        tl
+    }
+    /// Exports the current project timeline as OpenTimelineIO (`.otio`) JSON.
+    pub fn export_otio(&mut self, name: &str) -> String {
+        self.interchange_timeline(name).to_otio_json()
+    }
+    /// Exports the current project timeline as a CMX 3600 `.edl`.
+    pub fn export_edl(&mut self, name: &str) -> String {
+        self.interchange_timeline(name).to_cmx3600_edl()
+    }
     pub fn duration(&self) -> usize {
         self.tracks
             .iter()
@@ -826,6 +962,14 @@ pub struct Studio {
     pub europarack_ui: europarack_ui::EuropaRackUi,
     pub studio_rack_ui: studio_rack_ui::StudioRackUi,
     pub muse_ui: muse_ui::MuseUi,
+    pub voice_preset: moan_core::voice_cleanup::VoicePreset,
+    pub delivery_target: moan_core::loudness::DeliveryTarget,
+    pub last_loudness: Option<moan_core::loudness::LoudnessMeasurement>,
+    pub last_interchange_export: Option<String>,
+    pub lv2_catalog: plugins::Lv2Catalog,
+    voice_preset_btn: Id,
+    loudness_readout: Id,
+    lv2_status: Id,
 }
 impl Studio {
     pub fn set_detected_ram_mb(&mut self, mb: u64) {
@@ -875,8 +1019,21 @@ impl Studio {
             ("moan.modular", "Show EuropaRack", "Ctrl+Alt+R"),
             ("moan.muse.toggle", "Toggle Muse", "Ctrl+Shift+U"),
             ("moan.muse.disable", "Disable Muse", "Ctrl+Alt+U"),
+            ("moan.voice.cleanup", "1-Click Voice Cleanup", "Ctrl+Alt+V"),
+            ("moan.voice.preset", "Cycle Voice Preset", "Ctrl+Alt+B"),
+            ("moan.voice.podcast", "Voice: Podcast Clean", ""),
+            ("moan.voice.broadcast", "Voice: Broadcast", ""),
+            ("moan.voice.noisy", "Voice: Noisy Room", ""),
+            ("moan.loudness.measure", "Measure EBU R128", "Ctrl+Alt+L"),
+            ("moan.loudness.streaming14", "Normalize -14 LUFS", "Ctrl+Alt+1"),
+            ("moan.loudness.podcast16", "Normalize -16 LUFS", "Ctrl+Alt+2"),
+            ("moan.loudness.broadcast23", "Normalize -23 LUFS", "Ctrl+Alt+3"),
+            ("moan.stretch.apply", "Elastic Time-Stretch", "Ctrl+Alt+S"),
+            ("moan.export.otio", "Export OTIO Timeline", "Ctrl+Alt+O"),
+            ("moan.export.edl", "Export CMX 3600 EDL", "Ctrl+Alt+E"),
         ] {
-            ui.commands.add(Command::new(id, label).shortcut(key));
+            let cmd = Command::new(id, label);
+            ui.commands.add(if key.is_empty() { cmd } else { cmd.shortcut(key) });
         }
         let root = ui.root();
         ui.set_layout(root, Layout::column());
@@ -889,7 +1046,9 @@ impl Studio {
                     .command("moan.save-project")
                     .separator()
                     .command("moan.import")
-                    .command("moan.export"),
+                    .command("moan.export")
+                    .command("moan.export.otio")
+                    .command("moan.export.edl"),
                 Menu::new("Edit").command("moan.undo").command("moan.redo"),
                 Menu::new("MIDI")
                     .command("moan.library.keys")
@@ -903,6 +1062,16 @@ impl Studio {
                 Menu::new("Transport")
                     .command("moan.play")
                     .command("moan.stop"),
+                Menu::new("Tools")
+                    .command("moan.voice.cleanup")
+                    .command("moan.voice.preset")
+                    .separator()
+                    .command("moan.loudness.measure")
+                    .command("moan.loudness.streaming14")
+                    .command("moan.loudness.podcast16")
+                    .command("moan.loudness.broadcast23")
+                    .separator()
+                    .command("moan.stretch.apply"),
             ],
         );
         // Transport and workspace navigation never scroll out of reach.
@@ -1250,6 +1419,27 @@ impl Studio {
             plugins::Status::Idle.label(),
             TextStyle::Caption,
         );
+        let lv2_status = ui.text(device_panel, "LV2: no bundles scanned", TextStyle::Caption);
+        let oma_tools_row = ui.group(device_panel, Layout::row().gap(4.0).wrap().fill_width());
+        let voice_preset_btn = ui.button(oma_tools_row, "Preset: Podcast");
+        buttons.push((voice_preset_btn, "Preset: Podcast"));
+        for name in [
+            "Voice Cleanup",
+            "Measure LUFS",
+            "-14 LUFS",
+            "-16 LUFS",
+            "-23 LUFS",
+            "Elastic Stretch",
+            "Export OTIO",
+            "Export EDL",
+        ] {
+            buttons.push((ui.button(oma_tools_row, name), name));
+        }
+        let loudness_readout = ui.text(
+            device_panel,
+            "Loudness: -- LUFS / -- dBTP",
+            TextStyle::Caption,
+        );
         let ariel_ui = ariel_ui::ArielUi::build(ui, device_panel);
         let studio_rack_ui = studio_rack_ui::StudioRackUi::build(ui, device_panel);
         let europarack_ui = europarack_ui::EuropaRackUi::build(ui, root);
@@ -1378,6 +1568,14 @@ impl Studio {
             europarack_ui,
             studio_rack_ui,
             muse_ui,
+            voice_preset: moan_core::voice_cleanup::VoicePreset::PodcastClean,
+            delivery_target: moan_core::loudness::DeliveryTarget::StreamingMinus14,
+            last_loudness: None,
+            last_interchange_export: None,
+            lv2_catalog: plugins::Lv2Catalog::new(),
+            voice_preset_btn,
+            loudness_readout,
+            lv2_status,
         };
         studio.refresh(ui);
         studio.plugin_status(ui, plugins::Status::Idle);
@@ -1405,6 +1603,139 @@ impl Studio {
                 name
             ),
         );
+    }
+    pub fn loudness_readout_text(&self) -> String {
+        match self.last_loudness {
+            Some(m) => format!(
+                "Loudness: {:.1} LUFS / {:.1} dBTP (LRA {:.1} LU)",
+                m.integrated_lufs, m.true_peak_dbtp, m.loudness_range_lu
+            ),
+            None => String::from("Loudness: -- LUFS / -- dBTP"),
+        }
+    }
+    fn voice_preset_label(preset: moan_core::voice_cleanup::VoicePreset) -> &'static str {
+        match preset {
+            moan_core::voice_cleanup::VoicePreset::PodcastClean => "Preset: Podcast",
+            moan_core::voice_cleanup::VoicePreset::BroadcastVoice => "Preset: Broadcast",
+            moan_core::voice_cleanup::VoicePreset::NoisyRoom => "Preset: Noisy Room",
+        }
+    }
+    pub fn set_voice_preset(
+        &mut self,
+        ui: &mut Ui,
+        preset: moan_core::voice_cleanup::VoicePreset,
+    ) {
+        self.voice_preset = preset;
+        ui.set_text(self.voice_preset_btn, Self::voice_preset_label(preset));
+    }
+    pub fn cycle_voice_preset(
+        &mut self,
+        ui: &mut Ui,
+    ) -> moan_core::voice_cleanup::VoicePreset {
+        let next = match self.voice_preset {
+            moan_core::voice_cleanup::VoicePreset::PodcastClean => {
+                moan_core::voice_cleanup::VoicePreset::BroadcastVoice
+            }
+            moan_core::voice_cleanup::VoicePreset::BroadcastVoice => {
+                moan_core::voice_cleanup::VoicePreset::NoisyRoom
+            }
+            moan_core::voice_cleanup::VoicePreset::NoisyRoom => {
+                moan_core::voice_cleanup::VoicePreset::PodcastClean
+            }
+        };
+        self.set_voice_preset(ui, next);
+        next
+    }
+    pub fn voice_cleanup(
+        &mut self,
+        ui: &mut Ui,
+        preset: moan_core::voice_cleanup::VoicePreset,
+    ) -> Result<(), &'static str> {
+        self.set_voice_preset(ui, preset);
+        self.session.apply_voice_cleanup(preset)?;
+        self.last_loudness = self.session.measure_selected_loudness();
+        self.refresh(ui);
+        self.message(
+            ui,
+            &format!("Voice Cleanup ({}) applied", Self::voice_preset_label(preset)),
+        );
+        Ok(())
+    }
+    pub fn measure_loudness(
+        &mut self,
+        ui: &mut Ui,
+    ) -> moan_core::loudness::LoudnessMeasurement {
+        let m = self.session.measure_loudness();
+        self.last_loudness = Some(m);
+        self.refresh(ui);
+        self.message(ui, &self.loudness_readout_text());
+        m
+    }
+    pub fn normalize_loudness(
+        &mut self,
+        ui: &mut Ui,
+        target: moan_core::loudness::DeliveryTarget,
+    ) -> Result<moan_core::loudness::NormalizationReport, &'static str> {
+        self.delivery_target = target;
+        let report = self.session.normalize_to_target(target)?;
+        self.last_loudness = Some(report.after);
+        self.refresh(ui);
+        self.message(
+            ui,
+            &format!(
+                "Normalized to {:.1} LUFS ({:.1} dBTP)",
+                report.after.integrated_lufs, report.after.true_peak_dbtp
+            ),
+        );
+        Ok(report)
+    }
+    pub fn elastic_stretch(
+        &mut self,
+        ui: &mut Ui,
+        tempo_ratio: f32,
+        pitch_semitones: f32,
+        formant_preserve: bool,
+    ) -> Result<(), &'static str> {
+        self.session
+            .apply_elastic_stretch(tempo_ratio, pitch_semitones, formant_preserve)?;
+        self.last_loudness = self.session.measure_selected_loudness();
+        self.refresh(ui);
+        self.message(
+            ui,
+            &format!(
+                "Elastic stretch: {:.2}x tempo, {:+.1} st",
+                tempo_ratio, pitch_semitones
+            ),
+        );
+        Ok(())
+    }
+    pub fn export_otio(&mut self, ui: &mut Ui, project_name: &str) -> String {
+        let otio = self.session.export_otio(project_name);
+        self.last_interchange_export = Some(otio.clone());
+        self.refresh(ui);
+        self.message(ui, &format!("Exported OTIO ({} bytes)", otio.len()));
+        otio
+    }
+    pub fn export_edl(&mut self, ui: &mut Ui, project_name: &str) -> String {
+        let edl = self.session.export_edl(project_name);
+        self.last_interchange_export = Some(edl.clone());
+        self.refresh(ui);
+        self.message(ui, &format!("Exported CMX 3600 EDL ({} bytes)", edl.len()));
+        edl
+    }
+    pub fn discover_lv2_bundle(
+        &mut self,
+        ui: &mut Ui,
+        bundle_path: &str,
+        manifest_ttl: &str,
+        extra_ttls: &[&str],
+    ) -> Result<usize, moan_plugin::lv2::Error> {
+        let count = self
+            .lv2_catalog
+            .discover_ttl_bundle(bundle_path, manifest_ttl, extra_ttls)?;
+        self.refresh(ui);
+        self.message(ui, &self.lv2_catalog.summary_text());
+        Ok(count)
     }
     pub fn plugin_status(&mut self, ui: &mut Ui, status: plugins::Status) {
         self.plugin_state = status;
@@ -1554,6 +1885,14 @@ impl Studio {
             "moan.library.bass",
             "moan.library.kit",
             "moan.clear-notes",
+            "moan.voice.cleanup",
+            "moan.voice.podcast",
+            "moan.voice.broadcast",
+            "moan.voice.noisy",
+            "moan.loudness.streaming14",
+            "moan.loudness.podcast16",
+            "moan.loudness.broadcast23",
+            "moan.stretch.apply",
         ] {
             ui.commands.set_enabled(command, !busy);
         }
@@ -1905,6 +2244,12 @@ impl Studio {
                 name
             ),
         );
+        ui.set_text(
+            self.voice_preset_btn,
+            Self::voice_preset_label(self.voice_preset),
+        );
+        ui.set_text(self.loudness_readout, &self.loudness_readout_text());
+        ui.set_text(self.lv2_status, &self.lv2_catalog.summary_text());
         self.refresh_steps(ui);
         let (height, pixels) = waveform::render_at(
             &self.session,
@@ -2787,6 +3132,18 @@ impl Studio {
                 "moan.split" => "Split",
                 "moan.cut" => "Cut range",
                 "moan.move-clips" => "Drag clips",
+                "moan.voice.cleanup" => "Voice Cleanup",
+                "moan.voice.preset" => "Preset: Podcast",
+                "moan.voice.podcast" => "Voice: Podcast Clean",
+                "moan.voice.broadcast" => "Voice: Broadcast",
+                "moan.voice.noisy" => "Voice: Noisy Room",
+                "moan.loudness.measure" => "Measure LUFS",
+                "moan.loudness.streaming14" => "-14 LUFS",
+                "moan.loudness.podcast16" => "-16 LUFS",
+                "moan.loudness.broadcast23" => "-23 LUFS",
+                "moan.stretch.apply" => "Elastic Stretch",
+                "moan.export.otio" => "Export OTIO",
+                "moan.export.edl" => "Export EDL",
                 _ => return Ok(None),
             }),
             _ => None,
@@ -2865,6 +3222,18 @@ impl Studio {
             "WS Extract Stems",
             "Ariel Voice",
             "Prism Synth",
+            "Preset: Podcast",
+            "Voice Cleanup",
+            "Voice: Podcast Clean",
+            "Voice: Broadcast",
+            "Voice: Noisy Room",
+            "Measure LUFS",
+            "-14 LUFS",
+            "-16 LUFS",
+            "-23 LUFS",
+            "Elastic Stretch",
+            "Export OTIO",
+            "Export EDL",
         ]
         .contains(&command)
         {
@@ -3589,6 +3958,67 @@ impl Studio {
             }
             "Redo" => {
                 self.session.redo();
+                None
+            }
+            "Preset: Podcast" => {
+                self.cycle_voice_preset(ui);
+                None
+            }
+            "Voice Cleanup" => {
+                self.session.apply_voice_cleanup(self.voice_preset)?;
+                self.last_loudness = self.session.measure_selected_loudness();
+                None
+            }
+            "Voice: Podcast Clean" => {
+                self.set_voice_preset(ui, moan_core::voice_cleanup::VoicePreset::PodcastClean);
+                self.session.apply_voice_cleanup(self.voice_preset)?;
+                self.last_loudness = self.session.measure_selected_loudness();
+                None
+            }
+            "Voice: Broadcast" => {
+                self.set_voice_preset(ui, moan_core::voice_cleanup::VoicePreset::BroadcastVoice);
+                self.session.apply_voice_cleanup(self.voice_preset)?;
+                self.last_loudness = self.session.measure_selected_loudness();
+                None
+            }
+            "Voice: Noisy Room" => {
+                self.set_voice_preset(ui, moan_core::voice_cleanup::VoicePreset::NoisyRoom);
+                self.session.apply_voice_cleanup(self.voice_preset)?;
+                self.last_loudness = self.session.measure_selected_loudness();
+                None
+            }
+            "Measure LUFS" => {
+                let m = self.session.measure_loudness();
+                self.last_loudness = Some(m);
+                None
+            }
+            "-14 LUFS" | "-16 LUFS" | "-23 LUFS" => {
+                let target = match command {
+                    "-16 LUFS" => moan_core::loudness::DeliveryTarget::PodcastMinus16,
+                    "-23 LUFS" => moan_core::loudness::DeliveryTarget::BroadcastMinus23,
+                    _ => moan_core::loudness::DeliveryTarget::StreamingMinus14,
+                };
+                self.delivery_target = target;
+                let report = self.session.normalize_to_target(target)?;
+                self.last_loudness = Some(report.after);
+                None
+            }
+            "Elastic Stretch" => {
+                let tempo = (self.studio_rack_ui.speed_percent as f32 / 100.0).clamp(0.25, 4.0);
+                let pitch = (self.studio_rack_ui.transpose as f32).clamp(-12.0, 12.0);
+                let formant = self.session.selected_region().is_some_and(|c| c.vocal_clip().is_some());
+                self.session.apply_elastic_stretch(tempo, pitch, formant)?;
+                self.last_loudness = self.session.measure_selected_loudness();
+                None
+            }
+            "Export OTIO" => {
+                let otio = self.session.export_otio("Moan Project");
+                self.last_interchange_export = Some(otio);
+                None
+            }
+            "Export EDL" => {
+                let edl = self.session.export_edl("Moan Project");
+                self.last_interchange_export = Some(edl);
                 None
             }
             _ => None,

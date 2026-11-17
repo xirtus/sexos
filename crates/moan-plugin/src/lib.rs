@@ -4,6 +4,7 @@ extern crate alloc;
 pub mod clap;
 pub mod elf;
 pub mod job;
+pub mod lv2;
 #[cfg(all(
     feature = "sexos",
     target_arch = "x86_64",
