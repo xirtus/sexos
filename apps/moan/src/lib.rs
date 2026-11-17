@@ -3,6 +3,7 @@
 #![no_std]
 extern crate alloc;
 pub mod ariel_ui;
+pub mod console_fx_ui;
 pub mod europarack_ui;
 pub mod meter_history;
 pub mod muse_ui;
@@ -14,6 +15,7 @@ pub mod project;
 pub mod project_io;
 pub mod step;
 pub mod studio_rack_ui;
+pub mod tapestry_ui;
 pub mod track_colors;
 pub mod waveform;
 use alloc::{format, string::String, sync::Arc, vec, vec::Vec};
@@ -32,6 +34,9 @@ struct Snapshot {
     selected: usize,
     rack_patch: Option<Vec<u8>>,
     muse_crate: Vec<moan_gen::stems::TakeCrate>,
+    tapestry: moan_core::pattern::TapestryBank,
+    scenes: moan_core::pattern::SceneMatrix,
+    mastering: Option<moan_core::mastering::MasteringProcessor>,
 }
 #[derive(Clone)]
 struct ArchivedTrack {
@@ -144,6 +149,11 @@ pub struct Session {
     pub rack: moan_modular::PatchGraph,
     pub rack_theme: moan_modular::RackTheme,
     pub muse_crate: Vec<moan_gen::stems::TakeCrate>,
+    pub tapestry: moan_core::pattern::TapestryBank,
+    pub scenes: moan_core::pattern::SceneMatrix,
+    pub retrospective: moan_core::pattern::RetrospectiveNoteBuffer,
+    pub mastering: Option<moan_core::mastering::MasteringProcessor>,
+    pub last_gr_db_q8: [i16; MAX_TRACKS],
 }
 impl Default for Session {
     fn default() -> Self {
@@ -162,10 +172,27 @@ impl Default for Session {
             rack: moan_modular::PatchGraph::new(),
             rack_theme: moan_modular::RackTheme { dark_room_brightness: 85 },
             muse_crate: Vec::new(),
+            tapestry: moan_core::pattern::TapestryBank::new(),
+            scenes: moan_core::pattern::SceneMatrix::new(),
+            retrospective: moan_core::pattern::RetrospectiveNoteBuffer::new(),
+            mastering: None,
+            last_gr_db_q8: [0; MAX_TRACKS],
         }
     }
 }
 impl Session {
+    pub fn track_uses_console_mix(track: &Track<'_>) -> bool {
+        track.parametric_eq.is_some()
+            || track.sc_compressor.is_some()
+            || track.gate.is_some()
+            || track.tape.is_some()
+            || track.transient.is_some()
+            || track.crusher.is_some()
+            || track.chorus.is_some()
+            || track.sidechain_from.is_some()
+            || track.post_fader_send.is_some()
+            || track.output_bus.is_some()
+    }
     pub fn master_volume(&self) -> u16 {
         self.master_volume
     }
@@ -186,15 +213,36 @@ impl Session {
         &mut self,
         start: usize,
         out: &mut [Frame],
-        tap: impl FnMut(usize, Frame),
+        mut tap: impl FnMut(usize, Frame),
     ) {
-        moan_core::render_processed_observed_master(
-            &mut self.tracks,
-            start,
-            out,
-            self.master_volume,
-            tap,
-        );
+        if self.mastering.is_some() || self.tracks.iter().any(Self::track_uses_console_mix) {
+            let mut peak_gr = [0i16; MAX_TRACKS];
+            moan_core::render_console_mix(
+                &mut self.tracks,
+                start,
+                out,
+                self.master_volume,
+                self.mastering.as_mut(),
+                |idx, frame, gr_q8| {
+                    if idx < MAX_TRACKS && gr_q8 > peak_gr[idx] {
+                        peak_gr[idx] = gr_q8;
+                    }
+                    tap(idx, frame);
+                },
+            );
+            for idx in 0..MAX_TRACKS {
+                self.last_gr_db_q8[idx] = peak_gr[idx];
+            }
+        } else {
+            self.last_gr_db_q8 = [0; MAX_TRACKS];
+            moan_core::render_processed_observed_master(
+                &mut self.tracks,
+                start,
+                out,
+                self.master_volume,
+                tap,
+            );
+        }
     }
     pub fn is_dirty(&self) -> bool {
         self.revision != self.saved_revision
@@ -280,6 +328,9 @@ impl Session {
             selected: self.selected,
             rack_patch,
             muse_crate: self.muse_crate.clone(),
+            tapestry: self.tapestry.clone(),
+            scenes: self.scenes.clone(),
+            mastering: self.mastering.clone(),
         }
     }
     fn remember(&mut self) {
@@ -317,6 +368,10 @@ impl Session {
             self.rack = moan_modular::PatchGraph::new();
         }
         self.muse_crate = s.muse_crate.clone();
+        self.tapestry = s.tapestry.clone();
+        self.scenes = s.scenes.clone();
+        self.mastering = s.mastering.clone();
+        self.last_gr_db_q8 = [0; MAX_TRACKS];
         true
     }
     pub fn redo(&mut self) -> bool {
@@ -344,6 +399,10 @@ impl Session {
             self.rack = moan_modular::PatchGraph::new();
         }
         self.muse_crate = s.muse_crate.clone();
+        self.tapestry = s.tapestry.clone();
+        self.scenes = s.scenes.clone();
+        self.mastering = s.mastering.clone();
+        self.last_gr_db_q8 = [0; MAX_TRACKS];
         true
     }
     pub fn add_vocal(&mut self, text: &str, params: moan_core::vocal::VoiceParams) -> Result<(), &'static str> {
@@ -617,6 +676,280 @@ impl Session {
         }
         Ok(())
     }
+    pub fn apply_compose_tool(
+        &mut self,
+        tool: &moan_core::compose::ComposeTool,
+    ) -> Result<(), &'static str> {
+        if let Some(source) = self.midi_clip() {
+            let old = source.source_frames().as_ptr();
+            let pat = source.midi_pattern().ok_or("No MIDI pattern")?;
+            let transformed = match moan_core::compose::apply_tool_to_midi(pat, tool) {
+                Ok(p) => p,
+                Err(_) => {
+                    let (expr, tempo, _) = moan_core::compose::midi_pattern_to_notes(pat)
+                        .map_err(|_| "Compose tool read error")?;
+                    let mut notes = moan_core::compose::apply_tool(&expr, tool)
+                        .map_err(|_| "Compose tool failed")?;
+                    notes.truncate(moan_core::midi::MAX_NOTES);
+                    let mut midi_notes = Vec::new();
+                    for n in &notes {
+                        if let Ok(mut mn) = n.to_midi_note(&tempo, 0) {
+                            if mn.start < pat.frames {
+                                let avail = pat.frames - mn.start;
+                                if mn.frames > avail {
+                                    mn.frames = avail;
+                                }
+                                midi_notes.push(mn);
+                            }
+                        }
+                    }
+                    let next = moan_core::midi::Pattern {
+                        frames: pat.frames,
+                        bpm: pat.bpm,
+                        instrument: pat.instrument,
+                        notes: midi_notes,
+                    };
+                    next.validate()
+                        .map_err(|_| "Compose tool exceeds note bounds")?;
+                    next
+                }
+            };
+            let replacement =
+                Clip::midi(transformed, 0).map_err(|_| "Compose tool exceeds MIDI bounds")?;
+            self.remember();
+            for clip in &mut self.tracks[self.selected].clips {
+                if clip.source_frames().as_ptr() == old {
+                    clip.replace_midi_source(&replacement)
+                        .map_err(|_| "MIDI cache mismatch")?;
+                }
+            }
+            self.tracks[self.selected].reset_effects();
+            return Ok(());
+        }
+
+        let active_id = self.tapestry.active_pattern;
+        let ch_id = self
+            .tapestry
+            .channels
+            .iter()
+            .find(|c| c.target_track as usize == self.selected)
+            .or_else(|| self.tapestry.channels.first())
+            .map(|c| c.id)
+            .ok_or("Choose a MIDI region or Tapestry channel")?;
+        let existing = self
+            .tapestry
+            .pattern(active_id)
+            .ok_or("Choose a MIDI region")?
+            .channel_notes(ch_id)
+            .to_vec();
+        if existing.is_empty() {
+            return Err("No notes in active pattern channel");
+        }
+        let next_notes =
+            moan_core::compose::apply_tool(&existing, tool).map_err(|_| "Compose tool failed")?;
+        self.remember();
+        if let Some(pat) = self.tapestry.pattern_mut(active_id) {
+            if let Ok(vec_notes) = pat.channel_notes_mut(ch_id) {
+                *vec_notes = next_notes;
+            }
+        }
+        crate::tapestry_ui::TapestryUi::bake_bank_to_tracks(&self.tapestry, &mut self.tracks)?;
+        Ok(())
+    }
+    pub fn export_smf_bytes(&self) -> Result<Vec<u8>, &'static str> {
+        if !self.tapestry.channels.is_empty() && !self.tapestry.patterns.is_empty() {
+            if let Ok(realized) = self.tapestry.realize_events(self.tapestry.transport_mode) {
+                if !realized.is_empty() {
+                    return moan_core::smf::export_smf_bank(&self.tapestry)
+                        .map_err(|_| "MIDI export failed");
+                }
+            }
+            if let Some(pat) = self.tapestry.pattern(self.tapestry.active_pattern) {
+                if pat.channel_notes.iter().any(|(_, n)| !n.is_empty()) {
+                    return moan_core::smf::export_smf_pattern(
+                        pat,
+                        &self.tapestry.channels,
+                        &self.tapestry.tempo_map,
+                    )
+                    .map_err(|_| "MIDI export failed");
+                }
+            }
+        }
+
+        let first_bpm = self
+            .tracks
+            .iter()
+            .flat_map(|t| t.clips.iter())
+            .find_map(Clip::midi_pattern)
+            .map_or(120, |p| p.bpm);
+        let mut temp_bank = moan_core::pattern::TapestryBank::new();
+        temp_bank.tempo_map = moan_core::time::TempoMap::constant(first_bpm as u32 * 100)
+            .map_err(|_| "Invalid MIDI tempo")?;
+        let pat_id = temp_bank
+            .create_pattern("Moan Arrangement", 4, 4)
+            .map_err(|_| "MIDI export failed")?;
+        let mut max_end = moan_core::time::Time::from_beats(4);
+        let mut any_notes = false;
+
+        for (t_idx, trk) in self.tracks.iter().enumerate() {
+            for clip in &trk.clips {
+                let Some(mpat) = clip.midi_pattern() else {
+                    continue;
+                };
+                if mpat.notes.is_empty() {
+                    continue;
+                }
+                if temp_bank.channels.len() >= moan_core::pattern::MAX_RACK_CHANNELS {
+                    break;
+                }
+                let ch_id = temp_bank
+                    .add_channel(mpat.instrument.name(), mpat.instrument as u8)
+                    .map_err(|_| "Too many MIDI channels to export")?;
+                if let Some(ch) = temp_bank.channel_mut(ch_id) {
+                    ch.target_track = (t_idx as u8).min((MAX_TRACKS - 1) as u8);
+                }
+                let clip_off = clip.source_offset();
+                let clip_end = clip_off.saturating_add(clip.len());
+                for (n_idx, n) in mpat.notes.iter().enumerate() {
+                    let s_in_src = (n.start as usize).max(clip_off);
+                    let e_in_src = (n.start as usize)
+                        .saturating_add(n.frames as usize)
+                        .min(clip_end);
+                    if e_in_src <= s_in_src {
+                        continue;
+                    }
+                    let abs_s_f = clip.start() as u64 + (s_in_src - clip_off) as u64;
+                    let abs_e_f = clip.start() as u64 + (e_in_src - clip_off) as u64;
+                    let s_beat = temp_bank.tempo_map.frame_to_beat(abs_s_f, 0);
+                    let e_beat = temp_bank.tempo_map.frame_to_beat(abs_e_f, 0);
+                    let len = e_beat
+                        .checked_sub(s_beat)
+                        .filter(|l| *l > moan_core::time::Time::ZERO)
+                        .unwrap_or(moan_core::time::Time::MIN_BEAT_STEP);
+                    let end = s_beat.checked_add(len).unwrap_or(e_beat);
+                    if end > max_end {
+                        max_end = end;
+                    }
+                    if let Some(tpat) = temp_bank.pattern_mut(pat_id) {
+                        tpat.add_note(
+                            ch_id,
+                            moan_core::compose::ExpressiveNote::new(
+                                (n_idx + 1) as u32,
+                                s_beat,
+                                len,
+                                n.key,
+                                n.velocity,
+                            ),
+                        )
+                        .map_err(|_| "MIDI export note overflow")?;
+                        any_notes = true;
+                    }
+                }
+            }
+        }
+        if !any_notes {
+            return Err("Add MIDI notes or a Tapestry pattern before exporting MIDI");
+        }
+        let bpb = temp_bank
+            .tempo_map
+            .time_signature_at(moan_core::time::Time::ZERO)
+            .beats_per_bar();
+        let bars_needed = ((max_end.to_f64() / bpb.to_f64()) + 0.999_999) as i64;
+        if let Some(tpat) = temp_bank.pattern_mut(pat_id) {
+            tpat.bars = bars_needed.clamp(1, moan_core::pattern::MAX_BARS as i64) as u8;
+        }
+        moan_core::smf::export_smf_bank(&temp_bank).map_err(|_| "MIDI export failed")
+    }
+    pub fn import_smf_bytes(&mut self, bytes: &[u8]) -> Result<(), &'static str> {
+        let imported = moan_core::smf::import_smf(bytes)
+            .map_err(|_| "Invalid or unsupported Standard MIDI File")?;
+        let mut bank = imported
+            .to_tapestry_bank()
+            .map_err(|_| "MIDI file exceeds Tapestry limits")?;
+
+        // Preserve Moan instruments 0..=11 carried as SMF Program Change numbers.
+        let mut ch_cursor = 0usize;
+        for (idx, trk) in imported.tracks.iter().enumerate() {
+            if idx >= moan_core::pattern::MAX_RACK_CHANNELS {
+                break;
+            }
+            if trk.notes.is_empty() && imported.tracks.len() > 1 {
+                continue;
+            }
+            if let Some(ch) = bank.channels.get_mut(ch_cursor) {
+                if trk.is_percussion {
+                    ch.instrument = Instrument::VelvetSampler as u8;
+                } else if let Some(prog) = trk.program {
+                    if (prog as usize) < Instrument::ALL.len() {
+                        ch.instrument = prog;
+                    }
+                }
+                ch_cursor += 1;
+            }
+        }
+
+        let sig = bank
+            .tempo_map
+            .time_signature_at(moan_core::time::Time::ZERO);
+        let pat_opt = bank.pattern(bank.active_pattern).cloned();
+        let total_beats = pat_opt
+            .as_ref()
+            .map_or(moan_core::time::Time::from_beats(4), |p| p.total_beats(sig));
+        let mut clip_frames = (bank.tempo_map.beat_to_frame(total_beats, 0) as u32)
+            .clamp(1, moan_core::midi::MAX_FRAMES);
+        let bpm =
+            (bank.tempo_map.bpm_x100_at(moan_core::time::Time::ZERO) / 100).clamp(30, 240) as u16;
+
+        let mut new_tracks = Vec::new();
+        if let Some(pat) = &pat_opt {
+            for ch in bank.channels.iter().take(MAX_TRACKS) {
+                let expr_notes = pat.channel_notes(ch.id);
+                if expr_notes.is_empty() {
+                    continue;
+                }
+                let inst = Instrument::try_from(ch.instrument).unwrap_or(Instrument::SilkTriangle);
+                let mut midi_notes = Vec::new();
+                for n in expr_notes.iter().take(moan_core::midi::MAX_NOTES) {
+                    if let Ok(mn) = n.to_midi_note(&bank.tempo_map, 0) {
+                        if mn.start < moan_core::midi::MAX_FRAMES {
+                            clip_frames = clip_frames
+                                .max(mn.start.saturating_add(1))
+                                .min(moan_core::midi::MAX_FRAMES);
+                            midi_notes.push(mn);
+                        }
+                    }
+                }
+                for mn in &mut midi_notes {
+                    let avail = clip_frames - mn.start;
+                    if mn.frames > avail {
+                        mn.frames = avail.max(1);
+                    }
+                }
+                let mpat = moan_core::midi::Pattern {
+                    frames: clip_frames,
+                    bpm,
+                    instrument: inst,
+                    notes: midi_notes,
+                };
+                let clip =
+                    Clip::midi(mpat, 0).map_err(|_| "Imported MIDI clip exceeds engine limits")?;
+                let mut trk = Track::new();
+                trk.clips.push(clip);
+                new_tracks.push(trk);
+            }
+        }
+
+        self.remember();
+        self.tracks = new_tracks;
+        self.tapestry = bank;
+        self.scenes = moan_core::pattern::SceneMatrix::new();
+        self.last_gr_db_q8 = [0; MAX_TRACKS];
+        self.selected = 0;
+        self.cursor = 0;
+        self.from = 0;
+        self.to = self.duration();
+        Ok(())
+    }
 }
 
 /// Strict PCM WAV import: 48 kHz stereo signed 16-bit, bounded to one minute.
@@ -716,6 +1049,8 @@ pub enum Action {
     Record,
     Import,
     Export,
+    ImportMidi,
+    ExportMidi,
     OpenProject,
     SaveProject,
     NewProject,
@@ -747,6 +1082,7 @@ pub enum Workspace {
     Instruments,
     StepSequencer,
     EuropaRack,
+    Tapestry,
     Muse,
 }
 pub struct Studio {
@@ -780,6 +1116,10 @@ pub struct Studio {
     piano_label: Id,
     velocity: Id,
     note_velocity: u8,
+    pub compose_tool_btn: Id,
+    pub compose_apply_btn: Id,
+    typing_octave: i8,
+    typing_clock_frame: u64,
     app_end: Id,
     meter_names: Vec<Id>,
     meter_details: Vec<Id>,
@@ -825,6 +1165,8 @@ pub struct Studio {
     pub ariel_ui: ariel_ui::ArielUi,
     pub europarack_ui: europarack_ui::EuropaRackUi,
     pub studio_rack_ui: studio_rack_ui::StudioRackUi,
+    pub tapestry_ui: tapestry_ui::TapestryUi,
+    pub console_fx_ui: console_fx_ui::ConsoleFxUi,
     pub muse_ui: muse_ui::MuseUi,
 }
 impl Studio {
@@ -834,13 +1176,50 @@ impl Studio {
     pub fn musical_typing(&self, ascii: u8, base_octave: i8) -> Option<u8> {
         moan_core::arp::musical_typing_key(ascii, base_octave)
     }
+    pub fn record_typing_note(
+        &mut self,
+        ascii: u8,
+        base_octave: i8,
+        start_frame: u64,
+        length_frames: u64,
+    ) -> Option<u8> {
+        let key = self.musical_typing(ascii, base_octave)?;
+        let ch = self
+            .session
+            .tapestry
+            .channels
+            .get(self.tapestry_ui.selected_channel_idx)
+            .or_else(|| self.session.tapestry.channels.first())
+            .map_or(moan_core::pattern::ChannelId(0), |c| c.id);
+        let _ = self
+            .session
+            .retrospective
+            .push_note(moan_core::pattern::RetrospectiveNote {
+                channel: ch,
+                start_frame,
+                length_frames: length_frames.max(1),
+                key,
+                velocity: self.note_velocity.clamp(1, 127),
+            });
+        Some(key)
+    }
     pub fn build(ui: &mut Ui) -> Self {
         for (id, label, key) in [
             ("moan.library.keys", "Silk Keys MIDI", "Ctrl+Shift+I"),
             ("moan.library.bass", "Satin Bass MIDI", "Ctrl+Shift+B"),
             ("moan.library.kit", "Velvet Kit MIDI", "Ctrl+Shift+D"),
+            ("moan.library.sub808", "Sub 808 MIDI", "Ctrl+Alt+1"),
+            ("moan.library.drums", "Studio Drums MIDI", "Ctrl+Alt+2"),
+            ("moan.library.tine", "Tine Keys MIDI", "Ctrl+Alt+3"),
+            ("moan.library.grand", "Grand Piano MIDI", "Ctrl+Alt+4"),
+            ("moan.library.guitar", "Electric Guitar MIDI", "Ctrl+Alt+5"),
+            ("moan.library.mallet", "Mallet Bells MIDI", "Ctrl+Alt+6"),
+            ("moan.library.cross", "Cross Synth MIDI", "Ctrl+Alt+7"),
             ("moan.piano", "Show Piano Roll", "Ctrl+P"),
             ("moan.steps", "Show Step Sequencer", "Ctrl+J"),
+            ("moan.tapestry", "Show Tapestry", "Ctrl+Alt+T"),
+            ("moan.compose.cycle", "Cycle Note Tool", "Ctrl+Alt+C"),
+            ("moan.compose.apply", "Apply Note Tool", "Ctrl+Alt+N"),
             ("moan.tracks", "Focus Track List", "Ctrl+Shift+R"),
             ("moan.mixer", "Show Mixer", "Ctrl+M"),
             ("moan.octave", "Raise MIDI Octave", "Ctrl+Shift+Up"),
@@ -857,6 +1236,8 @@ impl Studio {
             ("moan.redo", "Redo Edit", "Ctrl+Shift+Z"),
             ("moan.import", "Import WAV", "Ctrl+O"),
             ("moan.export", "Export Audio", "Ctrl+Shift+E"),
+            ("moan.import-midi", "Import MIDI", "Ctrl+Alt+I"),
+            ("moan.export-midi", "Export MIDI", "Ctrl+Alt+E"),
             ("moan.open-project", "Open Project", "Ctrl+Shift+O"),
             ("moan.save-project", "Save Project", "Ctrl+S"),
             ("moan.new-project", "New Project", "Ctrl+N"),
@@ -889,14 +1270,26 @@ impl Studio {
                     .command("moan.save-project")
                     .separator()
                     .command("moan.import")
-                    .command("moan.export"),
+                    .command("moan.export")
+                    .separator()
+                    .command("moan.import-midi")
+                    .command("moan.export-midi"),
                 Menu::new("Edit").command("moan.undo").command("moan.redo"),
                 Menu::new("MIDI")
                     .command("moan.library.keys")
                     .command("moan.library.bass")
                     .command("moan.library.kit")
+                    .command("moan.library.sub808")
+                    .command("moan.library.drums")
+                    .command("moan.library.tine")
+                    .command("moan.library.grand")
+                    .command("moan.library.guitar")
+                    .command("moan.library.mallet")
+                    .command("moan.library.cross")
                     .separator()
                     .command("moan.piano")
+                    .command("moan.compose.cycle")
+                    .command("moan.compose.apply")
                     .command("moan.clear-notes")
                     .command("moan.octave")
                     .command("moan.velocity-half"),
@@ -943,6 +1336,7 @@ impl Studio {
             "Mix",
             "Piano Roll",
             "Step Sequencer",
+            "Tapestry",
             "Instruments",
             "EuropaRack",
             "Muse",
@@ -976,6 +1370,7 @@ impl Studio {
                 .fill_width()
                 .shrink(0.0),
         );
+        let console_fx_ui = console_fx_ui::ConsoleFxUi::build(ui, body);
         let workspace = ui.group(
             body,
             Layout::row()
@@ -993,7 +1388,18 @@ impl Studio {
                 .shrink(0.0),
         );
         ui.text(library, "Library", TextStyle::Heading);
-        for name in ["Silk Keys", "Satin Bass", "Velvet Kit"] {
+        for name in [
+            "Silk Keys",
+            "Satin Bass",
+            "Velvet Kit",
+            "Sub 808",
+            "Studio Drums",
+            "Tine Keys",
+            "Grand Piano",
+            "Electric Guitar",
+            "Mallet Bells",
+            "Cross Synth",
+        ] {
             buttons.push((ui.button(library, name), name));
         }
         ui.text(
@@ -1177,6 +1583,10 @@ impl Studio {
         ] {
             buttons.push((ui.button(midi_edits, name), name));
         }
+        let compose_tool_btn = ui.button(midi_edits, "Tool: Legato");
+        let compose_apply_btn = ui.button(midi_edits, "Apply Note Tool");
+        buttons.push((compose_tool_btn, "Cycle Note Tool"));
+        buttons.push((compose_apply_btn, "Apply Note Tool"));
         ui.text(midi_edits, "Velocity", TextStyle::Caption);
         let velocity = ui.slider(midi_edits, 1.0, 127.0, 96.0);
         ui.set_layout(velocity, Layout::default().width(110.0));
@@ -1253,7 +1663,46 @@ impl Studio {
         let ariel_ui = ariel_ui::ArielUi::build(ui, device_panel);
         let studio_rack_ui = studio_rack_ui::StudioRackUi::build(ui, device_panel);
         let europarack_ui = europarack_ui::EuropaRackUi::build(ui, root);
+        let tapestry_ui = tapestry_ui::TapestryUi::build(ui, root);
         let muse_ui = muse_ui::MuseUi::build(ui, root, arrange, smart);
+
+        buttons.push((tapestry_ui.mode_btn, "Tapestry Mode"));
+        buttons.push((tapestry_ui.pattern_btn, "Tapestry Cycle Pattern"));
+        buttons.push((tapestry_ui.new_pat_btn, "New Pattern"));
+        buttons.push((tapestry_ui.clone_pat_btn, "Clone Pattern"));
+        buttons.push((tapestry_ui.instance_btn, "Tapestry Cycle Instance"));
+        buttons.push((tapestry_ui.make_unique_btn, "Make Unique"));
+        buttons.push((tapestry_ui.split_btn, "Split Channels"));
+        buttons.push((tapestry_ui.kit_btn, "Tapestry Cycle Kit"));
+        buttons.push((tapestry_ui.add_kit_btn, "Add Kit"));
+        buttons.push((tapestry_ui.starter_btn, "Tapestry Cycle Starter"));
+        buttons.push((tapestry_ui.load_starter_btn, "Load Starter"));
+        buttons.push((tapestry_ui.paint_btn, "Paint Pattern to Arrange"));
+        buttons.push((tapestry_ui.scene_btn, "Tapestry Cycle Scene"));
+        buttons.push((tapestry_ui.queue_scene_btn, "Queue Scene"));
+        buttons.push((tapestry_ui.advance_bar_btn, "Advance Bar"));
+        buttons.push((tapestry_ui.recover_riff_btn, "Recover Riff"));
+        buttons.push((tapestry_ui.import_midi_btn, "Import MIDI"));
+        buttons.push((tapestry_ui.export_midi_btn, "Export MIDI"));
+
+        buttons.push((console_fx_ui.toggle_eq_btn, "Toggle 6-Band EQ"));
+        buttons.push((console_fx_ui.hpf_btn, "HPF 80Hz"));
+        buttons.push((console_fx_ui.auto_cut_btn, "Auto Cut Resonance"));
+        buttons.push((console_fx_ui.reset_eq_btn, "Reset 6-Band EQ"));
+        buttons.push((console_fx_ui.sc_key_btn, "Cycle Sidechain Key"));
+        buttons.push((console_fx_ui.sc_duck_btn, "Enable Sidechain Duck"));
+        buttons.push((console_fx_ui.gate_preset_btn, "Cycle Gate Preset"));
+        buttons.push((console_fx_ui.apply_gate_btn, "Apply Gate Preset"));
+        buttons.push((console_fx_ui.send_btn, "Cycle Post Send"));
+        buttons.push((console_fx_ui.bus_btn, "Cycle Out Bus"));
+        buttons.push((console_fx_ui.tape_preset_btn, "Cycle Tape Preset"));
+        buttons.push((console_fx_ui.apply_tape_btn, "Apply Tape Preset"));
+        buttons.push((console_fx_ui.transient_btn, "Toggle Transient"));
+        buttons.push((console_fx_ui.crusher_btn, "Toggle BitCrush"));
+        buttons.push((console_fx_ui.chorus_btn, "Toggle Chorus"));
+        buttons.push((console_fx_ui.master_preset_btn, "Cycle Mastering Preset"));
+        buttons.push((console_fx_ui.apply_master_btn, "Apply Mastering Preset"));
+        buttons.push((console_fx_ui.disable_master_btn, "Disable Mastering"));
 
         buttons.push((europarack_ui.patch_btn, "Cycle Patch"));
         buttons.push((europarack_ui.load_patch_btn, "Load Preset"));
@@ -1295,6 +1744,8 @@ impl Studio {
         ui.set_visible(smart, false);
         ui.set_visible(piano_panel, false);
         ui.set_visible(europarack_ui.panel, false);
+        ui.set_visible(tapestry_ui.panel, false);
+        ui.set_visible(console_fx_ui.panel, false);
         ui.set_visible(muse_ui.setup_card, false);
         ui.set_visible(muse_ui.chat_bar, false);
         ui.set_visible(muse_ui.takes_strip, false);
@@ -1332,6 +1783,10 @@ impl Studio {
             piano_label,
             velocity,
             note_velocity: 96,
+            compose_tool_btn,
+            compose_apply_btn,
+            typing_octave: 4,
+            typing_clock_frame: 0,
             app_end,
             meter_names,
             meter_details,
@@ -1377,6 +1832,8 @@ impl Studio {
             ariel_ui,
             europarack_ui,
             studio_rack_ui,
+            tapestry_ui,
+            console_fx_ui,
             muse_ui,
         };
         studio.refresh(ui);
@@ -1494,6 +1951,8 @@ impl Studio {
             self.mute,
             self.solo,
             self.master_level,
+            self.tapestry_ui.canvas,
+            self.tapestry_ui.swing_slider,
         ] {
             ui.set_enabled(id, !busy);
         }
@@ -1531,6 +1990,7 @@ impl Studio {
                 "Mix",
                 "Piano Roll",
                 "Step Sequencer",
+                "Tapestry",
                 "Instruments",
                 "Library",
                 "Region controls",
@@ -1547,12 +2007,22 @@ impl Studio {
             "moan.redo",
             "moan.import",
             "moan.export",
+            "moan.import-midi",
+            "moan.export-midi",
             "moan.open-project",
             "moan.save-project",
             "moan.new-project",
             "moan.library.keys",
             "moan.library.bass",
             "moan.library.kit",
+            "moan.library.sub808",
+            "moan.library.drums",
+            "moan.library.tine",
+            "moan.library.grand",
+            "moan.library.guitar",
+            "moan.library.mallet",
+            "moan.library.cross",
+            "moan.compose.apply",
             "moan.clear-notes",
         ] {
             ui.commands.set_enabled(command, !busy);
@@ -1621,6 +2091,7 @@ impl Studio {
                 );
             }
         }
+        self.console_fx_ui.refresh_gr(ui, &self.session);
     }
     pub fn publish_master(&self, ui: &mut Ui, meter: &mut serenade_core::LevelMeter) {
         let value = meter.snapshot();
@@ -1746,6 +2217,18 @@ impl Studio {
         );
         Self::visible_layout(
             ui,
+            self.tapestry_ui.panel,
+            self.workspace == Workspace::Tapestry,
+            Layout::column().gap(4.0).padding(6.0).fill_width(),
+        );
+        Self::visible_layout(
+            ui,
+            self.console_fx_ui.panel,
+            matches!(self.workspace, Workspace::Mix | Workspace::Instruments),
+            Layout::column().gap(4.0).padding(6.0).fill_width(),
+        );
+        Self::visible_layout(
+            ui,
             self.muse_ui.muse_workspace,
             self.workspace == Workspace::Muse && self.muse_config.enabled,
             Layout::column().gap(6.0).padding(8.0).fill_width(),
@@ -1839,6 +2322,11 @@ impl Studio {
         ui.set_visible(self.step_panel, workspace == Workspace::StepSequencer);
         ui.set_visible(self.device_panel, workspace == Workspace::Instruments);
         ui.set_visible(self.europarack_ui.panel, workspace == Workspace::EuropaRack);
+        ui.set_visible(self.tapestry_ui.panel, workspace == Workspace::Tapestry);
+        ui.set_visible(
+            self.console_fx_ui.panel,
+            matches!(workspace, Workspace::Mix | Workspace::Instruments),
+        );
         ui.set_visible(
             self.muse_ui.muse_workspace,
             workspace == Workspace::Muse && self.muse_config.enabled,
@@ -1891,7 +2379,7 @@ impl Studio {
             ),
         );
     }
-    pub fn refresh(&self, ui: &mut Ui) {
+    pub fn refresh(&mut self, ui: &mut Ui) {
         ui.set_value(self.master_level, self.session.master_volume as f32);
         let name = self
             .session
@@ -1959,6 +2447,10 @@ impl Studio {
                 self.session.midi_clip().and_then(Clip::midi_pattern),
                 (ui.size().0 as f32 / ui.theme().scale - 24.0).clamp(160.0, 4096.0) as usize,
             ),
+        );
+        ui.set_text(
+            self.compose_tool_btn,
+            &format!("Tool: {}", self.studio_rack_ui.compose_tool_name()),
         );
         ui.set_text(
             self.piano_label,
@@ -2079,6 +2571,9 @@ impl Studio {
             ui.set_checked(self.reverb, t.effects.reverb.is_some());
             ui.set_value(self.gain, t.clips.first().map_or(100, Clip::gain) as f32);
         }
+        self.tapestry_ui
+            .refresh(ui, &self.session.tapestry, &self.session.scenes);
+        self.console_fx_ui.refresh(ui, &self.session);
     }
     fn guard_action(&mut self, ui: &mut Ui, action: Action) -> Option<Action> {
         if self.pending.is_some() {
@@ -2132,6 +2627,11 @@ impl Studio {
             span: self.session.duration().max(RATE as usize * 2),
         };
         self.drag = None;
+        self.tapestry_ui.selected_instance_idx = 0;
+        self.tapestry_ui.selected_channel_idx = 0;
+        self.tapestry_ui.scene_clock_frame = 0;
+        self.tapestry_ui.channel_colors.clear();
+        self.typing_clock_frame = 0;
         self.refresh(ui);
         Ok(())
     }
@@ -2139,6 +2639,11 @@ impl Studio {
         self.session = Session::default();
         self.view = waveform::View::default();
         self.drag = None;
+        self.tapestry_ui.selected_instance_idx = 0;
+        self.tapestry_ui.selected_channel_idx = 0;
+        self.tapestry_ui.scene_clock_frame = 0;
+        self.tapestry_ui.channel_colors.clear();
+        self.typing_clock_frame = 0;
         self.refresh(ui);
     }
     fn change_view(&mut self, command: &str) {
@@ -2175,6 +2680,38 @@ impl Studio {
         if let weft::Event::Pointer(pointer) = event {
             if self.pointer(ui, pointer) {
                 return vec![Response::Command("moan.selection".into())];
+            }
+        }
+        if let weft::Event::Key(key) = &event {
+            if !self.busy
+                && self.pending.is_none()
+                && ui.find_kind("menurow").is_empty()
+                && !key.control
+            {
+                let in_text_field = ui.focused().is_some_and(|id| {
+                    id.index() > self.app_end.index() || ui.find_kind("field").contains(&id)
+                });
+                if !in_text_field {
+                    if let Some(ch) = key.text {
+                        if ch.is_ascii() {
+                            let ascii = ch as u8;
+                            if let Some(delta) = moan_core::arp::octave_shift_key(ascii) {
+                                self.typing_octave = (self.typing_octave + delta).clamp(1, 7);
+                            } else if self
+                                .record_typing_note(
+                                    ascii,
+                                    self.typing_octave,
+                                    self.typing_clock_frame,
+                                    (RATE / 4) as u64,
+                                )
+                                .is_some()
+                            {
+                                self.typing_clock_frame =
+                                    self.typing_clock_frame.saturating_add((RATE / 4) as u64);
+                            }
+                        }
+                    }
+                }
             }
         }
         let navigation = matches!(
@@ -2215,6 +2752,73 @@ impl Studio {
             return false;
         }
         ui.layout();
+        if self.workspace == Workspace::Tapestry
+            && pointer.kind == PointerKind::Down(Button::Left)
+        {
+            let tap_rect = ui.rect(self.tapestry_ui.canvas);
+            let point = Point::new(pointer.x / ui.theme().scale, pointer.y / ui.theme().scale);
+            let visible_tap = tap_rect.intersect(&weft::Rect::new(
+                0.0,
+                0.0,
+                ui.size().0 as f32 / ui.theme().scale,
+                ui.size().1 as f32 / ui.theme().scale,
+            ));
+            if visible_tap.contains(point) {
+                let cx = (((point.x - tap_rect.x) / tap_rect.w.max(1.0))
+                    * tapestry_ui::RACK_WIDTH as f32)
+                    .clamp(0.0, (tapestry_ui::RACK_WIDTH - 1) as f32) as usize;
+                let cy = (((point.y - tap_rect.y) / tap_rect.h.max(1.0))
+                    * tapestry_ui::RACK_HEIGHT as f32)
+                    .clamp(0.0, (tapestry_ui::RACK_HEIGHT - 1) as f32) as usize;
+                if let Some(ch_id) =
+                    tapestry_ui::TapestryUi::hit_test_mute(cx, cy, &self.session.tapestry)
+                {
+                    ui.focus(None);
+                    self.session.remember();
+                    if let Some(ch) = self.session.tapestry.channel_mut(ch_id) {
+                        ch.muted = !ch.muted;
+                    }
+                    if let Err(err) = tapestry_ui::TapestryUi::bake_bank_to_tracks(
+                        &self.session.tapestry,
+                        &mut self.session.tracks,
+                    ) {
+                        self.message(ui, err);
+                    } else {
+                        self.refresh(ui);
+                    }
+                    return true;
+                }
+                if let Some((ch_id, step_idx, root_key)) =
+                    tapestry_ui::TapestryUi::hit_test_step(cx, cy, &self.session.tapestry)
+                {
+                    if let Some(row_idx) = self
+                        .session
+                        .tapestry
+                        .channels
+                        .iter()
+                        .position(|c| c.id == ch_id)
+                    {
+                        self.tapestry_ui.selected_channel_idx = row_idx;
+                    }
+                    let pat_id = self.session.tapestry.active_pattern;
+                    let velocity = self.note_velocity;
+                    ui.focus(None);
+                    self.session.remember();
+                    if let Some(pat) = self.session.tapestry.pattern_mut(pat_id) {
+                        let _ = pat.toggle_step(ch_id, step_idx, root_key, velocity);
+                    }
+                    if let Err(err) = tapestry_ui::TapestryUi::bake_bank_to_tracks(
+                        &self.session.tapestry,
+                        &mut self.session.tracks,
+                    ) {
+                        self.message(ui, err);
+                    } else {
+                        self.refresh(ui);
+                    }
+                    return true;
+                }
+            }
+        }
         let step_rect = ui.rect(self.steps);
         if self.workspace == Workspace::StepSequencer
             && pointer.kind == PointerKind::Down(Button::Left)
@@ -2515,6 +3119,7 @@ impl Studio {
                                 "Mix",
                                 "Piano Roll",
                                 "Step Sequencer",
+                                "Tapestry",
                                 "Instruments",
                                 "EuropaRack",
                                 "Muse",
@@ -2531,6 +3136,7 @@ impl Studio {
                     "moan.mixer",
                     "moan.piano",
                     "moan.steps",
+                    "moan.tapestry",
                     "moan.timeline",
                     "moan.modular",
                     "moan.muse.toggle",
@@ -2568,6 +3174,24 @@ impl Studio {
                 self.remember_mix();
                 self.session.master_volume = value;
                 self.refresh_mix(ui);
+                return Ok(None);
+            }
+            if *id == self.tapestry_ui.swing_slider {
+                let val =
+                    (ui.value(*id) + 0.5).clamp(0.0, moan_core::time::MAX_SWING_PCT as f32) as u8;
+                if self.session.tapestry.swing_pct != val {
+                    self.remember_mix();
+                    self.session.tapestry.swing_pct = val;
+                    if !self.session.tapestry.channels.is_empty()
+                        && !self.session.tapestry.patterns.is_empty()
+                    {
+                        tapestry_ui::TapestryUi::bake_bank_to_tracks(
+                            &self.session.tapestry,
+                            &mut self.session.tracks,
+                        )?;
+                    }
+                    self.refresh(ui);
+                }
                 return Ok(None);
             }
             if *id == self.europarack_ui.dark_room_slider {
@@ -2756,10 +3380,20 @@ impl Studio {
                 "moan.library.keys" => "Silk Keys",
                 "moan.library.bass" => "Satin Bass",
                 "moan.library.kit" => "Velvet Kit",
+                "moan.library.sub808" => "Sub 808",
+                "moan.library.drums" => "Studio Drums",
+                "moan.library.tine" => "Tine Keys",
+                "moan.library.grand" => "Grand Piano",
+                "moan.library.guitar" => "Electric Guitar",
+                "moan.library.mallet" => "Mallet Bells",
+                "moan.library.cross" => "Cross Synth",
                 "moan.library.ariel" => "Ariel Voice",
                 "moan.library.prism" => "Prism Synth",
                 "moan.arp" => "Arpeggiate",
+                "moan.compose.cycle" => "Cycle Note Tool",
+                "moan.compose.apply" => "Apply Note Tool",
                 "moan.modular" => "EuropaRack",
+                "moan.tapestry" => "Tapestry",
                 "moan.muse.toggle" => "Muse",
                 "moan.muse.disable" => "Disable Muse",
                 "moan.clear-notes" => "Clear notes",
@@ -2776,6 +3410,8 @@ impl Studio {
                 "moan.redo" => "Redo",
                 "moan.import" => "Import WAV",
                 "moan.export" => "Export WAV",
+                "moan.import-midi" => "Import MIDI",
+                "moan.export-midi" => "Export MIDI",
                 "moan.open-project" => "Open Project",
                 "moan.save-project" => "Save Project",
                 "moan.new-project" => "New Project",
@@ -2801,6 +3437,8 @@ impl Studio {
             "Redo",
             "New Project",
             "Open Project",
+            "Import MIDI",
+            "Export MIDI",
             "WAV",
             "FLAC",
             "MP3",
@@ -2817,6 +3455,7 @@ impl Studio {
             "Mix",
             "Piano Roll",
             "Step Sequencer",
+            "Tapestry",
             "Instruments",
             "EuropaRack",
             "Muse",
@@ -2848,6 +3487,8 @@ impl Studio {
             "Apply Warp",
             "Extract MIDI",
             "Arpeggiate",
+            "Cycle Note Tool",
+            "Apply Note Tool",
             "Create Song",
             "Add Layer",
             "Replace Section",
@@ -2865,6 +3506,47 @@ impl Studio {
             "WS Extract Stems",
             "Ariel Voice",
             "Prism Synth",
+            "Sub 808",
+            "Studio Drums",
+            "Tine Keys",
+            "Grand Piano",
+            "Electric Guitar",
+            "Mallet Bells",
+            "Cross Synth",
+            "Tapestry Mode",
+            "Tapestry Cycle Pattern",
+            "New Pattern",
+            "Clone Pattern",
+            "Tapestry Cycle Instance",
+            "Make Unique",
+            "Split Channels",
+            "Tapestry Cycle Kit",
+            "Add Kit",
+            "Tapestry Cycle Starter",
+            "Load Starter",
+            "Paint Pattern to Arrange",
+            "Tapestry Cycle Scene",
+            "Queue Scene",
+            "Advance Bar",
+            "Recover Riff",
+            "Toggle 6-Band EQ",
+            "HPF 80Hz",
+            "Auto Cut Resonance",
+            "Reset 6-Band EQ",
+            "Cycle Sidechain Key",
+            "Enable Sidechain Duck",
+            "Cycle Gate Preset",
+            "Apply Gate Preset",
+            "Cycle Post Send",
+            "Cycle Out Bus",
+            "Cycle Tape Preset",
+            "Apply Tape Preset",
+            "Toggle Transient",
+            "Toggle BitCrush",
+            "Toggle Chorus",
+            "Cycle Mastering Preset",
+            "Apply Mastering Preset",
+            "Disable Mastering",
         ]
         .contains(&command)
         {
@@ -2879,6 +3561,560 @@ impl Studio {
                 };
                 self.session
                     .add_midi(moan_core::midi::Pattern::preset(instrument))?;
+                None
+            }
+            "Sub 808"
+            | "Studio Drums"
+            | "Tine Keys"
+            | "Grand Piano"
+            | "Electric Guitar"
+            | "Mallet Bells"
+            | "Cross Synth" => {
+                let instrument = match command {
+                    "Sub 808" => Instrument::Sub808,
+                    "Studio Drums" => Instrument::DrumKit,
+                    "Tine Keys" => Instrument::TineKeys,
+                    "Grand Piano" => Instrument::ModalGrand,
+                    "Electric Guitar" => Instrument::PluckGuitar,
+                    "Mallet Bells" => Instrument::ModalMallet,
+                    _ => Instrument::CrossSynth,
+                };
+                self.session
+                    .add_midi(moan_core::midi::Pattern::preset(instrument))?;
+                None
+            }
+            "Cycle Note Tool" => {
+                let name = self.studio_rack_ui.cycle_compose_tool();
+                ui.set_text(self.compose_tool_btn, &format!("Tool: {}", name));
+                None
+            }
+            "Apply Note Tool" => {
+                let tool = self.studio_rack_ui.active_compose_tool();
+                self.session.apply_compose_tool(&tool)?;
+                None
+            }
+            "Tapestry" => {
+                self.show_workspace(ui, Workspace::Tapestry);
+                ui.focus(Some(self.tapestry_ui.canvas));
+                None
+            }
+            "Tapestry Mode" => {
+                self.session.remember();
+                self.session.tapestry.transport_mode = match self.session.tapestry.transport_mode {
+                    moan_core::pattern::TransportContext::PatternMode => {
+                        moan_core::pattern::TransportContext::SongMode
+                    }
+                    moan_core::pattern::TransportContext::SongMode => {
+                        moan_core::pattern::TransportContext::PatternMode
+                    }
+                };
+                tapestry_ui::TapestryUi::bake_bank_to_tracks(
+                    &self.session.tapestry,
+                    &mut self.session.tracks,
+                )?;
+                None
+            }
+            "Tapestry Cycle Pattern" => {
+                self.tapestry_ui.cycle_pattern(&mut self.session.tapestry);
+                if self.session.tapestry.transport_mode
+                    == moan_core::pattern::TransportContext::PatternMode
+                    && !self.session.tapestry.channels.is_empty()
+                {
+                    tapestry_ui::TapestryUi::bake_bank_to_tracks(
+                        &self.session.tapestry,
+                        &mut self.session.tracks,
+                    )?;
+                }
+                None
+            }
+            "New Pattern" => {
+                self.session.remember();
+                let next_num = self.session.tapestry.patterns.len() + 1;
+                let pid = self
+                    .session
+                    .tapestry
+                    .create_pattern(format!("Pattern {}", next_num), 1, 4)
+                    .map_err(|_| "Pattern limit reached")?;
+                self.session.tapestry.active_pattern = pid;
+                None
+            }
+            "Clone Pattern" => {
+                self.session.remember();
+                let pid = self
+                    .session
+                    .tapestry
+                    .clone_pattern(self.session.tapestry.active_pattern)
+                    .map_err(|_| "Create or load a pattern first")?;
+                self.session.tapestry.active_pattern = pid;
+                None
+            }
+            "Tapestry Cycle Instance" => {
+                self.tapestry_ui.cycle_instance(&self.session.tapestry);
+                None
+            }
+            "Make Unique" => {
+                let idx = self.tapestry_ui.selected_instance_idx;
+                if idx >= self.session.tapestry.instances.len() {
+                    return Err("Paint or place a pattern instance first");
+                }
+                self.session.remember();
+                let new_id = self
+                    .session
+                    .tapestry
+                    .make_instance_unique(idx)
+                    .map_err(|_| "Cannot make instance unique")?;
+                self.session.tapestry.active_pattern = new_id;
+                tapestry_ui::TapestryUi::bake_bank_to_tracks(
+                    &self.session.tapestry,
+                    &mut self.session.tracks,
+                )?;
+                None
+            }
+            "Split Channels" => {
+                let active = self.session.tapestry.active_pattern;
+                self.session.remember();
+                let created = self
+                    .session
+                    .tapestry
+                    .split_pattern_by_channel(active)
+                    .map_err(|_| "Cannot split pattern channels")?;
+                if let Some(&first) = created.first() {
+                    self.session.tapestry.active_pattern = first;
+                }
+                None
+            }
+            "Tapestry Cycle Kit" => {
+                self.tapestry_ui.cycle_kit(ui);
+                None
+            }
+            "Add Kit" => {
+                let kit = self.tapestry_ui.active_kit();
+                self.session.remember();
+                self.tapestry_ui
+                    .apply_kit_to_bank(kit, &mut self.session.tapestry)?;
+                None
+            }
+            "Tapestry Cycle Starter" => {
+                self.tapestry_ui.cycle_starter(ui);
+                None
+            }
+            "Load Starter" => {
+                let starter = self.tapestry_ui.active_starter();
+                self.session.remember();
+                self.tapestry_ui.apply_starter_to_bank(
+                    starter,
+                    &mut self.session.tapestry,
+                    &mut self.session.scenes,
+                )?;
+                tapestry_ui::TapestryUi::bake_bank_to_tracks(
+                    &self.session.tapestry,
+                    &mut self.session.tracks,
+                )?;
+                self.session.from = 0;
+                self.session.to = self.session.duration();
+                None
+            }
+            "Paint Pattern to Arrange" => {
+                let pat_id = self.session.tapestry.active_pattern;
+                let sig = self
+                    .session
+                    .tapestry
+                    .tempo_map
+                    .time_signature_at(moan_core::time::Time::ZERO);
+                let len_beats = self
+                    .session
+                    .tapestry
+                    .pattern(pat_id)
+                    .ok_or("Create or load a pattern first")?
+                    .total_beats(sig);
+                let next_start = self
+                    .session
+                    .tapestry
+                    .instances
+                    .iter()
+                    .filter_map(|inst| inst.start_beat.checked_add(inst.length_beats))
+                    .max()
+                    .unwrap_or(moan_core::time::Time::ZERO);
+                self.session.remember();
+                let idx = self
+                    .session
+                    .tapestry
+                    .place_instance(moan_core::pattern::PatternInstance {
+                        pattern: pat_id,
+                        start_beat: next_start,
+                        length_beats: len_beats,
+                        offset_beats: moan_core::time::Time::ZERO,
+                        lane: 0,
+                    })
+                    .map_err(|_| "Pattern instance limit reached")?;
+                self.tapestry_ui.selected_instance_idx = idx;
+                self.session.tapestry.transport_mode =
+                    moan_core::pattern::TransportContext::SongMode;
+                tapestry_ui::TapestryUi::bake_bank_to_tracks(
+                    &self.session.tapestry,
+                    &mut self.session.tracks,
+                )?;
+                self.session.from = 0;
+                self.session.to = self.session.duration();
+                None
+            }
+            "Tapestry Cycle Scene" => {
+                self.tapestry_ui.cycle_scene(ui);
+                None
+            }
+            "Queue Scene" => {
+                let s_idx = self.tapestry_ui.selected_scene_idx;
+                let active_pat = self.session.tapestry.active_pattern;
+                let has_pat = self.session.tapestry.pattern(active_pat).is_some();
+                self.session.remember();
+                if has_pat
+                    && self
+                        .session
+                        .scenes
+                        .scenes
+                        .get(s_idx)
+                        .is_some_and(|r| r.slots.iter().all(|s| s.is_none()))
+                {
+                    let _ = self.session.scenes.set_slot(s_idx, 0, Some(active_pat));
+                }
+                self.session
+                    .scenes
+                    .queue_scene_for_bank(
+                        s_idx,
+                        self.tapestry_ui.scene_clock_frame,
+                        &self.session.tapestry,
+                    )
+                    .map_err(|_| "Cannot queue scene")?;
+                None
+            }
+            "Advance Bar" => {
+                let target_frame = if let Some(q) = self.session.scenes.queued {
+                    q.launch_frame.max(self.tapestry_ui.scene_clock_frame)
+                } else {
+                    self.session
+                        .tapestry
+                        .tempo_map
+                        .next_bar_at_frame(
+                            self.tapestry_ui.scene_clock_frame,
+                            self.session.tapestry.swing_pct,
+                        )
+                        .1
+                };
+                self.tapestry_ui.scene_clock_frame = target_frame;
+                if let Ok(launched) = self
+                    .session
+                    .scenes
+                    .advance_to(target_frame, &mut self.session.tapestry)
+                {
+                    if launched > 0 {
+                        self.session.tapestry.transport_mode =
+                            moan_core::pattern::TransportContext::SongMode;
+                        tapestry_ui::TapestryUi::bake_bank_to_tracks(
+                            &self.session.tapestry,
+                            &mut self.session.tracks,
+                        )?;
+                        self.session.from = 0;
+                        self.session.to = self.session.duration();
+                    }
+                }
+                None
+            }
+            "Recover Riff" => {
+                if self.session.retrospective.is_empty() {
+                    return Err("Play keyboard typing notes first to recover a riff");
+                }
+                self.session.remember();
+                let target_ch = if let Some(ch) = self
+                    .session
+                    .tapestry
+                    .channels
+                    .get(self.tapestry_ui.selected_channel_idx)
+                    .or_else(|| self.session.tapestry.channels.first())
+                {
+                    ch.id
+                } else {
+                    self.session
+                        .tapestry
+                        .add_channel("Recovered Riff", Instrument::TineKeys as u8)
+                        .map_err(|_| "Channel limit reached")?
+                };
+                let pat_num = self.session.tapestry.patterns.len() + 1;
+                let pat_id = self
+                    .session
+                    .tapestry
+                    .create_pattern(format!("Recovered Riff {}", pat_num), 2, 4)
+                    .map_err(|_| "Pattern limit reached")?;
+                let mut pat = self
+                    .session
+                    .retrospective
+                    .recover_to_pattern(
+                        pat_id,
+                        format!("Recovered Riff {}", pat_num),
+                        &self.session.tapestry.tempo_map,
+                        self.session.tapestry.swing_pct,
+                        Some(moan_core::time::Time::SIXTEENTH),
+                    )
+                    .map_err(|_| "Could not recover retrospective riff")?;
+                let valid_ids: Vec<_> = self
+                    .session
+                    .tapestry
+                    .channels
+                    .iter()
+                    .map(|c| c.id)
+                    .collect();
+                let mut remapped: Vec<(
+                    moan_core::pattern::ChannelId,
+                    Vec<moan_core::compose::ExpressiveNote>,
+                )> = Vec::new();
+                for (cid, notes) in pat.channel_notes.drain(..) {
+                    let dst = if valid_ids.contains(&cid) {
+                        cid
+                    } else {
+                        target_ch
+                    };
+                    if let Some((_, existing)) = remapped.iter_mut().find(|(id, _)| *id == dst) {
+                        existing.extend(notes);
+                    } else {
+                        remapped.push((dst, notes));
+                    }
+                }
+                pat.channel_notes = remapped;
+                if let Some(slot) = self.session.tapestry.pattern_mut(pat_id) {
+                    *slot = pat.clone();
+                }
+                self.session.tapestry.active_pattern = pat_id;
+                let sig = self
+                    .session
+                    .tapestry
+                    .tempo_map
+                    .time_signature_at(moan_core::time::Time::ZERO);
+                let total_beats = pat.total_beats(sig);
+                if let Some((cid, notes)) = pat.channel_notes.first() {
+                    let inst = self
+                        .session
+                        .tapestry
+                        .channel(*cid)
+                        .and_then(|c| Instrument::try_from(c.instrument).ok())
+                        .unwrap_or(Instrument::TineKeys);
+                    if self.session.tracks.len() < MAX_TRACKS && !notes.is_empty() {
+                        if let Ok(mpat) = moan_core::compose::notes_to_midi_pattern(
+                            notes,
+                            total_beats,
+                            inst,
+                            &self.session.tapestry.tempo_map,
+                            self.session.tapestry.swing_pct,
+                        ) {
+                            if let Ok(clip) = Clip::midi(mpat, self.session.cursor) {
+                                let mut trk = Track::new();
+                                trk.clips.push(clip);
+                                self.session.tracks.push(trk);
+                                self.session.selected = self.session.tracks.len() - 1;
+                            }
+                        }
+                    }
+                }
+                self.session.from = 0;
+                self.session.to = self.session.duration();
+                None
+            }
+            "Import MIDI" => Some(Action::ImportMidi),
+            "Export MIDI" => Some(Action::ExportMidi),
+            "Toggle 6-Band EQ" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                self.session.remember();
+                let t = &mut self.session.tracks[self.session.selected];
+                t.parametric_eq = if t.parametric_eq.is_some() {
+                    None
+                } else {
+                    Some(moan_core::parametric_eq::ParametricEq::new())
+                };
+                None
+            }
+            "HPF 80Hz" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                self.session.remember();
+                let t = &mut self.session.tracks[self.session.selected];
+                let eq = t
+                    .parametric_eq
+                    .get_or_insert_with(moan_core::parametric_eq::ParametricEq::new);
+                let enabled = !eq.band(0).is_some_and(|b| b.enabled);
+                let _ = eq.set_high_pass(enabled, 80.0, 0.707);
+                None
+            }
+            "Auto Cut Resonance" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                let (spec, res) = console_fx_ui::ConsoleFxUi::analyze_track_spectrum(
+                    &self.session.tracks[self.session.selected],
+                )?;
+                self.console_fx_ui.last_spectrum_db = spec;
+                self.console_fx_ui.last_resonances = res;
+                self.session.remember();
+                let t = &mut self.session.tracks[self.session.selected];
+                let eq = t
+                    .parametric_eq
+                    .get_or_insert_with(moan_core::parametric_eq::ParametricEq::new);
+                let mut band = 2usize;
+                for cand in res.into_iter().flatten() {
+                    if band > 3 {
+                        break;
+                    }
+                    let _ = eq.apply_resonance_cut(band, cand);
+                    band += 1;
+                }
+                None
+            }
+            "Reset 6-Band EQ" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                self.session.remember();
+                self.session.tracks[self.session.selected].parametric_eq = None;
+                None
+            }
+            "Cycle Sidechain Key" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                self.session.remember();
+                let n = self.session.tracks.len();
+                let sel = self.session.selected;
+                let next = console_fx_ui::next_other_track(
+                    self.session.tracks[sel].sidechain_from,
+                    n,
+                    sel,
+                );
+                self.session.tracks[sel].sidechain_from = next;
+                None
+            }
+            "Enable Sidechain Duck" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                let n = self.session.tracks.len();
+                let sel = self.session.selected;
+                self.session.remember();
+                let t = &mut self.session.tracks[sel];
+                if t.sidechain_from.is_none() && n >= 2 {
+                    t.sidechain_from = console_fx_ui::next_other_track(None, n, sel);
+                }
+                t.sc_compressor = Some(console_fx_ui::ConsoleFxUi::default_sidechain_compressor());
+                None
+            }
+            "Cycle Gate Preset" => {
+                self.console_fx_ui.cycle_gate_preset(ui);
+                None
+            }
+            "Apply Gate Preset" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                let gate = self.console_fx_ui.build_active_gate()?;
+                self.session.remember();
+                self.session.tracks[self.session.selected].gate = Some(gate);
+                None
+            }
+            "Cycle Post Send" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                self.session.remember();
+                let n = self.session.tracks.len();
+                let sel = self.session.selected;
+                let cur = self.session.tracks[sel]
+                    .post_fader_send
+                    .map(|(dst, _)| dst);
+                let next = console_fx_ui::next_other_track(cur, n, sel);
+                self.session.tracks[sel].post_fader_send = next.map(|d| (d, 45));
+                None
+            }
+            "Cycle Out Bus" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                self.session.remember();
+                let n = self.session.tracks.len();
+                let sel = self.session.selected;
+                let next = console_fx_ui::next_other_track(
+                    self.session.tracks[sel].output_bus,
+                    n,
+                    sel,
+                );
+                self.session.tracks[sel].output_bus = next;
+                None
+            }
+            "Cycle Tape Preset" => {
+                self.console_fx_ui.cycle_tape_preset(ui);
+                None
+            }
+            "Apply Tape Preset" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                let tape = self.console_fx_ui.build_active_tape()?;
+                self.session.remember();
+                self.session.tracks[self.session.selected].tape = Some(tape);
+                None
+            }
+            "Toggle Transient" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                self.session.remember();
+                let t = &mut self.session.tracks[self.session.selected];
+                t.transient = if t.transient.is_some() {
+                    None
+                } else {
+                    Some(console_fx_ui::ConsoleFxUi::default_transient())
+                };
+                None
+            }
+            "Toggle BitCrush" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                self.session.remember();
+                let t = &mut self.session.tracks[self.session.selected];
+                t.crusher = if t.crusher.is_some() {
+                    None
+                } else {
+                    Some(console_fx_ui::ConsoleFxUi::default_bitcrusher())
+                };
+                None
+            }
+            "Toggle Chorus" => {
+                if self.session.selected >= self.session.tracks.len() {
+                    return Err("Select a track");
+                }
+                self.session.remember();
+                let t = &mut self.session.tracks[self.session.selected];
+                t.chorus = if t.chorus.is_some() {
+                    None
+                } else {
+                    Some(console_fx_ui::ConsoleFxUi::default_chorus())
+                };
+                None
+            }
+            "Cycle Mastering Preset" => {
+                self.console_fx_ui.cycle_master_preset(ui);
+                None
+            }
+            "Apply Mastering Preset" => {
+                let master = self.console_fx_ui.build_active_mastering()?;
+                self.session.remember();
+                self.session.mastering = Some(master);
+                None
+            }
+            "Disable Mastering" => {
+                if self.session.mastering.is_some() {
+                    self.session.remember();
+                    self.session.mastering = None;
+                }
                 None
             }
             "Ariel Voice" => {

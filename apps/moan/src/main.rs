@@ -107,6 +107,9 @@ mod guest {
         for t in &mut studio.session.tracks {
             t.reset_effects();
         }
+        if let Some(m) = &mut studio.session.mastering {
+            m.reset();
+        }
         sex_pdx::serial_record!(
             "[moan.export.started] format={} frames={}",
             format.extension(),
@@ -156,6 +159,9 @@ mod guest {
         })();
         for t in &mut studio.session.tracks {
             t.reset_effects();
+        }
+        if let Some(m) = &mut studio.session.mastering {
+            m.reset();
         }
         studio.set_busy(&mut app.ui, false);
         if result.is_err() {
@@ -453,6 +459,9 @@ mod guest {
                                     for t in &mut studio.session.tracks {
                                         t.reset_effects();
                                     }
+                                    if let Some(m) = &mut studio.session.mastering {
+                                        m.reset();
+                                    }
                                     for meter in &mut meters {
                                         meter.reset();
                                     }
@@ -595,6 +604,27 @@ mod guest {
                                 &mut app.ui,
                                 match result {
                                     Ok(()) => "File operation complete",
+                                    Err(e) => e,
+                                },
+                            );
+                        }
+                        Some(Action::ImportMidi) | Some(Action::ExportMidi) => {
+                            if playing || paused || recording.is_some() || plugin.busy() {
+                                studio.message(
+                                    &mut app.ui,
+                                    "Stop transport and finish offline rendering before MIDI file operations",
+                                );
+                                continue;
+                            }
+                            let result = if action == Some(Action::ImportMidi) {
+                                moan::project_io::import_midi(&mut app, &mut studio)
+                            } else {
+                                moan::project_io::export_midi(&mut app, &mut studio)
+                            };
+                            studio.message(
+                                &mut app.ui,
+                                match result {
+                                    Ok(()) => "MIDI file operation complete",
                                     Err(e) => e,
                                 },
                             );

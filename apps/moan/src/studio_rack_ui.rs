@@ -10,14 +10,27 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 use moan_core::{
     arp::{generate_arp, ArpMode, StepDivision},
+    compose::{ComposeTool, StrumDir},
     effects::{Distortion, DistortionMode, Equalizer},
     midi::{Note, Pattern},
+    time::Time,
     wavetable::{preview_curve, PrismParams},
 };
 use weft::{Id, Layout, TextStyle, Ui};
 
 pub const CURVES_WIDTH: usize = 480;
 pub const CURVES_HEIGHT: usize = 90;
+
+pub const COMPOSE_TOOL_NAMES: [&str; 8] = [
+    "Legato",
+    "Articulate",
+    "Chop",
+    "Strum",
+    "Flam",
+    "Humanize",
+    "Flip",
+    "Tidy",
+];
 
 /// UI widget IDs and parameters for the visual device chain & clip warp.
 pub struct StudioRackUi {
@@ -45,6 +58,7 @@ pub struct StudioRackUi {
     pub distortion_enabled: bool,
     pub distortion_mode_idx: usize,
     pub distortion_drive: u16,
+    pub compose_tool_idx: usize,
     pub prism_params: PrismParams,
 }
 
@@ -116,6 +130,7 @@ impl StudioRackUi {
             distortion_enabled: false,
             distortion_mode_idx: 0,
             distortion_drive: 100,
+            compose_tool_idx: 0,
             prism_params: PrismParams::default(),
         }
     }
@@ -253,5 +268,58 @@ impl StudioRackUi {
                 velocity,
             })
             .collect();
+    }
+
+    pub fn compose_tool_name(&self) -> &'static str {
+        COMPOSE_TOOL_NAMES[self.compose_tool_idx % COMPOSE_TOOL_NAMES.len()]
+    }
+
+    pub fn cycle_compose_tool(&mut self) -> &'static str {
+        self.compose_tool_idx = (self.compose_tool_idx + 1) % COMPOSE_TOOL_NAMES.len();
+        self.compose_tool_name()
+    }
+
+    pub fn select_compose_tool(&mut self, name: &str) -> bool {
+        if let Some(pos) = COMPOSE_TOOL_NAMES
+            .iter()
+            .position(|&item| item.eq_ignore_ascii_case(name))
+        {
+            self.compose_tool_idx = pos;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn active_compose_tool(&self) -> ComposeTool {
+        match self.compose_tool_idx % COMPOSE_TOOL_NAMES.len() {
+            0 => ComposeTool::Legato { gap: Time::ZERO },
+            1 => ComposeTool::Articulate { scale_pct: 50 },
+            2 => ComposeTool::Chop {
+                division: Time::SIXTEENTH,
+                gate_pct: 80,
+            },
+            3 => ComposeTool::Strum {
+                spread: Time::EIGHTH,
+                direction: StrumDir::Up,
+                vel_falloff_pct: 15,
+            },
+            4 => ComposeTool::Flam {
+                count: 1,
+                spacing: Time::THIRTY_SECOND,
+                vel_pct: 60,
+            },
+            5 => ComposeTool::Humanize {
+                max_timing_ticks: 24,
+                max_vel_delta: 12,
+                max_len_pct: 10,
+                seed: 42,
+            },
+            6 => ComposeTool::Flip {
+                reverse_time: true,
+                mirror_pitch: true,
+            },
+            _ => ComposeTool::Tidy,
+        }
     }
 }

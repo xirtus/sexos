@@ -14,8 +14,29 @@ pub enum Instrument {
     VelvetSampler = 2,
     ArielFormant = 3,
     PrismWavetable = 4,
+    Sub808 = 5,
+    DrumKit = 6,
+    TineKeys = 7,
+    ModalGrand = 8,
+    PluckGuitar = 9,
+    ModalMallet = 10,
+    CrossSynth = 11,
 }
 impl Instrument {
+    pub const ALL: [Instrument; 12] = [
+        Self::SilkTriangle,
+        Self::SatinPulse,
+        Self::VelvetSampler,
+        Self::ArielFormant,
+        Self::PrismWavetable,
+        Self::Sub808,
+        Self::DrumKit,
+        Self::TineKeys,
+        Self::ModalGrand,
+        Self::PluckGuitar,
+        Self::ModalMallet,
+        Self::CrossSynth,
+    ];
     pub fn name(self) -> &'static str {
         match self {
             Self::SilkTriangle => "Silk Keys",
@@ -23,6 +44,13 @@ impl Instrument {
             Self::VelvetSampler => "Velvet Kit",
             Self::ArielFormant => "Ariel Voice",
             Self::PrismWavetable => "Prism Synth",
+            Self::Sub808 => "Sub 808",
+            Self::DrumKit => "Studio Drums",
+            Self::TineKeys => "Tine Keys",
+            Self::ModalGrand => "Grand Piano",
+            Self::PluckGuitar => "Electric Guitar",
+            Self::ModalMallet => "Mallet Bells",
+            Self::CrossSynth => "Cross Synth",
         }
     }
 }
@@ -35,6 +63,13 @@ impl TryFrom<u8> for Instrument {
             2 => Ok(Self::VelvetSampler),
             3 => Ok(Self::ArielFormant),
             4 => Ok(Self::PrismWavetable),
+            5 => Ok(Self::Sub808),
+            6 => Ok(Self::DrumKit),
+            7 => Ok(Self::TineKeys),
+            8 => Ok(Self::ModalGrand),
+            9 => Ok(Self::PluckGuitar),
+            10 => Ok(Self::ModalMallet),
+            11 => Ok(Self::CrossSynth),
             _ => Err(Error::Instrument),
         }
     }
@@ -129,6 +164,9 @@ impl Pattern {
             let key = match instrument {
                 Instrument::VelvetSampler => 60,
                 Instrument::SatinPulse => [48, 48, 55, 53][step as usize % 4],
+                Instrument::Sub808 => [36, 36, 43, 41][step as usize % 4],
+                Instrument::DrumKit => [36, 42, 38, 42, 36, 42, 38, 46][step as usize % 8],
+                Instrument::PluckGuitar => [52, 55, 59, 64][step as usize % 4],
                 _ => [60, 64, 67, 69][step as usize % 4],
             };
             notes.push(Note {
@@ -148,6 +186,9 @@ impl Pattern {
     /// Render immutable cached PCM; bounded memory/voices and no filesystem or IPC.
     pub fn bake(&self) -> Result<Arc<Vec<Frame>>, Error> {
         self.validate()?;
+        if let Some(pcm) = crate::instruments::bake_instrument_pattern(self)? {
+            return Ok(Arc::new(pcm));
+        }
         let mut mix: Vec<[i32; 2]> = Vec::new();
         mix.try_reserve_exact(self.frames as usize)
             .map_err(|_| Error::Memory)?;

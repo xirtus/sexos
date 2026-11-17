@@ -2,9 +2,22 @@
 //! Versioned editable Moan project, not a mixdown. PCM source IDs preserve shared
 //! clip sources, edits and effect configuration. DSP history/undo are not stored.
 use crate::{Session, MAX_FRAMES, MAX_TRACKS};
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 use moan_core::{
+    compose::ExpressiveNote,
     effects::{Compressor, Equalizer, Reverb},
+    mastering::MasteringProcessor,
+    parametric_eq::{BandConfig, ParametricEq},
+    pattern::{
+        ChannelId, PatternId, PatternInstance, QueuedScene, RackChannel, SceneMatrix,
+        TapestryBank, TapestryPattern, TransportContext, MAX_INSTANCES, MAX_PATTERNS,
+        MAX_RACK_CHANNELS, SCENE_COUNT, SCENE_LANES,
+    },
+    tape_fx::{
+        BitCrusher, SidechainCompressor, SidechainGate, StereoChorus, TapeMachine,
+        TransientShaper,
+    },
+    time::{TempoMap, TempoSegment, Time, TimeSignature, MAX_SWING_PCT},
     Clip, Track, RATE,
 };
 pub const MAGIC: &[u8; 8] = b"MOANPRJ\0";
@@ -51,17 +64,34 @@ impl Writer {
     fn u8(&mut self, v: u8) -> Result<(), Error> {
         self.bytes(&[v])
     }
+    fn i8(&mut self, v: i8) -> Result<(), Error> {
+        self.bytes(&[v as u8])
+    }
     fn u16(&mut self, v: u16) -> Result<(), Error> {
         self.bytes(&v.to_le_bytes())
     }
     fn u32(&mut self, v: usize) -> Result<(), Error> {
         self.bytes(&u32::try_from(v).map_err(|_| Error::Limit)?.to_le_bytes())
     }
+    fn u32_raw(&mut self, v: u32) -> Result<(), Error> {
+        self.bytes(&v.to_le_bytes())
+    }
+    fn i64(&mut self, v: i64) -> Result<(), Error> {
+        self.bytes(&v.to_le_bytes())
+    }
     fn u64(&mut self, v: usize) -> Result<(), Error> {
         self.bytes(&(v as u64).to_le_bytes())
     }
+    fn u64_raw(&mut self, v: u64) -> Result<(), Error> {
+        self.bytes(&v.to_le_bytes())
+    }
     fn f32(&mut self, v: f32) -> Result<(), Error> {
         self.bytes(&v.to_le_bytes())
+    }
+    fn str_u16(&mut self, s: &str) -> Result<(), Error> {
+        let b = s.as_bytes();
+        self.u16(u16::try_from(b.len()).map_err(|_| Error::Limit)?)?;
+        self.bytes(b)
     }
 }
 struct Reader<'a> {
@@ -78,6 +108,9 @@ impl<'a> Reader<'a> {
     fn u8(&mut self) -> Result<u8, Error> {
         Ok(self.bytes(1)?[0])
     }
+    fn i8(&mut self) -> Result<i8, Error> {
+        Ok(self.bytes(1)?[0] as i8)
+    }
     fn i16(&mut self) -> Result<i16, Error> {
         Ok(i16::from_le_bytes(self.bytes(2)?.try_into().unwrap()))
     }
@@ -87,12 +120,29 @@ impl<'a> Reader<'a> {
     fn u32(&mut self) -> Result<usize, Error> {
         Ok(u32::from_le_bytes(self.bytes(4)?.try_into().unwrap()) as usize)
     }
+    fn u32_raw(&mut self) -> Result<u32, Error> {
+        Ok(u32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
+    }
+    fn i64(&mut self) -> Result<i64, Error> {
+        Ok(i64::from_le_bytes(self.bytes(8)?.try_into().unwrap()))
+    }
     fn u64(&mut self) -> Result<usize, Error> {
         usize::try_from(u64::from_le_bytes(self.bytes(8)?.try_into().unwrap()))
             .map_err(|_| Error::Limit)
     }
+    fn u64_raw(&mut self) -> Result<u64, Error> {
+        Ok(u64::from_le_bytes(self.bytes(8)?.try_into().unwrap()))
+    }
     fn f32(&mut self) -> Result<f32, Error> {
         Ok(f32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
+    }
+    fn str_u16(&mut self, max_len: usize) -> Result<String, Error> {
+        let len = self.u16()? as usize;
+        if len > max_len {
+            return Err(Error::Limit);
+        }
+        let s = core::str::from_utf8(self.bytes(len)?).map_err(|_| Error::Metadata)?;
+        Ok(String::from(s))
     }
     fn zero(&mut self) -> Result<(), Error> {
         if self.u16()? != 0 {
@@ -143,7 +193,9 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
     }
     let mut w = Writer(Vec::new());
     w.bytes(MAGIC)?;
-    let has_v4 = sources.iter().any(|s| s.vocal_clip().is_some())
+    let has_ext5 = session_needs_ext5(session, &sources);
+    let has_v4 = has_ext5
+        || sources.iter().any(|s| s.vocal_clip().is_some())
         || sources.iter().any(|s| {
             if let Some(p) = s.midi_pattern() {
                 matches!(
@@ -340,6 +392,9 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
                 w.u16(line.text.len() as u16)?;
                 w.bytes(line.text.as_bytes())?;
             }
+        }
+        if has_ext5 {
+            write_ext5(&mut w, session)?;
         }
     }
     let length = w.0.len();
@@ -703,6 +758,13 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
             muse_crate.push(take);
         }
     }
+    let mut ext5_data: Option<Ext5Data> = None;
+    if version >= 4 && r.at < bytes.len() {
+        if r.bytes(4)? != b"EXT5" {
+            return Err(Error::Metadata);
+        }
+        ext5_data = Some(read_ext5(&mut r, specs.len())?);
+    }
     if r.at != bytes.len() {
         return Err(Error::Metadata);
     }
@@ -785,5 +847,631 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
     }
     session.rack = rack;
     session.muse_crate = muse_crate;
+    if let Some(ext5) = ext5_data {
+        for (track, fx) in session.tracks.iter_mut().zip(ext5.track_fx.into_iter()) {
+            track.parametric_eq = fx.parametric_eq;
+            track.sc_compressor = fx.sc_compressor;
+            track.gate = fx.gate;
+            track.tape = fx.tape;
+            track.transient = fx.transient;
+            track.crusher = fx.crusher;
+            track.chorus = fx.chorus;
+            track.sidechain_from = fx.sidechain_from;
+            track.post_fader_send = fx.post_fader_send;
+            track.output_bus = fx.output_bus;
+        }
+        session.mastering = ext5.mastering;
+        session.tapestry = ext5.tapestry;
+        session.scenes = ext5.scenes;
+    }
     Ok(session)
+}
+
+fn track_has_ext5(t: &Track<'_>) -> bool {
+    t.parametric_eq.is_some()
+        || t.sc_compressor.is_some()
+        || t.gate.is_some()
+        || t.tape.is_some()
+        || t.transient.is_some()
+        || t.crusher.is_some()
+        || t.chorus.is_some()
+        || t.sidechain_from.is_some()
+        || t.post_fader_send.is_some()
+        || t.output_bus.is_some()
+}
+
+fn scenes_has_data(scenes: &SceneMatrix) -> bool {
+    scenes.active_scene.is_some()
+        || scenes.queued.is_some()
+        || scenes
+            .scenes
+            .iter()
+            .any(|row| row.slots.iter().any(Option::is_some))
+}
+
+fn tapestry_has_data(bank: &TapestryBank) -> bool {
+    !bank.channels.is_empty()
+        || !bank.patterns.is_empty()
+        || !bank.instances.is_empty()
+        || bank.swing_pct != 0
+        || bank.transport_mode != TransportContext::PatternMode
+        || bank.tempo_map != TempoMap::default()
+}
+
+fn session_needs_ext5(session: &Session, sources: &[&Clip<'_>]) -> bool {
+    tapestry_has_data(&session.tapestry)
+        || scenes_has_data(&session.scenes)
+        || session.mastering.is_some()
+        || session.tracks.iter().any(track_has_ext5)
+        || sources
+            .iter()
+            .any(|s| s.midi_pattern().is_some_and(|p| (p.instrument as u8) >= 5))
+}
+
+struct Ext5TrackFx {
+    parametric_eq: Option<ParametricEq>,
+    sc_compressor: Option<SidechainCompressor>,
+    gate: Option<SidechainGate>,
+    tape: Option<TapeMachine>,
+    transient: Option<TransientShaper>,
+    crusher: Option<BitCrusher>,
+    chorus: Option<StereoChorus>,
+    sidechain_from: Option<u8>,
+    post_fader_send: Option<(u8, u16)>,
+    output_bus: Option<u8>,
+}
+
+struct Ext5Data {
+    track_fx: Vec<Ext5TrackFx>,
+    mastering: Option<MasteringProcessor>,
+    tapestry: TapestryBank,
+    scenes: SceneMatrix,
+}
+
+fn write_ext5(w: &mut Writer, session: &Session) -> Result<(), Error> {
+    w.bytes(b"EXT5")?;
+    w.u16(session.tracks.len() as u16)?;
+    for t in &session.tracks {
+        let flags = (t.parametric_eq.is_some() as u16)
+            | ((t.sc_compressor.is_some() as u16) << 1)
+            | ((t.gate.is_some() as u16) << 2)
+            | ((t.tape.is_some() as u16) << 3)
+            | ((t.transient.is_some() as u16) << 4)
+            | ((t.crusher.is_some() as u16) << 5)
+            | ((t.chorus.is_some() as u16) << 6)
+            | ((t.sidechain_from.is_some() as u16) << 7)
+            | ((t.post_fader_send.is_some() as u16) << 8)
+            | ((t.output_bus.is_some() as u16) << 9);
+        w.u16(flags)?;
+        if let Some(eq) = &t.parametric_eq {
+            for b_idx in 0..6 {
+                let b = eq.band(b_idx).ok_or(Error::Effect)?;
+                w.u8(b.enabled as u8)?;
+                w.f32(b.freq_hz)?;
+                w.f32(b.gain_db)?;
+                w.f32(b.q)?;
+            }
+        }
+        if let Some(comp) = &t.sc_compressor {
+            let (th, ra, at, re, mk) = comp.parameters();
+            for v in [th, ra, at, re, mk] {
+                w.f32(v)?;
+            }
+        }
+        if let Some(gate) = &t.gate {
+            let (th, hy, ho, at, re, rg) = gate.parameters();
+            for v in [th, hy, ho, at, re, rg] {
+                w.f32(v)?;
+            }
+        }
+        if let Some(tape) = &t.tape {
+            let (dr, hb, tn, wo, fl, hs, mx) = tape.parameters();
+            for v in [dr, hb, tn, wo, fl, hs, mx] {
+                w.f32(v)?;
+            }
+        }
+        if let Some(tr) = &t.transient {
+            let (at, su) = tr.parameters();
+            w.f32(at)?;
+            w.f32(su)?;
+        }
+        if let Some(cr) = &t.crusher {
+            let (ds, bits, mix) = cr.parameters();
+            w.u16(ds)?;
+            w.u8(bits)?;
+            w.f32(mix)?;
+        }
+        if let Some(ch) = &t.chorus {
+            let (rt, dp, fb, mx) = ch.parameters();
+            for v in [rt, dp, fb, mx] {
+                w.f32(v)?;
+            }
+        }
+        if let Some(sc) = t.sidechain_from {
+            w.u8(sc)?;
+        }
+        if let Some((dst, pct)) = t.post_fader_send {
+            w.u8(dst)?;
+            w.u16(pct)?;
+        }
+        if let Some(bus) = t.output_bus {
+            w.u8(bus)?;
+        }
+    }
+
+    if let Some(m) = &session.mastering {
+        w.u8(1)?;
+        w.f32(m.trim_db())?;
+        let (low, body, air) = m.eq_gains();
+        w.f32(low)?;
+        w.f32(body)?;
+        w.f32(air)?;
+        let (th, ra, at, re, mk) = m.glue_compressor().parameters();
+        for v in [th, ra, at, re, mk] {
+            w.f32(v)?;
+        }
+        w.f32(m.stereo_width())?;
+        w.f32(m.limiter().ceiling_db())?;
+        w.f32(m.limiter().release_ms())?;
+    } else {
+        w.u8(0)?;
+    }
+
+    let bank = &session.tapestry;
+    w.u16(bank.active_pattern.0)?;
+    w.u8(match bank.transport_mode {
+        TransportContext::PatternMode => 0,
+        TransportContext::SongMode => 1,
+    })?;
+    w.u8(bank.swing_pct)?;
+
+    let segs = bank.tempo_map.segments();
+    w.u16(segs.len() as u16)?;
+    for s in segs {
+        w.i64(s.start.num)?;
+        w.u32_raw(s.start.den)?;
+        w.u32_raw(s.bpm_x100)?;
+        if let Some(r) = s.ramp_to_bpm_x100 {
+            w.u8(1)?;
+            w.u32_raw(r)?;
+        } else {
+            w.u8(0)?;
+        }
+    }
+    let sigs = bank.tempo_map.time_signatures();
+    w.u16(sigs.len() as u16)?;
+    for &(at, sig) in sigs {
+        w.i64(at.num)?;
+        w.u32_raw(at.den)?;
+        w.u8(sig.numerator)?;
+        w.u8(sig.denominator)?;
+    }
+
+    w.u16(bank.channels.len() as u16)?;
+    for ch in &bank.channels {
+        w.u16(ch.id.0)?;
+        w.str_u16(&ch.name)?;
+        w.u8(ch.instrument)?;
+        w.u8(ch.root_key)?;
+        w.u16(ch.volume_pct)?;
+        w.i8(ch.pan)?;
+        w.u8((ch.muted as u8) | ((ch.solo as u8) << 1))?;
+        w.u8(ch.cut_group)?;
+        w.u8(ch.target_track)?;
+    }
+
+    w.u16(bank.patterns.len() as u16)?;
+    for pat in &bank.patterns {
+        w.u16(pat.id.0)?;
+        w.str_u16(&pat.name)?;
+        w.u32_raw(pat.color_rgb)?;
+        w.u8(pat.bars)?;
+        w.u8(pat.steps_per_beat)?;
+        w.u16(pat.channel_notes.len() as u16)?;
+        for (ch_id, notes) in &pat.channel_notes {
+            w.u16(ch_id.0)?;
+            w.u32(notes.len())?;
+            for n in notes {
+                w.u32_raw(n.id)?;
+                w.i64(n.start.num)?;
+                w.u32_raw(n.start.den)?;
+                w.i64(n.length.num)?;
+                w.u32_raw(n.length.den)?;
+                w.u8(n.key)?;
+                w.u8(n.velocity)?;
+                w.i8(n.pan)?;
+                w.i8(n.fine_cents)?;
+                if let Some(slide) = n.slide_to_key {
+                    w.u8(1)?;
+                    w.u8(slide)?;
+                } else {
+                    w.u8(0)?;
+                }
+                w.u8(n.timbre)?;
+                w.u8(n.pressure)?;
+            }
+        }
+    }
+
+    w.u16(bank.instances.len() as u16)?;
+    for inst in &bank.instances {
+        w.u16(inst.pattern.0)?;
+        w.i64(inst.start_beat.num)?;
+        w.u32_raw(inst.start_beat.den)?;
+        w.i64(inst.length_beats.num)?;
+        w.u32_raw(inst.length_beats.den)?;
+        w.i64(inst.offset_beats.num)?;
+        w.u32_raw(inst.offset_beats.den)?;
+        w.u8(inst.lane)?;
+    }
+
+    let scenes = &session.scenes;
+    w.u8(scenes.active_scene.map_or(255, |i| i as u8))?;
+    if let Some(q) = scenes.queued {
+        w.u8(1)?;
+        w.u16(q.scene_idx as u16)?;
+        w.i64(q.launch_beat.num)?;
+        w.u32_raw(q.launch_beat.den)?;
+        w.u64_raw(q.launch_frame)?;
+    } else {
+        w.u8(0)?;
+    }
+    w.u8(scenes.scenes.len() as u8)?;
+    for row in &scenes.scenes {
+        w.str_u16(&row.name)?;
+        for slot in &row.slots {
+            if let Some(pid) = slot {
+                w.u8(1)?;
+                w.u16(pid.0)?;
+            } else {
+                w.u8(0)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn read_ext5(r: &mut Reader<'_>, expected_tracks: usize) -> Result<Ext5Data, Error> {
+    let track_count = r.u16()? as usize;
+    if track_count != expected_tracks || track_count > MAX_TRACKS {
+        return Err(Error::Metadata);
+    }
+    let mut track_fx = Vec::new();
+    track_fx.try_reserve(track_count).map_err(|_| Error::Memory)?;
+    for _ in 0..track_count {
+        let flags = r.u16()?;
+        if (flags & !0x03FF) != 0 {
+            return Err(Error::Metadata);
+        }
+        let parametric_eq = if flags & (1 << 0) != 0 {
+            let mut eq = ParametricEq::new();
+            for b_idx in 0..6 {
+                let enabled = r.u8()? != 0;
+                let freq_hz = r.f32()?;
+                let gain_db = r.f32()?;
+                let q = r.f32()?;
+                eq.set_band(
+                    b_idx,
+                    BandConfig {
+                        enabled,
+                        freq_hz,
+                        gain_db,
+                        q,
+                    },
+                )
+                .map_err(|_| Error::Effect)?;
+            }
+            Some(eq)
+        } else {
+            None
+        };
+        let sc_compressor = if flags & (1 << 1) != 0 {
+            Some(
+                SidechainCompressor::new(r.f32()?, r.f32()?, r.f32()?, r.f32()?, r.f32()?)
+                    .map_err(|_| Error::Effect)?,
+            )
+        } else {
+            None
+        };
+        let gate = if flags & (1 << 2) != 0 {
+            Some(
+                SidechainGate::new(
+                    r.f32()?,
+                    r.f32()?,
+                    r.f32()?,
+                    r.f32()?,
+                    r.f32()?,
+                    r.f32()?,
+                )
+                .map_err(|_| Error::Effect)?,
+            )
+        } else {
+            None
+        };
+        let tape = if flags & (1 << 3) != 0 {
+            Some(
+                TapeMachine::new(
+                    r.f32()?,
+                    r.f32()?,
+                    r.f32()?,
+                    r.f32()?,
+                    r.f32()?,
+                    r.f32()?,
+                    r.f32()?,
+                )
+                .map_err(|_| Error::Effect)?,
+            )
+        } else {
+            None
+        };
+        let transient = if flags & (1 << 4) != 0 {
+            Some(TransientShaper::new(r.f32()?, r.f32()?).map_err(|_| Error::Effect)?)
+        } else {
+            None
+        };
+        let crusher = if flags & (1 << 5) != 0 {
+            Some(BitCrusher::new(r.u16()?, r.u8()?, r.f32()?).map_err(|_| Error::Effect)?)
+        } else {
+            None
+        };
+        let chorus = if flags & (1 << 6) != 0 {
+            Some(
+                StereoChorus::new(r.f32()?, r.f32()?, r.f32()?, r.f32()?)
+                    .map_err(|_| Error::Effect)?,
+            )
+        } else {
+            None
+        };
+        let sidechain_from = if flags & (1 << 7) != 0 {
+            let k = r.u8()?;
+            if (k as usize) >= MAX_TRACKS {
+                return Err(Error::Metadata);
+            }
+            Some(k)
+        } else {
+            None
+        };
+        let post_fader_send = if flags & (1 << 8) != 0 {
+            let dst = r.u8()?;
+            let pct = r.u16()?;
+            if (dst as usize) >= MAX_TRACKS || pct > 400 {
+                return Err(Error::Metadata);
+            }
+            Some((dst, pct))
+        } else {
+            None
+        };
+        let output_bus = if flags & (1 << 9) != 0 {
+            let bus = r.u8()?;
+            if (bus as usize) >= MAX_TRACKS {
+                return Err(Error::Metadata);
+            }
+            Some(bus)
+        } else {
+            None
+        };
+        track_fx.push(Ext5TrackFx {
+            parametric_eq,
+            sc_compressor,
+            gate,
+            tape,
+            transient,
+            crusher,
+            chorus,
+            sidechain_from,
+            post_fader_send,
+            output_bus,
+        });
+    }
+
+    let mastering = if r.u8()? != 0 {
+        let mut m = MasteringProcessor::new().map_err(|_| Error::Effect)?;
+        m.set_trim_db(r.f32()?).map_err(|_| Error::Effect)?;
+        m.set_eq_gains(r.f32()?, r.f32()?, r.f32()?)
+            .map_err(|_| Error::Effect)?;
+        m.set_glue_compressor(r.f32()?, r.f32()?, r.f32()?, r.f32()?, r.f32()?)
+            .map_err(|_| Error::Effect)?;
+        m.set_stereo_width(r.f32()?).map_err(|_| Error::Effect)?;
+        m.limiter_mut()
+            .set_ceiling_db(r.f32()?)
+            .map_err(|_| Error::Effect)?;
+        m.limiter_mut()
+            .set_release_ms(r.f32()?)
+            .map_err(|_| Error::Effect)?;
+        Some(m)
+    } else {
+        None
+    };
+
+    let mut bank = TapestryBank::new();
+    let active_pattern = PatternId(r.u16()?);
+    bank.transport_mode = match r.u8()? {
+        0 => TransportContext::PatternMode,
+        1 => TransportContext::SongMode,
+        _ => return Err(Error::Metadata),
+    };
+    let swing_pct = r.u8()?;
+    if swing_pct > MAX_SWING_PCT {
+        return Err(Error::Metadata);
+    }
+    bank.swing_pct = swing_pct;
+
+    let seg_count = r.u16()? as usize;
+    if seg_count > 4096 {
+        return Err(Error::Limit);
+    }
+    let mut segs = Vec::new();
+    segs.try_reserve(seg_count).map_err(|_| Error::Memory)?;
+    for _ in 0..seg_count {
+        let start = Time::new(r.i64()?, r.u32_raw()?).ok_or(Error::Metadata)?;
+        let bpm_x100 = r.u32_raw()?;
+        let ramp_to_bpm_x100 = if r.u8()? != 0 {
+            Some(r.u32_raw()?)
+        } else {
+            None
+        };
+        segs.push(TempoSegment {
+            start,
+            bpm_x100,
+            ramp_to_bpm_x100,
+        });
+    }
+    let sig_count = r.u16()? as usize;
+    if sig_count > 1024 {
+        return Err(Error::Limit);
+    }
+    let mut sigs = Vec::new();
+    sigs.try_reserve(sig_count).map_err(|_| Error::Memory)?;
+    for _ in 0..sig_count {
+        let at = Time::new(r.i64()?, r.u32_raw()?).ok_or(Error::Metadata)?;
+        let num = r.u8()?;
+        let den = r.u8()?;
+        let sig = TimeSignature::new(num, den).map_err(|_| Error::Metadata)?;
+        sigs.push((at, sig));
+    }
+    bank.tempo_map = TempoMap::with_time_signatures(segs, sigs).map_err(|_| Error::Metadata)?;
+
+    let ch_count = r.u16()? as usize;
+    if ch_count > MAX_RACK_CHANNELS {
+        return Err(Error::Limit);
+    }
+    for _ in 0..ch_count {
+        let id = ChannelId(r.u16()?);
+        let name = r.str_u16(256)?;
+        let instrument = r.u8()?;
+        let root_key = r.u8()?;
+        let volume_pct = r.u16()?;
+        let pan = r.i8()?;
+        let flags = r.u8()?;
+        let cut_group = r.u8()?;
+        let target_track = r.u8()?;
+        let mut ch = RackChannel::new(id, name, instrument);
+        ch.root_key = root_key;
+        ch.volume_pct = volume_pct;
+        ch.pan = pan;
+        ch.muted = flags & 1 != 0;
+        ch.solo = flags & 2 != 0;
+        ch.cut_group = cut_group;
+        ch.target_track = target_track;
+        bank.push_channel(ch).map_err(|_| Error::Metadata)?;
+    }
+
+    let pat_count = r.u16()? as usize;
+    if pat_count > MAX_PATTERNS {
+        return Err(Error::Limit);
+    }
+    for _ in 0..pat_count {
+        let id = PatternId(r.u16()?);
+        let name = r.str_u16(256)?;
+        let color_rgb = r.u32_raw()?;
+        let bars = r.u8()?;
+        let steps_per_beat = r.u8()?;
+        let mut pat = TapestryPattern::new(id, name, bars, steps_per_beat)
+            .map_err(|_| Error::Metadata)?;
+        pat.color_rgb = color_rgb;
+        let ch_note_vecs = r.u16()? as usize;
+        if ch_note_vecs > MAX_RACK_CHANNELS {
+            return Err(Error::Limit);
+        }
+        for _ in 0..ch_note_vecs {
+            let ch_id = ChannelId(r.u16()?);
+            let note_count = r.u32()?;
+            if note_count > 16_384 {
+                return Err(Error::Limit);
+            }
+            for _ in 0..note_count {
+                let n_id = r.u32_raw()?;
+                let start = Time::new(r.i64()?, r.u32_raw()?).ok_or(Error::Metadata)?;
+                let length = Time::new(r.i64()?, r.u32_raw()?).ok_or(Error::Metadata)?;
+                let key = r.u8()?;
+                let velocity = r.u8()?;
+                let pan = r.i8()?;
+                let fine_cents = r.i8()?;
+                let slide_to_key = if r.u8()? != 0 { Some(r.u8()?) } else { None };
+                let timbre = r.u8()?;
+                let pressure = r.u8()?;
+                let mut note = ExpressiveNote::new(n_id, start, length, key, velocity);
+                note.pan = pan;
+                note.fine_cents = fine_cents;
+                note.slide_to_key = slide_to_key;
+                note.timbre = timbre;
+                note.pressure = pressure;
+                pat.add_note(ch_id, note).map_err(|_| Error::Metadata)?;
+            }
+        }
+        bank.push_pattern(pat).map_err(|_| Error::Metadata)?;
+    }
+    bank.active_pattern = active_pattern;
+
+    let inst_count = r.u16()? as usize;
+    if inst_count > MAX_INSTANCES {
+        return Err(Error::Limit);
+    }
+    for _ in 0..inst_count {
+        let pattern = PatternId(r.u16()?);
+        let start_beat = Time::new(r.i64()?, r.u32_raw()?).ok_or(Error::Metadata)?;
+        let length_beats = Time::new(r.i64()?, r.u32_raw()?).ok_or(Error::Metadata)?;
+        let offset_beats = Time::new(r.i64()?, r.u32_raw()?).ok_or(Error::Metadata)?;
+        let lane = r.u8()?;
+        bank.place_instance(PatternInstance {
+            pattern,
+            start_beat,
+            length_beats,
+            offset_beats,
+            lane,
+        })
+        .map_err(|_| Error::Metadata)?;
+    }
+
+    let mut scenes = SceneMatrix::new();
+    let active_scene_u8 = r.u8()?;
+    scenes.active_scene = if active_scene_u8 == 255 {
+        None
+    } else if (active_scene_u8 as usize) < SCENE_COUNT {
+        Some(active_scene_u8 as usize)
+    } else {
+        return Err(Error::Metadata);
+    };
+    scenes.queued = if r.u8()? != 0 {
+        let scene_idx = r.u16()? as usize;
+        if scene_idx >= SCENE_COUNT {
+            return Err(Error::Metadata);
+        }
+        let launch_beat = Time::new(r.i64()?, r.u32_raw()?).ok_or(Error::Metadata)?;
+        let launch_frame = r.u64_raw()?;
+        Some(QueuedScene {
+            scene_idx,
+            launch_beat,
+            launch_frame,
+        })
+    } else {
+        None
+    };
+    let scene_rows = r.u8()? as usize;
+    if scene_rows > SCENE_COUNT {
+        return Err(Error::Limit);
+    }
+    for s_idx in 0..scene_rows {
+        let name = r.str_u16(256)?;
+        if let Some(row) = scenes.scenes.get_mut(s_idx) {
+            row.name = name;
+        }
+        for lane in 0..SCENE_LANES {
+            let pat_opt = if r.u8()? != 0 {
+                Some(PatternId(r.u16()?))
+            } else {
+                None
+            };
+            scenes
+                .set_slot(s_idx, lane, pat_opt)
+                .map_err(|_| Error::Metadata)?;
+        }
+    }
+
+    Ok(Ext5Data {
+        track_fx,
+        mastering,
+        tapestry: bank,
+        scenes,
+    })
 }

@@ -145,6 +145,71 @@ pub fn save(app: &mut App, studio: &mut Studio) -> Result<(), &'static str> {
     }
     result
 }
+pub fn import_midi(app: &mut App, studio: &mut Studio) -> Result<(), &'static str> {
+    let mut path = [0; sex_pdx::fs::PATH_BYTES];
+    let picked = files::pick(&mut app.window, files::Pick::Open, b"", &mut path);
+    events(app, studio)?;
+    let chosen = picked.map_err(|_| "Import MIDI cancelled; current project kept")?;
+    let size = files::size(&mut app.window, chosen).map_err(|_| "Cannot inspect MIDI file")?;
+    if size == 0 || size > moan_core::smf::MAX_SMF_BYTES as u64 {
+        return Err("MIDI file is empty or exceeds the 4 MiB limit");
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(size as usize)
+        .map_err(|_| "Not enough memory for MIDI import")?;
+    bytes.resize(size as usize, 0);
+    for (index, piece) in bytes.chunks_mut(4096).enumerate() {
+        events(app, studio)?;
+        if files::read_at(&mut app.window, chosen, (index * 4096) as u64, piece)
+            .map_err(|_| "Cannot read MIDI file")?
+            != piece.len()
+        {
+            return Err("Short MIDI read; current project kept");
+        }
+    }
+    events(app, studio)?;
+    studio.session.import_smf_bytes(&bytes)?;
+    studio.refresh(&mut app.ui);
+    sex_pdx::serial_record!(
+        "[moan.midi.imported] bytes={} tracks={}",
+        bytes.len(),
+        studio.session.tracks.len()
+    );
+    Ok(())
+}
+pub fn export_midi(app: &mut App, studio: &mut Studio) -> Result<(), &'static str> {
+    let bytes = studio.session.export_smf_bytes()?;
+    let mut path = [0; sex_pdx::fs::PATH_BYTES];
+    let picked = files::pick(
+        &mut app.window,
+        files::Pick::Save,
+        b"arrangement.mid",
+        &mut path,
+    );
+    events(app, studio)?;
+    let chosen = picked.map_err(|_| "Export MIDI cancelled")?;
+    files::create(&mut app.window, chosen)
+        .map_err(|_| "Choose a new .mid filename; existing files are preserved")?;
+    let result: Result<(), &'static str> = (|| {
+        for (index, piece) in bytes.chunks(4096).enumerate() {
+            events(app, studio)?;
+            let written = files::write_at(&mut app.window, chosen, (index * 4096) as u64, piece)
+                .map_err(|_| "MIDI write failed; partial new file retained")?;
+            if written != piece.len() {
+                return Err("Disk full; partial MIDI file retained");
+            }
+        }
+        files::sync(&mut app.window).map_err(|_| "MIDI sync failed")?;
+        events(app, studio)?;
+        sex_pdx::serial_record!("[moan.midi.exported] bytes={} synced=1", bytes.len());
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = files::sync(&mut app.window);
+    }
+    result
+}
 /// The Shell can launch a held project route. Loading it never widens authority.
 pub fn startup(app: &mut App, studio: &mut Studio) {
     let mut args = [0; sex_pdx::fs::ARGS_MAX];

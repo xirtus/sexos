@@ -10,11 +10,54 @@ pub const GRID: usize = WIDTH - KEYBOARD;
 pub const HEIGHT: usize = ROWS * ROW;
 pub const STEPS: usize = 16;
 pub const LOW: u8 = 48;
+pub const SLIDE_COLOR: u32 = 0xffcc66;
 pub fn key(y: usize) -> u8 {
     LOW + (ROWS - 1 - (y / ROW).min(ROWS - 1)) as u8
 }
 pub fn step(x: usize) -> usize {
     (x.saturating_sub(KEYBOARD).min(GRID - 1) * STEPS / GRID).min(STEPS - 1)
+}
+fn draw_slide_line(
+    pixels: &mut [u32],
+    width: usize,
+    height: usize,
+    x0: usize,
+    y0: usize,
+    x1: usize,
+    y1: usize,
+    color: u32,
+) {
+    let mut cx = x0 as isize;
+    let mut cy = y0 as isize;
+    let tx = x1 as isize;
+    let ty = y1 as isize;
+    let dx = (tx - cx).abs();
+    let dy = -(ty - cy).abs();
+    let sx = if cx < tx { 1 } else { -1 };
+    let sy = if cy < ty { 1 } else { -1 };
+    let mut err = dx + dy;
+    loop {
+        if cx >= 0 && (cx as usize) < width && cy >= 0 && (cy as usize) < height {
+            let ux = cx as usize;
+            let uy = cy as usize;
+            pixels[uy * width + ux] = color;
+            if uy + 1 < height {
+                pixels[(uy + 1) * width + ux] = color;
+            }
+        }
+        if cx == tx && cy == ty {
+            break;
+        }
+        let e2 = 2 * err;
+        if e2 >= dy {
+            err += dy;
+            cx += sx;
+        }
+        if e2 <= dx {
+            err += dx;
+            cy += sy;
+        }
+    }
 }
 pub fn render(pattern: Option<&Pattern>) -> Vec<u32> {
     render_width(pattern, WIDTH)
@@ -57,6 +100,43 @@ pub fn render_width(pattern: Option<&Pattern>, width: usize) -> Vec<u32> {
                         0x388d74 + (note.velocity as u32 / 4) * 0x000100
                     };
                 }
+            }
+        }
+        if pattern.frames > 0 && pattern.notes.len() >= 2 {
+            let mut sorted = pattern.notes.clone();
+            sorted.sort_by(|a, b| a.start.cmp(&b.start).then(a.key.cmp(&b.key)));
+            for i in 1..sorted.len() {
+                let b = sorted[i];
+                let Some(a) = sorted[..i]
+                    .iter()
+                    .rev()
+                    .find(|a| a.start < b.start && a.start + a.frames > b.start && a.key != b.key)
+                else {
+                    continue;
+                };
+                let a_in = (LOW..LOW + ROWS as u8).contains(&a.key);
+                let b_in = (LOW..LOW + ROWS as u8).contains(&b.key);
+                if !a_in && !b_in {
+                    continue;
+                }
+                let row_y = |k: u8| -> usize {
+                    let clamped = k.clamp(LOW, LOW + ROWS as u8 - 1);
+                    (LOW + ROWS as u8 - 1 - clamped) as usize * ROW + ROW / 2
+                };
+                let y0 = row_y(a.key);
+                let y1 = row_y(b.key);
+                if y0 == y1 {
+                    continue;
+                }
+                let x0 = (keyboard
+                    + (b.start as u64 * grid as u64 / pattern.frames as u64) as usize)
+                    .clamp(keyboard, width.saturating_sub(1));
+                let overlap_end = (a.start + a.frames).min(b.start + b.frames);
+                let x1 = (keyboard
+                    + (overlap_end as u64 * grid as u64 / pattern.frames as u64) as usize)
+                    .max(x0 + 6)
+                    .min(width.saturating_sub(1));
+                draw_slide_line(&mut pixels, width, HEIGHT, x0, y0, x1, y1, SLIDE_COLOR);
             }
         }
     }

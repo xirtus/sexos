@@ -272,10 +272,13 @@ impl Rack {
             reverb.reset();
         }
     }
+    pub(crate) fn is_bypass(&self) -> bool {
+        self.eq.is_none() && self.compressor.is_none() && self.reverb.is_none()
+    }
     pub(crate) fn frame(&mut self, input: [i64; 2]) -> [i64; 2] {
         // Preserve wide sums on the bypass path, including cancellation across
         // tracks. Configured DSP uses bounded headroom to keep arithmetic safe.
-        if self.eq.is_none() && self.compressor.is_none() && self.reverb.is_none() {
+        if self.is_bypass() {
             return input;
         }
         let mut frame = input.map(bound);
