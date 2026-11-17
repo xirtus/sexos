@@ -661,7 +661,7 @@
     },
     {
       "id": "CAPABILITY_GENESIS",
-      "requirement": "BOOT_DAG is the sole source of capability genesis; graph is immutable after lock.",
+      "requirement": "BOOT_DAG is the sole source of capability genesis; resource authority is immutable after lock, and afterwards only object capabilities derived from a held root (never wider rights, never a forged badge) can be installed (D1, plan #405).",
       "status": "partial",
       "sources": [
         {
@@ -673,6 +673,10 @@
           "anchor": "pub fn seal"
         },
         {
+          "path": "kernel/src/capability_table.rs",
+          "anchor": "pub fn install"
+        },
+        {
           "path": "kernel/src/boot_memory.rs",
           "anchor": "pub fn seal_all()"
         }
@@ -680,7 +684,8 @@
       "checks": [
         "domain_identity",
         "memory_runtime",
-        "paging_runtime"
+        "paging_runtime",
+        "capability_v2"
       ],
       "gaps": [
         "Observed boot sealing does not prove all dormant internal grant paths unreachable; complete replay of genesis remains absent."
