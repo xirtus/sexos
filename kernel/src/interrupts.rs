@@ -259,8 +259,13 @@ pub unsafe extern "C" fn syscall_entry() {
 #[no_mangle]
 pub extern "C" fn syscall_handler(regs: &mut SyscallRegs) -> u64 {
     // syscall_entry already opened every key; a second write only costs time.
+    crate::scheduler::prof_user_entry();
     crate::scheduler::observe_user_entry();
-    crate::syscalls::dispatch(regs)
+    let t = crate::scheduler::tsc();
+    let n = regs.rax;
+    let r = crate::syscalls::dispatch(regs);
+    crate::scheduler::prof(match n { 28 => 9, 100 => 15, 101 => 16, 53 => 17, 40 => 18, _ => 19 }, t);
+    r
 }
 
 // ── Assembly Stubs ──────────────────────────────────────────────────────────
