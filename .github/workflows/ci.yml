@@ -536,7 +536,7 @@ jobs:
         if-no-files-found: ignore
 
   denim-double:
-    name: Compressed memory, a heap twice the RAM (1G and 12G)
+    name: Memory, lazy stacks and a heap twice the RAM (1G and 12G)
     runs-on: ubuntu-latest
     timeout-minutes: 150
     steps:
@@ -544,6 +544,10 @@ jobs:
     - uses: ./.github/actions/setup
     - name: Build the image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - name: Program heap, lazy stacks and the stack guard page (#306)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/heap-source.img"
+        python3 scripts/program_heap_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/heap-source.img" --out "$RUNNER_TEMP/sexos-proof/heap"
     - name: Heap 2.5x free memory at 1 GiB RAM
       run: |
         truncate -s 1G "$RUNNER_TEMP/double-source.img"
