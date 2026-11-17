@@ -904,6 +904,7 @@ pub fn init() {
     crate::boot_memory::init_pixel_regions(sexdisp_id);
     crate::boot_memory::init_screen_capture(sexdisp_id);
     crate::boot_memory::init_sound_rings(sexbell_id);
+    crate::boot_memory::init_usb_audio(sexbell_id, sexusb_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
     // Denim's store grows with what it holds.

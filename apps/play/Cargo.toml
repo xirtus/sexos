@@ -12,3 +12,4 @@ path = "src/main.rs"
 sex-pdx = { path = "../../crates/sex-pdx" }
 sex-app = { path = "../../crates/sex-app" }
 sex-media = { path = "../../crates/sex-media" }
+sex-font = { path = "../../crates/sex-font" }

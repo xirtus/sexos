@@ -460,6 +460,11 @@ pub fn init_pixel_regions(display: u32) {
 
 /// One sound ring per program row: the program writes sound, Bell mixes and plays it
 /// and writes back how far it got.
+/// USB sound cards: Bell's mix goes to SexUSB through this region (sex_pdx::usb_audio).
+pub fn init_usb_audio(bell: u32, usb: u32) {
+    paired(bell, usb, sex_pdx::usb_audio::SLOT, sex_pdx::usb_audio::REGION_ID, sex_pdx::usb_audio::BYTES, true);
+}
+
 pub fn init_sound_rings(bell: u32) {
     use sex_pdx::sound_ring::{BYTES, CLIENT_SLOT, bell_slot, region_id};
     require_boot();
