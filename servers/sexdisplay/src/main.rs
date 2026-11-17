@@ -5590,7 +5590,6 @@ pub extern "C" fn _start() -> ! {
             unsafe { if MOTION_FRAME_BUDGET > 0 { MOTION_FRAME_BUDGET -= 1; sex_pdx::serial_record!("[display.motion.frame] tick={} progress={}", motion_now, motion.progress(motion_now).unwrap_or(1024)); } }
             }
         } else if motion_damage.is_some() {
-            pacer.stop();
             motion.clear_finished(motion_now);
             sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
         }
@@ -5608,8 +5607,12 @@ pub extern "C" fn _start() -> ! {
         // Only this completed publication discharges the retained requirements.
         // The service performs no intake during prepare/publish/receipt handling.
         pending_paint.complete(published.is_some());
-        if animating && paced && published.is_some() {
-            if let Some(ms) = pacer.presented(motion_now) {
+        // The landing frame counts too; then the next animation starts a fresh grid.
+        let landing = !animating && motion_damage.is_some();
+        if (animating && paced || landing) && published.is_some() {
+            let interval = pacer.presented(motion_now);
+            if landing { pacer.stop(); }
+            if let Some(ms) = interval {
                 static mut FRAME_TIME_BUDGET: u32 = 600;
                 unsafe { if FRAME_TIME_BUDGET > 0 { FRAME_TIME_BUDGET -= 1; sex_pdx::serial_record!("[display.frame.time] ms={} p99={}", ms, pacer.percentile(99).unwrap_or(0)); } }
             }

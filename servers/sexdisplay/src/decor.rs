@@ -187,7 +187,7 @@ pub fn row(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, sce
                                 break shape::darken(wall(x), shade_under(xi, None));
                             };
                             let c = shape::darken(crate::composite_pixel_selected(x, y, w, h, wall(x), scene.focus, Some(wins[b].id), scene), shade_under(xi, Some(b)));
-                            let k = wins[b].cover(xi, yi);
+                            let k = (wins[b].cover(xi, yi) as u32 * wins[b].fade as u32 / 255) as u8;
                             if k == 255 || depth == layers.len() { break c; }
                             layers[depth] = (c, k); depth += 1; from = b + 1;
                         };

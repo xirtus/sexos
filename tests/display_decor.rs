@@ -231,6 +231,20 @@ fn an_opening_window_fades_in_with_its_shadow() {
 }
 
 #[test]
+fn windows_fading_in_together_show_the_wallpaper_at_first() {
+    let _g = lock();
+    decor::set_effects(true);
+    let scene = desktop();
+    decor::opened(1, 5000);
+    decor::opened(3, 5000);
+    decor::set_now(5000);
+    let fb = render(&scene);
+    // Inside both windows: neither is visible yet, so the wallpaper shows.
+    assert_eq!(fb[200 * W + 250], bg(200, H));
+    assert!(decor::clear_fades());
+}
+
+#[test]
 fn preview() {
     let _g = lock();
     decor::set_effects(true);
