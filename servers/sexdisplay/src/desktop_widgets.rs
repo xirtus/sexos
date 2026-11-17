@@ -73,7 +73,12 @@ pub fn over(x: usize, y: usize, back: u32) -> u32 {
 pub fn tick(clock: &silkbar_model::civil_clock::CivilClock, w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
     let s = st();
     if s.cards == 0 { return None; }
-    let layout = Layout::new(s.cards, w, h, super::bar_height(), sex_pdx::desktop_style::ui_scale() as usize)?;
+    let Some(layout) = Layout::new(s.cards, w, h, super::bar_height(), sex_pdx::desktop_style::ui_scale() as usize) else {
+        // No longer fits (a smaller screen or a larger scale): take the old cards away.
+        let old = s.layout.take().map(|l| l.column);
+        s.drawn = None;
+        return old;
+    };
     let now = sex_pdx::get_ticks();
     if s.cards & dw::SYSTEM != 0 && (s.sample.is_none() || now.saturating_sub(s.sampled_at) >= 2_000) {
         if let Some(o) = sex_pdx::system_stats::overview() {
