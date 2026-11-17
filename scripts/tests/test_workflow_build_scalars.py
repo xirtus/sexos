@@ -56,7 +56,9 @@ class WorkflowBuildScalars(unittest.TestCase):
                 runs='\n'.join(s.get('run','') for s in job['steps'])
                 self.assertNotIn('entrypoint_build.sh',runs)
                 self.assertNotIn('master_runtime_gate.sh',runs)
-        self.assertEqual(set(jobs['build']['needs']),set(jobs)-{'build'})
+        # Jobs master keeps informational (such as the long leak gate) may stay out.
+        self.assertLessEqual(set(SHARED)|{'image','web','boot'},set(jobs['build']['needs']))
+        self.assertLessEqual(set(jobs['build']['needs']),set(jobs))
 
     def test_a_folded_command_is_caught(self):
         command='scripts/ci_image_pack.sh "$RUNNER_TEMP/sexos-image/image.tar.zst"'
