@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Builds the boot partition `install` writes to a disk: FAT with Limine's UEFI loader, its
 configuration, the kernel and every module, exactly as on the ISO."""
-import argparse,subprocess,tempfile
+import argparse,subprocess,sys,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 # 12 MiB: room for today's kernel and modules. With Wi-Fi firmware in the pack it takes
@@ -18,8 +18,15 @@ def main():
  files=[a.root/'sexos-kernel']+[f for sub in ('servers','apps') for f in (a.root/sub).iterdir() if f.is_file()]+([pack] if pack.is_file() else [])
  need=sum(f.stat().st_size for f in files)+(1<<20)
  sectors=SECTORS if need<=SECTORS*512 and not (pack.is_file() and pack.stat().st_size>1<<20) else SECTORS_WITH_FIRMWARE
+ if need>sectors*512:
+  # Say what fills the slot instead of letting mcopy fail with "disk full".
+  for f in sorted(files,key=lambda f:-f.stat().st_size)[:12]:print(f'[boot_image] {f.stat().st_size:>10} {f.relative_to(a.root)}',file=sys.stderr)
+  raise SystemExit(f'[boot_image] FAIL need={need} bytes > slot={sectors*512} bytes (sex_pdx::fs::BOOT_SECTORS)')
+ print(f'[boot_image] need={need} slot={sectors*512} free={sectors*512-need}')
  with img.open('wb') as f:f.truncate(sectors*512)
- run=lambda *c:subprocess.run(c,check=True,capture_output=True)
+ def run(*c):
+  r=subprocess.run(c,capture_output=True,text=True)
+  if r.returncode:raise SystemExit(f'[boot_image] FAIL {" ".join(c)}: {r.stderr.strip() or r.stdout.strip()} (need={need} slot={sectors*512})')
  run('mformat','-i',str(img),'-T',str(sectors),'-h','64','-s','32','-v','SEXOS','::')
  with tempfile.TemporaryDirectory() as tmp:
   efi=Path(tmp)/'BOOTX64.EFI'
