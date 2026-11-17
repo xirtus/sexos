@@ -5593,15 +5593,16 @@ pub extern "C" fn _start() -> ! {
             motion.clear_finished(motion_now);
             sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
         }
+        // Frame cost: from here to the completed publication.
+        decor::take_cycles();
+        let render_start=decor::cycles_now();
+        let render_ms_start=sex_pdx::get_ticks();
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
         if cursor_only_moved{pending_paint.request_cursor();}
         if needs_top_strip_redraw{pending_paint.request_strip();}
         if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}
-        decor::take_cycles();
-        let render_start=decor::cycles_now();
-        let render_ms_start=sex_pdx::get_ticks();
         let plan=pending_paint.plan(w,h);
         let published=if fb_live&&!plan.is_empty(){
             clock_canon_apply_to_bar(&mut bar);
