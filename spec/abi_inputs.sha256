@@ -144,7 +144,7 @@ be4bb003491894145a3412a00802e7ecf9533f5b3a5e5b9ad62e66702eb80037  kernel/src/boo
 
 0df43cf6345d3b1088a540fbacff7745038673597ee5b456294e60b110976949  kernel/src/capability_slot.rs
 
-f35f18dc4d604b2e9c9f507fe54a35648430e479def4438424c4cd0b9c20aa57  kernel/src/capability_table.rs
+5e20ec711ea70a5ada10da77a43cc254b5bc7f175e1c5aee9c16a12552df7043  kernel/src/capability_table.rs
 
 ddda6ecb6219bb1cdad31c61a5401719eaecee79c8e3e218b44034ca45a2cc8f  kernel/src/clock_source.rs
 

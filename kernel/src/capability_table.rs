@@ -127,14 +127,15 @@ impl Generations {
     }
 
     pub fn owner(&self, object: u32) -> Option<u32> {
-        let owner = self.object_owner.get(object as usize)?.load(Ordering::Acquire);
+        if object as usize >= MAX_OBJECTS { return None; }
+        let owner = self.object_owner[spec_clamp(object as usize, MAX_OBJECTS)].load(Ordering::Acquire);
         (owner != FREE).then_some(owner)
     }
 
     /// True while `cap` names a live object at its current generation.
     pub fn live(&self, cap: &ObjectCap) -> bool {
-        let object = cap.object as usize;
-        object < MAX_OBJECTS
+        let object = spec_clamp(cap.object as usize, MAX_OBJECTS);
+        (cap.object as usize) < MAX_OBJECTS
             && self.object_owner[object].load(Ordering::Acquire) != FREE
             && self.object_generation[object].load(Ordering::Acquire) == cap.generation
     }
@@ -143,22 +144,24 @@ impl Generations {
     /// new generation and its owner mints fresh roots from the returned one.
     pub fn revoke(&self, object: u32) -> Option<ObjectCap> {
         self.owner(object)?;
-        let generation = self.bump(&self.object_generation[object as usize]);
+        let generation = self.bump(&self.object_generation[spec_clamp(object as usize, MAX_OBJECTS)]);
         Some(ObjectCap { object, generation, rights: rights::ALL, badge: 0 })
     }
 
     /// Revoke every capability to `object` and free it for reuse.
     pub fn destroy(&self, object: u32) -> bool {
         if self.owner(object).is_none() { return false; }
-        self.bump(&self.object_generation[object as usize]);
-        self.object_owner[object as usize].store(FREE, Ordering::Release);
+        let index = spec_clamp(object as usize, MAX_OBJECTS);
+        self.bump(&self.object_generation[index]);
+        self.object_owner[index].store(FREE, Ordering::Release);
         true
     }
 
     /// The current incarnation generation of domain `pd`; reply capabilities
     /// to a caller carry it.
     pub fn incarnation(&self, pd: u32) -> u32 {
-        self.incarnation.get(pd as usize).map_or(0, |g| g.load(Ordering::Acquire))
+        if pd as usize >= MAX_INCARNATIONS { return 0; }
+        self.incarnation[spec_clamp(pd as usize, MAX_INCARNATIONS)].load(Ordering::Acquire)
     }
 
     /// True while a reply capability's caller incarnation is still alive.
@@ -170,7 +173,7 @@ impl Generations {
     /// object it owned is destroyed, so every capability naming one, in any
     /// table, is dead. Returns how many objects were destroyed.
     pub fn end_incarnation(&self, pd: u32) -> u32 {
-        if let Some(g) = self.incarnation.get(pd as usize) { self.bump(g); }
+        if (pd as usize) < MAX_INCARNATIONS { self.bump(&self.incarnation[spec_clamp(pd as usize, MAX_INCARNATIONS)]); }
         if pd == FREE { return 0; }
         let mut destroyed = 0;
         for (object, owner) in self.object_owner.iter().enumerate() {
@@ -190,6 +193,16 @@ impl Generations {
         }
     }
 }
+
+/// Spectre v1 (audit S10): an index from a register is bounds-checked by a
+/// branch, which can be mispredicted. Masking it to a power-of-two length
+/// after the check keeps even a speculative load inside the array, with no
+/// branch for the predictor to get wrong.
+#[inline(always)]
+fn spec_clamp(index: usize, len: usize) -> usize {
+    index & (len - 1)
+}
+const _: () = assert!(SLOT_COUNT.is_power_of_two() && MAX_OBJECTS.is_power_of_two() && MAX_INCARNATIONS.is_power_of_two());
 
 /// The generation after `g`, skipping 0 on wrap so a zeroed capability
 /// stays dead.
@@ -283,7 +296,8 @@ impl CapabilityTable {
     }
 
     fn slot(&self, id: u32) -> Option<&Slot> {
-        if id == 0 || id as usize > SLOT_COUNT { None } else { Some(&self.slots[id as usize - 1]) }
+        if id == 0 || id as usize > SLOT_COUNT { return None; }
+        Some(&self.slots[spec_clamp((id as usize).wrapping_sub(1), SLOT_COUNT)])
     }
 
     /// BOOT only: place `data` in the next slot (wrapping, as before).

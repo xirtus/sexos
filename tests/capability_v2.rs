@@ -272,3 +272,26 @@ fn kernel_tags_match_and_dead_kinds_are_gone() {
         assert!(!capability.contains(dead), "{dead}");
     }
 }
+
+#[test]
+fn register_indexes_are_masked_after_their_bounds_check() {
+    // Audit S10 (Spectre v1): every array index taken from a caller value is
+    // masked to the power-of-two length after the branch, so no speculative
+    // load leaves the array. Out-of-range values still answer "absent".
+    let source = include_str!("../kernel/src/capability_table.rs");
+    assert!(source.contains("Some(&self.slots[spec_clamp((id as usize).wrapping_sub(1), SLOT_COUNT)])"));
+    for raw in ["self.slots[id", "object_owner[object as usize]", "object_generation[object as usize]", ".get(pd as usize)", ".get(object as usize)"] {
+        assert!(!source.contains(raw), "{raw}");
+    }
+    let t = table();
+    for id in [0, 1025, 2048, 1 << 20, u32::MAX] { assert!(t.find(id).is_none() && t.object(id).is_none() && t.revoke(id).is_none()); }
+    let objs = objects();
+    for big in [4096u32, 4096 + 1, u32::MAX - 1] {
+        assert_eq!(objs.owner(big), None);
+        assert!(objs.revoke(big).is_none() && !objs.destroy(big));
+        assert!(!objs.live(&ObjectCap { object: big, generation: 1, rights: 0, badge: 0 }));
+    }
+    assert_eq!(objs.incarnation(1024), 0);
+    assert_eq!(objs.end_incarnation(1024), 0);
+    assert_eq!(objs.incarnation(0), 1, "an out-of-range end never lands on a masked alias");
+}

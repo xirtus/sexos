@@ -58,7 +58,7 @@ APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95
     # WS2 kernel heap counters (SYS_STATS OP_KERNEL), unused slab.rs removed, 2026-11-17
     '95ef2223d462a85888843a0700105ff4538f044360df25138dde638253e06fb5',
     # authority v2 capability table (inline slots, generations), cheri.rs removed, 2026-11-17
-    '98f7bda591f9519918d9c2e7e92df55747e6ab5ef1fd95394b274afcaa59510c')
+    '9fcbbfd651d478e05643986a9725230192690b0c42e5a05e4c0ba6fda6afe205')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
