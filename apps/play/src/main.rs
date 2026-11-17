@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Qupid: plays video and sound. `run qupid @clip.mp4`; `run qupid --library @/Music`
 //! opens the library view (library.rs); `qupid --thumb @IN @OUT SIZE` draws a thumbnail
-//! with no window (thumb.rs). Decoding is sex-media's
+//! with no window (thumb.rs); `--addons`, `--add-repo URL` and `--install ID` manage Kodi
+//! add-ons (kodi.rs). Decoding is sex-media's
 //! (FFmpeg inside this program's own confinement): this program reads the file
 //! through Files, shows each picture in its window and handles keys. A hostile file
 //! can only crash this window.
@@ -20,6 +21,7 @@
 extern crate alloc;
 mod captions;
 mod encode_proof;
+mod kodi;
 mod library;
 mod thumb;
 
@@ -681,6 +683,7 @@ pub extern "C" fn _start() -> ! {
     let words: Vec<&[u8]> = given.split(|b| *b == b' ').filter(|w| !w.is_empty()).collect();
     let number = |w: Option<&&[u8]>| w.and_then(|w| core::str::from_utf8(w).ok()).and_then(|t| t.parse::<u32>().ok());
     if words.first() == Some(&&b"--library"[..]) { library::run(&mut window, &words[1..]); }
+    if matches!(words.first().copied(), Some(b"--addons" | b"--add-repo" | b"--install")) { kodi::run(&mut window, &words); }
     let file = if words.first() == Some(&&b"--encode-proof"[..]) {
         match encode_proof::run(&mut window, words.get(1).copied().unwrap_or(b"")) {
             Ok(()) => say(&mut window, b"Synthetic encoder proof saved. This is not a desktop recording."),

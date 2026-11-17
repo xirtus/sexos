@@ -5785,7 +5785,9 @@ version = "0.1.0"
 dependencies = [
  "sex-app",
  "sex-episodes",
+ "sex-fetch",
  "sex-font",
+ "sex-kodi",
  "sex-media",
  "sex-pdx",
 ]

@@ -24,6 +24,20 @@ Qupid shows "Up next S01E04 in 10 s": the next item of the playlist, or the show
 episode from the same folder when Qupid may read it. **Enter** plays it now, **Esc**
 watches the credits instead.
 
+### Kodi add-ons
+
+Qupid installs Kodi add-ons from Kodi repositories, checked the way Kodi checks them
+(addons.xml against its MD5, every zip against its published hash), into its own folder:
+
+```text
+run +net qupid --add-repo https://example.org/repository.example-1.0.0.zip
+run +net qupid --addons                 # browse the plugins; Enter installs, R reloads
+run +net qupid --install plugin.video.example
+```
+
+Dependencies (`script.module.*`) come first. Running a plugin's menus needs the Python
+helper, which comes next.
+
 ### Library view
 
 `run qupid --library @FOLDER` reads every song under the folder (three levels down), groups
