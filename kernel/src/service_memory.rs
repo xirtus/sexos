@@ -9,7 +9,7 @@ use x86_64::VirtAddr;
 
 const MAX: usize = 8;
 #[derive(Clone, Copy)]
-struct Arena { pd: u32, base: u64, pages: usize, grown: usize, key: u8 }
+struct Arena { pd: u32, base: u64, pages: usize, grown: usize, key: u8, holes: usize }
 static ARENAS: spin::Mutex<[Option<Arena>; MAX]> = spin::Mutex::new([None; MAX]);
 
 /// BOOT only: gives service `pd_id` an arena. No page or table exists until it grows.
@@ -20,7 +20,7 @@ pub fn reserve(pd_id: u32) {
     let mut arenas = ARENAS.lock();
     assert!(arenas.iter().flatten().all(|a| a.pd != pd_id), "BOOT_SERVICE_ARENA_TWICE");
     let free = arenas.iter_mut().find(|a| a.is_none()).expect("BOOT_SERVICE_ARENA_FULL");
-    *free = Some(Arena { pd: pd_id, base, pages, grown: 0, key: pd.pku_key });
+    *free = Some(Arena { pd: pd_id, base, pages, grown: 0, key: pd.pku_key, holes: 0 });
     crate::serial_println!("[boot.service.arena] pd={} base={:#x} pages={} key={}", pd_id, base, pages, pd.pku_key);
 }
 
@@ -81,7 +81,13 @@ pub fn hole(pd_id: u32, va: u64, fill: bool) -> u64 {
         crate::smp::tlb::flush(va);
         crate::program_frames::give(old & crate::app_resource_state::PHYSICAL_MASK);
     }
+    if let Some(a) = ARENAS.lock().iter_mut().flatten().find(|a| a.pd == pd_id) { if fill { a.holes -= 1 } else { a.holes += 1 } }
     m::OK
+}
+
+/// Pages `pd`'s arena holds now (grown, less the holes).
+pub fn present(pd_id: u32) -> u64 {
+    ARENAS.lock().iter().flatten().find(|a| a.pd == pd_id).map_or(0, |a| (a.grown - a.holes) as u64)
 }
 
 /// Every page of `pd`'s arena goes back, with one shootdown (a restarted Denim's old store).
@@ -97,5 +103,6 @@ pub fn empty(pd_id: u32) -> u64 {
     }
     crate::smp::tlb::flush_pages(frames.len(), (0..a.grown as u64).map(|i| a.base + i * 4096));
     for &f in &frames { crate::program_frames::give(f); }
+    if let Some(a) = ARENAS.lock().iter_mut().flatten().find(|a| a.pd == pd_id) { a.holes = a.grown; }
     frames.len() as u64
 }

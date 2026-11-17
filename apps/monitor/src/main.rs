@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Mesh (formerly Monitor): what the machine is doing. `run mesh` lists every service and program
 //! that has used the CPU, busiest first, with its share of one core over the last
-//! second and the memory it holds, and the whole machine's load and free memory.
+//! second and the memory it holds (and how much of it Denim keeps packed), and the whole
+//! machine's load, free memory and compressed memory: pages packed, the store they take,
+//! and the ratio.
 //! The numbers come from the kernel's read-only statistics (syscall 87). Up and Down
 //! choose a line; Home goes back to the top.
 #![no_std]
@@ -21,13 +23,14 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 #[derive(Clone, Copy, Default)]
-struct Row { pd: u32, cycles: u64, tenths: u64, pages: u64, task: u32, syscalls: u64, rate: u64 }
+struct Row { pd: u32, cycles: u64, tenths: u64, pages: u64, task: u32, syscalls: u64, rate: u64, packed: u64 }
 
-struct Sample { rows: [Row; MAX], count: usize, tsc: u64, idle: u64, cores: u64, free_pages: u64, ms: u64, span_ms: u64 }
+struct Sample { rows: [Row; MAX], count: usize, tsc: u64, idle: u64, cores: u64, free_pages: u64, ms: u64, span_ms: u64, packed: u64, store: u64 }
 
 fn sample(previous: &Sample) -> Sample {
     let ms = sex_pdx::get_ticks();
-    let mut s = Sample { rows: [Row::default(); MAX], count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms, span_ms: 0 };
+    let mut s = Sample { rows: [Row::default(); MAX], count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms, span_ms: 0, packed: 0, store: 0 };
+    if let Some((packed, store)) = stats::packed(0) { s.packed = packed; s.store = store; }
     if let Some(o) = stats::overview() { s.tsc = o.tsc; s.idle = o.idle_cycles; s.cores = o.cores.max(1); s.free_pages = o.free_pages; }
     let span_ms = ms.saturating_sub(previous.ms);
     s.span_ms = span_ms;
@@ -39,7 +42,8 @@ fn sample(previous: &Sample) -> Sample {
         let before = previous.rows[..previous.count].iter().find(|r| r.pd == pd);
         let tenths = before.map_or(0, |b| stats::tenths_of_core(b.cycles, d.cycles, previous.tsc, s.tsc));
         let rate = before.map_or(0, |b| d.syscalls.saturating_sub(b.syscalls) * 1000 / span_ms.max(1));
-        s.rows[s.count] = Row { pd, cycles: d.cycles, tenths, pages: d.pages, task: d.task, syscalls: d.syscalls, rate };
+        let packed = if s.packed > 0 && d.pages != stats::UNKNOWN { stats::packed(pd).map_or(0, |p| p.0) } else { 0 };
+        s.rows[s.count] = Row { pd, cycles: d.cycles, tenths, pages: d.pages, task: d.task, syscalls: d.syscalls, rate, packed };
         s.count += 1;
     }
     // Busiest first; ties by domain so the list does not jump about.
@@ -98,7 +102,13 @@ fn render(window: &mut Window, s: &Sample, prev: &Sample, top: usize, chosen: Op
     let all = span.saturating_mul(s.cores);
     let busy = 1000u64.saturating_sub((s.idle.saturating_sub(prev.idle) as u128 * 1000 / all as u128).min(1000) as u64);
     t.put(b"CPU "); t.tenths(busy); t.put(b" of "); t.num(s.cores, 1); t.put(b" cores   free memory");
-    t.bytes(s.free_pages); t.put(b"\n\nNAME             DOMAIN    CPU      MEMORY  CALLS/S\n");
+    t.bytes(s.free_pages);
+    if s.packed > 0 {
+        // Denim: what it keeps packed, what that takes, and the ratio in tenths.
+        t.put(b"\ncompressed"); t.bytes(s.packed); t.put(b" in"); t.bytes(s.store);
+        let r = s.packed * 10 / s.store.max(1); t.put(b" ("); t.num(r / 10, 1); t.put(b"."); t.num(r % 10, 1); t.put(b"x)");
+    }
+    t.put(b"\n\nNAME             DOMAIN    CPU      MEMORY     PACKED  CALLS/S\n");
     let mut top = top.min(s.count.saturating_sub(1));
     // Keep the chosen line on screen.
     if let Some(i) = chosen.and_then(|pd| s.rows[..s.count].iter().position(|r| r.pd == pd)) {
@@ -106,7 +116,8 @@ fn render(window: &mut Window, s: &Sample, prev: &Sample, top: usize, chosen: Op
     }
     for r in s.rows[top..s.count].iter().take(SHOWN) {
         t.put(if Some(r.pd) == chosen { b"> " } else { b"  " });
-        t.name(r.pd); t.num(r.pd as u64, 6); t.put(b"  "); t.tenths(r.tenths); t.put(b" "); t.bytes(r.pages); t.num(r.rate, 9); t.put(b"\n");
+        t.name(r.pd); t.num(r.pd as u64, 6); t.put(b"  "); t.tenths(r.tenths); t.put(b" "); t.bytes(r.pages);
+        t.put(b" "); if r.packed > 0 { t.bytes(r.packed) } else { t.put(b"        -") } t.num(r.rate, 9); t.put(b"\n");
     }
     t.put(b"\nUp/Down choose a line, Delete ends that program.\n"); t.put(note);
     window.show(&t.buf[..t.len]);
@@ -114,6 +125,10 @@ fn render(window: &mut Window, s: &Sample, prev: &Sample, top: usize, chosen: Op
         sex_pdx::serial_record!("[monitor.sample] rows={} busy_tenths={} top_pd={} top_tenths={} top_task={} free_pages={}", s.count, busy, r.pd, r.tenths, r.task, s.free_pages);
         for r in s.rows[..s.count].iter().take(4) {
             sex_pdx::serial_record!("[monitor.row] pd={} tenths={} pages={} calls_per_s={}", r.pd, r.tenths, r.pages, r.rate);
+        }
+        if s.packed > 0 {
+            sex_pdx::serial_record!("[monitor.packed] packed_pages={} store_pages={} ratio_tenths={}", s.packed, s.store, s.packed * 10 / s.store.max(1));
+            for r in s.rows[..s.count].iter().filter(|r| r.packed > 0) { sex_pdx::serial_record!("[monitor.row.packed] pd={} packed_pages={}", r.pd, r.packed); }
         }
     }
     top
@@ -123,11 +138,11 @@ fn render(window: &mut Window, s: &Sample, prev: &Sample, top: usize, chosen: Op
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
     window.title(b"Mesh");
-    let mut prev = sample(&Sample { rows: [Row::default(); MAX], count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, span_ms: 0 });
+    let mut prev = sample(&Sample { rows: [Row::default(); MAX], count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, span_ms: 0, packed: 0, store: 0 });
     let mut top = 0usize;
     let mut chosen: Option<u32> = None;
     // The sample before `prev`, so a redraw after a key shows the same numbers.
-    let mut older = Sample { rows: [Row::default(); MAX], count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, span_ms: 0 };
+    let mut older = Sample { rows: [Row::default(); MAX], count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, span_ms: 0, packed: 0, store: 0 };
     let mut note: &[u8] = b"";
     sex_pdx::serial_record!("[monitor.ready] target={} task={}", window.target, window.task);
     loop {

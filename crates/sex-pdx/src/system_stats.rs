@@ -13,6 +13,9 @@ pub const OP_NAME: u64 = 2;
 pub const OP_NEXT: u64 = 3;
 /// rsi, rdx = sixteen bytes of the caller's own name.
 pub const OP_SET_NAME: u64 = 4;
+/// rsi = domain (0: the machine) → rsi = pages Denim holds packed for the domain's run
+/// (the machine: for every run), rdx = pages Denim's store takes (the machine only).
+pub const OP_PACKED: u64 = 6;
 pub const OK: u64 = 0;
 pub const INVALID: u64 = 1;
 pub const NONE: u64 = 2;
@@ -65,6 +68,12 @@ pub fn name(pd: u32) -> [u8; 16] {
 pub fn next(after: u32) -> Option<u32> {
     let (s, r) = call(OP_NEXT, after as u64, 0);
     (s == OK).then_some(r[0] as u32)
+}
+/// Compressed memory (Denim): pages held packed for `pd`'s run, or with `pd` 0 for every
+/// run, and with `pd` 0 the pages Denim's store takes for them.
+pub fn packed(pd: u32) -> Option<(u64, u64)> {
+    let (s, r) = call(OP_PACKED, pd as u64, 0);
+    (s == OK).then_some((r[0], r[1]))
 }
 /// Names the calling domain; at most sixteen bytes are kept.
 pub fn set_name(name: &[u8]) {

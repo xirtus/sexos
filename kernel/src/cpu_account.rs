@@ -96,6 +96,7 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             }
             wire::NONE
         }
+        wire::OP_PACKED => { (regs.rsi, regs.rdx) = crate::app_resources::packed(arg as u32); wire::OK }
         wire::OP_SET_NAME => {
             if caller == 0 || caller as usize >= DOMAINS || arg == 0 { return wire::INVALID; }
             NAMES[caller as usize][0].store(arg, Ordering::Relaxed);

@@ -847,6 +847,13 @@ pub fn poll_exit_notifications(){
         }
     }
 }
+/// Pages Denim holds for `target`'s run, or (`target` 0) for every run and the pages
+/// Denim's store takes (`system_stats::packed`).
+pub fn packed(target:u32)->(u64,u64){
+    let Some(apps)=apps_lock!() else{return (0,0)};
+    let out=apps.iter().filter(|a|a.ready&&(target==0||a.target==target)&&!a.retired).map(|a|a.out as u64).sum();
+    (out,if target==0{crate::service_memory::present(sex_pdx::denim::DENIM_PD)}else{0})
+}
 /// Denim's view of a live run (`sex_pdx::denim`). The run must be the
 /// row's current one, as for `grow`; its domain is found by target, not by caller.
 fn denim_run(apps:&mut [App;MAX_APPS],target:u32)->Result<&mut App,u64>{

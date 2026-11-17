@@ -45,6 +45,16 @@ def main():
    time.sleep(2)
   assert outs>=1024,f'Denim took only {r[-1] if r else None} pages out'
   out_round=r[-1]
+  # D4: Mesh shows the packed pages, the store they take and the ratio, and heaptest's share.
+  mesh='mesh' if (ROOT/'iso_root/programs/mesh').exists() else 'monitor'
+  g['focus'](153);time.sleep(.5);s=len(t())
+  for k in 'run '+mesh:q.key('spc' if k==' ' else k);time.sleep(.05)
+  q.key('ret')
+  mp=g['wait'](r'\[monitor\.packed\] packed_pages=(\d+) store_pages=(\d+) ratio_tenths=(\d+)',s,120)
+  assert int(mp[1])>=1024 and int(mp[2])>0,mp[0]
+  g['wait'](rf'\[monitor\.row\.packed\] pd={target} packed_pages=[1-9]',s,60)
+  mt=re.findall(r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',t()[s:])[-1]
+  g['focus'](int(mt[2]));time.sleep(.3);s=len(t());q.key('f11');g['wait'](rf'\[app.private.retired\] target={mt[0]} task={mt[1]} ',s,90)
   g['focus'](sid);time.sleep(.5);s=len(t());q.key('v')
   v=g['wait'](rf'\[heaptest\.verify\] target={target} task={task} pages=2048 bad=(\d+) ticks=(\d+)',s,240)
   assert v[1]=='0',f'{v[1]} kept pages came back wrong'
@@ -84,6 +94,6 @@ def main():
   g['wait'](rf'\[shell\.denim\.lost\] target={t2} task={k2} ',s,60)
   g['wait'](rf'\[app.private.retired\] target={t2} task={k2} ',s,120)
   for bad in ('KERNEL PANIC','panicked at','[denim.damaged]','[denim.panic]'):assert bad not in t(),bad
-  print({'ok':True,'target':target,'out':out_round,'verify_ticks':int(v[2]),'faults_in':faults,'restart':{'target':t2,'ended':int(r[2])}})
+  print({'ok':True,'target':target,'out':out_round,'mesh':{'packed':int(mp[1]),'store':int(mp[2]),'ratio':int(mp[3])/10},'verify_ticks':int(v[2]),'faults_in':faults,'restart':{'target':t2,'ended':int(r[2])}})
  finally:g['stop']()
 if __name__=='__main__':main()
