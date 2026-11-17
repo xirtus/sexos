@@ -1,0 +1,12 @@
+[package]
+name = "filigree-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Filigree font manager engine: OpenType/TrueType binary table inspector, glyph repertoire analyzer, duplicate detector, smart collections, and non-destructive activation manifest"
+
+[dependencies]
+ttf-parser = { version = "0.25", default-features = false, features = ["no-std-float", "opentype-layout"] }
+sex-font = { path = "../sex-font" }
+sex-archive = { path = "../sex-archive" }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }

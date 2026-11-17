@@ -7,10 +7,18 @@
 //! font is bytes, a glyph is a function of those bytes and a size.
 #![no_std]
 
+extern crate alloc;
+
 pub mod cache;
 pub mod fallback;
+#[forbid(unsafe_code)]
+pub mod inspect;
 pub mod raster;
 
+pub use inspect::{
+    font_collection_count, inspect_font, FontClass, FontMetadata, Panose, ScriptRange,
+    UnicodeCoverage,
+};
 pub use ttf_parser::GlyphId;
 use raster::{div_round, Raster, FX};
 use ttf_parser::{Face, OutlineBuilder};
