@@ -74,6 +74,12 @@ impl FrameGroups {
         self.child_group(s).filter(|g|g.parent_required()&&!g.frame_seen)
             .and_then(|g|g.catalog.frame_surface_id())
     }
+    /// The surface that is drawn on top: a focused bound child raises its frame.
+    pub fn raised_focus(&self, surfaces: &[Surface], focused: u64) -> u64 {
+        surfaces.iter().find(|s| s.active && s.surface_id == focused)
+            .and_then(|s| self.child_group(s)).filter(|g| g.frame_seen)
+            .and_then(|g| g.catalog.frame_surface_id()).unwrap_or(focused)
+    }
     pub fn winner<'a>(&self, surfaces: &'a [Surface], focused: u64,
         x: usize, y: usize, w: usize, h: usize) -> Option<&'a Surface> {
         // The shell's modal launcher must remain above app focus without

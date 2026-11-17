@@ -64,6 +64,15 @@ impl<'a> Painter<'a> {
         self.pixels[i] = 0xFF00_0000 | m(c.r() as u32, d >> 16 & 0xFF) << 16 | m(c.g() as u32, d >> 8 & 0xFF) << 8 | m(c.b() as u32, d & 0xFF);
     }
 
+    /// Glyph coverage of `c` mixed in linear light (`sex_font::gamma`), so text
+    /// keeps one weight on light and dark themes; `k` is the ink's contrast.
+    #[inline]
+    fn blend_text(&mut self, i: usize, c: Color, cover: u8, k: i32) {
+        let cover = (c.a() as u32 * cover as u32 / 255) as u8;
+        if cover == 0 { return; }
+        self.pixels[i] = 0xFF00_0000 | (sex_font::gamma::blend_with(c.0, self.pixels[i], cover, k) & 0xFF_FFFF);
+    }
+
     /// Fills whole device pixels of `r`; edges are snapped, so adjacent rectangles meet.
     pub fn fill_rect(&mut self, r: Rect, c: Color) {
         let d = self.dev(r);
@@ -196,11 +205,13 @@ impl<'a> Painter<'a> {
         let mut pen = x * s;
         let base = libm::roundf(baseline * s) as i32;
         let (cx0, cy0, cx1, cy1) = self.clip_ints();
+        let ink = c.0 & 0xFF_FFFF;
+        let k = sex_font::gamma::contrast_for(ink);
         for (ch, a) in text.chars().zip(adv.iter()) {
             if pen > cx1 as f32 { break; }
             if ch != ' ' && pen + a >= cx0 as f32 - px {
                 let (whole, phase) = Fonts::phase_of(pen);
-                if let Some(g) = fonts.glyph(face, ch, px, phase) {
+                if let Some(g) = fonts.glyph_for(face, ch, px, phase, ink) {
                     let gx = whole + g.left;
                     let gy = base - g.top;
                     for row in 0..g.h as i32 {
@@ -212,7 +223,7 @@ impl<'a> Painter<'a> {
                             let x = gx + col as i32;
                             if x < cx0 || x >= cx1 { continue; }
                             let i = y as usize * self.width + x as usize;
-                            self.blend(i, c, *cover as u32);
+                            self.blend_text(i, c, *cover, k);
                         }
                     }
                 } else {

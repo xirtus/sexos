@@ -72,6 +72,9 @@ run_stage() {
       cp limine/limine-bios-cd.bin iso_root/boot/limine/
       cp limine/limine-uefi-cd.bin iso_root/boot/limine/
       cp limine/limine-bios.sys iso_root/boot/limine/
+      # Fix Limine 7.13.3's BIOS boot-menu countdown hang (idempotent; CI patches
+      # limine/ itself before building the installer tool).
+      python3 scripts/patch_limine_bios.py iso_root/boot/limine/limine-bios-cd.bin iso_root/boot/limine/limine-bios.sys
       ;;
     cargo_pkg)
       local pkg src dst extra_rustflags

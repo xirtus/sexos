@@ -180,7 +180,7 @@ unsafe fn send_speech() {
 
 /// The name a window shows in its title bar (Display's `surface_title`): Some(length),
 /// or Err(true) for a program window whose run has not named it yet.
-fn title(sid: u64, buf: &mut [u8; 16]) -> Result<usize, bool> {
+pub(crate) fn title(sid: u64, buf: &mut [u8; 16]) -> Result<usize, bool> {
     if sid == 200 { return Ok(reader::join(&[b"Linen"], buf)); }
     let row = app_catalog::INCARNATIONS.iter().find(|r| r.surface == sid || r.shell_surface == Some(sid)).ok_or(false)?;
     let name: &[u8] = match row.app {
