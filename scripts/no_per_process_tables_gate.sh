@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Repository-wide static absence check for per-process translation roots and a
 # Unix-style process model. SexOS has one GLOBAL_VAS: every translation-root
-# load must reinstall the single boot-established root. This scans every Rust
-# source of every workspace member; it is static evidence, not a runtime proof.
+# load must reinstall the single boot-established root, or enter a protection
+# view of it (kernel/src/views.rs, plan decision D2: the same translation, only
+# span permissions differ, and views belong to key-sharing program rows, not to
+# processes). This scans every Rust source of every workspace member; it is
+# static evidence, not a runtime proof.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python3 - "$ROOT_DIR" <<'PY'
@@ -12,7 +15,10 @@ from pathlib import Path
 # Each permitted translation-root effect, bound to its enclosing function and
 # to evidence that it reinstalls the one global root rather than a new one.
 ALLOWED={
- 'cr3_write':[('kernel/src/hal/x86_64.rs','tlb_flush_local','let (p4_frame, flags) = Cr3::read();\n            Cr3::write(p4_frame, flags);')],
+ 'cr3_write':[('kernel/src/hal/x86_64.rs','tlb_flush_local','let (p4_frame, flags) = Cr3::read();\n            Cr3::write(p4_frame, flags);'),
+              # Protection views: the same leaves under every root (views_rules::open copies only
+              # the tables above a span), entered by CR3 with the view's PCID.
+              ('kernel/src/views.rs','set_cr3','rules::open(&mut hw(), root_table(), ROOT[view]')],
  'page_table_root':[('kernel/src/memory/manager.rs','init','let level_4_table = unsafe { active_level_4_table(VirtAddr::new(hhdm_offset)) };\n    let mut mapper = unsafe { OffsetPageTable::new(level_4_table')],
  # rustls's hash::Context trait names its copy-the-running-hash method `fork`; it
  # copies a SHA-2 state, not a process.
@@ -52,7 +58,7 @@ def scan(root):
                     if rel==site and enclosing(text,match.start())==function and evidence in text:ok=True;break
                 if ok:seen[kind]+=1
                 else:errors.append(f'{rel}:{line}: {kind}: {text.splitlines()[line-1].strip()[:100]}')
-    expected={'cr3_write':1,'page_table_root':1,'ttbr_write':4}
+    expected={'cr3_write':2,'page_table_root':1,'ttbr_write':4}
     for kind,count in expected.items():
         if seen[kind]!=count:errors.append(f'{kind}: expected {count} sanctioned global-root sites, found {seen[kind]}')
     return len(set(files)),errors

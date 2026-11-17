@@ -538,7 +538,16 @@
         "bash",
         "scripts/no_per_process_tables_gate.sh"
       ],
-      "scope": "Static scan of every workspace and arch Rust source: translation-root loads and mapper roots are confined to sanctioned reinstalls of the one boot root; process-model identifiers are absent. Not runtime translation, generated code or hostile-code evidence."
+      "scope": "Static scan of every workspace and arch Rust source: translation-root loads and mapper roots are confined to sanctioned reinstalls of the one boot root and to protection views of it (same leaves, span permissions only); process-model identifiers are absent. Not runtime translation, generated code or hostile-code evidence."
+    },
+    {
+      "id": "protection_views",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/protection_views_host_gate.sh"
+      ],
+      "scope": "Production view page-table rules (kernel/src/views_rules.rs) compiled natively on tables in ordinary memory: a view opens only its spans, shares every page table with the canonical root, never sees another view's spans, follows canonical table growth; CR3/PCID and stale-mark arithmetic. Not CPU TLB, cross-core or hostile-code evidence."
     },
     {
       "id": "capability_revocation",
@@ -753,7 +762,7 @@
     },
     {
       "id": "NO_PER_PROCESS_TABLES",
-      "requirement": "No per-process page tables or Linux-style process model may be introduced.",
+      "requirement": "No per-process page tables or Linux-style process model may be introduced. One translation serves every domain; protection views (decision D2) are extra roots over the same leaves that differ only in span permissions, one per key-sharing program row.",
       "status": "partial",
       "sources": [
         {
@@ -763,10 +772,15 @@
         {
           "path": "kernel/src/hal/x86_64.rs",
           "anchor": "fn tlb_flush_local"
+        },
+        {
+          "path": "kernel/src/views.rs",
+          "anchor": "pub fn enter"
         }
       ],
       "checks": [
-        "no_per_process_tables"
+        "no_per_process_tables",
+        "protection_views"
       ],
       "gaps": [
         "The executable absence check is static source evidence over workspace members; it does not observe runtime CR3/TTBR values, generated or vendored code, or hostile native code."

@@ -13,7 +13,6 @@ use alloc::boxed::Box;
 use core::sync::atomic::{AtomicBool,AtomicU32,AtomicU64,AtomicUsize,Ordering};
 use sex_pdx::organs::RECORD_KEY;
 use sex_pdx::program_store as store;
-use x86_64::VirtAddr;
 
 pub const BASE:u32=1024;
 pub const CAPACITY:usize=4096;
@@ -144,7 +143,8 @@ fn set_present(index:usize,present:bool){
         let value=core::ptr::read_volatile(entry);
         if value==0{return}
         core::ptr::write_volatile(entry,if present{value|PRESENT}else{value&!PRESENT});
-        x86_64::instructions::tlb::flush(VirtAddr::new(virtual_page(index,page)));
+        // Under the current view now, and under this core's others when next entered.
+        crate::views::invalidate(virtual_page(index,page));
     });
 }
 /// Called before any task runs. Only the record about to run has pages present.

@@ -31,9 +31,8 @@ pub fn home_core(pd: u64) -> u32 {
     if spare == 0 { return 0; }
     // Apps of every incarnation follow, spread by domain.
     if sex_pdx::app_catalog::app_of(pd as u32).is_some_and(|app| app != sex_pdx::app_catalog::App::Program) { return 2 + pd as u32 % spare; }
-    // Programs leave the desktop's core too. Rows sharing a key take turns on one core,
-    // the last spare, since one set of present bits serves one core at a time.
-    if crate::program_tenancy::shared(pd as u32) { return 2 + spare - 1; }
+    // Programs leave the desktop's core too; rows sharing a key each run in their own
+    // view (`views`), so they spread like any other.
     if sex_pdx::app_catalog::app_of(pd as u32) == Some(sex_pdx::app_catalog::App::Program) { return 2 + pd as u32 % spare; }
     match MOVED.iter().position(|m| *m == pd) { Some(index) => 2 + index as u32 % spare, None => 0 }
 }
@@ -132,11 +131,9 @@ pub mod tlb {
     const EVERYTHING: u64 = u64::MAX;
     /// Past this many pages one request for everything is cheaper than one per page.
     pub const BATCH: usize = 8;
-    fn invalidate(va: u64) {
-        // User pages are never global, so reloading CR3 drops all of them.
-        if va == EVERYTHING { x86_64::instructions::tlb::flush_all(); }
-        else { x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(va)); }
-    }
+    // User pages are never global, so reloading CR3 drops all of them; with PCIDs,
+    // `views` also flushes this core's other views when it next enters them.
+    fn invalidate(va: u64) { crate::views::invalidate(va) }
 
     /// Answer a request not yet answered here. Touches no per-core GS data, since an
     /// interrupt from user mode arrives with the user's GS still loaded.

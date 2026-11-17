@@ -508,7 +508,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [cleanup, app-resource, crash, denim]
+        gate: [cleanup, app-resource, crash, denim, views]
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -530,6 +530,17 @@ jobs:
         SEXOS_DENIM_EAGER=1 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/denim-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/denim-build.log"; exit 1)
         truncate -s 1G "$RUNNER_TEMP/denim-source.img"
         python3 scripts/denim_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/denim-source.img" --out "$RUNNER_TEMP/sexos-proof/denim"
+    - name: Shared-key program rows in protection views on 4 cores (no turn-taking, PCID)
+      if: matrix.gate == 'views'
+      run: |
+        ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/views-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/views-build.log"; exit 1)
+        truncate -s 1G "$RUNNER_TEMP/views-source.img"
+        SEXOS_GATE_CORES=4 SEXOS_GATE_MEMORY=2G python3 scripts/program_pool_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/views-source.img" --out "$RUNNER_TEMP/sexos-proof/views-pool"
+    - name: A shared-key row cannot read its neighbour without PKU (probe build)
+      if: matrix.gate == 'views'
+      run: |
+        SEXOS_PROGRAM_ISOLATION_PROBE=4 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/views-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/views-probe-build.log"; exit 1)
+        SEXOS_GATE_CPU=max,-pku,+rdseed SEXOS_GATE_CORES=4 SEXOS_GATE_MEMORY=2G python3 scripts/program_isolation_probe.py sexos-v1.0.0.iso "$RUNNER_TEMP/views-source.img" "$RUNNER_TEMP/sexos-proof/views-isolation" 4
     - name: Cap-scoped peer epochs across same-task service restart
       if: matrix.gate == 'crash'
       run: SEXOS_GATE_CORES=4 python3 scripts/service_peer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof/service-peer"
