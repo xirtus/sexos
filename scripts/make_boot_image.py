@@ -19,7 +19,13 @@ def main():
  need=sum(f.stat().st_size for f in files)+(1<<20)
  sectors=SECTORS if need<=SECTORS*512 and not (pack.is_file() and pack.stat().st_size>1<<20) else SECTORS_WITH_FIRMWARE
  with img.open('wb') as f:f.truncate(sectors*512)
- run=lambda *c:subprocess.run(c,check=True,capture_output=True)
+ def run(*c):
+  r=subprocess.run(c,capture_output=True,text=True)
+  if r.returncode:
+   # Say what did not fit: the slot, what was asked of it, and the biggest files.
+   print(f'[boot.img.fail] cmd={" ".join(c)} sectors={sectors} need={need} stderr={r.stderr.strip()!r}',flush=True)
+   for f in sorted(files,key=lambda f:-f.stat().st_size)[:12]:print(f'[boot.img.file] {f.stat().st_size} {f}',flush=True)
+   r.check_returncode()
  run('mformat','-i',str(img),'-T',str(sectors),'-h','64','-s','32','-v','SEXOS','::')
  with tempfile.TemporaryDirectory() as tmp:
   efi=Path(tmp)/'BOOTX64.EFI'
