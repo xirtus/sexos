@@ -913,6 +913,15 @@ manifest = "apps/hum/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/doze"
 dest_artifact = "iso_root/programs/doze"
 
+# Swatch: one memory sample (kernel heap, free frames, program rows) for leak gates.
+[[stage]]
+id = "build_swatch"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/hum/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/swatch"
+dest_artifact = "iso_root/programs/swatch"
+
 # Lurk: the remote desktop viewer (VNC/RFB client), `run +net lurk HOST:PORT`.
 [[stage]]
 id = "build_lurk"

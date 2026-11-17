@@ -41,6 +41,7 @@ mod tray_items;
 mod tray_items_glue;
 mod layouts;
 mod layouts_glue;
+mod animations;
 mod silk_ctl;
 mod silk_ctl_glue;
 mod hot_corners;
@@ -10745,7 +10746,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::ClipboardHistory => clipboard_history_step(),
         A::Notifications => toggle_bell(),
         A::Wallpaper => desktop_look_step(1, 0),
-        A::Animations => { MOTION_ON = !MOTION_ON; motion_hint(0); let on: &[u8] = if MOTION_ON { b"Animations on" } else { b"Animations off" }; if notify_panel(on) { NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS; } true }
+        A::Animations => { let (look, on) = animations::cycle(); MOTION_ON = look == animations::Look::Full; motion_hint(0); if notify_panel(on) { NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS; } true }
         A::NightLight => desktop_look_step(0, 1),
         A::Lock => lock::lock(),
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
@@ -13746,7 +13747,7 @@ static mut MOTION_ON: bool = true;
 /// Tells Display whether to animate and, for a workspace switch, which side
 /// the next windows come from (-1 left, 1 right).
 unsafe fn motion_hint(dir: i8) {
-    let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::window_motion::OP_MOTION, MOTION_ON as u64, dir as u8 as u64, 0);
+    let (status, _) = pdx_call(SLOT_DISPLAY, sex_pdx::window_motion::OP_MOTION, MOTION_ON as u64, dir as u8 as u64, animations::motion_arg2());
     sex_pdx::serial_record!("[shell.motion] on={} dir={} status={:#x}", MOTION_ON as u8, dir, status);
 }
 unsafe fn switch_scene(scene_idx: u8) {
@@ -24917,7 +24918,7 @@ unsafe fn hit_test_surface_chrome(x: i32, y: i32, sid: u64) -> Option<HitTarget>
 unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     let focused = FOCUSED_SURFACE_ID;
     // A group's background tab keeps its old bounds but is not on screen.
-    if point_in_surface(x, y, focused) && layouts_glue::behind(focused).is_none() {
+    if point_in_surface(x, y, focused) && shaped(x, y, focused) && layouts_glue::behind(focused).is_none() {
         // Chrome check: rim/tab-strip takes priority over content area.
         if let Some(chrome_target) = hit_test_surface_chrome(x, y, focused) {
             if let HitTarget::FrameChrome { frame_id, kind } = chrome_target {
@@ -24946,7 +24947,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
     }
     for entry in APP_CUSTODY.iter().flatten() {
         let sid=entry.shell_surface().unwrap_or(entry.surface);
-        if entry.dead || sid == focused || !point_in_surface(x,y,sid) || layouts_glue::behind(sid).is_some() { continue; }
+        if entry.dead || sid == focused || !point_in_surface(x,y,sid) || !shaped(x,y,sid) || layouts_glue::behind(sid).is_some() { continue; }
         if let Some(fid) = frame_for_surface(sid) {
             if frame_accepts_input(fid) {
                 if let Some(chrome) = hit_test_surface_chrome(x,y,sid) { return chrome; }
@@ -24962,7 +24963,7 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
             serial_println!("[shell.hit_test.skip] id={} reason=dead", sid);
             continue;
         }
-        if point_in_surface(x, y, sid) {
+        if point_in_surface(x, y, sid) && shaped(x, y, sid) {
             // Chrome check for z-order surfaces too (if frame-owned).
             if let Some(chrome_target) = hit_test_surface_chrome(x, y, sid) {
                 if let HitTarget::FrameChrome { frame_id, kind } = chrome_target {
@@ -24992,6 +24993,9 @@ unsafe fn hit_test_at(x: i32, y: i32) -> HitTarget {
         }
     }
     HitTarget::None
+}
+/// Rounded-corner hit mask: a click in a see-through corner falls through.
+unsafe fn shaped(x: i32, y: i32, sid: u64) -> bool { animations::in_shape(x, y, get_surface_bounds(sid), sex_pdx::desktop_style::ui_scale())
 }
 
 /// Extract the surface_id from a HitTarget, if it represents a surface hit.

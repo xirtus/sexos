@@ -1019,3 +1019,33 @@ jobs:
         name: UNSAFE-keyboard-payload-proof-never-private-input
         path: ${{ runner.temp }}/input-payload-proof
         if-no-files-found: ignore
+
+  # Leak gate (WS2). Not in `build`'s needs yet: it reports while the leaks it finds
+  # are fixed, then joins the required set.
+  leaks:
+    name: Leak gate (programs open/close, services restart)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image with the crash probe
+      run: |
+        SEXOS_CRASH_PROBE=1 SEXOS_STOP_RESTART_SECONDS=8 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/leak-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/leak-build.log"; exit 1)
+    - name: Memory comes back after open/close and restart cycles
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/leak-source.img"
+        python3 scripts/leak_gate.py --services --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/leak-source.img" --out "$RUNNER_TEMP/sexos-leak"
+    - name: Leak report
+      if: always()
+      run: |
+        [ -f "$RUNNER_TEMP/sexos-leak/leak.json" ] && python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print('ok', r.get('ok'), 'leaks', r.get('leaks'), 'why', r.get('why')); [print(k, n, v['growth']) for k in ('programs','services') for n, v in r.get(k, {}).items()]" "$RUNNER_TEMP/sexos-leak/leak.json" | tee -a "$GITHUB_STEP_SUMMARY" || true
+    - name: Preserve leak evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-leak-proof
+        path: |
+          ${{ runner.temp }}/sexos-leak/leak.json
+          ${{ runner.temp }}/sexos-leak/*.log
+        if-no-files-found: ignore
