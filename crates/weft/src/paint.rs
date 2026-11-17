@@ -68,9 +68,11 @@ impl<'a> Painter<'a> {
     /// keeps one weight on light and dark themes; `k` is the ink's contrast.
     #[inline]
     fn blend_text(&mut self, i: usize, c: Color, cover: u8, k: i32) {
-        let cover = (c.a() as u32 * cover as u32 / 255) as u8;
+        // Stroke correction first, then the colour's own opacity, so a translucent
+        // colour keeps the opacity it asked for inside solid strokes.
+        let cover = (sex_font::gamma::enhance(cover, k) as u32 * c.a() as u32 / 255) as u8;
         if cover == 0 { return; }
-        self.pixels[i] = 0xFF00_0000 | (sex_font::gamma::blend_with(c.0, self.pixels[i], cover, k) & 0xFF_FFFF);
+        self.pixels[i] = 0xFF00_0000 | (sex_font::gamma::blend_with(c.0, self.pixels[i], cover, 0) & 0xFF_FFFF);
     }
 
     /// Fills whole device pixels of `r`; edges are snapped, so adjacent rectangles meet.
