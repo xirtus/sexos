@@ -36,6 +36,10 @@ them by artist and album from their tags and plays them one after another with n
 | **`Up / Down`** | **Volume** | Increase or decrease audio playback volume. |
 | **`M`** | **Mute** | Toggle audio mute. |
 | **`F`** | **Fullscreen** | Expand playback frame to fill physical monitor. |
+| **`C`** | **Chapters** | Show the chapter list for a few seconds. |
+| **`PgUp / PgDn`** | **Chapter jump** | Previous or next chapter. |
+| **`Enter`** | **Skip intro** | Take the "Skip intro / recap / credits" card shown during those chapters. |
+| **`1`-`9`** | **Jump** | Go to 10%-90% of the video. |
 | **`S`** | **Subtitles** | Cycle through embedded and external subtitle streams (SRT, ASS). |
 | **`A`** | **Audio Track** | Cycle through available multi-language audio streams. |
 | **`[` / `]`** | **Speed** | Decrease or increase playback speed (0.5× to 2.0×). |

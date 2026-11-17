@@ -9,7 +9,8 @@
 //! Home goes to the start. Subtitles come from a SubRip or SubStation file given after
 //! the video (`run qupid @film.mp4 @film.srt`), or one beside it when Qupid may read it.
 //! S shows or hides subtitles, A plays the next sound track,
-//! [ and ] play slower and faster (= back to normal). F11 closes. The keyboard's media keys work too, wherever
+//! [ and ] play slower and faster (= back to normal). C lists the chapters, PgUp/PgDn
+//! jump between them, Enter takes the "Skip intro" card, 1-9 jump to 10%-90%, M mutes. F11 closes. The keyboard's media keys work too, wherever
 //! the focus is, while Qupid is the program playing (Shell routes them): play/pause
 //! toggles and stop pauses at the start.
 #![no_std]
@@ -23,6 +24,7 @@ mod library;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use sex_app::{files, Event, Window};
+use sex_episodes::segments::{from_chapters, skip_at, Chapter, Segment};
 use sex_media::{Decoder, Player, Source, Step};
 use sex_pdx::pixel_region::{MAX_H, MAX_W};
 
@@ -102,6 +104,42 @@ struct Ui {
     item: (usize, usize),
     /// The time shown last, so a paused picture is drawn again only when it changes.
     drawn_ms: i64,
+    /// This item's chapters, and the parts of it worth skipping (from chapter names).
+    chapters: Vec<Chapter>,
+    segments: Vec<Segment>,
+    /// The card over the corner of the picture: "Skip intro", or the chapter list.
+    card: Option<captions::Painter>,
+    /// The chapter list shows until this tick (C shows it).
+    chapter_list_until: u64,
+    muted: bool,
+}
+
+/// Seconds the chapter list stays up after C.
+const CHAPTER_LIST_MS: u64 = 5000;
+
+/// The chapter playing at `ms`: the last that starts at or before it.
+fn chapter_at(chapters: &[Chapter], ms: u64) -> Option<usize> {
+    chapters.iter().rposition(|c| c.start_ms <= ms)
+}
+
+/// What the corner card says at `ms`, if anything.
+fn card_text(ui: &Ui, ms: u64) -> Option<alloc::string::String> {
+    use core::fmt::Write;
+    if sex_pdx::get_ticks() < ui.chapter_list_until && !ui.chapters.is_empty() {
+        let now = chapter_at(&ui.chapters, ms);
+        let mut text = alloc::string::String::from("Chapters  (PgUp / PgDn)");
+        // At most 8 lines around the one playing.
+        let first = now.unwrap_or(0).saturating_sub(3).min(ui.chapters.len().saturating_sub(8));
+        for (k, c) in ui.chapters.iter().enumerate().skip(first).take(8) {
+            text.push('\n');
+            text.push_str(if Some(k) == now { "> " } else { "   " });
+            clock(&mut text, c.start_ms);
+            let title = if c.title.is_empty() { alloc::format!("Chapter {}", k + 1) } else { c.title.clone() };
+            let _ = write!(text, "  {}", title);
+        }
+        return Some(text);
+    }
+    skip_at(&ui.segments, ms).map(|s| alloc::format!("{}  (Enter)", s.kind.prompt()))
 }
 
 const CONTROLS_MS: u64 = 2500;
@@ -145,6 +183,15 @@ fn present(window: &mut Window, player: &mut Player, ui: &mut Ui, at_ms: i64) {
             c.shown = text;
         }
     }
+    let card = card_text(ui, at_ms.max(0) as u64);
+    if let Some(c) = ui.card.as_mut() {
+        let text = card.unwrap_or_default();
+        if text != c.shown {
+            sex_pdx::serial_record!("[qupid.card] at_ms={} text={}", at_ms, text.replace('\n', " / "));
+            c.shown.clone_from(&text);
+        }
+        if !text.is_empty() { c.card(&mut window.pixels()[..w * h], w, h, &text); }
+    }
     ui.drawn_ms = at_ms;
     window.show_pixels(w, h);
 }
@@ -169,6 +216,47 @@ fn keys(window: &mut Window, player: &mut Player, ui: &mut Ui) -> Option<Outcome
                     player.seek(to);
                 }
                 0x66 => player.seek(0),
+                // Enter: skip the intro (recap, credits, preview) the card offers.
+                0x1C => if let Some(seg) = skip_at(&ui.segments, player.time_ms().max(0) as u64).cloned() {
+                    sex_pdx::serial_record!("[qupid.skip] kind={} to_ms={}", match seg.kind {
+                        sex_episodes::segments::Kind::Recap => "recap", sex_episodes::segments::Kind::Intro => "intro",
+                        sex_episodes::segments::Kind::Credits => "credits", sex_episodes::segments::Kind::Preview => "preview" }, seg.end_ms);
+                    player.seek(seg.end_ms);
+                },
+                // C: the chapter list for a few seconds.
+                0x2E => {
+                    ui.chapter_list_until = if sex_pdx::get_ticks() < ui.chapter_list_until { 0 } else { sex_pdx::get_ticks() + CHAPTER_LIST_MS };
+                    sex_pdx::serial_record!("[qupid.chapters.list] shown={} count={}", (ui.chapter_list_until != 0) as u8, ui.chapters.len());
+                }
+                // PgDn: the next chapter; PgUp: this chapter's start, or the one
+                // before when near its start.
+                0x49 | 0x68 | 0x51 | 0x6D if !ui.chapters.is_empty() => {
+                    let now = player.time_ms().max(0) as u64;
+                    let cur = chapter_at(&ui.chapters, now);
+                    let to = if matches!(k.code, 0x51 | 0x6D) {
+                        cur.map_or(0, |c| c + 1)
+                    } else {
+                        match cur { Some(c) if now >= ui.chapters[c].start_ms + 3000 => c, Some(c) => c.saturating_sub(1), None => 0 }
+                    };
+                    if let Some(ch) = ui.chapters.get(to) {
+                        sex_pdx::serial_record!("[qupid.chapter] n={} to_ms={} title={}", to, ch.start_ms, ch.title);
+                        player.seek(ch.start_ms);
+                        if sex_pdx::get_ticks() < ui.chapter_list_until { ui.chapter_list_until = sex_pdx::get_ticks() + CHAPTER_LIST_MS; }
+                    }
+                }
+                // 1-9: jump to 10%..90%; 0 to the start.
+                0x02..=0x0B => {
+                    let tenths = if k.code == 0x0B { 0 } else { (k.code - 1) as u64 };
+                    let to = player.duration_ms() * tenths / 10;
+                    sex_pdx::serial_record!("[play.seek] to_ms={}", to);
+                    player.seek(to);
+                }
+                // M: mute or unmute this program.
+                0x32 => {
+                    ui.muted = !ui.muted;
+                    player.set_muted(ui.muted);
+                    sex_pdx::serial_record!("[qupid.muted] {}", ui.muted as u8);
+                }
                 // N and the next key: the next item; P and the previous key: back to
                 // this item's start, or the item before when near its start.
                 0x31 | sex_pdx::app_key::KEY_NEXT => return Some(Outcome::Next),
@@ -233,7 +321,15 @@ fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progre
         info.audio_codec, info.sample_rate, info.channels
     );
     let begun = sex_pdx::get_ticks();
+    ui.chapters = dec.chapters().into_iter().map(|(title, start_ms)| Chapter { title, start_ms }).collect();
+    ui.segments = from_chapters(&ui.chapters, info.duration_ms);
+    ui.chapter_list_until = 0;
+    if !ui.chapters.is_empty() {
+        sex_pdx::serial_record!("[qupid.chapters] count={} segments={}", ui.chapters.len(), ui.segments.len());
+        for s in &ui.segments { sex_pdx::serial_record!("[qupid.segment] kind={} from_ms={} to_ms={}", s.kind.prompt(), s.start_ms, s.end_ms); }
+    }
     let mut player = Player::new(dec, w, h, true, false);
+    if ui.muted { player.set_muted(true); }
     if info.sample_rate > 0 && !player.has_sound() {
         sex_pdx::serial_record!("[play.sound.none] reason=no_ring");
     }
@@ -355,7 +451,8 @@ fn playlist(window: &mut Window, words: &[&[u8]]) {
     }
     if items.is_empty() { return fail(window, b"Usage: run qupid @VIDEO.mp4 [@SUBTITLES.srt] [@MORE.mp4 ...], or run qupid --library @FOLDER"); }
     let mut resume = Resume::load(window);
-    let mut ui = Ui { subs: None, controls: captions::Painter::new(), controls_until: 0, item: (0, items.len()), drawn_ms: 0 };
+    let mut ui = Ui { subs: None, controls: captions::Painter::new(), controls_until: 0, item: (0, items.len()), drawn_ms: 0,
+        chapters: Vec::new(), segments: Vec::new(), card: captions::Painter::new(), chapter_list_until: 0, muted: false };
     let mut i = 0usize;
     while i < items.len() {
         let (path, given) = items[i];

@@ -130,6 +130,7 @@ mod ffi {
         pub fn sx_tag(s: *mut c_void, key: *const c_char, out: *mut c_char, cap: c_int) -> c_int;
         pub fn sx_audio_tracks(s: *mut c_void, current: *mut c_int) -> c_int;
         pub fn sx_set_audio_track(s: *mut c_void, n: c_int) -> c_int;
+        pub fn sx_chapter(s: *mut c_void, n: c_int, out: *mut c_char, cap: c_int, start_ms: *mut i64) -> c_int;
         pub fn sx_close(s: *mut c_void);
         fn sx_error(err: c_int, buf: *mut c_char, len: c_int);
     }
@@ -358,6 +359,25 @@ impl Decoder {
             return (n.max(0) as usize, (current >= 0).then_some(current as usize));
         }
         (0, None)
+    }
+
+    /// The file's chapters in its own order: (title, start in ms). Untitled chapters
+    /// have an empty title.
+    pub fn chapters(&self) -> Vec<(alloc::string::String, u64)> {
+        #[cfg_attr(not(ffmpeg), allow(unused_mut))]
+        let mut out = Vec::new();
+        #[cfg(ffmpeg)]
+        if !self.s.is_null() {
+            let count = unsafe { ffi::sx_chapter(self.s, -1, core::ptr::null_mut(), 0, core::ptr::null_mut()) };
+            for n in 0..count.clamp(0, 256) {
+                let mut title = [0u8; 128];
+                let mut start: i64 = 0;
+                unsafe { ffi::sx_chapter(self.s, n, title.as_mut_ptr().cast(), title.len() as c_int, &mut start) };
+                let len = title.iter().position(|b| *b == 0).unwrap_or(0);
+                out.push((alloc::string::String::from_utf8_lossy(&title[..len]).into_owned(), start.max(0) as u64));
+            }
+        }
+        out
     }
 
     /// Decode sound track `n` instead; seek next so it starts in step.
@@ -757,6 +777,8 @@ impl Player {
     pub fn audio_tracks(&self) -> (usize, Option<usize>) {
         match self.audio.as_ref() { Some(a) => a.audio_tracks(), None => self.dec.audio_tracks() }
     }
+    /// The video's chapters: (title, start in ms).
+    pub fn chapters(&self) -> Vec<(alloc::string::String, u64)> { self.dec.chapters() }
     /// Play sound track `n` from where playback is now.
     pub fn set_audio_track(&mut self, n: usize) -> Result<(), Error> {
         let at = self.time_ms().max(0) as u64;

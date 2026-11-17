@@ -309,5 +309,23 @@ int sx_tag(struct sx *s, const char *key, char *out, int cap) {
     return n;
 }
 
+// Chapter `n` of the file: its title (cut to cap-1; empty when it has none) and in
+// *start_ms where it starts. Returns how many chapters there are, whatever n is; the
+// title and start are written only when n is one of them.
+int sx_chapter(struct sx *s, int n, char *out, int cap, int64_t *start_ms) {
+    int count = (int)s->format->nb_chapters;
+    if (n < 0 || n >= count || cap <= 0) return count;
+    AVChapter *c = s->format->chapters[n];
+    int64_t ms = av_rescale_q(c->start, c->time_base, (AVRational){1, 1000});
+    if (s->format->start_time != AV_NOPTS_VALUE) ms -= s->format->start_time / 1000;
+    *start_ms = ms < 0 ? 0 : ms;
+    AVDictionaryEntry *e = av_dict_get(c->metadata, "title", NULL, 0);
+    int len = e ? (int)strlen(e->value) : 0;
+    if (len > cap - 1) len = cap - 1;
+    if (len) memcpy(out, e->value, len);
+    out[len] = 0;
+    return count;
+}
+
 // FFmpeg's error text, for the window.
 void sx_error(int err, char *buf, int len) { av_strerror(err, buf, len); }

@@ -98,6 +98,38 @@ impl Painter {
         composite(px, w, h, &self.line, lw, line_h, (w.saturating_sub(lw)) / 2, top + 6, false);
     }
 
+    /// A card in the lower right of the picture, above the controls band: `text`
+    /// (lines split by '\n') on a dark panel with a thin accent edge.
+    pub fn card(&mut self, px: &mut [u32], w: usize, h: usize, text: &str) {
+        if text.is_empty() || w < 64 || h < 48 { return; }
+        let px_size = (h / 26).max(11);
+        let line_h = self.line_height(px_size);
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut rendered: Vec<(Vec<u8>, usize)> = Vec::new();
+        for l in &lines { self.render(l, px_size); rendered.push((core::mem::take(&mut self.line), self.line_w)); }
+        let pad = (px_size / 2).max(6);
+        let box_w = (rendered.iter().map(|r| r.1).max().unwrap_or(0) + 2 * pad).min(w);
+        let box_h = (lines.len() * line_h + 2 * pad).min(h);
+        let x0 = w.saturating_sub(box_w + w / 30);
+        let bottom = h.saturating_sub(h / 7);
+        let y0 = bottom.saturating_sub(box_h);
+        for y in y0..(y0 + box_h).min(h) {
+            for x in x0..(x0 + box_w).min(w) {
+                let p = &mut px[y * w + x];
+                let edge = y == y0 || y + 1 == y0 + box_h || x == x0 || x + 1 == x0 + box_w;
+                // Corners cut by one pixel, for a softer box.
+                let corner = (y == y0 || y + 1 == y0 + box_h) && (x == x0 || x + 1 == x0 + box_w);
+                if corner { continue; }
+                if edge { *p = (*p & 0xFF00_0000) | 0x00E8_A33D; continue; }
+                let c = |s: u32| ((*p >> s) & 0xFF) / 4 + 8;
+                *p = (*p & 0xFF00_0000) | c(16) << 16 | c(8) << 8 | c(0);
+            }
+        }
+        for (k, (line, lw)) in rendered.iter().enumerate() {
+            composite(px, w, h, line, *lw, line_h, x0 + pad, y0 + pad + k * line_h, false);
+        }
+    }
+
     fn line_height(&self, px_size: usize) -> usize {
         let size = (px_size * 64) as u32;
         ((self.font.ascender(size) - self.font.descender(size)) / FX + 2) as usize
