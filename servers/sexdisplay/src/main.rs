@@ -5599,19 +5599,19 @@ pub extern "C" fn _start() -> ! {
         if cursor_only_moved{pending_paint.request_cursor();}
         if needs_top_strip_redraw{pending_paint.request_strip();}
         if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}
-        let plan=pending_paint.plan(w,h);
         decor::take_cycles();
         let render_start=decor::cycles_now();
         let render_ms_start=sex_pdx::get_ticks();
+        let plan=pending_paint.plan(w,h);
         let published=if fb_live&&!plan.is_empty(){
             clock_canon_apply_to_bar(&mut bar);
             unsafe{render_prepared(FB_PTR as *mut u32,w,h,&bar,plan)}
         }else{None};
-        let render_cycles=decor::cycles_now().wrapping_sub(render_start);
-        let render_ms=sex_pdx::get_ticks().saturating_sub(render_ms_start);
         // Only this completed publication discharges the retained requirements.
         // The service performs no intake during prepare/publish/receipt handling.
         pending_paint.complete(published.is_some());
+        let render_cycles=decor::cycles_now().wrapping_sub(render_start);
+        let render_ms=sex_pdx::get_ticks().saturating_sub(render_ms_start);
         // The landing frame counts too; then the next animation starts a fresh grid.
         let landing = !animating && motion_damage.is_some();
         if (animating && paced || landing) && published.is_some() {
