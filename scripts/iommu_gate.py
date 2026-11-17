@@ -50,7 +50,7 @@ def main():
  assert m,'IOMMU self-test did not pass'
  summary={'files':[check(t,[NVME,XHCI],a.vendor) for t in files]}
  for t in files:
-  assert re.search(r'\[sexdrive.dma.loan\] slot=17 active=1 domain=\d+ device_address=0x[0-9a-f]+ pages=32 reads=zero_copy\n',t),'sexdrive did not borrow the block buffer'
+  assert re.search(r'\[sexdrive.dma.loan\] slot=17 active=1 domain=\d+ device_address=0x[0-9a-f]+ pages=128 reads=zero_copy\n',t),'sexdrive did not borrow the block buffer'
   assert re.search(r'\[sexdrive.read.zero_copy\] first=1 ',t),'no read went straight into the loan'
  sound=run('sound_gate.py',a.out/'sound','',a)
  summary['sound']=[check(t,[SOUND],a.vendor) for t in sound]

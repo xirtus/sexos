@@ -15,3 +15,11 @@
 - **Proof:** `cargo test -p sex-font` (render, gamma tests),
   `cargo run -p sex-font --example text_quality -- out.ppm [scale]` draws the
   before/after sheet at 100 % and 200 %.
+- **Colour emoji:** `assets/fonts/noto/emoji-color-32.sxc` (1,439 single-scalar
+  Noto Color Emoji, 32 px, a 16-colour palette each, 834 KB; written by
+  `scripts/gen_fallback_fonts.py`) and `sex_font::fallback::ColorEmoji::draw` (area
+  average or bilinear to any size). Weft draws them in text with the `color-emoji`
+  feature (part of `fallback-fonts`); variation selectors and joiners take no room.
+  Screenshot: project files `fonts/weft-colour-emoji.png`.
+- **CI:** the host step now runs all of `sex-font`, `sex-icons`, `sex-theme`, Weft
+  with colour emoji and `scripts/brand/icons.py --check`.

@@ -12,18 +12,18 @@ from install_program import install
 from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
 PROGRAMS=['fortune','mesh','gestalt','jot']
-# The serial tag a program says it is ready with, where it differs from its name.
-TAG={'mesh':'monitor','gestalt':'shapes'}
+# The serial line a program says it is ready with, where it is not [NAME.ready].
+TAG={'mesh':'monitor.ready','gestalt':'shapes.ready','kaleidoscope':'web.ready','spreadeagle':'spreadeagle.open','assuit':'assuit.open'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800')
- p.add_argument('--runs',type=int,default=3);p.add_argument('--max-ms',type=float,default=30000.0);a=p.parse_args()
+ p.add_argument('--runs',type=int,default=3);p.add_argument('--programs',default=','.join(PROGRAMS),help='comma-separated, e.g. spreadeagle,kaleidoscope (#305)');p.add_argument('--max-ms',type=float,default=30000.0);a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- elfs={n:(ROOT/'iso_root/programs'/n).read_bytes()for n in PROGRAMS};install(disk,list(elfs.items()))
+ programs=a.programs.split(',');elfs={n:(ROOT/'iso_root/programs'/n).read_bytes()for n in programs};install(disk,list(elfs.items()))
  g=boot(a.iso,disk,a.out,'start',a.resolution);t=g['text'];q=g['q']
  res={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  for name in PROGRAMS:
+  for name in programs:
    times=[];starts=[]
    for _ in range(a.runs):
     g['focus'](153);time.sleep(.5)
@@ -35,7 +35,7 @@ def main():
     while True:
      txt=t()[s:]
      if entered is None and '[spindle.enter]' in txt:entered=time.monotonic()
-     m=re.search(rf'\[{TAG.get(name,name)}\.ready\] target=(\d+) task=(\d+)',txt)
+     m=re.search(rf'\[{re.escape(TAG.get(name,name+".ready"))}\] target=(\d+) task=(\d+)',txt)
      if m:break
      assert time.monotonic()<deadline,f'{name} never became ready'
      time.sleep(.001)

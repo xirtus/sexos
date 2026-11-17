@@ -6,8 +6,8 @@
 use sex_config::{Config, Key, Kind, COUNT, KEYS};
 
 /// Accent colours Left/Right walk through (any `#rrggbb` in the file still works).
-pub const ACCENTS: [(&str, i32); 8] = [
-    ("Blue", 0x3D7EFF), ("Teal", 0x14B8A6), ("Green", 0x22C55E), ("Amber", 0xF59E0B),
+pub const ACCENTS: [(&str, i32); 9] = [
+    ("SexOS pink", 0xD6336C), ("Blue", 0x3D7EFF), ("Teal", 0x14B8A6), ("Green", 0x22C55E), ("Amber", 0xF59E0B),
     ("Orange", 0xF97316), ("Red", 0xEF4444), ("Pink", 0xEC4899), ("Violet", 0x8B5CF6),
 ];
 pub const QUERY_MAX: usize = 24;
@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(step_value(wall, 0, false, false), sex_config::WALLPAPERS.len() as i32 - 1, "choices wrap");
         let accent = sex_config::key(id::ACCENT).unwrap();
         assert_eq!(step_value(accent, 0x3D7EFF, true, false), 0x14B8A6);
-        assert_eq!(step_value(accent, 0x123456, true, false), 0x3D7EFF, "custom goes to the first");
+        assert_eq!(step_value(accent, 0x123456, true, false), 0xD6336C, "custom goes to the first");
         for k in KEYS {
             for v in [k.default, step_value(k, k.default, true, true), step_value(k, k.default, false, true)] {
                 assert!(k.accepts(v), "{} {}", k.name, v);

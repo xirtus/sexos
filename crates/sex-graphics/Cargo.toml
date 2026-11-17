@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 sex-pdx = { path = "../sex-pdx" }
+sex-theme = { path = "../sex-theme" }
