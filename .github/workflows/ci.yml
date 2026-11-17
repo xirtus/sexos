@@ -46,6 +46,8 @@ jobs:
       run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
+    - name: Rounded window corners and soft shadows (Display decoration pass) on the host
+      run: bash scripts/display_decor_host_gate.sh
     - name: Velvet game rules and Weft input integration
       run: cargo test --locked -p velvet --no-default-features
     - name: Moan Weft app and project editing

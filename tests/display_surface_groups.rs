@@ -387,6 +387,8 @@ mod program_tray{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}
 fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_tray_menu(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
+// Rounded corners and shadows have their own gate (display_decor_host_gate.sh).
+mod decor{pub fn row(_:*mut u32,_:usize,_:usize,_:usize,_:usize,_:usize,_:&crate::scene::SceneSnapshot){}pub fn grow(r:crate::damage::Rect,_:usize,_:usize,_:usize,_:u32)->crate::damage::Rect{r}}
 fn report_app_presented(){unsafe{DAMAGE_ORDER.push("presented");}}
 #[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;
 use paint_batch::{Content,Plan};

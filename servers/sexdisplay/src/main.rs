@@ -151,6 +151,7 @@ mod bitmap_transaction;
 mod bitmap_stores;
 mod fill_damage;
 mod wallpaper_mark;
+mod decor;
 mod damage;
 static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
 static mut BITMAP_STORES: bitmap_stores::Stores<{sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser)}> = bitmap_stores::Stores::UNBOUND;
@@ -754,6 +755,7 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
             x+=1;
         }
     }
+    decor::row(fb,y,x0,x1,w,h,scene);
 }
 
 /// For each active fill rect in the surface, if the global pixel (x,y) falls
@@ -2608,6 +2610,7 @@ fn raster_damage(target: &frame_output::Target<'_>, rect: damage::Rect, scene: &
     }
     let Some(total) = w.checked_mul(h) else { return false; };
     let bar=&scene.bar;
+    let rect=decor::grow(rect,w,h,scene.metrics.bar()as usize,scene.metrics.scale());
     for y in rect.y..rect.bottom {
         raster_row(fb,y,rect.x,rect.right,w,h,scene);
     }
@@ -4591,6 +4594,8 @@ pub extern "C" fn _start() -> ! {
                     if msg.caller_pd == 3 {
                         let motion = unsafe { &mut *core::ptr::addr_of_mut!(MOTION) };
                         motion.set_enabled(msg.arg0 != 0);
+                        // arg2 bit 0: plain look (square corners, no shadows).
+                        if decor::set_effects(msg.arg2 & 1 == 0) { needs_full_redraw = true; }
                         let dir = msg.arg1 as u8 as i8;
                         if dir != 0 { motion.workspace(dir, unsafe { FB_W } as u32 / 8, sex_pdx::get_ticks()); }
                         sex_pdx::serial_record!("[display.motion] on={} dir={}", motion.enabled() as u8, dir);
