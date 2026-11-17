@@ -273,8 +273,11 @@ pub fn prof_user_entry() {
     let pd = core.current_pd() as u64;
     prof(if crate::program_records::is_record(pd) { 10 } else if pd == 11 { 11 } else { 12 }, since);
 }
+pub static SYSNUM: [AtomicU64; 128] = [const { AtomicU64::new(0) }; 128];
 pub fn report_prof() {
     let mut line = alloc::string::String::new();
+    for (i, c) in SYSNUM.iter().enumerate() { let n = c.load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" s{}={}", i, n)); } }
+    let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" handoffs={}", HANDOFFS.load(Ordering::Relaxed)));
     for i in 0..32 { let n = PROF[2 * i].load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" b{}={}x{}", i, n, PROF[2 * i + 1].load(Ordering::Relaxed) / n)); } }
     serial_println!("[ipc.prof]{}", line);
 }
@@ -381,7 +384,7 @@ impl Scheduler {
     fn tick_inner(&self) -> ScheduleDecision {
         // A call's partner runs at once: housekeeping waits for an ordinary turn, at most
         // HANDOFF_STREAK switches away (and core 0's timer polls every tick anyway).
-        let lean = self.deadline.is_empty() && !self.handoff.load(Ordering::Acquire).is_null();
+        let lean = !self.handoff.load(Ordering::Acquire).is_null();
         self.lean.store(lean, Ordering::Relaxed);
         let t_pp = tsc();
         if !lean { poll_paging_exit_notifications(); }
