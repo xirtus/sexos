@@ -185,6 +185,23 @@ def _input_idle_profile(root,source):
     return result
 
 
+# Quil (BOOT domain 9) waits 64 ticks between autosave countdown checks while a draft is armed.
+QUIL_TOKENS=('}elseifunsafe{QUIL_AUTOSAVE.armed()}{//Idledraftcountdown:boundedtimedwait,wokenearlybyinput.matchpdx_try_listen_raw(0){Some(msg)=>msg,None=>{let_=sex_pdx::sys_wait_self_ticks(64);continue}}',)
+
+
+def _quil_wait_profile(text,root,source,seals):
+    result=dict(ok=False,task=QUIL_TASK,ticks=64,scope='optional Quil autosave countdown wait-role admission')
+    if source is None or not source['ok'] or len(seals)!=1:return result
+    try:
+        _source_tokens(root,('servers/quil/src/main.rs',),QUIL_TOKENS)
+        markers=list(re.finditer(re.escape('[kernel.spawn.quil'),text))
+        roles=list(re.finditer(r'^\[kernel.spawn.quil\] id=9 path=\S+\r?\n',text,re.M))
+        if len(markers)!=len(roles)or len(roles)!=1 or roles[0].start()>=seals[0].start():raise ValueError('missing unique prior BOOT Quil role')
+        result.update(ok=True,receipt_offset=roles[0].start())
+    except (OSError,ValueError,UnicodeError,RuntimeError)as error:result['errors']=[str(error)]
+    return result
+
+
 def _denim_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=DENIM_TASK,ticks=(64,8),scope='optional Denim scan-loop wait-role admission')
     if source is None or not source['ok'] or len(seals)!=1:return result
@@ -333,6 +350,7 @@ def passive_observer_joins(text,root,core,topology,identity,seals,expiries):
 
 
 SHELL_TASK=3
+QUIL_TASK=9
 DENIM_TASK=51
 SHELL_AUTOFILL_MAX_TICKS=1000
 
@@ -363,6 +381,8 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  input_idle=tuple((4,t)for t in range(2,33))if inputs['ok']else()
  denim=_denim_wait_profile(text,source_root,source,seals)
  denim_waits=((DENIM_TASK,64),(DENIM_TASK,8))if denim['ok']else()
+ quil=_quil_wait_profile(text,source_root,source,seals)
+ quil_waits=((QUIL_TASK,64),)if quil['ok']else()
  if not valid_seal:errors.append('missing/invalid unique complete BOOT timer inventory (capacity must be 64)')
  if len(authority)!=1:errors.append('missing unique real Ring3 invalid-argument probes')
  if seals and any(m.start()<seals[0].start()for m in parks+expiries+authority):errors.append('timed wait precedes BOOT seal')
@@ -375,9 +395,9 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
   # Shell (3) wakes itself for password autofill (silk-shell autofill_routes::wake):
   # 100 ticks while a page identity is held, at most 1000 toward a transaction deadline.
   shell=source_ok and int(p[1])==SHELL_TASK and 1<=int(p[2])<=SHELL_AUTOFILL_MAX_TICKS
-  if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+input_idle+denim_waits+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
+  if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+input_idle+denim_waits+quil_waits+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
  for e in expiries:
-  if int(e[1])not in(13,2,1,6,4,5)+((SHELL_TASK,)if source_ok else())+((DENIM_TASK,)if denim['ok']else())+selected+((50,)if acpi['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry: task=%s deadline=%s now=%s'%(e[1],e[2],e[3]))
+  if int(e[1])not in(13,2,1,6,4,5)+((SHELL_TASK,)if source_ok else())+((DENIM_TASK,)if denim['ok']else())+((QUIL_TASK,)if quil['ok']else())+selected+((50,)if acpi['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry: task=%s deadline=%s now=%s'%(e[1],e[2],e[3]))
  for r in returns:
   if int(r[2])<int(r[1]):errors.append('backward Ring3 clock')
  for group,index in [(parks,4),(expiries,4),(returns,3)]:
@@ -425,7 +445,7 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  if not active and(any(int(p[1])==13 for p in parks)or any(int(e[1])==13 for e in expiries)or returns):
   if not returns or any(not text[r.end():].startswith(' device=0 reply_pending=1')for r in returns):errors.append('unsupported NIC unexpectedly entered device polling without retained reply work')
  if re.search(r'TIMED_WAIT_WITHOUT_ATTACHED_OWNER|BOOT_SELF_WAIT_AUTHORITY|SELF_WAIT_FRONTEND_PROBE|KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|panicked at',text):errors.append('guest self-wait failure')
- return dict(ok=not errors,errors=errors,browser_tasks=list(selected),boot_tasks=int(seals[0][1])if valid_seal else None,parks_observed=len(parks),expiries_observed=len(expiries),returns_observed=len(returns),timer_user_joins=joined,observed_timer_user_joins=observed,inferred_timer_user_joins=inferred,passive_continuation_joins=continued,passive_observer_contract=observer,source_contract=source,auxiliary_wait_profiles={'acpi':acpi,'input_idle':inputs,'denim':denim},up_topology=topology,net_boot_identity=net_identity,scope='Sampled real BOOT/main-task/park/timer/Ring3 receipts with explicitly caller-selected observed Browser task IDs; no identity autodiscovery or authority grant. Native peer and desktop gates separately establish useful progress. Nominal timer-assisted polling, not NIC IRQ, CPU/power bound, physical or SMP proof. Inferred park requires reviewed unchanged causal source, exact observed UP topology and one-to-one expiry/Net-return envelopes; caller separately verifies frozen source/image binding. Passive diagnostic continuation is reported separately: sampled expiry then later first-epoch Ring3 syscall entry, not an exact two-tick envelope or IPC-exclusive wake reason.')
+ return dict(ok=not errors,errors=errors,browser_tasks=list(selected),boot_tasks=int(seals[0][1])if valid_seal else None,parks_observed=len(parks),expiries_observed=len(expiries),returns_observed=len(returns),timer_user_joins=joined,observed_timer_user_joins=observed,inferred_timer_user_joins=inferred,passive_continuation_joins=continued,passive_observer_contract=observer,source_contract=source,auxiliary_wait_profiles={'acpi':acpi,'input_idle':inputs,'denim':denim,'quil':quil},up_topology=topology,net_boot_identity=net_identity,scope='Sampled real BOOT/main-task/park/timer/Ring3 receipts with explicitly caller-selected observed Browser task IDs; no identity autodiscovery or authority grant. Native peer and desktop gates separately establish useful progress. Nominal timer-assisted polling, not NIC IRQ, CPU/power bound, physical or SMP proof. Inferred park requires reviewed unchanged causal source, exact observed UP topology and one-to-one expiry/Net-return envelopes; caller separately verifies frozen source/image binding. Passive diagnostic continuation is reported separately: sampled expiry then later first-epoch Ring3 syscall entry, not an exact two-tick envelope or IPC-exclusive wake reason.')
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('log',type=Path);p.add_argument('--inactive',action='store_true');p.add_argument('--source-root',type=Path,help='reviewed causal source for sampled UP equivalence and quiet USB32');a=p.parse_args();r=inspect(a.log.read_text(errors='replace'),not a.inactive,source_root=a.source_root);print(json.dumps(r,indent=2));raise SystemExit(0 if r['ok']else 1)

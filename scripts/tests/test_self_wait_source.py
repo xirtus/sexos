@@ -121,6 +121,16 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
             self.assertFalse(self.check(bad+SAMPLED+denim)['ok'])
         self.assertFalse(self.check(role+SAMPLED+denim.replace('ticks=64','ticks=63'))['ok'])
 
+    def test_quil_autosave_wait_needs_its_reviewed_wait_and_role(self):
+        quil='[scheduler.self_wait.park] task=9 ticks=64 deadline=200 count=40 task_count=1\n[scheduler.self_wait.expired] task=9 deadline=200 now=200 count=41 task_count=1\n'
+        role='[kernel.spawn.quil] id=9 path=/servers/quil\n'
+        self.assertFalse(self.check(SAMPLED+quil)['ok'])
+        self.assertTrue(self.check(role+SAMPLED+quil)['ok'])
+        for bad in (role.replace('id=9','id=8'),role+role):
+            self.assertFalse(self.check(bad+SAMPLED+quil)['ok'])
+        self.assertFalse(self.check(role+SAMPLED+quil.replace('ticks=64','ticks=63'))['ok'])
+        self.assertFalse(self.check(SAMPLED+role+quil)['ok'])
+
     def test_sex_pdx_module_list_is_outside_the_wait_fingerprint(self):
         from check_self_wait import wait_fingerprint
         name='crates/sex-pdx/src/lib.rs';data=(ROOT/name).read_bytes()
