@@ -131,7 +131,7 @@ impl Store {
     /// A page of the arena: a hole refilled, or a new one.
     fn page(&mut self) -> Option<u64> {
         if let Some(hole) = self.holes.pop() {
-            if d::call(d::REFILL, 0, hole, 0, 0)[0] == d::OK { let i = self.at(hole); self.kind[i] = 0; return Some(hole); }
+            if d::call(d::REFILL, 0, hole, 0, 0)[0] == d::OK { let i = self.at(hole); if i < self.kind.len() { self.kind[i] = 0; } return Some(hole); }
             self.holes.push(hole);
             return None;
         }
@@ -320,12 +320,14 @@ impl Denim {
 
     /// Brings `page` back; with a token its task goes on. False when it must wait for memory.
     fn page_in(&mut self, target: u32, page: u64, token: u64) -> bool {
-        let Some(state) = self.runs.iter().find(|r| r.target == target) else {
-            serial_println!("[denim.lost] target={} page={:#x} token={}", target, page, token);
-            return true;
-        };
-        let i = ((page.wrapping_sub(state.base)) / PAGE as u64) as usize;
-        let Some(&e) = state.held.get(i).filter(|e| e.kind != Kind::None) else {
+        let held = self.runs.iter().find(|r| r.target == target).and_then(|state| {
+            let i = ((page.wrapping_sub(state.base)) / PAGE as u64) as usize;
+            state.held.get(i).filter(|e| e.kind != Kind::None).map(|&e| (i, e))
+        });
+        let Some((i, e)) = held else {
+            // Another task of the run already brought it back (or the run ended): the
+            // kernel finds no marker there and lets this task go on, to touch it again.
+            if token != 0 && d::call(d::IN, target, page, self.store.window, token)[0] == d::DENIED { return true; }
             serial_println!("[denim.lost] target={} page={:#x} token={}", target, page, token);
             return true;
         };
