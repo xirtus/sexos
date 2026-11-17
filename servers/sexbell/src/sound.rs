@@ -506,6 +506,21 @@ impl Player {
         while self.hearing && self.asked < LISTEN_AHEAD && self.card.input_ask() { self.asked += 1; }
     }
 
+    /// Drops the periods in flight when the card changes: the old card plays them out
+    /// (or they are lost with it), but each stream's frames in them are counted as
+    /// played, or the stream would wait for them forever.
+    fn forget_flying(&mut self) {
+        while self.flying > 0 {
+            for (i, st) in self.streams.iter().enumerate() {
+                let n = self.took[self.first][i];
+                if let (Some(st), true) = (st, n > 0) { if crate::restricted::denied(st.pd){continue;} st.ring.store(ring::PLAYED, st.ring.load(ring::PLAYED) + n as u64); }
+                self.took[self.first][i] = 0;
+            }
+            self.first = (self.first + 1) % IN_FLIGHT; self.flying -= 1;
+        }
+        self.first = 0;
+    }
+
     fn pump(&mut self) {
         self.card.follow_jack();
         self.listen_pump();
@@ -672,7 +687,7 @@ fn usb_check() {
                     let old = core::mem::replace(&mut p.card, card);
                     if !matches!(old, Card::Usb { .. }) { *parked = Some((old, p.started)); }
                     // Periods still with the old card play out there; counting starts again.
-                    p.first = 0; p.flying = 0; p.started = false;
+                    p.forget_flying(); p.started = false;
                 }
             }
             sex_pdx::serial_record!("[bell.usb.card] vendor={:#06x} product={:#06x} uac={} generation={} parked={}",
@@ -683,7 +698,7 @@ fn usb_check() {
             let back = parked.take();
             sex_pdx::serial_record!("[bell.usb.gone] generation={} back={}", *seen, back.as_ref().map_or("none", |(c, _)| c.name()));
             if let Some((card, started)) = back { p.card = card; p.started = started; }
-            p.first = 0; p.flying = 0;
+            p.forget_flying();
             *seen = 0;
         }
         _ => {}

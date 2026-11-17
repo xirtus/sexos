@@ -145,10 +145,15 @@ struct App {
 }
 
 impl App {
-    /// The track after `i`: the queue first, then the library's order.
-    fn after(&mut self, i: usize) -> Option<usize> {
-        if !self.queue.is_empty() { return Some(self.queue.remove(0)); }
+    /// The track after `i`: the queue first, then the library's order. The queue
+    /// keeps it until [`App::commit`], so a track queued later can still go first.
+    fn after(&self, i: usize) -> Option<usize> {
+        if let Some(&q) = self.queue.first() { return Some(q); }
         (i + 1 < self.tracks.len()).then_some(i + 1)
+    }
+    /// Track `n` starts now: off the queue if it came from there.
+    fn commit(&mut self, n: usize) {
+        if self.queue.first() == Some(&n) { self.queue.remove(0); }
     }
 
     fn render(&mut self, window: &mut Window, e: &Engine) {
@@ -236,14 +241,16 @@ pub fn run(window: &mut Window, refs: &[&[u8]]) -> ! {
                     }
                     0x31 | sex_pdx::app_key::KEY_NEXT => {
                         let now = e.hearing().unwrap_or(0);
-                        if let Some(n) = app.after(now) { start(&mut e, &mut app, n) }
+                        if let Some(n) = app.after(now) { app.commit(n); start(&mut e, &mut app, n) }
                     }
-                    0x19 | sex_pdx::app_key::KEY_PREVIOUS => {
+                    0x19 | sex_pdx::app_key::KEY_PREVIOUS if !app.tracks.is_empty() => {
                         let now = e.hearing().unwrap_or(0);
                         start(&mut e, &mut app, now.saturating_sub(1))
                     }
                     0x10 if !app.tracks.is_empty() => {
                         app.queue.push(app.chosen);
+                        // The track opened ahead may no longer be next: open it again.
+                        e.next = None;
                         sex_pdx::serial_record!("[qupid.library.queued] n={} queue={}", app.chosen, app.queue.len());
                     }
                     sex_pdx::app_key::KEY_STOP => { e.stop(); e.paused = true; }
@@ -273,6 +280,7 @@ pub fn run(window: &mut Window, refs: &[&[u8]]) -> ! {
                         // The next track's first frame goes right after this one's last.
                         e.cur = e.next.take();
                         if let Some((n, _)) = e.cur {
+                            app.commit(n);
                             e.starts.push((e.sound.written_total(), n));
                             sex_pdx::serial_record!("[qupid.library.next] n={} at_frame={} title={}", n, e.sound.written_total(), app.tracks[n].title);
                         } else {
