@@ -302,6 +302,10 @@ jobs:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - uses: ./.github/actions/image
+    # Screenshot gates below (desktop capture and later) read pixels with PIL; it
+    # used to arrive with the browser steps that moved to the web job.
+    - name: Install image tools for gates
+      run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
     - name: Boots to the desktop with 1, 2, 4 and 32 GiB of RAM
       run: python3 scripts/ram_sizes_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/ram-sizes"
     - name: Compiled scheduler stack-release boundary
