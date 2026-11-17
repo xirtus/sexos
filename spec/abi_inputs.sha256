@@ -140,7 +140,7 @@ be4bb003491894145a3412a00802e7ecf9533f5b3a5e5b9ad62e66702eb80037  kernel/src/boo
 
 07e1a4d79cd121594f04d44c9ed15edd5b12873dca4304389591531401156ff7  kernel/src/boot_network_state.rs
 
-2b8aa1aae9400edfdc5f272744123b74789ad60b21eae2b0318349e7ffaa942d  kernel/src/capability.rs
+ce7644f5ce3b31289407e0b1b7b381692cda47935597c90bab8b09ceb6b39b82  kernel/src/capability.rs
 
 0df43cf6345d3b1088a540fbacff7745038673597ee5b456294e60b110976949  kernel/src/capability_slot.rs
 
@@ -176,7 +176,7 @@ a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci
 
 c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/service_restart.rs
 
-d5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f  kernel/src/syscalls/mod.rs
+4034e96da847e4ab85bdd0f8dedc41a64501abf29569eb3f27b63e49751e8d43  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

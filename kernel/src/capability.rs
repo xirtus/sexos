@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr};
 use crate::cheri::SexCapability;
 use core::ptr;
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, VecDeque};
 use spin::Mutex;
 
 /// Capability Types
@@ -162,6 +162,7 @@ pub struct ProtectionDomain {
     pub base_pkru_mask: u32,
     pub current_pkru_mask: AtomicU32,
     pub cap_table: *mut CapabilityTable,
+    pub signal_handlers: AtomicPtr<BTreeMap<i32, u64>>,
     pub signal_ring: *mut RingBuffer<u8, 32>,
     pub message_ring: *mut RingBuffer<MessageType, 256>,
     pub main_task: AtomicPtr<crate::scheduler::Task>,
@@ -180,6 +181,7 @@ impl ProtectionDomain {
             base_pkru_mask: pkru_mask,
             current_pkru_mask: AtomicU32::new(pkru_mask),
             cap_table: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(CapabilityTable::new())),
+            signal_handlers: AtomicPtr::new(alloc::boxed::Box::into_raw(alloc::boxed::Box::new(BTreeMap::new()))),
             signal_ring: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RingBuffer::new())),
             message_ring: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RingBuffer::new())),
             main_task: AtomicPtr::new(ptr::null_mut()),
@@ -203,6 +205,7 @@ impl ProtectionDomain {
             base_pkru_mask: pkru_mask,
             current_pkru_mask: AtomicU32::new(pkru_mask),
             cap_table, signal_ring, message_ring,
+            signal_handlers: AtomicPtr::new(alloc::boxed::Box::into_raw(alloc::boxed::Box::new(BTreeMap::new()))),
             main_task: AtomicPtr::new(ptr::null_mut()),
             trampoline_task: AtomicPtr::new(ptr::null_mut()),
             incoming_replies: Mutex::new(VecDeque::new()),
@@ -235,6 +238,27 @@ impl ProtectionDomain {
             }
         }
         false
+    }
+
+    pub fn set_signal_handler(&self, signo: i32, handler: u64) {
+        loop {
+            let old_ptr = self.signal_handlers.load(Ordering::Acquire);
+            let old_map = unsafe { &*old_ptr };
+            let mut new_map = old_map.clone();
+            new_map.insert(signo, handler);
+            let new_ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(new_map));
+            if self.signal_handlers.compare_exchange(old_ptr, new_ptr, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
+                break;
+            } else {
+                unsafe { let _ = alloc::boxed::Box::from_raw(new_ptr); }
+            }
+        }
+    }
+
+    pub fn get_signal_handler(&self, signo: i32) -> Option<u64> {
+        let ptr = self.signal_handlers.load(Ordering::Acquire);
+        let map = unsafe { &*ptr };
+        map.get(&signo).copied()
     }
 
     pub fn activate_memory_cap(&self, cap_id: u32) -> Result<(), &'static str> {
