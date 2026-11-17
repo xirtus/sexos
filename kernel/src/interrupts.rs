@@ -264,7 +264,7 @@ pub extern "C" fn syscall_handler(regs: &mut SyscallRegs) -> u64 {
     let t = crate::scheduler::tsc();
     let n = regs.rax;
     let r = crate::syscalls::dispatch(regs);
-    crate::scheduler::prof(match n { 28 => 9, 100 => 15, 101 => 16, 53 => 17, 40 => 18, _ => 19 }, t);
+    crate::scheduler::prof(match n { 28 => 9, 102 => 15, 103 => 16, 53 => 17, 40 => 18, 32 => 20, 29 => 21, 0 => 22, 34 => 23, _ => 19 }, t);
     r
 }
 

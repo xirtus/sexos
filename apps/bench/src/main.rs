@@ -92,6 +92,9 @@ fn run(window: &mut Window, r: &mut Report) -> Result<(), &'static str> {
     // A call to a service and its reply (Files answers PING at once): the IPC round
     // trip, against a Linux pipe round trip between two processes. After the file
     // tests, so Files already knows this run.
+    // Files keeps polling while a write waits to be committed; make it durable first so
+    // the trips measure the call path, not that.
+    files::sync(window).map_err(|_| "sync failed")?;
     let n = 2_000;
     let t = tsc();
     for _ in 0..n { files::ping(window).map_err(|_| "ping failed")?; }
