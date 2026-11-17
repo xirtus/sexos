@@ -274,10 +274,12 @@ pub fn prof_user_entry() {
     prof(if crate::program_records::is_record(pd) { 10 } else if pd == 11 { 11 } else { 12 }, since);
 }
 pub static SYSNUM: [AtomicU64; 128] = [const { AtomicU64::new(0) }; 128];
+pub static SYSPD: [AtomicU64; 65] = [const { AtomicU64::new(0) }; 65];
 pub fn report_prof() {
     let mut line = alloc::string::String::new();
     for (i, c) in SYSNUM.iter().enumerate() { let n = c.load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" s{}={}", i, n)); } }
     let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" handoffs={}", HANDOFFS.load(Ordering::Relaxed)));
+    for (i, c) in SYSPD.iter().enumerate() { let n = c.load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" y{}={}", i, n)); } }
     for i in 0..48 { let n = PROF[2 * i].load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" b{}={}x{}", i, n, PROF[2 * i + 1].load(Ordering::Relaxed) / n)); } }
     serial_println!("[ipc.prof]{}", line);
 }

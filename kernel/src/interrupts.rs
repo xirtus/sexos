@@ -264,6 +264,7 @@ pub extern "C" fn syscall_handler(regs: &mut SyscallRegs) -> u64 {
     let t = crate::scheduler::tsc();
     let n = regs.rax;
     if let Some(c) = crate::scheduler::SYSNUM.get(n as usize) { c.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
+    if matches!(n, 28 | 32 | 34) { let pd = crate::core_local::CoreLocal::get().current_pd() as usize; crate::scheduler::SYSPD[pd.min(64)].fetch_add(1, core::sync::atomic::Ordering::Relaxed); } // IPC_PROFILE_TEMP
     crate::scheduler::prof(match n { 28 => 25, 102 => 26, 103 => 27, 53 => 28, 32 => 29, 29 => 30, 0 => 31, _ => 24 }, t);
     let r = crate::syscalls::dispatch(regs);
     crate::scheduler::prof(match n { 28 => 9, 102 => 15, 103 => 16, 53 => 17, 40 => 18, 32 => 20, 29 => 21, 0 => 22, 34 => 23, _ => 19 }, t);
