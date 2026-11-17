@@ -26,7 +26,6 @@ pub mod hal;
 pub mod pku;
 pub mod fpu;
 #[cfg(target_arch = "x86_64")]
-pub mod slab;
 #[cfg(target_arch = "x86_64")]
 pub mod cheri;
 #[cfg(target_arch = "x86_64")]
