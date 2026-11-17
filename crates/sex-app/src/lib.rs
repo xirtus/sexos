@@ -684,20 +684,21 @@ pub mod files {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0xFF_FFFF;
         let r = w::Request { seq, kind, path_len: path_len as u16, offset, length };
         let a = r.args();
-        loop {
-            // Waits for the answer in the same kernel entry; Files runs next.
-            match sex_pdx::pdx_call_wait(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
-                (0, _) => break,
-                (sex_pdx::ERR_SERVICE_NOT_READY, _) => sex_pdx::sys_yield(),
-                _ => return Err(w::UNAVAILABLE),
+        // Waits for the answer in the same kernel entry, which usually brings it back in
+        // registers; Files runs next.
+        let mut first = loop {
+            match sex_pdx::ipc_recv::pdx_call_recv(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
+                Ok(m) => break m,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return Err(w::UNAVAILABLE),
             }
-        }
+        };
         // The main task sleeps until its inbox has something (or briefly, to see the
         // mailbox); a worker cannot sleep that way, so it looks, and lets others run.
         let worker = crate::thread::is_worker();
         let mut idle = 0u32;
         loop {
-            let m = match mailbox::take(|m| mine(m, seq)) {
+            let m = match first.take().or_else(|| mailbox::take(|m| mine(m, seq))) {
                 Some(m) => m,
                 None => match sex_pdx::pdx_try_listen_raw(0) {
                     Some(m) => { idle = 0; m }

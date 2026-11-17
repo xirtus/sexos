@@ -134,7 +134,8 @@ pub extern "C" fn _start() -> ! {
     let mut report = Report { text: alloc::string::String::new() };
     let _ = writeln!(report.text, "Bench. F11 closes.\n");
     match run(&mut window, &mut report) {
-        Ok(()) => sex_pdx::serial_record!("[bench.done] target={} task={}", window.target, window.task),
+        Ok(()) => { let t = tsc(); while tsc() - t < 1_500_000_000 { core::hint::spin_loop(); } // IPC_PROFILE_TEMP
+            sex_pdx::serial_record!("[bench.done] target={} task={}", window.target, window.task) },
         Err(why) => {
             sex_pdx::serial_record!("[bench.fail] target={} task={} why={}", window.target, window.task, why);
             let _ = writeln!(report.text, "\nFailed: {}", why);
