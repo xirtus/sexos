@@ -3696,6 +3696,8 @@ pub extern "C" fn _start() -> ! {
         if !unsafe { NVME_IO_STATE.ready } && ahci_probe() { storage_selftests(); }
     }
     else { serial_println!("[sexdrive.dma.region.err] ready=0"); }
+    // Boot timing (#309, scripts/boot_time_gate.py): disk up and self-tested.
+    sex_pdx::serial_record!("[sexdrive.boot.storage] nvme={} ahci={}", unsafe { NVME_IO_STATE.ready } as u8, ahci::ready() as u8);
     xhci_probe_mmio();
 
     // Wait for display/shell to be ready
@@ -3720,5 +3722,6 @@ pub extern "C" fn _start() -> ! {
     }
 
     if hot_log() { serial_println!("[sexdrive.ready]"); }
+    sex_pdx::serial_record!("[sexdrive.boot.serving]");
     loop { service_next_request(); }
 }

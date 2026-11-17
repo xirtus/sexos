@@ -12,7 +12,8 @@ from quil_autosave_gate import boot
 MILESTONES=[
  ('kernel_entry',r'\[boot\.kernel_entry\] tsc='),
  ('shell_ready',r'\[silk-shell\.ready\]'),
- ('drive_ready',r'\[sexdrive\.ready\]'),
+ ('drive_storage_up',r'\[sexdrive\.boot\.storage\]'),
+ ('drive_serving',r'\[sexdrive\.boot\.serving\]'),
  ('files_ready',r'\[sexfiles\.ready\]'),
  ('boot_program_done',r'\[app\.private\.retired\] target=41 '),
  ('desktop_ready',r'\[linen\.fast_paint\] sid=200[^\n]*reason=remote_ready'),
