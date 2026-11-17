@@ -1,0 +1,43 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Host-only models of kernel data structures (kernel plan phase 7). Builds the real
+# kernel sources through #[path]; nothing here is linked into the kernel.
+#   cargo test                                   proptest models
+#   RUSTFLAGS="--cfg loom" cargo test --release --test model_loom_queues
+#   cargo kani                                   bounded proofs (tests/model_kani.rs)
+[workspace]
+
+[package]
+name = "sexos-kernel-models"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-only"
+build = "build.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[target.'cfg(loom)'.dependencies]
+loom = "0.7"
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[[test]]
+name = "model_reply_credit"
+path = "../../tests/model_reply_credit.rs"
+
+[[test]]
+name = "model_scheduler_queue"
+path = "../../tests/model_scheduler_queue.rs"
+
+[[test]]
+name = "model_ipc_ring"
+path = "../../tests/model_ipc_ring.rs"
+
+[[test]]
+name = "model_loom_queues"
+path = "../../tests/model_loom_queues.rs"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(kani)"] }

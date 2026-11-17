@@ -1,0 +1,162 @@
+name: Kernel models and nightly fuzzing
+
+# Kernel plan phase 7 (assurance). Host-only models of kernel structures in
+# fuzz/models (tests/model_*.rs run against the real kernel sources):
+#   models  proptest model-based tests (reply credits, run queue, IPC ring)
+#   loom    every interleaving of the lock-free run queue and IPC ring
+#   kani    bounded proofs of the same structures
+# On pull requests and master pushes that touch a modelled file these run small;
+# nightly (03:15 UTC) they run deep, and a seeded syscall + protocol fuzz run of
+# the booted image (scripts/syscall_fuzz_gate.py) runs for hours. Seeds come from
+# the run number and are printed in the summary; replay one with workflow_dispatch.
+
+'on':
+  pull_request:
+    paths:
+      - 'kernel/src/ipc/reply_credit.rs'
+      - 'kernel/src/scheduler_queue.rs'
+      - 'kernel/src/scheduler_queue_tests.rs'
+      - 'kernel/src/ipc_ring.rs'
+      - 'tests/model_*.rs'
+      - 'fuzz/models/**'
+      - '.github/workflows/assurance.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'kernel/src/ipc/reply_credit.rs'
+      - 'kernel/src/scheduler_queue.rs'
+      - 'kernel/src/ipc_ring.rs'
+      - 'tests/model_*.rs'
+      - 'fuzz/models/**'
+  schedule:
+    - cron: '15 3 * * *'
+  workflow_dispatch:
+    inputs:
+      calls:
+        description: 'Syscall fuzz calls per seed'
+        required: false
+        default: '1000000'
+      seed:
+        description: 'Random syscall seed (blank = run number)'
+        required: false
+        default: ''
+      proto_seed:
+        description: 'Protocol seed (blank = run number + 100000)'
+        required: false
+        default: ''
+      fuzz:
+        description: 'Also run the booted syscall fuzz'
+        type: boolean
+        required: false
+        default: true
+
+concurrency:
+  group: assurance-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  DEEP: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  models:
+    name: Property models (proptest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - name: Rust toolchain cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.rustup/toolchains
+          ~/.rustup/update-hashes
+          ~/.rustup/settings.toml
+        key: rustup-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: fuzz/models
+        shared-key: kernel-models
+    - name: Model tests
+      working-directory: fuzz/models
+      run: |
+        if [ "$DEEP" = true ]; then export PROPTEST_CASES=20000; else export PROPTEST_CASES=512; fi
+        echo "PROPTEST_CASES=$PROPTEST_CASES"
+        cargo test --locked --release
+
+  loom:
+    name: Lock-free queues (loom)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+    - name: Rust toolchain cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.rustup/toolchains
+          ~/.rustup/update-hashes
+          ~/.rustup/settings.toml
+        key: rustup-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: fuzz/models
+        shared-key: kernel-models-loom
+    - name: Loom models
+      working-directory: fuzz/models
+      env:
+        RUSTFLAGS: --cfg loom
+      run: |
+        # Nightly: unbounded preemptions (every interleaving); PRs: bound 3.
+        if [ "$DEEP" != true ]; then export LOOM_MAX_PREEMPTIONS=3; fi
+        cargo test --locked --release --test model_loom_queues
+
+  kani:
+    name: Bounded proofs (Kani)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+    # Pull requests prove the quick harnesses (seconds); nightly proves all of them
+    # (the symbolic-caller reply-table proofs take ~10 minutes each).
+    - uses: model-checking/kani-github-action@v1
+      with:
+        working-directory: fuzz/models
+        args: ${{ env.DEEP == 'true' && '--output-format terse' || '--output-format terse --harness run_queue_is_a_bounded_fifo --harness ipc_ring_is_a_bounded_fifo --harness reply_needs_an_invocation' }}
+
+  syscall-fuzz:
+    name: Booted syscall and protocol fuzz (long)
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.fuzz)
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - name: Pick seeds
+      id: seeds
+      run: |
+        seed="${{ inputs.seed }}"; proto="${{ inputs.proto_seed }}"
+        [ -n "$seed" ] || seed=$(( ${{ github.run_number }} ))
+        [ -n "$proto" ] || proto=$(( ${{ github.run_number }} + 100000 ))
+        echo "seed=$seed" >> "$GITHUB_OUTPUT"; echo "proto=$proto" >> "$GITHUB_OUTPUT"
+        echo "Syscall fuzz: calls=${{ inputs.calls || '1000000' }} seed=$seed proto_seed=$proto (replay with workflow_dispatch)" | tee -a "$GITHUB_STEP_SUMMARY"
+    - name: Fuzz
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
+        python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" \
+          --out "$RUNNER_TEMP/sexos-fuzz-nightly" --calls "${{ inputs.calls || '1000000' }}" \
+          --seeds "${{ steps.seeds.outputs.seed }}" --proto-seeds "${{ steps.seeds.outputs.proto }}" \
+          | tee "$RUNNER_TEMP/fuzz-result.txt"
+        tail -1 "$RUNNER_TEMP/fuzz-result.txt" >> "$GITHUB_STEP_SUMMARY"
+    - name: Preserve evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: syscall-fuzz-${{ github.run_id }}
+        path: |
+          ${{ runner.temp }}/sexos-fuzz-nightly/*.log
+          ${{ runner.temp }}/sexos-fuzz-nightly/*.ppm
+          ${{ runner.temp }}/fuzz-result.txt
+        if-no-files-found: ignore
+        retention-days: 30
