@@ -24,3 +24,13 @@ wallpaper, so the gaps between tiles read as depth instead of flat lines.
 
 Next in WS6: Shell hit masks for the see-through corners, fade/scale open and
 close, vsync pacing and a frame-time gate, launcher/overlay blur.
+
+## Follow-up (same day): look switch and hit masks
+
+- Super+Shift+A now steps through three looks: full (animations, rounded
+  corners, shadows) -> still (no animations) -> plain (square corners, no
+  shadows). `servers/silk-shell/src/animations.rs`; Display gets plain as
+  `OP_MOTION` arg2 bit 0.
+- Shell hit masks: a click in a see-through rounded corner falls through to
+  what is drawn there (`hit_test_at` checks `animations::in_shape` with the
+  same `window_shape` math Display draws with).
