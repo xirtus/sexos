@@ -12,7 +12,8 @@
 //! the video (`run qupid @film.mp4 @film.srt`), or one beside it when Qupid may read it.
 //! S shows or hides subtitles, A plays the next sound track,
 //! [ and ] play slower and faster (= back to normal). C lists the chapters, PgUp/PgDn
-//! jump between them, Enter takes the "Skip intro" card, 1-9 jump to 10%-90%, M mutes. F11 closes. The keyboard's media keys work too, wherever
+//! jump between them, Enter takes the "Skip intro" card, 1-9 jump to 10%-90%, M mutes, E opens the sound
+//! menu (boost to 300%, equalizer presets, dialogue lift), B toggles a 200% boost. F11 closes. The keyboard's media keys work too, wherever
 //! the focus is, while Qupid is the program playing (Shell routes them): play/pause
 //! toggles and stop pauses at the start.
 #![no_std]
@@ -29,6 +30,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use sex_app::{files, Event, Window};
 use sex_episodes::segments::{from_chapters, skip_at, Chapter, Segment, UpNext, UpNextCard};
+use sex_media::audio_dsp::{AudioDspConfig, EqPreset};
 use sex_media::{Decoder, Player, Source, Step};
 use sex_pdx::pixel_region::{MAX_H, MAX_W};
 
@@ -121,6 +123,42 @@ struct Ui {
     up_next: Option<UpNextCard>,
     /// While the card counts down: milliseconds left.
     up_next_left: Option<u64>,
+    /// The sound menu (E), while open: the chosen row.
+    sound_menu: Option<usize>,
+    /// Boost, equalizer and dialogue lift, kept from item to item.
+    effects: AudioDspConfig,
+}
+
+const SOUND_ROWS: usize = 3;
+
+/// The sound menu's lines.
+fn sound_menu_text(fx: &AudioDspConfig, row: usize) -> alloc::string::String {
+    let rows = [
+        alloc::format!("Boost  {}%", fx.boost_percent),
+        alloc::format!("Sound  {}", fx.preset.label()),
+        alloc::format!("Dialogue lift  {}", if fx.dialogue_drc { "on" } else { "off" }),
+    ];
+    let mut text = alloc::string::String::from("Sound  (Up/Down, Left/Right, E closes)");
+    for (k, r) in rows.iter().enumerate() {
+        text.push('\n');
+        text.push_str(if k == row { "> " } else { "   " });
+        text.push_str(r);
+    }
+    text
+}
+
+/// Left (-1) or Right (+1) on a row of the sound menu.
+fn sound_menu_change(fx: &mut AudioDspConfig, row: usize, dir: i16) {
+    match row {
+        0 => { fx.step_boost(25 * dir); }
+        1 => {
+            let order = EqPreset::CYCLE_ORDER;
+            let at = order.iter().position(|p| *p == fx.preset).unwrap_or(0) as i16;
+            let n = order.len() as i16;
+            fx.apply_preset(order[((at + dir).rem_euclid(n)) as usize]);
+        }
+        _ => fx.dialogue_drc = !fx.dialogue_drc,
+    }
 }
 
 /// Seconds the chapter list stays up after C.
@@ -134,6 +172,7 @@ fn chapter_at(chapters: &[Chapter], ms: u64) -> Option<usize> {
 /// What the corner card says at `ms`, if anything.
 fn card_text(ui: &Ui, ms: u64) -> Option<alloc::string::String> {
     use core::fmt::Write;
+    if let Some(row) = ui.sound_menu { return Some(sound_menu_text(&ui.effects, row)); }
     if sex_pdx::get_ticks() < ui.chapter_list_until && !ui.chapters.is_empty() {
         let now = chapter_at(&ui.chapters, ms);
         let mut text = alloc::string::String::from("Chapters  (PgUp / PgDn)");
@@ -216,7 +255,38 @@ fn keys(window: &mut Window, player: &mut Player, ui: &mut Ui) -> Option<Outcome
             Event::Close => return Some(Outcome::Closed),
             Event::Key(k) => {
                 any = true;
+                // The sound menu takes the arrows while it is open.
+                if let Some(row) = ui.sound_menu {
+                    let mut changed = false;
+                    match k.code {
+                        0x48 | 0x67 => { ui.sound_menu = Some(row.saturating_sub(1)); continue; }
+                        0x50 | 0x6C => { ui.sound_menu = Some((row + 1).min(SOUND_ROWS - 1)); continue; }
+                        0x4B | 0x69 => { sound_menu_change(&mut ui.effects, row, -1); changed = true; }
+                        0x4D | 0x6a | 0x1C => { sound_menu_change(&mut ui.effects, row, 1); changed = true; }
+                        0x12 | 0x01 => { ui.sound_menu = None; sex_pdx::serial_record!("[qupid.sound.menu] open=0"); continue; }
+                        _ => {}
+                    }
+                    if changed {
+                        player.set_sound_effects(ui.effects);
+                        let fx = ui.effects;
+                        sex_pdx::serial_record!("[qupid.sound] boost={} preset={} bass={} voice={} treble={} drc={}",
+                            fx.boost_percent, fx.preset.id(), fx.bass_db, fx.voice_db, fx.treble_db, fx.dialogue_drc as u8);
+                        continue;
+                    }
+                }
                 match k.code {
+                // E: the sound menu (boost, equalizer, dialogue lift).
+                0x12 => {
+                    ui.sound_menu = Some(0);
+                    sex_pdx::serial_record!("[qupid.sound.menu] open=1");
+                }
+                // B: the projector boost, 100% <-> 200%.
+                0x30 => {
+                    ui.effects.toggle_boost_200();
+                    player.set_sound_effects(ui.effects);
+                    sex_pdx::serial_record!("[qupid.sound] boost={} preset={} bass={} voice={} treble={} drc={}",
+                        ui.effects.boost_percent, ui.effects.preset.id(), ui.effects.bass_db, ui.effects.voice_db, ui.effects.treble_db, ui.effects.dialogue_drc as u8);
+                }
                 57 | 37 | sex_pdx::app_key::KEY_PLAY_PAUSE => {
                     if player.paused() { player.play() } else { player.pause() }
                     sex_pdx::serial_record!("[play.paused] {}", player.paused() as u8);
@@ -356,6 +426,7 @@ fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progre
     }
     let mut player = Player::new(dec, w, h, true, false);
     if ui.muted { player.set_muted(true); }
+    player.set_sound_effects(ui.effects);
     if info.sample_rate > 0 && !player.has_sound() {
         sex_pdx::serial_record!("[play.sound.none] reason=no_ring");
     }
@@ -492,7 +563,7 @@ fn playlist(window: &mut Window, words: &[&[u8]]) {
     let mut resume = Resume::load(window);
     let mut ui = Ui { subs: None, controls: captions::Painter::new(), controls_until: 0, item: (0, items.len()), drawn_ms: 0,
         chapters: Vec::new(), segments: Vec::new(), card: captions::Painter::new(), chapter_list_until: 0, muted: false,
-        next_label: None, up_next: None, up_next_left: None };
+        next_label: None, up_next: None, up_next_left: None, sound_menu: None, effects: AudioDspConfig::default() };
     let mut i = 0usize;
     while i < items.len() {
         // At the playlist's end, the show's next episode from the same folder, when

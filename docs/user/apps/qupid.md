@@ -61,6 +61,8 @@ them by artist and album from their tags and plays them one after another with n
 | **`PgUp / PgDn`** | **Chapter jump** | Previous or next chapter. |
 | **`Enter`** | **Skip intro** | Take the "Skip intro / recap / credits" card shown during those chapters. |
 | **`1`-`9`** | **Jump** | Go to 10%-90% of the video. |
+| **`E`** | **Sound menu** | Boost (50-300%), equalizer preset (Projector, Dialogue, Cinema, Night) and dialogue lift. |
+| **`B`** | **Boost** | Toggle a 200% boost for quiet rips and small speakers. |
 | **`S`** | **Subtitles** | Cycle through embedded and external subtitle streams (SRT, ASS). |
 | **`A`** | **Audio Track** | Cycle through available multi-language audio streams. |
 | **`[` / `]`** | **Speed** | Decrease or increase playback speed (0.5× to 2.0×). |

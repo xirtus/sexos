@@ -603,6 +603,9 @@ pub struct Player {
     pub late_ms: i64,
     volume: u8,
     muted: bool,
+    /// Sound boost, equalizer and dialogue lift, applied to every frame decoded (None:
+    /// sound as the file has it).
+    effects: Option<audio_dsp::AudioDsp>,
     /// Sound is held back, and the clock with it, until this much is queued, so a
     /// slow start (FFmpeg warming up, a busy page) doesn't open with a gap.
     priming: bool,
@@ -627,7 +630,7 @@ impl Player {
         let mut p = Player {
             dec, audio: None, ended_parts: (false, false), last_at: (i64::MIN, i64::MIN), w, h, sound: None, clock: Clock::new(), queue: VecDeque::new(), free: Vec::new(), cap,
             current: Vec::new(), pcm: Vec::new(), left: (0, 0), pad: 0, decoded: 0, eof: false, ended: false,
-            skip_until: i64::MIN, error: None, silence: None, shown: 0, heard: 0, late_ms: 0, volume: 100, muted: false, priming: false, prime_from: 0, wants_sound,
+            skip_until: i64::MIN, error: None, silence: None, shown: 0, heard: 0, late_ms: 0, volume: 100, muted: false, effects: None, priming: false, prime_from: 0, wants_sound,
         };
         if paused {
             p.clock.paused = true;
@@ -785,6 +788,20 @@ impl Player {
         match self.audio.as_mut() { Some(a) => a.set_audio_track(n)?, None => self.dec.set_audio_track(n)? }
         self.seek(at);
         Ok(())
+    }
+
+    /// Sound boost (50-300%), equalizer preset or bands, and dialogue lift, from the
+    /// next sound decoded on. The identity settings turn the effects off.
+    pub fn set_sound_effects(&mut self, config: audio_dsp::AudioDspConfig) {
+        let config = config.normalized();
+        if config.is_identity() { self.effects = None; return; }
+        match self.effects.as_mut() {
+            Some(fx) => fx.set_config(config),
+            None => self.effects = Some(audio_dsp::AudioDsp::new(RATE, config)),
+        }
+    }
+    pub fn sound_effects(&self) -> audio_dsp::AudioDspConfig {
+        self.effects.as_ref().map(|fx| fx.config()).unwrap_or_default()
     }
 
     /// 0..=100.
@@ -973,6 +990,7 @@ impl Player {
                     self.pad = ((at - at.min(now)).min(PAD_MAX_MS) as u64) * RATE as u64 / 1000;
                 }
                 self.left = (0, frames.min(self.pcm.len()));
+                if let Some(fx) = self.effects.as_mut() { fx.process_stereo_frames(&mut self.pcm[..self.left.1]); }
                 false
             }
         }

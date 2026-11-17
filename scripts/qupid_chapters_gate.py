@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Qupid's chapters and "Skip intro" card. A 12 s clip with three chapters made by host
 ffmpeg ("Prologue" 0-2 s, "Opening" 2-7 s, "Story" 7-12 s): Qupid reads the chapters,
-offers "Skip intro" over the picture during "Opening" (an orange-edged card in the lower
+offers "Skip intro" over the picture during "Opening" (an accent-edged card in the lower
 right), and Enter lands at the end of the opening. C lists the chapters; PgUp and PgDn
-move between them.
+move between them. B doubles the sound (heard in the recording), and E's sound menu
+changes the equalizer preset.
 
 Needs ffmpeg on the host and Qupid built (scripts/build_play.sh), or SEXOS_PLAY."""
-import argparse,http.server,os,re,shutil,subprocess,tempfile,threading,time
+import argparse,http.server,os,re,shutil,struct,subprocess,tempfile,threading,time
 from pathlib import Path
 from PIL import Image
 from install_program import install
@@ -83,8 +84,8 @@ def main():
   ss=len(t());q.key('spc');g['wait'](r'\[play.paused\] 1',ss,30);time.sleep(.8)
   shot=out/'skip-card.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   img=Image.open(shot).convert('RGB');img.save(out/'skip-card.png');px=img.load()
-  orange=sum(1 for y in range(img.height) for x in range(img.width) if abs(px[x,y][0]-0xE8)<8 and abs(px[x,y][1]-0xA3)<8 and abs(px[x,y][2]-0x3D)<8)
-  assert orange>60,f'no card edge on screen: {orange} orange pixels'
+  accent=sum(1 for y in range(img.height) for x in range(img.width) if abs(px[x,y][0]-0xDB)<8 and abs(px[x,y][1]-0x4A)<8 and abs(px[x,y][2]-0x7E)<8)
+  assert accent>60,f'no card edge on screen: {accent} accent pixels'
   q.key('spc');g['wait'](r'\[play.paused\] 0',ss,30)
   ss=len(t());q.key('ret')
   skip=g['wait'](r'\[qupid.skip\] kind=intro to_ms=(\d+)',ss,30);assert skip[1]=='7000',skip[0]
@@ -95,8 +96,20 @@ def main():
   assert (up[1],up[3])==('1','Opening'),up[0]
   ss=len(t());q.key('pgdn');dn=g['wait'](r'\[qupid.chapter\] n=(\d+) to_ms=(\d+) title=(\S+)',ss,30)
   assert (dn[1],dn[2],dn[3])==('2','7000','Story'),dn[0]
+  # B: the 200% boost, heard twice as loud; E: the sound menu changes the preset.
+  ss=len(t());q.key('b');g['wait'](r'\[qupid.sound\] boost=200 preset=flat ',ss,30)
+  q.key('e');g['wait'](r'\[qupid.sound.menu\] open=1',ss,30)
+  q.key('down');q.key('right');pre=g['wait'](r'\[qupid.sound\] boost=200 preset=(\w+) ',ss,30);assert pre[1]!='flat',pre[0]
+  menu=g['wait'](r'\[qupid.card\] at_ms=\d+ text=Sound  [^\n]*Boost  200%',ss,30)
+  q.key('e');g['wait'](r'\[qupid.sound.menu\] open=0',ss,30)
   g['wait'](r'\[play.done\] frames=\d+ ',s,180)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
-  print({'ok':True,'card_at_ms':int(card[1]),'card_edge_px':orange,'skip_to_ms':int(skip[1]),'pgup':up[0],'pgdn':dn[0],'list':lst[0][:120]})
+  q.cmd('quit');g['proc'].wait(30)
+  data=wav.read_bytes();at=data.find(b'data');pcm=data[at+8:]
+  left=struct.unpack(f'<{len(pcm)//2}h',pcm[:len(pcm)//2*2])[::2]
+  peaks=sorted(max(abs(x) for x in left[i:i+4800]) for i in range(0,len(left)-4800,4800));peaks=[p for p in peaks if p>800]
+  lo,hi=peaks[len(peaks)//5],peaks[len(peaks)*4//5]
+  assert hi>1.6*lo,f'boost not heard: quiet {lo} loud {hi}'
+  print({'ok':True,'boost_peaks':(lo,hi),'preset':pre[1],'card_at_ms':int(card[1]),'card_edge_px':accent,'skip_to_ms':int(skip[1]),'pgup':up[0],'pgdn':dn[0],'list':lst[0][:120]})
  finally:g['stop']()
 if __name__=='__main__':main()

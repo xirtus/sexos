@@ -75,31 +75,43 @@ impl Painter {
         }
     }
 
-    /// The controls band over the bottom of the picture: a darkened strip, a progress
-    /// line (`progress` in thousandths) and `text` centred in it.
+    /// The controls band over the bottom of the picture, in Weft's dark style: a
+    /// translucent surface strip, a progress track with the accent fill and a knob
+    /// (`progress` in thousandths), and `text` centred in it.
     pub fn controls(&mut self, px: &mut [u32], w: usize, h: usize, text: &str, progress: u32) {
         if w < 32 || h < 32 { return; }
         let px_size = (h / 22).max(11);
         let line_h = self.line_height(px_size);
-        let band = line_h + 10;
+        let band = line_h + 14;
         let top = h.saturating_sub(band);
         for y in top..h {
-            for p in &mut px[y * w..(y + 1) * w] {
-                let c = |s: u32| ((*p >> s) & 0xFF) * 2 / 5;
-                *p = (*p & 0xFF00_0000) | c(16) << 16 | c(8) << 8 | c(0);
-            }
+            for p in &mut px[y * w..(y + 1) * w] { *p = blend(*p, style::SURFACE, 210); }
         }
-        let done = w * progress.min(1000) as usize / 1000;
-        for y in top..(top + 3).min(h) {
-            for x in 0..w { px[y * w + x] = if x < done { 0x00E8_A33D } else { 0x0050_5050 }; }
+        // The track, inset from the sides, with the played part in the accent.
+        let inset = (w / 40).max(6);
+        let (x0, x1) = (inset, w.saturating_sub(inset));
+        let done = x0 + (x1 - x0) * progress.min(1000) as usize / 1000;
+        let ty = top + 4;
+        for y in ty..(ty + 3).min(h) {
+            for x in x0..x1 { px[y * w + x] = if x < done { style::ACCENT } else { style::TRACK }; }
+        }
+        // The knob: a small disc on the played end.
+        let r = 4i64;
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx * dx + dy * dy > r * r { continue; }
+                let (x, y) = (done as i64 + dx, ty as i64 + 1 + dy);
+                if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h { px[y as usize * w + x as usize] = style::ACCENT; }
+            }
         }
         self.render(text, px_size);
         let lw = self.line_w;
-        composite(px, w, h, &self.line, lw, line_h, (w.saturating_sub(lw)) / 2, top + 6, false);
+        composite(px, w, h, &self.line, lw, line_h, (w.saturating_sub(lw)) / 2, top + 10, false);
     }
 
     /// A card in the lower right of the picture, above the controls band: `text`
-    /// (lines split by '\n') on a dark panel with a thin accent edge.
+    /// (lines split by '\n') on Weft's surface colour with rounded corners and an
+    /// accent bar down its left side.
     pub fn card(&mut self, px: &mut [u32], w: usize, h: usize, text: &str) {
         if text.is_empty() || w < 64 || h < 48 { return; }
         let px_size = (h / 26).max(11);
@@ -108,25 +120,26 @@ impl Painter {
         let mut rendered: Vec<(Vec<u8>, usize)> = Vec::new();
         for l in &lines { self.render(l, px_size); rendered.push((core::mem::take(&mut self.line), self.line_w)); }
         let pad = (px_size / 2).max(6);
-        let box_w = (rendered.iter().map(|r| r.1).max().unwrap_or(0) + 2 * pad).min(w);
+        let bar = 3usize;
+        let box_w = (rendered.iter().map(|r| r.1).max().unwrap_or(0) + 2 * pad + bar).min(w);
         let box_h = (lines.len() * line_h + 2 * pad).min(h);
         let x0 = w.saturating_sub(box_w + w / 30);
         let bottom = h.saturating_sub(h / 7);
         let y0 = bottom.saturating_sub(box_h);
+        let radius = style::RADIUS.min(box_h / 2) as i64;
         for y in y0..(y0 + box_h).min(h) {
             for x in x0..(x0 + box_w).min(w) {
+                // Outside the rounded corners: leave the picture.
+                let (lx, ly) = ((x - x0) as i64, (y - y0) as i64);
+                let cx = if lx < radius { radius - lx } else if lx >= box_w as i64 - radius { lx - (box_w as i64 - radius - 1) } else { 0 };
+                let cy = if ly < radius { radius - ly } else if ly >= box_h as i64 - radius { ly - (box_h as i64 - radius - 1) } else { 0 };
+                if cx > 0 && cy > 0 && cx * cx + cy * cy > radius * radius { continue; }
                 let p = &mut px[y * w + x];
-                let edge = y == y0 || y + 1 == y0 + box_h || x == x0 || x + 1 == x0 + box_w;
-                // Corners cut by one pixel, for a softer box.
-                let corner = (y == y0 || y + 1 == y0 + box_h) && (x == x0 || x + 1 == x0 + box_w);
-                if corner { continue; }
-                if edge { *p = (*p & 0xFF00_0000) | 0x00E8_A33D; continue; }
-                let c = |s: u32| ((*p >> s) & 0xFF) / 4 + 8;
-                *p = (*p & 0xFF00_0000) | c(16) << 16 | c(8) << 8 | c(0);
+                *p = if (x - x0) < bar { style::ACCENT } else { blend(*p, style::SURFACE, 235) };
             }
         }
         for (k, (line, lw)) in rendered.iter().enumerate() {
-            composite(px, w, h, line, *lw, line_h, x0 + pad, y0 + pad + k * line_h, false);
+            composite(px, w, h, line, *lw, line_h, x0 + bar + pad, y0 + pad + k * line_h, false);
         }
     }
 
@@ -182,6 +195,22 @@ impl Painter {
         }
         width
     }
+}
+
+/// Weft's dark theme (crates/weft/src/theme.rs): the default accent as dark grounds
+/// show it, the surface and the track colour, and the corner radius.
+pub mod style {
+    pub const ACCENT: u32 = 0x00DB_4A7E;
+    pub const SURFACE: u32 = 0x0026_232B;
+    pub const TRACK: u32 = 0x0045_404C;
+    pub const RADIUS: usize = 6;
+}
+
+/// `p` mixed toward `to` by `a` (0..255), keeping `p`'s top byte.
+fn blend(p: u32, to: u32, a: u32) -> u32 {
+    let ch = |v: u32, s: u32| (v >> s) & 0xFF;
+    let mix = |s: u32| (ch(p, s) * (255 - a) + ch(to, s) * a) / 255;
+    (p & 0xFF00_0000) | mix(16) << 16 | mix(8) << 8 | mix(0)
 }
 
 /// White text, over a dark outline (the largest coverage within 2 px) when `outline`.

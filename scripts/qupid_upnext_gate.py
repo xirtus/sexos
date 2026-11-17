@@ -69,8 +69,8 @@ def main():
   card=g['wait'](r'\[qupid.card\] at_ms=\d+ text=Up next  S01E02  in \d+ s',ss,60)
   time.sleep(.5);shot=out/'up-next.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
   img=Image.open(shot).convert('RGB');img.save(out/'up-next.png');px=img.load()
-  orange=sum(1 for y in range(img.height) for x in range(img.width) if abs(px[x,y][0]-0xE8)<8 and abs(px[x,y][1]-0xA3)<8 and abs(px[x,y][2]-0x3D)<8)
-  assert orange>40,f'no card edge on screen: {orange} orange pixels'
+  accent=sum(1 for y in range(img.height) for x in range(img.width) if abs(px[x,y][0]-0xDB)<8 and abs(px[x,y][1]-0x4A)<8 and abs(px[x,y][2]-0x7E)<8)
+  assert accent>40,f'no card edge on screen: {accent} accent pixels'
   g['wait'](r'\[qupid.upnext\] go label=S01E02',ss,120)
   s2=len(t());g['wait'](r'\[play.item\] n=1 of=3 file=\S*S01E02',ss,60)
   # Episode 2: Esc watches the credits; episode 3 follows at the end anyway.
@@ -85,6 +85,6 @@ def main():
   g['wait'](r'\[play.playlist.done\] items=3',ss,180)
   assert '[qupid.upnext' not in t()[s3:],'a card in the last episode'
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
-  print({'ok':True,'armed_from_ms':int(armed[1]),'first_left_ms':int(shown[1]),'card':card[0].strip(),'card_edge_px':orange})
+  print({'ok':True,'armed_from_ms':int(armed[1]),'first_left_ms':int(shown[1]),'card':card[0].strip(),'card_edge_px':accent})
  finally:g['stop']()
 if __name__=='__main__':main()
