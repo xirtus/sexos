@@ -317,6 +317,8 @@ waits for 5. 7 runs alongside from Phase 2.
 
 ## 8. Decisions for Andreas
 
+**2026-11-17: Andreas approved D1 and D2.** D3 stays open until after Phase 5. D4 is done in Phase 1.
+
 | | Question | Recommendation |
 |---|---|---|
 | **D1** | Allow capabilities to be minted after BOOT, from BOOT-held roots only, with generation-based revocation? This changes "the capability graph is immutable once the epoch engine starts" to "the *kinds and roots* are fixed at BOOT; derived capabilities come and go". | Yes. It is what lets servers stop re-checking authority, and it keeps BOOT_DAG as the only source of genesis. |
