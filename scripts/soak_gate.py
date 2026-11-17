@@ -61,7 +61,8 @@ def main():
   g['focus'](sid);time.sleep(.3);s=len(t());q.key('f11');g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
   return int(m[1])
  # Services that start again in place, and their crash_log names.
- VICTIMS=[('Files',11),('Network',13),('Bell',10),('Input',4),('Shell',3),('Display',1)]
+ # Denim (compressed memory) too: a run with pages out then ends, and the Shell says which.
+ VICTIMS=[('Files',11),('Network',13),('Bell',10),('Input',4),('Shell',3),('Display',1),('Denim',51)]
  def inject(n):
   name,pd=VICTIMS[(n-1)%len(VICTIMS)];s=len(t())
   expect(f'crash {name.lower()}',rf'\[spindle.crash.probe\] target={pd}\b')
