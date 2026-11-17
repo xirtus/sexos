@@ -34,7 +34,7 @@ def main():
   g['wait'](rf'\[heaptest.ready\] target={target} task={task}',s,60);g['wait'](rf'\[display.text.committed\] target={target} ',s,60)
   grants=re.findall(rf'\[app.program.memory\] target={target} task={task} granted=(\d+) held=(\d+) base=(0x[0-9a-f]+) window_pages=(\d+)',t()[s:])
   assert grants,'no grant evidence'
-  assert re.search(rf'\[app\.program\.loaded\] target={target} task={task} [^\n]* stack_pages=1024\n',t()[s:]),'the 4 MiB stack heaptest asks for was not given'
+  assert re.search(rf'\[app\.program\.loaded\] target={target} task={task} [^\n]* stack_pages=1024 stack_committed=16\n',t()[s:]),'the 4 MiB stack heaptest asks for was not given'
   assert int(grants[0][1])==16 and len({b for *_,b,_ in grants})==1,'grants are not one span from the window start'
   peak=int(fields['peak']);assert 12*1024*1024<peak<=WINDOW,f'peak {peak}'
   assert int(fields['full_mib'])>=12,f"filled only {fields['full_mib']} MiB"
