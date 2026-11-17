@@ -4,6 +4,7 @@
 extern crate alloc;
 pub mod ariel_ui;
 pub mod europarack_ui;
+pub mod lv2_catalog;
 pub mod meter_history;
 pub mod muse_ui;
 pub mod piano;
@@ -966,7 +967,7 @@ pub struct Studio {
     pub delivery_target: moan_core::loudness::DeliveryTarget,
     pub last_loudness: Option<moan_core::loudness::LoudnessMeasurement>,
     pub last_interchange_export: Option<String>,
-    pub lv2_catalog: plugins::Lv2Catalog,
+    pub lv2_catalog: lv2_catalog::Lv2Catalog,
     voice_preset_btn: Id,
     loudness_readout: Id,
     lv2_status: Id,
@@ -1572,7 +1573,7 @@ impl Studio {
             delivery_target: moan_core::loudness::DeliveryTarget::StreamingMinus14,
             last_loudness: None,
             last_interchange_export: None,
-            lv2_catalog: plugins::Lv2Catalog::new(),
+            lv2_catalog: lv2_catalog::Lv2Catalog::new(),
             voice_preset_btn,
             loudness_readout,
             lv2_status,

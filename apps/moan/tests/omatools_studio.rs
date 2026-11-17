@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-only
-use moan::{plugins::Lv2Catalog, Studio};
+use moan::{lv2_catalog::Lv2Catalog, Studio};
 use moan_core::{
     interchange::InterchangeTimeline,
     loudness::DeliveryTarget,
