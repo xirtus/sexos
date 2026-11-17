@@ -143,7 +143,7 @@ impl Ui {
         f(&mut pens[i].1)
     }
 
-    fn cell_name(&self) -> String { format!("{}{}", column_name(self.col), self.row + 1) }
+    fn cell_name(&self) -> String { format!("{}{}", column_name(self.col), u64::from(self.row) + 1) }
 
     /// The cells the next command works on: the stretched selection, or the cursor's cell.
     fn selection(&self) -> Range {
@@ -519,7 +519,7 @@ impl Ui {
                 let (t, _, _, r) = sel.bounds();
                 let done = self.book.add_chart(sel, t, r + 2);
                 self.command("insert.chart", done, format!("Chart of {}", sel.a1()));
-                if let Some(c) = self.book.charts().last() { sex_std::record(&format!("[spreadeagle.chart] at={}{} width={} height={}", column_name(c.col), c.row + 1, c.width, c.height)); }
+                if let Some(c) = self.book.charts().last() { sex_std::record(&format!("[spreadeagle.chart] at={}{} width={} height={}", column_name(c.col), u64::from(c.row) + 1, c.width, c.height)); }
                 false
             }
             _ => false,
