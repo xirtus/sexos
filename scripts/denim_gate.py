@@ -21,7 +21,7 @@ ROOT=Path(__file__).resolve().parents[1]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- install(disk,[('heaptest',(ROOT/'iso_root/programs/heaptest').read_bytes())])
+ install(disk,[(n,(ROOT/'iso_root/programs'/n).read_bytes())for n in('heaptest','mesh')])
  g=boot(a.iso,disk,a.out,'denim',a.resolution);t=g['text'];q=g['q']
  try:
   g['wait'](r'\[denim\.ready\] ok=1 rows=\d+ eager=1 ',0,120)
@@ -46,7 +46,7 @@ def main():
   assert outs>=1024,f'Denim took only {r[-1] if r else None} pages out'
   out_round=r[-1]
   # D4: Mesh shows the packed pages, the store they take and the ratio, and heaptest's share.
-  mesh='mesh' if (ROOT/'iso_root/programs/mesh').exists() else 'monitor'
+  mesh='mesh'
   g['focus'](153);time.sleep(.5);s=len(t())
   for k in 'run '+mesh:q.key('spc' if k==' ' else k);time.sleep(.05)
   q.key('ret')
@@ -95,5 +95,10 @@ def main():
   g['wait'](rf'\[app.private.retired\] target={t2} task={k2} ',s,120)
   for bad in ('KERNEL PANIC','panicked at','[denim.damaged]','[denim.panic]'):assert bad not in t(),bad
   print({'ok':True,'target':target,'out':out_round,'mesh':{'packed':int(mp[1]),'store':int(mp[2]),'ratio':int(mp[3])/10},'verify_ticks':int(v[2]),'faults_in':faults,'restart':{'target':t2,'ended':int(r[2])}})
+ except Exception:
+  # The full serial is in the artifact; say here which programs started, faulted or ended.
+  keep=re.compile(r'\[(monitor|mesh|shell\.program|shell\.denim|app\.program|app\.private|heaptest|denim\.(ready|lost|damaged)|crash|paging\.fault|fault\.kill|spindle\.(run|line))')
+  print('--- denim: programs and faults ---');print('\n'.join(l for l in t().splitlines() if keep.search(l))[-12000:])
+  raise
  finally:g['stop']()
 if __name__=='__main__':main()
