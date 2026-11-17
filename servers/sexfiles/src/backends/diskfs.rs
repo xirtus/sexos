@@ -404,6 +404,8 @@ impl DiskFs {
     /// Typed block write: send BLOCK_WRITE command to sexdrive.
     #[allow(dead_code)]
     pub fn diskfs_block_write(offset: u64, size: u64, buffer_cap: u64) -> u64 {
+        // Every write path (the store, the bridge, history) drops blocks read ahead.
+        crate::fs_service::ahead::forget();
         if hot_log() { serial_println!(
             "[sexfiles.diskfs.typed.call] cmd=BLOCK_WRITE offset={:#x} size={} buf_cap={:#x}",
             offset, size, buffer_cap
