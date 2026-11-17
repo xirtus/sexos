@@ -10,7 +10,7 @@ use sex_pdx::{
     BLOCK_READ, BLOCK_WRITE, BLOCK_SYNC, BLOCK_CAPACITY, BLOCK_SHUTDOWN,
     BLOCK_RAW_READ, BLOCK_RAW_WRITE, BLOCK_LAYOUT,
     BLOCK_ERR_BAD_CMD, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE,
-    BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER, BLOCK_MAX_RUN,
+    BLOCK_SECTOR_SIZE, BLOCK_MAX_XFER, BLOCK_MAX_RUN, BLOCK_CMD_RUN,
 };
 
 
@@ -184,8 +184,8 @@ fn init_dma_region() -> bool {
     };
     let mut pool = match DmaRegionPool::new(view) { Ok(pool) => pool, Err(_) => return false };
     // Each bounce lease holds one whole run plus, after it, the page of its PRP list.
-    let read = match pool.reserve(BLOCK_MAX_RUN + PAGE_SIZE) { Ok(buffer) => buffer, Err(_) => return false };
-    let write = match pool.reserve(BLOCK_MAX_RUN + PAGE_SIZE) { Ok(buffer) => buffer, Err(_) => return false };
+    let read = match pool.reserve(BLOCK_CMD_RUN + PAGE_SIZE) { Ok(buffer) => buffer, Err(_) => return false };
+    let write = match pool.reserve(BLOCK_CMD_RUN + PAGE_SIZE) { Ok(buffer) => buffer, Err(_) => return false };
     unsafe {
         DMA_VIEW = Some(view);
         DMA_POOL = Some(pool);
@@ -260,30 +260,30 @@ fn stop_uncertain_io() {
 /// contiguous (one BOOT DMA region), so entry i is simply base + i pages.
 fn prp2_for(buffer: &sex_pdx::dma_pool::DmaBuffer, size: u64) -> Option<u64> {
     let pages = size.div_ceil(PAGE_SIZE);
-    if pages == 0 || pages > BLOCK_MAX_RUN / PAGE_SIZE { return None; }
+    if pages == 0 || pages > BLOCK_CMD_RUN / PAGE_SIZE { return None; }
     if pages == 1 { return Some(0); }
     if pages == 2 { return Some(buffer.physical_address + PAGE_SIZE); }
-    if buffer.length < BLOCK_MAX_RUN + PAGE_SIZE { return None; }
-    let list = (buffer.virtual_address + BLOCK_MAX_RUN) as *mut u64;
+    if buffer.length < BLOCK_CMD_RUN + PAGE_SIZE { return None; }
+    let list = (buffer.virtual_address + BLOCK_CMD_RUN) as *mut u64;
     for i in 1..pages {
         unsafe { core::ptr::write_volatile(list.add((i - 1) as usize), buffer.physical_address + i * PAGE_SIZE); }
     }
-    Some(buffer.physical_address + BLOCK_MAX_RUN)
+    Some(buffer.physical_address + BLOCK_CMD_RUN)
 }
 
 /// PRP2 when the data pages are a loan (consecutive device addresses from
 /// `loan`); the PRP list itself still lives in the lease's pool page.
 fn prp2_for_loan(buffer: &sex_pdx::dma_pool::DmaBuffer, loan: u64, size: u64) -> Option<u64> {
     let pages = size.div_ceil(PAGE_SIZE);
-    if pages == 0 || pages > BLOCK_MAX_RUN / PAGE_SIZE { return None; }
+    if pages == 0 || pages > BLOCK_CMD_RUN / PAGE_SIZE { return None; }
     if pages == 1 { return Some(0); }
     if pages == 2 { return Some(loan + PAGE_SIZE); }
-    if buffer.length < BLOCK_MAX_RUN + PAGE_SIZE { return None; }
-    let list = (buffer.virtual_address + BLOCK_MAX_RUN) as *mut u64;
+    if buffer.length < BLOCK_CMD_RUN + PAGE_SIZE { return None; }
+    let list = (buffer.virtual_address + BLOCK_CMD_RUN) as *mut u64;
     for i in 1..pages {
         unsafe { core::ptr::write_volatile(list.add((i - 1) as usize), loan + i * PAGE_SIZE); }
     }
-    Some(buffer.physical_address + BLOCK_MAX_RUN)
+    Some(buffer.physical_address + BLOCK_CMD_RUN)
 }
 
 fn prepare_bounce(write: bool, cid: u16) -> Option<DmaTransfer<'static>> {
@@ -544,10 +544,26 @@ fn typed_read_handoff(offset:u64,size:u64,buf_cap:u64,view:Option<RegionView>)->
 /// device address, and the data goes there directly (single drives only; a
 /// RAID volume is assembled strip by strip through the pool).
 fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u64 {
+    // A call longer than one command (#307): NVMe gets two commands in flight at a
+    // time; RAID and AHCI take the pieces one after another.
+    if size > BLOCK_CMD_RUN && size <= BLOCK_MAX_RUN && size % NVME_LBA_BYTES == 0 && dst_va != 0 {
+        let direct = !(raid::serving() && !raid::raw()) && !serving_ahci();
+        let step = if direct { 2 * BLOCK_CMD_RUN } else { BLOCK_CMD_RUN };
+        let mut at = 0u64;
+        while at < size {
+            let len = (size - at).min(step);
+            let piece_loan = if loan != 0 { loan + at } else { 0 };
+            let status = if direct && len > BLOCK_CMD_RUN { nvme_read_queued(offset + at, len, dst_va + at, piece_loan) }
+                else { nvme_read_into_mapped_va(offset + at, len, dst_va + at, piece_loan) };
+            if status != 0 { return status; }
+            at += len;
+        }
+        return 0;
+    }
     if raid::serving() && !raid::raw() { return raid::read(offset, size, dst_va); }
     if serving_ahci() { return ahci_read_into_mapped_va(offset, size, dst_va); }
     if size == 0
-        || size > BLOCK_MAX_RUN
+        || size > BLOCK_CMD_RUN
         || (offset % NVME_LBA_BYTES) != 0
         || (size % NVME_LBA_BYTES) != 0
         || dst_va == 0
@@ -755,6 +771,122 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
     0u64
 }
 
+/// Two read commands in flight at once (#307): the first `BLOCK_CMD_RUN` bytes through
+/// the read lease, the rest through the write lease (Files' requests are served one at a
+/// time, so no write holds it now). Both SQEs go to the device with one doorbell; the
+/// CQEs may come back in either order. The same DMA rules as one command: a lease is
+/// reused only after its own CQE, and an unresolved command quarantines the queue.
+fn nvme_read_queued(offset: u64, size: u64, dst_va: u64, loan: u64) -> u64 {
+    if size <= BLOCK_CMD_RUN || size > 2 * BLOCK_CMD_RUN || offset % NVME_LBA_BYTES != 0
+        || size % NVME_LBA_BYTES != 0 || dst_va == 0 || dst_va == u64::MAX { return BLOCK_ERR_BAD_LEN; }
+    let (map_va, io_sq_va, io_cq_va, sq1tdbl, cq1hdbl, mut sq_tail, mut cq_head, mut cq_phase) = unsafe {
+        let st = &*core::ptr::addr_of!(NVME_IO_STATE);
+        if !st.ready { return BLOCK_ERR_NO_DEVICE; }
+        (st.map_va, st.io_sq_va, st.io_cq_va, st.sq1tdbl, st.cq1hdbl, st.sq_tail, st.cq_head, st.cq_phase)
+    };
+    let parts = [(0u64, BLOCK_CMD_RUN), (BLOCK_CMD_RUN, size - BLOCK_CMD_RUN)];
+    let mut cids = [0u16; 2];
+    let mut transfers: [Option<DmaTransfer<'static>>; 2] = [None, None];
+    for (i, &(at, len)) in parts.iter().enumerate() {
+        let cid = unsafe { let c = NVME_IO_STATE.next_cid; NVME_IO_STATE.next_cid = c.wrapping_add(1); c };
+        let Some(transfer) = prepare_bounce(i == 1, cid) else { return BLOCK_ERR_NO_DEVICE };
+        let buffer = transfer.buffer;
+        if buffer.physical_address == 0 || buffer.physical_address % PAGE_SIZE != 0 || buffer.virtual_address == 0
+            || buffer.length < len { return BLOCK_ERR_NO_DEVICE; }
+        let prp2 = if loan != 0 { prp2_for_loan(&buffer, loan + at, len) } else { prp2_for(&buffer, len) };
+        let Some(prp2) = prp2 else { return BLOCK_ERR_BAD_LEN };
+        let prp1 = if loan != 0 { loan + at } else { buffer.physical_address };
+        let blocks = len / NVME_LBA_BYTES;
+        let Some(dev_lba) = place((offset + at) / NVME_LBA_BYTES, blocks, false) else { return BLOCK_ERR_NO_DEVICE };
+        let sqe = (io_sq_va as *mut u8).wrapping_add(sq_tail as usize * 64) as *mut u32;
+        unsafe {
+            for d in 0..16usize { core::ptr::write_volatile(sqe.add(d), 0); }
+            core::ptr::write_volatile(sqe.add(0), 0x02u32 | ((cid as u32) << 16)); // READ + CID
+            core::ptr::write_volatile(sqe.add(1), 1u32); // NSID=1
+            core::ptr::write_volatile(sqe.add(6), prp1 as u32);
+            core::ptr::write_volatile(sqe.add(7), (prp1 >> 32) as u32);
+            core::ptr::write_volatile(sqe.add(8), prp2 as u32);
+            core::ptr::write_volatile(sqe.add(9), (prp2 >> 32) as u32);
+            core::ptr::write_volatile(sqe.add(10), dev_lba as u32);
+            core::ptr::write_volatile(sqe.add(11), (dev_lba >> 32) as u32);
+            core::ptr::write_volatile(sqe.add(12), ((blocks - 1) & 0xFFFF) as u32); // NLB (0-based)
+        }
+        sq_tail = (sq_tail + 1) % 16;
+        cids[i] = cid;
+        transfers[i] = Some(transfer);
+    }
+    compiler_fence(Ordering::SeqCst);
+    for t in transfers.iter_mut().flatten() { if t.submit().is_err() { return BLOCK_ERR_NO_DEVICE; } }
+    unsafe {
+        core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
+        NVME_IO_STATE.sq_tail = sq_tail;
+    }
+    let mut failed = false;
+    for _ in 0..2 {
+        let wait = nvme_wait_any(io_cq_va, cq_head, cids, cq_phase);
+        let Ok(done) = wait.result else {
+            stop_uncertain_io();
+            serial_println!("[sexdrive.nvme.queued.err] reason=cqe_timeout cids={},{} head={} phase={}", cids[0], cids[1], cq_head, cq_phase);
+            return BLOCK_ERR_NO_DEVICE;
+        };
+        let seen = (done.dw3 & 0xFFFF) as u16;
+        let i = if seen == cids[0] { 0 } else { 1 };
+        let Some(mut transfer) = transfers[i].take() else { stop_uncertain_io(); return BLOCK_ERR_NO_DEVICE };
+        if transfer.complete(seen, (done.dw3 >> 16) & 1, cq_phase).is_err() { return BLOCK_ERR_NO_DEVICE; }
+        if (done.dw3 >> 17) & 0x7FFF != 0 {
+            failed = true;
+            serial_println!("[sexdrive.nvme.queued.err] reason=status_fail cid={} dw3={:#x}", seen, done.dw3);
+        } else if loan == 0 {
+            // The CQE was observed (acquire), so this command's data is complete.
+            let (at, len) = parts[i];
+            unsafe { core::ptr::copy_nonoverlapping(transfer.buffer.virtual_address as *const u8, (dst_va + at) as *mut u8, len as usize); }
+        }
+        cq_head = (cq_head + 1) % 16;
+        if cq_head == 0 { cq_phase ^= 1; }
+        unsafe {
+            core::ptr::write_volatile((map_va + cq1hdbl) as *mut u32, cq_head);
+            NVME_IO_STATE.cq_head = cq_head;
+            NVME_IO_STATE.cq_phase = cq_phase;
+        }
+    }
+    if failed {
+        unsafe { NVME_IO_STATE.ready = false; } // as for one command: stop on a CQ error.
+        return BLOCK_ERR_NO_DEVICE;
+    }
+    unsafe {
+        if loan != 0 && !ZERO_COPY_SEEN { ZERO_COPY_SEEN = true;
+            serial_println!("[sexdrive.read.zero_copy] first=1 device_address={:#x} bytes={} copy=0", loan, size); }
+        QUEUED_READS += 1;
+        if QUEUED_READS.is_power_of_two() { sex_pdx::serial_record!("[sexdrive.nvme.queued] reads={} depth=2 bytes={}", QUEUED_READS, size); }
+    }
+    0
+}
+static mut QUEUED_READS: u64 = 0;
+
+/// `nvme_wait_completion` for a CQ slot that may hold either of two commands.
+fn nvme_wait_any(cq_va: u64, head: u32, cids: [u16; 2], phase: u32) -> completion_wait::Report {
+    const QUICK_TURNS: u32 = 256;
+    let mut quick = 0u32;
+    let cqe = (cq_va as *const u8).wrapping_add(head as usize * 16) as *const u32;
+    let irq = NVME_IRQ.load(Ordering::Relaxed);
+    let report = completion_wait::wait_for(|c| c == cids[0] || c == cids[1], phase, || unsafe {
+        let dw3 = core::ptr::read_volatile(cqe.add(3)); compiler_fence(Ordering::Acquire);
+        (core::ptr::read_volatile(cqe.add(2)), dw3)
+    }, sex_pdx::get_ticks, || {
+        if irq {
+            if sex_pdx::device::irq_take() != 0 { NVME_IRQ_WAKES.fetch_add(1, Ordering::Relaxed); return Ok(()); }
+            NVME_IRQ_WAITS.fetch_add(1, Ordering::Relaxed);
+            return sex_pdx::sys_wait_self_ticks(1);
+        }
+        if quick < QUICK_TURNS { quick += 1; sex_pdx::sys_yield(); Ok(()) } else { sex_pdx::sys_wait_self_ticks(1) }
+    });
+    if report.turns > QUICK_TURNS || report.result.is_err() {
+        sex_pdx::serial_record!("[sexdrive.nvme.wait] cids={},{} head={} phase={} polls={} turns={} elapsed_ticks={} result={:?}",
+            cids[0], cids[1], head, phase, report.polls, report.turns, report.elapsed, report.result.map(|_| ()));
+    }
+    report
+}
+
 /// What the namespace says, or just the original fixed area if it could not say.
 /// The whole disk, as the controller reported it (the Intel RAID volume when one is served).
 fn disk_sectors() -> u64 {
@@ -947,10 +1079,21 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
 
 fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     if raid::writes_refused() { return BLOCK_ERR_NO_DEVICE; }
+    // Writes longer than one command go out as consecutive commands.
+    if size > BLOCK_CMD_RUN && size <= BLOCK_MAX_RUN && size % NVME_LBA_BYTES == 0 && src_va != 0 && src_va != u64::MAX {
+        let mut at = 0u64;
+        while at < size {
+            let len = (size - at).min(BLOCK_CMD_RUN);
+            let status = nvme_write_one_block(offset + at, len, src_va + at);
+            if status != 0 { return status; }
+            at += len;
+        }
+        return 0;
+    }
     if serving_ahci() { return ahci_write(offset, size, src_va); }
     // Success chatter shares the existing finite hot-log budget. Device errors,
     // timeout/quarantine and actual FLUSH receipts remain unconditional.
-    if size == 0 || size > BLOCK_MAX_RUN
+    if size == 0 || size > BLOCK_CMD_RUN
         || size % NVME_LBA_BYTES != 0 || offset % NVME_LBA_BYTES != 0
         || offset.checked_add(size).map_or(true,|end|end>device_sectors()*NVME_LBA_BYTES)
         || src_va == 0 || src_va == u64::MAX {
@@ -1961,7 +2104,7 @@ fn next_ahci_tag() -> u16 {
 /// Move `size` bytes between the disk and the reusable bounce lease. `fill`
 /// runs on the bounce before the command (write), `drain` after it (read).
 fn ahci_bounce(write: bool, offset: u64, size: u64, fill: impl FnOnce(u64), drain: impl FnOnce(u64)) -> u64 {
-    if size == 0 || size > BLOCK_MAX_RUN || size % NVME_LBA_BYTES != 0 || offset % NVME_LBA_BYTES != 0
+    if size == 0 || size > BLOCK_CMD_RUN || size % NVME_LBA_BYTES != 0 || offset % NVME_LBA_BYTES != 0
         || offset.checked_add(size).map_or(true, |end| end > device_sectors() * NVME_LBA_BYTES) {
         serial_println!("[sexdrive.ahci.io.err] reason=bad_args write={} offset={:#x} size={}", write as u8, offset, size);
         return BLOCK_ERR_BAD_LEN;

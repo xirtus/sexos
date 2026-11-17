@@ -96,6 +96,60 @@ pub fn flush_for_power() -> bool {
 }
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
+/// Device reads of file payload, for the asking client's READ_IO counters.
+fn counted(bytes: usize) {
+    unsafe {
+        DEVICE_READ_CALLS = DEVICE_READ_CALLS.saturating_add(1);
+        DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(bytes as u64);
+    }
+}
+/// Sequential readahead (#307): file blocks the last run fetched past what was asked,
+/// kept until the reader asks for them, any write, or a new mount. The filesystem
+/// still checks each block's checksum when it is handed over.
+pub(crate) mod ahead {
+    use alloc::vec::Vec;
+    use sexfs::BLOCK;
+    static mut DATA: Vec<u8> = Vec::new();
+    /// (first disk block, blocks held).
+    static mut SPAN: (u64, u64) = (0, 0);
+    static mut SERVED: u64 = 0;
+    pub fn forget() { unsafe { SPAN = (0, 0); } }
+    pub fn keep(first: u64, bytes: &[u8]) {
+        unsafe {
+            let data = &mut *core::ptr::addr_of_mut!(DATA);
+            SPAN = (0, 0);
+            if data.len() < bytes.len() {
+                if data.try_reserve_exact(bytes.len() - data.len()).is_err() { return; }
+                data.resize(bytes.len(), 0);
+            }
+            data[..bytes.len()].copy_from_slice(bytes);
+            SPAN = (first, (bytes.len() / BLOCK) as u64);
+        }
+    }
+    /// Fills `out` from blocks `first..` if they are all held; what is handed over is let go.
+    pub fn take(first: u64, out: &mut [u8]) -> bool {
+        unsafe {
+            let (at, n) = SPAN;
+            let want = (out.len() / BLOCK) as u64;
+            if n == 0 || out.len() % BLOCK != 0 || first < at || first + want > at + n { return false; }
+            let from = ((first - at) as usize) * BLOCK;
+            let data = &*core::ptr::addr_of!(DATA);
+            out.copy_from_slice(&data[from..from + out.len()]);
+            let end = first + want;
+            SPAN = if end < at + n && first == at {
+                // Shift the window: what is left still starts at a held block.
+                let rest = ((at + n - end) as usize) * BLOCK;
+                let data = &mut *core::ptr::addr_of_mut!(DATA);
+                data.copy_within(from + out.len()..from + out.len() + rest, 0);
+                (end, at + n - end)
+            } else { (0, 0) };
+            SERVED += 1;
+            let served = SERVED;
+            if served.is_power_of_two() { sex_pdx::serial_record!("[files.readahead] served={}", served); }
+            true
+        }
+    }
+}
 pub struct Disk { blocks: u64 }
 impl Disk {
     /// The shared block buffer, as long as one command may move.
@@ -124,14 +178,26 @@ impl Device for Disk {
         self.read_data_run(block, out)
     }
     fn read_data_run(&mut self, first: u64, out: &mut [u8]) -> Result<(), ()> {
+        if ahead::take(first, out) { return Ok(()); }
         self.read_run(first, out)?;
-        unsafe {
-            DEVICE_READ_CALLS = DEVICE_READ_CALLS.saturating_add(1);
-            DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(out.len() as u64);
-        }
+        counted(out.len());
+        Ok(())
+    }
+    /// One command for `out` and the `ahead` blocks after it; those wait in `ahead` for
+    /// the reader's next request.
+    fn read_data_ahead(&mut self, first: u64, out: &mut [u8], ahead: usize) -> Result<(), ()> {
+        if ahead::take(first, out) { return Ok(()); }
+        let buf = Self::buffer()?;
+        let total = (out.len() + ahead * BLOCK).min(buf.len()) / BLOCK * BLOCK;
+        if total <= out.len() || out.len() % BLOCK != 0 { return self.read_data_run(first, out); }
+        if DiskFs::diskfs_block_read(Self::offset(first), total as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
+        out.copy_from_slice(&buf[..out.len()]);
+        ahead::keep(first + (out.len() / BLOCK) as u64, &buf[out.len()..total]);
+        counted(total);
         Ok(())
     }
     fn write_run(&mut self, first: u64, data: &[u8]) -> Result<(), ()> {
+        ahead::forget();
         let buf = Self::buffer()?;
         if data.is_empty() || data.len() % BLOCK != 0 || data.len() > buf.len() { return Err(()); }
         buf[..data.len()].copy_from_slice(data);
@@ -201,6 +267,7 @@ fn bring_up() -> State {
 /// Smallest disk worth scanning for other systems' volumes: 1 MiB.
 const DEVICE_MIN_SECTORS: u64 = 2048;
 fn bring_up_on(sectors: u64) -> State {
+    ahead::forget();
     if sectors < w::MIN_SECTORS {
         sex_pdx::serial_record!("[files.fs.absent] sectors={}", sectors);
         return State::Absent;

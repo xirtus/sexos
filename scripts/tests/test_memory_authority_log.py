@@ -17,7 +17,7 @@ def good():
         "[boot.memory.authority.sealed] runtime_alloc=0 runtime_map=capability_leaf runtime_mint=0",
         "task.running id=1", "[sexusb.memory.dma.ready] region_id=1 length=2097152",
         "[sexdrive.dma.region] slot=32 bytes=524288 reusable_buffers=2",
-        "[sexfiles.bridge.diskfs.buf.ready] buf_va=0x1000 region_id=4 length=131072 peer_pd=2",
+        "[sexfiles.bridge.diskfs.buf.ready] buf_va=0x1000 region_id=4 length=524288 peer_pd=2",
         "[sexfiles.memory.authority.negative] empty=1 wrong_kind=1 dma_right=1 ok=1",
         "[runtime.heap.ready] backing=elf_owned bytes=65536 runtime_mapping=0"])
 

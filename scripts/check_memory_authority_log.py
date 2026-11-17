@@ -46,7 +46,7 @@ def validate(text):
     for marker in (
         r"\[sexusb\.memory\.dma\.ready\] region_id=1 length=2097152",
         r"\[sexdrive\.dma\.region\] slot=32 bytes=524288 reusable_buffers=2",
-        r"\[sexfiles\.bridge\.diskfs\.buf\.ready\].*region_id=4 length=131072 peer_pd=\d+",
+        r"\[sexfiles\.bridge\.diskfs\.buf\.ready\].*region_id=4 length=524288 peer_pd=\d+",
         r"\[sexfiles\.memory\.authority\.negative\] empty=1 wrong_kind=1 dma_right=1 ok=1",
         r"\[runtime\.heap\.ready\] backing=elf_owned bytes=[1-9]\d* runtime_mapping=0",
     ):
