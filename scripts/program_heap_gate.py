@@ -78,10 +78,15 @@ def main():
    assert big['pressure']==2,f'memory ran out without critical pressure: {big}'
    assert re.search(r'\[memory\.pressure\] level=2 ',t()[s:]),'kernel never logged critical pressure'
   s0=len(t());close(big)
-  s=len(t());after=started();close(after)
-  # Close gave the memory back, so pressure is normal again.
+  # Close gave the memory back, so pressure is normal again. Pages Denim packed for the
+  # run go back over its next rounds, as it finds the run gone and empties its store.
   if big['free']<1024:
-   assert re.search(r'\[memory\.pressure\] level=0 ',t()[s0:]),'pressure never fell after Close'
+   try:g['wait'](r'\[memory\.pressure\] level=0 ',s0,120)
+   except TimeoutError:
+    print('\n'.join(re.findall(r'[^\n]*\[(?:memory\.pressure|denim\.round|denim\.ready|service\.memory)\][^\n]*',t()[s0:])[-40:]))
+    raise AssertionError('pressure never fell after Close')
+  s=len(t());after=started();close(after)
+  if big['free']<1024:
    assert int(re.findall(rf'\[heaptest\.ok\] target={after["target"]} task={after["task"]} [^\n]*pressure=(\d+)',t())[-1])==0,'pressure not normal after Close'
   assert after['free']+after['held']>=big['free']+big['held']-64,f"pages leaked: {big} then {after}"
   # A deep call fits the 4 MiB stack; running past it hits the guard page and ends

@@ -270,7 +270,8 @@ impl Denim {
     /// The next page to scan, or None once the run's heap (or the run) ends.
     fn scan(&mut self, target: u32, first: u64, take: &mut usize, cold: u8) -> Option<u64> {
         let r = d::call(d::SCAN, target, first, 0, 0);
-        if r[0] != d::OK { if first == 0 { self.forget(target); } return None; }
+        // DENIED: the run ended (or another began). RETRY is only a busy table: keep what is held.
+        if r[0] != d::OK { if r[0] == d::DENIED { self.forget(target); } return None; }
         let (grown, run, base) = ((r[3] & 0xFFFF_FFFF) as usize, (r[3] >> 32) as u32, r[4]);
         if self.run(target).is_some_and(|s| s.run != run || s.base != base) { self.forget(target); }
         if self.run(target).is_none() {
