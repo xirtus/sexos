@@ -46,7 +46,8 @@ def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False
   if match:return match
   time.sleep(.02)
  # What the system said meanwhile, for CI logs (the serial file may not be kept).
- tail=[l for l in text()[start:].splitlines() if 'view.bytes' not in l and 'view.text' not in l][-40:]
+ noise=('view.bytes','view.text','clock.source.snapshot','silkbar.civil','sched.latency','display.heartbeat')
+ tail=[l for l in text()[start:].splitlines() if not any(n in l for n in noise)][-60:]
  print(f'--- {tag}: last serial lines before the timeout ---',*tail,sep='\n',file=sys.stderr)
  raise TimeoutError(f'{tag}: {pattern}')
 

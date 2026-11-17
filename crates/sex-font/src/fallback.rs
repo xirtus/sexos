@@ -19,6 +19,95 @@ pub static NOTO_HEBREW: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoS
 pub static NOTO_DEVANAGARI: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansDevanagari-Regular.ttf");
 pub static NOTO_THAI: &[u8] = include_bytes!("../../../assets/fonts/noto/NotoSansThai-Regular.ttf");
 pub static EMOJI: &[u8] = include_bytes!("../../../assets/fonts/noto/emoji-36.sxe");
+/// The same emoji in colour (Noto Color Emoji, 32x32); only programs that name it pay for it.
+pub static EMOJI_COLOR: &[u8] = include_bytes!("../../../assets/fonts/noto/emoji-color-32.sxc");
+
+/// Colour emoji: "SXC1", u16 size, u16 count, sorted u32 scalars, then per emoji a
+/// 16-entry RGBA palette (entry 0 transparent, 64 bytes) and size*size/2 bytes of
+/// 4-bit palette indices (high nibble first).
+pub struct ColorEmoji<'a> { size: usize, scalars: &'a [u8], records: &'a [u8] }
+impl<'a> ColorEmoji<'a> {
+    pub fn new(data: &'a [u8]) -> Option<Self> {
+        if data.get(..4)? != b"SXC1" { return None; }
+        let size = u16::from_le_bytes([data[4], data[5]]) as usize;
+        let count = u16::from_le_bytes([data[6], data[7]]) as usize;
+        if size < 2 || size % 2 != 0 { return None; }
+        let scalars = data.get(8..8 + count * 4)?;
+        let rec = 64 + size * size / 2;
+        let records = data.get(8 + count * 4..8 + count * 4 + count * rec)?;
+        Some(Self { size, scalars, records })
+    }
+    /// The embedded set.
+    pub fn embedded() -> Option<ColorEmoji<'static>> { ColorEmoji::new(EMOJI_COLOR) }
+    fn index(&self, scalar: u32) -> Option<usize> {
+        let (mut lo, mut hi) = (0, self.scalars.len() / 4);
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let s = u32::from_le_bytes(self.scalars[mid * 4..mid * 4 + 4].try_into().ok()?);
+            if s == scalar { return Some(mid); }
+            if s < scalar { lo = mid + 1 } else { hi = mid }
+        }
+        None
+    }
+    pub fn has(&self, scalar: u32) -> bool { self.index(scalar).is_some() }
+    pub fn size(&self) -> usize { self.size }
+    pub fn count(&self) -> usize { self.scalars.len() / 4 }
+    /// Premultiplied (a, r, g, b) of the emoji's own pixel (x, y).
+    fn texel(&self, rec: &[u8], x: usize, y: usize) -> [u32; 4] {
+        let i = y * self.size + x;
+        let byte = rec[64 + i / 2];
+        let k = if i % 2 == 0 { byte >> 4 } else { byte & 15 } as usize;
+        let (r, g, b, a) = (rec[k * 4] as u32, rec[k * 4 + 1] as u32, rec[k * 4 + 2] as u32, rec[k * 4 + 3] as u32);
+        [a, r * a / 255, g * a / 255, b * a / 255]
+    }
+    /// `scalar` scaled into a `side` x `side` image of non-premultiplied
+    /// `0xAARRGGBB` pixels: bilinear when enlarging, an area average when shrinking.
+    pub fn draw(&self, scalar: u32, side: usize, out: &mut [u32]) -> bool {
+        let Some(i) = self.index(scalar) else { return false };
+        let Some(need) = side.checked_mul(side) else { return false };
+        if out.len() < need { return false; }
+        let n = 64 + self.size * self.size / 2;
+        let rec = &self.records[i * n..(i + 1) * n];
+        let s = self.size;
+        for y in 0..side {
+            for x in 0..side {
+                // The source box this pixel covers, in 1/256 of a source pixel.
+                let (x0, x1) = (x * s * 256 / side, (x + 1) * s * 256 / side);
+                let (y0, y1) = (y * s * 256 / side, (y + 1) * s * 256 / side);
+                let mut acc = [0u64; 4];
+                let mut total = 0u64;
+                if side > s {
+                    // Enlarging: bilinear at the box's centre.
+                    let cx = ((x0 + x1) / 2).saturating_sub(128).min((s - 1) * 256);
+                    let cy = ((y0 + y1) / 2).saturating_sub(128).min((s - 1) * 256);
+                    let (sx, fx, sy, fy) = (cx / 256, (cx % 256) as u64, cy / 256, (cy % 256) as u64);
+                    for (dx, dy, w) in [(0, 0, (256 - fx) * (256 - fy)), (1, 0, fx * (256 - fy)), (0, 1, (256 - fx) * fy), (1, 1, fx * fy)] {
+                        let t = self.texel(rec, (sx + dx).min(s - 1), (sy + dy).min(s - 1));
+                        for c in 0..4 { acc[c] += t[c] as u64 * w; }
+                        total += w;
+                    }
+                } else {
+                    for sy in y0 / 256..y1.div_ceil(256).min(s) {
+                        let wy = (y1.min(sy * 256 + 256) - y0.max(sy * 256)) as u64;
+                        for sx in x0 / 256..x1.div_ceil(256).min(s) {
+                            let w = wy * (x1.min(sx * 256 + 256) - x0.max(sx * 256)) as u64;
+                            let t = self.texel(rec, sx, sy);
+                            for c in 0..4 { acc[c] += t[c] as u64 * w; }
+                            total += w;
+                        }
+                    }
+                }
+                let total = total.max(1);
+                let a = (acc[0] + total / 2) / total;
+                out[y * side + x] = if a == 0 { 0 } else {
+                    let un = |v: u64| ((v * 255 + a * total / 2) / (a * total)).min(255) as u32;
+                    (a as u32) << 24 | un(acc[1]) << 16 | un(acc[2]) << 8 | un(acc[3])
+                };
+            }
+        }
+        true
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source { Mono, Symbols, Cjk, Emoji, Script(usize) }
