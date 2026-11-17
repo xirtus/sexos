@@ -22,6 +22,16 @@ class LeakGate(unittest.TestCase):
         after = dict(BASE, heap_blocks=80, free_frames=9900, row_pages=1)
         self.assertEqual(sorted(leaks(growth(BASE, after), TOL)), ['frames=100', 'heap_blocks=30', 'row_pages=1'])
 
+    def test_one_time_growth_is_not_a_leak(self):
+        grew = {'heap_bytes': 66496, 'heap_blocks': 2, 'frames': 0, 'row_pages': 0}
+        steps = [dict(grew), *[{k: 0 for k in grew} for _ in range(3)]]
+        self.assertEqual(leaks(grew, TOL, steps), [])
+
+    def test_growth_every_cycle_is_a_leak(self):
+        grew = {'heap_bytes': 80000, 'heap_blocks': 4, 'frames': 0, 'row_pages': 0}
+        steps = [{'heap_bytes': 20000, 'heap_blocks': 1, 'frames': 0, 'row_pages': 0}] * 4
+        self.assertEqual(leaks(grew, TOL, steps), ['heap_bytes=80000'])
+
     def test_sample_line_parses(self):
         line = '[swatch.sample] heap_used=1 heap_mapped=2 heap_blocks=3 heap_peak=4 free_frames=5 free_pages=6 rows=7 row_pages=8'
         self.assertEqual(dict(zip(FIELDS, map(int, SAMPLE.search(line).groups()))), dict(zip(FIELDS, range(1, 9))))

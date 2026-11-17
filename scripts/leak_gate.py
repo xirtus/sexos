@@ -5,8 +5,9 @@ restartable service, and the memory must come back.
 Memory is read by Swatch (`spawn swatch 1`, apps/hum/src/bin/swatch.rs): the kernel heap
 (bytes in use, live blocks), the machine's free frames, free program memory and the pages
 program rows still hold. For each program: --warm open/close cycles first (caches fill,
-the row is made once), a sample, --cycles more, another sample. A program leaks when the
-second sample is worse than the first by more than the tolerance. With --services (an ISO
+the row is made once), a sample, then --cycles more with a sample after each. A program
+leaks when memory lost over all cycles passes the tolerance and the loss shows in more than
+half the cycles (a table that grows once while warming up is not a leak). With --services (an ISO
 built with SEXOS_CRASH_PROBE=1) each restartable service is stopped as a fault would stop
 it, the same way. Every result goes to leak.json; the gate fails at the end with the list
 of leaks, so one run finds them all.
@@ -42,9 +43,18 @@ def growth(before, after):
     }
 
 
-def leaks(grew, tol):
-    """The measures over their tolerance, as 'measure=amount'."""
-    return [f'{k}={v}' for k, v in grew.items() if v > tol[k]]
+def leaks(grew, tol, steps=None):
+    """The measures over their tolerance, as 'measure=amount'. With `steps` (the growth
+    over each cycle), a measure also has to grow in more than half the cycles: a table
+    that doubles once while warming up is not a leak, memory lost every cycle is."""
+    bad = []
+    for k, v in grew.items():
+        if v <= tol[k]:
+            continue
+        if steps and 2 * sum(1 for g in steps if g[k] > 0) <= len(steps):
+            continue
+        bad.append(f'{k}={v}')
+    return bad
 
 
 def main():
@@ -127,13 +137,17 @@ def main():
     def measure(kind, name, step, n):
         for _ in range(a.warm):
             step()
-        before = sample(f'{name}:before')
-        for _ in range(n):
+        before = last = sample(f'{name}:before')
+        steps = []
+        for i in range(n):
             step()
-        after = sample(f'{name}:after')
+            now = sample(f'{name}:{i + 1}')
+            steps.append(growth(last, now))
+            last = now
+        after = last
         grew = growth(before, after)
-        bad = leaks(grew, tol)
-        record[kind][name] = {'before': before, 'after': after, 'growth': grew, 'leaks': bad}
+        bad = leaks(grew, tol, steps)
+        record[kind][name] = {'before': before, 'after': after, 'growth': grew, 'steps': steps, 'leaks': bad}
         out.write_text(json.dumps(record, indent=1))
         print(f'[leak] {kind[:-1]}={name} ' + ' '.join(f'{k}={v}' for k, v in grew.items()) +
               (' LEAK ' + ','.join(bad) if bad else ' ok'), flush=True)
