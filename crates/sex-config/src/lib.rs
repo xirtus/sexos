@@ -108,7 +108,14 @@ pub mod id {
     pub const OPEN_VIDEO: u16 = 21;
     pub const OPEN_AUDIO: u16 = 22;
     pub const OPEN_PAGE: u16 = 23;
+    pub const CORNER_TOP_LEFT: u16 = 24;
+    pub const CORNER_TOP_RIGHT: u16 = 25;
+    pub const CORNER_BOTTOM_LEFT: u16 = 26;
+    pub const CORNER_BOTTOM_RIGHT: u16 = 27;
 }
+
+/// What a hot corner does (the Shell's `hot_corners::ACTIONS`). Append-only.
+pub const CORNER_ACTIONS: &[&str] = &["none", "overview", "launcher", "notifications", "lock"];
 
 /// Programs that open each kind of file, the default first. Append-only.
 pub const PDF_PROGRAMS: &[&str] = &["vellum", "kaleidoscope"];
@@ -148,6 +155,10 @@ pub const KEYS: &[Key] = &[
     Key { id: id::ANIMATIONS, name: "appearance.animations", label: "Animations", kind: Kind::Bool, default: 1 },
     Key { id: id::WALLPAPER, name: "desktop.wallpaper", label: "Wallpaper", kind: Kind::Choice(WALLPAPERS), default: 0 },
     Key { id: id::NIGHT_LIGHT, name: "desktop.night_light", label: "Night light (0 off to 3 warmest)", kind: int(0, 3), default: 0 },
+    Key { id: id::CORNER_TOP_LEFT, name: "desktop.corner_top_left", label: "Top-left corner", kind: Kind::Choice(CORNER_ACTIONS), default: 1 },
+    Key { id: id::CORNER_TOP_RIGHT, name: "desktop.corner_top_right", label: "Top-right corner", kind: Kind::Choice(CORNER_ACTIONS), default: 0 },
+    Key { id: id::CORNER_BOTTOM_LEFT, name: "desktop.corner_bottom_left", label: "Bottom-left corner", kind: Kind::Choice(CORNER_ACTIONS), default: 0 },
+    Key { id: id::CORNER_BOTTOM_RIGHT, name: "desktop.corner_bottom_right", label: "Bottom-right corner", kind: Kind::Choice(CORNER_ACTIONS), default: 0 },
     Key { id: id::SCALE, name: "display.scale", label: "Scale (0 automatic)", kind: int(0, 3), default: 0 },
     Key { id: id::LAYOUT, name: "keyboard.layout", label: "Keyboard layout", kind: Kind::Choice(LAYOUTS), default: 0 },
     Key { id: id::REPEAT_DELAY, name: "keyboard.repeat_delay_ms", label: "Repeat delay (ms)", kind: int(150, 1000), default: 400 },
