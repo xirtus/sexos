@@ -17,7 +17,7 @@ for seed in "" 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16; do
   if python3 scripts/key_bytes.py target/x86_64-sex-app/release/splicy; then break; fi
   [[ "$seed" != "16" ]] || { echo "[FAIL] splicy binary has refused key bytes"; exit 1; }
 done
-size=$(stat -c %s target/x86_64-sex-app/release/splicy)
+size=$(stat -c %s target/x86_64-sex-app/release/splicy 2>/dev/null || stat -f %z target/x86_64-sex-app/release/splicy)
 echo "[splicy_host_gate] splicy is $size bytes"
 (( size < 32 * 1024 * 1024 )) || { echo "[FAIL] splicy is over the 32 MiB program limit"; exit 1; }
 

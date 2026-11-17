@@ -5592,7 +5592,7 @@ pub extern "C" fn _start() -> ! {
                     let before=sex_pdx::get_ticks();
                     sex_pdx::sys_wait_self_ticks(2).expect("BOOT_SELF_WAIT_AUTHORITY");
                     let after=sex_pdx::get_ticks();timed_waits=timed_waits.saturating_add(1);
-                    if timed_waits<=8||timed_waits.is_power_of_two(){sex_pdx::serial_record!("[sexnet.receive.wait] before={} after={} ticks=2 count={} kind=timer_assisted_poll irq=0 device={} reply_pending={}",before,after,timed_waits,(preparing||polling)as u8,reply_pending as u8);}
+                    if timed_waits<=32||timed_waits.is_power_of_two(){sex_pdx::serial_record!("[sexnet.receive.wait] before={} after={} ticks=2 count={} kind=timer_assisted_poll irq=0 device={} reply_pending={}",before,after,timed_waits,(preparing||polling)as u8,reply_pending as u8);}
                     continue;
                 },
             }

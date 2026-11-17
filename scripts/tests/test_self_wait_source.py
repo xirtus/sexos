@@ -46,6 +46,23 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
         self.assertEqual(set(result['source_contract']['source_sha256']),set(APPROVED_TIMED_WAIT_SOURCES))
         self.assertTrue(result['up_topology']['ok'])
 
+    def test_per_task_sample_joins_when_global_ordinal_is_unsampled(self):
+        # Other tasks' waits took the global samples; Net's own early records still log.
+        expiry='[scheduler.self_wait.expired] task=13 deadline=102 now=103 count=37 task_count=5\n'
+        late_return=RETURN.replace('count=2','count=20')
+        result=self.check(BASE+expiry+late_return)
+        self.assertTrue(result['ok'],result)
+        self.assertEqual(result['inferred_timer_user_joins'][0]['expiry_count'],37)
+        # An unsampled per-task ordinal, or a Net return past the first 32, is no proof.
+        for bad in (BASE+expiry.replace('task_count=5','task_count=33')+late_return,
+                    BASE+expiry+RETURN.replace('count=2','count=33')):
+            self.assertFalse(self.check(bad)['ok'])
+        # A task's own ordinals must increase; tasks past the BOOT slots carry 0.
+        repeated=BASE+'[scheduler.self_wait.park] task=13 ticks=2 deadline=100 count=5 task_count=5\n'+'[scheduler.self_wait.park] task=13 ticks=2 deadline=101 count=6 task_count=5\n'+expiry+late_return
+        self.assertIn('repeated/backward/unsampled per-task diagnostic ordinal',self.check(repeated)['errors'])
+        foreign=BASE+'[scheduler.self_wait.park] task=13 ticks=2 deadline=100 count=5 task_count=0\n'+expiry+late_return
+        self.assertFalse(self.check(foreign)['ok'])
+
     def test_original_observed_chain_does_not_need_source_or_up_inference(self):
         for topology in ('','[smp.online] cores=2 present=2\n'):
             result=inspect(OBSERVED.replace('[smp.online] cores=1 present=1\n',topology))
@@ -103,6 +120,23 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
         for bad in (role.replace('key=14','key=15'),role+role,''):
             self.assertFalse(self.check(bad+SAMPLED+denim)['ok'])
         self.assertFalse(self.check(role+SAMPLED+denim.replace('ticks=64','ticks=63'))['ok'])
+
+    def test_quil_autosave_wait_needs_its_reviewed_wait_and_role(self):
+        quil='[scheduler.self_wait.park] task=9 ticks=64 deadline=200 count=40 task_count=1\n[scheduler.self_wait.expired] task=9 deadline=200 now=200 count=41 task_count=1\n'
+        role='[kernel.spawn.quil] id=9 path=/servers/quil\n'
+        self.assertFalse(self.check(SAMPLED+quil)['ok'])
+        self.assertTrue(self.check(role+SAMPLED+quil)['ok'])
+        for bad in (role.replace('id=9','id=8'),role+role):
+            self.assertFalse(self.check(bad+SAMPLED+quil)['ok'])
+        self.assertFalse(self.check(role+SAMPLED+quil.replace('ticks=64','ticks=63'))['ok'])
+        self.assertFalse(self.check(SAMPLED+role+quil)['ok'])
+
+    def test_sex_pdx_module_list_is_outside_the_wait_fingerprint(self):
+        from check_self_wait import wait_fingerprint
+        name='crates/sex-pdx/src/lib.rs';data=(ROOT/name).read_bytes()
+        self.assertIn(wait_fingerprint(name,data),APPROVED_TIMED_WAIT_SOURCES[name])
+        self.assertIn(wait_fingerprint(name,data+b'\npub mod another_service;\n'),APPROVED_TIMED_WAIT_SOURCES[name])
+        self.assertNotIn(wait_fingerprint(name,data+b'\npub fn f()->u64{0}\n'),APPROVED_TIMED_WAIT_SOURCES[name])
 
     def test_quiet_usb_32_is_only_allowed_with_exact_reviewed_predicate(self):
         usb='[scheduler.self_wait.park] task=5 ticks=32 deadline=200 count=2\n'
