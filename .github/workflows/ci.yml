@@ -85,7 +85,7 @@ jobs:
     - name: egui backend (input mapping, CPU rasterizer, whole frames of the egui demo)
       run: cargo test --locked -p sex-egui
     - name: Weft toolkit and Abacus (layout, input, menus, palette, dialogs, tabs, accessibility)
-      run: cargo test --locked -p weft && cargo test --locked -p abacus --no-default-features
+      run: cargo test --locked -p weft --features color-emoji && cargo test --locked -p abacus --no-default-features
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Spreadeagle workbook engine and office painting (host)
@@ -94,8 +94,8 @@ jobs:
       run: cargo test --locked -p sex-disk --lib
     - name: Keyboard layouts, dead keys and Compose
       run: cargo test --locked -p sex-keymap
-    - name: Fallback fonts reach Cyrillic, Greek, CJK, emoji and symbols; bold and italic faces
-      run: cargo test --locked -p sex-font --test fallback --test styles
+    - name: Fonts (fallbacks, colour emoji, bold and italic, hinting, darkening, gamma), icon set and theme tokens
+      run: cargo test --locked -p sex-font -p sex-icons -p sex-theme && python3 scripts/brand/icons.py --check
     - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
       run: cargo test --locked -p sex-shape --features shaping
     - name: Shuttle userspace font fallback, RTL/BiDi shaping and font picker on the host

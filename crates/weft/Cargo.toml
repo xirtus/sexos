@@ -10,7 +10,9 @@ default = []
 # Glue to a SexOS program window (sex-app): events in, pixels out, Files' picker.
 sexos = ["dep:sex-app", "dep:sex-pdx"]
 # Noto fallback fonts (CJK, Arabic, Hebrew, Devanagari, Thai, symbols): about 5.5 MB.
-fallback-fonts = []
+fallback-fonts = ["color-emoji"]
+# Noto Color Emoji at 32 px (about 830 KB) for characters no outline font has.
+color-emoji = []
 
 [dependencies]
 # MIT. Flexbox, grid and block layout; no_std with alloc.

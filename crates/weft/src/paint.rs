@@ -209,7 +209,7 @@ impl<'a> Painter<'a> {
         let k = sex_font::gamma::contrast_for(ink);
         for (ch, a) in text.chars().zip(adv.iter()) {
             if pen > cx1 as f32 { break; }
-            if ch != ' ' && pen + a >= cx0 as f32 - px {
+            if ch != ' ' && !Fonts::invisible(ch) && pen + a >= cx0 as f32 - px {
                 let (whole, phase) = Fonts::phase_of(pen);
                 if let Some(g) = fonts.glyph_for(face, ch, px, phase, ink) {
                     let gx = whole + g.left;
@@ -226,6 +226,11 @@ impl<'a> Painter<'a> {
                             self.blend_text(i, c, *cover, k);
                         }
                     }
+                } else if let Some((side, img)) = fonts.emoji(ch, px) {
+                    // A colour emoji, its square sitting on the baseline a little below it.
+                    let img = img.to_vec();
+                    let top = base as f32 - side as f32 * 0.88;
+                    self.image_alpha(Rect::new(libm::roundf(pen) / s, libm::roundf(top) / s, side as f32 / s, side as f32 / s), side, side, &img);
                 } else {
                     // A box for a character no font has.
                     let h = px * 0.7;
