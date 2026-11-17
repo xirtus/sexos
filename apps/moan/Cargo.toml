@@ -11,6 +11,8 @@ taffy = { version = "0.15.1", default-features = false, features = ["alloc"] }
 moan-plugin = { path = "../../crates/moan-plugin" }
 moan-export = { path = "../../crates/moan-export" }
 moan-core = { path = "../../crates/moan-core" }
+moan-modular = { path = "../../crates/moan-modular" }
+moan-gen = { path = "../../crates/moan-gen" }
 serenade-core = { path = "../../crates/serenade-core" }
 weft = { path = "../../crates/weft" }
 sex-app = { path = "../../crates/sex-app", optional = true }

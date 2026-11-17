@@ -3,6 +3,7 @@
 extern crate alloc;
 use alloc::string::String;
 use weft::{widget::Id, Ui};
+#[allow(dead_code)]
 pub struct Snapshot {
     pub x: usize,
     pub y: usize,
