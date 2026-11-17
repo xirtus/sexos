@@ -13,9 +13,16 @@
 
 extern crate alloc;
 
+pub mod cache;
+pub mod compositor;
 pub mod media;
 pub mod view;
+pub mod vu;
 pub mod words;
+
+pub use cache::{CacheConfig, CachedFrame, FrameCache};
+pub use compositor::{composite_cpu, BlendMode, CompositeOutput, LayerInput, LayerTransform, QualityMode};
+pub use vu::{TrackMeter, VuStrip, VU_STRIP_H};
 
 use alloc::format;
 use alloc::string::String;
@@ -32,6 +39,13 @@ pub const LONG_PAUSE: Micros = SECOND;
 /// ...down to this.
 pub const KEEP_PAUSE: Micros = 300_000;
 
+/// Audition mode for `\`: hear the cut itself or hear what was removed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AuditionMode {
+    HearJoin,
+    HearRemoved,
+}
+
 pub struct Editor {
     pub history: History,
     pub transcript: Transcript,
@@ -42,6 +56,7 @@ pub struct Editor {
     pub anchor: Option<usize>,
     /// Which pending suggestion card has the focus.
     pub card: usize,
+    pub audition: AuditionMode,
 }
 
 impl Editor {
@@ -61,7 +76,15 @@ impl Editor {
         }
         let tl = tl.apply_all(&ops).unwrap_or(tl);
         transcript.media = media;
-        Editor { history: History::new(tl), transcript, suggestions: Suggestions::default(), caret: 0, anchor: None, card: 0 }
+        Editor {
+            history: History::new(tl),
+            transcript,
+            suggestions: Suggestions::default(),
+            caret: 0,
+            anchor: None,
+            card: 0,
+            audition: AuditionMode::HearJoin,
+        }
     }
 
     pub fn timeline(&self) -> &Timeline {
@@ -268,6 +291,29 @@ impl Editor {
         let at = self.caret_time().unwrap_or(0);
         let join = self.joins().into_iter().min_by_key(|j| (j - at).abs())?;
         Some(Range::new((join - JOIN_CONTEXT).max(0), (join + JOIN_CONTEXT).min(self.timeline().duration())))
+    }
+
+    /// Finds the nearest join on the video track where `w[0].media == w[1].media && w[0].source.end < w[1].source.start`
+    /// and returns `Some((w[0].media, Range::new(w[0].source.end, w[1].source.start)))`.
+    pub fn removed_at_nearest_join(&self) -> Option<(u32, Range)> {
+        let tl = self.timeline();
+        let track = tl.tracks.iter().find(|t| t.kind == TrackKind::Video)?;
+        let at = self.caret_time().unwrap_or(0);
+        let candidate = track
+            .clips
+            .windows(2)
+            .filter(|w| w[0].end() == w[1].at && w[0].media == w[1].media && w[0].source.end < w[1].source.start)
+            .min_by_key(|w| (w[1].at - at).abs())?;
+        Some((candidate[0].media, Range::new(candidate[0].source.end, candidate[1].source.start)))
+    }
+
+    /// Toggles audition mode between `HearJoin` and `HearRemoved`.
+    pub fn cycle_audition(&mut self) -> AuditionMode {
+        self.audition = match self.audition {
+            AuditionMode::HearJoin => AuditionMode::HearRemoved,
+            AuditionMode::HearRemoved => AuditionMode::HearJoin,
+        };
+        self.audition
     }
 
     /// How many suggestions were applied and skipped, for the status line.
