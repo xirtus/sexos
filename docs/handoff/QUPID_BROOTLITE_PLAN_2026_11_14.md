@@ -101,6 +101,13 @@ controls and media keys, and gives Music gapless playback.
   refused), an install plan through `<requires>`, MD5/SHA checksums and checked zip
   unpacking. Next, Q13b: Qupid adds a repository from its zip or URL, fetches and
   checks `addons.xml`, browses plugins, installs a plan into its addon folder.
+- **Q1b: sound for quiet rips and small speakers.** `sex_media::audio_dsp` (salvaged from
+  the closed #291): volume 50-300% with a click-free ramp and soft limiter, a three-band
+  EQ with presets (Projector, Dialogue, Cinema bass, Night), dialogue range compression,
+  and 5.1/7.1 downmix that lifts the centre channel. Qupid wires it to keys with Q2.
+  Stream lists and provider settings from #291 were not kept: Torznab and magnets are
+  `sex_torrent`'s (Q11b), Stremio streams come with Q9, and providers are only ever ones
+  the user adds at run time.
 - **Q9-Q12** as in the table, each after a short report where it is large (Q11).
 
 Order: Q2 and Q3 wait for #183 to merge (Play's main loop changes there) and for the
