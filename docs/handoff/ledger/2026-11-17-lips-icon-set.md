@@ -17,3 +17,8 @@
   `Icons::draw_file`, `Painter::image_alpha`); Files' thumbnail grid shows file and
   folder icons instead of kind words.
 - **Proof:** `cargo test -p sex-icons -p weft`; `cargo run -p sex-icons --example sheet`.
+- **SilkBar tray:** Display's network, volume and battery chips draw `sex_icons`
+  line icons (wifi / wifi-off, speaker / volume-low / volume / volume-off, battery
+  with a live fill, plug without a battery), anti-aliased over the bar's glass at
+  every scale (`servers/sexdisplay/src/tray_icons.rs`, fixed masks, no heap),
+  replacing the hand-placed pixel shapes. Ink is the dark theme's text `#f1eef4`.

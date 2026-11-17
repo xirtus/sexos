@@ -7574,6 +7574,7 @@ dependencies = [
  "sex-font",
  "sex-gpu-intel",
  "sex-graphics",
+ "sex-icons",
  "sex-pdx",
  "sex-rt",
  "sex-shape",
