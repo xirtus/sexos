@@ -4,6 +4,9 @@ pub mod font;
 pub mod qoi;
 pub mod png;
 pub mod png_encode;
+/// Theme tokens shared with Weft: draw chrome and text in `theme::Tokens` colours so
+/// every program follows Settings' theme and accent.
+pub use sex_theme as theme;
 pub mod window_shape;
 
 pub use font::draw_str;

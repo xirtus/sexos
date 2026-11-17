@@ -55,6 +55,12 @@ pub struct Fonts {
     cache: BTreeMap<Key, Glyph>,
     cached_bytes: usize,
     acc: Vec<i32>,
+    /// Colour emoji (Noto Color Emoji), for characters no outline font has.
+    #[cfg(feature = "color-emoji")]
+    emoji: Option<sex_font::fallback::ColorEmoji<'static>>,
+    /// Emoji drawn so far, by (scalar, side in pixels).
+    #[cfg_attr(not(feature = "color-emoji"), allow(dead_code))]
+    emoji_images: BTreeMap<(u32, u32), Vec<u32>>,
 }
 
 /// Glyph bitmaps kept before the cache starts over (a window of text at three sizes
@@ -77,7 +83,45 @@ impl Fonts {
             cache: BTreeMap::new(),
             cached_bytes: 0,
             acc: Vec::new(),
+            #[cfg(feature = "color-emoji")]
+            emoji: sex_font::fallback::ColorEmoji::embedded(),
+            emoji_images: BTreeMap::new(),
         }
+    }
+
+    /// True when `c` is drawn as a colour emoji (no outline font has it).
+    pub fn is_emoji(&self, face: Face, c: char) -> bool {
+        #[cfg(feature = "color-emoji")]
+        { self.resolve(face, c).is_none() && self.emoji.as_ref().is_some_and(|e| e.has(c as u32)) }
+        #[cfg(not(feature = "color-emoji"))]
+        { let _ = (face, c); false }
+    }
+
+    /// Characters that draw nothing and take no room: variation selectors, the
+    /// zero-width joiner and friends.
+    pub fn invisible(c: char) -> bool { matches!(c as u32, 0xFE00..=0xFE0F | 0x200B..=0x200D | 0x2060 | 0xFEFF) }
+
+    /// The side of an emoji square at `px` text size, in pixels.
+    pub fn emoji_side(px: f32) -> u32 { libm::roundf(px * 1.15).max(1.0) as u32 }
+
+    /// Colour emoji `c` as a square of non-premultiplied `0xAARRGGBB` pixels for text
+    /// at `px`, drawn on first use. `None` when it is not an emoji we have.
+    pub fn emoji(&mut self, c: char, px: f32) -> Option<(usize, &[u32])> {
+        let side = Self::emoji_side(px);
+        #[cfg(feature = "color-emoji")]
+        {
+            let key = (c as u32, side);
+            if !self.emoji_images.contains_key(&key) {
+                let e = self.emoji.as_ref()?;
+                let mut img = vec![0u32; (side * side) as usize];
+                if !e.draw(c as u32, side as usize, &mut img) { return None; }
+                if self.emoji_images.len() > 512 { self.emoji_images.clear(); }
+                self.emoji_images.insert(key, img);
+            }
+            self.emoji_images.get(&key).map(|v| (side as usize, v.as_slice()))
+        }
+        #[cfg(not(feature = "color-emoji"))]
+        { let _ = (c, side); None }
     }
 
     fn primary(&self, face: Face) -> &Font<'static> { &self.geist[face.id() as usize] }
@@ -132,7 +176,11 @@ impl Fonts {
         for c in text.chars() {
             let r = self.resolve(face, c);
             let mut adv = match r {
+                // Variation selectors and joiners take no room (emoji presentation is the default).
+                _ if Self::invisible(c) => 0,
                 Some((id, g)) => self.font(id).map_or(0, |f| f.advance_synthetic(g, s, Self::synth(id, face))),
+                // An emoji takes its square and a little room.
+                None if self.is_emoji(face, c) => ((Self::emoji_side(px) as f32 + px * 0.1) * 256.0) as i32,
                 // Missing glyphs take the width of a box.
                 None => (px * 0.6 * 256.0) as i32,
             };
@@ -254,6 +302,20 @@ fn split_keep(text: &str) -> impl Iterator<Item = (usize, &str)> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "color-emoji")]
+    #[test]
+    fn colour_emoji_take_a_square_and_selectors_take_nothing() {
+        let mut f = Fonts::new();
+        assert!(f.is_emoji(Face::Sans, '💋'));
+        assert!(!f.is_emoji(Face::Sans, 'a'));
+        let mut adv = Vec::new();
+        f.advances(Face::Sans, 20.0, "\u{2764}\u{FE0F}", &mut adv);
+        assert!(adv[0] >= 20.0 && adv[1] == 0.0, "{adv:?}");
+        let (side, img) = f.emoji('🔥', 20.0).unwrap();
+        assert_eq!(side, 23);
+        assert!(img.iter().any(|p| p >> 24 == 255 && (p >> 16) & 255 > 200));
+    }
+
     use super::*;
     #[test]
     fn measures_and_draws_geist() {
