@@ -15,7 +15,8 @@ jobs:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+      # Until #393 lands, master's Wi-Fi pack overflows boot.img; the bench needs no Wi-Fi.
+      run: sed -i 's#bash scripts/fetch_wifi_firmware.sh target/wifi-firmware#false#' scripts/sexos_build_trace.sh && ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
     - name: Blank program disk
       run: truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
     - name: Bench, 1 core, no PKU
