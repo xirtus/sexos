@@ -85,6 +85,8 @@ pub fn sys_yield(){}
 mod program_tenancy{pub fn read(_:u32,leaf:u64)->u64{unsafe{core::ptr::read_volatile(leaf as *const u64)}}pub fn restored(_:u32,_:u64,value:u64)->u64{value}pub fn boot_pages(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn adopt(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn release(_:u32){}pub fn arena(_:u32,_:u64,_:u64){}pub fn grant(_:u32,page:crate::app_resource_state::PrivatePage){unsafe{core::ptr::write_volatile(page.leaf as *mut u64,page.expected)}}}
 mod smp{pub fn shootdown_covers_all()->bool{crate::core_local::INITIALIZED_CORES.load(crate::Ordering::Acquire)==1}pub mod tlb{pub fn service(){}pub fn flush(va:u64){crate::x86_64::instructions::tlb::flush(crate::VirtAddr::new(va))}pub fn flush_pages(_:usize,pages:impl Iterator<Item=u64>){for va in pages{flush(va)}}}}
 mod program_frames{pub static FRAMES:crate::Mutex<Vec<u64>>=crate::Mutex::new(Vec::new());pub fn take()->Option<u64>{FRAMES.lock().pop()}pub fn give(frame:u64){FRAMES.lock().push(frame)}pub fn available()->u64{FRAMES.lock().len() as u64}}
+mod crash_log{pub fn fault(_:u32,_:u64,_:u64,_:u64,_:u64,_:&str){}}
+mod service_memory{pub fn present(_:u32)->u64{0}}
 pub static ALLOCATOR:HeapLock=HeapLock;pub struct HeapLock;impl HeapLock{pub fn lock(&self)->Heap{Heap}}pub struct Heap;impl Heap{pub fn used(&self)->usize{0}}
 mod boot_memory{
  pub type ImageCopy=Vec<u8>;
