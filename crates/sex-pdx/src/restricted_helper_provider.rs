@@ -312,7 +312,8 @@ impl Provider {
             self.abandon();
             return;
         }
-        let now = p.now();
+        // The clock is a syscall: read it only when a job or deadline waits on it.
+        let now = if self.deadline != 0 || self.committed.iter().any(Option::is_some) { p.now() } else { 0 };
         for job in &mut self.committed {
             if let Some(current) = job.filter(|job| now >= job.until) {
                 // Expired data rights are already false even if cleanup retries.
@@ -321,7 +322,7 @@ impl Provider {
                 }
             }
         }
-        if self.deadline != 0 && p.now() >= self.deadline {
+        if self.deadline != 0 && now >= self.deadline {
             self.abandon();
             return;
         }

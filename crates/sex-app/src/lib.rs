@@ -619,17 +619,20 @@ pub mod files {
 
     fn region() -> Result<&'static mut [u8], Error> {
         direct::restricted::region_ready()?;
-        let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?;
-        Ok(unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) })
+        let mut at = REGION_AT.load(Ordering::Relaxed);
+        if at == 0 {
+            at = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?.virtual_address;
+            REGION_AT.store(at, Ordering::Relaxed);
+        }
+        Ok(unsafe { core::slice::from_raw_parts_mut(at as *mut u8, w::REGION_BYTES) })
     }
     /// The region's address, asked once: it is this run's for the run's whole life.
     static REGION_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     /// What Files last said about `path`, if nothing has changed since: no call at all.
     fn cached(path: &[u8]) -> Option<direct::Stat> {
         direct::restricted::region_ready().ok()?;
-        let mut at = REGION_AT.load(Ordering::Relaxed);
-        if at == 0 { at = region().ok()?.as_ptr() as u64; REGION_AT.store(at, Ordering::Relaxed); }
-        let cache = unsafe { core::slice::from_raw_parts((at as usize + w::CACHE_AT) as *const u8, w::CACHE_BYTES) };
+        let at = region().ok()?.as_ptr() as usize;
+        let cache = unsafe { core::slice::from_raw_parts((at + w::CACHE_AT) as *const u8, w::CACHE_BYTES) };
         let (dir, size, modified, id) = w::stat_cache::read(cache, path)?;
         Some(direct::Stat { dir, size, modified, id })
     }
