@@ -16,7 +16,9 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',),
 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
 'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
-'kernel/src/scheduler.rs': ('0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',),
+'kernel/src/scheduler.rs': ('0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
+                             # per-task self-wait sampling (task_count), 2026-11-17
+                             '25c0bc835f30039f947f28bc79ed567e1c742e17ea3c9a8e0663b5f502c9d642',),
  'kernel/src/self_wait.rs': ('0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf',),
  'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
  'kernel/src/smp.rs': ('bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
@@ -32,7 +34,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  # Reviewed restricted-provider intake/polling; the exact Net2 envelope and
  # deadline owners are unchanged. See RESTRICTED_TIMER_SOURCE_REVIEW_2026_11_15.
  'servers/sexnet/src/main.rs': ('00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725',
-                              'd7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d', 'fcf8299b6ce8b8acdd0bc005507036087d5569664c08d63da001dc9e694c7253',),
+                              'd7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d', 'fcf8299b6ce8b8acdd0bc005507036087d5569664c08d63da001dc9e694c7253',
+                              # first 32 timed returns logged, 2026-11-17
+                              '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b',),
  'servers/sexusb/src/main.rs': ('3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81',
                                 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec')}
 
@@ -44,7 +48,9 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
 # c209 raw-master only; no speculative combined privacy/kernel cohort.
-APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb', 'e93d67e07151c4c0f5eed240e0f3a27f9abb58074e26f52934eb8c36963278f7')
+APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb', 'e93d67e07151c4c0f5eed240e0f3a27f9abb58074e26f52934eb8c36963278f7',
+    # per-task self-wait sampling, 2026-11-17
+    'a897c8b8c617cfef1ec3a7fad038f32f8530b232cf698f9ea896a89950d5a0ec')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -217,6 +223,31 @@ def _complete(text,match,suffix):
 def _sampled(count,initial):
     return count>0 and(count<=initial or count&(count-1)==0)
 
+
+# The kernel logs a park/expiry when its global ordinal is sampled (first four,
+# then powers of two) or, for BOOT task ids below 64, when the task's own ordinal
+# (task_count) is sampled (first SELF_WAIT_TASK_FIRST, then powers of two).
+# Net logs its first NET_RETURN_FIRST timed returns, then powers of two. Since
+# every Net expiry ends one Net timed wait, an early Net expiry and its return
+# are both logged however busy the other tasks are.
+SELF_WAIT_TASK_FIRST=32
+NET_RETURN_FIRST=32
+
+def _record_sampled(record):
+    own=record[5]
+    return _sampled(int(record[4]),4)or(own is not None and int(record[1])<64 and _sampled(int(own),SELF_WAIT_TASK_FIRST))
+
+
+def _task_ordinals_ok(records):
+    last={}
+    for record in records:
+        if record[5] is None:continue
+        task,own=int(record[1]),int(record[5])
+        if(own==0)!=(task>=64)or not _record_sampled(record):return False
+        if own and own<=last.get(task,0):return False
+        if own:last[task]=own
+    return True
+
 # The optional passive diagnostic observer never grants authority or causes a wake.
 # Only this actual reviewed Shell/API/kernel cohort is admitted; future merge
 # combinations need independent review and an exact new fingerprint.
@@ -286,7 +317,7 @@ def passive_observer_joins(text,root,core,topology,identity,seals,expiries):
             if before<old_before+250 or before<old_after or counter<old_counter:return fail('observer clock/counter reset or throttle violation')
         previous=(seq,before,after,counter)
     for expiry in expiries:
-        if int(expiry[1])!=13 or not _complete(text,expiry,r'\r?\n')or not _sampled(int(expiry[4]),4):continue
+        if int(expiry[1])!=13 or not _complete(text,expiry,r'\r?\n')or not _record_sampled(expiry):continue
         if not(handoff[0].start()<expiry.start()and topology['receipt_offset']<expiry.start()and 2<=int(expiry[2])<=int(expiry[3])):continue
         for first,second in zip(samples,samples[1:]):
             aseq,abefore,aafter,acount=map(int,first.groups());bseq,bbefore,bafter,bcount=map(int,second.groups())
@@ -322,8 +353,8 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  markers=list(re.finditer(re.escape('[boot.self_wait.sealed'),text))
  seals=list(re.finditer(r'^\[boot.self_wait.sealed\] tasks=([1-9][0-9]?) capacity='+str(EXPECTED_BOOT_MAIN_CAPACITY)+r' max_ticks=64 runtime_registration=0\r?\n',text,re.M))
  authority=list(re.finditer(r'\[sexnet.wait.authority\] invalid_intervals=3 spare_arguments=4 ok=1',text))
- parks=list(re.finditer(r'\[scheduler.self_wait.park\] task=(\d+) ticks=(\d+) deadline=(\d+) count=(\d+)',text))
- expiries=list(re.finditer(r'\[scheduler.self_wait.expired\] task=(\d+) deadline=(\d+) now=(\d+) count=(\d+)',text))
+ parks=list(re.finditer(r'\[scheduler.self_wait.park\] task=(\d+) ticks=(\d+) deadline=(\d+) count=(\d+)(?: task_count=(\d+))?',text))
+ expiries=list(re.finditer(r'\[scheduler.self_wait.expired\] task=(\d+) deadline=(\d+) now=(\d+) count=(\d+)(?: task_count=(\d+))?',text))
  returns=list(re.finditer(r'\[sexnet.receive.wait\] before=(\d+) after=(\d+) ticks=2 count=(\d+) kind=timer_assisted_poll irq=0',text))
  valid_seal=len(markers)==len(seals)==1 and 1<=int(seals[0][1])<=EXPECTED_BOOT_MAIN_CAPACITY
  acpi=_acpi_wait_profile(text,source_root,source,seals)
@@ -352,6 +383,8 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  for group,index in [(parks,4),(expiries,4),(returns,3)]:
   counts=[int(x[index])for x in group]
   if any(n<=0 for n in counts)or any(a>=b for a,b in zip(counts,counts[1:])):errors.append('repeated/backward diagnostic ordinal')
+ for group in (parks,expiries):
+  if not _task_ordinals_ok(group):errors.append('repeated/backward/unsampled per-task diagnostic ordinal')
  joined=[]
  for e in expiries:
   if int(e[1])!=13:continue
@@ -367,10 +400,10 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
  if active and not observed and source_ok and topology['ok'] and net_identity['ok'] and valid_seal and net_identity['receipt_offset']<seals[0].start():
   candidates=[]
   for e in expiries:
-   if int(e[1])!=13 or not _complete(text,e,r'\r?\n') or not _sampled(int(e[4]),4):continue
+   if int(e[1])!=13 or not _complete(text,e,r'\r?\n') or not _record_sampled(e):continue
    matches=[r for r in returns if r.start()>e.start() and topology['receipt_offset']<e.start()
             and _complete(text,r,r' device=[01] reply_pending=[01]\r?\n')
-            and _sampled(int(r[3]),8) and int(r[1])<=int(e[2])-2<=int(e[3])<=int(r[2])]
+            and _sampled(int(r[3]),NET_RETURN_FIRST) and int(r[1])<=int(e[2])-2<=int(e[3])<=int(r[2])]
    if len(matches)>1:errors.append('ambiguous source-bound Net return envelopes')
    if len(matches)==1:candidates.append((e,matches[0]))
   for e,r in candidates:

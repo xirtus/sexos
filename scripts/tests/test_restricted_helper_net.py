@@ -54,7 +54,7 @@ impl Service {
         self.assertIn('if restricted::denied(pd)||pdx_reply(pd,word)==0', source)
         # Existing bounded wait is retained; this hook adds no wait implementation.
         self.assertIn('sex_pdx::sys_wait_self_ticks(2).expect("BOOT_SELF_WAIT_AUTHORITY")', source)
-        self.assertIn('if timed_waits<=8||timed_waits.is_power_of_two()', source)
+        self.assertIn('if timed_waits<=32||timed_waits.is_power_of_two()', source)
 
 
 if __name__ == '__main__':

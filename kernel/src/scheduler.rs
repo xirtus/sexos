@@ -50,6 +50,16 @@ pub mod self_wait;
 static SELF_WAIT_TASKS:self_wait::BootInventory<Task,{self_wait::BOOT_MAIN_CAPACITY}>=self_wait::BootInventory::new();
 static TIMED_PARKS:AtomicU64=AtomicU64::new(0);
 static TIMER_WAKES:AtomicU64=AtomicU64::new(0);
+// Per-task sampling: each BOOT task (id < 64) logs its first SELF_WAIT_TASK_FIRST
+// parks and expiries, then its powers of two, besides the global samples. A busy
+// neighbour can no longer crowd one task's records out of the log.
+const SELF_WAIT_TASK_FIRST:u32=32;
+static TASK_PARKS:[AtomicU32;64]=[const{AtomicU32::new(0)};64];
+static TASK_WAKES:[AtomicU32;64]=[const{AtomicU32::new(0)};64];
+fn self_wait_sample(global:u64,per_task:&[AtomicU32;64],task:u32)->(bool,u32){
+    let own=match per_task.get(task as usize){Some(slot)=>slot.fetch_add(1,Ordering::Relaxed).saturating_add(1),None=>0};
+    (global<=4||global.is_power_of_two()||(own!=0&&(own<=SELF_WAIT_TASK_FIRST||own.is_power_of_two())),own)
+}
 pub use task_exit::{register_paging_exit_watch, validate_dead_target, acknowledge_dead_cleanup, poll_paging_exit_notifications};
 use task_ownership::{Admission, ParkResult, TaskOwnership, WakeResult};
 
@@ -951,7 +961,8 @@ pub unsafe fn wait_for_message_ticks(regs_ptr:*const crate::interrupts::SyscallR
         ParkResult::Blocked=>{
             (*task).resume_observation_pending.store(true,Ordering::Release);
             let n=TIMED_PARKS.fetch_add(1,Ordering::Relaxed)+1;
-            if n<=4||n.is_power_of_two(){serial_println!("[scheduler.self_wait.park] task={} ticks={} deadline={} count={}",(*task).id,ticks,deadline,n);}
+            let (log,own)=self_wait_sample(n,&TASK_PARKS,(*task).id);
+            if log{serial_println!("[scheduler.self_wait.park] task={} ticks={} deadline={} count={} task_count={}",(*task).id,ticks,deadline,n,own);}
             yield_and_switch(regs_ptr)
         },
         ParkResult::Exited=>{(*task).wait_deadline.cancel();yield_and_switch(regs_ptr)},
@@ -965,7 +976,8 @@ pub fn poll_self_wait_deadlines(now:u64){
     SELF_WAIT_TASKS.visit(|task|unsafe{
         if let Some(deadline)=(*task).wait_deadline.take_due(now){
             let n=TIMER_WAKES.fetch_add(1,Ordering::Relaxed)+1;
-            if n<=4||n.is_power_of_two(){serial_println!("[scheduler.self_wait.expired] task={} deadline={} now={} count={}",(*task).id,deadline,now,n);}
+            let (log,own)=self_wait_sample(n,&TASK_WAKES,(*task).id);
+            if log{serial_println!("[scheduler.self_wait.expired] task={} deadline={} now={} count={} task_count={}",(*task).id,deadline,now,n,own);}
             // take_due already retired this deadline. Do not cancel a later
             // arm if another lane has meanwhile resumed and waited again.
             wake_owned_thread(task);
