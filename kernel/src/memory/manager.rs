@@ -105,6 +105,7 @@ impl GlobalVas {
                 pku::tag_virtual_address(page.start_address().as_u64(), pkey);
             }
         }
+        crate::views::mapped(va.as_u64(), size);
         Ok(())
     }
 
@@ -122,6 +123,7 @@ impl GlobalVas {
             }
             phys += 4096;
         }
+        crate::views::mapped(va.as_u64(), size);
         Ok(())
     }
 }

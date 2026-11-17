@@ -28,8 +28,8 @@
   when PCID is on, shared rows seen on two or more cores) and
   `program_isolation_probe.py` with `SEXOS_PROGRAM_ISOLATION_PROBE=4` and PKU off (row 45
   reads row 44's image while 44 is live; only 45 dies).
-- **Kernel growth:** +191 non-blank lines (views 176, rules 67; tenancy -42).
-- **Known limit:** private table copies follow canonical changes made by
-  `boot_memory::arena_leaf` at once and anything else at the next program start
-  (`views::resync`). A `GLOBAL_VAS` mapping made at run time is invisible inside a row's
-  view until then; WS2 can call `views::resync` from `memory::manager` to close this.
+- **Kernel growth:** +221 non-blank lines (views, rules, two `views::mapped` calls in memory::manager; tenancy -42).
+- **Run-time mappings:** private copies follow canonical changes from
+  `boot_memory::arena_leaf` (`views::mirror`) and from `GLOBAL_VAS` `map_*` calls
+  (`views::mapped`, only the entries the mapping reaches), and `views::resync` runs at each
+  program start as a backstop.

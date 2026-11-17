@@ -61,7 +61,7 @@ fn a_view_opens_only_its_spans_and_shares_page_tables() {
     let root = canonical(&mut m, &[A, B, C]);
     let view = m.copy(root).unwrap();
     let mut made = Vec::new();
-    assert_eq!(open(&mut m, root, view, A + 0x1234, &mut |c, p| made.push((c, p))), Ok(true));
+    assert_eq!(open(&mut m, root, view, A + 0x1234, &mut |_, c, p| made.push((c, p))), Ok(true));
     assert_eq!(made.len(), 2, "a PDPT and a page directory are copied");
     assert!(user(&m, view, A));
     assert!(!user(&m, view, B) && !user(&m, view, C), "other spans stay closed");
@@ -74,9 +74,9 @@ fn a_second_span_under_the_same_directory_copies_nothing() {
     let mut m = Memory::default();
     let root = canonical(&mut m, &[A, B]);
     let view = m.copy(root).unwrap();
-    open(&mut m, root, view, A, &mut |_, _| {}).unwrap();
+    open(&mut m, root, view, A, &mut |_, _, _| {}).unwrap();
     let mut made = 0;
-    open(&mut m, root, view, B, &mut |_, _| made += 1).unwrap();
+    open(&mut m, root, view, B, &mut |_, _, _| made += 1).unwrap();
     assert_eq!(made, 0);
     assert!(user(&m, view, A) && user(&m, view, B));
 }
@@ -86,9 +86,9 @@ fn two_views_never_see_each_others_spans() {
     let mut m = Memory::default();
     let root = canonical(&mut m, &[A, B, C]);
     let (one, two) = (m.copy(root).unwrap(), m.copy(root).unwrap());
-    open(&mut m, root, one, A, &mut |_, _| {}).unwrap();
-    open(&mut m, root, two, B, &mut |_, _| {}).unwrap();
-    open(&mut m, root, two, C, &mut |_, _| {}).unwrap();
+    open(&mut m, root, one, A, &mut |_, _, _| {}).unwrap();
+    open(&mut m, root, two, B, &mut |_, _, _| {}).unwrap();
+    open(&mut m, root, two, C, &mut |_, _, _| {}).unwrap();
     assert!(user(&m, one, A) && !user(&m, one, B) && !user(&m, one, C));
     assert!(!user(&m, two, A) && user(&m, two, B) && user(&m, two, C));
 }
@@ -105,11 +105,11 @@ fn a_view_older_than_a_new_root_slot_still_opens_it() {
     let pt = m.table();
     m.write(t, index(late, 1), pt | CLOSED);
     m.write(view, index(late, 3), 0);
-    assert_eq!(open(&mut m, root, view, late, &mut |_, _| {}), Ok(true));
+    assert_eq!(open(&mut m, root, view, late, &mut |_, _, _| {}), Ok(true));
     assert!(user(&m, view, late));
     let fresh = canonical(&mut m, &[]);
     let fresh_view = m.copy(fresh).unwrap();
-    assert_eq!(open(&mut m, fresh, fresh_view, A, &mut |_, _| {}), Err(()), "an unmapped span cannot open");
+    assert_eq!(open(&mut m, fresh, fresh_view, A, &mut |_, _, _| {}), Err(()), "an unmapped span cannot open");
 }
 
 #[test]
@@ -126,7 +126,7 @@ fn mirror_after_a_new_table_reaches_the_view() {
     let root = canonical(&mut m, &[A]);
     let view = m.copy(root).unwrap();
     let mut copies = vec![(root, view)];
-    open(&mut m, root, view, A, &mut |c, p| copies.push((c, p))).unwrap();
+    open(&mut m, root, view, A, &mut |_, c, p| copies.push((c, p))).unwrap();
     // Canonical gains a page table for B under the directory the view copied.
     let pt = m.table();
     let mut dir = root;
@@ -149,4 +149,13 @@ fn cr3_values_and_stale_marks() {
     let stale = stale_after_invalidate(2);
     assert_eq!(stale & (1 << 2), 0, "the current view was invalidated in place");
     assert_eq!(stale & 0b1011, 0b1011);
+}
+
+#[test]
+fn reaching_names_only_the_entries_a_mapping_touches() {
+    assert_eq!(reaching(1, A, A, A + 1), index(A, 1)..index(A, 1) + 1);
+    assert_eq!(reaching(1, A, A, A + SPAN + 1), index(A, 1)..index(A, 1) + 2);
+    assert_eq!(reaching(1, A, C, C + 1), 0..0, "another directory's range");
+    assert_eq!(reaching(3, 0, C, C + 4096), index(C, 3)..index(C, 3) + 1);
+    assert_eq!(reaching(2, A, A - 1, A + 1), 0..1, "clipped at the table's start");
 }

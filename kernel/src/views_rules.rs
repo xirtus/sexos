@@ -25,9 +25,10 @@ pub trait Tables {
 pub fn index(va: u64, level: u32) -> usize { ((va >> (12 + 9 * level)) & 511) as usize }
 
 /// Gives the view rooted at `root` its own tables down to `va`'s span and opens the span
-/// there. `made(canonical, private)` hears each table copied. Ok(true) when the view held
+/// there. `made(level, canonical, private)` hears each table copied (2: a PDPT, 1: a
+/// page directory). Ok(true) when the view held
 /// the span closed before, so cores may still cache the closed entry and must flush.
-pub fn open<T: Tables>(t: &mut T, canonical: u64, root: u64, va: u64, made: &mut dyn FnMut(u64, u64)) -> Result<bool, ()> {
+pub fn open<T: Tables>(t: &mut T, canonical: u64, root: u64, va: u64, made: &mut dyn FnMut(u32, u64, u64)) -> Result<bool, ()> {
     let (mut c, mut v) = (canonical, root);
     for level in [3, 2] {
         let i = index(va, level);
@@ -38,7 +39,7 @@ pub fn open<T: Tables>(t: &mut T, canonical: u64, root: u64, va: u64, made: &mut
         v = if ve & PRESENT == 0 || ve & FRAME == next {
             let copy = t.copy(next).ok_or(())?;
             t.write(v, i, copy | (ce & !FRAME));
-            made(next, copy);
+            made(level - 1, next, copy);
             copy
         } else { ve & FRAME };
         c = next;
@@ -70,3 +71,15 @@ pub fn cr3(root: u64, view: usize, pcid: bool, stale: bool) -> u64 {
 /// Views a core must flush on their next entry after an invalidation ran under `current`:
 /// INVLPG and a CR3 reload reach the current PCID only.
 pub fn stale_after_invalidate(current: usize) -> u64 { !(1u64 << current) }
+
+/// The entries of a table at `level` (3 root, 2 PDPT, 1 directory) covering `base` that
+/// reach into [start, end).
+pub fn reaching(level: u32, base: u64, start: u64, end: u64) -> core::ops::Range<usize> {
+    let size = 1u64 << (12 + 9 * level);
+    let span = size * 512;
+    let base = base & !(span - 1);
+    if end <= base || start >= base.wrapping_add(span) { return 0..0; }
+    let first = (start.max(base) - base) / size;
+    let last = (end.min(base.wrapping_add(span)) - base).div_ceil(size);
+    first as usize..last as usize
+}

@@ -22,7 +22,8 @@ const _: () = assert!(COUNT <= 64);
 const CORES: usize = 256;
 const WRITABLE: u64 = 1 << 1;
 
-struct View { copies: Vec<(u64, u64)>, spans: Vec<u64> }
+/// `copies`: (canonical, private, level, an address the table covers).
+struct View { copies: Vec<(u64, u64, u32, u64)>, spans: Vec<u64> }
 static VIEWS: Mutex<[View; COUNT]> = Mutex::new([const { View { copies: Vec::new(), spans: Vec::new() } }; COUNT]);
 static ROOT: [AtomicU64; COUNT] = [const { AtomicU64::new(0) }; COUNT];
 static PCID: AtomicBool = AtomicBool::new(false);
@@ -70,7 +71,7 @@ pub fn init() {
     }
     for (v, slot) in ROOT.iter().enumerate().skip(1) {
         slot.store(t.copy(root).expect("VIEWS_ROOT_COPY"), Ordering::Release);
-        VIEWS.lock()[v].copies.push((root, slot.load(Ordering::Relaxed)));
+        VIEWS.lock()[v].copies.push((root, slot.load(Ordering::Relaxed), 3, 0));
     }
     ROOT[0].store(root, Ordering::Release);
     let pcid = core::arch::x86_64::__cpuid(1).ecx & (1 << 17) != 0;
@@ -85,7 +86,7 @@ pub fn open(view: usize, va: u64) {
     let mut views = VIEWS.lock();
     let entry = &mut views[view];
     let mut made = Vec::new();
-    let closed = rules::open(&mut hw(), root_table(), ROOT[view].load(Ordering::Acquire), span, &mut |c, p| made.push((c, p))).expect("VIEWS_SPAN_UNMAPPED");
+    let closed = rules::open(&mut hw(), root_table(), ROOT[view].load(Ordering::Acquire), span, &mut |level, c, p| made.push((c, p, level, span))).expect("VIEWS_SPAN_UNMAPPED");
     entry.copies.extend(made);
     if let Err(i) = entry.spans.binary_search(&span) { entry.spans.insert(i, span); }
     drop(views);
@@ -103,7 +104,7 @@ pub fn close(owner: usize, va: u64) {
     t.write(table, i, before & !USER);
     let views = VIEWS.lock();
     for (_, view) in views.iter().enumerate().filter(|(v, _)| *v != owner) {
-        for &(_, private) in view.copies.iter().filter(|(c, _)| *c == table) {
+        for &(_, private, _, _) in view.copies.iter().filter(|copy| copy.0 == table) {
             let e = t.read(private, i);
             t.write(private, i, e & !USER);
         }
@@ -120,9 +121,25 @@ pub fn mirror(table: u64, index: usize) {
     let mut t = hw();
     let c = t.read(table, index);
     for view in VIEWS.lock().iter() {
-        for &(_, private) in view.copies.iter().filter(|(canonical, _)| *canonical == table) {
+        for &(_, private, _, _) in view.copies.iter().filter(|copy| copy.0 == table) {
             let p = t.read(private, index);
             t.write(private, index, rules::merged(c, p));
+        }
+    }
+}
+
+/// A mapping was made in the canonical tables over [va, va + bytes) (`memory::manager`):
+/// private tables above it take any table it created.
+pub fn mapped(va: u64, bytes: u64) {
+    if ROOT[0].load(Ordering::Acquire) == 0 { return; }
+    let mut t = hw();
+    let end = va.saturating_add(bytes);
+    for view in VIEWS.lock().iter() {
+        for &(canonical, private, level, base) in &view.copies {
+            for i in rules::reaching(level, base, va, end) {
+                let p = t.read(private, i);
+                t.write(private, i, rules::merged(t.read(canonical, i), p));
+            }
         }
     }
 }
@@ -131,7 +148,7 @@ pub fn mirror(table: u64, index: usize) {
 pub fn resync() {
     let mut t = hw();
     for view in VIEWS.lock().iter() {
-        for &(canonical, private) in &view.copies {
+        for &(canonical, private, _, _) in &view.copies {
             for i in 0..512 { let p = t.read(private, i); t.write(private, i, rules::merged(t.read(canonical, i), p)); }
         }
     }
