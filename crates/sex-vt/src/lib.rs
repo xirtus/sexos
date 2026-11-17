@@ -26,6 +26,7 @@ pub mod copy_mode;
 pub mod hints;
 mod osc;
 mod search;
+mod replay;
 
 pub use osc::{CommandMark, Event, Progress};
 pub use search::{Highlight, Match};

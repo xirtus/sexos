@@ -123,3 +123,36 @@ fn env_block_reads_in_pieces() {
     assert_eq!(entries.count(), 0);
     assert_eq!(split_env_block(b"").0, b"");
 }
+#[test]
+fn a_yarn_ring_keeps_the_newest_bytes() {
+    let mut r: Ring<8> = Ring::new();
+    r.push_over(b"abcde");
+    r.push_over(b"fghij");
+    let mut out = [0u8; 8];
+    assert_eq!(r.pop(&mut out), 8);
+    assert_eq!(&out, b"cdefghij");
+    // More than the ring holds at once: only its tail.
+    r.push_over(b"0123456789AB");
+    assert_eq!(r.pop(&mut out), 8);
+    assert_eq!(&out, b"456789AB");
+    // Room left: nothing dropped, and it wraps.
+    r.push(b"xyz");
+    r.pop(&mut out[..2]);
+    r.push_over(b"1234567");
+    assert_eq!(r.len(), 8);
+    assert_eq!(r.pop(&mut out), 8);
+    assert_eq!(&out, b"z1234567");
+}
+#[test]
+fn detach_words_and_yarn_records() {
+    assert_eq!(split_detach(detach_word(20_000, 12)), Some((20_000, 12)));
+    assert_eq!(split_detach(detach_word(0, LABEL_BYTES + 1)), None);
+    let mut label = [0u8; LABEL_BYTES];
+    label[..14].copy_from_slice(b"stdhello count");
+    let y = Yarn { name: 7, state: RUNNING, code: 0, target: 40, label, label_len: 14 };
+    let mut out = [0u8; YARN_BYTES];
+    y.encode(&mut out);
+    assert_eq!(Yarn::decode(&out), Some(y));
+    assert_eq!(y.label(), b"stdhello count");
+    assert_eq!(Yarn::decode(&out[..YARN_BYTES - 1]), None);
+}

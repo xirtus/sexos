@@ -18,6 +18,9 @@
   its `ioctl(TIOCGWINSZ)` is Term's size.
 * Lua 5.4 (`lua -e`, then its interactive prompt until Ctrl+D) and CPython (`python -c`).
 * Two panes each run a program of their own at once.
+* Yarn: `stdhello count` goes on printing after its window closes (F11); in a new
+  window `attach N` shows it again with nothing lost in between. `cmd &` starts a
+  background job (a yarn from the start), `fg N` brings it in, `kill N` ends one.
 * A Term started with plain `run spindle` holds no relay grant: Files refuses its
   relay ticket (DENIED) and Term reports the refusal."""
 import argparse,hashlib,json,os,re,shutil,time
@@ -30,7 +33,7 @@ from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 KEYS={' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal',',':'comma',';':'semicolon'}
-SHIFTED={'(':'9',')':'0','*':'8','+':'equal'}
+SHIFTED={'(':'9',')':'0','*':'8','+':'equal','&':'7'}
 def denial_sources(root):
  """Bind this legacy relay denial to the reviewed exact-run ticket route.
 
@@ -242,6 +245,39 @@ def main():
   assert '[std.interrupted]' not in t()[s:],'the waiting pane was disturbed'
   chord('ctrl','shift','right');time.sleep(.5);r=len(t());chord('ctrl','c');ran('stdhello',130,r)
   q.cmd('screendump',{'filename':str(a.out/'term-native-two-panes.ppm')})
+  # Yarn: closing the window leaves a program running; `attach` in a new window shows it
+  # again, with what it wrote in between.
+  term_line('clear');s=len(t());term_line('stdhello count')
+  g['wait'](r'\[std\.out\] count 20\n',s,240)
+  r=len(t());q.key('f11')
+  m=g['wait'](r'\[term\.yarn\.detached\] name=stdhello yarn=(\d+) bytes=(\d+)\n',r,60);yarn=m[1];assert int(m[2])>0,m[0]
+  g['wait'](rf'\[files\.yarn\.detached\] terminal_row=\d+ slot=\d+ yarn={yarn} dump=[1-9]\d*\n',r,60)
+  g['wait'](r'\[term\.closed\] how=window',r,60)
+  g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',r,120)
+  gone=len(t());first=int(g['wait'](r'\[std\.out\] count (\d+)\n',gone,60)[1]);time.sleep(3)
+  last=int(re.findall(r'\[std\.out\] count (\d+)\n',t()[gone:])[-1]);assert last>first+20,('no output without a window',first,last)
+  target,task,_=start('spindle')
+  s=len(t());term_line('jobs');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,60)
+  s=len(t());term_line('attach '+yarn)
+  g['wait'](rf'\[files\.yarn\.adopted\] terminal_row=\d+ slot=\d+ yarn={yarn}\n',s,60)
+  g['wait'](rf'\[term\.yarn\.attached\] name=stdhello yarn={yarn} state=2\n',s,60);time.sleep(2)
+  chord('ctrl','c');ran('stdhello',130,s)
+  screen=snapshot();nums=[int(n)for n in re.findall(r'^count (\d+)$',screen,re.M)]
+  assert nums and max(nums)>last and nums==list(range(nums[0],nums[0]+len(nums))),('the attached output has gaps',last,nums)
+  q.cmd('screendump',{'filename':str(a.out/'term-native-yarn-attached.ppm')})
+  # A background job: `&`, then `fg` brings it here until Ctrl+C.
+  term_line('clear');s=len(t());term_line('stdhello count &')
+  bg=g['wait'](r'\[term\.yarn\.background\] name=stdhello yarn=(\d+)\n',s,60)[1]
+  g['wait'](rf'\[files\.yarn\.started\] yarn={bg} ',s,240);g['wait'](r'\[std\.out\] count 20\n',s,240)
+  s=len(t());term_line('fg '+bg);g['wait'](rf'\[term\.shell\.fg\] job={bg} capture=0\n',s,60)
+  g['wait'](rf'\[term\.yarn\.attached\] name=stdhello yarn={bg} ',s,60);time.sleep(1)
+  chord('ctrl','c');ran('stdhello',130,s)
+  # `kill` ends a background job waiting for input.
+  term_line('clear');s=len(t());term_line('stdhello wait &')
+  w=g['wait'](r'\[term\.yarn\.background\] name=stdhello yarn=(\d+)\n',s,60)[1]
+  g['wait'](r'\[std\.out\] \[stdhello\.wait\] reading\n',s,240);time.sleep(1)
+  s=len(t());term_line('kill '+w);g['wait'](rf'\[files\.yarn\.stop\] yarn={w} state=2\n',s,60)
+  g['wait'](r'\[std\.interrupted\] ',s,60)
   s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   # Without the grant, Files refuses.
   target,task,_=start('run spindle')

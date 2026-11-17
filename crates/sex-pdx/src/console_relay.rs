@@ -68,6 +68,59 @@ pub const POLL: u64 = 11;
 /// the runs of that slot.
 pub const SET_SIZE: u64 = 12;
 
+/// Terminal: the run in `slot` goes on without it, as a yarn (a session no window shows)
+/// that a terminal may ADOPT later, the same window or another. `length` is
+/// [`detach_word`]: the data area holds the yarn's label (its command line), then what
+/// the terminal's screen showed, as bytes for a screen (sex-vt's `Screen::replay`),
+/// which the adopting terminal is given first, then everything the run wrote since. The
+/// value is the yarn's name, never 0. `NOT_FOUND` when nothing runs in the slot,
+/// `UNAVAILABLE` when every yarn is taken. A yarn's output ring drops its oldest bytes
+/// when full, so the run never waits for a window.
+pub const DETACH: u64 = 19;
+/// Terminal: yarn `length` becomes the run in `slot`, which must not hold one
+/// (`PENDING`); `NOT_FOUND` for no such yarn. TAKE then gives what it wrote.
+pub const ADOPT: u64 = 20;
+/// Terminal: the yarns into the data area, [`YARN_BYTES`] each ([`Yarn`]); the value
+/// counts them.
+pub const YARNS: u64 = 21;
+/// Terminal: yarn `length` is stopped as Ctrl+C and Ctrl+D would; one that ended is
+/// forgotten. The value is its target, for Shell's stop of a run that ignores both.
+pub const YARN_STOP: u64 = 22;
+/// A yarn's label: its command line, cut to this.
+pub const LABEL_BYTES: usize = 48;
+pub const YARN_BYTES: usize = 16 + LABEL_BYTES;
+/// DETACH's `length`: the dump's bytes, and the label's above them.
+pub const fn detach_word(dump: usize, label: usize) -> u64 { dump as u64 & 0xFFFF_FFFF | (label as u64) << 32 }
+/// The dump's and the label's length of DETACH's `length`; None for a label past [`LABEL_BYTES`].
+pub const fn split_detach(word: u64) -> Option<(usize, usize)> {
+    let label = (word >> 32) as usize;
+    if label > LABEL_BYTES { return None; }
+    Some((word as u32 as usize, label))
+}
+/// One yarn, as YARNS lists it: its name, state and code (as [`Status`]), its target,
+/// and its label. Bytes 0..4 name, 4 state, 5 label length, 8..12 code, 12..16 target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Yarn { pub name: u32, pub state: u8, pub code: u32, pub target: u32, pub label: [u8; LABEL_BYTES], pub label_len: u8 }
+impl Yarn {
+    pub fn label(&self) -> &[u8] { &self.label[..(self.label_len as usize).min(LABEL_BYTES)] }
+    pub fn encode(&self, out: &mut [u8]) {
+        out[..YARN_BYTES].fill(0);
+        out[0..4].copy_from_slice(&self.name.to_le_bytes());
+        out[4] = self.state;
+        out[5] = self.label_len.min(LABEL_BYTES as u8);
+        out[8..12].copy_from_slice(&self.code.to_le_bytes());
+        out[12..16].copy_from_slice(&self.target.to_le_bytes());
+        out[16..16 + LABEL_BYTES].copy_from_slice(&self.label);
+    }
+    pub fn decode(d: &[u8]) -> Option<Yarn> {
+        if d.len() < YARN_BYTES { return None; }
+        let word = |i: usize| u32::from_le_bytes(d[i..i + 4].try_into().unwrap());
+        let mut label = [0; LABEL_BYTES];
+        label.copy_from_slice(&d[16..16 + LABEL_BYTES]);
+        Some(Yarn { name: word(0), state: d[4], code: word(8), target: word(12), label, label_len: d[5].min(LABEL_BYTES as u8) })
+    }
+}
+
 /// Mode bits (SET_MODE, [`Status::mode`]). 0 is a cooked line with echo, as a terminal
 /// starts: the terminal edits the line and sends it on Enter.
 /// Keys go to the run as they are typed, encoded as a terminal sends them; no local editing.
@@ -207,6 +260,15 @@ impl<const N: usize> Ring<N> {
         for (i, b) in bytes[..n].iter().enumerate() { self.buf[(self.head + self.len + i) % N] = *b; }
         self.len += n;
         n
+    }
+    /// All of `bytes`, the oldest bytes held dropped to make room (a yarn's output, which
+    /// nobody reads until a terminal adopts it): only the last `N` stay.
+    pub fn push_over(&mut self, bytes: &[u8]) {
+        let bytes = &bytes[bytes.len().saturating_sub(N)..];
+        let drop = (self.len + bytes.len()).saturating_sub(N);
+        self.head = (self.head + drop) % N;
+        self.len -= drop;
+        self.push(bytes);
     }
     /// Up to `out.len()` bytes, oldest first; returns how many.
     pub fn pop(&mut self, out: &mut [u8]) -> usize {
