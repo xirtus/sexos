@@ -7860,6 +7860,7 @@ name = "silk-shell"
 version = "0.1.0"
 dependencies = [
  "sex-config",
+ "sex-graphics",
  "sex-ime",
  "sex-keymap",
  "sex-pdx",
