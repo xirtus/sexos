@@ -26,13 +26,16 @@ jobs:
     - name: Bench, 1 core, PKU
       if: always()
       run: python3 scripts/program_bench_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/b/1pku"
+    - name: Latency gate, 1 core
+      if: always()
+      run: python3 scripts/latency_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/b/lat1"
     - name: Latency gate, 4 cores
       if: always()
       run: SEXOS_GATE_CORES=4 python3 scripts/latency_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/b/lat"
     - name: Profile lines
       if: always()
       run: |
-        for d in "$RUNNER_TEMP"/b/*; do echo "== $d"; grep -ahE '\[bench\] |\[ipc\.prof\]|\[latency|p99' "$d"/*.log "$d"/*serial* 2>/dev/null | tail -40; ls "$d"; done
+        for d in "$RUNNER_TEMP"/b/*; do echo "== $d"; grep -ahE '\[bench\] |\[ipc\.prof\]|\[sched\.latency|p99' "$d"/*.log "$d"/*serial* 2>/dev/null | tail -8; cat "$d"/*.json 2>/dev/null; ls "$d"; done
     - uses: actions/upload-artifact@v4
       if: always()
       with:
