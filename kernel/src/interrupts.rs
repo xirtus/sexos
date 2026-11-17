@@ -259,16 +259,8 @@ pub unsafe extern "C" fn syscall_entry() {
 #[no_mangle]
 pub extern "C" fn syscall_handler(regs: &mut SyscallRegs) -> u64 {
     // syscall_entry already opened every key; a second write only costs time.
-    crate::scheduler::prof_user_entry();
     crate::scheduler::observe_user_entry();
-    let t = crate::scheduler::tsc();
-    let n = regs.rax;
-    if let Some(c) = crate::scheduler::SYSNUM.get(n as usize) { c.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
-    if matches!(n, 28 | 32 | 34) { let pd = crate::core_local::CoreLocal::get().current_pd() as usize; crate::scheduler::SYSPD[pd.min(64)].fetch_add(1, core::sync::atomic::Ordering::Relaxed); } // IPC_PROFILE_TEMP
-    crate::scheduler::prof(match n { 28 => 25, 102 => 26, 103 => 27, 53 => 28, 32 => 29, 29 => 30, 0 => 31, _ => 24 }, t);
-    let r = crate::syscalls::dispatch(regs);
-    crate::scheduler::prof(match n { 28 => 9, 102 => 15, 103 => 16, 53 => 17, 40 => 18, 32 => 20, 29 => 21, 0 => 22, 34 => 23, _ => 19 }, t);
-    r
+    crate::syscalls::dispatch(regs)
 }
 
 // ── Assembly Stubs ──────────────────────────────────────────────────────────
@@ -561,7 +553,7 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
         crate::scheduler::poll_self_wait_deadlines(TICKS.load(Ordering::Relaxed));
         crate::program_workers::poll(TICKS.load(Ordering::Relaxed));
         crate::console::tick();
-        if TICKS.load(Ordering::Relaxed) % 2048 == 0 { crate::scheduler::report_latency(); } else if TICKS.load(Ordering::Relaxed) % 256 == 0 { crate::scheduler::report_prof(); }
+        if TICKS.load(Ordering::Relaxed) % 2048 == 0 { crate::scheduler::report_latency(); }
     }
     if core_id == crate::smp::guest_core() { crate::program_records::poll(TICKS.load(Ordering::Relaxed)); }
     reschedule(stack_frame);

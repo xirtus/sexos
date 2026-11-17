@@ -95,13 +95,10 @@ fn run(window: &mut Window, r: &mut Report) -> Result<(), &'static str> {
     // Files keeps polling while a write waits to be committed; make it durable first so
     // the trips measure the call path, not that.
     files::sync(window).map_err(|_| "sync failed")?;
-    let prof = || unsafe { core::arch::asm!("syscall", inlateout("rax") 40u64 => _, in("rdi") 0x5E4Bu64, out("rcx") _, out("r11") _, options(nostack)); }; // IPC_PROFILE_TEMP
-    prof();
     let n = 2_000;
     let t = tsc();
     for _ in 0..n { files::ping(window).map_err(|_| "ping failed")?; }
     r.add("ipc_roundtrip", n, tsc() - t, "trip");
-    prof();
     Ok(())
 }
 
@@ -140,8 +137,7 @@ pub extern "C" fn _start() -> ! {
     let mut report = Report { text: alloc::string::String::new() };
     let _ = writeln!(report.text, "Bench. F11 closes.\n");
     match run(&mut window, &mut report) {
-        Ok(()) => { let t = tsc(); while tsc() - t < 1_500_000_000 { core::hint::spin_loop(); } // IPC_PROFILE_TEMP
-            sex_pdx::serial_record!("[bench.done] target={} task={}", window.target, window.task) },
+        Ok(()) => sex_pdx::serial_record!("[bench.done] target={} task={}", window.target, window.task),
         Err(why) => {
             sex_pdx::serial_record!("[bench.fail] target={} task={} why={}", window.target, window.task, why);
             let _ = writeln!(report.text, "\nFailed: {}", why);

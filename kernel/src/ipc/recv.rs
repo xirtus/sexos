@@ -62,21 +62,17 @@ pub unsafe fn wait_and_take(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
 /// r9 r10 ..., as `yield_and_switch` saved it).
 pub unsafe fn deliver(task: *mut Task) {
     if !(*task).deliver.swap(false, Ordering::Relaxed) { return; }
-    let t = crate::scheduler::tsc(); // IPC_PROFILE_TEMP
     let pd = &*(*task).context.pd_ptr;
     let [status, ty, from, a0, a1, a2] = event_regs(take_event(pd));
     let frame = (*task).context.kstack_top as *mut u64;
     *frame = status; *frame.add(6) = ty; *frame.add(5) = from; *frame.add(3) = a0; *frame.add(9) = a1; *frame.add(7) = a2;
-    crate::scheduler::prof(39, t); // IPC_PROFILE_TEMP
 }
 
 /// Syscall 102, PDX_CALL_RECV: syscall 100, and the answer comes back in registers.
 pub unsafe fn call_recv(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
     let sched = &crate::scheduler::SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
     sched.arm_handoff(true);
-    let t = crate::scheduler::tsc(); // IPC_PROFILE_TEMP
     let called = if regs.rdi == 0 { Err(sex_pdx::ERR_CAP_INVALID) } else { super::safe_pdx_call(regs.rdi as u32, regs.rsi, regs.rdx, regs.r10, regs.r8) };
-    crate::scheduler::prof(37, t); // IPC_PROFILE_TEMP
     sched.arm_handoff(false);
     match called { Ok(_) => wait_and_take(regs), Err(e) => { regs.rdi = 0; e } }
 }
@@ -86,9 +82,7 @@ pub unsafe fn call_recv(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
 pub unsafe fn reply_recv(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
     let sched = &crate::scheduler::SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
     sched.arm_handoff(true);
-    let t = crate::scheduler::tsc(); // IPC_PROFILE_TEMP
     let sent = super::router::send_reply(regs.rdi as u32, regs.rsi).is_ok();
-    crate::scheduler::prof(38, t); // IPC_PROFILE_TEMP
     sched.arm_handoff(false);
     if sent { wait_and_take(regs) } else { regs.rdi = 0; 1 }
 }

@@ -261,30 +261,7 @@ fn note_latency(task: &Task) {
     worst.fetch_max(cycles, Ordering::Relaxed);
 }
 /// Logs the latency counters; the timekeeper calls it every couple of seconds.
-// IPC_PROFILE_TEMP: cycle split of a round trip (removed before merge).
-pub static PROF: [AtomicU64; 96] = [const { AtomicU64::new(0) }; 96];
-#[inline(always)] pub fn tsc() -> u64 { unsafe { core::arch::x86_64::_rdtsc() } }
-#[inline(always)] pub fn prof(i: usize, since: u64) { PROF[2 * i].fetch_add(1, Ordering::Relaxed); PROF[2 * i + 1].fetch_add(tsc().wrapping_sub(since), Ordering::Relaxed); }
-pub static USER_SINCE: [AtomicU64; 128] = [const { AtomicU64::new(0) }; 128];
-pub fn prof_user_entry() {
-    let core = crate::core_local::CoreLocal::get();
-    let since = USER_SINCE[core.core_id as usize].swap(0, Ordering::Relaxed);
-    if since == 0 { return; }
-    let pd = core.current_pd() as u64;
-    prof(if crate::program_records::is_record(pd) { 10 } else if pd == 11 { 11 } else { 12 }, since);
-}
-pub static SYSNUM: [AtomicU64; 128] = [const { AtomicU64::new(0) }; 128];
-pub static SYSPD: [AtomicU64; 65] = [const { AtomicU64::new(0) }; 65];
-pub fn report_prof() {
-    let mut line = alloc::string::String::new();
-    for (i, c) in SYSNUM.iter().enumerate() { let n = c.load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" s{}={}", i, n)); } }
-    let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" handoffs={}", HANDOFFS.load(Ordering::Relaxed)));
-    for (i, c) in SYSPD.iter().enumerate() { let n = c.load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" y{}={}", i, n)); } }
-    for i in 0..48 { let n = PROF[2 * i].load(Ordering::Relaxed); if n != 0 { let _ = core::fmt::Write::write_fmt(&mut line, format_args!(" b{}={}x{}", i, n, PROF[2 * i + 1].load(Ordering::Relaxed) / n)); } }
-    serial_println!("[ipc.prof]{}", line);
-}
 pub fn report_latency() {
-    report_prof();
     for class in [CLASS_INTERACTIVE, CLASS_NORMAL] {
         let [count, total, worst] = &LATENCY[class];
         let n = count.load(Ordering::Relaxed);
@@ -378,19 +355,11 @@ impl Scheduler {
     }
 
     pub fn tick(&self) -> ScheduleDecision {
-        let t_tick = tsc();
-        let d = self.tick_inner();
-        prof(3, t_tick);
-        d
-    }
-    fn tick_inner(&self) -> ScheduleDecision {
         // A call's partner runs at once: housekeeping waits for an ordinary turn, at most
         // HANDOFF_STREAK switches away (and core 0's timer polls every tick anyway).
         let lean = !self.handoff.load(Ordering::Acquire).is_null();
         self.lean.store(lean, Ordering::Relaxed);
-        let t_pp = tsc();
         if !lean { poll_paging_exit_notifications(); }
-        prof(5, t_pp);
         if SCHED_TICK_ENTER_LOG_BUDGET
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |v| v.checked_sub(1))
             .is_ok()
@@ -418,11 +387,8 @@ impl Scheduler {
 
         // Retained Detached custody survives Full/Contended admission. Scan a
         // bounded slice of the existing task inventory; Constructed never enters.
-        let t_ra = tsc();
         if !lean { self.retry_admission(); }
-        prof(4, t_ra);
         // Deadline work first while it is within its share of this core, else last.
-        let t_sel = tsc();
         let early = !self.budget.exhausted();
         let next_task = if early { self.deadline.take() } else { ptr::null_mut() };
         let next_task = if next_task.is_null() { self.take_handoff() } else { next_task };
@@ -483,7 +449,6 @@ impl Scheduler {
                 next_task = self.attempt_steal();
             }
         }
-        prof(35, t_sel);
         // Phase 1: explicit NoRunnable.
         // Do not touch current_task/current_pd until a real next task exists.
         if next_task.is_null() {
@@ -510,13 +475,10 @@ impl Scheduler {
             return ScheduleDecision::NoRunnable;
         }
 
-        let t_acc = tsc();
         note_latency(unsafe { &*next_task });
         crate::cpu_account::switch(self.core_id, Some(unsafe { (*next_task).context.pd_id as u32 }));
         self.budget.switched(crate::interrupts::TICKS.load(Ordering::Relaxed), unsafe { core::arch::x86_64::_rdtsc() },
             unsafe { (*next_task).deadline_us.load(Ordering::Relaxed) } != 0);
-        prof(32, t_acc);
-        let t_so = tsc();
         // A concrete next task has exclusive dispatch custody. Outgoing custody
         // remains SwitchingOut until the assembly's post-stack-release callback.
         let old_task = self.current_task.load(Ordering::Acquire);
@@ -526,7 +488,6 @@ impl Scheduler {
         }
         let replaced = self.current_task.swap(next_task, Ordering::AcqRel);
         assert_eq!(replaced, old_task);
-        prof(36, t_so);
 
         unsafe {
             if TASK_LIFECYCLE_LOG_BUDGET
@@ -548,18 +509,14 @@ impl Scheduler {
             let next_pd_ptr = (*next_task).context.pd_ptr as *mut crate::capability::ProtectionDomain;
 
             // Enforce strict atomic ordering: bind -> wrpkru -> switch_to
-            let t_bd = tsc();
             crate::program_records::before_dispatch((*next_task).context.pd_id);
             crate::program_tenancy::before_dispatch((*next_task).context.pd_id);
-            prof(33, t_bd);
-            let t_sp = tsc();
             if !self.ran_task.swap(true, Ordering::Relaxed) {
                 serial_println!("[smp.core.first_task] core={} pd={} tsc={}", self.core_id, (*next_task).context.pd_id, core::arch::x86_64::_rdtsc());
             }
             core.set_pd(next_pd_ptr);
             note_dispatch((*next_task).context.pd_id);
             crate::ipc::recv::deliver(next_task);
-            prof(34, t_sp);
         }
 
         if SCHED_PICK_NEXT_LOG_BUDGET
@@ -907,17 +864,10 @@ fn finish_last_runnable_proof(_current: *mut Task) {}
 /// No context-to-Task cast is valid: Task's Rust layout is intentionally opaque.
 #[no_mangle]
 pub extern "C" fn scheduler_finish_switch() {
-    let t_fs = tsc();
-    finish_switch_inner();
-    prof(6, t_fs);
-    USER_SINCE[crate::core_local::CoreLocal::get().core_id as usize].store(tsc(), Ordering::Relaxed);
-}
-fn finish_switch_inner() {
     let core = crate::core_local::CoreLocal::get().core_id;
     let sched = &SCHEDULERS[core as usize];
     let old = sched.pending_outgoing.swap(ptr::null_mut(), Ordering::AcqRel);
     let loaded = &FPU_LOADED[core as usize];
-    let t_fpu = tsc();
     unsafe {
         // The outgoing task's registers are still in the core (the kernel never uses
         // them): keep them in its own block before any other core may resume it.
@@ -931,7 +881,6 @@ fn finish_switch_inner() {
             loaded.store(next, Ordering::Release);
         }
     }
-    prof(7, t_fpu);
     if old.is_null() { return; }
     unsafe {
         let rsp: u64;
@@ -945,12 +894,8 @@ fn finish_switch_inner() {
         assert!((*old).state.release_after_stack_switch(core), "OUTGOING_CUSTODY_MISMATCH");
         // After release, access only immutable fields or the atomic protocol.
         // Another lane may immediately acquire and rewrite the saved context.
-        let t_ad = tsc();
         sched.admit(old, false, sched.sliced.swap(false, Ordering::Relaxed));
-        prof(13, t_ad);
-        let t_pp = tsc();
         if !sched.lean.swap(false, Ordering::Relaxed) { poll_paging_exit_notifications(); }
-        prof(8, t_pp);
     }
 }
 
@@ -1335,7 +1280,6 @@ fn note_dispatch(pd: u64) {
 
 pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) -> ! {
     x86_64::instructions::interrupts::disable();
-    let t_ys = tsc();
     let core_id = crate::core_local::CoreLocal::get().core_id as usize;
     let sched = &SCHEDULERS[core_id];
     let current = sched.current_task.load(Ordering::Acquire);
@@ -1412,11 +1356,9 @@ pub unsafe fn yield_and_switch(regs_ptr: *const crate::interrupts::SyscallRegs) 
         }
 
     }
-    prof(2, t_ys);
-    let t_pick = tsc();
     let next = match sched.tick() {
         ScheduleDecision::Switch { next, .. } => next,
-        ScheduleDecision::NoRunnable => { let n = wait_for_local_resume_or_switch(sched); prof(14, t_pick); USER_SINCE[core_id].store(tsc(), Ordering::Relaxed); n },
+        ScheduleDecision::NoRunnable => wait_for_local_resume_or_switch(sched),
     };
     {
         let kstack_top = (*next).kstack_top;

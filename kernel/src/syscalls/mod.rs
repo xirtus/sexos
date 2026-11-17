@@ -425,7 +425,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         // Ambient physical allocation/mapping and runtime capability minting
         // are unavailable. Boot regions are queried through54/55 only.
         30 | 31 | 50 | 51 => u64::MAX,
-        40 => { if rdi == 0x5E4B { crate::scheduler::report_prof(); } 0 }, // historical shared-buffer failure convention; IPC_PROFILE_TEMP
+        40 => 0, // historical shared-buffer failure convention
 
         32 => { // SYSCALL_YIELD — cooperative scheduling fallback
             // When the preemptive LAPIC timer does not fire (QEMU limitation),
@@ -667,10 +667,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             // The callee runs next on this core if it lives here (a handoff).
             let sched = &crate::scheduler::SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
             sched.arm_handoff(true);
-            let t_c = crate::scheduler::tsc();
             let called = if rdi == 0 { Err(sex_pdx::ERR_CAP_INVALID) } else { crate::ipc::safe_pdx_call(rdi as u32, rsi, rdx, r10, r8) };
             sched.arm_handoff(false);
-            crate::scheduler::prof(0, t_c);
             match called {
                 Ok(value) => {
                     regs.rsi = value;
@@ -685,9 +683,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         101 => { // PDX_REPLY_WAIT: syscall 29, then syscall 53 if it was delivered.
             let sched = &crate::scheduler::SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
             sched.arm_handoff(true);
-            let t_r = crate::scheduler::tsc();
             let sent = crate::ipc::router::send_reply(rdi as u32, rsi).is_ok();
-            crate::scheduler::prof(1, t_r);
             sched.arm_handoff(false);
             if sent { regs.rax = 0; unsafe { wait_unless_pending(regs) }; 0 } else { 1 }
         },
