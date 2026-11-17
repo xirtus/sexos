@@ -207,6 +207,9 @@ fn present(window: &mut Window, player: &mut Player, ui: &mut Ui, at_ms: i64) {
     let (w, h) = player.size();
     if w == 0 || player.picture().len() < w * h { return; }
     window.pixels()[..w * h].copy_from_slice(player.picture());
+    let showing = player.paused() || sex_pdx::get_ticks() < ui.controls_until;
+    // Captions sit above the controls band while it shows, never under it.
+    let reserve = match (ui.controls.as_ref(), showing) { (Some(c), true) => c.controls_band(h), _ => 0 };
     if let Some(s) = ui.subs.as_mut().filter(|s| s.on) {
         let mut text = core::mem::take(&mut s.text);
         s.track.at(at_ms.max(0) as u64, &mut text);
@@ -214,10 +217,9 @@ fn present(window: &mut Window, player: &mut Player, ui: &mut Ui, at_ms: i64) {
             sex_pdx::serial_record!("[play.caption] at_ms={} text={}", at_ms, text.replace('\n', " / "));
             s.painter.shown.clone_from(&text);
         }
-        s.painter.draw(&mut window.pixels()[..w * h], w, h, &text);
+        s.painter.draw(&mut window.pixels()[..w * h], w, h, &text, reserve);
         s.text = text;
     }
-    let showing = player.paused() || sex_pdx::get_ticks() < ui.controls_until;
     if let (Some(c), true) = (ui.controls.as_mut(), showing) {
         use core::fmt::Write;
         let mut text = alloc::string::String::new();

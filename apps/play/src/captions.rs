@@ -59,14 +59,15 @@ impl Painter {
         Some(Painter { font: Font::new(sex_font::GEIST_SANS)?, acc: Vec::new(), glyph: Vec::new(), line: Vec::new(), line_w: 0, shown: String::new() })
     }
 
-    /// Draws `text` (lines split by '\n') over `px`, a `w` x `h` picture.
-    pub fn draw(&mut self, px: &mut [u32], w: usize, h: usize, text: &str) {
+    /// Draws `text` (lines split by '\n') over `px`, a `w` x `h` picture, with its
+    /// last line ending `reserve` pixels above the bottom (room for the controls band).
+    pub fn draw(&mut self, px: &mut [u32], w: usize, h: usize, text: &str, reserve: usize) {
         if text.is_empty() || w < 32 || h < 32 { return; }
         // Text height about 1/16 of the picture, at least 12 px.
         let px_size = (h / 16).max(12);
         let line_h = self.line_height(px_size);
         let lines: Vec<&str> = text.split('\n').collect();
-        let bottom = h - h / 20;
+        let bottom = (h - h / 20).min(h.saturating_sub(reserve + 2)).max(line_h);
         let top = bottom.saturating_sub(lines.len() * line_h);
         for (k, l) in lines.iter().enumerate() {
             self.render(l, px_size);
@@ -82,8 +83,7 @@ impl Painter {
         if w < 32 || h < 32 { return; }
         let px_size = (h / 22).max(11);
         let line_h = self.line_height(px_size);
-        let band = line_h + 14;
-        let top = h.saturating_sub(band);
+        let top = h.saturating_sub(self.controls_band(h));
         for y in top..h {
             for p in &mut px[y * w..(y + 1) * w] { *p = blend(*p, style::SURFACE, 210); }
         }
@@ -142,6 +142,9 @@ impl Painter {
             composite(px, w, h, line, *lw, line_h, x0 + bar + pad, y0 + pad + k * line_h, false);
         }
     }
+
+    /// The height of the controls band over a picture `h` pixels high.
+    pub fn controls_band(&self, h: usize) -> usize { self.line_height((h / 22).max(11)) + 14 }
 
     fn line_height(&self, px_size: usize) -> usize {
         let size = (px_size * 64) as u32;
