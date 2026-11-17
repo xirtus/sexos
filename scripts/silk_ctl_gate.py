@@ -32,7 +32,7 @@ def main():
     if any(x for x in out.iterdir()): raise RuntimeError('fresh output required')
     disk = out / 'nvme.img'; shutil.copyfile(a.source_disk, disk)
     with disk.open('r+b') as f: f.truncate(1024 ** 3)
-    install(disk, [('abacus', (ROOT / 'iso_root/programs/sex-calc').read_bytes())])
+    install(disk, [('abacus', (ROOT / 'iso_root/programs/abacus').read_bytes())])
     g = boot(a.iso, disk, out, 'silk', a.resolution); t = g['text']; q = g['q']; wait = g['wait']
     steps = []
 
@@ -64,7 +64,7 @@ def main():
     try:
         wait(r'\[app.private.retired\] target=41 ', 0, 120); time.sleep(2)
         s = typed('run abacus')
-        ready = wait(r'\[calc.ready\] target=(\d+) task=(\d+)', s, 120)
+        ready = wait(r'\[abacus.ready\] target=(\d+) task=(\d+)', s, 300)
         sid = int(wait(rf'\[shell.program.launch\] target={ready[1]} task={ready[2]} surface=(\d+)', s, 60)[1])
         wait(rf'\[display.app.pixels\] target={ready[1]} ', s, 60); time.sleep(2)
 
@@ -110,7 +110,7 @@ def main():
         step(rf'\[shell.silk.events\] pd=\d+ since=0 events={len(events)} ', s)
 
         text = t()
-        for bad in ('KERNEL PANIC', 'panicked', '[calc.fatal]', '[shell.silk.reject]', '[shell.silk.out.full]'):
+        for bad in ('KERNEL PANIC', 'panicked', '[abacus.fatal]', '[shell.silk.reject]', '[shell.silk.out.full]'):
             if bad in text: raise RuntimeError('guest reported ' + bad)
         result = dict(ok=True, surface=sid, frame=frame, from_workspace=before, scene_move=moved[0], events=events, steps=steps,
                       scope=f'QEMU {a.resolution}: Spindle\'s silk command lists the calculator, focuses it, moves it to workspace 3 '

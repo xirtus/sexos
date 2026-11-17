@@ -962,6 +962,29 @@ pub mod files {
             /// Terminal: its size in cells, for the run to read (on start and on every resize).
             pub fn set_size(cols: u16, rows: u16) -> Result<(), Error> { set_size_at(0, cols, rows) }
             pub fn set_size_at(slot: usize, cols: u16, rows: u16) -> Result<(), Error> { op(c::at_slot(c::SET_SIZE, slot), c::size_word(cols, rows)).map(|_| ()) }
+            /// Terminal: the run in `slot` goes on without this window, as a yarn named by
+            /// the value (`c::DETACH`). `label` is its command line; `screen` what the window
+            /// showed (sex-vt's `Screen::replay`), which the terminal that adopts it gets first.
+            pub fn detach_at(slot: usize, label: &[u8], screen: &[u8]) -> Result<u32, Error> {
+                let label = &label[..label.len().min(c::LABEL_BYTES)];
+                let screen = &screen[screen.len().saturating_sub(c::OUTPUT_BYTES)..];
+                let (l, n) = (label.len(), screen.len());
+                exchange(None, c::KIND, b"", c::at_slot(c::DETACH, slot), c::detach_word(n, l), |d| { d[..l].copy_from_slice(label); d[l..l + n].copy_from_slice(screen); }, |name, _| name)
+            }
+            /// Terminal: yarn `name` becomes the run in `slot`; TAKE gives its screen and output.
+            pub fn adopt_at(slot: usize, name: u32) -> Result<(), Error> { op(c::at_slot(c::ADOPT, slot), name as u64).map(|_| ()) }
+            /// Terminal: every yarn, oldest first.
+            pub fn yarns() -> Result<alloc::vec::Vec<c::Yarn>, Error> {
+                const MAX: usize = 64;
+                exchange(None, c::KIND, b"", c::YARNS, (MAX * c::YARN_BYTES) as u64, |_| {}, |n, d| {
+                    let mut list: alloc::vec::Vec<c::Yarn> = (0..(n as usize).min(MAX)).filter_map(|i| d.get(i * c::YARN_BYTES..).and_then(c::Yarn::decode)).collect();
+                    list.sort_by_key(|y| y.name);
+                    list
+                })
+            }
+            /// Terminal: yarn `name` gets Ctrl+C and the end of its input, or is forgotten
+            /// once it ended. Its target, for [`stop`] when it ignores both.
+            pub fn yarn_stop(name: u32) -> Result<u32, Error> { op(c::YARN_STOP, name as u64) }
             /// Terminal: stop the run with `target` (TAKE's `Status::target`) that it started,
             /// when Ctrl+C did not end it: Shell ends it as it ends a program ignoring Close.
             pub fn stop(target: u32) -> Result<(), Error> {

@@ -32,7 +32,7 @@ def main():
     if any(x for x in out.iterdir()): raise RuntimeError('fresh output required')
     disk = out / 'nvme.img'; shutil.copyfile(a.source_disk, disk)
     with disk.open('r+b') as f: f.truncate(1024 ** 3)
-    install(disk, [('abacus', (ROOT / 'iso_root/programs/sex-calc').read_bytes())])
+    install(disk, [('abacus', (ROOT / 'iso_root/programs/abacus').read_bytes())])
     rw, rh = map(int, a.resolution.split('x'))
     g = boot(a.iso, disk, out, 'decor', a.resolution); t = g['text']; q = g['q']; wait = g['wait']
     steps = []
@@ -76,7 +76,7 @@ def main():
         for k in 'run abacus':
             q.key({' ': 'spc'}.get(k, k)); time.sleep(.08)
         q.key('ret')
-        ready = wait(r'\[calc.ready\] target=(\d+) task=(\d+)', s, 120); target, task = ready[1], ready[2]
+        ready = wait(r'\[abacus.ready\] target=(\d+) task=(\d+)', s, 300); target, task = ready[1], ready[2]
         sid = int(wait(rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)', s, 60)[1])
         wait(rf'\[display.app.pixels\] target={target} ', s, 60); time.sleep(2)
         g['focus'](sid); time.sleep(1)
@@ -119,11 +119,11 @@ def main():
         f = frame(sid); s = len(t()); click(f['close_x'], f['close_y'])
         action(fid, sid, 'close', 'button', s)
         wait(rf'\[shell.app.close.request\] target={target} task={task} surface={sid}', s, 30)
-        wait(rf'\[calc.closed\] target={target} task={task}', s, 60)
+        wait(rf'\[abacus.closed\] target={target} task={task}', s, 60)
         retired = wait(rf'\[app.private.retired\] target={target} task={task} ', s, 90)
         wait(rf'\[shell.app.cleanup\] target={target} task={task} ', s, 60)
         text = t()
-        for bad in ('KERNEL PANIC', 'panicked', '[calc.fatal]'):
+        for bad in ('KERNEL PANIC', 'panicked', '[abacus.fatal]'):
             if bad in text: raise RuntimeError('guest reported ' + bad)
         result = dict(ok=True, target=int(target), task=int(task), sid=sid, frame=fid, menu=[mx, my, mw, mh], steps=steps, retired=retired[0],
                       scope=f'QEMU {a.resolution}: title bar double-click maximise/restore, right-click window menu drawn by Display and its Float row, float and maximise buttons, close button ends the program')

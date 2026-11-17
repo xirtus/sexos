@@ -76,6 +76,7 @@ fn result(a: &mut Abacus, ui: &mut Ui, text: &str) -> String {
     match a.equals(ui) {
         Note::Result { value, .. } => value,
         Note::Error(e) => panic!("{e}"),
+        _ => panic!("equals gives a result or an error"),
     }
 }
 #[test]
@@ -137,7 +138,9 @@ fn compact_window_scrolls_bottom_keypad_and_programmer_controls_into_view() {
     ui.layout();
     let eq = a.keys.iter().find(|(_, k)| *k == "=").unwrap().0;
     assert!(!ui.find_kind("scroll").is_empty());
-    for _ in 0..30 {
+    // Tab through the window (the memory row adds keys before the pad's last row).
+    for _ in 0..60 {
+        if ui.focused() == Some(eq) { break; }
         ui.handle(weft::Event::Key(weft::Key::new(weft::input::code::TAB)));
         ui.layout();
     }

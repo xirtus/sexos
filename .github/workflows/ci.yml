@@ -496,7 +496,9 @@ jobs:
   profiles:
     name: Proof builds (${{ matrix.gate }})
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # A Cargo.lock change (crates added or removed) misses the exact build cache and
+    # rebuilds cold, which takes ~45 minutes here; 40 left such PRs no way to pass.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -869,11 +871,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Calculator arithmetic and calendar model on the host
-      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-dav -p sex-vcard -p sex-vt -p spindle-panes -p spindle-shell -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay && cargo test --locked --release -p sex-vt --features render,ligatures render_tests
+    - name: Calendar model and terminal on the host
+      run: cargo test --locked -p sex-calendar -p sex-dav -p sex-vcard -p sex-vt -p spindle-panes -p spindle-shell -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay && cargo test --locked --release -p sex-vt --features render,ligatures render_tests
     - name: Build the image
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
-    - name: Calculator typed, clicked and recalled
+    - name: Abacus typed, clicked, remembered and recalled
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-productivity.img"
         python3 scripts/program_calc_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/calc"

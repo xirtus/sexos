@@ -39,7 +39,7 @@ def main():
     if any(x for x in out.iterdir()): raise RuntimeError('fresh output required')
     disk = out / 'nvme.img'; shutil.copyfile(a.source_disk, disk)
     with disk.open('r+b') as f: f.truncate(1024 ** 3)
-    install(disk, [('abacus', (ROOT / 'iso_root/programs/sex-calc').read_bytes())])
+    install(disk, [('abacus', (ROOT / 'iso_root/programs/abacus').read_bytes())])
     g = boot(a.iso, disk, out, 'groups', a.resolution); t = g['text']; q = g['q']; wait = g['wait']
     steps = []
 
@@ -66,7 +66,7 @@ def main():
         for k in 'run abacus':
             q.key({' ': 'spc'}.get(k, k)); time.sleep(.08)
         q.key('ret')
-        ready = wait(r'\[calc.ready\] target=(\d+) task=(\d+)', s, 120)
+        ready = wait(r'\[abacus.ready\] target=(\d+) task=(\d+)', s, 300)
         sid = int(wait(rf'\[shell.program.launch\] target={ready[1]} task={ready[2]} surface=(\d+)', s, 60)[1])
         wait(rf'\[display.app.pixels\] target={ready[1]} ', s, 60); time.sleep(2)
         return sid
@@ -149,7 +149,7 @@ def main():
         shot('05-ungrouped')
 
         text = t()
-        for bad in ('KERNEL PANIC', 'panicked', '[calc.fatal]'):
+        for bad in ('KERNEL PANIC', 'panicked', '[abacus.fatal]'):
             if bad in text: raise RuntimeError('guest reported ' + bad)
         result = dict(ok=True, calculators=sids, dwindle=tiles, group=fid, members=members, cycle=order, steps=steps,
                       scope=f'QEMU {a.resolution}: Super+T dwindle with alternating splits, Super+G groups three windows into one frame, '

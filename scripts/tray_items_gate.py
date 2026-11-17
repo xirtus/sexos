@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Program tray items and notification replies (slice S2) on a booted desktop.
 
-The calculator is run from Spindle as `abacus tray`: it adds an item to the
+Abacus is run from Spindle as `abacus tray`: it adds an item to the
 panel with a four-row menu. A click on the item opens the menu, which Display
 draws; its "Ask me a sum" row reaches the program, which posts a notification
 through Bell with a button and an inline reply field. The Shell shows it as a
@@ -34,7 +34,7 @@ def main():
     if any(x for x in out.iterdir()): raise RuntimeError('fresh output required')
     disk = out / 'nvme.img'; shutil.copyfile(a.source_disk, disk)
     with disk.open('r+b') as f: f.truncate(1024 ** 3)
-    install(disk, [('abacus', (ROOT / 'iso_root/programs/sex-calc').read_bytes())])
+    install(disk, [('abacus', (ROOT / 'iso_root/programs/abacus').read_bytes())])
     rw, rh = map(int, a.resolution.split('x'))
     g = boot(a.iso, disk, out, 'tray', a.resolution); t = g['text']; q = g['q']; wait = g['wait']
     steps = []
@@ -60,9 +60,9 @@ def main():
         for k in 'run abacus tray':
             q.key({' ': 'spc'}.get(k, k)); time.sleep(.08)
         q.key('ret')
-        ready = wait(r'\[calc.ready\] target=(\d+) task=(\d+)', s, 120); pd, task = ready[1], ready[2]
+        ready = wait(r'\[abacus.ready\] target=(\d+) task=(\d+)', s, 120); pd, task = ready[1], ready[2]
         sid = int(wait(rf'\[shell.program.launch\] target={pd} task={task} surface=(\d+)', s, 60)[1])
-        step(rf'\[calc.tray.ready\] target={pd} task={task} item=1 rows=4', s, 60)
+        step(rf'\[abacus.tray.ready\] target={pd} task={task} item=1 rows=4', s, 60)
         step(rf'\[shell.tray_items.item\] pd={pd} task={task} id=0 label== rows=4 tip=Abacus: the last answer ok=1', s, 60)
         icon = wait(ICON, s, 60); time.sleep(1)
         ix, iy, size = int(icon[2]), int(icon[3]), int(icon[4])
@@ -81,9 +81,9 @@ def main():
         s = len(t()); click(mx + pad + 20, my + pad + 3 * row_h + row_h // 2)
         step(rf'\[shell.tray_items.menu\] open=0 reason=chose pd={pd} id=0 row=3', s)
         step(rf'\[shell.tray_items.told\] pd={pd} task={task} event=Menu \{{ item: 0, row: 3 \}} ok=1', s)
-        step(r'\[calc.tray.menu\] item=0 row=3 label=Ask me a sum', s)
+        step(r'\[abacus.tray.menu\] item=0 row=3 label=Ask me a sum', s)
         step(r'\[display.tray_items\] section=menu shown=0 ', s)
-        step(r'\[calc.notify.ask\] tag=1 posted=1', s)
+        step(r'\[abacus.notify.ask\] tag=1 posted=1', s)
         step(rf'\[shell.tray_items.actions\] pd={pd} task={task} committed=1 ok=1', s)
         step(rf'\[shell.tray_items.paired\] id=\d+ pd={pd} tag=1 queued=0', s)
         card = step(CARD, s)
@@ -105,7 +105,7 @@ def main():
         s = len(t()); q.key('ret')
         step(rf'\[shell.tray_items.reply\] sent=1 pd={pd} tag=1 len=4 via=enter', s)
         step(rf'\[shell.tray_items.told\] pd={pd} task={task} reply tag=1 len=4 ok=1', s)
-        reply = step(r'\[calc.notify.reply\] tag=1 text=12-5 answer=7 error=0', s)
+        reply = step(r'\[abacus.notify.reply\] tag=1 text=12-5 answer=7 error=0', s)
         step(r'\[shell.tray_items.card\] shown=0', s)
         step(r'\[display.tray_items\] section=card shown=0 ', s)
 
@@ -114,11 +114,11 @@ def main():
         f = wait(FRAME.format(sid=sid), 0, 30)
         f = re.findall(FRAME.format(sid=sid), t())[-1]
         s = len(t()); click(int(f[1]), int(f[2]))
-        wait(rf'\[calc.closed\] target={pd} task={task}', s, 60)
+        wait(rf'\[abacus.closed\] target={pd} task={task}', s, 60)
         step(r'\[shell.tray_items.cleanup\] gone=1 items=0 cards=0', s, 60)
         step(r'\[display.tray_items\] section=icons count=0', s, 30)
         text = t()
-        for bad in ('KERNEL PANIC', 'panicked', '[calc.fatal]', '[shell.tray_items.reject]'):
+        for bad in ('KERNEL PANIC', 'panicked', '[abacus.fatal]', '[shell.tray_items.reject]'):
             if bad in text: raise RuntimeError('guest reported ' + bad)
         result = dict(ok=True, target=int(pd), task=int(task), sid=sid, icon=[ix, iy, size], menu=[mx, my, mw, mh], field=[fx, fy],
                       reply=reply[0], steps=steps,

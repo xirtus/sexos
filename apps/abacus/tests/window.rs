@@ -50,3 +50,104 @@ fn keypad_and_keyboard_work_sums_out() {
     let mut px = vec![0u32; 560 * 640];
     assert!(ui.paint(&mut px).is_some());
 }
+
+fn typed(ui: &mut Ui, a: &mut Abacus, text: &str) -> Vec<String> {
+    let mut rs = Vec::new();
+    for c in text.chars() { rs.extend(ui.handle(Event::Key(Key::typed(c)))); }
+    rs.extend(ui.handle(Event::Key(Key::new(code::ENTER))));
+    run(ui, a, rs)
+}
+fn notes(ui: &mut Ui, a: &mut Abacus, rs: Vec<Response>) -> Vec<Note> { rs.iter().filter_map(|r| a.on(ui, r)).collect() }
+
+#[test]
+fn memory_sign_recall_and_carry_on() {
+    let mut ui = Ui::new(560, 720, Theme::light(), Strings::new("en"));
+    let mut a = Abacus::build(&mut ui);
+    assert_eq!(a.keys.len(), 35);
+    assert_eq!(typed(&mut ui, &mut a, "6*7"), vec!["42".to_string()]);
+    // An operator straight after an answer carries on from it; a digit starts afresh.
+    assert_eq!(typed(&mut ui, &mut a, "+8"), vec!["50".to_string()]);
+    assert_eq!(a.past[0].0, "ans+8");
+    assert_eq!(typed(&mut ui, &mut a, "3"), vec!["3".to_string()]);
+    // M+ with an empty line adds the answer; M− takes what the line works out to.
+    click(&mut ui, &mut a, "M+");
+    assert_eq!(a.memory, 3.0);
+    assert_eq!(ui.text_of(a.mem_line), "M = 3");
+    for k in ["4", "×", "1", "0"] { click(&mut ui, &mut a, k); }
+    click(&mut ui, &mut a, "M−");
+    assert_eq!(a.memory, -37.0);
+    click(&mut ui, &mut a, "C");
+    click(&mut ui, &mut a, "MC");
+    assert_eq!(ui.text_of(a.mem_line), "");
+    for k in ["4", "0"] { click(&mut ui, &mut a, k); }
+    click(&mut ui, &mut a, "M+");
+    click(&mut ui, &mut a, "C");
+    // MR and ± put the memory in, negated.
+    click(&mut ui, &mut a, "MR");
+    assert_eq!(ui.text_of(a.expr), "40");
+    click(&mut ui, &mut a, "±");
+    assert_eq!(ui.text_of(a.expr), "-(40)");
+    assert_eq!(click(&mut ui, &mut a, "="), vec!["-40".to_string()]);
+    // x² and 1/x from the Functions menu's commands wrap the answer.
+    let rs = vec![Response::Command("abacus.square".into())];
+    run(&mut ui, &mut a, rs);
+    assert_eq!(ui.text_of(a.expr), "(ans)^2");
+    assert_eq!(click(&mut ui, &mut a, "="), vec!["1600".to_string()]);
+    // Up twice picks the answer before last, Enter puts it in (bracketed: it is negative).
+    ui.focus(Some(a.expr));
+    let mut rs = ui.handle(Event::Key(Key::new(code::UP)));
+    rs.extend(ui.handle(Event::Key(Key::new(code::UP))));
+    run(&mut ui, &mut a, rs);
+    assert_eq!(a.picked, Some(1));
+    assert_eq!(ui.selected_row(a.history), Some(1));
+    let rs = ui.handle(Event::Key(Key::new(code::ENTER)));
+    assert!(matches!(notes(&mut ui, &mut a, rs).as_slice(), [Note::Recall { index: 1, value }] if value == "-40"));
+    assert_eq!(ui.text_of(a.expr), "(-40)");
+    assert_eq!(typed(&mut ui, &mut a, "/2"), vec!["-20".to_string()]);
+    // Ctrl+D switches degrees and radians.
+    let rs = ui.handle(Event::Key(Key::ctrl(0x20)));
+    assert!(matches!(notes(&mut ui, &mut a, rs).as_slice(), [Note::Angle(false)]));
+    assert_eq!(a.angle, abacus::calc::Angle::Radians);
+    // The Functions menu puts a function in; errors say what is wrong.
+    run(&mut ui, &mut a, vec![Response::Command("abacus.fn.exp".into())]);
+    assert_eq!(ui.text_of(a.expr), "exp(");
+    let rs = ui.handle(Event::Key(Key::new(code::ENTER)));
+    assert!(matches!(notes(&mut ui, &mut a, rs).as_slice(), [Note::Error(m)] if m == "Brackets don't match"));
+    let mut px = vec![0u32; 560 * 720];
+    assert!(ui.paint(&mut px).is_some());
+}
+
+#[test]
+fn carry_on_survives_an_error_and_clear_history_drops_the_pick() {
+    let mut ui = Ui::new(560, 720, Theme::light(), Strings::new("en"));
+    let mut a = Abacus::build(&mut ui);
+    assert_eq!(typed(&mut ui, &mut a, "6*7"), vec!["42".to_string()]);
+    assert!(typed(&mut ui, &mut a, "+1/0").is_empty());
+    assert_eq!(ui.text_of(a.expr), "ans+1/0");
+    // Put right: the 0 becomes a 2.
+    let mut rs = ui.handle(Event::Key(Key::new(code::BACKSPACE)));
+    rs.extend(ui.handle(Event::Key(Key::typed('2'))));
+    rs.extend(ui.handle(Event::Key(Key::new(code::ENTER))));
+    assert_eq!(run(&mut ui, &mut a, rs), vec!["42.5".to_string()]);
+    // A picked answer that Clear History removed no longer swallows Enter.
+    ui.focus(Some(a.expr));
+    let rs = ui.handle(Event::Key(Key::new(code::UP)));
+    run(&mut ui, &mut a, rs);
+    assert_eq!(a.picked, Some(0));
+    run(&mut ui, &mut a, vec![Response::Command("abacus.clear-history".into())]);
+    assert_eq!(a.picked, None);
+    assert_eq!(typed(&mut ui, &mut a, "1+1"), vec!["2".to_string()]);
+}
+
+#[test]
+fn a_sum_sent_from_a_notification_starts_afresh() {
+    let mut ui = Ui::new(560, 720, Theme::light(), Strings::new("en"));
+    let mut a = Abacus::build(&mut ui);
+    typed(&mut ui, &mut a, "6*7");
+    // Half-typed work in the line is replaced, and `-5` after an answer would carry
+    // on, but a reply that starts with a number starts afresh.
+    ui.set_text(a.expr, "99+");
+    match a.work_out(&mut ui, "12-5") { Note::Result { value, .. } => assert_eq!(value, "7"), _ => panic!("no answer") }
+    assert_eq!(a.result_text(&ui), "7");
+    assert!(matches!(a.work_out(&mut ui, "1/0"), Note::Error(_)));
+}

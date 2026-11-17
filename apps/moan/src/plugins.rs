@@ -6,6 +6,7 @@ use moan_core::Frame;
 #[cfg(all(feature = "sexos", target_arch = "x86_64", target_os = "none"))]
 use moan_plugin::job::Parameter;
 use moan_plugin::job::{Format, MAX_FRAMES};
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     Memory,
@@ -19,6 +20,7 @@ pub enum Error {
     Audio,
     Exhausted,
 }
+#[allow(dead_code)]
 impl Error {
     pub fn message(self) -> &'static str {
         match self {
@@ -35,6 +37,7 @@ impl Error {
         }
     }
 }
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     WaitingForMemory,
@@ -45,6 +48,7 @@ pub enum Status {
     Ready,
     Failed,
 }
+#[allow(dead_code)]
 impl Status {
     pub fn label(self) -> &'static str {
         match self {
