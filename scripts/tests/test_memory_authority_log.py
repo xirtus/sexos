@@ -9,7 +9,7 @@ spec.loader.exec_module(checker)
 
 def good():
     rows = [(7, 32, 1, 2097152, 15, 0), (9, 32, 2, 262144, 15, 0), (2, 32, 3, 524288, 15, 0),
-            (5, 17, 4, 131072, 7, 2), (2, 17, 4, 131072, 7, 5),
+            (5, 17, 4, 524288, 7, 2), (2, 17, 4, 524288, 7, 5),
             (2, 33, 5, 3145728, 7, 1), (1, 33, 5, 3145728, 3, 2)]
     return "\n".join([f"[boot.memory.region] pd={p} slot={s} region={r} bytes={b} rights={q} peer={x}"
                       for p, s, r, b, q, x in rows] + [
