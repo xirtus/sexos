@@ -2468,6 +2468,7 @@ dependencies = [
  "sex-config",
  "sex-diskimage",
  "sex-font",
+ "sex-icons",
  "sex-image",
  "sex-pdx",
  "sex-ssh",
@@ -7140,6 +7141,14 @@ name = "sex-i2c-dw"
 version = "0.1.0"
 
 [[package]]
+name = "sex-icons"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "sex-font",
+]
+
+[[package]]
 name = "sex-image"
 version = "0.1.0"
 dependencies = [
@@ -9899,6 +9908,7 @@ dependencies = [
  "png 0.18.1",
  "sex-app",
  "sex-font",
+ "sex-icons",
  "sex-pdx",
  "taffy",
  "tiny-skia 0.11.4",

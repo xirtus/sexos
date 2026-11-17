@@ -21,6 +21,7 @@ accesskit = { version = "0.25.2", default-features = false }
 tiny-skia = { version = "0.11.4", default-features = false, features = ["no-std-float"] }
 libm = "0.2"
 sex-font = { path = "../sex-font" }
+sex-icons = { path = "../sex-icons" }
 sex-app = { path = "../sex-app", optional = true }
 sex-pdx = { path = "../sex-pdx", optional = true }
 

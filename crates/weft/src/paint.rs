@@ -238,6 +238,24 @@ impl<'a> Painter<'a> {
         (pen / s) - x
     }
 
+    /// Draws an image of `w` by `h` non-premultiplied `0xAARRGGBB` pixels (alpha 0
+    /// is transparent) into `r`, scaled to fit: icons and other cut-out pictures.
+    pub fn image_alpha(&mut self, r: Rect, w: usize, h: usize, px: &[u32]) {
+        if w == 0 || h == 0 || px.len() < w * h { return; }
+        let d = self.dev(r);
+        let (cx0, cy0, cx1, cy1) = self.clip_ints();
+        let (x0, y0) = ((libm::roundf(d.x) as i32).max(cx0), (libm::roundf(d.y) as i32).max(cy0));
+        let (x1, y1) = ((libm::roundf(d.right()) as i32).min(cx1), (libm::roundf(d.bottom()) as i32).min(cy1));
+        for y in y0..y1 {
+            let sy = (((y as f32 + 0.5 - d.y) / d.h) * h as f32) as usize;
+            for x in x0..x1 {
+                let sx = (((x as f32 + 0.5 - d.x) / d.w) * w as f32) as usize;
+                let p = px[sy.min(h - 1) * w + sx.min(w - 1)];
+                self.blend(y as usize * self.width + x as usize, Color(0xFF00_0000 | p), p >> 24);
+            }
+        }
+    }
+
     /// Copies an image of `w` by `h` `0x00RRGGBB` pixels into `r`, scaled to fit.
     pub fn image(&mut self, r: Rect, w: usize, h: usize, px: &[u32]) {
         if w == 0 || h == 0 || px.len() < w * h { return; }

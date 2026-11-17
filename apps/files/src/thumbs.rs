@@ -4,7 +4,7 @@
 //! Pictures (PNG, JPEG, GIF, WebP) are made small in the background, one per piece of
 //! work between keys, and kept in Files' own folder (`thumbs/`), named by path, size and
 //! modification time; the folder opened again draws from there without decoding anything.
-//! Other files show a tile with their kind (PDF, VIDEO, TEXT, ...).
+//! Other files and folders show their icon from the SexOS icon set (`sex_icons`).
 //!
 //! Documents are drawn by their own program, one at a time, run with no window:
 //! `NAME --thumb @/in @/out 112` writes the thumbnail straight into the same cache, in
@@ -36,6 +36,8 @@ const TILE: u32 = 0x2A2D34;
 const PICKED: u32 = 0x3D6FD6;
 const TEXT: u32 = 0xE6E8EC;
 const DIM: u32 = 0x9AA0AA;
+/// Side of a file or folder icon in a tile.
+const ICON: usize = 80;
 
 pub enum Thumb { Picture { w: usize, h: usize, px: Vec<u32> }, Kind(&'static str) }
 
@@ -74,6 +76,8 @@ pub struct Thumbs {
     font: Option<Font<'static>>,
     acc: Vec<i32>,
     cover: Vec<u8>,
+    /// File icons drawn so far, by icon name: `ICON` square `0xAARRGGBB` pixels.
+    icons: BTreeMap<&'static str, Vec<u32>>,
 }
 
 pub fn kind(name: &[u8], dir: bool) -> Option<&'static str> {
@@ -101,7 +105,7 @@ impl Thumbs {
     pub const fn new() -> Self {
         Thumbs { on: false, made: BTreeMap::new(), queue: VecDeque::new(), documents: VecDeque::new(), helping: None, missing: Vec::new(), own: None,
                  tally: Tally { pictures: 0, made: 0, cached: 0, failed: 0, started: 0, documents: 0, drawn: 0, from_cache: 0, pictures_done: 0 }, folder: Vec::new(),
-                 dir_ready: false, font: None, acc: Vec::new(), cover: Vec::new() }
+                 dir_ready: false, font: None, acc: Vec::new(), cover: Vec::new(), icons: BTreeMap::new() }
     }
     pub fn busy(&self) -> bool { self.on && (!self.queue.is_empty() || !self.documents.is_empty() || self.helping.is_some()) }
     /// Queues the pictures of a freshly listed folder that have no thumbnail yet.
@@ -292,11 +296,19 @@ impl Thumbs {
                     let (ox, oy) = (inner.0 + (SIDE - w) / 2, inner.1 + (SIDE - h) / 2);
                     for y in 0..*h { px[(oy + y) * width + ox..(oy + y) * width + ox + w].copy_from_slice(&t[y * w..y * w + w]); }
                 }
-                (k, made) => {
-                    let label = k.or(match made { Some(Thumb::Kind(k)) => Some(*k), _ => None }).unwrap_or("...");
-                    fill(px, width, inner.0 + 20, inner.1 + 16, SIDE - 40, SIDE - 32, BG);
-                    let lw = self.measure(label);
-                    self.text(px, width, inner.0 + (SIDE.saturating_sub(lw)) / 2, inner.1 + SIDE / 2 - 8, SIDE, label, DIM);
+                (_, made) => {
+                    let tile = if i == cursor { PICKED } else { TILE };
+                    // A picture that would not decode says so under its icon.
+                    let failed = match made { Some(Thumb::Kind(k)) if k.ends_with('?') => Some(*k), _ => None };
+                    let icon = self.icon(sex_icons::file_for(&e.name, e.dir));
+                    let (ox, oy) = (inner.0 + (SIDE - ICON) / 2, inner.1 + (SIDE - ICON) / 2);
+                    for y in 0..ICON {
+                        for x in 0..ICON {
+                            let p = icon[y * ICON + x];
+                            if p >> 24 != 0 { px[(oy + y) * width + ox + x] = blend(tile, p, p >> 24); }
+                        }
+                    }
+                    if let Some(k) = failed { self.text(px, width, inner.0 + 8, inner.1 + SIDE - 18, SIDE - 16, k, DIM); }
                 }
             }
             let mut name = String::from(crate::shown(&e.name));
@@ -309,6 +321,16 @@ impl Thumbs {
         window.show_pixels(width, height);
     }
 
+    /// File icon `name` at `ICON` pixels, drawn on first use.
+    fn icon(&mut self, name: &'static str) -> &[u32] {
+        self.icons.entry(name).or_insert_with(|| {
+            let (a, m) = sex_icons::scratch(ICON);
+            let (mut acc, mut mask, mut px) = (vec![0; a], vec![0; m], vec![0; ICON * ICON]);
+            sex_icons::draw(sex_icons::Kind::File, name, ICON, &sex_icons::Palette::BRAND, &mut acc, &mut mask, &mut px);
+            px
+        })
+    }
+
     fn font(&mut self) -> Option<&Font<'static>> {
         if self.font.is_none() {
             self.font = Font::new(sex_font::GEIST_SANS);
@@ -316,10 +338,6 @@ impl Thumbs {
             self.cover = vec![0; GLYPH_W * GLYPH_H];
         }
         self.font.as_ref()
-    }
-    fn measure(&mut self, s: &str) -> usize {
-        let Some(font) = self.font() else { return 0 };
-        s.chars().filter_map(|c| font.glyph(c as u32)).map(|g| font.advance(g, SIZE) as usize).sum::<usize>() / 256
     }
     /// Draws one line of text at (`x`, `y`) top left, cut at `max` pixels wide.
     fn text(&mut self, px: &mut [u32], stride: usize, x: usize, y: usize, max: usize, s: &str, color: u32) {
