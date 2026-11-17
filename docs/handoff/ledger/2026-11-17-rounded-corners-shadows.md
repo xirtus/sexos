@@ -1,0 +1,26 @@
+# 2026-11-17 Rounded window corners and soft shadows (WS6, first slice)
+
+Windows on the SexOS desktop now have rounded corners (10 px times the UI
+scale, anti-aliased) and soft drop shadows. The focused window floats with a
+deep shadow (28 px, pushed 8 px down) that falls on the wallpaper and on the
+windows under it; other windows rest with a short ambient shadow on the
+wallpaper, so the gaps between tiles read as depth instead of flat lines.
+
+- `crates/sex-graphics/src/window_shape.rs`: the shape math (coverage, row
+  inset, hit mask, rounded-rect shadow distance), integer only, shared with
+  the Shell for hit masks.
+- `servers/sexdisplay/src/decor.rs`: the pass `raster_row` runs after a row is
+  composited. It touches only pixels in shadow bands and corner arcs; a corner
+  pixel outside the arc shows the next window down or the wallpaper. Partial
+  row redraws give the same pixels as full frames (tested). Damage rectangles
+  grow by the shadow reach so a moving window leaves no shadow behind.
+- Plain look: `OP_MOTION` arg2 bit 0 = square corners and no shadows (redraws
+  the whole screen). The Shell does not send it yet; the animations slice adds
+  the switch.
+- Not decorated: the cursor, the Shell's modal launcher, and a window that
+  fills the screen.
+- Gate: `scripts/display_decor_host_gate.sh` (CI host job). Older display
+  harnesses stub `decor` like the other overlay passes.
+
+Next in WS6: Shell hit masks for the see-through corners, fade/scale open and
+close, vsync pacing and a frame-time gate, launcher/overlay blur.
