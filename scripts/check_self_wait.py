@@ -275,7 +275,7 @@ def _task_ordinals_ok(records):
 # Only this actual reviewed Shell/API/kernel cohort is admitted; future merge
 # combinations need independent review and an exact new fingerprint.
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
- 'servers/silk-shell/src/main.rs': 'wait-v1:4498ab1ca18598a6dcf3e4c8b64a0a3ce3f90ead7c3a136f125492802ee68235',
+ 'servers/silk-shell/src/main.rs': 'wait-v1:8f387c104199b88d2ea09b2248a64cde8d22b6ca7655b967b87b072e88ce687b',
  'crates/sex-pdx/src/system_stats.rs': '408fb8ea07d12eb2fc53f38797b8ddb4fd61c32140ecc516e63b69fd5689f97d',
  'crates/sex-pdx/src/crash_log.rs': '98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
@@ -399,7 +399,8 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
   # are sampled (first four, then powers of two), so either may appear.
   # Idle Display (1) and SilkBar (6) sleep 8 ticks; polled sexinput (4) and sexusb (5) sleep 1.
   # Shell (3) wakes itself for password autofill (silk-shell autofill_routes::wake):
-  # 100 ticks while a page identity is held, at most 1000 toward a transaction deadline.
+  # 100 ticks while a page identity is held, at most 1000 toward a transaction deadline;
+  # and for the tray (tray_wake), at most 1000 while a Wi-Fi answer is owed or due.
   shell=source_ok and int(p[1])==SHELL_TASK and 1<=int(p[2])<=SHELL_AUTOFILL_MAX_TICKS
   if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+input_idle+denim_waits+quil_waits+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
  for e in expiries:
