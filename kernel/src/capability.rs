@@ -91,8 +91,40 @@ pub struct DmaCapData { pub phys_addr: u64, pub length: u64, pub pku_key: u8 }
 #[derive(Debug, Clone, Copy)]
 pub struct VfsNodeCapData { pub inode_id: u64, pub permissions: u32, pub generation: u64 }
 
+/// Rights bits carried by every v2 object capability (Endpoint, Notification,
+/// Reply). A derived capability holds a subset of its parent's rights.
+pub mod rights {
+    pub const READ: u32 = 1 << 0;
+    pub const WRITE: u32 = 1 << 1;
+    /// May mint and grant a derived capability with a subset of these rights.
+    pub const GRANT: u32 = 1 << 2;
+    /// Endpoint: may Call it. Notification: may signal it.
+    pub const CALL: u32 = 1 << 3;
+    /// Endpoint: may receive on it. Notification: may wait on it.
+    pub const RECEIVE: u32 = 1 << 4;
+    pub const ALL: u32 = READ | WRITE | GRANT | CALL | RECEIVE;
+}
+
+/// A v2 kernel-object capability: which object, which generation of it, what
+/// the holder may do and the badge the kernel delivers with each use. Valid
+/// only while `generation` equals the object's live generation, so bumping
+/// the object's generation revokes every copy at once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ObjectCap {
+    pub object: u32,
+    pub generation: u32,
+    pub rights: u32,
+    pub badge: u64,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum CapabilityData {
+    /// IPC v2 rendezvous endpoint (kernel/src/ipc_v2/endpoint.rs).
+    Endpoint(ObjectCap),
+    /// IPC v2 notification word, OR-ed by signalers (ipc_v2/notification.rs).
+    Notification(ObjectCap),
+    /// One-shot reply to one call; `generation` is the caller's incarnation.
+    Reply(ObjectCap),
     Memory(MemoryCapData), DMA(DmaCapData), IPC(IpcCapData), Interrupt(InterruptCapData),
     Domain(u32), Node(NodeCapData), Spawn(SpawnCapData), Pci(PciCapData),
     Network(NetworkCapData), Socket(SocketCapData), MemLend(MemLendCapData), RemoteProxy(GlobalCapId),
