@@ -1,0 +1,17 @@
+name: SexOS image from this run
+description: Unpack the image the `image` job built (ISO, iso_root, target outputs, runtime gate log).
+runs:
+  using: composite
+  steps:
+  - uses: actions/download-artifact@v4
+    with:
+      name: sexos-image
+      path: ${{ runner.temp }}/sexos-image
+  - name: Unpack the image
+    shell: bash
+    run: |
+      tar -I zstd -xf "$RUNNER_TEMP/sexos-image/image.tar.zst"
+      mkdir -p "$RUNNER_TEMP/sexos-runtime"
+      tar -I zstd -xf "$RUNNER_TEMP/sexos-image/runtime.tar.zst" -C "$RUNNER_TEMP/sexos-runtime"
+      rm -rf "$RUNNER_TEMP/sexos-image"
+      sha256sum sexos-v1.0.0.iso

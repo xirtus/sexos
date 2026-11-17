@@ -1,11 +1,18 @@
-"""Parse actual workflow scalars before asking Bash to validate their scripts."""
+"""Parse actual workflow scalars before asking Bash to validate their scripts.
+
+Once, reading/places folded their build command and the next step's `truncate`
+into one invalid shell line. The image is now built once by the `image` job, so
+this checks every `run:` scalar of every job with a real YAML parser and `bash -n`,
+and that the jobs testing the shared image unpack it instead of rebuilding.
+"""
 from pathlib import Path
 import json
 import subprocess
 import unittest
 
 ROOT=Path(__file__).resolve().parents[2]
-JOBS=('reading','places')
+SHARED=('boot','web','devices','media','editor','programs','reading','places','desktop',
+        'js-jit','productivity','terminal-editor','documents-pictures')
 
 
 def parse_yaml(source):
@@ -17,57 +24,45 @@ def parse_yaml(source):
     return json.loads(parsed.stdout)
 
 
-def build_steps(workflow):
-    result={}
-    for name in JOBS:
-        jobs=workflow['jobs']
-        assert name in jobs['build']['needs'], 'required job was removed from aggregator'
-        matches=[step for step in jobs[name]['steps'] if step.get('name')=='Build the image']
-        assert len(matches)==1, 'missing or duplicate build step'
-        run=matches[0]['run']
-        assert run.endswith('\n'), 'build command must retain a literal newline'
-        syntax=subprocess.run(['bash','-n'],input=run,text=True,capture_output=True,timeout=10)
-        assert syntax.returncode==0, syntax.stderr
-        result[name]=run
-    return result
+def check_runs(workflow):
+    for name,job in workflow['jobs'].items():
+        for step in job['steps']:
+            run=step.get('run')
+            if run is None:continue
+            syntax=subprocess.run(['bash','-n'],input=run,text=True,capture_output=True,timeout=10)
+            assert syntax.returncode==0,f'{name}: {step.get("name")}: {syntax.stderr}'
 
 
 class WorkflowBuildScalars(unittest.TestCase):
-    def test_actual_literal_build_commands_parse_with_newlines_and_valid_shell(self):
-        workflow=parse_yaml((ROOT/'.github/workflows/ci.yml').read_text())
-        runs=build_steps(workflow)
-        for name,run in runs.items():
-            with self.subTest(job=name):
-                self.assertEqual(run.count('./scripts/entrypoint_build.sh'),1)
-                self.assertIn(f'"$RUNNER_TEMP/{name}-build.log"',run)
-                # Preserve the seed's real command boundary whether truncate is
-                # in this literal block or the following independent app step.
-                commands='\n'.join(step.get('run','') for step in workflow['jobs'][name]['steps'])
-                self.assertRegex(commands,r'\)\n+truncate -s 256M')
+    def setUp(self):
+        self.source=(ROOT/'.github/workflows/ci.yml').read_text()
+        self.workflow=parse_yaml(self.source)
 
-    def test_the_exact_old_plain_multiline_form_folds_into_invalid_shell(self):
-        source=(ROOT/'.github/workflows/ci.yml').read_text()
-        for name in JOBS:
-            with self.subTest(job=name):
-                command=f'./scripts/entrypoint_build.sh > "$RUNNER_TEMP/{name}-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/{name}-build.log"; exit 1)'
-                literal='      run: |\n        '+command
-                self.assertEqual(source.count(literal),1)
-                broken=source.replace(literal,'      run: '+command+f'\n        truncate -s 256M "$RUNNER_TEMP/blank-{name}.img"',1)
-                parsed=parse_yaml(broken)
-                run=next(step['run'] for step in parsed['jobs'][name]['steps'] if step.get('name')=='Build the image')
-                self.assertIn(') truncate -s 256M',run)
-                self.assertNotIn('\ntruncate',run)
-                syntax=subprocess.run(['bash','-n'],input=run,text=True,capture_output=True,timeout=10)
-                self.assertNotEqual(syntax.returncode,0)
-                with self.assertRaises(AssertionError):build_steps(parsed)
+    def test_every_run_scalar_is_valid_shell(self):
+        check_runs(self.workflow)
 
-    def test_folded_block_indicator_is_rejected_too(self):
-        source=(ROOT/'.github/workflows/ci.yml').read_text()
-        for name in JOBS:
-            command=f'./scripts/entrypoint_build.sh > "$RUNNER_TEMP/{name}-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/{name}-build.log"; exit 1)'
-            broken=source.replace('      run: |\n        '+command,
-                                  '      run: >\n        '+command+f'\n        truncate -s 256M "$RUNNER_TEMP/blank-{name}.img"',1)
-            with self.subTest(job=name),self.assertRaises(AssertionError):build_steps(parse_yaml(broken))
+    def test_shared_image_jobs_unpack_it_and_do_not_rebuild(self):
+        jobs=self.workflow['jobs']
+        image=[s.get('run','') for s in jobs['image']['steps']]
+        self.assertTrue(any('master_runtime_gate.sh' in r for r in image))
+        self.assertTrue(any('ci_image_pack.sh' in r for r in image))
+        for name in SHARED:
+            with self.subTest(job=name):
+                job=jobs[name]
+                self.assertEqual(job.get('needs'),'image')
+                self.assertIn(name,jobs['build']['needs'])
+                uses=[s.get('uses') for s in job['steps']]
+                self.assertEqual(uses.count('./.github/actions/image'),1)
+                runs='\n'.join(s.get('run','') for s in job['steps'])
+                self.assertNotIn('entrypoint_build.sh',runs)
+                self.assertNotIn('master_runtime_gate.sh',runs)
+        self.assertEqual(set(jobs['build']['needs']),set(jobs)-{'build'})
+
+    def test_a_folded_command_is_caught(self):
+        command='scripts/ci_image_pack.sh "$RUNNER_TEMP/sexos-image/image.tar.zst"'
+        self.assertEqual(self.source.count('bash '+command),1)
+        broken=self.source.replace('bash '+command,'bash '+command+' (',1)
+        with self.assertRaises(AssertionError):check_runs(parse_yaml(broken))
 
 
 if __name__=='__main__':unittest.main()
