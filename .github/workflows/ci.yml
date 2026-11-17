@@ -120,6 +120,11 @@ jobs:
       run: bash scripts/polyamour/check_wasm_guest.sh && cargo test --locked --release -p sex-3d -p polyamour -p polyamour-sdk -p polyamour-wasm
     - name: Burlesque presentations engine (PPTX, ODP, presenter view, PDF export) on the host
       run: bash scripts/burlesque_host_gate.sh
+    - name: Cabaret studio, Filigree fonts and the shared colour, broadcast and audio engines on the host
+      run: |
+        cargo test --locked -p sex-color -p cabaret-core -p cabaret-proto -p cabaret-plugins -p filigree-core -p moan-core -p moan-plugin
+        cargo test --locked -p cabaret -p filigree --no-default-features
+        cargo test --locked -p sex-pdx --test cabaret_omatools
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport

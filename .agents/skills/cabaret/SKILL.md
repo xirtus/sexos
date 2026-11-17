@@ -1,8 +1,8 @@
 ---
 name: cabaret
 description: >
-  Guide for Cabaret, the SexOS live video broadcast studio and recorder with OBS
-  and OmaBroadcast parity. Covers headless OmaTools CLI (`schema`, `status --json`,
+  Guide for Cabaret, the SexOS live video broadcast studio and recorder. Covers
+  the headless CLI (`schema`, `status --json`,
   `list`, `inspect`, `ctl`, `apply`), OBS WebSocket v5 (`:4455`), `cabaret-ops`
   Python/Lua/JS line-RPC, 12 safe-Rust plugins, Wide-Gamut `LinearRec2020`/HDR10
   compositing, Burlesque `LivePresentationSource`, and Splicy timeline handoff.
@@ -12,9 +12,9 @@ description: >
 
 Cabaret (`apps/cabaret`, `/bin/cabaret`) is the SexOS live broadcast studio and recorder built on Weft (`crates/cabaret-core`, `crates/cabaret-plugins`, `crates/cabaret-proto`).
 
-Spindle bare-name aliases `obs`, `omabroadcast`, and `broadcast` resolve to `/bin/cabaret`.
+Spindle bare-name alias `broadcast` resolves to `/bin/cabaret`.
 
-## Headless OmaTools CLI
+## Headless CLI
 
 Run subcommands directly (or discover capabilities via `cabaret schema`):
 

@@ -443,9 +443,6 @@ pub const RENAMED: &[(&[u8], &[u8])] = &[
     (b"view", b"gaze"),
     (b"settings", b"tatami"),
     (b"filagree", b"filigree"),
-    (b"omafont", b"filigree"),
-    (b"obs", b"cabaret"),
-    (b"omabroadcast", b"cabaret"),
     (b"broadcast", b"cabaret"),
 ];
 /// The program a bare name means now; a path or a current name is kept as given.

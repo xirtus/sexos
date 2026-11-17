@@ -215,7 +215,7 @@ pub fn schema() -> JsonVal {
         ),
         cmd_doc(
             "list",
-            "List scenes, inputs, filters, or attached Stream Deck devices",
+            "List scenes, inputs, filters, or attached control decks",
             &["[scenes|inputs|devices]"],
             &[],
             "cabaret list scenes",
@@ -229,7 +229,7 @@ pub fn schema() -> JsonVal {
         ),
         cmd_doc(
             "schema",
-            "Emit this machine-readable OmaTools JSON schema",
+            "Emit this machine-readable Cabaret JSON schema",
             &[],
             &[],
             "cabaret schema",

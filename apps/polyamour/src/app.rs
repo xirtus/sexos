@@ -559,7 +559,7 @@ fn window_menu(_d: &Doc) -> Vec<MenuItem> {
 }
 
 fn help_menu(_d: &Doc) -> Vec<MenuItem> {
-    vec![MenuItem::Heading("Polyamour 0.1: Blender's layout and keymap on SexOS".into())]
+    vec![MenuItem::Heading("Polyamour 0.1 on SexOS".into())]
 }
 
 fn topbar(ui: &mut Ui, doc: &Doc, workspaces: &[Workspace], active: &mut usize, r: Rect) {

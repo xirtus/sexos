@@ -434,7 +434,7 @@ pub fn run_repair_for_printing(d: &mut Doc) -> Result<ManifoldReport, String> {
 pub fn run(d: &mut Doc, op: &Op) -> bool {
     let arg = op.arg.as_str();
     match op.id.as_str() {
-        "object.photo_to_mesh" | "mesh.photo_to_mesh" | "omamesh.photo_to_mesh" => {
+        "object.photo_to_mesh" | "mesh.photo_to_mesh" => {
             let args = parse_photo_args(arg);
             let res = find_source_image(d, &args)
                 .and_then(|(name, img)| generate_photo_mesh_from_image(d, &name, &img, args.options));
@@ -443,39 +443,39 @@ pub fn run(d: &mut Doc, op: &Op) -> bool {
             }
             true
         }
-        "object.scale_to_height_mm" | "mesh.scale_to_height_mm" | "omamesh.scale_to_height_mm" => {
+        "object.scale_to_height_mm" | "mesh.scale_to_height_mm" => {
             let h = parse_scalar_arg(arg, &["height_mm", "height", "mm"]).unwrap_or(50.0);
             if let Err(e) = run_scale_to_height_mm(d, h) {
                 d.report = format!("Scale to Height (mm): {e}");
             }
             true
         }
-        "object.place_on_bed" | "mesh.place_on_bed" | "omamesh.place_on_bed" => {
+        "object.place_on_bed" | "mesh.place_on_bed" => {
             if let Err(e) = run_place_on_bed(d) {
                 d.report = format!("Place on Bed: {e}");
             }
             true
         }
-        "object.orient_upright" | "mesh.orient_upright" | "omamesh.orient_upright" => {
+        "object.orient_upright" | "mesh.orient_upright" => {
             if let Err(e) = run_orient_upright(d) {
                 d.report = format!("Orient Upright: {e}");
             }
             true
         }
-        "object.decimate_qem" | "mesh.decimate_qem" | "omamesh.decimate_qem" => {
+        "object.decimate_qem" | "mesh.decimate_qem" => {
             let ratio = parse_scalar_arg(arg, &["ratio", "target_ratio"]).unwrap_or(0.5);
             if let Err(e) = run_decimate_qem(d, ratio) {
                 d.report = format!("QEM Decimate: {e}");
             }
             true
         }
-        "object.inspect_manifold" | "mesh.inspect_manifold" | "omamesh.inspect_manifold" => {
+        "object.inspect_manifold" | "mesh.inspect_manifold" => {
             if let Err(e) = run_inspect_manifold(d) {
                 d.report = format!("Inspect Manifold: {e}");
             }
             true
         }
-        "object.repair_for_printing" | "mesh.repair_for_printing" | "omamesh.repair_for_printing" => {
+        "object.repair_for_printing" | "mesh.repair_for_printing" => {
             if let Err(e) = run_repair_for_printing(d) {
                 d.report = format!("Repair for Printing: {e}");
             }
@@ -554,7 +554,7 @@ mod tests {
 
         let mut d = Doc::default();
         let arg = format!("path={};quality=draft;height_mm=60", tmp.to_string_lossy());
-        d.run(&Op::with("omamesh.photo_to_mesh", &arg));
+        d.run(&Op::with("object.photo_to_mesh", &arg));
         let _ = std::fs::remove_file(&tmp);
 
         let obj = d.active().expect("generated object");

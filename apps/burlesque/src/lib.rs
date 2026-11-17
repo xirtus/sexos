@@ -111,9 +111,9 @@ impl Burlesque {
             slide,
             AspectRatio::Ratio16x9,
             "Burlesque Presentations",
-            "Keynote-Grade Presentation Engine for SexOS",
+            "Slides, builds and presenter view for SexOS",
         );
-        slide.set_speaker_notes("Welcome to Burlesque presentations on SexOS. Keynote-class themes, transitions, presenter view, and full PPTX/ODP/PDF workflows.");
+        slide.set_speaker_notes("Welcome to Burlesque presentations on SexOS: themes, transitions, presenter view, and full PPTX/ODP/PDF workflows.");
 
         let preview_w = 640;
         let preview_h = 360;
@@ -127,7 +127,7 @@ impl Burlesque {
             Command::new("burlesque.import-pptx", "Import PPTX"),
             Command::new("burlesque.save-odp", "Save ODP"),
             Command::new("burlesque.import-odp", "Import ODP"),
-            Command::new("burlesque.import-key", "Import Keynote (.key)"),
+            Command::new("burlesque.import-key", "Import .key Presentation"),
             Command::new("burlesque.presenter", "Presenter View").shortcut("F5"),
             Command::new("burlesque.add-slide", "Add Slide").shortcut("Ctrl+N"),
             Command::new("burlesque.delete-slide", "Delete Slide"),
@@ -311,13 +311,13 @@ impl Burlesque {
         ui.set_layout(field_title, Layout::default().width(220.0));
 
         ui.label(sidebar, "Slide Body:");
-        let field_body = ui.field(sidebar, "Keynote-Grade Presentation Engine for SexOS", "Body");
+        let field_body = ui.field(sidebar, "Slides, builds and presenter view for SexOS", "Body");
         ui.set_layout(field_body, Layout::default().width(220.0));
 
         ui.label(sidebar, "Speaker Notes:");
         let field_notes = ui.field(
             sidebar,
-            "Welcome to Burlesque presentations on SexOS. Keynote-class themes, transitions, presenter view, and full PPTX/ODP/PDF workflows.",
+            "Welcome to Burlesque presentations on SexOS: themes, transitions, presenter view, and full PPTX/ODP/PDF workflows.",
             "Notes",
         );
         ui.set_layout(field_notes, Layout::default().width(220.0));

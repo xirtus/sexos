@@ -484,7 +484,7 @@ impl CabaretStudio {
             .add_source(
                 "UVC Camera (1080p60)",
                 cabaret_core::scene::SourceKind::UvcCamera {
-                    device_id: String::from("/dev/uvc0"),
+                    device_id: String::from("sexuvc:0"),
                     pixel_fmt: UvcPixelFormat::Nv12,
                     range_auto: true,
                 },

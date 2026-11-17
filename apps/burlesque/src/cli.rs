@@ -30,7 +30,7 @@ pub fn load_deck_from_path(path: &str) -> Result<Deck, String> {
     } else if lower.ends_with(".odp") {
         Deck::open_odp(&bytes).map_err(|e| format!("failed to open ODP '{}': {}", path, e))
     } else if lower.ends_with(".key") {
-        Deck::open_keynote(&bytes).map_err(|e| format!("failed to open Keynote '{}': {}", path, e))
+        Deck::open_keynote(&bytes).map_err(|e| format!("failed to open .key presentation '{}': {}", path, e))
     } else if lower.ends_with(".md") || lower.ends_with(".markdown") {
         let s = std::str::from_utf8(&bytes)
             .map_err(|e| format!("invalid UTF-8 in '{}': {}", path, e))?;

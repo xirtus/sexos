@@ -5,14 +5,14 @@ description: >
   typography bridge. Covers headless CLI (`list`, `info`, `install-check`,
   `activate`, `deactivate`, `dupes`, `compare`, `spindle-hand-off` with `--json`),
   `/system/fonts/active.toml` non-destructive manifest, 6-family comparison, and
-  `filagree` / `omafont` Spindle aliases.
+  `filagree` Spindle alias.
 ---
 
 # Filigree
 
 Filigree (`apps/filigree`, `/bin/filigree`) is the SexOS font manager, specimen comparator, and Spindle typography bridge built on Weft (`crates/filigree-core`, `crates/sex-font`).
 
-Spindle bare-name aliases `filagree` and `omafont` resolve to `/bin/filigree`.
+Spindle bare-name alias `filagree` resolves to `/bin/filigree`.
 
 ## Headless CLI (`--json` supported on all commands)
 

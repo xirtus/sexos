@@ -3,7 +3,7 @@ name = "cabaret-plugins"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
-description = "Native pure-Rust ports of the 12 essential OBS Studio plugins for Cabaret"
+description = "Cabaret effects, transitions, captions, overlays and multi-canvas tools in pure Rust"
 
 [dependencies]
 libm = "0.2"

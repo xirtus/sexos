@@ -3,7 +3,7 @@ name = "cabaret"
 version = "0.1.0"
 edition = "2021"
 license = "GPL-3.0-only"
-description = "Cabaret: the SexOS live video broadcast studio and recorder with full OBS + OmaBroadcast parity"
+description = "Cabaret: the SexOS live video broadcast studio and recorder"
 
 [[bin]]
 name = "cabaret"

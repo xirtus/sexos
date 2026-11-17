@@ -53,7 +53,7 @@ fn test_burlesque_window_interactions() {
     assert_eq!(b.current_transition(), Transition::None);
     assert_eq!(
         b.deck.get_slide(0).unwrap().notes(),
-        "Welcome to Burlesque presentations on SexOS. Keynote-class themes, transitions, presenter view, and full PPTX/ODP/PDF workflows."
+        "Welcome to Burlesque presentations on SexOS: themes, transitions, presenter view, and full PPTX/ODP/PDF workflows."
     );
 
     // 2. Add Slide

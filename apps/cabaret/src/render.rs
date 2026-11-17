@@ -166,7 +166,7 @@ pub fn build_raw_sources(
         fill_rect_fb(&mut alerts, 8, 8, (w as i32 - 16).max(32), 46, [0.08, 0.03, 0.14, 0.88]);
         stroke_rect_fb(&mut alerts, 8, 8, (w as i32 - 16).max(32), 46, 2, [0.95, 0.25, 0.65, 0.95]);
         draw_mini_text(&mut alerts, 16, 18, "ALERT OVERLAY", [1.0, 0.85, 0.35, 1.0]);
-        draw_mini_text(&mut alerts, 16, 32, "OBSSTUDIO BRIDGE OK", [0.75, 0.95, 1.0, 1.0]);
+        draw_mini_text(&mut alerts, 16, 32, "BROWSER BRIDGE OK", [0.75, 0.95, 1.0, 1.0]);
         map.insert(studio.sources.browser_alerts, alerts);
     }
 

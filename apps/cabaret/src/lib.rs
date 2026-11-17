@@ -573,7 +573,7 @@ impl Cabaret {
         let vertical_summary = ui.paragraph(vert_card, "");
 
         let fx_card = ui.card(pl_scroll, Layout::column().gap(6.0).fill_width().shrink(0.0));
-        ui.text(fx_card, "OBS Essential Plugins Rack", TextStyle::Heading);
+        ui.text(fx_card, "Effects Rack", TextStyle::Heading);
         let fx_row1 = ui.group(fx_card, Layout::row().gap(6.0).wrap().fill_width());
         let shader_cycle_btn = ui.button(fx_row1, "Cycle Shader Preset");
         let shader_clear_btn = ui.button(fx_row1, "Shader Off");
@@ -1545,7 +1545,7 @@ impl Cabaret {
         ui.set_text(
             self.header_status,
             &format!(
-                "{} | {} | {} | StreamDeck: {} attached",
+                "{} | {} | {} | Control decks: {}",
                 pgm_name,
                 self.studio.profile.name,
                 if self.studio.capture_exclusion.cabaret_ui_hidden {

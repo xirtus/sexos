@@ -179,7 +179,7 @@ pub fn dispatch_obs_request(studio: &mut CabaretStudio, req: &ObsRequest) -> Obs
         ObsRequest::GetVersion => ObsResponse::ok(
             rtype,
             ObsResponseData::Version {
-                obs_version: String::from("Cabaret 0.1.0 (SexOS OBS-Parity)"),
+                obs_version: String::from("Cabaret 0.1.0"),
                 obs_web_socket_version: String::from("5.5.0"),
                 rpc_version: OBS_WS_RPC_VERSION,
                 available_requests: vec![
@@ -918,7 +918,7 @@ pub fn dispatch_script_batch(
                 Err(resp
                     .status
                     .comment
-                    .unwrap_or_else(|| String::from("OBS request failed")))
+                    .unwrap_or_else(|| String::from("Request failed")))
             }
         }
         ScriptAction::SetProperty {

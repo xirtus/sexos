@@ -250,7 +250,7 @@ pub fn import_keynote_with_stats(bytes: &[u8]) -> Result<(Deck, KeynoteImportSta
                 if sex_image::decode(&prev_bytes, &sex_image::Limits::PHOTO).is_ok() {
                     let mut slide = Slide::new(1, SlideLayout::Blank);
                     slide.title = if deck.metadata.title.is_empty() {
-                        String::from("Keynote Preview")
+                        String::from("Imported Preview")
                     } else {
                         deck.metadata.title.clone()
                     };
@@ -272,7 +272,7 @@ pub fn import_keynote_with_stats(bytes: &[u8]) -> Result<(Deck, KeynoteImportSta
     // 7. Guaranteed fallback slide if metadata was present in an otherwise binary-only .key
     if deck.slides.is_empty() {
         let title = if deck.metadata.title.is_empty() {
-            String::from("Keynote Presentation")
+            String::from("Imported Presentation")
         } else {
             deck.metadata.title.clone()
         };
