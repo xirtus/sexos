@@ -127,6 +127,7 @@ jobs:
         cargo test --locked -p sex-color -p cabaret-core -p cabaret-proto -p cabaret-plugins -p filigree-core -p moan-core -p moan-plugin
         cargo test --locked -p cabaret -p filigree --no-default-features
         cargo test --locked -p sex-pdx --test cabaret_omatools
+        cargo test --locked -p sex-font --features inspect --lib
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport

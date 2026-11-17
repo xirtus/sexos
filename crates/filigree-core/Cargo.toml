@@ -7,6 +7,6 @@ description = "Filigree font manager engine: OpenType/TrueType binary table insp
 
 [dependencies]
 ttf-parser = { version = "0.25", default-features = false, features = ["no-std-float", "opentype-layout"] }
-sex-font = { path = "../sex-font" }
+sex-font = { path = "../sex-font", features = ["inspect"] }
 sex-archive = { path = "../sex-archive" }
 sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
