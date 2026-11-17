@@ -202,6 +202,7 @@ members = [
     "apps/splicy-probe",
     "crates/polyamour-sdk",
     "crates/polyamour-wasm",
+    "crates/sex-color",
 ]
 [workspace.package]
 license = "GPL-3.0-only"

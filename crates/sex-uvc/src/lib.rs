@@ -16,6 +16,7 @@ pub mod fixture;
 pub mod photobooth;
 pub mod pixel;
 pub mod stream;
+pub mod virtual_cam;
 
 pub use control::VideoProbeCommitControl;
 pub use descriptors::{parse_descriptors, FormatDescriptor, FormatKind, FrameDescriptor, UvcDeviceDescriptors};
@@ -23,3 +24,7 @@ pub use fixture::{SyntheticUvcDevice, WireMessage};
 pub use photobooth::{apply_filter, compose_burst_contact_sheet, render_effects_grid, Filter};
 pub use pixel::{decode_frame, nv12_to_argb, yuy2_to_argb};
 pub use stream::{CompleteFrame, UvcPayloadHeader, UvcStreamAssembler};
+pub use virtual_cam::{
+    rgba_to_argb, rgba_to_nv12, rgba_to_yuy2, VirtualCamError, VirtualCamFormat, VirtualCamHeader,
+    VirtualCamRing, VirtualCamSource, VIRTUAL_CAM_NAME,
+};

@@ -110,3 +110,273 @@ pub const fn master_gain(volume: u8) -> u32 {
     let v = if volume > 100 { 100 } else { volume } as u32;
     v * v * 65536 / 10_000
 }
+
+// ── Per-PD Audio Capture Tap & Private Browser Sink (Cabaret / Bell) ────────
+
+/// Cabaret / Shell -> Bell: request, consent-grant, query, or stop a per-PD audio tap.
+pub const OP_MIXER_APP_TAP: u64 = 0xCD;
+/// Cabaret -> Bell: configure an isolated private sink for Browser Source audio.
+pub const OP_MIXER_PRIVATE_SINK: u64 = 0xCE;
+
+const APP_TAP_REPLY_BIT: u64 = 1 << 54;
+const PRIVATE_SINK_REPLY_BIT: u64 = 1 << 53;
+
+/// Lifecycle state of a per-PD audio capture tap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AppTapState {
+    Off = 0,
+    WaitingConsent = 1,
+    Active = 2,
+}
+
+impl AppTapState {
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Off),
+            1 => Some(Self::WaitingConsent),
+            2 => Some(Self::Active),
+            _ => None,
+        }
+    }
+}
+
+/// Control action sent via `OP_MIXER_APP_TAP`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum AppTapAction {
+    Query = 0,
+    RequestStart = 1,
+    GrantConsent = 2,
+    Stop = 3,
+}
+
+impl AppTapAction {
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(Self::Query),
+            1 => Some(Self::RequestStart),
+            2 => Some(Self::GrantConsent),
+            3 => Some(Self::Stop),
+            _ => None,
+        }
+    }
+}
+
+/// Wire request for `OP_MIXER_APP_TAP`.
+///
+/// `RequestStart` moves an `Off` tap into `WaitingConsent`; only a person-facing
+/// authority (Shell) sending `GrantConsent` can transition it to `Active`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AppTapRequest {
+    pub action: AppTapAction,
+    pub target_pd: u32,
+    pub tap_id: u32,
+    pub owner_pd: u32,
+}
+
+impl AppTapRequest {
+    pub const fn new(
+        action: AppTapAction,
+        target_pd: u32,
+        tap_id: u32,
+        owner_pd: u32,
+    ) -> Option<Self> {
+        if target_pd == 0
+            || target_pd > 0xFF_FFFF
+            || tap_id == 0
+            || tap_id > 0xFF_FFFF
+            || owner_pd == 0
+            || owner_pd > 0xFF_FFFF
+        {
+            return None;
+        }
+        Some(Self {
+            action,
+            target_pd,
+            tap_id,
+            owner_pd,
+        })
+    }
+
+    pub const fn args(self) -> [u64; 3] {
+        [
+            (self.action as u64) | ((self.target_pd as u64) << 8),
+            (self.tap_id as u64) | ((self.owner_pd as u64) << 24),
+            0,
+        ]
+    }
+
+    pub fn decode(args: [u64; 3]) -> Option<Self> {
+        if (args[0] >> 32) != 0 || (args[1] >> 48) != 0 || args[2] != 0 {
+            return None;
+        }
+        let action = AppTapAction::from_u8((args[0] & 0xFF) as u8)?;
+        let target_pd = ((args[0] >> 8) & 0xFF_FFFF) as u32;
+        let tap_id = (args[1] & 0xFF_FFFF) as u32;
+        let owner_pd = ((args[1] >> 24) & 0xFF_FFFF) as u32;
+        Self::new(action, target_pd, tap_id, owner_pd)
+    }
+}
+
+/// Bell's reply to `OP_MIXER_APP_TAP`, tagged so `is_reply(word)` holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AppTapReply {
+    pub state: AppTapState,
+    pub target_pd: u32,
+    pub tap_id: u32,
+}
+
+impl AppTapReply {
+    pub const fn new(state: AppTapState, target_pd: u32, tap_id: u32) -> Option<Self> {
+        if target_pd == 0 || target_pd > 0xFF_FFFF || tap_id == 0 || tap_id > 0xFF_FFFF {
+            return None;
+        }
+        Some(Self {
+            state,
+            target_pd,
+            tap_id,
+        })
+    }
+
+    pub const fn word(self) -> u64 {
+        TAG | APP_TAP_REPLY_BIT
+            | ((self.state as u64) << 48)
+            | ((self.tap_id as u64) << 24)
+            | (self.target_pd as u64)
+    }
+
+    pub fn decode(word: u64) -> Option<Self> {
+        if !is_reply(word)
+            || word == REFUSED
+            || (word & APP_TAP_REPLY_BIT) == 0
+            || (word & (0xF << 50)) != 0
+        {
+            return None;
+        }
+        let state = AppTapState::from_u8(((word >> 48) & 0x3) as u8)?;
+        let tap_id = ((word >> 24) & 0xFF_FFFF) as u32;
+        let target_pd = (word & 0xFF_FFFF) as u32;
+        Self::new(state, target_pd, tap_id)
+    }
+}
+
+/// Routing mode for an isolated Browser Source sink.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum PrivateSinkRoute {
+    /// Captured solely into the owning studio session; silent on all physical speakers.
+    CaptureOnly = 1,
+    /// Captured into the owning studio session AND locally monitored to output devices.
+    CaptureAndMonitor = 2,
+    /// Tear down the private sink and restore normal routing.
+    Release = 3,
+}
+
+impl PrivateSinkRoute {
+    pub const fn from_u8(v: u8) -> Option<Self> {
+        match v {
+            1 => Some(Self::CaptureOnly),
+            2 => Some(Self::CaptureAndMonitor),
+            3 => Some(Self::Release),
+            _ => None,
+        }
+    }
+}
+
+/// Specification for an isolated Browser Source audio sink (`OP_MIXER_PRIVATE_SINK`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PrivateSinkSpec {
+    pub sink_id: u32,
+    pub source_pd: u32,
+    pub owner_pd: u32,
+    pub route: PrivateSinkRoute,
+    pub gain_percent: u8,
+    pub muted: bool,
+}
+
+impl PrivateSinkSpec {
+    pub const fn new(
+        sink_id: u32,
+        source_pd: u32,
+        owner_pd: u32,
+        route: PrivateSinkRoute,
+        gain_percent: u8,
+        muted: bool,
+    ) -> Option<Self> {
+        if sink_id == 0
+            || sink_id > 0xFF_FFFF
+            || source_pd == 0
+            || source_pd > 0xFF_FFFF
+            || owner_pd == 0
+            || owner_pd > 0xFF_FFFF
+            || gain_percent > 100
+        {
+            return None;
+        }
+        Some(Self {
+            sink_id,
+            source_pd,
+            owner_pd,
+            route,
+            gain_percent,
+            muted,
+        })
+    }
+
+    pub const fn args(self) -> [u64; 3] {
+        let arg0 = (self.sink_id as u64)
+            | ((self.source_pd as u64) << 24)
+            | ((self.route as u64) << 48)
+            | ((self.muted as u64) << 56);
+        let arg1 = (self.owner_pd as u64) | ((self.gain_percent as u64) << 24);
+        [arg0, arg1, 0]
+    }
+
+    pub fn decode(args: [u64; 3]) -> Option<Self> {
+        if (args[0] >> 57) != 0 || (args[1] >> 32) != 0 || args[2] != 0 {
+            return None;
+        }
+        let sink_id = (args[0] & 0xFF_FFFF) as u32;
+        let source_pd = ((args[0] >> 24) & 0xFF_FFFF) as u32;
+        let route = PrivateSinkRoute::from_u8(((args[0] >> 48) & 0xFF) as u8)?;
+        let muted = ((args[0] >> 56) & 1) != 0;
+        let owner_pd = (args[1] & 0xFF_FFFF) as u32;
+        let gain_percent = ((args[1] >> 24) & 0xFF) as u8;
+        Self::new(sink_id, source_pd, owner_pd, route, gain_percent, muted)
+    }
+}
+
+pub const fn private_sink_reply(
+    sink_id: u32,
+    route: PrivateSinkRoute,
+    active: bool,
+) -> Option<u64> {
+    if sink_id == 0 || sink_id > 0xFF_FFFF {
+        return None;
+    }
+    Some(
+        TAG | PRIVATE_SINK_REPLY_BIT
+            | ((active as u64) << 32)
+            | ((route as u64) << 24)
+            | (sink_id as u64),
+    )
+}
+
+pub fn decode_private_sink_reply(word: u64) -> Option<(u32, PrivateSinkRoute, bool)> {
+    if !is_reply(word)
+        || word == REFUSED
+        || (word & PRIVATE_SINK_REPLY_BIT) == 0
+        || (word & APP_TAP_REPLY_BIT) != 0
+        || ((word >> 33) & 0xF_FFFF) != 0
+    {
+        return None;
+    }
+    let sink_id = (word & 0xFF_FFFF) as u32;
+    if sink_id == 0 {
+        return None;
+    }
+    let route = PrivateSinkRoute::from_u8(((word >> 24) & 0xFF) as u8)?;
+    let active = ((word >> 32) & 1) != 0;
+    Some((sink_id, route, active))
+}
