@@ -8,6 +8,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 # Splicy lives in its own repository (github.com/xirtus/Splicy), checked out here as a submodule.
 [[ -f apps/splicy-studio/Cargo.toml ]] || git submodule update --init apps/splicy-studio
+# Splicy's lock file lives in its repository, but the SexOS crates it uses by path
+# (sex-egui, sex-std...) change here. Bring their entries up to date; every other
+# locked version stays as Splicy's lock file has it.
+(cd apps/splicy-studio && cargo update --workspace --quiet)
 src="$(python3 scripts/sex_std_source.py)"
 bin=apps/splicy-studio/target/x86_64-sex-std/release/splicy-studio
 build() {

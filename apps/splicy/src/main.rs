@@ -32,9 +32,10 @@ mod program {
     use sex_pdx::app_pointer::Kind;
     use sex_splice::export::{export_pictures, sound_pieces, Frames, Pictures, SoundPiece};
     use sex_splice::{Micros, SECOND};
+    use splicy::cache::{CacheConfig, CachedFrame, FrameCache};
     use splicy::media::{Library, Peaks, Thumb};
     use splicy::view::View;
-    use splicy::{words, Editor};
+    use splicy::{words, AuditionMode, Editor};
 
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -92,6 +93,7 @@ mod program {
         at_ms: i64,
         frame_ms: i64,
         pcm: Vec<[i16; 2]>,
+        cache: FrameCache,
     }
 
     impl Grabber {
@@ -99,6 +101,14 @@ mod program {
             let want = source / 1000;
             if self.at_ms >= 0 && want >= self.at_ms && want < self.at_ms + self.frame_ms {
                 return Ok(());
+            }
+            let tol_us = (self.frame_ms * 500).max(500);
+            if let Some(hit) = self.cache.get(0, source, tol_us, false) {
+                if hit.pixels.len() == self.picture.len() {
+                    self.picture.copy_from_slice(&hit.pixels);
+                    self.at_ms = hit.source_us / 1000;
+                    return Ok(());
+                }
             }
             if self.at_ms < 0 || want < self.at_ms || want > self.at_ms + 2000 {
                 self.dec.seek(want.max(0) as u64)?;
@@ -108,6 +118,14 @@ mod program {
                     Next::Picture { at_ms } => {
                         self.at_ms = at_ms.max(0);
                         if at_ms + self.frame_ms / 2 >= want {
+                            self.cache.insert(CachedFrame::new(
+                                0,
+                                self.at_ms * 1000,
+                                self.w,
+                                self.h,
+                                false,
+                                self.picture.clone(),
+                            ));
                             return Ok(());
                         }
                     }
@@ -283,6 +301,9 @@ mod program {
                 let _ = media;
                 let _ = g.show(s);
             }
+            if self.view.vu.visible {
+                self.view.vu.update_from_library(self.ed.timeline(), &self.lib, self.playhead, 40_000);
+            }
             let (w, h) = self.window.size();
             let picture = self.grab.as_ref().map(|g| (&g.picture[..], g.w, g.h));
             self.view.paint(self.window.pixels(), w, h, &self.ed, &self.lib, picture, self.playhead, &self.message);
@@ -323,6 +344,7 @@ mod program {
                         self.ed.redo();
                     }
                     Some(b'e') => self.export(),
+                    Some(b'h') => self.export_handoff(),
                     _ => return,
                 }
                 self.report();
@@ -363,6 +385,10 @@ mod program {
                     sex_pdx::serial_record!("[splicy.cleanup] cards={}", n);
                     self.message = format!("{n} suggestion{} to look at", if n == 1 { "" } else { "s" });
                 }
+                (_, Some(b'v')) => {
+                    self.view.vu.visible = !self.view.vu.visible;
+                    self.message = if self.view.vu.visible { "VU meter strip on".into() } else { "VU meter strip off".into() };
+                }
                 (_, Some(b'\\')) => self.preview_join(),
                 (_, Some(b'=')) => {
                     let w = self.window.size().0 as i32;
@@ -383,6 +409,7 @@ mod program {
                     if let Some((a, b)) = sel {
                         sex_pdx::serial_record!("[splicy.cut] first={} last={} text={}", a, b, self.ed.quote(a, b));
                     }
+                    self.ed.audition = AuditionMode::HearJoin;
                     self.follow_caret();
                     self.report();
                 }
@@ -391,13 +418,46 @@ mod program {
             }
         }
 
-        /// Show the pictures around the nearest join at their own pace.
+        /// Two-state `\` audition: alternates between playing the join and playing what was cut.
         fn preview_join(&mut self) {
+            let mode = self.ed.audition;
+            if mode == AuditionMode::HearRemoved {
+                if let Some((_media, removed)) = self.ed.removed_at_nearest_join() {
+                    sex_pdx::serial_record!("[splicy.join.removed] from_ms={} to_ms={}", removed.start / 1000, removed.end / 1000);
+                    self.message = "Auditioning removed passage (\\ again for the join)".into();
+                    let tl = self.ed.timeline();
+                    let step = (tl.fps_den as i64 * SECOND / tl.fps_num.max(1) as i64).max(1);
+                    let begun = sex_pdx::get_ticks();
+                    let mut s = removed.start;
+                    while s < removed.end {
+                        if let Some(Event::Close) = self.window.poll() {
+                            self.window.close_now();
+                        }
+                        if let Some(g) = self.grab.as_mut() {
+                            let _ = g.show(s);
+                        }
+                        let (w, h) = self.window.size();
+                        let picture = self.grab.as_ref().map(|g| (&g.picture[..], g.w, g.h));
+                        self.view.paint(self.window.pixels(), w, h, &self.ed, &self.lib, picture, self.playhead, &self.message);
+                        self.window.show_pixels(w, h);
+                        let due = begun + ((s - removed.start + step) / 1000) as u64;
+                        let now = sex_pdx::get_ticks();
+                        if due > now {
+                            let _ = sex_pdx::sys_wait_self_ticks(due - now);
+                        }
+                        s += step;
+                    }
+                    self.ed.cycle_audition();
+                    self.follow_caret();
+                    return;
+                }
+            }
             let Some(r) = self.ed.join_preview() else {
                 self.message = "No cuts yet: delete some words first.".into();
                 return;
             };
             sex_pdx::serial_record!("[splicy.join] from_ms={} to_ms={}", r.start / 1000, r.end / 1000);
+            self.message = "Auditioning join (\\ again for removed footage)".into();
             let tl = self.ed.timeline();
             let step = (tl.fps_den as i64 * SECOND / tl.fps_num.max(1) as i64).max(1);
             let begun = sex_pdx::get_ticks();
@@ -415,7 +475,41 @@ mod program {
                 }
                 t += step;
             }
+            self.ed.cycle_audition();
             self.follow_caret();
+        }
+
+        fn write_doc(&mut self, filename: &str, content: &str) -> Result<(), &'static str> {
+            let bytes = content.as_bytes();
+            if files::size(&mut self.window, filename.as_bytes()).is_err() {
+                files::create(&mut self.window, filename.as_bytes()).map_err(|_| "Cannot create handoff file.")?;
+            }
+            files::write(&mut self.window, filename.as_bytes(), bytes).map_err(|_| "Cannot write handoff file.")?;
+            Ok(())
+        }
+
+        fn export_handoff(&mut self) {
+            let stem = self.name.rsplit_once('.').map_or(self.name.as_str(), |(s, _)| s);
+            let stem = String::from(stem.rsplit('/').next().unwrap_or(stem).trim_start_matches('@'));
+            let bundle = sex_splice::handoff::build_handoff_bundle(self.ed.timeline(), Some(&self.ed.transcript), &stem);
+            let write_all = (|| -> Result<(), &'static str> {
+                self.write_doc(&format!("{stem}.fcpxml"), &bundle.fcpxml)?;
+                self.write_doc(&format!("{stem}.otio"), &bundle.otio)?;
+                self.write_doc(&format!("{stem}.edl"), &bundle.edl)?;
+                if let Some(srt) = &bundle.srt {
+                    self.write_doc(&format!("{stem}.srt"), srt)?;
+                }
+                self.write_doc(&format!("{stem}-handoff.md"), &bundle.readme)?;
+                files::sync(&mut self.window).map_err(|_| "Cannot sync handoff bundle.")?;
+                Ok(())
+            })();
+            match write_all {
+                Ok(()) => {
+                    sex_pdx::serial_record!("[splicy.handoff] stem={}", stem);
+                    self.message = format!("Saved {stem} NLE handoff (.fcpxml, .otio, .edl, .srt, README)");
+                }
+                Err(why) => self.message = String::from(why),
+            }
         }
 
         fn export(&mut self) {
@@ -612,7 +706,7 @@ mod program {
                     name, info.format, info.video_codec, info.audio_codec, info.width, info.height, fps.0, fps.1, info.duration_ms, transcript.words.len()
                 );
                 let g = if info.width > 0 {
-                    Some(Grabber { dec, w, h, picture: vec![0; w * h], at_ms: -1, frame_ms, pcm: vec![[0; 2]; 8192] })
+                    Some(Grabber { dec, w, h, picture: vec![0; w * h], at_ms: -1, frame_ms, pcm: vec![[0; 2]; 8192], cache: FrameCache::new(CacheConfig::low_memory()) })
                 } else {
                     None
                 };

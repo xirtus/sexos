@@ -7,6 +7,7 @@
 //! through and dimmed, so the editor sees what was taken out.
 
 use crate::media::Library;
+use crate::vu::{VuStrip, VU_STRIP_H};
 use crate::Editor;
 use alloc::format;
 use alloc::string::String;
@@ -62,10 +63,12 @@ pub struct Areas {
     pub ruler: Rect,
     /// Where the clips are drawn.
     pub tracks: Rect,
+    /// Bottom VU meter strip when shown.
+    pub vu: Rect,
     pub status: Rect,
 }
 
-pub fn areas(w: i32, h: i32) -> Areas {
+pub fn areas_with_vu(w: i32, h: i32, show_vu: bool) -> Areas {
     let body_y = TOOLBAR_H;
     let body_h = (h - TOOLBAR_H - STATUS_H).max(0);
     let top_h = body_h * 11 / 20;
@@ -77,11 +80,34 @@ pub fn areas(w: i32, h: i32) -> Areas {
     let player = Rect { x: left_w + PAD, y: body_y + PAD, w: (w - left_w - PAD * 2).max(0), h: (top_h - transport_h - PAD).max(0) };
     let transport = Rect { x: player.x, y: player.y + player.h, w: player.w, h: transport_h };
     let tl_y = body_y + top_h + 1;
-    let tl_h = (body_h - top_h - 1).max(0);
+    let total_tl_h = (body_h - top_h - 1).max(0);
+    let (tl_h, vu) = if show_vu {
+        let vu_h = VU_STRIP_H.min(total_tl_h);
+        let tl_h = total_tl_h - vu_h;
+        let vu_rect = Rect { x: 0, y: tl_y + tl_h, w, h: vu_h };
+        (tl_h, vu_rect)
+    } else {
+        (total_tl_h, Rect { x: 0, y: h - STATUS_H, w: 0, h: 0 })
+    };
     let heads = Rect { x: 0, y: tl_y + RULER_H, w: HEAD_W.min(w), h: (tl_h - RULER_H).max(0) };
     let ruler = Rect { x: heads.w, y: tl_y, w: (w - heads.w).max(0), h: RULER_H.min(tl_h) };
     let tracks = Rect { x: heads.w, y: heads.y, w: ruler.w, h: heads.h };
-    Areas { toolbar: Rect { x: 0, y: 0, w, h: TOOLBAR_H }, text, cards, player, transport, heads, ruler, tracks, status: Rect { x: 0, y: h - STATUS_H, w, h: STATUS_H } }
+    Areas {
+        toolbar: Rect { x: 0, y: 0, w, h: TOOLBAR_H },
+        text,
+        cards,
+        player,
+        transport,
+        heads,
+        ruler,
+        tracks,
+        vu,
+        status: Rect { x: 0, y: h - STATUS_H, w, h: STATUS_H },
+    }
+}
+
+pub fn areas(w: i32, h: i32) -> Areas {
+    areas_with_vu(w, h, false)
 }
 
 /// `t` as HH:MM:SS:FF at `fps`.
@@ -160,11 +186,22 @@ pub struct View {
     pub zoom: Micros,
     /// The timeline time at the left edge of the tracks.
     pub start: Micros,
+    /// Bottom-strip VU meter.
+    pub vu: VuStrip,
 }
 
 impl Default for View {
     fn default() -> Self {
-        View { pen: Pen::sans(16), small: Pen::sans(12), big: Pen::mono(18), scroll: 0, followed: None, zoom: 0, start: 0 }
+        View {
+            pen: Pen::sans(16),
+            small: Pen::sans(12),
+            big: Pen::mono(18),
+            scroll: 0,
+            followed: None,
+            zoom: 0,
+            start: 0,
+            vu: VuStrip::default(),
+        }
     }
 }
 
@@ -253,7 +290,7 @@ impl View {
     #[allow(clippy::too_many_arguments)]
     pub fn paint(&mut self, px: &mut [u32], w: usize, h: usize, ed: &Editor, lib: &Library, picture: Option<Picture>, playhead: Micros, message: &str) {
         let (wi, hi) = (w as i32, h as i32);
-        let a = areas(wi, hi);
+        let a = areas_with_vu(wi, hi, self.vu.visible);
         let mut c = Canvas::new(px, w, h);
         c.fill(0, 0, wi, hi, BG);
         self.toolbar(&mut c, a.toolbar, ed, playhead);
@@ -263,6 +300,10 @@ impl View {
         self.player(&mut c, a.player, picture);
         self.transport(&mut c, a.transport, ed, playhead);
         self.timeline(&mut c, &a, ed, lib, playhead);
+        if self.vu.visible {
+            self.vu.update_from_library(ed.timeline(), lib, playhead, 50_000);
+            self.vu.paint(&mut c, a.vu, &mut self.small);
+        }
         c.fill(0, a.status.y, wi, STATUS_H, PANEL);
         c.fill(0, a.status.y, wi, 1, LINE);
         let status = if message.is_empty() {
