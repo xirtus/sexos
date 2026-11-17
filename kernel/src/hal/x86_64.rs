@@ -6,6 +6,31 @@ use crate::interrupts;
 use core::sync::atomic::{AtomicU64, AtomicBool, Ordering};
 use x86_64::registers::control::Cr3;
 
+/// Ring-0 hardening each core turns on (docs/handoff/KERNEL_SECURITY_AUDIT_2026_11_18.md):
+/// SMEP and UMIP where the CPU has them, and enhanced or automatic IBRS against
+/// Spectre v2. Returns (smep, umip, ibrs kind, RDCL_NO). SMAP waits for user-copy helpers.
+pub fn harden_core() -> (bool, bool, &'static str, bool) {
+    use core::arch::x86_64::__cpuid_count;
+    use x86_64::registers::control::{Cr4, Cr4Flags};
+    use x86_64::registers::model_specific::Msr;
+    let leaf7 = unsafe { __cpuid_count(7, 0) };
+    let (smep, umip) = (leaf7.ebx & (1 << 7) != 0, leaf7.ecx & (1 << 2) != 0);
+    let mut cr4 = Cr4::read();
+    if smep { cr4.insert(Cr4Flags::SUPERVISOR_MODE_EXECUTION_PROTECTION); }
+    if umip { cr4.insert(Cr4Flags::USER_MODE_INSTRUCTION_PREVENTION); }
+    unsafe { Cr4::write(cr4); }
+    // IA32_ARCH_CAPABILITIES: bit 0 RDCL_NO (no Meltdown, so no Meltdown-PK), bit 1 IBRS_ALL.
+    let arch = if leaf7.edx & (1 << 29) != 0 { unsafe { Msr::new(0x10A).read() } } else { 0 };
+    let top = unsafe { __cpuid_count(0x8000_0000, 0) }.eax;
+    let amd = top >= 0x8000_0021 && unsafe { __cpuid_count(0x8000_0021, 0) }.eax & (1 << 8) != 0;
+    let ibrs = unsafe {
+        if arch & 2 != 0 { let mut m = Msr::new(0x48); m.write(m.read() | 1); "enhanced" }
+        else if amd { let mut m = Msr::new(0xC000_0080); m.write(m.read() | (1 << 21)); "auto" }
+        else { "none" }
+    };
+    (smep, umip, ibrs, arch & 1 != 0)
+}
+
 pub struct X86Hal {
     paging_ready: AtomicBool,
     paging_cr3: AtomicU64,
@@ -54,8 +79,11 @@ impl HardwareAbstractionLayer for X86Hal {
             serial_println!("PKU: unsupported on this CPU/QEMU path; PKRU ops gated off");
         }
 
-        // SSE for programs; APs copy CR0/CR4/XCR0 from here.
+        // SSE for programs; APs copy CR0/CR4/XCR0/EFER from here.
         unsafe { crate::fpu::init_core(); }
+        let (smep, umip, ibrs, rdcl_no) = harden_core();
+        serial_println!("[cpu.hardening] smep={} smap=0 umip={} ibrs={} rdcl_no={} meltdown_pk={}",
+            smep as u8, umip as u8, ibrs, rdcl_no as u8, if rdcl_no { "no" } else { "possible" });
         serial_println!("[fpu.ready] sse=1 xsave_state=x87+sse");
         serial_println!("X86Hal: Initializing GDT/IDT...");
         gdt::init();

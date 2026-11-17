@@ -1,251 +1,319 @@
-# SEXOS ARCHITECTURE.md — SASOS CANONICAL REFERENCE
+# SexOS architecture
+
+This file describes SexOS as the code builds it today, and marks the parts that the
+approved redesign (`docs/handoff/KERNEL_STUDY_AND_REDESIGN_2026_11_17.md`, PR #405)
+is changing. Each rule below is either true of the code or labelled **planned**.
+When code and this file disagree, one of them is a bug: fix the code, or fix this file
+in the same PR. `spec/*.sexspec` inventories the obligations and pins this file's hash
+(`scripts/check_architectural_truth.py`).
+
+Rewritten 2026-11-18 (decision D4). The earlier text described a system-wide
+determinism invariant, a kernel that never maps memory, and a slot table that the
+code had outgrown.
 
 ## 0. System Model
 
-SexOS is a **Single Address Space OS (SASOS)**.
+SexOS is a **single address space operating system (SASOS)** on a capability
+microkernel, for x86_64 machines with protection keys (PKU). QEMU and KVM are the
+test machines until real hardware.
 
-- ONE global virtual address space (GLOBAL_VAS)
-- NO per-process page tables
-- Memory is globally addressable
-- Memory access is capability-controlled — NOT paging-isolated
+- **One translation.** Every core runs on the root the bootloader handed over
+  (`smp.rs` asserts `SMP_SECOND_TRANSLATION_ROOT`). A virtual address names the same
+  byte for every domain, for its whole life. There are no per-program address
+  spaces, no fork, and no copying between address spaces.
+- **Protection domains** are the units of isolation: a BOOT service, a program
+  record, or a program run. A domain has an id, a capability table, a PKU key and
+  a PKRU value, and one or more tasks.
+- **Capabilities** decide what a domain may name in a call or a kernel operation.
+- **PKU** decides what a domain's loads and stores may touch.
 
-### Memory Model Hierarchy (System Invariant — Never Violate)
-
-```
-GLOBAL_VAS  →  defines ADDRESSING only (what can be named)
-sex-pdx     →  defines AUTHORITY only  (what can be accessed)
-PKU         →  defines ENFORCEMENT     (hardware acceleration of sex-pdx boundaries)
-```
-
-**This is a strict layered invariant, not a description:**
-- GLOBAL_VAS does NOT imply visibility or authority
-- sex-pdx is the sole source of access authority — PKU never is
-- PKU is an optional hardware accelerator for sex-pdx enforcement
-- PKU being absent does NOT weaken the authority model — sex-pdx enforcement still holds
-- No layer may substitute for or override the layer above it
-
-### Precedence Chain (System Invariant — Single Source of Truth)
+### Three layers
 
 ```
-BOOT_DAG  →  capability genesis   (static, boot-time only — immutable after lock)
-sex-pdx   →  runtime authority    (all access decisions, enforced at every invocation)
-PKU       →  enforcement accel    (hardware acceleration of sex-pdx decisions only)
+GLOBAL_VAS     addressing   what can be named (one translation for everyone)
+capabilities   authority    what a domain may invoke or be granted (sex-pdx ABI)
+PKU            enforcement  what a domain's loads and stores reach in hardware
 ```
 
-Rules (never override):
-1. BOOT_DAG defines what capabilities MAY exist. No capability exists without BOOT_DAG sanction.
-2. sex-pdx makes ALL runtime access decisions. No other layer may override or substitute.
-3. PKU never participates in authority decisions. Absent PKU = same authority model, softer enforcement.
-4. This chain is enforced at every capability invocation. No shortcut paths exist.
+1. A global address grants nothing. Holding an address is not holding access.
+2. Capabilities are the only source of authority. The kernel checks them on every
+   call that names another domain or a kernel object; PKU state never feeds an
+   authorization decision (`scripts/pku_parity_gate.py` compares authority records
+   with and without PKU).
+3. PKU enforces the memory side of those decisions. **Without PKU there is no
+   hardware isolation between domains today**: every domain's pages are user pages
+   in one table, so a hostile program could read or write any other domain. That is
+   a release blocker, not a softer mode. Planned fix (D2, approved): per-core
+   *permission views*, below.
 
-### Determinism Invariant (System Invariant — Never Violate)
+### Capability genesis
 
-> All system state is a deterministic function of:
-> `f(epoch_id, input_stream, capability_graph)`
->
-> **Closure conditions:**
-> - No external I/O influences state except via `input_stream`
-> - No hidden hardware state affects output except as explicit snapshot input
-> - No hidden state exists — all state is derivable from the above triple
-> - Replay from epoch_id=0 with same inputs must produce identical state
+- `BOOT_DAG` (`kernel/src/init.rs`, `boot_memory.rs`) creates every domain and every
+  root capability in a fixed order, then seals the tables before any task runs
+  (`capability_table.rs` `seal`, `boot_memory::seal_all`).
+- After the seal, capabilities can be revoked but not created. Runtime changes go
+  through kernel objects that BOOT granted (program records, app lifecycle grants,
+  pager mappings, device leases).
+- **Planned (D1, approved 2026-11-17):** runtime minting from BOOT-held roots.
+  A domain holding a root may mint a narrower capability (fewer rights, a badge)
+  into a domain that holds a receive slot. Revocation bumps a generation, and the
+  death of an incarnation revokes everything minted from it. Nothing can be minted
+  without a root, so BOOT_DAG stays the only source of authority.
 
-All state transitions are: **snapshot → transform → swap → commit**.
-No in-place mutation outside epoch boundaries. Execution is fully replayable.
+### Determinism, scoped to UiIR
 
----
+Determinism is a property of **UiIR streams and the Display scene**, not of the
+whole machine. Timers, interrupts, IPIs, work stealing and device completion
+order make kernel state nondeterministic, and the kernel keeps no replay log.
+
+- A UiIR stream carries a contiguous per-sender sequence and non-decreasing epochs,
+  and its consumer checks both.
+- Display builds one immutable scene per drain and publishes it whole
+  (snapshot, transform, swap, commit).
+- Full-system replay from epoch 0 is an open goal for a ring-3 recorder server.
+  It is not a kernel invariant and does not constrain kernel design.
 
 ## 1. Core Architecture
 
-### 1.1 sex-pdx — Global Capability + Communication Substrate
+### 1.1 sex-pdx (IPC and the user ABI)
 
-sex-pdx is NOT just IPC.
-sex-pdx IS the entire OS execution graph connectivity model:
+The user-facing ABI is `crates/sex-pdx`. Calls name a capability slot in the
+caller's own table.
 
-- Sole authorization layer for all inter-domain access
-- Routing substrate for all domain communication
-- Enforcer of the capability graph
-- Provider of all domain interaction primitives:
-  - `pdx_call`     — invoke a capability target
-  - `pdx_reply`    — complete a synchronous exchange
-  - `pdx_listen`   — receive inbound capability invocations
-  - `pdx_spawn_pd` — instantiate a new protection domain (BOOT_DAG gated)
+| Syscall | Name | What it does |
+|---|---|---|
+| 0 | `PDX_CALL` | Send opcode + 3 words to the domain a slot names; take a reply credit |
+| 28 | `PDX_LISTEN` | Take the next inbound call |
+| 29 | `PDX_REPLY` | Answer a call the replier holds a credit for |
+| 53 | `PDX_WAIT_SELF` | Wait for this domain's own inbox or reply events |
+| 100 / 101 | `PDX_CALL_WAIT` / `PDX_REPLY_WAIT` | Call or reply, then wait, in one entry |
 
-No domain interaction occurs outside sex-pdx. No ambient authority.
+Each domain has a 256-entry inbound ring and a reply-credit table. Larger data
+moves through BOOT-paired regions, lends and UiIR rings. Other syscalls are
+kernel operations on capabilities the caller holds (memory, program rows, power
+84, crash log 85, device 86, stats 87, Denim 88, DMA 90, VM 110, civil time 76).
 
-### 1.2 sext — Demand Pager (User-Space Fault Resolver)
+**Planned (Phase 2):** endpoints with rendezvous and badges, one-shot reply
+capabilities cancelled when the caller dies, notifications (a 64-bit word that IRQs
+can set), 8 message registers plus a 4 KiB IPC buffer, and a same-core round trip
+of at most 1,000 cycles on KVM. PR #402 adds 102 to 104 (receive in registers,
+deadline scheduling) as a step towards it.
 
-sext is a Ring-3 protection domain server.
-sext is NOT part of kernel memory management.
-sext is NOT a Linux-style paging subsystem.
+### 1.2 sext
 
-**Kernel role boundary:** The kernel is a transition arbiter only — not a memory
-authority. It traps the fault, forwards it via sex-pdx, and resumes execution.
-It does NOT allocate frames, does NOT map memory, does NOT own GLOBAL_VAS.
-
-sext responsibilities:
-- Receive page fault dispatch from sex-pdx
-- Allocate physical frames on demand
-- Map frames into GLOBAL_VAS
-- Apply PKU keys where applicable
-- Return capability-backed memory mappings
-
-**Fault flow (canonical):**
-```
-CPU #PF exception
-  → kernel trap (transition arbiter — ONLY ring-0 component)
-  → kernel/src/ipc/pagefault.rs::forward_page_fault()
-  → sex-pdx dispatch → sext (slot 2)
-  → sext (ring-3): frame allocator
-  → GLOBAL_VAS::map_pku_range()
-  → PKU key assignment (enforcement layer — see ARCHITECTURE.md §0)
-  → resume faulting domain
-```
-
-Frame allocation and GLOBAL_VAS mapping are sext's exclusive responsibility.
-
-### 1.3 silk-shell — Execution Orchestration Layer
-
-silk-shell is NOT a service.
-silk-shell IS part of the execution topology:
-
-- Runtime orchestration layer
-- Capsule lifecycle manager (spawn, suspend, resume, destroy)
-- Execution composition system
-- Domain execution entry point for interactive sessions
-
-silk-shell is a node in the capability graph, not a peripheral utility.
-
-### 1.4 UiIR — Userland Transport Primitive
-
-UiIR is the shared-memory frame protocol between execution domains and the compositor.
-
-- Shared-memory ring buffers with epoch-gated visibility
-- Fully ordered per-sender causal streams
-- No cross-epoch mutation visibility
-- Used by: silk-shell → SexCompositor → SexDisplay pipeline
-
-UiIR is NOT an IPC mechanism. It is a data transport substrate.
-Authority for UiIR ring access is granted via sex-pdx capability.
-UiIR ring contents constitute part of the `input_stream` in the determinism invariant.
-
-### 1.5 SMP Model
-
-Each core is an independent execution lane.
-Ordering defined by epoch boundaries + per-sender causal streams.
-No global scheduler in early phases — epoch transitions are explicit.
-
-### 1.6 Boot System (BOOT_DAG)
-
-Static dependency graph resolved at boot.
-Domains spawned via `pdx_spawn_pd` — gated by BOOT_DAG.
-Capability graph is immutable once epoch engine starts.
-**BOOT_DAG is the ONLY authority for capability genesis.**
-
-### 1.7 Security Model
-
-All access is capability-mediated. No ambient authority.
-Authority model: §0 Memory Model Hierarchy + Precedence Chain.
-Full traceability via capability graph + epoch log.
-
----
-
-## 2. Userland Servers
-
-| Server        | Role |
-|---------------|------|
-| sext          | Demand pager — fault-resolution memory authority |
-| silk-shell    | Execution orchestration — capsule lifecycle + composition |
-| SexCompositor | Deterministic frame graph reducer (UiIR consumer) |
-| SexDisplay    | Buffer ownership + atomic scanout |
-| Linen FM      | Causal filesystem view |
-
-All communicate via sex-pdx capability invocations + UiIR transport rings.
-
----
-
-## 3. Hard Constraints
-
-- NO per-process page tables
-- NO Linux-style process model
-- NO ambient authority — all access via sex-pdx capability
-- NO nondeterministic IPC ordering
-- NO in-place rendering mutation outside epoch boundaries
-- NO implicit kernel policy engines
-- NO hidden state — all state derivable from (epoch_id, input_stream, capability_graph)
-- NO drivers, filesystems, protocol stacks or firmware interpreters in the kernel; NO Linux-shaped syscalls (fork, pipes, fds, sockets). Compatibility layers are libraries; Linux drivers are temporary ring-3 bridges with a tracked native replacement. See `docs/DESIGN_GUARDRAILS.md` and `docs/BRIDGE_LEDGER.md`.
-
----
-
-## 4. Repository Layout
+sext is the ring-3 pager. The kernel traps a user page fault, checks that the
+faulting task is live and holds a pager capability (`SLOT_SEXT`), and forwards the
+fault (`kernel/src/ipc/pagefault.rs` `forward_page_fault`). A page Denim holds goes
+to Denim instead.
 
 ```
-kernel/              — ring-0 transition arbiter only (trap + forward)
-crates/sex-pdx/      — global capability substrate (userland-facing ABI)
-crates/sext/         — demand pager server (ring-3, PDX-dispatched)
-servers/silk-shell/  — execution orchestration layer
-servers/sexdisplay/  — scanout controller + compositor
-apps/linen/          — filesystem view
+#PF in ring 3
+  -> kernel: live task? pager capability? (fails closed otherwise)
+  -> forward to sext (or Denim for a page it holds)
+  -> sext picks a frame from its BOOT-granted pool and zeroes it (zero_owner=sext)
+  -> sext asks the kernel to map it through its PagerMapping capability
+  -> kernel checks the grant, writes the entry, resumes the task
 ```
 
----
+sext owns the policy and the zeroing. The kernel owns the page-table write and
+the bootstrap reservations (initial backing, VA windows, table pages). Kernel
+faults never enter this path, and protection, PKU, reserved-bit and
+instruction-fetch faults end the program instead of paging.
 
-## 5. Capability Slot Table
+### 1.3 silk-shell
 
-| Slot | Domain     | Role |
-|------|------------|------|
-| 0    | kernel     | Bootstrapped capability bridge — sex-pdx mediated, no ambient authority granted |
-| 1    | sexfiles   | VFS |
-| 2    | sext       | Demand pager — fault resolver |
-| 3    | sexnode    | Node translator |
-| 4    | sexnet     | Network manager |
-| 5    | SexDisplay | Compositor + scanout |
-| 6    | silk-shell | Execution orchestration entry |
+silk-shell (domain 3) is the desktop's orchestrator: it starts and stops program
+records (it holds the one `RecordPool` capability), routes launches and file
+grants, and owns the session. It is a capability holder like any other service.
 
-Slot 0 is NOT an escape hatch from the capability model. All slot-0 invocations
-remain sex-pdx mediated. The kernel does not grant ambient execution authority.
+### 1.4 UiIR
 
----
+UiIR is the shared-memory frame protocol between producers and Display.
 
-## 6. Execution Roadmap
+- BOOT pairs each stream's ring and cursor regions between exact peers, one
+  writer per page (`boot_memory.rs` `init_uiir`). The grant is a capability.
+- A stream carries per-sender sequence numbers and non-decreasing epochs; the
+  consumer refuses gaps and regressions.
+- UiIR is a data transport, not IPC: notifications still go through sex-pdx.
+- Today one stream exists (Shell to Display, focus transitions). The determinism
+  rule in section 0 applies to UiIR streams and Display's scene.
 
-**M1 — Silicon Bootstrap**
-DRM init, framebuffer bind → purple screen proof
+### 1.5 The kernel
 
-**M2 — ABI Coherence**
-Flat atomic packets, cache flush + fence barriers, triple-buffer swapchain
+The kernel holds mechanism only (`docs/DESIGN_GUARDRAILS.md` section 1). Its jobs:
 
-**M3 — SFDP Reactor**
-VBlank-driven pipeline: acquire → build_frame → admit → raster → commit. UiIR ring active.
+| Job | Where |
+|---|---|
+| Entry: `SYSCALL`/`SYSRET`, exceptions, interrupts, per-task kernel stacks | `interrupts.rs`, `gdt.rs` |
+| Scheduling: per-core schedulers, work stealing, urgent queue, partner handoff | `scheduler*.rs`, `smp.rs` |
+| IPC: calls, replies, waits, reply credits | `ipc.rs`, `ipc/*`, `ipc_ring.rs` |
+| Capabilities: tables, checks, revocation | `capability*.rs`, `capabilities/` |
+| Frames and mappings (see below) | `memory/*`, `boot_memory.rs`, `app_resources.rs`, `program_*.rs`, `denim.rs` |
+| PKU keys and PKRU per domain | `pku.rs`, `program_tenancy.rs` |
+| Interrupt routing to driver domains, device leases, IOMMU domains | `device_irq.rs`, `device_lease.rs`, `iommu.rs` |
+| Drag virtual machines (VT-x, EPT) | `vmx.rs` |
+| What only ring 0 can do when everything else is dead: stop screen, crash log, fixed-hardware reset and power off | `console.rs`, `crash_log.rs`, `hal/acpi.rs` |
 
-**M4 — Recovery Layer**
-GPU hang detection, last-good-frame latch, safe rebind pipeline
+The kernel does not run drivers, filesystems, protocol stacks or firmware
+interpreters (AML runs in `servers/sexacpi`).
 
-**M5 — Interaction Lattice**
-UiIR producer (hello-uiir), hardware cursor, hit-test pipeline, silk-shell capsule spawn
+**The kernel maps memory.** It is the only code that writes page tables, and it
+does so only on a capability-checked request or a BOOT_DAG step:
 
-**M6 — Semantic Unification**
-Shared-memory UiIR ring, multi-node scene graph, Wayland interop
+- BOOT regions and their pairings between services (`boot_memory.rs`);
+- program row windows, heaps and code pages (`app_resources.rs`,
+  `program_records.rs`, `program_frames.rs`, `program_image.rs`);
+- which program row is present under the shared key (`program_tenancy.rs`);
+- pages Denim packs and returns (`denim.rs`);
+- IPC buffers and lends (`ipc/buffer.rs`), IOMMU tables, Drag EPT;
+- mappings that sext asks for (section 1.2).
 
----
+Policy (which page, when, for whom) lives in servers; the kernel checks the
+capability and performs the write.
 
-## 7. Success Criterion
+Entry hardening (audit: `docs/handoff/KERNEL_SECURITY_AUDIT_2026_11_18.md`): SMEP and
+UMIP on where the CPU has them, enhanced or automatic IBRS against Spectre v2,
+NMIs on their own IST stack, `SFMASK` clears IF, DF, TF, AC, NT and IOPL, SYSRET
+never returns to a non-canonical RIP, and the kernel is built without SSE so no
+kernel data reaches user vector registers. SMAP is off until user-memory access
+goes through copy helpers. On syscall entry PKRU is set to 0 (all keys open) for
+the length of the call.
 
-System is valid when a UiIR rectangle moves across the screen for 60 seconds at
-native refresh rate (60–360 Hz) with:
-- zero tearing
-- deterministic frame drops (epoch-bounded)
-- zero undefined rendering state
-- perfect latch recovery on forced GPU interruption
-- full epoch replay from `f(epoch_id=0, input_stream, capability_graph)` → identical output
+### 1.6 SMP and scheduling
 
----
+- One scheduler per core (up to 128): a work-stealing run queue, an urgent queue
+  for interactive wakes, and a handoff slot that runs a call's partner next.
+- Placement is a function of the domain (`smp::home_core`): desktop services on
+  core 0, programs spread over spare cores, every shared-key program row on one
+  core. There is no load-based migration yet.
+- The kernel is not preemptible. A timer that lands in ring 0 does not switch;
+  the task switches at its next return to user or wait.
+- **Planned (Phase 4):** placement with load feedback and per-core locks, so the
+  4-core latency gate passes with p99 under 2 ms.
 
-## 8. Build Authority (Sealed)
+### 1.7 Boot (BOOT_DAG)
 
-Build execution authority is sealed to a single deterministic path:
+Limine loads the kernel and the service modules. `init.rs` spawns BOOT services in
+a fixed order, so their domain ids are stable, then the optional services
+(sexacpi 50, Denim 51, Cufflinks 52) and the boot incarnations of Quil, Spindle,
+Kaleidoscope and the program chain. It pairs regions, grants routes and leases,
+seals every table, and starts the schedulers. No domain is created after the seal
+except through program records.
 
-- `sexos_build_spec.toml` — single declarative build specification of truth
-- `scripts/entrypoint_build.sh` — only valid build root
-- `scripts/sexos_build_trace.sh` — linear interpreter of the build spec
+### 1.8 Security model
 
-Legacy direct routes (`build_payload.sh`, direct `make iso`/`run-sasos`) are invalid and must fail.
+- No ambient authority: a global address, slot 0 and ring 0 grant nothing.
+  Slot 0 reaches three caller-scoped bridge operations only (BOOT display query,
+  bounded serial record, own init argument; `capability_slot.rs`).
+- Code loaded into programs may not contain `WRPKRU`, `XRSTOR` or `XRSTORS`
+  (`sex_pdx::program_code`), so a program cannot open other keys.
+- Organs: a PKU key belongs to a group of trusted services (section 2). Services in
+  one organ are not isolated from each other in memory; capabilities still separate
+  their authority.
+- Known gaps, tracked in the audit: no isolation without PKU (until D2), kernel
+  runs with all keys open, no SMAP, Spectre v1 hardening of table lookups, and
+  Meltdown-PK on CPUs without `RDCL_NO`.
+
+## 2. Domains, organs and keys
+
+BOOT services, by spawn order. A domain's PKU key is its id unless it shares an
+organ (`sex_pdx::organs::service_key`).
+
+| Domain | Service | Key | Organ / role |
+|---|---|---|---|
+| 1 | sexdisplay | 1 | Core: compositor and scanout |
+| 2 | sexdrive | 2 | Storage devices (NVMe, AHCI) |
+| 3 | silk-shell | 3 | Desktop orchestration |
+| 4 | sexinput | 4 | Senses: input |
+| 5 | sexusb | 4 | Senses: USB host |
+| 6 | silkbar | 1 | Core: panel, shares Display's key |
+| 7 | linen | 7 | Linen file manager surface |
+| 8 | sexstore | 11 | Storage: key/value store, shares Files' key |
+| 9 | quil | 9 | Quil editor surface |
+| 10 | sexbell | 4 | Senses: sound and attention |
+| 11 | sexfiles | 11 | Storage: files and the program store |
+| 12 | spindle | 12 | Spindle terminal |
+| 13 | sexnet | 13 | Network |
+| 14 | sext | 14 | Memory: pager |
+| 15 | kaleidoscope | 15 | Browser |
+| 50 | sexacpi | 4 | Senses: ACPI AML in ring 3 |
+| 51 | Denim | 14 | Memory: compressed pages |
+| 52 | Cufflinks | 4 | Senses: Bluetooth |
+
+Programs: rows 0 and 1 run on key 5, row 2 on key 6, and every later row on key 8,
+where rows take turns being present (one core, a local TLB flush per turn).
+Program records hold key 10. Key 0 is the kernel's.
+
+**Planned (D2, approved):** per-core PCID-tagged permission views. A view is a
+private copy of the upper-level tables whose user bits differ, sharing every
+page-table page below that. Each shared-key row gets its own view, so rows run on
+any core without turn-taking or full flushes, and without PKU each organ gets a
+view, which gives isolation on machines without PKU. Views change permissions
+only; the translation stays one.
+
+## 3. Capability slot conventions
+
+A domain's table has 1,024 slots. Slot numbers are conventions: the same number
+means the same kind of route in every domain that holds it. Slot 0 is the kernel
+bridge (section 1.8). The main fixed slots (`crates/sex-pdx/src/lib.rs`):
+
+| Slot | Holds |
+|---|---|
+| 1 | Files (sexfiles) |
+| 2 | Pager (sext) |
+| 3 | Input |
+| 4 | Audio |
+| 5 | Display |
+| 6 | Shell |
+| 7 | SilkBar |
+| 8 | USB host controller lease |
+| 10 | sexstore |
+| 11 / 13 / 14 | Quil / Linen / Spindle surfaces |
+| 12 | Bell |
+| 15 | Block service (sexdrive) |
+| 16 | First NVMe controller lease |
+| 17 | Block buffer lend |
+| 18 / 19 | Network route / NIC lease |
+| 20-25 | Sound, AHCI, Wi-Fi (device, DMA, firmware), GPU leases |
+| 32-37 | DMA region, frame region, frame pool, demand region, pager mappings |
+
+Capability kinds are listed in `kernel/src/capability.rs` `CapabilityData`.
+**Planned (Phase 3):** inline 32-byte slots (object, generation, rights, badge),
+new Endpoint, Notification and Reply kinds, and removal of the unused kinds.
+
+## 4. Hard constraints
+
+- One translation. No per-program address spaces, no Linux-style processes.
+  Permission views (D2) share the translation and are not address spaces.
+- No ambient authority: every access decision comes from a capability.
+- No drivers, filesystems, protocol stacks or firmware interpreters in the kernel;
+  no Linux-shaped syscalls (fork, pipes, fds, sockets). Compatibility layers are
+  libraries; Linux drivers are temporary ring-3 bridges with a tracked native
+  replacement (`docs/DESIGN_GUARDRAILS.md`, `docs/BRIDGE_LEDGER.md`).
+- The kernel stays under its line budget (22,700 non-blank lines,
+  `scripts/tests/test_kernel_design_guardrails.py`).
+- Programs never get `WRPKRU`/`XRSTOR`; XCR0 never includes PKRU.
+- UiIR streams stay ordered per sender with non-decreasing epochs.
+
+## 5. Repository layout
+
+```
+kernel/          ring-0 mechanism (section 1.5)
+crates/sex-pdx/  user-facing ABI: syscalls, slots, organs, grants
+crates/          shared libraries (sex-rt, sex-std, sex-libc, drivers, codecs...)
+servers/         BOOT services (sexdisplay, sexfiles, sext, silk-shell, ...)
+apps/            programs (Quil, Kaleidoscope, Spreadeagle, Moan, ...)
+spec/            obligation inventory pinned to this file
+docs/            design rules, handoffs, reports
+```
+
+## 6. Build authority
+
+Builds go through one path:
+
+- `sexos_build_spec.toml`: the declarative build specification;
+- `scripts/entrypoint_build.sh`: the only build root;
+- `scripts/sexos_build_trace.sh`: the interpreter of the build spec.
+
+Direct routes (`build_payload.sh`, a bare `make iso` or `run-sasos`) are invalid
+and must fail. Full builds and QEMU gates run on GitHub CI from a pushed branch.

@@ -6,6 +6,8 @@ use x86_64::VirtAddr;
 use x86_64::instructions::segmentation::Segment;
 
 pub const DOUBLE_FAULT_IST_INDEX: usize = 0;
+/// NMIs get their own stack: one can arrive while RSP still holds the caller's value.
+pub const NMI_IST_INDEX: usize = 1;
 pub static mut TSS: TaskStateSegment = TaskStateSegment::new();
 
 lazy_static! {
@@ -80,6 +82,9 @@ pub fn init_core() -> *mut TaskStateSegment {
     let mut tss = TaskStateSegment::new();
     // The IDT asks for IST index + 1.
     tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX + 1] = VirtAddr::from_ptr(stack.as_ptr()) + stack.len() as u64;
+    let nmi = alloc::vec![0u8; 16 * 1024].leak();
+    tss.interrupt_stack_table[NMI_IST_INDEX + 1] = VirtAddr::from_ptr(nmi.as_ptr()) + nmi.len() as u64;
+    crate::hal::x86_64::harden_core();
     let tss: &'static mut TaskStateSegment = alloc::boxed::Box::leak(alloc::boxed::Box::new(tss));
     let pointer = tss as *mut TaskStateSegment;
     let mut gdt = GlobalDescriptorTable::new();
@@ -105,6 +110,7 @@ pub fn init_core() -> *mut TaskStateSegment {
 }
 
 static mut DOUBLE_FAULT_STACK: [u8; 32 * 1024] = [0; 32 * 1024];
+static mut NMI_STACK: [u8; 16 * 1024] = [0; 16 * 1024];
 
 pub fn init() {
     use x86_64::instructions::segmentation::{CS, DS, ES, FS, GS, SS};
@@ -115,6 +121,8 @@ pub fn init() {
     unsafe {
         let top = core::ptr::addr_of!(DOUBLE_FAULT_STACK) as u64 + 32 * 1024;
         (*core::ptr::addr_of_mut!(TSS)).interrupt_stack_table[DOUBLE_FAULT_IST_INDEX + 1] = VirtAddr::new(top);
+        let nmi_top = core::ptr::addr_of!(NMI_STACK) as u64 + 16 * 1024;
+        (*core::ptr::addr_of_mut!(TSS)).interrupt_stack_table[NMI_IST_INDEX + 1] = VirtAddr::new(nmi_top);
     }
 
     // Load GDT
