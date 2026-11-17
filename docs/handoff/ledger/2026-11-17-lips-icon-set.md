@@ -1,6 +1,6 @@
 # The SexOS icon set in the lips brand style (2026-11-17)
 
-- **One source:** `assets/icons/icons.txt` holds every icon (73 line, 23 app,
+- **One source:** `assets/icons/icons.txt` holds every icon (76 line, 23 app,
   9 file-kind; the line icons include tray icons for wifi, battery, bluetooth, power
   and volume-off) on a 24-unit grid
   in Weft's path notation, now with `F` for filled subpaths.
