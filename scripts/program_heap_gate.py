@@ -64,7 +64,10 @@ def main():
   m=g['wait'](rf'\[heaptest\.(all|fail)\] target={big["target"]} task={big["task"]} ([^\n]*)\n',s,900)
   assert m[1]=='all',f'fill failed: {m[0]}'
   filled=int(dict(kv.split('=')for kv in m[2].split())['full_mib']);assert filled>=64,f'filled only {filled} MiB'
-  big.update(filled=filled,free=int(re.findall(r'free_pages=(\d+)',t()[s:])[-1]),held=int(re.findall(rf'target={big["target"]} task={big["task"]} granted=\d+ held=(\d+)',t())[-1]),window=int(re.findall(rf'target={big["target"]} task={big["task"]} granted=\d+ held=\d+ base=0x[0-9a-f]+ window_pages=(\d+)',t())[-1]))
+  # The least free memory seen during the fill: Denim takes pages out while the machine
+  # runs low, so the latest reading can be well above the moment the program was refused.
+  seg=t()[s:];seg=seg[:seg.index(m[0])+len(m[0])]
+  big.update(filled=filled,free=min(int(f) for f in re.findall(r'free_pages=(\d+)',seg)),held=int(re.findall(rf'target={big["target"]} task={big["task"]} granted=\d+ held=(\d+)',t())[-1]),window=int(re.findall(rf'target={big["target"]} task={big["task"]} granted=\d+ held=\d+ base=0x[0-9a-f]+ window_pages=(\d+)',t())[-1]))
   # Filled means the machine ran out, or the program reached its arena (all but its
   # image, stack and guard page).
   assert big['free']<1024 or big['held']>=big['window']-2048,f"memory left over after filling: {big}"
