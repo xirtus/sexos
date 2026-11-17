@@ -720,6 +720,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/corner-source.img"
         python3 scripts/hot_corner_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/corner-source.img" --out "$RUNNER_TEMP/sexos-desktop/corner"
+    - name: Desktop widgets (Super+Shift+W shows the clock and system cards on the wallpaper, and hides them)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/widgets-source.img"
+        python3 scripts/desktop_widgets_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/widgets-source.img" --out "$RUNNER_TEMP/sexos-desktop/widgets"
     - name: Magnifier and colour filters (accessibility)
       run: |
         truncate -s 256M "$RUNNER_TEMP/access-source.img"

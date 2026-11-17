@@ -489,8 +489,17 @@ pointer already at 0,0. Settings has `desktop.corner_top_left` (default `overvie
 window overview) and the other three corners (default `none`); choices `none`, `overview`,
 `launcher`, `notifications`, `lock`, run through the same `wm_action` path as the Super chords.
 Pure logic: `servers/silk-shell/src/hot_corners.rs` (host test `tests/hot_corners.rs`); glue:
-`hot_corners_glue.rs`; gate: `scripts/hot_corner_gate.py`. *Desktop widgets* (S5b: clock,
-weather from Open-Meteo, system) follow.
+`hot_corners_glue.rs`; gate: `scripts/hot_corner_gate.py`. *Desktop widgets* (S5b): a clock
+card (time and date in the bar's zone) and a system card (processor load, free memory) drawn
+by Display as part of the wallpaper, in a column at the top right, so every window covers them
+and they never take input. The Shell only turns them on or off (`desktop.widgets`, off by
+default; Super+Shift+W) with `sex_pdx::desktop_widgets` `OP_DESKTOP_WIDGETS` (0x2F9); Display
+fills them from its own civil time and the kernel's numbers (syscall 87) and redraws a small
+cache only when a word changes. Words and layout: `crates/sex-pdx/src/desktop_widgets.rs`
+(host test `tests/desktop_widgets.rs`); drawing: `servers/sexdisplay/src/desktop_widgets.rs`
+(blended in `wallpaper_mark::pixel`); gate: `scripts/desktop_widgets_gate.py`. *Weather*
+(S5c): a confined program fetches Open-Meteo for the place set in Settings and hands the
+Shell the numbers, which pass them to Display for a third card (`WEATHER`, reserved).
 
 ### T. Office suite: Gingham, Brocade, Burlesque and the Craft apps (8)
 

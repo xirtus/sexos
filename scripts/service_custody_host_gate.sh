@@ -264,6 +264,9 @@ rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libsilk_ctl_pdx.rl
 # Hot corners (S5).
 rustc --edition=2021 -A dead_code --test tests/hot_corners.rs -o "$TEST_DIR/hot-corners"
 "$TEST_DIR/hot-corners"
+# Desktop widgets' words and layout (S5b).
+rustc --edition=2021 -A dead_code --test tests/desktop_widgets.rs -o "$TEST_DIR/desktop-widgets"
+"$TEST_DIR/desktop-widgets"
 # Whisper, the screen reader: built against a sex_pdx of only the wires it uses.
 printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/speech_voice.rs"] pub mod speech_voice;\n#[path = "%s/crates/sex-pdx/src/a11y.rs"] pub mod a11y;\n' "$ROOT_DIR" "$ROOT_DIR" > "$TEST_DIR/reader_pdx.rs"
 rustc --edition=2021 --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/reader_pdx.rs" -o "$TEST_DIR/libreader_pdx.rlib"

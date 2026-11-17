@@ -132,6 +132,7 @@ fn take(w: &mut Watch, key: u16, value: i32) {
         id::VOLUME => give_volume(w),
         id::NTP => give_network_time(w),
         id::REPEAT_DELAY | id::REPEAT_RATE | id::CAPS_AS_CTRL => keyboard(w),
+        id::WIDGETS => unsafe { crate::widgets_glue::set(value != 0) },
         _ => {}
     }
 }

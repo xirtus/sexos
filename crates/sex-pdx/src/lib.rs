@@ -1302,6 +1302,7 @@ pub mod wifi_status;
 pub mod network_time;
 pub mod notify;
 pub mod desktop_look;
+pub mod desktop_widgets;
 pub mod access_view;
 pub mod window_switcher;
 pub mod window_menu;

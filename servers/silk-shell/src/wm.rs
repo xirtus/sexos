@@ -140,6 +140,8 @@ pub enum WmAction {
     KeyboardLayout,
     /// Super+Shift+B: the Bluetooth panel.
     Bluetooth,
+    /// Super+Shift+W: the desktop widgets on or off.
+    Widgets,
     /// Super+G: pull the neighbouring window into the focused one's tab
     /// group (layouts.rs, slice S3).
     Group,
@@ -198,7 +200,8 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::BRACKET_LEFT, _) => WmAction::ShrinkMaster,
         (code::S, false) => WmAction::Scratchpad,
         (code::S, true) => WmAction::ToScratchpad,
-        (code::W, _) => WmAction::Overview,
+        (code::W, false) => WmAction::Overview,
+        (code::W, true) => WmAction::Widgets,
         (code::N, false) => WmAction::Notifications,
         (code::N, true) => WmAction::NightLight,
         (code::B, false) => WmAction::Wallpaper,
