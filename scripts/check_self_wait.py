@@ -52,7 +52,7 @@ APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95
     # per-task self-wait sampling, 2026-11-17
     'a897c8b8c617cfef1ec3a7fad038f32f8530b232cf698f9ea896a89950d5a0ec',
     # WS2 kernel heap counters (SYS_STATS OP_KERNEL), unused slab.rs removed, 2026-11-17
-    '64aec7c870d1dd36706dcd1a26403b84fbf2a8200ccd5c87925ccf271a506aeb')
+    '95ef2223d462a85888843a0700105ff4538f044360df25138dde638253e06fb5')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -272,10 +272,10 @@ def _task_ordinals_ok(records):
 # combinations need independent review and an exact new fingerprint.
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
  'servers/silk-shell/src/main.rs': 'wait-v1:4498ab1ca18598a6dcf3e4c8b64a0a3ce3f90ead7c3a136f125492802ee68235',
- 'crates/sex-pdx/src/system_stats.rs': '3bf1362b08dfbf4705ffaf9409639b52767c9035108493ec4e5f5bff5235124d',
+ 'crates/sex-pdx/src/system_stats.rs': '408fb8ea07d12eb2fc53f38797b8ddb4fd61c32140ecc516e63b69fd5689f97d',
  'crates/sex-pdx/src/crash_log.rs': '98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
- 'kernel/src/cpu_account.rs': '3def0f0d8b0eb146681ea0517542d57d16f0d81ff46f960140c831219d269abc',
+ 'kernel/src/cpu_account.rs': '281b10b4f856a7f665c7ba59951b73b926decefa5c3bfae968af5714ba202f45',
  'kernel/src/core_local.rs': '62ece205111acc3deba4a41854a9ed632ff99742a54283bce094d1295025a300',
  'kernel/src/app_resources.rs': '1c4de7fca3f3fc4cc6ade73eecec83c269f800a0d520069b2201466d15c761a0',
  'kernel/src/service_restart.rs': 'c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e',

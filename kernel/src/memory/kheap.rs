@@ -39,13 +39,14 @@ unsafe impl GlobalAlloc for KernelHeap {
     }
 }
 
-/// SYS_STATS `OP_KERNEL`: bytes in use, bytes mapped, live blocks, most bytes ever in
-/// use, and the machine's free frames.
-pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
+/// SYS_STATS `OP_KERNEL`. Part 0: heap bytes in use, bytes mapped, live blocks, most
+/// bytes ever in use. Part 1: the machine's free frames.
+pub fn syscall(regs: &mut crate::interrupts::SyscallRegs, part: u64) -> u64 {
+    if part == 1 { regs.rsi = crate::memory::allocator::debug_global_free_frames(); return sex_pdx::system_stats::OK; }
+    if part != 0 { return sex_pdx::system_stats::INVALID; }
     let (used, size) = { let h = crate::ALLOCATOR.lock(); (h.used(), h.size()) };
     regs.rsi = used as u64; regs.rdx = size as u64;
     regs.r10 = LIVE.load(Ordering::Relaxed) as u64; regs.r8 = PEAK.load(Ordering::Relaxed) as u64;
-    regs.r9 = crate::memory::allocator::debug_global_free_frames();
     sex_pdx::system_stats::OK
 }
 
