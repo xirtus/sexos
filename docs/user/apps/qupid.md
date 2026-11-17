@@ -17,6 +17,13 @@ run qupid @film.mp4 @film.srt         # Play with a subtitle file beside it
 run qupid --library @/Music           # Open the music library view
 ```
 
+### Up next
+
+Near the end of an episode (when its credits chapter starts, or 30 s before the end)
+Qupid shows "Up next S01E04 in 10 s": the next item of the playlist, or the show's next
+episode from the same folder when Qupid may read it. **Enter** plays it now, **Esc**
+watches the credits instead.
+
 ### Library view
 
 `run qupid --library @FOLDER` reads every song under the folder (three levels down), groups

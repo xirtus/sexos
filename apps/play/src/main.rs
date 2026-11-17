@@ -24,7 +24,7 @@ mod library;
 use alloc::boxed::Box;
 use alloc::vec::Vec;
 use sex_app::{files, Event, Window};
-use sex_episodes::segments::{from_chapters, skip_at, Chapter, Segment};
+use sex_episodes::segments::{from_chapters, skip_at, Chapter, Segment, UpNext, UpNextCard};
 use sex_media::{Decoder, Player, Source, Step};
 use sex_pdx::pixel_region::{MAX_H, MAX_W};
 
@@ -112,6 +112,11 @@ struct Ui {
     /// The chapter list shows until this tick (C shows it).
     chapter_list_until: u64,
     muted: bool,
+    /// What plays after this item ("S01E02" or its name), and its "Up next" card.
+    next_label: Option<alloc::string::String>,
+    up_next: Option<UpNextCard>,
+    /// While the card counts down: milliseconds left.
+    up_next_left: Option<u64>,
 }
 
 /// Seconds the chapter list stays up after C.
@@ -138,6 +143,9 @@ fn card_text(ui: &Ui, ms: u64) -> Option<alloc::string::String> {
             let _ = write!(text, "  {}", title);
         }
         return Some(text);
+    }
+    if let (Some(left), Some(label)) = (ui.up_next_left, ui.next_label.as_ref()) {
+        return Some(alloc::format!("Up next  {}  in {} s\nEnter plays now, Esc watches the credits", label, left.div_ceil(1000)));
     }
     skip_at(&ui.segments, ms).map(|s| alloc::format!("{}  (Enter)", s.kind.prompt()))
 }
@@ -217,6 +225,15 @@ fn keys(window: &mut Window, player: &mut Player, ui: &mut Ui) -> Option<Outcome
                 }
                 0x66 => player.seek(0),
                 // Enter: skip the intro (recap, credits, preview) the card offers.
+                0x1C if ui.up_next_left.is_some() => {
+                    sex_pdx::serial_record!("[qupid.upnext] now label={}", ui.next_label.as_deref().unwrap_or(""));
+                    return Some(Outcome::Next);
+                }
+                0x01 if ui.up_next_left.is_some() => {
+                    if let Some(c) = ui.up_next.as_mut() { c.dismiss(); }
+                    ui.up_next_left = None;
+                    sex_pdx::serial_record!("[qupid.upnext] dismissed");
+                }
                 0x1C => if let Some(seg) = skip_at(&ui.segments, player.time_ms().max(0) as u64).cloned() {
                     sex_pdx::serial_record!("[qupid.skip] kind={} to_ms={}", match seg.kind {
                         sex_episodes::segments::Kind::Recap => "recap", sex_episodes::segments::Kind::Intro => "intro",
@@ -328,6 +345,11 @@ fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progre
         sex_pdx::serial_record!("[qupid.chapters] count={} segments={}", ui.chapters.len(), ui.segments.len());
         for s in &ui.segments { sex_pdx::serial_record!("[qupid.segment] kind={} from_ms={} to_ms={}", s.kind.prompt(), s.start_ms, s.end_ms); }
     }
+    ui.up_next = ui.next_label.as_ref().map(|_| UpNextCard::new(&ui.segments, info.duration_ms));
+    ui.up_next_left = None;
+    if let Some(c) = ui.up_next.as_ref() {
+        sex_pdx::serial_record!("[qupid.upnext.armed] from_ms={} label={}", c.from_ms.map_or(-1, |m| m as i64), ui.next_label.as_deref().unwrap_or(""));
+    }
     let mut player = Player::new(dec, w, h, true, false);
     if ui.muted { player.set_muted(true); }
     if info.sample_rate > 0 && !player.has_sound() {
@@ -352,6 +374,19 @@ fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progre
     let mut flash = false;
     let outcome = loop {
         if let Some(o) = keys(window, &mut player, ui) { break o; }
+        if let Some(card) = ui.up_next.as_mut() {
+            match card.at(player.time_ms().max(0) as u64) {
+                UpNext::Go => {
+                    sex_pdx::serial_record!("[qupid.upnext] go label={}", ui.next_label.as_deref().unwrap_or(""));
+                    break Outcome::Next;
+                }
+                UpNext::Counting(left) => {
+                    if ui.up_next_left.is_none() { sex_pdx::serial_record!("[qupid.upnext] shown left_ms={}", left); }
+                    ui.up_next_left = Some(left);
+                }
+                UpNext::Hidden => ui.up_next_left = None,
+            }
+        }
         if let (Some(sex_media::Silence::Stalled { played, pending }), false) = (player.silence(), stalled) {
             stalled = true;
             sex_pdx::serial_record!("[play.sound.stalled] played={} pending={}", played, pending);
@@ -442,20 +477,28 @@ fn is_subtitles(w: &[u8]) -> bool {
 
 /// Plays the playlist: each video, with the subtitle file named right after it.
 fn playlist(window: &mut Window, words: &[&[u8]]) {
-    let mut items: Vec<(&[u8], Option<&[u8]>)> = Vec::new();
+    let mut items: Vec<(Vec<u8>, Option<Vec<u8>>)> = Vec::new();
     for w in words.iter().copied().filter(|w| !w.starts_with(b"--")) {
         match items.last_mut() {
-            Some(last) if is_subtitles(w) && last.1.is_none() => last.1 = Some(w),
-            _ => items.push((w, None)),
+            Some(last) if is_subtitles(w) && last.1.is_none() => last.1 = Some(w.to_vec()),
+            _ => items.push((w.to_vec(), None)),
         }
     }
     if items.is_empty() { return fail(window, b"Usage: run qupid @VIDEO.mp4 [@SUBTITLES.srt] [@MORE.mp4 ...], or run qupid --library @FOLDER"); }
     let mut resume = Resume::load(window);
     let mut ui = Ui { subs: None, controls: captions::Painter::new(), controls_until: 0, item: (0, items.len()), drawn_ms: 0,
-        chapters: Vec::new(), segments: Vec::new(), card: captions::Painter::new(), chapter_list_until: 0, muted: false };
+        chapters: Vec::new(), segments: Vec::new(), card: captions::Painter::new(), chapter_list_until: 0, muted: false,
+        next_label: None, up_next: None, up_next_left: None };
     let mut i = 0usize;
     while i < items.len() {
-        let (path, given) = items[i];
+        // At the playlist's end, the show's next episode from the same folder, when
+        // Qupid may read that folder.
+        if i + 1 == items.len() {
+            if let Some(next) = folder_next(window, &items[i].0) { items.push((next, None)); }
+        }
+        ui.next_label = items.get(i + 1).map(|n| item_label(&n.0));
+        let (path, given) = (items[i].0.clone(), items[i].1.clone());
+        let (path, given) = (path.as_slice(), given.as_deref());
         ui.item = (i, items.len());
         sex_pdx::serial_record!("[play.item] n={} of={} file={}", i, items.len(), core::str::from_utf8(path).unwrap_or("?"));
         let len = match files::size(window, path) {
@@ -500,6 +543,29 @@ fn playlist(window: &mut Window, words: &[&[u8]]) {
         i += 1;
     }
     sex_pdx::serial_record!("[play.playlist.done] items={}", items.len());
+}
+
+/// How the "Up next" card names an item: its episode ("S01E04"), else its file name.
+fn item_label(path: &[u8]) -> alloc::string::String {
+    let text = alloc::string::String::from_utf8_lossy(path);
+    match sex_episodes::episodes::parse(&text) {
+        Some(ep) => sex_episodes::episodes::label(&ep),
+        None => alloc::string::String::from(sex_episodes::episodes::base(&text)),
+    }
+}
+
+/// The next episode of the show `path` belongs to, from its folder's listing.
+fn folder_next(window: &mut Window, path: &[u8]) -> Option<Vec<u8>> {
+    let text = core::str::from_utf8(path).ok()?;
+    sex_episodes::episodes::parse(text)?;
+    let (dir, prefix) = match path.iter().rposition(|b| *b == b'/') { Some(k) => (&path[..k.max(1)], &path[..k + 1]), None => (&b"."[..], &b""[..]) };
+    let entries = files::list(window, dir).ok()?;
+    let names: Vec<alloc::string::String> = entries.iter().filter(|e| !e.dir)
+        .map(|e| { let mut p = prefix.to_vec(); p.extend_from_slice(&e.name); alloc::string::String::from_utf8_lossy(&p).into_owned() }).collect();
+    let refs: Vec<&str> = names.iter().map(|n| n.as_str()).collect();
+    let k = sex_episodes::episodes::next_episode(text, &refs)?;
+    sex_pdx::serial_record!("[qupid.upnext.folder] next={}", names[k]);
+    Some(names[k].as_bytes().to_vec())
 }
 
 /// cos and sin of `x` (|x| up to about 4), by their series, since programs have no libm here.
