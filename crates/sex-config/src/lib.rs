@@ -108,7 +108,11 @@ pub mod id {
     pub const OPEN_VIDEO: u16 = 21;
     pub const OPEN_AUDIO: u16 = 22;
     pub const OPEN_PAGE: u16 = 23;
+    pub const THEME: u16 = 24;
 }
+
+/// Themes, in `sex_theme::Mode` setting order. Append-only.
+pub const THEMES: &[&str] = &["Light", "Dark", "High contrast"];
 
 /// Programs that open each kind of file, the default first. Append-only.
 pub const PDF_PROGRAMS: &[&str] = &["vellum", "kaleidoscope"];
@@ -144,8 +148,9 @@ const fn int(min: i32, max: i32) -> Kind { Kind::Int { min, max } }
 /// section stay together. Idle times default to never: first-start setup offers
 /// times, so a machine nobody set up (or a test run) never dims on its own.
 pub const KEYS: &[Key] = &[
-    Key { id: id::ACCENT, name: "appearance.accent", label: "Accent colour", kind: Kind::Color, default: 0x3D7EFF },
+    Key { id: id::ACCENT, name: "appearance.accent", label: "Accent colour", kind: Kind::Color, default: 0xD6336C },
     Key { id: id::ANIMATIONS, name: "appearance.animations", label: "Animations", kind: Kind::Bool, default: 1 },
+    Key { id: id::THEME, name: "appearance.theme", label: "Theme", kind: Kind::Choice(THEMES), default: 0 },
     Key { id: id::WALLPAPER, name: "desktop.wallpaper", label: "Wallpaper", kind: Kind::Choice(WALLPAPERS), default: 0 },
     Key { id: id::NIGHT_LIGHT, name: "desktop.night_light", label: "Night light (0 off to 3 warmest)", kind: int(0, 3), default: 0 },
     Key { id: id::SCALE, name: "display.scale", label: "Scale (0 automatic)", kind: int(0, 3), default: 0 },

@@ -33,6 +33,12 @@ mod scene {
     impl Groups {
         pub fn raised_focus(&self, _: &[Surface], focused: u64) -> u64 { focused }
         pub fn independent(&self, s: &Surface) -> bool { s.active }
+        /// Production clamp (surface_groups::rect_below): origin clamped, extent kept.
+        pub fn rect(&self, s: &Surface, w: usize, h: usize) -> (usize, usize, usize, usize) {
+            let x = (s.x.max(0) as usize).min(w.saturating_sub(1));
+            let y = (s.y.max(crate::BAR as i32) as usize).min(h.saturating_sub(1));
+            (x, y, (s.w as usize).min(w.saturating_sub(x)), (s.h as usize).min(h.saturating_sub(y)))
+        }
     }
     pub struct SceneSnapshot { pub surfaces: [Surface; MAX_SURFACES], pub groups: Groups, pub metrics: Metrics, pub focus: u64 }
 }
@@ -55,8 +61,8 @@ fn bg(y: usize, h: usize) -> u32 {
 /// Window colour at a pixel: a title bar on top of a body.
 fn paint(s: &Surface, y: usize) -> u32 { if (y as i32) < s.y + TITLE { 0x00_1E1E2E } else { s.color } }
 fn holds(s: &Surface, x: usize, y: usize) -> bool {
-    let (x, y) = (x as i32, y as i32);
-    s.active && x >= s.x && y >= s.y && x < s.x + s.w as i32 && y < s.y + s.h as i32
+    let (sx, sy, sw, sh) = scene::Groups.rect(s, W, H);
+    s.active && x >= sx && y >= sy && x < sx + sw && y < sy + sh
 }
 /// Focused first, then slot order: the production winner rule.
 fn winner(scene: &SceneSnapshot, x: usize, y: usize) -> Option<&Surface> {
@@ -168,6 +174,36 @@ fn a_screen_filling_window_stays_square_and_casts_nothing() {
     let fb = render(&scene);
     assert_eq!(fb[BAR * W], 0x00_1E1E2E);
     assert_eq!(fb[(H - 1) * W + W - 1], 0x00_445566);
+}
+
+#[test]
+fn stacked_corners_show_the_wallpaper_not_the_window_below() {
+    let _g = lock();
+    decor::set_effects(true);
+    let mut scene = desktop();
+    scene.surfaces = [Surface::default(); surface_lifecycle::MAX_SURFACES];
+    scene.surfaces[0] = win(1, 100, 100, 200, 150, 0x00_445566);
+    scene.surfaces[1] = win(2, 100, 100, 260, 200, 0x00_778899);
+    scene.focus = 0;
+    let fb = render(&scene);
+    let c = fb[100 * W + 100];
+    assert_ne!(c, 0x00_1E1E2E, "lower window's square title corner shows through");
+    assert!(dark(c) <= dark(bg(100, H)));
+}
+
+#[test]
+fn off_screen_origin_uses_the_drawn_rectangle() {
+    let _g = lock();
+    decor::set_effects(true);
+    let mut scene = desktop();
+    scene.surfaces = [Surface::default(); surface_lifecycle::MAX_SURFACES];
+    scene.surfaces[0] = win(1, -20, 100, 100, 100, 0x00_445566);
+    scene.focus = 1;
+    let fb = render(&scene);
+    // Drawn across x=0..100: no shadow inside it at x=90, and the drawn corner is rounded.
+    assert_eq!(fb[150 * W + 90], 0x00_445566);
+    assert!(dark(fb[150 * W + 101]) < dark(bg(150, H)));
+    assert_ne!(fb[199 * W + 99], 0x00_445566);
 }
 
 #[test]
