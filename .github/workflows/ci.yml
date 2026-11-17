@@ -716,6 +716,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/silk-source.img"
         python3 scripts/silk_ctl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/silk-source.img" --out "$RUNNER_TEMP/sexos-desktop/silk"
+    - name: Hot corners (the top-left corner opens and closes the window overview)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/corner-source.img"
+        python3 scripts/hot_corner_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/corner-source.img" --out "$RUNNER_TEMP/sexos-desktop/corner"
     - name: Magnifier and colour filters (accessibility)
       run: |
         truncate -s 256M "$RUNNER_TEMP/access-source.img"
