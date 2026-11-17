@@ -13,6 +13,12 @@ mod denim {
  pub fn holds(_:u32,_:u64)->bool{HOLDS.with(|h|h.get())}
  pub fn notify(target:u32,page:u64,token:u64)->Result<(),u64>{NOTICES.with(|n|n.borrow_mut().push((target,page,token)));Ok(())}
 }
+/// The row's workers (none unless a test adds one).
+mod program_workers {
+ thread_local!{pub static WORKERS:std::cell::RefCell<Vec<usize>>=const{std::cell::RefCell::new(Vec::new())};}
+ pub fn is_worker(t:*mut super::scheduler::Task)->bool{WORKERS.with(|w|w.borrow().contains(&(t as usize)))}
+ pub fn find(_:u32,pick:impl Fn(*mut super::scheduler::Task)->bool)->Option<*mut super::scheduler::Task>{WORKERS.with(|w|w.borrow().iter().map(|&t|t as *mut super::scheduler::Task).find(|&t|pick(t)))}
+}
 pub const SLOT_SEXT:u64=2;
 #[macro_export] macro_rules! serial_println { ($($arg:tt)*) => { let _ = format_args!($($arg)*); }; }
 use pagefault::{is_canonical_fault_address,PageFaultError,PageFaultRequest,OP_PAGE_FAULT};
@@ -207,4 +213,30 @@ fn a_page_denim_holds_faults_to_denim_not_the_pager(){
  assert!(kernel_pagefault::query_fault(7,9,token).is_err());
  let record=kernel_pagefault::query_fault(7,51,token).unwrap();assert_eq!(record.page_addr,0x4000_1000);
  let _=task;
+}
+
+/// A worker that touches a page Denim holds parks and comes back through Denim: the
+/// kernel finds the worker by the fault's token. A worker's other faults stay refused.
+#[test]
+fn a_worker_touching_a_denim_page_comes_back_through_denim(){
+ let _serial=SERIAL.lock().unwrap_or_else(|e|e.into_inner());
+ let main=setup();
+ let state=ownership::TaskOwnership::new();assert!(state.activate());
+ assert_eq!(state.try_admit(||Ok::<(),()>(())),ownership::Admission::Published);
+ assert!(state.begin_dispatch(0));assert!(state.attach(0));assert_eq!(state.park_fault(0),ownership::ParkResult::Blocked);
+ let worker=Box::into_raw(Box::new(scheduler::Task{id:0x4000_0009,context:scheduler::Context{rip:0x100300,kstack_top:0x300800},state,fault:fault_transaction::FaultSlot::new()}));
+ program_workers::WORKERS.with(|w|w.borrow_mut().push(worker as usize));
+ scheduler::SCHEDULERS[0].current_task.store(worker,Ordering::Release);
+ // Not a page Denim holds: only the main task may fault to the pager.
+ assert_eq!(forward(0x4000_2234,6,7),Err(DENIED));
+ denim::HOLDS.with(|h|h.set(true));
+ let token=forward(0x4000_2234,6,7).unwrap();
+ denim::HOLDS.with(|h|h.set(false));
+ assert_eq!(denim::NOTICES.with(|n|n.borrow_mut().pop()),Some((7,0x4000_2000,token)));
+ let record=kernel_pagefault::claim_fault(7,51,token).unwrap();
+ assert_eq!((record.task_id,record.page_addr),(0x4000_0009,0x4000_2000));
+ assert_eq!(kernel_pagefault::complete_fault(7,51,token),Ok(()));
+ assert_eq!(RESUMES.load(Ordering::Relaxed),1);
+ assert!(!unsafe{(*main).state.snapshot()}.exited);
+ program_workers::WORKERS.with(|w|w.borrow_mut().clear());
 }

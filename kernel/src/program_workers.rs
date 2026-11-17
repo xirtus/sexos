@@ -100,6 +100,11 @@ fn worker_row(task: *mut Task) -> Option<u32> {
     table().workers.iter().find(|w| w.task == task).map(|w| w.target)
 }
 
+/// A live worker of `target` that `pick` chooses.
+pub fn find(target: u32, pick: impl Fn(*mut Task) -> bool) -> Option<*mut Task> {
+    table().workers.iter().find(|w| w.target == target && !dead(w.task) && pick(w.task)).map(|w| w.task)
+}
+
 /// The run of `target` has ended: every worker is told to exit. Blocked and queued
 /// ones die without running again; one running on a core is switched out at its next tick.
 pub fn end(target: u32) {

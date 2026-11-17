@@ -61,3 +61,41 @@ fn grow_in(arena: &mut Arena, want: u64) -> Result<[u64; 3], u64> {
     crate::serial_println!("[service.memory] pd={} granted={} held={} free_pages={}", arena.pd, want, arena.grown, crate::program_frames::available());
     Ok([m::OK, arena.base, arena.grown as u64])
 }
+
+/// A page of `pd`'s arena below its mark: its frame goes back (`fill` false), or a hole
+/// gets a fresh zeroed frame (`fill` true). The pages stay the service's to refill.
+pub fn hole(pd_id: u32, va: u64, fill: bool) -> u64 {
+    // A copy: no core may wait on this lock while a shootdown waits on it. Only the
+    // service itself calls, so its arena cannot change meanwhile.
+    let Some(a) = ARENAS.lock().iter().flatten().find(|a| a.pd == pd_id).copied() else { return m::DENIED };
+    if va & 0xFFF != 0 || va < a.base || va >= a.base + a.grown as u64 * 4096 { return m::INVALID; }
+    let Some(leaf) = crate::boot_memory::existing_leaf_address(va) else { return m::INVALID };
+    let old = unsafe { core::ptr::read_volatile(leaf as *const u64) };
+    if fill != (old == 0) { return m::DENIED; }
+    if fill {
+        let Some(frame) = crate::program_frames::take() else { return m::FULL };
+        unsafe { core::ptr::write_volatile(leaf as *mut u64, frame | 7 | ((a.key as u64) << 59) | (1 << 63)); }
+        x86_64::instructions::tlb::flush(VirtAddr::new(va));
+    } else {
+        unsafe { core::ptr::write_volatile(leaf as *mut u64, 0); }
+        crate::smp::tlb::flush(va);
+        crate::program_frames::give(old & crate::app_resource_state::PHYSICAL_MASK);
+    }
+    m::OK
+}
+
+/// Every page of `pd`'s arena goes back, with one shootdown (a restarted Denim's old store).
+pub fn empty(pd_id: u32) -> u64 {
+    let Some(a) = ARENAS.lock().iter().flatten().find(|a| a.pd == pd_id).copied() else { return 0 };
+    let mut frames = alloc::vec::Vec::new();
+    for va in (0..a.grown as u64).map(|i| a.base + i * 4096) {
+        let Some(leaf) = crate::boot_memory::existing_leaf_address(va) else { continue };
+        let old = unsafe { core::ptr::read_volatile(leaf as *const u64) };
+        if old & 1 == 0 { continue; }
+        unsafe { core::ptr::write_volatile(leaf as *mut u64, 0); }
+        frames.push(old & crate::app_resource_state::PHYSICAL_MASK);
+    }
+    crate::smp::tlb::flush_pages(frames.len(), (0..a.grown as u64).map(|i| a.base + i * 4096));
+    for &f in &frames { crate::program_frames::give(f); }
+    frames.len() as u64
+}

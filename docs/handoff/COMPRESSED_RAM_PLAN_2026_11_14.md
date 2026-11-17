@@ -50,7 +50,7 @@ The kernel keeps mechanism, Denim keeps policy (DESIGN_GUARDRAILS):
 |---|---|---|
 | D1 | `crates/denim` codec, host tests in CI | done in this PR |
 | D2 | Kernel: accessed-bit scan op, page-out op with non-present marker, page-in forward; a first Denim server | done: host model (`tests/app_resource_state.rs`) + `scripts/denim_gate.py` (8 MiB of mixed pages out and back, eager build) |
-| D3 | `servers/denim`: store, clock scan, pressure-driven page-out | gate: `heaptest` 2x RAM with a slow access pattern completes |
+| D3 | `servers/denim`: store, clock scan, pressure-driven page-out | done: `denim_double_gate.py` (1G, 12G) and the restart part of `denim_gate.py`; see below |
 | D4 | Mesh shows compressed memory per program and the machine's ratio | monitor gate |
 | D5 | Soak with Denim on (J2 `--inject` includes Denim) | soak gate |
 
@@ -75,3 +75,14 @@ rows, so it gets its own PR with a host model of the PTE states before any guest
 Left for D3: Denim restart (today its parked faults would wait forever: end those runs),
 faults from worker tasks, slab compaction and returning store pages, a recall when
 pressure falls, and the 2x RAM `heaptest` gate.
+
+## D3 as built (2026-11-17)
+
+- Denim restarts: its first call `RESET` ends the runs whose pages the old run held (a
+  crash record, a System notice from the Shell via `OP_LOST`), and frees the old store.
+- Worker faults come back through Denim (the kernel finds the task by its fault token);
+  runs with workers may have pages out. SEAL/OPEN and VM loans still recall.
+- The store gives pages back (`RETURN`) and refills holes (`REFILL`); compaction moves
+  blocks out of sparse slab pages when over an eighth of slab bytes are unused.
+- A clock hand paced by pressure; recall 1024 pages per round once memory is roomy.
+- Ledger: docs/handoff/ledger/2026-11-17-denim-d3.md.

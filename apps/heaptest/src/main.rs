@@ -103,6 +103,55 @@ fn kept_page(p: usize, page: &mut [u8]) {
 }
 const KEPT_PAGES: usize = 2048;
 
+/// Page `p` of the double set: mostly ordinary heap (zeros, filled runs, text), an
+/// eighth noise that does not compress.
+fn double_page(p: usize, page: &mut [u8]) {
+    match p % 8 {
+        0 => page.fill(0),
+        1 | 2 => page.fill(p as u8 | 1),
+        7 => kept_page(3 + 4 * p, page),
+        _ => {
+            const LINE: &[u8] = b"a line of ordinary text in the double set, as heaps hold. ";
+            for (i, b) in page.iter_mut().enumerate() { *b = LINE[i % LINE.len()]; }
+            page[..8].copy_from_slice(&(p as u64).to_le_bytes());
+        }
+    }
+}
+
+/// D: two and a half times the memory free at the start, a mebibyte at a time, so the
+/// heap only fits because Denim packs the cold part. Like a polite program, it waits
+/// while memory is critical or an allocation is refused. Then every page reads back.
+fn double(target: u32, task: u32) {
+    const MIB_PAGES: usize = 256;
+    let free = sex_pdx::system_stats::overview().map_or(0, |o| o.free_pages) as usize;
+    let goal = free * 5 / 2 / MIB_PAGES;
+    sex_pdx::serial_record!("[heaptest.double.start] target={} task={} free_pages={} goal_mib={}", target, task, free, goal);
+    let start = sex_pdx::get_ticks();
+    let (mut chunks, mut waited, mut since): (Vec<Vec<u8>>, u64, u64) = (Vec::new(), 0, start);
+    if chunks.try_reserve_exact(goal).is_err() { sex_pdx::serial_record!("[heaptest.fail] target={} task={} why=no room to count chunks", target, task); return; }
+    while chunks.len() < goal {
+        let mut chunk = Vec::new();
+        if memory::pressure() == memory::PRESSURE_CRITICAL || chunk.try_reserve_exact(MIB_PAGES * 4096).is_err() {
+            if sex_pdx::get_ticks() - since > 300_000 { sex_pdx::serial_record!("[heaptest.fail] target={} task={} why=no memory came free for 300 s at {} MiB", target, task, chunks.len()); return; }
+            let _ = sex_pdx::sys_wait_self_ticks(8); waited += 8; continue;
+        }
+        chunk.resize(MIB_PAGES * 4096, 0);
+        let first = chunks.len() * MIB_PAGES;
+        for (i, page) in chunk.chunks_mut(4096).enumerate() { double_page(first + i, page); }
+        chunks.push(chunk);
+        since = sex_pdx::get_ticks();
+        if chunks.len() % 256 == 0 { sex_pdx::serial_record!("[heaptest.double.progress] target={} task={} mib={} ticks={} waited={}", target, task, chunks.len(), since - start, waited); }
+    }
+    let filled = sex_pdx::get_ticks();
+    let mut expect = alloc::vec![0u8; 4096];
+    let mut bad = 0;
+    for (n, chunk) in chunks.iter().enumerate() {
+        for (i, page) in chunk.chunks(4096).enumerate() { double_page(n * MIB_PAGES + i, &mut expect); if page != &expect[..] { bad += 1; } }
+    }
+    sex_pdx::serial_record!("[heaptest.double] target={} task={} mib={} free_pages={} bad={} fill_ticks={} verify_ticks={} waited={}",
+        target, task, chunks.len(), free, bad, filled - start, sex_pdx::get_ticks() - filled, waited);
+}
+
 fn text_of(used: usize, peak: usize, full: usize) -> String {
     let mut s = String::new();
     let _ = write!(s, "Heap test. F11 closes.\n\nThis run started with no memory and was given zeroed pages.\nVec, Box, BTreeMap and String: {} KiB.\nFilled {} MiB more.\nPeak: {} KiB.\n\nAll checks passed.\n",
@@ -140,6 +189,8 @@ pub extern "C" fn _start() -> ! {
                 }
                 sex_pdx::serial_record!("[heaptest.kept] target={} task={} pages={}", target, task, kept.len());
             }
+            // D: a heap over twice the machine's free memory (see `double`).
+            Event::Key(key) if key.code == 0x20 && kept.is_empty() => double(target, task),
             // V: every kept page must read back exactly.
             Event::Key(key) if key.code == 0x2F => {
                 let start = sex_pdx::get_ticks();

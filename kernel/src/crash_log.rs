@@ -295,7 +295,7 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
                 crate::serial_println!("[crash.probe.kernel]");
                 panic!("crash probe: the kernel was asked to stop");
             }
-            if !(1..=15).contains(&arg) { return wire::INVALID; }
+            if !(1..=15).contains(&arg) && arg != sex_pdx::denim::DENIM_PD as u64 { return wire::INVALID; }
             crate::serial_println!("[crash.probe.service] pd={}", arg);
             PROBE_KILL.store(arg as u32, Ordering::Release);
             // A service waiting for messages makes no syscall until something wakes it.

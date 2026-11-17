@@ -6,7 +6,12 @@ Denim takes cold pages without waiting for memory pressure.
 Heaptest keeps 8 MiB of mixed pages (zero, same-filled, text, noise; key K), then idles.
 Denim must take at least half of them out; reading them back (key V) faults them in, and
 every byte must match. Close must still retire the run cleanly with pages out, and
-nothing may fault or panic."""
+nothing may fault or panic.
+
+D3: the ISO is also a crash-probe build (SEXOS_CRASH_PROBE=1). A second heaptest run keeps
+its pages and lets them go out; then `crash denim` in Spindle ends Denim as a fault would.
+Denim starts again, its first call ends the run whose pages were lost, the Shell names it
+in a System notice, and the run retires; the new Denim then works as before."""
 import argparse,os,re,shutil,time
 os.environ.setdefault('SEXOS_GATE_BOUND','900')
 from pathlib import Path
@@ -58,6 +63,27 @@ def main():
   g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
   for bad in ('KERNEL PANIC','panicked at','[denim.lost]','[denim.damaged]','[denim.panic]'):assert bad not in t(),bad
   assert not re.search(r'fault.kill \[paging.fault.terminal\] pd=\d+',t()),'a task was killed by a fault'
-  print({'ok':True,'target':target,'out':out_round,'verify_ticks':int(v[2]),'faults_in':faults})
+  # Denim starts again with pages out: the run that had them ends and the Shell says so.
+  def spindle(line):
+   g['focus'](153);time.sleep(.5);s=len(t())
+   for k in line:q.key('spc' if k==' ' else k);time.sleep(.05)
+   q.key('ret');return s
+  s=spindle('run heaptest')
+  m=g['wait'](r'\[heaptest\.ok\] target=(\d+) task=(\d+)',s,180);t2,k2=m[1],m[2]
+  g['wait'](rf'\[display.text.committed\] target={t2} ',s,60);time.sleep(1)
+  sid2=int(re.findall(rf'\[shell.program.launch\] target={t2} task={k2} surface=(\d+)',t())[-1])
+  g['focus'](sid2);time.sleep(.5);s=len(t());q.key('k')
+  g['wait'](rf'\[heaptest\.kept\] target={t2} task={k2} pages=2048',s,120)
+  g['wait'](r'\[denim\.round\] [^\n]* runs=1\n',s,120)
+  s=spindle('crash denim')
+  g['wait'](r'\[crash.probe.service\] pd=51\n',s,60)
+  g['wait'](r'\[service.restarted\] pd=51 [^\n]*admitted=1',s,60)
+  r=g['wait'](r'\[denim\.ready\] ok=1 [^\n]*restarts=(\d+) ended=(\d+)',s,60)
+  assert r[1]=='1' and r[2]=='1',r[0]
+  g['wait'](rf'\[denim\.lost\.run\] target={t2} task={k2} pages_out=[1-9]',s,60)
+  g['wait'](rf'\[shell\.denim\.lost\] target={t2} task={k2} ',s,60)
+  g['wait'](rf'\[app.private.retired\] target={t2} task={k2} ',s,120)
+  for bad in ('KERNEL PANIC','panicked at','[denim.damaged]','[denim.panic]'):assert bad not in t(),bad
+  print({'ok':True,'target':target,'out':out_round,'verify_ticks':int(v[2]),'faults_in':faults,'restart':{'target':t2,'ended':int(r[2])}})
  finally:g['stop']()
 if __name__=='__main__':main()

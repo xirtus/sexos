@@ -1566,7 +1566,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"crashes" => { crashes_command(sb); true }
         b"crash" if option_env!("SEXOS_CRASH_PROBE").is_some() => {
             // Test builds only: stop a service, or the kernel, as a fault would.
-            let target = if args.eq_ignore_ascii_case(b"kernel") { Some(0) } else {
+            let target = if args.eq_ignore_ascii_case(b"kernel") { Some(0) }
+                else if args.eq_ignore_ascii_case(b"denim") { Some(sex_pdx::denim::DENIM_PD as u64) } else {
                 sex_pdx::crash_log::SERVICE_NAMES.iter().position(|n| n.as_bytes().eq_ignore_ascii_case(args)).map(|i| i as u64 + 1)
             };
             match target {

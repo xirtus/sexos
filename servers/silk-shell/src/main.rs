@@ -41,6 +41,7 @@ mod tray_items;
 mod tray_items_glue;
 mod layouts;
 mod layouts_glue;
+mod denim_notice;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -27022,6 +27023,8 @@ pub extern "C" fn _start() -> ! {
         if msg.type_id == sex_pdx::power::OP_EVENT && msg.caller_pd == 0 { unsafe { LAPTOP_NEXT_POLL = 0; laptop_poll(); } continue; }
         // The kernel's critical-memory word: the poll above acts on it.
         if msg.type_id == sex_pdx::program_memory::OP_PRESSURE && msg.caller_pd == 0 { unsafe { MEMORY_LAST_LOOK = 0; } continue; }
+        // The kernel: Denim started again and a program's packed memory was lost.
+        if unsafe { denim_notice::receive(&msg) } { continue; }
         unsafe {
             if shell_lifecycle_hint(&msg) { continue; }
             if restricted_routes::receive(&msg){continue;}

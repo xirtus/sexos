@@ -79,6 +79,16 @@ impl FaultSlot {
         })
     }
 
+    /// Whether fault `token` is this slot's, outstanding or just completed.
+    pub fn holds(&self, token: u64) -> bool {
+        loop {
+            match self.with(|s| Ok(s.completed.is_some_and(|r| r.token == token) || match s.active {
+                Active::Prepared(r) | Active::Pending(r) | Active::Claimed(r) => r.token == token, Active::Idle => false })) {
+                Err(RETRY) => core::hint::spin_loop(), held => return held.unwrap_or(false),
+            }
+        }
+    }
+
     pub fn publish(&self, token: u64) -> Result<(), u64> {
         self.with(|state| match state.active {
             Active::Prepared(record) if record.token == token => { state.active = Active::Pending(record); Ok(()) }

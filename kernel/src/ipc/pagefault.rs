@@ -14,6 +14,15 @@ fn target_task(target_pd: u32) -> Result<*mut Task, u64> {
     if task.is_null() { Err(INVALID) } else { Ok(task) }
 }
 
+/// The task of `target_pd`'s run that holds fault `token`: the main task, or, for a
+/// page Denim holds, any of the run's workers.
+fn fault_task(target_pd: u32, pager_pd: u32, token: u64) -> Result<*mut Task, u64> {
+    let main = target_task(target_pd)?;
+    let holds = |t: *mut Task| unsafe { (*t).fault.holds(token) };
+    if pager_pd != sex_pdx::denim::DENIM_PD || holds(main) { return Ok(main); }
+    crate::program_workers::find(target_pd, holds).ok_or(INVALID)
+}
+
 fn is_live_fault(task: *mut Task) -> bool {
     let state = unsafe { (*task).state.snapshot() };
     state.fault_blocked && !state.exited
@@ -31,11 +40,12 @@ pub unsafe fn forward_page_fault(fault_addr: u64, error_code: u64, pd_id: u64) -
     let core = crate::core_local::CoreLocal::get();
     let pd = core.current_pd_ref();
     if pd_id != pd.id as u64 { return Err(INVALID); }
-    let task = target_task(pd.id)?;
-    if SCHEDULERS[core.core_id as usize].current_task.load(Ordering::Acquire) != task
-        || !is_live_fault(task) { return Err(DENIED); }
-    // A page Denim holds comes back through Denim; any other through the row's pager.
+    // A page Denim holds comes back through Denim, for workers too; any other through
+    // the row's pager, for the main task only.
     let denim = crate::denim::holds(pd.id, fault_addr);
+    let current = SCHEDULERS[core.core_id as usize].current_task.load(Ordering::Acquire);
+    let task = if denim && crate::program_workers::is_worker(current) { current } else { target_task(pd.id)? };
+    if current != task || !is_live_fault(task) { return Err(DENIED); }
     let pager = if denim { sex_pdx::denim::DENIM_PD } else {
         let cap = pd.find_capability(sex_pdx::SLOT_SEXT as u32).ok_or(DENIED)?;
         match cap.data {
@@ -90,7 +100,7 @@ pub fn query_fault(target_pd: u32, pager_pd: u32, token: u64) -> Result<FaultRec
 }
 
 pub fn claim_fault(target_pd: u32, pager_pd: u32, token: u64) -> Result<FaultRecord, u64> {
-    let task = target_task(target_pd)?;
+    let task = fault_task(target_pd, pager_pd, token)?;
     if !is_live_fault(task) { return Err(DENIED); }
     let record = unsafe { (*task).fault.claim(pager_pd, token)? };
     let checked = validate_record(task, target_pd, record);
@@ -103,7 +113,7 @@ pub fn claim_fault(target_pd: u32, pager_pd: u32, token: u64) -> Result<FaultRec
 
 /// Caller guarantees that no PTE was changed and no selected frame became live.
 pub fn rollback_fault(target_pd: u32, pager_pd: u32, token: u64) -> bool {
-    let Ok(task) = target_task(target_pd) else { return false; };
+    let Ok(task) = fault_task(target_pd, pager_pd, token) else { return false; };
     // The claim belongs to this kernel operation. Retry only lock contention;
     // never strand a claimed transaction after a no-effect commit rejection.
     loop {
@@ -118,7 +128,7 @@ pub fn rollback_fault(target_pd: u32, pager_pd: u32, token: u64) -> bool {
 /// invalidation. Mapping remains committed even if its task has since exited.
 /// Retire all mutable fault metadata BEFORE exposing runnable ownership.
 pub fn complete_fault(target_pd: u32, pager_pd: u32, token: u64) -> Result<(), u64> {
-    let task = target_task(target_pd)?;
+    let task = fault_task(target_pd, pager_pd, token)?;
     let Some(record) = (unsafe { (*task).fault.complete(pager_pd, token)? }) else { return Ok(()); };
     assert!(validate_record(task, target_pd, record).is_ok(), "COMMITTED_FAULT_TASK_IDENTITY_CHANGED");
     let resumed = unsafe { crate::scheduler::resume_resolved_fault(task) };

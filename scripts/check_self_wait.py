@@ -15,7 +15,9 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 # deadline reference; USB quiet only narrows (also requires no Bluetooth HID traffic).
 APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',),
 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
-'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
+'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',
+    # Denim D3 (restart RESET, worker faults, store holes), 2026-11-17: no deadline reference
+    '2bb065d27ea49bf9f84cbe7930180987a3cda6b764285769415e290810744461',),
 'kernel/src/scheduler.rs': ('0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
                              # per-task self-wait sampling (task_count), 2026-11-17
                              '25c0bc835f30039f947f28bc79ed567e1c742e17ea3c9a8e0663b5f502c9d642',),
@@ -25,7 +27,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'kernel/src/interrupts.rs': ('c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
                               'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d'),
  'kernel/src/syscalls/mod.rs': ('aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
- 'kernel/src/program_workers.rs': ('6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',),
+ 'kernel/src/program_workers.rs': ('6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',
+    # Denim D3 (restart RESET, worker faults, store holes), 2026-11-17: no deadline reference
+    '83fbb2d6899ff2fbc050154a0bfc922fa2af7d8bf5d5649347629a67fd8ed58a',),
  'crates/sex-pdx/src/lib.rs': ('8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde', '9eb262eb2108d51f57ae9dc821e6e40a12a9e1003fbfac711422b246ec17fd44',
                                'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
                                'c2895d4991c2d48d099daee3e6090063b3288f77c0ad5e9a75201c903f95c984', 'ef6e695c7535ac077e8c4adef7ded6d79425210a1fd77005940be7f823cab40a', 'cee8e1525fa104c2c14f398b4eee80f4f63cd0f3f06602310cdf421dc15009c1', '1b7fe3f1752da8d10ea2f2ea6df5c387ff9ec9969a4287be64fb6e878f4a4d75', '562ccc2f5cf8cf755e68925f0a65a699fd9e968ac78a44bfe4c7dc84f464e7ab', 'f00f44669af45f707a4a24ec15f70321ed9ed04565007c9e1b093b42fdd39e96', '3766c55f455e02199154d9cdbe28c5fc93a454f91a2459fe04e2eafaf8abd24b', '74a5f4ccbd9aeeb574ff5c9d8f7008b486d89e214ef405ef589711dfda71904b',
@@ -50,7 +54,9 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
 # c209 raw-master only; no speculative combined privacy/kernel cohort.
 APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb', 'e93d67e07151c4c0f5eed240e0f3a27f9abb58074e26f52934eb8c36963278f7',
     # per-task self-wait sampling, 2026-11-17
-    'a897c8b8c617cfef1ec3a7fad038f32f8530b232cf698f9ea896a89950d5a0ec')
+    'a897c8b8c617cfef1ec3a7fad038f32f8530b232cf698f9ea896a89950d5a0ec',
+    # Denim D3 (restart RESET, worker faults, store holes), 2026-11-17: no deadline reference
+    '760225b10352362611d59ea08997c879e287e4aad16fe54c4a37762b442de1fe')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -275,9 +281,9 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
  'kernel/src/cpu_account.rs': 'c2e3f65a5aa411d2872d34f87ddfb9f9d9e0f56b41e3d1eeaa7d03bb1d4777b8',
  'kernel/src/core_local.rs': '62ece205111acc3deba4a41854a9ed632ff99742a54283bce094d1295025a300',
- 'kernel/src/app_resources.rs': '1c4de7fca3f3fc4cc6ade73eecec83c269f800a0d520069b2201466d15c761a0',
- 'kernel/src/service_restart.rs': 'c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e',
- 'kernel/src/crash_log.rs': '4a6a0f5312fdbec23efa0d5497b820105ba244c35cc878f27db04ba98cedc3ae',
+ 'kernel/src/app_resources.rs': '7172fb3a2c778b7a6f372fb211c0a52be85ff653876393e93ca478023d757bd3',
+ 'kernel/src/service_restart.rs': '0900a46c2424b1329a3ad9ca3b1a8b282cc03cb01f8d7d8ef373d36904bac5a4',
+ 'kernel/src/crash_log.rs': '5c8b5bec1ca425afc7d626c0f970aa5080ccb727cfe339bbbd33048431d6581f',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
 

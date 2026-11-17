@@ -549,8 +549,6 @@ pub fn spawn_worker(pd:&ProtectionDomain,entry:u64,stack:u64,arg:u64)->Result<u6
     let apps=apps_lock!().ok_or(RETRY)?;
     let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(DENIED)?;
     let run=live(app,pd)?;
-    // Denim pages come back only to the main task's faults: bring them all back first.
-    if app.out>0{return Err(RECALL)}
     let id=next_run_task()?;
     crate::program_workers::spawn(pd,run,id,entry,stack,arg)
 }
@@ -672,13 +670,36 @@ pub fn force_end(pd:&ProtectionDomain,slot:u64)->u64{
         g.authorize(pd.id,app.target,app.boot_task,QUERY)?;
         if pd.id!=app.coordinator||!app.reusable{return Err(DENIED)}
         if app.forced||app.retired||app.rebirthing{return Ok(())}
-        let id=app.target;crate::program_tenancy::release(id);
-        for page in &app.pages[..app.count]{unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};}
-        crate::smp::tlb::flush_pages(app.count,app.pages[..app.count].iter().map(|p|p.va));
-        app.forced=true;
-        crate::program_workers::end(id);
-        crate::serial_println!("[app.program.forced] target={} task={} pages={}",app.target,app.task,app.count);
+        end_forced(app);
         Ok(())})();result.map_or_else(|e|e,|()|0)
+}
+fn end_forced(app:&mut App){
+    let id=app.target;crate::program_tenancy::release(id);
+    for page in &app.pages[..app.count]{unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};}
+    crate::smp::tlb::flush_pages(app.count,app.pages[..app.count].iter().map(|p|p.va));
+    app.forced=true;
+    crate::program_workers::end(id);
+    crate::serial_println!("[app.program.forced] target={} task={} pages={}",app.target,app.task,app.count);
+}
+/// Denim started again, so the pages it held are gone: every run with pages out ends
+/// as a forced run does (a task parked on such a page with it), the Shell is told
+/// which (`OP_LOST`), and each gets a crash record. Returns how many ended.
+pub fn denim_lost()->u64{
+    let Some(mut apps)=apps_lock!() else{return 0};
+    let mut ended=0;
+    for app in apps.iter_mut().filter(|a|a.ready&&a.reusable&&a.out>0&&!a.forced&&!a.retired&&!a.rebirthing){
+        end_forced(app);
+        let main=app.main as *mut crate::scheduler::Task;
+        if unsafe{(*main).state.exit()}{crate::scheduler::unpark_thread(main)}
+        crate::crash_log::fault(app.target,14,0,0,0,"compressed memory lost: Denim restarted");
+        if let Some(shell)=crate::ipc::DOMAIN_REGISTRY.get(app.coordinator){
+            let msg=crate::ipc::messages::MessageType::IpcCall{func_id:sex_pdx::denim::OP_LOST,arg0:app.target as u64,arg1:app.task as u64,arg2:app.out as u64,caller_pd:0,caller_task:0};
+            if unsafe{(*shell.message_ring).enqueue(msg)}.is_ok(){crate::scheduler::unpark_thread(shell.main_task.load(Ordering::Acquire));}
+        }
+        crate::serial_println!("[denim.lost.run] target={} task={} pages_out={}",app.target,app.task,app.out);
+        ended+=1;
+    }
+    ended
 }
 pub fn ack(pd:&ProtectionDomain,slot:u64,task:u64)->u64{
     let result=(||{let g=grant(pd,slot)?;let mut apps=apps_lock!().ok_or(RETRY)?;
@@ -793,7 +814,7 @@ pub fn poll_exit_notifications(){
         }
     }
 }
-/// Denim's view of a live, single-threaded run (`sex_pdx::denim`). The run must be the
+/// Denim's view of a live run (`sex_pdx::denim`). The run must be the
 /// row's current one, as for `grow`; its domain is found by target, not by caller.
 fn denim_run(apps:&mut [App;MAX_APPS],target:u32)->Result<&mut App,u64>{
     let app=apps.iter_mut().find(|a|a.ready&&a.target==target).ok_or(DENIED)?;
@@ -836,8 +857,6 @@ pub fn denim_out(target:u32,va:u64,window:u64)->[u64;2]{
     let result=(||{
         let mut apps=apps_lock!().ok_or(RETRY)?;
         let app=denim_run(&mut apps,target)?;
-        // A worker could fault on the marker, and only the main task's faults reach Denim.
-        if !crate::program_workers::all_dead(target){return Err(DENIED)}
         let at=heap_index(app,va)?;
         // A VM maps this frame (Drag): the guest's touches never mark the page used,
         // and its frame must outlive the loan. Lent pages stay.

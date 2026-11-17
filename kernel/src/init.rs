@@ -924,6 +924,8 @@ pub fn init() {
     crate::service_restart::capture(sexdisp_id, 1);
     // Shell: a new run rebuilds its windows from the app catalog.
     crate::service_restart::capture(silkshell_id, 3);
+    // Denim: a new run ends the runs whose pages the old one held (`denim::RESET`).
+    crate::service_restart::capture(denim_id, sex_pdx::denim::DENIM_PD as u8);
     crate::program_records::init(silkshell_id);
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");
