@@ -34,8 +34,8 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/play'))
- install(disk,[('play',Path(play).read_bytes())])
+ play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/qupid'))
+ install(disk,[('qupid',Path(play).read_bytes())])
  files={'/low.mp4':tone(440),'/high.mp4':tone(880)}
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
@@ -64,9 +64,9 @@ def main():
   g['wait'](r'\[bell.sound.ready\] card=\S+ stream=\d+ rate=48000 channels=2',0,120)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   fetched('low.mp4');fetched('high.mp4')
-  s=len(t());say('run play @low.mp4',r'\[play.opened\] ',300)
+  s=len(t());say('run qupid @low.mp4',r'\[play.opened\] ',300)
   low=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
-  s=len(t());say('run play @high.mp4',r'\[play.opened\] ',300)
+  s=len(t());say('run qupid @high.mp4',r'\[play.opened\] ',300)
   high=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](r'\[bell.sound.stream.open\] row=\d+ caller='+high[1],s,60)
   time.sleep(2)

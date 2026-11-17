@@ -113,8 +113,8 @@ pub mod id {
 /// Programs that open each kind of file, the default first. Append-only.
 pub const PDF_PROGRAMS: &[&str] = &["vellum", "kaleidoscope"];
 pub const IMAGE_PROGRAMS: &[&str] = &["gaze", "kaleidoscope"];
-pub const VIDEO_PROGRAMS: &[&str] = &["play"];
-pub const AUDIO_PROGRAMS: &[&str] = &["play"];
+pub const VIDEO_PROGRAMS: &[&str] = &["qupid"];
+pub const AUDIO_PROGRAMS: &[&str] = &["qupid"];
 pub const PAGE_PROGRAMS: &[&str] = &["kaleidoscope"];
 
 /// The `open.*` setting for a file name, by its extension.
@@ -468,8 +468,8 @@ mod tests {
         let mut c = Config::new();
         assert_eq!(c.program_for(b"report.PDF"), Some("vellum"));
         assert_eq!(c.program_for(b"cat.jpeg"), Some("gaze"));
-        assert_eq!(c.program_for(b"film.mkv"), Some("play"));
-        assert_eq!(c.program_for(b"song.flac"), Some("play"));
+        assert_eq!(c.program_for(b"film.mkv"), Some("qupid"));
+        assert_eq!(c.program_for(b"song.flac"), Some("qupid"));
         assert_eq!(c.program_for(b"index.html"), Some("kaleidoscope"));
         assert_eq!(c.program_for(b"notes"), None);
         assert_eq!(c.program_for(b"archive.tar.gz"), None);

@@ -13,7 +13,16 @@ Qupid can play local files or stream media over the network:
 run qupid @video.mp4                  # Play local video file with custody grant
 run qupid @song.flac                  # Play lossless audio track
 run +net qupid https://media.site/hls # Stream online media with network authority
+run qupid @film.mp4 @film.srt         # Play with a subtitle file beside it
+run qupid --library @/Music           # Open the music library view
 ```
+
+### Library view
+
+`run qupid --library @FOLDER` reads every song under the folder (three levels down), groups
+them by artist and album from their tags and plays them one after another with no gap.
+**Up/Down** choose, **Enter** plays from the chosen track, **Space** pauses, **N/P** skip,
+**Q** adds the chosen track to the queue.
 
 ---
 

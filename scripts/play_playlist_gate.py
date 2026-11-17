@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Play's playlist, resume position and controls. `run play @one.mp4 @two.mp4` plays
+"""Play's playlist, resume position and controls. `run qupid @one.mp4 @two.mp4` plays
 both in turn, showing "1 of 2" in its controls. A long video paused half way shows
 the paused controls; closed there, it opens again where it was left (within 1 s).
 
@@ -23,8 +23,8 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/play'))
- install(disk,[('play',Path(play).read_bytes())])
+ play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/qupid'))
+ install(disk,[('qupid',Path(play).read_bytes())])
  server=Quiet(('127.0.0.1',0),Handler);port=server.server_address[1]
  threading.Thread(target=server.serve_forever,daemon=True).start()
  wav=out/'sound.wav';wav.unlink(missing_ok=True)
@@ -51,7 +51,7 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   for n in ('one.mp4','two.mp4','long.mp4'):fetched(n)
   # A playlist of two: both play, in order, then it is done.
-  s,m=launch('run play @one.mp4 @two.mp4',r'\[play.item\] n=0 of=2 file=\S*one\.mp4')
+  s,m=launch('run qupid @one.mp4 @two.mp4',r'\[play.item\] n=0 of=2 file=\S*one\.mp4')
   g['wait'](r'\[play.controls\] text=Playing  0:0\d / 0:02   1 of 2',s,60)
   g['wait'](r'\[play.item\] n=1 of=2 file=\S*two\.mp4',s,120)
   g['wait'](r'\[play.controls\] text=Playing  0:0\d / 0:02   2 of 2',s,60)
@@ -59,7 +59,7 @@ def main():
   assert len(re.findall(r'\[play.done\] frames=',t()[s:]))==2
   close(m)
   # Pause half way: the paused controls show; close there.
-  s,m=launch('run play @long.mp4',r'\[play.opened\] ')
+  s,m=launch('run qupid @long.mp4',r'\[play.opened\] ')
   g['wait'](r'\[play.frame\] n=1[05]0 at_ms=(\d+)',s,120)
   g['focus'](int(m[3]));time.sleep(.3)
   ss=len(t());q.key('spc');g['wait'](r'\[play.paused\] 1',ss,30)
@@ -70,7 +70,7 @@ def main():
   g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',ss,90)
   assert 3000<=left<=6500,f'left at {left} ms'
   # Opened again: it goes on from there.
-  s,m=launch('run play @long.mp4',rf'\[play.resume\] ms={left}')
+  s,m=launch('run qupid @long.mp4',rf'\[play.resume\] ms={left}')
   f=g['wait'](r'\[play.frame\] n=0 at_ms=(\d+)',s,60)
   assert abs(int(f[1])-left)<=1000,f'first picture at {f[1]} ms, left at {left} ms'
   g['wait'](r'\[play.done\] ',s,120)

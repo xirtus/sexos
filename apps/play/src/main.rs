@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Play: plays video and sound. `run play @clip.mp4`. Decoding is sex-media's
+//! Qupid: plays video and sound. `run qupid @clip.mp4`; `run qupid --library @/Music`
+//! opens the library view (library.rs). Decoding is sex-media's
 //! (FFmpeg inside this program's own confinement): this program reads the file
 //! through Files, shows each picture in its window and handles keys. A hostile file
 //! can only crash this window.
 //!
 //! Keys: Space or K pauses and plays; Left/J and Right/L go back and forward 5 s;
 //! Home goes to the start. Subtitles come from a SubRip or SubStation file given after
-//! the video (`run play @film.mp4 @film.srt`), or one beside it when Play may read it.
+//! the video (`run qupid @film.mp4 @film.srt`), or one beside it when Qupid may read it.
 //! S shows or hides subtitles, A plays the next sound track,
 //! [ and ] play slower and faster (= back to normal). F11 closes. The keyboard's media keys work too, wherever
-//! the focus is, while Play is the program playing (Shell routes them): play/pause
+//! the focus is, while Qupid is the program playing (Shell routes them): play/pause
 //! toggles and stop pauses at the start.
 #![no_std]
 #![no_main]
@@ -17,6 +18,7 @@
 extern crate alloc;
 mod captions;
 mod encode_proof;
+mod library;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -68,7 +70,7 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 fn say(window: &mut Window, why: &[u8]) {
     let mut text = [0u8; 300];
-    let head = b"Play. Space pauses, J/L or Left/Right seek, S subtitles, A sound track, [ ] speed, F11 closes.\n\n";
+    let head = b"Qupid. Space pauses, J/L or Left/Right seek, S subtitles, A sound track, [ ] speed, F11 closes.\n\n";
     let n = (head.len() + why.len()).min(text.len());
     text[..head.len()].copy_from_slice(head);
     text[head.len()..n].copy_from_slice(&why[..n - head.len()]);
@@ -302,7 +304,7 @@ fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progre
 }
 
 /// Where each video was left, in Play's own folder: "ms<TAB>path" lines, newest first.
-const RESUME_FILE: &[u8] = b"play-resume.txt";
+const RESUME_FILE: &[u8] = b"qupid-resume.txt";
 const RESUME_MAX: usize = 64;
 /// Positions this close to either end are not kept: start again from the beginning.
 const RESUME_EDGE_MS: u64 = 3000;
@@ -351,7 +353,7 @@ fn playlist(window: &mut Window, words: &[&[u8]]) {
             _ => items.push((w, None)),
         }
     }
-    if items.is_empty() { return fail(window, b"Usage: run play @VIDEO.mp4 [@SUBTITLES.srt] [@MORE.mp4 ...]"); }
+    if items.is_empty() { return fail(window, b"Usage: run qupid @VIDEO.mp4 [@SUBTITLES.srt] [@MORE.mp4 ...], or run qupid --library @FOLDER"); }
     let mut resume = Resume::load(window);
     let mut ui = Ui { subs: None, controls: captions::Painter::new(), controls_until: 0, item: (0, items.len()), drawn_ms: 0 };
     let mut i = 0usize;
@@ -501,11 +503,12 @@ fn listen(window: &mut Window, seconds: u32) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
-    window.title(b"Play");
+    window.title(b"Qupid");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
     let words: Vec<&[u8]> = given.split(|b| *b == b' ').filter(|w| !w.is_empty()).collect();
     let number = |w: Option<&&[u8]>| w.and_then(|w| core::str::from_utf8(w).ok()).and_then(|t| t.parse::<u32>().ok());
+    if words.first() == Some(&&b"--library"[..]) { library::run(&mut window, &words[1..]); }
     let file = if words.first() == Some(&&b"--encode-proof"[..]) {
         match encode_proof::run(&mut window, words.get(1).copied().unwrap_or(b"")) {
             Ok(()) => say(&mut window, b"Synthetic encoder proof saved. This is not a desktop recording."),
@@ -520,7 +523,7 @@ pub extern "C" fn _start() -> ! {
         None
     } else { words.first().map(|f| f.to_vec()) };
     if file.is_some() { playlist(&mut window, &words); }
-    else if !words.first().is_some_and(|w| w.starts_with(b"--")) { fail(&mut window, b"Usage: run play @VIDEO.mp4 [@SUBTITLES.srt] [@MORE.mp4 ...]"); }
+    else if !words.first().is_some_and(|w| w.starts_with(b"--")) { fail(&mut window, b"Usage: run qupid @VIDEO.mp4 [@SUBTITLES.srt] [@MORE.mp4 ...], or run qupid --library @FOLDER"); }
     sex_pdx::serial_record!("[play.ready] target={} task={}", window.target, window.task);
     loop {
         if let Event::Close = window.next() {

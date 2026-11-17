@@ -48,7 +48,6 @@ members = [
     "apps/crossdress",
     "apps/fuzz",
     "apps/play",
-    "apps/music",
     "apps/cpp",
     "apps/web",
     "crates/sex-app",

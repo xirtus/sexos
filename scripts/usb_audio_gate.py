@@ -34,8 +34,8 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/play'))
- install(disk,[('play',Path(play).read_bytes())])
+ play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/qupid'))
+ install(disk,[('qupid',Path(play).read_bytes())])
  files={'/tone.mp4':tone(1000,8)}
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
@@ -65,7 +65,7 @@ def main():
   dev=g['wait'](r'\[sexusb.audio\] slot=\d+ uac=1 speed=full .* mps=(\d+) interval_us=1000 frames_per_packet=48 .* ok=1',0,120)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   m=say(f'fetch http://10.0.2.2:{port}/tone.mp4 tone.mp4',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',600);assert m[1].startswith('Saved'),m[1]
-  s=len(t());say('run play @tone.mp4',r'\[play.opened\] ',300)
+  s=len(t());say('run qupid @tone.mp4',r'\[play.opened\] ',300)
   g['wait'](r'\[bell.usb.card\] vendor=0x46f4 product=0x0002 uac=1 generation=1 parked=1',0,60)
   g['wait'](r'\[play.done\] ',s,120)
   sent=g['wait'](r'\[sexusb.audio.sent\] packets=(\d+) frames=(\d+)',s,60)

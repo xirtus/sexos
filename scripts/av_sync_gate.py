@@ -48,8 +48,8 @@ def main():
  os.environ.setdefault('SEXOS_GATE_BOUND',str(a.seconds*2+400))
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/play'))
- install(disk,[('play',Path(play).read_bytes())])
+ play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/qupid'))
+ install(disk,[('qupid',Path(play).read_bytes())])
  files={'/sync.mp4':clip(a.seconds)}
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
@@ -76,7 +76,7 @@ def main():
   g['wait'](r'\[bell.sound.ready\] card=\S+ stream=\d+ rate=48000 channels=2',0,120)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   m=say(f'fetch http://10.0.2.2:{port}/sync.mp4 sync.mp4',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',600);assert m[1].startswith('Saved'),m[1]
-  s=len(t());say('run play @sync.mp4',r'\[play.opened\] ',300)
+  s=len(t());say('run qupid @sync.mp4',r'\[play.opened\] ',300)
   done=g['wait'](r'\[play.done\] frames=(\d+) ms=(\d+) .* late_ms=(\d+)',s,a.seconds*2+120)
   flashes=[(int(at),int(tick),int(pl)) for at,tick,pl in re.findall(r'\[play.flash\] at_ms=(\d+) tick=(\d+) played=(\d+)',t()[s:])]
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()

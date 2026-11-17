@@ -15,7 +15,7 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 # deadline reference; USB quiet only narrows (also requires no Bluetooth HID traffic).
 APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',),
 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
-'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
+'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d', '571253499401f146bfad92e506325c36ec896f1714dcb226814c0bc7031b0b09',),
 'kernel/src/scheduler.rs': ('0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
                              # per-task self-wait sampling (task_count), 2026-11-17
                              '25c0bc835f30039f947f28bc79ed567e1c742e17ea3c9a8e0663b5f502c9d642',),
@@ -38,7 +38,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
                               # first 32 timed returns logged, 2026-11-17
                               '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b',),
  'servers/sexusb/src/main.rs': ('3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81',
-                                'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec')}
+                                'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec',
+                                # 2026-11-17 Qupid/#183 merge: USB audio pump only, quiet predicate unchanged
+                                '96d3ea5a52156559eaf7106a145ffe1b08445eb88798fe64645bf92da8abeaae')}
 
 
 # Mechanical source closure only, not a general Rust/unsafe-code verifier.
@@ -48,7 +50,7 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
 # c209 raw-master only; no speculative combined privacy/kernel cohort.
-APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb', 'e93d67e07151c4c0f5eed240e0f3a27f9abb58074e26f52934eb8c36963278f7',
+APPROVED_KERNEL_RUST_TREES=('24cea2a82243a254c22257616e4ad47c6064ea22218d5d31c7742e27de036906', '91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb', 'e93d67e07151c4c0f5eed240e0f3a27f9abb58074e26f52934eb8c36963278f7',
     # per-task self-wait sampling, 2026-11-17
     'a897c8b8c617cfef1ec3a7fad038f32f8530b232cf698f9ea896a89950d5a0ec')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')

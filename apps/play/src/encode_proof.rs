@@ -41,7 +41,7 @@ pub fn run(window: &mut Window, path: &[u8]) -> Result<(), &'static [u8]> {
         || !path.ends_with(b".mkv")
         || path.len() > 200
     {
-        return Err(b"Usage: run play --encode-proof proof.mkv");
+        return Err(b"Usage: run qupid --encode-proof proof.mkv");
     }
     // Friendly early refusal; the exclusive CREATE below is the actual fence.
     match files::size(window, path) {

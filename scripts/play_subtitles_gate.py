@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Play's subtitles, sound tracks and speed. A video with two sound tracks (440 Hz and
-880 Hz) and a SubRip file, both given to Play (`run play @film.mp4 @film.srt`): Play draws
+880 Hz) and a SubRip file, both given to Play (`run qupid @film.mp4 @film.srt`): Play draws
 each line at its time (white text appears in the bottom of the picture), the A key
 switches to the second sound track (880 Hz is heard after it), and ] plays faster.
 
@@ -27,8 +27,8 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/play'))
- install(disk,[('play',Path(play).read_bytes())])
+ play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/qupid'))
+ install(disk,[('qupid',Path(play).read_bytes())])
  files={'/film.mp4':clip(),'/film.srt':SRT}
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
@@ -57,7 +57,7 @@ def main():
   g['wait'](r'\[bell.sound.ready\] card=\S+ stream=\d+ rate=48000 channels=2',0,120)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   fetched('film.mp4');fetched('film.srt')
-  s=len(t());say('run play @film.mp4 @film.srt',r'\[play.subtitles.loaded\] file=\S*film\.srt cues=2',300)
+  s=len(t());say('run qupid @film.mp4 @film.srt',r'\[play.subtitles.loaded\] file=\S*film\.srt cues=2',300)
   launch=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](r'\[play.caption\] at_ms=\d+ text=Hello from SexOS',s,60)
   # The picture with the caption, made big (Super+F): white text with a dark outline

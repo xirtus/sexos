@@ -25,7 +25,7 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- install(disk,[('play',(ROOT/'iso_root/programs/play').read_bytes())])
+ install(disk,[('qupid',(ROOT/'iso_root/programs/qupid').read_bytes())])
  server=Quiet(('127.0.0.1',0),Handler);port=server.server_address[1]
  threading.Thread(target=server.serve_forever,daemon=True).start()
  wav=out/'sound.wav';wav.unlink(missing_ok=True)
@@ -47,7 +47,7 @@ def main():
   g['wait'](r'\[bell.sound.ready\] card=\S+ stream=\d+ rate=48000 channels=2',0,120)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   m=say(f'fetch http://10.0.2.2:{port}/clip.mp4 clip.mp4',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',600);assert m[1].startswith('Saved'),m[1]
-  s=len(t());say('run play @clip.mp4',r'\[play.opened\] format=\S+ codec=h264 ',300)
+  s=len(t());say('run qupid @clip.mp4',r'\[play.opened\] format=\S+ codec=h264 ',300)
   launch=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](r'\[bell.sound.stream.open\] row=\d+ caller='+launch[1],s,60)
   # Spindle has the focus, not Play: the key still reaches the program that plays.

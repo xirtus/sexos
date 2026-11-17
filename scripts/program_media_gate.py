@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 ROOT=Path(__file__).resolve().parents[1]
 TESTS=ROOT/'apps/play/tests'
-PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'iso_root/programs/play'))
+PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'iso_root/programs/qupid'))
 # name, format, video codec, audio codec, pictures, tone Hz
 CLIPS=[('clip-av.mp4','mov,mp4,m4a,3gp,3g2,mj2','h264','aac',50,440),
        ('clip.webm','matroska,webm','vp9','opus',50,660),
@@ -20,7 +20,7 @@ CLIPS=[('clip-av.mp4','mov,mp4,m4a,3gp,3g2,mj2','h264','aac',50,440),
        ('clip-av1.webm','matroska,webm','libdav1d','opus',50,990),
        ('tone.mp3','mp3','','mp3float',0,880)]
 LONG='clip-long.mp4'  # 8 s, 160x120, 550 Hz
-FILES={'/play':Path(PLAY).read_bytes(),**{'/'+c[0]:(TESTS/c[0]).read_bytes() for c in CLIPS},'/'+LONG:(TESTS/LONG).read_bytes()}
+FILES={'/qupid':Path(PLAY).read_bytes(),**{'/'+c[0]:(TESTS/c[0]).read_bytes() for c in CLIPS},'/'+LONG:(TESTS/LONG).read_bytes()}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -58,11 +58,11 @@ def main():
  try:
   g['wait'](r'\[bell.sound.ready\]',0,180)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  fetched('/play','/bin/play')
+  fetched('/qupid','/bin/qupid')
   for c in CLIPS:fetched('/'+c[0],c[0])
   for name,fmt,vcodec,acodec,pictures,hz in CLIPS:
    s=len(t())
-   opened=expect(f'run play @{name}',r'\[play.opened\] format=(\S+) codec=(\S*) w=(\d+) h=(\d+) .* audio=(\S+) rate=(\d+) channels=(\d+)',300)
+   opened=expect(f'run qupid @{name}',r'\[play.opened\] format=(\S+) codec=(\S*) w=(\d+) h=(\d+) .* audio=(\S+) rate=(\d+) channels=(\d+)',300)
    assert fmt.startswith(opened[1]) and (opened[2],opened[5])==(vcodec,acodec),opened[0]
    m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
    done=g['wait'](r'\[play.done\] frames=(\d+) ms=(\d+) w=\d+ h=\d+ sound_frames=(\d+) played=(\d+) late_ms=(-?\d+)',s,900)
@@ -77,7 +77,7 @@ def main():
   # Pause, play and seek.
   fetched('/'+LONG,LONG)
   s=len(t())
-  expect(f'run play @{LONG}',r'\[play.opened\] format=\S+ codec=h264 w=160 h=120',300)
+  expect(f'run qupid @{LONG}',r'\[play.opened\] format=\S+ codec=h264 w=160 h=120',300)
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](r'\[play.frame\] n=10 ',s,120)
   g['focus'](int(m[3]));time.sleep(.3);q.key('spc')

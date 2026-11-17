@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Music: a music library and player. `run music @/Music` (a folder, read through
-//! Files, its subfolders too) or `run music @a.flac @b.mp3`. Tracks are grouped by
+//! Qupid's library view: `run qupid --library @/Music` (a folder, read through Files,
+//! its subfolders too) or `run qupid --library @a.flac @b.mp3`. Tracks are grouped by
 //! artist and album from their tags (FFmpeg reads them inside this program's
 //! confinement) and play one after another with no gap between them: the next track
 //! is opened while the current one plays, and its first sound follows the last sound
@@ -9,10 +9,6 @@
 //! Keys: Up/Down choose, Enter plays from the chosen track, Space or the play key
 //! pauses, N or the next key skips, P or the previous key goes back, Q adds the chosen
 //! track to the queue (it plays next), F11 closes.
-#![no_std]
-#![no_main]
-
-extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::format;
@@ -21,12 +17,6 @@ use alloc::vec::Vec;
 use sex_app::sound::Sound;
 use sex_app::{files, Event, Window};
 use sex_media::{Decoder, Next, Source};
-
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    sex_pdx::serial_record!("[music.fatal] {}", info);
-    sex_pdx::task_finish(1);
-}
 
 const AUDIO: [&[u8]; 9] = [b".mp3", b".flac", b".ogg", b".oga", b".opus", b".m4a", b".aac", b".wav", b".mka"];
 fn is_audio(name: &[u8]) -> bool {
@@ -98,7 +88,7 @@ fn library(window: &mut Window, args: &[&[u8]]) -> Vec<Track> {
     for a in args { collect(window, a, 0, &mut found); }
     let mut tracks = Vec::new();
     for (k, (path, len)) in found.into_iter().enumerate() {
-        if k % 25 == 0 { window.show(format!("Music\n\nReading tags: {} files...", k).as_bytes()); }
+        if k % 25 == 0 { window.show(format!("Qupid Library\n\nReading tags: {} files...", k).as_bytes()); }
         let t = Track { path, len, title: String::new(), artist: String::new(), album: String::new(), number: 0, ms: 0 };
         let Some(d) = open(window, &t) else { continue };
         if d.info.sample_rate == 0 { continue; }
@@ -169,7 +159,7 @@ impl App {
             a.dedup();
             a.len()
         };
-        s.push_str(&format!("Music  {} tracks, {} albums", self.tracks.len(), albums));
+        s.push_str(&format!("Qupid Library  {} tracks, {} albums", self.tracks.len(), albums));
         if let Some(h) = hearing {
             let t = &self.tracks[h];
             s.push_str(&format!("\n{} {} - {}", if e.paused { "Paused:" } else { "Playing:" }, t.artist, t.title));
@@ -203,33 +193,28 @@ fn start_track(e: &mut Engine, app: &mut App, i: usize, wp: *mut Window) {
     let w = unsafe { &mut *wp };
     e.cur = open(w, &app.tracks[i]).map(|d| (i, d));
     e.starts.push((e.sound.written_total(), i));
-    sex_pdx::serial_record!("[music.play] n={} title={}", i, app.tracks[i].title);
+    sex_pdx::serial_record!("[qupid.library.play] n={} title={}", i, app.tracks[i].title);
 }
 
-#[no_mangle]
-pub extern "C" fn _start() -> ! {
-    let mut window = Window::open();
-    window.title(b"Music");
-    let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
-    let given = files::args(&mut window, &mut args);
-    let words: Vec<Vec<u8>> = given.split(|b| *b == b' ').filter(|w| !w.is_empty()).map(|w| w.to_vec()).collect();
-    let refs: Vec<&[u8]> = words.iter().map(|w| w.as_slice()).collect();
+/// Runs the library view over `refs` (folders and songs); never returns.
+pub fn run(window: &mut Window, refs: &[&[u8]]) -> ! {
+    window.title(b"Qupid Library");
     if refs.is_empty() {
-        window.show(b"Music\n\nUsage: run music @FOLDER (or @SONG.flac @SONG.mp3 ...)");
-        loop { if let Event::Close = window.next() { window.close() } }
+        window.show(b"Qupid Library\n\nUsage: run qupid --library @FOLDER (or @SONG.flac @SONG.mp3 ...)");
+        loop { if let Event::Close = window.next() { sex_pdx::task_finish(0) } }
     }
-    let tracks = library(&mut window, &refs);
-    sex_pdx::serial_record!("[music.library] tracks={}", tracks.len());
+    let tracks = library(window, refs);
+    sex_pdx::serial_record!("[qupid.library] tracks={}", tracks.len());
     for (i, t) in tracks.iter().enumerate().take(64) {
-        sex_pdx::serial_record!("[music.library.track] n={} artist={} album={} number={} title={} ms={}", i, t.artist, t.album, t.number, t.title, t.ms);
+        sex_pdx::serial_record!("[qupid.library.track] n={} artist={} album={} number={} title={} ms={}", i, t.artist, t.album, t.number, t.title, t.ms);
     }
     let Some(sound) = Sound::open() else {
-        window.show(b"Music\n\nNo sound for this program.");
-        loop { if let Event::Close = window.next() { window.close() } }
+        window.show(b"Qupid Library\n\nNo sound for this program.");
+        loop { if let Event::Close = window.next() { sex_pdx::task_finish(0) } }
     };
     let mut app = App { tracks, chosen: 0, queue: Vec::new(), shown: String::new() };
     let mut e = Engine { sound, cur: None, next: None, pcm: alloc::vec![[0i16; 2]; 4096], left: (0, 0), pic: alloc::vec![0u32; 16 * 16], paused: false, starts: Vec::new() };
-    let wp: *mut Window = &mut window;
+    let wp: *mut Window = window;
     let window = unsafe { &mut *wp };
     // Plays from the first track at once.
     let start = move |e: &mut Engine, app: &mut App, i: usize| start_track(e, app, i, wp);
@@ -247,7 +232,7 @@ pub extern "C" fn _start() -> ! {
                     57 | sex_pdx::app_key::KEY_PLAY_PAUSE => {
                         e.paused = !e.paused;
                         e.sound.pause(e.paused);
-                        sex_pdx::serial_record!("[music.paused] {}", e.paused as u8);
+                        sex_pdx::serial_record!("[qupid.library.paused] {}", e.paused as u8);
                     }
                     0x31 | sex_pdx::app_key::KEY_NEXT => {
                         let now = e.hearing().unwrap_or(0);
@@ -259,7 +244,7 @@ pub extern "C" fn _start() -> ! {
                     }
                     0x10 if !app.tracks.is_empty() => {
                         app.queue.push(app.chosen);
-                        sex_pdx::serial_record!("[music.queued] n={} queue={}", app.chosen, app.queue.len());
+                        sex_pdx::serial_record!("[qupid.library.queued] n={} queue={}", app.chosen, app.queue.len());
                     }
                     sex_pdx::app_key::KEY_STOP => { e.stop(); e.paused = true; }
                     _ => {}
@@ -277,7 +262,7 @@ pub extern "C" fn _start() -> ! {
                 if e.next.is_none() {
                     if let Some(n) = app.after(i) {
                         e.next = open(unsafe { &mut *wp }, &app.tracks[n]).map(|d| (n, d));
-                        if e.next.is_none() { sex_pdx::serial_record!("[music.skip] n={} reason=open", n); }
+                        if e.next.is_none() { sex_pdx::serial_record!("[qupid.library.skip] n={} reason=open", n); }
                     }
                 }
                 match d.next(&mut e.pic, 16, 16, &mut e.pcm) {
@@ -289,9 +274,9 @@ pub extern "C" fn _start() -> ! {
                         e.cur = e.next.take();
                         if let Some((n, _)) = e.cur {
                             e.starts.push((e.sound.written_total(), n));
-                            sex_pdx::serial_record!("[music.next] n={} at_frame={} title={}", n, e.sound.written_total(), app.tracks[n].title);
+                            sex_pdx::serial_record!("[qupid.library.next] n={} at_frame={} title={}", n, e.sound.written_total(), app.tracks[n].title);
                         } else {
-                            sex_pdx::serial_record!("[music.end] at_frame={}", e.sound.written_total());
+                            sex_pdx::serial_record!("[qupid.library.end] at_frame={}", e.sound.written_total());
                         }
                         continue;
                     }
@@ -304,7 +289,7 @@ pub extern "C" fn _start() -> ! {
         }
         let heard = e.hearing();
         if heard != last_heard {
-            if let Some(h) = heard { sex_pdx::serial_record!("[music.hearing] n={} played={}", h, e.sound.played_total()); }
+            if let Some(h) = heard { sex_pdx::serial_record!("[qupid.library.hearing] n={} played={}", h, e.sound.played_total()); }
             last_heard = heard;
         }
         app.render(window, &e);

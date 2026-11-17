@@ -29,7 +29,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("iso", "source-disk", "extractor", "out"):
         parser.add_argument("--" + name, required=True, type=Path)
-    parser.add_argument("--program", type=Path, default=ROOT / "iso_root/programs/play")
+    parser.add_argument("--program", type=Path, default=ROOT / "iso_root/programs/qupid")
     args = parser.parse_args()
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -43,7 +43,7 @@ def main():
     shutil.copyfile(args.source_disk, disk)
     with disk.open("r+b") as output:
         output.truncate(1024**3)
-    install(disk, [("play", args.program.read_bytes())])
+    install(disk, [("qupid", args.program.read_bytes())])
     os.environ.setdefault("SEXOS_GATE_BOUND", "600")
     guest = None
     try:
@@ -52,7 +52,7 @@ def main():
         guest["focus"](153)
         time.sleep(.5)
         start = len(guest["text"]())
-        for key in "run play --encode-proof proof.mkv":
+        for key in "run qupid --encode-proof proof.mkv":
             guest["q"].key({" ": "spc", "-": "minus", ".": "dot"}.get(key, key))
             time.sleep(.06)
         guest["q"].key("ret")
@@ -62,7 +62,7 @@ def main():
         guest["stop"]()
         guest = None
         movie = args.out / "proof.mkv"
-        subprocess.run([str(args.extractor.resolve()), str(disk), "/data/play/proof.mkv", str(movie)], check=True)
+        subprocess.run([str(args.extractor.resolve()), str(disk), "/data/qupid/proof.mkv", str(movie)], check=True)
         assert movie.stat().st_size == result["guest_file_bytes"]
         probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_entries",
             "stream=codec_name,width,height,pix_fmt:packet=pts_time,duration_time", "-of", "json", str(movie)], text=True))

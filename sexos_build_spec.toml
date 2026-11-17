@@ -70,7 +70,6 @@ crates = [
   "apps/threads/Cargo.toml",
   "apps/web/Cargo.toml",
   "apps/play/Cargo.toml",
-  "apps/music/Cargo.toml",
   "apps/cpp/Cargo.toml",
   "apps/stdhello/Cargo.toml",
   "apps/tassel/Cargo.toml",
@@ -821,16 +820,8 @@ id = "build_play"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/play/Cargo.toml"
-source_artifact = "target/x86_64-sex-app/release/play"
-dest_artifact = "iso_root/programs/play"
-
-[[stage]]
-id = "build_music"
-action = "cargo_manifest"
-target = "x86_64-sex-app.json"
-manifest = "apps/music/Cargo.toml"
-source_artifact = "target/x86_64-sex-app/release/music"
-dest_artifact = "iso_root/programs/music"
+source_artifact = "target/x86_64-sex-app/release/qupid"
+dest_artifact = "iso_root/programs/qupid"
 
 # The same program, starting on its game.
 [[stage]]

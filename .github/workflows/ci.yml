@@ -457,6 +457,10 @@ jobs:
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
         python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
         python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Qupid subtitles, sound tracks and speed
+      run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/play_subtitles_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-subtitles"
+    - name: Qupid library plays an album without a gap
+      run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/music_gapless_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-gapless"
     - name: Preserve media evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -466,6 +470,7 @@ jobs:
           ${{ runner.temp }}/media-build.log
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
+          ${{ runner.temp }}/sexos-qupid-*
         if-no-files-found: ignore
 
   editor:

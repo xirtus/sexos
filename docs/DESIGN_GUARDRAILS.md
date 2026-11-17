@@ -141,7 +141,7 @@ while, so scripts and habits keep working; aliases are dropped once nothing uses
 | Collar | Authority: grants and app permissions | silk-shell, sexfiles |
 | Mesh | The capability graph and the system overview | silk-shell |
 | Kaleidoscope | The browser | `apps/web` (to become `apps/kaleidoscope`) |
-| Qupid | The media player | `apps/play` (to become `apps/qupid`) |
+| Qupid | The media player and its music library (`--library`) | `apps/play`, program `/bin/qupid` |
 | sexshop | The app store | `apps/store` (to become the `sexshop` program) |
 | sexfiles | The filesystem service | `servers/sexfiles` |
 | sexnet | The network service (TCP/IP, DNS, Wi-Fi, Ethernet) | `servers/sexnet` |

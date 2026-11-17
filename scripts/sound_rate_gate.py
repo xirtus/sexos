@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Programs play sound at their own rate: Play's test tone (`run play --tone HZ RATE`)
+"""Programs play sound at their own rate: Play's test tone (`run qupid --tone HZ RATE`)
 writes two seconds of a sine at 44.1, 22.05 and 96 kHz, and Bell converts each to its
 48 kHz mix. QEMU records the virtio sound card to a WAV file: each tone must be heard
 for about two seconds at its own pitch."""
@@ -14,7 +14,7 @@ TONES=[(440,44100),(660,22050),(880,96000)]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- install(disk,[('play',(ROOT/'iso_root/programs/play').read_bytes())])
+ install(disk,[('qupid',(ROOT/'iso_root/programs/qupid').read_bytes())])
  wav=out/'sound.wav';wav.unlink(missing_ok=True)
  os.environ['SEXOS_GATE_DEVICES']=f'-audiodev wav,id=snd0,path={wav},out.frequency=48000,out.channels=2 -device virtio-sound-pci,audiodev=snd0'
  from quil_autosave_gate import boot
@@ -27,7 +27,7 @@ def main():
   g['wait'](r'\[bell.sound.ready\] card=\S+ stream=\d+ rate=48000 channels=2',0,120)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   for hz,rate in TONES:
-   m=say(f'run play --tone {hz} {rate}',rf'\[play.tone\] hz={hz} rate={rate} frames=(\d+) played=(\d+)')
+   m=say(f'run qupid --tone {hz} {rate}',rf'\[play.tone\] hz={hz} rate={rate} frames=(\d+) played=(\d+)')
    assert int(m[1])==2*rate and int(m[2])==2*rate,m[0]
    time.sleep(.5)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()

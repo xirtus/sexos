@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Music plays an album without a gap. Two FLAC tracks, a 440 Hz tone (track 1) then
-an 880 Hz tone (track 2), 2 s each, are given in the wrong order; Music sorts them by
+"""Qupid's library view plays an album without a gap. Two FLAC tracks, a 440 Hz tone (track 1) then
+an 880 Hz tone (track 2), 2 s each, are given in the wrong order; the library sorts them by
 their tags and plays them one after the other. QEMU records the sound card: from the
 first sound to the last there is no silence longer than 5 ms, and 440 Hz comes first.
 
-Needs ffmpeg on the host and Music built (scripts/build_music.sh)."""
+Needs ffmpeg on the host and Qupid built (scripts/build_play.sh)."""
 import argparse,http.server,os,re,shutil,struct,subprocess,tempfile,threading,time
 from pathlib import Path
 from install_program import install
@@ -25,8 +25,8 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- music=os.environ.get('SEXOS_MUSIC',str(ROOT/'target/music/x86_64-sex-app/release/music'))
- install(disk,[('music',Path(music).read_bytes())])
+ play=os.environ.get('SEXOS_PLAY',str(ROOT/'target/play/x86_64-sex-app/release/qupid'))
+ install(disk,[('qupid',Path(play).read_bytes())])
  files={'/one.flac':track(440,1,'Low'),'/two.flac':track(880,2,'High')}
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
@@ -54,12 +54,12 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   for n in ('one.flac','two.flac'):
    m=say(f'fetch http://10.0.2.2:{port}/{n} {n}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',600);assert m[1].startswith('Saved'),m[1]
-  s=len(t());say('run music @two.flac @one.flac',r'\[music.library\] tracks=2',300)
-  g['wait'](r'\[music.library.track\] n=0 artist=Gate album=Gapless number=1 title=Low',s,30)
-  g['wait'](r'\[music.play\] n=0 title=Low',s,60)
-  nxt=g['wait'](r'\[music.next\] n=1 at_frame=(\d+) title=High',s,120)
-  g['wait'](r'\[music.end\] ',s,120)
-  g['wait'](r'\[music.hearing\] n=1 ',s,60);time.sleep(4)
+  s=len(t());say('run qupid --library @two.flac @one.flac',r'\[qupid.library\] tracks=2',300)
+  g['wait'](r'\[qupid.library.track\] n=0 artist=Gate album=Gapless number=1 title=Low',s,30)
+  g['wait'](r'\[qupid.library.play\] n=0 title=Low',s,60)
+  nxt=g['wait'](r'\[qupid.library.next\] n=1 at_frame=(\d+) title=High',s,120)
+  g['wait'](r'\[qupid.library.end\] ',s,120)
+  g['wait'](r'\[qupid.library.hearing\] n=1 ',s,60);time.sleep(4)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   q.cmd('quit');g['proc'].wait(30)
  finally:g['stop']()
