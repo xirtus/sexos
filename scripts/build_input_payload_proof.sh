@@ -28,7 +28,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 python3 scripts/input_payload_profile.py --output "$EVIDENCE_DIR/diagnostic-spec.toml"
 cp "$EVIDENCE_DIR/diagnostic-spec.toml" sexos_build_spec.toml
-GATE_DIR="$EVIDENCE_DIR/diagnostic-build" bash scripts/master_runtime_gate.sh --probe 60 --keep-log > "$EVIDENCE_DIR/diagnostic-build.log" 2>&1
+GATE_DIR="$EVIDENCE_DIR/diagnostic-build" bash scripts/master_runtime_gate.sh --probe 60 --keep-log > "$EVIDENCE_DIR/diagnostic-build.log" 2>&1 || {
+  status=$?
+  # The log lives in the evidence artifact; show why in the job log too.
+  tail -80 "$EVIDENCE_DIR/diagnostic-build.log" >&2 || true
+  exit "$status"
+}
 python3 scripts/freeze_native_evidence.py --build "$EVIDENCE_DIR/diagnostic-build" --out "$EVIDENCE_DIR/frozen" --iso sexos-v1.0.0.iso --kernel iso_root/sexos-kernel
 cp sexos-v1.0.0.iso "$EVIDENCE_DIR/UNSAFE-input-payload-proof.iso"
 printf '%s\n' 'UNSAFE diagnostic image: records keyboard contents; never enter passwords or private data.' > "$EVIDENCE_DIR/README.txt"
