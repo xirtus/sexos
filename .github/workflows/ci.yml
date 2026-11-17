@@ -465,6 +465,8 @@ jobs:
       run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_chapters_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-chapters"
     - name: Qupid Up next plays the next episode
       run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_upnext_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-upnext"
+    - name: Qupid thumbnails for Files and Loom
+      run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_thumb_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-thumb"
     - name: Preserve media evidence
       if: always()
       uses: actions/upload-artifact@v4

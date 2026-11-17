@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Qupid: plays video and sound. `run qupid @clip.mp4`; `run qupid --library @/Music`
-//! opens the library view (library.rs). Decoding is sex-media's
+//! opens the library view (library.rs); `qupid --thumb @IN @OUT SIZE` draws a thumbnail
+//! with no window (thumb.rs). Decoding is sex-media's
 //! (FFmpeg inside this program's own confinement): this program reads the file
 //! through Files, shows each picture in its window and handles keys. A hostile file
 //! can only crash this window.
@@ -20,6 +21,7 @@ extern crate alloc;
 mod captions;
 mod encode_proof;
 mod library;
+mod thumb;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
@@ -665,6 +667,13 @@ fn listen(window: &mut Window, seconds: u32) {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // `--thumb` runs hidden for Files and Loom: no window, one picture, then the run ends.
+    {
+        let mut buf = [0u8; sex_pdx::fs::ARGS_MAX];
+        let n = sex_app::files::direct::args(&mut buf);
+        let words: Vec<&[u8]> = buf[..n].split(|b| *b == b' ').filter(|w| !w.is_empty()).collect();
+        if let Some(status) = thumb::run(&words) { sex_app::launch::exit(status); }
+    }
     let mut window = Window::open();
     window.title(b"Qupid");
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
