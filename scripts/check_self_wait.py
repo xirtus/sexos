@@ -29,7 +29,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'kernel/src/syscalls/mod.rs': ('aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
  'kernel/src/program_workers.rs': ('6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',
     # Denim D3 (restart RESET, worker faults, store holes), 2026-11-17: no deadline reference
-    '83fbb2d6899ff2fbc050154a0bfc922fa2af7d8bf5d5649347629a67fd8ed58a',),
+    '83fbb2d6899ff2fbc050154a0bfc922fa2af7d8bf5d5649347629a67fd8ed58a',
+    # Worker tasks capped per row (audit S9), 2026-11-18: no deadline reference
+    'afc1650bd31219fb7a33340029aef2f53b28c61242eab41cd5628dd134376ca6',),
  'crates/sex-pdx/src/lib.rs': ('8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde', '9eb262eb2108d51f57ae9dc821e6e40a12a9e1003fbfac711422b246ec17fd44',
                                'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
                                'c2895d4991c2d48d099daee3e6090063b3288f77c0ad5e9a75201c903f95c984', 'ef6e695c7535ac077e8c4adef7ded6d79425210a1fd77005940be7f823cab40a', 'cee8e1525fa104c2c14f398b4eee80f4f63cd0f3f06602310cdf421dc15009c1', '1b7fe3f1752da8d10ea2f2ea6df5c387ff9ec9969a4287be64fb6e878f4a4d75', '562ccc2f5cf8cf755e68925f0a65a699fd9e968ac78a44bfe4c7dc84f464e7ab', 'f00f44669af45f707a4a24ec15f70321ed9ed04565007c9e1b093b42fdd39e96', '3766c55f455e02199154d9cdbe28c5fc93a454f91a2459fe04e2eafaf8abd24b', '74a5f4ccbd9aeeb574ff5c9d8f7008b486d89e214ef405ef589711dfda71904b',
@@ -64,7 +66,9 @@ APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95
     # WS2 kernel heap counters (SYS_STATS OP_KERNEL), unused slab.rs removed, 2026-11-17
     '95ef2223d462a85888843a0700105ff4538f044360df25138dde638253e06fb5',
     # Denim D3-D5 and lazy stacks merged with WS2 OP_KERNEL, 2026-11-17: no deadline reference
-    'f1d7714407d0cbd6a07f066a3b64a6ec418138848d2589b32436196014c9e226')
+    'f1d7714407d0cbd6a07f066a3b64a6ec418138848d2589b32436196014c9e226',
+    # Worker tasks capped per row (audit S9), 2026-11-18: no deadline reference
+    '08c5b11a25d63cf2ead75c4bc7438c16fc1819b5834c2e7c27395ed1fde25d11')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 

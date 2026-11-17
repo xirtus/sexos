@@ -24,6 +24,8 @@ struct Table { workers: Vec<Worker>, waiters: Vec<Waiter> }
 // Task pointers are owned by this table for good; tasks synchronise through their atomics.
 unsafe impl Send for Table {}
 const REUSE_TICKS: u64 = 4;
+/// Dead tasks a row may hold beyond its live limit while they wait out `REUSE_TICKS`.
+const SPARE_TASKS: usize = 8;
 static TABLE: Mutex<Table> = Mutex::new(Table { workers: Vec::new(), waiters: Vec::new() });
 
 /// Interrupts are off in syscalls; a holder on another core may be waiting for this
@@ -72,6 +74,9 @@ pub fn spawn(pd: &crate::capability::ProtectionDomain, run: u32, id: u32, entry:
     let task = match table.workers.iter_mut().find(|w| w.target == pd.id && w.dead_since != 0 && now - w.dead_since >= REUSE_TICKS) {
         Some(w) => { w.run = run; w.dead_since = 0; w.task }
         None => {
+            // Tasks are kept for reuse, never freed: a row that churns workers waits (RETRY) for a
+            // dead one to come free instead of taking a new kernel stack each time.
+            if table.workers.iter().filter(|w| w.target == pd.id).count() >= t::MAX_WORKERS + SPARE_TASKS { return Err(t::RETRY); }
             let task = Box::leak(Box::new(Task::with_kernel_stack(id, entry, stack, pd, true, 65536))) as *mut Task;
             table.workers.push(Worker { target: pd.id, run, task, dead_since: 0 });
             task
