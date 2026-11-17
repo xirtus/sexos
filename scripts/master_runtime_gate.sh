@@ -252,6 +252,7 @@ else
         BUILD_GATE="FAIL"
         echo "[gate] BUILD: FAIL"
         echo "[gate] Build log: $BUILD_LOG"
+        tail -60 "$BUILD_LOG" | sed 's/^/[gate.build.tail] /' || true
         # A failed build cannot authorize a probe of a stale root ISO.
         # Preserve a fresh failure report without binding any image as tested.
         python3 - "$PROVENANCE_PATH" "$RUN_STARTED_UTC" <<'PYBUILDFAIL'

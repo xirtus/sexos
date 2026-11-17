@@ -49,6 +49,18 @@ pub fn get(key: u16) -> Result<i32, Error> { ok(call(c::GET, key, 0)?).map(|r| r
 pub fn set(key: u16, value: i32) -> Result<(), Error> { ok(call(c::SET, key, value as u32 as u64)?).map(|_| ()) }
 /// The settings generation: it grows with every change anyone makes.
 pub fn generation() -> Result<u64, Error> { ok(call(c::GENERATION, 0, 0)?).map(|r| r.value as u32 as u64) }
+/// The appearance settings every program's colours follow:
+/// (`appearance.theme`, `appearance.accent`).
+pub fn appearance() -> Result<(i32, i32), Error> { Ok((get(id::THEME)?, get(id::ACCENT)?)) }
+
+/// The theme tokens Settings describes (`sex_theme`), or the defaults when Files
+/// cannot be asked. Programs that draw their own pixels take their colours from here,
+/// and look at [`generation`] now and then to follow a change.
+pub fn theme() -> sex_theme::Tokens {
+    let (t, a) = appearance().unwrap_or((0, sex_theme::DEFAULT_ACCENT as i32));
+    sex_theme::from_settings(t, a)
+}
+
 /// Every setting, in schema order, as Files holds it now.
 pub fn all() -> Result<[i32; schema::COUNT], Error> {
     let mut out = [0; schema::COUNT];
