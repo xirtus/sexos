@@ -5630,7 +5630,8 @@ pub extern "C" fn _start() -> ! {
             static mut FRAME_COST_BUDGET: u32 = 64;
             unsafe { if FRAME_COST_BUDGET > 0 { FRAME_COST_BUDGET -= 1;
                 let decor = decor::take_cycles();
-                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8); } }
+                let kpx = match plan.content { paint_batch::Content::Damage(r) => ((r.right - r.x) * (r.bottom - r.y) / 1000) as u64, paint_batch::Content::Full | paint_batch::Content::Area => (w * h / 1000) as u64, _ => 0 };
+                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx); } }
         }
         if let Some(frame)=published.as_ref(){
             if frame.plan.clock_dirty(){unsafe{LAST_REDRAWN_CLOCK_CANON_SS=frame.canon_ss;}}
