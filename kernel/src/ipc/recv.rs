@@ -65,20 +65,23 @@ fn away(pd: u32) -> bool {
 /// in the inbox or `SPIN_CYCLES` pass, then park as usual. The task stays running, so
 /// the partner's wake only sets its pending bit: no interrupt, no switch either way.
 /// Interrupts stay off (this is a system call); TLB shootdowns are answered meanwhile,
-/// as `smp::tlb` does while it waits.
-unsafe fn spin_for_partner(task: *mut Task, pd: &ProtectionDomain) {
+/// as `smp::tlb` does while it waits. True when it took a wake: the caller then returns
+/// without parking, as a park that finds the bit would, even when the inbox is empty
+/// (a worker may have moved the answer to the program's mailbox).
+unsafe fn spin_for_partner(task: *mut Task, pd: &ProtectionDomain) -> bool {
     let core = crate::core_local::CoreLocal::get().core_id;
     let until = core::arch::x86_64::_rdtsc() + SPIN_CYCLES;
-    let mut look = true;
     loop {
-        // Take the pending bit a wake leaves, so the park after a miss sleeps for real;
-        // the inbox, not the bit, says whether the answer is here.
-        if (*task).state.snapshot().pending { let _ = (*task).state.park(core); look = true; }
-        if look {
-            if (*pd.message_ring).len() != 0 || !pd.incoming_replies.lock().is_empty() { note_spin(0); return; }
-            look = false;
+        // Only a pending bit is taken (a park without one would block a running task).
+        // A request already in the ring has its wake on the way: that bit stays, and
+        // costs at most one early return later.
+        let pending = (*task).state.snapshot().pending;
+        if pending || (*pd.message_ring).len() != 0 {
+            if pending { let _ = (*task).state.park(core); }
+            note_spin(0);
+            return true;
         }
-        if core::arch::x86_64::_rdtsc() >= until { note_spin(1); return; }
+        if core::arch::x86_64::_rdtsc() >= until { note_spin(1); return false; }
         crate::smp::tlb::service();
         core::hint::spin_loop();
     }
@@ -98,11 +101,12 @@ unsafe fn wait_and_take_from(regs: &mut crate::interrupts::SyscallRegs, partner:
     let pd = core.current_pd_ref();
     if !task.is_null() && task == pd.main_task.load(Ordering::Acquire) {
         regs.rax = 0;
-        if partner.is_some_and(away) { spin_for_partner(task, pd); }
-        (*task).deliver.store(true, Ordering::Relaxed);
-        crate::scheduler::wait_for_message(regs as *const _);
-        // Still here: it did not sleep.
-        (*task).deliver.store(false, Ordering::Relaxed);
+        if !(partner.is_some_and(away) && spin_for_partner(task, pd)) {
+            (*task).deliver.store(true, Ordering::Relaxed);
+            crate::scheduler::wait_for_message(regs as *const _);
+            // Still here: it did not sleep.
+            (*task).deliver.store(false, Ordering::Relaxed);
+        }
     }
     let [_, t, from, a0, a1, a2] = event_regs(take_event(pd));
     regs.rdi = t; regs.rsi = from; regs.rdx = a0; regs.r10 = a1; regs.r8 = a2;
