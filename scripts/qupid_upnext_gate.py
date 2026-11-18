@@ -67,8 +67,8 @@ def main():
   g['wait'](r'\[play.frame\] n=\d+ ',s,120);ss=jump()
   shown=g['wait'](r'\[qupid.upnext\] shown left_ms=(\d+)',ss,60)
   card=g['wait'](r'\[qupid.card\] at_ms=\d+ text=Up next  S01E02  in \d+ s',ss,60)
-  from qupid_shot import accent_shot
-  accent,notes=accent_shot(q,out,'up-next',41,tries=8)
+  from qupid_shot import accent_shot,zoom
+  zoom(q);accent,notes=accent_shot(q,out,'up-next',41,tries=8)
   assert accent>40,f'no card edge on screen: {accent} accent pixels {notes}'
   g['wait'](r'\[qupid.upnext\] go label=S01E02',ss,120)
   s2=len(t());g['wait'](r'\[play.item\] n=1 of=3 file=\S*S01E02',ss,60)

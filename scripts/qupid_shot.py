@@ -4,10 +4,14 @@ from PIL import Image
 
 ACCENT=(0xDB,0x4A,0x7E)
 
-def accent_px(img):
+def accent_px(img,tol=8):
     px=img.load();r0,g0,b0=ACCENT
     return sum(1 for y in range(img.height) for x in range(img.width)
-               if abs(px[x,y][0]-r0)<8 and abs(px[x,y][1]-g0)<8 and abs(px[x,y][2]-b0)<8)
+               if abs(px[x,y][0]-r0)<tol and abs(px[x,y][1]-g0)<tol and abs(px[x,y][2]-b0)<tol)
+
+def zoom(q,wait=.8):
+    """Super+F: the focused window fills the screen, as the subtitles gate shows it."""
+    q.cmd('send-key',{'keys':[{'type':'qcode','data':'meta_l'},{'type':'qcode','data':'f'}],'hold-time':80});time.sleep(wait)
 
 def accent_shot(q,out,name,want,tries=12):
     """Dumps the screen up to `tries` times, 0.5 s apart, until at least `want`
@@ -22,4 +26,4 @@ def accent_shot(q,out,name,want,tries=12):
         last=raw
     img.save(out/f'{name}.png')
     top=collections.Counter(img.getdata()).most_common(6)
-    return count,f'size={img.size} top_colors={[("#%02x%02x%02x"%c,n) for c,n in top]}'
+    return count,f'near_accent={accent_px(img,40)} size={img.size} top_colors={[("#%02x%02x%02x"%c,n) for c,n in top]}'
