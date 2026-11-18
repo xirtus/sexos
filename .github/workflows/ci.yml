@@ -50,6 +50,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Rounded window corners and soft shadows (Display decoration pass) on the host
       run: bash scripts/display_decor_host_gate.sh
+    - name: Deadline scheduling class (earliest first, share of each window) on the host
+      run: bash scripts/scheduler_deadline_host_gate.sh
     - name: Velvet game rules and Weft input integration
       run: cargo test --locked -p velvet --no-default-features
     - name: Moan Weft app and project editing
@@ -328,6 +330,11 @@ jobs:
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
+    - name: IPC round trip and null call, 1 and 4 cores (bench)
+      run: |
+        SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/program_bench_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bench-1"
+        SEXOS_GATE_CORES=4 SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/program_bench_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bench-4"
+        grep -ahE '\[bench\] name=(null_syscall|ipc_roundtrip)' "$RUNNER_TEMP"/sexos-runtime/bench-*/* 2>/dev/null || true
     - name: Boot time to the desktop (3 cold boots, #309)
       run: python3 scripts/boot_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/boot-time"
     - name: Big programs start time (#305)
@@ -355,6 +362,16 @@ jobs:
         python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: Kernel cycles on KVM, real CPU (kernel study Phase 0; 1 core with and without PKU, 4 cores)
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        if [ ! -w /dev/kvm ]; then echo "[bench.kvm] no usable /dev/kvm on this runner; skipped"; exit 0; fi
+        grep -m1 'model name' /proc/cpuinfo; grep -qw pku /proc/cpuinfo && echo "[bench.kvm] host pku=yes" || echo "[bench.kvm] host pku=no"
+        out="$RUNNER_TEMP/sexos-runtime/kvm-bench"
+        python3 scripts/program_bench_gate.py --accel kvm --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/1core-pku"
+        python3 scripts/program_bench_gate.py --accel kvm --no-pku --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/1core-nopku"
+        SEXOS_GATE_CORES=4 python3 scripts/program_bench_gate.py --accel kvm --no-pku --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/4core-nopku"
+        for f in "$out"/*/bench.json; do echo "$f"; cat "$f"; echo; done
     - name: Preserve runtime evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -765,6 +782,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/silk-source.img"
         python3 scripts/silk_ctl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/silk-source.img" --out "$RUNNER_TEMP/sexos-desktop/silk"
+    - name: Hot corners (the top-left corner opens and closes the window overview)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/corner-source.img"
+        python3 scripts/hot_corner_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/corner-source.img" --out "$RUNNER_TEMP/sexos-desktop/corner"
     - name: Magnifier and colour filters (accessibility)
       run: |
         truncate -s 256M "$RUNNER_TEMP/access-source.img"
@@ -819,7 +840,7 @@ jobs:
 
   build:
     if: always()
-    needs: [host, truth, image, boot, web, desktop, devices, programs, media, editor, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places]
+    needs: [host, truth, image, boot, web, desktop, devices, programs, media, editor, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks]
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -1069,8 +1090,7 @@ jobs:
         path: ${{ runner.temp }}/input-payload-proof
         if-no-files-found: ignore
 
-  # Leak gate (WS2). Not in `build`'s needs yet: it reports while the leaks it finds
-  # are fixed, then joins the required set.
+  # Leak gate (WS2): every program and restartable service gives its memory back.
   leaks:
     name: Leak gate (programs open/close, services restart)
     runs-on: ubuntu-latest

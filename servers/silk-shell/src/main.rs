@@ -44,6 +44,8 @@ mod layouts_glue;
 mod animations;
 mod silk_ctl;
 mod silk_ctl_glue;
+mod hot_corners;
+mod hot_corners_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -11136,6 +11138,16 @@ static mut TRAY_WIFI_ASKED: Option<u64> = None;
 static mut TRAY_WIFI_DUE: bool = false;
 /// A refused ask is tried again from this tick on (the main loop's tray look).
 static mut TRAY_WIFI_RETRY: u64 = 0;
+/// Wi-Fi answers lost in a row; after three the next 30 s look asks again.
+static mut TRAY_WIFI_LOST: u8 = 0;
+/// How long the idle Shell may sleep while a tray answer is owed or a Wi-Fi look is
+/// due: nothing else may wake it, and a lost answer is only noticed by `tray_tick`.
+pub unsafe fn tray_wake() -> Option<u64> {
+    let now = sex_pdx::get_ticks();
+    if let Some(t) = TRAY_WIFI_ASKED { return Some((t + 5_000).saturating_sub(now).clamp(1, 1_000)); }
+    if TRAY_WIFI_DUE { return Some(TRAY_WIFI_RETRY.saturating_sub(now).clamp(1, 1_000)); }
+    None
+}
 /// A volume or mute click made while another answer was owed to Shell: sent once that
 /// answer is in. The kernel keeps one unread reply per domain, so a second answer
 /// arriving before Shell reads the first is lost (and the tray would show the old state).
@@ -11180,7 +11192,7 @@ unsafe fn tray_refresh() {
     use sex_pdx::sound_mixer as mixer;
     TRAY_REFRESHED = Some(sex_pdx::get_ticks());
     if let Ok(p) = sex_pdx::power::sensors() { TRAY.battery = p.battery_percent; TRAY.charging = p.charging; TRAY.on_ac = p.on_ac; }
-    TRAY_WIFI_DUE = true;
+    TRAY_WIFI_DUE = true; TRAY_WIFI_LOST = 0;
     // Bell first; its answer asks sexnet (tray_volume).
     if !MEDIA_ASKS.pending() && pdx_call(SLOT_BELL, mixer::OP_MIXER, mixer::STATE, 0, 0).0 == 0 { MEDIA_ASKS.push(media_keys::Ask::Tray); }
     else { tray_ask_wifi(); }
@@ -11194,7 +11206,7 @@ unsafe fn tray_ask_wifi() {
     TRAY_WIFI_ASKED = (status == 0).then_some(now);
     // Refused (sexnet not taking calls yet): still due, asked again shortly
     // rather than at the next 30 s look.
-    if status != 0 { TRAY_WIFI_DUE = true; TRAY_WIFI_RETRY = now + 500; sex_pdx::serial_record!("[shell.tray.wifi.retry] status={:#x}", status); }
+    if status != 0 { TRAY_WIFI_LOST = TRAY_WIFI_LOST.saturating_add(1); TRAY_WIFI_DUE = TRAY_WIFI_LOST < 3; TRAY_WIFI_RETRY = now + 500; sex_pdx::serial_record!("[shell.tray.wifi.retry] status={:#x} count={}", status, TRAY_WIFI_LOST); }
 }
 /// Every 30 s, and every 2 s while a tray menu shows.
 unsafe fn tray_tick() {
@@ -11203,8 +11215,8 @@ unsafe fn tray_tick() {
     // Another answer filled Shell's one reply slot and sexnet's was dropped: ask again
     // now rather than at the next 30 s look.
     if TRAY_WIFI_ASKED.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) >= 5_000) {
-        TRAY_WIFI_ASKED = None; TRAY_WIFI_DUE = true;
-        sex_pdx::serial_record!("[shell.tray.wifi.lost]");
+        TRAY_WIFI_ASKED = None; TRAY_WIFI_LOST = TRAY_WIFI_LOST.saturating_add(1); TRAY_WIFI_DUE = TRAY_WIFI_LOST < 3;
+        sex_pdx::serial_record!("[shell.tray.wifi.lost] count={}", TRAY_WIFI_LOST);
         tray_ask_wifi();
     }
     // A look put off while Bell or network time owed Shell an answer, or refused.
@@ -11227,7 +11239,7 @@ unsafe fn tray_volume(word: u64) {
 }
 unsafe fn tray_receive(msg: &sex_pdx::PdxMessage) -> bool {
     if msg.type_id != 1 || TRAY_WIFI_ASKED.is_none() || msg.caller_pd != TRAY_SEXNET_PD || msg.arg0 >> 56 != sex_pdx::wifi_status::TAG >> 56 { return false; }
-    TRAY_WIFI_ASKED = None;
+    TRAY_WIFI_ASKED = None; TRAY_WIFI_LOST = 0;
     TRAY.wifi = sex_pdx::wifi_status::State::of(msg.arg0).phase;
     tray_publish();
     tray_send_owed();
@@ -26337,7 +26349,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); }
+        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         #[cfg(sexos_input_payload_proof)]
@@ -27025,6 +27037,7 @@ pub extern "C" fn _start() -> ! {
                     continue;
                 }
                 if let Some(t)=unsafe{autofill_routes::wake()}{let _=sex_pdx::sys_wait_self_ticks(t);continue;}
+                if let Some(t)=unsafe{tray_wake()}{let _=sex_pdx::sys_wait_self_ticks(t);continue;}
                 if let Some(t) = lock::next_wake() { let _ = sex_pdx::sys_wait_self_ticks(t.min(60_000) + 1); continue; }
                 pdx_listen_raw(0)
             }
