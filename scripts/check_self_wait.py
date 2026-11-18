@@ -61,7 +61,9 @@ APPROVED_KERNEL_RUST_TREES=(
     # WS2 kernel heap counters (SYS_STATS OP_KERNEL), unused slab.rs removed, 2026-11-17
     '95ef2223d462a85888843a0700105ff4538f044360df25138dde638253e06fb5',
     # Kernel plan phase 2: kernel/src/ipc_v2 (endpoint, reply, notification), not wired yet, 2026-11-17
-    'c620598cd6151890bb134924fcbb76dbe7ab8396503971b66f7e52b1c8251cbd')
+    'c620598cd6151890bb134924fcbb76dbe7ab8396503971b66f7e52b1c8251cbd',
+    # master after #406 + #410 together (each pinned only its own tree), 2026-11-18
+    '417835283472c60cfd1455bccc223876d2936126736b182b47c1e75f6ed56260')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
