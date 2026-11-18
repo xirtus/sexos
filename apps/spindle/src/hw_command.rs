@@ -18,7 +18,7 @@ use sex_pdx::serial_println;
 pub const TAGS: &[&[u8]] = &[
     b"[hw.", b"[kernel.vmd.", b"[kernel.pci.nvme.found]", b"[gpu.", b"[iommu.enabled]", b"[iommu.absent]",
     b"[display.intel", b"[sexdrive.nvme.drive]", b"[sexdrive.nvme.namespace", b"[sexdrive.nvme.refused]",
-    b"[sexdrive.nvme.reprovision.err]", b"[sexdrive.nvme.irq]", b"[sexdrive.nvme2.", b"[sexdrive.raid.serve]",
+    b"[sexdrive.nvme.reprovision.err]", b"[sexdrive.nvme.irq", b"[device.irq.", b"[sexdrive.nvme2.", b"[sexdrive.raid.serve]",
     b"[sexdrive.disk.", b"[sexdrive.ahci.", b"[wifi.chip", b"[wifi.firmware]", b"[wifi.alive]", b"[wifi.ready]",
     b"[wifi.failed]", b"[wifi.lease.bad]", b"[wifi.link.up]", b"[bell.hda.ready]", b"[bell.hda.codec]",
     b"[sexnet.nic.", b"[net.dhcp.lease]", b"[usb.host.controller.found]", b"[sexusb.device]",

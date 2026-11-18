@@ -58,7 +58,7 @@ and networks), `wifi join N PASSWORD`, `beep` (sound).
 | Its format | `[sexdrive.nvme.namespace] sectors=N lba_shift=9` | lba_shift=9 | `[sexdrive.nvme.namespace.refused] reason=sector_size lba_bytes=4096 fix=nvme_format_lbaf_512`: the drive uses 4 KiB sectors (not supported yet; reformatting erases it) |
 | Second SSD / RAID volume | `[sexdrive.nvme2.drive]`, `[sexdrive.raid.serve] ok=1 ... writes=0` | | `[sexdrive.nvme2.err] reason=...` |
 | Whose disk | `[sexdrive.disk.layout] kind=...` | `foreign` is expected with Windows on it: nothing is written | |
-| Interrupts | `[sexdrive.nvme.irq] mode=msix polling=0` | msix | `polling=1` is fine behind VMD (no MSI-X there yet) |
+| Interrupts | `[kernel.vmd.msi] remap=1 ...`, `[device.irq.msix] ... vmd_vector=N`, `[sexdrive.nvme.irq] mode=msix polling=0` | msix, and no `irq.silent` line | `[sexdrive.nvme.irq.silent] ... polling=1`: the interrupt never arrived, so sexdrive polls (slower, still works); `[kernel.vmd.msi] remap=0 reason=...` says why VMD's table was not set up |
 | DMA isolation | `[iommu.enabled] vendor=intel ...` | | `[iommu.absent] reason=...`; if the start hangs, pick "SexOS without DMA protection" in the boot menu |
 | Panel | `[display.intel] device=9a60 ...`, `[display.intel.edid] ...` | | |
 | dGPU off | `[gpu.found] ... vendor=10de`, `[gpu.power] ...` | | |

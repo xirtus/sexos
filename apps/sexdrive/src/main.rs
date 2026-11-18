@@ -322,6 +322,9 @@ fn prepare_bounce(write: bool, cid: u16) -> Option<DmaTransfer<'static>> {
     }
 }
 
+/// Sleeps with no interrupt at all before sexdrive gives up on them and polls.
+const IRQ_SILENT_WAITS:u64=64;
+
 /// The BOOT main-task inventory already sanctions this self-only timed wait.
 /// No inbox receive or new I/O submission occurs while submitted DMA is held.
 fn nvme_wait_completion(cq_va:u64,head:u32,cid:u16,phase:u32)->completion_wait::Report{
@@ -349,6 +352,12 @@ fn nvme_wait_completion(cq_va:u64,head:u32,cid:u16,phase:u32)->completion_wait::
         // first, and only then sleep whole ticks, so a command does not cost a tick.
         if quick<QUICK_TURNS{quick+=1;sex_pdx::sys_yield();Ok(())}else{sex_pdx::sys_wait_self_ticks(1)}
     });
+    // An interrupt that never arrives (a route that does not work on this machine, such
+    // as behind Intel VMD) costs a tick per command: after enough of those, poll.
+    if irq&&NVME_IRQ_WAKES.load(Ordering::Relaxed)==0&&NVME_IRQ_WAITS.load(Ordering::Relaxed)>=IRQ_SILENT_WAITS{
+        NVME_IRQ.store(false,Ordering::Relaxed);
+        sex_pdx::serial_record!("[sexdrive.nvme.irq.silent] waits={} wakes=0 polling=1",IRQ_SILENT_WAITS);
+    }
     // Only slow or failed waits are worth a line; the serial port is slow too.
     if report.turns>QUICK_TURNS||report.result.is_err(){
         sex_pdx::serial_record!("[sexdrive.nvme.wait] cid={} head={} phase={} polls={} turns={} elapsed_ticks={} result={:?}",cid,head,phase,report.polls,report.turns,report.elapsed,report.result.map(|_|()));
