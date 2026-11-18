@@ -40,7 +40,7 @@ def main():
      assert time.monotonic()<deadline,f'{name} never became ready'
      time.sleep(.001)
     done=time.monotonic();times.append(round((done-t0)*1000));starts.append(round((done-(entered or t0))*1000))
-    time.sleep(1.5);surface=int(re.findall(rf'\[shell.program.launch\] target={m[1]} task={m[2]} surface=(\d+)',t())[-1])
+    surface=int(g['wait'](rf'\[shell.program.launch\] target={m[1]} task={m[2]} surface=(\d+)',s,60)[1]);time.sleep(1.5)
     s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,90);time.sleep(.5)
    res[name]={'bytes':len(elfs[name]),'from_key_ms':times,'from_command_ms':starts,'best_ms':min(starts)}
   (a.out/'start-times.json').write_text(json.dumps(res))

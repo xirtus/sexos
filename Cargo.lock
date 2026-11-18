@@ -420,6 +420,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "avxtest"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+]
+
+[[package]]
 name = "backtrace"
 version = "0.3.77"
 source = "registry+https://github.com/rust-lang/crates.io-index"
