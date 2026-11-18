@@ -32,6 +32,8 @@ hal/x86_64.rs +27).
 | S13 | Unused user-accessible per-core page on key 15 | Low | Open: `core_local.rs` owner (WS4) |
 | S14 | Cross-domain branch-target injection between programs | Info | Open: decision for Phase 5/6 |
 | S15 | BOOT services and bridges were never scanned for WRPKRU/XRSTOR/XRSTORS | High | Fixed |
+| S16 | Three kernel user mappings were writable and executable; program records' code was never scanned | High | Fixed |
+| S17 | The framebuffer grant sets the user bit on whole huge pages | Medium | Open: `init.rs`/boot display owner |
 
 Checked and fine: syscall and interrupt returns restore every general register from
 the saved user frame (no kernel register contents reach ring 3); the GDT has no
@@ -227,6 +229,35 @@ sexnet, Kaleidoscope and Cufflinks need the full build trace and are checked by 
 The byte check holds only while code cannot change: services have no
 writable-and-executable memory, and only programs can turn pages into code
 (`SYS_PROGRAM_CODE`, which scans).
+
+### S16. W^X for every user mapping, and record code (fixed)
+
+The byte scan holds only if no ring-3 code can write a page and then run it. Every
+path that maps user memory was checked:
+
+| Path | Before | Now |
+|---|---|---|
+| Program images, heaps, stacks (`app_resources.rs`) | W^X, loader refuses W+X segments | unchanged |
+| Program records (`program_records.rs`) | W^X, but code **not scanned** | scanned like programs (`[record.rejected]`) |
+| BOOT services (`elf.rs`) | per-segment flags, W+X allowed | W+X refused, code scanned (S15) |
+| BOOT regions, pager mappings, Denim, app aliases | NX on every writable page | unchanged |
+| `pku::set_page_user_accessible` (framebuffer grant) | set U+W, **left NX as it was** | sets NX |
+| Per-core syscall page (`core_local.rs`, S13) | U+W, **executable**, key 15 | NX (still unused; remove later) |
+| IPC buffers (`ipc/buffer.rs`) | U+W, **executable**, key 14 | NX |
+| `SYS_PROGRAM_CODE` seal (JIT) | scans before making pages code | unchanged |
+
+After this, a page a ring-3 domain can write is never executable, and every page it
+can execute was scanned once its bytes were final. The cross-domain isolation gate
+(stream 7) should include "write a page, jump to it, expect a fault".
+
+### S17. Framebuffer grant on huge pages (open)
+
+`init.rs` gives Display the framebuffer by calling `set_page_user_accessible` per
+4 KiB, but when the bootloader mapped it with a 2 MiB or 1 GiB page, the function
+sets the user bit on the whole huge page. Display then reaches everything else in
+that page, which can include other devices' MMIO. Fix: map the framebuffer into a
+BOOT region window with 4 KiB pages (as other regions are) instead of changing the
+HHDM entry.
 
 ## Kernel stacks
 

@@ -31,7 +31,8 @@ impl IpcBufferManager {
             
             let flags = PageTableFlags::PRESENT 
                       | PageTableFlags::WRITABLE 
-                      | PageTableFlags::USER_ACCESSIBLE;
+                      | PageTableFlags::USER_ACCESSIBLE
+                      | PageTableFlags::NO_EXECUTE;
             
             // Validation: pkey MUST be SHARED (14)
             let pkey = pku::SHARED;

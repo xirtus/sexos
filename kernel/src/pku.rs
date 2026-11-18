@@ -204,7 +204,7 @@ pub unsafe fn set_page_user_accessible(va: u64, pkey: u8) {
     // 1GiB huge page — set flags and PKEY on PDPTE
     if (pdpte & (1 << 7)) != 0 {
         let mut entry = pdpte;
-        entry |= 0x6;            // USER_ACCESSIBLE(bit2) | WRITABLE(bit1)
+        entry |= 0x6 | (1 << 63); // USER_ACCESSIBLE | WRITABLE | NO_EXECUTE: data, never code
         entry &= !(0xF << 59);   // clear old PKEY
         entry |= (pkey as u64 & 0xF) << 59; // set new PKEY
         *pdpt_virt.add(pdpt_idx) = entry;
@@ -222,7 +222,7 @@ pub unsafe fn set_page_user_accessible(va: u64, pkey: u8) {
     // 2MiB huge page — set flags and PKEY on PDE
     if (pde & (1 << 7)) != 0 {
         let mut entry = pde;
-        entry |= 0x6;
+        entry |= 0x6 | (1 << 63);
         entry &= !(0xF << 59);
         entry |= (pkey as u64 & 0xF) << 59;
         *pd_virt.add(pd_idx) = entry;
@@ -236,7 +236,7 @@ pub unsafe fn set_page_user_accessible(va: u64, pkey: u8) {
     if (pte & 1) == 0 { return; }
 
     let mut entry = pte;
-    entry |= 0x6;                // USER_ACCESSIBLE | WRITABLE
+    entry |= 0x6 | (1 << 63);    // USER_ACCESSIBLE | WRITABLE | NO_EXECUTE
     entry &= !(0xF << 59);
     entry |= (pkey as u64 & 0xF) << 59;
     *pt_virt.add(pt_idx) = entry;

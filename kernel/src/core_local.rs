@@ -39,7 +39,7 @@ impl CoreLocal {
             vas_ref.map_pku_range(
                 VirtAddr::new(msg_va),
                 4096,
-                PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
+                PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE | PageTableFlags::NO_EXECUTE,
                 15 // PKEY 15
             ).expect("CoreLocal: Map fail");
         }

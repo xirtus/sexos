@@ -13,7 +13,9 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 # Any new causal source requires explicit review. 2026-11-15 master reconcile:
 # Denim (syscall 88), Cufflinks/Bluetooth, touchpad route and SYS_VM (110) add no
 # deadline reference; USB quiet only narrows (also requires no Bluetooth HID traffic).
-APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',),
+APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',
+    # record code scanned for key instructions (stream 2), 2026-11-18
+    'd8dab16031564c8540b35ce5e45c28d1cbf297071e3ffc6d21e5aff7322f625b',),
 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
 'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
 'kernel/src/scheduler.rs': ('8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
@@ -65,7 +67,9 @@ APPROVED_KERNEL_RUST_TREES=('eb6b69a3a3a5b687adc4134e30b58f73dad0cf36aa3f4fe8044
     # BOOT loader refuses key instructions and W+X code (stream 2), 2026-11-18
     'bdaa310d6ed632686c4284e34dcee8f2264ef16010014a6caac0013b998cf5bb',
     # stream 2 on top of the IPC fast path (#402), 2026-11-18
-    '98e232964db1dbed07859aac5a285b9f80dbfdc87a7fe74adb0d23e7a0ca43ad')
+    '98e232964db1dbed07859aac5a285b9f80dbfdc87a7fe74adb0d23e7a0ca43ad',
+    # W^X for every user mapping + record code scan (stream 2), 2026-11-18
+    'ddd84cbbe668235c1afc410fcaa0373b5388a992f71c1cdf89d39bb1c7173345')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
