@@ -65,7 +65,7 @@ APPROVED_KERNEL_RUST_TREES=(
     # Kernel plan phase 2: kernel/src/ipc_v2 (endpoint, reply, notification), not wired yet, 2026-11-17
     'c620598cd6151890bb134924fcbb76dbe7ab8396503971b66f7e52b1c8251cbd',
     # protection views with PCID (plan Phase 5b), 2026-11-17
-    'ce01f224f4be8c0e82653f1bf75467a20def72b212476993d694abadb27a1c54')
+    '6ca5a3bb30a1a0ac8ec45738a5436a1a1ee810321fe4e64b77dfa71b0db509f0')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
