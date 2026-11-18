@@ -76,6 +76,7 @@ pub mod ucgm;
 pub mod ipc;
 #[cfg(target_arch = "x86_64")]
 pub mod ipc_ring;
+pub mod ipc_v2;
 #[cfg(target_arch = "x86_64")]
 pub mod gdt;
 #[cfg(target_arch = "x86_64")]
