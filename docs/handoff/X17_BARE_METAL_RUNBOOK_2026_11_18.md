@@ -62,8 +62,13 @@ and networks), `wifi join N PASSWORD`, `beep` (sound).
 
 ## 4. If it goes wrong
 
-- **Black screen right after the boot menu:** try the boot menu entry "SexOS without DMA
-  protection"; if that starts, the IOMMU setup is the cause.
+- **Hangs or stops during the first start:** start again and pick **"SexOS safe start"**
+  in the boot menu (arrow keys while the menu shows). It leaves out the riskiest
+  new-hardware steps: NVIDIA power-off, DMA protection, MSI/MSI-X interrupts, Wi-Fi,
+  sound, the touchpad and the Intel display registers (`[kernel.safe_start]` in the log).
+  If safe start reaches the desktop, try "SexOS without DMA protection" next: if that
+  starts too, the IOMMU is the cause; if not, `hw` from safe start plus the photo of the
+  hang tell which of the rest it is.
 - **Stops at a driver line:** the last line on the boot log is where it hung; photograph it.
 - **No internal disk at all, RAID On:** `hw vmd` and `hw nvme` say whether VMD opened and
   whether a drive answered.

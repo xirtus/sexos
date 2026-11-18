@@ -74,7 +74,9 @@ APPROVED_KERNEL_RUST_TREES=('8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3
     # IPC v2 syscalls 105/106 wired (kernel plan phase 2), 2026-11-18
     '22a70bcd8ad7b76d717a4484845ef6920d18fca47b892b0ae4f993a4953a0909',
     # boot log head kept for Spindle `hw` (x17 hardware report, SYS_CRASH_LOG OP_LOG_HEAD), 2026-11-18
-    '76f3eaeafd43bad25bdec24cb9dcf5afa3abefd7e4c34636fcdec38625cdcf05')
+    '76f3eaeafd43bad25bdec24cb9dcf5afa3abefd7e4c34636fcdec38625cdcf05',
+    # "SexOS safe start" boot entry (CMDLINE=safe; devmgr/iommu/dgpu skip new-hardware steps), 2026-11-18
+    'e1e457c8813a3d35f2e7591d68403bb51bb4353e257b92ce7a2400a8417349a8')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
