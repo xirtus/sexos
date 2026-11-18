@@ -306,7 +306,11 @@ What it says:
   unlike TCG, where PKU was 4x slower. The cost is in the IPC path, not in WRPKRU.
 - **null_syscall is noisy** (373 to 1,527 across runs that should match), so CI now runs
   each configuration 3 times and prints the median and spread (`scripts/bench_median.py`).
-- The next CI run includes #415, which gives the first KVM numbers with the fast path.
+- **With the WS4 fast path (#415), medians of 3, PR #418's CI, same host:** ipc_roundtrip
+  10,318 (1 core, PKU), 10,139 (1 core, no PKU), 81,773 (4 cores). Same-core IPC got
+  5.2x faster on silicon; cross-core IPC did not move, so the 4-core path (IPIs, remote
+  wake, home-core placement) is now the biggest single gap, and Phase 2's same-core
+  target (≤1,000) is still 10x away.
 
 ## 6. Phased plan
 
