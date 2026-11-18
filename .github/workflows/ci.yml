@@ -372,6 +372,10 @@ jobs:
         python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: PKU gate cost on the runner's CPU (kernel study Phase 6; host Linux, informational)
+      run: |
+        cc -O2 -Wall -o "$RUNNER_TEMP/pku_gate_bench" tools/pku-gate-bench/pku_gate_bench.c
+        "$RUNNER_TEMP/pku_gate_bench"
     - name: Kernel cycles on KVM, real CPU (kernel study Phase 0; 1 core with and without PKU, 4 cores; median of 3)
       run: |
         if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
