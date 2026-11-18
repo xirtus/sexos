@@ -44,10 +44,11 @@ mod interrupts{pub static TICKS:crate::AtomicU64=crate::AtomicU64::new(0);}
 mod capability{
  use crate::*;
  #[derive(Clone,Copy)]pub enum CapabilityData{AppLifecycle(app_resource_state::LifecycleGrant),AppActivation(app_resource_state::ActivationGrant),Domain(u32),Other}
- #[derive(Clone,Copy)]pub struct Capability{pub id:u32,pub data:CapabilityData,pub cheri_meta:u64}
+ #[derive(Clone,Copy)]pub struct Capability{pub id:u32,pub data:CapabilityData}
+ impl CapabilityData{pub const REPLY_TAG:u8=4;pub fn object_tag(&self)->Option<(u8,crate::capability_table::ObjectCap)>{None}pub fn from_object_tag(_:u8,_:crate::capability_table::ObjectCap)->Option<Self>{None}}
  pub struct ProtectionDomain{pub id:u32,pub pku_key:u8,pub main_task:AtomicPtr<scheduler::Task>,pub trampoline_task:AtomicPtr<scheduler::Task>,pub message_ring:*mut ring::RingBuffer<messages::MessageType,256>,pub signal_ring:*mut ring::RingBuffer<u8,32>,pub incoming_replies:Mutex<VecDeque<messages::IpcReply>>,pub reply_credits:Mutex<reply_credit::ReplyCredits>,pub cap_table:*mut capability_table::CapabilityTable,caps:Mutex<Vec<(u32,CapabilityData)>>}
  impl ProtectionDomain{
-  pub fn find_capability(&self,slot:u32)->Option<Capability>{self.caps.lock().iter().find(|(s,_)|*s==slot).map(|(s,data)|Capability{id:*s,data:*data,cheri_meta:0})}
+  pub fn find_capability(&self,slot:u32)->Option<Capability>{self.caps.lock().iter().find(|(s,_)|*s==slot).map(|(s,data)|Capability{id:*s,data:*data})}
   pub fn grant_capability(&self,slot:u64,data:CapabilityData){self.caps.lock().push((slot as u32,data));}
   // Fault injection into the finite host capability table; never a guest API.
   pub fn replace_capability_for_test(&self,slot:u32,data:CapabilityData){
@@ -57,7 +58,7 @@ mod capability{
   pub fn new_key(id:u32,key:u8)->&'static Self{
    let task=Box::into_raw(Box::new(scheduler::Task{id,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0x4000,rsp:0},state:ownership::TaskOwnership::new()}));
    let tramp=Box::into_raw(Box::new(scheduler::Task{id:id|0x8000,context:scheduler::Context{pd_id:id as u64,pd_ptr:core::ptr::null(),rip:0,rsp:0},state:ownership::TaskOwnership::new()}));
-   let pd=Box::leak(Box::new(Self{id,pku_key:key,main_task:AtomicPtr::new(task),trampoline_task:AtomicPtr::new(tramp),message_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),signal_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),incoming_replies:Mutex::new(VecDeque::new()),reply_credits:Mutex::new(reply_credit::ReplyCredits::new()),cap_table:Box::into_raw(Box::new(capability_table::CapabilityTable::new())),caps:Mutex::new(Vec::new())}));
+   let pd=Box::leak(Box::new(Self{id,pku_key:key,main_task:AtomicPtr::new(task),trampoline_task:AtomicPtr::new(tramp),message_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),signal_ring:Box::into_raw(Box::new(ring::RingBuffer::new())),incoming_replies:Mutex::new(VecDeque::new()),reply_credits:Mutex::new(reply_credit::ReplyCredits::new()),cap_table:capability_table::CapabilityTable::new_boxed(),caps:Mutex::new(Vec::new())}));
    unsafe{(*task).context.pd_ptr=pd;(*tramp).context.pd_ptr=pd;}
    REGISTRY[id as usize].store(pd,Ordering::Release);pd
   }
