@@ -39,17 +39,20 @@ fn one_grant_one_reply_to_that_caller() {
     assert_eq!(credits.outstanding(), 0);
 }
 
-/// Two callers that collide on a probe chain (any home slot) keep separate counts, and withdraw
+/// Two callers that collide on a probe chain keep separate counts, and withdraw
 /// undoes exactly one reservation.
 #[kani::proof]
 #[kani::unwind(130)]
 #[kani::solver(cadical)]
 fn colliding_callers_stay_separate_and_withdraw_is_exact() {
     let mut credits = ReplyCredits::new();
-    let a: u32 = kani::any();
-    // One collision step keeps the proof inside CBMC's memory on CI runners; a
-    // symbolic step count ran out of memory. The proptest model covers longer chains.
-    kani::assume(a > 0 && (a as usize) < REPLY_CREDIT_CAPACITY - REPLY_CALLERS);
+    // Any caller id whose home slot is 5 or the last slot (127, so the probe wraps
+    // to slot 0). A fully symbolic id did not finish in 40 minutes; with the home
+    // slot fixed the solver only reasons about the id's upper bits.
+    let home: u32 = if kani::any() { 5 } else { REPLY_CALLERS as u32 - 1 };
+    let j: u32 = kani::any();
+    kani::assume(j < (REPLY_CREDIT_CAPACITY / REPLY_CALLERS) as u32 - 1);
+    let a = home + j * REPLY_CALLERS as u32;
     let b = a + REPLY_CALLERS as u32; // same home slot as a, still a valid caller
     assert_eq!(credits.grant(a), Grant::Added);
     assert_eq!(credits.grant(b), Grant::Added);

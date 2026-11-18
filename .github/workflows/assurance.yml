@@ -122,7 +122,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     # Pull requests prove the quick harnesses (seconds); nightly proves all of them
-    # (the symbolic-caller reply-table proofs take ~10 minutes each).
+    # (the reply-table proofs take 4-9 minutes each).
     - uses: model-checking/kani-github-action@v1
       with:
         working-directory: fuzz/models
