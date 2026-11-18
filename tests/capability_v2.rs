@@ -268,7 +268,8 @@ fn kernel_tags_match_and_dead_kinds_are_gone() {
                  "pub const REPLY_TAG: u8 = 4;", "2 => Some(CapabilityData::Endpoint(cap)),", "3 => Some(CapabilityData::Notification(cap)),"] {
         assert!(capability.contains(line), "{line}");
     }
-    for dead in ["Socket(", "Network(", "VfsNode(", "RemoteProxy(", "Spawn(", "cheri", "CapabilityKind", "GlobalCapId", "signal_handlers"] {
+    for dead in ["Socket(", "Network(", "VfsNode(", "RemoteProxy(", "Spawn(", "cheri", "CapabilityKind", "GlobalCapId", "signal_handlers",
+                 "IPC(", "Node(", "DMA(", "MemLend("] {
         assert!(!capability.contains(dead), "{dead}");
     }
 }
@@ -302,4 +303,14 @@ fn speculation_clamp_is_computed_not_folded() {
     // bounds branch the way `index & (len - 1)` is.
     let source = include_str!("../kernel/src/capability_table.rs");
     assert!(source.contains(r#""cmp {i}, {l}", "sbb {m}, {m}""#));
+}
+
+#[test]
+fn skip_keeps_later_slot_numbers_and_refuses_after_the_seal() {
+    let t = table();
+    t.skip();
+    assert_eq!(t.insert(D::Domain(1)), 2);
+    assert!(t.find(1).is_none());
+    t.seal();
+    assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| t.skip())).is_err());
 }

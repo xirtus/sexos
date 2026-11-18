@@ -1,4 +1,4 @@
-use crate::capability::{ProtectionDomain, CapabilityData, NodeCapData};
+use crate::capability::{ProtectionDomain, CapabilityData};
 use crate::serial_println;
 
 pub struct CapEngine;
@@ -8,13 +8,9 @@ impl CapEngine {
     pub fn grant_initial_rights(pd: &ProtectionDomain) {
         serial_println!("cap: Granting root rights to PD {}...", pd.id);
 
-        // 1. Root VFS capability
-        pd.grant(CapabilityData::Node(NodeCapData {
-            node_id: 1,
-            sexdrive_pd_id: 100, // sexfiles PD ID
-            inode_id: 2,
-            permissions: 0x7, // R/W/X
-        }));
+        // 1. Slot 1 (SLOT_STORAGE) stays empty for BOOT to wire to Files; the
+        // retired VFS node placeholder granted nothing.
+        unsafe { (*pd.cap_table).skip() };
 
         // 2. Control Ring Capability (Self-management)
         pd.grant(CapabilityData::Domain(pd.id));

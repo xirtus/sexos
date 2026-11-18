@@ -1,6 +1,5 @@
 use x86_64::VirtAddr;
 use crate::{serial_println, boot_trace};
-use crate::ipc::DOMAIN_REGISTRY;
 use x86_64::structures::paging::PageTableFlags;
 
 pub struct ElfLoader;
@@ -36,12 +35,10 @@ impl ElfLoader {
         if !current_pd_ptr.is_null() {
             let current_pd = unsafe { &*current_pd_ptr };
             if current_pd.id != 0 {
-                let vfs_cap = unsafe { (&*current_pd.cap_table).find(1).ok_or("loader: VFS cap missing")? };
-                let sexfiles_pd_id = match vfs_cap.data {
-                    crate::capability::CapabilityData::IPC(data) => data.target_pd_id,
-                    _ => return Err("loader: Invalid VFS cap"),
-                };
-                let _sexfiles_pd = DOMAIN_REGISTRY.get(sexfiles_pd_id).ok_or("loader: sexfiles not found")?;
+                // No capability kind routes a loader request to sexfiles, so a
+                // non-BOOT caller is always refused (as before the IPC kind went).
+                unsafe { (&*current_pd.cap_table).find(1).ok_or("loader: VFS cap missing")? };
+                return Err("loader: Invalid VFS cap");
             } else {
                 boot_trace!("loader: Bootstrap mode (PD 0). Using internal initrd.");
             }

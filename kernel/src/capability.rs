@@ -4,23 +4,7 @@ use alloc::collections::VecDeque;
 use spin::Mutex;
 
 #[derive(Debug, Clone, Copy)]
-pub struct MemLendCapData { 
-    pub base: u64, 
-    pub length: u64, 
-    pub pku_key: u8, 
-    pub permissions: u8,
-    /// Phase 14: Formal Verification - Source PD ID for ownership tracking
-    pub source_pd_id: u32,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct IpcCapData { pub node_id: u32, pub target_pd_id: u32 }
-
-#[derive(Debug, Clone, Copy)]
 pub struct InterruptCapData { pub irq: u8 }
-
-#[derive(Debug, Clone, Copy)]
-pub struct NodeCapData { pub node_id: u32, pub sexdrive_pd_id: u32, pub inode_id: u64, pub permissions: u8 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct PciCapData { pub bus: u8, pub dev: u8, pub func: u8, pub vendor_id: u16, pub device_id: u16,
@@ -58,9 +42,6 @@ impl core::fmt::Debug for DisplayHardwareLease {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct DmaCapData { pub phys_addr: u64, pub length: u64, pub pku_key: u8 }
-
 pub use crate::capability_table::{rights, ObjectCap};
 
 #[derive(Debug, Clone, Copy)]
@@ -71,8 +52,7 @@ pub enum CapabilityData {
     Notification(ObjectCap),
     /// One-shot reply to one call; `generation` is the caller's incarnation.
     Reply(ObjectCap),
-    DMA(DmaCapData), IPC(IpcCapData), Interrupt(InterruptCapData),
-    Domain(u32), Node(NodeCapData), Pci(PciCapData), MemLend(MemLendCapData),
+    Interrupt(InterruptCapData), Domain(u32), Pci(PciCapData),
     Region(sex_pdx::memory_region::RegionGrant),
     FramePool(crate::paging_state::FramePoolGrant),
     PagerMapping(crate::paging_state::PagerMappingGrant),

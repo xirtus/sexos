@@ -17,7 +17,7 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
                                # record table allocated zeroed via CapabilityTable::new_boxed (no wait change), 2026-11-17
                                'e4f79ad810b5bba8aab649b5472154ebece0d4ae1c7b96ccf0cacf3b076de769',),
 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
-'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
+'kernel/src/init.rs': ('5c3430c7e97726b5e3c22763596e01a5f231abfd9a73bbaeddd1abd0540b34ce', '784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
 'kernel/src/scheduler.rs': ('8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
     '0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
                              # per-task self-wait sampling (task_count), 2026-11-17
@@ -65,7 +65,9 @@ APPROVED_KERNEL_RUST_TREES=(
     # Kernel plan phase 2: kernel/src/ipc_v2 (endpoint, reply, notification), not wired yet, 2026-11-17
     'c620598cd6151890bb134924fcbb76dbe7ab8396503971b66f7e52b1c8251cbd',
     # authority v2 capability table (inline slots, generations), cheri.rs removed, 2026-11-17
-    '6371383dfa90b1b27da40ad384b65ebd757ae90284fe6f0f1a083453fb6b1933')
+    '6371383dfa90b1b27da40ad384b65ebd757ae90284fe6f0f1a083453fb6b1933',
+    # capability kinds IPC, Node, DMA, MemLend removed (stream 3 follow-up), 2026-11-18
+    'dafb00984d4d2efacc40ffb53f76f97e403171d2a6a18db9b6869e3c1517a4d0')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 

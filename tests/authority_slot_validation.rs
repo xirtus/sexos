@@ -149,8 +149,10 @@ fn no_capability_selects_kernel_privileged_code() {
     let capability = include_str!("../kernel/src/capability.rs");
     assert!(!ipc.contains("SyncCall"));
     assert!(!ipc.contains("\"call {"));
-    assert!(ipc.contains("CapabilityData::IPC(_) => Err(sex_pdx::ERR_CAP_INVALID),"));
-    assert!(capability.contains("pub struct IpcCapData { pub node_id: u32, pub target_pd_id: u32 }"));
+    // The retired IPC kind is gone; anything that is not a Domain, queue or
+    // input ring capability is refused by resolve_edge's catch-all.
+    assert!(!capability.contains("IPC(") && !capability.contains("IpcCapData"));
+    assert!(ipc.contains("        _ => Err(sex_pdx::ERR_CAP_INVALID),"));
     let traverse = ipc.split("pub fn traverse_edge(").nth(1).unwrap().split("pub fn safe_pdx_call(").next().unwrap();
     assert!(!traverse.contains("asm!"));
 }
