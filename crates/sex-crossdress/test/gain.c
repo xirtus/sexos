@@ -62,6 +62,7 @@ typedef struct {
     float reported;
     double sample_rate;
     int active, processing;
+    int main_thread_calls;
 } gain_t;
 
 static const char *const features[] = { CLAP_PLUGIN_FEATURE_AUDIO_EFFECT, CLAP_PLUGIN_FEATURE_UTILITY, CLAP_PLUGIN_FEATURE_STEREO, NULL };
@@ -99,7 +100,15 @@ static void report(gain_t *g, const clap_output_events_t *out, uint32_t time) {
     if (out->try_push(out, &e.header)) g->reported = g->gain;
 }
 
-static bool g_init(const clap_plugin_t *p) { gain_t *g = p->plugin_data; g->gain = 1.0f; g->reported = 1.0f; return true; }
+static bool g_init(const clap_plugin_t *p) {
+    gain_t *g = p->plugin_data;
+    g->gain = 1.0f; g->reported = 1.0f;
+    // Host extensions may be queried from init on (a callback into the host), and a
+    // main-thread callback requested (the host must call on_main_thread afterwards).
+    (void)g->host->get_extension(g->host, CLAP_EXT_PARAMS);
+    g->host->request_callback(g->host);
+    return true;
+}
 static void g_destroy(const clap_plugin_t *p) { HeapFree(GetProcessHeap(), 0, p->plugin_data); }
 static bool g_activate(const clap_plugin_t *p, double sr, uint32_t min, uint32_t max) {
     gain_t *g = p->plugin_data;
@@ -107,7 +116,7 @@ static bool g_activate(const clap_plugin_t *p, double sr, uint32_t min, uint32_t
     g->sample_rate = sr; g->active = 1; return true;
 }
 static void g_deactivate(const clap_plugin_t *p) { ((gain_t *)p->plugin_data)->active = 0; }
-static bool g_start(const clap_plugin_t *p) { gain_t *g = p->plugin_data; if (!g->active) return false; g->processing = 1; return true; }
+static bool g_start(const clap_plugin_t *p) { gain_t *g = p->plugin_data; if (!g->active || !g->main_thread_calls) return false; g->processing = 1; return true; }
 static void g_stop(const clap_plugin_t *p) { ((gain_t *)p->plugin_data)->processing = 0; }
 static void g_reset(const clap_plugin_t *p) { (void)p; }
 
@@ -163,7 +172,7 @@ static void params_flush(const clap_plugin_t *p, const clap_input_events_t *in, 
 static const clap_plugin_params_t params = { params_count, params_info, params_value, params_to_text, params_from_text, params_flush };
 
 static const void *g_extension(const clap_plugin_t *p, const char *id) { (void)p; return same(id, CLAP_EXT_PARAMS) ? &params : NULL; }
-static void g_main_thread(const clap_plugin_t *p) { (void)p; }
+static void g_main_thread(const clap_plugin_t *p) { ((gain_t *)p->plugin_data)->main_thread_calls++; }
 
 static uint32_t f_count(const clap_plugin_factory_t *f) { (void)f; return 1; }
 static const clap_plugin_descriptor_t *f_descriptor(const clap_plugin_factory_t *f, uint32_t i) { (void)f; return i == 0 ? &descriptor : NULL; }
@@ -185,8 +194,6 @@ static const clap_plugin_t *f_create(const clap_plugin_factory_t *f, const clap_
     g->plugin.process = g_process;
     g->plugin.get_extension = g_extension;
     g->plugin.on_main_thread = g_main_thread;
-    // The host must answer an extension query (a callback into the host).
-    (void)host->get_extension(host, CLAP_EXT_PARAMS);
     return &g->plugin;
 }
 static const clap_plugin_factory_t factory = { f_count, f_descriptor, f_create };

@@ -133,6 +133,9 @@ pub struct ClapPlugin {
     pub descriptor: Descriptor,
     pub params: Vec<ParamInfo>,
     pub requests: Requests,
+    /// How many times `on_main_thread` ran.
+    pub main_thread_calls: u32,
+    served_callbacks: u32,
     entry: u64,
     plugin: u64,
     params_ext: u64,
@@ -150,7 +153,7 @@ impl ClapPlugin {
         let entry = process.export("clap_entry").ok_or(Error::NotClap)?;
         process.cell.map(BRIDGE_VA, BRIDGE_BYTES / PAGE, Access::USER_RW).map_err(|e| Error::Load(LoadError::Cell(e)))?;
         let mut p = ClapPlugin {
-            process, descriptor: Descriptor::default(), params: Vec::new(), requests: Requests::default(),
+            process, descriptor: Descriptor::default(), params: Vec::new(), requests: Requests::default(), main_thread_calls: 0, served_callbacks: 0,
             entry, plugin: 0, params_ext: 0, phase: Phase::Loaded, max_frames: 0, steady_time: 0, strings_next: STRINGS,
         };
         // clap_host_t: version, host_data, name, vendor, url, version, then the callbacks.
@@ -196,12 +199,30 @@ impl ClapPlugin {
         Err(Error::Bad("string too long"))
     }
 
-    /// Calls a plugin function under the CLAP host callbacks.
+    /// Calls a plugin function under the CLAP host callbacks. A `request_callback` made
+    /// during the call is answered with `plugin.on_main_thread` once the call returns
+    /// (the host's one thread is its main thread).
     fn call(&mut self, cpu: &mut impl Vcpu, host: &mut impl Host, function: u64, args: &[u64], floats: Option<[u64; 4]>, events: u32) -> Result<(u64, Vec<ParamChange>), Error> {
         let mut calls = Calls { inner: host, events, pushed: Vec::new(), requests: &mut self.requests, bad: false };
         let v = self.process.call(cpu, &mut calls, function, args, floats)?;
         if calls.bad { return Err(Error::Bad("event")); }
-        Ok((v, calls.pushed))
+        let pushed = calls.pushed;
+        self.main_thread(cpu, host)?;
+        Ok((v, pushed))
+    }
+
+    /// Runs `plugin.on_main_thread` while callbacks are requested (at most 8 rounds, so a
+    /// plugin that asks again every time cannot hold the host).
+    fn main_thread(&mut self, cpu: &mut impl Vcpu, host: &mut impl Host) -> Result<(), Error> {
+        for _ in 0..8 {
+            if self.requests.callback == self.served_callbacks || self.plugin == 0 || self.phase < Phase::Created { return Ok(()); }
+            self.served_callbacks = self.requests.callback;
+            let (f, plugin) = (self.method(88)?, self.plugin);
+            let mut calls = Calls { inner: &mut *host, events: 0, pushed: Vec::new(), requests: &mut self.requests, bad: false };
+            self.process.call(cpu, &mut calls, f, &[plugin], None)?;
+            self.main_thread_calls += 1;
+        }
+        Ok(())
     }
 
     fn method(&self, offset: u64) -> Result<u64, Error> {
@@ -252,6 +273,8 @@ impl ClapPlugin {
         let plugin = self.plugin;
         if self.call(cpu, host, init, &[plugin], None, 0)?.0 as u8 == 0 { return Err(Error::Refused("plugin.init")); }
         self.phase = Phase::Created;
+        // Requests made during init are served now that the plugin may be called.
+        self.main_thread(cpu, host)?;
         // Parameters (clap.params), when the plugin has them.
         let ext_id = self.string("clap.params").ok_or(Error::Host("strings"))?;
         let get_extension = self.method(80)?;

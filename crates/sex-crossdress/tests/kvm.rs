@@ -250,6 +250,7 @@ fn a_windows_clap_plugin_processes_audio_in_a_kvm_cell() {
     assert_eq!(plugin.params.len(), 1);
     assert_eq!((plugin.params[0].id, plugin.params[0].name.as_str(), plugin.params[0].min, plugin.params[0].max, plugin.params[0].default), (0, "Gain", 0.0, 2.0, 1.0));
     assert!(plugin.requests.extensions >= 1, "the plugin asked the host for an extension (a callback out of the cell)");
+    assert_eq!((plugin.requests.callback, plugin.main_thread_calls), (1, 1), "its request_callback was answered with on_main_thread");
     assert_eq!(plugin.param_value(&mut cpu, &mut console, 0).unwrap(), Some(1.0));
 
     plugin.activate(&mut cpu, &mut console, 48_000.0, 512).unwrap();
