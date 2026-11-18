@@ -686,6 +686,10 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             if sent { regs.rax = 0; unsafe { wait_unless_pending(regs) }; 0 } else { 1 }
         },
 
+        102 => unsafe { crate::ipc::recv::call_recv(regs) }, // PDX_CALL_RECV: 100, answer in registers.
+        103 => unsafe { crate::ipc::recv::reply_recv(regs) }, // PDX_REPLY_RECV: 101, next request in registers.
+        104 => crate::scheduler::sched_syscall(rdi, rsi), // SYS_SCHED: the caller's own deadline class.
+
         53 => { // PDX_WAIT_SELF: only this domain's own inbox/reply events.
             if rdi != 0 {
                 sex_pdx::ERR_CAP_INVALID
