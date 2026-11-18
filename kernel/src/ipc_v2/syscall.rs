@@ -84,7 +84,6 @@ unsafe fn wait(regs: &mut SyscallRegs, me: TaskId) -> u64 {
     let state = ipc(me);
     regs.rax = E_AGAIN;
     state.parked.store(true, Ordering::Release);
-    count(2);
     crate::scheduler::park_current_unless(regs as *const _, || state.ready.load(Ordering::Acquire));
     state.parked.store(false, Ordering::Relaxed);
     if state.ready.swap(false, Ordering::AcqRel) { finish(regs, state) } else { count(3); E_AGAIN }
@@ -94,7 +93,11 @@ unsafe fn wait(regs: &mut SyscallRegs, me: TaskId) -> u64 {
 /// `wait` finds its result in its saved frame (rax rbx rcx rdx rbp rsi rdi r8 r9 r10).
 pub unsafe fn deliver(task: *mut Task) {
     let state = &(*task).ipc_v2;
-    if !state.parked.swap(false, Ordering::AcqRel) || !state.ready.swap(false, Ordering::AcqRel) { return; }
+    // Only a task that really slept in `wait` reaches here parked (a wait that never
+    // blocked clears `parked` itself), so this is where slept and spurious wakes count.
+    if !state.parked.swap(false, Ordering::AcqRel) { return; }
+    count(2);
+    if !state.ready.swap(false, Ordering::AcqRel) { count(3); return; }
     let r = state.result.each_ref().map(|w| w.load(Ordering::Relaxed));
     let frame = (*task).context.kstack_top as *mut u64;
     *frame = r[0]; *frame.add(6) = r[1]; *frame.add(5) = r[2]; *frame.add(3) = r[3]; *frame.add(9) = r[4]; *frame.add(7) = r[5];
