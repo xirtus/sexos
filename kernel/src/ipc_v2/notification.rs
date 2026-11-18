@@ -8,11 +8,11 @@
 //! waiter returns the bits itself and the signaler's wake finds it running. The
 //! scheduler treats waking a runnable task as a no-op.
 
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
 
 use super::TaskId;
 
-const NO_WAITER: u32 = 0;
+const NO_WAITER: u64 = 0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SignalOutcome {
@@ -34,7 +34,7 @@ pub enum WaitOutcome {
 
 pub struct Notification {
     word: AtomicU64,
-    waiter: AtomicU32,
+    waiter: AtomicU64,
 }
 
 impl Default for Notification {
@@ -42,7 +42,7 @@ impl Default for Notification {
 }
 
 impl Notification {
-    pub const fn new() -> Self { Self { word: AtomicU64::new(0), waiter: AtomicU32::new(NO_WAITER) } }
+    pub const fn new() -> Self { Self { word: AtomicU64::new(0), waiter: AtomicU64::new(NO_WAITER) } }
 
     pub fn signal(&self, bits: u64) -> SignalOutcome {
         if bits == 0 {
@@ -57,7 +57,7 @@ impl Notification {
 
     /// Takes the pending bits, or parks `task` as the waiter when there are none.
     pub fn wait(&self, task: TaskId) -> WaitOutcome {
-        debug_assert!(task < u32::MAX);
+        debug_assert!(task < u64::MAX);
         let bits = self.word.swap(0, Ordering::AcqRel);
         if bits != 0 {
             return WaitOutcome::Ready(bits);
