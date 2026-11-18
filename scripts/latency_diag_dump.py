@@ -3,7 +3,7 @@
 CI artifacts cannot be fetched from the cloud session."""
 import re,sys
 t=open(sys.argv[1],errors='replace').read()
-keys=('smp.online','smp.core.first_task','bench.','files.program','spindle.run','program.','app.private','sched.latency','PANIC','FAULT','panicked','refused','denied','retry','stall','timeout','tlb','shootdown')
+keys=('shell.focus.set','shell.program.key','smp.online','smp.core.first_task','bench.','files.program','spindle.run','program.','app.private','sched.latency','PANIC','FAULT','panicked','refused','denied','retry','stall','timeout','tlb','shootdown')
 noise=('view.bytes','view.text','clock.source.snapshot','silkbar.civil','display.heartbeat','display.text.committed')
 s=t.find('run bench spin')
 start=t.rfind('[app.private.retired] target=41 ')

@@ -45,10 +45,17 @@ def main():
   s=len(t())
   for i in range(a.busy):
    # One at a time: each must be running before the next is asked for.
-   type_line('run bench spin 600')
+   typed=len(t());type_line('run bench spin 600')
    deadline=time.time()+240
-   while len(re.findall(r'\[bench\.spin\.start\]',t()[s:]))<i+1:
+   while len(starts:=re.findall(r'\[bench\.spin\.start\] target=(\d+) ',t()[s:]))<i+1:
+    stray=re.search(r'\[shell\.program\.key\.(?:down|up)\] pd=(\d+) ',t()[typed:])
+    assert not stray,f'busy program {i+1}: its command was typed into program {stray[1]}\'s window, not Spindle'
     assert time.time()<deadline,f'busy program {i+1} never started';time.sleep(1)
+   # Shell focuses a program's window when it maps it, which under emulation can come
+   # well after [bench.spin.start]. Wait for that before the next line refocuses
+   # Spindle, or the next command's keys go to this program (SMP_LATENCY_ROOT_CAUSE).
+   surface=int(starts[i])+317;w=time.time()+30
+   while not re.search(rf'\[shell\.focus\.set\] id={surface}\r?\n',t()[typed:]) and time.time()<w:time.sleep(.2)
   time.sleep(3)
   loaded=measure(a.keys)
   still=len(re.findall(r'\[bench\.spin\.done\]',t()[s:]))
