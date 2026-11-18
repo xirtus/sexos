@@ -3,8 +3,9 @@
 # Builds libaom's AV1 encoder for SexOS programs as a static archive for
 # x86_64-sex-app.json, with the same flags as FFmpeg (scripts/build_ffmpeg.sh runs
 # this first for the export profile). Splicy exports MP4 with AV1 + Opus through it.
-# One thread; SSE2..SSE4.2 assembly and intrinsics, never AVX, whose state the kernel
-# does not keep. C calls go to crates/sex-libc.
+# One thread; SSE2..SSE4.2, AVX and AVX2 assembly and intrinsics, chosen at run time
+# (CONFIG_RUNTIME_CPU_DETECT checks CPUID and XCR0; the kernel saves AVX state since
+# #408). No AVX-512. C calls go to crates/sex-libc.
 #
 # Output: target/libaom/lib/libaom.a, target/libaom/include/aom and a pkg-config file.
 #
@@ -50,7 +51,7 @@ cmake "$LIBAOM_SRC" -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTA
   -DCMAKE_C_FLAGS="$CFLAGS" -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
   -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DBUILD_SHARED_LIBS=OFF \
   -DCONFIG_AV1_DECODER=0 -DCONFIG_MULTITHREAD=0 -DCONFIG_RUNTIME_CPU_DETECT=1 \
-  -DENABLE_AVX=0 -DENABLE_AVX2=0 -DENABLE_AVX512=0 -DENABLE_NEON=0 \
+  -DENABLE_AVX=1 -DENABLE_AVX2=1 -DENABLE_AVX512=0 -DENABLE_NEON=0 \
   -DENABLE_DOCS=0 -DENABLE_EXAMPLES=0 -DENABLE_TESTS=0 -DENABLE_TESTDATA=0 -DENABLE_TOOLS=0 \
   -DCONFIG_TUNE_VMAF=0 -DCONFIG_TUNE_BUTTERAUGLI=0 -DCONFIG_DENOISE=1 \
   -DCONFIG_REALTIME_ONLY=0 -DCONFIG_INSPECTION=0 -DCONFIG_WEBM_IO=0 -DCONFIG_LIBYUV=0 \

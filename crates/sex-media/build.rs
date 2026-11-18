@@ -45,7 +45,19 @@ fn main() {
     assert!(status.success(), "compiling src/bridge.c failed");
     let lib = out.join("libmediabridge.a");
     let _ = std::fs::remove_file(&lib);
-    let mut objects = vec![obj];
+    // The SIMD bench (src/bench.c): baseline flags like the bridge; the codecs choose
+    // their AVX code at run time.
+    println!("cargo:rerun-if-changed=src/bench.c");
+    let bench = out.join("bench.o");
+    assert!(Command::new("clang")
+        .args(["--target=x86_64-unknown-none-elf", "-nostdinc", "-std=c17", "-O2", "-fPIC", "-ffunction-sections", "-fdata-sections"])
+        .args(["-msse2", "-mno-avx", "-mno-red-zone", "-fno-stack-protector", "-Wall", "-Werror", "-D_GNU_SOURCE"])
+        .arg("-isystem").arg(format!("{}/include", resource.trim()))
+        .arg("-isystem").arg(ff.join("include-c"))
+        .arg("-I").arg(ff.join("include"))
+        .args(["-c", "src/bench.c", "-o"]).arg(&bench)
+        .status().expect("clang bench").success(), "compiling src/bench.c failed");
+    let mut objects = vec![obj, bench];
     if recording {
         println!("cargo:rerun-if-changed=src/recording/bridge.c");
         let object = out.join("recording_bridge.o");

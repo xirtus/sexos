@@ -942,6 +942,13 @@ jobs:
       run: |
         bash scripts/build_splicy_studio.sh
         python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"
+    - name: Media codecs use AVX2 and decode the same pictures as with SSE (decode and encode speed, real CPU on KVM)
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        grep -m1 'model name' /proc/cpuinfo
+        bash scripts/build_mediabench.sh
+        truncate -s 1G "$RUNNER_TEMP/mediabench-source.img"
+        python3 scripts/program_mediabench_gate.py --accel auto --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/mediabench-source.img" --out "$RUNNER_TEMP/recording/mediabench"
     - name: Preserve encoder evidence
       if: always()
       uses: actions/upload-artifact@v4
