@@ -104,6 +104,8 @@ pub struct Task {
     pub(crate) deliver: AtomicBool,
     /// Deadline class (`deadline`): each wake is due within this many microseconds; 0: none.
     pub deadline_us: AtomicU64,
+    /// IPC v2 endpoint/notification state (`ipc_v2::syscall`).
+    pub(crate) ipc_v2: crate::ipc_v2::syscall::TaskIpc,
 }
 
 impl Task {
@@ -170,6 +172,7 @@ impl Task {
             home: AtomicU32::new(u32::MAX),
             woken_at: AtomicU64::new(0),
             deliver: AtomicBool::new(false),
+            ipc_v2: crate::ipc_v2::syscall::TaskIpc::new(),
             deadline_us: AtomicU64::new(deadline::default_period_us(pd.id as u64)),
         }
     }
@@ -1011,6 +1014,21 @@ pub unsafe fn wait_for_message(regs_ptr: *const crate::interrupts::SyscallRegs) 
             begin_last_runnable_proof(sched, current);
             yield_and_switch(regs_ptr);
         }
+        ParkResult::Exited => yield_and_switch(regs_ptr),
+        ParkResult::NotOwner => panic!("WAIT_WITHOUT_ATTACHED_OWNER"),
+    }
+}
+
+/// IPC v2: `wait_for_message` with the caller's own ready check instead of the inbox.
+pub unsafe fn park_current_unless(regs_ptr: *const crate::interrupts::SyscallRegs, ready: impl Fn() -> bool) {
+    x86_64::instructions::interrupts::disable();
+    let core = crate::core_local::CoreLocal::get();
+    let sched = &SCHEDULERS[core.core_id as usize];
+    let current = sched.current_task.load(Ordering::Acquire);
+    if current.is_null() || ready() { return; }
+    match (*current).state.park(core.core_id) {
+        ParkResult::WakeConsumed => {}
+        ParkResult::Blocked => { (*current).resume_observation_pending.store(true, Ordering::Release); begin_last_runnable_proof(sched, current); yield_and_switch(regs_ptr); }
         ParkResult::Exited => yield_and_switch(regs_ptr),
         ParkResult::NotOwner => panic!("WAIT_WITHOUT_ATTACHED_OWNER"),
     }
