@@ -32,18 +32,20 @@ static inline uint32_t rdpkru(void) {
 static inline void wrpkru(uint32_t v) {
     __asm__ volatile(".byte 0x0f,0x01,0xef" :: "a"(v), "c"(0), "d"(0) : "memory");
 }
-// ERIM-style checked write: after WRPKRU, confirm the value (a jump into the
-// middle of a gate must not leave the domain open).
-static inline void wrpkru_checked(uint32_t v) {
-    uint32_t got;
+static volatile uint32_t EXPECT_OPEN, EXPECT_CLOSED;
+
+// ERIM-style checked write: after WRPKRU, compare EAX with an expected value held in
+// memory (an operand independent of the value written), so a jump straight to the
+// WRPKRU with another EAX lands in ud2. The real stubs (crates/sex-gate) compare with an
+// immediate; a memory operand is the closest this C bench can get with runtime keys.
+static inline void wrpkru_checked(uint32_t v, const volatile uint32_t *expect) {
     __asm__ volatile(
         ".byte 0x0f,0x01,0xef\n\t"
-        "cmp %%eax, %1\n\t"
+        "cmp %1, %%eax\n\t"
         "je 1f\n\t"
         "ud2\n"
         "1:"
-        : "=a"(got) : "r"(v), "a"(v), "c"(0), "d"(0) : "memory", "cc");
-    (void)got;
+        :: "a"(v), "m"(*expect), "c"(0), "d"(0) : "memory", "cc");
 }
 
 static volatile uint64_t sink;
@@ -53,7 +55,7 @@ static uint8_t gate_stack[1 << 16] __attribute__((aligned(64)));
 
 // Open, check, switch to the service stack, call, switch back, close, check.
 static inline void gate_call(uint32_t open, uint32_t closed) {
-    wrpkru_checked(open);
+    wrpkru_checked(open, &EXPECT_OPEN);
     __asm__ volatile(
         "mov %%rsp, %%rbx\n\t"
         "mov %0, %%rsp\n\t"
@@ -61,7 +63,7 @@ static inline void gate_call(uint32_t open, uint32_t closed) {
         "mov %%rbx, %%rsp\n\t"
         :: "r"(gate_stack + sizeof gate_stack), "r"(service)
         : "rbx", "rax", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "r11", "memory", "cc");
-    wrpkru_checked(closed);
+    wrpkru_checked(closed, &EXPECT_CLOSED);
 }
 
 static int cmp_u64(const void *a, const void *b) {
@@ -77,9 +79,9 @@ static void b_empty(void) { __asm__ volatile("" ::: "memory"); }
 static void b_rdpkru(void) { sink += rdpkru(); }
 static void b_wrpkru_same(void) { wrpkru(CLOSED); }
 static void b_open_close(void) { wrpkru(OPEN); wrpkru(CLOSED); }
-static void b_open_close_checked(void) { wrpkru_checked(OPEN); wrpkru_checked(CLOSED); }
+static void b_open_close_checked(void) { wrpkru_checked(OPEN, &EXPECT_OPEN); wrpkru_checked(CLOSED, &EXPECT_CLOSED); }
 static void b_gate(void) { gate_call(OPEN, CLOSED); }
-static void b_gate_touch(void) { wrpkru_checked(OPEN); sink += PAGE[0]; PAGE[64] = 1; wrpkru_checked(CLOSED); }
+static void b_gate_touch(void) { wrpkru_checked(OPEN, &EXPECT_OPEN); sink += PAGE[0]; PAGE[64] = 1; wrpkru_checked(CLOSED, &EXPECT_CLOSED); }
 static void b_call_only(void) {
     __asm__ volatile(
         "mov %%rsp, %%rbx\n\t" "mov %0, %%rsp\n\t" "call *%1\n\t" "mov %%rbx, %%rsp\n\t"
@@ -123,6 +125,8 @@ int main(void) {
     uint32_t base = rdpkru();
     OPEN = base & ~(3u << (2 * key));       // key readable + writable
     CLOSED = base | (3u << (2 * key));      // access + write disabled
+    EXPECT_OPEN = OPEN;
+    EXPECT_CLOSED = CLOSED;
     wrpkru(CLOSED);
 
     struct { const char *name; body_fn f; int iters; } cases[] = {
