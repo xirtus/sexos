@@ -19,7 +19,8 @@ impl DomainRegistry {
     }
 
     pub fn get(&self, id: u32) -> Option<&'static ProtectionDomain> {
-        let slot = self.domains.get(id as usize)?;
+        // Spectre v1 (audit S10): a mispredicted check cannot load past the table.
+        let slot = &self.domains[crate::capability_slot::index_nospec(id as usize, MAX_DOMAINS)?];
         let ptr = slot.load(Ordering::Acquire);
         // Registry insertions accept only kernel-owned, permanently live PDs.
         let pd = unsafe { ptr.as_ref() }?;
