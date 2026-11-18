@@ -32,15 +32,20 @@ def main():
   assert len({row[0]for row in live})==a.live,'programs were not on separate rows'
   shared={row[0] for row in pool}
   assert len(shared&{row[0]for row in live})>=2,f'fewer than two shared rows ran: {live} {shared}'
-  time.sleep(2)
-  path=a.out/'many.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(1)
-  drawn=[]
-  for target,task,sid in live:
-   tile=re.findall(rf'\[shell.tile.apply\] sid={sid} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
-   ink,missing=text_ink(path,(x,y,w,h),font)
+  # Six windows retile as each opens; on several emulated cores Display may still be
+  # redrawing one, so the picture is taken again (up to ~30 s) until every row is drawn.
+  for attempt in range(10):
+   time.sleep(3)
+   path=a.out/f'many-{attempt}.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(1)
+   drawn=[]
+   for target,task,sid in live:
+    tile=re.findall(rf'\[shell.tile.apply\] sid={sid} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)',t());x,y,w,h=map(int,tile[-1])
+    ink,missing=text_ink(path,(x,y,w,h),font)
+    drawn.append(dict(target=int(target),task=task,tile=(x,y,w,h),ink=ink,missing=missing))
    # The pointer rests at this screen's centre and may cover a few glyphs.
-   assert ink>100 and missing*10<=ink,f'row {target}: text ink {ink} missing {missing}'
-   drawn.append(dict(target=int(target),task=task,ink=ink))
+   if all(d['ink']>100 and d['missing']*10<=d['ink'] for d in drawn):break
+   print('[pool.redraw.wait]',attempt,drawn,flush=True)
+  for d in drawn:assert d['ink']>100 and d['missing']*10<=d['ink'],f"row {d['target']}: text ink {d['ink']} missing {d['missing']} tile {d['tile']}"
   # Rows no longer take turns: no span opens or closes for a switch, and no full flush.
   assert '[program.pool.switch]'not in t(),'shared rows still take turns'
   switches=[tuple(map(int,m))for m in re.findall(r'\[views\.switch\] switches=(\d+) flushed=(\d+) view=(\d+) core=(\d+) pcid=(\d)',t())]
