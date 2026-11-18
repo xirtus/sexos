@@ -10,7 +10,7 @@
 //! empty, and a caller queues only under the lock after seeing no receiver.
 
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use super::TaskId;
 
@@ -18,8 +18,8 @@ use super::TaskId;
 /// full gets [`SendOutcome::Full`] and retries after yielding.
 pub const QUEUE_DEPTH: usize = 16;
 
-const NO_WAITER: u32 = 0;
-const CLOSED: u32 = u32::MAX;
+const NO_WAITER: u64 = 0;
+const CLOSED: u64 = u64::MAX;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallKind {
@@ -82,7 +82,7 @@ struct Queue {
 }
 
 pub struct Endpoint {
-    waiter: AtomicU32,
+    waiter: AtomicU64,
     lock: AtomicBool,
     queue: UnsafeCell<Queue>,
 }
@@ -108,7 +108,7 @@ impl Default for Endpoint {
 impl Endpoint {
     pub const fn new() -> Self {
         Self {
-            waiter: AtomicU32::new(NO_WAITER),
+            waiter: AtomicU64::new(NO_WAITER),
             lock: AtomicBool::new(false),
             queue: UnsafeCell::new(Queue { items: [Sender::NONE; QUEUE_DEPTH], head: 0, len: 0 }),
         }
@@ -172,6 +172,9 @@ impl Endpoint {
             queue.head = (queue.head + 1) % QUEUE_DEPTH;
             queue.len -= 1;
             return RecvOutcome::Message(sender);
+        }
+        if waiter == receiver + 1 {
+            return RecvOutcome::Parked; // still the waiter (woken spuriously, asking again)
         }
         if waiter != NO_WAITER {
             return RecvOutcome::Busy;

@@ -25,9 +25,9 @@ PY
   if [[ $st == 0 ]]; then cat "$T/mutant.log"; echo "[ipc_v2.negative] FAIL $4 passed with mutant"; exit 1; fi
 }
 mutant endpoint.rs 'if waiter != NO_WAITER {' 'if false {' one_receiver_at_a_time
-mutant reply.rs 'if generations.is_current(cap.caller, cap.generation) {' 'if true {' caller_death_cancels_the_outstanding_reply
+mutant reply.rs 'if generations.is_current(cap.caller, cap.generation) { Ok(cap) }' 'if true { Ok(cap) }' caller_death_cancels_the_outstanding_reply
 mutant notification.rs 'w => SignalOutcome::Wake(w - 1),' '_ => SignalOutcome::Pending,' signal_wakes_the_parked_waiter
 mutant endpoint.rs 'queue.len -= 1;
         Some(removed)' 'Some(removed)' cancelled_caller_leaves_the_others_in_order
 echo '[ipc_v2.negative] PASS mutants_rejected=4'
-echo '[ipc_v2.result] PASS scope=endpoint_reply_notification_state_machines_host_not_wired'
+echo '[ipc_v2.result] PASS scope=endpoint_reply_notification_state_machines_host'
