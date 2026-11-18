@@ -13,7 +13,8 @@ end A and nothing else; `[fuzz.iso.breach]` means the touch went through. Rows:
   read_code    A reads B's code
   exec_data    A jumps into B's data page (no-execute)
   exec_code    A calls B's code (a function that only returns)
-  dead_read    A reads B's data page after B has ended (dead incarnation)
+  dead_read    A reads B's data page after B has ended (dead incarnation): faults, or
+               A was given B's row and sees fresh memory, not B's byte
   wrpkru       a copy of the fuzz program with WRPKRU (0F 01 EF) patched into its
                code must be refused at load (`[app.program.rejected] reason=key_instruction`)
   revoked_grant, dead_badge
@@ -104,7 +105,14 @@ def run_backend(name,a,elf,out):
   s=len(t());close(b_target,b_task)
   kept=re.search(rf'\[fuzz.iso.closed\] target={b_target} task={b_task} data_byte=(0x[0-9a-f]+)',t()[s-4096:])
   cells['b_data_byte']=('ok' if kept and kept[1]=='0x5a' else 'changed',kept[0] if kept else 'no closed record')
-  time.sleep(2);cells['dead_read']=probe('read',data)
+  # After B ends its row may be reused, even by A itself: then A reading B's old
+  # address reads A's own fresh memory, and the rule is that B's byte (0x5a) is
+  # gone. From any other row the read must fault.
+  time.sleep(2);kind,ev=probe('read',data)
+  if kind=='breach':
+   m=re.search(r'target=(\d+) .* byte=(0x[0-9a-f]+)',ev)
+   if m and m[1]==b_target and int(m[2],16)!=0x5a:kind='fresh'
+  cells['dead_read']=(kind,ev)
   # A program whose code holds WRPKRU is refused at load.
   s=len(t());type_run('run fuzzkey')
   r=g['wait'](r'(\[app.program.rejected\] [^\n]*reason=key_instruction[^\n]*|\[shell.program.launch\] [^\n]*)',s,120)
@@ -118,6 +126,7 @@ def run_backend(name,a,elf,out):
 
 def verdict(row,backend,cells):
  want=expect(row,backend)
+ if row=='dead_read' and want=='fault' and cells.get(row,('',''))[0]=='fresh':return want,'fresh',cells[row][1],True
  if want=='pending':return want,'pending',PENDING[row],True
  got,evidence=cells.get(row,('missing',''))
  if want=='ok':return want,got,evidence,got=='ok'

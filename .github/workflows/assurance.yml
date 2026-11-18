@@ -144,6 +144,7 @@ jobs:
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
     - name: Isolation matrix
       run: |
+        set -o pipefail
         truncate -s 1G "$RUNNER_TEMP/iso-source.img"
         python3 scripts/isolation_matrix_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/iso-source.img" \
           --out "$RUNNER_TEMP/sexos-isolation" | tee "$RUNNER_TEMP/isolation.txt"
@@ -185,6 +186,7 @@ jobs:
         # The boot helper ends a guest after SEXOS_GATE_BOUND seconds (default 300).
         SEXOS_GATE_BOUND: '19000'
       run: |
+        set -o pipefail
         truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
         python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" \
           --out "$RUNNER_TEMP/sexos-fuzz-nightly" --calls "${{ inputs.calls || '1000000' }}" \
