@@ -57,6 +57,8 @@ pub fn root_table() -> u64 {
     match ROOT[0].load(Ordering::Acquire) { 0 => cr3() & FRAME, root => root }
 }
 
+pub fn ready() -> bool { ROOT[0].load(Ordering::Acquire) != 0 }
+
 /// BOOT, before anything runs. The kernel half of the root is filled first, so a kernel
 /// mapping made later lands in tables every view shares.
 pub fn init() {

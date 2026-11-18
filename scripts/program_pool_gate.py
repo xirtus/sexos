@@ -22,7 +22,7 @@ def main():
   assert pool,'no shared rows claimed their regions'
   for target,pages,spans,boot in pool:
    # Whole spans: a region needs no more than its size in 2 MiB spans, plus one per region,
-   # and BOOT's image and stack add their own.
+   # and BOOT's image and stack (claimed with the successor, logged apart) add their own.
    assert int(spans)<=int(pages)//512+8+int(boot),f'row {target}: {spans} spans for {pages} pages'
   live=[]
   for _ in range(a.live):

@@ -68,9 +68,28 @@ pub fn arena(target: u32, base: u64, bytes: u64) {
     assert!(base % SPAN == 0 && bytes % SPAN == 0, "PROGRAM_POOL_ARENA_SPAN");
     with_row(target, |row, _| row.owned.push((base, base + bytes)));
 }
-/// At BOOT: the pages BOOT made for the row before its arena.
+/// At BOOT: the pages BOOT made for the row before its arena. Their spans join the row's
+/// view at once if views exist (BOOT reserves successors after `claim_regions`).
 pub fn boot_pages(target: u32, pages: &[PrivatePage]) {
-    with_row(target, |row, _| row.boot.extend_from_slice(pages));
+    let Some(view) = view_of(target) else { return };
+    let mut pool = POOL.lock();
+    pool[view - 1].boot.extend_from_slice(pages);
+    if crate::views::ready() { claim_boot(&mut pool, view); }
+}
+/// The spans of the row's BOOT pages not yet its own become its own: closed everywhere
+/// but in its view. Returns how many.
+fn claim_boot(pool: &mut [Row; ROWS], view: usize) -> usize {
+    let mut boot: Vec<u64> = pool[view - 1].boot.iter().map(|p| p.va & !(SPAN - 1)).collect();
+    boot.sort_unstable(); boot.dedup();
+    boot.retain(|&span| !pool[view - 1].owned.iter().any(|&(b, e)| span >= b && span < e));
+    for &span in &boot {
+        assert!(boot_span_alone(&*pool, view - 1, span), "PROGRAM_POOL_BOOT_SPAN_SHARED");
+        let row = &mut pool[view - 1];
+        row.owned.push((span, span + SPAN));
+        crate::views::close(view, span);
+        note(row, view, span);
+    }
+    boot.len()
 }
 /// A span of BOOT's pages for a row is the row's alone: every page in it carries the
 /// shared key, and no other row's BOOT page lies in it.
@@ -98,18 +117,13 @@ pub fn claim_regions() {
             owned.push((region.virtual_base, region.virtual_base + region.length.next_multiple_of(SPAN)));
             pages += region.length / 4096;
         }
-        let mut boot: Vec<u64> = pool[view - 1].boot.iter().map(|p| p.va & !(SPAN - 1)).collect();
-        boot.sort_unstable(); boot.dedup();
-        for &span in &boot {
-            assert!(boot_span_alone(&*pool, view - 1, span), "PROGRAM_POOL_BOOT_SPAN_SHARED");
-            owned.push((span, span + SPAN));
-        }
+        let boot = claim_boot(&mut pool, view);
         let row = &mut pool[view - 1];
         row.owned.extend_from_slice(&owned);
         for &(base, end) in &owned {
             for va in (base..end).step_by(SPAN as usize) { crate::views::close(view, va); note(row, view, va); }
         }
-        crate::serial_println!("[boot.program.pool.regions] target={} pages={} spans={} view={} boot_spans={}", target, pages, row.spans.len(), view, boot.len());
+        crate::serial_println!("[boot.program.pool.regions] target={} pages={} spans={} view={} boot_spans={}", target, pages, row.spans.len(), view, boot);
     }
     crate::views::resync();
 }
