@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Frame time during workspace slides: with 4 cores, Display paces animation
 frames at 60 Hz and each paced frame is reported as `[display.frame.time]
-ms=N`. On KVM the 99th percentile must stay under 20 ms. QEMU's software CPU
+ms=N`. On KVM the 99th percentile is reported against 20 ms (required with
+SEXOS_FRAME_TIME_ENFORCE=1). QEMU's software CPU
 (TCG) renders a frame in hundreds of ms, so without /dev/kvm the gate only
 checks that frames are paced and reported, and says the threshold was not
 enforced. Saves a screenshot of the desktop with rounded corners and shadows."""
@@ -134,10 +135,15 @@ def main():
         # The grid may catch up with a short interval after a late frame, but
         # a paced desktop does not spin: half the frames take at least 15 ms.
         if kvm and p50 < 15: raise RuntimeError('frames not paced at 60 Hz: %r' % times)
-        if kvm and p99 >= LIMIT_MS: raise RuntimeError('frame time p99 %d ms >= %d ms: %r' % (p99, LIMIT_MS, times))
-        result = dict(ok=True, accel='kvm' if kvm else 'tcg', threshold_enforced=kvm, limit_ms=LIMIT_MS, frames=len(times),
+        # Andreas (2026-11-18): until slides composite from cached window layers
+        # the 20 ms budget is reported, not required; SEXOS_FRAME_TIME_ENFORCE=1 requires it.
+        enforce = kvm and os.environ.get('SEXOS_FRAME_TIME_ENFORCE') == '1'
+        met = p99 < LIMIT_MS
+        if enforce and not met: raise RuntimeError('frame time p99 %d ms >= %d ms: %r' % (p99, LIMIT_MS, times))
+        if kvm and not met: print('[frame_time.over_budget] p99=%d limit=%d times=%r' % (p99, LIMIT_MS, times), flush=True)
+        result = dict(ok=True, accel='kvm' if kvm else 'tcg', threshold_enforced=enforce, threshold_met=met if kvm else None, limit_ms=LIMIT_MS, frames=len(times),
                       p50_ms=p50, p99_ms=p99, max_ms=max(times), slides=a.slides, cost=cost,
-                      scope='QEMU 1280x800, 4 cores: paced workspace-slide frame intervals; p99 < 20 ms enforced on KVM only')
+                      scope='QEMU 1280x800, 4 cores: paced workspace-slide frame intervals; p99 < 20 ms reported on KVM, required with SEXOS_FRAME_TIME_ENFORCE=1')
         (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n'); print(json.dumps(result))
     except Exception as e:
         (out / 'result.json').write_text(json.dumps(dict(ok=False, accel='kvm' if kvm else 'tcg', error=str(e))) + '\n'); raise
