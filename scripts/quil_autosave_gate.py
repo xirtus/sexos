@@ -7,7 +7,7 @@ document was never saved and stays dirty, then cut power (QEMU kill, no
 shutdown). Boot 2 on the same disk: open Linen, select the draft by name and
 load it in Quil; the loaded bytes/hash must equal the last drafted buffer.
 """
-import sys,argparse,hashlib,json,os,re,shutil,subprocess,time
+import sys,argparse,bisect,hashlib,json,os,re,shutil,subprocess,time
 from pathlib import Path
 from desktop_close_gate import QMP
 from desktop_focus import focus_surface
@@ -27,22 +27,51 @@ def disk_args(disk):
  if bus=='ahci':return['-drive',f'if=none,id=sata,file={disk},format=raw','-device','ide-hd,drive=sata,bus=ide.0']
  raise ValueError('SEXOS_GATE_DISK_BUS must be nvme or ahci')
 
+class SerialText:
+ """A serial log that only grows. Whole lines are kept as chunks with their offsets;
+ the joined text is built only when a caller asks for all of it, and `since(start)`
+ (text()[start:]) reads just the chunks from `start` on, so hours-long runs don't copy
+ their whole log on every poll. A partial last line is returned but not kept."""
+ def __init__(self,path):
+  self.path=Path(path);self.off=0;self.chunks=[];self.starts=[];self.size=0;self.whole='';self.joined=0
+ def pull(self):
+  if not self.path.exists():return ''
+  with self.path.open('rb') as f:
+   f.seek(self.off);new=f.read()
+  cut=new.rfind(b'\n')+1
+  if cut:
+   self.off+=cut;chunk=new[:cut].decode('utf-8','replace')
+   self.chunks.append(chunk);self.starts.append(self.size);self.size+=len(chunk)
+  return new[cut:].decode('utf-8','replace') if cut<len(new) else ''
+ def text(self):
+  tail=self.pull()
+  if self.joined<len(self.chunks):
+   self.whole+=''.join(self.chunks[self.joined:]);self.joined=len(self.chunks)
+  return self.whole+tail if tail else self.whole
+ def since(self,start):
+  tail=self.pull()
+  if start>=self.size:return tail[start-self.size:]
+  i=max(0,bisect.bisect_right(self.starts,start)-1)
+  return ''.join(self.chunks[i:])[start-self.starts[i]:]+tail
+
 def check_serial_health(text,tag):
  m=re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',text)
  # Name what failed: the matching line and a few after it.
  if m:raise RuntimeError(tag+' guest failure: '+text[text.rfind('\n',0,m.start())+1:][:600])
 
-def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False):
+def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False,since=None):
  """Wait for complete receipts; raw is reserved for unterminated firmware menus.
 
  Keep text offsets and match offsets unchanged. Health always checks the raw
  stream, including faults whose terminating newline has not arrived yet.
+ `since(start)` (text from `start` on) keeps each poll to the new text, so hours-long
+ runs don't copy their whole log every 20 ms.
  """
  d=time.monotonic()+timeout
  while time.monotonic()<d:
-  health();now=text()
+  health();now=since(start) if since else text()[start:]
   if not raw:now=now[:now.rfind('\n')+1]
-  match=re.search(pattern,now[start:])
+  match=re.search(pattern,now)
   if match:return match
   time.sleep(.02)
  # What the system said meanwhile, for CI logs (the serial file may not be kept).
@@ -61,24 +90,16 @@ def boot(iso,disk,out,tag,resolution):
   proc=subprocess.Popen(cmd,stdout=qemu_log,stderr=subprocess.STDOUT)
  began=time.monotonic()
  # The log only grows: read what is new, so hours-long runs don't reread it on every poll.
- seen={'off':0,'text':'','health':0}
- def text():
-  if not serial.exists():return ''
-  with serial.open('rb') as f:
-   f.seek(seen['off']);new=f.read()
-  # Decode only whole lines; a partial last line waits for its end.
-  cut=new.rfind(b'\n')+1
-  if cut:seen['off']+=cut;seen['text']+=new[:cut].decode('utf-8','replace')
-  return seen['text']+new[cut:].decode('utf-8','replace') if cut<len(new) else seen['text']
+ log=SerialText(serial);text=log.text;since=log.since;checked_health={'off':0}
  def health():
   if time.monotonic()-began>int(os.environ.get('SEXOS_GATE_BOUND','300')):raise TimeoutError(tag+' over its time bound')
   if proc.poll()is not None:raise RuntimeError(tag+' guest exited')
   # Only text not yet checked, backing up a little for a marker split across reads.
-  now=text();start=max(0,seen.get('health',0)-64);seen['health']=len(now)
-  check_serial_health(now[start:],tag)
+  start=max(0,checked_health['off']-64);now=since(start);checked_health['off']=start+len(now)
+  check_serial_health(now,tag)
  checked_launches={'off':0}
  def wait(pattern,start=0,timeout=120,*,raw=False):
-  match=wait_serial(text,health,pattern,start,timeout,tag=tag,raw=raw)
+  match=wait_serial(text,health,pattern,start,timeout,tag=tag,raw=raw,since=since)
   checked_launches['off']=check_ordinary_launches(Path(__file__).resolve().parents[1],text(),checked_launches['off'])
   return match
  def stop():
@@ -98,7 +119,7 @@ def boot(iso,disk,out,tag,resolution):
  def key(name,pattern):s=len(text());q.key(name);return wait(pattern,s)
  def chord(mod,k,pattern):
   s=len(text());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,(mod,k)),(False,(k,mod)))for x in ks]});return wait(pattern,s)
- return dict(q=q,proc=proc,text=text,wait=wait,key=key,chord=chord,stop=stop,focus=lambda sid:focus_surface(sid,text,key))
+ return dict(q=q,proc=proc,text=text,since=since,wait=wait,key=key,chord=chord,stop=stop,focus=lambda sid:focus_surface(sid,text,key))
 
 def settle(g,timeout):
  """Wait until Display applied Quil's latest admitted paint."""
