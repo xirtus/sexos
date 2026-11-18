@@ -304,8 +304,8 @@ What it says:
   and that is where most of "vastly faster" comes from.
 - **PKU itself is cheap on silicon.** The PKU and no-PKU IPC numbers are within 5%,
   unlike TCG, where PKU was 4x slower. The cost is in the IPC path, not in WRPKRU.
-- **null_syscall is noisy** (373 to 1,527 across runs that should match). Phase 0's
-  follow-up repeats each test and reports the median before any phase relies on it.
+- **null_syscall is noisy** (373 to 1,527 across runs that should match), so CI now runs
+  each configuration 3 times and prints the median and spread (`scripts/bench_median.py`).
 - The next CI run includes #415, which gives the first KVM numbers with the fast path.
 
 ## 6. Phased plan
