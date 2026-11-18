@@ -1807,3 +1807,25 @@ fn code_cache_runs_the_same_scripts_and_modules() {
     // The classic script is written on its second sighting and read on its third.
     assert!(c.hits >= 5, "hits {} misses {}", c.hits, c.misses);
 }
+
+#[test]
+fn document_position_in_one_host_call() {
+    let mut s = page("<div id=a><p id=b>x<i id=c></i></p><p id=d></p></div><span id=e></span>");
+    s.eval(r#"
+        const $ = id => document.getElementById(id);
+        const [a, b, c, d, e] = ['a', 'b', 'c', 'd', 'e'].map($);
+        const text = b.firstChild, loose = document.createElement('div');
+        console.log(a.compareDocumentPosition(c), c.compareDocumentPosition(a), b.compareDocumentPosition(d), d.compareDocumentPosition(b));
+        console.log(text.compareDocumentPosition(c), c.compareDocumentPosition(text), e.compareDocumentPosition(c), document.compareDocumentPosition(e));
+        console.log(a.compareDocumentPosition(loose) & 33, a.compareDocumentPosition(loose) === a.compareDocumentPosition(loose), b.compareDocumentPosition(b));
+        console.log(a.contains(c), c.contains(a), a.contains(a), b.contains(text), a.contains(loose), a.contains(null));
+        const root = e.attachShadow({ mode: 'open' });
+        root.innerHTML = '<b id=in>s</b>';
+        const inner = root.getElementById('in');
+        console.log(e.contains(inner), root.contains(inner), e.compareDocumentPosition(inner) & 1);
+        // jQuery-style sort: tree order, quickly.
+        const all = [e, d, c, a, b].sort((x, y) => x.compareDocumentPosition(y) & 2 ? 1 : -1).map(n => n.id).join('');
+        console.log(all);
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:20 10 4 2", "0:4 2 2 20", "0:33 true 0", "0:true false true true false false", "0:false true 1", "0:abcde"]);
+}

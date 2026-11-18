@@ -245,6 +245,38 @@ impl Document {
         (id < self.dom.nodes.len()).then_some(id)
     }
 
+    /// DOM `compareDocumentPosition` bits for `other` seen from `node`: 20 when node
+    /// contains other, 10 when other contains node, 4 when other follows and 2 when it
+    /// precedes in tree order. Nodes in different trees (detached, or across a shadow
+    /// root) are 1|32 plus a stable order.
+    fn position(&self, node: NodeId, other: NodeId) -> u32 {
+        if node == other { return 0; }
+        let chain = |mut n: NodeId| {
+            let mut v = alloc::vec![n];
+            // A shadow root is the root of its own tree, as its parentNode is null to pages.
+            while let Some(p) = self.dom.nodes[n].parent.filter(|_| self.dom.tag(n) != Some("sx-shadow")) {
+                if v.len() > self.dom.nodes.len() { break; }
+                v.push(p);
+                n = p;
+            }
+            v.reverse();
+            v
+        };
+        let (a, b) = (chain(node), chain(other));
+        if a[0] != b[0] { return 1 | 32 | if node < other { 4 } else { 2 }; }
+        let common = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+        if common == a.len() { return 16 | 4; }
+        if common == b.len() { return 8 | 2; }
+        let kids = &self.dom.nodes[a[common - 1]].children;
+        let at = |n: NodeId| kids.iter().position(|&c| c == n);
+        match (at(a[common]), at(b[common])) {
+            (Some(x), Some(y)) if x < y => 4,
+            (Some(_), Some(_)) => 2,
+            // A child its parent does not list (should not happen): keep a stable order.
+            _ => 1 | 32 | if node < other { 4 } else { 2 },
+        }
+    }
+
     fn element(&self, s: Option<&&str>) -> Option<NodeId> {
         self.node(s).filter(|&n| matches!(self.dom.nodes[n].kind, Kind::Element { .. }))
     }
@@ -475,6 +507,10 @@ impl Page for Document {
                     }
                 }
                 if all { Some(Self::ids(found.into_iter())) } else { found.first().map(|n| format!("{n}")) }
+            }
+            op::POSITION => {
+                let (a, b) = (self.node(a.first())?, self.node(a.get(1))?);
+                Some(format!("{}", self.position(a, b)))
             }
             op::SVG_CONTEXT => {
                 let node = self.node(a.first())?;
