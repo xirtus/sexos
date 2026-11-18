@@ -40,6 +40,11 @@ limit, sector format), RAID, IOMMU, Intel display, GPU power, sound, network car
 ACPI and Wi-Fi. `hw nvme`, `hw wifi`, `hw display` show every line containing that text;
 `hw all` the newest lines of the whole head. `crashes` lists anything that stopped.
 
+**Easier than photos:** plug in a second USB stick (FAT or exFAT), then in Spindle
+`cd /media/NAME` (`ls /media` shows the name) and `hw save`. That writes
+`hw-report.txt` with every hardware line plus the newest 200 lines of the boot log;
+`unmount NAME` before pulling the stick, then send the file.
+
 Also useful from Spindle: `df` (did the disk mount), `wifi` and `wifi scan` (radio state
 and networks), `wifi join N PASSWORD`, `beep` (sound).
 
@@ -74,5 +79,5 @@ and networks), `wifi join N PASSWORD`, `beep` (sound).
   whether a drive answered.
 - **No Wi-Fi:** `hw wifi`; Ethernet on the Killer port is the fallback.
 
-Send the photos (or the `hw` screens) to the project; they settle every "to confirm" in
+Send `hw-report.txt` (or photos of the `hw` screens) to the project; they settle every "to confirm" in
 the driver plan.

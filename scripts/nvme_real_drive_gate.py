@@ -13,7 +13,7 @@
 
 Passes when both hold, the boot log names the drive (model, MDTS), and Spindle's
 `hw` (the hardware report for a PC with no serial port) shows the drive and the
-device census.
+device census, and `hw save` writes the same report to a file.
 """
 import argparse, hashlib, os, re, shutil, sys, time
 from pathlib import Path
@@ -67,6 +67,14 @@ def main():
         hw = t()
         assert re.search(r'\[spindle\.hw\.line\] \[sexdrive\.nvme\.drive\] vendor=1b36 ', hw), 'hw did not show the drive'
         assert re.search(r'\[spindle\.hw\.line\] \[hw\.device\] ', hw), 'hw did not show the device census'
+        # `hw save`: the same report as a text file, as it would go to a USB stick.
+        run('hw save hw.txt', r'\[spindle\.fs\.result\] kind=8 status=0')
+        assert re.search(r'\[spindle\.hw\.save\] lines=[1-9]\d* bytes=[1-9]\d* head_bytes=[1-9]', t()), t()[-400:]
+        start = len(t())
+        saved = cat('hw.txt')
+        assert saved and saved[0] == 'SexOS hardware report (Spindle hw save)', saved[:3]
+        # cat reads 4 KiB at a time; give the later reads a moment.
+        g['wait'](r'\[spindle\.fs\.cat\] \[sexdrive\.nvme\.drive\] vendor=1b36 ', start, 30)
         text = t()
         errors = re.findall(r'\[sexdrive\.(?:nvme\.(?:write|queued)\.err|block\.read\.(?:api|handoff)\.err|dma\.quarantine)\][^\n]*', text)
         assert not errors, errors

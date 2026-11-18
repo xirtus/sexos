@@ -72,6 +72,23 @@ impl Client {
         self.seq = (self.seq + 1) & 0xFF_FFFF;
         self.carry_len = 0; self.shown = 0;
     }
+    /// Writes `fill`'s bytes to `path` (made absolute against the working directory),
+    /// replacing the file or creating it. `fill` gets room for at most `max` bytes and
+    /// returns how many it wrote. Used by `hw save`.
+    pub fn start_write_with(&mut self, path: &[u8], max: usize, fill: impl FnOnce(&mut [u8]) -> usize, sb: &mut Scrollback) -> bool {
+        if self.busy() { sb.push(b"The disk is busy with the last command."); return false; }
+        let Some(region) = region() else { sb.push(b"The disk is not available."); return false };
+        let mut full = [0u8; w::PATH_BYTES];
+        let Some(n) = self.join(path, &mut full) else { sb.push(b"Path too long."); return false };
+        if n == 0 { sb.push(b"Name the file to write."); return false; }
+        region[..n].copy_from_slice(&full[..n]);
+        // STAT answers into the data area's first 64 bytes, so the text waits past them.
+        let max = max.min(w::DATA_MAX - 64);
+        let length = fill(&mut region[w::PATH_BYTES + 64..w::PATH_BYTES + 64 + max]).min(max);
+        self.data_len = length;
+        self.start(Cmd::Write, w::STAT, n, 0, 0);
+        true
+    }
     /// Asks Files to check (two paths) or apply (three) a downloaded update. The outcome
     /// lands in [`UPDATE_STATUS`].
     pub fn start_update(&mut self, paths: &[&[u8]], sb: &mut Scrollback) -> bool {

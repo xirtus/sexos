@@ -6,7 +6,10 @@
 //! about hardware, so one photo of Spindle is the hardware report.
 //!
 //! `hw` shows the hardware lines; `hw all` shows the newest lines of the whole head;
-//! `hw TEXT` shows the lines containing TEXT (e.g. `hw nvme`).
+//! `hw TEXT` shows the lines containing TEXT (e.g. `hw nvme`). `hw save [PATH]` writes
+//! every hardware line to a text file (default `hw-report.txt` in the working
+//! directory), e.g. `cd /media/STICK` then `hw save`, so the report leaves the laptop
+//! on a USB stick instead of as photos.
 
 use sex_pdx::crash_log as log;
 use sex_pdx::serial_println;
@@ -59,6 +62,12 @@ const SHOW: usize = 160;
 const LINE: usize = 158;
 
 pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
+    if args == b"save" || args.starts_with(b"save ") {
+        let mut path = &args[4..];
+        while let [b' ', rest @ ..] = path { path = rest; }
+        save(if path.is_empty() { b"hw-report.txt" } else { path }, sb);
+        return;
+    }
     let pick = pick(args);
     // Two passes over the head: count matches, then show the newest SHOW of them.
     let mut total = 0usize;
@@ -82,6 +91,44 @@ pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
     let _ = core::fmt::Write::write_fmt(&mut w, format_args!(
         "{} of {} lines from the first {} KiB of the boot log. hw all | hw TEXT for more.",
         total.min(SHOW), total, bytes / 1024));
+    let n = w.len;
+    sb.push(&text[..n]);
+}
+
+/// The most a saved report holds: every hardware line of a 256 KiB head fits easily.
+const SAVE_MAX: usize = 64 * 1024;
+
+/// `hw save PATH`: the hardware lines, then the newest lines of the whole head, as text.
+fn save(path: &[u8], sb: &mut crate::Scrollback) {
+    let (mut lines, mut bytes, mut head) = (0usize, 0usize, None);
+    let started = unsafe { crate::fs_commands::FS.start_write_with(path, SAVE_MAX, |room| {
+        let mut at = 0usize;
+        let mut put = |text: &[u8], at: &mut usize| {
+            if *at + text.len() + 1 > room.len() { return; }
+            room[*at..*at + text.len()].copy_from_slice(text);
+            room[*at + text.len()] = b'\n';
+            *at += text.len() + 1;
+        };
+        put(b"SexOS hardware report (Spindle hw save)", &mut at);
+        head = walk(|line| { put(line, &mut at); lines += 1; }, Pick::Hardware);
+        if head.is_none() { put(b"The boot log is not available here.", &mut at); }
+        // The newest 200 lines of the whole head, for what the tags miss.
+        let mut total = 0usize;
+        let _ = walk(|_| total += 1, Pick::All);
+        let skip = total.saturating_sub(200);
+        put(b"", &mut at);
+        put(b"--- newest lines of the boot log head ---", &mut at);
+        let mut index = 0usize;
+        let _ = walk(|line| { if index >= skip { put(line, &mut at); } index += 1; }, Pick::All);
+        bytes = at;
+        at
+    }, sb) };
+    if !started { return; }
+    serial_println!("[spindle.hw.save] lines={} bytes={} head_bytes={}", lines, bytes, head.unwrap_or(0));
+    let mut text = [0u8; 160];
+    let mut w = Cursor { buf: &mut text, len: 0 };
+    let _ = core::fmt::Write::write_fmt(&mut w, format_args!(
+        "Saving {} hardware lines ({} bytes) to {}.", lines, bytes, core::str::from_utf8(path).unwrap_or("?")));
     let n = w.len;
     sb.push(&text[..n]);
 }

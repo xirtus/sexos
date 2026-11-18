@@ -872,7 +872,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  silk windows|focus|move|layout|float|close|events  script the desktop (silk alone: usage)");
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  crashes      what stopped, this start and earlier ones");
-            sb.push(b"  hw [all|TEXT]  hardware report from the boot log (no serial port needed)");
+            sb.push(b"  hw [all|TEXT|save [PATH]]  hardware report from the boot log; save writes it to a file");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
