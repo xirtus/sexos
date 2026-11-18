@@ -176,7 +176,7 @@ a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci
 
 c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/service_restart.rs
 
-055312eb92a25b451b946caef4f00d1999391840bb782a1697db72e1903b1c41  kernel/src/syscalls/mod.rs
+5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 
