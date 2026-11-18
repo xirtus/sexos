@@ -629,8 +629,9 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
 }
 
 /// Paint one row run of plain surface content without asking pixel by pixel.
-/// False means this run needs composite_pixel_source: chrome, a bitmap, or a
-/// fill rect covering part of it. Must match that function exactly.
+/// False means this run needs composite_pixel_source: chrome or a bitmap.
+/// Fill rects paint in order over the run (the last one wins, as there).
+/// Must match that function exactly.
 fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
     let surf=source.surface;
     let (sx,sy,sw,sh)=scene.groups.rect(surf,w,h);
@@ -643,20 +644,20 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
         source.content
     }else{surf};
     if unsafe{scene.bitmaps.matches_surface(content.owner_pd,content.surface_id)}{return false;}
-    let mut base=content.color;
     let (lx0,lx1,ly)=(x0 as i32-content.x,x1 as i32-content.x,y as i32-content.y);
+    let mask=surface_lifecycle::native_pixel_bit(if source.chrome{content.owner_pd}else{surf.owner_pd},if source.chrome{content.surface_id}else{surf.surface_id});
+    if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
+    let row=unsafe{fb.add(y*w)};
+    // The private frame is ordinary memory: plain fills vectorize.
+    unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0).fill(content.color);}
     for i in 0..content.fill_count as usize{
         if content.fill_sw[i]==0||content.fill_sh[i]==0
             ||ly<content.fill_sy[i]||ly>=content.fill_sy[i]+content.fill_sh[i] as i32
             ||lx1<=content.fill_sx[i]||lx0>=content.fill_sx[i]+content.fill_sw[i] as i32{continue;}
-        if lx0<content.fill_sx[i]||lx1>content.fill_sx[i]+content.fill_sw[i] as i32{return false;}
-        base=content.fill_color[i];
+        let a=content.fill_sx[i].max(lx0);let b=(content.fill_sx[i]+content.fill_sw[i] as i32).min(lx1);
+        let (a,b)=((a-lx0) as usize+x0,(b-lx0) as usize+x0);
+        unsafe{core::slice::from_raw_parts_mut(row.add(a),b-a).fill(content.fill_color[i]);}
     }
-    let mask=surface_lifecycle::native_pixel_bit(if source.chrome{content.owner_pd}else{surf.owner_pd},if source.chrome{content.surface_id}else{surf.surface_id});
-    if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
-    let row=unsafe{fb.add(y*w)};
-    // The private frame is ordinary memory: a plain fill vectorizes.
-    unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0).fill(base);}
     text_run(row,x0,x1,y,content,scene.metrics);
     true
 }
