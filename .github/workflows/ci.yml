@@ -337,6 +337,10 @@ jobs:
         SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/program_bench_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bench-1"
         SEXOS_GATE_CORES=4 SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/program_bench_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bench-4"
         grep -ahE '\[bench\] name=(null_syscall|ipc_roundtrip)' "$RUNNER_TEMP"/sexos-runtime/bench-*/* 2>/dev/null || true
+    - name: IPC v2 endpoints and notifications on a booted system, 1 and 4 cores (bench ipc2)
+      run: |
+        SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/ipc_v2_runtime_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipc2-1"
+        SEXOS_GATE_CORES=4 SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/ipc_v2_runtime_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipc2-4"
     - name: Boot time to the desktop (3 cold boots, #309)
       run: python3 scripts/boot_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/boot-time"
     - name: Big programs start time (#305)
