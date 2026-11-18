@@ -28,6 +28,7 @@ FIELDS = {
     'EPAGE': (4, 0x01010141, 0x02020242),
     'EMASK': (8, 0x0101010101010101, 0x0202020202020202),
     'ENTRY': (4, 0x01010101, 0x02020202),
+    'AREAS': (8, 0x0101010101010101, 0x0202020202020202),
 }
 LABELS = ('gate_wrpkru_1', 'gate_wrpkru_2', 'gate_wrpkru_3', 'gate_wrpkru_4', 'gate_return', 'gate_stub_end')
 

@@ -29,22 +29,24 @@ pub enum Field {
     Epage,
     Emask,
     Entry,
+    Areas,
 }
 
-/// Size of the per-task frame page at the GS base; slot pages follow it.
+/// Size of the per-task frame page at the start of the task's gate area; slot pages follow it.
 pub const PAGE: u32 = 4096;
 /// Deepest nesting of gate calls in one task.
 pub const MAX_DEPTH: u64 = 32;
 /// What a stub returns in RAX when the call matrix denies it.
 pub const DENIED: u64 = u64::MAX;
+/// Each task's gate area is `1 << AREA_SHIFT` bytes (frame page plus 63 slot pages).
+pub const AREA_SHIFT: u32 = 18;
 
-/// Frame page layout (GS-relative). The frame key protects it: readable by every
+/// Frame page layout (offsets in the task's gate area). The frame key protects it: readable by every
 /// domain, writable only while PKRU is the stub's `G` value.
 pub mod frame {
     pub const CUR: usize = 0x00;
     pub const DEPTH: usize = 0x08;
     pub const ACTIVE: usize = 0x10;
-    pub const SELF: usize = 0x18;
     pub const FRAMES: usize = 0x40;
     pub const SCRATCH_TOP: usize = 0xFF0;
 }
@@ -57,7 +59,7 @@ pub mod slot {
     pub const STACK: usize = 0x40;
 }
 
-/// GS offset of the slot page for domain index `d` (domain 0's page follows the frame page).
+/// Area offset of the slot page for domain index `d` (domain 0's page follows the frame page).
 pub const fn slot_offset(domain: u32) -> u32 {
     PAGE * (1 + domain)
 }
@@ -95,6 +97,9 @@ pub struct Stub {
     pub callee: u32,
     /// The callee's entry point.
     pub entry: u64,
+    /// Base of the gate areas: a task's area is `areas + (IA32_TSC_AUX << AREA_SHIFT)`,
+    /// read with RDPID. The kernel writes TSC_AUX on every task switch.
+    pub areas: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -156,6 +161,7 @@ pub fn build(s: &Stub) -> Result<[u8; template::LEN], Error> {
             Field::Epage => (slot_offset(s.callee) + addend) as u64,
             Field::Emask => 1u64 << s.callee,
             Field::Entry => rel as i32 as u32 as u64,
+            Field::Areas => s.areas,
         };
         out[at..at + width as usize].copy_from_slice(&value.to_le_bytes()[..width as usize]);
     }
@@ -207,6 +213,7 @@ mod tests {
             caller: 3,
             callee: 2,
             entry: 0x4100_0000,
+            areas: 0x6000_0000_0000,
         }
     }
 
@@ -251,7 +258,7 @@ mod tests {
         let other = Stub {
             at: 0x4000_1000, matrix: 0x5000_0040, id: 9, frame_key: 12,
             caller_pkru: pkru(1 << 5, 1 << 12), callee_pkru: pkru(1 << 6, 1 << 12),
-            caller: 5, callee: 6, entry: 0x4200_0000,
+            caller: 5, callee: 6, entry: 0x4200_0000, areas: 0x6100_0000_0000,
         };
         let o = build(&other).unwrap();
         for &(field, at, width, _) in template::SITES {

@@ -1,19 +1,38 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Runs real gate stubs on the Linux host under real protection keys (`pkey_alloc`).
 //! The host plays the kernel: it lays out the frame and slot pages, tags them with keys,
-//! points the GS base at the frame page and maps the stub next to the callee.
-//! Skipped (passes) when the host CPU or kernel has no PKU.
+//! and maps the stub next to the callee. Linux already keeps IA32_TSC_AUX = this CPU, so
+//! the test pins itself to one CPU and puts its gate area where RDPID will point the stub.
+//! Skipped (passes) when the host CPU or kernel has no PKU, or the CPU has no RDPID.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use core::arch::asm;
 use core::arch::x86_64::__cpuid_count;
 use sex_gate::*;
 
-const ARCH_SET_GS: libc::c_int = 0x1001;
-
 fn host_pku() -> bool {
+    #[allow(unused_unsafe)]
     let r = unsafe { __cpuid_count(7, 0) };
-    r.ecx & (1 << 3) != 0 && r.ecx & (1 << 4) != 0
+    // PKU, OSPKE, RDPID.
+    r.ecx & (1 << 3) != 0 && r.ecx & (1 << 4) != 0 && r.ecx & (1 << 22) != 0
+}
+
+fn rdpid() -> u64 {
+    let v: u64;
+    unsafe { asm!("rdpid {}", out(reg) v, options(nomem, nostack)) };
+    v
+}
+
+/// Pins this thread to the CPU it is on and returns that CPU's TSC_AUX.
+fn pin() -> u64 {
+    unsafe {
+        let cpu = libc::sched_getcpu();
+        assert!(cpu >= 0, "sched_getcpu");
+        let mut set: libc::cpu_set_t = core::mem::zeroed();
+        libc::CPU_SET(cpu as usize, &mut set);
+        assert_eq!(libc::sched_setaffinity(0, core::mem::size_of::<libc::cpu_set_t>(), &set), 0, "sched_setaffinity");
+    }
+    rdpid()
 }
 
 fn rdpkru() -> u32 {
@@ -106,8 +125,22 @@ fn world(entries: &[extern "C" fn(u64, u64, u64, u64) -> u64]) -> World {
     let callee_pkru = pkru(1 << ke, 1 << kf);
     let other_pkru = pkru(1 << 0, 1 << kf);
 
-    // Frame page, caller slot page, callee slot page, then 16 pages of callee stack.
-    let area = map(3 * 4096);
+    // Each world gets its own range of gate areas, so test threads pinned to the same CPU
+    // never share one. This task's area is `areas + (TSC_AUX << AREA_SHIFT)`: a frame page,
+    // the caller's slot page and the callee's, then 16 pages of callee stack elsewhere.
+    let aux = pin();
+    let span = ((aux + 1) << AREA_SHIFT) as usize;
+    let areas = unsafe {
+        libc::mmap(core::ptr::null_mut(), span, libc::PROT_NONE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE, -1, 0)
+    };
+    assert_ne!(areas, libc::MAP_FAILED);
+    let area = unsafe {
+        libc::mmap((areas as u64 + (aux << AREA_SHIFT)) as *mut _, 3 * 4096, libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED | libc::MAP_POPULATE, -1, 0)
+    };
+    assert_ne!(area, libc::MAP_FAILED);
+    let area = area as *mut u8;
     let stack = map(16 * 4096);
     let secret = map(4096) as *mut u64;
     unsafe {
@@ -115,7 +148,6 @@ fn world(entries: &[extern "C" fn(u64, u64, u64, u64) -> u64]) -> World {
         w(frame::CUR, caller_pkru as u64);
         w(frame::DEPTH, 0);
         w(frame::ACTIVE, 1 << CALLER);
-        w(frame::SELF, area as u64);
         w(slot_offset(CALLEE) as usize + slot::STACK, stack as u64 + 16 * 4096);
         secret.write(0x5ec7e7);
     }
@@ -124,8 +156,6 @@ fn world(entries: &[extern "C" fn(u64, u64, u64, u64) -> u64]) -> World {
     tag(unsafe { area.add(slot_offset(CALLEE) as usize) }, 4096, ke);
     tag(stack, 16 * 4096, ke);
     tag(secret as *mut u8, 4096, kc);
-    let r = unsafe { libc::syscall(libc::SYS_arch_prctl, ARCH_SET_GS, area as u64) };
-    assert_eq!(r, 0, "arch_prctl(ARCH_SET_GS)");
 
     let matrix = map(4096);
     let stubs = map_near(sum as *const () as usize as u64, 4096);
@@ -141,6 +171,7 @@ fn world(entries: &[extern "C" fn(u64, u64, u64, u64) -> u64]) -> World {
             caller: CALLER,
             callee: CALLEE,
             entry: entry as *const () as usize as u64,
+            areas: areas as u64,
         };
         let code = build(&s).expect("build");
         unsafe { core::ptr::copy_nonoverlapping(code.as_ptr(), stubs.add(i * STUB_LEN), code.len()) };
@@ -193,6 +224,19 @@ impl World {
 fn gate_runs_on_real_protection_keys() {
     if !host_pku() {
         eprintln!("[gate.linux] SKIP: no PKU on this host");
+        return;
+    }
+    // glibc registers an rseq area, and Linux writes it (key 0) when it preempts the
+    // thread. Inside a stub key 0 is disabled, so that write fails and Linux kills the
+    // process with SIGSEGV. SexOS has no such write; on Linux, rerun with rseq off.
+    const NO_RSEQ: &str = "glibc.pthread.rseq=0";
+    if !std::env::var("GLIBC_TUNABLES").is_ok_and(|v| v.contains(NO_RSEQ)) {
+        let st = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "gate_runs_on_real_protection_keys", "--nocapture", "--test-threads=1"])
+            .env("GLIBC_TUNABLES", NO_RSEQ)
+            .status()
+            .expect("rerun without rseq");
+        assert!(st.success(), "gate test without rseq: {st}");
         return;
     }
     let w = world(&[sum, callee_pkru, peek, leak_regs]);
