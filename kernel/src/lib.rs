@@ -17,8 +17,6 @@ pub mod crash_log;
 #[cfg(target_arch = "x86_64")]
 pub mod cpu_account;
 #[cfg(target_arch = "x86_64")]
-pub mod vga;
-#[cfg(target_arch = "x86_64")]
 pub mod memory;
 #[cfg(target_arch = "x86_64")]
 pub mod hal;
@@ -74,8 +72,6 @@ pub mod device_irq;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod boot_frame_reservations;
 #[cfg(target_arch = "x86_64")]
-pub mod ucgm;
-#[cfg(target_arch = "x86_64")]
 pub mod ipc;
 #[cfg(target_arch = "x86_64")]
 pub mod ipc_ring;
@@ -84,13 +80,6 @@ pub mod ipc_v2;
 pub mod gdt;
 #[cfg(target_arch = "x86_64")]
 pub mod interrupts;
-#[cfg(target_arch = "x86_64")]
-pub mod amdahl;
-#[cfg(target_arch = "x86_64")]
-pub mod sunni;
-// pub mod throughput_test;
-#[cfg(target_arch = "x86_64")]
-pub mod latency_guard;
 #[cfg(target_arch = "x86_64")]
 pub mod core_local;
 #[cfg(target_arch = "x86_64")]
@@ -125,15 +114,11 @@ pub mod vmd;
 #[cfg(target_arch = "x86_64")]
 pub mod vmx;
 #[cfg(target_arch = "x86_64")]
-pub mod hw;
-#[cfg(target_arch = "x86_64")]
 pub mod keyboard;
 
-// Phase 1 compile-time architecture seam + dead-code semantic protection
-// types. Behavior-neutral; no call path changed.
+// Phase 1 compile-time architecture seam. Behavior-neutral; no call path changed.
 // See Sex_ArmV9/docs/ARM_S1POE_PORT_PLAN_V1.md §D.
 pub mod arch;
-pub mod protection;
 
 pub const MAP_MEMORY_SYSCALL_NUM: u64 = 30;
 pub const ALLOCATE_MEMORY_SYSCALL_NUM: u64 = 31;
