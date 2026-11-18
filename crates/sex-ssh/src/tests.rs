@@ -139,3 +139,14 @@ fn a_wrong_key_is_refused_and_openssh_key_files_load() {
     let _ = std::fs::remove_dir_all(&dir);
     let _ = "".to_string();
 }
+
+#[test]
+fn a_resize_before_the_session_opens_sizes_the_shell_instead() {
+    let mut c = Client::new("me", Vec::new(), Some(Run::Shell { term: "xterm-256color".into(), cols: 80, rows: 24 }), rng());
+    let before = c.output();
+    c.resize(132, 50);
+    // Nothing goes out during key exchange or login: there is no channel yet.
+    assert!(c.output().is_empty());
+    assert!(matches!(&c.run, Some(Run::Shell { cols: 132, rows: 50, .. })), "{:?}", c.run);
+    let _ = before;
+}
