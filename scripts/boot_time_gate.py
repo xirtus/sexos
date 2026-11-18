@@ -33,12 +33,13 @@ def main():
     now=round((time.monotonic()-t0)*1000)
     for name,pattern in MILESTONES:
      if name not in seen and re.search(pattern,txt):seen[name]=now
-    if 'desktop_ready' in seen:return
+    # Storage and Files may come up after the desktop: keep timing them (60 s at most).
+    if len(seen)==len(MILESTONES) or ('desktop_ready' in seen and now>seen['desktop_ready']+60000):return
     time.sleep(.01)
   t0=time.monotonic();w=threading.Thread(target=watch,daemon=True);w.start();g=None
   try:
    g=boot(a.iso,disk,a.out,f'boot{n}',a.resolution)
-   w.join(240);assert 'desktop_ready' in seen,f'boot {n} never reached the desktop'
+   w.join(300);assert 'desktop_ready' in seen,f'boot {n} never reached the desktop'
    for name,_ in MILESTONES:seen.setdefault(name,None)
    assert 'KERNEL PANIC' not in g['text']()
    runs.append(dict(seen))

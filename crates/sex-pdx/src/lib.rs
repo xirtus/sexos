@@ -7,6 +7,8 @@
 #![no_std]
 
 pub mod mem;
+pub mod ipc_recv;
+pub mod sched;
 pub mod pagefault;
 pub mod app_catalog;
 pub mod browser_sources;
@@ -1335,6 +1337,7 @@ pub mod power;
 pub mod denim;
 pub mod touchpad;
 pub mod program_threads;
+pub mod endpoint;
 pub mod fs;
 pub mod home_lock;
 pub mod disks;
