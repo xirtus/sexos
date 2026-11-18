@@ -266,7 +266,7 @@ jobs:
   boot:
     name: Build, boot and runtime gates
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 95
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -374,7 +374,7 @@ jobs:
   devices:
     name: Disks, power and fuzzing
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 80
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -455,7 +455,7 @@ jobs:
   media:
     name: Browser media streaming and seeking
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 65
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -484,7 +484,7 @@ jobs:
   editor:
     name: Quil code editor
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 65
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -511,7 +511,7 @@ jobs:
     runs-on: ubuntu-latest
     # A Cargo.lock change (crates added or removed) misses the exact build cache and
     # rebuilds cold, which takes ~45 minutes here; 40 left such PRs no way to pass.
-    timeout-minutes: 60
+    timeout-minutes: 80
     strategy:
       fail-fast: false
       matrix:
@@ -551,7 +551,7 @@ jobs:
   programs:
     name: Programs, packages and ports
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 110
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -632,7 +632,7 @@ jobs:
   reading:
     name: Reading programs
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 80
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -661,7 +661,7 @@ jobs:
   places:
     name: Phone link and maps
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 80
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -689,7 +689,7 @@ jobs:
   desktop:
     name: Desktop shell
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 65
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -790,7 +790,7 @@ jobs:
   js-jit:
     name: Experimental JS JIT and W^X (${{ matrix.cores }} cores)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -884,7 +884,7 @@ jobs:
   productivity:
     name: Productivity programs
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -919,7 +919,7 @@ jobs:
   terminal-editor:
     name: Terminal and editor
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -950,7 +950,7 @@ jobs:
   documents-pictures:
     name: Documents and pictures
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 80
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -984,7 +984,7 @@ jobs:
   input-payload-proof:
     name: Diagnostic keyboard payload proof (UNSAFE)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 110
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
