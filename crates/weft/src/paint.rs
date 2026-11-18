@@ -68,9 +68,11 @@ impl<'a> Painter<'a> {
     /// keeps one weight on light and dark themes; `k` is the ink's contrast.
     #[inline]
     fn blend_text(&mut self, i: usize, c: Color, cover: u8, k: i32) {
-        let cover = (c.a() as u32 * cover as u32 / 255) as u8;
+        // Stroke correction first, then the colour's own opacity, so a translucent
+        // colour keeps the opacity it asked for inside solid strokes.
+        let cover = (sex_font::gamma::enhance(cover, k) as u32 * c.a() as u32 / 255) as u8;
         if cover == 0 { return; }
-        self.pixels[i] = 0xFF00_0000 | (sex_font::gamma::blend_with(c.0, self.pixels[i], cover, k) & 0xFF_FFFF);
+        self.pixels[i] = 0xFF00_0000 | (sex_font::gamma::blend_with(c.0, self.pixels[i], cover, 0) & 0xFF_FFFF);
     }
 
     /// Fills whole device pixels of `r`; edges are snapped, so adjacent rectangles meet.
@@ -209,7 +211,7 @@ impl<'a> Painter<'a> {
         let k = sex_font::gamma::contrast_for(ink);
         for (ch, a) in text.chars().zip(adv.iter()) {
             if pen > cx1 as f32 { break; }
-            if ch != ' ' && pen + a >= cx0 as f32 - px {
+            if ch != ' ' && !Fonts::invisible(ch) && pen + a >= cx0 as f32 - px {
                 let (whole, phase) = Fonts::phase_of(pen);
                 if let Some(g) = fonts.glyph_for(face, ch, px, phase, ink) {
                     let gx = whole + g.left;
@@ -226,6 +228,11 @@ impl<'a> Painter<'a> {
                             self.blend_text(i, c, *cover, k);
                         }
                     }
+                } else if let Some((side, img)) = fonts.emoji(ch, px) {
+                    // A colour emoji, its square sitting on the baseline a little below it.
+                    let img = img.to_vec();
+                    let top = base as f32 - side as f32 * 0.88;
+                    self.image_alpha(Rect::new(libm::roundf(pen) / s, libm::roundf(top) / s, side as f32 / s, side as f32 / s), side, side, &img);
                 } else {
                     // A box for a character no font has.
                     let h = px * 0.7;
@@ -236,6 +243,24 @@ impl<'a> Painter<'a> {
             pen += a;
         }
         (pen / s) - x
+    }
+
+    /// Draws an image of `w` by `h` non-premultiplied `0xAARRGGBB` pixels (alpha 0
+    /// is transparent) into `r`, scaled to fit: icons and other cut-out pictures.
+    pub fn image_alpha(&mut self, r: Rect, w: usize, h: usize, px: &[u32]) {
+        if w == 0 || h == 0 || px.len() < w * h { return; }
+        let d = self.dev(r);
+        let (cx0, cy0, cx1, cy1) = self.clip_ints();
+        let (x0, y0) = ((libm::roundf(d.x) as i32).max(cx0), (libm::roundf(d.y) as i32).max(cy0));
+        let (x1, y1) = ((libm::roundf(d.right()) as i32).min(cx1), (libm::roundf(d.bottom()) as i32).min(cy1));
+        for y in y0..y1 {
+            let sy = (((y as f32 + 0.5 - d.y) / d.h) * h as f32) as usize;
+            for x in x0..x1 {
+                let sx = (((x as f32 + 0.5 - d.x) / d.w) * w as f32) as usize;
+                let p = px[sy.min(h - 1) * w + sx.min(w - 1)];
+                self.blend(y as usize * self.width + x as usize, Color(0xFF00_0000 | p), p >> 24);
+            }
+        }
     }
 
     /// Copies an image of `w` by `h` `0x00RRGGBB` pixels into `r`, scaled to fit.

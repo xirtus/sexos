@@ -108,7 +108,7 @@ impl Default for Theme {
 }
 
 /// SexOS pink.
-pub const DEFAULT_ACCENT: Color = Color::hex(0xD6336C);
+pub const DEFAULT_ACCENT: Color = Color::hex(sex_theme::DEFAULT_ACCENT);
 
 impl Theme {
     pub fn new(mode: Mode, accent: Color) -> Theme {
@@ -118,6 +118,14 @@ impl Theme {
     pub fn dark() -> Theme { Theme::new(Mode::Dark, DEFAULT_ACCENT) }
     pub fn high_contrast() -> Theme { Theme::new(Mode::HighContrast, DEFAULT_ACCENT) }
 
+    /// The theme Settings describes: `appearance.theme` (0 light, 1 dark, 2 high
+    /// contrast) and `appearance.accent` (`0xRRGGBB`), keeping scale and density.
+    pub fn with_settings(mut self, theme: i32, accent: i32) -> Theme {
+        self.mode = sex_theme::Mode::from_setting(theme).into();
+        self.accent = Color::hex(accent as u32 & 0xFF_FFFF);
+        self.palette = palette(self.mode, self.accent);
+        self
+    }
     pub fn with_accent(mut self, accent: Color) -> Theme { self.accent = accent; self.palette = palette(self.mode, accent); self }
     pub fn with_scale(mut self, scale: f32) -> Theme { self.scale = scale.clamp(0.5, 4.0); self }
     pub fn with_density(mut self, density: Density) -> Theme { self.density = density; self }
@@ -174,77 +182,25 @@ impl Theme {
     }
 }
 
+/// The palette from the shared theme tokens (`sex_theme`), so Weft and programs
+/// that draw their own pixels show the same colours.
 fn palette(mode: Mode, accent: Color) -> Palette {
-    let white = Color::hex(0xFFFFFF);
-    let black = Color::hex(0x000000);
-    // Text on the accent: whichever of white or near-black reads better.
-    let on = |c: Color| if c.contrast(white) >= c.contrast(Color::hex(0x111111)) { white } else { Color::hex(0x111111) };
-    match mode {
-        Mode::Light => Palette {
-            window: Color::hex(0xF6F5F7),
-            surface: Color::hex(0xFFFFFF),
-            field: Color::hex(0xFFFFFF),
-            control: Color::hex(0xEAE8EC),
-            control_hover: Color::hex(0xDFDCE2),
-            control_pressed: Color::hex(0xD2CED6),
-            border: Color::hex(0xCFCBD3),
-            text: Color::hex(0x1E1B22),
-            text_dim: Color::hex(0x5F5966),
-            text_disabled: Color::hex(0xA29CA8),
-            accent,
-            on_accent: on(accent),
-            selection: accent.with_alpha(0x40),
-            focus: accent,
-            danger: Color::hex(0xC62828),
-            on_danger: white,
-            shadow: black.with_alpha(0x30),
-            scrim: black.with_alpha(0x50),
-        },
-        Mode::Dark => {
-            // A brighter accent reads better on dark grounds.
-            let a = accent.mix(white, 0.12);
-            Palette {
-                window: Color::hex(0x1C1A20),
-                surface: Color::hex(0x26232B),
-                field: Color::hex(0x141217),
-                control: Color::hex(0x35313B),
-                control_hover: Color::hex(0x413C48),
-                control_pressed: Color::hex(0x4C4654),
-                border: Color::hex(0x45404C),
-                text: Color::hex(0xF1EEF4),
-                text_dim: Color::hex(0xB3ADB9),
-                text_disabled: Color::hex(0x6E6875),
-                accent: a,
-                on_accent: on(a),
-                selection: a.with_alpha(0x55),
-                focus: a,
-                danger: Color::hex(0xEF5350),
-                on_danger: black,
-                shadow: black.with_alpha(0x70),
-                scrim: black.with_alpha(0x80),
-            }
-        }
-        Mode::HighContrast => Palette {
-            window: black,
-            surface: black,
-            field: black,
-            control: black,
-            control_hover: Color::hex(0x1A1A1A),
-            control_pressed: Color::hex(0x333333),
-            border: white,
-            text: white,
-            text_dim: white,
-            text_disabled: Color::hex(0x9E9E9E),
-            accent: Color::hex(0xFFE600),
-            on_accent: black,
-            selection: Color::hex(0xFFE600).with_alpha(0x80),
-            focus: Color::hex(0x00FFFF),
-            danger: Color::hex(0xFF6E6E),
-            on_danger: black,
-            shadow: black.with_alpha(0),
-            scrim: black.with_alpha(0xC0),
-        },
+    let t = sex_theme::tokens(mode.into(), accent.0 & 0xFF_FFFF);
+    let c = Color;
+    Palette {
+        window: c(t.window), surface: c(t.surface), field: c(t.field),
+        control: c(t.control), control_hover: c(t.control_hover), control_pressed: c(t.control_pressed),
+        border: c(t.border), text: c(t.text), text_dim: c(t.text_dim), text_disabled: c(t.text_disabled),
+        accent: c(t.accent), on_accent: c(t.on_accent), selection: c(t.selection), focus: c(t.focus),
+        danger: c(t.danger), on_danger: c(t.on_danger), shadow: c(t.shadow), scrim: c(t.scrim),
     }
+}
+
+impl From<Mode> for sex_theme::Mode {
+    fn from(m: Mode) -> Self { match m { Mode::Light => Self::Light, Mode::Dark => Self::Dark, Mode::HighContrast => Self::HighContrast } }
+}
+impl From<sex_theme::Mode> for Mode {
+    fn from(m: sex_theme::Mode) -> Self { match m { sex_theme::Mode::Light => Self::Light, sex_theme::Mode::Dark => Self::Dark, sex_theme::Mode::HighContrast => Self::HighContrast } }
 }
 
 #[cfg(test)]
@@ -259,6 +215,17 @@ mod tests {
         assert_eq!(t.scale, 1.5);
         assert_eq!(t.density, Density::Compact);
         assert_eq!(lang.as_deref(), Some("de"));
+    }
+    #[test]
+    fn settings_values_pick_the_shared_tokens() {
+        let t = Theme::light().with_scale(1.5).with_settings(1, 0x3584E4);
+        assert_eq!(t.mode, Mode::Dark);
+        assert_eq!(t.scale, 1.5);
+        let tokens = sex_theme::tokens(sex_theme::Mode::Dark, 0x3584E4);
+        assert_eq!(t.palette.window.0, tokens.window);
+        assert_eq!(t.palette.accent.0, tokens.accent);
+        // Defaults in Settings are the old Weft default.
+        assert_eq!(Theme::dark().with_settings(0, sex_theme::DEFAULT_ACCENT as i32), Theme::light());
     }
     #[test]
     fn body_text_meets_wcag_aa_in_every_mode() {

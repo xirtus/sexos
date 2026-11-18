@@ -145,6 +145,7 @@ mod lock_screen;
 mod bt_panel;
 mod window_menu;
 mod program_tray;
+mod tray_icons;
 mod bitmap_binding;
 mod bitmap_transaction;
 mod bitmap_stores;
@@ -993,53 +994,7 @@ static mut TRAY_LABEL: u64 = 0;
 static mut TRAY_VIEW: sex_pdx::tray::View = sex_pdx::tray::View { menu: sex_pdx::tray::Menu::None, month_offset: 0 };
 const TRAY_FG: u32 = 0x00CDD6F4;
 const TRAY_DIM: u32 = 0x006C7086;
-const TRAY_WARN: u32 = 0x00F38BA8;
-const TRAY_GOOD: u32 = 0x00A6E3A1;
 /// One tray icon on a 16-unit grid: 0 network, 1 volume, 2 battery.
-fn tray_icon(slot: usize, gx: usize, gy: usize, s: &sex_pdx::tray::Status) -> Option<u32> {
-    match slot {
-        0 => {
-            // Four rising bars; bright when connected (or wired), dim otherwise.
-            let on = matches!(s.wifi, 0 | 10) ;
-            for (i, top) in [11usize, 8, 5, 2].iter().enumerate() {
-                let x0 = 1 + i * 4;
-                if gx >= x0 && gx < x0 + 3 && gy >= *top && gy < 14 { return Some(if on { TRAY_FG } else { TRAY_DIM }); }
-            }
-            None
-        }
-        1 => {
-            let c = if s.muted { TRAY_DIM } else { TRAY_FG };
-            if gx >= 1 && gx < 4 && gy >= 6 && gy < 10 { return Some(c); }
-            if gx >= 4 && gx < 8 { let spread = gx - 4; if gy + spread >= 5 && gy <= 10 + spread { return Some(c); } }
-            if s.muted {
-                let (a, b) = (gx as isize - 9, gy as isize - 5);
-                if (0..6).contains(&a) && (0..6).contains(&b) && (a == b || a == 5 - b) { return Some(TRAY_WARN); }
-                return None;
-            }
-            let waves = if s.volume == 0 { 0 } else if s.volume <= 33 { 1 } else if s.volume <= 66 { 2 } else { 3 };
-            for k in 0..waves { let x = 9 + k * 2; let r = 2 + k * 2; if gx == x && gy + r >= 8 && gy <= 7 + r { return Some(c); } }
-            None
-        }
-        _ => match s.battery {
-            Some(p) => {
-                let colour = if s.charging { TRAY_GOOD } else if p <= 20 { TRAY_WARN } else { TRAY_FG };
-                let outline = (gy == 4 || gy == 12) && gx >= 1 && gx <= 13 || (gx == 1 || gx == 13) && gy >= 4 && gy <= 12;
-                if outline { return Some(TRAY_FG); }
-                if gx >= 14 && gx < 16 && gy >= 6 && gy < 11 { return Some(TRAY_FG); }
-                let fill = 3 + (p as usize * 9 + 50) / 100;
-                if gx >= 3 && gx < fill && gy >= 6 && gy <= 10 { return Some(colour); }
-                None
-            }
-            None => {
-                // A plug: two prongs, a body and a cord.
-                if (gx == 5 || gx == 10) && gy >= 1 && gy < 5 { return Some(TRAY_FG); }
-                if gx >= 3 && gx < 13 && gy >= 5 && gy < 10 { return Some(TRAY_FG); }
-                if gx >= 7 && gx < 9 && gy >= 10 && gy < 15 { return Some(TRAY_FG); }
-                None
-            }
-        },
-    }
-}
 fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option<u32>{
     // Tray icons in the three status chips: network, volume, battery.
     for (idx,slot) in [ModuleSlot::Chip0,ModuleSlot::Chip1,ModuleSlot::Chip2].iter().enumerate(){
@@ -1048,8 +1003,9 @@ fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option
         let left=cx+cw.saturating_sub(size)/2;let top=cy+ch.saturating_sub(size)/2;
         if !in_rect(x,y,left,top,size,size){continue;}
         if !bar.chips[idx].visible{return None;}
-        let unit=(size/16).max(1);
-        return tray_icon(idx,(x-left)/unit,(y-top)/unit,unsafe{&*core::ptr::addr_of!(TRAY_STATUS)});
+        // The SexOS icon set's tray icons, anti-aliased over the bar's glass.
+        return tray_icons::at(idx,x-left,y-top,size,unsafe{&*core::ptr::addr_of!(TRAY_STATUS)})
+            .map(|(c,a)|coverage_blend(c,bar_body(x,y,scene),a));
     }
     None
 }

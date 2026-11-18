@@ -482,6 +482,16 @@ own program-initiated call (checked: inside the work area, one per window, sizes
 minimum), so the Shell never waits on the plugin. `silk layout WS plugin:PATH` answers that
 plugins are not in this build until then.
 
+**S5 notes (2026-11-17).** S5 lands in two PRs. *Hot corners* (S5a): pushing the pointer
+onto a corner pixel runs that corner's action once, until the pointer leaves by 8 px; never
+while a button is held or something holds the pointer, never while locked, and not for the boot
+pointer already at 0,0. Settings has `desktop.corner_top_left` (default `overview`, the Super+W
+window overview) and the other three corners (default `none`); choices `none`, `overview`,
+`launcher`, `notifications`, `lock`, run through the same `wm_action` path as the Super chords.
+Pure logic: `servers/silk-shell/src/hot_corners.rs` (host test `tests/hot_corners.rs`); glue:
+`hot_corners_glue.rs`; gate: `scripts/hot_corner_gate.py`. *Desktop widgets* (S5b: clock,
+weather from Open-Meteo, system) follow.
+
 ### T. Office suite: Gingham, Brocade, Burlesque and the Craft apps (8)
 
 Write set: new `apps/gingham`, `apps/brocade`, `apps/burlesque`, new `crates/sex-office`.
