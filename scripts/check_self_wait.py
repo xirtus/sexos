@@ -52,7 +52,7 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
 # c209 raw-master only; no speculative combined privacy/kernel cohort.
-APPROVED_KERNEL_RUST_TREES=('3a92859241a3b65dc5b033d948818c4d40028160421ad0723a0ffa945bd69f8d',  # IPC fast path (WS4), 2026-11-17
+APPROVED_KERNEL_RUST_TREES=('ad54b57094dec16de9007a317b15506afc52747967aa9d4fedd100a32b1d95dd',  # IPC fast path (WS4), 2026-11-17
     '91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb', 'e93d67e07151c4c0f5eed240e0f3a27f9abb58074e26f52934eb8c36963278f7',
     # per-task self-wait sampling, 2026-11-17
     'a897c8b8c617cfef1ec3a7fad038f32f8530b232cf698f9ea896a89950d5a0ec',
