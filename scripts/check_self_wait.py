@@ -16,9 +16,10 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',),
 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
 'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',
-    # Denim D3 (restart RESET, worker faults, store holes), 2026-11-17: no deadline reference
+    # Denim D3-D5, lazy stacks and worker cap (S9) merged with master, 2026-11-18: no deadline reference
     '2bb065d27ea49bf9f84cbe7930180987a3cda6b764285769415e290810744461',),
-'kernel/src/scheduler.rs': ('0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
+'kernel/src/scheduler.rs': ('8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
+    '0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
                              # per-task self-wait sampling (task_count), 2026-11-17
                              '25c0bc835f30039f947f28bc79ed567e1c742e17ea3c9a8e0663b5f502c9d642',),
  'kernel/src/self_wait.rs': ('0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf',),
@@ -26,11 +27,10 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'kernel/src/smp.rs': ('bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
  'kernel/src/interrupts.rs': ('c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
                               'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d'),
- 'kernel/src/syscalls/mod.rs': ('aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
+ 'kernel/src/syscalls/mod.rs': ('055312eb92a25b451b946caef4f00d1999391840bb782a1697db72e1903b1c41', '318f8602a3e053470c4f6f984fa818f928cae16253dcf9a9946edf1b114995ba',  # IPC fast path (WS4), 2026-11-17
+    'aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
  'kernel/src/program_workers.rs': ('6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',
-    # Denim D3 (restart RESET, worker faults, store holes), 2026-11-17: no deadline reference
-    '83fbb2d6899ff2fbc050154a0bfc922fa2af7d8bf5d5649347629a67fd8ed58a',
-    # Worker tasks capped per row (audit S9), 2026-11-18: no deadline reference
+    # Denim D3-D5, lazy stacks and worker cap (S9) merged with master, 2026-11-18: no deadline reference
     'afc1650bd31219fb7a33340029aef2f53b28c61242eab41cd5628dd134376ca6',),
  'crates/sex-pdx/src/lib.rs': ('8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde', '9eb262eb2108d51f57ae9dc821e6e40a12a9e1003fbfac711422b246ec17fd44',
                                'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
@@ -56,7 +56,10 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
 # c209 raw-master only; no speculative combined privacy/kernel cohort.
-APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb', 'e93d67e07151c4c0f5eed240e0f3a27f9abb58074e26f52934eb8c36963278f7',
+APPROVED_KERNEL_RUST_TREES=(
+    # Phase 1a dead kernel modules removed, 2026-11-18
+    '620ffd8bab9d6528e4842df3930d060d4ceacc071b7587db37604bd3ddaf7c6d','ad54b57094dec16de9007a317b15506afc52747967aa9d4fedd100a32b1d95dd',  # IPC fast path (WS4), 2026-11-17
+    '91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb', 'e93d67e07151c4c0f5eed240e0f3a27f9abb58074e26f52934eb8c36963278f7',
     # per-task self-wait sampling, 2026-11-17
     'a897c8b8c617cfef1ec3a7fad038f32f8530b232cf698f9ea896a89950d5a0ec',
     # Denim D3 (restart RESET, worker faults, store holes), 2026-11-17: no deadline reference
@@ -65,10 +68,10 @@ APPROVED_KERNEL_RUST_TREES=('91e41656109be5dd659d70a70718e0640f68372f35762c34d95
     'eebfb8992af089755f4cfe73f1e37afca0a6f6cf8996cff06e44384ab98574ab',
     # WS2 kernel heap counters (SYS_STATS OP_KERNEL), unused slab.rs removed, 2026-11-17
     '95ef2223d462a85888843a0700105ff4538f044360df25138dde638253e06fb5',
-    # Denim D3-D5 and lazy stacks merged with WS2 OP_KERNEL, 2026-11-17: no deadline reference
-    'f1d7714407d0cbd6a07f066a3b64a6ec418138848d2589b32436196014c9e226',
-    # Worker tasks capped per row (audit S9), 2026-11-18: no deadline reference
-    '08c5b11a25d63cf2ead75c4bc7438c16fc1819b5834c2e7c27395ed1fde25d11')
+    # Kernel plan phase 2: kernel/src/ipc_v2 (endpoint, reply, notification), not wired yet, 2026-11-17
+    'c620598cd6151890bb134924fcbb76dbe7ab8396503971b66f7e52b1c8251cbd',
+    # Denim D3-D5, lazy stacks and worker cap (S9) merged with master, 2026-11-18: no deadline reference
+    '67745eb66aeec02433661ec6b66625a7d69c2715d09ca526432a9da90ff20551')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -287,12 +290,12 @@ def _task_ordinals_ok(records):
 # Only this actual reviewed Shell/API/kernel cohort is admitted; future merge
 # combinations need independent review and an exact new fingerprint.
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
- 'servers/silk-shell/src/main.rs': 'wait-v1:4498ab1ca18598a6dcf3e4c8b64a0a3ce3f90ead7c3a136f125492802ee68235',
+ 'servers/silk-shell/src/main.rs': 'wait-v1:8f387c104199b88d2ea09b2248a64cde8d22b6ca7655b967b87b072e88ce687b',
  'crates/sex-pdx/src/system_stats.rs': '2f41c001a47809131a3b47adfbf3a799de5bc0da44f86098a6d7b307aadb437f',
  'crates/sex-pdx/src/crash_log.rs': '98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
  'kernel/src/cpu_account.rs': 'afd6376602c6d2f3bffcb9c35f854eba6487ddb09bd6caad8255ac1f659797d0',
- 'kernel/src/core_local.rs': '62ece205111acc3deba4a41854a9ed632ff99742a54283bce094d1295025a300',
+ 'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
  'kernel/src/app_resources.rs': '61ad468a6efb75291e43bb6efd5b580b430ec00187c62509bae73d8bf3d32f40',
  'kernel/src/service_restart.rs': '0900a46c2424b1329a3ad9ca3b1a8b282cc03cb01f8d7d8ef373d36904bac5a4',
  'kernel/src/crash_log.rs': '5c8b5bec1ca425afc7d626c0f970aa5080ccb727cfe339bbbd33048431d6581f',
@@ -411,7 +414,8 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
   # are sampled (first four, then powers of two), so either may appear.
   # Idle Display (1) and SilkBar (6) sleep 8 ticks; polled sexinput (4) and sexusb (5) sleep 1.
   # Shell (3) wakes itself for password autofill (silk-shell autofill_routes::wake):
-  # 100 ticks while a page identity is held, at most 1000 toward a transaction deadline.
+  # 100 ticks while a page identity is held, at most 1000 toward a transaction deadline;
+  # and for the tray (tray_wake), at most 1000 while a Wi-Fi answer is owed or due.
   shell=source_ok and int(p[1])==SHELL_TASK and 1<=int(p[2])<=SHELL_AUTOFILL_MAX_TICKS
   if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+input_idle+denim_waits+quil_waits+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
  for e in expiries:
