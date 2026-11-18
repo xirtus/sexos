@@ -1,0 +1,15 @@
+[package]
+name = "voice"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "voice"
+path = "src/main.rs"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-app = { path = "../../crates/sex-app" }
+sex-voice = { path = "../../crates/sex-voice" }
+sha2 = { version = "0.10.9", default-features = false }

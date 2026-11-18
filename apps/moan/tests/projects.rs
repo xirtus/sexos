@@ -8,6 +8,26 @@ use moan_core::{
     render, render_processed,
 };
 use weft::{Strings, Theme, Ui};
+#[test]
+fn generated_voice_reopens_with_pcm_and_provenance_and_undo() {
+    let mut s = Session::default();
+    let mut model = [0u8; moan::voice::MODEL_MAX];
+    model[..6].copy_from_slice(b"active");
+    let provenance = moan::voice::Provenance { job_id: 31, asset_id: 72, seed: 0,
+        content_hash: [9; 32], source_rate: 24_000, source_channels: 1,
+        model, model_len: 6 };
+    s.add_generated(vec![[101, -202]; 96], provenance.clone()).unwrap();
+    let bytes = s.encode_project().unwrap();
+    assert_eq!(u16::from_le_bytes([bytes[8], bytes[9]]), moan::project::VERSION);
+    let mut opened = Session::decode_project(&bytes).unwrap();
+    assert_eq!(opened.generated[0], Some(provenance));
+    assert_eq!(opened.tracks[0].clips[0].source_frames()[0], [101, -202]);
+    assert_eq!(opened.encode_project().unwrap(), bytes);
+    opened.add(vec![[1, 2]; 10]).unwrap();
+    assert!(opened.undo());
+    assert_eq!(opened.generated.len(), 1);
+    assert_eq!(opened.generated[0].as_ref().unwrap().job_id, 31);
+}
 fn fixture() -> Session {
     let mut s = Session::default();
     s.add((0..100).map(|i| [i * 100 - 4000, 4000 - i * 70]).collect())

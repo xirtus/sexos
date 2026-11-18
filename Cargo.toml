@@ -51,6 +51,8 @@ members = [
     "apps/cpp",
     "apps/web",
     "crates/sex-app",
+    "crates/sex-voice",
+    "apps/voice",
     "crates/sex-egui",
     "crates/weft",
     "apps/abacus",

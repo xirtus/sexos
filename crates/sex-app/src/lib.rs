@@ -1134,6 +1134,28 @@ pub mod files {
         both[from.len() + 1..from.len() + 1 + to.len()].copy_from_slice(to);
         request(window, w::RENAME, &both[..from.len() + 1 + to.len()], 0, 0).map(|_| ())
     }
+    /// Moves exactly the file inspected earlier (its [`file_id`]), never replacing the
+    /// destination: `STALE` if the source is now another file, `EXISTS` if the
+    /// destination is taken. Both paths stay inside this run's folder.
+    pub fn move_if_id(window: &mut Window, from: &[u8], to: &[u8], expected_id: u64) -> Result<(), Error> {
+        if expected_id == 0 || from.is_empty() || to.is_empty() || from.contains(&0) || to.contains(&0)
+            || from.len() + 1 + to.len() > w::PATH_BYTES { return Err(w::NAME); }
+        let mut both = [0u8; w::PATH_BYTES];
+        both[..from.len()].copy_from_slice(from);
+        both[from.len() + 1..from.len() + 1 + to.len()].copy_from_slice(to);
+        request(window, w::MOVE_IF_ID, &both[..from.len() + 1 + to.len()], expected_id, 0).map(|_| ())
+    }
+    /// The file's object identity, for [`move_if_id`]. Asks Files, never the cache.
+    pub fn file_id(window: &mut Window, path: &[u8]) -> Result<u64, Error> {
+        exchange(Some(window), w::STAT, path, 0, 0, |_| {}, |_, d| word(d, 3))
+    }
+    /// Creates a new file holding `data` and makes it durable. An existing name is
+    /// refused (`EXISTS`); an interrupted write can leave a partial new file.
+    pub fn write_new(window: &mut Window, path: &[u8], data: &[u8]) -> Result<(), Error> {
+        create(window, path)?;
+        if write_at(window, path, 0, data)? != data.len() { return Err(w::NO_SPACE); }
+        sync(window)
+    }
     /// Writes `data` at byte `offset`, growing the file if it must. Returns bytes written.
     pub fn write_at(window: &mut Window, path: &[u8], offset: u64, data: &[u8]) -> Result<usize, Error> {
         let mut done = 0;
@@ -2340,6 +2362,24 @@ pub mod net {
     /// Fetches `url` into `out` and keeps the headers, so a caller can follow redirects
     /// and read the content type.
     pub fn fetch(window: &mut Window, url: &[u8], out: &mut [u8]) -> Result<Reply, Error> {
+        exchange(window, url, b"GET", &[], None, out)
+    }
+    /// Fetches an inclusive byte range. Inspect status 206 and Content-Range.
+    pub fn fetch_range(window: &mut Window, url: &[u8], start: u64, end: u64, out: &mut [u8]) -> Result<Reply, Error> {
+        if end < start || end - start >= 32 * 1024 { return Err(Error::Address); }
+        exchange(window, url, b"GET", &[], Some((start, end)), out)
+    }
+    /// Sends a bounded binary request through this run's optional network grant.
+    pub fn post(window: &mut Window, url: &[u8], body: &[u8], out: &mut [u8]) -> Result<Reply, Error> {
+        if body.len() > 32 * 1024 { return Err(Error::Address); }
+        exchange(window, url, b"POST", body, None, out)
+    }
+    fn decimal(mut value: usize, out: &mut [u8; 20]) -> &[u8] {
+        let mut at = out.len();
+        loop { at -= 1; out[at] = b'0' + (value % 10) as u8; value /= 10; if value == 0 { break; } }
+        &out[at..]
+    }
+    fn exchange(window: &mut Window, url: &[u8], method: &[u8], body: &[u8], range: Option<(u64, u64)>, out: &mut [u8]) -> Result<Reply, Error> {
         let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) { (Some(r), _) => (r, true), (_, Some(r)) => (r, false), _ => return Err(Error::Address) };
         let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
         let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
@@ -2351,11 +2391,22 @@ pub mod net {
         };
         // HTTP/1.0, so the reply needs no chunk decoding and ends when the peer closes.
         let mut request = [0u8; 900];
-        let parts: [&[u8]; 5] = [b"GET ", path, b" HTTP/1.0\r\nHost: ", host, b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\n\r\n"];
+        let mut length_buf = [0u8; 20];
+        let body_len = decimal(body.len(), &mut length_buf);
+        let mut range_start_buf = [0u8; 20];
+        let mut range_end_buf = [0u8; 20];
+        let (range_head, range_start, range_dash, range_end, range_tail): (&[u8], &[u8], &[u8], &[u8], &[u8]) = match range {
+            Some((start, end)) => (b"Range: bytes=", decimal(start as usize, &mut range_start_buf), b"-", decimal(end as usize, &mut range_end_buf), b"\r\n"),
+            None => (b"", b"", b"", b"", b""),
+        };
+        let parts: [&[u8]; 14] = [method, b" ", path, b" HTTP/1.0\r\nHost: ", host,
+            b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\nContent-Type: application/octet-stream\r\nContent-Length: ", body_len, b"\r\n", range_head, range_start, range_dash, range_end, range_tail, b"\r\n"];
         let mut n = 0;
         for p in parts { if n + p.len() > request.len() { return Err(Error::Address); } request[n..n + p.len()].copy_from_slice(p); n += p.len(); }
         let host = core::str::from_utf8(host).map_err(|_| Error::Address)?;
-        let mut ex = Exchange::raw(window, host, port, tls, request[..n].to_vec(), false, out.len().max(1), out.len())?;
+        let mut request_bytes = request[..n].to_vec();
+        request_bytes.extend_from_slice(body);
+        let mut ex = Exchange::raw(window, host, port, tls, request_bytes, false, out.len().max(1), out.len())?;
         wait(window, &mut ex)?;
         let got = ex.raw.len().min(out.len());
         out[..got].copy_from_slice(&ex.raw[..got]);

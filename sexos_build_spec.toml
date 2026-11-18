@@ -52,6 +52,7 @@ crates = [
   "apps/moan/Cargo.toml",
   "apps/moanplug/Cargo.toml",
   "apps/jot/Cargo.toml",
+  "apps/voice/Cargo.toml",
   "apps/term/Cargo.toml",
   "apps/quil/Cargo.toml",
   "apps/files/Cargo.toml",
@@ -294,6 +295,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/fortune/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/fortune"
 dest_artifact = "iso_root/programs/fortune"
+
+# Voice: types a prompt, asks a host voice worker for a take, saves it under /data/voice.
+[[stage]]
+id = "build_voice"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/voice/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/voice"
+dest_artifact = "iso_root/programs/voice"
 
 [[stage]]
 id = "build_jot"

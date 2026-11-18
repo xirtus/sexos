@@ -17,3 +17,5 @@ serenade-core = { path = "../../crates/serenade-core" }
 weft = { path = "../../crates/weft" }
 sex-app = { path = "../../crates/sex-app", optional = true }
 sex-pdx = { path = "../../crates/sex-pdx", optional = true }
+sex-voice = { path = "../../crates/sex-voice" }
+sha2 = { version = "0.10", default-features = false }

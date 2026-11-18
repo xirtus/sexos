@@ -1,0 +1,10 @@
+[package]
+name = "sex-voice"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Bounded, platform-neutral voice job wire contract for SexOS clients and workers"
+
+[lib]
+path = "src/lib.rs"
+

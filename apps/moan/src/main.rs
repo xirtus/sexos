@@ -4,10 +4,11 @@
 #[cfg(feature = "sexos")]
 mod guest {
     extern crate alloc;
-    use alloc::{format, vec, vec::Vec};
+    use alloc::{format, string::String, vec, vec::Vec};
     use moan::{Action, Studio};
     use moan_core::{Frame, RATE};
     use sex_app::{files, sound::Sound};
+    use sex_voice::{Message as VoiceMessage, Operation as VoiceOperation, Submit as VoiceSubmit, JobState};
     use weft::{sexos::App, Response, Strings, Theme};
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -181,6 +182,125 @@ mod guest {
         studio.refresh(&mut app.ui);
         Ok(())
     }
+    struct VoiceJob { id: u64, endpoint: String, due: u64 }
+    fn voice_url(endpoint: &str, path: &str) -> Result<String, &'static str> {
+        if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") { return Err("Voice worker URL must be HTTP or HTTPS"); }
+        if endpoint.len() > 180 || endpoint.as_bytes().iter().any(|b| b.is_ascii_whitespace()) { return Err("Invalid voice worker URL"); }
+        Ok(format!("{}{}", endpoint.trim_end_matches('/'), path))
+    }
+    fn voice_request(app: &mut App, endpoint: &str, message: VoiceMessage<'_>) -> Result<VoiceMessage<'static>, &'static str> {
+        let mut request = [0u8; sex_voice::MAX_FRAME];
+        let n = sex_voice::encode(message, &mut request).map_err(|_| "Invalid voice request")?;
+        let url = voice_url(endpoint, "/v1/frame")?;
+        let mut response = [0u8; sex_voice::MAX_FRAME + 1024];
+        let reply = sex_app::net::post(&mut app.window, url.as_bytes(), &request[..n], &mut response)
+            .map_err(|_| "Voice worker unavailable; start Moan with run +net")?;
+        if reply.status != 200 { return Err("Voice worker rejected request"); }
+        let decoded = sex_voice::decode(&response[reply.body..reply.end]).map_err(|_| "Invalid voice worker response")?;
+        // Copy the only borrowed response payload before the stack buffer expires.
+        match decoded {
+            VoiceMessage::Status { job_id, data } => Ok(VoiceMessage::Status { job_id, data }),
+            _ => Err("Unexpected voice worker response"),
+        }
+    }
+    fn voice_submit(app: &mut App, studio: &Studio, id: u64) -> Result<VoiceJob, &'static str> {
+        let prompt = String::from(app.ui.text_of(studio.voice_prompt));
+        if prompt.is_empty() || prompt.len() > sex_voice::MAX_TEXT { return Err("Enter up to 3072 bytes of voice text"); }
+        let endpoint = voice_url(app.ui.text_of(studio.voice_endpoint), "")?;
+        let reply = voice_request(app, &endpoint, VoiceMessage::Submit { job_id: id,
+            data: VoiceSubmit { operation: VoiceOperation::Synthesize, seed: 0, voice_id: 0,
+                reference_asset_id: 0, max_frames: 11_520_000, language: "en", model: "active", text: &prompt } })?;
+        if !matches!(reply, VoiceMessage::Status { job_id, data } if job_id == id && data.state == JobState::Queued) { return Err("Voice worker did not queue job"); }
+        Ok(VoiceJob { id, endpoint, due: weft::sexos::now().saturating_add(500) })
+    }
+    fn content_range(value: &[u8]) -> Option<(usize, usize, usize)> {
+        let value = core::str::from_utf8(value).ok()?.strip_prefix("bytes ")?;
+        let (part, total) = value.split_once('/')?;
+        let (start, end) = part.split_once('-')?;
+        Some((start.parse().ok()?, end.parse().ok()?, total.parse().ok()?))
+    }
+    fn voice_asset(app: &mut App, url: &str, limit: usize) -> Result<Vec<u8>, &'static str> {
+        let mut wav = Vec::new();
+        let mut total = None;
+        loop {
+            let start = wav.len();
+            let end = start.saturating_add(32 * 1024 - 1).min(total.unwrap_or(limit).saturating_sub(1));
+            let mut chunk = [0u8; 32 * 1024 + 1024];
+            let reply = sex_app::net::fetch_range(&mut app.window, url.as_bytes(), start as u64, end as u64, &mut chunk)
+                .map_err(|_| "Could not fetch voice output; use Retry Voice")?;
+            if reply.status != 206 { return Err("Voice worker did not return a byte range"); }
+            let (from, to, full) = reply.header(&chunk, b"Content-Range").and_then(content_range)
+                .ok_or("Voice output missing Content-Range")?;
+            let body = &chunk[reply.body..reply.end];
+            if from != start || to < from || to > end || body.len() != to - from + 1
+                || full == 0 || full > limit || total.is_some_and(|n| n != full) {
+                return Err("Voice output range is inconsistent");
+            }
+            wav.try_reserve(body.len()).map_err(|_| "Not enough memory for voice output")?;
+            wav.extend_from_slice(body);
+            total = Some(full);
+            if wav.len() == full { return Ok(wav); }
+            if wav.len() > full { return Err("Voice output exceeded declared length"); }
+        }
+    }
+    fn voice_snapshot(app: &mut App, studio: &Studio, job_id: u64) -> Result<String, &'static str> {
+        let bytes = studio.session.encode_project().map_err(|_| "Could not encode recovery project")?;
+        if bytes.len() > 16 * 1024 * 1024 { return Err("Recovery project exceeds 16 MiB; use Save Project"); }
+        let name = format!("voice-{}.moan", job_id);
+        let path = format!("/data/moan/{}", name);
+        files::create(&mut app.window, name.as_bytes()).map_err(|_| "Recovery project name exists or storage unavailable")?;
+        for (index, chunk) in bytes.chunks(32 * 1024).enumerate() {
+            let offset = index as u64 * 32 * 1024;
+            let n = files::write_at(&mut app.window, name.as_bytes(), offset, chunk)
+                .map_err(|_| "Recovery project write failed")?;
+            if n != chunk.len() { return Err("Recovery project write was short"); }
+        }
+        files::sync(&mut app.window).map_err(|_| "Recovery project sync failed")?;
+        sex_pdx::serial_record!("[moan.voice.snapshot] job={} path={} bytes={} synced=1", job_id, path, bytes.len());
+        Ok(path)
+    }
+    fn voice_poll(app: &mut App, studio: &mut Studio, job: &VoiceJob) -> Result<bool, &'static str> {
+        let mut request = [0u8; sex_voice::MAX_FRAME];
+        let n = sex_voice::encode(VoiceMessage::GetStatus { job_id: job.id }, &mut request).map_err(|_| "Invalid voice status request")?;
+        let url = voice_url(&job.endpoint, "/v1/frame")?;
+        let mut response = [0u8; sex_voice::MAX_FRAME + 1024];
+        let reply = sex_app::net::post(&mut app.window, url.as_bytes(), &request[..n], &mut response)
+            .map_err(|_| "Voice worker unavailable; use Retry Voice")?;
+        if reply.status != 200 { return Err("Voice worker rejected status request"); }
+        match sex_voice::decode(&response[reply.body..reply.end]).map_err(|_| "Invalid voice status response")? {
+            VoiceMessage::Status { job_id, data } if job_id == job.id => match data.state {
+                JobState::Queued | JobState::Running => {
+                    studio.message(&mut app.ui, &format!("Voice generating: {}% · Cancel Voice to stop", data.progress_bps / 100));
+                    Ok(false)
+                }
+                JobState::Cancelled => Err("Voice job cancelled; Retry Voice to resubmit"),
+                JobState::Failed => Err("Voice generation failed; Retry Voice to resubmit"),
+                JobState::Complete => Err("Voice worker omitted output metadata"),
+            },
+            VoiceMessage::Result { job_id, data } if job_id == job.id => {
+                if data.frames > 11_520_000 || data.channels > 2 { return Err("Voice output exceeds Moan import limit"); }
+                let size = (data.frames as usize).checked_mul(data.channels as usize).and_then(|n| n.checked_mul(2))
+                    .and_then(|n| n.checked_add(65_536)).filter(|n| *n <= 24 * 1024 * 1024)
+                    .ok_or("Voice output exceeds 24 MiB import limit")?;
+                let url = voice_url(&job.endpoint, &format!("/v1/assets/{}", data.asset_id))?;
+                let wav = voice_asset(app, &url, size)?;
+                let (pcm, provenance) = moan::voice::import_result(job.id, &data, &wav)?;
+                studio.session.add_generated(pcm, provenance)?;
+                studio.refresh(&mut app.ui);
+                match voice_snapshot(app, studio, job.id) {
+                    Ok(path) => studio.message(&mut app.ui, &format!("Generated voice added; recovery project: {}", path)),
+                    Err(error) => {
+                        sex_pdx::serial_record!("[moan.voice.snapshot.failed] job={} reason={}", job.id, error);
+                        studio.message(&mut app.ui, &format!("Generated voice added; {}", error));
+                    },
+                }
+                sex_pdx::serial_record!("[moan.voice.imported] job={} asset={} tracks={} frames={} model={}",
+                    job.id, data.asset_id, studio.session.tracks.len(), data.frames, data.model);
+                Ok(true)
+            }
+            _ => Err("Unexpected voice worker response"),
+        }
+    }
     fn choose_plugin_path(app: &mut App, folder: bool) -> Result<Vec<u8>, &'static str> {
         let mut buffer = [0u8; sex_pdx::fs::PATH_BYTES];
         let picked = files::pick(
@@ -235,12 +355,22 @@ mod guest {
         let mut master_meter = serenade_core::LevelMeter::new(2, RATE, 800, 18.0);
         let mut meter_due = 0u64;
         let mut status_due = 0u64;
+        let mut voice_job: Option<VoiceJob> = None;
+        let mut voice_serial = weft::sexos::now().max(1);
         let mut prefill = false;
         // Twice the maximum queued ring: rendering a new batch cannot overwrite
         // any not-yet-metered consumed batch. All storage predates playback.
         let mut history =
             moan::meter_history::History::new(sex_pdx::sound_ring::FRAMES as usize * 2);
         loop {
+            if voice_job.as_ref().is_some_and(|job| weft::sexos::now() >= job.due) {
+                let result = voice_poll(&mut app, &mut studio, voice_job.as_ref().unwrap());
+                match result {
+                    Ok(true) => voice_job = None,
+                    Ok(false) => voice_job.as_mut().unwrap().due = weft::sexos::now().saturating_add(500),
+                    Err(error) => { voice_job = None; studio.message(&mut app.ui, error); }
+                }
+            }
             if plugin.poll(weft::sexos::now()) {
                 sex_pdx::serial_record!(
                     "[moan.plugin.state] status={:?} retired={}",
@@ -291,13 +421,13 @@ mod guest {
             );
             // Poll the existing window with a short bound while sound is active;
             // toolkit App::next can wait indefinitely when there are no UI timers.
-            let responses = if playing || recording.is_some() || plugin.busy() {
+            let responses = if playing || recording.is_some() || plugin.busy() || voice_job.is_some() {
                 app.present();
                 app.ui.tick(weft::sexos::now());
                 let mut out = Vec::new();
                 if let Some(e) =
                     app.window
-                        .next_within(if plugin.busy() && !playing && recording.is_none() {
+                        .next_within(if (plugin.busy() || voice_job.is_some()) && !playing && recording.is_none() {
                             20
                         } else {
                             4
@@ -341,6 +471,29 @@ mod guest {
                 match outcome {
                     Err(e) => studio.message(&mut app.ui, e),
                     Ok(action) => match action {
+                        Some(Action::GenerateVoice) | Some(Action::RetryVoice) => {
+                            if voice_job.is_some() || playing || paused || recording.is_some() || plugin.busy() {
+                                studio.message(&mut app.ui, "Finish current transport or voice job first");
+                                continue;
+                            }
+                            voice_serial = voice_serial.wrapping_add(1).max(1);
+                            match voice_submit(&mut app, &studio, voice_serial) {
+                                Ok(job) => {
+                                    sex_pdx::serial_record!("[moan.voice.queued] job={} endpoint={}", job.id, job.endpoint);
+                                    voice_job = Some(job); studio.message(&mut app.ui, "Voice queued; Cancel Voice to stop");
+                                },
+                                Err(error) => studio.message(&mut app.ui, error),
+                            }
+                        }
+                        Some(Action::CancelVoice) => {
+                            if let Some(job) = voice_job.take() {
+                                match voice_request(&mut app, &job.endpoint, VoiceMessage::Cancel { job_id: job.id }) {
+                                    Ok(VoiceMessage::Status { job_id, data }) if job_id == job.id && data.state == JobState::Cancelled =>
+                                        { sex_pdx::serial_record!("[moan.voice.cancelled] job={}", job.id); studio.message(&mut app.ui, "Voice cancelled; Retry Voice to resubmit"); },
+                                    _ => studio.message(&mut app.ui, "Voice cancel not confirmed; retry or check worker"),
+                                }
+                            }
+                        }
                         Some(Action::ChoosePlugin) | Some(Action::ChooseRenderFolder) => {
                             if playing || paused || recording.is_some() || plugin.busy() {
                                 studio.message(
@@ -600,6 +753,10 @@ mod guest {
                             );
                         }
                         Some(Action::OpenProject) | Some(Action::SaveProject) => {
+                            if voice_job.is_some() && action == Some(Action::OpenProject) {
+                                studio.message(&mut app.ui, "Cancel or finish voice generation before opening a project");
+                                continue;
+                            }
                             if playing || paused || recording.is_some() || plugin.busy() {
                                 studio.message(
                                     &mut app.ui,
@@ -621,6 +778,10 @@ mod guest {
                             );
                         }
                         Some(Action::NewProject) => {
+                            if voice_job.is_some() {
+                                studio.message(&mut app.ui, "Cancel or finish voice generation before a new project");
+                                continue;
+                            }
                             if plugin.busy() {
                                 studio.message(
                                     &mut app.ui,
@@ -633,6 +794,9 @@ mod guest {
                             sex_pdx::serial_record!("[moan.project.new] tracks=0 clean=1");
                         }
                         Some(Action::Quit) => {
+                            if let Some(job) = voice_job.take() {
+                                let _ = voice_request(&mut app, &job.endpoint, VoiceMessage::Cancel { job_id: job.id });
+                            }
                             if plugin.busy() && !plugin.retired() {
                                 plugin.cancel();
                                 pending_plugin_close = true;
