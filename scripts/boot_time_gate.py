@@ -13,6 +13,8 @@ MILESTONES=[
  ('kernel_entry',r'\[boot\.kernel_entry\] tsc='),
  ('shell_ready',r'\[silk-shell\.ready\]'),
  ('drive_storage_up',r'\[sexdrive\.boot\.storage\]'),
+ ('drive_probed',r'\[sexdrive\.boot\.probed\]'),
+ ('drive_frame',r'\[sexdrive\.boot\.frame\]'),
  ('drive_serving',r'\[sexdrive\.boot\.serving\]'),
  ('files_ready',r'\[sexfiles\.ready\]'),
  ('boot_program_done',r'\[app\.private\.retired\] target=41 '),

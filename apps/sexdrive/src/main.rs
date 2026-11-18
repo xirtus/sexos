@@ -3699,11 +3699,9 @@ pub extern "C" fn _start() -> ! {
     // Boot timing (#309, scripts/boot_time_gate.py): disk up and self-tested.
     sex_pdx::serial_record!("[sexdrive.boot.storage] nvme={} ahci={}", unsafe { NVME_IO_STATE.ready } as u8, ahci::ready() as u8);
     xhci_probe_mmio();
-
-    // Wait for display/shell to be ready
-    for _ in 0..10_000_000 {
-        core::hint::spin_loop();
-    }
+    // No spin "for the shell" here (#309): the bind below is a call, so it already
+    // waits for the shell, and Files waits on this service.
+    sex_pdx::serial_record!("[sexdrive.boot.probed]");
 
     // The paired frame is assigned by BOOT_DAG; no allocation or peer choice.
     let shared_addr = match sex_pdx::memory_region_view(SLOT_FRAME_REGION, 0, 1024 * 768 * 4, QUERY_VIEW | WRITE) {
@@ -3715,6 +3713,7 @@ pub extern "C" fn _start() -> ! {
     };
 
     fill_initial_frame(shared_addr);
+    sex_pdx::serial_record!("[sexdrive.boot.frame]");
 
     // Zero-copy handoff: Notify AUTHORITY (Silk-Shell) about shared buffer
     unsafe {
