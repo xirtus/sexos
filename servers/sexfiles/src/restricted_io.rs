@@ -733,6 +733,15 @@ pub fn pending() -> bool {
         }
 }
 pub fn poll() {
+    // Nothing held: no clock or epoch to read (they are syscalls, on every request).
+    let held = unsafe {
+        (*core::ptr::addr_of!(CONTROL)).is_some()
+            || (*core::ptr::addr_of!(CHILD)).iter().any(Option::is_some)
+            || (*core::ptr::addr_of!(REPLIES)).iter().any(Option::is_some)
+    };
+    if !held && !Turn::enter().jobs().pending() {
+        return;
+    }
     poll_control();
     poll_children();
     let Some(own_epoch) = epoch() else { return };

@@ -794,7 +794,8 @@ action = "cargo_manifest"
 target = "x86_64-sex-std.json"
 build_std = "std,panic_abort"
 manifest = "apps/polyamour/Cargo.toml"
-source_artifact = "target/x86_64-sex-std/release/polyamour"
+profile = "lean-fast"
+source_artifact = "target/x86_64-sex-std/lean-fast/polyamour"
 dest_artifact = "iso_root/programs/polyamour"
 
 # Spreadeagle: the spreadsheet, GridCraft's engine (formulas, xlsx) under a native grid.
@@ -804,7 +805,8 @@ action = "cargo_manifest"
 target = "x86_64-sex-std.json"
 build_std = "std,panic_abort"
 manifest = "apps/spreadeagle/Cargo.toml"
-source_artifact = "target/x86_64-sex-std/release/spreadeagle"
+profile = "lean"
+source_artifact = "target/x86_64-sex-std/lean/spreadeagle"
 dest_artifact = "iso_root/programs/spreadeagle"
 
 # Assuit: the word processor, WordCraft's engine (docx, Word layout, undo) drawing its pages.
@@ -814,7 +816,8 @@ action = "cargo_manifest"
 target = "x86_64-sex-std.json"
 build_std = "std,panic_abort"
 manifest = "apps/assuit/Cargo.toml"
-source_artifact = "target/x86_64-sex-std/release/assuit"
+profile = "lean"
+source_artifact = "target/x86_64-sex-std/lean/assuit"
 dest_artifact = "iso_root/programs/assuit"
 
 [[stage]]
