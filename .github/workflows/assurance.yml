@@ -2,12 +2,15 @@ name: Kernel models and nightly fuzzing
 
 # Kernel plan phase 7 (assurance). Host-only models of kernel structures in
 # fuzz/models (tests/model_*.rs run against the real kernel sources):
-#   models  proptest model-based tests (reply credits, run queue, IPC ring)
-#   loom    every interleaving of the lock-free run queue and IPC ring
+#   models  proptest model-based tests (reply credits, run queue, IPC ring, authority
+#           v2 capability table, IPC v2 endpoint/notification/reply, key-instruction scan)
+#   loom    every interleaving of the lock-free run queue, IPC ring, IPC v2 endpoint and
+#           notification, and the capability table's seqlock slots
 #   kani    bounded proofs of the same structures
 #   isolation  cross-domain matrix on the booted image per backend (KVM+PKU when the
 #           runner has it, TCG+PKU, TCG without PKU): reads/writes/exec of another
-#           program's pages, a dead incarnation's pages, and a WRPKRU program refused
+#           program's pages, a dead incarnation's pages, another program's or a dead
+#           incarnation's capability slots, a revoked grant, and a WRPKRU program refused
 # On pull requests and master pushes that touch a modelled file these run small;
 # nightly (03:15 UTC) they run deep, and a seeded syscall + protocol fuzz run of
 # the booted image (scripts/syscall_fuzz_gate.py) runs for hours. Seeds come from
@@ -17,6 +20,9 @@ name: Kernel models and nightly fuzzing
   pull_request:
     paths:
       - 'kernel/src/ipc/reply_credit.rs'
+      - 'kernel/src/capability_table.rs'
+      - 'kernel/src/ipc_v2/**'
+      - 'crates/sex-pdx/src/program_code.rs'
       - 'kernel/src/scheduler_queue.rs'
       - 'kernel/src/scheduler_queue_tests.rs'
       - 'kernel/src/ipc_ring.rs'
@@ -29,6 +35,9 @@ name: Kernel models and nightly fuzzing
     branches: [master]
     paths:
       - 'kernel/src/ipc/reply_credit.rs'
+      - 'kernel/src/capability_table.rs'
+      - 'kernel/src/ipc_v2/**'
+      - 'crates/sex-pdx/src/program_code.rs'
       - 'kernel/src/scheduler_queue.rs'
       - 'kernel/src/ipc_ring.rs'
       - 'tests/model_*.rs'
@@ -89,7 +98,7 @@ jobs:
         cargo test --locked --release
 
   loom:
-    name: Lock-free queues (loom)
+    name: Lock-free structures (loom)
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -113,7 +122,7 @@ jobs:
       run: |
         # Nightly: unbounded preemptions (every interleaving); PRs: bound 3.
         if [ "$DEEP" != true ]; then export LOOM_MAX_PREEMPTIONS=3; fi
-        cargo test --locked --release --test model_loom_queues
+        cargo test --locked --release --test model_loom_queues --test model_loom_v2
 
   kani:
     name: Bounded proofs (Kani)
@@ -126,7 +135,7 @@ jobs:
     - uses: model-checking/kani-github-action@v1
       with:
         working-directory: fuzz/models
-        args: ${{ env.DEEP == 'true' && '--output-format terse' || '--output-format terse --harness run_queue_is_a_bounded_fifo --harness ipc_ring_is_a_bounded_fifo --harness reply_needs_an_invocation' }}
+        args: ${{ env.DEEP == 'true' && '--output-format terse' || '--output-format terse --harness run_queue_is_a_bounded_fifo --harness ipc_ring_is_a_bounded_fifo --harness reply_needs_an_invocation --harness derive_only_narrows --harness next_generation_moves_and_skips_zero' }}
 
   isolation:
     name: Cross-domain isolation matrix

@@ -110,3 +110,56 @@ fn ipc_ring_is_a_bounded_fifo() {
         assert_eq!(ring.len(), len);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Authority v2 (kernel/src/capability_table.rs) and the key-instruction scanner
+// (crates/sex-pdx/src/program_code.rs).
+
+use crate::capability_table::{next_generation, rights, ObjectCap};
+
+/// Deriving never widens rights, never changes the object or generation (so never
+/// revives or retargets), needs GRANT, and never changes a set badge.
+#[kani::proof]
+fn derive_only_narrows() {
+    let parent = ObjectCap { object: kani::any(), generation: kani::any(), rights: kani::any(), badge: kani::any() };
+    let (wanted, badge): (u32, u64) = (kani::any(), kani::any());
+    match parent.derive(wanted, badge) {
+        Ok(child) => {
+            assert!(parent.rights & rights::GRANT != 0);
+            assert!(child.rights == wanted && child.rights & !parent.rights == 0);
+            assert!(child.object == parent.object && child.generation == parent.generation);
+            assert!(parent.badge == 0 || child.badge == parent.badge);
+            assert!(child.badge == badge);
+        }
+        Err(_) => assert!(parent.rights & rights::GRANT == 0 || wanted & !parent.rights != 0 || (parent.badge != 0 && badge != parent.badge)),
+    }
+}
+
+/// A generation always moves and is never 0, so a zeroed capability is never live.
+#[kani::proof]
+fn next_generation_moves_and_skips_zero() {
+    let g: u32 = kani::any();
+    let n = next_generation(g);
+    assert!(n != 0 && n != g);
+}
+
+/// For every 10-byte code (a whole 8-byte word plus an edge) and every split into two
+/// pieces, the piecewise scan finds the same first refused instruction as a
+/// byte-by-byte search (the word skip and the carried history lose nothing at an edge).
+#[kani::proof]
+#[kani::unwind(12)]
+fn key_scan_split_matches_bytewise() {
+    use crate::program_code::{refused, Scan};
+    let code: [u8; 10] = kani::any();
+    let cut: usize = kani::any();
+    kani::assume(cut <= 10);
+    let mut want = None;
+    let mut i = 0;
+    while i + 2 < 10 {
+        if want.is_none() && code[i] == 0x0F && refused(code[i + 1], code[i + 2]) { want = Some(i as i64); }
+        i += 1;
+    }
+    let mut scan = Scan::new();
+    let got = match scan.feed(&code[..cut], false) { Some(at) => Some(at), None => scan.feed(&code[cut..], false) };
+    assert!(got == want);
+}

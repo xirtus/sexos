@@ -190,6 +190,12 @@ fn isolation(mut window: Window, op: Option<&[u8]>, addr: Option<&[u8]>) -> ! {
             unsafe { core::ptr::write_volatile(data as *mut u8, 0x5A); }
             sex_pdx::serial_record!("[fuzz.iso.hold] target={} task={} code={:#x} data={:#x} stack={:#x}",
                 window.target, window.task, iso_target_code as *const () as usize, data, stack_slot.as_ptr() as u64);
+            // An endpoint of B's own, and a badged CALL copy of it: another program
+            // naming these slots, or a later program in B's row, must hold nothing.
+            let root = sex_pdx::endpoint::create_endpoint();
+            let copy = root.and_then(|slot| derive(slot, ISO_RIGHT_CALL | ISO_RIGHT_GRANT, 0xB0B));
+            sex_pdx::serial_record!("[fuzz.iso.cap.hold] target={} task={} endpoint={} copy={}",
+                window.target, window.task, slot_or_status(root), slot_or_status(copy));
             window.show(b"Isolation probe: holding. F11 closes.");
             loop {
                 if let Event::Close = window.next() {
@@ -206,6 +212,40 @@ fn isolation(mut window: Window, op: Option<&[u8]>, addr: Option<&[u8]>) -> ! {
             let back = unsafe { core::ptr::read_volatile(data as *const u8) };
             iso_target_code();
             sex_pdx::serial_record!("[fuzz.iso.own] target={} task={} ok={}", window.target, window.task, (back == 0x33) as u8);
+        }
+        // Use a capability slot this program never received: derive from it (never
+        // blocks). Anything but a refusal means another program's authority reached us.
+        (Some(b"cap"), Some(slot)) => {
+            let got = derive(slot as u32, ISO_RIGHT_CALL, 0);
+            sex_pdx::serial_record!("[fuzz.iso.cap.try] target={} task={} slot={} status={:#x}",
+                window.target, window.task, slot, got.err().unwrap_or(0));
+            if let Ok(new) = got {
+                sex_pdx::serial_record!("[fuzz.iso.breach] target={} task={} op=cap slot={} new={}", window.target, window.task, slot, new);
+            }
+        }
+        // A copy outlives its root's destruction only as a dead capability: deriving
+        // from it and sending on it must both be refused.
+        (Some(b"revoke"), _) => {
+            let root = sex_pdx::endpoint::create_endpoint();
+            let copy = root.and_then(|slot| derive(slot, ISO_RIGHT_CALL | ISO_RIGHT_GRANT, 0));
+            let destroyed = match root {
+                Ok(slot) => sex_pdx::endpoint::endpoint(sex_pdx::endpoint::OP_DESTROY, slot, [0; 4]).err().unwrap_or(0),
+                Err(e) => e,
+            };
+            let (after_derive, after_send) = match (copy, destroyed) {
+                (Ok(c), 0) => {
+                    let d = derive(c, ISO_RIGHT_CALL, 0).err().unwrap_or(0);
+                    let info = sex_pdx::endpoint::MessageInfo::new(0, 0, 0).map(|i| i.raw()).unwrap_or(0);
+                    let s = sex_pdx::endpoint::endpoint(sex_pdx::endpoint::OP_SEND, c, [info, 0, 0, 0]).err().unwrap_or(0);
+                    (d, s)
+                }
+                _ => (u64::MAX, u64::MAX),
+            };
+            sex_pdx::serial_record!("[fuzz.iso.revoke] target={} task={} root={} copy={} destroy={:#x} derive={:#x} send={:#x}",
+                window.target, window.task, slot_or_status(root), slot_or_status(copy), destroyed, after_derive, after_send);
+            if after_derive == 0 || after_send == 0 {
+                sex_pdx::serial_record!("[fuzz.iso.breach] target={} task={} op=revoke", window.target, window.task);
+            }
         }
         (Some(op @ (b"read" | b"write" | b"exec")), Some(addr)) => {
             let name = core::str::from_utf8(op).unwrap_or("?");
@@ -228,6 +268,19 @@ fn isolation(mut window: Window, op: Option<&[u8]>, addr: Option<&[u8]>) -> ! {
 }
 
 static mut ISO_DATA: [u8; 4096] = [0; 4096];
+
+// Rights bits of an object capability (kernel/src/capability_table.rs `rights`).
+const ISO_RIGHT_GRANT: u64 = 1 << 2;
+const ISO_RIGHT_CALL: u64 = 1 << 3;
+
+/// OP_DERIVE: a copy of `slot` in this program's own table with `rights` and `badge`.
+fn derive(slot: u32, rights: u64, badge: u64) -> Result<u32, u64> {
+    sex_pdx::endpoint::endpoint(sex_pdx::endpoint::OP_DERIVE, slot, [0, rights, badge, 0]).map(|r| r.words[0] as u32)
+}
+
+fn slot_or_status(r: Result<u32, u64>) -> u64 {
+    match r { Ok(slot) => slot as u64, Err(e) => e }
+}
 
 /// Code another run may try to execute: it only returns.
 #[inline(never)]

@@ -39,5 +39,21 @@ path = "../../tests/model_ipc_ring.rs"
 name = "model_loom_queues"
 path = "../../tests/model_loom_queues.rs"
 
+[[test]]
+name = "model_capability_table"
+path = "../../tests/model_capability_table.rs"
+
+[[test]]
+name = "model_ipc_v2"
+path = "../../tests/model_ipc_v2.rs"
+
+[[test]]
+name = "model_program_code"
+path = "../../tests/model_program_code.rs"
+
+[[test]]
+name = "model_loom_v2"
+path = "../../tests/model_loom_v2.rs"
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(kani)"] }
