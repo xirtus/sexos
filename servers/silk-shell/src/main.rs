@@ -11143,12 +11143,13 @@ static mut TRAY_WIFI_RETRY: u64 = 0;
 /// Wi-Fi answers lost in a row; after three the next 30 s look asks again.
 static mut TRAY_WIFI_LOST: u8 = 0;
 /// How long the idle Shell may sleep while a tray answer is owed or a Wi-Fi look is
-/// due: nothing else may wake it, and a lost answer is only noticed by `tray_tick`.
+/// due, or while program tray items or cards are up: nothing else may wake it, a lost
+/// answer is only noticed by `tray_tick`, and an ended program's item by its poll.
 pub unsafe fn tray_wake() -> Option<u64> {
     let now = sex_pdx::get_ticks();
     if let Some(t) = TRAY_WIFI_ASKED { return Some((t + 5_000).saturating_sub(now).clamp(1, 1_000)); }
     if TRAY_WIFI_DUE { return Some(TRAY_WIFI_RETRY.saturating_sub(now).clamp(1, 1_000)); }
-    None
+    tray_items_glue::wake()
 }
 /// A volume or mute click made while another answer was owed to Shell: sent once that
 /// answer is in. The kernel keeps one unread reply per domain, so a second answer
