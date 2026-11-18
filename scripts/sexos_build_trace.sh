@@ -101,6 +101,8 @@ run_stage() {
       stage_target="$(rg -n '^target\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       # Ordinary programs (x86_64-sex-std.json) build the whole standard library.
       stage_std="$(rg -n '^build_std\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+      # A stage may name its own Cargo profile ("lean": big programs, Cargo.toml); release otherwise.
+      stage_profile="$(rg -n '^profile\s*=\s*"[a-z-]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       is_allowed_crate "$manifest" || { echo "[FAIL] manifest not in whitelist: $manifest"; exit 1; }
       python3 scripts/build_input_receipt.py begin "$stage"
       # Their std is the toolchain's with SexOS's std::process added (scripts/sex_std_source.py).
@@ -115,6 +117,7 @@ run_stage() {
         -Z build-std-features=compiler-builtins-mem \
         --manifest-path "$manifest" \
         --target "${stage_target:-$TARGET}" \
+<<<<<<< HEAD
         --release
       # Programs and BOOT services alike: the loaders refuse code holding WRPKRU/XRSTOR
       # bytes at any offset. A displacement that holds them by chance moves when the
@@ -122,6 +125,15 @@ run_stage() {
       # in build.rs, services get the same shuffle as link arguments.
       local seed=0 shuffle=""
       while ! python3 scripts/key_bytes.py "$src"; do
+=======
+        --profile "${stage_profile:-release}"
+      # Programs: the loader refuses code holding WRPKRU/XRSTOR bytes at any offset.
+      # A displacement that holds them by chance moves when the program links with its
+      # read-only data in another order (programs that read SEX_LAYOUT_SEED).
+      if [[ ${stage_target:-$TARGET} == x86_64-sex-app.json || ${stage_target:-$TARGET} == x86_64-sex-std.json ]]; then
+        local seed=0
+        while ! python3 scripts/key_bytes.py "$src"; do
+>>>>>>> origin/master
           seed=$((seed + 1))
           [[ $seed -le 24 ]] || { echo "[FAIL] $src holds a refused instruction at every layout tried"; exit 1; }
           echo "[layout] $src: linking again with SEX_LAYOUT_SEED=$seed"
@@ -133,8 +145,14 @@ run_stage() {
             -Z build-std-features=compiler-builtins-mem \
             --manifest-path "$manifest" \
             --target "${stage_target:-$TARGET}" \
+<<<<<<< HEAD
             --release
       done
+=======
+            --profile "${stage_profile:-release}"
+        done
+      fi
+>>>>>>> origin/master
       cp "$src" "$dst"
       python3 scripts/build_input_receipt.py finish "$stage"
       ;;

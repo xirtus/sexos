@@ -99,6 +99,8 @@ class ConsumedInputs(unittest.TestCase):
         scripts = self.root / 'scripts'; scripts.mkdir()
         for name in ('sexos_build_trace.sh', 'build_input_receipt.py'):
             shutil.copyfile(ROOT / 'scripts' / name, scripts / name)
+        # The trace scans every built module for key instructions; the fixture is not ELF.
+        (scripts / 'key_bytes.py').write_text('import sys\nsys.exit(0)\n')
         binaries = self.root / 'bin'; binaries.mkdir()
         cargo = binaries / 'cargo'
         cargo.write_text('#!/usr/bin/env python3\nfrom pathlib import Path\n'

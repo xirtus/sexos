@@ -19,6 +19,8 @@ class BuildStageFlags(unittest.TestCase):
             (root / 'out').mkdir()
             shutil.copy(ROOT / 'scripts/sexos_build_trace.sh', root / 'scripts/trace.sh')
             shutil.copy(ROOT / 'scripts/build_input_receipt.py', root / 'scripts/build_input_receipt.py')
+            # The trace scans every built module for key instructions; the fixture is not ELF.
+            (root / 'scripts/key_bytes.py').write_text('import sys\nsys.exit(0)\n')
             (root / 'artifact').write_bytes(b'fixture')
             cargo = root / 'bin/cargo'
             cargo.write_text('#!/usr/bin/env python3\nimport os,json\n'
