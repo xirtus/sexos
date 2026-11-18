@@ -57,6 +57,9 @@ CPU, against 192 for `getppid`. That includes four checked `WRPKRU`, the frame
 bookkeeping, two `VZEROALL`, the register scrub and a 16-entry RSB fill. The obvious
 next cuts are scrubbing only the vector registers the callee policy needs, and a shorter
 RSB fill on parts with eIBRS. Both are measured before the ≤150-cycle KVM gate in P6.3.
+A release build of the same test measures 162 ticks, or 152 with a one-entry RSB fill.
+Dropping `VZEROALL` makes the scrub test fail (the callee sees the caller's `xmm7`), so
+the vector scrub stays.
 
 **Reading.** A `WRPKRU` pair costs about the same as one serialising write; the check after
 each write is free. The gate model costs about a quarter of a bare Linux system call.
