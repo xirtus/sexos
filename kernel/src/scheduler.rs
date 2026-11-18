@@ -932,6 +932,9 @@ pub extern "C" fn idle_core() -> ! {
 /// IRQs are enabled only around HLT; every state/selection check runs with IF=0.
 pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskContext {
     let mut polled = false;
+    // Looks again after a re-check found work, at most this many times in a row: work
+    // that tick never takes cannot spin this core with interrupts off for good.
+    let mut rechecks = 0u32;
     // While this core looks for work it will see a wake without an interrupt: wakers
     // skip the IPI (`kick`). Cleared, and everything looked at again, before a halt.
     let polling = &POLLING[sched.core_id as usize];
@@ -974,7 +977,8 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
         // clearing the flag, or the halt could sleep through it.
         polling.store(false, Ordering::SeqCst);
         core::sync::atomic::fence(Ordering::SeqCst);
-        if (!current.is_null() && (*current).state.snapshot().pending) || sched.has_queued() { continue; }
+        if rechecks < 64 && ((!current.is_null() && (*current).state.snapshot().pending) || sched.has_queued()) { rechecks += 1; continue; }
+        rechecks = 0;
         // Timer interrupts deliberately do not schedule kernel frames. They
         // return here, where pending wakes and retained admissions are retried.
         crate::hal::acpi::idle();
