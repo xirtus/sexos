@@ -3,7 +3,7 @@
   "subsystem": "architecture",
   "constitution": {
     "path": "ARCHITECTURE.md",
-    "sha256": "7f99eefb1afb48ba73ed6079ac080e2a5aeea693a8ba364a19927c1b3e741679"
+    "sha256": "2edfa67517bc5df6cb698348ea4a4f5c1de99f67ae11e69813c7a762f1a8ea5f"
   },
   "state_model": {
     "equation": "S[n+1] = T(S[n], I[n], C)",
@@ -727,7 +727,7 @@
     },
     {
       "id": "DETERMINISTIC_REPLAY",
-      "requirement": "Replay from epoch zero with the same input stream and capability graph yields identical complete observable state.",
+      "requirement": "Replay of a UiIR stream with the same input and capability graph yields the same Display scene; full-system replay is a goal for a ring-3 recorder, not a kernel invariant (ARCHITECTURE.md 2026-11-18, D4).",
       "status": "open",
       "sources": [
         {
@@ -743,7 +743,7 @@
     },
     {
       "id": "EPOCH_COMMIT",
-      "requirement": "Observable transitions follow snapshot -> transform -> swap -> commit at explicit epoch boundaries.",
+      "requirement": "Display scene publication follows snapshot -> transform -> swap -> commit at explicit epoch boundaries.",
       "status": "open",
       "sources": [
         {
@@ -789,7 +789,7 @@
     },
     {
       "id": "USERLAND_MEMORY_AUTHORITY",
-      "requirement": "The kernel traps/forwards/resumes; sext owns fault-resolution frame allocation and GLOBAL_VAS mappings.",
+      "requirement": "The kernel traps, checks and forwards user faults and performs capability-checked page-table writes; sext owns fault-resolution frame choice and zeroing.",
       "status": "partial",
       "sources": [
         {
@@ -821,7 +821,7 @@
     },
     {
       "id": "CAUSAL_DOMAIN_ORDER",
-      "requirement": "Cross-domain streams preserve explicit deterministic ordering with no hidden hardware input.",
+      "requirement": "UiIR streams preserve contiguous per-sender sequences and non-decreasing epochs with no hidden hardware input.",
       "status": "partial",
       "sources": [
         {
