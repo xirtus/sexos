@@ -90,10 +90,38 @@ What this settles and what it does not:
 - 3 cores PKU (everything on core 2 together with Spindle) passed 3/3 at 92-95 ms,
   so sharing a core with spinners is not enough on its own to cause the tail.
 
-Next step for Phase 4, once WS4 frees `smp.rs`/`scheduler.rs`: add a per-key trace
-(Spindle wake to run on core 2, Display commit on core 0), run it on the Phase 0 KVM
-lane to remove TCG noise, and test Spindle (and other terminal-facing apps) as
-interactive class on wake, or keeping it off cores that host program rows.
+## Tried and measured: Spindle as interactive class, sleeping instead of yield-polling
+
+Tested on CI run 44399533878 (same runner pool, both variants in one run). Two changes
+were tested together against master. First, `class_of` treated every Spindle incarnation as interactive. Second,
+Spindle's idle loop slept with `sys_wait_self_ticks(1)` instead of `sys_yield` while
+a command was pending.
+
+KVM `program_bench_gate.py` (cycles, no PKU; 3 runs at 4 cores, 1 run at 1 core):
+
+| | ipc_roundtrip 4 cores | ipc_roundtrip 1 core | yield 1 core |
+|---|---|---|---|
+| master | 105k, 122k, 98k | 12.0k | 5.9k |
+| changed | 151k, 169k, 161k | 23.5k | 50.3k |
+
+Latency gate, 4 cores TCG, no PKU, loaded p99 (bound 400 ms):
+
+| | 4 busy | 2 busy |
+|---|---|---|
+| master | 102, 91 ms (pass) | 866, 535 ms (fail) |
+| changed | 87, 92 ms (pass) | 506, 549 ms (fail) |
+
+The change halved the interactive class's average wake cost (about 160k to 85k
+cycles). It did **not** fix the 2-busy tail and made IPC and 1-core yield slower:
+a sleeping Spindle no longer gives the yield and IPC partners a runnable peer, so they hit
+the idle path more often. It was not landed. The 2-busy tail
+also shows up in **idle** p99 (204-283 ms with no keys under load), so
+part of it happens without the busy programs at all. The Spindle-on-core-2 lead is weaker than it
+looked.
+
+Next step: a per-key trace (which task and core each slow key waited on) on the KVM lane,
+and a look at what runs on cores 2-3 during an idle-p99 spike. Do this before any further
+scheduler change.
 
 ## Fixes
 
@@ -112,7 +140,8 @@ interactive class on wake, or keeping it off cores that host program rows.
    into the focused window since the launch (focus-stealing prevention, as on other
    desktops); mark the new window as wanting attention instead.
 3. **No scheduler change is needed for the "never starts" failure.** The separate
-   p99 tail above is open and belongs to Phase 4. Phase 4 should still revisit placement: at 4 cores core 3 holds
+   p99 tail above is open and belongs to Phase 4. The tested terminal-class change did not
+   fix it (see above). Phase 4 should still revisit placement: at 4 cores core 3 holds
    Files plus every shared-key program row, so programs 2-4 of this gate all share a
    core with Files while core 2 holds only Spindle and program 1.
 
