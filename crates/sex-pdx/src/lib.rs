@@ -1337,6 +1337,7 @@ pub mod power;
 pub mod denim;
 pub mod touchpad;
 pub mod program_threads;
+pub mod endpoint;
 pub mod fs;
 pub mod home_lock;
 pub mod disks;
