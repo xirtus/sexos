@@ -133,6 +133,7 @@ fn take(w: &mut Watch, key: u16, value: i32) {
         id::NTP => give_network_time(w),
         id::REPEAT_DELAY | id::REPEAT_RATE | id::CAPS_AS_CTRL => keyboard(w),
         id::WIDGETS => unsafe { crate::widgets_glue::set(value != 0) },
+        id::WEATHER => unsafe { crate::widgets_glue::weather(value != 0) },
         _ => {}
     }
 }
@@ -145,6 +146,7 @@ fn show_zone(w: &mut Watch) {
     let zone = w.copy.value(id::ZONE) as u64;
     w.zone_owed = sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, sex_pdx::clock_zone::OP_CLOCK_ZONE, zone, 0, 0).0 != 0;
     sex_pdx::serial_record!("[shell.clock.zone] zone={} ok={}", zone, !w.zone_owed as u8);
+    unsafe { crate::weather_glue::zone(zone); }
 }
 
 fn keyboard(w: &mut Watch) {

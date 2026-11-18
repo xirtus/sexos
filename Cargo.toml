@@ -154,6 +154,7 @@ members = [
     "apps/crush",
     "apps/lua",
     "apps/whisper-voice",
+    "apps/steamy",
     "apps/rg",
     "apps/fd",
     "apps/bat",

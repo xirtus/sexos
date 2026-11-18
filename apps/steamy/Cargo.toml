@@ -1,0 +1,13 @@
+[package]
+name = "steamy"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "steamy"
+path = "src/main.rs"
+
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+sex-config = { path = "../../crates/sex-config" }

@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Desktop widgets (slice S5b): the clock and system cards drawn on the
-//! wallpaper, under every window (`sex_pdx::desktop_widgets`). The Shell
-//! only turns them on or off; the clock comes from the civil time and zone
-//! this server keeps for the bar, the system card from the kernel's numbers.
+//! Desktop widgets (slices S5b, S5c): the clock, weather and system cards
+//! drawn on the wallpaper, under every window (`sex_pdx::desktop_widgets`).
+//! The Shell turns them on or off and passes on the weather reports; the
+//! clock comes from the civil time and zone this server keeps for the bar,
+//! the system card from the kernel's numbers.
 //!
 //! The cards are drawn once into `CACHE` whenever a word on them changes (the
-//! minute, the date, the processor load, free memory), and the wallpaper path
+//! minute, the date, the weather, the processor load, free memory), and the wallpaper path
 //! (`wallpaper_mark::pixel`) blends that cache over the gradient, so windows
 //! cover the cards like any wallpaper.
 
-use sex_pdx::desktop_widgets::{self as dw, Layout, Line, Sample};
+use sex_pdx::desktop_widgets::{self as dw, Layout, Line, Report, Sample};
 
 /// Largest cards kept: scale 2.
 const CAP_W: usize = dw::CARD_W * 2;
-const CAP_H: usize = (dw::CLOCK_H + dw::GAP + dw::SYSTEM_H) * 2;
+const CAP_H: usize = (dw::CLOCK_H + dw::GAP + dw::WEATHER_H + dw::GAP + dw::SYSTEM_H) * 2;
 /// Each pixel: alpha in the top byte (0: wallpaper shows), colour below.
 static mut CACHE: [u32; CAP_W * CAP_H] = [0; CAP_W * CAP_H];
 
@@ -21,14 +22,16 @@ struct State {
     cards: u64,
     layout: Option<Layout>,
     /// What the cache shows: the screen it was laid out for and its words.
-    drawn: Option<((usize, usize, usize, usize), [Line; 4])>,
+    drawn: Option<((usize, usize, usize, usize), [Line; 6])>,
+    /// The latest weather report and the zone it is for.
+    weather: Option<(Report, usize)>,
     sample: Option<Sample>,
     sampled_at: u64,
     cpu: Option<u8>,
     free_pages: Option<u64>,
     receipts: u32,
 }
-static mut STATE: State = State { cards: 0, layout: None, drawn: None, sample: None, sampled_at: 0, cpu: None, free_pages: None, receipts: 64 };
+static mut STATE: State = State { cards: 0, layout: None, drawn: None, weather: None, sample: None, sampled_at: 0, cpu: None, free_pages: None, receipts: 64 };
 fn st() -> &'static mut State { unsafe { &mut *core::ptr::addr_of_mut!(STATE) } }
 
 const CARD: u32 = 0x0014_121A;
@@ -48,6 +51,15 @@ pub fn receive(caller: u32, cards: u64) -> bool {
     s.drawn = None;
     sex_pdx::serial_record!("[display.widgets] cards={}", cards);
     true
+}
+
+/// `OP_WEATHER` from the Shell: the helper's report for a zone. The next
+/// tick draws it.
+pub fn weather(caller: u32, report: u64, zone: u64) {
+    if caller != 3 { return; }
+    let Some(r) = Report::unpack(report) else { return };
+    st().weather = Some((r, zone as usize));
+    sex_pdx::serial_record!("[display.widgets.weather] zone={} report={:?}", zone, r);
 }
 
 /// The column's rows and columns, if cards show.
@@ -97,8 +109,12 @@ pub fn tick(clock: &silkbar_model::civil_clock::CivilClock, w: usize, h: usize) 
         let mut d = Line::EMPTY; d.bytes[..12].copy_from_slice(b"Date unknown"); d.len = 12;
         (t, d)
     };
+    let zone = sex_pdx::clock_zone::zone();
+    // A report for another zone is old news: the helper is asking about the new one.
+    let report = s.weather.filter(|w| w.1 == zone).map(|w| w.0);
+    let (sky, temps) = dw::weather_lines(report, sex_time::zone::zone(zone).name);
     let (cpu, free) = dw::system_lines(s.cpu, s.free_pages);
-    let words = [time, date, cpu, free];
+    let words = [time, date, cpu, free, sky, temps];
     let key = (w, h, layout.scale, s.cards as usize);
     if s.layout == Some(layout) && s.drawn.as_ref().is_some_and(|d| d.0 == key && d.1 == words) { return None; }
     let moved = s.layout.map(|l| l.column).filter(|c| *c != layout.column);
@@ -108,7 +124,7 @@ pub fn tick(clock: &silkbar_model::civil_clock::CivilClock, w: usize, h: usize) 
     if s.receipts > 0 {
         s.receipts -= 1;
         let (x, y, cw, ch) = layout.column;
-        sex_pdx::serial_record!("[display.widgets.draw] x={} y={} w={} h={} time={:?} date={:?} cpu={:?} free={:?}", x, y, cw, ch, time, date, cpu, free);
+        sex_pdx::serial_record!("[display.widgets.draw] x={} y={} w={} h={} time={:?} date={:?} cpu={:?} free={:?} sky={:?} temps={:?}", x, y, cw, ch, time, date, cpu, free, sky, temps);
     }
     // A column that moved (new scale) repaints where it was as well.
     Some(match moved { Some(old) => union(old, layout.column), None => layout.column })
@@ -120,7 +136,7 @@ fn union(a: (usize, usize, usize, usize), b: (usize, usize, usize, usize)) -> (u
     (x0, y0, x1 - x0, y1 - y0)
 }
 
-fn draw(l: &Layout, words: &[Line; 4]) {
+fn draw(l: &Layout, words: &[Line; 6]) {
     let (cx, cy, cw, ch) = l.column;
     let cache = unsafe { &mut *core::ptr::addr_of_mut!(CACHE) };
     cache[..cw * ch].fill(0);
@@ -132,10 +148,16 @@ fn draw(l: &Layout, words: &[Line; 4]) {
         text(cache, cw, words[0].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, INK, 3, r.2 - 32 * s);
         text(cache, cw, words[1].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + super::glyphs::UI_H * 3 + 8 * s, SOFT, ui, r.2 - 32 * s);
     }
+    let line = super::glyphs::UI_H * s + 4 * s;
+    if let Some(r) = l.weather {
+        let r = (r.0 - cx, r.1 - cy, r.2, r.3);
+        card(cache, cw, r, s);
+        text(cache, cw, words[4].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, INK, ui, r.2 - 32 * s);
+        text(cache, cw, words[5].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + line, SOFT, ui, r.2 - 32 * s);
+    }
     if let Some(r) = l.system {
         let r = (r.0 - cx, r.1 - cy, r.2, r.3);
         card(cache, cw, r, s);
-        let line = super::glyphs::UI_H * s + 4 * s;
         text(cache, cw, words[2].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, INK, ui, r.2 - 32 * s);
         text(cache, cw, words[3].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + line, INK, ui, r.2 - 32 * s);
     }

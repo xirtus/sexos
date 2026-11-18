@@ -8168,6 +8168,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "steamy"
+version = "0.1.0"
+dependencies = [
+ "sex-config",
+ "sex-std",
+]
+
+[[package]]
 name = "store"
 version = "0.1.0"
 dependencies = [

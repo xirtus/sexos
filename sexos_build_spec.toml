@@ -94,6 +94,7 @@ crates = [
   "apps/crush/Cargo.toml",
   "apps/lua/Cargo.toml",
   "apps/whisper-voice/Cargo.toml",
+  "apps/steamy/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
   "apps/bat/Cargo.toml",
@@ -627,6 +628,17 @@ build_std = "std,panic_abort"
 manifest = "apps/whisper-voice/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/whisper-voice"
 dest_artifact = "iso_root/programs/whisper-voice"
+
+# Steamy, the desktop weather card's helper: asks Open-Meteo about the time zone's
+# city and hands the Shell the numbers (slice S5c). Started hidden, with the network.
+[[stage]]
+id = "build_steamy"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/steamy/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/steamy"
+dest_artifact = "iso_root/programs/steamy"
 
 # ripgrep 15.2.0 (vendor/ripgrep-15.2.0) and fd 10.5.2 (vendor/fd-10.5.2), upstream
 # source on the published crates (grep, ignore, globset, regex, clap, ...).

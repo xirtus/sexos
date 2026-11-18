@@ -4589,6 +4589,7 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 sex_pdx::desktop_widgets::OP_DESKTOP_WIDGETS => { if desktop_widgets::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
+                sex_pdx::desktop_widgets::OP_WEATHER => desktop_widgets::weather(msg.caller_pd, msg.arg0, msg.arg1),
                 sex_pdx::window_menu::OP_WINDOW_MENU => { if window_menu::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
                 sex_pdx::program_tray::OP_TRAY_VIEW => { if program_tray::receive(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) { needs_full_redraw = true; } }
                 sex_pdx::window_motion::OP_MOTION => {

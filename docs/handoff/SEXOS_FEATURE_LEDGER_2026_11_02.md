@@ -5321,3 +5321,9 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - `sex_pdx::brand` draws the same outline natively at any size (integer scanline fill, 4 sub-rows, exact horizontal coverage, no allocation), so the kernel, Display and programs share one mark.
 - Silkbar: the launcher button is the lips on the bar's glass instead of the blue square. Wallpaper: the default is now "SexOS" (warm charcoal with the lips at 26% width, centred); the old navy theme gradient is kept as "Midnight". Boot screen: a charcoal header with the lips and the title. Lock screen: charcoal with the lips above "Locked". README and website carry the mark.
 - Verified by `tests/brand.rs`, `tests/desktop_look.rs` (both now run in `scripts/service_custody_host_gate.sh`) and `scripts/desktop_look_gate.py` (Super+B still steps SexOS → Dusk).
+
+## Desktop widgets: clock, weather and system cards (S5b, S5c, 2026-11-18)
+
+- Super+Shift+W (setting `desktop.widgets`, off by default) puts three cards on the wallpaper at the top right, under every window: the time and date in your zone, today's weather, and processor load with free memory. Display draws them from its own clock and the kernel's numbers and only redraws when a word changes.
+- The weather comes from Open-Meteo (no account or key) for your time zone's city (Berlin, New York, Tokyo...; Fahrenheit for US zones). `apps/steamy` is a hidden helper the Shell starts with the network right only while the cards show and `desktop.weather` (default on) allows it; it sends only the city's rounded coordinates, asks every 30 minutes, and the Shell accepts its reports from that run alone. UTC names no city, so no request is made and the card says so.
+- Verified by `tests/desktop_widgets.rs` (words, places for every Settings zone, Open-Meteo answer parsing, wire, layout), `scripts/desktop_widgets_gate.py` and `scripts/weather_widget_gate.py` (Berlin, the helper's report reaching the card, the helper ending with the cards).

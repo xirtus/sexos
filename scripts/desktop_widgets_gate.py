@@ -3,17 +3,19 @@
 clock and system cards on the wallpaper, and again takes them off.
 
 On an empty workspace (Super+2), Super+Shift+W: the Shell's `[shell.widgets]
-on=1 ok=1`, Display's `[display.widgets] cards=3` and `[display.widgets.draw]`
+on=1 ok=1`, Display's `[display.widgets] cards=7` and `[display.widgets.draw]`
 with the card column, the time (the guest clock runs on UTC, the default zone,
-so it matches the host's UTC time to a minute or two), the date, and once two
-samples are in, the processor load. The screen shows the cards: the column
+so it matches the host's UTC time to a minute or two), the date, the weather
+card (UTC names no city, so the Shell says so and no helper runs: the network
+path is `weather_widget_gate.py`), and once two samples are in, the processor
+load. The screen shows the cards: the column
 differs from the bare wallpaper and holds light text. Super+Shift+W again
 hides them and the column is wallpaper again."""
 import argparse, datetime, json, re, shutil, time
 from pathlib import Path
 from quil_autosave_gate import boot
 
-DRAW = r'\[display.widgets.draw\] x=(\d+) y=(\d+) w=(\d+) h=(\d+) time="([^"]*)" date="([^"]*)" cpu="([^"]*)" free="([^"]*)"'
+DRAW = r'\[display.widgets.draw\] x=(\d+) y=(\d+) w=(\d+) h=(\d+) time="([^"]*)" date="([^"]*)" cpu="([^"]*)" free="([^"]*)" sky="([^"]*)" temps="([^"]*)"'
 
 
 def ppm(path):
@@ -63,7 +65,7 @@ def main():
 
         s = len(t()); chord('meta_l', 'shift', 'w')
         step(r'\[shell.widgets\] on=1 ok=1', s)
-        step(r'\[display.widgets\] cards=3', s)
+        step(r'\[display.widgets\] cards=7', s)
         first = step(DRAW, s)
         x, y, w, h = (int(v) for v in first.groups()[:4])
         if not (x + w <= bw and y + h <= bh and w >= 200 and h >= 150): raise RuntimeError('odd card column: ' + first[0])
@@ -74,6 +76,10 @@ def main():
         day = now.strftime('%A ') + str(now.day) + now.strftime(' %B')
         if first[6] != day and now.hour not in (0, 23): raise RuntimeError(f'the clock card says {first[6]!r}, not {day!r}')
         if not re.fullmatch(r'Memory free \d+(\.\d)? [MG]B', first[8]): raise RuntimeError('memory line: ' + first[8])
+        # UTC is no city: the weather card says so, and no helper started.
+        nocity = step(DRAW.replace(r'temps="([^"]*)"', r'temps="(Set a time zone city)"'), s, 30)
+        if nocity[9] != 'Weather': raise RuntimeError('weather line: ' + nocity[9])
+        if '[shell.weather] state=starting' in t(): raise RuntimeError('the weather helper started for UTC')
         # A second sample gives the processor load.
         loaded = step(DRAW.replace(r'cpu="([^"]*)"', r'cpu="(Processor \d+%)"'), s, 60)
         sw, sh, shown = shot('widgets')
@@ -97,10 +103,10 @@ def main():
         text = t()
         for bad in ('KERNEL PANIC', 'panicked'):
             if bad in text: raise RuntimeError('guest reported ' + bad)
-        result = dict(ok=True, column=[x, y, w, h], time=hhmm, date=first[6], cpu=loaded[7], free=loaded[8],
+        result = dict(ok=True, column=[x, y, w, h], time=hhmm, date=first[6], cpu=loaded[7], free=loaded[8], weather=[nocity[9], nocity[10]],
                       changed=changed, light=bright, steps=steps,
                       scope=f'QEMU {a.resolution}: Super+Shift+W shows the clock and system cards on the wallpaper of an empty '
-                            'workspace (time matching the host, processor load and free memory) and hides them again')
+                            'workspace (time matching the host, processor load and free memory, a weather card saying UTC names no city) and hides them again')
         (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n'); print(json.dumps(result))
     except Exception as e:
         (out / 'result.json').write_text(json.dumps(dict(ok=False, error=str(e), steps=steps)) + '\n'); raise

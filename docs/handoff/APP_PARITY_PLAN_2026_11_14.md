@@ -498,8 +498,16 @@ fills them from its own civil time and the kernel's numbers (syscall 87) and red
 cache only when a word changes. Words and layout: `crates/sex-pdx/src/desktop_widgets.rs`
 (host test `tests/desktop_widgets.rs`); drawing: `servers/sexdisplay/src/desktop_widgets.rs`
 (blended in `wallpaper_mark::pixel`); gate: `scripts/desktop_widgets_gate.py`. *Weather*
-(S5c): a confined program fetches Open-Meteo for the place set in Settings and hands the
-Shell the numbers, which pass them to Display for a third card (`WEATHER`, reserved).
+(S5c, done): `apps/steamy`, a hidden helper the Shell starts with the network right while the
+cards show and `desktop.weather` is on (default on; the widgets themselves are opt-in), asks
+Open-Meteo (HTTPS, no key) about the time zone's city (`PLACES`, one per Settings zone;
+Fahrenheit for US zones) every 30 minutes, 5 after a failure, and at once on a zone change.
+The Shell tells it the zone (`OP_WEATHER_PLACE` 0x2FB), takes `OP_WEATHER` (0x2FA) reports from
+that run only, and passes them to Display, which draws the card between clock and system. UTC
+names no city: the Shell tells Display so without starting the helper. Glue:
+`servers/silk-shell/src/weather_glue.rs`; gate: `scripts/weather_widget_gate.py` (takes either a
+forecast or "out of reach", since CI's guest may not reach the Internet). Later: a city picker
+in Settings beyond the zone's city.
 
 ### T. Office suite: Gingham, Brocade, Burlesque and the Craft apps (8)
 
