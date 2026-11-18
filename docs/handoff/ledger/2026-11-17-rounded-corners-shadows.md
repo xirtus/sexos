@@ -49,3 +49,4 @@ close, vsync pacing and a frame-time gate, launcher/overlay blur.
   p99 < 20 ms enforced on KVM (falls back to TCG without the threshold when
   the runner has no KVM or cannot boot SexOS on it). Saves desktop.png and
   prints it base64 in the job log.
+- Title bars: a tabbed window's bar takes its active tab's colour end to end (behind the lights and past the last tab), with no divider under it; inactive tabs sit darker. Untabbed bars keep the glass toolbar and divider.

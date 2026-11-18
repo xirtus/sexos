@@ -505,31 +505,28 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             // Frosted glass toolbar background.
             let base_alpha: u8 = if frame_hovered { 220 } else { 200 };
             let toolbar_alpha = scale_alpha(base_alpha, chrome_dim);
-            if toolbar_alpha > 0 {
+            // A window with tabs wears its active tab's colour across the whole
+            // bar (behind the lights and past the last tab); other tabs sit darker.
+            let tab_paint=|color:u32,alpha:u8|alpha_blend_xrgb_over_xrgb(color,glass_over_bg(color,x,y,224,scene),alpha);
+            if surf.tab_count > 0 {
+                c = tab_paint(scene.tokens.active_tab_color, 240);
+            } else if toolbar_alpha > 0 {
                 c = glass_over_bg(scene.tokens.frame_top_bar_color, x, y, toolbar_alpha, scene);
             }
-            // Divider: bright opaque line at bottom edge.
-            if ly >= (scene.metrics.title()as usize).saturating_sub(scene.metrics.scale()as usize) {
+            // Divider: bright opaque line at bottom edge (a tabbed bar flows into its tab).
+            if surf.tab_count == 0 && ly >= (scene.metrics.title()as usize).saturating_sub(scene.metrics.scale()as usize) {
                 c = FRAME_TOP_BAR_DIVIDER_COLOR;
             }
-            // Tab strip: glass background with tab color overlay.
-            if surf.tab_count > 0
+            // Tab strip: inactive tabs over the active-tab bar.
+            if surf.tab_count > 1
                 && lx >= scene.metrics.controls_end()as usize
                 && lx < rim_right
             {
                 let exclusion=scene.metrics.controls_end()as usize;
                 let available = rim_right.saturating_sub(exclusion);
                 let slot_w = available / surf.tab_count as usize;
-                if slot_w > 0 {
-                    let tab_idx = (lx - exclusion) / slot_w;
-                    let tab_color = if tab_idx == surf.active_tab as usize {
-                        scene.tokens.active_tab_color
-                    } else {
-                        scene.tokens.inactive_tab_color
-                    };
-                    let tab_glass = glass_over_bg(tab_color, x, y, 224, scene);
-                    let tab_alpha: u8 = if tab_idx == surf.active_tab as usize { 240 } else { 200 };
-                    c = alpha_blend_xrgb_over_xrgb(tab_color, tab_glass, tab_alpha);
+                if slot_w > 0 && (lx - exclusion) / slot_w != surf.active_tab as usize {
+                    c = tab_paint(scene.tokens.inactive_tab_color, 200);
                 }
             }
             // Select title ink against the final glass/tab pixel, then paint it.
