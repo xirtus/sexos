@@ -1,7 +1,7 @@
 //! Host tests of IPC v2 one-shot reply capabilities (kernel/src/ipc_v2/reply.rs).
 #[path = "../kernel/src/ipc_v2"]
 mod ipc_v2 {
-    pub type TaskId = u32;
+    pub type TaskId = u64;
     pub mod endpoint;
     pub mod reply;
 }
@@ -14,14 +14,14 @@ use std::sync::atomic::{AtomicU32, Ordering};
 struct Gens([AtomicU32; 8]);
 impl Gens {
     fn new() -> Self { Self(Default::default()) }
-    fn get(&self, t: u32) -> u32 { self.0[t as usize].load(Ordering::SeqCst) }
-    fn retire(&self, t: u32) { self.0[t as usize].fetch_add(1, Ordering::SeqCst); }
+    fn get(&self, t: u64) -> u32 { self.0[t as usize].load(Ordering::SeqCst) }
+    fn retire(&self, t: u64) { self.0[t as usize].fetch_add(1, Ordering::SeqCst); }
 }
 impl Incarnations for Gens {
-    fn is_current(&self, t: u32, g: u32) -> bool { self.0.get(t as usize).is_some_and(|w| w.load(Ordering::SeqCst) == g) }
+    fn is_current(&self, t: u64, g: u32) -> bool { self.0.get(t as usize).is_some_and(|w| w.load(Ordering::SeqCst) == g) }
 }
 
-fn caller(gens: &Gens, task: u32) -> Sender { Sender { task, badge: 1, generation: gens.get(task), kind: CallKind::Call } }
+fn caller(gens: &Gens, task: u64) -> Sender { Sender { task, badge: 1, generation: gens.get(task), kind: CallKind::Call } }
 
 #[test]
 fn reply_is_used_at_most_once() {
@@ -67,8 +67,8 @@ fn caller_death_cancels_the_outstanding_reply() {
 fn server_death_returns_a_live_caller_to_wake() {
     let gens = Gens::new();
     let slot = ReplySlot::new();
-    slot.install(ReplyCap { caller: 0, generation: 0 }).unwrap();
-    assert_eq!(slot.discard(&gens), Some(ReplyCap { caller: 0, generation: 0 }));
+    slot.install(ReplyCap { caller: 1, generation: 0 }).unwrap();
+    assert_eq!(slot.discard(&gens), Some(ReplyCap { caller: 1, generation: 0 }));
     slot.install(ReplyCap { caller: 2, generation: 0 }).unwrap();
     gens.retire(2);
     assert_eq!(slot.discard(&gens), None);

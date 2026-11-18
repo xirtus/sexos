@@ -1,7 +1,7 @@
 //! Host tests of IPC v2 notifications and interrupt routes (kernel/src/ipc_v2/notification.rs).
 #[path = "../kernel/src/ipc_v2"]
 mod ipc_v2 {
-    pub type TaskId = u32;
+    pub type TaskId = u64;
     pub mod notification;
 }
 

@@ -8,7 +8,7 @@
 //! next. Servers with deferred work check [`ReplySlot::is_live`] before doing it,
 //! which reads the generation word and makes no syscall.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 use super::TaskId;
 use super::endpoint::{CallKind, Sender};
@@ -34,15 +34,6 @@ impl ReplyCap {
             CallKind::Send => None,
         }
     }
-
-    const fn pack(self) -> u64 { ((self.caller as u64 + 1) << 32) | self.generation as u64 }
-
-    const fn unpack(word: u64) -> Option<Self> {
-        match word {
-            0 => None,
-            w => Some(Self { caller: ((w >> 32) - 1) as u32, generation: w as u32 }),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,9 +46,12 @@ pub enum ReplyError {
     CallerGone,
 }
 
-/// A server thread's single reply capability.
+/// A server thread's single reply capability. The kernel installs it while the
+/// server is not running and only the server's own syscalls take it, so the two
+/// words never race with each other.
 pub struct ReplySlot {
-    word: AtomicU64,
+    caller: AtomicU64,
+    generation: AtomicU32,
 }
 
 impl Default for ReplySlot {
@@ -65,35 +59,38 @@ impl Default for ReplySlot {
 }
 
 impl ReplySlot {
-    pub const fn new() -> Self { Self { word: AtomicU64::new(0) } }
+    pub const fn new() -> Self { Self { caller: AtomicU64::new(0), generation: AtomicU32::new(0) } }
 
     /// Holds the capability from a call just received.
     pub fn install(&self, cap: ReplyCap) -> Result<(), ReplyError> {
-        debug_assert!(cap.caller < u32::MAX);
-        self.word
-            .compare_exchange(0, cap.pack(), Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| ())
-            .map_err(|_| ReplyError::Occupied)
+        debug_assert!(cap.caller != 0);
+        if self.caller.load(Ordering::Acquire) != 0 {
+            return Err(ReplyError::Occupied);
+        }
+        self.generation.store(cap.generation, Ordering::Relaxed);
+        self.caller.store(cap.caller, Ordering::Release);
+        Ok(())
     }
 
     /// Consumes the capability to reply. Either way the slot is empty afterwards,
     /// so a capability is used at most once.
     pub fn take(&self, generations: &impl Incarnations) -> Result<ReplyCap, ReplyError> {
-        let cap = ReplyCap::unpack(self.word.swap(0, Ordering::AcqRel)).ok_or(ReplyError::Empty)?;
-        if generations.is_current(cap.caller, cap.generation) {
-            Ok(cap)
-        } else {
-            Err(ReplyError::CallerGone)
-        }
+        let cap = self.peek().ok_or(ReplyError::Empty)?;
+        self.caller.store(0, Ordering::Release);
+        if generations.is_current(cap.caller, cap.generation) { Ok(cap) } else { Err(ReplyError::CallerGone) }
     }
 
     /// Whether the held capability can still be answered (for deferred work).
     pub fn is_live(&self, generations: &impl Incarnations) -> bool {
-        ReplyCap::unpack(self.word.load(Ordering::Acquire))
-            .is_some_and(|cap| generations.is_current(cap.caller, cap.generation))
+        self.peek().is_some_and(|cap| generations.is_current(cap.caller, cap.generation))
     }
 
-    pub fn peek(&self) -> Option<ReplyCap> { ReplyCap::unpack(self.word.load(Ordering::Acquire)) }
+    pub fn peek(&self) -> Option<ReplyCap> {
+        match self.caller.load(Ordering::Acquire) {
+            0 => None,
+            caller => Some(ReplyCap { caller, generation: self.generation.load(Ordering::Relaxed) }),
+        }
+    }
 
     /// The server thread died holding a call: returns the caller to wake with an
     /// error, if it is still the same incarnation.
