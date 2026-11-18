@@ -452,3 +452,16 @@ opt-level = "s"
 opt-level = "s"
 [profile.release.package.filmcraft-tts]
 opt-level = "s"
+
+# Big programs (#305), named by their build stage (sexos_build_spec.toml `profile`).
+# lean: document programs, size-tuned code and no symbols (Spreadeagle 12.2 -> about
+# 10.5 MiB). No LTO: fat LTO saved only 3.5% more and added ~13 min to every CI build.
+# Package overrides above (wasmi, sex-html at opt-level 3) still win.
+[profile.lean]
+inherits = "release"
+opt-level = "s"
+strip = true
+# lean-fast: programs whose work is pixels (3D, video, the browser): opt-level 3, no symbols.
+[profile.lean-fast]
+inherits = "release"
+strip = true

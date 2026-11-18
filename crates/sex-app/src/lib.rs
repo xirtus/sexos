@@ -619,17 +619,20 @@ pub mod files {
 
     fn region() -> Result<&'static mut [u8], Error> {
         direct::restricted::region_ready()?;
-        let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?;
-        Ok(unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) })
+        let mut at = REGION_AT.load(Ordering::Relaxed);
+        if at == 0 {
+            at = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?.virtual_address;
+            REGION_AT.store(at, Ordering::Relaxed);
+        }
+        Ok(unsafe { core::slice::from_raw_parts_mut(at as *mut u8, w::REGION_BYTES) })
     }
     /// The region's address, asked once: it is this run's for the run's whole life.
     static REGION_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     /// What Files last said about `path`, if nothing has changed since: no call at all.
     fn cached(path: &[u8]) -> Option<direct::Stat> {
         direct::restricted::region_ready().ok()?;
-        let mut at = REGION_AT.load(Ordering::Relaxed);
-        if at == 0 { at = region().ok()?.as_ptr() as u64; REGION_AT.store(at, Ordering::Relaxed); }
-        let cache = unsafe { core::slice::from_raw_parts((at as usize + w::CACHE_AT) as *const u8, w::CACHE_BYTES) };
+        let at = region().ok()?.as_ptr() as usize;
+        let cache = unsafe { core::slice::from_raw_parts((at + w::CACHE_AT) as *const u8, w::CACHE_BYTES) };
         let (dir, size, modified, id) = w::stat_cache::read(cache, path)?;
         Some(direct::Stat { dir, size, modified, id })
     }
@@ -684,20 +687,21 @@ pub mod files {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0xFF_FFFF;
         let r = w::Request { seq, kind, path_len: path_len as u16, offset, length };
         let a = r.args();
-        loop {
-            // Waits for the answer in the same kernel entry; Files runs next.
-            match sex_pdx::pdx_call_wait(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
-                (0, _) => break,
-                (sex_pdx::ERR_SERVICE_NOT_READY, _) => sex_pdx::sys_yield(),
-                _ => return Err(w::UNAVAILABLE),
+        // Waits for the answer in the same kernel entry, which usually brings it back in
+        // registers; Files runs next.
+        let mut first = loop {
+            match sex_pdx::ipc_recv::pdx_call_recv(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
+                Ok(m) => break m,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return Err(w::UNAVAILABLE),
             }
-        }
+        };
         // The main task sleeps until its inbox has something (or briefly, to see the
         // mailbox); a worker cannot sleep that way, so it looks, and lets others run.
         let worker = crate::thread::is_worker();
         let mut idle = 0u32;
         loop {
-            let m = match mailbox::take(|m| mine(m, seq)) {
+            let m = match first.take().or_else(|| mailbox::take(|m| mine(m, seq))) {
                 Some(m) => m,
                 None => match sex_pdx::pdx_try_listen_raw(0) {
                     Some(m) => { idle = 0; m }
