@@ -1,8 +1,10 @@
 name: Rust CI
 
 # Gates run as parallel jobs. Each job sets up from shared caches (rustup,
-# cargo + target, FFmpeg, libc++); jobs that boot SexOS build their own ISO,
-# so no job waits on another. Every gate of the former single job still runs.
+# cargo + target, FFmpeg, libc++). The `image` job builds the default image once
+# (the mandatory entrypoint gate) and the jobs that test that image unpack it
+# (.github/actions/image); only jobs with their own build flags (profiles,
+# recording, input proof) build again. Every gate of the former single job still runs.
 
 on:
   push:
@@ -38,6 +40,8 @@ jobs:
       run: bash scripts/volumes_host_gate.sh
     - name: IOMMU tables, page tables and lending window on the host
       run: bash scripts/iommu_host_gate.sh
+    - name: IPC v2 endpoints, reply capabilities and notifications on the host
+      run: bash scripts/ipc_v2_host_gate.sh
     - name: Display model (KMS, EDID) and Intel Gen12 display engine on the host
       run: bash scripts/kms_host_gate.sh
     - name: sexdrive DMA lifetime and zero-copy reads on the host
@@ -263,10 +267,10 @@ jobs:
         path: ${{ runner.temp }}/sexos-truth
         if-no-files-found: ignore
 
-  boot:
-    name: Build, boot and runtime gates
+  image:
+    name: Build and boot the image once (mandatory entrypoint)
     runs-on: ubuntu-latest
-    timeout-minutes: 95
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -274,6 +278,38 @@ jobs:
         save-cache: "true"
     - name: Build and boot via single entrypoint (mandatory)
       run: GATE_DIR="$RUNNER_TEMP/sexos-runtime" bash scripts/master_runtime_gate.sh --probe 60 --keep-log
+    - name: Pack the image for the gate jobs
+      run: |
+        mkdir -p "$RUNNER_TEMP/sexos-image"
+        bash scripts/ci_image_pack.sh "$RUNNER_TEMP/sexos-image/image.tar.zst"
+        tar -I 'zstd -T0 -3' -cf "$RUNNER_TEMP/sexos-image/runtime.tar.zst" -C "$RUNNER_TEMP/sexos-runtime" .
+    - uses: actions/upload-artifact@v4
+      with:
+        name: sexos-image
+        path: ${{ runner.temp }}/sexos-image
+        compression-level: 0
+        retention-days: 2
+    - name: Preserve the entrypoint gate's evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-entrypoint-proof
+        path: ${{ runner.temp }}/sexos-runtime
+        if-no-files-found: ignore
+
+  boot:
+    name: Boot and runtime gates
+    runs-on: ubuntu-latest
+    needs: image
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
+    # Screenshot gates below (desktop capture and later) read pixels with PIL; it
+    # used to arrive with the browser steps that moved to the web job.
+    - name: Install image tools for gates
+      run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
     - name: Boots to the desktop with 1, 2, 4 and 32 GiB of RAM
       run: python3 scripts/ram_sizes_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/ram-sizes"
     - name: Compiled scheduler stack-release boundary
@@ -322,6 +358,41 @@ jobs:
       run: python3 scripts/lurk_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lurk"
     - name: Needle prints to a fake IPP Everywhere printer and scans from a fake eSCL scanner
       run: python3 scripts/needle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/needle"
+    - name: Native screenshot saved as a real PNG file
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/capture-source.img"
+        python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
+    - name: USB input paths
+      run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: Kernel cycles on KVM, real CPU (kernel study Phase 0; 1 core with and without PKU, 4 cores)
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        if [ ! -w /dev/kvm ]; then echo "[bench.kvm] no usable /dev/kvm on this runner; skipped"; exit 0; fi
+        grep -m1 'model name' /proc/cpuinfo; grep -qw pku /proc/cpuinfo && echo "[bench.kvm] host pku=yes" || echo "[bench.kvm] host pku=no"
+        out="$RUNNER_TEMP/sexos-runtime/kvm-bench"
+        python3 scripts/program_bench_gate.py --accel kvm --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/1core-pku"
+        python3 scripts/program_bench_gate.py --accel kvm --no-pku --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/1core-nopku"
+        SEXOS_GATE_CORES=4 python3 scripts/program_bench_gate.py --accel kvm --no-pku --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/4core-nopku"
+        for f in "$out"/*/bench.json; do echo "$f"; cat "$f"; echo; done
+    - name: Preserve runtime evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-runtime-proof
+        path: |
+          ${{ runner.temp }}/sexos-runtime
+          ${{ runner.temp }}/sexos-usb
+        if-no-files-found: ignore
+
+  web:
+    name: Browser gates
+    runs-on: ubuntu-latest
+    needs: image
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
     - name: Web page JavaScript (native QuickJS tier)
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
@@ -355,31 +426,23 @@ jobs:
       run: python3 scripts/program_web_extensions_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-extensions"
     - name: Browser site suite (encyclopedia, news, links, GitHub, webmail sign-in)
       run: python3 scripts/browser_sites_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sites"
-    - name: Native screenshot saved as a real PNG file
-      run: |
-        truncate -s 1G "$RUNNER_TEMP/capture-source.img"
-        python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
-    - name: USB input paths
-      run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
-    - name: Preserve runtime evidence
+    - name: Preserve browser evidence
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: sexos-runtime-proof
-        path: |
-          ${{ runner.temp }}/sexos-runtime
-          ${{ runner.temp }}/sexos-usb
+        name: sexos-browser-proof
+        path: ${{ runner.temp }}/sexos-runtime/web-*
         if-no-files-found: ignore
 
   devices:
     name: Disks, power and fuzzing
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    needs: image
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: USB sticks in Files
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-usb.img"
@@ -455,7 +518,8 @@ jobs:
   media:
     name: Browser media streaming and seeking
     runs-on: ubuntu-latest
-    timeout-minutes: 65
+    needs: image
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -463,8 +527,7 @@ jobs:
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
         bash scripts/media_source_host_gate.sh
-    - name: Build the FFmpeg-enabled image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/media-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/media-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Progressive playback and Range seek
       run: |
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
@@ -484,14 +547,14 @@ jobs:
   editor:
     name: Quil code editor
     runs-on: ubuntu-latest
-    timeout-minutes: 65
+    needs: image
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Quil engine on the host (1 GB lazy file, multi-cursor, Vim, keymaps, fuzzy, project search)
       run: cargo test --locked --release -p quil-core
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/editor-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/editor-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Quil in QEMU (200 MB file, Go to File, cursors, Vim dd, project search)
       run: |
         truncate -s 256M "$RUNNER_TEMP/editor-source.img"
@@ -551,12 +614,12 @@ jobs:
   programs:
     name: Programs, packages and ports
     runs-on: ubuntu-latest
-    timeout-minutes: 110
+    needs: image
+    timeout-minutes: 90
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Blank program disk
       run: truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
     - name: Spreadeagle spreadsheet opens, edits, saves and reopens xlsx
@@ -632,15 +695,14 @@ jobs:
   reading:
     name: Reading programs
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    needs: image
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: E-book and feed models (EPUB, FictionBook, CBZ, reflow, RSS, Atom, OPML) on the host
       run: cargo test --locked -p sex-xml -p sex-ebook -p sex-feed
-    - name: Build the image
-      run: |
-        ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/reading-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/reading-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Bodice opens an EPUB, turns pages and reopens at the saved page
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-reading.img"
@@ -661,15 +723,14 @@ jobs:
   places:
     name: Phone link and maps
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    needs: image
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Hookup protocol (KDE Connect) on the host, against the Python test peer; map tiles, search and routes
       run: cargo test --locked -p sex-kdeconnect -p sex-map
-    - name: Build the image
-      run: |
-        ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/places-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/places-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Hookup pairs with a test phone, receives and sends files, media keys
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-places.img"
@@ -689,7 +750,8 @@ jobs:
   desktop:
     name: Desktop shell
     runs-on: ubuntu-latest
-    timeout-minutes: 65
+    needs: image
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -697,8 +759,7 @@ jobs:
       run: |
         sudo apt-get update -qq
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/desktop-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/desktop-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Settings last across a restart
       run: |
         truncate -s 1G "$RUNNER_TEMP/settings-source.img"
@@ -781,7 +842,7 @@ jobs:
 
   build:
     if: always()
-    needs: [host, truth, boot, desktop, devices, programs, media, editor, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks]
+    needs: [host, truth, image, boot, web, desktop, devices, programs, media, editor, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks]
     runs-on: ubuntu-latest
     steps:
     - run: |
@@ -790,7 +851,8 @@ jobs:
   js-jit:
     name: Experimental JS JIT and W^X (${{ matrix.cores }} cores)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    needs: image
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -800,8 +862,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build sealed ISO from this candidate
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Runtime code permissions, blocked instructions and per-run fault isolation
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-jit.img"
@@ -833,7 +894,7 @@ jobs:
   recording:
     name: Lossless encoder guest proof
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 120
     steps:
     - uses: actions/checkout@v4
       with:
@@ -884,14 +945,14 @@ jobs:
   productivity:
     name: Productivity programs
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    needs: image
+    timeout-minutes: 40
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Calendar model and terminal on the host
       run: cargo test --locked -p sex-calendar -p sex-dav -p sex-vcard -p sex-vt -p spindle-panes -p spindle-shell -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay && cargo test --locked --release -p sex-vt --features render,ligatures render_tests
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Abacus typed, clicked, remembered and recalled
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-productivity.img"
@@ -919,12 +980,12 @@ jobs:
   terminal-editor:
     name: Terminal and editor
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    needs: image
+    timeout-minutes: 40
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/term-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/term-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Term draws the VT fixture, runs a Wasm program behind a stream; std consoles become terminals
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-term.img"
@@ -950,12 +1011,12 @@ jobs:
   documents-pictures:
     name: Documents and pictures
     runs-on: ubuntu-latest
-    timeout-minutes: 80
+    needs: image
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: PDF finds a word on page 7, outline, thumbnails and zoom
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-pdf.img"
@@ -984,7 +1045,7 @@ jobs:
   input-payload-proof:
     name: Diagnostic keyboard payload proof (UNSAFE)
     runs-on: ubuntu-latest
-    timeout-minutes: 110
+    timeout-minutes: 90
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -1035,7 +1096,7 @@ jobs:
   leaks:
     name: Leak gate (programs open/close, services restart)
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 140
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
