@@ -59,6 +59,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"history-cancel",
     b"history-retry",
     b"history-status",
+    b"hw",
     b"input",
     b"install",
     b"kaleidoscope",

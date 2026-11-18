@@ -103,6 +103,7 @@ mod display_delivery;
 mod sextime_command;
 mod volume_command;
 mod wifi_command;
+mod hw_command;
 mod calc_command;
 mod complete;
 mod silk_command;
@@ -871,6 +872,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  silk windows|focus|move|layout|float|close|events  script the desktop (silk alone: usage)");
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  crashes      what stopped, this start and earlier ones");
+            sb.push(b"  hw [all|TEXT]  hardware report from the boot log (no serial port needed)");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -1567,6 +1569,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         b"service-state" => { service_state_command(args, sb); true }
         b"crashes" => { crashes_command(sb); true }
+        b"hw" => { hw_command::command(args, sb); true }
         b"crash" if option_env!("SEXOS_CRASH_PROBE").is_some() => {
             // Test builds only: stop a service, or the kernel, as a fault would.
             let target = if args.eq_ignore_ascii_case(b"kernel") { Some(0) } else {

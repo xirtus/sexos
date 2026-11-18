@@ -11,7 +11,9 @@
    refuse the drive before any read or write, say why and how to fix it, and
    the system must still come up. The disk image must be untouched.
 
-Passes when both hold and the boot log names the drive (model, MDTS).
+Passes when both hold, the boot log names the drive (model, MDTS), and Spindle's
+`hw` (the hardware report for a PC with no serial port) shows the drive and the
+device census.
 """
 import argparse, hashlib, os, re, shutil, sys, time
 from pathlib import Path
@@ -60,6 +62,11 @@ def main():
         run('mkdir big', r'\[spindle\.fs\.line\] ok')
         run('write big/a.txt sixty four kilobytes a command', r'\[spindle\.fs\.result\] kind=8 status=0')
         assert cat('big/a.txt') == ['sixty four kilobytes a command'], t()[-400:]
+        # The hardware report a PC with no serial port shows: Spindle's `hw`.
+        run('hw', r'\[spindle\.hw\] lines=\d+ shown=\d+ head_bytes=\d+')
+        hw = t()
+        assert re.search(r'\[spindle\.hw\.line\] \[sexdrive\.nvme\.drive\] vendor=1b36 ', hw), 'hw did not show the drive'
+        assert re.search(r'\[spindle\.hw\.line\] \[hw\.device\] ', hw), 'hw did not show the device census'
         text = t()
         errors = re.findall(r'\[sexdrive\.(?:nvme\.(?:write|queued)\.err|block\.read\.(?:api|handoff)\.err|dma\.quarantine)\][^\n]*', text)
         assert not errors, errors
