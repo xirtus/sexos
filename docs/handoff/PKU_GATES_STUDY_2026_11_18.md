@@ -1,6 +1,6 @@
 # PKU gates: side-channel review and design (kernel redesign Phase 6)
 
-Date: 2026-11-18. Status: study only, no kernel code. Decision D3 below is for Andreas.
+Date: 2026-11-18. Status: study and design; D3 approved 2026-11-18 (prototype now).
 Parent plan: `docs/handoff/KERNEL_STUDY_AND_REDESIGN_2026_11_17.md` (Phase 6, decision D3).
 
 ## 1. Short answer
@@ -81,63 +81,85 @@ The CI runner's numbers will be added here once the first run reports them.
 
 ### 4.1 Pieces
 
-1. **Gate code page.** The kernel generates it at boot and maps it user-executable and
-   read-only. It holds one stub per *(callee, entry)* pair. Each stub uses a direct
-   `call rel32` into the callee's entry, so the gate has **no indirect branches**. The
-   page holds the only `WRPKRU` bytes outside the kernel, and the loader and BOOT
-   scans exempt exactly this page.
-2. **Call matrix.** The kernel writes it into a read-only page. Each row is
-   `(caller key, callee, entry) → allowed, callee PKRU, callee stack slot`. It is built
-   from D1 capabilities: a new `Gate` capability kind (callee + entry mask) is minted
-   from the callee's BOOT root. Granting one sets a matrix bit; revoking it clears the
-   bit. The matrix isn't secret, so any domain may read it.
-3. **Gate data key.** One spare protection key covers the per-task gate frames
-   (saved caller RSP, caller PKRU, return address, nesting depth) and the per-task
-   callee stacks. Only the gate ever opens this key. The exact key is chosen in P6.1
-   against the current key map.
+1. **Gate code page.** The kernel generates this page at boot and maps it
+   user-executable and read-only. It holds one stub per *(caller, callee, entry)* that
+   the capabilities allow. Each stub enters the callee with a direct `call rel32`, so the
+   gate has **no indirect branches**. In a single address space the kernel places the
+   page within ±2 GiB of BOOT service text. The page holds the only `WRPKRU` bytes
+   outside the kernel. The loader and BOOT scans exempt exactly this page, by address
+   and hash.
+2. **Call matrix.** The kernel writes this into a read-only page: one bit per stub. It
+   is built from D1 capabilities. A new `Gate` capability kind (callee + entry mask) is
+   minted from the callee's BOOT root. Granting one sets the bit, and revoking it clears
+   the bit. The matrix isn't secret.
+3. **Per-task gate area, found through the user GS base.** The kernel sets each task's
+   user GS base to that task's gate area on every switch. `CR4.FSGSBASE` stays off, so
+   ring 3 can't change it, and that makes "which task am I" unforgeable in user mode.
+   Today the kernel sets GS_BASE and KERNEL_GS_BASE to the same per-core block, so
+   P6.2 must give every entry path strict `swapgs` discipline. That is also worth doing
+   as hardening on its own. The area has two parts:
+   - a **frame page** under a spare *gate key* that only the gate opens. It holds the
+     task's current domain, the frame stack (stub id and depth) and the callee stack
+     pointers;
+   - one **return-slot page per domain the task enters**, tagged with *that domain's*
+     key. It holds the domain's pending caller RSP and stub id. The kernel allocates it
+     the first time the task enters that domain.
 
-### 4.2 A call
+### 4.2 The rule that makes jumping into the middle harmless
 
-1. The caller does a direct `call` to the stub for *(callee, entry)*, with arguments in
-   the IPC v2 message registers.
-2. **Stub, step 1.** `RDPKRU` gives the caller's key set. That value is unforgeable,
-   because only the gate and the kernel can write PKRU. The stub uses it to index the
-   call matrix:
-   - the index is bounds-checked and masked with `cmp` + `sbb`, the same as audit S10;
-   - if the bit is clear, it returns `ERR_DENIED`.
-3. **Step 2.** `WRPKRU` to (caller keys + gate data key). The new value comes from an
-   immediate built from the matrix row, never from the caller's registers. A check
-   follows the write (ERIM): `cmp eax, expected; jne fault`.
-4. **Step 3.** Push a frame (caller RSP, caller PKRU, return RIP, depth) into the task's
-   gate frame area, then load the callee stack pointer for this task.
-5. **Step 4.** `WRPKRU` to the callee's PKRU, without the gate data key, then check it.
-   Zero every register except the arguments: general-purpose registers, the direction
-   flag, and vector state through `VZEROALL`, or a full XMM/ZMM wipe when the callee is
-   marked as handling secrets. Then do a direct `call` to the callee entry.
-6. **Return.** This mirrors the call:
-   - `WRPKRU` to (callee + gate data), checked;
-   - pop the frame, scrub non-result registers, then `WRPKRU` to the saved caller PKRU,
-     checked against the frame;
-   - restore the caller's RSP and `ret` to the saved return address.
+Any domain can jump to any byte of the gate page with any registers. So the danger is
+not the authorisation check before a `WRPKRU`: it is what the code *after* the write
+does with registers an attacker chose. ERIM's checked write (`wrpkru; cmp eax, IMM; jne
+fault`) only proves that PKRU now equals `IMM`. A jumper who sets `eax = IMM` passes that
+check. So every `WRPKRU` in the gate obeys three rules:
 
-That is four checked `WRPKRU` per round trip, which is about 2x the measured gate model:
-around 100–120 ticks before scrubbing.
+- it writes an immediate and is checked against that immediate;
+- the immediate is one of three values only:
+  - **G**: the gate key alone, every other key disabled. This is harmless: a jumper
+    gets no one's memory and runs a fixed path;
+  - **E**: the callee's keys, immediately followed by a direct `call` to the callee's
+    fixed entry. A jumper gets nothing it couldn't get by calling E normally;
+  - **C**: the caller's keys, followed only by code that takes its stack and return
+    address **from C's own return slot** (C-key memory, unforgeable by anyone else);
+- no register value the attacker chose is used as an address while PKRU is G or C.
 
-### 4.3 Why jumping into the middle doesn't help an attacker
+The first draft of this design restored the caller's RSP from a register and then
+returned with `ret`. A jumper landing on that last `WRPKRU` with `eax = C` would have
+run code of its choice with C's keys. The rule above closes that hole.
 
-- **Jumping to any `WRPKRU`.** The value written is an immediate or a value loaded from
-  memory the attacker can't write, never an attacker register. The check after the
-  write either confirms the expected value or faults with `ud2`.
-- **Jumping past the matrix check, straight to step 3.** The attacker gets PKRU =
-  (its own keys + gate data) and then falls into step 4. That writes the callee's PKRU
-  and calls the callee's *legitimate entry*: exactly a normal call, minus the
-  authorisation check.
-  - To close this, step 3 re-derives the row from `RDPKRU`, which still shows only the
-    caller's keys, and re-checks the matrix bit after opening the data key. The check
-    and the use are then in the same straight-line block. This follows the ERIM and
-    Hodor pattern: checks sit after the privileged write, not before it.
-- **Jumping into the return path.** With an empty frame stack (depth 0), the stub
-  faults. Frames live in gate-key memory, so neither side can forge one.
+### 4.3 A call and its return
+
+Call (stub for C → E, entry n):
+
+1. **Still in C's keys, no write yet.** Check the matrix bit; if it is clear, return
+   `ERR_DENIED`. Store RSP and the stub id in the task's C return slot. A jumper from
+   another domain faults right here, because it can't write C-key memory.
+2. **Write G, checked.** Check that the task's current domain (from the frame page) is
+   C; otherwise unwind to the kernel. Check the depth bound. Push the frame (stub id,
+   depth), set the current domain to E, and load this task's E stack pointer.
+3. **Scrub.** Zero every register except the four argument registers, clear the
+   direction flag, and run `VZEROALL` (or a full XMM/ZMM wipe for callees marked as
+   holding secrets).
+4. **Write E, checked.** `call` the entry (direct).
+
+Return (falls through after the `call`):
+
+5. **Write G, checked.** Check that the top frame's stub id is this stub's id; pop it
+   and set the current domain back to C.
+6. **Scrub** non-result registers and **fill the RSB** with a fixed call sequence
+   (SC4).
+7. **Write C, checked.** Load RSP from the C return slot, check that its stub id
+   matches, clear the slot, and `ret` to C's genuine call site.
+
+That is four checked `WRPKRU` per round trip, about 2x the measured gate model: roughly
+100–120 ticks before scrubbing and the RSB fill.
+
+**Residual R1 (found late, not prevented).** Take a chain C → E → X inside one task.
+X could jump to step 7 of the C → E stub and resume C at its genuine pending call site
+with a result E never produced. Step 7 only accepts C's pending call *to this E*, so the
+damage is a skipped E frame. The orphaned frames are detected at the task's next gate
+entry, where step 2's current-domain check fails and the kernel unwinds. Callees that
+call onward should treat their own callees' results with the same care as any input.
 
 ### 4.4 Interrupts, preemption and other cores
 
@@ -216,11 +238,12 @@ service**.
 - **seL4, NOVA, Fiasco.OC:** their fastpath IPC is the kernel-mediated alternative. Phase
   2 builds it, and IPC v2 is the fallback in §4.7.
 
-## 7. Prototype plan (if D3 is approved)
+## 7. Prototype plan (D3 approved)
 
 | Step | What | Kernel lines | Gate |
 |---|---|---|---|
-| P6.1 | Gate page generator (stubs, RSB fill, scrub), matrix page, gate data key, `Gate` capability kind; host tests of the generated bytes (no indirect branch, one `WRPKRU` set, checks after every write) | +180 | Host tests; the isolation matrix gets "jump into the stub middle faults" |
+| P6.1 | Gate stub generator as a crate (`crates/sex-gate`, outside `kernel/src`): stubs, RSB fill, scrub, matrix and area layout; host tests of the generated bytes (no indirect branch, every `WRPKRU` writes G/E/C and is checked, no stray key bytes from immediates) and a Linux run of real stubs under `pkey_alloc` keys (call, return, deny, jump-to-each-`WRPKRU`) | 0 | Host tests in CI |
+| P6.2a | Kernel: per-task user GS base with strict `swapgs` on every entry path; gate area pages; matrix page; `Gate` capability kind | +150 | All boot gates green; GS base unforgeable from ring 3 |
 | P6.2 | Per-task gate frames and callee stacks; crash unwinding to `ERR_PEER_DIED`; accounting to the callee | +90 | Kill-the-callee-mid-call gate |
 | P6.3 | One real pair behind a feature flag (Files → sexdrive block reads), with IPC v2 fallback | +30 | Files gates green both ways; bench: same-core service call ≤150 cycles KVM with PKU |
 | P6.4 | Isolation matrix rows (Phase 7) for gates: no capability means no entry, revoke stops new calls, callee can't read the caller, caller's registers are scrubbed | 0 | Matrix green on KVM with PKU, skipped without PKU |
@@ -228,11 +251,13 @@ service**.
 Total: about +300 kernel lines, matching the plan's Phase 6 estimate. The 22,700 budget is
 not raised.
 
-**Order.** The prototype starts after Phase 5b views land: the gate data key and the
+**Order (Andreas chose "prototype now", 2026-11-18).** P6.1 starts at once; it touches no kernel files. The kernel steps start after Phase 5b views land: the gate data key and the
 key-8 rows both depend on the final key map. P6.1's generator and host tests can start
 earlier, because they touch no shared kernel files.
 
 ## 8. Decision D3 for Andreas
+
+**2026-11-18: Andreas chose A (prototype now).**
 
 Should SexOS add kernel-free calls between trusted services (PKU gates)?
 
