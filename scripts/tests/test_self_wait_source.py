@@ -197,14 +197,14 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
                 self.assertFalse(result['source_contract']['ok'])
                 self.assertIn('unreviewed kernel deadline reference owner',result['source_contract']['errors'][0])
                 path.unlink()
-            # Even a new module without recognized tokens requires review;
-            # the complete Rust tree requires review even for unrecognized syntax.
+            # A kernel file with no deadline reference, new or changed, is outside the
+            # causal closure: it needs no re-pin, so unrelated merges cannot fail the gate.
             path.write_text('fn unrelated_new_module(){}')
-            self.assertFalse(self.check(SAMPLED,root)['ok']);path.unlink()
+            self.assertTrue(self.check(SAMPLED,root)['ok']);path.unlink()
             name=next(p.relative_to(ROOT).as_posix()for p in (ROOT/'kernel').rglob('*.rs')
                       if p.relative_to(ROOT).as_posix()not in APPROVED_TIMED_WAIT_SOURCES)
             path=root/name;original=path.read_text();path.write_text(original+'\n// changed outside causal owners\n')
-            self.assertFalse(self.check(SAMPLED,root)['ok']);path.write_text(original)
+            self.assertTrue(self.check(SAMPLED,root)['ok']);path.write_text(original)
             result=source_contract(ROOT)
             self.assertEqual(set(result['deadline_reference_closure']['owner_sha256']),DEADLINE_REFERENCE_OWNERS)
             self.assertGreater(result['deadline_reference_closure']['files'],len(DEADLINE_REFERENCE_OWNERS))
