@@ -235,8 +235,21 @@ pub const CLASS_NORMAL: usize = 1;
 /// sexdisplay, silk-shell, sexinput, sexusb, silkbar. Sound (sexbell) stays normal:
 /// its device ring covers a scheduling delay, and it needs a deadline class instead.
 const INTERACTIVE_DOMAINS: [u64; 5] = [1, 3, 4, 5, 6];
+/// Spindle windows (terminals) too: they share a core with the programs they start, and a
+/// key typed into one must not wait behind a busy program's slice (SMP_LATENCY_ROOT_CAUSE).
+/// Only a wake or a sliced turn counts as interactive; a yield still waits behind the rest.
+const TERMINALS: u128 = terminals();
+const fn terminals() -> u128 {
+    let rows = sex_pdx::app_catalog::INCARNATIONS;
+    let (mut bits, mut i) = (0u128, 0);
+    while i < rows.len() {
+        if rows[i].app as u8 == sex_pdx::app_catalog::App::Spindle as u8 && rows[i].target < 128 { bits |= 1 << rows[i].target; }
+        i += 1;
+    }
+    bits
+}
 pub fn class_of(pd: u64) -> usize {
-    if INTERACTIVE_DOMAINS.contains(&pd) { CLASS_INTERACTIVE } else { CLASS_NORMAL }
+    if INTERACTIVE_DOMAINS.contains(&pd) || (pd < 128 && TERMINALS >> pd & 1 == 1) { CLASS_INTERACTIVE } else { CLASS_NORMAL }
 }
 /// Interactive tasks may run this many times in a row ahead of a waiting normal one.
 const URGENT_STREAK: u32 = 16;

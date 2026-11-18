@@ -1,0 +1,41 @@
+name: Phase 4 diagnosis (temporary, stream 8)
+
+on:
+  push:
+    branches: [ claude/project-thread-cfxcuc ]
+
+jobs:
+  bench:
+    name: ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [ base, fixed ]
+    steps:
+    - uses: actions/checkout@v4
+    - name: Base variant uses master's scheduler and Spindle loop
+      if: matrix.variant == 'base'
+      run: git fetch -q --depth=1 origin master && git checkout FETCH_HEAD -- kernel/src/scheduler.rs apps/spindle/src/main.rs && git status --short
+    - uses: ./.github/actions/setup
+    - name: Build the image
+      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - name: KVM bench (real CPU), 4 cores x3 and 1 core, no PKU
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        grep -m1 'model name' /proc/cpuinfo; ls -la /dev/kvm || true
+        truncate -s 1G "$RUNNER_TEMP/blank.img"
+        for run in 4-1 4-2 4-3 1-1; do c=${run%-*}
+          o="$RUNNER_TEMP/b/$run"
+          SEXOS_GATE_CORES=$c python3 scripts/program_bench_gate.py --accel kvm --no-pku --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank.img" --out "$o" 2>&1 | tail -1 | cut -c1-2000 | sed "s/^/[$run] /" || true
+          rm -f "$o/nvme.img"
+        done
+    - name: Latency gate (TCG), 4 cores, 4 and 2 busy, x2
+      run: |
+        for busy in 4 2; do for i in 1 2; do
+          o="$RUNNER_TEMP/l/b$busy-$i"
+          SEXOS_GATE_CORES=4 SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/latency_gate.py --busy $busy --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank.img" --out "$o" 2>&1 | tail -1 | cut -c1-600 | sed "s/^/[busy=$busy run=$i] /" || true
+          grep -a "sched.latency" "$o/latency-serial.log" | tail -2 | cut -c1-300 | sed "s/^/  /" || true
+          rm -f "$o/nvme.img"
+        done; done

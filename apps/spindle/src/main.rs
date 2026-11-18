@@ -2827,7 +2827,11 @@ pub extern "C" fn _start() -> ! {
         if unsafe{update_command::UPDATE.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{pkg_command::PKG.step(sb)}{unsafe{content_render(&line,sb);}}
         let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0}{
-            match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
+            match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{
+                // Sleep to the next tick or message instead of yielding in a loop: a yield
+                // loop keeps this core busy for as long as a program runs, and the program's
+                // own calls then queue behind it (SMP_LATENCY_ROOT_CAUSE_2026_11_18.md).
+                let _=sex_pdx::sys_wait_self_ticks(1);continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         let capture_lines=sb.total_lines;
         if msg.type_id==1&&unsafe{record_command::RECORD.receive(msg.caller_pd,msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
