@@ -169,3 +169,14 @@ fn kernel_authorization_never_consults_hardware_pku_state() {
         }
     }
 }
+
+#[test]
+fn index_nospec_answers_like_a_bounds_check() {
+    // Audit S10: the cmp+sbb mask keeps every in-range index and refuses the rest.
+    for (i, n) in [(0usize, 1usize), (5, 8), (7, 8), (1023, 1024), (0, usize::MAX), (usize::MAX - 1, usize::MAX)] {
+        assert_eq!(capability_slot::index_nospec(i, n), Some(i));
+    }
+    for (i, n) in [(0usize, 0usize), (8, 8), (9, 8), (usize::MAX, usize::MAX), (usize::MAX, 1)] {
+        assert_eq!(capability_slot::index_nospec(i, n), None);
+    }
+}
