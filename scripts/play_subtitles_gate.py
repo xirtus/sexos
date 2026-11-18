@@ -67,10 +67,19 @@ def main():
   g['focus'](int(launch[3]));time.sleep(.2)
   ps=len(t());q.key('spc');g['wait'](r'\[play.paused\] 1',ps,30)
   q.cmd('send-key',{'keys':[{'type':'qcode','data':'meta_l'},{'type':'qcode','data':'f'}],'hold-time':80});time.sleep(.8)
+  shade={}
   def shot(name):
-   path=out/f'{name}.ppm';q.cmd('screendump',{'filename':str(path)});time.sleep(.5)
-   img=Image.open(path).convert('RGB');img.save(out/f'{name}.png')
    zoom=re.findall(rf'\[silk.lifecycle.zoom.active\] frame=\d+ sid={launch[3]} zx=(-?\d+) zy=(-?\d+)',t());x0,y0=int(zoom[-1][0])+8,int(zoom[-1][1])+34
+   # The picture is paused: dump until the window stops changing (the zoom
+   # animation and the redraw after a key have settled).
+   path=out/f'{name}.ppm';last=None
+   for _ in range(12):
+    q.cmd('screendump',{'filename':str(path)});time.sleep(.5)
+    img=Image.open(path).convert('RGB');crop=img.crop((x0,y0,x0+320,y0+240)).tobytes()
+    if crop==last:break
+    last=crop
+   img.save(out/f'{name}.png');img.crop((x0,y0,x0+320,y0+240)).save(out/f'{name}-picture.png')
+   shade[name]=sum(img.crop((x0,y0+190,x0+312,y0+238)).convert('L').getdata())//(312*48)
    px=img.load()
    # White glyph pixels with dark outline pixels close beside them.
    white=dark=0
@@ -87,7 +96,7 @@ def main():
   off=shot('no-caption')
   q.key('s');g['wait'](r'\[play.subtitles\] on=1',ss,30)
   ps=len(t());q.key('spc');g['wait'](r'\[play.paused\] 0',ps,30)
-  assert on[1]>50 and on[1]>3*max(off[1],1),f'caption edge pixels: shown={on} hidden={off}'
+  assert on[1]>50 and on[1]>3*max(off[1],1),f'caption edge pixels: shown={on} hidden={off} mean_luma={shade}'
   ss=len(t());q.key('a');tr=g['wait'](r'\[play.audio.track\] track=(\d+) of=(\d+) ok=(\d)',ss,30)
   assert tr.groups()==('1','2','1'),tr[0]
   q.key('bracket_right');sp=g['wait'](r'\[play.speed\] percent=(\d+)',ss,30);assert sp[1]=='125',sp[0]
