@@ -20,7 +20,7 @@ def main():
  p.add_argument('--keys',type=int,default=40);p.add_argument('--busy',type=int,default=4);p.add_argument('--max-p99-ms',type=float,default=400.0);a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('bench',(ROOT/'iso_root/programs/bench').read_bytes())])
- g=boot(a.iso,disk,a.out,'latency',a.resolution);t=g['text'];q=g['q']
+ g=boot(a.iso,disk,a.out,'latency',a.resolution);t=g['text'];q=g['q'];serial=a.out/'latency-serial.log'
  def type_line(line):
   g['focus'](153);time.sleep(.5)
   for k in line:q.key('spc' if k==' ' else k);time.sleep(.05)
@@ -29,11 +29,14 @@ def main():
   g['focus'](153);time.sleep(1)
   out=[]
   for i in range(n):
-   s=len(t());k='abcdefghijklmnopqrstuvwxyz'[i%26]
+   # Read only what the guest wrote since the key: rereading the whole log every
+   # half millisecond costs the host a CPU the emulated cores need.
+   f=open(serial,'rb');f.seek(0,2);new=b'';k='abcdefghijklmnopqrstuvwxyz'[i%26]
    t0=time.monotonic();q.key(k)
-   while not re.search(COMMIT,t()[s:]):
+   while not re.search(COMMIT.encode(),new):
     if time.monotonic()-t0>10:raise TimeoutError(f'key {i} never reached the screen')
-    time.sleep(.0005)
+    time.sleep(.0005);new+=f.read()
+   f.close()
    out.append((time.monotonic()-t0)*1000);time.sleep(.08)
   # Clear the line again so the next command starts clean.
   for _ in range(n):q.key('backspace');time.sleep(.02)
@@ -62,7 +65,7 @@ def main():
   res={'idle':summary(idle),'loaded':summary(loaded),'busy_programs':a.busy,'spins_finished_during':still,'cores':os.environ.get('SEXOS_GATE_CORES','1')}
   (a.out/'latency.json').write_text(json.dumps(res))
   assert still==0,'the load ended before the loaded keys were timed'
-  assert res['loaded']['p99_ms']<=a.max_p99_ms,f"loaded p99 {res['loaded']['p99_ms']} ms over {a.max_p99_ms}"
+  assert res['loaded']['p99_ms']<=a.max_p99_ms,f"loaded p99 {res['loaded']['p99_ms']} ms over {a.max_p99_ms}: {res}"
   text=t();assert 'KERNEL PANIC' not in text
   print({'ok':True,**res})
  finally:g['stop']()
