@@ -61,15 +61,39 @@ With the focus race gone, 4 cores PKU fails 3/3 on latency instead: loaded p99 6
 interactive class 11,040 wakes, avg 421k cycles, max 99M; normal class (Spindle is
 pd 12, normal) 6,275 wakes, avg 2.9M cycles, max 147M, with 84 waits over 33M cycles.
 
-Open question, not settled here: is that guest scheduling (Spindle on core 2 behind
-busy program 1, Files on core 3 behind programs 2-4, `smp::home_core`) or the host
-(4 emulated cores on a 4-vCPU runner, with PKU making each switch far more costly to
-emulate)? Points to the host: 4 cores without PKU, same placement, passes at
-93-103 ms, and 3 cores with PKU, where all four spinners share Spindle's core 2,
-passes at 92-95 ms. A follow-up CI run (4 cores PKU with 4 and with 2 busy programs,
-and the no-PKU control, with the cheaper gate polling) is queued behind the other
-streams' jobs; its result goes in the PR. The decisive check is the Phase 0 KVM lane:
-on KVM PKU costs nothing extra, so a p99 failure there would be the guest's.
+A second run with the cheaper gate polling (CI run 44222299725, 3 runs each,
+all fail the 400 ms bound):
+
+| 4 cores | loaded p50 | loaded p95 | loaded p99 | idle p99 |
+|---|---|---|---|---|
+| PKU, 4 busy | 79-80 ms | 96-118 ms | 491, 412, 415 ms | 88-164 ms |
+| no PKU, 4 busy | 80 ms | 114-126 ms | 523, 505, 527 ms | 268-446 ms |
+| PKU, 2 busy | 81-82 ms | 328-613 ms | 1900, 1925, 914 ms | 100-303 ms |
+
+What this settles and what it does not:
+
+- **It is not PKU.** No-PKU failed this time with the same tail; its earlier 3/3 pass
+  (93-103 ms) was on a quieter runner. Run-to-run spread at 4 cores under TCG is large
+  (idle p99 alone ranges 88-446 ms across these runs).
+- **It is probably not plain host CPU shortage either.** Two busy programs (two pegged
+  vCPUs) are *worse* than four: p95 rises from ~100 ms to 330-610 ms. Less host load
+  giving more latency points at the guest.
+- **Guest lead:** with 2 busy programs, program 1 (row 42) shares core 2 with Spindle
+  (pd 12, normal class) and program 2 (row 43) shares core 3 with Files (pd 11). The
+  keystroke path is Input/Shell (core 0) -> Spindle (core 2) -> Display (core 0).
+  Spindle is normal class, so each time it blocks and wakes it queues behind a spinner
+  for a full slice. The normal-class `[sched.latency]` counters in the 4-busy runs
+  (max 147M cycles, 84 waits over 33M) match that. Why 2 busy is worse than 4 is
+  not explained yet. One guess: with 4 busy, rows 44/45 go to core 3 and row 42
+  stays alone with Spindle, so it may be about which tasks share core 2's turns.
+  That needs a per-key trace (which task the slow key waited on, on which core).
+- 3 cores PKU (everything on core 2 together with Spindle) passed 3/3 at 92-95 ms,
+  so sharing a core with spinners is not enough on its own to cause the tail.
+
+Next step for Phase 4, once WS4 frees `smp.rs`/`scheduler.rs`: add a per-key trace
+(Spindle wake to run on core 2, Display commit on core 0), run it on the Phase 0 KVM
+lane to remove TCG noise, and test Spindle (and other terminal-facing apps) as
+interactive class on wake, or keeping it off cores that host program rows.
 
 ## Fixes
 
@@ -80,15 +104,15 @@ on KVM PKU costs nothing extra, so a p99 failure there would be the guest's.
    the gate now reads only the serial bytes written since the key (it reread the whole
    1+ MB log every 0.5 ms, a host CPU the emulated cores need), and a p99 failure
    prints the whole summary. Verified on CI (run 44212026700): 3 cores PKU 3/3 pass
-   (loaded p99 94.6, 92.1, 93.2 ms); 4 cores PKU now starts all four programs every
-   time (0 stray keys) but fails on p99, see below.
+   (loaded p99 94.6, 92.1, 93.2 ms). At 4 cores all four programs now start every
+   time (no stray keys), but p99 still fails, see below.
 2. **Desktop (product bug, for the desktop shell owner, not WS4):** a window that
    appears seconds after its command steals focus from the terminal the user is still
    typing in. Shell should not move focus to a newly mapped window if the user typed
    into the focused window since the launch (focus-stealing prevention, as on other
    desktops); mark the new window as wanting attention instead.
-3. **No scheduler change is needed for this failure,** so Phase 4's SMP work does not
-   have to wait on it. Phase 4 should still revisit placement: at 4 cores core 3 holds
+3. **No scheduler change is needed for the "never starts" failure.** The separate
+   p99 tail above is open and belongs to Phase 4. Phase 4 should still revisit placement: at 4 cores core 3 holds
    Files plus every shared-key program row, so programs 2-4 of this gate all share a
    core with Files while core 2 holds only Spindle and program 1.
 
