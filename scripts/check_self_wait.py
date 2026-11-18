@@ -71,7 +71,9 @@ APPROVED_KERNEL_RUST_TREES=('dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8
     # authority v2 capability table (inline slots, generations), cheri.rs removed, 2026-11-17
     '6371383dfa90b1b27da40ad384b65ebd757ae90284fe6f0f1a083453fb6b1933',
     # IPC v2 syscalls 105/106 wired (kernel plan phase 2), 2026-11-18
-    '22a70bcd8ad7b76d717a4484845ef6920d18fca47b892b0ae4f993a4953a0909')
+    '22a70bcd8ad7b76d717a4484845ef6920d18fca47b892b0ae4f993a4953a0909',
+    # master 7ecda1a4: #407, #408 and IPC v2 syscalls merged together, 2026-11-18
+    '9053dbcc72bc82be4b24ebd5e9badd53f20c03af4ede06af9033c528f284d71f')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
