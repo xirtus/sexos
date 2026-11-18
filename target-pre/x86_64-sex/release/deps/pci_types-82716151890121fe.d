@@ -1,0 +1,12 @@
+/home/user/sexos/target-pre/x86_64-sex/release/deps/pci_types-82716151890121fe.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/msi.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/msix.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/device_type.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/register.rs
+
+/home/user/sexos/target-pre/x86_64-sex/release/deps/libpci_types-82716151890121fe.rlib: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/msi.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/msix.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/device_type.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/register.rs
+
+/home/user/sexos/target-pre/x86_64-sex/release/deps/libpci_types-82716151890121fe.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/msi.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/msix.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/device_type.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/register.rs
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/msi.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/capability/msix.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/device_type.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pci_types-0.10.1/src/register.rs:

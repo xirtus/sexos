@@ -1,0 +1,1 @@
+{"rustc":2526752119565639892,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[7648903741785607723,"build_script_build",false,13535343357267801224],[12052818955475161878,"build_script_build",false,6008032699502107747]],"local":[{"Precalculated":"0.52.0"}],"rustflags":["-C","target-cpu=generic"],"config":0,"compile_kind":0}

@@ -377,6 +377,10 @@ jobs:
         if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
         if [ ! -w /dev/kvm ]; then echo "[bench.kvm] no usable /dev/kvm on this runner; skipped"; exit 0; fi
         grep -m1 'model name' /proc/cpuinfo; grep -qw pku /proc/cpuinfo && echo "[bench.kvm] host pku=yes" || echo "[bench.kvm] host pku=no"
+        # The real CPU's XSAVE path (XSAVEC, AVX-512 where the host has it): YMM state kept
+        # by two copies on one core and four copies across four cores.
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host python3 scripts/program_avx_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/avx-kvm-1"
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/program_avx_gate.py --copies 4 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/avx-kvm-4"
         out="$RUNNER_TEMP/sexos-runtime/kvm-bench"
         for run in 1 2 3; do
           python3 scripts/program_bench_gate.py --accel kvm --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/1core-pku-$run"

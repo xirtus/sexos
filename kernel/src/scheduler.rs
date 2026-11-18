@@ -92,7 +92,7 @@ pub struct Task {
     pub(crate) ext_init: Option<InitArg>,
     resume_observation_pending: AtomicBool,
     pub(crate) wait_deadline: self_wait::Deadline,
-    /// x87/SSE registers while the task is off-core (see crate::fpu).
+    /// x87/SSE/AVX registers while the task is off-core (see crate::fpu).
     fpu: crate::fpu::FpuState,
     /// The core this task runs on, when not its domain's (a program's workers);
     /// u32::MAX means `smp::home_core` of its domain.
@@ -126,6 +126,7 @@ impl Task {
         let kstack = alloc::vec![0u8; kstack_bytes];
         let kstack_alloc_top = kstack.as_ptr() as u64 + kstack_bytes as u64;
         core::mem::forget(kstack);
+        unsafe { stack_canary::arm(kstack_alloc_top - kstack_bytes as u64) };
 
         // Pre-seed kstack with IRETQ frame + Dummy Error + GPR zeros.
         // Layout low→high: [r15=0..rax=0][dummy=0][RIP][CS][RFLAGS][RSP][SS]
@@ -168,7 +169,7 @@ impl Task {
             ext_init: None,
             resume_observation_pending: AtomicBool::new(false),
             wait_deadline:self_wait::Deadline::new(),
-            fpu: crate::fpu::FpuState::INIT,
+            fpu: crate::fpu::FpuState::new(),
             home: AtomicU32::new(u32::MAX),
             woken_at: AtomicU64::new(0),
             deliver: AtomicBool::new(false),
@@ -210,7 +211,7 @@ impl Task {
         self.deliver = AtomicBool::new(false);
         self.deadline_us = AtomicU64::new(deadline::default_period_us(pd_id));
         // A new run starts with fresh registers, never the last run's.
-        self.fpu = crate::fpu::FpuState::INIT;
+        self.fpu.reset();
         let me = self as *mut Task;
         for loaded in FPU_LOADED.iter() {
             let _ = loaded.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire);
@@ -893,6 +894,9 @@ pub extern "C" fn scheduler_finish_switch() {
         assert!(rsp < bottom || rsp >= top, "OUTGOING_STACK_NOT_RELEASED");
         let frame = (*old).context.kstack_top;
         assert!(frame >= bottom && frame <= top - 168, "OUTGOING_FRAME_OUTSIDE_STACK");
+        // Kernel stacks are heap blocks without guard pages: an overrun shows here,
+        // at the overrunning task's next switch, before it corrupts much more.
+        if !stack_canary::intact(bottom) { panic!("KERNEL_STACK_OVERRUN task={} pd={} bytes={}", (*old).id, (*old).context.pd_id, (*old).kstack_bytes); }
         log_wake_event("post_stack_release", old);
         assert!((*old).state.release_after_stack_switch(core), "OUTGOING_CUSTODY_MISMATCH");
         // After release, access only immutable fields or the atomic protocol.
@@ -900,6 +904,14 @@ pub extern "C" fn scheduler_finish_switch() {
         sched.admit(old, false, sched.sliced.swap(false, Ordering::Relaxed));
         if !sched.lean.swap(false, Ordering::Relaxed) { poll_paging_exit_notifications(); }
     }
+}
+
+/// Words at the low end of every kernel stack that only an overrun writes.
+mod stack_canary {
+    const WORD: u64 = 0x5EC5_57AC_C0DE_CA4E;
+    const WORDS: usize = 8;
+    pub unsafe fn arm(bottom: u64) { for i in 0..WORDS { *(bottom as *mut u64).add(i) = WORD ^ i as u64; } }
+    pub unsafe fn intact(bottom: u64) -> bool { (0..WORDS).all(|i| *(bottom as *const u64).add(i) == WORD ^ i as u64) }
 }
 
 unsafe fn leave_dead_task(sched: &Scheduler, current: *mut Task) -> ! {
