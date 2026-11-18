@@ -554,11 +554,11 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/heap-source.img"
         python3 scripts/program_heap_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/heap-source.img" --out "$RUNNER_TEMP/sexos-proof/heap"
-    - name: Heap 2.5x free memory at 1 GiB RAM
+    - name: Heap over twice the RAM at 1 GiB
       run: |
         truncate -s 1G "$RUNNER_TEMP/double-source.img"
         SEXOS_GATE_MEMORY=1G python3 scripts/denim_double_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/double-source.img" --out "$RUNNER_TEMP/sexos-proof/double-1g"
-    - name: Heap 2.5x free memory at 12 GiB RAM
+    - name: Heap over twice the RAM at 12 GiB
       run: SEXOS_GATE_MEMORY=12G python3 scripts/denim_double_gate.py --minutes 100 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/double-source.img" --out "$RUNNER_TEMP/sexos-proof/double-12g"
     - name: Preserve evidence
       if: always()

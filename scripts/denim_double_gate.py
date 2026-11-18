@@ -2,7 +2,7 @@
 """Compressed memory (Denim, J5 D3): a program whose heap is over twice the machine's RAM
 still completes. Needs an ordinary ISO (not eager): Denim acts only on memory pressure.
 
-Heaptest's D key fills 2.5x the memory free at its start, a mebibyte at a time (mostly
+Heaptest's D key fills three times the memory free at its start plus 128 MiB, a mebibyte at a time (mostly
 ordinary heap: zeros, filled runs and text, an eighth noise), waiting politely while memory
 is critical; then it reads every page back. Every byte must match, the heap must reach at
 least twice the guest's RAM, Denim must have taken pages out and brought them back, and

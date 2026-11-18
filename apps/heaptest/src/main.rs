@@ -118,13 +118,14 @@ fn double_page(p: usize, page: &mut [u8]) {
     }
 }
 
-/// D: two and a half times the memory free at the start, a mebibyte at a time, so the
+/// D: three times the memory free at the start and 128 MiB more (free memory is about
+/// two thirds of a 1 GiB machine, so this is over twice its RAM), a mebibyte at a time, so the
 /// heap only fits because Denim packs the cold part. Like a polite program, it waits
 /// while memory is critical or an allocation is refused. Then every page reads back.
 fn double(target: u32, task: u32) {
     const MIB_PAGES: usize = 256;
     let free = sex_pdx::system_stats::overview().map_or(0, |o| o.free_pages) as usize;
-    let goal = free * 5 / 2 / MIB_PAGES;
+    let goal = free * 3 / MIB_PAGES + 128;
     sex_pdx::serial_record!("[heaptest.double.start] target={} task={} free_pages={} goal_mib={}", target, task, free, goal);
     let start = sex_pdx::get_ticks();
     let (mut chunks, mut waited, mut since): (Vec<Vec<u8>>, u64, u64) = (Vec::new(), 0, start);
