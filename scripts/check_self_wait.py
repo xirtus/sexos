@@ -67,7 +67,9 @@ APPROVED_KERNEL_RUST_TREES=('dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8
     # Kernel plan phase 2: kernel/src/ipc_v2 (endpoint, reply, notification), not wired yet, 2026-11-17
     'c620598cd6151890bb134924fcbb76dbe7ab8396503971b66f7e52b1c8251cbd',
     # authority v2 capability table (inline slots, generations), cheri.rs removed, 2026-11-17
-    '6371383dfa90b1b27da40ad384b65ebd757ae90284fe6f0f1a083453fb6b1933')
+    '6371383dfa90b1b27da40ad384b65ebd757ae90284fe6f0f1a083453fb6b1933',
+    # #408 XSAVE/AVX merged after #407's capability table, 2026-11-18
+    '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
