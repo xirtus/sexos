@@ -55,9 +55,10 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
 DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
-# c209 raw-master only; no speculative combined privacy/kernel cohort.
-APPROVED_KERNEL_RUST_TREES=('dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8b114a8d2c6fb2',  # XSAVE + AVX (stream 5), 2026-11-18
-    
+# Reviewed whole-tree digests, kept as review receipts; deadline_source_closure no
+# longer requires the current tree to be one of them.
+APPROVED_KERNEL_RUST_TREES=('8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5',  # master after #407 + #408 + #422 combined, 2026-11-18
+    'dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8b114a8d2c6fb2',  # XSAVE + AVX (stream 5), 2026-11-18
     # Phase 1a dead kernel modules removed, 2026-11-18
     '417835283472c60cfd1455bccc223876d2936126736b182b47c1e75f6ed56260',  # IPC v2 objects (#406) + #410 merged on master, 2026-11-18
     '620ffd8bab9d6528e4842df3930d060d4ceacc071b7587db37604bd3ddaf7c6d','ad54b57094dec16de9007a317b15506afc52747967aa9d4fedd100a32b1d95dd',  # IPC fast path (WS4), 2026-11-17
@@ -115,8 +116,10 @@ def deadline_source_closure(root):
             owners[name]=hashes[name]
     if set(owners)!=DEADLINE_REFERENCE_OWNERS:raise ValueError('reviewed kernel deadline reference owner missing')
     tree=hashlib.sha256(json.dumps(hashes,sort_keys=True,separators=(',',':')).encode()).hexdigest()
-    if tree not in APPROVED_KERNEL_RUST_TREES:raise ValueError('unreviewed kernel Rust source tree')
-    return dict(scope='reviewed complete kernel Rust tree plus bounded named-reference scan; not macro expansion or general Rust verification',
+    # The tree digest is reported, not required (Andreas, 2026-11-18): a whole-tree pin
+    # turned master red whenever two separately pinned kernel PRs merged. Every causal
+    # file is still pinned above, and a deadline reference outside the owners fails closed.
+    return dict(scope='bounded named-reference scan of the complete kernel Rust tree, with hash-pinned causal files; not macro expansion or general Rust verification',
                 files=len(hashes),bytes=total,tree_sha256=tree,owner_sha256=owners,kernel_rust_sha256=hashes)
 
 
