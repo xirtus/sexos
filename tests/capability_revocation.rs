@@ -1,10 +1,15 @@
-//! Native tests of the production capability table's sealed revocation.
+//! Native tests of the production capability table's sealed revocation (BOOT records).
 extern crate alloc;
 mod capability {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum CapabilityData { Domain(u32), Region(u64), Other }
     #[derive(Clone, Copy, Debug)]
-    pub struct Capability { pub id: u32, pub data: CapabilityData, pub cheri_meta: u64 }
+    pub struct Capability { pub id: u32, pub data: CapabilityData }
+    impl CapabilityData {
+        pub const REPLY_TAG: u8 = 4;
+        pub fn object_tag(&self) -> Option<(u8, crate::capability_table::ObjectCap)> { None }
+        pub fn from_object_tag(_: u8, _: crate::capability_table::ObjectCap) -> Option<Self> { None }
+    }
 }
 #[path = "../kernel/src/capability_table.rs"]
 mod capability_table;
@@ -13,7 +18,7 @@ use capability::CapabilityData;
 use capability_table::CapabilityTable;
 
 fn sealed(data: &[CapabilityData]) -> Box<CapabilityTable> {
-    let table = Box::new(CapabilityTable::new());
+    let table = unsafe { Box::from_raw(CapabilityTable::new_boxed()) };
     for value in data { table.insert(*value); }
     table.seal();
     table
