@@ -195,9 +195,23 @@ impl Generations {
 }
 
 /// Spectre v1 (audit S10): an index from a register is bounds-checked by a
-/// branch, which can be mispredicted. Masking it to a power-of-two length
-/// after the check keeps even a speculative load inside the array, with no
-/// branch for the predictor to get wrong.
+/// branch, which can be mispredicted. After the check the index is ANDed with
+/// a mask computed by `cmp`+`sbb` (all ones when in range, else zero), so even
+/// a speculative load stays inside the array. Plain Rust masking would be
+/// folded away by the optimizer, which already knows the index is in range.
+#[cfg(target_arch = "x86_64")]
+#[inline(always)]
+fn spec_clamp(index: usize, len: usize) -> usize {
+    let mask: usize;
+    // SAFETY: register-only arithmetic, no memory or stack access.
+    unsafe {
+        core::arch::asm!("cmp {i}, {l}", "sbb {m}, {m}", i = in(reg) index, l = in(reg) len, m = out(reg) mask,
+                         options(pure, nomem, nostack));
+    }
+    index & mask
+}
+
+#[cfg(not(target_arch = "x86_64"))]
 #[inline(always)]
 fn spec_clamp(index: usize, len: usize) -> usize {
     index & (len - 1)

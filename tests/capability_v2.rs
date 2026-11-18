@@ -295,3 +295,11 @@ fn register_indexes_are_masked_after_their_bounds_check() {
     assert_eq!(objs.end_incarnation(1024), 0);
     assert_eq!(objs.incarnation(0), 1, "an out-of-range end never lands on a masked alias");
 }
+
+#[test]
+fn speculation_clamp_is_computed_not_folded() {
+    // The mask comes from cmp+sbb, so it cannot be optimised away after the
+    // bounds branch the way `index & (len - 1)` is.
+    let source = include_str!("../kernel/src/capability_table.rs");
+    assert!(source.contains(r#""cmp {i}, {l}", "sbb {m}, {m}""#));
+}
