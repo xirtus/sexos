@@ -24,16 +24,11 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
  'kernel/src/smp.rs': ('bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
  'kernel/src/interrupts.rs': ('c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
-<<<<<<< HEAD
                               'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d',
                               # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
                               'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),
- 'kernel/src/syscalls/mod.rs': ('aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
-=======
-                              'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d'),
  'kernel/src/syscalls/mod.rs': ('318f8602a3e053470c4f6f984fa818f928cae16253dcf9a9946edf1b114995ba',  # IPC fast path (WS4), 2026-11-17
     'aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
->>>>>>> origin/master
  'kernel/src/program_workers.rs': ('6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',),
  'crates/sex-pdx/src/lib.rs': ('8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde', '9eb262eb2108d51f57ae9dc821e6e40a12a9e1003fbfac711422b246ec17fd44',
                                'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
@@ -68,7 +63,9 @@ APPROVED_KERNEL_RUST_TREES=('eb6b69a3a3a5b687adc4134e30b58f73dad0cf36aa3f4fe8044
     # entry hardening + security audit (stream 2), 2026-11-18
     '24a9360f565da793ccaa3f9dda02c0540af671c7d7f997ea81d9286a28ce9865',
     # BOOT loader refuses key instructions and W+X code (stream 2), 2026-11-18
-    'bdaa310d6ed632686c4284e34dcee8f2264ef16010014a6caac0013b998cf5bb')
+    'bdaa310d6ed632686c4284e34dcee8f2264ef16010014a6caac0013b998cf5bb',
+    # stream 2 on top of the IPC fast path (#402), 2026-11-18
+    '98e232964db1dbed07859aac5a285b9f80dbfdc87a7fe74adb0d23e7a0ca43ad')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 

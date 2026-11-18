@@ -117,23 +117,13 @@ run_stage() {
         -Z build-std-features=compiler-builtins-mem \
         --manifest-path "$manifest" \
         --target "${stage_target:-$TARGET}" \
-<<<<<<< HEAD
-        --release
+        --profile "${stage_profile:-release}"
       # Programs and BOOT services alike: the loaders refuse code holding WRPKRU/XRSTOR
       # bytes at any offset. A displacement that holds them by chance moves when the
       # binary links with its sections in another order: programs read SEX_LAYOUT_SEED
       # in build.rs, services get the same shuffle as link arguments.
       local seed=0 shuffle=""
       while ! python3 scripts/key_bytes.py "$src"; do
-=======
-        --profile "${stage_profile:-release}"
-      # Programs: the loader refuses code holding WRPKRU/XRSTOR bytes at any offset.
-      # A displacement that holds them by chance moves when the program links with its
-      # read-only data in another order (programs that read SEX_LAYOUT_SEED).
-      if [[ ${stage_target:-$TARGET} == x86_64-sex-app.json || ${stage_target:-$TARGET} == x86_64-sex-std.json ]]; then
-        local seed=0
-        while ! python3 scripts/key_bytes.py "$src"; do
->>>>>>> origin/master
           seed=$((seed + 1))
           [[ $seed -le 24 ]] || { echo "[FAIL] $src holds a refused instruction at every layout tried"; exit 1; }
           echo "[layout] $src: linking again with SEX_LAYOUT_SEED=$seed"
@@ -145,14 +135,8 @@ run_stage() {
             -Z build-std-features=compiler-builtins-mem \
             --manifest-path "$manifest" \
             --target "${stage_target:-$TARGET}" \
-<<<<<<< HEAD
-            --release
-      done
-=======
             --profile "${stage_profile:-release}"
-        done
-      fi
->>>>>>> origin/master
+      done
       cp "$src" "$dst"
       python3 scripts/build_input_receipt.py finish "$stage"
       ;;
