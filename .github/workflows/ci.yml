@@ -481,6 +481,8 @@ jobs:
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
     - name: Intel RAID 0 on two NVMe drives, read only
       run: python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
+    - name: NVMe drives as real laptops have them (64 KiB per command; 4 KiB sectors refused)
+      run: python3 scripts/nvme_real_drive_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-nvme-real"
     - name: Power off and restart through ACPI
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI

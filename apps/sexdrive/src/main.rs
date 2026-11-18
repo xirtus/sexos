@@ -22,6 +22,7 @@ mod raid;
 mod ahci;
 mod controller_ready;
 mod apst;
+mod identify;
 use dma_transfer::DmaTransfer;
 use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
 use sex_pdx::memory_region::{RegionView, QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
@@ -247,12 +248,40 @@ fn end_block_loan() {
     }
 }
 
-const ADMIN_POLLS: u32 = 64_000_000;
+const ADMIN_POLLS: u64 = 64_000_000;
+/// Wall time an admin command gets once its poll budget is spent. Polls are what
+/// matter in QEMU (its device moves only when this core lets it); on a real SSD
+/// 64M polls pass in well under a second, while the first command after enable
+/// may take longer. Linux allows 60 s; ten is plenty and still ends a dead drive.
+const ADMIN_TICKS: u64 = 10_000;
+/// Keep waiting for an admin completion? Gives the core away every 64Ki polls and
+/// gives up only when both the poll budget and ADMIN_TICKS are spent.
+fn admin_patience(poll: u64, start: u64) -> bool {
+    if poll & 0xFFFF != 0xFFFF { return true; }
+    sex_pdx::sys_yield();
+    poll < ADMIN_POLLS || sex_pdx::get_ticks().saturating_sub(start) < ADMIN_TICKS
+}
+
 fn stop_uncertain_io() {
     unsafe { NVME_IO_STATE.ready = false; }
     end_block_loan();
     ahci::stop_io();
     serial_println!("[sexdrive.dma.quarantine] ready=0 reason=unresolved_submission");
+}
+
+/// The most one NVMe command moves: BLOCK_CMD_RUN, or less when the drive's MDTS
+/// says so (set once the first drive is up).
+fn cmd_run() -> u64 { NVME_CMD_RUN.load(Ordering::Relaxed) }
+static NVME_CMD_RUN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(BLOCK_CMD_RUN);
+
+/// One line the first time a request is cut smaller only because of the drive's MDTS.
+fn note_mdts_split(write: bool, size: u64, run: u64) {
+    static SEEN: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+    let bit = 1u8 << write as u8;
+    if run < BLOCK_CMD_RUN && SEEN.fetch_or(bit, Ordering::Relaxed) & bit == 0 {
+        sex_pdx::serial_record!("[sexdrive.nvme.split] first=1 op={} bytes={} max_transfer={} commands={}",
+            if write { "WRITE" } else { "READ" }, size, run, size.div_ceil(run));
+    }
 }
 
 /// PRP2 for `size` bytes of a lease buffer: none for one page, the second page for two,
@@ -546,14 +575,16 @@ fn typed_read_handoff(offset:u64,size:u64,buf_cap:u64,view:Option<RegionView>)->
 fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u64 {
     // A call longer than one command (#307): NVMe gets two commands in flight at a
     // time; RAID and AHCI take the pieces one after another.
-    if size > BLOCK_CMD_RUN && size <= BLOCK_MAX_RUN && size % NVME_LBA_BYTES == 0 && dst_va != 0 {
+    let run = if serving_ahci() { BLOCK_CMD_RUN } else { cmd_run() };
+    if size > run && size <= BLOCK_MAX_RUN && size % NVME_LBA_BYTES == 0 && dst_va != 0 {
         let direct = !(raid::serving() && !raid::raw()) && !serving_ahci();
-        let step = if direct { 2 * BLOCK_CMD_RUN } else { BLOCK_CMD_RUN };
+        let step = if direct { 2 * run } else { run };
+        note_mdts_split(false, size, run);
         let mut at = 0u64;
         while at < size {
             let len = (size - at).min(step);
             let piece_loan = if loan != 0 { loan + at } else { 0 };
-            let status = if direct && len > BLOCK_CMD_RUN { nvme_read_queued(offset + at, len, dst_va + at, piece_loan) }
+            let status = if direct && len > run { nvme_read_queued(offset + at, len, dst_va + at, piece_loan) }
                 else { nvme_read_into_mapped_va(offset + at, len, dst_va + at, piece_loan) };
             if status != 0 { return status; }
             at += len;
@@ -563,7 +594,7 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
     if raid::serving() && !raid::raw() { return raid::read(offset, size, dst_va); }
     if serving_ahci() { return ahci_read_into_mapped_va(offset, size, dst_va); }
     if size == 0
-        || size > BLOCK_CMD_RUN
+        || size > cmd_run()
         || (offset % NVME_LBA_BYTES) != 0
         || (size % NVME_LBA_BYTES) != 0
         || dst_va == 0
@@ -771,20 +802,21 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
     0u64
 }
 
-/// Two read commands in flight at once (#307): the first `BLOCK_CMD_RUN` bytes through
+/// Two read commands in flight at once (#307): the first `cmd_run()` bytes through
 /// the read lease, the rest through the write lease (Files' requests are served one at a
 /// time, so no write holds it now). Both SQEs go to the device with one doorbell; the
 /// CQEs may come back in either order. The same DMA rules as one command: a lease is
 /// reused only after its own CQE, and an unresolved command quarantines the queue.
 fn nvme_read_queued(offset: u64, size: u64, dst_va: u64, loan: u64) -> u64 {
-    if size <= BLOCK_CMD_RUN || size > 2 * BLOCK_CMD_RUN || offset % NVME_LBA_BYTES != 0
+    let run = cmd_run();
+    if size <= run || size > 2 * run || offset % NVME_LBA_BYTES != 0
         || size % NVME_LBA_BYTES != 0 || dst_va == 0 || dst_va == u64::MAX { return BLOCK_ERR_BAD_LEN; }
     let (map_va, io_sq_va, io_cq_va, sq1tdbl, cq1hdbl, mut sq_tail, mut cq_head, mut cq_phase) = unsafe {
         let st = &*core::ptr::addr_of!(NVME_IO_STATE);
         if !st.ready { return BLOCK_ERR_NO_DEVICE; }
         (st.map_va, st.io_sq_va, st.io_cq_va, st.sq1tdbl, st.cq1hdbl, st.sq_tail, st.cq_head, st.cq_phase)
     };
-    let parts = [(0u64, BLOCK_CMD_RUN), (BLOCK_CMD_RUN, size - BLOCK_CMD_RUN)];
+    let parts = [(0u64, run), (run, size - run)];
     let mut cids = [0u16; 2];
     let mut transfers: [Option<DmaTransfer<'static>>; 2] = [None, None];
     for (i, &(at, len)) in parts.iter().enumerate() {
@@ -1080,10 +1112,12 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
 fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     if raid::writes_refused() { return BLOCK_ERR_NO_DEVICE; }
     // Writes longer than one command go out as consecutive commands.
-    if size > BLOCK_CMD_RUN && size <= BLOCK_MAX_RUN && size % NVME_LBA_BYTES == 0 && src_va != 0 && src_va != u64::MAX {
+    let run = if serving_ahci() { BLOCK_CMD_RUN } else { cmd_run() };
+    if size > run && size <= BLOCK_MAX_RUN && size % NVME_LBA_BYTES == 0 && src_va != 0 && src_va != u64::MAX {
+        note_mdts_split(true, size, run);
         let mut at = 0u64;
         while at < size {
-            let len = (size - at).min(BLOCK_CMD_RUN);
+            let len = (size - at).min(run);
             let status = nvme_write_one_block(offset + at, len, src_va + at);
             if status != 0 { return status; }
             at += len;
@@ -1093,7 +1127,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     if serving_ahci() { return ahci_write(offset, size, src_va); }
     // Success chatter shares the existing finite hot-log budget. Device errors,
     // timeout/quarantine and actual FLUSH receipts remain unconditional.
-    if size == 0 || size > BLOCK_CMD_RUN
+    if size == 0 || size > cmd_run()
         || size % NVME_LBA_BYTES != 0 || offset % NVME_LBA_BYTES != 0
         || offset.checked_add(size).map_or(true,|end|end>device_sectors()*NVME_LBA_BYTES)
         || src_va == 0 || src_va == u64::MAX {
@@ -2279,6 +2313,12 @@ fn nvme_probe_bar() {
     let nvme_asq = unsafe { core::ptr::read_volatile((map_va + 0x0028) as *const u64) };
     let nvme_acq = unsafe { core::ptr::read_volatile((map_va + 0x0030) as *const u64) };
 
+    // All ones: the controller is not answering (powered down, link down, or behind
+    // a VMD domain that was not opened). Nothing below would ever complete.
+    if nvme_cap == u64::MAX || nvme_csts == u32::MAX {
+        serial_println!("[sexdrive.nvme.refused] reason=device_not_responding cap={:#x} csts={:#x}", nvme_cap, nvme_csts);
+        return;
+    }
     let cap_mqes = (nvme_cap & 0xFFFF) as u16;
     let cap_dstrd = ((nvme_cap >> 32) & 0xF) as u8;
     // Include IO CQ1's doorbell; reject a controller layout outside its BAR.
@@ -2447,6 +2487,11 @@ fn nvme_probe_bar() {
     let old_asq = nvme_asq;
     let old_acq = nvme_acq;
     let cap_to = ((nvme_cap >> 24) & 0xFF) as u32;
+    // 4 KiB pages and the NVM command set, or this driver cannot talk to it at all.
+    if let Err(reason) = identify::capabilities(nvme_cap) {
+        serial_println!("[sexdrive.nvme.refused] reason={} cap={:#x}", reason, nvme_cap);
+        return;
+    }
 
     serial_println!(
         "[sexdrive.nvme.reprovision.begin] old_cc={:#x} old_csts={:#x} old_aqa={:#x} old_asq={:#x} old_acq={:#x} cap_to={} dstrd={}",
@@ -2725,6 +2770,7 @@ fn nvme_probe_bar() {
     let mut cqe_phase = 0u32;
     let mut cqe_cid = 0u32;
     let mut cqe_polls = 0u32;
+    let identify_start = sex_pdx::get_ticks();
     let mut acq_changed = false;
     let mut first_change_poll = u32::MAX;
     let mut acq0_dw0_change = acq0_dw0_before;
@@ -2738,7 +2784,8 @@ fn nvme_probe_bar() {
     let mut ig_dw3 = 0u32;
     let mut ig_phase = 0u32;
 
-    while cqe_polls < 1_000_000 {
+    // The first command after enable: a real SSD may take far longer than QEMU.
+    while admin_patience(cqe_polls as u64, identify_start) && cqe_polls < u32::MAX {
         let acq0_dw0 = unsafe { core::ptr::read_volatile(acq0_ptr.add(0)) };
         let acq0_dw1 = unsafe { core::ptr::read_volatile(acq0_ptr.add(1)) };
         let acq0_dw2 = unsafe { core::ptr::read_volatile(acq0_ptr.add(2)) };
@@ -2882,6 +2929,17 @@ fn nvme_probe_bar() {
         unsafe { NVME0_SERIAL[i as usize] = core::ptr::read_volatile((id_va + 4 + i) as *const u8); }
     }
     let mn0 = unsafe { core::ptr::read_volatile((id_va + 24) as *const u64) };
+    // Which drive this is, for the bare-metal boot log, and how much one command may move.
+    let id_page = unsafe { core::slice::from_raw_parts(id_va as *const u8, PAGE_SIZE as usize) };
+    let mut drive_cmd_run = BLOCK_CMD_RUN;
+    if let Some(drive) = identify::controller(id_page) {
+        drive_cmd_run = identify::max_transfer(drive.mdts, BLOCK_CMD_RUN);
+        let (mut model, mut firmware) = ([0u8; 40], [0u8; 8]);
+        let (m, f) = (identify::text(&drive.model, &mut model), identify::text(&drive.firmware, &mut firmware));
+        sex_pdx::serial_record!("[sexdrive.nvme.drive] vendor={:04x} model=\"{}\" firmware=\"{}\" mdts={} max_transfer_kib={} namespaces={}",
+            drive.vendor, core::str::from_utf8(&model[..m]).unwrap_or("?"), core::str::from_utf8(&firmware[..f]).unwrap_or("?"),
+            drive.mdts, drive_cmd_run / 1024, drive.namespaces);
+    }
     let nn = unsafe { core::ptr::read_volatile((id_va + 516) as *const u32) };
     NVME_RTD3E_US.store(unsafe { core::ptr::read_volatile((id_va + 88) as *const u32) }, Ordering::Relaxed);
     serial_println!(
@@ -2981,8 +3039,10 @@ fn nvme_probe_bar() {
     let mut cq_cqe_dw2 = 0u32;
     let mut cq_cqe_dw3 = 0u32;
     // The device only moves when something lets it: count no polls as time.
-    for poll in 0..ADMIN_POLLS {
-        if poll&0xFFFF==0xFFFF{sex_pdx::sys_yield();}
+    let admin_start = sex_pdx::get_ticks();
+    let mut poll = 0u64;
+    while admin_patience(poll, admin_start) {
+        poll += 1;
         let cqe_ptr = (acq_owned_va as *const u8).wrapping_add((admin_cq_head as usize) * 16) as *const u32;
         let dw2 = unsafe { core::ptr::read_volatile(cqe_ptr.add(2)) };
         let dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
@@ -3066,8 +3126,10 @@ fn nvme_probe_bar() {
     let mut sq_done = false;
     let mut sq_cqe_dw3 = 0u32;
     // The device only moves when something lets it: count no polls as time.
-    for poll in 0..ADMIN_POLLS {
-        if poll&0xFFFF==0xFFFF{sex_pdx::sys_yield();}
+    let admin_start = sex_pdx::get_ticks();
+    let mut poll = 0u64;
+    while admin_patience(poll, admin_start) {
+        poll += 1;
         let cqe_ptr = (acq_owned_va as *const u8).wrapping_add((admin_cq_head as usize) * 16) as *const u32;
         let dw3 = unsafe { core::ptr::read_volatile(cqe_ptr.add(3)) };
         let cid_now = dw3 & 0xFFFF;
@@ -3118,8 +3180,12 @@ fn nvme_probe_bar() {
         admin_cq_phase as u64
     );
 
-    // How big is this disk? Failure leaves only the original fixed area writable.
-    let mut device_size = 0u64;
+    // How big is this disk, and are its sectors the 512 bytes everything here assumes?
+    // A drive that cannot say, or says otherwise, is not used at all: a 4 KiB-sector
+    // read would DMA past the 512-byte buffer it was given.
+    let device_size: u64;
+    let mut namespace: Option<Result<u64, identify::Refusal>> = None;
+    let mut namespace_status = u32::MAX;
     let ns_phys = reserve_dma_phys(PAGE_SIZE);
     let ns_va = own_dma_virtual(ns_phys, PAGE_SIZE);
     if ns_phys != 0 && ns_phys != u64::MAX && ns_va != 0 && ns_va != u64::MAX {
@@ -3135,31 +3201,41 @@ fn nvme_probe_bar() {
         compiler_fence(Ordering::SeqCst);
         admin_sq_tail = (admin_sq_tail + 1) % q_entries;
         unsafe { core::ptr::write_volatile((map_va + NVME_SQ0TDBL) as *mut u32, admin_sq_tail); }
-        for poll in 0..ADMIN_POLLS {
-            if poll&0xFFFF==0xFFFF{sex_pdx::sys_yield();}
+        let admin_start = sex_pdx::get_ticks();
+        let mut poll = 0u64;
+        while admin_patience(poll, admin_start) {
+            poll += 1;
             let cqe = (acq_owned_va as *const u8).wrapping_add((admin_cq_head as usize) * 16) as *const u32;
             let dw3 = unsafe { core::ptr::read_volatile(cqe.add(3)) };
             if dw3 & 0xFFFF == cid as u32 && (dw3 >> 16) & 1 == admin_cq_phase {
                 admin_cq_head = (admin_cq_head + 1) % q_entries;
                 if admin_cq_head == 0 { admin_cq_phase ^= 1; }
                 unsafe { core::ptr::write_volatile((map_va + cq0hdbl) as *mut u32, admin_cq_head); }
-                if (dw3 >> 17) & 0x7FFF == 0 {
-                    let (size, format) = unsafe { (core::ptr::read_volatile(ns_va as *const u64),
-                        core::ptr::read_volatile((ns_va + 26) as *const u8) & 0xF) };
-                    let shift = unsafe { core::ptr::read_volatile((ns_va + 128 + 4 * format as u64 + 2) as *const u8) };
-                    if shift == 9 { device_size = size; }
-                    sex_pdx::serial_record!("[sexdrive.nvme.namespace] sectors={} lba_shift={}", size, shift);
-                    if shift != 9 {
-                        // 4 KiB-sector namespaces need BLOCK_SECTOR_SIZE to follow the disk;
-                        // until then only the fixed proof area is used, never the rest.
-                        sex_pdx::serial_record!("[sexdrive.nvme.namespace.unsupported] lba_bytes={} reason=only_512_byte_sectors fix=nvme_format_lbaf_512", 1u64 << shift.min(63));
-                    }
+                namespace_status = (dw3 >> 17) & 0x7FFF;
+                if namespace_status == 0 {
+                    let page = unsafe { core::slice::from_raw_parts(ns_va as *const u8, PAGE_SIZE as usize) };
+                    namespace = Some(identify::namespace(page));
                 }
                 break;
             }
         }
     }
 
+    match namespace {
+        Some(Ok(sectors)) => {
+            device_size = sectors;
+            sex_pdx::serial_record!("[sexdrive.nvme.namespace] sectors={} lba_shift=9 nsid=1", sectors);
+        }
+        Some(Err(r)) => {
+            sex_pdx::serial_record!("[sexdrive.nvme.namespace.refused] nsid=1 reason={} lba_bytes={} metadata_bytes={} fix={} writes=0 reads=0",
+                r.reason, r.lba_bytes, r.metadata_bytes, r.fix);
+            return;
+        }
+        None => {
+            sex_pdx::serial_record!("[sexdrive.nvme.namespace.refused] nsid=1 reason=identify_failed status={:#x} writes=0 reads=0", namespace_status);
+            return;
+        }
+    }
     // Battery: let the idle SSD drop into its low-power states by itself (APST),
     // from the Identify Controller data still in id_va. The table goes in the
     // namespace page, which is ours and no longer needed.
@@ -3185,8 +3261,10 @@ fn nvme_probe_bar() {
                 admin_sq_tail = (admin_sq_tail + 1) % q_entries;
                 unsafe { core::ptr::write_volatile((map_va + NVME_SQ0TDBL) as *mut u32, admin_sq_tail); }
                 let mut status = u32::MAX;
-                for poll in 0..ADMIN_POLLS {
-                    if poll&0xFFFF==0xFFFF{sex_pdx::sys_yield();}
+                let admin_start = sex_pdx::get_ticks();
+                let mut poll = 0u64;
+                while admin_patience(poll, admin_start) {
+                    poll += 1;
                     let cqe = (acq_owned_va as *const u8).wrapping_add((admin_cq_head as usize) * 16) as *const u32;
                     let dw3 = unsafe { core::ptr::read_volatile(cqe.add(3)) };
                     if dw3 & 0xFFFF == cid as u32 && (dw3 >> 16) & 1 == admin_cq_phase {
@@ -3225,6 +3303,7 @@ fn nvme_probe_bar() {
     } else {
         serial_println!("[sexdrive.nvme.irq] mode=none polling=1");
     }
+    NVME_CMD_RUN.store(drive_cmd_run, Ordering::Relaxed);
     unsafe {
         NVME_IO_STATE.ready = true;
         NVME_IO_STATE.sectors = device_size;
@@ -3336,8 +3415,10 @@ fn nvme_probe_bar() {
     let mut rd_dw2 = 0u32;
     let mut rd_dw3 = 0u32;
     // The device only moves when something lets it: count no polls as time.
-    for poll in 0..ADMIN_POLLS {
-        if poll&0xFFFF==0xFFFF{sex_pdx::sys_yield();}
+    let admin_start = sex_pdx::get_ticks();
+    let mut poll = 0u64;
+    while admin_patience(poll, admin_start) {
+        poll += 1;
         let cqe_ptr = (io_cq_va as *const u8).wrapping_add((io_cq_head as usize) * 16) as *const u32;
         let dw0 = unsafe { core::ptr::read_volatile(cqe_ptr.add(0)) };
         let dw1 = unsafe { core::ptr::read_volatile(cqe_ptr.add(1)) };

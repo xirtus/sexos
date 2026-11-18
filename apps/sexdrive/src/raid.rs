@@ -223,6 +223,8 @@ pub struct Controller {
     asq: (u64, u64), acq: (u64, u64), sq: (u64, u64), cq: (u64, u64),
     a_tail: u32, a_head: u32, a_phase: u32,
     tail: u32, head: u32, phase: u32, cid: u16,
+    /// Most bytes one command may move (the drive's MDTS, at most BLOCK_CMD_RUN).
+    run: u64,
     pub sectors: u64,
     pub serial: [u8; 20],
 }
@@ -238,7 +240,7 @@ fn page() -> Option<(u64, u64)> {
 impl Controller {
     const fn empty() -> Self {
         Controller { regs: 0, stride: 4, ready: false, asq: (0, 0), acq: (0, 0), sq: (0, 0), cq: (0, 0),
-            a_tail: 0, a_head: 0, a_phase: 1, tail: 0, head: 0, phase: 1, cid: CID_BASE, sectors: 0, serial: [0; 20] }
+            a_tail: 0, a_head: 0, a_phase: 1, tail: 0, head: 0, phase: 1, cid: CID_BASE, run: BLOCK_CMD_RUN, sectors: 0, serial: [0; 20] }
     }
     fn r32(&self, at: u64) -> u32 { unsafe { core::ptr::read_volatile((self.regs + at) as *const u32) } }
     fn w32(&self, at: u64, v: u32) { unsafe { core::ptr::write_volatile((self.regs + at) as *mut u32, v) } }
@@ -271,6 +273,7 @@ impl Controller {
         self.regs = va;
         let cap = self.r32(0) as u64 | (self.r32(4) as u64) << 32;
         self.stride = 4 << ((cap >> 32) & 0xF);
+        if let Err(reason) = super::identify::capabilities(cap) { serial_println!("[sexdrive.nvme2.err] reason={} cap={:#x}", reason, cap); return false; }
         if 0x1000 + 4 * self.stride > bytes { serial_println!("[sexdrive.nvme2.err] reason=doorbells_outside_bar"); return false; }
         // CAP.TO is in 500 ms units; clock ticks are milliseconds.
         let timeout = (((cap >> 24) & 0xFF).max(1)) * 500 + 500;
@@ -292,12 +295,25 @@ impl Controller {
             serial_println!("[sexdrive.nvme2.err] reason=identify_controller"); return false;
         }
         for i in 0..20 { self.serial[i] = unsafe { core::ptr::read_volatile((id.0 + 4 + i as u64) as *const u8) }; }
+        let page = unsafe { core::slice::from_raw_parts(id.0 as *const u8, super::PAGE_SIZE as usize) };
+        if let Some(drive) = super::identify::controller(page) {
+            self.run = super::identify::max_transfer(drive.mdts, BLOCK_CMD_RUN);
+            let mut model = [0u8; 40];
+            let m = super::identify::text(&drive.model, &mut model);
+            serial_println!("[sexdrive.nvme2.drive] vendor={:04x} model=\"{}\" mdts={} max_transfer_kib={}",
+                drive.vendor, core::str::from_utf8(&model[..m]).unwrap_or("?"), drive.mdts, self.run / 1024);
+        }
         if self.admin([0x06, 1, 0, 0, 0, 0, id.1 as u32, (id.1 >> 32) as u32, 0, 0, 0, 0, 0, 0, 0, 0]) != Some(0) {
             serial_println!("[sexdrive.nvme2.err] reason=identify_namespace"); return false;
         }
-        let (size, format) = unsafe { (core::ptr::read_volatile(id.0 as *const u64), core::ptr::read_volatile((id.0 + 26) as *const u8) & 0xF) };
-        let shift = unsafe { core::ptr::read_volatile((id.0 + 128 + 4 * format as u64 + 2) as *const u8) };
-        if shift != 9 { serial_println!("[sexdrive.nvme2.err] reason=sector_size lba_shift={}", shift); return false; }
+        let page = unsafe { core::slice::from_raw_parts(id.0 as *const u8, super::PAGE_SIZE as usize) };
+        let size = match super::identify::namespace(page) {
+            Ok(sectors) => sectors,
+            Err(r) => {
+                serial_println!("[sexdrive.nvme2.err] reason={} lba_bytes={} metadata_bytes={} fix={}", r.reason, r.lba_bytes, r.metadata_bytes, r.fix);
+                return false;
+            }
+        };
         self.sectors = size;
         if self.admin([0x05, 0, 0, 0, 0, 0, cq.1 as u32, (cq.1 >> 32) as u32, 0, 0, (Q - 1) << 16 | 1, 1, 0, 0, 0, 0]) != Some(0)
             || self.admin([0x01, 0, 0, 0, 0, 0, sq.1 as u32, (sq.1 >> 32) as u32, 0, 0, (Q - 1) << 16 | 1, 1 << 16 | 1, 0, 0, 0, 0]) != Some(0) {
@@ -329,6 +345,17 @@ impl Controller {
         let sector = SECTOR as u64;
         if !self.ready { return BLOCK_ERR_NO_DEVICE; }
         if size == 0 || size > BLOCK_CMD_RUN || offset % sector != 0 || size % sector != 0 { return BLOCK_ERR_BAD_LEN; }
+        // More than this drive takes in one command: one command per piece.
+        if size > self.run {
+            let mut at = 0;
+            while at < size {
+                let len = (size - at).min(self.run);
+                let status = self.read(offset + at, len, dst_va + at);
+                if status != 0 { return status; }
+                at += len;
+            }
+            return 0;
+        }
         let cid = self.cid; self.cid = self.cid.wrapping_add(1) | CID_BASE;
         let Some(mut transfer) = super::prepare_bounce(false, cid) else { return BLOCK_ERR_NO_DEVICE };
         if transfer.buffer.length < size { return BLOCK_ERR_NO_DEVICE; }
