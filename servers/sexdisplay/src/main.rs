@@ -5057,7 +5057,11 @@ pub extern "C" fn _start() -> ! {
                                 let motion = &mut *core::ptr::addr_of_mut!(MOTION);
                                 let now = sex_pdx::get_ticks();
                                 match before {
-                                    None => { motion.opened(surface_id, to, now); if motion.enabled() { decor::opened(surface_id, now); } }
+                                    None => {
+                                        // A workspace's windows slide in whole; only a new window fades in.
+                                        if motion.enabled() && !motion.sliding(now) { decor::opened(surface_id, now); }
+                                        motion.opened(surface_id, to, now);
+                                    }
                                     Some((bx, by, bw, bh, _)) => {
                                         let far = (bx - to.x).abs() > 24 || (by - to.y).abs() > 24 || bw.abs_diff(to.w) > 24 || bh.abs_diff(to.h) > 24;
                                         if far { motion.moved(surface_id, Geom { x: bx, y: by, w: bw, h: bh }, to, now); } else { motion.forget(surface_id); }

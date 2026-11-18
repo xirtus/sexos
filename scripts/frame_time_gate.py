@@ -122,6 +122,7 @@ def main():
         costs = [tuple(int(v) for v in m) for m in re.findall(r'\[display\.frame\.cost\] render_ms=(\d+) render_kcyc=(\d+) decor_kcyc=(\d+) full=(\d)', text()[start:])]
         render_kcyc = sum(c[1] for c in costs); decor_kcyc = sum(c[2] for c in costs)
         cost = dict(frames=len(costs), render_ms=[c[0] for c in costs][:24], full_frames=sum(c[3] for c in costs),
+                    decor_pct=[c[2] * 100 // max(c[1], 1) for c in costs][:24],
                     decor_share_pct=(decor_kcyc * 100 // render_kcyc) if render_kcyc else None)
         print('[frame_time.cost] ' + json.dumps(cost), flush=True)
         if len(times) < a.slides: raise RuntimeError('too few paced frames: %r' % times)
