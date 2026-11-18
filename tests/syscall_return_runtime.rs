@@ -27,12 +27,17 @@ fn model(asm:&[&str],initial:&BTreeMap<String,u64>,handler:impl FnOnce(&mut Sysc
     let mut args=unsafe{core::ptr::read(words.as_ptr().cast::<SyscallRegs>())};let returned=handler(&mut args);
     let modified=unsafe{core::slice::from_raw_parts((&args as *const SyscallRegs).cast::<u64>(),words.len())};
     let discard=asm.iter().enumerate().skip(call+1).find(|(_,s)|s.starts_with("add rsp, ")).unwrap().0;
-    let copies=&asm[call+1..discard];assert_eq!(copies.len()%2,0);
+    let copies:Vec<&str>=asm[call+1..discard].iter().copied().filter(|&s|s!="cli").collect();assert_eq!(copies.len()%2,0);
     for pair in copies.chunks_exact(2){let source=offset(pair[0],"mov rcx, [rsp + ","]");let destination=offset(pair[1],"mov [rbp + " ,"], rcx");assert_eq!((source%8,destination%8),(0,0));frame[destination/8]=modified[source/8];}
     assert_eq!(offset(asm[discard],"add rsp, ",""),core::mem::size_of::<SyscallRegs>());
     let mut registers=initial.clone();registers.insert("rax".into(),returned);let mut sp=0usize;
-    for instruction in &asm[discard+1..]{
-        if let Some(name)=instruction.strip_prefix("pop "){
+    let tail=&asm[discard+1..];let mut at=0;
+    while at<tail.len(){let instruction=&tail[at];at+=1;
+        if *instruction=="mov rdi, [rsp + 56]"{registers.insert("rdi".into(),frame[(sp+56)/8]);}
+        else if *instruction=="shr rdi, 47"{registers.insert("rdi".into(),registers["rdi"]>>47);}
+        else if *instruction=="jz 94f"{if registers["rdi"]==0{at=tail.iter().position(|&s|s=="94:").unwrap()+1;}}
+        else if *instruction=="mov qword ptr [rsp + 56], 0"{frame[(sp+56)/8]=0;}
+        else if let Some(name)=instruction.strip_prefix("pop "){
             let value=frame[sp/8];sp+=8;registers.insert(name.to_string(),value);
         }else if let Some(name)=instruction.strip_prefix("push "){
             sp=sp.checked_sub(8).unwrap();frame[sp/8]=registers[name];
@@ -40,7 +45,7 @@ fn model(asm:&[&str],initial:&BTreeMap<String,u64>,handler:impl FnOnce(&mut Sysc
         else if *instruction=="mov rax, rdi"{registers.insert("rax".into(),registers["rdi"]);}
         else if *instruction=="xor ecx, ecx"{registers.insert("rcx".into(),0);}
         else if *instruction=="xor edx, edx"{registers.insert("rdx".into(),0);}
-        else{assert!(instruction.starts_with("cmp byte ptr ")||matches!(*instruction,"je 93f"|"wrpkru"|"93:"|"swapgs"|"sysretq"),"unmodeled return instruction {instruction}");}
+        else{assert!(instruction.starts_with("cmp byte ptr ")||matches!(*instruction,"je 93f"|"wrpkru"|"93:"|"94:"|"swapgs"|"sysretq"),"unmodeled return instruction {instruction}");}
     }
     assert_eq!(sp,names.len()*8);registers
 }
@@ -68,4 +73,7 @@ fn receive_outputs(regs:&mut SyscallRegs)->u64{regs.rdi=901;regs.rsi=3;regs.rdx=
 #[test]fn missing_rdi_copy_reproduces_old_selector_even_while_all_other_outputs_survive(){
     let mut old=ENTRY_ASM.to_vec();let at=old.iter().position(|&s|s=="mov rcx, [rsp + 8]").unwrap();assert_eq!(old[at+1],"mov [rbp + 96], rcx");old.drain(at..at+2);let returned=model(&old,&inputs(0,28),receive_outputs);
     assert_eq!(returned["rdi"],0);assert_ne!(returned["rdi"],901);assert_eq!(returned["rsi"],3);assert_eq!(returned["rdx"],0x100_0000_0001);assert_eq!(returned["r10"],u64::MAX);assert_eq!(returned["r8"],0xfeed_abb0);
+}
+#[test]fn non_canonical_return_rip_is_sent_to_zero_and_canonical_rip_is_kept(){
+    for (rip,expected) in [(0x7fff_ffff_f000u64,0x7fff_ffff_f000u64),(0x8000_0000_0000,0),(0xffff_8000_0000_1000,0)]{let mut initial=inputs(0,28);initial.insert("rcx".into(),rip);let returned=model(ENTRY_ASM,&initial,|_|0);assert_eq!(returned["rcx"],expected,"rip {rip:#x}");assert_eq!(returned["rdi"],0);}
 }
