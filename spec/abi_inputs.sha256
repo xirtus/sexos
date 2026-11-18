@@ -130,7 +130,7 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 99e2089130ccb63dec906a478946d6c18939b21c2554895e49fb6789033c1ada  kernel/src/app_resource_state.rs
 
-1c4de7fca3f3fc4cc6ade73eecec83c269f800a0d520069b2201466d15c761a0  kernel/src/app_resources.rs
+89626a05e12f0947a102e3332eac3c9ee0bb89092711afde33952e7c3d37496e  kernel/src/app_resources.rs
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
@@ -140,11 +140,11 @@ be4bb003491894145a3412a00802e7ecf9533f5b3a5e5b9ad62e66702eb80037  kernel/src/boo
 
 07e1a4d79cd121594f04d44c9ed15edd5b12873dca4304389591531401156ff7  kernel/src/boot_network_state.rs
 
-ce7644f5ce3b31289407e0b1b7b381692cda47935597c90bab8b09ceb6b39b82  kernel/src/capability.rs
+9030c900d01f06597d1dab33919a459f7b467d7d988ddf4cc4497fd1d9dad111  kernel/src/capability.rs
 
 0c62bb2bd29f503742475183301cb41ad7da26308dac26ae638e44f8d9d9f6b4  kernel/src/capability_slot.rs
 
-d4ded4cf20061e5ea54c59e2b026972c09a0924b08eff6a07c8fc1b2a4e7765c  kernel/src/capability_table.rs
+5863aba8b8e3b427b63dd82dc301d92b132587ebac244c3280a182a769b2efdf  kernel/src/capability_table.rs
 
 ddda6ecb6219bb1cdad31c61a5401719eaecee79c8e3e218b44034ca45a2cc8f  kernel/src/clock_source.rs
 

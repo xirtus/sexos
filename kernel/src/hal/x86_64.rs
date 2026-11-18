@@ -84,7 +84,7 @@ impl HardwareAbstractionLayer for X86Hal {
         let (smep, umip, ibrs, rdcl_no) = harden_core();
         serial_println!("[cpu.hardening] smep={} smap=0 umip={} ibrs={} rdcl_no={} meltdown_pk={}",
             smep as u8, umip as u8, ibrs, rdcl_no as u8, if rdcl_no { "no" } else { "possible" });
-        serial_println!("[fpu.ready] sse=1 xsave_state=x87+sse");
+        { let (files, mode, size) = crate::fpu::describe(); serial_println!("[fpu.ready] sse=1 xsave_state={} save={} bytes={}", files, mode, size); }
         serial_println!("X86Hal: Initializing GDT/IDT...");
         gdt::init();
 

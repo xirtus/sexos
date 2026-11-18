@@ -14,8 +14,12 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 # Denim (syscall 88), Cufflinks/Bluetooth, touchpad route and SYS_VM (110) add no
 # deadline reference; USB quiet only narrows (also requires no Bluetooth HID traffic).
 APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',
+                               # record table allocated zeroed via CapabilityTable::new_boxed (no wait change), 2026-11-17
+                               'e4f79ad810b5bba8aab649b5472154ebece0d4ae1c7b96ccf0cacf3b076de769',
     # record code scanned for key instructions (stream 2), 2026-11-18
-    'd8dab16031564c8540b35ce5e45c28d1cbf297071e3ffc6d21e5aff7322f625b',),
+    'd8dab16031564c8540b35ce5e45c28d1cbf297071e3ffc6d21e5aff7322f625b',
+    # stream 2 scan merged with the v2 capability table, 2026-11-18
+    '46adbb04a4ef0f0e057f3282c9c19fc1f8044a8a9f4d4e77b0a4c679dee03215',),
 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
 'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
 'kernel/src/scheduler.rs': ('8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
@@ -56,7 +60,8 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
 # c209 raw-master only; no speculative combined privacy/kernel cohort.
-APPROVED_KERNEL_RUST_TREES=(
+APPROVED_KERNEL_RUST_TREES=('dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8b114a8d2c6fb2',  # XSAVE + AVX (stream 5), 2026-11-18
+    
     # Phase 1a dead kernel modules removed, 2026-11-18
     '620ffd8bab9d6528e4842df3930d060d4ceacc071b7587db37604bd3ddaf7c6d','ad54b57094dec16de9007a317b15506afc52747967aa9d4fedd100a32b1d95dd',  # IPC fast path (WS4), 2026-11-17
     '91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb', 'e93d67e07151c4c0f5eed240e0f3a27f9abb58074e26f52934eb8c36963278f7',
@@ -79,7 +84,11 @@ APPROVED_KERNEL_RUST_TREES=(
     # stream 2 merged with ipc_v2 (stream 4), 2026-11-18
     '6653e237101288231f1336156721a6401df232d53786312b2ec222f5db2438b3',
     # stream 2 merged with the shared-image CI (#399), 2026-11-18
-    '55803e9cff54b5b46b50be5a697c71617e5461f48a37cc9f99168f1046ed2cfd')
+    '55803e9cff54b5b46b50be5a697c71617e5461f48a37cc9f99168f1046ed2cfd',
+    # authority v2 capability table (inline slots, generations), cheri.rs removed, 2026-11-17
+    '6371383dfa90b1b27da40ad384b65ebd757ae90284fe6f0f1a083453fb6b1933',
+    # stream 2 merged with authority v2 and XSAVE (#407, #408), 2026-11-18
+    'ace8232c43ac9354d1997d8aed554d48ad8a39bf26507479a00cab0affaea3ae')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -304,7 +313,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
  'kernel/src/cpu_account.rs': '281b10b4f856a7f665c7ba59951b73b926decefa5c3bfae968af5714ba202f45',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
- 'kernel/src/app_resources.rs': '1c4de7fca3f3fc4cc6ade73eecec83c269f800a0d520069b2201466d15c761a0',
+ 'kernel/src/app_resources.rs': '89626a05e12f0947a102e3332eac3c9ee0bb89092711afde33952e7c3d37496e',
  'kernel/src/service_restart.rs': 'c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e',
  'kernel/src/crash_log.rs': '4a6a0f5312fdbec23efa0d5497b820105ba244c35cc878f27db04ba98cedc3ae',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
