@@ -1,5 +1,3 @@
-pub mod storage;
-pub mod store;
 
 use crate::interrupts::SyscallRegs;
 use crate::ipc::messages::MessageType;
