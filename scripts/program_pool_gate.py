@@ -20,10 +20,10 @@ def main():
   views=re.search(r'\[boot\.views\] views=(\d+) pcid=(\d)',t());assert views,'no protection views'
   pool=re.findall(r'\[boot\.program\.pool\.regions\] target=(\d+) pages=(\d+) spans=(\d+) view=\d+ boot_spans=(\d+)',t())
   assert pool,'no shared rows claimed their regions'
-  for target,pages,spans,boot in pool:
+  for target,pages,spans,boot_spans in pool:
    # Whole spans: a region needs no more than its size in 2 MiB spans, plus one per region,
    # and BOOT's image and stack (claimed with the successor, logged apart) add their own.
-   assert int(spans)<=int(pages)//512+8+int(boot),f'row {target}: {spans} spans for {pages} pages'
+   assert int(spans)<=int(pages)//512+8+int(boot_spans),f'row {target}: {spans} spans for {pages} pages'
   live=[]
   for _ in range(a.live):
    palette_select(g['key'],'FocusProgram',commands)
