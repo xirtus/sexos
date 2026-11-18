@@ -13,6 +13,7 @@
 //! that in this service's memory only, for this boot (never in a file); a refused
 //! handshake (usually a wrong passphrase) or `wifi leave` forgets them. Joining
 //! another network, or a scan after a failure, restarts the chip the same way.
+extern crate alloc;
 use sex_pdx::wifi_status as ws;
 use sex_pdx::{memory_region as m, pci_command as c};
 use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, join::{self, Join}, assoc::{self, Assoc}, rsna::{self, Rsna}, link::{self as wlink, Link}, tx::TxQueue, ieee80211::{self, Bss}, crypto, hcmd, pack::Pack, scan::{self, Scan}, ucode::Firmware, sae};

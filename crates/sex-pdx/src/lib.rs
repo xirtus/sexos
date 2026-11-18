@@ -7,6 +7,8 @@
 #![no_std]
 
 pub mod mem;
+pub mod ipc_recv;
+pub mod sched;
 pub mod pagefault;
 pub mod app_catalog;
 pub mod browser_sources;
@@ -984,9 +986,12 @@ pub const BLOCK_ERR_TIMEOUT:  u64 = 5; // Operation timed out
 pub const BLOCK_SECTOR_SIZE:  u64 = 512;     // Minimum alignment unit
 pub const BLOCK_MAX_XFER:     u64 = 4096;    // Max bytes per transfer (one page)
 /// Largest single READ/WRITE Files may send: the size of the shared block buffer.
-/// One NVMe command moves it all (a PRP list), so large I/O costs one command per run
-/// instead of one per page. BLOCK_MAX_XFER stays the unit for callers that want pages.
-pub const BLOCK_MAX_RUN:      u64 = 128 * 1024;
+/// SexDrive moves it as commands of at most BLOCK_CMD_RUN, several in flight at once
+/// (#307), so large I/O costs one call per run instead of one per page.
+/// BLOCK_MAX_XFER stays the unit for callers that want pages.
+pub const BLOCK_MAX_RUN:      u64 = 512 * 1024;
+/// Largest single device command (one PRP list page; within common NVMe MDTS limits).
+pub const BLOCK_CMD_RUN:      u64 = 128 * 1024;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DISK LAYOUT — canonical, single source of truth for every fixed on-disk
@@ -1333,6 +1338,7 @@ pub mod power;
 pub mod denim;
 pub mod touchpad;
 pub mod program_threads;
+pub mod endpoint;
 pub mod fs;
 pub mod home_lock;
 pub mod disks;
