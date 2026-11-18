@@ -69,7 +69,7 @@ APPROVED_KERNEL_RUST_TREES=('dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8
     # authority v2 capability table (inline slots, generations), cheri.rs removed, 2026-11-17
     '6371383dfa90b1b27da40ad384b65ebd757ae90284fe6f0f1a083453fb6b1933',
     # capability kinds IPC, Node, DMA, MemLend removed (stream 3 follow-up), 2026-11-18
-    'dafb00984d4d2efacc40ffb53f76f97e403171d2a6a18db9b6869e3c1517a4d0')
+    'b080a12111987833761907de6cc115093c2df4eabcb412671002bb0d25b2f6dc')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
