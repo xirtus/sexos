@@ -7319,6 +7319,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-organize"
+version = "0.1.0"
+
+[[package]]
 name = "sex-pdx"
 version = "0.1.0"
 dependencies = [
@@ -8035,6 +8039,7 @@ name = "spindle"
 version = "0.1.0"
 dependencies = [
  "sex-graphics",
+ "sex-organize",
  "sex-pdx",
  "sex-time",
 ]

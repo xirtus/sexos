@@ -7,3 +7,4 @@ edition = "2021"
 sex-pdx = { path = "../../crates/sex-pdx" }
 sex-graphics = { path = "../../crates/sex-graphics" }
 sex-time = { path = "../../crates/sex-time" }
+sex-organize = { path = "../../crates/sex-organize" }

@@ -85,6 +85,7 @@ pub const COMMANDS: &[&[u8]] = &[
     b"net-retry",
     b"net-status",
     b"notify",
+    b"organize",
     b"object-new",
     b"object-search",
     b"object-tag",

@@ -12,6 +12,8 @@ pub mod check;
 #[cfg(all(test, feature = "repair"))]
 mod powercut;
 
+pub mod organizer;
+
 pub const BLOCK: usize = 4096;
 pub const NAME_MAX: usize = 255;
 pub const ROOT: u64 = 1;
@@ -39,7 +41,7 @@ const KEY_BYTES: usize = 17;
 const REC_HEAD: usize = KEY_BYTES + 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Error { Io, Corrupt, NoSpace, NotFound, Exists, NotDir, IsDir, NotEmpty, Name, TooBig, Poisoned, Unformatted }
+pub enum Error { Io, Corrupt, NoSpace, NotFound, Exists, NotDir, IsDir, NotEmpty, Name, TooBig, Poisoned, Unformatted, Stale }
 pub type Result<T> = core::result::Result<T, Error>;
 
 pub trait Device {
@@ -646,6 +648,7 @@ impl<'a, D: Device> Fs<'a, D> {
     fn walk(&mut self, path: &[u8]) -> Result<u64> {
         let mut at = ROOT;
         for part in trim(path).split(|b| *b == b'/').filter(|p| !p.is_empty()) {
+            Self::valid_name(part)?;
             if self.inode(at)?.0 != Kind::Dir { return Err(Error::NotDir); }
             at = self.lookup_in(at, part)?.ok_or(Error::NotFound)?.0;
         }
@@ -906,6 +909,31 @@ impl<'a, D: Device> Fs<'a, D> {
             let _ = src_off;
             f.drop_entry(src_dir, src_off2)?;
             f.add_entry(dst_dir, dst_name, id, kind)
+        })
+    }
+    /// Move one file only if `from` still names the object the caller inspected.
+    /// Unlike `rename`, this never replaces a destination. The caller must commit
+    /// on success or roll back on any error before issuing another operation.
+    /// A mismatched source id is reported as `Stale`, so a stale plan cannot
+    /// move a different file that appeared under the same name.
+    pub fn move_file_if_id(&mut self, from: &[u8], to: &[u8], expected_id: u64) -> Result<u64> {
+        self.guarded(|f| {
+            let (src_dir, src_name) = f.parent(from)?;
+            let (id, _) = f.lookup_in(src_dir, src_name)?.ok_or(Error::NotFound)?;
+            if id != expected_id { return Err(Error::Stale); }
+            if f.inode(id)?.0 != Kind::File { return Err(Error::IsDir); }
+            let (dst_dir, dst_name) = f.parent(to)?;
+            if let Some((other, _)) = f.lookup_in(dst_dir, dst_name)? {
+                // Moving a file to its current path is an idempotent no-op.
+                if other == id && src_dir == dst_dir && src_name == dst_name { return Ok(id); }
+                return Err(Error::Exists);
+            }
+            // Lookup after all preflight checks: a COW edit may have shifted the
+            // collision chain before the source entry is removed.
+            let (_, src_off) = f.lookup_in(src_dir, src_name)?.ok_or(Error::Corrupt)?;
+            f.drop_entry(src_dir, src_off)?;
+            f.add_entry(dst_dir, dst_name, id, Kind::File)?;
+            Ok(id)
         })
     }
     /// Directories hold no parent link, so this searches. Only a directory rename uses it.

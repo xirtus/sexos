@@ -295,7 +295,7 @@ pub fn status(e: Error) -> u8 {
     match e {
         Error::Io | Error::Poisoned => w::IO, Error::Corrupt => w::CORRUPT, Error::NoSpace => w::NO_SPACE, Error::NotFound => w::NOT_FOUND,
         Error::Exists => w::EXISTS, Error::NotDir => w::NOT_DIR, Error::IsDir => w::IS_DIR, Error::NotEmpty => w::NOT_EMPTY,
-        Error::Name | Error::TooBig => w::NAME, Error::Unformatted => w::UNAVAILABLE,
+        Error::Name | Error::TooBig => w::NAME, Error::Unformatted => w::UNAVAILABLE, Error::Stale => w::STALE,
     }
 }
 /// A client's reply slot may hold another service's answer, so ours waits its turn.
@@ -681,6 +681,9 @@ fn program_live(target: u32, task: u32) -> bool {
 pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -> u64 {
     let Some(r) = w::Request::decode(a, offset, length) else { return w::reply((a & 0xFF_FFFF) as u32, w::INVALID, 0) };
     let program = program_index(caller);
+    if program.is_some() && matches!(r.kind, w::ORGANIZE_STATE | w::ORGANIZE_SET | w::ORGANIZE_MOVE | w::ORGANIZE_UNDO) {
+        return w::reply(r.seq, w::DENIED, 0);
+    }
     let index = match (sex_pdx::app_catalog::SPINDLE_TARGETS.iter().position(|t| *t == caller), program) {
         (Some(index), _) => {
             if !crate::spindle_history::live(caller) { return w::reply(r.seq, w::DENIED, 0); }
@@ -870,7 +873,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
                 unsafe { PREPARING_FOR = Some(relay_pipe(id, word)); }
             }
             n
-        } else if r.kind == w::RENAME {
+        } else if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE) {
             let Some(split) = raw[..path_len].iter().position(|b| *b == 0) else { return w::reply(r.seq, w::NAME, 0) };
             let mut second = [0u8; w::PATH_BYTES];
             let (Some(a), Some(b)) = (confine(&binding, &raw[..split], &mut own), confine(&binding, &raw[split + 1..path_len], &mut second)) else { return w::reply(r.seq, w::NAME, 0) };
@@ -893,7 +896,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // No SexOS filesystem on this disk: only its own volumes under /media, read only.
         let path = &path[..path_len];
         if !crate::volumes::owns(path) { return w::reply(r.seq, w::UNAVAILABLE, 0); }
-        if r.kind == w::RENAME || r.kind == w::MOUNT || r.kind == w::UNMOUNT { return w::reply(r.seq, w::READ_ONLY, 0); }
+        if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::READ_ONLY, 0); }
         return match crate::volumes::run(None, r, path, data) { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
     };
     // Reads change nothing; a write fails before it changes anything (sexfs checks
@@ -914,7 +917,13 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         _ => forget_stats(None),
     }
     // Other systems' volumes, under /media.
-    let rename_halves = (r.kind == w::RENAME).then(|| path.iter().position(|b| *b == 0)).flatten().map(|i| (&path[..i], &path[i + 1..]));
+    let rename_halves = matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE).then(|| path.iter().position(|b| *b == 0)).flatten().map(|i| (&path[..i], &path[i + 1..]));
+    // Checked (organizer) moves stay inside the SexOS filesystem: never into, out of or
+    // within another volume or the encrypted home, whose files have other identities.
+    if matches!(r.kind, w::MOVE_IF_ID | w::ORGANIZE_MOVE) {
+        let Some((a, b)) = rename_halves else { return w::reply(r.seq, w::NAME, 0) };
+        if crate::volumes::owns(a) || crate::volumes::owns(b) || crate::home::owns(a) || crate::home::owns(b) { return w::reply(r.seq, w::OTHER_DISK, 0); }
+    }
     let media = match (r.kind, rename_halves) {
         (w::MOUNT, _) => Some(crate::volumes::mount(fs, path, data)),
         (w::UNMOUNT, _) => Some(crate::volumes::unmount(fs, path)),
@@ -1129,6 +1138,38 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
             fs.rename(&path[..split], &path[split + 1..])?;
             fs.commit()?;
             Ok(0)
+        }
+        w::MOVE_IF_ID => {
+            if r.length != 0 { return Err(Error::Name); }
+            let split = path.iter().position(|b| *b == 0).ok_or(Error::Name)?;
+            fs.move_file_if_id(&path[..split], &path[split + 1..], r.offset)?;
+            fs.commit()?;
+            Ok(0)
+        }
+        w::ORGANIZE_STATE => {
+            if !path.is_empty() || r.offset != 0 || r.length != 0 { return Err(Error::Name); }
+            data[0] = sexfs::organizer::enabled(fs)? as u8;
+            data[1..9].copy_from_slice(&fs.statfs().generation.to_le_bytes());
+            Ok(9)
+        }
+        w::ORGANIZE_SET => {
+            if !path.is_empty() || r.offset > 1 || r.length != 0 { return Err(Error::Name); }
+            sexfs::organizer::set_enabled(fs, r.offset == 1)?;
+            fs.commit()?;
+            Ok(r.offset as u32)
+        }
+        w::ORGANIZE_MOVE => {
+            if r.length != 0 { return Err(Error::Name); }
+            let split = path.iter().position(|b| *b == 0).ok_or(Error::Name)?;
+            let depth = sexfs::organizer::move_and_record(fs, &path[..split], &path[split + 1..], r.offset)?;
+            fs.commit()?;
+            Ok(depth as u32)
+        }
+        w::ORGANIZE_UNDO => {
+            if !path.is_empty() || r.offset != 0 || r.length != 0 { return Err(Error::Name); }
+            let depth = sexfs::organizer::undo_last(fs)?;
+            fs.commit()?;
+            Ok(depth as u32)
         }
         // Both go through private memory: the client can change its region at any time, and
         // checksums must be over the bytes we keep, not bytes it might still be changing.

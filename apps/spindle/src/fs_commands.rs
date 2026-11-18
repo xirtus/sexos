@@ -3,19 +3,41 @@
 use crate::Scrollback;
 use sex_pdx::fs as w;
 use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
+use sex_organize::{Candidate, Class, Decision, Rule};
 
 const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 32 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount, Update, Package }
-pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize, bare: [u8; 16], bare_len: usize }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount, Update, Package, Organize, AutoState, AutoSet(bool), Undo }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OrganizePhase { Idle, Inbox, Documents, Pictures, List, Stat, Move }
+struct Organize {
+    phase: OrganizePhase, dry_run: bool, page: [u8; 4000], page_len: usize, at: usize,
+    cursor: u64, names: [[u8; 255]; 128], lengths: [u8; 128], sizes: [u64; 128],
+    count: usize, index: usize, seen: u16, moved: u16, skipped: u16, source: [u8; w::PATH_BYTES],
+    source_len: usize, destination: [u8; w::PATH_BYTES], destination_len: usize,
+}
+impl Organize {
+    const fn new() -> Self { Self { phase: OrganizePhase::Idle, dry_run: false, page: [0; 4000], page_len: 0,
+        at: 0, cursor: 0, names: [[0; 255]; 128], lengths: [0; 128], sizes: [0; 128],
+        count: 0, index: 0, seen: 0, moved: 0, skipped: 0, source: [0; w::PATH_BYTES], source_len: 0,
+        destination: [0; w::PATH_BYTES], destination_len: 0 } }
+}
+pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize, bare: [u8; 16], bare_len: usize, organize: Organize, auto_known: bool, auto_enabled: bool, auto_seen: u64, auto_next_tick: u64 }
 /// How Files answered the last update request: OK go on, EXISTS nothing newer, else stop.
 pub static mut UPDATE_STATUS: Option<u8> = None;
 /// How Files answered the last package request.
 pub static mut PACKAGE_STATUS: Option<u8> = None;
 /// The last package report's lines meant for Spindle (URLs), newline separated.
 pub static mut PACKAGE_MACHINE: ([u8; 4096], usize) = ([0; 4096], 0);
-pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0, bare: [0; 16], bare_len: 0 };
+pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0, bare: [0; 16], bare_len: 0, organize: Organize::new(), auto_known: false, auto_enabled: false, auto_seen: 0, auto_next_tick: 0 };
+
+const ORGANIZE_RULES: [Rule<'static>; 2] = [
+    Rule { id: 1, class: Class::Specific, priority: 0, source: b"/Inbox", name_prefix: None,
+        extension: Some(b"pdf"), min_size: None, max_size: None, destination: b"/Documents" },
+    Rule { id: 2, class: Class::Specific, priority: 0, source: b"/Inbox", name_prefix: None,
+        extension: Some(b"png"), min_size: None, max_size: None, destination: b"/Pictures" },
+];
 
 fn region() -> Option<&'static mut [u8]> {
     let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).ok()?;
@@ -46,6 +68,70 @@ fn shown(bytes: &[u8]) -> &str { core::str::from_utf8(bytes).unwrap_or("?") }
 
 impl Client {
     pub fn busy(&self) -> bool { self.cmd.is_some() }
+    pub fn auto_waiting(&self) -> bool { !self.auto_known || self.auto_enabled }
+    /// A post-commit generation change causes one bounded Inbox reconciliation.
+    /// Missed polls are harmless because the generation is durable.
+    pub fn auto_tick(&mut self, now: u64) {
+        if self.busy() || now < self.auto_next_tick || (self.auto_known && !self.auto_enabled) { return; }
+        self.start(Cmd::AutoState, w::ORGANIZE_STATE, 0, 0, 0);
+        self.auto_next_tick = now.saturating_add(1000);
+    }
+    fn start_organize(&mut self, region: &mut [u8], dry_run: bool) {
+        self.organize.page_len = 0; self.organize.at = 0; self.organize.cursor = 0;
+        self.organize.count = 0; self.organize.index = 0; self.organize.seen = 0;
+        self.organize.moved = 0; self.organize.skipped = 0;
+        self.organize.source_len = 0; self.organize.destination_len = 0;
+        self.organize.dry_run = dry_run;
+        self.organize.phase = if dry_run { OrganizePhase::List } else { OrganizePhase::Inbox };
+        region[..6].copy_from_slice(b"/Inbox");
+        self.start(Cmd::Organize, if dry_run { w::LIST } else { w::MKDIR }, 6, 0, 0);
+    }
+    fn organize_request(&mut self, region: &mut [u8], path: &[u8], kind: u8, offset: u64) {
+        region[..path.len()].copy_from_slice(path);
+        self.path_len = path.len() as u16;
+        self.next(kind, offset, 0);
+    }
+    fn organize_finish(&mut self, sb: &mut Scrollback) {
+        say!(sb, "Organize: {} moved, {} skipped, {} scanned.", self.organize.moved, self.organize.skipped, self.organize.seen);
+        sex_pdx::serial_record!("[spindle.organize.done] moved={} skipped={} scanned={} dry={}",
+            self.organize.moved, self.organize.skipped, self.organize.seen, self.organize.dry_run as u8);
+        self.organize.phase = OrganizePhase::Idle;
+        self.cmd = None;
+    }
+    fn organize_page_next(&mut self, region: &mut [u8], sb: &mut Scrollback) {
+        loop {
+            if self.organize.index >= self.organize.count { self.organize_finish(sb); return; }
+            let at = self.organize.index;
+            self.organize.index += 1;
+            self.organize.seen += 1;
+            let name = &self.organize.names[at][..self.organize.lengths[at] as usize];
+            let size = self.organize.sizes[at];
+            if b"/Inbox/".len() + name.len() > self.organize.source.len() { self.organize.skipped += 1; continue; }
+            self.organize.source[..7].copy_from_slice(b"/Inbox/");
+            self.organize.source[7..7 + name.len()].copy_from_slice(name);
+            self.organize.source_len = 7 + name.len();
+            let candidate = Candidate { path: &self.organize.source[..self.organize.source_len], size, pinned: false, override_destination: None };
+            let (destination, file_name, rule_id) = match sex_organize::decide(candidate, &ORGANIZE_RULES) {
+                Decision::Move { destination, name, rule_id } => (destination, name, rule_id),
+                Decision::Conflict { first, second } => { say!(sb, "Conflict: {} and {} for {}", first, second, shown(name)); self.organize.skipped += 1; continue; }
+                _ => { self.organize.skipped += 1; continue; }
+            };
+            match sex_organize::join_destination(destination, file_name, &mut self.organize.destination) {
+                Ok(n) => self.organize.destination_len = n,
+                Err(_) => { self.organize.skipped += 1; continue; }
+            }
+            if self.organize.dry_run {
+                say!(sb, "would move {} -> {}", shown(&self.organize.source[..self.organize.source_len]), shown(&self.organize.destination[..self.organize.destination_len]));
+                sex_pdx::serial_record!("[spindle.organize.preview] rule={} file={}", rule_id.unwrap_or(0), shown(name));
+                continue;
+            }
+            let mut source = [0; w::PATH_BYTES];
+            source[..self.organize.source_len].copy_from_slice(&self.organize.source[..self.organize.source_len]);
+            self.organize.phase = OrganizePhase::Stat;
+            self.organize_request(region, &source[..self.organize.source_len], w::STAT, 0);
+            return;
+        }
+    }
     /// `path` made absolute against the working directory, without `.` and `..`.
     pub fn join(&self, path: &[u8], out: &mut [u8]) -> Option<usize> {
         let mut len = 0;
@@ -102,6 +188,23 @@ impl Client {
     pub fn submit_line(&mut self, cmd: &[u8], args: &[u8], sb: &mut Scrollback) -> bool {
         if self.busy() { sb.push(b"The disk is busy with the last command."); return true; }
         let Some(region) = region() else { return false };
+        if cmd == b"organize" {
+            if args == b"auto on" {
+                self.start(Cmd::AutoSet(true), w::ORGANIZE_SET, 0, 1, 0);
+                sb.push(b"Enabling automatic Inbox organization.");
+            } else if args == b"auto off" {
+                self.start(Cmd::AutoSet(false), w::ORGANIZE_SET, 0, 0, 0);
+                sb.push(b"Disabling automatic Inbox organization.");
+            } else if args == b"undo" {
+                self.start(Cmd::Undo, w::ORGANIZE_UNDO, 0, 0, 0);
+            } else if args.is_empty() || args == b"--dry-run" {
+                self.start_organize(region, args == b"--dry-run");
+                sb.push(if args == b"--dry-run" { b"Previewing Inbox placement." } else { b"Organizing Inbox." });
+            } else {
+                sb.push(b"Usage: organize [--dry-run | auto on | auto off | undo]");
+            }
+            return true;
+        }
         let (first, rest) = split(args);
         if cmd == b"pwd" {
             if self.cwd_len == 0 { say!(sb, "/"); } else { say!(sb, "{}", shown(&self.cwd[..self.cwd_len])); }
@@ -300,6 +403,124 @@ impl Client {
             unsafe { UPDATE_STATUS = Some(status); }
             return true;
         }
+        if cmd == Cmd::Organize {
+            match self.organize.phase {
+                OrganizePhase::Inbox | OrganizePhase::Documents | OrganizePhase::Pictures => {
+                    if status != w::OK && status != w::EXISTS { say!(sb, "Organize setup: {}", shown(w::message(status))); self.organize_finish(sb); return true; }
+                    let (next_phase, path): (OrganizePhase, &[u8]) = match self.organize.phase {
+                        OrganizePhase::Inbox => (OrganizePhase::Documents, b"/Documents"),
+                        OrganizePhase::Documents => (OrganizePhase::Pictures, b"/Pictures"),
+                        _ => (OrganizePhase::List, b"/Inbox"),
+                    };
+                    self.organize.phase = next_phase;
+                    self.organize_request(region, path, if next_phase == OrganizePhase::List { w::LIST } else { w::MKDIR }, 0);
+                    return true;
+                }
+                OrganizePhase::List => {
+                    if status != w::OK {
+                        if self.organize.dry_run && status == w::NOT_FOUND { sb.push(b"Inbox does not exist yet."); }
+                        else { say!(sb, "Organize listing: {}", shown(w::message(status))); }
+                        self.organize_finish(sb); return true;
+                    }
+                    let data = &region[data_at..];
+                    if value < w::LIST_HEAD as u32 || value as usize > self.organize.page.len() {
+                        sb.push(b"Organize: invalid listing size."); self.organize_finish(sb); return true;
+                    }
+                    self.organize.cursor = u64::from_le_bytes(data[..8].try_into().unwrap());
+                    self.organize.page_len = value as usize;
+                    self.organize.page[..self.organize.page_len].copy_from_slice(&data[..self.organize.page_len]);
+                    self.organize.at = w::LIST_HEAD;
+                    while self.organize.at < self.organize.page_len {
+                        let at = self.organize.at;
+                        if at + w::ENTRY_HEAD > self.organize.page_len { sb.push(b"Organize: invalid listing."); self.organize_finish(sb); return true; }
+                        let is_dir = self.organize.page[at] == 1;
+                        let len = self.organize.page[at + 1] as usize;
+                        let end = at + w::ENTRY_HEAD + len;
+                        if end > self.organize.page_len || len == 0 || len > 255 { sb.push(b"Organize: invalid listing."); self.organize_finish(sb); return true; }
+                        self.organize.at = end;
+                        if is_dir { self.organize.skipped += 1; continue; }
+                        if self.organize.count == self.organize.names.len() { break; }
+                        let index = self.organize.count;
+                        self.organize.names[index][..len].copy_from_slice(&self.organize.page[at + w::ENTRY_HEAD..end]);
+                        self.organize.lengths[index] = len as u8;
+                        self.organize.sizes[index] = u64::from_le_bytes(self.organize.page[at + 2..at + 10].try_into().unwrap());
+                        self.organize.count += 1;
+                    }
+                    if self.organize.count == self.organize.names.len() {
+                        sb.push(b"Organize snapshot capped at 128 files; later files remain in Inbox.");
+                    } else if self.organize.cursor != 0 {
+                        self.organize_request(region, b"/Inbox", w::LIST, self.organize.cursor);
+                        return true;
+                    }
+                    self.organize_page_next(region, sb);
+                    return true;
+                }
+                OrganizePhase::Stat => {
+                    if status != w::OK || value < 32 || region[data_at] != 0 {
+                        say!(sb, "Skipped {}: source changed", shown(&self.organize.source[..self.organize.source_len]));
+                        self.organize.skipped += 1; self.organize_page_next(region, sb); return true;
+                    }
+                    let id = u64::from_le_bytes(region[data_at + 24..data_at + 32].try_into().unwrap());
+                    let n = self.organize.source_len + 1 + self.organize.destination_len;
+                    if n > w::PATH_BYTES { self.organize.skipped += 1; self.organize_page_next(region, sb); return true; }
+                    region[..self.organize.source_len].copy_from_slice(&self.organize.source[..self.organize.source_len]);
+                    region[self.organize.source_len] = 0;
+                    region[self.organize.source_len + 1..n].copy_from_slice(&self.organize.destination[..self.organize.destination_len]);
+                    self.organize.phase = OrganizePhase::Move;
+                    self.path_len = n as u16;
+                    self.next(w::ORGANIZE_MOVE, id, 0);
+                    return true;
+                }
+                OrganizePhase::Move => {
+                    if status == w::OK {
+                        self.organize.moved += 1;
+                        say!(sb, "moved {} -> {}", shown(&self.organize.source[..self.organize.source_len]), shown(&self.organize.destination[..self.organize.destination_len]));
+                        sex_pdx::serial_record!("[spindle.organize.moved] id_checked=1 source={} destination={}",
+                            shown(&self.organize.source[..self.organize.source_len]), shown(&self.organize.destination[..self.organize.destination_len]));
+                    } else {
+                        self.organize.skipped += 1;
+                        say!(sb, "Skipped {}: {}", shown(&self.organize.source[..self.organize.source_len]), shown(w::message(status)));
+                    }
+                    self.organize_page_next(region, sb);
+                    return true;
+                }
+                OrganizePhase::Idle => { self.cmd = None; return true; }
+            }
+        }
+        if cmd == Cmd::AutoState {
+            self.cmd = None;
+            if status == w::OK && value == 9 {
+                self.auto_known = true;
+                self.auto_enabled = region[data_at] == 1;
+                let generation = u64::from_le_bytes(region[data_at + 1..data_at + 9].try_into().unwrap());
+                if self.auto_enabled && generation != self.auto_seen {
+                    self.auto_seen = generation;
+                    sex_pdx::serial_record!("[spindle.organize.auto.reconcile] generation={}", generation);
+                    self.start_organize(region, false);
+                }
+            } else { self.auto_next_tick = sex_pdx::get_ticks().saturating_add(5000); }
+            return true;
+        }
+        if let Cmd::AutoSet(on) = cmd {
+            self.cmd = None;
+            if status == w::OK {
+                self.auto_known = true; self.auto_enabled = on;
+                self.auto_seen = 0; self.auto_next_tick = 0;
+                say!(sb, "Automatic Inbox organization {}.", if on { "on" } else { "off" });
+                sex_pdx::serial_record!("[spindle.organize.auto] enabled={}", on as u8);
+            } else { say!(sb, "Automatic organization: {}", shown(w::message(status))); }
+            return true;
+        }
+        if cmd == Cmd::Undo {
+            self.cmd = None;
+            if status == w::OK {
+                self.auto_enabled = false; self.auto_known = true;
+                say!(sb, "Restored last organized file; automatic organization is off. {} undo records remain.", value);
+                sex_pdx::serial_record!("[spindle.organize.undo] remaining={} auto=0", value);
+            }
+            else { say!(sb, "Undo: {}", shown(w::message(status))); }
+            return true;
+        }
         if status != w::OK {
             // A missing file is what write and append start from.
             if status == w::NOT_FOUND && matches!(cmd, Cmd::Write | Cmd::Append(0)) && self.kind == w::STAT {
@@ -410,6 +631,7 @@ impl Client {
             }
             Cmd::Unmount => { say!(sb, "Safe to remove."); }
             Cmd::Update | Cmd::Package => {}
+            Cmd::Organize | Cmd::AutoState | Cmd::AutoSet(_) | Cmd::Undo => {}
             Cmd::Program(count, flags) => {
                 use sex_pdx::program_store as store;
                 // A package's program: ask the person first, or apply what they said.

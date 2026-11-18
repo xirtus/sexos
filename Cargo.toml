@@ -59,6 +59,7 @@ members = [
     "apps/chastity",
     "apps/chastity-probe",
     "apps/tassel",
+    "crates/sex-organize",
     "crates/sex-html",
     "crates/sex-js",
     "crates/sex-gl",

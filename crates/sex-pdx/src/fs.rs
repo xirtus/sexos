@@ -47,6 +47,17 @@ pub const ARGS_MAX: usize = 256;
 /// Spindle only: it changes how the machine starts.
 pub const INSTALL: u8 = 14;
 pub const INSTALL_GO: u64 = 1;
+/// No-clobber move of a file, only if its current object ID equals `offset`.
+/// The path region contains `source\0destination`, like RENAME. The caller's
+/// existing file scope is applied to both paths independently.
+pub const MOVE_IF_ID: u8 = 30;
+/// Spindle-only organizer controls. STATE returns enabled byte and committed
+/// filesystem generation in the shared data region; SET uses offset 0/1.
+pub const ORGANIZE_STATE: u8 = 31;
+pub const ORGANIZE_SET: u8 = 32;
+/// Same checked move as MOVE_IF_ID, with a durable undo record in one commit.
+pub const ORGANIZE_MOVE: u8 = 33;
+pub const ORGANIZE_UNDO: u8 = 34;
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;
@@ -159,13 +170,15 @@ pub const READ_ONLY: u8 = 14;
 pub const UNSUPPORTED: u8 = 15;
 /// The person hasn't answered yet.
 pub const PENDING: u8 = 16;
+/// The file changed since it was inspected (organizer checked moves).
+pub const STALE: u8 = 17;
 
 pub fn message(status: u8) -> &'static [u8] {
     match status {
         OK => b"ok", UNAVAILABLE => b"no filesystem on this disk", NOT_FOUND => b"not found", EXISTS => b"already exists",
         NOT_DIR => b"not a directory", IS_DIR => b"is a directory", NOT_EMPTY => b"directory not empty", NAME => b"bad name",
         NO_SPACE => b"disk full", IO => b"disk error", CORRUPT => b"damaged data found", DENIED => b"not allowed",
-        OTHER_DISK => b"on another disk", READ_ONLY => b"read-only disk", UNSUPPORTED => b"not supported on this disk", PENDING => b"waiting for the person", _ => b"invalid request",
+        OTHER_DISK => b"on another disk", READ_ONLY => b"read-only disk", UNSUPPORTED => b"not supported on this disk", PENDING => b"waiting for the person", STALE => b"file changed since inspection", _ => b"invalid request",
     }
 }
 
