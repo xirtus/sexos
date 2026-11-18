@@ -161,6 +161,12 @@ key register.
 
 ### F8. Correctness checks worth running before redesign
 
+- **Key-register gadgets outside programs.** The loader refuses WRPKRU/XRSTOR/XRSTORS
+  bytes in program code (at load and when JIT code is sealed), but BOOT services and
+  Tuxedo bridges are not scanned. A compromised service could use a stray gadget.
+  Phase 1c scans every boot module at build time and refuses unscanned executable images
+  at BOOT spawn (added 2026-11-17).
+
 - `SYSRET` with a non-canonical RCX faults in ring 0 on Intel (the CVE-2012-0217 class).
   Confirm the top user page below the canonical hole is never mapped executable.
 - Kernel stacks are leaked `Vec`s; confirm task exit cannot exhaust them under the
@@ -293,7 +299,7 @@ filled in by that PR.
 | **4. SMP** | Per-core frame magazines, split VAS lock, per-core record state, migration with IPC-pair affinity, batched cross-core IPIs, tickless idle, scheduling contexts with donation (generalising 104). | +500, −200 | 4-core latency gate passes 10/10 runs, p99 ≤2 ms; cross-core round trip ≤3 µs; 4-core file_stat within 1.2x of 1-core |
 | **5. Views + PCID + XSAVE** (needs D2) | Protection views, PCID, program rows on any core, isolation without PKU, XSAVE with AVX/AVX-512 and init optimisation. | +500, −350 (tenancy turn-taking) | No full TLB flush on row switch; 8 programs on 4 cores scale ≥3x over 1 core; a no-PKU isolation gate (domain A cannot read B) passes; AVX2 FFmpeg decode ≥2x faster |
 | **6. PKU gates** (research, decision D3 later) | Kernel-owned gate page holding the only WRPKRU; migrating calls between trusted services with no kernel entry; stack switch in the gate. | +300 | Same-core service call ≤150 cycles KVM with PKU; side-channel review written first |
-| **7. Assurance** | Kani/proptest models of the capability table, endpoint state machine and scheduler queues; `loom` for the lock-free parts; syscall fuzzing in nightly; `unsafe` count down by half with each remaining block commented. | ±0 (tests live outside `kernel/src`) | Models in CI; nightly fuzz green 7 days |
+| **7. Assurance** | A cross-domain isolation matrix gate run on every backend (PKU on KVM, no-PKU with views, TCG): A reads/writes/executes B's pages and faults, revoked grants and dead badges fail, WRPKRU programs are refused. Kani/proptest models of the capability table, endpoint state machine and scheduler queues; `loom` for the lock-free parts; syscall fuzzing in nightly; `unsafe` count down by half with each remaining block commented. | ±0 (tests live outside `kernel/src`) | Models in CI; nightly fuzz green 7 days |
 
 Net kernel size after Phase 5: roughly 20,200 lines (around today's size) with
 far more capability. The 22,700 budget is not raised.
