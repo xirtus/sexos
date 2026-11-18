@@ -243,6 +243,8 @@ pub extern "C" fn trampoline_main() {
     let crash_keeper=unsafe{&mut *core::ptr::addr_of_mut!(CRASH_KEEPER)};
     crash_keeper.load(&mut crate::history_disk::DiskIo);
     crash_keeper.sync(&mut crate::history_disk::DiskIo);
+    // The next request, when a reply that waited brought it back in registers.
+    let mut next:Option<sex_pdx::PdxMessage>=None;
     loop {
         crate::restricted_runtime::poll();
         crate::restricted_io::poll();
@@ -257,7 +259,9 @@ pub extern "C" fn trampoline_main() {
         // SEXFILES_DEFER_V1: drain requests stashed by nested reply-wait
         // loops before listening for new ones — they arrived first.
         let stamped =
-            if let Some(d) = crate::pdx::defer_pop() {
+            if let Some(m) = next.take() {
+                crate::defer_queue::Stamped { message: (m.type_id, m.caller_pd, m.arg0, m.arg1, m.arg2), caller_task: m.caller_task }
+            } else if let Some(d) = crate::pdx::defer_pop() {
                 d
             } else {
                 // Listen on slot 0 (self message ring — all servers use this pattern).
@@ -337,7 +341,7 @@ pub extern "C" fn trampoline_main() {
             // Nothing else owed and nothing to commit: answer and wait in one entry, so
             // the caller runs next. Otherwise the loop's top answers in order.
             let idle=!crate::restricted_runtime::pending()&&!crate::restricted_io::pending()&&!crate::fs_service::replies_pending()&&!crate::fs_service::writes_pending()&&!history.pending()&&!probes.pending()&&!documents.pending()&&crate::pdx::defer_empty();
-            if !(idle&&sex_pdx::pdx_reply_wait(caller,word)==0){crate::fs_service::reply_later(caller,word);}
+            match idle.then(||sex_pdx::ipc_recv::pdx_reply_recv(caller,word)){Some(Ok(m))=>next=m,_=>crate::fs_service::reply_later(caller,word)}
             continue;
         }
         if msg.type_id==sex_pdx::autofill::IDENTIFY {
