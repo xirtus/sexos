@@ -41,12 +41,64 @@ fn event_regs(e: [u64; 6]) -> [u64; 6] { [0, e[0], e[1] << 32 | (e[5] & 0xFFFF_F
 /// After a delivered call or reply: waits like syscall 53, then returns the first inbox
 /// event in registers. A task that does not sleep (a worker, or one with something
 /// already waiting) gets it at once; a sleeping one gets it when it next runs (`deliver`).
-pub unsafe fn wait_and_take(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
+pub unsafe fn wait_and_take(regs: &mut crate::interrupts::SyscallRegs) -> u64 { wait_and_take_from(regs, None) }
+
+/// Cross-core counters: answers caught spinning, spins that ran out.
+static SPINS: [core::sync::atomic::AtomicU64; 2] = [const { core::sync::atomic::AtomicU64::new(0) }; 2];
+/// How long a call or reply whose partner runs on another core waits for the answer
+/// still running. A real CPU answers in a few microseconds; parking, switching away and
+/// the wake interrupt back cost more than that, most of all under a hypervisor, where
+/// the interrupt and the halt are each a trip out of the guest.
+const SPIN_CYCLES: u64 = 40_000;
+
+/// True when domain `pd`'s main task lives on another core. Tasks stay on their home
+/// core, so this is where it waits and where it answers from.
+fn away(pd: u32) -> bool {
+    let Some(domain) = crate::ipc::DOMAIN_REGISTRY.get(pd) else { return false };
+    let task = domain.main_task.load(Ordering::Acquire);
+    if task.is_null() { return false; }
+    let home = match unsafe { (*task).home.load(Ordering::Relaxed) } { u32::MAX => crate::smp::home_core(pd as u64), core => core };
+    home != crate::core_local::CoreLocal::get().core_id
+}
+
+/// After a call or reply to a task on another core: keep this core until the answer is
+/// in the inbox or `SPIN_CYCLES` pass, then park as usual. The task stays running, so
+/// the partner's wake only sets its pending bit: no interrupt, no switch either way.
+/// Interrupts stay off (this is a system call); TLB shootdowns are answered meanwhile,
+/// as `smp::tlb` does while it waits.
+unsafe fn spin_for_partner(task: *mut Task, pd: &ProtectionDomain) {
+    let core = crate::core_local::CoreLocal::get().core_id;
+    let until = core::arch::x86_64::_rdtsc() + SPIN_CYCLES;
+    let mut look = true;
+    loop {
+        // Take the pending bit a wake leaves, so the park after a miss sleeps for real;
+        // the inbox, not the bit, says whether the answer is here.
+        if (*task).state.snapshot().pending { let _ = (*task).state.park(core); look = true; }
+        if look {
+            if (*pd.message_ring).len() != 0 || !pd.incoming_replies.lock().is_empty() { note_spin(0); return; }
+            look = false;
+        }
+        if core::arch::x86_64::_rdtsc() >= until { note_spin(1); return; }
+        crate::smp::tlb::service();
+        core::hint::spin_loop();
+    }
+}
+fn note_spin(i: usize) {
+    let n = SPINS[i].fetch_add(1, Ordering::Relaxed) + 1;
+    if n & (n - 1) == 0 && n >= 1024 {
+        crate::serial_println!("[ipc.xcore] spin_hits={} spin_misses={} remote_resumes={}", SPINS[0].load(Ordering::Relaxed),
+            SPINS[1].load(Ordering::Relaxed), crate::scheduler::REMOTE_RESUMES.load(Ordering::Relaxed));
+    }
+}
+
+/// `wait_and_take`, after a call or reply to domain `partner`.
+unsafe fn wait_and_take_from(regs: &mut crate::interrupts::SyscallRegs, partner: Option<u32>) -> u64 {
     let core = crate::core_local::CoreLocal::get();
     let task = crate::scheduler::SCHEDULERS[core.core_id as usize].current_task.load(Ordering::Acquire);
     let pd = core.current_pd_ref();
     if !task.is_null() && task == pd.main_task.load(Ordering::Acquire) {
         regs.rax = 0;
+        if partner.is_some_and(away) { spin_for_partner(task, pd); }
         (*task).deliver.store(true, Ordering::Relaxed);
         crate::scheduler::wait_for_message(regs as *const _);
         // Still here: it did not sleep.
@@ -75,7 +127,9 @@ pub unsafe fn call_recv(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
     sched.arm_handoff(true);
     let called = if regs.rdi == 0 { Err(sex_pdx::ERR_CAP_INVALID) } else { super::safe_pdx_call(regs.rdi as u32, regs.rsi, regs.rdx, regs.r10, regs.r8) };
     sched.arm_handoff(false);
-    match called { Ok(_) => wait_and_take(regs), Err(e) => { regs.rdi = 0; e } }
+    let partner = || match (*crate::core_local::CoreLocal::get().current_pd_ref().cap_table).find(regs.rdi as u32)?.data {
+        crate::capability::CapabilityData::Domain(id) => Some(id), _ => None };
+    match called { Ok(_) => { let partner = partner(); wait_and_take_from(regs, partner) } Err(e) => { regs.rdi = 0; e } }
 }
 
 /// Syscall 103, PDX_REPLY_RECV: syscall 101, and the next request comes in registers.
@@ -85,5 +139,5 @@ pub unsafe fn reply_recv(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
     sched.arm_handoff(true);
     let sent = super::router::send_reply(regs.rdi as u32, regs.rsi).is_ok();
     sched.arm_handoff(false);
-    if sent { wait_and_take(regs) } else { regs.rdi = 0; 1 }
+    if sent { wait_and_take_from(regs, Some(regs.rdi as u32)) } else { regs.rdi = 0; 1 }
 }
