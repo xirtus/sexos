@@ -932,13 +932,17 @@ pub mod files {
             /// Terminal: prepares `/bin/NAME` with `args` (only plain words reach it) and asks
             /// Shell to start it attached here. Needs the `+launch` grant (Spindle's `spindle` command).
             pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> { start_at(0, name, args) }
-            pub fn start_at(slot: usize, name: &[u8], args: &[u8]) -> Result<(), Error> {
+            pub fn start_at(slot: usize, name: &[u8], args: &[u8]) -> Result<(), Error> { start_net_at(slot, name, args, false) }
+            /// As [`start_at`]; with `network`, the run reaches the network if this terminal
+            /// may (Shell passes on only what the terminal itself was allowed).
+            pub fn start_net_at(slot: usize, name: &[u8], args: &[u8], network: bool) -> Result<(), Error> {
                 let bin = sex_pdx::program_store::BIN;
                 let mut path = alloc::vec::Vec::with_capacity(bin.len() + name.len());
                 path.extend_from_slice(bin); path.extend_from_slice(name);
                 let n = args.len().min(w::ARGS_MAX);
                 let ticket = exchange(None, w::PREPARE, &path, c::at_slot(0, slot), n as u64, |d| d[..n].copy_from_slice(&args[..n]), |t, _| t)?;
-                sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64, 0)
+                let flags = if network { sex_pdx::program_store::RUN_NETWORK } else { 0 };
+                sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64, flags)
                     .map(|_| ()).map_err(|_| w::UNAVAILABLE)
             }
             /// Terminal: input for the run; how many bytes it took.

@@ -56,6 +56,21 @@ static mut FACES: [core::mem::MaybeUninit<Faces>; 2] = [const { core::mem::Maybe
 static mut FACES_STATE: [u8; 2] = [0; 2];
 /// The family new painters draw with.
 static mut FAMILY: Family = Family::GeistMono;
+/// SSH domains from `spindle.conf` (`ssh.NAME = user@host:port`), for `ssh NAME`.
+static mut DOMAINS: Vec<spindle_panes::config::SshDomain> = Vec::new();
+/// Programs that reach the network when a pane runs them: the person typing `ssh` asks
+/// for exactly that. Shell passes the network on only because this window has it.
+const NETWORK_PROGRAMS: &[&[u8]] = &[b"ssh"];
+
+/// `ssh NAME [COMMAND]` with NAME an SSH domain: the arguments `ssh` itself takes.
+fn ssh_domain_args(args: &[&[u8]]) -> Option<Vec<Vec<u8>>> {
+    let first = core::str::from_utf8(args.first()?).ok()?;
+    // SAFETY: one thread; check_config writes DOMAINS between frames.
+    let d = unsafe { (*core::ptr::addr_of!(DOMAINS)).iter().find(|d| d.name == first)?.clone() };
+    let mut out = vec![b"-p".to_vec(), format!("{}", d.port).into_bytes(), format!("{}@{}", d.user, d.host).into_bytes()];
+    out.extend(args[1..].iter().map(|a| a.to_vec()));
+    Some(out)
+}
 fn painter(cw: usize, ch: usize) -> Painter {
     // SAFETY: one thread; a slot is written once, before its state says it is parsed.
     unsafe {
@@ -805,15 +820,19 @@ impl Pane {
             self.say("\x1b[31mrun: too many panes are running programs in this window\x1b[0m (open a new window)\n");
             return;
         }
-        let words = args.join(&b' ');
+        let network = NETWORK_PROGRAMS.contains(&cmd);
+        let domain = if cmd == b"ssh" { ssh_domain_args(args) } else { None };
+        if let Some(d) = &domain { sex_pdx::serial_record!("[term.ssh.domain] name={} args={}", String::from_utf8_lossy(args[0]), String::from_utf8_lossy(&d.join(&b' '))); }
+        let words = match &domain { Some(d) => d.join(&b' '), None => args.join(&b' ') };
         let n = String::from_utf8_lossy(cmd).into_owned();
         let label = if words.is_empty() { n.clone() } else { format!("{} {}", n, String::from_utf8_lossy(&words)) };
         // A general launch ticket is not permission to attach a terminal console: the
         // relay's own answer (no grant, or a run still going) comes first.
         let slot = self.slot as usize;
-        match files::direct::relay::release_at(slot).and_then(|_| files::direct::relay::start_at(slot, cmd, &words)) {
+        match files::direct::relay::release_at(slot).and_then(|_| files::direct::relay::start_net_at(slot, cmd, &words, network)) {
             Ok(()) => {
                 sex_pdx::serial_record!("[term.native.start] name={}", n);
+                if network { sex_pdx::serial_record!("[term.native.network] name={}", n); }
                 self.job = Some(Job { name: n, runner: Runner::Native(Native { since: sex_pdx::get_ticks(), mode: 0, target: 0, interrupted_at: None, stopping: false, label }), line: Vec::new(), pending: Vec::new(), eof: false });
                 self.native_size();
             }
@@ -1320,6 +1339,8 @@ const HELP: &str = "\x1b[1mSpindle\x1b[0m: the SexOS terminal. Each pane has its
   NAME ARGS &    runs the program in the background; jobs lists, fg N brings one here,\n\
                  kill N stops one. Closing a pane or the window leaves its program running:\n\
   attach [N]     shows job N (the newest when no N) here again, with the screen it left\n\
+  ssh USER@HOST  logs in to another machine in this pane (ssh NAME for an ssh.NAME =\n\
+                 user@host:port line in spindle.conf); its shell gets the pane's size\n\
 Keys: Tab completes, Up/Down recall, Ctrl+Shift+C/V copy/paste, Shift+PgUp/PgDn scroll,\n\
   Ctrl+=/- text size, Ctrl+C stop, Ctrl+D end input (closes an idle pane), Ctrl+L clear.\n\
 Tabs: Ctrl+Shift+T new, Ctrl+PgUp/PgDn switch, Ctrl+Shift+PgUp/PgDn move, Ctrl+Shift+1..9 pick,\n\
@@ -1404,6 +1425,8 @@ impl Spindle {
             for pane in self.panes.values_mut() { pane.new_font(); }
             self.painter = painter(self.painter.cell_w, self.painter.cell_h);
         }
+        // SAFETY: one thread; panes read DOMAINS when they start `ssh`.
+        unsafe { *core::ptr::addr_of_mut!(DOMAINS) = config.ssh.clone(); }
         self.theme = theme;
         for pane in self.panes.values_mut() { pane.screen.set_theme(theme); pane.screen.set_history_max(config.scrollback); }
         let step = config.font_size as isize - self.cell_h as isize;

@@ -12,6 +12,7 @@
 //! padding = 6             # pixels around each pane's text
 //! scrollback = 10000      # lines kept per pane
 //! background = #101010    # and foreground, cursor, selection, color0 .. color15
+//! ssh.work = me@build.example.org:2222   # `ssh work` in a pane logs in there
 //! ```
 
 use alloc::format;
@@ -29,13 +30,32 @@ pub struct Config {
     /// Colour overrides on top of the theme: (key, 0xRRGGBB), key one of `foreground`,
     /// `background`, `cursor`, `selection`, `color0`..`color15`.
     pub colors: Vec<(String, u32)>,
+    /// SSH domains (`ssh.NAME = user@host[:port]`): `ssh NAME` in a pane logs in there.
+    pub ssh: Vec<SshDomain>,
     /// Lines that were not understood, as messages.
     pub problems: Vec<String>,
 }
 
+/// A machine a pane can run on, by a short name of the person's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SshDomain { pub name: String, pub user: String, pub host: String, pub port: u16 }
+
+impl Config {
+    /// The SSH domain called `name`.
+    pub fn domain(&self, name: &str) -> Option<&SshDomain> { self.ssh.iter().find(|d| d.name == name) }
+}
+
+/// `user@host` or `user@host:port` (port 22 when left out).
+fn ssh_target(v: &str) -> Option<(String, String, u16)> {
+    let (user, rest) = v.split_once('@')?;
+    let (host, port) = match rest.rsplit_once(':') { Some((h, p)) => (h, p.parse::<u16>().ok().filter(|p| *p != 0)?), None => (rest, 22) };
+    let ok = |t: &str| !t.is_empty() && t.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b));
+    (ok(user) && ok(host)).then(|| (String::from(user), String::from(host), port))
+}
+
 impl Default for Config {
     fn default() -> Config {
-        Config { theme: String::from("mocha"), font: String::from("geist-mono"), font_size: 18, padding: 4, scrollback: 10_000, colors: Vec::new(), problems: Vec::new() }
+        Config { theme: String::from("mocha"), font: String::from("geist-mono"), font_size: 18, padding: 4, scrollback: 10_000, colors: Vec::new(), ssh: Vec::new(), problems: Vec::new() }
     }
 }
 
@@ -93,6 +113,17 @@ impl Config {
                 Some(x) => self.colors.push((String::from(k), x)),
                 None => self.problems.push(bad("must be #rrggbb")),
             },
+            k if k.starts_with("ssh.") => {
+                let name = &k[4..];
+                let named = !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+                match ssh_target(v).filter(|_| named) {
+                    Some((user, host, port)) => {
+                        self.ssh.retain(|d| d.name != name);
+                        self.ssh.push(SshDomain { name: String::from(name), user, host, port });
+                    }
+                    None => self.problems.push(bad("must be user@host or user@host:port")),
+                }
+            }
             _ => self.problems.push(format!("line {}: unknown setting {}", line, key)),
         }
     }

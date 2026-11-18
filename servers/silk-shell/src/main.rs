@@ -17947,7 +17947,9 @@ unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
         }
         let(status,_)=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,if by_program{msg.caller_pd as u64}else{0});
         PROGRAM_READING=status==0;
-        PROGRAM_NETWORK=status==0&&!by_program&&msg.arg2&store::RUN_NETWORK!=0;
+        // A terminal's run reaches the network only when the terminal asks (`ssh`) and the
+        // terminal itself was allowed it, as a launched child inherits it (NETWORK_RUNS).
+        PROGRAM_NETWORK=status==0&&msg.arg2&store::RUN_NETWORK!=0&&(!by_program||NETWORK_RUNS.contains(&Some((msg.caller_pd,msg.caller_task))));
         PROGRAM_LAUNCHER=if status==0&&by_program{running_task(msg.caller_pd).map(|t|(msg.caller_pd,t))}else{None};
         // A restored run's workspace, and the ticket Spindle keeps the session by: Spindle's runs only.
         PROGRAM_TICKET=if by_program{0}else{msg.arg1};PROGRAM_SCENE=if by_program{None}else{sex_pdx::session_restore::scene_of(msg.arg2).filter(|s|(*s as usize)<ATLAS_MAX_SCENES)};

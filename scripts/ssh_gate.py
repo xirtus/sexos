@@ -7,6 +7,10 @@
 2. The gate adds that line to the server's authorized_keys.
 3. The same command again: the remembered host key matches, the key logs in, the
    command's output comes back and its exit status is 0.
+4. An SSH pane (Spindle P9): `ssh -p PORT USER@10.0.2.2` typed in a Spindle terminal
+   window reaches the network (the window asks for it for `ssh` alone), gets a real PTY
+   of the pane's size (`stty size` there agrees), runs `echo` in the remote shell, and
+   `exit` ends it with status 0.
 
 The server is OpenSSH's sshd on 127.0.0.1, which QEMU's user network shows the guest
 as 10.0.2.2."""
@@ -41,14 +45,16 @@ class Sshd:
 SSHD=Sshd()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 from quil_autosave_gate import boot
-KEYS={' ':'spc','.':'dot','-':'minus','/':'slash'}
+KEYS={' ':'spc','.':'dot','-':'minus','/':'slash',';':'semicolon'}
+SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
  elf=(ROOT/'iso_root/programs/ssh').read_bytes();assert elf[:4]==b'\x7fELF'
- install(disk,[('ssh',elf)])
+ term=(ROOT/'iso_root/programs/spindle').read_bytes();assert term[:4]==b'\x7fELF'
+ install(disk,[('ssh',elf),('spindle',term)])
  g=boot(a.iso,disk,a.out,'ssh',a.resolution);t=g['text'];q=g['q']
  def keys(text):
   for k in text:
@@ -80,6 +86,26 @@ def main():
   assert '[ssh.key] '+key in t()[s:] and 'Made a new key' not in t()[s:] and 'New host' not in t()[s:]
   q.cmd('screendump',{'filename':str(a.out/'ssh.ppm')});time.sleep(.5)
   close(m,s)
+  # An SSH pane: the remote shell in a Spindle terminal, with a PTY of the pane's size.
+  g['focus'](153);time.sleep(.5);s=len(t());keys('spindle');q.key('ret')
+  m=g['wait'](r'\[term\.ready\] target=(\d+) task=(\d+) cols=(\d+) rows=(\d+)',s,240);target,task=int(m[1]),int(m[2])
+  g['wait'](rf'\[display\.app\.title\] target={target} ',s,60);time.sleep(1)
+  g['focus'](SURFACE[target]);time.sleep(.5)
+  s=len(t());keys(f'ssh -p {SSHD.port} {SSHD.user}@10.0.2.2');q.key('ret')
+  g['wait'](r'\[term\.native\.network\] name=ssh\n',s,60)
+  size=g['wait'](r'\[term\.native\.size\] cols=(\d+) rows=(\d+) ok=1\n',s,60)
+  pty=g['wait'](r'\[ssh\.pty\] tty=(\d) cols=(\d+) rows=(\d+)\n',s,300)
+  assert pty[1]=='1' and (pty[2],pty[3])==(size[1],size[2]),(pty[0],size[0])
+  g['wait'](r'\[ssh\.authenticated\]',s,300);time.sleep(3)
+  keys('stty size; echo sexos-pane-ok');q.key('ret')
+  g['wait'](r'\[ssh\.out\] sexos-pane-ok\r?\n',s,120)
+  rc=re.findall(r'\[ssh\.out\] (\d+) (\d+)\r?\n',t()[s:])
+  assert (size[2],size[1]) in rc,('the remote PTY has another size',size[0],rc)
+  keys('exit');q.key('ret')
+  d=g['wait'](r'\[ssh\.done\] status=(-?\d+)\n',s,120);assert d[1]=='0',d[0]
+  g['wait'](r'\[term\.job\.exit\] name=ssh code=0\n',s,60)
+  q.cmd('screendump',{'filename':str(a.out/'ssh-pane.ppm')});time.sleep(.5)
+  s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'host':host,'key':key[:40]+'...'})
  finally:
