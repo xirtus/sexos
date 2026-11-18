@@ -35,12 +35,16 @@ pub fn run() -> Result<[(&'static str, u64, u64); 2], &'static str> {
     if ep::endpoint(OP_RECV, client, [0; 4]) != Err(E_RIGHTS) { return Err("call-only copy could receive"); }
     if ep::endpoint(OP_DERIVE, client, [0, 1 << 3, BADGE + 1, 0]).is_ok() { return Err("badge changed on a badged copy"); }
     let n = 2_000u64;
+    let before = ep::endpoint(OP_STATS, 0, [0; 4]).map_err(|_| "stats")?;
     let t = tsc();
     for i in 0..n {
         let r = ep::call(root, 1, [i, BADGE, 0]).map_err(|_| "call failed")?;
         if r.words[1] != i + 1 { return Err("round trip mixed up"); }
     }
     let trip = tsc() - t;
+    let after = ep::endpoint(OP_STATS, 0, [0; 4]).map_err(|_| "stats")?;
+    let d = |i: usize| after.words[i] - before.words[i];
+    sex_pdx::serial_record!("[bench.ipc2.path] trips={} handoffs={} rendezvous={} queued={} slept={} again={}", n, after.badge - before.badge, d(0), d(1), d(2), d(3));
     // Notification: signal bits, then a wait that finds them at once.
     let note = ep::notify(OP_CREATE, 0, 0).map_err(|_| "create notification")? as u32;
     ep::notify(OP_SIGNAL, note, 0b1010).map_err(|_| "signal")?;

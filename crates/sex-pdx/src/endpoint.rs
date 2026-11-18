@@ -152,6 +152,9 @@ pub const OP_GRANT: u64 = 7;
 pub const OP_DESTROY: u64 = 8;
 /// A copy in this domain's own table: rights rdx (narrower), badge r10 (unbadged source only).
 pub const OP_DERIVE: u64 = 9;
+/// Diagnostics: badge = the scheduler's same-core handoffs; words = rendezvous,
+/// queued sends, waits that slept, E_AGAIN returns (all since boot).
+pub const OP_STATS: u64 = 10;
 pub const OP_SIGNAL: u64 = 1;
 pub const OP_NOTIFY_WAIT: u64 = 2;
 pub const OP_POLL: u64 = 3;

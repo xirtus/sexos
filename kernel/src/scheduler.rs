@@ -951,7 +951,7 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
         crate::cpu_account::switch(sched.core_id, None);
         // Idle time is no one's deadline work.
         sched.budget.switched(crate::interrupts::TICKS.load(Ordering::Relaxed), core::arch::x86_64::_rdtsc(), false);
-        if !polled && !current.is_null() && (*current).deliver.load(Ordering::Relaxed) {
+        if !polled && !current.is_null() && ((*current).deliver.load(Ordering::Relaxed) || (*current).ipc_v2.waiting()) {
             polled = true;
             poll_for_partner(sched, current);
             continue;

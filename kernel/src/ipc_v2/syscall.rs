@@ -26,6 +26,10 @@ static NOTIFICATION_OBJECT: [AtomicU32; POOL] = [const { AtomicU32::new(0) }; PO
 /// Pool entry + 1 for each object id (0: none).
 static POOL_OF: [AtomicU16; MAX_OBJECTS] = [const { AtomicU16::new(0) }; MAX_OBJECTS];
 
+/// Counters for `OP_STATS`: rendezvous, queued, waits that slept, E_AGAIN returns.
+static COUNTS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+fn count(i: usize) { COUNTS[i].fetch_add(1, Ordering::Relaxed); }
+
 /// Per-task IPC v2 state, in `Task`.
 pub struct TaskIpc {
     /// The result its wait returns: status, badge, info, three payload words.
@@ -43,6 +47,8 @@ impl TaskIpc {
         Self { result: [const { AtomicU64::new(0) }; 6], ready: AtomicBool::new(false), parked: AtomicBool::new(false),
                outbox: [const { AtomicU64::new(0) }; 4], reply: ReplySlot::new() }
     }
+    /// It sleeps in an IPC v2 wait: an idle core spins briefly for its answer.
+    pub fn waiting(&self) -> bool { self.parked.load(Ordering::Relaxed) && !self.ready.load(Ordering::Relaxed) }
 }
 
 impl Incarnations for Generations {
@@ -78,9 +84,10 @@ unsafe fn wait(regs: &mut SyscallRegs, me: TaskId) -> u64 {
     let state = ipc(me);
     regs.rax = E_AGAIN;
     state.parked.store(true, Ordering::Release);
+    count(2);
     crate::scheduler::park_current_unless(regs as *const _, || state.ready.load(Ordering::Acquire));
     state.parked.store(false, Ordering::Relaxed);
-    if state.ready.swap(false, Ordering::AcqRel) { finish(regs, state) } else { E_AGAIN }
+    if state.ready.swap(false, Ordering::AcqRel) { finish(regs, state) } else { count(3); E_AGAIN }
 }
 
 /// Called as `task` is about to run (from `ipc::recv::deliver`): a task that slept in
@@ -202,9 +209,9 @@ unsafe fn send(regs: &mut SyscallRegs, slot: u32, kind: CallKind) -> u64 {
     let sender = Sender { task: me, badge: cap.badge, generation: OBJECTS.incarnation(pd_of(me)), kind };
     for (slot, word) in ipc(me).outbox.iter().zip(words) { slot.store(word, Ordering::Relaxed); }
     match ENDPOINTS[entry].send(sender) {
-        SendOutcome::Rendezvous { receiver } if kind == CallKind::Call => { hand_over(receiver, &sender, words, true); wait(regs, me) }
+        SendOutcome::Rendezvous { receiver } if kind == CallKind::Call => { count(0); hand_over(receiver, &sender, words, true); wait(regs, me) }
         SendOutcome::Rendezvous { receiver } => { hand_over(receiver, &sender, words, false); 0 }
-        SendOutcome::Queued => wait(regs, me),
+        SendOutcome::Queued => { count(1); wait(regs, me) }
         SendOutcome::Full => E_FULL,
         SendOutcome::Closed => E_CLOSED,
     }
@@ -257,6 +264,12 @@ pub unsafe fn endpoint_syscall(regs: &mut SyscallRegs) -> u64 {
         OP_GRANT => grant(regs, slot, false),
         OP_DERIVE => grant(regs, slot, true),
         OP_DESTROY => destroy(slot, true),
+        OP_STATS => {
+            let c = COUNTS.each_ref().map(|c| c.load(Ordering::Relaxed));
+            regs.rdi = crate::scheduler::HANDOFFS.load(Ordering::Relaxed);
+            regs.rsi = c[0]; regs.rdx = c[1]; regs.r10 = c[2]; regs.r8 = c[3];
+            0
+        }
         _ => E_BADMSG,
     }
 }
