@@ -6,8 +6,11 @@
 //! cores, and the incoming task's comes back before it runs. A task never sees
 //! another task's registers, whatever key or core either ran on.
 //!
-//! XCR0 holds x87 and SSE, plus AVX (YMM upper halves) where the CPU has it, plus the
-//! three AVX-512 components (opmask, ZMM_Hi256, Hi16_ZMM) where it has those. PKRU
+//! XCR0 holds x87 and SSE, plus AVX (YMM upper halves) where the CPU has it. AVX-512
+//! stays off: its 1,856 more bytes per task sit inline in `Task`, and every copy of a
+//! Task on a program's 16 KiB kernel stack (worker spawn builds one there) grew with
+//! them until a stack overran its heap neighbour. AVX-512 returns once the save area
+//! is its own heap block sized from CPUID. PKRU
 //! (XCR0 bit 9) is never enabled, so no XRSTOR, the kernel's or a program's, can load a
 //! protection-key register; the loader's XRSTOR ban stays as the second wall.
 //! Saving uses XSAVEC (compacted, skips registers still in their reset state), else
@@ -19,12 +22,11 @@ use core::arch::x86_64::__cpuid_count as cpuid;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
-/// Bytes of the largest state ever enabled: x87/SSE legacy area, XSAVE header, AVX,
-/// (MPX gap), opmask, ZMM_Hi256, Hi16_ZMM, in standard layout. Compacted is no larger.
-pub const AREA: usize = 2688;
+/// Bytes of the largest state ever enabled: x87/SSE legacy area, XSAVE header and
+/// AVX, in standard layout. Compacted is no larger.
+pub const AREA: usize = 832;
 const X87_SSE: u64 = 0b11;
 const AVX: u64 = 1 << 2;
-const AVX512: u64 = 0b111 << 5;
 
 /// One task's register state, in FXSAVE layout followed by the XSAVE header and the
 /// extended components. XSAVE needs 64-byte alignment.
@@ -72,12 +74,11 @@ pub unsafe fn init_core() {
         let offered = { let l = cpuid(0xD, 0); l.eax as u64 | (l.edx as u64) << 32 };
         let mut xcr0 = X87_SSE;
         if leaf1 & (1 << 28) != 0 && offered & AVX != 0 { xcr0 |= AVX; }
-        if xcr0 & AVX != 0 && cpuid(7, 0).ebx & (1 << 16) != 0 && offered & AVX512 == AVX512 { xcr0 |= AVX512; }
         x86_64::registers::xcontrol::XCr0::write_raw(xcr0);
         let saves = cpuid(0xD, 1).eax;
         let (standard, compacted) = (cpuid(0xD, 0).ebx, cpuid(0xD, 1).ebx);
-        if xcr0 & AVX512 != 0 && standard.max(compacted) as usize > AREA {
-            xcr0 &= !AVX512; // A layout we did not plan for: keep AVX, drop AVX-512.
+        if standard.max(compacted) as usize > AREA {
+            xcr0 = X87_SSE; // A layout we did not plan for: keep x87/SSE only.
             x86_64::registers::xcontrol::XCr0::write_raw(xcr0);
         }
         let mode = if saves & 2 != 0 { XSAVEC } else if saves & 1 != 0 { XSAVEOPT } else { XSAVE };
@@ -92,7 +93,7 @@ pub unsafe fn init_core() {
 /// For the boot record: enabled register files, save instruction, bytes per save.
 pub fn describe() -> (&'static str, &'static str, u32) {
     let bits = XCR0_BITS.load(Ordering::Relaxed);
-    let files = if bits & AVX512 != 0 { "x87+sse+avx+avx512" } else if bits & AVX != 0 { "x87+sse+avx" } else { "x87+sse" };
+    let files = if bits & AVX != 0 { "x87+sse+avx" } else { "x87+sse" };
     let mode = ["fxsave", "xsave", "xsaveopt", "xsavec"][MODE.load(Ordering::Relaxed) as usize];
     (files, mode, SIZE.load(Ordering::Relaxed))
 }
@@ -134,9 +135,9 @@ mod tests {
         assert!(s.0[513..576].iter().all(|&b| b == 0));
     }
     #[test]
-    fn area_fits_avx512_standard_layout() {
-        // Hi16_ZMM is component 7 at standard offset 1664, 1024 bytes; PKRU (2688) is excluded.
-        assert_eq!(AREA, 1664 + 1024);
+    fn area_fits_avx_standard_layout() {
+        // YMM_Hi128 is component 2 at standard offset 576, 256 bytes.
+        assert_eq!(AREA, 576 + 256);
         assert_eq!(AREA % 64, 0);
     }
 }
