@@ -559,6 +559,15 @@
       "scope": "Production capability table compiled natively: post-seal revocation, no refill/mint, concurrent lookup and terminal-retirement wiring source; not native, cross-core or hostile-code evidence."
     },
     {
+      "id": "capability_v2",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/capability_v2_host_gate.sh"
+      ],
+      "scope": "Authority v2 on the production capability table compiled natively: inline 32-byte slots, derivation that only narrows rights and keeps badges, post-seal install of object kinds only, generation revocation, incarnation death and torn-read freedom under host threads; not native, cross-core or hostile-code evidence."
+    },
+    {
       "id": "uiir_stream",
       "kind": "host",
       "argv": [
@@ -661,7 +670,7 @@
     },
     {
       "id": "CAPABILITY_GENESIS",
-      "requirement": "BOOT_DAG is the sole source of capability genesis; graph is immutable after lock.",
+      "requirement": "BOOT_DAG is the sole source of capability genesis; resource authority is immutable after lock, and afterwards only object capabilities derived from a held root (never wider rights, never a forged badge) can be installed (D1, plan #405).",
       "status": "partial",
       "sources": [
         {
@@ -673,6 +682,10 @@
           "anchor": "pub fn seal"
         },
         {
+          "path": "kernel/src/capability_table.rs",
+          "anchor": "pub fn install"
+        },
+        {
           "path": "kernel/src/boot_memory.rs",
           "anchor": "pub fn seal_all()"
         }
@@ -680,7 +693,8 @@
       "checks": [
         "domain_identity",
         "memory_runtime",
-        "paging_runtime"
+        "paging_runtime",
+        "capability_v2"
       ],
       "gaps": [
         "Observed boot sealing does not prove all dormant internal grant paths unreachable; complete replay of genesis remains absent."

@@ -101,7 +101,7 @@ pub fn init(shell:u32){
     }
     unsafe{POOL=pool.leak().as_mut_ptr();}
     POOL_FREE.store(frames,Ordering::Release);POOL_TOTAL.store(frames,Ordering::Release);
-    let table=Box::into_raw(Box::new(crate::capability::CapabilityTable::new()));
+    let table=crate::capability::CapabilityTable::new_boxed();
     let signal=Box::into_raw(Box::new(crate::ipc_ring::RingBuffer::new()));
     let message=Box::into_raw(Box::new(crate::ipc_ring::RingBuffer::new()));
     let mut records=alloc::vec::Vec::with_capacity(count);
