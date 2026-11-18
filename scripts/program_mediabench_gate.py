@@ -84,8 +84,10 @@ def main():
    assert done[3]=='0',f'{mode}: {done[0]} ' + ' '.join(re.findall(r'\[mediabench\.fail\][^\n]*',text))
    assert int(done[1])==len(clips),done[0]
    cpu=re.search(r'\[mediabench\.cpu\] simd=\S+ flags=(\S+) avx=(\d) avx2=(\d) fma3=(\d) avx512=(\d) xcr0=(\S+)',text);assert cpu,'no cpu record'
-   dec={m[0]:dict(codec=m[1],frames=int(m[2]),w=int(m[3]),h=int(m[4]),cycles=int(m[6]),ms=int(m[7]),hash=m[8]) for m in re.findall(r'\[mediabench\.decode\] file=(\S+) codec=(\S+) simd=\S+ frames=(\d+) w=(\d+) h=(\d+) bytes=(\d+) cycles=(\d+) ms=(\d+) hash=(\w+)',text)}
+   dec={m[0]:dict(codec=m[1],frames=int(m[2]),w=int(m[3]),h=int(m[4]),cycles=int(m[6]),ms=int(m[7]),hash=m[8]) for m in re.findall(r'\[mediabench\.decode\] file=(\S+) codec=(\S+) simd=\S+ frames=(\d+) w=(\d+) h=(\d+) bytes=(\d+) cycles=(\d+) convert_cycles=\d+ ms=(\d+) hash=(\w+)',text)}
    enc={m[0]:dict(frames=int(m[1]),bytes=int(m[4]),cycles=int(m[5]),ms=int(m[6]),hash=m[7]) for m in re.findall(r'\[mediabench\.encode\] codec=(\S+) simd=\S+ frames=(\d+) w=(\d+) h=(\d+) bytes=(\d+) cycles=(\d+) ms=(\d+) hash=(\w+)',text)}
+   assert sorted(dec)==sorted(clips),f'{mode}: decode records for {sorted(dec)}, want {sorted(clips)}'
+   assert enc,f'{mode}: no encode records'
    runs[mode]=dict(cpu=dict(flags=cpu[1],avx=cpu[2],avx2=cpu[3],fma3=cpu[4],avx512=cpu[5],xcr0=cpu[6]),decode=dec,encode=enc)
    close(s)
   sse,full=runs['sse'],runs['full']
