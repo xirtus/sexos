@@ -14,8 +14,7 @@ jobs:
       matrix:
         include:
           - { name: 4c-pku,   cores: "4", cpu: "max,+pku,+rdseed" }
-          - { name: 4c-nopku, cores: "4", cpu: "max,-pku,+rdseed" }
-          - { name: 2c-pku,   cores: "2", cpu: "max,+pku,+rdseed" }
+          - { name: 3c-pku,   cores: "3", cpu: "max,+pku,+rdseed" }
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -29,7 +28,7 @@ jobs:
         nproc; truncate -s 1G "$RUNNER_TEMP/blank.img"
         for i in 1 2 3; do
           echo "=== run $i ==="
-          python3 scripts/latency_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank.img" --out "$RUNNER_TEMP/lat/run$i" && echo "RUN $i PASS" || echo "RUN $i FAIL"
+          python3 scripts/latency_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank.img" --out "$RUNNER_TEMP/lat/run$i" && echo "RUN $i PASS" || { echo "RUN $i FAIL"; python3 scripts/latency_diag_dump.py "$RUNNER_TEMP/lat/run$i/latency-serial.log"; }
           rm -f "$RUNNER_TEMP/lat/run$i/nvme.img"
         done
     - name: Preserve serial logs
