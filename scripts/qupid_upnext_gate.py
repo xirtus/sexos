@@ -67,10 +67,9 @@ def main():
   g['wait'](r'\[play.frame\] n=\d+ ',s,120);ss=jump()
   shown=g['wait'](r'\[qupid.upnext\] shown left_ms=(\d+)',ss,60)
   card=g['wait'](r'\[qupid.card\] at_ms=\d+ text=Up next  S01E02  in \d+ s',ss,60)
-  time.sleep(.5);shot=out/'up-next.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
-  img=Image.open(shot).convert('RGB');img.save(out/'up-next.png');px=img.load()
-  accent=sum(1 for y in range(img.height) for x in range(img.width) if abs(px[x,y][0]-0xDB)<8 and abs(px[x,y][1]-0x4A)<8 and abs(px[x,y][2]-0x7E)<8)
-  assert accent>40,f'no card edge on screen: {accent} accent pixels'
+  from qupid_shot import accent_shot
+  accent,notes=accent_shot(q,out,'up-next',41,tries=8)
+  assert accent>40,f'no card edge on screen: {accent} accent pixels {notes}'
   g['wait'](r'\[qupid.upnext\] go label=S01E02',ss,120)
   s2=len(t());g['wait'](r'\[play.item\] n=1 of=3 file=\S*S01E02',ss,60)
   # Episode 2: Esc watches the credits; episode 3 follows at the end anyway.

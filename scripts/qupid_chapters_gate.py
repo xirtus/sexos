@@ -82,10 +82,9 @@ def main():
   # Hold the picture while the card is up, so the screenshot is steady.
   card=g['wait'](r'\[qupid.card\] at_ms=(\d+) text=Skip intro  \(Enter\)',s,120)
   ss=len(t());q.key('spc');g['wait'](r'\[play.paused\] 1',ss,30);time.sleep(.8)
-  shot=out/'skip-card.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5)
-  img=Image.open(shot).convert('RGB');img.save(out/'skip-card.png');px=img.load()
-  accent=sum(1 for y in range(img.height) for x in range(img.width) if abs(px[x,y][0]-0xDB)<8 and abs(px[x,y][1]-0x4A)<8 and abs(px[x,y][2]-0x7E)<8)
-  assert accent>60,f'no card edge on screen: {accent} accent pixels'
+  from qupid_shot import accent_shot
+  accent,notes=accent_shot(q,out,'skip-card',61)
+  assert accent>60,f'no card edge on screen: {accent} accent pixels {notes}'
   q.key('spc');g['wait'](r'\[play.paused\] 0',ss,30)
   ss=len(t());q.key('ret')
   skip=g['wait'](r'\[qupid.skip\] kind=intro to_ms=(\d+)',ss,30);assert skip[1]=='7000',skip[0]
