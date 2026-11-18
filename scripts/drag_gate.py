@@ -26,6 +26,10 @@ program (the built-in test .exe) loaded into a Drag cell, a SYS_VM guest with no
 - kvm: the program's console lines come back as `[crossdress.out] ...`, ending with
   `crossdress: all checks passed`, and `[crossdress.stop] reason=exited code=0x0 ...
   handled=5` (five hardware exceptions through its vectored handler).
+Then `run crossdress plugin`: the built-in Windows CLAP plugin DLL (test/gain.c) in a cell:
+- tcg: `[crossdress.clap.loaded] base=0x180000000 ... imports=3`, then the refusal.
+- kvm: `[crossdress.clap.open] id=org.sexos.crossdress.test-gain ...` and
+  `[crossdress.clap.done] frames=1280 exact=1 ... reported=2` (its audio bit for bit).
 `--require-guest` fails unless the guest paths ran."""
 import argparse,os,re,shutil,time
 from pathlib import Path
@@ -128,8 +132,27 @@ def main():
   surface=int(re.findall(rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',t())[-1])
   s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11')
   g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120)
+  # Crossdress plugin bridge: a Windows CLAP plugin DLL in a cell, driven by the host.
+  s=len(t());run('run crossdress plugin')
+  start=g['wait'](r'\[crossdress\.start\] target=(\d+) task=(\d+)',s,180);target,task=int(start[1]),int(start[2])
+  g['wait'](r'\[crossdress\.clap\.loaded\] base=0x180000000 entry=0x18000[0-9a-f]+ imports=3 ',s,180)
+  end=g['wait'](r'\[crossdress\.(clap\.done|refused|fail)\][^\n]*\n',s,240)
+  assert end[1]!='fail',f'crossdress plugin failed: {end[0].strip()}'
+  if end[1]=='clap.done':
+   text=t()[s:]
+   assert '[crossdress.clap.open] id=org.sexos.crossdress.test-gain name=Crossdress Test Gain ' in text,text[-2000:]
+   assert re.search(r'\[crossdress\.clap\.done\] frames=1280 exact=1 [^\n]*reported=2 ',text),end[0]
+   assert '[crossdress.fail]' not in text,end[0]
+   clap='guest'
+  else:
+   assert path=='refused','dragtest ran a guest but the crossdress plugin was refused'
+   clap='refused'
+  if a.require_guest:assert clap=='guest','--require-guest: the Windows plugin did not run'
+  surface=int(re.findall(rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',t())[-1])
+  s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11')
+  g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,120)
   text=t();assert 'KERNEL PANIC' not in text and '[drag.fatal]' not in text and '[crossdress.fatal]' not in text and 'panicked' not in text
   reason=re.search(r'\[drag\] vmx=(\w+)(?: reason=(\w+))?',text)
-  print({'ok':True,'accel':accel,'path':path,'d2':d2,'crossdress':cw1,'vmx':reason[1],'reason':reason[2]})
+  print({'ok':True,'accel':accel,'path':path,'d2':d2,'crossdress':cw1,'clap':clap,'vmx':reason[1],'reason':reason[2]})
  finally:g['stop']()
 if __name__=='__main__':main()

@@ -9,6 +9,11 @@
 //! and their `__wine_unix_call` go later (CW3): the calls then come from ntdll.dll
 //! instead of from the program's import table.
 //!
+//! The host can also call into the guest (`call`): a DLL's DllMain and its exports, such
+//! as a CLAP plugin's `clap_entry` functions (`crate::clap`). Such a call returns through
+//! the call-return thunk, and function pointers the host hands the guest point at
+//! callback thunks (`CALLBACK | n`) that reach `Host::callback`.
+//!
 //! Hardware exceptions arrive from the ring-0 stubs (`cell`). The host turns them into
 //! a Windows EXCEPTION_RECORD and CONTEXT on the thread's stack and calls the vectored
 //! exception handlers in user mode; a handler that returns EXCEPTION_CONTINUE_EXECUTION
@@ -31,13 +36,39 @@ pub const STACK_TOP: u64 = 0x0000_7FF7_FF00_0000;
 /// VirtualAlloc without an address starts here (64 KiB granularity, like Windows).
 pub const ALLOC_BASE: u64 = 0x0000_0200_0000_0000;
 pub const ALLOCATION_GRANULARITY: u64 = 0x1_0000;
+/// The process heap (GetProcessHeap's handle is its base).
+pub const HEAP_VA: u64 = 0x0000_0100_0000_0000;
+/// Where a host call's floating-point arguments wait for the shim (top of the stack).
+pub const FLOAT_ARGS_VA: u64 = STACK_TOP - 0x40;
 pub const PROCESS_ID: u32 = 0x100;
 pub const THREAD_ID: u32 = 0x104;
 
 const THUNK_SIZE: u64 = 16;
-/// Thunk slot 0 returns from a vectored exception handler, slot 1 from the entry point;
-/// imports start at slot 2.
-const FIRST_IMPORT: u64 = 2;
+/// Thunk slot 0 returns from a vectored exception handler, slot 1 from the entry point,
+/// slot 2 from a host call; slots 3-4 hold the float-argument shim; then come
+/// `CALLBACKS` host callback slots, then the imports.
+const RETURNS: u64 = 3;
+const SHIM_SLOT: u64 = 3;
+const FIRST_CALLBACK: u64 = 5;
+/// How many host callbacks (`Host::callback`) a process offers.
+pub const CALLBACKS: u32 = 32;
+const FIRST_IMPORT: u64 = FIRST_CALLBACK + CALLBACKS as u64;
+/// The shim: loads XMM0-XMM3 from [R11] and jumps to R10, so a host call can pass
+/// `double` and `float` arguments (Windows x64 passes them by position in XMM0-XMM3).
+const FLOAT_SHIM: [u8; 26] = [
+    0xF2, 0x41, 0x0F, 0x10, 0x03,       // movsd xmm0, [r11]
+    0xF2, 0x41, 0x0F, 0x10, 0x4B, 0x08, // movsd xmm1, [r11+8]
+    0xF2, 0x41, 0x0F, 0x10, 0x53, 0x10, // movsd xmm2, [r11+16]
+    0xF2, 0x41, 0x0F, 0x10, 0x5B, 0x18, // movsd xmm3, [r11+24]
+    0x41, 0xFF, 0xE2,                   // jmp r10
+];
+/// Space a host call leaves at the top of the stack (the float arguments live there).
+const CALL_FRAME_GAP: u64 = 0x100;
+/// Most arguments a host call passes.
+pub const MAX_CALL_ARGS: usize = 16;
+
+/// The guest address of host callback thunk `n`, the function pointer a guest calls.
+pub const fn callback_va(n: u32) -> u64 { THUNK_VA + (FIRST_CALLBACK + n as u64) * THUNK_SIZE }
 
 /// Why the process stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +88,9 @@ pub enum Stop {
     Hypervisor(u64),
     /// The host asked to stop (window closed).
     Host,
+    /// A function the host called (`WinProcess::call`) returned this RAX. Only `call`
+    /// sees it; `run` on an executable never stops this way.
+    Returned(u64),
 }
 
 /// What the process needs from the program around it.
@@ -67,10 +101,13 @@ pub trait Host {
     fn sleep(&mut self, ms: u32);
     /// Called on host interrupts and time slices; false stops the process.
     fn keep_going(&mut self) -> bool { true }
+    /// The guest called host callback `n` (`callback_va(n)`) with the Windows x64
+    /// integer arguments `args`; the result goes to RAX.
+    fn callback(&mut self, n: u32, args: [u64; 4], cell: &mut Cell) -> u64 { let _ = (n, args, cell); 0 }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Counters { pub exits: u64, pub calls: u64, pub exceptions: u64, pub handled: u64 }
+pub struct Counters { pub exits: u64, pub calls: u64, pub exceptions: u64, pub handled: u64, pub callbacks: u64 }
 
 /// A hardware exception as the cell's stub reported it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -85,6 +122,11 @@ pub struct WinProcess {
     pub base: u64,
     pub entry: u64,
     pub imports: Vec<(String, String, Option<Api>)>,
+    /// Exported names and their addresses (a DLL's API).
+    pub exports: Vec<(String, u64)>,
+    /// The process heap: next free byte and end of what is mapped.
+    pub heap_next: u64,
+    pub heap_end: u64,
     pub handlers: Vec<u64>,
     pub next_alloc: u64,
     pub counters: Counters,
@@ -102,9 +144,16 @@ impl From<cell::Error> for LoadError { fn from(e: cell::Error) -> Self { LoadErr
 impl WinProcess {
     /// Loads a 64-bit Windows executable into a fresh cell over `ram`. The image goes at
     /// its preferred base: a cell is its own address space, so /FIXED images load too.
-    pub fn load(ram: Ram, file: &[u8]) -> Result<WinProcess, LoadError> {
+    pub fn load(ram: Ram, file: &[u8]) -> Result<WinProcess, LoadError> { Self::load_image(ram, file, false) }
+
+    /// Loads a 64-bit Windows DLL (a plugin) as the cell's only module. Nothing runs yet:
+    /// the host calls DllMain (`attach`) and the exports with `call`. `entry` is DllMain,
+    /// or 0 when the DLL has none.
+    pub fn load_dll(ram: Ram, file: &[u8]) -> Result<WinProcess, LoadError> { Self::load_image(ram, file, true) }
+
+    fn load_image(ram: Ram, file: &[u8], dll: bool) -> Result<WinProcess, LoadError> {
         let image = Image::parse(file)?;
-        if image.is_dll() { return Err(LoadError::Pe(pe::Error::NotPe)); }
+        if image.is_dll() != dll { return Err(LoadError::Pe(pe::Error::NotPe)); }
         let base = image.preferred_base;
         let mut mem = image.lay_out(file, base)?;
         let mut cell = Cell::new(ram)?;
@@ -115,14 +164,22 @@ impl WinProcess {
         if slots > 0xFFFF { return Err(LoadError::TooManyImports); }
         let mut thunks = Vec::with_capacity((slots * THUNK_SIZE) as usize);
         for n in 0..slots {
-            let code: u32 = match n { 0 => cell::HANDLER_RETURN, 1 => cell::ENTRY_RETURN, _ => cell::CALL | n as u32 };
             let mut t = [0xCCu8; THUNK_SIZE as usize];
-            // The two return thunks first keep the returned RAX: mov rcx, rax.
-            let at = if n < FIRST_IMPORT { t[..3].copy_from_slice(&[0x48, 0x89, 0xC1]); 3 } else { 0 };
+            if n == SHIM_SLOT { thunks.extend_from_slice(&FLOAT_SHIM); thunks.resize((thunks.len() as u64).next_multiple_of(THUNK_SIZE) as usize, 0xCC); continue; }
+            if n == SHIM_SLOT + 1 { continue; }
+            let code: u32 = match n {
+                0 => cell::HANDLER_RETURN,
+                1 => cell::ENTRY_RETURN,
+                2 => cell::CALL_RETURN,
+                _ if n < FIRST_IMPORT => cell::CALLBACK | (n - FIRST_CALLBACK) as u32,
+                _ => cell::CALL | n as u32,
+            };
+            // The return thunks first keep the returned RAX: mov rcx, rax.
+            let at = if n < RETURNS { t[..3].copy_from_slice(&[0x48, 0x89, 0xC1]); 3 } else { 0 };
             t[at] = 0xB8;
             t[at + 1..at + 5].copy_from_slice(&code.to_le_bytes());
             t[at + 5..at + 7].copy_from_slice(&[0xE7, cell::HYPERCALL_PORT]);
-            t[at + 7] = if n < FIRST_IMPORT { 0xF4 } else { 0xC3 }; // returns never come back; calls ret
+            t[at + 7] = if n < RETURNS { 0xF4 } else { 0xC3 }; // returns never come back; calls ret
             thunks.extend_from_slice(&t);
         }
         let mut imports = Vec::with_capacity(list.len());
@@ -168,16 +225,65 @@ impl WinProcess {
         ];
         for (offset, value) in teb { cell.write_u64(TEB_VA + offset, value).ok_or(LoadError::Cell(cell::Error::OutOfMemory))?; }
 
+        let exports = image.exports(&mem)?.into_iter().map(|(n, rva)| (n, base + rva as u64)).collect();
+
         // The entry is called like a function: RSP = 8 mod 16, returning to the exit thunk.
-        let rsp = STACK_TOP - 0x28;
+        let rsp = STACK_TOP - CALL_FRAME_GAP - 0x28;
         cell.write_u64(rsp, THUNK_VA + THUNK_SIZE).ok_or(LoadError::Cell(cell::Error::OutOfMemory))?;
-        let entry = base + image.entry_rva as u64;
+        let entry = if image.entry_rva == 0 { 0 } else { base + image.entry_rva as u64 };
         let mut initial = cell.user_state(entry, rsp, TEB_VA);
         initial.regs.rcx = PEB_VA;
         Ok(WinProcess {
-            cell, image, base, entry, imports, handlers: Vec::new(), next_alloc: ALLOC_BASE,
+            cell, image, base, entry, imports, exports, heap_next: HEAP_VA, heap_end: HEAP_VA, handlers: Vec::new(), next_alloc: ALLOC_BASE,
             counters: Counters::default(), last_fault: None, dispatch: Vec::new(), initial,
         })
+    }
+
+    /// The address of export `name`, if the image has it.
+    pub fn export(&self, name: &str) -> Option<u64> { self.exports.iter().find(|e| e.0 == name).map(|e| e.1) }
+
+    /// Calls the guest function at `function` with Windows x64 arguments: `args` are the
+    /// integer/pointer arguments by position (RCX, RDX, R8, R9, then the stack), and
+    /// `floats` the XMM0-XMM3 values for arguments that are `double` (a `float` goes in as
+    /// `f32::to_bits` in the low half). The guest's own calls, callbacks and exceptions
+    /// are served on the way, as in `run`. Returns the function's RAX.
+    pub fn call(&mut self, cpu: &mut impl Vcpu, host: &mut impl Host, function: u64, args: &[u64], floats: Option<[u64; 4]>) -> Result<u64, Stop> {
+        if args.len() > MAX_CALL_ARGS || function == 0 { return Err(Stop::CellFault { vector: 0xFE, rip: function }); }
+        let fault = Stop::CellFault { vector: 0xFE, rip: function };
+        // At the call: RSP 16-aligned with 32 bytes of home space, then the stack arguments.
+        let stack_args = args.len().saturating_sub(4) as u64;
+        let at_call = (STACK_TOP - CALL_FRAME_GAP - 0x20 - 8 * stack_args) & !0xF;
+        let rsp = at_call - 8;
+        self.cell.write_user(rsp, &(THUNK_VA + 2 * THUNK_SIZE).to_le_bytes()).ok_or(fault.clone())?;
+        for (i, a) in args.iter().enumerate().skip(4) {
+            self.cell.write_user(at_call + 0x20 + 8 * (i as u64 - 4), &a.to_le_bytes()).ok_or(fault.clone())?;
+        }
+        let mut st = self.cell.user_state(function, rsp, TEB_VA);
+        let mut a = [0u64; 4];
+        for (i, v) in args.iter().take(4).enumerate() { a[i] = *v; }
+        // The guest's Windows x64 argument registers (a guest register file, not SexOS IPC).
+        { let g = &mut st.regs; g.rcx = a[0]; g.rdx = a[1]; g.r8 = a[2]; g.r9 = a[3]; }
+        if let Some(x) = floats {
+            let mut block = [0u8; 32];
+            for (i, v) in x.iter().enumerate() { block[8 * i..8 * i + 8].copy_from_slice(&v.to_le_bytes()); }
+            self.cell.write_user(FLOAT_ARGS_VA, &block).ok_or(fault.clone())?;
+            st.regs.r10 = function;
+            st.regs.r11 = FLOAT_ARGS_VA;
+            st.regs.rip = THUNK_VA + SHIM_SLOT * THUNK_SIZE;
+        }
+        cpu.set_state(&st).map_err(Stop::Hypervisor)?;
+        match self.run(cpu, host) {
+            Stop::Returned(v) => Ok(v),
+            s => Err(s),
+        }
+    }
+
+    /// Calls a DLL's entry point (DllMain) with `reason` (1 attach, 0 detach). A DLL
+    /// without one succeeds.
+    pub fn dll_main(&mut self, cpu: &mut impl Vcpu, host: &mut impl Host, reason: u32) -> Result<bool, Stop> {
+        if self.entry == 0 { return Ok(true); }
+        let (entry, base) = (self.entry, self.base);
+        self.call(cpu, host, entry, &[base, reason as u64, 0], None).map(|v| v as u32 != 0)
     }
 
     /// The state to load into a fresh vCPU before the first run.
@@ -220,6 +326,17 @@ impl WinProcess {
                             Err(s) => return s,
                         },
                         _ if code == cell::ENTRY_RETURN => return Stop::Exited(e.regs.rcx as u32),
+                        _ if code == cell::CALL_RETURN => return Stop::Returned(e.regs.rcx),
+                        cell::CALLBACK => {
+                            let n = code & 0xFFFF;
+                            if n >= CALLBACKS { return Stop::CellFault { vector: 0xFD, rip: e.regs.rip }; }
+                            self.counters.callbacks += 1;
+                            let g = &e.regs;
+                            let args = [g.rcx, g.rdx, g.r8, g.r9];
+                            e.regs.rax = host.callback(n, args, &mut self.cell);
+                            e.regs.rip = next;
+                            load = true;
+                        }
                         _ => return Stop::Unexpected { reason: e.reason, rip: e.regs.rip },
                     }
                 }

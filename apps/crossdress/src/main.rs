@@ -2,6 +2,10 @@
 //! Crossdress (CW1): runs a 64-bit Windows program in a Drag cell. `run crossdress` runs
 //! the built-in test program (`crates/sex-crossdress/test/hello.c`); `run crossdress
 //! FILE.exe` runs an .exe from this program's folder (or a file it was given).
+//! `run crossdress plugin` runs the built-in Windows CLAP test plugin
+//! (`crates/sex-crossdress/test/gain.c`) through the host bridge (`sex_crossdress::clap`)
+//! and checks its audio bit for bit; `run crossdress FILE.clap` opens another Windows
+//! CLAP plugin and processes a test signal through it.
 //!
 //! The cell is a SYS_VM guest with no guest OS (`sex_crossdress`). Its memory is this
 //! run's own heap, lent to the VM. The Windows code never runs in SexOS's address space,
@@ -12,6 +16,11 @@
 //! before Drag D5) or `[crossdress.run]`, one `[crossdress.out] ...` per line the program
 //! writes, and `[crossdress.stop] reason=... code=... exits=... calls=... exceptions=...
 //! handled=...`. Failures: `[crossdress.fail]`.
+//!
+//! Plugins: `[crossdress.clap.loaded] base=... imports=...`, then the same refusal or
+//! `[crossdress.clap.open] id=... name=... params=...`, `[crossdress.clap.param] ...` per
+//! parameter, and `[crossdress.clap.done] frames=... exact=... peak=... reported=...
+//! callbacks=...`.
 #![no_std]
 #![no_main]
 
@@ -20,6 +29,7 @@ use alloc::vec::Vec;
 use drag_vmm::memory::{self, Ram};
 use drag_vmm::vmm::Vcpu;
 use sex_app::{files, Event, Window};
+use sex_crossdress::clap::{self, ClapPlugin, ParamChange};
 use sex_crossdress::process::{Host, WinProcess, Stop};
 use sex_pdx::vm::{self, Exit, State};
 
@@ -158,6 +168,7 @@ fn stop_line(stop: &Stop) -> (&'static str, u64) {
         Stop::Unexpected { reason, .. } => ("unexpected_exit", *reason as u64),
         Stop::Hypervisor(s) => ("hypervisor", *s),
         Stop::Host => ("host", 0),
+        Stop::Returned(v) => ("returned", *v),
     }
 }
 
@@ -192,6 +203,72 @@ fn windows(p: &mut Program, exe: &[u8]) -> Result<Stop, (&'static str, u64)> {
     Ok(stop)
 }
 
+fn clap_error(e: &clap::Error) -> (&'static str, u64) {
+    match e {
+        clap::Error::Load(_) => ("clap_load", 0),
+        clap::Error::NotClap => ("not_clap", 0),
+        clap::Error::Stopped(s) => { let (why, code) = stop_line(s); sex_pdx::serial_record!("[crossdress.clap.stopped] reason={} code={:#x}", why, code); ("clap_stopped", code) }
+        clap::Error::Refused(what) => { sex_pdx::serial_record!("[crossdress.clap.refused] step={}", what); ("clap_refused", 0) }
+        clap::Error::Bad(what) => { sex_pdx::serial_record!("[crossdress.clap.bad] what={}", what); ("clap_bad", 0) }
+        clap::Error::Host(what) => { sex_pdx::serial_record!("[crossdress.clap.host] what={}", what); ("clap_host", 0) }
+    }
+}
+
+/// A test signal: two different deterministic triangle-ish waves in [-0.78, 0.78].
+fn signal(i: usize, step: usize) -> f32 { ((i * step) % 200) as f32 / 128.0 - 0.78125 }
+
+/// Opens a Windows CLAP plugin in a cell and processes 1280 frames of a test signal in
+/// three blocks. The built-in test plugin (`builtin`) gets gain changes at frames 100 and
+/// 300 of the second block and its output is checked bit for bit.
+fn plugin(p: &mut Program, file: &[u8], builtin: bool) -> Result<bool, (&'static str, u64)> {
+    let ram = Ram::new(CELL_MIB << 20).ok_or(("cell_ram", CELL_MIB as u64))?;
+    let mut plug = ClapPlugin::load(ram, file).map_err(|e| clap_error(&e))?;
+    sex_pdx::serial_record!("[crossdress.clap.loaded] base={:#x} entry={:#x} imports={} cell_mib={}",
+        plug.process.base, plug.process.entry, plug.process.imports.len(), CELL_MIB);
+    match vm::info() {
+        Ok((true, _)) => {}
+        Ok((false, reason)) => return Err(("unavailable", reason)),
+        Err(s) => return Err(("info", s)),
+    }
+    let machine = vm::create().map_err(|s| ("create", s))?;
+    let result = (|| {
+        lend(machine, &plug.process.cell.ram)?;
+        let cpu = vm::vcpu_create(machine).map_err(|s| ("vcpu", s))?;
+        sex_pdx::serial_record!("[crossdress.run] vm={} pages={}", machine, plug.process.cell.ram.len() / memory::PAGE);
+        let mut vcpu = KernelVcpu::new(machine, cpu);
+        plug.open(&mut vcpu, p, "C:\\Program Files\\Common Files\\CLAP\\plugin.clap").map_err(|e| clap_error(&e))?;
+        let d = &plug.descriptor;
+        sex_pdx::serial_record!("[crossdress.clap.open] id={} name={} vendor={} version={} params={}", d.id, d.name, d.vendor, d.version, plug.params.len());
+        for q in plug.params.iter().take(32) {
+            sex_pdx::serial_record!("[crossdress.clap.param] id={} name={} min={} max={} default={}", q.id, q.name, q.min, q.max, q.default);
+        }
+        plug.activate(&mut vcpu, p, 48_000.0, 512).map_err(|e| clap_error(&e))?;
+        let changes: [&[ParamChange]; 3] = if builtin {
+            [&[], &[ParamChange { time: 100, id: 0, value: 0.5 }, ParamChange { time: 300, id: 0, value: 1.5 }], &[]]
+        } else { [&[], &[], &[]] };
+        let (mut at, mut gain, mut exact, mut peak, mut reported) = (0usize, 1.0f32, true, 0.0f32, 0usize);
+        for (frames, ch) in [512usize, 512, 256].into_iter().zip(changes) {
+            let l: Vec<f32> = (at..at + frames).map(|i| signal(i, 7)).collect();
+            let r: Vec<f32> = (at..at + frames).map(|i| signal(i, 13)).collect();
+            let (mut ol, mut or) = (alloc::vec![0f32; frames], alloc::vec![0f32; frames]);
+            reported += plug.process(&mut vcpu, p, [&l, &r], [&mut ol, &mut or], ch).map_err(|e| clap_error(&e))?.len();
+            for i in 0..frames {
+                for c in ch.iter().filter(|c| c.time as usize == i) { gain = c.value as f32; }
+                exact &= ol[i].to_bits() == (l[i] * gain).to_bits() && or[i].to_bits() == (r[i] * gain).to_bits();
+                peak = peak.max(ol[i].abs()).max(or[i].abs());
+            }
+            at += frames;
+        }
+        plug.close(&mut vcpu, p).map_err(|e| clap_error(&e))?;
+        let c = plug.process.counters;
+        sex_pdx::serial_record!("[crossdress.clap.done] frames={} exact={} peak={} reported={} callbacks={} calls={} exits={}",
+            at, exact as u8, peak, reported, c.callbacks, c.calls, c.exits);
+        Ok(!builtin || (exact && reported == 2))
+    })();
+    vm::destroy(machine).map_err(|s| ("destroy", s))?;
+    result
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut window = Window::open();
@@ -200,8 +277,34 @@ pub extern "C" fn _start() -> ! {
     let line = files::args(&mut window, &mut buf).to_vec();
     sex_pdx::serial_record!("[crossdress.start] target={} task={} args_len={}", window.target, window.task, line.len());
     let path: Vec<u8> = line.split(|&c| c == b' ').find(|w| !w.is_empty()).map(|w| w.to_vec()).unwrap_or_default();
-    let exe = if path.is_empty() { Ok(sex_crossdress::TEST_EXE.to_vec()) } else { read_file(&path, 256 << 20) };
     let mut p = Program { window: &mut window, line: Vec::new(), lines: Vec::new(), t0: sex_pdx::get_ticks(), closed: false, polls: 0 };
+    let builtin = path == b"plugin";
+    if builtin || path.ends_with(b".clap") {
+        let file = if builtin { Ok(sex_crossdress::TEST_CLAP.to_vec()) } else { read_file(&path, 256 << 20) };
+        let text: &[u8] = match file.map_err(|why| { sex_pdx::serial_record!("[crossdress.fail] step=read why={}", why); }) {
+            Err(()) => b"Crossdress: could not read that plugin.\nF11 closes.",
+            Ok(file) => match plugin(&mut p, &file, builtin) {
+                Ok(true) => b"Crossdress: the Windows plugin processed audio.\nF11 closes.",
+                Ok(false) => { sex_pdx::serial_record!("[crossdress.fail] step=clap_check status=0"); b"Crossdress: the plugin's audio was wrong (see the log).\nF11 closes." }
+                Err(("unavailable", reason)) => {
+                    sex_pdx::serial_record!("[crossdress.refused] status={} reason={}", vm::UNAVAILABLE, reason);
+                    b"Crossdress: this machine has no usable VMX.\nF11 closes."
+                }
+                Err((step, status)) => {
+                    sex_pdx::serial_record!("[crossdress.fail] step={} status={}", step, status);
+                    b"Crossdress: the plugin stopped with an error (see the log).\nF11 closes."
+                }
+            },
+        };
+        p.show(text);
+        loop {
+            if let Event::Close = window.next() {
+                sex_pdx::serial_record!("[crossdress.closed] target={} task={}", window.target, window.task);
+                window.close()
+            }
+        }
+    }
+    let exe = if path.is_empty() { Ok(sex_crossdress::TEST_EXE.to_vec()) } else { read_file(&path, 256 << 20) };
     let text: &[u8] = match exe {
         Err(why) => { sex_pdx::serial_record!("[crossdress.fail] step=read why={}", why); b"Crossdress: could not read that .exe.\nF11 closes." }
         Ok(exe) => match windows(&mut p, &exe) {

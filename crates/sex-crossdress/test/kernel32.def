@@ -7,3 +7,6 @@ AddVectoredExceptionHandler
 VirtualAlloc
 GetCurrentThreadId
 GetTickCount64
+GetProcessHeap
+HeapAlloc
+HeapFree

@@ -33,6 +33,11 @@ pub const EXCEPTION: u32 = 0x7E00_0000;
 pub const HANDLER_RETURN: u32 = 0x7F00_0000;
 /// EAX when the program's entry point returns.
 pub const ENTRY_RETURN: u32 = 0x7F00_0001;
+/// EAX when a function the host called in the guest (`WinProcess::call`) returns.
+pub const CALL_RETURN: u32 = 0x7F00_0002;
+/// EAX of a host callback thunk (a function pointer the host gave the guest, such as a
+/// CLAP host's `get_extension`): `CALLBACK | index`.
+pub const CALLBACK: u32 = 0x7D00_0000;
 pub const MAGIC_MASK: u32 = 0xFF00_0000;
 
 /// Where the ring-0 pieces live (supervisor pages, top of the address space).

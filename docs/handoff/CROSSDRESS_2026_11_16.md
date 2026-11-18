@@ -89,3 +89,45 @@ and ends with `crossdress: all checks passed`. The serial log has
   flush; CW1 only adds new mappings.
 - Next: CW2, the in-SAS test mode for CI without KVM. CW3 builds Wine's PE DLLs (llvm-mingw)
   and routes `__wine_unix_call` to the host, replacing `win32.rs`.
+
+## CX1 (2026-11-18): a Windows CLAP plugin in a cell
+
+Asked for: push Crossdress toward a first Windows audio plugin in a Drag cell. This step
+proves the plugin half of CW8 (the yabridge role) before Wine's PE DLLs (CW3) exist.
+
+- **Test plugin** `test/gain.c` → `test/gain.clap` (`test/build_gain.sh`): a real 64-bit
+  Windows CLAP plugin DLL, "Crossdress Test Gain", built with clang + lld-link against the
+  upstream CLAP headers (`vendor/clap-fixture/include`), no SDK, no C runtime. Stereo gain
+  with one automatable parameter, its instance on the process heap, DllMain counting
+  attaches, and every parameter change echoed through `out_events`. `_Static_assert`s pin
+  every structure offset the host uses, so a header change breaks the plugin build, not
+  the audio. Byte-compared with LLVM 18 like `hello.exe`; other LLVMs run the rebuild on
+  KVM (`CROSSDRESS_CLAP`).
+- **DLLs and host calls** (`process.rs`): `WinProcess::load_dll` maps a DLL as the cell's
+  only module and resolves its exports; `call` runs any guest function with Windows x64
+  arguments (stack arguments, 16-byte alignment, return through a call-return thunk);
+  `double` arguments go through a 26-byte shim that loads XMM0-XMM3 from memory (CLAP's
+  `activate(plugin, double, u32, u32)` needs XMM1); `dll_main` attach/detach.
+  32 **host callback thunks** (`callback_va(n)`, `cell::CALLBACK | n`) are function
+  pointers the guest can call; they reach `Host::callback`.
+- **KERNEL32**: GetProcessHeap, HeapAlloc (bump heap mapped on demand, zeroed), HeapFree.
+- **Bridge** (`clap.rs`): `ClapPlugin` lays out `clap_host_t`, `clap_process_t`, audio
+  buffers and event lists in a bridge area of the cell; `open` (DllMain,
+  `clap_entry.init`, factory, descriptor, `create_plugin`, `init`, `clap.params`),
+  `activate`, sample-accurate `process` with CLAP_EVENT_PARAM_VALUE in and out,
+  `param_value`, `close`. Guest pointers are read with user rights only.
+- **Program**: `run crossdress plugin` runs the built-in plugin and checks its audio bit for
+  bit; `run crossdress FILE.clap` opens another Windows CLAP plugin and processes a test
+  signal (serial `[crossdress.clap.*]`).
+
+Gates: `tests/kvm.rs` `a_windows_clap_plugin_processes_audio_in_a_kvm_cell` (CI host job,
+real SVM/VT-x): three blocks, gain changes at frames 100 and 300, every output sample
+bit-identical to the same arithmetic on the host, both changes reported back, callbacks
+counted. `scripts/drag_gate.py` runs `run crossdress plugin` (TCG: loaded then refused;
+KVM: `exact=1 reported=2`).
+
+What real closed plugins still need, in order: a C runtime and the rest of KERNEL32/NTDLL
+(CW3: Wine's PE DLLs, `__wine_unix_call` to the host), threads as vCPUs (CW4), VST3's COM
+interfaces over the same call/callback seams, plugin GUIs (CW6), and Moan's plugin host
+(moanplug) opening Windows `.clap`/`.vst3` files through `ClapPlugin` in its sandboxed
+helper.

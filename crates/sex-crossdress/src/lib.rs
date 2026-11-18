@@ -13,6 +13,8 @@
 //! - [`process`]: one process and thread, import thunks, the exit loop, vectored
 //!   exception dispatch.
 //! - [`win32`]: Windows structure layouts, status codes and the KERNEL32 subset.
+//! - [`clap`]: a Windows CLAP plugin DLL in a cell, driven by the host (the yabridge
+//!   role): descriptor, parameters, activate, sample-accurate `process`.
 //!
 //! Host-testable: the kernel is reached only through `drag_vmm::vmm::Vcpu`, and
 //! `tests/kvm.rs` runs the same cell on Linux KVM where /dev/kvm exists.
@@ -22,6 +24,7 @@ extern crate alloc;
 extern crate std;
 
 pub mod cell;
+pub mod clap;
 pub mod pe;
 pub mod process;
 pub mod win32;
@@ -33,3 +36,7 @@ pub static TEST_EXE: &[u8] = include_bytes!("../test/hello.exe");
 
 /// The line the test program prints last when every check passed.
 pub const TEST_PASS: &str = "crossdress: all checks passed";
+
+/// The plugin test (`test/gain.c`, built by `test/build_gain.sh`): a real 64-bit Windows
+/// CLAP audio plugin DLL, "Crossdress Test Gain".
+pub static TEST_CLAP: &[u8] = include_bytes!("../test/gain.clap");
