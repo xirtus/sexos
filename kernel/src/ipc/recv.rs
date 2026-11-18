@@ -61,6 +61,7 @@ pub unsafe fn wait_and_take(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
 /// `wait_and_take` finds its event in its saved frame (rax rbx rcx rdx rbp rsi rdi r8
 /// r9 r10 ..., as `yield_and_switch` saved it).
 pub unsafe fn deliver(task: *mut Task) {
+    crate::ipc_v2::syscall::deliver(task);
     if !(*task).deliver.swap(false, Ordering::Relaxed) { return; }
     let pd = &*(*task).context.pd_ptr;
     let [status, ty, from, a0, a1, a2] = event_regs(take_event(pd));

@@ -3,7 +3,7 @@
   "subsystem": "architecture",
   "constitution": {
     "path": "ARCHITECTURE.md",
-    "sha256": "7f99eefb1afb48ba73ed6079ac080e2a5aeea693a8ba364a19927c1b3e741679"
+    "sha256": "2edfa67517bc5df6cb698348ea4a4f5c1de99f67ae11e69813c7a762f1a8ea5f"
   },
   "state_model": {
     "equation": "S[n+1] = T(S[n], I[n], C)",
@@ -550,6 +550,15 @@
       "scope": "Production capability table compiled natively: post-seal revocation, no refill/mint, concurrent lookup and terminal-retirement wiring source; not native, cross-core or hostile-code evidence."
     },
     {
+      "id": "capability_v2",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/capability_v2_host_gate.sh"
+      ],
+      "scope": "Authority v2 on the production capability table compiled natively: inline 32-byte slots, derivation that only narrows rights and keeps badges, post-seal install of object kinds only, generation revocation, incarnation death and torn-read freedom under host threads; not native, cross-core or hostile-code evidence."
+    },
+    {
       "id": "uiir_stream",
       "kind": "host",
       "argv": [
@@ -652,7 +661,7 @@
     },
     {
       "id": "CAPABILITY_GENESIS",
-      "requirement": "BOOT_DAG is the sole source of capability genesis; graph is immutable after lock.",
+      "requirement": "BOOT_DAG is the sole source of capability genesis; resource authority is immutable after lock, and afterwards only object capabilities derived from a held root (never wider rights, never a forged badge) can be installed (D1, plan #405).",
       "status": "partial",
       "sources": [
         {
@@ -664,6 +673,10 @@
           "anchor": "pub fn seal"
         },
         {
+          "path": "kernel/src/capability_table.rs",
+          "anchor": "pub fn install"
+        },
+        {
           "path": "kernel/src/boot_memory.rs",
           "anchor": "pub fn seal_all()"
         }
@@ -671,7 +684,8 @@
       "checks": [
         "domain_identity",
         "memory_runtime",
-        "paging_runtime"
+        "paging_runtime",
+        "capability_v2"
       ],
       "gaps": [
         "Observed boot sealing does not prove all dormant internal grant paths unreachable; complete replay of genesis remains absent."
@@ -713,7 +727,7 @@
     },
     {
       "id": "DETERMINISTIC_REPLAY",
-      "requirement": "Replay from epoch zero with the same input stream and capability graph yields identical complete observable state.",
+      "requirement": "Replay of a UiIR stream with the same input and capability graph yields the same Display scene; full-system replay is a goal for a ring-3 recorder, not a kernel invariant (ARCHITECTURE.md 2026-11-18, D4).",
       "status": "open",
       "sources": [
         {
@@ -729,7 +743,7 @@
     },
     {
       "id": "EPOCH_COMMIT",
-      "requirement": "Observable transitions follow snapshot -> transform -> swap -> commit at explicit epoch boundaries.",
+      "requirement": "Display scene publication follows snapshot -> transform -> swap -> commit at explicit epoch boundaries.",
       "status": "open",
       "sources": [
         {
@@ -775,7 +789,7 @@
     },
     {
       "id": "USERLAND_MEMORY_AUTHORITY",
-      "requirement": "The kernel traps/forwards/resumes; sext owns fault-resolution frame allocation and GLOBAL_VAS mappings.",
+      "requirement": "The kernel traps, checks and forwards user faults and performs capability-checked page-table writes; sext owns fault-resolution frame choice and zeroing.",
       "status": "partial",
       "sources": [
         {
@@ -807,7 +821,7 @@
     },
     {
       "id": "CAUSAL_DOMAIN_ORDER",
-      "requirement": "Cross-domain streams preserve explicit deterministic ordering with no hidden hardware input.",
+      "requirement": "UiIR streams preserve contiguous per-sender sequences and non-decreasing epochs with no hidden hardware input.",
       "status": "partial",
       "sources": [
         {

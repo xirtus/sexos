@@ -21,6 +21,7 @@ def main():
   assert kvm_usable(),'--accel kvm needs a readable and writable /dev/kvm'
   os.environ['SEXOS_GATE_ACCEL']='kvm';os.environ['SEXOS_GATE_CPU']='host,-pku' if a.no_pku else 'host'
   if not a.no_pku and not host_has('pku'):print('[bench.kvm] host CPU has no pku; PKU column is not measured');os.environ['SEXOS_GATE_CPU']='host'
+ else:os.environ.pop('SEXOS_GATE_ACCEL',None)
  label={'accel':accel,'cpu':os.environ.get('SEXOS_GATE_CPU','max,+pku,+rdseed')}
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('bench',(ROOT/'iso_root/programs/bench').read_bytes())])
