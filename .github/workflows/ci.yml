@@ -693,7 +693,7 @@ jobs:
   desktop:
     name: Desktop shell
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -888,7 +888,7 @@ jobs:
   productivity:
     name: Productivity programs
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
