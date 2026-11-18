@@ -738,7 +738,10 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
         let end=end.min(x1);
         if row.is_some(){
             if let Some(source)=source{
-                if fast_content_run(fb,x,end,y,w,h,source,scene){x=end;continue;}
+                let t=decor::cycles_now();
+                let fast=fast_content_run(fb,x,end,y,w,h,source,scene);
+                decor::tally(0,t);
+                if fast{x=end;continue;}
             }else{
                 match mark{
                     // The SexOS wallpaper's lips: this run crosses them.
@@ -750,6 +753,7 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
                 x=end;continue;
             }
         }
+        let t=decor::cycles_now();
         while x<end{
             let under=if mark.is_some(){wallpaper_mark::pixel(x,y,w,h,back)}else{back};
             let color=if let Some(row)=row.as_mut(){
@@ -758,6 +762,7 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
             unsafe{core::ptr::write_volatile(fb.add(y*w+x),color);}
             x+=1;
         }
+        decor::tally(1,t);
     }
     decor::row(fb,y,x0,x1,w,h,scene);
 }
@@ -5554,7 +5559,7 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
         }
         // Frame cost: from here to the completed publication.
-        decor::take_cycles();
+        decor::take_cycles();decor::take_tally(0);decor::take_tally(1);
         let render_start=decor::cycles_now();
         let render_ms_start=sex_pdx::get_ticks();
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
@@ -5586,8 +5591,9 @@ pub extern "C" fn _start() -> ! {
             static mut FRAME_COST_BUDGET: u32 = 64;
             unsafe { if FRAME_COST_BUDGET > 0 { FRAME_COST_BUDGET -= 1;
                 let decor = decor::take_cycles();
+                let (fast, pixel) = (decor::take_tally(0), decor::take_tally(1));
                 let kpx = match plan.content { paint_batch::Content::Damage(r) => ((r.right - r.x) * (r.bottom - r.y) / 1000) as u64, paint_batch::Content::Full | paint_batch::Content::Area => (w * h / 1000) as u64, _ => 0 };
-                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx); } }
+                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={} fast_kcyc={} pixel_kcyc={}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx, fast / 1000, pixel / 1000); } }
         }
         if let Some(frame)=published.as_ref(){
             if frame.plan.clock_dirty(){unsafe{LAST_REDRAWN_CLOCK_CANON_SS=frame.canon_ss;}}

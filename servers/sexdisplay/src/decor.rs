@@ -96,6 +96,12 @@ pub fn cycles_now() -> u64 {
 /// Cycles spent in this pass since the last call.
 static mut CYCLES: u64 = 0;
 pub fn take_cycles() -> u64 { unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(CYCLES)) } }
+/// Compositor cycles by path for the frame-cost report: 0 fast runs, 1 per-pixel.
+static mut TALLY: [u64; 2] = [0; 2];
+pub fn tally(slot: usize, start: u64) {
+    unsafe { let t = &mut *core::ptr::addr_of_mut!(TALLY); t[slot] = t[slot].wrapping_add(cycles_now().wrapping_sub(start)); }
+}
+pub fn take_tally(slot: usize) -> u64 { unsafe { core::mem::take(&mut (*core::ptr::addr_of_mut!(TALLY))[slot]) } }
 
 /// Decorate framebuffer row `y` between `x0` and `x1`.
 pub fn row(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, scene: &crate::scene::SceneSnapshot) {

@@ -33,7 +33,7 @@ use surface_groups::FrameGroups;
 use silkbar_model::{DEFAULT_THEME,DEFAULT_SILK_BAR};
 // The SexOS wallpaper mark is off here: the reference compositor draws plain gradients.
 mod wallpaper_mark{pub fn span(_:usize,_:usize,_:usize)->Option<(usize,usize)>{None}pub fn pixel(_:usize,_:usize,_:usize,_:usize,back:u32)->u32{back}}
-mod decor{pub fn row(_:*mut u32,_:usize,_:usize,_:usize,_:usize,_:usize,_:&crate::scene::SceneSnapshot){}pub fn grow(r:crate::damage::Rect,_:usize,_:usize,_:usize,_:u32)->crate::damage::Rect{r}}
+mod decor{pub fn row(_:*mut u32,_:usize,_:usize,_:usize,_:usize,_:usize,_:&crate::scene::SceneSnapshot){}pub fn grow(r:crate::damage::Rect,_:usize,_:usize,_:usize,_:u32)->crate::damage::Rect{r}pub fn cycles_now()->u64{0}pub fn tally(_:usize,_:u64){}}
 include!(env!("DISPLAY_CURSOR_SOURCE"));
 const W:usize=128;const H:usize=112;
 const MENU_OLD:u32=0x004488aa;const MENU_NEW:u32=0x00aa8844;
