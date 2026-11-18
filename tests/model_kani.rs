@@ -49,9 +49,8 @@ fn colliding_callers_stay_separate_and_withdraw_is_exact() {
     let a: u32 = kani::any();
     // One collision step keeps the proof inside CBMC's memory on CI runners; a
     // symbolic step count ran out of memory. The proptest model covers longer chains.
-    kani::assume(a > 0);
-    let b = a + REPLY_CALLERS as u32; // same home slot as a
-    kani::assume((b as usize) < REPLY_CREDIT_CAPACITY);
+    kani::assume(a > 0 && (a as usize) < REPLY_CREDIT_CAPACITY - REPLY_CALLERS);
+    let b = a + REPLY_CALLERS as u32; // same home slot as a, still a valid caller
     assert_eq!(credits.grant(a), Grant::Added);
     assert_eq!(credits.grant(b), Grant::Added);
     assert_eq!(credits.grant(b), Grant::Added);
