@@ -54,13 +54,34 @@ One 4-core PKU run started all four programs and failed with loaded p99 422.1 ms
 above; it was not reproduced in the other runs and is not evidence of starvation.
 Real numbers need KVM or hardware (the bench lane in Phase 0).
 
+## What is left at 4 cores with PKU: loaded p99 ~700 ms
+
+With the focus race gone, 4 cores PKU fails 3/3 on latency instead: loaded p99 667,
+741 and 712 ms (bound 400). Guest counters from one of those runs (`[sched.latency]`):
+interactive class 11,040 wakes, avg 421k cycles, max 99M; normal class (Spindle is
+pd 12, normal) 6,275 wakes, avg 2.9M cycles, max 147M, with 84 waits over 33M cycles.
+
+Open question, not settled here: is that guest scheduling (Spindle on core 2 behind
+busy program 1, Files on core 3 behind programs 2-4, `smp::home_core`) or the host
+(4 emulated cores on a 4-vCPU runner, with PKU making each switch far more costly to
+emulate)? Points to the host: 4 cores without PKU, same placement, passes at
+93-103 ms, and 3 cores with PKU, where all four spinners share Spindle's core 2,
+passes at 92-95 ms. A follow-up CI run (4 cores PKU with 4 and with 2 busy programs,
+and the no-PKU control, with the cheaper gate polling) is queued behind the other
+streams' jobs; its result goes in the PR. The decisive check is the Phase 0 KVM lane:
+on KVM PKU costs nothing extra, so a p99 failure there would be the guest's.
+
 ## Fixes
 
 1. **Gate (done in this PR):** after each `[bench.spin.start] target=T`, wait (up to
    30 s) for `[shell.focus.set] id=T+317` (the program row's surface) before refocusing
    Spindle for the next command, and fail at once with "typed into program N's window"
-   if `[shell.program.key.*]` shows up while waiting for a start. Verified on CI at
-   4 and 3 cores with PKU (see the PR).
+   if `[shell.program.key.*]` shows up while waiting for a start. While timing a key
+   the gate now reads only the serial bytes written since the key (it reread the whole
+   1+ MB log every 0.5 ms, a host CPU the emulated cores need), and a p99 failure
+   prints the whole summary. Verified on CI (run 44212026700): 3 cores PKU 3/3 pass
+   (loaded p99 94.6, 92.1, 93.2 ms); 4 cores PKU now starts all four programs every
+   time (0 stray keys) but fails on p99, see below.
 2. **Desktop (product bug, for the desktop shell owner, not WS4):** a window that
    appears seconds after its command steals focus from the terminal the user is still
    typing in. Shell should not move focus to a newly mapped window if the user typed
