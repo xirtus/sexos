@@ -71,7 +71,11 @@ APPROVED_KERNEL_RUST_TREES=('ad54b57094dec16de9007a317b15506afc52747967aa9d4fedd
     # W^X for every user mapping + record code scan (stream 2), 2026-11-18
     'ddd84cbbe668235c1afc410fcaa0373b5388a992f71c1cdf89d39bb1c7173345',
     # stream 2 merged with master (core_local page removed upstream), 2026-11-18
-    '471f85c4ed8912eed8ae8b6ace5e1b6ccef5fc92af580498e3bdc0454c0b582f')
+    '471f85c4ed8912eed8ae8b6ace5e1b6ccef5fc92af580498e3bdc0454c0b582f',
+    # Kernel plan phase 2: kernel/src/ipc_v2 (endpoint, reply, notification), not wired yet, 2026-11-17
+    'c620598cd6151890bb134924fcbb76dbe7ab8396503971b66f7e52b1c8251cbd',
+    # stream 2 merged with ipc_v2 (stream 4), 2026-11-18
+    '6653e237101288231f1336156721a6401df232d53786312b2ec222f5db2438b3')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
