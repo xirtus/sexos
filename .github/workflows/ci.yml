@@ -938,7 +938,9 @@ jobs:
       run: |
         bash scripts/build_splicy_probe.sh
         python3 scripts/program_splicy_probe_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-probe"
-    - name: Splicy Studio opens a clip and its transcript in FilmCraft's editor in a SexOS window
+    - name: Splicy Studio exports WebM (VP9+Opus), AV1 MP4 and H.264 MP4 with its own encoders, checked by FFmpeg
+      run: python3 scripts/splicy_studio_export_host_gate.py "$RUNNER_TEMP/recording/splicy-studio-export"
+    - name: Splicy Studio opens a clip and its transcript, and exports all three formats, in a SexOS window
       run: |
         bash scripts/build_splicy_studio.sh
         python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"

@@ -8,7 +8,9 @@ Transcript tab edits. Splicy's interface shows it: menus, Program monitor with
 the picture, project bin, timeline with filmstrip and waveform.
 The window is zoomed and photographed (splicy-studio.png); the picture must hold
 Splicy's dark panels, its blue accent, and a lit Program monitor. Then a click on the
-Program monitor's play button must keep frames coming. Build it first:
+Program monitor's play button must keep frames coming. Before the window opens, Studio
+exports the first second as WebM (VP9 + Opus), MP4 (AV1 + Opus) and MP4 (H.264 + AAC) with
+Splicy's own encoders (`--export=`), and each file must hold real bytes. Build it first:
 scripts/build_splicy_studio.sh."""
 import argparse,http.server,os,re,shutil,subprocess,sys,tempfile,threading,time
 from collections import Counter
@@ -54,7 +56,8 @@ os.environ.setdefault('SEXOS_GATE_BOUND','2400')
 os.environ.setdefault('SEXOS_GATE_MEMORY','4G')
 from quil_autosave_gate import boot
 from program_gate_geometry import maximize
-KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
+KEYS={' ':'spc','/':'slash','.':'dot','-':'minus','=':'equal'}
+EXPORTS=[('webm','talk-cut.webm'),('av1','talk-av1.mp4'),('h264','talk-h264.mp4')]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
@@ -74,10 +77,15 @@ def main():
   for name in('talk.webm','talk.words'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
   s=len(t())
-  expect('run splicy-studio @talk.webm @talk.words',r'\[splicy.studio.ready\]',900)
+  expect('run splicy-studio @talk.webm @talk.words '+' '.join(f'--export={f}:{n}:1' for f,n in EXPORTS),r'\[splicy.studio.ready\]',1500)
   imp=g['wait'](r'\[splicy.studio.(imported\] items=1 errors=\[\]|import.failed\][^\n]*)',s,60);assert imp[1].startswith('imported'),imp[0]
   g['wait'](r'\[splicy.studio.sequence\] made',s,60)
   g['wait'](r'\[splicy.studio.transcript\] words=11',s,60)
+  exported={}
+  for f,n in EXPORTS:
+   m=g['wait'](rf'\[splicy.studio.export(?:\] format={f} file={re.escape(n)} bytes=(\d+) ms=(\d+)|\.failed\] format={f}[^\n]*)',s,60)
+   assert m[1] and int(m[1])>1000,m[0]
+   exported[f]={'bytes':int(m[1]),'ms':int(m[2])}
   launch=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   first=g['wait'](r'\[egui.frame\] n=1 w=(\d+) h=(\d+) meshes=(\d+) triangles=(\d+) pixels=(\d+) ms=(\d+)',s,600)
   (x,y,w,h),before=maximize(g,launch[3])
@@ -95,7 +103,7 @@ def main():
   assert blue>20,f'Splicy blue accent: {blue} pixels'
   assert len(colours)>200,f'only {len(colours)} colours: not an editor'
   text=t();assert 'KERNEL PANIC' not in text and 'KERNEL PAGE FAULT' not in text and '[splicy.fatal]' not in text
-  print({'ok':True,'first_frame':first[0],'tile':(x,y,w,h),'dark':dark,'blue':blue,'colours':len(colours)})
+  print({'ok':True,'exports':exported,'first_frame':first[0],'tile':(x,y,w,h),'dark':dark,'blue':blue,'colours':len(colours)})
  except BaseException:
   keep=re.compile(r'splicy|egui|shell\.program|program\.|loader|fatal|panic|fault|denied|refused',re.I)
   print('--- splicy-studio: program lines ---',*[l for l in t().splitlines() if keep.search(l) and 'civil' not in l and 'view.bytes' not in l][-120:],sep='\n',file=sys.stderr)
