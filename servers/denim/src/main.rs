@@ -83,6 +83,8 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 /// Passes a page must stay untouched before it goes out.
 const COLD: u8 = 2;
+/// A page that did not pack: left alone until the program touches it again.
+const STAYS: u8 = u8::MAX;
 const EAGER: bool = match option_env!("SEXOS_DENIM_EAGER") { Some(v) => v.len() == 1 && v.as_bytes()[0] == b'1', None => false };
 const CLASSES: [usize; 5] = [256, 512, 1024, 2048, 4096];
 /// An arena page Denim gave back.
@@ -100,12 +102,12 @@ fn pace(pressure: u64, recalling: bool) -> (u64, usize, usize, u8) {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Kind { None, Zero, Fill, Lz, Raw }
+enum Kind { None, Zero, Fill, Lz }
 /// Where a page out lives: `at` is a slab slot (or the fill word), `len` the block.
 #[derive(Clone, Copy)]
 struct Entry { kind: Kind, class: u8, len: u16, at: u64 }
 const EMPTY: Entry = Entry { kind: Kind::None, class: 0, len: 0, at: 0 };
-impl Entry { fn slab(&self) -> bool { matches!(self.kind, Kind::Lz | Kind::Raw) } }
+impl Entry { fn slab(&self) -> bool { matches!(self.kind, Kind::Lz) } }
 
 /// One program row's current run as Denim knows it.
 struct Run { target: u32, run: u32, base: u64, cold: Vec<u8>, held: Vec<Entry>, out: usize }
@@ -182,21 +184,22 @@ impl Store {
     /// Bytes of slab slots holding nothing.
     fn spare(&self) -> u64 { self.slabs * m::PAGE - self.bytes }
 
-    /// Packs the window's page. None when there is no room: the caller puts it back.
-    fn keep(&mut self, scratch: &mut [u8; MAX_PACKED]) -> Option<Entry> {
+    /// Packs the window's page. Err when there is no room (false) or it would not pack
+    /// (true): keeping it whole saves nothing, so the caller puts it back.
+    fn keep(&mut self, scratch: &mut [u8; MAX_PACKED]) -> Result<Entry, bool> {
         let page = self.window();
         let (kind, len, bytes): (Kind, usize, &[u8]) = match pack(page, scratch) {
             Packed::Zero => (Kind::Zero, 0, &[]),
-            Packed::Fill(w) => { self.pages_out += 1; return Some(Entry { kind: Kind::Fill, class: 0, len: 0, at: w }) }
+            Packed::Fill(w) => { self.pages_out += 1; return Ok(Entry { kind: Kind::Fill, class: 0, len: 0, at: w }) }
             Packed::Lz(n) if n <= PAGE - PAGE / 8 => (Kind::Lz, n, &scratch[..n]),
-            Packed::Lz(_) => (Kind::Raw, PAGE, &page[..]),
+            Packed::Lz(_) => return Err(true),
         };
-        if kind == Kind::Zero { self.pages_out += 1; return Some(Entry { kind, class: 0, len: 0, at: 0 }); }
-        let class = CLASSES.iter().position(|&c| c >= len)?;
-        let at = self.take(class)?;
+        if kind == Kind::Zero { self.pages_out += 1; return Ok(Entry { kind, class: 0, len: 0, at: 0 }); }
+        let class = CLASSES.iter().position(|&c| c >= len).ok_or(false)?;
+        let at = self.take(class).ok_or(false)?;
         unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), at as *mut u8, len); }
         self.pages_out += 1;
-        Some(Entry { kind, class: class as u8, len: len as u16, at })
+        Ok(Entry { kind, class: class as u8, len: len as u16, at })
     }
     /// Unpacks `e` into the window.
     fn restore(&self, e: Entry) -> bool {
@@ -207,7 +210,6 @@ impl Store {
             Kind::Zero => unpack(Packed::Zero, &[], page).is_some(),
             Kind::Fill => unpack(Packed::Fill(e.at), &[], page).is_some(),
             Kind::Lz => unpack(Packed::Lz(e.len as usize), block(e.len as usize), page).is_some(),
-            Kind::Raw => { page.copy_from_slice(block(PAGE)); true }
         }
     }
 
@@ -253,7 +255,7 @@ impl Store {
     }
 }
 
-struct Denim { store: Store, runs: Vec<Run>, scratch: [u8; MAX_PACKED], ins: u64, faults: u64, outs: u64, recalled: u64, waiting: Vec<(u32, u64, u64)> }
+struct Denim { store: Store, runs: Vec<Run>, scratch: [u8; MAX_PACKED], ins: u64, faults: u64, outs: u64, recalled: u64, stays: u64, waiting: Vec<(u32, u64, u64)> }
 
 impl Denim {
     fn run(&mut self, target: u32) -> Option<&mut Run> { self.runs.iter_mut().find(|r| r.target == target) }
@@ -292,7 +294,7 @@ impl Denim {
                 if i >= grown { break; }
                 if r[1] & 1 << bit != 0 { state.cold[i] = 0; }
                 else if r[2] & 1 << bit != 0 { state.cold[i] = state.cold[i].saturating_add(1); }
-                if n < *take && r[2] & 1 << bit != 0 && state.cold[i] >= cold { chosen[n] = i; n += 1; }
+                if n < *take && r[2] & 1 << bit != 0 && state.cold[i] >= cold && state.cold[i] != STAYS { chosen[n] = i; n += 1; }
             }
         }
         for &i in &chosen[..n] { if self.page_out(target, base, i) { *take -= 1; } }
@@ -304,16 +306,18 @@ impl Denim {
         let va = base + (i * PAGE) as u64;
         if d::call(d::OUT, target, va, self.store.window, 0)[0] != d::OK { return false; }
         match self.store.keep(&mut self.scratch) {
-            Some(e) => {
+            Ok(e) => {
                 let state = self.run(target).unwrap();
                 state.held[i] = e; state.cold[i] = 0; state.out += 1;
                 self.outs += 1;
                 true
             }
-            None => {
-                // No room to keep it: the window still holds the page, so it goes straight back.
+            Err(whole) => {
+                // No room to keep it, or it would not pack: the window still holds the page,
+                // so it goes straight back.
                 let back = d::call(d::IN, target, va, self.store.window, 0)[0];
-                serial_println!("[denim.full] target={} page={:#x} back={}", target, va, back);
+                if whole { if let Some(state) = self.run(target) { state.cold[i] = STAYS; } self.stays += 1; }
+                else { serial_println!("[denim.full] target={} page={:#x} back={}", target, va, back); }
                 false
             }
         }
@@ -392,7 +396,7 @@ pub extern "C" fn _start() -> ! {
     };
     if store.base == 0 { store.base = window; }
     store.window = window;
-    let mut denim = Denim { store, runs: Vec::new(), scratch: [0; MAX_PACKED], ins: 0, faults: 0, outs: 0, recalled: 0, waiting: Vec::new() };
+    let mut denim = Denim { store, runs: Vec::new(), scratch: [0; MAX_PACKED], ins: 0, faults: 0, outs: 0, recalled: 0, stays: 0, waiting: Vec::new() };
     let targets: Vec<u32> = sex_pdx::app_catalog::INCARNATIONS.iter()
         .filter(|r| r.app == sex_pdx::app_catalog::App::Program).map(|r| r.target).collect();
     serial_println!("[denim.ready] ok=1 rows={} eager={} cold_scans={} restarts={} ended={} holes={}",
@@ -446,9 +450,9 @@ pub extern "C" fn _start() -> ! {
                 shown = (denim.outs, denim.ins, denim.store.returned);
                 let s = &denim.store;
                 // `faults`: the pages that came back because the program touched them.
-                serial_println!("[denim.round] outs={} ins={} pages_out={} slab_bytes={} store_pages={} saved_pages={} pressure={} faults={} recalled={} returned={} holes={} runs={}",
+                serial_println!("[denim.round] outs={} ins={} pages_out={} slab_bytes={} store_pages={} saved_pages={} pressure={} faults={} recalled={} returned={} holes={} stays={} runs={}",
                     denim.outs, denim.ins, s.pages_out, s.bytes, s.slabs, s.pages_out as i64 - s.slabs as i64, pressure, denim.faults,
-                    denim.recalled, s.returned, s.holes.len(), denim.runs.iter().filter(|r| r.out > 0).count());
+                    denim.recalled, s.returned, s.holes.len(), denim.stays, denim.runs.iter().filter(|r| r.out > 0).count());
             }
             next = now + ticks;
         }
