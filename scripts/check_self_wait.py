@@ -56,7 +56,8 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
 # c209 raw-master only; no speculative combined privacy/kernel cohort.
-APPROVED_KERNEL_RUST_TREES=('dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8b114a8d2c6fb2',  # XSAVE + AVX (stream 5), 2026-11-18
+APPROVED_KERNEL_RUST_TREES=('8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5',  # master after #407 + #408 + #422 combined, 2026-11-18
+    'dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8b114a8d2c6fb2',  # XSAVE + AVX (stream 5), 2026-11-18
     
     # Phase 1a dead kernel modules removed, 2026-11-18
     '417835283472c60cfd1455bccc223876d2936126736b182b47c1e75f6ed56260',  # IPC v2 objects (#406) + #410 merged on master, 2026-11-18
