@@ -1,0 +1,11 @@
+[package]
+name = "sex-gate"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "PKU gate stubs: kernel-free calls between trusted SexOS services (kernel redesign Phase 6)"
+
+[dependencies]
+
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dev-dependencies]
+libc = "0.2"

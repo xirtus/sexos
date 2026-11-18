@@ -108,6 +108,8 @@ jobs:
       run: cargo test --locked -p sex-shape --features shaping
     - name: Shuttle userspace font fallback, RTL/BiDi shaping and font picker on the host
       run: bash scripts/shuttle_host_gate.sh
+    - name: PKU gate stubs (kernel study Phase 6) built and run under real protection keys on the host
+      run: cargo test --locked -p sex-gate -- --nocapture
     - name: Loom engines (batch rename, duplicates, usage map, tags, compare) on the host
       run: cargo test --locked -p loom-core
     - name: Vellum annotations, forms and incremental PDF saves on the host
