@@ -242,7 +242,7 @@ path that maps user memory was checked:
 | BOOT services (`elf.rs`) | per-segment flags, W+X allowed | W+X refused, code scanned (S15) |
 | BOOT regions, pager mappings, Denim, app aliases | NX on every writable page | unchanged |
 | `pku::set_page_user_accessible` (framebuffer grant) | set U+W, **left NX as it was** | sets NX |
-| Per-core syscall page (`core_local.rs`, S13) | U+W, **executable**, key 15 | NX (still unused; remove later) |
+| Per-core syscall page (`core_local.rs`, S13) | U+W, **executable**, key 15 | removed on master by WS4 |
 | IPC buffers (`ipc/buffer.rs`) | U+W, **executable**, key 14 | NX |
 | `SYS_PROGRAM_CODE` seal (JIT) | scans before making pages code | unchanged |
 
