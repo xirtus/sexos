@@ -117,6 +117,12 @@ pub mod id {
     pub const FIRST_RUN_MICROPHONE: u16 = 30;
     pub const WIDGETS: u16 = 31;
     pub const WEATHER: u16 = 32;
+    pub const MAGNIFIER_ZOOM: u16 = 33;
+    pub const COLOUR_FILTER: u16 = 34;
+    pub const STICKY_KEYS: u16 = 35;
+    pub const SLOW_KEYS: u16 = 36;
+    pub const BOUNCE_KEYS: u16 = 37;
+    pub const SCREEN_READER: u16 = 38;
 }
 
 /// What a hot corner does (the Shell's `hot_corners::ACTIONS`). Append-only.
@@ -129,6 +135,9 @@ pub const THEMES: &[&str] = &["Light", "Dark", "High contrast"];
 /// grants): ask the person, no, or yes. Files applies it to a run; nothing is recorded,
 /// so going back to "ask" asks again. Append-only.
 pub const FIRST_RUN: &[&str] = &["ask", "no", "yes"];
+
+/// Colour filters, in `sex_pdx::access_view` order. Append-only.
+pub const COLOUR_FILTERS: &[&str] = &["Off", "High contrast", "Inverted", "Grayscale", "Red-green aid", "Blue-yellow aid"];
 
 /// Programs that open each kind of file, the default first. Append-only.
 pub const PDF_PROGRAMS: &[&str] = &["vellum", "kaleidoscope"];
@@ -194,6 +203,12 @@ pub const KEYS: &[Key] = &[
     Key { id: id::OPEN_VIDEO, name: "open.video", label: "Open videos with", kind: Kind::Choice(VIDEO_PROGRAMS), default: 0 },
     Key { id: id::OPEN_AUDIO, name: "open.audio", label: "Open music with", kind: Kind::Choice(AUDIO_PROGRAMS), default: 0 },
     Key { id: id::OPEN_PAGE, name: "open.page", label: "Open web pages with", kind: Kind::Choice(PAGE_PROGRAMS), default: 0 },
+    Key { id: id::MAGNIFIER_ZOOM, name: "accessibility.magnifier_zoom", label: "Magnifier zoom in quarters (4 off, 8 is 2x)", kind: int(4, 32), default: 4 },
+    Key { id: id::COLOUR_FILTER, name: "accessibility.colour_filter", label: "Colour filter", kind: Kind::Choice(COLOUR_FILTERS), default: 0 },
+    Key { id: id::STICKY_KEYS, name: "accessibility.sticky_keys", label: "Sticky keys", kind: Kind::Bool, default: 0 },
+    Key { id: id::SLOW_KEYS, name: "accessibility.slow_keys", label: "Slow keys", kind: Kind::Bool, default: 0 },
+    Key { id: id::BOUNCE_KEYS, name: "accessibility.bounce_keys", label: "Bounce keys", kind: Kind::Bool, default: 0 },
+    Key { id: id::SCREEN_READER, name: "accessibility.screen_reader", label: "Screen reader (Whisper)", kind: Kind::Bool, default: 0 },
     Key { id: id::FIRST_RUN_NETWORK, name: "privacy.network_first_run", label: "New programs asking for the network", kind: Kind::Choice(FIRST_RUN), default: 0 },
     Key { id: id::FIRST_RUN_MICROPHONE, name: "privacy.microphone_first_run", label: "New programs asking for the microphone", kind: Kind::Choice(FIRST_RUN), default: 0 },
 ];
