@@ -369,7 +369,13 @@ impl Browser {
 
     /// Makes frame `i`'s page the current one, until `leave`. Only the shown page has
     /// frames: frames inside frames are not loaded.
-    fn enter(&mut self, i: usize) { self.swap_frame(i); self.in_frame = Some(self.frames[i].node); }
+    fn enter(&mut self, i: usize) { self.code_site(); self.swap_frame(i); self.in_frame = Some(self.frames[i].node); }
+
+    /// Compiled scripts from now on belong to the shown top-level page's site (frames
+    /// included). Called before any of its or its frames' scripts run.
+    pub(crate) fn code_site(&mut self) {
+        if self.in_frame.is_none() { self.code_store.open(&mut self.window, &mut self.code_cache.borrow_mut(), &self.url); }
+    }
     fn leave(&mut self, i: usize) { self.swap_frame(i); self.in_frame = None; }
 
     /// Stops a frame's downloads as it goes.
@@ -895,8 +901,7 @@ impl Browser {
         let Doc::Plain(mut doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock))) else { return };
         doc.import_map = core::mem::take(&mut self.import_map);
         doc.code_cache = Some(self.code_cache.clone());
-        // Frames compile under their top-level page's site.
-        if self.in_frame.is_none() { self.code_store.open(&mut self.window, &mut self.code_cache.borrow_mut(), &self.url); }
+        self.code_site();
         let started = sex_pdx::get_ticks();
         let mut script = match Script::new(doc, sex_js::Limits::default()) {
             Ok(s) => s,

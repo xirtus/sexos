@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn names_round_trip_and_partitions_differ() {
-        let key: CodeKey = core::array::from_fn(|i| i as u8 * 9);
+        let key: CodeKey = core::array::from_fn(|i| (i * 9) as u8);
         assert_eq!(key_from_name(key_name(&key).as_bytes()), Some(key));
         assert_eq!(key_from_name(b"seen"), None);
         assert_eq!(key_from_name(&[b'g'; 64]), None);
