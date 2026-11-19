@@ -75,3 +75,40 @@ do only what its service could.
   thread's I/O APIC lines).
 - Syscall 83 `SYS_PROGRAM_THREAD`: new op 7 `SPAWN_ON` (driver services only).
 - `OP_UNMASK` now also re-aims the vector at the caller's core.
+
+## Finding: per-core queues need more than one submitter
+
+SexDrive serves one request at a time on one task, and its only client is Files,
+which is also one task making one synchronous call per block run. Every disk read in
+the system therefore funnels through one Files task and one SexDrive task, whatever
+core the app runs on. One NVMe queue per core only pays once several cores submit at
+once, so the queues alone would measure as no change. What does pay today:
+
+- interrupts on the driver's own core (stage 1, #457);
+- spin-then-sleep for synchronous commands (`poll::Hybrid`, SexDrive, stacked on the
+  queue-depth branch);
+- QD32 batches and 4 MiB runs (the "Speed up native drivers" thread).
+
+## Stage 3 proposal: direct read lanes (Files out of the read data path)
+
+The design that makes per-core queues and zero copy real, as SPDK and io_uring
+passthrough do on Linux, and as a single address space makes natural:
+
+1. An app opens a file through Files as today. For an unencrypted file Files also
+   hands SexDrive a read-only **extent map** for it (disk ranges and block checksums)
+   under a lane ticket, and the app a lane capability bound to that ticket.
+2. The app's lane lives on its own core: a submission ring and a completion ring
+   (`sex_lanes::ring`) shared with the SexDrive worker for that core, which owns that
+   core's NVMe queue pair and vector.
+3. A read names (file offset, length, buffer). The worker maps it through the extent
+   map, checks the buffer lies in memory the app lent it, and DMAs straight into the
+   app's buffer through the IOMMU (syscall 90 lending). No Files hop, no copy. The
+   app library checks block checksums before returning (sexfs's own check, moved to
+   the reader).
+4. Writes, metadata, encrypted files and everything else stay on the Files path. A
+   write to a file revokes its extent maps first (generation number in the ticket).
+
+Cost: new code in sexfs (extent export), Files (ticket grant/revoke), SexDrive (lane
+workers, per-core queues, extent translation), sex-app (lane client), no new kernel
+mechanism beyond stage 1. Program loads, media playback and large file reads, the
+reads that matter, scale with cores.
