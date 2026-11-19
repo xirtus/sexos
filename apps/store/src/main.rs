@@ -642,6 +642,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 continue;
             }
+            _ => continue,
         };
         if view.typing {
             match key.code {
