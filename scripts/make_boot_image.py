@@ -20,12 +20,32 @@ def sectors_for(sizes,pack_bytes):
  sectors=max(SECTORS_WITH_FIRMWARE,-(-need//(1<<20))*2048)
  if sectors>SLOT_SECTORS:raise SystemExit(f'boot image needs {need} bytes, more than the {SLOT_SECTORS*512}-byte system slot')
  return sectors
+
+def recorder_module(root, config):
+ seen_in_entry=False
+ configured=False
+ for line in config.splitlines():
+  line=line.strip()
+  if line.startswith(':'):
+   seen_in_entry=False
+  elif line.startswith('MODULE_PATH='):
+   path=line.split('=',1)[1].strip()
+   if not path.startswith('boot:///programs/'):continue
+   if path!='boot:///programs/record' or seen_in_entry:
+    raise ValueError('unsupported or duplicate installed program module in entry')
+   seen_in_entry=True;configured=True
+ if not configured:return None
+ record=root/'programs'/'record'
+ if not record.is_file():raise FileNotFoundError('configured recorder module is missing')
+ return record
 def main():
  p=argparse.ArgumentParser();p.add_argument('--root',type=Path,default=ROOT/'iso_root');p.add_argument('--out',type=Path,required=True);a=p.parse_args()
  img=a.out;img.parent.mkdir(parents=True,exist_ok=True)
  pack=a.root/'firmware'/'wifi.pack'
+ config=(a.root/'limine.cfg').read_text()
+ record=recorder_module(a.root,config)
  # Everything copied in, plus room for FAT tables and the loader.
- files=[a.root/'sexos-kernel']+[f for sub in ('servers','apps') for f in (a.root/sub).iterdir() if f.is_file()]+([pack] if pack.is_file() else [])
+ files=[a.root/'sexos-kernel']+[f for sub in ('servers','apps') for f in (a.root/sub).iterdir() if f.is_file()]+([pack] if pack.is_file() else [])+([record] if record is not None else [])
  sectors=sectors_for([f.stat().st_size for f in files],pack.stat().st_size if pack.is_file() else 0)
  with img.open('wb') as f:f.truncate(sectors*512)
  def run(*c):
@@ -38,13 +58,16 @@ def main():
   for d in ('::/EFI','::/EFI/BOOT','::/servers','::/apps','::/firmware'):run('mmd','-i',str(img),d)
   run('mcopy','-i',str(img),str(efi),'::/EFI/BOOT/BOOTX64.EFI')
  # The installed system boots without the image it was installed from.
- cfg=Path(tmp_cfg:=str(img)+'.cfg');cfg.write_text(''.join(l for l in (a.root/'limine.cfg').read_text().splitlines(True)
+ cfg=Path(tmp_cfg:=str(img)+'.cfg');cfg.write_text(''.join(l for l in config.splitlines(True)
    if 'boot:///boot.img' not in l and (pack.is_file() or 'boot:///firmware/wifi.pack' not in l)))
  run('mcopy','-i',str(img),str(cfg),'::/limine.cfg');cfg.unlink()
  run('mcopy','-i',str(img),str(a.root/'sexos-kernel'),'::/sexos-kernel')
  for sub in ('servers','apps'):
   for f in sorted((a.root/sub).iterdir()):
    if f.is_file():run('mcopy','-i',str(img),str(f),f'::/{sub}/{f.name}')
+ if record is not None:
+  run('mmd','-i',str(img),'::/programs')
+  run('mcopy','-i',str(img),str(record),'::/programs/record')
  if pack.is_file():run('mcopy','-i',str(img),str(pack),'::/firmware/wifi.pack')
  print(img,img.stat().st_size)
 if __name__=='__main__':main()

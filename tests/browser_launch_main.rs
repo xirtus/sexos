@@ -53,7 +53,7 @@ const SURFACE_ID_BELL_PLACEHOLDER:u64=204;const SURFACE_ID_COLLAR:u64=203;const 
 include!(env!("BROWSER_LAUNCH_PRODUCTION"));
 fn slot(target:u32)->usize{match target{15=>40,30=>154,31=>158,_=>usize::MAX}}
 fn held(target:u32,task:u32,surface:u64)->a::CatalogInfo{a::CatalogInfo{target_pd:target,task_id:task,surface_id:surface,coordinator_pd:3}}
-fn receipt(target:u32,task:u32,surface:u64,state:u64)->Result<a::ActivationInfo,u64>{Ok(a::ActivationInfo{successor:target,task,surface,state})}
+fn receipt(target:u32,task:u32,surface:u64,state:u64)->Result<a::ActivationInfo,u64>{Ok(a::ActivationInfo{successor:target,task,surface,state,source_pinned:false})}
 unsafe fn reset(){
  APP_CUSTODY=[Some(app_custody::Entry::new(40,15,150,300)),Some(app_custody::Entry::new(154,30,300,343)),Some(app_custody::Entry::new(158,31,310,344))];
  HELD=[Ok(held(15,150,300)),Ok(held(30,300,343)),Ok(held(31,310,344))];LIVE=[Err(a::LIVE);3];
