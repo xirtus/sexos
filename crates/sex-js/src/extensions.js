@@ -18,7 +18,7 @@
   delete globalThis.__sx_ext;
   if (!X) return;
   const { H, report } = X;
-  const EXT = 35;
+  const EXT = 39;
   const key = H(EXT, 'key');
   if (!key) return;
   const stringify = JSON.stringify, parse = JSON.parse;

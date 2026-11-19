@@ -147,7 +147,7 @@ pub mod op {
     /// verb, key, value) the extension's own storage, verb `get`, `set` (answers `!`
     /// over the quota), `remove` or `keys` (the keys starting with `key`, that part cut,
     /// one per line).
-    pub const EXTENSION: u32 = 35;
+    pub const EXTENSION: u32 = 39;
     /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
     pub const WS_TAKE: u32 = 74;
     /// (name, source, kind+provenance): compiled bytecode for it, if the browser's code
