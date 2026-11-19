@@ -3703,6 +3703,12 @@ Plan: `docs/handoff/NVIDIA_GSP_BRINGUP_2026_11_19.md` (GSP boot, display through
 - **Firmware pack** `scripts/make_nvidia_firmware_pack.py` (`SEXNVFW1`, built in the ISO build and into the installed boot slot).
 - **ABI**: SYS_IDENTITY `QUERY_BARS` (3) returns the held NVIDIA GPU's BAR0/BAR1/BAR3 bus addresses and bus/devfn. Not yet proven on the x17.
 
+## NVIDIA RM objects after the GSP boot (N4c, 2026-11-19)
+
+- **`crates/sex-gpu-nv/src/rm.rs`**: an RPC session after `GSP_INIT_DONE` (sequencer scripts and notices handled while waiting), `GET_GSP_STATIC_INFO` decoded (GPU name, VRAM, usable regions, GPCs/TPCs, internal handles), `GSP_RM_ALLOC` / `GSP_RM_CONTROL` / `FREE`, our client/device/subdevice, and the display engine's static info (heads, windows).
+- **`sexgpu-nv`** logs `[nvidia.rm] name="..." vram_mib= ...`, `[nvidia.rm.device]`, `[nvidia.rm.display] heads= ...`, `[nvidia.rm.ready]`.
+- Simulated GSP-RM answers in the host gate; layouts pinned to NVIDIA's 535.113.01 structures. ABI: none.
+
 ## Net: ALPN http/1.1 (2026-11-09)
 
 - The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do (the rustls move set `alpn_protocols`). Host test `[sexnet.tls.open.host]` now proves it on the wire: an OpenSSL server offering `h2` and `http/1.1` must pick `http/1.1`. YouTube stage Y3e.

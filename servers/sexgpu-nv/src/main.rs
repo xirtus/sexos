@@ -15,13 +15,17 @@
 //! `[nvidia.firmware] file= bytes= sha256=ok`, `[nvidia.gsp] step=<name> ...` for each of
 //! chip, vbios, layout, prepare, fwsec_frts, riscv, booter, init_done,
 //! then `[nvidia.gsp.ready] ...` or `[nvidia.gsp.failed] step=<name> reason=...`.
+//! After that (stage N4c) it asks GSP-RM what it found and opens its own RM objects:
+//! `[nvidia.rm] name="..." vram_mib= ...`, `[nvidia.rm.device]`, `[nvidia.rm.display] heads= ...`,
+//! `[nvidia.rm.ready]`, or `[nvidia.rm.failed] step= reason=`.
 //! Without a GPU it logs `[sexgpu-nv.idle] gpu=none`. Afterwards it sleeps in
-//! `sys_wait_self` and answers messages with "not yet" (RM objects are stage N4c).
+//! `sys_wait_self` and answers messages with "not yet" (display is stage N5).
 #![no_std]
 #![no_main]
 
 use sex_gpu_nv::boot::{self, Config, Firmware, Memory, Report, Sizes, Step};
 use sex_gpu_nv::pack::{self, Pack};
+use sex_gpu_nv::rm::{self, Session};
 use sex_gpu_nv::{chip::Chip, rpc::SystemInfo, Clock, Mmio};
 use sex_pdx::memory_region::{DMA_ADDRESS, QUERY_VIEW, READ, WRITE};
 use sex_pdx::nvidia_gpu as n;
@@ -199,10 +203,37 @@ pub extern "C" fn _start() -> ! {
     };
     let vbios: &'static mut [u8] = unsafe { &mut *core::ptr::addr_of_mut!(VBIOS) };
     let started = sex_pdx::get_ticks();
-    match boot::boot(&mut bar0, &mut Tsc, &cfg, &f, vbios, &mut mem, &mut |s: Step, r: &Report| step_line(s, r)) {
-        Ok(r) => log!("[nvidia.gsp.ready] chipset={:#x} vram_mib={} wpr2_lo={:#x} wpr2_hi={:#x} events={} ms={}", r.chipset, r.fb_size >> 20,
-            r.wpr2_lo, r.wpr2_hi, r.events, sex_pdx::get_ticks() - started),
-        Err(e) => log!("[nvidia.gsp.failed] step={} reason={:?} ms={}", e.step.name(), e.error, sex_pdx::get_ticks() - started),
-    }
+    let report = match boot::boot(&mut bar0, &mut Tsc, &cfg, &f, vbios, &mut mem, &mut |s: Step, r: &Report| step_line(s, r)) {
+        Ok(r) => {
+            log!("[nvidia.gsp.ready] chipset={:#x} vram_mib={} wpr2_lo={:#x} wpr2_hi={:#x} events={} ms={}", r.chipset, r.fb_size >> 20,
+                r.wpr2_lo, r.wpr2_hi, r.events, sex_pdx::get_ticks() - started);
+            r
+        }
+        Err(e) => { log!("[nvidia.gsp.failed] step={} reason={:?} ms={}", e.step.name(), e.error, sex_pdx::get_ticks() - started); park() }
+    };
+    rm_bringup(&mut bar0, &mut mem, &report);
     park()
+}
+
+/// Stage N4c: ask GSP-RM what it found, then open our own client, device and subdevice
+/// and read the display engine's shape (heads), which N5 builds on.
+fn rm_bringup(bar0: &mut Bar0, mem: &mut Memory, report: &Report) {
+    let mut s = Session::new(mem, report.cmdq_seq, report.app_version);
+    let info = match s.static_info(bar0, &mut Tsc) {
+        Ok(i) => i,
+        Err(e) => { log!("[nvidia.rm.failed] step=static_info reason={:?}", e); return }
+    };
+    log!("[nvidia.rm] name=\"{}\" chip={} vram_mib={} usable_mib={} bus_bits={} ram_type={} l2_kib={} gpcs={} tpcs={} mobile={} vbios_valid={} subsystem={:04x}:{:04x}",
+        info.name_str(), info.short_name_str(), info.fb_length >> 20, info.fb_usable >> 20, info.fb_bus_width, info.fb_ram_type,
+        info.l2_cache_size >> 10, info.gpcs, info.tpcs, info.mobile as u8, info.vbios_valid as u8, info.vbios_sub_vendor, info.vbios_sub_device);
+    if let Err(e) = s.open_device(bar0, &mut Tsc) {
+        log!("[nvidia.rm.failed] step=device reason={:?}", e); return
+    }
+    log!("[nvidia.rm.device] client={:#x} device={:#x} subdevice={:#x}", rm::CLIENT, rm::DEVICE, rm::SUBDEVICE);
+    match s.display_static_info(bar0, &mut Tsc, &info) {
+        Ok(d) => log!("[nvidia.rm.display] heads={} windows={:#x} primary_vga={} internal_active={:#x} i2c_port={}",
+            d.heads, d.window_mask, d.primary_vga as u8, d.internal_active_mask, d.i2c_port),
+        Err(e) => log!("[nvidia.rm.failed] step=display reason={:?}", e),
+    }
+    log!("[nvidia.rm.ready] other_events={}", s.other_events);
 }

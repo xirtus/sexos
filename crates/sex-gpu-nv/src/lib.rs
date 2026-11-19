@@ -45,6 +45,7 @@ pub mod msgq;
 pub mod pack;
 pub mod radix3;
 pub mod regs;
+pub mod rm;
 pub mod rpc;
 pub mod sequencer;
 pub mod vbios;
@@ -98,6 +99,11 @@ pub enum Error {
     Gsp(&'static str),
     /// The GSP message queue is full or a message is too large.
     QueueFull,
+    /// GSP-RM answered an RPC with a nonzero result.
+    Rpc { function: u32, status: u32 },
+    /// An RM allocation (`what` = class) or control (`what` = command) failed with an
+    /// `NV_STATUS` code.
+    Rm { what: u32, status: u32 },
 }
 
 /// Poll until `reg & mask == want`. `budget` counts reads, `step_us` is the

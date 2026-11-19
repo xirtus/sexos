@@ -13,7 +13,7 @@ Andreas (2026-11-18): NVIDIA and hardware support are the top priority.
 | N1 | Name the GPU, power it off (D3cold) when unused | merged (#82, #88) |
 | N4a | GSP-RM boot as driver logic: `crates/sex-gpu-nv`, host gate, real 535.113.01 firmware | merged (#443) |
 | **N4b** | **Kernel lease (all 16 MiB of BAR0, command grant, 64 MiB DMA pool in the IOMMU domain, firmware pack) + `servers/sexgpu-nv` runs the boot from the "SexOS with NVIDIA GPU" boot entry** | **in review; to prove on the x17** |
-| N4c | First RM objects over RPC: root client, device, subdevice; `GET_GSP_STATIC_INFO`; GPU name, VRAM, VBIOS version in the boot log and Spindle `hw` | after N4b |
+| **N4c** | **First RM objects over RPC: `GET_GSP_STATIC_INFO` (GPU name, VRAM, units, internal handles), our root client, device, subdevice, and the display engine's static info (heads, windows), in the boot log** | **in review (after #449)** |
 | N5a | Display: allocate the display classes (NVD7 core channel), read connectors and EDID through RM, light the HDMI 2.1 / mini-DP port with a framebuffer in VRAM | after N4c |
 | N5b | The internal panel on the dGPU: mux / Advanced Optimus (to confirm on the x17: whether its BIOS offers a discrete-only or dynamic mux setting) | after N5a |
 | N5c | Full modesetting: atomic commits through sex-kms, flips at vblank, cursor, hotplug, multiple monitors with the Intel panel | after N5b |
@@ -111,6 +111,29 @@ What was built (and where it differs from the first sketch):
 What the x17 run answers: whether the PROM holds the VBIOS (else N4c adds the ACPI `_ROM`
 fallback), the fuse-selected signatures, Booter's verdict on our WPR meta (`FalconFailed` with
 its mailboxes), and how long GSP-RM takes to `INIT_DONE` (5 s allowed).
+
+## N4c: talking to GSP-RM (`crates/sex-gpu-nv/src/rm.rs`)
+
+- `rm::Session` sends one RPC at a time on the queues the boot set up (continuing its
+  sequence numbers, `Report::cmdq_seq`) and waits for the answer to that function, running
+  CPU sequencer scripts and skipping notices that arrive first (nouveau's `r535_gsp_msg_recv`).
+- `static_info()`: `GET_GSP_STATIC_INFO` (65), `GspStaticConfigInfo` (2168 bytes): marketing and
+  chip name, VRAM size/bus width/type, usable FB regions, L2, GPC/TPC counts, mobile flag, VBIOS
+  subsystem, BAR1/BAR2 page directory bases and GSP-RM's internal client/device/subdevice handles.
+- `alloc()` / `control()` / `free()`: `GSP_RM_ALLOC` (103), `GSP_RM_CONTROL` (76), `FREE` (10);
+  RM's `NV_STATUS` comes back as `Error::Rm { what, status }`. `open_device()` allocates
+  `NV01_ROOT` (client 0xc1d00001), `NV01_DEVICE_0` (0xde1d0000) and `NV20_SUBDEVICE_0` (0x5d1d0000).
+- `display_static_info()`: `NV2080_CTRL_CMD_INTERNAL_DISPLAY_GET_STATIC_INFO` on the internal
+  subdevice: number of heads, window mask, whether the GPU is the primary VGA, internal panel mask.
+- Service log: `[nvidia.rm] name="..." chip= vram_mib= usable_mib= bus_bits= ...`,
+  `[nvidia.rm.device]`, `[nvidia.rm.display] heads= windows= primary_vga= internal_active=`,
+  `[nvidia.rm.ready]` or `[nvidia.rm.failed] step= reason=`.
+- Tests: the simulated GA104 now plays GSP-RM after `INIT_DONE` (answers, interleaved notices and
+  a sequencer script, RM status codes, parent checks); offsets checked with gcc against nouveau's
+  535.113.01 `nvrm` excerpts and pinned in `tests/structs.rs`.
+
+Still for later: the ACPI `_ROM` VBIOS fallback, the interrupt table and MSI (polling for now),
+Booter-unload for a clean restart of the service.
 
 ## N5: display through the dGPU and the mux
 

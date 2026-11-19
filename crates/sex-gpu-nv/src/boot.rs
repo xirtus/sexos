@@ -130,6 +130,8 @@ pub struct Report {
     pub events: u32,
     pub sequencer_runs: u32,
     pub init_done: bool,
+    /// Commands queued so far: the next command's sequence number (for [`crate::rm::Session`]).
+    pub cmdq_seq: u32,
 }
 
 /// A step failed: which, and why.
@@ -226,7 +228,7 @@ pub fn boot(m: &mut impl Mmio, c: &mut impl Clock, cfg: &Config, f: &Firmware, v
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare(m: &mut impl Mmio, l: &FbLayout, _booter: &FalconUcode, bl_desc: &fw::RiscvDesc, bl: &[u8], rm: &fw::GspRm, cfg: &Config, mem: &mut Memory, _r: &mut Report) -> Result<(), Error> {
+fn prepare(m: &mut impl Mmio, l: &FbLayout, _booter: &FalconUcode, bl_desc: &fw::RiscvDesc, bl: &[u8], rm: &fw::GspRm, cfg: &Config, mem: &mut Memory, r: &mut Report) -> Result<(), Error> {
     let fit = |d: &Dma, n: usize| if d.len() < n { Err(Error::BufferTooSmall { need: n, have: d.len() }) } else { Ok(()) };
     fit(&mem.rm_image, rm.image.len())?;
     mem.rm_image.cpu[..rm.image.len()].copy_from_slice(rm.image);
@@ -270,6 +272,7 @@ fn prepare(m: &mut impl Mmio, l: &FbLayout, _booter: &FalconUcode, bl_desc: &fw:
     q.push(mem.shm.cpu, scratch, rpc::FN_GSP_SET_SYSTEM_INFO, &info)?;
     let n = rpc::registry(payload, rpc::DEFAULT_REGISTRY)?;
     q.push(mem.shm.cpu, scratch, rpc::FN_SET_REGISTRY, &payload[..n])?;
+    r.cmdq_seq = q.seq;
     GSP.wr(m, regs::falcon::QUEUE_HEAD0, 0);
     Ok(())
 }
