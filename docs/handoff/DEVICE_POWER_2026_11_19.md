@@ -23,7 +23,7 @@ lines (`pci_power.rs`, config access and records only; policy is host-tested in 
 
 ## Tests
 
-- `cargo test -p sex-pcipm` (17, CI): root port + SSD get every state with Linux's L1.2
+- `cargo test -p sex-pcipm` (18, CI): root port + SSD get every state with Linux's L1.2
   timing; second pass changes nothing; FADT flag; endpoint latency limits; firmware
   substates kept; Realtek quirk; pre-1.1/bridges skipped; empty slot; L1.2 needs LTR;
   a switch with two downstream ports (latency adds up, LTR follows the path); threshold

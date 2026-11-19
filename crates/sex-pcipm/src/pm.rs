@@ -83,8 +83,14 @@ pub fn restore<C: Config + ?Sized>(c: &mut C, f: Bdf, s: &Saved) {
     }
     // Command only: the status half is write-one-to-clear.
     c.write(f, reg::COMMAND, s.header[1] & 0xFFFF);
+    // Link states stay off until the L1 substate timing is back (PCIe 5.5.4): the link
+    // control goes in without its ASPM bits first and whole after the substates.
+    let lnkctl = EXP_SAVED.iter().position(|o| *o == reg::EXP_LNKCTL).unwrap_or(1);
     if s.exp_at != 0 {
-        for (i, off) in EXP_SAVED.iter().enumerate() { c.write(f, s.exp_at + off, s.exp[i]); }
+        for (i, off) in EXP_SAVED.iter().enumerate() {
+            let v = if i == lnkctl { s.exp[i] & !(reg::LNKCTL_ASPM_L0S | reg::LNKCTL_ASPM_L1) } else { s.exp[i] };
+            c.write(f, s.exp_at + off, v);
+        }
     }
     if s.ltr_at != 0 { c.write(f, s.ltr_at + 4, s.ltr); }
     if s.l1ss_at != 0 {
@@ -92,6 +98,7 @@ pub fn restore<C: Config + ?Sized>(c: &mut C, f: Bdf, s: &Saved) {
         c.write(f, s.l1ss_at + reg::L1SS_CTL1, s.l1ss[0] & !reg::L1SS_ENABLES);
         c.write(f, s.l1ss_at + reg::L1SS_CTL1, s.l1ss[0]);
     }
+    if s.exp_at != 0 { c.write(f, s.exp_at + reg::EXP_LNKCTL, s.exp[lnkctl]); }
     if s.msi_at != 0 {
         let control = s.msi[0] & 0xFFFF_0000;
         c.write(f, s.msi_at, control & !(1 << 16));

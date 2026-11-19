@@ -74,6 +74,8 @@ pub struct Link {
     pub before: u8,
     pub after: u8,
     pub skip: Option<Skip>,
+    /// Each function's own ASPM control bits as found (port first).
+    own: [(Bdf, u8); MAX_CHILDREN + 1],
     /// L1.2 entry threshold programmed, in microseconds (0 = not programmed).
     pub threshold_us: u32,
     port_exp: u16,
@@ -134,14 +136,15 @@ pub fn power_on_us(scale: u32, value: u32) -> u32 {
 }
 
 /// LTR_L1.2_THRESHOLD as (scale, value) for a time in microseconds.
+/// The smallest scale whose 10-bit value holds the time, rounded up, so the encoded
+/// threshold is never shorter than the transition it guards (as Linux encodes it).
 pub fn encode_threshold(us: u32) -> (u32, u32) {
     let ns = us as u64 * 1_000;
-    if ns < 32 { (0, ns as u32) }
-    else if ns < 1_024 { (1, (ns >> 5) as u32) }
-    else if ns < 32_768 { (2, (ns >> 10) as u32) }
-    else if ns < 1_048_576 { (3, (ns >> 15) as u32) }
-    else if ns < 33_554_432 { (4, (ns >> 20) as u32) }
-    else { (5, ((ns >> 25) as u32).min(0x3FF)) }
+    for scale in 0..6u32 {
+        let unit = 1u64 << (5 * scale);
+        if ns <= unit * 0x3FF { return (scale, ns.div_ceil(unit) as u32); }
+    }
+    (5, 0x3FF)
 }
 
 /// The CTL1 timing fields and CTL2 for L1.2 on a link, and the threshold in us
@@ -205,7 +208,7 @@ pub fn discover<C: Config>(c: &mut C, functions: &[Bdf], r: &mut Report) {
         if secondary == 0 || secondary <= port.bus { continue; }
         let mut link = Link {
             port, children: [Bdf::new(0, 0, 0); MAX_CHILDREN], count: 0, parent: None, id: 0, support: 0, capable: 0,
-            before: 0, after: 0, skip: None, threshold_us: 0, port_exp, child_exp: [0; MAX_CHILDREN],
+            before: 0, after: 0, skip: None, own: [(Bdf::new(0, 0, 0), 0); MAX_CHILDREN + 1], threshold_us: 0, port_exp, child_exp: [0; MAX_CHILDREN],
             port_l1ss: 0, child_l1ss: 0, l0s_up_ns: 0, l0s_dw_ns: 0, l1_up_ns: 0, l1_dw_ns: 0,
         };
         for &f in functions.iter().filter(|f| f.bus == secondary && f.dev == 0) {
@@ -239,6 +242,7 @@ fn survey<C: Config>(c: &mut C, r: &mut Report, forbidden: bool) {
         if l.count == 0 { l.skip = Some(Skip::Empty); r.links[i] = Some(l); continue; }
         let port_cap = c.read(l.port, l.port_exp + reg::EXP_LNKCAP);
         let port_ctl = c.read(l.port, l.port_exp + reg::EXP_LNKCTL);
+        l.own[0] = (l.port, (port_ctl & 3) as u8);
         l.id = c.read(l.children[0], 0);
         let mut support = ((port_cap >> 10) & 3) as u8;
         let mut clkpm_support = true;
@@ -256,6 +260,7 @@ fn survey<C: Config>(c: &mut C, r: &mut Report, forbidden: bool) {
             clkpm_support &= cap & reg::LNKCAP_CLKPM != 0;
             clkpm_on &= ctl & reg::LNKCTL_CLKPM != 0;
             children_aspm &= (ctl & 3) as u8;
+            l.own[k + 1] = (f, (ctl & 3) as u8);
             if k == 0 {
                 l.l0s_up_ns = l0s_exit_ns(cap);
                 l.l1_up_ns = l1_exit_ns(cap);
@@ -346,9 +351,12 @@ fn apply<C: Config>(c: &mut C, l: &Link) -> u32 {
     }
     // ASPM: the upstream port first, then every function below (all functions of a
     // device take the same setting).
+    // Each function keeps its own firmware bits (an L0s firmware set on one end only),
+    // plus the new states; L1 cleared above for the substates comes back here.
     let aspm = (l.after & (L0S | L1)) as u32;
-    update16(c, l.port, l.port_exp + reg::EXP_LNKCTL, 3, aspm);
-    for k in 0..l.count as usize { update16(c, l.children[k], l.child_exp[k] + reg::EXP_LNKCTL, 3, aspm); }
+    let own = |f: Bdf| (l.own.iter().find(|o| o.0 == f).map_or(0, |o| o.1)) as u32;
+    update16(c, l.port, l.port_exp + reg::EXP_LNKCTL, 3, aspm | own(l.port));
+    for k in 0..l.count as usize { let f = l.children[k]; update16(c, f, l.child_exp[k] + reg::EXP_LNKCTL, 3, aspm | own(f)); }
     threshold
 }
 

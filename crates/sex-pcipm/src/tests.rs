@@ -149,15 +149,15 @@ fn root_port_and_ssd_get_every_state() {
     assert_eq!(s.l1ss_ctl1(RP) & 0xF, 0xF);
     assert_eq!(s.l1ss_ctl1(SSD) & 0xF, 0xF);
     // T_POWER_ON: port 60 us beats the SSD's 5 x 2 us; common mode: SSD's 40 us.
-    // Threshold 2 + 4 + 40 + 60 = 106 us = 106000 ns -> scale 3 (32768 ns units), value 3.
+    // Threshold 2 + 4 + 40 + 60 = 106 us = 106000 ns -> scale 2 (1024 ns units), value 104 (rounded up).
     assert_eq!(l.threshold_us, 106);
     assert_eq!(s.word(RP, L1SS_AT + reg::L1SS_CTL2), 1 | 6 << 3);
     assert_eq!(s.word(SSD, L1SS_AT + reg::L1SS_CTL2), 1 | 6 << 3);
     assert_eq!(s.l1ss_ctl1(RP) >> 8 & 0xFF, 40, "common mode restore in the upstream port");
     assert_eq!(s.l1ss_ctl1(SSD) >> 8 & 0xFF, 0, "and only there");
     for b in [RP, SSD] {
-        assert_eq!(s.l1ss_ctl1(b) >> 16 & 0x3FF, 3);
-        assert_eq!(s.l1ss_ctl1(b) >> 29, 3);
+        assert_eq!(s.l1ss_ctl1(b) >> 16 & 0x3FF, 104);
+        assert_eq!(s.l1ss_ctl1(b) >> 29, 2);
     }
 }
 
@@ -211,6 +211,24 @@ fn firmware_states_stay_and_firmware_substate_timing_is_kept() {
     assert_eq!(s.l1ss_ctl1(RP), 0x0A | 7 << 16 | 2 << 29, "firmware's substate setup untouched");
     assert_eq!(l.after & aspm::L1SS, l.before & aspm::L1SS);
     assert_eq!(s.lnkctl(SSD) & 3, 3, "L0s added");
+}
+
+#[test]
+fn each_end_keeps_its_own_firmware_bits() {
+    // Firmware: L0s+L1 on the port, L1 only on the SSD. Adding clock PM must not drop
+    // the port's L0s (the intersection of both ends is only L1).
+    let mut s = laptop();
+    let at = EXP_AT + reg::EXP_LNKCTL;
+    s.space.get_mut(&RP).unwrap()[(at / 4) as usize] = 3;
+    s.space.get_mut(&SSD).unwrap()[(at / 4) as usize] = reg::LNKCTL_ASPM_L1;
+    // The SSD cannot take L0s, so L0s is not added on the link.
+    s.space.get_mut(&SSD).unwrap()[((EXP_AT + reg::EXP_DEVCAP) / 4) as usize] = reg::DEVCAP_RBER | 6 << 9;
+    let r = run(&mut s, Policy::POWERSAVE, false);
+    let l = r.iter().next().unwrap();
+    assert_eq!(l.before & (aspm::L0S | aspm::L1), aspm::L1);
+    assert_ne!(l.after & aspm::CLKPM, 0);
+    assert_eq!(s.lnkctl(RP) & 3, 3, "the port's firmware L0s stays");
+    assert_eq!(s.lnkctl(SSD) & 3, 2);
 }
 
 #[test]
@@ -303,11 +321,17 @@ fn ltr_stops_where_the_path_breaks() {
 #[test]
 fn threshold_encoding_matches_linux() {
     assert_eq!(aspm::encode_threshold(0), (0, 0));
-    assert_eq!(aspm::encode_threshold(1), (1, 31));
-    assert_eq!(aspm::encode_threshold(30), (2, 29));
-    assert_eq!(aspm::encode_threshold(106), (3, 3));
-    assert_eq!(aspm::encode_threshold(2_000), (4, 1));
-    assert_eq!(aspm::encode_threshold(100_000), (5, 2));
+    // Smallest scale that fits 10 bits, rounded up: never shorter than asked.
+    assert_eq!(aspm::encode_threshold(1), (0, 1000));
+    assert_eq!(aspm::encode_threshold(30), (1, 938));
+    assert_eq!(aspm::encode_threshold(106), (2, 104));
+    assert_eq!(aspm::encode_threshold(2_000), (3, 62));
+    assert_eq!(aspm::encode_threshold(100_000), (4, 96));
+    assert_eq!(aspm::encode_threshold(u32::MAX), (5, 0x3FF));
+    for us in [1u32, 7, 30, 106, 250, 2_000, 100_000] {
+        let (scale, value) = aspm::encode_threshold(us);
+        assert!(value as u64 * (1u64 << (5 * scale)) >= us as u64 * 1000, "{} us encoded short", us);
+    }
     assert_eq!(aspm::power_on_us(3, 9), 0);
     assert_eq!(aspm::power_on_us(2, 3), 300);
 }
@@ -355,6 +379,7 @@ fn d3hot_round_trip_restores_a_reset_function() {
     let t = pm::set_state(&mut s, SSD, pm::D0, &mut saved).unwrap();
     assert!(t.restored && !t.no_soft_reset);
     assert_eq!(s.space[&SSD], before, "everything the reset lost is back");
+    assert_eq!(s.lnkctl(SSD), 0x0142, "link control (with its ASPM bits) restored last");
     assert_eq!(s.delayed_us, 2 * pm::D3HOT_DELAY_US as u64);
 }
 

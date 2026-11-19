@@ -102,7 +102,9 @@ pub fn set_power(lease: &sex_pdx::device::Lease, table: u64, to: u64) -> u64 {
     let mut saved = slot.and_then(|i| saved_table[i].map(|s| s.1));
     let mut msix = slot.and_then(|i| saved_table[i].map(|s| s.2)).unwrap_or([0; MSIX_KEPT * 4]);
     let kept = if lease.mode == d::Mode::MsiX { (lease.vectors as usize).min(MSIX_KEPT) } else { 0 };
-    if to == pm::D3HOT as u64 && table != 0 {
+    // Only a device still in D0 has a readable table; a repeated D3hot request keeps
+    // the snapshot taken on the way down.
+    if to == pm::D3HOT as u64 && table != 0 && pm::state(&mut hw, f) == Some(pm::D0) {
         for (i, w) in msix.iter_mut().enumerate().take(kept * 4) { *w = unsafe { ((table + i as u64 * 4) as *const u32).read_volatile() }; }
     }
     let result = pm::set_state(&mut hw, f, to as u8, &mut saved);
