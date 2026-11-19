@@ -26,4 +26,11 @@ pub fn prove() {
         best = best.min(ticks().wrapping_sub(t));
     }
     sex_pdx::serial_record!("[gate.ping] ok={} bound=1 round_trip_ticks={}", ok as u8, best);
+    if option_env!("SEXOS_GATE_FAULT_PROBE").is_some() {
+        // The callee dies mid-call: Files gets PEER_DIED back and goes on, and the gate
+        // still answers afterwards (a callee fault ends the call, not the service).
+        let died = stub(sex_pdx::gate::PING_FAULT, 0, 0, 0) == sex_pdx::gate::PEER_DIED;
+        let after = stub(a, b, c, d) == expect(a, b, c, d);
+        sex_pdx::serial_record!("[gate.fault.probe] peer_died={} after={}", died as u8, after as u8);
+    }
 }

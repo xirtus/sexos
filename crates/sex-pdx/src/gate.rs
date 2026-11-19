@@ -37,6 +37,9 @@ pub const DENIED: u64 = u64::MAX;
 
 /// Export numbers in use. Each service picks from its own space.
 pub const EXPORT_PING: u64 = 1;
+/// In a build with `SEXOS_GATE_FAULT_PROBE=1`, SexDrive's ping faults on this argument,
+/// so Files can show that a dying callee hands back [`PEER_DIED`] and leaves it running.
+pub const PING_FAULT: u64 = 0xFA17_FA17;
 
 #[inline]
 fn gate(op: u64, slot: u64, a: u64, b: u64) -> Result<u64, u64> {

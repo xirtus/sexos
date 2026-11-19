@@ -3,6 +3,9 @@
 //! entry. It runs under SexDrive's keys on a gate stack and touches nothing else.
 
 extern "C" fn ping(a: u64, b: u64, c: u64, d: u64) -> u64 {
+    if option_env!("SEXOS_GATE_FAULT_PROBE").is_some() && a == sex_pdx::gate::PING_FAULT {
+        unsafe { core::ptr::write_volatile(8 as *mut u8, 1) };
+    }
     (a ^ b.rotate_left(16) ^ c.rotate_left(32) ^ d.rotate_left(48)).wrapping_add(0x5EC5_D21E)
 }
 
