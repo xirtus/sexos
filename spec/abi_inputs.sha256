@@ -134,7 +134,7 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
-be4bb003491894145a3412a00802e7ecf9533f5b3a5e5b9ad62e66702eb80037  kernel/src/boot_memory.rs
+c77bff42adbc3b951721d3e27a38e82ed68299ef59d99a44dce5b567440660da  kernel/src/boot_memory.rs
 
 2fd25f89091106c70503869c40f52cfeb6662fab8ddfcd2c6202d2e04550fe69  kernel/src/boot_network.rs
 
@@ -172,7 +172,7 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 
 61c23d34744793d69bcfde0d6e0b4044a2867134754204cd58759ee5ab37164b  kernel/src/paging_state.rs
 
-a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci_command.rs
+1e97e4e9c6785aa33de79bf713f01d4dbda1619f59817b8ace3d42a149036e47  kernel/src/pci_command.rs
 
 c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/service_restart.rs
 
