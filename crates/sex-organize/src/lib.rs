@@ -165,6 +165,111 @@ pub fn join_destination(dir: &[u8], file_name: &[u8], out: &mut [u8]) -> Result<
     Ok(len)
 }
 
+/// Folders where new files arrive and may be organized: the Inbox, the person's
+/// Downloads and Desktop, and a program's own `Downloads` folder (`/data/NAME/Downloads`,
+/// where Kaleidoscope saves). Only files directly inside one count; subfolders are the
+/// person's own arrangement and stay out of scope.
+pub fn ingress(path: &[u8]) -> bool {
+    if !valid_path(path) || path == b"/" { return false; }
+    let parent = &path[..path.len() - name(path).len() - 1];
+    if matches!(parent, b"/Inbox" | b"/Downloads" | b"/Desktop") { return true; }
+    let Some(rest) = parent.strip_prefix(b"/data/") else { return false };
+    let mut parts = rest.split(|&b| b == b'/');
+    matches!((parts.next(), parts.next(), parts.next()), (Some(n), Some(b"Downloads"), None) if !n.is_empty())
+}
+
+/// A name still being written or meant to stay hidden: dot files (Loom's `.NAME.part`
+/// copies) and the usual partial-download suffixes. These never produce a placement.
+pub fn unsettled(file_name: &[u8]) -> bool {
+    file_name.is_empty() || file_name[0] == b'.'
+        || [&b".part"[..], b".partial", b".crdownload", b".tmp", b".download"].iter().any(|s| {
+            file_name.len() > s.len() && ascii_eq(&file_name[file_name.len() - s.len()..], s)
+        })
+}
+
+/// Where an organizer may put files: a canonical folder in the person's own tree. Never
+/// hidden folders, programs' private folders, system folders or other disks.
+pub fn destination_allowed(dir: &[u8]) -> bool {
+    if !valid_path(dir) || dir == b"/" || dir.len() > 200 { return false; }
+    let first = dir[1..].split(|&b| b == b'/').next().unwrap_or(b"");
+    if first.first() == Some(&b'.') { return false; }
+    !matches!(first, b"data" | b"media" | b"bin" | b"servers" | b"programs" | b"home" | b"boot" | b"system" | b"Inbox")
+        && dir[1..].split(|&b| b == b'/').all(|p| p.first() != Some(&b'.'))
+}
+
+/// The built-in placements, by extension. Rule ids 1..=4 name the category.
+pub const DOCUMENTS: &[&[u8]] = &[b"pdf", b"txt", b"md", b"odt", b"ods", b"odp", b"doc", b"docx", b"xls", b"xlsx", b"ppt", b"pptx", b"rtf", b"epub", b"csv"];
+pub const PICTURES: &[&[u8]] = &[b"png", b"jpg", b"jpeg", b"gif", b"webp", b"bmp", b"qoi", b"svg", b"avif", b"tif", b"tiff", b"heic"];
+pub const MUSIC: &[&[u8]] = &[b"mp3", b"flac", b"ogg", b"opus", b"wav", b"m4a", b"aac"];
+pub const VIDEOS: &[&[u8]] = &[b"mp4", b"mkv", b"webm", b"mov", b"avi", b"m4v"];
+pub const BUILTIN: [(u32, &[u8], &[&[u8]]); 4] = [
+    (1, b"/Documents", DOCUMENTS), (2, b"/Pictures", PICTURES), (3, b"/Music", MUSIC), (4, b"/Videos", VIDEOS),
+];
+/// User rules are numbered from here, in the order they were added.
+pub const USER_RULE_BASE: u32 = 100;
+pub const USER_RULES_MAX: usize = 32;
+
+/// One user rule line: `PATTERN DESTINATION`. PATTERN is `*.ext`, `prefix*` or
+/// `prefix*.ext`; DESTINATION a folder `destination_allowed` accepts.
+pub fn parse_rule(line: &[u8]) -> Option<(Option<&[u8]>, Option<&[u8]>, &[u8])> {
+    let space = line.iter().position(|&b| b == b' ')?;
+    let (pattern, dest) = (&line[..space], &line[space + 1..]);
+    if !destination_allowed(dest) || pattern.contains(&b'/') || pattern.contains(&0) { return None; }
+    let star = pattern.iter().position(|&b| b == b'*')?;
+    if pattern[star + 1..].contains(&b'*') { return None; }
+    let (prefix, tail) = (&pattern[..star], &pattern[star + 1..]);
+    let ext = match tail {
+        b"" => None,
+        t if t.len() > 1 && t[0] == b'.' && !t[1..].contains(&b'.') => Some(&t[1..]),
+        _ => return None,
+    };
+    if prefix.is_empty() && ext.is_none() { return None; }
+    Some(((!prefix.is_empty()).then_some(prefix), ext, dest))
+}
+
+/// What the organizer would do with one arrived file, and why.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Plan<'a> {
+    Move { destination: &'a [u8], rule_id: u32 },
+    Stay(Stay),
+    Conflict { first: u32, second: u32 },
+    /// Outside the organized folders, or a name still being written.
+    Ignore,
+}
+
+/// Plans one file: pins first, then the person's rules (newline-separated `rules`, which
+/// outrank the built-ins), then the built-in placements; anything else stays.
+pub fn plan<'a>(path: &'a [u8], size: u64, pinned: bool, rules: &'a [u8]) -> Plan<'a> {
+    if !ingress(path) || unsettled(name(path)) { return Plan::Ignore; }
+    if pinned { return Plan::Stay(Stay::Pinned); }
+    let parent = &path[..path.len() - name(path).len() - 1];
+    let candidate = Candidate { path, size, pinned: false, override_destination: None };
+    let blank = Rule { id: 0, class: Class::Project, priority: 0, source: parent, name_prefix: None, extension: None, min_size: None, max_size: None, destination: b"/" };
+    let mut list: [Rule<'a>; USER_RULES_MAX] = [blank; USER_RULES_MAX];
+    let mut n = 0;
+    for (i, line) in rules.split(|&b| b == b'\n').filter(|l| !l.is_empty()).take(USER_RULES_MAX).enumerate() {
+        if let Some((prefix, ext, dest)) = parse_rule(line) {
+            list[n] = Rule { id: USER_RULE_BASE + i as u32, name_prefix: prefix, extension: ext, destination: dest, ..blank };
+            n += 1;
+        }
+    }
+    let chosen = match decide(candidate, &list[..n]) {
+        Decision::Move { rule_id, .. } => rule_id,
+        Decision::Conflict { first, second } => return Plan::Conflict { first, second },
+        Decision::Stay(Stay::AlreadyPlaced) => return Plan::Stay(Stay::AlreadyPlaced),
+        _ => None,
+    };
+    if let Some(id) = chosen {
+        let destination = list[..n].iter().find(|r| r.id == id).map(|r| r.destination).unwrap_or(b"/");
+        return Plan::Move { destination, rule_id: id };
+    }
+    let Some(ext) = extension(name(path)) else { return Plan::Stay(Stay::NoMatch) };
+    for (id, dest, exts) in BUILTIN {
+        if exts.iter().any(|e| ascii_eq(e, ext)) { return Plan::Move { destination: dest, rule_id: id }; }
+    }
+    Plan::Stay(Stay::NoMatch)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +347,51 @@ mod tests {
         assert!(matches!(decide(candidate, &rules), Decision::Move { rule_id: Some(9), .. }));
         assert_eq!(decide(Candidate { size: 99, ..candidate }, &rules), Decision::Stay(Stay::NoMatch));
         assert_eq!(decide(Candidate { path: b"/Inbox/scan.PDF", ..candidate }, &rules), Decision::Stay(Stay::NoMatch));
+    }
+
+    #[test]
+    fn ingress_folders_and_unsettled_names() {
+        assert!(ingress(b"/Inbox/a.pdf") && ingress(b"/Downloads/a") && ingress(b"/Desktop/x.png"));
+        assert!(ingress(b"/data/kaleidoscope/Downloads/song.mp3"));
+        assert!(!ingress(b"/Inbox/sub/a.pdf") && !ingress(b"/data/Downloads/a") && !ingress(b"/data/k/Other/a"));
+        assert!(!ingress(b"/Documents/a.pdf") && !ingress(b"/Inbox") && !ingress(b"/Inbox/../a"));
+        assert!(unsettled(b".a.pdf.part") && unsettled(b"big.iso.PART") && unsettled(b"x.crdownload") && !unsettled(b"a.pdf"));
+    }
+
+    #[test]
+    fn destinations_stay_in_the_persons_tree() {
+        assert!(destination_allowed(b"/Documents") && destination_allowed(b"/Documents/Taxes 2026"));
+        for bad in [&b"/"[..], b"/data/x", b"/media/STICK", b"/.Trash", b"/Documents/.hidden", b"/bin", b"/Inbox", b"/a/../b", b"rel"] {
+            assert!(!destination_allowed(bad), "{:?}", core::str::from_utf8(bad));
+        }
+    }
+
+    #[test]
+    fn plans_builtins_rules_pins_and_conflicts() {
+        assert_eq!(plan(b"/Inbox/a.PDF", 1, false, b""), Plan::Move { destination: b"/Documents", rule_id: 1 });
+        assert_eq!(plan(b"/Downloads/b.jpeg", 1, false, b""), Plan::Move { destination: b"/Pictures", rule_id: 2 });
+        assert_eq!(plan(b"/Desktop/c.flac", 1, false, b""), Plan::Move { destination: b"/Music", rule_id: 3 });
+        assert_eq!(plan(b"/data/web/Downloads/d.webm", 1, false, b""), Plan::Move { destination: b"/Videos", rule_id: 4 });
+        assert_eq!(plan(b"/Inbox/e.zip", 1, false, b""), Plan::Stay(Stay::NoMatch));
+        assert_eq!(plan(b"/Inbox/noext", 1, false, b""), Plan::Stay(Stay::NoMatch));
+        assert_eq!(plan(b"/Inbox/a.pdf", 1, true, b""), Plan::Stay(Stay::Pinned));
+        assert_eq!(plan(b"/Inbox/.a.pdf.part", 1, false, b""), Plan::Ignore);
+        assert_eq!(plan(b"/Documents/a.pdf", 1, false, b""), Plan::Ignore);
+        let rules = b"invoice-* /Documents/Invoices\n*.zip /Archives\n";
+        assert_eq!(plan(b"/Inbox/invoice-7.pdf", 1, false, rules), Plan::Move { destination: b"/Documents/Invoices", rule_id: 100 });
+        assert_eq!(plan(b"/Downloads/x.ZIP", 1, false, rules), Plan::Move { destination: b"/Archives", rule_id: 101 });
+        let tied = b"*.pdf /A\n*.pdf /B\n";
+        assert_eq!(plan(b"/Inbox/a.pdf", 1, false, tied), Plan::Conflict { first: 100, second: 101 });
+        // Bad lines are skipped, never widened.
+        assert_eq!(plan(b"/Inbox/a.pdf", 1, false, b"* /X\n*.pdf /data/x\n"), Plan::Move { destination: b"/Documents", rule_id: 1 });
+    }
+
+    #[test]
+    fn rule_lines_parse_strictly() {
+        assert_eq!(parse_rule(b"*.pdf /Documents"), Some((None, Some(&b"pdf"[..]), &b"/Documents"[..])));
+        assert_eq!(parse_rule(b"scan-*.pdf /Scans"), Some((Some(&b"scan-"[..]), Some(&b"pdf"[..]), &b"/Scans"[..])));
+        for bad in [&b"*"[..], b"*.pdf", b"a.pdf /X", b"*.p.df /X", b"**.pdf /X", b"a/*.pdf /X", b"*.pdf /media/S"] {
+            assert_eq!(parse_rule(bad), None, "{:?}", core::str::from_utf8(bad));
+        }
     }
 }

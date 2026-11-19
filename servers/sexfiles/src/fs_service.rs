@@ -45,7 +45,19 @@ fn commit_writes(fs: &mut Fs<'static, Disk>) {
     // Home's own commit first: its blocks then go out with the system's.
     crate::home::sync(fs);
     if let Err(e) = fs.commit() { forget_stats(None); sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
+    crate::organize::committed(fs);
 }
+/// Between requests: the Organizer's next event, once nothing waits to be committed.
+pub fn organize_idle() {
+    if writes_pending() { return; }
+    match unsafe { &mut *core::ptr::addr_of_mut!(STATE) } {
+        State::Ready(fs) => crate::home::deep(|| crate::organize::step(fs)),
+        State::Absent => crate::organize::unmounted(),
+        // Not mounted until the first request; nothing has arrived before it.
+        State::Untried => {}
+    }
+}
+pub(crate) fn forget_all_stats() { forget_stats(None) }
 /// Clients' regions, found once: (address, 0 until looked up, u64::MAX if absent).
 static mut REGIONS: [u64; 64] = [0; 64];
 // Files serves requests serially. Device counters are sampled only around an
@@ -248,6 +260,7 @@ fn bring_up() -> State {
     let state = bring_up_on(sectors);
     // No SexOS filesystem here (a Windows RAID volume, say): its own volumes, read only.
     if matches!(state, State::Absent) && sectors >= DEVICE_MIN_SECTORS { crate::volumes::attach_device(sectors); }
+    if matches!(state, State::Ready(_)) { crate::organize::mounted(); } else { crate::organize::unmounted(); }
     state
 }
 /// Smallest disk worth scanning for other systems' volumes: 1 MiB.
@@ -681,7 +694,7 @@ fn program_live(target: u32, task: u32) -> bool {
 pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -> u64 {
     let Some(r) = w::Request::decode(a, offset, length) else { return w::reply((a & 0xFF_FFFF) as u32, w::INVALID, 0) };
     let program = program_index(caller);
-    if program.is_some() && matches!(r.kind, w::ORGANIZE_STATE | w::ORGANIZE_SET | w::ORGANIZE_MOVE | w::ORGANIZE_UNDO) {
+    if program.is_some() && (w::ORGANIZE_STATE..=w::ORGANIZE_LOG).contains(&r.kind) {
         return w::reply(r.seq, w::DENIED, 0);
     }
     let index = match (sex_pdx::app_catalog::SPINDLE_TARGETS.iter().position(|t| *t == caller), program) {
@@ -754,7 +767,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         let result = crate::installer::run(fs, &path[..path_len], r.offset, go, &mut region[w::PATH_BYTES..]);
         // Once the installer has written raw, the driver stops this system's writes and the
         // layout under the mounted filesystem may have changed: drop it until restart.
-        if go && DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_LOCKED { *state = State::Absent; }
+        if go && DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_LOCKED { *state = State::Absent; crate::organize::unmounted(); }
         return match result { Ok(n) => w::reply(r.seq, w::OK, n), Err(e) => w::reply(r.seq, status(e), 0) };
     }
     if r.kind == w::UPDATE {
@@ -924,6 +937,11 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         let Some((a, b)) = rename_halves else { return w::reply(r.seq, w::NAME, 0) };
         if crate::volumes::owns(a) || crate::volumes::owns(b) || crate::home::owns(a) || crate::home::owns(b) { return w::reply(r.seq, w::OTHER_DISK, 0); }
     }
+    // The Organizer (Spindle only, checked in `handle`): Files' own policy module.
+    if (w::ORGANIZE_STATE..=w::ORGANIZE_LOG).contains(&r.kind) {
+        if crate::volumes::owns(path) || crate::home::owns(path) { return w::reply(r.seq, w::OTHER_DISK, 0); }
+        return match crate::home::deep(|| crate::organize::request(fs, r, path, data)) { Ok(v) => w::reply(r.seq, w::OK, v), Err(st) => w::reply(r.seq, st, 0) };
+    }
     let media = match (r.kind, rename_halves) {
         (w::MOUNT, _) => Some(crate::volumes::mount(fs, path, data)),
         (w::UNMOUNT, _) => Some(crate::volumes::unmount(fs, path)),
@@ -971,6 +989,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
                 if unsafe { UNCOMMITTED } >= COMMIT_BYTES { commit_writes(fs); }
             }
             if r.kind == w::SYNC { unsafe { UNCOMMITTED = 0; } }
+            if !read_only { crate::organize::after(fs, r.kind, path); }
             w::reply(r.seq, w::OK, value)
         }
         Err(e) => {
@@ -1145,31 +1164,6 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
             fs.move_file_if_id(&path[..split], &path[split + 1..], r.offset)?;
             fs.commit()?;
             Ok(0)
-        }
-        w::ORGANIZE_STATE => {
-            if !path.is_empty() || r.offset != 0 || r.length != 0 { return Err(Error::Name); }
-            data[0] = sexfs::organizer::enabled(fs)? as u8;
-            data[1..9].copy_from_slice(&fs.statfs().generation.to_le_bytes());
-            Ok(9)
-        }
-        w::ORGANIZE_SET => {
-            if !path.is_empty() || r.offset > 1 || r.length != 0 { return Err(Error::Name); }
-            sexfs::organizer::set_enabled(fs, r.offset == 1)?;
-            fs.commit()?;
-            Ok(r.offset as u32)
-        }
-        w::ORGANIZE_MOVE => {
-            if r.length != 0 { return Err(Error::Name); }
-            let split = path.iter().position(|b| *b == 0).ok_or(Error::Name)?;
-            let depth = sexfs::organizer::move_and_record(fs, &path[..split], &path[split + 1..], r.offset)?;
-            fs.commit()?;
-            Ok(depth as u32)
-        }
-        w::ORGANIZE_UNDO => {
-            if !path.is_empty() || r.offset != 0 || r.length != 0 { return Err(Error::Name); }
-            let depth = sexfs::organizer::undo_last(fs)?;
-            fs.commit()?;
-            Ok(depth as u32)
         }
         // Both go through private memory: the client can change its region at any time, and
         // checksums must be over the bytes we keep, not bytes it might still be changing.

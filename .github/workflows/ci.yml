@@ -473,6 +473,10 @@ jobs:
       run: python3 scripts/corset_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-corset"
     - name: Files opens a file in its program
       run: python3 scripts/files_open_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-open"
+    - name: Files saves a program's file through the picker (Save As), only that path granted
+      run: python3 scripts/files_save_picker_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-save-picker"
+    - name: Organizer places new arrivals in Inbox, Downloads and Desktop by rule; undo, pins and rules survive a restart
+      run: python3 scripts/spindle_organize_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-organize"
     - name: Power cuts while Files writes (QEMU killed, disk checked each time)
       run: python3 scripts/powercut_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-powercut"
     - name: Files repairs a damaged disk at start

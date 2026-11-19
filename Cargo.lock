@@ -7613,6 +7613,7 @@ dependencies = [
  "sex-crypt",
  "sex-disk",
  "sex-object-model",
+ "sex-organize",
  "sex-pdx",
  "sex-pkg",
  "sex-rt",
@@ -8047,7 +8048,6 @@ name = "spindle"
 version = "0.1.0"
 dependencies = [
  "sex-graphics",
- "sex-organize",
  "sex-pdx",
  "sex-time",
 ]

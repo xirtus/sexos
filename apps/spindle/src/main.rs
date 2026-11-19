@@ -864,7 +864,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
-            sb.push(b"  organize [--dry-run|auto on|auto off|undo]   sort Inbox PDFs and PNGs");
+            sb.push(b"  organize [--dry-run|auto on|off|undo|log|status|pin|unpin|rule|rules|send]");
             sb.push(b"  fetch URL FILE   download a file");
             sb.push(b"  capture FILE.png   save whole desktop (first terminal)");
             sb.push(b"  beep [HZ] [MS] [VOL]  play a note on the sound card");
@@ -2811,7 +2811,6 @@ pub extern "C" fn _start() -> ! {
         if presentation_pending && !unsafe{DISPLAY_IO.pending()} && sex_pdx::pdx_call_checked(SLOT_DISPLAY,sex_pdx::app_lifecycle::OP_APP_PRESENT,catalog.surface_id,1,0).is_ok(){presentation_pending=false;presentation_sent=true;}
         unsafe{record_command::RECORD.poll();}
         if unsafe{capture_command::CAPTURE.step(sb,!DISPLAY_IO.pending())}{unsafe{content_render(&line,sb);}}
-        unsafe{fs_commands::FS.auto_tick(sex_pdx::get_ticks());}
         if unsafe{fs_commands::FS.send()}{}
         {
             let idle=unsafe{!fs_commands::FS.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
@@ -2830,9 +2829,6 @@ pub extern "C" fn _start() -> ! {
         if unsafe{pkg_command::PKG.step(sb)}{unsafe{content_render(&line,sb);}}
         let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
-        }else if unsafe{fs_commands::FS.auto_waiting()}{
-            // Automatic organization polls the committed generation; sleep between polls.
-            match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{let _=sex_pdx::sys_wait_self_ticks(64);continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         let capture_lines=sb.total_lines;
         if msg.type_id==1&&unsafe{record_command::RECORD.receive(msg.caller_pd,msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
