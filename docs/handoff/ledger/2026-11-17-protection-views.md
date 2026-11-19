@@ -33,3 +33,9 @@
   `boot_memory::arena_leaf` (`views::mirror`) and from `GLOBAL_VAS` `map_*` calls
   (`views::mapped`, only the entries the mapping reaches), and `views::resync` runs at each
   program start as a backstop.
+- **2026-11-19 follow-up: every program row in a view.** `organs::program_key` returns
+  `SHARED_PROGRAM_KEY` (8) for every row, so keys 5 and 6 are no row's (key 5 goes to the
+  PKU gate frame, plan P6.2). A row's workers spread over every program core like any
+  row's. Since several cores can now run one view, a span a view opens at run time is
+  followed by one shootdown on every core (`views::flush_everywhere`), sent after the
+  pool lock is released. Kernel lines: net -8.

@@ -81,8 +81,11 @@ pub fn init() {
     crate::serial_println!("[boot.views] views={} pcid={} root={:#x}", COUNT, pcid as u8, root);
 }
 
-/// `va`'s span opens in `view`, which gets private tables down to it as needed.
-pub fn open(view: usize, va: u64) {
+/// `va`'s span opens in `view`, which gets private tables down to it as needed. True
+/// when the view held it closed: cores may cache that, so the caller runs
+/// `flush_everywhere` once it holds no lock another core may wait on.
+#[must_use]
+pub fn open(view: usize, va: u64) -> bool {
     assert!(view != 0 && view < COUNT, "VIEWS_INDEX");
     let span = va & !(rules::SPAN - 1);
     let mut views = VIEWS.lock();
@@ -91,9 +94,12 @@ pub fn open(view: usize, va: u64) {
     let closed = rules::open(&mut hw(), root_table(), ROOT[view].load(Ordering::Acquire), span, &mut |level, c, p| made.push((c, p, level, span))).expect("VIEWS_SPAN_UNMAPPED");
     entry.copies.extend(made);
     if let Err(i) = entry.spans.binary_search(&span) { entry.spans.insert(i, span); }
-    drop(views);
-    if closed { changed(view); }
+    closed
 }
+
+/// Every core drops what it caches, in every view (an opening must reach a core already
+/// running the view, which may hold the closed entry).
+pub fn flush_everywhere() { crate::smp::tlb::flush_pages(usize::MAX, core::iter::empty()); }
 
 /// `va`'s span closes in the canonical tables and in every view but `owner`'s.
 pub fn close(owner: usize, va: u64) {
@@ -113,7 +119,7 @@ pub fn close(owner: usize, va: u64) {
     }
     drop(views);
     // Every core may hold the open entry, under any PCID.
-    crate::smp::tlb::flush_pages(usize::MAX, core::iter::empty());
+    flush_everywhere();
 }
 
 /// The canonical `table` changed at `index` (`boot_memory::arena_leaf`): views copying
@@ -154,15 +160,6 @@ pub fn resync() {
             for i in 0..512 { let p = t.read(private, i); t.write(private, i, rules::merged(t.read(canonical, i), p)); }
         }
     }
-}
-
-/// Cores must flush `view` before using it again; this one at once if it is in it.
-fn changed(view: usize) {
-    for core in STALE.iter() { core.fetch_or(1 << view, Ordering::AcqRel); }
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        let now = cr3();
-        if now & FRAME == ROOT[view].load(Ordering::Acquire) { unsafe { set_cr3(now & !rules::NOFLUSH); } }
-    });
 }
 
 /// Before a task runs: its view, entered with a CR3 write that keeps the TLB unless an

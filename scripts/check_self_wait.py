@@ -42,7 +42,8 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'kernel/src/syscalls/mod.rs': ('5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577',  # IPC v2 syscalls 105/106, 2026-11-18
     '055312eb92a25b451b946caef4f00d1999391840bb782a1697db72e1903b1c41', '318f8602a3e053470c4f6f984fa818f928cae16253dcf9a9946edf1b114995ba',  # IPC fast path (WS4), 2026-11-17
     'aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
- 'kernel/src/program_workers.rs': ('c8ddc4a8002159a6814b651d32ef6fa7cb5f8b131b28e2ced837698bcc1c289b',  # S9 row task cap (no wait change), 2026-11-19
+ 'kernel/src/program_workers.rs': ('5f2f08d282204b97d25197920112a1aa055ae1a20f14354eb80a85e191e10ab5',  # every program row in a view, workers on every core, 2026-11-19
+    'c8ddc4a8002159a6814b651d32ef6fa7cb5f8b131b28e2ced837698bcc1c289b',  # S9 row task cap (no wait change), 2026-11-19
     '6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',),
  'crates/sex-pdx/src/lib.rs': ('8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde', '9eb262eb2108d51f57ae9dc821e6e40a12a9e1003fbfac711422b246ec17fd44',
                                'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
