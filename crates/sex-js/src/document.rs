@@ -10,6 +10,9 @@ use sex_html::dom::{Dom, Kind, NodeId};
 pub struct Document {
     #[cfg(feature = "jit-profile")]
     pub query_profile: Vec<(String, u64, u64)>,
+    /// Real time for `jit-profile` attributions when `clock` is virtual (the page bench).
+    #[cfg(feature = "jit-profile")]
+    pub profile_clock: Option<fn() -> u64>,
     selectors: Vec<(String, alloc::rc::Rc<Vec<sex_html::css::Selector>>)>,
     resource_owner: u64,
     source_policies: alloc::collections::BTreeMap<String, bool>,
@@ -194,7 +197,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None }
+        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), #[cfg(feature = "jit-profile")] profile_clock: None, selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -310,6 +313,8 @@ pub fn resolve_module(map: &[(String, String)], base: &str, spec: &str) -> Strin
 
 impl Page for Document {
     fn now_ns(&mut self) -> u64 { (self.clock)() }
+    #[cfg(feature = "jit-profile")]
+    fn profile_ns(&mut self) -> u64 { self.profile_clock.unwrap_or(self.clock)() }
     fn take_wanted_modules(&mut self) -> Vec<String> { core::mem::take(&mut self.modules_wanted) }
 
     fn call_bytes(&mut self, operation: u32, a: &[&[u8]]) -> Option<Vec<u8>> {
@@ -469,13 +474,13 @@ impl Page for Document {
             }
             op::BY_ID => {
                 let want = *a.first()?;
-                self.dom.descendants(Dom::ROOT).into_iter().find(|&n| self.dom.attr(n, "id") == Some(want)).map(|n| format!("{n}"))
+                self.dom.by_id(Dom::ROOT, want).map(|n| format!("{n}"))
             }
             op::QUERY | op::MATCHES => {
                 let root = self.node(a.first())?;
                 let text = *a.get(1)?;
                 #[cfg(feature = "jit-profile")]
-                let before = (self.clock)();
+                let before = self.profile_clock.unwrap_or(self.clock)();
                 let list = if let Some((_, parsed)) = self.selectors.iter().find(|(s, _)| s == text) {
                     parsed.clone()
                 } else {
@@ -495,7 +500,7 @@ impl Page for Document {
                 let found = self.dom.query(root, &list, all);
                 #[cfg(feature = "jit-profile")]
                 {
-                    let elapsed = (self.clock)().saturating_sub(before);
+                    let elapsed = self.profile_clock.unwrap_or(self.clock)().saturating_sub(before);
                     if let Some((_, calls, ns)) = self.query_profile.iter_mut().find(|(s, _, _)| s == text) {
                         *calls = calls.saturating_add(1); *ns = ns.saturating_add(elapsed);
                     } else if text.len() <= 16384 {
