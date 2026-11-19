@@ -128,7 +128,9 @@ def main():
         # A hidden, still-arriving name is never placed.
         s = run('write /Downloads/.big.iso.part partial', r'\[spindle.fs.result\] kind=8 status=0')
         time.sleep(4)
-        assert '/Downloads/.big.iso.part' not in text()[s:], text()[s:][-800:]
+        # (Other records may echo the typed path; only Files' organizer records count.)
+        hit = re.search(r'\[files\.organize\.[a-z.]+\][^\n]*/Downloads/\.big\.iso\.part', text()[s:])
+        assert hit is None, hit and hit[0]
 
         # Undo puts it back and pins it there, so automatic mode leaves it alone.
         run('organize undo', r'\[spindle.organize.undo\] ok=1')
