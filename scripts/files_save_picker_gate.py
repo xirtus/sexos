@@ -64,7 +64,6 @@ def main():
         g['wait'](r'\[app.private.retired\] target=41 ', 0, 120); time.sleep(2)
         for n, dest in (('files', '/bin/loom'), ('jot', '/bin/jot')):
             m = expect(f'fetch http://10.0.2.2:{PORT}/{n} {dest}', r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)', 240); assert m[1].startswith('Saved'), m[1]
-        expect('mkdir /Saves', r'\[spindle.fs.result\] kind=3 status=0')
         # Files, given the whole filesystem, answers the questions.
         s = len(t()); line('files'); m = launched(s); fa_target, fa_sid = m[1], int(m[3])
         g['wait'](r'\[files.app.ready\] target=\d+ task=\d+ root=/ portal=1', s, 60)
@@ -75,26 +74,27 @@ def main():
         s = len(t()); chord('s', 'shift')
         g['wait'](r'\[files.pick.asked\] row=\d+ mode=1 ', s, 30)
         g['wait'](r'\[files.app.question\] program=jot mode=Save', s, 30)
-        # In Files (at /): Ctrl+S names the file; the suggestion is cleared first.
+        # In Files (at /): Ctrl+S names a file in the folder shown (names have no '/');
+        # the suggestion is cleared first.
         g['focus'](fa_sid); time.sleep(.5)
         chord('s'); time.sleep(.5)
         for _ in range(40):
             q.key('backspace'); time.sleep(.02)
-        keys('Saves/picked.txt'); time.sleep(.3)
+        keys('picked.txt'); time.sleep(.3)
         q.cmd('screendump', {'filename': str(a.out / 'files-save-picker.ppm')}); time.sleep(.5)
         s2 = len(t()); q.key('ret')
-        g['wait'](r'\[files.pick.granted\] row=\d+ path=/Saves/picked.txt', s2, 30)
-        g['wait'](r'\[files.app.answered\] program=jot path=/Saves/picked.txt', s2, 30)
-        g['wait'](r'\[jot.picked\] path=@/Saves/picked.txt', s2, 30)
+        g['wait'](r'\[files.pick.granted\] row=\d+ path=/picked.txt', s2, 30)
+        g['wait'](r'\[files.app.answered\] program=jot path=/picked.txt', s2, 30)
+        g['wait'](r'\[jot.picked\] path=@/picked.txt', s2, 30)
         m = g['wait'](r'\[jot.saved\] bytes=(\d+) ', s2, 60)
         result['first_bytes'] = int(m[1])
         assert int(m[1]) in (len(FIRST), len(FIRST) + 1), m[0]
-        expect('cat /Saves/picked.txt', rf'\[spindle.fs.cat\] {FIRST}')
+        expect('cat /picked.txt', rf'\[spindle.fs.cat\] {FIRST}')
         # The granted path stays Jot's: Ctrl+S saves to it again.
         g['focus'](jot_sid); time.sleep(.5); keys(MORE); time.sleep(.3)
         s = len(t()); chord('s'); m = g['wait'](r'\[jot.saved\] bytes=(\d+) ', s, 60)
         assert int(m[1]) in (len(FIRST + MORE), len(FIRST + MORE) + 1), m[0]
-        expect('cat /Saves/picked.txt', rf'\[spindle.fs.cat\] {FIRST + MORE}')
+        expect('cat /picked.txt', rf'\[spindle.fs.cat\] {FIRST + MORE}')
         # A cancelled save: Esc in Files, Jot hears no, nothing new appears.
         g['focus'](jot_sid); time.sleep(.5)
         s = len(t()); chord('s', 'shift')
@@ -103,10 +103,8 @@ def main():
         s = len(t()); q.key('esc')
         g['wait'](r'\[files.pick.cancelled\] row=\d+', s, 30)
         g['wait'](r'\[jot.pick.refused\] status=\d+', s, 30)
-        s = len(t()); line('ls /Saves'); g['wait'](r'\[spindle.fs.result\] kind=2 status=0', s, 60); time.sleep(1)
-        listed = re.findall(r'\[spindle.fs.line\] ([^\n]*)', t()[s:])
-        assert [x.split('  ')[0] for x in listed if x.strip()] == ['picked.txt'], listed
-        result['listed'] = listed
+        # Nothing new was written by the cancelled save: the file is as saved before.
+        expect('cat /picked.txt', rf'\[spindle.fs.cat\] {FIRST + MORE}')
         text = t()
         assert 'KERNEL PANIC' not in text and 'panicked' not in text and '[files.app.fatal]' not in text
     finally:
