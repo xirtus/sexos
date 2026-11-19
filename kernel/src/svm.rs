@@ -14,8 +14,8 @@
 //! by the host right after STGI. CLGI, STGI, VMRUN, VMLOAD, VMSAVE, SKINIT, INVD and
 //! XSETBV never run in a guest. The VMCB is rewritten from the vCPU's `State` on every
 //! run (all clean bits off), so a vCPU may run on any core. Every guest uses ASID 1; a
-//! core flushes it when it runs a different vCPU than last time or a nested table lost
-//! a mapping (`vmx::EPT_GENERATION`).
+//! core flushes it when it runs a different vCPU than last time, the vCPU last ran on
+//! another core, or a nested table lost a mapping (`vmx::EPT_GENERATION`).
 use core::sync::atomic::{AtomicU64, Ordering};
 use sex_pdx::vm::{self as abi, svm, Reason};
 use x86_64::registers::model_specific::Msr;
@@ -108,16 +108,21 @@ impl Vmcb {
 }
 
 /// One VMRUN and #VMEXIT on this core. `key` names the vCPU (for the TLB), `extra` is
-/// its CR2 and KERNEL_GS_BASE, which `State` does not carry. Restores PKRU (guest
+/// its CR2 and KERNEL_GS_BASE, which `State` does not carry, and the core it last ran on
+/// plus one (0 = never ran). Restores PKRU (guest
 /// WRPKRU) and EFER; VMRUN and VMLOAD restore the rest of the host.
-pub unsafe fn enter(c: &Caps, core: usize, key: u64, st: &mut abi::State, extra: &mut [u64; 2], ncr3: u64, event: u32, error: u32,
+pub unsafe fn enter(c: &Caps, core: usize, key: u64, st: &mut abi::State, extra: &mut [u64; 3], ncr3: u64, event: u32, error: u32,
     exit: &mut abi::Exit) -> Result<(u32, u32), (u64, u64)> {
     use x86_64::registers::control::Cr4;
     let (Some(vmcb), Some(host), Some(hsave)) = (region(core * 3), region(core * 3 + 1), region(core * 3 + 2)) else { return Err((abi::EXHAUSTED, 0)) };
     let v = Vmcb(hhdm(vmcb) as *mut u8);
     core::ptr::write_bytes(v.0, 0, 4096);
     let generation = crate::vmx::EPT_GENERATION.load(Ordering::Acquire);
-    let flush = (SEEN[core].swap(generation, Ordering::AcqRel) != generation) | (LAST[core].swap(key, Ordering::AcqRel) != key);
+    // Flush when this core ran another vCPU since, a nested table lost a mapping, or the
+    // vCPU ran elsewhere last: its INVLPGs there never reached this core's TLB.
+    let moved = extra[2] != core as u64 + 1;
+    extra[2] = core as u64 + 1;
+    let flush = (SEEN[core].swap(generation, Ordering::AcqRel) != generation) | (LAST[core].swap(key, Ordering::AcqRel) != key) | moved;
     load(c, &v, st, extra, ncr3, event, error, flush);
     let cr4 = Cr4::read_raw();
     let pkru = if cr4 & CR4_PKE != 0 { crate::pku::rdpkru() } else { 0 };
@@ -130,7 +135,7 @@ pub unsafe fn enter(c: &Caps, core: usize, key: u64, st: &mut abi::State, extra:
     Ok(save(c, &v, st, extra, exit))
 }
 
-unsafe fn load(c: &Caps, v: &Vmcb, st: &abi::State, extra: &[u64; 2], ncr3: u64, event: u32, error: u32, flush: bool) {
+unsafe fn load(c: &Caps, v: &Vmcb, st: &abi::State, extra: &[u64; 3], ncr3: u64, event: u32, error: u32, flush: bool) {
     v.w(INTERCEPT_3, svm::INTERCEPT_3); v.w(INTERCEPT_4, svm::INTERCEPT_4);
     v.w(IOPM, c.iopm); v.w(MSRPM, c.msrpm);
     v.w(ASID, 1u32);
@@ -155,7 +160,7 @@ unsafe fn load(c: &Caps, v: &Vmcb, st: &abi::State, extra: &[u64; 2], ncr3: u64,
     v.w(PAT, 0x0007_0406_0007_0406u64);
 }
 
-unsafe fn save(c: &Caps, v: &Vmcb, st: &mut abi::State, extra: &mut [u64; 2], exit: &mut abi::Exit) -> (u32, u32) {
+unsafe fn save(c: &Caps, v: &Vmcb, st: &mut abi::State, extra: &mut [u64; 3], exit: &mut abi::Exit) -> (u32, u32) {
     st.regs.rax = v.r(RAX); st.regs.rsp = v.r(RSP); st.regs.rip = v.r(RIP); st.regs.rflags = v.r(RFLAGS);
     st.cr0 = v.r(CR0); st.guest_cr3 = v.r(CR3); st.cr4 = v.r(CR4);
     st.efer = v.r::<u64>(GUEST_EFER) & !EFER_SVME;

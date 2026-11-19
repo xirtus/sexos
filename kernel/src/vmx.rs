@@ -33,8 +33,9 @@ const GPA_LIMIT: u64 = 1 << 39;
 const SLICE_TSC: u64 = 4_000_000;
 const CORES: usize = crate::scheduler::task_ownership::MAX_CORES as usize;
 
-/// `extra`: CR2 and KERNEL_GS_BASE, which the VMCB swaps on AMD (`svm::enter`).
-struct Vcpu { state: abi::State, event: u32, event_error: u32, running: bool, extra: [u64; 2] }
+/// `extra`: CR2 and KERNEL_GS_BASE, which the VMCB swaps on AMD, and the core the vCPU
+/// last ran on plus one (`svm::enter`).
+struct Vcpu { state: abi::State, event: u32, event_error: u32, running: bool, extra: [u64; 3] }
 struct Vm { id: u64, pd: u32, root: u64, tables: Vec<u64>, loans: Vec<(u64, u64)>, vcpus: Vec<Vcpu> }
 struct Machines { next: u64, vms: Vec<Vm> }
 static VMS: Mutex<Machines> = Mutex::new(Machines { next: 1, vms: Vec::new() });
@@ -164,7 +165,7 @@ fn call(pd: &crate::capability::ProtectionDomain, op: u64, a: u64, b: u64, c: u6
             let mut m = VMS.lock();
             find(&mut m, pd.id, a).and_then(|vm| {
                 if vm.vcpus.len() >= MAX_VCPUS { return Err(abi::EXHAUSTED); }
-                vm.vcpus.push(Vcpu { state: abi::State::real_mode(0, 0), event: 0, event_error: 0, running: false, extra: [0; 2] });
+                vm.vcpus.push(Vcpu { state: abi::State::real_mode(0, 0), event: 0, event_error: 0, running: false, extra: [0; 3] });
                 Ok(vm.vcpus.len() as u64 - 1)
             })
         }

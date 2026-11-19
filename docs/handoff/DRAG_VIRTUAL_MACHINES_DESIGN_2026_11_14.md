@@ -264,7 +264,8 @@ What remains for D2 to be "Linux boots to a shell":
   an exit code with no Intel twin comes back as `SVM_OTHER | code`. Without NRIP save the
   skipped instructions use their fixed lengths.
 - TLB: every guest is ASID 1. A core flushes it (by ASID when the CPU can, else all) when it
-  runs a different vCPU than last time or a nested table lost a mapping (`EPT_GENERATION`).
+  runs a different vCPU than last time, the vCPU last ran on another core (its INVLPGs
+  there never reached this core), or a nested table lost a mapping (`EPT_GENERATION`).
 - vCPU state the ABI has no field for (CR2, KERNEL_GS_BASE) is kept per vCPU in the kernel.
 - No preemption timer on AMD: a guest in a tight loop leaves at the host's next timer
   interrupt instead (`EXTERNAL_INTERRUPT`, not `PREEMPTED`).
