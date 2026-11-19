@@ -555,6 +555,10 @@ jobs:
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
         python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
         python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Microphone on Intel HD Audio (input pin, converter and input stream)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/hda-mic-source.img"
+        python3 scripts/sound_listen_gate.py --card hda --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/hda-mic-source.img" --out "$RUNNER_TEMP/sexos-hda-mic"
     - name: Preserve media evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -564,6 +568,7 @@ jobs:
           ${{ runner.temp }}/media-build.log
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
+          ${{ runner.temp }}/sexos-hda-mic
         if-no-files-found: ignore
 
   editor:
