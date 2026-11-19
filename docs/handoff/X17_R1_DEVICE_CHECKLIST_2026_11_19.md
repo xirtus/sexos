@@ -22,7 +22,7 @@ Spindle `hw` report (runbook: `X17_BARE_METAL_RUNBOOK_2026_11_18.md`) confirms t
 | Fn hotkeys | ACPI video notify, Dell WMI 9DBB5994 | this thread | Brightness via ACPI video (PR #179); Dell WMI events decoded (this PR) |
 | Keyboard and chassis lighting (AlienFX) | USB HID 187c:05xx (verify) | this thread | Not started: needs the USB ids from `hw`; firmware keeps the last colours |
 | Touchpad, I2C HID on Serial IO | PNP0C50 | PR #179 + "Expand real-PC hardware support" | Described and polled; GPIO interrupt pending |
-| Webcam (FHD + IR, USB UVC) | USB 0bda / 0c45 (verify) | this thread | `sex-uvc` protocol + `sexuvc` server run on a synthetic camera; no isochronous USB transfers yet |
+| Webcam (FHD + IR, USB UVC) | USB 0bda / 0c45 (verify) | this thread | `sex-uvc` protocol + `sexuvc` server run on a synthetic camera; sexusb now finds and logs the camera (`[sexusb.uvc]`); isoch streaming next |
 | Fans and temperatures (AWCC) | WMI A70591CE (`WMAX`) | this thread | This PR: fans, sensors, profiles read and logged |
 | Thermal profiles (quiet / balanced / performance) | AWCC method 0x15 | this thread | This PR: follow the desktop's power profile |
 | Battery, AC, lid | PNP0C0A, ACPI0003, PNP0C0D | PR #179 (done) | Works in QEMU |
@@ -73,6 +73,20 @@ to Bell or the desktop; manual fan boost has no desktop control yet.
   70-80%, adaptive); the laptop power gate gives QEMU an Alienware x17 R1 type 1 and a
   Dell token table and checks the boot lines.
 
+## PR 3: webcam groundwork
+
+- `servers/sexusb/src/isoch.rs`: xHCI isochronous endpoint parameters (Max Burst, Mult,
+  Max ESIT Payload, Interval), Isoch TRBs (TBC/TLBPC, Frame ID or SIA), alternate setting
+  choice. Generic for UVC, USB audio and Bluetooth SCO.
+- `servers/sexusb/src/uvc_scan.rs`: finds a UVC camera's control and streaming interfaces,
+  alternate settings, formats and largest frame size. Boot lines `[sexusb.uvc]` and
+  `[sexusb.uvc.format]`, so the first x17 boot names the webcam (and its IR function,
+  `more_streams=1`).
+- Host gate: `scripts/usb_isoch_host_gate.sh` (`tests/sexusb_isoch.rs`). QEMU has no UVC
+  device, so streaming is proven on the real machine.
+- sexacpi: `bounded()` is reentrant, so a WMI method called from an already bounded pass
+  no longer restarts at the AML stack top (Codex review on #445).
+
 ## Panel and MUX
 
 The x17 R1 panel runs at its native refresh only once a display driver sets the mode; with
@@ -85,7 +99,7 @@ native mode and refresh in the `hw` report so we know which of the three panels 
 ## Next in this thread, in order
 
 1. Desktop control for charge mode (Settings or launcher, sends `CTL_CHARGE`).
-2. Webcam: isochronous IN endpoints in sexusb's xHCI, then bind `sexuvc` to a real UVC
-   interface.
+2. Webcam: an isochronous transfer ring in sexusb's xHCI (Configure Endpoint type 5,
+   SetInterface, VS probe/commit), then bind `sexuvc` to the real camera.
 3. AlienFX lighting once the USB ids are known.
 4. Panel EDID line in `hw`; desktop controls for thermal profile and fan boost.
