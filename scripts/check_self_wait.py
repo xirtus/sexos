@@ -49,7 +49,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('fn-v1:50abfa82
     'c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
                               'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d',
                               # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
-                              'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),
+                              'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e',
+                              # kernel page fault prints the words around RSP (soak null-RIP hunt), 2026-11-19
+                              'fn-v1:96213afb9ba13c65c30b8892bda0d19b66aaf74aeedfcfeede56e4187b00f438'),
  'kernel/src/syscalls/mod.rs': ('fn-v1:676eae4ad2ce1171bafcdd21eb7b0d61e5e387ff84e401eb926eecf173191fbb',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
     '5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577',  # IPC v2 syscalls 105/106, 2026-11-18
     '055312eb92a25b451b946caef4f00d1999391840bb782a1697db72e1903b1c41', '318f8602a3e053470c4f6f984fa818f928cae16253dcf9a9946edf1b114995ba',  # IPC fast path (WS4), 2026-11-17
@@ -82,7 +84,8 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
 # Reviewed whole-tree digests, kept as review receipts; deadline_source_closure no
 # longer requires the current tree to be one of them.
-APPROVED_KERNEL_RUST_TREES=('8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5',  # master after #407 + #408 + #422 combined, 2026-11-18
+APPROVED_KERNEL_RUST_TREES=('18ac007a8e8c4db6928169e7d71934958abf5ba4654dd1e52afccb213b17ab56',  # kernel page fault stack words (WS2 soak), 2026-11-19
+    '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5',  # master after #407 + #408 + #422 combined, 2026-11-18
     'dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8b114a8d2c6fb2',  # XSAVE + AVX (stream 5), 2026-11-18
     # Phase 1a dead kernel modules removed, 2026-11-18
     '417835283472c60cfd1455bccc223876d2936126736b182b47c1e75f6ed56260',  # IPC v2 objects (#406) + #410 merged on master, 2026-11-18

@@ -716,6 +716,13 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
     if fault_cs_rpl != 3 {
         serial_println!("KERNEL PAGE FAULT HALT: addr={:#x} rip={:#x} rsp={:#x} err={:#x} pd={}",
             fault_addr, fault_rip, fault_rsp, error_code, cur_pd);
+        // The words around RSP name the caller of a jump to a bad address (a return
+        // address just below RSP after `ret`), read only where the stack is mapped.
+        let low = fault_rsp.wrapping_sub(32) & !7;
+        if [low, low + 63].iter().all(|&a| crate::boot_memory::existing_leaf_address(a).is_some_and(|l| unsafe { core::ptr::read_volatile(l as *const u64) } & 1 != 0)) {
+            let w = |i: u64| unsafe { core::ptr::read_volatile((low + i * 8) as *const u64) };
+            serial_println!("KERNEL PAGE FAULT STACK: at={:#x} {:#x} {:#x} {:#x} {:#x} | {:#x} {:#x} {:#x} {:#x}", low, w(0), w(1), w(2), w(3), w(4), w(5), w(6), w(7));
+        }
         crate::console::stop(format_args!("page fault in the kernel touching {:#x} at {:#x} (error {:#x})",
             fault_addr, fault_rip, error_code));
     }
