@@ -5341,3 +5341,12 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - SSH domains: `ssh.NAME = user@host[:port]` lines in `spindle.conf` (`ssh NAME [COMMAND]` logs in there); bad lines are reported like other settings.
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
+
+## Harness driver SDK and the public hardware list (2026-11-19)
+- `crates/harness` (GPL-2.0-or-later OR MIT): the driver SDK. `Regs` (with a bounds-checked `Mmio`), `Clock`, `Irq` (pending bits, `NoIrq`), `DmaPool`/`DmaBuf`/`RingIndex`, bounded waits (`poll_until`, `wait_for`: deadline plus a 1M poll cap; all ones is `Gone`), `[tag] key=value` records that `hw_report.py` always parses, and `Error`.
+- `mock` feature: `DeviceModel` + `ModelRegs` (access log, shared model), `MockClock` (models step while the driver sleeps), `MockIrq`/`IrqLine`, `MockDma`/`BusPort` (out-of-region device DMA counted as an IOMMU fault), `Lines`. Fuzz hooks: `FuzzRegs` (pins), `FuzzIrq`, `Src`, the built-in mutator from `fuzz/drivers` with its hang budget, `fuzz_main!`, and `fuzz::one` for cargo-fuzz.
+- `sexos` feature: lease BAR view, service DMA pool, syscall 86 interrupts, clock, serial records through `sex_pdx`.
+- `crates/harness-template`: a complete driver for QEMU's edu device (identity, liveness, factorial by poll or interrupt, DMA both ways, limits checked before the device sees them), a device model with fault knobs, 10 tests, and the `fuzz_edu` binary. Guide: `docs/sdk/DRIVER_SDK.md`.
+- `scripts/hardware_list.py` builds `docs/HARDWARE.md` and `docs/hardware.json` from sex-hwdb (every `exact()` row and `by_class()` rule) and the newest `hw-reports/` report of each machine ("Seen on: works/failed").
+- Verified by `scripts/driver_sdk_host_gate.sh` (CI host job) and `scripts/tests/test_hardware_list.py`.
+

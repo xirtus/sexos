@@ -95,6 +95,8 @@ members = [
     "crates/sex-crypt",
     "crates/corset-core",
     "crates/sex-hwdb",
+    "crates/harness",
+    "crates/harness-template",
     "crates/sex-laptop",
     "crates/sex-hid-touch",
     "crates/sex-i2c-dw",
