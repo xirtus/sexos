@@ -38,6 +38,13 @@ python3 scripts/freeze_native_evidence.py --build "$EVIDENCE_DIR/diagnostic-buil
 cp sexos-v1.0.0.iso "$EVIDENCE_DIR/UNSAFE-input-payload-proof.iso"
 printf '%s\n' 'UNSAFE diagnostic image: records keyboard contents; never enter passwords or private data.' > "$EVIDENCE_DIR/README.txt"
 cp "$INPUT_PROFILE_BACKUP/spec" sexos_build_spec.toml
+# CI sets SEXOS_INPUT_PROOF_SKIP_NORMAL=1: its image job builds the normal image,
+# and the job ends after testing the frozen diagnostic image.
+if [[ "${SEXOS_INPUT_PROOF_SKIP_NORMAL:-0}" == 1 ]]; then
+  cmp sexos_build_spec.toml "$INPUT_PROFILE_BACKUP/spec"
+  echo '[input.proof] normal rebuild skipped (SEXOS_INPUT_PROOF_SKIP_NORMAL=1); the tree holds the diagnostic image' > "$EVIDENCE_DIR/normal-build.log"
+  exit 0
+fi
 bash scripts/entrypoint_build.sh > "$EVIDENCE_DIR/normal-build.log" 2>&1
 cmp sexos_build_spec.toml "$INPUT_PROFILE_BACKUP/spec"
 cp sexos-v1.0.0.iso "$EVIDENCE_DIR/normal.iso"
