@@ -735,8 +735,10 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         crate::ipc::messages::IpcReply::erase_queue(&mut target.incoming_replies.lock());
         target.reply_credits.lock().clear();
         // The terminal incarnation's held authority is revoked, then checked
-        // empty against the actual table; nothing can refill a sealed table.
+        // empty against the actual table; a sealed table refills only by a
+        // runtime grant from a live holder. Its objects and owed replies die.
         let revoked=unsafe{(*target.cap_table).revoke_all()};
+        crate::capability_table::OBJECTS.end_incarnation(app.target);
         assert!(unsafe{(*target.cap_table).holds_none(|_|true)},"APP_CAPS_RETAINED");
         crate::serial_println!("[app.caps.revoked] target={} task={} revoked={} remaining=0",app.target,app.task,revoked);
         app.retired=true;

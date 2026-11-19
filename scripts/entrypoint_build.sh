@@ -97,6 +97,7 @@ ABI_INPUTS=(
   kernel/src/ipc/sender.rs
   kernel/src/ipc/router.rs
   kernel/src/vmx.rs
+  kernel/src/svm.rs
   crates/sex-pdx/src/vm.rs
 )
 

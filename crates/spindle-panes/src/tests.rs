@@ -138,3 +138,12 @@ fn config_picks_the_font() {
     let c = config::parse("font = comic-sans\n");
     assert_eq!((c.font.as_str(), c.problems.len()), ("geist-mono", 1));
 }
+
+#[test]
+fn config_names_ssh_domains() {
+    let c = config::parse("ssh.work = me@build.example.org:2222\nssh.pi = pi@10.0.0.7\nssh.bad = nobody\nssh. = a@b\nssh.pi = root@10.0.0.8\n");
+    assert_eq!(c.domain("work"), Some(&config::SshDomain { name: "work".into(), user: "me".into(), host: "build.example.org".into(), port: 2222 }));
+    assert_eq!(c.domain("pi").map(|d| (d.user.as_str(), d.host.as_str(), d.port)), Some(("root", "10.0.0.8", 22)));
+    assert_eq!(c.ssh.len(), 2);
+    assert_eq!(c.problems.len(), 2, "{:?}", c.problems);
+}

@@ -66,6 +66,7 @@ crates = [
   "apps/shapes/Cargo.toml",
   "apps/monitor/Cargo.toml",
   "apps/fputest/Cargo.toml",
+  "apps/avxtest/Cargo.toml",
   "apps/fuzz/Cargo.toml",
   "apps/jit/Cargo.toml",
   "apps/threads/Cargo.toml",
@@ -426,6 +427,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/fputest/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/fputest"
 dest_artifact = "iso_root/programs/fputest"
+
+[[stage]]
+id = "build_avxtest"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/avxtest/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/avxtest"
+dest_artifact = "iso_root/programs/avxtest"
 
 [[stage]]
 id = "build_fuzz"

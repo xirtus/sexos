@@ -197,14 +197,14 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
                 self.assertFalse(result['source_contract']['ok'])
                 self.assertIn('unreviewed kernel deadline reference owner',result['source_contract']['errors'][0])
                 path.unlink()
-            # Even a new module without recognized tokens requires review;
-            # the complete Rust tree requires review even for unrecognized syntax.
+            # A kernel file with no deadline reference, new or changed, is outside the
+            # causal closure: it needs no re-pin, so unrelated merges cannot fail the gate.
             path.write_text('fn unrelated_new_module(){}')
-            self.assertFalse(self.check(SAMPLED,root)['ok']);path.unlink()
+            self.assertTrue(self.check(SAMPLED,root)['ok']);path.unlink()
             name=next(p.relative_to(ROOT).as_posix()for p in (ROOT/'kernel').rglob('*.rs')
                       if p.relative_to(ROOT).as_posix()not in APPROVED_TIMED_WAIT_SOURCES)
             path=root/name;original=path.read_text();path.write_text(original+'\n// changed outside causal owners\n')
-            self.assertFalse(self.check(SAMPLED,root)['ok']);path.write_text(original)
+            self.assertTrue(self.check(SAMPLED,root)['ok']);path.write_text(original)
             result=source_contract(ROOT)
             self.assertEqual(set(result['deadline_reference_closure']['owner_sha256']),DEADLINE_REFERENCE_OWNERS)
             self.assertGreater(result['deadline_reference_closure']['files'],len(DEADLINE_REFERENCE_OWNERS))
@@ -227,6 +227,23 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
         hashes['kernel/src/unreviewed.rs']='0'*64
         mutated=hashlib.sha256(json.dumps(hashes,sort_keys=True,separators=(',',':')).encode()).hexdigest()
         self.assertNotIn(mutated,APPROVED_KERNEL_RUST_TREES)
+
+    def test_kernel_files_are_pinned_by_their_wait_functions(self):
+        # Andreas, 2026-11-18: an edit outside the wait functions needs no re-pin;
+        # an edit inside one, or a new function that waits, does.
+        with tempfile.TemporaryDirectory()as directory:
+            root=Path(directory)
+            copy_causal_sources(root)
+            path=root/'kernel/src/scheduler.rs';original=path.read_text()
+            path.write_text(original+'\nfn unrelated_helper(a:u64)->u64{a+1}\n')
+            self.assertTrue(source_contract(root)['ok'])
+            for extra in ('\nunsafe fn extra(task:*mut Task){(*task).wait_deadline.cancel();}\n',
+                          '\nunsafe fn extra(task:*mut Task){unpark_thread(task);}\n'):
+                path.write_text(original+extra)
+                self.assertFalse(source_contract(root)['ok'],extra)
+            path.write_text(original.replace('pub fn unpark_thread(task_ptr: *mut Task) {','pub fn unpark_thread(task_ptr: *mut Task) { let _changed = 0;',1))
+            self.assertFalse(source_contract(root)['ok'])
+            path.write_text(original)
 
     def test_missing_source_does_not_enable_inference(self):
         with tempfile.TemporaryDirectory()as directory:

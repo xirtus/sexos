@@ -20,10 +20,14 @@ pub struct TaskContext {
     /// The task's thread pointer (FS base), loaded on every switch to it. Programs
     /// set it with `program_threads::TLS`; user code cannot change it otherwise.
     pub fs_base: u64,
+    /// The task's gate-area index, loaded into IA32_TSC_AUX while gates are on
+    /// (crate::gate). 0 = no area.
+    pub gate_aux: u64,
 }
 
 const _: () = assert!(core::mem::offset_of!(TaskContext, kstack_top) == 0xC0);
 const _: () = assert!(core::mem::offset_of!(TaskContext, fs_base) == 0xC8);
+const _: () = assert!(core::mem::offset_of!(TaskContext, gate_aux) == 0xD0);
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,8 +96,9 @@ pub struct Task {
     pub(crate) ext_init: Option<InitArg>,
     resume_observation_pending: AtomicBool,
     pub(crate) wait_deadline: self_wait::Deadline,
-    /// x87/SSE registers while the task is off-core (see crate::fpu).
-    fpu: crate::fpu::FpuState,
+    /// x87/SSE registers while the task is off-core (see crate::fpu). Its own heap
+    /// block, so a Task stays small wherever it is built or copied (#427).
+    fpu: alloc::boxed::Box<crate::fpu::FpuState>,
     /// The core this task runs on, when not its domain's (a program's workers);
     /// u32::MAX means `smp::home_core` of its domain.
     pub home: AtomicU32,
@@ -104,6 +109,30 @@ pub struct Task {
     pub(crate) deliver: AtomicBool,
     /// Deadline class (`deadline`): each wake is due within this many microseconds; 0: none.
     pub deadline_us: AtomicU64,
+    /// IPC v2 endpoint/notification state (`ipc_v2::syscall`).
+    pub(crate) ipc_v2: crate::ipc_v2::syscall::TaskIpc,
+}
+
+static FPU_INIT: crate::fpu::FpuState = crate::fpu::FpuState::INIT;
+/// A reset save area, copied straight into the heap: never a temporary on the stack.
+fn fresh_fpu() -> alloc::boxed::Box<crate::fpu::FpuState> {
+    let mut b = alloc::boxed::Box::<crate::fpu::FpuState>::new_uninit();
+    unsafe { ptr::copy_nonoverlapping(&FPU_INIT, b.as_mut_ptr(), 1); b.assume_init() }
+}
+static GUARDED_STACKS: AtomicU32 = AtomicU32::new(0);
+/// A zeroed kernel stack (never freed) with an unmapped page below it: an overflow
+/// faults into the double-fault IST instead of writing over its heap neighbour.
+/// Returns the top. The guard is skipped where the heap is not mapped by 4 KiB leaves.
+fn guarded_kernel_stack(bytes: usize) -> u64 {
+    let layout = core::alloc::Layout::from_size_align(bytes + 4096, 4096).expect("KSTACK_LAYOUT");
+    let base = unsafe { alloc::alloc::alloc_zeroed(layout) } as u64;
+    assert!(base != 0, "KSTACK_OUT_OF_MEMORY");
+    if let Some(leaf) = crate::boot_memory::existing_leaf_address(base) {
+        unsafe { ptr::write_volatile(leaf as *mut u64, ptr::read_volatile(leaf as *const u64) & !1); }
+        x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(base));
+        if GUARDED_STACKS.fetch_add(1, Ordering::Relaxed) == 0 { serial_println!("[kstack.guard] first={:#x} bytes={}", base, bytes); }
+    }
+    base + 4096 + bytes as u64
 }
 
 impl Task {
@@ -121,9 +150,7 @@ impl Task {
             (selectors.kernel_cs.0 as u64, selectors.kernel_ss.0 as u64, 0x202u64)
         };
 
-        let kstack = alloc::vec![0u8; kstack_bytes];
-        let kstack_alloc_top = kstack.as_ptr() as u64 + kstack_bytes as u64;
-        core::mem::forget(kstack);
+        let kstack_alloc_top = guarded_kernel_stack(kstack_bytes);
 
         // Pre-seed kstack with IRETQ frame + Dummy Error + GPR zeros.
         // Layout low→high: [r15=0..rax=0][dummy=0][RIP][CS][RFLAGS][RSP][SS]
@@ -153,6 +180,7 @@ impl Task {
             pd_ptr: pd as *const _,
             kstack_top: forged_ksp,  // active ksp; switch_to saves/loads here
             fs_base: 0,
+            gate_aux: 0,
         };
 
         Self {
@@ -166,10 +194,11 @@ impl Task {
             ext_init: None,
             resume_observation_pending: AtomicBool::new(false),
             wait_deadline:self_wait::Deadline::new(),
-            fpu: crate::fpu::FpuState::INIT,
+            fpu: fresh_fpu(),
             home: AtomicU32::new(u32::MAX),
             woken_at: AtomicU64::new(0),
             deliver: AtomicBool::new(false),
+            ipc_v2: crate::ipc_v2::syscall::TaskIpc::new(),
             deadline_us: AtomicU64::new(deadline::default_period_us(pd.id as u64)),
         }
     }
@@ -207,7 +236,7 @@ impl Task {
         self.deliver = AtomicBool::new(false);
         self.deadline_us = AtomicU64::new(deadline::default_period_us(pd_id));
         // A new run starts with fresh registers, never the last run's.
-        self.fpu = crate::fpu::FpuState::INIT;
+        unsafe { ptr::copy_nonoverlapping(&FPU_INIT, &mut *self.fpu, 1); }
         let me = self as *mut Task;
         for loaded in FPU_LOADED.iter() {
             let _ = loaded.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire);
@@ -290,6 +319,8 @@ pub struct Scheduler {
     handoff_armed: AtomicBool,
     /// This switch is a handoff, so it skips housekeeping (see `tick`).
     lean: AtomicBool,
+    /// The next `tick` skips housekeeping: a task waits on its partner (102/103).
+    lean_next: AtomicBool,
     /// The outgoing task's time ran out (timer or preemption), as opposed to a yield.
     sliced: AtomicBool,
     /// Turns an interactive task kept its class after its time ran out since a normal
@@ -346,6 +377,7 @@ impl Scheduler {
             handoff_streak: AtomicU32::new(0),
             handoff_armed: AtomicBool::new(false),
             lean: AtomicBool::new(false),
+            lean_next: AtomicBool::new(false),
             sliced: AtomicBool::new(false),
             kept: AtomicU32::new(0),
             deadline: deadline::DeadlineSet::new(),
@@ -357,7 +389,8 @@ impl Scheduler {
     pub fn tick(&self) -> ScheduleDecision {
         // A call's partner runs at once: housekeeping waits for an ordinary turn, at most
         // HANDOFF_STREAK switches away (and core 0's timer polls every tick anyway).
-        let lean = !self.handoff.load(Ordering::Acquire).is_null() && self.handoff_streak.load(Ordering::Relaxed) < HANDOFF_STREAK;
+        let lean = self.lean_next.swap(false, Ordering::Relaxed)
+            || (!self.handoff.load(Ordering::Acquire).is_null() && self.handoff_streak.load(Ordering::Relaxed) < HANDOFF_STREAK);
         self.lean.store(lean, Ordering::Relaxed);
         if !lean { poll_paging_exit_notifications(); }
         if SCHED_TICK_ENTER_LOG_BUDGET
@@ -685,6 +718,14 @@ impl Scheduler {
             "mov edx, [rsi + 0xCC]",
             "mov ecx, 0xC0000100",
             "wrmsr",
+            // The next task's gate identity for RDPID (TaskContext.gate_aux at 0xD0).
+            "cmp byte ptr [rip + {gates_on}], 0",
+            "je 4f",
+            "mov eax, [rsi + 0xD0]",
+            "xor edx, edx",
+            "mov ecx, 0xC0000103",
+            "wrmsr",
+            "4:",
             // Only now narrow PKRU; the Rust callback ran with kernel access.
             "cmp byte ptr [rip + {pku_enabled}], 0",
             "je 2f",
@@ -723,6 +764,7 @@ impl Scheduler {
 
             finish_switch = sym scheduler_finish_switch,
             pku_enabled = sym crate::pku::PKU_ENABLED,
+            gates_on = sym crate::gate::ON,
             actual_iret_rsp = sym ACTUAL_IRET_RSP,
             actual_q0 = sym ACTUAL_IRET_Q0_RIP,
             actual_q1 = sym ACTUAL_IRET_Q1_CS,
@@ -872,12 +914,12 @@ pub extern "C" fn scheduler_finish_switch() {
         // The outgoing task's registers are still in the core (the kernel never uses
         // them): keep them in its own block before any other core may resume it.
         if !old.is_null() {
-            crate::fpu::save(&mut (*old).fpu);
+            crate::fpu::save(&mut *(*old).fpu);
             loaded.store(ptr::null_mut(), Ordering::Release);
         }
         let next = sched.current_task.load(Ordering::Acquire);
         if !next.is_null() && loaded.load(Ordering::Acquire) != next {
-            crate::fpu::restore(&(*next).fpu);
+            crate::fpu::restore(&*(*next).fpu);
             loaded.store(next, Ordering::Release);
         }
     }
@@ -925,10 +967,19 @@ pub extern "C" fn idle_core() -> ! {
 /// IRQs are enabled only around HLT; every state/selection check runs with IF=0.
 pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskContext {
     let mut polled = false;
+    // Looks again after a re-check found work, at most this many times in a row: work
+    // that tick never takes cannot spin this core with interrupts off for good.
+    let mut rechecks = 0u32;
+    // While this core looks for work it will see a wake without an interrupt: wakers
+    // skip the IPI (`kick`). Cleared, and everything looked at again, before a halt.
+    let polling = &POLLING[sched.core_id as usize];
     loop {
         x86_64::instructions::interrupts::disable();
+        polling.store(true, Ordering::SeqCst);
+        core::sync::atomic::fence(Ordering::SeqCst);
         let current = sched.current_task.load(Ordering::Acquire);
         if !current.is_null() && (*current).state.resume_attached(sched.core_id) {
+            polling.store(false, Ordering::SeqCst);
             log_wake_event("local_resume", current);
             crate::ipc::recv::deliver(current);
             crate::cpu_account::switch(sched.core_id, Some((*current).context.pd_id as u32));
@@ -936,13 +987,17 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
             finish_last_runnable_proof(current);
             return &(*current).context;
         }
+        // The first look for a task waiting on its partner skips housekeeping, as a
+        // handoff does: the answer usually comes within microseconds.
+        if !polled && !current.is_null() && (*current).deliver.load(Ordering::Relaxed) { sched.lean_next.store(true, Ordering::Relaxed); }
         match sched.tick() {
-            ScheduleDecision::Switch { next, .. } => return next,
+            ScheduleDecision::Switch { next, .. } => { polling.store(false, Ordering::SeqCst); return next }
             ScheduleDecision::NoRunnable => {}
         }
         // A dead task with nothing to replace it would hold this core and its own
         // memory for good. Leave its stack so it can finish dying.
         if !current.is_null() && (*current).state.snapshot().exited {
+            polling.store(false, Ordering::SeqCst);
             leave_dead_task(sched, current);
         }
         crate::cpu_account::switch(sched.core_id, None);
@@ -953,6 +1008,12 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
             poll_for_partner(sched, current);
             continue;
         }
+        // A wake that saw this core polling sent no interrupt: look once more after
+        // clearing the flag, or the halt could sleep through it.
+        polling.store(false, Ordering::SeqCst);
+        core::sync::atomic::fence(Ordering::SeqCst);
+        if rechecks < 64 && ((!current.is_null() && (*current).state.snapshot().pending) || sched.has_queued()) { rechecks += 1; continue; }
+        rechecks = 0;
         // Timer interrupts deliberately do not schedule kernel frames. They
         // return here, where pending wakes and retained admissions are retried.
         crate::hal::acpi::idle();
@@ -977,15 +1038,11 @@ const POLL_CYCLES: u64 = 100_000;
 /// The task here waits in a call or reply (syscall 102/103) and this core has nothing
 /// else: its partner usually answers within microseconds, so look for that first.
 unsafe fn poll_for_partner(sched: &Scheduler, current: *mut Task) {
-    let polling = &POLLING[sched.core_id as usize];
-    polling.store(true, Ordering::SeqCst);
     let until = core::arch::x86_64::_rdtsc() + POLL_CYCLES;
     // Device and timer interrupts still arrive: they never switch a kernel frame.
     x86_64::instructions::interrupts::enable();
     while core::arch::x86_64::_rdtsc() < until && !(*current).state.snapshot().pending && !sched.has_queued() { core::hint::spin_loop(); }
     x86_64::instructions::interrupts::disable();
-    polling.store(false, Ordering::SeqCst);
-    core::sync::atomic::fence(Ordering::SeqCst);
 }
 /// Wakes another core for new work, unless it is polling for it anyway.
 fn kick(core: u32) {
@@ -1008,9 +1065,25 @@ pub unsafe fn wait_for_message(regs_ptr: *const crate::interrupts::SyscallRegs) 
         ParkResult::Blocked => {
             (*current).resume_observation_pending.store(true, Ordering::Release);
             log_wake_event("park", current);
+            if (*current).deliver.load(Ordering::Relaxed) { sched.lean_next.store(true, Ordering::Relaxed); }
             begin_last_runnable_proof(sched, current);
             yield_and_switch(regs_ptr);
         }
+        ParkResult::Exited => yield_and_switch(regs_ptr),
+        ParkResult::NotOwner => panic!("WAIT_WITHOUT_ATTACHED_OWNER"),
+    }
+}
+
+/// IPC v2: `wait_for_message` with the caller's own ready check instead of the inbox.
+pub unsafe fn park_current_unless(regs_ptr: *const crate::interrupts::SyscallRegs, ready: impl Fn() -> bool) {
+    x86_64::instructions::interrupts::disable();
+    let core = crate::core_local::CoreLocal::get();
+    let sched = &SCHEDULERS[core.core_id as usize];
+    let current = sched.current_task.load(Ordering::Acquire);
+    if current.is_null() || ready() { return; }
+    match (*current).state.park(core.core_id) {
+        ParkResult::WakeConsumed => {}
+        ParkResult::Blocked => { (*current).resume_observation_pending.store(true, Ordering::Release); begin_last_runnable_proof(sched, current); yield_and_switch(regs_ptr); }
         ParkResult::Exited => yield_and_switch(regs_ptr),
         ParkResult::NotOwner => panic!("WAIT_WITHOUT_ATTACHED_OWNER"),
     }
