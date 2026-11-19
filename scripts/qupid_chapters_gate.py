@@ -98,7 +98,7 @@ def main():
   # B: the 200% boost, heard twice as loud; E: the sound menu changes the preset.
   ss=len(t());q.key('b');g['wait'](r'\[qupid.sound\] boost=200 preset=flat ',ss,30)
   q.key('e');g['wait'](r'\[qupid.sound.menu\] open=1',ss,30)
-  q.key('down');q.key('right');pre=g['wait'](r'\[qupid.sound\] boost=200 preset=(\w+) ',ss,30);assert pre[1]!='flat',pre[0]
+  ss=len(t());q.key('down');time.sleep(.2);q.key('right');pre=g['wait'](r'\[qupid.sound\] boost=200 preset=(\w+) ',ss,30);assert pre[1]!='flat',pre[0]
   menu=g['wait'](r'\[qupid.card\] at_ms=\d+ text=Sound  [^\n]*Boost  200%',ss,30)
   q.key('e');g['wait'](r'\[qupid.sound.menu\] open=0',ss,30)
   g['wait'](r'\[play.done\] frames=\d+ ',s,180)
