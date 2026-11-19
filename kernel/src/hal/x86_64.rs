@@ -8,7 +8,7 @@ use x86_64::registers::control::Cr3;
 
 /// Ring-0 hardening each core turns on (docs/handoff/KERNEL_SECURITY_AUDIT_2026_11_18.md):
 /// SMEP and UMIP where the CPU has them, and enhanced or automatic IBRS against
-/// Spectre v2. Returns (smep, umip, ibrs kind, RDCL_NO). SMAP waits for user-copy helpers.
+/// Spectre v2. Returns (smep, umip, ibrs kind, RDCL_NO). SMAP is turned on after the IDT (crate::smap).
 pub fn harden_core() -> (bool, bool, &'static str, bool) {
     use core::arch::x86_64::__cpuid_count;
     use x86_64::registers::control::{Cr4, Cr4Flags};
@@ -96,7 +96,7 @@ impl HardwareAbstractionLayer for X86Hal {
         // SSE for programs; APs copy CR0/CR4/XCR0/EFER from here.
         unsafe { crate::fpu::init_core(); }
         let (smep, umip, ibrs, rdcl_no) = harden_core();
-        serial_println!("[cpu.hardening] smep={} smap=0 umip={} ibrs={} rdcl_no={} meltdown_pk={}",
+        serial_println!("[cpu.hardening] smep={} umip={} ibrs={} rdcl_no={} meltdown_pk={}",
             smep as u8, umip as u8, ibrs, rdcl_no as u8, if rdcl_no { "no" } else { "possible" });
         serial_println!("[cpu.ibpb] present={} on=leaving_untrusted_domain", has_ibpb() as u8);
         { let (files, mode, size) = crate::fpu::describe(); serial_println!("[fpu.ready] sse=1 xsave_state={} save={} bytes={}", files, mode, size); }
@@ -104,6 +104,9 @@ impl HardwareAbstractionLayer for X86Hal {
         gdt::init();
 
         interrupts::init_idt();
+        // SMAP needs this core's page fault handler first (audit mode, crate::smap).
+        let smap = crate::smap::enable_core();
+        serial_println!("[cpu.smap] present={} mode={}", smap as u8, crate::smap::mode());
         serial_println!("[HAL] GDT/TSS + Star MSR locked under Intel MPK/PKEY isolation (10th-gen+ hardware enforced)");
     }
 

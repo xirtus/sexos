@@ -464,6 +464,9 @@ jobs:
           ${{ runner.temp }}/sexos-runtime
           ${{ runner.temp }}/sexos-usb
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   web:
     name: Browser gates
@@ -515,6 +518,9 @@ jobs:
         name: sexos-browser-proof
         path: ${{ runner.temp }}/sexos-runtime/web-*
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   devices:
     name: Disks, power and fuzzing
@@ -599,6 +605,9 @@ jobs:
           ${{ runner.temp }}/sexos-fuzz
           ${{ runner.temp }}/sexos-drag
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   media:
     name: Browser media streaming and seeking
@@ -634,6 +643,9 @@ jobs:
           ${{ runner.temp }}/sexos-web-seek
           ${{ runner.temp }}/sexos-hda-mic
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   editor:
     name: Quil code editor
@@ -660,6 +672,9 @@ jobs:
           ${{ runner.temp }}/editor-build.log
           ${{ runner.temp }}/sexos-editor
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   profiles:
     name: Proof builds (${{ matrix.gate }})
@@ -832,6 +847,9 @@ jobs:
       with:
         name: sexos-programs-proof
         path: ${{ runner.temp }}/sexos-runtime
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
   reading:
     name: Reading programs
     runs-on: ubuntu-latest
@@ -861,6 +879,9 @@ jobs:
         if-no-files-found: ignore
 
   # Single required check: keeps the old "build" check name for branch rules.
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
   places:
     name: Phone link and maps
     runs-on: ubuntu-latest
@@ -888,6 +909,9 @@ jobs:
           ${{ runner.temp }}/sexos-places
           ${{ runner.temp }}/places-build.log
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   desktop:
     name: Desktop shell
@@ -987,6 +1011,9 @@ jobs:
         name: sexos-desktop-proof
         path: ${{ runner.temp }}/sexos-desktop
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   build:
     if: always()
@@ -1049,6 +1076,9 @@ jobs:
           ${{ runner.temp }}/build.log
           ${{ runner.temp }}/web-jit
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   recording:
     name: Lossless encoder guest proof
@@ -1145,6 +1175,9 @@ jobs:
           ${{ runner.temp }}/productivity-build.log
           ${{ runner.temp }}/sexos-productivity
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   terminal-editor:
     name: Terminal and editor
@@ -1177,6 +1210,9 @@ jobs:
           ${{ runner.temp }}/term-build.log
           ${{ runner.temp }}/sexos-term
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   documents-pictures:
     name: Documents and pictures
@@ -1213,6 +1249,9 @@ jobs:
         if-no-files-found: ignore
 
   # Deliberately unsafe fixture-only image; every other job builds normal flags.
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
   input-payload-proof:
     name: Diagnostic keyboard payload proof (UNSAFE)
     needs: changes
