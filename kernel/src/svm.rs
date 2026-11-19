@@ -97,7 +97,7 @@ const N_CR3: usize = 0xB0; const NEXT_RIP: usize = 0xC8;
 /// ES, CS, SS, DS, FS, GS, LDTR, TR in `State` order; GDTR and IDTR between them.
 const SEGMENTS: [usize; 8] = [0x400, 0x410, 0x420, 0x430, 0x440, 0x450, 0x470, 0x490];
 const GDTR: usize = 0x460; const IDTR: usize = 0x480; const CPL: usize = 0x4CB; const GUEST_EFER: usize = 0x4D0;
-const CR4: usize = 0x548; const CR3: usize = 0x550; const CR0: usize = 0x558; const DR7: usize = 0x560; const DR6: usize = 0x568;
+const CR4: usize = 0x548; const GUEST_CR3: usize = 0x550; const CR0: usize = 0x558; const DR7: usize = 0x560; const DR6: usize = 0x568;
 const RFLAGS: usize = 0x570; const RIP: usize = 0x578; const RSP: usize = 0x5D8; const RAX: usize = 0x5F8;
 const KERNEL_GS: usize = 0x620; const CR2: usize = 0x640; const PAT: usize = 0x668;
 
@@ -152,7 +152,7 @@ unsafe fn load(c: &Caps, v: &Vmcb, st: &abi::State, extra: &[u64; 3], ncr3: u64,
     v.w(IDTR + 4, st.idtr_limit); v.w(IDTR + 8, st.idtr_base);
     v.w(CPL, svm::cpl(st.cr0, st.regs.rflags, svm::attrib(st.segments[2].access)));
     v.w(GUEST_EFER, st.efer | EFER_SVME); // VMRUN requires it; the guest never sees it
-    v.w(CR0, st.cr0); v.w(CR3, st.guest_cr3); v.w(CR4, st.cr4);
+    v.w(CR0, st.cr0); v.w(GUEST_CR3, st.guest_cr3); v.w(CR4, st.cr4);
     v.w(DR7, 0x400u64); v.w(DR6, 0xFFFF_0FF0u64);
     v.w(RFLAGS, (st.regs.rflags & 0x003F_7FD5) | 2);
     v.w(RIP, st.regs.rip); v.w(RSP, st.regs.rsp); v.w(RAX, st.regs.rax);
@@ -162,7 +162,7 @@ unsafe fn load(c: &Caps, v: &Vmcb, st: &abi::State, extra: &[u64; 3], ncr3: u64,
 
 unsafe fn save(c: &Caps, v: &Vmcb, st: &mut abi::State, extra: &mut [u64; 3], exit: &mut abi::Exit) -> (u32, u32) {
     st.regs.rax = v.r(RAX); st.regs.rsp = v.r(RSP); st.regs.rip = v.r(RIP); st.regs.rflags = v.r(RFLAGS);
-    st.cr0 = v.r(CR0); st.guest_cr3 = v.r(CR3); st.cr4 = v.r(CR4);
+    st.cr0 = v.r(CR0); st.guest_cr3 = v.r(GUEST_CR3); st.cr4 = v.r(CR4);
     st.efer = v.r::<u64>(GUEST_EFER) & !EFER_SVME;
     for (s, &at) in st.segments.iter_mut().zip(SEGMENTS.iter()) {
         s.selector = v.r(at); s.access = svm::access(v.r(at + 2)); s.limit = v.r(at + 4); s.base = v.r(at + 8);
