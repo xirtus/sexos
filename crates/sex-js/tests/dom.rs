@@ -1807,3 +1807,44 @@ fn code_cache_runs_the_same_scripts_and_modules() {
     // The classic script is written on its second sighting and read on its third.
     assert!(c.hits >= 5, "hits {} misses {}", c.hits, c.misses);
 }
+
+#[test]
+fn document_position_in_one_host_call() {
+    let mut s = page("<div id=a><p id=b>x<i id=c></i></p><p id=d></p></div><span id=e></span>");
+    s.eval(r#"
+        const $ = id => document.getElementById(id);
+        const [a, b, c, d, e] = ['a', 'b', 'c', 'd', 'e'].map($);
+        const text = b.firstChild, loose = document.createElement('div');
+        console.log(a.compareDocumentPosition(c), c.compareDocumentPosition(a), b.compareDocumentPosition(d), d.compareDocumentPosition(b));
+        console.log(text.compareDocumentPosition(c), c.compareDocumentPosition(text), e.compareDocumentPosition(c), document.compareDocumentPosition(e));
+        console.log(a.compareDocumentPosition(loose) & 33, a.compareDocumentPosition(loose) === a.compareDocumentPosition(loose), b.compareDocumentPosition(b));
+        console.log(a.contains(c), c.contains(a), a.contains(a), b.contains(text), a.contains(loose), a.contains(null));
+        const root = e.attachShadow({ mode: 'open' });
+        root.innerHTML = '<b id=in>s</b>';
+        const inner = root.getElementById('in');
+        console.log(e.contains(inner), root.contains(inner), e.compareDocumentPosition(inner) & 1);
+        // jQuery-style sort: tree order, quickly.
+        const all = [e, d, c, a, b].sort((x, y) => x.compareDocumentPosition(y) & 2 ? 1 : -1).map(n => n.id).join('');
+        console.log(all);
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:20 10 4 2", "0:4 2 2 20", "0:33 true 0", "0:true false true true false false", "0:false true 1", "0:abcde"]);
+}
+
+#[test]
+fn id_lookup_and_small_subtree_queries_after_changes() {
+    let mut s = page("<div id=a><p id=dup>1</p></div><section><p id=dup>2</p><a href=#x>x</a></section>");
+    s.eval(r#"
+        const a = document.getElementById('a');
+        // A later duplicate moved before the first one wins: tree order, not age.
+        a.before(document.querySelector('section'));
+        console.log(document.getElementById('dup').textContent, document.getElementById('nope'));
+        const loose = document.createElement('div');
+        loose.innerHTML = '<span id=in><a>1</a><a>2</a></span>';
+        console.log(document.getElementById('in'), loose.querySelectorAll('*').length, loose.querySelectorAll('a').length);
+        document.body.appendChild(loose);
+        console.log(document.getElementById('in') === loose.firstChild, loose.querySelectorAll('a').length, document.querySelectorAll('a').length);
+        loose.firstChild.id = 'renamed';
+        console.log(document.getElementById('in'), document.getElementById('renamed') === loose.firstChild);
+    "#, "t.js").unwrap();
+    assert_eq!(logs(&mut s), ["0:2 null", "0:null 3 2", "0:true 2 3", "0:null true"]);
+}

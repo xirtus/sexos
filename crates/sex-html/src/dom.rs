@@ -46,6 +46,12 @@ impl Dom {
         self.query_cache.borrow_mut().query(self, root, selectors, all)
     }
 
+    /// `getElementById` under `root`: the first element in tree order with this exact id.
+    pub fn by_id(&self, root: NodeId, id: &str) -> Option<NodeId> {
+        if root >= self.nodes.len() { return None; }
+        self.query_cache.borrow_mut().by_id(self, root, id)
+    }
+
     /// Whether `a` is `n` or one of its ancestors.
     pub fn is_inclusive_ancestor(&self, a: NodeId, mut n: NodeId) -> bool {
         loop {
