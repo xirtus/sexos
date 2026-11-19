@@ -2717,7 +2717,8 @@ fn raster_damage(target: &frame_output::Target<'_>, rect: damage::Rect, scene: &
     }
     let Some(total) = w.checked_mul(h) else { return false; };
     let bar=&scene.bar;
-    let rect=decor::grow(rect,w,h,scene.metrics.bar()as usize,scene.metrics.scale());
+    // Decorations are per pixel: a content change repaints only its own pixels.
+    // Geometry damage (moving windows, their shadows) arrives already grown.
     for y in rect.y..rect.bottom {
         raster_row(fb,y,rect.x,rect.right,w,h,scene);
     }
@@ -5646,7 +5647,7 @@ pub extern "C" fn _start() -> ! {
             let pad = 16;
             damage::Rect { x: (l - pad).max(0) as usize, y: (t - pad).max(0) as usize, right: (r + pad).max(0) as usize, bottom: (b + pad).max(0) as usize }
         });
-        if let Some(rect) = motion_damage { pending_paint.request_damage(rect, w, h, bar_height()); }
+        if let Some(rect) = motion_damage { pending_paint.request_damage(decor::grow(rect, w, h, bar_height(), chrome_metrics().scale()), w, h, bar_height()); }
         if animating {
             if paced {
             static mut MOTION_FRAME_BUDGET: u32 = 96;
