@@ -1,6 +1,10 @@
 //! Deliberately narrow ELF64 shared-object admission. This is not a Linux loader.
 //! Only source-built, freestanding x86_64 SysV objects are supported. The loader
-//! never searches dependencies, runs ELF constructors, or resolves ambient symbols.
+//! never searches dependencies or resolves ambient symbols. The only constructors
+//! it admits are DT_INIT_ARRAY/DT_FINI_ARRAY tables (C `__attribute__((constructor))`
+//! and C++ static initialisers, which LADSPA and LV2 libraries rely on); each
+//! entry must point into the image's own executable code. DT_INIT, DT_FINI and
+//! DT_PREINIT_ARRAY stay refused.
 use alloc::vec::Vec;
 use core::ops::Range;
 pub const PAGE: usize = 4096;
@@ -8,6 +12,8 @@ pub const MAX_FILE: usize = 16 * 1024 * 1024;
 pub const MAX_IMAGE: usize = 32 * 1024 * 1024;
 const MAX_HEADERS: usize = 128;
 const MAX_RELOCS: usize = 65536;
+/// Constructor/destructor table entries admitted per image.
+pub const MAX_CONSTRUCTORS: usize = 256;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
     Format,
@@ -39,6 +45,9 @@ pub struct Image<'a> {
     pub segments: Vec<Segment>,
     sections: Vec<Section>,
     pub size: usize,
+    /// Image-relative ranges of the DT_INIT_ARRAY and DT_FINI_ARRAY tables.
+    pub init_array: Option<Range<usize>>,
+    pub fini_array: Option<Range<usize>>,
 }
 fn u16b(b: &[u8], at: usize) -> Result<u16, Error> {
     Ok(u16::from_le_bytes(
@@ -94,6 +103,8 @@ impl<'a> Image<'a> {
         range(sh, sn * 64, bytes.len())?;
         let mut segments: Vec<Segment> = Vec::new();
         let mut size = 0;
+        // (address, size) for DT_INIT_ARRAY(SZ) and DT_FINI_ARRAY(SZ).
+        let mut tables = [(None, None); 2];
         for i in 0..pn {
             let p = ph + i * 56;
             let kind = u32b(bytes, p)?;
@@ -114,8 +125,20 @@ impl<'a> Image<'a> {
                 for d in (off..off + len).step_by(16) {
                     match u64b(bytes, d)? {
                         1 | 15 | 29 => return Err(Error::Dependency),
-                        12 | 13 | 25 | 26 | 32 => {
+                        12 | 13 | 32 => {
                             if u64b(bytes, d + 8)? != 0 {
+                                return Err(Error::Constructors);
+                            }
+                        }
+                        tag @ (25 | 26) => {
+                            let slot = &mut tables[(tag - 25) as usize].0;
+                            if slot.replace(num(u64b(bytes, d + 8)?)?).is_some() {
+                                return Err(Error::Constructors);
+                            }
+                        }
+                        tag @ (27 | 28) => {
+                            let slot = &mut tables[(tag - 27) as usize].1;
+                            if slot.replace(num(u64b(bytes, d + 8)?)?).is_some() {
                                 return Err(Error::Constructors);
                             }
                         }
@@ -184,12 +207,35 @@ impl<'a> Image<'a> {
             }
             sections.push(section);
         }
-        let image = Self {
+        let mut image = Self {
             bytes,
             segments,
             sections,
             size,
+            init_array: None,
+            fini_array: None,
         };
+        for (i, table) in tables.into_iter().enumerate() {
+            let range = match table {
+                (None, None) | (None, Some(0)) => continue,
+                (Some(at), Some(len)) => {
+                    if at % 8 != 0
+                        || len % 8 != 0
+                        || len / 8 > MAX_CONSTRUCTORS
+                        || (len > 0 && !image.contains(at, len))
+                    {
+                        return Err(Error::Constructors);
+                    }
+                    at..at + len
+                }
+                _ => return Err(Error::Constructors),
+            };
+            if i == 0 {
+                image.init_array = Some(range);
+            } else {
+                image.fini_array = Some(range);
+            }
+        }
         // Preflight all relocation records and symbols BEFORE allocating executable memory.
         image.relocations(|_, _, _| Ok(()))?;
         Ok(image)
@@ -390,6 +436,41 @@ mod tests {
         let p = overlap[64..120].to_vec();
         overlap[120..176].copy_from_slice(&p);
         assert!(matches!(Image::parse(&overlap), Err(Error::Permission)));
+    }
+    fn dynamic(entries: &[(u64, u64)]) -> Vec<u8> {
+        let mut b = fixture();
+        put16(&mut b, 56, 2);
+        put32(&mut b, 120, 2);
+        put64(&mut b, 128, 512);
+        put64(&mut b, 152, entries.len() as u64 * 16);
+        for (i, (tag, value)) in entries.iter().enumerate() {
+            put64(&mut b, 512 + i * 16, *tag);
+            put64(&mut b, 520 + i * 16, *value);
+        }
+        b
+    }
+    #[test]
+    fn constructor_tables_must_be_complete_and_in_image() {
+        let ok = dynamic(&[(25, 4096), (27, 8), (26, 4104), (28, 8)]);
+        let image = Image::parse(&ok).unwrap();
+        assert_eq!(image.init_array, Some(4096..4104));
+        assert_eq!(image.fini_array, Some(4104..4112));
+        for bad in [
+            &[(25u64, 4096u64)][..],
+            &[(27, 8)],
+            &[(25, 4097), (27, 8)],
+            &[(25, 4096), (27, 12)],
+            &[(25, 0x10_0000), (27, 8)],
+            &[(25, 4096), (27, 8 * 257)],
+            &[(25, 4096), (27, 8), (25, 4096)],
+            &[(12, 4096)],
+            &[(32, 4096)],
+        ] {
+            assert!(
+                matches!(Image::parse(&dynamic(bad)), Err(Error::Constructors)),
+                "{bad:?}"
+            );
+        }
     }
     #[test]
     fn no_dynamic_dependency_or_constructor() {
