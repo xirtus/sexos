@@ -15,7 +15,7 @@ const v = document.getElementById('v');
 const AV1 = 'video/mp4; codecs="av01.0.05M.08"; width=320; height=240; framerate=25';
 const VP9 = 'video/webm; codecs="vp09.00.20.08"';
 const OPUS = 'audio/webm; codecs="opus"; channels=2';
-const RANGE = 40000;
+const RANGE = 24000;
 say('types', MediaSource.isTypeSupported(AV1), MediaSource.isTypeSupported(VP9), MediaSource.isTypeSupported(OPUS),
     typeof ReadableStream, typeof SourceBuffer.prototype.changeType);
 let chunks = 0, posts = 0;

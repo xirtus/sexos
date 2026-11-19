@@ -1835,6 +1835,20 @@ fn streams_and_fetch_bodies() {
             console.log('made', made.status, made.ok, made.headers.get('content-type'), (await made.json()).k, made.bodyUsed, await copy.text());
             console.log('stream body', await new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([104, 105])); c.close(); } })).text(), new Response(null).body);
             await made.text().catch(e => console.log('again', e.constructor.name));
+            // Cloning after .body was touched still reads the bytes.
+            const touched = new Response('hello'); void touched.body;
+            console.log('clone touched', await touched.clone().text(), await touched.text());
+            // A failing transform errors the readable side too.
+            const bad = new ReadableStream({ start(c) { c.enqueue('x'); } }).pipeThrough(new TransformStream({ transform() { throw new Error('nope'); } }));
+            await bad.getReader().read().then(() => console.log('bad read'), e => console.log('transform', e.message));
+            // An aborted pipe aborts its destination's sink.
+            const ac2 = new AbortController();
+            let sunk = '';
+            const sink = new WritableStream({ write(ch) { sunk += ch; }, close() { sunk += '|closed'; }, abort(r) { sunk += '|abort ' + r; } });
+            const p = new ReadableStream({ start(c) { c.enqueue('a'); } }).pipeTo(sink, { signal: ac2.signal });
+            for (let i = 0; i < 6; i++) await null;
+            ac2.abort('stop');
+            await p.catch(e => console.log('pipe', e, sunk));
         })();
         // fetch: the body streams in pieces; an aborted fetch rejects.
         fetch('/videoplayback', { method: 'POST', body: new Uint8Array([1, 2, 3]) }).then(async r => {
@@ -1865,12 +1879,15 @@ fn streams_and_fetch_bodies() {
     l.sort();
     assert_eq!(l, [
         "0:again TypeError",
+        "0:clone touched hello hello",
         "0:decoded c©!",
-        "0:fetch body 200 3 150000 true",
+        "0:fetch body 200 10 150000 true",
         "0:made 201 true text/plain;charset=UTF-8 1 true {\"k\":1}",
+        "0:pipe stop a|abort stop",
         "0:req 5",
         "0:slow AbortError",
         "0:stream body hi null",
         "0:streams AB AB true false",
+        "0:transform nope",
     ]);
 }

@@ -3089,8 +3089,9 @@
         if (signal) {
           const abort = () => {
             if (stop) return;
+            stop = true;
             const r = signal.reason;
-            Promise.all([opts.preventAbort ? null : dest.abort(r), opts.preventCancel ? null : this._cancel(r)]).catch(() => {}).then(() => finish(r, true));
+            Promise.all([opts.preventAbort ? null : writer.abort(r), opts.preventCancel ? null : this._cancel(r)]).catch(() => {}).then(() => finish(r, true));
           };
           if (signal.aborted) { abort(); return; }
           signal.addEventListener('abort', abort);
@@ -3208,12 +3209,14 @@
         terminate: () => { try { rc.close(); } catch (e) {} },
         get desiredSize() { return rc.desiredSize; },
       };
-      let started;
-      try { started = transformer.start ? transformer.start(tc) : undefined; } catch (e) { started = Promise.reject(e); }
+      // A failing transformer errors both sides, so readers don't wait forever.
+      const fail = e => { rc.error(e); throw e; };
+      const run = f => { try { return Promise.resolve(f()).catch(fail); } catch (e) { return Promise.reject(e).catch(fail); } };
+      const started = run(() => transformer.start ? transformer.start(tc) : undefined);
       this.writable = new WritableStream({
         start: () => started,
-        write: chunk => transformer.transform ? transformer.transform(chunk, tc) : tc.enqueue(chunk),
-        close: () => Promise.resolve(transformer.flush ? transformer.flush(tc) : undefined).then(() => { try { rc.close(); } catch (e) {} }),
+        write: chunk => run(() => transformer.transform ? transformer.transform(chunk, tc) : tc.enqueue(chunk)),
+        close: () => run(() => transformer.flush ? transformer.flush(tc) : undefined).then(() => { try { rc.close(); } catch (e) {} }),
         abort: r => { rc.error(r); },
       });
     }
@@ -3297,8 +3300,9 @@
     else if (body instanceof Blob && body.type) headers.set('content-type', body.type);
   }
   // A body as a stream of Uint8Array pieces, as a browser hands a download over.
-  const BODY_PIECE = 64 * 1024;
+  const BODY_PIECE = 16 * 1024;
   function bytesStream(take) {
+    // take() runs once, on the first read.
     let bytes = null, at = 0;
     return new ReadableStream({
       type: 'bytes',
@@ -3317,7 +3321,14 @@
     get body() {
       if (this._stream) return this._stream;
       if (this._id === null && this._src === null) return null;
-      this._stream = this._src instanceof ReadableStream ? this._src : bytesStream(() => this._raw());
+      if (this._src instanceof ReadableStream) return this._stream = this._src;
+      // The stream owns the bytes from here on, whatever later happens to _src (clone).
+      const id = this._id, src = this._src;
+      this._id = null;
+      this._stream = bytesStream(id === null ? () => plainBytes(src) : () => {
+        const v = H(OP.FETCH_BODY | 0x10000, '' + id);
+        return v === null ? new Uint8Array(0) : new Uint8Array(v);
+      });
       return this._stream;
     },
     // The whole body now (not for a stream body).

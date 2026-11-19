@@ -12,7 +12,7 @@ youtube.com, so this proves on local fixtures the exact shapes the live embed ru
   `TransformStream`, queuing strategies, `TextDecoderStream` (UTF-8 split across
   chunks) and `TextEncoderStream`. There were none before (`typeof ReadableStream`
   was "undefined"). BYOB readers are refused with a TypeError.
-- `Response.body` is a ReadableStream of Uint8Array pieces (64 KiB each); it was null.
+- `Response.body` is a ReadableStream of Uint8Array pieces (16 KiB each); it was null.
   `bodyUsed` follows reads through it. Text from the browser still skips the JS UTF-8
   decoder when nothing touched the stream.
 - `new Response(body, init)` works for pages (string, bytes, Blob, URLSearchParams,
