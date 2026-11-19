@@ -25,6 +25,23 @@ mod guest {
     const RESTART: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/restart.clap"));
     const VST: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/gain.vst3"));
     const HANG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/hang.clap"));
+    const LOWPASS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/lowpass.ladspa"));
+    const AMP: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/amp.lv2b"));
+    /// LADSPA T5 low-pass at 1 kHz: the Nyquist part of the right channel is
+    /// removed and both channels settle to the 0.125 DC both carry.
+    fn lowpass_ok(pcm: &[[f32; 2]]) -> bool {
+        pcm.len() == 1025
+            && pcm[pcm.len() - 256..]
+                .iter()
+                .all(|f| (f[0] - 0.125).abs() < 0.01 && (f[1] - 0.125).abs() < 0.01)
+    }
+    /// LV2 eg-amp at -6.02 dB halves every sample.
+    fn amp_ok(pcm: &[[f32; 2]]) -> bool {
+        pcm.iter().enumerate().all(|(i, v)| {
+            let want = [0.0625, if i % 2 == 0 { 0.25 } else { -0.125 }];
+            (v[0] - want[0]).abs() < 1e-4 && (v[1] - want[1]).abs() < 1e-4
+        })
+    }
     fn nonce() -> Option<[u8; 16]> {
         let seed = unsafe { core::arch::x86_64::__cpuid_count(7, 0).ebx & (1 << 18) != 0 };
         let rand = unsafe { core::arch::x86_64::__cpuid(1).ecx & (1 << 30) != 0 };
@@ -256,7 +273,7 @@ mod guest {
         let column = app.ui.column(app.ui.root());
         app.ui
             .text(column, "Offline plugin helper", TextStyle::Title);
-        app.ui.paragraph(column,"Source-built upstream CLAP template and VST3 Gain. Separate domain; crash containment only. Ordinary OS plugin binaries and hostile sandboxing are not qualified.");
+        app.ui.paragraph(column,"Source-built upstream CLAP template, VST3 Gain, T5 LADSPA low-pass and LV2 eg-amp. Separate domain; crash containment only. Ordinary OS plugin binaries and hostile sandboxing are not qualified.");
         let row = app.ui.row(column);
         let buttons = [
             app.ui.button(row, "Render"),
@@ -266,6 +283,8 @@ mod guest {
             app.ui.button(row, "VST3 gain"),
             app.ui.button(row, "Restart request"),
             app.ui.button(row, "Receipt wait"),
+            app.ui.button(row, "LADSPA low-pass"),
+            app.ui.button(row, "LV2 amp"),
         ];
         let status = app.ui.label(column, "Ready");
         let alive = app.ui.button(column, "Parent still works");
@@ -320,6 +339,8 @@ mod guest {
                     let st = j.status();
                     let result = j.take_result();
                     let pass = match result {
+                        Ok(Some(pcm)) if selected == 7 => lowpass_ok(&pcm),
+                        Ok(Some(pcm)) if selected == 8 => amp_ok(&pcm),
                         Ok(Some(pcm)) => pcm.iter().enumerate().all(|(i, v)| {
                             *v == if selected == 4 {
                                 [0.03125, if i % 2 == 0 { 0.125 } else { -0.0625 }]
@@ -341,6 +362,10 @@ mod guest {
                         if pass {
                             if selected == 4 {
                                 "VST3 gain 0.25 verified"
+                            } else if selected == 7 {
+                                "LADSPA low-pass verified"
+                            } else if selected == 8 {
+                                "LV2 amp -6 dB verified"
                             } else {
                                 "CLAP stereo swap verified"
                             }
@@ -360,8 +385,8 @@ mod guest {
                 sex_app::launch::exit(0)
             }
             let mut responses = Vec::new();
-            if let Some(e) = app.window.next_within(20) {
-                responses.extend(app.ui.handle(event(e)));
+            if let Some(e) = app.window.next_within(20).and_then(event) {
+                responses.extend(app.ui.handle(e));
             }
             app.ui.tick(now);
             for response in responses {
@@ -401,6 +426,8 @@ mod guest {
                     let output = format!("@/data/moanrack/{hex}.out");
                     let binary = match i {
                         4 => VST,
+                        7 => LOWPASS,
+                        8 => AMP,
                         5 => RESTART,
                         6 => SWAP,
                         _ => [SWAP, CRASH, HANG][i],
@@ -418,15 +445,17 @@ mod guest {
                             nonce,
                             counter,
                             &pcm,
-                            if i == 4 {
-                                &[moan_plugin::job::Parameter { id: 0, value: 0.25 }]
-                            } else {
-                                &[]
+                            match i {
+                                4 => &[moan_plugin::job::Parameter { id: 0, value: 0.25 }][..],
+                                7 => &[moan_plugin::job::Parameter { id: 2, value: 1000.0 }][..],
+                                8 => &[moan_plugin::job::Parameter { id: 0, value: -6.0206 }][..],
+                                _ => &[],
                             },
-                            if i == 4 {
-                                moan_plugin::job::Format::Vst3
-                            } else {
-                                moan_plugin::job::Format::Clap
+                            match i {
+                                4 => moan_plugin::job::Format::Vst3,
+                                7 => moan_plugin::job::Format::Ladspa,
+                                8 => moan_plugin::job::Format::Lv2,
+                                _ => moan_plugin::job::Format::Clap,
                             },
                             now,
                         )

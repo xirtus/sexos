@@ -1,4 +1,5 @@
-//! Disposable offline CLAP helper. No window, network request or parent pointers.
+//! Disposable offline plugin helper (CLAP, VST3, LADSPA, LV2). No window,
+//! network request or parent pointers.
 #![no_std]
 #![no_main]
 extern crate alloc;
@@ -73,12 +74,7 @@ fn run() -> Result<(), ()> {
         || parts[1] != b"@/plugin"
         || parts[2] != b"@/request"
         || parts[3] != b"@/result"
-        || parts[4]
-            != (if admitted.format == 0 {
-                b"clap"
-            } else {
-                b"vst3"
-            })
+        || Some(parts[4]) != job::Format::from_id(admitted.format as u8).map(|f| f.token())
     {
         return Err(());
     }
@@ -109,7 +105,22 @@ fn run() -> Result<(), ()> {
         own.task
     );
     bootstrap::ready(admitted)?;
-    let mapped = Mapped::load(&binary).map_err(|_| ())?;
+    // An LV2 job carries a packed bundle: its Turtle is read here, in safe code,
+    // before the library inside it is mapped.
+    let lv2 = if parts[4] == b"lv2" {
+        let bundle = moan_plugin::lv2::Bundle::decode(&binary).map_err(|_| ())?;
+        let plugin = moan_plugin::lv2::describe(&bundle).map_err(|_| ())?;
+        let library = bundle.get(plugin.binary.as_bytes()).ok_or(())?;
+        let start = library.as_ptr() as usize - binary.as_ptr() as usize;
+        Some((plugin, start..start + library.len()))
+    } else {
+        None
+    };
+    let library = match &lv2 {
+        Some((_, range)) => &binary[range.clone()],
+        None => &binary[..],
+    };
+    let mapped = Mapped::load(library).map_err(|_| ())?;
     sex_pdx::serial_record!("[moanplug.native] pd={} task={} ready=1", own.pd, own.task);
     let start = sex_pdx::get_ticks();
     let rendered = match parts[4] {
@@ -126,6 +137,28 @@ fn run() -> Result<(), ()> {
                 ()
             })?
         }
+        b"ladspa" => unsafe {
+            let entry = core::mem::transmute::<*const u8, moan_plugin::ladspa::Entry>(
+                mapped.export(library, b"ladspa_descriptor").map_err(|_| ())?,
+            );
+            let mut plugin = moan_plugin::ladspa::Processor::open(entry, &request.parameters)
+                .map_err(|_| ())?;
+            plugin.render(&request.pcm).map_err(|_| ())?
+        },
+        b"lv2" => unsafe {
+            let (description, _) = lv2.as_ref().ok_or(())?;
+            let entry = core::mem::transmute::<*const u8, moan_plugin::lv2::Entry>(
+                mapped.export(library, b"lv2_descriptor").map_err(|_| ())?,
+            );
+            let mut plugin =
+                moan_plugin::lv2::Processor::open(entry, description, &request.parameters)
+                    .map_err(|e| {
+                        if e == moan_plugin::native::Error::Feature {
+                            sex_pdx::serial_record!("[moanplug.rejected] format=lv2 reason=feature");
+                        }
+                    })?;
+            plugin.render(&request.pcm).map_err(|_| ())?
+        },
         b"vst3" => unsafe {
             let entry = core::mem::transmute::<
                 *const u8,

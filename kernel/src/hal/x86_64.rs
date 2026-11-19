@@ -55,7 +55,8 @@ impl X86Hal {
 
 impl HardwareAbstractionLayer for X86Hal {
     fn init(&self) {
-        if !self.is_paging_ready() {
+        let bsp = !self.is_paging_ready();
+        if bsp {
             // Cycles since power-on at kernel entry: boot time without the loader.
             serial_println!("[boot.kernel_entry] tsc={}", unsafe { core::arch::x86_64::_rdtsc() });
             serial_println!("X86Hal: Initializing foundation (BSP)...");
@@ -78,6 +79,7 @@ impl HardwareAbstractionLayer for X86Hal {
             crate::pku::set_pku_enabled(false);
             serial_println!("PKU: unsupported on this CPU/QEMU path; PKRU ops gated off");
         }
+        if bsp { crate::gate::init(); }
 
         // SSE for programs; APs copy CR0/CR4/XCR0/EFER from here.
         unsafe { crate::fpu::init_core(); }
