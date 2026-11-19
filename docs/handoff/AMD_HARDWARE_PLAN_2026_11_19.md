@@ -28,7 +28,7 @@ threads.
 | A5 | Pixel clock and modeset: DCCG DTO readout (exact clock without EDID), then full modeset (DIG, PHY link training) | host + receipt | |
 | A6 | Backlight (eDP AUX backlight and the ABM/PWM path), PSR | receipt | |
 | P1 | CPPC on Zen 2 (shared-memory `_CPC` from ACPI): belongs in `sexacpi` (AML), not the kernel | `laptop_power_gate.py` style SSDT | |
-| P2 | Preferred cores: CPPC highest-perf ranking into the scheduler's core order (Zen 4/5 laptops boost two cores) | host | |
+| P2 | Preferred cores: CPPC highest-perf ranking into the scheduler's core order (Zen 4/5 laptops boost two cores) | host | code in: each core's HWP/CPPC highest perf orders the program cores (`smp::program_core`), `[smp.preferred]` at boot; QEMU reports none, so CI placement is unchanged |
 | P3 | Laptop vendor bits on AMD (ASUS/Lenovo WMI, AMD PMF platform profiles): build on the x17 thread's `sex-laptop` WMI module and its CTL_PROFILE forwarding | SSDT gate | |
 | P4 | IP discovery: read the discovery table so DCN base and versions are known on any new chip instead of from the device table | receipt | |
 

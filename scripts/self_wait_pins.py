@@ -60,6 +60,8 @@ PINS = (
 
     ('timed', 'kernel/src/smp.rs', 'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325'),
 
+    ('timed', 'kernel/src/smp.rs', 'b70ef0379662d01aa7559855d91b63c82d45146d10302f05e101717aa33aeac2'),  # preferred-core order (PROGRAM_ORDER, rank_program_cores), no wait change, 2026-11-20
+
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:235c80ce88b369d9d1da26b934e188c056b5e24330b1c242801deaf2e3854c86'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
     ('timed', 'kernel/src/interrupts.rs', 'c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d'),
