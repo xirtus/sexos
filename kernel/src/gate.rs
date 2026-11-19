@@ -15,6 +15,9 @@
 //! through the HHDM alias, which PKU does not cover. Stubs live below the service code
 //! (`loader::elf::pd_code_base`), so every entry is in rel32 reach.
 //!
+//! A Gate may also be exported under a number; a service holding a route (Domain
+//! capability) to its owner binds it with OP_BIND_ROUTE.
+//!
 //! Not yet: nested gate calls (a callee calling a third service on the caller's task),
 //! freeing areas when a task ends, and unwinding a caller whose callee dies (P6.2d).
 use alloc::vec::Vec;
@@ -51,7 +54,7 @@ pub static ON: AtomicBool = AtomicBool::new(false);
 static USABLE: AtomicBool = AtomicBool::new(false);
 static AREAS: AtomicU64 = AtomicU64::new(0);
 
-struct Gate { object: u32, generation: u32, callee: u32, entry: u64 }
+struct Gate { object: u32, generation: u32, callee: u32, entry: u64, export: u64 }
 struct Bound { object: u32, generation: u32, caller: u32 }
 struct State {
     gates: Vec<Gate>,
@@ -124,10 +127,10 @@ fn sweep(st: &mut State) {
     }
 }
 
-/// OP_CREATE: a Gate into the caller's own code at `entry`.
-fn create(entry: u64) -> Result<u64, u64> {
+/// OP_CREATE: a Gate into the caller's own code at `entry`, exported as `export`.
+fn create(entry: u64, export: u64) -> Result<u64, u64> {
     let pd = me();
-    if !trusted(pd) { return Err(E_RIGHTS); }
+    if !trusted(pd) || export > 255 { return Err(E_RIGHTS); }
     let pte = crate::memory::manager::read_pte_flags(VirtAddr::new(entry)).map_err(|_| E_RIGHTS)?;
     if pte & F::USER_ACCESSIBLE.bits() == 0 || pte & F::NO_EXECUTE.bits() != 0 || ((pte >> 59) & 0xF) as u8 != pd.pku_key {
         return Err(E_RIGHTS);
@@ -135,7 +138,11 @@ fn create(entry: u64) -> Result<u64, u64> {
     let cap = OBJECTS.create(pd.id).ok_or(E_FULL)?;
     let mut st = STATE.lock();
     sweep(&mut st);
-    st.gates.push(Gate { object: cap.object, generation: cap.generation, callee: pd.id, entry });
+    if export != 0 && st.gates.iter().any(|g| g.callee == pd.id && g.export == export) {
+        OBJECTS.destroy(cap.object);
+        return Err(sex_pdx::endpoint::E_BUSY);
+    }
+    st.gates.push(Gate { object: cap.object, generation: cap.generation, callee: pd.id, entry, export });
     match table(pd).install(CapabilityData::Gate(cap)) {
         Ok(slot) => Ok(slot as u64),
         Err(_) => { OBJECTS.destroy(cap.object); st.gates.pop(); Err(E_FULL) }
@@ -154,17 +161,29 @@ fn destroy(slot: u32) -> Result<u64, u64> {
     Ok(0)
 }
 
-/// OP_BIND: the stub for (this Gate, the caller's domain), and this task's area.
-fn bind(slot: u32) -> Result<u64, u64> {
+/// OP_BIND: the Gate capability in `slot`. OP_BIND_ROUTE: the Gate the service behind
+/// the route in `slot` exported as `export`; holding the route is the authority.
+fn bind(slot: u32, route: Option<u64>) -> Result<u64, u64> {
     if !KEY_FREE || !USABLE.load(Ordering::Acquire) { return Err(UNAVAILABLE); }
     let caller = me();
-    let Some(CapabilityData::Gate(cap)) = table(caller).find(slot).map(|c| c.data) else { return Err(sex_pdx::ERR_CAP_INVALID) };
-    if !OBJECTS.live(&cap) { return Err(E_CLOSED); }
-    if !cap.allows(rights::CALL) || !trusted(caller) { return Err(E_RIGHTS); }
+    if !trusted(caller) { return Err(E_RIGHTS); }
     let mut st = STATE.lock();
     sweep(&mut st);
-    let (callee, entry) = st.gates.iter().find(|g| g.object == cap.object && g.generation == cap.generation)
-        .map(|g| (g.callee, g.entry)).ok_or(E_CLOSED)?;
+    let found = match route {
+        None => {
+            let Some(CapabilityData::Gate(cap)) = table(caller).find(slot).map(|c| c.data) else { return Err(sex_pdx::ERR_CAP_INVALID) };
+            if !OBJECTS.live(&cap) { return Err(E_CLOSED); }
+            if !cap.allows(rights::CALL) { return Err(E_RIGHTS); }
+            st.gates.iter().find(|g| g.object == cap.object && g.generation == cap.generation)
+        }
+        Some(export) => {
+            let held = crate::capability_slot::decode_capability_slot(slot as u64).and_then(|s| table(caller).find(s));
+            let Some(CapabilityData::Domain(target)) = held.map(|c| c.data) else { return Err(sex_pdx::ERR_CAP_INVALID) };
+            st.gates.iter().find(|g| g.callee == target && export != 0 && g.export == export)
+        }
+    };
+    let (object, generation, callee, entry) = found.map(|g| (g.object, g.generation, g.callee, g.entry)).ok_or(E_CLOSED)?;
+    let cap = ObjectCap { object, generation, rights: 0, badge: 0 };
     let callee = crate::ipc::DOMAIN_REGISTRY.get(callee).ok_or(E_CLOSED)?;
     if !trusted(callee) || callee.pku_key == caller.pku_key { return Err(E_RIGHTS); }
     let areas = match AREAS.load(Ordering::Acquire) {
@@ -244,8 +263,9 @@ fn area(st: &mut State, areas: u64, caller: &ProtectionDomain, callee: &Protecti
 pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
     let slot = (regs.rdi >> 8) as u32;
     let result = match regs.rdi & 0xFF {
-        OP_CREATE => create(regs.rsi),
-        OP_BIND => bind(slot),
+        OP_CREATE => create(regs.rsi, regs.rdx),
+        OP_BIND => bind(slot, None),
+        OP_BIND_ROUTE => bind(slot, Some(regs.rsi)),
         OP_DESTROY => destroy(slot),
         _ => Err(sex_pdx::ERR_CAP_INVALID),
     };

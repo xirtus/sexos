@@ -22,6 +22,7 @@ mod fs_service;
 mod config_store;
 mod password_store;
 mod bt_bonds;
+mod gate_ping;
 mod recording_role;
 mod recording_image;
 mod recording_journal;

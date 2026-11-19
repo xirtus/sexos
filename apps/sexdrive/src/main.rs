@@ -22,6 +22,7 @@ mod raid;
 mod ahci;
 mod controller_ready;
 mod apst;
+mod gate_ping;
 use dma_transfer::DmaTransfer;
 use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
 use sex_pdx::memory_region::{RegionView, QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
@@ -3688,6 +3689,7 @@ fn fill_initial_frame(shared_addr:u64){
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexdrive.init.start]");
+    gate_ping::export();
     if init_dma_region() {
         lend_block_buffer();
         nvme_probe_bar();

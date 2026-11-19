@@ -45,6 +45,7 @@ mod crash_keeper;
 mod config_store;
 mod password_store;
 mod bt_bonds;
+mod gate_ping;
 
 use crate::trampoline::trampoline_main;
 
