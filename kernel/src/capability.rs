@@ -1,22 +1,7 @@
-use core::sync::atomic::{AtomicU32, Ordering, AtomicPtr};
-use crate::cheri::SexCapability;
+use core::sync::atomic::{AtomicU32, AtomicPtr};
 use core::ptr;
-use alloc::collections::{BTreeMap, VecDeque};
+use alloc::collections::VecDeque;
 use spin::Mutex;
-
-/// Capability Types
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CapabilityKind {
-    Memory, DMA, IPC, Interrupt, Domain, Node, Spawn, Pci, Network, Socket, MemLend, RemoteProxy, VfsNode,
-    InputRing, MessageQueue, Region, FramePool, PagerMapping, DemandRegion, AppLifecycle, EntropySource, ClockSource, TrustPolicy,
-}
-
-#[repr(C, align(64))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GlobalCapId {
-    pub node_id: u32, pub local_id: u32, pub generation: u32,
-    pub padding: [u32; 13],
-}
 
 #[derive(Debug, Clone, Copy)]
 pub struct MemLendCapData { 
@@ -32,16 +17,10 @@ pub struct MemLendCapData {
 pub struct IpcCapData { pub node_id: u32, pub target_pd_id: u32 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct MemoryCapData { pub cheri_cap: SexCapability, pub pku_key: u8 }
-
-#[derive(Debug, Clone, Copy)]
 pub struct InterruptCapData { pub irq: u8 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct NodeCapData { pub node_id: u32, pub sexdrive_pd_id: u32, pub inode_id: u64, pub permissions: u8 }
-
-#[derive(Debug, Clone, Copy)]
-pub struct SpawnCapData { pub max_pds: u32, pub allowed_pku_keys: u32 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct PciCapData { pub bus: u8, pub dev: u8, pub func: u8, pub vendor_id: u16, pub device_id: u16,
@@ -80,23 +59,20 @@ impl core::fmt::Debug for DisplayHardwareLease {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct NetworkCapData { pub interface_id: u32, pub mac_address: [u8; 6] }
-
-#[derive(Debug, Clone, Copy)]
-pub struct SocketCapData { pub protocol: u8, pub local_port: u16, pub remote_addr: [u8; 4], pub remote_port: u16 }
-
-#[derive(Debug, Clone, Copy)]
 pub struct DmaCapData { pub phys_addr: u64, pub length: u64, pub pku_key: u8 }
 
-#[derive(Debug, Clone, Copy)]
-pub struct VfsNodeCapData { pub inode_id: u64, pub permissions: u32, pub generation: u64 }
+pub use crate::capability_table::{rights, ObjectCap};
 
 #[derive(Debug, Clone, Copy)]
 pub enum CapabilityData {
-    Memory(MemoryCapData), DMA(DmaCapData), IPC(IpcCapData), Interrupt(InterruptCapData),
-    Domain(u32), Node(NodeCapData), Spawn(SpawnCapData), Pci(PciCapData),
-    Network(NetworkCapData), Socket(SocketCapData), MemLend(MemLendCapData), RemoteProxy(GlobalCapId),
-    VfsNode(VfsNodeCapData),
+    /// IPC v2 rendezvous endpoint (kernel/src/ipc_v2/endpoint.rs).
+    Endpoint(ObjectCap),
+    /// IPC v2 notification word, OR-ed by signalers (ipc_v2/notification.rs).
+    Notification(ObjectCap),
+    /// One-shot reply to one call; `generation` is the caller's incarnation.
+    Reply(ObjectCap),
+    DMA(DmaCapData), IPC(IpcCapData), Interrupt(InterruptCapData),
+    Domain(u32), Node(NodeCapData), Pci(PciCapData), MemLend(MemLendCapData),
     Region(sex_pdx::memory_region::RegionGrant),
     FramePool(crate::paging_state::FramePoolGrant),
     PagerMapping(crate::paging_state::PagerMappingGrant),
@@ -120,8 +96,31 @@ pub enum CapabilityData {
 pub struct Capability {
     pub id: u32,
     pub data: CapabilityData,
-    /// Phase 14: CHERI Prep - aligned capability metadata
-    pub cheri_meta: u64,
+}
+
+impl CapabilityData {
+    /// Slot tag of the one-shot reply kind (tags 0 and 1 are the table's).
+    pub const REPLY_TAG: u8 = 4;
+
+    /// The inline form of an object capability: its table tag and fields.
+    /// Every other kind is a BOOT record and returns None.
+    pub fn object_tag(&self) -> Option<(u8, ObjectCap)> {
+        match *self {
+            CapabilityData::Endpoint(cap) => Some((2, cap)),
+            CapabilityData::Notification(cap) => Some((3, cap)),
+            CapabilityData::Reply(cap) => Some((Self::REPLY_TAG, cap)),
+            _ => None,
+        }
+    }
+
+    pub fn from_object_tag(tag: u8, cap: ObjectCap) -> Option<Self> {
+        match tag {
+            2 => Some(CapabilityData::Endpoint(cap)),
+            3 => Some(CapabilityData::Notification(cap)),
+            Self::REPLY_TAG => Some(CapabilityData::Reply(cap)),
+            _ => None,
+        }
+    }
 }
 
 pub use crate::capability_table::CapabilityTable;
@@ -162,7 +161,6 @@ pub struct ProtectionDomain {
     pub base_pkru_mask: u32,
     pub current_pkru_mask: AtomicU32,
     pub cap_table: *mut CapabilityTable,
-    pub signal_handlers: AtomicPtr<BTreeMap<i32, u64>>,
     pub signal_ring: *mut RingBuffer<u8, 32>,
     pub message_ring: *mut RingBuffer<MessageType, 256>,
     pub main_task: AtomicPtr<crate::scheduler::Task>,
@@ -180,8 +178,7 @@ impl ProtectionDomain {
             id, pku_key,
             base_pkru_mask: pkru_mask,
             current_pkru_mask: AtomicU32::new(pkru_mask),
-            cap_table: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(CapabilityTable::new())),
-            signal_handlers: AtomicPtr::new(alloc::boxed::Box::into_raw(alloc::boxed::Box::new(BTreeMap::new()))),
+            cap_table: CapabilityTable::new_boxed(),
             signal_ring: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RingBuffer::new())),
             message_ring: alloc::boxed::Box::into_raw(alloc::boxed::Box::new(RingBuffer::new())),
             main_task: AtomicPtr::new(ptr::null_mut()),
@@ -205,7 +202,6 @@ impl ProtectionDomain {
             base_pkru_mask: pkru_mask,
             current_pkru_mask: AtomicU32::new(pkru_mask),
             cap_table, signal_ring, message_ring,
-            signal_handlers: AtomicPtr::new(alloc::boxed::Box::into_raw(alloc::boxed::Box::new(BTreeMap::new()))),
             main_task: AtomicPtr::new(ptr::null_mut()),
             trampoline_task: AtomicPtr::new(ptr::null_mut()),
             incoming_replies: Mutex::new(VecDeque::new()),
@@ -225,52 +221,5 @@ impl ProtectionDomain {
 
     pub fn find_capability(&self, id: u32) -> Option<Capability> {
         unsafe { (*self.cap_table).find(id) }
-    }
-
-    /// Formal Verification Hook: Lent Memory Ownership
-    /// Asserts that a lent capability has a valid and tracked origin.
-    pub fn verify_ownership(&self, cap_id: u32) -> bool {
-        if let Some(cap) = unsafe { (*self.cap_table).find(cap_id) } {
-            if let CapabilityData::MemLend(data) = cap.data {
-                // [Verified in DESIGN_PHASE14]
-                // Rule: Lent capabilities must track their source PD.
-                return data.source_pd_id != 0;
-            }
-        }
-        false
-    }
-
-    pub fn set_signal_handler(&self, signo: i32, handler: u64) {
-        loop {
-            let old_ptr = self.signal_handlers.load(Ordering::Acquire);
-            let old_map = unsafe { &*old_ptr };
-            let mut new_map = old_map.clone();
-            new_map.insert(signo, handler);
-            let new_ptr = alloc::boxed::Box::into_raw(alloc::boxed::Box::new(new_map));
-            if self.signal_handlers.compare_exchange(old_ptr, new_ptr, Ordering::AcqRel, Ordering::Relaxed).is_ok() {
-                break;
-            } else {
-                unsafe { let _ = alloc::boxed::Box::from_raw(new_ptr); }
-            }
-        }
-    }
-
-    pub fn get_signal_handler(&self, signo: i32) -> Option<u64> {
-        let ptr = self.signal_handlers.load(Ordering::Acquire);
-        let map = unsafe { &*ptr };
-        map.get(&signo).copied()
-    }
-
-    pub fn activate_memory_cap(&self, cap_id: u32) -> Result<(), &'static str> {
-        let cap = unsafe { (*self.cap_table).find(cap_id).ok_or("Cap: Not found")? };
-        if let CapabilityData::Memory(data) = cap.data {
-            if !data.cheri_cap.is_valid() { return Err("CHERI violation"); }
-            let shift = data.pku_key * 2;
-            let mut current = self.current_pkru_mask.load(Ordering::Acquire);
-            current &= !(0b01 << shift); 
-            if (data.cheri_cap.permissions & 2) != 0 { current &= !(0b10 << shift); } 
-            self.current_pkru_mask.store(current, Ordering::Release);
-            Ok(())
-        } else { Err("Not memory cap") }
     }
 }

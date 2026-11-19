@@ -13,6 +13,8 @@ use crate::{css::{self, Selector}, dom::{Dom, Kind, NodeId}};
 
 /// Most candidates checked by ancestor walks before the tree order is rebuilt.
 const FEW: usize = 64;
+/// Subtrees up to this many nodes are walked rather than ordering the whole document.
+const SMALL: usize = 1024;
 const MAX_NODES: usize = 32768;
 const MAX_TOKENS: usize = 131072;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
@@ -153,6 +155,21 @@ impl Cache {
 
     pub(crate) fn tree_changed(&mut self) { self.order = None; }
 
+    /// The first element in tree order under `root` (inclusive) whose id is exactly `id`,
+    /// from the id index when there is one; otherwise a walk.
+    pub(crate) fn by_id(&mut self, dom: &Dom, root: NodeId, id: &str) -> Option<NodeId> {
+        if !self.attempted { self.keys = Keys::build(dom); self.attempted = true; }
+        let Some(keys) = &self.keys else {
+            return dom.descendants(root).into_iter().find(|&n| dom.attr(n, "id") == Some(id));
+        };
+        let mut found: Vec<NodeId> = keys.ids.get(id).map(|v| v.iter().copied().filter(|&n| dom.is_inclusive_ancestor(root, n)).collect()).unwrap_or_default();
+        if found.len() > 1 {
+            if let Some(o) = &self.order { found.sort_unstable_by_key(|&n| o.rank[n]); }
+            else { found.sort_unstable_by_key(|&n| position(dom, n)); }
+        }
+        found.first().copied()
+    }
+
     pub(crate) fn query(&mut self, dom: &Dom, root: NodeId, selectors: &[Selector], all: bool) -> Vec<NodeId> {
         if !self.attempted { self.keys = Keys::build(dom); self.attempted = true; }
         let Some(keys) = &self.keys else { return walk(dom, root, selectors, all) };
@@ -162,8 +179,16 @@ impl Cache {
                 // Every element is a candidate: walking the subtree costs no more than
                 // rebuilding the order, unless the subtree is a whole tree.
                 if dom.nodes[root].parent.is_some() { return walk(dom, root, selectors, all); }
+                // A detached element (just made, as for jQuery's support tests) is
+                // usually tiny.
+                if root != Dom::ROOT { if let Some(found) = walk_small(dom, root, selectors, all) { return found; } }
             } else if lists.iter().map(|l| l.map_or(0, <[_]>::len)).sum::<usize>() <= FEW {
                 return few(dom, root, selectors, &lists, all);
+            } else if root != Dom::ROOT {
+                // A query under one element (attached or not) right after a change,
+                // as jQuery's `.find('a')` between edits: a small subtree is cheaper to
+                // walk than the whole document's order is to rebuild.
+                if let Some(found) = walk_small(dom, root, selectors, all) { return found; }
             }
             self.order = Some(Order::build(dom));
         }
@@ -172,14 +197,17 @@ impl Cache {
         let mut found: Vec<(usize, NodeId)> = Vec::new();
         let mut best = usize::MAX;
         for (selector, list) in selectors.iter().zip(&lists) {
-            let candidates = list.unwrap_or(&ix.order[lo..hi]);
+            // An indexed list covers the whole document; a small subtree (a jQuery
+            // `.find('a')` under one element) is cheaper to scan in tree order.
+            let in_order = list.is_none_or(|l| l.len() > hi - lo);
+            let candidates = if in_order { &ix.order[lo..hi] } else { list.unwrap() };
             for &n in candidates {
                 let rank = ix.rank[n];
                 if rank < lo || rank >= hi || (!all && rank >= best) { continue; }
                 if css::matches(dom, n, selector) {
                     if all { found.push((rank, n)) } else { best = rank; found = vec![(rank, n)]; }
                     // The subtree list is in tree order: its first match is the first.
-                    if !all && list.is_none() { break; }
+                    if !all && in_order { break; }
                 }
             }
         }
@@ -204,6 +232,19 @@ fn few(dom: &Dom, root: NodeId, selectors: &[Selector], lists: &[Option<&[NodeId
     }
     if !all { found.truncate(1); }
     found
+}
+
+/// [`walk`] for a subtree of at most `SMALL` nodes; None for a larger one.
+fn walk_small(dom: &Dom, root: NodeId, selectors: &[Selector], all: bool) -> Option<Vec<NodeId>> {
+    let mut nodes = Vec::new();
+    let mut stack: Vec<NodeId> = dom.nodes[root].children.iter().rev().copied().collect();
+    while let Some(n) = stack.pop() {
+        if nodes.len() == SMALL { return None; }
+        nodes.push(n);
+        stack.extend(dom.nodes[n].children.iter().rev().copied());
+    }
+    let found = nodes.into_iter().filter(|&n| selectors.iter().any(|s| css::matches(dom, n, s)));
+    Some(if all { found.collect() } else { found.take(1).collect() })
 }
 
 fn walk(dom: &Dom, root: NodeId, selectors: &[Selector], all: bool) -> Vec<NodeId> {

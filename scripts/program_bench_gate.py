@@ -21,6 +21,7 @@ def main():
   assert kvm_usable(),'--accel kvm needs a readable and writable /dev/kvm'
   os.environ['SEXOS_GATE_ACCEL']='kvm';os.environ['SEXOS_GATE_CPU']='host,-pku' if a.no_pku else 'host'
   if not a.no_pku and not host_has('pku'):print('[bench.kvm] host CPU has no pku; PKU column is not measured');os.environ['SEXOS_GATE_CPU']='host'
+ else:os.environ.pop('SEXOS_GATE_ACCEL',None)
  label={'accel':accel,'cpu':os.environ.get('SEXOS_GATE_CPU','max,+pku,+rdseed')}
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('bench',(ROOT/'iso_root/programs/bench').read_bytes())])
@@ -41,6 +42,6 @@ def main():
   m=g['wait'](r'\[bench\.(done|fail)\][^\n]*\n',s,900);assert m[1]=='done',m[0]
   results={n:int(c) for n,c in re.findall(r'\[bench\] name=(\w+) ops=\d+ cycles=(\d+)',t()[s:])}
   assert len(results)==10,results
-  (a.out/'bench.json').write_text(json.dumps({**label,'cores':os.environ.get('SEXOS_GATE_CORES','1'),**results}));print({'ok':True,'cores':os.environ.get('SEXOS_GATE_CORES','1'),**label,**results})
+  (a.out/'bench.json').write_text(json.dumps({**label,'cores':os.environ.get('SEXOS_GATE_CORES','1'),**results}));xcore=re.findall(r'\[ipc\.xcore\][^\r\n]*',t()[s:]);print({'ok':True,'cores':os.environ.get('SEXOS_GATE_CORES','1'),**label,**results,'xcore':xcore[-1] if xcore else None})
  finally:g['stop']()
 if __name__=='__main__':main()

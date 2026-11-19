@@ -23,10 +23,13 @@ Freestanding x86_64 little-endian ELF64 ET_DYN, SysV C/system ABI, SSE2, stereo
 32-bit float, 48kHz, blocks1..256, at most60s per offline job. ELF input<=16MiB,
 image<=32MiB, at most128 headers/sections and65536 relocations. Only RELATIVE,
 64, GLOB_DAT and JUMP_SLOT relocations into mapped ranges are supported. There is
-no dependency search, TLS, interpreter, constructor execution, W+X or overlapping
-load pages. Relocation writes occur before SYS82 seals executable heap pages;
+no dependency search, TLS, interpreter, W+X or overlapping load pages.
+Constructors run only from DT_INIT_ARRAY/DT_FINI_ARRAY (at most 256 entries
+each, every entry inside the image's own sealed code); DT_INIT, DT_FINI and
+DT_PREINIT_ARRAY stay refused. Relocation writes occur before SYS82 seals executable heap pages;
 failed sealing or unsealing fails closed. Only explicitly enumerated libc and
-allocator import addresses can resolve.
+allocator import addresses can resolve: the allocator, `strdup`, `snprintf`,
+the C math library and memory/string functions (`crates/moan-plugin/src/imports.rs`).
 
 CLAP1: entry/factory first descriptor (count<=64), plugin init, exactly one stereo
 input/output bus, activate/start, process, stop/deactivate/destroy and entry deinit.
@@ -43,6 +46,36 @@ latency/tail compensation or ordinary OS services are claimed. The source-built
 vst3-rs Gain fixture is an upstream ABI example with unchanged DSP; initial param0
 at0.25 makes processed audio distinguishable from a bypass. Native runtime proof
 is recorded separately when completed.
+
+LADSPA 1.1 (format 2): `ladspa_descriptor(0)`, ports from the descriptor
+arrays, control defaults from the range hints (bounds, sample-rate scaling,
+logarithmic low/middle/high, the fixed defaults), integer/toggled rounding,
+instantiate at 48 kHz, connect, activate, run, deactivate, cleanup. A
+one-in/one-out plugin runs as two instances (left, right); two-in/two-out runs as
+one stereo instance; anything else (generators, sidechains) is refused.
+Parameters are port indices and must name control inputs; values are clamped to
+the declared range. Unwritten output is detected (NaN-filled buffers).
+
+LV2 (format 3): the helper receives one file, a packed bundle (`MOANLV2B`:
+manifest.ttl, the data files it names, the library; flat names only). Its Turtle
+is read in safe Rust (`crates/moan-plugin/src/ttl.rs`, the full Turtle grammar
+LV2 data uses, bounded to 1 MiB/65536 triples/depth 32) before any native code
+is mapped. First plugin of the bundle; ports by `lv2:index` (every index exactly
+once): audio, control, CV (held at the default), and atom ports only when
+`lv2:connectionOptional` (connected to null). Defaults/min/max with
+`lv2:sampleRate` scaling, integer/toggled/enumeration. Features provided:
+`urid:map`, `urid:unmap`, `options:options` (sample rate, min/max/nominal block
+length), `buf-size:boundedBlockLength`; any other `lv2:requiredFeature` is
+refused. Same channel plan and parameter rules as LADSPA. Moan packs a chosen
+bundle folder into the render folder (`moan-lv2-*.bundle`) before the job.
+Not yet: atom/MIDI ports, state, worker, presets, UIs, live inserts.
+
+Open plugins rebuilt for SexOS (`fixtures/moan-open-plugins/README.md`): T5
+second-order low/high-pass (LADSPA), LV2 eg-amp and blop lp4pole, from
+unmodified upstream sources. `crates/moan-plugin/tests/open_plugins.rs` checks the
+SexOS builds pass the helper's ELF admission and import rules and that the host
+builds produce the expected audio through the same host code; `moanrack` has
+"LADSPA low-pass" and "LV2 amp" buttons that run them in the restricted helper.
 
 Mach-O, PE, ordinary Linux runtime-dependent `.so`/bundles and system-installed
 commercial binaries are unsupported. A `.clap`/`.vst3` suffix grants no trust.

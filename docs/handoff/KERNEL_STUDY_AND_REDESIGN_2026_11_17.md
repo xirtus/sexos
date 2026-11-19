@@ -283,6 +283,35 @@ proven elsewhere.
   vector registers costs almost nothing to switch. Kernel-to-kernel and IPC fastpath
   switches between tasks that have not used the FPU skip it entirely.
 
+## 5.6 Phase 0 baseline: real CPU (KVM)
+
+First KVM run, from CI on PR #414 (2026-11-18). Host: Intel Xeon 6975P-C, PKU present,
+QEMU `-accel kvm -cpu host`. The kernel is master **before** the WS4 IPC fast path
+(#402/#415). These are cycles per operation from `apps/bench`, one run each.
+
+| | 1 core, PKU | 1 core, no PKU | 4 cores, no PKU |
+|---|---|---|---|
+| ipc_roundtrip | 53,488 | 56,042 | 81,747 |
+| null_syscall | 450 | 1,527 | 373 |
+| yield | 94,494 | 94,457 | 10,924 |
+| file_stat (cached) | 62 | 63 | 172 |
+| file_read_4k | 320,756 | 606,648 | 899,753 |
+| memcpy | 84,201 | 85,390 | 81,034 |
+
+What it says:
+- **IPC is the gap.** A round trip costs about 54k cycles on a real CPU (about 15 µs).
+  seL4-class kernels do it in well under 1k. The Phase 2 target (≤1,000) is a 50x cut,
+  and that is where most of "vastly faster" comes from.
+- **PKU itself is cheap on silicon.** The PKU and no-PKU IPC numbers are within 5%,
+  unlike TCG, where PKU was 4x slower. The cost is in the IPC path, not in WRPKRU.
+- **null_syscall is noisy** (373 to 1,527 across runs that should match), so CI now runs
+  each configuration 3 times and prints the median and spread (`scripts/bench_median.py`).
+- **With the WS4 fast path (#415), medians of 3, PR #418's CI, same host:** ipc_roundtrip
+  10,318 (1 core, PKU), 10,139 (1 core, no PKU), 81,773 (4 cores). Same-core IPC got
+  5.2x faster on silicon; cross-core IPC did not move, so the 4-core path (IPIs, remote
+  wake, home-core placement) is now the biggest single gap, and Phase 2's same-core
+  target (≤1,000) is still 10x away.
+
 ## 6. Phased plan
 
 Each phase is one or more PRs, merged only on green (2026-11-16 merge rule). Each states
@@ -329,7 +358,7 @@ waits for 5. 7 runs alongside from Phase 2.
 |---|---|---|
 | **D1** | Allow capabilities to be minted after BOOT, from BOOT-held roots only, with generation-based revocation? This changes "the capability graph is immutable once the epoch engine starts" to "the *kinds and roots* are fixed at BOOT; derived capabilities come and go". | Yes. It is what lets servers stop re-checking authority, and it keeps BOOT_DAG as the only source of genesis. |
 | **D2** | Allow per-core *permission views* (shared translation, separate root tables, PCID-tagged)? This touches "NO per-process page tables": translation stays global, but more than one root table exists. | Yes. It removes the 16-key ceiling and the one-core bottleneck, and gives isolation on CPUs without PKU. |
-| **D3** | Later: allow user-mode PKU gates between trusted services (no kernel entry)? | Decide after Phase 5 with a written side-channel review. |
+| **D3** | Later: allow user-mode PKU gates between trusted services (no kernel entry)? | Decide after Phase 5 with a written side-channel review. The review and design are in `docs/handoff/PKU_GATES_STUDY_2026_11_18.md` (2026-11-18): yes for trusted service pairs only, prototype after views land. |
 | **D4** | Rewrite `ARCHITECTURE.md` to describe the system as it is (drop the determinism invariant as a hard rule, or scope it to UiIR)? | Yes, in Phase 1. |
 
 ## 9. Coordination

@@ -10,6 +10,8 @@ pub const INFO_BYTES: usize = 176;
 pub const HEADER: usize = 48;
 pub const PATH_MAX: usize = 192;
 pub const MAX: usize = HEADER + 3 * PATH_MAX;
+/// Plugin formats: 0 CLAP, 1 VST3, 2 LADSPA, 3 packed LV2 bundle.
+pub const MAX_FORMAT: u8 = 3;
 pub const OP_CLAIM: u64 = 0x4d50_5010;
 pub const OP_DESCRIBE: u64 = 0x4d50_5011;
 pub const OP_LOAD: u64 = 0x4d50_5012;
@@ -71,7 +73,7 @@ impl<'a> Prepare<'a> {
         })
     }
     pub fn encode(&self, bytes: &mut [u8]) -> Option<usize> {
-        if self.format > 1
+        if self.format > MAX_FORMAT
             || self.cookie == 0
             || self.nonce == [0; 16]
             || self.paths.iter().any(|p| !path(p))
@@ -147,7 +149,7 @@ impl Info {
             || frames > 48_000 * 60
             || files_epoch == 0
             || nonce == [0; 16]
-            || format > 1
+            || format > MAX_FORMAT as u32
             || cookie == 0
             || generation > crate::restricted_helper::MAX_GENERATION
         {
