@@ -143,12 +143,12 @@ const MAX_MICS: usize = 4;
 /// An input pin and its path to an input converter: `path[0]` is the converter,
 /// `path[len - 1]` the pin, and `pick[i]` which connection of `path[i]` leads on.
 #[derive(Clone, Copy)]
-struct Mic { codec: u32, pin: u32, path: [u32; 6], pick: [u32; 6], len: usize, input: crate::mic::Input }
+struct Mic { codec: u32, afg: u32, pin: u32, path: [u32; 6], pick: [u32; 6], len: usize, input: crate::mic::Input }
 
 /// `device` is the jack's default-configuration device: 0 line out, 1 speaker,
 /// 2 headphones.
 #[derive(Clone, Copy)]
-struct Route { codec: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32, sense: bool }
+struct Route { codec: u32, afg: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32, sense: bool }
 
 impl Hda {
     fn reg<T>(&self, offset: u32) -> *mut T {
@@ -310,7 +310,7 @@ impl Hda {
             if config >> 30 == 1 { continue; } // nothing is wired to this jack
             let device = config >> 20 & 0xf;
             let rank = match device { 1 => 0, 2 => 1, 0 => 2, 0xf | 5 => continue, _ => 3 };
-            let mut route = Route { codec: self.codec, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device, sense: pin & 1 << 2 != 0 };
+            let mut route = Route { codec: self.codec, afg, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device, sense: pin & 1 << 2 != 0 };
             if self.find_dac(nid, 0, &mut route) && n < out.len() { out[n] = Some(route); n += 1; }
         }
         n
@@ -349,7 +349,7 @@ impl Hda {
             let config = self.verb(pin, GET_CONFIG_DEFAULT, 0).unwrap_or(0);
             let Some(input) = crate::mic::input(config, caps) else { continue };
             for &adc in &adcs[..n_adc] {
-                let mut mic = Mic { codec: self.codec, pin, path: [0; 6], pick: [0; 6], len: 0, input };
+                let mut mic = Mic { codec: self.codec, afg, pin, path: [0; 6], pick: [0; 6], len: 0, input };
                 if self.find_pin(adc, pin, 0, &mut mic) {
                     sex_pdx::serial_record!("[bell.hda.input] codec={} pin={} adc={} device={:#x} rank={} sense={} hops={}",
                         self.codec, pin, adc, input.device, input.rank, input.sense as u8, mic.len);
@@ -361,16 +361,22 @@ impl Hda {
         }
     }
 
+    /// A widget's amplifier capabilities (`P_IN_AMP` or `P_OUT_AMP`): its own when it
+    /// sets Amp Param Override, otherwise the audio function group's defaults.
+    fn amp_caps(&mut self, afg: u32, nid: u32, which: u32) -> u32 {
+        if self.param(nid, P_WIDGET) & 1 << 3 != 0 { self.param(nid, which) } else { self.param(afg, which) }
+    }
+
     /// Powers, unmutes and enables every node on the route.
     fn open_route(&mut self, route: &Route) {
         for &nid in &route.path[..route.len] {
             let _ = self.verb(nid, SET_POWER, 0);
-            let amp = self.param(nid, P_OUT_AMP);
+            let amp = self.amp_caps(route.afg, nid, P_OUT_AMP);
             // Output amp, both channels, unmuted, at the 0 dB step.
             let _ = self.verb(nid, SET_AMP, 0xb000 | (amp & 0x7f));
             // Every input of a mixer on the path, unmuted at 0 dB.
             if self.param(nid, P_WIDGET) >> 20 & 0xf == WIDGET_MIXER {
-                let input = self.param(nid, P_IN_AMP);
+                let input = self.amp_caps(route.afg, nid, P_IN_AMP);
                 for index in 0..4u32 { let _ = self.verb(nid, SET_AMP, 0x7000 | index << 8 | (input & 0x7f)); }
             }
         }
@@ -571,8 +577,10 @@ impl Hda {
         self.codec = m.codec;
         for (i, &nid) in m.path[..m.len].iter().enumerate() {
             let _ = self.verb(nid, SET_POWER, 0);
-            let kind = self.param(nid, P_WIDGET) >> 20 & 0xf;
-            let in_amp = self.param(nid, P_IN_AMP);
+            let widget = self.param(nid, P_WIDGET);
+            let kind = widget >> 20 & 0xf;
+            let in_amp = self.amp_caps(m.afg, nid, P_IN_AMP);
+            let out_amp = self.amp_caps(m.afg, nid, P_OUT_AMP);
             if nid == m.pin {
                 // The pin's own input amplifier (a microphone boost on many codecs).
                 let _ = self.verb(nid, SET_AMP, 0x7000 | (in_amp & 0x7f));
@@ -584,12 +592,13 @@ impl Hda {
                     let mute = if index == m.pick[i] { in_amp & 0x7f } else { 0x80 };
                     let _ = self.verb(nid, SET_AMP, 0x7000 | index << 8 | mute);
                 }
-                let out_amp = self.param(nid, P_OUT_AMP);
                 let _ = self.verb(nid, SET_AMP, 0xb000 | (out_amp & 0x7f));
             } else {
-                // Converters and selectors take one input: pick it and unmute it.
+                // Converters and selectors take one input: pick it and unmute it, and
+                // a selector's own output amplifier too, when it has one.
                 let _ = self.verb(nid, SET_SELECT, m.pick[i]);
                 let _ = self.verb(nid, SET_AMP, 0x7000 | m.pick[i] << 8 | (in_amp & 0x7f));
+                if kind == WIDGET_SELECTOR && widget & 1 << 2 != 0 { let _ = self.verb(nid, SET_AMP, 0xb000 | (out_amp & 0x7f)); }
             }
         }
         let caps = self.param(m.pin, P_PIN);
