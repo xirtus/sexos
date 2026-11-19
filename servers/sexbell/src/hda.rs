@@ -9,6 +9,10 @@
 //! The stream runs from start to finish over a ring of periods. Bell writes a
 //! mixed period just ahead of the play position and zeroes each period once the
 //! controller has read it, so the chip plays silence whenever nothing is queued.
+//!
+//! The microphone is the controller's first input stream: while someone may listen,
+//! the chosen input pin (`crate::mic`) records through an input converter into a
+//! second ring, and Bell copies out each period the controller has filled.
 use sex_pdx::memory_region as m;
 
 // ── Controller registers (HDA 1.0a, section 3.3) ─────────────────────
@@ -44,6 +48,8 @@ const SD_CTL_RESET: u32 = 1;
 const SD_CTL_RUN: u32 = 2;
 /// The tag the output converter listens for; 0 means "no stream".
 const STREAM_TAG: u32 = 1;
+/// The tag the input converter sends with.
+const MIC_TAG: u32 = 2;
 /// 48 kHz, 16 bits, 2 channels.
 const FORMAT_48K_S16_STEREO: u16 = 0x0011;
 
@@ -69,6 +75,7 @@ const P_CONNECTIONS: u32 = 0x0e;
 const P_IN_AMP: u32 = 0x0d;
 const P_OUT_AMP: u32 = 0x12;
 const WIDGET_OUTPUT: u32 = 0;
+const WIDGET_INPUT: u32 = 1;
 const WIDGET_MIXER: u32 = 2;
 const WIDGET_SELECTOR: u32 = 3;
 const WIDGET_PIN: u32 = 4;
@@ -79,12 +86,18 @@ pub const PERIOD_BYTES: usize = 8192;
 /// 16 periods of 8 KiB is 683 ms around the ring; Bell keeps at most 12 queued.
 pub const PERIODS: usize = 16;
 const RING_BYTES: usize = PERIOD_BYTES * PERIODS;
-// Layout inside the DMA pool: CORB 1 KiB, RIRB 2 KiB, BDL 256 B, then the ring.
+/// 8 periods of 8 KiB (340 ms) for the microphone.
+pub const MIC_PERIODS: usize = 8;
+const MIC_RING_BYTES: usize = PERIOD_BYTES * MIC_PERIODS;
+// Layout inside the DMA pool: CORB 1 KiB, RIRB 2 KiB, BDL 256 B, the microphone's
+// BDL 256 B, the ring, then the microphone's ring (200 KiB of the 256 KiB pool).
 const CORB_AT: usize = 0;
 const RIRB_AT: usize = 1024;
 const BDL_AT: usize = 4096;
+const MIC_BDL_AT: usize = BDL_AT + 256;
 const RING_AT: usize = 8192;
-const POOL_NEEDS: usize = RING_AT + RING_BYTES;
+const MIC_RING_AT: usize = RING_AT + RING_BYTES;
+const POOL_NEEDS: usize = MIC_RING_AT + MIC_RING_BYTES;
 
 /// How long one controller or codec step may take before it counts as broken.
 const SPIN: u32 = 200_000;
@@ -115,14 +128,27 @@ pub struct Hda {
     /// (until the person picks outputs themselves).
     pub home: u32,
     pub auto: bool,
+    /// Every microphone or line in found, the input stream descriptor (0 when the
+    /// controller has none), the input recording now, and the next period to copy.
+    mics: [Option<Mic>; MAX_MICS],
+    mic_count: usize,
+    mic_sd: u32,
+    mic_on: Option<usize>,
+    mic_tail: usize,
 }
 
 pub const MAX_OUTPUTS: usize = 8;
+const MAX_MICS: usize = 4;
+
+/// An input pin and its path to an input converter: `path[0]` is the converter,
+/// `path[len - 1]` the pin, and `pick[i]` which connection of `path[i]` leads on.
+#[derive(Clone, Copy)]
+struct Mic { codec: u32, afg: u32, pin: u32, path: [u32; 6], pick: [u32; 6], len: usize, input: crate::mic::Input }
 
 /// `device` is the jack's default-configuration device: 0 line out, 1 speaker,
 /// 2 headphones.
 #[derive(Clone, Copy)]
-struct Route { codec: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32, sense: bool }
+struct Route { codec: u32, afg: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32, sense: bool }
 
 impl Hda {
     fn reg<T>(&self, offset: u32) -> *mut T {
@@ -284,22 +310,73 @@ impl Hda {
             if config >> 30 == 1 { continue; } // nothing is wired to this jack
             let device = config >> 20 & 0xf;
             let rank = match device { 1 => 0, 2 => 1, 0 => 2, 0xf | 5 => continue, _ => 3 };
-            let mut route = Route { codec: self.codec, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device, sense: pin & 1 << 2 != 0 };
+            let mut route = Route { codec: self.codec, afg, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device, sense: pin & 1 << 2 != 0 };
             if self.find_dac(nid, 0, &mut route) && n < out.len() { out[n] = Some(route); n += 1; }
         }
         n
+    }
+
+    /// A path from the input converter or mixer `nid` up to the pin `pin`.
+    fn find_pin(&mut self, nid: u32, pin: u32, depth: usize, mic: &mut Mic) -> bool {
+        mic.path[depth] = nid;
+        mic.len = depth + 1;
+        if nid == pin && depth > 0 { return true; }
+        let kind = self.param(nid, P_WIDGET) >> 20 & 0xf;
+        if depth + 1 >= mic.path.len() || !(depth == 0 || kind == WIDGET_MIXER || kind == WIDGET_SELECTOR) { return false; }
+        let mut list = [0u32; 16];
+        let n = self.connections(nid, &mut list);
+        for (index, &next) in list[..n].iter().enumerate() {
+            if self.find_pin(next, pin, depth + 1, mic) { mic.pick[depth] = index as u32; return true; }
+        }
+        false
+    }
+
+    /// Input pins that can record, each with a path to an input converter.
+    fn mic_routes(&mut self, afg: u32) {
+        let nodes = self.param(afg, P_NODES);
+        let (first, count) = (nodes >> 16 & 0xff, nodes & 0xff);
+        let mut adcs = [0u32; 8];
+        let mut n_adc = 0;
+        for nid in first..first + count {
+            let caps = self.param(nid, P_WIDGET);
+            // An input converter that takes digital audio is S/PDIF in, not a microphone.
+            if caps >> 20 & 0xf == WIDGET_INPUT && caps & 1 << 9 == 0 && n_adc < adcs.len() { adcs[n_adc] = nid; n_adc += 1; }
+        }
+        for pin in first..first + count {
+            if self.mic_count >= MAX_MICS { return; }
+            if self.param(pin, P_WIDGET) >> 20 & 0xf != WIDGET_PIN { continue; }
+            let caps = self.param(pin, P_PIN);
+            let config = self.verb(pin, GET_CONFIG_DEFAULT, 0).unwrap_or(0);
+            let Some(input) = crate::mic::input(config, caps) else { continue };
+            for &adc in &adcs[..n_adc] {
+                let mut mic = Mic { codec: self.codec, afg, pin, path: [0; 6], pick: [0; 6], len: 0, input };
+                if self.find_pin(adc, pin, 0, &mut mic) {
+                    sex_pdx::serial_record!("[bell.hda.input] codec={} pin={} adc={} device={:#x} rank={} sense={} hops={}",
+                        self.codec, pin, adc, input.device, input.rank, input.sense as u8, mic.len);
+                    self.mics[self.mic_count] = Some(mic);
+                    self.mic_count += 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// A widget's amplifier capabilities (`P_IN_AMP` or `P_OUT_AMP`): its own when it
+    /// sets Amp Param Override, otherwise the audio function group's defaults.
+    fn amp_caps(&mut self, afg: u32, nid: u32, which: u32) -> u32 {
+        if self.param(nid, P_WIDGET) & 1 << 3 != 0 { self.param(nid, which) } else { self.param(afg, which) }
     }
 
     /// Powers, unmutes and enables every node on the route.
     fn open_route(&mut self, route: &Route) {
         for &nid in &route.path[..route.len] {
             let _ = self.verb(nid, SET_POWER, 0);
-            let amp = self.param(nid, P_OUT_AMP);
+            let amp = self.amp_caps(route.afg, nid, P_OUT_AMP);
             // Output amp, both channels, unmuted, at the 0 dB step.
             let _ = self.verb(nid, SET_AMP, 0xb000 | (amp & 0x7f));
             // Every input of a mixer on the path, unmuted at 0 dB.
             if self.param(nid, P_WIDGET) >> 20 & 0xf == WIDGET_MIXER {
-                let input = self.param(nid, P_IN_AMP);
+                let input = self.amp_caps(route.afg, nid, P_IN_AMP);
                 for index in 0..4u32 { let _ = self.verb(nid, SET_AMP, 0x7000 | index << 8 | (input & 0x7f)); }
             }
         }
@@ -317,30 +394,7 @@ impl Hda {
         self.sd = SD_BASE + SD_STRIDE * inputs;
         if self.sd + SD_STRIDE > self.length as u32 { return Err("stream_outside_view"); }
         let sd = self.sd;
-        self.w32(sd + SD_CTL, self.r32(sd + SD_CTL) & 0x00ff_fffc);
-        self.w32(sd + SD_CTL, SD_CTL_RESET);
-        if !self.wait(|h| h.r32(sd + SD_CTL) & SD_CTL_RESET != 0) { return Err("stream_reset_enter"); }
-        self.w32(sd + SD_CTL, 0);
-        if !self.wait(|h| h.r32(sd + SD_CTL) & SD_CTL_RESET == 0) { return Err("stream_reset_leave"); }
-        unsafe { core::ptr::write_bytes(self.dma::<u8>(RING_AT), 0, RING_BYTES) };
-        for i in 0..PERIODS {
-            let at = BDL_AT + i * 16;
-            unsafe {
-                self.dma::<u64>(at).write_volatile(self.dma_pa + (RING_AT + i * PERIOD_BYTES) as u64);
-                self.dma::<u32>(at + 8).write_volatile(PERIOD_BYTES as u32);
-                self.dma::<u32>(at + 12).write_volatile(0);
-            }
-        }
-        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-        let bdl = self.dma_pa + BDL_AT as u64;
-        self.w32(sd + SD_BDPL, bdl as u32);
-        self.w32(sd + SD_BDPU, (bdl >> 32) as u32);
-        self.w32(sd + SD_CBL, RING_BYTES as u32);
-        self.w16(sd + SD_LVI, (PERIODS - 1) as u16);
-        self.w16(sd + SD_FMT, FORMAT_48K_S16_STEREO);
-        self.w32(sd + SD_CTL, STREAM_TAG << 20);
-        self.w8(sd + SD_STS, 0x1c);
-        Ok(())
+        self.setup_sd(sd, BDL_AT, RING_AT, PERIODS, STREAM_TAG)
     }
 
     fn start(&mut self) -> Result<(), &'static str> {
@@ -357,7 +411,8 @@ impl Hda {
         let mut h = Hda { mmio: view.virtual_address as usize, length: view.length as usize,
             dma_va: dma.virtual_address as usize, dma_pa, corb_wp: 0, rirb_rp: 0, codec: 0, sd: 0,
             tail: 0, head: 1, queued: [false; PERIODS], pending: 0, vendor: 0, dac: 0, pins: 0,
-            routes: [None; MAX_OUTPUTS], outputs: 0, on: 0, home: 0, auto: true };
+            routes: [None; MAX_OUTPUTS], outputs: 0, on: 0, home: 0, auto: true,
+            mics: [None; MAX_MICS], mic_count: 0, mic_sd: 0, mic_on: None, mic_tail: 0 };
         if h.length < 0x180 { return Err("short_view"); }
         h.w32(INTCTL, 0);
         let codecs = h.reset()?;
@@ -377,6 +432,7 @@ impl Hda {
                 let _ = h.verb(afg, SET_POWER, 0);
                 let mut routes = [None; 8];
                 let n = h.routes(afg, &mut routes);
+                h.mic_routes(afg);
                 sex_pdx::serial_record!("[bell.hda.codec] address={} vendor={:#010x} function={} outputs={}", cad, vendor, afg, n);
                 for r in routes[..n].iter().flatten() {
                     if h.outputs < MAX_OUTPUTS { h.routes[h.outputs] = Some(*r); h.outputs += 1; }
@@ -399,6 +455,8 @@ impl Hda {
         h.follow_jack();
         h.stream()?;
         h.start()?;
+        // The microphone needs an input stream descriptor; the first one is it.
+        if h.r16(GCAP) >> 8 & 0xf != 0 && h.mic_count > 0 { h.mic_sd = SD_BASE; }
         h.tail = h.position();
         h.head = (h.tail + 1) % PERIODS;
         Ok(h)
@@ -462,6 +520,130 @@ impl Hda {
     /// codec address and pin.
     pub fn output(&self, k: usize) -> Option<(u32, u32, u32)> {
         self.routes.get(k).copied().flatten().map(|r| (r.device, r.codec, r.pin))
+    }
+
+    /// True when there is an input to record from and a stream to record with.
+    pub fn has_mic(&self) -> bool { self.mic_sd != 0 }
+
+    /// How many inputs can record (-1 without an input stream), for the boot log.
+    pub fn mic_inputs(&self) -> i64 { if self.mic_sd == 0 { -1 } else { self.mic_count as i64 } }
+
+    /// Resets a stream descriptor and points it at a ring of `periods` periods.
+    fn setup_sd(&mut self, sd: u32, bdl_at: usize, ring_at: usize, periods: usize, tag: u32) -> Result<(), &'static str> {
+        self.w32(sd + SD_CTL, self.r32(sd + SD_CTL) & 0x00ff_fffc);
+        self.w32(sd + SD_CTL, SD_CTL_RESET);
+        if !self.wait(|h| h.r32(sd + SD_CTL) & SD_CTL_RESET != 0) { return Err("stream_reset_enter"); }
+        self.w32(sd + SD_CTL, 0);
+        if !self.wait(|h| h.r32(sd + SD_CTL) & SD_CTL_RESET == 0) { return Err("stream_reset_leave"); }
+        unsafe { core::ptr::write_bytes(self.dma::<u8>(ring_at), 0, PERIOD_BYTES * periods) };
+        for i in 0..periods {
+            let at = bdl_at + i * 16;
+            unsafe {
+                self.dma::<u64>(at).write_volatile(self.dma_pa + (ring_at + i * PERIOD_BYTES) as u64);
+                self.dma::<u32>(at + 8).write_volatile(PERIOD_BYTES as u32);
+                self.dma::<u32>(at + 12).write_volatile(0);
+            }
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let bdl = self.dma_pa + bdl_at as u64;
+        self.w32(sd + SD_BDPL, bdl as u32);
+        self.w32(sd + SD_BDPU, (bdl >> 32) as u32);
+        self.w32(sd + SD_CBL, (PERIOD_BYTES * periods) as u32);
+        self.w16(sd + SD_LVI, (periods - 1) as u16);
+        self.w16(sd + SD_FMT, FORMAT_48K_S16_STEREO);
+        self.w32(sd + SD_CTL, tag << 20);
+        self.w8(sd + SD_STS, 0x1c);
+        Ok(())
+    }
+
+    /// Starts recording: a plugged-in jack microphone, else the best input, routed
+    /// to its converter, unmuted at 0 dB, with microphone bias; then the stream runs.
+    pub fn mic_start(&mut self) -> bool {
+        if self.mic_sd == 0 { return false; }
+        if self.mic_on.is_some() { return true; }
+        let mut inputs = [crate::mic::Input { device: 0, internal: false, sense: false, rank: 0 }; MAX_MICS];
+        let mut plugged = [false; MAX_MICS];
+        let mics = self.mics;
+        for (k, m) in mics[..self.mic_count].iter().enumerate() {
+            let Some(m) = m else { continue };
+            inputs[k] = m.input;
+            if m.input.sense {
+                self.codec = m.codec;
+                plugged[k] = self.verb(m.pin, GET_PIN_SENSE, 0).is_some_and(|v| v & 1 << 31 != 0);
+            }
+        }
+        let Some(k) = crate::mic::choose(&inputs[..self.mic_count], &plugged[..self.mic_count]) else { return false };
+        let Some(m) = mics[k] else { return false };
+        self.codec = m.codec;
+        for (i, &nid) in m.path[..m.len].iter().enumerate() {
+            let _ = self.verb(nid, SET_POWER, 0);
+            let widget = self.param(nid, P_WIDGET);
+            let kind = widget >> 20 & 0xf;
+            let in_amp = self.amp_caps(m.afg, nid, P_IN_AMP);
+            let out_amp = self.amp_caps(m.afg, nid, P_OUT_AMP);
+            if nid == m.pin {
+                // The pin's own input amplifier (a microphone boost on many codecs).
+                let _ = self.verb(nid, SET_AMP, 0x7000 | (in_amp & 0x7f));
+            } else if kind == WIDGET_MIXER {
+                // Only the input on the path: other mixer inputs would bring playback in.
+                let mut list = [0u32; 16];
+                let n = self.connections(nid, &mut list) as u32;
+                for index in 0..n.min(16) {
+                    let mute = if index == m.pick[i] { in_amp & 0x7f } else { 0x80 };
+                    let _ = self.verb(nid, SET_AMP, 0x7000 | index << 8 | mute);
+                }
+                let _ = self.verb(nid, SET_AMP, 0xb000 | (out_amp & 0x7f));
+            } else {
+                // Converters and selectors take one input: pick it and unmute it, and
+                // a selector's own output amplifier too, when it has one.
+                let _ = self.verb(nid, SET_SELECT, m.pick[i]);
+                let _ = self.verb(nid, SET_AMP, 0x7000 | m.pick[i] << 8 | (in_amp & 0x7f));
+                if kind == WIDGET_SELECTOR && widget & 1 << 2 != 0 { let _ = self.verb(nid, SET_AMP, 0xb000 | (out_amp & 0x7f)); }
+            }
+        }
+        let caps = self.param(m.pin, P_PIN);
+        let control = crate::mic::pin_control(m.input.device, caps);
+        let _ = self.verb(m.pin, SET_PIN_CONTROL, control);
+        let adc = m.path[0];
+        let _ = self.verb(adc, SET_FORMAT, FORMAT_48K_S16_STEREO as u32);
+        let _ = self.verb(adc, SET_STREAM, MIC_TAG << 4);
+        let sd = self.mic_sd;
+        if self.setup_sd(sd, MIC_BDL_AT, MIC_RING_AT, MIC_PERIODS, MIC_TAG).is_err() { return false; }
+        self.w32(sd + SD_CTL, MIC_TAG << 20 | SD_CTL_RUN);
+        if !self.wait(|h| h.r32(sd + SD_CTL) & SD_CTL_RUN != 0) { return false; }
+        self.mic_tail = self.mic_position();
+        self.mic_on = Some(k);
+        sex_pdx::serial_record!("[bell.hda.mic] codec={} pin={} adc={} device={:#x} internal={} plugged={} control={:#x}",
+            m.codec, m.pin, adc, m.input.device, m.input.internal as u8, plugged[k] as u8, control);
+        true
+    }
+
+    /// Stops recording: the stream halts, the converter drops its tag, the pin closes.
+    pub fn mic_stop(&mut self) -> bool {
+        let Some(k) = self.mic_on.take() else { return true };
+        let sd = self.mic_sd;
+        self.w32(sd + SD_CTL, self.r32(sd + SD_CTL) & !SD_CTL_RUN);
+        let stopped = self.wait(|h| h.r32(sd + SD_CTL) & SD_CTL_RUN == 0);
+        if let Some(m) = self.mics[k] {
+            self.codec = m.codec;
+            let _ = self.verb(m.path[0], SET_STREAM, 0);
+            let _ = self.verb(m.pin, SET_PIN_CONTROL, 0);
+        }
+        stopped
+    }
+
+    fn mic_position(&self) -> usize { (self.r32(self.mic_sd + SD_LPIB) as usize % MIC_RING_BYTES) / PERIOD_BYTES }
+
+    /// Copies the next period the microphone filled into `out`; false when the
+    /// controller is still filling it.
+    pub fn mic_take(&mut self, out: &mut [u8]) -> bool {
+        if self.mic_on.is_none() || out.len() < PERIOD_BYTES { return false; }
+        if self.mic_tail == self.mic_position() { return false; }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        let at = MIC_RING_AT + self.mic_tail * PERIOD_BYTES;
+        unsafe { core::ptr::copy_nonoverlapping(self.dma::<u8>(at), out.as_mut_ptr(), PERIOD_BYTES) };
+        self.mic_tail = (self.mic_tail + 1) % MIC_PERIODS;
+        true
     }
 
     /// The period the controller is reading now.
