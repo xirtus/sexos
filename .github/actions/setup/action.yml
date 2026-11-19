@@ -19,6 +19,14 @@ inputs:
 runs:
   using: composite
   steps:
+  - name: Rebuild by file contents, not modification times
+    shell: bash
+    # A fresh checkout gives every file a new mtime, so the restored cargo cache
+    # used to rebuild every workspace crate anyway (~25 minutes per image build).
+    # With checksums only crates whose sources really changed rebuild. Set before
+    # the cargo cache step: the variable is part of its key, so every workflow
+    # using this action shares one cache.
+    run: echo "CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true" >> "$GITHUB_ENV"
   - name: Install build tools
     shell: bash
     run: |
