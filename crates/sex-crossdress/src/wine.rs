@@ -77,6 +77,9 @@ pub fn load(ram: Ram, setup: &WineSetup) -> Result<WinProcess, LoadError> {
     let exe_key = crate::nt::normalize(setup.exe_path);
     p.nt.add_file(&exe_key, setup.exe.to_vec());
     p.nt.add_file("c:\\windows\\system32\\ntdll.dll", setup.ntdll.to_vec());
+    for (key, base) in [(exe_key.clone(), exe_base), (String::from("c:\\windows\\system32\\ntdll.dll"), p.base)] {
+        if let Some(f) = p.nt.file(&key) { p.nt.images.push((base, f)); }
+    }
     for (name, data) in setup.system32 { p.nt.add_file(&alloc::format!("c:\\windows\\system32\\{}", name.to_ascii_lowercase()), data.to_vec()); }
     for (name, data) in setup.nls { p.nt.nls.push((name.to_ascii_lowercase(), data.to_vec())); }
 
@@ -179,4 +182,59 @@ pub fn run(p: &mut WinProcess, cpu: &mut impl Vcpu, host: &mut impl Host) -> Sto
         Ok(v) => Stop::Returned(v),
         Err(s) => s,
     }
+}
+
+/// Host scratch space for `load_library` (the last page of the process parameters).
+const SCRATCH_VA: u64 = PARAMS_VA + (PARAMS_PAGES - 1) * PAGE;
+
+/// Initializes the process without running the program: `LdrInitializeThunk` with a
+/// CONTEXT that continues at the host call's return thunk instead of RtlUserThreadStart.
+/// Wine's loader loads the program's DLLs (kernel32, kernelbase, ...) and runs their
+/// DllMain; the process is then ready for `load_library` and host calls, as a plugin host
+/// process is.
+pub fn start(p: &mut WinProcess, cpu: &mut impl Vcpu, host: &mut impl Host) -> Result<(), Stop> {
+    let Some(init) = p.export("LdrInitializeThunk") else {
+        return Err(Stop::Unimplemented { dll: String::from("ntdll.dll"), name: String::from("LdrInitializeThunk") });
+    };
+    let ctx_va = (process::STACK_TOP - 0x1000 - win32::CONTEXT_SIZE) & !0xF;
+    let mut regs = sex_pdx::vm::Regs::default();
+    regs.rip = process::CALL_RETURN_VA;
+    regs.rsp = (process::STACK_TOP - 0x2000) & !0xF;
+    regs.rflags = cell::USER_RFLAGS;
+    let mut c = [0u8; win32::CONTEXT_SIZE as usize];
+    win32::write_context(&mut c, &regs);
+    if p.cell.write_user(ctx_va, &c).is_none() { return Err(Stop::CellFault { vector: 0xFE, rip: ctx_va }); }
+    p.call_at(cpu, host, init, &[ctx_va, 0, 0, 0], ctx_va - 0x100).map(|_| ())
+}
+
+/// Why a DLL did not load.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LoadLibraryError { Status(u32), Stopped(Stop), Bad(&'static str) }
+
+/// Loads the DLL at DOS path `path` (a file in the process's virtual file system) with
+/// Wine's own `LdrLoadDll`: imports, relocation, TLS and DllMain are Wine's loader's.
+/// Returns its base and exports.
+pub fn load_library(p: &mut WinProcess, cpu: &mut impl Vcpu, host: &mut impl Host, path: &str) -> Result<(u64, Vec<(String, u64)>), LoadLibraryError> {
+    let ldr = p.export("LdrLoadDll").ok_or(LoadLibraryError::Bad("no LdrLoadDll"))?;
+    let name = utf16(path);
+    if name.len() + 0x40 > PAGE as usize { return Err(LoadLibraryError::Bad("path too long")); }
+    // UNICODE_STRING at +0, the module handle at +0x10, the text at +0x20.
+    let mut b = alloc::vec![0u8; 0x20 + name.len() + 2];
+    b[0..2].copy_from_slice(&(name.len() as u16).to_le_bytes());
+    b[2..4].copy_from_slice(&(name.len() as u16 + 2).to_le_bytes());
+    b[8..16].copy_from_slice(&(SCRATCH_VA + 0x20).to_le_bytes());
+    b[0x20..0x20 + name.len()].copy_from_slice(&name);
+    p.cell.write_user(SCRATCH_VA, &b).ok_or(LoadLibraryError::Bad("scratch"))?;
+    let status = p.call(cpu, host, ldr, &[0, 0, SCRATCH_VA, SCRATCH_VA + 0x10], None).map_err(LoadLibraryError::Stopped)? as u32;
+    if status != 0 { return Err(LoadLibraryError::Status(status)); }
+    let mut h = [0u8; 8];
+    p.cell.read_user(SCRATCH_VA + 0x10, &mut h).ok_or(LoadLibraryError::Bad("handle"))?;
+    let base = u64::from_le_bytes(h);
+    // The exports, read from the image as Wine mapped it.
+    let file = p.nt.files.iter().find(|f| f.0 == crate::nt::normalize(path)).map(|f| f.1.clone()).ok_or(LoadLibraryError::Bad("file"))?;
+    let img = crate::pe::Image::parse(&file).map_err(|_| LoadLibraryError::Bad("not PE"))?;
+    let mut mem = alloc::vec![0u8; img.size_of_image as usize];
+    p.cell.read_user(base, &mut mem).ok_or(LoadLibraryError::Bad("image"))?;
+    let exports = img.exports(&mem).map_err(|_| LoadLibraryError::Bad("exports"))?.into_iter().map(|(n, rva)| (n, base + rva as u64)).collect();
+    Ok((base, exports))
 }

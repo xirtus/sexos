@@ -285,3 +285,28 @@ fn an_msvc_style_program_runs_through_api_sets_natively() {
     assert!(text.contains(sex_crossdress::MSVC_PASS), "the program's checks passed through API sets and vcruntime140");
     assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
 }
+
+/// Starts a Wine process, loads `file` with Wine's LdrLoadDll and runs the CX1 checks.
+fn wine_clap(tag: &str, file: &[u8]) {
+    let _one = NATIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut p) = common::wine_plugin_host(file) else { println!("[crossdress.native.{tag}] SKIP no CROSSDRESS_WINE_DIR"); return; };
+    let mut out = common::Keep::default();
+    let exports = {
+        let Some(mut cpu) = Native::new(&mut p.cell) else { println!("[crossdress.native.{tag}] SKIP guest addresses taken"); return; };
+        sex_crossdress::wine::start(&mut p, &mut cpu, &mut out).expect("Wine's loader initialized the process");
+        let (base, exports) = sex_crossdress::wine::load_library(&mut p, &mut cpu, &mut out, common::CLAP_PATH).expect("LdrLoadDll loaded the plugin");
+        println!("[crossdress.native.{tag}] plugin base={base:#x} exports={}", exports.len());
+        exports
+    };
+    // The vCPU points at the cell, which moves into the plugin: a fresh one follows it.
+    let mut plugin = sex_crossdress::clap::ClapPlugin::in_wine(p, &exports).unwrap();
+    let mut cpu = Native::new(&mut plugin.process.cell).expect("guest addresses");
+    for line in common::drive_gain_plugin(&mut plugin, &mut cpu, &mut out) { println!("[crossdress.native.{tag}] {line}"); }
+    for line in String::from_utf8_lossy(&out.text).lines() { println!("[crossdress.native.{tag}.out] {line}"); }
+}
+
+#[test]
+fn a_clap_plugin_runs_in_a_wine_process_natively() { wine_clap("wineclap", sex_crossdress::TEST_CLAP); }
+
+#[test]
+fn an_msvc_crt_clap_plugin_runs_in_a_wine_process_natively() { wine_clap("msvcclap", sex_crossdress::TEST_CLAP_MSVC); }

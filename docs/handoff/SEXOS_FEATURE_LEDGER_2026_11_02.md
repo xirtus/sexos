@@ -5332,3 +5332,6 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - SSH domains: `ssh.NAME = user@host[:port]` lines in `spindle.conf` (`ssh NAME [COMMAND]` logs in there); bad lines are reported like other settings.
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
+
+## CW4 + CW5: Windows C-runtime programs and CLAP plugins on Wine's loader (2026-11-19)
+- Crossdress cells now run programs that use the Windows C runtime the way MSVC builds import it (api-ms-win-crt API sets resolved through Wine's API set schema, ucrtbase, vcruntime140). A CLAP plugin can be loaded into a Wine-started process by Wine's own LdrLoadDll and processes audio bit-exact, including a plugin whose memory comes from the C runtime. Natively and on KVM; no kernel change.

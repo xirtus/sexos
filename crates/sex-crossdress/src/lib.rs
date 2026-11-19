@@ -46,6 +46,10 @@ pub const TEST_PASS: &str = "crossdress: all checks passed";
 /// The plugin test (`test/gain.c`, built by `test/build_gain.sh`): a real 64-bit Windows
 /// CLAP audio plugin DLL, "Crossdress Test Gain".
 pub static TEST_CLAP: &[u8] = include_bytes!("../test/gain.clap");
+/// The same plugin built with CROSSDRESS_MSVC_CRT (test/build_gain_msvc.sh): its memory
+/// comes from the C runtime through api-ms-win-crt-heap and vcruntime140.dll, so it loads
+/// only in a Wine process (CW5).
+pub static TEST_CLAP_MSVC: &[u8] = include_bytes!("../test/gain_msvc.clap");
 
 /// The CW3 test program (`test/wine_hello.c`, built by `test/build_wine_hello.sh`): runs
 /// on Wine's own KERNEL32, loaded by Wine's ntdll in the cell.

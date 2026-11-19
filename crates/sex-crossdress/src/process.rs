@@ -81,6 +81,10 @@ pub const SYSCALL_DISPATCHER_VA: u64 = THUNK_VA + SYSCALL_SLOT * THUNK_SIZE;
 /// Unix half, which on SexOS is the host.
 pub const UNIX_CALL_DISPATCHER_VA: u64 = THUNK_VA + UNIX_CALL_SLOT * THUNK_SIZE;
 
+/// The thunk a host call returns through (`mov rcx, rax; out`): a guest that continues
+/// here ends the host's call with RAX.
+pub const CALL_RETURN_VA: u64 = THUNK_VA + 2 * THUNK_SIZE;
+
 /// Why the process stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Stop {

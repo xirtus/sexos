@@ -71,7 +71,12 @@ pub fn exercise_ntdll(cpu: &mut impl Vcpu, p: &mut sex_crossdress::process::WinP
 #[derive(Default)]
 pub struct Keep { pub text: Vec<u8> }
 impl sex_crossdress::process::Host for Keep {
-    fn output(&mut self, _: u32, b: &[u8]) { self.text.extend_from_slice(b); }
+    fn output(&mut self, _: u32, b: &[u8]) {
+        // With CROSSDRESS_NT_TRACE the trace is also echoed live, so a test that panics
+        // still shows the calls that led there.
+        if std::env::var_os("CROSSDRESS_NT_TRACE").is_some() { eprint!("{}", String::from_utf8_lossy(b)); }
+        self.text.extend_from_slice(b);
+    }
     fn now_ms(&mut self) -> u64 { 1 }
     fn sleep(&mut self, _: u32) {}
 }
@@ -108,4 +113,62 @@ pub fn wine_process(exe: &[u8], path: &str) -> Option<sex_crossdress::process::W
     let mut p = sex_crossdress::wine::load(drag_vmm::memory::Ram::new(256 << 20).unwrap(), &setup).unwrap();
     p.nt.trace = std::env::var_os("CROSSDRESS_NT_TRACE").is_some();
     Some(p)
+}
+
+/// Where the Wine-hosted plugin tests put the plugin in the virtual file system.
+pub const CLAP_PATH: &str = "C:\\Program Files\\Common Files\\CLAP\\gain.clap";
+
+/// A Wine process ready to host a plugin: the CW3 program's image as the process image
+/// (its entry never runs), `plugin` at CLAP_PATH. None (SKIP) without CROSSDRESS_WINE_DIR.
+pub fn wine_plugin_host(plugin: &[u8]) -> Option<sex_crossdress::process::WinProcess> {
+    let mut p = wine_process(sex_crossdress::WINE_HELLO_EXE, "C:\\Program Files\\Crossdress\\host.exe")?;
+    p.nt.add_file(&sex_crossdress::nt::normalize(CLAP_PATH), plugin.to_vec());
+    Some(p)
+}
+
+fn sine(frames: usize, offset: usize, hz: f64) -> Vec<f32> {
+    (0..frames).map(|i| (((offset + i) as f64) * hz * 2.0 * core::f64::consts::PI / 48_000.0).sin() as f32 * 0.5).collect()
+}
+
+/// Opens the test gain plugin and runs the CX1 audio checks (descriptor, parameters,
+/// host callbacks, three blocks with sample-accurate gain changes compared bit for bit,
+/// changes echoed back, close). Returns lines to print.
+pub fn drive_gain_plugin(plugin: &mut sex_crossdress::clap::ClapPlugin, cpu: &mut impl Vcpu, host: &mut impl sex_crossdress::process::Host) -> Vec<String> {
+    use sex_crossdress::clap::ParamChange;
+    let mut log = Vec::new();
+    let r = plugin.open(cpu, host, CLAP_PATH);
+    log.push(format!("open={r:?} counters={:?}", plugin.process.counters));
+    if let Err(e) = r { panic!("open: {e:?} ({log:?})"); }
+    let d = &plugin.descriptor;
+    log.push(format!("id={} name={:?} params={:?}", d.id, d.name, plugin.params));
+    assert_eq!(d.id, "org.sexos.crossdress.test-gain");
+    assert_eq!(d.features, ["audio-effect", "utility", "stereo"]);
+    assert_eq!(plugin.params.len(), 1);
+    assert!(plugin.requests.extensions >= 1);
+    assert_eq!((plugin.requests.callback, plugin.main_thread_calls), (1, 1));
+    assert_eq!(plugin.param_value(cpu, host, 0).unwrap(), Some(1.0));
+    plugin.activate(cpu, host, 48_000.0, 512).unwrap();
+    let blocks: [(usize, Vec<ParamChange>); 3] = [
+        (512, vec![]),
+        (512, vec![ParamChange { time: 100, id: 0, value: 0.5 }, ParamChange { time: 300, id: 0, value: 1.5 }]),
+        (256, vec![]),
+    ];
+    let (mut gain, mut at) = (1.0f32, 0usize);
+    let mut reported = Vec::new();
+    for (frames, changes) in &blocks {
+        let (l, r) = (sine(*frames, at, 997.0), sine(*frames, at, 2000.0));
+        let (mut ol, mut or) = (vec![9.0f32; *frames], vec![9.0f32; *frames]);
+        let pushed = plugin.process(cpu, host, [&l, &r], [&mut ol, &mut or], changes).unwrap();
+        for i in 0..*frames {
+            for c in changes.iter().filter(|c| c.time as usize == i) { gain = c.value as f32; }
+            assert_eq!((ol[i].to_bits(), or[i].to_bits()), ((l[i] * gain).to_bits(), (r[i] * gain).to_bits()), "frame {i} of the block at {at}");
+        }
+        reported.extend(pushed);
+        at += frames;
+    }
+    assert_eq!(reported, [ParamChange { time: 100, id: 0, value: 0.5 }, ParamChange { time: 300, id: 0, value: 1.5 }]);
+    assert_eq!(plugin.param_value(cpu, host, 0).unwrap(), Some(1.5));
+    plugin.close(cpu, host).unwrap();
+    log.push(format!("processed={at} frames bit-exact, reported={reported:?} counters={:?}", plugin.process.counters));
+    log
 }

@@ -139,8 +139,8 @@ pub fn syscall(p: &mut WinProcess, number: u32, regs: &Regs, host: &mut impl Hos
             crate::win32::read_context(&c, &mut r);
             return Outcome::Jump(r);
         }
-        "NtOpenFile" => open_file(p, a[0], a[2], a[3]),
-        "NtCreateFile" => if a[7] == 1 /* FILE_OPEN */ || a[7] == 3 /* FILE_OPEN_IF */ { open_file(p, a[0], a[2], a[3]) } else { STATUS_ACCESS_DENIED },
+        "NtOpenFile" => open_file(p, a[0], a[2], a[3], host),
+        "NtCreateFile" => if a[7] == 1 /* FILE_OPEN */ || a[7] == 3 /* FILE_OPEN_IF */ { open_file(p, a[0], a[2], a[3], host) } else { STATUS_ACCESS_DENIED },
         "NtQueryAttributesFile" => query_attributes(p, a[0], a[1], false),
         "NtQueryFullAttributesFile" => query_attributes(p, a[0], a[1], true),
         "NtCreateSection" => create_section(p, a[0], a[3], a[5] as u32, a[6]),
@@ -161,6 +161,18 @@ pub fn syscall(p: &mut WinProcess, number: u32, regs: &Regs, host: &mut impl Hos
         // Console driver requests (condrv): there is no console device yet, so programs see
         // a plain file and write through NtWriteFile (GetConsoleMode fails).
         "NtDeviceIoControlFile" => 0xC000_0010, // STATUS_INVALID_DEVICE_REQUEST
+        // A second-chance (unhandled) exception ends the process; the stop names it.
+        "NtRaiseException" if a[2] == 0 => {
+            let (code, at) = (get(p, a[0]).unwrap_or(0) as u32, get(p, a[0] + 0x10).unwrap_or(0));
+            // EXCEPTION_WINE_STUB: a function Wine does not implement; the record names it.
+            if code == 0x8000_0100 {
+                let text = |va: u64| -> String { let mut b = [0u8; 64]; let _ = p.cell.read_user(va, &mut b); String::from_utf8_lossy(&b[..b.iter().position(|&c| c == 0).unwrap_or(64)]).into_owned() };
+                let (dll, name) = (get(p, a[0] + 0x20).unwrap_or(0), get(p, a[0] + 0x28).unwrap_or(0));
+                let name = if name >> 16 == 0 { alloc::format!("#{name}") } else { text(name) };
+                return Outcome::Stop(Stop::Unimplemented { dll: text(dll), name });
+            }
+            return Outcome::Stop(Stop::Unimplemented { dll: String::from("unhandled exception"), name: alloc::format!("{code:#x} at {at:#x}") });
+        }
         "NtFsControlFile" => fs_control(p, a[0], a[4], a[5] as u32, a[8], a[9]),
         _ => return Outcome::Stop(Stop::Unimplemented { dll: String::from("ntdll.syscall"), name }),
     };
@@ -192,6 +204,9 @@ pub struct NtState {
     next_handle: u64,
     /// Images mapped in the cell: (base, SizeOfImage).
     pub modules: Vec<(u64, u64)>,
+    /// Which file each image view came from (base, index in `files`), so a second
+    /// NtMapViewOfSection of the same file returns the same view.
+    pub images: Vec<(u64, usize)>,
     pub main_image: Option<(u64, crate::pe::Image)>,
     pub main_entry: u64,
     /// NLS tables by file name, and where each is mapped once asked for.
@@ -214,7 +229,7 @@ impl NtState {
         let key = normalize(path);
         match self.files.iter_mut().find(|f| f.0 == key) { Some(f) => f.1 = data, None => self.files.push((key, data)) }
     }
-    fn file(&self, path: &str) -> Option<usize> { self.files.iter().position(|f| f.0 == path) }
+    pub fn file(&self, path: &str) -> Option<usize> { self.files.iter().position(|f| f.0 == path) }
     fn is_dir(&self, path: &str) -> bool {
         let p = path.trim_end_matches('\\');
         p.len() == 2 && p.ends_with(':') || self.files.iter().any(|f| f.0.len() > p.len() + 1 && f.0.starts_with(p) && f.0.as_bytes()[p.len()] == b'\\')
@@ -254,8 +269,9 @@ fn object_path(p: &WinProcess, oa: u64) -> Option<String> {
 fn io_status(p: &mut WinProcess, iosb: u64, status: u64, info: u64) { if iosb != 0 { let _ = put(p, iosb, status); let _ = put(p, iosb + 8, info); } }
 
 /// NtOpenFile/NtCreateFile (open existing, read).
-fn open_file(p: &mut WinProcess, handle_ptr: u64, oa: u64, iosb: u64) -> u64 {
+fn open_file(p: &mut WinProcess, handle_ptr: u64, oa: u64, iosb: u64, host: &mut impl Host) -> u64 {
     let Some(path) = object_path(p, oa) else { return STATUS_ACCESS_VIOLATION };
+    if p.nt.trace { host.output(2, alloc::format!("[nt]   open {path}\n").as_bytes()); }
     let obj = if let Some(f) = p.nt.file(&path) { Object::File { file: f, pos: 0 } } else if p.nt.is_dir(&path) { Object::Directory(path) } else {
         return if path.contains('\\') && !p.nt.is_dir(path.rsplit_once('\\').map(|x| x.0).unwrap_or("")) { STATUS_OBJECT_PATH_NOT_FOUND } else { STATUS_OBJECT_NAME_NOT_FOUND };
     };
@@ -341,8 +357,9 @@ fn map_view(p: &mut WinProcess, section: u64, process: u64, base_ptr: u64, size_
     let data = p.nt.files[file].1.clone();
     let Ok(img) = crate::pe::Image::parse(&data) else { return STATUS_INVALID_IMAGE_FORMAT };
     let size = (img.size_of_image as u64).next_multiple_of(PAGE);
-    if let Some(&(b, _)) = p.nt.modules.iter().find(|m| m.0 == img.preferred_base) {
-        // Already mapped (ntdll itself): the same view again.
+    if let Some(&(b, _)) = p.nt.images.iter().find(|m| m.1 == file) {
+        // This file is already mapped (ntdll and the program, which the host mapped): the
+        // same view again. Another image at the same preferred base is relocated below.
         let _ = put(p, base_ptr, b);
         let _ = put(p, size_ptr, size);
         return STATUS_SUCCESS;
@@ -354,6 +371,7 @@ fn map_view(p: &mut WinProcess, section: u64, process: u64, base_ptr: u64, size_
     }
     if p.map_image(&data, base).is_err() { return STATUS_NO_MEMORY; }
     p.nt.modules.push((base, size));
+    p.nt.images.push((base, file));
     if put(p, base_ptr, base).is_none() || put(p, size_ptr, size).is_none() { return STATUS_ACCESS_VIOLATION; }
     if base != img.preferred_base { STATUS_IMAGE_NOT_AT_BASE } else { STATUS_SUCCESS }
 }
@@ -602,13 +620,16 @@ fn allocate(p: &mut WinProcess, process: u64, base_ptr: u64, size_ptr: u64, kind
 }
 
 /// `__wine_unix_call(handle, code, args)`. For ntdll's own Unix library (Wine 9's
-/// `unix_call_funcs` order): 2 `wine_dbg_write(str, len)` goes to the host's stderr,
+/// `unix_call_funcs` order): 1 `unwind_builtin_dll` finds nothing, 2 `wine_dbg_write(str, len)` goes to the host's stderr,
 /// 7 `system_time_precise(*time)`. Others stop the process with handle and code.
 pub fn unix_call(p: &mut WinProcess, regs: &Regs, host: &mut impl Host) -> Outcome {
     let g = regs;
     let (handle, code, args) = (g.rcx, g.rdx as u32, g.r8);
     if handle == NTDLL_UNIXLIB {
         match code {
+            // unwind_builtin_dll: the host has no unwind data for code outside PE images (the
+            // cell's thunks), so Wine's unwinder treats such a frame as a leaf function.
+            1 => return Outcome::Return(0xC000_0001), // STATUS_UNSUCCESSFUL
             2 => {
                 let (Some(s), Some(n)) = (get(p, args), get(p, args + 8)) else { return Outcome::Return(STATUS_ACCESS_VIOLATION) };
                 let mut b = alloc::vec![0u8; (n as usize).min(4096)];

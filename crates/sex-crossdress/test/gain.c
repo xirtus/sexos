@@ -48,8 +48,21 @@ _Static_assert(sizeof(clap_param_info_t) == 1320, "param info");
 _Static_assert(offsetof(clap_param_info_t, min_value) == 1296, "param info min");
 _Static_assert(offsetof(clap_plugin_params_t, flush) == 40, "params.flush");
 
+#ifdef CROSSDRESS_MSVC_CRT
+// gain_msvc.clap (build_gain_msvc.sh): the same plugin taking its memory from the C runtime
+// through the API set names and vcruntime140.dll, as MSVC-built plugins do. It needs
+// Wine's ucrtbase in the cell (Crossdress CW4).
+__declspec(dllimport) void *calloc(size_t, size_t);
+__declspec(dllimport) void free(void *);
+__declspec(dllimport) void *memcpy(void *, const void *, size_t);
+static void *zalloc(size_t n) { return calloc(1, n); }
+static void release(void *p) { free(p); }
+static void copy_name(char *to, const char *from, size_t n) { size_t i = 0; while (i + 1 < n && from[i]) i++; memcpy(to, from, i); to[i] = 0; }
+#else
 static void *zalloc(size_t n) { return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, n); }
+static void release(void *p) { HeapFree(GetProcessHeap(), 0, p); }
 static void copy_name(char *to, const char *from, size_t n) { size_t i = 0; for (; i + 1 < n && from[i]; i++) to[i] = from[i]; to[i] = 0; }
+#endif
 static int same(const char *a, const char *b) { while (*a && *a == *b) { a++; b++; } return *a == *b; }
 
 static int attaches;
@@ -109,7 +122,7 @@ static bool g_init(const clap_plugin_t *p) {
     g->host->request_callback(g->host);
     return true;
 }
-static void g_destroy(const clap_plugin_t *p) { HeapFree(GetProcessHeap(), 0, p->plugin_data); }
+static void g_destroy(const clap_plugin_t *p) { release(p->plugin_data); }
 static bool g_activate(const clap_plugin_t *p, double sr, uint32_t min, uint32_t max) {
     gain_t *g = p->plugin_data;
     if (sr < 8000.0 || min > max || max == 0) return false;

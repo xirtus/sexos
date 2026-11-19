@@ -184,6 +184,35 @@ no host-side kernel32.
   rebuilds wine_hello.exe and compares it byte for byte (LLVM 18), or runs the rebuild
   with `CROSSDRESS_WINE_EXE` on another LLVM. `CROSSDRESS_NT_TRACE=1` prints every call.
 
-Next (CW4): ucrtbase and msvcrt so a CRT-linked plugin loads; a small registry; then the
-CLAP bridge on top of a Wine-started process, so commercial plugins that use kernel32
-beyond our subset load; then VST3 (COM) and Moan opening Windows plugins.
+## CW4 (2026-11-19): Wine's C runtime, the MSVC way
+
+- **CW4a**: `test/wine_crt.exe` links `ucrtbase.dll` directly (malloc, calloc, strtol,
+  qsort with a callback into the program, sqrt, sprintf, puts, exit) and passes on Wine's
+  ucrtbase. The host's std handles are pipes (FILE_TYPE_PIPE), so the CRT buffers lines;
+  NtDeviceIoControlFile (condrv) is refused, so GetConsoleMode fails and output goes
+  through NtWriteFile. NtTerminateProcess(0, ...) ends only the *other* threads (none),
+  so DllMain(DETACH) runs and flushes stdio before NtTerminateProcess(-1).
+- **CW4b**: the host maps Wine's `apisetschema.dll` read-only and points PEB.ApiSetMap at
+  its `.apiset` section, as Wine's Unix loader does. `test/wine_msvc.exe` imports
+  `api-ms-win-crt-{heap,string,stdio,math,runtime}-l1-1-0.dll` and `VCRUNTIME140.dll`
+  exactly as MSVC builds do, and Wine's ntdll resolves them to ucrtbase and vcruntime140.
+
+## CW5 (2026-11-19): CLAP plugins loaded by Wine's own loader
+
+- `wine::start` runs `LdrInitializeThunk` with a CONTEXT that continues at the host
+  call's return thunk instead of RtlUserThreadStart: Wine initializes the process (kernel32,
+  kernelbase, their DllMain) and hands it back without running the program.
+- `wine::load_library` calls Wine's `LdrLoadDll` for a plugin in the virtual file system;
+  imports (through API sets), relocation and DllMain are Wine's.
+- `ClapPlugin::in_wine` drives such a plugin with the CX1 bridge (DllMain already ran).
+- `test/gain_msvc.clap` is the test plugin built with `CROSSDRESS_MSVC_CRT`: its memory
+  comes from `calloc`/`free` through `api-ms-win-crt-heap` and `memcpy` from
+  `VCRUNTIME140.dll`. Both plugins process the CX1 audio bit-exact in a Wine process.
+- Fixed on the way: NtMapViewOfSection reused a view whenever *any* image sat at the
+  preferred base (ucrtbase and the plugin both prefer 0x180000000); views are now keyed by
+  file and a clash is relocated. Unix call 1 (`unwind_builtin_dll`) answers "nothing" so
+  Wine's unwinder treats thunk frames as leaves; an unhandled exception stops the cell
+  with its code, and EXCEPTION_WINE_STUB with the DLL and function it names.
+
+Next: msvcp140 (C++ plugins), a small registry, VST3 (COM), and Moan opening Windows
+plugins.

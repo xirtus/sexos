@@ -341,3 +341,27 @@ fn an_msvc_style_program_runs_through_api_sets_in_a_kvm_cell() {
     assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
     println!("[crossdress.kvm.msvc] ok: an MSVC-style program ran through API sets and vcruntime140 in a KVM cell");
 }
+
+/// Starts a Wine process on KVM, loads `file` with Wine's LdrLoadDll and runs the CX1
+/// audio checks on it.
+fn wine_clap_on_kvm(tag: &str, file: &[u8]) {
+    let Some(mut p) = common::wine_plugin_host(file) else { println!("[crossdress.kvm.{tag}] SKIP no CROSSDRESS_WINE_DIR (scripts/fetch_wine_pe.sh)"); return; };
+    let Some(kvm) = open_kvm() else { println!("[crossdress.kvm.{tag}] SKIP no usable /dev/kvm"); return; };
+    let mut cpu = kvm_vcpu(kvm, &p.cell.ram);
+    let mut out = common::Keep::default();
+    sex_crossdress::wine::start(&mut p, &mut cpu, &mut out).expect("Wine's loader initialized the process");
+    let (base, exports) = sex_crossdress::wine::load_library(&mut p, &mut cpu, &mut out, common::CLAP_PATH).expect("LdrLoadDll loaded the plugin");
+    println!("[crossdress.kvm.{tag}] plugin base={base:#x}");
+    // The guest RAM block stays put, but the Ram handle the vCPU reads guest code through
+    // moves with the process into the plugin: point the vCPU at the new place.
+    let mut plugin = sex_crossdress::clap::ClapPlugin::in_wine(p, &exports).unwrap();
+    cpu.ram = &plugin.process.cell.ram;
+    for line in common::drive_gain_plugin(&mut plugin, &mut cpu, &mut out) { println!("[crossdress.kvm.{tag}] {line}"); }
+    println!("[crossdress.kvm.{tag}] ok: a CLAP plugin loaded by Wine's loader processed audio bit-exact in a KVM cell");
+}
+
+#[test]
+fn a_clap_plugin_runs_in_a_wine_process_in_a_kvm_cell() { wine_clap_on_kvm("wineclap", sex_crossdress::TEST_CLAP); }
+
+#[test]
+fn an_msvc_crt_clap_plugin_runs_in_a_wine_process_in_a_kvm_cell() { wine_clap_on_kvm("msvcclap", sex_crossdress::TEST_CLAP_MSVC); }

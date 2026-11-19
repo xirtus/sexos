@@ -143,18 +143,32 @@ pub struct ClapPlugin {
     max_frames: u32,
     steady_time: i64,
     strings_next: u64,
+    /// Wine's loader already ran DllMain (the plugin came in through `LdrLoadDll`).
+    attached: bool,
 }
 
 impl ClapPlugin {
     /// Loads a `.clap` (a 64-bit Windows DLL) into a fresh cell over `ram` and lays out
     /// the host side. Nothing in the plugin runs until `open`.
     pub fn load(ram: Ram, file: &[u8]) -> Result<ClapPlugin, Error> {
-        let mut process = WinProcess::load_dll(ram, file)?;
+        let process = WinProcess::load_dll(ram, file)?;
         let entry = process.export("clap_entry").ok_or(Error::NotClap)?;
+        Self::with_process(process, entry, false)
+    }
+
+    /// The plugin in a Wine-started process (`wine::start`), loaded with Wine's own loader
+    /// (`wine::load_library`), so it may use the C runtime and anything else Wine's DLLs
+    /// provide. `exports` are the plugin DLL's.
+    pub fn in_wine(process: WinProcess, exports: &[(String, u64)]) -> Result<ClapPlugin, Error> {
+        let entry = exports.iter().find(|e| e.0 == "clap_entry").map(|e| e.1).ok_or(Error::NotClap)?;
+        Self::with_process(process, entry, true)
+    }
+
+    fn with_process(mut process: WinProcess, entry: u64, attached: bool) -> Result<ClapPlugin, Error> {
         process.cell.map(BRIDGE_VA, BRIDGE_BYTES / PAGE, Access::USER_RW).map_err(|e| Error::Load(LoadError::Cell(e)))?;
         let mut p = ClapPlugin {
             process, descriptor: Descriptor::default(), params: Vec::new(), requests: Requests::default(), main_thread_calls: 0, served_callbacks: 0,
-            entry, plugin: 0, params_ext: 0, phase: Phase::Loaded, max_frames: 0, steady_time: 0, strings_next: STRINGS,
+            entry, plugin: 0, params_ext: 0, phase: Phase::Loaded, max_frames: 0, steady_time: 0, strings_next: STRINGS, attached,
         };
         // clap_host_t: version, host_data, name, vendor, url, version, then the callbacks.
         let strs = ["SexOS Crossdress", "SexOS", "https://github.com/xirtus/sexos", "0.1.0"].map(|s| p.string(s));
@@ -236,7 +250,7 @@ impl ClapPlugin {
     pub fn open(&mut self, cpu: &mut impl Vcpu, host: &mut impl Host, path: &str) -> Result<(), Error> {
         if self.phase != Phase::Loaded { return Err(Error::Host("already open")); }
         let mut calls = Calls { inner: host, events: 0, pushed: Vec::new(), requests: &mut self.requests, bad: false };
-        if !self.process.dll_main(cpu, &mut calls, 1)? { return Err(Error::Refused("DllMain")); }
+        if !self.attached && !self.process.dll_main(cpu, &mut calls, 1)? { return Err(Error::Refused("DllMain")); }
         let entry = self.entry;
         let mut version = [0u8; 12];
         self.process.cell.read_user(entry, &mut version).ok_or(Error::Bad("clap_entry"))?;
@@ -399,8 +413,11 @@ impl ClapPlugin {
             let f = self.ptr(self.entry + 24)?;
             self.call(cpu, host, f, &[], None, 0)?;
             self.phase = Phase::Loaded;
-            let mut calls = Calls { inner: host, events: 0, pushed: Vec::new(), requests: &mut self.requests, bad: false };
-            self.process.dll_main(cpu, &mut calls, 0)?;
+            // In a Wine process the DLL stays loaded (Wine's loader owns its lifetime).
+            if !self.attached {
+                let mut calls = Calls { inner: host, events: 0, pushed: Vec::new(), requests: &mut self.requests, bad: false };
+                self.process.dll_main(cpu, &mut calls, 0)?;
+            }
         }
         Ok(())
     }
