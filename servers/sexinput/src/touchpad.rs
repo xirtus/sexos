@@ -55,6 +55,9 @@ struct Pad {
     line_bit: Option<u8>,
     /// The line fired and the pad has not been read since.
     fired: bool,
+    /// An edge drain wants another read; it waits for the next turn, where Input checks
+    /// its outboxes have room again.
+    again: bool,
     next_poll: u64,
     failures: u32,
     last_error: Option<sex_i2c_dw::Error>,
@@ -105,7 +108,7 @@ fn open(f: &Found) -> Result<Pad, &'static str> {
     serial_println!("[sexinput.touchpad.ready] vendor={:#06x} product={:#06x} extent={}x{} fingers={} touch_mode={} report={:?} input_len={}",
         tp.hid.vendor_id, tp.hid.product_id, tp.extent.0, tp.extent.1, tp.layout.fingers, tp.touch_mode as u8, tp.layout.touch_report, tp.input_len());
     let rec = Recognizer::new(Config::for_extent(tp.extent.0));
-    let mut pad = Pad { ctrl, address: f.address, tp, rec, pace: Pace::polling(), line_bit: None, fired: false, next_poll: 0, failures: 0, last_error: None };
+    let mut pad = Pad { ctrl, address: f.address, tp, rec, pace: Pace::polling(), line_bit: None, fired: false, again: false, next_poll: 0, failures: 0, last_error: None };
     if let Some(irq) = f.irq { arm(&mut pad, irq); } else { serial_println!("[sexinput.touchpad.mode] mode=poll reason=no_line"); }
     Ok(pad)
 }
@@ -176,8 +179,9 @@ pub fn poll(now: u64, mut out: impl FnMut(Out)) {
     let Some(p) = (unsafe { (*core::ptr::addr_of_mut!(PAD)).as_mut() }) else { return };
     let fired = core::mem::take(&mut p.fired);
     p.next_poll = p.pace.next_read();
-    if !p.pace.due(now, fired) { return; }
-    loop {
+    if !core::mem::take(&mut p.again) && !p.pace.due(now, fired) { return; }
+    {
+        let repeats = p.tp.repeats;
         let mut bus = OnBus { c: &mut p.ctrl, address: p.address, last_error: &mut p.last_error };
         let read = match p.tp.poll(&mut bus) {
             Ok(Some(frame)) => {
@@ -188,7 +192,9 @@ pub fn poll(now: u64, mut out: impl FnMut(Out)) {
                 });
                 Read::Report { touch: frame.fingers() > 0 || frame.button }
             }
-            Ok(None) => { p.failures = 0; if p.tp.last_empty { Read::Empty } else { Read::Report { touch: false } } }
+            // A pad that repeats its last report when idle has nothing new: as good as empty,
+            // so idle check reads never count against the line.
+            Ok(None) => { p.failures = 0; if p.tp.last_empty || p.tp.repeats != repeats { Read::Empty } else { Read::Report { touch: false } } }
             Err(()) => {
                 p.failures += 1;
                 if p.failures == 1 || p.failures == GIVE_UP_AFTER {
@@ -204,7 +210,7 @@ pub fn poll(now: u64, mut out: impl FnMut(Out)) {
             }
         };
         match p.pace.after(now, read) {
-            Next::Again => continue,
+            Next::Again => { p.again = true; p.next_poll = now; return; }
             Next::Unmask => { let _ = sex_pdx::device::line_mask(0, false); }
             Next::Fallback(why) => {
                 let _ = sex_pdx::device::line_mask(0, true);
@@ -213,7 +219,6 @@ pub fn poll(now: u64, mut out: impl FnMut(Out)) {
             }
             Next::Done => {}
         }
-        break;
     }
     p.next_poll = p.pace.next_read();
 }
