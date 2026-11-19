@@ -43,6 +43,8 @@ static FIRED: [AtomicU64; VECTORS] = [const { AtomicU64::new(0) }; VECTORS];
 static NEXT_VECTOR: AtomicU32 = AtomicU32::new(0);
 /// vector index → 1 << 63 | notification bit << 48 | pool entry << 32 | object id (OP_BIND).
 static BOUND: [AtomicU64; VECTORS] = [const { AtomicU64::new(0) }; VECTORS];
+/// The bound notification's object generation (BOUND names its id).
+static BOUND_GENERATION: [AtomicU32; VECTORS] = [const { AtomicU32::new(0) }; VECTORS];
 
 #[derive(Clone, Copy)]
 struct Record {
@@ -277,7 +279,8 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             let at = r.vector + index as usize;
             if nslot == u32::MAX { BOUND[at].store(0, Ordering::Release); return 0; }
             match crate::ipc_v2::syscall::signal_target(nslot) {
-                Ok((entry, object)) => {
+                Ok((entry, object, generation)) => {
+                    BOUND_GENERATION[at].store(generation, Ordering::Release);
                     BOUND[at].store(1 << 63 | bit << 48 | (entry as u64) << 32 | object as u64, Ordering::Release);
                     crate::serial_println!("[device.irq.bind] pd={} slot={} vector_index={} notification_slot={} bit={}", pd, a, index, nslot, bit);
                     0
@@ -303,12 +306,12 @@ fn fire(index: usize) {
     let bound = BOUND[index].load(Ordering::Acquire);
     if bound >> 63 != 0 {
         FIRED[index].fetch_add(1, Ordering::Relaxed);
-        if crate::ipc_v2::syscall::signal_bound((bound >> 32) as u16 as usize, bound as u32, 1 << (bound >> 48 & 63)) {
+        if crate::ipc_v2::syscall::signal_bound((bound >> 32) as u16 as usize, bound as u32, BOUND_GENERATION[index].load(Ordering::Acquire), 1 << (bound >> 48 & 63)) {
             unsafe { crate::interrupts::send_eoi(); }
             return;
         }
         // The notification is gone: the vector wakes the main task again.
-        BOUND[index].store(0, Ordering::Release);
+        let _ = BOUND[index].compare_exchange(bound, 0, Ordering::AcqRel, Ordering::Relaxed);
     }
     if route >> 40 & 1 != 0 {
         let (pd, bit) = (route as u32, (route >> 32) as u8 & 63);
