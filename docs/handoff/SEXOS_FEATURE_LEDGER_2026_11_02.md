@@ -5341,8 +5341,3 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - SSH domains: `ssh.NAME = user@host[:port]` lines in `spindle.conf` (`ssh NAME [COMMAND]` logs in there); bad lines are reported like other settings.
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
-
-## AMD A1+A2: Radeon display engine readout and boot receipt (2026-11-19)
-- `crates/sex-gpu-amd`: native DCN logic for Ryzen APUs (Renoir through Strix Point) and RDNA 1-3 Radeon: chip table, per-generation register layouts, OTG timing and HUBP surface readout, VM aperture, DP AUX (DPCD, EDID over I2C-over-AUX) with the DMCU arbiter, vblank flips. Host-tested against a simulated DCN in `scripts/kms_host_gate.sh`.
-- BOOT leases Display the first 256 KiB of any AMD display controller's register BAR (BAR 5) at slot 28 (lease kind `AmdDisplay`, read/write view, no command grant, no DMA). `sexdisplay` prints `[display.amd.chip|otg|surface|aperture|dpcd|edid]` and `[display.amd] ... otgs_lit=` for known chips; unknown Radeons log `known=0` and stay on the firmware picture. AUX is used only on APUs (eDP on AUX 0); nothing else is written.
-- QEMU has no Radeon, so the receipt comes from the first Ryzen laptop boot.
