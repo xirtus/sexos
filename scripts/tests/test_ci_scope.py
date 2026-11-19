@@ -36,6 +36,11 @@ class CiScope(unittest.TestCase):
     def test_any_code_runs_every_gate(self):
         self.assertEqual(self.scope('pull_request',{'docs/NOTES.md':'b\n','src/lib.rs':'// x\n'}),'full')
 
+    def test_moving_code_into_docs_is_code(self):
+        (self.root/'docs/archived.md').write_text((self.root/'src/lib.rs').read_text())
+        (self.root/'src/lib.rs').unlink()
+        self.assertEqual(self.scope('pull_request',{}),'full')
+
     def test_master_push_is_smoke_and_nightly_is_full(self):
         self.assertEqual(self.scope('push',{'src/lib.rs':'// y\n'}),'smoke')
         self.assertEqual(self.scope('schedule',{'docs/NOTES.md':'c\n'}),'full')

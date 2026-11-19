@@ -20,7 +20,7 @@ case "$event" in
   *) echo full; exit 0 ;;
 esac
 base="${2:-HEAD^1}"
-mapfile -t changed < <(git diff --name-only "$base" HEAD) || { echo full; exit 0; }
+mapfile -t changed < <(git diff --no-renames --name-only "$base" HEAD) || { echo full; exit 0; }
 [[ ${#changed[@]} -gt 0 ]] || { echo full; exit 0; }
 for path in "${changed[@]}"; do
   case "$path" in
