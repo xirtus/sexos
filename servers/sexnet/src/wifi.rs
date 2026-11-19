@@ -118,6 +118,8 @@ const SETTLE_TICKS: u64 = 10;
 const RX_FRAMES: usize = 32;
 /// The chip's .ucode, inflated from the firmware pack (the largest is 1.75 MB).
 static mut FIRMWARE: [u8; 2 << 20] = [0; 2 << 20];
+/// Stage X2: frames one block-ack session holds until the gap before them fills.
+static mut BA_SLOTS: sex_wifi::ba::Slots = sex_wifi::ba::Slots::EMPTY;
 static mut LINK_RX: [[u8; wlink::MAX_ETHERNET]; RX_FRAMES] = [[0; wlink::MAX_ETHERNET]; RX_FRAMES];
 struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64 }
 impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0 }; }
@@ -458,7 +460,7 @@ impl Wifi {
                 let family = self.bringup.boot.chip.family;
                 let tx = core::mem::replace(&mut a.tx, TxQueue::new(family));
                 self.rx = RxQueue::EMPTY;
-                self.link = Some(Link::new(tx, a.target, a.me(), family, false).with_rate_control(self.tlc_version()));
+                self.link = Some(Link::new(tx, a.target, a.me(), family, false).with_rate_control(self.tlc_version()).with_block_ack(self.block_ack_command()));
                 self.attempts = 0;
                 sex_pdx::serial_record!("[wifi.link.up] security=open rate={:#x}", wlink::DATA_RATE);
             }
@@ -539,8 +541,8 @@ impl Wifi {
         if r.step == rsna::Step::Connected {
             sex_pdx::serial_record!("[wifi.connected] ssid=\"{}\" security=WPA2 ticks={}", ssid, now_ticks);
             self.rx = RxQueue::EMPTY;
-            let version = self.tlc_version();
-            self.link = self.rsna.take().map(|r| r.into_link().with_rate_control(version));
+            let (version, command) = (self.tlc_version(), self.block_ack_command());
+            self.link = self.rsna.take().map(|r| r.into_link().with_rate_control(version).with_block_ack(command));
             self.attempts = 0;
             sex_pdx::serial_record!("[wifi.link.up] security=WPA2 rate={:#x}", wlink::DATA_RATE);
         } else {
@@ -610,6 +612,14 @@ impl Wifi {
             .map_or(3, |v| if v.version == 4 { 4 } else { 3 })
     }
 
+    /// How block-ack sessions are set up (stage X2): RX_BAID_ALLOCATION_CONFIG_CMD's
+    /// version when the firmware sets CAPA_BAID_ML_SUPPORT, else 0 (ADD_STA).
+    fn block_ack_command(&self) -> u8 {
+        let Ok(fw) = Firmware::parse(self.file) else { return 0 };
+        if !fw.has_capa(sex_wifi::ba::CAPA_BAID_ML_SUPPORT) { return 0; }
+        fw.command_version(hcmd::DATA_PATH_GROUP, sex_wifi::ba::RX_BAID_ALLOCATION_CONFIG_CMD).map_or(0, |v| v.version)
+    }
+
     /// The link is up: sexnet's IP stack may use it.
     pub fn link_up(&self) -> bool { self.link.as_ref().is_some_and(|l| l.up()) }
     pub fn link_mac(&self) -> Option<[u8; 6]> { self.link.as_ref().map(|l| l.me()) }
@@ -630,8 +640,11 @@ impl Wifi {
         let before = (l.received, l.dropped);
         let keys = (l.rekey_messages, l.rekeyed);
         let rates = (l.rate_control, l.rate);
+        let block_ack = (l.ba_sessions, l.ba_declined, l.ba_flushes);
         let q = &mut self.rx;
-        let up = l.poll(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, |frame| {
+        // SAFETY: sexnet runs one thread, and only this link touches BA_SLOTS.
+        let slots = unsafe { &mut *core::ptr::addr_of_mut!(BA_SLOTS) };
+        let up = l.poll_with(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, Some(slots), |frame| {
             if q.count == RX_FRAMES || frame.len() > wlink::MAX_ETHERNET { q.overflow += 1; return; }
             let at = (q.head + q.count) % RX_FRAMES;
             // SAFETY: sexnet runs one thread, and only this queue touches LINK_RX.
@@ -646,6 +659,10 @@ impl Wifi {
         }
         if (l.rate_control, l.rate) != rates {
             sex_pdx::serial_record!("[wifi.rate] control={:?} rate={:#x}", l.rate_control, l.rate);
+        }
+        if (l.ba_sessions, l.ba_declined, l.ba_flushes) != block_ack {
+            let (tid, window) = l.ba.as_ref().map_or((0xff, 0), |s| (s.tid, s.window));
+            sex_pdx::serial_record!("[wifi.ba] sessions={} declined={} flushes={} tid={} window={}", l.ba_sessions, l.ba_declined, l.ba_flushes, tid, window);
         }
         if (l.rekey_messages, l.rekeyed) != keys {
             sex_pdx::serial_record!("[wifi.rekey] messages={} installed={} error={:?}", l.rekey_messages, l.rekeyed, l.rekey_error);

@@ -637,3 +637,34 @@ and `[wifi.rate]`.
 
 Next: X2 block-ack (ADDBA answers, firmware BA sessions, receive reordering by
 the descriptor's reorder word, transmit aggregation queues), X3 roaming and 6 GHz.
+
+## 20. Stage X2a: block-ack receive (2026-11-19)
+
+An 802.11n/ac/ax AP sends its downlink as A-MPDUs only after a block-ack
+agreement. Without one the link stays at single-frame rates however wide the
+channel. X2a takes one receive session at a time (`crates/sex-wifi/src/ba.rs`,
+`Link::poll_with`).
+
+- **Agreement.** An ADDBA request (action category 3) on an HT link is answered
+  with an ADDBA response: immediate policy, no A-MSDU inside the A-MPDU, window
+  min(AP's, 64). Before answering, the firmware gets the session: with
+  CAPA_BAID_ML_SUPPORT (63) by RX_BAID_ALLOCATION_CONFIG_CMD (DATA_PATH 0x16,
+  16 bytes, answers the BAID), else by ADD_STA modify `add_immediate_ba`. A second
+  TID while a session runs, or a legacy link, is declined (status 37). DELBA
+  from the AP removes the session in the firmware.
+- **Reordering.** Each RX descriptor's reorder word (offset 16: NSSN, SN, BAID,
+  OLD_SN) says where a frame sits. Frames in order pass straight on; frames past
+  a gap wait in `ba::Slots` (64 × 1514 bytes, a static in sexnet), already
+  decrypted, with their PN; the firmware's FRAME_RELEASE (0xc3) and
+  BAR_FRAME_RELEASE (0xc2) move the window head and hand them over in order. The
+  CCMP replay check runs at release, in sequence order. Duplicates (status bit 22)
+  and frames behind the head are dropped. A window that has not moved for 250 ms
+  is flushed.
+- **Not yet.** Transmit aggregation (our ADDBA to the AP and a scheduler queue per
+  TID) is X2b.
+
+Boot log: `[wifi.ba] sessions=1 declined=0 flushes=0 tid=0 window=64` after the
+AP's first ADDBA. Tests: `crates/sex-wifi/tests/driver.rs`
+`x17_associates_as_wifi6_on_80mhz` and `x17_reorders_a_block_ack_session` (an
+out-of-order A-MPDU through a fake firmware, release notifications, a duplicate,
+DELBA).
