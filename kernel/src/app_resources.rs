@@ -40,7 +40,7 @@ impl App {
 const RUN_TASK_END:u32=0x8000_0000; // Above this are BOOT trampolines and program records.
 static NEXT_RUN_TASK:AtomicU32=AtomicU32::new(0x4000_0000);
 // Reserve an id once; exhaustion remains permanent and never wraps to a boot id.
-fn next_run_task()->Result<u32,u64>{
+pub(crate) fn next_run_task()->Result<u32,u64>{
     NEXT_RUN_TASK.fetch_update(Ordering::Relaxed,Ordering::Relaxed,|id|id.checked_add(1).filter(|next|id>=0x4000_0000&&*next<=RUN_TASK_END)).map_err(|_|DENIED)
 }
 static APPS:Mutex<[App;MAX_APPS]>=Mutex::new([const{App::new()};MAX_APPS]);

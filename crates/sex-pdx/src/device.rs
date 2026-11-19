@@ -26,6 +26,20 @@ pub const OP_UNMASK: u64 = 1;
 pub const OP_MASK: u64 = 2;
 /// → the pending bits, cleared atomically.
 pub const OP_TAKE: u64 = 3;
+// 4 and 5: I/O APIC lines (touchpad thread).
+/// rdi=slot, rsi=vector index | core << 16 → 0. Aims that vector at one core, so a
+/// queue's completions land where its worker runs. `OP_UNMASK` already aims the vector
+/// at the unmasking task's core; this is for a worker that unmasks on another's behalf.
+/// Refused for vectors routed through another table (Intel VMD).
+pub const OP_STEER: u64 = 6;
+/// `OP_STEER`'s core: the caller's own.
+pub const STEER_HERE: u32 = 0xffff;
+/// rdi=slot, rsi=vector index | bit << 16 | notification slot << 32 → 0. From now on
+/// that vector signals `bit` of an IPC v2 notification the caller may signal, instead
+/// of the pending word and the main task: one worker per queue waits on its own
+/// notification. Notification slot `u32::MAX` unbinds. If the notification is
+/// destroyed, the vector falls back to the pending word.
+pub const OP_BIND: u64 = 7;
 
 pub const EXTRA_SLOT_BASE: u64 = 160;
 pub const EXTRA_SLOTS: u64 = 32;
@@ -119,6 +133,20 @@ pub fn irq_unmask(slot: u64, vector: u64) -> Result<(), u64> {
 #[cfg(target_arch = "x86_64")]
 pub fn irq_mask(slot: u64, vector: u64) -> Result<(), u64> {
     let r = call(OP_MASK, slot, vector)[0];
+    if r == 0 { Ok(()) } else { Err(r) }
+}
+
+/// Aims `vector` of the device at `slot` at `core` (`STEER_HERE`: this task's core).
+#[cfg(target_arch = "x86_64")]
+pub fn irq_steer(slot: u64, vector: u16, core: u32) -> Result<(), u64> {
+    let r = call(OP_STEER, slot, vector as u64 | ((core & 0xffff) as u64) << 16)[0];
+    if r == 0 { Ok(()) } else { Err(r) }
+}
+
+/// Makes `vector` signal `bit` of the notification in `notification_slot`.
+#[cfg(target_arch = "x86_64")]
+pub fn irq_bind(slot: u64, vector: u16, notification_slot: u32, bit: u8) -> Result<(), u64> {
+    let r = call(OP_BIND, slot, vector as u64 | ((bit & 63) as u64) << 16 | (notification_slot as u64) << 32)[0];
     if r == 0 { Ok(()) } else { Err(r) }
 }
 

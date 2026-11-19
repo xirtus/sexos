@@ -30,6 +30,12 @@ pub const CORES: u64 = 5;
 /// to it restores: `fs:0` is then its thread control block, as x86-64 thread-local
 /// storage expects. Any task of a live run may set its own; it must be a user address.
 pub const TLS: u64 = 6;
+/// Driver services only (a domain holding a device lease): rsi = entry, rdx = stack
+/// top, r10 = argument, r8 = core → rsi = worker id. Like SPAWN, but the worker runs on
+/// that core (wrapped to the cores online), so each device queue has its own core.
+/// A driver's worker sleeps on an IPC v2 notification its queue's interrupt is bound
+/// to (`device::irq_bind`), not WAIT; EXIT ends it. The workers end with the service.
+pub const SPAWN_ON: u64 = 7;
 
 pub const OK: u64 = 0;
 pub const INVALID: u64 = 1;
@@ -60,6 +66,27 @@ pub fn call(op: u64, a: u64, b: u64, c: u64) -> (u64, u64) {
 }
 #[cfg(not(all(target_arch = "x86_64", any(target_os = "none", target_os = "hermit"))))]
 pub fn call(_op: u64, _a: u64, _b: u64, _c: u64) -> (u64, u64) { (u64::MAX, 0) }
+
+/// A driver service's worker at `entry` on `core` (see `SPAWN_ON`).
+#[cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "hermit")))]
+pub fn spawn_on(entry: u64, stack_top: u64, arg: u64, core: u32) -> Result<u64, u64> {
+    loop {
+        let (status, out): (u64, u64);
+        unsafe {
+            core::arch::asm!("syscall",
+                inlateout("rax") SYS_PROGRAM_THREAD => status,
+                inlateout("rdi") SPAWN_ON => _,
+                inlateout("rsi") entry => out, inlateout("rdx") stack_top => _,
+                inlateout("r10") arg => _, inlateout("r8") core as u64 => _,
+                out("rcx") _, out("r11") _, options(nostack));
+        }
+        match status {
+            OK => return Ok(out),
+            RETRY => crate::sys_yield(),
+            e => return Err(e),
+        }
+    }
+}
 
 /// Starts a worker at `entry` on the stack ending at `stack_top`, with `arg` in rdi.
 pub fn spawn(entry: u64, stack_top: u64, arg: u64) -> Result<u64, u64> {

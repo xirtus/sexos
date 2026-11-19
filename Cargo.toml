@@ -70,6 +70,7 @@ members = [
     "purple-scanout",
     "crates/sex-pdx",
     "crates/sex-iommu",
+    "crates/sex-lanes",
     "crates/sex-kms",
     "crates/sex-gpu-intel",
     "crates/sex-gpu-nv",

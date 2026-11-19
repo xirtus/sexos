@@ -1,0 +1,77 @@
+# Per-core zero-copy disk and network paths (I/O lanes), 2026-11-19
+
+Thread "Add per-core zero-copy disk and network paths". Builds on "Speed up native
+drivers" (NIC interrupts #451, NVMe queue depth 32 + 4 MiB runs, filesystem layout),
+which keeps those pieces; this work is what sits on top.
+
+## Where the time goes today (measured, CI KVM lane, AMD EPYC 9V74, median of 3)
+
+| bench (`program_bench_gate --accel kvm --no-pku`) | 1 core | 4 cores | 4 / 1 |
+|---|---|---|---|
+| `file_read` 4 MiB, cycles per MiB | 5,057,988 | 12,137,424 | 2.4x slower |
+| `file_read_4k`, cycles per read | 283,596 | 665,458 | 2.3x slower |
+| `ipc_roundtrip`, cycles | 11,944 | 94,401 | 7.9x |
+
+More cores make disk reads *slower*. With 4 cores, Files (pd 11) and SexDrive (pd 2)
+run on core 3 and the bench on another core, but every NVMe interrupt is aimed at
+core 0 (`device_irq::record` used the boot core's APIC for every vector): core 0 takes
+it, sets a bit and IPIs core 3 to wake SexDrive. Each request also crosses cores twice
+(app to Files, Files back), and every byte is copied twice (Files' block buffer into
+the shared window, the window into the app's buffer).
+
+## Design
+
+A **lane** is one core's private path: a submission ring and a completion ring in
+memory both sides see (one address space, so a request names its buffer by address
+and nothing is copied), a device queue of its own (NVMe I/O queue pair, NIC RX/TX
+pair), and that queue's MSI-X vector aimed at the same core, waking a driver worker
+that runs there. No lock is shared between cores.
+
+1. **Kernel mechanism (this PR, about 130 kernel lines)**
+   - `OP_UNMASK` aims the vector at the unmasking task's core (direct MSI/MSI-X entries
+     only; VMD-routed entries stay put). SexDrive and SexNet take their own interrupts
+     on their own core: no IPI hop.
+   - `SYS_DEVICE OP_STEER` (86/6): aim one vector at any core.
+   - `SYS_DEVICE OP_BIND` (86/7): a vector signals a bit of an IPC v2 notification the
+     driver holds instead of waking the main task; each queue's worker waits on its own
+     notification (`SYS_NOTIFY OP_NOTIFY_WAIT`). A destroyed notification falls back.
+   - `SYS_PROGRAM_THREAD SPAWN_ON` (83/7): a driver service (a domain holding a device
+     lease) starts a worker on a chosen core. Workers share the service's domain, key
+     and authority; they end with the service (`program_workers::end`).
+2. **`crates/sex-lanes` (host-tested, `scripts/lanes_host_gate.sh`)**
+   - `ring`: SPSC rings over shared memory with the need-wakeup handshake (a busy
+     consumer costs the producer no system call), robust to a lying peer (cursors that
+     no honest peer can produce read as `Corrupt`, never out of bounds). A two-thread
+     test moves 2 million items with the consumer sleeping whenever empty.
+   - `poll`: adaptive polling. A burst masks the vector and polls; 64 empty rounds
+     unmask and sleep; a stretch yields every 4096 rounds; the burst size that enters
+     polling adapts between 2 and 32.
+   - `nvme`: Set Features Number of Queues, Create/Delete I/O CQ/SQ, doorbell stride.
+   - `plan`: core to queue to vector when a device grants fewer queues or vectors than
+     cores (NVMe keeps vector 0 for admin, as Linux does).
+   - `rss`: Toeplitz hash (passes Microsoft's verification vectors), indirection table,
+     Intel igb/igc multi-queue registers.
+3. **NVMe one queue pair per core** (after the NVMe depth PR merges): SexDrive asks
+   for one queue per core, creates CQ/SQ pairs each with its own vector steered to its
+   core, and runs a worker per queue that drains its lane and its CQ.
+4. **NIC queues per core** (after #451): RSS on igb/igc, one RX/TX pair per core,
+   SexNet workers per queue; virtio-net multiqueue for QEMU.
+5. **Zero copy**: a client lends its buffer (region view) once; Files hands the block
+   run's address to SexDrive, which DMA-lends it through the IOMMU (syscall 90), so
+   the device writes straight into the app's buffer. Packet pools shared read-only
+   with the socket owner for receive.
+
+## Isolation
+
+Rings live in memory lent between exactly two domains; each side validates
+everything it reads (cursor ranges, buffer addresses inside the lent region). DMA
+into a client buffer goes through the driver's IOMMU domain only for the lent range.
+Workers run under the service's own PKU key. No new authority is minted: a worker can
+do only what its service could.
+
+## ABI
+
+- Syscall 86 `SYS_DEVICE`: new ops 6 `OP_STEER`, 7 `OP_BIND` (4 and 5 are the touchpad
+  thread's I/O APIC lines).
+- Syscall 83 `SYS_PROGRAM_THREAD`: new op 7 `SPAWN_ON` (driver services only).
+- `OP_UNMASK` now also re-aims the vector at the caller's core.

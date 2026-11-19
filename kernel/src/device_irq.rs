@@ -12,10 +12,16 @@
 //! Nothing here is created after BOOT: the syscall only reads records, flips mask
 //! bits of vectors BOOT already gave the caller, and clears the caller's own bits.
 //!
+//! Each vector is aimed at the core of the task that unmasks it, so a driver homed
+//! away from core 0 takes its own interrupts without an IPI hop; `OP_STEER` aims one
+//! vector at any core (one queue per core). `OP_BIND` makes a vector signal an IPC v2
+//! notification the caller holds instead of the main task, so each per-core worker
+//! sleeps on its own queue's interrupt.
+//!
 //! Without interrupt remapping (D4) a driver that can DMA can also forge an MSI
 //! write; that is the same trust a DMA-capable driver already has before the IOMMU.
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use sex_pdx::device::{Lease, Mode, MAX_LEASES, MAX_VECTORS_PER_SERVICE, ERR_NONE, OP_LIST, OP_MASK, OP_TAKE, OP_UNMASK};
+use sex_pdx::device::{Lease, Mode, MAX_LEASES, MAX_VECTORS_PER_SERVICE, ERR_NONE, OP_BIND, OP_LIST, OP_MASK, OP_STEER, OP_TAKE, OP_UNMASK, STEER_HERE};
 use x86_64::structures::idt::InterruptStackFrame;
 
 pub const FIRST_VECTOR: u8 = 0x50;
@@ -35,11 +41,15 @@ static ROUTE: [AtomicU64; VECTORS] = [const { AtomicU64::new(0) }; VECTORS];
 /// Interrupts delivered, by vector index.
 static FIRED: [AtomicU64; VECTORS] = [const { AtomicU64::new(0) }; VECTORS];
 static NEXT_VECTOR: AtomicU32 = AtomicU32::new(0);
+/// vector index → 1 << 63 | notification bit << 48 | pool entry << 32 | object id (OP_BIND).
+static BOUND: [AtomicU64; VECTORS] = [const { AtomicU64::new(0) }; VECTORS];
 
 #[derive(Clone, Copy)]
 struct Record {
     pd: u32,
     lease: Lease,
+    /// Index of the device's first vector in `ROUTE`.
+    vector: usize,
     /// Kernel-only mapping of the MSI-X table (Mode::MsiX).
     table: u64,
     /// MSI capability offset, its 64-bit flag and per-vector masking (Mode::Msi).
@@ -90,7 +100,7 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
     let mut lease = Lease { slot, vendor: dev.vendor_id, device: dev.device_id,
         class: (dev.class_id as u32) << 16 | (dev.subclass_id as u32) << 8 | dev.prog_if as u32,
         bus: dev.bus, dev: dev.dev, func: dev.func, mode: Mode::None, vectors: 0, first_bit: 0 };
-    let mut record = Record { pd, lease, table: 0, msi: 0, msi_wide: false, msi_masking: false };
+    let mut record = Record { pd, lease, vector: 0, table: 0, msi: 0, msi_wide: false, msi_masking: false };
     let (msi, msix) = if want == 0 { (None, None) } else { capabilities(dev) };
     let apic = crate::apic::local_id();
     if let Some(cap) = msix {
@@ -121,7 +131,7 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
                 }
                 dev.write_u32(cap, (dev.read_u32(cap) | 0x8000 << 16) & !(0x4000 << 16));
                 dev.write_u32(0x04, (dev.read_u32(0x04) & 0xffff) | INTX_DISABLE);
-                record.table = table;
+                record.table = table; record.vector = vector;
                 lease.mode = Mode::MsiX; lease.vectors = n as u8; lease.first_bit = bit;
                 crate::serial_println!("[device.irq.msix] pd={} slot={} {:02x}:{:02x}.{} table_size={} vectors={} first_vector={:#x} first_bit={} apic={} masked=1",
                     pd, slot, dev.bus, dev.dev, dev.func, size, n, FIRST_VECTOR as usize + vector, bit, apic);
@@ -142,7 +152,7 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
                 dev.write_u32(cap, dev.read_u32(cap) | 1 << 16);
                 dev.write_u32(0x04, (dev.read_u32(0x04) & 0xffff) | INTX_DISABLE);
             }
-            record.msi = cap; record.msi_wide = wide; record.msi_masking = masking;
+            record.msi = cap; record.msi_wide = wide; record.msi_masking = masking; record.vector = vector;
             lease.mode = Mode::Msi; lease.vectors = 1; lease.first_bit = bit;
             crate::serial_println!("[device.irq.msi] pd={} slot={} {:02x}:{:02x}.{} vector={:#x} bit={} wide={} masking={} apic={} masked=1",
                 pd, slot, dev.bus, dev.dev, dev.func, FIRST_VECTOR as usize + vector, bit, wide as u8, masking as u8, apic);
@@ -158,8 +168,42 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
     }
 }
 
+/// Whether domain `pd` holds any device lease: a driver service.
+pub fn holds_lease(pd: u32) -> bool { RECORDS.lock().iter().flatten().any(|r| r.pd == pd) }
+
 fn find(pd: u32, slot: u64) -> Option<Record> {
     RECORDS.lock().iter().flatten().find(|r| r.pd == pd && r.lease.slot == slot).copied()
+}
+
+fn config(l: &Lease) -> crate::hal::pci::PciDevice {
+    crate::hal::pci::PciDevice { bus: l.bus, dev: l.dev, func: l.func, vendor_id: l.vendor, device_id: l.device,
+        class_id: (l.class >> 16) as u8, subclass_id: (l.class >> 8) as u8, prog_if: l.class as u8, ecam: 0 }
+}
+
+/// Points vector `index` at local APIC `apic`. Only entries that name our own vector
+/// directly are moved: one routed through another table (Intel VMD) stays put.
+fn aim(record: &Record, index: u64, apic: u32) -> bool {
+    if index >= record.lease.vectors as u64 { return false; }
+    let ours = (FIRST_VECTOR as usize + record.vector + index as usize) as u32;
+    match record.lease.mode {
+        Mode::MsiX => unsafe {
+            let entry = (record.table + index * 16) as *mut u32;
+            if entry.add(2).read_volatile() != ours { return false; }
+            let masked = entry.add(3).read_volatile();
+            // Masked while the address changes, so no message goes out half-written.
+            entry.add(3).write_volatile(masked | 1);
+            entry.write_volatile(address(apic));
+            entry.add(3).write_volatile(masked);
+        },
+        Mode::Msi => {
+            let dev = config(&record.lease);
+            let data_at = if record.msi_wide { record.msi + 12 } else { record.msi + 8 };
+            if dev.read_u32(data_at) & 0xffff != ours { return false; }
+            dev.write_u32(record.msi + 4, address(apic));
+        }
+        Mode::None => return false,
+    }
+    true
 }
 
 fn set_mask(record: &Record, index: u64, masked: bool) -> bool {
@@ -168,8 +212,7 @@ fn set_mask(record: &Record, index: u64, masked: bool) -> bool {
     match l.mode {
         Mode::MsiX => unsafe { ((record.table + index * 16 + 12) as *mut u32).write_volatile(masked as u32); },
         Mode::Msi => {
-            let dev = crate::hal::pci::PciDevice { bus: l.bus, dev: l.dev, func: l.func, vendor_id: l.vendor, device_id: l.device,
-                class_id: (l.class >> 16) as u8, subclass_id: (l.class >> 8) as u8, prog_if: l.class as u8, ecam: 0 };
+            let dev = config(l);
             let cap = record.msi;
             if record.msi_masking {
                 let at = if record.msi_wide { cap + 16 } else { cap + 12 };
@@ -201,14 +244,47 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             w[0]
         }
         OP_UNMASK | OP_MASK => match find(pd, a) {
-            Some(r) if set_mask(&r, b, op == OP_MASK) => {
+            Some(r) if b < r.lease.vectors as u64 => {
+                // The unmasking task is the one that will wait: its core takes the interrupt.
+                let here = op == OP_UNMASK && aim(&r, b, crate::apic::local_id());
+                if !set_mask(&r, b, op == OP_MASK) { return sex_pdx::ERR_CAP_INVALID; }
                 if op == OP_UNMASK {
-                    crate::serial_println!("[device.irq.unmask] pd={} slot={} vector_index={} mode={}", pd, a, b, r.lease.mode.name());
+                    crate::serial_println!("[device.irq.unmask] pd={} slot={} vector_index={} mode={} core={} aimed={}",
+                        pd, a, b, r.lease.mode.name(), crate::core_local::CoreLocal::get().core_id, here as u8);
                 }
                 0
             }
             _ => sex_pdx::ERR_CAP_INVALID,
         },
+        // rsi=slot, rdx=vector index | core << 16 (STEER_HERE: the caller's core).
+        OP_STEER => {
+            let (index, core) = (b & 0xffff, (b >> 16) as u32);
+            let core = if core == STEER_HERE { crate::core_local::CoreLocal::get().core_id } else { core };
+            match (find(pd, a), crate::smp::local_apic_of(core)) {
+                (Some(r), Some(apic)) if aim(&r, index, apic) => {
+                    crate::serial_println!("[device.irq.steer] pd={} slot={} vector_index={} core={} apic={}", pd, a, index, core, apic);
+                    0
+                }
+                _ => sex_pdx::ERR_CAP_INVALID,
+            }
+        }
+        // rsi=slot, rdx=vector index | notification bit << 16 | notification slot << 32.
+        // A notification slot of 0xffff_ffff unbinds: the vector wakes the main task again.
+        OP_BIND => {
+            let (index, bit, nslot) = (b & 0xffff, (b >> 16) & 0xff, (b >> 32) as u32);
+            let Some(r) = find(pd, a) else { return sex_pdx::ERR_CAP_INVALID };
+            if index >= r.lease.vectors as u64 || bit >= 64 { return sex_pdx::ERR_CAP_INVALID; }
+            let at = r.vector + index as usize;
+            if nslot == u32::MAX { BOUND[at].store(0, Ordering::Release); return 0; }
+            match crate::ipc_v2::syscall::signal_target(nslot) {
+                Ok((entry, object)) => {
+                    BOUND[at].store(1 << 63 | bit << 48 | (entry as u64) << 32 | object as u64, Ordering::Release);
+                    crate::serial_println!("[device.irq.bind] pd={} slot={} vector_index={} notification_slot={} bit={}", pd, a, index, nslot, bit);
+                    0
+                }
+                Err(e) => e,
+            }
+        }
         OP_TAKE => PENDING[pd as usize].swap(0, Ordering::AcqRel),
         _ => sex_pdx::ERR_CAP_INVALID,
     }
@@ -224,6 +300,16 @@ pub fn fired(index: usize) -> u64 { FIRED[index].load(Ordering::Relaxed) }
 
 fn fire(index: usize) {
     let route = ROUTE[index].load(Ordering::Acquire);
+    let bound = BOUND[index].load(Ordering::Acquire);
+    if bound >> 63 != 0 {
+        FIRED[index].fetch_add(1, Ordering::Relaxed);
+        if crate::ipc_v2::syscall::signal_bound((bound >> 32) as u16 as usize, bound as u32, 1 << (bound >> 48 & 63)) {
+            unsafe { crate::interrupts::send_eoi(); }
+            return;
+        }
+        // The notification is gone: the vector wakes the main task again.
+        BOUND[index].store(0, Ordering::Release);
+    }
     if route >> 40 & 1 != 0 {
         let (pd, bit) = (route as u32, (route >> 32) as u8 & 63);
         PENDING[pd as usize].fetch_or(1 << bit, Ordering::AcqRel);

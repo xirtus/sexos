@@ -517,7 +517,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         },
 
         83 => { // SYS_PROGRAM_THREAD: workers of the caller's own run.
-            crate::program_workers::call(regs,rdi,rsi,rdx,r10)
+            if rdi==sex_pdx::program_threads::SPAWN_ON{crate::program_workers::spawn_service(regs)}
+            else{crate::program_workers::call(regs,rdi,rsi,rdx,r10)}
         },
 
         82 => { // SYS_PROGRAM_CODE: self-only, the run's own heap pages become code or data.

@@ -30,7 +30,7 @@ ab8817143b15e29969990957e5c465b5a703ee4812ae21c399de2ce55fa83aa2  crates/sex-pdx
 
 d17ef036e0f28ec8199e709913df79689f31bacdf4d84e951fbe0da540269383  crates/sex-pdx/src/desktop_style.rs
 
-4519de04eef091b40d15e00f40bc2ec7911f916a9ac3e28ebf4fd05613f1beca  crates/sex-pdx/src/device.rs
+daa704aff8acedd14ad0f66c8ab03d13c7a5101a5a6d1a2046b3babe45ab5f03  crates/sex-pdx/src/device.rs
 
 75ea7ea281d2cc93c27a2496d91f86ca9c2defe90777e2d5fd2b2aa1dcfd3f1c  crates/sex-pdx/src/display_boot.rs
 
@@ -130,7 +130,7 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 99e2089130ccb63dec906a478946d6c18939b21c2554895e49fb6789033c1ada  kernel/src/app_resource_state.rs
 
-89626a05e12f0947a102e3332eac3c9ee0bb89092711afde33952e7c3d37496e  kernel/src/app_resources.rs
+7a2a0a3810eb2ba86622b10fbfe4284afa9b2bb1034fb8d8a5df39e59f2693b8  kernel/src/app_resources.rs
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
@@ -176,7 +176,7 @@ a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci
 
 c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/service_restart.rs
 
-5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577  kernel/src/syscalls/mod.rs
+09377692073c10bda3d4b2d87575ef0f2e5485b95d8d3df6625d2a9055f6b3c3  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

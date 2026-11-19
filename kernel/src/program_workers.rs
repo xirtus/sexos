@@ -56,9 +56,35 @@ fn cores(target: u32) -> u64 {
     if crate::program_tenancy::shared(target) { 1 } else { crate::smp::program_cores().max(1) as u64 }
 }
 
+/// A driver service's workers belong to this run: the service's whole life.
+const SERVICE_RUN: u32 = u32::MAX;
+
+/// A BOOT service that drives a device: it may start workers pinned to cores, one per
+/// device queue. Its workers end when the service is ended (`end`).
+fn driver(pd: u32) -> bool { crate::device_irq::holds_lease(pd) }
+
+/// Syscall 83 `SPAWN_ON`: a driver service's worker on core r8 (wrapped to the cores
+/// online). rsi = entry, rdx = stack top, r10 = argument → rsi = worker id.
+pub fn spawn_service(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
+    let pd = crate::core_local::CoreLocal::get().current_pd_ref();
+    let (entry, stack, arg, core) = (regs.rsi, regs.rdx, regs.r10, regs.r8);
+    regs.rsi = 0;
+    if !driver(pd.id) { return t::DENIED; }
+    let online = crate::smp::ONLINE.load(Ordering::Acquire).max(1) as u64;
+    let id = match crate::app_resources::next_run_task() { Ok(id) => id, Err(e) => return e };
+    match spawn_on(pd, SERVICE_RUN, id, entry, stack, arg, Some((core % online) as u32)) {
+        Ok(id) => { regs.rsi = id; t::OK }
+        Err(e) => e,
+    }
+}
+
 /// Starts a worker for `target`'s run `run`. The caller holds the program table and
 /// has checked that `run` is the row's live run, so no end can race this.
 pub fn spawn(pd: &crate::capability::ProtectionDomain, run: u32, id: u32, entry: u64, stack: u64, arg: u64) -> Result<u64, u64> {
+    spawn_on(pd, run, id, entry, stack, arg, None)
+}
+
+fn spawn_on(pd: &crate::capability::ProtectionDomain, run: u32, id: u32, entry: u64, stack: u64, arg: u64, core: Option<u32>) -> Result<u64, u64> {
     if entry == 0 || stack < 16 { return Err(t::INVALID); }
     let mut table = table();
     let live = table.workers.iter().filter(|w| w.target == pd.id && w.run == run && !dead(w.task)).count();
@@ -83,7 +109,7 @@ pub fn spawn(pd: &crate::capability::ProtectionDomain, run: u32, id: u32, entry:
         let frame = (*task).context.kstack_top as *mut u64;
         *frame.add(6) = arg;
         (*task).context.rdi = arg;
-        (*task).home.store(core_for(pd.id, n), Ordering::Release);
+        (*task).home.store(core.unwrap_or_else(|| core_for(pd.id, n)), Ordering::Release);
     }
     drop(table);
     let core = crate::core_local::CoreLocal::get().core_id as usize;
