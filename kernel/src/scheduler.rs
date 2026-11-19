@@ -291,6 +291,8 @@ fn note_latency(task: &Task) {
 }
 /// Logs the latency counters; the timekeeper calls it every couple of seconds.
 pub fn report_latency() {
+    let donated = DONATIONS.load(Ordering::Relaxed);
+    if donated != 0 { serial_println!("[sched.donation] wakes={}", donated); }
     for class in [CLASS_INTERACTIVE, CLASS_NORMAL] {
         let [count, total, worst] = &LATENCY[class];
         let n = count.load(Ordering::Relaxed);
@@ -317,6 +319,8 @@ pub struct Scheduler {
     handoff_streak: AtomicU32,
     /// Set by a call-and-wait or reply-and-wait for the wake it causes.
     handoff_armed: AtomicBool,
+    /// The wake being admitted answers a call from an interactive task (`unpark_for_call`).
+    donating: AtomicBool,
     /// This switch is a handoff, so it skips housekeeping (see `tick`).
     lean: AtomicBool,
     /// The next `tick` skips housekeeping: a task waits on its partner (102/103).
@@ -376,6 +380,7 @@ impl Scheduler {
             handoff: AtomicPtr::new(ptr::null_mut()),
             handoff_streak: AtomicU32::new(0),
             handoff_armed: AtomicBool::new(false),
+            donating: AtomicBool::new(false),
             lean: AtomicBool::new(false),
             lean_next: AtomicBool::new(false),
             sliced: AtomicBool::new(false),
@@ -635,7 +640,11 @@ impl Scheduler {
             if woken { unsafe { (*task).woken_at.store(now, Ordering::Relaxed) }; }
             if woken && period != 0 && !home.budget.exhausted() && home.deadline.try_push(task, now + home.budget.cycles(period)).is_ok() { due = true; return Ok(()); }
             if handoff && self.handoff.compare_exchange(ptr::null_mut(), task, Ordering::AcqRel, Ordering::Acquire).is_ok() { return Ok(()); }
-            let interactive = class_of(unsafe { (*task).context.pd_id }) == CLASS_INTERACTIVE;
+            // A service woken by an interactive caller's request runs with the caller's
+            // class for that wake (K3b donation): Shell's call to Files does not queue
+            // behind a busy program on Files' core.
+            let interactive = class_of(unsafe { (*task).context.pd_id }) == CLASS_INTERACTIVE
+                || (woken && self.donating.load(Ordering::Relaxed));
             let keep = sliced && interactive && home.kept.fetch_add(1, Ordering::Relaxed) < SLICED_KEEP;
             if (woken || keep) && interactive && home.urgent.try_push(task).is_ok() { urgent = true; return Ok(()); }
             home.runqueue.try_push(task)
@@ -1155,6 +1164,24 @@ pub fn park_current_thread() {
         unsafe { (*current).state.park(core_id); }
     }
 }
+
+/// `unpark_thread` for the server of a call just published. When the caller is
+/// interactive and the server is a service (not an app or a record), the server is
+/// admitted with the interactive class for this wake.
+pub fn unpark_for_call(task_ptr: *mut Task) {
+    if task_ptr.is_null() { return; }
+    let sched = &SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
+    let caller = sched.current_task.load(Ordering::Acquire);
+    let server = unsafe { (*task_ptr).context.pd_id };
+    let donate = !caller.is_null() && class_of(unsafe { (*caller).context.pd_id }) == CLASS_INTERACTIVE
+        && class_of(server) != CLASS_INTERACTIVE && !crate::program_records::is_record(server)
+        && sex_pdx::app_catalog::by_target(server as u32).is_none();
+    if donate { sched.donating.store(true, Ordering::Relaxed); DONATIONS.fetch_add(1, Ordering::Relaxed); }
+    unpark_thread(task_ptr);
+    if donate { sched.donating.store(false, Ordering::Relaxed); }
+}
+/// Wakes admitted with a caller's interactive class (`unpark_for_call`).
+pub static DONATIONS: AtomicU64 = AtomicU64::new(0);
 
 pub fn unpark_thread(task_ptr: *mut Task) {
     if task_ptr.is_null() { return; }
