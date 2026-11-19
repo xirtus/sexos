@@ -20,10 +20,14 @@ pub struct TaskContext {
     /// The task's thread pointer (FS base), loaded on every switch to it. Programs
     /// set it with `program_threads::TLS`; user code cannot change it otherwise.
     pub fs_base: u64,
+    /// The task's gate-area index, loaded into IA32_TSC_AUX while gates are on
+    /// (crate::gate). 0 = no area.
+    pub gate_aux: u64,
 }
 
 const _: () = assert!(core::mem::offset_of!(TaskContext, kstack_top) == 0xC0);
 const _: () = assert!(core::mem::offset_of!(TaskContext, fs_base) == 0xC8);
+const _: () = assert!(core::mem::offset_of!(TaskContext, gate_aux) == 0xD0);
 
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -176,6 +180,7 @@ impl Task {
             pd_ptr: pd as *const _,
             kstack_top: forged_ksp,  // active ksp; switch_to saves/loads here
             fs_base: 0,
+            gate_aux: 0,
         };
 
         Self {
@@ -713,6 +718,14 @@ impl Scheduler {
             "mov edx, [rsi + 0xCC]",
             "mov ecx, 0xC0000100",
             "wrmsr",
+            // The next task's gate identity for RDPID (TaskContext.gate_aux at 0xD0).
+            "cmp byte ptr [rip + {gates_on}], 0",
+            "je 4f",
+            "mov eax, [rsi + 0xD0]",
+            "xor edx, edx",
+            "mov ecx, 0xC0000103",
+            "wrmsr",
+            "4:",
             // Only now narrow PKRU; the Rust callback ran with kernel access.
             "cmp byte ptr [rip + {pku_enabled}], 0",
             "je 2f",
@@ -751,6 +764,7 @@ impl Scheduler {
 
             finish_switch = sym scheduler_finish_switch,
             pku_enabled = sym crate::pku::PKU_ENABLED,
+            gates_on = sym crate::gate::ON,
             actual_iret_rsp = sym ACTUAL_IRET_RSP,
             actual_q0 = sym ACTUAL_IRET_Q0_RIP,
             actual_q1 = sym ACTUAL_IRET_Q1_CS,
