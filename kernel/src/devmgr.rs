@@ -24,6 +24,8 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
     let services = Services { drive: sexdrive_pd_id, display: sexdisplay_pd_id, usb: sexusb_pd_id, net: sexnet_pd_id, bell: sexbell_pd_id, input: sexinput_pd_id };
     let mut held = [0u8; sex_hwdb::manifest::ALL.len()];
     let mut nvme = 0u32;
+    let safe = crate::safe_start();
+    if safe { serial_println!("[kernel.safe_start] skipped=dgpu_power_off,iommu,msi,wifi,sound,touchpad,intel_display"); }
     for dev in devices {
         let Some((manifest, entry)) = sex_hwdb::manifest::claim(id(&dev)) else { continue };
         let index = sex_hwdb::manifest::ALL.iter().position(|m| m.service == manifest.service).unwrap_or(0);
@@ -54,6 +56,13 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
                 }
             };
         let first = slot == entry.slot;
+        // Safe start: nothing that is new on real hardware and not needed to reach the
+        // desktop and the disk. The firmware framebuffer still shows the picture.
+        if safe && matches!(entry.lease, Lease::Wifi | Lease::Hda | Lease::SerialIo | Lease::IntelDisplay) {
+            serial_println!("[devmgr.lease.skip] {:02x}:{:02x}.{} {:04x}:{:04x} service={} reason=safe_start",
+                dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, manifest.service.name());
+            continue;
+        }
         let leased = match entry.lease {
             Lease::Nvme => nvme_lease(&dev, pd, slot),
             Lease::Xhci => xhci_lease(&dev, pd, slot),
@@ -76,7 +85,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
         held[index] += 1;
         serial_println!("[devmgr.lease] {:02x}:{:02x}.{} {:04x}:{:04x} service={} pd={} slot={} kind={:?} nth={}",
             dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, manifest.service.name(), owner, slot, entry.lease, held[index]);
-        if slot != 0 { crate::device_irq::record(owner, slot, &dev, manifest.vectors); }
+        if slot != 0 { crate::device_irq::record(owner, slot, &dev, if safe { 0 } else { manifest.vectors }); }
     }
     serial_println!("[devmgr.manifest] services={} drive={} usb={} net={} bell={} display={} input={}",
         sex_hwdb::manifest::ALL.len(), held[0], held[1], held[2], held[3], held[4], held[5]);

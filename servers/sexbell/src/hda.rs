@@ -135,7 +135,14 @@ pub struct Hda {
     mic_sd: u32,
     mic_on: Option<usize>,
     mic_tail: usize,
+    /// Widgets one path search may still visit (see `WALK_BUDGET`).
+    walk: u32,
 }
+
+/// Widgets one pin's path search visits at most. Paths are at most 6 widgets with
+/// up to 16 connections each, so a dense or looping mixer graph (or a hostile
+/// codec) could otherwise cost 16^5 lookups; real codecs need a few dozen.
+const WALK_BUDGET: u32 = 512;
 
 pub const MAX_OUTPUTS: usize = 8;
 const MAX_MICS: usize = 4;
@@ -155,12 +162,31 @@ impl Hda {
         assert!(offset as usize + size_of::<T>() <= self.length, "HDA_MMIO_OUTSIDE_VIEW");
         (self.mmio + offset as usize) as *mut T
     }
+    #[cfg(not(device_model))]
     fn r8(&self, o: u32) -> u8 { unsafe { self.reg::<u8>(o).read_volatile() } }
+    #[cfg(not(device_model))]
     fn r16(&self, o: u32) -> u16 { unsafe { self.reg::<u16>(o).read_volatile() } }
+    #[cfg(not(device_model))]
     fn r32(&self, o: u32) -> u32 { unsafe { self.reg::<u32>(o).read_volatile() } }
+    #[cfg(not(device_model))]
     fn w8(&mut self, o: u32, v: u8) { unsafe { self.reg::<u8>(o).write_volatile(v) } }
+    #[cfg(not(device_model))]
     fn w16(&mut self, o: u32, v: u16) { unsafe { self.reg::<u16>(o).write_volatile(v) } }
+    #[cfg(not(device_model))]
     fn w32(&mut self, o: u32, v: u32) { unsafe { self.reg::<u32>(o).write_volatile(v) } }
+    // Host fuzzing (fuzz/drivers, drv_hda): the registers are a device model.
+    #[cfg(device_model)]
+    fn r8(&self, o: u32) -> u8 { let _ = self.reg::<u8>(o); crate::device_model::read(o, 1) as u8 }
+    #[cfg(device_model)]
+    fn r16(&self, o: u32) -> u16 { let _ = self.reg::<u16>(o); crate::device_model::read(o, 2) as u16 }
+    #[cfg(device_model)]
+    fn r32(&self, o: u32) -> u32 { let _ = self.reg::<u32>(o); crate::device_model::read(o, 4) }
+    #[cfg(device_model)]
+    fn w8(&mut self, o: u32, v: u8) { let _ = self.reg::<u8>(o); crate::device_model::write(o, 1, v as u32) }
+    #[cfg(device_model)]
+    fn w16(&mut self, o: u32, v: u16) { let _ = self.reg::<u16>(o); crate::device_model::write(o, 2, v as u32) }
+    #[cfg(device_model)]
+    fn w32(&mut self, o: u32, v: u32) { let _ = self.reg::<u32>(o); crate::device_model::write(o, 4, v) }
     fn dma<T>(&self, at: usize) -> *mut T {
         assert!(at + size_of::<T>() <= POOL_NEEDS, "HDA_DMA_OUTSIDE_POOL");
         (self.dma_va + at) as *mut T
@@ -235,7 +261,9 @@ impl Hda {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         self.corb_wp = wp;
         self.w16(CORBWP, wp);
-        loop {
+        // A codec may queue unsolicited responses (jack events) ahead of the
+        // answer, but not forever: past a full ring of them the answer is lost.
+        for _ in 0..256 {
             if !self.wait(|h| h.r16(RIRBWP) & 0xff != h.rirb_rp) { return None; }
             self.rirb_rp = (self.rirb_rp + 1) & 0xff;
             let at = RIRB_AT + self.rirb_rp as usize * 8;
@@ -244,6 +272,7 @@ impl Hda {
             self.w8(RIRBSTS, 0x05);
             if extra & 0x10 == 0 { return Some(answer); } // skip unsolicited responses
         }
+        None
     }
     fn param(&mut self, nid: u32, p: u32) -> u32 { self.verb(nid, GET_PARAMETER, p).unwrap_or(0) }
 
@@ -274,6 +303,8 @@ impl Hda {
 
     /// A path from `nid` back to an output converter through mixers and selectors.
     fn find_dac(&mut self, nid: u32, depth: usize, route: &mut Route) -> bool {
+        if self.walk == 0 { return false; }
+        self.walk -= 1;
         let caps = self.param(nid, P_WIDGET);
         let kind = caps >> 20 & 0xf;
         route.path[depth] = nid;
@@ -311,6 +342,7 @@ impl Hda {
             let device = config >> 20 & 0xf;
             let rank = match device { 1 => 0, 2 => 1, 0 => 2, 0xf | 5 => continue, _ => 3 };
             let mut route = Route { codec: self.codec, afg, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device, sense: pin & 1 << 2 != 0 };
+            self.walk = WALK_BUDGET;
             if self.find_dac(nid, 0, &mut route) && n < out.len() { out[n] = Some(route); n += 1; }
         }
         n
@@ -318,6 +350,8 @@ impl Hda {
 
     /// A path from the input converter or mixer `nid` up to the pin `pin`.
     fn find_pin(&mut self, nid: u32, pin: u32, depth: usize, mic: &mut Mic) -> bool {
+        if self.walk == 0 { return false; }
+        self.walk -= 1;
         mic.path[depth] = nid;
         mic.len = depth + 1;
         if nid == pin && depth > 0 { return true; }
@@ -350,6 +384,7 @@ impl Hda {
             let Some(input) = crate::mic::input(config, caps) else { continue };
             for &adc in &adcs[..n_adc] {
                 let mut mic = Mic { codec: self.codec, afg, pin, path: [0; 6], pick: [0; 6], len: 0, input };
+                self.walk = WALK_BUDGET;
                 if self.find_pin(adc, pin, 0, &mut mic) {
                     sex_pdx::serial_record!("[bell.hda.input] codec={} pin={} adc={} device={:#x} rank={} sense={} hops={}",
                         self.codec, pin, adc, input.device, input.rank, input.sense as u8, mic.len);
@@ -412,7 +447,7 @@ impl Hda {
             dma_va: dma.virtual_address as usize, dma_pa, corb_wp: 0, rirb_rp: 0, codec: 0, sd: 0,
             tail: 0, head: 1, queued: [false; PERIODS], pending: 0, vendor: 0, dac: 0, pins: 0,
             routes: [None; MAX_OUTPUTS], outputs: 0, on: 0, home: 0, auto: true,
-            mics: [None; MAX_MICS], mic_count: 0, mic_sd: 0, mic_on: None, mic_tail: 0 };
+            mics: [None; MAX_MICS], mic_count: 0, mic_sd: 0, mic_on: None, mic_tail: 0, walk: 0 };
         if h.length < 0x180 { return Err("short_view"); }
         h.w32(INTCTL, 0);
         let codecs = h.reset()?;

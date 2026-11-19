@@ -21,9 +21,10 @@ SECOND=['spc','a','n','d','spc','t','w','o']
 SCOPE='Native QEMU power-cut recovery of a Quil idle draft through the held document route and Linen; no claim about physical media flush ordering.'
 
 def disk_args(disk):
- """The gate disk on NVMe (default) or, with SEXOS_GATE_DISK_BUS=ahci, as a SATA disk on q35's built-in AHCI."""
+ """The gate disk on NVMe (default) or, with SEXOS_GATE_DISK_BUS=ahci, as a SATA disk on q35's built-in AHCI.
+ SEXOS_GATE_NVME_OPTS is appended to the NVMe device (e.g. ',mdts=4' for a drive that takes 64 KiB per command)."""
  bus=os.environ.get('SEXOS_GATE_DISK_BUS','nvme')
- if bus=='nvme':return['-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial='+os.environ.get('SEXOS_GATE_DISK_SERIAL','sexos01')+',drive=nvm']
+ if bus=='nvme':return['-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial='+os.environ.get('SEXOS_GATE_DISK_SERIAL','sexos01')+',drive=nvm'+os.environ.get('SEXOS_GATE_NVME_OPTS','')]
  if bus=='ahci':return['-drive',f'if=none,id=sata,file={disk},format=raw','-device','ide-hd,drive=sata,bus=ide.0']
  raise ValueError('SEXOS_GATE_DISK_BUS must be nvme or ahci')
 
