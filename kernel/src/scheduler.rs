@@ -319,6 +319,8 @@ pub struct Scheduler {
     handoff_armed: AtomicBool,
     /// This switch is a handoff, so it skips housekeeping (see `tick`).
     lean: AtomicBool,
+    /// The next `tick` skips housekeeping: a task waits on its partner (102/103).
+    lean_next: AtomicBool,
     /// The outgoing task's time ran out (timer or preemption), as opposed to a yield.
     sliced: AtomicBool,
     /// Turns an interactive task kept its class after its time ran out since a normal
@@ -375,6 +377,7 @@ impl Scheduler {
             handoff_streak: AtomicU32::new(0),
             handoff_armed: AtomicBool::new(false),
             lean: AtomicBool::new(false),
+            lean_next: AtomicBool::new(false),
             sliced: AtomicBool::new(false),
             kept: AtomicU32::new(0),
             deadline: deadline::DeadlineSet::new(),
@@ -386,7 +389,8 @@ impl Scheduler {
     pub fn tick(&self) -> ScheduleDecision {
         // A call's partner runs at once: housekeeping waits for an ordinary turn, at most
         // HANDOFF_STREAK switches away (and core 0's timer polls every tick anyway).
-        let lean = !self.handoff.load(Ordering::Acquire).is_null() && self.handoff_streak.load(Ordering::Relaxed) < HANDOFF_STREAK;
+        let lean = self.lean_next.swap(false, Ordering::Relaxed)
+            || (!self.handoff.load(Ordering::Acquire).is_null() && self.handoff_streak.load(Ordering::Relaxed) < HANDOFF_STREAK);
         self.lean.store(lean, Ordering::Relaxed);
         if !lean { poll_paging_exit_notifications(); }
         if SCHED_TICK_ENTER_LOG_BUDGET
@@ -963,10 +967,19 @@ pub extern "C" fn idle_core() -> ! {
 /// IRQs are enabled only around HLT; every state/selection check runs with IF=0.
 pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskContext {
     let mut polled = false;
+    // Looks again after a re-check found work, at most this many times in a row: work
+    // that tick never takes cannot spin this core with interrupts off for good.
+    let mut rechecks = 0u32;
+    // While this core looks for work it will see a wake without an interrupt: wakers
+    // skip the IPI (`kick`). Cleared, and everything looked at again, before a halt.
+    let polling = &POLLING[sched.core_id as usize];
     loop {
         x86_64::instructions::interrupts::disable();
+        polling.store(true, Ordering::SeqCst);
+        core::sync::atomic::fence(Ordering::SeqCst);
         let current = sched.current_task.load(Ordering::Acquire);
         if !current.is_null() && (*current).state.resume_attached(sched.core_id) {
+            polling.store(false, Ordering::SeqCst);
             log_wake_event("local_resume", current);
             crate::ipc::recv::deliver(current);
             crate::cpu_account::switch(sched.core_id, Some((*current).context.pd_id as u32));
@@ -974,13 +987,17 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
             finish_last_runnable_proof(current);
             return &(*current).context;
         }
+        // The first look for a task waiting on its partner skips housekeeping, as a
+        // handoff does: the answer usually comes within microseconds.
+        if !polled && !current.is_null() && (*current).deliver.load(Ordering::Relaxed) { sched.lean_next.store(true, Ordering::Relaxed); }
         match sched.tick() {
-            ScheduleDecision::Switch { next, .. } => return next,
+            ScheduleDecision::Switch { next, .. } => { polling.store(false, Ordering::SeqCst); return next }
             ScheduleDecision::NoRunnable => {}
         }
         // A dead task with nothing to replace it would hold this core and its own
         // memory for good. Leave its stack so it can finish dying.
         if !current.is_null() && (*current).state.snapshot().exited {
+            polling.store(false, Ordering::SeqCst);
             leave_dead_task(sched, current);
         }
         crate::cpu_account::switch(sched.core_id, None);
@@ -991,6 +1008,12 @@ pub unsafe fn wait_for_local_resume_or_switch(sched: &Scheduler) -> *const TaskC
             poll_for_partner(sched, current);
             continue;
         }
+        // A wake that saw this core polling sent no interrupt: look once more after
+        // clearing the flag, or the halt could sleep through it.
+        polling.store(false, Ordering::SeqCst);
+        core::sync::atomic::fence(Ordering::SeqCst);
+        if rechecks < 64 && ((!current.is_null() && (*current).state.snapshot().pending) || sched.has_queued()) { rechecks += 1; continue; }
+        rechecks = 0;
         // Timer interrupts deliberately do not schedule kernel frames. They
         // return here, where pending wakes and retained admissions are retried.
         crate::hal::acpi::idle();
@@ -1015,15 +1038,11 @@ const POLL_CYCLES: u64 = 100_000;
 /// The task here waits in a call or reply (syscall 102/103) and this core has nothing
 /// else: its partner usually answers within microseconds, so look for that first.
 unsafe fn poll_for_partner(sched: &Scheduler, current: *mut Task) {
-    let polling = &POLLING[sched.core_id as usize];
-    polling.store(true, Ordering::SeqCst);
     let until = core::arch::x86_64::_rdtsc() + POLL_CYCLES;
     // Device and timer interrupts still arrive: they never switch a kernel frame.
     x86_64::instructions::interrupts::enable();
     while core::arch::x86_64::_rdtsc() < until && !(*current).state.snapshot().pending && !sched.has_queued() { core::hint::spin_loop(); }
     x86_64::instructions::interrupts::disable();
-    polling.store(false, Ordering::SeqCst);
-    core::sync::atomic::fence(Ordering::SeqCst);
 }
 /// Wakes another core for new work, unless it is polling for it anyway.
 fn kick(core: u32) {
@@ -1046,6 +1065,7 @@ pub unsafe fn wait_for_message(regs_ptr: *const crate::interrupts::SyscallRegs) 
         ParkResult::Blocked => {
             (*current).resume_observation_pending.store(true, Ordering::Release);
             log_wake_event("park", current);
+            if (*current).deliver.load(Ordering::Relaxed) { sched.lean_next.store(true, Ordering::Relaxed); }
             begin_last_runnable_proof(sched, current);
             yield_and_switch(regs_ptr);
         }
