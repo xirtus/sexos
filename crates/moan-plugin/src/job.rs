@@ -338,12 +338,33 @@ mod request_tests {
 pub enum Format {
     Clap,
     Vst3,
+    Ladspa,
+    /// A packed LV2 bundle (`MOANLV2B`, see `lv2::Bundle`).
+    Lv2,
 }
 impl Format {
+    pub const ALL: [Format; 4] = [Self::Clap, Self::Vst3, Self::Ladspa, Self::Lv2];
     pub fn token(self) -> &'static [u8] {
         match self {
             Self::Clap => b"clap",
             Self::Vst3 => b"vst3",
+            Self::Ladspa => b"ladspa",
+            Self::Lv2 => b"lv2",
+        }
+    }
+    /// The wire number carried by Files/Shell job records (MOANJOB2 byte 8).
+    pub fn id(self) -> u8 {
+        self as u8
+    }
+    pub fn from_id(id: u8) -> Option<Self> {
+        Self::ALL.get(id as usize).copied()
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Clap => "CLAP",
+            Self::Vst3 => "VST3",
+            Self::Ladspa => "LADSPA",
+            Self::Lv2 => "LV2",
         }
     }
 }
