@@ -1,4 +1,6 @@
-//! Drag D1: the Intel VT-x mechanism behind syscall 110 (`sex_pdx::vm`).
+//! Drag D1: the Intel VT-x mechanism behind syscall 110 (`sex_pdx::vm`). The VMs, loans
+//! and the syscall live here for both vendors; on AMD (D5) entry and exit are `svm.rs`
+//! and the guest-physical tables are nested page tables instead of EPT.
 //!
 //! Kernel growth, approved by Andreas on 2026-11-14 (docs/handoff/DRAG_VIRTUAL_MACHINES_
 //! DESIGN_2026_11_14.md): VMX instructions, the VMCS, EPT and VM entry/exit only run in
@@ -31,7 +33,8 @@ const GPA_LIMIT: u64 = 1 << 39;
 const SLICE_TSC: u64 = 4_000_000;
 const CORES: usize = crate::scheduler::task_ownership::MAX_CORES as usize;
 
-struct Vcpu { state: abi::State, event: u32, event_error: u32, running: bool }
+/// `extra`: CR2 and KERNEL_GS_BASE, which the VMCB swaps on AMD (`svm::enter`).
+struct Vcpu { state: abi::State, event: u32, event_error: u32, running: bool, extra: [u64; 2] }
 struct Vm { id: u64, pd: u32, root: u64, tables: Vec<u64>, loans: Vec<(u64, u64)>, vcpus: Vec<Vcpu> }
 struct Machines { next: u64, vms: Vec<Vm> }
 static VMS: Mutex<Machines> = Mutex::new(Machines { next: 1, vms: Vec::new() });
@@ -40,14 +43,17 @@ static VMS: Mutex<Machines> = Mutex::new(Machines { next: 1, vms: Vec::new() });
 #[derive(Clone, Copy)]
 struct Caps { revision: u32, pin: u32, proc: u32, proc2: u32, exit: u32, entry: u32, entry_may: u32,
     cr0: (u64, u64), cr4: (u64, u64), timer_shift: Option<u8> }
-static CAPS: Mutex<Option<Result<Caps, Reason>>> = Mutex::new(None);
+/// The vendor mechanism this machine runs guests with.
+#[derive(Clone, Copy)]
+enum Backend { Vmx(Caps), Svm(crate::svm::Caps) }
+static CAPS: Mutex<Option<Result<Backend, Reason>>> = Mutex::new(None);
 
 /// Per core: the VMXON region and the VMCS every run on that core uses (taken on first use).
 static REGIONS: [AtomicU64; CORES * 2] = [const { AtomicU64::new(0) }; CORES * 2];
 /// Bumped whenever an EPT loses a mapping or is freed. A core whose last INVEPT is older
 /// flushes every EPT translation before its next entry, so no stale guest-physical
 /// translation outlives a destroyed VM on any core.
-static EPT_GENERATION: AtomicU64 = AtomicU64::new(1);
+pub(crate) static EPT_GENERATION: AtomicU64 = AtomicU64::new(1);
 static SEEN: [AtomicU64; CORES] = [const { AtomicU64::new(0) }; CORES];
 
 // VMCS fields (Intel SDM appendix B).
@@ -72,17 +78,30 @@ const EFER_LMA: u64 = 1 << 10;
 
 fn rdmsr(n: u32) -> u64 { unsafe { Msr::new(n).read() } }
 
-/// The VMX capabilities, probed once: CPUID, the firmware lock, and every control the
-/// mechanism needs. Logs `[drag] vmx=...` the first time.
-fn caps() -> Result<Caps, Reason> {
+/// What this machine's VMX (or, on AMD, SVM) offers, probed once: CPUID, the firmware
+/// lock, and every control the mechanism needs. Logs `[drag] vmx=...` or `[drag] svm=...`
+/// the first time.
+fn caps() -> Result<Backend, Reason> {
     let mut slot = CAPS.lock();
     if let Some(c) = *slot { return c; }
+    let vmx = core::arch::x86_64::__cpuid(1).ecx & (1 << 5) != 0;
+    if !vmx && crate::svm::present() {
+        let probed = crate::svm::probe().map(Backend::Svm);
+        match probed {
+            Ok(Backend::Svm(c)) => crate::svm::describe(&c),
+            Err(r) => { serial_println!("[drag] svm=unavailable reason={}", r.name()); }
+            Ok(_) => {}
+        }
+        *slot = Some(probed);
+        return probed;
+    }
     let probed = probe();
     match probed {
         Ok(c) => { serial_println!("[drag] vmx=available revision={:#x} pin={:#x} proc={:#x} proc2={:#x} exit={:#x} entry={:#x} preemption_timer={}",
             c.revision, c.pin, c.proc, c.proc2, c.exit, c.entry, c.timer_shift.is_some() as u8); }
         Err(r) => { serial_println!("[drag] vmx=unavailable reason={}", r.name()); }
     }
+    let probed = probed.map(Backend::Vmx);
     *slot = Some(probed);
     probed
 }
@@ -140,12 +159,12 @@ fn call(pd: &crate::capability::ProtectionDomain, op: u64, a: u64, b: u64, c: u6
     let Ok(caps) = caps() else { return [abi::UNAVAILABLE, 0, 0] };
     let result = match op {
         abi::OP_CREATE => create(pd.id),
-        abi::OP_LEND_MEMORY => lend(pd, a, b, c, d),
+        abi::OP_LEND_MEMORY => lend(&caps, pd, a, b, c, d),
         abi::OP_VCPU_CREATE => {
             let mut m = VMS.lock();
             find(&mut m, pd.id, a).and_then(|vm| {
                 if vm.vcpus.len() >= MAX_VCPUS { return Err(abi::EXHAUSTED); }
-                vm.vcpus.push(Vcpu { state: abi::State::real_mode(0, 0), event: 0, event_error: 0, running: false });
+                vm.vcpus.push(Vcpu { state: abi::State::real_mode(0, 0), event: 0, event_error: 0, running: false, extra: [0; 2] });
                 Ok(vm.vcpus.len() as u64 - 1)
             })
         }
@@ -202,7 +221,7 @@ fn create(pd: u32) -> Result<u64, u64> {
 
 /// Maps `pages` of the caller's own heap at `va` into the VM at `gpa`. Nothing else can
 /// be lent: not kernel memory, BOOT pages, device windows or another run's frames.
-fn lend(pd: &crate::capability::ProtectionDomain, vm: u64, va: u64, gpa: u64, d: u64) -> Result<u64, u64> {
+fn lend(caps: &Backend, pd: &crate::capability::ProtectionDomain, vm: u64, va: u64, gpa: u64, d: u64) -> Result<u64, u64> {
     let (pages, access) = (d & 0xFFFF_FFFF, d >> 32);
     if pages == 0 || pages > 1 << 18 || access & abi::READ == 0 || access & !7 != 0 || gpa & 0xFFF != 0
         || gpa.checked_add(pages * 4096).map_or(true, |end| end > GPA_LIMIT) { return Err(abi::INVALID); }
@@ -214,7 +233,7 @@ fn lend(pd: &crate::capability::ProtectionDomain, vm: u64, va: u64, gpa: u64, d:
         let mut m = VMS.lock();
         let vm = find(&mut m, pd.id, vm)?;
         for (n, &frame) in frames.iter().enumerate() {
-            if let Err(e) = map(vm, gpa + n as u64 * 4096, frame, access) {
+            if let Err(e) = map(caps, vm, gpa + n as u64 * 4096, frame, access) {
                 for undo in 0..n as u64 { unmap(vm, gpa + undo * 4096); }
                 return Err(e);
             }
@@ -226,7 +245,12 @@ fn lend(pd: &crate::capability::ProtectionDomain, vm: u64, va: u64, gpa: u64, d:
     } else { e })
 }
 
-fn map(vm: &mut Vm, gpa: u64, frame: u64, access: u64) -> Result<(), u64> {
+fn map(caps: &Backend, vm: &mut Vm, gpa: u64, frame: u64, access: u64) -> Result<(), u64> {
+    // EPT and nested page tables share the 4-level shape and the low present bits.
+    let (table_entry, leaf) = match caps {
+        Backend::Vmx(_) => (hw::ept_table(0), hw::ept_leaf(frame, access)),
+        Backend::Svm(c) => (crate::svm::table(0), crate::svm::leaf(c, frame, access)),
+    };
     let mut table = vm.root;
     for level in (1..4).rev() {
         let e = entry(table, hw::ept_index(gpa, level));
@@ -234,13 +258,13 @@ fn map(vm: &mut Vm, gpa: u64, frame: u64, access: u64) -> Result<(), u64> {
         table = if v & 7 != 0 { v & hw::ADDRESS } else {
             let t = crate::program_frames::take().ok_or(abi::EXHAUSTED)?;
             vm.tables.push(t);
-            unsafe { e.write_volatile(hw::ept_table(t)) };
+            unsafe { e.write_volatile((t & hw::ADDRESS) | table_entry) };
             t
         };
     }
     let e = entry(table, hw::ept_index(gpa, 0));
     if unsafe { e.read_volatile() } != 0 { return Err(abi::INVALID); } // already lent there
-    unsafe { e.write_volatile(hw::ept_leaf(frame, access)) };
+    unsafe { e.write_volatile(leaf) };
     vm.loans.push((gpa, frame));
     Ok(())
 }
@@ -277,27 +301,31 @@ pub fn lent(pd: u32, frame: u64) -> bool {
     VMS.lock().vms.iter().any(|v| v.pd == pd && v.loans.iter().any(|l| l.1 == frame))
 }
 
-fn run(caps: &Caps, pd: u32, vm: u64, n: u64, out: u64, flags: u64) -> [u64; 3] {
+fn run(caps: &Backend, pd: u32, vm: u64, n: u64, out: u64, flags: u64) -> [u64; 3] {
     let size = core::mem::size_of::<abi::Exit>();
     if flags & !abi::RUN_LOAD_REGS != 0 || !crate::syscalls::user_bytes_writable(out, size) { return [abi::INVALID, 0, 0]; }
     let core = crate::core_local::CoreLocal::get().core_id as usize;
     if core >= CORES { return [abi::UNAVAILABLE, 0, 0]; }
-    let (mut state, eptp, event, error) = {
+    let (mut state, mut extra, eptp, event, error) = {
         let mut m = VMS.lock();
         let Ok(v) = find(&mut m, pd, vm) else { return [abi::DENIED, 0, 0] };
-        let eptp = hw::eptp(v.root);
+        let eptp = match caps { Backend::Vmx(_) => hw::eptp(v.root), Backend::Svm(_) => v.root };
         let Some(c) = v.vcpus.get_mut(n as usize) else { return [abi::INVALID, 0, 0] };
         if c.running { return [abi::BUSY, 0, 0]; }
         if flags & abi::RUN_LOAD_REGS != 0 { c.state.regs = unsafe { (out as *const abi::Exit).read_unaligned() }.regs; }
         c.running = true;
         let event = (c.event, c.event_error);
         c.event = 0;
-        (c.state, eptp, event.0, event.1)
+        (c.state, c.extra, eptp, event.0, event.1)
     };
     let mut exit = abi::Exit::default();
-    let result = x86_64::instructions::interrupts::without_interrupts(|| unsafe { enter(caps, core, &mut state, eptp, event, error, &mut exit) });
+    let result = x86_64::instructions::interrupts::without_interrupts(|| unsafe { match caps {
+        Backend::Vmx(c) => enter(c, core, &mut state, eptp, event, error, &mut exit),
+        Backend::Svm(c) => crate::svm::enter(c, core, vm << 3 | n, &mut state, &mut extra, eptp, event, error, &mut exit),
+    } });
     if let Ok(c) = vcpu(&mut VMS.lock(), pd, vm, n) {
         c.state = state;
+        c.extra = extra;
         c.running = false;
         // An event the exit cut short is delivered again; one never entered stays queued.
         match result {

@@ -499,10 +499,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
         python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" --out "$RUNNER_TEMP/sexos-fuzz"
-    - name: Drag VM syscall 110 and Crossdress refused cleanly without VMX (QEMU TCG; the guest paths need --accel kvm)
+    - name: Drag VMs and Crossdress through the kernel's AMD SVM backend (QEMU TCG emulates SVM with nested paging)
       run: |
         truncate -s 1G "$RUNNER_TEMP/drag-source.img"
-        python3 scripts/drag_gate.py --accel tcg --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drag-source.img" --out "$RUNNER_TEMP/sexos-drag"
+        python3 scripts/drag_gate.py --accel tcg --require-guest --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drag-source.img" --out "$RUNNER_TEMP/sexos-drag"
     - name: Preserve evidence
       if: always()
       uses: actions/upload-artifact@v4
