@@ -2995,6 +2995,8 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
             sex_pdx::access_view::set_pointer(ox, oy);
             // Intel cursor plane: the pointer moves by register writes, no pixels.
             if hw_cursor(ox, oy, cs) {
+                // No drawn arrow this frame: an old save-under is stale now.
+                CURSOR_UNDER_VALID = false;
                 PREPARED_CURSOR=Some(PreparedCursor{x:ox,y:oy,seq:INPUT_TRACE_LAST_SEQ,shell_tick:INPUT_TRACE_LAST_SHELL_TICK});
                 return;
             }
