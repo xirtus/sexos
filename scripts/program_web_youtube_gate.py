@@ -95,5 +95,9 @@ def main():
    assert 3.5<=long<=4.5,f'{hz} Hz played {long:.2f} s in all, not about 4 s: {found}'
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'buffered':buf[2],'requests':SEEN,'frames':frames,'sound_frames':heard,'tones':[(round(s,2),round(l,2),round(h)) for s,l,h in found]})
+ except BaseException:
+  # What the player said, for a failure the WAV alone can't explain.
+  for line in re.findall(r'^.*\[(?:web\.media|web\.mse|play|media)\.[^\n]*$',t(),re.M)[-60:]:print(line)
+  raise
  finally:g['stop']()
 if __name__=='__main__':main()
