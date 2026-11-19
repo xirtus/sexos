@@ -28,7 +28,19 @@ pub fn harden_core() -> (bool, bool, &'static str, bool) {
         else if amd { let mut m = Msr::new(0xC000_0080); m.write(m.read() | (1 << 21)); "auto" }
         else { "none" }
     };
+    // IBPB: Intel CPUID.7:EDX[26], AMD CPUID.80000008:EBX[12] (audit S14).
+    let amd_ibpb = top >= 0x8000_0008 && unsafe { __cpuid_count(0x8000_0008, 0) }.ebx & (1 << 12) != 0;
+    if leaf7.edx & (1 << 26) != 0 || amd_ibpb { IBPB.store(true, Ordering::Relaxed); }
     (smep, umip, ibrs, arch & 1 != 0)
+}
+
+static IBPB: AtomicBool = AtomicBool::new(false);
+/// Whether this CPU can flush indirect branch predictions (IA32_PRED_CMD).
+pub fn has_ibpb() -> bool { IBPB.load(Ordering::Relaxed) }
+/// Flushes indirect branch predictions, so code that runs next cannot be steered by
+/// branch targets trained before. Does nothing on a CPU without IBPB.
+pub fn ibpb() {
+    if has_ibpb() { unsafe { x86_64::registers::model_specific::Msr::new(0x49).write(1); } }
 }
 
 pub struct X86Hal {
@@ -86,6 +98,7 @@ impl HardwareAbstractionLayer for X86Hal {
         let (smep, umip, ibrs, rdcl_no) = harden_core();
         serial_println!("[cpu.hardening] smep={} smap=0 umip={} ibrs={} rdcl_no={} meltdown_pk={}",
             smep as u8, umip as u8, ibrs, rdcl_no as u8, if rdcl_no { "no" } else { "possible" });
+        serial_println!("[cpu.ibpb] present={} on=leaving_untrusted_domain", has_ibpb() as u8);
         { let (files, mode, size) = crate::fpu::describe(); serial_println!("[fpu.ready] sse=1 xsave_state={} save={} bytes={}", files, mode, size); }
         serial_println!("X86Hal: Initializing GDT/IDT...");
         gdt::init();

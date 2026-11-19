@@ -30,7 +30,7 @@ hal/x86_64.rs +27).
 | S11 | SMAP off and PKRU = 0 for the whole syscall | Medium | Open: Phase 6 design |
 | S12 | Meltdown and Meltdown-PK on CPUs without `RDCL_NO` | Info | Reported at boot |
 | S13 | Unused user-accessible per-core page on key 15 | Low | Fixed in #415 (page removed) |
-| S14 | Cross-domain branch-target injection between programs | Info | Open: decision for Phase 5/6 |
+| S14 | Cross-domain branch-target injection between programs | Info | Fixed: IBPB when a core leaves an untrusted domain |
 | S15 | BOOT services and bridges were never scanned for WRPKRU/XRSTOR/XRSTORS | High | Fixed |
 | S16 | Three kernel user mappings were writable and executable; program records' code was never scanned | High | Fixed |
 | S17 | The framebuffer grant sets the user bit on whole huge pages | Medium | Fixed: huge pages are split before the grant |
@@ -209,6 +209,12 @@ mispredicts. Enhanced IBRS protects the kernel, not one user domain from another
 Options: IBPB when switching between domains of different trust (thousands of
 cycles per switch on most parts), or STIBP plus core placement. This belongs with
 the Phase 5 placement and Phase 6 isolation work.
+
+Fixed 2026-11-19 (`scheduler.rs`, `hal/x86_64.rs`): each core remembers the last
+domain it ran. When it switches away from an untrusted domain (a program row, a
+program record or the browser) to a different domain, it writes IA32_PRED_CMD.IBPB
+first, where the CPU has IBPB. Switches between BOOT services cost nothing. Boot
+marker: `[cpu.ibpb] present=`.
 
 ### S15. BOOT services and bridges could hold key instructions (fixed)
 
