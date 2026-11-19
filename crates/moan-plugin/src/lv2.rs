@@ -148,13 +148,20 @@ pub fn encode(files: &[(&[u8], &[u8])]) -> Result<Vec<u8>, Error> {
     if files.is_empty() || files.len() > MAX_ENTRIES {
         return Err(Error::Descriptor);
     }
-    let mut out = Vec::new();
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    let mut total = 12usize;
     for (name, data) in files {
         if !valid_name(name) || data.len() > u32::MAX as usize {
             return Err(Error::Descriptor);
         }
+        total = total
+            .checked_add(6 + name.len() + data.len())
+            .ok_or(Error::Memory)?;
+    }
+    let mut out = Vec::new();
+    out.try_reserve_exact(total).map_err(|_| Error::Memory)?;
+    out.extend_from_slice(MAGIC);
+    out.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    for (name, data) in files {
         out.extend_from_slice(&(name.len() as u16).to_le_bytes());
         out.extend_from_slice(&(data.len() as u32).to_le_bytes());
         out.extend_from_slice(name);
@@ -303,8 +310,8 @@ pub fn describe(bundle: &Bundle) -> Result<Plugin, Error> {
             p.max *= RATE as f32;
         }
         p.toggled = graph.has(node, &lv2("portProperty"), &lv2("toggled"));
-        p.integer = graph.has(node, &lv2("portProperty"), &lv2("integer"))
-            || graph.has(node, &lv2("portProperty"), &lv2("enumeration"));
+        // lv2:enumeration scale points may be fractional, so it does not imply rounding.
+        p.integer = graph.has(node, &lv2("portProperty"), &lv2("integer"));
         p.default = match num("default") {
             Some(v) if sample_rate => v * RATE as f32,
             Some(v) => v,

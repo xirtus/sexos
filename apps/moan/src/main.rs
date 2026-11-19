@@ -232,9 +232,22 @@ mod guest {
         let manifest = read_whole(app, &join(bundle, b"manifest.ttl"), 1 << 20)?;
         let names = moan_plugin::lv2::manifest_files(&manifest)
             .map_err(|_| "LV2 bundle manifest is missing or unsupported")?;
+        // The helper accepts at most 16 MiB in total: check sizes before reading.
+        let limit = moan_plugin::elf::MAX_FILE;
+        let mut total = 12 + 6 + b"manifest.ttl".len() + manifest.len();
+        for name in &names {
+            let size = files::size(&mut app.window, &join(bundle, name.as_bytes()))
+                .map_err(|_| "LV2 bundle file is missing")?;
+            total = total
+                .saturating_add(6 + name.len())
+                .saturating_add(usize::try_from(size).unwrap_or(usize::MAX));
+            if total > limit {
+                return Err("LV2 bundle exceeds the 16 MiB plugin limit");
+            }
+        }
         let mut parts = vec![(b"manifest.ttl".to_vec(), manifest)];
         for name in names {
-            let data = read_whole(app, &join(bundle, name.as_bytes()), moan_plugin::elf::MAX_FILE)?;
+            let data = read_whole(app, &join(bundle, name.as_bytes()), limit)?;
             parts.push((name.into_bytes(), data));
         }
         let refs: Vec<(&[u8], &[u8])> = parts.iter().map(|(n, d)| (&n[..], &d[..])).collect();
