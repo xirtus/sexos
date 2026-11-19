@@ -22,7 +22,7 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 20511d2ef2946babfeac294a053b920b07c0ed8bcb100a0dad303b9269821025  crates/sex-pdx/src/clock_source.rs
 
-98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621  crates/sex-pdx/src/crash_log.rs
+25253ac16c94e169aecf44c829c6c0c39f597cbebaf1dc14a65c726d2287787a  crates/sex-pdx/src/crash_log.rs
 
 1c4224481339a54ed14854d9fa014bf2141605c639d3b7239eadc3bf5bb33681  crates/sex-pdx/src/denim.rs
 
@@ -148,7 +148,7 @@ be4bb003491894145a3412a00802e7ecf9533f5b3a5e5b9ad62e66702eb80037  kernel/src/boo
 
 ddda6ecb6219bb1cdad31c61a5401719eaecee79c8e3e218b44034ca45a2cc8f  kernel/src/clock_source.rs
 
-4a6a0f5312fdbec23efa0d5497b820105ba244c35cc878f27db04ba98cedc3ae  kernel/src/crash_log.rs
+5a6faf451e366cadd0448a2036d738b4c9c7689bf7f188d2ecd074c67b920a26  kernel/src/crash_log.rs
 
 3d4409ab3f2238999dbad3988e56cb19e66cd3fae1d78de035617ca4d0cfafe0  kernel/src/entropy_source.rs
 
@@ -158,11 +158,11 @@ cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/his
 
 e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e  kernel/src/interrupts.rs
 
-91dca455cb96fe1bd271ae5e257039d5eaf28718cddd1e3882b5041c571c1396  kernel/src/ipc.rs
+55132110f83f84f466cd471ed3dc6b89726eb04a2f6121268fc0ddd42ea408b1  kernel/src/ipc.rs
 
 c8ce764c793dd50836578efc7991b2c966b6a10021dde94cf452a8cfcd09b864  kernel/src/ipc/messages.rs
 
-dcc491154df5f4182c1cec5f13498ff9081b030e90d894af41b09163e8cbe029  kernel/src/ipc/reply_credit.rs
+f9df579f9f9edad2a2c527d907e5d29b761d3eb821785ef683c2d03caa06370a  kernel/src/ipc/reply_credit.rs
 
 5fd9d7d28138623172ea565d6a7d0ddb74a07baca2cd3f29079ccddac8fff0f0  kernel/src/ipc/router.rs
 
@@ -174,9 +174,9 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 
 a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci_command.rs
 
-c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/service_restart.rs
+60ca2fea7a1b731a2c1ff0afc7de0871c124b1f0cf7b54c1646e1152d6731210  kernel/src/service_restart.rs
 
-5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577  kernel/src/syscalls/mod.rs
+82fb5a65191bf69bc40ddb9312e191d853c5120d60f5ecb4557f123e5a7726c2  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

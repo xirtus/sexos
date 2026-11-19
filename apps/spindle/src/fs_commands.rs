@@ -7,15 +7,15 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 32 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount, Update, Package }
-pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize, bare: [u8; 16], bare_len: usize }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Sum, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount, Update, Package }
+pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize, bare: [u8; 16], bare_len: usize, fnv: u64 }
 /// How Files answered the last update request: OK go on, EXISTS nothing newer, else stop.
 pub static mut UPDATE_STATUS: Option<u8> = None;
 /// How Files answered the last package request.
 pub static mut PACKAGE_STATUS: Option<u8> = None;
 /// The last package report's lines meant for Spindle (URLs), newline separated.
 pub static mut PACKAGE_MACHINE: ([u8; 4096], usize) = ([0; 4096], 0);
-pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0, bare: [0; 16], bare_len: 0 };
+pub static mut FS: Client = Client { sent_at: 0, cmd: None, seq: 0, kind: 0, path_len: 0, offset: 0, length: 0, sent: false, cwd: [0; CWD_MAX], cwd_len: 0, carry: [0; 160], carry_len: 0, shown: 0, data_len: 0, bare: [0; 16], bare_len: 0, fnv: 0 };
 
 fn region() -> Option<&'static mut [u8]> {
     let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).ok()?;
@@ -140,7 +140,7 @@ impl Client {
         let Some(mut n) = self.join(first, &mut path) else { sb.push(b"Path too long."); return true };
         if cmd == b"cd" && first.is_empty() { self.cwd_len = 0; return true; }
         match cmd {
-            b"ls" | b"cd" | b"cat" | b"df" | b"mount" | b"unmount" => {}
+            b"ls" | b"cd" | b"cat" | b"sum" | b"df" | b"mount" | b"unmount" => {}
             b"mkdir" | b"rm" | b"touch" | b"write" | b"append" => {}
             b"mv" => {
                 if rest.is_empty() { sb.push(b"Usage: mv FROM TO"); return true; }
@@ -161,6 +161,8 @@ impl Client {
             b"rm" => self.start(Cmd::Rm, w::REMOVE, n, 0, 0),
             b"mv" => self.start(Cmd::Mv, w::RENAME, n, 0, 0),
             b"cat" => self.start(Cmd::Cat, w::READ, n, 0, 4096),
+            // Size and FNV-1a 64 of a whole file, read the way any program reads it.
+            b"sum" => { self.fnv = 0xcbf2_9ce4_8422_2325; self.start(Cmd::Sum, w::READ, n, 0, 4096) }
             b"touch" => self.start(Cmd::Create, w::CREATE, n, 0, 0),
             b"df" => self.start(Cmd::Df, w::STATFS, n, 0, 0),
             b"mount" => self.start(Cmd::Mount, w::MOUNT, n, 0, 0),
@@ -347,6 +349,12 @@ impl Client {
                     self.cwd[..n].copy_from_slice(path);
                     self.cwd_len = n;
                 }
+            }
+            Cmd::Sum => {
+                for b in &region[data_at..data_at + value as usize] { self.fnv = (self.fnv ^ *b as u64).wrapping_mul(0x0100_0000_01b3); }
+                self.shown += value as u64;
+                if value == 4096 { self.next(w::READ, self.shown, 4096); return true; }
+                say!(sb, "{} bytes, fnv {:016x}", self.shown, self.fnv);
             }
             Cmd::Cat => {
                 let bytes = &region[data_at..data_at + value as usize];

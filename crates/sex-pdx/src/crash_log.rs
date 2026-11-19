@@ -18,8 +18,18 @@ pub const OP_STATUS: u64 = 1;
 /// beside this start's own so every reader sees one list.
 pub const OP_ADOPT: u64 = 2;
 /// Test builds only: Spindle asks the kernel to stop (rsi 0) or to end a service (rsi:
-/// its domain id) as if it had faulted.
+/// its domain id) as if it had faulted. `PROBE_BUSY` and `PROBE_HANG` may be or-ed in.
 pub const OP_PROBE_FAULT: u64 = 3;
+/// `OP_PROBE_FAULT`: end the service only while it holds a message it took (mid-request).
+pub const PROBE_BUSY: u64 = 1 << 8;
+/// `OP_PROBE_FAULT`: instead of ending it, stop the service mid-request as a driver
+/// stuck on its device would be, so the kernel's hang watch has to find it.
+pub const PROBE_HANG: u64 = 1 << 9;
+/// The reply a caller gets, from the service's own domain, for a call the service took
+/// and then ended (fault or hang) before answering: the device was reset and the
+/// service started again, so the caller may send the same request again. Only services
+/// that answer every call they take (Drive, USB) send it.
+pub const PEER_RESTARTED: u64 = 0xFFFF_FFFF_5E57_A27D;
 /// With arg0=0, the caller's legacy restart count. With a nonzero canonical
 /// held Domain capability slot and reserved buf=0, a typed peer snapshot:
 /// rsi=restart_count+1 (first boot epoch 1), rdx=PeerLife. No raw PD query.

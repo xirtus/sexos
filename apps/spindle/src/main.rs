@@ -1494,7 +1494,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"update" => {unsafe{update_command::UPDATE.start(args,sb);}true},
         b"pkg" => {unsafe{pkg_command::PKG.command(args,sb);}true},
         b"silk" => {unsafe{(*core::ptr::addr_of_mut!(silk_command::SILK)).command(args,sb);}true},
-        b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
+        b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"sum"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
         // Loom (formerly Files), given a folder (the whole filesystem by default) to look after.
         b"loom" | b"files" => {
             let mut given = [0u8; 256];
@@ -1569,17 +1569,26 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"service-state" => { service_state_command(args, sb); true }
         b"crashes" => { crashes_command(sb); true }
         b"crash" if option_env!("SEXOS_CRASH_PROBE").is_some() => {
-            // Test builds only: stop a service, or the kernel, as a fault would.
-            let target = if args.eq_ignore_ascii_case(b"kernel") { Some(0) } else {
-                sex_pdx::crash_log::SERVICE_NAMES.iter().position(|n| n.as_bytes().eq_ignore_ascii_case(args)).map(|i| i as u64 + 1)
+            // Test builds only: stop a service, or the kernel, as a fault would. `busy`
+            // waits until the service is in the middle of a request; `hang` leaves it
+            // stuck there instead, for the kernel's hang watch to find.
+            let mut words = args.split(|b| *b == b' ').filter(|w| !w.is_empty());
+            let name = words.next().unwrap_or(b"");
+            let mut how = 0;
+            for w in words {
+                if w.eq_ignore_ascii_case(b"busy") { how |= sex_pdx::crash_log::PROBE_BUSY; }
+                if w.eq_ignore_ascii_case(b"hang") { how |= sex_pdx::crash_log::PROBE_HANG; }
+            }
+            let target = if name.eq_ignore_ascii_case(b"kernel") { Some(0) } else {
+                sex_pdx::crash_log::SERVICE_NAMES.iter().position(|n| n.as_bytes().eq_ignore_ascii_case(name)).map(|i| i as u64 + 1 | how)
             };
             match target {
                 Some(t) => {
-                    serial_println!("[spindle.crash.probe] target={}", t);
+                    serial_println!("[spindle.crash.probe] target={} how={:#x}", t & 0xff, t >> 8);
                     let (status, _, _) = sex_pdx::crash_log::call(sex_pdx::crash_log::OP_PROBE_FAULT, t, 0);
                     sb.push(if status == 0 { b"Asked the kernel to stop it." } else { b"The kernel refused." });
                 }
-                None => sb.push(b"Use: crash kernel | crash Display | Input | Shell | Bell | ..."),
+                None => sb.push(b"Use: crash kernel | crash Drive|USB|Input|Bell|Network|... [busy] [hang]"),
             }
             true
         }

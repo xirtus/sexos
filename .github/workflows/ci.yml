@@ -605,7 +605,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [cleanup, app-resource, crash, denim]
+        gate: [cleanup, app-resource, crash, denim, drivers]
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -630,6 +630,13 @@ jobs:
     - name: Cap-scoped peer epochs across same-task service restart
       if: matrix.gate == 'crash'
       run: SEXOS_GATE_CORES=4 python3 scripts/service_peer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof/service-peer"
+    - name: Drivers killed or hung mid-use restart and the work goes on (disk, USB, input, sound, network)
+      if: matrix.gate == 'drivers'
+      run: |
+        SEXOS_CRASH_PROBE=1 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/drivers-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/drivers-build.log"; exit 1)
+        mkdir -p "$RUNNER_TEMP/sexos-proof" && cp sexos-v1.0.0.iso "$RUNNER_TEMP/sexos-proof/drivers-probe.iso"
+        truncate -s 1G "$RUNNER_TEMP/drivers-source.img"
+        python3 scripts/driver_restart_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drivers-source.img" --out "$RUNNER_TEMP/sexos-proof/driver-restart"
     - name: Preserve evidence
       if: always()
       uses: actions/upload-artifact@v4

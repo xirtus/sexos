@@ -4,6 +4,14 @@
 //! old run's messages and replies, and points the same task at the same entry. The
 //! domain, its key and every capability it holds stay as BOOT made them: nothing is
 //! minted, so a restart can never grant more than the first run had.
+//!
+//! Drivers are supervised as well as restarted. One that holds a message for longer
+//! than its hang limit without coming back to its inbox is ended as a fault would end
+//! it. Before a driver runs again its devices are reset: bus mastering off, IOMMU loans
+//! ended, a function-level reset where the device has one, then BOOT's config and
+//! masked interrupt vectors put back. Calls made while it is down are refused (callers
+//! retry), and a caller whose call the dead run took gets `PEER_RESTARTED` from a
+//! service that answers every call, so it can send it again: exactly one answer each.
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
@@ -21,7 +29,7 @@ const PTE_FRAME: u64 = 0x000f_ffff_ffff_f000;
 #[derive(Clone, Copy)]
 struct Page { frame: u64, pristine: u64 }
 struct Service { pd: u32, entry: u64, stack_top: u64, pages: [Page; MAX_PAGES], count: usize }
-const SERVICES: usize = 6;
+const SERVICES: usize = 8;
 static SERVICE: [Mutex<Service>; SERVICES] = [const { Mutex::new(Service { pd: 0, entry: 0, stack_top: 0, pages: [Page { frame: 0, pristine: 0 }; MAX_PAGES], count: 0 }) }; SERVICES];
 // BOOT publishes immutable identity separately; self count cannot contend with its own rearm.
 static SERVICE_IDS:[AtomicU32;SERVICES]=[const{AtomicU32::new(0)};SERVICES];
@@ -29,6 +37,41 @@ static RESTARTS: [AtomicU32; SERVICES] = [const { AtomicU32::new(0) }; SERVICES]
 static LOOP: [AtomicU32; SERVICES] = [const { AtomicU32::new(0) }; SERVICES];
 static LAST_RESTART: [core::sync::atomic::AtomicU64; SERVICES] = [const { core::sync::atomic::AtomicU64::new(0) }; SERVICES];
 static GAVE_UP: [core::sync::atomic::AtomicBool; SERVICES] = [const { core::sync::atomic::AtomicBool::new(false) }; SERVICES];
+/// The tick a dead service's device reset settles; 0 while it is not being reset.
+static RESET_AT: [core::sync::atomic::AtomicU64; SERVICES] = [const { core::sync::atomic::AtomicU64::new(0) }; SERVICES];
+
+const DRIVE_PD: u32 = 2;
+const USB_PD: u32 = 5;
+/// How long a service may hold one message before it counts as hung, in ticks; 0: not
+/// watched. Drive's own command deadline is 30 s, so it gets longer than that.
+fn hang_limit(pd: u32) -> u64 { match pd { DRIVE_PD => 45_000, 4 | USB_PD | 10 | 13 => 10_000, _ => 0 } }
+/// Services that answer every call they take, so every owed reply was really awaited.
+fn answers_every_call(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD) }
+/// Drivers whose devices get a function-level reset before they run again (not Display:
+/// that would drop the firmware's screen).
+fn resets_devices(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD | 10 | 13) }
+
+/// By domain id: the tick it last looked at its inbox, and whether it then took something.
+static INBOX_AT: [core::sync::atomic::AtomicU64; 64] = [const { core::sync::atomic::AtomicU64::new(0) }; 64];
+static HOLDING: [core::sync::atomic::AtomicBool; 64] = [const { core::sync::atomic::AtomicBool::new(false) }; 64];
+/// Domains that are down (dead, or being reset): calls to them are refused until they run.
+static DOWN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Test builds: domains stopped mid-request by the hang probe.
+static FROZEN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// From the inbox syscalls: `pd` looked at its inbox and took a message (or not).
+pub fn inbox(pd: u32, took: bool) {
+    if pd == 0 || pd >= 64 { return; }
+    INBOX_AT[pd as usize].store(crate::interrupts::TICKS.load(Ordering::Relaxed), Ordering::Relaxed);
+    HOLDING[pd as usize].store(took, Ordering::Relaxed);
+}
+/// Whether `pd` holds a message it took and has not come back to its inbox since.
+pub fn holding(pd: u32) -> bool { pd != 0 && pd < 64 && HOLDING[pd as usize].load(Ordering::Relaxed) }
+/// Whether calls to `pd` are refused because it is down. Checked under its credit lock.
+pub fn down(pd: u32) -> bool { pd != 0 && pd < 64 && DOWN.load(Ordering::Acquire) & 1 << pd != 0 }
+/// Test builds: stop `pd` at its syscalls from now on, as a driver stuck on its device.
+pub fn freeze(pd: u32) { if pd != 0 && pd < 64 { FROZEN.fetch_or(1 << pd, Ordering::AcqRel); } }
+pub fn frozen(pd: u32) -> bool { pd != 0 && pd < 64 && FROZEN.load(Ordering::Relaxed) & 1 << pd != 0 }
 
 fn code_base(domain_id: u8) -> u64 { 0x4000_0000 + (domain_id as u64).saturating_sub(1) * SLOT_BYTES }
 fn stack_top(domain_id: u8) -> u64 { 0x7000_0000_0000 + (domain_id as u64).saturating_sub(1) * SLOT_BYTES + 0x0010_0000 }
@@ -67,6 +110,7 @@ pub fn capture(pd_id: u32, domain_id: u8) {
     s.pd = pd_id;
     s.entry = unsafe { (*main).context.rip };
     s.stack_top = unsafe { (*main).context.rsp };
+    crate::device_irq::snapshot(pd_id);
     SERVICE_IDS[index].store(pd_id,Ordering::Release);
     crate::serial_println!("[boot.service.restartable] pd={} task={} pages={} entry={:#x}", pd_id, unsafe{(*main).id}, s.count, s.entry);
 }
@@ -173,30 +217,83 @@ fn poll_one(index: usize) {
     let main = pd.main_task.load(Ordering::Acquire);
     if main.is_null() { return; }
     let state = unsafe { (*main).state.snapshot() };
-    if !state.exited || state.phase != crate::scheduler::task_ownership::Phase::Dead || state.owner_core.is_some() { return; }
     let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
+    if !state.exited {
+        // A driver that took a message and has not been back to its inbox for its limit
+        // (or leaves a full inbox untouched) is stuck: end it, as a fault would.
+        let (limit, at) = (hang_limit(s.pd), INBOX_AT[s.pd as usize].load(Ordering::Relaxed));
+        let waiting = HOLDING[s.pd as usize].load(Ordering::Relaxed) || unsafe { (*pd.message_ring).len() } != 0;
+        if limit != 0 && at != 0 && waiting && now.saturating_sub(at) > limit && unsafe { (*main).state.exit() } {
+            crate::serial_println!("[service.hung] pd={} held_ticks={} queued={}", s.pd, now - at, unsafe { (*pd.message_ring).len() });
+            crate::crash_log::fault(s.pd, 0xfd, unsafe { (*main).context.rip }, 0, now - at, "no answer (hung)");
+            crate::scheduler::unpark_thread(main);
+        }
+        return;
+    }
+    if state.phase != crate::scheduler::task_ownership::Phase::Dead || state.owner_core.is_some() { return; }
     if now.saturating_sub(LAST_RESTART[index].load(Ordering::Relaxed)) > CRASH_LOOP_TICKS { LOOP[index].store(0, Ordering::Relaxed); }
     if LOOP[index].load(Ordering::Relaxed) >= MAX_RESTARTS {
         GAVE_UP[index].store(true, Ordering::Relaxed);
+        DOWN.fetch_or(1 << s.pd, Ordering::AcqRel);
         crate::crash_log::service(s.pd, MAX_RESTARTS, true);
         return;
     }
-    crate::pci_command::quiesce(pd);
-    crate::iommu::revoke(s.pd);
+    // First the device: no more DMA, no loans, and a reset where it has one.
+    if RESET_AT[index].load(Ordering::Relaxed) == 0 {
+        DOWN.fetch_or(1 << s.pd, Ordering::AcqRel);
+        // Worker tasks the dead run started (per-core driver queues) end with it.
+        crate::program_workers::end(s.pd);
+        crate::pci_command::quiesce(pd);
+        crate::iommu::revoke(s.pd);
+        let flr = resets_devices(s.pd) && crate::device_irq::reset_begin(s.pd);
+        RESET_AT[index].store(now + if flr { 100 } else { 1 }, Ordering::Relaxed);
+        return;
+    }
+    if now < RESET_AT[index].load(Ordering::Relaxed) || !crate::program_workers::all_dead(s.pd) { return; }
+    // The callee's credit lock orders this against every call being admitted.
+    let Some(mut credits) = pd.reply_credits.try_lock() else { return };
+    // Each waiting caller needs room for its one answer; this runs in the timer, so it
+    // neither waits for a lock nor grows a queue. A caller that keeps a reply unread
+    // for a whole second is passed over.
+    let late = now > RESET_AT[index].load(Ordering::Relaxed) + 1000;
+    if answers_every_call(s.pd) && !late && credits.owed().any(|c| crate::ipc::DOMAIN_REGISTRY.get(c)
+        .is_some_and(|c| c.incoming_replies.try_lock().is_none_or(|q| q.len() >= q.capacity()))) { return; }
+    crate::device_irq::reset_end(s.pd);
     for page in s.pages[..s.count].iter().filter(|p| p.pristine != 0) { crate::boot_memory::copy_frame(page.pristine, page.frame); }
     // Requests to the dead run, and answers it was owed, belong to that run.
     let mut dropped = 0;
     while unsafe { (*pd.message_ring).dequeue() }.is_some() { dropped += 1; if dropped > 256 { break; } }
     while unsafe { (*pd.signal_ring).dequeue() }.is_some() {}
     crate::ipc::messages::IpcReply::erase_queue(&mut pd.incoming_replies.lock());
-    pd.reply_credits.lock().clear();
+    // A caller of a service that answers every call is waiting for each one: it hears
+    // that the run it called is gone, once, and may send the same call again.
+    let mut told = 0;
+    if answers_every_call(s.pd) {
+        for caller in credits.owed() {
+            let Some(c) = crate::ipc::DOMAIN_REGISTRY.get(caller) else { continue };
+            let Some(mut q) = c.incoming_replies.try_lock() else { continue };
+            if q.len() >= q.capacity() { continue; }
+            q.push_back(crate::ipc::messages::IpcReply { value: sex_pdx::crash_log::PEER_RESTARTED, caller_pd: s.pd, caller_task: 0 });
+            drop(q);
+            crate::scheduler::unpark_thread(c.main_task.load(Ordering::Acquire));
+            told += 1;
+        }
+    }
+    credits.clear();
+    FROZEN.fetch_and(!(1 << s.pd), Ordering::AcqRel);
+    INBOX_AT[s.pd as usize].store(now, Ordering::Relaxed);
+    HOLDING[s.pd as usize].store(false, Ordering::Relaxed);
+    let count = RESTARTS[index].fetch_add(1, Ordering::Relaxed) + 1;
     let id = unsafe { (*main).id };
     unsafe { (*main).rearm(id, s.entry, s.stack_top, pd); }
-    let count = RESTARTS[index].fetch_add(1, Ordering::Relaxed) + 1;
+    DOWN.fetch_and(!(1 << s.pd), Ordering::AcqRel);
+    drop(credits);
+    RESET_AT[index].store(0, Ordering::Relaxed);
     LOOP[index].fetch_add(1, Ordering::Relaxed);
     LAST_RESTART[index].store(now, Ordering::Relaxed);
     let admitted = crate::scheduler::SCHEDULERS[0].activate_task(main);
     crate::serial_println!("[service.restarted] pd={} task={} restarts={} pages={} dropped_messages={} admitted={}", s.pd, id, count, s.count, dropped, admitted as u8);
+    if told != 0 { crate::serial_println!("[service.restart.callers] pd={} told={}", s.pd, told); }
     crate::crash_log::service(s.pd, count, false);
     // A new Shell starts from nothing: Display starts again too, so that it forgets
     // the old windows and announces itself ready to the new Shell.
