@@ -8,10 +8,12 @@
 //! every device are the program's job (the `drag` server in D2). The kernel keeps only
 //! what ring 3 cannot do: VMX on/off, the VMCS, EPT, entry and exit.
 //!
-//! Intel VT-x only in D1 (AMD SVM is D5). VMX is entered inside `OP_VCPU_RUN` on the
+//! Intel VT-x (D1) and AMD SVM (D5). Either is entered inside `OP_VCPU_RUN` on the
 //! calling core and left before the call returns, so a program that never calls this
-//! leaves VMX untouched. Without usable VMX (QEMU TCG, AMD, firmware lock) every op but
-//! [`OP_INFO`] answers [`UNAVAILABLE`] and `OP_INFO` says why.
+//! leaves VMX and SVM untouched. On AMD the kernel turns every SVM exit into the same
+//! [`Exit`] record (Intel exit reasons and qualifications, see [`svm::translate`]), so a
+//! VMM is written once. Without usable VMX or SVM (firmware lock, no nested paging)
+//! every op but [`OP_INFO`] answers [`UNAVAILABLE`] and `OP_INFO` says why.
 //!
 //! Registers: rax = 110, rdi = op, rsi/rdx/r10/r8 = arguments.
 //! Reply: rax = status, rsi/rdx = values.
@@ -73,11 +75,12 @@ pub const ENTRY_FAILED: u64 = 6;
 /// Why VMX is unavailable (`OP_INFO` rdx; also the kernel's `[drag] vmx=unavailable` line).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u64)]
-pub enum Reason { Usable = 0, NoVmx = 1, FirmwareLocked = 2, Controls = 3, Ept = 4, Basic = 5 }
+pub enum Reason { Usable = 0, NoVmx = 1, FirmwareLocked = 2, Controls = 3, Ept = 4, Basic = 5, SvmDisabled = 6, NoNpt = 7 }
 impl Reason {
     pub fn name(self) -> &'static str {
         match self { Reason::Usable => "usable", Reason::NoVmx => "no_vmx_cpuid", Reason::FirmwareLocked => "feature_control_locked",
-            Reason::Controls => "missing_controls", Reason::Ept => "missing_ept", Reason::Basic => "vmx_basic" }
+            Reason::Controls => "missing_controls", Reason::Ept => "missing_ept", Reason::Basic => "vmx_basic",
+            Reason::SvmDisabled => "svm_disabled_by_firmware", Reason::NoNpt => "missing_npt" }
     }
 }
 
@@ -89,18 +92,30 @@ pub mod exit {
     pub const TRIPLE_FAULT: u32 = 2;
     pub const CPUID: u32 = 10;
     pub const HLT: u32 = 12;
+    pub const INVD: u32 = 13;
+    pub const RDPMC: u32 = 15;
     pub const VMCALL: u32 = 18;
+    /// The guest ran a virtualization instruction (VMLAUNCH on Intel; VMRUN, VMLOAD,
+    /// VMSAVE, STGI, CLGI, SKINIT or INVLPGA on AMD). A VMM usually injects #UD.
+    pub const VMX_INSTRUCTION: u32 = 20;
     pub const CR_ACCESS: u32 = 28;
     pub const IO: u32 = 30;
     pub const RDMSR: u32 = 31;
     pub const WRMSR: u32 = 32;
     pub const EPT_VIOLATION: u32 = 48;
     pub const EPT_MISCONFIG: u32 = 49;
+    pub const MWAIT: u32 = 36;
+    pub const MONITOR: u32 = 39;
+    pub const WBINVD: u32 = 54;
     /// The vCPU's time slice ended (fairness). Run again.
     pub const PREEMPTED: u32 = 52;
     pub const XSETBV: u32 = 55;
     /// Bit 31 of `Exit::reason`: the entry failed on guest state (reason 33/34).
     pub const ENTRY_FAILURE: u32 = 1 << 31;
+    /// Entry failed on invalid guest state (with [`ENTRY_FAILURE`]).
+    pub const INVALID_GUEST_STATE: u32 = 33;
+    /// Bit 30: an AMD exit code with no Intel counterpart; the low bits are the code.
+    pub const SVM_OTHER: u32 = 1 << 30;
 }
 
 /// `Exit::io_flags` bits.
@@ -208,6 +223,156 @@ pub mod hw {
     /// The base of a 64-bit system descriptor (TSS) from its two quadwords.
     pub fn descriptor_base(low: u64, high: u64) -> u64 {
         ((low >> 16) & 0xFF_FFFF) | (((low >> 56) & 0xFF) << 24) | ((high & 0xFFFF_FFFF) << 32)
+    }
+}
+
+/// AMD SVM encodings the kernel uses (AMD64 APM volume 2, chapter 15 and appendix B),
+/// kept here so the host can test them. The kernel turns every SVM exit into the
+/// VMX-shaped [`Exit`] with [`translate`], so VMMs see one format on both vendors.
+pub mod svm {
+    use super::{exit, IO_IN, IO_STRING, IO_REP, EXEC, WRITE};
+
+    /// Nested page table entries are ordinary x86-64 entries: present, writable, user
+    /// (the guest's accesses count as user accesses in the nested walk).
+    pub fn npt_table(frame: u64) -> u64 { (frame & super::hw::ADDRESS) | 7 }
+    /// A 4 KiB nested leaf. Write-back (PAT index 0). Not executable unless `EXEC`,
+    /// when the host runs with EFER.NXE (`nx`); without it every page is executable.
+    pub fn npt_leaf(frame: u64, access: u64, nx: bool) -> u64 {
+        let w = if access & WRITE != 0 { 2 } else { 0 };
+        let no_exec = if nx && access & EXEC == 0 { 1 << 63 } else { 0 };
+        (frame & super::hw::ADDRESS) | 1 | w | 4 | no_exec
+    }
+
+    /// VMX access rights (bits 7:0 type/S/DPL/P, 15:12 AVL/L/DB/G, bit 16 unusable)
+    /// to the VMCB's packed 12-bit attribute. An unusable segment is null (P = 0).
+    pub fn attrib(access: u32) -> u16 {
+        if access & (1 << 16) != 0 { return 0; }
+        ((access & 0xFF) | ((access >> 4) & 0xF00)) as u16
+    }
+    /// The VMCB attribute back to VMX access rights; not present means unusable.
+    pub fn access(attrib: u16) -> u32 {
+        let a = attrib as u32;
+        (a & 0xFF) | ((a & 0xF00) << 4) | if a & 0x80 == 0 { 1 << 16 } else { 0 }
+    }
+
+    // SVM exit codes.
+    pub const EXCEPTION_BASE: u64 = 0x40;
+    pub const INTR: u64 = 0x60;
+    pub const NMI: u64 = 0x61;
+    pub const SMI: u64 = 0x62;
+    pub const INIT: u64 = 0x63;
+    pub const RDPMC: u64 = 0x6F;
+    pub const CPUID: u64 = 0x72;
+    pub const INVD: u64 = 0x76;
+    pub const HLT: u64 = 0x78;
+    pub const INVLPGA: u64 = 0x7A;
+    pub const IOIO: u64 = 0x7B;
+    pub const MSR: u64 = 0x7C;
+    pub const SHUTDOWN: u64 = 0x7F;
+    pub const VMRUN: u64 = 0x80;
+    pub const VMMCALL: u64 = 0x81;
+    pub const VMLOAD: u64 = 0x82;
+    pub const VMSAVE: u64 = 0x83;
+    pub const STGI: u64 = 0x84;
+    pub const CLGI: u64 = 0x85;
+    pub const SKINIT: u64 = 0x86;
+    pub const WBINVD: u64 = 0x89;
+    pub const MONITOR: u64 = 0x8A;
+    pub const MWAIT: u64 = 0x8B;
+    pub const MWAIT_CONDITIONAL: u64 = 0x8C;
+    pub const XSETBV: u64 = 0x8D;
+    pub const NPF: u64 = 0x400;
+    pub const INVALID: u64 = u64::MAX;
+
+    /// Intercept vector 3 (VMCB 0x0C): what exits. External interrupts, NMIs and INIT
+    /// stay the host's; CPUID, HLT, every port and MSR go to the VMM (like Intel's
+    /// unconditional I/O exiting without MSR bitmaps); INVD and INVLPGA never run in a guest.
+    pub const INTERCEPT_3: u32 = 1 | (1 << 1) | (1 << 3) | (1 << 15) | (1 << 18) | (1 << 22) | (1 << 24)
+        | (1 << 26) | (1 << 27) | (1 << 28) | (1u32 << 31);
+    /// Intercept vector 4 (VMCB 0x10): VMRUN (required), VMMCALL, VMLOAD, VMSAVE, STGI,
+    /// CLGI (a guest must never hold the host's interrupts), SKINIT, WBINVD, MONITOR,
+    /// MWAIT and XSETBV (XCR0 is not swapped by VMRUN).
+    pub const INTERCEPT_4: u32 = 0x3F | (1 << 6) | (1 << 9) | (1 << 10) | (1 << 11) | (1 << 12) | (1 << 13);
+
+    /// One SVM exit in the VMX-shaped form of [`super::Exit`].
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub struct Translated {
+        pub reason: u32, pub instruction_len: u32, pub qualification: u64, pub guest_physical: u64,
+        pub interruption_info: u32, pub interruption_error: u32, pub port: u16, pub io_size: u8, pub io_flags: u8,
+    }
+
+    /// Instruction length when the CPU gives no next RIP (no NRIP save): the exits that
+    /// are skipped have fixed encodings (prefixes aside).
+    fn fixed_len(code: u64) -> u32 {
+        match code {
+            HLT => 1,
+            CPUID | MSR | INVD | WBINVD | RDPMC => 2,
+            VMMCALL | XSETBV | MONITOR | MWAIT | MWAIT_CONDITIONAL | VMRUN | VMLOAD | VMSAVE | STGI | CLGI | SKINIT | INVLPGA => 3,
+            _ => 0,
+        }
+    }
+
+    /// Turns an SVM exit (EXITCODE, EXITINFO1, EXITINFO2, the guest RIP and the next
+    /// RIP when the CPU saves it) into Intel's exit reason and qualification.
+    pub fn translate(code: u64, info1: u64, info2: u64, rip: u64, next_rip: Option<u64>) -> Translated {
+        let mut t = Translated::default();
+        let len = |next: u64| { let l = next.wrapping_sub(rip); if l >= 1 && l <= 15 { l as u32 } else { 0 } };
+        t.instruction_len = next_rip.map(len).filter(|&l| l != 0).unwrap_or_else(|| fixed_len(code));
+        t.reason = match code {
+            c if (EXCEPTION_BASE..EXCEPTION_BASE + 32).contains(&c) => {
+                let vector = (c - EXCEPTION_BASE) as u32;
+                let has_error = matches!(vector, 8 | 10..=14 | 17 | 21 | 29 | 30);
+                t.interruption_info = vector | (3 << 8) | (has_error as u32) << 11 | 1 << 31;
+                t.interruption_error = if has_error { info1 as u32 } else { 0 };
+                if vector == 14 { t.qualification = info2; }
+                t.instruction_len = 0;
+                exit::EXCEPTION_NMI
+            }
+            INTR | NMI | SMI | INIT => { t.instruction_len = 0; exit::EXTERNAL_INTERRUPT }
+            SHUTDOWN => { t.instruction_len = 0; exit::TRIPLE_FAULT }
+            CPUID => exit::CPUID,
+            HLT => exit::HLT,
+            INVD => exit::INVD,
+            RDPMC => exit::RDPMC,
+            VMMCALL => exit::VMCALL,
+            VMRUN | VMLOAD | VMSAVE | STGI | CLGI | SKINIT | INVLPGA => exit::VMX_INSTRUCTION,
+            WBINVD => exit::WBINVD,
+            MONITOR => exit::MONITOR,
+            MWAIT | MWAIT_CONDITIONAL => exit::MWAIT,
+            XSETBV => exit::XSETBV,
+            MSR => if info1 & 1 != 0 { exit::WRMSR } else { exit::RDMSR },
+            IOIO => {
+                // EXITINFO2 holds the next RIP whether or not NRIP save exists.
+                if let l @ 1.. = len(info2) { t.instruction_len = l; }
+                let size: u8 = if info1 & (1 << 4) != 0 { 1 } else if info1 & (1 << 5) != 0 { 2 } else { 4 };
+                let input = info1 & 1 != 0;
+                let (string, rep) = (info1 & (1 << 2) != 0, info1 & (1 << 3) != 0);
+                t.port = (info1 >> 16) as u16;
+                t.io_size = size;
+                t.io_flags = (input as u8 * IO_IN) | (string as u8 * IO_STRING) | (rep as u8 * IO_REP);
+                t.qualification = (size as u64 - 1) | (input as u64) << 3 | (string as u64) << 4 | (rep as u64) << 5 | (t.port as u64) << 16;
+                exit::IO
+            }
+            NPF => {
+                // Error code: P, W, U, RSV, fetch; Intel: read/write/fetch, then what the
+                // entry allowed (a present entry that faulted forbade this access).
+                let (present, write, fetch) = (info1 & 1 != 0, info1 & 2 != 0, info1 & 16 != 0);
+                let read = !write && !fetch;
+                let allowed = if present { (1 << 3) | ((!write as u64) << 4) | ((!fetch as u64) << 5) } else { 0 };
+                t.qualification = read as u64 | (write as u64) << 1 | (fetch as u64) << 2 | allowed | (info1 >> 32 & 1) << 8;
+                t.guest_physical = info2;
+                t.instruction_len = 0;
+                exit::EPT_VIOLATION
+            }
+            INVALID => { t.instruction_len = 0; exit::ENTRY_FAILURE | exit::INVALID_GUEST_STATE }
+            other => { t.instruction_len = 0; exit::SVM_OTHER | (other as u32 & 0xFFFF) }
+        };
+        t
+    }
+
+    /// The CPL the VMCB must carry: 0 in real mode, 3 in virtual-8086 mode, else SS.DPL.
+    pub fn cpl(cr0: u64, rflags: u64, ss_attrib: u16) -> u8 {
+        if cr0 & 1 == 0 { 0 } else if rflags & (1 << 17) != 0 { 3 } else { ((ss_attrib >> 5) & 3) as u8 }
     }
 }
 
@@ -321,5 +486,80 @@ mod tests {
         assert_eq!(s.segments[1].access, 0x9B);
         assert_eq!(s.segments[6].access & 0x1_0000, 0x1_0000, "LDTR unusable");
         assert_eq!(State::real_mode(0xF000, 0).segments[1].base, 0xF0000);
+    }
+
+    #[test]
+    fn svm_nested_entries() {
+        assert_eq!(svm::npt_table(0x1234_5FFF), 0x1234_5007);
+        assert_eq!(svm::npt_leaf(0xABC_D000, READ | WRITE, true), 0xABC_D000 | 7 | 1 << 63, "no exec without EXEC");
+        assert_eq!(svm::npt_leaf(0xABC_D000, READ | EXEC, true), 0xABC_D000 | 5, "read-only, executable");
+        assert_eq!(svm::npt_leaf(0xABC_D000, READ, false), 0xABC_D000 | 5, "no NX bit when the host lacks NXE");
+    }
+
+    #[test]
+    fn svm_segment_attributes() {
+        // 64-bit code: type B, S, P, L.
+        assert_eq!(svm::attrib(0xA09B), 0xA9B);
+        assert_eq!(svm::access(0xA9B), 0xA09B);
+        // Real-mode data and the unusable LDTR.
+        assert_eq!(svm::attrib(0x93), 0x93);
+        assert_eq!(svm::attrib(0x1_0082), 0);
+        assert_eq!(svm::access(0) & 0x1_0000, 0x1_0000, "not present comes back unusable");
+        for a in [0x9Bu32, 0x93, 0x8B, 0xC093, 0xA09B, 0x40F3] { assert_eq!(svm::access(svm::attrib(a)), a); }
+    }
+
+    #[test]
+    fn svm_io_exit_matches_vmx() {
+        // out 0xE9, al at rip 0x7C00 (2 bytes): SZ8, port 0xE9, next rip in EXITINFO2.
+        let t = svm::translate(svm::IOIO, 0x00E9_0010, 0x7C02, 0x7C00, None);
+        assert_eq!((t.reason, t.port, t.io_size, t.io_flags, t.instruction_len), (exit::IO, 0xE9, 1, 0, 2));
+        assert_eq!(hw::io(t.qualification), (0xE9, 1, 0), "the qualification decodes as Intel's");
+        // rep insw from 0x1F0.
+        let t = svm::translate(svm::IOIO, 0x01F0_0000 | 1 | 4 | 8 | 32, 0x1002, 0x1000, Some(0x1002));
+        assert_eq!((t.port, t.io_size, t.io_flags), (0x1F0, 2, IO_IN | IO_STRING | IO_REP));
+        assert_eq!(hw::io(t.qualification), (0x1F0, 2, IO_IN | IO_STRING | IO_REP));
+        // out dx, eax.
+        assert_eq!(svm::translate(svm::IOIO, 0x0CF8_0040, 1, 0, None).io_size, 4);
+    }
+
+    #[test]
+    fn svm_exits_and_lengths() {
+        let t = |c, i1| svm::translate(c, i1, 0, 0x100, None);
+        assert_eq!((t(svm::CPUID, 0).reason, t(svm::CPUID, 0).instruction_len), (exit::CPUID, 2));
+        assert_eq!((t(svm::HLT, 0).reason, t(svm::HLT, 0).instruction_len), (exit::HLT, 1));
+        assert_eq!(t(svm::MSR, 0).reason, exit::RDMSR);
+        assert_eq!(t(svm::MSR, 1).reason, exit::WRMSR);
+        assert_eq!((t(svm::VMMCALL, 0).reason, t(svm::VMMCALL, 0).instruction_len), (exit::VMCALL, 3));
+        assert_eq!(t(svm::XSETBV, 0).reason, exit::XSETBV);
+        assert_eq!(t(svm::CLGI, 0).reason, exit::VMX_INSTRUCTION);
+        assert_eq!(t(svm::INTR, 0).reason, exit::EXTERNAL_INTERRUPT);
+        assert_eq!(t(svm::NMI, 0).reason, exit::EXTERNAL_INTERRUPT, "the host takes its NMI after STGI");
+        assert_eq!(t(svm::SHUTDOWN, 0).reason, exit::TRIPLE_FAULT);
+        assert_eq!(t(svm::INVALID, 0).reason, exit::ENTRY_FAILURE | exit::INVALID_GUEST_STATE);
+        assert_eq!(t(0x6E, 0).reason, exit::SVM_OTHER | 0x6E);
+        // NRIP save wins over the fixed table (a prefixed CPUID is 3 bytes).
+        assert_eq!(svm::translate(svm::CPUID, 0, 0, 0x100, Some(0x103)).instruction_len, 3);
+        assert_eq!(svm::translate(svm::CPUID, 0, 0, 0x100, Some(0x100)).instruction_len, 2, "a nonsense next rip is ignored");
+    }
+
+    #[test]
+    fn svm_nested_page_fault() {
+        // A write to a page lent read-only: present, write, final translation.
+        let t = svm::translate(svm::NPF, 1 | 2 | 4 | 1 << 32, 0xD000_0010, 0, None);
+        assert_eq!((t.reason, t.guest_physical, t.instruction_len), (exit::EPT_VIOLATION, 0xD000_0010, 0));
+        assert_eq!(t.qualification, 2 | 8 | 32 | 256);
+        // A read of an unlent MMIO page: not present.
+        assert_eq!(svm::translate(svm::NPF, 4, 0xD000_0000, 0, None).qualification, 1);
+        // A page fault the VMM asked to see: vector 14 with its error code and address.
+        let t = svm::translate(svm::EXCEPTION_BASE + 14, 2, 0xDEAD_B000, 0, None);
+        assert_eq!((t.reason, t.interruption_info, t.interruption_error, t.qualification), (exit::EXCEPTION_NMI, 14 | 0x300 | 0x800 | 1 << 31, 2, 0xDEAD_B000));
+    }
+
+    #[test]
+    fn svm_cpl() {
+        assert_eq!(svm::cpl(0x10, 2, 0x93), 0, "real mode");
+        assert_eq!(svm::cpl(0x8000_0011, 2, 0xF3), 3, "SS.DPL 3");
+        assert_eq!(svm::cpl(0x11, 2 | 1 << 17, 0xF3), 3, "virtual-8086");
+        assert_eq!(svm::cpl(0x8000_0011, 2, 0xC93), 0);
     }
 }

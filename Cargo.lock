@@ -4783,6 +4783,8 @@ name = "moan-plugin"
 version = "0.1.0"
 dependencies = [
  "clap-sys",
+ "libc",
+ "libm",
  "sex-app",
  "sex-libc",
  "sex-pdx",

@@ -20,7 +20,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('fn-v1:50abfa82
     # record code scanned for key instructions (stream 2), 2026-11-18
     'd8dab16031564c8540b35ce5e45c28d1cbf297071e3ffc6d21e5aff7322f625b',
     # stream 2 scan merged with the v2 capability table, 2026-11-18
-    '46adbb04a4ef0f0e057f3282c9c19fc1f8044a8a9f4d4e77b0a4c679dee03215',),
+    '46adbb04a4ef0f0e057f3282c9c19fc1f8044a8a9f4d4e77b0a4c679dee03215',
+    # protection views merged with the stream 2 scan, 2026-11-19
+    'fb6aaf0bc13ba27eaf82ce9e9dfb3498125830ee711899aff368c0fdc25bb96f',),
 'kernel/src/pd/create.rs': ('fn-v1:69758987a8d686a5f4b046db74d530379e4eff061dbe018b3019886371056906',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
     '3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
 'kernel/src/init.rs': ('fn-v1:fb2da8b1ece8812feee1502fa72b73deb6248639042d5ddd6e42422db14ed884',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
@@ -30,6 +32,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('fn-v1:50abfa82
     'fn-v1:4670ed1968ba7f46d7097721884c9cf2c95de4bd69220374b07321f2f5eec750',  # cross-core IPC polling + lean first look + bounded re-check (#429 / 80b89713), reviewed by WS4, 2026-11-18
     'fn-v1:8b328859b9fda2ff8e024287e6d020c11182c169ad993a0e786ad86033420fe6',  # XSAVE/AVX heap save area + kernel stack canary (#427 / ed888ad5), reviewed by WS4, 2026-11-18
     'fn-v1:c92ee26a67f14c438179f32834b8b0a62f82d1dee42271d43863d4cc96f95a8f',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+    '53aec880d2ea82474231d37aaae0862dcb8747185626ab6f4d79175a422ce8a8',  # PKU gates: TSC_AUX on switch (P6.2a), 2026-11-19
+    'fn-v1:458daaa0e25c5b534627e9cef612d5e71ba9f781e05b48689bee025a1fd4c70b',  # master 53aec880: PKU gates TSC_AUX on switch (no wait change), 2026-11-19
+    'fn-v1:3af49f2ffe4d2b73c67ec09f190aa8e46cf43a3a7b233f7d8a24532828203567',  # #429 merged with master at 950c36ac (raw af1bffe7), wait change as reviewed at 28ffcb59, 2026-11-19
     '586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae',  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
     '13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1',  # IPC v2 syscalls 105/106, 2026-11-18
     '8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
@@ -38,7 +43,8 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('fn-v1:50abfa82
                              '25c0bc835f30039f947f28bc79ed567e1c742e17ea3c9a8e0663b5f502c9d642',),
  'kernel/src/self_wait.rs': ('0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf',),
  'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
- 'kernel/src/smp.rs': ('bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
+ 'kernel/src/smp.rs': ('261699be11866980d2a30b72cbb8d35ddccdc00aa1ee1cbceefadc716edc7d75',  # protection views (tlb hook, rows spread), 2026-11-17
+    'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
  'kernel/src/interrupts.rs': ('fn-v1:235c80ce88b369d9d1da26b934e188c056b5e24330b1c242801deaf2e3854c86',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
     'c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
                               'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d',
@@ -109,7 +115,9 @@ APPROVED_KERNEL_RUST_TREES=('8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3
     # IPC v2 syscalls 105/106 wired (kernel plan phase 2), 2026-11-18
     '22a70bcd8ad7b76d717a4484845ef6920d18fca47b892b0ae4f993a4953a0909',
     # stream 2 merged with IPC v2 syscalls (#418/#421/#422), 2026-11-18
-    'c74db80e5ed8fa929a2a5253c80949ec3beffe467cfef29ac192dae43234902c')
+    'c74db80e5ed8fa929a2a5253c80949ec3beffe467cfef29ac192dae43234902c',
+    # protection views with PCID (plan Phase 5b), 2026-11-17
+    'c90aad02c6aa7df0113ccb215474c805633b552229da4af87ee9c5949ff1b73b')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
