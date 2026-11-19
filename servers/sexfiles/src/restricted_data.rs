@@ -54,10 +54,12 @@ pub fn run(
                 args[2 * i] = b"0123456789abcdef"[(b >> 4) as usize];
                 args[2 * i + 1] = b"0123456789abcdef"[(b & 15) as usize];
             }
-            let suffix = if entry.format == 0 {
-                b" @/plugin @/request @/result clap".as_slice()
-            } else {
-                b" @/plugin @/request @/result vst3".as_slice()
+            let suffix = match entry.format {
+                0 => b" @/plugin @/request @/result clap".as_slice(),
+                1 => b" @/plugin @/request @/result vst3".as_slice(),
+                2 => b" @/plugin @/request @/result ladspa".as_slice(),
+                3 => b" @/plugin @/request @/result lv2".as_slice(),
+                _ => return Err(Error::State),
             };
             args[32..32 + suffix.len()].copy_from_slice(suffix);
             Ok(Reply::Data(bytes(&args[..32 + suffix.len()])?))
