@@ -34,8 +34,9 @@ pub fn radius(scale: u32, w: u32, h: u32) -> u32 { (RADIUS * scale.max(1)).min(w
 /// Integer square root (floor).
 pub fn isqrt(v: u64) -> u64 {
     if v < 2 { return v; }
-    let mut x = v;
-    let mut y = (x + 1) / 2;
+    // Start from a power of two at or above the root: a few Newton steps.
+    let mut x = 1u64 << ((64 - v.leading_zeros() + 1) / 2);
+    let mut y = (x + v / x) / 2;
     while y < x { x = y; y = (x + v / x) / 2; }
     x
 }
@@ -78,7 +79,9 @@ fn rounded_distance(lx: i32, ly: i32, w: u32, h: u32, r: u32, top: i32) -> i64 {
     let qx = (px - hw).abs() - hw + r16;
     let qy = (py - hh).abs() - hh + r16;
     let (ox, oy) = (qx.max(0), qy.max(0));
-    isqrt((ox * ox + oy * oy) as u64) as i64 + qx.max(qy).min(0) - r16
+    // Along a straight edge one axis is zero: no square root needed.
+    let out = if ox == 0 { oy } else if oy == 0 { ox } else { isqrt((ox * ox + oy * oy) as u64) as i64 };
+    out + qx.max(qy).min(0) - r16
 }
 
 /// How dark `shadow` is at (`lx`, `ly`) relative to the window's top-left.
@@ -117,6 +120,14 @@ pub fn blend(fg: u32, bg: u32, coverage: u8) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn isqrt_is_exact_floor() {
+        for v in (0..200_000u64).chain([u32::MAX as u64, (1u64 << 40) + 12345, u64::MAX >> 2]) {
+            let r = isqrt(v);
+            assert!(r * r <= v && (r + 1) * (r + 1) > v, "isqrt({v}) = {r}");
+        }
+    }
 
     #[test]
     fn corners_are_cut_and_edges_are_solid() {

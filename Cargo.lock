@@ -4783,6 +4783,8 @@ name = "moan-plugin"
 version = "0.1.0"
 dependencies = [
  "clap-sys",
+ "libc",
+ "libm",
  "sex-app",
  "sex-libc",
  "sex-pdx",
@@ -7105,6 +7107,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-gate"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "sex-gl"
 version = "0.1.0"
 dependencies = [
@@ -7119,6 +7128,10 @@ version = "0.1.0"
 dependencies = [
  "sex-kms",
 ]
+
+[[package]]
+name = "sex-gpu-nv"
+version = "0.1.0"
 
 [[package]]
 name = "sex-graphics"
