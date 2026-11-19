@@ -108,5 +108,8 @@ def main():
   bad=g['wait'](r'\[qupid.kodi.failed\] (Checksum[^\n]*)',s,5)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'repo':added[0].strip(),'installed':inst[0].strip(),'tampered':bad[1][:80],'requests':len(served)})
+ except Exception:
+  from qupid_shot import player_trace
+  print('--- player records ---\n'+player_trace(t()),flush=True);raise
  finally:g['stop']()
 if __name__=='__main__':main()

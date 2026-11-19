@@ -68,5 +68,8 @@ def main():
   assert 'qupid.thumb.written' not in t()[s:],'a file for a song without art'
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'thumb':(w,h),'from_ms':at,'ms':ms,'mid':wr[2],'big':big.groups(),'song':fail[1]})
+ except Exception:
+  from qupid_shot import player_trace
+  print('--- player records ---\n'+player_trace(t()),flush=True);raise
  finally:g['stop']()
 if __name__=='__main__':main()

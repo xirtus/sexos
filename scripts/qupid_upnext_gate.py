@@ -86,5 +86,8 @@ def main():
   assert '[qupid.upnext' not in t()[s3:],'a card in the last episode'
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'armed_from_ms':int(armed[1]),'first_left_ms':int(shown[1]),'card':card[0].strip(),'card_edge_px':accent})
+ except Exception:
+  from qupid_shot import player_trace
+  print('--- player records ---\n'+player_trace(t()),flush=True);raise
  finally:g['stop']()
 if __name__=='__main__':main()

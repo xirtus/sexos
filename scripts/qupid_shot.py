@@ -27,3 +27,9 @@ def accent_shot(q,out,name,want,tries=12):
     img.save(out/f'{name}.png')
     top=collections.Counter(img.getdata()).most_common(6)
     return count,f'near_accent={accent_px(img,40)} size={img.size} top_colors={[("#%02x%02x%02x"%c,n) for c,n in top]}'
+
+def player_trace(text,limit=60):
+    """The player's own records from a serial log, for a failing gate's output."""
+    import re
+    rows=[l for l in text.splitlines() if re.search(r'\[(qupid|play)\.',l) and not l.startswith('[play.frame]')]
+    return '\n'.join(rows[-limit:])
