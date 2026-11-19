@@ -1,0 +1,196 @@
+name: Driver fuzzing
+
+# fuzz/drivers: device models feed hostile register values, DMA rings,
+# descriptors, firmware files and tables to the real driver sources (Wi-Fi,
+# webcam, Intel display, NVIDIA, IOMMU, touchpad, I2C, Intel RAID, EC/battery,
+# HDA sound, xHCI/USB, NVMe, ACPI AML). A driver must never panic or poll forever
+# on what a device says.
+#   smoke      pull requests and master pushes that touch a driver: every target
+#              through the built-in mutator, 20 s each, seeded by the run number.
+#   libfuzzer  nightly (02:45 UTC): coverage-guided cargo-fuzz, one job per target,
+#              corpus kept between nights in the Actions cache. A crash is uploaded
+#              as an artifact; replay it with `cargo run --release --bin TARGET -- FILE`.
+
+'on':
+  pull_request:
+    paths:
+      - 'fuzz/drivers/**'
+      - 'servers/sexbell/src/**'
+      - 'servers/sexusb/src/**'
+      - 'servers/sexacpi/src/**'
+      - 'apps/sexdrive/src/**'
+      - 'crates/sex-pdx/**'
+      - 'crates/sex-wifi/**'
+      - 'crates/sex-uvc/**'
+      - 'crates/sex-kms/**'
+      - 'crates/sex-gpu-intel/**'
+      - 'crates/sex-gpu-nv/**'
+      - 'crates/sex-iommu/**'
+      - 'crates/sex-imsm/**'
+      - 'crates/sex-laptop/**'
+      - 'crates/sex-i2c-dw/**'
+      - 'crates/sex-hid-touch/**'
+      - 'hw-reports/**'
+      - 'scripts/hw_report.py'
+      - '.github/workflows/driver-fuzz.yml'
+  push:
+    branches: [master]
+    paths:
+      - 'fuzz/drivers/**'
+      - 'servers/sexbell/src/**'
+      - 'servers/sexusb/src/**'
+      - 'servers/sexacpi/src/**'
+      - 'apps/sexdrive/src/**'
+      - 'crates/sex-pdx/**'
+      - 'crates/sex-wifi/**'
+      - 'crates/sex-uvc/**'
+      - 'crates/sex-kms/**'
+      - 'crates/sex-gpu-intel/**'
+      - 'crates/sex-gpu-nv/**'
+      - 'crates/sex-iommu/**'
+      - 'crates/sex-imsm/**'
+      - 'crates/sex-laptop/**'
+      - 'crates/sex-i2c-dw/**'
+      - 'crates/sex-hid-touch/**'
+      - 'hw-reports/**'
+      - 'scripts/hw_report.py'
+      - '.github/workflows/driver-fuzz.yml'
+  schedule:
+    - cron: '45 2 * * *'
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: 'libFuzzer minutes per target'
+        required: false
+        default: '20'
+      seed:
+        description: 'Smoke seed (blank = run number)'
+        required: false
+        default: ''
+
+concurrency:
+  group: driver-fuzz-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  smoke:
+    name: Driver fuzz smoke (built-in mutator)
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - name: Rust toolchain cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.rustup/toolchains
+          ~/.rustup/update-hashes
+          ~/.rustup/settings.toml
+        key: rustup-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: fuzz/drivers
+        shared-key: driver-fuzz
+    - name: Every driver target, 20 s each
+      working-directory: fuzz/drivers
+      env:
+        DRIVER_FUZZ_SECONDS: '20'
+      run: |
+        set -o pipefail
+        export DRIVER_FUZZ_SEED="${{ inputs.seed || github.run_number }}"
+        echo "Driver fuzz smoke: seed=$DRIVER_FUZZ_SEED (replay: DRIVER_FUZZ_SEED=$DRIVER_FUZZ_SEED ./run.sh)" | tee -a "$GITHUB_STEP_SUMMARY"
+        ./run.sh | tee "$RUNNER_TEMP/driver-fuzz.txt"
+    - name: Summary
+      if: always()
+      run: grep -E '^\[driver_fuzz' "$RUNNER_TEMP/driver-fuzz.txt" >> "$GITHUB_STEP_SUMMARY" || true
+    - name: Preserve failing inputs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: driver-fuzz-smoke-${{ github.run_id }}
+        path: fuzz/drivers/crashes/
+        if-no-files-found: ignore
+        retention-days: 30
+
+  hw-report:
+    name: Real-hardware reports (hw-reports/)
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@v4
+    - name: Verdict of every report
+      run: |
+        PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts/tests/test_hw_report.py
+        python3 scripts/hw_report.py --check-all hw-reports >> "$GITHUB_STEP_SUMMARY"
+
+  targets:
+    name: List targets
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+    - uses: actions/checkout@v4
+    - id: list
+      run: echo "list=$(grep -oE '^name = "drv_[a-z0-9_]+"' fuzz/drivers/Cargo.toml | cut -d'"' -f2 | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+
+  libfuzzer:
+    name: libFuzzer ${{ matrix.target }}
+    needs: targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    continue-on-error: ${{ matrix.target == 'drv_acpi_aml' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        target: ${{ fromJSON(needs.targets.outputs.list) }}
+    steps:
+    - uses: actions/checkout@v4
+    - name: Rust toolchain cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.rustup/toolchains
+          ~/.rustup/update-hashes
+          ~/.rustup/settings.toml
+        key: rustup-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: fuzz/drivers
+        shared-key: driver-fuzz-libfuzzer
+    - name: cargo-fuzz
+      run: command -v cargo-fuzz || cargo install cargo-fuzz --locked
+    - name: Corpus from earlier nights
+      uses: actions/cache/restore@v4
+      with:
+        path: fuzz/drivers/corpus/${{ matrix.target }}
+        key: driver-corpus-${{ matrix.target }}-${{ github.run_id }}
+        restore-keys: driver-corpus-${{ matrix.target }}-
+    - name: Fuzz
+      working-directory: fuzz/drivers
+      run: STRICT=1 ./run_libfuzzer.sh $(( ${{ inputs.minutes || '20' }} * 60 )) ${{ matrix.target }} | tee -a "$GITHUB_STEP_SUMMARY"
+    - name: Minimise and keep the corpus
+      if: always()
+      working-directory: fuzz/drivers
+      run: |
+        mkdir -p "corpus/${{ matrix.target }}.min"
+        cargo fuzz run --fuzz-dir . --features libfuzzer -O --debug-assertions ${{ matrix.target }} \
+          "corpus/${{ matrix.target }}.min" "corpus/${{ matrix.target }}" -- -merge=1 >/dev/null 2>&1 \
+          && rm -rf "corpus/${{ matrix.target }}" && mv "corpus/${{ matrix.target }}.min" "corpus/${{ matrix.target }}" || true
+    - uses: actions/cache/save@v4
+      if: always()
+      with:
+        path: fuzz/drivers/corpus/${{ matrix.target }}
+        key: driver-corpus-${{ matrix.target }}-${{ github.run_id }}
+    - name: Preserve crashes
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: driver-fuzz-${{ matrix.target }}-${{ github.run_id }}
+        path: |
+          fuzz/drivers/artifacts/
+        if-no-files-found: ignore
+        retention-days: 30
