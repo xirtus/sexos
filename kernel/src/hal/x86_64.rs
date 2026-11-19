@@ -79,7 +79,7 @@ impl HardwareAbstractionLayer for X86Hal {
             crate::pku::set_pku_enabled(false);
             serial_println!("PKU: unsupported on this CPU/QEMU path; PKRU ops gated off");
         }
-        if bsp { crate::gate::init(); }
+        if bsp { crate::gate::init(); crate::jitter::init(); }
 
         // SSE for programs; APs copy CR0/CR4/XCR0/EFER from here.
         unsafe { crate::fpu::init_core(); }

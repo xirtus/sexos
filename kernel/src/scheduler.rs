@@ -1047,6 +1047,7 @@ unsafe fn poll_for_partner(sched: &Scheduler, current: *mut Task) {
 /// Wakes another core for new work, unless it is polling for it anyway.
 fn kick(core: u32) {
     core::sync::atomic::fence(Ordering::SeqCst);
+    if crate::jitter::hit(crate::jitter::Site::Kick) { return; } // a late IPI: the next tick looks
     if !POLLING[core as usize].load(Ordering::SeqCst) { crate::apic::send_to_core(core, crate::smp::WAKE_VECTOR); }
 }
 
@@ -1162,6 +1163,7 @@ pub fn unpark_thread(task_ptr: *mut Task) {
 }
 
 fn wake_owned_thread(task_ptr:*mut Task){
+    crate::jitter::delay(crate::jitter::Site::Wake);
     let woke = unsafe { (*task_ptr).state.wake() };
     if woke == WakeResult::Recorded {
         // A task parked on its own core stays attached there, and that core may be

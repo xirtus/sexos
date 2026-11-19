@@ -276,6 +276,7 @@ pub extern "C" fn syscall_handler(regs: &mut SyscallRegs) -> u64 {
     // syscall_entry already opened every key; a second write only costs time.
     crate::scheduler::observe_user_entry();
     if crate::gate::inside(regs) { return sex_pdx::gate::IN_GATE; }
+    crate::jitter::delay(crate::jitter::Site::Entry);
     crate::syscalls::dispatch(regs)
 }
 
