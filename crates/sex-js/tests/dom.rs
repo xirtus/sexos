@@ -1807,3 +1807,70 @@ fn code_cache_runs_the_same_scripts_and_modules() {
     // The classic script is written on its second sighting and read on its third.
     assert!(c.hits >= 5, "hits {} misses {}", c.hits, c.misses);
 }
+
+#[test]
+fn streams_and_fetch_bodies() {
+    let mut s = page("<p>x</p>");
+    s.eval(r#"
+        const out = [];
+        // A ReadableStream read with a reader, piped through a TransformStream, teed.
+        const rs = new ReadableStream({ start(c) { c.enqueue('a'); c.enqueue('b'); c.close(); } });
+        const up = rs.pipeThrough(new TransformStream({ transform(ch, c) { c.enqueue(ch.toUpperCase()); } }));
+        const [l, r] = up.tee();
+        (async () => {
+            const got = [];
+            for await (const x of l) got.push(x);
+            const rd = r.getReader();
+            const one = await rd.read(), two = await rd.read(), end = await rd.read();
+            console.log('streams', got.join(''), one.value + two.value, end.done, rs.locked);
+            // Pull-driven, with UTF-8 split across chunks.
+            let n = 0;
+            const bytes = new ReadableStream({ pull(c) { n < 2 ? c.enqueue(new Uint8Array(n++ ? [0xA9, 0x21] : [0x63, 0xC2])) : c.close(); } });
+            let text = '';
+            for await (const t of bytes.pipeThrough(new TextDecoderStream())) text += t;
+            console.log('decoded', text);
+            // Response made by the page.
+            const made = new Response('{"k":1}', { status: 201, headers: { 'x-a': 'b' } });
+            const copy = made.clone();
+            console.log('made', made.status, made.ok, made.headers.get('content-type'), (await made.json()).k, made.bodyUsed, await copy.text());
+            console.log('stream body', await new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([104, 105])); c.close(); } })).text(), new Response(null).body);
+            await made.text().catch(e => console.log('again', e.constructor.name));
+        })();
+        // fetch: the body streams in pieces; an aborted fetch rejects.
+        fetch('/videoplayback', { method: 'POST', body: new Uint8Array([1, 2, 3]) }).then(async r => {
+            const reader = r.body.getReader();
+            let pieces = 0, total = 0;
+            for (;;) { const { value, done } = await reader.read(); if (done) break; pieces++; total += value.byteLength; }
+            console.log('fetch body', r.status, pieces, total, r.bodyUsed);
+        });
+        const ac = new AbortController();
+        fetch('/slow', { signal: ac.signal }).then(() => console.log('slow loaded'), e => console.log('slow', e.name));
+        ac.abort();
+        fetch(new Request('/req', { method: 'PUT', body: 'hey' })).then(r => r.arrayBuffer()).then(b => console.log('req', b.byteLength));
+    "#, "t.js").unwrap();
+    s.dispatch("flush").unwrap();
+    let asked = std::mem::take(&mut s.page_mut().fetches);
+    assert_eq!(asked.len(), 3);
+    assert_eq!((asked[0].method.as_str(), &asked[0].body[..]), ("POST", &[1u8, 2, 3][..]));
+    assert_eq!((asked[2].url.as_str(), asked[2].method.as_str(), &asked[2].body[..]), ("/req", "PUT", &b"hey"[..]));
+    s.page_mut().keep_head(asked[0].id, "http://example.test/videoplayback", "content-type: application/vnd.yt-ump\r\n");
+    s.page_mut().keep_body(asked[0].id, 200, vec![7; 150_000]);
+    s.dispatch(&format!("fetched\t{}\t200\t150000", asked[0].id)).unwrap();
+    s.page_mut().keep_body(asked[1].id, 200, vec![1; 10]);
+    s.dispatch(&format!("fetched\t{}\t200\t10", asked[1].id)).unwrap();
+    s.page_mut().keep_body(asked[2].id, 200, vec![1; 5]);
+    s.dispatch(&format!("fetched\t{}\t200\t5", asked[2].id)).unwrap();
+    for _ in 0..4 { s.dispatch("flush").unwrap(); }
+    let mut l = logs(&mut s);
+    l.sort();
+    assert_eq!(l, [
+        "0:again TypeError",
+        "0:decoded c©!",
+        "0:fetch body 200 3 150000 true",
+        "0:made 201 true text/plain;charset=UTF-8 1 true {\"k\":1}",
+        "0:req 5",
+        "0:slow AbortError",
+        "0:stream body hi null",
+        "0:streams AB AB true false",
+    ]);
+}

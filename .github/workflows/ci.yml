@@ -529,7 +529,7 @@ jobs:
     name: Browser media streaming and seeking
     runs-on: ubuntu-latest
     needs: image
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -543,6 +543,10 @@ jobs:
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
         python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
         python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Media Source Extensions (fMP4 and WebM, live append, quality switch, seek)
+      run: python3 scripts/program_web_mse_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-mse"
+    - name: YouTube-shaped streaming (AV1 fMP4 + Opus WebM, POST ranges read through response.body, changeType to VP9)
+      run: python3 scripts/program_web_youtube_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-youtube"
     - name: Preserve media evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -552,6 +556,8 @@ jobs:
           ${{ runner.temp }}/media-build.log
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
+          ${{ runner.temp }}/sexos-web-mse
+          ${{ runner.temp }}/sexos-web-youtube
         if-no-files-found: ignore
 
   editor:

@@ -1,0 +1,72 @@
+<!doctype html>
+<html><head><title>Tube YouTube-shaped MSE</title></head>
+<body>
+<h1>YouTube-shaped streaming</h1>
+<video id=v width=320 height=240></video>
+<script>
+// Streams the way YouTube's player does on SexOS today: AV1 video in fragmented MP4
+// (with a sidx) and Opus sound in WebM go to two SourceBuffers. Each piece is a POST
+// for a byte range (`&range=A-B` in the URL, a small request body), read through
+// `response.body.getReader()` and appended chunk by chunk as it arrives, so appends
+// cut boxes and Clusters anywhere. At 4 s the video buffer switches codec with
+// changeType (VP9 WebM, 160x120) and both buffers move on with timestampOffset.
+const say = (...a) => console.log('tube yt', ...a);
+const v = document.getElementById('v');
+const AV1 = 'video/mp4; codecs="av01.0.05M.08"; width=320; height=240; framerate=25';
+const VP9 = 'video/webm; codecs="vp09.00.20.08"';
+const OPUS = 'audio/webm; codecs="opus"; channels=2';
+const RANGE = 40000;
+say('types', MediaSource.isTypeSupported(AV1), MediaSource.isTypeSupported(VP9), MediaSource.isTypeSupported(OPUS),
+    typeof ReadableStream, typeof SourceBuffer.prototype.changeType);
+let chunks = 0, posts = 0;
+// One append at a time per buffer, in order.
+function appender(sb) {
+  let chain = Promise.resolve();
+  return bytes => chain = chain.then(() => new Promise((ok, bad) => {
+    sb.onupdateend = () => { sb.onupdateend = sb.onerror = null; ok(); };
+    sb.onerror = () => bad(new Error('append refused'));
+    sb.appendBuffer(bytes);
+  }));
+}
+async function stream(append, file) {
+  let at = 0, total = Infinity;
+  while (at < total) {
+    const r = await fetch('yt/' + file + '?alr=yes&range=' + at + '-' + (at + RANGE - 1),
+      { method: 'POST', body: new Uint8Array([0x78, 0, 0x08, at & 0x7f]), headers: { 'Content-Type': 'application/x-protobuf' } });
+    posts++;
+    if (r.status !== 200) throw new Error(file + ' answered ' + r.status);
+    total = +r.headers.get('x-total-length');
+    const reader = r.body.getReader();
+    let got = 0;
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      chunks++; got += value.byteLength;
+      await append(value);
+    }
+    at += got;
+  }
+}
+const ms = new MediaSource();
+ms.addEventListener('sourceopen', async () => {
+  try {
+    const vsb = ms.addSourceBuffer(AV1), asb = ms.addSourceBuffer(OPUS);
+    vsb.appendWindowEnd = asb.appendWindowEnd = 8;
+    const va = appender(vsb), aa = appender(asb);
+    await Promise.all([stream(va, 'video-av1.mp4'), stream(aa, 'audio-600.webm')]);
+    say('first', vsb.buffered.end(0).toFixed(2), asb.buffered.end(0).toFixed(2));
+    vsb.changeType(VP9);
+    vsb.timestampOffset = 4; asb.timestampOffset = 4;
+    await Promise.all([stream(va, 'video-vp9.webm'), stream(aa, 'audio-750.webm')]);
+    const b = v.buffered;
+    say('buffered', b.length, b.start(0).toFixed(2), b.end(0).toFixed(2), posts, chunks > posts);
+    ms.endOfStream();
+    say('ended', ms.readyState, ms.duration.toFixed(1));
+    await v.play();
+  } catch (e) { say('failed', e.message); }
+});
+v.addEventListener('playing', () => say('playing'));
+v.addEventListener('ended', () => say('done', v.currentTime.toFixed(1)));
+v.src = URL.createObjectURL(ms);
+</script>
+</body></html>
