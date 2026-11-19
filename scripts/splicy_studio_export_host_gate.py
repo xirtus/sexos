@@ -71,6 +71,10 @@ def diagnose(path):
  for k,l in enumerate(dbg):
   if 'Error parsing' in l or 'rror' in l and 'opus' in l:
    say('\n'.join(dbg[max(0,k-6):k+2]));break
+def decode_errors(path):
+ r=subprocess.run(['ffmpeg','-v','error','-xerror','-i',str(path),'-f','null','-'],capture_output=True,text=True)
+ # the address in "[opus @ 0x...]" differs per run
+ return r.returncode,[re.sub(r' @ 0x[0-9a-f]+','',l) for l in r.stderr.splitlines() if l.strip()]
 def check(fmt,name,codecs,container,log,out,reference,heard):
  if True:
   m=re.search(rf'\[splicy.studio.export\] format={fmt} file={re.escape(name)} bytes=(\d+) ms=(\d+)',log)
@@ -83,8 +87,14 @@ def check(fmt,name,codecs,container,log,out,reference,heard):
   assert (streams['video']['width'],streams['video']['height'])==(320,180),(fmt,streams['video'])
   pictures=int(streams['video']['nb_read_frames']);assert pictures==SECONDS*FPS,(fmt,pictures)
   assert streams['audio']['sample_rate']=='48000',(fmt,streams['audio'])
-  errors=subprocess.run(['ffmpeg','-v','error','-xerror','-i',str(path),'-f','null','-'],capture_output=True,text=True)
-  assert errors.returncode==0 and not errors.stderr.strip(),(fmt,errors.stderr[-600:])
+  code,lines=decode_errors(path)
+  known=set(decode_errors(out/'source.webm')[1]) if fmt=='webm' else set()
+  # FFmpeg 8.0's Opus parser is called once more with an empty buffer when the Matroska demuxer
+  # flushes at the end of the file, and logs "Error parsing Opus packet header." for every WebM
+  # with Opus, the libopus-made source included. Only that line, and only when the source shows
+  # it too, is FFmpeg's own; anything else is ours.
+  lines=[l for l in lines if not (l in known and 'Error parsing Opus packet header' in l)]
+  assert code==0 and not lines,(fmt,code,lines[-6:])
   quality=psnr(path,reference);assert quality>30,(fmt,'PSNR',quality)
   level=loudness(path);assert abs(level-heard)<1.5,(fmt,'loudness',level,heard)
   return {'bytes':int(m[1]),'ms':int(m[2]),'pictures':pictures,'psnr':round(quality,1),'mean_db':level}
