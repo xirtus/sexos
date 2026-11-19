@@ -58,6 +58,10 @@ fn cores(target: u32) -> u64 {
 
 /// A driver service's workers belong to this run: the service's whole life.
 const SERVICE_RUN: u32 = u32::MAX;
+/// Task ids for driver workers: just under the program runs' range (0x4000_0000 up),
+/// above every BOOT task. Dead workers are reused, so the range never runs out in
+/// practice; if it does, SPAWN_ON is refused.
+static NEXT_SERVICE_TASK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x3F00_0000);
 
 /// A BOOT service that drives a device: it may start workers pinned to cores, one per
 /// device queue. Its workers end when the service is ended (`end`).
@@ -71,7 +75,8 @@ pub fn spawn_service(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
     regs.rsi = 0;
     if !driver(pd.id) { return t::DENIED; }
     let online = crate::smp::ONLINE.load(Ordering::Acquire).max(1) as u64;
-    let id = match crate::app_resources::next_run_task() { Ok(id) => id, Err(e) => return e };
+    let id = NEXT_SERVICE_TASK.fetch_add(1, Ordering::Relaxed);
+    if id >= 0x4000_0000 { return t::FULL; }
     match spawn_on(pd, SERVICE_RUN, id, entry, stack, arg, Some((core % online) as u32)) {
         Ok(id) => { regs.rsi = id; t::OK }
         Err(e) => e,
