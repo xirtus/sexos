@@ -50,6 +50,8 @@ def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False
         'clock.civil','display.civil.draw','silkbar.clock','scheduler.self_wait','sched.active')
  tail=[l for l in text()[start:].splitlines() if not any(n in l for n in noise)][-150:]
  print(f'--- {tag}: last serial lines before the timeout ---',*tail,sep='\n',file=sys.stderr)
+ life=[l for l in text().splitlines() if re.search(r'\[(?:app|display\.app|shell\.app|files\.app|net\.app|bell\.app|boot\.app)\.',l)][-200:]
+ print(f'--- {tag}: program lifecycle lines over the whole run ---',*life,sep='\n',file=sys.stderr)
  raise TimeoutError(f'{tag}: {pattern}')
 
 def boot(iso,disk,out,tag,resolution):
