@@ -15,7 +15,7 @@ RUN rm -f /var/lib/man-db/auto-update \
  && apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends \
       ca-certificates curl git git-lfs jq sudo unzip zip xz-utils zstd file lsb-release \
-      build-essential pkg-config python3 python3-pip python3-venv python3-pil \
+      build-essential pkg-config ruby python3 python3-pip python3-venv python3-pil \
       ripgrep clang lld llvm wabt nasm musl-dev cmake ninja-build meson acpica-tools mtools gdisk dosfstools \
       xorriso qemu-system-x86 qemu-utils genisoimage udftools fdisk e2fsprogs \
       ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
@@ -33,6 +33,7 @@ ENV PATH=/home/runner/.cargo/bin:$PATH
 
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none \
  && rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -c rust-src -t x86_64-unknown-none \
+ && rustup toolchain install stable --profile minimal \
  && rustup default "$RUST_TOOLCHAIN"
 
 RUN mkdir actions-runner && cd actions-runner \

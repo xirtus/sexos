@@ -35,6 +35,10 @@ and is deleted. Nothing from the Mac is mounted into it.
 
 ## Running it
 
+Rosetta must be installed on the Mac (`softwareupdate --install-rosetta`). Without it
+Colima silently falls back to QEMU user emulation, which is far slower and makes
+gcc's linker crash (seen 2026-11-19). `run.sh` refuses to start in that case.
+
 Needs `colima`, `docker` and an authenticated `gh` (repo admin, for runner
 registration tokens).
 

@@ -67,7 +67,9 @@ slot() {
   done
 }
 
+/usr/bin/arch -x86_64 /usr/bin/true 2>/dev/null || { log "Rosetta is not installed (softwareupdate --install-rosetta); refusing to run x86 jobs under QEMU"; exit 1; }
 colima status -p "$PROFILE" >/dev/null 2>&1 || colima start "$PROFILE" --vm-type vz --vz-rosetta --arch aarch64 --cpu 8 --memory 10 --disk 100 --runtime docker
+colima ssh -p "$PROFILE" -- test -e /proc/sys/fs/binfmt_misc/rosetta || { log "the VM has no Rosetta binfmt; restart it: colima stop $PROFILE"; exit 1; }
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build --platform linux/amd64 -t "$IMAGE" "$HERE"
 
 trap 'log "stopping"; docker ps -q --filter name=sexos-mac- | xargs docker stop -t 30 >/dev/null; kill 0' INT TERM
