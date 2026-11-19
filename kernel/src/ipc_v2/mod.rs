@@ -11,6 +11,8 @@
 pub mod endpoint;
 pub mod notification;
 pub mod reply;
+pub mod syscall;
 
-/// A task as these objects see it: a small dense id the scheduler owns.
-pub type TaskId = u32;
+/// A task as these objects see it: the kernel passes its `*mut Task` address (tasks
+/// are never freed, so a stale one is checked by incarnation, never dangling).
+pub type TaskId = u64;

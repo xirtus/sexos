@@ -1,7 +1,7 @@
 //! Host tests of the IPC v2 endpoint (kernel/src/ipc_v2/endpoint.rs).
 #[path = "../kernel/src/ipc_v2"]
 mod ipc_v2 {
-    pub type TaskId = u32;
+    pub type TaskId = u64;
     pub mod endpoint;
 }
 
@@ -9,7 +9,7 @@ use ipc_v2::endpoint::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-fn call(task: u32, badge: u64) -> Sender { Sender { task, badge, generation: 7, kind: CallKind::Call } }
+fn call(task: u64, badge: u64) -> Sender { Sender { task, badge, generation: 7, kind: CallKind::Call } }
 
 #[test]
 fn parked_receiver_is_taken_by_the_fastpath() {
@@ -47,7 +47,7 @@ fn one_receiver_at_a_time() {
 #[test]
 fn full_queue_refuses_without_losing_anyone() {
     let ep = Endpoint::new();
-    for t in 0..QUEUE_DEPTH as u32 { assert_eq!(ep.send(call(t, 0)), SendOutcome::Queued); }
+    for t in 0..QUEUE_DEPTH as u64 { assert_eq!(ep.send(call(t, 0)), SendOutcome::Queued); }
     assert_eq!(ep.send(call(99, 0)), SendOutcome::Full);
     assert_eq!(ep.queued(), QUEUE_DEPTH);
 }
@@ -59,7 +59,7 @@ fn cancelled_caller_leaves_the_others_in_order() {
     assert_eq!(ep.cancel_send(2).map(|s| s.task), Some(2));
     assert_eq!(ep.cancel_send(2), None);
     assert_eq!(ep.queued(), 3);
-    let order: Vec<u32> = (0..3).map(|_| match ep.recv(0) { RecvOutcome::Message(s) => s.task, o => panic!("{o:?}") }).collect();
+    let order: Vec<u64> = (0..3).map(|_| match ep.recv(0) { RecvOutcome::Message(s) => s.task, o => panic!("{o:?}") }).collect();
     assert_eq!(order, vec![1, 3, 4]);
 }
 
@@ -98,7 +98,7 @@ fn no_message_is_lost_or_duplicated_under_contention() {
         std::thread::spawn(move || for i in 0..EACH {
             let badge = ((c as u64) << 32) | i as u64;
             loop {
-                match ep.send(Sender { task: 100 + c, badge, generation: 0, kind: CallKind::Send }) {
+                match ep.send(Sender { task: 100 + c as u64, badge, generation: 0, kind: CallKind::Send }) {
                     SendOutcome::Rendezvous { receiver } => { assert_eq!(receiver, 1); inbox.lock().unwrap().push(badge); break }
                     SendOutcome::Queued => break,
                     SendOutcome::Full => std::thread::yield_now(),
