@@ -462,7 +462,4 @@ pub fn request(fs: &mut F, r: w::Request, path: &[u8], data: &mut [u8]) -> Resul
     }
 }
 
-fn pin_count(fs: &mut F) -> usize {
-    let mut ids = [0u64; store::MAX_PINS as usize];
-    store::pins(fs, &mut ids).unwrap_or(0)
-}
+fn pin_count(fs: &mut F) -> usize { store::pin_count(fs).unwrap_or(0) as usize }

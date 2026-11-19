@@ -51,7 +51,8 @@ fn commit_writes(fs: &mut Fs<'static, Disk>) {
 pub fn organize_idle() {
     if writes_pending() { return; }
     match unsafe { &mut *core::ptr::addr_of_mut!(STATE) } {
-        State::Ready(fs) => crate::home::deep(|| crate::organize::step(fs)),
+        // On Files' own stack: `home::deep` would take 256 KiB from a 128 KiB heap.
+        State::Ready(fs) => if crate::organize::pending() { crate::organize::step(fs) },
         State::Absent => crate::organize::unmounted(),
         // Not mounted until the first request; nothing has arrived before it.
         State::Untried => {}
@@ -940,7 +941,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     // The Organizer (Spindle only, checked in `handle`): Files' own policy module.
     if (w::ORGANIZE_STATE..=w::ORGANIZE_LOG).contains(&r.kind) {
         if crate::volumes::owns(path) || crate::home::owns(path) { return w::reply(r.seq, w::OTHER_DISK, 0); }
-        return match crate::home::deep(|| crate::organize::request(fs, r, path, data)) { Ok(v) => w::reply(r.seq, w::OK, v), Err(st) => w::reply(r.seq, st, 0) };
+        return match crate::organize::request(fs, r, path, data) { Ok(v) => w::reply(r.seq, w::OK, v), Err(st) => w::reply(r.seq, st, 0) };
     }
     let media = match (r.kind, rename_halves) {
         (w::MOUNT, _) => Some(crate::volumes::mount(fs, path, data)),

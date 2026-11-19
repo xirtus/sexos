@@ -112,7 +112,7 @@ fn lend<T>(main: &mut Fs<'static, FsDisk>, f: impl FnOnce() -> T) -> T {
 const DEEP: usize = 256 * 1024;
 static mut DEEP_STACK: *mut u8 = core::ptr::null_mut();
 static mut DEEP_IN: bool = false;
-pub(crate) fn deep<R>(f: impl FnOnce() -> R) -> R {
+fn deep<R>(f: impl FnOnce() -> R) -> R {
     // Already on it: one stack, so no second switch.
     if unsafe { DEEP_IN } { return f(); }
     let base = unsafe {

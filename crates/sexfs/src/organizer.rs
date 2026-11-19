@@ -178,6 +178,11 @@ pub fn pin<D: Device>(fs: &mut Fs<'_, D>, id: u64, on: bool) -> Result<()> {
     }
 }
 
+/// How many files are pinned.
+pub fn pin_count<D: Device>(fs: &mut Fs<'_, D>) -> Result<u64> {
+    Ok(pins_file(fs, false)?.map_or(0, |(_, size)| size / 8))
+}
+
 /// Pinned ids, for listing. Returns how many were written.
 pub fn pins<D: Device>(fs: &mut Fs<'_, D>, out: &mut [u64]) -> Result<usize> {
     let Some((file, size)) = pins_file(fs, false)? else { return Ok(0) };
