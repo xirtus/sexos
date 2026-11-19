@@ -32,11 +32,12 @@ Each stage is its own PR; long gates run on GitHub CI.
 ## Design notes
 
 - Wi-Fi stays inside sexnet (as W1-W6), Bluetooth inside Cufflinks. Thunderbolt
-  gets its own server (a PD of its own, like sexusb), leasing the NHI by PCI ID.
+  runs inside SexUSB (USB4 is the USB family, and SexUSB is already its own PD),
+  leasing the NHI by PCI class 0c0340; it can move to a PD of its own if it grows.
 - Firmware commands follow OpenBSD iwx(4) (ISC). Where iwx has no 802.11ax, the
   HE command layouts come from iwlwifi's `fw/api` headers, which are dual-licensed
   GPL-2.0 or BSD-3-Clause. Thunderbolt follows the USB4 and Thunderbolt 3 specs
   with Linux's `drivers/thunderbolt` (GPL-2.0) as a reference only: our code is
   written fresh and is GPL-3.0.
 - None of this needs a new syscall: Wi-Fi uses the existing lease, Cufflinks its
-  regions, and the Thunderbolt server the driver/MSI-X syscall (86).
+  regions, and Thunderbolt the class lease (slots 29/30 in SexUSB).

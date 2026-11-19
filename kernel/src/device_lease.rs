@@ -13,9 +13,11 @@ pub const CLASS_AHCI: u32 = 0x01_06_01;
 pub const CLASS_WIFI: u32 = 0x02_80_00;
 /// "Other" serial bus controller: Intel Serial IO. The manifest only claims its I2C functions.
 pub const CLASS_SERIAL_IO: u32 = 0x0c_80_00;
+/// USB4 host interface: Intel's Thunderbolt 4 NHI (to the USB service).
+pub const CLASS_USB4_NHI: u32 = 0x0c_03_40;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind { Hda, Ahci, Wifi, SerialIo }
+pub enum Kind { Hda, Ahci, Wifi, SerialIo, Thunderbolt }
 impl Kind {
     pub fn of(dev: &PciDevice) -> Option<Kind> {
         Self::of_class((dev.class_id as u32) << 16 | (dev.subclass_id as u32) << 8 | dev.prog_if as u32)
@@ -27,21 +29,25 @@ impl Kind {
             CLASS_AHCI => Some(Kind::Ahci),
             c if c & 0xffff00 == CLASS_WIFI => Some(Kind::Wifi),
             c if c & 0xffff00 == CLASS_SERIAL_IO => Some(Kind::SerialIo),
+            CLASS_USB4_NHI => Some(Kind::Thunderbolt),
             _ => None,
         }
     }
     pub fn class(self, dev: &PciDevice) -> u32 {
-        match self { Kind::Hda => CLASS_HDA | dev.prog_if as u32, Kind::Ahci => CLASS_AHCI, Kind::Wifi => CLASS_WIFI | dev.prog_if as u32, Kind::SerialIo => CLASS_SERIAL_IO | dev.prog_if as u32 }
+        match self { Kind::Hda => CLASS_HDA | dev.prog_if as u32, Kind::Ahci => CLASS_AHCI, Kind::Wifi => CLASS_WIFI | dev.prog_if as u32, Kind::SerialIo => CLASS_SERIAL_IO | dev.prog_if as u32, Kind::Thunderbolt => CLASS_USB4_NHI }
     }
     /// HDA and Intel Wi-Fi keep their registers in BAR0; AHCI's ABAR is BAR5.
-    pub fn bar(self) -> u8 { match self { Kind::Hda | Kind::Wifi | Kind::SerialIo => 0, Kind::Ahci => 5 } }
+    pub fn bar(self) -> u8 { match self { Kind::Hda | Kind::Wifi | Kind::SerialIo | Kind::Thunderbolt => 0, Kind::Ahci => 5 } }
     /// Global registers plus every stream (HDA: up to 30 descriptors) or port
     /// (AHCI: 32 ports at 0x100 + n*0x80) a driver may touch.
     /// Intel Wi-Fi: the CSRs up to the RX free-ring index at 0x1c80 (8 KiB BAR minimum).
     /// Serial IO: the DesignWare block and Intel's private page (resets) at 0x200.
-    pub fn registers_end(self) -> u64 { match self { Kind::Hda => 0x180, Kind::Ahci => 0x180, Kind::Wifi => 0x2000, Kind::SerialIo => 0x300 } }
+    /// Thunderbolt NHI: rings, then the firmware status word at 0x39944.
+    pub fn registers_end(self) -> u64 { match self { Kind::Hda => 0x180, Kind::Ahci => 0x180, Kind::Wifi => 0x2000, Kind::SerialIo => 0x300, Kind::Thunderbolt => 0x3a000 } }
+    /// The most of the BAR a driver sees: 64 KiB, the whole 256 KiB for the NHI.
+    pub fn max_view(self) -> u64 { if self == Kind::Thunderbolt { 256 * 1024 } else { 64 * 1024 } }
     pub fn view_length(self, actual: u64) -> Option<u64> {
-        if actual < self.registers_end() { None } else { Some(actual.min(64 * 1024)) }
+        if actual < self.registers_end() { None } else { Some(actual.min(self.max_view())) }
     }
     /// The DMA pool region a driver of this kind holds at SLOT_DMA_REGION.
     pub fn dma(self) -> (u32, u64) {
@@ -49,14 +55,25 @@ impl Kind {
             Kind::Hda => (sex_pdx::pci_command::HDA_DMA_REGION_ID, sex_pdx::pci_command::HDA_DMA_BYTES),
             Kind::Ahci => (sex_pdx::pci_command::AHCI_DMA_REGION_ID, sex_pdx::pci_command::AHCI_DMA_BYTES),
             Kind::Wifi => (sex_pdx::pci_command::WIFI_DMA_REGION_ID, sex_pdx::pci_command::WIFI_DMA_BYTES),
+            Kind::Thunderbolt => (sex_pdx::pci_command::THUNDERBOLT_DMA_REGION_ID, sex_pdx::pci_command::THUNDERBOLT_DMA_BYTES),
             Kind::SerialIo => (0, 0),
         }
     }
     /// Where that pool sits. Wi-Fi shares the network service with the wired NIC,
     /// whose pool already holds SLOT_DMA_REGION.
     pub fn dma_slot(self) -> u64 {
-        match self { Kind::Wifi => sex_pdx::pci_command::SLOT_WIFI_DMA, _ => sex_pdx::SLOT_DMA_REGION }
+        match self { Kind::Wifi => sex_pdx::pci_command::SLOT_WIFI_DMA, Kind::Thunderbolt => sex_pdx::pci_command::SLOT_THUNDERBOLT_DMA, _ => sex_pdx::SLOT_DMA_REGION }
     }
+}
+
+/// Integrated Thunderbolt (Ice Lake and later): the controller's firmware runs only
+/// while "force power" is raised in its vendor config word VS_CAP_22 (0xfc), with
+/// Linux's DMA delay 0x22; it then sets FW_READY in VS_CAP_9 and the driver sees
+/// the firmware status in BAR0. Drivers never see config space, so BOOT raises it.
+pub fn force_power(dev: &PciDevice) -> u32 {
+    let word = dev.read_u32(0xfc);
+    dev.write_u32(0xfc, (word & 0x00ff_ffff) | 0x22 << 24 | 1 << 1);
+    dev.read_u32(0xc8)
 }
 
 /// PCI power management: firmware may leave a Serial IO function in D3hot, where its

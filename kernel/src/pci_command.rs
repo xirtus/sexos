@@ -17,7 +17,7 @@ fn held_device(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64)->Option<(u32,w::
     let expected=pd.id.checked_mul(1024).and_then(|n|n.checked_add(0x10000)).and_then(|n|n.checked_add(slot));
     if expected!=Some(view.region_id) || m::resolve_info(Some(&view)).is_err()
         || view.rights!=m::QUERY_VIEW|m::READ|m::WRITE || view.dma_base.is_some() || view.peer_pd.is_some()
-        || view.length>65536 {return None;}
+        || view.length>crate::device_lease::Kind::of_class(device.class).map_or(65536,|k|k.max_view()) {return None;}
     // A virtio lease is sized by its register layout, a NIC's by its fixed registers.
     let complete=match device.virtio {
         Some(layout)=>crate::virtio_boot::supported(device.vendor_id,device.device_id)&&layout.valid(view.length),

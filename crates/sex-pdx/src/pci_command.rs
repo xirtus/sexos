@@ -32,6 +32,13 @@ pub const WIFI_DMA_BYTES: u64 = 4 * 1024 * 1024;
 pub const WIFI_FIRMWARE_REGION_ID: u32 = 0x4401;
 /// The boot module holding the firmware pack (`sex_wifi::pack`).
 pub const WIFI_FIRMWARE_MODULE: &str = "wifi.pack";
+/// An Intel Thunderbolt 4 / USB4 host interface (NHI) in the USB service: its
+/// register view (256 KiB BAR: rings and the firmware status words), and a small
+/// DMA pool for the control ring (`sex_thunderbolt::ring::Layout`).
+pub const SLOT_THUNDERBOLT: u64 = 29;
+pub const SLOT_THUNDERBOLT_DMA: u64 = 30;
+pub const THUNDERBOLT_DMA_REGION_ID: u32 = 0x4500;
+pub const THUNDERBOLT_DMA_BYTES: u64 = 64 * 1024;
 pub const DENIED: u64 = u64::MAX;
 /// A hardware write/readback failure is uncertain; do not retry a mutation.
 pub const IO: u64 = u64::MAX - 1;

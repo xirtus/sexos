@@ -666,19 +666,19 @@ pub fn nic_lease(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)-
     let(bar,physical,actual_length)=crate::nic_boot::bars(dev.vendor_id,dev.device_id).iter()
         .find_map(|&bar|dev.probe_boot_bar_any(bar).map(|(p,l)|(bar,p,l)))?;
     let end=crate::nic_boot::registers_end(dev.vendor_id,dev.device_id);
-    bar_lease(pd,dev,slot,bar,physical,actual_length,end)
+    bar_lease(pd,dev,slot,bar,physical,actual_length,end,64*1024)
 }
 
 /// One BAR as a page-granular view. A BAR of a page or more is leased from its
 /// start (at most 64 KiB). A smaller BAR is leased as its whole page only when no
 /// other BAR anywhere decodes in that page; the window says where it sits.
-fn bar_lease(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,bar:u8,physical:u64,actual_length:u64,end:u64)
+fn bar_lease(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,bar:u8,physical:u64,actual_length:u64,end:u64,max:u64)
     ->Option<(RegionGrant,(u32,u32))>
 {
     require_boot();
     if actual_length<end{return None}
     if actual_length>=4096 {
-        let length=actual_length.min(64*1024);
+        let length=actual_length.min(max);
         return Some((pci_view(pd,slot,physical,actual_length,length),(0,length as u32)));
     }
     let page=physical&!0xfff;
@@ -754,7 +754,7 @@ pub fn intel_display_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,sl
 pub fn class_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,kind:crate::device_lease::Kind)->Option<(RegionGrant,(u32,u32))>{
     require_boot();
     let(physical,actual_length)=dev.probe_boot_bar_any(kind.bar())?;
-    bar_lease(pd,dev,slot,kind.bar(),physical,actual_length,kind.registers_end())
+    bar_lease(pd,dev,slot,kind.bar(),physical,actual_length,kind.registers_end(),kind.max_view())
 }
 
 /// Memory-space and bus-master bits for a class-leased controller, like the NIC's.
@@ -764,7 +764,7 @@ pub fn class_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u
     require_boot();
     assert_eq!(view.region_id,0x10000 + pd.id * 1024 + slot as u32,"BOOT_CLASS_COMMAND_VIEW_ID");
     assert!(sex_pdx::memory_region::resolve_info(Some(&view)).is_ok()
-        && view.length >= kind.registers_end() && view.length <= 65536
+        && view.length >= kind.registers_end() && view.length <= kind.max_view()
         && view.rights == QUERY_VIEW|READ|WRITE && view.dma_base.is_none() && view.peer_pd.is_none(), "BOOT_CLASS_COMMAND_VIEW");
     let g=sex_pdx::pci_command::Grant {subject:pd.id,bus:dev.bus,device:dev.dev,function:dev.func,
         vendor_id:dev.vendor_id,device_id:dev.device_id,

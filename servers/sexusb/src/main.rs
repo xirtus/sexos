@@ -6,6 +6,7 @@
 //! into reports for Input. Report packing and the ordered outbox to Input live here.
 
 mod hid;
+mod thunderbolt;
 mod usb;
 mod xhci;
 
@@ -382,9 +383,13 @@ pub extern "C" fn _start() -> ! {
         },
         None => { serial_println!("[sexusb.irq] mode=none polling=1"); false }
     };
+    // Thunderbolt 4 / USB4: the firmware connection manager on Intel's NHI, if leased.
+    let mut bolt = thunderbolt::Thunderbolt::open();
+    serial_println!("[sexusb.thunderbolt] nhi={}", bolt.is_some() as u8);
     loop {
         if irq { let _ = sex_pdx::device::irq_take(); }
         let mut busy = false;
+        if let Some(b) = bolt.as_mut() { busy |= b.poll(); }
         for _ in 0..64 {
             let Some(e) = usb.x.event() else { break };
             usb.event(e);
@@ -417,7 +422,7 @@ pub extern "C" fn _start() -> ! {
         // this pass may be for an undrained event, and the network's transmit ring
         // (USB Ethernet) has no wake of its own.
         let slept = crate::xhci::SLEPT.swap(false, core::sync::atomic::Ordering::Relaxed);
-        let quiet = irq && !queued && !usb.changed && !slept && !usb.ether_active() && !usb.bt_hid_active();
+        let quiet = irq && !queued && !usb.changed && !slept && !usb.ether_active() && !usb.bt_hid_active() && !bolt.as_ref().is_some_and(|b| b.starting());
         if !busy { let _ = sex_pdx::sys_wait_self_ticks(if quiet { 32 } else { 1 }); }
     }
 }
