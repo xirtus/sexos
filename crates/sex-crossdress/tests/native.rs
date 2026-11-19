@@ -271,3 +271,17 @@ fn a_crt_program_runs_on_wines_ucrtbase_natively() {
     assert!(text.contains(sex_crossdress::CRT_PASS), "the program's checks passed on Wine's ucrtbase");
     assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
 }
+
+#[test]
+fn an_msvc_style_program_runs_through_api_sets_natively() {
+    let _one = NATIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut p) = common::msvc_program() else { println!("[crossdress.native.msvc] SKIP no CROSSDRESS_WINE_DIR"); return; };
+    let Some(mut cpu) = Native::new(&mut p.cell) else { println!("[crossdress.native.msvc] SKIP guest addresses taken"); return; };
+    let mut out = common::Keep::default();
+    let stop = sex_crossdress::wine::run(&mut p, &mut cpu, &mut out);
+    let text = String::from_utf8_lossy(&out.text);
+    for line in text.lines() { println!("[crossdress.native.msvc.out] {line}"); }
+    println!("[crossdress.native.msvc] stop={stop:?} counters={:?}", p.counters);
+    assert!(text.contains(sex_crossdress::MSVC_PASS), "the program's checks passed through API sets and vcruntime140");
+    assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
+}

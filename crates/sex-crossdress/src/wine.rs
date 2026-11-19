@@ -22,6 +22,9 @@ const PARAMS_PAGES: u64 = 8;
 pub const STDIN_HANDLE: u64 = 0x10;
 pub const STDOUT_HANDLE: u64 = 0x14;
 pub const STDERR_HANDLE: u64 = 0x18;
+/// Wine's API set schema (`apisetschema.dll`, mapped as a plain file, read-only).
+pub const APISET_VA: u64 = 0x0000_7FF7_FFA0_0000;
+const APISET_MAX_PAGES: u64 = 64;
 
 /// What a Wine process starts from.
 pub struct WineSetup<'a> {
@@ -33,6 +36,25 @@ pub struct WineSetup<'a> {
     pub system32: &'a [(&'a str, &'a [u8])],
     /// NLS tables (locale.nls, l_intl.nls, c_1252.nls, ...) for Wine's locale code.
     pub nls: &'a [(&'a str, &'a [u8])],
+    /// Wine's apisetschema.dll: its `.apiset` section maps `api-ms-win-crt-*` and the other
+    /// API set names that MSVC-built programs import onto the DLLs that implement them.
+    pub apiset: Option<&'a [u8]>,
+}
+
+/// Maps `file` read-only at APISET_VA and returns the address of its `.apiset` section's
+/// API_SET_NAMESPACE (version 6), as Wine's Unix loader does (`load_apiset_dll`).
+fn map_apiset(p: &mut WinProcess, file: &[u8]) -> Result<u64, LoadError> {
+    let img = crate::pe::Image::parse(file)?;
+    let sec = img.sections.iter().find(|s| &s.name == b".apiset\0").ok_or(LoadError::Pe(crate::pe::Error::NotPe))?;
+    let at = sec.raw_offset as usize;
+    let version = file.get(at..at + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    if version != Some(6) || (sec.virtual_size as usize) > file.len().saturating_sub(at) { return Err(LoadError::Pe(crate::pe::Error::NotPe)); }
+    let pages = (file.len() as u64).div_ceil(PAGE);
+    if pages > APISET_MAX_PAGES { return Err(LoadError::Cell(cell::Error::OutOfMemory)); }
+    p.cell.map(APISET_VA, pages, Access::USER_RW)?;
+    p.cell.write(APISET_VA, file).ok_or(LoadError::Cell(cell::Error::OutOfMemory))?;
+    p.cell.protect(APISET_VA, pages, Access::USER_RO)?;
+    Ok(APISET_VA + at as u64)
 }
 
 fn utf16(s: &str) -> Vec<u8> { s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect() }
@@ -64,6 +86,7 @@ pub fn load(ram: Ram, setup: &WineSetup) -> Result<WinProcess, LoadError> {
     w(&mut p, win32::PEB_IMAGE_BASE, exe_base)?;
     w(&mut p, 0x20, PARAMS_VA)?; // ProcessParameters
     let w32 = |p: &mut WinProcess, at: u64, v: u32| p.cell.write_u32(peb + at, v).ok_or(LoadError::Cell(cell::Error::OutOfMemory));
+    if let Some(file) = setup.apiset { let map = map_apiset(&mut p, file)?; w(&mut p, 0x68, map)?; } // ApiSetMap
     w32(&mut p, 0xB8, 1)?;       // NumberOfProcessors
     w32(&mut p, 0x118, 10)?;     // OSMajorVersion
     w32(&mut p, 0x11C, 0)?;      // OSMinorVersion

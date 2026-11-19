@@ -90,14 +90,21 @@ pub fn crt_program() -> Option<sex_crossdress::process::WinProcess> {
     wine_process(&exe, "C:\\test\\wine_crt.exe")
 }
 
+/// The CW4 MSVC-style program (CROSSDRESS_MSVC_EXE overrides it, as above).
+pub fn msvc_program() -> Option<sex_crossdress::process::WinProcess> {
+    let exe = std::env::var_os("CROSSDRESS_MSVC_EXE").map(|f| std::fs::read(f).expect("CROSSDRESS_MSVC_EXE")).unwrap_or_else(|| sex_crossdress::WINE_MSVC_EXE.to_vec());
+    wine_process(&exe, "C:\\test\\wine_msvc.exe")
+}
+
 /// `exe` in a fresh cell, set up the Wine way, at DOS path `path`.
 pub fn wine_process(exe: &[u8], path: &str) -> Option<sex_crossdress::process::WinProcess> {
     let ntdll = wine_dll("ntdll.dll")?;
-    let dlls: Vec<(&str, Vec<u8>)> = ["kernel32.dll", "kernelbase.dll", "ucrtbase.dll", "msvcrt.dll"].iter().filter_map(|n| Some((*n, wine_dll(n)?))).collect();
+    let dlls: Vec<(&str, Vec<u8>)> = ["kernel32.dll", "kernelbase.dll", "ucrtbase.dll", "msvcrt.dll", "vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll"].iter().filter_map(|n| Some((*n, wine_dll(n)?))).collect();
     let nls: Vec<(&str, Vec<u8>)> = ["locale.nls", "l_intl.nls", "c_1252.nls", "c_437.nls", "c_20127.nls", "sortdefault.nls", "normnfc.nls", "normnfd.nls"].iter().filter_map(|n| Some((*n, wine_dll(n)?))).collect();
     let system32: Vec<(&str, &[u8])> = dlls.iter().map(|(n, d)| (*n, d.as_slice())).collect();
     let nls_ref: Vec<(&str, &[u8])> = nls.iter().map(|(n, d)| (*n, d.as_slice())).collect();
-    let setup = sex_crossdress::wine::WineSetup { ntdll: &ntdll, exe, exe_path: path, system32: &system32, nls: &nls_ref };
+    let apiset = wine_dll("apisetschema.dll");
+    let setup = sex_crossdress::wine::WineSetup { ntdll: &ntdll, exe, exe_path: path, system32: &system32, nls: &nls_ref, apiset: apiset.as_deref() };
     let mut p = sex_crossdress::wine::load(drag_vmm::memory::Ram::new(256 << 20).unwrap(), &setup).unwrap();
     p.nt.trace = std::env::var_os("CROSSDRESS_NT_TRACE").is_some();
     Some(p)

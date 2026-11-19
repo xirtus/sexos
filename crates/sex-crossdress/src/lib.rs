@@ -58,3 +58,8 @@ pub const WINE_PASS: &str = "crossdress: wine checks passed";
 pub static WINE_CRT_EXE: &[u8] = include_bytes!("../test/wine_crt.exe");
 /// What the CRT program prints when its checks pass.
 pub const CRT_PASS: &str = "crossdress: crt checks passed";
+/// CW4: a program that imports its C runtime the MSVC way (api-ms-win-crt-*.dll API sets
+/// and vcruntime140.dll), built from test/wine_msvc.c by test/build_wine_msvc.sh.
+pub static WINE_MSVC_EXE: &[u8] = include_bytes!("../test/wine_msvc.exe");
+/// What the MSVC-style program prints when its checks pass.
+pub const MSVC_PASS: &str = "crossdress: msvc checks passed";
