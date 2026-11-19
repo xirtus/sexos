@@ -125,3 +125,52 @@ impl Adaptive {
         self.rounds = 0;
     }
 }
+
+/// Hybrid waiting for one synchronous command: spin on the completion for about as
+/// long as the device usually takes, and only then sleep on its interrupt.
+///
+/// An interrupt and the wake that follows cost far more than a few microseconds of
+/// spinning when the device is that quick (a fast SSD answers a 4 KiB read in tens of
+/// microseconds; the interrupt, the wake and the switch back cost about as much). A
+/// slow command (a flush, a spun-down disk) spins only `floor` and then sleeps, so
+/// spinning never costs more than a fraction of what it might save.
+///
+/// Times are in whatever unit the caller measures (TSC cycles in SexDrive).
+#[derive(Clone, Copy, Debug)]
+pub struct Hybrid {
+    /// Moving average of recent completion times, in 1/8 units for precision.
+    avg8: u64,
+    samples: u64,
+    /// Spin at least this long (covers the first few polls).
+    pub floor: u64,
+    /// Never spin longer than this: past it, sleeping is cheaper than burning the core.
+    pub cap: u64,
+    pub spun_hits: u64,
+    pub slept: u64,
+}
+
+impl Hybrid {
+    pub const fn new(floor: u64, cap: u64) -> Self {
+        Self { avg8: 0, samples: 0, floor, cap, spun_hits: 0, slept: 0 }
+    }
+
+    /// How long to spin before sleeping.
+    pub fn spin_budget(&self) -> u64 {
+        if self.samples < 4 { return self.floor; }
+        let avg = self.avg8 / 8;
+        if avg > self.cap { return self.floor; }
+        // A little past the average catches most completions without spinning long
+        // on the ones that will be slow anyway.
+        (avg + avg / 2).clamp(self.floor, self.cap)
+    }
+
+    /// A command finished after `took`; `spun` says whether spinning caught it.
+    pub fn record(&mut self, took: u64, spun: bool) {
+        let t8 = took.min(self.cap.saturating_mul(16)).saturating_mul(8);
+        self.avg8 = if self.samples == 0 { t8 } else { self.avg8 - self.avg8 / 8 + t8 / 8 };
+        self.samples += 1;
+        if spun { self.spun_hits += 1; } else { self.slept += 1; }
+    }
+
+    pub fn average(&self) -> u64 { self.avg8 / 8 }
+}

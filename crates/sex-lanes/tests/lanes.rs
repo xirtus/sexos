@@ -291,3 +291,24 @@ fn indirection_table_spreads_and_keeps_flows_together() {
     assert_eq!(rss::intel::key_words(&rss::DEFAULT_KEY)[0], 0xda56_5a6d);
     assert_eq!((rss::intel::rdt(1), rss::intel::tdt(3)), (0xC058, 0xE0D8));
 }
+
+#[test]
+fn hybrid_spins_about_as_long_as_the_device_takes() {
+    use sex_lanes::poll::Hybrid;
+    let mut h = Hybrid::new(1_000, 100_000);
+    assert_eq!(h.spin_budget(), 1_000, "no history: only the floor");
+    for _ in 0..32 { h.record(20_000, true); }
+    let b = h.spin_budget();
+    assert!((25_000..=32_000).contains(&b), "about 1.5x a 20k average, got {b}");
+    // The device turns slow (a flush, a sleeping disk): spinning drops to the floor.
+    for _ in 0..64 { h.record(5_000_000, false); }
+    assert_eq!(h.spin_budget(), 1_000);
+    // And recovers when it is quick again.
+    for _ in 0..64 { h.record(10_000, true); }
+    assert!((10_000..=20_000).contains(&h.spin_budget()), "{}", h.spin_budget());
+    assert_eq!((h.spun_hits, h.slept), (96, 64));
+    // Never past the cap.
+    let mut h = Hybrid::new(1_000, 50_000);
+    for _ in 0..32 { h.record(45_000, true); }
+    assert_eq!(h.spin_budget(), 50_000);
+}
