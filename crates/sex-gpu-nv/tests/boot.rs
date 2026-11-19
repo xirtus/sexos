@@ -200,19 +200,6 @@ impl Mmio for Sim {
 struct Ticks(u64);
 impl Clock for Ticks { fn delay_us(&mut self, us: u32) { self.0 += us as u64; } }
 
-struct Carve<'a> { rest: &'a mut [u8], bus: u64 }
-impl<'a> Carve<'a> {
-    fn take(&mut self, n: usize) -> Dma<'a> {
-        let n = n.div_ceil(4096) * 4096;
-        let rest = std::mem::take(&mut self.rest);
-        let (a, b) = rest.split_at_mut(n);
-        self.rest = b;
-        let d = Dma::new(a, self.bus);
-        self.bus += n as u64;
-        d
-    }
-}
-
 fn run(fwsec_fuse: u32, fail_booter: bool, send_init_done: bool) -> (Result<boot::Report, boot::Failed>, Sim, Vec<Step>, Ticks) {
     let (bl, bt, gsp) = (bootloader(), booter(), gsp_elf(700)); // 700 pages: radix3 level 2 spans two pages
     let f = Firmware { booter_load: &bt, bootloader: &bl, gsp: &gsp };
@@ -225,15 +212,8 @@ fn run(fwsec_fuse: u32, fail_booter: bool, send_init_done: bool) -> (Result<boot
         doorbells: 0, fwsec_fuse, fail_booter, send_init_done, notes: vec![],
     };
     sim.regs.insert(regs::PCI_ROM_SHADOW, 1);
-    let mut c = Carve { rest: &mut arena, bus: ARENA_BUS };
     let mut scratch = vec![0u8; 2 * msgq::MAX_MSG];
-    let mut mem = Memory {
-        fwsec: c.take(sizes.fwsec_max), booter: c.take(sizes.booter), rm_image: c.take(sizes.rm_image),
-        radix3_l0: c.take(4096), radix3_l1: c.take(4096), radix3_l2: c.take(sizes.radix3_l2),
-        signature: c.take(sizes.signature), bootloader: c.take(sizes.bootloader), wpr_meta: c.take(4096),
-        libos: c.take(4096), loginit: c.take(0x10000), logintr: c.take(0x10000), logrm: c.take(0x10000),
-        rmargs: c.take(4096), shm: c.take(sizes.shm), scratch: &mut scratch,
-    };
+    let mut mem = Memory::carve(&mut arena, ARENA_BUS, &sizes, &mut scratch).unwrap();
     let cfg = Config { system: rpc::SystemInfo { bar0: 0xa000_0000, bar1: 0x40_0000_0000, bar_inst: 0x42_0000_0000, bus: 1, devfn: 0, max_user_va: 0x7fff_ffff_f000 }, init_polls: 1000 };
     let mut vb = vec![0u8; 1 << 20];
     let mut steps = vec![];

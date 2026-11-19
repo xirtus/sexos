@@ -17,7 +17,7 @@ pub struct Id { pub vendor: u16, pub device: u16, pub class: u8, pub subclass: u
 
 /// The SexOS service that owns a device kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Service { Kernel, Drive, Net, Bell, Usb, Display, Input, Nothing }
+pub enum Service { Kernel, Drive, Net, Bell, Usb, Display, Input, Gpu, Nothing }
 
 impl Service {
     pub fn name(self) -> &'static str {
@@ -29,6 +29,7 @@ impl Service {
             Service::Usb => "sexusb",
             Service::Display => "sexdisplay",
             Service::Input => "sexinput",
+            Service::Gpu => "sexgpu-nv",
             Service::Nothing => "none",
         }
     }

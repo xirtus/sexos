@@ -11,8 +11,8 @@ Andreas (2026-11-18): NVIDIA and hardware support are the top priority.
 | Stage | What | State |
 |---|---|---|
 | N1 | Name the GPU, power it off (D3cold) when unused | merged (#82, #88) |
-| **N4a** | **GSP-RM boot as driver logic: `crates/sex-gpu-nv`, host gate, real 535.113.01 firmware** | **this PR** |
-| N4b | Kernel lease (BAR0 16 MiB view, command grant, 48 MiB DMA pool behind the IOMMU) + `servers/sexgpu-nv` runs the boot on the x17 behind a boot-menu entry; power-on through `sexacpi` + `FW_DGPU RESTORE` | next |
+| N4a | GSP-RM boot as driver logic: `crates/sex-gpu-nv`, host gate, real 535.113.01 firmware | merged (#443) |
+| **N4b** | **Kernel lease (all 16 MiB of BAR0, command grant, 64 MiB DMA pool in the IOMMU domain, firmware pack) + `servers/sexgpu-nv` runs the boot from the "SexOS with NVIDIA GPU" boot entry** | **in review; to prove on the x17** |
 | N4c | First RM objects over RPC: root client, device, subdevice; `GET_GSP_STATIC_INFO`; GPU name, VRAM, VBIOS version in the boot log and Spindle `hw` | after N4b |
 | N5a | Display: allocate the display classes (NVD7 core channel), read connectors and EDID through RM, light the HDMI 2.1 / mini-DP port with a framebuffer in VRAM | after N4c |
 | N5b | The internal panel on the dGPU: mux / Advanced Optimus (to confirm on the x17: whether its BIOS offers a discrete-only or dynamic mux setting) | after N5a |
@@ -76,22 +76,41 @@ What the simulation cannot prove (only the x17 can): that the PROM has the VBIOS
 laptop (some Optimus laptops expose it only through ACPI `_ROM`, which N4b adds as a fallback
 through `sexacpi`), the real fuse values, Booter's acceptance of our meta, and GSP-RM's timing.
 
-## N4b: running it on the x17 (next PR)
+## N4b: running it on the x17
 
-- **Power**: at boot the dGPU is in D3cold (N1). `sexgpu-nv` asks `sexacpi` to run `_ON`/`_PS0`
-  for the GPU's power resources, then `FW_DGPU RESTORE` brings the link and headers back.
-  Coordinate with "Prepare Alienware x17 for bare metal": its safe-start entry keeps the dGPU
-  off, and so will the default entry until N4b is proven; a separate boot-menu entry
-  ("SexOS with NVIDIA GPU") turns the boot on.
-- **Lease** (`sex_hwdb::manifest` `Lease::NvidiaGpu`, kernel `devmgr`): BAR0 view of 16 MiB,
-  memory + bus-master command bits, MSI (one vector), and a 48 MiB DMA pool inside the service's
-  IOMMU lend window (128 MiB), so GSP-RM's own DMA stays fenced. BAR1/BAR3 addresses are passed to
-  GSP-RM in `GSP_SET_SYSTEM_INFO` but not mapped yet.
-- **Firmware**: 38 MB is far too big for the boot slot (about 1 MB free). The service reads the
-  four files from the system volume (`/system/firmware/nvidia/ga102/gsp/`), checks their SHA-256
-  against the pins, and copies them into the DMA pool.
-- **Log**: `[nvidia.gsp] step=<name> ...` per step, `[nvidia.gsp.failed] step=... reason=...`;
-  Spindle `hw nvidia` shows them.
+What was built (and where it differs from the first sketch):
+
+- **Boot entry**: "SexOS with NVIDIA GPU" in `limine.cfg` is the main entry plus two modules,
+  `servers/sexgpu-nv` and `firmware/nvidia-gsp.pack` (`scripts/tests/test_limine_nvidia_entry.py`).
+  Every other entry, safe start included, does not start the service and keeps the dGPU off.
+- **Power**: simpler than planned. When the service's module is present BOOT never parks the
+  NVIDIA GPU (`hal::dgpu::init(true)` logs `[gpu.power] ... action=keep reason=driver
+  service=sexgpu-nv`), so it is still in D0 as firmware left it, the way Linux finds it; no
+  `_ON`/`FW_DGPU RESTORE` round trip. Waking it from D3cold later (runtime power management,
+  "GPU off until an app needs it") is still `sexacpi` + `FW_DGPU RESTORE`.
+- **Lease** (`sex_hwdb::manifest::GPU`, `Lease::NvidiaGpu`; kernel `device_lease::Kind::NvidiaGpu`):
+  domain 53 (`sex_pdx::nvidia_gpu`, Core organ key 1), slot 16 = a view of all 16 MiB of BAR0,
+  memory + bus-master command bits, a 64 MiB DMA pool at slot 32 (the boot takes about 39 MiB;
+  the buddy allocator would round 48 MiB up to 64 anyway), the pack read only at slot 24. The
+  IOMMU maps the pool for the GPU only. SYS_IDENTITY gains `QUERY_BARS` (3): BAR0/BAR1/BAR3 bus
+  addresses and bus/devfn for `GSP_SET_SYSTEM_INFO`, answered only for an NVIDIA GPU lease.
+  Without the service, `manifest::claim_present` gives the GPU to Display (identity only) as before.
+  No MSI yet: the service polls the message queue.
+- **Firmware**: a boot module after all. Installs write a 256 MiB system slot now (not the old
+  32 MiB one), so the 38 MB pack fits; `scripts/make_nvidia_firmware_pack.py` builds it
+  (`SEXNVFW1`, raw files with their SHA-256, `crates/sex-gpu-nv/src/pack.rs`) from the pinned
+  linux-firmware files, with NVIDIA's licence beside them. The service checks each file's recorded
+  hash against the pins and hashes the bytes itself (SHA-256). An offline build packs nothing and
+  the service logs `[nvidia.gsp.failed] step=firmware reason=pack_empty`.
+- **Log** (serial and Spindle `hw`): `[kernel.spawn.sexgpu-nv] id=53`, `[devmgr.lease] ... kind=NvidiaGpu`,
+  `[sexgpu-nv.start]`, `[nvidia.gpu] vendor= device= bar0= bar1= bar3= bus=`,
+  `[nvidia.firmware] file= bytes= sha256=ok` (x3), `[nvidia.dma] pool_bytes= need= bus=`, then
+  `[nvidia.gsp] step=chip|vbios|layout|prepare|fwsec_frts|riscv|booter|init_done ...` and finally
+  `[nvidia.gsp.ready] ...` or `[nvidia.gsp.failed] step=<name> reason=<error>`.
+
+What the x17 run answers: whether the PROM holds the VBIOS (else N4c adds the ACPI `_ROM`
+fallback), the fuse-selected signatures, Booter's verdict on our WPR meta (`FalconFailed` with
+its mailboxes), and how long GSP-RM takes to `INIT_DONE` (5 s allowed).
 
 ## N5: display through the dGPU and the mux
 

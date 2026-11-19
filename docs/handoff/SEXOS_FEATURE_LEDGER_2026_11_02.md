@@ -3695,6 +3695,14 @@ Plan: `docs/handoff/NVIDIA_GSP_BRINGUP_2026_11_19.md` (GSP boot, display through
 - **Gate** `scripts/nvidia_gsp_host_gate.sh` (CI): parses the real 535.113.01 files, pins every structure offset to NVIDIA's C layout, and boots a simulated GA104 end to end (signatures where the boot ROM looks, FRTS at the right VRAM address, Booter walks radix3 and finds the real image, first RPCs with good checksums, sequencer run, `GSP_INIT_DONE`), plus failure paths (Booter error, silent GSP, WPR2 left by a previous driver).
 - Not yet: the kernel lease and the `sexgpu-nv` service that runs this on the x17 (N4b). ABI: none.
 
+## NVIDIA GPU service and boot entry (N4b, 2026-11-19)
+
+- **Boot entry "SexOS with NVIDIA GPU"**: the main system plus `servers/sexgpu-nv` and `firmware/nvidia-gsp.pack`. Only that entry starts the service; the others keep the dGPU off.
+- **Kernel**: optional domain 53 (Core organ); with it present the NVIDIA GPU is not parked (`[gpu.power] ... action=keep reason=driver`) and is leased to it (`Lease::NvidiaGpu`): all 16 MiB of BAR0, memory + bus-master bits, a 64 MiB DMA pool mapped for the GPU in the IOMMU, the firmware pack read only. Without it Display keeps the GPU's identity (`manifest::claim_present`).
+- **`servers/sexgpu-nv`**: checks the pack's files against the pins (and SHA-256 of the bytes), carves the pool (`boot::Memory::carve`), turns on bus mastering, runs the `sex-gpu-nv` boot with a TSC clock and logs `[nvidia.gsp] step=...` per step, then `[nvidia.gsp.ready]` or `[nvidia.gsp.failed] step= reason=`.
+- **Firmware pack** `scripts/make_nvidia_firmware_pack.py` (`SEXNVFW1`, built in the ISO build and into the installed boot slot).
+- **ABI**: SYS_IDENTITY `QUERY_BARS` (3) returns the held NVIDIA GPU's BAR0/BAR1/BAR3 bus addresses and bus/devfn. Not yet proven on the x17.
+
 ## Net: ALPN http/1.1 (2026-11-09)
 
 - The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do (the rustls move set `alpn_protocols`). Host test `[sexnet.tls.open.host]` now proves it on the wire: an OpenSSL server offering `h2` and `http/1.1` must pick `http/1.1`. YouTube stage Y3e.

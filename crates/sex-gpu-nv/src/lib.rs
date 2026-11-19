@@ -42,6 +42,7 @@ pub mod fw;
 pub mod layout;
 pub mod libos;
 pub mod msgq;
+pub mod pack;
 pub mod radix3;
 pub mod regs;
 pub mod rpc;
