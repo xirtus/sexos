@@ -178,7 +178,7 @@ c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/ser
 
 bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm.rs
 
-5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577  kernel/src/syscalls/mod.rs
+90c9db0ad74450a5ea59799bde0858f32047e075606203f62babdc3f7ba4304a  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

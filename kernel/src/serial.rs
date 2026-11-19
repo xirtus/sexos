@@ -74,6 +74,18 @@ pub fn write_stopped(bytes: &[u8]) {
     }
 }
 
+/// A service's whole line in one string write (`rep outsb`). Under KVM that is one
+/// exit to QEMU for the line instead of one per byte, which made every logged line
+/// cost milliseconds on nested-virtualised CI runners and sat inside every
+/// keystroke's path. Like the byte loop it replaces, it does not wait on the FIFO.
+pub fn write_string(bytes: &[u8]) {
+    if bytes.is_empty() { return; }
+    unsafe {
+        core::arch::asm!("rep outsb", in("dx") 0x3f8u16, inout("rsi") bytes.as_ptr() => _,
+            inout("rcx") bytes.len() => _, options(nostack, preserves_flags, readonly));
+    }
+}
+
 #[macro_export]
 macro_rules! serial_print {
     ($($arg:tt)*) => {

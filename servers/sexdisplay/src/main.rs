@@ -724,6 +724,93 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
     }
 }
 
+/// One row run of window chrome (the rim band and the title bar) without asking
+/// composite_pixel_source pixel by pixel. Glass depends only on the row, so each
+/// run needs its colours once; per pixel only the outline edge, inactive tabs, the
+/// title's ink (within the title's laid-out width) and the control marks remain.
+/// Was the larger part of every full repaint's cost (`pixel_kcyc` in
+/// [display.frame.cost]). False leaves the run to composite_pixel_source: the
+/// top-rim lights of a window without a title bar, the SilkBar rows, or a run that
+/// reaches the content area. Must match composite_pixel_source exactly.
+fn fast_chrome_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
+    if !source.chrome{return false;}
+    let surf=source.surface;
+    let (sx,sy,sw,sh)=scene.groups.rect(surf,w,h);
+    if !surf.active||sw==0||sh==0||x0<sx||x1>sx+sw||x0>=x1||y<sy||y>=sy+sh{return false;}
+    let m=scene.metrics;
+    if y<(m.bar()as usize){return false;}
+    let (ly,px8)=(y-sy,m.px(8)as usize);
+    let (l0,l1)=(x0-sx,x1-sx);
+    let rim_right=sw.saturating_sub(px8);
+    let rim_bottom=sh.saturating_sub(px8);
+    let top_bar_active=surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0;
+    let fb_h=scene.height as u32;
+    let row=unsafe{fb.add(y*w)};
+    let mask=surface_lifecycle::native_pixel_bit(surf.owner_pd,surf.surface_id);
+    if top_bar_active&&ly<(m.title()as usize){
+        let frame_hovered=surf.chrome_flags&SURFACE_CHROME_FRAME_HOVER!=0;
+        let light_hovered=surf.chrome_flags&SURFACE_CHROME_LIGHT_HOVER!=0;
+        let hovered_light_kind=(surf.chrome_flags&SURFACE_CHROME_LIGHT_KIND_MASK)>>SURFACE_CHROME_LIGHT_KIND_SHIFT;
+        let close_allowed=surf.chrome_flags&SURFACE_CHROME_CLOSE_ALLOWED!=0;
+        let chrome_dim:u32=if surf.tab_count<=1&&!frame_hovered{5}else{10};
+        let toolbar_alpha=((if frame_hovered{220u32}else{200})*chrome_dim/10) as u8;
+        if fb_h==0||(surf.tab_count==0&&toolbar_alpha==0){return false;}
+        let glass=|fg:u32,alpha:u8|glass_over_bg(fg,x0,y,alpha,scene);
+        let tab_paint=|color:u32,alpha:u8|alpha_blend_xrgb_over_xrgb(color,glass(color,224),alpha);
+        let mut base=if surf.tab_count>0{tab_paint(scene.tokens.active_tab_color,240)}else{glass(scene.tokens.frame_top_bar_color,toolbar_alpha)};
+        if surf.tab_count==0&&ly>=(m.title()as usize).saturating_sub(m.scale()as usize){base=FRAME_TOP_BAR_DIVIDER_COLOR;}
+        let inactive=if surf.tab_count>1{tab_paint(scene.tokens.inactive_tab_color,200)}else{base};
+        let exclusion=m.controls_end()as usize;
+        let slot_w=if surf.tab_count>1{rim_right.saturating_sub(exclusion)/surf.tab_count as usize}else{0};
+        // Past the title's last glyph no pixel has ink; None (no font) asks every pixel.
+        let ui_scale=m.scale();
+        let title_x=m.title_x()as usize;
+        let title_end=surface_title(surf.surface_id).and_then(|t|glyphs::ui_ink_end(t,ui_scale)).map_or(usize::MAX,|e|title_x.saturating_add(e.max(0) as usize).saturating_add(2));
+        for lx in l0..l1{
+            let mut c=base;
+            if slot_w>0&&lx>=exclusion&&lx<rim_right&&(lx-exclusion)/slot_w!=surf.active_tab as usize{c=inactive;}
+            if lx+2>=title_x&&lx<title_end{if let Some(fg)=toolbar_title_fg_at_scaled(lx,ly,surf.surface_id,c,ui_scale){c=fg;}}
+            if lx<exclusion{
+                for index in 0..sex_pdx::desktop_style::chrome::CONTROLS{
+                    let r=m.control(index).unwrap();
+                    let size=m.px(10)as usize;
+                    let left=r.x as usize+(r.w as usize-size)/2;
+                    let top=r.y as usize+(r.h as usize-size)/2;
+                    if !in_rect(lx,ly,left,top,size,size){continue;}
+                    let dx=(2*(lx-left)+1)as i32-size as i32;
+                    let dy=(2*(ly-top)+1)as i32-size as i32;
+                    if dx*dx+dy*dy>=(size*size)as i32{continue;}
+                    let color=match index{0=>scene.tokens.close_light_color,1=>scene.tokens.minimize_light_color,2=>scene.tokens.zoom_light_color,_=>FRAME_LIGHT_FLOAT_COLOR};
+                    let disabled=index==0&&!close_allowed;
+                    let hovered=light_hovered&&hovered_light_kind as u32==index;
+                    let alpha=if disabled{80}else if hovered{255}else{224};
+                    let inner=size.saturating_sub(2*m.scale()as usize);
+                    let ink=if dx*dx+dy*dy>=(inner*inner)as i32{sex_pdx::desktop_style::contrast_ink(c)}else{color};
+                    c=coverage_blend(ink,c,alpha);
+                }
+            }
+            unsafe{core::ptr::write_volatile(row.add(sx+lx),c);}
+        }
+    }else{
+        // The rim band: the whole row on the top and bottom rims, else the side rims.
+        let band_row=ly<px8||ly>=rim_bottom;
+        if ly<px8&&!top_bar_active{return false;}
+        if !band_row&&l1>px8&&l0<rim_right{return false;}
+        let edge=m.scale()as usize;
+        let edge_row=ly<edge||ly>=sh.saturating_sub(edge);
+        let outline=glass_over_bg(scene.tokens.frame_rim_color,x0,y,112,scene);
+        let inset=glass_over_bg(sex_pdx::desktop_style::NATIVE_CANVAS,x0,y,224,scene);
+        for lx in l0..l1{
+            let c=if edge_row||lx<edge||lx>=sw.saturating_sub(edge){outline}else{inset};
+            unsafe{core::ptr::write_volatile(row.add(sx+lx),c);}
+        }
+    }
+    if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
+    true
+}
+
+/// Pixels sent down the per-pixel path since the last frame cost: no source, chrome, bitmap, other content.
+static mut SLOW_PIXELS:[u64;4]=[0;4];
 /// One framebuffer row from x0 to x1: fast runs where possible.
 fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot){
     let focused=scene.focus;
@@ -737,7 +824,7 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
         if row.is_some(){
             if let Some(source)=source{
                 let t=decor::cycles_now();
-                let fast=fast_content_run(fb,x,end,y,w,h,source,scene);
+                let fast=fast_content_run(fb,x,end,y,w,h,source,scene)||fast_chrome_run(fb,x,end,y,w,h,source,scene);
                 decor::tally(0,t);
                 if fast{x=end;continue;}
             }else{
@@ -752,6 +839,9 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
             }
         }
         let t=decor::cycles_now();
+        // Which runs still take the per-pixel path ([display.frame.cost] slow=).
+        let kind=match row.as_mut().and_then(|r|r.source(x)){None=>0,Some(s)if s.chrome=>1,Some(s)if unsafe{scene.bitmaps.matches_surface(s.content.owner_pd,s.content.surface_id)}=>2,Some(_)=>3};
+        unsafe{SLOW_PIXELS[kind]+=(end-x) as u64;}
         while x<end{
             let under=if mark.is_some(){wallpaper_mark::pixel(x,y,w,h,back)}else{back};
             let color=if let Some(row)=row.as_mut(){
@@ -5591,7 +5681,8 @@ pub extern "C" fn _start() -> ! {
                 let decor = decor::take_cycles();
                 let (fast, pixel) = (decor::take_tally(0), decor::take_tally(1));
                 let kpx = match plan.content { paint_batch::Content::Damage(r) => ((r.right - r.x) * (r.bottom - r.y) / 1000) as u64, paint_batch::Content::Full | paint_batch::Content::Area => (w * h / 1000) as u64, _ => 0 };
-                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={} fast_kcyc={} pixel_kcyc={}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx, fast / 1000, pixel / 1000); } }
+                let slow = core::mem::take(&mut *core::ptr::addr_of_mut!(SLOW_PIXELS));
+                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={} fast_kcyc={} pixel_kcyc={} slow={}/{}/{}/{}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx, fast / 1000, pixel / 1000, slow[0], slow[1], slow[2], slow[3]); } }
         }
         if let Some(frame)=published.as_ref(){
             if frame.plan.clock_dirty(){unsafe{LAST_REDRAWN_CLOCK_CANON_SS=frame.canon_ss;}}

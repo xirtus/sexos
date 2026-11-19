@@ -195,6 +195,8 @@ def main():
         if 'resize' not in skip:
             def at(x, y): q.cmd('input-send-event', {'events': [{'type': 'abs', 'data': {'axis': 'x', 'value': int(x * 32767 / 1280)}}, {'type': 'abs', 'data': {'axis': 'y', 'value': int(y * 32767 / 800)}}]})
             def btn(down): q.cmd('input-send-event', {'events': [{'type': 'btn', 'data': {'down': down, 'button': 'left'}}]})
+            # A corner drag starts only on the focused window.
+            g['focus'](201); time.sleep(2)
             x, y, w, h = map(int, re.findall(r'\[shell.tile.apply\] sid=201 x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)', t())[-1])
             cx, cy = x + w - 2, y + h - 2
             at(cx, cy); time.sleep(.5); btn(True); time.sleep(.4)
