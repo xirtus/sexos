@@ -25,7 +25,7 @@
 //! the PKRU it really had ([`keep_live_pkru`]), not its domain's.
 //!
 //! Not yet: nested gate calls (a callee calling a third service on the caller's task),
-//! freeing areas when a task ends, and clearing vector registers on an unwind.
+//! clearing vector registers on an unwind.
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
@@ -64,8 +64,10 @@ static FRAME_OF: [AtomicU64; MAX_AREAS as usize + 1] = [const { AtomicU64::new(0
 
 struct Gate { object: u32, generation: u32, callee: u32, entry: u64, export: u64 }
 struct Bound { object: u32, generation: u32, caller: u32, callee: u32 }
-/// One task's area: its slot pages (one bit per domain), the frame page and slot frames.
-struct Area { mask: u64, frame: u64, slots: [u64; 64] }
+/// One task's area: its slot pages (one bit per domain), the frame page, slot frames and
+/// the task. Tasks are never freed; one that starts over (`Task::rearm`) zeroes its
+/// `gate_aux`, and an area whose task no longer names it is free for the next binder.
+struct Area { mask: u64, frame: u64, slots: [u64; 64], task: usize }
 struct State {
     gates: Vec<Gate>,
     /// By stub id - 1.
@@ -262,14 +264,26 @@ fn area(st: &mut State, areas: u64, caller: &ProtectionDomain, callee: &Protecti
     if task.is_null() { return Err(E_RIGHTS); }
     let ctx = unsafe { &mut (*task).context };
     if ctx.pd_id as u32 != caller.id { return Err(E_RIGHTS); }
-    if st.areas.is_empty() { st.areas.push(Area { mask: !0, frame: 0, slots: [0; 64] }); }
+    if st.areas.is_empty() { st.areas.push(Area { mask: !0, frame: 0, slots: [0; 64], task: 0 }); }
+    if ctx.gate_aux == 0 {
+        let free = (1..st.areas.len()).find(|&i| unsafe { (*(st.areas[i].task as *const crate::scheduler::Task)).context.gate_aux } != i as u64);
+        if let Some(index) = free {
+            st.areas[index].task = task as usize;
+            let (frame, index) = (st.areas[index].frame, index as u64);
+            put(frame, sex_gate::frame::DEPTH as u64, 0);
+            put(frame, sex_gate::frame::CUR as u64, caller.base_pkru_mask as u64);
+            put(frame, sex_gate::frame::ACTIVE as u64, 1 << caller.id);
+            ctx.gate_aux = index;
+            unsafe { x86_64::registers::model_specific::Msr::new(TSC_AUX).write(index) };
+        }
+    }
     if ctx.gate_aux == 0 {
         let index = st.areas.len() as u64;
         if index > MAX_AREAS { return Err(E_FULL); }
         let frame = page(areas + (index << sex_gate::AREA_SHIFT), FRAME_KEY, F::WRITABLE | F::NO_EXECUTE, 0)?;
         put(frame, sex_gate::frame::CUR as u64, caller.base_pkru_mask as u64);
         put(frame, sex_gate::frame::ACTIVE as u64, 1 << caller.id);
-        st.areas.push(Area { mask: 0, frame, slots: [0; 64] });
+        st.areas.push(Area { mask: 0, frame, slots: [0; 64], task: task as usize });
         FRAME_OF[index as usize].store(frame, Ordering::Release);
         ctx.gate_aux = index;
         unsafe { x86_64::registers::model_specific::Msr::new(TSC_AUX).write(index) };
