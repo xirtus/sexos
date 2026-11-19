@@ -42,11 +42,7 @@ def main():
   try:report[fmt]=check(fmt,name,codecs,container,log,out,reference,heard)
   except AssertionError as e:
    failed[fmt]=repr(e)
-   # what FFmpeg was given, to find the packet it refused
-   print(f'--- {fmt}: {e!r}',file=sys.stderr)
-   print(subprocess.run(['ffprobe','-v','error','-show_entries','stream=codec_name,channels,extradata_size,initial_padding:stream_side_data','-show_data','-of','compact',str(out/name)],capture_output=True,text=True).stdout[-3000:],file=sys.stderr)
-   packets=subprocess.run(['ffprobe','-v','error','-select_streams','a','-show_entries','packet=pts,duration,size,flags','-show_data','-of','compact',str(out/name)],capture_output=True,text=True).stdout.splitlines()
-   print(*packets[:3],'...',*packets[-3:],sep='\n',file=sys.stderr)
+   diagnose(out/name)
  # The Text panel's Remove Restarts (after Scarlet): the first "Keep the," goes, 0.9 s, so the
  # second saying plays; the whole sequence then exports 0.9 s shorter.
  (out/'restart.words').write_text('0 300 Keep\n350 600 the,\n900 1100 keep\n1150 1350 the\n1400 1700 ending\n2000 2500 here.\n')
@@ -60,6 +56,21 @@ def main():
  except AssertionError as e:failed['clean_up']=repr(e)
  print(json.dumps({'ok':not failed,'ffmpeg':run('ffmpeg','-version').stdout.splitlines()[0],'source_mean_db':heard,'exports':report,'failed':failed}))
  if failed:sys.exit(1)
+def diagnose(path):
+ # What FFmpeg was given: the codec setup bytes, every audio packet's first and last bytes, and
+ # the packet the error follows (-debug_ts names each packet as it is read).
+ say=lambda *a:print(*a,file=sys.stderr)
+ streams=json.loads(subprocess.run(['ffprobe','-v','error','-show_streams','-show_data','-of','json',str(path)],capture_output=True,text=True).stdout or '{}')
+ for st in streams.get('streams',[]):
+  say('stream',st.get('codec_name'),st.get('channels'),'extradata',re.sub(r'[^0-9a-f]','',''.join(l[9:49] for l in st.get('extradata','').splitlines())))
+ pk=json.loads(subprocess.run(['ffprobe','-v','error','-select_streams','a','-show_packets','-show_data','-of','json',str(path)],capture_output=True,text=True).stdout or '{}')
+ for n,p in enumerate(pk.get('packets',[])):
+  h=re.sub(r'[^0-9a-f]','',''.join(l[9:49] for l in p.get('data','').splitlines()))
+  say(f"pkt {n} pts={p.get('pts')} size={p.get('size')} head={h[:16]} tail={h[-8:]}")
+ dbg=subprocess.run(['ffmpeg','-hide_banner','-v','verbose','-debug_ts','-xerror','-i',str(path),'-map','0:a','-f','null','-'],capture_output=True,text=True).stderr.splitlines()
+ for k,l in enumerate(dbg):
+  if 'Error parsing' in l or 'rror' in l and 'opus' in l:
+   say('\n'.join(dbg[max(0,k-6):k+2]));break
 def check(fmt,name,codecs,container,log,out,reference,heard):
  if True:
   m=re.search(rf'\[splicy.studio.export\] format={fmt} file={re.escape(name)} bytes=(\d+) ms=(\d+)',log)
