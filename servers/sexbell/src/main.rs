@@ -6,6 +6,7 @@ mod sound;
 mod restricted;
 mod resample;
 mod jack;
+mod mic;
 mod hda;
 
 use sex_pdx::{pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
