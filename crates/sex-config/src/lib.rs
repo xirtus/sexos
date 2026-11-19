@@ -167,7 +167,7 @@ pub const KEYS: &[Key] = &[
     Key { id: id::CORNER_BOTTOM_LEFT, name: "desktop.corner_bottom_left", label: "Bottom-left corner", kind: Kind::Choice(CORNER_ACTIONS), default: 0 },
     Key { id: id::CORNER_BOTTOM_RIGHT, name: "desktop.corner_bottom_right", label: "Bottom-right corner", kind: Kind::Choice(CORNER_ACTIONS), default: 0 },
     Key { id: id::WIDGETS, name: "desktop.widgets", label: "Clock, weather and system widgets on the desktop", kind: Kind::Bool, default: 0 },
-    Key { id: id::WEATHER, name: "desktop.weather", label: "Weather widget (asks Open-Meteo about your time zone's city)", kind: Kind::Bool, default: 1 },
+    Key { id: id::WEATHER, name: "desktop.weather", label: "Weather widget (asks Open-Meteo about your clock's city)", kind: Kind::Bool, default: 1 },
     Key { id: id::SCALE, name: "display.scale", label: "Scale (0 automatic)", kind: int(0, 3), default: 0 },
     Key { id: id::LAYOUT, name: "keyboard.layout", label: "Keyboard layout", kind: Kind::Choice(LAYOUTS), default: 0 },
     Key { id: id::REPEAT_DELAY, name: "keyboard.repeat_delay_ms", label: "Repeat delay (ms)", kind: int(150, 1000), default: 400 },
