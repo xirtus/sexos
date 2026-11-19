@@ -2,7 +2,8 @@
 # Drag on the host.
 # D1: the VM ABI's record layouts (sex_pdx::vm) and the hardware encodings the kernel's
 # VMX code uses (EPT entries, VMX controls, I/O exit qualification, VMCS segment
-# fields, TSS descriptor base).
+# fields, TSS descriptor base), and the AMD SVM side: nested page entries, VMCB segment
+# attributes, CPL and the translation of SVM exits into the same records (D5).
 # D2: drag-vmm, the drag program's VMM core: bzImage loading (synthetic setup headers,
 # zero page, E820, command line, initrd, identity tables, 64- and 32-bit entry), the
 # 16550, 8259 pair, 8254, virtio-mmio virtio-blk (hostile chains and rings), the MMIO
