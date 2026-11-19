@@ -36,8 +36,20 @@ def main():
  log=run(*args,cwd=out).stdout
  reference=out/'reference.mp4'
  run('ffmpeg','-v','error','-y','-i',str(src),'-t',str(SECONDS),'-c:v','libx264','-qp','0','-c:a','aac',str(reference))
- heard=loudness(reference);report={}
+ heard=loudness(reference);report={};failed={}
  for fmt,name,codecs,container in FORMATS:
+  try:report[fmt]=check(fmt,name,codecs,container,log,out,reference,heard)
+  except AssertionError as e:
+   failed[fmt]=repr(e)
+   # what FFmpeg was given, to find the packet it refused
+   print(f'--- {fmt}: {e!r}',file=sys.stderr)
+   print(subprocess.run(['ffprobe','-v','error','-show_entries','stream=codec_name,channels,extradata_size,initial_padding:stream_side_data','-show_data','-of','compact',str(out/name)],capture_output=True,text=True).stdout[-3000:],file=sys.stderr)
+   packets=subprocess.run(['ffprobe','-v','error','-select_streams','a','-show_entries','packet=pts,duration,size,flags','-show_data','-of','compact',str(out/name)],capture_output=True,text=True).stdout.splitlines()
+   print(*packets[:3],'...',*packets[-3:],sep='\n',file=sys.stderr)
+ print(json.dumps({'ok':not failed,'ffmpeg':run('ffmpeg','-version').stdout.splitlines()[0],'source_mean_db':heard,'exports':report,'failed':failed}))
+ if failed:sys.exit(1)
+def check(fmt,name,codecs,container,log,out,reference,heard):
+ if True:
   m=re.search(rf'\[splicy.studio.export\] format={fmt} file={re.escape(name)} bytes=(\d+) ms=(\d+)',log)
   assert m,f'{fmt}: no export line in\n{log}'
   path=out/name;assert path.stat().st_size==int(m[1])>1000,(fmt,m[1])
@@ -52,6 +64,5 @@ def main():
   assert errors.returncode==0 and not errors.stderr.strip(),(fmt,errors.stderr[-600:])
   quality=psnr(path,reference);assert quality>30,(fmt,'PSNR',quality)
   level=loudness(path);assert abs(level-heard)<1.5,(fmt,'loudness',level,heard)
-  report[fmt]={'bytes':int(m[1]),'ms':int(m[2]),'pictures':pictures,'psnr':round(quality,1),'mean_db':level}
- print(json.dumps({'ok':True,'source_mean_db':heard,'exports':report}))
+  return {'bytes':int(m[1]),'ms':int(m[2]),'pictures':pictures,'psnr':round(quality,1),'mean_db':level}
 if __name__=='__main__':main()
