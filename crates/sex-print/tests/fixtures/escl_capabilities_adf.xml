@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Shaped like a multifunction printer's answer: feeder only, colour modes per profile,
+     resolutions as a range plus discrete values, an attribute containing '>'. -->
+<scan:ScannerCapabilities xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm" xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" note="a>b">
+  <pwg:Version>2.6</pwg:Version>
+  <pwg:MakeAndModel>Office Jet &amp; Scan 5000</pwg:MakeAndModel>
+  <pwg:SerialNumber>CN12345</pwg:SerialNumber>
+  <scan:UUID>1c852a4d-b800-1f08-abcd-0123456789ab</scan:UUID>
+  <scan:Adf>
+    <scan:AdfSimplexInputCaps>
+      <scan:MinWidth>591</scan:MinWidth>
+      <scan:MaxWidth>2550</scan:MaxWidth>
+      <scan:MinHeight>591</scan:MinHeight>
+      <scan:MaxHeight>4200</scan:MaxHeight>
+      <scan:SettingProfiles>
+        <scan:SettingProfile name="p1">
+          <scan:ColorModes>
+            <scan:ColorMode>RGB24</scan:ColorMode>
+          </scan:ColorModes>
+          <scan:DocumentFormats>
+            <pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat>
+            <pwg:DocumentFormat>application/pdf</pwg:DocumentFormat>
+          </scan:DocumentFormats>
+          <scan:SupportedResolutions>
+            <scan:DiscreteResolutions>
+              <scan:DiscreteResolution><scan:XResolution>200</scan:XResolution><scan:YResolution>200</scan:YResolution></scan:DiscreteResolution>
+              <scan:DiscreteResolution><scan:XResolution>600</scan:XResolution><scan:YResolution>600</scan:YResolution></scan:DiscreteResolution>
+            </scan:DiscreteResolutions>
+          </scan:SupportedResolutions>
+        </scan:SettingProfile>
+        <scan:SettingProfile name="p2">
+          <scan:ColorModes>
+            <scan:ColorMode>Grayscale8</scan:ColorMode>
+            <scan:ColorMode>RGB24</scan:ColorMode>
+          </scan:ColorModes>
+        </scan:SettingProfile>
+      </scan:SettingProfiles>
+    </scan:AdfSimplexInputCaps>
+  </scan:Adf>
+</scan:ScannerCapabilities>

@@ -1,0 +1,606 @@
+{
+  "scope": "Development runtime: exact Moan ELF installed on a private disk over the unchanged c84 normal ISO. Not a sealed rebuilt whole-image cohort. First MIDI workspace slice only; Step Sequencer, prompt Stop silence and plugin panel are subsequent work.",
+  "base_revision": "c84dc5f84f4c95aef05fbc1aebeb1ec85e1565f2",
+  "evidence_directory": "/Users/xmacbookm5/Projects/sexos-moan-workstation/target/workstation-proof-v3",
+  "iso_sha256": "e23d9d5df4152828dcf530e5a41d1bff82d13509c6b0bf8cfdda68f8618fa483",
+  "staged_elf_sha256": "8d22fb8257ef8608efe79e1414bb92172e2dcf862a97d20311b1129e1d05bf34",
+  "files_elf_sha256": "adb99920a0dc00be8c6cb7e04f8fcc536043645885e0851d6abd651be254e81c",
+  "source_seed_sha256": "49bc20df15e412a64472421e13fe86ff1c5165e18b2afccf160d4dc19fe68a14",
+  "final_private_disk_sha256": "8858c49816105a09fa3aef32a9d5aadf7f45fa773206d5a0077b31a5c334f584",
+  "inputs_sha256": "27f4b4c349894365700e6aef2c0767ca9a5c4e5af4a34327f6e73417e20b3708",
+  "result_sha256": "a000163c0aff32e8db29c7277ee351d55759aa1e2ba36ce96b301d372b91d3bd",
+  "gate_sha256": "0c63d663a36dc4db5c3497634ebdb04c9b5fb60adfa91dc555ec593841b9d916",
+  "recording_sha256": "2631cff5a1a087b7571ba0c2ce65630b90b8375f848edd89f3d24c0f2333fd57",
+  "saved_project_sha256": "40cac79d7fa6447a9ec945ee543b5e7460bf1ae59372da3063fb08ddeaa2aa9b",
+  "source_sha256": {
+    "apps/moan/Cargo.toml": "fa70fb6d2b45a46f1f640d89f31b3c03c8860fb6cc6086bc9947c75f8d8d6d5f",
+    "apps/moan/build.rs": "88265209bfe235aa9729dd3958232523beba41d4c6323acdb9b0c163111f529e",
+    "apps/moan/tests/midi_project.rs": "d33c22cab47b0d7dc3707c0950b709f34536d515a94658eeaa4654f0b26600ff",
+    "apps/moan/tests/studio.rs": "10d3bb4a10cd1fbc00263b1a0b73f6f90c316a96808b0a7d56779be4407fe1b7",
+    "apps/moan/tests/waveform.rs": "0ed5f0f01bd647df93ceaac3fae27d2cebd1a2bf06e0a22bda36d1be1130cd98",
+    "apps/moan/tests/midi_memory.rs": "94c86b614c703ca7054d0a162186c235115d981ef48736bc1cd88ea7685703c5",
+    "apps/moan/tests/projects.rs": "d92b8d737ccebf9dedc14a313d4b6bd06dfb4290aef33d7b59cef401d7e6e331",
+    "apps/moan/tests/workstation.rs": "1a340b709c2d6cb4b19f3d2ee7d4498cefabb8130aadde1c22ae11d76f5792a5",
+    "apps/moan/tests/meter_history.rs": "18668dec57428fa464546b61c7ece9568b0d02624d9d3304d0bb5e173e9bd855",
+    "apps/moan/examples/preview.rs": "79fbddfa1fc46b8ec42ac0933906c0ade0eb63d96560256ccbd750006465bb4f",
+    "apps/moan/src/lib.rs": "2e48b05c6d2512ffda363e35b8f46e7ae4f52dec0c2c3b6edc706d0259416dfc",
+    "apps/moan/src/waveform.rs": "575e0ced56ad570c4c7c93f07b065814bf775fa9b04f05de568d3ce4ca0c2341",
+    "apps/moan/src/project.rs": "3a418d9d1cef94ffdef524849f8b31a0a7c303bea262413d198bd3a074db4660",
+    "apps/moan/src/piano.rs": "16120f313fd262163aa22f3f9fe4b108eb62540983afb36e5b0cf9a3a6d6244c",
+    "apps/moan/src/main.rs": "e351e4db75de54628f48c7d25cf01a91441173f8f33ed0d48b8191b9a6265efc",
+    "apps/moan/src/project_io.rs": "150a89d15bcaa4c41fb39491e105c0e5f0aa6fcc9c748ab19e4539755ee7b543",
+    "apps/moan/src/meter_history.rs": "d4142a91583a18308eb7cabf66ba16eaa7677c48188853dc6386a18bbf1540e7",
+    "crates/moan-core/Cargo.toml": "a46856b45635a76bd8f316d7c1f1d40fb6a6f4642b488fcdf055df3e0d76bf2c",
+    "crates/moan-core/tests/midi.rs": "e50188293532a2d26e78a2a2a35f67eaa721e79abb997c1713ae87a2b73a898f",
+    "crates/moan-core/tests/timeline.rs": "e3b52db00bb0dd7b278f10c5a6e6307eb3522c79fc61825c2619d18605ce31b7",
+    "crates/moan-core/tests/effects.rs": "e4c85df8316d1cc0bd6e0c636d60707734a03d724e002ca4f6458f838f49d5aa",
+    "crates/moan-core/examples/effects_reference.rs": "6e0abd72a854a194d5702c7ab401ad9fac98b79feaddc93373a5e0e3343e0800",
+    "crates/moan-core/src/midi.rs": "fc40a6462c8cf5f2c63a3b0ced3eda0354c47771a16a4dc3a4c4e7c656f57249",
+    "crates/moan-core/src/lib.rs": "fe98da1cccee6a927f5c434aef80bd0b935465246ed3f043ca52bfe4997ad869",
+    "crates/moan-core/src/effects.rs": "e64e38e9739770c7bfad8261e7c9cefd1a965d891d17a5fda2e1cf8ea4affb62",
+    "crates/serenade-core/Cargo.toml": "ebf3356495ab35df44b36e0fb92de3ef38167c969b6d3fd80788f8863f91bdd0",
+    "crates/serenade-core/tests/serenade_tests.rs": "a9df79e8c77bb9af48fe46e97ee32e763efc90b604d1895f965073ef4e6039ce",
+    "crates/serenade-core/src/edit.rs": "a454740acf7a9947e0b0d5bfc827f6226a39097e7b05bc3039577006a3e91d95",
+    "crates/serenade-core/src/recorder.rs": "bb65ef48337007a19748295ea8d7abc0ddc171d1e7a861d92b58f88803af581b",
+    "crates/serenade-core/src/lib.rs": "09a9bac3bfaa0fb6feba847fbb98b29ca46fc582d228de488ec2afe2a3ea421c",
+    "crates/serenade-core/src/meter.rs": "8de9a8f65627e140f44b2a481d2530826f2156ac835cfb447ff86d783685f233",
+    "crates/serenade-core/src/waveform.rs": "b00e3b5b49a8c7b53d1e940371cf9e6e4d45def3bc72a2ae1331d9dde1ad13e7",
+    "crates/serenade-core/src/wav.rs": "8a2bd4f3531f473d7e35728abd701e7f4a5ed377b615e9a90132b32ea5e61fee",
+    "crates/moan-export/Cargo.toml": "ac8b5ffc1f26cc2d9744ca0e3d7a8b3ca6a3bc43e326acf271a5a2cf12b698b5",
+    "crates/moan-export/build.rs": "83ab9c737ef6bb155ebad2246e1b5c26bb772bdfbfbc1b4d2743812a0318508d",
+    "crates/moan-export/tests/codecs.rs": "acd9496a92b09feb88d5b2f875d72ab2ef5bdb7dea31dc8b67cb96c25c6a3f52",
+    "crates/moan-export/src/lib.rs": "645dccdcda82488ffc2eee93f9c7141727e25a619a6532af482d6e19b79e737a",
+    "crates/moan-export/src/output.rs": "8f39f7d608b3502b271f6a6e9da41671412208cf65d1b683c4b5f4c3a7232472",
+    "crates/moan-export/src/bridge.c": "88f40bc6d78db309ec4c4ac4456aba5ab163ef4b9ad5261e17f70898ae89afbe",
+    "crates/weft/Cargo.toml": "f748c26f45b5eaef054a10a995dab687d91ae2c818a346e18f576ed3225b551a",
+    "crates/weft/tests/ui.rs": "7b5bdb06e06b243a85c351aa2fdf76babc6f70689e4dce1872a29aca692e501c",
+    "crates/weft/examples/gallery.rs": "3cd23eaef8057b1e6ef86bcbf9c5e3ca46a4ccf6bb4fd37505f777acb35cd4b7",
+    "crates/weft/i18n/en.ftl": "366d0c7ba8c426ecbc0fe3100263c3cf930bbeb0468be24675bdae1dd8ed5d12",
+    "crates/weft/i18n/de.ftl": "caf372983ba48de9bea15dd38bdc305b957e01064a6b502987ac59dbbd32004c",
+    "crates/weft/src/edit.rs": "b82fff163331b3a6bf6cd3ef8203ba7ae0d3aa105dc543823726bb30ed5bb984",
+    "crates/weft/src/paint.rs": "d5f71b059c7158b138f043b89cc7dff73f7595e5f9e247aba55c4741d5f5cc42",
+    "crates/weft/src/icons.rs": "19b760ec806bb785d0dc5bcc0cb3c842c545929b792578f69a4c1c0b53d601b1",
+    "crates/weft/src/events.rs": "ca0e4b596a425a628a7ce4c191d05710a928800861030afface74dba547a1905",
+    "crates/weft/src/ui.rs": "508f8ed096148274e72dc3c02e3774118f072987fd8e86e3fedb2ca4d0bd4a35",
+    "crates/weft/src/geom.rs": "1cfa6e3269d4e23cd3e29a5767c1f54603f086e1aa351d05a283c899f4971972",
+    "crates/weft/src/widget.rs": "434289474ad9e559eb85df910844cc62ec1fb1b0ccffb98f1cfe80ccb19fee41",
+    "crates/weft/src/lib.rs": "85b9e449456891a24530254e4ec87133e3674c2b64c2a0cf291d3dec74fd32e2",
+    "crates/weft/src/theme.rs": "b56c4c748f36116100469560d2177118fff8cdfbc533b1d920402323941ff682",
+    "crates/weft/src/build.rs": "b09ed95382565e523fe1c125ef91fcbadc426af54d6777ed2113c97f57a0632a",
+    "crates/weft/src/draw.rs": "cc0649eb9d0b97cf225fc826410d3637247b2c50d349225919a954892616488a",
+    "crates/weft/src/a11y.rs": "76af916bc34bbe5811118f2522b9903d1ccc627b56c35958f924cb372600b252",
+    "crates/weft/src/text.rs": "20e71d6b50210b81daf5e3ef3790b7b26e8d5446e3c42e4bcae475283f009e78",
+    "crates/weft/src/input.rs": "c6fc75472fcc66e4d671aae3b27262c26d680d3706d773acb9c00e0821bccf5f",
+    "crates/weft/src/i18n.rs": "a5295b7d138521a301577e77603e5e88b57a25885ca56e5833d09dce587a04bd",
+    "crates/weft/src/menu.rs": "58f8ffb53f378a8d27fa1dbb6ad68de89be82a7026fe0e611f8466aeddafdf81",
+    "crates/weft/src/sexos.rs": "5a16363041cb5c55ceda47a65f9863cecc3403556484c7145cd94067d9cdbfaa",
+    "crates/weft/src/overlays.rs": "0e5176a63fc194b151d2190b4677fe8f289399a5d3d703f6b64a1f0b042c97da",
+    "crates/sex-app/Cargo.toml": "d09fbbcc9caf8e8d20a64008d3e523dd597d7b91b79d088498ee8c64686027e4",
+    "crates/sex-app/src/code.rs": "e680462ab92f560462ed716b6721c571ce27b08fb3c2eb9cbc21877dc5258272",
+    "crates/sex-app/src/autofill.rs": "6ce93e155b67a3fa5bc82147cdd2039231ca4f26f51b4fe5bbd1ba9339ba045f",
+    "crates/sex-app/src/heap.rs": "9f50b2e8bfc6d7e9999ac78dee535eec0164767963b537ec72720cbf39ce708a",
+    "crates/sex-app/src/thread.rs": "4ca5c0464ee1b65973a58c4311a75859c8dda6e5879406d02eb1112fe4095d63",
+    "crates/sex-app/src/lib.rs": "0425ff9abffc728a3f72fce2ee3b3d61ea26a96f9e52a784931fc07af528a917",
+    "crates/sex-app/src/sound.rs": "f7fb32118d533262b8a55477ac4d9acbf4c8f0fae923ad011dc934f8eb93651c",
+    "crates/sex-app/src/mailbox.rs": "9d4360a113f3b93dae432f30e5f6b8c5b6c3b836f0585d8a5dccd26065de33ab",
+    "crates/sex-app/src/settings.rs": "e96bf615519dc2b778573239f7244629eaf65669a83e430d236073ab59f77ef6",
+    "crates/sex-app/src/tls.rs": "24aecc81be69ea52c26fdcf5499add2d00b7ee55bd1e1caef09524ce3421f30a",
+    "crates/sex-pdx/Cargo.toml": "4e3fee5270f6051f5d8b3de172eddc4130e456f146647c414e6b3b8644589def",
+    "crates/sex-pdx/build.rs": "eb54258e363f42cebe949d5ea510c9983ffb9628c2cb3cc6af99b84d5d160351",
+    "crates/sex-pdx/tests/console_relay.rs": "32b9b0ef2ebab7c678521f47659a3d4ba4eb52d3d04e4c8850c52eccd98800f4",
+    "crates/sex-pdx/tests/stream.rs": "9b888dd62cb2bb2b9490ac42ac5acce7af52fdbd8bd8c508be1659cf65aaf10c",
+    "crates/sex-pdx/src/session_restore.rs": "44dbee46b6f74b243a400371c535db1ccfcddfd799c939692f9351f4a3366d17",
+    "crates/sex-pdx/src/notify.rs": "15f8136faff1408d5a6f8d5a8dacc637aed675883639a88ae97292482ebf83db",
+    "crates/sex-pdx/src/console_relay.rs": "48f4a80b980715eb9cbea1454717f30baa77cbe31479be15d1c3e6e9c25742cd",
+    "crates/sex-pdx/src/trust_source.rs": "4042c312b26a16eab7a82e04b9a922f9479ff289fffc1c5e421fca10f6fd8730",
+    "crates/sex-pdx/src/organs.rs": "917d19dc312a4d189ed18d6a4cd6476bb6d501e0ab307937278ae063f9b5e904",
+    "crates/sex-pdx/src/spindle_view.rs": "37a4f1a194dc43b8d1cfeddf8fa9b1d340704e5aab974f7167c43aa6d028b2dc",
+    "crates/sex-pdx/src/bitmap_batch.rs": "7c9d30efb3618edebc483d9eae64275c4f8ccb77d6aaf2f810d31d88c142e14c",
+    "crates/sex-pdx/src/stream.rs": "2f32ac78c01fa51af0d74d808f9015be2f849bcf75bf46c4ed04355fc6585fa7",
+    "crates/sex-pdx/src/app_catalog.rs": "07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3",
+    "crates/sex-pdx/src/autofill.rs": "04debd4d22549b231a185652da74a91bad4dcb48b540ea8662b4dc681ca97d91",
+    "crates/sex-pdx/src/desktop_style.rs": "801e34b49d8bd9daf55068e6f75398599193e2d9b702a0f2a8680dbff16d2f85",
+    "crates/sex-pdx/src/memory_region.rs": "b02d602feb5f239687f1a450e8c0ec2b932c366df85ae4f2a5dc67df3f5edcef",
+    "crates/sex-pdx/src/desktop_look.rs": "694004d1b125795d09febba28c8b03c926376f5316fb64f5f022cdc65e99a508",
+    "crates/sex-pdx/src/entropy_source.rs": "3f377a4a91b79e25d50737cd939c37ec76f0a9d6ee7d2cd282901a014c7c05f4",
+    "crates/sex-pdx/src/display_ready.rs": "164249ea4f01c7ffed97bec436f261a03c4a9a12834862eecc52a464dd4ca8ee",
+    "crates/sex-pdx/src/entropy_seed.rs": "7ffe2339486c6b0f3fea6291dac86b9fcb75dc5260d8e944fa267e4758280f82",
+    "crates/sex-pdx/src/screen_state.rs": "1f0aa53e3984a3269f174e139ec205e6efc65339158b8924eccd5b35e96931fd",
+    "crates/sex-pdx/src/device.rs": "4519de04eef091b40d15e00f40bc2ec7911f916a9ac3e28ebf4fd05613f1beca",
+    "crates/sex-pdx/src/dnd.rs": "90b6011726f6f85677f1bc598cdb41726b8aec090c94e4c5cfb7b350180c77d3",
+    "crates/sex-pdx/src/home_lock.rs": "f02e2d0e8e980b573afb72fed3098ceaa5ed18218e90a54da435c98eaee74b3b",
+    "crates/sex-pdx/src/network_dns.rs": "5c44e0f39b4929a8ebadaee1cfdbbc8d5e18d949d314dbda3c8879af40809c07",
+    "crates/sex-pdx/src/network_job.rs": "ca3473e0758dc253100249326f0e9cb31d48d6bdfa341076f6282b62e29315a8",
+    "crates/sex-pdx/src/usb_net.rs": "c7325b30965ac39376c5f7d5be7bb63a3b32fb08f5214bdf7e0d437ff42a52d6",
+    "crates/sex-pdx/src/config.rs": "696e22e7caa3c1a74f5bc2ebdc67c3bf81870da99e1758595609c0bbdcd81c03",
+    "crates/sex-pdx/src/clock_source.rs": "34803d9a2e3144f61b25a3e8ae494e364976f7140e17569e71ecce01435bd404",
+    "crates/sex-pdx/src/dma_pool.rs": "c50c543635a4cff704af1b41816bfdb804c0f910df82a098c41952974a5fb879",
+    "crates/sex-pdx/src/accounts.rs": "9d244f0745cb9b84d1a33dca35e52bcc137d1b3be5a118e402170557e23acfc7",
+    "crates/sex-pdx/src/lib.rs": "8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde",
+    "crates/sex-pdx/src/spindle_status.rs": "3b2307aebab4213e4b3e78687a6017e2b1f8b858531e0f16fec457b90db31de7",
+    "crates/sex-pdx/src/text_encoding.rs": "89e66abfe30c397ba4dd6d86b39d22a211363144e717d03bd17cfadced250ecb",
+    "crates/sex-pdx/src/tray.rs": "339d297b1da7ea0d68b00d6ccc7425d426bb5a8e779aedde35563af98e5722d1",
+    "crates/sex-pdx/src/usb_disk.rs": "392b5a570f621399204a7ed227911f3a39250a168451ca8e4a2760fde3a6efa7",
+    "crates/sex-pdx/src/uiir.rs": "b31453fe0f2ad75a6efda46aa19bd69ff0d925bc4a313a0334f849bd6a4f7967",
+    "crates/sex-pdx/src/clock_zone.rs": "13029d25bcbc94eec5dc0a5f6bc0f6c35cca6a7803e02504f02ac476b00b4ab4",
+    "crates/sex-pdx/src/program_store.rs": "d0bf95ec8827df5ab09db3c914f93f869dc4652527db7346efdb2b19451a1498",
+    "crates/sex-pdx/src/program_code.rs": "d1f8faf6f40c733545bf647c149ab0e161b0838fcdd4012a84420a18deed49ef",
+    "crates/sex-pdx/src/text_region.rs": "dac6c303922c9abe8dc1ccdf25ae44bf5cde10efed0ddca9a5f2c374da5651f7",
+    "crates/sex-pdx/src/package.rs": "87b28fa869ee66422e4022516e12d75630c078c927204c9a2fea18ad38ea7455",
+    "crates/sex-pdx/src/input_diagnostics.rs": "c802a7c131bc32914f6573342aa1f5045dfa1781f86bc05a1be4c0b546cda9dc",
+    "crates/sex-pdx/src/web.rs": "2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd",
+    "crates/sex-pdx/src/app_key.rs": "a6cf4bef8fe0fcbebba08a34d8cec047eedd3c3043f0e19cff9c1dac54747c1e",
+    "crates/sex-pdx/src/paging.rs": "eac0c2eb5f726f3cfac35fc4ce3f4d3d8eb64fedb7879de9d2f9620ab2a48994",
+    "crates/sex-pdx/src/power.rs": "b13e5f3e739b0000837a81c9ae7212f0356c5d507d04d0f100a421f2ea05ddd6",
+    "crates/sex-pdx/src/ring.rs": "9b072e444edcd84a925050b4a4779afd0fc7be4e15341930f2f4846d057ad90c",
+    "crates/sex-pdx/src/document_snapshot.rs": "16cc8c0f33513beaf2ce175a5cff53949627b41b243ca62ae57afe8faf68e408",
+    "crates/sex-pdx/src/text_selection.rs": "4873d5820488135640ed4be6f25dd10ff76118df36f88cbdd087a2bd7908abf2",
+    "crates/sex-pdx/src/text_batch.rs": "8cfae435e8cfdafe9ccca145e3031a76b21fea23bd6867952ebee99fda73a47c",
+    "crates/sex-pdx/src/trust_policy.rs": "96d2f732ef49396ad82cb9a7827585993fec97931e218c2e954de3f978f9dba7",
+    "crates/sex-pdx/src/history_recovery.rs": "a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d",
+    "crates/sex-pdx/src/pagefault.rs": "abdd8e52815f29c8d67e409906f4ddf0e1d5f9c5446d1a314a306da29bf50f26",
+    "crates/sex-pdx/src/virtio.rs": "1a0fe38cf9766f5cb2f65a66caaa6ff8bd370e85f5a18d143f88efbf9e6f31ab",
+    "crates/sex-pdx/src/display_boot.rs": "75ea7ea281d2cc93c27a2496d91f86ca9c2defe90777e2d5fd2b2aa1dcfd3f1c",
+    "crates/sex-pdx/src/clipboard_client.rs": "23573f8a270bca79c28095dc8c176699739817e247b1ef7804d15adacbc03def",
+    "crates/sex-pdx/src/window_motion.rs": "af1e7ea593f94a6f589654f0b61ec8a8704896aee3d40fd5f74a4504df7c5184",
+    "crates/sex-pdx/src/screenshot.rs": "6e29b528a6b678480407683f7507b7e5f241a1bedfc93a4dc4af1d7a84a65589",
+    "crates/sex-pdx/src/document_view.rs": "8169ed07f21a7d5651ba180775803b79347d3ce9c7a5046d0123911c41606a4e",
+    "crates/sex-pdx/src/crash_log.rs": "98357d79e617b3cf3a9895e8e4eaa38ca8d2510ce02a432229aff6698b87c621",
+    "crates/sex-pdx/src/screen_capture.rs": "93d33d6a62bf030a19ffdfe31883f76c873f02a93eff525f4bb9dd308a2f3ec7",
+    "crates/sex-pdx/src/shell_ready.rs": "a85e05125e915a7610427b185ee00972ec8a4ff3b888b442119147f550760c9b",
+    "crates/sex-pdx/src/document_buffer.rs": "e1a8e5b73c48cfd4cc079510a2c51eacd7f371f00dffabb5968962ca9f462e30",
+    "crates/sex-pdx/src/spindle_history.rs": "5be9952eafdd333f8b74b67a15268ab5686ff26a7ad6e9d148770f24944bac8d",
+    "crates/sex-pdx/src/clipboard.rs": "e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04",
+    "crates/sex-pdx/src/program_threads.rs": "72644f5e61188d372d7374f05eb299d7fc4376c0d96d37582dfdda0e5bbdb165",
+    "crates/sex-pdx/src/document.rs": "b16768a8983ba57d17b51949bede4bdb4b6dcfd3981d47d64420680edd45f655",
+    "crates/sex-pdx/src/sound_ring.rs": "7c78f200ce9d06d578aab67ad314eeb8c7cd30d5bf33832a8e93a1d359f572c9",
+    "crates/sex-pdx/src/fs.rs": "41098b6370881379a4827fbb1852500b65cec127cbfae6e58ee0bc1dffcc5f3d",
+    "crates/sex-pdx/src/pci_command.rs": "ba3a32bd82239a056e7108f32b8d4d515e5aee97c64edef82b2229a8359d1dde",
+    "crates/sex-pdx/src/wifi_status.rs": "ecd60bfc74137fa273118f8babc8d8a857179a9aee5d22009c97771e923adb99",
+    "crates/sex-pdx/src/certificate_time.rs": "0b0c410eb65c4fe713bcca1f57e1f63407bbdfb13dcb6012da9b723ba6de7405",
+    "crates/sex-pdx/src/sound_mixer.rs": "91c0410fd38417a2f623300821715a5aab56a7a8302846a5e62fd66af135d686",
+    "crates/sex-pdx/src/app_lifecycle.rs": "0f88d10b629503599986dda2140158ae6d3637f4f8f3a885132a99d6d4d9cfbd",
+    "crates/sex-pdx/src/app_pointer.rs": "a22784217a62767a29ff16bd6a61b60d8109211be0f89ec16b8d50a405e41385",
+    "crates/sex-pdx/src/window_switcher.rs": "ea951e8cf097389f43c0f537339948f1e1520c061c4c1ed190b7260cdee18a20",
+    "crates/sex-pdx/src/pixel_region.rs": "614f7f3d3338949c2d022d8afc004e7b2f315ff285887d8a995ad1f7aebe60b0",
+    "crates/sex-pdx/src/system_stats.rs": "6f77139bfab17ed0f01a7a30b59854596ac53e679171a004b88be54ee00dc197",
+    "crates/sex-pdx/src/display_frames.rs": "492bb349add747f8727f9c1aeb774b61ec9878cdc34651e159209a0300a707b8",
+    "crates/sex-pdx/src/program_memory.rs": "04d0affed34c207205ad2e350eb785e6fb52f9f0e35b8420277091c9b8cf773c",
+    "crates/sex-pdx/src/serial_record_buffer.rs": "221f31999299c76a493cd33158acce94663dd53a4a117ad8e10969ec747b2868",
+    "crates/sex-pdx/src/network_config.rs": "ea82d42449a115ad8086776a4f7a51d0494d508eccaae0f5ff4f2c7525ff62e9",
+    "crates/sex-pdx/src/app_scroll.rs": "4918d7d03ca42713f932e7e5c66172044b848ff4e8b13f59d1395c18e7cbe7f8",
+    "crates/sex-pdx/src/browser_sources.rs": "6f2eb55b2138052fc43c9f40c4026cb1129ac88b285938359491ce23ff61f3b7",
+    "crates/sex-pdx/src/spindle_probe.rs": "30fbe05ac325b1066ba035d7b6c1be075c4f3236a4cbec09bde96c8d44690f7f",
+    "crates/sex-pdx/src/desktop_recording.rs": "ab8817143b15e29969990957e5c465b5a703ee4812ae21c399de2ce55fa83aa2",
+    "crates/sex-pdx/src/launch.rs": "fed218053149c291e7cf29139fc1559f8405f880e8de57f3995d602cc655ac69",
+    "crates/sex-pdx/src/dma_lend.rs": "9f8ed1fe431f31a63087f1b0778edddf97c27343c3befc3333e958f0e5148bd4",
+    "crates/sex-pdx/src/mem.rs": "64e5773f3f02d9cf8795cd182940d0be10d9d77b48b0ccf711ccd9ffb1ed0be9",
+    "crates/sex-font/Cargo.toml": "aa54af5e8cb95d352558f1dd6d01996b11697133eafb241b2c2e79fa80c637a1",
+    "crates/sex-font/tests/fallback.rs": "ec07ca4176fbed33bf8ffa9f357b75affae3da3c3000ff1d68f12c3b76f0c3b2",
+    "crates/sex-font/examples/fallback_strip.rs": "f5c7d98c1ce2270580f136eb677ae4cdff27b04d133ef1d2030b0b11cabd7d09",
+    "crates/sex-font/examples/ui_labels.rs": "edb729db0b646ec65d967adbd77ed0c44cb6a64165dcb48bbef4d1dfb69a5f93",
+    "crates/sex-font/examples/cells.rs": "88224f08a5f67fa9c30744052d2a2a0c8b9400970c0464c5b459102910dd753d",
+    "crates/sex-font/examples/captions.rs": "241cf8f47a632ca4ca36a930bd7d8e9179b054ffaafdad27503562d6366f4719",
+    "crates/sex-font/src/cache.rs": "659d764ac755edd34ff564153bd6c66f0c73d24599b83a2ee0d9a06075d97bee",
+    "crates/sex-font/src/lib.rs": "c71873950066e45deff79111861fb7e83edb703cd974c593237467df55d18e95",
+    "crates/sex-font/src/fallback.rs": "e8c742d82f18c1072fbe230c4a0bfdd647b875849b7c7e55cc1120f2b935b369",
+    "crates/sex-font/src/raster.rs": "c4efdb48286e24c64eee206d6dc887a255448a3fe16d28fb3be4de21c047b0bb",
+    "assets/fonts/noto/NotoSansThai-Regular.ttf": "dfbd5ed0f1e68c3cbc51aa08f646d1ab0e68e7c4ceab70a69e465225ff701f93",
+    "assets/fonts/noto/NotoSansMono-Regular.ttf": "6b692c4b6d15ccf59f1c1fe8d11cb8a92f51960f3e9f1f523781755a3af7e29f",
+    "assets/fonts/noto/emoji-36.sxe": "988c66d11284ac09475726a6476ea03ce4f18981ca4b35a51701de7305836805",
+    "assets/fonts/noto/README.md": "f0cd3b02cd9b2efcdab6f4730ecaf640df19f4ca1452a666fd111731781b8845",
+    "assets/fonts/noto/NotoSansHebrew-Regular.ttf": "436900d5ad77d33e4234247f3076eaecd25b92b9bea0519514f684140e3566a7",
+    "assets/fonts/noto/NotoSansCJK-SC-Subset.otf": "b3c48b98ac7725828478c8f164f15807b0948f89dd71b1ce8163e7e6c5cd67c0",
+    "assets/fonts/noto/OFL.txt": "399bd60ea5f79c0b2220b9e67e945f25f9723837d4ab27718aebda61f2e4c8fd",
+    "assets/fonts/noto/NotoSansDevanagari-Regular.ttf": "79a470365ccb210fa3c7d8d8ff2e005ef9d983cfd067f735a0caf7e15070ca9f",
+    "assets/fonts/noto/NotoSansSymbols2-Regular.ttf": "876598db5f1e3bef2bc77c4d94c5b0d5d2c1620be4878a06f18fb5434e331688",
+    "assets/fonts/noto/NotoSansArabic-Regular.ttf": "504d7407d86875acf7d04dfaa0fd7524d0b8797723bc4aa18022f29db25b0b6e",
+    "assets/fonts/geist/Geist-Regular.ttf": "2c460a7a71063e53491f343d44b382267bc0cf496e31db64865f962af3152e68",
+    "assets/fonts/geist/README.md": "5fbe6169699d76e11068090cb024b736eaf776f101292c53fbb339d3dcf37480",
+    "assets/fonts/geist/OFL.txt": "021caa749f89fecd7c2e40a50499de29e84d2bc19251659b47d499c2fbfffc17",
+    "assets/fonts/geist/GeistMono-Regular.ttf": "686914333e77a620c85b35481064788deb33fc25f69901bdbf296c1bbc26a7fe",
+    "Cargo.lock": "34de31e3f7b262e9e00eae5e8d5b9d76a7290108df0948bb7f48fee0baf33f0f",
+    "scripts/moan_workstation_gate.py": "0c63d663a36dc4db5c3497634ebdb04c9b5fb60adfa91dc555ec593841b9d916",
+    "scripts/moan_project_gate.py": "201498f37665acb9d7b270b6ca551b151de237f4875a9f98f0982b329217a216",
+    "scripts/moan_gate_geometry.py": "b5cf47bdbd2c2fe07f7a40206bee211a1cf511b8fa74eaab6d71da6565c919a1",
+    "scripts/desktop_focus.py": "18a5fb7c6f40fcbe4510f173f1d67d1554ed4ef6faefd0fcf59e80f18f6dd169"
+  },
+  "screenshots": [
+    {
+      "file": "piano-a3.ppm",
+      "sha256": "731b48e0106991ba668c71d6cfdbaa2039a721d3e557efab673bbbf1ff5e67f1",
+      "semantic": {
+        "key": 57,
+        "velocity": 96,
+        "frames": 192000
+      }
+    },
+    {
+      "file": "mixer-playing.ppm",
+      "sha256": "99e8f26af2e14e1874906da8c27739a0ce3a3ca43f922792208869a785b77736",
+      "semantic": {
+        "track": 0,
+        "source": "actual processed samples",
+        "level": 7553
+      }
+    },
+    {
+      "file": "piano-a4-soft.ppm",
+      "sha256": "c2b3b611d8cd82f2dcb67c3d9350dcdc7b59666ea381002aac5b7a8f4c037f9b",
+      "semantic": {
+        "key": 69,
+        "velocity": 48,
+        "frames": 192000
+      }
+    },
+    {
+      "file": "sampler-edited.ppm",
+      "sha256": "de124e7cb70e4fe7a380203284a44a2fd0d0cf03f1d26038243c894de85fd2e5",
+      "semantic": {
+        "key": 60,
+        "velocity": 48,
+        "frames": 48000
+      }
+    },
+    {
+      "file": "saved-three-track-arrangement.ppm",
+      "sha256": "4e509c4841c7962ea8e82b3c7741c54797d0f5ae8fa242b123487c8cd35e5d89",
+      "semantic": {
+        "tracks": 3,
+        "clips": 3,
+        "project_hash": "0xe4a3679498b196a2",
+        "synced": true
+      }
+    },
+    {
+      "file": "reopened-midi.ppm",
+      "sha256": "696d1378b072022cb5fb15e2903eaeab088dfcaaf1fefb05d501eef1fac6e4d5",
+      "semantic": {
+        "saved_pattern": "0x57ae3870b6a96604",
+        "key": 60,
+        "velocity": 48,
+        "frames": 48000
+      }
+    }
+  ],
+  "host_tests": 68,
+  "audio_oracle_tests": 6,
+  "scanner": {
+    "seed": 0,
+    "script": "scripts/key_bytes.py",
+    "exit_code": 0
+  },
+  "failures_preserved": [
+    "target/workstation-proof-v1/FAILURE.json",
+    "target/workstation-proof-v2/FAILURE.json"
+  ],
+  "result": {
+    "ok": true,
+    "audio": {
+      "ok": true,
+      "bursts": [
+        {
+          "start": 0.0,
+          "seconds": 4.0,
+          "hz": 220.06418538740465,
+          "rms": 3488.7331778332637,
+          "peak": 6047,
+          "threshold_tail_islands": 0
+        },
+        {
+          "start": 6.14,
+          "seconds": 4.01,
+          "hz": 440.06646837282716,
+          "rms": 1742.0612738931227,
+          "peak": 3023,
+          "threshold_tail_islands": 0
+        },
+        {
+          "start": 12.28,
+          "seconds": 0.39,
+          "hz": 116.01037491157746,
+          "rms": 1403.6566863597357,
+          "peak": 4673,
+          "threshold_tail_islands": 1
+        },
+        {
+          "start": 18.43,
+          "seconds": 0.19,
+          "hz": 232.02074982315492,
+          "rms": 1415.550026615406,
+          "peak": 4673,
+          "threshold_tail_islands": 0
+        }
+      ],
+      "sampler": [
+        {
+          "onset": 12.288020833333333,
+          "energy": 36884524472,
+          "decay50": 0.08054166666666666,
+          "decay90": 0.21245833333333333,
+          "decay99": 0.316
+        },
+        {
+          "onset": 18.432020833333333,
+          "energy": 18275987393,
+          "decay50": 0.04058333333333333,
+          "decay90": 0.10633333333333334,
+          "decay99": 0.15804166666666666
+        }
+      ],
+      "scope": "Recorded stereo PCM: unchanged strict synth pitch/continuous duration/velocity energy; sampler independent onset, total energy, finite support and octave decay time scaling. No UI telemetry used as audio."
+    },
+    "project": {
+      "ok": true,
+      "version": 2,
+      "tracks": 3,
+      "patterns": [
+        {
+          "instrument": 2,
+          "frames": 192000,
+          "notes": [
+            {
+              "start": 0,
+              "frames": 48000,
+              "key": 60,
+              "velocity": 48
+            }
+          ],
+          "pcm_sha256": "02a0b274d122706df3b5b0826a14cb3ef5b9f5552b5392a63f685522e25bf32a"
+        },
+        {
+          "instrument": 0,
+          "frames": 192000,
+          "notes": [
+            {
+              "start": 0,
+              "frames": 18000,
+              "key": 60,
+              "velocity": 96
+            },
+            {
+              "start": 24000,
+              "frames": 18000,
+              "key": 64,
+              "velocity": 96
+            },
+            {
+              "start": 48000,
+              "frames": 18000,
+              "key": 67,
+              "velocity": 96
+            },
+            {
+              "start": 72000,
+              "frames": 18000,
+              "key": 69,
+              "velocity": 96
+            },
+            {
+              "start": 96000,
+              "frames": 18000,
+              "key": 60,
+              "velocity": 96
+            },
+            {
+              "start": 120000,
+              "frames": 18000,
+              "key": 64,
+              "velocity": 96
+            },
+            {
+              "start": 144000,
+              "frames": 18000,
+              "key": 67,
+              "velocity": 96
+            },
+            {
+              "start": 168000,
+              "frames": 18000,
+              "key": 69,
+              "velocity": 96
+            }
+          ],
+          "pcm_sha256": "8be5afe071259d5cc3afe16d247290a0ef056dedf17b630168342e024ff3e06c"
+        },
+        {
+          "instrument": 1,
+          "frames": 192000,
+          "notes": [
+            {
+              "start": 0,
+              "frames": 18000,
+              "key": 48,
+              "velocity": 96
+            },
+            {
+              "start": 24000,
+              "frames": 18000,
+              "key": 48,
+              "velocity": 96
+            },
+            {
+              "start": 48000,
+              "frames": 18000,
+              "key": 55,
+              "velocity": 96
+            },
+            {
+              "start": 72000,
+              "frames": 18000,
+              "key": 53,
+              "velocity": 96
+            },
+            {
+              "start": 96000,
+              "frames": 18000,
+              "key": 48,
+              "velocity": 96
+            },
+            {
+              "start": 120000,
+              "frames": 18000,
+              "key": 48,
+              "velocity": 96
+            },
+            {
+              "start": 144000,
+              "frames": 18000,
+              "key": 55,
+              "velocity": 96
+            },
+            {
+              "start": 168000,
+              "frames": 18000,
+              "key": 53,
+              "velocity": 96
+            }
+          ],
+          "pcm_sha256": "fe8303ce6e8e38a676e9802adbfd22e01a09e7ea7a8f513e77a64f0f2eae638e"
+        }
+      ],
+      "bytes": 2304490,
+      "sha256": "40cac79d7fa6447a9ec945ee543b5e7460bf1ae59372da3063fb08ddeaa2aa9b"
+    },
+    "reboot_reopen": true,
+    "post_reopen_edit_undo_clean": true,
+    "screenshots": [
+      {
+        "file": "piano-a3.ppm",
+        "sha256": "731b48e0106991ba668c71d6cfdbaa2039a721d3e557efab673bbbf1ff5e67f1",
+        "inputs_sha256": "27f4b4c349894365700e6aef2c0767ca9a5c4e5af4a34327f6e73417e20b3708",
+        "semantic": {
+          "key": 57,
+          "velocity": 96,
+          "frames": 192000
+        },
+        "serial_start": 509070,
+        "serial_end": 509070,
+        "serial_prefix_sha256": "1c4c9e4fac5d5d1511adb473902d119e2f56bb9908212670bd3d53aa756b1511",
+        "attempts": [
+          {
+            "file": "piano-a3-attempt1.ppm",
+            "sha256": "731b48e0106991ba668c71d6cfdbaa2039a721d3e557efab673bbbf1ff5e67f1",
+            "ok": true,
+            "error": null,
+            "serial_end": 509070
+          }
+        ]
+      },
+      {
+        "file": "mixer-playing.ppm",
+        "sha256": "99e8f26af2e14e1874906da8c27739a0ce3a3ca43f922792208869a785b77736",
+        "inputs_sha256": "27f4b4c349894365700e6aef2c0767ca9a5c4e5af4a34327f6e73417e20b3708",
+        "semantic": {
+          "track": 0,
+          "source": "actual processed samples",
+          "level": 7553
+        },
+        "serial_start": 519610,
+        "serial_end": 519610,
+        "serial_prefix_sha256": "abf4cb383f9bae3763a01959309c3ce5936f7d9aa17273c93611f1a0048a7ae9",
+        "attempts": [
+          {
+            "file": "mixer-playing-attempt1.ppm",
+            "sha256": "99e8f26af2e14e1874906da8c27739a0ce3a3ca43f922792208869a785b77736",
+            "ok": true,
+            "error": null,
+            "serial_end": 519610
+          }
+        ]
+      },
+      {
+        "file": "piano-a4-soft.ppm",
+        "sha256": "c2b3b611d8cd82f2dcb67c3d9350dcdc7b59666ea381002aac5b7a8f4c037f9b",
+        "inputs_sha256": "27f4b4c349894365700e6aef2c0767ca9a5c4e5af4a34327f6e73417e20b3708",
+        "semantic": {
+          "key": 69,
+          "velocity": 48,
+          "frames": 192000
+        },
+        "serial_start": 549686,
+        "serial_end": 549686,
+        "serial_prefix_sha256": "23cee2e5d7557caa67878fa0e07c281ba843c12f32b8e4450bad93e7b620e7b5",
+        "attempts": [
+          {
+            "file": "piano-a4-soft-attempt1.ppm",
+            "sha256": "c2b3b611d8cd82f2dcb67c3d9350dcdc7b59666ea381002aac5b7a8f4c037f9b",
+            "ok": true,
+            "error": null,
+            "serial_end": 549686
+          }
+        ]
+      },
+      {
+        "file": "sampler-edited.ppm",
+        "sha256": "de124e7cb70e4fe7a380203284a44a2fd0d0cf03f1d26038243c894de85fd2e5",
+        "inputs_sha256": "27f4b4c349894365700e6aef2c0767ca9a5c4e5af4a34327f6e73417e20b3708",
+        "semantic": {
+          "key": 60,
+          "velocity": 48,
+          "frames": 48000
+        },
+        "serial_start": 686592,
+        "serial_end": 686592,
+        "serial_prefix_sha256": "0db9b6e940b01156cf195beab227aed6a8a5e7a3478fd9aa06acb74b3a716c11",
+        "attempts": [
+          {
+            "file": "sampler-edited-attempt1.ppm",
+            "sha256": "de124e7cb70e4fe7a380203284a44a2fd0d0cf03f1d26038243c894de85fd2e5",
+            "ok": true,
+            "error": null,
+            "serial_end": 686592
+          }
+        ]
+      },
+      {
+        "file": "saved-three-track-arrangement.ppm",
+        "sha256": "4e509c4841c7962ea8e82b3c7741c54797d0f5ae8fa242b123487c8cd35e5d89",
+        "inputs_sha256": "27f4b4c349894365700e6aef2c0767ca9a5c4e5af4a34327f6e73417e20b3708",
+        "semantic": {
+          "tracks": 3,
+          "clips": 3,
+          "project_hash": "0xe4a3679498b196a2",
+          "synced": true
+        },
+        "serial_start": 786985,
+        "serial_end": 786985,
+        "serial_prefix_sha256": "b6370cc87c282df9fd579323391aae2883115b1065ad956a716a8474cc19ef8c",
+        "attempts": [
+          {
+            "file": "saved-three-track-arrangement-attempt1.ppm",
+            "sha256": "4e509c4841c7962ea8e82b3c7741c54797d0f5ae8fa242b123487c8cd35e5d89",
+            "ok": true,
+            "error": null,
+            "serial_end": 786985
+          }
+        ]
+      },
+      {
+        "file": "reopened-midi.ppm",
+        "sha256": "696d1378b072022cb5fb15e2903eaeab088dfcaaf1fefb05d501eef1fac6e4d5",
+        "inputs_sha256": "27f4b4c349894365700e6aef2c0767ca9a5c4e5af4a34327f6e73417e20b3708",
+        "semantic": {
+          "saved_pattern": "0x57ae3870b6a96604",
+          "key": 60,
+          "velocity": 48,
+          "frames": 48000
+        },
+        "serial_start": 482041,
+        "serial_end": 482041,
+        "serial_prefix_sha256": "fbd5c344fad4480c471f2d54153c391248aefcbdbaa16d29f6cd94bef2e62412",
+        "attempts": [
+          {
+            "file": "reopened-midi-attempt1.ppm",
+            "sha256": "696d1378b072022cb5fb15e2903eaeab088dfcaaf1fefb05d501eef1fac6e4d5",
+            "ok": true,
+            "error": null,
+            "serial_end": 482041
+          }
+        ]
+      }
+    ],
+    "inputs_sha256": "27f4b4c349894365700e6aef2c0767ca9a5c4e5af4a34327f6e73417e20b3708",
+    "scope": "Actual Weft MIDI edits, independent synth/sampler PCM checks, v2 reboot and pixels.\nTelemetry never substitutes for recorded audio. This is a workstation slice, not\nexternal MIDI hardware, third-party plugins, live inserts or full DAW parity.\n"
+  }
+}

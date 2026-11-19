@@ -7,6 +7,11 @@ use std::sync::Mutex;
 mod production_store;
 #[path = "../crates/sex-pdx/src/program_store.rs"]
 pub mod program_store;
+// Finite single-writer backend: this fixture exercises image loading, not admission.
+mod restricted_image {
+    pub struct Writer;
+    pub fn writer() -> Option<Writer> { Some(Writer) }
+}
 #[macro_export]
 macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}};}
 pub const BLOCK_MAX_XFER: u64 = 512;
@@ -46,6 +51,9 @@ mod vfs {
             .bridge
             .as_ptr() as u64
     }
+    pub fn diskfs_bridge_buf_len() -> u64 {
+        crate::WORLD.lock().unwrap().as_ref().unwrap().bridge.len() as u64
+    }
 }
 mod backends {
     pub mod diskfs {
@@ -66,6 +74,10 @@ mod backends {
             }
         }
     }
+}
+mod console_relay {
+    pub const SLOTS: usize = 8;
+    pub fn not_started(_: usize) {}
 }
 mod fs_service {
     pub mod w {
@@ -117,6 +129,9 @@ mod fs_service {
         Ready(FakeFs),
     }
     static mut STATE: State = State::Untried;
+    /// No program rows here: every ticket is Spindle's (requester 0).
+    fn program_index(_: u32) -> Option<usize> { None }
+    fn current_ticket_owner(_: u32) -> Option<TicketOwner> { None }
     fn bring_up() -> State {
         State::Ready(FakeFs)
     }
@@ -231,13 +246,13 @@ fn unbound_mode_refuses_tickets_without_consuming_or_reading_anything() {
 #[test]
 fn ordinary_named_and_ticket_loads_retain_their_existing_bookkeeping() {
     reset(true, false);
-    let word = production_store::load(program_store::pack_name(b"ordinary").unwrap());
+    let word = production_store::load(program_store::pack_name(b"ordinary").unwrap(), 0);
     assert!(matches!(program_store::decode_reply(word), Some(Ok(_))));
     assert_eq!(fs_service::loaded_name(), b"ordinary");
     assert_eq!(fs_service::loaded_arguments(), b"");
     assert_eq!(fs_service::prepared_length(), 13);
     reset(true, false);
-    let word = production_store::load([program_store::TICKET, 77]);
+    let word = production_store::load([program_store::TICKET, 77], 0);
     assert!(matches!(program_store::decode_reply(word), Some(Ok(_))));
     assert_eq!(fs_service::loaded_name(), b"ordinary");
     assert_eq!(fs_service::loaded_arguments(), b"alpha");

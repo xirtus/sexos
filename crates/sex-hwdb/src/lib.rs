@@ -251,6 +251,7 @@ fn by_class(id: Id) -> (Service, Support) {
         (0x0c, 0x03, _) => (Usb, Unsupported),
         (0x0c, 0x05, _) => (Kernel, Platform),
         // Intel Serial IO (I2C/SPI/UART): the bus under laptop touchpads (I2C HID).
+        (0x0c, 0x80, _) if manifest::serial_io_i2c(id.vendor, id.device) => (Input, InProgress),
         (0x0c, 0x80, _) if id.vendor == 0x8086 => (Input, Planned),
         _ => (Nothing, Unsupported),
     }
@@ -276,7 +277,7 @@ pub fn advice(id: Id) -> Option<&'static str> {
     match (id.class, id.subclass) {
         (0x01, 0x04) => Some("RAID controller without a driver: disks behind it are hidden"),
         (0x03, _) if id.vendor == 0x10de => Some("NVIDIA GPU has no native driver yet: the picture comes from the firmware framebuffer. On a laptop, Hybrid mode lets the Intel GPU drive the panel"),
-        (0x02, 0x80) if id.vendor == 0x8086 => Some("Intel Wi-Fi driver in progress: the chip starts its firmware but cannot join a network yet; use Ethernet"),
+        (0x02, 0x80) if id.vendor == 0x8086 => Some("Intel Wi-Fi driver is new and untried on this machine: join with Spindle `wifi join N PASSWORD`; if it fails, use Ethernet and save `hw` output"),
         (0x02, 0x80) => Some("no Wi-Fi driver for this maker yet: use Ethernet"),
         _ => None,
     }

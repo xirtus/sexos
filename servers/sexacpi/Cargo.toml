@@ -6,5 +6,6 @@ license = "GPL-3.0-only"
 
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx" }
+sex-laptop = { path = "../../crates/sex-laptop" }
 linked_list_allocator = "0.10.5"
 acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"] }

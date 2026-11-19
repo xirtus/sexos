@@ -42,6 +42,12 @@ ABI_INPUTS=(
   crates/sex-pdx/src/display_frames.rs
   kernel/src/history_recovery.rs
   crates/sex-pdx/src/lib.rs
+  crates/sex-pdx/src/input_diagnostics.rs
+  crates/sex-pdx/src/autofill.rs
+  crates/sex-pdx/src/restricted_job.rs
+  crates/sex-pdx/src/restricted_helper.rs
+  crates/sex-pdx/src/restricted_helper_journal.rs
+  crates/sex-pdx/src/restricted_helper_provider.rs
   crates/sex-pdx/src/uiir.rs
   crates/sex-pdx/src/app_catalog.rs
   crates/sex-pdx/src/browser_sources.rs
@@ -63,6 +69,7 @@ ABI_INPUTS=(
   crates/sex-pdx/src/program_store.rs
   crates/sex-pdx/src/crash_log.rs
   crates/sex-pdx/src/program_memory.rs
+  crates/sex-pdx/src/denim.rs
   crates/sex-pdx/src/fs.rs
   crates/sex-pdx/src/web.rs
   crates/sex-pdx/src/text_selection.rs
@@ -89,6 +96,9 @@ ABI_INPUTS=(
   kernel/src/ipc/reply_credit.rs
   kernel/src/ipc/sender.rs
   kernel/src/ipc/router.rs
+  kernel/src/vmx.rs
+  kernel/src/svm.rs
+  crates/sex-pdx/src/vm.rs
 )
 
 if [[ "$#" -ne 0 ]]; then

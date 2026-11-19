@@ -648,6 +648,9 @@ pub struct Chrome<'a> {
     pub marks: &'a [[i32; 5]],
     /// The page zoom in percent, shown in the bar when not 100.
     pub zoom: u32,
+    /// The shield badge: whether Shields are up for the site, and how many requests
+    /// they blocked on the page. `None` shows no badge (built-in pages, files).
+    pub shields: Option<(bool, u32)>,
 }
 
 /// Tab chips in the bar: each chip's x and width, for `width` and `n` tabs.
@@ -701,7 +704,20 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
     }
     let left = chips.last().map_or(6, |(x, w)| x + w + 6);
     let zoom = if c.zoom != 0 && c.zoom != 100 { alloc::format!("{}%", c.zoom) } else { String::new() };
-    let zoom_w = if zoom.is_empty() { 0 } else { fonts.text_width(&zoom, small) + 10 };
+    let mut zoom_w = if zoom.is_empty() { 0 } else { fonts.text_width(&zoom, small) + 10 };
+    // The shield badge, at the right end: orange with the count while up, grey when down.
+    if let Some((up, n)) = c.shields {
+        let label = if !up { String::from("off") } else if n > 999 { String::from("999+") } else { alloc::format!("{}", n) };
+        let w = fonts.text_width(&label, small) + 26;
+        let x = width - 6 - w;
+        bar.fill(x, 6, w, BAR - 12, if up { 0xFFFB_542B } else { 0xFF4A_5260 }, 9);
+        // A small shield: a square top and a pointed foot.
+        let (sx, sy) = (x + 6, 10);
+        bar.fill(sx, sy, 9, 6, 0xFFFF_FFFF, 1);
+        for row in 0..5 { bar.fill(sx + row, sy + 6 + row, 9 - 2 * row, 1, 0xFFFF_FFFF, 0); }
+        text_run(&mut bar, fonts, x + 20, 19, small, 0xFFFF_FFFF, &label);
+        zoom_w += w + 4;
+    }
     bar.fill(left, 4, width - 6 - left - zoom_w, BAR - 8, if c.editing { 0xFFFF_FFFF } else { 0xFF22_2C3A }, 8);
     if !zoom.is_empty() { text_run(&mut bar, fonts, width - zoom_w, 19, small, 0xFFD7_E3F0, &zoom); }
     let color = if c.editing { 0xFF1F_1F1F } else { 0xFFD7_E3F0 };

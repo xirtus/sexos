@@ -11,6 +11,8 @@ Outputs, in assets/fonts/noto/:
                                compatibility jamo and full-width forms
   emoji-36.sxe                 every single-scalar emoji of Noto Color Emoji as 36x36
                                4-bit coverage (shaded by lightness), for monochrome text
+  emoji-color-32.sxc           the same emoji in colour, 32x32, 15 colours + transparent
+                               per emoji (format in crates/sex-font/src/fallback.rs)
 Run: python3 scripts/gen_fallback_fonts.py
 """
 import io, shutil, struct, subprocess, sys, tempfile
@@ -23,6 +25,7 @@ OUT = ROOT / 'assets/fonts/noto'
 NOTO = Path('/usr/share/fonts/truetype/noto')
 CJK = Path('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
 EMOJI_SIZE = 36
+COLOR_SIZE = 32
 
 def charset(codec, rows, cols):
     s = set()
@@ -67,6 +70,34 @@ def emoji():
     (OUT / f'emoji-{EMOJI_SIZE}.sxe').write_bytes(blob)
     return len(entries)
 
+def color_emoji():
+    """Every single-scalar emoji in colour: per emoji a 16-entry RGBA palette (entry 0
+    transparent) and 4-bit indices, so the whole set stays under a megabyte."""
+    font = TTFont(str(NOTO / 'NotoColorEmoji.ttf'))
+    strike = font['CBDT'].strikeData[0]
+    entries = []
+    for scalar, name in sorted(font.getBestCmap().items()):
+        if scalar < 0x2000 or name not in strike:
+            continue
+        image = Image.open(io.BytesIO(strike[name].imageData)).convert('RGBA')
+        image.thumbnail((COLOR_SIZE, COLOR_SIZE), Image.LANCZOS)
+        canvas = Image.new('RGBA', (COLOR_SIZE, COLOR_SIZE))
+        canvas.paste(image, ((COLOR_SIZE - image.width) // 2, (COLOR_SIZE - image.height) // 2))
+        q = canvas.quantize(colors=15, method=Image.Quantize.FASTOCTREE, dither=Image.Dither.NONE)
+        pal = q.getpalette(rawmode='RGBA')[:15 * 4]
+        pal += [0] * (15 * 4 - len(pal))
+        idx = list(q.getdata())
+        alpha = [a for *_, a in canvas.getdata()]
+        # Index 0 is transparent; the quantiser's colours move up by one.
+        levels = [0 if a < 8 else i + 1 for i, a in zip(idx, alpha)]
+        palette = bytes([0, 0, 0, 0]) + bytes(pal)
+        packed = bytes(levels[i] << 4 | levels[i + 1] for i in range(0, len(levels), 2))
+        entries.append((scalar, palette + packed))
+    blob = b'SXC1' + struct.pack('<HH', COLOR_SIZE, len(entries))
+    blob += b''.join(struct.pack('<I', s) for s, _ in entries) + b''.join(p for _, p in entries)
+    (OUT / f'emoji-color-{COLOR_SIZE}.sxc').write_bytes(blob)
+    return len(entries)
+
 def main():
     OUT.mkdir(parents=True, exist_ok=True)
     for name in ['NotoSansMono-Regular.ttf', 'NotoSansSymbols2-Regular.ttf', 'NotoSansArabic-Regular.ttf',
@@ -75,6 +106,7 @@ def main():
     with tempfile.TemporaryDirectory() as tmp:
         cjk(Path(tmp))
     print('emoji', emoji())
+    print('colour emoji', color_emoji())
 
 if __name__ == '__main__':
     main()

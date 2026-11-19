@@ -72,6 +72,10 @@ pub fn spawn(pd: &crate::capability::ProtectionDomain, run: u32, id: u32, entry:
     let task = match table.workers.iter_mut().find(|w| w.target == pd.id && w.dead_since != 0 && now - w.dead_since >= REUSE_TICKS) {
         Some(w) => { w.run = run; w.dead_since = 0; w.task }
         None => {
+            // A row keeps at most twice MAX_WORKERS tasks, live and dead. Starting workers
+            // that exit at once would otherwise leak a 64 KiB kernel stack per start
+            // (audit S9). Past the cap some task is Dead and soon reusable: try again.
+            if table.workers.iter().filter(|w| w.target == pd.id).count() >= 2 * t::MAX_WORKERS { return Err(t::RETRY); }
             let task = Box::leak(Box::new(Task::with_kernel_stack(id, entry, stack, pd, true, 65536))) as *mut Task;
             table.workers.push(Worker { target: pd.id, run, task, dead_since: 0 });
             task
@@ -169,6 +173,8 @@ pub fn call(regs: &mut crate::interrupts::SyscallRegs, op: u64, a: u64, b: u64, 
     match op {
         t::SPAWN => match crate::app_resources::spawn_worker(pd, a, b, c) {
             Ok(id) => reply(regs, t::OK, id),
+            // Denim's pages come back first; the program's spawn tries again.
+            Err(crate::app_resource_state::RECALL) => { crate::denim::recall(pd.id); reply(regs, t::RETRY, 0) }
             Err(e) => reply(regs, e, 0),
         },
         t::CORES => {

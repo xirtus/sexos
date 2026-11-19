@@ -118,9 +118,147 @@ pub fn map_len(len: usize) -> Option<usize> {
     len.checked_add(PAGE - 1).map(|n| n & !(PAGE - 1))
 }
 
+// ---- termios --------------------------------------------------------------------------
+
+/// musl's `struct termios` (x86-64).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Termios {
+    pub c_iflag: u32, pub c_oflag: u32, pub c_cflag: u32, pub c_lflag: u32,
+    pub c_line: u8, pub c_cc: [u8; 32], pub c_ispeed: u32, pub c_ospeed: u32,
+}
+pub const ISIG: u32 = 0o1;
+pub const ICANON: u32 = 0o2;
+pub const ECHO: u32 = 0o10;
+pub const ECHOE: u32 = 0o20;
+pub const ECHOK: u32 = 0o40;
+pub const IEXTEN: u32 = 0o100000;
+pub const ICRNL: u32 = 0o400;
+pub const IXON: u32 = 0o2000;
+pub const OPOST: u32 = 0o1;
+pub const ONLCR: u32 = 0o4;
+pub const CS8: u32 = 0o60;
+pub const CREAD: u32 = 0o200;
+/// B38400, what a terminal emulator reports.
+pub const B38400: u32 = 0o17;
+/// The console's terminal mode bits (`sex_pdx::console_relay`).
+pub const MODE_RAW: u8 = 1;
+pub const MODE_NO_ECHO: u8 = 2;
+pub const MODE_NO_SIGNALS: u8 = 4;
+
+impl Termios {
+    /// A terminal as it starts: a cooked line with echo, Ctrl+C an interrupt, and the
+    /// usual control characters (VINTR ^C, VQUIT ^\, VERASE DEL, VKILL ^U, VEOF ^D, VMIN 1).
+    pub const fn cooked() -> Termios {
+        let mut c_cc = [0u8; 32];
+        c_cc[0] = 3; c_cc[1] = 0x1c; c_cc[2] = 0x7f; c_cc[3] = 0x15; c_cc[4] = 4; c_cc[6] = 1;
+        Termios { c_iflag: ICRNL | IXON, c_oflag: OPOST | ONLCR, c_cflag: CS8 | CREAD | B38400, c_lflag: ISIG | ICANON | ECHO | ECHOE | ECHOK | IEXTEN,
+            c_line: 0, c_cc, c_ispeed: B38400, c_ospeed: B38400 }
+    }
+    /// The console mode these settings ask for. The terminal always maps CR and NL as
+    /// a terminal emulator does; only ICANON, ECHO and ISIG change what it does.
+    pub fn mode(&self) -> u8 {
+        let mut m = 0;
+        if self.c_lflag & ICANON == 0 { m |= MODE_RAW; }
+        if self.c_lflag & ECHO == 0 { m |= MODE_NO_ECHO; }
+        if self.c_lflag & ISIG == 0 { m |= MODE_NO_SIGNALS; }
+        m
+    }
+    /// These settings with the local flags that `mode` says.
+    pub fn with_mode(mut self, mode: u8) -> Termios {
+        let set = |flag: u32, on: bool, l: &mut u32| if on { *l |= flag } else { *l &= !flag };
+        set(ICANON, mode & MODE_RAW == 0, &mut self.c_lflag);
+        set(ECHO, mode & MODE_NO_ECHO == 0, &mut self.c_lflag);
+        set(ISIG, mode & MODE_NO_SIGNALS == 0, &mut self.c_lflag);
+        self
+    }
+    /// `cfmakeraw`.
+    pub fn make_raw(&mut self) {
+        self.c_iflag &= !(0o1 | 0o2 | 0o10 | 0o40 | 0o100 | 0o200 | ICRNL | IXON);
+        self.c_oflag &= !OPOST;
+        self.c_lflag &= !(ECHO | 0o100 | ICANON | ISIG | IEXTEN);
+        self.c_cflag = (self.c_cflag & !(0o60 | 0o400)) | CS8;
+        self.c_cc[6] = 1;
+        self.c_cc[5] = 0;
+    }
+}
+
+// ---- processes ---------------------------------------------------------------------------
+
+pub const SIGKILL: c_int = 9;
+pub const WNOHANG: c_int = 1;
+
+/// A wait status (`<sys/wait.h>`) for a run that ended: `exit(code)` gives
+/// `WIFEXITED` with `WEXITSTATUS == code & 0xff`; a run that ended without a status
+/// (killed, or it crashed) reads as ended by SIGKILL.
+pub fn wait_status(status: Option<u32>) -> c_int {
+    match status { Some(code) => ((code & 0xff) << 8) as c_int, None => SIGKILL }
+}
+
+/// The words of a `system()` command line: split at blanks, with '...' and "..."
+/// keeping blanks (and `\` before `"`, `\` or `$` inside double quotes, and before any
+/// character outside quotes). No variables, globs, pipes or redirections: there is no
+/// shell, the first word is the program.
+pub fn command_words(line: &[u8]) -> Vec<Vec<u8>> {
+    let mut words = Vec::new();
+    let mut word: Option<Vec<u8>> = None;
+    let mut quote = 0u8;
+    let mut i = 0;
+    while i < line.len() {
+        let b = line[i];
+        match (quote, b) {
+            (0, b' ' | b'\t' | b'\n') => { if let Some(w) = word.take() { words.push(w); } }
+            (0, b'\'' | b'"') => { quote = b; word.get_or_insert_with(Vec::new); }
+            (0, b'\\') if i + 1 < line.len() => { i += 1; word.get_or_insert_with(Vec::new).push(line[i]); }
+            (b'"', b'\\') if matches!(line.get(i + 1), Some(b'"' | b'\\' | b'$')) => { i += 1; word.get_or_insert_with(Vec::new).push(line[i]); }
+            (q, b) if q != 0 && b == q => quote = 0,
+            _ => word.get_or_insert_with(Vec::new).push(b),
+        }
+        i += 1;
+    }
+    if let Some(w) = word { words.push(w); }
+    words
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn termios_modes() {
+        use super::*;
+        let t = Termios::cooked();
+        assert_eq!(t.mode(), 0);
+        let mut raw = t;
+        raw.make_raw();
+        assert_eq!(raw.mode(), MODE_RAW | MODE_NO_ECHO | MODE_NO_SIGNALS);
+        assert_eq!(t.with_mode(raw.mode()).mode(), raw.mode());
+        // A password prompt: cooked, no echo.
+        let mut quiet = t;
+        quiet.c_lflag &= !ECHO;
+        assert_eq!(quiet.mode(), MODE_NO_ECHO);
+        assert_eq!(raw.with_mode(0).mode(), 0);
+        assert_eq!(core::mem::size_of::<Termios>(), 60);
+    }
     use super::*;
+
+    #[test]
+    fn wait_statuses_read_as_posix_says() {
+        let exited = wait_status(Some(7));
+        assert_eq!(exited & 0x7f, 0, "WIFEXITED");
+        assert_eq!((exited & 0xff00) >> 8, 7, "WEXITSTATUS");
+        assert_eq!(wait_status(Some(256 + 3)) >> 8, 3);
+        let killed = wait_status(None);
+        assert!(((killed & 0xffff) as u32).wrapping_sub(1) < 0xff, "WIFSIGNALED");
+        assert_eq!(killed & 0x7f, SIGKILL, "WTERMSIG");
+    }
+
+    #[test]
+    fn command_lines_split_like_a_shell() {
+        let w = |s: &[u8]| command_words(s).into_iter().map(|w| String::from_utf8(w).unwrap()).collect::<Vec<_>>();
+        assert_eq!(w(b"  stdspawn exit   7 "), ["stdspawn", "exit", "7"]);
+        assert_eq!(w(br#"rg "two words" 'single "q"' a\ b "" x"#), ["rg", "two words", r#"single "q""#, "a b", "", "x"]);
+        assert_eq!(w(br#"p "a\"b\\c""#), ["p", r#"a"b\c"#]);
+        assert!(w(b"   ").is_empty());
+    }
 
     #[test]
     fn select_sets_round_trip_through_poll() {

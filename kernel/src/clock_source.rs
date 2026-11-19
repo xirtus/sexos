@@ -53,7 +53,22 @@ pub fn invoke(pd:&ProtectionDomain,slot:u64,kind:u64,a:u64,b:u64,c:u64)->[u64;5]
 /// Civil time for every task ([`w::civil`]): the last CMOS reading plus the ticks
 /// since it, read again once a minute. `(reading ms, tick at reading)`, 0 when none.
 static CIVIL:spin::Mutex<(u64,u64)>=spin::Mutex::new((0,0));
-pub fn civil_ms()->Result<u64,u64>{
+/// How far civil time is set from the CMOS reading (ms), by the time keeper.
+static OFFSET:core::sync::atomic::AtomicI64=core::sync::atomic::AtomicI64::new(0);
+/// The one domain that may set civil time (sexnet, which asks the network); 0: none.
+pub static KEEPER:core::sync::atomic::AtomicU32=core::sync::atomic::AtomicU32::new(0);
+pub fn civil_ms()->Result<u64,u64>{Ok(cmos_ms()?.saturating_add_signed(OFFSET.load(Ordering::Acquire)))}
+/// Civil time becomes `ms`: the CMOS stays as it is, every later reading is offset.
+pub fn set_civil(caller:u32,ms:u64)->u64{
+    let keeper=KEEPER.load(Ordering::Acquire);
+    if keeper==0||caller!=keeper{return w::DENIED;}
+    if !(w::MIN_SECONDS*1000..=w::MAX_SECONDS*1000).contains(&ms){return w::INVALID;}
+    let Ok(base)=cmos_ms()else{return w::BUSY};
+    let offset=ms as i64-base as i64;let before=OFFSET.swap(offset,Ordering::AcqRel);
+    crate::serial_println!("[clock.civil.set] pd={} ms={} step_ms={} offset_ms={}",caller,ms,offset-before,offset);
+    0
+}
+fn cmos_ms()->Result<u64,u64>{
     let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
     let mut held=CIVIL.lock();
     if held.0==0||now.saturating_sub(held.1)>=w::civil::RESAMPLE_MS{

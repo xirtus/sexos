@@ -1,0 +1,2718 @@
+// SPDX-License-Identifier: GPL-3.0-only
+//! polyops: the line-based text command language that Polyamour's Python API
+//! (`apps/polyamour/python/polyamour`) speaks, and the scene text format.
+//!
+//! A Python script cannot link into the Polyamour process, so the `polyamour`
+//! (and `bpy`) package turns API calls into polyops lines; Polyamour starts
+//! `python` with the script, reads the stream (a file today, an IPC channel
+//! later) and executes it here against a [`Scene`]. The full description is in
+//! `docs/handoff/POLYAMOUR_PYTHON_2026_11_14.md`; in short:
+//!
+//! * UTF-8 lines. The first line that is not blank or a comment is `polyops 1`.
+//!   A token starting with `#` (unquoted) ends the line as a comment.
+//! * A line is a command word then tokens separated by blanks. A token is bare
+//!   text or `"quoted text"` (escapes `\" \\ \n \t \r`), or a mix (`a"b c"`).
+//!   `key=value` (key an identifier, `=` outside quotes) is an option; the rest
+//!   are positional arguments. Lists are comma-separated (`location=1,2,3`).
+//! * Objects, meshes, materials and collections are named by their names, or by
+//!   a handle: `as=$7` on a creating command binds the unquoted token `$7` to
+//!   what it created, whatever unique name it got (`Cube.001`). Quoted text is
+//!   never a handle, never `none`, never an option.
+//! * `@ID` before the command word asks for a reply line `@ID ok ...`; queries
+//!   (`get`, `list`, `exists`, `ping`) always reply. Replies are collected in
+//!   [`RunReport::replies`], so a one-way stream works today and the same lines
+//!   can travel back over a channel later.
+//! * `end` marks a complete stream, `abort MESSAGE` fails the whole run (the
+//!   Python side writes it when the script raised).
+//!
+//! [`run`] is atomic: it executes on a copy and only replaces the scene when every
+//! line succeeded, so the caller records one undo step per script (push the
+//! scene on the [`crate::undo::UndoStack`] before calling). [`Session`] is the
+//! line-at-a-time engine underneath, for a live channel. [`scene_to_polyops`]
+//! writes a scene back out as commands; running that text on [`Scene::new`]
+//! rebuilds an equal scene (images and textures excepted).
+//!
+//! ## Rigging commands
+//!
+//! Vertex groups, shape keys, armatures, poses, constraints and lattices
+//! (see `script/rig.rs`). Lists of three booleans are written `1,0,1`;
+//! enum values are Blender's identifiers in lower case.
+//!
+//! * `vgroup MESH NAME indices=0,1,2 weights=1,0.5,0.25 remove=7,8` creates
+//!   the group when missing and sets weights (one weight for all, or one
+//!   per index; `weights=` alone covers every vertex). `vgroup_remove MESH NAME`.
+//! * `shape_key MESH NAME verts=... value= slider_min= slider_max=
+//!   relative_key=KEY vertex_group=G|none mute= interpolation=linear|cardinal|catmull_rom|bspline
+//!   frame= from_mix=` creates the key when missing (the first key is the
+//!   Basis) and sets its options. `shape_key_remove MESH NAME`,
+//!   `shape_key_settings MESH use_relative= eval_time=`.
+//! * `armature_new NAME as=$h`; `add_armature NAME data=ARM` (placement
+//!   options as for `add_object`; without `data=` a new armature is made).
+//! * `bone ARM NAME head=x,y,z tail=x,y,z roll= parent=BONE|none use_connect=
+//!   use_deform= use_inherit_rotation= inherit_scale=full|fix_shear|average|none|none_legacy|aligned
+//!   use_local_location= use_relative_parent= envelope_distance= envelope_weight=
+//!   head_radius= tail_radius= use_envelope_multiply= bbone_segments=` creates or edits a bone
+//!   (armature space, like edit bones). `bone_collection ARM NAME BONE...`.
+//! * `lattice_new NAME points=u,v,w interpolation=t[,t,t] use_outside= verts=...`,
+//!   `lattice_set LATTICE ...` and `add_lattice NAME data=LATTICE`.
+//! * `parent CHILD PARENT bone=BONE type=object|armature|bone keep_transform=`;
+//!   `parent_with_armature MESH ARMATURE weights=none|empty|envelope|automatic`
+//!   (Ctrl+P > With ... Weights).
+//! * `pose_bone OBJ BONE location= rotation_mode=quaternion|axis_angle|xyz|...
+//!   quaternion=w,x,y,z euler=x,y,z axis_angle=a,x,y,z scale= ik_lock=
+//!   ik_stiffness= ik_stretch= ik_limit= ik_min= ik_max=`.
+//! * `constraint_add OBJ TYPE [bone=BONE] ...` (types `copy_location`,
+//!   `copy_rotation`, `copy_scale`, `copy_transforms`, `limit_distance`,
+//!   `limit_location`, `limit_rotation`, `limit_scale`, `maintain_volume`,
+//!   `transform`, `child_of`, `track_to`, `damped_track`, `locked_track`,
+//!   `stretch_to`, `floor`, `armature`, `ik`) replies with the index;
+//!   `constraint_set OBJ INDEX [bone=] ...`, `constraint_remove OBJ INDEX [bone=]`,
+//!   `constraint_target OBJ INDEX TARGET subtarget= weight= [bone=]` (Armature
+//!   constraint targets) and `constraint_set_inverse OBJ INDEX [bone=] clear=`
+//!   (Child Of). Common options: `name= influence= mute= owner_space= target_space=`
+//!   (`world`, `pose`, `local_with_parent`, `local`, `custom`) `space_object=
+//!   space_subtarget= target= subtarget= head_tail=`; the type's own options
+//!   use Blender's Python names (`use_xyz=`, `invert=`, `mix_mode=`, `euler_order=`,
+//!   `track_axis=track_negative_z`, `up_axis=y`, `rest_length=`, `pole_target=`,
+//!   `pole_subtarget=`, `pole_angle=`, `chain_count=`, `inverse_matrix=` 16 numbers
+//!   column-major, ...).
+//! * Modifiers: every deform modifier takes `vertex_group=NAME|none` and
+//!   `invert_vertex_group=`; `Armature`, `Hook`, `Lattice`, `Warp`,
+//!   `VertexWeightEdit`, `VertexWeightMix` and `VertexWeightProximity` take
+//!   their fields by name (`falloff_type=smooth`, `mix_mode=avg`, ...).
+//!
+//! # Shader node trees
+//!
+//! A tree belongs to an OWNER, written `material NAME`, `world` or
+//! `group NAME` (a node group in `Scene::node_groups`). Nodes are named by
+//! their unique name in the tree, sockets by identifier (`Base Color`,
+//! `Value_001`, `Socket_0`) or, failing that, by name.
+//!
+//! * `node_tree OWNER [name=TREE] [clear=1] [active=NODE|none] [remove=1]`
+//!   creates the owner's tree (and a group of that name) if missing; replies
+//!   with the tree name.
+//! * `node_interface group NAME input|output SOCKET TYPE [default=V] [min=]
+//!   [max=]` adds a group socket; Group nodes using the group follow.
+//!   TYPE is `float int bool vector color string shader geometry object
+//!   collection image material texture rotation matrix menu virtual`.
+//! * `node_add OWNER IDNAME [name=] [label=] [location=x,y] [width=] [mute=1]
+//!   [hide=1] [select=1] [color=r,g,b] [unknown=1]` adds a node of a
+//!   registered type (`ShaderNodeMath`); `unknown=1` allows an unregistered
+//!   idname with no sockets, which `node_socket OWNER NODE in|out ID TYPE
+//!   [name=]` then adds. Replies with the node's unique name.
+//! * `node_set OWNER NODE TARGET VALUE [type=T]`: TARGET is `prop:NAME`
+//!   (`prop:operation MULTIPLY`, `prop:use_clamp 1`, `prop:image NAME`,
+//!   `prop:node_tree GROUP`, `prop:color_ramp
+//!   LINEAR;RGB;0,0,0,0,1;1,1,1,1,1`, `prop:mapping x,y,x,y;x,y,...` one
+//!   curve per `;` part; `type=` (enum bool int float vector color string
+//!   ramp curve image object group collection material) adds a property the
+//!   node type does not have), `in:SOCKET` / `out:SOCKET` (a number, a list,
+//!   a quoted string, or an object/image name), `hide:in:SOCKET` /
+//!   `hide:out:SOCKET`, `parent FRAME|none`, `name`, or one of the `node_add`
+//!   options. Image names that do not resolve leave the slot empty.
+//! * `node_link OWNER FROM FROM_SOCKET TO TO_SOCKET [muted=1]` replaces any
+//!   link into TO_SOCKET; `node_unlink OWNER NODE INPUT`; `node_remove OWNER
+//!   NODE`.
+//!
+//! [`scene_to_polyops`] writes groups (interfaces first), then material and
+//! world trees, after the objects, writing only properties and socket values
+//! that differ from a new node's.
+use crate::math::{Quat, Vec2, Vec3};
+use crate::mesh::{Face, Mesh};
+use crate::modifiers::{BooleanOp, CastType, DecimateMode, Modifier, RemeshMode, ShrinkwrapMethod, SimpleDeformMode};
+use crate::scene::{unique_name, AreaShape, Camera, Light, LightKind, Material, MaterialEevee, Object, ObjectData, PanoramaType, RenderMethod, Scene, SensorFit, Transform, VolumeSettings};
+use base64::Engine;
+use std::collections::{BTreeMap, HashMap};
+use std::fmt::{self, Write as _};
+
+mod rig;
+mod nodes;
+mod gp;
+pub mod bpy;
+pub mod live;
+mod physics;
+
+/// The language version this module reads and writes (`polyops 1`).
+pub const VERSION: u32 = 1;
+
+/// Meshes with more vertices than this are written with `b64:` arrays.
+const BASE64_ABOVE: usize = 64;
+
+/// A failed line: 1-based line number and what went wrong.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScriptError {
+    pub line: usize,
+    pub message: String,
+}
+
+impl fmt::Display for ScriptError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "line {}: {}", self.line, self.message)
+    }
+}
+
+impl std::error::Error for ScriptError {}
+
+/// Property widget type declared by a script or WASM add-on via `ui_prop`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddonPropKind {
+    Float,
+    Int,
+    Bool,
+    Vec3,
+    Color,
+    String,
+    Button,
+}
+
+/// One declarative UI control inside an [`AddonPanel`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct AddonProp {
+    pub key: String,
+    pub kind: AddonPropKind,
+    pub label: String,
+    pub default: Option<String>,
+    pub min: Option<f32>,
+    pub max: Option<f32>,
+}
+
+/// Declarative operator/add-on panel registered via `ui_panel` and `ui_prop`,
+/// rendered natively by Polyamour's 3D View Sidebar without widget FFI.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AddonPanel {
+    pub id: String,
+    pub label: String,
+    pub category: String,
+    pub props: Vec<AddonProp>,
+}
+
+/// Per-session host compute, datablock, mesh-size and output caps so untrusted
+/// scripts and `.wasm` add-ons cannot exhaust host CPU or RAM via host calls.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SessionLimits {
+    /// Maximum commands executed in this session (`None` = unlimited).
+    pub max_commands: Option<usize>,
+    /// Maximum objects/datablocks created in this session (`None` = unlimited).
+    pub max_created_objects: Option<usize>,
+    /// Maximum cumulative reply bytes produced across the session (`None` = unlimited).
+    pub max_reply_bytes: Option<usize>,
+    /// Maximum vertices in any created, edited or `mesh_get` mesh (`None` = unlimited).
+    pub max_mesh_vertices: Option<usize>,
+    /// Maximum faces in any created, edited or `mesh_get` mesh (`None` = unlimited).
+    pub max_mesh_faces: Option<usize>,
+}
+
+impl SessionLimits {
+    pub const fn unlimited() -> Self {
+        Self {
+            max_commands: None,
+            max_created_objects: None,
+            max_reply_bytes: None,
+            max_mesh_vertices: None,
+            max_mesh_faces: None,
+        }
+    }
+
+    /// Default caps for confined `.wasm` add-ons and untrusted script runs.
+    pub const fn sandboxed() -> Self {
+        Self {
+            max_commands: Some(10_000),
+            max_created_objects: Some(2_048),
+            max_reply_bytes: Some(16 << 20),
+            max_mesh_vertices: Some(200_000),
+            max_mesh_faces: Some(200_000),
+        }
+    }
+
+    fn check_mesh(&self, verts: usize, faces: usize, what: &str) -> Result<(), String> {
+        if let Some(max_v) = self.max_mesh_vertices {
+            if verts > max_v {
+                return Err(format!("{what} has {verts} vertices, exceeding limit of {max_v}"));
+            }
+        }
+        if let Some(max_f) = self.max_mesh_faces {
+            if faces > max_f {
+                return Err(format!("{what} has {faces} faces, exceeding limit of {max_f}"));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// What a successful run did.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RunReport {
+    /// The version named by the `polyops` header.
+    pub version: u32,
+    /// Commands executed (header, blank and comment lines not counted).
+    pub commands: usize,
+    /// Names of the objects created, in order (deleted ones included).
+    pub created: Vec<String>,
+    /// Reply lines for queries and `@ID` requests, in order.
+    pub replies: Vec<String>,
+    /// `render key=value` settings, stored for the caller (the scene has no
+    /// render settings of its own yet).
+    pub render: BTreeMap<String, String>,
+    /// Declarative UI panels registered by `ui_panel` and `ui_prop`.
+    pub panels: Vec<AddonPanel>,
+    /// True when the stream ended with `end`. A Python-produced stream that is
+    /// not complete was cut short (the interpreter died) and should not be trusted.
+    pub complete: bool,
+}
+
+/// Run a polyops program against `scene`, all or nothing: on error the scene is
+/// left untouched and the error names the line.
+pub fn run(scene: &mut Scene, src: &str) -> Result<RunReport, ScriptError> {
+    run_with_limits(scene, src, SessionLimits::unlimited())
+}
+
+/// Like [`run`], enforcing [`SessionLimits`] on host commands, creations,
+/// mesh sizes, and reply output.
+pub fn run_with_limits(scene: &mut Scene, src: &str, limits: SessionLimits) -> Result<RunReport, ScriptError> {
+    let mut work = scene.clone();
+    let mut session = Session::with_limits(limits);
+    for line in src.lines() {
+        session.exec_line(&mut work, line)?;
+    }
+    let report = session.finish()?;
+    *scene = work;
+    Ok(report)
+}
+
+/// Quote `s` as a polyops token when it is not a safe bare word.
+pub fn quote(s: &str) -> String {
+    let bare = !s.is_empty()
+        && s != "none"
+        && !s.starts_with(['$', '#', '@'])
+        && s.chars().all(|c| c.is_alphanumeric() || "_-.+:/!?%&*<>^~'[]()".contains(c));
+    if bare {
+        return s.to_string();
+    }
+    let mut o = String::with_capacity(s.len() + 2);
+    o.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            '\n' => o.push_str("\\n"),
+            '\t' => o.push_str("\\t"),
+            '\r' => o.push_str("\\r"),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
+// ---------------------------------------------------------------------------
+// Tokens
+
+/// One token of a line.
+#[derive(Clone, Debug, PartialEq)]
+struct Token {
+    /// `Some(key)` for `key=value` options.
+    key: Option<String>,
+    /// The (unescaped) value.
+    text: String,
+    /// Any part of the value was quoted: never a handle, keyword or option.
+    quoted: bool,
+}
+
+impl Token {
+    fn is_word(&self, w: &str) -> bool {
+        !self.quoted && self.text == w
+    }
+}
+
+fn is_ident(s: &str) -> bool {
+    let mut c = s.chars();
+    matches!(c.next(), Some(ch) if ch.is_ascii_alphabetic() || ch == '_') && c.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+}
+
+fn tokenize(line: &str) -> Result<Vec<Token>, String> {
+    let mut out = Vec::new();
+    let mut it = line.chars().peekable();
+    loop {
+        while it.peek().is_some_and(|c| c.is_whitespace()) {
+            it.next();
+        }
+        match it.peek() {
+            None | Some('#') => break,
+            _ => {}
+        }
+        let mut tok = Token { key: None, text: String::new(), quoted: false };
+        while let Some(&c) = it.peek() {
+            if c.is_whitespace() {
+                break;
+            }
+            it.next();
+            match c {
+                '"' => {
+                    tok.quoted = true;
+                    loop {
+                        match it.next() {
+                            None => return Err("unterminated quoted string".into()),
+                            Some('"') => break,
+                            Some('\\') => match it.next() {
+                                Some('"') => tok.text.push('"'),
+                                Some('\\') => tok.text.push('\\'),
+                                Some('n') => tok.text.push('\n'),
+                                Some('t') => tok.text.push('\t'),
+                                Some('r') => tok.text.push('\r'),
+                                Some(e) => return Err(format!("unknown escape \\{e} in a quoted string")),
+                                None => return Err("unterminated quoted string".into()),
+                            },
+                            Some(ch) => tok.text.push(ch),
+                        }
+                    }
+                }
+                '=' if tok.key.is_none() && !tok.quoted && is_ident(&tok.text) => tok.key = Some(std::mem::take(&mut tok.text)),
+                // Nodes modifier inputs: `input:Name=v`, `input:"Some Name"=v`.
+                '=' if tok.key.is_none() && tok.text.starts_with("input:") => {
+                    tok.key = Some(std::mem::take(&mut tok.text));
+                    tok.quoted = false;
+                }
+                c => tok.text.push(c),
+            }
+        }
+        out.push(tok);
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
+// Value parsing
+
+type Res<T> = Result<T, String>;
+
+fn num(t: &str) -> Res<f32> {
+    match t.trim().parse::<f32>() {
+        Ok(v) if v.is_finite() => Ok(v),
+        _ => Err(format!("'{t}' is not a finite number")),
+    }
+}
+
+fn uint(t: &str) -> Res<u32> {
+    t.trim().parse::<u32>().map_err(|_| format!("'{t}' is not a whole number"))
+}
+
+fn boolean(t: &str) -> Res<bool> {
+    match t.to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => Err(format!("'{t}' is not a boolean (1/0, true/false)")),
+    }
+}
+
+/// A comma-separated float list, or `b64:` little-endian f32s.
+fn floats(t: &str) -> Res<Vec<f32>> {
+    if let Some(b) = t.strip_prefix("b64:") {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(b.trim()).map_err(|e| format!("bad base64: {e}"))?;
+        if bytes.len() % 4 != 0 {
+            return Err("base64 float array length is not a multiple of 4".into());
+        }
+        let v: Vec<f32> = bytes.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        if v.iter().any(|x| !x.is_finite()) {
+            return Err("base64 float array holds a non-finite number".into());
+        }
+        return Ok(v);
+    }
+    if t.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    t.split(',').map(num).collect()
+}
+
+/// A comma-separated index list, or `b64:` little-endian u32s.
+fn uints(t: &str) -> Res<Vec<u32>> {
+    if let Some(b) = t.strip_prefix("b64:") {
+        let bytes = base64::engine::general_purpose::STANDARD.decode(b.trim()).map_err(|e| format!("bad base64: {e}"))?;
+        if bytes.len() % 4 != 0 {
+            return Err("base64 index array length is not a multiple of 4".into());
+        }
+        return Ok(bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect());
+    }
+    if t.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    t.split(',').map(uint).collect()
+}
+
+/// Polygons: `0,1,2;2,3,0` or `b64:` u32 runs of `count, v0 .. v(count-1)`.
+fn polygons(t: &str) -> Res<Vec<Vec<u32>>> {
+    if t.starts_with("b64:") {
+        let flat = uints(t)?;
+        let mut out = Vec::new();
+        let mut i = 0;
+        while i < flat.len() {
+            let n = flat[i] as usize;
+            let end = i + 1 + n;
+            if end > flat.len() {
+                return Err("base64 face array ends inside a face".into());
+            }
+            out.push(flat[i + 1..end].to_vec());
+            i = end;
+        }
+        return Ok(out);
+    }
+    t.split(';').filter(|f| !f.trim().is_empty()).map(uints).collect()
+}
+
+fn vec3_of(v: &[f32], what: &str) -> Res<Vec3> {
+    match v {
+        [x, y, z] => Ok(Vec3::new(*x, *y, *z)),
+        _ => Err(format!("{what} needs 3 numbers, got {}", v.len())),
+    }
+}
+
+/// Values of a property: positional tokens, each possibly comma-separated.
+fn values(toks: &[Token]) -> Res<Vec<f32>> {
+    let mut v = Vec::new();
+    for t in toks {
+        v.extend(floats(&t.text)?);
+    }
+    Ok(v)
+}
+
+fn fmt_f(v: f32) -> String {
+    // Rust prints the shortest text that reads back to the same f32.
+    format!("{v}")
+}
+
+fn fmt_list(v: &[f32]) -> String {
+    v.iter().map(|x| fmt_f(*x)).collect::<Vec<_>>().join(",")
+}
+
+fn b64_f32(v: &[f32]) -> String {
+    let bytes: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+    format!("b64:{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+fn b64_u32(v: &[u32]) -> String {
+    let bytes: Vec<u8> = v.iter().flat_map(|x| x.to_le_bytes()).collect();
+    format!("b64:{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// Blender XYZ Euler angles (radians) of a rotation.
+pub fn quat_to_euler_xyz(q: Quat) -> [f32; 3] {
+    let q = q.normalize();
+    let (x, y, z, w) = (q.x, q.y, q.z, q.w);
+    let r00 = 1.0 - 2.0 * (y * y + z * z);
+    let r10 = 2.0 * (x * y + w * z);
+    let r20 = 2.0 * (x * z - w * y);
+    let r21 = 2.0 * (y * z + w * x);
+    let r22 = 1.0 - 2.0 * (x * x + y * y);
+    let sy = (-r20).clamp(-1.0, 1.0);
+    if sy.abs() > 0.99999 {
+        // Gimbal lock: fold Z into X.
+        let r01 = 2.0 * (x * y - w * z);
+        let r11 = 1.0 - 2.0 * (x * x + z * z);
+        return [(sy.signum() * r01).atan2(r11), sy.asin(), 0.0];
+    }
+    [r21.atan2(r22), sy.asin(), r10.atan2(r00)]
+}
+
+/// Vertical field of view for a lens in millimetres on Blender's 36 mm sensor
+/// (sensor fit along the 16:9 frame's width, as [`Camera::default`]).
+fn lens_to_fov(lens: f32) -> f32 {
+    2.0 * (18.0 / lens * 9.0 / 16.0).atan()
+}
+
+fn fov_to_lens(fov: f32) -> f32 {
+    18.0 * 9.0 / 16.0 / (fov * 0.5).tan()
+}
+
+// ---------------------------------------------------------------------------
+// Commands
+
+/// A parsed command line: positional arguments and options, with every option
+/// required to be used (so a typo is an error, not silently ignored).
+struct Cmd {
+    name: String,
+    pos: Vec<Token>,
+    opts: Vec<(String, Token, bool)>,
+}
+
+impl Cmd {
+    fn opt(&mut self, key: &str) -> Option<Token> {
+        let o = self.opts.iter_mut().find(|o| o.0 == key)?;
+        o.2 = true;
+        Some(o.1.clone())
+    }
+    fn f(&mut self, key: &str) -> Res<Option<f32>> {
+        self.opt(key).map(|t| num(&t.text).map_err(|e| format!("{key}: {e}"))).transpose()
+    }
+    fn u(&mut self, key: &str) -> Res<Option<u32>> {
+        self.opt(key).map(|t| uint(&t.text).map_err(|e| format!("{key}: {e}"))).transpose()
+    }
+    fn b(&mut self, key: &str) -> Res<Option<bool>> {
+        self.opt(key).map(|t| boolean(&t.text).map_err(|e| format!("{key}: {e}"))).transpose()
+    }
+    fn v3(&mut self, key: &str) -> Res<Option<Vec3>> {
+        self.opt(key).map(|t| floats(&t.text).and_then(|v| vec3_of(&v, key))).transpose()
+    }
+    fn list(&mut self, key: &str) -> Res<Option<Vec<f32>>> {
+        self.opt(key).map(|t| floats(&t.text).map_err(|e| format!("{key}: {e}"))).transpose()
+    }
+    fn arg(&self, i: usize, what: &str) -> Res<&Token> {
+        self.pos.get(i).ok_or_else(|| format!("{} needs {what}", self.name))
+    }
+    fn max_args(&self, n: usize) -> Res<()> {
+        if self.pos.len() > n {
+            return Err(format!("{} takes {n} argument(s), got {}", self.name, self.pos.len()));
+        }
+        Ok(())
+    }
+    /// Error on options nobody asked for.
+    fn done(&self) -> Res<()> {
+        match self.opts.iter().find(|o| !o.2) {
+            Some(o) => Err(format!("unknown option '{}' for {}", o.0, self.name)),
+            None => Ok(()),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum Handle {
+    Object(String),
+    Mesh(usize),
+    Material(usize),
+    Collection(usize),
+    Armature(usize),
+    Lattice(usize),
+}
+
+fn scene_datablock_count(scene: &Scene) -> usize {
+    scene.objects.len()
+        + scene.meshes.len()
+        + scene.materials.len()
+        + scene.collections.len()
+        + scene.armatures.len()
+        + scene.lattices.len()
+        + scene.node_groups.len()
+}
+
+/// Conservative upper bound on `(vertices, faces)` produced by evaluating
+/// `stack` on `base`, checked BEFORE running modifiers when [`SessionLimits`]
+/// bounds mesh sizes so stacked Subdivision/Array modifiers cannot OOM the host.
+fn estimate_evaluated_bounds(base: &Mesh, stack: &[Modifier]) -> (usize, usize) {
+    let mut v = base.vertex_count().max(1);
+    let mut f = base.face_count();
+    for m in stack {
+        match m {
+            Modifier::Subdivision { levels, .. } => {
+                let mult = 4usize.saturating_pow(*levels);
+                f = f.saturating_mul(mult);
+                v = v.saturating_add(f.saturating_mul(2));
+            }
+            Modifier::Array { count, .. } => {
+                let c = (*count as usize).max(1);
+                v = v.saturating_mul(c);
+                f = f.saturating_mul(c);
+            }
+            Modifier::Mirror { x, y, z, .. } => {
+                let mult = 1usize << (*x as usize + *y as usize + *z as usize);
+                v = v.saturating_mul(mult);
+                f = f.saturating_mul(mult);
+            }
+            Modifier::Solidify { .. } => {
+                v = v.saturating_mul(2);
+                f = f.saturating_mul(3);
+            }
+            Modifier::Screw { steps, iterations, .. } => {
+                let mult = (*steps as usize).max(1).saturating_mul((*iterations as usize).max(1));
+                v = v.saturating_mul(mult);
+                f = f.saturating_mul(mult);
+            }
+            Modifier::Remesh { octree_depth, .. } => {
+                let side = 1usize.checked_shl(*octree_depth).unwrap_or(usize::MAX);
+                let cells = side.saturating_mul(side).saturating_mul(6);
+                v = v.max(cells);
+                f = f.max(cells);
+            }
+            _ => {}
+        }
+    }
+    (v, f)
+}
+
+/// The line-at-a-time interpreter behind [`run`]. Feed it lines with
+/// [`Session::exec_line`]; it keeps handles and the header state between lines.
+#[derive(Debug, Default)]
+pub struct Session {
+    line: usize,
+    handles: HashMap<String, Handle>,
+    report: RunReport,
+    header: bool,
+    ended: bool,
+    limits: SessionLimits,
+    reply_bytes: usize,
+    created_datablocks: usize,
+    /// What Blender keeps outside the scene (mode, selection, actions...), for the live `bpy` API.
+    pub bpy: bpy::State,
+}
+
+impl Session {
+    pub fn new() -> Session {
+        Session::default()
+    }
+
+    /// Create a [`Session`] enforcing [`SessionLimits`] on host compute and memory.
+    pub fn with_limits(limits: SessionLimits) -> Session {
+        Session { limits, ..Session::default() }
+    }
+
+    pub fn limits(&self) -> SessionLimits {
+        self.limits
+    }
+
+    /// Cumulative bytes of replies emitted across this session (unaffected by [`Session::take_replies`]).
+    pub fn reply_bytes(&self) -> usize {
+        self.reply_bytes
+    }
+
+    /// Execute one line. Errors carry this line's number.
+    pub fn exec_line(&mut self, scene: &mut Scene, text: &str) -> Result<(), ScriptError> {
+        self.line += 1;
+        let line = self.line;
+        self.exec(scene, text).map_err(|message| ScriptError { line, message })
+    }
+
+    /// Reply lines produced so far, taken out of the report (for a live channel).
+    pub fn take_replies(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.report.replies)
+    }
+
+    /// Declarative UI panels registered since the last call, taken out of the report.
+    pub fn take_panels(&mut self) -> Vec<AddonPanel> {
+        std::mem::take(&mut self.report.panels)
+    }
+
+    /// The report; fails when no `polyops` header was seen.
+    pub fn finish(self) -> Result<RunReport, ScriptError> {
+        if !self.header {
+            return Err(ScriptError { line: self.line.max(1), message: "missing 'polyops 1' header".into() });
+        }
+        Ok(self.report)
+    }
+
+    fn exec(&mut self, scene: &mut Scene, text: &str) -> Res<()> {
+        let mut toks = tokenize(text)?;
+        if toks.is_empty() {
+            return Ok(());
+        }
+        if self.ended {
+            return Err("text after 'end'".into());
+        }
+        let id = match toks.first() {
+            Some(t) if !t.quoted && t.key.is_none() && t.text.starts_with('@') => {
+                let id = toks.remove(0).text[1..].to_string();
+                if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
+                    return Err("a request id is @ then letters, digits, '_' or '-'".into());
+                }
+                Some(id)
+            }
+            _ => None,
+        };
+        let head = toks.first().ok_or("a request id needs a command")?;
+        if head.quoted || head.key.is_some() {
+            return Err("a line starts with a command word".into());
+        }
+        let name = toks.remove(0).text;
+        if !self.header {
+            if name != "polyops" {
+                return Err("the first command must be 'polyops 1'".into());
+            }
+            let v = match toks.as_slice() {
+                [t] if t.key.is_none() => uint(&t.text)?,
+                _ => return Err("expected 'polyops 1'".into()),
+            };
+            if v == 0 || v > VERSION {
+                return Err(format!("polyops version {v} is not supported (this Polyamour reads version {VERSION})"));
+            }
+            self.header = true;
+            self.report.version = v;
+            return Ok(());
+        }
+        if let Some(max_cmds) = self.limits.max_commands {
+            if self.report.commands >= max_cmds {
+                return Err(format!("command limit exceeded ({max_cmds})"));
+            }
+        }
+        let mut cmd = Cmd { name, pos: Vec::new(), opts: Vec::new() };
+        for t in toks {
+            match t.key.clone() {
+                Some(k) => {
+                    if cmd.opts.iter().any(|o| o.0 == k) {
+                        return Err(format!("option '{k}' given twice"));
+                    }
+                    cmd.opts.push((k, Token { key: None, ..t }, false));
+                }
+                None => cmd.pos.push(t),
+            }
+        }
+        let before_db = scene_datablock_count(scene);
+        let before_created = self.report.created.len();
+        let query = matches!(cmd.name.as_str(), "get" | "mesh_get" | "list" | "exists" | "ping");
+        let reply = self.command(scene, &mut cmd)?;
+        cmd.done()?;
+        let db_growth = scene_datablock_count(scene).saturating_sub(before_db);
+        let obj_growth = self.report.created.len().saturating_sub(before_created);
+        self.created_datablocks = self.created_datablocks.saturating_add(db_growth.max(obj_growth));
+        if let Some(max_obj) = self.limits.max_created_objects {
+            if self.created_datablocks > max_obj {
+                return Err(format!("created datablock limit exceeded ({max_obj})"));
+            }
+        }
+        self.report.commands += 1;
+        let prefix = id.as_ref().map(|i| format!("@{i} ")).unwrap_or_default();
+        // Queries always answer; other commands only when asked with @ID (a
+        // creating command then answers with the unique name it gave).
+        if query || id.is_some() {
+            let formatted = match reply {
+                Some(r) if !r.is_empty() => format!("{prefix}ok {r}"),
+                _ => format!("{prefix}ok"),
+            };
+            self.reply_bytes = self.reply_bytes.saturating_add(formatted.len());
+            if let Some(max_bytes) = self.limits.max_reply_bytes {
+                if self.reply_bytes > max_bytes {
+                    return Err(format!("reply output limit exceeded ({max_bytes} bytes)"));
+                }
+            }
+            self.report.replies.push(formatted);
+        }
+        Ok(())
+    }
+
+    // --- name resolution ------------------------------------------------------
+
+    fn handle(&self, t: &Token) -> Res<Option<&Handle>> {
+        if t.quoted || !t.text.starts_with('$') {
+            return Ok(None);
+        }
+        self.handles.get(&t.text).map(Some).ok_or_else(|| format!("handle {} is not bound", t.text))
+    }
+
+    fn object(&self, scene: &Scene, t: &Token) -> Res<usize> {
+        let name = match self.handle(t)? {
+            Some(Handle::Object(n)) => n.as_str(),
+            Some(_) => return Err(format!("{} is not an object", t.text)),
+            None => t.text.as_str(),
+        };
+        scene.find_object(name).ok_or_else(|| format!("no object named '{name}'"))
+    }
+
+    fn mesh(&self, scene: &Scene, t: &Token) -> Res<usize> {
+        match self.handle(t)? {
+            Some(Handle::Mesh(i)) => return Ok(*i),
+            Some(Handle::Object(_)) => {}
+            Some(_) => return Err(format!("{} is not a mesh", t.text)),
+            None => {}
+        }
+        if let Ok(o) = self.object(scene, t) {
+            return match scene.objects[o].data {
+                ObjectData::Mesh(m) => Ok(m),
+                _ => Err(format!("object '{}' has no mesh", scene.objects[o].name)),
+            };
+        }
+        scene.mesh_names.iter().position(|n| *n == t.text).ok_or_else(|| format!("no object or mesh named '{}'", t.text))
+    }
+
+    fn material(&self, scene: &Scene, t: &Token) -> Res<usize> {
+        match self.handle(t)? {
+            Some(Handle::Material(i)) => Ok(*i),
+            Some(_) => Err(format!("{} is not a material", t.text)),
+            None => scene.materials.iter().position(|m| m.name == t.text).ok_or_else(|| format!("no material named '{}'", t.text)),
+        }
+    }
+
+    fn collection(&self, scene: &Scene, t: &Token) -> Res<usize> {
+        match self.handle(t)? {
+            Some(Handle::Collection(i)) => Ok(*i),
+            Some(_) => Err(format!("{} is not a collection", t.text)),
+            None => scene.collections.iter().position(|c| c.name == t.text).ok_or_else(|| format!("no collection named '{}'", t.text)),
+        }
+    }
+
+    /// Bind `as=$H` if given.
+    fn bind(&mut self, cmd: &mut Cmd, h: Handle) -> Res<()> {
+        if let Some(t) = cmd.opt("as") {
+            if t.quoted || !t.text.starts_with('$') || t.text.len() < 2 {
+                return Err("as= takes a handle like $1".into());
+            }
+            self.handles.insert(t.text, h);
+        }
+        Ok(())
+    }
+
+    fn rename_handles(&mut self, old: &str, new: &str) {
+        for h in self.handles.values_mut() {
+            if matches!(h, Handle::Object(n) if n == old) {
+                *h = Handle::Object(new.to_string());
+            }
+        }
+    }
+
+    // --- dispatch ----------------------------------------------------------------
+
+    fn command(&mut self, scene: &mut Scene, cmd: &mut Cmd) -> Res<Option<String>> {
+        match cmd.name.as_str() {
+            "polyops" => Err("the header appears twice".into()),
+            "end" => {
+                cmd.max_args(0)?;
+                self.ended = true;
+                self.report.complete = true;
+                Ok(None)
+            }
+            "abort" => {
+                let msg: Vec<&str> = cmd.pos.iter().map(|t| t.text.as_str()).collect();
+                Err(format!("script aborted: {}", if msg.is_empty() { "no reason given".into() } else { msg.join(" ") }))
+            }
+            "ping" => {
+                cmd.max_args(0)?;
+                Ok(Some(format!("polyops {VERSION}")))
+            }
+            "scene" => {
+                cmd.max_args(0)?;
+                if let Some(t) = cmd.opt("name") {
+                    scene.name = t.text;
+                }
+                if let Some(v) = cmd.opt("frame_start") {
+                    scene.frame_start = v.text.parse().map_err(|_| "frame_start: not an integer")?;
+                }
+                if let Some(v) = cmd.opt("frame_end") {
+                    scene.frame_end = v.text.parse().map_err(|_| "frame_end: not an integer")?;
+                }
+                if let Some(v) = cmd.f("fps")? {
+                    scene.fps = v;
+                }
+                Ok(None)
+            }
+            "world" => {
+                cmd.max_args(0)?;
+                if let Some(c) = cmd.v3("color")? {
+                    scene.world.color = c;
+                }
+                if let Some(s) = cmd.f("strength")? {
+                    scene.world.strength = s;
+                }
+                set_volume_opts(cmd, &mut scene.world.volume)?;
+                Ok(None)
+            }
+            "render" => {
+                cmd.max_args(0)?;
+                for o in &mut cmd.opts {
+                    o.2 = true;
+                    self.report.render.insert(o.0.clone(), o.1.text.clone());
+                }
+                Ok(None)
+            }
+            "add_primitive" => self.add_primitive(scene, cmd),
+            "mesh_new" => {
+                cmd.max_args(1)?;
+                let name = cmd.arg(0, "a mesh name")?.text.clone();
+                let m = parse_mesh(cmd, Mesh::new(), &self.limits)?;
+                let i = scene.add_mesh(&name, m);
+                self.bind(cmd, Handle::Mesh(i))?;
+                Ok(Some(quote(&scene.mesh_names[i])))
+            }
+            "add_mesh" => {
+                cmd.max_args(1)?;
+                let name = given_name(cmd, true).unwrap_or_else(|| "Mesh".into());
+                let m = parse_mesh(cmd, Mesh::new(), &self.limits)?;
+                let i = scene.add_mesh_object(&name, m);
+                self.created(scene, cmd, i).map(Some)
+            }
+            "add_object" | "add_empty" => {
+                cmd.max_args(1)?;
+                let name = given_name(cmd, true).unwrap_or_else(|| "Empty".into());
+                let data = match cmd.opt("data") {
+                    Some(t) if t.is_word("none") => ObjectData::Empty,
+                    Some(t) if cmd.name == "add_object" => ObjectData::Mesh(self.mesh(scene, &t)?),
+                    Some(_) => return Err("add_empty takes no data=".into()),
+                    None => ObjectData::Empty,
+                };
+                let i = scene.add_object(Object::new(&name, data));
+                self.created(scene, cmd, i).map(Some)
+            }
+            "light_add" => {
+                cmd.max_args(1)?;
+                let kind = cmd.pos.first().map(|t| t.text.to_ascii_lowercase()).unwrap_or_else(|| "point".into());
+                let (kind, default_name, power) = match kind.as_str() {
+                    "point" => (LightKind::Point, "Point", 1000.0),
+                    "sun" => (LightKind::Sun, "Sun", 1.0),
+                    "spot" => (LightKind::Spot { angle: 45f32.to_radians(), blend: 0.15 }, "Spot", 1000.0),
+                    "area" => (LightKind::Area { size: 1.0 }, "Area", 1000.0),
+                    k => return Err(format!("unknown light type '{k}' (point, sun, spot, area)")),
+                };
+                let name = given_name(cmd, false).unwrap_or_else(|| default_name.into());
+                let mut light = Light { kind, power, ..Light::default() };
+                set_light_opts(cmd, &mut light)?;
+                let i = scene.add_object(Object::new(&name, ObjectData::Light(light)));
+                self.created(scene, cmd, i).map(Some)
+            }
+            "camera_add" => {
+                cmd.max_args(0)?;
+                let name = given_name(cmd, false).unwrap_or_else(|| "Camera".into());
+                let mut cam = Camera::default();
+                if let Some(v) = cmd.f("fov")? {
+                    cam.fov_y = v;
+                }
+                if let Some(v) = cmd.f("lens")? {
+                    cam.fov_y = lens_to_fov(v);
+                }
+                if let Some(v) = cmd.f("ortho_scale")? {
+                    cam.ortho_scale = Some(v);
+                }
+                if let Some(v) = cmd.f("near")? {
+                    cam.near = v;
+                }
+                if let Some(v) = cmd.f("far")? {
+                    cam.far = v;
+                }
+                for key in CAMERA_OPTS {
+                    if let Some(t) = cmd.opt(key) {
+                        set_camera_prop(&mut cam, key, std::slice::from_ref(&t))?;
+                    }
+                }
+                let i = scene.add_object(Object::new(&name, ObjectData::Camera(cam)));
+                let make_active = cmd.b("active")?;
+                let r = self.created(scene, cmd, i)?;
+                if make_active.unwrap_or(scene.active_camera.is_none()) {
+                    scene.active_camera = Some(i);
+                }
+                Ok(Some(r))
+            }
+            "mesh_set" => {
+                cmd.max_args(1)?;
+                let mi = self.mesh(scene, cmd.arg(0, "an object or mesh")?)?;
+                let m = parse_mesh(cmd, Mesh::new(), &self.limits)?;
+                scene.meshes[mi] = m;
+                Ok(None)
+            }
+            "mesh_edit" => self.mesh_edit(scene, cmd),
+            "set" => self.set(scene, cmd),
+            "get" => self.get(scene, cmd).map(Some),
+            "parent" => {
+                self.parent_command(scene, cmd)?;
+                Ok(None)
+            }
+            "material_new" => {
+                cmd.max_args(1)?;
+                let base = cmd.arg(0, "a material name")?.text.clone();
+                let name = unique_name(&base, |n| scene.materials.iter().any(|m| m.name == n));
+                let mut m = Material { name, ..Material::default() };
+                set_material_opts(cmd, &mut m)?;
+                set_material_render_opts(cmd, &mut m)?;
+                let i = scene.add_material(m);
+                self.bind(cmd, Handle::Material(i))?;
+                Ok(Some(quote(&scene.materials[i].name)))
+            }
+            "material_set" => {
+                cmd.max_args(1)?;
+                let i = self.material(scene, cmd.arg(0, "a material")?)?;
+                if let Some(n) = cmd.opt("name") {
+                    let taken = |x: &str| scene.materials.iter().enumerate().any(|(j, m)| j != i && m.name == x);
+                    scene.materials[i].name = unique_name(&n.text, taken);
+                }
+                set_material_opts(cmd, &mut scene.materials[i])?;
+                set_material_render_opts(cmd, &mut scene.materials[i])?;
+                Ok(None)
+            }
+            "material_assign" => {
+                cmd.max_args(2)?;
+                let o = self.object(scene, cmd.arg(0, "an object")?)?;
+                let m = self.material(scene, cmd.arg(1, "a material")?)?;
+                let slots = &mut scene.objects[o].materials;
+                match cmd.u("slot")? {
+                    Some(s) => {
+                        let s = s as usize;
+                        if s > 255 {
+                            return Err("slot must be below 256".into());
+                        }
+                        if slots.len() <= s {
+                            slots.resize(s + 1, m);
+                        }
+                        slots[s] = m;
+                    }
+                    None => slots.push(m),
+                }
+                Ok(None)
+            }
+            "material_clear" => {
+                cmd.max_args(1)?;
+                let o = self.object(scene, cmd.arg(0, "an object")?)?;
+                scene.objects[o].materials.clear();
+                Ok(None)
+            }
+            "modifier_add" => {
+                cmd.max_args(2)?;
+                let o = self.object(scene, cmd.arg(0, "an object")?)?;
+                let ty = cmd.arg(1, "a modifier type")?.text.clone();
+                let m = modifier_opts(cmd, default_modifier(&ty)?)?;
+                scene.objects[o].modifiers.push(m);
+                Ok(Some((scene.objects[o].modifiers.len() - 1).to_string()))
+            }
+            "modifier_set" | "modifier_remove" => {
+                cmd.max_args(2)?;
+                let o = self.object(scene, cmd.arg(0, "an object")?)?;
+                let idx = uint(&cmd.arg(1, "a modifier index")?.text)? as usize;
+                let n = scene.objects[o].modifiers.len();
+                if idx >= n {
+                    return Err(format!("modifier {idx} does not exist ('{}' has {n})", scene.objects[o].name));
+                }
+                if cmd.name == "modifier_remove" {
+                    scene.objects[o].modifiers.remove(idx);
+                } else {
+                    let m = modifier_opts(cmd, scene.objects[o].modifiers[idx].clone())?;
+                    scene.objects[o].modifiers[idx] = m;
+                }
+                Ok(None)
+            }
+            "modifier_clear" => {
+                cmd.max_args(1)?;
+                let o = self.object(scene, cmd.arg(0, "an object")?)?;
+                scene.objects[o].modifiers.clear();
+                Ok(None)
+            }
+            "select" | "select_add" | "deselect" => {
+                let objs = cmd.pos.iter().map(|t| self.object(scene, t)).collect::<Res<Vec<_>>>()?;
+                match cmd.name.as_str() {
+                    "select" => scene.selected.clear(),
+                    "deselect" if objs.is_empty() => scene.selected.clear(),
+                    _ => {}
+                }
+                for o in objs {
+                    if cmd.name == "deselect" {
+                        scene.selected.retain(|&s| s != o);
+                    } else if !scene.selected.contains(&o) {
+                        scene.selected.push(o);
+                    }
+                }
+                Ok(None)
+            }
+            "select_all" => {
+                cmd.max_args(0)?;
+                scene.selected = (0..scene.objects.len()).collect();
+                Ok(None)
+            }
+            "active" | "active_camera" => {
+                cmd.max_args(1)?;
+                let t = cmd.arg(0, "an object or none")?.clone();
+                let o = if t.is_word("none") { None } else { Some(self.object(scene, &t)?) };
+                if cmd.name == "active" {
+                    scene.active_object = o;
+                } else {
+                    if let Some(i) = o {
+                        if !matches!(scene.objects[i].data, ObjectData::Camera(_)) {
+                            return Err(format!("'{}' is not a camera", scene.objects[i].name));
+                        }
+                    }
+                    scene.active_camera = o;
+                }
+                Ok(None)
+            }
+            "delete" => {
+                if cmd.pos.is_empty() {
+                    return Err("delete needs objects".into());
+                }
+                let mut objs = cmd.pos.iter().map(|t| self.object(scene, t)).collect::<Res<Vec<_>>>()?;
+                objs.sort_unstable();
+                objs.dedup();
+                for &o in objs.iter().rev() {
+                    let gone = scene.remove_object(o).name;
+                    self.handles.retain(|_, h| !matches!(h, Handle::Object(n) if *n == gone));
+                }
+                Ok(None)
+            }
+            "collection_new" => {
+                cmd.max_args(1)?;
+                let name = cmd.arg(0, "a collection name")?.text.clone();
+                let parent = cmd.opt("parent").map(|t| self.collection(scene, &t)).transpose()?;
+                let i = scene.add_collection(&name, parent);
+                if let Some(v) = cmd.b("visible")? {
+                    scene.collections[i].visible = v;
+                }
+                self.bind(cmd, Handle::Collection(i))?;
+                Ok(Some(quote(&scene.collections[i].name)))
+            }
+            "collection_set" => {
+                cmd.max_args(1)?;
+                let i = self.collection(scene, cmd.arg(0, "a collection")?)?;
+                if let Some(t) = cmd.opt("parent") {
+                    let p = if t.is_word("none") { None } else { Some(self.collection(scene, &t)?) };
+                    let mut c = p;
+                    while let Some(ci) = c {
+                        if ci == i {
+                            return Err("collection parenting would make a cycle".into());
+                        }
+                        c = scene.collections[ci].parent;
+                    }
+                    scene.collections[i].parent = p;
+                }
+                if let Some(n) = cmd.opt("name") {
+                    let taken = |x: &str| scene.collections.iter().enumerate().any(|(j, c)| j != i && c.name == x);
+                    scene.collections[i].name = unique_name(&n.text, taken);
+                }
+                if let Some(v) = cmd.b("visible")? {
+                    scene.collections[i].visible = v;
+                }
+                Ok(None)
+            }
+            "link" => {
+                cmd.max_args(2)?;
+                let o = self.object(scene, cmd.arg(0, "an object")?)?;
+                let c = self.collection(scene, cmd.arg(1, "a collection")?)?;
+                scene.objects[o].collection = c;
+                Ok(None)
+            }
+            "list" => {
+                cmd.max_args(1)?;
+                let what = cmd.arg(0, "objects, meshes, materials, collections or selected")?.text.clone();
+                let names: Vec<String> = match what.as_str() {
+                    "objects" => scene.objects.iter().map(|o| quote(&o.name)).collect(),
+                    "meshes" => scene.mesh_names.iter().map(|n| quote(n)).collect(),
+                    "materials" => scene.materials.iter().map(|m| quote(&m.name)).collect(),
+                    "collections" => scene.collections.iter().map(|c| quote(&c.name)).collect(),
+                    "selected" => scene.selected.iter().map(|&i| quote(&scene.objects[i].name)).collect(),
+                    w => return Err(format!("cannot list '{w}'")),
+                };
+                Ok(Some(names.join(" ")))
+            }
+            "mesh_get" => {
+                cmd.max_args(1)?;
+                let target = cmd.arg(0, "an object or mesh")?.clone();
+                let evaluated = cmd.b("evaluated")?.unwrap_or(false);
+                if evaluated {
+                    let oi = self.object(scene, &target)?;
+                    let mi = match scene.objects[oi].data {
+                        ObjectData::Mesh(m) => m,
+                        _ => return Err(format!("object '{}' has no mesh", scene.objects[oi].name)),
+                    };
+                    let (est_v, est_f) = estimate_evaluated_bounds(&scene.meshes[mi], &scene.objects[oi].modifiers);
+                    self.limits.check_mesh(est_v, est_f, "evaluated mesh estimate")?;
+                    let eval_mesh = scene
+                        .evaluated_mesh(oi)
+                        .ok_or_else(|| format!("object '{}' has no mesh", scene.objects[oi].name))?;
+                    self.limits.check_mesh(eval_mesh.vertex_count(), eval_mesh.face_count(), "evaluated mesh")?;
+                    Ok(Some(mesh_to_options(&eval_mesh).trim_start().to_string()))
+                } else {
+                    let mi = self.mesh(scene, &target)?;
+                    let base = &scene.meshes[mi];
+                    self.limits.check_mesh(base.vertex_count(), base.face_count(), "mesh")?;
+                    Ok(Some(mesh_to_options(base).trim_start().to_string()))
+                }
+            }
+            "ui_panel" => {
+                cmd.max_args(1)?;
+                let id = cmd.arg(0, "a panel id")?.text.clone();
+                if id.is_empty() {
+                    return Err("panel id cannot be empty".into());
+                }
+                let label = cmd.opt("label").map(|t| t.text).unwrap_or_else(|| id.clone());
+                let category = cmd.opt("category").map(|t| t.text).unwrap_or_else(|| "Tool".into());
+                if let Some(existing) = self.report.panels.iter_mut().find(|p| p.id == id) {
+                    existing.label = label;
+                    existing.category = category;
+                } else {
+                    self.report.panels.push(AddonPanel { id: id.clone(), label, category, props: Vec::new() });
+                }
+                Ok(Some(quote(&id)))
+            }
+            "ui_prop" => {
+                cmd.max_args(2)?;
+                let panel_id = cmd.arg(0, "a panel id")?.text.clone();
+                let key = cmd.arg(1, "a property key")?.text.clone();
+                if key.is_empty() {
+                    return Err("property key cannot be empty".into());
+                }
+                let kind_str = cmd.opt("kind").map(|t| t.text.to_ascii_lowercase()).unwrap_or_else(|| "float".into());
+                let kind = match kind_str.as_str() {
+                    "float" => AddonPropKind::Float,
+                    "int" => AddonPropKind::Int,
+                    "bool" => AddonPropKind::Bool,
+                    "vec3" => AddonPropKind::Vec3,
+                    "color" => AddonPropKind::Color,
+                    "string" => AddonPropKind::String,
+                    "button" => AddonPropKind::Button,
+                    k => return Err(format!("unknown ui_prop kind '{k}' (float, int, bool, vec3, color, string, button)")),
+                };
+                let label = cmd.opt("label").map(|t| t.text).unwrap_or_else(|| key.clone());
+                let default = cmd.opt("default").map(|t| t.text);
+                let min = cmd.f("min")?;
+                let max = cmd.f("max")?;
+                if let (Some(lo), Some(hi)) = (min, max) {
+                    if lo > hi {
+                        return Err(format!("ui_prop min ({lo}) cannot exceed max ({hi})"));
+                    }
+                }
+                let panel = self
+                    .report
+                    .panels
+                    .iter_mut()
+                    .find(|p| p.id == panel_id)
+                    .ok_or_else(|| format!("no ui_panel named '{panel_id}'"))?;
+                let prop = AddonProp { key: key.clone(), kind, label, default, min, max };
+                if let Some(existing) = panel.props.iter_mut().find(|p| p.key == key) {
+                    *existing = prop;
+                } else {
+                    panel.props.push(prop);
+                }
+                Ok(None)
+            }
+            "exists" => {
+                cmd.max_args(1)?;
+                let t = cmd.arg(0, "an object")?;
+                Ok(Some(if self.object(scene, t).is_ok() { "1" } else { "0" }.into()))
+            }
+            name if rig::COMMANDS.contains(&name) => self.rig_command(scene, cmd),
+            name if gp::COMMANDS.contains(&name) => self.gp_command(scene, cmd),
+            name if bpy::COMMANDS.contains(&name) => self.bpy_command(scene, cmd),
+            name if physics::COMMANDS.contains(&name) => self.physics_command(scene, cmd),
+            "node_tree" | "node_interface" | "node_add" | "node_socket" | "node_set" | "node_link" | "node_unlink" | "node_remove" => self.node_command(scene, cmd),
+            other => Err(format!("unknown command '{other}'")),
+        }
+    }
+
+    /// Placement options shared by every creating command, then Blender's
+    /// add behaviour: the new object is the active and only selected one.
+    fn created(&mut self, scene: &mut Scene, cmd: &mut Cmd, i: usize) -> Res<String> {
+        let o = &mut scene.objects[i];
+        if let Some(v) = cmd.v3("location")? {
+            o.transform.location = v;
+        }
+        if let Some(r) = cmd.v3("rotation")? {
+            o.transform.rotation = Quat::from_euler_xyz(r.x, r.y, r.z);
+        }
+        if let Some(q) = cmd.list("quaternion")? {
+            o.transform.rotation = quat_of(&q)?;
+        }
+        if let Some(s) = cmd.list("scale")? {
+            o.transform.scale = scale_of(&s)?;
+        }
+        if let Some(v) = cmd.b("visible")? {
+            scene.objects[i].visible = v;
+        }
+        if let Some(t) = cmd.opt("collection") {
+            scene.objects[i].collection = self.collection(scene, &t)?;
+        }
+        let name = scene.objects[i].name.clone();
+        self.bind(cmd, Handle::Object(name.clone()))?;
+        scene.active_object = Some(i);
+        scene.selected = vec![i];
+        self.report.created.push(name.clone());
+        Ok(quote(&name))
+    }
+
+    fn add_primitive(&mut self, scene: &mut Scene, cmd: &mut Cmd) -> Res<Option<String>> {
+        use crate::primitives as p;
+        cmd.max_args(1)?;
+        let kind = cmd.arg(0, "a primitive type")?.text.to_ascii_lowercase();
+        let (mesh, default_name) = match kind.as_str() {
+            "cube" => {
+                self.limits.check_mesh(8, 6, "primitive cube")?;
+                (p::cube(cmd.f("size")?.unwrap_or(2.0)), "Cube")
+            }
+            "plane" => {
+                self.limits.check_mesh(4, 1, "primitive plane")?;
+                (p::plane(cmd.f("size")?.unwrap_or(2.0)), "Plane")
+            }
+            "grid" => {
+                let (x, y) = (cmd.u("x_subdivisions")?.unwrap_or(10).min(4096), cmd.u("y_subdivisions")?.unwrap_or(10).min(4096));
+                let est_v = (x as usize + 1).saturating_mul(y as usize + 1);
+                let est_f = (x as usize).saturating_mul(y as usize);
+                self.limits.check_mesh(est_v, est_f, "primitive grid")?;
+                (p::grid(x, y, cmd.f("size")?.unwrap_or(2.0)), "Grid")
+            }
+            "uv_sphere" | "sphere" => {
+                let (s, r) = (cmd.u("segments")?.unwrap_or(32).min(4096), cmd.u("rings")?.unwrap_or(16).min(4096));
+                let est_v = (s as usize + 1).saturating_mul(r as usize + 1);
+                let est_f = (s as usize).saturating_mul(r as usize);
+                self.limits.check_mesh(est_v, est_f, "primitive uv_sphere")?;
+                (p::uv_sphere(s, r, cmd.f("radius")?.unwrap_or(1.0)), "Sphere")
+            }
+            "ico_sphere" | "icosphere" => {
+                let sub = cmd.u("subdivisions")?.unwrap_or(2);
+                if sub > 8 {
+                    return Err("subdivisions must be 8 or fewer".into());
+                }
+                let est_f = 20usize.saturating_mul(4usize.saturating_pow(sub));
+                self.limits.check_mesh(est_f / 2 + 2, est_f, "primitive ico_sphere")?;
+                (p::ico_sphere(sub, cmd.f("radius")?.unwrap_or(1.0)), "Icosphere")
+            }
+            "cylinder" => {
+                let s = cmd.u("segments")?.unwrap_or(32).min(4096);
+                self.limits.check_mesh(s as usize * 2, s as usize + 2, "primitive cylinder")?;
+                (p::cylinder(s, cmd.f("radius")?.unwrap_or(1.0), cmd.f("depth")?.unwrap_or(2.0)), "Cylinder")
+            }
+            "cone" => {
+                let s = cmd.u("segments")?.unwrap_or(32).min(4096);
+                self.limits.check_mesh(s as usize * 2, s as usize + 2, "primitive cone")?;
+                let (r1, r2) = (cmd.f("radius1")?.unwrap_or(1.0), cmd.f("radius2")?.unwrap_or(0.0));
+                (p::cone(s, r1, r2, cmd.f("depth")?.unwrap_or(2.0)), "Cone")
+            }
+            "torus" => {
+                let (a, b) = (cmd.u("major_segments")?.unwrap_or(48).min(4096), cmd.u("minor_segments")?.unwrap_or(12).min(4096));
+                let est = (a as usize).saturating_mul(b as usize);
+                self.limits.check_mesh(est, est, "primitive torus")?;
+                (p::torus(a, b, cmd.f("major_radius")?.unwrap_or(1.0), cmd.f("minor_radius")?.unwrap_or(0.25)), "Torus")
+            }
+            k => return Err(format!("unknown primitive '{k}' (cube, plane, grid, uv_sphere, ico_sphere, cylinder, cone, torus)")),
+        };
+        self.limits.check_mesh(mesh.vertex_count(), mesh.face_count(), "primitive mesh")?;
+        let name = given_name(cmd, false).unwrap_or_else(|| default_name.into());
+        let i = scene.add_mesh_object(&name, mesh);
+        self.created(scene, cmd, i).map(Some)
+    }
+
+    fn mesh_edit(&mut self, scene: &mut Scene, cmd: &mut Cmd) -> Res<Option<String>> {
+        let mi = self.mesh(scene, cmd.arg(0, "an object or mesh")?)?;
+        let op = cmd.arg(1, "an operation")?.text.clone();
+        let rest = values(&cmd.pos[2..]);
+        let m = &mut scene.meshes[mi];
+        let n = m.positions.len();
+        let picked: Vec<usize> = match cmd.opt("indices") {
+            Some(t) => {
+                let idx = uints(&t.text)?;
+                if let Some(&bad) = idx.iter().find(|&&v| v as usize >= n) {
+                    return Err(format!("vertex {bad} does not exist (the mesh has {n})"));
+                }
+                idx.into_iter().map(|v| v as usize).collect()
+            }
+            None => (0..n).collect(),
+        };
+        let center = cmd.v3("center")?.unwrap_or(Vec3::ZERO);
+        match op.as_str() {
+            "translate_verts" => {
+                let d = vec3_of(&rest?, "translate_verts")?;
+                for &i in &picked {
+                    m.positions[i] += d;
+                }
+            }
+            "scale_verts" => {
+                let s = scale_of(&rest?)?;
+                for &i in &picked {
+                    m.positions[i] = center + (m.positions[i] - center).mul_elem(s);
+                }
+            }
+            "rotate_verts" => {
+                let r = vec3_of(&rest?, "rotate_verts")?;
+                let q = Quat::from_euler_xyz(r.x, r.y, r.z);
+                for &i in &picked {
+                    m.positions[i] = center + q.rotate(m.positions[i] - center);
+                }
+            }
+            "set_verts" => {
+                let p = cmd.list("verts")?.ok_or("set_verts needs verts=")?;
+                if p.len() != picked.len() * 3 {
+                    return Err(format!("set_verts: {} numbers for {} vertices", p.len(), picked.len()));
+                }
+                for (k, &i) in picked.iter().enumerate() {
+                    m.positions[i] = Vec3::new(p[3 * k], p[3 * k + 1], p[3 * k + 2]);
+                }
+            }
+            "flip_normals" => m.flip_normals(),
+            "shade_smooth" | "shade_flat" => {
+                for f in &mut m.faces {
+                    f.smooth = op == "shade_smooth";
+                }
+            }
+            "weld" => {
+                let d = rest?.first().copied().unwrap_or(1e-4);
+                m.weld(d);
+            }
+            "set_material" => {
+                let slot = rest?.first().copied().ok_or("set_material needs a slot")?;
+                if slot < 0.0 || slot > 255.0 || slot.fract() != 0.0 {
+                    return Err("slot must be a whole number below 256".into());
+                }
+                let faces = match cmd.opt("faces") {
+                    Some(t) => uints(&t.text)?.into_iter().map(|f| f as usize).collect(),
+                    None => (0..m.faces.len()).collect::<Vec<_>>(),
+                };
+                for f in faces {
+                    m.faces.get_mut(f).ok_or_else(|| format!("face {f} does not exist"))?.material = slot as u16;
+                }
+            }
+            o => return Err(format!("unknown mesh_edit operation '{o}'")),
+        }
+        if !matches!(op.as_str(), "translate_verts" | "scale_verts" | "rotate_verts" | "weld" | "set_material") {
+            cmd.max_args(2)?;
+        }
+        Ok(None)
+    }
+
+    fn set_parent(&mut self, scene: &mut Scene, child: usize, p: &Token, keep: bool) -> Res<()> {
+        let parent = if p.is_word("none") { None } else { Some(self.object(scene, p)?) };
+        let mut c = parent;
+        let mut guard = 0;
+        while let Some(ci) = c {
+            if ci == child {
+                return Err("parenting would make a cycle".into());
+            }
+            c = scene.objects[ci].parent;
+            guard += 1;
+            if guard > scene.objects.len() {
+                break;
+            }
+        }
+        let world = scene.world_matrix(child);
+        scene.objects[child].parent = parent;
+        if keep {
+            let local = match parent {
+                Some(pi) => scene.world_matrix(pi).inverse() * world,
+                None => world,
+            };
+            scene.objects[child].transform = Transform::from_matrix(&local);
+        }
+        Ok(())
+    }
+
+    /// Split `Obj.prop` at its last dot (property names have none).
+    fn target(&self, scene: &Scene, cmd: &Cmd) -> Res<(usize, String)> {
+        let t = cmd.arg(0, "OBJECT.property")?;
+        let (obj, prop) = t.text.rsplit_once('.').ok_or_else(|| format!("'{}' is not OBJECT.property", t.text))?;
+        let tok = Token { key: None, text: obj.to_string(), quoted: t.quoted };
+        Ok((self.object(scene, &tok)?, prop.to_string()))
+    }
+
+    fn set(&mut self, scene: &mut Scene, cmd: &mut Cmd) -> Res<Option<String>> {
+        let (i, prop) = self.target(scene, cmd)?;
+        let args = cmd.pos[1..].to_vec();
+        let one = || -> Res<&Token> {
+            match args.as_slice() {
+                [t] => Ok(t),
+                _ => Err(format!("{prop} takes one value")),
+            }
+        };
+        let v = || values(&args);
+        let o = &mut scene.objects[i];
+        match prop.as_str() {
+            "location" => o.transform.location = vec3_of(&v()?, "location")?,
+            "rotation_euler" => {
+                let r = vec3_of(&v()?, "rotation_euler")?;
+                o.transform.rotation = Quat::from_euler_xyz(r.x, r.y, r.z);
+            }
+            "rotation_quaternion" => o.transform.rotation = quat_of(&v()?)?,
+            "scale" => o.transform.scale = scale_of(&v()?)?,
+            "visible" => o.visible = boolean(&one()?.text)?,
+            "name" => {
+                let old = o.name.clone();
+                let new = one()?.text.clone();
+                if new.is_empty() {
+                    return Err("a name cannot be empty".into());
+                }
+                let new = unique_name(&new, |n| scene.objects.iter().enumerate().any(|(j, x)| j != i && x.name == n));
+                scene.objects[i].name = new.clone();
+                for ob in &mut scene.objects {
+                    ob.modifiers.iter_mut().for_each(|m| m.rename_object_ref(&old, &new));
+                    ob.constraints.iter_mut().for_each(|c| c.rename_object_ref(&old, &new));
+                    for pb in &mut ob.pose {
+                        pb.constraints.iter_mut().for_each(|c| c.rename_object_ref(&old, &new));
+                    }
+                }
+                self.rename_handles(&old, &new);
+            }
+            "collection" => {
+                let c = self.collection(scene, one()?)?;
+                scene.objects[i].collection = c;
+            }
+            "parent" => {
+                let p = one()?.clone();
+                self.set_parent(scene, i, &p, false)?;
+            }
+            "visible_camera" => o.visibility.camera = boolean(&one()?.text)?,
+            "visible_diffuse" => o.visibility.diffuse = boolean(&one()?.text)?,
+            "visible_glossy" => o.visibility.glossy = boolean(&one()?.text)?,
+            "visible_transmission" => o.visibility.transmission = boolean(&one()?.text)?,
+            "visible_volume_scatter" => o.visibility.volume_scatter = boolean(&one()?.text)?,
+            "visible_shadow" => o.visibility.shadow = boolean(&one()?.text)?,
+            "holdout" => o.holdout = boolean(&one()?.text)?,
+            "pass_index" => o.pass_index = uint(&one()?.text)?,
+            "motion" if matches!(args.as_slice(), [t] if t.is_word("none")) => o.motion = None,
+            "motion_location" => o.motion.get_or_insert(o.transform).location = vec3_of(&v()?, "motion_location")?,
+            "motion_rotation_quaternion" => o.motion.get_or_insert(o.transform).rotation = quat_of(&v()?)?,
+            "motion_scale" => o.motion.get_or_insert(o.transform).scale = scale_of(&v()?)?,
+            "focus_object" => {
+                let t = one()?.clone();
+                let f = if t.is_word("none") { None } else { Some(self.object(scene, &t)?) };
+                match &mut scene.objects[i].data {
+                    ObjectData::Camera(c) => c.dof.focus_object = f,
+                    _ => return Err("focus_object is only for cameras".into()),
+                }
+            }
+            _ => match &mut o.data {
+                ObjectData::Light(l) => set_light_prop(l, &prop, &args)?,
+                ObjectData::Camera(c) => set_camera_prop(c, &prop, &args)?,
+                _ => return Err(format!("unknown property '{prop}' for '{}'", o.name)),
+            },
+        }
+        Ok(None)
+    }
+
+    fn get(&self, scene: &Scene, cmd: &mut Cmd) -> Res<String> {
+        cmd.max_args(1)?;
+        let (i, prop) = self.target(scene, cmd)?;
+        let o = &scene.objects[i];
+        let t = &o.transform;
+        Ok(match prop.as_str() {
+            "location" => fmt_vals(&t.location.to_array()),
+            "rotation_euler" => fmt_vals(&quat_to_euler_xyz(t.rotation)),
+            "rotation_quaternion" => fmt_vals(&[t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z]),
+            "scale" => fmt_vals(&t.scale.to_array()),
+            "matrix_world" => fmt_vals(&scene.world_matrix(i).to_cols_array()),
+            "visible" => (o.visible as u8).to_string(),
+            "name" => quote(&o.name),
+            "collection" => quote(&scene.collections[o.collection].name),
+            "parent" => o.parent.map(|p| quote(&scene.objects[p].name)).unwrap_or_else(|| "none".into()),
+            "visible_camera" => (o.visibility.camera as u8).to_string(),
+            "visible_diffuse" => (o.visibility.diffuse as u8).to_string(),
+            "visible_glossy" => (o.visibility.glossy as u8).to_string(),
+            "visible_transmission" => (o.visibility.transmission as u8).to_string(),
+            "visible_volume_scatter" => (o.visibility.volume_scatter as u8).to_string(),
+            "visible_shadow" => (o.visibility.shadow as u8).to_string(),
+            "holdout" => (o.holdout as u8).to_string(),
+            "pass_index" => o.pass_index.to_string(),
+            "type" => match o.data {
+                ObjectData::Empty => "EMPTY",
+                ObjectData::Mesh(_) => "MESH",
+                ObjectData::Camera(_) => "CAMERA",
+                ObjectData::Light(_) => "LIGHT",
+                ObjectData::Armature(_) => "ARMATURE",
+                ObjectData::Lattice(_) => "LATTICE",
+                ObjectData::GreasePencil(_) => "GREASEPENCIL",
+            }
+            .into(),
+            "data" => match o.data {
+                ObjectData::Mesh(m) => quote(&scene.mesh_names[m]),
+                ObjectData::Armature(a) => quote(&scene.armature_names[a]),
+                ObjectData::Lattice(l) => quote(&scene.lattice_names[l]),
+                ObjectData::GreasePencil(g) => quote(&scene.grease_pencil_names[g]),
+                _ => "none".into(),
+            },
+            "vertex_count" | "face_count" => match o.data {
+                ObjectData::Mesh(m) => {
+                    let m = &scene.meshes[m];
+                    (if prop == "vertex_count" { m.vertex_count() } else { m.face_count() }).to_string()
+                }
+                _ => "0".into(),
+            },
+            "materials" => o.materials.iter().map(|&m| quote(&scene.materials[m].name)).collect::<Vec<_>>().join(" "),
+            "modifiers" => o.modifiers.iter().map(|m| m.type_name()).collect::<Vec<_>>().join(" "),
+            _ => match &o.data {
+                ObjectData::Light(l) => match prop.as_str() {
+                    "power" => fmt_f(l.power),
+                    "color" => fmt_vals(&l.color.to_array()),
+                    "radius" => fmt_f(l.radius),
+                    "shape" => shape_name(l.shape).into(),
+                    "size_y" => fmt_f(l.size_y),
+                    "spread" => fmt_f(l.spread),
+                    "max_bounces" => l.max_bounces.to_string(),
+                    "cast_shadow" => (l.cast_shadow as u8).to_string(),
+                    "use_mis" => (l.use_mis as u8).to_string(),
+                    "contact_shadow" => (l.contact_shadow as u8).to_string(),
+                    "contact_shadow_distance" => fmt_f(l.contact_shadow_distance),
+                    "contact_shadow_thickness" => fmt_f(l.contact_shadow_thickness),
+                    _ => return Err(format!("unknown property '{prop}' for light '{}'", o.name)),
+                },
+                ObjectData::Camera(c) => match prop.as_str() {
+                    "fov" => fmt_f(c.fov_y),
+                    "lens" => fmt_f(fov_to_lens(c.fov_y)),
+                    "near" => fmt_f(c.near),
+                    "far" => fmt_f(c.far),
+                    "ortho_scale" => c.ortho_scale.map(fmt_f).unwrap_or_else(|| "none".into()),
+                    "focus_object" => c.dof.focus_object.and_then(|f| scene.objects.get(f)).map(|f| quote(&f.name)).unwrap_or_else(|| "none".into()),
+                    p => camera_opt_value(c, p).ok_or_else(|| format!("unknown property '{prop}' for camera '{}'", o.name))?,
+                },
+                _ => return Err(format!("unknown property '{prop}' for '{}'", o.name)),
+            },
+        })
+    }
+}
+
+/// The new object's name: `name=`, or (`positional`) the first argument; an
+/// empty name counts as none given.
+fn given_name(cmd: &mut Cmd, positional: bool) -> Option<String> {
+    let n = cmd.opt("name").map(|t| t.text).or_else(|| if positional { cmd.pos.first().map(|t| t.text.clone()) } else { None });
+    n.filter(|n| !n.is_empty())
+}
+
+fn fmt_vals(v: &[f32]) -> String {
+    // `+ 0.0` turns -0 into 0 for readers.
+    v.iter().map(|x| fmt_f(*x + 0.0)).collect::<Vec<_>>().join(" ")
+}
+
+/// `w,x,y,z` (Blender's order) to a unit quaternion.
+fn quat_of(v: &[f32]) -> Res<Quat> {
+    match v {
+        [w, x, y, z] => {
+            let q = Quat { x: *x, y: *y, z: *z, w: *w };
+            if (q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w) < 1e-12 {
+                return Err("a rotation quaternion cannot be zero".into());
+            }
+            Ok(q)
+        }
+        _ => Err(format!("a quaternion needs 4 numbers (w x y z), got {}", v.len())),
+    }
+}
+
+/// One number (uniform) or three.
+fn scale_of(v: &[f32]) -> Res<Vec3> {
+    match v {
+        [s] => Ok(Vec3::splat(*s)),
+        _ => vec3_of(v, "scale"),
+    }
+}
+
+fn set_light_opts(cmd: &mut Cmd, l: &mut Light) -> Res<()> {
+    for key in ["power", "color", "radius", "angle", "blend", "size", "shape", "size_y", "spread", "max_bounces", "cast_shadow", "use_mis", "contact_shadow", "contact_shadow_distance", "contact_shadow_thickness"] {
+        if let Some(t) = cmd.opt(key) {
+            set_light_prop(l, key, std::slice::from_ref(&t))?;
+        }
+    }
+    Ok(())
+}
+
+fn shape_name(s: AreaShape) -> &'static str {
+    match s {
+        AreaShape::Square => "square",
+        AreaShape::Rectangle => "rectangle",
+        AreaShape::Disk => "disk",
+        AreaShape::Ellipse => "ellipse",
+    }
+}
+
+fn set_light_prop(l: &mut Light, prop: &str, args: &[Token]) -> Res<()> {
+    let word = || match args {
+        [t] => Ok(t.text.to_ascii_lowercase()),
+        _ => Err(format!("{prop} takes one value")),
+    };
+    match prop {
+        "shape" => {
+            let w = word()?;
+            l.shape = [AreaShape::Square, AreaShape::Rectangle, AreaShape::Disk, AreaShape::Ellipse].into_iter().find(|s| shape_name(*s) == w).ok_or_else(|| format!("unknown area shape '{w}' (square, rectangle, disk, ellipse)"))?;
+            return Ok(());
+        }
+        "cast_shadow" => {
+            l.cast_shadow = boolean(&word()?)?;
+            return Ok(());
+        }
+        "use_mis" => {
+            l.use_mis = boolean(&word()?)?;
+            return Ok(());
+        }
+        "contact_shadow" => {
+            l.contact_shadow = boolean(&word()?)?;
+            return Ok(());
+        }
+        "max_bounces" => {
+            l.max_bounces = uint(&word()?)?;
+            return Ok(());
+        }
+        _ => {}
+    }
+    let v = values(args)?;
+    let one = || match v.as_slice() {
+        [x] => Ok(*x),
+        _ => Err(format!("{prop} takes one number")),
+    };
+    match (prop, &mut l.kind) {
+        ("power", _) => l.power = one()?,
+        ("color", _) => l.color = vec3_of(&v, "color")?,
+        ("radius", _) => l.radius = one()?,
+        ("angle", LightKind::Spot { angle, .. }) => *angle = one()?,
+        ("blend", LightKind::Spot { blend, .. }) => *blend = one()?,
+        ("size", LightKind::Area { size }) => *size = one()?,
+        ("size_y", _) => l.size_y = one()?,
+        ("spread", _) => l.spread = one()?,
+        ("contact_shadow_distance", _) => l.contact_shadow_distance = one()?,
+        ("contact_shadow_thickness", _) => l.contact_shadow_thickness = one()?,
+        ("angle" | "blend", _) => return Err(format!("{prop} is only for spot lights")),
+        ("size", _) => return Err("size is only for area lights".into()),
+        _ => return Err(format!("unknown light property '{prop}'")),
+    }
+    Ok(())
+}
+
+/// Camera options beyond fov/lens/near/far/ortho_scale.
+const CAMERA_OPTS: [&str; 19] = [
+    "sensor_width",
+    "sensor_height",
+    "sensor_fit",
+    "shift_x",
+    "shift_y",
+    "panorama",
+    "fisheye_fov",
+    "fisheye_lens",
+    "latitude_min",
+    "latitude_max",
+    "longitude_min",
+    "longitude_max",
+    "dof",
+    "focus_distance",
+    "fstop",
+    "blades",
+    "aperture_rotation",
+    "aperture_ratio",
+    "lens_type",
+];
+
+fn panorama_name(p: Option<PanoramaType>) -> &'static str {
+    match p {
+        None => "none",
+        Some(PanoramaType::Equirectangular) => "equirectangular",
+        Some(PanoramaType::FisheyeEquidistant) => "fisheye_equidistant",
+        Some(PanoramaType::FisheyeEquisolid) => "fisheye_equisolid",
+    }
+}
+
+fn fit_name(f: SensorFit) -> &'static str {
+    match f {
+        SensorFit::Auto => "auto",
+        SensorFit::Horizontal => "horizontal",
+        SensorFit::Vertical => "vertical",
+    }
+}
+
+/// A camera option's value as text, for `get` and saving.
+fn camera_opt_value(c: &Camera, key: &str) -> Option<String> {
+    Some(match key {
+        "sensor_width" => fmt_f(c.sensor_width),
+        "sensor_height" => fmt_f(c.sensor_height),
+        "sensor_fit" => fit_name(c.sensor_fit).into(),
+        "shift_x" => fmt_f(c.shift_x),
+        "shift_y" => fmt_f(c.shift_y),
+        "panorama" => panorama_name(c.panorama).into(),
+        "fisheye_fov" => fmt_f(c.fisheye_fov),
+        "fisheye_lens" => fmt_f(c.fisheye_lens),
+        "latitude_min" => fmt_f(c.latitude_min),
+        "latitude_max" => fmt_f(c.latitude_max),
+        "longitude_min" => fmt_f(c.longitude_min),
+        "longitude_max" => fmt_f(c.longitude_max),
+        "dof" => (c.dof.enabled as u8).to_string(),
+        "focus_distance" => fmt_f(c.dof.focus_distance),
+        "fstop" => fmt_f(c.dof.fstop),
+        "blades" => c.dof.blades.to_string(),
+        "aperture_rotation" => fmt_f(c.dof.rotation),
+        "aperture_ratio" => fmt_f(c.dof.ratio),
+        _ => return None,
+    })
+}
+
+fn set_camera_prop(c: &mut Camera, prop: &str, args: &[Token]) -> Res<()> {
+    if prop == "ortho_scale" && matches!(args, [t] if t.is_word("none")) {
+        c.ortho_scale = None;
+        return Ok(());
+    }
+    let word = || match args {
+        [t] => Ok(t.text.to_ascii_lowercase()),
+        _ => Err(format!("{prop} takes one value")),
+    };
+    match prop {
+        "panorama" => {
+            let w = word()?;
+            c.panorama = [None, Some(PanoramaType::Equirectangular), Some(PanoramaType::FisheyeEquidistant), Some(PanoramaType::FisheyeEquisolid)].into_iter().find(|p| panorama_name(*p) == w).ok_or_else(|| format!("unknown panorama type '{w}'"))?;
+            return Ok(());
+        }
+        "sensor_fit" => {
+            let w = word()?;
+            c.sensor_fit = [SensorFit::Auto, SensorFit::Horizontal, SensorFit::Vertical].into_iter().find(|f| fit_name(*f) == w).ok_or_else(|| format!("unknown sensor fit '{w}' (auto, horizontal, vertical)"))?;
+            return Ok(());
+        }
+        "dof" => {
+            c.dof.enabled = boolean(&word()?)?;
+            return Ok(());
+        }
+        "blades" => {
+            c.dof.blades = uint(&word()?)?;
+            return Ok(());
+        }
+        "lens_type" => {
+            match word()?.as_str() {
+                "perspective" => {
+                    c.ortho_scale = None;
+                    c.panorama = None;
+                }
+                "orthographic" => {
+                    c.panorama = None;
+                    c.ortho_scale = Some(c.ortho_scale.unwrap_or(6.0 * 9.0 / 16.0));
+                }
+                "panoramic" => c.panorama = Some(c.panorama.unwrap_or_default()),
+                w => return Err(format!("unknown lens type '{w}' (perspective, orthographic, panoramic)")),
+            }
+            return Ok(());
+        }
+        _ => {}
+    }
+    let v = match values(args)?.as_slice() {
+        [x] => *x,
+        _ => return Err(format!("{prop} takes one number")),
+    };
+    match prop {
+        "fov" => c.fov_y = v,
+        "lens" => c.fov_y = lens_to_fov(v),
+        "near" => c.near = v,
+        "far" => c.far = v,
+        "ortho_scale" => c.ortho_scale = Some(v),
+        "sensor_width" => c.sensor_width = v,
+        "sensor_height" => c.sensor_height = v,
+        "shift_x" => c.shift_x = v,
+        "shift_y" => c.shift_y = v,
+        "fisheye_fov" => c.fisheye_fov = v,
+        "fisheye_lens" => c.fisheye_lens = v,
+        "latitude_min" => c.latitude_min = v,
+        "latitude_max" => c.latitude_max = v,
+        "longitude_min" => c.longitude_min = v,
+        "longitude_max" => c.longitude_max = v,
+        "focus_distance" => c.dof.focus_distance = v,
+        "fstop" => c.dof.fstop = v,
+        "aperture_rotation" => c.dof.rotation = v,
+        "aperture_ratio" => c.dof.ratio = v,
+        _ => return Err(format!("unknown camera property '{prop}'")),
+    }
+    Ok(())
+}
+
+fn set_material_opts(cmd: &mut Cmd, m: &mut Material) -> Res<()> {
+    if let Some(c) = cmd.list("base_color")? {
+        m.base_color = match c.as_slice() {
+            [r, g, b] => [*r, *g, *b, 1.0],
+            [r, g, b, a] => [*r, *g, *b, *a],
+            _ => return Err("base_color needs 3 or 4 numbers".into()),
+        };
+    }
+    if let Some(v) = cmd.f("metallic")? {
+        m.metallic = v;
+    }
+    if let Some(v) = cmd.f("roughness")? {
+        m.roughness = v;
+    }
+    if let Some(v) = cmd.v3("emission")? {
+        m.emission = v;
+    }
+    if let Some(v) = cmd.f("emission_strength")? {
+        m.emission_strength = v;
+    }
+    if let Some(v) = cmd.f("ior")? {
+        m.ior = v;
+    }
+    if let Some(v) = cmd.f("transmission")? {
+        m.transmission = v;
+    }
+    if let Some(v) = cmd.b("double_sided")? {
+        m.double_sided = v;
+    }
+    Ok(())
+}
+
+/// Render-only material options: pass index and the volume.
+fn set_material_render_opts(cmd: &mut Cmd, m: &mut Material) -> Res<()> {
+    if let Some(v) = cmd.u("pass_index")? {
+        m.pass_index = v;
+    }
+    if let Some(t) = cmd.opt("render_method") {
+        let w = t.text.to_ascii_lowercase();
+        m.eevee.render_method = RenderMethod::ALL.into_iter().find(|r| r.label().eq_ignore_ascii_case(&w)).ok_or_else(|| format!("unknown render method '{w}' (dithered, blended)"))?;
+    }
+    if let Some(v) = cmd.b("backface_culling")? {
+        m.eevee.backface_culling = v;
+    }
+    if let Some(v) = cmd.b("backface_culling_shadow")? {
+        m.eevee.backface_culling_shadow = v;
+    }
+    if let Some(v) = cmd.b("transparent_shadows")? {
+        m.eevee.transparent_shadows = v;
+    }
+    if let Some(v) = cmd.b("screen_refraction")? {
+        m.eevee.screen_refraction = v;
+    }
+    if let Some(v) = cmd.f("refraction_depth")? {
+        m.eevee.refraction_depth = v;
+    }
+    set_volume_opts(cmd, &mut m.volume)
+}
+
+/// EEVEE material options that differ from the defaults, as ` key=value`s.
+fn eevee_material_opts(e: &MaterialEevee) -> String {
+    let d = MaterialEevee::default();
+    let mut out = String::new();
+    if e.render_method != d.render_method {
+        out += &format!(" render_method={}", e.render_method.label().to_ascii_lowercase());
+    }
+    for (key, a, b) in [("backface_culling", e.backface_culling, d.backface_culling), ("backface_culling_shadow", e.backface_culling_shadow, d.backface_culling_shadow), ("transparent_shadows", e.transparent_shadows, d.transparent_shadows), ("screen_refraction", e.screen_refraction, d.screen_refraction)] {
+        if a != b {
+            out += &format!(" {key}={}", a as u8);
+        }
+    }
+    if e.refraction_depth != d.refraction_depth {
+        out += &format!(" refraction_depth={}", fmt_f(e.refraction_depth));
+    }
+    out
+}
+
+/// `volume=none` or `volume_density=` etc. (any of them creates the volume).
+fn set_volume_opts(cmd: &mut Cmd, vol: &mut Option<VolumeSettings>) -> Res<()> {
+    if let Some(t) = cmd.opt("volume") {
+        if t.is_word("none") {
+            *vol = None;
+        } else {
+            return Err("volume takes none; set volume_density= etc. instead".into());
+        }
+    }
+    let set = |vol: &mut Option<VolumeSettings>, f: &dyn Fn(&mut VolumeSettings)| f(vol.get_or_insert_with(VolumeSettings::default));
+    if let Some(c) = cmd.v3("volume_color")? {
+        set(vol, &|v| v.color = c);
+    }
+    if let Some(d) = cmd.f("volume_density")? {
+        set(vol, &|v| v.density = d);
+    }
+    if let Some(g) = cmd.f("volume_anisotropy")? {
+        set(vol, &|v| v.anisotropy = g);
+    }
+    if let Some(c) = cmd.v3("volume_absorption_color")? {
+        set(vol, &|v| v.absorption_color = c);
+    }
+    if let Some(c) = cmd.v3("volume_emission_color")? {
+        set(vol, &|v| v.emission_color = c);
+    }
+    if let Some(e) = cmd.f("volume_emission_strength")? {
+        set(vol, &|v| v.emission_strength = e);
+    }
+    Ok(())
+}
+
+fn volume_opts(v: &Option<VolumeSettings>) -> String {
+    match v {
+        None => String::new(),
+        Some(v) => format!(
+            " volume_color={} volume_density={} volume_anisotropy={} volume_absorption_color={} volume_emission_color={} volume_emission_strength={}",
+            fmt_list(&v.color.to_array()),
+            fmt_f(v.density),
+            fmt_f(v.anisotropy),
+            fmt_list(&v.absorption_color.to_array()),
+            fmt_list(&v.emission_color.to_array()),
+            fmt_f(v.emission_strength)
+        ),
+    }
+}
+
+/// A modifier with Blender's defaults, by polyops or Blender type name.
+fn default_modifier(ty: &str) -> Res<Modifier> {
+    Modifier::with_defaults(ty).ok_or_else(|| format!("unknown modifier type '{ty}' ({})", Modifier::TYPE_NAMES))
+}
+
+/// Pick one of `names` (case-insensitive) for option `key`.
+fn choice<T: Copy>(cmd: &mut Cmd, key: &str, names: &[(&str, T)], into: &mut T) -> Res<()> {
+    if let Some(t) = cmd.opt(key) {
+        let w = t.text.to_ascii_lowercase();
+        *into = names.iter().find(|(n, _)| *n == w).map(|(_, v)| *v).ok_or_else(|| {
+            let all: Vec<&str> = names.iter().map(|(n, _)| *n).collect();
+            format!("{key}: '{}' is not one of {}", t.text, all.join(", "))
+        })?;
+    }
+    Ok(())
+}
+
+const AXES: [(&str, u8); 3] = [("x", 0), ("y", 1), ("z", 2)];
+const DECIMATE_MODES: [(&str, DecimateMode); 3] = [("collapse", DecimateMode::Collapse), ("unsubdivide", DecimateMode::Unsubdivide), ("planar", DecimateMode::Planar)];
+const REMESH_MODES: [(&str, RemeshMode); 3] = [("blocks", RemeshMode::Blocks), ("smooth", RemeshMode::Smooth), ("voxel", RemeshMode::Voxel)];
+const BOOLEAN_OPS: [(&str, BooleanOp); 3] = [("intersect", BooleanOp::Intersect), ("union", BooleanOp::Union), ("difference", BooleanOp::Difference)];
+const DEFORM_MODES: [(&str, SimpleDeformMode); 4] = [("twist", SimpleDeformMode::Twist), ("bend", SimpleDeformMode::Bend), ("taper", SimpleDeformMode::Taper), ("stretch", SimpleDeformMode::Stretch)];
+const CAST_TYPES: [(&str, CastType); 3] = [("sphere", CastType::Sphere), ("cylinder", CastType::Cylinder), ("cuboid", CastType::Cuboid)];
+const WRAP_METHODS: [(&str, ShrinkwrapMethod); 3] = [("nearest_surface", ShrinkwrapMethod::NearestSurfacePoint), ("project", ShrinkwrapMethod::Project), ("nearest_vertex", ShrinkwrapMethod::NearestVertex)];
+
+fn name_of<T: PartialEq + Copy>(names: &[(&'static str, T)], v: T) -> &'static str {
+    names.iter().find(|(_, x)| *x == v).map_or("", |(n, _)| n)
+}
+
+fn modifier_opts(cmd: &mut Cmd, mut m: Modifier) -> Res<Modifier> {
+    if rig::modifier_opts(cmd, &mut m)? || physics::modifier_opts(cmd, &mut m)? {
+        return Ok(m);
+    }
+    fn arr3(cmd: &mut Cmd, key: &str, into: &mut [f32; 3]) -> Res<()> {
+        if let Some(v) = cmd.v3(key)? {
+            *into = v.to_array();
+        }
+        Ok(())
+    }
+    fn f(cmd: &mut Cmd, key: &str, into: &mut f32) -> Res<()> {
+        *into = cmd.f(key)?.unwrap_or(*into);
+        Ok(())
+    }
+    fn u(cmd: &mut Cmd, key: &str, into: &mut u32) -> Res<()> {
+        *into = cmd.u(key)?.unwrap_or(*into);
+        Ok(())
+    }
+    fn b(cmd: &mut Cmd, key: &str, into: &mut bool) -> Res<()> {
+        *into = cmd.b(key)?.unwrap_or(*into);
+        Ok(())
+    }
+    fn bools3(cmd: &mut Cmd, keys: [&str; 3], into: &mut [bool; 3]) -> Res<()> {
+        for (k, v) in keys.iter().zip(into.iter_mut()) {
+            b(cmd, k, v)?;
+        }
+        Ok(())
+    }
+    fn s(cmd: &mut Cmd, key: &str, into: &mut String) {
+        if let Some(t) = cmd.opt(key) {
+            *into = t.text;
+        }
+    }
+    match &mut m {
+        Modifier::Mirror { x, y, z, merge, merge_distance } => {
+            *x = cmd.b("x")?.unwrap_or(*x);
+            *y = cmd.b("y")?.unwrap_or(*y);
+            *z = cmd.b("z")?.unwrap_or(*z);
+            *merge = cmd.b("merge")?.unwrap_or(*merge);
+            *merge_distance = cmd.f("merge_distance")?.unwrap_or(*merge_distance);
+        }
+        Modifier::Subdivision { levels, simple } => {
+            *levels = cmd.u("levels")?.unwrap_or(*levels);
+            if *levels > 6 {
+                return Err("subdivision levels must be 6 or fewer".into());
+            }
+            *simple = cmd.b("simple")?.unwrap_or(*simple);
+        }
+        Modifier::Array { count, relative, constant, merge } => {
+            *count = cmd.u("count")?.unwrap_or(*count);
+            if *count > 10_000 {
+                return Err("array count must be 10000 or fewer".into());
+            }
+            arr3(cmd, "relative", relative)?;
+            arr3(cmd, "constant", constant)?;
+            *merge = cmd.b("merge")?.unwrap_or(*merge);
+        }
+        Modifier::Solidify { thickness, offset } => {
+            *thickness = cmd.f("thickness")?.unwrap_or(*thickness);
+            *offset = cmd.f("offset")?.unwrap_or(*offset);
+        }
+        Modifier::Bevel { width, segments, angle } => {
+            *width = cmd.f("width")?.unwrap_or(*width);
+            *segments = cmd.u("segments")?.unwrap_or(*segments);
+            *angle = cmd.f("angle")?.unwrap_or(*angle);
+        }
+        Modifier::Triangulate => {}
+        Modifier::Weld { distance } => *distance = cmd.f("distance")?.unwrap_or(*distance),
+        Modifier::Displace { strength, .. } => *strength = cmd.f("strength")?.unwrap_or(*strength),
+        Modifier::Smooth { factor, iterations, .. } => {
+            *factor = cmd.f("factor")?.unwrap_or(*factor);
+            *iterations = cmd.u("iterations")?.unwrap_or(*iterations);
+        }
+        Modifier::Decimate { mode, ratio, iterations, angle, triangulate } => {
+            choice(cmd, "mode", &DECIMATE_MODES, mode)?;
+            f(cmd, "ratio", ratio)?;
+            u(cmd, "iterations", iterations)?;
+            f(cmd, "angle", angle)?;
+            b(cmd, "triangulate", triangulate)?;
+        }
+        Modifier::Remesh { mode, voxel_size, octree_depth, scale, smooth_shade } => {
+            choice(cmd, "mode", &REMESH_MODES, mode)?;
+            f(cmd, "voxel_size", voxel_size)?;
+            u(cmd, "octree_depth", octree_depth)?;
+            if *octree_depth > 12 {
+                return Err("remesh octree_depth must be 12 or less".into());
+            }
+            f(cmd, "scale", scale)?;
+            b(cmd, "smooth_shade", smooth_shade)?;
+        }
+        Modifier::Screw { axis, angle, steps, screw_offset, iterations, merge, merge_distance, flip, smooth_shade } => {
+            choice(cmd, "axis", &AXES, axis)?;
+            f(cmd, "angle", angle)?;
+            u(cmd, "steps", steps)?;
+            f(cmd, "screw_offset", screw_offset)?;
+            u(cmd, "iterations", iterations)?;
+            if *steps > 10_000 || *iterations > 10_000 {
+                return Err("screw steps and iterations must be 10000 or fewer".into());
+            }
+            b(cmd, "merge", merge)?;
+            f(cmd, "merge_distance", merge_distance)?;
+            b(cmd, "flip", flip)?;
+            b(cmd, "smooth_shade", smooth_shade)?;
+        }
+        Modifier::Wireframe { thickness, offset, even, relative, boundary, replace } => {
+            f(cmd, "thickness", thickness)?;
+            f(cmd, "offset", offset)?;
+            b(cmd, "even", even)?;
+            b(cmd, "relative", relative)?;
+            b(cmd, "boundary", boundary)?;
+            b(cmd, "replace", replace)?;
+        }
+        Modifier::EdgeSplit { angle, use_angle } => {
+            f(cmd, "angle", angle)?;
+            b(cmd, "use_angle", use_angle)?;
+        }
+        Modifier::Build { start, length, reverse, random, seed } => {
+            f(cmd, "start", start)?;
+            f(cmd, "length", length)?;
+            b(cmd, "reverse", reverse)?;
+            b(cmd, "random", random)?;
+            u(cmd, "seed", seed)?;
+        }
+        Modifier::Boolean { object, operation } => {
+            s(cmd, "object", object);
+            choice(cmd, "operation", &BOOLEAN_OPS, operation)?;
+        }
+        Modifier::SimpleDeform { mode, axis, factor, limits, lock, .. } => {
+            choice(cmd, "mode", &DEFORM_MODES, mode)?;
+            choice(cmd, "axis", &AXES, axis)?;
+            f(cmd, "factor", factor)?;
+            if let Some(l) = cmd.list("limits")? {
+                if l.len() != 2 {
+                    return Err("limits= takes two numbers".into());
+                }
+                *limits = [l[0], l[1]];
+            }
+            bools3(cmd, ["lock_x", "lock_y", "lock_z"], lock)?;
+        }
+        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius, .. } => {
+            choice(cmd, "type", &CAST_TYPES, kind)?;
+            f(cmd, "factor", factor)?;
+            f(cmd, "radius", radius)?;
+            f(cmd, "size", size)?;
+            bools3(cmd, ["x", "y", "z"], axes)?;
+            b(cmd, "size_from_radius", size_from_radius)?;
+        }
+        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start, .. } => {
+            b(cmd, "x", x)?;
+            b(cmd, "y", y)?;
+            b(cmd, "cyclic", cyclic)?;
+            b(cmd, "normals", normals)?;
+            f(cmd, "falloff", falloff)?;
+            f(cmd, "height", height)?;
+            f(cmd, "width", width)?;
+            f(cmd, "narrowness", narrowness)?;
+            f(cmd, "speed", speed)?;
+            f(cmd, "time_offset", time_offset)?;
+            f(cmd, "lifetime", lifetime)?;
+            f(cmd, "damping", damping)?;
+            if let Some(l) = cmd.list("start")? {
+                if l.len() != 2 {
+                    return Err("start= takes two numbers".into());
+                }
+                *start = [l[0], l[1]];
+            }
+        }
+        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative, .. } => {
+            s(cmd, "target", target);
+            choice(cmd, "method", &WRAP_METHODS, method)?;
+            f(cmd, "offset", offset)?;
+            bools3(cmd, ["x", "y", "z"], axes)?;
+            b(cmd, "positive", positive)?;
+            b(cmd, "negative", negative)?;
+        }
+        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized, .. } => {
+            u(cmd, "iterations", iterations)?;
+            f(cmd, "factor", factor)?;
+            f(cmd, "border", border)?;
+            bools3(cmd, ["x", "y", "z"], axes)?;
+            b(cmd, "preserve_volume", preserve_volume)?;
+            b(cmd, "normalized", normalized)?;
+        }
+        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth, .. } => {
+            f(cmd, "factor", factor)?;
+            u(cmd, "iterations", iterations)?;
+            f(cmd, "scale", scale)?;
+            b(cmd, "length_weighted", length_weighted)?;
+            b(cmd, "only_smooth", only_smooth)?;
+        }
+        Modifier::WeightedNormal { keep_sharp } => b(cmd, "keep_sharp", keep_sharp)?,
+        Modifier::Nodes { group, inputs } => {
+            s(cmd, "group", group);
+            let keys: Vec<String> = cmd.opts.iter().filter(|o| o.0.starts_with("input:")).map(|o| o.0.clone()).collect();
+            for k in keys {
+                let Some(t) = cmd.opt(&k) else { continue };
+                let name = k["input:".len()..].to_string();
+                let v = node_value(&t);
+                match inputs.iter_mut().find(|x| x.0 == name) {
+                    Some(x) => x.1 = v,
+                    None => inputs.push((name, v)),
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(m)
+}
+
+/// Vertex pairs written as `a,b;c,d` (or base64 u32s when large).
+fn edge_pairs(text: &str, what: &str) -> Res<Vec<[u32; 2]>> {
+    let e = if text.starts_with("b64:") { uints(text) } else { text.split(';').filter(|s| !s.trim().is_empty()).map(uints).collect::<Res<Vec<_>>>().map(|v| v.concat()) }
+        .map_err(|e| format!("{what}: {e}"))?;
+    if e.len() % 2 != 0 {
+        return Err(format!("{what}= needs pairs of vertex indices"));
+    }
+    Ok(e.chunks_exact(2).map(|c| [c[0], c[1]]).collect())
+}
+
+fn write_pairs(o: &mut String, key: &str, pairs: &[[u32; 2]], b64: bool) {
+    if pairs.is_empty() {
+        return;
+    }
+    let flat: Vec<u32> = pairs.iter().flat_map(|e| e.iter().copied()).collect();
+    let text = if b64 { b64_u32(&flat) } else { pairs.iter().map(|e| format!("{},{}", e[0], e[1])).collect::<Vec<_>>().join(";") };
+    let _ = write!(o, " {key}={text}");
+}
+
+/// Mesh data options: `verts= faces= edges= seams= sharp= uvs= smooth= mat=`.
+fn parse_mesh(cmd: &mut Cmd, mut m: Mesh, limits: &SessionLimits) -> Res<Mesh> {
+    if let Some(t) = cmd.opt("verts") {
+        if let Some(max_v) = limits.max_mesh_vertices {
+            if let Some(b64) = t.text.strip_prefix("b64:") {
+                // 3 * f32 = 12 bytes -> 16 base64 chars per vertex
+                let approx_verts = b64.trim().len() / 16;
+                if approx_verts > max_v {
+                    return Err(format!("verts= exceeds vertex limit of {max_v}"));
+                }
+            }
+        }
+        let v = floats(&t.text).map_err(|e| format!("verts: {e}"))?;
+        if v.len() % 3 != 0 {
+            return Err(format!("verts= holds {} numbers, not a multiple of 3", v.len()));
+        }
+        limits.check_mesh(v.len() / 3, 0, "mesh")?;
+        m.positions = v.chunks_exact(3).map(|c| Vec3::new(c[0], c[1], c[2])).collect();
+    }
+    if let Some(t) = cmd.opt("faces") {
+        let polys = polygons(&t.text).map_err(|e| format!("faces: {e}"))?;
+        limits.check_mesh(m.positions.len(), polys.len(), "mesh")?;
+        m.faces = polys.into_iter().map(Face::new).collect();
+    }
+    if let Some(t) = cmd.opt("edges") {
+        m.loose_edges = edge_pairs(&t.text, "edges")?;
+    }
+    if let Some(t) = cmd.opt("seams") {
+        m.seams = edge_pairs(&t.text, "seams")?.into_iter().map(|e| crate::mesh::edge_key(e[0], e[1])).collect();
+    }
+    if let Some(t) = cmd.opt("sharp") {
+        m.sharp_edges = edge_pairs(&t.text, "sharp")?.into_iter().map(|e| crate::mesh::edge_key(e[0], e[1])).collect();
+    }
+    if let Some(uv) = cmd.list("uvs")? {
+        let corners: usize = m.faces.iter().map(|f| f.verts.len()).sum();
+        if uv.len() != corners * 2 {
+            return Err(format!("uvs= holds {} numbers for {corners} face corners (2 each)", uv.len()));
+        }
+        let mut k = 0;
+        for f in &mut m.faces {
+            f.uvs = (0..f.verts.len()).map(|c| Vec2::new(uv[k + 2 * c], uv[k + 2 * c + 1])).collect();
+            k += 2 * f.verts.len();
+        }
+    }
+    if let Some(t) = cmd.opt("smooth") {
+        let s = t.text.trim();
+        if s.len() == 1 {
+            let on = boolean(s)?;
+            m.faces.iter_mut().for_each(|f| f.smooth = on);
+        } else {
+            if s.len() != m.faces.len() || !s.bytes().all(|b| b == b'0' || b == b'1') {
+                return Err(format!("smooth= is one 0/1 per face ({} faces) or a single 0/1", m.faces.len()));
+            }
+            for (f, b) in m.faces.iter_mut().zip(s.bytes()) {
+                f.smooth = b == b'1';
+            }
+        }
+    }
+    if let Some(t) = cmd.opt("mat") {
+        let mat = uints(&t.text)?;
+        if mat.len() != m.faces.len() {
+            return Err(format!("mat= has {} entries for {} faces", mat.len(), m.faces.len()));
+        }
+        for (f, s) in m.faces.iter_mut().zip(mat) {
+            f.material = u16::try_from(s).ok().filter(|s| *s < 256).ok_or("mat= slots must be below 256")?;
+        }
+    }
+    m.validate()?;
+    Ok(m)
+}
+
+// ---------------------------------------------------------------------------
+// Writing scenes
+
+/// Decode a [`mesh_to_options`] / `mesh_get` payload back into a [`Mesh`].
+pub fn mesh_from_options(src: &str) -> Result<Mesh, String> {
+    let toks = tokenize(src)?;
+    let mut cmd = Cmd { name: "mesh_get".into(), pos: Vec::new(), opts: Vec::new() };
+    for t in toks {
+        match t.key.clone() {
+            Some(k) => {
+                if cmd.opts.iter().any(|o| o.0 == k) {
+                    return Err(format!("option '{k}' given twice"));
+                }
+                cmd.opts.push((k, Token { key: None, ..t }, false));
+            }
+            None => return Err(format!("unexpected positional token '{}' in mesh options", t.text)),
+        }
+    }
+    let mesh = parse_mesh(&mut cmd, Mesh::new(), &SessionLimits::unlimited())?;
+    cmd.done()?;
+    Ok(mesh)
+}
+
+/// Mesh data options for `mesh_new` / `add_mesh` / `mesh_set`.
+pub fn mesh_to_options(m: &Mesh) -> String {
+    let b64 = m.positions.len() > BASE64_ABOVE;
+    let mut o = String::new();
+    let pos: Vec<f32> = m.positions.iter().flat_map(|p| p.to_array()).collect();
+    let _ = write!(o, " verts={}", if b64 { b64_f32(&pos) } else { fmt_list(&pos) });
+    if !m.faces.is_empty() {
+        let faces = if b64 {
+            b64_u32(&m.faces.iter().flat_map(|f| std::iter::once(f.verts.len() as u32).chain(f.verts.iter().copied())).collect::<Vec<_>>())
+        } else {
+            m.faces.iter().map(|f| f.verts.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(",")).collect::<Vec<_>>().join(";")
+        };
+        let _ = write!(o, " faces={faces}");
+    }
+    write_pairs(&mut o, "edges", &m.loose_edges, b64);
+    let n = m.positions.len() as u32;
+    let valid = |set: &std::collections::BTreeSet<(u32, u32)>| set.iter().filter(|e| e.0 < n && e.1 < n).map(|e| [e.0, e.1]).collect::<Vec<_>>();
+    write_pairs(&mut o, "seams", &valid(&m.seams), b64);
+    write_pairs(&mut o, "sharp", &valid(&m.sharp_edges), b64);
+    if m.has_uvs() {
+        let uv: Vec<f32> = m.faces.iter().flat_map(|f| f.uvs.iter().flat_map(|u| [u.x, u.y])).collect();
+        let _ = write!(o, " uvs={}", if b64 { b64_f32(&uv) } else { fmt_list(&uv) });
+    }
+    if m.faces.iter().any(|f| f.smooth) {
+        if m.faces.iter().all(|f| f.smooth) {
+            o.push_str(" smooth=1");
+        } else {
+            let s: String = m.faces.iter().map(|f| if f.smooth { '1' } else { '0' }).collect();
+            let _ = write!(o, " smooth={s}");
+        }
+    }
+    if m.faces.iter().any(|f| f.material != 0) {
+        let _ = write!(o, " mat={}", m.faces.iter().map(|f| f.material.to_string()).collect::<Vec<_>>().join(","));
+    }
+    o
+}
+
+fn modifier_to_options(m: &Modifier) -> String {
+    modifier_base_options(m) + &rig::modifier_to_options(m) + &physics::modifier_to_options(m)
+}
+
+fn modifier_base_options(m: &Modifier) -> String {
+    let b = |v: bool| v as u8;
+    let f = |v: f32| fmt_f(v);
+    match m {
+        Modifier::Mirror { x, y, z, merge, merge_distance } => format!(" x={} y={} z={} merge={} merge_distance={}", b(*x), b(*y), b(*z), b(*merge), fmt_f(*merge_distance)),
+        Modifier::Subdivision { levels, simple } => format!(" levels={levels} simple={}", b(*simple)),
+        Modifier::Array { count, relative, constant, merge } => format!(" count={count} relative={} constant={} merge={}", fmt_list(relative), fmt_list(constant), b(*merge)),
+        Modifier::Solidify { thickness, offset } => format!(" thickness={} offset={}", fmt_f(*thickness), fmt_f(*offset)),
+        Modifier::Bevel { width, segments, angle } => format!(" width={} segments={segments} angle={}", fmt_f(*width), fmt_f(*angle)),
+        Modifier::Triangulate => String::new(),
+        Modifier::Weld { distance } => format!(" distance={}", fmt_f(*distance)),
+        Modifier::Displace { strength, .. } => format!(" strength={}", fmt_f(*strength)),
+        Modifier::Smooth { factor, iterations, .. } => format!(" factor={} iterations={iterations}", fmt_f(*factor)),
+        Modifier::Decimate { mode, ratio, iterations, angle, triangulate } => {
+            format!(" mode={} ratio={} iterations={iterations} angle={} triangulate={}", name_of(&DECIMATE_MODES, *mode), f(*ratio), f(*angle), b(*triangulate))
+        }
+        Modifier::Remesh { mode, voxel_size, octree_depth, scale, smooth_shade } => {
+            format!(" mode={} voxel_size={} octree_depth={octree_depth} scale={} smooth_shade={}", name_of(&REMESH_MODES, *mode), f(*voxel_size), f(*scale), b(*smooth_shade))
+        }
+        Modifier::Screw { axis, angle, steps, screw_offset, iterations, merge, merge_distance, flip, smooth_shade } => format!(
+            " axis={} angle={} steps={steps} screw_offset={} iterations={iterations} merge={} merge_distance={} flip={} smooth_shade={}",
+            name_of(&AXES, *axis),
+            f(*angle),
+            f(*screw_offset),
+            b(*merge),
+            f(*merge_distance),
+            b(*flip),
+            b(*smooth_shade)
+        ),
+        Modifier::Wireframe { thickness, offset, even, relative, boundary, replace } => {
+            format!(" thickness={} offset={} even={} relative={} boundary={} replace={}", f(*thickness), f(*offset), b(*even), b(*relative), b(*boundary), b(*replace))
+        }
+        Modifier::EdgeSplit { angle, use_angle } => format!(" angle={} use_angle={}", f(*angle), b(*use_angle)),
+        Modifier::Build { start, length, reverse, random, seed } => format!(" start={} length={} reverse={} random={} seed={seed}", f(*start), f(*length), b(*reverse), b(*random)),
+        Modifier::Boolean { object, operation } => format!(" object={} operation={}", quote(object), name_of(&BOOLEAN_OPS, *operation)),
+        Modifier::SimpleDeform { mode, axis, factor, limits, lock, .. } => format!(
+            " mode={} axis={} factor={} limits={} lock_x={} lock_y={} lock_z={}",
+            name_of(&DEFORM_MODES, *mode),
+            name_of(&AXES, *axis),
+            f(*factor),
+            fmt_list(limits),
+            b(lock[0]),
+            b(lock[1]),
+            b(lock[2])
+        ),
+        Modifier::Cast { kind, factor, radius, size, axes, size_from_radius, .. } => format!(
+            " type={} factor={} radius={} size={} x={} y={} z={} size_from_radius={}",
+            name_of(&CAST_TYPES, *kind),
+            f(*factor),
+            f(*radius),
+            f(*size),
+            b(axes[0]),
+            b(axes[1]),
+            b(axes[2]),
+            b(*size_from_radius)
+        ),
+        Modifier::Wave { x, y, cyclic, normals, falloff, height, width, narrowness, speed, time_offset, lifetime, damping, start, .. } => format!(
+            " x={} y={} cyclic={} normals={} falloff={} height={} width={} narrowness={} speed={} time_offset={} lifetime={} damping={} start={}",
+            b(*x),
+            b(*y),
+            b(*cyclic),
+            b(*normals),
+            f(*falloff),
+            f(*height),
+            f(*width),
+            f(*narrowness),
+            f(*speed),
+            f(*time_offset),
+            f(*lifetime),
+            f(*damping),
+            fmt_list(start)
+        ),
+        Modifier::Shrinkwrap { target, method, offset, axes, positive, negative, .. } => format!(
+            " target={} method={} offset={} x={} y={} z={} positive={} negative={}",
+            quote(target),
+            name_of(&WRAP_METHODS, *method),
+            f(*offset),
+            b(axes[0]),
+            b(axes[1]),
+            b(axes[2]),
+            b(*positive),
+            b(*negative)
+        ),
+        Modifier::LaplacianSmooth { iterations, factor, border, axes, preserve_volume, normalized, .. } => format!(
+            " iterations={iterations} factor={} border={} x={} y={} z={} preserve_volume={} normalized={}",
+            f(*factor),
+            f(*border),
+            b(axes[0]),
+            b(axes[1]),
+            b(axes[2]),
+            b(*preserve_volume),
+            b(*normalized)
+        ),
+        Modifier::CorrectiveSmooth { factor, iterations, scale, length_weighted, only_smooth, .. } => {
+            format!(" factor={} iterations={iterations} scale={} length_weighted={} only_smooth={}", f(*factor), f(*scale), b(*length_weighted), b(*only_smooth))
+        }
+        Modifier::WeightedNormal { keep_sharp } => format!(" keep_sharp={}", b(*keep_sharp)),
+        Modifier::Nodes { group, inputs } => {
+            let mut o = format!(" group={}", quote(group));
+            for (name, v) in inputs {
+                let text = match v {
+                    crate::nodes::Value::Float(x) => {
+                        let t = fmt_f(*x);
+                        if t.contains(['.', 'e', 'i', 'N']) {
+                            t
+                        } else {
+                            t + ".0"
+                        }
+                    }
+                    crate::nodes::Value::Int(i) => i.to_string(),
+                    crate::nodes::Value::Bool(x) => x.to_string(),
+                    crate::nodes::Value::Vector(x) => fmt_list(x),
+                    crate::nodes::Value::Color(x) => fmt_list(x),
+                    crate::nodes::Value::String(s) => format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\"")),
+                    _ => continue,
+                };
+                let key = if is_ident(name) { name.clone() } else { format!("\"{}\"", name.replace('\\', "\\\\").replace('"', "\\\"")) };
+                let _ = write!(o, " input:{key}={text}");
+            }
+            o
+        }
+        _ => String::new(),
+    }
+}
+
+/// A Nodes modifier input value as polyops writes it: a quoted string,
+/// `true`/`false`, a whole number (Int), a number with a point (Float),
+/// three numbers (Vector) or four (Color).
+fn node_value(t: &Token) -> crate::nodes::Value {
+    use crate::nodes::Value;
+    if t.quoted {
+        return Value::String(t.text.clone());
+    }
+    let s = t.text.trim();
+    match s {
+        "true" => return Value::Bool(true),
+        "false" => return Value::Bool(false),
+        _ => {}
+    }
+    if !s.contains(',') {
+        if let Ok(i) = s.parse::<i32>() {
+            return Value::Int(i);
+        }
+    }
+    let nums: Option<Vec<f32>> = s.split(',').map(|x| x.trim().parse::<f32>().ok()).collect();
+    match nums.as_deref() {
+        Some([x]) => Value::Float(*x),
+        Some([x, y, z]) => Value::Vector([*x, *y, *z]),
+        Some([r, g, b, a]) => Value::Color([*r, *g, *b, *a]),
+        _ => Value::String(t.text.clone()),
+    }
+}
+
+/// Serialise `scene` as a polyops program. Running it on [`Scene::new`] gives a
+/// scene equal to `scene`, except that images, material textures and the world
+/// HDRI are not carried, and duplicate material names come back made unique.
+pub fn scene_to_polyops(scene: &Scene) -> String {
+    let mut o = String::new();
+    let _ = writeln!(o, "polyops {VERSION}");
+    let _ = writeln!(o, "# Polyamour scene: {} objects, {} meshes, {} materials", scene.objects.len(), scene.meshes.len(), scene.materials.len());
+    let _ = writeln!(o, "scene name={} frame_start={} frame_end={} fps={}", quote(&scene.name), scene.frame_start, scene.frame_end, fmt_f(scene.fps));
+    let w = &scene.world;
+    let _ = writeln!(o, "world color={} strength={}{}", fmt_list(&w.color.to_array()), fmt_f(w.strength), volume_opts(&w.volume));
+    // Collection 0 exists in every scene; create the others, then fix parents
+    // (a parent may come later in the list).
+    for (i, c) in scene.collections.iter().enumerate() {
+        if i == 0 {
+            if c.name != "Collection" || !c.visible {
+                let _ = writeln!(o, "collection_set Collection name={} visible={}", quote(&c.name), c.visible as u8);
+            }
+        } else {
+            let _ = writeln!(o, "collection_new {}{}", quote(&c.name), if c.visible { "" } else { " visible=0" });
+        }
+    }
+    for c in &scene.collections {
+        if let Some(p) = c.parent {
+            let _ = writeln!(o, "collection_set {} parent={}", quote(&c.name), quote(&scene.collections[p].name));
+        }
+    }
+    for m in &scene.materials {
+        let c = m.base_color;
+        let _ = writeln!(
+            o,
+            "material_new {} base_color={} metallic={} roughness={} emission={} emission_strength={} ior={} transmission={} double_sided={}",
+            quote(&m.name),
+            fmt_list(&c),
+            fmt_f(m.metallic),
+            fmt_f(m.roughness),
+            fmt_list(&m.emission.to_array()),
+            fmt_f(m.emission_strength),
+            fmt_f(m.ior),
+            fmt_f(m.transmission),
+            m.double_sided as u8
+        );
+        let ee = eevee_material_opts(&m.eevee);
+        if m.pass_index != 0 || m.volume.is_some() || !ee.is_empty() {
+            let pi = if m.pass_index != 0 { format!(" pass_index={}", m.pass_index) } else { String::new() };
+            let _ = writeln!(o, "material_set {}{pi}{}{ee}", quote(&m.name), volume_opts(&m.volume));
+        }
+    }
+    for (m, n) in scene.meshes.iter().zip(&scene.mesh_names) {
+        let _ = writeln!(o, "mesh_new {}{}", quote(n), mesh_to_options(m));
+        rig::write_mesh_extras(&mut o, n, m);
+    }
+    rig::write_data(&mut o, scene);
+    physics::write_scene(&mut o, scene);
+    gp::write_data(&mut o, scene);
+    for ob in &scene.objects {
+        let t = &ob.transform;
+        let place = format!(
+            " location={} quaternion={} scale={} collection={}{}",
+            fmt_list(&t.location.to_array()),
+            fmt_list(&[t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z]),
+            fmt_list(&t.scale.to_array()),
+            quote(&scene.collections.get(ob.collection).map(|c| c.name.as_str()).unwrap_or("Collection")),
+            if ob.visible { "" } else { " visible=0" }
+        );
+        let name = quote(&ob.name);
+        if let Some(l) = rig::object_line(scene, ob, &place).or_else(|| gp::object_line(scene, ob, &place)) {
+            let _ = writeln!(o, "{l}");
+            continue;
+        }
+        let _ = match &ob.data {
+            ObjectData::Armature(_) | ObjectData::Lattice(_) | ObjectData::GreasePencil(_) => Ok(()),
+            ObjectData::Empty => writeln!(o, "add_empty {name}{place}"),
+            ObjectData::Mesh(m) => writeln!(o, "add_object {name} data={}{place}", quote(&scene.mesh_names[*m])),
+            ObjectData::Light(l) => {
+                let (kind, extra) = match l.kind {
+                    LightKind::Point => ("point", String::new()),
+                    LightKind::Sun => ("sun", String::new()),
+                    LightKind::Spot { angle, blend } => ("spot", format!(" angle={} blend={}", fmt_f(angle), fmt_f(blend))),
+                    LightKind::Area { size } => ("area", format!(" size={}", fmt_f(size))),
+                };
+                let d = Light::default();
+                let mut extra = extra;
+                if l.shape != d.shape {
+                    extra += &format!(" shape={}", shape_name(l.shape));
+                }
+                if l.size_y != d.size_y {
+                    extra += &format!(" size_y={}", fmt_f(l.size_y));
+                }
+                if l.spread != d.spread {
+                    extra += &format!(" spread={}", fmt_f(l.spread));
+                }
+                if l.max_bounces != d.max_bounces {
+                    extra += &format!(" max_bounces={}", l.max_bounces);
+                }
+                if !l.cast_shadow {
+                    extra += " cast_shadow=0";
+                }
+                if !l.use_mis {
+                    extra += " use_mis=0";
+                }
+                if l.contact_shadow {
+                    extra += " contact_shadow=1";
+                }
+                if l.contact_shadow_distance != d.contact_shadow_distance {
+                    extra += &format!(" contact_shadow_distance={}", fmt_f(l.contact_shadow_distance));
+                }
+                if l.contact_shadow_thickness != d.contact_shadow_thickness {
+                    extra += &format!(" contact_shadow_thickness={}", fmt_f(l.contact_shadow_thickness));
+                }
+                writeln!(o, "light_add {kind} name={name} power={} color={} radius={}{extra}{place}", fmt_f(l.power), fmt_list(&l.color.to_array()), fmt_f(l.radius))
+            }
+            ObjectData::Camera(c) => {
+                let mut ortho = c.ortho_scale.map(|s| format!(" ortho_scale={}", fmt_f(s))).unwrap_or_default();
+                let d = Camera::default();
+                for key in CAMERA_OPTS {
+                    let (a, b) = (camera_opt_value(c, key), camera_opt_value(&d, key));
+                    if let (Some(a), true) = (&a, a != b) {
+                        ortho += &format!(" {key}={a}");
+                    }
+                }
+                writeln!(o, "camera_add name={name} fov={} near={} far={}{ortho} active=0{place}", fmt_f(c.fov_y), fmt_f(c.near), fmt_f(c.far))
+            }
+        };
+    }
+    for ob in &scene.objects {
+        let name = quote(&ob.name);
+        if let Some(p) = ob.parent {
+            let _ = writeln!(o, "parent {name} {}{}", quote(&scene.objects[p].name), rig::parent_options(ob));
+        }
+        for (slot, &m) in ob.materials.iter().enumerate() {
+            // Empty slots (imported `None` materials) have nothing to assign.
+            let Some(mat) = scene.materials.get(m) else { continue };
+            let _ = writeln!(o, "material_assign {name} {} slot={slot}", quote(&mat.name));
+        }
+        for m in &ob.modifiers {
+            let _ = writeln!(o, "modifier_add {name} {}{}", m.type_name(), modifier_to_options(m));
+        }
+        let target = |prop: &str| quote(&format!("{}.{prop}", ob.name));
+        let vis = &ob.visibility;
+        for (prop, on) in [("visible_camera", vis.camera), ("visible_diffuse", vis.diffuse), ("visible_glossy", vis.glossy), ("visible_transmission", vis.transmission), ("visible_volume_scatter", vis.volume_scatter), ("visible_shadow", vis.shadow)] {
+            if !on {
+                let _ = writeln!(o, "set {} 0", target(prop));
+            }
+        }
+        if ob.holdout {
+            let _ = writeln!(o, "set {} 1", target("holdout"));
+        }
+        if ob.pass_index != 0 {
+            let _ = writeln!(o, "set {} {}", target("pass_index"), ob.pass_index);
+        }
+        if let Some(m) = &ob.motion {
+            let r = m.rotation;
+            let _ = writeln!(o, "set {} {}", target("motion_location"), fmt_vals(&m.location.to_array()));
+            let _ = writeln!(o, "set {} {}", target("motion_rotation_quaternion"), fmt_vals(&[r.w, r.x, r.y, r.z]));
+            let _ = writeln!(o, "set {} {}", target("motion_scale"), fmt_vals(&m.scale.to_array()));
+        }
+        if let ObjectData::Camera(c) = &ob.data {
+            if let Some(f) = c.dof.focus_object.and_then(|f| scene.objects.get(f)) {
+                let _ = writeln!(o, "set {} {}", target("focus_object"), quote(&f.name));
+            }
+        }
+        rig::write_object_rig(&mut o, ob);
+        physics::write_object(&mut o, ob);
+        gp::write_object(&mut o, ob);
+    }
+    nodes::write_node_trees(&mut o, scene);
+    gp::write_sequencer(&mut o, scene);
+    let names = |v: &[usize]| v.iter().map(|&i| format!(" {}", quote(&scene.objects[i].name))).collect::<String>();
+    let _ = writeln!(o, "select{}", names(&scene.selected));
+    let one = |i: Option<usize>| i.map(|i| quote(&scene.objects[i].name)).unwrap_or_else(|| "none".into());
+    let _ = writeln!(o, "active {}", one(scene.active_object));
+    let _ = writeln!(o, "active_camera {}", one(scene.active_camera));
+    o.push_str("end\n");
+    o
+}

@@ -223,6 +223,7 @@ impl Builder {
     }
 
     fn start(&mut self, tag: &str, attrs: Vec<(String, String)>) {
+        self.dom.invalidate_queries();
         match tag {
             "html" => {
                 let html = self.html();

@@ -96,6 +96,7 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             }
             wire::NONE
         }
+        wire::OP_KERNEL => crate::memory::kheap::syscall(regs, arg),
         wire::OP_SET_NAME => {
             if caller == 0 || caller as usize >= DOMAINS || arg == 0 { return wire::INVALID; }
             NAMES[caller as usize][0].store(arg, Ordering::Relaxed);

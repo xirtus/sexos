@@ -28,8 +28,9 @@ fn night_light_keeps_red_and_warms_more_each_level() {
 #[test]
 fn look_takes_only_known_values() {
     let _turn = LOOK.lock().unwrap();
-    assert!(set(0, 0) && wallpaper().is_none() && night_level() == 0);
-    assert!(set(2, 3));
+    assert!(set(0, 0) && night_level() == 0);
+    assert!(shows_mark() && wallpaper() == Some((WALLPAPERS[0].1, WALLPAPERS[0].2)), "the default is the SexOS wallpaper");
+    assert!(set(2, 3) && !shows_mark());
     assert_eq!(wallpaper(), Some((WALLPAPERS[2].1, WALLPAPERS[2].2)));
     assert!(!set(WALLPAPERS.len() as u64, 0) && !set(0, NIGHT_LEVELS as u64));
     assert_eq!((wallpaper_index(), night_level()), (2, 3), "a refused look changes nothing");

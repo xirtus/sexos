@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest import mock
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import quil_readability_gate as g
+from check_desktop_pixels import draw_cell
 import test_https_import_gate as disk_fixture
 ROOT=Path(__file__).resolve().parents[2]
 
@@ -60,15 +61,10 @@ class ResponsiveLayout(unittest.TestCase):
   for text in(v['text'].replace('Ctrl A select all',''),v['text'].replace('> Inspect','  Inspect'),v['text'].replace('Save As  Ctrl Shift S','SaveAs')):
    with self.assertRaises(ValueError):g.chrome(dict(v,text=text),'commands',self.c)
  def test_real_whole_view_pixel_helper_rejects_header_hint_and_body_corruption(self):
-  v=self.make_view('edited');w,h=1280,800;x,y=8,86;paint=77;data=bytearray(w*h*3)
+  v=self.make_view('edited');w,h=1280,800;x,y=8,86;paint=77;data=bytearray(b'\x0c\x14\x20'*(w*h))
   for row,line in enumerate(v['text'].splitlines()):
    for col,char in enumerate(line):
-    for gy,bits in enumerate(g.launch.glyph(self.c['font'],char)):
-     for gx in range(5):
-      if bits&(1<<(4-gx)):
-       for dy in range(2):
-        for dx in range(2):
-         px=x+8+(col*6+gx)*2+dx;py=y+v['top']+(row*9+gy)*2+dy;data[(py*w+px)*3:(py*w+px)*3+3]=b'\xe0\xf0\xff'
+    draw_cell(data,w,x+8+col*12,y+v['top']+row*18,char,2,b'\xe0\xf0\xff',self.c['font'])
   text=v['text'].encode();trace=(f'[launcher.text.view] x=400 y=200 w=480 h=280 scale=2 selected=0 first=0 rows=1\n'
    '[launcher.text.row] index=0 row=0 name=Focus Quil status=RUNNING\n[command_palette.close]\n'
    '[linen.list.text] x=640 y=50 w=640 h=375 scale=2 text_color=0xf0f8ff rows=3 selected=1 row_y=72 row_h=36 committed_view=1\n[linen.list.label] id=1 row=0 text=first\n[linen.list.label] id=2 row=1 text=second\n[linen.list.label] id=3 row=2 text=third\n'

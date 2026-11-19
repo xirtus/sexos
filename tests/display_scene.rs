@@ -31,6 +31,7 @@ pub mod app_lifecycle{
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"]pub mod bitmap_batch;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/desktop_look.rs"]pub mod desktop_look;
+#[path="../crates/sex-pdx/src/access_view.rs"]pub mod access_view;
 #[path="../crates/sex-pdx/src/spindle_view.rs"]pub mod spindle_view;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"]mod surface_lifecycle;
 #[path="../servers/sexdisplay/src/surface_groups.rs"]mod surface_groups;
@@ -171,6 +172,7 @@ mod boundary{
 }
 pub fn pdx_reply(target:u32,word:u64)->u64{boundary::reply(target,word)}
 fn scrub_cursor_under(){boundary::cursor();}
+fn motion_place(_:&mut SceneSnapshot){}
 // Controlled publication boundary: obtain/drop an actual scoped Scene lease,
 // then construct the descriptive receipt. No device write/native success is
 // claimed; the actual prepared-output pipeline has its own registered tests.

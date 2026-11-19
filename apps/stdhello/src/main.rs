@@ -11,6 +11,72 @@ use sex_std as _;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // `run stdhello vt`: the console as a terminal. Colours, a cursor move, and a cursor
+    // position report whose answer arrives on standard input, as from any terminal.
+    if args.get(1).map(String::as_str) == Some("vt") {
+        print!("\x1b[2J\x1b[H\x1b[1;31mred\x1b[0m \x1b[42mgreen\x1b[0m\x1b[3;5Hthird row\x1b[6n");
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        let mut reply = [0u8; 32];
+        let n = std::io::Read::read(&mut std::io::stdin(), &mut reply).unwrap_or(0);
+        let reply = String::from_utf8_lossy(&reply[..n]).replace('\x1b', "ESC");
+        println!("\n[stdhello.vt] reply={reply}");
+        return;
+    }
+    // `stdhello echo`: lines in, lines out, until the end of input (Term's Ctrl+D).
+    if args.get(1).map(String::as_str) == Some("echo") {
+        let mut lines = 0;
+        for line in std::io::BufRead::lines(std::io::stdin().lock()) {
+            let Ok(line) = line else { break };
+            lines += 1;
+            println!("got: {}", line.to_uppercase());
+        }
+        println!("[stdhello.echo] lines={lines}");
+        std::process::exit(3);
+    }
+    // `stdhello count`: output until stopped (Term's Ctrl+C).
+    if args.get(1).map(String::as_str) == Some("count") {
+        for i in 0u64.. { println!("count {i}"); std::thread::sleep(std::time::Duration::from_millis(20)); }
+    }
+    // `stdhello size`: the terminal's size, then again after it changes (or a minute).
+    if args.get(1).map(String::as_str) == Some("size") {
+        let ((cols, rows), seen) = (sex_std::terminal::size(), sex_std::terminal::size_changes());
+        println!("[stdhello.size] cols={cols} rows={rows} changes={seen}");
+        let began = Instant::now();
+        while sex_std::terminal::size_changes() == seen && began.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let ((cols, rows), now) = (sex_std::terminal::size(), sex_std::terminal::size_changes());
+        println!("[stdhello.resized] cols={cols} rows={rows} changes={now}");
+        return;
+    }
+    // `stdhello wait`: blocked reading standard input, until Ctrl+C ends it.
+    if args.get(1).map(String::as_str) == Some("wait") {
+        println!("[stdhello.wait] reading");
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+        println!("[stdhello.wait] read={}", line.trim());
+        return;
+    }
+    // `stdhello spin`: computes and never reads, writes or sleeps: only a second Ctrl+C
+    // (the terminal asks Shell to stop it) ends it.
+    if args.get(1).map(String::as_str) == Some("spin") {
+        println!("[stdhello.spin] spinning");
+        let mut x = 1u64;
+        loop { x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1)); }
+    }
+    // `stdhello raw`: keys one at a time, unechoed, until `q`.
+    if args.get(1).map(String::as_str) == Some("raw") {
+        let ok = sex_std::terminal::set_raw(true);
+        println!("[stdhello.raw] on={}", ok as u8);
+        let mut b = [0u8; 1];
+        while std::io::stdin().read(&mut b).unwrap_or(0) == 1 {
+            println!("[stdhello.raw] byte={}", b[0]);
+            if b[0] == b'q' { break; }
+        }
+        sex_std::terminal::set_raw(false);
+        println!("[stdhello.raw] off");
+        return;
+    }
     println!("Hello from Rust std on SexOS.");
     println!("arguments: {:?}", &args[1..]);
     let mut passed = 0;
@@ -65,8 +131,8 @@ fn main() {
     let _ = std::fs::create_dir("stdhello-tree/empty");
     check("read_dir of an empty folder", sex_std::fs::read_dir("stdhello-tree/empty").is_ok_and(|v| v.is_empty()));
     check("remove_dir_all", sex_std::fs::remove_dir_all("stdhello-tree").is_ok() && std::fs::metadata("stdhello-tree").is_err());
-    // std's own answer for starting another program (see sex_std::process).
-    check("Command says unsupported", std::process::Command::new("stdhello").status().is_err_and(|e| e.kind() == std::io::ErrorKind::Unsupported));
+    // Starting another program (sex_std::process; scripts/process_gate.py runs real ones).
+    check("Command of a missing program", std::process::Command::new("no-such-program").status().is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound));
 
     let counter = Arc::new(Mutex::new(0u64));
     let handles: Vec<_> = (0..4).map(|i| {

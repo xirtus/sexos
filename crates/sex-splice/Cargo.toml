@@ -1,0 +1,8 @@
+[package]
+name = "sex-splice"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Splicy's editing core: a non-destructive timeline, edit by transcript, staged suggestions, version history, render plans and OpenTimelineIO export"
+
+[dependencies]

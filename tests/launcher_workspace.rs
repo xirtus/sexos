@@ -11,6 +11,10 @@ use launcher::{Evidence,LiveAction};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]pub enum Admission{Accepted,Full,Rejected(u64)}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]pub enum LatestPoll{Idle,Deferred,Applied(Operation),Rejected(u64)}
 mod linen_text_delivery{pub use crate::{Admission,LatestPoll};}
+// No tab groups here: every tab of a shown frame shows.
+mod layouts_glue{pub static mut BEHIND:Option<u64>=None;pub unsafe fn tab_hidden(_:u32,_:usize)->bool{false}
+ pub unsafe fn behind(sid:u64)->Option<(u32,usize)>{if BEHIND==Some(sid){Some((sid as u32,1))}else{None}}
+ pub unsafe fn show(sid:u64)->bool{crate::OPS.push(format!("show:{sid}"));BEHIND=None;true}}
 pub const ERR_SERVICE_NOT_READY:u64=9;
 static mut NOW:u64=0;
 pub fn get_ticks()->u64{unsafe{NOW}}
@@ -81,6 +85,7 @@ unsafe fn pdx_call(slot:u64,op:u64,sid:u64,a:u64,b:u64)->(u64,u64){let result=ra
 unsafe fn update_local_geometry(_:u64,_:i32,_:i32,_:u32,_:u32){}
 unsafe fn send_frame_tab_info(_:u32){}
 unsafe fn tile_active_scene_frames(){OPS.push("tile".into());}
+unsafe fn session_placed(_:u64,_:u8){}
 unsafe fn try_set_focus(sid:u64)->bool{try_set_focus_inner(sid,true)}
 unsafe fn try_set_focus_inner(sid:u64,refresh_children:bool)->bool{launcher_focus_discard();if refresh_children&&ACTUAL_DESKTOP.is_some(){ACTUAL_DESKTOP.as_mut().unwrap().observe(Operation{opcode:0xEC,surface:154,packed:1,control:1},Admission::Accepted);}let f=FRAMES.iter().flatten().find(|f|f.frame_id==sid as u32).unwrap();if f.scene_id!=ACTIVE_SCENE_IDX||frame_is_minimized(f.frame_id)||STATE[index(sid)]!=LifecycleState::Visible{return false}FOCUSED_SURFACE_ID=sid;pdx_call(SLOT_DISPLAY,0xED,sid,0,0);true}
 unsafe fn restore_minimized_frame_inner(fid:u32,focus:bool)->bool{OPS.push(format!("restore:{fid}"));let f=FRAMES.iter_mut().flatten().find(|f|f.frame_id==fid).unwrap();f.flags&=!FRAME_FLAG_MINIMIZED;STATE[index(fid as u64)]=LifecycleState::Visible;pdx_call(SLOT_DISPLAY,0xEC,fid as u64,0,0);if focus&&DESKTOP_STATES.ready(fid as u64){try_set_focus(fid as u64);}true}
@@ -90,7 +95,7 @@ unsafe fn surface_in_active_scene(sid:u64)->bool{FRAMES.iter().flatten().any(|f|
 unsafe fn sync_lifecycle_scene_visibility(){for f in FRAMES.iter().flatten(){let sid=f.frame_id as u64;if f.flags&FRAME_FLAG_MINIMIZED==0{STATE[index(sid)]=if f.scene_id==ACTIVE_SCENE_IDX{LifecycleState::Visible}else{LifecycleState::Hidden};}}}
 include!(env!("LAUNCHER_WORKSPACE_PRODUCTION"));
 unsafe fn reset(target:u32,sid:u64,scene:u8,minimized:bool,visible:bool){
- APP_CUSTODY=[None;6];FRAMES=[None;6];STATE=[LifecycleState::Hidden;6];READY=[true;6];ACTIVE_SCENE_IDX=0;FOCUSED_SURFACE_ID=0;LAST_DISPLAY_FOCUS_RESULT=None;CATALOG_BAD_TASK=false;CATALOG_ERROR=None;LAUNCHER_FOCUS=None;DISPLAY_FOCUS=FocusDelivery::new();ACTUAL_DESKTOP=None;NOW=0;ACTIVATION_STATE=0;EVIDENCE=Evidence::Live;STATUS=0;OPS.clear();LOG.clear();ATLAS_DRAG_INTENT.active=false;
+ APP_CUSTODY=[None;6];FRAMES=[None;6];STATE=[LifecycleState::Hidden;6];READY=[true;6];ACTIVE_SCENE_IDX=0;FOCUSED_SURFACE_ID=0;LAST_DISPLAY_FOCUS_RESULT=None;CATALOG_BAD_TASK=false;CATALOG_ERROR=None;LAUNCHER_FOCUS=None;DISPLAY_FOCUS=FocusDelivery::new();ACTUAL_DESKTOP=None;NOW=0;ACTIVATION_STATE=0;layouts_glue::BEHIND=None;EVIDENCE=Evidence::Live;STATUS=0;OPS.clear();LOG.clear();ATLAS_DRAG_INTENT.active=false;
  let (slot,content)=match target{9=>(38,156),12=>(39,154),16=>(45,301),17=>(50,302),18=>(54,307),_=>panic!()};let row=app_catalog::by_surface(target,content).unwrap();assert_eq!(row.lifecycle_slot,slot);assert_eq!(row.frame(),sid);APP_CUSTODY[0]=Some(app_custody::Entry::new(slot,target,target*100+1,content));FRAMES[0]=Some(Frame{frame_id:sid as u32,scene_id:scene,flags:if minimized{1}else{0},tabs:[Some(Tab{surface_id:sid})]});STATE[index(sid)]=if minimized{LifecycleState::Minimized}else if visible{LifecycleState::Visible}else{LifecycleState::Hidden};
 }
 #[test]fn original_and_reserved_live_instances_move_without_activation_and_focus_after_visibility(){let _l=LOCK.lock().unwrap();unsafe{
@@ -228,3 +233,4 @@ unsafe fn reset(target:u32,sid:u64,scene:u8,minimized:bool,visible:bool){
   assert_eq!(FRAMES[0].unwrap().scene_id,2);assert_eq!(FRAMES[0].unwrap().flags,FRAME_FLAG_MINIMIZED);
  }
 }}
+#[test]fn grouped_background_tab_is_switched_to_before_focus(){let _l=LOCK.lock().unwrap();unsafe{for minimized in[false,true]{reset(12,153,0,minimized,!minimized);layouts_glue::BEHIND=Some(153);assert_eq!(launcher_focus_existing(12,153,None),Some(true));let show=OPS.iter().position(|s|s=="show:153").unwrap();let focus=OPS.iter().position(|s|s=="send:ed:153").unwrap();assert!(show<focus);if minimized{assert!(OPS.iter().position(|s|s=="restore:153").unwrap()<show);}assert_eq!(FOCUSED_SURFACE_ID,153);}}}

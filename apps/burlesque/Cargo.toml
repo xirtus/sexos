@@ -1,0 +1,24 @@
+[package]
+name = "burlesque"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Burlesque: Weft presentations app"
+
+[[bin]]
+name = "burlesque"
+path = "src/main.rs"
+
+[features]
+default = ["sexos"]
+sexos = ["dep:sex-pdx", "dep:sex-app", "dep:sex-media"]
+
+[dependencies]
+burlesque-core = { path = "../../crates/burlesque-core" }
+sex-canvas = { path = "../../crates/sex-canvas" }
+sex-font = { path = "../../crates/sex-font" }
+sex-splice = { path = "../../crates/sex-splice" }
+libm = "0.2"
+sex-pdx = { path = "../../crates/sex-pdx", optional = true }
+sex-app = { path = "../../crates/sex-app", optional = true }
+sex-media = { path = "../../crates/sex-media", optional = true }

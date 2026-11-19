@@ -61,6 +61,8 @@ impl Format {
             Format::Png | Format::Jpeg | Format::Webp | Format::Gif => Support::Decode,
             Format::Jxl if cfg!(feature = "jxl") => Support::Decode,
             Format::Svg if cfg!(feature = "svg") => Support::Decode,
+            // CR3 has no preview extraction here; rawler (feature `raw`) develops it.
+            Format::Cr3 if cfg!(feature = "raw") => Support::Decode,
             Format::Cr3 => Support::Detected,
             f if f.is_raw() => Support::Preview,
             _ => Support::Detected,
@@ -153,7 +155,8 @@ pub fn sniff(b: &[u8]) -> Option<Format> {
 /// ISO base media files (HEIF, AVIF, CR3): judged by major and compatible brands.
 fn isobmff(b: &[u8]) -> Option<Format> {
     let size = u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize;
-    let end = size.clamp(16, b.len().min(4096));
+    // max() keeps the bounds ordered for inputs shorter than 16 bytes (fuzz #259).
+    let end = size.clamp(16, b.len().min(4096).max(16));
     let brands = core::iter::once(&b[8..12]).chain(b.get(16..end).unwrap_or(&[]).chunks_exact(4));
     let (mut heic, mut heif) = (false, false);
     for brand in brands {

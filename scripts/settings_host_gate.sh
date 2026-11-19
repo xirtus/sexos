@@ -13,4 +13,6 @@ rustc --edition 2021 --test -A dead_code --extern sex_config="$out/libsex_config
 rustc --edition 2021 --test -A dead_code --extern sex_config="$out/libsex_config.rlib" apps/settings/src/setup.rs -o "$out/settings-setup"
 "$out/settings-setup" -q
 rustc --edition 2021 --test -A dead_code tests/screen_state.rs -o "$out/screen-state" && "$out/screen-state" -q
+# Idle held off while media plays: the Shell asks Bell before an idle step.
+rustc --edition 2021 --test servers/silk-shell/src/idle_media.rs -o "$out/idle-media" && "$out/idle-media" -q
 echo "[settings.host.gate] PASS"

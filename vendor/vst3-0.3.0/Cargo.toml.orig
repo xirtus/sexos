@@ -1,0 +1,24 @@
+[package]
+name = "vst3"
+version = "0.3.0"
+authors = ["Micah Johnston <micahrjohnston@gmail.com>"]
+edition = "2021"
+description = "Rust bindings for the VST 3 API"
+documentation = "https://coupler.rs/vst3-rs/vst3/"
+repository = "https://github.com/coupler-rs/vst3-rs"
+license = "MIT OR Apache-2.0"
+exclude = ["/vst3sdk"]
+
+[dependencies]
+com-scrape-types = { path = "com-scrape-types", version = "0.1.1" }
+
+[[example]]
+name = "gain"
+crate-type = ["cdylib"]
+
+[workspace]
+members = [
+    "com-scrape",
+    "com-scrape-types",
+    "generate",
+]

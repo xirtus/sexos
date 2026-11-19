@@ -1,4 +1,5 @@
 """Sustained real-input session extension for quil_workflow_gate (no builds)."""
+from input_payload_profile import wait_releases
 import math
 import json
 import re
@@ -44,7 +45,7 @@ def submit_save(q, wait, start):
         {"type":"key","data":{"down":down,"key":{"type":"qcode","data":key}}}
         for key,down in [("ctrl",True),("s",True),("s",False),("ctrl",False)]]})
     wait(r"\[quil.document.begin\] kind=save",start)
-    wait(r"\[sexinput.ps2.scancode\] raw=0x9d(?:\s|$)",start)
+    wait_releases(wait,start)
 
 
 def finish_cycle(text, clock, cycle, started, cycle_start, serial_start, session_deadline):

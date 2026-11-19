@@ -173,6 +173,7 @@ fn bindings_cover_the_hyprland_and_kde_basics() {
     assert_eq!(binding(code::N, m), Some(WmAction::Notifications));
     assert_eq!(binding(code::N, s), Some(WmAction::NightLight));
     assert_eq!(binding(code::B, m), Some(WmAction::Wallpaper));
+    assert_eq!(binding(code::B, s), Some(WmAction::Bluetooth));
 }
 
 #[test]

@@ -11,6 +11,7 @@ extern crate alloc;
 
 pub mod css;
 pub mod dom;
+mod query;
 pub mod layout;
 pub mod parse;
 pub mod style;
@@ -50,6 +51,11 @@ pub fn styles_at(dom: &Dom, extra_css: &[&str], width: i32, height: i32, now_ms:
     let mut author: Vec<css::Sheet> = extra_css.iter().map(|c| css::parse_sheet(c, width)).collect();
     for (text, media) in page_styles(dom) {
         if media.map_or(true, |m| css::media_matches(&m, width)) { author.push(css::parse_sheet(&text, width)); }
+    }
+    for (&root, text) in &dom.adopted_styles {
+        let mut sheet = css::parse_sheet(text, width);
+        sheet.scope = Some(root);
+        author.push(sheet);
     }
     let mut sheets: Vec<&css::Sheet> = Vec::with_capacity(author.len() + 1);
     sheets.push(&ua);

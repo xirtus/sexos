@@ -36,4 +36,15 @@ Serial markers are `[quil.code.*]`, apart from BOOT Quil's `[quil.*]`.
 | O9 | Wasm extensions on sex-wasm |
 | O10 | SSH remote folders (sex-ssh) |
 | O11 | assistant panel, off by default |
-| O12 | Jot polish (with the F thread, which owns Jot) |
+| O12 | Done (see below), except printing, which waits for a printing service |
+
+## O12: Jot polish (done)
+
+Jot (`apps/jot`, shared parts in `crates/sex-textedit`):
+
+- **Unsaved work survives a crash.** 0.8 s after the last change, Jot writes every tab with unsaved changes (path, text, cursor, encoding) to `/data/jot/.jot-session` and syncs it. The file has a checksum, so a write cut short is ignored. On start, Jot opens those files again with the unsaved text in place. The tab shows as modified, and undo goes back to what is on disk. Closing the window keeps unsaved tabs the same way (hot exit). Closing a tab on purpose discards it.
+- **Encodings and line ends.** Reads UTF-8, UTF-8 with BOM, UTF-16 LE/BE and Windows-1252, with LF or CRLF, and saves the file back the way it came. Ctrl+T switches LF/CRLF and Ctrl+Shift+T cycles the encoding. The status bar shows both. Characters Windows-1252 cannot hold are reported, not dropped silently.
+- **Soft wrap** (Ctrl+R): wraps at spaces; clicks and the cursor follow the wrapped rows.
+- **Markdown preview** (Ctrl+M, Esc to leave): headings, paragraphs, lists, task boxes, quotes, code, rules, tables, plus bold, italic, code, links and strikeout.
+- **Large files:** up to 64 MiB are edited; bigger files open read-only, cut at 64 MiB, with a pointer to Quil (which has no size limit).
+- Gate: `scripts/program_jot_restore_gate.py` (CI "Terminal and editor"). It kills QEMU with unsaved text and checks that the text comes back byte for byte after a reboot. It also checks that a CRLF file saves back as CRLF, and covers preview and wrap.

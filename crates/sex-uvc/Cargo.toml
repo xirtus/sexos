@@ -1,0 +1,9 @@
+[package]
+name = "sex-uvc"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Pure-Rust USB Video Class (UVC 1.1/1.5) protocol parser, probe/commit negotiator, stream reassembler, and color decoder"
+
+[dependencies]
+sex-image = { path = "../sex-image" }

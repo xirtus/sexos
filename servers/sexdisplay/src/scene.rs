@@ -76,6 +76,20 @@ impl SceneSnapshot {
 
     pub fn is_valid(&self)->bool{self.valid}
 
+    /// Window animations: windows `at` places are drawn there this frame, and
+    /// their content follows. Canonical surfaces are untouched.
+    pub fn place(&mut self,at:impl Fn(&Surface)->Option<(i32,i32,u32,u32)>)->bool{
+        let mut any=false;
+        for s in self.surfaces.iter_mut().filter(|s|s.active){
+            if let Some((x,y,w,h))=at(s){s.x=x;s.y=y;s.w=w;s.h=h;any=true;}
+        }
+        if any{
+            self.groups.fit_children(&mut self.surfaces);
+            for s in self.surfaces.iter_mut().filter(|s|s.active){crate::recompute_text_lines(s);}
+        }
+        any
+    }
+
     /// Remove retained text, selection, scalar layout and bitmap pixels before
     /// releasing a scene. Volatile value writes cover every Surface field, not
     /// just text_len: hidden/tail bytes and cursor/fill geometry are erased too.

@@ -18,7 +18,8 @@ extern PyObject* PyInit__string(void);
     X(time) X(atexit) X(faulthandler) X(_tracemalloc) X(_suggestions) X(_sre)      \
     X(_sysconfig) X(_typing) X(_symtable) X(_opcode) X(math) X(cmath) X(_struct)   \
     X(_random) X(_json) X(_bisect) X(_heapq) X(binascii) X(array) X(_datetime)     \
-    X(_contextvars) X(_queue) X(_statistics) X(_sha2)
+    X(_contextvars) X(_queue) X(_statistics) X(_sha2)                     \
+    X(_md5) X(_sha1) X(_sha3) X(_blake2) X(zlib) X(select) X(_socket) X(unicodedata) X(_sqlite3) X(_sextls)
 
 #define DECLARE(name) extern PyObject* PyInit_##name(void);
 MODULES(DECLARE)

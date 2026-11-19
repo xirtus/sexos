@@ -1,0 +1,21 @@
+[package]
+name = "splicy"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Splicy: the SexOS video editor; edit a clip by editing its transcript"
+
+[[bin]]
+name = "splicy"
+path = "src/main.rs"
+
+[features]
+default = ["sexos"]
+sexos = ["dep:sex-pdx", "dep:sex-app", "dep:sex-media"]
+
+[dependencies]
+sex-splice = { path = "../../crates/sex-splice" }
+sex-office = { path = "../../crates/sex-office" }
+sex-pdx = { path = "../../crates/sex-pdx", optional = true }
+sex-app = { path = "../../crates/sex-app", optional = true }
+sex-media = { path = "../../crates/sex-media", optional = true }

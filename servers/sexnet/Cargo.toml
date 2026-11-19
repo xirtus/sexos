@@ -30,5 +30,6 @@ sex-rt = { path = "../../sex-rt" }
 libsys = { path = "../../sex-src/lib/libsys" }
 
 sex-net = { path = "../../crates/sex-net" }
+sex-ntp = { path = "../../crates/sex-ntp" }
 sex-wifi = { path = "../../crates/sex-wifi" }
 sex-tls = { path = "../../crates/sex-tls", features = ["open-web"] }

@@ -4,6 +4,7 @@
 The host is the named endpoint itself. It neither forwards guest traffic nor
 provides a substitute verifier. No TLS key log or ephemeral secrets are saved.
 """
+from input_payload_profile import require_payload_proof
 from clock_source_evidence import browser_clock_sources
 import browser_source_evidence as source_evidence
 import argparse,ast,hashlib,json,math,os,re,shutil,socket,ssl,struct,subprocess,tempfile,threading,time
@@ -505,6 +506,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus_surface(300,text,key)
   from quil_workflow_gate import palette_commands,palette_select
   palette_select(key,'ZoomToggle',palette_commands(root))
@@ -531,7 +533,7 @@ def main():
    try:proc.wait(timeout=5)
    except subprocess.TimeoutExpired:proc.kill();proc.wait()
   sock.unlink(missing_ok=True)
- manifest['host_utc_end']=host_end;(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=inspect_wire(raw,peer.rows,a.mode);dns=dns_capture(raw,'echo',attempts=peer.attempts,expected=peer.dns)if peer.dns else dict(ok=False,errors=['missing actual fixed-name DNS fixture']);exchange=inspect_exchange(trace,a.mode,wire,dns,raw,host_start,host_end,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace)
+ manifest['host_utc_end']=host_end;(out/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n');raw=pcap.read_bytes()if pcap.exists()else b'';trace=text();wire=inspect_wire(raw,peer.rows,a.mode);dns=dns_capture(raw,'echo',attempts=peer.attempts,expected=peer.dns)if peer.dns else dict(ok=False,errors=['missing actual fixed-name DNS fixture']);exchange=inspect_exchange(trace,a.mode,wire,dns,raw,host_start,host_end,root=root);authority=nic_check(trace,expected=1,preparation=True,ethernet=True,network_config=True,routing=True);waiting=wait_check(trace,source_root=root)
  (out/'peer-exchanges.json').write_text(json.dumps(dict(tls=peer.rows,dns=peer.dns,dns_send_attempts=peer.attempts,keylog_enabled=False,scope='Explicit actual endpoint public application observations only; no private/ephemeral TLS material captured.'),indent=2)+'\n')
  result=dict(ok=failure is None and not peer.errors and all(v['ok']for v in(wire,dns,exchange,authority,waiting)),error=failure,server_errors=peer.errors,mode=a.mode,binding=binding,wire=wire,dns=dns,exchange=exchange,authority=authority,self_wait=waiting,pixels=pixels,cleanup=cleanup,actions=actions,scope=scope(a.mode));(out/'result.json').write_text(json.dumps(result,indent=2)+'\n')
  if not result['ok']:raise RuntimeError(json.dumps(result))

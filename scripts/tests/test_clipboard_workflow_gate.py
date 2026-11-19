@@ -5,7 +5,7 @@ from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import clipboard_workflow_gate as gate
 import http_content_gate as http
-from check_desktop_pixels import glyph
+from check_desktop_pixels import glyph,draw_cell
 ROOT=Path(__file__).resolve().parents[2]
 
 class ClipboardWorkflow(unittest.TestCase):
@@ -20,18 +20,15 @@ class ClipboardWorkflow(unittest.TestCase):
    f'[browser.reader.position] anchor={f["anchor"]} viewport=1 tls=0 retained_body_only=1\n'
    f'[browser.view.applied] bytes={f["bytes"]} http=258 body_bytes=12288 pixels=unconfirmed\n')
  def screen(self,f,highlight=True,base_y=70):
-  w,h=1280,800;pixels=bytearray(w*h*3);scale=f['scale'];a,b=f['selection'];fg=self.c['color'].to_bytes(3,'big');bg=self.c['selection_color'].to_bytes(3,'big')
+  w,h=1280,800;pixels=bytearray(self.c['background'].to_bytes(3,'big')*(w*h));scale=f['scale'];a,b=f['selection'];fg=self.c['color'].to_bytes(3,'big');bg=self.c['selection_color'].to_bytes(3,'big')
   for row,line in enumerate(f['lines']):
    for col,byte in enumerate(line):
-    for gy in range(9):
-     for gx in range(6):
-      on=gy<7 and gx<5 and bool(glyph(self.c['font'],chr(byte))[gy]&(1<<(4-gx)))
-      selected=highlight and a<=row*(f['cols']+1)+col<b
-      color=fg if on else bg if selected else b'\0\0\0'
-      for dy in range(scale):
-       for dx in range(scale):
-        x=50+self.c['inset']+(col*6+gx)*scale+dx;y=base_y+self.c['top']+(row*9+gy)*scale+dy
-        pixels[(y*w+x)*3:(y*w+x)*3+3]=color
+    x=50+self.c['inset']+col*6*scale;y=base_y+self.c['top']+row*9*scale
+    selected=highlight and a<=row*(f['cols']+1)+col<b
+    if selected:
+     for dy in range(9*scale):
+      at=((y+dy)*w+x)*3;pixels[at:at+6*scale*3]=bg*(6*scale)
+    draw_cell(pixels,w,x,y,chr(byte),scale,fg,self.c['font'])
   return b'P6\n1280 800\n255\n'+pixels
  def check(self,f,image=None,selection=(3,5),trace=None):return gate.verify_browser(self.trace(f)if trace is None else trace,self.screen(f)if image is None else image,gate.BODY,self.c,f['anchor'],selection,'Selected',(1280,800))
  def test_actual_source_closure_and_reverse_mapping(self):
@@ -40,6 +37,20 @@ class ClipboardWorkflow(unittest.TestCase):
   self.assertEqual(self.frame((5,3))['selection'],self.frame((3,5))['selection']);self.assertTrue(self.check(self.frame())['ok'])
  def test_whole_body_highlight_includes_more_than_256_source_bytes(self):
   f=self.frame((0,12288));r=self.check(f,selection=(0,12288));self.assertTrue(r['ok'],r);self.assertGreater(r['highlight_pixels'],1000)
+ def test_exact_coverage_rejects_partial_ink_zero_padding_and_stale_spare_cell(self):
+  from check_desktop_pixels import cell_coverage
+  f=self.frame();image=self.screen(f);offset=image.index(b'255\n')+4;scale=f['scale']
+  coverage=cell_coverage(self.c['font'],'P',scale)
+  partial=next(i for i,a in enumerate(coverage)if 0<a<255)
+  zero=next(i for i,a in enumerate(coverage)if not a)
+  origin_x=50+self.c['inset'];origin_y=70+self.c['top']
+  points=[(origin_x+partial%(6*scale),origin_y+partial//(6*scale)),
+          (origin_x+zero%(6*scale),origin_y+zero//(6*scale)),
+          (origin_x+f['cols']*6*scale,origin_y)]
+  for x,y in points:
+   bad=bytearray(image);point=offset+(y*1280+x)*3;bad[point:point+3]=b'\xff\x00\xff'
+   self.assertFalse(self.check(f,bytes(bad))['ok'])
+  self.assertEqual(self.check(f)['text_raster'],'source-coverage-ascii')
  def test_missing_highlight_wrong_range_and_chrome_highlight_fail(self):
   f=self.frame();self.assertFalse(self.check(f,self.screen(f,False))['ok']);self.assertFalse(self.check(f,selection=(4,6))['ok'])
   wrong=copy.deepcopy(f);wrong['selection']=(0,2);self.assertFalse(self.check(f,self.screen(wrong))['ok'])
@@ -199,7 +210,7 @@ class ClipboardWorkflow(unittest.TestCase):
    nonlocal stream,calls
    calls+=1;self.assertEqual(start,len(stream));self.assertEqual(actions,[('alt','tab')]);self.assertEqual(order[-1][0],'hardware')
    event=order[-1][2]['events'];self.assertEqual([(e['data']['key']['data'],e['data']['down'])for e in event],[('alt',True),('tab',True),('tab',False),('alt',False)])
-   stream+='[shell.focus.set] id=201\n[shell.app.switch] old=300 new=201 live=1 shortcut=alt_tab\n';order.append(('focus_barrier',));return 'actual focus'
+   stream+='[input.keyboard.keydown.ok] code=15 source=ps2\n[shell.focus.set] id=201\n[shell.app.switch] old=300 new=201 live=1 shortcut=alt_tab\n[input.keyboard.keyup.ok] code=15 source=ps2\n';order.append(('focus_barrier',));return 'actual focus'
   def key(code,pattern):return gate.qualified_key(q,code,pattern,text,wait,actions.append)
   gate.focus_surface(201,text,key)
   self.assertEqual(calls,1);self.assertEqual(actions,[('alt','tab')]);self.assertEqual([row[0]for row in order],['hardware','focus_barrier'])
@@ -216,6 +227,21 @@ class ClipboardWorkflow(unittest.TestCase):
   for bad in(t.replace(marker,''),t.replace('new=201 live=1 shortcut=alt_tab','new=201 live=0 shortcut=alt_tab'),t.replace('shortcut=alt_tab','shortcut=tab'),marker+t.replace(marker,'')):
    with self.assertRaises(ValueError):gate.clipboard_join(bad)
 
+ def test_access_focus_join_requires_exact_quil_result_and_completed_input_edges(self):
+  t=self.join_trace();marker='[shell.app.switch] old=300 new=201 live=1 shortcut=alt_tab\n'
+  action=('[input.keyboard.keydown.ok] code=15 source=ps2\n'
+          '[shell.kbd.ui.action] scancode=15 action=AccessFocusNext focused=300 frame=3 sid=300\n'
+          '[shell.kbd.ui.result] action=AccessFocusNext ok=1 reason=ok frame=3 sid=201\n'
+          '[input.keyboard.keyup.ok] code=15 source=ps2\n')
+  early='[shell.kbd.ui.result] action=AccessFocusNext ok=1 reason=ok frame=3 sid=201\n'
+  for wrong in(action.replace('sid=201','sid=200'),action.replace('reason=ok','reason=other'),action.replace('frame=3 sid=201','frame=0 sid=201')):
+   mixed=t.replace(marker,early+wrong)
+   with self.assertRaises(ValueError):gate.clipboard_join(mixed)
+  valid=t.replace(marker,action);r=gate.clipboard_join(valid)
+  self.assertEqual(r['focus_method'],'access_focus_next');self.assertIsNone(r['alt_tab_offset'])
+  self.assertGreater(r['focus_offset'],r['published_offset'])
+  for bad in(valid.replace('sid=201','sid=200'),valid.replace('ok=1 reason=ok frame=3','ok=0 reason=ok frame=3'),valid.replace('code=15 source=ps2\n','code=14 source=ps2\n'),valid.replace('[input.keyboard.keyup.ok]','[input.keyboard.other]'),valid.replace('scancode=15 action=AccessFocusNext','scancode=15 action=AccessClose'),action+t.replace(marker,'')):
+   with self.assertRaises(ValueError):gate.clipboard_join(bad)
  def test_canonical_desktop_boundary_accepts_y28_and_rejects_y27(self):
   self.assertEqual(self.c['desktop_top'],28);f=self.frame();image=self.screen(f,base_y=28)
   good=self.check(f,image,trace=self.trace(f,y=28));self.assertTrue(good['ok'],good)

@@ -10,7 +10,7 @@
 //!   3. good cap id → 0.
 //! Results are checked by the EL0 warden (tag 5) from the mailbox and
 //! printed as markers. The real PDX port (capability.rs/ipc.rs compile
-//! for aarch64 + userland PDs) is a later phase; protection.rs stays dead.
+//! for aarch64 + userland PDs) is a later phase; the dead protection.rs types were deleted.
 
 use super::registers::*;
 use super::serial;

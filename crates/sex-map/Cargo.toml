@@ -1,0 +1,17 @@
+[package]
+name = "sex-map"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Maps for SexOS (Rendezvous): vector tile (MVT) decoding and drawing, raster tile fallback, Nominatim search, OSRM routes, offline regions"
+
+[dependencies]
+# MIT/Apache-2.0, all no_std + alloc.
+tiny-skia = { version = "0.11.4", default-features = false, features = ["no-std-float"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+libm = "0.2"
+zune-inflate = { version = "0.2.54", default-features = false, features = ["gzip", "zlib"] }
+sex-font = { path = "../sex-font" }
+
+[dev-dependencies]
+tiny-skia = { version = "0.11.4", default-features = false, features = ["no-std-float"] }

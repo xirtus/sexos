@@ -1,0 +1,14 @@
+[package]
+name="moanrack"
+version="0.1.0"
+edition="2021"
+license.workspace=true
+[features]
+default=[]
+sexos=["dep:sex-app","dep:sex-pdx","weft/sexos","moan-plugin/sexos"]
+[dependencies]
+moan-plugin={path="../../crates/moan-plugin"}
+weft={path="../../crates/weft"}
+[target.'cfg(all(target_arch = "x86_64", target_os = "none"))'.dependencies]
+sex-app={path="../../crates/sex-app",optional=true}
+sex-pdx={path="../../crates/sex-pdx",optional=true}

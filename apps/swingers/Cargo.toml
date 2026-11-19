@@ -1,0 +1,17 @@
+[package]
+name = "swingers"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Swingers, the SexOS BitTorrent client"
+
+[[bin]]
+name = "swingers"
+path = "src/main.rs"
+
+[dependencies]
+sex-torrent = { path = "../../crates/sex-torrent" }
+sha2 = { version = "=0.10.9", default-features = false }
+
+[target.'cfg(target_os = "hermit")'.dependencies]
+sex-std = { path = "../../crates/sex-std" }

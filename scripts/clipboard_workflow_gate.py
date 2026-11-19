@@ -4,13 +4,14 @@
 Fixtures are a finite loopback endpoint. Guest authority remains its held BOOT
 routes in one GLOBAL_VAS. Synthetic tests exercise this checker, not the guest.
 """
+from input_payload_profile import require_payload_proof
 import argparse,ast,gzip,hashlib,json,os,re,shutil,socket,subprocess,threading,time
 from pathlib import Path
 import http_content_gate as http
 import https_import_gate as storage
 import tls_responsiveness_gate as desktop
 from desktop_close_gate import QMP
-from desktop_focus import focus_surface
+from desktop_focus import focus_surface, _completed as focus_completed
 from network_contention_gate import frozen_binding,cleanup_receipts,MAX_PCAP
 from tls_exchange_gate import reassemble
 from check_document_disk import recover,fnv
@@ -114,6 +115,8 @@ def source_contract(root,text_profile='ascii'):
  c['desktop_top']=int(boundary[1])
  reader=source['apps/kaleidoscope/src/document_reader.rs']
  if text_profile=='utf8'and not all(x in reader for x in ('encoded_row_cost','source_geometry','text::cell(body,offset)','replace_footer','CAPACITY-(3*cols+2)')):raise ValueError('scalar reader byte-budget/source binding changed')
+ # These ASCII clipboard qualification frames do not claim a Unicode shaping
+ # model. UTF8 retains its explicit historical scalar-cell oracle below.
  c['source_sha256'].update({p:sha(value.encode())for p,value in source.items()})
  return c
 
@@ -209,6 +212,24 @@ def verify_browser(trace,ppm,body,c,anchor,selection,status='Selected',resolutio
   width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1)
   if resolution and(width,height)!=tuple(resolution):raise ValueError('actual framebuffer resolution differs')
   if tile['x']<0 or tile['y']<c['desktop_top'] or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual reader tile outside framebuffer')
+  if c.get('text_raster')=='source-coverage'and all(byte<128 for line in f['lines']for byte in line):
+   factor=f['scale'];a,b=f['selection'];checked=ink=highlight=mismatch=0
+   bottom=tile['y']+tile['h']-c.get('content_bottom_inset',0)
+   columns=min(c.get('renderer_max_columns',80),max(0,(tile['w']-2*c['inset'])//(c['advance']*factor)))
+   rows=min(c['max_rows'],max(0,(bottom-tile['y']-c['top']+c['line']*factor-1)//(c['line']*factor)))
+   for row in range(rows):
+    line=f['lines'][row]if row<f['rows']else b''
+    row_start=f.get('row_offsets',[i*(f['cols']+1)for i in range(f['rows'])])[row]if row<f['rows']else 0
+    for col in range(columns):
+     char=chr(line[col])if col<len(line)else' '
+     selected=row<f['rows']and col<f['cols']and col<len(line)and a<=row_start+col<row_start+col+1<=b
+     cell_contract=dict(c,background=c['selection_color'])if selected else c
+     count,nonzero,bad=http.check_text_cell(pixels,width,tile['x']+c['inset']+col*c['advance']*factor,tile['y']+c['top']+row*c['line']*factor,char,factor,cell_contract,bottom)
+     checked+=count;ink+=nonzero;mismatch+=bad
+     if selected:highlight+=count-nonzero
+   if mismatch:raise ValueError(f'whole Browser exact coverage/selection/erasure mismatches={mismatch}')
+   if not ink or a!=b and not highlight:raise ValueError('missing checked text/highlight pixels')
+   return dict(ok=True,errors=[],text_raster='source-coverage-ascii',checked_pixels=checked,highlight_pixels=highlight,selection=list(f['selection']),source_selection=list(selection),expected_rows=[line.decode('ascii')for line in f['lines']],geometry={k:v for k,v in f.items()if k not in('starts','lines')})
   factor=f['scale'];fg=c['color'].to_bytes(3,'big');bg=c['selection_color'].to_bytes(3,'big');a,b=f['selection'];mismatch=ink=highlight=checked=0
   columns=min(80,max(0,(tile['w']-2*c['inset'])//(c['advance']*factor)))
   rows=min(c['max_rows'],max(0,(tile['h']-c['top']+c['line']*factor-1)//(c['line']*factor)))
@@ -231,7 +252,7 @@ def verify_browser(trace,ppm,body,c,anchor,selection,status='Selected',resolutio
         mismatch+=(value!=fg)if on else(value!=bg)if selected else(value in(fg,bg))
   if mismatch:raise ValueError(f'whole Browser text/highlight/stale-band pixel mismatches={mismatch}')
   if not ink or a!=b and not highlight:raise ValueError('missing checked text/highlight pixels')
-  return dict(ok=True,errors=[],checked_pixels=checked,highlight_pixels=highlight,selection=list(f['selection']),source_selection=list(selection),expected_rows=[line.decode('utf8')for line in f['lines']],geometry={k:v for k,v in f.items()if k not in('starts','lines')})
+  return dict(ok=True,errors=[],text_raster='legacy-scalar-rom',checked_pixels=checked,highlight_pixels=highlight,selection=list(f['selection']),source_selection=list(selection),expected_rows=[line.decode('utf8')for line in f['lines']],geometry={k:v for k,v in f.items()if k not in('starts','lines')})
  except(ValueError,KeyError,IndexError,OverflowError,UnicodeError)as exc:return dict(ok=False,errors=[str(exc)])
 
 
@@ -343,12 +364,16 @@ def clipboard_join(trace,body=BODY):
  intent=re.search(rf'\[quil.clipboard.intent\] ticket={dt} action=paste generation=\d+ revision=\d+ start=(\d+) end=(\d+)',trace)
  selections=list(re.finditer(r'\[quil.selection\] generation=(\d+) revision=(\d+) bytes=(\d+) anchor=(\d+) caret=(\d+)',trace[:intent.start()if intent else 0]))
  if not intent or not selections:raise ValueError('paste lacks exact selected replacement snapshot')
- switches=list(re.finditer(r'\[shell.app.switch\] old=\d+ new=201 live=1 shortcut=alt_tab',trace[pub.end():intent.start()]))
- if not switches:raise ValueError('cross-app paste lacks actual live Alt+Tab switch to Quil after publication')
- switch_offset=pub.end()+switches[-1].start()
+ focus_trace=trace[pub.end():intent.start()]
+ switches=list(re.finditer(r'\[shell.app.switch\] old=\d+ new=201 live=1 shortcut=alt_tab',focus_trace))
+ traversal=list(re.finditer(r'^\[shell.kbd.ui.result\] action=AccessFocusNext ok=1 reason=ok frame=[1-9][0-9]* sid=201\r?\n',focus_trace,re.M))
+ if switches:focus_method='alt_tab';switch_offset=pub.end()+switches[-1].start()
+ elif traversal and focus_completed(focus_trace,15,'AccessFocusNext',proof=True,target_sid=201):
+  focus_method='access_focus_next';switch_offset=pub.end()+traversal[-1].start()
+ else:raise ValueError('cross-app paste lacks completed live focus to Quil after publication')
  old=selections[-1];oldlen,anchor,caret=map(int,old.groups()[2:])
  if oldlen==0 or sorted((anchor,caret))!=[0,oldlen]or tuple(map(int,intent.groups()))!=(0,oldlen):raise ValueError('Quil paste did not atomically replace whole existing buffer')
- return dict(producer=dict(pd=15,task=15,ticket=ticket,source_generation=generation,revision=revision),consumer=dict(pd=9,task=9,ticket=dt,replaced_bytes=oldlen),publication_generation=pg,alt_tab_offset=switch_offset,bytes=len(body),hash=value,copy_offset=cp.start(),published_offset=pub.start(),paste_offset=dest.start(),receiver_shell_subject=dict(pd=3,task=3,proof='positive workflow plus sealed exact Client::receive sender check'))
+ return dict(producer=dict(pd=15,task=15,ticket=ticket,source_generation=generation,revision=revision),consumer=dict(pd=9,task=9,ticket=dt,replaced_bytes=oldlen),publication_generation=pg,focus_method=focus_method,focus_offset=switch_offset,alt_tab_offset=switch_offset if focus_method=='alt_tab'else None,bytes=len(body),hash=value,copy_offset=cp.start(),published_offset=pub.start(),paste_offset=dest.start(),receiver_shell_subject=dict(pd=3,task=3,proof='positive workflow plus sealed exact Client::receive sender check'))
 
 
 def unchanged_quil(before,after):
@@ -607,6 +632,7 @@ def run_boot(root,iso,binding,seed,out,contract,model,resolution_text,recovery=F
    time.sleep(.02)
   q=QMP(sock)
   if resolution_text=='1024x768':wait(r'SexOS compact 1024x768',timeout=15);press('down');press('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');wait(r'\[linen.disk.publish.done\]')
   start=len(text());q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':32700}},{'type':'abs','data':{'axis':'y','value':30000}}]});wait(r'\[shell.abs.normalize\] raw_x=32700 raw_y=30000 .*reason=(?:ok|duplicate_sample)',start)
   if recovery:reopen(expected['object']);picture('quil-cold-reopened','quil')

@@ -1,0 +1,9 @@
+[package]
+name = "sex-i2c-dw"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Synopsys DesignWare I2C master (Intel Serial IO / LPSS, AMD) driven by polling, without the bus mapping"
+
+[lib]
+path = "src/lib.rs"

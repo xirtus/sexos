@@ -1,0 +1,12 @@
+[package]
+name = "climax-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Climax benchmark and stress test engine: deterministic CPU/memory microbenchmarks, thermal throttling detector and report formatter"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libm = { version = "=0.2.16", default-features = false }

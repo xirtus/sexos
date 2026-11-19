@@ -1,0 +1,59 @@
+name: Nightly soak (fault injection)
+
+# J2 soak (scripts/soak_gate.py --inject) on a crash-probe image: a working session
+# repeated for hours while one restartable service is stopped each round. Free program
+# memory (Mesh) and the kernel heap (Swatch) must stay flat. One runner job may last 6 h,
+# so a night is one 4.5 h segment; `hours` up to 5.5 by hand. Reports land in the step
+# summary and the soak-<run> artifact (soak.json has every round).
+
+'on':
+  schedule:
+    - cron: '30 1 * * *'
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: 'Soak hours (at most 5.5 per runner job)'
+        required: false
+        default: '4.5'
+      cores:
+        description: 'QEMU cores'
+        required: false
+        default: '2'
+
+concurrency:
+  group: nightly-soak-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    name: Soak with fault injection
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      SOAK_HOURS: ${{ inputs.hours || '4.5' }}
+      SEXOS_GATE_CORES: ${{ inputs.cores || '2' }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build the image with the crash probe
+      run: |
+        SEXOS_CRASH_PROBE=1 SEXOS_STOP_RESTART_SECONDS=8 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/soak-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/soak-build.log"; exit 1)
+    - name: Soak
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/soak-source.img"
+        python3 scripts/soak_gate.py --inject --hours "$SOAK_HOURS" --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/soak-source.img" --out "$RUNNER_TEMP/sexos-soak"
+    - name: Soak report
+      if: always()
+      run: |
+        python3 scripts/soak_report.py "$RUNNER_TEMP/sexos-soak/soak.json" | tee -a "$GITHUB_STEP_SUMMARY" || true
+    - name: Preserve soak evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: soak-${{ github.run_id }}
+        path: |
+          ${{ runner.temp }}/sexos-soak/soak.json
+          ${{ runner.temp }}/sexos-soak/*.log
+          ${{ runner.temp }}/sexos-soak/*.ppm
+        if-no-files-found: ignore
+        retention-days: 30

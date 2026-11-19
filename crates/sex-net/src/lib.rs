@@ -93,7 +93,18 @@ fn hash(mut value:u64,bytes:&[u8])->u64{for b in bytes{value=(value^*b as u64).w
 /// handle is internal data, never an app-visible capability or file descriptor.
 pub struct Engine<'a>{network:sex_net_config::Config,seed:u64,iface:Interface,flows:SocketSet<'a>,handle:SocketHandle,client_handle:SocketHandle,dns_handle:SocketHandle,adapter:Adapter,last:u64,
     stopped:bool,failed:Option<Error>,pending:[u8;TURN_BYTES],pending_length:usize,pending_offset:usize,
-    active_flow:bool,stats:Statistics,open:Option<Open>}
+    active_flow:bool,stats:Statistics,open:Option<Open>,
+    /// Flows owing a reset, and since when (see `forget_unsent_resets`).
+    owed:alloc::vec::Vec<(SocketHandle,u64)>}
+/// How long a reset may wait for its peer's link address before it is dropped.
+const RESET_GRACE_MS:u64=2_000;
+/// Lets a TCP flow go. A flow that never heard from its peer (SYN-SENT) owes it no
+/// reset (RFC 9293 3.10.5), so it is forgotten outright; smoltcp's own abort would queue
+/// one, which waits on a neighbor that may never answer.
+fn let_go(s:&mut tcp::Socket){
+    let unanswered=s.state()==State::SynSent;s.abort();
+    if unanswered{let _=s.listen(IpListenEndpoint{addr:None,port:1});s.abort();}
+}
 /// The open-internet side: its own TCP flow, DNS socket and DHCP client, attached the
 /// first time something asks for them, so nothing else ever sees their traffic.
 struct Open{tcp:alloc::vec::Vec<SocketHandle>,udp:alloc::vec::Vec<SocketHandle>,dns:SocketHandle,dhcp:SocketHandle,lease:Option<Lease>,next_port:u16,next_udp_port:u16,query:Question,
@@ -196,7 +207,7 @@ impl<'a> Engine<'a>{
         let dns=udp::Socket::new(udp::PacketBuffer::new(&mut dns_rxmeta[..],&mut dns_rx[..]),
             udp::PacketBuffer::new(&mut dns_txmeta[..],&mut dns_tx[..]));
         let dns_handle=flows.add(dns);
-        Ok(Self{network,seed,iface,flows,handle,client_handle,dns_handle,open:None,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new()})
+        Ok(Self{network,seed,iface,flows,handle,client_handle,dns_handle,open:None,adapter,last:now,stopped:false,failed:None,pending:[0;TURN_BYTES],pending_length:0,pending_offset:0,active_flow:false,stats:Statistics::new(),owed:alloc::vec::Vec::new()})
     }
     pub fn state(&self)->State{self.flows.get::<tcp::Socket>(self.handle).state()}
     /// Start the open-internet side. Asks for an address on the local network.
@@ -410,7 +421,7 @@ impl<'a> Engine<'a>{
         let handle=*open.tcp.get(flow).ok_or(Error::Length)?;
         open.groups[flow]=None;
         let flow=self.flows.get_mut::<tcp::Socket>(handle);
-        flow.abort();
+        let_go(flow);
         let local=match address{Address::V4(_)=>IpListenEndpoint{addr:Some(IpAddress::v4(local[0],local[1],local[2],local[3])),port},Address::V6(_)=>IpListenEndpoint{addr:None,port}};
         flow.connect(self.iface.context(),(address.ip(),remote),local).map_err(|_|Error::Protocol)
     }
@@ -431,7 +442,7 @@ impl<'a> Engine<'a>{
         if other{return Err(Error::Busy);}
         open.groups[flow]=group.map(|n|(port,n));
         let flow=self.flows.get_mut::<tcp::Socket>(handle);
-        flow.abort();
+        let_go(flow);
         flow.listen(IpListenEndpoint{addr:None,port}).map_err(|_|Error::Protocol)
     }
     /// A flow of `group` a peer has connected to, waiting to be accepted. The caller takes
@@ -492,7 +503,7 @@ impl<'a> Engine<'a>{
         self.open_take(flow);
         if let Ok(h)=self.tcp_handle(flow){
             let s=self.flows.get_mut::<tcp::Socket>(h);
-            if !matches!(s.state(),State::FinWait1|State::FinWait2|State::Closing|State::TimeWait|State::LastAck){s.abort();}
+            if !matches!(s.state(),State::FinWait1|State::FinWait2|State::Closing|State::TimeWait|State::LastAck){let_go(s);}
         }
     }
     /// Makes one more program UDP socket and gives its number.
@@ -560,7 +571,7 @@ impl<'a> Engine<'a>{
     pub fn take_frame(&mut self)->Option<Frame>{self.adapter.tx.take()}
     pub fn has_frame(&self)->bool{self.adapter.tx.is_some()}
     pub fn stop(&mut self,reason:Error){
-        self.stopped=true;self.failed=Some(reason);self.flows.get_mut::<tcp::Socket>(self.handle).abort();self.flows.get_mut::<tcp::Socket>(self.client_handle).abort();
+        self.stopped=true;self.failed=Some(reason);self.flows.get_mut::<tcp::Socket>(self.handle).abort();let_go(self.flows.get_mut::<tcp::Socket>(self.client_handle));
         self.flows.get_mut::<udp::Socket>(self.dns_handle).close();
         self.adapter.rx=None;self.adapter.tx=None;self.pending.fill(0);self.pending_length=0;self.pending_offset=0;
     }
@@ -601,7 +612,7 @@ impl<'a> Engine<'a>{
     /// The caller must retain the per-frame live-ticket fence before DMA; abort
     /// never relabels an old frame as shared listener/gateway traffic.
     pub fn client_abort(&mut self){
-        self.flows.get_mut::<tcp::Socket>(self.client_handle).abort();
+        let_go(self.flows.get_mut::<tcp::Socket>(self.client_handle));
         if self.adapter.tx.as_ref().is_some_and(|f|f.client_ticket(&self.network).is_some()){self.adapter.tx=None;}
     }
 
@@ -680,10 +691,30 @@ impl<'a> Engine<'a>{
             if connection.listen((IpAddress::v4(self.network.local[0],self.network.local[1],self.network.local[2],self.network.local[3]),self.network.listen_port)).is_err(){self.stop(Error::Protocol);return;}
         }
         self.iface.poll_egress(time,&mut self.adapter,&mut self.flows);
+        self.forget_unsent_resets(now);
         self.open_poll_dhcp();
         self.open_poll_dhcp6();
         // Replies are taken each turn, so a stray datagram can't crowd out the answer.
         self.open_collect();
+    }
+    /// A flow that ended (aborted, or timed out) owes its peer a reset, and smoltcp
+    /// retries it until it goes out. When the peer's link address never answers, that
+    /// retry asks for it every second forever, and the interface asks for one neighbor
+    /// at a time: every other flow waiting on a neighbor (an IPv6 connect after SLAAC,
+    /// say) would wait behind it for good. A reset still unsent after a short grace is
+    /// dropped, as a peer that can't be reached can't take it anyway.
+    fn forget_unsent_resets(&mut self,now:u64){
+        let owed=&mut self.owed;
+        for(handle,socket) in self.flows.iter_mut(){
+            let smoltcp::socket::Socket::Tcp(s)=socket else{continue};
+            let at=owed.iter().position(|(h,_)|*h==handle);
+            if s.state()!=State::Closed||s.remote_endpoint().is_none(){if let Some(i)=at{owed.swap_remove(i);}continue;}
+            match at{
+                None=>owed.push((handle,now)),
+                Some(i) if now.saturating_sub(owed[i].1)>=RESET_GRACE_MS=>{owed.swap_remove(i);let _=s.listen(IpListenEndpoint{addr:None,port:1});s.abort();},
+                Some(_)=>{},
+            }
+        }
     }
     /// Stateless DHCPv6: once a router says other configuration comes from DHCPv6, ask
     /// for the resolvers with an Information-Request, retrying with backoff, and again

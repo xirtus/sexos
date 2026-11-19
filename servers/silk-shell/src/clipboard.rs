@@ -63,7 +63,10 @@ struct Transaction {
     source: Source,
     len: usize,
     offset: usize,
-    producer: usize,
+    /// The publication's owner while it is read: a document slot, or none for a program
+    /// (Shell checks a program's liveness before every read step).
+    producer: Option<usize>,
+    producer_subject: Subject,
     generation: u32,
     hash: u64,
     born: u64,
@@ -149,7 +152,7 @@ impl Broker {
         self.transaction = Some(Transaction {
             owner: index, ticket, action, mode: Mode::Offered, intent_admitted: false, ready: false,
             poisoned: false, source: Source { generation: 0, revision: 0 }, len: 0, offset: 0,
-            producer: index, generation: 0, hash: 0, born: now, progress: now, last_now: now, turns: 0, stalled: 0,
+            producer: Some(index), producer_subject: subject, generation: 0, hash: 0, born: now, progress: now, last_now: now, turns: 0, stalled: 0,
         });
         Ok(ticket)
     }
@@ -254,13 +257,13 @@ impl Broker {
                 let Some(publication) = self.publication else {
                     self.fail(index, ticket, Phase::Read, Status::Empty); return Ok(());
                 };
-                let producer = self.index(publication.owner).ok_or(Status::Invalidated)?;
-                if self.slots[producer].retired || !self.slots[producer].live {
+                let producer = self.index(publication.owner);
+                if producer.is_some_and(|i| self.slots[i].retired || !self.slots[i].live) {
                     self.fail(index, ticket, Phase::Read, Status::Invalidated); return Err(Status::Invalidated);
                 }
                 erase(&mut self.read_snapshot); self.read_snapshot[..publication.len].copy_from_slice(&self.committed[..publication.len]);
                 let t = self.transaction.as_mut().unwrap();
-                t.mode = Mode::Read; t.len = publication.len; t.producer = producer; t.source = publication.source;
+                t.mode = Mode::Read; t.len = publication.len; t.producer = producer; t.producer_subject = publication.owner; t.source = publication.source;
                 t.generation = publication.generation; t.hash = publication.hash;
                 self.slots[index].put(meta(ticket, Phase::Read, Status::Ok, Some(publication)), Effect::Read);
                 self.progress(now);
@@ -276,7 +279,7 @@ impl Broker {
                 if sex_pdx::clipboard::hash(&self.read_snapshot[..t.len]) != t.hash || !text(&self.read_snapshot[..t.len]) {
                     self.fail(index, ticket, Phase::Finish, Status::Invalid); return Err(Status::Invalid);
                 }
-                let value = Publication { owner: self.slots[t.producer].participant.unwrap().subject, source: t.source, len: t.len, generation, hash };
+                let value = Publication { owner: t.producer_subject, source: t.source, len: t.len, generation, hash };
                 self.slots[index].put(meta(ticket, Phase::Finish, Status::Ok, Some(value)), Effect::Finish);
             }
             Request::Cancel { .. } | Request::Query { .. } => unreachable!(),
@@ -319,7 +322,7 @@ impl Broker {
     /// Shell calls this after an exact held lifecycle terminal attestation and
     /// before its own cleanup ACK. Replays never restore registration or bytes.
     pub fn retire(&mut self, subject: Subject) -> bool {
-        let Some(index) = self.index(subject) else { return false; };
+        let Some(index) = self.index(subject) else { return self.forget_program(subject); };
         self.slots[index].retired = true; self.slots[index].live = false;
         self.slots[index].erase_pending(); self.slots[index].receipt = None;
         if self.publication.is_some_and(|p| p.owner == subject) { erase(&mut self.committed); self.publication = None; }
@@ -329,7 +332,7 @@ impl Broker {
         }
         if let Some(t) = self.transaction.as_ref() {
             if t.owner == index { self.clear_transaction(); }
-            else if t.mode == Mode::Read && t.producer == index {
+            else if t.mode == Mode::Read && t.producer == Some(index) {
                 let (consumer, ticket) = (t.owner, t.ticket);
                 self.fail(consumer, ticket, Phase::Finish, Status::Invalidated);
             }
@@ -338,6 +341,36 @@ impl Broker {
     }
 }
 impl Broker {
+    /// A program's copy (`sex_pdx::program_clipboard`): Shell has checked that the
+    /// program holds focus and was just used. Not while a transfer is in flight.
+    pub fn publish_program(&mut self, owner: Subject, bytes: &[u8]) -> Result<Publication, Status> {
+        if self.transaction.is_some() { return Err(Status::Busy); }
+        if self.index(owner).is_some() || !owner.valid() { return Err(Status::Denied); }
+        if bytes.is_empty() || bytes.len() > MAX_BYTES || !text(bytes) { return Err(Status::Invalid); }
+        let generation = self.generation.checked_add(1).ok_or(Status::Exhausted)?;
+        let digest = hash(bytes);
+        let publication = Publication { owner, source: Source { generation: generation as u64, revision: 0 }, len: bytes.len(), generation, hash: digest };
+        self.keep_history(digest);
+        erase(&mut self.committed); self.committed[..bytes.len()].copy_from_slice(bytes);
+        self.generation = generation; self.publication = Some(publication);
+        Ok(publication)
+    }
+    /// A program ended: what it copied goes, as a document's does.
+    fn forget_program(&mut self, subject: Subject) -> bool {
+        let mut forgot = false;
+        if self.publication.is_some_and(|p| p.owner == subject) { erase(&mut self.committed); self.publication = None; forgot = true; }
+        let mut i = 0;
+        while i < HISTORY {
+            if self.history[i].is_some_and(|p| p.owner == subject) { self.history_remove(i); forgot = true; } else { i += 1; }
+        }
+        if let Some(t) = self.transaction.as_ref() {
+            if t.mode == Mode::Read && t.producer.is_none() && t.producer_subject == subject {
+                let (consumer, ticket) = (t.owner, t.ticket);
+                self.fail(consumer, ticket, Phase::Finish, Status::Invalidated);
+            }
+        }
+        forgot
+    }
     /// The publication being replaced goes to the front of the history,
     /// unless the new one has the same bytes.
     fn keep_history(&mut self, next_hash: u64) {

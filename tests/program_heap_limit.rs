@@ -1,5 +1,7 @@
 //! Production Talc source; test allocations explicitly use a private allocator.
 extern crate self as sex_pdx;
+/// heap.rs records why the window refused it; the host test has no serial line.
+#[macro_export] macro_rules! serial_record{($($arg:tt)*)=>{{let _=core::format_args!($($arg)*);}}}
 use core::alloc::{GlobalAlloc,Layout};
 use std::cell::RefCell;
 pub mod program_memory{

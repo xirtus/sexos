@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="html">Atom &lt;b&gt;Fixture&lt;/b&gt;</title>
+  <link rel="self" href="http://example.org/atom.xml"/><link href="http://example.org/"/>
+  <entry>
+    <title>First entry</title><id>urn:uuid:1</id><updated>2026-11-14T10:00:00Z</updated>
+    <link rel="alternate" href="http://example.org/e1"/>
+    <link rel="enclosure" type="audio/ogg" length="99" href="http://example.org/e1.ogg"/>
+    <summary type="html">&lt;p&gt;Hello &lt;i&gt;there&lt;/i&gt;&lt;/p&gt;</summary>
+  </entry>
+  <entry>
+    <title>Second</title><id>urn:uuid:2</id><published>2026-11-13T10:00:00Z</published>
+    <content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml"><p>One &amp; two</p><p>Three</p></div></content>
+  </entry>
+</feed>

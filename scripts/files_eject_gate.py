@@ -31,7 +31,7 @@ def main():
  pull=a.out/'pullme.img';eject=a.out/'ejectme.img'
  make_stick(pull,'PULLME',scratch);make_stick(eject,'EJECTME',scratch)
  import http.server,threading
- FILES={'/files':(ROOT/'iso_root/programs/files').read_bytes()}
+ FILES={'/files':(ROOT/'iso_root/programs/loom').read_bytes()}
  class Handler(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
    body=FILES.get(self.path)
@@ -69,7 +69,7 @@ def main():
  result={}
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/files',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  m=expect(f'fetch http://10.0.2.2:{PORT}/files /bin/loom',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   for node,img in (('pulldrive',pull),('ejectdrive',eject)):
    q.cmd('blockdev-add',{'driver':'raw','node-name':node,'file':{'driver':'file','filename':str(img)}})
   # 1. Pulled out mid-copy.

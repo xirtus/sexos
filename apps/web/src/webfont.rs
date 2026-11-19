@@ -40,6 +40,7 @@ impl Browser {
                     if fetched >= PER_PAGE { continue; }
                     fetched += 1;
                     self.status = Some("Loading fonts…");
+                    self.next_kind = Some(sex_shields::Kind::Font);
                     let n = match self.fetch(&url) {
                         Ok((_, body)) => sex_fetch::woff::to_sfnt(&self.buf[body]).and_then(|ttf| self.fonts.add_face(ttf)),
                         Err(_) => None,

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<scan:ScannerCapabilities xmlns:scan="http://schemas.hp.com/imaging/escl/2011/05/03" xmlns:pwg="http://www.pwg.org/schemas/2010/12/sm">
+ <pwg:Version>2.63</pwg:Version>
+ <pwg:MakeAndModel>SexOS Fake eSCL</pwg:MakeAndModel>
+ <scan:UUID>4e65656c-6465-4000-8000-000000000002</scan:UUID>
+ <scan:Platen>
+  <scan:PlatenInputCaps>
+   <scan:MinWidth>16</scan:MinWidth><scan:MaxWidth>2550</scan:MaxWidth>
+   <scan:MinHeight>16</scan:MinHeight><scan:MaxHeight>3508</scan:MaxHeight>
+   <scan:SettingProfiles><scan:SettingProfile>
+    <scan:ColorModes><scan:ColorMode>BlackAndWhite1</scan:ColorMode><scan:ColorMode>Grayscale8</scan:ColorMode><scan:ColorMode>RGB24</scan:ColorMode></scan:ColorModes>
+    <scan:DocumentFormats><pwg:DocumentFormat>image/jpeg</pwg:DocumentFormat><pwg:DocumentFormat>image/png</pwg:DocumentFormat><scan:DocumentFormatExt>application/pdf</scan:DocumentFormatExt></scan:DocumentFormats>
+    <scan:SupportedResolutions><scan:DiscreteResolutions>
+     <scan:DiscreteResolution><scan:XResolution>75</scan:XResolution><scan:YResolution>75</scan:YResolution></scan:DiscreteResolution>
+     <scan:DiscreteResolution><scan:XResolution>300</scan:XResolution><scan:YResolution>300</scan:YResolution></scan:DiscreteResolution>
+    </scan:DiscreteResolutions></scan:SupportedResolutions>
+   </scan:SettingProfile></scan:SettingProfiles>
+  </scan:PlatenInputCaps>
+ </scan:Platen>
+</scan:ScannerCapabilities>

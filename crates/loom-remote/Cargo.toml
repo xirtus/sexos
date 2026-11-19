@@ -1,0 +1,15 @@
+[package]
+name = "loom-remote"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Loom's remote places: SFTP (over sex-ssh), WebDAV/Nextcloud and S3-compatible storage behind one folder-like trait; no I/O of its own"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+sex-ssh = { path = "../sex-ssh" }
+sex-http = { path = "../sex-http" }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
+hmac = { version = "=0.12.1", default-features = false }

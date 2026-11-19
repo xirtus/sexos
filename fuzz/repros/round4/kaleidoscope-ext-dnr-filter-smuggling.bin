@@ -1,0 +1,9 @@
+[
+  {
+    "id": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "urlFilter": "example.com#@#.ad-banner"
+    }
+  }
+]

@@ -40,3 +40,22 @@ fn geist_still_draws_ascii_first() {
     let mut out = vec![0u8; 12 * 18];
     for c in 0x21..0x7F { assert!(draw_cell(&geist, c, 12, 18, &mut acc, &mut out)); }
 }
+
+#[test]
+fn colour_emoji_draw_in_colour_at_any_size() {
+    let e = sex_font::fallback::ColorEmoji::embedded().expect("colour emoji parse");
+    assert!(e.count() > 1000 && e.size() == 32);
+    assert!(!e.has('A' as u32));
+    for side in [12usize, 20, 32, 48] {
+        let mut px = vec![0u32; side * side];
+        assert!(e.draw(0x1F600, side, &mut px), "grinning face");
+        // Yellow-ish face: mostly red+green, little blue, and transparent corners.
+        let solid: Vec<_> = px.iter().filter(|p| **p >> 24 > 200).collect();
+        assert!(solid.len() * 3 > side * side, "{side}");
+        let (r, g, b) = solid.iter().fold((0u64, 0u64, 0u64), |(r, g, b), p| (r + ((**p >> 16) & 255) as u64, g + ((**p >> 8) & 255) as u64, b + (**p & 255) as u64));
+        assert!(r > b * 2 && g > b * 2, "{side}: {r} {g} {b}");
+        assert_eq!(px[0] >> 24, 0);
+    }
+    let mut px = vec![0u32; 4];
+    assert!(!e.draw('A' as u32, 2, &mut px));
+}

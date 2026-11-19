@@ -5,14 +5,14 @@
   println!, arguments, HashMap, std::fs (write, append, read, read_dir, metadata,
   remove, no way above its folder, create_dir_all, file types, modified), sex_std::fs
   (rename, set_len, sync, copy, canonicalize, read_dir of an empty folder,
-  remove_dir_all), Command refused as
-  Unsupported, threads with Arc/Mutex, mpsc, Instant, sleep.
+  remove_dir_all), Command of a missing
+  program refused as NotFound, threads with Arc/Mutex, mpsc, Instant, sleep.
 * `run chello one two`: C `main(argc, argv)` on sex-libc's POSIX layer: stdio streams,
   fopen/fgets/fseek/ftell, open/lseek/read, stat, rename, opendir/readdir, remove,
   errno, qsort, malloc, atexit, pread/pwrite, ftruncate/fsync, mmap (private, shared
   with msync/munmap write-back, anonymous), poll and select on stdin/stdout/a file,
   getaddrinfo services and flags, getnameinfo, gethostbyname.
-* `run pdf`: the PDF viewer (hayro) writes welcome.pdf into its folder, reads it back
+* `run vellum`: the PDF viewer (hayro) writes welcome.pdf into its folder, reads it back
   through std::fs, renders page 1 with ink on it, turns to page 2 on Right, and closes.
 * `run +net chello net 10.0.2.2 ECHO`: the same C program's sockets (getaddrinfo,
   connect, send/recv, select, poll, UDP sendto/recvfrom) against the echo services.
@@ -57,7 +57,7 @@ PROGRAMS=[
 ]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
- elfs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in [p[0] for p in PROGRAMS]+['pdf','stdnet']]
+ elfs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in [p[0] for p in PROGRAMS]+['vellum','stdnet']]
  assert all(e[:4]==b'\x7fELF' for _,e in elfs)
  if b'This build has no C compiler output (musl headers were missing).' in dict(elfs)['chello']:
   raise SystemExit('chello is the no-compiler fallback: install musl headers or set MUSL_INCLUDE, then rebuild before running this gate')
@@ -91,7 +91,7 @@ def main():
    time.sleep(1);q.cmd('screendump',{'filename':str(a.out/f'{prog[0]}.ppm')})
    close(first);second=started(*prog);close(second);runs+=[first,second]
   for n in range(2):
-   s=len(t());run('run pdf')
+   s=len(t());run('run vellum')
    o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=welcome\.pdf pages=2\n',s,600)
    m=g['wait'](r'\[pdf\.page\] page=1 pages=2 width=(\d+) height=(\d+) ink=(\d+) ms=(\d+)\n',s,900)
    assert int(m[1])>=300 and int(m[3])>2000,f'page 1 looks empty: {m[0]}'

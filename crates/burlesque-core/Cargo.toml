@@ -1,0 +1,22 @@
+[package]
+name = "burlesque-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Burlesque presentations engine: layouts, deck model, PPTX/ODP/Markdown, presenter view, renderer, PDF export"
+
+[features]
+default = []
+std = ["sex-archive/std"]
+
+[dependencies]
+sex-canvas = { path = "../sex-canvas" }
+sex-font = { path = "../sex-font" }
+sex-image = { path = "../sex-image" }
+sex-archive = { path = "../sex-archive", default-features = false }
+miniz_oxide = { version = "=0.9.1", default-features = false, features = ["with-alloc"] }
+libm = "0.2"
+
+[dev-dependencies]
+vellum-edit = { path = "../vellum-edit" }
+crc32fast = "=1.5.4"

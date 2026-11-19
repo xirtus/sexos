@@ -1,0 +1,11 @@
+[package]
+name = "sex-gpu-nv"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Native NVIDIA GPU driver logic for SexOS: GSP-RM boot on Ampere (GA10x), host-testable"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]

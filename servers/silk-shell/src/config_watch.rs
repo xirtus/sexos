@@ -3,7 +3,7 @@
 //!
 //! Whenever the Shell is awake and has not asked for a while, it asks Files for the
 //! settings generation; when it grew, it walks the changed keys, keeps them in its
-//! own copy and applies the ones it owns (wallpaper and night light so far).
+//! own copy and applies the ones it owns (wallpaper, night light, clock zone, volume).
 //! Changes the person makes with Shell keys go the other way, to Files, so they
 //! last across restarts. Answers come back as tagged replies, one request in
 //! flight at a time.
@@ -34,11 +34,15 @@ struct Watch {
     look_owed: bool,
     /// The bar clock's time zone still has to reach Display.
     zone_owed: bool,
+    /// The volume from settings still has to reach Bell.
+    volume_owed: bool,
+    /// Network time on/off still has to reach sexnet.
+    time_owed: bool,
 }
 
 static mut WATCH: Watch = Watch {
     copy: Config::new(), seen: None, target: 0, asked: Asked::Nothing, asked_at: 0, last_poll: 0,
-    queue: [(0, 0); QUEUE], queued: 0, look_owed: false, zone_owed: false,
+    queue: [(0, 0); QUEUE], queued: 0, look_owed: false, zone_owed: false, volume_owed: false, time_owed: false,
 };
 
 fn watch() -> &'static mut Watch { unsafe { &mut *core::ptr::addr_of_mut!(WATCH) } }
@@ -57,6 +61,8 @@ pub fn poll() {
     let now = sex_pdx::get_ticks();
     if w.look_owed { show_look(w); }
     if w.zone_owed { show_zone(w); }
+    if w.volume_owed { give_volume(w); }
+    if w.time_owed { give_network_time(w); }
     // Files restarted or lost the request: ask again after a while.
     if w.asked != Asked::Nothing && now.saturating_sub(w.asked_at) > 5 * POLL_TICKS { w.asked = Asked::Nothing; }
     if w.asked != Asked::Nothing { return; }
@@ -93,6 +99,9 @@ pub fn receive(msg: &sex_pdx::PdxMessage) -> bool {
                 take(w, r.key, r.value);
                 ask(w, Asked::Next, c::NEXT, r.key, w.seen.unwrap_or(0));
             } else {
+                // A walk from the start (the first, or Files restarted): the keyboard
+                // settings hold even where none changed from their defaults.
+                if w.seen == Some(0) { keyboard(w); }
                 w.seen = Some(w.target);
                 sex_pdx::serial_record!("[shell.config.current] generation={}", w.target);
             }
@@ -120,6 +129,9 @@ fn take(w: &mut Watch, key: u16, value: i32) {
     match key {
         id::WALLPAPER | id::NIGHT_LIGHT => show_look(w),
         id::ZONE => show_zone(w),
+        id::VOLUME => give_volume(w),
+        id::NTP => give_network_time(w),
+        id::REPEAT_DELAY | id::REPEAT_RATE | id::CAPS_AS_CTRL => keyboard(w),
         _ => {}
     }
 }
@@ -132,6 +144,28 @@ fn show_zone(w: &mut Watch) {
     let zone = w.copy.value(id::ZONE) as u64;
     w.zone_owed = sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, sex_pdx::clock_zone::OP_CLOCK_ZONE, zone, 0, 0).0 != 0;
     sex_pdx::serial_record!("[shell.clock.zone] zone={} ok={}", zone, !w.zone_owed as u8);
+}
+
+fn keyboard(w: &mut Watch) {
+    let v = |k| w.copy.value(k).max(0) as u64;
+    unsafe { crate::keyboard_settings(v(id::REPEAT_DELAY), v(id::REPEAT_RATE), v(id::CAPS_AS_CTRL) != 0) };
+}
+
+/// sexnet sets the clock from the network unless the person turned it off.
+fn give_network_time(w: &mut Watch) {
+    let on = w.copy.value(id::NTP) != 0;
+    // sexnet answers in Shell's one reply slot: wait while Bell or sexnet still owe one.
+    if unsafe { crate::answer_owed() } { w.time_owed = true; return; }
+    let r = sex_pdx::pdx_call(sex_pdx::SLOT_NET, sex_pdx::network_time::OP, sex_pdx::network_time::SET_ENABLED, on as u64, 0).0;
+    w.time_owed = r != 0;
+    if r == 0 { unsafe { crate::NET_TIME_ASKED = Some(sex_pdx::get_ticks()); } }
+    sex_pdx::serial_record!("[shell.network_time] on={} ok={}", on as u8, (r == 0) as u8);
+}
+
+fn give_volume(w: &mut Watch) {
+    let volume = w.copy.value(id::VOLUME).clamp(0, 100) as u8;
+    w.volume_owed = !unsafe { crate::volume_restore(volume) };
+    sex_pdx::serial_record!("[shell.volume.restore] volume={} ok={}", volume, !w.volume_owed as u8);
 }
 
 /// Display started again and knows nothing: show the look and the clock's zone again.

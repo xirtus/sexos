@@ -1,0 +1,49 @@
+{
+  "ok": true,
+  "formats": {
+    "wav": {
+      "expected_bytes": 768044,
+      "expected_frames": 192000,
+      "codec": "pcm_s16le",
+      "decoded_frames": 192000,
+      "bytes": 768044,
+      "sha256": "1937c53402ede53692125291dfdd597145f4b1a7d1ea2f6555f0376b56e48bfa",
+      "decoded_sha256": "0cc03b924009e6f982b8de5daaf1228b20e93a0f1e36d04eaed96ddf01ba6cb3"
+    },
+    "flac": {
+      "expected_bytes": 74099,
+      "expected_frames": 192000,
+      "codec": "flac",
+      "decoded_frames": 192000,
+      "bytes": 74099,
+      "sha256": "204c25ef7820fc2950122554263dca01df76a0b95824e975b24969a1e54d3bff",
+      "decoded_sha256": "0cc03b924009e6f982b8de5daaf1228b20e93a0f1e36d04eaed96ddf01ba6cb3"
+    },
+    "mp3": {
+      "expected_bytes": 96788,
+      "expected_frames": 192000,
+      "codec": "mp3",
+      "decoded_frames": 191855,
+      "bytes": 96788,
+      "sha256": "34ceb8c8461a409c260faee5fc4c3e8d3ef1c663b0e3d18f52102b19a5bdf6c4",
+      "decoded_sha256": "aaa039229fd3e97911c92a0fd54d3a4471d32dd4bd2375712b0198b1fad48019"
+    }
+  },
+  "close_cancelled": true,
+  "partial_bytes": 4140,
+  "provenance": {
+    "date": "2026-11-14",
+    "scope": "Actual QEMU app export through Files on an ABI-compatible development ISO; final combined-candidate CI remains required.",
+    "moan_elf_sha256": "a5b25b66b1657891dbc3b4598821ad3915faf77dbbf9c94641377021dd58cfab",
+    "files_app_elf_sha256": "1106c3117a59d4f4a4be32984b15584c8810beec27a8cd758d14c0699780fc8e",
+    "iso_sha256": "4cb7e33127e88bb44d9b2f13139ddc41f58c4db80a41b56b5f8bd298286547b5",
+    "kernel_sha256": "561790a09ae36f95498a64996bd44f93e76facc5abb9f17788c915ad63281715",
+    "shell_elf_sha256": "559d401e4d0873331a1a956122b92056f639efb3fa1a8c1082d6461c59474fb2",
+    "files_service_elf_sha256": "e0daf13f84b6fa87571fd171a8cd12c36f789c61f53d5efd335361c15854b683",
+    "base_iso_sha256": "c6eaec57eb55cbbfd4b9bd1afc20caa8b6531d342e73ba8629ad89040443356c",
+    "export_gate_sha256": "c3de49723682dff3049e826b85f8fac4d18b73112b00f19e89f8952d1831f3d1",
+    "geometry_helper_sha256": "b5cf47bdbd2c2fe07f7a40206bee211a1cf511b8fa74eaab6d71da6565c919a1",
+    "gate_integration_commit": "70d125fd",
+    "evidence_directory": "/Users/xmacbookm5/Projects/sexos-moan-export/target/moan-final-proof/export"
+  }
+}

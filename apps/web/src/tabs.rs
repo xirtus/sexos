@@ -43,6 +43,7 @@ pub struct Tab {
     marks: Vec<[i32; 5]>,
     pub title: String,
     laid_zoom: u32,
+    blocked: u32,
 }
 
 impl Tab {
@@ -56,7 +57,7 @@ impl Tab {
             canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_loads: Vec::new(),
             url: String::new(), history: Vec::new(), forward: Vec::new(), scroll: 0, focus: None, hover_css: false,
             import_map: Vec::new(), script_scroll: 0, view, frames: Vec::new(), images: Vec::new(), svgs: Vec::new(),
-            moving: Vec::new(), frames_shown: 0, find: None, find_at: 0, marks: Vec::new(), title: String::new(), laid_zoom: sex_html::style::zoom(),
+            moving: Vec::new(), frames_shown: 0, find: None, find_at: 0, marks: Vec::new(), title: String::new(), laid_zoom: sex_html::style::zoom(), blocked: 0,
         }
     }
 }
@@ -77,6 +78,7 @@ impl Browser {
         swap(&mut self.fonts.frames_shown, &mut t.frames_shown);
         swap(&mut self.find, &mut t.find); swap(&mut self.find_at, &mut t.find_at); swap(&mut self.marks, &mut t.marks);
         swap(&mut self.laid_zoom, &mut t.laid_zoom);
+        swap(&mut self.blocked, &mut t.blocked);
     }
 
     /// The label of each tab for the strip.

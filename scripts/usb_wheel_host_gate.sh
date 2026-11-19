@@ -35,7 +35,11 @@ assert re.search(r'Task::new\(\s*pd_id, entry',creation)
 usb=(root/'servers/sexusb/src/main.rs').read_text()
 devices=(root/'servers/sexusb/src/usb.rs').read_text()
 # Every pointer report, absolute or relative, records its wheel before it is sent.
-assert devices.count('record_device_wheel(slot, r.len() as u32,')==2
+assert devices.count('record_device_wheel(slot, r.len() as u32,')==1
+# Relative reports go through send_relative (shared with Bluetooth mice), which records
+# the wheel of the first report with the received length.
+assert 'self.send_relative(slot, r.len() as u32, buttons, x, y, wheel);' in devices
+assert devices.count('record_device_wheel(slot, bytes, false, w, packed)')==1
 assert 'let wheel = wheel.clamp(-127, 127) as i8;' in devices
 input_source=(root/'servers/sexinput/src/main.rs').read_text()
 assert 'let mut normalized_events: [(u64, u64, u64); 5]' in input_source
@@ -49,7 +53,11 @@ assert 'if keyboard_outbox.available()>=20' in loop
 assert '[sexinput.ps2.scancode] raw={:#x}' in loop
 Path(sys.argv[2]).write_text('\n'.join(parts)+'\n')
 PY
-USB_WHEEL_PRODUCTION="$WHEEL_TEMP/production.rs" rustc --edition=2021 --test "$WHEEL_ROOT/tests/usb_wheel.rs" -o "$WHEEL_TEMP/tests"
-"$WHEEL_TEMP/tests"
+for INPUT_DIAG_MODE in normal proof; do
+  INPUT_DIAG_FLAGS=()
+  if [[ "$INPUT_DIAG_MODE" == proof ]]; then INPUT_DIAG_FLAGS=(--cfg sexos_input_payload_proof); fi
+  USB_WHEEL_PRODUCTION="$WHEEL_TEMP/production.rs" rustc --edition=2021 --check-cfg 'cfg(sexos_input_payload_proof)' "${INPUT_DIAG_FLAGS[@]}" --test "$WHEEL_ROOT/tests/usb_wheel.rs" -o "$WHEEL_TEMP/tests"
+  "$WHEEL_TEMP/tests"
+done
 rustc --edition=2021 --test "$WHEEL_ROOT/servers/sexusb/src/hid.rs" -o "$WHEEL_TEMP/hid" 2>/dev/null && "$WHEEL_TEMP/hid" -q
 echo '[wheel.host] PASS scope=actual_decoders_normalizers_and_bounded_arrival_order_host_callbacks_not_native_authority_or_pixels'

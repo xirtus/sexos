@@ -1,0 +1,14 @@
+[package]
+name = "hookup"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+
+[[bin]]
+name = "hookup"
+path = "src/main.rs"
+
+[dependencies]
+sex-std = { path = "../../crates/sex-std" }
+sex-font = { path = "../../crates/sex-font" }
+sex-kdeconnect = { path = "../../crates/sex-kdeconnect", features = ["std"] }

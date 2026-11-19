@@ -12,7 +12,7 @@ def unsparse(name):
  while at<len(raw):
   lba=struct.unpack('<Q',raw[at:at+8])[0];out[lba*512:lba*512+512]=raw[at+8:at+520];at+=520
  return bytes(out)
-FILES={'/jot':(ROOT/'iso_root/programs/jot').read_bytes(),'/files':(ROOT/'iso_root/programs/files').read_bytes(),
+FILES={'/jot':(ROOT/'iso_root/programs/jot').read_bytes(),'/files':(ROOT/'iso_root/programs/loom').read_bytes(),
        '/stick.img':unsparse('fat12'),'/linux.img':unsparse('ext2')}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
@@ -45,7 +45,7 @@ def main():
  def step(action,pattern,timeout=30):s=len(t());action();return g['wait'](pattern,s,timeout)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  for name,dest in [('jot','/bin/jot'),('files','/bin/files'),('stick.img','stick.img'),('linux.img','linux.img')]:
+  for name,dest in [('jot','/bin/jot'),('files','/bin/loom'),('stick.img','stick.img'),('linux.img','linux.img')]:
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} {dest}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   # The stick: FAT12, read and written from Spindle.
   expect('mount stick.img',r'\[files.media.mounted\] name=FLOPPY format=FAT12 ')

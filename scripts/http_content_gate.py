@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real app HTTP intent, controlled loopback bytes, TCP capture and body pixels."""
+from input_payload_profile import require_payload_proof
 import argparse,ast,hashlib,json,os,re,shutil,socket,struct,subprocess,threading,time
 from pathlib import Path
 from desktop_close_gate import QMP
@@ -8,6 +9,7 @@ from check_dns_capture import inspect as dns_capture,query as dns_query,response
 from check_nic_command import inspect as nic
 from check_desktop_pixels import font_from_source,glyph,verify_kaleido_layout
 from check_disk_persistence import ppm_rgb
+from native_text_metrics import source_metrics,cell_rgb,font_sources
 
 DNS_MODES=('dns-disallowed','dns-zero-ttl','dns-malformed','dns-silence','dns-cancel','dns-close','dns-cname-disallowed','dns-cname-zero-ttl','dns-cname-cycle','dns-cname-conflict','dns-bad-pointer','dns-cname-unrelated')
 DNS_SUCCESS=('dns-compressed','dns-cname','dns-cname-reordered','dns-cname-sections')
@@ -25,8 +27,11 @@ STREAM_BODY=(b''.join((b' '*48 if n%11==10 else(f'{n:03d} SEXOS STREAM LINE / SO
 assert len(STREAM_BODY)==12288
 
 def load_pixel_contract(root):
+ metrics=source_metrics(root)
  paths={'chrome_geometry':'scripts/browser_gate_viewport.py','renderer':'servers/sexdisplay/src/main.rs','preview':'apps/kaleidoscope/src/body_text.rs','compose':'apps/kaleidoscope/src/browser_view.rs','app':'apps/kaleidoscope/src/main.rs','style':'crates/sex-pdx/src/desktop_style.rs','surface':'servers/sexdisplay/src/surface_lifecycle.rs','wire':'crates/sex-http/src/codec.rs','wire_facade':'apps/kaleidoscope/src/http_wire.rs','wire_lib':'crates/sex-http/src/lib.rs','wire_manifest':'crates/sex-http/Cargo.toml','wire_config':'crates/sex-net-config/src/lib.rs','client':'apps/kaleidoscope/src/http_probe.rs','reader':'apps/kaleidoscope/src/document_reader.rs','network_abi':'crates/sex-pdx/src/network_job.rs','text_encoding':'crates/sex-pdx/src/text_encoding.rs','palette_navigation':'scripts/quil_workflow_gate.py','palette_catalog':'servers/silk-shell/src/main.rs'}
+ paths['native_text_metrics']='scripts/native_text_metrics.py'
  sources={key:(root/path).read_text()for key,path in paths.items()}
+ font_closure=font_sources(root)
  if not re.fullmatch(r'(?s)\s*//[^\n]*\n//! Source-path facade:[^#]*#\[path="\.\./\.\./\.\./crates/sex-http/src/codec\.rs"\]\s*mod codec;\s*pub use self::codec::\*;\s*',sources['wire_facade']):raise ValueError('production HTTP facade no longer uses the single shared codec')
  if '#![no_std]'not in sources['wire_lib']or 'pub use codec::*;'not in sources['wire_lib']or 'mod codec;'not in sources['wire_lib']:raise ValueError('shared HTTP no_std library binding changed')
  if 'sex_net_config::HOST_NAME'not in sources['wire']:raise ValueError('shared HTTP hostname no longer comes from immutable BOOT data')
@@ -48,6 +53,8 @@ def load_pixel_contract(root):
  if slim:
   compact=re.sub(r'\s+','',sources['renderer'])
   if '(sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).title()asusize)+(sex_pdx::desktop_style::chrome::Metrics::new(ui_scale).px(8)asusize)'not in compact:raise ValueError('renderer shared text origin changed')
+  for token in ('letrim_bottom=sh.saturating_sub((scene.metrics.px(8)asusize));','||lx>=rim_right||ly>=rim_bottom','ly>=sh.saturating_sub((scene.metrics.px(8)asusize))'):
+   if token not in compact:raise ValueError('renderer resize rim content clipping changed')
  else:
   if 'FRAME_TOP_BAR_HEIGHT_PX + 8'not in sources['renderer']:raise ValueError('renderer text origin changed')
  if 'let dns_start=preview.len()+64'not in compose or 'let http_start=dns_start+64'not in compose or 'let body_start=http_start+64'not in compose:raise ValueError('production status extent layout changed')
@@ -82,12 +89,41 @@ def load_pixel_contract(root):
  for token in ('frame.end>frame.first','range[length] = b\'-\'','range[length] = b\'/\'','controls.len()+1+length<=frame.cols'):
   if token not in reader:raise ValueError('production finite range/footer contract changed')
  https_reader_footers=[controls[0][0],b'V I',b'I'];reader_footers=[controls[0][1],b'V back',b'V']
- return dict(reader_encoding='utf-8-scalars',reader_max_rows=number('reader',r'const MAX_ROWS: usize = (\d+)'),reader_tab_cells=1,reader_replacement=0xfffd,reader_max_columns=number('reader',r'pub const MAX_COLUMNS: usize = (\d+)'),reader_controls=controls,reader_https_headers=https_headers,wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,https_reader_footers=https_reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
+ if number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)')!=metrics['glyph_height']:raise ValueError('reader glyph height differs from approved shared metrics')
+ renderer_max_columns=number('renderer',r'\(surf\.w\.saturating_sub\(chrome_metrics\(\)\.px\(16\)\) / advance\)\.clamp\(1, (\d+)\)')
+ if renderer_max_columns!=160:raise ValueError('approved renderer column cap changed')
+ return dict(text_raster='source-coverage',content_bottom_inset=metrics['inset']if slim else 0,background=0x303860,reader_encoding='utf-8-scalars',reader_max_rows=number('reader',r'const MAX_ROWS: usize = (\d+)'),reader_tab_cells=1,reader_replacement=0xfffd,reader_max_columns=number('reader',r'pub const MAX_COLUMNS: usize = (\d+)'),reader_controls=controls,reader_https_headers=https_headers,wire_max_body=number('wire',r'pub const MAX_BODY: usize = (\d+)'),wire_max_headers=number('wire',r'pub const MAX_HEADERS: usize = (\d+)'),stream_ring=number('network_abi',r'pub const STREAM_RING_BYTES: usize = (\d+)'),stream_max_wire=number('network_abi',r'pub const MAX_STREAM_BYTES: usize = ([0-9_ +]+);'),stream_total_ticks=number('network_abi',r'pub const STREAM_TOTAL_TICKS: u64 = ([0-9_]+)'),stream_idle_ticks=number('network_abi',r'pub const STREAM_IDLE_TICKS: u64 = ([0-9_]+)'),dynamic_reader_path=dynamic_path,reader_max_path=number('wire',r'pub const MAX_PATH: usize = (\d+)')if dynamic_path else 48,reader_max_ticket=number('network_abi',r'pub const MAX_TICKET: u32 = ([0-9_]+)'),reader_header=reader_header,reader_footers=reader_footers,https_reader_footers=https_reader_footers,reader_path=literal('reader',r'const PATH: &\[u8\] = (b"[^"\n]*")'),reader_capacity=number('reader',r'const CAPACITY: usize = (\d+)'),reader_max_body=number('reader',r'const MAX_BODY: usize = (\d+)'),glyph_height=number('reader',r'const GLYPH_HEIGHT: u32 = (\d+)'),font=font_from_source(sources['renderer']),prefix=literal('preview',r'preview\.append\((b"[^"\n]*")\)'),echo=echo,dns=dns,http=http,
   dns_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nControlled DNS: ")\)'),dns_footer=literal('compose',r'append\([^;\n]*,(b"\\nD query  X cancel")\)'),
   http_prefix=literal('compose',r'append\([^;\n]*,(b"\\n\\nPlain HTTP / no TLS: ")\)'),http_footer=literal('compose',r'append\([^;\n]*,(b"\\nH fetch[^"\n]*")\)'),
-  inset=number('style',r'INSET: u32 = (\d+)'),advance=number('style',r'ADVANCE: u32 = (\d+)'),line=number('style',r'LINE: u32 = (\d+)'),scale_threshold=number('style',r'width >= (\d+)'),top=number('renderer',r'FRAME_TOP_BAR_HEIGHT_PX: usize = (\d+)')+8,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
+  inset=metrics['inset'],advance=metrics['advance'],line=metrics['line'],scale_threshold=metrics['scale_threshold'],title=metrics['title'],bar=metrics['bar'],top=metrics['top'],glyph_width=metrics['glyph_width'],renderer_max_columns=renderer_max_columns,max_rows=number('surface',r'TEXT_MAX_ROWS: usize = (\d+)'),capacity=number('surface',r'TEXT_BUF_CAP: usize = (\d+)'),
   request=literal('wire',r'const REQUEST: &\[u8\] = (b"[^"\n]*")'),color=number('app',r'self\.ui\.queue(?:_selected)?\(&text\.bytes\[\.\.text\.len\],(0x[0-9A-Fa-f]+)'),
-  source_sha256={paths[key]:hashlib.sha256(value.encode()).hexdigest()for key,value in sources.items()})
+  source_sha256={**{paths[key]:hashlib.sha256(value.encode()).hexdigest()for key,value in sources.items()},**font_closure})
+
+def check_text_cell(pixels,width,x,y,char,scale,contract,y_end=None):
+ """Check every cell pixel, including partial coverage and erased padding.
+
+ Frozen contracts without text_raster retain their explicit historical ROM
+ predicate. New source-bound contracts require exact foreground/background RGB.
+ """
+ w=contract['advance']*scale;h=contract['line']*scale;checked=ink=mismatch=0
+ raster=contract.get('text_raster','legacy-rom')
+ if raster not in ('source-coverage','legacy-rom'):raise ValueError('unknown frozen text raster profile')
+ exact=raster=='source-coverage'
+ if exact:
+  expected=cell_rgb(contract,char,scale);background=contract['background'].to_bytes(3,'big')
+  if len(expected)!=w*h*3:raise ValueError('source coverage cell has wrong extent')
+ else:
+  bitmap=glyph(contract['font'],char);color=contract['color'].to_bytes(3,'big')
+ for gy in range(h):
+  if y_end is not None and y+gy>=y_end:continue
+  for gx in range(w):
+   at=((y+gy)*width+x+gx)*3;actual=pixels[at:at+3];checked+=1
+   if exact:
+    want=expected[(gy*w+gx)*3:(gy*w+gx)*3+3];ink+=want!=background;mismatch+=actual!=want
+   else:
+    on=gy//scale<7 and gx//scale<5 and bool(bitmap[gy//scale]&(1<<(4-gx//scale)))
+    ink+=on;mismatch+=(actual==color)!=on
+ return checked,ink,mismatch
 
 WHEEL_SCOPE='Actual QMP USB-tablet relative wheel bytes through BOOT SexUSB5/task5, Input4/task4, exact live Shell Browser15/task15 route43 and retained bounded reader. Three visual rows/notch, whole reader glyphs and endpoint clamps; hover/title/modal/closed rejection, finite burst with actual report coalescing observed, no navigation refetch. No physical hardware, arbitrary HID descriptors, queue-saturation or hostile-input isolation claim.'
 WHEEL_SERIAL_UNITS='UTF-8 decoded characters; universal newlines; replacement on decode error'
@@ -109,6 +145,13 @@ WHEEL_PATTERNS={kind:pattern+r'(?=\r?\n|$)'for kind,pattern in WHEEL_PATTERNS.it
 WHEEL_TAGS={'device':'sexusb.wheel.device','received':'sexinput.wheel.received','normalized':'sexinput.wheel.normalized','queued':'shell.browser.wheel.queued','delivered':'shell.browser.wheel.delivered','reader':'browser.reader.wheel','rejected':'shell.browser.wheel.rejected'}
 WHEEL_PENDING_PLAN=[('pending-burst',-3,'pending'),('closed',-1,'closed')]
 WHEEL_PLAN=[('top',1,'body'),('down',-1,'body'),('up',1,'body'),('burst',-3,'body'),('end',-1,'body'),('outside',-1,'outside'),('title',-1,'title'),('modal',-1,'modal'),('closed',-1,'closed')]
+
+def body_bounds(tile,contract):
+ # Match chrome::Metrics::body at the source-approved scale, including tiny
+ # windows with an empty content area. These are half-open pixel bounds.
+ inset=contract['inset'];top=contract['top']
+ left=tile['x']+min(inset,tile['w']);upper=tile['y']+min(top,tile['h'])
+ return left,upper,left+max(0,tile['w']-2*inset),upper+max(0,tile['h']-top-inset)
 
 def _wheel_compact(text):
  # Reviewed Rust forms only; this is a fail-closed source-shape contract,
@@ -275,16 +318,17 @@ def inspect_wheel_action(trace,action,body,contract,resolution):
  values=[int(m[4])for m in device]
  if sum(values)!=wheel or any(v==0 or(v>0)!=(wheel>0)for v in values):raise ValueError('real USB wheel report sum/direction differs from QMP intent')
  if target!='closed':
-  tile,viewport=wheel_viewport(trace[:start]);frame=None if target=='pending'else reader_geometry(trace[:start],body,contract,before);inside=tile['x']+8<=sx<tile['x']+tile['w']-8 and tile['y']+36<=sy<tile['y']+tile['h']-8
+  tile,viewport=wheel_viewport(trace[:start]);frame=None if target=='pending'else reader_geometry(trace[:start],body,contract,before);left,top,right,bottom=body_bounds(tile,contract);inside=left<=sx<right and top<=sy<bottom
   if frame is not None:
    positions=list(re.finditer(r'\[browser.reader.position\] anchor=(\d+) viewport=(\d+) tls=0 retained_body_only=1',trace[:start]))
    if not positions or tuple(map(int,positions[-1].groups()))!=(before,viewport):raise ValueError('wheel before-anchor differs from actual preceding reader position')
   if target in('body','pending','modal')and not inside or target in('outside','title')and inside:raise ValueError('wheel target classification differs from actual Browser body')
-  if target=='title'and not(tile['x']<=sx<tile['x']+tile['w']and tile['y']<=sy<tile['y']+36):raise ValueError('title rejection not inside actual frame chrome')
+  if target=='title'and not(tile['x']<=sx<tile['x']+tile['w']and tile['y']<=sy<tile['y']+contract['title']):raise ValueError('title rejection not inside actual frame chrome')
   if target=='modal':
    from check_launcher_pixels import layout
    modal,_=layout(trace[:start])
-   if not(modal['x']+8<=sx<modal['x']+modal['w']-8 and modal['y']+36<=sy<modal['y']+modal['h']-8)or trace[:start].rfind('[command_palette.close]')>trace[:start].rfind('[launcher.text.view]'):raise ValueError('modal wheel lacks actual overlapping open launcher')
+   left,top,right,bottom=body_bounds(modal,contract)
+   if not(left<=sx<right and top<=sy<bottom)or trace[:start].rfind('[command_palette.close]')>trace[:start].rfind('[launcher.text.view]'):raise ValueError('modal wheel lacks actual overlapping open launcher')
  else:
   if not re.search(r'\[sext.app.pool.ready\] target=15 task=15 .*ok=1',trace[:start]):raise ValueError('closed rejection precedes actual terminal cleanup')
   frame=None;viewport=None
@@ -526,30 +570,26 @@ def verify_reader_pixels(trace,ppm,body,contract,anchor=0,resolution=None,expect
  try:
   expected=reader_geometry(trace,body,contract,anchor,expected_path);tile=expected['tile'];width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1)
   if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
-  if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
+  if tile['x']<0 or tile['y']<contract.get('bar',50) or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('reader tile outside framebuffer')
   layouts=list(re.finditer(r'\[browser.reader.layout\] first=(\d+) end=(\d+) body_rows=(\d+) rows=(\d+) cols=(\d+) total_lines=(\d+) source_bytes=(\d+) viewport=(\d+) origin=validated_body tls=0 pixels=unconfirmed',trace))
   wanted=tuple(expected[key]for key in ['first','end','body_rows','rows','cols','total_lines','source_bytes','viewport'])
   if not layouts or tuple(map(int,layouts[-1].groups()))!=wanted:raise ValueError('reader layout receipt differs from independent document/geometry/navigation model')
   reader_position(trace,layouts[-1].end(),expected,0,contract.get('reader_require_position',False))
   if not re.search(rf'\[browser.view.applied\] bytes={expected["bytes"]} http=258 body_bytes={len(body)} pixels=unconfirmed',trace[layouts[-1].end():]):raise ValueError('missing positive atomic reader Applied receipt after current layout')
   scale=expected['scale'];color=contract['color'].to_bytes(3,'big');checked=0;mismatch=0;ink=0
-  columns=min(80,max(0,(tile['w']-2*contract['inset'])//(contract['advance']*scale)))
+  columns=min(contract.get('renderer_max_columns',80),max(0,(tile['w']-2*contract['inset'])//(contract['advance']*scale)))
   # Inspect the entire former text band, including the spare column and all
   # rows below the bounded reader snapshot. Stale overview/body ink must erase.
-  band_rows=min(contract['max_rows'],max(0,(tile['h']-contract['top']+contract['line']*scale-1)//(contract['line']*scale)))
+  # The source-bound bottom resize rim belongs to frame chrome, not Browser.
+  # UI1 chrome pixels are independent of the reader's automatic text scale.
+  content_bottom=tile['y']+tile['h']-contract.get('content_bottom_inset',0)
+  band_rows=min(contract['max_rows'],max(0,(content_bottom-tile['y']-contract['top']+contract['line']*scale-1)//(contract['line']*scale)))
   for row in range(band_rows):
    line=expected['lines'][row]if row<expected['rows']else b''
    for column in range(columns):
-    bitmap=glyph(contract['font'],chr(line[column]))if column<len(line)else(0,)*7
-    for gy in range(contract['line']):
-     for gx in range(contract['advance']):
-      on=gy<contract['glyph_height']and gx<5 and bool(bitmap[gy]&(1<<(4-gx)))
-      for dy in range(scale):
-       py=tile['y']+contract['top']+(row*contract['line']+gy)*scale+dy
-       if py>=tile['y']+tile['h']:continue
-       for dx in range(scale):
-        px=tile['x']+contract['inset']+(column*contract['advance']+gx)*scale+dx
-        actual=pixels[(py*width+px)*3:(py*width+px)*3+3]==color;checked+=1;ink+=on;mismatch+=actual!=on
+    char=chr(line[column])if column<len(line)else' '
+    c,i,m=check_text_cell(pixels,width,tile['x']+contract['inset']+column*contract['advance']*scale,tile['y']+contract['top']+row*contract['line']*scale,char,scale,contract,content_bottom)
+    checked+=c;ink+=i;mismatch+=m
   errors=[]if not mismatch else[f'whole reader glyph/padding/erasure mismatches={mismatch}']
   if not ink:errors.append('reader frame contains no checked ink')
   return dict(ok=not errors,errors=errors,geometry={k:v for k,v in expected.items()if k not in('starts','lines')},expected_rows=[line.decode('ascii')for line in expected['lines']],checked_pixels=checked,expected_ink_pixels=ink)
@@ -585,7 +625,7 @@ def http_status_geometry(text,expected,body,contract):
  if len(body)>64 or any(b!=10 and not 32<=b<=126 for b in body):raise ValueError('invalid expected normalized HTTP body')
  x,y,w,h=map(int,tiles[-1]);length=int(previews[-1]);offset=length+128
  if not len(contract['prefix'])<length or length+258>contract['capacity']:raise ValueError('composed text exceeds production extent')
- scale=2 if w>=contract['scale_threshold']else 1;columns=max(1,min(80,(w-2*contract['inset'])//(contract['advance']*scale)))
+ scale=2 if w>=contract['scale_threshold']else 1;columns=max(1,min(contract.get('renderer_max_columns',80),(w-2*contract['inset'])//(contract['advance']*scale)))
  prior=contract['echo'][echo].ljust(64,b' ')+(contract['dns_prefix']+dns_label+contract['dns_footer']).ljust(64,b' ')
  status=(contract['http_prefix']+contract['http'][expected]+contract['http_footer']).ljust(64,b' ')
  if len(prior)!=128 or len(status)!=64:raise ValueError('invalid production fixed status extent')
@@ -611,18 +651,13 @@ def verify_http_pixels(text,ppm,expected,body,contract,resolution=None):
  try:
   geometry=http_status_geometry(text,expected,body,contract);width,height,pixels=ppm_rgb(ppm,min_width=1,min_height=1);tile=geometry['tile'];scale=geometry['scale'];errors=[];checked=0;ink=0;body_checked=0;color=contract['color'].to_bytes(3,'big')
   if resolution and (width,height)!=tuple(resolution):raise ValueError('wrong actual framebuffer resolution')
-  if tile['x']<0 or tile['y']<50 or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual Browser tile outside framebuffer')
+  if tile['x']<0 or tile['y']<contract.get('bar',50) or tile['x']+tile['w']>width or tile['y']+tile['h']>height:raise ValueError('actual Browser tile outside framebuffer')
   for row in geometry['rows']:
    mismatch=0
    for column in range(geometry['columns']):
-    bitmap=glyph(contract['font'],row['text'][column])if column<len(row['text'])else(0,)*7
-    for gy in range(contract['line']):
-     for gx in range(contract['advance']):
-      on=gy<7 and gx<5 and bool(bitmap[gy]&(1<<(4-gx)))
-      for dy in range(scale):
-       for dx in range(scale):
-        px=row['x']+(column*contract['advance']+gx)*scale+dx;py=row['y']+gy*scale+dy
-        actual=pixels[(py*width+px)*3:(py*width+px)*3+3]==color;mismatch+=actual!=on;checked+=1;ink+=on;body_checked+=row['body']
+    char=row['text'][column]if column<len(row['text'])else' '
+    c,i,m=check_text_cell(pixels,width,row['x']+column*contract['advance']*scale,row['y'],char,scale,contract)
+    mismatch+=m;checked+=c;ink+=i;body_checked+=c*row['body']
    if mismatch:errors.append(f'Browser HTTP/body row={row["row"]} glyph_mismatches={mismatch}')
   if not ink or not body_checked:errors.append('missing complete HTTP label or body region')
   return dict(ok=not errors,errors=errors,expected=expected,expected_body_hex=body.hex()if expected=='Ready'else'',geometry=geometry,checked_pixels=checked,body_region_pixels=body_checked,expected_ink_pixels=ink)
@@ -900,7 +935,9 @@ def main():
    except(ValueError,AssertionError,KeyError)as exc:error=str(exc);time.sleep(.02)
   raise RuntimeError('real wheel action '+name+': '+error)
  def wheel_body_point():
-  tile,_=wheel_viewport(text());return tile['x']+tile['w']-24,tile['y']+64
+  tile,_=wheel_viewport(text());left,top,right,bottom=body_bounds(tile,contract)
+  if left>=right or top>=bottom:raise ValueError('wheel Browser has no body')
+  return (left+right)//2,(top+bottom)//2
  def wheel_close(q):
   nonlocal wheel_close_start
   from clipboard_workflow_gate import hardware_keys
@@ -947,7 +984,7 @@ def main():
    for name,delta in [('top',1),('down',-1),('up',1),('burst',-3)]:anchor=wheel_send(q,name,delta,'body',anchor,x,y);paint('browser-wheel-'+name)
    navigation('end',107,'browser-wheel-end-entry');anchor=wheel_send(q,'end',-1,'body',anchor,x,y);paint('browser-wheel-end-clamp')
    tile,_=wheel_viewport(text());anchor=wheel_send(q,'outside',-1,'outside',anchor,int(a.resolution.split('x')[0])-20,10);paint('browser-wheel-outside')
-   anchor=wheel_send(q,'title',-1,'title',anchor,tile['x']+tile['w']//2,tile['y']+14);paint('browser-wheel-title')
+   anchor=wheel_send(q,'title',-1,'title',anchor,tile['x']+tile['w']//2,tile['y']+contract['title']//2);paint('browser-wheel-title')
    start=len(text());hardware_keys(q,('grave_accent',));wait(r'\[shell.palette.item\] idx=0',start)
    deadline=time.monotonic()+15
    while True:
@@ -956,7 +993,8 @@ def main():
      health()
      if time.monotonic()>deadline:raise
      time.sleep(.02)
-   left=max(tile['x']+8,modal['x']+8);right=min(tile['x']+tile['w']-8,modal['x']+modal['w']-8);top=max(tile['y']+36,modal['y']+36);bottom=min(tile['y']+tile['h']-8,modal['y']+modal['h']-8)
+   bl,bt,br,bb=body_bounds(tile,contract);ml,mt,mr,mb=body_bounds(modal,contract)
+   left=max(bl,ml);right=min(br,mr);top=max(bt,mt);bottom=min(bb,mb)
    if left>=right or top>=bottom:raise RuntimeError('actual launcher does not overlap Browser body')
    anchor=wheel_send(q,'modal',-1,'modal',anchor,(left+right)//2,(top+bottom)//2);wheel_other_picture(q,'browser-wheel-modal','launcher')
    start=len(text());hardware_keys(q,('esc',));wait(r'\[command_palette.close\]',start);wheel_need_erasure=True;paint('browser-wheel-modal-erased');navigation('home',102,'browser-wheel-home')
@@ -994,6 +1032,7 @@ def main():
   q=QMP(qmp)
   if a.resolution=='1024x768':
    wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret');actions.append(dict(action='actual_compact_boot_menu',requested_resolution=[1024,768]))
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[app.surface.presented\] target=15 surface=300');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0')
   focus(q);start=len(text());began=time.monotonic();q.key('h')
   deadline=time.monotonic()+60

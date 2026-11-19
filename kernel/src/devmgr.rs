@@ -7,7 +7,7 @@ use sex_hwdb::manifest::Lease;
 // Which device goes to which service is data: the driver manifests in
 // `sex_hwdb::manifest`. This file only builds leases of each kind.
 
-pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32, sexbell_pd_id: u32) {
+pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32, sexbell_pd_id: u32, sexinput_pd_id: u32) {
     serial_println!("DevMgr: Starting hardware discovery...");
 
     let mut devices = HAL.enumerate_pci();
@@ -21,7 +21,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
         census.devices, census.working, census.in_progress, census.planned, census.unsupported, census.warnings);
 
     let behind_vmd = devices.iter().any(|d| sex_hwdb::is_vmd(id(d)));
-    let services = Services { drive: sexdrive_pd_id, display: sexdisplay_pd_id, usb: sexusb_pd_id, net: sexnet_pd_id, bell: sexbell_pd_id };
+    let services = Services { drive: sexdrive_pd_id, display: sexdisplay_pd_id, usb: sexusb_pd_id, net: sexnet_pd_id, bell: sexbell_pd_id, input: sexinput_pd_id };
     let mut held = [0u8; sex_hwdb::manifest::ALL.len()];
     let mut nvme = 0u32;
     for dev in devices {
@@ -67,6 +67,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             Lease::Hda => class_lease(&dev, crate::device_lease::Kind::Hda, pd, slot, first),
             Lease::Ahci => class_lease(&dev, crate::device_lease::Kind::Ahci, pd, slot, first),
             Lease::Wifi => class_lease(&dev, crate::device_lease::Kind::Wifi, pd, slot, first),
+            Lease::SerialIo => class_lease(&dev, crate::device_lease::Kind::SerialIo, pd, slot, first),
             Lease::Virtio => virtio(&dev, pd, slot, first),
             Lease::Display => display_lease(&dev, pd),
             Lease::IntelDisplay => intel_display_lease(&dev, pd, slot),
@@ -77,8 +78,8 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, manifest.service.name(), owner, slot, entry.lease, held[index]);
         if slot != 0 { crate::device_irq::record(owner, slot, &dev, manifest.vectors); }
     }
-    serial_println!("[devmgr.manifest] services={} drive={} usb={} net={} bell={} display={}",
-        sex_hwdb::manifest::ALL.len(), held[0], held[1], held[2], held[3], held[4]);
+    serial_println!("[devmgr.manifest] services={} drive={} usb={} net={} bell={} display={} input={}",
+        sex_hwdb::manifest::ALL.len(), held[0], held[1], held[2], held[3], held[4], held[5]);
 
     if nvme == 0 {
         serial_println!("[kernel.pci.nvme.absent] behind_vmd={}", behind_vmd as u8);
@@ -91,7 +92,7 @@ fn id(dev: &crate::hal::pci::PciDevice) -> sex_hwdb::Id {
 }
 
 /// The domains BOOT started for each driver service.
-struct Services { drive: u32, display: u32, usb: u32, net: u32, bell: u32 }
+struct Services { drive: u32, display: u32, usb: u32, net: u32, bell: u32, input: u32 }
 impl Services {
     fn owner(&self, service: sex_hwdb::Service) -> u32 {
         use sex_hwdb::Service::*;
@@ -102,6 +103,7 @@ impl Services {
             Net => self.net,
             Bell => self.bell,
             Display => self.display,
+            Input => self.input,
             _ => 0,
         }
     }
@@ -228,6 +230,9 @@ fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind
     let Some((view, window)) = crate::boot_memory::class_bar(pd, dev, slot, kind) else {
         serial_println!("[kernel.cap.class.skip] kind={:?} reason=invalid_bar bar={}", kind, kind.bar()); return false;
     };
+    if kind == crate::device_lease::Kind::SerialIo && crate::device_lease::wake_d0(dev) {
+        serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind=SerialIo", dev.bus, dev.dev, dev.func);
+    }
     let command = crate::boot_memory::class_command(pd, dev, slot, view, kind);
     pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,

@@ -9,6 +9,8 @@
 
 pub mod cache;
 pub mod fallback;
+pub mod gamma;
+mod gamma_tables;
 pub mod raster;
 
 pub use ttf_parser::GlyphId;
@@ -18,6 +20,120 @@ use ttf_parser::{Face, OutlineBuilder};
 /// Geist Mono and Geist Sans by Vercel, SIL Open Font License 1.1 (assets/fonts/geist/OFL.txt).
 pub static GEIST_MONO: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-Regular.ttf");
 pub static GEIST_SANS: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-Regular.ttf");
+/// The bold and italic faces of both. A program pays only for the faces it names:
+/// the linker drops the rest.
+pub static GEIST_SANS_BOLD: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-Bold.ttf");
+pub static GEIST_SANS_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-Italic.ttf");
+pub static GEIST_SANS_BOLD_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/geist/Geist-BoldItalic.ttf");
+pub static GEIST_MONO_BOLD: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-Bold.ttf");
+pub static GEIST_MONO_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-Italic.ttf");
+pub static GEIST_MONO_BOLD_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/geist/GeistMono-BoldItalic.ttf");
+/// JetBrains Mono, SIL Open Font License 1.1 (assets/fonts/jetbrains/OFL.txt): Spindle's
+/// other terminal font, the one with coding ligatures.
+pub static JETBRAINS_MONO: &[u8] = include_bytes!("../../../assets/fonts/jetbrains/JetBrainsMono-Regular.ttf");
+pub static JETBRAINS_MONO_BOLD: &[u8] = include_bytes!("../../../assets/fonts/jetbrains/JetBrainsMono-Bold.ttf");
+pub static JETBRAINS_MONO_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/jetbrains/JetBrainsMono-Italic.ttf");
+pub static JETBRAINS_MONO_BOLD_ITALIC: &[u8] = include_bytes!("../../../assets/fonts/jetbrains/JetBrainsMono-BoldItalic.ttf");
+
+/// Weight and slant of a face.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Style { pub bold: bool, pub italic: bool }
+
+impl Style {
+    pub const REGULAR: Style = Style { bold: false, italic: false };
+    pub const BOLD: Style = Style { bold: true, italic: false };
+    pub const ITALIC: Style = Style { bold: false, italic: true };
+    pub const BOLD_ITALIC: Style = Style { bold: true, italic: true };
+    /// 0 regular, 1 bold, 2 italic, 3 bold italic.
+    pub fn index(self) -> usize { self.bold as usize | (self.italic as usize) << 1 }
+}
+
+/// The Geist file for a face: Sans or Mono (`mono`) in `style`.
+pub fn geist(mono: bool, style: Style) -> &'static [u8] {
+    match (mono, style.bold, style.italic) {
+        (false, false, false) => GEIST_SANS,
+        (false, true, false) => GEIST_SANS_BOLD,
+        (false, false, true) => GEIST_SANS_ITALIC,
+        (false, true, true) => GEIST_SANS_BOLD_ITALIC,
+        (true, false, false) => GEIST_MONO,
+        (true, true, false) => GEIST_MONO_BOLD,
+        (true, false, true) => GEIST_MONO_ITALIC,
+        (true, true, true) => GEIST_MONO_BOLD_ITALIC,
+    }
+}
+
+/// Bold and italic made from a regular face, for fonts that have no such faces
+/// (the Noto fallbacks): italic leans the outline, bold smears it sideways.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Synthetic {
+    /// Horizontal lean per unit of height, in 1/1024 (a 12-degree slant is 218).
+    pub slant: i32,
+    /// Extra stroke width in 1/1024 of an em (bold is about 32).
+    pub embolden: i32,
+}
+
+impl Synthetic {
+    pub const NONE: Synthetic = Synthetic { slant: 0, embolden: 0 };
+    /// What `style` asks of a font that is itself regular.
+    pub fn for_style(style: Style) -> Synthetic {
+        Synthetic { slant: if style.italic { 218 } else { 0 }, embolden: if style.bold { 32 } else { 0 } }
+    }
+}
+
+/// How a glyph is drawn beyond its bare outline. [`Render::PLAIN`] is the outline
+/// as it is (what [`Font::draw`] does, and what the pixel oracles were cut from);
+/// [`Render::UI`] is what interface text should use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Render {
+    /// Light hinting below this size (1/64 pixel per em; 0 never): the baseline,
+    /// x-height and cap height land on whole pixels, vertically only, so advances,
+    /// kerning and line breaks stay exactly as unhinted.
+    pub hint_below: u32,
+    /// Stem darkening: thin strokes at small sizes get up to about a third of a
+    /// pixel more weight, centred on the stroke, fading out by [`DARKEN_UNTIL`].
+    pub darken: bool,
+}
+
+impl Render {
+    pub const PLAIN: Render = Render { hint_below: 0, darken: false };
+    /// Interface text: hinted up to 32 px, darkened at small sizes.
+    pub const UI: Render = Render { hint_below: 32 * 64, darken: true };
+    /// Interface text for ink of colour `rgb` (`0xRRGGBB`): darkening only for ink
+    /// darker than mid grey. Mixed in linear light ([`gamma::blend`]) dark strokes on
+    /// a light ground thin out and need it; light strokes on a dark ground already
+    /// gain weight and would smear.
+    pub fn ui_for(rgb: u32) -> Render {
+        Render { darken: gamma::luminance(rgb) < 2048, ..Render::UI }
+    }
+}
+
+/// The size (1/64 pixel per em) from which stems are no longer darkened.
+pub const DARKEN_UNTIL: u32 = 32 * 64;
+/// The most darkening, in 1/256 pixel, reached at 8 px and below.
+pub const DARKEN_MAX: i32 = 88;
+
+/// How much wider stems are drawn at `size`, in 1/256 pixel.
+pub fn darkening(size: u32) -> i32 {
+    const FROM: u32 = 8 * 64;
+    if size >= DARKEN_UNTIL { return 0; }
+    let size = size.max(FROM);
+    (DARKEN_MAX as i64 * (DARKEN_UNTIL - size) as i64 / (DARKEN_UNTIL - FROM) as i64) as i32
+}
+
+/// Light hinting's vertical map, in 1/256 pixel above the baseline: each zone
+/// (descenders and lowercase, x-height to cap height, above the caps) is scaled so
+/// its top lands on a whole pixel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct VMap { xh: i32, xh_to: i32, cap: i32, cap_to: i32 }
+
+impl VMap {
+    fn map(&self, y: i32) -> i32 {
+        let lerp = |v: i32, from: i32, to: i32| (v as i64 * to as i64 / from.max(1) as i64) as i32;
+        if y <= self.xh { lerp(y, self.xh, self.xh_to) }
+        else if y <= self.cap { self.xh_to + lerp(y - self.xh, self.cap - self.xh, self.cap_to - self.xh_to) }
+        else { self.cap_to + lerp(y - self.cap, self.cap, self.cap_to) }
+    }
+}
 
 /// A parsed font. Sizes are in 1/64 pixel per em, positions in 1/256 pixel.
 pub struct Font<'a> {
@@ -46,6 +162,17 @@ impl<'a> Font<'a> {
     pub fn advance(&self, glyph: GlyphId, size: u32) -> i32 {
         self.fx(self.face.glyph_hor_advance(glyph).unwrap_or(0) as i64, size)
     }
+
+    /// The advance of a glyph drawn with `synth`: emboldening widens it by the smear.
+    pub fn advance_synthetic(&self, glyph: GlyphId, size: u32, synth: Synthetic) -> i32 {
+        self.advance(glyph, size) + Self::smear(size, synth)
+    }
+
+    /// The emboldening smear in 1/256 pixel.
+    fn smear(size: u32, synth: Synthetic) -> i32 { (synth.embolden.max(0) as i64 * size as i64 * 4 / 1024) as i32 }
+
+    /// What the face says of itself (OS/2 and head flags).
+    pub fn style(&self) -> Style { Style { bold: self.face.is_bold(), italic: self.face.is_italic() || self.face.is_oblique() } }
     pub fn ascender(&self, size: u32) -> i32 { self.fx(self.face.ascender() as i64, size) }
     pub fn descender(&self, size: u32) -> i32 { self.fx(self.face.descender() as i64, size) }
 
@@ -93,11 +220,60 @@ impl<'a> Font<'a> {
     /// (`x`, `baseline`) in 1/256 pixel from the bitmap's top left. Ink outside the
     /// bitmap is clipped. `acc` needs [`raster::scratch_len`]`(w, h)` cells.
     pub fn draw(&self, glyph: GlyphId, size: u32, x: i32, baseline: i32, w: usize, h: usize, acc: &mut [i32], out: &mut [u8]) -> bool {
+        self.draw_synthetic(glyph, size, x, baseline, w, h, acc, out, Synthetic::NONE)
+    }
+
+    /// [`Font::draw`] with a synthetic slant and weight. The lean pivots on the
+    /// baseline, so ascenders move right and descenders left of the pen; emboldening
+    /// draws the outline again at each step of the smear, and the coverage of the
+    /// overlapping copies saturates, so strokes thicken and counters narrow.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_synthetic(&self, glyph: GlyphId, size: u32, x: i32, baseline: i32, w: usize, h: usize, acc: &mut [i32], out: &mut [u8], synth: Synthetic) -> bool {
+        self.draw_rendered(glyph, size, x, baseline, w, h, acc, out, synth, Render::PLAIN)
+    }
+
+    /// [`Font::draw_synthetic`] with hinting and stem darkening as `render` asks.
+    /// With [`Render::PLAIN`] the result is bit-identical to `draw_synthetic`.
+    /// Hinting moves the baseline to the nearest whole pixel.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_rendered(&self, glyph: GlyphId, size: u32, x: i32, baseline: i32, w: usize, h: usize, acc: &mut [i32], out: &mut [u8], synth: Synthetic, render: Render) -> bool {
+        if out.len() < w * h || acc.len() < raster::scratch_len(w, h) { return false; }
+        let vmap = (size < render.hint_below).then(|| self.vmap(size)).flatten();
+        let baseline = if vmap.is_some() { div_round(baseline as i64, FX as i64) as i32 * FX } else { baseline };
+        let dark = if render.darken { darkening(size) } else { 0 };
+        if dark == 0 {
+            return self.pass(glyph, size, x, baseline, w, h, acc, out, synth, vmap, false);
+        }
+        // The outline drawn twice, a darkening apart and centred on the pen, and
+        // the larger coverage kept: every stem gains the darkening, the advance none.
+        self.pass(glyph, size, x - dark / 2, baseline, w, h, acc, out, synth, vmap, false)
+            && self.pass(glyph, size, x + dark - dark / 2, baseline, w, h, acc, out, synth, vmap, true)
+    }
+
+    /// Light hinting's zones at `size`, or `None` when the font has no usable x-height.
+    fn vmap(&self, size: u32) -> Option<VMap> {
+        let top = |c: u8| self.glyph(c as u32).and_then(|g| self.face.glyph_bounding_box(g)).map(|b| b.y_max);
+        let xh = self.face.x_height().filter(|h| *h > 0).or_else(|| top(b'x'))?;
+        let cap = self.face.capital_height().filter(|h| *h > xh).or_else(|| top(b'H')).filter(|h| *h > xh)?;
+        let snap = |v: i32| (div_round(v as i64, FX as i64) as i32).max(1) * FX;
+        let (xh, cap) = (self.fx(xh as i64, size), self.fx(cap as i64, size));
+        let xh_to = snap(xh);
+        Some(VMap { xh, xh_to, cap, cap_to: snap(cap).max(xh_to + FX) })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pass(&self, glyph: GlyphId, size: u32, x: i32, baseline: i32, w: usize, h: usize, acc: &mut [i32], out: &mut [u8], synth: Synthetic, vmap: Option<VMap>, keep_max: bool) -> bool {
         let Some(raster) = Raster::new(w, h, acc) else { return false };
-        if out.len() < w * h { return false; }
-        let mut pen = Pen { raster, font: self, size, x, baseline, start: (0, 0), at: (0, 0) };
-        self.face.outline_glyph(glyph, &mut pen);
-        pen.raster.finish(out);
+        let smear = Self::smear(size, synth);
+        // Copies a quarter pixel apart at most, so the smear stays solid.
+        let copies = if smear > 0 { (smear / 64).clamp(1, 16) + 1 } else { 1 };
+        let mut pen = Pen { raster, font: self, size, x, baseline, slant: synth.slant, vmap, start: (0, 0), at: (0, 0) };
+        for n in 0..copies {
+            pen.x = x + if copies > 1 { smear * n / (copies - 1) } else { 0 };
+            self.face.outline_glyph(glyph, &mut pen);
+            pen.close();
+        }
+        if keep_max { pen.raster.finish_max(out) } else { pen.raster.finish(out) }
         true
     }
 }
@@ -109,6 +285,10 @@ struct Pen<'f, 'a, 'r> {
     size: u32,
     x: i32,
     baseline: i32,
+    /// Lean in 1/1024 per unit of height.
+    slant: i32,
+    /// Light hinting's vertical map, when hinted.
+    vmap: Option<VMap>,
     start: (i32, i32),
     at: (i32, i32),
 }
@@ -118,7 +298,9 @@ impl Pen<'_, '_, '_> {
         // Sixteenths of a font unit keep composite-glyph offsets exact enough.
         let units = |v: f32| (v * 16.0 + if v < 0.0 { -0.5 } else { 0.5 }) as i64;
         let scale = |v: f32| div_round(units(v) * self.size as i64 * 4, self.font.upem * 16) as i32;
-        (self.x + scale(x), self.baseline - scale(y))
+        let (sx, sy) = (scale(x), scale(y));
+        let sy = self.vmap.map_or(sy, |m| m.map(sy));
+        (self.x + sx + (sy as i64 * self.slant as i64 / 1024) as i32, self.baseline - sy)
     }
 }
 
@@ -176,4 +358,12 @@ pub fn draw_cell(font: &Font, scalar: u32, w: usize, h: usize, acc: &mut [i32], 
     let Some(glyph) = font.glyph(scalar) else { return false };
     let (size, x, baseline) = cell_layout(font, w, h);
     font.draw(glyph, size, x, baseline, w, h, acc, out)
+}
+
+/// [`draw_cell`] for a glyph found by shaping (a ligature's part), drawn `shift` cells to
+/// the right of the bitmap: a glyph that reaches into the cells before its own (as
+/// coding ligatures do) gives each of them its part this way.
+pub fn draw_cell_glyph(font: &Font, glyph: GlyphId, shift: usize, w: usize, h: usize, acc: &mut [i32], out: &mut [u8]) -> bool {
+    let (size, x, baseline) = cell_layout(font, w, h);
+    font.draw(glyph, size, x + (shift * w) as i32 * FX, baseline, w, h, acc, out)
 }

@@ -1,0 +1,16 @@
+[package]
+name = "gaze-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Gaze photo library catalog, faces-free smart search by date and place, offline reverse-geocoding gazetteer, and shared Batik non-destructive edits"
+
+[features]
+default = []
+std = []
+
+[dependencies]
+sex-image = { path = "../sex-image" }
+gaze-codecs = { path = "../gaze-codecs", default-features = false }
+batik-core = { path = "../batik-core", default-features = false }
+libm = "0.2"

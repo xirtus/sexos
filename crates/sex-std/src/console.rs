@@ -6,11 +6,83 @@
 //! as many as the window's text holds. The window opens with the first output or read,
 //! so a program that never prints opens none. Input is a line typed into the window,
 //! echoed as it is typed, with Backspace; closing the window ends input.
+//!
+//! A program that writes an escape sequence (colours, cursor movement, clearing: what
+//! command-line ports print) turns the window into a real terminal: a VT100/xterm screen
+//! (`sex-vt`) drawn in the window's pixels, with what was printed before carried over,
+//! scrollback on the wheel and Shift+PageUp, and the terminal's answers (a cursor
+//! position report, say) arriving on standard input as they would from a terminal.
+//!
+//! A run that a terminal started (`sex_pdx::console_relay`) has no window at all: its
+//! output and input go through Files to that terminal, Ctrl+C there ends it (at its next
+//! read or write, sleep or [`crate::terminal::interrupted`] look) and Ctrl+D ends its
+//! input. Its size and mode (raw, echo) are the terminal's: see [`crate::terminal`].
+//!
+//! A run another program started with its streams handed over (`Stdio::piped()`,
+//! `crate::process`) is a pipe run: each piped stream goes through Files to that
+//! program, each null one reads nothing and drops what is written, and an inherited one
+//! is the run's own console as above.
 use sex_app::{Event, Window};
 use sex_pdx::text_region::BYTES as SHOWN;
 use std::sync::Mutex;
 
+/// The window as a terminal, once the program wrote an escape sequence.
+struct Vt {
+    screen: sex_vt::Screen,
+    parser: sex_vt::Parser,
+    painter: sex_vt::render::Painter,
+    cache: Box<sex_vt::render::Cache>,
+    size: (usize, usize),
+    after_cr: bool,
+}
+impl Vt {
+    fn new() -> Box<Vt> {
+        let (w, h) = window_mut().size();
+        let (cw, ch) = sex_vt::render::cell_for_height(18);
+        let painter = sex_vt::render::Painter::new(cw, ch);
+        let (cols, rows) = painter.grid(w, h);
+        // An empty cache is all zeroes; building it on the stack would not fit.
+        let cache = unsafe { Box::<sex_vt::render::Cache>::new_zeroed().assume_init() };
+        Box::new(Vt { screen: sex_vt::Screen::new(cols, rows), parser: sex_vt::Parser::new(), painter, cache, size: (w.max(32), h.max(32)), after_cr: false })
+    }
+    /// Output, with lone newlines as CR LF (a terminal's output processing).
+    fn feed(&mut self, bytes: &[u8]) {
+        let mut start = 0;
+        for (i, &b) in bytes.iter().enumerate() {
+            if b == b'\n' && !(if i == 0 { self.after_cr } else { bytes[i - 1] == b'\r' }) {
+                self.screen.feed(&mut self.parser, &bytes[start..i]);
+                self.screen.feed(&mut self.parser, b"\r\n");
+                start = i + 1;
+            }
+        }
+        self.screen.feed(&mut self.parser, &bytes[start..]);
+        if let Some(&last) = bytes.last() { self.after_cr = last == b'\r'; }
+        // The terminal's answers are input, as from a real terminal.
+        let replies = self.screen.take_replies();
+        if !replies.is_empty() { PENDING.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&replies); }
+    }
+    fn resize(&mut self, w: usize, h: usize) {
+        self.size = (w.max(32), h.max(32));
+        let (cols, rows) = self.painter.grid(self.size.0, self.size.1);
+        self.screen.resize(cols, rows);
+    }
+    fn draw(&mut self) {
+        let window = window_mut();
+        if let Some(title) = self.screen.take_title() { let t = title.to_vec(); window.title(&t); }
+        let dirty = self.screen.take_dirty();
+        if !dirty.iter().any(|d| *d) { return; }
+        let (w, h) = self.size;
+        let pixels = window.pixels();
+        if pixels.len() < w * h { return; }
+        self.painter.draw(&self.screen, &dirty, &mut self.cache, &mut pixels[..w * h], w, true);
+        let used = self.screen.rows() * self.painter.cell_h;
+        if used < h { pixels[used * w..h * w].fill(sex_vt::DEFAULT_BG); }
+        window.show_pixels(w, h);
+    }
+}
+
 struct Console {
+    vt: Option<Box<Vt>>,
     /// What the window shows (when it is a console): the newest output.
     text: Vec<u8>,
     /// The line each stream is gathering for the serial record.
@@ -20,7 +92,7 @@ struct Console {
     closed: bool,
 }
 
-static CONSOLE: Mutex<Console> = Mutex::new(Console { text: Vec::new(), lines: [Vec::new(), Vec::new()], opened: false, closed: false });
+static CONSOLE: Mutex<Console> = Mutex::new(Console { vt: None, text: Vec::new(), lines: [Vec::new(), Vec::new()], opened: false, closed: false });
 static mut WINDOW: Option<Window> = None;
 /// Set once the program has the window for itself.
 static TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -45,6 +117,7 @@ impl Console {
     fn show(&mut self) {
         if taken() || self.closed { return; }
         self.opened = true;
+        if let Some(vt) = self.vt.as_mut() { vt.draw(); return; }
         let cap = SHOWN as usize - 64;
         if self.text.len() > cap {
             // Keep whole lines.
@@ -61,13 +134,177 @@ impl Console {
     }
 }
 
-/// Writes `bytes` to standard output (`stream` 0) or standard error (1).
+/// This run is a hidden helper (`crate::process::HIDDEN_WORD`): nobody can see or close
+/// a window of its, so output goes to the serial record only, input is at its end at
+/// once, and the program never waits for its window to be closed.
+static HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+pub(crate) fn hide() {
+    HIDDEN.store(true, std::sync::atomic::Ordering::Release);
+    if let Ok(mut c) = CONSOLE.lock() { c.closed = true; }
+}
+fn hidden() -> bool { HIDDEN.load(std::sync::atomic::Ordering::Acquire) }
+
+/// Whether a terminal holds this run's console: asked of Files once.
+fn attached() -> bool {
+    use std::sync::atomic::Ordering;
+    match ATTACHED.load(Ordering::Acquire) {
+        0 => {
+            let yes = sex_app::files::direct::relay::attached_word() == Some(0);
+            ATTACHED.store(1 + yes as u8, Ordering::Release);
+            yes
+        }
+        n => n == 2,
+    }
+}
+/// 0: not asked yet; 1: no terminal; 2: a terminal holds the console.
+static ATTACHED: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+/// A pipe run's stdio word with `PIPE_RUN` above it; 0 for any other run.
+static PIPES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// Streams whose reader went away (`HUNG_UP` on a write): bit 0 stdout, bit 1 stderr.
+static DEAF: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+/// This run is a pipe run (its starter said `+piped`; Files' ATTACHED agrees): `word` is
+/// its stdio word. No terminal holds its console.
+pub(crate) fn set_pipes(word: u8) {
+    use std::sync::atomic::Ordering;
+    PIPES.store(sex_pdx::console_relay::PIPE_RUN | word as u32, Ordering::Release);
+    ATTACHED.store(1, Ordering::Release);
+}
+fn piped_run() -> bool { PIPES.load(std::sync::atomic::Ordering::Acquire) != 0 }
+/// What stream `n` (0 stdin, 1 stdout, 2 stderr) is in a pipe run; None for other runs.
+fn pipe_stream(n: u32) -> Option<u8> {
+    let p = PIPES.load(std::sync::atomic::Ordering::Acquire);
+    (p != 0).then(|| sex_pdx::console_relay::stream(p as u8, n))
+}
+/// All of `bytes` to the starter's ring for `stream` (0 stdout, 1 stderr), waiting
+/// while it is full. A starter that stopped reading drops them, as a closed pipe would.
+fn pipe_write(stream: usize, bytes: &[u8]) {
+    use sex_app::files::direct::relay;
+    use std::sync::atomic::Ordering;
+    let (mut done, mut round) = (0, 0);
+    while done < bytes.len() && DEAF.load(Ordering::Relaxed) & (1 << stream) == 0 {
+        let sent = if stream == 0 { relay::write(&bytes[done..]) } else { relay::write_err(&bytes[done..]) };
+        match sent {
+            Ok(0) => { sex_app::thread::pause(round); round += 1; }
+            Ok(n) => { done += n; round = 0; }
+            Err(_) => { DEAF.fetch_or(1 << stream, Ordering::Relaxed); }
+        }
+    }
+}
+/// Input from the starter: waits for some; 0 once it closed the child's stdin.
+fn pipe_read(out: &mut [u8], wait: bool) -> usize {
+    let mut round = 0;
+    let want = out.len().min(sex_pdx::console_relay::INPUT_BYTES);
+    loop {
+        match sex_app::files::direct::relay::read(&mut out[..want]) {
+            Ok(0) if wait && want > 0 => { sex_app::thread::pause(round); round += 1; }
+            Ok(n) => return n,
+            Err(_) => return 0,
+        }
+    }
+}
+/// Ctrl+C in the terminal: the run ends as a terminal's interrupt would end it.
+fn interrupted_exit() -> ! {
+    sex_pdx::serial_record!("[std.interrupted] ms={}", sex_pdx::get_ticks());
+    crate::sys::sys_exit(130)
+}
+/// All of `bytes` to the terminal, waiting while it is behind.
+fn relay_write(bytes: &[u8]) {
+    use sex_pdx::console_relay as r;
+    let (mut done, mut round) = (0, 0);
+    while done < bytes.len() {
+        match sex_app::files::direct::relay::write(&bytes[done..]) {
+            Ok(0) => { sex_app::thread::pause(round); round += 1; }
+            Ok(n) => { done += n; round = 0; }
+            Err(r::INTERRUPTED) => interrupted_exit(),
+            Err(_) => return,
+        }
+    }
+}
+/// Typed input from the terminal: waits for some; 0 at the end of input.
+fn relay_read(out: &mut [u8], wait: bool) -> usize {
+    use sex_pdx::console_relay as r;
+    let mut round = 0;
+    loop {
+        match sex_app::files::direct::relay::read(out) {
+            Ok(0) if wait => { sex_app::thread::pause(round); round += 1; }
+            Ok(n) => return n,
+            Err(r::INTERRUPTED) => interrupted_exit(),
+            Err(_) => { if let Ok(mut c) = CONSOLE.lock() { c.closed = true; } return 0; }
+        }
+    }
+}
+
+/// The console's size in cells and how many times it changed: the terminal's when one
+/// holds the console (80 by 24 until it says), else the window's.
+pub(crate) fn size() -> (u16, u16, u32) {
+    if !taken() && attached() {
+        return match sex_app::files::direct::relay::size() {
+            Ok(s) if s.known() => (s.cols, s.rows, s.changes),
+            Ok(s) => (80, 24, s.changes),
+            Err(_) => (80, 24, 0),
+        };
+    }
+    let Ok(c) = CONSOLE.lock() else { return (80, 24, 0) };
+    if let Some(vt) = c.vt.as_ref() { return (vt.screen.cols() as u16, vt.screen.rows() as u16, RESIZES.load(std::sync::atomic::Ordering::Relaxed)); }
+    drop(c);
+    let (w, h) = window_mut().size();
+    let (cw, ch) = sex_vt::render::cell_for_height(18);
+    let (cols, rows) = sex_vt::render::Painter::new(cw, ch).grid(w.max(32), h.max(32));
+    (cols as u16, rows as u16, RESIZES.load(std::sync::atomic::Ordering::Relaxed))
+}
+/// Resizes of the program's own console window, for [`size`].
+static RESIZES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// The terminal mode (`sex_pdx::console_relay::RAW` and the rest) this run asked for.
+static MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+pub(crate) fn mode() -> u8 { MODE.load(std::sync::atomic::Ordering::Relaxed) }
+/// Asks the terminal for `mode`; false when no terminal holds the console (the program's
+/// own window keeps its cooked line).
+pub(crate) fn set_mode(mode: u8) -> bool {
+    MODE.store(mode & sex_pdx::console_relay::MODES, std::sync::atomic::Ordering::Relaxed);
+    !taken() && attached() && sex_app::files::direct::relay::set_mode(mode).is_ok()
+}
+/// Whether Ctrl+C was pressed in the terminal since the last look (it is taken).
+pub(crate) fn interrupted() -> bool {
+    !taken() && attached() && sex_app::files::direct::relay::poll() == Err(sex_pdx::console_relay::INTERRUPTED)
+}
+/// A place where Ctrl+C may end the run: a sleep. Looks at most every 20 ms.
+pub(crate) fn interrupt_point() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    let now = sex_pdx::get_ticks();
+    if now.saturating_sub(LAST.load(Ordering::Relaxed)) < 20 { return; }
+    LAST.store(now, Ordering::Relaxed);
+    if mode() & sex_pdx::console_relay::NO_SIGNALS == 0 && interrupted() { interrupted_exit(); }
+}
+
 pub(crate) fn write(stream: usize, bytes: &[u8]) {
+    match pipe_stream(1 + stream as u32) {
+        Some(sex_pdx::console_relay::PIPED) => return pipe_write(stream, bytes),
+        Some(sex_pdx::console_relay::NULL) => return,
+        _ => {}
+    }
     let Ok(mut c) = CONSOLE.lock() else { return };
     for &b in bytes {
         if b == b'\n' { c.record(stream); } else if c.lines[stream].len() < 400 { c.lines[stream].push(b); } else { c.record(stream); c.lines[stream].push(b); }
     }
-    c.text.extend_from_slice(bytes);
+    if hidden() { return; }
+    if !taken() && attached() { drop(c); relay_write(bytes); return; }
+    if c.vt.is_none() && !taken() && bytes.contains(&0x1b) {
+        // The first escape sequence: from here on the window is a terminal, starting
+        // with what was printed before.
+        let mut vt = Vt::new();
+        let before = core::mem::take(&mut c.text);
+        vt.feed(&before);
+        c.vt = Some(vt);
+    }
+    match c.vt.as_mut() { Some(vt) => vt.feed(bytes), None => c.text.extend_from_slice(bytes) }
+    c.show();
+}
+
+/// Echo of typed input, through the terminal when there is one.
+fn echo(c: &mut Console, bytes: &[u8]) {
+    match c.vt.as_mut() { Some(vt) => vt.feed(bytes), None => c.text.extend_from_slice(bytes) }
     c.show();
 }
 
@@ -85,7 +322,19 @@ static TYPING: Mutex<Vec<u8>> = Mutex::new(Vec::new());
 /// Reads typed input into `out`: what is left of the last line, or the next line.
 /// 0 when the window was closed.
 pub(crate) fn read(out: &mut [u8]) -> usize {
+    match pipe_stream(0) {
+        Some(sex_pdx::console_relay::PIPED) => return pipe_read(out, true),
+        Some(sex_pdx::console_relay::NULL) => return 0,
+        _ => {}
+    }
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
+    if pending.is_empty() && !taken() && attached() {
+        if closed() { return 0; }
+        let mut got = vec![0u8; out.len().clamp(1, sex_pdx::console_relay::INPUT_BYTES)];
+        let n = relay_read(&mut got, true);
+        if n == 0 { return 0; }
+        pending.extend_from_slice(&got[..n]);
+    }
     if pending.is_empty() {
         if let Ok(mut c) = CONSOLE.lock() { c.show(); }
         loop {
@@ -105,9 +354,20 @@ fn closed() -> bool { CONSOLE.lock().map(|c| c.closed).unwrap_or(true) }
 /// the window was closed. Takes the keys already waiting, without waiting for more.
 /// A program that took the window for itself reads its keys there, so never.
 pub(crate) fn input_ready() -> bool {
+    match pipe_stream(0) {
+        Some(sex_pdx::console_relay::PIPED) => return !matches!(sex_app::files::direct::relay::poll(), Ok(0)),
+        Some(sex_pdx::console_relay::NULL) => return true,
+        _ => {}
+    }
     if taken() { return false; }
     let mut pending = PENDING.lock().unwrap_or_else(|e| e.into_inner());
     if !pending.is_empty() || closed() { return true; }
+    if attached() {
+        let mut got = [0u8; 512];
+        let n = relay_read(&mut got, false);
+        pending.extend_from_slice(&got[..n]);
+        return n > 0 || closed();
+    }
     if let Ok(mut c) = CONSOLE.lock() { if !c.opened { c.show(); } }
     while let Some(event) = window_mut().poll() {
         if let Some(line) = take(event) { *pending = line; return true; }
@@ -125,12 +385,38 @@ fn take(event: Event) -> Option<Vec<u8>> {
             // One character back, with every byte of it.
             if !line.is_empty() {
                 let mut c = CONSOLE.lock().ok()?;
+                let mut gone = 0;
                 while let Some(b) = line.pop() {
-                    c.text.pop();
+                    gone += 1;
                     if b & 0xC0 != 0x80 { break; }
                 }
+                if c.vt.is_some() { echo(&mut c, b"\x08 \x08"); } else { for _ in 0..gone { c.text.pop(); } }
                 c.show();
             }
+            None
+        }
+        Event::Resize { width, height } => {
+            let mut c = CONSOLE.lock().ok()?;
+            if let Some(vt) = c.vt.as_mut() { vt.resize(width, height); }
+            RESIZES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            c.show();
+            None
+        }
+        Event::Pointer(p) => {
+            if let sex_pdx::app_pointer::Kind::Wheel { steps } = p.kind {
+                let mut c = CONSOLE.lock().ok()?;
+                if let Some(vt) = c.vt.as_mut() { vt.screen.scroll_view(steps as isize * 3); }
+                c.show();
+            }
+            None
+        }
+        Event::Key(key) if key.shift && matches!(key.code, 0x49 | 0x68 | 0x51 | 0x6D) => {
+            let mut c = CONSOLE.lock().ok()?;
+            if let Some(vt) = c.vt.as_mut() {
+                let page = vt.screen.rows() as isize - 1;
+                vt.screen.scroll_view(if matches!(key.code, 0x49 | 0x68) { page } else { -page });
+            }
+            c.show();
             None
         }
         Event::Key(key) => {
@@ -139,8 +425,7 @@ fn take(event: Event) -> Option<Vec<u8>> {
             let bytes = ch.encode_utf8(&mut utf8).as_bytes();
             line.extend_from_slice(bytes);
             let mut c = CONSOLE.lock().ok()?;
-            c.text.extend_from_slice(bytes);
-            c.show();
+            echo(&mut c, bytes);
             if ch == '\n' { Some(std::mem::take(&mut *line)) } else { None }
         }
         _ => None,
@@ -149,14 +434,19 @@ fn take(event: Event) -> Option<Vec<u8>> {
 
 /// When the program ends: a console that showed output stays until the person has read
 /// it and closes the window, with how the program ended as its last line.
+/// The run ends with `code`: a terminal holding its console is told.
+pub(crate) fn ended(code: i32) {
+    // A pipe run's starter reads to the end of its output once it hears this.
+    if piped_run() || !taken() && attached() { sex_app::files::direct::relay::exit(code as u32 & 0xFFFF); }
+}
 pub(crate) fn finish(how: &str) {
     flush();
+    if attached() { return; }
     let wait = {
         let Ok(mut c) = CONSOLE.lock() else { return };
         if !c.opened || c.closed || taken() { false } else {
             let line = format!("\n[{how}. Close the window to dismiss.]");
-            c.text.extend_from_slice(line.as_bytes());
-            c.show();
+            echo(&mut c, line.as_bytes());
             true
         }
     };

@@ -78,3 +78,29 @@ out = ['// SPDX-License-Identifier: GPL-2.0-or-later OR MIT',
 out += ['    (0x%05x, 0x%05x),' % (a, b) for a, b in wide]
 out.append('];')
 Path(__file__).resolve().parent.parent.joinpath('crates/sex-shape/src/wide_table.rs').write_text('\n'.join(out) + '\n')
+
+# Which characters take no cell: combining marks (Mn, Me), format characters that are
+# not drawn, zero-width joiners and variation selectors, the emoji skin-tone modifiers
+# and the Hangul medial and final jamo, which join the syllable before them.
+zero = []
+for cp in range(0x110000):
+    c = chr(cp)
+    cat = unicodedata.category(c)
+    # Prepended concatenation marks and interlinear annotation marks are format
+    # characters that are drawn, so they keep their cell.
+    shown = cp in (0xAD, 0x6DD, 0x70F, 0x8E2, 0x110BD, 0x110CD) or 0x600 <= cp <= 0x605 or 0x890 <= cp <= 0x891 or 0xFFF9 <= cp <= 0xFFFB
+    z = (cat in ('Mn', 'Me') or (cat == 'Cf' and not shown) or 0x1F3FB <= cp <= 0x1F3FF
+         or (cat != 'Cn' and (0x1160 <= cp <= 0x11FF or 0xD7B0 <= cp <= 0xD7FF)))
+    if z:
+        if zero and zero[-1][1] == cp - 1: zero[-1][1] = cp
+        else: zero.append([cp, cp])
+out = ['// SPDX-License-Identifier: GPL-2.0-or-later OR MIT',
+       '// Generated from Unicode general categories Mn, Me and Cf, plus emoji modifiers and',
+       '// Hangul medial/final jamo (Unicode %s).' % unicodedata.unidata_version,
+       '// Do not edit: regenerate with scripts/gen_shape_tables.py.', '',
+       '/// Inclusive ranges of characters that take no text cell of their own, sorted.',
+       'pub static ZERO: [(u32, u32); %d] = [' % len(zero)]
+out += ['    (0x%05x, 0x%05x),' % (a, b) for a, b in zero]
+out.append('];')
+Path(__file__).resolve().parent.parent.joinpath('crates/sex-shape/src/zero_table.rs').write_text('\n'.join(out) + '\n')
+print(len(zero), 'zero-width ranges')

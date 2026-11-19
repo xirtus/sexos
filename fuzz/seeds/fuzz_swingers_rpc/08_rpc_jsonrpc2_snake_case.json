@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"torrent_get","params":{"ids":"recently_active","fields":["id","hash_string","percent_done","file_stats","tracker_stats"]},"id":"req-1"}

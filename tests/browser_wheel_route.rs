@@ -49,6 +49,7 @@ pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 pub const ERR_CAP_INVALID:u64=u64::MAX-2;
 pub fn get_ticks()->u64{1}
 #[macro_export]macro_rules! serial_record{($($arg:tt)*)=>{{unsafe{crate::LOG.push(format!($($arg)*));}}}}
+#[macro_export]macro_rules! serial_input_record{(($($public:tt)*); ($($private:tt)*))=>{{let _=format_args!($($private)*);serial_record!($($public)*);}}}
 macro_rules! serial_println{($($arg:tt)*)=>{serial_record!($($arg)*)}}
 static LOCK:std::sync::Mutex<()>=std::sync::Mutex::new(());
 static mut APP_INPUT:Queue=Queue::new();
@@ -102,6 +103,7 @@ unsafe fn program_pointer_wheel(_steps:i8)->bool{false}
 fn is_pointer_move(word:u64)->bool{matches!(app_pointer::Pointer::decode(word,0,app_pointer::CLASS),Some(app_pointer::Pointer{kind:app_pointer::Kind::Move,..}))}
 /// The session lock sees HID events first; this route test runs unlocked.
 mod lock { pub fn input(_: u64, _: u8, _: u64) -> bool { false } }
+unsafe fn clip_touched(_: clipboard::Subject) {}
 include!(env!("BROWSER_WHEEL_PRODUCTION"));
 fn browser()->Participant{Participant::from_catalog(lifecycle_abi::CatalogInfo{target_pd:15,task_id:15,surface_id:300,coordinator_pd:3}).unwrap()}
 fn wheel(vertical:i8)->Item{Item{destination:browser(),input:Input::Scroll(Scroll::new(vertical).unwrap())}}

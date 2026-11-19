@@ -26,3 +26,20 @@ use program_code::*;
         let mut s = Scan::primed([0x90, 0x90]);
         assert_eq!(s.feed(&[0x0F, 0xAE, 0x28], true), Some(0));
     }
+    /// The word skip finds exactly what a byte-at-a-time scan finds, at every split.
+    #[test]
+    fn word_skip_matches_the_byte_scan() {
+        fn slow(code: &[u8]) -> Option<usize> { (0..code.len().saturating_sub(2)).find(|&i| code[i] == 0x0F && refused(code[i + 1], code[i + 2])) }
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        for round in 0..20_000 {
+            let len = (next() % 80) as usize;
+            let sparse = round % 2 == 0;
+            let code: Vec<u8> = (0..len).map(|_| { let r = next(); match r % if sparse { 64 } else { 6 } { 0 => 0x0F, 1 => [0x01, 0xAE, 0xC7][(r >> 8) as usize % 3], 2 => [0xEF, 0x28, 0x18, 0xE8][(r >> 16) as usize % 4], _ => (r >> 24) as u8 } }).collect();
+            assert_eq!(check(&code).err(), slow(&code), "{code:02x?}");
+            let cut = if len == 0 { 0 } else { (next() as usize) % len };
+            let mut s = Scan::new();
+            let got = s.feed(&code[..cut], false).or_else(|| s.feed(&code[cut..], false));
+            assert_eq!(got.map(|a| a as usize), slow(&code), "cut {cut} {code:02x?}");
+        }
+    }

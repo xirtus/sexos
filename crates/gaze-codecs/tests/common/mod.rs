@@ -16,6 +16,7 @@ pub enum Val {
     Byte(Vec<u8>),
     Undefined(Vec<u8>),
     Rational(Vec<(u32, u32)>),
+    SRational(Vec<(i32, i32)>),
     /// A pointer to a sub-IFD (LONG).
     Sub(Ifd),
     /// Several sub-IFDs (SubIFDs, tag 0x14a).
@@ -83,6 +84,7 @@ impl W {
                 Val::Byte(v) => rows.push((*tag, 1, v.len() as u32, v.clone(), i)),
                 Val::Undefined(v) => rows.push((*tag, 7, v.len() as u32, v.clone(), i)),
                 Val::Rational(v) => rows.push((*tag, 5, v.len() as u32, v.iter().flat_map(|&(n, d)| [self.u32(n), self.u32(d)].concat()).collect(), i)),
+                Val::SRational(v) => rows.push((*tag, 10, v.len() as u32, v.iter().flat_map(|&(n, d)| [self.u32(n as u32), self.u32(d as u32)].concat()).collect(), i)),
                 Val::Sub(_) => rows.push((*tag, 4, 1, vec![0; 4], i)),
                 Val::Subs(s) => rows.push((*tag, 4, s.len() as u32, vec![0; 4 * s.len()], i)),
                 Val::Blob(b, len_tag) => {

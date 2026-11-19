@@ -178,7 +178,7 @@ impl UsbPointerOutbox {
                     self.pop();return true;
                 }
                 Err(error) => {
-                    sex_pdx::serial_record!("[sexusb.input.rejected] op={} arg0={} arg1={} arg2={} reason=transport error={} admitted=0",op,a,b,c,error);
+                    sex_pdx::serial_record!("[sexusb.input.rejected] op={} reason=transport error={} admitted=0 payload=redacted",op,error);
                     self.pop();return true;
                 }
             }
@@ -244,7 +244,7 @@ fn send_report_to_sexinput(op:u64,arg0:u64,arg1:u64,arg2:u64)->Result<bool,u64> 
             Ok(true) => {if !keyboard{record_wheel_admission(arg2);}return Ok(true);}
             Ok(false)|Err(sex_pdx::ERR_SERVICE_NOT_READY)=>{}
             Err(error)=>{
-                sex_pdx::serial_record!("[sexusb.input.rejected] op={} arg0={} arg1={} arg2={} reason=transport error={} admitted=0",op,arg0,arg1,arg2,error);
+                sex_pdx::serial_record!("[sexusb.input.rejected] op={} reason=transport error={} admitted=0 payload=redacted",op,error);
                 return Err(error);
             }
         }
@@ -257,7 +257,7 @@ fn send_report_to_sexinput(op:u64,arg0:u64,arg1:u64,arg2:u64)->Result<bool,u64> 
         }
     }
     {
-        sex_pdx::serial_record!("[sexusb.input.rejected] op={} arg0={} arg1={} arg2={} reason=outbox_full_or_sequence admitted=0",op,arg0,arg1,arg2);
+        sex_pdx::serial_record!("[sexusb.input.rejected] op={} reason=outbox_full_or_sequence admitted=0 payload=redacted",op);
         Err(sex_pdx::ERR_SERVICE_NOT_READY)
     }
 }
@@ -309,6 +309,7 @@ fn send_report_once(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u6
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.init.start]");
+    sex_pdx::serial_record!("[input.payload.mode] component=sexusb mode=redacted");
     let limit = sex_pdx::memory_region_info(SLOT_USB_HOST).map(|info| info.length).unwrap_or(0).min(0x10000);
     let mut cap = u64::MAX;
     for _ in 0..3 {
@@ -344,6 +345,14 @@ pub extern "C" fn _start() -> ! {
         usb.net_region = v.virtual_address;
     }
     serial_println!("[sexusb.ether.route] region={}", net_view.is_some() as u8);
+    // Bluetooth controllers: HCI packets to and from Cufflinks (sex_pdx::bt_hci).
+    if let Ok(v) = sex_pdx::memory_region_full_view(sex_pdx::bt_hci::SLOT, sex_pdx::memory_region::QUERY_VIEW | sex_pdx::memory_region::READ | sex_pdx::memory_region::WRITE) {
+        if v.length >= sex_pdx::bt_hci::BYTES && v.virtual_address != 0 {
+            unsafe { sex_pdx::bt_hci::Shared::at(v.virtual_address as *mut u8) }.set_link(None);
+            usb.bt_region = v.virtual_address;
+        }
+    }
+    serial_println!("[sexusb.bt.route] region={}", (usb.bt_region != 0) as u8);
     let ports = usb.x.ports;
     let (connected, first) = usb.scan();
     if connected == 0 {
@@ -383,6 +392,8 @@ pub extern "C" fn _start() -> ! {
         }
         usb.service();
         busy |= usb.ether_pump();
+        busy |= usb.bt_pump();
+        busy |= usb.bt_hid_pump();
         if usb.changed && files != 0 {
             usb.changed = false;
             let (status, _) = sex_pdx::pdx_call(sex_pdx::usb_disk::SLOT, sex_pdx::usb_disk::OP_CHANGED, usb.generation, 0, 0);
@@ -406,7 +417,7 @@ pub extern "C" fn _start() -> ! {
         // this pass may be for an undrained event, and the network's transmit ring
         // (USB Ethernet) has no wake of its own.
         let slept = crate::xhci::SLEPT.swap(false, core::sync::atomic::Ordering::Relaxed);
-        let quiet = irq && !queued && !usb.changed && !slept && !usb.ether_active();
+        let quiet = irq && !queued && !usb.changed && !slept && !usb.ether_active() && !usb.bt_hid_active();
         if !busy { let _ = sex_pdx::sys_wait_self_ticks(if quiet { 32 } else { 1 }); }
     }
 }

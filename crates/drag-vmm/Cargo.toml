@@ -1,0 +1,9 @@
+[package]
+name = "drag-vmm"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Drag's ring-3 virtual machine monitor core: guest memory, Linux boot protocol loader, exit dispatch, CPUID/MSR policy, 16550 UART, 8259 PIC, 8254 PIT and virtio-mmio virtio-blk"
+
+[dependencies]
+sex-pdx = { path = "../sex-pdx" }

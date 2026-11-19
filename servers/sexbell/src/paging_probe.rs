@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Second boot-authorized client of sext; one page stays live during reuse.
 use sex_pdx::{paging::SLOT_DEMAND_REGION, serial_record};
-/// Messages that arrive while the probe waits for the pager; boot traffic can be bursty.
-const DEFERRED_MAX: usize = 128;
+/// Messages that arrive while the probe waits for the pager; boot traffic can be bursty
+/// (crash-probe builds restart services while the release replies are pending).
+const DEFERRED_MAX: usize = 512;
 static mut DEFERRED: [Option<sex_pdx::PdxMessage>; DEFERRED_MAX] = [None; DEFERRED_MAX];
 static mut DEFERRED_COUNT: usize = 0;
 static mut DEFERRED_READ: usize = 0;
@@ -26,6 +27,27 @@ pub fn try_next_message() -> Option<sex_pdx::PdxMessage> {
         }
     }
     sex_pdx::pdx_try_listen_raw(0)
+}
+/// Keeps a message for the main loop. Space already read is reused, and an overflow
+/// names the senders that filled the queue so the flood can be traced.
+fn defer(reply: sex_pdx::PdxMessage) {
+    unsafe {
+        if DEFERRED_READ > 0 {
+            let live = DEFERRED_COUNT - DEFERRED_READ;
+            for i in 0..live { DEFERRED[i] = DEFERRED[DEFERRED_READ + i].take(); }
+            DEFERRED_COUNT = live;
+            DEFERRED_READ = 0;
+        }
+        if DEFERRED_COUNT == DEFERRED_MAX {
+            let first = DEFERRED[0].unwrap();
+            let last = DEFERRED[DEFERRED_MAX - 1].unwrap();
+            serial_record!("[paging.client.deferred] full={} first_pd={} first_type={:#x} last_pd={} last_type={:#x} new_pd={} new_type={:#x}",
+                DEFERRED_MAX, first.caller_pd, first.type_id, last.caller_pd, last.type_id, reply.caller_pd, reply.type_id);
+            panic!("BELL_DEFERRED_OVERFLOW");
+        }
+        DEFERRED[DEFERRED_COUNT] = Some(reply);
+        DEFERRED_COUNT += 1;
+    }
 }
 pub fn run() {
     let info = sex_pdx::paging_info(SLOT_DEMAND_REGION).expect("BELL_DEMAND_REGION_MISSING");
@@ -51,11 +73,7 @@ pub fn run() {
                 assert_eq!(reply.arg0, (page + 1) << 8, "BELL_RELEASE_FAILED");
                 break;
             }
-            unsafe {
-                assert!(DEFERRED_COUNT < DEFERRED_MAX, "BELL_DEFERRED_OVERFLOW");
-                DEFERRED[DEFERRED_COUNT] = Some(reply);
-                DEFERRED_COUNT += 1;
-            }
+            defer(reply);
         }
     }
     serial_record!("[paging.client.released] pd={} pages=3 retained=1 ok=1", info.target_pd);
@@ -80,11 +98,7 @@ pub fn exit_reuse() {
             assert_eq!(reply.arg0, 4 << 8, "BELL_CLEANUP_WAIT_ACK");
             break;
         }
-        unsafe {
-            assert!(DEFERRED_COUNT < DEFERRED_MAX, "BELL_DEFERRED_OVERFLOW");
-            DEFERRED[DEFERRED_COUNT] = Some(reply);
-            DEFERRED_COUNT += 1;
-        }
+        defer(reply);
     }
     let info = sex_pdx::paging_info(SLOT_DEMAND_REGION).expect("BELL_DEMAND_REGION_MISSING");
     for page in 0..3u64 {

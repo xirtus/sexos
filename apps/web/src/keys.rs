@@ -4,7 +4,8 @@
 //! Ctrl+T new tab, Ctrl+W close it, Ctrl+PageDown / Ctrl+PageUp next and previous
 //! tab, Ctrl+1..8 that tab and Ctrl+9 the last (Tab itself is the desktop's),
 //! Ctrl+L the address, Ctrl+D bookmark, Ctrl+F find, Ctrl+= / Ctrl+- / Ctrl+0 zoom,
-//! Ctrl+R reload, Ctrl+J downloads, Ctrl+Shift+Backspace forget this site's cookies and storage.
+//! Ctrl+R reload, Ctrl+J downloads, Ctrl+Shift+Backspace forget this site's cookies and storage,
+//! Ctrl+Shift+S Shields down (or up) for this site.
 
 use super::{nav, Browser, Nav};
 use sex_web::sex_html;
@@ -43,6 +44,12 @@ impl Browser {
             }
             0x13 => { let u = self.url.clone(); self.open(&u, false); }
             0x24 => self.open("about:downloads", true),
+            // Ctrl+Shift+S: Shields down for this site, or up again; the page reloads.
+            0x1F if key.shift => {
+                let url = self.url.clone();
+                self.shields.toggle(&mut self.window, &url);
+                self.open(&url, false);
+            }
             0x0E if key.shift => {
                 let url = self.url.clone();
                 self.profile.clear_site(&mut self.jar.borrow_mut(), &url);

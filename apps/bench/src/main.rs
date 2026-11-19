@@ -11,6 +11,7 @@ use alloc::vec::Vec;
 use core::fmt::Write as _;
 use sex_app::{files, Event, Window};
 use sex_pdx::program_memory as memory;
+mod ipc2;
 mod large_read;
 
 #[panic_handler]
@@ -92,6 +93,9 @@ fn run(window: &mut Window, r: &mut Report) -> Result<(), &'static str> {
     // A call to a service and its reply (Files answers PING at once): the IPC round
     // trip, against a Linux pipe round trip between two processes. After the file
     // tests, so Files already knows this run.
+    // Files keeps polling while a write waits to be committed; make it durable first so
+    // the trips measure the call path, not that.
+    files::sync(window).map_err(|_| "sync failed")?;
     let n = 2_000;
     let t = tsc();
     for _ in 0..n { files::ping(window).map_err(|_| "ping failed")?; }
@@ -119,6 +123,18 @@ pub extern "C" fn _start() -> ! {
             }
         };
         window.show(report.as_bytes());
+        loop { if let Event::Close = window.next() { window.close() } }
+    }
+    if args == b"ipc2" {
+        let text = match ipc2::run() {
+            Ok(rows) => {
+                for (name, ops, cycles) in rows { sex_pdx::serial_record!("[bench] name={} ops={} cycles={} per=trip", name, ops, cycles / ops); }
+                sex_pdx::serial_record!("[bench.ipc2.done] target={} task={}", window.target, window.task);
+                "IPC v2 checked. F11 closes.\n"
+            }
+            Err(why) => { sex_pdx::serial_record!("[bench.ipc2.fail] target={} task={} why={}", window.target, window.task, why); "IPC v2 failed. F11 closes.\n" }
+        };
+        window.show(text.as_bytes());
         loop { if let Event::Close = window.next() { window.close() } }
     }
     if args == b"spin" || args.starts_with(b"spin ") {

@@ -166,6 +166,30 @@ pub fn layout_in(dom: &Dom, styles: &[Option<Style>], width: i32, viewport_heigh
     };
     for (n, r) in l.boxes { put(n, r); }
     for k in &l.links { put(k.node, [k.x, k.y, k.w, k.h]); }
+    // A definite root/body height does not truncate visible overflow (for
+    // example Wikipedia's viewport-height root). Accumulate descendant extents
+    // in tree order, stopping at clipping boxes and fixed-position subtrees.
+    // Use tree traversal rather than arena order: scripts can reparent nodes.
+    if let Some(root) = html {
+        let mut order = alloc::vec![root];
+        let mut i = 0;
+        while i < order.len() {
+            let n = order[i];
+            order.extend_from_slice(&dom.nodes[n].children);
+            i += 1;
+        }
+        let mut bottoms: Vec<i32> = boxes.iter().map(|b| b.map_or(0, |b| b[1].saturating_add(b[3]))).collect();
+        for &n in order.iter().rev() {
+            let s = styles[n].as_ref();
+            if s.map_or(false, |s| s.position == style::Position::Fixed) { continue; }
+            let mut bottom = bottoms[n];
+            if n != root && s.map_or(false, |s| s.overflow_clip) {
+                if let Some(b) = boxes[n] { bottom = bottom.min(b[1].saturating_add(b[3])); }
+            }
+            if n == root { height = height.max(bottom); }
+            else if let Some(parent) = dom.nodes[n].parent { bottoms[parent] = bottoms[parent].max(bottom); }
+        }
+    }
     // A sticky box stops at the bottom of its containing block.
     let stickies: Vec<[i32; 4]> = sticky_marks.into_iter().map(|([y, h, top, _], parent)| {
         let limit = boxes.get(parent as usize).copied().flatten().map_or(height, |b| b[1] + b[3]);

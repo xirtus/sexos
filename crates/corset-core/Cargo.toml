@@ -1,0 +1,12 @@
+[package]
+name = "corset-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Corset — Disks and partitions: the UI/engine of BDSM"
+
+[dependencies]
+sex-disk = { path = "../sex-disk" }
+sex-volumes = { path = "../sex-volumes" }
+sex-crypt = { path = "../sex-crypt" }
+sexfs = { path = "../sexfs" }

@@ -31,7 +31,7 @@ fn table() -> &'static mut Config {
 fn writer(caller: u32) -> bool {
     caller == SHELL
         || sex_pdx::app_catalog::SPINDLE_TARGETS.contains(&caller) && crate::spindle_history::live(caller)
-        || crate::fs_service::program_is(caller, b"settings")
+        || crate::fs_service::program_is(caller, b"tatami")
 }
 
 /// One request; the word to reply with.

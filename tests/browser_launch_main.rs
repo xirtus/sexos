@@ -70,6 +70,7 @@ unsafe fn install(index:usize,sid:u64){let mut tabs=[None;MAX_TABS_PER_FRAME as 
 unsafe fn dead(index:usize,acked:u64){let e=APP_CUSTODY[index].as_mut().unwrap();e.dead=true;e.retired=true;e.acked=acked&1!=0;e.close_pending=false;
  LIVE[index]=Ok(a::LifecycleInfo{target_pd:e.target,task_id:e.task,required_mask:31,acked_mask:acked});
 }
+mod layouts_glue{pub unsafe fn behind(_:u64)->Option<(u32,usize)>{None}pub unsafe fn show(_:u64)->bool{true}}
 unsafe fn frame_for_surface(sid:u64)->Option<u32>{FRAMES.iter().flatten().find(|f|f.tabs.iter().flatten().any(|t|t.surface_id==sid)).map(|f|f.frame_id)}
 unsafe fn frame_is_minimized(fid:u32)->bool{FRAMES.iter().flatten().find(|f|f.frame_id==fid).is_some_and(|f|f.flags&FRAME_FLAG_MINIMIZED!=0)}
 unsafe fn lifecycle_state(sid:u64)->Option<LifecycleState>{let i=FRAMES.iter().position(|f|f.is_some_and(|f|f.tabs.iter().flatten().any(|t|t.surface_id==sid)))?;Some(if VISIBLE[i]{LifecycleState::Visible}else{LifecycleState::Hidden})}
@@ -88,6 +89,8 @@ unsafe fn open_program_in_active_scene()->bool{false}
 fn program_launcher_status()->(bool,&'static str,&'static str){(false,"","")}
 fn power_launcher_status(_:Command)->(bool,&'static str,&'static str){(false,"","")}
 fn palette_power(_:Command)->bool{false}
+fn laptop_launcher_status(_:Command)->(bool,&'static str,&'static str){(false,"","")}
+fn laptop_command(_:Command)->bool{false}
 static mut PALETTE_FROM_KEY:bool=false;
 unsafe fn launcher_action_record(target:u32,frame:u64,_:launcher::LiveAction,_:u8,activated:bool,_:bool){if activated{EFFECTS.push(Effect::Activated(target,frame));}}
 unsafe fn first_minimized_frame_id()->Option<u32>{None}
@@ -101,7 +104,7 @@ fn spindle_launcher_status()->(bool,&'static str,&'static str){(false,"unused","
 fn spindle_active_frame()->Option<(u32,u64)>{None}
 
 #[test]fn browser_row_preserves_existing_indices_and_webstub_identity(){let _l=LOCK.lock().unwrap();unsafe{reset();
- assert_eq!(COMMAND_LIST.len(),14);assert_eq!((COMMAND_LIST[0].command,COMMAND_LIST[1].command),(Command::FocusSpindle,Command::FocusQuil));
+ assert_eq!(COMMAND_LIST.len(),20);assert_eq!((COMMAND_LIST[0].command,COMMAND_LIST[1].command),(Command::FocusSpindle,Command::FocusQuil));
  assert_eq!(COMMAND_LIST[8].command,Command::ZoomToggle);assert_eq!(COMMAND_LIST[9].command,Command::MinimizeFocused);
  assert_eq!((COMMAND_LIST[10].command,COMMAND_LIST[10].name),(Command::FocusBrowser,"Open Browser"));assert_eq!(Command::FocusBrowser as u8,10);
  assert_eq!((SURFACE_ID_BROWSER,BROWSER_FRAME_ID),(205,8));assert!(![300,343,344].contains(&SURFACE_ID_BROWSER));

@@ -648,17 +648,60 @@ fn firmware_pack_finds_checked_files() {
 }
 
 #[test]
+fn firmware_pack_inflates_compressed_files_and_still_reads_v1_packs() {
+    use sha2::Digest;
+    let ucode: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8 ^ (i / 4096) as u8).collect();
+    let packed = miniz_oxide::deflate::compress_to_vec(&ucode, 9);
+    assert!(packed.len() < ucode.len());
+    let build = |magic: &[u8; 8], inflated: u32, body: &[u8], sha: &[u8]| {
+        let mut pack = magic.to_vec();
+        pack.extend_from_slice(&1u32.to_le_bytes());
+        pack.extend_from_slice(&0u32.to_le_bytes());
+        let mut e = [0u8; pack::ENTRY];
+        e[..28].copy_from_slice(b"iwlwifi-ty-a0-gf-a0-77.ucode");
+        e[44..48].copy_from_slice(&inflated.to_le_bytes());
+        e[48..52].copy_from_slice(&4096u32.to_le_bytes());
+        e[52..56].copy_from_slice(&(body.len() as u32).to_le_bytes());
+        e[56..88].copy_from_slice(sha);
+        pack.extend_from_slice(&e);
+        pack.resize(4096, 0);
+        pack.extend_from_slice(body);
+        pack
+    };
+    let sha = sha2::Sha256::digest(&ucode);
+    let pack = build(pack::MAGIC, ucode.len() as u32, &packed, &sha);
+    let p = pack::Pack::parse(&pack).unwrap();
+    let mut inflater = pack::Inflater::default();
+    let mut scratch = vec![0u8; 2 << 20];
+    assert_eq!(p.file("iwlwifi-ty-a0-gf-a0-77.ucode").err(), Some(pack::Error::Compressed));
+    assert_eq!(p.open("iwlwifi-ty-a0-gf-a0-77.ucode", &mut scratch, &mut inflater).unwrap(), &ucode[..]);
+    // Twice with the same inflater: it starts afresh each time.
+    assert_eq!(p.open("iwlwifi-ty-a0-gf-a0-77.ucode", &mut scratch, &mut inflater).unwrap(), &ucode[..]);
+    assert_eq!(p.open("iwlwifi-ty-a0-gf-a0-77.ucode", &mut [0u8; 1000], &mut inflater).err(), Some(pack::Error::TooBig));
+    let mut bad = pack.clone();
+    bad[4096 + 100] ^= 0x55;
+    assert_eq!(pack::Pack::parse(&bad).unwrap().open("iwlwifi-ty-a0-gf-a0-77.ucode", &mut scratch, &mut inflater).err(), Some(pack::Error::Damaged));
+    // A first-format pack (stored, 48-byte names) from an older boot partition still reads.
+    let v1 = build(pack::MAGIC_V1, 0, &ucode, &sha);
+    let p = pack::Pack::parse(&v1).unwrap();
+    assert_eq!(p.file("iwlwifi-ty-a0-gf-a0-77.ucode").unwrap(), &ucode[..]);
+    assert_eq!(p.open("iwlwifi-ty-a0-gf-a0-77.ucode", &mut scratch, &mut inflater).unwrap(), &ucode[..]);
+}
+
+#[test]
 fn real_firmware_pack_starts_the_x17_chip_in_a_4_mib_pool() {
     // Set by scripts/wifi_host_gate.sh after packing the fetched linux-firmware files.
     let Some(path) = std::env::var_os("SEXOS_WIFI_PACK") else { return };
     let bytes = std::fs::read(&path).unwrap();
     let p = pack::Pack::parse(&bytes).unwrap();
+    let mut inflater = pack::Inflater::default();
+    let mut scratch = vec![0u8; 2 << 20];
     for name in devices::FIRMWARE_FILES {
-        let file = p.file(name).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+        let file = p.open(name, &mut scratch, &mut inflater).unwrap_or_else(|e| panic!("{name}: {e:?}"));
         if name.ends_with(".ucode") { assert!(ucode::Firmware::parse(file).is_ok(), "{name}"); }
     }
     let chip = devices::identify(0x2725, 0x1674, 0x420, 0x0010d000).unwrap();
-    let fw = ucode::Firmware::parse(p.file(chip.firmware).unwrap()).unwrap();
+    let fw = ucode::Firmware::parse(p.open(chip.firmware, &mut scratch, &mut inflater).unwrap()).unwrap();
     let mut m = Memory(vec![0; 4 << 20]);
     let b = bringup::Bringup::prepare(chip, &fw, &mut m, 0x1_0000_0000, 4 << 20, 0x420, 0).unwrap();
     assert!(b.layout.end <= 4 << 20 && b.iml_len > 0);

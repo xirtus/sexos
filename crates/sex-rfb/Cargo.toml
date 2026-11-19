@@ -1,0 +1,10 @@
+[package]
+name = "sex-rfb"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "RFB 3.8 (VNC) protocol for SexOS: the client state machine and decoders, and the server's message encoders"
+
+[dependencies]
+# zlib for ZRLE (MIT/Zlib/Apache-2.0, no_std + alloc); already in Cargo.lock through the image decoders.
+miniz_oxide = { version = "=0.8.9", default-features = false, features = ["with-alloc"] }

@@ -45,6 +45,13 @@ pub const AUTO: u64 = 1 << 8;
 /// word (its PD inside), or `REFUSED` when no program has played. Shell asks; Bell
 /// only names the program, and Shell delivers the key to it as an ordinary key.
 pub const LAST_PLAYER: u64 = 11;
+/// Whether a program's sound stream is playing now (open and not paused): replies
+/// `STREAMING_TAG | 1` if so, `STREAMING_TAG` if not. The Shell asks before idle dims
+/// or locks the screen. Its own tag keeps the answer apart from the other mixer
+/// answers, which the Shell matches to its asks in order.
+pub const STREAMING: u64 = 12;
+pub const STREAMING_TAG: u64 = 0x4E << 56;
+pub const fn is_streaming_reply(word: u64) -> bool { word >> 8 == STREAMING_TAG >> 8 }
 /// Set in the outputs word while Bell follows the headphone jack.
 pub const OUTPUTS_AUTO: u64 = 1 << 12;
 

@@ -1,5 +1,3 @@
-pub mod storage;
-pub mod store;
 
 use crate::interrupts::SyscallRegs;
 use crate::ipc::messages::MessageType;
@@ -524,8 +522,14 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
         82 => { // SYS_PROGRAM_CODE: self-only, the run's own heap pages become code or data.
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
-            let reply=crate::app_resources::code(pd,rdi,rsi,rdx);
+            let mut reply=crate::app_resources::code(pd,rdi,rsi,rdx);
+            if reply[0]==crate::app_resource_state::RECALL{crate::denim::recall(pd.id);reply[0]=sex_pdx::program_code::RETRY;}
             regs.rsi=reply[1];regs.rdx=reply[2];reply[0]
+        },
+        88 => { // SYS_DENIM: compressed memory, Denim only (sex_pdx::denim).
+            let pd=crate::core_local::CoreLocal::get().current_pd_ref();
+            let reply=crate::denim::call(pd.id,rdi,rsi,rdx,r10,r8);
+            regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
 
         84 => { // SYS_POWER: shut down, restart, Files' flush answer, power sensors.
@@ -584,7 +588,10 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.rsi=reply[1];regs.rdx=reply[2];regs.r10=reply[3];regs.r8=reply[4];reply[0]
         },
         76 => { // civil time: ms since the Unix epoch, for any task (sex_pdx::clock_source::civil)
-            match crate::clock_source::civil_ms(){Ok(ms)=>{regs.rsi=ms;0},Err(e)=>{regs.rsi=0;e}}
+            if rdi==sex_pdx::clock_source::civil::SET{
+                let pd=crate::core_local::CoreLocal::get().current_pd_ref().id;
+                let status=crate::clock_source::set_civil(pd,rsi);regs.rsi=0;status
+            }else{match crate::clock_source::civil_ms(){Ok(ms)=>{regs.rsi=ms;0},Err(e)=>{regs.rsi=0;e}}}
         },
         73 => {
             let pd=crate::core_local::CoreLocal::get().current_pd_ref();
@@ -652,6 +659,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
         86 => crate::device_irq::syscall(regs), // SYS_DEVICE: own leases, own vectors, own bits.
 
+        110 => crate::vmx::syscall(regs), // SYS_VM: Drag virtual machines, Machine capability only.
+
         100 => { // PDX_CALL_WAIT: syscall 0 to a slot, then syscall 53, in one entry.
             // The callee runs next on this core if it lives here (a handoff).
             let sched = &crate::scheduler::SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
@@ -676,6 +685,12 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             sched.arm_handoff(false);
             if sent { regs.rax = 0; unsafe { wait_unless_pending(regs) }; 0 } else { 1 }
         },
+
+        102 => unsafe { crate::ipc::recv::call_recv(regs) }, // PDX_CALL_RECV: 100, answer in registers.
+        103 => unsafe { crate::ipc::recv::reply_recv(regs) }, // PDX_REPLY_RECV: 101, next request in registers.
+        104 => crate::scheduler::sched_syscall(rdi, rsi), // SYS_SCHED: the caller's own deadline class.
+        105 => unsafe { crate::ipc_v2::syscall::endpoint_syscall(regs) }, // SYS_ENDPOINT: IPC v2 endpoints.
+        106 => unsafe { crate::ipc_v2::syscall::notify_syscall(regs) }, // SYS_NOTIFY: IPC v2 notifications.
 
         53 => { // PDX_WAIT_SELF: only this domain's own inbox/reply events.
             if rdi != 0 {

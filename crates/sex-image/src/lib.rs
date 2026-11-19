@@ -29,6 +29,7 @@ use zune_core::colorspace::ColorSpace;
 use zune_core::options::DecoderOptions;
 
 mod gif;
+pub mod view;
 
 /// Largest side any header may announce (the JPEG maximum).
 const HEADER_MAX: usize = u16::MAX as usize;

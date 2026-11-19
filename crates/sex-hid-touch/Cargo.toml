@@ -1,0 +1,9 @@
+[package]
+name = "sex-hid-touch"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "I2C HID touchpads: HID-over-I2C protocol, report descriptor parsing, multi-touch contacts and gestures"
+
+[lib]
+path = "src/lib.rs"

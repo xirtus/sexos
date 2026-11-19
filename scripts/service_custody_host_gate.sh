@@ -234,10 +234,55 @@ rustc --edition=2021 -A dead_code --test tests/launcher_search.rs -o "$TEST_DIR/
 rustc --edition=2021 -A dead_code --test tests/notify.rs -o "$TEST_DIR/notify"
 "$TEST_DIR/notify"
 rustc --edition=2021 -A dead_code --test tests/desktop_look.rs -o "$TEST_DIR/desktop-look"
+"$TEST_DIR/desktop-look"
+rustc --edition=2021 -A dead_code --test tests/brand.rs -o "$TEST_DIR/brand"
+"$TEST_DIR/brand"
+rustc --edition=2021 -A dead_code --test tests/access_view.rs -o "$TEST_DIR/access-view"
+"$TEST_DIR/access-view" --test-threads=1
+rustc --edition=2021 -A dead_code --test tests/access_keys.rs -o "$TEST_DIR/access-keys"
+"$TEST_DIR/access-keys"
+# Window decorations (S1): title bar buttons, double click and the window menu,
+# built against a sex_pdx of only the modules they use.
+printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/app_catalog.rs"] pub mod app_catalog;\n#[path = "%s/crates/sex-pdx/src/desktop_style.rs"] pub mod desktop_style;\n#[path = "%s/crates/sex-pdx/src/window_menu.rs"] pub mod window_menu;\n' "$ROOT_DIR" "$ROOT_DIR" "$ROOT_DIR" > "$TEST_DIR/decorations_pdx.rs"
+rustc --edition=2021 -A dead_code --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/decorations_pdx.rs" -o "$TEST_DIR/libdecorations_pdx.rlib"
+rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libdecorations_pdx.rlib" --test tests/decorations.rs -o "$TEST_DIR/decorations"
+"$TEST_DIR/decorations"
+# Program tray items and notification actions (S2), built against a sex_pdx
+# of only the wire and layouts they use.
+printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/program_tray.rs"] pub mod program_tray;\n' "$ROOT_DIR" > "$TEST_DIR/tray_items_pdx.rs"
+rustc --edition=2021 -A dead_code --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/tray_items_pdx.rs" -o "$TEST_DIR/libtray_items_pdx.rlib"
+rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libtray_items_pdx.rlib" --test tests/tray_items.rs -o "$TEST_DIR/tray-items"
+"$TEST_DIR/tray-items"
+# Tabbed window groups, the dwindle split tree and per-workspace layout memory (S3).
+rustc --edition=2021 -A dead_code --test tests/window_groups.rs -o "$TEST_DIR/window-groups"
+"$TEST_DIR/window-groups"
+# Desktop scripting, the `silk` command (S4): built against a sex_pdx of only its wire.
+printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/silk_ctl.rs"] pub mod silk_ctl;\n' "$ROOT_DIR" > "$TEST_DIR/silk_ctl_pdx.rs"
+rustc --edition=2021 -A dead_code --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/silk_ctl_pdx.rs" -o "$TEST_DIR/libsilk_ctl_pdx.rlib"
+rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libsilk_ctl_pdx.rlib" --test tests/silk_ctl.rs -o "$TEST_DIR/silk-ctl"
+"$TEST_DIR/silk-ctl"
+# Hot corners (S5).
+rustc --edition=2021 -A dead_code --test tests/hot_corners.rs -o "$TEST_DIR/hot-corners"
+"$TEST_DIR/hot-corners"
+# Whisper, the screen reader: built against a sex_pdx of only the wires it uses.
+printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/speech_voice.rs"] pub mod speech_voice;\n#[path = "%s/crates/sex-pdx/src/a11y.rs"] pub mod a11y;\n' "$ROOT_DIR" "$ROOT_DIR" > "$TEST_DIR/reader_pdx.rs"
+rustc --edition=2021 --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/reader_pdx.rs" -o "$TEST_DIR/libreader_pdx.rlib"
+rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libreader_pdx.rlib" --test tests/screen_reader.rs -o "$TEST_DIR/screen-reader"
+"$TEST_DIR/screen-reader"
 rustc --edition=2021 -A dead_code --test tests/window_switcher.rs -o "$TEST_DIR/window-switcher"
 "$TEST_DIR/window-switcher"
 rustc --edition=2021 -A dead_code --test tests/screenshot.rs -o "$TEST_DIR/screenshot"
 "$TEST_DIR/screenshot"
+rustc --edition=2021 -A dead_code --test tests/tray.rs -o "$TEST_DIR/tray"
+"$TEST_DIR/tray"
+rustc --edition=2021 -A dead_code --test tests/window_motion.rs -o "$TEST_DIR/window-motion"
+rustc --edition=2021 -A dead_code --test tests/launch.rs -o "$TEST_DIR/launch"
+rustc --edition=2021 -A dead_code --test tests/session_restore.rs -o "$TEST_DIR/session-restore"
+rustc --edition=2021 -A dead_code --test tests/dnd.rs -o "$TEST_DIR/dnd"
+"$TEST_DIR/dnd"
+"$TEST_DIR/session-restore"
+"$TEST_DIR/launch"
+"$TEST_DIR/window-motion"
 "$TEST_DIR/desktop-look"
 "$TEST_DIR/desktop-keys"
 python3 - "$TEST_DIR/cursor.rs" "$TEST_DIR/cursor_status.rs" <<'PYCURSOR'
