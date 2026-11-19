@@ -16,7 +16,7 @@ RUN rm -f /var/lib/man-db/auto-update \
  && apt-get install -y -qq --no-install-recommends \
       ca-certificates curl git git-lfs jq sudo unzip zip xz-utils zstd file lsb-release \
       build-essential pkg-config python3 python3-pip python3-venv python3-pil \
-      ripgrep clang lld llvm wabt nasm musl-dev cmake ninja-build meson acpica-tools mtools gdisk dosfstools ruby \
+      ripgrep clang lld llvm wabt nasm musl-dev cmake ninja-build meson acpica-tools mtools gdisk dosfstools \
       xorriso qemu-system-x86 qemu-utils genisoimage udftools fdisk e2fsprogs \
       ffmpeg libavcodec-dev libavformat-dev libavutil-dev libswscale-dev \
       openssh-server openssh-sftp-server aria2 transmission-cli \
