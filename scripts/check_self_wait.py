@@ -54,8 +54,8 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
                               '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b',),
  'servers/sexusb/src/main.rs': ('3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81',
                                 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec',
-                                # Thunderbolt manager polled each pass; no 32-tick sleep while it starts (2026-11-19)
-                                '2654003e1999c66d42013a7cb293dd149b8afcb1fe27704898a9a6bce0f69256')}
+                                # Thunderbolt manager polled each pass, waits unchanged (2026-11-19)
+                                'e78d6073dc41fe5b46b75e962e0ac3b5b9e7ab347bb9b95e5e21fed12a3f4e87')}
 
 
 # Mechanical source closure only, not a general Rust/unsafe-code verifier.

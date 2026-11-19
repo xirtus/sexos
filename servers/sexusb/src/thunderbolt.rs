@@ -113,7 +113,4 @@ impl Thunderbolt {
         }
         (self.manager.frames_in, self.manager.frames_out) != before
     }
-
-    /// Still starting (the loop should not take long sleeps).
-    pub fn starting(&self) -> bool { matches!(self.phase, Phase::Firmware | Phase::DriverReady | Phase::RootRouter) }
 }

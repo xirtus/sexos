@@ -422,7 +422,7 @@ pub extern "C" fn _start() -> ! {
         // this pass may be for an undrained event, and the network's transmit ring
         // (USB Ethernet) has no wake of its own.
         let slept = crate::xhci::SLEPT.swap(false, core::sync::atomic::Ordering::Relaxed);
-        let quiet = irq && !queued && !usb.changed && !slept && !usb.ether_active() && !usb.bt_hid_active() && !bolt.as_ref().is_some_and(|b| b.starting());
+        let quiet = irq && !queued && !usb.changed && !slept && !usb.ether_active() && !usb.bt_hid_active();
         if !busy { let _ = sex_pdx::sys_wait_self_ticks(if quiet { 32 } else { 1 }); }
     }
 }
