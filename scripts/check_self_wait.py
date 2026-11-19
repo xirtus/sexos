@@ -22,7 +22,8 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
     '46adbb04a4ef0f0e057f3282c9c19fc1f8044a8a9f4d4e77b0a4c679dee03215',),
 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
 'kernel/src/init.rs': ('5c3430c7e97726b5e3c22763596e01a5f231abfd9a73bbaeddd1abd0540b34ce', '784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
-'kernel/src/scheduler.rs': ('13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1',  # IPC v2 syscalls 105/106, 2026-11-18
+'kernel/src/scheduler.rs': ('586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae',  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
+    '13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1',  # IPC v2 syscalls 105/106, 2026-11-18
     '8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
     '0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
                              # per-task self-wait sampling (task_count), 2026-11-17
@@ -98,7 +99,7 @@ APPROVED_KERNEL_RUST_TREES=('8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3
     # stream 2 merged with IPC v2 syscalls (#418/#421/#422), 2026-11-18
     'c74db80e5ed8fa929a2a5253c80949ec3beffe467cfef29ac192dae43234902c',
     # capability kinds IPC, Node, DMA, MemLend removed (stream 3 follow-up), 2026-11-19
-    '5fadd5e95183e2ecc6ff933a73e08eb54260cbf6ef784a586d6af7fef96378b8')
+    'ae2aeed41bc71e7f20d636ce88f4ad3fb75385cdde2d0d0b36c96655ecb74ca9')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
