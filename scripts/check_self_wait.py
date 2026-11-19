@@ -27,22 +27,6 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('fn-v1:50abfa82
     '3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
 'kernel/src/init.rs': ('fn-v1:fb2da8b1ece8812feee1502fa72b73deb6248639042d5ddd6e42422db14ed884',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
     '784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
-'kernel/src/scheduler.rs': ('fn-v1:d1ae84d320565569056b4890ee32b11af3b66bc34eba297a890387e8851f71ab', '1b10ca8d1b0d1eb3a092f0a61ed1ca7fe6a4b43c448bc24d560ead211940f8d9',  # #429 merged with master (28ffcb59), reviewed by WS4, 2026-11-19
-    'fn-v1:dea888ff27ad54e217839dc46b9a74e521d07b2be1c36256452fd7df937802f2',  # master 586140ad: kernel stack guard page + boxed FPU area (no wait change), 2026-11-19
-    'fn-v1:4670ed1968ba7f46d7097721884c9cf2c95de4bd69220374b07321f2f5eec750',  # cross-core IPC polling + lean first look + bounded re-check (#429 / 80b89713), reviewed by WS4, 2026-11-18
-    'fn-v1:8b328859b9fda2ff8e024287e6d020c11182c169ad993a0e786ad86033420fe6',  # XSAVE/AVX heap save area + kernel stack canary (#427 / ed888ad5), reviewed by WS4, 2026-11-18
-    'fn-v1:c92ee26a67f14c438179f32834b8b0a62f82d1dee42271d43863d4cc96f95a8f',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
-    '53aec880d2ea82474231d37aaae0862dcb8747185626ab6f4d79175a422ce8a8',  # PKU gates: TSC_AUX on switch (P6.2a), 2026-11-19
-    'fn-v1:458daaa0e25c5b534627e9cef612d5e71ba9f781e05b48689bee025a1fd4c70b',  # master 53aec880: PKU gates TSC_AUX on switch (no wait change), 2026-11-19
-    'fn-v1:3af49f2ffe4d2b73c67ec09f190aa8e46cf43a3a7b233f7d8a24532828203567',  # #429 merged with master at 950c36ac (raw af1bffe7), wait change as reviewed at 28ffcb59, 2026-11-19
-    '586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae',  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
-    '13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1',  # IPC v2 syscalls 105/106, 2026-11-18
-    '8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
-    '0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
-                             # per-task self-wait sampling (task_count), 2026-11-17
-                             '25c0bc835f30039f947f28bc79ed567e1c742e17ea3c9a8e0663b5f502c9d642',),
- 'kernel/src/self_wait.rs': ('0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf',),
- 'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
  'kernel/src/smp.rs': ('261699be11866980d2a30b72cbb8d35ddccdc00aa1ee1cbceefadc716edc7d75',  # protection views (tlb hook, rows spread), 2026-11-17
     'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
  'kernel/src/interrupts.rs': ('fn-v1:235c80ce88b369d9d1da26b934e188c056b5e24330b1c242801deaf2e3854c86',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
@@ -132,13 +116,13 @@ SHELL_WAIT_LINE=re.compile(r'wait_observer|sys_wait_self_ticks|pdx_listen|pdx_tr
 # every `fn` whose body names a wait/park/wake/timer item. A short one is pinned
 # whole; a very long one (dispatch, init) by its signature and those lines. Other
 # functions change freely; a new function that waits changes the fingerprint.
-# self_wait.rs, task_ownership.rs (the park/wake state machine) and smp.rs stay whole.
+# smp.rs stays whole; scheduler.rs, self_wait.rs and task_ownership.rs are modelled (below).
 KERNEL_WAIT_TOKEN=re.compile(r'wait_deadline|self_wait|SELF_WAIT|take_due|wait_for_message|wake_record|poll_self_wait|ParkResult|\.park\(|\.wake\(|unpark|sexnet_id|resume_attached|yield_and_switch')
-KERNEL_FN_SCOPED=frozenset(('kernel/src/program_records.rs','kernel/src/pd/create.rs','kernel/src/init.rs','kernel/src/scheduler.rs',
+KERNEL_FN_SCOPED=frozenset(('kernel/src/program_records.rs','kernel/src/pd/create.rs','kernel/src/init.rs',
     'kernel/src/interrupts.rs','kernel/src/syscalls/mod.rs','kernel/src/program_workers.rs'))
 KERNEL_FN_WHOLE_LINES=200
-def _kernel_wait_functions(text):
-    out=[]
+def _functions(text):
+    """Each `fn` with a body: (name, text from `fn` to its closing brace)."""
     for m in re.finditer(r'\bfn\s+(\w+)\s*(?:<[^>{;]*>)?\s*\(',text):
         start=text.find('{',m.end());semi=text.find(';',m.end())
         if start<0 or 0<=semi<start:continue
@@ -147,12 +131,60 @@ def _kernel_wait_functions(text):
             depth+=(text[end]=='{')-(text[end]=='}')
             if depth==0:break
             end+=1
-        body=text[m.start():end+1]
+        yield m.group(1),text[m.start():end+1],start-m.start()
+def _kernel_wait_functions(text):
+    out=[]
+    for name,body,_ in _functions(text):
         if not KERNEL_WAIT_TOKEN.search(body):continue
         lines=body.splitlines()
         kept=lines if len(lines)<=KERNEL_FN_WHOLE_LINES else [lines[0]]+[l for l in lines[1:] if KERNEL_WAIT_TOKEN.search(l)]
-        out.append(m.group(1)+':'+''.join(re.sub(r'\s+','',l) for l in kept))
+        out.append(name+':'+''.join(re.sub(r'\s+','',l) for l in kept))
     return out
+# Kernel pass 2, K6: proof over pins. The park/wake custody word (task_ownership.rs)
+# and the timed-wait deadlines and BOOT inventory (self_wait.rs) are checked by the
+# model in tests/model_scheduler_wait.rs, run on the real files by
+# scripts/scheduler_model_gate.sh (spec check scheduler_model, with compiled mutants),
+# by loom (tests/model_loom_scheduler.rs) and by Kani, so they carry no pin. Their use
+# in scheduler.rs is checked against the model too: every scheduler.rs function that
+# waits or touches custody must make exactly the custody, deadline and wait calls,
+# in order with their match arms, that the model's SCHEDULER_PROTOCOL table lists.
+# An edit that keeps those calls needs no pin; one that changes them changes the
+# table, next to the models it must pass.
+SCHEDULER_MODEL='tests/model_scheduler_wait.rs'
+MODELLED_SOURCES=frozenset(('kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/task_ownership.rs'))
+# Snapshots only read the word, so they are left out.
+SCHEDULER_PROTOCOL_CALL=re.compile(r'interrupts::disable\(\)|\.state\.(?!snapshot\()\w+\(|\.wait_deadline\.\w+\(|SELF_WAIT_TASKS\.\w+\(|'
+    r'\b(?:ParkResult|WakeResult|Admission)::\w+|\.(?:admit_task|admit)\(|\b(?:wake_owned_thread|yield_and_switch|wait_for_local_resume_or_switch|'
+    r'unpark_thread|park_current_thread|wake_record|wake_record_if_due|wait_for_message|wait_for_message_ticks|poll_self_wait_deadlines)\(')
+def scheduler_protocol(text):
+    """{function: calls} for each scheduler.rs function that waits or touches custody."""
+    out={}
+    for name,body,head in _functions(text):
+        inner=body[head:]
+        if not KERNEL_WAIT_TOKEN.search(body) and not re.search(r'\.state\.(?!snapshot\()\w+\(',inner):continue
+        calls=[re.sub(r'^\.(?=state|wait_deadline)','',c.group(0)).rstrip('(').replace('interrupts::disable()','interrupts::disable')
+               for c in SCHEDULER_PROTOCOL_CALL.finditer(re.sub(r'//[^\n]*','',inner))]
+        if not calls:continue
+        if name in out:raise ValueError('scheduler protocol function named twice: '+name)
+        out[name]=' '.join(calls)
+    return out
+def model_protocol(text):
+    table=text.split('pub const SCHEDULER_PROTOCOL: &str = "',1)[1].split('";',1)[0]
+    out={}
+    for line in table.strip().splitlines():
+        name,calls=line.split(':',1)
+        out[name.strip()]=' '.join(calls.split())
+    return out
+def model_fingerprint(root,name,data):
+    model=(root/SCHEDULER_MODEL).read_text()
+    if name=='kernel/src/scheduler.rs':
+        actual,modelled=scheduler_protocol(data.decode()),model_protocol(model)
+        for fn in sorted(set(actual)|set(modelled)):
+            if actual.get(fn)!=modelled.get(fn):
+                raise ValueError('scheduler.rs custody protocol differs from '+SCHEDULER_MODEL+' in '+fn+': kernel '+repr(actual.get(fn))+' model '+repr(modelled.get(fn)))
+        return 'model-v1:'+hashlib.sha256(json.dumps(actual,sort_keys=True).encode()).hexdigest()
+    if '#[path = "../'+name+'"]' not in model:raise ValueError(SCHEDULER_MODEL+' no longer models '+name)
+    return 'model-v1:'+SCHEDULER_MODEL
 def wait_fingerprint(name,data):
     text=data.decode()
     if name in KERNEL_FN_SCOPED:
@@ -200,11 +232,14 @@ def source_contract(root):
     sources={}
     try:
         root=Path(root).resolve(strict=True);texts={}
-        for name,approved in APPROVED_TIMED_WAIT_SOURCES.items():
+        for name in sorted(set(APPROVED_TIMED_WAIT_SOURCES)|MODELLED_SOURCES):
             path=(root/name).resolve(strict=True)
             if not path.is_relative_to(root) or not path.is_file():raise ValueError('source escapes root: '+name)
-            data=path.read_bytes();digest=wait_fingerprint(name,data);sources[name]=digest
-            if digest not in approved:raise ValueError('unreviewed timed-wait source: '+name)
+            data=path.read_bytes()
+            if name in MODELLED_SOURCES:sources[name]=model_fingerprint(root,name,data)
+            else:
+                digest=wait_fingerprint(name,data);sources[name]=digest
+                if digest not in APPROVED_TIMED_WAIT_SOURCES[name]:raise ValueError('unreviewed timed-wait source: '+name)
             texts[name]=re.sub(r'\s+','',data.decode())
         closure=deadline_source_closure(root)
         scheduler=texts['kernel/src/scheduler.rs']
