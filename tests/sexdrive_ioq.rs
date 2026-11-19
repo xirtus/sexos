@@ -35,6 +35,8 @@ fn a_whole_run_is_cut_into_commands() {
     assert_eq!(pieces(512 * 1024, 128 * 1024), 4);
     assert_eq!(pieces(512 * 1024 + 512, 128 * 1024), 5);
     assert_eq!(pieces(512 * 1024, 16 * 1024), 32);
+    // A whole 4 MiB run (sex_pdx::BLOCK_MAX_RUN) on a 128 KiB-MDTS drive fills a batch.
+    assert_eq!(pieces(4 << 20, 128 * 1024) as usize, MAX_IN_FLIGHT);
     assert_eq!(pieces(4096, 0), 0);
     assert_eq!(piece(4, 512 * 1024 + 512, 128 * 1024), (512 * 1024, 512));
     assert_eq!(piece(1, 200 * 1024, 128 * 1024), (128 * 1024, 72 * 1024));

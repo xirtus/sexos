@@ -107,11 +107,12 @@ Fixed in stage 1 are marked **[fixed]**.
 15. **NVMe: one 4 KiB command at a time**, synchronous, one I/O queue
     (`BLOCK_MAX_XFER` 4096). Linux keeps many large commands in flight.
     **[partly fixed: commands carry up to 128 KiB (PRP lists, MDTS), requests run
-    to 512 KiB (`BLOCK_MAX_RUN`), and since 2026-11-19 a request goes out as one
-    batch of up to 32 commands on a 64-entry queue, one doorbell, completions by
-    interrupt and reaped in any order (ledger 2026-11-19-nvme-queue-depth). Still
+    to 4 MiB (`BLOCK_MAX_RUN`, 512 KiB until 2026-11-19), and a request goes out as
+    one batch of up to 32 commands on a 64-entry queue, one doorbell, completions
+    by interrupt and reaped in any order (ledger 2026-11-19-nvme-queue-depth). Still
     open: without an IOMMU loan the 512 KiB DMA pool caps a batch at 2 to 4 bounced
-    commands; Files sends one request at a time; one queue pair, not one per core.]**
+    commands; Files sends one request at a time; sexfs lays files out in small
+    extents, which stops readahead; one queue pair, not one per core.]**
 16. **Every file write is a durable commit.** Files commits the copy-on-write
     tree and flushes the disk after each 63 KiB request; Linux buffers and
     flushes on `fsync`. Mounting walks the whole tree.

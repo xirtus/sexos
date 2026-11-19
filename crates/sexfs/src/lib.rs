@@ -83,8 +83,13 @@ pub trait Device {
     }
 }
 
-/// Longest run of file blocks moved together.
+/// Longest run of file blocks a read hands over at once (their checksums sit on the stack).
 const RUN_MAX: usize = 128;
+/// Longest run of blocks written side by side, and longest a sequential read fetches
+/// (what it asked for plus readahead): 4 MiB, a whole block buffer
+/// (sex_pdx::BLOCK_MAX_RUN), so SexDrive gets its full batch of commands in flight.
+/// Readahead blocks wait in the device's buffer, not here.
+const LONG_RUN: usize = 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind { File, Dir }
@@ -726,7 +731,7 @@ impl<'a, D: Device> Fs<'a, D> {
         let index = at / BLOCK as u64;
         let inside = (at % BLOCK as u64) as usize;
         let whole = if inside == 0 { data.len() / BLOCK } else { 0 };
-        let want = whole.min(self.dev.run_blocks()).min(RUN_MAX);
+        let want = whole.min(self.dev.run_blocks()).min(LONG_RUN);
         if want >= 2 {
             // New blocks side by side, so the device takes them in one command.
             let first = self.alloc()?;
@@ -813,7 +818,7 @@ impl<'a, D: Device> Fs<'a, D> {
         // still sit side by side on disk and fit one run.
         let mut ahead = 0usize;
         if n == want && self.sequential == (id, index) {
-            let room = self.dev.run_blocks().min(RUN_MAX).saturating_sub(n);
+            let room = self.dev.run_blocks().min(LONG_RUN).saturating_sub(n);
             while ahead < room {
                 if !self.get(Key { id, kind: K_BLOCK, off: index + (n + ahead) as u64 })? { break; }
                 let block = get_u64(&self.value, 0);

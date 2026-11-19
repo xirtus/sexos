@@ -294,6 +294,28 @@ fn repeated_file_reads_reach_device_without_counting_metadata_or_holes() {
     assert_eq!(fs.device().data_bytes - before, BLOCK as u64);
 }
 #[test]
+fn a_four_mib_buffer_reads_a_sequential_file_in_two_commands() {
+    let mut fs = fresh(40960);
+    fs.device().runs = 1024; // sex_pdx::BLOCK_MAX_RUN of 4 KiB blocks
+    fs.device().ahead_on = true;
+    let id = fs.create(b"big", 1).unwrap();
+    let data = bytes_of(29, 4 << 20);
+    fs.write(id, 0, &data, 1).unwrap();
+    fs.commit().unwrap();
+    let mut back = vec![0u8; 65536];
+    let (cmds, bytes) = (fs.device().run_cmds, fs.device().data_bytes);
+    for (i, chunk) in data.chunks(65536).enumerate() {
+        assert_eq!(fs.read(id, i as u64 * 65536, &mut back).unwrap(), back.len());
+        assert!(back == chunk, "chunk {i}");
+    }
+    // One 4 MiB write lays the file out side by side; the first 64 KiB read fetches only
+    // itself, the second brings the rest of the file in the same command.
+    let reads = fs.device().run_cmds - cmds;
+    assert!(reads <= 2, "{reads} device commands for 4 MiB read sequentially");
+    assert_eq!(fs.device().data_bytes - bytes, data.len() as u64);
+}
+
+#[test]
 fn sequential_reads_fetch_ahead_in_one_command() {
     let mut fs = fresh(40960);
     fs.device().runs = 128;

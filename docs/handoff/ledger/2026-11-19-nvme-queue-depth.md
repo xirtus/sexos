@@ -27,11 +27,47 @@ Now a request longer than one command goes to the drive as one batch:
   as for one command (`[sexdrive.nvme.batch.stopped]`). If a CQE never comes,
   everything still out is quarantined and the loan ends first.
 
-How deep a batch gets depends on the drive. A 512 KiB request (`BLOCK_MAX_RUN`) on a
-drive with a 128 KiB-or-larger MDTS (the PM9A1 and QEMU) is 4 commands, all in flight
-at once. 32 in flight takes smaller commands (a 16 KiB MDTS) or larger requests.
-Files still sends one request at a time, so the next gain is from Files keeping more
-than one request out, or a larger `BLOCK_MAX_RUN`.
+## Runs of 4 MiB, so a batch fills
+
+A batch can only be as deep as the request is long, so `sex_pdx::BLOCK_MAX_RUN` (the
+Files/SexDrive shared block buffer, region 4) grows from 512 KiB to 4 MiB: 32
+commands of 128 KiB, a whole batch on a drive with a 128 KiB MDTS (the PM9A1, and
+QEMU). Before this, a 512 KiB run was 4 commands. What allows the size:
+
+- BOOT backs the region with one physically contiguous block (`try_backing`, buddy
+  order 10 for 4 MiB) and maps it into both domains with 4 KiB pages. That costs
+  3.5 MiB more memory at boot.
+- The IOMMU loan of the whole buffer is 1,024 pages, well inside the 128 MiB lend
+  window. The kernel needs 4 KiB leaves to lend, which the region has.
+- SexDrive's own DMA pool is still 512 KiB. With the loan, a run needs only the 32
+  PRP list slots (8 KiB). Without the loan, a run goes through the 2 to 4 bounces,
+  refilled as they free up: more round trips through the batch, still one Files call.
+- Files needs no change. It sizes everything from the region it is given
+  (`diskfs_bridge_buf_len`): sexfs device runs, readahead (held in the buffer
+  itself), program-store loads, FAT/NTFS volume reads and the installer's copies.
+- sexfs had its own 512 KiB caps. Readahead and side-by-side writes now go up to
+  `LONG_RUN` = 1,024 blocks (4 MiB). The per-run checksum array, `RUN_MAX` = 128,
+  is unchanged: it covers only what a read hands over, which a 64 KiB request
+  bounds anyway.
+
+Files still sends one request at a time. Keeping several outstanding would need
+the block protocol and the Files service loop to change (and open PR #444 is
+editing `fs_service.rs`), so that option was not taken. Readahead and large runs
+reach the same depth with one call.
+
+Found while testing: sexfs places copy-on-write tree blocks right after each data
+run it writes. A file written in 512 KiB pieces therefore sits in 512 KiB extents,
+and readahead stops at each extent's end: a 4 MiB file read sequentially takes 9
+device runs, not 2. Files commits after every 63 KiB request, so files written
+through the request region are probably in extents that small. This was reasoned
+from code and not measured on a real image. Allocating tree blocks away from data,
+or allocating data late, would let readahead and the 4 MiB runs reach ordinary
+files. Until then, the big runs mostly help program loads, foreign volumes and
+installs.
+
+ABI: `BLOCK_MAX_RUN` 512 KiB -> 4 MiB (region 4 size; `spec/abi_inputs.sha256`
+re-pinned; `check_self_wait.py` admits the new sex-pdx wait fingerprint with a
+dated entry; `check_memory_authority_log.py` expects `region_id=4 length=4194304`).
 
 ## Tests
 
@@ -40,6 +76,7 @@ than one request out, or a larger `BLOCK_MAX_RUN`.
   reverse and interleaved completion order, a full 4-entry SQ holding submissions
   back until SQHD moves, a bogus SQHD ignored, the DMA limit capping commands in
   flight, an error CQE on one command of a batch, foreign and replayed CIDs.
+- `tests/sexfs.rs`: `a_four_mib_buffer_reads_a_sequential_file_in_two_commands`.
 - `tests/sexdrive_dma_transfer.rs` compiles the production `nvme_batch`: one doorbell
   for 4 bounced commands that complete in any order; two bounces refilled in the order
   they free up; 32 zero-copy commands in flight; one PRP list per slot; an error on one

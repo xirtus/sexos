@@ -988,8 +988,10 @@ pub const BLOCK_MAX_XFER:     u64 = 4096;    // Max bytes per transfer (one page
 /// Largest single READ/WRITE Files may send: the size of the shared block buffer.
 /// SexDrive moves it as commands of at most BLOCK_CMD_RUN, several in flight at once
 /// (#307), so large I/O costs one call per run instead of one per page.
+/// 4 MiB is 32 commands of 128 KiB: one run fills SexDrive's whole batch
+/// (ioq::MAX_IN_FLIGHT) on a drive whose MDTS allows 128 KiB.
 /// BLOCK_MAX_XFER stays the unit for callers that want pages.
-pub const BLOCK_MAX_RUN:      u64 = 512 * 1024;
+pub const BLOCK_MAX_RUN:      u64 = 4 * 1024 * 1024;
 /// Largest single device command (one PRP list page; within common NVMe MDTS limits).
 pub const BLOCK_CMD_RUN:      u64 = 128 * 1024;
 
