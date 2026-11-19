@@ -32,8 +32,13 @@ python3 "$ROOT_DIR/scripts/drag_guest_qemu.py"
 # VT-x/SVM cell on Linux KVM (tests/kvm.rs, SKIP without a usable /dev/kvm).
 # CW3: Wine's ntdll.dll (pinned Wine 9.0 PE build) runs in the cell natively and on KVM,
 # and a Windows program (test/wine_hello.exe) runs on Wine's own kernel32 and kernelbase.
-CROSSDRESS_WINE_DIR="$(bash "$ROOT_DIR/scripts/fetch_wine_pe.sh")"
-export CROSSDRESS_WINE_DIR
+# A network failure skips the Wine tests (loudly) instead of failing every PR's gate.
+if CROSSDRESS_WINE_DIR="$(bash "$ROOT_DIR/scripts/fetch_wine_pe.sh")"; then
+  export CROSSDRESS_WINE_DIR
+else
+  echo "[drag.host.gate] WARN could not fetch Wine's PE DLLs: the CW3 Wine tests SKIP this run"
+  unset CROSSDRESS_WINE_DIR
+fi
 (cd "$ROOT_DIR" && cargo test --locked -p sex-crossdress -- --nocapture 2>&1 | grep -E '^\[crossdress|^test result|FAILED|panicked' ; exit "${PIPESTATUS[0]}")
 CROSS="$ROOT_DIR/crates/sex-crossdress/test"
 if command -v clang >/dev/null && command -v lld-link >/dev/null && command -v llvm-dlltool >/dev/null; then
