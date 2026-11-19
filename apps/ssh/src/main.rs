@@ -6,6 +6,10 @@
 //! folder) and prints the line to add to the server's `authorized_keys`. Host keys are
 //! remembered in `known_hosts` the first time (trust on first use); a changed key is
 //! refused. `--password` reads a password line instead of using the key.
+//!
+//! In a Spindle pane (`ssh USER@HOST` typed there) the remote shell gets a real PTY:
+//! `xterm-256color` at the pane's size, keys sent as they are typed (Ctrl+C included,
+//! for the remote side), and every resize of the pane passed on.
 use sex_ssh::{keys::Ed25519, Auth, Client, Event, Run};
 use sha2::{Digest, Sha256};
 use std::io::{BufRead, Read, Write};
@@ -80,20 +84,44 @@ fn main() {
     };
     record(&format!("[ssh.key] {}", key.authorized_line()));
     let mut auth = vec![Auth::Ed25519(key)];
-    let (lines_tx, lines) = mpsc::channel::<String>();
-    std::thread::spawn(move || { for l in std::io::stdin().lock().lines() { if lines_tx.send(l.unwrap_or_default()).is_err() { break; } } });
     if password {
         println!("Password for {user}@{host}:");
-        auth.insert(0, Auth::Password(lines.recv().unwrap_or_default()));
+        let echo = sex_std::terminal::set_echo(false);
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+        if echo { sex_std::terminal::set_echo(true); println!(); }
+        auth.insert(0, Auth::Password(line.trim_end_matches(['\r', '\n']).to_string()));
     }
-    let run = if command.is_empty() { Run::Shell { term: "dumb".into(), cols: 100, rows: 30 } } else { Run::Exec(command.join(" ")) };
     let interactive = command.is_empty();
+    // A terminal's pane: raw keys and a real PTY of the pane's size. Elsewhere, lines.
+    let tty = interactive && sex_std::terminal::set_raw(true);
+    let (cols, rows) = if tty { sex_std::terminal::size() } else { (100, 30) };
+    let mut changes = sex_std::terminal::size_changes();
+    record(&format!("[ssh.pty] tty={} cols={cols} rows={rows}", tty as u8));
+    let run = if !interactive { Run::Exec(command.join(" ")) }
+        else { Run::Shell { term: if tty { "xterm-256color" } else { "dumb" }.into(), cols: cols as u32, rows: rows as u32 } };
+    let (keys_tx, keys) = mpsc::channel::<Vec<u8>>();
+    if interactive {
+        std::thread::spawn(move || {
+            if tty {
+                let mut b = [0u8; 1024];
+                loop {
+                    match std::io::stdin().read(&mut b) { Ok(0) | Err(_) => break, Ok(n) => if keys_tx.send(b[..n].to_vec()).is_err() { break } }
+                }
+            } else {
+                for l in std::io::stdin().lock().lines() { if keys_tx.send(format!("{}\n", l.unwrap_or_default()).into_bytes()).is_err() { break; } }
+            }
+        });
+    }
+    if tty { print!("\x1b]0;{user}@{host}\x07"); let _ = std::io::stdout().flush(); }
+    let finish = move |code: i32| -> ! { if tty { sex_std::terminal::set_raw(false); } let _ = std::io::stdout().flush(); std::process::exit(code) };
 
     let mut sock = match TcpStream::connect((host, port)) {
         Ok(s) => s,
-        Err(e) => { println!("ssh: can't reach {host}:{port}: {e}"); record(&format!("[ssh.failed] connect {e}")); std::process::exit(1) }
+        Err(e) => { println!("ssh: can't reach {host}:{port}: {e}"); record(&format!("[ssh.failed] connect {e}")); finish(1) }
     };
-    let _ = sock.set_read_timeout(Some(Duration::from_millis(50)));
+    // Keys wait at most this long for the socket's next look.
+    let _ = sock.set_read_timeout(Some(Duration::from_millis(if tty { 10 } else { 50 })));
     let mut c = Client::new(user, auth, Some(run), Box::new(move |b: &mut [u8]| rng(b)));
     let mut buf = vec![0u8; 65536];
     let mut status = None;
@@ -101,7 +129,13 @@ fn main() {
         let o = c.output();
         if !o.is_empty() && sock.write_all(&o).is_err() { break; }
         if c.closed() { break; }
-        if interactive { while let Ok(l) = lines.try_recv() { c.send(format!("{l}\n").as_bytes()); } }
+        while let Ok(k) = keys.try_recv() { c.send(&k); }
+        if tty && sex_std::terminal::size_changes() != changes {
+            changes = sex_std::terminal::size_changes();
+            let (cols, rows) = sex_std::terminal::size();
+            c.resize(cols as u32, rows as u32);
+            record(&format!("[ssh.resize] cols={cols} rows={rows}"));
+        }
         let n = match sock.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => n,
@@ -111,7 +145,7 @@ fn main() {
         if let Err(e) = c.receive(&buf[..n]) {
             println!("ssh: {}", match e { sex_ssh::Error::AuthFailed => "the server refused the key (is it in authorized_keys?)".into(), other => format!("{other:?}") });
             record(&format!("[ssh.failed] {e:?}"));
-            std::process::exit(1);
+            finish(1);
         }
         while let Some(e) = c.event() {
             match e {
@@ -126,7 +160,7 @@ fn main() {
                             record("[ssh.failed] host key changed");
                             c.reject_host_key();
                             let _ = sock.write_all(&c.output());
-                            std::process::exit(1);
+                            finish(1);
                         }
                         None => {
                             println!("New host {name}, {algorithm} key {fingerprint}: remembered.");
@@ -134,13 +168,13 @@ fn main() {
                         }
                     }
                     record(&format!("[ssh.host] {line}"));
-                    if c.accept_host_key().is_err() { std::process::exit(1); }
+                    if c.accept_host_key().is_err() { finish(1); }
                 }
                 Event::Banner(b) => print!("{b}"),
                 Event::Authenticated => record("[ssh.authenticated]"),
                 Event::Data { bytes, stderr } => {
                     let text = String::from_utf8_lossy(&bytes);
-                    if stderr { eprint!("{text}"); } else { print!("{text}"); }
+                    if stderr { eprint!("{text}"); } else { print!("{text}"); let _ = std::io::stdout().flush(); }
                     for l in text.lines() { record(&format!("[ssh.out] {l}")); }
                 }
                 Event::ExitStatus(s) => status = Some(s),
@@ -148,7 +182,6 @@ fn main() {
             }
         }
     }
-    let _ = std::io::stdout().flush();
     record(&format!("[ssh.done] status={}", status.map_or(-1, |s| s as i64)));
-    std::process::exit(status.map_or(255, |s| s as i32));
+    finish(status.map_or(255, |s| s as i32));
 }

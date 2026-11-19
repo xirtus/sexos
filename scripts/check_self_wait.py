@@ -15,10 +15,15 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 # deadline reference; USB quiet only narrows (also requires no Bluetooth HID traffic).
 APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',
                                # record table allocated zeroed via CapabilityTable::new_boxed (no wait change), 2026-11-17
-                               'e4f79ad810b5bba8aab649b5472154ebece0d4ae1c7b96ccf0cacf3b076de769',),
+                               'e4f79ad810b5bba8aab649b5472154ebece0d4ae1c7b96ccf0cacf3b076de769',
+    # record code scanned for key instructions (stream 2), 2026-11-18
+    'd8dab16031564c8540b35ce5e45c28d1cbf297071e3ffc6d21e5aff7322f625b',
+    # stream 2 scan merged with the v2 capability table, 2026-11-18
+    '46adbb04a4ef0f0e057f3282c9c19fc1f8044a8a9f4d4e77b0a4c679dee03215',),
 'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
 'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
-'kernel/src/scheduler.rs': ('13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1',  # IPC v2 syscalls 105/106, 2026-11-18
+'kernel/src/scheduler.rs': ('586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae',  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
+    '13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1',  # IPC v2 syscalls 105/106, 2026-11-18
     '8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
     '0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
                              # per-task self-wait sampling (task_count), 2026-11-17
@@ -27,7 +32,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
  'kernel/src/smp.rs': ('bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
  'kernel/src/interrupts.rs': ('c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
-                              'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d'),
+                              'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d',
+                              # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
+                              'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),
  'kernel/src/syscalls/mod.rs': ('5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577',  # IPC v2 syscalls 105/106, 2026-11-18
     '055312eb92a25b451b946caef4f00d1999391840bb782a1697db72e1903b1c41', '318f8602a3e053470c4f6f984fa818f928cae16253dcf9a9946edf1b114995ba',  # IPC fast path (WS4), 2026-11-17
     'aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
@@ -67,12 +74,30 @@ APPROVED_KERNEL_RUST_TREES=('8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3
     'a897c8b8c617cfef1ec3a7fad038f32f8530b232cf698f9ea896a89950d5a0ec',
     # WS2 kernel heap counters (SYS_STATS OP_KERNEL), unused slab.rs removed, 2026-11-17
     '95ef2223d462a85888843a0700105ff4538f044360df25138dde638253e06fb5',
+    # entry hardening + security audit (stream 2), 2026-11-18
+    '24a9360f565da793ccaa3f9dda02c0540af671c7d7f997ea81d9286a28ce9865',
+    # BOOT loader refuses key instructions and W+X code (stream 2), 2026-11-18
+    'bdaa310d6ed632686c4284e34dcee8f2264ef16010014a6caac0013b998cf5bb',
+    # stream 2 on top of the IPC fast path (#402), 2026-11-18
+    '98e232964db1dbed07859aac5a285b9f80dbfdc87a7fe74adb0d23e7a0ca43ad',
+    # W^X for every user mapping + record code scan (stream 2), 2026-11-18
+    'ddd84cbbe668235c1afc410fcaa0373b5388a992f71c1cdf89d39bb1c7173345',
+    # stream 2 merged with master (core_local page removed upstream), 2026-11-18
+    '471f85c4ed8912eed8ae8b6ace5e1b6ccef5fc92af580498e3bdc0454c0b582f',
     # Kernel plan phase 2: kernel/src/ipc_v2 (endpoint, reply, notification), not wired yet, 2026-11-17
     'c620598cd6151890bb134924fcbb76dbe7ab8396503971b66f7e52b1c8251cbd',
+    # stream 2 merged with ipc_v2 (stream 4), 2026-11-18
+    '6653e237101288231f1336156721a6401df232d53786312b2ec222f5db2438b3',
+    # stream 2 merged with the shared-image CI (#399), 2026-11-18
+    '55803e9cff54b5b46b50be5a697c71617e5461f48a37cc9f99168f1046ed2cfd',
     # authority v2 capability table (inline slots, generations), cheri.rs removed, 2026-11-17
     '6371383dfa90b1b27da40ad384b65ebd757ae90284fe6f0f1a083453fb6b1933',
+    # stream 2 merged with authority v2 and XSAVE (#407, #408), 2026-11-18
+    'ace8232c43ac9354d1997d8aed554d48ad8a39bf26507479a00cab0affaea3ae',
     # IPC v2 syscalls 105/106 wired (kernel plan phase 2), 2026-11-18
-    '22a70bcd8ad7b76d717a4484845ef6920d18fca47b892b0ae4f993a4953a0909')
+    '22a70bcd8ad7b76d717a4484845ef6920d18fca47b892b0ae4f993a4953a0909',
+    # stream 2 merged with IPC v2 syscalls (#418/#421/#422), 2026-11-18
+    'c74db80e5ed8fa929a2a5253c80949ec3beffe467cfef29ac192dae43234902c')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
