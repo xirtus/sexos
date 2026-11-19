@@ -106,6 +106,12 @@ Fixed in stage 1 are marked **[fixed]**.
 
 15. **NVMe: one 4 KiB command at a time**, synchronous, one I/O queue
     (`BLOCK_MAX_XFER` 4096). Linux keeps many large commands in flight.
+    **[partly fixed: commands carry up to 128 KiB (PRP lists, MDTS), requests run
+    to 512 KiB (`BLOCK_MAX_RUN`), and since 2026-11-19 a request goes out as one
+    batch of up to 32 commands on a 64-entry queue, one doorbell, completions by
+    interrupt and reaped in any order (ledger 2026-11-19-nvme-queue-depth). Still
+    open: without an IOMMU loan the 512 KiB DMA pool caps a batch at 2 to 4 bounced
+    commands; Files sends one request at a time; one queue pair, not one per core.]**
 16. **Every file write is a durable commit.** Files commits the copy-on-write
     tree and flushes the disk after each 63 KiB request; Linux buffers and
     flushes on `fsync`. Mounting walks the whole tree.
@@ -144,7 +150,8 @@ Each stage is a PR, merged when its gates pass at 1 and 4 cores.
    mapping buddy pages; replace `linked_list_allocator` with a size-class slab
    over the buddy allocator (Linux's SLUB model).
 3. **Storage throughput.** NVMe PRP lists for up to 128 KiB per command, a queue
-   depth of 32 with completions by interrupt, then a second queue per core.
+   depth of 32 with completions by interrupt (done 2026-11-19, see item 15), then
+   a second queue per core (written up as next steps in that ledger entry).
    Files: commit on `SYNC` and on a short timer instead of per request, and a
    shared buffer per client so data is not copied through the 64 KiB region.
    Target: within 2x of Linux raw NVMe on the bench.
