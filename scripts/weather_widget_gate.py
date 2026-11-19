@@ -33,7 +33,8 @@ def main():
     out = a.out.resolve(); out.mkdir(parents=True, exist_ok=True)
     if any(x for x in out.iterdir()): raise RuntimeError('fresh output required')
     disk = out / 'nvme.img'; shutil.copyfile(a.source_disk, disk)
-    install(disk, [('tatami', (ROOT / 'iso_root/programs/tatami').read_bytes())])
+    # Settings for the first start, and the helper, as an installed system has them.
+    install(disk, [(n, (ROOT / 'iso_root/programs' / n).read_bytes()) for n in ('tatami', 'steamy')])
     os.environ.setdefault('SEXOS_GATE_NIC', '-netdev user,id=n0 -device e1000e,netdev=n0')
     g = boot(a.iso, disk, out, 'weather', a.resolution); t = g['text']; q = g['q']; wait = g['wait']
     steps = []
