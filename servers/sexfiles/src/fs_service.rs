@@ -245,7 +245,13 @@ pub fn home_unlock_from_lock_screen(password: &[u8]) -> Option<u8> {
 }
 fn bring_up() -> State {
     let sectors = DiskFs::diskfs_block_call(sex_pdx::BLOCK_CAPACITY, 0, 0, 0);
-    let state = bring_up_on(sectors);
+    // Another system's disk (Windows on the laptop's SSD): never mounted or formatted
+    // as SexOS's; sexdrive serves it for reading only.
+    let foreign = DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_FOREIGN;
+    let state = if foreign {
+        sex_pdx::serial_record!("[files.fs.foreign] sectors={} read_only=1", sectors);
+        State::Absent
+    } else { bring_up_on(sectors) };
     // No SexOS filesystem here (a Windows RAID volume, say): its own volumes, read only.
     if matches!(state, State::Absent) && sectors >= DEVICE_MIN_SECTORS { crate::volumes::attach_device(sectors); }
     state

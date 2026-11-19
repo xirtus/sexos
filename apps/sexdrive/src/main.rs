@@ -944,7 +944,10 @@ fn device_sectors() -> u64 {
     match unsafe { LENS } {
         Lens::Store { sectors, .. } => sectors,
         Lens::Whole | Lens::Locked { .. } => disk_sectors(),
-        Lens::Unknown | Lens::Foreign(_) => WRITE_PROOF_LBA + 1,
+        // Another system's disk is served whole for reading (Files mounts its volumes
+        // read only, as with an Intel RAID volume); `place` refuses every write.
+        Lens::Foreign(_) => disk_sectors(),
+        Lens::Unknown => WRITE_PROOF_LBA + 1,
     }
 }
 
@@ -956,6 +959,7 @@ fn place(slba: u64, blocks: u64, write: bool) -> Option<u64> {
         Lens::Whole => Some(slba),
         Lens::Store { base, sectors } => (end <= sectors).then_some(base + slba),
         Lens::Locked { base } if !write => Some(base + slba),
+        Lens::Foreign(_) if !write => (end <= disk_sectors()).then_some(slba),
         _ => None,
     }
 }
@@ -2237,7 +2241,7 @@ fn storage_selftests() {
     probe_layout();
     if matches!(unsafe { LENS }, Lens::Foreign(_)) {
         // Another system's disk: skip the write self-tests, which would land in it.
-        sex_pdx::serial_record!("[sexdrive.disk.foreign] writes=refused selftest=skipped");
+        sex_pdx::serial_record!("[sexdrive.disk.foreign] writes=refused reads=whole_disk selftest=skipped");
         return;
     }
     let ap3_buf_phys = reserve_dma_phys(PAGE_SIZE);

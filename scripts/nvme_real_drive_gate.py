@@ -11,11 +11,16 @@
    refuse the drive before any read or write, say why and how to fix it, and
    the system must still come up. The disk image must be untouched.
 
-Passes when both hold, the boot log names the drive (model, MDTS), and Spindle's
+3. Another system's disk (a GPT with a FAT partition, standing in for the
+   laptop's Windows SSD in AHCI/NVMe mode): sexdrive serves it for reading only,
+   Files never mounts or formats it as its own, opens its partition read only
+   under /media, a write there is refused, and the image is untouched.
+
+Passes when all three hold, the boot log names the drive (model, MDTS), and Spindle's
 `hw` (the hardware report for a PC with no serial port) shows the drive and the
 device census, and `hw save` writes the same report to a file.
 """
-import argparse, hashlib, os, re, shutil, sys, time
+import argparse, hashlib, os, re, shutil, subprocess, sys, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -109,6 +114,41 @@ def main():
         g['stop']()
         os.environ.pop('SEXOS_GATE_NVME_OPTS', None)
     assert sha(disk) == before, 'the 4 KiB-sector disk was written'
+
+    # 3. Another system's disk: read only, its partition under /media.
+    disk = a.out / 'foreign.img'
+    disk.unlink(missing_ok=True)
+    with disk.open('wb') as f:
+        f.truncate(GIB)
+    subprocess.run(['sgdisk', '-o', '-n', '1:2048:+100M', '-t', '1:ef00', '-c', '1:EFI system partition',
+                    '-n', '2:0:+16M', '-t', '2:0700', '-c', '2:Basic data partition', str(disk)], check=True, capture_output=True)
+    first = int(re.search(r'First sector: (\d+)', subprocess.run(['sgdisk', '-i', '2', str(disk)], check=True, capture_output=True, text=True).stdout).group(1))
+    fat, hello = a.out / 'windata.img', a.out / 'hello.txt'
+    fat.unlink(missing_ok=True)
+    with fat.open('wb') as f:
+        f.truncate(16 << 20)
+    hello.write_text('hello from the other system\n')
+    subprocess.run(['mformat', '-i', str(fat), '-T', '32768', '-h', '64', '-s', '32', '-v', 'WINDATA', '::'], check=True, capture_output=True)
+    subprocess.run(['mcopy', '-i', str(fat), str(hello), '::hello.txt'], check=True, capture_output=True)
+    with disk.open('r+b') as f:
+        f.seek(first * 512)
+        f.write(fat.read_bytes())
+    before = sha(disk)
+    g, t, q, run, cat, ls = session(a, disk, 'foreign')
+    try:
+        g['wait'](r'\[sexdrive\.disk\.layout\] kind=foreign-gpt ', 0, 60)
+        g['wait'](r'\[sexdrive\.disk\.foreign\] writes=refused reads=whole_disk', 0, 60)
+        g['wait'](r'\[files\.fs\.foreign\] sectors=2097152 read_only=1', 0, 60)
+        g['wait'](r'\[files\.media\.mounted\] name=WINDATA format=FAT16 sectors=32768 start=%d read_only=1' % first, 0, 60)
+        assert cat('/media/WINDATA/hello.txt') == ['hello from the other system'], t()[-400:]
+        run('write /media/WINDATA/nope.txt x', r'\[spindle\.fs\.line\] read-only disk')
+        text = t()
+        assert not re.search(r'\[files\.fs\.(formatted|mounted)\]', text), 'Files took the other system\'s disk'
+        assert 'KERNEL PANIC' not in text
+        report['foreign'] = 'read_only'
+    finally:
+        g['stop']()
+    assert sha(disk) == before, 'the other system\'s disk was written'
     print('[nvme_real_drive.gate] PASS', report)
     return 0
 
