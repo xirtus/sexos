@@ -648,6 +648,8 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>,source:Optio
         DORMANT[index].store(true,Ordering::Release);
         TERMINAL[index].store(false,Ordering::Release);
         crate::serial_println!("[app.rebirth.begin] target={} task={} generation={}",app.target,task,app.generation);
+        // Hints for the new run go out on the next tick, not the 64-tick safety scan.
+        crate::scheduler::task_ownership::EXITS.fetch_add(1,Ordering::AcqRel);
         return Ok(5);
     }
     if app.acked!=REQUIRED {return Ok(5)}
@@ -754,11 +756,14 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
 /// for the service's capability-authenticated ACK.
 /// Ticks before a hint is sent again, after `tries` earlier re-sends.
 fn gap(tries:u8)->u64{16<<tries.min(3)}
-pub fn poll_exit_notifications(){
-    let Some(mut apps)=APPS.try_lock()else{return};
+/// Returns whether any row still has lifecycle work in flight (or the table was busy).
+pub fn poll_exit_notifications()->bool{
+    let Some(mut apps)=APPS.try_lock()else{return true};
+    let mut busy=false;
     let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
     for (index,app) in apps.iter_mut().enumerate(){
         if app.ready && app.rebirthing {
+            busy=true;
             // Everyone has forgotten the old run: wake the coordinator to commit.
             if app.acked==REQUIRED && app.hinted&32==0 {
                 let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(app.coordinator)else{continue};
@@ -779,6 +784,7 @@ pub fn poll_exit_notifications(){
         if !app.ready || app.retired{continue}
         let main=app.main as *mut crate::scheduler::Task;
         if !unsafe{(*main).state.snapshot().exited}{continue}
+        busy=true;
         if app.reusable{crate::program_workers::end(app.target);}
         if !app.kicked{for holder in app.services.into_iter().chain(core::iter::once(app.pager)){
             if let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(holder){crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire));}
@@ -799,6 +805,7 @@ pub fn poll_exit_notifications(){
             }
         }
     }
+    busy
 }
 /// Denim's view of a live, single-threaded run (`sex_pdx::denim`). The run must be the
 /// row's current one, as for `grow`; its domain is found by target, not by caller.

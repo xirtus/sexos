@@ -43,7 +43,8 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('fn-v1:50abfa82
                              # per-task self-wait sampling (task_count), 2026-11-17
                              '25c0bc835f30039f947f28bc79ed567e1c742e17ea3c9a8e0663b5f502c9d642',),
  'kernel/src/self_wait.rs': ('0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf',),
- 'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
+ 'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',
+     'b343ab6b18605ddbbfb6386a5055b3f03ad069fd5b2bbd6bbf331c1258d33a48',),  # K2c: EXITS epoch bumped on the first exit (no wait change), 2026-11-20
  'kernel/src/smp.rs': ('261699be11866980d2a30b72cbb8d35ddccdc00aa1ee1cbceefadc716edc7d75',  # protection views (tlb hook, rows spread), 2026-11-17
     'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
  'kernel/src/interrupts.rs': ('fn-v1:235c80ce88b369d9d1da26b934e188c056b5e24330b1c242801deaf2e3854c86',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
@@ -373,8 +374,8 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
  'kernel/src/cpu_account.rs': '281b10b4f856a7f665c7ba59951b73b926decefa5c3bfae968af5714ba202f45',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
- 'kernel/src/app_resources.rs': '007a8fe09b8924c47c5d15fa9a52c3e42f403ed4b33cbecccaf2a6c18d97baf1',  # K2a hint backoff only (no observer change), 2026-11-20
- 'kernel/src/service_restart.rs': 'c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e',
+ 'kernel/src/app_resources.rs': '769b963f795c1508360ee11030e6e687e2fae3c99dab36b304f95a8f0c8e815e',  # K2a hint backoff, K2c busy result (no observer change), 2026-11-20
+ 'kernel/src/service_restart.rs': 'a66ded412b60ef50cfc95310bee4027de9617a904908ab0f50d5df470622a856',  # K2c: poll reports work in flight (no observer change), 2026-11-20
  'kernel/src/crash_log.rs': '4a6a0f5312fdbec23efa0d5497b820105ba244c35cc878f27db04ba98cedc3ae',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
