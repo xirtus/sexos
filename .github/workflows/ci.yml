@@ -543,6 +543,10 @@ jobs:
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
         python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
         python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Sound on Intel HD Audio by interrupt (MSI, period-end wakes)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/hda-sound-source.img"
+        python3 scripts/sound_gate.py --card hda --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/hda-sound-source.img" --out "$RUNNER_TEMP/sexos-hda-sound"
     - name: Microphone on Intel HD Audio (input pin, converter and input stream)
       run: |
         truncate -s 1G "$RUNNER_TEMP/hda-mic-source.img"
@@ -557,6 +561,7 @@ jobs:
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
           ${{ runner.temp }}/sexos-hda-mic
+          ${{ runner.temp }}/sexos-hda-sound
         if-no-files-found: ignore
 
   editor:

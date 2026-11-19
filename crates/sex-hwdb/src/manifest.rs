@@ -136,7 +136,9 @@ pub const NET: Manifest = Manifest {
 
 /// sexbell: virtio sound, Intel HD Audio controllers.
 pub const BELL: Manifest = Manifest {
-    service: Service::Bell, max_devices: 0, vectors: 0,
+    // One vector: Intel HD Audio interrupts at each period end; virtio sound keeps
+    // its vector masked and polls its queues.
+    service: Service::Bell, max_devices: 0, vectors: 1,
     matches: &[
         // One sound card is driven: whichever comes first holds slot 20.
         Match::id(0x1af4, 0x1059, Lease::Virtio, 20),

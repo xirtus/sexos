@@ -13,6 +13,12 @@
 //! The microphone is the controller's first input stream: while someone may listen,
 //! the chosen input pin (`crate::mic`) records through an input converter into a
 //! second ring, and Bell copies out each period the controller has filled.
+//!
+//! Interrupts: when BOOT gave the lease an MSI or MSI-X vector, every period of both
+//! rings ends with an interrupt-on-completion, so Bell sleeps until a period is
+//! played or recorded instead of looking every tick. Bell arms the controller's
+//! interrupt only while sound plays (`arm`) and acknowledges each wake (`ack`).
+//! Without a vector it polls exactly as before.
 use sex_pdx::memory_region as m;
 
 // ── Controller registers (HDA 1.0a, section 3.3) ─────────────────────
@@ -46,6 +52,13 @@ const SD_BDPL: u32 = 0x18;
 const SD_BDPU: u32 = 0x1c;
 const SD_CTL_RESET: u32 = 1;
 const SD_CTL_RUN: u32 = 2;
+/// Interrupt on completion: the stream raises its status bit at a flagged period end.
+const SD_CTL_IOCE: u32 = 1 << 2;
+/// Buffer completion, FIFO error and descriptor error; each is cleared by writing 1.
+const SD_STS_BCIS: u8 = 1 << 2;
+const SD_STS_ALL: u8 = 0x1c;
+/// Global interrupt enable; bits 0..29 enable one stream descriptor each.
+const INTCTL_GIE: u32 = 1 << 31;
 /// The tag the output converter listens for; 0 means "no stream".
 const STREAM_TAG: u32 = 1;
 /// The tag the input converter sends with.
@@ -135,6 +148,12 @@ pub struct Hda {
     mic_sd: u32,
     mic_on: Option<usize>,
     mic_tail: usize,
+    /// Streams flag period ends for an interrupt (BOOT gave the lease a vector).
+    irq: bool,
+    /// The INTCTL value written last.
+    armed: u32,
+    /// Period ends seen by `ack`.
+    pub completions: u64,
 }
 
 pub const MAX_OUTPUTS: usize = 8;
@@ -399,20 +418,22 @@ impl Hda {
 
     fn start(&mut self) -> Result<(), &'static str> {
         let sd = self.sd;
-        self.w32(sd + SD_CTL, STREAM_TAG << 20 | SD_CTL_RUN);
+        self.w32(sd + SD_CTL, STREAM_TAG << 20 | SD_CTL_RUN | self.ioce());
         if !self.wait(|h| h.r32(sd + SD_CTL) & SD_CTL_RUN != 0) { return Err("stream_run"); }
         Ok(())
     }
 
     /// Bring up the controller, a codec, an output route and the running stream.
-    pub fn open(view: m::RegionView, dma: m::RegionView) -> Result<Hda, &'static str> {
+    /// `irq`: the lease has a vector, so periods end with an interrupt.
+    pub fn open(view: m::RegionView, dma: m::RegionView, irq: bool) -> Result<Hda, &'static str> {
         let dma_pa = dma.dma_address.ok_or("no_dma_address")?;
         if (dma.length as usize) < POOL_NEEDS { return Err("dma_small"); }
         let mut h = Hda { mmio: view.virtual_address as usize, length: view.length as usize,
             dma_va: dma.virtual_address as usize, dma_pa, corb_wp: 0, rirb_rp: 0, codec: 0, sd: 0,
             tail: 0, head: 1, queued: [false; PERIODS], pending: 0, vendor: 0, dac: 0, pins: 0,
             routes: [None; MAX_OUTPUTS], outputs: 0, on: 0, home: 0, auto: true,
-            mics: [None; MAX_MICS], mic_count: 0, mic_sd: 0, mic_on: None, mic_tail: 0 };
+            mics: [None; MAX_MICS], mic_count: 0, mic_sd: 0, mic_on: None, mic_tail: 0,
+            irq, armed: 0, completions: 0 };
         if h.length < 0x180 { return Err("short_view"); }
         h.w32(INTCTL, 0);
         let codecs = h.reset()?;
@@ -522,6 +543,44 @@ impl Hda {
         self.routes.get(k).copied().flatten().map(|r| (r.device, r.codec, r.pin))
     }
 
+    fn ioce(&self) -> u32 { if self.irq { SD_CTL_IOCE } else { 0 } }
+
+    /// True while periods end with an interrupt.
+    pub fn interrupts(&self) -> bool { self.irq }
+
+    /// The vector could not be unmasked after all: stay quiet and poll.
+    pub fn poll_instead(&mut self) {
+        self.arm(false);
+        self.irq = false;
+    }
+
+    /// Lets the playback stream (and the microphone's, when there is one) interrupt,
+    /// or stops them: Bell arms only while sound plays, so an idle Bell is never woken.
+    pub fn arm(&mut self, on: bool) {
+        if !self.irq { return; }
+        let mut want = 0;
+        if on {
+            want = INTCTL_GIE | 1 << ((self.sd - SD_BASE) / SD_STRIDE);
+            if self.mic_sd != 0 { want |= 1 << ((self.mic_sd - SD_BASE) / SD_STRIDE); }
+        }
+        if want != self.armed { self.w32(INTCTL, want); self.armed = want; }
+    }
+
+    /// Clears the streams' completion bits, so the next period end interrupts again
+    /// (a message-signalled interrupt fires on the edge). Returns how many were set.
+    pub fn ack(&mut self) -> u32 {
+        if !self.irq { return 0; }
+        let mut n = 0;
+        for sd in [self.sd, self.mic_sd] {
+            if sd == 0 { continue; }
+            let sts = self.r8(sd + SD_STS);
+            if sts & SD_STS_ALL != 0 { self.w8(sd + SD_STS, sts & SD_STS_ALL); }
+            n += (sts & SD_STS_BCIS != 0) as u32;
+        }
+        self.completions += n as u64;
+        n
+    }
+
     /// True when there is an input to record from and a stream to record with.
     pub fn has_mic(&self) -> bool { self.mic_sd != 0 }
 
@@ -541,7 +600,8 @@ impl Hda {
             unsafe {
                 self.dma::<u64>(at).write_volatile(self.dma_pa + (ring_at + i * PERIOD_BYTES) as u64);
                 self.dma::<u32>(at + 8).write_volatile(PERIOD_BYTES as u32);
-                self.dma::<u32>(at + 12).write_volatile(0);
+                // Bit 0: interrupt on completion of this period.
+                self.dma::<u32>(at + 12).write_volatile(self.irq as u32);
             }
         }
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
@@ -551,8 +611,8 @@ impl Hda {
         self.w32(sd + SD_CBL, (PERIOD_BYTES * periods) as u32);
         self.w16(sd + SD_LVI, (periods - 1) as u16);
         self.w16(sd + SD_FMT, FORMAT_48K_S16_STEREO);
-        self.w32(sd + SD_CTL, tag << 20);
-        self.w8(sd + SD_STS, 0x1c);
+        self.w32(sd + SD_CTL, tag << 20 | self.ioce());
+        self.w8(sd + SD_STS, SD_STS_ALL);
         Ok(())
     }
 
@@ -609,7 +669,7 @@ impl Hda {
         let _ = self.verb(adc, SET_STREAM, MIC_TAG << 4);
         let sd = self.mic_sd;
         if self.setup_sd(sd, MIC_BDL_AT, MIC_RING_AT, MIC_PERIODS, MIC_TAG).is_err() { return false; }
-        self.w32(sd + SD_CTL, MIC_TAG << 20 | SD_CTL_RUN);
+        self.w32(sd + SD_CTL, MIC_TAG << 20 | SD_CTL_RUN | self.ioce());
         if !self.wait(|h| h.r32(sd + SD_CTL) & SD_CTL_RUN != 0) { return false; }
         self.mic_tail = self.mic_position();
         self.mic_on = Some(k);
