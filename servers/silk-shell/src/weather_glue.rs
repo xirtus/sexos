@@ -139,6 +139,11 @@ pub unsafe fn refused(code: u32) -> bool {
     if crate::LAUNCH_ASKER.is_some() { return false; }
     HELPER_STATE = Helper::Off { tries: tries + 1 };
     sex_pdx::serial_record!("[shell.weather] state=refused code={} tries={}", code, tries + 1);
+    // The helper is missing or will not start: the card says there is no forecast.
+    if tries + 1 >= START_TRIES {
+        LAST = Some((dw::Report::Unavailable(dw::NO_FORECAST).pack(), ZONE));
+        DISPLAY_OWED = true;
+    }
     true
 }
 
