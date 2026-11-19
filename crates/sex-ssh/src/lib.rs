@@ -457,8 +457,13 @@ impl Client {
         }
     }
 
-    /// The terminal changed size.
+    /// The terminal changed size. Before the session is open there is no channel to tell:
+    /// a shell still to be started takes the new size instead.
     pub fn resize(&mut self, cols: u32, rows: u32) {
+        if self.stage != Stage::Session {
+            if let Some(Run::Shell { cols: c, rows: r, .. }) = self.run.as_mut() { *c = cols; *r = rows; }
+            return;
+        }
         let mut w = Writer::new();
         w.byte(98).u32(self.remote_channel).string(b"window-change").byte(0).u32(cols).u32(rows).u32(0).u32(0);
         let m = w.finish();

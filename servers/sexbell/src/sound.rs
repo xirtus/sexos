@@ -281,26 +281,40 @@ impl Card {
             h.follow_jack();
         }
     }
-    fn has_input(&self) -> bool { matches!(self, Card::Virtio { input: Some(_), .. }) }
+    fn has_input(&self) -> bool {
+        match self { Card::Virtio { input, .. } => input.is_some(), Card::Hda(h) => h.has_mic() }
+    }
     /// Starts or stops the microphone stream.
     fn input_run(&mut self, on: bool) -> bool {
         match self {
             Card::Virtio { card, input: Some(i), .. } => if on { card.pcm_start(*i).is_ok() } else { card.pcm_stop(*i).is_ok() },
+            Card::Hda(h) => if on { h.mic_start() } else { h.mic_stop() },
             _ => false,
         }
     }
-    /// Asks for one more period from the microphone.
+    /// Asks for one more period from the microphone. The HD Audio input stream runs
+    /// on its own ring and needs no asking.
     fn input_ask(&mut self) -> bool {
         match self { Card::Virtio { card, input: Some(i), .. } => card.pcm_capture_nb(*i).is_ok(), _ => false }
     }
-    /// A period the microphone filled, if one is back.
-    fn input_take(&mut self) -> Option<alloc::vec::Vec<u8>> {
-        match self { Card::Virtio { card, input: Some(_), .. } => card.pcm_capture_take().ok().flatten().map(|(_, f)| f), _ => None }
+    /// A period the microphone filled, if one is back, copied into `out`: its length.
+    fn input_take(&mut self, out: &mut [u8; PERIOD_BYTES]) -> Option<usize> {
+        match self {
+            Card::Virtio { card, input: Some(_), .. } => card.pcm_capture_take().ok().flatten().map(|(_, f)| {
+                let n = f.len().min(PERIOD_BYTES);
+                out[..n].copy_from_slice(&f[..n]);
+                n
+            }),
+            Card::Hda(h) => h.mic_take(out).then_some(crate::hda::PERIOD_BYTES.min(PERIOD_BYTES)),
+            _ => None,
+        }
     }
 }
 
 /// Capture periods kept with the device while someone listens.
 const LISTEN_AHEAD: usize = 4;
+/// The period the microphone handed back last, kept off the service's small stack.
+static mut HEARD: [u8; PERIOD_BYTES] = [0; PERIOD_BYTES];
 
 struct Player {
     card: Card,
@@ -458,7 +472,9 @@ impl Player {
             sex_pdx::serial_record!("[bell.mic] on={} ok={} heard={}", on as u8, ok as u8, self.heard);
         }
         // Periods come back in order; while no one listens they are dropped.
-        while let Some(frames) = self.card.input_take() {
+        let heard = unsafe { &mut *core::ptr::addr_of_mut!(HEARD) };
+        while let Some(len) = self.card.input_take(heard) {
+            let frames = &heard[..len];
             self.asked = self.asked.saturating_sub(1);
             if !self.hearing { continue; }
             let n = (frames.len() / FRAME_BYTES) as u64;
@@ -610,6 +626,7 @@ fn open_hda(view: m::RegionView) -> Result<Player, &'static str> {
     let h = crate::hda::Hda::open(view, dma)?;
     sex_pdx::serial_record!("[bell.hda.ready] vendor={:#010x} dac={} pins={} periods={} period_bytes={}",
         h.vendor, h.dac, h.pins, crate::hda::PERIODS, crate::hda::PERIOD_BYTES);
+    sex_pdx::serial_record!("[bell.mic.card] input={}", h.mic_inputs());
     Ok(player_with(Card::Hda(h)))
 }
 
