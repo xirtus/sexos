@@ -55,6 +55,8 @@ pub mod app_resources;
 pub mod program_image;
 pub mod program_records;
 pub mod program_tenancy;
+pub mod views;
+pub mod views_rules;
 pub mod program_frames;
 pub mod program_workers;
 pub mod denim;
