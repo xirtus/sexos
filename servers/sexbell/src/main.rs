@@ -6,6 +6,7 @@ mod sound;
 mod restricted;
 mod resample;
 mod jack;
+mod mic;
 mod hda;
 mod hdmi;
 

@@ -567,6 +567,10 @@ jobs:
       run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_thumb_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-thumb"
     - name: Qupid Kodi repositories and installs
       run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_kodi_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-kodi"
+    - name: Microphone on Intel HD Audio (input pin, converter and input stream)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/hda-mic-source.img"
+        python3 scripts/sound_listen_gate.py --card hda --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/hda-mic-source.img" --out "$RUNNER_TEMP/sexos-hda-mic"
     - name: Preserve media evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -577,6 +581,7 @@ jobs:
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
           ${{ runner.temp }}/sexos-qupid-*
+          ${{ runner.temp }}/sexos-hda-mic
         if-no-files-found: ignore
 
   editor:
