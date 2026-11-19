@@ -58,7 +58,7 @@ a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d  crates/sex-pdx
 
 c802a7c131bc32914f6573342aa1f5045dfa1781f86bc05a1be4c0b546cda9dc  crates/sex-pdx/src/input_diagnostics.rs
 
-496e8c1c449f1d3befcde8179aba193efe0b8f97a54d2daad07df0ceff3654fa  crates/sex-pdx/src/lib.rs
+da51bfcc15bfd941de46c7db7871cef4346d2b55446a25dcf78962ab6d6ec567  crates/sex-pdx/src/lib.rs
 
 b02d602feb5f239687f1a450e8c0ec2b932c366df85ae4f2a5dc67df3f5edcef  crates/sex-pdx/src/memory_region.rs
 
@@ -140,7 +140,7 @@ f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boo
 
 07e1a4d79cd121594f04d44c9ed15edd5b12873dca4304389591531401156ff7  kernel/src/boot_network_state.rs
 
-9030c900d01f06597d1dab33919a459f7b467d7d988ddf4cc4497fd1d9dad111  kernel/src/capability.rs
+1839ff6fd0b5917b5a725015716a2170c37da581bf307d02f0cbef23dc6c8da8  kernel/src/capability.rs
 
 0c62bb2bd29f503742475183301cb41ad7da26308dac26ae638e44f8d9d9f6b4  kernel/src/capability_slot.rs
 
@@ -176,7 +176,7 @@ a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci
 
 c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/service_restart.rs
 
-5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577  kernel/src/syscalls/mod.rs
+46507d23a1fd6fe99143eebfe8626aefc754d452806be5458c936a1d56fcae08  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

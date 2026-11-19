@@ -1360,5 +1360,6 @@ pub mod bitmap_batch;
 pub mod speech_voice;
 pub mod a11y;
 pub mod vm;
+pub mod gate;
 pub mod stream;
 pub mod console_relay;
