@@ -20,3 +20,11 @@
   QEMU gate `scripts/nvme_real_drive_gate.py` (MDTS 4 drive formats, writes and mounts
   again; a 4 KiB-sector drive is refused and left byte-for-byte unchanged). Gates take
   `SEXOS_GATE_NVME_OPTS` for extra NVMe device properties.
+- Another system's disk (Windows on the SSD in AHCI/NVMe mode) used to be refused
+  for reads as well, so Files showed nothing. sexdrive now serves it whole for
+  reading (`[sexdrive.disk.foreign] writes=refused reads=whole_disk`), every write is
+  still refused, Files never mounts or formats it as its own (`[files.fs.foreign]`)
+  and opens its volumes read only under `/media`, like an Intel RAID volume. Gate:
+  `nvme_real_drive_gate.py` scenario 3 (GPT with a FAT partition; image unchanged).
+- `ram_sizes_gate.py` also boots the x17's panels: 32 GiB at 3840x2160 and 16 GiB at
+  1920x1080, and checks the desktop lays out at that width.

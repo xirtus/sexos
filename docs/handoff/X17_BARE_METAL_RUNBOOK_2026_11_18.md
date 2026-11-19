@@ -23,6 +23,10 @@ Andreas's Alienware x17 R1. The background (parts, PCI ids, driver plan) is in
    the touchpad may not yet), and an Ethernet cable for the Killer E3100G port as a
    fallback for Wi-Fi.
 5. Start from the stick with **F12** (one-time boot menu), UEFI entry for the stick.
+6. Nothing is installed by starting: SexOS runs from the stick and the internal SSD
+   stays as it is. With Windows on it, its volumes show up read only under `/media`
+   (both storage modes). Spindle `install` only plans; `install go` would put SexOS in
+   the SSD's free space next to Windows, so leave that for later.
 
 ## 2. What to look at, and what to send back
 
@@ -57,7 +61,9 @@ and networks), `wifi join N PASSWORD`, `beep` (sound).
 | The SSD | `[sexdrive.nvme.drive] vendor=144d model="..." mdts=.. max_transfer_kib=..` | Samsung = vendor 144d | `[sexdrive.nvme.refused] reason=...` |
 | Its format | `[sexdrive.nvme.namespace] sectors=N lba_shift=9` | lba_shift=9 | `[sexdrive.nvme.namespace.refused] reason=sector_size lba_bytes=4096 fix=nvme_format_lbaf_512`: the drive uses 4 KiB sectors (not supported yet; reformatting erases it) |
 | Second SSD / RAID volume | `[sexdrive.nvme2.drive]`, `[sexdrive.raid.serve] ok=1 ... writes=0` | | `[sexdrive.nvme2.err] reason=...` |
-| Whose disk | `[sexdrive.disk.layout] kind=...` | `foreign` is expected with Windows on it: nothing is written | |
+| Whose disk | `[sexdrive.disk.layout] kind=...`, `[files.fs.foreign]` | `foreign-gpt` is expected with Windows on it: nothing is written | |
+| Windows files | `[files.media.mounted] name=... format=NTFS ... read_only=1` | `ls /media` lists the Windows volumes; they open read only | `[files.media.device.none] ...`: no volume found |
+| Panel | `[display.chrome.metrics] ... width=1920` (FHD) or `width=3840` (UHD) | the panel's own width | `width=1280`: the "1280x800" fallback entry was used |
 | Interrupts | `[kernel.vmd.msi] remap=1 ...`, `[device.irq.msix] ... vmd_vector=N`, `[sexdrive.nvme.irq] mode=msix polling=0` | msix, and no `irq.silent` line | `[sexdrive.nvme.irq.silent] ... polling=1`: the interrupt never arrived, so sexdrive polls (slower, still works); `[kernel.vmd.msi] remap=0 reason=...` says why VMD's table was not set up |
 | DMA isolation | `[iommu.enabled] vendor=intel ...` | | `[iommu.absent] reason=...`; if the start hangs, pick "SexOS without DMA protection" in the boot menu |
 | Panel | `[display.intel] device=9a60 ...`, `[display.intel.edid] ...` | | |
