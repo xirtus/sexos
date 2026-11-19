@@ -201,3 +201,15 @@ fn bar_sizing_and_bridge_registers_round_trip() {
     assert_eq!(plan::windows(plan::mem_register(Window::default()), lo, bh, lh), (Window::default(), Window::default()));
     assert_eq!(plan::windows(0, 0, 0, 0), (Window::default(), Window::default()));
 }
+
+#[test]
+fn narrow_prefetchable_bar_stays_below_4g() {
+    let mut bars = [Bar::default(); 6];
+    bars[0] = Bar { size: 1 << 20, prefetch: true, wide: false };
+    bars[2] = pref(1 << 20);
+    let nodes = [Node { parent: None, bridge: false, bars }];
+    let mut out = [Placed::default(); 1];
+    plan::plan(&nodes, Window { base: 0xc000_0000, size: 2 << 20 }, Window { base: 0x40_0000_0000, size: 1 << 30 }, &mut out).unwrap();
+    assert_eq!(out[0].bars[0], 0xc000_0000);
+    assert_eq!(out[0].bars[2], 0x40_0000_0000);
+}

@@ -116,7 +116,7 @@ pub fn tick(now: u64) {
         }
         let (b, d, f) = name(&port.at);
         if step.power.is_some() {
-            crate::serial_println!("[hotplug.power] port={:02x}:{:02x}.{} on={}", b, d, f, step.power == Some(true));
+            crate::serial_println!("[hotplug.power] port={:02x}:{:02x}.{} on={}", b, d, f, (step.power == Some(true)) as u8);
         }
         if step.arrived { arrive(port); }
         if step.failed { crate::serial_println!("[hotplug.failed] port={:02x}:{:02x}.{} reason=link_never_up", b, d, f); }
@@ -139,9 +139,18 @@ fn each_below(first: u8, last: u8, mut f: impl FnMut(&PciDevice)) {
     }
 }
 
+/// Firmware gave the port a bus range of its own; otherwise a walk would run over
+/// the root bus (or another port's) and quiet devices that never left.
+fn below(port: &PciDevice, first: u8, last: u8) -> bool {
+    let ok = first > port.bus && last >= first;
+    if !ok { crate::serial_println!("[hotplug.buses.unset] port={:02x}:{:02x}.{} secondary={:02x} subordinate={:02x}", port.bus, port.dev, port.func, first, last); }
+    ok
+}
+
 fn leave(port: &Port) {
     let buses = port.at.read_u32(0x18);
     let (first, last) = ((buses >> 8) as u8, (buses >> 16) as u8);
+    if !below(&port.at, first, last) { return; }
     let mut n = 0;
     // Gone already on a surprise removal; on a button removal, quiet before power-off.
     // A zero status half clears nothing (its bits are write-one-to-clear).
@@ -169,6 +178,7 @@ fn arrive(port: &Port) {
     let p = &port.at;
     let buses = p.read_u32(0x18);
     let (secondary, subordinate) = ((buses >> 8) as u8, (buses >> 16) as u8);
+    if !below(p, secondary, subordinate) { return; }
     let (mem, pref) = plan::windows(p.read_u32(0x20), p.read_u32(0x24), p.read_u32(0x28), p.read_u32(0x2c));
     // The port itself forwards memory and DMA (firmware may have left an empty port off).
     p.write_u32(0x04, (p.read_u32(0x04) & 0xffff) | 0x0006);

@@ -62,12 +62,14 @@ enum Target { Bar(u8, u8), Window(u8) }
 #[derive(Clone, Copy)]
 struct Item { size: u64, align: u64, target: Target }
 
-struct Planner<'a> { nodes: &'a [Node], pref_window: bool }
+struct Planner<'a> { nodes: &'a [Node], pref_window: bool, pref_low: bool }
 
 fn align_up(v: u64, a: u64) -> u64 { (v + a - 1) & !(a - 1) }
 
 impl Planner<'_> {
-    fn kind(&self, bar: &Bar) -> bool { bar.prefetch && self.pref_window }
+    /// A 32-bit prefetchable BAR may only use a prefetchable window below 4 GiB;
+    /// otherwise it goes to the memory window, which always is.
+    fn kind(&self, bar: &Bar) -> bool { bar.prefetch && self.pref_window && (bar.wide || self.pref_low) }
 
     /// Everything that must fit in `parent`'s window of one kind, largest alignment first.
     fn items(&self, parent: Option<u8>, pref: bool, out: &mut [Item; MAX_ITEMS]) -> Result<usize, Error> {
@@ -144,7 +146,7 @@ pub fn plan(nodes: &[Node], mem: Window, pref: Window, out: &mut [Placed]) -> Re
         if let Some(p) = node.parent { if p as usize >= i { return Err(Error::Malformed); } }
     }
     for o in out.iter_mut() { *o = Placed::default(); }
-    let planner = Planner { nodes, pref_window: pref.is_open() };
+    let planner = Planner { nodes, pref_window: pref.is_open(), pref_low: pref.is_open() && pref.limit() < 1 << 32 };
     planner.place(None, false, mem, out)?;
     if pref.is_open() { planner.place(None, true, pref, out)?; }
     Ok(())
