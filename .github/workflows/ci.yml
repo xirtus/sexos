@@ -60,6 +60,8 @@ jobs:
       run: cargo test --locked -p velvet --no-default-features
     - name: Moan Weft app and project editing
       run: cargo test --locked -p moan --no-default-features
+    - name: Moan plugin hosts (CLAP, VST3, LADSPA, LV2) and open plugins rebuilt for SexOS
+      run: MOAN_OPEN_PLUGINS_REQUIRED=1 cargo test --locked -p moan-plugin
     - name: Moan native FFmpeg WAV, FLAC and Shine MP3 export oracle
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
@@ -555,6 +557,10 @@ jobs:
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
         python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
         python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Microphone on Intel HD Audio (input pin, converter and input stream)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/hda-mic-source.img"
+        python3 scripts/sound_listen_gate.py --card hda --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/hda-mic-source.img" --out "$RUNNER_TEMP/sexos-hda-mic"
     - name: Preserve media evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -564,6 +570,7 @@ jobs:
           ${{ runner.temp }}/media-build.log
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
+          ${{ runner.temp }}/sexos-hda-mic
         if-no-files-found: ignore
 
   editor:
@@ -600,7 +607,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [cleanup, app-resource, crash, denim]
+        gate: [cleanup, app-resource, crash, denim, views]
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -622,6 +629,17 @@ jobs:
         SEXOS_DENIM_EAGER=1 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/denim-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/denim-build.log"; exit 1)
         truncate -s 1G "$RUNNER_TEMP/denim-source.img"
         python3 scripts/denim_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/denim-source.img" --out "$RUNNER_TEMP/sexos-proof/denim"
+    - name: Shared-key program rows in protection views on 4 cores (no turn-taking, PCID)
+      if: matrix.gate == 'views'
+      run: |
+        ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/views-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/views-build.log"; exit 1)
+        truncate -s 1G "$RUNNER_TEMP/views-source.img"
+        SEXOS_GATE_CORES=4 SEXOS_GATE_MEMORY=2G python3 scripts/program_pool_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/views-source.img" --out "$RUNNER_TEMP/sexos-proof/views-pool"
+    - name: A shared-key row cannot read its neighbour without PKU (probe build)
+      if: matrix.gate == 'views'
+      run: |
+        SEXOS_PROGRAM_ISOLATION_PROBE=4 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/views-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/views-probe-build.log"; exit 1)
+        SEXOS_GATE_CPU=max,-pku,+rdseed SEXOS_GATE_CORES=4 SEXOS_GATE_MEMORY=2G python3 scripts/program_isolation_probe.py sexos-v1.0.0.iso "$RUNNER_TEMP/views-source.img" "$RUNNER_TEMP/sexos-proof/views-isolation" 4
     - name: Cap-scoped peer epochs across same-task service restart
       if: matrix.gate == 'crash'
       run: SEXOS_GATE_CORES=4 python3 scripts/service_peer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof/service-peer"
