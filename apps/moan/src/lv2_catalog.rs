@@ -1,7 +1,7 @@
 //! LV2 bundle discovery for Moan's Instruments/Plugins pane: pure-Rust Turtle
 //! manifest parsing, no native plugin code is loaded.
 use alloc::{format, string::String, vec::Vec};
-pub use moan_plugin::lv2::{
+pub use moan_plugin::lv2_turtle::{
     Error as Lv2Error, Lv2Manifest, Lv2PluginInfo, Lv2Port, Lv2PortKind, Lv2Preset,
 };
 

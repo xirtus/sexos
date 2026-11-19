@@ -7,7 +7,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use moan_plugin::job::{Format, Parameter, BLOCK};
-use moan_plugin::lv2::{
+use moan_plugin::lv2_turtle::{
     enumerate_descriptors, Error, Lv2Manifest, Lv2PortKind, Lv2Processor, LV2_Descriptor,
     LV2_Feature, LV2_Handle,
 };
