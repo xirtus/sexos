@@ -82,7 +82,7 @@ e6a3818cd7a8c278367b538850ebe11aa284021e66dcb9631dacc330e2863726  crates/sex-pdx
 
 a04cea6e68fbd33daec92567495febe4a59bc16b63c093f99a7766e1fd213e99  crates/sex-pdx/src/restricted_helper_provider.rs
 
-a992a9e0fb41eb8f4f3dc48a0a1f0856f2aee012a4dad7fa99e4d50c11766855  crates/sex-pdx/src/restricted_job.rs
+1a877568e9d2501cbcc4b856edf7dea33b8af5a68c51b3b9177aedb153982c67  crates/sex-pdx/src/restricted_job.rs
 
 93d33d6a62bf030a19ffdfe31883f76c873f02a93eff525f4bb9dd308a2f3ec7  crates/sex-pdx/src/screen_capture.rs
 
@@ -116,7 +116,7 @@ c7325b30965ac39376c5f7d5be7bb63a3b32fb08f5214bdf7e0d437ff42a52d6  crates/sex-pdx
 
 1a0fe38cf9766f5cb2f65a66caaa6ff8bd370e85f5a18d143f88efbf9e6f31ab  crates/sex-pdx/src/virtio.rs
 
-f655f8f5d654e156b32f5f680f344d06f34055becbccc48b0b07c1eea3536887  crates/sex-pdx/src/vm.rs
+c550be6f2dd09f4828c43b255c35f161f21aa071aa58b3c5f7213f42a804e5ef  crates/sex-pdx/src/vm.rs
 
 2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd  crates/sex-pdx/src/web.rs
 
@@ -134,7 +134,7 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
-cc2cd0f34bca5baf5ef28d7db392bf8dbbc606b3a7ae9d7c4d924b7ecbbb2970  kernel/src/boot_memory.rs
+205d15d899afd791778240b37f3476db725f4323a9e0a4742accae99cf414125  kernel/src/boot_memory.rs
 
 2fd25f89091106c70503869c40f52cfeb6662fab8ddfcd2c6202d2e04550fe69  kernel/src/boot_network.rs
 
@@ -176,9 +176,11 @@ a6cec3ea15190f7bbebebca78444a4cf2c190597bc7c1596165b3693dd798b96  kernel/src/pci
 
 c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/service_restart.rs
 
+bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm.rs
+
 5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 
-a43b551780b77e722f38ff1bedeab0586a24c976264ac974f910dd476324f6a5  kernel/src/vmx.rs
+decb9e8eeaa1e1dc5e0dc2b479f9ea29f51ecbf60adcd565da7cd27601b33a3d  kernel/src/vmx.rs
 
