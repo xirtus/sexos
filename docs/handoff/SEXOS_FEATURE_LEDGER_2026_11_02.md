@@ -5328,3 +5328,10 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Export panel: WebM (VP9) in the format list, AV1 no longer greyed out, Opus audio rows, presets "WebM 1080p (VP9 + Opus)" and "AV1 1080p (MP4)".
 - `splicy-studio --export=FORMAT:FILE[:SECONDS]` exports before the window opens (gates and scripts).
 - Verified by `scripts/splicy_studio_export_host_gate.py` (FFmpeg finds vp9/opus, av1/opus, h264/aac, decodes all three with no error, 60 of 60 pictures, PSNR over 30 dB against the source, loudness within 1.5 dB) and `scripts/program_splicy_studio_gate.py` (all three exported inside SexOS before the editor window opens).
+
+## Splicy: Scarlet's restart finder and cut edges on the waveform (2026-11-19)
+
+From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, not its agent prompts:
+- **Restarts** (`crates/sex-splice/src/restarts.rs`; Studio `core/crates/edit/src/transcript/restarts.rs`): a phrase said, then said again within 12 words and 12 s (three words or more, or two with at most one between; one word added or dropped; contractions fold). Splicy's clean-up cards use it in place of the old adjacent-repeat rule. Splicy Studio: `transcript.findRestarts`, `transcript.removeRestarts`, a Text panel **Remove restarts** button, and `--clean-up` for scripts.
+- **Cut edges between run-together words** (`crates/sex-splice/src/edges.rs`): where two words are timed under 60 ms apart, a cut's edge moves onto the waveform's room tone (-55 dBFS) or a trough (-48 dBFS, 10 dB under each side; -44 dBFS within 50 ms of the transcript edge), never inside a sounding word. Integer tenths of a dB, 20 ms RMS buckets measured during Splicy's scan. A card whose edge found no quiet place says "listen to the join first".
+- Gates: sex-splice host tests; Studio host gate `--clean-up` cuts 0.9 s of a restart; QEMU `program_splicy_studio_gate.py` runs `--clean-up` on SexOS.

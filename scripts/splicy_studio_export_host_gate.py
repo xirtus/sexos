@@ -6,6 +6,7 @@ Builds Splicy Studio for the host (profile `shot`), imports a 2 s VP9/Opus clip,
 with `--export=` as WebM (VP9 + Opus), MP4 (AV1 + Opus) and MP4 (H.264 + AAC): the same engine
 command the Export panel runs. FFmpeg must find the right codecs, decode every file without an
 error, count every picture, see the source's picture (PSNR) and hear its sound (loudness).
+Then `--clean-up` (Remove Restarts, Remove Filler Words) must cut a restart out of the sequence.
 Usage: splicy_studio_export_host_gate.py OUT_DIR"""
 import json,re,subprocess,sys
 from pathlib import Path
@@ -46,6 +47,17 @@ def main():
    print(subprocess.run(['ffprobe','-v','error','-show_entries','stream=codec_name,channels,extradata_size,initial_padding:stream_side_data','-show_data','-of','compact',str(out/name)],capture_output=True,text=True).stdout[-3000:],file=sys.stderr)
    packets=subprocess.run(['ffprobe','-v','error','-select_streams','a','-show_entries','packet=pts,duration,size,flags','-show_data','-of','compact',str(out/name)],capture_output=True,text=True).stdout.splitlines()
    print(*packets[:3],'...',*packets[-3:],sep='\n',file=sys.stderr)
+ # The Text panel's Remove Restarts (after Scarlet): the first "Keep the," goes, 0.9 s, so the
+ # second saying plays; the whole sequence then exports 0.9 s shorter.
+ (out/'restart.words').write_text('0 300 Keep\n350 600 the,\n900 1100 keep\n1150 1350 the\n1400 1700 ending\n2000 2500 here.\n')
+ clean=run(str(STUDIO/'target/shot/splicy-studio'),src.name,'restart.words','--clean-up','--export=h264:clean.mp4:all','clean.png','320','200',cwd=out).stdout
+ try:
+  assert re.search(r'\[splicy.studio.cleanup\] restarts=1 ticks=[1-9]',clean),clean
+  assert '[splicy.studio.cleanup] found_restarts=1' in clean,clean
+  took=float(run('ffprobe','-v','error','-show_entries','format=duration','-of','csv=p=0',str(out/'clean.mp4')).stdout)
+  assert abs(took-(SECONDS+1-0.9))<0.05,('clean-up duration',took)
+  report['clean_up']={'seconds':took}
+ except AssertionError as e:failed['clean_up']=repr(e)
  print(json.dumps({'ok':not failed,'ffmpeg':run('ffmpeg','-version').stdout.splitlines()[0],'source_mean_db':heard,'exports':report,'failed':failed}))
  if failed:sys.exit(1)
 def check(fmt,name,codecs,container,log,out,reference,heard):

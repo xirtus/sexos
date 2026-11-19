@@ -3,7 +3,8 @@
 
 `run splicy-studio @talk.webm @talk.words` imports the clip Splicy's own gate uses (VP9 and
 Opus, decoded by Splicy's pure-Rust decoders), makes it a sequence, and turns
-talk.words into the clip's transcript (11 words), which the Text panel's
+talk.words into the clip's transcript (13 words). `--clean-up` runs the Text panel's
+Remove Restarts, which must cut the first "Keep the,", and Remove Filler Words. The
 Transcript tab edits. Splicy's interface shows it: menus, Program monitor with
 the picture, project bin, timeline with filmstrip and waveform.
 The window is zoomed and photographed (splicy-studio.png); the picture must hold
@@ -18,7 +19,7 @@ from pathlib import Path
 from PIL import Image
 ROOT=Path(__file__).resolve().parents[1]
 STUDIO=os.environ.get('SEXOS_SPLICY_STUDIO',str(ROOT/'apps/splicy-studio/target/x86_64-sex-std/release/splicy-studio'))
-# The clip and transcript program_splicy_gate.py uses.
+# The clip program_splicy_gate.py uses; its transcript, with a restart ("Keep the, keep the").
 WORDS="""# START_MS END_MS WORD
 0 400 Hello
 500 900 there
@@ -27,10 +28,12 @@ WORDS="""# START_MS END_MS WORD
 2400 2700 this
 2800 3300 sentence
 3400 3800 out.
-4000 4400 Keep
-4500 4800 the
-4900 5400 ending
-5500 5900 here.
+4000 4300 Keep
+4350 4600 the,
+4900 5100 keep
+5150 5350 the
+5400 5700 ending
+5750 5950 here.
 """
 def make_clip():
  d=Path(tempfile.mkdtemp());out=d/'talk.webm'
@@ -77,10 +80,13 @@ def main():
   for name in('talk.webm','talk.words'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
   s=len(t())
-  expect('run splicy-studio @talk.webm @talk.words '+' '.join(f'--export={f}:{n}:1' for f,n in EXPORTS),r'\[splicy.studio.ready\]',1500)
+  expect('run splicy-studio @talk.webm @talk.words --clean-up '+' '.join(f'--export={f}:{n}:1' for f,n in EXPORTS),r'\[splicy.studio.ready\]',1500)
   imp=g['wait'](r'\[splicy.studio.(imported\] items=1 errors=\[\]|import.failed\][^\n]*)',s,60);assert imp[1].startswith('imported'),imp[0]
   g['wait'](r'\[splicy.studio.sequence\] made',s,60)
-  g['wait'](r'\[splicy.studio.transcript\] words=11',s,60)
+  g['wait'](r'\[splicy.studio.transcript\] words=13',s,60)
+  m=g['wait'](r'\[splicy.studio.cleanup(?:\] restarts=(\d+) ticks=(\d+)|\.failed\][^\n]*)',s,60);assert m[1]=='1' and int(m[2])>0,m[0]
+  m=g['wait'](r'\[splicy.studio.cleanup(?:\] fillers=(\d+)|\.failed\][^\n]*)',s,60);assert m[1]=='0',m[0]
+  m=g['wait'](r'\[splicy.studio.cleanup(?:\] found_restarts=(\d+)|\.failed\][^\n]*)',s,60);assert m[1]=='1',m[0]
   exported={}
   for f,n in EXPORTS:
    m=g['wait'](rf'\[splicy.studio.export(?:\] format={f} file={re.escape(n)} bytes=(\d+) ms=(\d+)|\.failed\] format={f}[^\n]*)',s,60)
