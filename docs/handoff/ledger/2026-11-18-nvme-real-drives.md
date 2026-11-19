@@ -28,3 +28,4 @@
   `nvme_real_drive_gate.py` scenario 3 (GPT with a FAT partition; image unchanged).
 - `ram_sizes_gate.py` also boots the x17's panels: 32 GiB at 3840x2160 and 16 GiB at
   1920x1080, and checks the desktop lays out at that width.
+- BitLocker partitions are named: `[files.media.bitlocker] start= sectors= readable=0 reason=encrypted` (`sex_volumes::bitlocker`, tested), so a closed Windows volume does not look like a bug. `hw` shows the Files disk lines too.
