@@ -5328,3 +5328,8 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Dell hotkey events (mic mute, Command Center key, keyboard light, radio) are decoded and logged.
 - ACPI interpreter fixes: `DerefOf (PKG [i])` works (it failed on every package lookup), and buffer fields read as values (WMI argument parsing).
 - Verified by `crates/sex-laptop/tests/awcc_aml.rs` (real AML through the interpreter) and `scripts/laptop_power_gate.py`. Device checklist: `docs/handoff/X17_R1_DEVICE_CHECKLIST_2026_11_19.md`.
+
+## SMBIOS and Dell battery charge modes (2026-11-19)
+- The kernel copies the SMBIOS table at boot and hands it to the ACPI service, which logs the machine (vendor, model, SKU, BIOS version; recognises the Alienware x17 R1).
+- Dell/Alienware battery charge modes (standard, express, adaptive, primarily AC, custom start/stop) are read through Dell's WMI calling interface and can be set with the new `CTL_CHARGE` power control (custom: stop at 55-100%).
+- Verified by `crates/sex-laptop/tests/awcc_aml.rs` (Dell WMI device in AML) and `scripts/laptop_power_gate.py` (QEMU SMBIOS type 1 + Dell token table).

@@ -10,7 +10,7 @@ use acpi::aml::object::{Object, WrappedObject};
 use alloc::vec::Vec;
 use sex_laptop::profile::Profile;
 use sex_laptop::wmi::{self as wmi_data, guids, Block};
-use sex_laptop::{awcc, dell_wmi};
+use sex_laptop::{awcc, dell_smbios, dell_wmi, smbios};
 use sex_pdx::serial_println;
 
 pub struct Device { pub path: AmlName, wdg: Vec<u8> }
@@ -143,5 +143,86 @@ impl Hotkeys {
             serial_println!("[sexacpi.hotkey] key={} code={:#06x} act={}", k.name(), code, k.actionable() as u8);
         }
         Some(keys[..n].to_vec())
+    }
+}
+
+/// Dell battery charge modes through the SMBIOS calling interface (WMI method 1 of the
+/// Dell SMBIOS GUID), with tokens from the SMBIOS table.
+pub struct Charging { dev: AmlName, method: [u8; 4], size: usize, tokens: Vec<dell_smbios::Token>, pub state: dell_smbios::Charge }
+
+struct DellCall<'a> { aml: &'a Aml, dev: &'a AmlName, method: [u8; 4], size: usize }
+
+impl dell_smbios::Firmware for DellCall<'_> {
+    fn call(&mut self, class: u16, select: u16, input: [u32; 4]) -> Option<[u32; 4]> {
+        let name = core::str::from_utf8(&self.method).ok()?;
+        let mut buf = alloc::vec![0u8; self.size];
+        let n = dell_smbios::request(class, select, input, self.size, &mut buf);
+        buf.truncate(n);
+        let args = alloc::vec![
+            WrappedObject::new(Object::Integer(0)),
+            WrappedObject::new(Object::Integer(1)),
+            WrappedObject::new(Object::Buffer(buf)),
+        ];
+        match bounded(|| eval(self.aml, self.dev, name, args)).as_deref() {
+            Some(Object::Buffer(b)) => dell_smbios::answer(b),
+            _ => None,
+        }
+    }
+}
+
+impl Charging {
+    /// Logs the machine (SMBIOS type 0/1) and finds the charge-mode tokens and the Dell
+    /// SMBIOS WMI method. `None` on machines without them.
+    pub fn find(aml: &Aml, devices: &[Device], table: Option<&[u8]>) -> Option<Self> {
+        let table = table?;
+        let sys = smbios::system(table);
+        let mut tokens = Vec::new();
+        for st in smbios::structures(table).filter(|s| s.kind == 0xDA) { tokens.extend(dell_smbios::tokens(&st)); }
+        serial_println!("[sexacpi.smbios] vendor={} product={} sku={} bios={} dell_tokens={} x17r1={}",
+            sys.vendor.unwrap_or("?"), sys.product.unwrap_or("?"), sys.sku.unwrap_or("?"), sys.bios_version.unwrap_or("?"),
+            tokens.len(), smbios::is_alienware_x17_r1(&sys) as u8);
+        if !dell_smbios::MODES.iter().any(|(_, id)| tokens.iter().any(|t| t.id == *id)) { return None; }
+        let (dev, block) = devices.iter().find_map(|d| d.block(&guids::DELL_SMBIOS).map(|b| (d, b)))?;
+        let method = block.method_name()?;
+        // The descriptor block names the buffer size; 4096 bytes is what Dell firmware uses.
+        let size = devices.iter().find_map(|d| {
+            let q = d.block(&guids::DELL_DESCRIPTOR)?.query_name()?;
+            let name = core::str::from_utf8(&q).ok()?;
+            match bounded(|| eval(aml, &d.path, name, alloc::vec![WrappedObject::new(Object::Integer(0))])).as_deref() {
+                Some(Object::Buffer(b)) => dell_smbios::descriptor(b).map(|(_, size)| size as usize),
+                _ => None,
+            }
+        });
+        let found = size.is_some();
+        let size = size.unwrap_or(4096).saturating_sub(8).max(36);
+        let mut c = Self { dev: dev.path.clone(), method, size, tokens, state: dell_smbios::Charge::default() };
+        c.refresh(aml);
+        serial_println!("[sexacpi.charge] path={} method={} buffer={} descriptor={}", c.dev, core::str::from_utf8(&method).unwrap_or("?"), size, found as u8);
+        Some(c)
+    }
+
+    fn fw<'a>(&'a self, aml: &'a Aml) -> DellCall<'a> { DellCall { aml, dev: &self.dev, method: self.method, size: self.size } }
+
+    pub fn refresh(&mut self, aml: &Aml) {
+        let tokens = core::mem::take(&mut self.tokens);
+        self.state = dell_smbios::charge(&mut self.fw(aml), &tokens);
+        self.tokens = tokens;
+        let mut modes = alloc::string::String::new();
+        for (m, _) in dell_smbios::MODES.iter().filter(|(m, _)| self.state.supports(*m)) { modes.push_str(m.name()); modes.push(','); }
+        serial_println!("[sexacpi.charge.state] modes={} mode={} start={} end={}", modes.trim_end_matches(','),
+            self.state.mode.map_or("unknown", |m| m.name()), self.state.start.map_or(-1, |v| v as i32), self.state.end.map_or(-1, |v| v as i32));
+    }
+
+    /// A `CTL_CHARGE` value: a mode, or 55..=100 for custom stopping at that percent.
+    pub fn set(&mut self, aml: &Aml, value: u8) {
+        let (mode, limits) = match value {
+            55..=100 => (dell_smbios::Mode::Custom, Some((value.saturating_sub(10), value))),
+            v => match dell_smbios::Mode::from_u8(v) { Some(m) => (m, None), None => return },
+        };
+        let tokens = core::mem::take(&mut self.tokens);
+        let ok = self.state.supports(mode) && dell_smbios::set_mode(&mut self.fw(aml), &tokens, mode, limits);
+        self.tokens = tokens;
+        serial_println!("[sexacpi.charge.set] value={} mode={} ok={}", value, mode.name(), ok as u8);
+        self.refresh(aml);
     }
 }

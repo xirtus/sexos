@@ -187,7 +187,9 @@ ACPI_AUX_COHORTS=(
  ('822bebd1f4048d35105a0c7fae00b3112b4c11a6013501cf8de528dc5e42dbf6','b13e5f3e739b0000837a81c9ae7212f0356c5d507d04d0f100a421f2ea05ddd6'),
  ('24446427547d1f80eeb557e928b5854c27edc8b0caa45d5aebd7a5e6b460e531','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
  # Alienware WMI fans/profiles and Dell hotkeys (wait unchanged), 2026-11-19
- ('269576f3cc365e9987edf36ab958dce3f4d42d3c79ba6fa697cbace95e96a584','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'))
+ ('269576f3cc365e9987edf36ab958dce3f4d42d3c79ba6fa697cbace95e96a584','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
+ # SMBIOS table + Dell battery charge modes, CTL_CHARGE (wait unchanged), 2026-11-19
+ ('42b7fc5891ed364bf6b3a805dc481065cbed05be7fad84f4fa0c205cdf26326f','1e6111a0f1ba1be3f21be3cf8ff6425a5c63bdf653ae5318801e985520942669'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')

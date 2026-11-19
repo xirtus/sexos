@@ -240,6 +240,17 @@ pub const CTL_CLAIM_BUTTON: u64 = 4;
 /// and queues it for the ACPI service, which runs the firmware's low-power-idle `_DSM`
 /// (screen off, entry; exit, screen on) and darkens or restores the panel.
 pub const CTL_SLEEP: u64 = 5;
+/// Battery charging (Dell/Alienware firmware charge modes), queued for the ACPI service.
+/// value = `CHARGE_*` mode, or 55..=100: custom mode that stops at that percent and
+/// starts again 10 points lower (never below 50).
+pub const CTL_CHARGE: u64 = 6;
+pub const CHARGE_STANDARD: u8 = 0;
+pub const CHARGE_EXPRESS: u8 = 1;
+pub const CHARGE_ADAPTIVE: u8 = 2;
+pub const CHARGE_PRIMARILY_AC: u8 = 3;
+pub const CHARGE_CUSTOM: u8 = 4;
+/// Whether `value` is a valid `CTL_CHARGE` value.
+pub const fn charge_value_ok(value: u8) -> bool { value <= CHARGE_CUSTOM || (value >= 55 && value <= 100) }
 pub const PROFILE_PERFORMANCE: u8 = 0;
 pub const PROFILE_BALANCED: u8 = 1;
 pub const PROFILE_SAVER: u8 = 2;

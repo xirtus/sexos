@@ -11,9 +11,11 @@
 pub mod awcc;
 pub mod backlight;
 pub mod battery;
+pub mod dell_smbios;
 pub mod dell_wmi;
 pub mod ec;
 pub mod profile;
 pub mod resources;
+pub mod smbios;
 pub mod thermal;
 pub mod wmi;

@@ -26,7 +26,7 @@ Spindle `hw` report (runbook: `X17_BARE_METAL_RUNBOOK_2026_11_18.md`) confirms t
 | Fans and temperatures (AWCC) | WMI A70591CE (`WMAX`) | this thread | This PR: fans, sensors, profiles read and logged |
 | Thermal profiles (quiet / balanced / performance) | AWCC method 0x15 | this thread | This PR: follow the desktop's power profile |
 | Battery, AC, lid | PNP0C0A, ACPI0003, PNP0C0D | PR #179 (done) | Works in QEMU |
-| Battery charge limits | Dell SMBIOS tokens 0x0341-0x034A | this thread | Next: needs the SMBIOS table from the kernel |
+| Battery charge limits | Dell SMBIOS tokens 0x0341-0x034A | this thread | PR 2: read and set through `CTL_CHARGE`; desktop control pending |
 | Suspend to idle | LPS0 _DSM | PR #179 (done) | Devices to D3 while asleep still open |
 
 ## This PR: WMI, Alienware fans and profiles, Dell hotkeys
@@ -56,6 +56,23 @@ Spindle `hw` report (runbook: `X17_BARE_METAL_RUNBOOK_2026_11_18.md`) confirms t
 Not yet acted on: mic mute and the Command Center key are decoded and logged, not routed
 to Bell or the desktop; manual fan boost has no desktop control yet.
 
+## PR 2: SMBIOS and battery charge modes
+
+- Kernel: Limine's SMBIOS request; the structure table is copied at boot (through a
+  read-only mapping when the HHDM leaves firmware memory out) and served as one more
+  `FW_TABLE` entry signed `SMBI`. Boot line `[acpi.smbios]`.
+- `sex_laptop::smbios`: entry points and structures; vendor, product, SKU, BIOS version;
+  `is_alienware_x17_r1`. Boot line `[sexacpi.smbios] ... x17r1=1` on the real machine.
+- `sex_laptop::dell_smbios`: Dell token table (type 0xDA), the WMI calling interface
+  buffer, the descriptor block, charge modes (standard, express, adaptive, primarily AC,
+  custom 50-95 / 55-100, 5 apart). Boot lines `[sexacpi.charge]`, `[sexacpi.charge.state]`.
+- `CTL_CHARGE` (power control 6): value 0-4 = mode, 55-100 = custom mode stopping at that
+  percent and starting 10 lower. The kernel validates and queues it for the ACPI service.
+  No desktop control sends it yet; a Settings/launcher entry is the next step.
+- Tested: `crates/sex-laptop/tests/awcc_aml.rs` runs a Dell WMI device in AML (read, custom
+  70-80%, adaptive); the laptop power gate gives QEMU an Alienware x17 R1 type 1 and a
+  Dell token table and checks the boot lines.
+
 ## Panel and MUX
 
 The x17 R1 panel runs at its native refresh only once a display driver sets the mode; with
@@ -67,10 +84,7 @@ native mode and refresh in the `hw` report so we know which of the three panels 
 
 ## Next in this thread, in order
 
-1. Battery charge limits: kernel hands the SMBIOS entry point to the ACPI service; parse
-   Dell's token table (type 0xDA); charge mode (standard / adaptive / primarily AC /
-   custom start-stop) through the Dell SMBIOS WMI calling interface. SMBIOS also gives the
-   model name for quirk tables.
+1. Desktop control for charge mode (Settings or launcher, sends `CTL_CHARGE`).
 2. Webcam: isochronous IN endpoints in sexusb's xHCI, then bind `sexuvc` to a real UVC
    interface.
 3. AlienFX lighting once the USB ids are known.

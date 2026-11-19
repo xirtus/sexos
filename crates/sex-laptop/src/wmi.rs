@@ -84,6 +84,11 @@ impl Block {
         let ok = |c: u8| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_';
         (self.is_method() && ok(self.id[0]) && ok(self.id[1])).then_some([b'W', b'M', self.id[0], self.id[1]])
     }
+    /// `WQxx` for a data block (neither method nor event): reads instance `n`.
+    pub fn query_name(&self) -> Option<[u8; 4]> {
+        let ok = |c: u8| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_';
+        (!self.is_method() && !self.is_event() && ok(self.id[0]) && ok(self.id[1])).then_some([b'W', b'Q', self.id[0], self.id[1]])
+    }
     /// The `Notify` value an event block is raised with (and `_WED`'s argument).
     pub fn notify_id(&self) -> Option<u8> { self.is_event().then_some(self.id[0]) }
 }
@@ -164,6 +169,8 @@ mod tests {
         assert_eq!(ev.method_name(), None);
         assert_eq!(find(&wdg, &guids::DELL_SMBIOS), None);
         assert_eq!(known(&guids::MOF), Some("mof"));
+        assert_eq!(find(&wdg, &guids::MOF).unwrap().query_name(), Some(*b"WQMO"));
+        assert_eq!(wmax.query_name(), None);
         // A method id that is not a name segment is refused.
         let odd = Block { guid: [0; 16], id: [0x01, b'X'], instances: 1, flags: FLAG_METHOD };
         assert_eq!(odd.method_name(), None);

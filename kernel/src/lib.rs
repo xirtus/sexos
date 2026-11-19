@@ -188,6 +188,13 @@ pub static MP_REQUEST: limine::request::MpRequest = limine::request::MpRequest::
 #[link_section = ".limine_requests"]
 pub static KERNEL_FILE_REQUEST: limine::request::ExecutableFileRequest = limine::request::ExecutableFileRequest::new();
 
+/// The SMBIOS entry point: the ACPI service reads the structure table (machine model for
+/// quirks, Dell's token table for battery charge modes) as one more `FW_TABLE` entry.
+#[cfg(target_arch = "x86_64")]
+#[used]
+#[link_section = ".limine_requests"]
+pub static SMBIOS_REQUEST: limine::request::SmbiosRequest = limine::request::SmbiosRequest::new();
+
 #[cfg(target_arch = "x86_64")]
 #[used]
 #[link_section = ".limine_requests"]

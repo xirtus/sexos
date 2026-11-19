@@ -205,7 +205,7 @@ impl Backlight {
 }
 
 /// Drains brightness requests the desktop queued through the kernel.
-pub fn controls(aml: &Aml, light: &mut Backlight, awcc: &mut Option<crate::wmi::Awcc>) -> bool {
+pub fn controls(aml: &Aml, light: &mut Backlight, awcc: &mut Option<crate::wmi::Awcc>, charge: &mut Option<crate::wmi::Charging>) -> bool {
     let mut any = false;
     for _ in 0..8 {
         let r = w::call4(w::FW_CONTROL, 0, 0, 0);
@@ -216,6 +216,10 @@ pub fn controls(aml: &Aml, light: &mut Backlight, awcc: &mut Option<crate::wmi::
             w::CTL_BRIGHTNESS_SET => light.to_percent(aml, value),
             w::CTL_SLEEP => sleep(aml, light, value == 1),
             // The kernel already set the CPU's preference; the fans follow here.
+            w::CTL_CHARGE => match charge.as_mut() {
+                Some(c) => c.set(aml, value),
+                None => serial_println!("[sexacpi.charge.set] value={} supported=0", value),
+            },
             w::CTL_PROFILE => if let (Some(a), Some(p)) = (awcc.as_mut(), sex_laptop::profile::Profile::from_u8(value)) { a.follow(aml, p) },
             _ => {}
         }

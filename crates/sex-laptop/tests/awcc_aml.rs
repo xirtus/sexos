@@ -118,3 +118,39 @@ fn alienware_wmax_end_to_end() {
     let n = dell_wmi::decode(&wed, &mut keys);
     assert_eq!(&keys[..n], &[dell_wmi::Key::MicMute]);
 }
+
+struct DellWmi<'a>(&'a Aml);
+impl sex_laptop::dell_smbios::Firmware for DellWmi<'_> {
+    fn call(&mut self, class: u16, select: u16, input: [u32; 4]) -> Option<[u32; 4]> {
+        let mut buf = vec![0u8; 40];
+        sex_laptop::dell_smbios::request(class, select, input, 40, &mut buf);
+        let args = vec![int(0), int(1), WrappedObject::new(Object::Buffer(buf))];
+        match eval(self.0, "\\_SB.DWMI.WMBC", args).as_deref() { Some(Object::Buffer(b)) => sex_laptop::dell_smbios::answer(b), _ => None }
+    }
+}
+
+#[test]
+fn dell_charge_modes_end_to_end() {
+    use sex_laptop::dell_smbios::{self as d, Mode, Token};
+    let aml = interpreter();
+    let wdg = match eval(&aml, "\\_SB.DWMI._WDG", vec![]).as_deref() { Some(Object::Buffer(b)) => b.clone(), _ => panic!("_WDG") };
+    assert_eq!(wmi::find(&wdg, &wmi::guids::DELL_SMBIOS).unwrap().method_name(), Some(*b"WMBC"));
+    let q = wmi::find(&wdg, &wmi::guids::DELL_DESCRIPTOR).unwrap().query_name().unwrap();
+    assert_eq!(&q, b"WQBD");
+    let desc = match eval(&aml, "\\_SB.DWMI.WQBD", vec![int(0)]).as_deref() { Some(Object::Buffer(b)) => b.clone(), _ => panic!("WQBD") };
+    assert_eq!(d::descriptor(&desc), Some((1, 48)));
+
+    let tokens: Vec<Token> = [(0x0341, 1), (0x0342, 1), (0x0343, 1), (0x0346, 1), (0x0349, 0), (0x034A, 0)]
+        .iter().map(|&(id, value)| Token { id, location: id, value }).collect();
+    let mut fw = DellWmi(&aml);
+    let c = d::charge(&mut fw, &tokens);
+    assert_eq!(c.mode, Some(Mode::Standard));
+    assert_eq!((c.start, c.end), (Some(50), Some(90)));
+    assert!(c.supports(Mode::Custom) && !c.supports(Mode::Express));
+    assert!(d::set_mode(&mut fw, &tokens, Mode::Custom, Some((70, 80))));
+    let c = d::charge(&mut fw, &tokens);
+    assert_eq!(c.mode, Some(Mode::Custom));
+    assert_eq!((c.start, c.end), (Some(70), Some(80)));
+    assert!(d::set_mode(&mut fw, &tokens, Mode::Adaptive, None));
+    assert_eq!(d::charge(&mut fw, &tokens).mode, Some(Mode::Adaptive));
+}

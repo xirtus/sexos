@@ -30,11 +30,19 @@ def ssdt(out,thermal):
  subprocess.run(['iasl',*(['-DTHERMAL_TRIP']if thermal else[]),'-p',str(aml.with_suffix('')),str(ROOT/'tests/acpi/laptop_gate_ssdt.asl')],check=True,stdout=subprocess.DEVNULL)
  return aml
 
+def dell_tokens(out):
+ """SMBIOS type 0xDA (Dell token table) with the battery charge-mode tokens, for QEMU's -smbios file=."""
+ import struct
+ toks=[(0x0341,1),(0x0342,1),(0x0343,1),(0x0346,1),(0x0349,0),(0x034A,0),(0xFFFF,0)]
+ body=struct.pack('<HBI',0xB2,0xDA,0x20003)+b''.join(struct.pack('<HHH',t,t if t!=0xFFFF else 0,v)for t,v in toks)
+ data=bytes([0xDA,4+len(body)])+struct.pack('<H',0xDA00)+body+b'\0\0'
+ f=out/'dell_tokens.smbios';f.write_bytes(data);return f
+
 def launch(iso,disk,out,tag,thermal):
  serial=out/f'{tag}-serial.log';debug=out/f'{tag}-debugcon.log';sock=Path('/tmp')/f'sex-laptop-{os.getpid()}-{tag}.sock'
  for f in(serial,debug):f.unlink(missing_ok=True)
  cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-smp',os.environ.get('SEXOS_GATE_CORES','1'),'-m','512M','-vga','none','-device','VGA,xres=1280,yres=800',
-      '-acpitable',f'file={ssdt(out,thermal)}','-chardev',f'file,id=sxdbg,path={debug}','-device','isa-debugcon,iobase=0x402,chardev=sxdbg',
+      '-acpitable',f'file={ssdt(out,thermal)}','-smbios','type=1,manufacturer=Alienware,product=Alienware x17 R1,sku=0A69','-smbios',f'file={dell_tokens(out)}','-chardev',f'file,id=sxdbg,path={debug}','-device','isa-debugcon,iobase=0x402,chardev=sxdbg',
       '-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm',
       '-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-nic','none','-no-reboot']
  proc=subprocess.Popen(cmd,stdout=(out/f'{tag}-qemu.log').open('w'),stderr=subprocess.STDOUT)
@@ -95,7 +103,12 @@ def main():
   g['wait'](r'\[sexacpi\.awcc\.fan\] id=0x33 name=gpu rpm=2100 min=0 max=5900')
   g['wait'](r'\[sexacpi\.awcc\.temp\] id=0x01 name=cpu celsius=41')
   g['wait'](r'\[sexacpi\.awcc\.profile\] id=0xa3 kind=quiet')
-  g['wait'](r'\[sexacpi\.vendor\] awcc=1 hotkeys=1')
+  # SMBIOS from the kernel: the machine model, and Dell's token table for charge modes.
+  g['wait'](r'\[acpi\.smbios\] version=\d+\.\d+ table=0x[0-9a-f]+ length=\d+ readable=1')
+  g['wait'](r'\[sexacpi\.smbios\] vendor=Alienware product=Alienware x17 R1 sku=0A69 bios=[^ ]+ dell_tokens=6 x17r1=1')
+  result['charge']=g['wait'](r'\[sexacpi\.charge\.state\] modes=primarily_ac,standard,adaptive,custom mode=standard start=50 end=90')[0]
+  g['wait'](r'\[sexacpi\.charge\] path=\\_SB\.DWMI method=WMBC buffer=40 descriptor=1')
+  g['wait'](r'\[sexacpi\.vendor\] awcc=1 hotkeys=1 charge=1 smbios=\d+')
   g['wait'](r'\[sexacpi\.hotkey\] key=mic_mute code=0x0000 act=1')
   sensors=g['wait'](r'\[sexacpi\.sensors\] battery=50 charging=0 minutes=120 health=96 ac=0 lid=1 temp_dk=3182 crit_dk=3732 brightness=\d+ critical=0')
   # The brightness-up key, as firmware Notify: it used to stop the interpreter.
