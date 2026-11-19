@@ -182,6 +182,7 @@ fn intel_display_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, 
         bar0_view: Some(view), command: None, virtio: None, class: 0x03_00_00 | dev.prog_if as u32, window: (0, view.length as u32),
     }));
     serial_println!("[kernel.cap.display.grant] pd={} slot={} device={:04x} bytes={}", pd.id, slot, dev.device_id, view.length);
+    crate::boot_memory::intel_scanout(pd, dev);
     true
 }
 

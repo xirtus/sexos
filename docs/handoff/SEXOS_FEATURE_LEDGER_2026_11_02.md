@@ -5334,3 +5334,11 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - SSH domains: `ssh.NAME = user@host[:port]` lines in `spindle.conf` (`ssh NAME [COMMAND]` logs in there); bad lines are reported like other settings.
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
+
+## L3: native Intel display on Tiger Lake (2026-11-19)
+- On Intel Tiger Lake graphics (the Alienware x17 R1's iGPU), Display takes the panel over from the firmware framebuffer without a modeset: it repoints the firmware's pipe at two buffers of its own and flips between them at vblank. Frames are tear-free and held to the panel's refresh; only changed rows are written and flushed.
+- The pointer is on the hardware cursor plane: moving it writes two registers and redraws no pixels (drawn arrow kept for the magnifier and screen-off).
+- BOOT gives Display the buffers and fills only their GPU page-table (GGTT) entries, so Display cannot point the GPU at other memory; the IOMMU maps them like any DMA pool.
+- Safe fallback: no matching pipe, PSR2, or a flip that never latches leaves or puts back the firmware framebuffer with the last picture.
+- Receipts: `[boot.display.intel_scanout]`, `[display.intel.takeover]`, `[display.intel.flip]`, `[display.intel.cursor]`, `[display.intel.fallback]`, measured `refresh_mhz=` and `[display.intel.edid.mode]` for every panel mode.
+- Verified on the host by `scripts/kms_host_gate.sh` (`takeover_keeps_the_mode_and_flips_between_our_buffers`: transcoder untouched, flips wait for the latch, dead pipe and PSR2 refused, firmware plane restored, cursor moves without pixels). QEMU has no Intel display; the x17 boot log is the first hardware run.

@@ -67,6 +67,47 @@ the eDP panel `[display.intel.dpcd]` and `[display.intel.edid]` read over AUX. I
 register writes are AUX transactions. QEMU has no Intel display, so the x17 boot log is
 its first run.
 
+## L3 on hardware: Intel takeover, flips at vblank, cursor plane (2026-11-19)
+
+Thread "Add native Intel display driver". Display now drives the Tiger Lake panel
+itself instead of copying into the firmware framebuffer, without a modeset:
+
+- **BOOT** (`boot_memory::intel_scanout`, called from the Intel lease): one
+  DMA-addressable region at slot 28 (`display_frames::INTEL_SCANOUT_*`): two frames
+  with the plane's 64-byte stride, then a 256x256 ARGB cursor image. BOOT writes the
+  GPU's own page table (GGTT, top half of BAR 0) so exactly these pages appear at GGTT
+  `0x1000_0000` (`INTEL_GGTT_WINDOW`), then flushes the GGTT TLB (`GFX_FLSH_CNTL`).
+  Display never writes GGTT entries, so it cannot point the GPU at other memory. The
+  region is a DMA pool, so the IOMMU maps it for the iGPU like any other pool. Skipped
+  (`[boot.display.intel_scanout] granted=0 reason=...`) when GGTT is under 1 GiB, BAR 0 is
+  not 16 MiB, or no contiguous block is free. Kernel growth: 31 lines.
+- **Takeover** (`sex_gpu_intel::takeover`, `servers/sexdisplay/src/intel.rs`): find the pipe
+  whose linear XRGB primary plane is exactly the boot framebuffer's size, copy the boot
+  picture into both buffers, repoint the plane (same pipe, transcoder, link, timings,
+  position), wait for SURFLIVE. Refused, with the firmware plane untouched or restored,
+  when no pipe matches, the panel is in PSR2 selective update, or the flip never latches.
+  Receipt `[display.intel.takeover] takeover=1 pipe=A ... modeset=0`.
+- **Every publication is a flip.** `publish_frame` asks for the back buffer
+  (`gpu_back_buffer`): it waits, sleeping 1 ms ticks, until the last flip latched, copies
+  in the rows the last flip changed (buffer age 2), writes this frame's changed spans,
+  `clflush`es them (the display engine does not snoop CPU caches) and arms the flip. So
+  frames are tear-free and held to at most one per refresh. `[display.intel.flip]`.
+- **Fallback.** If a flip does not latch within 200 ms, Display copies the last shown
+  picture into the firmware framebuffer, restores the firmware plane and carries on there
+  (`[display.intel.fallback] reason=...`).
+- **Cursor plane.** `draw_cursor_z_top` asks `hw_cursor` first: on Intel the arrow is drawn
+  once per scale into the cursor image and every pointer move is two register writes, with
+  no frame damage. It falls back to the drawn arrow when the magnifier is on or the screen
+  is off.
+- **Refresh receipt.** `[display.intel.pipe] ... refresh_mhz=` is measured from the frame
+  counter over 250 ms, and `[display.intel.edid.mode]` lists every detailed timing the panel
+  offers. The first x17 boot log shows whether firmware already runs the panel at its
+  high refresh rate.
+
+Not yet: changing the refresh rate or resolution (needs the full eDP modeset with link
+training, item 5 below; only worth writing once the boot log shows firmware lit the panel
+below its best mode), external screens on USB-C, PSR2 selective fetch.
+
 ## The x17 R1 and its screens (what to check on the hardware)
 
 - The internal panel is on the Intel iGPU in hybrid (Optimus) mode. If the BIOS
