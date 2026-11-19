@@ -186,6 +186,7 @@ fn visit(root: &Path, url: &str, page_seconds: u64, cache: Option<std::rc::Rc<st
         }
         let t = Instant::now();
         let next = script.dispatch("tick").unwrap();
+        if verbose { eprintln!("tick {:.1} ms next={next}", ms(t.elapsed().as_nanos() as u64)); }
         ph.ticks_ns += t.elapsed().as_nanos() as u64;
         ph.ticks += 1;
         let pending = !script.page().fetches.is_empty() || !script.page().modules_wanted.is_empty() || !script.page().classic_scripts.is_empty();

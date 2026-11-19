@@ -172,14 +172,17 @@ impl Cache {
         let mut found: Vec<(usize, NodeId)> = Vec::new();
         let mut best = usize::MAX;
         for (selector, list) in selectors.iter().zip(&lists) {
-            let candidates = list.unwrap_or(&ix.order[lo..hi]);
+            // An indexed list covers the whole document; a small subtree (a jQuery
+            // `.find('a')` under one element) is cheaper to scan in tree order.
+            let in_order = list.is_none_or(|l| l.len() > hi - lo);
+            let candidates = if in_order { &ix.order[lo..hi] } else { list.unwrap() };
             for &n in candidates {
                 let rank = ix.rank[n];
                 if rank < lo || rank >= hi || (!all && rank >= best) { continue; }
                 if css::matches(dom, n, selector) {
                     if all { found.push((rank, n)) } else { best = rank; found = vec![(rank, n)]; }
                     // The subtree list is in tree order: its first match is the first.
-                    if !all && list.is_none() { break; }
+                    if !all && in_order { break; }
                 }
             }
         }
