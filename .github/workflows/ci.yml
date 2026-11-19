@@ -58,6 +58,8 @@ jobs:
       run: cargo test --locked -p velvet --no-default-features
     - name: Moan Weft app and project editing
       run: cargo test --locked -p moan --no-default-features
+    - name: Moan plugin hosts (CLAP, VST3, LADSPA, LV2) and open plugins rebuilt for SexOS
+      run: MOAN_OPEN_PLUGINS_REQUIRED=1 cargo test --locked -p moan-plugin
     - name: Moan native FFmpeg WAV, FLAC and Shine MP3 export oracle
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg

@@ -200,6 +200,67 @@ mod guest {
         path.extend_from_slice(picked);
         Ok(path)
     }
+    fn read_whole(app: &mut App, path: &[u8], limit: usize) -> Result<Vec<u8>, &'static str> {
+        let size = files::size(&mut app.window, path).map_err(|_| "LV2 bundle file is missing")?;
+        if size == 0 || size > limit as u64 {
+            return Err("LV2 bundle file is empty or too large");
+        }
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(size as usize)
+            .map_err(|_| "Not enough memory for the LV2 bundle")?;
+        bytes.resize(size as usize, 0);
+        for (index, piece) in bytes.chunks_mut(4096).enumerate() {
+            if files::read_at(&mut app.window, path, (index * 4096) as u64, piece)
+                .map_err(|_| "Cannot read the LV2 bundle")?
+                != piece.len()
+            {
+                return Err("Short read in the LV2 bundle");
+            }
+        }
+        Ok(bytes)
+    }
+    fn join(dir: &[u8], name: &[u8]) -> Vec<u8> {
+        let mut path = dir.strip_suffix(b"/").unwrap_or(dir).to_vec();
+        path.push(b'/');
+        path.extend_from_slice(name);
+        path
+    }
+    /// The sandboxed helper sees exactly one plugin file, so an LV2 bundle
+    /// folder is packed (manifest, data files, library) into the render folder.
+    fn pack_lv2(app: &mut App, bundle: &[u8], folder: &[u8]) -> Result<Vec<u8>, &'static str> {
+        let manifest = read_whole(app, &join(bundle, b"manifest.ttl"), 1 << 20)?;
+        let names = moan_plugin::lv2::manifest_files(&manifest)
+            .map_err(|_| "LV2 bundle manifest is missing or unsupported")?;
+        let mut parts = vec![(b"manifest.ttl".to_vec(), manifest)];
+        for name in names {
+            let data = read_whole(app, &join(bundle, name.as_bytes()), moan_plugin::elf::MAX_FILE)?;
+            parts.push((name.into_bytes(), data));
+        }
+        let refs: Vec<(&[u8], &[u8])> = parts.iter().map(|(n, d)| (&n[..], &d[..])).collect();
+        let packed = moan_plugin::lv2::encode(&refs).map_err(|_| "LV2 bundle cannot be packed")?;
+        if packed.len() > moan_plugin::elf::MAX_FILE {
+            return Err("LV2 bundle exceeds the 16 MiB plugin limit");
+        }
+        let out = join(folder, format!("moan-lv2-{:x}.bundle", weft::sexos::now()).as_bytes());
+        files::create(&mut app.window, &out)
+            .map_err(|_| "Cannot create the packed LV2 bundle in the render folder")?;
+        for (index, piece) in packed.chunks(4096).enumerate() {
+            if files::write_at(&mut app.window, &out, (index * 4096) as u64, piece)
+                .map_err(|_| "Packed LV2 bundle write failed")?
+                != piece.len()
+            {
+                return Err("Disk full while packing the LV2 bundle");
+            }
+        }
+        files::sync(&mut app.window).map_err(|_| "Packed LV2 bundle sync failed")?;
+        sex_pdx::serial_record!(
+            "[moan.plugin.lv2.packed] files={} bytes={}",
+            parts.len(),
+            packed.len()
+        );
+        Ok(out)
+    }
     extern "C" fn main() -> ! {
         let mut app = App::open(
             "Moan",
@@ -350,7 +411,9 @@ mod guest {
                                 continue;
                             }
                             let folder = action == Some(Action::ChooseRenderFolder);
-                            match choose_plugin_path(&mut app, folder) {
+                            // An LV2 plugin is a bundle folder, not a single file.
+                            let pick_folder = folder || studio.plugin_format == 3;
+                            match choose_plugin_path(&mut app, pick_folder) {
                                 Ok(path) => {
                                     studio.plugin_selection(&mut app.ui, folder, &path);
                                     if folder {
@@ -384,14 +447,18 @@ mod guest {
                             }
                             let result = (|| {
                                 let (start, pcm) = studio.session.offline_region()?;
-                                let format = if studio.plugin_format == 0 {
-                                    moan_plugin::job::Format::Clap
+                                let format = moan_plugin::job::Format::from_id(studio.plugin_format)
+                                    .ok_or("Choose CLAP, VST3, LADSPA or LV2")?;
+                                let packed;
+                                let chosen: &[u8] = if format == moan_plugin::job::Format::Lv2 {
+                                    packed = pack_lv2(&mut app, &plugin_path, &render_folder)?;
+                                    &packed
                                 } else {
-                                    moan_plugin::job::Format::Vst3
+                                    &plugin_path
                                 };
                                 plugin
                                     .start(
-                                        &plugin_path,
+                                        chosen,
                                         &render_folder,
                                         &pcm,
                                         format,
