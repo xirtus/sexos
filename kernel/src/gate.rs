@@ -161,7 +161,7 @@ fn sweep(st: &mut State) {
 fn create(entry: u64, export: u64) -> Result<u64, u64> {
     let pd = me();
     if !trusted(pd) || export > 255 { return Err(E_RIGHTS); }
-    let pte = crate::memory::manager::read_pte_flags(VirtAddr::new(entry)).map_err(|_| E_RIGHTS)?;
+    let pte = crate::memory::manager::read_pte_flags(VirtAddr::try_new(entry).map_err(|_| E_RIGHTS)?).map_err(|_| E_RIGHTS)?;
     if pte & F::USER_ACCESSIBLE.bits() == 0 || pte & F::NO_EXECUTE.bits() != 0 || ((pte >> 59) & 0xF) as u8 != pd.pku_key {
         return Err(E_RIGHTS);
     }
