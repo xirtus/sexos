@@ -65,13 +65,13 @@ unsafe extern "C" fn w2c_dom_call(ctx: *mut Ctx, op: u32, ptr: u32, len: u32) ->
     let page = unsafe { &mut *ctx.page };
     let Some(args) = args_of(data, ptr as i32, len as i32) else { return u32::MAX };
     #[cfg(feature = "jit-profile")]
-    let before = page.now_ns();
+    let before = page.profile_ns();
     let r = if op >= BYTE_OPS { page.call_bytes(op, &args) } else {
         let Some(text) = args.iter().map(|a| core::str::from_utf8(a).ok()).collect::<Option<Vec<&str>>>() else { return u32::MAX };
         page.call(op, &text).map(String::into_bytes)
     };
     #[cfg(feature = "jit-profile")]
-    ctx.profile.host(op, page.now_ns().saturating_sub(before));
+    ctx.profile.host(op, page.profile_ns().saturating_sub(before));
     match r {
         Some(r) => { let n = r.len() as u32; ctx.result = r; n }
         None => u32::MAX,
@@ -147,10 +147,10 @@ unsafe extern "C" fn w2c_dom_jit_v3(ctx: *mut Ctx, pc: u32, len: u32, argv: u32,
         let ctx = unsafe { &mut *ctx };
         let data = unsafe { memory(ctx) };
         #[cfg(feature = "jit-profile")]
-        let before = unsafe { (*ctx.page).now_ns() };
+        let before = unsafe { (*ctx.page).profile_ns() };
         let result = ctx.jit.run_v3(data, pc, len, argv, argc, out) as u32;
         #[cfg(feature = "jit-profile")]
-        ctx.profile.jit(unsafe { (*ctx.page).now_ns() }.saturating_sub(before));
+        ctx.profile.jit(unsafe { (*ctx.page).profile_ns() }.saturating_sub(before));
         return result;
     }
     #[cfg(not(feature = "baseline-jit"))]

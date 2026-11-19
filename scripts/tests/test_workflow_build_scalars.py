@@ -60,6 +60,27 @@ class WorkflowBuildScalars(unittest.TestCase):
         self.assertLessEqual(set(SHARED)|{'image','web','boot'},set(jobs['build']['needs']))
         self.assertLessEqual(set(jobs['build']['needs']),set(jobs))
 
+    def test_crash_probe_image_is_built_once_for_the_crash_and_leak_gates(self):
+        jobs=self.workflow['jobs']
+        crash='\n'.join(s.get('run','') for s in jobs['crash']['steps'])
+        self.assertEqual(crash.count('SEXOS_CRASH_PROBE=1'),1)
+        self.assertIn('ci_image_pack.sh',crash)
+        self.assertEqual(jobs['leaks']['needs'],'crash')
+        leaks='\n'.join(s.get('run','') for s in jobs['leaks']['steps'])
+        self.assertNotIn('entrypoint_build.sh',leaks)
+        image=[s for s in jobs['leaks']['steps'] if s.get('uses')=='./.github/actions/image']
+        self.assertEqual(image[0]['with']['artifact'],'sexos-crash-image')
+        self.assertNotIn('crash',jobs['profiles']['strategy']['matrix']['gate'])
+
+    def test_every_gate_job_follows_the_scope(self):
+        jobs=self.workflow['jobs']
+        self.assertEqual(set(jobs['build']['needs']),set(jobs)-{'build'})
+        for name,job in jobs.items():
+            if name in ('changes','build'):continue
+            with self.subTest(job=name):
+                condition=job.get('if','')
+                self.assertTrue(any(k in condition for k in ('needs.changes.outputs.scope','needs.image.outputs.full','needs.crash.outputs.image')),condition)
+
     def test_a_folded_command_is_caught(self):
         command='scripts/ci_image_pack.sh "$RUNNER_TEMP/sexos-image/image.tar.zst"'
         self.assertEqual(self.source.count('bash '+command),1)
