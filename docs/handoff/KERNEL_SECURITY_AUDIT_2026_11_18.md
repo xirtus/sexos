@@ -25,15 +25,16 @@ hal/x86_64.rs +27).
 | S6 | SMEP and UMIP are off | Medium | Fixed (where the CPU has them) |
 | S7 | Spectre v2: no IBRS of any kind | Medium | Partly fixed (eIBRS / AutoIBRS) |
 | S8 | Conditional SWAPGS can be speculated past (CVE-2019-1125) | Low | Fixed |
-| S9 | A program can exhaust kernel memory by churning worker threads | Medium | Open: `program_workers.rs` owner (WS1) |
+| S9 | A program can exhaust kernel memory by churning worker threads | Medium | Fixed: a row keeps at most `2 * MAX_WORKERS` tasks |
 | S10 | Spectre v1 gadgets on capability-slot lookups | Medium | Open: stream 3 (new table) |
 | S11 | SMAP off and PKRU = 0 for the whole syscall | Medium | Open: Phase 6 design |
 | S12 | Meltdown and Meltdown-PK on CPUs without `RDCL_NO` | Info | Reported at boot |
-| S13 | Unused user-accessible per-core page on key 15 | Low | Open: `core_local.rs` owner (WS4) |
+| S13 | Unused user-accessible per-core page on key 15 | Low | Fixed in #415 (page removed) |
 | S14 | Cross-domain branch-target injection between programs | Info | Open: decision for Phase 5/6 |
 | S15 | BOOT services and bridges were never scanned for WRPKRU/XRSTOR/XRSTORS | High | Fixed |
 | S16 | Three kernel user mappings were writable and executable; program records' code was never scanned | High | Fixed |
 | S17 | The framebuffer grant sets the user bit on whole huge pages | Medium | Open: `init.rs`/boot display owner |
+| S18 | Kernel stacks had no guard page; a Task built on a 16 KiB stack overran it | High | Fixed (follow-up PR): guard page, boxed FPU area |
 
 Checked and fine: syscall and interrupt returns restore every general register from
 the saved user frame (no kernel register contents reach ring 3); the GDT has no
@@ -147,7 +148,7 @@ Each exception and interrupt stub runs `swapgs` only when it came from ring 3.
 The CPU can speculate down the wrong side and issue GS-relative loads with the
 wrong base. Fix: `lfence` where both paths join, in the four stubs that swap.
 
-### S9. Worker churn exhausts kernel memory (open, WS1)
+### S9. Worker churn exhausts kernel memory (fixed)
 
 `program_workers::spawn` reuses a dead worker task only after it has been dead for
 4 ticks; otherwise it leaks a new `Task` with a 64 KiB kernel stack. The limit
@@ -156,6 +157,10 @@ loop, allocates a new kernel stack per iteration until the kernel heap or frames
 run out. Suggested fix in `program_workers.rs`: also cap the row's total tasks
 (live plus dead, e.g. `2 * MAX_WORKERS`) and return `FULL` until one is reusable.
 Program-record tasks are a fixed pool and are fine.
+
+Fixed 2026-11-19 as suggested: past the cap `spawn` returns `RETRY` (some task is
+Dead and becomes reusable within `REUSE_TICKS`), which `sex_pdx::program_threads::spawn`
+already retries after a yield. A row's worker stacks are now bounded at 8 MiB.
 
 ### S10. Spectre v1 on slot lookups (open, stream 3)
 
@@ -258,6 +263,18 @@ sets the user bit on the whole huge page. Display then reaches everything else i
 that page, which can include other devices' MMIO. Fix: map the framebuffer into a
 BOOT region window with 4 KiB pages (as other regions are) instead of changing the
 HHDM entry.
+
+### S18. Kernel stack overflow into the heap (fixed in a follow-up)
+
+Kernel stacks were heap `Vec`s with nothing below them. #408 put a 2.7 KB XSAVE
+area inline in `Task`; worker spawn built the Task (and its copies) on the caller's
+16 KiB program kernel stack, which overran into its heap neighbour and ended in a
+`rip=0` halt (#427 shrank the area as a stopgap). Now every kernel stack is a
+page-aligned block whose lowest page is unmapped, so an overflow double-faults on
+its own IST, and `Task` holds its FPU area as a `Box` filled straight from a static
+reset image, so a Task is a few hundred bytes wherever it is built. The guard is
+skipped where the heap is mapped by huge pages; the first guarded stack logs
+`[kstack.guard]`.
 
 ## Kernel stacks
 

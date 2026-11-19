@@ -83,10 +83,12 @@ impl<const N: usize> Motion<N> {
     /// A window appeared at `to`: it rises into place, or slides in after a
     /// workspace switch.
     pub fn opened(&mut self, surface: u64, to: Geom, now: u64) {
-        let slide = self.slide != 0 && now.saturating_sub(self.slide_at) < SLIDE_WINDOW;
+        let slide = self.sliding(now);
         let from = if slide { Geom { x: to.x + self.slide as i32 * self.width, ..to } } else { Geom { y: to.y + RISE, ..to } };
         self.start(surface, from, to, now);
     }
+    /// True just after a workspace switch: windows shown now slide in.
+    pub fn sliding(&self, now: u64) -> bool { self.slide != 0 && now.saturating_sub(self.slide_at) < SLIDE_WINDOW }
     pub fn forget(&mut self, surface: u64) {
         for t in self.tweens.iter_mut() { if t.is_some_and(|t| t.surface == surface) { *t = None; } }
     }

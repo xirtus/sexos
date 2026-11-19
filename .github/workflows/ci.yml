@@ -44,6 +44,8 @@ jobs:
       run: bash scripts/ipc_v2_host_gate.sh
     - name: Display model (KMS, EDID) and Intel Gen12 display engine on the host
       run: bash scripts/kms_host_gate.sh
+    - name: NVIDIA GSP-RM boot (GA104 firmware, VBIOS/FWSEC, WPR2 layout, RPC queues, simulated GPU) on the host
+      run: bash scripts/nvidia_gsp_host_gate.sh
     - name: sexdrive DMA lifetime and zero-copy reads on the host
       run: bash scripts/sexdrive_dma_host_gate.sh
     - name: Intel RAID (IMSM metadata, VMD bus) on the host
@@ -58,6 +60,8 @@ jobs:
       run: cargo test --locked -p velvet --no-default-features
     - name: Moan Weft app and project editing
       run: cargo test --locked -p moan --no-default-features
+    - name: Moan plugin hosts (CLAP, VST3, LADSPA, LV2) and open plugins rebuilt for SexOS
+      run: MOAN_OPEN_PLUGINS_REQUIRED=1 cargo test --locked -p moan-plugin
     - name: Moan native FFmpeg WAV, FLAC and Shine MP3 export oracle
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
@@ -108,6 +112,8 @@ jobs:
       run: cargo test --locked -p sex-shape --features shaping
     - name: Shuttle userspace font fallback, RTL/BiDi shaping and font picker on the host
       run: bash scripts/shuttle_host_gate.sh
+    - name: PKU gate stubs (kernel study Phase 6) built and run under real protection keys on the host
+      run: cargo test --locked -p sex-gate -- --nocapture
     - name: Loom engines (batch rename, duplicates, usage map, tags, compare) on the host
       run: cargo test --locked -p loom-core
     - name: Vellum annotations, forms and incremental PDF saves on the host
@@ -372,11 +378,19 @@ jobs:
         python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: PKU gate cost on the runner's CPU (kernel study Phase 6; host Linux, informational)
+      run: |
+        cc -O2 -Wall -o "$RUNNER_TEMP/pku_gate_bench" tools/pku-gate-bench/pku_gate_bench.c
+        "$RUNNER_TEMP/pku_gate_bench"
     - name: Kernel cycles on KVM, real CPU (kernel study Phase 0; 1 core with and without PKU, 4 cores; median of 3)
       run: |
         if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
         if [ ! -w /dev/kvm ]; then echo "[bench.kvm] no usable /dev/kvm on this runner; skipped"; exit 0; fi
         grep -m1 'model name' /proc/cpuinfo; grep -qw pku /proc/cpuinfo && echo "[bench.kvm] host pku=yes" || echo "[bench.kvm] host pku=no"
+        # The real CPU's XSAVE path (XSAVEC, AVX-512 where the host has it): YMM state kept
+        # by two copies on one core and four copies across four cores.
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host python3 scripts/program_avx_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/avx-kvm-1"
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/program_avx_gate.py --copies 4 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/avx-kvm-4"
         out="$RUNNER_TEMP/sexos-runtime/kvm-bench"
         for run in 1 2 3; do
           python3 scripts/program_bench_gate.py --accel kvm --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/1core-pku-$run"
@@ -547,6 +561,10 @@ jobs:
       run: python3 scripts/program_web_mse_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-mse"
     - name: YouTube-shaped streaming (AV1 fMP4 + Opus WebM, POST ranges read through response.body, changeType to VP9)
       run: python3 scripts/program_web_youtube_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-youtube"
+    - name: Microphone on Intel HD Audio (input pin, converter and input stream)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/hda-mic-source.img"
+        python3 scripts/sound_listen_gate.py --card hda --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/hda-mic-source.img" --out "$RUNNER_TEMP/sexos-hda-mic"
     - name: Preserve media evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -558,6 +576,7 @@ jobs:
           ${{ runner.temp }}/sexos-web-seek
           ${{ runner.temp }}/sexos-web-mse
           ${{ runner.temp }}/sexos-web-youtube
+          ${{ runner.temp }}/sexos-hda-mic
         if-no-files-found: ignore
 
   editor:
@@ -590,11 +609,11 @@ jobs:
     runs-on: ubuntu-latest
     # A Cargo.lock change (crates added or removed) misses the exact build cache and
     # rebuilds cold, which takes ~45 minutes here; 40 left such PRs no way to pass.
-    timeout-minutes: 60
+    timeout-minutes: 80
     strategy:
       fail-fast: false
       matrix:
-        gate: [cleanup, app-resource, crash, denim]
+        gate: [cleanup, app-resource, crash, denim, views]
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -616,6 +635,17 @@ jobs:
         SEXOS_DENIM_EAGER=1 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/denim-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/denim-build.log"; exit 1)
         truncate -s 1G "$RUNNER_TEMP/denim-source.img"
         python3 scripts/denim_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/denim-source.img" --out "$RUNNER_TEMP/sexos-proof/denim"
+    - name: Shared-key program rows in protection views on 4 cores (no turn-taking, PCID)
+      if: matrix.gate == 'views'
+      run: |
+        ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/views-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/views-build.log"; exit 1)
+        truncate -s 1G "$RUNNER_TEMP/views-source.img"
+        SEXOS_GATE_CORES=4 SEXOS_GATE_MEMORY=2G python3 scripts/program_pool_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/views-source.img" --out "$RUNNER_TEMP/sexos-proof/views-pool"
+    - name: A shared-key row cannot read its neighbour without PKU (probe build)
+      if: matrix.gate == 'views'
+      run: |
+        SEXOS_PROGRAM_ISOLATION_PROBE=4 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/views-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/views-probe-build.log"; exit 1)
+        SEXOS_GATE_CPU=max,-pku,+rdseed SEXOS_GATE_CORES=4 SEXOS_GATE_MEMORY=2G python3 scripts/program_isolation_probe.py sexos-v1.0.0.iso "$RUNNER_TEMP/views-source.img" "$RUNNER_TEMP/sexos-proof/views-isolation" 4
     - name: Cap-scoped peer epochs across same-task service restart
       if: matrix.gate == 'crash'
       run: SEXOS_GATE_CORES=4 python3 scripts/service_peer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof/service-peer"
@@ -832,6 +862,11 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/motion-source.img"
         python3 scripts/window_motion_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/motion-source.img" --out "$RUNNER_TEMP/sexos-desktop/motion"
+    - name: Frame time during workspace slides (60 Hz pacing, p99 < 20 ms on KVM, 4 cores) and a desktop screenshot
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        truncate -s 256M "$RUNNER_TEMP/frames-source.img"
+        python3 scripts/frame_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/frames-source.img" --out "$RUNNER_TEMP/sexos-desktop/frame-time"
     - name: Programs starting programs
       run: |
         truncate -s 256M "$RUNNER_TEMP/launch-source.img"
@@ -910,7 +945,7 @@ jobs:
   recording:
     name: Lossless encoder guest proof
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 120
     steps:
     - uses: actions/checkout@v4
       with:
@@ -1112,7 +1147,7 @@ jobs:
   leaks:
     name: Leak gate (programs open/close, services restart)
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 140
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
