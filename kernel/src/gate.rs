@@ -24,8 +24,8 @@
 //! so a callee can never act with its caller's capabilities; and a preempted task keeps
 //! the PKRU it really had ([`keep_live_pkru`]), not its domain's.
 //!
-//! Not yet: nested gate calls (a callee calling a third service on the caller's task),
-//! clearing vector registers on an unwind.
+//! An unwind also resets the vector registers. Not yet: nested gate calls (a callee
+//! calling a third service on the caller's task).
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
@@ -61,6 +61,8 @@ static USABLE: AtomicBool = AtomicBool::new(false);
 static AREAS: AtomicU64 = AtomicU64::new(0);
 /// Frame page of each area, for the lock-free "is this task inside a call" check.
 static FRAME_OF: [AtomicU64; MAX_AREAS as usize + 1] = [const { AtomicU64::new(0) }; MAX_AREAS as usize + 1];
+
+static CLEAN_FPU: crate::fpu::FpuState = crate::fpu::FpuState::INIT;
 
 struct Gate { object: u32, generation: u32, callee: u32, entry: u64, export: u64 }
 struct Bound { object: u32, generation: u32, caller: u32, callee: u32 }
@@ -369,6 +371,9 @@ pub unsafe fn unwind(frame: &mut x86_64::structures::idt::InterruptStackFrame, v
         for (at, value) in regs { base.offset(at).write(value); }
         base.write(ret); // RIP
         base.add(3).write(rsp + 8); // RSP
+        // The callee's vector, x87 and AVX-512 state is still live (it is saved only on a
+        // switch): reset all of it, so nothing of the callee's reaches the caller.
+        crate::fpu::restore(&CLEAN_FPU);
         if crate::pku::PKU_ENABLED.load(Ordering::Relaxed) != 0 {
             core::arch::asm!("wrpkru", in("eax") caller.base_pkru_mask, in("ecx") 0, in("edx") 0, options(nostack));
         }
