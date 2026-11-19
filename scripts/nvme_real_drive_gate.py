@@ -120,9 +120,9 @@ def main():
     disk.unlink(missing_ok=True)
     with disk.open('wb') as f:
         f.truncate(GIB)
-    subprocess.run(['sgdisk', '-o', '-n', '1:2048:+100M', '-t', '1:ef00', '-c', '1:EFI system partition',
-                    '-n', '2:0:+16M', '-t', '2:0700', '-c', '2:Basic data partition', str(disk)], check=True, capture_output=True)
-    first = int(re.search(r'First sector: (\d+)', subprocess.run(['sgdisk', '-i', '2', str(disk)], check=True, capture_output=True, text=True).stdout).group(1))
+    subprocess.run(['sgdisk', '-o', '-n', '1:2048:+16M', '-t', '1:0700', '-c', '1:Basic data partition', str(disk)],
+                   check=True, capture_output=True)
+    first = 2048
     fat, hello = a.out / 'windata.img', a.out / 'hello.txt'
     fat.unlink(missing_ok=True)
     with fat.open('wb') as f:
@@ -134,6 +134,9 @@ def main():
         f.seek(first * 512)
         f.write(fat.read_bytes())
     before = sha(disk)
+    # A GPT's protective MBR ends in 55 AA, so the BIOS would start the disk's
+    # empty boot code ahead of the CD: start from the CD.
+    os.environ['SEXOS_GATE_DEVICES'] = '-boot order=d'
     g, t, q, run, cat, ls = session(a, disk, 'foreign')
     try:
         g['wait'](r'\[sexdrive\.disk\.layout\] kind=foreign-gpt ', 0, 60)
@@ -148,6 +151,7 @@ def main():
         report['foreign'] = 'read_only'
     finally:
         g['stop']()
+        os.environ.pop('SEXOS_GATE_DEVICES', None)
     assert sha(disk) == before, 'the other system\'s disk was written'
     print('[nvme_real_drive.gate] PASS', report)
     return 0
