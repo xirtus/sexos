@@ -3687,6 +3687,14 @@ Plan: `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` (stages N1-N6).
 - **AML work budget**: `acpi::with_aml(budget, f)` runs firmware AML quarantined with a limit on register accesses and stalls, so a firmware loop cannot hang the boot. _(2026-11-10, #88: the ACPI half now runs in `servers/sexacpi`; the kernel keeps D3hot, header save/restore and `PMC_BOOT_0`, and exposes them only through `FW_DGPU`.)_
 - **Gate** `scripts/dgpu_power_gate.py` in CI: QEMU root port + display controller + SSDT power resource (`tests/acpi/dgpu_gate_ssdt.asl`); checks the method order off/on/off on the debug console, the restored header, the boot GPU kept and the desktop up.
 - ABI: none.
+## NVIDIA GSP-RM boot logic (N4a, 2026-11-19)
+
+Plan: `docs/handoff/NVIDIA_GSP_BRINGUP_2026_11_19.md` (GSP boot, display through the mux, modesetting, acceleration).
+- **`crates/sex-gpu-nv`** (no_std, no heap, `GPL-2.0-or-later OR MIT`): the whole Ampere GSP-RM boot as Rust driver logic over an `Mmio` trait and caller-provided DMA buffers. VBIOS read from the ROM window (IFR header, image chain, BIT table, PMU table) and FWSEC v3 found, signature chosen by fuse, DMEM mapper patched to run FRTS; falcon reset, DMA load and heavy-secure boot through the boot ROM (GSP and SEC2); the VRAM layout of WPR2 and `GspFwWprMeta`; radix3 table for the 38 MB GSP-RM image; LibOS arguments and log buffers; the shared-memory RPC queues (checksums, wrap); `GSP_SET_SYSTEM_INFO` and `SET_REGISTRY`; Booter on SEC2; waiting for `GSP_INIT_DONE` while running GSP-RM's CPU sequencer scripts. Each step is a named log step so a boot photo shows where real hardware stopped.
+- **Firmware** `scripts/fetch_nvidia_gsp_firmware.sh`: NVIDIA's 535.113.01 GSP-RM, Booter and bootloader from linux-firmware, pinned commit + SHA-256 (redistributable, loaded as data).
+- **Gate** `scripts/nvidia_gsp_host_gate.sh` (CI): parses the real 535.113.01 files, pins every structure offset to NVIDIA's C layout, and boots a simulated GA104 end to end (signatures where the boot ROM looks, FRTS at the right VRAM address, Booter walks radix3 and finds the real image, first RPCs with good checksums, sequencer run, `GSP_INIT_DONE`), plus failure paths (Booter error, silent GSP, WPR2 left by a previous driver).
+- Not yet: the kernel lease and the `sexgpu-nv` service that runs this on the x17 (N4b). ABI: none.
+
 ## Net: ALPN http/1.1 (2026-11-09)
 
 - The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do (the rustls move set `alpn_protocols`). Host test `[sexnet.tls.open.host]` now proves it on the wire: an OpenSSL server offering `h2` and `http/1.1` must pick `http/1.1`. YouTube stage Y3e.
