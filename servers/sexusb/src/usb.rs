@@ -194,15 +194,24 @@ impl Usb {
                 (s >> 10) & 0xf, self.x.port_major[p as usize]);
             if s & 1 != 0 { connected += 1; if first == 0 { first = p; } }
         }
+        // Every connected USB 2 port resets at once, then each device is addressed in
+        // turn: boot waits for one reset (about 50 ms on real ports), not one per device.
+        let mut started = [false; 256];
+        for p in 1..=self.x.ports { self.x.clear_port_changes(p); }
         for p in 1..=self.x.ports {
-            self.x.clear_port_changes(p);
-            if self.x.portsc(p) & 1 != 0 { self.attach_root(p); }
+            if self.x.portsc(p) & 1 != 0 { started[p as usize] = self.x.start_reset(p); }
+        }
+        log!("[sexusb.ports.reset.parallel] started={}", started.iter().filter(|s| **s).count());
+        for p in 1..=self.x.ports {
+            if self.x.portsc(p) & 1 != 0 { self.attach_root_after(p, started[p as usize]); }
         }
         (connected, first)
     }
 
-    fn attach_root(&mut self, port: u32) {
-        if !self.x.reset_port(port) {
+    fn attach_root(&mut self, port: u32) { self.attach_root_after(port, false) }
+
+    fn attach_root_after(&mut self, port: u32, started: bool) {
+        if !self.x.finish_reset(port, started) {
             log!("[sexusb.port.reset.fail] port={} portsc={:#x}", port, self.x.portsc(port));
             self.stats.failed += 1;
             return;
@@ -531,6 +540,7 @@ impl Usb {
     fn service_hub(&mut self, i: usize) {
         let pending = core::mem::take(&mut self.dev[i].hub_pending);
         let buf = self.dev[i].mem.unwrap().buf;
+        let mut debounced = false;
         for p in 1..=self.dev[i].hub_ports as u32 {
             if pending & (1 << p) == 0 || !self.dev[i].used { continue; }
             let Ok(4) = self.get(i, 0xA3, 0, 0, p as u16, buf.0, 4) else { continue };
@@ -543,6 +553,8 @@ impl Usb {
             let connected = status & 1 != 0;
             if !connected || change & 1 != 0 { if let Some(c) = child { self.detach(c); } }
             if connected && (child.is_none() || change & 1 != 0) {
+                // One debounce for every port of this pass, not one per device.
+                if !debounced { crate::xhci::sleep_ticks(10); debounced = true; }
                 if let Some(speed) = self.reset_hub_port(i, p as u16) {
                     let root = self.dev[i].root_port;
                     let _ = self.attach(root, i as u8 + 1, p as u8, speed);
@@ -553,8 +565,7 @@ impl Usb {
 
     fn reset_hub_port(&mut self, i: usize, p: u16) -> Option<u32> {
         let buf = self.dev[i].mem.unwrap().buf;
-        crate::xhci::sleep_ticks(10); // debounce
-        self.set(i, 0x23, 3, 4, p).ok()?; // PORT_RESET
+        self.set(i, 0x23, 3, 4, p).ok()?; // PORT_RESET (debounced by the caller)
         for _ in 0..100 {
             crate::xhci::sleep_ticks(2);
             if self.get(i, 0xA3, 0, 0, p, buf.0, 4).ok()? != 4 { continue; }
