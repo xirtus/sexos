@@ -12,6 +12,8 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/program_records.rs', 'fn-v1:50abfa8222c49ebe84edeabc79324366bf1e5519a09c19d63542f664c6215981'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+
     ('timed', 'kernel/src/program_records.rs', '37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8'),
 
     ('timed', 'kernel/src/program_records.rs', 'e4f79ad810b5bba8aab649b5472154ebece0d4ae1c7b96ccf0cacf3b076de769'),  # record table allocated zeroed via CapabilityTable::new_boxed (no wait change), 2026-11-17
@@ -20,7 +22,13 @@ PINS = (
 
     ('timed', 'kernel/src/program_records.rs', '46adbb04a4ef0f0e057f3282c9c19fc1f8044a8a9f4d4e77b0a4c679dee03215'),  # stream 2 scan merged with the v2 capability table, 2026-11-18
 
+    ('timed', 'kernel/src/program_records.rs', 'fb6aaf0bc13ba27eaf82ce9e9dfb3498125830ee711899aff368c0fdc25bb96f'),  # protection views merged with the stream 2 scan, 2026-11-19
+
+    ('timed', 'kernel/src/pd/create.rs', 'fn-v1:69758987a8d686a5f4b046db74d530379e4eff061dbe018b3019886371056906'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+
     ('timed', 'kernel/src/pd/create.rs', '3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e'),
+
+    ('timed', 'kernel/src/init.rs', 'fn-v1:fb2da8b1ece8812feee1502fa72b73deb6248639042d5ddd6e42422db14ed884'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
     ('timed', 'kernel/src/init.rs', '784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64'),
 
@@ -33,6 +41,24 @@ PINS = (
     ('timed', 'kernel/src/init.rs', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8'),
 
     ('timed', 'kernel/src/init.rs', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d'),
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:d1ae84d320565569056b4890ee32b11af3b66bc34eba297a890387e8851f71ab'),
+
+    ('timed', 'kernel/src/scheduler.rs', '1b10ca8d1b0d1eb3a092f0a61ed1ca7fe6a4b43c448bc24d560ead211940f8d9'),  # #429 merged with master (28ffcb59), reviewed by WS4, 2026-11-19
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:dea888ff27ad54e217839dc46b9a74e521d07b2be1c36256452fd7df937802f2'),  # master 586140ad: kernel stack guard page + boxed FPU area (no wait change), 2026-11-19
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:4670ed1968ba7f46d7097721884c9cf2c95de4bd69220374b07321f2f5eec750'),  # cross-core IPC polling + lean first look + bounded re-check (#429 / 80b89713), reviewed by WS4, 2026-11-18
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:8b328859b9fda2ff8e024287e6d020c11182c169ad993a0e786ad86033420fe6'),  # XSAVE/AVX heap save area + kernel stack canary (#427 / ed888ad5), reviewed by WS4, 2026-11-18
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:c92ee26a67f14c438179f32834b8b0a62f82d1dee42271d43863d4cc96f95a8f'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+
+    ('timed', 'kernel/src/scheduler.rs', '53aec880d2ea82474231d37aaae0862dcb8747185626ab6f4d79175a422ce8a8'),  # PKU gates: TSC_AUX on switch (P6.2a), 2026-11-19
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:458daaa0e25c5b534627e9cef612d5e71ba9f781e05b48689bee025a1fd4c70b'),  # master 53aec880: PKU gates TSC_AUX on switch (no wait change), 2026-11-19
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:3af49f2ffe4d2b73c67ec09f190aa8e46cf43a3a7b233f7d8a24532828203567'),  # #429 merged with master at 950c36ac (raw af1bffe7), wait change as reviewed at 28ffcb59, 2026-11-19
 
     ('timed', 'kernel/src/scheduler.rs', '586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae'),  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
 
@@ -48,13 +74,19 @@ PINS = (
 
     ('timed', 'kernel/src/task_ownership.rs', '57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6'),
 
+    ('timed', 'kernel/src/smp.rs', '261699be11866980d2a30b72cbb8d35ddccdc00aa1ee1cbceefadc716edc7d75'),  # protection views (tlb hook, rows spread), 2026-11-17
+
     ('timed', 'kernel/src/smp.rs', 'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325'),
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:235c80ce88b369d9d1da26b934e188c056b5e24330b1c242801deaf2e3854c86'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
     ('timed', 'kernel/src/interrupts.rs', 'c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d'),
 
     ('timed', 'kernel/src/interrupts.rs', 'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d'),
 
     ('timed', 'kernel/src/interrupts.rs', 'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),  # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
+
+    ('timed', 'kernel/src/syscalls/mod.rs', 'fn-v1:676eae4ad2ce1171bafcdd21eb7b0d61e5e387ff84e401eb926eecf173191fbb'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
     ('timed', 'kernel/src/syscalls/mod.rs', '5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577'),  # IPC v2 syscalls 105/106, 2026-11-18
 
@@ -67,6 +99,10 @@ PINS = (
     ('timed', 'kernel/src/syscalls/mod.rs', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0'),
 
     ('timed', 'kernel/src/syscalls/mod.rs', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f'),
+
+    ('timed', 'kernel/src/program_workers.rs', 'fn-v1:83a85118b86748220c90c74a4050ea004db73bb95957bcbf1d7e447a3b0c2d24'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+
+    ('timed', 'kernel/src/program_workers.rs', 'c8ddc4a8002159a6814b651d32ef6fa7cb5f8b131b28e2ced837698bcc1c289b'),  # S9 row task cap (no wait change), 2026-11-19
 
     ('timed', 'kernel/src/program_workers.rs', '6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e'),
 
@@ -167,5 +203,7 @@ PINS = (
     ('tree', '', '22a70bcd8ad7b76d717a4484845ef6920d18fca47b892b0ae4f993a4953a0909'),  # IPC v2 syscalls 105/106 wired (kernel plan phase 2), 2026-11-18
 
     ('tree', '', 'c74db80e5ed8fa929a2a5253c80949ec3beffe467cfef29ac192dae43234902c'),  # stream 2 merged with IPC v2 syscalls (#418/#421/#422), 2026-11-18
+
+    ('tree', '', 'c90aad02c6aa7df0113ccb215474c805633b552229da4af87ee9c5949ff1b73b'),  # protection views with PCID (plan Phase 5b), 2026-11-17
 
 )

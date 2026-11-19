@@ -36,9 +36,9 @@ APPROVED_TIMED_WAIT_SOURCES=_pins('timed')
 DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/interrupts.rs',
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
-# Reviewed whole-tree digests, kept as review receipts (self_wait_pins.py);
-# deadline_source_closure no longer requires the current tree to be one of them.
-APPROVED_KERNEL_RUST_TREES=_pins('tree').get('',())
+# Reviewed whole-tree digests, kept as review receipts; deadline_source_closure no
+# longer requires the current tree to be one of them.
+APPROVED_KERNEL_RUST_TREES=_pins('tree').get('',())  # review receipts, one per line in self_wait_pins.py
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -49,8 +49,35 @@ DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take
 #   `wait_observer::poll();`, plus every line that waits, yields, listens or
 #   reaches wait_observer, in order (whitespace removed).
 SHELL_WAIT_LINE=re.compile(r'wait_observer|sys_wait_self_ticks|pdx_listen|pdx_try_listen|sys_yield|sched_yield|wait_for_message')
+# Kernel causal files are pinned by their wait functions only (Andreas, 2026-11-18):
+# every `fn` whose body names a wait/park/wake/timer item. A short one is pinned
+# whole; a very long one (dispatch, init) by its signature and those lines. Other
+# functions change freely; a new function that waits changes the fingerprint.
+# self_wait.rs, task_ownership.rs (the park/wake state machine) and smp.rs stay whole.
+KERNEL_WAIT_TOKEN=re.compile(r'wait_deadline|self_wait|SELF_WAIT|take_due|wait_for_message|wake_record|poll_self_wait|ParkResult|\.park\(|\.wake\(|unpark|sexnet_id|resume_attached|yield_and_switch')
+KERNEL_FN_SCOPED=frozenset(('kernel/src/program_records.rs','kernel/src/pd/create.rs','kernel/src/init.rs','kernel/src/scheduler.rs',
+    'kernel/src/interrupts.rs','kernel/src/syscalls/mod.rs','kernel/src/program_workers.rs'))
+KERNEL_FN_WHOLE_LINES=200
+def _kernel_wait_functions(text):
+    out=[]
+    for m in re.finditer(r'\bfn\s+(\w+)\s*(?:<[^>{;]*>)?\s*\(',text):
+        start=text.find('{',m.end());semi=text.find(';',m.end())
+        if start<0 or 0<=semi<start:continue
+        depth=0;end=start
+        while end<len(text):
+            depth+=(text[end]=='{')-(text[end]=='}')
+            if depth==0:break
+            end+=1
+        body=text[m.start():end+1]
+        if not KERNEL_WAIT_TOKEN.search(body):continue
+        lines=body.splitlines()
+        kept=lines if len(lines)<=KERNEL_FN_WHOLE_LINES else [lines[0]]+[l for l in lines[1:] if KERNEL_WAIT_TOKEN.search(l)]
+        out.append(m.group(1)+':'+''.join(re.sub(r'\s+','',l) for l in kept))
+    return out
 def wait_fingerprint(name,data):
     text=data.decode()
+    if name in KERNEL_FN_SCOPED:
+        return 'fn-v1:'+hashlib.sha256('\n'.join(_kernel_wait_functions(text)).encode()).hexdigest()
     if name=='crates/sex-pdx/src/lib.rs':
         kept=[l.rstrip() for l in text.splitlines() if l.strip() and not re.fullmatch(r'\s*pub\s+mod\s+\w+\s*;\s*',l)]
         return 'wait-v1:'+hashlib.sha256('\n'.join(kept).encode()).hexdigest()
