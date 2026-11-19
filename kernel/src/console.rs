@@ -63,6 +63,22 @@ pub fn log_tail(out: &mut [u8]) -> usize {
     let log = match LOG.try_lock() { Some(l) => l, None => return 0 };
     copy_tail(&log, out)
 }
+/// The first HEAD_BYTES logged, kept whole: the start is where a PC with no serial port
+/// says what hardware it found (devices, disks, Wi-Fi), and the ring above has long
+/// moved past it by the time anyone asks. Spindle's `hw` reads it.
+const HEAD_BYTES: usize = 256 * 1024;
+struct Head { bytes: [u8; HEAD_BYTES], len: usize }
+static HEAD: Mutex<Head> = Mutex::new(Head { bytes: [0; HEAD_BYTES], len: 0 });
+
+/// Copies the boot log's head from `offset` into `out`: (bytes copied, head length so far).
+pub fn log_head(offset: usize, out: &mut [u8]) -> (usize, usize) {
+    let head = match HEAD.try_lock() { Some(h) => h, None => return (0, 0) };
+    let from = offset.min(head.len);
+    let n = out.len().min(head.len - from);
+    out[..n].copy_from_slice(&head.bytes[from..from + n]);
+    (n, head.len)
+}
+
 fn copy_tail(log: &Log, out: &mut [u8]) -> usize {
     let n = out.len().min(log.written).min(LOG_BYTES);
     for (i, slot) in out[..n].iter_mut().enumerate() {
@@ -248,6 +264,12 @@ pub fn write(bytes: &[u8]) {
             log.bytes[at] = b;
             log.written += 1;
         }
+    }
+    if let Some(mut head) = HEAD.try_lock() {
+        let at = head.len;
+        let n = bytes.len().min(HEAD_BYTES - at);
+        head.bytes[at..at + n].copy_from_slice(&bytes[..n]);
+        head.len += n;
     }
     if SHOWING.load(Ordering::Acquire) {
         if let Some(mut s) = SCREEN.try_lock() {
