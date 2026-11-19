@@ -33,6 +33,8 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('fn-v1:50abfa82
     'fn-v1:8b328859b9fda2ff8e024287e6d020c11182c169ad993a0e786ad86033420fe6',  # XSAVE/AVX heap save area + kernel stack canary (#427 / ed888ad5), reviewed by WS4, 2026-11-18
     'fn-v1:c92ee26a67f14c438179f32834b8b0a62f82d1dee42271d43863d4cc96f95a8f',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
     '53aec880d2ea82474231d37aaae0862dcb8747185626ab6f4d79175a422ce8a8',  # PKU gates: TSC_AUX on switch (P6.2a), 2026-11-19
+    'fn-v1:458daaa0e25c5b534627e9cef612d5e71ba9f781e05b48689bee025a1fd4c70b',  # master 53aec880: PKU gates TSC_AUX on switch (no wait change), 2026-11-19
+    'fn-v1:3af49f2ffe4d2b73c67ec09f190aa8e46cf43a3a7b233f7d8a24532828203567',  # #429 merged with master at 950c36ac (raw af1bffe7), wait change as reviewed at 28ffcb59, 2026-11-19
     '586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae',  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
     '13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1',  # IPC v2 syscalls 105/106, 2026-11-18
     '8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
