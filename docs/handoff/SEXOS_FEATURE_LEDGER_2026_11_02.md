@@ -5340,3 +5340,7 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Drivers can put a device they hold in D3hot and back (syscall 86 `OP_POWER`); the kernel saves and restores what a reset loses, MSI-X table included.
 - Sleeping the desktop now tells every driver holding a device (`OP_DEVICE_SLEEP`); the disk flushes first.
 - Verified by `cargo test -p sex-pcipm` and `scripts/laptop_power_gate.py`. Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.
+
+## Device power part 2: devices power down while asleep (2026-11-19)
+- While the laptop sleeps the touchpad is in HID sleep, USB sticks and other idle USB devices are suspended (U3, cache flushed first), the HDA codecs are in D3 and the Intel eDP panel's backlight and panel power are off; all come back on wake. Keyboards, mice, hubs, USB network and Bluetooth stay up.
+- Verified by `cargo test -p sex-gpu-intel -p sex-hid-touch` and `scripts/laptop_power_gate.py` (USB stick suspend and resume). Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.

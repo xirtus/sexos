@@ -62,7 +62,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'servers/sexusb/src/main.rs': ('3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81',
                                 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec',
                                 # OP_DEVICE_SLEEP logged in the inbox drain; quiet predicate unchanged, 2026-11-19
-                                '5a19e98946977aad3a0e5ea78b6943ef50eaa197e0c9298cd3a8b903336e9fb9')}
+                                '5a19e98946977aad3a0e5ea78b6943ef50eaa197e0c9298cd3a8b903336e9fb9',
+                                # sleep notice suspends idle ports (Usb::device_sleep, bounded link waits); quiet predicate unchanged, 2026-11-19
+                                '2c15ba53f84180a5feb262de17783e3821be45c5f4941d9660835d9c9bb541a6')}
 
 
 # Mechanical source closure only, not a general Rust/unsafe-code verifier.

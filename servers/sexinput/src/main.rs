@@ -620,6 +620,7 @@ pub extern "C" fn _start() -> ! {
             'input_message: {
             if req.type_id == sex_pdx::power::OP_DEVICE_SLEEP && req.caller_pd == 0 {
                 sex_pdx::serial_record!("[sexinput.sleep] asleep={}", req.arg0);
+                touchpad::device_sleep(req.arg0 == 1, sex_pdx::get_ticks());
                 break 'input_message;
             }
             if req.type_id == sex_pdx::touchpad::OP_FOUND {

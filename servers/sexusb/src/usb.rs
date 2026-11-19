@@ -14,6 +14,8 @@ use crate::hid::{PointerLayout, Pointer};
 mod ether;
 #[path = "bt.rs"]
 mod bt;
+#[path = "sleep.rs"]
+mod sleep;
 
 use crate::{send_report_to_sexinput, record_device_wheel, OP_USB_KEYBOARD_REPORT, OP_USB_MOUSE_REPORT};
 
@@ -151,6 +153,8 @@ pub struct Usb {
     bt_keys: [(u8, u8, u64); 8],
     /// Buttons held on each Bluetooth pointing device (device, mask).
     bt_buttons: [(u8, u8); 8],
+    /// Root ports suspended while the machine sleeps (bit per port).
+    suspended: u64,
 }
 
 const BOUNCE: u64 = sex_pdx::usb_disk::BUFFER_BYTES + 8192;
@@ -170,7 +174,7 @@ impl Usb {
         Usb { x, dev: [Device::empty(); MAX_DEVICES], slot_dev: [0; 256], root_pending: 0, sent_keys: 0,
             sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
             generation: 0, changed: false, freed: 0, ether: None, net_region: 0, ether_buffers: ((0, 0), (0, 0)),
-            bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)), bt_keys: [(0, 0, 0); 8], bt_buttons: [(0, 0); 8] }
+            bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)), bt_keys: [(0, 0, 0); 8], bt_buttons: [(0, 0); 8], suspended: 0 }
     }
 
     fn ctx(&self, base: u64, index: u64) -> *mut u32 { (base + index * self.x.csz) as *mut u32 }
@@ -970,6 +974,7 @@ impl Usb {
 
     /// One request from Files.
     pub fn disk_request(&mut self, op: u64, a0: u64, a1: u64, a2: u64, region: u64) -> u64 {
+        if self.suspended != 0 && matches!(op, ud::OP_READ | ud::OP_WRITE | ud::OP_SYNC) { self.resume_all(); }
         match op {
             ud::OP_DISKS => {
                 let mask = self.disks.iter().enumerate().fold(0u64, |m, (k, d)| if *d != 0 { m | 1 << k } else { m });

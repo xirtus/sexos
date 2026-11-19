@@ -4482,7 +4482,8 @@ pub extern "C" fn _start() -> ! {
             };
             drained += 1;
             if msg.type_id == sex_pdx::power::OP_DEVICE_SLEEP && msg.caller_pd == 0 {
-                sex_pdx::serial_record!("[sexdisplay.sleep] asleep={}", msg.arg0);
+                let intel = intel::device_sleep(msg.arg0 == 1);
+                sex_pdx::serial_record!("[sexdisplay.sleep] asleep={} intel={}", msg.arg0, intel as u8);
                 continue;
             }
             unsafe {

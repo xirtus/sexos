@@ -50,6 +50,8 @@ struct Pad {
     last_touch: u64,
     failures: u32,
     last_error: Option<sex_i2c_dw::Error>,
+    /// Suspended to idle: the pad is in HID `SET_POWER` sleep and is not read.
+    asleep: bool,
 }
 
 static mut PAD: Option<Pad> = None;
@@ -98,7 +100,7 @@ fn open(f: &Found) -> Result<Pad, &'static str> {
     serial_println!("[sexinput.touchpad.ready] vendor={:#06x} product={:#06x} extent={}x{} fingers={} touch_mode={} report={:?} input_len={}",
         tp.hid.vendor_id, tp.hid.product_id, tp.extent.0, tp.extent.1, tp.layout.fingers, tp.touch_mode as u8, tp.layout.touch_report, tp.input_len());
     let rec = Recognizer::new(Config::for_extent(tp.extent.0));
-    Ok(Pad { ctrl, address: f.address, tp, rec, next_poll: 0, last_touch: 0, failures: 0, last_error: None })
+    Ok(Pad { ctrl, address: f.address, tp, rec, next_poll: 0, last_touch: 0, failures: 0, last_error: None, asleep: false })
 }
 
 /// The ACPI service's word: bring that touchpad up (once).
@@ -135,10 +137,23 @@ fn translate(e: Event) -> Option<Out> {
     })
 }
 
+/// Suspend to idle (the kernel's `OP_DEVICE_SLEEP`): the pad sleeps and is not read
+/// until the machine wakes; waking it costs one `SET_POWER`.
+pub fn device_sleep(asleep: bool, now: u64) {
+    let Some(p) = (unsafe { (*core::ptr::addr_of_mut!(PAD)).as_mut() }) else { return };
+    if p.asleep == asleep { return; }
+    let mut bus = OnBus { c: &mut p.ctrl, address: p.address, last_error: &mut p.last_error };
+    let ok = if asleep { p.tp.sleep(&mut bus) } else { p.tp.wake(&mut bus) };
+    p.asleep = asleep;
+    // Asleep: no read is due, so Input waits its whole idle bound.
+    p.next_poll = if asleep { u64::MAX } else { now };
+    serial_println!("[sexinput.touchpad.power] asleep={} ok={}", asleep as u8, ok as u8);
+}
+
 /// One poll when due. Calls `out` for each resulting event.
 pub fn poll(now: u64, mut out: impl FnMut(Out)) {
     let Some(p) = (unsafe { (*core::ptr::addr_of_mut!(PAD)).as_mut() }) else { return };
-    if now < p.next_poll { return; }
+    if p.asleep || now < p.next_poll { return; }
     let mut bus = OnBus { c: &mut p.ctrl, address: p.address, last_error: &mut p.last_error };
     match p.tp.poll(&mut bus) {
         Ok(Some(frame)) => {
