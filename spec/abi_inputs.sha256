@@ -116,7 +116,7 @@ c7325b30965ac39376c5f7d5be7bb63a3b32fb08f5214bdf7e0d437ff42a52d6  crates/sex-pdx
 
 1a0fe38cf9766f5cb2f65a66caaa6ff8bd370e85f5a18d143f88efbf9e6f31ab  crates/sex-pdx/src/virtio.rs
 
-f655f8f5d654e156b32f5f680f344d06f34055becbccc48b0b07c1eea3536887  crates/sex-pdx/src/vm.rs
+c550be6f2dd09f4828c43b255c35f161f21aa071aa58b3c5f7213f42a804e5ef  crates/sex-pdx/src/vm.rs
 
 2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd  crates/sex-pdx/src/web.rs
 
@@ -176,9 +176,11 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 
 c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/service_restart.rs
 
+bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm.rs
+
 5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 
-a43b551780b77e722f38ff1bedeab0586a24c976264ac974f910dd476324f6a5  kernel/src/vmx.rs
+decb9e8eeaa1e1dc5e0dc2b479f9ea29f51ecbf60adcd565da7cd27601b33a3d  kernel/src/vmx.rs
 
