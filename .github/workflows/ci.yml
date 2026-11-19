@@ -61,8 +61,9 @@ jobs:
     needs: changes
     if: needs.changes.outputs.scope == 'full'
     runs-on: ubuntu-latest
-    # 23 min warm; a cold cargo cache (after a red master) needs more.
-    timeout-minutes: 45
+    # 23 min warm; a cold cargo cache (a new cache key, or after a red master) runs
+    # the Polyamour release tests past 45.
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
