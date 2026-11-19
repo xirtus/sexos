@@ -200,15 +200,15 @@ pub fn reserve_arena(pkey: u8) -> (u64, usize) {
 /// visible to a program on another core that shares the key). One lock orders makers,
 /// so two cores cannot both create one table.
 pub fn arena_leaf(va: u64, pkey: u8) -> Option<u64> {
-    use x86_64::registers::control::Cr3;
     static MAKE: spin::Mutex<()> = spin::Mutex::new(());
     if let Some(leaf) = existing_leaf_address(va) { return Some(leaf); }
     let _held = MAKE.lock();
     let hhdm = crate::HHDM_REQUEST.response()?.offset;
     // Present, writable, user: the leaf alone decides access and carries the key.
-    // A row on the shared key takes turns by its spans' user bit, which only
-    // `program_tenancy` sets: a span is made closed.
-    let mut table = Cr3::read().0.start_address().as_u64();
+    // A row on the shared key is kept apart by its spans' user bit, set only in its own
+    // view (`program_tenancy`): a span is made closed. Tables are made in the canonical
+    // root, and views copying a changed table follow it (`views::mirror`).
+    let mut table = crate::views::root_table();
     for shift in [39, 30, 21] {
         let link: u64 = if shift == 21 && pkey == sex_pdx::organs::SHARED_PROGRAM_KEY { 0b011 } else { 0b111 };
         let slot = (hhdm + table + ((va >> shift) & 511) * 8) as *mut u64;
@@ -218,12 +218,14 @@ pub fn arena_leaf(va: u64, pkey: u8) -> Option<u64> {
             zero_frame(frame);
             entry = frame | link;
             unsafe { core::ptr::write_volatile(slot, entry); }
+            crate::views::mirror(table, ((va >> shift) & 511) as usize);
         }
         if entry & (1 << 7) != 0 { return None; }
         if entry & link != link {
             // A kernel mapping made this table; user and write here only let the leaf decide.
             entry |= link;
             unsafe { core::ptr::write_volatile(slot, entry); }
+            crate::views::mirror(table, ((va >> shift) & 511) as usize);
         }
         table = entry & 0x000f_ffff_ffff_f000;
     }
@@ -903,22 +905,10 @@ pub fn init_paging(pager_pd: u32, client_pds: [u32; 2]) {
     crate::paging::initialize(pool,mappings,pager_pd,pkeys,physical,leaves);
 }
 
-/// The page-directory entry over `address`'s 2 MiB span, if its page table exists.
-pub(crate) fn span_entry(address: u64) -> Option<u64> {
-    existing_leaf_address(address)?;
-    use x86_64::registers::control::Cr3;
-    let hhdm = crate::HHDM_REQUEST.response()?.offset;
-    let mut table = Cr3::read().0.start_address().as_u64();
-    for shift in [39,30] {
-        table = unsafe { core::ptr::read_volatile((hhdm + table + ((address >> shift)&511)*8) as *const u64) } & 0x000f_ffff_ffff_f000;
-    }
-    Some(hhdm + table + ((address >> 21)&511)*8)
-}
-
+/// The leaf for `address`, in the canonical tables (page tables are shared by every view).
 pub(crate) fn existing_leaf_address(address: u64) -> Option<u64> {
-    use x86_64::registers::control::Cr3;
     let hhdm = crate::HHDM_REQUEST.response()?.offset;
-    let mut table = Cr3::read().0.start_address().as_u64();
+    let mut table = crate::views::root_table();
     for shift in [39,30,21] {
         let entry = unsafe { core::ptr::read_volatile((hhdm + table + ((address >> shift)&511)*8) as *const u64) };
         if entry & 1 == 0 || entry & (1<<7) != 0 { return None; }
