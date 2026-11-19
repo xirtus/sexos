@@ -22,7 +22,7 @@ threads.
 | --- | --- | --- | --- |
 | D5 | SVM backend for SYS_VM: VMCB, nested paging, VMRUN with GIF held, exits translated to the VMX-shaped record | `drag_host_gate.sh`; `drag_gate.py --accel tcg --require-guest` (QEMU TCG emulates SVM) | PR #440 |
 | A1 | `crates/sex-gpu-amd`: chip table, DCN layouts, firmware scanout readout (OTG, HUBP, VM aperture), DCN AUX engine (DPCD, EDID), vsync flips | `kms_host_gate.sh` (simulated registers) | this PR |
-| A2 | Boot receipt: lease the Radeon's BAR 5 to sexdisplay read-only (like Intel's L2 receipt), print `[display.amd.*]` (chip, OTGs lit, timing, surface, aperture, AUX DPCD/EDID) | QEMU cannot emulate a Radeon; receipt from a Ryzen laptop | next |
+| A2 | Boot receipt: lease the Radeon's BAR 5 to sexdisplay read-only (like Intel's L2 receipt), print `[display.amd.*]` (chip, OTGs lit, timing, surface, aperture, AUX DPCD/EDID) | QEMU cannot emulate a Radeon; receipt from a Ryzen laptop | code in (lease kind `AmdDisplay`, slot 28, BAR 5 first 256 KiB; `servers/sexdisplay/src/amd.rs`); receipt waits for hardware |
 | A3 | Takeover: allocate scanout buffers in the carve-out (APU) or VRAM (dGPU) through the aperture, flip at vblank, tear-free in sexdisplay | receipt | |
 | A4 | Pads and connectors: DC_GPIO AUX/DDC mux, DIG/AUX/HPD per connector from the VBIOS object table, HDMI DDC through the DC_I2C engine, hotplug | host + receipt | |
 | A5 | Pixel clock and modeset: DCCG DTO readout (exact clock without EDID), then full modeset (DIG, PHY link training) | host + receipt | |

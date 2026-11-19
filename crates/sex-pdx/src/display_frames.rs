@@ -18,6 +18,11 @@ pub const SCANOUT_REGION_ID:u32=0x4210;
 /// (pipes, transcoders, planes, DDI/AUX, PCH GMBUS/hotplug/backlight).
 pub const INTEL_SLOT:u64=27;
 pub const INTEL_REGISTERS:u64=0xd0000;
+/// AMD display engine lease in Display: the first 256 KiB of the Radeon's register
+/// BAR (BAR 5), which holds DCN's OTG, HUBP, AUX and VM aperture registers.
+pub const AMD_SLOT:u64=28;
+pub const AMD_REGISTER_BAR:u8=5;
+pub const AMD_REGISTERS:u64=0x40000;
 pub const MAX_WIDTH:u64=8192;
 pub const MAX_HEIGHT:u64=4320;
 pub const PAGE:u64=4096;
