@@ -233,6 +233,8 @@ jobs:
       run: bash scripts/wifi_host_gate.sh
     - name: Cufflinks Bluetooth host stack (HCI goldens, SMP vectors, Intel firmware load, pairing)
       run: bash scripts/bt_host_gate.sh
+    - name: Thunderbolt 4 host driver core (control ring, CRC-32C, firmware connection manager model)
+      run: bash scripts/thunderbolt_host_gate.sh
     - name: Batik layered image editor engine (12 blend modes, brush, adjustments, PSD, ORA) on the host
       run: bash scripts/batik_host_gate.sh
     - name: Power off and restart through ACPI (host half)

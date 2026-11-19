@@ -1,0 +1,8 @@
+[package]
+name = "sex-thunderbolt"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Thunderbolt 4 / USB4 host (Intel NHI) driver core for SexOS: rings, control frames, firmware connection manager"
+
+[dependencies]
