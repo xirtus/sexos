@@ -101,6 +101,9 @@ pub struct Link {
     family: Family,
     protected: bool,
     seq: u16,
+    /// QoS data (stage X1): sequence numbers count per TID.
+    qos: bool,
+    qos_seq: [u16; 8],
     /// Last CCMP packet number per key id and TID (non-QoS frames use TID 0).
     pn: [[Option<u64>; 16]; 4],
     pub sent: u64,
@@ -167,7 +170,7 @@ pub fn declared(e: &[u8]) -> Option<usize> {
 impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
-        Self { tx, target, me, family, protected, seq: 0x400, pn: [[None; 16]; 4], sent: 0, received: 0, dropped: 0, last_drop: None, down: None,
+        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, received: 0, dropped: 0, last_drop: None, down: None,
             rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE,
             multicast: Setup::Wanted, missed_beacons: 0 }
     }
@@ -188,9 +191,17 @@ impl Link {
     /// Sends one Ethernet II frame to the AP.
     pub fn send<D: Dma>(&mut self, b: &Bringup, r: &mut impl Registers, dma: &mut D, ethernet: &[u8]) -> Result<(), tx::Error> {
         if ethernet.len() < 14 || ethernet.len() > MAX_ETHERNET { return Err(tx::Error::TooLong); }
-        let mut out = [0u8; 24 + 8 + MAX_ETHERNET];
-        self.seq = (self.seq + 1) & 0xfff;
-        let (hdr, total) = w::from_ethernet(ethernet, &self.target.bssid, self.seq, &mut out).ok_or(tx::Error::TooLong)?;
+        let mut out = [0u8; 26 + 8 + MAX_ETHERNET];
+        let (hdr, total) = if self.qos {
+            // EAPOL goes as voice, as wpa_supplicant and the kernel send it.
+            let tid = if ethernet[12..14] == eapol::ETHERTYPE.to_be_bytes() { 7 } else { w::user_priority(ethernet) };
+            let seq = &mut self.qos_seq[tid as usize];
+            *seq = (*seq + 1) & 0xfff;
+            w::from_ethernet_qos(ethernet, &self.target.bssid, *seq, tid, &mut out)
+        } else {
+            self.seq = (self.seq + 1) & 0xfff;
+            w::from_ethernet(ethernet, &self.target.bssid, self.seq, &mut out)
+        }.ok_or(tx::Error::TooLong)?;
         // Our own address as the source, whatever the stack wrote.
         out[10..16].copy_from_slice(&self.me);
         let (rate_flag, rate) = if self.rate_control == RateControl::On { (0, 0) } else { (tx::FLAG_CMD_RATE, DATA_RATE) };
@@ -253,7 +264,9 @@ impl Link {
             match decap(f, rx.status, protected, &mut eth) {
                 Ok((n, tid, number)) => {
                     if let Some((key, number)) = number {
-                        if pn[key][tid].is_some_and(|last| number <= last) { dropped += 1; last_drop = Some(Drop::Replay); return; }
+                        // A-MSDU subframes after the first share the frame's packet number.
+                        let same_ok = rx.subframe.is_some_and(|i| i > 0);
+                        if pn[key][tid].is_some_and(|last| number < last || (number == last && !same_ok)) { dropped += 1; last_drop = Some(Drop::Replay); return; }
                         pn[key][tid] = Some(number);
                     }
                     let key = n > 14 && eth[12..14] == eapol::ETHERTYPE.to_be_bytes() && eth[6..12] == bssid;

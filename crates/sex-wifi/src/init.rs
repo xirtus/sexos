@@ -200,6 +200,32 @@ impl Init {
         if let Some(n) = self.nvm { if n.rx_chains != 0 { rx &= n.rx_chains; } }
         rx
     }
+    /// Transmit antennas, the same way (`iwx_fw_valid_tx_ant`).
+    pub fn valid_tx_antennas(&self) -> u8 {
+        let mut tx = self.features.tx_antennas();
+        if let Some(n) = self.nvm { if n.tx_chains != 0 { tx &= n.tx_chains; } }
+        tx
+    }
+
+    /// What this chip, NVM and firmware let us offer an AP (stage X1): HT when
+    /// the NVM's SKU has 802.11n, two streams unless MIMO is off, 160 MHz with
+    /// 802.11ac, HE with 802.11ax and a STA_HE_CTXT_CMD the firmware knows.
+    pub fn ours(&self, fw: &Firmware<'_>) -> crate::ax::Ours {
+        use crate::ax::{Ours, Width};
+        let Some(n) = self.nvm else { return Ours::default() };
+        if n.sku_flags & SKU_11N == 0 { return Ours::default(); }
+        let (mut tx, mut rx) = (self.valid_tx_antennas(), self.valid_rx_antennas());
+        if n.sku_flags & SKU_MIMO_DISABLED != 0 { tx &= tx.wrapping_neg(); rx &= rx.wrapping_neg(); } // lowest antenna only
+        let he = fw.command_version(h::DATA_PATH_GROUP, crate::ax::STA_HE_CTXT_CMD).map_or(0, |v| v.version);
+        let tlc = fw.command_version(h::DATA_PATH_GROUP, crate::tlc::TLC_MNG_CONFIG_CMD).map_or(3, |v| if v.version == 4 { 4 } else { 3 });
+        Ours {
+            tx_antennas: tx, rx_antennas: rx,
+            max_width: if n.sku_flags & SKU_11AC != 0 { Width::W160 } else { Width::W40 },
+            he_ctxt: if n.sku_flags & SKU_11AX != 0 && (1..=3).contains(&he) { he } else { 0 },
+            he_mbssid: self.features.api(u::API_MBSSID_HE),
+            tlc,
+        }
+    }
 
     /// A scan of every channel the NVM and regulatory domain allow (stage W4).
     pub fn scan(&self, now_us: u64) -> crate::scan::Scan {

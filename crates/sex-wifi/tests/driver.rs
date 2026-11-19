@@ -472,7 +472,7 @@ fn authentication_and_association_frames() {
     let mut rsn = [0u8; 32];
     let rn = w::own_rsn(true, &mut rsn);
     let bss = w::parse_bss(&beacon(b"wpa3", 36, Some(&rsn[..rn]), true)).unwrap();
-    let n = w::assoc_request(&mut buf, &bss, &STA, 3, &rsn[..rn]);
+    let n = w::assoc_request(&mut buf, &bss, &STA, 3, &rsn[..rn], &[], &[]);
     let ies: Vec<u8> = w::elements(&buf[28..n]).map(|(id, _)| id).collect();
     assert_eq!(ies, [0, 1, 48, 244]);
     let mut resp = [0u8; 30];
@@ -1599,7 +1599,7 @@ fn join_uses_only_the_antennas_the_nvm_allows() {
 fn join_command_layouts() {
     // ACK rates (iwx_ack_rates): basic 1/2 Mb/s and 6 Mb/s on 2.4 GHz.
     let mut t = join::Target { bssid: [2, 0, 0, 0, 0, 1], channel: 1, beacon_interval: 100, dtim_period: 1, rates: 0,
-        basic_cck: 0b0011, basic_ofdm: 0b1, short_slot: true, short_preamble: true };
+        basic_cck: 0b0011, basic_ofdm: 0b1, short_slot: true, short_preamble: true, peer: Default::default(), ours: Default::default() };
     assert_eq!(join::ack_rates(&t), (0b0011, 0b1));
     // Only 11 Mb/s basic: every lower CCK rate joins; only 24 Mb/s OFDM: 6 and 12 join.
     t.basic_cck = 0b1000; t.basic_ofdm = 1 << 4;
@@ -1726,7 +1726,7 @@ fn tx_command_layouts_and_rates() {
     assert_eq!(tx::byte_count(devices::Family::Ax210, 30, 3), 30);
     assert_eq!(tx::byte_count(devices::Family::Gen22000, 30, 3), 8);
     assert_eq!(tx::byte_count(devices::Family::Ax210, 30, 7), 30 | 1 << 14);
-    let mut t = join::Target { bssid: AP, channel: 36, beacon_interval: 100, dtim_period: 1, rates: 0, basic_cck: 0, basic_ofdm: 0b101, short_slot: true, short_preamble: false };
+    let mut t = join::Target { bssid: AP, channel: 36, beacon_interval: 100, dtim_period: 1, rates: 0, basic_cck: 0, basic_ofdm: 0b101, short_slot: true, short_preamble: false, peer: Default::default(), ours: Default::default() };
     assert_eq!(tx::management_rate(&t), 1 << 14 | 1 << 8, "OFDM 6 Mb/s");
     t.channel = 1; t.basic_cck = 0b1100;
     assert_eq!(tx::management_rate(&t), 1 << 14 | 2, "CCK 5.5 Mb/s");

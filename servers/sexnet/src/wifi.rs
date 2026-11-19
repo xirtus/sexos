@@ -413,6 +413,7 @@ impl Wifi {
                 j.versions.phy, j.versions.rlc, j.versions.scd_queue, now_ticks);
             if let Some(bss) = self.joined_bss {
                 let (mac, family) = (i.mac, self.bringup.boot.chip.family);
+                let (versions, rx_antennas) = (j.versions, i.valid_rx_antennas());
                 let a = if bss.security == Security::Wpa3Personal {
                     match self.sae_for(&bss, &mac) {
                         Some(sae) => Assoc::with_sae(bss, t, mac, family, now_ticks * 1000, sae, bss.h2e),
@@ -424,6 +425,7 @@ impl Wifi {
                         }
                     }
                 } else { Assoc::new(bss, t, mac, family, now_ticks * 1000) };
+                let a = a.with_phy(versions, rx_antennas);
                 sex_pdx::serial_record!("[wifi.assoc.start] security={:?} step={:?} ticks={}", bss.security, a.step, now_ticks);
                 self.assoc = Some(a);
                 self.finished = false;
@@ -448,7 +450,9 @@ impl Wifi {
         self.finished = true;
         let ssid = core::str::from_utf8(&self.joined_ssid).unwrap_or("?").trim_end_matches('\0');
         if a.step == assoc::Step::Associated {
-            sex_pdx::serial_record!("[wifi.associated] ssid=\"{}\" aid={} frames={} security={:?} ticks={}", ssid, a.aid, a.tx.sent, a.bss.security, now_ticks);
+            let m = a.mode();
+            sex_pdx::serial_record!("[wifi.associated] ssid=\"{}\" aid={} frames={} security={:?} wifi={} width={} qos={} ticks={}",
+                ssid, a.aid, a.tx.sent, a.bss.security, m.generation(), m.width.mhz(), m.qos as u8, now_ticks);
             if a.bss.security != ieee80211::Security::Open { self.start_rsna(now_ticks); }
             else if let Some(a) = self.assoc.as_mut() {
                 let family = self.bringup.boot.chip.family;
@@ -588,12 +592,13 @@ impl Wifi {
         if n.bss.security != ieee80211::Security::Open && self.password_len == 0 { return false; }
         let Ok(fw) = Firmware::parse(self.file) else { return false };
         let versions = join::Versions::of(&fw, &i.features, self.hw_rev);
-        let target = join::Target::of(&n.bss, n.heard_on);
+        let target = join::Target::of(&n.bss, n.heard_on).with_ours(i.ours(&fw));
         self.joined_ssid = [0; 32];
         self.joined_ssid[..n.bss.ssid().len()].copy_from_slice(n.bss.ssid());
         self.joined_bss = Some(n.bss);
         let j = Join::new(target, versions, i.mac, i.valid_rx_antennas(), now_ticks * 1000);
-        sex_pdx::serial_record!("[wifi.join.start] index={} channel={} step={:?} ticks={}", index, target.channel, j.step, now_ticks);
+        let m = target.mode();
+        sex_pdx::serial_record!("[wifi.join.start] index={} channel={} step={:?} wifi={} width={} ticks={}", index, target.channel, j.step, m.generation(), m.width.mhz(), now_ticks);
         self.join = Some(j);
         self.finished = false;
         true
@@ -681,7 +686,7 @@ impl Wifi {
             return ws::State { phase, networks, scans: self.scans, channels };
         }
         if let Some(a) = &self.assoc {
-            let phase = match a.step { assoc::Step::Associated if self.link.as_ref().is_some_and(|l| !l.up()) => ws::FAILED, assoc::Step::Associated => ws::ASSOCIATED, assoc::Step::Auth | assoc::Step::Assoc | assoc::Step::Station | assoc::Step::Mac => ws::ASSOCIATING, _ => ws::FAILED };
+            let phase = match a.step { assoc::Step::Associated if self.link.as_ref().is_some_and(|l| !l.up()) => ws::FAILED, assoc::Step::Associated => ws::ASSOCIATED, assoc::Step::SaeCommit | assoc::Step::SaeConfirm | assoc::Step::Auth | assoc::Step::Assoc | assoc::Step::Phy | assoc::Step::Station | assoc::Step::He | assoc::Step::Mac => ws::ASSOCIATING, _ => ws::FAILED };
             let (networks, channels) = self.scan.as_ref().map_or((0, 0), |sc| (sc.count.min(255) as u8, sc.channels));
             return ws::State { phase, networks, scans: self.scans, channels };
         }
