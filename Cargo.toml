@@ -72,6 +72,7 @@ members = [
     "crates/sex-iommu",
     "crates/sex-kms",
     "crates/sex-gpu-intel",
+    "crates/sex-hotplug",
     "crates/sex-gpu-nv",
     "crates/sex-vmd",
     "crates/sex-imsm",

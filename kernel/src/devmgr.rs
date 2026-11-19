@@ -20,6 +20,8 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
     serial_println!("[hw.census] devices={} working={} in_progress={} planned={} unsupported={} warnings={}",
         census.devices, census.working, census.in_progress, census.planned, census.unsupported, census.warnings);
 
+    // Thunderbolt/USB4 and dock ports that take devices after BOOT.
+    crate::hotplug::init(&devices);
     let behind_vmd = devices.iter().any(|d| sex_hwdb::is_vmd(id(d)));
     let services = Services { drive: sexdrive_pd_id, display: sexdisplay_pd_id, usb: sexusb_pd_id, net: sexnet_pd_id, bell: sexbell_pd_id, input: sexinput_pd_id };
     let mut held = [0u8; sex_hwdb::manifest::ALL.len()];
@@ -188,7 +190,7 @@ fn intel_display_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, 
 /// One line per device naming it, the service that owns its kind, and how far that
 /// support goes, so a first boot on new hardware says what works. Description only:
 /// leases are decided below, never by the table.
-fn census_line(census: &mut sex_hwdb::Census, dev: &crate::hal::pci::PciDevice) {
+pub(crate) fn census_line(census: &mut sex_hwdb::Census, dev: &crate::hal::pci::PciDevice) {
     let id = sex_hwdb::Id { vendor: dev.vendor_id, device: dev.device_id, class: dev.class_id, subclass: dev.subclass_id, prog_if: dev.prog_if };
     let d = census.add(id);
     let model = if d.model.is_empty() { sex_hwdb::class_name(id.class, id.subclass, id.prog_if) } else { d.model };
