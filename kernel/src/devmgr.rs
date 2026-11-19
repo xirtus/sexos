@@ -87,6 +87,10 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, manifest.service.name(), owner, slot, entry.lease, held[index]);
         if slot != 0 { crate::device_irq::record(owner, slot, &dev, if safe { 0 } else { manifest.vectors }); }
     }
+    for &(service, lines) in sex_hwdb::manifest::LINES {
+        let index = sex_hwdb::manifest::ALL.iter().position(|m| m.service == service).unwrap_or(0);
+        if held[index] != 0 { crate::device_irq::reserve_lines(services.owner(service), lines); }
+    }
     serial_println!("[devmgr.manifest] services={} drive={} usb={} net={} bell={} display={} input={}",
         sex_hwdb::manifest::ALL.len(), held[0], held[1], held[2], held[3], held[4], held[5]);
 
