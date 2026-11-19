@@ -174,8 +174,26 @@ pub unsafe fn tag_virtual_address(va: u64, pkey: u8) {
     core::arch::asm!("invlpg [{}]", in(reg) va, options(nostack, preserves_flags));
 }
 
+/// Replaces the huge-page entry at `slot` (`size` bytes, 1 GiB or 2 MiB) with a table
+/// of 512 entries mapping the same frames with the same flags: 2 MiB pages, or 4 KiB
+/// ones, whose PAT bit is bit 7 instead of 12. Returns the new entry.
+unsafe fn split_huge(slot: *mut u64, size: u64, va: u64) -> u64 {
+    let hhdm = crate::HHDM_REQUEST.response().unwrap().offset;
+    let entry = *slot;
+    let (child, base) = (size >> 9, entry & 0x000F_FFFF_FFFF_F000 & !(size - 1));
+    let mut flags = entry & !0x000F_FFFF_FFFF_F000;
+    if child == 4096 { flags &= !(1 << 7); if entry & (1 << 12) != 0 { flags |= 1 << 7; } } else { flags |= entry & (1 << 12); }
+    let table = crate::memory::allocator::GLOBAL_ALLOCATOR.alloc(0).expect("PKU_SPLIT_TABLE");
+    let leaves = (table + hhdm) as *mut u64;
+    for i in 0..512 { *leaves.add(i) = base + i as u64 * child | flags; }
+    let new = table | 0x3;
+    *slot = new;
+    core::arch::asm!("invlpg [{0}]", in(reg) va, options(nostack, preserves_flags));
+    new
+}
+
 /// Set USER_ACCESSIBLE, WRITABLE, and PKEY on the terminal page table entry
-/// for the given virtual address. Handles 4KiB, 2MiB, and 1GiB pages correctly.
+/// for the given virtual address. A 2MiB or 1GiB page holding it is split first.
 /// Must be called from ring 0 (kernel context).
 pub unsafe fn set_page_user_accessible(va: u64, pkey: u8) {
     use x86_64::registers::control::Cr3;
@@ -198,37 +216,19 @@ pub unsafe fn set_page_user_accessible(va: u64, pkey: u8) {
     let pdpt_virt = ((pml4e & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *mut u64;
     let mut pdpte = *pdpt_virt.add(pdpt_idx);
     if (pdpte & 1) == 0 { return; }
+    // A huge page is split first, before any bit changes: the user bit and key go on
+    // this 4 KiB page only, never on whatever else shares the huge page (audit S17).
+    if (pdpte & (1 << 7)) != 0 { pdpte = split_huge(pdpt_virt.add(pdpt_idx), 1 << 30, va); }
     pdpte |= 0x6;
     *pdpt_virt.add(pdpt_idx) = pdpte;
-
-    // 1GiB huge page — set flags and PKEY on PDPTE
-    if (pdpte & (1 << 7)) != 0 {
-        let mut entry = pdpte;
-        entry |= 0x6 | (1 << 63); // USER_ACCESSIBLE | WRITABLE | NO_EXECUTE: data, never code
-        entry &= !(0xF << 59);   // clear old PKEY
-        entry |= (pkey as u64 & 0xF) << 59; // set new PKEY
-        *pdpt_virt.add(pdpt_idx) = entry;
-        core::arch::asm!("invlpg [{0}]", in(reg) va, options(nostack, preserves_flags));
-        return;
-    }
 
     // PD
     let pd_virt = ((pdpte & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *mut u64;
     let mut pde = *pd_virt.add(pd_idx);
     if (pde & 1) == 0 { return; }
+    if (pde & (1 << 7)) != 0 { pde = split_huge(pd_virt.add(pd_idx), 1 << 21, va); }
     pde |= 0x6;
     *pd_virt.add(pd_idx) = pde;
-
-    // 2MiB huge page — set flags and PKEY on PDE
-    if (pde & (1 << 7)) != 0 {
-        let mut entry = pde;
-        entry |= 0x6 | (1 << 63);
-        entry &= !(0xF << 59);
-        entry |= (pkey as u64 & 0xF) << 59;
-        *pd_virt.add(pd_idx) = entry;
-        core::arch::asm!("invlpg [{0}]", in(reg) va, options(nostack, preserves_flags));
-        return;
-    }
 
     // PT (4KiB page)
     let pt_virt = ((pde & 0xFFFF_FFFF_FFFF_F000) + hhdm_offset) as *mut u64;
