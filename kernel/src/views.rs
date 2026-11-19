@@ -27,9 +27,10 @@ struct View { copies: Vec<(u64, u64, u32, u64)>, spans: Vec<u64> }
 static VIEWS: Mutex<[View; COUNT]> = Mutex::new([const { View { copies: Vec::new(), spans: Vec::new() } }; COUNT]);
 static ROOT: [AtomicU64; COUNT] = [const { AtomicU64::new(0) }; COUNT];
 static PCID: AtomicBool = AtomicBool::new(false);
+static INVPCID: AtomicBool = AtomicBool::new(false);
 /// Per local APIC id: the views that core must flush when it next enters them.
 static STALE: [AtomicU64; CORES] = [const { AtomicU64::new(!0) }; CORES];
-/// Per local APIC id: the views that core has entered, for one line each.
+/// Per local APIC id: the views that core has entered (it may cache their translations).
 static ENTERED: [AtomicU64; CORES] = [const { AtomicU64::new(0) }; CORES];
 static SWITCHES: AtomicU64 = AtomicU64::new(0);
 static FLUSHED: AtomicU64 = AtomicU64::new(0);
@@ -77,8 +78,10 @@ pub fn init() {
     }
     ROOT[0].store(root, Ordering::Release);
     let pcid = core::arch::x86_64::__cpuid(1).ecx & (1 << 17) != 0;
+    let invpcid = pcid && core::arch::x86_64::__cpuid_count(7, 0).ebx & (1 << 10) != 0;
     PCID.store(pcid, Ordering::Release);
-    crate::serial_println!("[boot.views] views={} pcid={} root={:#x}", COUNT, pcid as u8, root);
+    INVPCID.store(invpcid, Ordering::Release);
+    crate::serial_println!("[boot.views] views={} pcid={} invpcid={} root={:#x}", COUNT, pcid as u8, invpcid as u8, root);
 }
 
 /// `va`'s span opens in `view`, which gets private tables down to it as needed. True
@@ -192,14 +195,39 @@ pub fn enter(view: usize) {
     });
 }
 
-/// This core drops `va` (everything for `u64::MAX`) from the current view now, and from
-/// its other views when it next enters them. `smp::tlb` runs this on every core.
+/// INVPCID `kind` for `pcid` and `va`.
+unsafe fn invpcid(kind: u64, pcid: u64, va: u64) {
+    let descriptor: [u64; 2] = [pcid, va];
+    unsafe { core::arch::asm!("invpcid {0}, [{1}]", in(reg) kind, in(reg) descriptor.as_ptr(), options(nostack, preserves_flags)); }
+}
+
+/// This core drops `va` (everything for `u64::MAX`) from every view. With INVPCID that is
+/// done at once, in each view this core has run; without it, the current view drops it
+/// now and the others are flushed whole when the core next enters them. `smp::tlb` runs
+/// this on every core.
 pub fn invalidate(va: u64) {
-    if va == u64::MAX { let now = cr3(); unsafe { set_cr3(now & !rules::NOFLUSH); } }
-    else { x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(va)); }
-    if ROOT[0].load(Ordering::Relaxed) == 0 || !tagged() { return; }
+    let tags = ROOT[0].load(Ordering::Relaxed) != 0 && tagged();
+    let precise = tags && INVPCID.load(Ordering::Relaxed);
+    if va == u64::MAX {
+        if precise { unsafe { invpcid(rules::INVPCID_ALL_NONGLOBAL, 0, 0); } return; }
+        let now = cr3(); unsafe { set_cr3(now & !rules::NOFLUSH); }
+    } else {
+        // Global (kernel) translations go only by INVLPG, in any PCID.
+        x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(va));
+    }
+    if !tags { return; }
     let current = (cr3() & 0xFFF) as usize;
-    STALE[crate::apic::local_id() as usize % CORES].fetch_or(rules::stale_after_invalidate(current), Ordering::AcqRel);
+    let core = crate::apic::local_id() as usize % CORES;
+    if precise {
+        let mut others = rules::invpcid_views(ENTERED[core].load(Ordering::Acquire), current);
+        while others != 0 {
+            let view = others.trailing_zeros() as u64;
+            others &= others - 1;
+            unsafe { invpcid(rules::INVPCID_ADDRESS, view, va); }
+        }
+        return;
+    }
+    STALE[core].fetch_or(rules::stale_after_invalidate(current), Ordering::AcqRel);
 }
 
 pub fn census() -> (u64, u64) { (SWITCHES.load(Ordering::Relaxed), FLUSHED.load(Ordering::Relaxed)) }
