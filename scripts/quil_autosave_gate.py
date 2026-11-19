@@ -99,7 +99,11 @@ def boot(iso,disk,out,tag,resolution):
   if proc.poll()is not None:raise RuntimeError(tag+' guest exited')
   # Only text not yet checked, backing up a little for a marker split across reads.
   start=max(0,checked_health['off']-64);now=since(start);checked_health['off']=start+len(now)
-  check_serial_health(now,tag)
+  try:check_serial_health(now,tag)
+  except RuntimeError:
+   # The lines before a guest fault, for CI logs (the serial file may not be kept).
+   back=since(max(0,start-24_000)).splitlines()[-80:]
+   print(f'--- {tag}: last serial lines before the guest failure ---',*back,sep='\n',file=sys.stderr,flush=True);raise
  checked_launches={'off':0}
  def wait(pattern,start=0,timeout=120,*,raw=False):
   match=wait_serial(text,health,pattern,start,timeout,tag=tag,raw=raw,since=since)
