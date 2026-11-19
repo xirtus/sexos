@@ -26,7 +26,7 @@ Spindle `hw` report (runbook: `X17_BARE_METAL_RUNBOOK_2026_11_18.md`) confirms t
 | Fans and temperatures (AWCC) | WMI A70591CE (`WMAX`) | this thread | This PR: fans, sensors, profiles read and logged |
 | Thermal profiles (quiet / balanced / performance) | AWCC method 0x15 | this thread | This PR: follow the desktop's power profile |
 | Battery, AC, lid | PNP0C0A, ACPI0003, PNP0C0D | PR #179 (done) | Works in QEMU |
-| Battery charge limits | Dell SMBIOS tokens 0x0341-0x034A | this thread | PR 2: read and set through `CTL_CHARGE`; desktop control pending |
+| Battery charge limits | Dell SMBIOS tokens 0x0341-0x034A | this thread | Read and set through `CTL_CHARGE`; launcher rows Battery Full Charge / Adaptive Charge / Stop at 80% |
 | Suspend to idle | LPS0 _DSM | PR #179 (done) | Devices to D3 while asleep still open |
 
 ## This PR: WMI, Alienware fans and profiles, Dell hotkeys
@@ -98,7 +98,7 @@ native mode and refresh in the `hw` report so we know which of the three panels 
 
 ## Next in this thread, in order
 
-1. Desktop control for charge mode (Settings or launcher, sends `CTL_CHARGE`).
+1. Done: launcher rows send `CTL_CHARGE` (Battery Full Charge, Adaptive Charge, Stop at 80%).
 2. Webcam: an isochronous transfer ring in sexusb's xHCI (Configure Endpoint type 5,
    SetInterface, VS probe/commit), then bind `sexuvc` to the real camera.
 3. AlienFX lighting once the USB ids are known.

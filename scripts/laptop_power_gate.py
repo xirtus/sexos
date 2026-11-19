@@ -9,7 +9,7 @@ notification once, as a laptop's EC event method does for the Fn key.
 Boot 1 checks: the ACPI service finds every device and reports 50%, 2:00 left, 96% health,
 on battery; Notify reaches the service (it used to stop the interpreter) and raises the
 brightness; the panel shows "50%  2:00 left"; the Shell sees the lid close and open; the
-launcher's Power Saver and Brightness Down reach the kernel and the firmware; the power
+launcher's Power Saver, Brightness Down and Battery Stop at 80% reach the kernel and the firmware; the power
 button opens the power dialog instead of cutting power, and Enter on it shuts down cleanly.
 An Alienware WMI device (AWCC) is found with its fans, sensors and profiles, its hotkey
 event decodes to mic mute, and Power Saver also puts the fans in the firmware's quiet
@@ -138,6 +138,11 @@ def main():
   g['wait'](r'\[shell\.laptop\.command\] what=brightness_down ok=1',s,30)
   g['wait'](r'\[sexacpi\.backlight\.set\] level=50 by=desktop bcm=1 bqc=50',s,30)
   g['wait'](r'\[sexacpi\.sensors\] [^\n]*brightness=50 ',s,30)
+  # Battery Stop at 80%: Dell custom charging, 70-80%, read back from the tokens.
+  s=len(g['text']());palette_select(key,'ChargeLimit',commands);g['q'].key('ret')
+  g['wait'](r'\[shell\.laptop\.command\] what=charge_limit_80 ok=1',s,30)
+  g['wait'](r'\[sexacpi\.charge\.set\] value=80 mode=custom ok=1',s,30)
+  result['charge_limit']=g['wait'](r'\[sexacpi\.charge\.state\] modes=[^ ]+ mode=custom start=70 end=80',s,30)[0]
   fw=g['firmware']()
   if fw.count('B')<2:raise RuntimeError(f'_BCM did not run twice: {fw!r}')
   if fw.count('P')<2:raise RuntimeError(f'touchpad and controller _PS0 did not run: {fw!r}')
