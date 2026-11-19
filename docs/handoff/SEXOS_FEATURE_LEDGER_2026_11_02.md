@@ -5334,3 +5334,10 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - SSH domains: `ssh.NAME = user@host[:port]` lines in `spindle.conf` (`ssh NAME [COMMAND]` logs in there); bad lines are reported like other settings.
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
+
+## Touchpad on its interrupt line (2026-11-19)
+- The laptop touchpad is read when its interrupt fires instead of 125 times a second: a new contact reaches the pointer at once (polling could add up to 8 ms), and an untouched pad costs no I2C reads (polling read it 20 times a second, each read a busy bus transfer).
+- sexacpi finds the line: an `Interrupt` in the pad's `_CRS`, or the pad's `GpioInt` pin on the Intel GPIO controller (Tiger Lake-LP/H as on the Alienware x17 R1, Alder Lake-P/S/N, Raptor Lake-S), when firmware routed that pad to the I/O APIC (read only). `sex_pdx::touchpad::Found` carries it (`irq`).
+- Kernel: BOOT reserves one I/O APIC *line* for Input (`sex_hwdb::manifest::LINES`); syscall 86 gains `OP_LINE_BIND` (4) and `OP_LINE_MASK` (5). A level line is masked each time it fires, so a stuck wire costs one interrupt. Inputs under 16 and inputs already bound are refused.
+- Polling stays: no line, a refused line, a stuck line (32 empty reads in a row after interrupts) or a silent one (reports found by the once-a-second check read with no interrupt, three times in a row) drop back to it (`sex_hid_touch::pace`).
+- Verified by host tests (`cargo test -p sex-laptop -p sex-hid-touch`, `sex_pdx::touchpad` round trips with the line); not yet run on a real pad.
