@@ -63,7 +63,7 @@ def main():
   launch=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   sid=int(launch[3])
   def jump():
-   g['focus'](sid);time.sleep(.3);ss=len(t());q.key('9');g['wait'](r'\[play.seek\] to_ms=5\d{4}\n',ss,30);return ss
+   g['focus'](sid);time.sleep(.3);ss=len(t());q.key('5');g['wait'](r'\[play.seek\] to_ms=3\d{4}\n',ss,30);return ss
   # Episode 1: the card counts down and episode 2 starts by itself.
   g['wait'](r'\[play.frame\] n=\d+ ',s,120);ss=jump()
   shown=g['wait'](r'\[qupid.upnext\] shown left_ms=(\d+)',ss,60)
