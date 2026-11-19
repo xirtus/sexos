@@ -3,7 +3,10 @@
 asks; Bell tells it it waits and hears nothing until Spindle's `volume ROW mic on`;
 then 48 kHz frames arrive at the card's pace (QEMU's silent input) for two seconds;
 when the program ends its leave lapses and what it heard is wiped, so the next asks anew;
-`volume ROW mic off` stops the microphone at once, and the program sees it."""
+`volume ROW mic off` stops the microphone at once, and the program sees it.
+With --card hda the same runs on an Intel HD Audio controller (QEMU's intel-hda with
+hda-duplex): Bell routes the codec's input pin to its input converter and records on
+the controller's input stream, as on a real laptop."""
 import argparse,os,re,shutil,time
 from pathlib import Path
 from install_program import install
@@ -11,10 +14,11 @@ ROOT=Path(__file__).resolve().parents[1]
 KEYS={' ':'spc','-':'minus'}
 
 def main():
- p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
+ p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--card',choices=['virtio','hda'],default='virtio');a=p.parse_args()
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('play',(ROOT/'iso_root/programs/play').read_bytes())])
- os.environ['SEXOS_GATE_DEVICES']='-audiodev none,id=snd0 -device virtio-sound-pci,audiodev=snd0'
+ card='-device virtio-sound-pci,audiodev=snd0' if a.card=='virtio' else '-device intel-hda -device hda-duplex,audiodev=snd0'
+ os.environ['SEXOS_GATE_DEVICES']=f'-audiodev none,id=snd0 {card}'
  from quil_autosave_gate import boot
  g=boot(a.iso,disk,out,'listen',a.resolution);t=g['text'];q=g['q']
  def say(text,pattern,timeout=180):
@@ -23,6 +27,7 @@ def main():
   q.key('ret');return g['wait'](pattern,s,timeout)
  try:
   g['wait'](r'\[bell.mic.card\] input=(\d+)',0,120)
+  if a.card=='hda':g['wait'](r'\[bell.hda.input\] codec=\d+ pin=\d+ adc=\d+ device=0x[8a] ',0,10)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   def ask():
    s0=len(t());m=say('run play --listen 2',r'\[bell.mic.asked\] row=(\d+) caller=(\d+) listen=1 allowed=0')
@@ -39,7 +44,8 @@ def main():
    assert ms>=1900 and abs(frames-48*ms)<=0.1*48*ms+4096,f'{frames} frames in {ms} ms'
    assert lost==0,m[0]
    return frames,ms
-  row,pd,surface=ask();frames,ms=hear(row)
+  row,pd,surface=ask();s_hear=len(t());frames,ms=hear(row)
+  if a.card=='hda':assert re.search(r'\[bell.hda.mic\] codec=\d+ pin=\d+ adc=\d+ device=0x[8a] internal=\d plugged=0 control=0x2[0-5]',t()[s_hear:]),'no hda input route'
   # The program ends while allowed: the leave lapses and what it heard is wiped.
   s0=len(t());g['focus'](surface);time.sleep(.5);q.key('f11')
   g['wait'](rf'\[bell.mic.lapsed\] row={row} pd={pd}',s0,60)
@@ -51,6 +57,6 @@ def main():
   say(f'volume {row2} mic off',rf'\[play.listen.end\] row={row2} mic=1',60)
   g['wait'](r'\[bell.mic\] on=0 ok=1',s0,30)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
-  print({'ok':True,'rows':[int(row),int(row2)],'frames':frames,'ms':ms})
+  print({'ok':True,'card':a.card,'rows':[int(row),int(row2)],'frames':frames,'ms':ms})
  finally:g['stop']()
 if __name__=='__main__':main()
