@@ -38,6 +38,7 @@ use sex_pdx::serial_println;
 
 mod laptop;
 mod touchpad;
+mod wmi;
 
 // ── Memory ─────────────────────────────────────────────────────────────────
 
@@ -551,6 +552,12 @@ pub extern "C" fn _start() -> ! {
 
     power_off_gpus(aml);
     let mut touchpads = bounded(|| touchpad::find(aml, &devices.i2c_hid));
+    // Vendor extras over WMI: Alienware fans and thermal profiles, Dell hotkeys.
+    let (mut awcc, hotkeys) = bounded(|| {
+        let wmi_devices = wmi::find(aml, &acpi_devices(aml));
+        (wmi::Awcc::find(aml, &wmi_devices), wmi::Hotkeys::find(&wmi_devices))
+    });
+    serial_println!("[sexacpi.vendor] awcc={} hotkeys={}", awcc.is_some() as u8, hotkeys.is_some() as u8);
 
     let mut next_read = 0u64;
     let mut last = w::Sensors::default();
@@ -567,8 +574,8 @@ pub extern "C" fn _start() -> ! {
         if !touchpads.is_empty() { touchpad::send(&mut touchpads); }
         // Firmware events: EC queries run `_Qxx`, which notify devices.
         if let Some(dev) = &ec { laptop::ec_events(aml, dev); }
-        let mut refresh = laptop::controls(aml, &mut light);
-        for event in laptop::notifications(aml, &devices, &light) {
+        let mut refresh = laptop::controls(aml, &mut light, &mut awcc);
+        for event in laptop::notifications(aml, &devices, &light, hotkeys.as_ref()) {
             match event {
                 laptop::Event::Brightness(up) => { light.step(aml, up, "key"); refresh = true; }
                 laptop::Event::Refresh => refresh = true,
@@ -577,7 +584,11 @@ pub extern "C" fn _start() -> ! {
         }
         let now = sex_pdx::get_ticks();
         if refresh || now >= next_read {
-            let s = bounded(|| { light.refresh(aml); laptop::read(aml, &devices, &light) });
+            let s = bounded(|| {
+                light.refresh(aml);
+                if let Some(a) = awcc.as_mut() { a.refresh(aml); }
+                laptop::read(aml, &devices, &light, awcc.as_ref())
+            });
             // Notifications raised while reading (firmware often notifies from _BST) wait
             // for the next pass.
             if s != last {

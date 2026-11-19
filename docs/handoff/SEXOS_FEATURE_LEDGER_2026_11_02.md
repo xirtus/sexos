@@ -5321,3 +5321,10 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - `sex_pdx::brand` draws the same outline natively at any size (integer scanline fill, 4 sub-rows, exact horizontal coverage, no allocation), so the kernel, Display and programs share one mark.
 - Silkbar: the launcher button is the lips on the bar's glass instead of the blue square. Wallpaper: the default is now "SexOS" (warm charcoal with the lips at 26% width, centred); the old navy theme gradient is kept as "Midnight". Boot screen: a charcoal header with the lips and the title. Lock screen: charcoal with the lips above "Locked". README and website carry the mark.
 - Verified by `tests/brand.rs`, `tests/desktop_look.rs` (both now run in `scripts/service_custody_host_gate.sh`) and `scripts/desktop_look_gate.py` (Super+B still steps SexOS → Dusk).
+
+## Alienware fans, thermal profiles and Dell hotkeys over WMI (2026-11-19)
+- ACPI-WMI support: `sex_laptop::wmi` reads `_WDG`; `servers/sexacpi/src/wmi.rs` finds `PNP0C14` devices and runs `WMxx`/`_WED`.
+- Alienware Command Center (x17 R1 and other Alienware laptops): fans (rpm, min, max), temperature sensors and thermal profiles are read at boot and logged (`[sexacpi.awcc*]`); the desktop's Power Saver / Balanced / Performance also switch the firmware's quiet / balanced / performance fan profile. The CPU sensor raises the reported temperature when it is hotter than the ACPI zones.
+- Dell hotkey events (mic mute, Command Center key, keyboard light, radio) are decoded and logged.
+- ACPI interpreter fixes: `DerefOf (PKG [i])` works (it failed on every package lookup), and buffer fields read as values (WMI argument parsing).
+- Verified by `crates/sex-laptop/tests/awcc_aml.rs` (real AML through the interpreter) and `scripts/laptop_power_gate.py`. Device checklist: `docs/handoff/X17_R1_DEVICE_CHECKLIST_2026_11_19.md`.

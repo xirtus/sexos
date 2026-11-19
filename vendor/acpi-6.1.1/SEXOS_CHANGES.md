@@ -12,4 +12,14 @@
   sequences, as the ACPI specification says. Upstream cast the first four bytes to an
   integer and panicked (slice length mismatch) on any longer buffer, which every I2C HID
   touchpad's `_DSM` hits with its 16-byte UUID check.
+- `aml/mod.rs`: `DerefOf` recognises references by variant. Upstream tested
+  `typ() == Reference`, but `typ()` reports what a reference points at, so every
+  `DerefOf (PKG [i])` failed with "expected Reference, got Integer" (common in real DSDTs:
+  table lookups in `_PRT` helpers, `_BCL` users, vendor WMI methods). A dereferenced buffer
+  element reads as an Integer.
+- `aml/mod.rs`: a buffer field used as a value (`If (FLD0 == 2)`, `FLD0 + 1`) is read: an
+  Integer when it fits the integer width, else a Buffer. Upstream passed the field object
+  on and comparisons failed. `CreateXxxField (ArgN, ...)` now points the field at the
+  buffer itself rather than the argument slot (reading it panicked). Every WMI method that
+  takes its input buffer apart with `CreateByteField` needs both, e.g. Alienware's `WMAX`.
 - Removed the upstream `Cargo.lock` and `.cargo_vcs_info.json`.

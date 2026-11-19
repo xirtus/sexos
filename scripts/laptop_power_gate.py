@@ -11,6 +11,9 @@ on battery; Notify reaches the service (it used to stop the interpreter) and rai
 brightness; the panel shows "50%  2:00 left"; the Shell sees the lid close and open; the
 launcher's Power Saver and Brightness Down reach the kernel and the firmware; the power
 button opens the power dialog instead of cutting power, and Enter on it shuts down cleanly.
+An Alienware WMI device (AWCC) is found with its fans, sensors and profiles, its hotkey
+event decodes to mic mute, and Power Saver also puts the fans in the firmware's quiet
+profile.
 Boot 2 (-DTHERMAL_TRIP): the zone passes its critical trip point and the machine shuts
 itself down cleanly, Files flushing first.
 """
@@ -84,6 +87,16 @@ def main():
   g['wait'](r'\[sexacpi\.touchpad\.sent\] pci=00:15\.1 status=0x0')
   g['wait'](r'\[sexinput\.touchpad\.found\] pci=00:15\.1 address=0x2c khz=400 hid_register=0x20')
   g['wait'](r'\[sexinput\.touchpad\.absent\] reason=controller_not_leased')
+  # Alienware Command Center over WMI: the fan controller and the hotkey event block.
+  g['wait'](r'\[sexacpi\.wmi\] path=\\_SB\.AMW0 guid=A70591CE-A997-11DA-B012-B622A1EF5492 name=alienware_wmax id=4158 instances=1 flags=0x2')
+  g['wait'](r'\[sexacpi\.wmi\] path=\\_SB\.AMW0 guid=9DBB5994-A997-11DA-B012-B622A1EF5492 name=dell_event id=d000 instances=1 flags=0x8')
+  result['awcc']=g['wait'](r'\[sexacpi\.awcc\] path=\\_SB\.AMW0 method=WMAX description=0x04000302 fans=2 sensors=3 profiles=3 current=balanced')[0]
+  g['wait'](r'\[sexacpi\.awcc\.fan\] id=0x32 name=cpu rpm=2400 min=0 max=5600')
+  g['wait'](r'\[sexacpi\.awcc\.fan\] id=0x33 name=gpu rpm=2100 min=0 max=5900')
+  g['wait'](r'\[sexacpi\.awcc\.temp\] id=0x01 name=cpu celsius=41')
+  g['wait'](r'\[sexacpi\.awcc\.profile\] id=0xa3 kind=quiet')
+  g['wait'](r'\[sexacpi\.vendor\] awcc=1 hotkeys=1')
+  g['wait'](r'\[sexacpi\.hotkey\] key=mic_mute code=0x0000 act=1')
   sensors=g['wait'](r'\[sexacpi\.sensors\] battery=50 charging=0 minutes=120 health=96 ac=0 lid=1 temp_dk=3182 crit_dk=3732 brightness=\d+ critical=0')
   # The brightness-up key, as firmware Notify: it used to stop the interpreter.
   g['wait'](r'\[sexacpi\.notify\] path=\\_SB\.PCI0\.GFX0\.DD1F value=0x86 kind=backlight')
@@ -105,6 +118,9 @@ def main():
   s=len(g['text']());palette_select(key,'PowerSaver',commands);g['q'].key('ret')
   g['wait'](r'\[shell\.laptop\.command\] what=profile_saver ok=1',s,30)
   result['profile']=g['wait'](r'\[acpi\.profile\] profile=saver epp=0xc0 ([^\n]*)',s,30)[1]
+  # The fans follow: the firmware's quiet profile, read back from the controller.
+  g['wait'](r'\[sexacpi\.awcc\.set\] desktop=saver firmware=0xa3 kind=quiet ok=1',s,30)
+  g['wait'](r'\[sexacpi\.awcc\.reading\] rpm=cpu:2400 gpu:2100 celsius=cpu:41 gpu:38 front:-1 profile=quiet',s,30)
   s=len(g['text']());palette_select(key,'BrightnessDown',commands);g['q'].key('ret')
   g['wait'](r'\[shell\.laptop\.command\] what=brightness_down ok=1',s,30)
   g['wait'](r'\[sexacpi\.backlight\.set\] level=50 by=desktop bcm=1 bqc=50',s,30)

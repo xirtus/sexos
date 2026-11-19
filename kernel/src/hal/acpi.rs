@@ -690,7 +690,12 @@ fn wake_desktop() {
 fn control(caller: u32, word: u64) -> [u64; 5] {
     let value = (word >> 8) as u8;
     match word & 0xFF {
-        w::CTL_PROFILE => set_profile(value),
+        w::CTL_PROFILE => {
+            let r = set_profile(value);
+            // Vendor thermal profiles (Alienware fans) follow in the ACPI service.
+            if r[0] == w::OK { let _ = queue_control(word); }
+            r
+        }
         w::CTL_CLAIM_BUTTON => { DESKTOP_PD.store(caller, Ordering::Release); BUTTON_CLAIMED.store(true, Ordering::Release); [w::OK, 0, 0, 0, 0] }
         w::CTL_SLEEP if value > 1 => [w::INVALID, 0, 0, 0, 0],
         w::CTL_SLEEP => {
