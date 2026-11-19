@@ -143,7 +143,7 @@ impl OfflineJob {
             .try_reserve_exact(output.len())
             .map_err(|_| Error::Memory)?;
         output_path.extend_from_slice(output);
-        let format_id = if format == job::Format::Clap { 0 } else { 1 };
+        let format_id = format.id();
         let info = files::restricted::prepare(&wire::Prepare {
             format: format_id,
             cookie,
