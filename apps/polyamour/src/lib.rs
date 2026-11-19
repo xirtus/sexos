@@ -21,6 +21,7 @@ pub mod edit;
 pub mod edit_ops;
 pub mod gpencil;
 pub mod editors;
+pub mod filebrowser;
 pub mod input;
 pub mod nodetree;
 pub mod persist;

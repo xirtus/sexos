@@ -5,6 +5,7 @@
 use crate::doc::Doc;
 use crate::draw::{Align, Painter, Rect};
 use crate::editors::{Editor, EditorKind};
+use crate::filebrowser::{Chosen, FileBrowser, Purpose};
 use crate::input::{Button, Input, Key, Mods};
 use crate::screen::{default_workspaces, Border, Workspace};
 use crate::theme as t;
@@ -18,6 +19,8 @@ pub struct App {
     pub painter: Painter,
     pub ui: UiState,
     pub popup: Option<Popup>,
+    /// The File Browser dialog (Open, Save As, Import, Export), over everything.
+    pub browser: Option<FileBrowser>,
     borders: Vec<Border>,
     dragging_border: Option<Border>,
     /// Area that owns the pointer while one of its modal actions runs.
@@ -56,6 +59,7 @@ impl App {
             painter: Painter::new(width, height),
             ui: UiState::default(),
             popup: None,
+            browser: None,
             borders: Vec::new(),
             dragging_border: None,
             captured: None,
@@ -82,6 +86,10 @@ impl App {
         self.doc = doc;
         self.doc.path = Some(name.to_string());
         self.doc.report = format!("Opened {name}");
+        if !name.ends_with(".poly") {
+            // Imported files come at any size and place: show all of it.
+            self.doc.view_ops.push(Op::new("view3d.view_all"));
+        }
         if name.ends_with(".poly") {
             // Disk Cache bakes from the `cache` folder next to the file.
             crate::physics::load_disk_caches(&self.doc);
@@ -110,6 +118,20 @@ impl App {
         let mut input = Some(input);
         let had_popup = self.popup.is_some();
         let ws_before = self.active_ws;
+
+        // 0. The File Browser is modal.
+        if let (Some(b), Some(inp)) = (&mut self.browser, &input) {
+            if !matches!(inp, Input::Tick | Input::Resize { .. } | Input::Up { .. }) {
+                let (open, chosen) = b.handle(&mut self.painter, inp);
+                if !open {
+                    self.browser = None;
+                }
+                if let Some(c) = chosen {
+                    self.file_chosen(c);
+                }
+                input = None;
+            }
+        }
 
         // 1. An open menu sees everything first.
         if let (Some(pop), Some(inp)) = (&mut self.popup, &input) {
@@ -196,6 +218,104 @@ impl App {
         if let Some(p) = &self.popup {
             p.draw(&mut self.painter, self.ui.mouse);
         }
+        if let Some(b) = &self.browser {
+            b.draw(&mut self.painter, self.ui.mouse);
+        }
+    }
+
+    /// Open the File Browser in the current file's folder.
+    pub fn browse(&mut self, purpose: Purpose) {
+        let path = self.doc.path.as_deref().map(std::path::Path::new);
+        let dir = path.and_then(|p| p.parent()).filter(|d| !d.as_os_str().is_empty()).map(|d| d.to_path_buf()).or_else(|| std::env::current_dir().ok()).unwrap_or_else(|| "/".into());
+        let stem = path.and_then(|p| p.file_stem()).map_or_else(|| "untitled".to_string(), |s| s.to_string_lossy().into_owned());
+        let name = match &purpose {
+            Purpose::Open | Purpose::Import(_) => String::new(),
+            Purpose::SaveAs => format!("{stem}.poly"),
+            Purpose::Export(e) => format!("{stem}.{e}"),
+        };
+        self.popup = None;
+        self.browser = Some(FileBrowser::new(purpose, &dir, &name));
+    }
+
+    /// Carry out a File Browser choice.
+    pub fn file_chosen(&mut self, c: Chosen) {
+        let path = c.path.to_string_lossy().into_owned();
+        match c.purpose {
+            Purpose::Open => open_path(self, &path),
+            Purpose::SaveAs => self.save_as(&path),
+            Purpose::Import(_) => self.import_path(&path),
+            Purpose::Export(ext) => self.export_to(&path, &ext),
+        }
+    }
+
+    /// File > Import: add a file's objects to the current scene (one undo step).
+    pub fn import_path(&mut self, path: &str) {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => {
+                self.doc.report = format!("Cannot open {path}: {e}");
+                return;
+            }
+        };
+        let Some(fmt) = sex_3d::io::Format::from_path(path).or_else(|| sex_3d::io::Format::sniff(&bytes)) else {
+            self.doc.report = format!("{path}: unknown file type");
+            return;
+        };
+        let dir = std::path::Path::new(path).parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        let resolve = move |p: &str| std::fs::read(dir.join(p)).ok();
+        self.doc.push_undo("Import");
+        match sex_3d::io::import_into(&mut self.doc.scene, &bytes, fmt, &resolve) {
+            Ok(added) => {
+                self.doc.scene.selected = added.clone();
+                self.doc.scene.active_object = added.first().copied();
+                self.doc.touch();
+                self.doc.view_ops.push(Op::new("view3d.view_selected"));
+                self.doc.report = format!("Imported {} object{} from {path}", added.len(), if added.len() == 1 { "" } else { "s" });
+            }
+            Err(e) => {
+                self.doc.queue.push(Op::new("ed.undo"));
+                self.doc.report = e.to_string();
+            }
+        }
+    }
+
+    /// File > Export to a chosen path.
+    fn export_to(&mut self, path: &str, ext: &str) {
+        if ext == "blend" {
+            return self.save_blend_copy(path);
+        }
+        let stem = path.strip_suffix(&format!(".{ext}")).unwrap_or(path).to_string();
+        let result = match sex_3d::io::Format::from_extension(ext) {
+            Some(f) => sex_3d::io::export_files(&self.doc.scene, f, &stem).map_err(|e| e.to_string()),
+            None => Err(format!("cannot export .{ext}")),
+        };
+        match result {
+            Ok(files) => {
+                for (name, bytes) in &files {
+                    if let Err(e) = std::fs::write(name, bytes) {
+                        self.doc.report = format!("Cannot write {name}: {e}");
+                        return;
+                    }
+                }
+                self.doc.report = format!("Exported \"{}\"", files.iter().map(|f| f.0.as_str()).collect::<Vec<_>>().join(", "));
+            }
+            Err(e) => self.doc.report = e,
+        }
+    }
+
+    /// The scene as a .blend file (with its animation), without changing the open file's path.
+    fn save_blend_copy(&mut self, path: &str) {
+        match std::fs::write(path, self.blend_bytes()) {
+            Ok(()) => self.doc.report = format!("Exported \"{path}\""),
+            Err(e) => self.doc.report = format!("Cannot write {path}: {e}"),
+        }
+    }
+
+    fn blend_bytes(&self) -> Vec<u8> {
+        let mut scene = self.doc.scene.clone();
+        scene.frame_current = self.doc.frame;
+        let opts = sex_3d::io::blend::BlendExport { width: self.doc.settings.resolution_x, height: self.doc.settings.resolution_y };
+        sex_3d::io::blend::export_blend(&scene, &crate::anim::blend_actions(&self.doc), opts)
     }
 
     /// Whether an editor in the active workspace wants `Input::Tick` events
@@ -232,6 +352,8 @@ impl App {
             (Key::Char('z'), Mods::CTRL) => Op::new("ed.undo"),
             (Key::Char('z'), Mods::CTRL_SHIFT) | (Key::Char('y'), Mods::CTRL) => Op::new("ed.redo"),
             (Key::Char('s'), Mods::CTRL) => Op::new("wm.save_mainfile"),
+            (Key::Char('s'), Mods::CTRL_SHIFT) => Op::new("wm.save_as_mainfile"),
+            (Key::Char('o'), Mods::CTRL) => Op::new("wm.open_mainfile"),
             (Key::Char('n'), Mods::CTRL) => Op::new("wm.read_homefile"),
             (Key::Char('q'), Mods::CTRL) => Op::new("wm.quit_blender"),
             (Key::F(12), Mods::NONE) => Op::new("render.render"),
@@ -297,8 +419,16 @@ impl App {
                 "wm.save_mainfile" => self.save(None),
                 // Save As with a file name: `.blend` writes a .blend file.
                 "wm.save_as_mainfile" if !op.arg.is_empty() => self.save_as(&op.arg),
-                "wm.save_as_mainfile" => self.save(None),
-                "wm.export" => self.save(Some(op.arg.clone())),
+                "wm.save_as_mainfile" => self.browse(Purpose::SaveAs),
+                "wm.open_mainfile" if !op.arg.is_empty() => open_path(self, &op.arg.clone()),
+                "wm.open_mainfile" => self.browse(Purpose::Open),
+                "wm.import" if op.arg.contains('/') => self.import_path(&op.arg.clone()),
+                "wm.import" => self.browse(Purpose::Import(op.arg.split(',').filter(|e| !e.is_empty()).map(String::from).collect())),
+                "wm.export" => match op.arg.split_once(':') {
+                    // `ext:path` exports straight to a path (scripts, gates).
+                    Some((ext, path)) => self.export_to(&path.to_string(), &ext.to_string()),
+                    None => self.browse(Purpose::Export(op.arg.clone())),
+                },
                 "render.render" => self.render(),
                 "image.browse" => self.doc.show_viewer = op.arg == "Viewer Node",
                 "render.render_animation" => self.render_animation(),
@@ -360,10 +490,7 @@ impl App {
     /// own format otherwise.
     fn save_as(&mut self, name: &str) {
         let bytes = if name.to_ascii_lowercase().ends_with(".blend") {
-            let mut scene = self.doc.scene.clone();
-            scene.frame_current = self.doc.frame;
-            let opts = sex_3d::io::blend::BlendExport { width: self.doc.settings.resolution_x, height: self.doc.settings.resolution_y };
-            sex_3d::io::blend::export_blend(&scene, &crate::anim::blend_actions(&self.doc), opts)
+            self.blend_bytes()
         } else {
             crate::persist::save(&self.doc).into_bytes()
         };
@@ -488,6 +615,20 @@ fn add_menu_items() -> Vec<MenuItem> {
     ]
 }
 
+/// Open a file from disk, resolving the files it refers to next to it.
+pub fn open_path(app: &mut App, path: &str) {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let dir = std::path::Path::new(path).parent().map(|p| p.to_path_buf()).unwrap_or_default();
+            let resolve = move |p: &str| std::fs::read(dir.join(p)).ok();
+            if let Err(e) = app.open_bytes(path, &bytes, &resolve) {
+                app.doc.report = e;
+            }
+        }
+        Err(e) => app.doc.report = format!("Cannot open {path}: {e}"),
+    }
+}
+
 fn search_items() -> Vec<MenuItem> {
     vec![
         MenuItem::op("Add Cube", "", Op::with("mesh.primitive_add", "cube")),
@@ -500,6 +641,7 @@ fn search_items() -> Vec<MenuItem> {
 
 fn file_menu(_d: &Doc) -> Vec<MenuItem> {
     let ex = |l: &str, e: &str| MenuItem::op(l, "", Op::with("wm.export", e));
+    let im = |l: &str, e: &str| MenuItem::op(l, "", Op::with("wm.import", e));
     vec![
         MenuItem::op("New", "Ctrl N", Op::new("wm.read_homefile")),
         MenuItem::op("Open...", "Ctrl O", Op::new("wm.open_mainfile")),
@@ -507,8 +649,21 @@ fn file_menu(_d: &Doc) -> Vec<MenuItem> {
         MenuItem::op("Save", "Ctrl S", Op::new("wm.save_mainfile")),
         MenuItem::op("Save As...", "Shift Ctrl S", Op::new("wm.save_as_mainfile")),
         MenuItem::Separator,
-        MenuItem::Sub("Import".into(), vec![MenuItem::op("glTF 2.0 (.glb/.gltf)", "", Op::new("wm.import")), MenuItem::op("Wavefront (.obj)", "", Op::new("wm.import")), MenuItem::op("Blender (.blend)", "", Op::new("wm.import"))]),
-        MenuItem::Sub("Export".into(), vec![ex("glTF 2.0 (.glb)", "glb"), ex("glTF 2.0 (.gltf)", "gltf"), ex("Wavefront (.obj)", "obj"), ex("STL (.stl)", "stl"), ex("Stanford PLY (.ply)", "ply")]),
+        MenuItem::Sub(
+            "Import".into(),
+            vec![
+                im("FBX (.fbx)", "fbx"),
+                im("glTF 2.0 (.glb/.gltf)", "glb,gltf"),
+                im("Wavefront (.obj)", "obj"),
+                im("STL (.stl)", "stl"),
+                im("Stanford PLY (.ply)", "ply"),
+                im("Blender (.blend)", "blend"),
+            ],
+        ),
+        MenuItem::Sub(
+            "Export".into(),
+            vec![ex("FBX (.fbx)", "fbx"), ex("glTF 2.0 (.glb)", "glb"), ex("glTF 2.0 (.gltf)", "gltf"), ex("Wavefront (.obj)", "obj"), ex("STL (.stl)", "stl"), ex("Stanford PLY (.ply)", "ply"), ex("Blender (.blend)", "blend")],
+        ),
         MenuItem::Separator,
         MenuItem::op("Quit", "Ctrl Q", Op::new("wm.quit_blender")),
     ]
