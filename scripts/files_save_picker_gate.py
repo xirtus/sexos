@@ -48,8 +48,9 @@ def main():
 
     def keys(text):
         for k in text:
-            if k.isupper():
-                q.cmd('send-key', {'keys': [{'type': 'qcode', 'data': 'shift'}, {'type': 'qcode', 'data': k.lower()}], 'hold-time': 80})
+            if k.isupper() or k == ':':
+                code = 'semicolon' if k == ':' else k.lower()
+                q.cmd('send-key', {'keys': [{'type': 'qcode', 'data': 'shift'}, {'type': 'qcode', 'data': code}], 'hold-time': 80})
             else:
                 q.key(KEYS.get(k, k))
             time.sleep(.06)
