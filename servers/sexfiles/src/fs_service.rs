@@ -245,7 +245,13 @@ pub fn home_unlock_from_lock_screen(password: &[u8]) -> Option<u8> {
 }
 fn bring_up() -> State {
     let sectors = DiskFs::diskfs_block_call(sex_pdx::BLOCK_CAPACITY, 0, 0, 0);
-    let state = bring_up_on(sectors);
+    // Another system's disk (Windows on the laptop's SSD): never mounted or formatted
+    // as SexOS's; sexdrive serves it for reading only.
+    let foreign = DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_FOREIGN;
+    let state = if foreign {
+        sex_pdx::serial_record!("[files.fs.foreign] sectors={} read_only=1", sectors);
+        State::Absent
+    } else { bring_up_on(sectors) };
     // No SexOS filesystem here (a Windows RAID volume, say): its own volumes, read only.
     if matches!(state, State::Absent) && sectors >= DEVICE_MIN_SECTORS { crate::volumes::attach_device(sectors); }
     state
@@ -301,9 +307,13 @@ pub fn status(e: Error) -> u8 {
 /// A client's reply slot may hold another service's answer, so ours waits its turn.
 /// Each client has one request in flight, so one entry per caller is all it takes.
 static mut REPLIES: [(u32, u64); 64] = [(0, 0); 64];
+/// Queues a reply. Several may be owed to one caller at once (Shell's settings poll and a
+/// program load both answer as tagged replies), so a new one never replaces an older one:
+/// that lost the program load's answer and left a spawn waiting forever.
 pub fn reply_later(caller: u32, word: u64) {
     let replies = unsafe { &mut *core::ptr::addr_of_mut!(REPLIES) };
-    match replies.iter_mut().find(|r| r.0 == 0 || r.0 == caller) {
+    // Kept packed in arrival order: the first empty slot is after every queued reply.
+    match replies.iter_mut().find(|r| r.0 == 0) {
         Some(entry) => *entry = (caller, word),
         None => sex_pdx::serial_record!("[files.fs.reply.lost] caller={}", caller),
     }
@@ -311,11 +321,22 @@ pub fn reply_later(caller: u32, word: u64) {
 pub fn replies_pending() -> bool { (unsafe { (*core::ptr::addr_of!(REPLIES)).iter().any(|r| r.0 != 0) }) || crate::recording_runtime::pending() }
 pub fn poll_replies() {
     let replies = unsafe { &mut *core::ptr::addr_of_mut!(REPLIES) };
+    // A caller's replies go in the order they were queued: once one waits, its later ones wait too.
+    let mut waiting = [0u32; 8];
+    let mut waits = 0;
     for entry in replies.iter_mut().filter(|r| r.0 != 0) {
         if sex_pdx::desktop_recording::ENABLED&&entry.0==sex_pdx::desktop_recording::TARGET{
             sex_pdx::serial_record!("[record.reply.unscoped.drop] target={}",entry.0);*entry=(0,0);continue;
         }
+        if waiting[..waits].contains(&entry.0) { continue; }
         if sex_pdx::pdx_reply(entry.0, entry.1) == 0 { *entry = (0, 0); }
+        else if waits < waiting.len() { waiting[waits] = entry.0; waits += 1; }
+        else { break; }
+    }
+    // Close the gaps, keeping the order.
+    let mut kept = 0;
+    for i in 0..replies.len() {
+        if replies[i].0 != 0 { replies[kept] = replies[i]; if kept != i { replies[i] = (0, 0); } kept += 1; }
     }
     crate::recording_runtime::poll();
 }

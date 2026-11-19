@@ -42,6 +42,7 @@ members = [
     "apps/monitor",
     "apps/fputest",
     "apps/avxtest",
+    "apps/mediabench",
     "apps/dragtest",
     "apps/drag",
     "crates/drag-vmm",
