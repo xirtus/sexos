@@ -82,6 +82,14 @@ pub mod loom_ipc_ring {
     include!(concat!(env!("OUT_DIR"), "/loom_ipc_ring.rs"));
 }
 
+/// Scheduler custody word and timed-wait deadlines, loom copies (build.rs).
+#[cfg(loom)]
+#[allow(dead_code)]
+pub mod loom_scheduler_wait {
+    pub mod ownership { include!(concat!(env!("OUT_DIR"), "/loom_task_ownership.rs")); }
+    pub mod self_wait { include!(concat!(env!("OUT_DIR"), "/loom_self_wait.rs")); }
+}
+
 /// IPC v2 endpoint and notification, loom copies (build.rs).
 #[cfg(loom)]
 #[allow(dead_code)]
@@ -130,6 +138,12 @@ pub mod scheduler_queue;
 #[cfg(kani)]
 #[path = "../../../kernel/src/ipc_ring.rs"]
 pub mod ipc_ring;
+#[cfg(kani)]
+#[path = "../../../kernel/src/task_ownership.rs"]
+pub mod task_ownership;
+#[cfg(kani)]
+#[path = "../../../kernel/src/self_wait.rs"]
+pub mod self_wait;
 #[cfg(kani)]
 #[path = "../../../tests/model_kani.rs"]
 mod model_kani;
