@@ -32,7 +32,7 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::str::FromStr;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use sex_pdx::power as w;
 use sex_pdx::serial_println;
 
@@ -125,9 +125,16 @@ pub(crate) fn spend(units: u64) {
     if left < units { BUDGET.store(u64::MAX, Ordering::Relaxed); panic!("AML work budget spent"); }
     BUDGET.store(left - units, Ordering::Relaxed);
 }
+/// Set while a call runs on `AML_STACK`: a nested `bounded` (a WMI method called from a
+/// discovery pass that is already bounded) stays on the current stack and inside the outer
+/// budget, since switching again would restart at the stack's top over the live frames.
+static ON_AML_STACK: AtomicBool = AtomicBool::new(false);
 pub(crate) fn bounded<R>(f: impl FnOnce() -> R) -> R {
+    if ON_AML_STACK.load(Ordering::Relaxed) { return f(); }
     BUDGET.store(PASS_BUDGET, Ordering::Relaxed);
+    ON_AML_STACK.store(true, Ordering::Relaxed);
     let r = on_aml_stack(f);
+    ON_AML_STACK.store(false, Ordering::Relaxed);
     BUDGET.store(u64::MAX, Ordering::Relaxed);
     r
 }
