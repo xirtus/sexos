@@ -1,0 +1,30 @@
+@prefix blop: <http://drobilla.net/plugins/blop/> .
+@prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+<http://drobilla.net/drobilla#me>
+	a foaf:Person ;
+	foaf:name "David Robillard" ;
+	foaf:mbox <mailto:d@drobilla.net> ;
+	rdfs:seeAlso <http://drobilla.net/drobilla> .
+
+blop:
+	a doap:Project ;
+	lv2:symbol "blop" ;
+	doap:name "Blop LV2" ;
+	doap:shortdesc "An LV2 port of the Blop plugins." ;
+	doap:homepage <http://drobilla.net/software/blop-lv2> ;
+	doap:license <http://opensource.org/licenses/gpl-3.0> ;
+	doap:maintainer <http://drobilla.net/drobilla#me> ;
+	doap:developer [
+		a foaf:Person ;
+		foaf:name "Mike Rawes" ;
+		foaf:mbox <mike_rawes@yahoo.co.uk>
+	] .
+
+blop:lp4pole
+	a lv2:Plugin ;
+	rdfs:seeAlso <lp4pole.ttl> ;
+	lv2:binary <lp4pole.so> .

@@ -20,6 +20,13 @@ static SKIPPED_NS: AtomicU64 = AtomicU64::new(0);
 /// Page time, independent of how fast this machine or engine is: each reading moves
 /// it on by a microsecond (so loops that wait on the clock end), and the main loop
 /// jumps it to the next timer. Host durations are measured with `Instant` instead.
+/// Host time since the first reading, for `--features profile` attributions.
+#[cfg(feature = "profile")]
+fn real_ns() -> u64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_nanos() as u64
+}
+
 fn clock() -> u64 { SKIPPED_NS.fetch_add(1_000, Ordering::Relaxed) + 1_000 }
 
 /// ROOT/HOST/PATH, `index.html` for a path ending in `/`, and the query (when there
@@ -112,6 +119,9 @@ fn visit(root: &Path, url: &str, page_seconds: u64, cache: Option<std::rc::Rc<st
     doc.measure = sex_web::canvas::measure_css;
     doc.import_map = map;
     doc.code_cache = cache.clone();
+    // Page time stays virtual; the profile measures real time.
+    #[cfg(feature = "profile")]
+    { doc.profile_clock = Some(real_ns); }
     let mut script = sex_js::Script::new(doc, sex_js::Limits::default()).unwrap();
     let serve_modules = |script: &mut sex_js::Script<sex_js::Document>, list: Vec<String>| {
         for u in list {
