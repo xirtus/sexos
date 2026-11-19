@@ -1,5 +1,6 @@
 //! Qualification fixtures: the unchanged official CLAP C template plus two
-//! explicitly modified crash/hang negatives. These are not bundled effects.
+//! explicitly modified crash/hang negatives, and open LADSPA/LV2 plugins built
+//! from unmodified upstream sources. These are not bundled effects.
 use std::{env, fs, path::PathBuf, process::Command};
 fn execute(command: &mut Command) {
     let status = command.status().expect("tool executable");
@@ -80,6 +81,32 @@ fn main() {
                 .arg(o),
         );
     }
+    // Open LADSPA/LV2 plugins rebuilt for SexOS from vendor/ sources.
+    let open = out.join("open-plugins");
+    execute(
+        Command::new("sh")
+            .arg(root.join("scripts/build_moan_open_plugins.sh"))
+            .arg("sexos")
+            .arg(&open),
+    );
+    fs::copy(open.join("t5_so_lowpass.so"), out.join("lowpass.ladspa")).unwrap();
+    // Packed LV2 bundle: same layout as moan_plugin::lv2::encode.
+    let amp = open.join("eg-amp.lv2");
+    let mut packed = b"MOANLV2B".to_vec();
+    let files = ["manifest.ttl", "amp.ttl", "amp.so"];
+    packed.extend_from_slice(&(files.len() as u32).to_le_bytes());
+    for name in files {
+        let data = fs::read(amp.join(name)).unwrap();
+        packed.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        packed.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        packed.extend_from_slice(name.as_bytes());
+        packed.extend_from_slice(&data);
+    }
+    fs::write(out.join("amp.lv2b"), packed).unwrap();
+    println!("cargo:rerun-if-changed=../../vendor/ladspa-t5");
+    println!("cargo:rerun-if-changed=../../vendor/lv2-plugins");
+    println!("cargo:rerun-if-changed=../../fixtures/moan-open-plugins");
+    println!("cargo:rerun-if-changed=../../scripts/build_moan_open_plugins.sh");
     let vst = env::var_os("SEXOS_VST_FIXTURE").expect("source-built SEXOS_VST_FIXTURE required");
     fs::copy(&vst, out.join("gain.vst3")).expect("source-built VST fixture");
     println!("cargo:rerun-if-changed={}", PathBuf::from(vst).display());
