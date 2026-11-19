@@ -256,8 +256,22 @@ fn poll_one(index: usize) {
     // neither waits for a lock nor grows a queue. A caller that keeps a reply unread
     // for a whole second is passed over.
     let late = now > RESET_AT[index].load(Ordering::Relaxed) + 1000;
-    if answers_every_call(s.pd) && !late && credits.owed().any(|c| crate::ipc::DOMAIN_REGISTRY.get(c)
-        .is_some_and(|c| c.incoming_replies.try_lock().is_none_or(|q| q.len() >= q.capacity()))) { return; }
+    // Take every waiting caller's reply queue now and keep it until its answer is in, so
+    // none can fill or be taken between this check and the push below (other cores).
+    const MAX_TOLD: usize = 8;
+    let mut held: [Option<(u32, spin::MutexGuard<'_, alloc::collections::VecDeque<crate::ipc::messages::IpcReply>>)>; MAX_TOLD] = [const { None }; MAX_TOLD];
+    let mut missed = 0;
+    if answers_every_call(s.pd) {
+        for caller in credits.owed() {
+            let slot = held.iter().position(|h| h.is_none());
+            let guard = crate::ipc::DOMAIN_REGISTRY.get(caller).and_then(|c| c.incoming_replies.try_lock()).filter(|q| q.len() < q.capacity());
+            match (slot, guard) {
+                (Some(i), Some(q)) => held[i] = Some((caller, q)),
+                _ if late => missed += 1,
+                _ => return,
+            }
+        }
+    }
     crate::device_irq::reset_end(s.pd);
     for page in s.pages[..s.count].iter().filter(|p| p.pristine != 0) { crate::boot_memory::copy_frame(page.pristine, page.frame); }
     // Requests to the dead run, and answers it was owed, belong to that run.
@@ -268,17 +282,13 @@ fn poll_one(index: usize) {
     // A caller of a service that answers every call is waiting for each one: it hears
     // that the run it called is gone, once, and may send the same call again.
     let mut told = 0;
-    if answers_every_call(s.pd) {
-        for caller in credits.owed() {
-            let Some(c) = crate::ipc::DOMAIN_REGISTRY.get(caller) else { continue };
-            let Some(mut q) = c.incoming_replies.try_lock() else { continue };
-            if q.len() >= q.capacity() { continue; }
-            q.push_back(crate::ipc::messages::IpcReply { value: sex_pdx::crash_log::PEER_RESTARTED, caller_pd: s.pd, caller_task: 0 });
-            drop(q);
-            crate::scheduler::unpark_thread(c.main_task.load(Ordering::Acquire));
-            told += 1;
-        }
+    for (caller, mut q) in held.iter_mut().filter_map(|h| h.take()) {
+        q.push_back(crate::ipc::messages::IpcReply { value: sex_pdx::crash_log::PEER_RESTARTED, caller_pd: s.pd, caller_task: 0 });
+        drop(q);
+        if let Some(c) = crate::ipc::DOMAIN_REGISTRY.get(caller) { crate::scheduler::unpark_thread(c.main_task.load(Ordering::Acquire)); }
+        told += 1;
     }
+    if missed != 0 { crate::serial_println!("[service.restart.callers.missed] pd={} missed={}", s.pd, missed); }
     credits.clear();
     FROZEN.fetch_and(!(1 << s.pd), Ordering::AcqRel);
     INBOX_AT[s.pd as usize].store(now, Ordering::Relaxed);
