@@ -24,9 +24,11 @@ env:
 jobs:
   host:
     name: Host regressions
-    runs-on: ubuntu-latest
-    # 23 min warm; a cold cargo cache (after a red master) needs more.
-    timeout-minutes: 45
+    # Runs on the self-hosted Mac (x86_64 container under Rosetta, tools/ci/mac-runner)
+    # when the repo variable SEXOS_MAC_RUNNER is 'on', never for pull requests from forks.
+    runs-on: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","sexos-mac"]') || 'ubuntu-latest' }}
+    # 23 min warm; a cold cargo cache (after a red master) needs more. Rosetta is slower.
+    timeout-minutes: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 90 || 45 }}
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -250,8 +252,10 @@ jobs:
 
   truth:
     name: Host kernel-model regressions (${{ matrix.shard }}/3)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Runs on the self-hosted Mac (x86_64 container under Rosetta, tools/ci/mac-runner)
+    # when the repo variable SEXOS_MAC_RUNNER is 'on', never for pull requests from forks.
+    runs-on: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","sexos-mac"]') || 'ubuntu-latest' }}
+    timeout-minutes: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 60 || 30 }}
     strategy:
       fail-fast: false
       matrix:
