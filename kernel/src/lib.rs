@@ -22,6 +22,7 @@ pub mod memory;
 pub mod hal;
 #[cfg(target_arch = "x86_64")]
 pub mod pku;
+pub mod gate;
 pub mod fpu;
 #[cfg(target_arch = "x86_64")]
 #[cfg(target_arch = "x86_64")]
@@ -55,6 +56,8 @@ pub mod app_resources;
 pub mod program_image;
 pub mod program_records;
 pub mod program_tenancy;
+pub mod views;
+pub mod views_rules;
 pub mod program_frames;
 pub mod program_workers;
 pub mod denim;
@@ -111,6 +114,7 @@ pub mod iommu_selftest;
 pub mod vmd;
 #[cfg(target_arch = "x86_64")]
 pub mod vmx;
+pub mod svm;
 #[cfg(target_arch = "x86_64")]
 pub mod keyboard;
 

@@ -66,6 +66,19 @@ class InputPrivacy(unittest.TestCase):
     if not fail:
      self.assertEqual((root/'evidence/UNSAFE-input-payload-proof.iso').read_bytes(),b'proof')
      self.assertEqual((root/'evidence/normal.iso').read_bytes(),b'normal')
+ def test_ci_skip_of_the_normal_rebuild_still_restores_the_spec(self):
+  with tempfile.TemporaryDirectory() as temporary:
+   root=pathlib.Path(temporary);(root/'scripts').mkdir();(root/'iso_root/servers').mkdir(parents=True)
+   for name in ('build_input_payload_proof.sh','input_payload_profile.py'):shutil.copyfile(ROOT/'scripts'/name,root/'scripts'/name)
+   original=(ROOT/'sexos_build_spec.toml').read_bytes();(root/'sexos_build_spec.toml').write_bytes(original)
+   (root/'scripts/master_runtime_gate.sh').write_text('#!/usr/bin/env bash\nprintf proof > sexos-v1.0.0.iso\n')
+   (root/'scripts/freeze_native_evidence.py').write_text("from pathlib import Path\nimport sys\nout=Path(sys.argv[sys.argv.index('--out')+1]);out.mkdir();(out/'frozen').write_text('proof')\n")
+   (root/'scripts/entrypoint_build.sh').write_text('#!/usr/bin/env bash\nexit 45\n')
+   result=subprocess.run(['bash','scripts/build_input_payload_proof.sh',str(root/'evidence')],cwd=root,env=dict(os.environ,SEXOS_INPUT_PROOF_SKIP_NORMAL='1'),capture_output=True,text=True)
+   self.assertEqual(result.returncode,0,result.stderr)
+   self.assertEqual((root/'sexos_build_spec.toml').read_bytes(),original)
+   self.assertEqual((root/'evidence/UNSAFE-input-payload-proof.iso').read_bytes(),b'proof')
+   self.assertFalse((root/'evidence/normal.iso').exists())
  def test_diagnostic_ci_keeps_frozen_proof_separate_and_restores_normal(self):
   builder=(ROOT/'scripts/build_input_payload_proof.sh').read_text()
   self.assertLess(builder.index('master_runtime_gate.sh --probe'),builder.index('freeze_native_evidence.py'))

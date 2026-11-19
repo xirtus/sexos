@@ -10,6 +10,9 @@ use sex_html::dom::{Dom, Kind, NodeId};
 pub struct Document {
     #[cfg(feature = "jit-profile")]
     pub query_profile: Vec<(String, u64, u64)>,
+    /// Real time for `jit-profile` attributions when `clock` is virtual (the page bench).
+    #[cfg(feature = "jit-profile")]
+    pub profile_clock: Option<fn() -> u64>,
     selectors: Vec<(String, alloc::rc::Rc<Vec<sex_html::css::Selector>>)>,
     resource_owner: u64,
     source_policies: alloc::collections::BTreeMap<String, bool>,
@@ -194,7 +197,7 @@ fn rough_measure(font: &str, text: &str) -> i32 {
 
 impl Document {
     pub fn new(dom: Dom, url: &str, viewport: (i32, i32), clock: fn() -> u64) -> Self {
-        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None }
+        Self { #[cfg(feature = "jit-profile")] query_profile: Vec::new(), #[cfg(feature = "jit-profile")] profile_clock: None, selectors: Vec::new(), resource_owner: NEXT_RESOURCE_OWNER.fetch_add(1, Ordering::Relaxed), source_policies: Default::default(), source_policy_overflow: false, dom, url: String::from(url), viewport, dirty: false, log: Vec::new(), navigate: None, navigate_post: None, navigate_type: String::new(), referrer: String::new(), parent_origin: None, outbox: Vec::new(), rects: Vec::new(), layers: Vec::new(), pointer_events: Vec::new(), clock, canvas_queue: Vec::new(), measure: rough_measure, gl: Default::default(), pictures: Vec::new(), fetches: Vec::new(), classic_scripts: Vec::new(), bodies: Vec::new(), media: Vec::new(), media_bytes: Vec::new(), heads: Vec::new(), next_fetch: 0, cookies: None, wall: || 0, storage: None, ws_asks: Vec::new(), ws_in: Vec::new(), next_ws: 0, modules: Default::default(), modules_wanted: Vec::new(), import_map: Vec::new(), code_cache: None }
     }
 
     /// Takes each element's laid-out box from the browser's layout, for
@@ -245,6 +248,38 @@ impl Document {
         (id < self.dom.nodes.len()).then_some(id)
     }
 
+    /// DOM `compareDocumentPosition` bits for `other` seen from `node`: 20 when node
+    /// contains other, 10 when other contains node, 4 when other follows and 2 when it
+    /// precedes in tree order. Nodes in different trees (detached, or across a shadow
+    /// root) are 1|32 plus a stable order.
+    fn position(&self, node: NodeId, other: NodeId) -> u32 {
+        if node == other { return 0; }
+        let chain = |mut n: NodeId| {
+            let mut v = alloc::vec![n];
+            // A shadow root is the root of its own tree, as its parentNode is null to pages.
+            while let Some(p) = self.dom.nodes[n].parent.filter(|_| self.dom.tag(n) != Some("sx-shadow")) {
+                if v.len() > self.dom.nodes.len() { break; }
+                v.push(p);
+                n = p;
+            }
+            v.reverse();
+            v
+        };
+        let (a, b) = (chain(node), chain(other));
+        if a[0] != b[0] { return 1 | 32 | if node < other { 4 } else { 2 }; }
+        let common = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+        if common == a.len() { return 16 | 4; }
+        if common == b.len() { return 8 | 2; }
+        let kids = &self.dom.nodes[a[common - 1]].children;
+        let at = |n: NodeId| kids.iter().position(|&c| c == n);
+        match (at(a[common]), at(b[common])) {
+            (Some(x), Some(y)) if x < y => 4,
+            (Some(_), Some(_)) => 2,
+            // A child its parent does not list (should not happen): keep a stable order.
+            _ => 1 | 32 | if node < other { 4 } else { 2 },
+        }
+    }
+
     fn element(&self, s: Option<&&str>) -> Option<NodeId> {
         self.node(s).filter(|&n| matches!(self.dom.nodes[n].kind, Kind::Element { .. }))
     }
@@ -278,6 +313,8 @@ pub fn resolve_module(map: &[(String, String)], base: &str, spec: &str) -> Strin
 
 impl Page for Document {
     fn now_ns(&mut self) -> u64 { (self.clock)() }
+    #[cfg(feature = "jit-profile")]
+    fn profile_ns(&mut self) -> u64 { self.profile_clock.unwrap_or(self.clock)() }
     fn take_wanted_modules(&mut self) -> Vec<String> { core::mem::take(&mut self.modules_wanted) }
 
     fn call_bytes(&mut self, operation: u32, a: &[&[u8]]) -> Option<Vec<u8>> {
@@ -437,13 +474,13 @@ impl Page for Document {
             }
             op::BY_ID => {
                 let want = *a.first()?;
-                self.dom.descendants(Dom::ROOT).into_iter().find(|&n| self.dom.attr(n, "id") == Some(want)).map(|n| format!("{n}"))
+                self.dom.by_id(Dom::ROOT, want).map(|n| format!("{n}"))
             }
             op::QUERY | op::MATCHES => {
                 let root = self.node(a.first())?;
                 let text = *a.get(1)?;
                 #[cfg(feature = "jit-profile")]
-                let before = (self.clock)();
+                let before = self.profile_clock.unwrap_or(self.clock)();
                 let list = if let Some((_, parsed)) = self.selectors.iter().find(|(s, _)| s == text) {
                     parsed.clone()
                 } else {
@@ -463,7 +500,7 @@ impl Page for Document {
                 let found = self.dom.query(root, &list, all);
                 #[cfg(feature = "jit-profile")]
                 {
-                    let elapsed = (self.clock)().saturating_sub(before);
+                    let elapsed = self.profile_clock.unwrap_or(self.clock)().saturating_sub(before);
                     if let Some((_, calls, ns)) = self.query_profile.iter_mut().find(|(s, _, _)| s == text) {
                         *calls = calls.saturating_add(1); *ns = ns.saturating_add(elapsed);
                     } else if text.len() <= 16384 {
@@ -475,6 +512,10 @@ impl Page for Document {
                     }
                 }
                 if all { Some(Self::ids(found.into_iter())) } else { found.first().map(|n| format!("{n}")) }
+            }
+            op::POSITION => {
+                let (a, b) = (self.node(a.first())?, self.node(a.get(1))?);
+                Some(format!("{}", self.position(a, b)))
             }
             op::SVG_CONTEXT => {
                 let node = self.node(a.first())?;
