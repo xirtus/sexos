@@ -63,6 +63,28 @@ The laptop gate now has a USB stick on the xHCI controller and checks its suspen
 resume around the lid close. QEMU has no HDA codec, eDP or I2C touchpad in that gate, so
 those three are proven on the x17 by their log lines.
 
+## Idle cores: C-states (kernel pass 2, K4)
+
+Before this, the ACPI service picked one `_CST` state (the deepest with exit latency
+under 200 us) and every idle core entered it, however soon the next tick was due. Now:
+
+- sexacpi reports every `_CST` state entered with MWAIT (`FW_IDLE` once per state). The
+  kernel keeps them by exit latency (`sex_idle::Table`, up to 6), logging
+  `[acpi.firmware.idle] c= latency_us= hint= states=` for each.
+- Each idle, `sex_idle::choose` picks the deepest state whose target residency (twice its
+  exit latency) fits the predicted idle time and whose exit latency fits the power
+  profile's limit (performance 100 us, balanced 500 us, saver 1,000 us). The prediction
+  is the time to the next tick (the local APIC timer's current count), shortened by the
+  core's typical recent idle length when its last 8 idle periods agree (Linux's menu
+  governor finds that the same way). Too short for any state: HLT.
+- Idle entries per state are counted per core; `[acpi.idle.usage] states=N entries=[hlt, ...]`
+  is logged on each sleep entry and exit.
+
+On the x17, look for two or three `[acpi.firmware.idle]` lines at boot (C6- and C10-class
+hints such as 0x20 and 0x60) and, after a lid close and open, `[acpi.idle.usage]` with most
+entries in the deepest state. With the 1 ms tick an idle core still wakes 1,000 times a
+second; tickless idle (the rest of K4) lets these states last longer.
+
 ## Later
 
 - Thunderbolt: the GO2SX / GO2SX_EXIT mailbox (VS_CAP_19 commands 0x02/0x03) around sleep,

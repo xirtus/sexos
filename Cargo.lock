@@ -7173,6 +7173,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-idle"
+version = "0.1.0"
+
+[[package]]
 name = "sex-image"
 version = "0.1.0"
 dependencies = [
@@ -7234,6 +7238,7 @@ dependencies = [
  "raw-cpuid 11.6.0",
  "scopeguard",
  "sex-hwdb",
+ "sex-idle",
  "sex-iommu",
  "sex-pcipm",
  "sex-pdx",

@@ -109,6 +109,9 @@ def main():
   # Closing the lid suspends to idle: firmware's LPS0 screen-off and entry, panel dark.
   g['wait'](r'\[shell\.sleep\] enter=1 by=lid ok=1',closed,30)
   g['wait'](r'\[acpi\.sleep\] enter=1 firmware_told=1',closed,30)
+  # Idle entries per state are counted (QEMU has no _CST, so all are HLT here).
+  usage=g['wait'](r'\[acpi\.idle\.usage\] states=(\d+) entries=\[([1-9]\d*)',closed,30)
+  result['idle_usage']=dict(states=int(usage[1]),hlt=int(usage[2]))
   g['wait'](r'\[sexacpi\.sleep\] enter=1 lps0=\\_SB\.PEPD ran=intel:3 intel:5 panel=10',closed,30)
   # Every driver holding a device hears it; the disk flushes before the machine sleeps.
   g['wait'](r'\[pci\.power\.sleep\] asleep=1 drivers_told=[2-9]',closed,30)

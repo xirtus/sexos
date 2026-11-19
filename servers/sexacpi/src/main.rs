@@ -294,11 +294,12 @@ fn inventory(aml: &Aml) -> Devices {
     d
 }
 
-/// The deepest `_CST` state entered with MWAIT whose exit latency stays under 200 us.
-fn choose_cstate(aml: &Aml, cpu: &AmlName) -> Option<(u8, u16, u32)> {
-    let cst = eval(aml, cpu, "_CST", Vec::new())?;
-    let Object::Package(items) = &*cst else { return None };
-    let mut best: Option<(u8, u16, u32)> = None;
+/// Every `_CST` state entered with MWAIT (functional fixed hardware, Intel class),
+/// as (type, exit latency in us, MWAIT hint). The kernel picks among them per idle period.
+fn cstates(aml: &Aml, cpu: &AmlName) -> Vec<(u8, u16, u32)> {
+    let mut out = Vec::new();
+    let Some(cst) = eval(aml, cpu, "_CST", Vec::new()) else { return out };
+    let Object::Package(items) = &*cst else { return out };
     for item in items.iter().skip(1) {
         let Object::Package(state) = &**item else { continue };
         if state.len() < 4 { continue; }
@@ -307,9 +308,9 @@ fn choose_cstate(aml: &Aml, cpu: &AmlName) -> Option<(u8, u16, u32)> {
         // Generic register descriptor: 0x82, len(2), space, width, offset, access, address(8).
         if reg.len() < 12 || reg[0] != 0x82 || reg[3] != 0x7F || reg[4] != 1 || reg[5] != 2 { continue; }
         let hint = u32::from_le_bytes([reg[7], reg[8], reg[9], reg[10]]);
-        if latency <= 200 && best.map_or(true, |(k, _, _)| kind as u8 > k) { best = Some((kind as u8, latency as u16, hint)); }
+        if kind >= 2 && latency <= 1000 { out.push((kind as u8, latency as u16, hint)); }
     }
-    best
+    out
 }
 
 // ── Discrete GPU power (D3cold) ────────────────────────────────────────────
@@ -537,14 +538,17 @@ pub extern "C" fn _start() -> ! {
             }
         }
         let devices = inventory(aml);
-        let cstate = devices.processors.first().and_then(|cpu| choose_cstate(aml, cpu));
+        let cstate = devices.processors.first().map(|cpu| cstates(aml, cpu)).unwrap_or_default();
         let light = laptop::Backlight::find(aml, &acpi_devices(aml));
         (devices, s5, cstate, ec, light)
     });
     let counts = devices.batteries.len().min(255) as u64 | (devices.lids.len().min(255) as u64) << 8
         | (devices.thermal.len().min(255) as u64) << 16 | (devices.i2c_hid.len().min(255) as u64) << 24 | 1 << 32;
     let _ = w::call4(w::FW_INVENTORY, counts, s5, 0);
-    let idle = cstate.map_or(u64::MAX, |(kind, latency, hint)| w::call4(w::FW_IDLE, kind as u64 | (latency as u64) << 8 | (hint as u64) << 32, 0, 0)[0]);
+    let idle = cstate.iter().fold(u64::MAX, |any, &(kind, latency, hint)| {
+        let r = w::call4(w::FW_IDLE, kind as u64 | (latency as u64) << 8 | (hint as u64) << 32, 0, 0)[0];
+        if r == w::OK { r } else { any }
+    });
     serial_println!("[sexacpi.ready] aml=1 batteries={} ac={} lids={} thermal={} processors={} i2c_hid={} s5={:#x} idle={} ec={} backlight={}",
         devices.batteries.len(), devices.ac.len(), devices.lids.len(), devices.thermal.len(), devices.processors.len(), devices.i2c_hid.len(),
         s5, if idle == w::OK { "mwait" } else { "hlt" }, ec.is_some() as u8, light.output.is_some() as u8);

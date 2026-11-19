@@ -319,17 +319,24 @@ fn fw_inventory(counts: u64, s5: u64, failed: u64) -> [u64; 5] {
         (info.flags & w::AML != 0) as u8, info.batteries, info.lids, info.thermal_zones, info.i2c_hid, S5.load(Ordering::Acquire));
     [w::OK, 0, 0, 0, 0]
 }
-/// The C-state the service chose from `_CST`: used only where MONITOR/MWAIT exist and the
-/// local APIC timer keeps running in deep states (ARAT), and only C2 and deeper.
+/// One `_CST` state the service found that MWAIT enters. The kernel takes it only where
+/// MONITOR/MWAIT exist and the local APIC timer keeps running in deep states (ARAT),
+/// and only C2 and deeper; which one each idle period uses is `sex_idle::choose`.
 fn fw_idle(arg: u64) -> [u64; 5] {
     let (kind, latency, hint) = (arg as u8, (arg >> 8) as u16, (arg >> 32) as u32);
     let monitor = cpuid(1, 0).ecx & (1 << 3) != 0;
     let arat = max_leaf() >= 6 && cpuid(6, 0).eax & (1 << 2) != 0;
-    if !(monitor && arat && kind >= 2 && latency <= 200 && hint <= 0xFF) { return [w::INVALID, 0, 0, 0, 0]; }
-    MWAIT_HINT.store(hint, Ordering::Release);
+    if !(monitor && arat && latency <= 1000) { return [w::INVALID, 0, 0, 0, 0]; }
+    let mut table = IDLE_STATES.lock();
+    let mut t = *table;
+    if !t.add(sex_idle::State { kind, hint, latency_us: latency as u32 }) { return [w::INVALID, 0, 0, 0, 0]; }
+    *table = t;
+    for (i, s) in t.states().iter().enumerate() { IDLE_PACKED[i].store(s.hint as u64 | (s.latency_us as u64) << 8 | (s.kind as u64) << 40, Ordering::Release); }
+    IDLE_COUNT.store(t.len(), Ordering::Release);
     let mut info = INFO.lock();
-    info.idle_state = kind; info.idle_latency_us = latency; info.flags |= w::MWAIT_IDLE;
-    serial_println!("[acpi.firmware.idle] c={} latency_us={} hint={:#x}", kind, latency, hint);
+    if kind >= info.idle_state { info.idle_state = kind; info.idle_latency_us = latency; }
+    info.flags |= w::MWAIT_IDLE;
+    serial_println!("[acpi.firmware.idle] c={} latency_us={} hint={:#x} states={}", kind, latency, hint, t.len());
     [w::OK, 0, 0, 0, 0]
 }
 
@@ -339,7 +346,16 @@ fn this_core() -> u32 {
 
 // ── CPU performance and idle ───────────────────────────────────────────────
 
-static MWAIT_HINT: AtomicU32 = AtomicU32::new(u32::MAX);
+/// MWAIT states by exit latency (`sex_idle::Table`), written once at boot by `fw_idle`;
+/// packed for the idle path, which reads them without a lock.
+static IDLE_STATES: spin::Mutex<sex_idle::Table> = spin::Mutex::new(sex_idle::Table::new());
+static IDLE_PACKED: [AtomicU64; sex_idle::MAX] = [const { AtomicU64::new(0) }; sex_idle::MAX];
+static IDLE_COUNT: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+/// Per core: recent idle lengths, and entries per state (0 = HLT, then the table's order).
+static IDLE_HISTORY: [spin::Mutex<sex_idle::History>; 64] = [const { spin::Mutex::new(sex_idle::History::new()) }; 64];
+static IDLE_USAGE: [[AtomicU64; sex_idle::MAX + 1]; 64] = [const { [const { AtomicU64::new(0) }; sex_idle::MAX + 1] }; 64];
+/// Longest exit latency each profile accepts (performance, balanced, saver), microseconds.
+const PROFILE_IDLE_LIMIT_US: [u32; 3] = [100, 500, 1000];
 #[repr(align(64))]
 struct Line([AtomicU64; 8]);
 static MONITOR_LINES: [Line; 64] = [const { Line([const { AtomicU64::new(0) }; 8]) }; 64];
@@ -416,19 +432,42 @@ fn set_profile(p: u8) -> [u64; 5] {
     [w::OK, (msr != 0) as u64, 0, 0, 0]
 }
 
-/// The scheduler's idle: MWAIT into the chosen C-state, or HLT (C1). Interrupts wake it.
+/// The scheduler's idle: MWAIT into the C-state `sex_idle` picks for the time to the next
+/// tick and this core's recent idle lengths, or HLT (C1). Interrupts wake it.
 pub fn idle() {
     profile_apply_local();
-    let hint = MWAIT_HINT.load(Ordering::Relaxed);
-    if hint == u32::MAX {
-        x86_64::instructions::interrupts::enable_and_hlt();
-        return;
+    let core = (this_core() as usize) % 64;
+    let n = IDLE_COUNT.load(Ordering::Acquire);
+    let mut t = sex_idle::Table::new();
+    for p in IDLE_PACKED.iter().take(n) {
+        let v = p.load(Ordering::Relaxed);
+        t.add(sex_idle::State { hint: v as u32 & 0xFF, latency_us: (v >> 8) as u32, kind: (v >> 40) as u8 });
     }
-    let line = &MONITOR_LINES[(this_core() as usize) % 64].0[0] as *const AtomicU64;
-    unsafe {
-        core::arch::asm!("monitor", in("rax") line, in("ecx") 0, in("edx") 0, options(nostack));
-        core::arch::asm!("sti", "mwait", in("eax") hint, in("ecx") 1, options(nostack));
+    let before = crate::apic::until_tick_us();
+    let limit = PROFILE_IDLE_LIMIT_US[PROFILE.load(Ordering::Relaxed) as usize % 3];
+    let pick = if t.is_empty() { None } else { sex_idle::choose(&t, &IDLE_HISTORY[core].lock(), before, limit) };
+    IDLE_USAGE[core][pick.map_or(0, |i| i + 1)].fetch_add(1, Ordering::Relaxed);
+    match pick {
+        None => x86_64::instructions::interrupts::enable_and_hlt(),
+        Some(i) => {
+            let line = &MONITOR_LINES[core].0[0] as *const AtomicU64;
+            unsafe {
+                core::arch::asm!("monitor", in("rax") line, in("ecx") 0, in("edx") 0, options(nostack));
+                core::arch::asm!("sti", "mwait", in("eax") t.states()[i].hint, in("ecx") 1, options(nostack));
+            }
+        }
     }
+    // The timer is periodic: a later reading above the earlier one means the tick came.
+    let after = crate::apic::until_tick_us();
+    let slept = if after > before { before + crate::apic::TICK_US.saturating_sub(after) } else { before - after };
+    IDLE_HISTORY[core].lock().record(slept);
+}
+
+/// Idle entries per state over all cores since boot: `[hlt, table order...]`, and how many states.
+pub fn idle_usage() -> ([u64; sex_idle::MAX + 1], usize) {
+    let mut sum = [0u64; sex_idle::MAX + 1];
+    for core in IDLE_USAGE.iter() { for (i, c) in core.iter().enumerate() { sum[i] += c.load(Ordering::Relaxed); } }
+    (sum, IDLE_COUNT.load(Ordering::Acquire))
 }
 
 // ── Bring-up ──────────────────────────────────────────────────────────────
@@ -704,6 +743,9 @@ fn control(caller: u32, word: u64) -> [u64; 5] {
             // Without the ACPI service the desktop still sleeps (dark, energy preferred).
             let queued = queue_control(word)[0] == w::OK;
             serial_println!("[acpi.sleep] enter={} firmware_told={}", value, queued as u8);
+            // Idle entries per state since boot ([hlt, then MWAIT states by latency]).
+            let (usage, n) = idle_usage();
+            serial_println!("[acpi.idle.usage] states={} entries={:?}", n, &usage[..=n]);
             if value == 0 { crate::pci_power::tell_drivers(false); }
             [w::OK, 0, 0, 0, 0]
         }

@@ -288,6 +288,8 @@ jobs:
       run: cargo test --locked -p sex-i2c-dw
     - name: PCIe power management (ASPM, L1 substates, LTR, D-states on a simulated config space)
       run: cargo test --locked -p sex-pcipm
+    - name: CPU idle states (which MWAIT C-state an idle core enters)
+      run: cargo test --locked -p sex-idle
 
   truth:
     name: Host kernel-model regressions (${{ matrix.shard }}/3)
