@@ -10,8 +10,11 @@
 //! runs on sex-app; until then [`ui`] shows the caret's page.
 //!
 //! Keys are WordCraft's (Word's): arrows, Home/End, Ctrl+arrows, Shift to select,
-//! Enter, Backspace, Delete, Ctrl+B/I/U, Ctrl+Z/Y, Ctrl+A. Ctrl+S saves, Ctrl+= and
-//! Ctrl+- zoom. A click places the caret; the wheel scrolls.
+//! Enter, Backspace, Delete, Ctrl+B/I/U, Ctrl+Z/Y, Ctrl+A. Ctrl+S saves (a .doc beside
+//! itself as .docx), Ctrl+Shift+E saves as (the extension picks docx, odt, rtf, html, md,
+//! txt or pdf), Ctrl+P writes a PDF beside the file, Ctrl+G goes to a page, Ctrl+= and
+//! Ctrl+- zoom. A click places the caret; the wheel scrolls. Unsaved changes are kept
+//! aside on close and after a quiet moment, and come back the next time the file opens.
 #![cfg_attr(not(target_os = "hermit"), allow(dead_code))]
 mod book;
 #[cfg(target_os = "hermit")]
@@ -28,7 +31,13 @@ fn main() {
         }
         "welcome.docx".to_string()
     });
-    let opened = if std::fs::metadata(&name).is_ok() { book::Book::open(&name) } else { Ok(book::Book::blank(&name)) };
+    let recovered = book::Book::open_recovered(&name);
+    let was_recovered = recovered.is_some();
+    let opened = match recovered {
+        Some(book) => Ok(book),
+        None if std::fs::metadata(&name).is_ok() => book::Book::open(&name),
+        None => Ok(book::Book::blank(&name)),
+    };
     let mut book = match opened {
         Ok(book) => book,
         Err(message) => {
@@ -39,7 +48,9 @@ fn main() {
     let (target, task) = sex_std::identity();
     sex_std::record(&format!("[assuit.open] target={target} task={task} name={name} pages={}", book.pages()));
     let window = sex_std::window();
-    ui::Ui::new(book, name).run(window);
+    let ui = ui::Ui::new(book, name);
+    let ui = if was_recovered { sex_std::record("[assuit.recovered]"); ui.recovered() } else { ui };
+    ui.run(window);
     std::process::exit(0);
 }
 

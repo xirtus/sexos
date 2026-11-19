@@ -69,7 +69,28 @@ pub struct Ui {
     /// A column whose right edge is being dragged: (column, pointer x at the start, width then,
     /// width now).
     resizing: Option<(u32, i32, i32, i32)>,
+    /// The Save As, Go To or insert/delete prompt, while it is open.
+    ask: Option<Ask>,
+    /// The workbook came back with last time's unsaved changes: Esc throws them away until
+    /// the next edit.
+    recovered: bool,
+    /// When the workbook last changed without its changes being kept (ticks), for the
+    /// quiet-moment copy.
+    unkept: Option<u64>,
 }
+
+/// A one-line prompt in the status line.
+enum Ask {
+    /// Ctrl+Shift+S: a file name; its extension picks the format.
+    SaveAs(Vec<char>),
+    /// Ctrl+G: a cell, range or Sheet!cell.
+    GoTo(Vec<char>),
+    /// Ctrl+Shift+= (insert) or Ctrl+- (delete): R for rows, C for columns.
+    Lines { insert: bool },
+}
+
+/// Unsaved changes are copied aside after this long without a key (milliseconds).
+const KEEP_AFTER_MS: u64 = 15_000;
 
 /// Ctrl+F asks what to find; Ctrl+H also asks what to put in its place.
 struct Prompt {
@@ -110,6 +131,10 @@ mod code {
     pub const U: u8 = 0x16;
     pub const F2: u8 = 0x3C;
     pub const H: u8 = 0x23;
+    pub const G: u8 = 0x22;
+    pub const P: u8 = 0x19;
+    pub const MINUS: u8 = 0x0C;
+    pub const EQUALS: u8 = 0x0D;
     /// The digit row: 1 to 6, and the key left of 1 (` and ~).
     pub fn digit(c: u8) -> Option<u8> { (0x02..=0x07).contains(&c).then(|| c - 1) }
     pub const GRAVE: u8 = 0x29;
@@ -130,6 +155,7 @@ impl Ui {
         Ui {
             book, name, row: 0, col: 0, anchor: None, top: 0, left: 0, edit: None, message: String::new(),
             pen: Pen::sans(13), small: RefCell::new(Vec::new()), rows: Vec::new(), cols: Vec::new(), grid: (i32::MAX, i32::MAX), copied: None, find: None, resizing: None,
+            ask: None, recovered: false, unkept: None,
         }
     }
 
@@ -417,7 +443,15 @@ impl Ui {
             self.pen.text(&mut canvas, tx + 12, ty0 + (TABS_H - self.pen.line_height()) / 2, sheet, if i == active { ACCENT } else { DIM }, None);
             tx += tw + 2;
         }
-        let status = if let Some(p) = &self.find {
+        let status = if let Some(ask) = &self.ask {
+            let said = |hint: &str| if self.message.is_empty() { hint.to_string() } else { self.message.clone() };
+            match ask {
+                Ask::SaveAs(name) => format!("Save as: {}_   {}", name.iter().collect::<String>(), said("xlsx, ods, csv, tsv, html or pdf; Enter saves, Esc closes")),
+                Ask::GoTo(place) => format!("Go to: {}_   {}", place.iter().collect::<String>(), said("a cell like B7, B7:D9 or Sheet2!B7; Enter goes, Esc closes")),
+                Ask::Lines { insert: true } => format!("Insert {}: R rows above, C columns to the left, Esc cancels", self.selection().a1()),
+                Ask::Lines { insert: false } => format!("Delete {}: R its rows, C its columns, Esc cancels", self.selection().a1()),
+            }
+        } else if let Some(p) = &self.find {
             let what: String = p.what.iter().collect();
             match &p.with {
                 None => {
@@ -432,7 +466,7 @@ impl Ui {
                 }
             }
         } else if self.message.is_empty() {
-            format!("{}{}  Ctrl+S save  Ctrl+Z undo  Ctrl+C/X/V copy  Ctrl+F find  Ctrl+H replace  Ctrl+D fill  Ctrl+Shift+T sum  Ctrl+Shift+A/D sort  L filter  F freeze  C chart",
+            format!("{}{}  Ctrl+S save  Ctrl+Shift+S save as  Ctrl+P PDF  Ctrl+Z undo  Ctrl+C/X/V copy  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+=/- insert/delete  Ctrl+D fill  Ctrl+Shift+T sum  Ctrl+Shift+A/D sort  L filter  F freeze  C chart",
                 self.name, if self.book.dirty() { " (changed)" } else { "" })
         } else {
             self.message.clone()
@@ -451,6 +485,8 @@ impl Ui {
     fn save(&mut self) {
         match self.book.save() {
             Ok(bytes) => {
+                self.recovered = false;
+                self.unkept = None;
                 sex_std::record(&format!("[spreadeagle.saved] name={} bytes={bytes}", self.book.path));
                 let saved = self.book.path.rsplit('/').next().unwrap_or(&self.book.path).to_string();
                 if saved != self.name { self.name = saved; }
@@ -459,6 +495,88 @@ impl Ui {
             Err(e) => {
                 sex_std::record(&format!("[spreadeagle.save-failed] {e}"));
                 self.message = e;
+            }
+        }
+    }
+
+    /// Keeps unsaved changes aside (on close, and after a quiet moment), so a crash or a
+    /// closed window loses nothing: the next start opens them.
+    fn keep(&mut self) {
+        self.unkept = None;
+        if !self.book.dirty() { return; }
+        match self.book.write_recovery() {
+            Ok(()) => sex_std::record(&format!("[spreadeagle.kept] name={}", crate::book::recovery_path(&self.book.path))),
+            Err(e) => sex_std::record(&format!("[spreadeagle.keep-failed] {e}")),
+        }
+    }
+
+    /// Writes the active sheet as a PDF beside the workbook.
+    fn export_pdf(&mut self) {
+        match self.book.export_pdf() {
+            Ok((path, bytes)) => {
+                sex_std::record(&format!("[spreadeagle.pdf] name={path} bytes={bytes}"));
+                self.message = format!("Wrote {} ({bytes} bytes)", path.rsplit('/').next().unwrap_or(&path));
+            }
+            Err(e) => {
+                sex_std::record(&format!("[spreadeagle.pdf-failed] {e}"));
+                self.message = e;
+            }
+        }
+    }
+
+    /// A key while a Save As, Go To or insert/delete prompt is open. Returns whether
+    /// cells (or the sheet) changed.
+    fn ask_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
+        let Some(ask) = &mut self.ask else { return false };
+        if key.code == code::ESC { self.ask = None; self.message.clear(); return false; }
+        match ask {
+            Ask::Lines { insert } => {
+                let insert = *insert;
+                let rows = match key.code { code::R => true, code::C => false, _ => return false };
+                self.ask = None;
+                let sel = self.selection();
+                let what = if rows { "rows" } else { "columns" };
+                let done = if insert { self.book.insert_lines(sel, rows) } else { self.book.delete_lines(sel, rows) };
+                let id = format!("home.{}{}", if insert { "insert" } else { "delete" }, if rows { "Rows" } else { "Columns" });
+                self.command(&id, done, format!("{} the {what} of {}", if insert { "Inserted" } else { "Deleted" }, sel.a1()))
+            }
+            Ask::SaveAs(text) | Ask::GoTo(text) => {
+                match key.code {
+                    code::BACKSPACE => { text.pop(); self.message.clear(); return false; }
+                    code::ENTER => {}
+                    _ => {
+                        if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { text.push(ch); self.message.clear(); }
+                        return false;
+                    }
+                }
+                let typed: String = text.iter().collect::<String>().trim().to_string();
+                if typed.is_empty() { return false; }
+                if matches!(ask, Ask::SaveAs(_)) {
+                    match self.book.save_as(&typed) {
+                        Ok((path, bytes)) => {
+                            self.ask = None;
+                            sex_std::record(&format!("[spreadeagle.saved-as] name={path} bytes={bytes}"));
+                            let short = path.rsplit('/').next().unwrap_or(&path).to_string();
+                            if path == self.book.path { self.name = short.clone(); self.recovered = false; }
+                            self.message = format!("Saved {short} ({bytes} bytes)");
+                        }
+                        Err(e) => self.message = e,
+                    }
+                    return false;
+                }
+                match self.book.go_to(&typed) {
+                    Ok(range) => {
+                        self.ask = None;
+                        self.commit();
+                        self.anchor = if range.single() { None } else { Some((range.r0, range.c0)) };
+                        self.row = range.r1;
+                        self.col = range.c1;
+                        sex_std::record(&format!("[spreadeagle.goto] place={typed} cell={}", self.cell_name()));
+                        self.message = format!("Went to {}", range.a1());
+                        true
+                    }
+                    Err(e) => { self.message = e; false }
+                }
             }
         }
     }
@@ -529,7 +647,22 @@ impl Ui {
     /// One key. Returns whether the cells (or the sheet) changed: worth a record of the column.
     fn key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
         let (row, col) = (self.row as i64, self.col as i64);
+        if self.ask.is_some() { return self.ask_key(key); }
         if self.find.is_some() { return self.find_key(key); }
+        if self.recovered && key.code == code::ESC && !key.control && self.edit.is_none() {
+            return self.discard_recovered();
+        }
+        if key.control && self.edit.is_none() {
+            let ask = match key.code {
+                code::S if key.shift => Some(Ask::SaveAs(self.name.chars().collect())),
+                code::G => Some(Ask::GoTo(Vec::new())),
+                code::EQUALS if key.shift => Some(Ask::Lines { insert: true }),
+                code::MINUS => Some(Ask::Lines { insert: false }),
+                code::P => { self.export_pdf(); return false; }
+                _ => None,
+            };
+            if let Some(ask) = ask { self.message.clear(); self.ask = Some(ask); return false; }
+        }
         if key.control {
             if key.shift && self.edit.is_none() && matches!(key.code, code::A | code::D | code::E | code::F | code::L | code::C) {
                 return self.data_key(key.code);
@@ -605,6 +738,24 @@ impl Ui {
             }
         }
         false
+    }
+
+    /// Esc on a workbook that came back with unsaved changes: goes back to the saved file.
+    fn discard_recovered(&mut self) -> bool {
+        self.recovered = false;
+        self.book.forget_recovery();
+        let path = self.book.path.clone();
+        let opened = if std::fs::metadata(&path).is_ok() { Book::open(&path).map(|(b, _)| b) } else { Ok(Book::blank(&path)) };
+        match opened {
+            Ok(book) => {
+                self.book = book;
+                self.home();
+                sex_std::record(&format!("[spreadeagle.discarded] name={path}"));
+                self.message = format!("Threw the kept changes away: {} is as last saved", self.name);
+                true
+            }
+            Err(e) => { self.message = e; false }
+        }
     }
 
     /// Ctrl shortcuts on the cells: clipboard, fill, styles, AutoSum and find, on GridCraft's
@@ -785,6 +936,13 @@ impl Ui {
         }
     }
 
+    /// Opens with last time's unsaved changes: says so, and Esc throws them away.
+    pub fn recovered(mut self) -> Ui {
+        self.recovered = true;
+        self.message = "Brought back the changes not saved last time: Ctrl+S keeps them, Esc throws them away".into();
+        self
+    }
+
     pub fn run(mut self, window: &mut sex_app::Window) {
         self.draw(window);
         let frozen = self.book.frozen().map_or("none".into(), |(r, c)| format!("{r},{c}"));
@@ -792,12 +950,22 @@ impl Ui {
         sex_std::record(&format!("[spreadeagle.columns] A={} B={}", self.book.col_width(0), self.book.col_width(1)));
         self.record_column();
         loop {
-            match window.next() {
-                Event::Close => break,
+            let Some(event) = window.next_within(1000) else {
+                // A quiet moment after a change: keep the unsaved work safe.
+                if self.unkept.is_some_and(|t| sex_std::sex_pdx::get_ticks().saturating_sub(t) >= KEEP_AFTER_MS) { self.keep(); }
+                continue;
+            };
+            match event {
+                Event::Close => { self.keep(); break; }
                 Event::Resize { .. } => self.draw(window),
                 Event::Key(key) => {
                     let col = self.col;
                     let changed = self.key(key);
+                    if changed && self.book.dirty() {
+                        self.unkept.get_or_insert(sex_std::sex_pdx::get_ticks());
+                        // An edit makes the brought-back changes the user's own: Esc no longer throws them away.
+                        if !matches!(key.code, code::ESC) { self.recovered = false; }
+                    }
                     self.draw(window);
                     if changed || col != self.col { self.record_column(); }
                 }
