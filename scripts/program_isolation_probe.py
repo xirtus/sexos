@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """One program reads its neighbour; only the reader dies. Needs an ISO built with SEXOS_PROGRAM_ISOLATION_PROBE=1 (row 43 reads 42, across keys)
-or =4 with a fourth argument `4` (row 45 reads 44, which shares its key but is absent while 45 runs)."""
+or =4 with a fourth argument `4` (row 45 reads 44, which shares its key but is closed in 45's protection view,
+with or without PKU: SEXOS_GATE_CPU=max,-pku)."""
 import sys,time,re,shutil
 from pathlib import Path
 from quil_autosave_gate import boot
@@ -20,6 +21,8 @@ try:
  m=g['wait'](rf'\[paging.fault.trap\] pd={READER}[^\n]*',s,60);print(m[0]);print(g['wait'](r'fault.kill[^\n]*',s,30)[0])
  print(g['wait'](rf'\[app.private.retired\] target={READER}[^\n]*',s,60)[0][:80]);time.sleep(2)
  print('breach' , 'hello.probe.breach' in t())
+ assert 'hello.probe.breach' not in t(),'a program read its neighbour'
+ assert 'KERNEL PANIC' not in t()
  # The row runs again. It may be the probing row itself, which probes and is ended again.
  palette_select(g['key'],'FocusProgram',palette_commands(ROOT));s=len(t());q.key('ret');print(g['wait'](r'\[hello.(ready|probe.own)\][^\n]*',s,60)[0]);time.sleep(2)
  q.cmd('screendump',{'filename':str(out/'p.ppm')});time.sleep(.5)
