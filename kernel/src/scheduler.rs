@@ -52,6 +52,8 @@ pub mod task_exit;
 pub mod self_wait;
 #[path = "scheduler_deadline.rs"]
 pub mod deadline;
+#[path = "scheduler_pair.rs"]
+pub mod pair;
 // Main-task addresses are registered once by BOOT, never from a syscall.
 static SELF_WAIT_TASKS:self_wait::BootInventory<Task,{self_wait::BOOT_MAIN_CAPACITY}>=self_wait::BootInventory::new();
 static TIMED_PARKS:AtomicU64=AtomicU64::new(0);
@@ -655,6 +657,11 @@ impl Scheduler {
         !self.handoff.load(Ordering::Relaxed).is_null() || !self.deadline.is_empty()
             || self.urgent.bottom.load(Ordering::Acquire) != self.urgent.top.load(Ordering::Acquire)
             || self.runqueue.bottom.load(Ordering::Acquire) != self.runqueue.top.load(Ordering::Acquire)
+    }
+    /// Tasks waiting in this core's queues, for pair affinity's load check.
+    fn queued(&self) -> usize {
+        let depth = |bottom: &core::sync::atomic::AtomicUsize, top: &core::sync::atomic::AtomicUsize| bottom.load(Ordering::Acquire).wrapping_sub(top.load(Ordering::Acquire));
+        depth(&self.runqueue.bottom, &self.runqueue.top) + depth(&self.urgent.bottom, &self.urgent.top) + !self.handoff.load(Ordering::Relaxed).is_null() as usize
     }
     fn running_normal(&self) -> bool {
         let current = self.current_task.load(Ordering::Acquire);
