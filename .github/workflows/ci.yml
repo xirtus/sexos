@@ -60,10 +60,12 @@ jobs:
     name: Host regressions
     needs: changes
     if: needs.changes.outputs.scope == 'full'
-    runs-on: ubuntu-latest
+    # Runs on the self-hosted Mac (x86_64 container under Rosetta, tools/ci/mac-runner)
+    # when the repo variable SEXOS_MAC_RUNNER is 'on', never for pull requests from forks.
+    runs-on: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","sexos-mac"]') || 'ubuntu-latest' }}
     # 23-35 min warm; a cold cargo cache (after a red master) or a slow apt mirror
-    # needs more.
-    timeout-minutes: 60
+    # needs more. Rosetta on the Mac is slower.
+    timeout-minutes: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 120 || 60 }}
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -293,8 +295,10 @@ jobs:
     name: Host kernel-model regressions (${{ matrix.shard }}/3)
     needs: changes
     if: needs.changes.outputs.scope == 'full'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Runs on the self-hosted Mac (x86_64 container under Rosetta, tools/ci/mac-runner)
+    # when the repo variable SEXOS_MAC_RUNNER is 'on', never for pull requests from forks.
+    runs-on: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","sexos-mac"]') || 'ubuntu-latest' }}
+    timeout-minutes: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 60 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -365,6 +369,8 @@ jobs:
       run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
     - name: Boots to the desktop with 1, 2, 4 and 32 GiB of RAM
       run: python3 scripts/ram_sizes_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/ram-sizes"
+    - name: Drivers come up on device mixes other gates skip (Intel xHCI + hub, AHCI only, e1000, HDA output codec)
+      run: python3 scripts/device_matrix_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/device-matrix"
     - name: Compiled scheduler stack-release boundary
       run: SWITCH_EVIDENCE="$RUNNER_TEMP/sexos-runtime/scheduler-switch.txt" bash scripts/scheduler_switch_boundary_gate.sh
     - name: Timer PKRU save and restore boundary
@@ -544,6 +550,8 @@ jobs:
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
     - name: Intel RAID 0 on two NVMe drives, read only
       run: python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
+    - name: NVMe drives as real laptops have them (64 KiB per command; 4 KiB sectors refused)
+      run: python3 scripts/nvme_real_drive_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-nvme-real"
     - name: Power off and restart through ACPI
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI
@@ -1081,6 +1089,13 @@ jobs:
       run: |
         bash scripts/build_splicy_studio.sh
         python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"
+    - name: Media codecs use AVX2 and decode the same pictures as with SSE (decode and encode speed, real CPU on KVM)
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        grep -m1 'model name' /proc/cpuinfo
+        bash scripts/build_mediabench.sh
+        truncate -s 1G "$RUNNER_TEMP/mediabench-source.img"
+        python3 scripts/program_mediabench_gate.py --accel auto --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/mediabench-source.img" --out "$RUNNER_TEMP/recording/mediabench"
     - name: Preserve encoder evidence
       if: always()
       uses: actions/upload-artifact@v4

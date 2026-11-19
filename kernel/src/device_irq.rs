@@ -53,7 +53,7 @@ static RECORDS: spin::Mutex<[Option<Record>; MAX_LEASES]> = spin::Mutex::new([No
 fn byte(dev: &crate::hal::pci::PciDevice, at: u8) -> u8 { (dev.read_u32(at & !3) >> ((at & 3) * 8)) as u8 }
 
 /// Offsets of the MSI and MSI-X capabilities, if the device has them.
-fn capabilities(dev: &crate::hal::pci::PciDevice) -> (Option<u8>, Option<u8>) {
+pub(crate) fn capabilities(dev: &crate::hal::pci::PciDevice) -> (Option<u8>, Option<u8>) {
     let (mut msi, mut msix) = (None, None);
     if dev.read_u32(0x04) & CAP_LIST == 0 { return (None, None); }
     let mut at = byte(dev, 0x34) & !3;
@@ -67,7 +67,7 @@ fn capabilities(dev: &crate::hal::pci::PciDevice) -> (Option<u8>, Option<u8>) {
 }
 
 /// MSI address for fixed delivery to one local APIC, and the data word for a vector.
-fn address(apic: u32) -> u32 { 0xFEE0_0000 | (apic & 0xff) << 12 }
+pub(crate) fn address(apic: u32) -> u32 { 0xFEE0_0000 | (apic & 0xff) << 12 }
 
 fn allocate(pd: u32, want: u32) -> Option<(usize, u8)> {
     let bit = NEXT_BIT[pd as usize].load(Ordering::Relaxed);
@@ -83,15 +83,16 @@ fn allocate(pd: u32, want: u32) -> Option<(usize, u8)> {
 
 /// BOOT: remember a lease devmgr just granted, and give it up to `want` vectors.
 pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
-    // Behind Intel VMD, MSI/MSI-X is remapped through VMD's own table, which is
-    // not set up: those devices poll.
-    let want = if dev.ecam != 0 { 0 } else { want };
+    // Behind Intel VMD, MSI-X goes through VMD's own table (`vmd::route`); plain MSI
+    // is not routed there, so such a device polls.
+    let behind_vmd = dev.ecam != 0;
     assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire), crate::ipc::BootPhase::RegistryBuild as u8, "DEVICE_IRQ_AFTER_GENESIS");
     let mut lease = Lease { slot, vendor: dev.vendor_id, device: dev.device_id,
         class: (dev.class_id as u32) << 16 | (dev.subclass_id as u32) << 8 | dev.prog_if as u32,
         bus: dev.bus, dev: dev.dev, func: dev.func, mode: Mode::None, vectors: 0, first_bit: 0 };
     let mut record = Record { pd, lease, table: 0, msi: 0, msi_wide: false, msi_masking: false };
     let (msi, msix) = if want == 0 { (None, None) } else { capabilities(dev) };
+    let msi = if behind_vmd { None } else { msi };
     let apic = crate::apic::local_id();
     if let Some(cap) = msix {
         let control = dev.read_u32(cap) >> 16;
@@ -102,6 +103,13 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
         match (bar, allocate(pd, (want as u32).min(size))) {
             (Some((physical, length)), Some((vector, bit))) if offset + size as u64 * 16 <= length => {
                 let n = (want as u32).min(size);
+                // Behind VMD the entries name VMD vectors, which point at ours.
+                let via = if behind_vmd {
+                    match crate::vmd::route(dev, n as u16, FIRST_VECTOR + vector as u8, apic) {
+                        Some(first) => Some(first),
+                        None => { crate::serial_println!("[device.irq.skip] pd={} slot={} reason=vmd_vectors polling=1", pd, slot); return keep(record); }
+                    }
+                } else { None };
                 // Function-masked while the table is written; enabled first so INTx stays off.
                 dev.write_u32(cap, dev.read_u32(cap) | 0xC000 << 16);
                 let table_pa = physical + offset;
@@ -113,9 +121,13 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
                     unsafe {
                         entry.add(3).write_volatile(1);
                         if i < n as u64 {
-                            entry.write_volatile(address(apic));
+                            let (addr, data) = match via {
+                                Some(first) => sex_vmd::child_msi(first + i as u16),
+                                None => (address(apic), (FIRST_VECTOR as usize + vector + i as usize) as u32),
+                            };
+                            entry.write_volatile(addr);
                             entry.add(1).write_volatile(0);
-                            entry.add(2).write_volatile((FIRST_VECTOR as usize + vector + i as usize) as u32);
+                            entry.add(2).write_volatile(data);
                         }
                     }
                 }
@@ -123,8 +135,8 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
                 dev.write_u32(0x04, (dev.read_u32(0x04) & 0xffff) | INTX_DISABLE);
                 record.table = table;
                 lease.mode = Mode::MsiX; lease.vectors = n as u8; lease.first_bit = bit;
-                crate::serial_println!("[device.irq.msix] pd={} slot={} {:02x}:{:02x}.{} table_size={} vectors={} first_vector={:#x} first_bit={} apic={} masked=1",
-                    pd, slot, dev.bus, dev.dev, dev.func, size, n, FIRST_VECTOR as usize + vector, bit, apic);
+                crate::serial_println!("[device.irq.msix] pd={} slot={} {:02x}:{:02x}.{} table_size={} vectors={} first_vector={:#x} first_bit={} apic={} masked=1 vmd_vector={}",
+                    pd, slot, dev.bus, dev.dev, dev.func, size, n, FIRST_VECTOR as usize + vector, bit, apic, via.map(|v| v as i32).unwrap_or(-1));
             }
             _ => { crate::serial_println!("[device.irq.skip] pd={} slot={} reason=msix_table_or_vectors bir={} offset={:#x}", pd, slot, bir, offset); }
         }
@@ -151,6 +163,11 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
         crate::serial_println!("[device.irq.skip] pd={} slot={} reason=no_msi_capability polling=1", pd, slot);
     }
     record.lease = lease;
+    keep(record);
+}
+
+fn keep(record: Record) {
+    let (pd, slot) = (record.pd, record.lease.slot);
     let mut records = RECORDS.lock();
     match records.iter_mut().find(|r| r.is_none()) {
         Some(free) => *free = Some(record),
