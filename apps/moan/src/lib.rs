@@ -1240,6 +1240,8 @@ impl Studio {
             "Render folder",
             "CLAP",
             "VST3",
+            "LADSPA",
+            "LV2",
             "Offline render",
             "Cancel render",
         ] {
@@ -1929,10 +1931,13 @@ impl Studio {
             ui.set_text(id, &format!("{:.6}", value as f64 / RATE as f64));
         }
         for (id, name) in &self.buttons {
-            if ["CLAP", "VST3"].contains(name) {
+            if let Some(format) = ["CLAP", "VST3", "LADSPA", "LV2"]
+                .iter()
+                .position(|item| item == name)
+            {
                 ui.set_button_style(
                     *id,
-                    if (*name == "CLAP") == (self.plugin_format == 0) {
+                    if format == self.plugin_format as usize {
                         weft::ButtonStyle::Primary
                     } else {
                         weft::ButtonStyle::Normal
@@ -2826,6 +2831,8 @@ impl Studio {
             "Render folder",
             "CLAP",
             "VST3",
+            "LADSPA",
+            "LV2",
             "Offline render",
             "Cancel render",
             "Master",
@@ -3430,8 +3437,13 @@ impl Studio {
                 ui.invalidate();
                 None
             }
-            "CLAP" | "VST3" => {
-                self.plugin_format = if command == "CLAP" { 0 } else { 1 };
+            "CLAP" | "VST3" | "LADSPA" | "LV2" => {
+                self.plugin_format = match command {
+                    "CLAP" => 0,
+                    "VST3" => 1,
+                    "LADSPA" => 2,
+                    _ => 3,
+                };
                 None
             }
             "Choose plugin" => Some(Action::ChoosePlugin),
