@@ -22,6 +22,8 @@ pub struct Mapped {
     base: *mut u8,
     layout: Layout,
     sealed: Vec<(usize, usize)>,
+    /// Destructors to run, in order, before the code pages are reopened.
+    fini: Vec<usize>,
 }
 impl Mapped {
     pub fn load(bytes: &[u8]) -> Result<Self, Error> {
@@ -47,6 +49,7 @@ impl Mapped {
             base,
             layout,
             sealed: Vec::new(),
+            fini: Vec::new(),
         };
         image.copy(unsafe { core::slice::from_raw_parts_mut(base, image.size) })?;
         image.relocations(|at, _, r| {
@@ -84,6 +87,39 @@ impl Mapped {
                 loaded.sealed.push((address, n));
             }
         }
+        // Constructor tables were relocated above; every entry must land in this
+        // image's own sealed code. 0 and -1 are the conventional "skip" markers.
+        let code = |entry: usize| {
+            image.segments.iter().any(|s| {
+                s.executable
+                    && entry >= base as usize + s.memory.start
+                    && entry < base as usize + s.memory.end
+            })
+        };
+        let table = |range: &Option<core::ops::Range<usize>>| -> Result<Vec<usize>, Error> {
+            let mut out = Vec::new();
+            if let Some(r) = range {
+                for at in r.clone().step_by(8) {
+                    let entry = unsafe { core::ptr::read_unaligned(base.add(at).cast::<usize>()) };
+                    if entry == 0 || entry == usize::MAX {
+                        continue;
+                    }
+                    if !code(entry) {
+                        return Err(Error::Import);
+                    }
+                    out.push(entry);
+                }
+            }
+            Ok(out)
+        };
+        let init = table(&image.init_array)?;
+        let mut fini = table(&image.fini_array)?;
+        // DT_FINI_ARRAY runs in reverse order.
+        fini.reverse();
+        loaded.fini = fini;
+        for f in init {
+            unsafe { core::mem::transmute::<usize, unsafe extern "C" fn()>(f)() };
+        }
         Ok(loaded)
     }
     /// # Safety
@@ -98,18 +134,26 @@ impl Mapped {
     }
 }
 fn import(name: &[u8]) -> Option<usize> {
+    if let Some(f) = crate::imports::lookup(name) {
+        return Some(f);
+    }
     Some(match name {
         b"moan_alloc" => plugin_alloc as *const () as usize,
         b"moan_free" => plugin_free as *const () as usize,
+        b"malloc" => sex_libc::mem::malloc as *const () as usize,
         b"calloc" => sex_libc::mem::calloc as *const () as usize,
+        b"realloc" => sex_libc::mem::realloc as *const () as usize,
         b"free" => sex_libc::mem::free as *const () as usize,
-        b"strcmp" => sex_libc::string::strcmp as *const () as usize,
+        b"strdup" => sex_libc::string::strdup as *const () as usize,
         b"snprintf" => sex_libc::stdio::snprintf as *const () as usize,
         _ => return None,
     })
 }
 impl Drop for Mapped {
     fn drop(&mut self) {
+        for f in core::mem::take(&mut self.fini) {
+            unsafe { core::mem::transmute::<usize, unsafe extern "C" fn()>(f)() };
+        }
         for &(address, pages) in &self.sealed {
             if sex_pdx::program_code::open(address as u64, pages as u64).is_err() {
                 return;

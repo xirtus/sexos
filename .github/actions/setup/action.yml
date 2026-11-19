@@ -32,6 +32,10 @@ runs:
     run: |
       # Skip man-page index rebuilds, the slowest part of apt on the runners.
       sudo rm -f /var/lib/man-db/auto-update
+      # A stalled mirror connection otherwise hangs apt for 20+ minutes (Host regressions
+      # timed out twice on PR #433 inside `apt-get install ffmpeg`). Every later apt call
+      # in the job reads this too: give up on a dead connection fast and retry.
+      printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "5";\n' | sudo tee /etc/apt/apt.conf.d/99sexos-ci-net >/dev/null
       pkgs="ripgrep clang lld llvm wabt nasm musl-dev cmake ninja-build meson acpica-tools mtools gdisk dosfstools"
       if [[ "${{ inputs.qemu }}" == true ]]; then pkgs="$pkgs xorriso qemu-system-x86"; fi
       sudo apt-get update -qq

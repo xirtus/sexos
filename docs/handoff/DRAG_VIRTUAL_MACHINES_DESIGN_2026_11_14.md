@@ -69,7 +69,7 @@ All of this stays out of the kernel, in a confined server per guest:
 | D2 | First slice landed (branch `claude/project-thread-bcyshp-drag-d2`): `apps/drag` on `crates/drag-vmm`: Linux direct boot (bzImage, boot protocol 2.06+, 64- and 32-bit entry), 16550 serial console, 8259 PIC + 8254 PIT, virtio-mmio virtio-blk on a file. See section 9. | host: `scripts/drag_host_gate.sh` (drag-vmm unit tests; the in-tree test guest against QEMU microvm's own 16550 and virtio-blk). QEMU: `scripts/drag_gate.py`: TCG proves loading and the clean refusal; `--accel kvm` runs the test guest, whose console lines must come back. A real Linux bzImage receipt is pending (KVM host or x17). |
 | D3 | virtio-net through SexNet, virtio-gpu 2D into a window, virtio-input | gate: guest screenshot shows its framebuffer |
 | D4 | SMP guests, x2APIC, posted interrupts, preemption fairness | bench vs bare metal |
-| D5 | AMD SVM path | gate on SVM-capable runner or x17-like receipts |
+| D5 | Landed (thread "Support AMD laptops and GPUs"): `kernel/src/svm.rs` beside VMX. `vmx.rs` keeps the VMs, loans and syscall and picks the backend; on AMD the guest-physical tables are nested page tables and every SVM exit is translated into the same `Exit` record (Intel reasons and qualifications) by `sex_pdx::vm::svm::translate`, so drag, Crossdress and dragtest are unchanged. See section 10. | host: `scripts/drag_host_gate.sh` (NPT entries, segment attributes, exit translation, CPL). QEMU: `scripts/drag_gate.py --accel tcg --require-guest` in CI: QEMU TCG emulates SVM with nested paging, so every guest path now runs in CI. Ryzen receipt pending. |
 | D6 | UEFI (OVMF) and a Windows guest; Drag app UI on the Weft toolkit | receipt |
 
 ## 6. Alternatives
@@ -243,3 +243,29 @@ What remains for D2 to be "Linux boots to a shell":
 3. VMM work: virtio-blk on a volume cap, not only a file; per-program consent for the
    Machine cap through Spindle (D1 left it for D2; still open); keyboard into the UART's
    receive queue from the window; a larger console view.
+
+## 10. D5: AMD SVM (2026-11-19)
+
+- Backend choice: CPUID.1:ECX.VMX picks VT-x; otherwise CPUID 8000_0001:ECX.SVM picks SVM. The
+  probe refuses with `svm_disabled_by_firmware` (VM_CR.SVMDIS) or `missing_npt`, and logs
+  `[drag] svm=available asids=.. npt=1 nrips=.. flush_by_asid=.. nx=.. decode_assists=..`.
+- Entry: per core a VMCB, a host VMSAVE area and the VM_HSAVE_PA page (taken on first use).
+  CLGI; VMSAVE host; VMLOAD guest; STI; VMRUN; VMSAVE guest; VMLOAD host; CLI; STGI. The guest
+  runs with V_INTR_MASKING, so the host's IF (not the guest's IF or CR8) decides physical
+  interrupts, which exit as `EXTERNAL_INTERRUPT`; NMIs and INIT exit too and the host takes
+  them after STGI. EFER.SVME is set only around the run.
+- Intercepts: INTR, NMI, INIT, RDPMC, CPUID, INVD, HLT, INVLPGA, all I/O, all MSRs (permission
+  maps with every bit set), shutdown, VMRUN, VMMCALL, VMLOAD, VMSAVE, STGI, CLGI, SKINIT, WBINVD,
+  MONITOR, MWAIT, XSETBV. Debug registers are not intercepted (on AMD, #VMEXIT disables the
+  host's breakpoints in DR7, and the host uses none), so Intel's MOV-DR exits have no AMD twin.
+- Translation: I/O exits get Intel's qualification and `port`/`io_size`/`io_flags`, with the
+  length from EXITINFO2 (next RIP); nested page faults become `EPT_VIOLATION` with the faulting
+  GPA; shutdown becomes `TRIPLE_FAULT`; the SVM-only instructions become `VMX_INSTRUCTION`;
+  an exit code with no Intel twin comes back as `SVM_OTHER | code`. Without NRIP save the
+  skipped instructions use their fixed lengths.
+- TLB: every guest is ASID 1. A core flushes it (by ASID when the CPU can, else all) when it
+  runs a different vCPU than last time, the vCPU last ran on another core (its INVLPGs
+  there never reached this core), or a nested table lost a mapping (`EPT_GENERATION`).
+- vCPU state the ABI has no field for (CR2, KERNEL_GS_BASE) is kept per vCPU in the kernel.
+- No preemption timer on AMD: a guest in a tight loop leaves at the host's next timer
+  interrupt instead (`EXTERNAL_INTERRUPT`, not `PREEMPTED`).
