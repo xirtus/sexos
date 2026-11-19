@@ -6,6 +6,8 @@ FROM --platform=linux/amd64 ubuntu:24.04
 ARG RUNNER_VERSION=2.338.2
 ARG RUST_TOOLCHAIN=nightly-2026-07-22
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
+# The runner is .NET; under Rosetta its W^X JIT mapping crashes (AccessViolation).
+ENV DOTNET_EnableWriteXorExecute=0
 
 # Base tools the hosted image has, plus everything .github/actions/setup and the
 # host jobs install, so their apt steps become no-ops.

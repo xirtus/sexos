@@ -53,19 +53,23 @@ slot() {
       log "slot $n: could not get a registration token; retrying in 60 s"; sleep 60; continue
     fi
     log "slot $n: waiting for a job"
+    local t0="$SECONDS"
     docker run --rm --name "sexos-mac-$n" --platform linux/amd64 \
       --cpus "$JOB_CPUS" --memory "$JOB_MEM" --memory-swap "$JOB_MEM" \
       -e RUNNER_URL="https://github.com/$REPO" -e RUNNER_TOKEN="$token" \
       -e RUNNER_NAME="$(hostname -s)-sexos-mac-$n" -e RUNNER_LABELS="sexos-mac" \
       "$IMAGE"
-    log "slot $n: job finished (exit $?), cleaning up"
+    local rc=$?
+    log "slot $n: runner exited ($rc), cleaning up"
     cleanup
+    # A runner that dies at once (bad image, auth trouble) must not spin.
+    if [ $((SECONDS - t0)) -lt 60 ]; then log "slot $n: exited within a minute; backing off 5 min"; sleep 300; fi
   done
 }
 
 colima status -p "$PROFILE" >/dev/null 2>&1 || colima start "$PROFILE" --vm-type vz --vz-rosetta --arch aarch64 --cpu 8 --memory 10 --disk 100 --runtime docker
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build --platform linux/amd64 -t "$IMAGE" "$HERE"
 
-trap 'log "stopping"; docker ps -q --filter name=sexos-mac- | xargs -r docker stop -t 30 >/dev/null; kill 0' INT TERM
+trap 'log "stopping"; docker ps -q --filter name=sexos-mac- | xargs docker stop -t 30 >/dev/null; kill 0' INT TERM
 for n in $(seq 1 "$SLOTS"); do slot "$n" & sleep 5; done
 wait
