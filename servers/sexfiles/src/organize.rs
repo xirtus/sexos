@@ -29,8 +29,11 @@ type F = Fs<'static, Disk>;
 const PATH_MAX: usize = 256;
 const STAGED_MAX: usize = 32;
 const RING: usize = 64;
-/// Files looked at in one folder per scan; later ones wait for the next.
+/// Names read from a folder at a time (moving changes the folder being read).
 const SCAN_FILES: usize = 128;
+/// Batches per folder per scan: 4096 files. Directory cursors are stable keys, so a
+/// batch resumes where the last stopped even though files moved out meanwhile.
+const SCAN_BATCHES: usize = 32;
 /// An arrival is placed once nothing has written to it for this long (ms ticks).
 /// Creating a file commits at once and its bytes follow in later requests (a large
 /// write even commits part way), so a committed arrival may not be whole yet. Programs
@@ -165,6 +168,9 @@ pub fn step(fs: &mut F) {
         sex_pdx::serial_record!("[files.organize.scan] moved={} looked={} auto=1", moved, looked);
         return;
     }
+    // Nothing published past what was worked through: never run ahead of SEQ, or the
+    // next arrival would get a number already counted as done.
+    if unsafe { DONE >= SEQ } { return; }
     let seq = unsafe { DONE + 1 };
     let e = &mut events()[(seq % RING as u64) as usize];
     if e.seq != seq { unsafe { DONE = seq; } return; }
@@ -259,24 +265,32 @@ fn scan_dir(fs: &mut F, dir: &[u8], report: bool, say: &mut dyn FnMut(&str), mov
     // Names first, then moves: moving changes the folder being read.
     let names = unsafe { &mut *core::ptr::addr_of_mut!(NAMES) };
     let lens = unsafe { &mut *core::ptr::addr_of_mut!(NAME_LENS) };
-    let (mut n, mut cursor) = (0, 0);
-    while n < SCAN_FILES {
-        let Ok(Some((len, kind, _, next))) = fs.read_dir(st.id, cursor, &mut names[n]) else { break };
-        cursor = next;
-        if kind == Kind::File && !sex_organize::unsettled(&names[n][..len]) && len <= 255 { lens[n] = len as u8; n += 1; }
+    // In batches, from where the last batch stopped, until the folder is read out.
+    let mut cursor = 0;
+    for _ in 0..SCAN_BATCHES {
+        let mut n = 0;
+        let mut more = false;
+        while n < SCAN_FILES {
+            let Ok(Some((len, kind, _, next))) = fs.read_dir(st.id, cursor, &mut names[n]) else { break };
+            cursor = next;
+            if kind == Kind::File && !sex_organize::unsettled(&names[n][..len]) && len <= 255 { lens[n] = len as u8; n += 1; }
+            if n == SCAN_FILES { more = true; }
+        }
+        for i in 0..n {
+            let mut path = [0u8; PATH_MAX];
+            let Ok(len) = sex_organize::join_destination(dir, &names[i][..lens[i] as usize], &mut path) else { continue };
+            *looked += 1;
+            let (outcome, rule, dest, dest_len) = place(fs, &path[..len], None, report);
+            let line = match outcome {
+                Outcome::Moved => { *moved += 1; format!("moved {} -> {} (rule {})", shown(&path[..len]), shown(&dest[..dest_len]), rule) }
+                Outcome::Waiting => format!("would move {} -> {} (rule {})", shown(&path[..len]), shown(&dest[..dest_len]), rule),
+                other => format!("stays {}: {}", shown(&path[..len]), why(other)),
+            };
+            say(&line);
+        }
+        if !more { return; }
     }
-    for i in 0..n {
-        let mut path = [0u8; PATH_MAX];
-        let Ok(len) = sex_organize::join_destination(dir, &names[i][..lens[i] as usize], &mut path) else { continue };
-        *looked += 1;
-        let (outcome, rule, dest, dest_len) = place(fs, &path[..len], None, report);
-        let line = match outcome {
-            Outcome::Moved => { *moved += 1; format!("moved {} -> {} (rule {})", shown(&path[..len]), shown(&dest[..dest_len]), rule) }
-            Outcome::Waiting => format!("would move {} -> {} (rule {})", shown(&path[..len]), shown(&dest[..dest_len]), rule),
-            other => format!("stays {}: {}", shown(&path[..len]), why(other)),
-        };
-        say(&line);
-    }
+    sex_pdx::serial_record!("[files.organize.scan.capped] dir={} files={}", shown(dir), SCAN_FILES * SCAN_BATCHES);
 }
 
 fn why(o: Outcome) -> alloc::string::String {

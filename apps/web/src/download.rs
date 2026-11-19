@@ -176,8 +176,17 @@ impl Browser {
         let mut html = String::from("<title>Downloads</title><body style='margin:24px;font-size:15px'><h2>Downloads</h2>");
         if self.downloads.is_empty() { html.push_str("<p>Nothing downloaded in this window yet.</p>"); }
         html.push_str("<ul>");
-        for d in self.downloads.iter().rev() {
-            html.push_str(&alloc::format!("<li><a href=\"@{}\">{}</a> — {} KB <span style='color:#5f6368'>from {}</span></li>", esc(&d.path), esc(d.path.trim_start_matches("Downloads/")), d.bytes >> 10, esc(&d.url)));
+        let mut here = Vec::with_capacity(self.downloads.len());
+        for d in self.downloads.iter() { here.push(files::size(&mut self.window, d.path.as_bytes()).is_ok()); }
+        for (d, there) in self.downloads.iter().zip(here).rev() {
+            let name = esc(d.path.trim_start_matches("Downloads/"));
+            // Files' Organizer may have placed it in the person's folders (Documents,
+            // Pictures...), outside this program's own: say so rather than link nowhere.
+            if there {
+                html.push_str(&alloc::format!("<li><a href=\"@{}\">{}</a> — {} KB <span style='color:#5f6368'>from {}</span></li>", esc(&d.path), name, d.bytes >> 10, esc(&d.url)));
+            } else {
+                html.push_str(&alloc::format!("<li>{} — {} KB <span style='color:#5f6368'>from {}; moved out of Downloads (Files' organize log says where)</span></li>", name, d.bytes >> 10, esc(&d.url)));
+            }
         }
         html.push_str("</ul>");
         if let Ok(list) = files::list(&mut self.window, DIR.as_bytes()) {
