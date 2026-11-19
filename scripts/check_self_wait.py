@@ -13,16 +13,23 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 # Any new causal source requires explicit review. 2026-11-15 master reconcile:
 # Denim (syscall 88), Cufflinks/Bluetooth, touchpad route and SYS_VM (110) add no
 # deadline reference; USB quiet only narrows (also requires no Bluetooth HID traffic).
-APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',
+APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('fn-v1:50abfa8222c49ebe84edeabc79324366bf1e5519a09c19d63542f664c6215981',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+    '37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',
                                # record table allocated zeroed via CapabilityTable::new_boxed (no wait change), 2026-11-17
                                'e4f79ad810b5bba8aab649b5472154ebece0d4ae1c7b96ccf0cacf3b076de769',
     # record code scanned for key instructions (stream 2), 2026-11-18
     'd8dab16031564c8540b35ce5e45c28d1cbf297071e3ffc6d21e5aff7322f625b',
     # stream 2 scan merged with the v2 capability table, 2026-11-18
     '46adbb04a4ef0f0e057f3282c9c19fc1f8044a8a9f4d4e77b0a4c679dee03215',),
-'kernel/src/pd/create.rs': ('3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
-'kernel/src/init.rs': ('784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
-'kernel/src/scheduler.rs': ('0d78346c79e423140c931032f3f79a2025d60c1221df6ffc5353458a9ef3011c',  # cross-core IPC: polling flag for the whole look, lean first look, bounded re-check (#429 / 80b89713), reviewed by WS4, 2026-11-18
+'kernel/src/pd/create.rs': ('fn-v1:69758987a8d686a5f4b046db74d530379e4eff061dbe018b3019886371056906',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+    '3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
+'kernel/src/init.rs': ('fn-v1:fb2da8b1ece8812feee1502fa72b73deb6248639042d5ddd6e42422db14ed884',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+    '784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
+'kernel/src/scheduler.rs': ('fn-v1:d1ae84d320565569056b4890ee32b11af3b66bc34eba297a890387e8851f71ab', '1b10ca8d1b0d1eb3a092f0a61ed1ca7fe6a4b43c448bc24d560ead211940f8d9',  # #429 merged with master (28ffcb59), reviewed by WS4, 2026-11-19
+    'fn-v1:dea888ff27ad54e217839dc46b9a74e521d07b2be1c36256452fd7df937802f2',  # master 586140ad: kernel stack guard page + boxed FPU area (no wait change), 2026-11-19
+    'fn-v1:4670ed1968ba7f46d7097721884c9cf2c95de4bd69220374b07321f2f5eec750',  # cross-core IPC polling + lean first look + bounded re-check (#429 / 80b89713), reviewed by WS4, 2026-11-18
+    'fn-v1:8b328859b9fda2ff8e024287e6d020c11182c169ad993a0e786ad86033420fe6',  # XSAVE/AVX heap save area + kernel stack canary (#427 / ed888ad5), reviewed by WS4, 2026-11-18
+    'fn-v1:c92ee26a67f14c438179f32834b8b0a62f82d1dee42271d43863d4cc96f95a8f',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
     '586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae',  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
     '13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1',  # IPC v2 syscalls 105/106, 2026-11-18
     '8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
@@ -32,14 +39,17 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'kernel/src/self_wait.rs': ('0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf',),
  'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
  'kernel/src/smp.rs': ('bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
- 'kernel/src/interrupts.rs': ('c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
+ 'kernel/src/interrupts.rs': ('fn-v1:235c80ce88b369d9d1da26b934e188c056b5e24330b1c242801deaf2e3854c86',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+    'c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
                               'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d',
                               # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
                               'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),
- 'kernel/src/syscalls/mod.rs': ('5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577',  # IPC v2 syscalls 105/106, 2026-11-18
+ 'kernel/src/syscalls/mod.rs': ('fn-v1:676eae4ad2ce1171bafcdd21eb7b0d61e5e387ff84e401eb926eecf173191fbb',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+    '5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577',  # IPC v2 syscalls 105/106, 2026-11-18
     '055312eb92a25b451b946caef4f00d1999391840bb782a1697db72e1903b1c41', '318f8602a3e053470c4f6f984fa818f928cae16253dcf9a9946edf1b114995ba',  # IPC fast path (WS4), 2026-11-17
     'aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
- 'kernel/src/program_workers.rs': ('6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',),
+ 'kernel/src/program_workers.rs': ('fn-v1:83a85118b86748220c90c74a4050ea004db73bb95957bcbf1d7e447a3b0c2d24',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+    '6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',),
  'crates/sex-pdx/src/lib.rs': ('8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde', '9eb262eb2108d51f57ae9dc821e6e40a12a9e1003fbfac711422b246ec17fd44',
                                'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
                                'c2895d4991c2d48d099daee3e6090063b3288f77c0ad5e9a75201c903f95c984', 'ef6e695c7535ac077e8c4adef7ded6d79425210a1fd77005940be7f823cab40a', 'cee8e1525fa104c2c14f398b4eee80f4f63cd0f3f06602310cdf421dc15009c1', '1b7fe3f1752da8d10ea2f2ea6df5c387ff9ec9969a4287be64fb6e878f4a4d75', '562ccc2f5cf8cf755e68925f0a65a699fd9e968ac78a44bfe4c7dc84f464e7ab', 'f00f44669af45f707a4a24ec15f70321ed9ed04565007c9e1b093b42fdd39e96', '3766c55f455e02199154d9cdbe28c5fc93a454f91a2459fe04e2eafaf8abd24b', '74a5f4ccbd9aeeb574ff5c9d8f7008b486d89e214ef405ef589711dfda71904b',
@@ -109,8 +119,35 @@ DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take
 #   `wait_observer::poll();`, plus every line that waits, yields, listens or
 #   reaches wait_observer, in order (whitespace removed).
 SHELL_WAIT_LINE=re.compile(r'wait_observer|sys_wait_self_ticks|pdx_listen|pdx_try_listen|sys_yield|sched_yield|wait_for_message')
+# Kernel causal files are pinned by their wait functions only (Andreas, 2026-11-18):
+# every `fn` whose body names a wait/park/wake/timer item. A short one is pinned
+# whole; a very long one (dispatch, init) by its signature and those lines. Other
+# functions change freely; a new function that waits changes the fingerprint.
+# self_wait.rs, task_ownership.rs (the park/wake state machine) and smp.rs stay whole.
+KERNEL_WAIT_TOKEN=re.compile(r'wait_deadline|self_wait|SELF_WAIT|take_due|wait_for_message|wake_record|poll_self_wait|ParkResult|\.park\(|\.wake\(|unpark|sexnet_id|resume_attached|yield_and_switch')
+KERNEL_FN_SCOPED=frozenset(('kernel/src/program_records.rs','kernel/src/pd/create.rs','kernel/src/init.rs','kernel/src/scheduler.rs',
+    'kernel/src/interrupts.rs','kernel/src/syscalls/mod.rs','kernel/src/program_workers.rs'))
+KERNEL_FN_WHOLE_LINES=200
+def _kernel_wait_functions(text):
+    out=[]
+    for m in re.finditer(r'\bfn\s+(\w+)\s*(?:<[^>{;]*>)?\s*\(',text):
+        start=text.find('{',m.end());semi=text.find(';',m.end())
+        if start<0 or 0<=semi<start:continue
+        depth=0;end=start
+        while end<len(text):
+            depth+=(text[end]=='{')-(text[end]=='}')
+            if depth==0:break
+            end+=1
+        body=text[m.start():end+1]
+        if not KERNEL_WAIT_TOKEN.search(body):continue
+        lines=body.splitlines()
+        kept=lines if len(lines)<=KERNEL_FN_WHOLE_LINES else [lines[0]]+[l for l in lines[1:] if KERNEL_WAIT_TOKEN.search(l)]
+        out.append(m.group(1)+':'+''.join(re.sub(r'\s+','',l) for l in kept))
+    return out
 def wait_fingerprint(name,data):
     text=data.decode()
+    if name in KERNEL_FN_SCOPED:
+        return 'fn-v1:'+hashlib.sha256('\n'.join(_kernel_wait_functions(text)).encode()).hexdigest()
     if name=='crates/sex-pdx/src/lib.rs':
         kept=[l.rstrip() for l in text.splitlines() if l.strip() and not re.fullmatch(r'\s*pub\s+mod\s+\w+\s*;\s*',l)]
         return 'wait-v1:'+hashlib.sha256('\n'.join(kept).encode()).hexdigest()
