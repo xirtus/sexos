@@ -83,7 +83,12 @@ pub fn lookup(dll: &str, name: &str) -> Option<Api> {
     })
 }
 
-pub enum Outcome { Return(u64), Stop(Stop) }
+pub enum Outcome {
+    Return(u64),
+    Stop(Stop),
+    /// Resume the thread with these registers instead of returning (NtContinue).
+    Jump(Regs),
+}
 
 pub(crate) fn set_last_error(p: &mut WinProcess, code: u32) { let _ = p.cell.write_u32(process::TEB_VA + TEB_LAST_ERROR, code); }
 
@@ -190,7 +195,15 @@ pub(crate) fn virtual_alloc(p: &mut WinProcess, address: u64, size: u64, kind: u
     if reserve && p.cell.reserve(start, bytes).is_err() { return fail(p, ERROR_INVALID_ADDRESS); }
     if kind & MEM_COMMIT != 0 {
         if let Some(access) = access {
-            if p.cell.map(start, bytes / PAGE, access).is_err() { return fail(p, ERROR_NOT_ENOUGH_MEMORY); }
+            // Committing pages that are already committed is allowed: map only the gaps.
+            let mut at = start;
+            while at < start + bytes {
+                if p.cell.is_mapped(at, PAGE) { at += PAGE; continue; }
+                let mut end = at;
+                while end < start + bytes && !p.cell.is_mapped(end, PAGE) { end += PAGE; }
+                if p.cell.map(at, (end - at) / PAGE, access).is_err() { return fail(p, ERROR_NOT_ENOUGH_MEMORY); }
+                at = end;
+            }
         }
     }
     start

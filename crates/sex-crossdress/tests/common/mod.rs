@@ -66,3 +66,28 @@ pub fn exercise_ntdll(cpu: &mut impl Vcpu, p: &mut sex_crossdress::process::WinP
     log
 }
 
+
+/// A host that keeps what the program writes (stdout and stderr together).
+#[derive(Default)]
+pub struct Keep { pub text: Vec<u8> }
+impl sex_crossdress::process::Host for Keep {
+    fn output(&mut self, _: u32, b: &[u8]) { self.text.extend_from_slice(b); }
+    fn now_ms(&mut self) -> u64 { 1 }
+    fn sleep(&mut self, _: u32) {}
+}
+
+/// The Wine test program in a fresh cell, set up the Wine way (`sex_crossdress::wine`).
+/// None (SKIP) without CROSSDRESS_WINE_DIR.
+pub fn wine_program() -> Option<sex_crossdress::process::WinProcess> {
+    let ntdll = wine_dll("ntdll.dll")?;
+    let dlls: Vec<(&str, Vec<u8>)> = ["kernel32.dll", "kernelbase.dll", "ucrtbase.dll", "msvcrt.dll"].iter().filter_map(|n| Some((*n, wine_dll(n)?))).collect();
+    let nls: Vec<(&str, Vec<u8>)> = ["locale.nls", "l_intl.nls", "c_1252.nls", "c_437.nls", "c_20127.nls", "sortdefault.nls", "normnfc.nls", "normnfd.nls"].iter().filter_map(|n| Some((*n, wine_dll(n)?))).collect();
+    let system32: Vec<(&str, &[u8])> = dlls.iter().map(|(n, d)| (*n, d.as_slice())).collect();
+    let nls_ref: Vec<(&str, &[u8])> = nls.iter().map(|(n, d)| (*n, d.as_slice())).collect();
+    // CROSSDRESS_WINE_EXE: the program as another LLVM rebuilt it (scripts/drag_host_gate.sh).
+    let exe = std::env::var_os("CROSSDRESS_WINE_EXE").map(|f| std::fs::read(f).expect("CROSSDRESS_WINE_EXE")).unwrap_or_else(|| sex_crossdress::WINE_HELLO_EXE.to_vec());
+    let setup = sex_crossdress::wine::WineSetup { ntdll: &ntdll, exe: &exe, exe_path: "C:\\test\\wine_hello.exe", system32: &system32, nls: &nls_ref };
+    let mut p = sex_crossdress::wine::load(drag_vmm::memory::Ram::new(256 << 20).unwrap(), &setup).unwrap();
+    p.nt.trace = std::env::var_os("CROSSDRESS_NT_TRACE").is_some();
+    Some(p)
+}

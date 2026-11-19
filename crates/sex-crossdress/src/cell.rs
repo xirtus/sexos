@@ -190,6 +190,46 @@ impl Cell {
         Ok(gpa)
     }
 
+    /// Changes the rights of the mapped user pages [va, va+pages*PAGE) to `access`,
+    /// splitting runs at the edges. Returns the old rights of the first page. Every page
+    /// must be mapped. A guest that already used a page may hold a stale TLB entry: a
+    /// fault it raises on a page whose new rights allow the access is spurious and is
+    /// retried by the process (`WinProcess::exception`); a stale entry with more rights
+    /// than the new ones can survive until the next entry flushes it (VirtualProtect
+    /// tightening is not yet exact).
+    pub fn protect(&mut self, va: u64, pages: u64, access: Access) -> Result<Access, Error> {
+        let end = va.checked_add(pages.checked_mul(PAGE).ok_or(Error::BadRange)?).ok_or(Error::BadRange)?;
+        if pages == 0 || va % PAGE != 0 || !access.user { return Err(Error::BadRange); }
+        // Every page must be a mapped user page.
+        let mut at = va;
+        while at < end {
+            let m = self.maps.iter().find(|m| m.access.user && at >= m.va && at < m.va + m.pages * PAGE).ok_or(Error::BadRange)?;
+            at = (m.va + m.pages * PAGE).min(end);
+        }
+        let mut old = None;
+        let mut out = Vec::with_capacity(self.maps.len() + 2);
+        for m in core::mem::take(&mut self.maps) {
+            let (m_end, lo, hi) = (m.va + m.pages * PAGE, m.va.max(va), (m.va + m.pages * PAGE).min(end));
+            if !m.access.user || lo >= hi { out.push(m); continue; }
+            if old.is_none() && lo == va { old = Some(m.access); }
+            let piece = |from: u64, to: u64, acc: Access| Map { va: from, pages: (to - from) / PAGE, gpa: m.gpa + (from - m.va), access: acc };
+            if m.va < lo { out.push(piece(m.va, lo, m.access)); }
+            out.push(piece(lo, hi, access));
+            if hi < m_end { out.push(piece(hi, m_end, m.access)); }
+        }
+        self.maps = out;
+        for i in 0..pages {
+            let page = va + i * PAGE;
+            let slot = self.pte(page)?;
+            let e = self.ram.read_u64(slot).map_err(|_| Error::OutOfMemory)?;
+            self.ram.write_u64(slot, (e & ADDR) | access.bits()).map_err(|_| Error::OutOfMemory)?;
+        }
+        Ok(old.unwrap_or(access))
+    }
+
+    /// The rights of the mapped page holding `va`, if any.
+    pub fn access_at(&self, va: u64) -> Option<Access> { self.maps.iter().find(|m| va >= m.va && va < m.va + m.pages * PAGE).map(|m| m.access) }
+
     /// Reserves [va, va+bytes) without memory: any access faults.
     pub fn reserve(&mut self, va: u64, bytes: u64) -> Result<(), Error> {
         if bytes == 0 || va % PAGE != 0 || bytes % PAGE != 0 || va.checked_add(bytes).map_or(true, |e| e > USER_TOP + 1) { return Err(Error::BadRange); }

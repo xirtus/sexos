@@ -12,6 +12,8 @@ VERSION="9.0~repack-4build3"
 URL="http://archive.ubuntu.com/ubuntu/pool/universe/w/wine/libwine_${VERSION}_amd64.deb"
 SHA256="eb421a3660bfdc090d70ce16b06aadfde1c2bce2593292023e520988f45d009e"
 DLLS=(ntdll kernelbase kernel32 ucrtbase msvcrt)
+# NLS tables for Wine's locale code (US English, code pages 1252 and 437).
+NLS=(locale l_intl c_1252 c_437 c_20127 sortdefault normnfc normnfd)
 DIR="${1:-${XDG_CACHE_HOME:-$HOME/.cache}/sexos/wine-9.0}"
 if [[ -f "$DIR/.done-$SHA256" ]]; then echo "$DIR"; exit 0; fi
 mkdir -p "$DIR"
@@ -21,6 +23,9 @@ echo "$SHA256  $T/libwine.deb" | sha256sum -c --quiet - >&2
 dpkg-deb -x "$T/libwine.deb" "$T" >&2
 for d in "${DLLS[@]}"; do
   cp "$T/usr/lib/x86_64-linux-gnu/wine/x86_64-windows/$d.dll" "$DIR/$d.dll"
+done
+for n in "${NLS[@]}"; do
+  cp "$T/usr/share/wine/nls/$n.nls" "$DIR/$n.nls"
 done
 touch "$DIR/.done-$SHA256"
 echo "$DIR"

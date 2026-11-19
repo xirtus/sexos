@@ -15,6 +15,8 @@
 //! - [`win32`]: Windows structure layouts, status codes and the KERNEL32 subset.
 //! - [`nt`]: Wine's ntdll.dll in a cell: KUSER_SHARED_DATA, the syscall and Unix call
 //!   dispatchers, and the NT system calls served by the host (CW3).
+//! - [`wine`]: a Windows program started the Wine way (LdrInitializeThunk) with Wine's
+//!   own loader, kernel32 and kernelbase (CW3b).
 //! - [`clap`]: a Windows CLAP plugin DLL in a cell, driven by the host (the yabridge
 //!   role): descriptor, parameters, activate, sample-accurate `process`.
 //!
@@ -31,6 +33,7 @@ pub mod nt;
 pub mod pe;
 pub mod process;
 pub mod win32;
+pub mod wine;
 
 /// The CW1 test program (`test/hello.c`, built by `test/build.sh`): a real 64-bit
 /// Windows console program that prints, checks its TEB/PEB, allocates memory and
@@ -43,3 +46,10 @@ pub const TEST_PASS: &str = "crossdress: all checks passed";
 /// The plugin test (`test/gain.c`, built by `test/build_gain.sh`): a real 64-bit Windows
 /// CLAP audio plugin DLL, "Crossdress Test Gain".
 pub static TEST_CLAP: &[u8] = include_bytes!("../test/gain.clap");
+
+/// The CW3 test program (`test/wine_hello.c`, built by `test/build_wine_hello.sh`): runs
+/// on Wine's own KERNEL32, loaded by Wine's ntdll in the cell.
+pub static WINE_HELLO_EXE: &[u8] = include_bytes!("../test/wine_hello.exe");
+
+/// The line the Wine test program prints last when every check passed.
+pub const WINE_PASS: &str = "crossdress: wine checks passed";

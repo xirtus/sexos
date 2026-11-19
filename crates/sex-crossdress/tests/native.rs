@@ -131,8 +131,9 @@ impl Native {
     fn map_new(&mut self) -> bool {
         let maps: Vec<_> = self.cell().maps().iter().filter(|m| m.access.user).copied().collect();
         for m in maps {
-            if self.mapped.iter().any(|&(va, _)| va == m.va) { continue; }
             let bytes = m.pages * PAGE;
+            // A run that NtProtectVirtualMemory split off lies inside one already mapped.
+            if self.mapped.iter().any(|&(va, n)| va <= m.va && m.va + bytes <= va + n) { continue; }
             let p = unsafe { libc::mmap(m.va as *mut _, bytes as usize, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE, -1, 0) };
             if p == libc::MAP_FAILED || p as u64 != m.va { eprintln!("[crossdress.native] cannot map {:#x}+{:#x}", m.va, bytes); return false; }
             self.mapped.push((m.va, bytes));
@@ -241,4 +242,18 @@ fn wines_ntdll_runs_natively() {
     println!("[crossdress.native.wine] ntdll base={:#x} exports={} syscalls={}", p.base, p.exports.len(), p.syscall_names.len());
     let Some(mut cpu) = Native::new(&mut p.cell) else { println!("[crossdress.native.wine] SKIP guest addresses taken"); return; };
     for line in common::exercise_ntdll(&mut cpu, &mut p) { println!("[crossdress.native.wine] {line}"); }
+}
+
+#[test]
+fn a_program_runs_on_wines_kernel32_natively() {
+    let _one = NATIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut p) = common::wine_program() else { println!("[crossdress.native.wine] SKIP no CROSSDRESS_WINE_DIR"); return; };
+    let Some(mut cpu) = Native::new(&mut p.cell) else { println!("[crossdress.native.wine] SKIP guest addresses taken"); return; };
+    let mut out = common::Keep::default();
+    let stop = sex_crossdress::wine::run(&mut p, &mut cpu, &mut out);
+    let text = String::from_utf8_lossy(&out.text);
+    for line in text.lines() { println!("[crossdress.native.wine.out] {line}"); }
+    println!("[crossdress.native.wine] stop={stop:?} counters={:?}", p.counters);
+    assert!(text.contains(sex_crossdress::WINE_PASS), "the program's checks passed on Wine's kernel32");
+    assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
 }

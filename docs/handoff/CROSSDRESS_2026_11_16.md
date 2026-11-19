@@ -1,4 +1,4 @@
-# Crossdress: Windows programs in Drag cells (CW1 landed)
+# Crossdress: Windows programs in Drag cells (CW1, CX1, CW3 landed)
 
 Status: CW1 (the cell proof) is in this PR. Andreas started the workstream on 2026-11-16
 ("start it now, build proof of crossdress, SexOS's own equivalent to Wine"). The design
@@ -157,7 +157,33 @@ ntdll's own sprintf, NtQuerySystemTime through Wine's stub and the dispatcher, t
 real heap (RtlCreateHeap, RtlAllocateHeap zeroed, RtlSizeHeap, RtlFreeHeap) on top of the
 host's NtAllocateVirtualMemory.
 
-Next (CW3b/CW4): Wine's own loader. LdrInitializeThunk with a PEB, process parameters
-and a virtual `C:\windows\system32` holding the Wine DLLs, served by NtOpenFile,
-NtCreateSection, NtMapViewOfSection and NtQueryAttributesFile; then kernelbase/kernel32,
-then ucrtbase, so a CRT-linked plugin loads.
+## CW3b (2026-11-19): a Windows program on Wine's kernel32
+
+`src/wine.rs` starts a program the way Wine's Unix half does: the host maps ntdll.dll and
+the program, builds the PEB, RTL_USER_PROCESS_PARAMETERS (normalized, with environment),
+the TEB fields Wine's `init_teb` fills (activation context stack, static Unicode string,
+real client id) and a virtual `C:\windows\system32` holding Wine's DLLs and NLS tables.
+Then it calls ntdll's own `LdrInitializeThunk(context)`. Wine's loader does the rest in
+the cell: it opens and maps kernel32.dll and kernelbase.dll through NtOpenFile,
+NtCreateSection and NtMapViewOfSection (with relocation), fixes the program's imports,
+runs DllMain, and reaches the program through NtContinue, RtlUserThreadStart and
+BaseThreadInitThunk. The test program (`test/wine_hello.c`, built with clang + lld-link,
+no SDK) calls HeapAlloc, GetModuleHandleA, GetProcAddress, lstrlenA, GetCommandLineA,
+GetCurrentProcessId and WriteFile on Wine's real kernel32, prints
+`crossdress: wine checks passed` and exits 0 through NtTerminateProcess. 87 system calls,
+no host-side kernel32.
+
+- **Served on top of CW3a**: NtProtectVirtualMemory (splits cell mappings, rewrites
+  PTEs), NtQueryVirtualMemory, NtContinue, NtOpenFile/NtCreateFile, NtQuery(Full)
+  AttributesFile, NtCreateSection/NtQuerySection (SEC_IMAGE), NtMap/UnmapViewOfSection,
+  NtFsControlFile (FSCTL_GET_OBJECT_ID), NtQueryInformationProcess/Thread/Token,
+  NtQuerySystemInformation, NtQueryVolumeInformationFile, NtWriteFile (console),
+  NtInitializeNlsFiles, NtGetNlsSectionPtr, NtQueryDefault{Locale,UILanguage}; registry
+  opens answer "not found" (no registry yet).
+- **Gate**: `a_program_runs_on_wines_kernel32_{natively,in_a_kvm_cell}`; the host gate
+  rebuilds wine_hello.exe and compares it byte for byte (LLVM 18), or runs the rebuild
+  with `CROSSDRESS_WINE_EXE` on another LLVM. `CROSSDRESS_NT_TRACE=1` prints every call.
+
+Next (CW4): ucrtbase and msvcrt so a CRT-linked plugin loads; a small registry; then the
+CLAP bridge on top of a Wine-started process, so commercial plugins that use kernel32
+beyond our subset load; then VST3 (COM) and Moan opening Windows plugins.

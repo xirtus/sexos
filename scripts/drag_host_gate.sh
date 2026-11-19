@@ -30,7 +30,8 @@ python3 "$ROOT_DIR/scripts/drag_guest_qemu.py"
 # Crossdress CW1 + the CLAP plugin bridge: the PE loader, the cell (page tables, GDT/IDT/TSS, stubs), the KERNEL32
 # subset and exception dispatch against a scripted vCPU; then the test .exe in a real
 # VT-x/SVM cell on Linux KVM (tests/kvm.rs, SKIP without a usable /dev/kvm).
-# CW3: Wine's ntdll.dll (pinned Wine 9.0 PE build) runs in the cell natively and on KVM.
+# CW3: Wine's ntdll.dll (pinned Wine 9.0 PE build) runs in the cell natively and on KVM,
+# and a Windows program (test/wine_hello.exe) runs on Wine's own kernel32 and kernelbase.
 CROSSDRESS_WINE_DIR="$(bash "$ROOT_DIR/scripts/fetch_wine_pe.sh")"
 export CROSSDRESS_WINE_DIR
 (cd "$ROOT_DIR" && cargo test --locked -p sex-crossdress -- --nocapture 2>&1 | grep -E '^\[crossdress|^test result|FAILED|panicked' ; exit "${PIPESTATUS[0]}")
@@ -38,6 +39,7 @@ CROSS="$ROOT_DIR/crates/sex-crossdress/test"
 if command -v clang >/dev/null && command -v lld-link >/dev/null && command -v llvm-dlltool >/dev/null; then
   bash "$CROSS/build.sh" "$TEST_DIR/hello.exe"
   bash "$CROSS/build_gain.sh" "$TEST_DIR/gain.clap"
+  bash "$CROSS/build_wine_hello.sh" "$TEST_DIR/wine_hello.exe"
   # The checked-in .exe is byte-exact only for the LLVM major it was built with
   # (test/LLVM_MAJOR). Another LLVM must still build it, and that build must pass in the
   # KVM cell too (SKIP without a usable /dev/kvm).
@@ -47,9 +49,11 @@ if command -v clang >/dev/null && command -v lld-link >/dev/null && command -v l
     echo "[drag.host.gate] crossdress test program matches its source"
     cmp "$TEST_DIR/gain.clap" "$CROSS/gain.clap" || { echo "[drag.host.gate] FAIL gain.clap is not what gain.c builds to"; exit 1; }
     echo "[drag.host.gate] crossdress test plugin matches its source"
+    cmp "$TEST_DIR/wine_hello.exe" "$CROSS/wine_hello.exe" || { echo "[drag.host.gate] FAIL wine_hello.exe is not what wine_hello.c builds to"; exit 1; }
+    echo "[drag.host.gate] crossdress Wine test program matches its source"
   else
     echo "[drag.host.gate] crossdress test program rebuilt with LLVM $llvm_major (checked in: LLVM $(cat "$CROSS/LLVM_MAJOR")); running the rebuild"
-    (cd "$ROOT_DIR" && CROSSDRESS_EXE="$TEST_DIR/hello.exe" CROSSDRESS_CLAP="$TEST_DIR/gain.clap" cargo test --locked -p sex-crossdress --test kvm -- --nocapture 2>&1 | grep -E '^\[crossdress\.kvm(\.clap)?\] (stop|SKIP|exe|plugin|ok)|^test result|FAILED|panicked' ; exit "${PIPESTATUS[0]}")
+    (cd "$ROOT_DIR" && CROSSDRESS_EXE="$TEST_DIR/hello.exe" CROSSDRESS_CLAP="$TEST_DIR/gain.clap" CROSSDRESS_WINE_EXE="$TEST_DIR/wine_hello.exe" cargo test --locked -p sex-crossdress --test kvm -- --nocapture 2>&1 | grep -E '^\[crossdress\.kvm(\.clap|\.wine)?\] (stop|SKIP|exe|plugin|ok)|^test result|FAILED|panicked' ; exit "${PIPESTATUS[0]}")
   fi
 else
   echo "[drag.host.gate] SKIP no clang/lld-link: crossdress test program not rebuilt"

@@ -31,7 +31,8 @@ use sex_pdx::vm::{exit, Exit, Regs, State};
 pub const THUNK_VA: u64 = 0x0000_7FF7_FFF0_0000;
 pub const PEB_VA: u64 = 0x0000_7FF7_FFFD_0000;
 pub const TEB_VA: u64 = 0x0000_7FF7_FFFE_0000;
-pub const TEB_PAGES: u64 = 2;
+/// Four pages: Wine keeps per-thread debug state at TEB+0x3000.
+pub const TEB_PAGES: u64 = 4;
 pub const STACK_TOP: u64 = 0x0000_7FF7_FF00_0000;
 /// VirtualAlloc without an address starts here (64 KiB granularity, like Windows).
 pub const ALLOC_BASE: u64 = 0x0000_0200_0000_0000;
@@ -117,7 +118,7 @@ pub trait Host {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Counters { pub exits: u64, pub calls: u64, pub exceptions: u64, pub handled: u64, pub callbacks: u64, pub syscalls: u64, pub unix_calls: u64 }
+pub struct Counters { pub exits: u64, pub calls: u64, pub exceptions: u64, pub handled: u64, pub callbacks: u64, pub syscalls: u64, pub unix_calls: u64, pub spurious: u64 }
 
 /// A hardware exception as the cell's stub reported it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +137,8 @@ pub struct WinProcess {
     pub exports: Vec<(String, u64)>,
     /// NT system call numbers read from the module's `Nt*` stubs (Wine's ntdll).
     pub syscall_names: alloc::collections::BTreeMap<u32, String>,
+    /// NT objects, files and modules for Wine's DLLs (`nt`, `wine`).
+    pub nt: crate::nt::NtState,
     /// The process heap: next free byte and end of what is mapped.
     pub heap_next: u64,
     pub heap_end: u64,
@@ -259,9 +262,35 @@ impl WinProcess {
         let mut initial = cell.user_state(entry, rsp, TEB_VA);
         initial.regs.rcx = PEB_VA;
         Ok(WinProcess {
-            cell, image, base, entry, imports, exports, syscall_names, heap_next: HEAP_VA, heap_end: HEAP_VA, handlers: Vec::new(), next_alloc: ALLOC_BASE,
+            cell, image, base, entry, imports, exports, syscall_names, nt: crate::nt::NtState::default(), heap_next: HEAP_VA, heap_end: HEAP_VA, handlers: Vec::new(), next_alloc: ALLOC_BASE,
             counters: Counters::default(), last_fault: None, dispatch: Vec::new(), initial,
         })
+    }
+
+    /// Maps another PE image (a DLL or Wine's main executable) at `base`, relocated
+    /// there, with per-section rights, without binding its imports (Wine's loader does
+    /// that). Returns the parsed image.
+    pub fn map_image(&mut self, file: &[u8], base: u64) -> Result<Image, LoadError> {
+        let image = Image::parse(file)?;
+        let mem = image.lay_out(file, base)?;
+        let header_pages = pages(image.size_of_headers as u64).max(1);
+        self.cell.map(base, header_pages, Access::USER_RO)?;
+        self.cell.write(base, &mem[..(header_pages * PAGE).min(mem.len() as u64) as usize]).ok_or(LoadError::Cell(cell::Error::OutOfMemory))?;
+        let mut mapped_to = base + header_pages * PAGE;
+        for s in &image.sections {
+            let size = s.virtual_size.max(s.raw_size) as u64;
+            if size == 0 { continue; }
+            let va = base + s.rva as u64;
+            let access = Access { write: s.writable(), execute: s.executable(), user: true };
+            self.cell.map(va, pages(size), access)?;
+            let end = ((s.rva as u64 + pages(size) * PAGE) as usize).min(mem.len());
+            self.cell.write(va, &mem[s.rva as usize..end]).ok_or(LoadError::Cell(cell::Error::OutOfMemory))?;
+            mapped_to = mapped_to.max(va + pages(size) * PAGE);
+        }
+        // The rest of SizeOfImage (gaps between sections) stays reserved, as in Windows.
+        let image_end = base + pages(image.size_of_image as u64) * PAGE;
+        if image_end > mapped_to { let _ = self.cell.reserve(mapped_to, image_end - mapped_to); }
+        Ok(image)
     }
 
     /// The address of export `name`, if the image has it.
@@ -273,11 +302,20 @@ impl WinProcess {
     /// `f32::to_bits` in the low half). The guest's own calls, callbacks and exceptions
     /// are served on the way, as in `run`. Returns the function's RAX.
     pub fn call(&mut self, cpu: &mut impl Vcpu, host: &mut impl Host, function: u64, args: &[u64], floats: Option<[u64; 4]>) -> Result<u64, Stop> {
+        self.call_frame(cpu, host, function, args, floats, STACK_TOP - CALL_FRAME_GAP)
+    }
+
+    /// `call` with the call frame below `frame_top` instead of the top of the stack.
+    pub fn call_at(&mut self, cpu: &mut impl Vcpu, host: &mut impl Host, function: u64, args: &[u64], frame_top: u64) -> Result<u64, Stop> {
+        self.call_frame(cpu, host, function, args, None, frame_top)
+    }
+
+    fn call_frame(&mut self, cpu: &mut impl Vcpu, host: &mut impl Host, function: u64, args: &[u64], floats: Option<[u64; 4]>, frame_top: u64) -> Result<u64, Stop> {
         if args.len() > MAX_CALL_ARGS || function == 0 { return Err(Stop::CellFault { vector: 0xFE, rip: function }); }
         let fault = Stop::CellFault { vector: 0xFE, rip: function };
         // At the call: RSP 16-aligned with 32 bytes of home space, then the stack arguments.
         let stack_args = args.len().saturating_sub(4) as u64;
-        let at_call = (STACK_TOP - CALL_FRAME_GAP - 0x20 - 8 * stack_args) & !0xF;
+        let at_call = (frame_top - 0x20 - 8 * stack_args) & !0xF;
         let rsp = at_call - 8;
         self.cell.write_user(rsp, &(THUNK_VA + 2 * THUNK_SIZE).to_le_bytes()).ok_or(fault.clone())?;
         for (i, a) in args.iter().enumerate().skip(4) {
@@ -338,6 +376,7 @@ impl WinProcess {
                             match win32::call(self, index, &mut e.regs, host) {
                                 win32::Outcome::Return(v) => { e.regs.rax = v; e.regs.rip = next; load = true; }
                                 win32::Outcome::Stop(s) => return s,
+                                win32::Outcome::Jump(r) => { e.regs = r; load = true; }
                             }
                         }
                         cell::EXCEPTION => {
@@ -357,6 +396,7 @@ impl WinProcess {
                             match crate::nt::syscall(self, e.regs.r11 as u32, &e.regs, host) {
                                 win32::Outcome::Return(v) => { e.regs.rax = v; e.regs.rip = next; load = true; }
                                 win32::Outcome::Stop(s) => return s,
+                                win32::Outcome::Jump(r) => { e.regs = r; load = true; }
                             }
                         }
                         _ if code == cell::UNIX_CALL => {
@@ -364,6 +404,7 @@ impl WinProcess {
                             match crate::nt::unix_call(self, &e.regs, host) {
                                 win32::Outcome::Return(v) => { e.regs.rax = v; e.regs.rip = next; load = true; }
                                 win32::Outcome::Stop(s) => return s,
+                                win32::Outcome::Jump(r) => { e.regs = r; load = true; }
                             }
                         }
                         cell::CALLBACK => {
@@ -389,6 +430,25 @@ impl WinProcess {
     fn exception(&mut self, vector: u8, regs: &mut Regs, cpu: &mut impl Vcpu) -> Result<(), Stop> {
         let frame = self.cell.frame(regs.rsp).ok_or(Stop::CellFault { vector, rip: regs.rip })?;
         if frame.cs & 3 != 3 { return Err(Stop::CellFault { vector, rip: frame.rip }); }
+        // A page fault the current page tables would allow came from a stale TLB entry
+        // (rights changed by VirtualProtect/NtProtectVirtualMemory): retry the access.
+        if vector == 14 {
+            let (write, fetch) = (frame.error & 2 != 0, frame.error & 0x10 != 0);
+            if let Some(a) = self.cell.access_at(frame.cr2) {
+                if a.user && (!write || a.write) && (!fetch || a.execute) {
+                    self.counters.spurious += 1;
+                    let mut st = self.cell.user_state(frame.rip, frame.rsp, TEB_VA);
+                    st.regs = *regs;
+                    st.regs.rax = frame.rax;
+                    st.regs.rip = frame.rip;
+                    st.regs.rsp = frame.rsp;
+                    st.regs.rflags = frame.rflags;
+                    cpu.set_state(&st).map_err(Stop::Hypervisor)?;
+                    *regs = st.regs;
+                    return Ok(());
+                }
+            }
+        }
         self.counters.exceptions += 1;
         self.last_fault = Some(Fault { vector, error: frame.error, rip: frame.rip, cr2: frame.cr2 });
         // The thread's registers at the fault: the stub changed only RAX and RSP.

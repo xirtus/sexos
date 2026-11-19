@@ -296,3 +296,18 @@ fn wines_ntdll_runs_in_a_kvm_cell() {
     for line in common::exercise_ntdll(&mut cpu, &mut p) { println!("[crossdress.kvm.wine] {line}"); }
     println!("[crossdress.kvm.wine] ok: Wine's ntdll.dll ran in a KVM cell (Rtl, CRT, NT system calls, heap)");
 }
+
+#[test]
+fn a_program_runs_on_wines_kernel32_in_a_kvm_cell() {
+    let Some(mut p) = common::wine_program() else { println!("[crossdress.kvm.wine] SKIP no CROSSDRESS_WINE_DIR (scripts/fetch_wine_pe.sh)"); return; };
+    let Some(kvm) = open_kvm() else { println!("[crossdress.kvm.wine] SKIP no usable /dev/kvm"); return; };
+    let mut cpu = kvm_vcpu(kvm, &p.cell.ram);
+    let mut out = common::Keep::default();
+    let stop = sex_crossdress::wine::run(&mut p, &mut cpu, &mut out);
+    let text = String::from_utf8_lossy(&out.text);
+    for line in text.lines() { println!("[crossdress.kvm.wine.out] {line}"); }
+    println!("[crossdress.kvm.wine] stop={stop:?} counters={:?}", p.counters);
+    assert!(text.contains(sex_crossdress::WINE_PASS), "the program's checks passed on Wine's kernel32");
+    assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
+    println!("[crossdress.kvm.wine] ok: a Windows program ran on Wine's kernel32 and kernelbase in a KVM cell");
+}
