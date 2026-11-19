@@ -5,8 +5,9 @@
 //! paints (`sex_pdx::screen_state`).
 use sex_pdx::screen_state::{self as s, Lock};
 
-const TOP: u32 = 0x0010_1626;
-const BOTTOM: u32 = 0x0024_2E48;
+// The SexOS wallpaper's charcoal, with the lips above the prompt (sex_pdx::brand).
+const TOP: u32 = sex_pdx::brand::WALL_TOP;
+const BOTTOM: u32 = sex_pdx::brand::WALL_BOTTOM;
 const INK: u32 = 0x00E8_ECF4;
 const SOFT: u32 = 0x00A0_A8BC;
 const WARN: u32 = 0x00FF_9C8A;
@@ -44,7 +45,18 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize) -> bool {
     let scale = sex_pdx::desktop_style::ui_scale().clamp(1, 3);
     let lh = super::glyphs::UI_H * scale as usize;
     let mid = h / 2;
-    line(fb, w, h, total, b"Locked", mid.saturating_sub(3 * lh), (scale * 2).min(3), INK);
+    let title_y = mid.saturating_sub(3 * lh);
+    let mark_w = (w / 7).min(360) as u32;
+    let mark_h = sex_pdx::brand::height_for(mark_w) as usize;
+    if let Some(mark_y) = title_y.checked_sub(mark_h + 2 * lh) {
+        let mark_x = (w - mark_w as usize) / 2;
+        let under = |_: u32, y: u32| super::vertical_gradient_xrgb(mark_y + y as usize, h, TOP, BOTTOM);
+        sex_pdx::brand::draw(mark_w, sex_pdx::brand::Tone::Rich, under, |x, y, c| {
+            let at = (mark_y + y as usize) * w + mark_x + x as usize;
+            if at < total { unsafe { core::ptr::write_volatile(fb.add(at), c) }; }
+        });
+    }
+    line(fb, w, h, total, b"Locked", title_y, (scale * 2).min(3), INK);
     let mut dots = [b' '; 2 * 64];
     let n = (lock.typed as usize).min(64);
     for i in 0..n { dots[2 * i] = b'*'; }

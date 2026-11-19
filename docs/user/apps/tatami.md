@@ -1,6 +1,6 @@
 # Tatami (Settings Center)
 
-> **Identity Note**: **Tatami** (`apps/settings`, `/bin/tatami`, `crates/tatami`, `crates/sex-config`) is the SexOS centralized preferences and system configuration manager, named after traditional woven mats in adherence to the fabric naming theme. In Spindle, typing `tatami` or `settings` opens Tatami. For in-depth lock screen and security documentation, see **[Settings & Lock Screen](../settings-and-lock-screen.md)**.
+> **Identity Note**: **Tatami** (`apps/settings`, `/bin/tatami`, `crates/sex-config`) is the SexOS centralized preferences and system configuration manager, named after traditional woven mats in adherence to the fabric naming theme. In Spindle, typing `tatami` or `settings` opens Tatami. For in-depth lock screen and security documentation, see **[Settings & Lock Screen](../settings-and-lock-screen.md)**.
 
 **Tatami** provides a unified graphical control panel for managing display parameters, keyboard typematic rates, night light color temperature, sound devices, civil time zones, network interfaces, appearance themes, screen lock security, and capability grants. All configuration changes persist automatically across reboots in `/system/settings.toml`.
 

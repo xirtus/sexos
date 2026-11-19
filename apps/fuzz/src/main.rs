@@ -97,7 +97,9 @@ pub extern "C" fn _start() -> ! {
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let args = sex_app::files::args(&mut window, &mut args);
     let mut words = args.split(|&b| b == b' ').filter(|w| !w.is_empty());
-    let calls = parse(words.next(), 20_000).min(10_000_000);
+    let first = words.next();
+    if first == Some(&b"iso"[..]) { isolation(window, words.next(), words.next()); }
+    let calls = parse(first, 20_000).min(10_000_000);
     let seed = parse(words.next(), 1).max(1);
     let proto = words.next() == Some(&b"proto"[..]);
     sex_pdx::serial_record!("[fuzz.start] target={} task={} calls={} seed={} proto={} ops={}", window.target, window.task, calls, seed, proto as u8, OPS.len());
@@ -167,6 +169,131 @@ pub extern "C" fn _start() -> ! {
             window.close()
         }
     }
+}
+
+/// Isolation matrix probes (scripts/isolation_matrix_gate.py, kernel plan phase 7).
+/// `run fuzz iso hold` stays open and names addresses in its own memory: a code
+/// address (`iso_target_code`, which only returns), a data page and a stack slot.
+/// `run fuzz iso OP ADDR` (OP = read, write, exec; ADDR hex) touches that address once.
+/// The gate passes a hold's addresses to a second run, which must then be ended by
+/// the kernel; `[fuzz.iso.breach]` means the touch went through. `own` proves the
+/// probe itself works on this run's own memory.
+fn isolation(mut window: Window, op: Option<&[u8]>, addr: Option<&[u8]>) -> ! {
+    let hex = |w: Option<&[u8]>| w.and_then(|w| core::str::from_utf8(w).ok())
+        .and_then(|t| u64::from_str_radix(t.trim_start_matches("0x"), 16).ok());
+    // Keeps the marker the gate patches into WRPKRU in this file's code.
+    core::hint::black_box(iso_key_marker as *const () as usize);
+    match (op, hex(addr)) {
+        (Some(b"hold"), _) => {
+            let stack_slot = core::hint::black_box([0x5Au8; 64]);
+            let data = core::ptr::addr_of_mut!(ISO_DATA) as u64;
+            unsafe { core::ptr::write_volatile(data as *mut u8, 0x5A); }
+            sex_pdx::serial_record!("[fuzz.iso.hold] target={} task={} code={:#x} data={:#x} stack={:#x}",
+                window.target, window.task, iso_target_code as *const () as usize, data, stack_slot.as_ptr() as u64);
+            // An endpoint of B's own, and a badged CALL copy of it: another program
+            // naming these slots, or a later program in B's row, must hold nothing.
+            let root = sex_pdx::endpoint::create_endpoint();
+            let copy = root.and_then(|slot| derive(slot, ISO_RIGHT_CALL | ISO_RIGHT_GRANT, 0xB0B));
+            sex_pdx::serial_record!("[fuzz.iso.cap.hold] target={} task={} endpoint={} copy={}",
+                window.target, window.task, slot_or_status(root), slot_or_status(copy));
+            window.show(b"Isolation probe: holding. F11 closes.");
+            loop {
+                if let Event::Close = window.next() {
+                    let kept = unsafe { core::ptr::read_volatile(data as *const u8) };
+                    sex_pdx::serial_record!("[fuzz.iso.closed] target={} task={} data_byte={:#x}", window.target, window.task, kept);
+                    core::hint::black_box(stack_slot);
+                    window.close()
+                }
+            }
+        }
+        (Some(b"own"), _) => {
+            let data = core::ptr::addr_of_mut!(ISO_DATA) as u64;
+            unsafe { core::ptr::write_volatile(data as *mut u8, 0x33); }
+            let back = unsafe { core::ptr::read_volatile(data as *const u8) };
+            iso_target_code();
+            sex_pdx::serial_record!("[fuzz.iso.own] target={} task={} ok={}", window.target, window.task, (back == 0x33) as u8);
+        }
+        // Use a capability slot this program never received: derive from it (never
+        // blocks). Anything but a refusal means another program's authority reached us.
+        (Some(b"cap"), Some(slot)) => {
+            let got = derive(slot as u32, ISO_RIGHT_CALL, 0);
+            sex_pdx::serial_record!("[fuzz.iso.cap.try] target={} task={} slot={} status={:#x}",
+                window.target, window.task, slot, got.err().unwrap_or(0));
+            if let Ok(new) = got {
+                sex_pdx::serial_record!("[fuzz.iso.breach] target={} task={} op=cap slot={} new={}", window.target, window.task, slot, new);
+            }
+        }
+        // A copy outlives its root's destruction only as a dead capability: deriving
+        // from it and sending on it must both be refused.
+        (Some(b"revoke"), _) => {
+            let root = sex_pdx::endpoint::create_endpoint();
+            let copy = root.and_then(|slot| derive(slot, ISO_RIGHT_CALL | ISO_RIGHT_GRANT, 0));
+            let destroyed = match root {
+                Ok(slot) => sex_pdx::endpoint::endpoint(sex_pdx::endpoint::OP_DESTROY, slot, [0; 4]).err().unwrap_or(0),
+                Err(e) => e,
+            };
+            let (after_derive, after_send) = match (copy, destroyed) {
+                (Ok(c), 0) => {
+                    let d = derive(c, ISO_RIGHT_CALL, 0).err().unwrap_or(0);
+                    let info = sex_pdx::endpoint::MessageInfo::new(0, 0, 0).map(|i| i.raw()).unwrap_or(0);
+                    let s = sex_pdx::endpoint::endpoint(sex_pdx::endpoint::OP_SEND, c, [info, 0, 0, 0]).err().unwrap_or(0);
+                    (d, s)
+                }
+                _ => (u64::MAX, u64::MAX),
+            };
+            sex_pdx::serial_record!("[fuzz.iso.revoke] target={} task={} root={} copy={} destroy={:#x} derive={:#x} send={:#x}",
+                window.target, window.task, slot_or_status(root), slot_or_status(copy), destroyed, after_derive, after_send);
+            if after_derive == 0 || after_send == 0 {
+                sex_pdx::serial_record!("[fuzz.iso.breach] target={} task={} op=revoke", window.target, window.task);
+            }
+        }
+        (Some(op @ (b"read" | b"write" | b"exec")), Some(addr)) => {
+            let name = core::str::from_utf8(op).unwrap_or("?");
+            sex_pdx::serial_record!("[fuzz.iso.try] target={} task={} op={} addr={:#x}", window.target, window.task, name, addr);
+            let seen = unsafe {
+                match op {
+                    b"read" => core::ptr::read_volatile(addr as *const u8) as u64,
+                    b"write" => { core::ptr::write_volatile(addr as *mut u8, 0xA5); 0xA5 }
+                    _ => { let f: extern "C" fn() = core::mem::transmute(addr as usize); f(); 0 }
+                }
+            };
+            sex_pdx::serial_record!("[fuzz.iso.breach] target={} task={} op={} addr={:#x} byte={:#x}", window.target, window.task, name, addr, seen);
+        }
+        _ => sex_pdx::serial_record!("[fuzz.iso.usage] target={} task={}", window.target, window.task),
+    }
+    window.show(b"Isolation probe done. F11 closes.");
+    loop {
+        if let Event::Close = window.next() { window.close() }
+    }
+}
+
+static mut ISO_DATA: [u8; 4096] = [0; 4096];
+
+// Rights bits of an object capability (kernel/src/capability_table.rs `rights`).
+const ISO_RIGHT_GRANT: u64 = 1 << 2;
+const ISO_RIGHT_CALL: u64 = 1 << 3;
+
+/// OP_DERIVE: a copy of `slot` in this program's own table with `rights` and `badge`.
+fn derive(slot: u32, rights: u64, badge: u64) -> Result<u32, u64> {
+    sex_pdx::endpoint::endpoint(sex_pdx::endpoint::OP_DERIVE, slot, [0, rights, badge, 0]).map(|r| r.words[0] as u32)
+}
+
+fn slot_or_status(r: Result<u32, u64>) -> u64 {
+    match r { Ok(slot) => slot as u64, Err(e) => e }
+}
+
+/// Code another run may try to execute: it only returns.
+#[inline(never)]
+#[no_mangle]
+extern "C" fn iso_target_code() { core::hint::black_box(()); }
+
+/// Never called. Its body is one 7-byte NOP whose operand spells "KEYH"
+/// (0F 1F 80 4B 45 59 48); the gate overwrites it with WRPKRU (0F 01 EF) plus a
+/// 4-byte NOP in a copy of this file, and the loader must refuse that copy.
+#[inline(never)]
+#[no_mangle]
+extern "C" fn iso_key_marker() {
+    unsafe { core::arch::asm!(".byte 0x0f, 0x1f, 0x80, 0x4b, 0x45, 0x59, 0x48", options(nomem, nostack, preserves_flags)); }
 }
 
 struct Text { buf: [u8; 256], len: usize }

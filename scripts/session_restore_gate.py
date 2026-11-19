@@ -44,7 +44,8 @@ def main():
   g['wait'](rf'\[spindle.session.placed\] target={first[1]} task={first[2]} scene=2',s,60)
   s=len(t());expect('run gaze @pic.png',r'\[spindle.session.started\] target=(\d+) task=(\d+) scene=0',240)
   second=g['wait'](launch,s,60);g['wait'](r'\[view.shown\]',s,120)
-  g['wait'](r'\[spindle.session.saved\] bytes=(\d+) status=0',s,60);time.sleep(1)
+  # A save of both: one from moving the first window may still finish after the second opens.
+  g['wait'](r'\[spindle.session.saved\] bytes=(\d+) status=0 programs=2',s,60);time.sleep(1)
  finally:g['stop']()
  # Power gone, no goodbye. The next boot opens both again.
  g=boot(a.iso,disk,a.out,'session2',a.resolution);t=g['text'];q=g['q']

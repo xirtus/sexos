@@ -23,7 +23,7 @@ fn events_round_trip() {
 
 #[test]
 fn files_open_in_the_program_for_their_type() {
-    assert_eq!(program_for(b"/home/report.PDF"), Some(&b"pdf"[..]));
+    assert_eq!(program_for(b"/home/report.PDF"), Some(&b"vellum"[..]));
     assert_eq!(program_for(b"/media/stick/clip.webm"), Some(&b"play"[..]));
     assert_eq!(program_for(b"/music/song.flac"), Some(&b"play"[..]));
     assert_eq!(program_for(b"/Screenshot-3.png"), Some(&b"gaze"[..]));

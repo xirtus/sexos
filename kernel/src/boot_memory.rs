@@ -234,15 +234,15 @@ pub fn reserve_arena(pkey: u8) -> (u64, usize) {
 /// visible to a program on another core that shares the key). One lock orders makers,
 /// so two cores cannot both create one table.
 pub fn arena_leaf(va: u64, pkey: u8) -> Option<u64> {
-    use x86_64::registers::control::Cr3;
     static MAKE: spin::Mutex<()> = spin::Mutex::new(());
     if let Some(leaf) = existing_leaf_address(va) { return Some(leaf); }
     let _held = MAKE.lock();
     let hhdm = crate::HHDM_REQUEST.response()?.offset;
     // Present, writable, user: the leaf alone decides access and carries the key.
-    // A row on the shared key takes turns by its spans' user bit, which only
-    // `program_tenancy` sets: a span is made closed.
-    let mut table = Cr3::read().0.start_address().as_u64();
+    // A row on the shared key is kept apart by its spans' user bit, set only in its own
+    // view (`program_tenancy`): a span is made closed. Tables are made in the canonical
+    // root, and views copying a changed table follow it (`views::mirror`).
+    let mut table = crate::views::root_table();
     for shift in [39, 30, 21] {
         let link: u64 = if shift == 21 && pkey == sex_pdx::organs::SHARED_PROGRAM_KEY { 0b011 } else { 0b111 };
         let slot = (hhdm + table + ((va >> shift) & 511) * 8) as *mut u64;
@@ -252,12 +252,14 @@ pub fn arena_leaf(va: u64, pkey: u8) -> Option<u64> {
             zero_frame(frame);
             entry = frame | link;
             unsafe { core::ptr::write_volatile(slot, entry); }
+            crate::views::mirror(table, ((va >> shift) & 511) as usize);
         }
         if entry & (1 << 7) != 0 { return None; }
         if entry & link != link {
             // A kernel mapping made this table; user and write here only let the leaf decide.
             entry |= link;
             unsafe { core::ptr::write_volatile(slot, entry); }
+            crate::views::mirror(table, ((va >> shift) & 511) as usize);
         }
         table = entry & 0x000f_ffff_ffff_f000;
     }
@@ -845,7 +847,7 @@ fn firmware_pack(pd_id:u32, slot:u64, region_id:u32){
 /// share the HCI rings; SexUSB may wake Cufflinks when a controller comes or goes;
 /// Cufflinks reads the firmware pack and keeps its bonds with Files. Bell hands
 /// Cufflinks its mix for a Bluetooth headset through `bt_audio`.
-pub fn init_bluetooth(usb: u32, cufflinks: u32, files: u32, bell: u32) {
+pub fn init_bluetooth(usb: u32, cufflinks: u32, files: u32, bell: u32, shell: u32) {
     use sex_pdx::bt_hci as b;
     require_boot();
     let Some(pd) = (cufflinks != 0).then(|| DOMAIN_REGISTRY.get(cufflinks)).flatten() else { return };
@@ -856,6 +858,10 @@ pub fn init_bluetooth(usb: u32, cufflinks: u32, files: u32, bell: u32) {
     crate::serial_println!("[boot.bt.hci] usb={} cufflinks={} files={} slot={} bytes={} runtime_mint=0", usb, cufflinks, files, b::SLOT, b::BYTES);
     paired(bell, cufflinks, sex_pdx::bt_audio::SLOT, sex_pdx::bt_audio::REGION_ID, sex_pdx::bt_audio::BYTES, true);
     crate::serial_println!("[boot.bt.audio] bell={} cufflinks={} slot={} bytes={} runtime_mint=0", bell, cufflinks, sex_pdx::bt_audio::SLOT, sex_pdx::bt_audio::BYTES);
+    // The desktop's Bluetooth panel: a shared region and Cufflinks's wake route to the Shell.
+    paired(shell, cufflinks, sex_pdx::bt_ui::SLOT, sex_pdx::bt_ui::REGION_ID, sex_pdx::bt_ui::BYTES, true);
+    if shell != 0 { pd.grant_capability(sex_pdx::bt_ui::NOTIFY_SLOT, CapabilityData::Domain(shell)); }
+    crate::serial_println!("[boot.bt.ui] shell={} cufflinks={} slot={} notify={} runtime_mint=0", shell, cufflinks, sex_pdx::bt_ui::SLOT, sex_pdx::bt_ui::NOTIFY_SLOT);
 }
 
 fn pci_view(pd:&ProtectionDomain,slot:u64,physical:u64,actual_length:u64,length:u64)->RegionGrant{
@@ -933,22 +939,10 @@ pub fn init_paging(pager_pd: u32, client_pds: [u32; 2]) {
     crate::paging::initialize(pool,mappings,pager_pd,pkeys,physical,leaves);
 }
 
-/// The page-directory entry over `address`'s 2 MiB span, if its page table exists.
-pub(crate) fn span_entry(address: u64) -> Option<u64> {
-    existing_leaf_address(address)?;
-    use x86_64::registers::control::Cr3;
-    let hhdm = crate::HHDM_REQUEST.response()?.offset;
-    let mut table = Cr3::read().0.start_address().as_u64();
-    for shift in [39,30] {
-        table = unsafe { core::ptr::read_volatile((hhdm + table + ((address >> shift)&511)*8) as *const u64) } & 0x000f_ffff_ffff_f000;
-    }
-    Some(hhdm + table + ((address >> 21)&511)*8)
-}
-
+/// The leaf for `address`, in the canonical tables (page tables are shared by every view).
 pub(crate) fn existing_leaf_address(address: u64) -> Option<u64> {
-    use x86_64::registers::control::Cr3;
     let hhdm = crate::HHDM_REQUEST.response()?.offset;
-    let mut table = Cr3::read().0.start_address().as_u64();
+    let mut table = crate::views::root_table();
     for shift in [39,30,21] {
         let entry = unsafe { core::ptr::read_volatile((hhdm + table + ((address >> shift)&511)*8) as *const u64) };
         if entry & 1 == 0 || entry & (1<<7) != 0 { return None; }

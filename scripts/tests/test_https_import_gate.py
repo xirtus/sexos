@@ -135,15 +135,11 @@ class ImportFramePixels(unittest.TestCase):
  @classmethod
  def setUpClass(cls):cls.contract=gate.source_contract(ROOT)
  def paint(self,state='Naming',name='web-note',compact=False):
-  width,height=(1024,768)if compact else(1280,800);tile=dict(x=0,y=50,w=width,h=height-50);f=gate.import_frame(tile,state,name,self.contract);raw=bytearray(width*height*3);scale=f['scale'];color=self.contract['color'].to_bytes(3,'big')
+  from check_desktop_pixels import draw_cell
+  width,height=(1024,768)if compact else(1280,800);tile=dict(x=0,y=50,w=width,h=height-50);f=gate.import_frame(tile,state,name,self.contract);raw=bytearray(self.contract['background'].to_bytes(3,'big')*(width*height));scale=f['scale'];color=self.contract['color'].to_bytes(3,'big')
   for row,line in enumerate(f['lines']):
    for column,byte in enumerate(line):
-    for gy,bits in enumerate(gate.https.glyph(self.contract['font'],chr(byte))):
-     for gx in range(5):
-      if bits&(1<<(4-gx)):
-       for dy in range(scale):
-        for dx in range(scale):
-         x=tile['x']+self.contract['inset']+(column*6+gx)*scale+dx;y=tile['y']+self.contract['top']+(row*9+gy)*scale+dy;at=(y*width+x)*3;raw[at:at+3]=color
+    draw_cell(raw,width,tile['x']+self.contract['inset']+column*self.contract['advance']*scale,tile['y']+self.contract['top']+row*self.contract['line']*scale,chr(byte),scale,color,self.contract['font'])
   code=gate.STATE_CODES[state];text=f'[shell.document.viewport] target=15 task=15 surface=300 sequence=7 x=0 y=50 w={width} h={height-50} enqueued=1\n[browser.viewport] target=15 task=15 sequence=7 w={width} h={height-50} origin=held_shell\n[browser.import.layout] state={state} name={name} bytes={f["bytes"]} cols={f["cols"]} rows={f["rows"]} viewport=7 hash={f["hash"]} pixels=unconfirmed\n[browser.import.applied] bytes={f["bytes"]} hash={f["hash"]} rows={f["rows"]} viewport=7 state_code={code} sequence=12 positive_ack=1\n[browser.view.applied] bytes={f["bytes"]} http={1024|(code<<11)} body_bytes=0 pixels=unconfirmed\n';return text,f'P6\n{width} {height}\n255\n'.encode()+raw,(width,height)
  def test_prompt_saved_collision_and_edited_name_have_full_glyphs(self):
   for compact in(False,True):

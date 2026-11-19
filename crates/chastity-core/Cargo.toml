@@ -1,0 +1,20 @@
+[package]
+name = "chastity-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Chastity's vault: KDBX4 files (keepass-rs), entries, search, TOTP and the password generator; host-testable"
+
+[dependencies]
+# KDBX 3/4 reading and KDBX4 writing, so vaults open in KeePassXC and back (MIT).
+# Its crypto: aes, chacha20, salsa20, twofish, rust-argon2, hmac, sha2 (MIT/Apache-2.0).
+keepass = { version = "=0.17.0", features = ["save_kdbx4"] }
+# The same RustCrypto versions keepass uses, for TOTP's HMAC.
+hmac = "0.13"
+sha1 = "0.11"
+sha2 = "0.11"
+# Random bytes: the system's entropy (sys_read_entropy in sex-std on SexOS).
+getrandom = "0.4"
+zeroize = "1"
+# keepass names its Argon2 version with this crate's type (lib name `argon2`).
+rust-argon2 = "3"

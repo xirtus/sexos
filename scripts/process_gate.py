@@ -10,13 +10,21 @@ Each run is typed into Spindle as a person would:
   with blanks and quotes arrive whole; `try_wait` is None before a child ends and
   `wait` then gives success; a long child is killed (no code, not success); a missing
   program is NotFound; asking for the network from a run without it is refused by
-  Shell (PermissionDenied); piped streams and `output()` are Unsupported, `output()`
-  with null streams works; a windowed child runs too.
+  Shell (PermissionDenied); `output()` with null streams works; a windowed child runs
+  too. Pipes, environment and working folder (pipe runs, Files' relay slots):
+  `output()` takes stdout, stderr and the status; 20 000 bytes through stdin and back
+  through stdout; 300 000 + 70 000 bytes at once through both output streams; a child
+  whose reader went away still ends; stdin of an ended child is BrokenPipe; null stdin;
+  a child's pipe handed to another child is Unsupported; `env`, an inherited variable
+  and `env_clear`; `current_dir` in the program's own folder (handed to the child as a
+  grant), one relative to the working folder, ones refused as NotFound (not held,
+  missing, a file, a name with a space that would read as a grant), and
+  `set_current_dir`.
 * `run +net stdspawn net`: a run that has the network may hand it on.
 * `run chello spawn`: C `system()` (wait status 7, quoted words, 127 for a missing
   program), `posix_spawnp` + `waitpid(WNOHANG)` + `kill(SIGKILL)` + `waitpid`
   (WIFSIGNALED), ECHILD after reaping, `posix_spawn` + `waitpid` (status 5), ENOENT,
-  ENOSYS for file actions.
+  ENOSYS for file actions, `envp` and `system()` handing on `environ`, `getcwd`.
 
 Hidden children never open a window and never wait to be dismissed; every check must
 pass, Shell's log must show the refused network and the kill, and each parent must
@@ -59,8 +67,11 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   runs=[]
-  s,r=scored('run stdspawn',r'\[stdspawn\.(ok|fail)\] passed=(\d+)/(\d+)\n',13)
+  s,r=scored('run stdspawn',r'\[stdspawn\.(ok|fail)\] passed=(\d+)/(\d+)\n',24)
   log=t()[s:]
+  # Files held the pipe runs' streams and handed the working folder on as a grant.
+  assert re.search(r'\[files\.pipe\.attached\] starter_row=\d+ slot=\d+ target=\d+ task=\d+ stdio=0x',log),'Files attached no pipe run'
+  assert '[files.pipe.cwd] starter_row=' in log and 'cwd=@/data/stdspawn/work' in log,'Files did not hand on the working folder'
   assert re.search(r'\[shell\.launch\.denied\] parent=\d+ cookie=\d+ reason=network',log),'Shell did not refuse the network'
   assert re.search(r'\[shell\.launch\.kill\] parent=\d+ child=\d+ task=\d+ ok=1',log),'Shell did not end the killed child'
   assert re.search(r'\[shell\.launch\.done\] parent=\d+ child=\d+ task=\d+ status=Some\(7\)',log),'Shell did not report status 7'
@@ -75,7 +86,7 @@ def main():
   assert m[1]=='ok',f'a run with the network could not hand it on: {m[2]}'
   e=g['wait'](r'\[std\.exit\] target=(\d+) task=(\d+) status=0\n',s+m.end(),120)
   r=dict(line='run +net stdspawn net',target=int(e[1]),task=int(e[2]));close(r);runs.append(r)
-  s,r=scored('run chello spawn',r'\[chello\.spawn\.(ok|fail)\] passed=(\d+)/(\d+)\n',13)
+  s,r=scored('run chello spawn',r'\[chello\.spawn\.(ok|fail)\] passed=(\d+)/(\d+)\n',16)
   log=t()[s:]
   assert re.search(r'\[shell\.launch\.kill\] parent=\d+ child=\d+ task=\d+ ok=1',log),'Shell did not end the C program\'s child'
   assert '[stdspawn.child] args=["exit", "5"] exit=5' in log

@@ -3,7 +3,7 @@
 //! data elements, a client that finds a peer's service records (Service Search
 //! Attribute, continuation included) and pulls out what A2DP needs (the sink's AVDTP
 //! PSM and versions), and a small server that answers peers asking about us (our A2DP
-//! Source record). Every length and count from the peer is bounded: nesting depth,
+//! Source record, and AVRCP Target and Controller records). Every length and count from the peer is bounded: nesting depth,
 //! element count, accumulated response bytes and continuation rounds.
 
 use alloc::vec::Vec;
@@ -13,10 +13,14 @@ pub const PSM: u16 = 0x0001;
 pub mod uuid {
     pub const L2CAP: u16 = 0x0100;
     pub const AVDTP: u16 = 0x0019;
+    pub const AVCTP: u16 = 0x0017;
     pub const PUBLIC_BROWSE_ROOT: u16 = 0x1002;
     pub const AUDIO_SOURCE: u16 = 0x110A;
     pub const AUDIO_SINK: u16 = 0x110B;
     pub const ADVANCED_AUDIO_DISTRIBUTION: u16 = 0x110D;
+    pub const AV_REMOTE_CONTROL_TARGET: u16 = 0x110C;
+    pub const AV_REMOTE_CONTROL: u16 = 0x110E;
+    pub const AV_REMOTE_CONTROL_CONTROLLER: u16 = 0x110F;
 }
 
 pub mod attr {
@@ -316,6 +320,28 @@ pub fn a2dp_source_record() -> Record {
         (attr::PROFILE_DESCRIPTOR_LIST, E::Seq(alloc::vec![E::Seq(alloc::vec![E::uuid(uuid::ADVANCED_AUDIO_DISTRIBUTION), E::u16(0x0103)])])),
         (attr::SUPPORTED_FEATURES, E::u16(0x0001)),
     ])
+}
+
+/// An AVRCP record: AVCTP 1.4 on PSM 0x0017, AVRCP 1.4 (absolute volume), `features`.
+fn avrcp_record(handle: u32, classes: &[u16], features: u16) -> Record {
+    use Element as E;
+    Record(alloc::vec![
+        (attr::SERVICE_RECORD_HANDLE, E::u32(handle)),
+        (attr::SERVICE_CLASS_ID_LIST, E::Seq(classes.iter().map(|&c| E::uuid(c)).collect())),
+        (attr::PROTOCOL_DESCRIPTOR_LIST, E::Seq(alloc::vec![
+            E::Seq(alloc::vec![E::uuid(uuid::L2CAP), E::u16(uuid::AVCTP)]),
+            E::Seq(alloc::vec![E::uuid(uuid::AVCTP), E::u16(0x0104)]),
+        ])),
+        (attr::BROWSE_GROUP_LIST, E::Seq(alloc::vec![E::uuid(uuid::PUBLIC_BROWSE_ROOT)])),
+        (attr::PROFILE_DESCRIPTOR_LIST, E::Seq(alloc::vec![E::Seq(alloc::vec![E::uuid(uuid::AV_REMOTE_CONTROL), E::u16(0x0104)])])),
+        (attr::SUPPORTED_FEATURES, E::u16(features)),
+    ])
+}
+/// Our AVRCP Target: category 1 (player), for the headset's buttons.
+pub fn avrcp_target_record() -> Record { avrcp_record(0x0001_0002, &[uuid::AV_REMOTE_CONTROL_TARGET], 0x0001) }
+/// Our AVRCP Controller: category 2 (amplifier), for the headset's absolute volume.
+pub fn avrcp_controller_record() -> Record {
+    avrcp_record(0x0001_0003, &[uuid::AV_REMOTE_CONTROL, uuid::AV_REMOTE_CONTROL_CONTROLLER], 0x0002)
 }
 
 fn error_rsp(tid: u16, code: u16) -> Vec<u8> { header(pdu::ERROR_RSP, tid, &code.to_be_bytes()) }

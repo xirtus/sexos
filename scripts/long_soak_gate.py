@@ -3,7 +3,7 @@
 r"""12-Hour CI-able Long-Run Soak Gate for SexOS.
 
 A continuous working session repeated for hours with three mandatory workload pillars:
-1. Open & Close Apps: Rotates through user-space apps (jot, fortune, sex-calc, pdf,
+1. Open & Close Apps: Rotates through user-space apps (jot, fortune, abacus, pdf,
    view, and mesh/monitor), verifying [shell.program.launch] and clean retirement
    [app.private.retired] on F11 close.
 2. Play Audio: Plays sound through Bell (beep tone, hum records, and play tone),
@@ -320,7 +320,7 @@ def main():
     if not resumed and progs_dir.exists():
         from install_program import install
         to_install = []
-        for name in ['jot', 'fortune', 'hum', mesh_name, 'play', 'sex-calc', 'pdf', 'view']:
+        for name in ['jot', 'fortune', 'hum', mesh_name, 'play', 'abacus', 'pdf', 'view']:
             p_bin = progs_dir / name
             if p_bin.exists():
                 to_install.append((name, p_bin.read_bytes()))
@@ -330,15 +330,15 @@ def main():
     # Populate HTTP server files
     if progs_dir.exists():
         with FILES_LOCK:
-            for name in ['jot', 'fortune', 'hum', mesh_name, 'play', 'sex-calc', 'pdf', 'view']:
+            for name in ['jot', 'fortune', 'hum', mesh_name, 'play', 'abacus', 'pdf', 'view']:
                 p_bin = progs_dir / name
                 if p_bin.exists():
                     FILES['/' + name] = p_bin.read_bytes()
 
     # Determine rotating apps pool
     rotating_apps = ['jot', 'fortune']
-    if (progs_dir / 'sex-calc').exists():
-        rotating_apps.append('sex-calc')
+    if (progs_dir / 'abacus').exists():
+        rotating_apps.append('abacus')
     if (progs_dir / 'pdf').exists():
         rotating_apps.append('pdf')
     if (progs_dir / 'view').exists():
@@ -432,13 +432,13 @@ def main():
         elif app_name == 'fortune':
             g['wait'](r'\[fortune\.ready\]', s, 60)
             time.sleep(0.2)
-        elif app_name == 'sex-calc':
-            g['wait'](r'\[calc\.ready\]', s, 60)
+        elif app_name == 'abacus':
+            g['wait'](r'\[abacus\.ready\]', s, 60)
             g['focus'](sid)
             time.sleep(0.2)
             keys(f'{round_n}+1')
             q.key('ret')
-            g['wait'](r'\[calc\.result\]', s, 60)
+            g['wait'](r'\[abacus\.result\]', s, 60)
         elif app_name == 'pdf':
             g['wait'](r'\[pdf\.open\]|\[display\.text\.committed\]|\[display\.app\.pixels\]', s, 60)
             time.sleep(0.2)

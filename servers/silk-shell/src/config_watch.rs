@@ -36,11 +36,13 @@ struct Watch {
     zone_owed: bool,
     /// The volume from settings still has to reach Bell.
     volume_owed: bool,
+    /// Network time on/off still has to reach sexnet.
+    time_owed: bool,
 }
 
 static mut WATCH: Watch = Watch {
     copy: Config::new(), seen: None, target: 0, asked: Asked::Nothing, asked_at: 0, last_poll: 0,
-    queue: [(0, 0); QUEUE], queued: 0, look_owed: false, zone_owed: false, volume_owed: false,
+    queue: [(0, 0); QUEUE], queued: 0, look_owed: false, zone_owed: false, volume_owed: false, time_owed: false,
 };
 
 fn watch() -> &'static mut Watch { unsafe { &mut *core::ptr::addr_of_mut!(WATCH) } }
@@ -60,6 +62,7 @@ pub fn poll() {
     if w.look_owed { show_look(w); }
     if w.zone_owed { show_zone(w); }
     if w.volume_owed { give_volume(w); }
+    if w.time_owed { give_network_time(w); }
     // Files restarted or lost the request: ask again after a while.
     if w.asked != Asked::Nothing && now.saturating_sub(w.asked_at) > 5 * POLL_TICKS { w.asked = Asked::Nothing; }
     if w.asked != Asked::Nothing { return; }
@@ -151,8 +154,12 @@ fn keyboard(w: &mut Watch) {
 /// sexnet sets the clock from the network unless the person turned it off.
 fn give_network_time(w: &mut Watch) {
     let on = w.copy.value(id::NTP) != 0;
+    // sexnet answers in Shell's one reply slot: wait while Bell or sexnet still owe one.
+    if unsafe { crate::answer_owed() } { w.time_owed = true; return; }
     let r = sex_pdx::pdx_call(sex_pdx::SLOT_NET, sex_pdx::network_time::OP, sex_pdx::network_time::SET_ENABLED, on as u64, 0).0;
-    sex_pdx::serial_record!("[shell.network_time] on={} ok={}", on as u8, (r == sex_pdx::network_time::OK) as u8);
+    w.time_owed = r != 0;
+    if r == 0 { unsafe { crate::NET_TIME_ASKED = Some(sex_pdx::get_ticks()); } }
+    sex_pdx::serial_record!("[shell.network_time] on={} ok={}", on as u8, (r == 0) as u8);
 }
 
 fn give_volume(w: &mut Watch) {

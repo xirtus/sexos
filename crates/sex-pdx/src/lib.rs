@@ -7,6 +7,8 @@
 #![no_std]
 
 pub mod mem;
+pub mod ipc_recv;
+pub mod sched;
 pub mod pagefault;
 pub mod app_catalog;
 pub mod browser_sources;
@@ -59,6 +61,7 @@ pub enum AuthLayer {
 pub struct SerialWriter;
 
 mod serial_record_buffer;
+pub mod input_diagnostics;
 
 /// A complete bounded line uses one raw-print invocation. On the current BSP
 /// syscall entry masks interrupts, so timer diagnostics cannot split its fields.
@@ -331,11 +334,11 @@ pub fn pdx_listen_raw(slot: u64) -> PdxMessage {
             continue;
         }
         unsafe {
-            if PDX_LISTEN_WRAPPER_BUDGET > 0 {
+            if PDX_LISTEN_WRAPPER_BUDGET > 0 && !autofill::request(type_id) && !autofill::response(type_id) {
                 PDX_LISTEN_WRAPPER_BUDGET -= 1;
                 serial_println!(
-                    "[pdx.listen.raw.wrapper] type={:#x} caller={} a0={:#x} a1={:#x}",
-                    type_id, caller_pd, arg0, arg1
+                    "[pdx.listen.raw.wrapper] type={:#x} caller={} task={} payload=redacted",
+                    type_id, caller_pd, caller_task
                 );
             }
         }
@@ -983,9 +986,12 @@ pub const BLOCK_ERR_TIMEOUT:  u64 = 5; // Operation timed out
 pub const BLOCK_SECTOR_SIZE:  u64 = 512;     // Minimum alignment unit
 pub const BLOCK_MAX_XFER:     u64 = 4096;    // Max bytes per transfer (one page)
 /// Largest single READ/WRITE Files may send: the size of the shared block buffer.
-/// One NVMe command moves it all (a PRP list), so large I/O costs one command per run
-/// instead of one per page. BLOCK_MAX_XFER stays the unit for callers that want pages.
-pub const BLOCK_MAX_RUN:      u64 = 128 * 1024;
+/// SexDrive moves it as commands of at most BLOCK_CMD_RUN, several in flight at once
+/// (#307), so large I/O costs one call per run instead of one per page.
+/// BLOCK_MAX_XFER stays the unit for callers that want pages.
+pub const BLOCK_MAX_RUN:      u64 = 512 * 1024;
+/// Largest single device command (one PRP list page; within common NVMe MDTS limits).
+pub const BLOCK_CMD_RUN:      u64 = 128 * 1024;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DISK LAYOUT — canonical, single source of truth for every fixed on-disk
@@ -1287,6 +1293,7 @@ pub mod usb_net;
 pub mod bt_hci;
 pub mod bt_bonds;
 pub mod bt_audio;
+pub mod bt_ui;
 pub mod network_config;
 
 pub mod desktop_style;
@@ -1297,11 +1304,19 @@ pub mod wifi_status;
 pub mod network_time;
 pub mod notify;
 pub mod desktop_look;
+pub mod access_view;
 pub mod window_switcher;
+pub mod window_menu;
 pub mod screenshot;
 pub mod tray;
+pub mod program_tray;
+pub mod silk_ctl;
 pub mod window_motion;
 pub mod launch;
+pub mod restricted_helper;
+pub mod restricted_job;
+pub mod restricted_helper_journal;
+pub mod restricted_helper_provider;
 pub mod dnd;
 pub mod program_clipboard;
 pub mod session_restore;
@@ -1322,11 +1337,15 @@ pub mod power;
 pub mod denim;
 pub mod touchpad;
 pub mod program_threads;
+pub mod endpoint;
 pub mod fs;
 pub mod home_lock;
+pub mod disks;
 pub mod web;
 pub mod accounts;
+pub mod autofill;
 pub mod organs;
+pub mod brand;
 pub mod text_selection;
 pub mod text_encoding;
 pub mod clipboard;
@@ -1338,6 +1357,8 @@ pub mod clock_zone;
 pub mod screen_state;
 pub mod app_scroll;
 pub mod bitmap_batch;
+pub mod speech_voice;
+pub mod a11y;
 pub mod vm;
 pub mod stream;
 pub mod console_relay;

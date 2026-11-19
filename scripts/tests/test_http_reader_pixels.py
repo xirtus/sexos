@@ -3,7 +3,7 @@ import copy,hashlib,sys,unittest
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 from http_content_gate import READER_BODY,READER_TAIL,STREAM_BODY,STREAM_TAIL,STREAM_MODES,MODES,wire_response,stream_receipts,load_pixel_contract,overview_preview,reader_frame,reader_move,reader_position,frame_prefix,verify_reader_pixels
-from check_desktop_pixels import glyph
+from check_desktop_pixels import glyph,draw_cell
 ROOT=Path(__file__).resolve().parents[2]
 
 class ReaderPixels(unittest.TestCase):
@@ -20,19 +20,31 @@ class ReaderPixels(unittest.TestCase):
    +(f'[browser.reader.position] anchor={frame["source_anchor"]} viewport={sequence} tls=0 retained_body_only=1\n'if position else'')+
    f'[browser.view.applied] bytes={frame["bytes"]} http=258 body_bytes={len(body)} pixels=unconfirmed\n')
  def screen(self,frame,x=600,y=70,shift=0):
-  pixels=bytearray(1280*800*3);factor=frame['scale'];contract=self.contract;color=contract['color'].to_bytes(3,'big')
+  factor=frame['scale'];contract=self.contract;color=contract['color'].to_bytes(3,'big');pixels=bytearray(contract['background'].to_bytes(3,'big')*(1280*800))
   for row,line in enumerate(frame['lines']):
    for column,byte in enumerate(line):
-    for gy,bits in enumerate(glyph(contract['font'],chr(byte))):
-     for gx in range(5):
-      if not bits&(1<<(4-gx)):continue
-      for dy in range(factor):
-       for dx in range(factor):
-        px=x+contract['inset']+(column*contract['advance']+gx)*factor+dx;py=y+contract['top']+(row*contract['line']+gy)*factor+dy+shift
-        pixels[(py*1280+px)*3:(py*1280+px)*3+3]=color
+    draw_cell(pixels,1280,x+contract['inset']+column*contract['advance']*factor,y+contract['top']+row*contract['line']*factor+shift,chr(byte),factor,color,contract['font'])
   return b'P6\n1280 800\n255\n'+pixels
  def result(self,frame,body=READER_BODY,w=624,h=706,anchor=0,screen=None,trace=None):
   return verify_reader_pixels(trace or self.trace(frame,body,w,h),screen or self.screen(frame),body,self.contract,anchor)
+ def test_short_tile_checks_content_through_last_pixel_without_claiming_resize_chrome(self):
+  # Real connected-desktop geometry: the last partial text cell crosses
+  # the compositor's eight-pixel bottom resize band (UI1, text scale2).
+  w,h,x,y=566,375,706,417;frame=self.frame(w=w,h=h)
+  image=bytearray(self.screen(frame,x=x,y=y));offset=image.index(b'255\n')+4
+  bottom=y+h-self.contract['content_bottom_inset']
+  for row in range(bottom,y+h):
+   start=offset+(row*1280+x)*3;image[start:start+w*3]=b'\x21\x32\x43'*w
+  trace=self.trace(frame,w=w,h=h,x=x,y=y)
+  result=verify_reader_pixels(trace,bytes(image),READER_BODY,self.contract)
+  self.assertTrue(result['ok'],result)
+  # The last actual content pixel is still checked, including blank erasure.
+  bad=bytearray(image);point=offset+((bottom-1)*1280+x+self.contract['inset'])*3
+  bad[point:point+3]=b'\xff\x00\xff'
+  self.assertFalse(verify_reader_pixels(trace,bytes(bad),READER_BODY,self.contract)['ok'])
+  # Historical contracts keep their original full-height predicate.
+  legacy=dict(self.contract);legacy.pop('content_bottom_inset')
+  self.assertFalse(verify_reader_pixels(trace,bytes(image),READER_BODY,legacy)['ok'])
  def test_exact_2048_fixture_complete_home_chrome_and_body(self):
   self.assertEqual(len(READER_BODY),2048);self.assertTrue(READER_BODY.endswith(READER_TAIL));self.assertTrue(all(b==10 or 32<=b<=126 for b in READER_BODY))
   frame=self.frame();self.assertEqual((frame['cols'],frame['rows'],frame['body_rows'],frame['bytes']),(49,37,34,1849));self.assertTrue(self.result(frame)['ok'])
@@ -66,6 +78,21 @@ class ReaderPixels(unittest.TestCase):
  def test_wrong_complete_body_byte_or_row_is_rejected(self):
   frame=self.frame();wrong=copy.deepcopy(frame);wrong['lines'][2]=b'X'+wrong['lines'][2][1:]
   self.assertFalse(self.result(frame,screen=self.screen(wrong))['ok']);self.assertFalse(self.result(frame,screen=self.screen(frame,shift=18))['ok'])
+ def test_legacy_two_pixel_origin_shift_cannot_pass_current_renderer(self):
+  frame=self.frame();self.assertEqual(self.contract['top'],34)
+  self.assertFalse(self.result(frame,screen=self.screen(frame,shift=2))['ok'])
+ def test_maximized_reader_checks_far_right_cells_beyond_old_80_column_cap(self):
+  frame=self.frame(w=1280,h=706);trace=self.trace(frame,w=1280,h=706,x=0);raw=bytearray(self.screen(frame,x=0))
+  self.assertEqual(self.contract['renderer_max_columns'],160);self.assertGreater(frame['cols'],100)
+  self.assertTrue(verify_reader_pixels(trace,bytes(raw),READER_BODY,self.contract)['ok'])
+  x=self.contract['inset']+100*self.contract['advance']*frame['scale'];y=70+self.contract['top'];at=raw.index(b'\n255\n')+5+(y*1280+x)*3;raw[at]=(raw[at]+1)%256
+  self.assertFalse(verify_reader_pixels(trace,bytes(raw),READER_BODY,self.contract)['ok'])
+ def test_maximized_reader_at_actual_bar28_and_above_bar_rejection(self):
+  self.assertEqual(self.contract['bar'],28);frame=self.frame(w=1280,h=772)
+  trace=self.trace(frame,w=1280,h=772,x=0,y=28);image=self.screen(frame,x=0,y=28)
+  self.assertTrue(verify_reader_pixels(trace,image,READER_BODY,self.contract)['ok'])
+  bad=verify_reader_pixels(trace.replace('y=28','y=27'),image,READER_BODY,self.contract)
+  self.assertFalse(bad['ok']);self.assertIn('outside framebuffer',' '.join(bad['errors']))
  def test_header_host_and_footer_are_required(self):
   frame=self.frame()
   for row in [0,1,frame['rows']-1]:

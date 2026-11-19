@@ -38,6 +38,7 @@ pub const FACES_FREE_POLICY: bool = true;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::{String, ToString};
     use alloc::vec;
     use alloc::vec::Vec;
     use sex_image::Image;
@@ -154,6 +155,7 @@ mod tests {
                 place: Some("Paris, France".into()),
                 place_region: Some("Ile-de-France Europe".into()),
                 camera: Some("SexOS Cam".into()),
+                ..Default::default()
             },
         );
         lib.upsert_photo(
@@ -167,6 +169,7 @@ mod tests {
                 place: Some("Tokyo, Japan".into()),
                 place_region: Some("Kanto Asia".into()),
                 camera: Some("SexOS Cam".into()),
+                ..Default::default()
             },
         );
         lib.upsert_photo(
@@ -180,6 +183,7 @@ mod tests {
                 place: Some("Reykjavik, Iceland".into()),
                 place_region: Some("Capital Region Europe".into()),
                 camera: Some("SexOS Cam".into()),
+                ..Default::default()
             },
         );
         lib.upsert_photo(
@@ -193,6 +197,7 @@ mod tests {
                 place: Some("New York, USA".into()),
                 place_region: Some("New York North America".into()),
                 camera: Some("SexOS Cam".into()),
+                ..Default::default()
             },
         );
 
@@ -281,6 +286,8 @@ mod tests {
                 place: Some("Paris, France".into()),
                 place_region: Some("Ile-de-France Europe".into()),
                 camera: Some("SexOS Cam".into()),
+                lens: Some("Summicron 35\tf/2".into()),
+                exposure: Some("1/250 s \u{b7} f/2.8 \u{b7} ISO 400 \u{b7} 35 mm".into()),
             },
         );
         lib.toggle_favorite("@/data/spindle/photos/paris.jpg");
@@ -315,6 +322,8 @@ mod tests {
             assert_eq!(rec.meta.place.as_deref(), Some("Paris, France"));
             assert_eq!(rec.meta.date, PhotoDate::new(2026, 5, 14, 16, 30, 0));
             assert_eq!(rec.recipe, recipe);
+            assert_eq!(rec.meta.lens.as_deref(), Some("Summicron 35\tf/2"));
+            assert_eq!(rec.meta.exposure.as_deref(), Some("1/250 s \u{b7} f/2.8 \u{b7} ISO 400 \u{b7} 35 mm"));
             rec.meta.clone()
         };
 
@@ -326,6 +335,39 @@ mod tests {
         assert_eq!(rec2.recipe, recipe);
         recipe.exposure_ev_x100 = 0;
         assert_ne!(rec2.recipe, recipe);
+    }
+
+    #[test]
+    fn exposure_line_reads_like_a_camera_and_old_catalogs_still_load() {
+        use gaze_codecs::Rational;
+        let r = |num, den| Some(Rational { num, den });
+        let exif = gaze_codecs::Exif { exposure_time: r(1, 250), f_number: r(28, 10), iso: Some(400), focal_length: r(35, 1), ..Default::default() };
+        assert_eq!(metadata::exposure_line(&exif).as_deref(), Some("1/250 s \u{b7} f/2.8 \u{b7} ISO 400 \u{b7} 35 mm"));
+        let long = gaze_codecs::Exif { exposure_time: r(5, 2), f_number: r(8, 1), ..Default::default() };
+        assert_eq!(metadata::exposure_line(&long).as_deref(), Some("2.5 s \u{b7} f/8"));
+        let odd = gaze_codecs::Exif { exposure_time: r(10, 1250), focal_length: r(0, 0), ..Default::default() };
+        assert_eq!(metadata::exposure_line(&odd).as_deref(), Some("1/125 s"));
+        // Slow but under a second: seconds, not a rounded 1/N (4/5 s is not 1/1 s).
+        for ((num, den), want) in [((4, 5), "0.8 s"), ((3, 5), "0.6 s"), ((1, 3), "0.3 s"), ((1, 4), "1/4 s")] {
+            let e = gaze_codecs::Exif { exposure_time: r(num, den), ..Default::default() };
+            assert_eq!(metadata::exposure_line(&e).as_deref(), Some(want));
+        }
+        assert_eq!(metadata::exposure_line(&gaze_codecs::Exif::default()), None);
+
+        // A catalog line written before lens and exposure were kept (13 columns).
+        let mut fresh = PhotoLibrary::new();
+        fresh.upsert_photo("photos/a.jpg", PhotoMeta { width: 10, height: 10, camera: Some("Cam".into()), lens: Some("L".into()), ..Default::default() });
+        let text = fresh.serialize();
+        let old: String = text.lines().map(|l| {
+            let mut line = if l.starts_with("PHOTO\t") { l.split('\t').take(13).collect::<Vec<_>>().join("\t") } else { l.to_string() };
+            line.push('\n');
+            line
+        }).collect();
+        assert!(old.lines().any(|l| l.starts_with("PHOTO\t") && l.split('\t').count() == 13));
+        let lib = PhotoLibrary::deserialize(&old);
+        let rec = lib.photo_by_path("photos/a.jpg").expect("old line loads");
+        assert_eq!(rec.meta.camera.as_deref(), Some("Cam"));
+        assert_eq!((rec.meta.lens.as_deref(), rec.meta.exposure.as_deref()), (None, None));
     }
 
     #[test]

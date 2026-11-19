@@ -49,7 +49,8 @@ pub fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Error> {
         let local = u32le(zip, at + 42).ok_or(bad.clone())?;
         let name = core::str::from_utf8(zip.get(at + 46..at + 46 + n).ok_or(bad.clone())?).map_err(|_| bad.clone())?;
         at += 46 + n + e + c;
-        if name.ends_with('/') { continue; }
+        // A folder entry, even with trailing blanks ("wrap/ ", issue #319).
+        if name.trim_end().ends_with('/') { continue; }
         let Some(path) = clean_path(name) else { return Err(Error::Package("a file outside the package")) };
         total += size;
         if total > MAX_TOTAL { return Err(Error::Package("too big")); }
@@ -59,7 +60,10 @@ pub fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Error> {
         let data = match method {
             0 => Vec::from(raw),
             8 => {
-                let opts = zune_inflate::DeflateOptions::default().set_limit(size.max(1)).set_size_hint(size);
+                // The declared size is untrusted: it bounds the output but only a small,
+                // packed-size-scaled hint is allocated up front (issue #319).
+                let hint = size.min(packed.saturating_mul(4)).min(256 * 1024);
+                let opts = zune_inflate::DeflateOptions::default().set_limit(size.max(1)).set_size_hint(hint);
                 zune_inflate::DeflateDecoder::new_with_options(raw, opts).decode_deflate().map_err(|_| Error::Package("a file could not be unpacked"))?
             }
             _ => return Err(Error::Package("a file is packed in an unknown way")),

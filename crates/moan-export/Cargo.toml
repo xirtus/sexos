@@ -1,0 +1,15 @@
+[package]
+name = "moan-export"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Moan audio export: bounded FFmpeg WAV, FLAC and fixed-point MP3 encoding"
+
+[features]
+default = []
+# Same pinned codec C bridge compiled against native host qualification libraries.
+host-codecs = []
+
+[target.'cfg(target_os = "none")'.dependencies]
+sex-libc = { path = "../sex-libc" }
+sex-pdx = { path = "../sex-pdx" }

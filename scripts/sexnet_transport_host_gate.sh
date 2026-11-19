@@ -10,8 +10,9 @@ from pathlib import Path
 import shutil,sys
 root,out=map(Path,sys.argv[1:]);out.mkdir(parents=True);shutil.copytree(root/'crates/sex-net/src',out/'src');shutil.copyfile(root/'Cargo.lock',out/'Cargo.lock')
 shutil.copytree(root/'crates/sex-net-config',out.parent/'sex-net-config')
-# Only isolate workspace discovery; production package/dependencies/source intact.
-(out/'Cargo.toml').write_text((root/'crates/sex-net/Cargo.toml').read_text()+'\n[workspace]\n')
+# Only isolate workspace discovery; production package/dependencies/source intact,
+# including the workspace's vendored smoltcp patch.
+(out/'Cargo.toml').write_text((root/'crates/sex-net/Cargo.toml').read_text()+'\n[workspace]\n'+f"\n[patch.crates-io]\nsmoltcp = {{ path = \"{root/'vendor/smoltcp-0.14.0'}\" }}\n")
 PY
 cargo metadata --manifest-path "$PACKAGE_DIR/Cargo.toml" --offline --format-version 1 > "$PACKAGE_DIR/metadata.json"
 python3 - "$ROOT_DIR" "$PACKAGE_DIR" <<'PY'

@@ -44,6 +44,18 @@ is_allowed_crate() {
   grep -Fxq "$value" <<<"$allowed_crates_raw"
 }
 
+# Rust cfg values may contain quotes; parse the TOML string rather than grep it.
+stage_rustflags() {
+  python3 - "$1" <<'PYFLAGS'
+import sys, tomllib
+with open(sys.argv[1], 'rb') as source:
+    value = tomllib.load(source)['stage'][0].get('rustflags', '')
+if not isinstance(value, str) or '\n' in value or '\r' in value:
+    raise SystemExit('invalid stage rustflags')
+print(value)
+PYFLAGS
+}
+
 run_stage() {
   local stage="$1"
   local action
@@ -53,19 +65,23 @@ run_stage() {
   case "$action" in
     prep_iso_root)
       rm -rf iso_root 2>/dev/null || true
+      rm -rf target/build-consumed-inputs
       mkdir -p iso_root/servers iso_root/apps iso_root/programs iso_root/boot/limine
       ;;
     copy_limine)
       cp limine/limine-bios-cd.bin iso_root/boot/limine/
       cp limine/limine-uefi-cd.bin iso_root/boot/limine/
       cp limine/limine-bios.sys iso_root/boot/limine/
+      # Fix Limine 7.13.3's BIOS boot-menu countdown hang (idempotent; CI patches
+      # limine/ itself before building the installer tool).
+      python3 scripts/patch_limine_bios.py iso_root/boot/limine/limine-bios-cd.bin iso_root/boot/limine/limine-bios.sys
       ;;
     cargo_pkg)
       local pkg src dst extra_rustflags
       pkg="$(rg -n '^package\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       src="$(rg -n '^source_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       dst="$(rg -n '^dest_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
-      extra_rustflags="$(rg -n '^rustflags\s*=\s*"[^"]*"' "$stage" | sed -E 's/.*"([^"]*)".*/\1/' || true)"
+      extra_rustflags="$(stage_rustflags "$stage")"
       is_allowed_crate "$pkg" || { echo "[FAIL] package not in whitelist: $pkg"; exit 1; }
       RUSTFLAGS="-C link-arg=-Tkernel/linker.ld ${extra_rustflags:-}" cargo build --locked \
         -Z build-std=core,compiler_builtins,alloc \
@@ -80,12 +96,15 @@ run_stage() {
       manifest="$(rg -n '^manifest\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       src="$(rg -n '^source_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
       dst="$(rg -n '^dest_artifact\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/')"
-      extra_rustflags="$(rg -n '^rustflags\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+      extra_rustflags="$(stage_rustflags "$stage")"
       # A stage may name its own target (programs use SSE; kernel and servers don't).
       stage_target="$(rg -n '^target\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       # Ordinary programs (x86_64-sex-std.json) build the whole standard library.
       stage_std="$(rg -n '^build_std\s*=\s*"[^"]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+      # A stage may name its own Cargo profile ("lean": big programs, Cargo.toml); release otherwise.
+      stage_profile="$(rg -n '^profile\s*=\s*"[a-z-]+"' "$stage" | sed -E 's/.*"([^"]+)".*/\1/' || true)"
       is_allowed_crate "$manifest" || { echo "[FAIL] manifest not in whitelist: $manifest"; exit 1; }
+      python3 scripts/build_input_receipt.py begin "$stage"
       # Their std is the toolchain's with SexOS's std::process added (scripts/sex_std_source.py).
       if [[ ${stage_target:-$TARGET} == x86_64-sex-std.json ]]; then
         export __CARGO_TESTS_ONLY_SRC_ROOT
@@ -98,25 +117,28 @@ run_stage() {
         -Z build-std-features=compiler-builtins-mem \
         --manifest-path "$manifest" \
         --target "${stage_target:-$TARGET}" \
-        --release
-      # Programs: the loader refuses code holding WRPKRU/XRSTOR bytes at any offset.
-      # A displacement that holds them by chance moves when the program links with its
-      # read-only data in another order (programs that read SEX_LAYOUT_SEED).
-      if [[ ${stage_target:-$TARGET} == x86_64-sex-app.json || ${stage_target:-$TARGET} == x86_64-sex-std.json ]]; then
-        local seed=0
-        while ! python3 scripts/key_bytes.py "$src"; do
+        --profile "${stage_profile:-release}"
+      # Programs and BOOT services alike: the loaders refuse code holding WRPKRU/XRSTOR
+      # bytes at any offset. A displacement that holds them by chance moves when the
+      # binary links with its sections in another order: programs read SEX_LAYOUT_SEED
+      # in build.rs, services get the same shuffle as link arguments.
+      local seed=0 shuffle=""
+      while ! python3 scripts/key_bytes.py "$src"; do
           seed=$((seed + 1))
           [[ $seed -le 64 ]] || { echo "[FAIL] $src holds a refused instruction at every layout tried"; exit 1; }
           echo "[layout] $src: linking again with SEX_LAYOUT_SEED=$seed"
-          SEX_LAYOUT_SEED=$seed RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-}" cargo build --locked \
+          if [[ ${stage_target:-$TARGET} != x86_64-sex-app.json && ${stage_target:-$TARGET} != x86_64-sex-std.json ]]; then
+            shuffle="-C link-arg=--shuffle-sections=.rodata*=$seed -C link-arg=--shuffle-sections=.text*=$seed"
+          fi
+          SEX_LAYOUT_SEED=$seed RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie ${extra_rustflags:-} $shuffle" cargo build --locked \
             -Z build-std="${stage_std:-core,compiler_builtins,alloc}" \
             -Z build-std-features=compiler-builtins-mem \
             --manifest-path "$manifest" \
             --target "${stage_target:-$TARGET}" \
-            --release
-        done
-      fi
+            --profile "${stage_profile:-release}"
+      done
       cp "$src" "$dst"
+      python3 scripts/build_input_receipt.py finish "$stage"
       ;;
     copy_file)
       local src dst

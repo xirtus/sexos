@@ -46,8 +46,8 @@ fn cell_pixel(s:&Surface,scalar:u32,x:usize,y:usize,selected:bool)->Option<u32>{
 }
 #[test]fn lowercase_titles_use_13px_natural_sans_within_shared_26px_titlebar(){
  let title=b"Linen";let width=glyphs::ui_width(title,1).unwrap();let mut count=0;
- for y in 0..26 {for x in 80..85+width+4 {
-  let alpha=if(5..21).contains(&y){glyphs::ui_coverage(title,x as i32-85,y-5,1).unwrap()}else{0};
+ for y in 0..26 {for x in 104..109+width+4 {
+  let alpha=if(5..21).contains(&y){glyphs::ui_coverage(title,x as i32-109,y-5,1).unwrap()}else{0};
   let expected=(alpha!=0).then(||coverage_blend(desktop_style::contrast_ink(0),0,alpha));
   assert_eq!(toolbar_title_fg_at(x,y,200,0),expected);count+=expected.is_some()as usize;
  }}assert!(count>80);

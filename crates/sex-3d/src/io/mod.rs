@@ -203,11 +203,22 @@ pub fn append_scene(scene: &mut Scene, other: Scene) -> Vec<usize> {
         scene.materials.push(m);
     }
     let mesh_ids: Vec<usize> = other.meshes.into_iter().zip(other.mesh_names).map(|(m, n)| scene.add_mesh(&n, m)).collect();
+    let arm_ids: Vec<usize> = other.armatures.into_iter().zip(other.armature_names).map(|(a, n)| scene.add_armature(&n, a)).collect();
+    let lat_ids: Vec<usize> = other.lattices.into_iter().zip(other.lattice_names).map(|(l, n)| scene.add_lattice(&n, l)).collect();
+    let gp_ids: Vec<usize> = other.grease_pencils.into_iter().zip(other.grease_pencil_names).map(|(g, n)| scene.add_grease_pencil(&n, g)).collect();
+    if scene.sequence_editor.is_none() {
+        scene.sequence_editor = other.sequence_editor;
+    }
     let obj_off = scene.objects.len();
     let mut out = Vec::new();
+    let mut renamed = Vec::new();
     for mut o in other.objects {
-        if let ObjectData::Mesh(mi) = &mut o.data {
-            *mi = mesh_ids[*mi];
+        match &mut o.data {
+            ObjectData::Mesh(mi) => *mi = mesh_ids[*mi],
+            ObjectData::Armature(ai) => *ai = arm_ids[*ai],
+            ObjectData::Lattice(li) => *li = lat_ids[*li],
+            ObjectData::GreasePencil(gi) => *gi = gp_ids[*gi],
+            _ => {}
         }
         for slot in &mut o.materials {
             if *slot != usize::MAX {
@@ -216,7 +227,24 @@ pub fn append_scene(scene: &mut Scene, other: Scene) -> Vec<usize> {
         }
         o.parent = o.parent.map(|p| p + obj_off);
         o.collection = 0;
-        out.push(scene.add_object(o));
+        let name = o.name.clone();
+        let i = scene.add_object(o);
+        if scene.objects[i].name != name {
+            renamed.push((name, scene.objects[i].name.clone()));
+        }
+        out.push(i);
+    }
+    // Objects made unique on the way in: point the appended objects'
+    // references (modifiers, constraints) at their new names.
+    for &i in &out {
+        let o = &mut scene.objects[i];
+        for (old, new) in &renamed {
+            o.modifiers.iter_mut().for_each(|m| m.rename_object_ref(old, new));
+            o.constraints.iter_mut().for_each(|c| c.rename_object_ref(old, new));
+            for pb in &mut o.pose {
+                pb.constraints.iter_mut().for_each(|c| c.rename_object_ref(old, new));
+            }
+        }
     }
     if scene.active_camera.is_none() {
         scene.active_camera = other.active_camera.map(|c| c + obj_off);
@@ -343,7 +371,7 @@ pub(crate) fn linear_to_srgb(c: f32) -> f32 {
 
 /// Decode a PNG or JPEG (detected by signature) into a linear-light image.
 /// Colour channels are treated as sRGB, alpha as linear.
-pub(crate) fn decode_image(name: &str, bytes: &[u8]) -> Result<Image, String> {
+pub fn decode_image(name: &str, bytes: &[u8]) -> Result<Image, String> {
     let (w, h, channels, data) = if bytes.starts_with(b"\x89PNG") {
         decode_png(bytes)?
     } else if bytes.starts_with(&[0xff, 0xd8]) {
@@ -411,7 +439,7 @@ fn decode_jpeg(bytes: &[u8]) -> Result<(u32, u32, usize, Vec<u8>), String> {
 }
 
 /// Encode a linear-light image as an 8-bit sRGB RGBA PNG.
-pub(crate) fn encode_png(img: &Image) -> Vec<u8> {
+pub fn encode_png(img: &Image) -> Vec<u8> {
     let mut data = Vec::with_capacity(img.pixels.len() * 4);
     for p in &img.pixels {
         let e = |c: f32| (linear_to_srgb(c) * 255.0 + 0.5) as u8;

@@ -47,7 +47,8 @@ reference and must check on real hardware (or replace with datasheet/REA facts).
 | `crates/sex-gpu-intel` (driver logic for the planned `servers/sexgpu-intel`), `crates/sex-kms` | Intel Gen12 Tiger Lake display engine (UHD 8086:9a60 on the x17 R1): GMBUS, DP AUX, transcoder readout, planes, cursor, backlight PWM, hotplug | Intel public PRMs (Tiger Lake Vol 2c registers, Vol 12 display); MIT i915 register headers as cross-check only; VESA E-EDID, DisplayPort and CTA-861 layouts | GMBUS pin numbers, AUX timing, TGL-H port set, SDEISR/DE HPD bits, PLANE_SURFLIVE latching, PWM controller on the x17 R1 | L1/L3 |
 | `servers/sexdisplay` `virtio_gpu.rs` | virtio-gpu 2D (QEMU) | virtio 1.2 specification §5.7 only; no crate, no Linux code | QEMU only | L2 |
 | `servers/sexbell` `sound.rs` | virtio sound | `virtio-drivers` crate (MIT), linked | QEMU only | master |
-| Planned: NVIDIA GSP driver (`sexgpu`) | RTX 30 (GA104) | NVIDIA open-gpu-kernel-modules (MIT/GPL dual, port under MIT with notices); nova (GPL-2.0) read only | everything | plan in `docs/handoff/NVIDIA_GPU_PLAN_2026_11_09.md` |
+| `crates/drag-vmm`, `apps/drag` (Drag D2, emulated devices for guests, not host drivers) | 16550A UART, 8259A PIC, 8254 PIT, virtio-mmio virtio-blk, Linux x86 boot protocol loader | Linux `Documentation/arch/x86/boot.rst` (boot protocol, read only), Intel SDM (VMX exits), 8250/16550, 8259A, 8254 data sheets, virtio 1.2 §2, §4.2, §5.2; no rust-vmm, QEMU or Linux code | a real Linux bzImage boots to its console under VMX (KVM host or x17) | D2 |
+| `crates/sex-gpu-nv` (driver logic for the planned `servers/sexgpu-nv`) | NVIDIA RTX 30 (GA104 first, GA102..GA107 and AD10x share the path): VBIOS/FWSEC-FRTS, falcon heavy-secure boot, WPR2 layout, Booter, GSP-RM RPC queues, CPU sequencer | nouveau GSP-RM path (`nvkm/subdev/gsp`, `nvkm/falcon`, `nvkm/subdev/bios`, MIT, re-implemented in Rust); NVIDIA open-gpu-kernel-modules 535.113.01 struct layouts (MIT/GPL dual; offsets checked by compiling the MIT headers); nova-core VBIOS doc (GPL-2.0+ OR MIT); nova code (GPL-2.0) not used | everything past parsing: PROM readout on the x17 (laptop VBIOS may need ACPI `_ROM`), FWSEC fuse/signature choice, WPR2 bounds, Booter mailbox 0, GSP_INIT_DONE | N4a |
 
 ## 3. Device firmware (runs on the device, not the CPU)
 
@@ -55,7 +56,7 @@ reference and must check on real hardware (or replace with datasheet/REA facts).
 |----------|--------|--------------------|-----------|
 | `iwlwifi-*.ucode`, `*.pnvm` | Intel Wi-Fi | linux-firmware, Intel redistributable licence | `servers/sexnet` from the boot pack `firmware/wifi.pack` (`crates/sex-wifi`, #83, W2) |
 | `ibt-*.sfi`, `ibt-*.ddc` | Intel Bluetooth (AX201, AX210/AX1675x, AX211) | linux-firmware (pinned commit, SHA-256 in `scripts/fetch_bt_firmware.sh`), Intel redistributable licence (LICENCE.ibt_firmware) | `servers/cufflinks` from a firmware pack region (`sex_pdx::bt_hci::FIRMWARE_SLOT`): BOOT grants `firmware/wifi.pack`, which does not carry the `ibt-*` files yet (the installed boot slot has about 1 MB free), W1/W2 |
-| GSP-RM (planned) | NVIDIA GA10x | linux-firmware, NVIDIA redistributable licence | planned `sexgpu` |
+| `gsp-535.113.01.bin` (GSP-RM, 38 MB), `booter_load/unload-535.113.01.bin`, `bootloader-535.113.01.bin` | NVIDIA GA102..GA107 (x17 R1 GA104; linux-firmware links `ga104/gsp` to `ga102/gsp`) | linux-firmware (pinned commit, SHA-256 in `scripts/fetch_nvidia_gsp_firmware.sh`), NVIDIA redistributable licence (LICENCE.nvidia) | planned `servers/sexgpu-nv` from the system volume (too big for the boot slot), parsed by `crates/sex-gpu-nv`; FWSEC comes from the GPU's own VBIOS, N4a |
 
 ## 4. Third-party code that runs in ring 0
 

@@ -1,0 +1,92 @@
+{
+  "input_binding": {
+    "path": "/Users/xmacbookm5/Projects/sexos-plan/target/autofill-sdk-d668-v6-full-seed/inputs.json",
+    "sha256": "0b69683cf540a540c00b516c012f00fa9c6ad8202dd16c6cc593661388a61dc6"
+  },
+  "result": {
+    "path": "/Users/xmacbookm5/Projects/sexos-plan/target/autofill-sdk-d668-v6-full-seed/result.json",
+    "sha256": "455c1012a5945f0014a2381bb24efc89779f0f0519c62087401002b25d4f166b"
+  },
+  "summary": {
+    "ok": true,
+    "persisted_vault": true,
+    "denied_first": true,
+    "approved_once": true,
+    "consumer_run_changed": true,
+    "locked_unavailable": true,
+    "secret_serial_leak": false,
+    "source_files_unchanged": 1848,
+    "runner_files_unchanged": 726,
+    "external_seed_unchanged": true
+  },
+  "privacy": {
+    "autofill-save": {
+      "provider": {
+        "pd": 42,
+        "task": 42
+      },
+      "serial_sha256": "4a8f4d8eababf658e8d9eae9348aea7a6890b0973a86f6e473a93060dba997d5",
+      "protected_start": 358393,
+      "protected_end": 484389,
+      "audit": {
+        "userspace_safe": true,
+        "kernel_safe": true,
+        "userspace_payload_lines": [],
+        "kernel_payload_lines": [],
+        "complete_keyboard_privacy_proven": false,
+        "kernel_policy": "separate source exception/review required"
+      },
+      "kernel_redacted_receipts": 32
+    },
+    "autofill-live": {
+      "provider": {
+        "pd": 43,
+        "task": 43
+      },
+      "serial_sha256": "0ad8108ec1037b90b1344c38da03dcf923652519410c4a6c28cd8c73f16864f6",
+      "protected_start": 392594,
+      "protected_end": 442644,
+      "audit": {
+        "userspace_safe": true,
+        "kernel_safe": true,
+        "userspace_payload_lines": [],
+        "kernel_payload_lines": [],
+        "complete_keyboard_privacy_proven": false,
+        "kernel_policy": "separate source exception/review required"
+      },
+      "kernel_redacted_receipts": 32
+    }
+  },
+  "artifacts": {
+    "autofill-save-serial.log": {
+      "bytes": 484535,
+      "sha256": "4a8f4d8eababf658e8d9eae9348aea7a6890b0973a86f6e473a93060dba997d5"
+    },
+    "autofill-live-qemu.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "consent-before-allow.ppm": {
+      "bytes": 3072016,
+      "sha256": "c04c1517b9debc0aa789f6492f44e50f7f143ba8de7eee1858c1a7bb8d9fa03e"
+    },
+    "autofill-save-qemu.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "autofill-live-serial.log": {
+      "bytes": 779409,
+      "sha256": "0ad8108ec1037b90b1344c38da03dcf923652519410c4a6c28cd8c73f16864f6"
+    },
+    "consent-default-deny.ppm": {
+      "bytes": 3072016,
+      "sha256": "9d7a5a61c2603862c0c9f70b50a38c618917e487ba7c55b4dc680bce6622422b"
+    }
+  },
+  "failed_setup_attempt": {
+    "path": "/Users/xmacbookm5/Projects/sexos-plan/target/autofill-sdk-d668-v6/setup-failure.json",
+    "sha256": "94c41a01ac702f9a897172414d733e57318498db1103e6f56cf80f8598f5681c",
+    "preserved": true
+  },
+  "scope": "Fresh d668 SDK provider/client binaries on normal sealed c327 image. Two actual boots, generic SDK consent/routing/persistence and protected typing intervals. Whole-boot32redactedkernelreceipts each; no raw kernel keyboard records. No Multipass/Valentine adapter, all-kernel secrecy or new master/VMX claim."
+}

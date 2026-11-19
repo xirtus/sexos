@@ -7,6 +7,11 @@ use std::sync::Mutex;
 mod production_store;
 #[path = "../crates/sex-pdx/src/program_store.rs"]
 pub mod program_store;
+// Finite single-writer backend: this fixture exercises image loading, not admission.
+mod restricted_image {
+    pub struct Writer;
+    pub fn writer() -> Option<Writer> { Some(Writer) }
+}
 #[macro_export]
 macro_rules! serial_record{($($arg:tt)*)=>{{let _=format_args!($($arg)*);}};}
 pub const BLOCK_MAX_XFER: u64 = 512;
@@ -71,6 +76,7 @@ mod backends {
     }
 }
 mod console_relay {
+    pub const SLOTS: usize = 8;
     pub fn not_started(_: usize) {}
 }
 mod fs_service {
@@ -125,6 +131,7 @@ mod fs_service {
     static mut STATE: State = State::Untried;
     /// No program rows here: every ticket is Spindle's (requester 0).
     fn program_index(_: u32) -> Option<usize> { None }
+    fn current_ticket_owner(_: u32) -> Option<TicketOwner> { None }
     fn bring_up() -> State {
         State::Ready(FakeFs)
     }

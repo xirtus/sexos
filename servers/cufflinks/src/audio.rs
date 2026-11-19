@@ -83,11 +83,18 @@ impl Audio {
 
     pub fn new() -> Audio {
         let ring = Self::region();
-        if let Some(r) = ring { r.set_sink(false); }
+        if let Some(r) = ring { r.set_sink(false); r.set_headset_volume(false); }
         Audio { ring, handle: None, t0: 0, sent: 0, last_sound: 0, chime: Vec::new(), chimed: false, buf: alloc::vec![[0; 2]; CHUNK], total: 0, dropped: 0 }
     }
 
     pub fn handle(&self) -> Option<u16> { self.handle }
+    /// Bell's master volume (0..=100), once Bell has written it.
+    pub fn master(&self) -> Option<u8> { self.ring?.master().map(|m| m.0) }
+    /// Tell Bell the headset applies the master volume itself (AVRCP absolute volume).
+    pub fn headset_volume(&self, on: bool) {
+        if let Some(r) = self.ring { r.set_headset_volume(on); }
+        log!("[cufflinks.audio.volume] headset={}", on as u8);
+    }
 
     /// A stream is ready on `handle` (the first one wins while it lasts).
     pub fn ready(&mut self, handle: u16) {

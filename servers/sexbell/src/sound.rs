@@ -203,8 +203,12 @@ static mut LAST_PLAYED: Option<usize> = None;
 fn played() -> &'static mut [u32; STREAMS] { unsafe { &mut *core::ptr::addr_of_mut!(PLAYED) } }
 fn last_played() -> &'static mut Option<usize> { unsafe { &mut *core::ptr::addr_of_mut!(LAST_PLAYED) } }
 
-/// Master gain in 1/65536, 0 while muted.
-fn master_gain() -> u32 { let m = settings(); if m.muted { 0 } else { mixer::master_gain(m.master) } }
+/// Master gain in 1/65536, 0 while muted. A headset doing AVRCP absolute volume
+/// applies the master volume itself (Cufflinks mirrors it there): full scale for it.
+fn master_gain() -> u32 {
+    let m = settings();
+    if m.muted { 0 } else if bt_ring().is_some_and(|b| b.headset_volume()) { 65536 } else { mixer::master_gain(m.master) }
+}
 
 #[derive(Clone, Copy)]
 /// A program's stream; `frac` is where between two of its frames the next output
@@ -277,26 +281,40 @@ impl Card {
             h.follow_jack();
         }
     }
-    fn has_input(&self) -> bool { matches!(self, Card::Virtio { input: Some(_), .. }) }
+    fn has_input(&self) -> bool {
+        match self { Card::Virtio { input, .. } => input.is_some(), Card::Hda(h) => h.has_mic() }
+    }
     /// Starts or stops the microphone stream.
     fn input_run(&mut self, on: bool) -> bool {
         match self {
             Card::Virtio { card, input: Some(i), .. } => if on { card.pcm_start(*i).is_ok() } else { card.pcm_stop(*i).is_ok() },
+            Card::Hda(h) => if on { h.mic_start() } else { h.mic_stop() },
             _ => false,
         }
     }
-    /// Asks for one more period from the microphone.
+    /// Asks for one more period from the microphone. The HD Audio input stream runs
+    /// on its own ring and needs no asking.
     fn input_ask(&mut self) -> bool {
         match self { Card::Virtio { card, input: Some(i), .. } => card.pcm_capture_nb(*i).is_ok(), _ => false }
     }
-    /// A period the microphone filled, if one is back.
-    fn input_take(&mut self) -> Option<alloc::vec::Vec<u8>> {
-        match self { Card::Virtio { card, input: Some(_), .. } => card.pcm_capture_take().ok().flatten().map(|(_, f)| f), _ => None }
+    /// A period the microphone filled, if one is back, copied into `out`: its length.
+    fn input_take(&mut self, out: &mut [u8; PERIOD_BYTES]) -> Option<usize> {
+        match self {
+            Card::Virtio { card, input: Some(_), .. } => card.pcm_capture_take().ok().flatten().map(|(_, f)| {
+                let n = f.len().min(PERIOD_BYTES);
+                out[..n].copy_from_slice(&f[..n]);
+                n
+            }),
+            Card::Hda(h) => h.mic_take(out).then_some(crate::hda::PERIOD_BYTES.min(PERIOD_BYTES)),
+            _ => None,
+        }
     }
 }
 
 /// Capture periods kept with the device while someone listens.
 const LISTEN_AHEAD: usize = 4;
+/// The period the microphone handed back last, kept off the service's small stack.
+static mut HEARD: [u8; PERIOD_BYTES] = [0; PERIOD_BYTES];
 
 struct Player {
     card: Card,
@@ -337,7 +355,7 @@ fn sine(phase: u32) -> f32 {
 
 impl Player {
     /// A paused stream doesn't count: Bell rests until the program kicks it again.
-    fn streaming(&self) -> bool { self.streams.iter().flatten().any(|st| st.active && st.ring.load(ring::PAUSED) == 0) }
+    fn streaming(&self) -> bool { self.streams.iter().flatten().any(|st| st.active && !crate::restricted::denied(st.pd) && st.ring.load(ring::PAUSED) == 0) }
 
     /// Mixes the next period of notes and streams into `period`, noting how many
     /// frames each stream gave in `took[slot]`. False when there is nothing to play.
@@ -367,6 +385,7 @@ impl Player {
         for (i, entry) in self.streams.iter_mut().enumerate() {
             self.took[slot][i] = 0;
             let Some(st) = entry.as_mut() else { continue };
+            if crate::restricted::denied(st.pd){st.active=false;continue;}
             if !st.active { continue; }
             let r = st.ring;
             let (written, mut taken) = (r.load(ring::WRITTEN), r.load(ring::TAKEN));
@@ -430,7 +449,7 @@ impl Player {
 
     /// Rows whose program wants the microphone and may have it.
     fn listener(&self, i: usize) -> bool {
-        self.streams[i].is_some_and(|st| st.ring.load(ring::LISTEN) == 1 && settings().mic[i])
+        self.streams[i].is_some_and(|st| !crate::restricted::denied(st.pd) && st.ring.load(ring::LISTEN) == 1 && settings().mic[i])
     }
     fn listening(&self) -> bool { (0..STREAMS).any(|i| self.listener(i)) }
 
@@ -440,6 +459,7 @@ impl Player {
         let input = self.card.has_input();
         for (i, st) in self.streams.iter().enumerate() {
             let Some(st) = st else { continue };
+            if crate::restricted::denied(st.pd){continue;}
             let want = st.ring.load(ring::LISTEN) == 1;
             let mic = if !want { ring::MIC_OFF } else if !input { ring::MIC_NONE }
                 else if settings().mic[i] { ring::MIC_ON } else { ring::MIC_WAITING };
@@ -452,7 +472,9 @@ impl Player {
             sex_pdx::serial_record!("[bell.mic] on={} ok={} heard={}", on as u8, ok as u8, self.heard);
         }
         // Periods come back in order; while no one listens they are dropped.
-        while let Some(frames) = self.card.input_take() {
+        let heard = unsafe { &mut *core::ptr::addr_of_mut!(HEARD) };
+        while let Some(len) = self.card.input_take(heard) {
+            let frames = &heard[..len];
             self.asked = self.asked.saturating_sub(1);
             if !self.hearing { continue; }
             let n = (frames.len() / FRAME_BYTES) as u64;
@@ -482,7 +504,7 @@ impl Player {
             if !self.card.done(self.tokens[self.first]) { break; }
             for (i, st) in self.streams.iter().enumerate() {
                 let n = self.took[self.first][i];
-                if let (Some(st), true) = (st, n > 0) { st.ring.store(ring::PLAYED, st.ring.load(ring::PLAYED) + n as u64); }
+                if let (Some(st), true) = (st, n > 0) { if crate::restricted::denied(st.pd){continue;} st.ring.store(ring::PLAYED, st.ring.load(ring::PLAYED) + n as u64); }
             }
             self.first = (self.first + 1) % IN_FLIGHT; self.flying -= 1; self.played += 1;
         }
@@ -525,6 +547,9 @@ static mut BT_ON: bool = false;
 fn bt_ring() -> Option<sex_pdx::bt_audio::Shared> { unsafe { *core::ptr::addr_of!(BT) } }
 fn bt_was_on() -> bool { unsafe { *core::ptr::addr_of!(BT_ON) } }
 
+/// The master volume for Cufflinks (a headset with absolute volume follows it).
+fn bt_publish() { if let Some(b) = bt_ring() { let m = settings(); b.set_master(m.master, m.muted); } }
+
 fn bt_init() {
     use sex_pdx::bt_audio as b;
     let ok = sex_pdx::memory_region_info(b::SLOT).ok().filter(|i| i.region_id == b::REGION_ID && i.length == b::BYTES
@@ -532,6 +557,7 @@ fn bt_init() {
         .and_then(|_| sex_pdx::memory_region_full_view(b::SLOT, m::QUERY_VIEW | m::READ | m::WRITE).ok())
         .filter(|v| v.virtual_address != 0 && v.length >= b::BYTES);
     if let Some(v) = ok { unsafe { *core::ptr::addr_of_mut!(BT) = Some(b::Shared::at(v.virtual_address as *mut u8)) }; }
+    bt_publish();
     sex_pdx::serial_record!("[bell.bt.route] region={}", ok.is_some() as u8);
 }
 
@@ -600,6 +626,7 @@ fn open_hda(view: m::RegionView) -> Result<Player, &'static str> {
     let h = crate::hda::Hda::open(view, dma)?;
     sex_pdx::serial_record!("[bell.hda.ready] vendor={:#010x} dac={} pins={} periods={} period_bytes={}",
         h.vendor, h.dac, h.pins, crate::hda::PERIODS, crate::hda::PERIOD_BYTES);
+    sex_pdx::serial_record!("[bell.mic.card] input={}", h.mic_inputs());
     Ok(player_with(Card::Hda(h)))
 }
 
@@ -641,6 +668,7 @@ pub fn stream(caller: u32) -> bool {
 
 /// The caller's row, its ring taken up if Bell had not yet.
 fn ring_of(p: &mut Player, caller: u32) -> Option<usize> {
+    if crate::restricted::denied(caller){return None;}
     let k = ring::index_of(caller).filter(|k| *k < STREAMS)?;
     if p.streams[k].is_none() {
         match sex_pdx::sound_ring_bell(k) {
@@ -711,7 +739,7 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
     let m = settings();
     let state = |m: &Mixer| mixer::state(m.master, m.muted, present());
     let row = |m: &Mixer, k: usize| {
-        let (playing, asked, pd, listening) = player().and_then(|p| p.streams[k].as_ref())
+        let (playing, asked, pd, listening) = player().and_then(|p| p.streams[k].as_ref()).filter(|st|!crate::restricted::denied(st.pd))
             .map_or((false, 0, 0, false), |st| (st.active, st.ring.load(ring::VOLUME).min(100) as u8, st.pd, st.ring.load(ring::MIC) == ring::MIC_ON));
         mixer::Stream { volume: m.rows[k], muted: m.rows_muted[k], playing, asked, pd, mic_allowed: m.mic[k], listening }.word()
     };
@@ -746,6 +774,7 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
             p.card.outputs()
         }
         mixer::MICROPHONE if (a as usize) < STREAMS && b <= 1 => {
+            if crate::restricted::row_denied(a as usize){return mixer::REFUSED;}
             m.mic[a as usize] = b == 1;
             sex_pdx::serial_record!("[bell.mic.leave] row={} allowed={}", a, b);
             if let Some(p) = player() { p.pump(); }
@@ -753,6 +782,7 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
         }
         _ => return mixer::REFUSED,
     };
+    bt_publish();
     sex_pdx::serial_record!("[bell.mixer] action={} master={} muted={} reply={:#x}", action, m.master, m.muted as u8, reply);
     reply
 }
@@ -760,3 +790,12 @@ pub fn mixer_request(action: u64, a: u64, b: u64, write: bool) -> u64 {
 /// A short tick at the current loudness, so the person hears where a volume key put it.
 /// Played after the reply, so the card's work never comes between request and answer.
 pub fn tick() { tone(988, 45, 40); }
+
+/// Stop every periodic ring access before the provider wipes the whole grant.
+/// This also works without an audio card; backing exists independently of Player.
+pub fn quarantine(pd:u32) {
+    let _=retire(pd);
+    if let (Some(index),Some(p))=(ring::index_of(pd),player()) {
+        if index<STREAMS {p.streams[index]=None;for period in &mut p.took{period[index]=0;}}
+    }
+}

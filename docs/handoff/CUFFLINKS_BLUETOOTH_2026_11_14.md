@@ -1,13 +1,16 @@
-# Cufflinks: native Bluetooth, slices W1, W1b, W2 and W3 (2026-11-14/15)
+# Cufflinks: native Bluetooth, slices W1, W1b, W2, W3, W2b and W3b (2026-11-14/15)
 
 Cufflinks is SexOS's own Bluetooth stack: no BlueZ, no Linux bridge, no Tuxedo. W1
 delivers the transport, the Intel firmware load, controller bring-up, discovery and
 pairing. W1b starts it at boot. W2 adds keyboards and mice (classic HID and HID over
 GATT), bonds kept on disk, and a bounded pairing policy in place of the desktop prompt.
 W3 adds headphones: A2DP Source with our own SBC encoder, Bell's mix routed to the
-headset, and ACL flow control.
+headset, and ACL flow control. W2b adds the desktop: the Shell's Bluetooth panel
+(Super+Shift+B) with scan, pair, forget and the numeric-comparison prompt, which
+replaces the pairing window as the normal way to pair. W3b adds the headset's buttons
+and volume (AVRCP).
 Plan row: `APP_PARITY_PLAN_2026_11_14.md` section W. W2 sections: 7 to 10 below; W3:
-sections 11 to 14.
+sections 11 to 14; W2b: sections 15 to 18; W3b: sections 19 to 21.
 
 ## 1. What W1 delivers
 
@@ -36,6 +39,9 @@ Cufflinks (`[sexusb.bt.route] region=0`).
 | Cufflinks -> Files (bonds) | `SLOT_STORAGE`, op 0x2C9 (`sex_pdx::bt_bonds`), `/system/bluetooth.bonds` |
 | HID mailbox | `bt_hci` header bytes 512..1024: 32 records of 16 bytes (Cufflinks -> SexUSB) |
 | `sex_pdx::bt_audio::SLOT` (W3: Bell's mix for a headset, Bell + Cufflinks) | 1006, region id 0x4404, 256 KiB (4 KiB header, 64,512 stereo frames at 48 kHz) |
+| `sex_pdx::bt_ui::SLOT` (W2b: the Bluetooth panel, Shell + Cufflinks) | 1007, region id 0x4405, 4 KiB |
+| Cufflinks -> Shell wake (W2b) | slot 1008 (`bt_ui::NOTIFY_SLOT`), op 0x2CA (`bt_ui::OP_EVENT`), no reply |
+| Shell -> Display panel lines (W2b) | op 0x2CB (`bt_ui::OP_PANEL`), Shell (domain 3) only |
 | New syscalls | none |
 | Firmware files | `ibt-19-0-4.{sfi,ddc}` (AX201), `ibt-0041-0041.{sfi,ddc}` (AX210, x17 R1), `ibt-0040-0041.{sfi,ddc}` (AX211) |
 
@@ -133,12 +139,11 @@ bonds=… window_s=…`, `[cufflinks.hid.connect] addr=… name=… window=1`,
 `[cufflinks.hid.skip] addr=… reason=no_prompt`, `[cufflinks.hid] addr=… device=… le=…
 keyboard=… pointer=… boot=…`, `[cufflinks.hid.failed] …`, `[cufflinks.hid.dropped]`.
 
-## 9. Pairing prompt: not done (TODO stays)
+## 9. Pairing prompt (W2): bounded window, now the fallback
 
-The desktop prompt is not built: it needs a `sex_pdx` prompt protocol, a Shell module with
-a ~10-line hook (DAILY_DRIVER_NEXT_100_SLICES.md section 2) and two more BOOT routes
-(Cufflinks -> Shell, Shell -> Cufflinks), which did not fit this slice. Auto-accept is
-now bounded instead (`servers/cufflinks/src/pairing.rs`, TODO W2b):
+W2 shipped without the desktop prompt; W2b (section 15) built it. The bounded rule W2
+used instead stays as the fallback for a boot where no Shell is attached to the panel
+region or Cufflinks's wake does not reach it (`servers/cufflinks/src/pairing.rs`):
 
 - bonded devices always reconnect;
 - a new keyboard/mouse (class of device major 0x05, or appearance 0x03C0..0x03C2) is
@@ -146,6 +151,9 @@ now bounded instead (`servers/cufflinks/src/pairing.rs`, TODO W2b):
   controller is ready, and only when nothing is bonded yet (first setup);
 - otherwise new devices are skipped (`[cufflinks.hid.skip] reason=no_prompt`) and a
   comparison is refused (`accepted=0 reason=no_prompt`).
+
+With the prompt available (the normal desktop) nothing new is connected on its own:
+scan results are only listed (`[cufflinks.hid.skip] reason=panel`).
 
 ## 10. Tests and receipts (W2)
 
@@ -164,7 +172,7 @@ now bounded instead (`servers/cufflinks/src/pairing.rs`, TODO W2b):
   paired=1`, `[cufflinks.bonds] saved=1`, `[cufflinks.hid] … keyboard=1`, and typing in a
   window. Reboot: `[cufflinks.bonds] loaded=1`, then the device reconnects on its own.
 
-Next: the desktop prompt (W2b), passkey entry (most BLE keyboards ask for it: KeyboardOnly
+Next: ~~the desktop prompt (W2b)~~ (done, section 15), passkey entry (most BLE keyboards ask for it: KeyboardOnly
 IO capability; today `choose()` refuses it), SDP + report protocol for classic devices with
 extra keys, a firmware pack slot for `ibt-*`, the Tatami Bluetooth page, then W3 (A2DP, sections 11 to 14).
 
@@ -248,7 +256,7 @@ otherwise `[cufflinks.audio.skip] reason=no_prompt` until the desktop prompt (W2
 Not done (next slices):
 
 - AAC (needs FFmpeg as a library or our own encoder), mSBC/HFP (headset microphone),
-  AVRCP (play/pause and volume buttons from the headset), delay reporting, content
+  ~~AVRCP (play/pause and volume buttons from the headset)~~ (W3b, section 19), delay reporting, content
   protection (SCMS-T), the tray item and the Tatami Bluetooth page.
 - 44.1 kHz-only sinks: we stream 48 kHz only (A2DP requires sinks to support both, so
   this should not bite); a resampler would lift it.
@@ -256,8 +264,8 @@ Not done (next slices):
   is clocked by its card. A card-less Bell clock (render by the tick while the sink is
   on) is the fix.
 - One headset streams at a time (the first ready one).
-- The desktop prompt (W2b) still gates new devices: after a keyboard is bonded, a new
-  headset is skipped (`reason=no_prompt`).
+- ~~The desktop prompt (W2b) still gates new devices~~: done in W2b (section 15); a new
+  headset is paired from the Bluetooth panel.
 - No QEMU gate for audio: QEMU has no Bluetooth controller model.
 
 x17 receipt (after section 10), with nothing bonded and Bluetooth headphones in
@@ -273,3 +281,170 @@ pairing mode before boot:
 4. Turn the headphones off: `[cufflinks.disconnected]`, `[cufflinks.audio.stopped]`,
    `[bell.bt.sink] on=0`, sound back on the speakers. Turn them on again: they page us,
    `[cufflinks.audio] …` again without pairing. Send any `[cufflinks.audio.failed]` line.
+
+
+## 15. W2b: the Bluetooth panel and pairing prompt
+
+| Piece | Where | What |
+|---|---|---|
+| Protocol | `crates/sex-pdx/src/bt_ui.rs` | One 4 KiB region shared by the Shell and Cufflinks: Cufflinks writes a `Snapshot` (controller phase, scanning, up to 12 devices with name, kind and flags, the comparison waiting for the user, the last pairing outcome) under a sequence lock; the Shell writes `Command`s (scan on/off, pair, forget, confirm with a ticket) into an 8-entry ring; the Shell marks itself attached and says whether its panel is open. Cufflinks wakes the Shell with `OP_EVENT` (no reply). Also the panel's text model (`Ui`: lines, keys, clicks, dialog), its wire to Display (`OP_PANEL`, `Lines` in 16-byte chunks, `Assembler`) and the layout both sides place it with (`Panel`) |
+| Shell | `servers/silk-shell/src/bt_panel.rs` + 6 hook lines in `main.rs`, Super+Shift+B in `wm.rs` | Maps the region at start and attaches; reads the snapshot after a wake or while the panel shows; sends the lines to Display only when they change; keys (Up/Down, Enter, S, Delete, Y/N, Esc) and clicks go to `bt_ui::Ui`; a comparison opens the panel by itself. While the panel shows it takes every key press that is not a Super chord (releases pass on) |
+| Display | `servers/sexdisplay/src/bt_panel.rs` + 3 hook lines in `main.rs` | Assembles `OP_PANEL` from the Shell only and draws the panel over the desktop under the bar at the right, after the tray menu and before the lock surface (which covers it) |
+| Cufflinks | `servers/cufflinks/src/ui.rs`, `main.rs`, `pairing.rs` | Publishes phase (no controller, starting, on, failed), devices from scans and bonds (a bonded LE device is listed under its bond address), connected/in-use/pairing/paired marks; takes commands only while a controller is up; Pair connects as a keyboard/mouse (`connect_hid`) or headset (`connect_audio`) by kind, unsupported kinds and devices not seen are refused with a reason; Forget is `Host::forget` |
+| Host | `sex_bt::host` | `Note::ConnectFailed { addr, status }` when a connection we asked for does not come up (page timeout), so a Pair fails at once instead of after 40 s; the device can be asked again |
+| Kernel | `boot_memory::init_bluetooth` (4 lines), `init.rs` (call takes the Shell's id) | Pairs the `bt_ui` region between the Shell and Cufflinks and grants Cufflinks slot 1008 -> Shell. Log: `[boot.bt.ui] shell=3 cufflinks=52 slot=1007 notify=1008 runtime_mint=0` |
+
+Why a region and one wake route, not two routes: Cufflinks polls the region every tick
+anyway while a controller is up, and with no controller there is nothing to command, so
+there is no Shell -> Cufflinks route and an idle Cufflinks is never woken by the
+desktop (`cufflinks_idle_gate.py` keeps checking that). The Shell sleeps in its listen,
+so it needs the wake; Cufflinks sends list changes only while the panel is open, and
+comparisons and outcomes always.
+
+The panel, top to bottom: "Bluetooth" with On / On, scanning / Off / Starting / Failed /
+Unavailable; a status line ("No Bluetooth controller", "Paired with ...", "Pairing with
+... failed", "... is not in range"); "Scan for devices" / "Stop scanning"; devices,
+paired and connected first ("Silk Keyboard    keyboard, in use"); a key hint. The
+dialog: "Pair with <name>?", "Does it show 123456?", "Yes, the numbers match", "No".
+
+## 16. W2b pairing policy
+
+`pairing.rs` (pure, host-tested as compiled):
+
+- Prompt available = a Shell attached to the region and Cufflinks's last wake reached it.
+- With the prompt: a scanned new device is never connected on its own; the user picks
+  Pair. Every numeric comparison is asked in the panel, whether the user started the
+  pairing or a device asked us; only Yes accepts. No answer within 30 s refuses
+  (`reason=timeout`); one question at a time (a second device asking meanwhile is
+  refused, `reason=busy`). Just Works pairing (a device with no screen) needs no
+  question: the user's Pair is the consent, and Cufflinks only starts it on a Pair.
+- Without the prompt: the W2 first-setup window (120 s, nothing bonded) as before.
+  Once anything is bonded, strangers are never auto-accepted, prompt or not.
+- A Pair that does not connect within 40 s (or fails to page) is reported failed.
+- Bonded devices come back as before.
+
+Boot-log lines added: `[cufflinks.ui.route] ok=1 slot=1007`, `[cufflinks.ui.wake]
+event=… ok=0 status=…`, `[cufflinks.ui.scan] on=1|0`, `[cufflinks.ui.pair] addr=…
+name=… audio=… user=1` (or `found=0`, `supported=0`, `timeout=1`), `[cufflinks.ui.forget]
+addr=…`, `[cufflinks.pair] addr=… compare=… asked=1 ticket=… requested=…`, `accepted=user`,
+`accepted=0 reason=user|timeout|busy`, `[cufflinks.pair] ticket=… stale=1`,
+`[cufflinks.connect.failed] addr=… status=…`, `[cufflinks.pairing] bonds=… window_s=…
+prompt=…`; Shell `[shell.bt.route] ok=1 slot=1007`, `[shell.bt.panel] open=… phase=…
+lines=… selected=… dialog=… status="…"`, `[shell.bt.command] Pair([..]) sent=1`;
+Display `[display.bt.panel] lines=… selected=…`, `[display.bt.panel.draw] lines=…
+panel=WxH+X+Y`.
+
+## 17. W2b tests
+
+- `bash scripts/bt_host_gate.sh` adds the `sex_pdx::bt_ui` tests (device kinds from class
+  and appearance; names made printable and bounded; table updates, eviction that never
+  drops a paired device, snapshot round trip and refusal of damaged snapshots; commands;
+  the region: commands written before Cufflinks starts are dropped, full ring, torn
+  writes never read, a runaway writer dropped; the panel through the Display wire:
+  "No Bluetooth controller", "not running", list order, Enter/Delete/Down/S/Esc, clicks
+  on the rows drawn, comparison dialog opening by itself, answered once, closed when
+  Cufflinks gives up, outcomes) and `tests/cufflinks_pairing.rs` (prompt means the user
+  decides; without a prompt only first setup pairs; bonded means no stranger; answer
+  timeout and stale tickets; requests bounded and expiring).
+- `cargo test -p sex-bt`: `hid_peers` `a_page_that_fails_is_noted_and_can_be_retried`.
+- `tests/wm_layouts.rs`: Super+Shift+B is Bluetooth, Super+B still the wallpaper.
+- `scripts/cufflinks_idle_gate.py` (boot log): the panel region is paired and both sides
+  find it; Cufflinks still sleeps.
+- `scripts/bt_panel_gate.py` (QEMU, in CI after the tray gate; passed locally: a
+  420x102 panel at 852,34 on 1280x800, 42,840 pixels changed): Super+Shift+B opens
+  the panel, Display draws it, it says "No Bluetooth controller" (QEMU has none), Escape
+  closes it. The comparison dialog and pairing need a controller: host tests plus the
+  x17 receipt below.
+
+## 18. W2b: not done, and the x17 receipt
+
+Not done: a tray icon or quick-settings row for Bluetooth (the panel opens from
+Super+Shift+B only; a bar icon needs Display's tray drawing), a Tatami page, a
+palette/launcher entry, device names for bonds not seen this boot (bonds do not store
+names: such a device shows its address until it is seen), passkey entry (still refused),
+renaming and per-device "connect/disconnect" separate from Pair, and battery levels.
+
+x17 receipt (after section 14):
+
+1. Boot: `[boot.bt.ui] shell=3 cufflinks=52 …`, `[cufflinks.ui.route] ok=1`,
+   `[shell.bt.route] ok=1`, then `[cufflinks.pairing] bonds=… prompt=1`.
+2. Super+Shift+B: the panel shows "Bluetooth  On" (or "On, scanning") and the devices
+   around. Put a keyboard in pairing mode, press S (scan), pick it, Enter:
+   `[shell.bt.command] Pair(…) sent=1`, `[cufflinks.ui.pair] … user=1`.
+3. If the keyboard shows a number: the panel asks "Does it show 123456?"; Y:
+   `[cufflinks.pair] … asked=1 …`, `… accepted=user`, `… paired=1`, "Paired with …".
+   Type on it. (A keyboard that asks for a passkey still fails: not done.)
+4. Headphones the same way (no number: Just Works), then Delete on the row forgets them:
+   `[cufflinks.ui.forget]`, `[cufflinks.bonds] saved=1 count=…`.
+5. A device that tries to pair by itself while the panel is closed: the panel opens with
+   the question; leave it 30 s: `accepted=0 reason=timeout`.
+
+## 19. W3b: headset buttons and volume (AVRCP)
+
+Roles, as a phone has them: we are AVRCP **Target** (category 1) for the headset's
+PASS THROUGH buttons, and **Controller** (category 2) for absolute volume (AVRCP 1.4:
+we register for EVENT_VOLUME_CHANGED and send SetAbsoluteVolume).
+
+| Piece | Where | What |
+|---|---|---|
+| AVCTP/AVRCP | `sex_bt::avrcp` | AVCTP single packets (start/continue/end fragments dropped: nothing we accept needs more than the 48-byte minimum MTU, so no reassembly to grow), AV/C frames, AVRCP vendor-dependent PDUs (SIG company id, AVRCP fragments refused, parameter length checked against the frame). `Remote`: as target, PASS THROUGH play, pause, stop, forward, backward, volume up/down, mute -> `Out::Key` (others NOT IMPLEMENTED), UNIT/SUBUNIT INFO, GetCapabilities (company id; no events), other PDUs REJECTED, other profile ids answered with IPID; as controller, the volume registration (again after each CHANGED, only on its own label), SetAbsoluteVolume (nothing sent when the headset is at that volume already). One packet in gives at most one packet out, never more than 515 bytes; frames over 512 bytes are dropped |
+| SDP | `sex_bt::sdp` | Our server also lists an AVRCP Target record (0x110C, features 0x0001) and a Controller record (0x110E/0x110F, features 0x0002), AVCTP 1.4 on PSM 0x17, AVRCP 1.4 |
+| Host | `sex_bt::host` | Opens AVCTP (PSM 0x17) once a stream is ready (`AudioReady`) unless the headset has one, and accepts the headset's (same rule as AVDTP: bonded or encrypted to open; a second channel replaces the first). AVRCP starts, and data on the channel counts, only on an encrypted classic link to a bonded device: before encryption nothing is taken or sent, and an Encryption Change to off stops it again. Notes `RemoteReady`, `RemoteKey`, `RemoteVolume { volume, changed }`, `RemoteNoVolume`, `RemoteClosed`; `remote_volume`, `set_remote_volume` |
+| Buttons | `servers/cufflinks/src/remote.rs`, `main.rs` | The headset gets a device number in the HID mailbox (its handle with bit 15 set, apart from a HID device on the same link) and its buttons go as keyboard snapshots: play/pause, stop, previous, next as the reserved keyboard usages 0xE8, 0xE9, 0xEA, 0xEB (the media usages some keyboards send), volume up/down and mute as 0x80, 0x81, 0x7F. A press with no release is let go after 2 s. SexUSB merges them like any keyboard; Input maps 0xE8..0xEB to `KEY_PLAY_PAUSE`, `KEY_STOP`, `KEY_PREVIOUS`, `KEY_NEXT` (4 lines in `servers/sexinput/src/main.rs`); the Shell's existing media keys do the rest. No new Shell protocol, no Shell change |
+| Volume | `remote.rs`, `sex_pdx::bt_audio`, `servers/sexbell/src/sound.rs` | Bell's master volume is the one volume. Bell writes master and mute into the `bt_audio` header (`MASTER`) whenever it answers a mixer request; Cufflinks sends it to the headset (0..100 -> 0..127, rounded both ways so it maps back exactly) whenever it changes. The headset's own buttons (a CHANGED) become one volume key press toward it (the Shell's 5% step, its OSD and tick); the new master goes back to the headset, which so snaps to the system's step. A headset volume within half a step of the master (our own setting echoed back) presses nothing, so there is no loop. While the streaming headset does absolute volume Cufflinks sets `HEADSET_VOLUME` and Bell leaves the master volume out of the mix it sends there (mute still silences it), so the volume is applied once, by the headset. A headset without absolute volume keeps its own volume; its VOL UP/DOWN buttons, if it sends them, are volume keys |
+
+Kernel and ABI: none. `sex_pdx::bt_audio` gains two header words (`MASTER`,
+`HEADSET_VOLUME`) inside the existing 4 KiB header; the region, its size and slot are
+unchanged, and `bt_audio.rs` is not an ABI input, so `spec/abi_inputs.sha256` is not
+re-pinned. No new syscalls, PDX operations or routes.
+
+## 20. W3b boot log and tests
+
+- Log: `[cufflinks.remote] addr=… handle=… device=… followed=1`,
+  `[cufflinks.remote.key] handle=… key=PlayPause pressed=1`,
+  `[cufflinks.remote.volume] handle=… headset=… changed=…` (the headset's volume),
+  `… set=…` (sent to it), `… key=0x80` (a headset button became a volume key),
+  `… absolute=0` (no absolute volume), `[cufflinks.audio.volume] headset=1`,
+  `[cufflinks.remote.closed]`.
+- `crates/sex-bt/tests/avrcp_peers.rs` (in `bash scripts/bt_host_gate.sh`): a bonded
+  headset pages us, the link is encrypted, it opens AVCTP; its PLAY, PAUSE, FORWARD,
+  BACKWARD and STOP presses and releases come out as keys and are ACCEPTED, REWIND is
+  NOT IMPLEMENTED; absolute volume both ways (INTERIM, CHANGED and our re-registration,
+  a stale CHANGED ignored, SetAbsoluteVolume, no echo, clamping, nothing while
+  encryption is off); a headset that refuses the registration or has no AVRCP profile:
+  `RemoteNoVolume`, no SetAbsoluteVolume, its volume buttons as keys; an unencrypted
+  link (the headset opens AVCTP early): buttons and volume ignored and nothing sent
+  until encryption, ignored again when it goes off; 23 hostile frames (AVCTP fragments,
+  lying lengths, cut-short frames, other companies, AVRCP fragments, other profile ids,
+  frames too long to echo, responses to nothing) each get the exact bounded answer or
+  none; 200,000 random packets into `Remote` (at most one answer each, at most 515
+  bytes, volumes in range) and 3,000 through the host never panic; our SDP records.
+  `a2dp_peers.rs` checks that AVCTP opens after the stream and the volume registration
+  arrives.
+- `tests/cufflinks_remote.rs` (same gate): the volume scales round-trip for 0..100,
+  buttons to snapshots, a lost release let go after 2 s, the first headset followed,
+  volume both ways with no loop, nothing without absolute volume.
+- `tests/usb_wheel.rs` (`scripts/usb_wheel_host_gate.sh`): Input maps the media usages.
+- The `sex_pdx::bt_audio` ring test covers the two new words.
+
+## 21. W3b: not done, and the x17 receipt
+
+Not done: PLAY and PAUSE are one toggle (we offer no PLAYBACK_STATUS events, so the
+headset alternates them by its own guess); no AVRCP browsing, track metadata or player
+events as target; a headset's sweep of several volume steps in one CHANGED moves the
+master one step (then the headset is snapped back to it); fragmented AVCTP is dropped
+rather than reassembled; one headset's buttons are followed at a time (the first);
+without Bell's region (or before Bell has answered a mixer request) the headset's
+volume is not mirrored. QEMU has no Bluetooth controller: on hardware only.
+
+x17 receipt (after section 18), with bonded headphones that do AVRCP 1.4:
+
+1. Connect them: `[cufflinks.remote] … followed=1`, `[cufflinks.remote.volume] …
+   headset=…`, then `… set=…` with the system volume, `[cufflinks.audio.volume]
+   headset=1`.
+2. Play music (Qupid); press the headset's play/pause: `[cufflinks.remote.key] …
+   PlayPause pressed=1`, the music pauses; press again, it plays. Next/previous too.
+3. Press the headset's volume up: `[cufflinks.remote.volume] … changed=1`, `… key=0x80`,
+   the Shell's volume OSD moves 5%, then `… set=…`. Press the keyboard's volume keys:
+   the headset gets louder or quieter (`… set=…`), without the OSD bouncing back.
+4. Send the lines if the volume jumps around (a loop) or a button does nothing.

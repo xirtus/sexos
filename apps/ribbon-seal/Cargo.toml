@@ -1,0 +1,14 @@
+[package]
+name = "ribbon-seal"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+[[bin]]
+name = "ribbonseal"
+path = "src/main.rs"
+[features]
+default = ["sexos"]
+sexos = ["dep:sex-app", "dep:sex-pdx"]
+[dependencies]
+sex-app = { path = "../../crates/sex-app", optional = true }
+sex-pdx = { path = "../../crates/sex-pdx", optional = true }

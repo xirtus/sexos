@@ -196,6 +196,8 @@ pub mod input {
         Pointer(Pointer),
         Drop { kind: u8, x: i16, y: i16 },
         DragEnded { target: u32 },
+        /// A key went up (nothing in the toolkit acts on it yet).
+        KeyUp(Key),
     }
 }
 
@@ -1263,7 +1265,9 @@ pub mod sexos {
                     kind,
                 })
             }
-            _ => Event::Close,
+            AppEvent::KeyUp(k) => Event::KeyUp(Key { code: k.code, shift: k.shift, control: k.control, text: None }),
+            AppEvent::Drop { kind, x, y } => Event::Drop { kind, x, y },
+            AppEvent::DragEnded { target } => Event::DragEnded { target },
         }
     }
 

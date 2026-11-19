@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/brand/sexos-lips.svg" alt="SexOS lips logo" width="180"></p>
+
 # SexOS
 
 ### A single-address-space Rust microkernel

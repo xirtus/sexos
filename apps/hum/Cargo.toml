@@ -19,5 +19,9 @@ path = "src/bin/spin.rs"
 name = "doze"
 path = "src/bin/doze.rs"
 
+[[bin]]
+name = "swatch"
+path = "src/bin/swatch.rs"
+
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx" }

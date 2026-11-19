@@ -18,6 +18,8 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <termios.h>
 #include <sys/select.h>
 #include <signal.h>
 #include <spawn.h>
@@ -61,6 +63,16 @@ static int spawn_checks(void) {
     r = posix_spawn(&pid, "stdspawn", &fa, NULL, five, NULL);
     posix_spawn_file_actions_destroy(&fa);
     check("file actions are ENOSYS", r == ENOSYS);
+    /* envp reaches the child: `stdspawn envis K V` ends with 0 when K is V there. */
+    char *envis[] = { "stdspawn", "envis", "CHELLO_ENV", "from C", NULL };
+    char *envp[] = { "CHELLO_ENV=from C", "OTHER=1", NULL };
+    r = posix_spawnp(&pid, "stdspawn", NULL, NULL, envis, envp);
+    check("posix_spawn envp", r == 0 && waitpid(pid, &st, 0) == pid && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    /* system() hands on environ (setenv's copy). */
+    setenv("CHELLO_ENV", "set here", 1);
+    check("system() hands on environ", (st = system("stdspawn envis CHELLO_ENV 'set here'")) != -1 && WIFEXITED(st) && WEXITSTATUS(st) == 0);
+    char cwd[256];
+    check("getcwd", getcwd(cwd, sizeof cwd) != NULL && strcmp(cwd, "/") == 0);
     check("getpid", getpid() > 0);
     printf("passed %d/%d\n", passed, total);
     fprintf(stderr, "[chello.spawn.%s] passed=%d/%d\n", passed == total ? "ok" : "fail", passed, total);
@@ -186,6 +198,19 @@ int main(int argc, char **argv) {
     free(big);
     check("strtol", strtol("-0x1F", NULL, 16) == -31);
     check("time", time(NULL) > 1767225600);
+
+    // The console is a terminal: its size in cells, and echo off and back on.
+    struct winsize ws = {0};
+    int sized = ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0;
+    printf("winsize cols=%d rows=%d\n", ws.ws_col, ws.ws_row);
+    check("ioctl TIOCGWINSZ", sized);
+    struct termios tio, tio_back;
+    int tty = tcgetattr(0, &tio) == 0 && (tio.c_lflag & ICANON) && (tio.c_lflag & ECHO);
+    tio.c_lflag &= ~ECHO;
+    tty = tty && tcsetattr(0, TCSANOW, &tio) == 0 && tcgetattr(0, &tio_back) == 0 && !(tio_back.c_lflag & ECHO);
+    tio_back.c_lflag |= ECHO;
+    tty = tty && tcsetattr(0, TCSANOW, &tio_back) == 0 && tcgetattr(0, &tio) == 0 && (tio.c_lflag & ECHO);
+    check("tcgetattr and tcsetattr", tty);
 
     /* Sockets: what works without the network, then, in a run given it
        (`run +net chello net HOST PORT`), a TCP and a UDP echo. */

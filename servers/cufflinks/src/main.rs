@@ -14,8 +14,15 @@
 //! through the region's HID mailbox to SexUSB, which hands it to Input with USB's own.
 //! Bonds are kept by Files (`store.rs`); who may pair is decided in `pairing.rs`.
 //!
+//! W2b: the Shell's Bluetooth panel (`ui.rs`, `sex_pdx::bt_ui`) lists devices, starts
+//! pairing and asks the user to confirm numeric comparisons.
+//!
 //! W3: headphones (A2DP Source, SBC): Bell's mix comes through the `bt_audio` region
 //! shared with Bell and goes to the headset (`audio.rs`).
+//!
+//! W3b: the headset's buttons and volume (AVRCP): its buttons go through the HID
+//! mailbox as media keys, its absolute volume follows Bell's master volume both ways
+//! (`remote.rs`).
 //!
 //! BOOT starts it as domain `bt_hci::CUFFLINKS_PD` (Senses organ) with the HCI region
 //! shared with SexUSB, the firmware pack and a route to Files. With no controller it
@@ -27,15 +34,20 @@ extern crate alloc;
 
 mod audio;
 mod pairing;
+mod remote;
 mod store;
+mod ui;
 
 use alloc::boxed::Box;
-use sex_bt::hci::{self, Event};
+use sex_bt::hci::{self, Addr, Event};
+use sex_bt::avrcp::Key;
 use sex_bt::hid::Input;
 use sex_bt::host::{Host, Note};
 use sex_bt::intel::{self, Loader, Outcome};
 use sex_bt::report::Transport;
 use sex_pdx::bt_hci::{self, HidInput, Shared};
+use sex_pdx::bt_ui::{self as u, Command};
+use pairing::{Answer, Pending, Requests};
 use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 use sex_pdx::serial_record as log;
 
@@ -111,6 +123,8 @@ pub extern "C" fn _start() -> ! {
     let ring = unsafe { Shared::at(view.virtual_address as *mut u8) };
     log!("[cufflinks.transport] ok=1 slot={}", bt_hci::SLOT);
     audio::Audio::probe();
+    let mut desk = ui::Desk::probe();
+    let mut failed: Option<u32> = None;
     let mut packet = [0u8; bt_hci::MAX_PACKET];
     loop {
         // Wait for SexUSB to report a controller: it sends OP_LINK when one comes.
@@ -123,8 +137,16 @@ pub extern "C" fn _start() -> ! {
         };
         let name = intel::part(vendor, product).map(|p| p.name).unwrap_or("unknown");
         log!("[cufflinks.controller] vendor={:#06x} product={:#06x} part=\"{}\"", vendor, product, name);
-        if vendor == intel::INTEL_VENDOR && !load_intel_firmware(&ring, generation, &mut packet) { continue; }
-        run_host(&ring, generation, &mut packet);
+        // A controller that failed stays "failed" in the panel while it retries.
+        if failed != Some(generation) { desk.phase(u::STARTING); }
+        if vendor == intel::INTEL_VENDOR && !load_intel_firmware(&ring, generation, &mut packet) {
+            failed = still(&ring, generation).then_some(generation);
+            desk.phase(if failed.is_some() { u::FAILED } else { u::NO_CONTROLLER });
+            continue;
+        }
+        run_host(&ring, generation, &mut packet, &mut desk);
+        failed = still(&ring, generation).then_some(generation);
+        desk.phase(if failed.is_some() { u::FAILED } else { u::NO_CONTROLLER });
     }
 }
 
@@ -192,29 +214,142 @@ impl HidDevices {
     fn count(&self) -> u32 { self.slots.iter().filter(|s| s.is_some()).count() as u32 }
 }
 
+/// A headset's AVRCP buttons count as one more keyboard, numbered apart from a HID
+/// device on the same link (handles are 12 bits).
+const REMOTE_DEVICE: u16 = 0x8000;
+
+fn usage(key: Key) -> u8 {
+    match key {
+        Key::PlayPause => remote::PLAY_PAUSE, Key::Stop => remote::STOP, Key::Next => remote::NEXT, Key::Previous => remote::PREVIOUS,
+        Key::VolumeUp => remote::VOLUME_UP, Key::VolumeDown => remote::VOLUME_DOWN, Key::Mute => remote::MUTE,
+    }
+}
+
+/// Carry out what `remote.rs` decided for the headset on `handle`.
+fn remote_do(ring: &Shared, h: &mut Host, hid: &HidDevices, handle: u16, d: Option<remote::Do>) {
+    let Some(d) = d else { return };
+    let device = hid.id(handle | REMOTE_DEVICE);
+    match d {
+        remote::Do::Keys(keys) => if let Some(device) = device { push_input(ring, HidInput::Keys { device, modifiers: 0, keys }); },
+        remote::Do::Tap(u) => if let Some(device) = device {
+            log!("[cufflinks.remote.volume] handle={:#06x} key={:#04x}", handle, u);
+            push_input(ring, HidInput::Keys { device, modifiers: 0, keys: u as u64 });
+            push_input(ring, HidInput::Keys { device, modifiers: 0, keys: 0 });
+        },
+        remote::Do::SetVolume(v) => { log!("[cufflinks.remote.volume] handle={:#06x} set={}", handle, v); h.set_remote_volume(handle, v); }
+    }
+}
+
+/// The headset's AVRCP went (or its link): let go of its keys and its device number.
+fn remote_gone(ring: &Shared, hid: &mut HidDevices, buttons: &mut remote::Remote, handle: u16) {
+    buttons.gone(handle);
+    if let Some(device) = hid.remove(handle | REMOTE_DEVICE) {
+        push_input(ring, HidInput::Gone { device });
+        ring.set_hid_links(hid.count());
+    }
+}
+
 fn push_input(ring: &Shared, input: HidInput) {
     // SexUSB drains the mailbox every pass while HID links are up; wait briefly if full.
     for _ in 0..100 { if ring.hid_push(input) { return; } let _ = sex_pdx::sys_wait_self_ticks(1); }
     log!("[cufflinks.hid.dropped]");
 }
 
-fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
+/// The address a device is listed under: a bonded LE device's bond address (it may
+/// advertise from a new private address each time), otherwise the one it used.
+fn canon(h: &Host, addr: Addr) -> Addr { h.bonds.le_for(&addr).map(|b| b.addr).unwrap_or(addr) }
+
+/// The panel's PAIRED marks follow the bonds (paired, forgotten, unplugged).
+fn sync_bonds(h: &Host, desk: &mut ui::Desk) {
+    let mut changed = false;
+    let mut bonded: alloc::vec::Vec<(Addr, bool)> = h.bonds.le.iter().map(|b| (b.addr, true)).collect();
+    bonded.extend(h.bonds.classic.iter().map(|b| (b.addr, false)));
+    let listed: alloc::vec::Vec<[u8; 6]> = desk.snap.devices().iter().map(|d| d.addr).collect();
+    for a in listed { changed |= desk.snap.set(&a, u::PAIRED, bonded.iter().any(|b| b.0 .0 == a)); }
+    for (a, le) in bonded {
+        if desk.snap.find(&a.0).is_none() { changed |= desk.snap.put(a.0, u::OTHER, None, None, le); }
+        changed |= desk.snap.set(&a.0, u::PAIRED, true);
+    }
+    desk.changed(changed);
+}
+
+fn run_host(ring: &Shared, generation: u32, packet: &mut [u8], desk: &mut ui::Desk) {
     let mut h = Host::new(Box::new(random));
-    let mut scanning = false;
     let mut policy = pairing::Policy::new(0, 1);
-    let mut tried: alloc::vec::Vec<sex_bt::hci::Addr> = alloc::vec::Vec::new();
+    let mut tried: alloc::vec::Vec<Addr> = alloc::vec::Vec::new();
     let mut hid = HidDevices { slots: [None; 8] };
+    // Open links (handle -> the address they are listed under), for the panel.
+    let mut links: alloc::vec::Vec<(u16, Addr)> = alloc::vec::Vec::new();
+    // The comparison shown in the panel, and the devices the user asked to pair.
+    let mut pending: Option<Pending> = None;
+    let mut requests = Requests::new();
     ring.set_hid_links(0);
     let mut sound = audio::Audio::new();
+    let mut buttons = remote::Remote::new();
+    // Whether the headset applies the master volume itself, as last told to Bell.
+    let mut headset_volume = false;
     // Classic links from bonded devices that may be headsets: if one opens AVDTP but
     // sets no stream up within two seconds, we do (handle, since).
     // (handle, since, signaling open): the 2 s setup window starts when AVDTP signaling opens.
     let mut quiet: alloc::vec::Vec<(u16, u64, bool)> = alloc::vec::Vec::new();
     while still(ring, generation) {
         let mut moved = false;
+        let now = sex_pdx::get_ticks();
+        // What the user asked for in the panel (only once the controller is ready).
+        while let Some(c) = h.ready().then(|| desk.command()).flatten() {
+            moved = true;
+            match c {
+                Command::Scan(true) => {
+                    h.scan(8);
+                    desk.scan_until = now + 8 * 1280 + 500;
+                    log!("[cufflinks.ui.scan] on=1");
+                }
+                Command::Scan(false) => {
+                    // Discovery stops; the LE scan that brings bonded devices back stays.
+                    h.stop_scan();
+                    h.restart_le_scan();
+                    desk.scan_until = 0;
+                    log!("[cufflinks.ui.scan] on=0");
+                }
+                Command::Pair(a) => {
+                    let Some(f) = h.devices().iter().find(|f| f.addr.0 == a || canon(&h, f.addr).0 == a).cloned() else {
+                        log!("[cufflinks.ui.pair] addr={} found=0", Addr(a));
+                        desk.outcome(a, false, u::REASON_NOT_FOUND);
+                        continue;
+                    };
+                    let audio = Host::is_audio(&f) && f.transport == Transport::Classic;
+                    if !audio && !Host::is_hid(&f) {
+                        log!("[cufflinks.ui.pair] addr={} supported=0", f.addr);
+                        desk.outcome(a, false, u::REASON_UNSUPPORTED);
+                        continue;
+                    }
+                    log!("[cufflinks.ui.pair] addr={} name=\"{}\" audio={} user=1", f.addr, f.name.as_deref().unwrap_or(""), audio as u8);
+                    if !tried.contains(&f.addr) { tried.push(f.addr); }
+                    requests.add(a, now);
+                    if !desk.snap.find(&a).is_some_and(|d| d.has(u::CONNECTED)) { desk.set(&a, u::PAIRING, true); }
+                    if audio { h.connect_audio(&f); } else { h.connect_hid(&f); }
+                }
+                Command::Forget(a) => {
+                    log!("[cufflinks.ui.forget] addr={}", Addr(a));
+                    h.forget(Addr(a));
+                    requests.done(&a);
+                    tried.retain(|t| t.0 != a && canon(&h, *t).0 != a);
+                    desk.set(&a, u::PAIRED | u::CONNECTED | u::IN_USE | u::PAIRING, false);
+                }
+                Command::Confirm { ticket, yes } => match pending {
+                    Some(p) if p.answers(ticket) => {
+                        if yes { log!("[cufflinks.pair] addr={} compare={:06} accepted=user", Addr(p.addr), p.value); }
+                        else { log!("[cufflinks.pair] addr={} compare={:06} accepted=0 reason=user", Addr(p.addr), p.value); }
+                        h.confirm(p.handle, yes);
+                        pending = None;
+                        desk.settle();
+                    }
+                    _ => log!("[cufflinks.pair] ticket={} stale=1", ticket),
+                },
+            }
+        }
         while let Some(p) = h.poll() { send(ring, &p, false); moved = true; }
         while let Some(n) = ring.rx_pop(packet) { h.on_packet(&packet[..n]); moved = true; }
-        let now = sex_pdx::get_ticks();
         while let Some(n) = h.note() {
             moved = true;
             match n {
@@ -223,43 +358,68 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
                         i.addr, i.hci_version, i.lmp_subversion, i.manufacturer, i.le() as u8, i.ssp() as u8, i.le_extended_advertising() as u8);
                     h.set_bonds(store::load());
                     policy = pairing::Policy::new(now, h.bonds.len());
-                    log!("[cufflinks.pairing] bonds={} window_s={}", h.bonds.len(), policy.window_seconds(now));
-                    if !scanning { h.scan(8); scanning = true; }
+                    log!("[cufflinks.pairing] bonds={} window_s={} prompt={}", h.bonds.len(), policy.window_seconds(now), desk.prompt() as u8);
+                    desk.phase(u::READY);
+                    sync_bonds(&h, desk);
+                    h.scan(8);
+                    desk.scan_until = now + 8 * 1280 + 500;
                 }
                 Note::Device(f) => {
                     log!("[cufflinks.device] addr={} type={} name=\"{}\" rssi={} class={:#08x} appearance={:#06x}",
                         f.addr, if f.transport == Transport::Le { "le" } else { "classic" }, f.name.as_deref().unwrap_or(""),
                         f.rssi.unwrap_or(127), f.class.unwrap_or(0), f.appearance.unwrap_or(0));
-                    // A new keyboard or mouse: only inside the pairing window (see pairing.rs).
+                    let listed = canon(&h, f.addr);
+                    desk.put(listed.0, u::kind_of(f.class, f.appearance), f.name.as_deref().map(str::as_bytes), f.rssi, f.transport == Transport::Le);
+                    // A new device: the user pairs it from the panel; without a panel,
+                    // only inside the first-setup window (see pairing.rs).
                     let new = h.bonds.le_for(&f.addr).is_none() && h.bonds.classic_for(&f.addr).is_none();
+                    let prompt = desk.prompt();
+                    let why = if prompt { "panel" } else { "no_prompt" };
                     if new && Host::is_audio(&f) && f.transport == Transport::Classic && !tried.contains(&f.addr) {
                         tried.push(f.addr);
-                        if policy.connect_new(now) {
+                        if policy.connect_new(now, prompt) {
                             log!("[cufflinks.audio.connect] addr={} name=\"{}\" window=1", f.addr, f.name.as_deref().unwrap_or(""));
                             h.connect_audio(&f);
                         } else {
-                            log!("[cufflinks.audio.skip] addr={} reason=no_prompt", f.addr);
+                            log!("[cufflinks.audio.skip] addr={} reason={}", f.addr, why);
                         }
                     }
                     if new && Host::is_hid(&f) && f.connectable && !tried.contains(&f.addr) {
-                        if policy.connect_new(now) {
-                            tried.push(f.addr);
+                        tried.push(f.addr);
+                        if policy.connect_new(now, prompt) {
                             log!("[cufflinks.hid.connect] addr={} name=\"{}\" window=1", f.addr, f.name.as_deref().unwrap_or(""));
                             h.connect_hid(&f);
                         } else {
-                            log!("[cufflinks.hid.skip] addr={} reason=no_prompt", f.addr);
-                            tried.push(f.addr);
+                            log!("[cufflinks.hid.skip] addr={} reason={}", f.addr, why);
                         }
                     }
                 }
                 Note::Connected { handle, addr, le } => {
                     log!("[cufflinks.connected] handle={:#06x} addr={} le={}", handle, addr, le as u8);
                     if !le { quiet.push((handle, now, false)); }
+                    let listed = canon(&h, addr);
+                    links.retain(|l| l.0 != handle);
+                    links.push((handle, listed));
+                    if desk.snap.find(&listed.0).is_none() { desk.put(listed.0, u::OTHER, None, None, le); }
+                    desk.set(&listed.0, u::CONNECTED, true);
+                }
+                Note::ConnectFailed { addr, status } => {
+                    log!("[cufflinks.connect.failed] addr={} status={:#04x}", addr, status);
+                    let listed = canon(&h, addr);
+                    desk.set(&listed.0, u::PAIRING, false);
+                    if requests.done(&listed.0) { desk.outcome(listed.0, false, status); }
                 }
                 Note::Disconnected { handle, reason } => {
                     log!("[cufflinks.disconnected] handle={:#06x} reason={:#04x}", handle, reason);
                     sound.gone(handle);
+                    remote_gone(ring, &mut hid, &mut buttons, handle);
                     quiet.retain(|q| q.0 != handle);
+                    if let Some(at) = links.iter().position(|l| l.0 == handle) {
+                        let a = links.remove(at).1;
+                        desk.set(&a.0, u::CONNECTED | u::IN_USE | u::PAIRING, false);
+                        if requests.done(&a.0) { desk.outcome(a.0, false, reason); }
+                    }
+                    if pending.is_some_and(|p| p.handle == handle) { pending = None; desk.settle(); }
                     if let Some(device) = hid.remove(handle) {
                         push_input(ring, HidInput::Gone { device });
                         ring.set_hid_links(hid.count());
@@ -268,36 +428,111 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
                     }
                 }
                 Note::Compare { handle, addr, value } => {
-                    // TODO(W2b): ask the desktop (pairing.rs). Until then: the window decides.
-                    let yes = policy.accept_compare(now);
+                    let prompt = desk.prompt();
+                    let mut answer = policy.compare(now, prompt);
+                    if answer == Answer::Ask {
+                        let listed = canon(&h, addr);
+                        if desk.snap.find(&listed.0).is_none() { desk.put(listed.0, u::OTHER, None, None, false); }
+                        if pending.is_some() {
+                            // One question at a time: a second device asking now is refused.
+                            log!("[cufflinks.pair] addr={} compare={:06} accepted=0 reason=busy", addr, value);
+                            h.confirm(handle, false);
+                            continue;
+                        }
+                        match desk.ask(listed.0, value) {
+                            Some(ticket) => {
+                                log!("[cufflinks.pair] addr={} compare={:06} asked=1 ticket={} requested={}", addr, value, ticket, requests.waiting(&listed.0) as u8);
+                                pending = Some(Pending { handle, addr: listed.0, value, ticket, since: now });
+                                continue;
+                            }
+                            // The Shell did not answer the wake: fall back.
+                            None => answer = policy.compare(now, false),
+                        }
+                    }
+                    let yes = answer == Answer::Accept;
                     if yes { log!("[cufflinks.pair] addr={} compare={:06} accepted=auto window=1", addr, value); }
                     else { log!("[cufflinks.pair] addr={} compare={:06} accepted=0 reason=no_prompt", addr, value); }
                     h.confirm(handle, yes);
                 }
-                Note::Paired { addr, le } => log!("[cufflinks.pair] addr={} le={} paired=1", addr, le as u8),
-                Note::PairingFailed { addr, reason } => log!("[cufflinks.pair] addr={} paired=0 reason={:#04x}", addr, reason),
+                Note::Paired { addr, le } => {
+                    log!("[cufflinks.pair] addr={} le={} paired=1", addr, le as u8);
+                    let listed = canon(&h, addr);
+                    requests.done(&listed.0);
+                    if pending.is_some_and(|p| p.addr == listed.0) { pending = None; desk.settle(); }
+                    desk.set(&listed.0, u::PAIRED, true);
+                    desk.outcome(listed.0, true, 0);
+                }
+                Note::PairingFailed { addr, reason } => {
+                    log!("[cufflinks.pair] addr={} paired=0 reason={:#04x}", addr, reason);
+                    let listed = canon(&h, addr);
+                    requests.done(&listed.0);
+                    if pending.is_some_and(|p| p.addr == listed.0) { pending = None; desk.settle(); }
+                    desk.outcome(listed.0, false, reason);
+                }
                 Note::Encrypted { handle } => log!("[cufflinks.encrypted] handle={:#06x}", handle),
                 Note::Refused { opcode, status } => log!("[cufflinks.refused] opcode={:#06x} status={:#04x}", opcode, status),
                 Note::Failed(e) => { log!("[cufflinks.failed] step=bringup reason={:?}", e); return; }
-                Note::BondsChanged => { store::save(&h.bonds); }
+                Note::BondsChanged => { store::save(&h.bonds); sync_bonds(&h, desk); }
                 Note::HidReady { handle, addr, le, keyboard, pointer, boot } => {
                     let device = hid.add(handle).unwrap_or(0);
                     ring.set_hid_links(hid.count());
                     log!("[cufflinks.hid] addr={} handle={:#06x} device={} le={} keyboard={} pointer={} boot={}",
                         addr, handle, device, le as u8, keyboard as u8, pointer as u8, boot as u8);
+                    let listed = canon(&h, addr);
+                    requests.done(&listed.0);
+                    desk.set(&listed.0, u::PAIRING, false);
+                    desk.set(&listed.0, u::CONNECTED | u::IN_USE, true);
                 }
-                Note::HidFailed { handle, code } => log!("[cufflinks.hid.failed] handle={:#06x} code={:#04x}", handle, code),
+                Note::HidFailed { handle, code } => {
+                    log!("[cufflinks.hid.failed] handle={:#06x} code={:#04x}", handle, code);
+                    if let Some(a) = links.iter().find(|l| l.0 == handle).map(|l| l.1) {
+                        desk.set(&a.0, u::PAIRING, false);
+                        if requests.done(&a.0) { desk.outcome(a.0, false, code); }
+                    }
+                }
                 Note::AudioSink { handle, sink } => log!("[cufflinks.audio.sink] handle={:#06x} psm={:#06x} avdtp={:#06x} a2dp={:#06x} features={:#06x}",
                     handle, sink.psm, sink.avdtp_version, sink.a2dp_version, sink.features),
                 Note::AudioReady { handle, addr, config, frames_per_packet } => {
                     log!("[cufflinks.audio] addr={} handle={:#06x} rate={} mode={:?} blocks={} subbands={} bitpool={} frame_bytes={} frames_per_packet={}",
                         addr, handle, config.rate, config.mode, config.blocks, config.subbands, config.bitpool, config.frame_bytes(), frames_per_packet);
                     sound.ready(handle);
+                    let listed = canon(&h, addr);
+                    requests.done(&listed.0);
+                    desk.set(&listed.0, u::PAIRING, false);
+                    desk.set(&listed.0, u::CONNECTED | u::IN_USE, true);
                 }
                 Note::AudioStreaming { handle } => { log!("[cufflinks.audio.streaming] handle={:#06x}", handle); sound.streaming(handle); }
                 Note::AudioSuspended { handle } => log!("[cufflinks.audio.suspended] handle={:#06x}", handle),
-                Note::AudioClosed { handle } => { log!("[cufflinks.audio.closed] handle={:#06x}", handle); sound.gone(handle); }
-                Note::AudioFailed { handle, code } => log!("[cufflinks.audio.failed] handle={:#06x} code={:#06x}", handle, code),
+                Note::AudioClosed { handle } => {
+                    log!("[cufflinks.audio.closed] handle={:#06x}", handle);
+                    sound.gone(handle);
+                    if let Some(a) = links.iter().find(|l| l.0 == handle).map(|l| l.1) { desk.set(&a.0, u::IN_USE, false); }
+                }
+                Note::AudioFailed { handle, code } => {
+                    log!("[cufflinks.audio.failed] handle={:#06x} code={:#06x}", handle, code);
+                    if let Some(a) = links.iter().find(|l| l.0 == handle).map(|l| l.1) {
+                        desk.set(&a.0, u::PAIRING, false);
+                        if requests.done(&a.0) { desk.outcome(a.0, false, code as u8); }
+                    }
+                }
+                Note::RemoteReady { handle, addr } => {
+                    let followed = buttons.ready(handle);
+                    let device = if followed { hid.add(handle | REMOTE_DEVICE) } else { None };
+                    ring.set_hid_links(hid.count());
+                    log!("[cufflinks.remote] addr={} handle={:#06x} device={} followed={}", addr, handle, device.unwrap_or(0), followed as u8);
+                }
+                Note::RemoteKey { handle, key, pressed } => {
+                    log!("[cufflinks.remote.key] handle={:#06x} key={:?} pressed={}", handle, key, pressed as u8);
+                    let d = buttons.key(handle, usage(key), pressed, now);
+                    remote_do(ring, &mut h, &hid, handle, d);
+                }
+                Note::RemoteVolume { handle, volume, changed } => {
+                    log!("[cufflinks.remote.volume] handle={:#06x} headset={} changed={}", handle, volume, changed as u8);
+                    let d = buttons.volume(handle, volume, changed, sound.master());
+                    remote_do(ring, &mut h, &hid, handle, d);
+                }
+                Note::RemoteNoVolume { handle } => { log!("[cufflinks.remote.volume] handle={:#06x} absolute=0", handle); buttons.no_volume(handle); }
+                Note::RemoteClosed { handle } => { log!("[cufflinks.remote.closed] handle={:#06x}", handle); remote_gone(ring, &mut hid, &mut buttons, handle); }
                 Note::Input { handle, input } => {
                     let Some(device) = hid.id(handle) else { continue };
                     push_input(ring, match input {
@@ -307,6 +542,21 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
                 }
             }
         }
+        // A comparison nobody answered is refused; a Pair that never connected has failed.
+        if let Some(p) = pending.filter(|p| p.expired(now)) {
+            log!("[cufflinks.pair] addr={} compare={:06} accepted=0 reason=timeout", Addr(p.addr), p.value);
+            h.confirm(p.handle, false);
+            pending = None;
+            desk.settle();
+            desk.outcome(p.addr, false, u::REASON_TIMEOUT);
+        }
+        while let Some(a) = requests.expired(now) {
+            if desk.snap.find(&a).is_some_and(|d| d.has(u::PAIRING)) {
+                log!("[cufflinks.ui.pair] addr={} timeout=1", Addr(a));
+                desk.outcome(a, false, u::REASON_TIMEOUT);
+            }
+        }
+        desk.pump(now);
         // A bonded headset that paged us and opened AVDTP without setting a stream up.
         quiet.retain_mut(|q| {
             let (handle, since, open) = *q;
@@ -323,10 +573,20 @@ fn run_host(ring: &Shared, generation: u32, packet: &mut [u8]) {
             }
             false
         });
+        if let Some(handle) = buttons.handle {
+            let d = buttons.tick(now, sound.master());
+            if d.is_some() { moved = true; }
+            remote_do(ring, &mut h, &hid, handle, d);
+        }
+        // Bell leaves the master volume out only while the headset streaming is the
+        // one applying it.
+        let applies = buttons.absolute && buttons.handle.is_some() && buttons.handle == sound.handle();
+        if applies != headset_volume { headset_volume = applies; sound.headset_volume(applies); }
         if sound.pump(&mut h, now) { moved = true; }
         if !moved { serve(); let _ = sex_pdx::sys_wait_self_ticks(1); }
     }
     if let Some(handle) = sound.handle() { sound.gone(handle); }
+    sound.headset_volume(false);
     for device in 1..=8 { if hid.slots[device as usize - 1].is_some() { push_input(ring, HidInput::Gone { device }); } }
     ring.set_hid_links(0);
     log!("[cufflinks.gone] generation={}", generation);

@@ -354,7 +354,7 @@ impl Book {
 
 /// `A`, `B`, … `Z`, `AA`, … for column `col` counted from 0.
 pub fn column_name(col: u32) -> String {
-    let mut n = col + 1;
+    let mut n = u64::from(col) + 1;
     let mut out = Vec::new();
     while n > 0 {
         n -= 1;
@@ -384,6 +384,8 @@ mod tests {
         assert_eq!(column_name(26), "AA");
         assert_eq!(column_name(701), "ZZ");
         assert_eq!(column_name(702), "AAA");
+        // Issue #282: the last u32 column must not overflow.
+        assert_eq!(column_name(u32::MAX), "MWLQKWV");
     }
 
     #[test]

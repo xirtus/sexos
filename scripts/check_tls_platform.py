@@ -105,6 +105,10 @@ def check_manifests(tls, workspace, app, trust=None):
                                       'console': {'path': 'vendor/console-0.16.6'},
                                       'path_abs': {'path': 'vendor/path_abs-0.5.1'},
                                       'clircle': {'path': 'vendor/clircle-0.6.1'},
+                                      # Chastity-only KDF wiping and bounded KDBX expansion;
+                                      # neither package occurs in sex-tls's target graph.
+                                      'keepass': {'path': 'vendor/keepass-0.17.0'},
+                                      'rust-argon2': {'path': 'vendor/rust-argon2-3.0.0'},
                                       # Assuit (WordCraft): Hermit-target fixes, and the PDF writer
                                       # fork WordCraft's own workspace patches in. None does TLS.
                                       'filetime': {'path': 'vendor/filetime-0.2.29'},
@@ -122,7 +126,11 @@ def check_manifests(tls, workspace, app, trust=None):
                                                       'rev': '9be9a63782298ab59cd9b7a42ee9cba4f42a5ccb'},
                                       'linesweeper': {'git': 'https://github.com/storytold/craft-libs',
                                                       'rev': '481f66d287b2a06845f3667a19daf35f0fe958ed'}}}
-    if workspace.get('patch') and workspace.get('patch') != reviewed_patches:
+    # Reviewed allocation-free split discovery clocks; this does not replace
+    # any TLS provider or alter the required existing patch selections.
+    with_neighbor_fix = {'crates-io': {**reviewed_patches['crates-io'],
+                                      'smoltcp': {'path': 'vendor/smoltcp-0.14.0'}}}
+    if workspace.get('patch') and workspace.get('patch') not in (reviewed_patches, with_neighbor_fix):
         errors.append('workspace dependency replacement needs TLS policy review: patch')
     if workspace.get('replace'):
         errors.append('workspace dependency replacement needs TLS policy review: replace')

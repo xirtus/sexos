@@ -1,0 +1,11 @@
+{
+  "scope": "offline CLAP/VST3 helper crash containment; no hostile-plugin or ordinary OS binary compatibility claim",
+  "ok": true,
+  "processed_runs": 5,
+  "crash_recovered": true,
+  "timeout_recovered": true,
+  "final_block_restart_rejected": true,
+  "window_wait_preserved_receipts": true,
+  "parent": 42,
+  "task": 42
+}

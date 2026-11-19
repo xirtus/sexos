@@ -13,6 +13,7 @@
 //! that in this service's memory only, for this boot (never in a file); a refused
 //! handshake (usually a wrong passphrase) or `wifi leave` forgets them. Joining
 //! another network, or a scan after a failure, restarts the chip the same way.
+extern crate alloc;
 use sex_pdx::wifi_status as ws;
 use sex_pdx::{memory_region as m, pci_command as c};
 use sex_wifi::{bringup::Bringup, context, csr, devices, ieee80211::Security, init::{self, Init}, join::{self, Join}, assoc::{self, Assoc}, rsna::{self, Rsna}, link::{self as wlink, Link}, tx::TxQueue, ieee80211::{self, Bss}, crypto, hcmd, pack::Pack, scan::{self, Scan}, ucode::Firmware, sae};
@@ -115,6 +116,8 @@ const SETTLE_TICKS: u64 = 10;
 /// Received Ethernet frames held for the IP stack, oldest first: the air delivers
 /// a burst at a time, the stack takes one frame per turn. Full means dropped.
 const RX_FRAMES: usize = 32;
+/// The chip's .ucode, inflated from the firmware pack (the largest is 1.75 MB).
+static mut FIRMWARE: [u8; 2 << 20] = [0; 2 << 20];
 static mut LINK_RX: [[u8; wlink::MAX_ETHERNET]; RX_FRAMES] = [[0; wlink::MAX_ETHERNET]; RX_FRAMES];
 struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64 }
 impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0 }; }
@@ -152,7 +155,11 @@ impl Wifi {
         let (file, pnvm) = match view(c::SLOT_WIFI_FIRMWARE, m::QUERY_VIEW | m::READ) {
             Ok(v) => {
                 let bytes: &'static [u8] = unsafe { core::slice::from_raw_parts(v.virtual_address as *const u8, v.length as usize) };
-                match Pack::parse(bytes).and_then(|p| p.file(chip.firmware).map(|f| (f, chip.pnvm.and_then(|n| p.file(n).ok())))) {
+                // The .ucode is DEFLATE-compressed in the pack: inflate it once into
+                // FIRMWARE (bss, never freed: the firmware's sections are read from it).
+                let scratch: &'static mut [u8] = unsafe { &mut *core::ptr::addr_of_mut!(FIRMWARE) };
+                let mut inflater = alloc::boxed::Box::new(sex_wifi::pack::Inflater::default());
+                match Pack::parse(bytes).and_then(|p| p.open(chip.firmware, scratch, &mut inflater).map(|f| (f, chip.pnvm.and_then(|n| p.file(n).ok())))) {
                     Ok(f) => f,
                     Err(e) => { sex_pdx::serial_record!("[wifi.failed] step=firmware file={} reason={:?} hint=run_scripts/fetch_wifi_firmware.sh_before_building", chip.firmware, e); return None; }
                 }

@@ -207,7 +207,10 @@ fn ext4_indexed_folder_takes_new_names() {
     v.sync(&mut d).unwrap();
     fsck(&d, &path, "indexed folder with new names");
     assert_eq!(v.list(&mut d, b"big").unwrap().len(), 300 + 60 - 1 + 1);
-    let ls = String::from_utf8_lossy(&run(&debugfs, &["-R", "ls -l /big", path.to_str().unwrap()]).stdout).to_string();
+    // debugfs also lists emptied slots (inode 0, name kept): a removed name that was the
+    // first in its block shows that way, depending on the random hash seed, so skip them.
+    let ls = String::from_utf8_lossy(&run(&debugfs, &["-R", "ls -l /big", path.to_str().unwrap()]).stdout)
+        .lines().filter(|l| l.split_whitespace().next() != Some("0")).collect::<Vec<_>>().join("\n");
     assert!(ls.contains("sexos file 59") && ls.contains("linux file 299.txt") && ls.contains("moved in") && !ls.contains("linux file 010.txt"), "{ls}");
     assert_eq!(debugfs_cat(&path, "big/sexos file 07"), b"hello");
     assert_eq!(debugfs_cat(&path, "big/linux file 123.txt"), b"123");

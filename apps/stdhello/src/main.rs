@@ -37,6 +37,46 @@ fn main() {
     if args.get(1).map(String::as_str) == Some("count") {
         for i in 0u64.. { println!("count {i}"); std::thread::sleep(std::time::Duration::from_millis(20)); }
     }
+    // `stdhello size`: the terminal's size, then again after it changes (or a minute).
+    if args.get(1).map(String::as_str) == Some("size") {
+        let ((cols, rows), seen) = (sex_std::terminal::size(), sex_std::terminal::size_changes());
+        println!("[stdhello.size] cols={cols} rows={rows} changes={seen}");
+        let began = Instant::now();
+        while sex_std::terminal::size_changes() == seen && began.elapsed() < Duration::from_secs(60) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let ((cols, rows), now) = (sex_std::terminal::size(), sex_std::terminal::size_changes());
+        println!("[stdhello.resized] cols={cols} rows={rows} changes={now}");
+        return;
+    }
+    // `stdhello wait`: blocked reading standard input, until Ctrl+C ends it.
+    if args.get(1).map(String::as_str) == Some("wait") {
+        println!("[stdhello.wait] reading");
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
+        println!("[stdhello.wait] read={}", line.trim());
+        return;
+    }
+    // `stdhello spin`: computes and never reads, writes or sleeps: only a second Ctrl+C
+    // (the terminal asks Shell to stop it) ends it.
+    if args.get(1).map(String::as_str) == Some("spin") {
+        println!("[stdhello.spin] spinning");
+        let mut x = 1u64;
+        loop { x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(1)); }
+    }
+    // `stdhello raw`: keys one at a time, unechoed, until `q`.
+    if args.get(1).map(String::as_str) == Some("raw") {
+        let ok = sex_std::terminal::set_raw(true);
+        println!("[stdhello.raw] on={}", ok as u8);
+        let mut b = [0u8; 1];
+        while std::io::stdin().read(&mut b).unwrap_or(0) == 1 {
+            println!("[stdhello.raw] byte={}", b[0]);
+            if b[0] == b'q' { break; }
+        }
+        sex_std::terminal::set_raw(false);
+        println!("[stdhello.raw] off");
+        return;
+    }
     println!("Hello from Rust std on SexOS.");
     println!("arguments: {:?}", &args[1..]);
     let mut passed = 0;

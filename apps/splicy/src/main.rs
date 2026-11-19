@@ -32,8 +32,10 @@ mod program {
     use sex_pdx::app_pointer::Kind;
     use sex_splice::export::{export_pictures, sound_pieces, Frames, Pictures, SoundPiece};
     use sex_splice::{Micros, SECOND};
+    use splicy::cache::{CacheConfig, CachedFrame, FrameCache};
+    use splicy::media::{Library, Peaks, Thumb};
     use splicy::view::View;
-    use splicy::{words, Editor};
+    use splicy::{words, AuditionMode, Editor};
 
     #[panic_handler]
     fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -91,6 +93,7 @@ mod program {
         at_ms: i64,
         frame_ms: i64,
         pcm: Vec<[i16; 2]>,
+        cache: FrameCache,
     }
 
     impl Grabber {
@@ -98,6 +101,14 @@ mod program {
             let want = source / 1000;
             if self.at_ms >= 0 && want >= self.at_ms && want < self.at_ms + self.frame_ms {
                 return Ok(());
+            }
+            let tol_us = (self.frame_ms * 500).max(500);
+            if let Some(hit) = self.cache.get(0, source, tol_us, false) {
+                if hit.pixels.len() == self.picture.len() {
+                    self.picture.copy_from_slice(&hit.pixels);
+                    self.at_ms = hit.source_us / 1000;
+                    return Ok(());
+                }
             }
             if self.at_ms < 0 || want < self.at_ms || want > self.at_ms + 2000 {
                 self.dec.seek(want.max(0) as u64)?;
@@ -107,6 +118,14 @@ mod program {
                     Next::Picture { at_ms } => {
                         self.at_ms = at_ms.max(0);
                         if at_ms + self.frame_ms / 2 >= want {
+                            self.cache.insert(CachedFrame::new(
+                                0,
+                                self.at_ms * 1000,
+                                self.w,
+                                self.h,
+                                false,
+                                self.picture.clone(),
+                            ));
                             return Ok(());
                         }
                     }
@@ -245,7 +264,10 @@ mod program {
         type Error = &'static str;
         fn frame(&mut self, pixels: &[u32], at: Micros) -> Result<(), Self::Error> {
             let n = ((at as i128 * self.fps.0 as i128 + (self.fps.1 as i128 * SECOND as i128) / 2) / (self.fps.1 as i128 * SECOND as i128)) as u64;
-            self.ex.picture(pixels, n).map_err(|_| "The encoder refused a picture.")?;
+            self.ex.picture(pixels, n).map_err(|e| {
+                sex_pdx::serial_record!("[splicy.export.picture.error] frame={} error={:?} pixels={}", n, e, pixels.len());
+                "The encoder refused a picture."
+            })?;
             drain(self.ex, self.window, self.path)?;
             if let Some(feed) = self.feed.as_deref_mut() {
                 let until = ((at as u64 * RATE as u64 / SECOND as u64) + RATE as u64 / 10).min(self.total);
@@ -267,6 +289,7 @@ mod program {
         ed: Editor,
         view: View,
         grab: Option<Grabber>,
+        lib: Library,
         has_sound: bool,
         playhead: Micros,
         message: String,
@@ -278,9 +301,12 @@ mod program {
                 let _ = media;
                 let _ = g.show(s);
             }
+            if self.view.vu.visible {
+                self.view.vu.update_from_library(self.ed.timeline(), &self.lib, self.playhead, 40_000);
+            }
             let (w, h) = self.window.size();
             let picture = self.grab.as_ref().map(|g| (&g.picture[..], g.w, g.h));
-            self.view.paint(self.window.pixels(), w, h, &self.ed, picture, self.playhead, &self.message);
+            self.view.paint(self.window.pixels(), w, h, &self.ed, &self.lib, picture, self.playhead, &self.message);
             self.window.show_pixels(w, h);
         }
 
@@ -318,6 +344,7 @@ mod program {
                         self.ed.redo();
                     }
                     Some(b'e') => self.export(),
+                    Some(b'h') => self.export_handoff(),
                     _ => return,
                 }
                 self.report();
@@ -358,7 +385,19 @@ mod program {
                     sex_pdx::serial_record!("[splicy.cleanup] cards={}", n);
                     self.message = format!("{n} suggestion{} to look at", if n == 1 { "" } else { "s" });
                 }
+                (_, Some(b'v')) => {
+                    self.view.vu.visible = !self.view.vu.visible;
+                    self.message = if self.view.vu.visible { "VU meter strip on".into() } else { "VU meter strip off".into() };
+                }
                 (_, Some(b'\\')) => self.preview_join(),
+                (_, Some(b'=')) => {
+                    let w = self.window.size().0 as i32;
+                    self.view.zoom_by(self.ed.timeline(), w, 1, self.playhead);
+                }
+                (_, Some(b'-')) => {
+                    let w = self.window.size().0 as i32;
+                    self.view.zoom_by(self.ed.timeline(), w, -1, self.playhead);
+                }
                 _ => {}
             }
         }
@@ -370,6 +409,7 @@ mod program {
                     if let Some((a, b)) = sel {
                         sex_pdx::serial_record!("[splicy.cut] first={} last={} text={}", a, b, self.ed.quote(a, b));
                     }
+                    self.ed.audition = AuditionMode::HearJoin;
                     self.follow_caret();
                     self.report();
                 }
@@ -378,13 +418,46 @@ mod program {
             }
         }
 
-        /// Show the pictures around the nearest join at their own pace.
+        /// Two-state `\` audition: alternates between playing the join and playing what was cut.
         fn preview_join(&mut self) {
+            let mode = self.ed.audition;
+            if mode == AuditionMode::HearRemoved {
+                if let Some((_media, removed)) = self.ed.removed_at_nearest_join() {
+                    sex_pdx::serial_record!("[splicy.join.removed] from_ms={} to_ms={}", removed.start / 1000, removed.end / 1000);
+                    self.message = "Auditioning removed passage (\\ again for the join)".into();
+                    let tl = self.ed.timeline();
+                    let step = (tl.fps_den as i64 * SECOND / tl.fps_num.max(1) as i64).max(1);
+                    let begun = sex_pdx::get_ticks();
+                    let mut s = removed.start;
+                    while s < removed.end {
+                        if let Some(Event::Close) = self.window.poll() {
+                            self.window.close_now();
+                        }
+                        if let Some(g) = self.grab.as_mut() {
+                            let _ = g.show(s);
+                        }
+                        let (w, h) = self.window.size();
+                        let picture = self.grab.as_ref().map(|g| (&g.picture[..], g.w, g.h));
+                        self.view.paint(self.window.pixels(), w, h, &self.ed, &self.lib, picture, self.playhead, &self.message);
+                        self.window.show_pixels(w, h);
+                        let due = begun + ((s - removed.start + step) / 1000) as u64;
+                        let now = sex_pdx::get_ticks();
+                        if due > now {
+                            let _ = sex_pdx::sys_wait_self_ticks(due - now);
+                        }
+                        s += step;
+                    }
+                    self.ed.cycle_audition();
+                    self.follow_caret();
+                    return;
+                }
+            }
             let Some(r) = self.ed.join_preview() else {
                 self.message = "No cuts yet: delete some words first.".into();
                 return;
             };
             sex_pdx::serial_record!("[splicy.join] from_ms={} to_ms={}", r.start / 1000, r.end / 1000);
+            self.message = "Auditioning join (\\ again for removed footage)".into();
             let tl = self.ed.timeline();
             let step = (tl.fps_den as i64 * SECOND / tl.fps_num.max(1) as i64).max(1);
             let begun = sex_pdx::get_ticks();
@@ -402,12 +475,48 @@ mod program {
                 }
                 t += step;
             }
+            self.ed.cycle_audition();
             self.follow_caret();
+        }
+
+        fn write_doc(&mut self, filename: &str, content: &str) -> Result<(), &'static str> {
+            let bytes = content.as_bytes();
+            if files::size(&mut self.window, filename.as_bytes()).is_err() {
+                files::create(&mut self.window, filename.as_bytes()).map_err(|_| "Cannot create handoff file.")?;
+            }
+            files::write(&mut self.window, filename.as_bytes(), bytes).map_err(|_| "Cannot write handoff file.")?;
+            Ok(())
+        }
+
+        fn export_handoff(&mut self) {
+            let stem = self.name.rsplit_once('.').map_or(self.name.as_str(), |(s, _)| s);
+            let stem = String::from(stem.rsplit('/').next().unwrap_or(stem).trim_start_matches('@'));
+            let bundle = sex_splice::handoff::build_handoff_bundle(self.ed.timeline(), Some(&self.ed.transcript), &stem);
+            let write_all = (|| -> Result<(), &'static str> {
+                self.write_doc(&format!("{stem}.fcpxml"), &bundle.fcpxml)?;
+                self.write_doc(&format!("{stem}.otio"), &bundle.otio)?;
+                self.write_doc(&format!("{stem}.edl"), &bundle.edl)?;
+                if let Some(srt) = &bundle.srt {
+                    self.write_doc(&format!("{stem}.srt"), srt)?;
+                }
+                self.write_doc(&format!("{stem}-handoff.md"), &bundle.readme)?;
+                files::sync(&mut self.window).map_err(|_| "Cannot sync handoff bundle.")?;
+                Ok(())
+            })();
+            match write_all {
+                Ok(()) => {
+                    sex_pdx::serial_record!("[splicy.handoff] stem={}", stem);
+                    self.message = format!("Saved {stem} NLE handoff (.fcpxml, .otio, .edl, .srt, README)");
+                }
+                Err(why) => self.message = String::from(why),
+            }
         }
 
         fn export(&mut self) {
             let stem = self.name.rsplit_once('.').map_or(self.name.as_str(), |(s, _)| s);
-            let out_name = format!("{}-edit.webm", stem.trim_start_matches('@'));
+            // Into Splicy's own folder: a run may hold only the clip itself, not the folder it is in.
+            let stem = stem.rsplit('/').next().unwrap_or(stem).trim_start_matches('@');
+            let out_name = format!("{stem}-edit.webm");
             self.message = format!("Exporting {out_name}...");
             self.draw();
             let result = self.export_to(out_name.as_bytes());
@@ -437,6 +546,9 @@ mod program {
                 Ok(_) => files::write(&mut self.window, out, b"").map_err(|_| "Cannot replace the old export.")?,
                 Err(_) => files::create(&mut self.window, out).map_err(|_| "Cannot create the export file.")?,
             }
+            // The file's header is ready as soon as the encoder starts: write it before the
+            // first picture, which the encoder takes only with nothing left to write.
+            drain(&mut ex, &mut self.window, out)?;
             let wp: *mut Window = &mut self.window;
             let mut feed = if self.has_sound {
                 let dec = open_decoder(&self.path, self.len).ok();
@@ -498,6 +610,41 @@ mod program {
         }
     }
 
+    /// One pass over the clip for the timeline: a small picture every `every` ms and the
+    /// loudness of all of its sound.
+    fn scan(path: &[u8], len: u64, media: u32, width: u32, height: u32, duration_ms: u64) -> Library {
+        let mut lib = Library::default();
+        let Ok(mut dec) = open_decoder(path, len) else { return lib };
+        let th = 54usize;
+        let tw = if width > 0 && height > 0 { (th * width as usize / height as usize).clamp(16, 192) } else { 96 };
+        let every = (duration_ms as i64 / 240).max(500);
+        let mut pic = vec![0u32; tw * th];
+        let mut pcm = vec![[0i16; 2]; 8192];
+        let mut peaks = Peaks { per: 10_000, v: Vec::new() };
+        let mut next_thumb = 0i64;
+        let started = sex_pdx::get_ticks();
+        loop {
+            match dec.next(&mut pic, tw, th, &mut pcm) {
+                Ok(Next::Picture { at_ms }) if at_ms >= next_thumb => {
+                    lib.add_thumb(media, Thumb { at: at_ms.max(0) * 1000, w: tw, h: th, px: pic.clone() });
+                    next_thumb = at_ms + every;
+                }
+                Ok(Next::Sound { frames, at_ms }) => peaks.add(at_ms.max(0) * 1000, &pcm[..frames.min(pcm.len())], RATE),
+                Ok(Next::End) | Err(_) => break,
+                _ => {}
+            }
+        }
+        sex_pdx::serial_record!(
+            "[splicy.scan] thumbs={} peaks={} loudest={} ms={}",
+            lib.thumbs.get(&media).map_or(0, |t| t.len()),
+            peaks.v.len(),
+            peaks.v.iter().max().copied().unwrap_or(0),
+            sex_pdx::get_ticks() - started
+        );
+        lib.peaks.insert(media, peaks);
+        lib
+    }
+
     fn say(window: &mut Window, text: &str) {
         sex_pdx::serial_record!("[splicy.message] {}", text);
         window.show(text.as_bytes());
@@ -509,9 +656,13 @@ mod program {
         window.title(b"Splicy");
         let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
         let given = files::args(&mut window, &mut args).to_vec();
-        let path: Vec<u8> = given.split(|b| *b == b' ').find(|w| !w.is_empty()).unwrap_or(b"").to_vec();
+        let mut tokens = given.split(|b| *b == b' ').filter(|w| !w.is_empty());
+        let path: Vec<u8> = tokens.next().unwrap_or(b"").to_vec();
+        // A run holds only the files it was given, so the transcript may come as its own
+        // argument (`run splicy @talk.webm @talk.words`); otherwise it is looked for beside the clip.
+        let words_arg: Option<String> = tokens.next().map(|w| String::from_utf8_lossy(w).into_owned());
         if path.is_empty() {
-            say(&mut window, "Splicy edits a clip by editing its transcript.\n\nUsage: run splicy @talk.webm (with talk.words beside it)");
+            say(&mut window, "Splicy edits a clip by editing its transcript.\n\nUsage: run splicy @talk.webm @talk.words");
             loop {
                 if let Event::Close = window.next() {
                     window.close()
@@ -531,7 +682,7 @@ mod program {
             }
         };
         // The transcript beside the clip.
-        let words_path = words::beside(&name);
+        let words_path = words_arg.unwrap_or_else(|| words::beside(&name));
         let mut text = vec![0u8; 1 << 20];
         let transcript = match files::read(&mut window, words_path.as_bytes(), &mut text) {
             Ok(n) => match words::parse(&String::from_utf8_lossy(&text[..n])) {
@@ -544,7 +695,7 @@ mod program {
             Err(_) => sex_splice::transcript::Transcript { media: 0, words: Vec::new() },
         };
         drop(text);
-        let (grab, duration, fps, has_sound) = match open_decoder(&path, len) {
+        let (grab, duration, fps, has_sound, dims) = match open_decoder(&path, len) {
             Ok(dec) => {
                 let info = dec.info.clone();
                 let (w, h) = sex_media::fit(info.width.max(2) as usize, info.height.max(2) as usize, 640, 360);
@@ -555,22 +706,24 @@ mod program {
                     name, info.format, info.video_codec, info.audio_codec, info.width, info.height, fps.0, fps.1, info.duration_ms, transcript.words.len()
                 );
                 let g = if info.width > 0 {
-                    Some(Grabber { dec, w, h, picture: vec![0; w * h], at_ms: -1, frame_ms, pcm: vec![[0; 2]; 8192] })
+                    Some(Grabber { dec, w, h, picture: vec![0; w * h], at_ms: -1, frame_ms, pcm: vec![[0; 2]; 8192], cache: FrameCache::new(CacheConfig::low_memory()) })
                 } else {
                     None
                 };
-                (g, info.duration_ms as i64 * 1000, fps, info.sample_rate > 0)
+                (g, info.duration_ms as i64 * 1000, fps, info.sample_rate > 0, (info.width, info.height))
             }
             Err(e) => {
                 let mut buf = [0u8; 96];
                 sex_pdx::serial_record!("[splicy.open.failed] {}", e.text(&mut buf));
                 // Edit the transcript alone: the clip's length is where its last word ends.
                 let end = transcript.words.last().map_or(SECOND, |w| w.source.end + SECOND);
-                (None, end, (30, 1), true)
+                (None, end, (30, 1), true, (0, 0))
             }
         };
         let ed = Editor::open(&name, duration, fps, has_sound, transcript);
-        let mut app = App { window, path, len, name, ed, view: View::default(), grab, has_sound, playhead: 0, message: String::new() };
+        say(&mut window, "Reading the clip for the timeline...");
+        let lib = scan(&path, len, ed.transcript.media, dims.0, dims.1, (duration / 1000) as u64);
+        let mut app = App { window, path, len, name, ed, view: View::default(), grab, lib, has_sound, playhead: 0, message: String::new() };
         app.report();
         app.draw();
         loop {
@@ -581,12 +734,27 @@ mod program {
                 Event::Pointer(p) => match p.kind {
                     Kind::Down { button: 0 } => {
                         let (w, h) = app.window.size();
-                        if let Some(i) = app.view.word_at(&app.ed, w as i32, h as i32, p.x as i32, p.y as i32) {
+                        let (x, y) = (p.x as i32, p.y as i32);
+                        if let Some(i) = app.view.word_at(&app.ed, w as i32, h as i32, x, y) {
                             app.ed.place(i, false);
                             app.follow_caret();
+                        } else if let Some(t) = app.view.time_at(app.ed.timeline(), w as i32, h as i32, x, y) {
+                            // A click on the ruler or the tracks moves the playhead there,
+                            // and the transcript's caret to the word playing then.
+                            app.playhead = t;
+                            if let Some(i) = app.ed.word_at_time(t) {
+                                app.ed.place(i, false);
+                            }
                         }
                     }
-                    Kind::Wheel { steps } => app.view.scroll = (app.view.scroll - steps as i32 * 40).max(0),
+                    Kind::Wheel { steps } => {
+                        let (w, h) = app.window.size();
+                        if app.view.time_at(app.ed.timeline(), w as i32, h as i32, p.x as i32, p.y as i32).is_some() {
+                            app.view.zoom_by(app.ed.timeline(), w as i32, steps as i32, app.playhead);
+                        } else {
+                            app.view.scroll = (app.view.scroll - steps as i32 * 40).max(0);
+                        }
+                    }
                     _ => continue,
                 },
                 _ => continue,

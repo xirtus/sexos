@@ -10,7 +10,7 @@ ROOT=Path(__file__).resolve().parents[2]
 class WheelChecker(unittest.TestCase):
  @classmethod
  def setUpClass(cls):cls.contract=gate.load_wheel_contract(ROOT)
- def fixture(self,wheel=-1,target='body',before=0,post=True,reports=None,resolution=(1280,800)):
+ def fixture(self,wheel=-1,target='body',before=0,post=True,reports=None,resolution=(1280,800),point=None):
   w,h,x,y=(640,375,640,425)if resolution[0]==1280 else(512,359,512,409)
   tile=dict(w=w,h=h,x=x,y=y);model=reader_fixture.ReaderPixels();model.contract=self.contract;frame=gate.reader_frame(gate.READER_BODY,w,h,self.contract,before)
   if target in('pending','closed'):
@@ -19,10 +19,11 @@ class WheelChecker(unittest.TestCase):
   else:trace=model.trace(frame,gate.READER_BODY,w,h,x,y,position=True)
   px,py=x+w-24,y+64
   if target in('outside','closed'):px,py=resolution[0]-20,10
-  elif target=='title':px,py=x+w//2,y+14
+  elif target=='title':px,py=x+w//2,y+self.contract['title']//2
   elif target=='modal':
-   px,py=max(x+8,408)+10,max(y+36,236)+2
+   px,py=max(x+self.contract['inset'],400+self.contract['inset'])+10,max(y+self.contract['top'],200+self.contract['top'])+2
    trace+='[launcher.text.view] x=400 y=200 w=480 h=280 scale=2 selected=0 first=0 rows=1\n[launcher.text.row] index=0 row=0 name=Open Spindle status=READY\n'
+  if point is not None:px,py=point
   pointer=len(trace);rx=round(px*32767/(resolution[0]-1));ry=round(py*32767/(resolution[1]-1));sx=rx*(resolution[0]-1)//32767;sy=ry*(resolution[1]-1)//32767
   trace+=f'[shell.abs.normalize] raw_x={rx} raw_y={ry} sx={sx} sy={sy} accepted=1 reason=ok\n';start=len(trace);anchor=before
   for delta in reports or[wheel]:
@@ -38,6 +39,20 @@ class WheelChecker(unittest.TestCase):
   action=dict(name='test',wheel=wheel,target=target,before=before,after=anchor,x=px,y=py,pointer_start=pointer,serial_start=start,serial_qmp_return=start,serial_end=len(trace),host_start=1.,host_qmp_return=1.1,host_end=1.2,transport='input-send-event',events=gate.wheel_events(wheel))
   return trace,action
  def check(self,trace,action,resolution=(1280,800)):return gate.inspect_wheel_action(trace,action,gate.READER_BODY,self.contract,resolution)
+ def test_body_boundary_matches_shared_chrome_and_tiny_frames(self):
+  tile=dict(x=100,y=200,w=640,h=400)
+  self.assertEqual(gate.body_bounds(tile,self.contract),(108,234,732,592))
+  for width,height in [(0,0),(7,20),(16,34),(16,42)]:
+   left,top,right,bottom=gate.body_bounds(dict(x=100,y=200,w=width,h=height),self.contract)
+   self.assertEqual(right,left);self.assertEqual(bottom,top)
+ def test_first_two_body_pixels_are_not_old_chrome_and_title_gap_is_not_title(self):
+  # Keep complete real QMP/report/route/reader receipts while putting the
+  # normalized pointer in the two pixels the obsolete top=36 lost.
+  trace,action=self.fixture(point=(960,460));self.assertTrue(self.check(trace,action)['ok'])
+  normalized_y=round(action['y']*32767/799)*799//32767
+  self.assertIn(normalized_y,(425+34,425+35))
+  trace,action=self.fixture(target='title',point=(960,453))
+  with self.assertRaisesRegex(ValueError,'frame chrome'):self.check(trace,action)
  def mutate(self,trace,action,old,new):
   prefix=trace[:action['serial_start']];segment=trace[action['serial_start']:];self.assertIn(old,segment);changed=prefix+segment.replace(old,new);row=dict(action,serial_end=len(changed));return changed,row
  def test_source_binds_actual_usb_input_shell_reader_and_exact_task_abi(self):

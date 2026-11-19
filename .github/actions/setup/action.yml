@@ -19,11 +19,23 @@ inputs:
 runs:
   using: composite
   steps:
+  - name: Rebuild by file contents, not modification times
+    shell: bash
+    # A fresh checkout gives every file a new mtime, so the restored cargo cache
+    # used to rebuild every workspace crate anyway (~25 minutes per image build).
+    # With checksums only crates whose sources really changed rebuild. Set before
+    # the cargo cache step: the variable is part of its key, so every workflow
+    # using this action shares one cache.
+    run: echo "CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true" >> "$GITHUB_ENV"
   - name: Install build tools
     shell: bash
     run: |
       # Skip man-page index rebuilds, the slowest part of apt on the runners.
       sudo rm -f /var/lib/man-db/auto-update
+      # A stalled mirror connection otherwise hangs apt for 20+ minutes (Host regressions
+      # timed out twice on PR #433 inside `apt-get install ffmpeg`). Every later apt call
+      # in the job reads this too: give up on a dead connection fast and retry.
+      printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "5";\n' | sudo tee /etc/apt/apt.conf.d/99sexos-ci-net >/dev/null
       pkgs="ripgrep clang lld llvm wabt nasm musl-dev cmake ninja-build meson acpica-tools mtools gdisk dosfstools"
       if [[ "${{ inputs.qemu }}" == true ]]; then pkgs="$pkgs xorriso qemu-system-x86"; fi
       sudo apt-get update -qq
@@ -56,15 +68,18 @@ runs:
         target/ffmpeg/include
         target/ffmpeg/include-c
         target/ffmpeg/sexos-recording-v1
-      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh', 'scripts/build_libvpx.sh', 'scripts/build_libaom.sh', 'scripts/build_x264.sh') }}
+        target/ffmpeg/sexos-audio-export-v1
+        target/ffmpeg/share/licenses
+        target/ffmpeg/source-pin
+      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh', 'scripts/build_shine.sh', 'scripts/build_libvpx.sh', 'scripts/build_libaom.sh', 'scripts/build_x264.sh') }}
   - name: Build FFmpeg for programs
     if: inputs.media == 'true'
     shell: bash
     run: |
       profile=0
-      # The recording profile is also Splicy's export profile (VP9, Opus, AAC; WebM, MP4).
+      # The recording profile also enables Splicy's VP9/Opus/AAC export.
       if [[ "${{ inputs.recording }}" == true ]]; then profile=2; fi
-      if [[ ! -f target/ffmpeg/lib/libavcodec.a ]] || [[ "$(cat target/ffmpeg/sexos-recording-v1 2>/dev/null)" != "$profile" ]]; then
+      if [[ ! -f target/ffmpeg/lib/libavcodec.a ]] || [[ ! -f target/ffmpeg/lib/libshine.a ]] || [[ "$(cat target/ffmpeg/sexos-audio-export-v1 2>/dev/null)" != 1 ]] || [[ "$(cat target/ffmpeg/sexos-recording-v1 2>/dev/null)" != "$profile" ]]; then
         FFMPEG_RECORDING=$profile bash scripts/build_ffmpeg.sh
       fi
   - name: Cache libc++
@@ -88,4 +103,6 @@ runs:
       git -C limine remote add origin https://github.com/limine-bootloader/limine.git
       git -C limine fetch -q --depth=1 origin ca3a5b20d2501e3819983c5cf838c70c30ee532a
       git -C limine checkout -q --detach FETCH_HEAD
+      # Limine 7.13.3's BIOS countdown can hang before the kernel (see the script).
+      python3 scripts/patch_limine_bios.py limine
       make -C limine limine

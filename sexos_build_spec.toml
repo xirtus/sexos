@@ -49,6 +49,8 @@ crates = [
   "apps/fortune/Cargo.toml",
   "apps/hum/Cargo.toml",
   "apps/moan-probe/Cargo.toml",
+  "apps/moan/Cargo.toml",
+  "apps/moanplug/Cargo.toml",
   "apps/jot/Cargo.toml",
   "apps/term/Cargo.toml",
   "apps/quil/Cargo.toml",
@@ -62,6 +64,7 @@ crates = [
   "apps/wasm/Cargo.toml",
   "apps/monitor/Cargo.toml",
   "apps/fputest/Cargo.toml",
+  "apps/avxtest/Cargo.toml",
   "apps/fuzz/Cargo.toml",
   "apps/jit/Cargo.toml",
   "apps/threads/Cargo.toml",
@@ -69,6 +72,11 @@ crates = [
   "apps/play/Cargo.toml",
   "apps/cpp/Cargo.toml",
   "apps/stdhello/Cargo.toml",
+  "apps/tassel/Cargo.toml",
+  "apps/abacus/Cargo.toml",
+  "apps/velvet/Cargo.toml",
+  "apps/leather-samples/Cargo.toml",
+  "apps/chastity-probe/Cargo.toml",
   "apps/stdspawn/Cargo.toml",
   "apps/stdnet/Cargo.toml",
   "apps/ssh/Cargo.toml",
@@ -76,24 +84,28 @@ crates = [
   "apps/needle/Cargo.toml",
   "apps/chello/Cargo.toml",
   "apps/pdf/Cargo.toml",
-  "apps/sex-calc/Cargo.toml",
   "apps/calendar/Cargo.toml",
   "apps/spreadeagle/Cargo.toml",
+  "apps/polyamour/Cargo.toml",
   "apps/assuit/Cargo.toml",
   "apps/gestalt/Cargo.toml",
   "apps/settings/Cargo.toml",
   "apps/aftercare/Cargo.toml",
   "apps/crush/Cargo.toml",
   "apps/lua/Cargo.toml",
+  "apps/whisper-voice/Cargo.toml",
   "apps/rg/Cargo.toml",
   "apps/fd/Cargo.toml",
   "apps/bat/Cargo.toml",
+  "apps/chastity/Cargo.toml",
   "apps/python/Cargo.toml",
   "apps/store/Cargo.toml",
   "apps/sdltest/Cargo.toml",
   "apps/driftspark/Cargo.toml",
   "servers/cufflinks/Cargo.toml",
   "apps/dragtest/Cargo.toml",
+  "apps/drag/Cargo.toml",
+  "apps/crossdress/Cargo.toml",
   "apps/lurk/Cargo.toml",
   "apps/bodice/Cargo.toml",
   "apps/gossip/Cargo.toml",
@@ -103,7 +115,8 @@ crates = [
   "apps/flash/Cargo.toml",
   "apps/climax/Cargo.toml",
   "apps/batik/Cargo.toml",
-  "apps/burlesque/Cargo.toml"
+  "apps/burlesque/Cargo.toml",
+  "apps/corset/Cargo.toml"
 ]
 
 [[stage]]
@@ -217,6 +230,16 @@ source_artifact = "target/x86_64-sex/release/sexacpi"
 dest_artifact = "iso_root/servers/sexacpi"
 rustflags = ""
 
+# Build and scanner-qualify the offline helper BEFORE Files binds its image SHA.
+# moanrack remains a qualification harness and is not installed in this image.
+[[stage]]
+id = "build_moanplug"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/moanplug/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/moanplug"
+dest_artifact = "iso_root/programs/moanplug"
+
 [[stage]]
 id = "build_denim"
 action = "cargo_manifest"
@@ -228,6 +251,7 @@ rustflags = ""
 [[stage]]
 id = "build_sexfiles"
 action = "cargo_manifest"
+consumed_inputs = ["iso_root/programs/moanplug"]
 manifest = "servers/sexfiles/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexfiles"
 dest_artifact = "iso_root/servers/sexfiles"
@@ -287,7 +311,7 @@ action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/term/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/term"
-dest_artifact = "iso_root/programs/term"
+dest_artifact = "iso_root/programs/spindle"
 
 [[stage]]
 id = "build_quil_editor"
@@ -329,6 +353,7 @@ manifest = "apps/talk/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/talk"
 dest_artifact = "iso_root/programs/flirt"
 
+# Gaze (View): an ordinary std program, as JPEG XL and SVG need the standard library.
 [[stage]]
 id = "build_view"
 action = "cargo_manifest"
@@ -384,6 +409,14 @@ target = "x86_64-sex-app.json"
 manifest = "apps/fputest/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/fputest"
 dest_artifact = "iso_root/programs/fputest"
+
+[[stage]]
+id = "build_avxtest"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/avxtest/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/avxtest"
+dest_artifact = "iso_root/programs/avxtest"
 
 [[stage]]
 id = "build_fuzz"
@@ -458,7 +491,75 @@ manifest = "apps/stdnet/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/stdnet"
 dest_artifact = "iso_root/programs/stdnet"
 
-# SSH client: log in to other machines (keys, known hosts, exec and shell).
+# egui's own demo app, unmodified, on the egui backend (crates/sex-egui).
+[[stage]]
+id = "build_tassel"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/tassel/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/tassel"
+dest_artifact = "iso_root/programs/tassel"
+
+# Velvet: original small games on the shared Weft widgets.
+[[stage]]
+id = "build_velvet"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/velvet/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/velvet"
+dest_artifact = "iso_root/programs/velvet"
+
+# Abacus, the calculator: the first program on the Weft toolkit (crates/weft).
+
+[[stage]]
+id = "build_leather_hello"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/leather-samples/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/leather-hello"
+dest_artifact = "iso_root/programs/leather-hello"
+
+[[stage]]
+id = "build_leather_stitch"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/leather-samples/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/leather-stitch"
+dest_artifact = "iso_root/programs/leather-stitch"
+
+[[stage]]
+id = "build_leather_lantern"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/leather-samples/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/leather-lantern"
+dest_artifact = "iso_root/programs/leather-lantern"
+
+[[stage]]
+id = "build_leather_postcard"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/leather-samples/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/leather-postcard"
+dest_artifact = "iso_root/programs/leather-postcard"
+
+[[stage]]
+id = "build_abacus"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/abacus/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/abacus"
+dest_artifact = "iso_root/programs/abacus"
+
+[[stage]]
+id = "build_chastity_probe"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/chastity-probe/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/chastity-probe"
+dest_artifact = "iso_root/programs/chastity-probe"
+
 [[stage]]
 id = "build_ssh"
 action = "cargo_manifest"
@@ -508,6 +609,17 @@ manifest = "apps/lua/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/lua"
 dest_artifact = "iso_root/programs/lua"
 
+# Whisper's voice: eSpeak NG 1.52.0 (vendor/espeak-ng-1.52.0, GPL-3.0-or-later) with its
+# English data compiled in (crates/sex-speech), on sex-libc; speaks what Shell sends.
+[[stage]]
+id = "build_whisper_voice"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/whisper-voice/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/whisper-voice"
+dest_artifact = "iso_root/programs/whisper-voice"
+
 # ripgrep 15.2.0 (vendor/ripgrep-15.2.0) and fd 10.5.2 (vendor/fd-10.5.2), upstream
 # source on the published crates (grep, ignore, globset, regex, clap, ...).
 [[stage]]
@@ -538,6 +650,17 @@ build_std = "std,panic_abort"
 manifest = "apps/bat/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/bat"
 dest_artifact = "iso_root/programs/bat"
+
+# Chastity, the password vault: KDBX4 vaults (keepass-rs, pure Rust) in its folder.
+[[stage]]
+id = "build_chastity"
+rustflags = '--cfg getrandom_backend="custom" --cfg aes_force_soft --cfg chacha20_force_soft'
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/chastity/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/chastity"
+dest_artifact = "iso_root/programs/chastity"
 
 # Python 3.13: CPython (vendor/cpython-3.13.18) on sex-libc, its stdlib frozen in.
 [[stage]]
@@ -578,6 +701,24 @@ manifest = "apps/dragtest/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/dragtest"
 dest_artifact = "iso_root/programs/dragtest"
 
+# Drag (D2): the VM program, Linux boot protocol, 16550 console, virtio-blk (drag-vmm).
+[[stage]]
+id = "build_drag"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/drag/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/drag"
+dest_artifact = "iso_root/programs/drag"
+
+# Crossdress (CW1): 64-bit Windows programs in a Drag cell (sex-crossdress).
+[[stage]]
+id = "build_crossdress"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/crossdress/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/crossdress"
+dest_artifact = "iso_root/programs/crossdress"
+
 # Bodice: e-books (EPUB, FictionBook, comics), on sex-app with sex-ebook.
 [[stage]]
 id = "build_bodice"
@@ -604,7 +745,7 @@ target = "x86_64-sex-std.json"
 build_std = "std,panic_abort"
 manifest = "apps/pdf/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/pdf"
-dest_artifact = "iso_root/programs/pdf"
+dest_artifact = "iso_root/programs/vellum"
 
 # Aftercare: encrypted, deduplicated backups (crates/aftercare-core) of a granted folder.
 [[stage]]
@@ -615,6 +756,15 @@ build_std = "std,panic_abort"
 manifest = "apps/aftercare/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/aftercare"
 dest_artifact = "iso_root/programs/aftercare"
+
+# Corset: disks and partitions (crates/corset-core) on removable disks Files hands it.
+[[stage]]
+id = "build_corset"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/corset/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/corset"
+dest_artifact = "iso_root/programs/corset"
 
 # Hookup: the phone link (KDE Connect protocol, crates/sex-kdeconnect) over std::net.
 [[stage]]
@@ -636,6 +786,17 @@ manifest = "apps/rendezvous/Cargo.toml"
 source_artifact = "target/x86_64-sex-std/release/rendezvous"
 dest_artifact = "iso_root/programs/rendezvous"
 
+# Polyamour: the 3D suite, Blender's workspace over sex-3d (meshes, path tracer, files).
+[[stage]]
+id = "build_polyamour"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/polyamour/Cargo.toml"
+profile = "lean-fast"
+source_artifact = "target/x86_64-sex-std/lean-fast/polyamour"
+dest_artifact = "iso_root/programs/polyamour"
+
 # Spreadeagle: the spreadsheet, GridCraft's engine (formulas, xlsx) under a native grid.
 [[stage]]
 id = "build_spreadeagle"
@@ -643,7 +804,8 @@ action = "cargo_manifest"
 target = "x86_64-sex-std.json"
 build_std = "std,panic_abort"
 manifest = "apps/spreadeagle/Cargo.toml"
-source_artifact = "target/x86_64-sex-std/release/spreadeagle"
+profile = "lean"
+source_artifact = "target/x86_64-sex-std/lean/spreadeagle"
 dest_artifact = "iso_root/programs/spreadeagle"
 
 # Assuit: the word processor, WordCraft's engine (docx, Word layout, undo) drawing its pages.
@@ -653,7 +815,8 @@ action = "cargo_manifest"
 target = "x86_64-sex-std.json"
 build_std = "std,panic_abort"
 manifest = "apps/assuit/Cargo.toml"
-source_artifact = "target/x86_64-sex-std/release/assuit"
+profile = "lean"
+source_artifact = "target/x86_64-sex-std/lean/assuit"
 dest_artifact = "iso_root/programs/assuit"
 
 # Gestalt: the vector editor, VectorCraft's engine (paths, Pathfinder, SVG/PDF/.ai) under a
@@ -709,6 +872,14 @@ dst = "iso_root/programs/pinball"
 
 # Moan engine guest proof; UI follows the shared Weft toolkit.
 [[stage]]
+id = "build_moan"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/moan/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/moan"
+dest_artifact = "iso_root/programs/moan"
+
+[[stage]]
 id = "build_moan_probe"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
@@ -757,6 +928,15 @@ manifest = "apps/hum/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/doze"
 dest_artifact = "iso_root/programs/doze"
 
+# Swatch: one memory sample (kernel heap, free frames, program rows) for leak gates.
+[[stage]]
+id = "build_swatch"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/hum/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/swatch"
+dest_artifact = "iso_root/programs/swatch"
+
 # Lurk: the remote desktop viewer (VNC/RFB client), `run +net lurk HOST:PORT`.
 [[stage]]
 id = "build_lurk"
@@ -802,20 +982,13 @@ source_artifact = "target/x86_64-sex-app/release/flash"
 dest_artifact = "iso_root/programs/flash"
 
 [[stage]]
-id = "build_sex_calc"
-action = "cargo_manifest"
-target = "x86_64-sex-app.json"
-manifest = "apps/sex-calc/Cargo.toml"
-source_artifact = "target/x86_64-sex-app/release/sex-calc"
-dest_artifact = "iso_root/programs/sex-calc"
-
-[[stage]]
 id = "build_calendar"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/calendar/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/calendar"
-dest_artifact = "iso_root/programs/calendar"
+dest_artifact = "iso_root/programs/date"
+
 # Climax: benchmark and thermal torture suite window.
 [[stage]]
 id = "build_climax"

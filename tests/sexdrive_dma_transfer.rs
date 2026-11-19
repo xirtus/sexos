@@ -154,6 +154,7 @@ mod driver_read {
     const PAGE_SIZE: u64 = 4096;
     const BLOCK_MAX_XFER: u64 = 4096;
     const BLOCK_MAX_RUN: u64 = 128 * 1024;
+    const BLOCK_CMD_RUN: u64 = BLOCK_MAX_RUN;
     const BLOCK_ERR_BAD_LEN: u64 = 2;
     const BLOCK_ERR_NO_DEVICE: u64 = 4;
     const NVME_LBA_BYTES: u64 = 512;
@@ -300,6 +301,33 @@ mod driver_read {
         }
         assert_eq!(nvme_write_one_block(0,512,source.as_ptr()as u64),0);assert_eq!(db,[0,0]);
         unsafe{assert_eq!((NVME_IO_STATE.sq_tail,NVME_IO_STATE.cq_head,NVME_IO_STATE.cq_phase,NVME_IO_STATE.next_cid),(0,0,0,43));assert!(!WRITE_LEASE.as_ref().unwrap().is_quarantined());WRITE_LEASE=None;NVME_IO_STATE.ready=false;}
+    }
+    #[test]fn queued_read_keeps_two_commands_in_flight_and_accepts_completions_in_either_order(){
+        let _lock=LOCK.lock().unwrap();
+        NVME_IRQ.store(false,Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);unsafe{LENS=Lens::Whole;CLOCK_MODE=0;DELAY=0;WAITS=0;}
+        let run=BLOCK_CMD_RUN as usize;
+        let mut sq=[0u64;128];let mut cq=[0u32;64];let mut db=[0u32;2];
+        let mut a=vec![0x1111_1111_1111_1111u64;(run+4096)/8];let mut b=vec![0x2222_2222_2222_2222u64;(run+4096)/8];
+        let mut dest=vec![0u8;run+8192];
+        // The device finished the second command first.
+        cq[3]=43|(1<<16);cq[4+3]=42|(1<<16);
+        unsafe{
+            NOW=10;CQ_PTR=cq.as_mut_ptr();DOORBELLS=db.as_ptr();DEST_PTR=core::ptr::null();DEST_LEN=0;
+            READ_LEASE=Some(DmaLease::new(dma_pool::DmaBuffer{virtual_address:a.as_mut_ptr()as u64,physical_address:0x200000,length:BLOCK_CMD_RUN+PAGE_SIZE}));
+            WRITE_LEASE=Some(DmaLease::new(dma_pool::DmaBuffer{virtual_address:b.as_mut_ptr()as u64,physical_address:0x400000,length:BLOCK_CMD_RUN+PAGE_SIZE}));
+            NVME_IO_STATE=NvmeState{sectors:0,ready:true,map_va:db.as_mut_ptr()as u64,io_sq_va:sq.as_mut_ptr()as u64,io_cq_va:cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:0,cq_head:0,cq_phase:1,next_cid:42};
+        }
+        assert_eq!(nvme_read_queued(0,(run+8192)as u64,dest.as_mut_ptr()as u64,0),0);
+        assert!(dest[..run].iter().all(|&x|x==0x11));assert!(dest[run..].iter().all(|&x|x==0x22));
+        assert_eq!(db,[2,2],"one doorbell for both SQEs; the CQ head moved past both");
+        let dw=|e:usize,i:usize|unsafe{*((sq.as_ptr() as *const u32).add(e*16+i))} as u64;
+        assert_eq!((dw(0,0)>>16,dw(0,6)|dw(0,7)<<32,dw(0,10),dw(0,12)),(42,0x200000,0,(run/512-1)as u64));
+        assert_eq!((dw(1,0)>>16,dw(1,6)|dw(1,7)<<32,dw(1,10),dw(1,12)),(43,0x400000,(run/512)as u64,15));
+        unsafe{
+            assert_eq!((NVME_IO_STATE.sq_tail,NVME_IO_STATE.cq_head,NVME_IO_STATE.next_cid,NVME_IO_STATE.ready),(2,2,44,true));
+            assert!(READ_LEASE.as_mut().unwrap().prepare(99).is_ok()&&WRITE_LEASE.as_mut().unwrap().prepare(99).is_ok(),"both leases are free again");
+            READ_LEASE=None;WRITE_LEASE=None;CQ_PTR=core::ptr::null_mut();DOORBELLS=core::ptr::null();NVME_IO_STATE.ready=false;
+        }
     }
     #[test]fn actual_flush_waits_for_exact_completion_and_fences_on_timeout_without_replay(){
         let _lock=LOCK.lock().unwrap();

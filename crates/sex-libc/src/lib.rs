@@ -127,6 +127,20 @@ static mut EMPTY_ENV: [*mut c_char; 1] = [core::ptr::null_mut()];
 #[allow(non_upper_case_globals)]
 pub static mut environ: *mut *mut c_char = core::ptr::addr_of_mut!(EMPTY_ENV) as *mut *mut c_char;
 
+/// The environment becomes `entries` (`KEY=VALUE` each ended by a NUL), as the program
+/// that started this run handed it over (`posix::run`).
+#[cfg(target_os = "hermit")]
+pub(crate) unsafe fn env_seed(entries: &[u8]) {
+    let env = unsafe { &mut *core::ptr::addr_of_mut!(ENV) };
+    env.clear();
+    for entry in entries.split(|b| *b == 0).filter(|e| e.len() > 1 && e[1..].contains(&b'=')) {
+        let mut owned = entry.to_vec();
+        owned.push(0);
+        if !env.iter().any(|e| env_key(e) == env_key(&owned[..owned.len() - 1])) { env.push(owned); }
+    }
+    unsafe { env_rebuild() };
+}
+
 fn env_key(entry: &[u8]) -> &[u8] { &entry[..entry.iter().position(|&b| b == b'=').unwrap_or(entry.len())] }
 unsafe fn env_rebuild() {
     unsafe {

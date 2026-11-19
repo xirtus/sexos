@@ -379,6 +379,77 @@ impl Cfg {
 }
 
 fn define(c: &Cfg) -> Dna {
+    define_ext(c, false)
+}
+
+/// The physics structs (rigid bodies, fields, cloth, particles, fluid),
+/// with Blender's member names; only what the importer reads, plus pads.
+fn define_physics(d: &mut Dna) {
+    d.def("PointCache", &[("PointCache", "*next"), ("PointCache", "*prev"), ("int", "flag"), ("int", "step"), ("int", "simframe"), ("int", "startframe"), ("int", "endframe"), ("int", "editframe"), ("int", "last_exact"), ("int", "last_valid"), ("char", "_pad[4]")]);
+    d.def("EffectorWeights", &[("Collection", "*group"), ("float", "weight[14]"), ("float", "global_gravity"), ("short", "flag"), ("char", "_pad[2]")]);
+    d.def("RigidBodyWorld_Shared", &[("PointCache", "*pointcache"), ("ListBase", "ptcaches"), ("void", "*physics_world")]);
+    d.def(
+        "RigidBodyWorld",
+        &[("EffectorWeights", "*effector_weights"), ("Collection", "*group"), ("Object", "**objects"), ("Collection", "*constraints"), ("int", "_pad"), ("float", "ltime"), ("RigidBodyWorld_Shared", "*shared"), ("PointCache", "*pointcache"), ("int", "numbodies"), ("short", "substeps_per_frame"), ("short", "num_solver_iterations"), ("int", "flag"), ("float", "time_scale")],
+    );
+    d.def(
+        "RigidBodyOb",
+        &[("void", "*shared"), ("short", "type"), ("short", "shape"), ("int", "flag"), ("int", "col_groups"), ("short", "mesh_source"), ("char", "_pad[2]"), ("float", "mass"), ("float", "friction"), ("float", "restitution"), ("float", "margin"), ("float", "lin_damping"), ("float", "ang_damping"), ("float", "lin_sleep_thresh"), ("float", "ang_sleep_thresh"), ("float", "orn[4]"), ("float", "pos[3]"), ("char", "_pad1[4]")],
+    );
+    let mut con: Vec<(&str, &str)> = vec![("Object", "*ob1"), ("Object", "*ob2"), ("short", "type"), ("short", "num_solver_iterations"), ("int", "flag"), ("float", "breaking_threshold"), ("char", "spring_type"), ("char", "_pad[3]")];
+    for n in [
+        "limit_lin_x_lower", "limit_lin_x_upper", "limit_lin_y_lower", "limit_lin_y_upper", "limit_lin_z_lower", "limit_lin_z_upper",
+        "limit_ang_x_lower", "limit_ang_x_upper", "limit_ang_y_lower", "limit_ang_y_upper", "limit_ang_z_lower", "limit_ang_z_upper",
+        "spring_stiffness_x", "spring_stiffness_y", "spring_stiffness_z", "spring_stiffness_ang_x", "spring_stiffness_ang_y", "spring_stiffness_ang_z",
+        "spring_damping_x", "spring_damping_y", "spring_damping_z", "spring_damping_ang_x", "spring_damping_ang_y", "spring_damping_ang_z",
+        "motor_lin_target_velocity", "motor_ang_target_velocity", "motor_lin_max_impulse", "motor_ang_max_impulse",
+    ] {
+        con.push(("float", n));
+    }
+    con.push(("void", "*physics_constraint"));
+    d.def("RigidBodyCon", &con);
+    let mut pd: Vec<(&str, &str)> = vec![("int", "flag"), ("short", "deflect"), ("short", "forcefield"), ("short", "falloff"), ("short", "shape"), ("short", "tex_mode"), ("short", "kink"), ("short", "kink_axis"), ("short", "zdir")];
+    for n in ["f_strength", "f_damp", "f_flow", "f_wind_factor"] {
+        pd.push(("float", n));
+    }
+    pd.push(("char", "_pad0[4]"));
+    for n in ["f_size", "f_power", "maxdist", "mindist", "f_power_r", "maxrad", "minrad", "pdef_damp", "pdef_rdamp", "pdef_perm", "pdef_frict", "pdef_rfrict", "pdef_stickness", "absorption", "pdef_sbdamp", "pdef_sbift", "pdef_sboft", "pdef_cfrict", "f_noise"] {
+        pd.push(("float", n));
+    }
+    pd.push(("int", "seed"));
+    d.def("PartDeflect", &pd);
+    d.def(
+        "ClothSimSettings",
+        &[
+            ("float", "mingoal"), ("float", "Cvi"), ("float", "mass"), ("float", "structural"), ("float", "shear"), ("float", "bending"), ("float", "max_sewing"),
+            ("float", "time_scale"), ("float", "goalspring"), ("float", "shrink_min"), ("float", "uniform_pressure_force"), ("float", "bending_damping"),
+            ("int", "stepsPerFrame"), ("int", "flags"), ("short", "vgroup_mass"), ("short", "vgroup_shrink"), ("short", "bending_model"), ("char", "_pad[2]"),
+            ("EffectorWeights", "*effector_weights"), ("float", "tension"), ("float", "compression"), ("float", "tension_damp"), ("float", "compression_damp"), ("float", "shear_damp"),
+        ],
+    );
+    d.def("ClothCollSettings", &[("void", "*collision_list"), ("float", "epsilon"), ("float", "self_friction"), ("float", "friction"), ("float", "damping"), ("float", "selfepsilon"), ("int", "flags"), ("short", "self_loop_count"), ("short", "loop_count"), ("Collection", "*group"), ("float", "clamp"), ("float", "self_clamp")]);
+    let md = ("ModifierData", "modifier");
+    d.def("ClothModifierData", &[md, ("Cloth", "*clothObject"), ("ClothSimSettings", "*sim_parms"), ("ClothCollSettings", "*coll_parms"), ("PointCache", "*point_cache"), ("ListBase", "ptcaches")]);
+    d.def("CollisionModifierData", &[md, ("void", "*x"), ("int", "mvert_num"), ("int", "tri_num")]);
+    d.def(
+        "ParticleSettings",
+        &[
+            ("ID", "id"), ("short", "type"), ("short", "from"), ("short", "distr"), ("short", "phystype"), ("short", "ren_as"), ("short", "draw_as"), ("short", "childtype"), ("short", "integrator"),
+            ("int", "totpart"), ("int", "child_nbr"), ("int", "ren_child_nbr"), ("short", "hair_step"), ("short", "omat"),
+            ("float", "sta"), ("float", "end"), ("float", "lifetime"), ("float", "randlife"), ("float", "normfac"), ("float", "tanfac"), ("float", "obfac"), ("float", "randfac"),
+            ("float", "mass"), ("float", "size"), ("float", "randsize"), ("float", "ob_vel[3]"), ("float", "childrad"), ("float", "clumpfac"), ("float", "rad_root"), ("float", "rad_tip"), ("float", "rad_scale"),
+            ("Object", "*instance_object"), ("Collection", "*instance_collection"), ("EffectorWeights", "*effector_weights"),
+        ],
+    );
+    d.def("ParticleSystem", &[("ParticleSystem", "*next"), ("ParticleSystem", "*prev"), ("ParticleSettings", "*part"), ("char", "name[64]"), ("int", "seed"), ("int", "child_seed"), ("PointCache", "*pointcache")]);
+    d.def("ParticleSystemModifierData", &[md, ("ParticleSystem", "*psys")]);
+    d.def("FluidDomainSettings", &[("int", "maxres"), ("int", "type"), ("float", "alpha"), ("float", "beta"), ("float", "vorticity"), ("int", "cache_frame_start"), ("int", "cache_frame_end"), ("char", "_pad[4]")]);
+    d.def("FluidFlowSettings", &[("short", "type"), ("short", "behavior"), ("float", "density"), ("float", "color[3]"), ("float", "fuel_amount"), ("float", "temperature")]);
+    d.def("FluidModifierData", &[md, ("FluidDomainSettings", "*domain"), ("FluidFlowSettings", "*flow"), ("FluidEffectorSettings", "*effector"), ("float", "time"), ("int", "type")]);
+    d.def("PhysicsSettings", &[("float", "gravity[3]"), ("int", "flag")]);
+}
+
+fn define_ext(c: &Cfg, physics: bool) -> Dna {
     let mut d = Dna::new(c.ptr);
     let id_name = if c.layout == Layout::Attr50 { "name[258]" } else { "name[66]" };
     d.def("Link", &[("Link", "*next"), ("Link", "*prev")]);
@@ -406,6 +477,10 @@ fn define(c: &Cfg) -> Dna {
     mesh.extend([("CustomData", vd), ("CustomData", ed), ("CustomData", if c.new_names() { "fdata_legacy" } else { "fdata" }), ("CustomData", pd), ("CustomData", ld)]);
     mesh.extend([("int", tv), ("int", te), ("int", if c.new_names() { "totface_legacy" } else { "totface" }), ("int", "totselect"), ("int", tp), ("int", tl), ("short", "totcol"), ("char", "_pad2[6]")]);
     d.def("Mesh", &mesh);
+    if physics {
+        d.def("ModifierData", &[("ModifierData", "*next"), ("ModifierData", "*prev"), ("int", "type"), ("int", "mode"), ("float", "execution_time"), ("short", "flag"), ("short", "ui_expand_flag"), ("char", "name[64]"), ("char", "*error"), ("char", "_pad[8]")]);
+        define_physics(&mut d);
+    }
 
     let mut ob: Vec<(&str, &str)> = vec![("ID", "id"), ("AnimData", "*adt"), ("SculptSession", "*sculpt"), ("short", "type"), ("short", "partype"), ("int", "par1"), ("int", "par2"), ("int", "par3"), ("char", "parsubstr[64]"), ("Object", "*parent"), ("Object", "*track"), ("void", "*data"), ("Material", "**mat"), ("char", "*matbits"), ("int", "totcol"), ("int", "actcol")];
     ob.extend([("float", "loc[3]"), ("float", "dloc[3]")]);
@@ -420,14 +495,150 @@ fn define(c: &Cfg) -> Dna {
         Layout::Legacy27 | Layout::Legacy30 | Layout::Attr36 => ob.push(("float", "obmat[4][4]")),
         _ => {}
     }
-    ob.extend([("float", "parentinv[4][4]"), ("float", "constinv[4][4]"), ("short", "rotmode"), ("char", "_pad3[6]")]);
+    ob.extend([("float", "parentinv[4][4]"), ("float", "constinv[4][4]"), ("short", "rotmode"), ("char", "_pad3[6]"), ("ListBase", "modifiers")]);
+    match c.layout {
+        // 2.8x keeps the "disable in viewports" bit in `restrictflag`.
+        Layout::Legacy27 | Layout::Legacy30 => ob.extend([("short", "restrictflag"), ("char", "_pad4[6]")]),
+        _ => ob.extend([("char", "visibility_flag"), ("char", "_pad4[7]")]),
+    }
+    if physics {
+        ob.extend([("RigidBodyOb", "*rigidbody_object"), ("RigidBodyCon", "*rigidbody_constraint"), ("PartDeflect", "*pd"), ("SoftBody", "*soft"), ("short", "softflag"), ("char", "_pad5[6]")]);
+    }
     d.def("Object", &ob);
+
+    // Modifiers: every concrete struct starts with `ModifierData modifier`.
+    if !physics {
+        d.def("ModifierData", &[("ModifierData", "*next"), ("ModifierData", "*prev"), ("int", "type"), ("int", "mode"), ("float", "execution_time"), ("short", "flag"), ("short", "ui_expand_flag"), ("char", "name[64]"), ("char", "*error"), ("char", "_pad[8]")]);
+    }
+    let md = ("ModifierData", "modifier");
+    d.def("MirrorModifierData", &[md, ("short", "axis"), ("short", "flag"), ("float", "tolerance"), ("float", "bisect_threshold"), ("char", "use_correct_order_on_merge"), ("char", "_pad[3]"), ("float", "uv_offset[2]"), ("float", "uv_offset_copy[2]"), ("Object", "*mirror_ob")]);
+    d.def("SubsurfModifierData", &[md, ("short", "subdivType"), ("short", "levels"), ("short", "renderLevels"), ("short", "flags"), ("short", "uv_smooth"), ("short", "quality"), ("short", "boundary_smooth"), ("char", "_pad[2]"), ("void", "*emCache"), ("void", "*mCache")]);
+    d.def(
+        "ArrayModifierData",
+        &[md, ("Object", "*start_cap"), ("Object", "*end_cap"), ("Object", "*curve_ob"), ("Object", "*offset_ob"), ("float", "offset[3]"), ("float", "scale[3]"), ("float", "length"), ("float", "merge_dist"), ("int", "fit_type"), ("int", "offset_type"), ("int", "flags"), ("int", "count"), ("float", "uv_offset[2]")],
+    );
+    d.def("SolidifyModifierData", &[md, ("char", "defgrp_name[64]"), ("char", "shell_defgrp_name[64]"), ("char", "rim_defgrp_name[64]"), ("float", "offset"), ("float", "offset_fac"), ("float", "offset_fac_vg"), ("float", "offset_clamp"), ("char", "mode"), ("char", "_pad[3]")]);
+    let mut bevel: Vec<(&str, &str)> = vec![md, ("float", "value"), ("int", "res"), ("short", "flags"), ("short", "val_flags"), ("short", "profile_type"), ("short", "lim_flags"), ("short", "e_flags"), ("short", "mat"), ("short", "edge_flags"), ("short", "face_str_mode")];
+    if c.layout == Layout::Legacy30 {
+        bevel.push(("char", "_pad[4]"));
+    } else {
+        bevel.extend([("char", "affect_type"), ("char", "_pad[3]")]);
+    }
+    bevel.extend([("float", "profile"), ("float", "bevel_angle"), ("float", "spread"), ("char", "defgrp_name[64]")]);
+    d.def("BevelModifierData", &bevel);
+    d.def("TriangulateModifierData", &[md, ("int", "flag"), ("int", "quad_method"), ("int", "ngon_method"), ("int", "min_vertices")]);
+    d.def("WeldModifierData", &[md, ("float", "merge_dist"), ("char", "defgrp_name[64]"), ("char", "mode"), ("char", "flag"), ("char", "_pad[2]")]);
+    d.def(
+        "DisplaceModifierData",
+        &[md, ("Tex", "*texture"), ("Object", "*map_object"), ("char", "map_bone[64]"), ("char", "defgrp_name[64]"), ("float", "midlevel"), ("int", "direction"), ("char", "uvlayer_name[64]"), ("int", "uvlayer_tmp"), ("int", "texmapping"), ("float", "strength"), ("int", "flag"), ("short", "space"), ("char", "_pad[6]")],
+    );
+    d.def("SmoothModifierData", &[md, ("float", "fac"), ("char", "defgrp_name[64]"), ("short", "flag"), ("short", "repeat")]);
+    d.def("OceanModifierData", &[md, ("float", "height"), ("float", "width"), ("float", "narrow"), ("float", "speed")]);
+
+    // Collections (2.8+).
+    d.def("CollectionObject", &[("CollectionObject", "*next"), ("CollectionObject", "*prev"), ("Object", "*ob"), ("void", "*_pad")]);
+    d.def("CollectionChild", &[("CollectionChild", "*next"), ("CollectionChild", "*prev"), ("Collection", "*collection"), ("void", "*_pad")]);
+    let col_flag = if c.layout == Layout::Legacy30 { ("short", "flag") } else { ("uchar", "flag") };
+    d.def("Collection", &[("ID", "id"), ("ID", "*owner_id"), ("ListBase", "gobject"), ("ListBase", "children"), ("char", "_pad0[4]"), ("int", "color_tag"), col_flag, ("char", "_pad1[5]")]);
+
+    // World.
+    d.def("World", &[("ID", "id"), ("AnimData", "*adt"), ("short", "colormodel"), ("short", "totex"), ("short", "texact"), ("short", "mistype"), ("float", "horr"), ("float", "horg"), ("float", "horb"), ("float", "exposure"), ("bNodeTree", "*nodetree"), ("short", "use_nodes"), ("char", "_pad[6]")]);
+
+    // Animation.
+    let mut adt: Vec<(&str, &str)> = vec![("bAction", "*action"), ("bAction", "*tmpact"), ("ListBase", "nla_tracks"), ("NlaTrack", "*act_track"), ("int", "flag"), ("int", "recalc")];
+    if c.layout == Layout::Attr50 {
+        adt.extend([("int", "slot_handle"), ("char", "last_slot_identifier[66]"), ("char", "_pad[2]")]);
+    }
+    d.def("AnimData", &adt);
+    d.def("BezTriple", &[("float", "vec[3][3]"), ("float", "tilt"), ("float", "weight"), ("float", "radius"), ("char", "ipo"), ("char", "h1"), ("char", "h2"), ("char", "f1"), ("char", "f2"), ("char", "f3"), ("char", "hide"), ("char", "easing"), ("float", "back"), ("float", "amplitude"), ("float", "period"), ("char", "auto_handle_type"), ("char", "_pad[3]")]);
+    d.def("FPoint", &[("float", "vec[2]"), ("int", "flag"), ("int", "_pad")]);
+    d.def(
+        "FCurve",
+        &[("FCurve", "*next"), ("FCurve", "*prev"), ("bActionGroup", "*grp"), ("ChannelDriver", "*driver"), ("ListBase", "modifiers"), ("BezTriple", "*bezt"), ("FPoint", "*fpt"), ("uint", "totvert"), ("int", "active_keyframe_index"), ("float", "curval"), ("short", "flag"), ("short", "extend"), ("char", "auto_smoothing"), ("char", "_pad[3]"), ("int", "array_index"), ("char", "*rna_path"), ("int", "color_mode"), ("float", "color[3]")],
+    );
+    let mut act: Vec<(&str, &str)> = vec![("ID", "id"), ("ListBase", "curves"), ("ListBase", "chanbase"), ("ListBase", "groups"), ("ListBase", "markers"), ("int", "flag"), ("int", "active_marker"), ("int", "idroot"), ("char", "_pad[4]")];
+    if c.layout == Layout::Attr50 {
+        d.def("ActionChannelbag", &[("int", "slot_handle"), ("int", "fcurve_array_num"), ("FCurve", "**fcurve_array"), ("bActionGroup", "**group_array"), ("int", "group_array_num"), ("char", "_pad[4]")]);
+        d.def("ActionStripKeyframeData", &[("ActionChannelbag", "**channelbag_array"), ("int", "channelbag_array_num"), ("char", "_pad[4]")]);
+        act.extend([
+            ("ActionLayer", "**layer_array"),
+            ("int", "layer_array_num"),
+            ("int", "layer_active_index"),
+            ("ActionSlot", "**slot_array"),
+            ("int", "slot_array_num"),
+            ("int", "last_slot_handle"),
+            ("ActionStripKeyframeData", "**strip_keyframe_data_array"),
+            ("int", "strip_keyframe_data_array_num"),
+            ("char", "_pad1[4]"),
+        ]);
+    }
+    d.def("bAction", &act);
 
     d.def("bNodeSocketValueRGBA", &[("float", "value[4]")]);
     d.def("bNodeSocketValueFloat", &[("int", "subtype"), ("float", "value"), ("float", "min"), ("float", "max")]);
     d.def("bNodeSocket", &[("bNodeSocket", "*next"), ("bNodeSocket", "*prev"), ("IDProperty", "*prop"), ("char", "identifier[64]"), ("char", "name[64]"), ("void", "*storage"), ("short", "type"), ("short", "flag"), ("char", "_pad[4]"), ("void", "*default_value")]);
-    d.def("bNode", &[("bNode", "*next"), ("bNode", "*prev"), ("ListBase", "inputs"), ("ListBase", "outputs"), ("char", "name[64]"), ("int", "flag"), ("short", "type"), ("char", "_pad[2]"), ("char", "idname[64]")]);
-    d.def("bNodeTree", &[("ID", "id"), ("AnimData", "*adt"), ("ListBase", "nodes"), ("ListBase", "links"), ("int", "type"), ("char", "_pad[4]")]);
+    d.def("bNodeSocketValueVector", &[("int", "subtype"), ("float", "value[3]"), ("float", "min"), ("float", "max")]);
+    d.def("bNodeSocketValueInt", &[("int", "subtype"), ("int", "value"), ("int", "min"), ("int", "max")]);
+    d.def("bNodeSocketValueBoolean", &[("char", "value"), ("char", "_pad[3]")]);
+    let mut node: Vec<(&str, &str)> = vec![("bNode", "*next"), ("bNode", "*prev"), ("ListBase", "inputs"), ("ListBase", "outputs"), ("char", "name[64]"), ("int", "flag"), ("short", "type"), ("char", "_pad[2]"), ("char", "idname[64]"), ("char", "label[64]")];
+    // Blender 4.4 replaced `locx`/`locy` by `location[2]`.
+    if c.layout == Layout::Attr50 {
+        node.push(("float", "location[2]"));
+    } else {
+        node.extend([("float", "locx"), ("float", "locy")]);
+    }
+    node.extend([("float", "width"), ("short", "custom1"), ("short", "custom2"), ("float", "custom3"), ("float", "custom4"), ("void", "*storage"), ("ID", "*id"), ("bNode", "*parent"), ("float", "color[3]"), ("char", "_pad1[4]")]);
+    d.def("bNode", &node);
+    d.def("bNodeLink", &[("bNodeLink", "*next"), ("bNodeLink", "*prev"), ("bNode", "*fromnode"), ("bNode", "*tonode"), ("bNodeSocket", "*fromsock"), ("bNodeSocket", "*tosock"), ("int", "flag"), ("int", "multi_input_sort_id")]);
+    d.def("NodeShaderMix", &[("char", "data_type"), ("char", "factor_mode"), ("char", "clamp_factor"), ("char", "clamp_result"), ("char", "blend_type"), ("char", "_pad[3]")]);
+    d.def("NodeTexImage", &[("int", "color_space"), ("int", "projection"), ("float", "projection_blend"), ("int", "interpolation"), ("int", "extension"), ("char", "_pad[4]")]);
+    d.def("NodeTexNoise", &[("int", "dimensions"), ("uchar", "type"), ("uchar", "normalize"), ("char", "_pad[2]")]);
+    d.def("CBData", &[("float", "r"), ("float", "g"), ("float", "b"), ("float", "a"), ("float", "pos"), ("int", "cur")]);
+    d.def("ColorBand", &[("short", "tot"), ("short", "cur"), ("char", "ipotype"), ("char", "ipotype_hue"), ("char", "color_mode"), ("char", "_pad[1]"), ("CBData", "data[32]")]);
+    d.def("CurveMapPoint", &[("float", "x"), ("float", "y"), ("short", "flag"), ("short", "shorty")]);
+    d.def("CurveMap", &[("short", "totpoint"), ("short", "flag"), ("float", "range"), ("CurveMapPoint", "*curve")]);
+    d.def("CurveMapping", &[("int", "flag"), ("int", "cur"), ("CurveMap", "cm[4]")]);
+    d.def("PackedFile", &[("int", "size"), ("int", "seek"), ("void", "*data")]);
+    d.def("ImagePackedFile", &[("ImagePackedFile", "*next"), ("ImagePackedFile", "*prev"), ("PackedFile", "*packedfile"), ("char", "filepath[1024]"), ("int", "view"), ("int", "tile_number")]);
+    d.def("ColorManagedColorspaceSettings", &[("char", "name[64]")]);
+    let mut im: Vec<(&str, &str)> = vec![("ID", "id"), ("char", "filepath[1024]")];
+    if c.new_names() {
+        im.push(("ListBase", "packedfiles"));
+    } else {
+        im.push(("PackedFile", "*packedfile"));
+    }
+    if c.layout != Layout::Legacy27 {
+        im.push(("ColorManagedColorspaceSettings", "colorspace_settings"));
+    }
+    d.def("Image", &im);
+    let mut tree: Vec<(&str, &str)> = vec![("ID", "id"), ("AnimData", "*adt"), ("ListBase", "nodes"), ("ListBase", "links"), ("int", "type"), ("char", "_pad[4]")];
+    if c.new_names() {
+        // 4.0+: the group interface as a panel of items.
+        d.def("bNodeTreeInterfaceItem", &[("char", "item_type"), ("char", "_pad[7]")]);
+        d.def(
+            "bNodeTreeInterfacePanel",
+            &[("bNodeTreeInterfaceItem", "item"), ("char", "*name"), ("char", "*description"), ("int", "flag"), ("char", "_pad[4]"), ("bNodeTreeInterfaceItem", "**items_array"), ("int", "items_num"), ("int", "identifier")],
+        );
+        d.def(
+            "bNodeTreeInterfaceSocket",
+            &[("bNodeTreeInterfaceItem", "item"), ("char", "*name"), ("char", "*description"), ("char", "*socket_type"), ("int", "flag"), ("char", "_pad[4]"), ("char", "*identifier"), ("void", "*socket_data")],
+        );
+        d.def("bNodeTreeInterface", &[("bNodeTreeInterfacePanel", "root_panel"), ("int", "active_index"), ("int", "next_uid")]);
+        tree.push(("bNodeTreeInterface", "tree_interface"));
+    } else {
+        tree.extend([("ListBase", "inputs"), ("ListBase", "outputs")]);
+    }
+    d.def("bNodeTree", &tree);
+    // Geometry nodes: storage structs and the Nodes modifier's ID properties.
+    d.def("NodeGeometryExtrudeMesh", &[("uchar", "mode")]);
+    d.def("NodeGeometryMeshCylinder", &[("uchar", "fill_type")]);
+    d.def("IDPropertyData", &[("void", "*pointer"), ("ListBase", "group"), ("int", "val"), ("int", "val2")]);
+    d.def(
+        "IDProperty",
+        &[("IDProperty", "*next"), ("IDProperty", "*prev"), ("char", "type"), ("char", "subtype"), ("short", "flag"), ("char", "name[64]"), ("char", "_pad0[4]"), ("IDPropertyData", "data"), ("int", "len"), ("int", "totallen"), ("void", "*ui_data")],
+    );
+    d.def("NodesModifierSettings", &[("IDProperty", "*properties")]);
+    d.def("NodesModifierData", &[("ModifierData", "modifier"), ("bNodeTree", "*node_group"), ("NodesModifierSettings", "settings"), ("char", "*bake_directory"), ("char", "flag"), ("char", "_pad[7]")]);
     d.def(
         "Material",
         &[("ID", "id"), ("AnimData", "*adt"), ("short", "flag"), ("char", "_pad1[2]"), ("float", "r"), ("float", "g"), ("float", "b"), ("float", "a"), ("float", "specr"), ("float", "specg"), ("float", "specb"), ("float", "alpha"), ("float", "ray_mirror"), ("float", "spec"), ("float", "gloss_mir"), ("float", "roughness"), ("float", "metallic"), ("char", "use_nodes"), ("char", "pr_type"), ("short", "pr_texture"), ("bNodeTree", "*nodetree")],
@@ -444,7 +655,20 @@ fn define(c: &Cfg) -> Dna {
         &[("ID", "id"), ("AnimData", "*adt"), ("char", "type"), ("char", "dtx"), ("short", "flag"), ("float", "passepartalpha"), ("float", cs), ("float", ce), ("float", "lens"), ("float", "ortho_scale"), ("float", "drawsize"), ("float", "sensor_x"), ("float", "sensor_y"), ("float", "shiftx"), ("float", "shifty"), ("char", "sensor_fit"), ("char", "_pad[7]")],
     );
     d.def("RenderData", &[("int", "cfra"), ("int", "sfra"), ("int", "efra"), ("short", "frs_sec"), ("char", "_pad[2]"), ("int", "xsch"), ("int", "ysch"), ("float", "xasp"), ("float", "yasp"), ("float", "frs_sec_base")]);
-    d.def("Scene", &[("ID", "id"), ("AnimData", "*adt"), ("Object", "*camera"), ("World", "*world"), ("Scene", "*set"), ("ListBase", "base"), ("RenderData", "r")]);
+    let mut scene: Vec<(&str, &str)> = vec![("ID", "id"), ("AnimData", "*adt"), ("Object", "*camera"), ("World", "*world"), ("Scene", "*set"), ("ListBase", "base"), ("RenderData", "r"), ("Collection", "*master_collection"), ("bNodeTree", "*nodetree"), ("char", "use_nodes"), ("char", "_pad9[7]")];
+    if physics {
+        scene.extend([("RigidBodyWorld", "*rigidbody_world"), ("PhysicsSettings", "physics_settings")]);
+    }
+    d.def("Scene", &scene);
+    // Compositor node storage (`DNA_node_types.h`).
+    d.def("NodeGlare", &[("char", "quality"), ("char", "type"), ("char", "iter"), ("char", "angle"), ("char", "_pad0"), ("char", "size"), ("char", "star_45"), ("char", "streaks"), ("float", "colmod"), ("float", "mix"), ("float", "threshold"), ("float", "fade"), ("float", "angle_ofs"), ("char", "_pad1[4]")]);
+    d.def(
+        "NodeBlurData",
+        &[("short", "sizex"), ("short", "sizey"), ("short", "samples"), ("short", "maxspeed"), ("short", "minspeed"), ("short", "relative"), ("short", "aspect"), ("short", "curved"), ("float", "fac"), ("float", "percentx"), ("float", "percenty"), ("short", "filtertype"), ("char", "bokeh"), ("char", "gamma"), ("int", "image_in_width"), ("int", "image_in_height")],
+    );
+    d.def("NodeChroma", &[("float", "t1"), ("float", "t2"), ("float", "t3"), ("float", "fsize"), ("float", "fstrength"), ("float", "falpha"), ("float", "key[4]"), ("short", "algorithm"), ("short", "channel")]);
+    d.def("NodeColorBalance", &[("float", "slope[3]"), ("float", "offset[3]"), ("float", "power[3]"), ("float", "offset_basis"), ("char", "_pad[4]"), ("float", "lift[3]"), ("float", "gamma[3]"), ("float", "gain[3]")]);
+    d.def("NodeTwoXYs", &[("short", "x1"), ("short", "x2"), ("short", "y1"), ("short", "y2"), ("float", "fac_x1"), ("float", "fac_x2"), ("float", "fac_y1"), ("float", "fac_y2")]);
     d.def("FileGlobal", &[("char", "subvstr[4]"), ("short", "subversion"), ("short", "minversion"), ("short", "minsubversion"), ("char", "_pad[6]"), ("bScreen", "*curscreen"), ("Scene", "*curscene")]);
     d
 }
@@ -535,7 +759,8 @@ pub fn scene_file(c: Cfg) -> Vec<u8> {
         } else {
             w.add("DATA", "bNodeSocketValueFloat", &[("value", n(val[0])), ("max", n(1.))])
         };
-        let ident = name.replace(' ', "_");
+        // Blender names a template socket's identifier after the socket.
+        let ident = name.to_string();
         let sk = w.inst("bNodeSocket", &[("next", p(next.unwrap_or(0))), ("identifier", s(&ident)), ("name", s(name)), ("default_value", p(dv))]);
         w.put(ptr, "DATA", "bNodeSocket", 1, sk);
     }
@@ -723,6 +948,227 @@ fn nv_f32(v: &[f32]) -> V {
 }
 
 // ---------------------------------------------------------------------------
+// Modifiers, collections, parenting, world and animation
+
+/// Inverse of `Root`'s world matrix T(1,0,0) Rz(90°), stored as `Mid`'s parentinv.
+pub const ROOT_INV: [f64; 16] = [0., -1., 0., 0., 1., 0., 0., 0., 0., 0., 1., 0., 0., 1., 0., 1.];
+
+/// World colour and strength the extras scene should import with: the
+/// Background node, except for the 2.8-era file whose world uses no nodes.
+pub fn extras_world(c: Cfg) -> ([f32; 3], f32) {
+    if c.layout == Layout::Legacy30 {
+        ([0.05, 0.06, 0.07], 1.0)
+    } else {
+        ([0.1, 0.2, 0.3], 2.5)
+    }
+}
+
+/// F-curves written on `Anim`'s action: (rna path, index, keys (frame, value,
+/// ipo), stored as baked FPoints). Only the transform ones are imported.
+pub fn extras_curves() -> Vec<(&'static str, usize, Vec<(f64, f64, u8)>, bool)> {
+    vec![
+        ("location", 0, vec![(1., 0., 2), (10., 5., 1)], false),
+        ("hide_viewport", 0, vec![(1., 0., 0)], false),
+        ("rotation_euler", 2, vec![(1., 0., 0), (20., 3., 2)], false),
+        ("scale", 1, vec![(1., 1., 1), (2., 2., 1)], true),
+        ("location", 1, vec![], false),
+    ]
+}
+
+fn version_of(c: &Cfg) -> u32 {
+    match c.layout {
+        Layout::Legacy27 => 279,
+        Layout::Legacy30 => 300,
+        Layout::Attr36 => 306,
+        Layout::Attr42 => 402,
+        Layout::Attr50 => 500,
+    }
+}
+
+/// A ListBase of `sname` link structs whose `member` points at `targets`.
+fn links(w: &mut Writer, sname: &str, member: &str, targets: &[u64]) -> (u64, u64) {
+    let addrs: Vec<u64> = targets.iter().map(|_| w.alloc()).collect();
+    for (i, &t) in targets.iter().enumerate() {
+        let prev = if i > 0 { addrs[i - 1] } else { 0 };
+        let d = w.inst(sname, &[("next", p(addrs.get(i + 1).copied().unwrap_or(0))), ("prev", p(prev)), (member, p(t))]);
+        w.put(addrs[i], "DATA", sname, 1, d);
+    }
+    (addrs.first().copied().unwrap_or(0), addrs.last().copied().unwrap_or(0))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collection(w: &mut Writer, ptr: u64, code: &str, name: &str, flag: f64, obs: &[u64], kids: &[u64]) {
+    let (of, ol) = links(w, "CollectionObject", "ob", obs);
+    let (cf, cl) = links(w, "CollectionChild", "collection", kids);
+    let d = w.inst(
+        "Collection",
+        &[("id.name", s(&format!("GR{name}"))), ("gobject.first", p(of)), ("gobject.last", p(ol)), ("children.first", p(cf)), ("children.last", p(cl)), ("flag", n(flag))],
+    );
+    w.put(ptr, code, "Collection", 1, d);
+}
+
+/// One FCurve block at `ptr` with its keys and RNA path.
+fn fcurve(w: &mut Writer, ptr: u64, next: u64, prev: u64, path: &str, index: usize, keys: &[(f64, f64, u8)], baked: bool) {
+    let rna = w.raw(format!("{path}\0").into_bytes(), 1);
+    let mut f = vec![("next", p(next)), ("prev", p(prev)), ("array_index", n(index as f64)), ("rna_path", p(rna)), ("totvert", n(keys.len() as f64))];
+    if !keys.is_empty() {
+        let addr = w.alloc();
+        let mut data = Vec::new();
+        if baked {
+            for &(fr, v, _) in keys {
+                data.extend(w.inst("FPoint", &[("vec", nv(&[fr, v]))]));
+            }
+            w.put(addr, "DATA", "FPoint", keys.len(), data);
+            f.push(("fpt", p(addr)));
+        } else {
+            for &(fr, v, ipo) in keys {
+                data.extend(w.inst("BezTriple", &[("vec", nv(&[fr - 1., v, 0., fr, v, 0., fr + 1., v, 0.])), ("ipo", n(ipo as f64)), ("h1", n(1.)), ("h2", n(1.))]));
+            }
+            w.put(addr, "DATA", "BezTriple", keys.len(), data);
+            f.push(("bezt", p(addr)));
+        }
+    }
+    let d = w.inst("FCurve", &f);
+    w.put(ptr, "DATA", "FCurve", 1, d);
+}
+
+/// A 2.8+ scene exercising modifiers, collections, parenting, the world and
+/// object animation. Not available for `Legacy27` (no collections then).
+///
+/// Objects: `Mod` (mesh with a modifier stack, in `Props` and `Nested`),
+/// `Root` (empty at (1,0,0) turned 90° about Z, in the master collection),
+/// `Mid` (child of `Root` with its parent inverse, disabled in viewports, in
+/// `Props`), `Leaf` (child of `Mid`, identity parent inverse, in `Hidden`),
+/// `Anim` (empty with an action, in `Nested`).
+/// Collections: master -> `Props` -> `Nested` (-> `Hidden` again), master ->
+/// `Hidden` (disabled in viewports).
+pub fn extras_file(c: Cfg) -> Vec<u8> {
+    assert!(c.layout != Layout::Legacy27);
+    let mut w = Writer::new(define(&c), c.big, c.layout == Layout::Attr50, version_of(&c));
+    let id = |code: &str, name: &str| ("id.name", s(&format!("{code}{name}")));
+    let [sc, world, me, mod_ob, root, mid, leaf, anim, master, props, nested, hidden, action, adt] = [(); 14].map(|_| w.alloc());
+
+    let glob = w.alloc();
+    let g = w.inst("FileGlobal", &[("curscene", p(sc))]);
+    w.put(glob, "GLOB", "FileGlobal", 1, g);
+    let d = w.inst(
+        "Scene",
+        &[id("SC", "Extras"), ("camera", p(0)), ("world", p(world)), ("master_collection", p(master)), ("r.sfra", n(1.)), ("r.efra", n(48.)), ("r.frs_sec", n(25.)), ("r.frs_sec_base", n(1.)), ("r.xsch", n(800.)), ("r.ysch", n(600.)), ("r.xasp", n(1.)), ("r.yasp", n(1.))],
+    );
+    w.put(sc, "SC", "Scene", 1, d);
+
+    // World: viewport colour plus, from 2.9 on, a Background node.
+    let nodes = c.layout != Layout::Legacy30;
+    let mut wf = vec![id("WO", "World"), ("horr", n(0.05)), ("horg", n(0.06)), ("horb", n(0.07)), ("use_nodes", n(nodes as u8 as f64))];
+    let tree = w.alloc();
+    let (bg, s_col, s_str) = (w.alloc(), w.alloc(), w.alloc());
+    let t = w.inst("bNodeTree", &[id("NT", "Shader Nodetree"), ("nodes.first", p(bg)), ("nodes.last", p(bg))]);
+    w.put(tree, "DATA", "bNodeTree", 1, t);
+    let nd = w.inst("bNode", &[("inputs.first", p(s_col)), ("inputs.last", p(s_str)), ("name", s("Background")), ("idname", s("ShaderNodeBackground"))]);
+    w.put(bg, "DATA", "bNode", 1, nd);
+    let dv = w.add("DATA", "bNodeSocketValueRGBA", &[("value", nv(&[0.1, 0.2, 0.3, 1.0]))]);
+    let sk = w.inst("bNodeSocket", &[("next", p(s_str)), ("identifier", s("Color")), ("name", s("Color")), ("default_value", p(dv))]);
+    w.put(s_col, "DATA", "bNodeSocket", 1, sk);
+    let dv = w.add("DATA", "bNodeSocketValueFloat", &[("value", n(2.5))]);
+    let sk = w.inst("bNodeSocket", &[("prev", p(s_col)), ("identifier", s("Strength")), ("name", s("Strength")), ("default_value", p(dv))]);
+    w.put(s_str, "DATA", "bNodeSocket", 1, sk);
+    wf.push(("nodetree", p(tree)));
+    let d = w.inst("World", &wf);
+    w.put(world, "WO", "World", 1, d);
+
+    write_mesh(&mut w, &c, me, 0, 0);
+
+    // Modifier stack; the Ocean (unsupported), render-only, vertex-bevel and textured
+    // displace entries must be skipped.
+    let edge_bevel: Vec<(&str, V)> = if c.layout == Layout::Legacy30 { vec![("flags", n(0.))] } else { vec![("affect_type", n(1.))] };
+    let vert_bevel: Vec<(&str, V)> = if c.layout == Layout::Legacy30 { vec![("flags", n(2.))] } else { vec![("affect_type", n(0.))] };
+    let mut bevel = vec![("value", n(0.05)), ("res", n(3.)), ("lim_flags", n(8.)), ("bevel_angle", n(0.6))];
+    bevel.extend(edge_bevel);
+    let mods: Vec<(&str, Vec<(&str, V)>)> = vec![
+        ("MirrorModifierData", vec![("flag", n((1 << 3 | 1 << 5 | 1 << 6) as f64)), ("tolerance", n(0.01))]),
+        ("SubsurfModifierData", vec![("levels", n(2.)), ("renderLevels", n(3.))]),
+        ("OceanModifierData", vec![("height", n(0.5))]),
+        ("SubsurfModifierData", vec![("modifier.mode", n(2.)), ("levels", n(4.))]),
+        ("ArrayModifierData", vec![("count", n(3.)), ("offset_type", n(3.)), ("scale", nv(&[1.5, 0., 0.])), ("offset", nv(&[0., 0., 2.])), ("flags", n(1.))]),
+        ("SolidifyModifierData", vec![("offset", n(0.2)), ("offset_fac", n(0.5))]),
+        ("BevelModifierData", bevel),
+        ("BevelModifierData", vert_bevel),
+        ("TriangulateModifierData", vec![]),
+        ("WeldModifierData", vec![("merge_dist", n(0.02))]),
+        ("DisplaceModifierData", vec![("strength", n(2.)), ("midlevel", n(0.25)), ("direction", n(3.))]),
+        ("DisplaceModifierData", vec![("texture", p(0xDEAD_0)), ("strength", n(2.)), ("direction", n(3.))]),
+        ("SmoothModifierData", vec![("fac", n(0.7)), ("repeat", n(4.))]),
+    ];
+    let addrs: Vec<u64> = mods.iter().map(|_| w.alloc()).collect();
+    for (i, (sname, fields)) in mods.into_iter().enumerate() {
+        let prev = if i > 0 { addrs[i - 1] } else { 0 };
+        let mut f: Vec<(&str, V)> = vec![("modifier.mode", n(3.)), ("modifier.type", n(i as f64 + 1.)), ("modifier.name", s(sname)), ("modifier.next", p(addrs.get(i + 1).copied().unwrap_or(0))), ("modifier.prev", p(prev))];
+        f.extend(fields);
+        let d = w.inst(sname, &f);
+        w.put(addrs[i], "DATA", sname, 1, d);
+    }
+
+    // Objects.
+    let ident = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    let has_obmat = !c.new_names();
+    let hide_name = if c.layout == Layout::Legacy30 { "restrictflag" } else { "visibility_flag" };
+    // "Disable in renders" alone: bit 2 of restrictflag, bit 1 of visibility_flag.
+    let render_off = if c.layout == Layout::Legacy30 { 4. } else { 2. };
+    let object = |w: &mut Writer, ptr: u64, name: &str, ty: f64, data: u64, extra: Vec<(&str, V)>| {
+        let mut f = vec![id("OB", name), ("type", n(ty)), ("data", p(data)), ("scale", nv(&[1., 1., 1.])), ("dscale", nv(&[1., 1., 1.])), ("parentinv", nv(&ident)), ("rotmode", n(1.))];
+        if has_obmat {
+            f.push(("obmat", nv(&ident))); // stale; the loc/rot/scale basis wins
+        }
+        f.extend(extra);
+        let d = w.inst("Object", &f);
+        w.put(ptr, "OB", "Object", 1, d);
+    };
+    object(&mut w, mod_ob, "Mod", 1., me, vec![("modifiers.first", p(addrs[0])), ("modifiers.last", p(*addrs.last().unwrap())), (hide_name, n(render_off))]);
+    object(&mut w, root, "Root", 0., 0, vec![("loc", nv(&[1., 0., 0.])), ("rot", nv(&[0., 0., FRAC_PI_2]))]);
+    object(&mut w, mid, "Mid", 0., 0, vec![("loc", nv(&[0., 2., 0.])), ("parent", p(root)), ("parentinv", nv(&ROOT_INV)), (hide_name, n(1.))]);
+    object(&mut w, leaf, "Leaf", 0., 0, vec![("loc", nv(&[0., 0., 3.])), ("parent", p(mid))]);
+    object(&mut w, anim, "Anim", 0., 0, vec![("adt", p(adt))]);
+
+    // Collections.
+    collection(&mut w, master, "DATA", "Scene Collection", 0., &[root], &[props, hidden]);
+    collection(&mut w, props, "GR", "Props", 0., &[mod_ob, mid], &[nested]);
+    collection(&mut w, nested, "GR", "Nested", 0., &[anim, mod_ob], &[hidden]);
+    collection(&mut w, hidden, "GR", "Hidden", 1., &[leaf], &[]);
+
+    // Animation.
+    let curves = extras_curves();
+    let fc: Vec<u64> = curves.iter().map(|_| w.alloc()).collect();
+    let slotted = c.layout == Layout::Attr50;
+    for (i, (path, index, keys, baked)) in curves.iter().enumerate() {
+        let (next, prev) = if slotted { (0, 0) } else { (fc.get(i + 1).copied().unwrap_or(0), if i > 0 { fc[i - 1] } else { 0 }) };
+        fcurve(&mut w, fc[i], next, prev, path, *index, keys, *baked);
+    }
+    let mut af = vec![id("AC", "AnimAction")];
+    let mut adf = vec![("action", p(action))];
+    if slotted {
+        // A decoy channelbag for another slot comes first.
+        let decoy_fc = w.alloc();
+        fcurve(&mut w, decoy_fc, 0, 0, "location", 0, &[(1., 99., 1)], false);
+        let decoy_arr = w.raw(w.ptrs(&[decoy_fc]), 1);
+        let decoy = w.add("DATA", "ActionChannelbag", &[("slot_handle", n(3.)), ("fcurve_array", p(decoy_arr)), ("fcurve_array_num", n(1.))]);
+        let arr = w.raw(w.ptrs(&fc), fc.len());
+        let bag = w.add("DATA", "ActionChannelbag", &[("slot_handle", n(7.)), ("fcurve_array", p(arr)), ("fcurve_array_num", n(fc.len() as f64))]);
+        let bags = w.raw(w.ptrs(&[decoy, bag]), 2);
+        let kd = w.add("DATA", "ActionStripKeyframeData", &[("channelbag_array", p(bags)), ("channelbag_array_num", n(2.))]);
+        let kds = w.raw(w.ptrs(&[kd]), 1);
+        af.extend([("strip_keyframe_data_array", p(kds)), ("strip_keyframe_data_array_num", n(1.))]);
+        adf.push(("slot_handle", n(7.)));
+    } else {
+        af.extend([("curves.first", p(fc[0])), ("curves.last", p(*fc.last().unwrap()))]);
+    }
+    let d = w.inst("bAction", &af);
+    w.put(action, "AC", "bAction", 1, d);
+    let d = w.inst("AnimData", &adf);
+    w.put(adt, "DATA", "AnimData", 1, d);
+    w.finish()
+}
+
+// ---------------------------------------------------------------------------
 // Compression helpers
 
 pub fn gzip(data: &[u8]) -> Vec<u8> {
@@ -764,4 +1210,614 @@ pub fn zstd_raw_frames(data: &[u8]) -> Vec<u8> {
 /// Build a lookup of object names to indices.
 pub fn names(scene: &sex_3d::Scene) -> HashMap<String, usize> {
     scene.objects.iter().enumerate().map(|(i, o)| (o.name.clone(), i)).collect()
+}
+
+// ---------------------------------------------------------------------------
+// Shader node trees
+
+/// A socket default value.
+pub enum Dv {
+    No,
+    F(f64),
+    C([f64; 4]),
+}
+
+/// A socket: identifier, name, `eNodeSocketDatatype`, default, flag.
+pub struct Sk(String, String, i64, Dv, i64);
+
+pub fn sk(id: &str, name: &str, ty: i64, dv: Dv) -> Sk {
+    Sk(id.into(), name.into(), ty, dv, 0)
+}
+
+/// A node as the writer lays it out.
+pub struct Nd {
+    pub name: &'static str,
+    pub idname: &'static str,
+    pub label: &'static str,
+    pub loc: [f64; 2],
+    pub width: f64,
+    pub flag: i64,
+    pub custom: [i64; 2],
+    pub storage: u64,
+    pub id: u64,
+    pub parent: Option<usize>,
+    pub color: [f64; 3],
+    pub inputs: Vec<Sk>,
+    pub outputs: Vec<Sk>,
+}
+
+impl Nd {
+    pub fn new(name: &'static str, idname: &'static str, inputs: Vec<Sk>, outputs: Vec<Sk>) -> Nd {
+        Nd { name, idname, label: "", loc: [0.0, 0.0], width: 140.0, flag: 0, custom: [0, 0], storage: 0, id: 0, parent: None, color: [0.0; 3], inputs, outputs }
+    }
+}
+
+fn cstr(w: &mut Writer, t: &str) -> u64 {
+    w.raw(format!("{t}\0").into_bytes(), 1)
+}
+
+fn default_value(w: &mut Writer, dv: &Dv) -> u64 {
+    match dv {
+        Dv::No => 0,
+        Dv::F(x) => w.add("DATA", "bNodeSocketValueFloat", &[("value", n(*x)), ("min", n(-1e4)), ("max", n(1e4))]),
+        Dv::C(c) => w.add("DATA", "bNodeSocketValueRGBA", &[("value", nv(c))]),
+    }
+}
+
+/// A ListBase of sockets; returns (first, last, addresses).
+fn socket_list(w: &mut Writer, socks: &[Sk]) -> (u64, u64, Vec<u64>) {
+    let addrs: Vec<u64> = socks.iter().map(|_| w.alloc()).collect();
+    for (i, Sk(id, name, ty, dv, flag)) in socks.iter().enumerate() {
+        let dvp = default_value(w, dv);
+        let prev = if i > 0 { addrs[i - 1] } else { 0 };
+        let next = addrs.get(i + 1).copied().unwrap_or(0);
+        let d = w.inst("bNodeSocket", &[("next", p(next)), ("prev", p(prev)), ("identifier", s(id)), ("name", s(name)), ("type", n(*ty as f64)), ("flag", n(*flag as f64)), ("default_value", p(dvp))]);
+        w.put(addrs[i], "DATA", "bNodeSocket", 1, d);
+    }
+    (addrs.first().copied().unwrap_or(0), addrs.last().copied().unwrap_or(0), addrs)
+}
+
+/// A group interface socket: name, identifier, flag (1 input, 2 output),
+/// default, and its type: a float unless the name is "Geometry".
+pub type Iface<'a> = (&'a str, &'a str, i64, f64);
+
+/// (4.x `socket_type` idname, `eNodeSocketDatatype`) of an interface socket.
+fn iface_type(name: &str) -> (&'static str, i64) {
+    if name == "Geometry" {
+        ("NodeSocketGeometry", 10)
+    } else {
+        ("NodeSocketFloat", 0)
+    }
+}
+
+/// A link: from node, from identifier, to node, to identifier, flag.
+pub type NodeLink<'a> = (usize, &'a str, usize, &'a str, i64);
+
+/// Write a node tree at `ptr` (`code` "DATA" for embedded trees, "NT" for groups).
+#[allow(clippy::too_many_arguments)]
+pub fn write_tree(w: &mut Writer, c: &Cfg, ptr: u64, code: &str, name: &str, nodes: &[Nd], links: &[NodeLink], iface: &[Iface]) {
+    let addrs: Vec<u64> = nodes.iter().map(|_| w.alloc()).collect();
+    let mut sock: HashMap<(usize, bool, String), u64> = HashMap::new();
+    for (i, nd) in nodes.iter().enumerate() {
+        let (if_, il, ia) = socket_list(w, &nd.inputs);
+        let (of, ol, oa) = socket_list(w, &nd.outputs);
+        for (k, a) in ia.iter().enumerate() {
+            sock.insert((i, false, nd.inputs[k].0.clone()), *a);
+        }
+        for (k, a) in oa.iter().enumerate() {
+            sock.insert((i, true, nd.outputs[k].0.clone()), *a);
+        }
+        let prev = if i > 0 { addrs[i - 1] } else { 0 };
+        let next = addrs.get(i + 1).copied().unwrap_or(0);
+        let mut f: Vec<(&str, V)> = vec![
+            ("next", p(next)),
+            ("prev", p(prev)),
+            ("inputs.first", p(if_)),
+            ("inputs.last", p(il)),
+            ("outputs.first", p(of)),
+            ("outputs.last", p(ol)),
+            ("name", s(nd.name)),
+            ("idname", s(nd.idname)),
+            ("label", s(nd.label)),
+            ("width", n(nd.width)),
+            ("flag", n(nd.flag as f64)),
+            ("custom1", n(nd.custom[0] as f64)),
+            ("custom2", n(nd.custom[1] as f64)),
+            ("storage", p(nd.storage)),
+            ("id", p(nd.id)),
+            ("parent", p(nd.parent.map_or(0, |k| addrs[k]))),
+            ("color", nv(&nd.color)),
+        ];
+        if c.layout == Layout::Attr50 {
+            f.push(("location", nv(&nd.loc)));
+        } else {
+            f.push(("locx", n(nd.loc[0])));
+            f.push(("locy", n(nd.loc[1])));
+        }
+        let d = w.inst("bNode", &f);
+        w.put(addrs[i], "DATA", "bNode", 1, d);
+    }
+    let link_addrs: Vec<u64> = links.iter().map(|_| w.alloc()).collect();
+    for (i, &(fnode, fs, tnode, ts, flag)) in links.iter().enumerate() {
+        let prev = if i > 0 { link_addrs[i - 1] } else { 0 };
+        let next = link_addrs.get(i + 1).copied().unwrap_or(0);
+        let fsock = sock[&(fnode, true, fs.to_string())];
+        let tsock = sock[&(tnode, false, ts.to_string())];
+        let d = w.inst("bNodeLink", &[("next", p(next)), ("prev", p(prev)), ("fromnode", p(addrs[fnode])), ("tonode", p(addrs[tnode])), ("fromsock", p(fsock)), ("tosock", p(tsock)), ("flag", n(flag as f64))]);
+        w.put(link_addrs[i], "DATA", "bNodeLink", 1, d);
+    }
+    let mut f: Vec<(String, V)> = vec![
+        ("id.name".into(), s(&format!("NT{name}"))),
+        ("nodes.first".into(), p(addrs.first().copied().unwrap_or(0))),
+        ("nodes.last".into(), p(addrs.last().copied().unwrap_or(0))),
+        ("links.first".into(), p(link_addrs.first().copied().unwrap_or(0))),
+        ("links.last".into(), p(link_addrs.last().copied().unwrap_or(0))),
+    ];
+    if !iface.is_empty() {
+        if c.new_names() {
+            let mut items = Vec::new();
+            for &(name, ident, flag, dv) in iface {
+                let (nm, ty, id) = (cstr(w, name), cstr(w, iface_type(name).0), cstr(w, ident));
+                let data = if iface_type(name).1 == 0 { default_value(w, &Dv::F(dv)) } else { 0 };
+                items.push(w.add("DATA", "bNodeTreeInterfaceSocket", &[("name", p(nm)), ("socket_type", p(ty)), ("flag", n(flag as f64)), ("identifier", p(id)), ("socket_data", p(data))]));
+            }
+            let arr = w.raw(w.ptrs(&items), items.len());
+            f.push(("tree_interface.root_panel.items_array".into(), p(arr)));
+            f.push(("tree_interface.root_panel.items_num".into(), n(items.len() as f64)));
+        } else {
+            for (lb, want) in [("inputs", 1), ("outputs", 2)] {
+                let socks: Vec<Sk> = iface.iter().filter(|x| x.2 == want).map(|&(name, ident, _, dv)| sk(ident, name, iface_type(name).1, if iface_type(name).1 == 0 { Dv::F(dv) } else { Dv::No })).collect();
+                let (first, last, _) = socket_list(w, &socks);
+                f.push((format!("{lb}.first"), p(first)));
+                f.push((format!("{lb}.last"), p(last)));
+            }
+        }
+    }
+    if nodes.iter().any(|nd| nd.idname.starts_with("GeometryNode")) {
+        f.push(("type".into(), n(3.))); // NTREE_GEOMETRY
+    }
+    if nodes.iter().any(|nd| nd.idname.starts_with("CompositorNode")) {
+        f.push(("type".into(), n(1.))); // NTREE_COMPOSIT
+    }
+    let d = w.inst("bNodeTree", &f);
+    w.put(ptr, code, "bNodeTree", 1, d);
+}
+
+/// The 2x2 RGBA test image: red, green / blue, white.
+pub const NODE_IMAGE: [[u8; 4]; 4] = [[255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 255, 255]];
+
+fn png_2x2() -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let mut e = png::Encoder::new(&mut out, 2, 2);
+        e.set_color(png::ColorType::Rgba);
+        e.set_depth(png::BitDepth::Eight);
+        let mut wr = e.write_header().unwrap();
+        wr.write_image_data(NODE_IMAGE.as_flattened()).unwrap();
+    }
+    out
+}
+
+/// A struct-array member: write `items` (each a full struct) from element 0.
+fn put_array(w: &Writer, buf: &mut [u8], sname: &str, member: &str, elem: &str, items: &[Vec<u8>]) {
+    let off = w.dna.slot(sname, member).offset;
+    let size = w.dna.size(elem);
+    for (i, it) in items.iter().enumerate() {
+        buf[off + i * size..off + (i + 1) * size].copy_from_slice(it);
+    }
+}
+
+/// Group interface identifiers: 4.x `Socket_N`, older `Input_N`/`Output_N`.
+pub fn group_idents(c: &Cfg) -> (&'static str, &'static str) {
+    if c.new_names() {
+        ("Socket_0", "Socket_1")
+    } else {
+        ("Input_0", "Output_1")
+    }
+}
+
+/// A material "Nodes" with most node features the importer reads, a node
+/// group "Half", a packed image, an object for Texture Coordinate and a
+/// world tree.
+pub fn nodes_file(c: Cfg) -> Vec<u8> {
+    let mut w = Writer::new(define(&c), c.big, c.layout == Layout::Attr50, version_of(&c));
+    let [sc, wo, ma, ob, im, grp, mtree, wtree] = [(); 8].map(|_| w.alloc());
+    let glob = w.alloc();
+    let g = w.inst("FileGlobal", &[("curscene", p(sc))]);
+    w.put(glob, "GLOB", "FileGlobal", 1, g);
+    let d = w.inst("Scene", &[("id.name", s("SCNodes")), ("world", p(wo)), ("r.xsch", n(64.)), ("r.ysch", n(64.)), ("r.xasp", n(1.)), ("r.yasp", n(1.))]);
+    w.put(sc, "SC", "Scene", 1, d);
+
+    // The packed image.
+    let png = png_2x2();
+    let len = png.len();
+    let data = w.raw(png, len);
+    let pf = w.add("DATA", "PackedFile", &[("size", n(len as f64)), ("data", p(data))]);
+    let mut f: Vec<(&str, V)> = vec![("id.name", s("IMtex.png")), ("filepath", s("//tex.png"))];
+    if c.new_names() {
+        let ipf = w.add("DATA", "ImagePackedFile", &[("packedfile", p(pf)), ("filepath", s("//tex.png"))]);
+        f.push(("packedfiles.first", p(ipf)));
+        f.push(("packedfiles.last", p(ipf)));
+    } else {
+        f.push(("packedfile", p(pf)));
+    }
+    if c.layout != Layout::Legacy27 {
+        f.push(("colorspace_settings.name", s("sRGB")));
+    }
+    let d = w.inst("Image", &f);
+    w.put(im, "IM", "Image", 1, d);
+
+    // An empty for the Texture Coordinate node.
+    let ident = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    let scale_name = if c.layout == Layout::Legacy27 { "size" } else { "scale" };
+    let mut f: Vec<(&str, V)> = vec![("id.name", s("OBEmpty")), ("type", n(0.)), (scale_name, nv(&[1., 1., 1.])), ("parentinv", nv(&ident)), ("rotmode", n(1.))];
+    if scale_name == "scale" {
+        f.push(("dscale", nv(&[1., 1., 1.])));
+    }
+    if !c.new_names() {
+        f.push(("obmat", nv(&ident)));
+    }
+    let d = w.inst("Object", &f);
+    w.put(ob, "OB", "Object", 1, d);
+
+    // Storage structs.
+    let mix = w.add("DATA", "NodeShaderMix", &[("data_type", n(2.)), ("factor_mode", n(0.)), ("clamp_factor", n(1.)), ("clamp_result", n(0.)), ("blend_type", n(2.))]);
+    let tex = w.add("DATA", "NodeTexImage", &[("projection", n(1.)), ("projection_blend", n(0.25)), ("interpolation", n(1.)), ("extension", n(3.))]);
+    let noise = w.add("DATA", "NodeTexNoise", &[("dimensions", n(2.)), ("type", n(1.)), ("normalize", n(1.))]);
+    let mut band = w.inst("ColorBand", &[("tot", n(2.)), ("ipotype", n(4.))]);
+    let e0 = w.inst("CBData", &[("r", n(1.)), ("a", n(1.)), ("pos", n(0.8))]);
+    let e1 = w.inst("CBData", &[("b", n(1.)), ("a", n(1.)), ("pos", n(0.2))]);
+    put_array(&w, &mut band, "ColorBand", "data", "CBData", &[e0, e1]);
+    let band_ptr = w.alloc();
+    w.put(band_ptr, "DATA", "ColorBand", 1, band);
+    let mut curves = w.inst("CurveMapping", &[("flag", n(0.))]);
+    let mut maps = Vec::new();
+    for k in 0..4 {
+        let top = if k == 3 { 0.5 } else { 1.0 };
+        let pts = [w.inst("CurveMapPoint", &[("x", n(0.)), ("y", n(0.))]), w.inst("CurveMapPoint", &[("x", n(1.)), ("y", n(top))])].concat();
+        let pp = w.alloc();
+        w.put(pp, "DATA", "CurveMapPoint", 2, pts);
+        maps.push(w.inst("CurveMap", &[("totpoint", n(2.)), ("curve", p(pp))]));
+    }
+    put_array(&w, &mut curves, "CurveMapping", "cm", "CurveMap", &maps);
+    let curves_ptr = w.alloc();
+    w.put(curves_ptr, "DATA", "CurveMapping", 1, curves);
+
+    // The group "Half": Out = In * 0.5.
+    let (gin, gout) = group_idents(&c);
+    let mut math = Nd::new("Math", "ShaderNodeMath", vec![sk("Value", "Value", 0, Dv::F(0.)), sk("Value_001", "Value", 0, Dv::F(0.5))], vec![sk("Value", "Value", 0, Dv::No)]);
+    math.custom = [2, 0];
+    let mut go = Nd::new("Group Output", "NodeGroupOutput", vec![sk(gout, "Out", 0, Dv::F(0.))], vec![]);
+    go.flag = 64;
+    let gnodes = [Nd::new("Group Input", "NodeGroupInput", vec![], vec![sk(gin, "In", 0, Dv::F(0.))]), math, go];
+    write_tree(&mut w, &c, grp, "NT", "Half", &gnodes, &[(0, gin, 1, "Value", 0), (1, "Value", 2, gout, 0)], &[("In", gin, 1, 1.0), ("Out", gout, 2, 0.0)]);
+
+    // The material tree.
+    let mut out = Nd::new("Material Output", "ShaderNodeOutputMaterial", vec![sk("Surface", "Surface", 3, Dv::No)], vec![]);
+    out.flag = 64;
+    let mut bsdf = Nd::new(
+        "Principled BSDF",
+        "ShaderNodeBsdfPrincipled",
+        vec![
+            sk("Base Color", "Base Color", 2, Dv::C([0.8, 0.8, 0.8, 1.0])),
+            sk("Metallic", "Metallic", 0, Dv::F(0.6)),
+            sk("Roughness", "Roughness", 0, Dv::F(0.5)),
+            // Pre-4.0 names that versioning renames.
+            sk("Specular", "Specular", 0, Dv::F(0.25)),
+            sk("Clearcoat", "Clearcoat", 0, Dv::F(0.0)),
+        ],
+        vec![sk("BSDF", "BSDF", 3, Dv::No)],
+    );
+    bsdf.label = "Shiny";
+    bsdf.loc = [-300.0, 120.0];
+    bsdf.width = 260.0;
+    let mut image = Nd::new("Image Texture", "ShaderNodeTexImage", vec![sk("Vector", "Vector", 1, Dv::No)], vec![sk("Color", "Color", 2, Dv::No), sk("Alpha", "Alpha", 0, Dv::No)]);
+    image.storage = tex;
+    image.id = im;
+    let mut mixn = Nd::new(
+        "Mix",
+        "ShaderNodeMix",
+        vec![sk("Factor_Float", "Factor", 0, Dv::F(0.75)), sk("A_Color", "A", 2, Dv::C([0.5, 0.5, 0.5, 1.0])), sk("B_Color", "B", 2, Dv::C([1.0, 0.5, 0.25, 1.0]))],
+        vec![sk("Result_Color", "Result", 2, Dv::No)],
+    );
+    mixn.storage = mix;
+    let mut mathn = Nd::new("Math", "ShaderNodeMath", vec![sk("Value", "Value", 0, Dv::F(0.5)), sk("Value_001", "Value", 0, Dv::F(3.0))], vec![sk("Value", "Value", 0, Dv::No)]);
+    mathn.custom = [2, 1];
+    let mut ramp = Nd::new("Color Ramp", "ShaderNodeValToRGB", vec![sk("Fac", "Fac", 0, Dv::F(0.5))], vec![sk("Color", "Color", 2, Dv::No), sk("Alpha", "Alpha", 0, Dv::No)]);
+    ramp.storage = band_ptr;
+    let mut noisen = Nd::new("Noise Texture", "ShaderNodeTexNoise", vec![sk("Scale", "Scale", 0, Dv::F(7.0))], vec![sk("Fac", "Fac", 0, Dv::No)]);
+    noisen.storage = noise;
+    noisen.parent = Some(10);
+    let mut invert = Nd::new("Invert", "ShaderNodeInvert", vec![Sk("Fac".into(), "Fac".into(), 0, Dv::F(1.0), 2), sk("Color", "Color", 2, Dv::C([0.0, 0.0, 0.0, 1.0]))], vec![sk("Color", "Color", 2, Dv::No)]);
+    invert.flag = (1 << 9) | (1 << 3) | (1 << 15);
+    invert.color = [0.1, 0.2, 0.3];
+    let mut curve = Nd::new("RGB Curves", "ShaderNodeRGBCurve", vec![sk("Fac", "Fac", 0, Dv::F(1.0))], vec![sk("Color", "Color", 2, Dv::No)]);
+    curve.storage = curves_ptr;
+    let mut group = Nd::new("Group", "ShaderNodeGroup", vec![sk(gin, "In", 0, Dv::F(0.25))], vec![sk(gout, "Out", 0, Dv::No)]);
+    group.id = grp;
+    let mut frame = Nd::new("Frame", "NodeFrame", vec![], vec![]);
+    frame.label = "Textures";
+    let mut coord = Nd::new("Texture Coordinate", "ShaderNodeTexCoord", vec![], vec![sk("Object", "Object", 1, Dv::No)]);
+    coord.id = ob;
+    let future = Nd::new("Future", "ShaderNodeFromTheFuture", vec![sk("Thing", "Thing", 0, Dv::F(2.0))], vec![sk("Out", "Out", 0, Dv::No)]);
+    let nodes = [out, bsdf, image, mixn, mathn, ramp, noisen, invert, curve, group, frame, coord, future];
+    let links: [NodeLink; 7] = [
+        (2, "Color", 3, "A_Color", 0),
+        (3, "Result_Color", 1, "Base Color", 0),
+        (4, "Value", 1, "Roughness", 0),
+        (9, gout, 1, "Clearcoat", 1 << 4),
+        (1, "BSDF", 0, "Surface", 0),
+        (12, "Out", 5, "Fac", 0),
+        (11, "Object", 2, "Vector", 0),
+    ];
+    write_tree(&mut w, &c, mtree, "DATA", "Shader Nodetree", &nodes, &links, &[]);
+    let d = w.inst("Material", &[("id.name", s("MANodes")), ("r", n(0.8)), ("g", n(0.8)), ("b", n(0.8)), ("a", n(1.)), ("use_nodes", n(1.)), ("nodetree", p(mtree))]);
+    w.put(ma, "MA", "Material", 1, d);
+
+    // The world tree.
+    let mut bg = Nd::new("Background", "ShaderNodeBackground", vec![sk("Color", "Color", 2, Dv::C([0.2, 0.3, 0.4, 1.0])), sk("Strength", "Strength", 0, Dv::F(2.0))], vec![sk("Background", "Background", 3, Dv::No)]);
+    bg.loc = [-200.0, 0.0];
+    let mut wout = Nd::new("World Output", "ShaderNodeOutputWorld", vec![sk("Surface", "Surface", 3, Dv::No)], vec![]);
+    wout.flag = 64;
+    write_tree(&mut w, &c, wtree, "DATA", "Shader Nodetree", &[bg, wout], &[(0, "Background", 1, "Surface", 0)], &[]);
+    let d = w.inst("World", &[("id.name", s("WOWorld")), ("horr", n(0.05)), ("horg", n(0.05)), ("horb", n(0.05)), ("nodetree", p(wtree)), ("use_nodes", n(1.))]);
+    w.put(wo, "WO", "World", 1, d);
+    w.finish()
+}
+
+/// A scene whose compositing tree (`Scene.nodetree`, `use_nodes` 1) runs
+/// Render Layers -> Blur (fast gauss, 3x5) -> Glare (bloom) -> Mix (add,
+/// clamp) -> Composite, with a Channel Key, a Color Balance (offset/power/
+/// slope), a muted Crop and a Math node (power, clamp) on the side.
+pub fn compositor_file(c: Cfg) -> Vec<u8> {
+    let mut w = Writer::new(define(&c), c.big, c.layout == Layout::Attr50, version_of(&c));
+    let [sc, tree, glob] = [(); 3].map(|_| w.alloc());
+    let g = w.inst("FileGlobal", &[("curscene", p(sc))]);
+    w.put(glob, "GLOB", "FileGlobal", 1, g);
+    let d = w.inst("Scene", &[("id.name", s("SCComp")), ("r.xsch", n(64.)), ("r.ysch", n(48.)), ("r.xasp", n(1.)), ("r.yasp", n(1.)), ("nodetree", p(tree)), ("use_nodes", n(1.))]);
+    w.put(sc, "SC", "Scene", 1, d);
+
+    let glare = w.add("DATA", "NodeGlare", &[("quality", n(2.)), ("type", n(4.)), ("iter", n(5.)), ("size", n(7.)), ("star_45", n(0.)), ("streaks", n(6.)), ("colmod", n(0.5)), ("mix", n(-0.25)), ("threshold", n(0.75)), ("fade", n(0.8)), ("angle_ofs", n(0.3))]);
+    let blur = w.add("DATA", "NodeBlurData", &[("sizex", n(3.)), ("sizey", n(5.)), ("filtertype", n(7.)), ("relative", n(1.)), ("aspect", n(2.)), ("percentx", n(10.)), ("gamma", n(1.))]);
+    let chroma = w.add("DATA", "NodeChroma", &[("t1", n(0.9)), ("t2", n(0.1)), ("algorithm", n(0.)), ("channel", n(3.))]);
+    let balance = w.add("DATA", "NodeColorBalance", &[("slope", nv(&[1.5, 1.0, 1.0])), ("offset", nv(&[0.0, 0.1, 0.0])), ("power", nv(&[1.0, 1.0, 2.0])), ("offset_basis", n(0.2)), ("lift", nv(&[1.; 3])), ("gamma", nv(&[1.; 3])), ("gain", nv(&[1.; 3]))]);
+    let crop = w.add("DATA", "NodeTwoXYs", &[("x1", n(2.)), ("x2", n(30.)), ("y1", n(4.)), ("y2", n(40.))]);
+
+    let img = |id: &str| sk(id, "Image", 2, Dv::C([0.8, 0.8, 0.8, 1.0]));
+    let rl = Nd::new("Render Layers", "CompositorNodeRLayers", vec![], vec![sk("Image", "Image", 2, Dv::No), sk("Alpha", "Alpha", 0, Dv::No)]);
+    let mut bl = Nd::new("Blur", "CompositorNodeBlur", vec![img("Image"), sk("Size", "Size", 0, Dv::F(0.5))], vec![sk("Image", "Image", 2, Dv::No)]);
+    bl.storage = blur;
+    bl.custom = [2, 0]; // extended bounds
+    let mut gl = Nd::new("Glare", "CompositorNodeGlare", vec![img("Image")], vec![sk("Image", "Image", 2, Dv::No)]);
+    gl.storage = glare;
+    let mut mix = Nd::new("Mix", "CompositorNodeMixRGB", vec![sk("Fac", "Fac", 0, Dv::F(0.6)), img("Image"), img("Image_001")], vec![sk("Image", "Image", 2, Dv::No)]);
+    mix.custom = [1, 2]; // add, clamp
+    let mut co = Nd::new("Composite", "CompositorNodeComposite", vec![img("Image"), sk("Alpha", "Alpha", 0, Dv::F(1.0))], vec![]);
+    co.custom = [0, 1]; // ignore alpha
+    let mut key = Nd::new("Channel Key", "CompositorNodeChannelMatte", vec![img("Image")], vec![sk("Image", "Image", 2, Dv::No), sk("Matte", "Matte", 0, Dv::No)]);
+    key.storage = chroma;
+    key.custom = [2, 1]; // HSV, R
+    let mut cb = Nd::new("Color Balance", "CompositorNodeColorBalance", vec![sk("Fac", "Fac", 0, Dv::F(1.0)), img("Image")], vec![sk("Image", "Image", 2, Dv::No)]);
+    cb.storage = balance;
+    cb.custom = [1, 0];
+    let mut cr = Nd::new("Crop", "CompositorNodeCrop", vec![img("Image")], vec![sk("Image", "Image", 2, Dv::No)]);
+    cr.storage = crop;
+    cr.custom = [1, 0];
+    cr.flag = 1 << 9;
+    let mut ma = Nd::new("Math", "CompositorNodeMath", vec![sk("Value", "Value", 0, Dv::F(2.0)), sk("Value_001", "Value", 0, Dv::F(3.0))], vec![sk("Value", "Value", 0, Dv::No)]);
+    ma.custom = [10, 1]; // NODE_MATH_POWER, clamp
+    let nodes = [rl, bl, gl, mix, co, key, cb, cr, ma];
+    let links: [NodeLink; 6] = [(0, "Image", 1, "Image", 0), (1, "Image", 2, "Image", 0), (2, "Image", 3, "Image", 0), (0, "Image", 3, "Image_001", 0), (3, "Image", 4, "Image", 0), (0, "Image", 5, "Image", 0)];
+    write_tree(&mut w, &c, tree, "DATA", "Compositing Nodetree", &nodes, &links, &[]);
+    w.finish()
+}
+
+/// The value the geometry nodes fixture's modifier gives "Height".
+pub const GN_HEIGHT: f32 = 0.75;
+
+/// A cube object "GN" with a Nodes modifier running the geometry node group
+/// "Geometry Nodes": its input extruded (faces, individually) by "Height",
+/// joined with a triangle-fan Cylinder. The modifier sets Height to
+/// [`GN_HEIGHT`] by ID property, with a `_use_attribute` entry to skip.
+pub fn geonodes_file(c: Cfg) -> Vec<u8> {
+    assert!(c.attr());
+    let mut w = Writer::new(define(&c), c.big, c.layout == Layout::Attr50, version_of(&c));
+    let [sc, me, ob, grp, md, root, height, use_attr] = [(); 8].map(|_| w.alloc());
+    let glob = w.alloc();
+    let g = w.inst("FileGlobal", &[("curscene", p(sc))]);
+    w.put(glob, "GLOB", "FileGlobal", 1, g);
+    let d = w.inst("Scene", &[("id.name", s("SCGeo")), ("r.sfra", n(1.)), ("r.efra", n(10.)), ("r.xsch", n(64.)), ("r.ysch", n(64.)), ("r.xasp", n(1.)), ("r.yasp", n(1.))]);
+    w.put(sc, "SC", "Scene", 1, d);
+    write_mesh(&mut w, &c, me, 0, 0);
+
+    // The group: interface identifiers as 4.x or 3.x name them.
+    let (gin, gout, gh) = if c.new_names() { ("Socket_0", "Socket_1", "Socket_2") } else { ("Input_0", "Output_1", "Input_2") };
+    let input = Nd::new("Group Input", "NodeGroupInput", vec![], vec![sk(gin, "Geometry", 10, Dv::No), sk(gh, "Height", 0, Dv::F(1.0))]);
+    let mut extrude = Nd::new(
+        "Extrude Mesh",
+        "GeometryNodeExtrudeMesh",
+        vec![sk("Mesh", "Mesh", 10, Dv::No), sk("Selection", "Selection", 4, Dv::No), sk("Offset", "Offset", 1, Dv::No), sk("Offset Scale", "Offset Scale", 0, Dv::F(1.0)), sk("Individual", "Individual", 4, Dv::No)],
+        vec![sk("Mesh", "Mesh", 10, Dv::No), sk("Top", "Top", 4, Dv::No), sk("Side", "Side", 4, Dv::No)],
+    );
+    extrude.storage = w.add("DATA", "NodeGeometryExtrudeMesh", &[("mode", n(2.))]);
+    let mut cyl = Nd::new("Cylinder", "GeometryNodeMeshCylinder", vec![], vec![sk("Mesh", "Mesh", 10, Dv::No)]);
+    cyl.storage = w.add("DATA", "NodeGeometryMeshCylinder", &[("fill_type", n(2.))]);
+    let join = Nd::new("Join Geometry", "GeometryNodeJoinGeometry", vec![sk("Geometry", "Geometry", 10, Dv::No)], vec![sk("Geometry", "Geometry", 10, Dv::No)]);
+    let mut out = Nd::new("Group Output", "NodeGroupOutput", vec![sk(gout, "Geometry", 10, Dv::No)], vec![]);
+    out.flag = 64;
+    let links: [NodeLink; 5] = [(0, gin, 1, "Mesh", 0), (0, gh, 1, "Offset Scale", 0), (1, "Mesh", 3, "Geometry", 0), (2, "Mesh", 3, "Geometry", 0), (3, "Geometry", 4, gout, 0)];
+    let iface: [Iface; 3] = [("Geometry", gin, 1, 0.0), ("Geometry", gout, 2, 0.0), ("Height", gh, 1, 1.0)];
+    write_tree(&mut w, &c, grp, "NT", "Geometry Nodes", &[input, extrude, cyl, join, out], &links, &iface);
+
+    // The modifier and its ID properties.
+    let prop = |w: &mut Writer, ptr: u64, prev: u64, next: u64, name: &str, ty: f64, val: f64| {
+        let d = w.inst("IDProperty", &[("next", p(next)), ("prev", p(prev)), ("type", n(ty)), ("name", s(name)), ("data.val", n(val))]);
+        w.put(ptr, "DATA", "IDProperty", 1, d);
+    };
+    prop(&mut w, height, 0, use_attr, gh, 2., GN_HEIGHT.to_bits() as f64);
+    prop(&mut w, use_attr, height, 0, &format!("{gh}_use_attribute"), 1., 1.);
+    let d = w.inst("IDProperty", &[("type", n(6.)), ("name", s("Nodes Modifier Settings")), ("data.group.first", p(height)), ("data.group.last", p(use_attr))]);
+    w.put(root, "DATA", "IDProperty", 1, d);
+    let d = w.inst("NodesModifierData", &[("modifier.mode", n(3.)), ("modifier.type", n(57.)), ("modifier.name", s("GeometryNodes")), ("node_group", p(grp)), ("settings.properties", p(root))]);
+    w.put(md, "DATA", "NodesModifierData", 1, d);
+
+    let ident = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    let mut f = vec![("id.name", s("OBGN")), ("type", n(1.)), ("data", p(me)), ("scale", nv(&[1., 1., 1.])), ("dscale", nv(&[1., 1., 1.])), ("parentinv", nv(&ident)), ("rotmode", n(1.)), ("modifiers.first", p(md)), ("modifiers.last", p(md))];
+    if !c.new_names() {
+        f.push(("obmat", nv(&ident)));
+    }
+    let d = w.inst("Object", &f);
+    w.put(ob, "OB", "Object", 1, d);
+    w.finish()
+}
+
+/// Rigid body world, rigid bodies, a constraint, a force field, and the
+/// Collision, Cloth, Particle System and Fluid modifiers.
+pub fn physics_file(c: Cfg) -> Vec<u8> {
+    let mut w = Writer::new(define_ext(&c, true), c.big, c.layout == Layout::Attr50, version_of(&c));
+    let [sc, me, ground, cube, empty, domain] = [(); 6].map(|_| w.alloc());
+    let glob = w.alloc();
+    let g = w.inst("FileGlobal", &[("curscene", p(sc))]);
+    w.put(glob, "GLOB", "FileGlobal", 1, g);
+
+    // Scene: gravity and the rigid body world (its cache directly before
+    // 2.8, through the shared struct after).
+    let pc = w.add("DATA", "PointCache", &[("startframe", n(3.)), ("endframe", n(90.)), ("flag", n(64.))]);
+    let ew = w.add("DATA", "EffectorWeights", &[("weight", nv(&[1., 1., 1., 1., 0.25, 1., 1., 1., 1., 1., 1., 1., 1., 1.])), ("global_gravity", n(0.5))]);
+    let mut f = if c.layout == Layout::Legacy27 {
+        vec![("pointcache", p(pc))]
+    } else {
+        let shared = w.add("DATA", "RigidBodyWorld_Shared", &[("pointcache", p(pc))]);
+        vec![("shared", p(shared))]
+    };
+    f.extend([("effector_weights", p(ew)), ("substeps_per_frame", n(25.)), ("num_solver_iterations", n(30.)), ("flag", n(4.)), ("time_scale", n(0.75))]);
+    let rbw = w.add("DATA", "RigidBodyWorld", &f);
+    let d = w.inst(
+        "Scene",
+        &[("id.name", s("SCPhys")), ("r.sfra", n(1.)), ("r.efra", n(100.)), ("r.xsch", n(64.)), ("r.ysch", n(64.)), ("r.xasp", n(1.)), ("r.yasp", n(1.)), ("rigidbody_world", p(rbw)), ("physics_settings.gravity", nv(&[0., 0., -4.])), ("physics_settings.flag", n(1.))],
+    );
+    w.put(sc, "SC", "Scene", 1, d);
+    write_mesh(&mut w, &c, me, 0, 0);
+
+    let ident = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1.];
+    let object = |w: &mut Writer, ptr: u64, name: &str, ty: f64, data: u64, mods: (u64, u64), extra: Vec<(&str, V)>| {
+        let (sz, dsz) = if c.layout == Layout::Legacy27 { ("size", "dsize") } else { ("scale", "dscale") };
+        let id = format!("OB{name}");
+        let mut f = vec![("id.name", s(&id)), ("type", n(ty)), ("data", p(data)), (sz, nv(&[1., 1., 1.])), (dsz, nv(&[1., 1., 1.])), ("parentinv", nv(&ident)), ("rotmode", n(1.)), ("modifiers.first", p(mods.0)), ("modifiers.last", p(mods.1))];
+        if !c.new_names() {
+            f.push(("obmat", nv(&ident)));
+        }
+        f.extend(extra);
+        let d = w.inst("Object", &f);
+        w.put(ptr, "OB", "Object", 1, d);
+    };
+
+    // Ground: passive box with a Collision modifier (settings on `pd`).
+    let rb = w.add("DATA", "RigidBodyOb", &[("type", n(1.)), ("shape", n(0.)), ("flag", n(0.)), ("mesh_source", n(2.)), ("mass", n(1.)), ("friction", n(0.8)), ("restitution", n(0.1)), ("margin", n(0.04))]);
+    let pd = w.add("DATA", "PartDeflect", &[("deflect", n(1.)), ("pdef_sboft", n(0.05)), ("pdef_damp", n(0.3)), ("pdef_cfrict", n(2.)), ("flag", n(16.))]);
+    let col = w.add("DATA", "CollisionModifierData", &[("modifier.mode", n(3.)), ("modifier.name", s("Collision"))]);
+    object(&mut w, ground, "Ground", 1., me, (col, col), vec![("rigidbody_object", p(rb)), ("pd", p(pd))]);
+
+    // Cube: active sphere, Cloth then a Particle System.
+    let rb = w.add(
+        "DATA",
+        "RigidBodyOb",
+        &[("type", n(0.)), ("shape", n(1.)), ("flag", n((8 | 64) as f64)), ("mesh_source", n(2.)), ("mass", n(3.)), ("friction", n(0.3)), ("restitution", n(0.6)), ("margin", n(0.02)), ("lin_damping", n(0.2)), ("ang_damping", n(0.3)), ("lin_sleep_thresh", n(0.5)), ("ang_sleep_thresh", n(0.6))],
+    );
+    let sim = w.add(
+        "DATA",
+        "ClothSimSettings",
+        &[
+            ("Cvi", n(2.)),
+            ("mass", n(0.5)),
+            ("tension", n(20.)),
+            ("compression", n(21.)),
+            ("shear", n(6.)),
+            ("bending", n(0.7)),
+            ("time_scale", n(1.)),
+            ("goalspring", n(2.)),
+            ("shrink_min", n(0.1)),
+            ("uniform_pressure_force", n(3.)),
+            ("bending_damping", n(0.4)),
+            ("stepsPerFrame", n(9.)),
+            ("flags", n((1 << 17) as f64)),
+            ("tension_damp", n(5.)),
+            ("compression_damp", n(5.)),
+            ("shear_damp", n(5.)),
+        ],
+    );
+    let coll = w.add("DATA", "ClothCollSettings", &[("epsilon", n(0.02)), ("selfepsilon", n(0.03)), ("self_friction", n(4.)), ("flags", n(6.)), ("loop_count", n(3.))]);
+    let cpc = w.add("DATA", "PointCache", &[("startframe", n(1.)), ("endframe", n(60.))]);
+    let [cloth, psmd] = [(); 2].map(|_| w.alloc());
+    let d = w.inst("ClothModifierData", &[("modifier.mode", n(3.)), ("modifier.name", s("Cloth")), ("modifier.next", p(psmd)), ("sim_parms", p(sim)), ("coll_parms", p(coll)), ("point_cache", p(cpc))]);
+    w.put(cloth, "DATA", "ClothModifierData", 1, d);
+    let part = w.alloc();
+    let d = w.inst(
+        "ParticleSettings",
+        &[
+            ("id.name", s("PASparks")),
+            ("type", n(0.)),
+            ("from", n(1.)),
+            ("distr", n(1.)),
+            ("phystype", n(1.)),
+            ("ren_as", n(7.)),
+            ("draw_as", n(2.)),
+            ("childtype", n(1.)),
+            ("integrator", n(2.)),
+            ("totpart", n(123.)),
+            ("child_nbr", n(5.)),
+            ("ren_child_nbr", n(50.)),
+            ("hair_step", n(5.)),
+            ("omat", n(1.)),
+            ("sta", n(5.)),
+            ("end", n(50.)),
+            ("lifetime", n(30.)),
+            ("randlife", n(0.25)),
+            ("normfac", n(2.)),
+            ("randfac", n(0.1)),
+            ("mass", n(2.)),
+            ("size", n(0.2)),
+            ("randsize", n(0.5)),
+            ("ob_vel", nv(&[0., 0., 1.])),
+            ("childrad", n(0.3)),
+            ("rad_root", n(1.)),
+            ("rad_scale", n(0.01)),
+            ("instance_object", p(ground)),
+        ],
+    );
+    w.put(part, "PA", "ParticleSettings", 1, d);
+    let psys = w.add("DATA", "ParticleSystem", &[("part", p(part)), ("name", s("Sparks")), ("seed", n(7.))]);
+    let d = w.inst("ParticleSystemModifierData", &[("modifier.mode", n(3.)), ("modifier.name", s("ParticleSystem")), ("modifier.prev", p(cloth)), ("psys", p(psys))]);
+    w.put(psmd, "DATA", "ParticleSystemModifierData", 1, d);
+    object(&mut w, cube, "Cube", 1., me, (cloth, psmd), vec![("rigidbody_object", p(rb)), ("loc", nv(&[0., 0., 3.]))]);
+
+    // Empty: a wind field and a hinge between the two.
+    let pd = w.add(
+        "DATA",
+        "PartDeflect",
+        &[("forcefield", n(4.)), ("shape", n(1.)), ("falloff", n(1.)), ("zdir", n(1.)), ("flag", n((1 | 256 | (1 << 14)) as f64)), ("f_strength", n(2.5)), ("f_flow", n(0.5)), ("f_power", n(2.)), ("maxdist", n(4.)), ("mindist", n(1.)), ("f_noise", n(0.2)), ("seed", n(9.))],
+    );
+    let con = w.add(
+        "DATA",
+        "RigidBodyCon",
+        &[
+            ("ob1", p(ground)),
+            ("ob2", p(cube)),
+            ("type", n(2.)),
+            ("flag", n((1 | 8 | (1 << 8) | (1 << 13) | (1 << 16)) as f64)),
+            ("breaking_threshold", n(7.)),
+            ("spring_type", n(1.)),
+            ("limit_ang_x_lower", n(-0.5)),
+            ("limit_ang_x_upper", n(0.5)),
+            ("spring_stiffness_z", n(40.)),
+            ("spring_damping_z", n(0.25)),
+        ],
+    );
+    object(&mut w, empty, "Hinge", 0., 0, (0, 0), vec![("pd", p(pd)), ("rigidbody_constraint", p(con))]);
+
+    // Smoke domain.
+    let dom = w.add("DATA", "FluidDomainSettings", &[("maxres", n(48.)), ("type", n(0.)), ("alpha", n(0.5)), ("beta", n(1.5)), ("vorticity", n(0.1)), ("cache_frame_start", n(2.)), ("cache_frame_end", n(80.))]);
+    let fm = w.add("DATA", "FluidModifierData", &[("modifier.mode", n(3.)), ("modifier.name", s("Fluid")), ("domain", p(dom)), ("type", n(1.))]);
+    object(&mut w, domain, "Domain", 1., me, (fm, fm), vec![]);
+    w.finish()
 }

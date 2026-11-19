@@ -13,6 +13,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import time
 from desktop_close_gate import QMP
 
@@ -52,6 +53,9 @@ def main():
             if m: return m
             if re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at', value): raise RuntimeError('guest fault')
             time.sleep(.05)
+        # The log is an artifact the reader may not reach: show the tray's story here.
+        tail = [l for l in text().splitlines() if re.search(r'shell\.(tray|media|network_time)|sexnet\.(wifi|tray)|wifi_status', l)][-40:]
+        print('\n'.join(tail), file=sys.stderr)
         raise RuntimeError('timeout: ' + pattern)
 
     try:

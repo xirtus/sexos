@@ -55,6 +55,21 @@ pub fn is_wide(scalar: u32) -> bool {
     i < table.len() && table[i].0 <= scalar
 }
 
+/// Whether a character takes no cell of its own: a combining mark, a format character
+/// such as the zero-width joiner, a variation selector or an emoji skin-tone modifier.
+/// A terminal draws it with the character before it.
+pub fn is_zero_width(scalar: u32) -> bool {
+    if scalar < 0x300 { return false; }
+    let table = &super::zero_table::ZERO;
+    let i = table.partition_point(|&(_, last)| last < scalar);
+    i < table.len() && table[i].0 <= scalar
+}
+
+/// How many cells of a text grid a character takes: 0, 1 or 2.
+pub fn width(scalar: u32) -> usize {
+    if is_zero_width(scalar) { 0 } else if is_wide(scalar) { 2 } else { 1 }
+}
+
 /// The scalar to draw for the character at byte `at` of `text`: an Arabic letter's
 /// joining form, otherwise `scalar` itself.
 pub fn shown(text: &[u8], at: usize, scalar: u32) -> u32 {

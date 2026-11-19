@@ -712,6 +712,8 @@ pub extern "C" fn _start() -> ! { sex_app::with_stack(1 << 20, main) }
 extern "C" fn main() -> ! {
     let mut window = Window::open();
     window.title(b"Jot");
+    // Numpad keys come marked (Key::keypad); Jot treats them as the grey keys for now.
+    window.want_keys(sex_pdx::app_key::KEYPAD);
     // Files the person gave, as `@/path` words, or the notes in Jot's own folder.
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args).to_vec();
@@ -779,7 +781,7 @@ extern "C" fn main() -> ! {
                     _ => continue,
                 }
             }
-            Event::DragEnded { .. } => continue,
+            Event::DragEnded { .. } | Event::KeyUp(_) => continue,
             // A file dropped on the window opens in a new tab; dropped text goes in at the cursor.
             Event::Drop { kind, .. } => {
                 let bytes = sex_app::dnd::dropped().to_vec();

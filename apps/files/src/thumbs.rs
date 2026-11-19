@@ -4,7 +4,12 @@
 //! Pictures (PNG, JPEG, GIF, WebP) are made small in the background, one per piece of
 //! work between keys, and kept in Files' own folder (`thumbs/`), named by path, size and
 //! modification time; the folder opened again draws from there without decoding anything.
-//! Other files show a tile with their kind (PDF, VIDEO, TEXT, ...).
+//! Other files and folders show their icon from the SexOS icon set (`sex_icons`).
+//!
+//! Documents are drawn by their own program, one at a time, run with no window:
+//! `NAME --thumb @/in @/out 112` writes the thumbnail straight into the same cache, in
+//! the same format (u16 LE width, u16 LE height, RGB rows). A helper that is missing,
+//! fails or takes too long leaves the kind tile.
 
 use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
@@ -26,22 +31,45 @@ const DIR: &[u8] = b"thumbs";
 /// Pictures larger than this are not read for a thumbnail.
 const FILE_MAX: u64 = 48 * 1024 * 1024;
 
-const BG: u32 = 0x1B1D22;
-const TILE: u32 = 0x2A2D34;
-const PICKED: u32 = 0x3D6FD6;
-const TEXT: u32 = 0xE6E8EC;
-const DIM: u32 = 0x9AA0AA;
+// The grid is drawn in the dark theme's tokens (`sex_theme`) whatever the theme, as
+// picture grids are, so pictures read true; the accent follows Settings.
+const BG: u32 = 0x1C1A20; // Dark window
+const TILE: u32 = 0x26232B; // Dark surface
+const TEXT: u32 = 0xF1EEF4; // Dark text
+const DIM: u32 = 0xB3ADB9; // Dark text_dim
+/// Side of a file or folder icon in a tile.
+const ICON: usize = 80;
 
 pub enum Thumb { Picture { w: usize, h: usize, px: Vec<u32> }, Kind(&'static str) }
 
 /// What one folder's thumbnails took.
 #[derive(Default, Clone, Copy)]
-pub struct Tally { pub pictures: usize, pub made: usize, pub cached: usize, pub failed: usize, pub started: u64 }
+pub struct Tally { pub pictures: usize, pub made: usize, pub cached: usize, pub failed: usize, pub started: u64,
+                   /// Files a helper program draws: how many, drawn now, from the cache.
+                   pub documents: usize, pub drawn: usize, pub from_cache: usize,
+                   /// When the last picture was done: `ms` counts pictures only.
+                   pub pictures_done: u64 }
+
+/// Kinds a program draws a thumbnail of with `--thumb`, and that program.
+const HELPERS: &[(&str, &[u8])] = &[("PDF", b"vellum"), ("RAW", b"gaze")];
+/// A helper run that has not ended by now is ended.
+const HELPER_MS: u64 = 20_000;
+static HELPER_RUNS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0x7B00_0000);
+
+/// The helper drawing one document: (cookie, document path, cache name, started at).
+struct Helping { cookie: u32, program: &'static [u8], path: Vec<u8>, name: Vec<u8>, started: u64 }
 
 pub struct Thumbs {
     pub on: bool,
     made: BTreeMap<Vec<u8>, Thumb>,
     queue: VecDeque<(Vec<u8>, u64)>,
+    /// Documents waiting for their helper, after the pictures.
+    documents: VecDeque<(Vec<u8>, u64, &'static [u8])>,
+    helping: Option<Helping>,
+    /// Helpers found missing this run, so they are not asked again.
+    missing: Vec<&'static [u8]>,
+    /// Where Files' own folder is as an absolute path, if helpers may write there.
+    own: Option<Vec<u8>>,
     pub tally: Tally,
     /// The folder whose thumbnails are being made, logged when the queue empties.
     folder: Vec<u8>,
@@ -49,6 +77,10 @@ pub struct Thumbs {
     font: Option<Font<'static>>,
     acc: Vec<i32>,
     cover: Vec<u8>,
+    /// File icons drawn so far, by icon name: `ICON` square `0xAARRGGBB` pixels.
+    icons: BTreeMap<&'static str, Vec<u32>>,
+    /// The picked tile: Settings' accent in the dark theme, read when a folder is listed.
+    picked: u32,
 }
 
 pub fn kind(name: &[u8], dir: bool) -> Option<&'static str> {
@@ -60,6 +92,8 @@ pub fn kind(name: &[u8], dir: bool) -> Option<&'static str> {
     Some(match &e[..ext.len()] {
         b"png" | b"jpg" | b"jpeg" | b"gif" | b"webp" => return None,
         b"pdf" => "PDF",
+        // Camera RAW: Gaze draws the embedded preview.
+        b"dng" | b"cr2" | b"cr3" | b"nef" | b"arw" | b"orf" | b"rw2" | b"pef" | b"raf" => "RAW",
         b"mp4" | b"webm" | b"mkv" | b"mov" | b"avi" | b"m4v" => "VIDEO",
         b"mp3" | b"ogg" | b"opus" | b"flac" | b"wav" | b"m4a" => "AUDIO",
         b"txt" | b"md" | b"rs" | b"toml" | b"json" | b"csv" | b"log" | b"html" | b"css" | b"js" => "TEXT",
@@ -72,46 +106,152 @@ fn fnv(bytes: &[u8]) -> u64 { bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b|
 
 impl Thumbs {
     pub const fn new() -> Self {
-        Thumbs { on: false, made: BTreeMap::new(), queue: VecDeque::new(), tally: Tally { pictures: 0, made: 0, cached: 0, failed: 0, started: 0 }, folder: Vec::new(),
-                 dir_ready: false, font: None, acc: Vec::new(), cover: Vec::new() }
+        Thumbs { on: false, made: BTreeMap::new(), queue: VecDeque::new(), documents: VecDeque::new(), helping: None, missing: Vec::new(), own: None,
+                 tally: Tally { pictures: 0, made: 0, cached: 0, failed: 0, started: 0, documents: 0, drawn: 0, from_cache: 0, pictures_done: 0 }, folder: Vec::new(),
+                 dir_ready: false, font: None, acc: Vec::new(), cover: Vec::new(), icons: BTreeMap::new(), picked: 0xDB4B7E }
     }
-    pub fn busy(&self) -> bool { self.on && !self.queue.is_empty() }
+    pub fn busy(&self) -> bool { self.on && (!self.queue.is_empty() || !self.documents.is_empty() || self.helping.is_some()) }
     /// Queues the pictures of a freshly listed folder that have no thumbnail yet.
     pub fn folder(&mut self, cwd: &[u8], entries: &[Entry]) {
+        let accent = sex_app::settings::appearance().map_or(sex_theme::DEFAULT_ACCENT, |(_, a)| a as u32);
+        self.picked = sex_theme::tokens(sex_theme::Mode::Dark, accent).accent & 0xFF_FFFF;
         self.queue.clear();
+        self.documents.clear();
+        // A helper still drawing for the folder left behind is ended.
+        if let Some(h) = self.helping.take() { sex_app::launch::kill(h.cookie); }
         self.folder = cwd.to_vec();
         self.tally = Tally { started: sex_pdx::get_ticks(), ..Tally::default() };
         for e in entries {
-            if kind(&e.name, e.dir).is_some() { continue; }
-            self.tally.pictures += 1;
             let path = join(cwd, &e.name);
-            if !self.made.contains_key(&path) { self.queue.push_back((path, e.size)); }
+            match kind(&e.name, e.dir) {
+                None => {
+                    self.tally.pictures += 1;
+                    if !self.made.contains_key(&path) { self.queue.push_back((path, e.size)); }
+                }
+                Some(k) => if let Some((_, program)) = HELPERS.iter().find(|(h, _)| *h == k) {
+                    if e.size == 0 { continue; }
+                    self.tally.documents += 1;
+                    if !self.made.contains_key(&path) { self.documents.push_back((path, e.size, program)); }
+                },
+            }
         }
-        if self.on && self.queue.is_empty() && self.tally.pictures > 0 { self.report(); }
+        if self.on && !self.busy() && self.tally.pictures + self.tally.documents > 0 { self.report(); }
     }
     fn report(&self) {
         let t = &self.tally;
-        sex_pdx::serial_record!("[files.app.thumbs] dir={} pictures={} made={} cached={} failed={} ms={}",
-            crate::shown(&self.folder), t.pictures, t.made, t.cached, t.failed, sex_pdx::get_ticks().saturating_sub(t.started));
+        sex_pdx::serial_record!("[files.app.thumbs] dir={} pictures={} made={} cached={} failed={} ms={} documents={} drawn={} from_cache={}",
+            crate::shown(&self.folder), t.pictures, t.made, t.cached, t.failed,
+            if t.pictures_done != 0 { t.pictures_done } else { sex_pdx::get_ticks() }.saturating_sub(t.started), t.documents, t.drawn, t.from_cache);
+    }
+    fn cache_name(window: &mut Window, path: &[u8], size: u64) -> Vec<u8> {
+        let mtime = files::stat(window, &at(path)).map(|s| s.mtime).unwrap_or(0);
+        alloc::format!("thumbs/{:016x}-{}-{}", fnv(path), size, mtime).into_bytes()
+    }
+    fn ready(&mut self, window: &mut Window) {
+        if self.dir_ready { return; }
+        let _ = files::mkdir(window, DIR);
+        self.dir_ready = true;
+        // Files' own folder, as a helper is handed it: `/data/NAME/thumbs` is the same
+        // folder only if Files runs as `loom` and holds the whole filesystem.
+        let mut own = sex_pdx::program_store::DATA.to_vec();
+        own.extend_from_slice(b"loom");
+        let mut probe = own.clone();
+        probe.extend_from_slice(b"/thumbs");
+        self.own = files::stat(window, &at(&probe)).ok().filter(|s| s.dir).map(|_| own);
     }
     /// Makes one thumbnail. True when the grid should be drawn again.
     pub fn step(&mut self, window: &mut Window) -> bool {
-        let Some((path, size)) = self.queue.pop_front() else { return false };
-        let mtime = files::stat(window, &at(&path)).map(|s| s.mtime).unwrap_or(0);
-        let name = alloc::format!("thumbs/{:016x}-{}-{}", fnv(&path), size, mtime);
-        let thumb = match self.cached(window, name.as_bytes()) {
+        let Some((path, size)) = self.queue.pop_front() else { return self.document_step(window) };
+        let name = Self::cache_name(window, &path, size);
+        let thumb = match self.cached(window, &name) {
             Some(t) => { self.tally.cached += 1; t }
             None => match picture(window, &path, size) {
                 Some((w, h, px)) => {
                     self.tally.made += 1;
-                    self.keep(window, name.as_bytes(), w, h, &px);
+                    self.keep(window, &name, w, h, &px);
                     Thumb::Picture { w, h, px }
                 }
                 None => { self.tally.failed += 1; Thumb::Kind("PICTURE?") }
             },
         };
         self.made.insert(path, thumb);
-        if self.queue.is_empty() { self.report(); }
+        if self.queue.is_empty() { self.tally.pictures_done = sex_pdx::get_ticks(); }
+        if !self.busy() { self.report(); }
+        true
+    }
+    /// Starts the next document's helper, or looks at the one running.
+    fn document_step(&mut self, window: &mut Window) -> bool {
+        use sex_app::launch::{self, Event};
+        if let Some(h) = &self.helping {
+            let (cookie, program) = (h.cookie, h.program);
+            let ended = match launch::poll(cookie) {
+                Some(Event::Started { .. }) => return false,
+                Some(Event::Refused { code, .. }) => {
+                    // Not installed: the kind tile, and no more asking this run.
+                    if code == sex_pdx::program_store::NOT_FOUND as u32 && !self.missing.contains(&program) { self.missing.push(program); }
+                    Some(alloc::format!("refused code={}", code))
+                }
+                Some(Event::Done { status: Some(0), .. }) => None,
+                Some(Event::Done { status, .. }) => Some(alloc::format!("status={}", status.map_or(-1, |s| s as i64))),
+                None if sex_pdx::get_ticks().saturating_sub(h.started) > HELPER_MS => { launch::kill(cookie); Some(String::from("timeout")) }
+                None => { let _ = sex_pdx::sys_wait_self_ticks(2); return false; }
+            };
+            let h = self.helping.take().unwrap();
+            let ms = sex_pdx::get_ticks().saturating_sub(h.started);
+            let thumb = match ended {
+                None => self.cached(window, &h.name),
+                Some(why) => {
+                    sex_pdx::serial_record!("[files.app.thumbs.helper.failed] program={} path={} {} ms={}", crate::shown(program), crate::shown(&h.path), why, ms);
+                    None
+                }
+            };
+            if thumb.is_some() {
+                self.tally.drawn += 1;
+                sex_pdx::serial_record!("[files.app.thumbs.helper] program={} path={} ms={}", crate::shown(program), crate::shown(&h.path), ms);
+            }
+            let label = HELPERS.iter().find(|(_, p)| *p == program).map_or("FILE", |(k, _)| *k);
+            self.made.insert(h.path, thumb.unwrap_or(Thumb::Kind(label)));
+            if !self.busy() { self.report(); }
+            return true;
+        }
+        let Some((path, size, program)) = self.documents.pop_front() else { return false };
+        self.ready(window);
+        let name = Self::cache_name(window, &path, size);
+        if let Some(t) = self.cached(window, &name) {
+            self.tally.from_cache += 1;
+            self.made.insert(path, t);
+            if !self.busy() { self.report(); }
+            return true;
+        }
+        let label = HELPERS.iter().find(|(_, p)| *p == program).map_or("FILE", |(k, _)| *k);
+        let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
+        let mut line = Vec::new();
+        let started = match (&self.own, self.missing.contains(&program)) {
+            (Some(own), false) => {
+                let mut out = own.clone();
+                out.push(b'/');
+                out.extend_from_slice(&name);
+                let input = sex_pdx::launch::open_args(&path, &mut args).map(|n| args[..n].to_vec());
+                let output = sex_pdx::launch::open_args(&out, &mut args).map(|n| args[..n].to_vec());
+                match (input, output) {
+                    (Some(i), Some(o)) => {
+                        line.extend_from_slice(b"--thumb ");
+                        line.extend_from_slice(&i);
+                        line.push(b' ');
+                        line.extend_from_slice(&o);
+                        line.extend_from_slice(alloc::format!(" {}", SIDE).as_bytes());
+                        let cookie = HELPER_RUNS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+                        (line.len() <= sex_pdx::fs::ARGS_MAX && launch::run_hidden(program, &line, cookie).is_ok()).then_some(cookie)
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        match started {
+            Some(cookie) => self.helping = Some(Helping { cookie, program, path, name, started: sex_pdx::get_ticks() }),
+            None => { self.made.insert(path, Thumb::Kind(label)); if !self.busy() { self.report(); } }
+        }
         true
     }
     fn cached(&self, window: &mut Window, name: &[u8]) -> Option<Thumb> {
@@ -123,7 +263,7 @@ impl Thumbs {
         Some(Thumb::Picture { w, h, px })
     }
     fn keep(&mut self, window: &mut Window, name: &[u8], w: usize, h: usize, px: &[u32]) {
-        if !self.dir_ready { let _ = files::mkdir(window, DIR); self.dir_ready = true; }
+        self.ready(window);
         let mut out = Vec::with_capacity(4 + px.len() * 3);
         out.extend_from_slice(&(w as u16).to_le_bytes());
         out.extend_from_slice(&(h as u16).to_le_bytes());
@@ -154,18 +294,26 @@ impl Thumbs {
             let (c, r) = ((i - first) % cols, (i - first) / cols);
             let (x0, y0) = (8 + c * CELL_W, HEAD + r * CELL_H);
             let box_w = CELL_W - 8;
-            fill(px, width, x0, y0, box_w, CELL_H - 6, if i == cursor { PICKED } else { TILE });
+            fill(px, width, x0, y0, box_w, CELL_H - 6, if i == cursor { self.picked } else { TILE });
             let inner = (x0 + (box_w - SIDE) / 2, y0 + 4);
             match (kind(&e.name, e.dir), self.made.get(&join(cwd, &e.name))) {
-                (None, Some(Thumb::Picture { w, h, px: t })) => {
+                (_, Some(Thumb::Picture { w, h, px: t })) => {
                     let (ox, oy) = (inner.0 + (SIDE - w) / 2, inner.1 + (SIDE - h) / 2);
                     for y in 0..*h { px[(oy + y) * width + ox..(oy + y) * width + ox + w].copy_from_slice(&t[y * w..y * w + w]); }
                 }
-                (k, made) => {
-                    let label = k.or(match made { Some(Thumb::Kind(k)) => Some(*k), _ => None }).unwrap_or("...");
-                    fill(px, width, inner.0 + 20, inner.1 + 16, SIDE - 40, SIDE - 32, BG);
-                    let lw = self.measure(label);
-                    self.text(px, width, inner.0 + (SIDE.saturating_sub(lw)) / 2, inner.1 + SIDE / 2 - 8, SIDE, label, DIM);
+                (_, made) => {
+                    let tile = if i == cursor { self.picked } else { TILE };
+                    // A picture that would not decode says so under its icon.
+                    let failed = match made { Some(Thumb::Kind(k)) if k.ends_with('?') => Some(*k), _ => None };
+                    let icon = self.icon(sex_icons::file_for(&e.name, e.dir));
+                    let (ox, oy) = (inner.0 + (SIDE - ICON) / 2, inner.1 + (SIDE - ICON) / 2);
+                    for y in 0..ICON {
+                        for x in 0..ICON {
+                            let p = icon[y * ICON + x];
+                            if p >> 24 != 0 { px[(oy + y) * width + ox + x] = blend(tile, p, p >> 24); }
+                        }
+                    }
+                    if let Some(k) = failed { self.text(px, width, inner.0 + 8, inner.1 + SIDE - 18, SIDE - 16, k, DIM); }
                 }
             }
             let mut name = String::from(crate::shown(&e.name));
@@ -178,6 +326,16 @@ impl Thumbs {
         window.show_pixels(width, height);
     }
 
+    /// File icon `name` at `ICON` pixels, drawn on first use.
+    fn icon(&mut self, name: &'static str) -> &[u32] {
+        self.icons.entry(name).or_insert_with(|| {
+            let (a, m) = sex_icons::scratch(ICON);
+            let (mut acc, mut mask, mut px) = (vec![0; a], vec![0; m], vec![0; ICON * ICON]);
+            sex_icons::draw(sex_icons::Kind::File, name, ICON, &sex_icons::Palette::BRAND, &mut acc, &mut mask, &mut px);
+            px
+        })
+    }
+
     fn font(&mut self) -> Option<&Font<'static>> {
         if self.font.is_none() {
             self.font = Font::new(sex_font::GEIST_SANS);
@@ -185,10 +343,6 @@ impl Thumbs {
             self.cover = vec![0; GLYPH_W * GLYPH_H];
         }
         self.font.as_ref()
-    }
-    fn measure(&mut self, s: &str) -> usize {
-        let Some(font) = self.font() else { return 0 };
-        s.chars().filter_map(|c| font.glyph(c as u32)).map(|g| font.advance(g, SIZE) as usize).sum::<usize>() / 256
     }
     /// Draws one line of text at (`x`, `y`) top left, cut at `max` pixels wide.
     fn text(&mut self, px: &mut [u32], stride: usize, x: usize, y: usize, max: usize, s: &str, color: u32) {

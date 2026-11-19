@@ -1,0 +1,9 @@
+[package]
+name = "sex-theme"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "SexOS theme tokens: the one source of colours and sizes for Weft and every other program"
+
+[dependencies]
+libm = "0.2"

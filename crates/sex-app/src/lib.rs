@@ -11,6 +11,7 @@ pub mod thread;
 pub mod tls;
 pub mod sound;
 pub mod mailbox;
+pub mod autofill;
 pub mod settings;
 
 /// Runs `main` on a stack of `bytes` taken from the heap, for programs that need more
@@ -37,12 +38,15 @@ const NET: u32 = 13;
 /// reaches its inbox wakes it at once.
 const MAILBOX_LOOK_TICKS: u64 = 4;
 
-fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) || launch::is_event(m) }
+fn is_answer(m: &sex_pdx::PdxMessage) -> bool { m.type_id == 1 && (m.caller_pd == FILES || m.caller_pd == NET) || launch::is_event(m) || restricted_status::is_event(m) }
 /// A message from Shell: keys, pointer, resizes and closes for the main task's window.
-fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::is_event(m) }
+fn is_shell(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && !launch::is_event(m) && !restricted_status::is_event(m) }
 
 pub enum Event {
     Key(Key),
+    /// A key pressed in this window went up (a modifier's too): the same key the press
+    /// delivered. When focus leaves the window, the keys still held there go up too.
+    KeyUp(Key),
     Close,
     /// The window's pixel area is now this many pixels wide and high: redraw to fit.
     Resize { width: usize, height: usize },
@@ -105,6 +109,12 @@ impl Window {
     /// The width and height of the window's pixel area, as Shell last reported it
     /// (see [`Event::Resize`]). Pixels shown beyond it are cut off.
     pub fn size(&self) -> (usize, usize) { self.size }
+    /// Asks Shell for keys it otherwise keeps (`sex_pdx::app_key::DESKTOP_KEYS`: Tab,
+    /// backtick, F1-F10, F12, Scroll Lock, Insert; F11 stays Shell's) and/or numpad marks
+    /// (`KEYPAD`: [`Key::keypad`]). Lasts for this run; ask again to change it.
+    pub fn want_keys(&self, flags: u64) -> bool {
+        sex_pdx::pdx_call_checked(SLOT_SHELL, sex_pdx::app_key::OP_KEYS, flags, 0, 0).is_ok()
+    }
     /// Shows the first `width` by `height` pixels in the window instead of its text.
     pub fn show_pixels(&mut self, width: usize, height: usize) {
         call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, 0);
@@ -116,6 +126,14 @@ impl Window {
         bytes[..n].copy_from_slice(&name[..n]);
         let words = (u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap()));
         call(SLOT_DISPLAY, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1);
+        // Shell too, for the screen reader, which says it when the window has focus.
+        // A full queue loses only the spoken name ("Program" is said instead).
+        for _ in 0..100 {
+            match pdx_call_checked(SLOT_SHELL, lifecycle::OP_APP_TITLE, self.surface, words.0, words.1) {
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                _ => break,
+            }
+        }
         sex_pdx::system_stats::set_name(name);
     }
     /// Replaces the window's text. Longer text than the region holds is cut.
@@ -134,6 +152,13 @@ impl Window {
         }
     }
     fn event(&mut self, m: &sex_pdx::PdxMessage) -> Option<Event> {
+        // Autofill protocol packets belong to its explicit SDK consumer, never
+        // to toolkit key handling. Preserve them without formatting arguments.
+        if m.caller_pd==SHELL && m.caller_task==SHELL && sex_pdx::autofill::response(m.type_id) {mailbox::put(*m);return None;}
+        // Launch receipts belong to their explicit supervisor, not UI dispatch.
+        // is_shell excludes these from the UI mailbox scan, so they are stashed once.
+        if launch::is_event(m) { mailbox::put(*m); return None; }
+        if restricted_status::is_event(m) { mailbox::put(*m); return None; }
         // Another task's answer, taken while this one waited: it looks in the mailbox.
         if is_answer(m) { mailbox::put(*m); return None; }
         if m.caller_pd != SHELL { return None; }
@@ -147,7 +172,11 @@ impl Window {
             if let Some(p) = sex_pdx::app_pointer::Pointer::decode(m.arg0, m.arg1, m.arg2) { return Some(Event::Pointer(p)); }
         }
         if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
+        // Tray items and notification answers wait for `tray::take` or `next_any`.
+        if m.type_id == sex_pdx::program_tray::OP_TRAY_EVENT { tray::receive(m); return None; }
+        if let Some(on) = sex_pdx::a11y::decode_state(m.type_id, m.arg0, m.arg1) { a11y::told(on); return None; }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
+        if m.type_id == 0x202 { if let Some(k) = Key::decode_release(m.arg0, m.arg1, m.arg2) { return Some(Event::KeyUp(k)); } }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
     }
@@ -164,11 +193,13 @@ impl Window {
     /// The next key or close if one is already waiting, otherwise `None` at once.
     pub fn poll(&mut self) -> Option<Event> {
         if let Some(slot) = self.held.iter_mut().find(|e| e.is_some()) { return slot.take(); }
-        while let Some(m) = mailbox::take(is_shell) {
+        while let Some(m) = mailbox::take(|m|is_shell(m)&&!sex_pdx::autofill::response(m.type_id)) {
             if let Some(event) = self.event(&m) { return Some(event); }
         }
-        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
-            if let Some(event) = self.event(&m) { return Some(event); }
+        while let Some(mut m) = sex_pdx::pdx_try_listen_raw(0) {
+            let event=self.event(&m);
+            if sex_pdx::autofill::response(m.type_id){autofill::erase_message(&mut m);}
+            if let Some(event)=event{return Some(event);}
         }
         None
     }
@@ -182,8 +213,112 @@ impl Window {
             let _ = sex_pdx::sys_wait_self_ticks((end - now).clamp(1, 64));
         }
     }
+    /// The next window event or tray event ([`tray::Event`]), waiting for one. For
+    /// programs with tray items or notifications with actions; [`Window::next`]
+    /// leaves tray events for [`tray::take`].
+    pub fn next_any(&mut self) -> Any {
+        loop {
+            if let Some(t) = tray::take() { return Any::Tray(t); }
+            if let Some(e) = self.poll() { return Any::Window(e); }
+            if let Some(t) = tray::take() { return Any::Tray(t); }
+            let _ = sex_pdx::sys_wait_self_ticks(MAILBOX_LOOK_TICKS);
+        }
+    }
     /// Ends the program. Nothing it saved is lost: files are on disk once written.
     pub fn close(self) -> ! { launch::exit(0) }
+}
+
+/// What [`Window::next_any`] returns.
+pub enum Any { Window(Event), Tray(tray::Event) }
+
+/// Tray items and notification actions (slice S2): a program puts a small item
+/// in the panel, with a tooltip and a menu, and posts notifications with up to
+/// three buttons and an inline reply field. The Shell tells the program what
+/// was clicked, chosen or replied as [`tray::Event`]s ([`Window::next_any`], or
+/// [`tray::take`] after [`Window::next`]). See [`sex_pdx::program_tray`].
+pub mod tray {
+    use sex_pdx::program_tray as pt;
+    pub use pt::{GONE_CLOSED, GONE_EXPIRED, GONE_REPLACED, MAX_ACTIONS, MAX_ROWS, REPLY_MAX};
+
+    /// A reply typed into a notification's field.
+    pub type Reply = pt::Line<{ pt::REPLY_MAX }>;
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Event {
+        /// Item `item` (it has no menu) was clicked.
+        Activated { item: u8 },
+        /// Row `row` of item `item`'s menu was chosen.
+        MenuChosen { item: u8, row: u8 },
+        /// Button `action` of the notification posted with `tag` was pressed.
+        NotificationAction { tag: u32, action: u8 },
+        /// Text was replied to the notification posted with `tag`.
+        NotificationReply { tag: u32, text: Reply },
+        /// The notification went away unanswered (`GONE_CLOSED`, `GONE_EXPIRED`, `GONE_REPLACED`).
+        NotificationGone { tag: u32, why: u8 },
+    }
+
+    const QUEUE: usize = 8;
+    static mut EVENTS: [Option<Event>; QUEUE] = [None; QUEUE];
+    static mut REPLY: pt::ReplyAssembler = pt::ReplyAssembler::new();
+
+    fn send(op: u64, w: [u64; 3]) -> bool {
+        for _ in 0..1000 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, op, w[0], w[1], w[2]) {
+                Ok(_) => return true,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+
+    /// Adds item `id` (0 or 1) to the panel, or replaces it: up to three
+    /// characters on a tile of `colour` (0xRRGGBB), a tooltip of up to 32
+    /// characters, and up to eight menu rows of 16 characters. An item with
+    /// no rows tells [`Event::Activated`] when clicked.
+    pub fn add(id: u8, label: &[u8], colour: u32, tooltip: &[u8], menu: &[&[u8]]) -> bool {
+        pt::item_calls(id, label, colour, tooltip, menu, |w| send(pt::OP_TRAY_ITEM, w))
+    }
+    /// Takes item `id` out of the panel. Items also go when the program ends.
+    pub fn remove(id: u8) -> bool { send(pt::OP_TRAY_ITEM, pt::ItemMsg::Remove { id }.wire()) }
+
+    /// Posts a notification through Bell ([`sex_pdx::notify::post`]) with up to three
+    /// buttons and, when `reply` holds the field's hint (e.g. `b"Reply"`), an inline
+    /// reply field. The answer comes back with `tag`. Bell's mute and per-program
+    /// rules still apply; a dropped notification is never answered.
+    pub fn notify_with_actions(tag: u32, summary: &[u8], body: &[u8], urgency: u8, actions: &[&[u8]], reply: Option<&[u8]>) -> bool {
+        pt::actions_calls(tag, actions, reply, |w| send(pt::OP_NOTIFY_ACTIONS, w)) && sex_pdx::notify::post(summary, body, urgency)
+    }
+
+    /// The oldest tray event not yet taken.
+    pub fn take() -> Option<Event> {
+        let q = unsafe { &mut *core::ptr::addr_of_mut!(EVENTS) };
+        let e = q[0].take()?;
+        q.copy_within(1.., 0);
+        q[QUEUE - 1] = None;
+        Some(e)
+    }
+
+    fn put(e: Event) {
+        let q = unsafe { &mut *core::ptr::addr_of_mut!(EVENTS) };
+        // A full queue loses the newest; read events often.
+        if let Some(slot) = q.iter_mut().find(|s| s.is_none()) { *slot = Some(e); }
+    }
+
+    /// An `OP_TRAY_EVENT` from the Shell.
+    pub(crate) fn receive(m: &sex_pdx::PdxMessage) {
+        let Some(e) = pt::Event::decode(m.arg0, m.arg1, m.arg2) else { return };
+        match e {
+            pt::Event::Activated { item } => put(Event::Activated { item }),
+            pt::Event::Menu { item, row } => put(Event::MenuChosen { item, row }),
+            pt::Event::Action { tag, action } => put(Event::NotificationAction { tag, action }),
+            pt::Event::Gone { tag, why } => put(Event::NotificationGone { tag, why }),
+            pt::Event::Reply { .. } => {
+                let r = unsafe { &mut *core::ptr::addr_of_mut!(REPLY) };
+                if let Some((tag, text)) = r.push(e) { put(Event::NotificationReply { tag, text }); }
+            }
+        }
+    }
 }
 
 /// Files in the program's own folder. Paths are relative to it; `..` is refused.
@@ -195,6 +330,49 @@ impl Window {
 /// Starting other programs, and opening files in the program for their type. A run
 /// started here gets only grants this run holds; Shell reports it started, was refused,
 /// or ended (see [`sex_pdx::launch`]).
+/// The screen reader ([`sex_pdx::a11y`]): a program asks Shell once whether one is on,
+/// and sends its accessibility tree only while Shell says so. Toolkits (Weft) do this.
+pub mod a11y {
+    use core::sync::atomic::{AtomicU8, Ordering};
+    use sex_pdx::a11y as wire;
+    /// 0: not asked, 1: asked (no answer yet, or off), 2: on.
+    static STATE: AtomicU8 = AtomicU8::new(0);
+    /// Set when Shell's answer changes; taken by [`changed`].
+    static CHANGED: AtomicU8 = AtomicU8::new(0);
+    pub(crate) fn told(on: bool) {
+        let new = if on { 2 } else { 1 };
+        if STATE.swap(new, Ordering::AcqRel) != new { CHANGED.store(1, Ordering::Release); }
+    }
+    /// Asks Shell whether a screen reader is on; its answers come with the window's
+    /// events (read with [`on`] and [`changed`]).
+    pub fn ask() {
+        let _ = STATE.compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire);
+        let [a, b, c] = wire::ask();
+        let _ = send(a, b, c);
+    }
+    /// True once [`ask`] was called.
+    pub fn asked() -> bool { STATE.load(Ordering::Acquire) != 0 }
+    /// True while a screen reader is on (Shell said so).
+    pub fn on() -> bool { STATE.load(Ordering::Acquire) == 2 }
+    /// True once after Shell's answer changed.
+    pub fn changed() -> bool { CHANGED.swap(0, Ordering::AcqRel) != 0 }
+    /// Sends one encoded tree update to Shell, if a reader is on. False if it could not.
+    pub fn send_update(bytes: &[u8]) -> bool {
+        if !on() || bytes.len() > wire::MAX_UPDATE { return false; }
+        wire::pieces(bytes).all(|[a, b, c]| send(a, b, c))
+    }
+    fn send(a: u64, b: u64, c: u64) -> bool {
+        for _ in 0..1000 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, wire::OP_A11Y, a, b, c) {
+                Ok(_) => return true,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+}
+
 /// Drag and drop between programs ([`sex_pdx::dnd`]).
 pub mod dnd {
     use super::{files, Event, Window};
@@ -253,6 +431,8 @@ pub mod dnd {
     /// Takes back a drag before the button comes up.
     pub fn cancel() { let _ = send(d::Message::Cancel); }
 }
+
+pub mod restricted_status;
 
 /// The system clipboard, shared with every program and Quil, through Shell
 /// ([`sex_pdx::program_clipboard`]). Shell takes a copy or a paste only while this
@@ -344,7 +524,7 @@ pub mod launch {
     pub use l::Event;
     use sex_pdx::program_store as store;
 
-    pub(crate) fn is_event(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && m.type_id == l::OP_EVENT }
+    pub(crate) fn is_event(m: &sex_pdx::PdxMessage) -> bool { m.caller_pd == SHELL && m.caller_task == SHELL && m.type_id == l::OP_EVENT }
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub enum Error {
         /// Files refused: no such program, or a grant this run does not hold (a `files` code).
@@ -356,6 +536,7 @@ pub mod launch {
     }
     /// Starts `/bin/NAME` (or `@/path` of a program file this run holds) with `args`.
     /// `network` only works for a run that has the network. Events for it carry `cookie`.
+    /// Call from the program's main task; launch/control requests are run-scoped.
     pub fn run(name: &[u8], args: &[u8], network: bool, cookie: u32) -> Result<(), Error> {
         start(name, args, if network { store::RUN_NETWORK } else { 0 }, cookie)
     }
@@ -365,6 +546,12 @@ pub mod launch {
     /// (refused unless this run has it), `hidden` gives the run no window on screen.
     pub fn run_with(name: &[u8], args: &[u8], network: bool, hidden: bool, cookie: u32) -> Result<(), Error> {
         start(name, args, if network { store::RUN_NETWORK } else { 0 } | if hidden { store::RUN_HIDDEN } else { 0 }, cookie)
+    }
+    /// Asks Shell to start a run Files already prepared (its `ticket`), as [`run_with`] does.
+    pub fn start_ticket(ticket: u32, network: bool, hidden: bool, cookie: u32) -> Result<(), Error> {
+        let flags = if network { store::RUN_NETWORK } else { 0 } | if hidden { store::RUN_HIDDEN } else { 0 };
+        sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, l::OP_LAUNCH, ticket as u64, flags, cookie as u64).map_err(|_| Error::Shell)?;
+        Ok(())
     }
     fn start(name: &[u8], args: &[u8], flags: u64, cookie: u32) -> Result<(), Error> {
         let mut path = [0u8; 64];
@@ -431,16 +618,21 @@ pub mod files {
     pub use w::{message, NOT_FOUND};
 
     fn region() -> Result<&'static mut [u8], Error> {
-        let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?;
-        Ok(unsafe { core::slice::from_raw_parts_mut(view.virtual_address as *mut u8, w::REGION_BYTES) })
+        direct::restricted::region_ready()?;
+        let mut at = REGION_AT.load(Ordering::Relaxed);
+        if at == 0 {
+            at = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).map_err(|_| w::UNAVAILABLE)?.virtual_address;
+            REGION_AT.store(at, Ordering::Relaxed);
+        }
+        Ok(unsafe { core::slice::from_raw_parts_mut(at as *mut u8, w::REGION_BYTES) })
     }
     /// The region's address, asked once: it is this run's for the run's whole life.
     static REGION_AT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
     /// What Files last said about `path`, if nothing has changed since: no call at all.
     fn cached(path: &[u8]) -> Option<direct::Stat> {
-        let mut at = REGION_AT.load(Ordering::Relaxed);
-        if at == 0 { at = region().ok()?.as_ptr() as u64; REGION_AT.store(at, Ordering::Relaxed); }
-        let cache = unsafe { core::slice::from_raw_parts((at as usize + w::CACHE_AT) as *const u8, w::CACHE_BYTES) };
+        direct::restricted::region_ready().ok()?;
+        let at = region().ok()?.as_ptr() as usize;
+        let cache = unsafe { core::slice::from_raw_parts((at + w::CACHE_AT) as *const u8, w::CACHE_BYTES) };
         let (dir, size, modified, id) = w::stat_cache::read(cache, path)?;
         Some(direct::Stat { dir, size, modified, id })
     }
@@ -464,7 +656,14 @@ pub mod files {
     /// Shell tells Files where a new run lives just as the run starts, so a first request
     /// can beat it there. A refusal is retried briefly; a program never bound stays refused.
     /// `fill` writes the data area before the request goes; `take` reads it after the answer.
-    fn exchange<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+    fn exchange<R>(hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64,
+                   fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
+        exchange_tries(hold, kind, path, offset, length, 50, fill, take)
+    }
+    /// As `exchange`, asking again at most `retries` times while Files says DENIED (a
+    /// lock another program holds). A refusal that stands is asked once (`retries` 0).
+    #[allow(clippy::too_many_arguments)]
+    fn exchange_tries<R>(mut hold: Hold, kind: u8, path: &[u8], offset: u64, length: u64, retries: u32,
                    fill: impl Fn(&mut [u8]), take: impl FnOnce(u32, &[u8]) -> R) -> Result<R, Error> {
         if path.len() > w::PATH_BYTES { return Err(w::NAME); }
         let _turn = Turn::take();
@@ -474,7 +673,7 @@ pub mod files {
             region[..path.len()].copy_from_slice(path);
             fill(&mut region[w::PATH_BYTES..]);
             match once(&mut hold, kind, path.len(), offset, length) {
-                Err(w::DENIED) if tries < 50 => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
+                Err(w::DENIED) if tries < retries => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
                 Ok(value) => return Ok(take(value, &region[w::PATH_BYTES..])),
                 Err(e) => return Err(e),
             }
@@ -488,20 +687,21 @@ pub mod files {
         let seq = SEQ.fetch_add(1, Ordering::Relaxed).wrapping_add(1) & 0xFF_FFFF;
         let r = w::Request { seq, kind, path_len: path_len as u16, offset, length };
         let a = r.args();
-        loop {
-            // Waits for the answer in the same kernel entry; Files runs next.
-            match sex_pdx::pdx_call_wait(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
-                (0, _) => break,
-                (sex_pdx::ERR_SERVICE_NOT_READY, _) => sex_pdx::sys_yield(),
-                _ => return Err(w::UNAVAILABLE),
+        // Waits for the answer in the same kernel entry, which usually brings it back in
+        // registers; Files runs next.
+        let mut first = loop {
+            match sex_pdx::ipc_recv::pdx_call_recv(sex_pdx::SLOT_STORAGE, w::OP, a[0], a[1], a[2]) {
+                Ok(m) => break m,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return Err(w::UNAVAILABLE),
             }
-        }
+        };
         // The main task sleeps until its inbox has something (or briefly, to see the
         // mailbox); a worker cannot sleep that way, so it looks, and lets others run.
         let worker = crate::thread::is_worker();
         let mut idle = 0u32;
         loop {
-            let m = match mailbox::take(|m| mine(m, seq)) {
+            let m = match first.take().or_else(|| mailbox::take(|m| mine(m, seq))) {
                 Some(m) => m,
                 None => match sex_pdx::pdx_try_listen_raw(0) {
                     Some(m) => { idle = 0; m }
@@ -595,6 +795,9 @@ pub mod files {
     pub mod direct {
         use super::{exchange, w, Error, Hold};
 
+        /// Epoch-bound immutable offline jobs; never uses ordinary launch tickets.
+        pub mod restricted { include!("restricted_files.rs"); }
+
         /// What Files knows of a file or folder.
         #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
         pub struct Stat { pub dir: bool, pub size: u64, pub modified: u64, pub id: u64 }
@@ -647,13 +850,62 @@ pub mod files {
         }
 
         /// A console attached to a terminal, and a terminal's side of it
-        /// (`sex_pdx::console_relay`): bytes through Files, no window.
+        /// (`sex_pdx::console_relay`): bytes through Files, no window. A terminal names
+        /// the slot (tab or pane, below `c::SLOTS`) of each call in the `*_at` forms; the
+        /// plain forms are slot 0.
         pub mod relay {
             use super::{exchange, w, Error};
             use sex_pdx::console_relay as c;
             fn op(offset: u64, length: u64) -> Result<u32, Error> { exchange(None, c::KIND, b"", offset, length, |_| {}, |n, _| n) }
-            /// Whether this run's console belongs to a terminal.
+            /// Whether this run's console belongs to a terminal (or its streams to the
+            /// program that started it: see [`attached_word`]).
             pub fn attached() -> bool { op(c::ATTACHED, 0).is_ok() }
+            /// None when nothing holds this run's console; 0 for a terminal; for a pipe
+            /// run, `c::PIPE_RUN` | its stdio word (`c::stream`).
+            pub fn attached_word() -> Option<u32> { op(c::ATTACHED, 0).ok() }
+            /// A pipe run's stderr: how many bytes its starter's ring took.
+            pub fn write_err(bytes: &[u8]) -> Result<usize, Error> {
+                let n = bytes.len().min(c::ERROR_BYTES);
+                exchange(None, c::KIND, b"", c::WRITE_ERR, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
+            }
+            /// A pipe run's environment block from byte `at` on (`c::ENV`); 0 at its end.
+            pub fn env(at: usize, out: &mut [u8]) -> Result<usize, Error> {
+                let want = out.len();
+                exchange(None, c::KIND, b"", c::ENV, at as u64, |_| {}, |n, d| { let n = (n as usize).min(want).min(d.len()); out[..n].copy_from_slice(&d[..n]); n })
+            }
+
+            /// Starter: prepares a pipe run of program file `path` (`/bin/NAME`, or `@/path`
+            /// this run holds) with `args`, attached to this run's `slot`, its streams as
+            /// the stdio word says (`c::stdio`). The ticket, for `launch::start_ticket`.
+            pub fn prepare_piped(path: &[u8], args: &[u8], slot: usize, word: u8) -> Result<u32, Error> {
+                if args.len() > w::ARGS_MAX || slot >= c::SLOTS { return Err(w::NAME); }
+                exchange(None, w::PREPARE, path, c::pipe_prepare(slot, word), args.len() as u64, |d| d[..args.len()].copy_from_slice(args), |ticket, _| ticket)
+            }
+            /// Starter, before the start: more `KEY=VALUE\0` entries for the run in `slot`.
+            pub fn set_env_at(slot: usize, entries: &[u8]) -> Result<(), Error> {
+                let n = entries.len();
+                if n > c::ENV_BYTES { return Err(w::INVALID); }
+                exchange(None, c::KIND, b"", c::at_slot(c::SET_ENV, slot), n as u64, |d| d[..n].copy_from_slice(entries), |_, _| ())
+            }
+            /// Starter, before the start: the run's working folder, as this run names it.
+            pub fn set_cwd_at(slot: usize, path: &[u8]) -> Result<(), Error> {
+                let n = path.len();
+                if n > w::PATH_BYTES { return Err(w::NAME); }
+                exchange(None, c::KIND, b"", c::at_slot(c::SET_CWD, slot), n as u64, |d| d[..n].copy_from_slice(path), |_, _| ())
+            }
+            /// Starter: the state of the run in `slot` and up to `out.len()` bytes of its
+            /// stdout (or stderr, `err`).
+            pub fn take_into(slot: usize, err: bool, out: &mut [u8]) -> Result<(c::Status, usize), Error> {
+                let cap = out.len().min(if err { c::ERROR_BYTES } else { c::OUTPUT_BYTES });
+                let op = if err { c::TAKE_ERR } else { c::TAKE };
+                exchange(None, c::KIND, b"", c::at_slot(op, slot), (c::STATUS_BYTES + cap) as u64, |_| {}, |n, d| {
+                    let n = (n as usize).min(cap);
+                    out[..n].copy_from_slice(&d[c::STATUS_BYTES..c::STATUS_BYTES + n]);
+                    (c::Status::decode(d), n)
+                })
+            }
+            /// Starter: it reads no more of the run's stdout (`mask` 1) or stderr (2).
+            pub fn close_read_at(slot: usize, mask: u8) -> Result<(), Error> { op(c::at_slot(c::CLOSE_READ, slot), (mask & 3) as u64).map(|_| ()) }
             /// Output: how many bytes the terminal took (fewer when it is behind).
             pub fn write(bytes: &[u8]) -> Result<usize, Error> {
                 let n = bytes.len().min(c::OUTPUT_BYTES);
@@ -665,39 +917,98 @@ pub mod files {
                 let want = out.len().min(c::INPUT_BYTES);
                 exchange(None, c::KIND, b"", c::READ, want as u64, |_| {}, |n, d| { let n = (n as usize).min(want); out[..n].copy_from_slice(&d[..n]); n })
             }
+            /// How many input bytes wait, taking none. `Err(c::INTERRUPTED)` (once) after
+            /// Ctrl+C, `Err(c::HUNG_UP)` at the end of input: a long computation's look.
+            pub fn poll() -> Result<usize, Error> { op(c::POLL, 0).map(|n| n as usize) }
+            /// The terminal's size in cells and how often it changed (0 by 0: not known).
+            pub fn size() -> Result<c::Size, Error> {
+                exchange(None, c::KIND, b"", c::SIZE, c::SIZE_BYTES as u64, |_| {}, |_, d| c::Size::decode(d))
+            }
+            /// This run's terminal mode (`c::RAW`, `c::NO_ECHO`, `c::NO_SIGNALS`); the one before.
+            pub fn set_mode(mode: u8) -> Result<u8, Error> { op(c::SET_MODE, (mode & c::MODES) as u64).map(|m| m as u8) }
             /// The run ends with `code`.
             pub fn exit(code: u32) { let _ = op(c::EXIT, code as u64); }
 
             /// Terminal: prepares `/bin/NAME` with `args` (only plain words reach it) and asks
             /// Shell to start it attached here. Needs the `+launch` grant (Spindle's `spindle` command).
-            pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> {
+            pub fn start(name: &[u8], args: &[u8]) -> Result<(), Error> { start_at(0, name, args) }
+            pub fn start_at(slot: usize, name: &[u8], args: &[u8]) -> Result<(), Error> { start_net_at(slot, name, args, false) }
+            /// As [`start_at`]; with `network`, the run reaches the network if this terminal
+            /// may (Shell passes on only what the terminal itself was allowed).
+            pub fn start_net_at(slot: usize, name: &[u8], args: &[u8], network: bool) -> Result<(), Error> {
                 let bin = sex_pdx::program_store::BIN;
                 let mut path = alloc::vec::Vec::with_capacity(bin.len() + name.len());
                 path.extend_from_slice(bin); path.extend_from_slice(name);
                 let n = args.len().min(w::ARGS_MAX);
-                let ticket = exchange(None, w::PREPARE, &path, 0, n as u64, |d| d[..n].copy_from_slice(&args[..n]), |t, _| t)?;
-                sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64, 0)
+                let ticket = exchange(None, w::PREPARE, &path, c::at_slot(0, slot), n as u64, |d| d[..n].copy_from_slice(&args[..n]), |t, _| t)?;
+                let flags = if network { sex_pdx::program_store::RUN_NETWORK } else { 0 };
+                sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_RUN, sex_pdx::program_store::TICKET, ticket as u64, flags)
                     .map(|_| ()).map_err(|_| w::UNAVAILABLE)
             }
             /// Terminal: input for the run; how many bytes it took.
-            pub fn put(bytes: &[u8]) -> Result<usize, Error> {
+            pub fn put(bytes: &[u8]) -> Result<usize, Error> { put_at(0, bytes) }
+            pub fn put_at(slot: usize, bytes: &[u8]) -> Result<usize, Error> {
                 let n = bytes.len().min(c::INPUT_BYTES);
-                exchange(None, c::KIND, b"", c::PUT, n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
+                exchange(None, c::KIND, b"", c::at_slot(c::PUT, slot), n as u64, |d| d[..n].copy_from_slice(&bytes[..n]), |n, _| n as usize)
             }
             /// Terminal: the run's state and its output since the last call.
-            pub fn take() -> Result<(c::Status, alloc::vec::Vec<u8>), Error> {
+            pub fn take() -> Result<(c::Status, alloc::vec::Vec<u8>), Error> { take_at(0) }
+            pub fn take_at(slot: usize) -> Result<(c::Status, alloc::vec::Vec<u8>), Error> {
                 let want = c::STATUS_BYTES + c::OUTPUT_BYTES;
-                exchange(None, c::KIND, b"", c::TAKE, want as u64, |_| {}, |n, d| {
+                exchange(None, c::KIND, b"", c::at_slot(c::TAKE, slot), want as u64, |_| {}, |n, d| {
                     let n = (n as usize).min(c::OUTPUT_BYTES);
                     (c::Status::decode(d), d[c::STATUS_BYTES..c::STATUS_BYTES + n].to_vec())
                 })
             }
-            pub fn interrupt() -> Result<(), Error> { op(c::INTERRUPT, 0).map(|_| ()) }
-            pub fn hang_up() -> Result<(), Error> { op(c::HANG_UP, 0).map(|_| ()) }
+            pub fn interrupt() -> Result<(), Error> { interrupt_at(0) }
+            pub fn interrupt_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::INTERRUPT, slot), 0).map(|_| ()) }
+            pub fn hang_up() -> Result<(), Error> { hang_up_at(0) }
+            pub fn hang_up_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::HANG_UP, slot), 0).map(|_| ()) }
             /// Terminal: forget the run that ended, so another can start.
-            pub fn release() -> Result<(), Error> { op(c::RELEASE, 0).map(|_| ()) }
+            pub fn release() -> Result<(), Error> { release_at(0) }
+            pub fn release_at(slot: usize) -> Result<(), Error> { op(c::at_slot(c::RELEASE, slot), 0).map(|_| ()) }
+            /// Terminal: its size in cells, for the run to read (on start and on every resize).
+            pub fn set_size(cols: u16, rows: u16) -> Result<(), Error> { set_size_at(0, cols, rows) }
+            pub fn set_size_at(slot: usize, cols: u16, rows: u16) -> Result<(), Error> { op(c::at_slot(c::SET_SIZE, slot), c::size_word(cols, rows)).map(|_| ()) }
+            /// Terminal: the run in `slot` goes on without this window, as a yarn named by
+            /// the value (`c::DETACH`). `label` is its command line; `screen` what the window
+            /// showed (sex-vt's `Screen::replay`), which the terminal that adopts it gets first.
+            pub fn detach_at(slot: usize, label: &[u8], screen: &[u8]) -> Result<u32, Error> {
+                let label = &label[..label.len().min(c::LABEL_BYTES)];
+                let screen = &screen[screen.len().saturating_sub(c::OUTPUT_BYTES)..];
+                let (l, n) = (label.len(), screen.len());
+                exchange(None, c::KIND, b"", c::at_slot(c::DETACH, slot), c::detach_word(n, l), |d| { d[..l].copy_from_slice(label); d[l..l + n].copy_from_slice(screen); }, |name, _| name)
+            }
+            /// Terminal: yarn `name` becomes the run in `slot`; TAKE gives its screen and output.
+            pub fn adopt_at(slot: usize, name: u32) -> Result<(), Error> { op(c::at_slot(c::ADOPT, slot), name as u64).map(|_| ()) }
+            /// Terminal: every yarn, oldest first.
+            pub fn yarns() -> Result<alloc::vec::Vec<c::Yarn>, Error> {
+                const MAX: usize = 64;
+                exchange(None, c::KIND, b"", c::YARNS, (MAX * c::YARN_BYTES) as u64, |_| {}, |n, d| {
+                    let mut list: alloc::vec::Vec<c::Yarn> = (0..(n as usize).min(MAX)).filter_map(|i| d.get(i * c::YARN_BYTES..).and_then(c::Yarn::decode)).collect();
+                    list.sort_by_key(|y| y.name);
+                    list
+                })
+            }
+            /// Terminal: yarn `name` gets Ctrl+C and the end of its input, or is forgotten
+            /// once it ended. Its target, for [`stop`] when it ignores both.
+            pub fn yarn_stop(name: u32) -> Result<u32, Error> { op(c::YARN_STOP, name as u64) }
+            /// Terminal: stop the run with `target` (TAKE's `Status::target`) that it started,
+            /// when Ctrl+C did not end it: Shell ends it as it ends a program ignoring Close.
+            pub fn stop(target: u32) -> Result<(), Error> {
+                sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, sex_pdx::program_store::OP_STOP_ATTACHED, target as u64, 0, 0)
+                    .map(|_| ()).map_err(|_| w::UNAVAILABLE)
+            }
         }
 
+        /// Exact private job metadata for the attested restricted bootstrap.
+        /// Failure never implies permission to run through an ambient fallback.
+        pub fn restricted_boot()->Result<sex_pdx::restricted_job::Info,Error>{
+            exchange(None,sex_pdx::restricted_job::KIND,b"",sex_pdx::restricted_job::BOOT_INFO,0,|_|{},|n,d|{
+                if n as usize!=sex_pdx::restricted_job::INFO_BYTES{return None}
+                sex_pdx::restricted_job::Info::decode(&d[..n as usize])
+            })?.ok_or(w::INVALID)
+        }
         /// The words typed after the program's name, if it was started with any.
         pub fn args(out: &mut [u8; w::ARGS_MAX]) -> usize { args_into(None, out) }
         /// Reads up to `out.len()` bytes from byte `offset`; fewer at the file's end.
@@ -917,6 +1228,78 @@ pub mod files {
     /// Answers a question with `path` (`@/...`), or cancels it with `None`.
     pub fn answer(window: &mut Window, q: &Question, path: Option<&[u8]>) -> Result<(), Error> {
         request(window, w::ANSWER, path.unwrap_or(b""), q.row as u64, q.ticket as u64).map(|_| ())
+    }
+
+    /// Raw removable disks (`sex_pdx::disks`), for a program that reshapes them. The first
+    /// read or write of a disk asks the person (the Files app shows the question, naming
+    /// the disk); until they answer it fails with `PENDING`, and with `DENIED` if they said
+    /// no. The system disk is never opened.
+    pub mod disks {
+        use super::{exchange, exchange_tries, request, Error, Window};
+        use alloc::string::String;
+        use alloc::vec::Vec;
+        use sex_pdx::disks as d;
+        pub use d::{FLAG_GRANTED, FLAG_READ_ONLY, FLAG_SYSTEM, IO_SECTORS, KIND_IMAGE, KIND_SYSTEM, KIND_USB, SECTOR};
+
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct Disk { pub id: u16, pub flags: u8, pub sectors: u64, pub name: String, pub product: String }
+        impl Disk {
+            pub fn system(&self) -> bool { self.flags & FLAG_SYSTEM != 0 }
+            pub fn read_only(&self) -> bool { self.flags & FLAG_READ_ONLY != 0 }
+        }
+        pub fn list(window: &mut Window) -> Result<Vec<Disk>, Error> {
+            exchange(Some(window), d::DISKS, b"", 0, 0, |_| {}, |used, data| {
+                let data = &data[..(used as usize).min(data.len())];
+                let mut out = Vec::new();
+                let mut at = 0;
+                while let Some((e, next)) = d::Entry::decode(data, at) {
+                    out.push(Disk { id: e.id, flags: e.flags, sectors: e.sectors, name: String::from_utf8_lossy(e.name).into_owned(), product: String::from_utf8_lossy(e.product).into_owned() });
+                    at = next;
+                }
+                out
+            })
+        }
+        /// Sectors from `lba` into `out` (whole sectors, at most `IO_SECTORS`).
+        pub fn read(window: &mut Window, disk: u16, lba: u64, out: &mut [u8]) -> Result<(), Error> {
+            let n = out.len() / SECTOR;
+            if n == 0 || out.len() % SECTOR != 0 || n as u64 > IO_SECTORS { return Err(sex_pdx::fs::INVALID); }
+            exchange_tries(Some(window), d::DISK_IO, b"", lba, d::io(disk, false, n as u32), 0, |_| {}, |_, data| out.copy_from_slice(&data[..out.len()]))
+        }
+        /// `data` (whole sectors, at most `IO_SECTORS`) to the disk from `lba`.
+        pub fn write(window: &mut Window, disk: u16, lba: u64, data: &[u8]) -> Result<(), Error> {
+            let n = data.len() / SECTOR;
+            if n == 0 || data.len() % SECTOR != 0 || n as u64 > IO_SECTORS { return Err(sex_pdx::fs::INVALID); }
+            exchange_tries(Some(window), d::DISK_IO, b"", lba, d::io(disk, true, n as u32), 0, |r| r[..data.len()].copy_from_slice(data), |_, _| ())
+        }
+        /// Everything written so far is on the medium.
+        pub fn flush(window: &mut Window, disk: u16) -> Result<(), Error> { request(window, d::DISK_IO, b"", 0, d::io(disk, true, 0)).map(|_| ()) }
+        /// Ends this run's use of the disk: Files mounts what it holds now.
+        pub fn done(window: &mut Window, disk: u16) -> Result<(), Error> { request(window, d::DISK_DONE, b"", 0, disk as u64).map(|_| ()) }
+
+        /// A question waiting for the person: may `program` use `disk`?
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        pub struct Question { pub row: u8, pub ticket: u32, pub program: Vec<u8>, pub disk: Vec<u8> }
+        /// Questions waiting. Only a run given the whole filesystem may ask.
+        pub fn questions(window: &mut Window) -> Result<Vec<Question>, Error> {
+            exchange(Some(window), d::DISK_ASKS, b"", 0, 0, |_| {}, |used, r| {
+                let used = (used as usize).min(r.len());
+                let mut out = Vec::new();
+                let mut at = 0;
+                while at + 6 <= used {
+                    let ticket = u32::from_le_bytes(r[at + 1..at + 5].try_into().unwrap_or([0; 4]));
+                    let n = r[at + 5] as usize;
+                    let program = r[at + 6..at + 6 + n].to_vec();
+                    let k = r[at + 6 + n] as usize;
+                    let disk = r[at + 7 + n..at + 7 + n + k].to_vec();
+                    out.push(Question { row: r[at], ticket, program, disk });
+                    at += 7 + n + k;
+                }
+                out
+            })
+        }
+        pub fn answer(window: &mut Window, q: &Question, yes: bool) -> Result<(), Error> {
+            request(window, d::DISK_ANSWER, b"", q.row as u64, q.ticket as u64 | if yes { d::YES } else { 0 }).map(|_| ())
+        }
     }
 }
 

@@ -13,13 +13,15 @@
 //!
 //! * The program is `/bin/NAME`, a bare NAME, or `@/path` of a program file this run
 //!   holds. Arguments travel as one quoted line (`sex_std::args`).
-//! * Environment variables and `current_dir` have no carrier between runs and are not
-//!   passed on. Two names are read here instead: `SEXOS_RUN_WINDOWED=1` gives the run a
+//! * The environment (this run's, with the command's changes) and `current_dir` go to the
+//!   child through Files, with its piped streams (`sex_std::process`: pipe runs). Two
+//!   names are read here and not passed on: `SEXOS_RUN_WINDOWED=1` gives the run a
 //!   window on the workspace (default: a hidden helper, no window, its output only in the
 //!   serial record) and `SEXOS_RUN_NETWORK=1` asks for the network, which only a run
 //!   that has it may hand on. `sex_std::process::CommandExt` sets them.
-//! * There are no pipes between runs: `Stdio::piped()` (and so `output()` unless both
-//!   streams are set to `null` or `inherit`) fails with `Unsupported`.
+//! * `Stdio::piped()` gives a `ChildPipe` over the child's relay slot in Files; `output()`
+//!   reads stdout and stderr together. A child's pipe handed to another `Command`
+//!   (`Stdio::from(child.stdout)`) and `Stdio::from(File)` are `Unsupported`.
 //! * A run that reports no status (it was killed, or it crashed) has no `code()`, as a
 //!   Unix process ended by a signal.
 
@@ -30,20 +32,34 @@ use crate::num::NonZero;
 use crate::path::Path;
 use crate::process::StdioPipes;
 use crate::sys::fs::File;
+use crate::io::{BorrowedCursor, IoSlice, IoSliceMut};
 use crate::{fmt, io};
 
 // crates/sex-std/src/process.rs.
 unsafe extern "C" {
-    /// Starts `program` with the NUL-ended words at `args`. `flags`: 1 network, 2 a
-    /// window. The run's own id (cookie) on success, `-errno` if it did not start; its
-    /// task in `*task`.
-    fn sys_process_spawn(program: *const u8, program_len: usize, args: *const u8, args_len: usize, flags: u32, task: *mut u32) -> i64;
     /// 0: still running (with `block` 0); 1: ended with `*status`; 2: ended without a
     /// status; `-errno` if `id` is not a run this program started.
     fn sys_process_wait(id: i64, block: i32, status: *mut i32, task: *mut u32) -> i32;
     fn sys_process_kill(id: i64) -> i32;
     /// The run's record is no longer needed (`Child` dropped).
     fn sys_process_forget(id: i64);
+    /// Starts `program` with the NUL-ended words at `args` (`flags`: 1 network, 2 a
+    /// window), handing over the stdio word (2 bits per stream: 0 inherit, 1 piped,
+    /// 2 null), the environment (`KEY=VALUE\0` entries) and the working folder (none when
+    /// `cwd` is null). The run's own id (cookie), or `-errno` if it did not start; its
+    /// task in `*task`, a pipe run's relay slot in `*slot` (else -1).
+    fn sys_process_spawn_with(program: *const u8, program_len: usize, args: *const u8, args_len: usize, flags: u32,
+                              stdio: u32, env: *const u8, env_len: usize, cwd: *const u8, cwd_len: usize,
+                              task: *mut u32, slot: *mut i32) -> i64;
+    /// Up to `len` bytes of stream 1 (stdout) or 2 (stderr): the count, 0 at the end,
+    /// `-EAGAIN` when nothing waits and `block` is 0, else `-errno`.
+    fn sys_process_pipe_read(slot: i32, stream: u32, out: *mut u8, len: usize, block: i32) -> isize;
+    /// Some of `bytes` to the child's stdin: the count, or `-errno` (`EPIPE`: it ended).
+    fn sys_process_pipe_write(slot: i32, bytes: *const u8, len: usize) -> isize;
+    /// This end of stream 0, 1 or 2 is closed.
+    fn sys_process_pipe_close(slot: i32, stream: u32);
+    /// Lets other tasks run while waiting (`round` counts the looks so far).
+    fn sys_process_pause(round: u32);
     /// This run's task, the id `std::process::id` gives.
     fn sys_process_self() -> u32;
 }
@@ -53,9 +69,14 @@ const FLAG_WINDOWED: u32 = 2;
 const WINDOWED: &str = "SEXOS_RUN_WINDOWED";
 const NETWORK: &str = "SEXOS_RUN_NETWORK";
 
-fn no_pipes() -> io::Error {
-    io::const_error!(io::ErrorKind::Unsupported, "SexOS has no pipes between programs yet: use Stdio::null() or Stdio::inherit()")
+fn not_handed() -> io::Error {
+    io::const_error!(io::ErrorKind::Unsupported, "SexOS cannot hand a child a file or another child's pipe as a stream")
 }
+
+const INHERIT: u32 = 0;
+const PIPED: u32 = 1;
+const NULL: u32 = 2;
+const EAGAIN: i32 = 11;
 
 ////////////////////////////////////////////////////////////////////////////////
 // Command
@@ -81,11 +102,19 @@ pub enum Stdio {
     ParentStderr,
     #[allow(dead_code)] // This variant exists only for the Debug impl
     InheritFile(File),
+    #[allow(dead_code)] // Refused at spawn; kept so its end closes when dropped
+    Pipe(ChildPipe),
 }
 
 impl Stdio {
-    fn usable(&self) -> bool {
-        matches!(self, Stdio::Inherit | Stdio::Null | Stdio::ParentStdout | Stdio::ParentStderr)
+    /// How the child gets it: its own (inherit), through Files (piped), or nothing.
+    fn kind(&self) -> io::Result<u32> {
+        match self {
+            Stdio::Inherit | Stdio::ParentStdout | Stdio::ParentStderr => Ok(INHERIT),
+            Stdio::Null => Ok(NULL),
+            Stdio::MakePipe => Ok(PIPED),
+            Stdio::InheritFile(_) | Stdio::Pipe(_) => Err(not_handed()),
+        }
     }
 }
 
@@ -156,7 +185,7 @@ impl Command {
         self.env.iter().any(|(k, v)| k == OsStr::new(name) && v.is_some_and(|v| v == OsStr::new("1")))
     }
 
-    fn start(&self) -> io::Result<Process> {
+    fn start(&self, stdio: [u32; 3]) -> io::Result<(Process, i32)> {
         let mut words = Vec::new();
         for arg in &self.args[1..] {
             let bytes = arg.as_encoded_bytes();
@@ -168,41 +197,87 @@ impl Command {
         }
         let program = self.program.as_encoded_bytes();
         let flags = if self.flag(NETWORK) { FLAG_NETWORK } else { 0 } | if self.flag(WINDOWED) { FLAG_WINDOWED } else { 0 };
-        let mut task = 0u32;
-        let r = unsafe { sys_process_spawn(program.as_ptr(), program.len(), words.as_ptr(), words.len(), flags, &mut task) };
+        // The child's environment: this run's, with the command's changes, less the
+        // two names that only steer the start.
+        let mut env = Vec::new();
+        for (key, value) in self.env.capture() {
+            if key.as_os_str() == OsStr::new(WINDOWED) || key.as_os_str() == OsStr::new(NETWORK) {
+                continue;
+            }
+            let (key, value) = (key.as_encoded_bytes(), value.as_encoded_bytes());
+            if key.is_empty() || key.contains(&b'=') || key.contains(&0) || value.contains(&0) {
+                return Err(io::const_error!(io::ErrorKind::InvalidInput, "an environment name or value holds a NUL or `=`"));
+            }
+            env.extend_from_slice(key);
+            env.push(b'=');
+            env.extend_from_slice(value);
+            env.push(0);
+        }
+        let cwd = self.cwd.as_ref().map(|c| c.as_encoded_bytes());
+        if cwd.is_some_and(|c| c.contains(&0)) {
+            return Err(io::const_error!(io::ErrorKind::InvalidInput, "the working folder holds a NUL byte"));
+        }
+        let word = stdio[0] | stdio[1] << 2 | stdio[2] << 4;
+        let (mut task, mut slot) = (0u32, -1i32);
+        let r = unsafe {
+            sys_process_spawn_with(
+                program.as_ptr(), program.len(), words.as_ptr(), words.len(), flags,
+                word, env.as_ptr(), env.len(),
+                cwd.map_or(crate::ptr::null(), |c| c.as_ptr()), cwd.map_or(0, |c| c.len()),
+                &mut task, &mut slot,
+            )
+        };
         if r < 0 {
             return Err(io::Error::from_raw_os_error(-r as i32));
         }
-        Ok(Process { id: r, task, status: None })
+        Ok((Process { id: r, task, status: None }, slot))
     }
 
     pub fn spawn(
         &mut self,
         default: Stdio,
-        _needs_stdin: bool,
+        needs_stdin: bool,
     ) -> io::Result<(Process, StdioPipes)> {
-        let usable = |s: &Option<Stdio>| s.as_ref().unwrap_or(&default).usable();
-        if !(usable(&self.stdin) && usable(&self.stdout) && usable(&self.stderr)) {
-            return Err(no_pipes());
-        }
-        Ok((self.start()?, StdioPipes { stdin: None, stdout: None, stderr: None }))
+        let stdin = match &self.stdin {
+            Some(s) => s.kind()?,
+            None if needs_stdin => default.kind()?,
+            None => NULL,
+        };
+        let stdout = self.stdout.as_ref().unwrap_or(&default).kind()?;
+        let stderr = self.stderr.as_ref().unwrap_or(&default).kind()?;
+        let (process, slot) = self.start([stdin, stdout, stderr])?;
+        let pipe = |kind: u32, stream: u32| (kind == PIPED && slot >= 0).then(|| ChildPipe { slot, stream });
+        Ok((process, StdioPipes { stdin: pipe(stdin, 0), stdout: pipe(stdout, 1), stderr: pipe(stderr, 2) }))
     }
 }
 
-/// `output()`: std asks for both streams piped unless they were set; with no pipes,
-/// only a command whose streams are `null` or `inherit` runs, and gives empty output.
+/// `output()`: stdout and stderr piped unless they were set, stdin null unless set.
 pub fn output(cmd: &mut Command) -> io::Result<(ExitStatus, Vec<u8>, Vec<u8>)> {
-    let set = |s: &Option<Stdio>| s.as_ref().is_some_and(Stdio::usable);
-    if !(set(&cmd.stdout) && set(&cmd.stderr)) || cmd.stdin.as_ref().is_some_and(|s| !s.usable()) {
-        return Err(no_pipes());
+    let (mut process, mut pipes) = cmd.spawn(Stdio::MakePipe, false)?;
+    drop(pipes.stdin.take());
+    let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+    match (pipes.stdout.take(), pipes.stderr.take()) {
+        (None, None) => {}
+        (Some(out), None) => {
+            out.read_to_end(&mut stdout)?;
+        }
+        (None, Some(err)) => {
+            err.read_to_end(&mut stderr)?;
+        }
+        (Some(out), Some(err)) => read_output(out, &mut stdout, err, &mut stderr)?,
     }
-    let mut process = cmd.start()?;
     let status = process.wait()?;
-    Ok((status, Vec::new(), Vec::new()))
+    Ok((status, stdout, stderr))
 }
 
 impl From<ChildPipe> for Stdio {
     fn from(pipe: ChildPipe) -> Stdio {
+        Stdio::Pipe(pipe)
+    }
+}
+
+impl From<crate::sys::pipe::Pipe> for Stdio {
+    fn from(pipe: crate::sys::pipe::Pipe) -> Stdio {
         pipe.diverge()
     }
 }
@@ -410,15 +485,130 @@ impl<'a> fmt::Debug for CommandArgs<'a> {
     }
 }
 
-pub type ChildPipe = crate::sys::pipe::Pipe;
+/// This program's end of a child's stdin, stdout or stderr: a stream of the child's
+/// relay slot in Files (`sex_std::process::pipe_*`).
+pub struct ChildPipe {
+    slot: i32,
+    /// 0 stdin, 1 stdout, 2 stderr.
+    stream: u32,
+}
 
+impl ChildPipe {
+    fn read_some(&self, buf: &mut [u8], block: bool) -> io::Result<Option<usize>> {
+        if self.stream == 0 {
+            return Err(io::const_error!(io::ErrorKind::Unsupported, "a child's stdin is not read here"));
+        }
+        let r = unsafe { sys_process_pipe_read(self.slot, self.stream, buf.as_mut_ptr(), buf.len(), block as i32) };
+        if r == -(EAGAIN as isize) && !block {
+            return Ok(None);
+        }
+        if r < 0 { Err(io::Error::from_raw_os_error(-r as i32)) } else { Ok(Some(r as usize)) }
+    }
+
+    pub fn read(&self, buf: &mut [u8]) -> io::Result<usize> {
+        Ok(self.read_some(buf, true)?.unwrap_or(0))
+    }
+
+    pub fn read_buf(&self, mut cursor: BorrowedCursor<'_, u8>) -> io::Result<()> {
+        // SAFETY: the read writes bytes into the buffer and never reads from it.
+        let buf = unsafe { &mut *(cursor.as_mut() as *mut [crate::mem::MaybeUninit<u8>] as *mut [u8]) };
+        let n = self.read(buf)?;
+        // SAFETY: exactly `n` bytes were filled.
+        unsafe { cursor.advance(n) };
+        Ok(())
+    }
+
+    pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
+        match bufs.iter_mut().find(|b| !b.is_empty()) {
+            Some(buf) => self.read(buf),
+            None => Ok(0),
+        }
+    }
+
+    pub fn is_read_vectored(&self) -> bool {
+        false
+    }
+
+    pub fn read_to_end(&self, buf: &mut Vec<u8>) -> io::Result<usize> {
+        let start = buf.len();
+        let mut chunk = vec![0u8; 32 * 1024];
+        loop {
+            let n = self.read(&mut chunk)?;
+            if n == 0 {
+                return Ok(buf.len() - start);
+            }
+            buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+
+    pub fn write(&self, buf: &[u8]) -> io::Result<usize> {
+        if self.stream != 0 {
+            return Err(io::const_error!(io::ErrorKind::Unsupported, "a child's output is not written here"));
+        }
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        let r = unsafe { sys_process_pipe_write(self.slot, buf.as_ptr(), buf.len()) };
+        if r < 0 { Err(io::Error::from_raw_os_error(-r as i32)) } else { Ok(r as usize) }
+    }
+
+    pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
+        match bufs.iter().find(|b| !b.is_empty()) {
+            Some(buf) => self.write(buf),
+            None => Ok(0),
+        }
+    }
+
+    pub fn is_write_vectored(&self) -> bool {
+        false
+    }
+}
+
+impl Drop for ChildPipe {
+    fn drop(&mut self) {
+        unsafe { sys_process_pipe_close(self.slot, self.stream) }
+    }
+}
+
+impl fmt::Debug for ChildPipe {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChildPipe").field("slot", &self.slot).field("stream", &self.stream).finish()
+    }
+}
+
+/// Both of a child's output streams to their ends, read as they come, so a child that
+/// fills one while this program waits on the other is never stuck.
 pub fn read_output(
     out: ChildPipe,
-    _stdout: &mut Vec<u8>,
-    _err: ChildPipe,
-    _stderr: &mut Vec<u8>,
+    stdout: &mut Vec<u8>,
+    err: ChildPipe,
+    stderr: &mut Vec<u8>,
 ) -> io::Result<()> {
-    match out.diverge() {}
+    let mut chunk = vec![0u8; 32 * 1024];
+    let (mut out_done, mut err_done, mut round) = (false, false, 0u32);
+    while !(out_done && err_done) {
+        let mut heard = false;
+        for (pipe, done, into) in [(&out, &mut out_done, &mut *stdout), (&err, &mut err_done, &mut *stderr)] {
+            if *done {
+                continue;
+            }
+            match pipe.read_some(&mut chunk, false)? {
+                Some(0) => *done = true,
+                Some(n) => {
+                    into.extend_from_slice(&chunk[..n]);
+                    heard = true;
+                }
+                None => {}
+            }
+        }
+        if heard {
+            round = 0;
+        } else {
+            round += 1;
+            unsafe { sys_process_pause(round) };
+        }
+    }
+    Ok(())
 }
 
 pub fn getpid() -> u32 {

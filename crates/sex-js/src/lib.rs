@@ -84,6 +84,9 @@ pub mod op {
     pub const MATCHES: u32 = 36;
     /// (node): whether the bounded ancestor walk reaches SVG before foreignObject.
     pub const SVG_CONTEXT: u32 = 37;
+    /// (node, other): `compareDocumentPosition` bits of other relative to node, in one
+    /// call instead of listing the whole document (jQuery sorts every result with it).
+    pub const POSITION: u32 = 38;
     /// (video or audio element, verb, argument): play, pause, seek SECONDS, load,
     /// volume 0..1, muted 0/1, loop 0/1; queued for the browser. The browser answers
     /// with `media` dispatches carrying the element's state and its events.
@@ -156,6 +159,10 @@ pub trait Page {
     fn call_bytes(&mut self, op: u32, args: &[&[u8]]) -> Option<Vec<u8>> { let _ = (op, args); None }
     /// Nanoseconds on a monotonic clock, for `Date.now`, timers and the time budget.
     fn now_ns(&mut self) -> u64;
+    /// The clock that `jit-profile` attributions use: [`Page::now_ns`] unless the page
+    /// has a separate one (a replay benchmark keeps page time virtual but profiles in
+    /// real time).
+    fn profile_ns(&mut self) -> u64 { self.now_ns() }
     /// Module addresses the engine asked for ([`op::MODULE_SOURCE`]) and did not get,
     /// since the last call.
     fn take_wanted_modules(&mut self) -> Vec<String> { Vec::new() }
@@ -515,13 +522,13 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
         let (data, state) = m.data_and_store_mut(&mut c);
         let Some(args) = args_of(data, ptr, len) else { return -1 };
         #[cfg(feature = "jit-profile")]
-        let before = state.page.now_ns();
+        let before = state.page.profile_ns();
         let r = if op as u32 >= BYTE_OPS { state.page.call_bytes(op as u32, &args) } else {
             let Some(text) = args.iter().map(|a| core::str::from_utf8(a).ok()).collect::<Option<Vec<&str>>>() else { return -1 };
             state.page.call(op as u32, &text).map(String::into_bytes)
         };
         #[cfg(feature = "jit-profile")]
-        state.profile.host(op as u32, state.page.now_ns().saturating_sub(before));
+        state.profile.host(op as u32, state.page.profile_ns().saturating_sub(before));
         match r {
             Some(r) => { let n = r.len() as i32; state.result = r; n }
             None => -1,
@@ -548,10 +555,10 @@ fn link<P: Page + 'static>(linker: &mut Linker<State<P>>) -> Result<(), wasmi::e
             let Some(m) = mem(&c) else { return 0 };
             let (data, state) = m.data_and_store_mut(&mut c);
             #[cfg(feature = "jit-profile")]
-            let before = state.page.now_ns();
+            let before = state.page.profile_ns();
             let result = state.jit.run_v3(data, pc as u32, len as u32, argv as u32, argc as u32, out as u32) as i32;
             #[cfg(feature = "jit-profile")]
-            state.profile.jit(state.page.now_ns().saturating_sub(before));
+            state.profile.jit(state.page.profile_ns().saturating_sub(before));
             return result;
         }
         #[cfg(not(feature = "baseline-jit"))]
