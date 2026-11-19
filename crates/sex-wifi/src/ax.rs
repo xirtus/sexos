@@ -226,6 +226,8 @@ pub struct Ours {
     /// The widest channel we take: 160 MHz on AX200 and later, W20 when the PHY
     /// context cannot be widened after association.
     pub max_width: Width,
+    /// 802.11ac (VHT) is on in the NVM SKU; an 11n-only part offers HT alone.
+    pub vht: bool,
     /// STA_HE_CTXT_CMD's version (0: HE is not used), and whether the firmware
     /// takes its multiple-BSSID fields (API bit 52, else version 1's size).
     pub he_ctxt: u8,
@@ -235,7 +237,7 @@ pub struct Ours {
 }
 impl Default for Ours {
     /// A legacy-only station: no HT, VHT or HE elements, as before X1.
-    fn default() -> Self { Self { tx_antennas: 0, rx_antennas: 0, max_width: Width::W20, he_ctxt: 0, he_mbssid: false, tlc: 3 } }
+    fn default() -> Self { Self { tx_antennas: 0, rx_antennas: 0, max_width: Width::W20, vht: false, he_ctxt: 0, he_mbssid: false, tlc: 3 } }
 }
 impl Ours {
     pub fn streams(&self) -> u8 { (self.tx_antennas.count_ones().min(self.rx_antennas.count_ones()) as u8).clamp(1, 2) }
@@ -280,7 +282,7 @@ pub fn mode(peer: &Peer, ours: &Ours, channel: u8, two_ghz: bool) -> Mode {
     if !ours.ht() || peer.ht.is_none() || !peer.qos() { return m; }
     m.qos = true;
     m.ht = true;
-    m.vht = !two_ghz && peer.vht.is_some();
+    m.vht = ours.vht && !two_ghz && peer.vht.is_some();
     m.he = ours.he_ctxt != 0 && peer.he.is_some() && peer.he_op.is_some();
     if two_ghz { return m; }
     let ht_op = peer.ht_op.unwrap_or_default();

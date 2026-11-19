@@ -100,10 +100,14 @@ pub const BA_STUCK_US: u64 = 250_000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BaStep { Idle, Sent(u64, ba::AddbaRequest), Respond(ba::AddbaRequest, u16), Remove, Removing(u64) }
 
+/// The last frame the replay check accepted on a key and TID: its CCMP packet
+/// number, 802.11 sequence number and A-MSDU subframe index (0 when not one).
+type Accepted = (u64, u16, u8);
+
 /// Takes frames up in order: the replay check, then EAPOL to the supplicant or
 /// the frame to the stack.
 struct Intake<'a> {
-    pn: &'a mut [[Option<u64>; 16]; 4],
+    pn: &'a mut [[Option<Accepted>; 16]; 4],
     bssid: [u8; 6],
     rekeying: bool,
     key_frame: &'a mut [u8; eapol::MAX_FRAME],
@@ -113,16 +117,22 @@ struct Intake<'a> {
     last_drop: Option<Drop>,
 }
 impl Intake<'_> {
-    fn take(&mut self, eth: &[u8], tid: usize, number: Option<(usize, u64)>, same_ok: bool, deliver: &mut impl FnMut(&[u8])) {
+    /// `subframe`: the frame's sequence number and A-MSDU subframe index.
+    fn take(&mut self, eth: &[u8], tid: usize, number: Option<(usize, u64)>, subframe: (u16, u8), deliver: &mut impl FnMut(&[u8])) {
         let n = eth.len();
         if let Some((key, number)) = number {
-            // A-MSDU subframes after the first share the frame's packet number.
-            if self.pn[key][tid].is_some_and(|last| number < last || (number == last && !same_ok)) {
+            // A-MSDU subframes after the first share the frame's packet number:
+            // the same number passes only for a later subframe of the same frame,
+            // so a replayed A-MSDU loses every subframe, not just the first.
+            let (seq, index) = subframe;
+            let replay = self.pn[key][tid].is_some_and(|(last, last_seq, last_index)|
+                number < last || (number == last && !(index > last_index && seq == last_seq)));
+            if replay {
                 self.dropped += 1;
                 self.last_drop = Some(Drop::Replay);
                 return;
             }
-            self.pn[key][tid] = Some(number);
+            self.pn[key][tid] = Some((number, seq, index));
         }
         let key = n > 14 && eth[12..14] == eapol::ETHERTYPE.to_be_bytes() && eth[6..12] == self.bssid;
         if key && self.rekeying && n - 14 <= eapol::MAX_FRAME {
@@ -132,7 +142,7 @@ impl Intake<'_> {
     }
     fn take_slot(&mut self, slots: &ba::Slots, i: usize, tid: usize, deliver: &mut impl FnMut(&[u8])) {
         let n = slots.len[i] as usize;
-        self.take(&slots.data[i][..n], tid, slots.pn[i], false, deliver);
+        self.take(&slots.data[i][..n], tid, slots.pn[i], (0, 0), deliver);
     }
 }
 
@@ -151,7 +161,7 @@ pub struct Link {
     qos: bool,
     qos_seq: [u16; 8],
     /// Last CCMP packet number per key id and TID (non-QoS frames use TID 0).
-    pn: [[Option<u64>; 16]; 4],
+    pn: [[Option<Accepted>; 16]; 4],
     pub sent: u64,
     pub received: u64,
     pub dropped: u64,
@@ -354,14 +364,14 @@ impl Link {
             if f[0] & 0x0c != 0x08 || f[10..16] != bssid || f[16..22] == me { return; }
             match decap(f, rx.status, protected, &mut eth) {
                 Ok((n, tid, number)) => {
-                    let same_ok = rx.subframe.is_some_and(|i| i > 0);
+                    let subframe = (u16::from_le_bytes([f[22], f[23]]) >> 4, rx.subframe.unwrap_or(0));
                     let qos_unicast = f[0] & 0x80 != 0 && f[4] & 1 == 0;
                     let verdict = match (session.as_mut(), qos_unicast) {
                         (Some(s), true) => s.frame(rx.reorder, tid as u8, rx.status & STATUS_DUPLICATE != 0, false),
                         _ => ba::Verdict::Outside,
                     };
                     match verdict {
-                        ba::Verdict::Outside | ba::Verdict::Pass => intake.take(&eth[..n], tid, number, same_ok, &mut deliver),
+                        ba::Verdict::Outside | ba::Verdict::Pass => intake.take(&eth[..n], tid, number, subframe, &mut deliver),
                         ba::Verdict::Drop => {}
                         ba::Verdict::Hold(i) => {
                             let (s, sl) = (session.as_mut().unwrap(), slots.as_deref_mut().unwrap());

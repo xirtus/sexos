@@ -1967,6 +1967,25 @@ fn x17_carries_ethernet_over_wpa2() {
     assert_eq!(link.dropped, 3);
     assert_eq!(link.last_drop, Some(link::Drop::Replay));
     assert_eq!(link.tx.queued, 0, "the TX response freed the ring");
+    // An A-MSDU the hardware split: three subframes of sequence 5 share packet
+    // number 20 and all pass. Replayed, every subframe is dropped (not only the
+    // first), and the same number on another sequence is a replay too.
+    let amsdu = |seq: u16, index: u8, fill: u8| {
+        let mut f = protected_from_ap(&me, &bss.bssid, &gw, 20, &ip(fill));
+        f[22..24].copy_from_slice(&(seq << 4).to_le_bytes());
+        let mut p = mpdu_status(fam, &f, ok, true);
+        p[8 + 3] |= 0x40; // the descriptor's A-MSDU flag
+        p[8 + 4] = index;
+        p
+    };
+    for (index, fill) in [(0, 0x50), (1, 0x51), (2, 0x52)] { sim.deliver(&mut m, &b.layout, &amsdu(5, index, fill)); }
+    for (index, fill) in [(0, 0x50), (1, 0x51), (2, 0x52)] { sim.deliver(&mut m, &b.layout, &amsdu(5, index, fill)); }
+    sim.deliver(&mut m, &b.layout, &amsdu(6, 1, 0x53));
+    let mut got: Vec<Vec<u8>> = vec![];
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec())));
+    let fills: Vec<u8> = got.iter().map(|e| e[15]).collect();
+    assert_eq!(fills, vec![0x50, 0x51, 0x52]);
+    assert_eq!(link.dropped, 3 + 4);
     // The AP leaves: the link goes down.
     sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(w::FC_MGMT_DEAUTH, &me, &bss.bssid, &7u16.to_le_bytes()), 40, 6, true));
     assert!(!link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {}));
@@ -2149,7 +2168,7 @@ fn wifi6_elements() -> Vec<u8> {
 }
 
 fn x17_ours() -> sex_wifi::ax::Ours {
-    sex_wifi::ax::Ours { tx_antennas: 3, rx_antennas: 3, max_width: sex_wifi::ax::Width::W160, he_ctxt: 2, he_mbssid: true, tlc: 4 }
+    sex_wifi::ax::Ours { tx_antennas: 3, rx_antennas: 3, max_width: sex_wifi::ax::Width::W160, vht: true, he_ctxt: 2, he_mbssid: true, tlc: 4 }
 }
 
 #[test]

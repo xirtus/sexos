@@ -221,6 +221,7 @@ impl Init {
         Ours {
             tx_antennas: tx, rx_antennas: rx,
             max_width: if n.sku_flags & SKU_11AC != 0 { Width::W160 } else { Width::W40 },
+            vht: n.sku_flags & SKU_11AC != 0,
             he_ctxt: if n.sku_flags & SKU_11AX != 0 && (1..=3).contains(&he) { he } else { 0 },
             he_mbssid: self.features.api(u::API_MBSSID_HE),
             tlc,

@@ -8,7 +8,7 @@ use sex_wifi::tlc;
 const AP: [u8; 6] = [2, 0, 0, 0, 0, 1];
 const STA: [u8; 6] = [2, 0, 0, 0, 0, 2];
 
-fn x17() -> Ours { Ours { tx_antennas: 3, rx_antennas: 3, max_width: Width::W160, he_ctxt: 2, he_mbssid: true, tlc: 4 } }
+fn x17() -> Ours { Ours { tx_antennas: 3, rx_antennas: 3, max_width: Width::W160, vht: true, he_ctxt: 2, he_mbssid: true, tlc: 4 } }
 
 /// HT capabilities: LDPC, 40 MHz, SGI 20/40, RX STBC; 64 KiB A-MPDUs, 8 µs
 /// density; MCS 0..15.
@@ -176,7 +176,14 @@ fn agreed_mode_and_width() {
     assert_eq!(ax::mode(&n.peer, &x17(), 36, false), ax::Mode::LEGACY);
     // Firmware without STA_HE_CTXT_CMD: Wi-Fi 5.
     let m = ax::mode(&b.peer, &Ours { he_ctxt: 0, ..x17() }, 36, false);
-    assert_eq!((m.vht, m.he), (true, false));
+    assert_eq!((m.vht, m.he), (true, false));    // An 11n-only SKU (no 11ac, no 11ax): HT at 40 MHz on a Wi-Fi 6 AP, no VHT
+    // element offered and no VHT rates chosen.
+    let n = Ours { vht: false, he_ctxt: 0, max_width: Width::W40, ..x17() };
+    let m = ax::mode(&b.peer, &n, 36, false);
+    assert_eq!((m.ht, m.vht, m.he, m.width), (true, false, false, Width::W40));
+    let mut caps = [0u8; 128];
+    let (_, all) = ax::own_elements(&b.peer, &n, false, &mut caps);
+    assert!(w::elements(&caps[..all]).all(|(id, _)| id != 191), "no VHT capabilities element");
 }
 
 #[test]
