@@ -640,7 +640,7 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
             ||x0-sx<(scene.metrics.px(8)as usize)||x1-sx>sw.saturating_sub((scene.metrics.px(8)as usize)){return false;}
         source.content
     }else{surf};
-    if unsafe{scene.bitmaps.matches_surface(content.owner_pd,content.surface_id)}{return false;}
+    let bitmap=unsafe{scene.bitmaps.matches_surface(content.owner_pd,content.surface_id)};
     let (lx0,lx1,ly)=(x0 as i32-content.x,x1 as i32-content.x,y as i32-content.y);
     let mask=surface_lifecycle::native_pixel_bit(if source.chrome{content.owner_pd}else{surf.owner_pd},if source.chrome{content.surface_id}else{surf.surface_id});
     if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
@@ -654,6 +654,11 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
         let a=content.fill_sx[i].max(lx0);let b=(content.fill_sx[i]+content.fill_sw[i] as i32).min(lx1);
         let (a,b)=((a-lx0) as usize+x0,(b-lx0) as usize+x0);
         unsafe{core::slice::from_raw_parts_mut(row.add(a),b-a).fill(content.fill_color[i]);}
+    }
+    // A page's pixels over the fills, under the text (bitmap_color's place there).
+    if bitmap{
+        let out=unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0)};
+        unsafe{scene.bitmaps.blend_row(content.owner_pd,content.surface_id,bitmap_viewport_for(content,scene.metrics),x0,y,out);}
     }
     text_run(row,x0,x1,y,content,scene.metrics);
     true
@@ -795,12 +800,15 @@ fn fast_chrome_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:
         // The rim band: the whole row on the top and bottom rims, else the side rims.
         let band_row=ly<px8||ly>=rim_bottom;
         if ly<px8&&!top_bar_active{return false;}
-        if !band_row&&l1>px8&&l0<rim_right{return false;}
+        // A run across the content between the side rims: the content's own fast run.
+        let (c0,c1)=(l0.max(px8),l1.min(rim_right));
+        if !band_row&&c0<c1&&!fast_content_run(fb,sx+c0,sx+c1,y,w,h,source,scene){return false;}
         let edge=m.scale()as usize;
         let edge_row=ly<edge||ly>=sh.saturating_sub(edge);
         let outline=glass_over_bg(scene.tokens.frame_rim_color,x0,y,112,scene);
         let inset=glass_over_bg(sex_pdx::desktop_style::NATIVE_CANVAS,x0,y,224,scene);
         for lx in l0..l1{
+            if !band_row&&lx>=c0&&lx<c1{continue;}
             let c=if edge_row||lx<edge||lx>=sw.saturating_sub(edge){outline}else{inset};
             unsafe{core::ptr::write_volatile(row.add(sx+lx),c);}
         }

@@ -10,6 +10,9 @@ host's input event to the serial marker that says the result reached the screen.
   open     Enter on a text file in Files -> Files asks Shell -> Jot's window opens ->
            Jot has the bytes -> Jot's first pixels
 
+First pixels is Display's answer to the program's present request
+([display.app.present.reply]), sent once a published frame shows the window.
+
 Every serial line is stamped with the host time it arrived, so each interaction also
 gets a stage-by-stage breakdown (median ms from the input to each marker), and the
 first few are printed whole as traces. With /dev/kvm the guest runs on KVM with
@@ -171,15 +174,21 @@ def main():
             for name in programs:
                 tag = LAUNCH_TAG.get(name, name + '.ready'); rows = []; st = []
                 for run in range(a.runs):
-                    line(f'run {name}', enter=False); time.sleep(.3)
+                    cmd = f'run {name}'; s0 = len(t()); line(cmd, enter=False)
+                    # QMP queues each key behind the last one's hold time: wait until
+                    # Spindle has the whole line, so Enter is not timed behind typing.
+                    g['wait'](rf'\[spindle\.line\.cursor\] pos={len(cmd)} len={len(cmd)}\b', s0, 30); time.sleep(.5)
                     tr.start(); q.key('ret')
                     win, m, i = tr.until(r'\[shell\.program\.launch\] target=(\d+) task=(\d+) surface=(\d+)', 120)
                     pd, task, surface = m[1], m[2], int(m[3])
                     first, fm, _ = tr.soon(rf'\[display\.[a-z_.]+\] target={pd} ', 60, i)
+                    # Display answers a program's present request once a published
+                    # frame shows it: the window's first pixels on screen.
+                    shown, _, _ = tr.soon(rf'\[display\.app\.present\.reply\] target={pd} ', 60, i)
                     ready, _, _ = tr.soon(rf'\[{re.escape(tag)}\] ', 60)
                     time.sleep(.3); tr.poll()
-                    rows.append({'window_ms': round(win, 1), 'first_pixels_ms': first and round(first, 1),
-                                 'first_marker': fm and fm[0].split(']')[0] + ']', 'ready_ms': ready and round(ready, 1)})
+                    rows.append({'window_ms': round(win, 1), 'display_first_ms': first and round(first, 1),
+                                 'first_marker': fm and fm[0].split(']')[0] + ']', 'first_pixels_ms': shown and round(shown, 1), 'ready_ms': ready and round(ready, 1)})
                     st.append(tr.stages())
                     if run in (0, 1): tr.dump(f'launch {name} run {run}', 120)
                     time.sleep(1.5); s = len(t())
@@ -198,11 +207,12 @@ def main():
             # A corner drag starts only on the focused window.
             g['focus'](201); time.sleep(2)
             x, y, w, h = map(int, re.findall(r'\[shell.tile.apply\] sid=201 x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+)', t())[-1])
-            cx, cy = x + w - 2, y + h - 2
+            # The right edge's middle: a corner pixel can fall outside the rounded hit mask.
+            cx, cy = x + w - 3, y + h // 2
             at(cx, cy); time.sleep(.5); btn(True); time.sleep(.4)
             apply_ms, paint_ms, st = [], [], []
             for i in range(1, 13):
-                tr.start(); at(cx - i * 10, cy - i * 6)
+                tr.start(); at(cx - i * 10, cy)
                 d, _, j = tr.soon(r'\[silk\.resize\.apply\] sid=201 ', 5)
                 pm, _, _ = tr.soon(r'\[quil\.ui\.applied\] paint=', 3, j) if d is not None else (None, None, 0)
                 time.sleep(.05); tr.poll()
@@ -231,9 +241,11 @@ def main():
                 pd, task, surface = lm[1], lm[2], int(lm[3])
                 loaded, _, _ = tr.soon(r'\[jot\.loaded\] bytes=', 60)
                 first, fm, _ = tr.soon(rf'\[display\.[a-z_.]+\] target={pd} ', 60, i)
+                shown, _, _ = tr.soon(rf'\[display\.app\.present\.reply\] target={pd} ', 60, i)
                 time.sleep(.3); tr.poll()
                 rows.append({'files_asked_ms': round(asked, 1), 'window_ms': round(win, 1), 'loaded_ms': loaded and round(loaded, 1),
-                             'first_pixels_ms': first and round(first, 1), 'first_marker': fm and fm[0].split(']')[0] + ']'})
+                             'display_first_ms': first and round(first, 1), 'first_marker': fm and fm[0].split(']')[0] + ']',
+                             'first_pixels_ms': shown and round(shown, 1)})
                 st.append(tr.stages())
                 if run in (0, 1): tr.dump(f'open run {run}', 120)
                 time.sleep(1.5); s = len(t())
