@@ -9,7 +9,7 @@ What SexOS drives today, device by device, and what real machines have shown. Tw
 
 Any device not named below falls under the class rules at the end. To add a device, add its row to `crates/sex-hwdb`; to write its driver, start from the driver SDK (`docs/sdk/DRIVER_SDK.md`).
 
-70 named devices, 43 of them working on master. 0 real machines reported.
+71 named devices, 44 of them working on master. 0 real machines reported.
 
 ## Support levels
 
@@ -122,6 +122,12 @@ No real-machine report yet. The first will come from the Alienware x17 R1 (`docs
 | Device | PCI id | Support | Seen on |
 |---|---|---|---|
 | virtio input device | `1af4:1052` | planned |  |
+
+## Harness SDK drivers (`saddle`)
+
+| Device | PCI id | Support | Seen on |
+|---|---|---|---|
+| QEMU/Bochs edu teaching device (QEMU, Harness template driver) | `1234:11e8` | driven |  |
 
 ## Platform (`kernel`)
 

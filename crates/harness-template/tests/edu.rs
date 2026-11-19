@@ -137,7 +137,14 @@ fn dma_requests_outside_the_device_limits_never_reach_it() {
     let mut far_pool = far.pool();
     let fb = far_pool.take(64, 1).unwrap();
     assert_eq!(edu.dma(Direction::ToDevice, &fb, 0, 64, &mut clock, poll(), &mut out), Err(Error::BadRequest));
-    assert!(edu.into_regs().writes_to(DMA_CMD).is_empty());
+    // A wider mask lets it through, but never past 4 GiB.
+    edu.set_dma_limit(1 << 40);
+    assert_eq!(edu.dma(Direction::ToDevice, &fb, 0, 64, &mut clock, poll(), &mut out), Err(Error::Timeout), "reaches the device (the model has no bus)");
+    let mut high = MockDma::new(4096, (1 << 32) - 16);
+    let mut high_pool = high.pool();
+    let hb = high_pool.take(64, 1).unwrap();
+    assert_eq!(edu.dma(Direction::ToDevice, &hb, 0, 64, &mut clock, poll(), &mut out), Err(Error::BadRequest));
+    assert_eq!(edu.into_regs().writes_to(DMA_CMD).len(), 1);
 }
 
 #[test]

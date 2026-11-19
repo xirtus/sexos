@@ -57,7 +57,8 @@ pub const IRQ_DMA: u32 = 0x100;
 
 pub const BUFFER_ADDR: u32 = 0x40000;
 pub const BUFFER_LEN: u32 = 4096;
-/// The device masks DMA addresses to 28 bits.
+/// The device masks DMA addresses to 28 bits unless started with a wider
+/// `dma_mask` (see [`Edu::set_dma_limit`]).
 pub const DMA_LIMIT: u64 = 1 << 28;
 
 /// The largest n whose factorial fits the 32-bit register.
@@ -90,6 +91,7 @@ pub struct Edu<R: Regs> {
     regs: R,
     pub major: u8,
     pub minor: u8,
+    dma_limit: u64,
 }
 
 impl<R: Regs> Edu<R> {
@@ -112,8 +114,13 @@ impl<R: Regs> Edu<R> {
         }
         let (major, minor) = ((id >> 24) as u8, (id >> 16) as u8);
         Record::new("edu.ready").text("version", &version(major, minor)).hex("id", id as u64).emit(out);
-        Ok(Edu { regs, major, minor })
+        Ok(Edu { regs, major, minor, dma_limit: DMA_LIMIT })
     }
+
+    /// The device was started with a wider DMA mask (`-device edu,dma_mask=...`):
+    /// accept bus addresses below `limit`. The driver writes the low half of the
+    /// 64-bit DMA registers only, so the limit never goes past 4 GiB.
+    pub fn set_dma_limit(&mut self, limit: u64) { self.dma_limit = limit.min(1 << 32); }
 
     /// n! computed by the device (n <= [`MAX_FACTORIAL`]).
     pub fn factorial<C: Clock, I: Irq, S: Sink>(&mut self, n: u32, clock: &mut C, mut wait: Wait<'_, I>, out: &mut S) -> Result<u32, Error> {
@@ -143,7 +150,7 @@ impl<R: Regs> Edu<R> {
         let dev_end = device_offset.checked_add(len).ok_or(Error::BadRequest)?;
         if dev_end > BUFFER_LEN { return Err(Error::BadRequest); }
         let ram = buf.bus;
-        if ram.checked_add(len as u64).map_or(true, |e| e > DMA_LIMIT) { return Err(Error::BadRequest); }
+        if ram.checked_add(len as u64).map_or(true, |e| e > self.dma_limit) { return Err(Error::BadRequest); }
         let dev = (BUFFER_ADDR + device_offset) as u64;
         let (src, dst) = match dir { Direction::ToDevice => (ram, dev), Direction::ToRam => (dev, ram) };
         // edu takes its 64-bit DMA registers in one access or as the low half

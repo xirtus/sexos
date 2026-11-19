@@ -582,6 +582,16 @@
    "vendor_name": "QEMU/Bochs"
   },
   {
+   "device": "11e8",
+   "group": "Saddle hosts drivers built on the Harness SDK; the template drives QEMU's edu",
+   "model": "edu teaching device (QEMU, Harness template driver)",
+   "seen": [],
+   "service": "Saddle",
+   "support": "Driven",
+   "vendor": "1234",
+   "vendor_name": "QEMU/Bochs"
+  },
+  {
    "device": "8125",
    "group": "Realtek",
    "model": "RTL8125 2.5GbE",

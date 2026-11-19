@@ -43,10 +43,11 @@ SERVICES = {
     "Usb": ("sexusb", "USB and Thunderbolt"),
     "Display": ("sexdisplay", "Graphics and display"),
     "Input": ("sexinput", "Input buses"),
+    "Saddle": ("saddle", "Harness SDK drivers"),
     "Kernel": ("kernel", "Platform"),
     "Nothing": ("none", "Other"),
 }
-ORDER = ["Drive", "Display", "Net", "Bell", "Usb", "Input", "Kernel", "Nothing"]
+ORDER = ["Drive", "Display", "Net", "Bell", "Usb", "Input", "Saddle", "Kernel", "Nothing"]
 SUPPORT = {
     "Driven": ("driven", "Works: a SexOS driver drives it"),
     "Firmware": ("firmware", "Works through firmware setup only (boot framebuffer), no native driver yet"),

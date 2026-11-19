@@ -13,9 +13,12 @@ pub const CLASS_AHCI: u32 = 0x01_06_01;
 pub const CLASS_WIFI: u32 = 0x02_80_00;
 /// "Other" serial bus controller: Intel Serial IO. The manifest only claims its I2C functions.
 pub const CLASS_SERIAL_IO: u32 = 0x0c_80_00;
+/// A generic lease (Saddle) carries this bit above the device's own 24-bit class, so
+/// the command path recognises the kind of a held lease from the lease alone.
+pub const GENERIC: u32 = 1 << 24;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind { Hda, Ahci, Wifi, SerialIo }
+pub enum Kind { Hda, Ahci, Wifi, SerialIo, Generic }
 impl Kind {
     pub fn of(dev: &PciDevice) -> Option<Kind> {
         Self::of_class((dev.class_id as u32) << 16 | (dev.subclass_id as u32) << 8 | dev.prog_if as u32)
@@ -23,6 +26,7 @@ impl Kind {
     /// HD Audio ignores the programming interface; AHCI must say AHCI, not IDE or RAID.
     pub fn of_class(class: u32) -> Option<Kind> {
         match class {
+            c if c & GENERIC != 0 => Some(Kind::Generic),
             c if c & 0xffff00 == CLASS_HDA => Some(Kind::Hda),
             CLASS_AHCI => Some(Kind::Ahci),
             c if c & 0xffff00 == CLASS_WIFI => Some(Kind::Wifi),
@@ -31,15 +35,16 @@ impl Kind {
         }
     }
     pub fn class(self, dev: &PciDevice) -> u32 {
-        match self { Kind::Hda => CLASS_HDA | dev.prog_if as u32, Kind::Ahci => CLASS_AHCI, Kind::Wifi => CLASS_WIFI | dev.prog_if as u32, Kind::SerialIo => CLASS_SERIAL_IO | dev.prog_if as u32 }
+        match self { Kind::Hda => CLASS_HDA | dev.prog_if as u32, Kind::Ahci => CLASS_AHCI, Kind::Wifi => CLASS_WIFI | dev.prog_if as u32, Kind::SerialIo => CLASS_SERIAL_IO | dev.prog_if as u32,
+            Kind::Generic => GENERIC | (dev.class_id as u32) << 16 | (dev.subclass_id as u32) << 8 | dev.prog_if as u32 }
     }
     /// HDA and Intel Wi-Fi keep their registers in BAR0; AHCI's ABAR is BAR5.
-    pub fn bar(self) -> u8 { match self { Kind::Hda | Kind::Wifi | Kind::SerialIo => 0, Kind::Ahci => 5 } }
+    pub fn bar(self) -> u8 { match self { Kind::Hda | Kind::Wifi | Kind::SerialIo | Kind::Generic => 0, Kind::Ahci => 5 } }
     /// Global registers plus every stream (HDA: up to 30 descriptors) or port
     /// (AHCI: 32 ports at 0x100 + n*0x80) a driver may touch.
     /// Intel Wi-Fi: the CSRs up to the RX free-ring index at 0x1c80 (8 KiB BAR minimum).
     /// Serial IO: the DesignWare block and Intel's private page (resets) at 0x200.
-    pub fn registers_end(self) -> u64 { match self { Kind::Hda => 0x180, Kind::Ahci => 0x180, Kind::Wifi => 0x2000, Kind::SerialIo => 0x300 } }
+    pub fn registers_end(self) -> u64 { match self { Kind::Hda => 0x180, Kind::Ahci => 0x180, Kind::Wifi => 0x2000, Kind::SerialIo => 0x300, Kind::Generic => sex_hwdb::manifest::GENERIC_REGISTERS_END } }
     pub fn view_length(self, actual: u64) -> Option<u64> {
         if actual < self.registers_end() { None } else { Some(actual.min(64 * 1024)) }
     }
@@ -50,6 +55,7 @@ impl Kind {
             Kind::Ahci => (sex_pdx::pci_command::AHCI_DMA_REGION_ID, sex_pdx::pci_command::AHCI_DMA_BYTES),
             Kind::Wifi => (sex_pdx::pci_command::WIFI_DMA_REGION_ID, sex_pdx::pci_command::WIFI_DMA_BYTES),
             Kind::SerialIo => (0, 0),
+            Kind::Generic => (sex_pdx::pci_command::GENERIC_DMA_REGION_ID, sex_pdx::pci_command::GENERIC_DMA_BYTES),
         }
     }
     /// Where that pool sits. Wi-Fi shares the network service with the wired NIC,

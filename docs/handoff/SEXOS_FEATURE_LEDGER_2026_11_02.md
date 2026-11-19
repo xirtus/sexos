@@ -5350,3 +5350,9 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - `scripts/hardware_list.py` builds `docs/HARDWARE.md` and `docs/hardware.json` from sex-hwdb (every `exact()` row and `by_class()` rule) and the newest `hw-reports/` report of each machine ("Seen on: works/failed").
 - Verified by `scripts/driver_sdk_host_gate.sh` (CI host job) and `scripts/tests/test_hardware_list.py`.
 
+## Saddle: Harness drivers run inside SexOS on generic leases (2026-11-20)
+- `Lease::Generic` (`sex_hwdb::manifest`) and `device_lease::Kind::Generic` (kernel): BAR0 view (256 B to 64 KiB), memory + bus-master command bits, a 256 KiB DMA pool (`GENERIC_DMA_REGION_ID`), MSI vectors from the manifest. The lease's class word carries bit 24 so the command path knows its kind.
+- `servers/saddle` (BOOT domain 53, Senses key, restartable): holds the leases from the `SADDLE` manifest (consulted last, exact ids only) and runs each driver in its `DRIVERS` table through `harness::sexos`. First driver: the edu template, with a self test (polled and interrupt factorials, DMA round trip): `[saddle.selftest] driver=edu ok=1`.
+- `harness::sexos::LeasedRegs` honours the lease window (sub-page BARs).
+- Verified by the `edu_saddle` row of `scripts/device_matrix_gate.py` (QEMU `-device edu,dma_mask=0xffffffff`) and `crates/sex-hwdb/tests/manifest.rs`.
+

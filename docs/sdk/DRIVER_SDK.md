@@ -15,6 +15,7 @@ What you get:
 | Fuzz hooks | `harness::fuzz` (`mock` feature) | `FuzzRegs`, `FuzzIrq`, `Src`, the built-in mutator and `fuzz_main!`, a hang budget |
 | System bindings | `harness::sexos` (`sexos` feature) | the lease's BAR view, the service's DMA pool, syscall 86 interrupts, the clock, the serial record stream |
 | A template driver | `crates/harness-template` | a complete driver for QEMU's `edu` device, with model tests and a fuzz binary |
+| The host service | `servers/saddle` | runs Harness drivers inside SexOS on generic leases |
 | The hardware list | `docs/HARDWARE.md`, `scripts/hardware_list.py` | what is supported and what real machines showed |
 
 Licence: Harness and the template are `GPL-2.0-or-later OR MIT`, like every
@@ -183,11 +184,36 @@ let mut irq = LeaseIrq::new(l);
 let mut dev = my_driver::Device::start(regs, &mut SystemClock, &mut Serial)?;
 ```
 
-To have BOOT lease your device to a service, add a `Match` to that service's
-manifest in `crates/sex-hwdb/src/manifest.rs`, using a lease kind that exists
-(`Lease::Nvme`, `Nic`, `Hda`, `Ahci`, `Wifi`, `SerialIo`, ...). Each kind is one
-small mechanism in the kernel's `devmgr`; a device that fits none needs a new kind,
-which is kernel growth and is named as such in its pull request
+### Saddle: where outside drivers run
+
+A device no system service drives gets a **generic lease** (`Lease::Generic`) to
+**Saddle** (`servers/saddle`, BOOT domain 53): a view of BAR0 (at least 256 bytes,
+at most 64 KiB of it), memory and bus-master command bits, one MSI vector, and a
+256 KiB DMA pool behind the IOMMU. The kernel knows nothing else about the device.
+Saddle holds that authority and runs each driver in its table with only `Regs`,
+`Clock`, `Irq`, DMA buffers and a record sink. A driver that faults takes Saddle
+down; the kernel resets the device and starts Saddle again, as for every driver
+service.
+
+To run your driver there:
+
+1. Add the device's exact id to the `SADDLE` manifest in
+   `crates/sex-hwdb/src/manifest.rs` (`Match::id(VENDOR, DEVICE, Lease::Generic, SADDLE_SLOT)`).
+   Saddle is consulted last, so it never takes a device a system service drives.
+2. Add your crate to `servers/saddle/Cargo.toml` and a row to `DRIVERS` in
+   `servers/saddle/src/main.rs`: your `DriverInfo` and a function that starts your
+   driver on the lease.
+3. Add a row to `scripts/device_matrix_gate.py` that boots QEMU with your device (if
+   QEMU models it) and names the record lines that prove it came up.
+
+The template shows all three: QEMU's edu device boots in the `edu_saddle` row,
+and the gate requires `[saddle.selftest] driver=edu ok=1`.
+
+Not yet: drivers loaded at run time (today they are linked into Saddle), one PKU
+key per driver (Saddle shares the Senses organ's key, so the IOMMU, not PKU,
+fences an outside driver's DMA from other services), and devices whose registers
+are not in BAR0. A system service's device (a disk, a NIC, a GPU) uses its own
+lease kind; a new kind is kernel growth, named as such in its pull request
 (`docs/DESIGN_GUARDRAILS.md`, section 1).
 
 ## 7. Get it on the hardware list

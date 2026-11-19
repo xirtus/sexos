@@ -231,6 +231,18 @@ pub fn init() {
         }
     }
 
+    // Saddle hosts drivers built on the Harness SDK (crates/harness) for devices no
+    // system service drives, on generic leases. Optional, in the Senses organ.
+    let mut saddle_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with("/saddle")) {
+        let id=sex_pdx::pci_command::SADDLE_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::pci_command::SADDLE_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_SADDLE_IDENTITY");saddle_id=created;
+                serial_println!("[kernel.spawn.saddle] id={} key={} organ=senses",created,sex_pdx::pci_command::SADDLE_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.saddle] failed={}",e);}
+        }
+    }
+
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
     // Static BOOT_DAG return edges for authenticated display-ready messages.
@@ -924,6 +936,8 @@ pub fn init() {
     crate::service_restart::capture(sexdisp_id, 1);
     // Shell: a new run rebuilds its windows from the app catalog.
     crate::service_restart::capture(silkshell_id, 3);
+    // Saddle: an outside driver that faults starts again on a reset device.
+    crate::service_restart::capture(saddle_id, sex_pdx::pci_command::SADDLE_PD as u8);
     crate::program_records::init(silkshell_id);
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");
@@ -1170,6 +1184,7 @@ pub fn init() {
                     50 => "sexacpi",
                     51 => "denim",
                     52 => "cufflinks",
+                    53 => "saddle",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };

@@ -36,9 +36,14 @@ impl LeasedRegs {
     pub fn open(slot: u64) -> Result<LeasedRegs, Error> {
         let view = sex_pdx::memory_region_full_view(slot, m::QUERY_VIEW | m::READ | m::WRITE).map_err(|_| Error::Denied)?;
         if view.virtual_address == 0 || view.length == 0 { return Err(Error::Denied); }
+        // A BAR smaller than a page sits inside the page BOOT mapped: the window
+        // says where its registers start and how many there are.
+        let (offset, length) = sex_pdx::device_window(slot).map_err(|_| Error::Denied)?;
+        if offset.checked_add(length).is_none_or(|e| e > view.length) { return Err(Error::Denied); }
         // SAFETY: the kernel mapped this view for this service and keeps it
-        // mapped while the lease lasts; nothing else in the service opens it.
-        let mmio = unsafe { Mmio::new(view.virtual_address as *mut u8, view.length as usize) };
+        // mapped while the lease lasts; the window lies inside it (checked);
+        // nothing else in the service opens it.
+        let mmio = unsafe { Mmio::new((view.virtual_address + offset) as *mut u8, length as usize) };
         Ok(LeasedRegs { mmio, slot })
     }
     pub fn stray_accesses(&self) -> u32 { self.mmio.stray_accesses() }

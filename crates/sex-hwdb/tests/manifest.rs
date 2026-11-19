@@ -52,3 +52,19 @@ fn every_service_has_one_manifest() {
         assert_eq!(of(m.service), Some(m));
     }
 }
+
+#[test]
+fn saddle_takes_only_what_no_system_service_drives() {
+    // QEMU's edu device goes to Saddle for the Harness template driver.
+    assert_eq!(claim(id(0x1234, 0x11e8, 0, 0xff, 0)).map(|(m, e)| (m.service, e.lease, e.slot)),
+        Some((Service::Saddle, Lease::Generic, sex_hwdb::manifest::SADDLE_SLOT)));
+    // Saddle is consulted last: no device a system service drives reaches it.
+    assert_eq!(ALL.last().map(|m| m.service), Some(Service::Saddle));
+    for m in ALL.iter().filter(|m| m.service != Service::Saddle) {
+        assert!(m.matches.iter().all(|e| e.lease != Lease::Generic), "{:?} uses the generic lease", m.service);
+    }
+    for e in sex_hwdb::manifest::SADDLE.matches {
+        assert_eq!(e.lease, Lease::Generic);
+        assert!(e.vendor != 0 && e.device != 0, "Saddle claims exact ids only");
+    }
+}

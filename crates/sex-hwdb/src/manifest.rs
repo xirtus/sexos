@@ -42,7 +42,17 @@ pub enum Lease {
     /// command bit, the function woken to D0, no DMA. Only product ids in
     /// [`SERIAL_IO_I2C`] match, so Serial IO SPI and UART functions stay unleased.
     SerialIo,
+    /// Any other device, for a driver built on the Harness SDK (`crates/harness`) in
+    /// the Saddle service: BAR0 (at least [`GENERIC_REGISTERS_END`] bytes, at most
+    /// 64 KiB of it), memory and bus-master command bits, and a DMA pool of its own
+    /// behind the IOMMU. Nothing about the device is known to the kernel.
+    Generic,
 }
+
+/// The smallest BAR0 a [`Lease::Generic`] device may have.
+pub const GENERIC_REGISTERS_END: u64 = 0x100;
+/// Where Saddle reads its first device ([`Lease::Generic`]).
+pub const SADDLE_SLOT: u64 = 24;
 
 /// Intel Serial IO I2C functions, Skylake to Meteor Lake PCHs.
 pub const SERIAL_IO_I2C: &[u16] = &[
@@ -168,8 +178,20 @@ pub const INPUT: Manifest = Manifest {
     matches: &[Match::vendor_class(0x8086, 0x0c_80_00, CLASS, Lease::SerialIo, 28)],
 };
 
+/// Saddle: devices driven by drivers built on the Harness SDK, outside the system
+/// services. Consulted last, so it never takes a device a system service drives.
+/// Add a device here (exact id, `Lease::Generic`) when its Harness driver joins
+/// Saddle's driver table (`servers/saddle`).
+pub const SADDLE: Manifest = Manifest {
+    service: Service::Saddle, max_devices: 8, vectors: 1,
+    matches: &[
+        // QEMU's edu teaching device: the Harness template driver (crates/harness-template).
+        Match::id(0x1234, 0x11e8, Lease::Generic, SADDLE_SLOT),
+    ],
+};
+
 /// Every manifest, in the order BOOT consults them.
-pub const ALL: &[Manifest] = &[DRIVE, USB, NET, BELL, DISPLAY, INPUT];
+pub const ALL: &[Manifest] = &[DRIVE, USB, NET, BELL, DISPLAY, INPUT, SADDLE];
 
 /// The manifest and entry that claim this device, if any.
 pub fn claim(id: Id) -> Option<(&'static Manifest, Match)> {
