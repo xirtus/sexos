@@ -36,6 +36,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use sex_pdx::power as w;
 use sex_pdx::serial_println;
 
+mod fadt_check;
 mod laptop;
 mod touchpad;
 
@@ -492,6 +493,10 @@ fn load() -> Option<&'static Aml> {
     let n = raw.len().min(fadt_bytes.len());
     raw[..n].copy_from_slice(&fadt_bytes[..n]);
     let fadt: Fadt = unsafe { core::ptr::read_unaligned(raw.as_ptr() as *const Fadt) };
+    if let Some(block) = fadt_check::pm1_not_io(&fadt) {
+        serial_println!("[sexacpi.fadt.refused] block={} reason=not_io_space", block);
+        return None;
+    }
     let registers = FixedRegisters::new(&fadt, Fw).ok()?;
     let (sig, dsdt) = table(1)?;
     if sig != u32::from_le_bytes(*b"DSDT") || dsdt.len() < 36 { return None; }

@@ -367,6 +367,8 @@ jobs:
       run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
     - name: Boots to the desktop with 1, 2, 4 and 32 GiB of RAM
       run: python3 scripts/ram_sizes_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/ram-sizes"
+    - name: Drivers come up on device mixes other gates skip (Intel xHCI + hub, AHCI only, e1000, HDA output codec)
+      run: python3 scripts/device_matrix_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/device-matrix"
     - name: Compiled scheduler stack-release boundary
       run: SWITCH_EVIDENCE="$RUNNER_TEMP/sexos-runtime/scheduler-switch.txt" bash scripts/scheduler_switch_boundary_gate.sh
     - name: Timer PKRU save and restore boundary
