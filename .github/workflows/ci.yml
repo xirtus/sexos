@@ -69,6 +69,7 @@ jobs:
     - uses: ./.github/actions/setup
       with:
         qemu: "false"
+        target-cache: none
     - name: Enforce root allowlist
       run: bash scripts/dev/check_root_allowlist.sh --strict
     - name: Host proof regressions
@@ -302,6 +303,7 @@ jobs:
     - uses: ./.github/actions/setup
       with:
         qemu: "false"
+        target-cache: none
     - name: Host kernel-model regressions
       run: python3 scripts/check_architectural_truth.py --run-host --shard ${{ matrix.shard }}/3 --evidence-dir "$RUNNER_TEMP/sexos-truth"
     - name: Preserve evidence
@@ -339,6 +341,9 @@ jobs:
         path: ${{ runner.temp }}/sexos-image
         compression-level: 0
         retention-days: 2
+    - name: Save the cargo target cache for the next runs
+      if: github.ref == 'refs/heads/master'
+      uses: ./.github/actions/save-target
     - name: Preserve the entrypoint gate's evidence
       if: always()
       uses: actions/upload-artifact@v4

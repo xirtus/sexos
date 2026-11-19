@@ -11,8 +11,13 @@ inputs:
     description: Build the optional FFV1/Matroska recording profile
     default: "false"
   save-cache:
-    description: Save the cargo cache after this job (one job per run, on master)
+    description: Save the cargo registry cache after this job (one job per run, on master)
     default: "false"
+  target-cache:
+    description: >-
+      Restore the image build's cargo target directory (`image`, saved by the image
+      job on master with .github/actions/save-target), or `none` for host-only jobs
+    default: image
   limine:
     description: Fetch and build Limine
     default: "true"
@@ -48,14 +53,30 @@ runs:
         ~/.rustup/update-hashes
         ~/.rustup/settings.toml
       key: rustup-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}
-  - name: Cargo cache
+  - name: Cargo registry cache
     uses: Swatinem/rust-cache@v2
     with:
       shared-key: sexos
       cache-all-crates: true
-      cache-workspace-crates: true
+      # The target directory has its own cache below: rust-cache's cleanup keeps
+      # only packages `cargo metadata` lists, so it deleted the -Z build-std units
+      # (core, alloc, std, compiler_builtins) and every crate above them rebuilt in
+      # every job (~25-30 minutes per image build, even on a full cache hit).
+      cache-targets: false
       cache-on-failure: true
       save-if: ${{ inputs.save-cache == 'true' && github.ref == 'refs/heads/master' }}
+  - name: Cargo target cache (the newest master image build)
+    if: inputs.target-cache != 'none'
+    uses: actions/cache/restore@v4
+    with:
+      # Keep in step with .github/actions/save-target: the paths are part of the cache version.
+      path: |
+        target
+        !target/ffmpeg
+        !target/libcxx
+        !target/**/incremental
+      key: target-${{ inputs.target-cache }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ github.run_id }}
+      restore-keys: target-${{ inputs.target-cache }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
   - name: Fetch crates (builds and host gates run offline)
     shell: bash
     run: cargo fetch --locked
