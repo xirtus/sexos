@@ -51,9 +51,13 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'servers/sexnet/src/main.rs': ('00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725',
                               'd7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d', 'fcf8299b6ce8b8acdd0bc005507036087d5569664c08d63da001dc9e694c7253',
                               # first 32 timed returns logged, 2026-11-17
-                              '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b',),
+                              '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b',
+                              # OP_DEVICE_SLEEP from the kernel logged and skipped after the listen (no wait change), 2026-11-19
+                              'fcc4ffc50a6302756285ae01c86fcd838852bfbdf4ac4a4b2198550bf2afe400',),
  'servers/sexusb/src/main.rs': ('3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81',
-                                'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec')}
+                                'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec',
+                                # OP_DEVICE_SLEEP logged in the inbox drain; quiet predicate unchanged, 2026-11-19
+                                '5a19e98946977aad3a0e5ea78b6943ef50eaa197e0c9298cd3a8b903336e9fb9')}
 
 
 # Mechanical source closure only, not a general Rust/unsafe-code verifier.
@@ -186,7 +190,9 @@ def source_contract(root):
 ACPI_AUX_SOURCES=('servers/sexacpi/src/main.rs','crates/sex-pdx/src/power.rs')
 ACPI_AUX_COHORTS=(
  ('822bebd1f4048d35105a0c7fae00b3112b4c11a6013501cf8de528dc5e42dbf6','b13e5f3e739b0000837a81c9ae7212f0356c5d507d04d0f100a421f2ea05ddd6'),
- ('24446427547d1f80eeb557e928b5854c27edc8b0caa45d5aebd7a5e6b460e531','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'))
+ ('24446427547d1f80eeb557e928b5854c27edc8b0caa45d5aebd7a5e6b460e531','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
+ # power.rs gains OP_DEVICE_SLEEP (a constant; the ACPI wait is unchanged), 2026-11-19
+ ('24446427547d1f80eeb557e928b5854c27edc8b0caa45d5aebd7a5e6b460e531','231583a434ade78732de80b01c85ec47612099338adcc832e0c52e6b0c4e9142'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')

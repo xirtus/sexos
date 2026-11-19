@@ -403,6 +403,10 @@ pub extern "C" fn _start() -> ! {
         while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
             if m.type_id <= 1 { continue; }
             busy = true;
+            if m.type_id == sex_pdx::power::OP_DEVICE_SLEEP && m.caller_pd == 0 {
+                serial_println!("[sexusb.sleep] asleep={} devices={}", m.arg0, usb.summary().slots);
+                continue;
+            }
             if m.caller_pd != files || region == 0 {
                 serial_println!("[sexusb.disks.refused] caller={} op={:#x}", m.caller_pd, m.type_id);
                 let _ = sex_pdx::pdx_reply(m.caller_pd, sex_pdx::usb_disk::INVALID);

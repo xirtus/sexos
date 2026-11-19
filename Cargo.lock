@@ -7233,6 +7233,7 @@ dependencies = [
  "scopeguard",
  "sex-hwdb",
  "sex-iommu",
+ "sex-pcipm",
  "sex-pdx",
  "sex-vmd",
  "spin",
@@ -7336,6 +7337,10 @@ version = "0.1.0"
 dependencies = [
  "sex-font",
 ]
+
+[[package]]
+name = "sex-pcipm"
+version = "0.1.0"
 
 [[package]]
 name = "sex-pdx"

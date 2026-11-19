@@ -5334,3 +5334,9 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - SSH domains: `ssh.NAME = user@host[:port]` lines in `spindle.conf` (`ssh NAME [COMMAND]` logs in there); bad lines are reported like other settings.
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
+
+## Device power part 1: link power states and the sleep notice (2026-11-19)
+- Every PCIe link gets the power states both ends support at BOOT: ASPM L0s/L1, L1.1/L1.2 substates, clock PM and LTR, with Linux's latency checks and quirks, adding to what firmware set and never removing it (`crates/sex-pcipm`, `kernel/src/pci_power.rs`). Idle links drop to L1.2, which the platform needs for its deepest idle states.
+- Drivers can put a device they hold in D3hot and back (syscall 86 `OP_POWER`); the kernel saves and restores what a reset loses, MSI-X table included.
+- Sleeping the desktop now tells every driver holding a device (`OP_DEVICE_SLEEP`); the disk flushes first.
+- Verified by `cargo test -p sex-pcipm` and `scripts/laptop_power_gate.py`. Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.

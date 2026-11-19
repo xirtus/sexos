@@ -15,7 +15,7 @@
 //! Without interrupt remapping (D4) a driver that can DMA can also forge an MSI
 //! write; that is the same trust a DMA-capable driver already has before the IOMMU.
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use sex_pdx::device::{Lease, Mode, MAX_LEASES, MAX_VECTORS_PER_SERVICE, ERR_NONE, OP_LIST, OP_MASK, OP_TAKE, OP_UNMASK};
+use sex_pdx::device::{Lease, Mode, MAX_LEASES, MAX_VECTORS_PER_SERVICE, ERR_NONE, OP_LIST, OP_MASK, OP_POWER, OP_TAKE, OP_UNMASK};
 use x86_64::structures::idt::InterruptStackFrame;
 
 pub const FIRST_VECTOR: u8 = 0x50;
@@ -210,8 +210,22 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             _ => sex_pdx::ERR_CAP_INVALID,
         },
         OP_TAKE => PENDING[pd as usize].swap(0, Ordering::AcqRel),
+        OP_POWER => match find(pd, a) {
+            Some(r) => crate::pci_power::set_power(&r.lease, r.table, b),
+            None => sex_pdx::ERR_CAP_INVALID,
+        },
         _ => sex_pdx::ERR_CAP_INVALID,
     }
+}
+
+/// The services holding at least one device lease (0 = unused entry).
+pub fn holders() -> [u32; 16] {
+    let mut out = [0u32; 16];
+    let mut n = 0;
+    for r in RECORDS.lock().iter().flatten() {
+        if n < out.len() && !out[..n].contains(&r.pd) { out[n] = r.pd; n += 1; }
+    }
+    out
 }
 
 /// Whether this domain has interrupt bits it has not taken; a wait returns at once.

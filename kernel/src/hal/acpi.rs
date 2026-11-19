@@ -458,6 +458,8 @@ pub fn init(rsdp: u64, hhdm: u64) {
         power_button_fixed: !flags.power_button_is_control_method(),
     };
     let (smi, enable) = (fadt.smi_cmd_port, fadt.acpi_enable);
+    let boot_arch = { fadt.iapc_boot_arch };
+    crate::pci_power::ASPM_FORBIDDEN.store(boot_arch.dont_enable_pcie_aspm(), Ordering::Release);
 
     // \_S5 from the DSDT bytes: shut down works even if AML cannot run.
     if let Ok(dsdt) = tables.dsdt() {
@@ -697,9 +699,12 @@ fn control(caller: u32, word: u64) -> [u64; 5] {
             if SLEEPING.swap(value == 1, Ordering::AcqRel) == (value == 1) { return [w::OK, 0, 0, 0, 0]; }
             PROFILE_EPOCH.fetch_add(1, Ordering::AcqRel);
             profile_apply_local();
+            // Devices go down before the firmware's sleep entry and come back after its exit.
+            if value == 1 { crate::pci_power::tell_drivers(true); }
             // Without the ACPI service the desktop still sleeps (dark, energy preferred).
             let queued = queue_control(word)[0] == w::OK;
             serial_println!("[acpi.sleep] enter={} firmware_told={}", value, queued as u8);
+            if value == 0 { crate::pci_power::tell_drivers(false); }
             [w::OK, 0, 0, 0, 0]
         }
         w::CTL_BRIGHTNESS_STEP | w::CTL_BRIGHTNESS_SET => queue_control(word),

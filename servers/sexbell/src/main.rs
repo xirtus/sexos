@@ -627,6 +627,7 @@ pub extern "C" fn _start() -> ! {
             if sound::busy()||restriction.pending() { let _ = sex_pdx::sys_wait_self_ticks(1); }
         };
         paging_probe::check_retained();
+        if msg.type_id==sex_pdx::power::OP_DEVICE_SLEEP&&msg.caller_pd==0{sex_pdx::serial_record!("[bell.sleep] asleep={}",msg.arg0);continue;}
         if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:msg.caller_pd,task:msg.caller_task},opcode:msg.type_id,words:[msg.arg0,msg.arg1,msg.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}
         if restricted::denied(msg.caller_pd){continue;}
 
