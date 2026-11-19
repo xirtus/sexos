@@ -21,7 +21,7 @@
   delete globalThis.__host;
   const OP = { LOG: 1, BY_ID: 2, QUERY: 3, INFO: 4, GET_ATTR: 5, SET_ATTR: 6, REMOVE_ATTR: 7, GET_TEXT: 8, SET_TEXT: 9,
     GET_HTML: 10, SET_HTML: 11, CREATE_ELEMENT: 12, CREATE_TEXT: 13, INSERT: 14, DETACH: 15, PARENT: 16, CHILDREN: 17,
-    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, ADOPTED_STYLES: 35, MATCHES: 36, SVG_CONTEXT: 37, WS: 73, WS_TAKE: 74 };
+    ATTR_NAMES: 18, VIEWPORT: 19, NAVIGATE: 20, CLICKABLE: 21, RECT: 22, LOCATION: 23, CANVAS: 24, MEASURE: 25, HIT: 26, VALUE: 27, CARET: 28, MEDIA: 48, GL: 64, GL_QUERY: 65, FETCH: 66, FETCH_BODY: 67, FETCH_HEAD: 68, COOKIE: 69, MEDIA_APPEND: 70, CLASSIC_SCRIPT: 71, FRAME: 31, POST_MESSAGE: 32, STORAGE: 33, IDB: 34, ADOPTED_STYLES: 35, MATCHES: 36, SVG_CONTEXT: 37, POSITION: 38, WS: 73, WS_TAKE: 74 };
   const nodes = new Map();
   const defaultChecked = new WeakMap();
 
@@ -376,7 +376,7 @@
       return c;
     }
     replaceChild(n, old) { this.insertBefore(n, old); return this.removeChild(old); }
-    contains(o) { for (let n = o; n; n = n.parentNode) if (n === this) return true; return false; }
+    contains(o) { return o === this || (o instanceof Node && o._id !== undefined && this._id !== undefined && (+H(OP.POSITION, this._id, o._id) & 16) !== 0); }
     cloneNode(deep) {
       if (this.nodeType === 3) return document.createTextNode(this.data);
       const holder = document.createElement('div');
@@ -390,12 +390,10 @@
     isEqualNode(o) { return !!o && o.nodeType === this.nodeType && (this.nodeType === 1 ? this.outerHTML === o.outerHTML : this.textContent === o.textContent); }
     compareDocumentPosition(o) {
       if (o === this) return 0;
-      if (this.contains(o)) return 20;
-      if (o.contains(this)) return 10;
-      const order = document.querySelectorAll('*');
-      const a = order.indexOf(this.nodeType === 1 ? this : this.parentNode), b = order.indexOf(o.nodeType === 1 ? o : o.parentNode);
-      if (a < 0 || b < 0) return 1 | 32;
-      return a < b ? 4 : 2;
+      if (!(o instanceof Node)) throw new TypeError('compareDocumentPosition needs a Node');
+      // One host call; listing the document here made jQuery's sorts quadratic.
+      if (this._id === undefined || o._id === undefined) return 1 | 32 | (this === document ? 4 : 2);
+      return +H(OP.POSITION, this._id, o._id);
     }
   }
   // Inserting into a host never puts nodes before its (flattened) shadow root, and
@@ -463,8 +461,10 @@
     querySelectorAll(s) { return list(check(H(OP.QUERY, this._id, String(s), '1'))); },
     getElementsByTagName(t) {
       const tag = String(t).toLowerCase();
-      const descendants = this.querySelectorAll('*');
-      return tag === '*' ? descendants : descendants.filter(n => n.localName === tag);
+      // A plain name is a type selector the host matches, so only matches get wrapped;
+      // other names (yt:player) are literal and compared here.
+      if (tag === '*' || /^[a-z][a-z0-9-]*$/.test(tag)) return this.querySelectorAll(tag);
+      return this.querySelectorAll('*').filter(n => n.localName === tag);
     },
     getElementsByClassName(c) { return this.querySelectorAll(String(c).trim().split(/\s+/).map(x => '.' + x).join('')); },
     append(...xs) { for (const x of xs) this.appendChild(toNode(x)); },
