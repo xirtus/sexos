@@ -1,0 +1,1 @@
+- 2026-11-19 WS3: self-wait source pins (timed-wait sources and kernel tree receipts) moved from tuples in scripts/check_self_wait.py to scripts/self_wait_pins.py, one pin per line with blank lines between, merged with `merge=union` (.gitattributes). Parallel kernel re-pins no longer conflict after long CI runs. Test: scripts/tests/test_self_wait_pins_merge.py.
