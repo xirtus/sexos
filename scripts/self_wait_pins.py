@@ -12,6 +12,8 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:da4f586b4a9bbbf0fa464e5ed0bb580c62eb0d3ce2df0ef8b1ff8f4b171a8e52'),  # K2d: rearm rebuilds the task from its constructor (no wait change), 2026-11-20
+
     ('timed', 'kernel/src/scheduler.rs', 'fn-v1:c6eb9ba163959607db0128c28254098b9fd6f63ba2a147e86606795b25b396bb'),  # K5 jitter in wake/kick + K3b call-class donation in admit (no park change), 2026-11-20
 
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:179c3a01c3681837811f309e17e3e498760f93924e2c1cef2c2a3c0246a0272b'),  # PKU gate: keep live PKRU in reschedule (no wait change), 2026-11-19

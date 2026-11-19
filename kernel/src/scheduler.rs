@@ -150,8 +150,15 @@ impl Task {
             (selectors.kernel_cs.0 as u64, selectors.kernel_ss.0 as u64, 0x202u64)
         };
 
-        let kstack_alloc_top = guarded_kernel_stack(kstack_bytes);
+        Self::on_stack(id, entry_point, stack_top, pd, (cs, ss, rflags), guarded_kernel_stack(kstack_bytes), kstack_bytes, fresh_fpu())
+    }
 
+    /// The one place a task's state is made: a new task, and every new run of a dead one
+    /// (`rearm`), which keeps only its kernel stack and FPU block. A field added to `Task`
+    /// is therefore reset on a restart without anyone remembering to (K2d).
+    fn on_stack(id: u32, entry_point: u64, stack_top: u64, pd: &ProtectionDomain, (cs, ss, rflags): (u64, u64, u64),
+                kstack_alloc_top: u64, kstack_bytes: usize, fpu: alloc::boxed::Box<crate::fpu::FpuState>) -> Self {
+        let pkru = pd.current_pkru_mask.load(Ordering::SeqCst);
         // Pre-seed kstack with IRETQ frame + Dummy Error + GPR zeros.
         // Layout low→high: [r15=0..rax=0][dummy=0][RIP][CS][RFLAGS][RSP][SS]
         let forged_ksp = unsafe {
@@ -194,7 +201,7 @@ impl Task {
             ext_init: None,
             resume_observation_pending: AtomicBool::new(false),
             wait_deadline:self_wait::Deadline::new(),
-            fpu: fresh_fpu(),
+            fpu,
             home: AtomicU32::new(u32::MAX),
             woken_at: AtomicU64::new(0),
             deliver: AtomicBool::new(false),
@@ -212,29 +219,17 @@ impl Task {
         // keeps 16-byte values on the stack. Idempotent, so a top read back from a
         // context gives the same entry RSP.
         let stack_top = ((stack_top - 8) & !0xF) + 8;
-        let forged = unsafe {
-            let mut ksp = self.kstack_top as *mut u64;
-            ksp = ksp.sub(1); *ksp = 0x23;
-            ksp = ksp.sub(1); *ksp = stack_top;
-            ksp = ksp.sub(1); *ksp = 0x202;
-            ksp = ksp.sub(1); *ksp = 0x2B;
-            ksp = ksp.sub(1); *ksp = entry;
-            ksp = ksp.sub(1); *ksp = 0;
-            for _ in 0..15 { ksp = ksp.sub(1); *ksp = 0; }
-            ksp as u64
-        };
-        let (pd_id, pd_ptr, pkru) = (self.context.pd_id, self.context.pd_ptr, pd.current_pkru_mask.load(Ordering::SeqCst));
-        self.id = id;
-        self.context = unsafe { core::mem::zeroed() };
-        self.context.pd_id = pd_id; self.context.pd_ptr = pd_ptr; self.context.pkru = pkru as u64;
-        self.context.rip = entry; self.context.rsp = stack_top; self.context.rflags = 0x202;
-        self.context.cs = 0x2B; self.context.ss = 0x23; self.context.kstack_top = forged;
-        self.state = TaskOwnership::new();
-        self.fault = fault_transaction::FaultSlot::new();
-        self.resume_observation_pending = AtomicBool::new(false);
-        self.wait_deadline = self_wait::Deadline::new();
-        self.deliver = AtomicBool::new(false);
-        self.deadline_us = AtomicU64::new(deadline::default_period_us(pd_id));
+        let pd_ptr = self.context.pd_ptr;
+        // Every field comes from the constructor; only the kernel stack, the FPU block
+        // (reset below) and the first-run argument carry over.
+        unsafe {
+            let old = ptr::read(self);
+            let Task { kstack_top, kstack_bytes, fpu, ext_init, .. } = old;
+            let mut fresh = Task::on_stack(id, entry, stack_top, pd, (0x2B, 0x23, 0x202), kstack_top, kstack_bytes as usize, fpu);
+            fresh.context.pd_ptr = pd_ptr;
+            fresh.ext_init = ext_init;
+            ptr::write(self, fresh);
+        }
         // A new run starts with fresh registers, never the last run's.
         unsafe { ptr::copy_nonoverlapping(&FPU_INIT, &mut *self.fpu, 1); }
         let me = self as *mut Task;
