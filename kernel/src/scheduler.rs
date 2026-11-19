@@ -626,15 +626,17 @@ impl Scheduler {
             core => core,
         };
         let home = &SCHEDULERS[home_core as usize];
-        let handoff = home_core == self.core_id && self.handoff_armed.swap(false, Ordering::Relaxed);
-        let (mut urgent, mut due) = (false, false);
+        // A call's partner runs next on its own core, this one or another: on another,
+        // it takes that core's handoff slot and the core is asked to switch now.
+        let handoff = self.handoff_armed.swap(false, Ordering::Relaxed);
+        let (mut urgent, mut due, mut partner) = (false, false, false);
         let period = unsafe { (*task).deadline_us.load(Ordering::Relaxed) };
         let admitted = unsafe { (*task).state.try_admit(|| {
             let now = core::arch::x86_64::_rdtsc();
             // Wake latency counts real wakes, not a turn given up by yielding.
             if woken { unsafe { (*task).woken_at.store(now, Ordering::Relaxed) }; }
             if woken && period != 0 && !home.budget.exhausted() && home.deadline.try_push(task, now + home.budget.cycles(period)).is_ok() { due = true; return Ok(()); }
-            if handoff && self.handoff.compare_exchange(ptr::null_mut(), task, Ordering::AcqRel, Ordering::Acquire).is_ok() { return Ok(()); }
+            if handoff && home.handoff.compare_exchange(ptr::null_mut(), task, Ordering::AcqRel, Ordering::Acquire).is_ok() { partner = true; return Ok(()); }
             let interactive = class_of(unsafe { (*task).context.pd_id }) == CLASS_INTERACTIVE;
             let keep = sliced && interactive && home.kept.fetch_add(1, Ordering::Relaxed) < SLICED_KEEP;
             if (woken || keep) && interactive && home.urgent.try_push(task).is_ok() { urgent = true; return Ok(()); }
@@ -644,6 +646,7 @@ impl Scheduler {
         // An interactive wake asks a core running a normal task to switch now, this
         // core included: the interrupt arrives once it is back in user code.
         if admitted == Admission::Published && ((urgent && woken && home.running_normal()) || (due && !home.budget.running())) { crate::apic::send_to_core(home_core, crate::smp::PREEMPT_VECTOR); }
+        else if admitted == Admission::Published && partner && home_core != self.core_id { preempt_for_partner(home_core); }
         else if admitted == Admission::Published && home_core != self.core_id { kick(home_core); }
         admitted
     }
@@ -661,6 +664,7 @@ impl Scheduler {
     pub fn should_preempt(&self) -> bool {
         (!self.deadline.is_empty() && !self.budget.running() && !self.budget.exhausted())
             || (self.running_normal() && self.urgent.bottom.load(Ordering::Acquire) != self.urgent.top.load(Ordering::Acquire))
+            || !self.handoff.load(Ordering::Acquire).is_null()
     }
 
     /// First admission is explicit; wake cannot activate unfinished trampolines.
@@ -1043,6 +1047,13 @@ unsafe fn poll_for_partner(sched: &Scheduler, current: *mut Task) {
     x86_64::instructions::interrupts::enable();
     while core::arch::x86_64::_rdtsc() < until && !(*current).state.snapshot().pending && !sched.has_queued() { core::hint::spin_loop(); }
     x86_64::instructions::interrupts::disable();
+}
+/// A call's partner waits in another core's handoff slot: a core looking for work
+/// finds it without an interrupt; one running a task is asked to switch now
+/// (`should_preempt`), not at its next tick or yield. A halted core wakes on it too.
+fn preempt_for_partner(core: u32) {
+    core::sync::atomic::fence(Ordering::SeqCst);
+    if !POLLING[core as usize].load(Ordering::SeqCst) { crate::apic::send_to_core(core, crate::smp::PREEMPT_VECTOR); }
 }
 /// Wakes another core for new work, unless it is polling for it anyway.
 fn kick(core: u32) {
