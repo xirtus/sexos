@@ -140,8 +140,9 @@ pub(crate) mod ahead {
             let Some(held) = buffer.get(from..from + out.len()) else { forget(); return false; };
             out.copy_from_slice(held);
             let end = first + want;
-            // What is left still starts at a held block; a skip forgets the rest.
-            SPAN = if end < at + n && first == at { (end, at + n - end, from + out.len()) } else { (0, 0, 0) };
+            // What follows stays held. A skip forward (over a block the file no longer uses,
+            // which sexfs readahead may read across) lets go only of what was skipped.
+            SPAN = if end < at + n { (end, at + n - end, from + out.len()) } else { (0, 0, 0) };
             SERVED += 1;
             let served = SERVED;
             if served.is_power_of_two() { sex_pdx::serial_record!("[files.readahead] served={}", served); }

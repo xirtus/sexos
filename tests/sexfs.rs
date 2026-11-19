@@ -10,18 +10,25 @@ struct Disk { blocks: HashMap<u64, Box<[u8; BLOCK]>>, volatile: Vec<(u64, Box<[u
 impl Device for Disk {
     fn blocks(&self) -> u64 { self.size }
     fn run_blocks(&self) -> usize { self.runs.max(1) }
+    // As Files does: a single data block is a one-block run, served from readahead if held.
     fn read_data(&mut self, block: u64, out: &mut [u8; BLOCK]) -> std::result::Result<(), ()> {
-        self.read(block, out)?; self.data_bytes += BLOCK as u64; Ok(())
+        self.read_data_run(block, out)
     }
+    // Like Files' `ahead::take`: blocks at or after the held start are handed over and
+    // what follows them stays held; anything before them is let go.
     fn read_data_run(&mut self, first: u64, out: &mut [u8]) -> std::result::Result<(), ()> {
-        if let Some((at, data)) = &self.held {
+        if let Some((at, data)) = self.held.take() {
             let n = (out.len() / BLOCK) as u64;
-            if first >= *at && first + n <= at + (data.len() / BLOCK) as u64 {
+            let held = (data.len() / BLOCK) as u64;
+            if first >= at && first + n <= at + held {
                 let from = ((first - at) as usize) * BLOCK;
                 out.copy_from_slice(&data[from..from + out.len()]);
                 self.ahead_served += 1;
+                let rest = data[from + out.len()..].to_vec();
+                if !rest.is_empty() { self.held = Some((first + n, rest)); }
                 return Ok(());
             }
+            self.held = Some((at, data));
         }
         self.read_run(first, out)?; self.data_bytes += out.len() as u64; Ok(())
     }
@@ -31,10 +38,10 @@ impl Device for Disk {
         }
         assert!(out.len() / BLOCK + ahead <= self.runs.max(1), "readahead stays inside one run");
         self.run_cmds += 1;
-        for (i, c) in out.chunks_exact_mut(BLOCK).enumerate() { self.read(first + i as u64, c.try_into().unwrap())?; }
+        for (i, c) in out.chunks_exact_mut(BLOCK).enumerate() { self.raw(first + i as u64, c.try_into().unwrap())?; }
         let next = first + (out.len() / BLOCK) as u64;
         let mut kept = vec![0u8; ahead * BLOCK];
-        for (i, c) in kept.chunks_exact_mut(BLOCK).enumerate() { self.read(next + i as u64, c.try_into().unwrap())?; }
+        for (i, c) in kept.chunks_exact_mut(BLOCK).enumerate() { self.raw(next + i as u64, c.try_into().unwrap())?; }
         self.data_bytes += (out.len() + kept.len()) as u64;
         self.held = Some((next, kept));
         Ok(())
@@ -46,17 +53,17 @@ impl Device for Disk {
         for (i, c) in data.chunks_exact(BLOCK).enumerate() { self.write(first + i as u64, c.try_into().unwrap())?; }
         Ok(())
     }
+    // Every other read uses the one shared buffer in Files, so it drops what was held.
     fn read_run(&mut self, first: u64, out: &mut [u8]) -> std::result::Result<(), ()> {
         assert!(out.len() % BLOCK == 0 && out.len() / BLOCK <= self.runs.max(1));
         self.run_cmds += 1;
-        for (i, c) in out.chunks_exact_mut(BLOCK).enumerate() { self.read(first + i as u64, c.try_into().unwrap())?; }
+        self.held = None;
+        for (i, c) in out.chunks_exact_mut(BLOCK).enumerate() { self.raw(first + i as u64, c.try_into().unwrap())?; }
         Ok(())
     }
     fn read(&mut self, block: u64, out: &mut [u8; BLOCK]) -> std::result::Result<(), ()> {
-        if self.fail_reads { return Err(()); }
-        if let Some((_, b)) = self.volatile.iter().rev().find(|(i, _)| *i == block) { *out = **b; return Ok(()); }
-        match self.blocks.get(&block) { Some(b) => *out = **b, None => out.fill(0) }
-        Ok(())
+        self.held = None;
+        self.raw(block, out)
     }
     fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> std::result::Result<(), ()> {
         self.held = None;
@@ -76,6 +83,12 @@ impl Device for Disk {
 }
 impl Disk {
     fn new(size: u64) -> Self { Disk { size, ..Default::default() } }
+    fn raw(&self, block: u64, out: &mut [u8; BLOCK]) -> std::result::Result<(), ()> {
+        if self.fail_reads { return Err(()); }
+        if let Some((_, b)) = self.volatile.iter().rev().find(|(i, _)| *i == block) { *out = **b; return Ok(()); }
+        match self.blocks.get(&block) { Some(b) => *out = **b, None => out.fill(0) }
+        Ok(())
+    }
     /// Power cut: some unflushed writes reached the disk, in any order, and one may be torn.
     fn crash(&mut self) {
         let mut pending = std::mem::take(&mut self.volatile);
@@ -293,6 +306,172 @@ fn repeated_file_reads_reach_device_without_counting_metadata_or_holes() {
     assert_eq!(fs.read(id, 1, &mut back[..1]).unwrap(), 1);
     assert_eq!(fs.device().data_bytes - before, BLOCK as u64);
 }
+/// Files' writes: 63 KiB at a time (its request region), a commit after each.
+fn write_like_files(fs: &mut Fs<'static, Disk>, id: u64, data: &[u8]) {
+    for (i, chunk) in data.chunks(63 * 1024).enumerate() {
+        fs.write(id, (i * 63 * 1024) as u64, chunk, 1).unwrap();
+        fs.commit().unwrap();
+    }
+}
+/// Device commands and data bytes to read `data` back sequentially in 64 KiB requests.
+fn sequential_read_cost(fs: &mut Fs<'static, Disk>, id: u64, data: &[u8]) -> (u64, u64) {
+    let mut back = vec![0u8; 65536];
+    let (cmds, bytes) = (fs.device().run_cmds, fs.device().data_bytes);
+    for (i, chunk) in data.chunks(65536).enumerate() {
+        let n = fs.read(id, i as u64 * 65536, &mut back).unwrap();
+        assert!(back[..n] == *chunk, "chunk {i}");
+    }
+    (fs.device().run_cmds - cmds, fs.device().data_bytes - bytes)
+}
+#[test]
+fn files_like_appends_stay_side_by_side_and_read_back_in_a_few_commands() {
+    let mut fs = fresh(40960);
+    fs.device().runs = 1024; // a 4 MiB block buffer
+    fs.device().ahead_on = true;
+    let id = fs.create(b"big", 1).unwrap();
+    let data = bytes_of(31, 4 << 20);
+    write_like_files(&mut fs, id, &data);
+    fs.verify().unwrap();
+    let (cmds, bytes) = sequential_read_cost(&mut fs, id, &data);
+    eprintln!("[sexfs.layout] files_like_4mib read_cmds={cmds} read_bytes={bytes}");
+    // 4 MiB written as 67 commits of 63 KiB used to take 101 commands to read back
+    // (tree blocks between every append). Now: the first request, its last odd block,
+    // then readahead across the whole file.
+    assert!(cmds <= 4, "{cmds} device commands");
+    // The spare blocks read across (one partial block rewritten per append) stay small.
+    assert!(bytes <= data.len() as u64 * 106 / 100, "{bytes} bytes read");
+    // Same layout after a remount (allocation is not remembered, only the tree).
+    let (dev, mem) = fs.into_parts();
+    let mut fs = Fs::mount(dev, mem).unwrap();
+    assert!(sequential_read_cost(&mut fs, id, &data).0 <= 4);
+}
+#[test]
+fn two_files_appended_in_turns_each_stay_mostly_side_by_side() {
+    let mut fs = fresh(40960);
+    fs.device().runs = 1024;
+    fs.device().ahead_on = true;
+    let (a, b) = (fs.create(b"a", 1).unwrap(), fs.create(b"b", 1).unwrap());
+    let (da, db) = (bytes_of(3, 1 << 20), bytes_of(4, 1 << 20));
+    for (i, (ca, cb)) in da.chunks(63 * 1024).zip(db.chunks(63 * 1024)).enumerate() {
+        fs.write(a, (i * 63 * 1024) as u64, ca, 1).unwrap(); fs.commit().unwrap();
+        fs.write(b, (i * 63 * 1024) as u64, cb, 1).unwrap(); fs.commit().unwrap();
+    }
+    fs.verify().unwrap();
+    // Interleaved appends cannot both continue in place; each file still reads back right.
+    let (ca, _) = sequential_read_cost(&mut fs, a, &da);
+    let (cb, _) = sequential_read_cost(&mut fs, b, &db);
+    eprintln!("[sexfs.layout] interleaved_1mib read_cmds={ca},{cb}");
+}
+#[test]
+fn a_power_cut_during_files_like_appends_leaves_the_last_commit() {
+    quiet();
+    let data = bytes_of(41, 600 * 1024);
+    let chunk = 63 * 1024;
+    for case in 0..80u64 {
+        let mut fs = fresh(8192);
+        fs.device().runs = 1024;
+        let id = fs.create(b"log", 1).unwrap();
+        fs.commit().unwrap();
+        // Three appends committed, then power goes during a later append or commit.
+        let mut committed = 0usize;
+        for i in 0..3 { fs.write(id, (i * chunk) as u64, &data[i * chunk..(i + 1) * chunk], 1).unwrap(); fs.commit().unwrap(); committed = (i + 1) * chunk; }
+        if case % 2 == 0 { let at = fs.device().writes + 1 + case / 2; fs.device().crash_at = Some(at); }
+        else { let at = fs.device().flushes + 1 + case / 8; fs.device().crash_flush = Some(at); }
+        fs.device().seed = case.wrapping_mul(0x9E3779B97F4A7C15) | 1;
+        let mut attempted = None;
+        for i in 3..data.len().div_ceil(chunk) {
+            let end = ((i + 1) * chunk).min(data.len());
+            if fs.write(id, (i * chunk) as u64, &data[i * chunk..end], 1).is_err() { break; }
+            match fs.commit() { Ok(()) => committed = end, Err(_) => { attempted = Some(end); break; } }
+        }
+        let (mut dev, mem) = fs.into_parts();
+        dev.crash_at = None; dev.crash_flush = None;
+        if !dev.volatile.is_empty() { dev.crash(); }
+        let mut after = Fs::mount(dev, mem).expect("every power cut must mount");
+        after.verify().unwrap();
+        let size = after.stat(id).unwrap().size as usize;
+        // The commit that was being written either landed whole or not at all.
+        assert!(size == committed || Some(size) == attempted, "case {case}: size {size}, committed {committed}, attempted {attempted:?}");
+        let mut back = vec![0u8; size];
+        assert_eq!(after.read(id, 0, &mut back).unwrap(), size);
+        assert!(back == data[..size], "case {case}: committed bytes changed");
+    }
+}
+
+/// A disk image as `Disk` keeps it: what was flushed, block by block.
+fn save_image(dev: &Disk, path: &str) {
+    let mut out = dev.size.to_le_bytes().to_vec();
+    let mut blocks: Vec<_> = dev.blocks.iter().collect();
+    blocks.sort_by_key(|(b, _)| **b);
+    for (b, d) in blocks { out.extend_from_slice(&b.to_le_bytes()); out.extend_from_slice(&d[..]); }
+    std::fs::write(path, out).unwrap();
+}
+fn load_image(path: &str) -> Disk {
+    let raw = std::fs::read(path).unwrap();
+    let mut dev = Disk::new(u64::from_le_bytes(raw[..8].try_into().unwrap()));
+    for rec in raw[8..].chunks_exact(8 + BLOCK) {
+        dev.blocks.insert(u64::from_le_bytes(rec[..8].try_into().unwrap()), Box::new(rec[8..].try_into().unwrap()));
+    }
+    dev
+}
+const LEGACY_SIZE: u64 = 16384;
+/// What the legacy image holds: two files appended in turns and one deleted.
+fn legacy_contents() -> (Vec<u8>, Vec<u8>) { (bytes_of(51, 700 * 1024), bytes_of(52, 300 * 1024 + 77)) }
+/// Run by scripts/sexfs_host_gate.sh against sexfs built with the allocator it had
+/// before tree blocks moved to the top of the disk: writes a volume laid out that way.
+#[test]
+fn legacy_layout_image_is_written_when_asked() {
+    let Ok(path) = std::env::var("SEXFS_WRITE_LEGACY_IMAGE") else { return };
+    let mut fs = fresh(LEGACY_SIZE);
+    fs.device().runs = 1024;
+    fs.device().ahead_on = true;
+    fs.mkdir(b"/docs", 1).unwrap();
+    let (a, b) = (fs.create(b"/docs/a", 1).unwrap(), fs.create(b"/b", 1).unwrap());
+    let gone = fs.create(b"/gone", 1).unwrap();
+    fs.write(gone, 0, &bytes_of(53, 200 * 1024), 1).unwrap();
+    fs.commit().unwrap();
+    let (da, db) = legacy_contents();
+    for i in 0..da.len().div_ceil(63 * 1024) {
+        let at = i * 63 * 1024;
+        fs.write(a, at as u64, &da[at..(at + 63 * 1024).min(da.len())], 1).unwrap(); fs.commit().unwrap();
+        if at < db.len() { fs.write(b, at as u64, &db[at..(at + 63 * 1024).min(db.len())], 1).unwrap(); fs.commit().unwrap(); }
+    }
+    fs.remove_path(b"/gone").unwrap();
+    fs.commit().unwrap();
+    let (cmds, _) = sequential_read_cost(&mut fs, a, &da);
+    eprintln!("[sexfs.layout] legacy_700k read_cmds={cmds}");
+    let (dev, _) = fs.into_parts();
+    save_image(&dev, &path);
+}
+#[test]
+fn a_volume_laid_out_the_old_way_mounts_reads_and_grows() {
+    let Ok(path) = std::env::var("SEXFS_LEGACY_IMAGE") else { eprintln!("[sexfs.legacy] skipped: no image (run scripts/sexfs_host_gate.sh)"); return };
+    let mut dev = load_image(&path);
+    dev.runs = 1024;
+    dev.ahead_on = true;
+    let mut fs = Fs::mount(dev, memory(LEGACY_SIZE, 32)).unwrap();
+    fs.verify().unwrap();
+    let (da, db) = legacy_contents();
+    let a = fs.open(b"/docs/a").unwrap();
+    let b = fs.open(b"/b").unwrap();
+    assert!(fs.open(b"/gone").is_err());
+    assert_eq!((a.size, b.size), (da.len() as u64, db.len() as u64));
+    sequential_read_cost(&mut fs, a.id, &da);
+    sequential_read_cost(&mut fs, b.id, &db);
+    // Appends now go after the file's last block where there is room, and the old
+    // blocks stay where they were.
+    let more = bytes_of(54, 400 * 1024);
+    for (i, c) in more.chunks(63 * 1024).enumerate() { fs.write(a.id, da.len() as u64 + (i * 63 * 1024) as u64, c, 2).unwrap(); fs.commit().unwrap(); }
+    let whole: Vec<u8> = da.iter().chain(more.iter()).copied().collect();
+    fs.verify().unwrap();
+    let (dev, mem) = fs.into_parts();
+    let mut fs = Fs::mount(dev, mem).unwrap();
+    fs.verify().unwrap();
+    sequential_read_cost(&mut fs, a.id, &whole);
+    sequential_read_cost(&mut fs, b.id, &db);
+    eprintln!("[sexfs.legacy] mounted=1 verified=1 grew_bytes={}", more.len());
+}
+
 #[test]
 fn a_four_mib_buffer_reads_a_sequential_file_in_two_commands() {
     let mut fs = fresh(40960);

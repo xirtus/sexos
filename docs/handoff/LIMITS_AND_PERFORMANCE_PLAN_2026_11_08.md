@@ -111,8 +111,8 @@ Fixed in stage 1 are marked **[fixed]**.
     one batch of up to 32 commands on a 64-entry queue, one doorbell, completions
     by interrupt and reaped in any order (ledger 2026-11-19-nvme-queue-depth). Still
     open: without an IOMMU loan the 512 KiB DMA pool caps a batch at 2 to 4 bounced
-    commands; Files sends one request at a time; sexfs lays files out in small
-    extents, which stops readahead; one queue pair, not one per core.]**
+    commands; Files sends one request at a time (sexfs now keeps appended files side
+    by side, so readahead fills the 4 MiB runs); one queue pair, not one per core.]**
 16. **Every file write is a durable commit.** Files commits the copy-on-write
     tree and flushes the disk after each 63 KiB request; Linux buffers and
     flushes on `fsync`. Mounting walks the whole tree.

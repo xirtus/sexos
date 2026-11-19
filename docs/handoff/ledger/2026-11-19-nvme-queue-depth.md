@@ -55,15 +55,42 @@ the block protocol and the Files service loop to change (and open PR #444 is
 editing `fs_service.rs`), so that option was not taken. Readahead and large runs
 reach the same depth with one call.
 
-Found while testing: sexfs places copy-on-write tree blocks right after each data
-run it writes. A file written in 512 KiB pieces therefore sits in 512 KiB extents,
-and readahead stops at each extent's end: a 4 MiB file read sequentially takes 9
-device runs, not 2. Files commits after every 63 KiB request, so files written
-through the request region are probably in extents that small. This was reasoned
-from code and not measured on a real image. Allocating tree blocks away from data,
-or allocating data late, would let readahead and the 4 MiB runs reach ordinary
-files. Until then, the big runs mostly help program loads, foreign volumes and
-installs.
+## sexfs keeps appended files side by side
+
+Found while testing the 4 MiB runs: sexfs took tree blocks and file data from the
+same cursor. Every commit's copied tree blocks therefore landed right after the data
+it had just written, and a file appended to across commits was stored in pieces. Its
+first append also rewrites the partial last block of the previous one, which can
+never go back in place. Readahead stopped at every piece.
+
+- Tree blocks now come from the top of the disk downwards (`alloc_meta`). File data
+  grows from the bottom.
+- A file's next block goes just past its previous block, or the first free block
+  within 8 after it (`alloc_data`, `data_hint`). So an append continues where the
+  file ended. A rewritten partial block lands one block on, leaving a one-block gap.
+- Readahead reads across gaps of up to 2 unused blocks (`GAP_MAX`). A block read on
+  its own (the partial block at the end of a request) keeps the reader sequential.
+  Files' `ahead::take` keeps what follows when the reader skips such a gap. Before,
+  it dropped everything held after any skip.
+- Only where new blocks go changed. Free space is still rebuilt from the tree at
+  mount, nothing committed or pending is reused before the commit that stops using
+  it, and commits and superblocks are written as before. The on-disk format is
+  unchanged, with no version bump, so old volumes mount as they are and new
+  volumes read on older code.
+
+Measured with the host model (`tests/sexfs.rs`, 4 MiB block buffer). The model now
+drops held readahead on every other read, as Files does. A 4 MiB file is written the
+way Files writes it, 63 KiB per request with a commit after each (67 commits), then
+read back in 64 KiB requests:
+
+| | device read commands | bytes read |
+|---|---|---|
+| before (allocator and reader at 8cc32bbc) | 101 | 4,198,400 |
+| after | 4 | 4,395,008 (+4.8 %: one stale block per append is read across) |
+
+The same layout comes back after a remount. Not solved: two files appended in turns
+cannot both continue in place. Each 1 MiB file in that test reads back in 21 commands,
+because each append is pushed past the other file's last one.
 
 ABI: `BLOCK_MAX_RUN` 512 KiB -> 4 MiB (region 4 size; `spec/abi_inputs.sha256`
 re-pinned; `check_self_wait.py` admits the new sex-pdx wait fingerprint with a
@@ -76,7 +103,17 @@ dated entry; `check_memory_authority_log.py` expects `region_id=4 length=4194304
   reverse and interleaved completion order, a full 4-entry SQ holding submissions
   back until SQHD moves, a bogus SQHD ignored, the DMA limit capping commands in
   flight, an error CQE on one command of a batch, foreign and replayed CIDs.
-- `tests/sexfs.rs`: `a_four_mib_buffer_reads_a_sequential_file_in_two_commands`.
+- `tests/sexfs.rs`: `a_four_mib_buffer_reads_a_sequential_file_in_two_commands`;
+  `files_like_appends_stay_side_by_side_and_read_back_in_a_few_commands` (<= 4
+  commands, <= 6 % extra bytes, also after a remount);
+  `a_power_cut_during_files_like_appends_leaves_the_last_commit` (80 cuts at writes
+  and flushes during appends: the volume mounts and verifies, and the file is exactly
+  the last committed or the attempted commit); `two_files_appended_in_turns_...`.
+- Old volumes: `scripts/sexfs_host_gate.sh` builds the test file once more against
+  sexfs with the previous allocator (tree blocks between data), writes a volume with
+  it (a directory, two files appended in turns, one deleted), and today's sexfs then
+  mounts, verifies, reads, appends 400 KiB and remounts it
+  (`a_volume_laid_out_the_old_way_mounts_reads_and_grows`).
 - `tests/sexdrive_dma_transfer.rs` compiles the production `nvme_batch`: one doorbell
   for 4 bounced commands that complete in any order; two bounces refilled in the order
   they free up; 32 zero-copy commands in flight; one PRP list per slot; an error on one
