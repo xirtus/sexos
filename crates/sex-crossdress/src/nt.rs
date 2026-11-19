@@ -127,7 +127,10 @@ pub fn syscall(p: &mut WinProcess, number: u32, regs: &Regs, host: &mut impl Hos
         }
         "NtClose" => { p.nt.handles.remove(&a[0]); STATUS_SUCCESS }
         "NtYieldExecution" | "NtFlushInstructionCache" | "NtSetInformationThread" | "NtSetInformationProcess" | "NtDelayExecution" => STATUS_SUCCESS,
-        "NtTerminateProcess" if a[0] == 0 || a[0] == u64::MAX => return Outcome::Stop(Stop::Exited(a[1] as u32)),
+        // Handle 0 ends every other thread of the process (RtlExitUserProcess does that before
+        // DllMain(DETACH) flushes the C runtime): with one thread there is nothing to end.
+        "NtTerminateProcess" if a[0] == 0 => STATUS_SUCCESS,
+        "NtTerminateProcess" if a[0] == u64::MAX => return Outcome::Stop(Stop::Exited(a[1] as u32)),
         "NtTerminateThread" if a[0] == 0 || a[0] == u64::MAX - 1 => return Outcome::Stop(Stop::Exited(a[1] as u32)),
         "NtContinue" => {
             let mut c = [0u8; crate::win32::CONTEXT_SIZE as usize];
@@ -155,6 +158,9 @@ pub fn syscall(p: &mut WinProcess, number: u32, regs: &Regs, host: &mut impl Hos
         "NtQueryInformationThread" => STATUS_INVALID_PARAMETER,
         "NtQueryInformationToken" => query_token(p, a[1] as u32, a[2], a[3], a[4]),
         "NtQueryVolumeInformationFile" => volume_info(p, a[0], a[1], a[2], a[3], a[4] as u32),
+        // Console driver requests (condrv): there is no console device yet, so programs see
+        // a plain file and write through NtWriteFile (GetConsoleMode fails).
+        "NtDeviceIoControlFile" => 0xC000_0010, // STATUS_INVALID_DEVICE_REQUEST
         "NtFsControlFile" => fs_control(p, a[0], a[4], a[5] as u32, a[8], a[9]),
         _ => return Outcome::Stop(Stop::Unimplemented { dll: String::from("ntdll.syscall"), name }),
     };
@@ -429,6 +435,7 @@ fn query_process(p: &mut WinProcess, process: u64, class: u32, buf: u64, len: u6
             b[32..40].copy_from_slice(&(process::PROCESS_ID as u64).to_le_bytes());
             b
         }
+        7 => alloc::vec![0u8; 8],  // ProcessDebugPort: no debugger
         26 => alloc::vec![0u8; 8], // ProcessWow64Information: not WoW64
         36 => 0x5EC5_0C0Eu32.to_le_bytes().to_vec(), // ProcessCookie
         34 => 0u32.to_le_bytes().to_vec(), // ProcessExecuteFlags
@@ -535,10 +542,12 @@ fn query_token(p: &mut WinProcess, class: u32, buf: u64, len: u64, ret: u64) -> 
 fn volume_info(p: &mut WinProcess, handle: u64, iosb: u64, buf: u64, len: u64, class: u32) -> u64 {
     if !p.nt.handles.contains_key(&handle) && p.nt.stdout.map_or(true, |(o, e)| handle != o && handle != e) { return STATUS_INVALID_HANDLE; }
     let out: Vec<u8> = match class {
-        4 => { // FileFsDeviceInformation: a disk, or the console for the std handles
-            let console = p.nt.stdout.map_or(false, |(o, e)| handle == o || handle == e);
+        4 => { // FileFsDeviceInformation: a disk, or a pipe for the std handles
+            // The host's output is a byte stream, not a console: as a pipe (FILE_TYPE_PIPE)
+            // the C runtime buffers whole lines instead of probing a console per character.
+            let stream = p.nt.stdout.map_or(false, |(o, e)| handle == o || handle == e);
             let mut b = alloc::vec![0u8; 8];
-            b[0..4].copy_from_slice(&(if console { 0x50u32 } else { 7 }).to_le_bytes());
+            b[0..4].copy_from_slice(&(if stream { 0x11u32 } else { 7 }).to_le_bytes());
             b
         }
         _ => return STATUS_INVALID_INFO_CLASS,

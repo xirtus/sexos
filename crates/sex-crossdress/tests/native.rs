@@ -257,3 +257,17 @@ fn a_program_runs_on_wines_kernel32_natively() {
     assert!(text.contains(sex_crossdress::WINE_PASS), "the program's checks passed on Wine's kernel32");
     assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
 }
+
+#[test]
+fn a_crt_program_runs_on_wines_ucrtbase_natively() {
+    let _one = NATIVE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut p) = common::crt_program() else { println!("[crossdress.native.crt] SKIP no CROSSDRESS_WINE_DIR"); return; };
+    let Some(mut cpu) = Native::new(&mut p.cell) else { println!("[crossdress.native.crt] SKIP guest addresses taken"); return; };
+    let mut out = common::Keep::default();
+    let stop = sex_crossdress::wine::run(&mut p, &mut cpu, &mut out);
+    let text = String::from_utf8_lossy(&out.text);
+    for line in text.lines() { println!("[crossdress.native.crt.out] {line}"); }
+    println!("[crossdress.native.crt] stop={stop:?} counters={:?}", p.counters);
+    assert!(text.contains(sex_crossdress::CRT_PASS), "the program's checks passed on Wine's ucrtbase");
+    assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
+}

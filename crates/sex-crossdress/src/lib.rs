@@ -53,3 +53,8 @@ pub static WINE_HELLO_EXE: &[u8] = include_bytes!("../test/wine_hello.exe");
 
 /// The line the Wine test program prints last when every check passed.
 pub const WINE_PASS: &str = "crossdress: wine checks passed";
+/// CW4: a program linked against the Universal C runtime (Wine's ucrtbase.dll), built from
+/// test/wine_crt.c by test/build_wine_crt.sh.
+pub static WINE_CRT_EXE: &[u8] = include_bytes!("../test/wine_crt.exe");
+/// What the CRT program prints when its checks pass.
+pub const CRT_PASS: &str = "crossdress: crt checks passed";

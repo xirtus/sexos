@@ -311,3 +311,18 @@ fn a_program_runs_on_wines_kernel32_in_a_kvm_cell() {
     assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
     println!("[crossdress.kvm.wine] ok: a Windows program ran on Wine's kernel32 and kernelbase in a KVM cell");
 }
+
+#[test]
+fn a_crt_program_runs_on_wines_ucrtbase_in_a_kvm_cell() {
+    let Some(mut p) = common::crt_program() else { println!("[crossdress.kvm.crt] SKIP no CROSSDRESS_WINE_DIR (scripts/fetch_wine_pe.sh)"); return; };
+    let Some(kvm) = open_kvm() else { println!("[crossdress.kvm.crt] SKIP no usable /dev/kvm"); return; };
+    let mut cpu = kvm_vcpu(kvm, &p.cell.ram);
+    let mut out = common::Keep::default();
+    let stop = sex_crossdress::wine::run(&mut p, &mut cpu, &mut out);
+    let text = String::from_utf8_lossy(&out.text);
+    for line in text.lines() { println!("[crossdress.kvm.crt.out] {line}"); }
+    println!("[crossdress.kvm.crt] stop={stop:?} counters={:?}", p.counters);
+    assert!(text.contains(sex_crossdress::CRT_PASS), "the program's checks passed on Wine's ucrtbase");
+    assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
+    println!("[crossdress.kvm.crt] ok: a C-runtime program ran on Wine's ucrtbase in a KVM cell");
+}
