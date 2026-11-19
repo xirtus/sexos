@@ -114,6 +114,7 @@ pub mod iommu_selftest;
 pub mod vmd;
 #[cfg(target_arch = "x86_64")]
 pub mod vmx;
+pub mod svm;
 #[cfg(target_arch = "x86_64")]
 pub mod keyboard;
 
