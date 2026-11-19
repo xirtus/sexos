@@ -92,8 +92,9 @@ pub struct Task {
     pub(crate) ext_init: Option<InitArg>,
     resume_observation_pending: AtomicBool,
     pub(crate) wait_deadline: self_wait::Deadline,
-    /// x87/SSE registers while the task is off-core (see crate::fpu).
-    fpu: crate::fpu::FpuState,
+    /// x87/SSE registers while the task is off-core (see crate::fpu). Its own heap
+    /// block, so a Task stays small wherever it is built or copied (#427).
+    fpu: alloc::boxed::Box<crate::fpu::FpuState>,
     /// The core this task runs on, when not its domain's (a program's workers);
     /// u32::MAX means `smp::home_core` of its domain.
     pub home: AtomicU32,
@@ -106,6 +107,28 @@ pub struct Task {
     pub deadline_us: AtomicU64,
     /// IPC v2 endpoint/notification state (`ipc_v2::syscall`).
     pub(crate) ipc_v2: crate::ipc_v2::syscall::TaskIpc,
+}
+
+static FPU_INIT: crate::fpu::FpuState = crate::fpu::FpuState::INIT;
+/// A reset save area, copied straight into the heap: never a temporary on the stack.
+fn fresh_fpu() -> alloc::boxed::Box<crate::fpu::FpuState> {
+    let mut b = alloc::boxed::Box::<crate::fpu::FpuState>::new_uninit();
+    unsafe { ptr::copy_nonoverlapping(&FPU_INIT, b.as_mut_ptr(), 1); b.assume_init() }
+}
+static GUARDED_STACKS: AtomicU32 = AtomicU32::new(0);
+/// A zeroed kernel stack (never freed) with an unmapped page below it: an overflow
+/// faults into the double-fault IST instead of writing over its heap neighbour.
+/// Returns the top. The guard is skipped where the heap is not mapped by 4 KiB leaves.
+fn guarded_kernel_stack(bytes: usize) -> u64 {
+    let layout = core::alloc::Layout::from_size_align(bytes + 4096, 4096).expect("KSTACK_LAYOUT");
+    let base = unsafe { alloc::alloc::alloc_zeroed(layout) } as u64;
+    assert!(base != 0, "KSTACK_OUT_OF_MEMORY");
+    if let Some(leaf) = crate::boot_memory::existing_leaf_address(base) {
+        unsafe { ptr::write_volatile(leaf as *mut u64, ptr::read_volatile(leaf as *const u64) & !1); }
+        x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(base));
+        if GUARDED_STACKS.fetch_add(1, Ordering::Relaxed) == 0 { serial_println!("[kstack.guard] first={:#x} bytes={}", base, bytes); }
+    }
+    base + 4096 + bytes as u64
 }
 
 impl Task {
@@ -123,9 +146,7 @@ impl Task {
             (selectors.kernel_cs.0 as u64, selectors.kernel_ss.0 as u64, 0x202u64)
         };
 
-        let kstack = alloc::vec![0u8; kstack_bytes];
-        let kstack_alloc_top = kstack.as_ptr() as u64 + kstack_bytes as u64;
-        core::mem::forget(kstack);
+        let kstack_alloc_top = guarded_kernel_stack(kstack_bytes);
 
         // Pre-seed kstack with IRETQ frame + Dummy Error + GPR zeros.
         // Layout low→high: [r15=0..rax=0][dummy=0][RIP][CS][RFLAGS][RSP][SS]
@@ -168,7 +189,7 @@ impl Task {
             ext_init: None,
             resume_observation_pending: AtomicBool::new(false),
             wait_deadline:self_wait::Deadline::new(),
-            fpu: crate::fpu::FpuState::INIT,
+            fpu: fresh_fpu(),
             home: AtomicU32::new(u32::MAX),
             woken_at: AtomicU64::new(0),
             deliver: AtomicBool::new(false),
@@ -210,7 +231,7 @@ impl Task {
         self.deliver = AtomicBool::new(false);
         self.deadline_us = AtomicU64::new(deadline::default_period_us(pd_id));
         // A new run starts with fresh registers, never the last run's.
-        self.fpu = crate::fpu::FpuState::INIT;
+        unsafe { ptr::copy_nonoverlapping(&FPU_INIT, &mut *self.fpu, 1); }
         let me = self as *mut Task;
         for loaded in FPU_LOADED.iter() {
             let _ = loaded.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire);
@@ -875,12 +896,12 @@ pub extern "C" fn scheduler_finish_switch() {
         // The outgoing task's registers are still in the core (the kernel never uses
         // them): keep them in its own block before any other core may resume it.
         if !old.is_null() {
-            crate::fpu::save(&mut (*old).fpu);
+            crate::fpu::save(&mut *(*old).fpu);
             loaded.store(ptr::null_mut(), Ordering::Release);
         }
         let next = sched.current_task.load(Ordering::Acquire);
         if !next.is_null() && loaded.load(Ordering::Acquire) != next {
-            crate::fpu::restore(&(*next).fpu);
+            crate::fpu::restore(&*(*next).fpu);
             loaded.store(next, Ordering::Release);
         }
     }
