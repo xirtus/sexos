@@ -2344,9 +2344,11 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
     if plan.is_full(){RENDER_FRAME_COUNTER.fetch_add(1,core::sync::atomic::Ordering::Relaxed);}
     let Some(lease)=SceneLease::capture(w,h,bar)else{drop(preparation);backup.restore();return None;};
     let scene=lease.view();
+    decor::begin_frame(w,h,scene);
     let canon_ss=unsafe{CLOCK_CANON_SS};
     if !settle_only{unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}}
     let prepared={let target=preparation.target();raster_batch(&target,scene,plan)};
+    decor::end_frame();
     if !prepared{drop(preparation);backup.restore();return None;}
     if !preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();return None;}
     if let Some(front)=store.front_pixels(){unsafe{
@@ -5655,7 +5657,7 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
         }
         // Frame cost: from here to the completed publication.
-        decor::take_cycles();decor::take_tally(0);decor::take_tally(1);
+        decor::take_cycles();decor::take_tally(0);decor::take_tally(1);decor::take_split();
         let render_start=decor::cycles_now();
         let render_ms_start=sex_pdx::get_ticks();
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
@@ -5690,7 +5692,8 @@ pub extern "C" fn _start() -> ! {
                 let (fast, pixel) = (decor::take_tally(0), decor::take_tally(1));
                 let kpx = match plan.content { paint_batch::Content::Damage(r) => ((r.right - r.x) * (r.bottom - r.y) / 1000) as u64, paint_batch::Content::Full | paint_batch::Content::Area => (w * h / 1000) as u64, _ => 0 };
                 let slow = core::mem::take(&mut *core::ptr::addr_of_mut!(SLOW_PIXELS));
-                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={} fast_kcyc={} pixel_kcyc={} slow={}/{}/{}/{}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx, fast / 1000, pixel / 1000, slow[0], slow[1], slow[2], slow[3]); } }
+                let split = decor::take_split();
+                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={} fast_kcyc={} pixel_kcyc={} slow={}/{}/{}/{} decor_split={}/{}/{}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx, fast / 1000, pixel / 1000, slow[0], slow[1], slow[2], slow[3], split[0] / 1000, split[1] / 1000, split[2] / 1000); } }
         }
         if let Some(frame)=published.as_ref(){
             if frame.plan.clock_dirty(){unsafe{LAST_REDRAWN_CLOCK_CANON_SS=frame.canon_ss;}}
