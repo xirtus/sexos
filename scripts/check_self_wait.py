@@ -35,7 +35,8 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
  'kernel/src/smp.rs': ('261699be11866980d2a30b72cbb8d35ddccdc00aa1ee1cbceefadc716edc7d75',  # protection views (tlb hook, rows spread), 2026-11-17
     'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
- 'kernel/src/interrupts.rs': ('c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
+ 'kernel/src/interrupts.rs': ('b6c52a2e2766a7745dd518d92de80a0f7772a6c2af3a34bb137f8ee0ad9d3db2',  # PKU gate unwind, syscall refusal, live PKRU (no wait change), 2026-11-19
+    'c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
                               'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d',
                               # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
                               'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),

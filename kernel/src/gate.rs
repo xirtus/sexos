@@ -18,8 +18,14 @@
 //! A Gate may also be exported under a number; a service holding a route (Domain
 //! capability) to its owner binds it with OP_BIND_ROUTE.
 //!
+//! A callee runs on its caller's task, so three kernel paths know about gates (P6.2d):
+//! a fault in the callee returns to the caller with `PEER_DIED` and is logged against
+//! the callee ([`unwind`]); a system call from inside a gate is refused ([`inside`]),
+//! so a callee can never act with its caller's capabilities; and a preempted task keeps
+//! the PKRU it really had ([`keep_live_pkru`]), not its domain's.
+//!
 //! Not yet: nested gate calls (a callee calling a third service on the caller's task),
-//! freeing areas when a task ends, and unwinding a caller whose callee dies (P6.2d).
+//! freeing areas when a task ends, and clearing vector registers on an unwind.
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use spin::Mutex;
@@ -53,9 +59,13 @@ const _: () = assert!(sex_gate::AREA_SHIFT == 18 && STUBS + MAX_STUBS as u64 * S
 pub static ON: AtomicBool = AtomicBool::new(false);
 static USABLE: AtomicBool = AtomicBool::new(false);
 static AREAS: AtomicU64 = AtomicU64::new(0);
+/// Frame page of each area, for the lock-free "is this task inside a call" check.
+static FRAME_OF: [AtomicU64; MAX_AREAS as usize + 1] = [const { AtomicU64::new(0) }; MAX_AREAS as usize + 1];
 
 struct Gate { object: u32, generation: u32, callee: u32, entry: u64, export: u64 }
-struct Bound { object: u32, generation: u32, caller: u32 }
+struct Bound { object: u32, generation: u32, caller: u32, callee: u32 }
+/// One task's area: its slot pages (one bit per domain), the frame page and slot frames.
+struct Area { mask: u64, frame: u64, slots: [u64; 64] }
 struct State {
     gates: Vec<Gate>,
     /// By stub id - 1.
@@ -63,8 +73,8 @@ struct State {
     /// Frames of the stub pages, in VA order from `STUBS`.
     pages: Vec<u64>,
     matrix: u64,
-    /// By area index: the slot pages mapped in it, one bit per domain (index 0 unused).
-    areas: Vec<u64>,
+    /// By area index (index 0 unused).
+    areas: Vec<Area>,
 }
 static STATE: Mutex<State> = Mutex::new(State { gates: Vec::new(), stubs: Vec::new(), pages: Vec::new(), matrix: 0, areas: Vec::new() });
 
@@ -104,6 +114,26 @@ fn page(va: u64, key: u8, flags: F, fill: u8) -> Result<u64, u64> {
 
 fn put(frame: u64, offset: u64, value: u64) {
     unsafe { ((frame + hhdm() + offset) as *mut u64).write_volatile(value) }
+}
+
+fn get(frame: u64, offset: u64) -> u64 {
+    unsafe { ((frame + hhdm() + offset) as *const u64).read_volatile() }
+}
+
+/// The word at user address `va`, read through the page tables (PKU does not apply).
+fn peek(va: u64) -> Option<u64> {
+    let mut table = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+    for level in [3u32, 2, 1, 0] {
+        let entry = get(table, ((va >> (12 + 9 * level)) & 511) * 8);
+        if entry & 5 != 5 { return None; } // present and user
+        let span = 1u64 << (12 + 9 * level);
+        if level == 0 || (level < 3 && entry & (1 << 7) != 0) {
+            let base = entry & 0x000F_FFFF_FFFF_F000 & !(span - 1);
+            return Some(get(base, (va & (span - 1)) & !7));
+        }
+        table = entry & 0x000F_FFFF_FFFF_F000;
+    }
+    None
 }
 
 fn me() -> &'static ProtectionDomain { crate::core_local::CoreLocal::get().current_pd_ref() }
@@ -214,7 +244,7 @@ fn bind(slot: u32, route: Option<u64>) -> Result<u64, u64> {
                 st.pages.push(frame);
             }
             unsafe { core::ptr::copy_nonoverlapping(code.as_ptr(), (st.pages[index] + hhdm() + at % PAGE) as *mut u8, code.len()) };
-            st.stubs.push(Bound { object: cap.object, generation: cap.generation, caller: caller.id });
+            st.stubs.push(Bound { object: cap.object, generation: cap.generation, caller: caller.id, callee: callee.id });
             id
         }
     };
@@ -232,21 +262,22 @@ fn area(st: &mut State, areas: u64, caller: &ProtectionDomain, callee: &Protecti
     if task.is_null() { return Err(E_RIGHTS); }
     let ctx = unsafe { &mut (*task).context };
     if ctx.pd_id as u32 != caller.id { return Err(E_RIGHTS); }
-    if st.areas.is_empty() { st.areas.push(!0); }
+    if st.areas.is_empty() { st.areas.push(Area { mask: !0, frame: 0, slots: [0; 64] }); }
     if ctx.gate_aux == 0 {
         let index = st.areas.len() as u64;
         if index > MAX_AREAS { return Err(E_FULL); }
         let frame = page(areas + (index << sex_gate::AREA_SHIFT), FRAME_KEY, F::WRITABLE | F::NO_EXECUTE, 0)?;
         put(frame, sex_gate::frame::CUR as u64, caller.base_pkru_mask as u64);
         put(frame, sex_gate::frame::ACTIVE as u64, 1 << caller.id);
-        st.areas.push(0);
+        st.areas.push(Area { mask: 0, frame, slots: [0; 64] });
+        FRAME_OF[index as usize].store(frame, Ordering::Release);
         ctx.gate_aux = index;
         unsafe { x86_64::registers::model_specific::Msr::new(TSC_AUX).write(index) };
     }
     let index = ctx.gate_aux as usize;
     let base = areas + ((index as u64) << sex_gate::AREA_SHIFT);
     for (pd, stack) in [(caller, false), (callee, true)] {
-        if st.areas[index] & (1 << pd.id) != 0 { continue; }
+        if st.areas[index].mask & (1 << pd.id) != 0 { continue; }
         let slot = page(base + sex_gate::slot_offset(pd.id) as u64, pd.pku_key, F::WRITABLE | F::NO_EXECUTE, 0)?;
         if stack {
             // One unmapped guard page below the callee's stack.
@@ -254,9 +285,83 @@ fn area(st: &mut State, areas: u64, caller: &ProtectionDomain, callee: &Protecti
             for p in 1..=CALLEE_STACK_PAGES { page(va + p * PAGE, pd.pku_key, F::WRITABLE | F::NO_EXECUTE, 0)?; }
             put(slot, sex_gate::slot::STACK as u64, va + (CALLEE_STACK_PAGES + 1) * PAGE);
         }
-        st.areas[index] |= 1 << pd.id;
+        st.areas[index].mask |= 1 << pd.id;
+        st.areas[index].slots[pd.id as usize] = slot;
     }
     Ok(())
+}
+
+/// Depth of the gate calls `ctx`'s task is in (0: none, or no area).
+fn depth(ctx: &crate::scheduler::TaskContext) -> u64 {
+    match FRAME_OF.get(ctx.gate_aux as usize).map(|f| f.load(Ordering::Acquire)) {
+        Some(frame) if frame != 0 && ctx.gate_aux != 0 => get(frame, sex_gate::frame::DEPTH as u64),
+        _ => 0,
+    }
+}
+
+fn current_context() -> Option<&'static mut crate::scheduler::TaskContext> {
+    let core = crate::core_local::CoreLocal::get().core_id as usize;
+    let task = crate::scheduler::SCHEDULERS[core].current_task.load(Ordering::Acquire);
+    (!task.is_null()).then(|| unsafe { &mut (*task).context })
+}
+
+/// True when a system call comes from inside a gate call: only the callee runs then.
+pub fn inside(_regs: &crate::interrupts::SyscallRegs) -> bool {
+    ON.load(Ordering::Acquire) && current_context().is_some_and(|ctx| depth(ctx) != 0)
+}
+
+/// A preempted task resumes with the PKRU it had, which inside a gate is the callee's.
+/// The switching stub saved it in the dummy error slot.
+pub unsafe fn keep_live_pkru(ctx: &mut crate::scheduler::TaskContext, frame: &x86_64::structures::idt::InterruptStackFrame) {
+    if !ON.load(Ordering::Acquire) || crate::pku::PKU_ENABLED.load(Ordering::Relaxed) == 0 { return; }
+    if frame.code_segment.0 & 3 != 3 || depth(ctx) == 0 { return; }
+    ctx.pkru = unsafe { *(frame as *const _ as *const u64).offset(-1) } & 0xFFFF_FFFF;
+}
+
+/// A user fault on a task inside a gate call is the callee's: undo the top call and
+/// return to the caller's stub call site with `PEER_DIED`, its stack, callee-saved
+/// registers and keys taken from its own slot. The fault stubs push the 15 GPRs just
+/// below the frame and return through IRETQ.
+pub unsafe fn unwind(frame: &mut x86_64::structures::idt::InterruptStackFrame, vector: u64, error: u64, address: u64) -> bool {
+    if !ON.load(Ordering::Acquire) || frame.code_segment.0 & 3 != 3 { return false; }
+    let Some(ctx) = current_context() else { return false };
+    if depth(ctx) == 0 { return false; }
+    let aux = ctx.gate_aux as usize;
+    let st = STATE.lock();
+    let Some(area) = st.areas.get(aux).filter(|_| aux != 0) else { return false };
+    let depth = get(area.frame, sex_gate::frame::DEPTH as u64);
+    if depth == 0 || depth > sex_gate::MAX_DEPTH { return false; }
+    let top = sex_gate::frame::FRAMES as u64 + (depth - 1) * 8;
+    let Some(bound) = (get(area.frame, top) as usize).checked_sub(1).and_then(|i| st.stubs.get(i)) else { return false };
+    let (slot, callee) = (area.slots[bound.caller as usize & 63], bound.callee);
+    let Some(caller) = crate::ipc::DOMAIN_REGISTRY.get(bound.caller) else { return false };
+    if slot == 0 { return false; }
+    let rsp = get(slot, sex_gate::slot::RSP as u64);
+    let Some(ret) = peek(rsp) else { return false };
+    put(area.frame, top, 0);
+    put(area.frame, sex_gate::frame::DEPTH as u64, depth - 1);
+    put(area.frame, sex_gate::frame::ACTIVE as u64, get(area.frame, sex_gate::frame::ACTIVE as u64) & !(1 << callee));
+    put(area.frame, sex_gate::frame::CUR as u64, caller.base_pkru_mask as u64);
+    put(slot, sex_gate::slot::ID as u64, 0);
+    let base = frame as *mut _ as *mut u64;
+    let rip = unsafe { base.read() };
+    let saved = |i: u64| get(slot, sex_gate::slot::SAVED as u64 + 8 * i);
+    // Below the frame: -2 r15 -3 r14 -4 r13 -5 r12 -6..-9 r11..r8 -10 rdi -11 rsi
+    // -12 rbp -13 rdx -14 rcx -15 rbx -16 rax.
+    let regs: [(isize, u64); 15] = [(-2, saved(5)), (-3, saved(4)), (-4, saved(3)), (-5, saved(2)),
+        (-6, 0), (-7, 0), (-8, 0), (-9, 0), (-10, 0), (-11, 0), (-12, saved(1)), (-13, 0), (-14, 0),
+        (-15, saved(0)), (-16, PEER_DIED)];
+    unsafe {
+        for (at, value) in regs { base.offset(at).write(value); }
+        base.write(ret); // RIP
+        base.add(3).write(rsp + 8); // RSP
+        if crate::pku::PKU_ENABLED.load(Ordering::Relaxed) != 0 {
+            core::arch::asm!("wrpkru", in("eax") caller.base_pkru_mask, in("ecx") 0, in("edx") 0, options(nostack));
+        }
+    }
+    crate::serial_println!("[gate.unwind] caller={} callee={} vector={} address={:#x}", bound.caller, callee, vector, address);
+    crate::crash_log::fault(callee, vector, rip, address, error, "gate callee");
+    true
 }
 
 /// SYS_GATE (111): rdi = op | slot << 8, rsi = argument; rsi out = value.

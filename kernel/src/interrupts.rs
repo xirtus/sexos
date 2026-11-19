@@ -275,6 +275,7 @@ pub unsafe extern "C" fn syscall_entry() {
 pub extern "C" fn syscall_handler(regs: &mut SyscallRegs) -> u64 {
     // syscall_entry already opened every key; a second write only costs time.
     crate::scheduler::observe_user_entry();
+    if crate::gate::inside(regs) { return sex_pdx::gate::IN_GATE; }
     crate::syscalls::dispatch(regs)
 }
 
@@ -492,6 +493,7 @@ fn fault_name(vector: u64) -> &'static str {
 #[no_mangle]
 pub extern "C" fn cpu_fault_handler(stack_frame: &mut InterruptStackFrame, error_code: u64, vector: u64) {
     if stack_frame.code_segment.0 & 3 == 3 {
+        if unsafe { crate::gate::unwind(stack_frame, vector, error_code, 0) } { return; }
         unsafe { end_user_fault(stack_frame, vector, error_code) }
     }
     let cur_pd = crate::core_local::CoreLocal::get().current_pd();
@@ -633,7 +635,10 @@ fn reschedule(stack_frame: &mut InterruptStackFrame) {
         // Save old context from interrupt stub's GPR push level on the stack.
         // stack_frame points to RIP.  Stub pushed [rax..r15][dummy=0] above RIP.
         // Layout from RIP downward: [dummy][r15][r14]..[rbx][rax]
-        if !old_ctx_ptr.is_null() { save_user_frame(&mut *old_ctx_ptr, stack_frame); }
+        if !old_ctx_ptr.is_null() {
+            save_user_frame(&mut *old_ctx_ptr, stack_frame);
+            crate::gate::keep_live_pkru(&mut *old_ctx_ptr, stack_frame);
+        }
 
         let kstack_top = (*next_ctx_ptr).kstack_top;
         if TIMER_TICK_LOG_BUDGET.load(Ordering::Acquire) > 0 {
@@ -719,6 +724,8 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
         crate::console::stop(format_args!("page fault in the kernel touching {:#x} at {:#x} (error {:#x})",
             fault_addr, fault_rip, error_code));
     }
+    // A fault inside a gate call is the callee's: the caller gets PEER_DIED.
+    if unsafe { crate::gate::unwind(stack_frame, 14, error_code, fault_addr) } { return; }
     let recoverable = crate::scheduler::fault_transaction::eligible_user_fault(
         fault_addr, error_code, fault_cs);
     serial_println!("[paging.fault.trap] pd={} addr={:#x} rip={:#x} error={:#x} eligible={}",
@@ -804,6 +811,7 @@ pub extern "C" fn general_protection_fault_handler(
     error_code: u64,
 ) {
     if stack_frame.code_segment.0 & 3 == 3 {
+        if unsafe { crate::gate::unwind(stack_frame, 13, error_code, 0) } { return; }
         unsafe { end_user_fault(stack_frame, 13, error_code) }
     }
     #[repr(C, packed)]

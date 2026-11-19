@@ -28,6 +28,10 @@ pub const OP_DESTROY: u64 = 3;
 pub const OP_BIND_ROUTE: u64 = 4;
 /// No gates on this machine: no PKU, no RDPID, or no free frame key yet.
 pub const UNAVAILABLE: u64 = 0xFFFF_FFFF_FFFF_FFE0;
+/// A system call made from inside a gate: refused, a callee never acts as its caller.
+pub const IN_GATE: u64 = 0xFFFF_FFFF_FFFF_FFE1;
+/// What a call returns when the callee faulted; the fault is logged against the callee.
+pub const PEER_DIED: u64 = 0xFFFF_FFFF_FFFF_FFE2;
 /// What a stub returns when its Gate was destroyed.
 pub const DENIED: u64 = u64::MAX;
 
