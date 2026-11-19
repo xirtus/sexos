@@ -34,6 +34,7 @@ hal/x86_64.rs +27).
 | S15 | BOOT services and bridges were never scanned for WRPKRU/XRSTOR/XRSTORS | High | Fixed |
 | S16 | Three kernel user mappings were writable and executable; program records' code was never scanned | High | Fixed |
 | S17 | The framebuffer grant sets the user bit on whole huge pages | Medium | Open: `init.rs`/boot display owner |
+| S18 | Kernel stacks had no guard page; a Task built on a 16 KiB stack overran it | High | Fixed (follow-up PR): guard page, boxed FPU area |
 
 Checked and fine: syscall and interrupt returns restore every general register from
 the saved user frame (no kernel register contents reach ring 3); the GDT has no
@@ -258,6 +259,18 @@ sets the user bit on the whole huge page. Display then reaches everything else i
 that page, which can include other devices' MMIO. Fix: map the framebuffer into a
 BOOT region window with 4 KiB pages (as other regions are) instead of changing the
 HHDM entry.
+
+### S18. Kernel stack overflow into the heap (fixed in a follow-up)
+
+Kernel stacks were heap `Vec`s with nothing below them. #408 put a 2.7 KB XSAVE
+area inline in `Task`; worker spawn built the Task (and its copies) on the caller's
+16 KiB program kernel stack, which overran into its heap neighbour and ended in a
+`rip=0` halt (#427 shrank the area as a stopgap). Now every kernel stack is a
+page-aligned block whose lowest page is unmapped, so an overflow double-faults on
+its own IST, and `Task` holds its FPU area as a `Box` filled straight from a static
+reset image, so a Task is a few hundred bytes wherever it is built. The guard is
+skipped where the heap is mapped by huge pages; the first guarded stack logs
+`[kstack.guard]`.
 
 ## Kernel stacks
 
