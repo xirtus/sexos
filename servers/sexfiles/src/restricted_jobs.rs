@@ -3,6 +3,9 @@
 use crate::restricted_job::{Error, Job};
 use crate::restricted_storage::Storage;
 use sex_pdx::restricted_helper::{Binding, Subject};
+/// Plugin formats a job may carry: 0 CLAP, 1 VST3, 2 LADSPA, 3 packed LV2.
+/// Same value as `sex_pdx::restricted_job::MAX_FORMAT`.
+const MAX_FORMAT: u8 = 3;
 pub const CAPACITY: usize = 2;
 pub const LIFETIME: u64 = 120_000;
 pub struct Entry {
@@ -97,7 +100,7 @@ impl Jobs {
         format: u8,
         create: impl FnOnce(u32) -> Result<(Storage, Job), Error>,
     ) -> Result<u32, Error> {
-        if epoch == 0 || format > 1 || self.next > 0xff_ffff {
+        if epoch == 0 || format > MAX_FORMAT || self.next > 0xff_ffff {
             return Err(Error::State);
         }
         let slot = self
