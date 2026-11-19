@@ -53,6 +53,8 @@ fn resets_devices(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD | 10 | 13) }
 
 /// By domain id: the tick it last looked at its inbox, and whether it then took something.
 static INBOX_AT: [core::sync::atomic::AtomicU64; 64] = [const { core::sync::atomic::AtomicU64::new(0) }; 64];
+/// By domain id: the tick the watch first saw calls waiting in its inbox (0: none).
+static QUEUED_SINCE: [core::sync::atomic::AtomicU64; 64] = [const { core::sync::atomic::AtomicU64::new(0) }; 64];
 static HOLDING: [core::sync::atomic::AtomicBool; 64] = [const { core::sync::atomic::AtomicBool::new(false) }; 64];
 /// Domains that are down (dead, or being reset): calls to them are refused until they run.
 static DOWN: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
@@ -222,10 +224,16 @@ fn poll_one(index: usize) {
         // A driver that took a message and has not been back to its inbox for its limit
         // (or leaves a full inbox untouched) is stuck: end it, as a fault would.
         let (limit, at) = (hang_limit(s.pd), INBOX_AT[s.pd as usize].load(Ordering::Relaxed));
-        let waiting = HOLDING[s.pd as usize].load(Ordering::Relaxed) || unsafe { (*pd.message_ring).len() } != 0;
-        if limit != 0 && at != 0 && waiting && now.saturating_sub(at) > limit && unsafe { (*main).state.exit() } {
-            crate::serial_println!("[service.hung] pd={} held_ticks={} queued={}", s.pd, now - at, unsafe { (*pd.message_ring).len() });
-            crate::crash_log::fault(s.pd, 0xfd, unsafe { (*main).context.rip }, 0, now - at, "no answer (hung)");
+        // Queued work counts from when the watch first saw it, not from the last empty
+        // look: a driver parked idle for minutes is not late for a call that just came.
+        let queued = &QUEUED_SINCE[s.pd as usize];
+        if unsafe { (*pd.message_ring).len() } == 0 { queued.store(0, Ordering::Relaxed); }
+        else if queued.load(Ordering::Relaxed) == 0 { queued.store(now, Ordering::Relaxed); }
+        let since = if HOLDING[s.pd as usize].load(Ordering::Relaxed) { at }
+            else { match queued.load(Ordering::Relaxed) { 0 => now, q => q.max(at) } };
+        if limit != 0 && at != 0 && now.saturating_sub(since) > limit && unsafe { (*main).state.exit() } {
+            crate::serial_println!("[service.hung] pd={} held_ticks={} queued={}", s.pd, now - since, unsafe { (*pd.message_ring).len() });
+            crate::crash_log::fault(s.pd, 0xfd, unsafe { (*main).context.rip }, 0, now - since, "no answer (hung)");
             crate::scheduler::unpark_thread(main);
         }
         return;
@@ -293,6 +301,7 @@ fn poll_one(index: usize) {
     FROZEN.fetch_and(!(1 << s.pd), Ordering::AcqRel);
     INBOX_AT[s.pd as usize].store(now, Ordering::Relaxed);
     HOLDING[s.pd as usize].store(false, Ordering::Relaxed);
+    QUEUED_SINCE[s.pd as usize].store(0, Ordering::Relaxed);
     let count = RESTARTS[index].fetch_add(1, Ordering::Relaxed) + 1;
     let id = unsafe { (*main).id };
     unsafe { (*main).rearm(id, s.entry, s.stack_top, pd); }
