@@ -176,6 +176,7 @@ pub fn main(name: &str, run: fn(&[u8]), seeds: fn() -> Vec<Vec<u8>>) {
     let max_len = env_u64("DRIVER_FUZZ_MAX_LEN", 4096) as usize;
     let start = std::time::Instant::now();
     let mut pool = seeds();
+    pool.extend(saved_seeds(name));
     pool.push(Vec::new());
     for s in pool.clone() { if let Err(why) = one(run, &s) { let _ = std::panic::take_hook(); report(name, &s, &why); } }
     let mut rng = Rng::new(seed ^ name.bytes().fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(b as u64)));
@@ -196,6 +197,15 @@ pub fn main(name: &str, run: fn(&[u8]), seeds: fn() -> Vec<Vec<u8>>) {
         n += 1;
     }
     println!("[driver_fuzz.ok] target={name} inputs={n} seed={seed} pool={} max_reads={max_reads} secs={}", pool.len(), start.elapsed().as_secs());
+}
+
+/// Inputs kept under `fuzz/drivers/seeds/<target>/`: blobs real machines reported
+/// (`scripts/hw_report.py --seeds`) and minimised finds worth keeping.
+pub fn saved_seeds(name: &str) -> Vec<Vec<u8>> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("seeds").join(name);
+    let mut files: Vec<_> = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).collect();
+    files.sort();
+    files.iter().filter_map(|p| std::fs::read(p).ok()).collect()
 }
 
 /// `driver_target!(run, seeds)` at the end of a target makes both entry points.

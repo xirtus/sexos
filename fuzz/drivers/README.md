@@ -74,11 +74,12 @@ Add a target: a `fuzz_targets/drv_NAME.rs` with `run(&[u8])`, `seeds()` and
 
 ## Known findings (open)
 
-* **`acpi` 6.1.1 AML interpreter** (`drv_acpi_aml`, report-only): malformed AML reaches
+* **`acpi` 6.1.1 AML interpreter** (`drv_acpi_aml`, report-only; the target builds
+  sexacpi's own copy, `vendor/acpi-6.1.1`): malformed AML reaches
   `todo!()` for `Match` and `CopyObject` (both appear in real DSDTs), a `panic!()` in
   unary maths, an out-of-range slice for a method whose length runs past its table,
   and `assert_ne!(path, root)` in the namespace. In sexacpi any of these stops the
-  service. Plan: patch a vendored copy (`[patch.crates-io]`) to return `AmlError`
-  instead, send the fixes upstream, then make the target blocking.
+  service. Plan: change `vendor/acpi-6.1.1` to return `AmlError` instead (listed in
+  its `SEXOS_CHANGES.md`), send the fixes upstream, then make the target blocking.
 * The NVMe target covers the controller, completion and APST code; the full queue
   model follows once the NVMe queue rework (PR #432 and the per-core queue work) lands.

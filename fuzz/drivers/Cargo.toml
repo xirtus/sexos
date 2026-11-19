@@ -33,7 +33,7 @@ sex-laptop = { path = "../../crates/sex-laptop" }
 sex-i2c-dw = { path = "../../crates/sex-i2c-dw" }
 sex-hid-touch = { path = "../../crates/sex-hid-touch" }
 p256 = { version = "=0.13.2", default-features = false, features = ["arithmetic"] }
-acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"] }
+acpi = { path = "../../vendor/acpi-6.1.1", default-features = false, features = ["alloc", "aml"] }
 sex_pdx = { package = "sex-pdx-model", path = "pdx-model" }
 
 [profile.release]

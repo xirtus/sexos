@@ -15,6 +15,7 @@ fail=0
 for t in "${targets[@]}"; do
   mkdir -p "corpus/$t" "artifacts/$t"
   cargo run -q --release --bin "$t" -- --seeds "corpus/$t" 2>/dev/null
+  [ -d "seeds/$t" ] && cp -n "seeds/$t"/* "corpus/$t"/ 2>/dev/null
   if cargo fuzz run --fuzz-dir . --features libfuzzer -O --debug-assertions "$t" "corpus/$t" -- \
        -max_total_time="$secs" -timeout=20 -rss_limit_mb=4096 -artifact_prefix="artifacts/$t/" -print_final_stats=1 \
        > "artifacts/$t.log" 2>&1; then

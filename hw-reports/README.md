@@ -6,6 +6,10 @@ one folder per machine, with a verdict beside it.
 
 ## Sending one
 
+Spindle's `hw` command arrives with PR #432 (x17 bare-metal prep). Until it
+merges, save the boot log instead: any serial or screen capture of the log works,
+since `hw_report.py` reads the same `[tag] key=value` lines from either.
+
 1. Boot SexOS (the CI ISO on a USB stick, see
    `docs/handoff/X17_BARE_METAL_RUNBOOK_2026_11_18.md`).
 2. Plug in a second FAT or exFAT stick. In Spindle: `ls /media`, `cd /media/NAME`,
