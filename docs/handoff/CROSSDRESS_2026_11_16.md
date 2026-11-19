@@ -131,3 +131,33 @@ What real closed plugins still need, in order: a C runtime and the rest of KERNE
 interfaces over the same call/callback seams, plugin GUIs (CW6), and Moan's plugin host
 (moanplug) opening Windows `.clap`/`.vst3` files through `ClapPlugin` in its sandboxed
 helper.
+
+## CW3a (2026-11-19): Wine's ntdll.dll in a cell
+
+Andreas approved CW3 (Wine's Windows libraries) on 2026-11-18.
+
+- **Pinned Wine**: 9.0 as Ubuntu 24.04 ships it (`scripts/fetch_wine_pe.sh`, SHA-256
+  checked; ledger table 5). Only the PE halves are used.
+- **Seams** (`src/nt.rs`): Wine 9's `Nt*` stubs test KUSER_SHARED_DATA+0x308 and call
+  `[0x7FFE1000]`; Crossdress maps KUSER with the flag set and the pointer at the cell's
+  syscall dispatcher thunk (`mov r11d, eax; mov eax, SYSCALL; out 0xE0, eax; ret`).
+  `__wine_unix_call_dispatcher`, `__wine_syscall_dispatcher` and `__wine_unixlib_handle`
+  are filled the way the Unix half would. Syscall numbers are read from the stubs, so the
+  host matches Wine builds by name. Debug options live at PEB+0x2000 (empty: all off).
+- **NT system calls served**: NtAllocateVirtualMemory, NtFreeVirtualMemory (no unmap yet),
+  NtQuerySystemTime, NtQueryPerformanceCounter, NtClose, NtYieldExecution,
+  NtTerminateProcess. Any other stops cleanly as `ntdll.syscall!NtName`; a Unix call stops
+  as `unixlib#handle!code N`.
+- **Native test mode** (`tests/native.rs`): cell user pages mapped at their own addresses
+  in the Linux test process, entry/exit through SIGUSR1/SIGSEGV with the guest's `out`,
+  GS = TEB. Lets Wine be iterated on without /dev/kvm; the CLAP plugin and ntdll run there.
+
+Gate (`tests/common`, run natively and in `tests/kvm.rs`): Wine's RtlComputeCrc32,
+ntdll's own sprintf, NtQuerySystemTime through Wine's stub and the dispatcher, then Wine's
+real heap (RtlCreateHeap, RtlAllocateHeap zeroed, RtlSizeHeap, RtlFreeHeap) on top of the
+host's NtAllocateVirtualMemory.
+
+Next (CW3b/CW4): Wine's own loader. LdrInitializeThunk with a PEB, process parameters
+and a virtual `C:\windows\system32` holding the Wine DLLs, served by NtOpenFile,
+NtCreateSection, NtMapViewOfSection and NtQueryAttributesFile; then kernelbase/kernel32,
+then ucrtbase, so a CRT-linked plugin loads.

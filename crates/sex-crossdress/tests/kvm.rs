@@ -12,6 +12,8 @@ use sex_crossdress::process::{Host, WinProcess, Stop};
 use sex_pdx::vm::{exit, Exit, Regs, Segment, State, IO_IN};
 use std::os::fd::RawFd;
 
+mod common;
+
 const KVMIO: u64 = 0xAE;
 const fn io(nr: u64) -> u64 { (KVMIO << 8) | nr }
 const fn iow(nr: u64, size: u64) -> u64 { (1 << 30) | (size << 16) | (KVMIO << 8) | nr }
@@ -281,4 +283,16 @@ fn a_windows_clap_plugin_processes_audio_in_a_kvm_cell() {
     plugin.close(&mut cpu, &mut console).unwrap();
     assert!(plugin.process.counters.callbacks >= 6, "in_events.size/get and out_events.try_push reached the host");
     println!("[crossdress.kvm.clap] ok: a Windows CLAP plugin processed {at} frames in a cell, bit-exact");
+}
+
+#[test]
+fn wines_ntdll_runs_in_a_kvm_cell() {
+    let Some(dll) = common::wine_dll("ntdll.dll") else { println!("[crossdress.kvm.wine] SKIP no CROSSDRESS_WINE_DIR (scripts/fetch_wine_pe.sh)"); return; };
+    let Some(kvm) = open_kvm() else { println!("[crossdress.kvm.wine] SKIP no usable /dev/kvm"); return; };
+    let mut p = WinProcess::load_dll(Ram::new(128 << 20).unwrap(), &dll).unwrap();
+    sex_crossdress::nt::prepare_ntdll(&mut p).unwrap();
+    println!("[crossdress.kvm.wine] ntdll base={:#x} exports={} syscalls={}", p.base, p.exports.len(), p.syscall_names.len());
+    let mut cpu = kvm_vcpu(kvm, &p.cell.ram);
+    for line in common::exercise_ntdll(&mut cpu, &mut p) { println!("[crossdress.kvm.wine] {line}"); }
+    println!("[crossdress.kvm.wine] ok: Wine's ntdll.dll ran in a KVM cell (Rtl, CRT, NT system calls, heap)");
 }

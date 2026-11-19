@@ -13,6 +13,8 @@
 //! - [`process`]: one process and thread, import thunks, the exit loop, vectored
 //!   exception dispatch.
 //! - [`win32`]: Windows structure layouts, status codes and the KERNEL32 subset.
+//! - [`nt`]: Wine's ntdll.dll in a cell: KUSER_SHARED_DATA, the syscall and Unix call
+//!   dispatchers, and the NT system calls served by the host (CW3).
 //! - [`clap`]: a Windows CLAP plugin DLL in a cell, driven by the host (the yabridge
 //!   role): descriptor, parameters, activate, sample-accurate `process`.
 //!
@@ -25,6 +27,7 @@ extern crate std;
 
 pub mod cell;
 pub mod clap;
+pub mod nt;
 pub mod pe;
 pub mod process;
 pub mod win32;

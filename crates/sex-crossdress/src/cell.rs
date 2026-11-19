@@ -38,6 +38,10 @@ pub const CALL_RETURN: u32 = 0x7F00_0002;
 /// EAX of a host callback thunk (a function pointer the host gave the guest, such as a
 /// CLAP host's `get_extension`): `CALLBACK | index`.
 pub const CALLBACK: u32 = 0x7D00_0000;
+/// EAX of the NT system call dispatcher thunk (the call number is in R11).
+pub const SYSCALL: u32 = 0x7B00_0000;
+/// EAX of the Unix call dispatcher thunk.
+pub const UNIX_CALL: u32 = 0x7F00_0003;
 pub const MAGIC_MASK: u32 = 0xFF00_0000;
 
 /// Where the ring-0 pieces live (supervisor pages, top of the address space).

@@ -64,3 +64,9 @@ reference and must check on real hardware (or replace with datasheet/REA facts).
 |-------|---------|----------------------------|--------|
 | `acpi` (table parsing) | MIT/Apache-2.0 | reads MADT and other static tables at boot | master; fine (static data, no firmware code runs) |
 | `acpi` / `aml` AML interpreter | MIT/Apache-2.0 | **no longer in ring 0.** Runs in the ring-3 `sexacpi` server (Senses organ, pd 50) for `\_S5`, `_PTS`, batteries, lids, thermal, `_CST`, I2C HID, and the dGPU's `_PS3`/`_PRx` `_OFF`. The kernel links the crate for table parsing only and never builds an interpreter (guardrail test `test_kernel_never_runs_firmware_aml`). | moved by the sexacpi PR #88 (2026-11-10), dGPU half included |
+
+## 5. Foreign code run in Crossdress cells (Windows code, never in SexOS's address space)
+
+| Code | Source and licence | Runs in | Replaced by / plan |
+|------|--------------------|---------|--------------------|
+| Wine 9.0 PE DLLs (`ntdll.dll` first; `kernelbase`, `kernel32`, `ucrtbase`, `msvcrt` next) | Ubuntu 24.04 `libwine` 9.0~repack-4build3 (pinned SHA-256 in `scripts/fetch_wine_pe.sh`), source = the matching Ubuntu `wine` source package; LGPL-2.1-or-later, used unmodified as separate DLLs | a Crossdress cell (VT-x guest, own page tables); the Unix halves (`ntdll.so`, ...) are not used: `crates/sex-crossdress/src/nt.rs` is the host side | CW3/CW4 (`docs/handoff/CROSSDRESS_2026_11_16.md`); later built from source in CI |

@@ -49,7 +49,10 @@ const THUNK_SIZE: u64 = 16;
 /// `CALLBACKS` host callback slots, then the imports.
 const RETURNS: u64 = 3;
 const SHIM_SLOT: u64 = 3;
-const FIRST_CALLBACK: u64 = 5;
+/// The NT system call dispatcher and the Unix call dispatcher (Wine's ntdll calls them).
+const SYSCALL_SLOT: u64 = 5;
+const UNIX_CALL_SLOT: u64 = 6;
+const FIRST_CALLBACK: u64 = 7;
 /// How many host callbacks (`Host::callback`) a process offers.
 pub const CALLBACKS: u32 = 32;
 const FIRST_IMPORT: u64 = FIRST_CALLBACK + CALLBACKS as u64;
@@ -69,6 +72,13 @@ pub const MAX_CALL_ARGS: usize = 16;
 
 /// The guest address of host callback thunk `n`, the function pointer a guest calls.
 pub const fn callback_va(n: u32) -> u64 { THUNK_VA + (FIRST_CALLBACK + n as u64) * THUNK_SIZE }
+/// Wine's syscall dispatcher in the cell: an ntdll `Nt*` stub calls it with the system
+/// call number in EAX and the arguments in R10, RDX, R8, R9 and on the stack. The thunk
+/// keeps the number in R11 (which `syscall` clobbers anyway) and exits to the host.
+pub const SYSCALL_DISPATCHER_VA: u64 = THUNK_VA + SYSCALL_SLOT * THUNK_SIZE;
+/// Wine's `__wine_unix_call_dispatcher(handle, code, args)`: a PE DLL's call into its
+/// Unix half, which on SexOS is the host.
+pub const UNIX_CALL_DISPATCHER_VA: u64 = THUNK_VA + UNIX_CALL_SLOT * THUNK_SIZE;
 
 /// Why the process stopped.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,7 +117,7 @@ pub trait Host {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Counters { pub exits: u64, pub calls: u64, pub exceptions: u64, pub handled: u64, pub callbacks: u64 }
+pub struct Counters { pub exits: u64, pub calls: u64, pub exceptions: u64, pub handled: u64, pub callbacks: u64, pub syscalls: u64, pub unix_calls: u64 }
 
 /// A hardware exception as the cell's stub reported it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +134,8 @@ pub struct WinProcess {
     pub imports: Vec<(String, String, Option<Api>)>,
     /// Exported names and their addresses (a DLL's API).
     pub exports: Vec<(String, u64)>,
+    /// NT system call numbers read from the module's `Nt*` stubs (Wine's ntdll).
+    pub syscall_names: alloc::collections::BTreeMap<u32, String>,
     /// The process heap: next free byte and end of what is mapped.
     pub heap_next: u64,
     pub heap_end: u64,
@@ -167,10 +179,21 @@ impl WinProcess {
             let mut t = [0xCCu8; THUNK_SIZE as usize];
             if n == SHIM_SLOT { thunks.extend_from_slice(&FLOAT_SHIM); thunks.resize((thunks.len() as u64).next_multiple_of(THUNK_SIZE) as usize, 0xCC); continue; }
             if n == SHIM_SLOT + 1 { continue; }
+            if n == SYSCALL_SLOT {
+                // mov r11d, eax; mov eax, SYSCALL; out 0xE0, eax; ret
+                t[..3].copy_from_slice(&[0x41, 0x89, 0xC3]);
+                t[3] = 0xB8;
+                t[4..8].copy_from_slice(&cell::SYSCALL.to_le_bytes());
+                t[8..10].copy_from_slice(&[0xE7, cell::HYPERCALL_PORT]);
+                t[10] = 0xC3;
+                thunks.extend_from_slice(&t);
+                continue;
+            }
             let code: u32 = match n {
                 0 => cell::HANDLER_RETURN,
                 1 => cell::ENTRY_RETURN,
                 2 => cell::CALL_RETURN,
+                UNIX_CALL_SLOT => cell::UNIX_CALL,
                 _ if n < FIRST_IMPORT => cell::CALLBACK | (n - FIRST_CALLBACK) as u32,
                 _ => cell::CALL | n as u32,
             };
@@ -225,7 +248,9 @@ impl WinProcess {
         ];
         for (offset, value) in teb { cell.write_u64(TEB_VA + offset, value).ok_or(LoadError::Cell(cell::Error::OutOfMemory))?; }
 
-        let exports = image.exports(&mem)?.into_iter().map(|(n, rva)| (n, base + rva as u64)).collect();
+        let raw_exports = image.exports(&mem)?;
+        let syscall_names = crate::nt::syscall_numbers(&raw_exports, &mem);
+        let exports = raw_exports.into_iter().map(|(n, rva)| (n, base + rva as u64)).collect();
 
         // The entry is called like a function: RSP = 8 mod 16, returning to the exit thunk.
         let rsp = STACK_TOP - CALL_FRAME_GAP - 0x28;
@@ -234,7 +259,7 @@ impl WinProcess {
         let mut initial = cell.user_state(entry, rsp, TEB_VA);
         initial.regs.rcx = PEB_VA;
         Ok(WinProcess {
-            cell, image, base, entry, imports, exports, heap_next: HEAP_VA, heap_end: HEAP_VA, handlers: Vec::new(), next_alloc: ALLOC_BASE,
+            cell, image, base, entry, imports, exports, syscall_names, heap_next: HEAP_VA, heap_end: HEAP_VA, handlers: Vec::new(), next_alloc: ALLOC_BASE,
             counters: Counters::default(), last_fault: None, dispatch: Vec::new(), initial,
         })
     }
@@ -327,6 +352,20 @@ impl WinProcess {
                         },
                         _ if code == cell::ENTRY_RETURN => return Stop::Exited(e.regs.rcx as u32),
                         _ if code == cell::CALL_RETURN => return Stop::Returned(e.regs.rcx),
+                        cell::SYSCALL => {
+                            self.counters.syscalls += 1;
+                            match crate::nt::syscall(self, e.regs.r11 as u32, &e.regs, host) {
+                                win32::Outcome::Return(v) => { e.regs.rax = v; e.regs.rip = next; load = true; }
+                                win32::Outcome::Stop(s) => return s,
+                            }
+                        }
+                        _ if code == cell::UNIX_CALL => {
+                            self.counters.unix_calls += 1;
+                            match crate::nt::unix_call(self, &e.regs, host) {
+                                win32::Outcome::Return(v) => { e.regs.rax = v; e.regs.rip = next; load = true; }
+                                win32::Outcome::Stop(s) => return s,
+                            }
+                        }
                         cell::CALLBACK => {
                             let n = code & 0xFFFF;
                             if n >= CALLBACKS { return Stop::CellFault { vector: 0xFD, rip: e.regs.rip }; }

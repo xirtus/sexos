@@ -85,7 +85,7 @@ pub fn lookup(dll: &str, name: &str) -> Option<Api> {
 
 pub enum Outcome { Return(u64), Stop(Stop) }
 
-fn set_last_error(p: &mut WinProcess, code: u32) { let _ = p.cell.write_u32(process::TEB_VA + TEB_LAST_ERROR, code); }
+pub(crate) fn set_last_error(p: &mut WinProcess, code: u32) { let _ = p.cell.write_u32(process::TEB_VA + TEB_LAST_ERROR, code); }
 
 /// Runs import `index` with the Windows x64 arguments in `regs`.
 pub fn call(p: &mut WinProcess, index: usize, regs: &mut Regs, host: &mut impl Host) -> Outcome {
@@ -158,7 +158,7 @@ const MEM_COMMIT: u32 = 0x1000;
 const MEM_RESERVE: u32 = 0x2000;
 
 /// VirtualAlloc: reserve and/or commit, at an address or anywhere above ALLOC_BASE.
-fn virtual_alloc(p: &mut WinProcess, address: u64, size: u64, kind: u32, protect: u32) -> u64 {
+pub(crate) fn virtual_alloc(p: &mut WinProcess, address: u64, size: u64, kind: u32, protect: u32) -> u64 {
     let fail = |p: &mut WinProcess, e| { set_last_error(p, e); 0 };
     if size == 0 || size > 1 << 40 || kind & !(MEM_COMMIT | MEM_RESERVE) != 0 || kind == 0 { return fail(p, ERROR_INVALID_PARAMETER); }
     let access = match protect {

@@ -30,6 +30,9 @@ python3 "$ROOT_DIR/scripts/drag_guest_qemu.py"
 # Crossdress CW1 + the CLAP plugin bridge: the PE loader, the cell (page tables, GDT/IDT/TSS, stubs), the KERNEL32
 # subset and exception dispatch against a scripted vCPU; then the test .exe in a real
 # VT-x/SVM cell on Linux KVM (tests/kvm.rs, SKIP without a usable /dev/kvm).
+# CW3: Wine's ntdll.dll (pinned Wine 9.0 PE build) runs in the cell natively and on KVM.
+CROSSDRESS_WINE_DIR="$(bash "$ROOT_DIR/scripts/fetch_wine_pe.sh")"
+export CROSSDRESS_WINE_DIR
 (cd "$ROOT_DIR" && cargo test --locked -p sex-crossdress -- --nocapture 2>&1 | grep -E '^\[crossdress|^test result|FAILED|panicked' ; exit "${PIPESTATUS[0]}")
 CROSS="$ROOT_DIR/crates/sex-crossdress/test"
 if command -v clang >/dev/null && command -v lld-link >/dev/null && command -v llvm-dlltool >/dev/null; then
