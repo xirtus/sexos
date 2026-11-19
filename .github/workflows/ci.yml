@@ -42,7 +42,7 @@ jobs:
       run: bash scripts/iommu_host_gate.sh
     - name: IPC v2 endpoints, reply capabilities and notifications on the host
       run: bash scripts/ipc_v2_host_gate.sh
-    - name: Display model (KMS, EDID) and Intel Gen12 display engine on the host
+    - name: Display model (KMS, EDID), Intel Gen12 and AMD DCN display engines on the host
       run: bash scripts/kms_host_gate.sh
     - name: NVIDIA GSP-RM boot (GA104 firmware, VBIOS/FWSEC, WPR2 layout, RPC queues, simulated GPU) on the host
       run: bash scripts/nvidia_gsp_host_gate.sh
