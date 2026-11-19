@@ -8,7 +8,8 @@ use sex_gpu_amd::regs::*;
 use sex_gpu_amd::{aux, identify, plane, readout, Asic, Error, Layout, Mmio};
 use sex_kms::edid::Edid;
 use sex_kms::mode::{cvt_rb, cta_vic, Mode, FLAG_HSYNC_POSITIVE, FLAG_VSYNC_POSITIVE};
-use sex_kms::model::{ConnectorKind, PlaneKind, Status};
+use sex_kms::model::{ConnectorKind, PlaneKind, Rect, Status};
+use sex_kms::commit::{self, Change, Commit};
 
 #[path = "../../sex-kms/tests/fixtures/edid.rs"]
 mod fixtures;
@@ -354,4 +355,21 @@ fn kms_view_of_the_takeover() {
     let m = readout::running_mode(o, None, readout::refresh_mhz(165, 1_000_000)).unwrap();
     assert_eq!((m.hdisplay, m.vdisplay, m.htotal, m.vtotal), (1920, 1080, 2080, 1101));
     assert!(readout::running_mode(o, None, 0).is_none());
+}
+
+#[test]
+fn kms_view_of_an_offset_viewport_commits() {
+    // Firmware scanning out a viewport 16,8 into a larger surface: the inherited
+    // framebuffer covers the viewport's corner, so a flip of it passes the commit check.
+    let asic = phoenix();
+    let mut f = laptop();
+    f.set(hubp(0, HUBP_PRI_VIEWPORT_START), 16 | 8 << 16);
+    let heads = readout::read_heads(&mut f, &asic);
+    let ports = vec![readout::Port { kind: ConnectorKind::Edp, otg: Some(0), live: true, edid: Some(Edid::parse(&panel_edid()).unwrap()) }];
+    let (dev, st) = readout::to_kms(&asic, &heads, &ports, &[]);
+    let fb = st.fbs[0].unwrap();
+    assert_eq!((fb.width, fb.height), (1936, 1088));
+    let primary = readout::plane_index(0, PlaneKind::Primary);
+    assert_eq!(st.planes[primary as usize].src, Rect::new(16, 8, 1920, 1080));
+    commit::check(&dev, &st, Commit { changes: &[Change::Flip { plane: primary, fb: 0 }], flags: 0 }).unwrap();
 }

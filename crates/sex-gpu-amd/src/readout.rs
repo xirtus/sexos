@@ -224,7 +224,9 @@ pub fn to_kms(asic: &Asic, heads: &[Head], ports: &[Port], measured_mhz: &[u32])
         st.crtcs[o as usize] = Crtc { active: mode.is_some(), mode };
         if let Some(p) = h.hubp.filter(|p| p.linear_xrgb()) {
             while st.fbs.len() <= o as usize { st.fbs.push(None); }
-            st.fbs[o as usize] = Some(Framebuffer { width: p.width, height: p.height, stride: p.stride_bytes(), format: Format::Xrgb8888 });
+            // The surface address is the framebuffer's origin; firmware may scan out a
+            // viewport inside it, so the framebuffer reaches past the viewport's corner.
+            st.fbs[o as usize] = Some(Framebuffer { width: p.x + p.width, height: p.y + p.height, stride: p.stride_bytes(), format: Format::Xrgb8888 });
             st.planes[plane_index(o, PlaneKind::Primary) as usize] = PlaneState {
                 crtc: Some(o), fb: Some(o),
                 src: Rect::new(p.x as i32, p.y as i32, p.width, p.height),
