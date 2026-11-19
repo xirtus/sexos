@@ -152,6 +152,7 @@ mod bitmap_stores;
 mod fill_damage;
 mod wallpaper_mark;
 mod decor;
+mod pacing;
 mod damage;
 static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
 static mut BITMAP_STORES: bitmap_stores::Stores<{sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Browser)}> = bitmap_stores::Stores::UNBOUND;
@@ -201,9 +202,12 @@ impl Drop for SceneLease {
 static mut FOCUSED_SURFACE_ID: u64 = 0;
 /// Window animations (sex_pdx::window_motion): opens, tiling moves, workspace slides.
 static mut MOTION: sex_pdx::window_motion::Motion<32> = sex_pdx::window_motion::Motion::new();
+/// Animation frames at 60 Hz (pacing.rs).
+static mut PACER: pacing::Pacer = pacing::Pacer::new();
 /// Draws moving windows at their tweened geometry in this frame's scene.
 fn motion_place(scene: &mut scene::SceneSnapshot) {
     let now = sex_pdx::get_ticks();
+    decor::set_now(now);
     let motion = unsafe { &*core::ptr::addr_of!(MOTION) };
     if motion.active(now) {
         scene.place(|s| motion.current(s.surface_id, now).map(|g| (g.x, g.y, g.w, g.h)));
@@ -501,31 +505,28 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             // Frosted glass toolbar background.
             let base_alpha: u8 = if frame_hovered { 220 } else { 200 };
             let toolbar_alpha = scale_alpha(base_alpha, chrome_dim);
-            if toolbar_alpha > 0 {
+            // A window with tabs wears its active tab's colour across the whole
+            // bar (behind the lights and past the last tab); other tabs sit darker.
+            let tab_paint=|color:u32,alpha:u8|alpha_blend_xrgb_over_xrgb(color,glass_over_bg(color,x,y,224,scene),alpha);
+            if surf.tab_count > 0 {
+                c = tab_paint(scene.tokens.active_tab_color, 240);
+            } else if toolbar_alpha > 0 {
                 c = glass_over_bg(scene.tokens.frame_top_bar_color, x, y, toolbar_alpha, scene);
             }
-            // Divider: bright opaque line at bottom edge.
-            if ly >= (scene.metrics.title()as usize).saturating_sub(scene.metrics.scale()as usize) {
+            // Divider: bright opaque line at bottom edge (a tabbed bar flows into its tab).
+            if surf.tab_count == 0 && ly >= (scene.metrics.title()as usize).saturating_sub(scene.metrics.scale()as usize) {
                 c = FRAME_TOP_BAR_DIVIDER_COLOR;
             }
-            // Tab strip: glass background with tab color overlay.
-            if surf.tab_count > 0
+            // Tab strip: inactive tabs over the active-tab bar.
+            if surf.tab_count > 1
                 && lx >= scene.metrics.controls_end()as usize
                 && lx < rim_right
             {
                 let exclusion=scene.metrics.controls_end()as usize;
                 let available = rim_right.saturating_sub(exclusion);
                 let slot_w = available / surf.tab_count as usize;
-                if slot_w > 0 {
-                    let tab_idx = (lx - exclusion) / slot_w;
-                    let tab_color = if tab_idx == surf.active_tab as usize {
-                        scene.tokens.active_tab_color
-                    } else {
-                        scene.tokens.inactive_tab_color
-                    };
-                    let tab_glass = glass_over_bg(tab_color, x, y, 224, scene);
-                    let tab_alpha: u8 = if tab_idx == surf.active_tab as usize { 240 } else { 200 };
-                    c = alpha_blend_xrgb_over_xrgb(tab_color, tab_glass, tab_alpha);
+                if slot_w > 0 && (lx - exclusion) / slot_w != surf.active_tab as usize {
+                    c = tab_paint(scene.tokens.inactive_tab_color, 200);
                 }
             }
             // Select title ink against the final glass/tab pixel, then paint it.
@@ -625,8 +626,9 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
 }
 
 /// Paint one row run of plain surface content without asking pixel by pixel.
-/// False means this run needs composite_pixel_source: chrome, a bitmap, or a
-/// fill rect covering part of it. Must match that function exactly.
+/// False means this run needs composite_pixel_source: chrome or a bitmap.
+/// Fill rects paint in order over the run (the last one wins, as there).
+/// Must match that function exactly.
 fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
     let surf=source.surface;
     let (sx,sy,sw,sh)=scene.groups.rect(surf,w,h);
@@ -639,20 +641,20 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
         source.content
     }else{surf};
     if unsafe{scene.bitmaps.matches_surface(content.owner_pd,content.surface_id)}{return false;}
-    let mut base=content.color;
     let (lx0,lx1,ly)=(x0 as i32-content.x,x1 as i32-content.x,y as i32-content.y);
+    let mask=surface_lifecycle::native_pixel_bit(if source.chrome{content.owner_pd}else{surf.owner_pd},if source.chrome{content.surface_id}else{surf.surface_id});
+    if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
+    let row=unsafe{fb.add(y*w)};
+    // The private frame is ordinary memory: plain fills vectorize.
+    unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0).fill(content.color);}
     for i in 0..content.fill_count as usize{
         if content.fill_sw[i]==0||content.fill_sh[i]==0
             ||ly<content.fill_sy[i]||ly>=content.fill_sy[i]+content.fill_sh[i] as i32
             ||lx1<=content.fill_sx[i]||lx0>=content.fill_sx[i]+content.fill_sw[i] as i32{continue;}
-        if lx0<content.fill_sx[i]||lx1>content.fill_sx[i]+content.fill_sw[i] as i32{return false;}
-        base=content.fill_color[i];
+        let a=content.fill_sx[i].max(lx0);let b=(content.fill_sx[i]+content.fill_sw[i] as i32).min(lx1);
+        let (a,b)=((a-lx0) as usize+x0,(b-lx0) as usize+x0);
+        unsafe{core::slice::from_raw_parts_mut(row.add(a),b-a).fill(content.fill_color[i]);}
     }
-    let mask=surface_lifecycle::native_pixel_bit(if source.chrome{content.owner_pd}else{surf.owner_pd},if source.chrome{content.surface_id}else{surf.surface_id});
-    if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
-    let row=unsafe{fb.add(y*w)};
-    // The private frame is ordinary memory: a plain fill vectorizes.
-    unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0).fill(base);}
     text_run(row,x0,x1,y,content,scene.metrics);
     true
 }
@@ -734,7 +736,10 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
         let end=end.min(x1);
         if row.is_some(){
             if let Some(source)=source{
-                if fast_content_run(fb,x,end,y,w,h,source,scene){x=end;continue;}
+                let t=decor::cycles_now();
+                let fast=fast_content_run(fb,x,end,y,w,h,source,scene);
+                decor::tally(0,t);
+                if fast{x=end;continue;}
             }else{
                 match mark{
                     // The SexOS wallpaper's lips: this run crosses them.
@@ -746,6 +751,7 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
                 x=end;continue;
             }
         }
+        let t=decor::cycles_now();
         while x<end{
             let under=if mark.is_some(){wallpaper_mark::pixel(x,y,w,h,back)}else{back};
             let color=if let Some(row)=row.as_mut(){
@@ -754,6 +760,7 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
             unsafe{core::ptr::write_volatile(fb.add(y*w+x),color);}
             x+=1;
         }
+        decor::tally(1,t);
     }
     decor::row(fb,y,x0,x1,w,h,scene);
 }
@@ -4594,6 +4601,7 @@ pub extern "C" fn _start() -> ! {
                     if msg.caller_pd == 3 {
                         let motion = unsafe { &mut *core::ptr::addr_of_mut!(MOTION) };
                         motion.set_enabled(msg.arg0 != 0);
+                        if msg.arg0 == 0 && decor::clear_fades() { needs_full_redraw = true; }
                         // arg2 bit 0: plain look (square corners, no shadows).
                         if decor::set_effects(msg.arg2 & 1 == 0) { needs_full_redraw = true; }
                         let dir = msg.arg1 as u8 as i8;
@@ -5008,7 +5016,11 @@ pub extern "C" fn _start() -> ! {
                                 let motion = &mut *core::ptr::addr_of_mut!(MOTION);
                                 let now = sex_pdx::get_ticks();
                                 match before {
-                                    None => motion.opened(surface_id, to, now),
+                                    None => {
+                                        // A workspace's windows slide in whole; only a new window fades in.
+                                        if motion.enabled() && !motion.sliding(now) { decor::opened(surface_id, now); }
+                                        motion.opened(surface_id, to, now);
+                                    }
                                     Some((bx, by, bw, bh, _)) => {
                                         let far = (bx - to.x).abs() > 24 || (by - to.y).abs() > 24 || bw.abs_diff(to.w) > 24 || bh.abs_diff(to.h) > 24;
                                         if far { motion.moved(surface_id, Geom { x: bx, y: by, w: bw, h: bh }, to, now); } else { motion.forget(surface_id); }
@@ -5526,18 +5538,28 @@ pub extern "C" fn _start() -> ! {
         // On the damage path: each frame redraws only where moving windows
         // pass, and the frame after the last tween ends lands them exactly.
         let motion = unsafe { &mut *core::ptr::addr_of_mut!(MOTION) };
-        let motion_damage = motion.span().map(|(l, t, r, b)| {
+        let pacer = unsafe { &mut *core::ptr::addr_of_mut!(PACER) };
+        let animating = motion.active(motion_now);
+        // 60 Hz: between paced frames the moving windows are not redrawn.
+        let paced = !animating || pacer.due(motion_now);
+        let motion_damage = motion.span().filter(|_| paced).map(|(l, t, r, b)| {
             let pad = 16;
             damage::Rect { x: (l - pad).max(0) as usize, y: (t - pad).max(0) as usize, right: (r + pad).max(0) as usize, bottom: (b + pad).max(0) as usize }
         });
         if let Some(rect) = motion_damage { pending_paint.request_damage(rect, w, h, bar_height()); }
-        if motion.active(motion_now) {
+        if animating {
+            if paced {
             static mut MOTION_FRAME_BUDGET: u32 = 96;
             unsafe { if MOTION_FRAME_BUDGET > 0 { MOTION_FRAME_BUDGET -= 1; sex_pdx::serial_record!("[display.motion.frame] tick={} progress={}", motion_now, motion.progress(motion_now).unwrap_or(1024)); } }
+            }
         } else if motion_damage.is_some() {
             motion.clear_finished(motion_now);
             sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
         }
+        // Frame cost: from here to the completed publication.
+        decor::take_cycles();decor::take_tally(0);decor::take_tally(1);
+        let render_start=decor::cycles_now();
+        let render_ms_start=sex_pdx::get_ticks();
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
@@ -5552,6 +5574,25 @@ pub extern "C" fn _start() -> ! {
         // Only this completed publication discharges the retained requirements.
         // The service performs no intake during prepare/publish/receipt handling.
         pending_paint.complete(published.is_some());
+        let render_cycles=decor::cycles_now().wrapping_sub(render_start);
+        let render_ms=sex_pdx::get_ticks().saturating_sub(render_ms_start);
+        // The landing frame counts too; then the next animation starts a fresh grid.
+        let landing = !animating && motion_damage.is_some();
+        if (animating && paced || landing) && published.is_some() {
+            let interval = pacer.presented(motion_now);
+            if landing { pacer.stop(); }
+            if let Some(ms) = interval {
+                static mut FRAME_TIME_BUDGET: u32 = 600;
+                unsafe { if FRAME_TIME_BUDGET > 0 { FRAME_TIME_BUDGET -= 1; sex_pdx::serial_record!("[display.frame.time] ms={} p99={}", ms, pacer.percentile(99).unwrap_or(0)); } }
+            }
+            // Where a paced frame's time goes: the whole render and its decoration share.
+            static mut FRAME_COST_BUDGET: u32 = 64;
+            unsafe { if FRAME_COST_BUDGET > 0 { FRAME_COST_BUDGET -= 1;
+                let decor = decor::take_cycles();
+                let (fast, pixel) = (decor::take_tally(0), decor::take_tally(1));
+                let kpx = match plan.content { paint_batch::Content::Damage(r) => ((r.right - r.x) * (r.bottom - r.y) / 1000) as u64, paint_batch::Content::Full | paint_batch::Content::Area => (w * h / 1000) as u64, _ => 0 };
+                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={} fast_kcyc={} pixel_kcyc={}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx, fast / 1000, pixel / 1000); } }
+        }
         if let Some(frame)=published.as_ref(){
             if frame.plan.clock_dirty(){unsafe{LAST_REDRAWN_CLOCK_CANON_SS=frame.canon_ss;}}
             if primary_receipt_pending&&frame.plan.is_full(){
@@ -5582,7 +5623,7 @@ pub extern "C" fn _start() -> ! {
         loop_iter = loop_iter.wrapping_add(1);
         // Nothing arrived and nothing was painted: sleep until a message or the
         // next clock check, so an idle desktop does not spin.
-        if drained==0 && plan.is_empty() { let _=sex_pdx::sys_wait_self_ticks(8); }
+        if drained==0 && plan.is_empty() { let _=sex_pdx::sys_wait_self_ticks(if animating { pacer.wait(sex_pdx::get_ticks()).clamp(1, 8) } else { 8 }); }
         else { sex_pdx::sys_yield(); }
     }
 }
