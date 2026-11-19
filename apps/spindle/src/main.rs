@@ -105,6 +105,7 @@ mod volume_command;
 mod wifi_command;
 mod calc_command;
 mod complete;
+mod silk_command;
 static mut HISTORY_STATUS:sex_pdx::spindle_status::Publisher=sex_pdx::spindle_status::Publisher::new(0,0);
 static mut HISTORY_IO:history_persistence::Client=history_persistence::Client::new();
 
@@ -791,6 +792,9 @@ impl core::fmt::Write for Cursor<'_> {
     }
 }
 
+/// A command typed while the session was being saved; it runs when the save ends.
+static mut HELD: [u8; CMD_MAX] = [0; CMD_MAX];
+static mut HELD_LEN: usize = 0;
 fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) -> bool {
     // A package's first run waits for the person's yes or no.
     if unsafe { pkg_command::PKG.answer(line, sb) } { return true; }
@@ -821,7 +825,13 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
     }
     if cmd.is_empty() { return true; }
     if unsafe{capture_command::CAPTURE.busy()}&&cmd!=b"capture-cancel"&&cmd!=b"record-stop"{sb.push(b"Capture owns the file buffer. Escape cancels; Close stays available.");return true}
-    if unsafe{session_command::SESSION.io_busy()}{sb.push(b"The disk is saving the session for a moment. Try again.");return true}
+    // The session is being written to disk: the command runs as soon as that ends.
+    if unsafe{session_command::SESSION.io_busy()}{
+        if line.len()>CMD_MAX||unsafe{HELD_LEN}!=0{sb.push(b"The disk is saving the session for a moment. Try again.");return true}
+        unsafe{HELD[..line.len()].copy_from_slice(line);HELD_LEN=line.len();}
+        serial_println!("[spindle.cmd.held] len={}",line.len());
+        return true
+    }
     let recognized = match cmd {
         b"record"=>{unsafe{record_command::RECORD.start(args,sb);}true},
         b"record-stop"=>{unsafe{record_command::RECORD.stop(args,sb);}true},
@@ -858,6 +868,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  capture FILE.png   save whole desktop (first terminal)");
             sb.push(b"  beep [HZ] [MS] [VOL]  play a note on the sound card");
             sb.push(b"  volume [N|+N|-N|mute|list]  sound volume (ROW N for one program)");
+            sb.push(b"  silk windows|focus|move|layout|float|close|events  script the desktop (silk alone: usage)");
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  crashes      what stopped, this start and earlier ones");
             sb.push(b"  about        Spindle version + identity");
@@ -1022,9 +1033,10 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             unsafe{fs_commands::FS.submit_program_granted(b"sexshop",args,sex_pdx::program_store::RUN_NETWORK,0,sex_pdx::package::GRANT_TOKEN,sb);}
             true
         }
-        // A Spindle terminal window (apps/term), allowed to start programs whose console it is.
+        // A Spindle terminal window (apps/term), allowed to start programs whose console it
+        // is, and the network, which it passes on only to a run that asks (`ssh` panes).
         b"spindle" => {
-            unsafe{fs_commands::FS.submit_program_granted(b"term",args,0,0,sex_pdx::console_relay::GRANT_TOKEN,sb);}
+            unsafe{fs_commands::FS.submit_program_granted(b"spindle",args,sex_pdx::program_store::RUN_NETWORK,0,sex_pdx::console_relay::GRANT_TOKEN,sb);}
             true
         }
         b"spawn" if args.split(|b|*b==b' ').next().is_some_and(|w|w.contains(&b'/')) => {
@@ -1481,6 +1493,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"fetch" => {unsafe{let fs=&*core::ptr::addr_of!(fs_commands::FS);fetch_command::FETCH.start(args,sb,|p,o|fs.join(p,o));}true},
         b"update" => {unsafe{update_command::UPDATE.start(args,sb);}true},
         b"pkg" => {unsafe{pkg_command::PKG.command(args,sb);}true},
+        b"silk" => {unsafe{(*core::ptr::addr_of_mut!(silk_command::SILK)).command(args,sb);}true},
         b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
         // Loom (formerly Files), given a folder (the whole filesystem by default) to look after.
         b"loom" | b"files" => {
@@ -2801,13 +2814,20 @@ pub extern "C" fn _start() -> ! {
         if unsafe{fs_commands::FS.send()}{}
         {
             let idle=unsafe{!fs_commands::FS.busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()};
-            if unsafe{session_command::SESSION.step(idle,sb)}{unsafe{content_render(&line,sb);}}
+            // A line held while the session file was busy runs before the session opens more.
+            if unsafe{session_command::SESSION.step(idle&&HELD_LEN==0,sb)}{unsafe{content_render(&line,sb);}}
+        }
+        if unsafe{HELD_LEN!=0&&!session_command::SESSION.io_busy()}{
+            let held=unsafe{let n=HELD_LEN;HELD_LEN=0;let mut b=[0u8;CMD_MAX];b[..n].copy_from_slice(&HELD[..n]);(b,n)};
+            let ok=dispatch(&held.0[..held.1],sb,hist,&mut ev);
+            serial_println!("[spindle.cmd.held.run] len={} ok={}",held.1,ok as u8);
+            unsafe{content_render(&line,sb);}
         }
         if unsafe{fs_commands::FS.expired(sex_pdx::get_ticks(),sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{update_command::UPDATE.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{pkg_command::PKG.step(sb)}{unsafe{content_render(&line,sb);}}
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()}{
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         let capture_lines=sb.total_lines;
@@ -2848,6 +2868,7 @@ pub extern "C" fn _start() -> ! {
             }
             continue;
         }
+        if unsafe{(*core::ptr::addr_of_mut!(silk_command::SILK)).receive(&msg,sb)} {unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1 && unsafe{(*core::ptr::addr_of_mut!(volume_command::VOLUME)).receive(msg.caller_pd,msg.arg0,sb)} {unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1 && unsafe{(*core::ptr::addr_of_mut!(wifi_command::WIFI)).receive(msg.caller_pd,msg.arg0,sb)} {unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1 && msg.caller_pd==13 {
@@ -2902,6 +2923,7 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             if value != 1 { continue; }
+            if scancode==0x01&&unsafe{(*core::ptr::addr_of!(silk_command::SILK)).following()}{unsafe{(*core::ptr::addr_of_mut!(silk_command::SILK)).stop(sb);content_render(&line,sb);}continue;}
             if scancode==0x01&&unsafe{capture_command::CAPTURE.busy()}{unsafe{capture_command::CAPTURE.cancel(sb);content_render(&line,sb);}continue;}
             // Ctrl chords edit the line; they never insert text.
             if (msg.arg0 >> 9) & 1 == 1 {

@@ -21,6 +21,14 @@ LIBVPX_TAG=${LIBVPX_TAG:-v1.15.2}
 OUT=$ROOT/target/libvpx
 WORK=$OUT/work
 mkdir -p "$WORK"
+# Upstream configure hardcodes readelf for NASM alignment checks. macOS LLVM
+# provides the same ELF reader as llvm-readelf; keep its alias local to this build.
+if ! command -v readelf >/dev/null 2>&1; then
+  READELF=$(command -v llvm-readelf) || { echo "readelf or llvm-readelf required" >&2; exit 1; }
+  mkdir -p "$WORK/tools"
+  ln -sf "$READELF" "$WORK/tools/readelf"
+  export PATH="$WORK/tools:$PATH"
+fi
 [[ -f "${MUSL_INCLUDE:-}/stdio.h" ]] || { echo "musl headers not found; set MUSL_INCLUDE" >&2; exit 1; }
 
 if [[ -z "${LIBVPX_SRC:-}" ]]; then
@@ -63,6 +71,9 @@ make -j"$(nproc)" libvpx.a >>make.log
 rm -rf "$OUT/lib" "$OUT/include" && mkdir -p "$OUT/lib/pkgconfig" "$OUT/include/vpx"
 cp libvpx.a "$OUT/lib/"
 cp "$LIBVPX_SRC"/vpx/*.h "$OUT/include/vpx/"
+mkdir -p "$OUT/share/licenses/libvpx"
+cp "$LIBVPX_SRC/LICENSE" "$LIBVPX_SRC/PATENTS" "$OUT/share/licenses/libvpx/"
+git -C "$LIBVPX_SRC" rev-parse HEAD > "$OUT/source-pin"
 cat >"$OUT/lib/pkgconfig/vpx.pc" <<PC
 prefix=$OUT
 includedir=\${prefix}/include

@@ -6,6 +6,8 @@ import json
 import pathlib
 import shutil
 import tempfile
+import tomllib
+from build_input_receipt import validate as validate_consumed
 
 
 def digest(path):
@@ -22,7 +24,7 @@ def local(root, name):
 def freeze(root, build, out, iso, kernel):
     root=pathlib.Path(root).resolve(strict=True);build=pathlib.Path(build).resolve(strict=True)
     out=pathlib.Path(out).resolve();out.mkdir(parents=True,exist_ok=True)
-    names=['source-binding.json','source','tested.iso','tested.kernel']
+    names=['source-binding.json','source','tested.iso','tested.kernel','generated-inputs']
     if any((out/name).exists()for name in names):raise FileExistsError('existing evidence must not be overwritten')
     provenance=json.loads((build/'provenance.json').read_text())
     sources=provenance.get('production_source_sha256')
@@ -36,6 +38,12 @@ def freeze(root, build, out, iso, kernel):
     paths={name:local(root,name)for name in sources}
     for name,path in paths.items():
         if digest(path)!=sources[name]:raise ValueError('production source changed since build: '+name)
+    spec_path=root/'sexos_build_spec.toml'
+    spec=tomllib.loads(spec_path.read_text()) if spec_path.is_file() else {}
+    consumed=provenance.get('consumed_build_inputs',{})
+    artifacts=validate_consumed(root,spec,consumed)
+    if artifacts and 'sexos_build_spec.toml' not in sources:
+        raise ValueError('consumed input declaration must be bound production source')
     runner_names={str(p.relative_to(root)) for directory,suffixes in [('scripts',{'.py','.sh'}),('tests',{'.rs','.py','.sh'})]
                   for p in (root/directory).rglob('*') if p.is_file() and p.suffix in suffixes and '__pycache__'not in p.parts}
     # Architectural host gates need their declarative inventory too. It is
@@ -50,6 +58,7 @@ def freeze(root, build, out, iso, kernel):
     binding=dict(iso_sha256=digest(iso),kernel_sha256=digest(kernel),
                  architecture_sha256=sources.get('ARCHITECTURE.md'),sources=sources,
                  runner_sha256=runner_hashes,build_provenance=provenance,
+                 consumed_build_inputs=consumed,
                  scope='sealed production inputs unchanged across build; scripts and host-test sources recorded separately')
     # Validate copies before publishing the binding. The final JSON is written
     # last, so a partial copy can never masquerade as accepted source evidence.
@@ -65,6 +74,12 @@ def freeze(root, build, out, iso, kernel):
         for path,name in [(iso,'tested.iso'),(kernel,'tested.kernel')]:
             shutil.copyfile(path,stage/name)
             if digest(stage/name)!=digest(path):raise ValueError('artifact changed while copying')
+        generated=stage/'generated-inputs';generated.mkdir()
+        for name,record in artifacts.items():
+            path=local(root,name);target=generated/name
+            target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
+            if target.stat().st_size!=record['bytes'] or digest(target)!=record['sha256']:
+                raise ValueError('consumed artifact changed while freezing: '+name)
         # Check against the sealed digest again, including after a concurrent
         # change to the original artifact during the copy above.
         if digest(stage/'tested.iso')!=binding['iso_sha256'] or digest(stage/'tested.kernel')!=binding['kernel_sha256']:

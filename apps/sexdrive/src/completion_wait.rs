@@ -14,7 +14,12 @@ pub struct Completion{pub dw2:u32,pub dw3:u32}
 pub struct Report{pub result:Result<Completion,Failure>,pub polls:u32,pub turns:u32,pub elapsed:u64,pub last_dw3:u32}
 /// The caller retains its submitted DMA guard throughout every pause. A pause
 /// is only scheduling cooperation; only exact CID+phase proves completion.
-pub fn wait(cid:u16,phase:u32,mut read:impl FnMut()->(u32,u32),mut ticks:impl FnMut()->u64,mut pause:impl FnMut()->Result<(),u64>)->Report{
+pub fn wait(cid:u16,phase:u32,read:impl FnMut()->(u32,u32),ticks:impl FnMut()->u64,pause:impl FnMut()->Result<(),u64>)->Report{
+    wait_for(|seen|seen==cid,phase,read,ticks,pause)
+}
+/// As `wait`, for a slot whose CQE may answer any of several commands in flight:
+/// the device finishes them in any order.
+pub fn wait_for(accept:impl Fn(u16)->bool,phase:u32,mut read:impl FnMut()->(u32,u32),mut ticks:impl FnMut()->u64,mut pause:impl FnMut()->Result<(),u64>)->Report{
     let start=ticks();let mut last=start;
     let mut report=Report{result:Err(Failure::TurnLimit),polls:0,turns:0,elapsed:0,last_dw3:0};
     let Some(deadline)=start.checked_add(MAX_TICKS)else{report.result=Err(Failure::ClockOverflow);return report};
@@ -27,7 +32,7 @@ pub fn wait(cid:u16,phase:u32,mut read:impl FnMut()->(u32,u32),mut ticks:impl Fn
         }
         for _ in 0..POLL_QUANTUM{
             let(dw2,dw3)=read();report.polls+=1;report.last_dw3=dw3;
-            if dw3&0xffff==cid as u32&&(dw3>>16)&1==phase{
+            if accept((dw3&0xffff)as u16)&&(dw3>>16)&1==phase{
                 report.result=Ok(Completion{dw2,dw3});return report;
             }
         }

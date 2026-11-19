@@ -7,16 +7,23 @@
 
 extern crate alloc;
 
+pub mod charts;
 pub mod kernels;
+pub mod linux_compare;
 pub mod report;
 pub mod stress;
 pub mod thermal;
 
+pub use charts::{
+    render_benchmark_charts, render_linux_comparison_chart, render_torture_realtime_chart,
+    Canvas,
+};
 pub use kernels::{
     bench_crypto_arx, bench_dsp_f32, bench_pointer_chase_ladder, bench_sha256,
     bench_stream, bench_stream_with_quota, bench_tiled_gemm_f32, generate_sattolo_cycle,
     LatencyStep, StreamResult,
 };
+pub use linux_compare::{ChecksumRow, ComparisonRow, LinuxComparisonDoc};
 pub use report::{compute_percentiles, BenchmarkReport, SubsystemScores};
 pub use stress::{Sample, StressConfig, TortureRunner, WorkloadType};
 pub use thermal::{ThermalAnalysis, ThermalAnalyzer, ThrottleState};
@@ -30,4 +37,6 @@ pub enum ClimaxError {
     TestAlreadyFinished,
     /// Memory allocation cap exceeded during benchmark execution.
     AllocationFailed,
+    /// Failed to parse benchmark document markdown.
+    ParseError(&'static str),
 }

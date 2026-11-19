@@ -6,12 +6,17 @@
 //! shared region of `sex_pdx::bt_hci`; nothing here looks inside them beyond the event
 //! length that splits the interrupt stream.
 //!
-//! Without the region (BOOT does not grant it yet) the controller is still set up and
+//! Without the region (a build without Cufflinks) the controller is still set up and
 //! asked for its version once, and the first events are logged, so a real machine shows
 //! in its boot log that the transport works.
+//!
+//! When a controller comes or goes SexUSB tells Cufflinks (`bt_hci::OP_LINK` on its route),
+//! so Cufflinks sleeps while there is none. Keys and pointer motion from Bluetooth
+//! keyboards and mice come back decoded through the region's HID mailbox and go to
+//! Input with USB's own (`bt_hid_pump`).
 
 use sex_pdx::serial_record as log;
-use sex_pdx::bt_hci::{self, Shared};
+use sex_pdx::bt_hci::{self, HidInput, Shared};
 use super::{Usb, Failure, Ring, xhci, trb, page, CC_SHORT_PACKET, CC_SUCCESS};
 
 /// 32 positions and a link TRB, so position % IN_FLIGHT is unique among TRBs in flight.
@@ -73,6 +78,13 @@ pub(super) fn parse(cfg: &[u8]) -> Option<Found> {
     Some(Found { iface, intr, input, output })
 }
 
+/// Tell Cufflinks the controller came or went, so it need not poll for one. Its answer
+/// is ignored (the main loop drops replies); Cufflinks rechecks the link on any wake.
+fn notify(up: bool) {
+    let (status, _) = sex_pdx::pdx_call(bt_hci::NOTIFY_SLOT, bt_hci::OP_LINK, up as u64, 0, 0);
+    log!("[sexusb.bt.notify] up={} sent={}", up as u8, (status == 0) as u8);
+}
+
 /// Whole events at the front of `stream` (code, length, parameters): their lengths.
 fn next_event(stream: &[u8]) -> Option<usize> {
     if stream.len() < 2 { return None; }
@@ -117,6 +129,7 @@ impl Usb {
             vendor, product, slot, f.iface, f.intr.0, f.input.0, f.output.0, route as u8);
         if route {
             unsafe { Shared::at(self.bt_region as *mut u8) }.set_link(Some((vendor, product)));
+            notify(true);
         } else {
             // No host stack to hand packets to: ask for the version once, to show the link works.
             let probe: &[u8] = if vendor == 0x8087 { &[0x05, 0xfc, 0x01, 0xff] } else { &[0x01, 0x10, 0x00] };
@@ -273,12 +286,57 @@ impl Usb {
         moved
     }
 
+    /// Bluetooth keyboards and mice (decoded by Cufflinks) to Input. True if anything moved.
+    pub fn bt_hid_pump(&mut self) -> bool {
+        if self.bt_region == 0 { return false; }
+        let shared = unsafe { Shared::at(self.bt_region as *mut u8) };
+        let mut moved = false;
+        while let Some(input) = shared.hid_pop() {
+            moved = true;
+            match input {
+                HidInput::Keys { device, modifiers, keys } => {
+                    let d = device.max(1);
+                    let at = self.bt_keys.iter().position(|k| k.0 == d).or_else(|| self.bt_keys.iter().position(|k| k.0 == 0));
+                    if let Some(at) = at { self.bt_keys[at] = (d, modifiers, keys); }
+                    self.send_keys();
+                }
+                HidInput::Pointer { device, buttons, dx, dy, wheel } => {
+                    let d = device.max(1);
+                    let at = self.bt_buttons.iter().position(|b| b.0 == d).or_else(|| self.bt_buttons.iter().position(|b| b.0 == 0));
+                    if let Some(at) = at { self.bt_buttons[at] = if buttons & 7 == 0 { (0, 0) } else { (d, buttons & 7) }; }
+                    self.send_relative(0, 0, self.bt_held(), dx as i32, dy as i32, wheel);
+                }
+                HidInput::Gone { device } => {
+                    for k in self.bt_keys.iter_mut().filter(|k| k.0 == device.max(1)) { *k = (0, 0, 0); }
+                    self.send_keys();
+                    // A mouse that left with a button down: release it.
+                    if self.bt_buttons.iter().any(|b| b.0 == device.max(1)) {
+                        for b in self.bt_buttons.iter_mut().filter(|b| b.0 == device.max(1)) { *b = (0, 0); }
+                        self.send_relative(0, 0, self.bt_held(), 0, 0, 0);
+                    }
+                }
+            }
+        }
+        moved
+    }
+
+    /// Buttons held across all Bluetooth pointing devices.
+    fn bt_held(&self) -> u8 { self.bt_buttons.iter().fold(0, |m, b| m | b.1) }
+
+    /// Bluetooth keyboards or mice are connected: input may arrive at any time.
+    pub fn bt_hid_active(&self) -> bool {
+        self.bt_region != 0 && unsafe { Shared::at(self.bt_region as *mut u8) }.hid_active()
+    }
+
     /// The controller's device left.
     pub(super) fn bt_gone(&mut self, i: usize) {
         if self.bt.as_ref().is_some_and(|b| b.dev == i) {
             self.bt = None;
-            if self.bt_region != 0 { unsafe { Shared::at(self.bt_region as *mut u8) }.set_link(None); }
+            if self.bt_region != 0 { unsafe { Shared::at(self.bt_region as *mut u8) }.set_link(None); notify(false); }
             log!("[sexusb.bt.gone] slot={}", self.dev[i].slot);
+            // Keys held on Bluetooth keyboards go up with the controller.
+            if self.bt_keys.iter().any(|k| k.0 != 0) { self.bt_keys = [(0, 0, 0); 8]; self.send_keys(); }
+            if self.bt_buttons.iter().any(|b| b.0 != 0) { self.bt_buttons = [(0, 0); 8]; self.send_relative(0, 0, 0, 0, 0, 0); }
         }
     }
 }

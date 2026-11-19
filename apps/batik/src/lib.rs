@@ -10,14 +10,16 @@ use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use batik_core::adjust::Adjustment;
+use batik_core::adjust::{
+    Adjustment, AdjustmentKind, CurvesAdjustment, CurvesPreset, HueSatAdjustment,
+};
 use batik_core::blend::{split_argb, BlendMode};
 use batik_core::brush::{
     bucket_fill, bucket_fill_mask, Brush, BrushPreset, PointerSample, StrokeEngine,
 };
 use batik_core::document::{BackgroundMode, Document};
 use batik_core::error::BatikError;
-use batik_core::filters::{blend_with_mask, box_blur, emboss, sharpen};
+use batik_core::filters::{blend_with_mask, box_blur, emboss, sharpen, FilterSpec};
 use batik_core::geom::Rect;
 use batik_core::history::{History, HistoryAction};
 use batik_core::jpeg::encode_jpeg;
@@ -154,6 +156,22 @@ pub struct Batik {
     pub layer_list: Id,
     pub status_label: Id,
 
+    // Widget IDs - Non-Destructive Workflow (G-27)
+    pub btn_adj_curves: Id,
+    pub btn_adj_huesat: Id,
+    pub btn_text_layer: Id,
+    pub btn_edit_text_style: Id,
+    pub btn_push_fx_stack: Id,
+    pub btn_toggle_fx_stack: Id,
+    pub btn_clear_fx_stack: Id,
+    pub inspector_label: Id,
+
+    // Cycling indices
+    pub curves_preset_idx: usize,
+    pub huesat_preset_idx: usize,
+    pub text_style_idx: usize,
+    pub fx_spec_idx: usize,
+
     pub controls: Vec<(&'static str, Id)>,
 
     pub canvas_w: usize,
@@ -229,6 +247,13 @@ impl Batik {
             Command::new("batik.deselect", "Deselect").shortcut("Ctrl+D"),
             Command::new("batik.invert-sel", "Invert Selection"),
             Command::new("batik.feather", "Feather Selection"),
+            Command::new("batik.add-curves-adj", "Add/Cycle Curves Adjustment"),
+            Command::new("batik.add-huesat-adj", "Add/Cycle Hue/Sat Adjustment"),
+            Command::new("batik.add-text-layer", "Add Text Layer"),
+            Command::new("batik.edit-text-style", "Cycle Text Style"),
+            Command::new("batik.push-fx-stack", "Push Filter to FX Stack"),
+            Command::new("batik.toggle-fx-stack", "Toggle FX Stack Node"),
+            Command::new("batik.clear-fx-stack", "Clear FX Stack"),
         ] {
             ui.commands.add(c);
         }
@@ -277,7 +302,15 @@ impl Batik {
                     .command("batik.add-mask")
                     .command("batik.mask-from-sel")
                     .command("batik.invert-mask")
-                    .command("batik.edit-mask"),
+                    .command("batik.edit-mask")
+                    .separator()
+                    .command("batik.add-curves-adj")
+                    .command("batik.add-huesat-adj")
+                    .command("batik.add-text-layer")
+                    .command("batik.edit-text-style")
+                    .command("batik.push-fx-stack")
+                    .command("batik.toggle-fx-stack")
+                    .command("batik.clear-fx-stack"),
             ],
         );
 
@@ -364,6 +397,17 @@ impl Batik {
         let btn_export_psd = ui.button(row_codecs, "ExpPSD");
         let btn_save_ora = ui.button(row_codecs, "SaveORA");
 
+        // Toolbar Row 5: Non-Destructive Workflow (Adjustment Layers, Text Layers, Filter Stack)
+        let row_nondestructive = ui.row(root);
+        let btn_adj_curves = ui.button(row_nondestructive, "Adj: Curves");
+        let btn_adj_huesat = ui.button(row_nondestructive, "Adj: Hue/Sat");
+        let btn_text_layer = ui.button(row_nondestructive, "Text Layer");
+        let btn_edit_text_style = ui.button(row_nondestructive, "Style Text");
+        ui.separator(row_nondestructive);
+        let btn_push_fx_stack = ui.button(row_nondestructive, "FX+ Stack");
+        let btn_toggle_fx_stack = ui.button(row_nondestructive, "FX Toggle");
+        let btn_clear_fx_stack = ui.button(row_nondestructive, "FX Clear");
+
         // Color Swatches & Import bar
         let color_row = ui.row(root);
         ui.label(color_row, "Color:");
@@ -391,7 +435,9 @@ impl Batik {
         ];
 
         // Central workspace row: Canvas on left, Layer stack on right
+        let workspace_h = (canvas_h as f32 + 24.0).max(280.0);
         let workspace = ui.row(root);
+        ui.set_layout(workspace, Layout::row().height(workspace_h));
 
         // Canvas container
         let flat = doc.flatten().expect("initial flatten");
@@ -403,9 +449,11 @@ impl Batik {
 
         // Layers Sidebar
         let sidebar = ui.column(workspace);
+        ui.set_layout(sidebar, Layout::column().width(460.0).height(workspace_h - 12.0));
         ui.label(sidebar, "Layers:");
-        let layer_list = ui.list(sidebar, &["  [V]     Layer 1 (100%) Norm"]);
-        ui.set_layout(layer_list, Layout::default().width(240.0).height(256.0));
+        let layer_list = ui.list(sidebar, &["  [V]     [R] Layer 1 (100%) Norm"]);
+        ui.set_layout(layer_list, Layout::default().width(440.0).height(190.0));
+        let inspector_label = ui.label(sidebar, "Inspector: Ready");
 
         // Bottom status label
         let status_label = ui.label(root, "Ready");
@@ -467,6 +515,21 @@ impl Batik {
             ("mask_from_sel", btn_mask_from_sel),
             ("invert_mask", btn_invert_mask),
             ("edit_mask", btn_edit_mask),
+            // Non-Destructive Workflow (G-27)
+            ("add_curves_adj", btn_adj_curves),
+            ("adj_curves", btn_adj_curves),
+            ("add_huesat_adj", btn_adj_huesat),
+            ("adj_huesat", btn_adj_huesat),
+            ("add_text_layer", btn_text_layer),
+            ("text_layer", btn_text_layer),
+            ("edit_text_style", btn_edit_text_style),
+            ("style_text", btn_edit_text_style),
+            ("push_fx_stack", btn_push_fx_stack),
+            ("push_fx", btn_push_fx_stack),
+            ("toggle_fx_stack", btn_toggle_fx_stack),
+            ("toggle_fx", btn_toggle_fx_stack),
+            ("clear_fx_stack", btn_clear_fx_stack),
+            ("clear_fx", btn_clear_fx_stack),
             // Codecs Export
             ("export_png", btn_export_png),
             ("save_png", btn_export_png),
@@ -569,6 +632,18 @@ impl Batik {
             swatches,
             layer_list,
             status_label,
+            btn_adj_curves,
+            btn_adj_huesat,
+            btn_text_layer,
+            btn_edit_text_style,
+            btn_push_fx_stack,
+            btn_toggle_fx_stack,
+            btn_clear_fx_stack,
+            inspector_label,
+            curves_preset_idx: 0,
+            huesat_preset_idx: 0,
+            text_style_idx: 0,
+            fx_spec_idx: 0,
             controls,
             canvas_w,
             canvas_h,
@@ -621,9 +696,22 @@ impl Batik {
         for l in self.doc.layers.iter().rev() {
             let active_mark = if l.id == self.active_layer_id { "> " } else { "  " };
             let vis_mark = if l.visible { "[V]" } else { "[H]" };
-            let mask_mark = match &l.kind {
-                LayerKind::Raster(r) if r.mask.is_some() => "[M]",
-                _ => "   ",
+            let mask_mark = if l.mask().is_some() { "[M]" } else { "   " };
+            let kind_tag = match &l.kind {
+                LayerKind::Raster(_) => "[R]",
+                LayerKind::Adjustment(adj) => match adj.kind {
+                    AdjustmentKind::Curves(_) => "[ADJ:Curves]",
+                    AdjustmentKind::HueSaturation(_) => "[ADJ:HueSat]",
+                    _ => "[ADJ]",
+                },
+                LayerKind::Text(_) => "[T]",
+                LayerKind::Group(_) => "[G]",
+            };
+            let fx_tag = if !l.filter_stack.is_empty() {
+                let enabled_count = l.filter_stack.iter().filter(|f| f.enabled).count();
+                format!(" [FX:{}/{}]", enabled_count, l.filter_stack.len())
+            } else {
+                alloc::string::String::new()
             };
             let blend_name = match l.blend_mode {
                 BlendMode::Normal => "Norm",
@@ -635,13 +723,15 @@ impl Batik {
                 _ => "Oth",
             };
             names.push(format!(
-                "{}{} {} {} ({}%) {}",
+                "{}{} {} {} {} ({}%) {}{}",
                 active_mark,
                 vis_mark,
                 mask_mark,
+                kind_tag,
                 l.name,
                 (l.opacity as u32 * 100) / 255,
-                blend_name
+                blend_name,
+                fx_tag
             ));
         }
         let rows = Rows(names.into_iter().map(|s| vec![s]).collect());
@@ -664,21 +754,93 @@ impl Batik {
             "None"
         };
         let msg = format!(
-            "Tool: {} | Curve: {:?} | Color: #{:08x} | Layers: {} (Blend: {}, {}) | Sel: {} | Undo: {}",
+            "Tool: {} | Curve: {:?} | Color: #{:08x} | Layers: {} (Adj: {}, Text: {}, FX: {}) | Blend: {} | {} | Sel: {} | Undo: {}",
             self.tool_name(),
             self.pressure_curve,
             self.current_color,
             self.layer_count(),
+            self.adj_layer_count(),
+            self.text_layer_count(),
+            self.active_fx_count(),
             self.active_blend_name(),
             mask_str,
             sel_str,
             self.undo_count()
         );
         ui.set_text(self.status_label, &msg);
+
+        // Update inspector label
+        if let Some(l) = self.doc.get_layer(self.active_layer_id) {
+            let fx_info = if l.filter_stack.is_empty() {
+                format!("FX: None")
+            } else {
+                let enabled = l.filter_stack.iter().filter(|f| f.enabled).count();
+                let last_name = l.filter_stack.last().map(|f| f.spec.name()).unwrap_or("None");
+                format!("FX: {}/{} on ({})", enabled, l.filter_stack.len(), last_name)
+            };
+
+            let desc = match &l.kind {
+                LayerKind::Raster(_) => {
+                    format!("Raster: \"{}\" | {}", l.name, fx_info)
+                }
+                LayerKind::Adjustment(adj) => match &adj.kind {
+                    AdjustmentKind::Curves(c) => {
+                        format!("Adj Curves: {} knots | {}", c.master.len(), fx_info)
+                    }
+                    AdjustmentKind::HueSaturation(hs) => {
+                        format!(
+                            "Adj HueSat: H:{:+}deg S:{:+}% L:{:+}% | {}",
+                            hs.hue_deg, hs.saturation_pct, hs.lightness_pct, fx_info
+                        )
+                    }
+                    _ => format!("Adj: \"{}\" | {}", l.name, fx_info),
+                },
+                LayerKind::Text(t) => {
+                    format!(
+                        "Text: \"{}\" ({:.0}px, #{:08x}) | {}",
+                        t.text, t.font_px, t.color, fx_info
+                    )
+                }
+                LayerKind::Group(_) => format!("Group: \"{}\" | {}", l.name, fx_info),
+            };
+            ui.set_text(self.inspector_label, &desc);
+        } else {
+            ui.set_text(self.inspector_label, "Inspector: None");
+        }
     }
 
     pub fn layer_count(&self) -> usize {
         self.doc.layers.len()
+    }
+
+    pub fn adj_layer_count(&self) -> usize {
+        self.doc
+            .layers
+            .iter()
+            .filter(|l| matches!(l.kind, LayerKind::Adjustment(_)))
+            .count()
+    }
+
+    pub fn text_layer_count(&self) -> usize {
+        self.doc
+            .layers
+            .iter()
+            .filter(|l| matches!(l.kind, LayerKind::Text(_)))
+            .count()
+    }
+
+    pub fn active_fx_count(&self) -> usize {
+        self.doc
+            .get_layer(self.active_layer_id)
+            .map(|l| l.filter_stack.len())
+            .unwrap_or(0)
+    }
+
+    pub fn active_fx_enabled(&self) -> bool {
+        self.doc
+            .get_layer(self.active_layer_id)
+            .map(|l| l.filter_stack.iter().any(|f| f.enabled))
+            .unwrap_or(false)
     }
 
     pub fn tool_name(&self) -> &'static str {
@@ -715,9 +877,7 @@ impl Batik {
 
     pub fn active_has_mask(&self) -> bool {
         if let Some(l) = self.doc.get_layer(self.active_layer_id) {
-            if let LayerKind::Raster(ref r) = l.kind {
-                return r.mask.is_some();
-            }
+            return l.mask().is_some();
         }
         false
     }
@@ -761,6 +921,55 @@ impl Batik {
     }
 
     pub fn handle_event(&mut self, ui: &mut Ui, event: &Event) -> bool {
+        if let Event::Key(k) = event {
+            if let Some(l) = self.doc.get_layer(self.active_layer_id) {
+                if let LayerKind::Text(ref text_layer) = l.kind {
+                    let old_text = text_layer.clone();
+                    let mut modified = false;
+                    let mut new_str = text_layer.text.clone();
+
+                    if k.code == 8 || k.code == 127 {
+                        // Backspace
+                        if !new_str.is_empty() {
+                            new_str.pop();
+                            modified = true;
+                        }
+                    } else if k.code == 13 || k.code == 10 {
+                        // Enter
+                        new_str.push('\n');
+                        modified = true;
+                    } else if let Some(ch) = k.text {
+                        if ch >= ' ' && !k.control {
+                            new_str.push(ch);
+                            modified = true;
+                        }
+                    }
+
+                    if modified {
+                        if self
+                            .doc
+                            .set_text_layer_content(self.active_layer_id, &new_str)
+                            .is_ok()
+                        {
+                            if let Some(new_l) = self.doc.get_layer(self.active_layer_id) {
+                                if let LayerKind::Text(ref updated) = new_l.kind {
+                                    self.history.push_action(HistoryAction::TextLayerChanged {
+                                        layer_id: self.active_layer_id,
+                                        old_text,
+                                        new_text: updated.clone(),
+                                    });
+                                    self.undo_actions += 1;
+                                }
+                            }
+                            self.refresh_canvas(ui);
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+
         let Event::Pointer(p) = event else {
             return false;
         };
@@ -1115,6 +1324,20 @@ impl Batik {
                 command = Some("batik.undo");
             } else if *id == self.btn_redo {
                 command = Some("batik.redo");
+            } else if *id == self.btn_adj_curves {
+                command = Some("batik.add-curves-adj");
+            } else if *id == self.btn_adj_huesat {
+                command = Some("batik.add-huesat-adj");
+            } else if *id == self.btn_text_layer {
+                command = Some("batik.add-text-layer");
+            } else if *id == self.btn_edit_text_style {
+                command = Some("batik.edit-text-style");
+            } else if *id == self.btn_push_fx_stack {
+                command = Some("batik.push-fx-stack");
+            } else if *id == self.btn_toggle_fx_stack {
+                command = Some("batik.toggle-fx-stack");
+            } else if *id == self.btn_clear_fx_stack {
+                command = Some("batik.clear-fx-stack");
             } else if let Some(&(_, color)) = self.swatches.iter().find(|(s_id, _)| s_id == id) {
                 self.current_color = color;
                 self.stroke_engine.brush.color = color;
@@ -1225,58 +1448,69 @@ impl Batik {
                 true
             }
             "batik.add-mask" => {
-                if let Some(l) = self.doc.get_layer_mut(self.active_layer_id) {
-                    if let LayerKind::Raster(ref mut raster) = l.kind {
-                        let old_mask = raster.mask.clone();
-                        if raster.add_mask(255).is_ok() {
-                            let new_mask = raster.mask.clone();
-                            self.history.push_action(HistoryAction::LayerMaskDelta {
-                                layer_id: self.active_layer_id,
-                                old_mask,
-                                new_mask,
-                            });
-                            self.undo_actions += 1;
-                            self.refresh_canvas(ui);
-                            return true;
-                        }
-                    }
+                let old_mask = self
+                    .doc
+                    .get_layer(self.active_layer_id)
+                    .and_then(|l| l.mask().map(|m| m.to_vec()));
+                if self.doc.add_layer_mask(self.active_layer_id, 255).is_ok() {
+                    let new_mask = self
+                        .doc
+                        .get_layer(self.active_layer_id)
+                        .and_then(|l| l.mask().map(|m| m.to_vec()));
+                    self.history.push_action(HistoryAction::LayerMaskDelta {
+                        layer_id: self.active_layer_id,
+                        old_mask,
+                        new_mask,
+                    });
+                    self.undo_actions += 1;
+                    self.refresh_canvas(ui);
+                    return true;
                 }
                 false
             }
             "batik.mask-from-sel" => {
-                if let Some(l) = self.doc.get_layer_mut(self.active_layer_id) {
-                    if let LayerKind::Raster(ref mut raster) = l.kind {
-                        let old_mask = raster.mask.clone();
-                        if raster.mask_from_selection(&self.selection).is_ok() {
-                            let new_mask = raster.mask.clone();
-                            self.history.push_action(HistoryAction::LayerMaskDelta {
-                                layer_id: self.active_layer_id,
-                                old_mask,
-                                new_mask,
-                            });
-                            self.undo_actions += 1;
-                            self.refresh_canvas(ui);
-                            return true;
-                        }
-                    }
+                let old_mask = self
+                    .doc
+                    .get_layer(self.active_layer_id)
+                    .and_then(|l| l.mask().map(|m| m.to_vec()));
+                if self
+                    .doc
+                    .apply_selection_to_mask(self.active_layer_id)
+                    .is_ok()
+                {
+                    let new_mask = self
+                        .doc
+                        .get_layer(self.active_layer_id)
+                        .and_then(|l| l.mask().map(|m| m.to_vec()));
+                    self.history.push_action(HistoryAction::LayerMaskDelta {
+                        layer_id: self.active_layer_id,
+                        old_mask,
+                        new_mask,
+                    });
+                    self.undo_actions += 1;
+                    self.refresh_canvas(ui);
+                    return true;
                 }
                 false
             }
             "batik.invert-mask" => {
-                if let Some(l) = self.doc.get_layer_mut(self.active_layer_id) {
-                    if let LayerKind::Raster(ref mut raster) = l.kind {
-                        let old_mask = raster.mask.clone();
-                        raster.invert_mask();
-                        let new_mask = raster.mask.clone();
-                        self.history.push_action(HistoryAction::LayerMaskDelta {
-                            layer_id: self.active_layer_id,
-                            old_mask,
-                            new_mask,
-                        });
-                        self.undo_actions += 1;
-                        self.refresh_canvas(ui);
-                        return true;
-                    }
+                let old_mask = self
+                    .doc
+                    .get_layer(self.active_layer_id)
+                    .and_then(|l| l.mask().map(|m| m.to_vec()));
+                if self.doc.invert_layer_mask(self.active_layer_id).is_ok() {
+                    let new_mask = self
+                        .doc
+                        .get_layer(self.active_layer_id)
+                        .and_then(|l| l.mask().map(|m| m.to_vec()));
+                    self.history.push_action(HistoryAction::LayerMaskDelta {
+                        layer_id: self.active_layer_id,
+                        old_mask,
+                        new_mask,
+                    });
+                    self.undo_actions += 1;
+                    self.refresh_canvas(ui);
+                    return true;
                 }
                 false
             }
@@ -1648,6 +1882,321 @@ impl Batik {
                         self.active_layer_id = self.doc.layers[pos + 1].id;
                         self.refresh_canvas(ui);
                         return true;
+                    }
+                }
+                false
+            }
+            "batik.add-curves-adj" => {
+                const CURVES_PRESETS: &[CurvesPreset] = &[
+                    CurvesPreset::SCurveContrast,
+                    CurvesPreset::LiftShadows,
+                    CurvesPreset::Solarize,
+                    CurvesPreset::WarmVintage,
+                    CurvesPreset::CoolCinema,
+                    CurvesPreset::Linear,
+                ];
+
+                let is_curves = if let Some(l) = self.doc.get_layer(self.active_layer_id) {
+                    matches!(&l.kind, LayerKind::Adjustment(adj) if matches!(adj.kind, AdjustmentKind::Curves(_)))
+                } else {
+                    false
+                };
+
+                if is_curves {
+                    let old_kind = if let Some(l) = self.doc.get_layer(self.active_layer_id) {
+                        if let LayerKind::Adjustment(ref adj) = l.kind {
+                            adj.kind.clone()
+                        } else {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    };
+
+                    self.curves_preset_idx = (self.curves_preset_idx + 1) % CURVES_PRESETS.len();
+                    let preset = CURVES_PRESETS[self.curves_preset_idx];
+                    let new_kind = AdjustmentKind::Curves(CurvesAdjustment::from_preset(preset));
+                    if self
+                        .doc
+                        .update_adjustment_layer(self.active_layer_id, new_kind.clone())
+                        .is_ok()
+                    {
+                        self.history.push_action(HistoryAction::AdjustmentLayerChanged {
+                            layer_id: self.active_layer_id,
+                            old_kind,
+                            new_kind,
+                        });
+                        self.undo_actions += 1;
+                        self.refresh_canvas(ui);
+                        return true;
+                    }
+                } else {
+                    self.curves_preset_idx = 0;
+                    let preset = CURVES_PRESETS[0];
+                    let name = format!("Curves {}", self.doc.layers.len() + 1);
+                    let id = self.doc.add_curves_preset_layer(&name, preset, 255);
+                    self.active_layer_id = id;
+                    if let Some(layer) = self.doc.get_layer(id) {
+                        self.history.push_action(HistoryAction::LayerAdded {
+                            layer: layer.clone(),
+                        });
+                        self.undo_actions += 1;
+                    }
+                    self.refresh_canvas(ui);
+                    return true;
+                }
+                false
+            }
+            "batik.add-huesat-adj" => {
+                const HUESAT_PRESETS: &[(i16, i16, i16)] = &[
+                    (60, 20, 0),
+                    (120, 0, 0),
+                    (0, -100, 0),
+                    (-60, 50, 10),
+                    (180, 0, 0),
+                    (0, 0, 0),
+                ];
+
+                let is_huesat = if let Some(l) = self.doc.get_layer(self.active_layer_id) {
+                    matches!(&l.kind, LayerKind::Adjustment(adj) if matches!(adj.kind, AdjustmentKind::HueSaturation(_)))
+                } else {
+                    false
+                };
+
+                if is_huesat {
+                    let old_kind = if let Some(l) = self.doc.get_layer(self.active_layer_id) {
+                        if let LayerKind::Adjustment(ref adj) = l.kind {
+                            adj.kind.clone()
+                        } else {
+                            return false;
+                        }
+                    } else {
+                        return false;
+                    };
+
+                    self.huesat_preset_idx = (self.huesat_preset_idx + 1) % HUESAT_PRESETS.len();
+                    let (h, s, l) = HUESAT_PRESETS[self.huesat_preset_idx];
+                    let new_kind = AdjustmentKind::HueSaturation(HueSatAdjustment::new(h, s, l));
+                    if self
+                        .doc
+                        .update_adjustment_layer(self.active_layer_id, new_kind.clone())
+                        .is_ok()
+                    {
+                        self.history.push_action(HistoryAction::AdjustmentLayerChanged {
+                            layer_id: self.active_layer_id,
+                            old_kind,
+                            new_kind,
+                        });
+                        self.undo_actions += 1;
+                        self.refresh_canvas(ui);
+                        return true;
+                    }
+                } else {
+                    self.huesat_preset_idx = 0;
+                    let (h, s, l) = HUESAT_PRESETS[0];
+                    let name = format!("Hue/Sat {}", self.doc.layers.len() + 1);
+                    let id = self.doc.add_hue_saturation_layer(&name, h, s, l, 255);
+                    self.active_layer_id = id;
+                    if let Some(layer) = self.doc.get_layer(id) {
+                        self.history.push_action(HistoryAction::LayerAdded {
+                            layer: layer.clone(),
+                        });
+                        self.undo_actions += 1;
+                    }
+                    self.refresh_canvas(ui);
+                    return true;
+                }
+                false
+            }
+            "batik.add-text-layer" => {
+                let name = format!("Text {}", self.doc.layers.len() + 1);
+                let text = "SexOS Batik";
+                let font_px = 24.0;
+                let color = if self.current_color != 0xFFFF_FFFF {
+                    self.current_color
+                } else {
+                    0xFF00_0000
+                };
+                let x = 24;
+                let y = 56;
+                if let Ok(id) = self.doc.add_text_layer(
+                    &name,
+                    text,
+                    x,
+                    y,
+                    font_px,
+                    color,
+                    BlendMode::Normal,
+                    255,
+                ) {
+                    self.active_layer_id = id;
+                    if let Some(layer) = self.doc.get_layer(id) {
+                        self.history.push_action(HistoryAction::LayerAdded {
+                            layer: layer.clone(),
+                        });
+                        self.undo_actions += 1;
+                    }
+                    self.refresh_canvas(ui);
+                    return true;
+                }
+                false
+            }
+            "batik.edit-text-style" => {
+                struct TextStylePreset {
+                    font_px: f32,
+                    bold: bool,
+                }
+
+                const TEXT_STYLES: &[TextStylePreset] = &[
+                    TextStylePreset {
+                        font_px: 28.0,
+                        bold: true,
+                    },
+                    TextStylePreset {
+                        font_px: 36.0,
+                        bold: false,
+                    },
+                    TextStylePreset {
+                        font_px: 20.0,
+                        bold: true,
+                    },
+                    TextStylePreset {
+                        font_px: 24.0,
+                        bold: false,
+                    },
+                ];
+
+                if let Some(l) = self.doc.get_layer(self.active_layer_id) {
+                    if let LayerKind::Text(ref text_layer) = l.kind {
+                        let old_text = text_layer.clone();
+                        self.text_style_idx = (self.text_style_idx + 1) % TEXT_STYLES.len();
+                        let st = &TEXT_STYLES[self.text_style_idx];
+                        let color = if self.current_color != 0xFFFF_FFFF {
+                            self.current_color
+                        } else {
+                            old_text.color
+                        };
+
+                        if self
+                            .doc
+                            .set_text_layer_style(
+                                self.active_layer_id,
+                                st.font_px,
+                                color,
+                                st.bold,
+                            )
+                            .is_ok()
+                        {
+                            if let Some(nl) = self.doc.get_layer(self.active_layer_id) {
+                                if let LayerKind::Text(ref new_t) = nl.kind {
+                                    self.history.push_action(HistoryAction::TextLayerChanged {
+                                        layer_id: self.active_layer_id,
+                                        old_text,
+                                        new_text: new_t.clone(),
+                                    });
+                                    self.undo_actions += 1;
+                                }
+                            }
+                            self.refresh_canvas(ui);
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            "batik.push-fx-stack" => {
+                let fx_specs = [
+                    FilterSpec::GaussianBlur { radius: 2 },
+                    FilterSpec::Sharpen { amount_pct: 100 },
+                    FilterSpec::Sepia { intensity_pct: 80 },
+                    FilterSpec::Emboss,
+                    FilterSpec::EdgeDetect,
+                    FilterSpec::Posterize { levels: 4 },
+                    FilterSpec::Invert,
+                    FilterSpec::HueSaturation {
+                        hue_deg: 90,
+                        saturation_pct: 20,
+                        lightness_pct: 0,
+                    },
+                ];
+
+                let spec = fx_specs[self.fx_spec_idx % fx_specs.len()].clone();
+                self.fx_spec_idx += 1;
+
+                let old_stack = self
+                    .doc
+                    .get_layer(self.active_layer_id)
+                    .map(|l| l.filter_stack.clone());
+                if let Some(old_stack) = old_stack {
+                    if self.doc.push_filter(self.active_layer_id, spec).is_ok() {
+                        if let Some(l) = self.doc.get_layer(self.active_layer_id) {
+                            self.history.push_action(HistoryAction::FilterStackChanged {
+                                layer_id: self.active_layer_id,
+                                old_stack,
+                                new_stack: l.filter_stack.clone(),
+                            });
+                            self.undo_actions += 1;
+                        }
+                        self.refresh_canvas(ui);
+                        return true;
+                    }
+                }
+                false
+            }
+            "batik.toggle-fx-stack" => {
+                let old_stack = self
+                    .doc
+                    .get_layer(self.active_layer_id)
+                    .map(|l| l.filter_stack.clone());
+                if let Some(old_stack) = old_stack {
+                    if !old_stack.is_empty() {
+                        let new_state = !old_stack.iter().any(|f| f.enabled);
+                        let mut ok = true;
+                        for idx in 0..old_stack.len() {
+                            if self
+                                .doc
+                                .set_filter_enabled(self.active_layer_id, idx, new_state)
+                                .is_err()
+                            {
+                                ok = false;
+                                break;
+                            }
+                        }
+                        if ok {
+                            if let Some(l) = self.doc.get_layer(self.active_layer_id) {
+                                self.history.push_action(HistoryAction::FilterStackChanged {
+                                    layer_id: self.active_layer_id,
+                                    old_stack,
+                                    new_stack: l.filter_stack.clone(),
+                                });
+                                self.undo_actions += 1;
+                            }
+                            self.refresh_canvas(ui);
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            "batik.clear-fx-stack" => {
+                let old_stack = self
+                    .doc
+                    .get_layer(self.active_layer_id)
+                    .map(|l| l.filter_stack.clone());
+                if let Some(old_stack) = old_stack {
+                    if !old_stack.is_empty() {
+                        if self.doc.clear_filter_stack(self.active_layer_id).is_ok() {
+                            if let Some(l) = self.doc.get_layer(self.active_layer_id) {
+                                self.history.push_action(HistoryAction::FilterStackChanged {
+                                    layer_id: self.active_layer_id,
+                                    old_stack,
+                                    new_stack: l.filter_stack.clone(),
+                                });
+                                self.undo_actions += 1;
+                            }
+                            self.refresh_canvas(ui);
+                            return true;
+                        }
                     }
                 }
                 false

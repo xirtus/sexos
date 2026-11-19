@@ -368,3 +368,24 @@ fn broker_step(b: &mut Broker, s: Subject, c: &mut clipboard_client::Client, now
     assert_eq!(b.history_len(), broker::HISTORY);
     assert_eq!(b.history_text(0), Some(format!("copy {}", broker::HISTORY + 1).as_bytes()));
 }
+#[test] fn a_program_copies_quil_pastes_it_and_it_goes_when_the_program_ends() {
+    const P: Subject = Subject { pd: 42, task: 420 };
+    let mut b = fresh();
+    publish(&mut b, Q, b"from quil", 1, true);
+    // A program has no document slot; Shell vouches for focus and use.
+    let p = b.publish_program(P, "für alle".as_bytes()).unwrap();
+    assert_eq!((p.owner, p.len), (P, "für alle".len()));
+    assert_eq!(b.current_text(), Some("für alle".as_bytes()));
+    assert_eq!(b.history_text(0), Some(&b"from quil"[..]));
+    assert_eq!(b.publish_program(Q, b"x"), Err(Status::Denied));
+    assert_eq!(b.publish_program(P, &[0xC3, 0x28]), Err(Status::Invalid));
+    assert_eq!(b.publish_program(P, b""), Err(Status::Invalid));
+    // Quil reads what the program copied.
+    let t = read(&mut b, Q3, 2); assert_eq!(read_all(&mut b, Q3, t, "für alle".len(), 2), "für alle".as_bytes());
+    receive(&mut b, Q3, Request::Finish { ticket: t, generation: p.generation, hash: hash("für alle".as_bytes()) }, 2).unwrap();
+    assert!(admitted(&mut b, 2).iter().any(|(s, r)| *s == Q3 && matches!(r, Response::Meta { status: Status::Ok, .. })));
+    // The program ends: its copy goes, the older one stays in the history.
+    assert!(b.retire(P));
+    assert_eq!(b.current_text(), None);
+    assert_eq!(b.history_text(0), Some(&b"from quil"[..]));
+}

@@ -20,12 +20,27 @@ pub enum Text {
     Char(char),
 }
 
+/// Program -> Shell: which keys this program wants besides the usual ones (arg0 =
+/// [`DESKTOP_KEYS`] | [`KEYPAD`]). Shell keeps it for this run of the program.
+pub const OP_KEYS: u64 = 0x62;
+/// Tab, backtick, F1-F10, F12, Scroll Lock and Insert reach the program while it has
+/// focus, instead of Shell. F11 and every Super chord stay Shell's.
+pub const DESKTOP_KEYS: u64 = 1;
+/// Numpad keys arrive with [`Key::keypad`] set, so they differ from the grey arrows,
+/// Home/End, Page Up/Down, Insert and Delete that share their codes.
+pub const KEYPAD: u64 = 2;
+
+/// `alt` is the left Alt key; the right one is AltGr and only changes what a key types.
+/// A key pressed with Alt types nothing ([`Key::char`]): it is a shortcut.
+/// `keypad`: the key is on the numpad (only for programs that asked for [`KEYPAD`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Key { pub code: u8, pub shift: bool, pub control: bool, pub text: Text }
+pub struct Key { pub code: u8, pub shift: bool, pub control: bool, pub alt: bool, pub keypad: bool, pub text: Text }
 impl Key {
-    pub const fn new(code: u8, shift: bool, control: bool) -> Self { Self { code, shift, control, text: Text::Us } }
+    pub const fn new(code: u8, shift: bool, control: bool) -> Self { Self { code, shift, control, alt: false, keypad: false, text: Text::Us } }
+    pub const fn with_alt(self, alt: bool) -> Self { Self { alt, ..self } }
+    pub const fn with_keypad(self, keypad: bool) -> Self { Self { keypad, ..self } }
     pub const fn wire(self) -> u64 {
-        let base = TAG | self.code as u64 | (self.shift as u64) << 8 | (self.control as u64) << 9;
+        let base = TAG | self.code as u64 | (self.shift as u64) << 8 | (self.control as u64) << 9 | (self.alt as u64) << 10 | (self.keypad as u64) << 11;
         match self.text {
             Text::Us => base,
             Text::Nothing => base | TEXT,
@@ -33,7 +48,7 @@ impl Key {
         }
     }
     pub fn decode(word: u64, down: u64, class: u64) -> Option<Self> {
-        if down != 1 || class != 1 || word & !(TAG | TEXT | 0x3ff | SCALAR_MASK << SCALAR_SHIFT) != 0 || word & TAG == 0 { return None; }
+        if down != 1 || class != 1 || word & !(TAG | TEXT | 0xfff | SCALAR_MASK << SCALAR_SHIFT) != 0 || word & TAG == 0 { return None; }
         let scalar = (word >> SCALAR_SHIFT) as u32;
         let text = match (word & TEXT != 0, scalar) {
             (false, 0) => Text::Us,
@@ -41,8 +56,14 @@ impl Key {
             (true, 0) => Text::Nothing,
             (true, s) => Text::Char(char::from_u32(s)?),
         };
-        let key = Self { code: word as u8, shift: word & 256 != 0, control: word & 512 != 0, text };
+        let key = Self { code: word as u8, shift: word & 256 != 0, control: word & 512 != 0, alt: word & 1024 != 0, keypad: word & 2048 != 0, text };
         (key.code != 0 && key.wire() == word).then_some(key)
+    }
+    /// A key going up: Shell sends the word of the press with `down` = 0 to the focused
+    /// program. [`Key::decode`] refuses it, so programs that ignore releases see nothing.
+    pub fn decode_release(word: u64, down: u64, class: u64) -> Option<Self> {
+        if down != 0 { return None; }
+        Self::decode(word, 1, class)
     }
     /// This key with what the layout typed; [`Text::Us`] when that is what a US
     /// keyboard types anyway.
@@ -52,6 +73,7 @@ impl Key {
     }
     /// The character to insert for this key, if any.
     pub fn char(self) -> Option<char> {
+        if self.alt { return None; }
         match self.text { Text::Us => us_char(self).map(|b| b as char), Text::Nothing => None, Text::Char(c) => Some(c) }
     }
 }
@@ -60,21 +82,25 @@ impl Key {
 pub fn us_char(key: Key) -> Option<u8> {
     let plain: &[u8; 58] = b"\0\x001234567890-=\0\0qwertyuiop[]\0\0asdfghjkl;'`\0\\zxcvbnm,./\0*\0 ";
     let upper: &[u8; 58] = b"\0\0!@#$%^&*()_+\0\0QWERTYUIOP{}\0\0ASDFGHJKL:\"~\0|ZXCVBNM<>?\0*\0 ";
-    if key.control { return None; }
+    if key.control || key.alt { return None; }
     let c = *if key.shift { upper } else { plain }.get(key.code as usize)?;
     (c != 0).then_some(c)
 }
 /// Hardware modifier ownership remains in Shell across focus changes. Both
 /// shifts/controls have separate state so releasing one preserves the other.
-pub struct Modifiers { left_shift: bool, right_shift: bool, left_control: bool, right_control: bool }
+pub struct Modifiers { left_shift: bool, right_shift: bool, left_control: bool, right_control: bool, alt: bool }
 impl Modifiers {
-    pub const fn new() -> Self { Self { left_shift:false, right_shift:false, left_control:false, right_control:false } }
+    pub const fn new() -> Self { Self { left_shift:false, right_shift:false, left_control:false, right_control:false, alt:false } }
     pub fn observe(&mut self, code:u8, value:u64) -> bool {
         if value > 1 { return false; }
-        let state = match code { 0x2a=>&mut self.left_shift, 0x36=>&mut self.right_shift, 0x1d=>&mut self.left_control, 0x61=>&mut self.right_control, _=>return false };
+        let state = match code { 0x2a=>&mut self.left_shift, 0x36=>&mut self.right_shift, 0x1d=>&mut self.left_control, 0x61=>&mut self.right_control, 0x38=>&mut self.alt, _=>return false };
         *state = value == 1; true
     }
-    pub const fn key(&self, code:u8) -> Key { Key::new(code, self.left_shift || self.right_shift, self.left_control || self.right_control) }
+    pub const fn key(&self, code:u8) -> Key { Key::new(code, self.left_shift || self.right_shift, self.left_control || self.right_control).with_alt(self.alt) }
+    /// For pointer events: [`crate::app_pointer::SHIFT`] | `CONTROL` | `ALT`.
+    pub const fn pointer(&self) -> u8 {
+        (self.left_shift || self.right_shift) as u8 | ((self.left_control || self.right_control) as u8) << 1 | (self.alt as u8) << 2
+    }
 }
 
 /// Media keys. On PS/2 they are E0 20 / E0 2E / E0 30, the same byte as D, C and B, and

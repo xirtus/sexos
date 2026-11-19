@@ -23,6 +23,10 @@ mod ipc {
     pub static BOOT_PHASE: AtomicU8 = AtomicU8::new(0);
 }
 
+#[path = "../kernel/src/capability_slot.rs"]
+#[allow(dead_code)]
+mod capability_slot;
+
 #[path = "../kernel/src/ipc/domain_registry.rs"]
 mod domain_registry;
 

@@ -147,11 +147,18 @@ impl Doc {
 
 /// One script of a page, ready to run.
 /// A script to run; `node` is its element, for `document.currentScript` (classic scripts only).
+/// Most bytecode the browser keeps for pages it may open again (GitHub's modules
+/// take about 10 MiB).
+const CODE_CACHE_BYTES: usize = 48 << 20;
+
 struct PageScript { source: String, name: String, module: bool, node: Option<usize>, external: bool }
 
 struct Browser {
     #[cfg(feature = "baseline-jit")]
     jit_enabled: bool,
+    /// Compiled scripts and modules, shared by every page and frame this session
+    /// (sex_js::CodeCache): a site's libraries are parsed once, not on each page.
+    code_cache: alloc::rc::Rc<core::cell::RefCell<sex_js::CodeCache>>,
     window: Window,
     /// Physical pixels within this window's held grant; never swapped into an iframe.
     surface: viewport::Surface,
@@ -679,6 +686,26 @@ impl Browser {
             self.scroll_to(frag);
             return;
         }
+        #[cfg(feature = "baseline-jit")]
+        if let Doc::Scripted(script) = &mut self.doc {
+            if let Ok([hits, misses, concat, compare]) = script.guest_fast_path_stats() {
+                sex_pdx::serial_record!("[web.object-cache.departure] hits={} misses={} concat={} compare={} url={}", hits, misses, concat, compare, self.url);
+            }
+            #[cfg(feature = "jit-profile")]
+            {
+                for (selector, calls, ns) in &script.page().query_profile {
+                    sex_pdx::serial_record!("[web.profile.query] calls={} elapsed_ns={} selector={:?}", calls, ns, selector);
+                }
+                let p = script.execution_profile();
+                let host_ns: u64 = p.host_ns.iter().copied().sum();
+                sex_pdx::serial_record!("[web.profile] vm_ns={} host_ns={} jit_ns={} jit_calls={} url={}", script.execution_ns(), host_ns, p.jit_ns, p.jit_calls, self.url);
+                for i in 0..128 {
+                    if p.calls[i] != 0 { sex_pdx::serial_record!("[web.profile.host] op={} calls={} elapsed_ns={}", i, p.calls[i], p.host_ns[i]); }
+                }
+            }
+            let s = script.jit_stats();
+            sex_pdx::serial_record!("[web.jit.departure] enabled={} compiled={} executed={} considered={} non_scalar={} cache_full={} unsupported={} hottest={} captured={} execution_ns={} url={}", self.jit_enabled as u8, s.compiled, s.executed, s.considered, s.non_scalar, s.cache_full, s.unsupported, s.hottest, s.compiled_captured, script.execution_ns(), self.url);
+        }
         if self.in_frame.is_none() { self.status = Some("Loading…"); }
         self.url = String::from(url);
         // Leaving the page stops its sound and pictures, and their downloads, and its
@@ -868,6 +895,7 @@ impl Browser {
     fn run_scripts(&mut self, scripts: Vec<PageScript>) {
         let Doc::Plain(mut doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock))) else { return };
         doc.import_map = core::mem::take(&mut self.import_map);
+        doc.code_cache = Some(self.code_cache.clone());
         if self.extensions.any() && self.url.starts_with("http") {
             doc.ext_key = self.extensions.key.clone();
             doc.ext_tab = self.ext_tab_json();
@@ -905,8 +933,14 @@ impl Browser {
         let _ = script.dispatch("ready");
         #[cfg(feature = "baseline-jit")]
         {
+            if let Ok([hits, misses, concat, compare]) = script.guest_fast_path_stats() {
+                sex_pdx::serial_record!("[web.object-cache] hits={} misses={} concat={} compare={}", hits, misses, concat, compare);
+            }
             let stats = script.jit_stats();
-            sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started);
+            if self.jit_enabled {
+                sex_pdx::serial_record!("[web.jit.admission] considered={} non_scalar={} cache_full={} unsupported={} hottest={} rejected_len={} prefix={:?}", stats.considered, stats.non_scalar, stats.cache_full, stats.unsupported, stats.hottest, stats.rejected_len, stats.rejected_prefix);
+            }
+            sex_pdx::serial_record!("[web.jit] enabled={} compiled={} executed={} bailouts={} refused={} ticks={} script_ticks={} native={} url={}", self.jit_enabled as u8, stats.compiled, stats.executed, stats.bailouts, stats.refused, sex_pdx::get_ticks() - started, sex_pdx::get_ticks() - scripts_started, Script::<Document>::NATIVE as u8, self.url);
         }
         self.script_scroll = 0;
         self.doc = Doc::Scripted(alloc::boxed::Box::new(script));
@@ -993,6 +1027,7 @@ impl Browser {
         sex_web::svg::draw_inline(&self.page, &doc.dom, &styles, &mut self.fonts);
         doc.set_boxes(&self.page.boxes);
         doc.set_layers(&self.page.layers);
+        doc.set_pointer_styles(&styles);
         if self.in_frame.is_none() { self.frames_check = true; }
         self.scroll = self.scroll.min(self.max_scroll());
         if self.focus.map_or(false, |f| f >= self.page.links.len()) { self.focus = None; }
@@ -1632,9 +1667,9 @@ impl Browser {
         let (px, py) = (x, y + self.scroll);
         // Over a frame: the frame's page has the pointer, in its own coordinates.
         if y >= 0 && self.in_frame.is_none() {
-            if let Some(i) = self.frames.iter().position(|f| px >= f.rect[0] && px < f.rect[0] + f.rect[2] && py >= f.rect[1] && py < f.rect[1] + f.rect[3]) {
+            if let Some(i) = self.frames.iter().position(|f| self.doc.get().accepts_pointer(f.node) && px >= f.rect[0] && px < f.rect[0] + f.rect[2] && py >= f.rect[1] && py < f.rect[1] + f.rect[3]) {
                 let [fx, fy, _, _] = self.frames[i].rect;
-                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind };
+                let q = sex_pdx::app_pointer::Pointer { x: (px - fx) as i16, y: (py - fy + BAR) as i16, buttons: p.buttons, kind: p.kind, mods: p.mods };
                 self.enter(i);
                 self.pointer(q);
                 self.leave(i);
@@ -1642,7 +1677,7 @@ impl Browser {
             }
         }
         // Links are named by node: a script's relayout rebuilds the list.
-        let link = if y >= 0 { self.page.links.iter().find(|l| px >= l.x && px < l.x + l.w && py >= l.y && py < l.y + l.h).map(|l| l.node) } else { None };
+        let link = if y >= 0 { self.doc.get().pointer_link_at(px, py, &self.page.links) } else { None };
         if let (Kind::Down { button: 1 }, Some(n), None) = (p.kind, link, self.in_frame) {
             let href = self.page.links.iter().find(|l| l.node == n).map(|l| l.href.clone()).unwrap_or_default();
             if let Some(t) = (!href.starts_with("javascript:") && !href.is_empty()).then(|| sex_html::url::resolve(&self.url, &href)).flatten() {
@@ -1797,7 +1832,7 @@ pub extern "C" fn _start() -> ! {
     let view = surface.document(BAR);
     let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
         shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None };
@@ -1850,7 +1885,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 b.pointer(p);
             }
-            Event::Drop { .. } | Event::DragEnded { .. } => {}
+            Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_) => {}
         }
     }
 }

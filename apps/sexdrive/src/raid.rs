@@ -13,7 +13,7 @@
 //! queue, reads through the same bounce lease as the first drive.
 
 use sex_imsm::{Metadata, Volume, SECTOR, TAIL_SECTORS};
-use sex_pdx::{serial_println, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE, BLOCK_MAX_RUN};
+use sex_pdx::{serial_println, BLOCK_ERR_BAD_LEN, BLOCK_ERR_NO_DEVICE, BLOCK_CMD_RUN};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum State { Plain, Member, Serving }
@@ -147,7 +147,7 @@ fn trim(serial: &[u8; 20]) -> &[u8] {
 /// Read volume sectors into `dst_va`, strip by strip.
 pub fn read(offset: u64, size: u64, dst_va: u64) -> u64 {
     let sector = SECTOR as u64;
-    if size == 0 || size > BLOCK_MAX_RUN || offset % sector != 0 || size % sector != 0 || dst_va == 0 || dst_va == u64::MAX {
+    if size == 0 || size > BLOCK_CMD_RUN || offset % sector != 0 || size % sector != 0 || dst_va == 0 || dst_va == u64::MAX {
         return BLOCK_ERR_BAD_LEN;
     }
     let (volume, present, slot_drive) = unsafe { (VOLUME, PRESENT, SLOT_DRIVE) };
@@ -328,7 +328,7 @@ impl Controller {
     pub fn read(&mut self, offset: u64, size: u64, dst_va: u64) -> u64 {
         let sector = SECTOR as u64;
         if !self.ready { return BLOCK_ERR_NO_DEVICE; }
-        if size == 0 || size > BLOCK_MAX_RUN || offset % sector != 0 || size % sector != 0 { return BLOCK_ERR_BAD_LEN; }
+        if size == 0 || size > BLOCK_CMD_RUN || offset % sector != 0 || size % sector != 0 { return BLOCK_ERR_BAD_LEN; }
         let cid = self.cid; self.cid = self.cid.wrapping_add(1) | CID_BASE;
         let Some(mut transfer) = super::prepare_bounce(false, cid) else { return BLOCK_ERR_NO_DEVICE };
         if transfer.buffer.length < size { return BLOCK_ERR_NO_DEVICE; }

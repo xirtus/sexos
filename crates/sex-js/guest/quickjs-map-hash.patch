@@ -1,0 +1,40 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -48856,7 +48856,20 @@
+     return safe_const(map_normalize_key(ctx, unsafe_unconst(key)));
+ }
+ 
+-/* XXX: better hash ? */
++/* SexOS: finish every key hash with a full avalanche. The raw values below keep
++   their low bits zero for small integers (the low word of the double is zero) and
++   for heap pointers (8-byte aligned), and buckets are chosen by the low bits, so
++   Maps keyed by node ids or objects collapsed into a few long chains. */
++static inline uint32_t map_hash_mix(uint32_t h)
++{
++    h ^= h >> 16;
++    h *= 0x7feb352d;
++    h ^= h >> 15;
++    h *= 0x846ca68b;
++    h ^= h >> 16;
++    return h;
++}
++
+ static uint32_t map_hash_key(JSContext *ctx, JSValueConst key)
+ {
+     uint32_t tag = JS_VALUE_GET_NORM_TAG(key);
+@@ -48894,13 +48907,13 @@
+     hash_float64:
+         u.d = d;
+         h = (u.u32[0] ^ u.u32[1]) * 3163;
+-        return h ^= JS_TAG_FLOAT64;
++        return map_hash_mix(h ^ JS_TAG_FLOAT64);
+     default:
+         h = 0;
+         break;
+     }
+     h ^= tag;
+-    return h;
++    return map_hash_mix(h);
+ }
+ 
+ static JSMapRecord *map_find_record(JSContext *ctx, JSMapState *s,

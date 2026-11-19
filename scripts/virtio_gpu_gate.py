@@ -72,9 +72,11 @@ def main():
   time.sleep(3)
   first=shot('desktop.ppm')
   if first[:2]!=(w,h):raise RuntimeError(f'host resource {first[:2]} != {(w,h)}')
-  # The bar, the blue launcher square and the red close light of the first window.
-  checks={'bar':(px(first,300,14),(37,42,63)),'launcher':(px(first,19,14),(87,158,205)),'close':(px(first,20,49),(230,68,68))}
+  # The bar, the rose-gold lips of the launcher button and the red close light of the first window.
+  checks={'bar':(px(first,300,14),(37,42,63)),'close':(px(first,20,49),(230,68,68))}
   bad={k:v for k,v in checks.items() if not near(*v)}
+  lips=px(first,19,14)
+  if not(lips[0]>lips[1]>lips[2] and lips[0]-lips[2]>=20):bad['launcher']=(lips,'rose-gold lips')
   if bad:raise RuntimeError(f'desktop not on the GPU resource: {bad}')
   # Slow runners may still be settling input; keep moving for up to 60 s.
   changed=0;deadline=time.monotonic()+60;step=0

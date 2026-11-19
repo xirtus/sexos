@@ -87,6 +87,9 @@ impl Default for Window {
     }
 }
 
+/// The kernel's last refusal of a growth (FULL, DENIED...), for the failure record.
+static REFUSED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
 /// Asks for `pages` in calls the kernel accepts. Returns the run's memory after the
 /// last call that succeeded, or None if not one did.
 fn ask(pages: u64) -> Option<memory::Memory> {
@@ -94,7 +97,7 @@ fn ask(pages: u64) -> Option<memory::Memory> {
     let mut last = None;
     while left > 0 {
         let n = left.min(memory::MAX_PAGES_PER_CALL);
-        match memory::grow(n) { Ok(m) => last = Some(m), Err(_) => break }
+        match memory::grow(n) { Ok(m) => last = Some(m), Err(e) => { REFUSED.store(e, Ordering::Relaxed); break } }
         left -= n;
     }
     last
@@ -116,7 +119,7 @@ impl Limit {
         let mut last = None;
         while left > 0 {
             let n = left.min(memory::MAX_PAGES_PER_CALL);
-            let got = match memory::grow(n) { Ok(m) => m, Err(_) => break };
+            let got = match memory::grow(n) { Ok(m) => m, Err(e) => { REFUSED.store(e, Ordering::Relaxed); break } };
             let next = self.pages.checked_add(n)?;
             if got.base != self.base || got.pages != next || next > self.max_pages
                 || got.base.checked_add(got.pages.checked_mul(memory::PAGE)?).is_none() {
@@ -144,7 +147,14 @@ unsafe impl talc::source::Source for Window {
         let got = match talc.source.limit.as_mut() {
             Some(limit) => limit.ask(need.max(STEP_PAGES)).or_else(|| limit.ask(need)),
             None => ask(need.max(STEP_PAGES)).or_else(|| ask(need)),
-        }.ok_or(())?;
+        };
+        let Some(got) = got else {
+            // Why the window said no, once, for whoever reads the serial record. The
+            // line is formatted on the stack: the heap is the thing that just failed.
+            let why = REFUSED.load(Ordering::Relaxed);
+            sex_pdx::serial_record!("[app.heap.refused] bytes={} pages={} held={} status={}", layout.size(), need, held(), why);
+            return Err(());
+        };
         let end = got
             .base
             .checked_add(got.pages.checked_mul(memory::PAGE).ok_or(())?)

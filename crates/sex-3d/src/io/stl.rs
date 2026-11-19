@@ -49,7 +49,7 @@ pub fn import_into(scene: &mut Scene, bytes: &[u8]) -> Result<Vec<usize>, IoErro
 
 fn read_binary(b: &[u8]) -> (String, Mesh) {
     let n = u32::from_le_bytes([b[80], b[81], b[82], b[83]]) as usize;
-    let mut m = Mesh { positions: Vec::with_capacity(n * 3), faces: Vec::with_capacity(n), loose_edges: Vec::new() };
+    let mut m = Mesh { positions: Vec::with_capacity(n * 3), faces: Vec::with_capacity(n), ..Default::default() };
     let f = |o: usize| f32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
     for t in 0..n {
         let base = 84 + 50 * t + 12; // skip the stored normal

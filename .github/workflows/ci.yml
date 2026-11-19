@@ -1,8 +1,20 @@
 name: Rust CI
 
 # Gates run as parallel jobs. Each job sets up from shared caches (rustup,
-# cargo + target, FFmpeg, libc++); jobs that boot SexOS build their own ISO,
-# so no job waits on another. Every gate of the former single job still runs.
+# cargo + target, FFmpeg, libc++). The `image` job builds the default image once
+# (the mandatory entrypoint gate) and the jobs that test that image unpack it
+# (.github/actions/image); the `crash` job builds the crash-probe image once for
+# itself and the leak gate. Only jobs with their own build flags (profiles,
+# recording, input proof) build again. Every gate of the former single job still runs.
+#
+# How much runs (scripts/ci_scope.sh, job `changes`):
+#   pull request touching code, nightly, manual run: every gate (~600 job-minutes
+#     before this split; see the PR that added it for the new figure)
+#   push to master: build and boot the image once and refresh the cargo cache;
+#     its pull request already passed every gate, and the nightly run catches two
+#     green PRs that break each other
+#   pull request touching only documents nothing reads: the root allowlist
+# Skipped jobs count as passing in `build` only when the scope says so.
 
 on:
   push:
@@ -10,20 +22,50 @@ on:
   pull_request:
     branches: [ master ]
   merge_group:
+  schedule:
+  # Every gate on master once a day (09:17 UTC).
+  - cron: '17 9 * * *'
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Per event: the nightly run is not replaced by, and does not replace, a push.
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  changes:
+    name: What this change needs
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      scope: ${{ steps.scope.outputs.scope }}
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        # A pull request's merge commit and its base (first parent).
+        fetch-depth: 2
+    - id: scope
+      run: |
+        scope="$(bash scripts/ci_scope.sh "${{ github.event_name }}")"
+        echo "scope=$scope" >> "$GITHUB_OUTPUT"
+        echo "CI scope: **$scope**" >> "$GITHUB_STEP_SUMMARY"
+    - name: Enforce root allowlist (documents-only changes)
+      if: steps.scope.outputs.scope == 'docs'
+      run: bash scripts/dev/check_root_allowlist.sh --strict
+
   host:
     name: Host regressions
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
+    # Runs on the self-hosted Mac (x86_64 container under Rosetta, tools/ci/mac-runner)
+    # when the repo variable SEXOS_MAC_RUNNER is 'on', never for pull requests from forks.
+    runs-on: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","sexos-mac"]') || 'ubuntu-latest' }}
+    # 23-35 min warm; a cold cargo cache (after a red master) or a slow apt mirror
+    # needs more. Rosetta on the Mac is slower.
+    timeout-minutes: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 120 || 60 }}
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -37,14 +79,32 @@ jobs:
       run: bash scripts/volumes_host_gate.sh
     - name: IOMMU tables, page tables and lending window on the host
       run: bash scripts/iommu_host_gate.sh
+    - name: IPC v2 endpoints, reply capabilities and notifications on the host
+      run: bash scripts/ipc_v2_host_gate.sh
     - name: Display model (KMS, EDID) and Intel Gen12 display engine on the host
       run: bash scripts/kms_host_gate.sh
+    - name: NVIDIA GSP-RM boot (GA104 firmware, VBIOS/FWSEC, WPR2 layout, RPC queues, simulated GPU) on the host
+      run: bash scripts/nvidia_gsp_host_gate.sh
     - name: sexdrive DMA lifetime and zero-copy reads on the host
       run: bash scripts/sexdrive_dma_host_gate.sh
     - name: Intel RAID (IMSM metadata, VMD bus) on the host
       run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
+    - name: Rounded window corners and soft shadows (Display decoration pass) on the host
+      run: bash scripts/display_decor_host_gate.sh
+    - name: Deadline scheduling class (earliest first, share of each window) on the host
+      run: bash scripts/scheduler_deadline_host_gate.sh
+    - name: Velvet game rules and Weft input integration
+      run: cargo test --locked -p velvet --no-default-features
+    - name: Moan Weft app and project editing
+      run: cargo test --locked -p moan --no-default-features
+    - name: Moan plugin hosts (CLAP, VST3, LADSPA, LV2) and open plugins rebuilt for SexOS
+      run: MOAN_OPEN_PLUGINS_REQUIRED=1 cargo test --locked -p moan-plugin
+    - name: Moan native FFmpeg WAV, FLAC and Shine MP3 export oracle
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+        bash scripts/moan_export_host_gate.sh
     - name: Moan timeline, edits and mixer on the host
       run: bash scripts/moan_host_gate.sh
     - name: Bell sound rate conversion on the host
@@ -61,12 +121,22 @@ jobs:
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
       run: cargo test --locked -p sex-html
+    - name: Leather SDK sample models and real Weft widgets
+      run: cargo test --locked -p leather-samples --no-default-features
+    - name: Live autofill capability broker and SDK (host transport)
+      run: bash scripts/autofill_host_gate.sh
+    - name: Chastity encrypted vault and Weft UI
+      run: bash scripts/chastity_host_gate.sh
     - name: Shields ad and tracker filters (Kaleidoscope, Qupid)
       run: cargo test --locked -p sex-shields
     - name: Browser extensions (manifests, match patterns, CRX/ZIP, declarativeNetRequest)
       run: cargo test --locked -p sex-extensions
     - name: Settings schema, file format, protocol and the Settings program's pages
       run: bash scripts/settings_host_gate.sh
+    - name: egui backend (input mapping, CPU rasterizer, whole frames of the egui demo)
+      run: cargo test --locked -p sex-egui
+    - name: Weft toolkit and Abacus (layout, input, menus, palette, dialogs, tabs, accessibility)
+      run: cargo test --locked -p weft --features color-emoji && cargo test --locked -p abacus --no-default-features
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Spreadeagle workbook engine and office painting (host)
@@ -75,18 +145,22 @@ jobs:
       run: cargo test --locked -p sex-disk --lib
     - name: Keyboard layouts, dead keys and Compose
       run: cargo test --locked -p sex-keymap
-    - name: Fallback fonts reach Cyrillic, Greek, CJK, emoji and symbols
-      run: cargo test --locked -p sex-font --test fallback
+    - name: Fonts (fallbacks, colour emoji, bold and italic, hinting, darkening, gamma), icon set and theme tokens
+      run: cargo test --locked -p sex-font -p sex-icons -p sex-theme && python3 scripts/brand/icons.py --check
     - name: Shaping (rustybuzz vs hb-shape), Arabic joining and bidi
       run: cargo test --locked -p sex-shape --features shaping
     - name: Shuttle userspace font fallback, RTL/BiDi shaping and font picker on the host
       run: bash scripts/shuttle_host_gate.sh
+    - name: PKU gate stubs (kernel study Phase 6) built and run under real protection keys on the host
+      run: cargo test --locked -p sex-gate -- --nocapture
     - name: Loom engines (batch rename, duplicates, usage map, tags, compare) on the host
       run: cargo test --locked -p loom-core
     - name: Vellum annotations, forms and incremental PDF saves on the host
       run: cargo test --locked -p vellum-edit
     - name: Gaze decoders (EXIF orientation, JPEG XL, SVG, RAW previews) on the host
       run: cargo test --locked -p gaze-codecs --all-features
+    - name: Vellum app (annotation geometry, form order, thumbnails) on the host
+      run: cargo test --locked -p pdf
     - name: Image codecs (WebP, animated GIF, AVIF, HEIC, 4-quadrant fidelity, 50k fuzzer) on the host
       run: bash scripts/sex_codecs_host_gate.sh
     - name: Aftercare backups (dedup, encryption, restore, prune, check) on the host
@@ -96,15 +170,24 @@ jobs:
     - name: Loom archives (zip, tar, 7z, gz, zst, xz) with Python interop on the host
       run: cargo test --locked -p sex-archive --features std
     - name: Polyamour 3D core (meshes, modifiers, booleans, path tracer, glTF/OBJ/STL/PLY/.blend, polyops + Python API)
-      run: cargo test --locked --release -p sex-3d
+      run: bash scripts/polyamour/check_wasm_guest.sh && cargo test --locked --release -p sex-3d -p polyamour -p polyamour-sdk -p polyamour-wasm
     - name: Burlesque presentations engine (PPTX, ODP, presenter view, PDF export) on the host
       run: bash scripts/burlesque_host_gate.sh
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport
+      run: |
+        cargo test --locked -p sex-speech
+        cargo test --locked -p sex-pdx --test speech_voice
+        cargo test --locked -p sex-pdx --test a11y
     - name: Denim page compression (compressed RAM codec)
       run: cargo test --locked -p denim
+    - name: SNTP client codec (network time)
+      run: cargo test --locked -p sex-ntp
     - name: Splicy editing core (timeline, edit by transcript, suggestions, render plan, OTIO)
       run: cargo test --locked -p sex-splice
+    - name: Splicy window (delete a sentence on screen, its frames and sound are gone)
+      run: bash scripts/splicy_host_gate.sh
     - name: Splicy export (WebM VP9+Opus, MP4 H.264+AAC, MP4 AV1+Opus) through system FFmpeg
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev
@@ -123,6 +206,8 @@ jobs:
       run: cargo test --locked --release -p sexfs --features repair --lib
     - name: Corset disks, GPT editor, FAT32/exFAT/SexFS formatters, SMART and BDSM encryption on the host
       run: bash scripts/corset_host_gate.sh
+    - name: Corset plans (step sentences, typed-name confirmation, re-read before apply, write order) on the host
+      run: cargo test --locked -p corset --lib
     - name: Network stack (IPv6 resolvers, accept backlog, UDP queues) on the host
       run: cargo test --locked -p sex-net --lib
     - name: HTTP/2 client (HPACK, 50 streams) against a real h2 server, plain and over TLS
@@ -137,6 +222,21 @@ jobs:
         sudo usermod -p '*' "$USER"
         cargo test --locked -p sex-wg
         cargo test --locked -p sex-ssh
+    - name: Loom network places (SFTP via real OpenSSH, WebDAV, S3 with SigV4) on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server openssh-sftp-server
+        sudo usermod -p '*' "$USER"
+        cargo test --locked -p loom-remote
+    - name: Disk and CD images (ISO/UDF/qcow2/VHD/VHDX/VMDK, partitions) on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends xorriso genisoimage udftools qemu-utils gdisk fdisk dosfstools e2fsprogs
+        cargo test --locked -p sex-diskimage
+    - name: BitTorrent engine (sex-torrent) goldens and protocol tests on the host
+      run: cargo test --locked -p sex-torrent
+    - name: Swingers downloads from and seeds to aria2 on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2 transmission-cli
+        bash scripts/swingers_host_gate.sh
     - name: Needle printing and scanning protocols (IPP, PWG raster, DNS-SD, eSCL goldens)
       run: |
         cargo test --locked -p sex-print
@@ -178,8 +278,10 @@ jobs:
       run: bash scripts/batik_host_gate.sh
     - name: Power off and restart through ACPI (host half)
       run: bash scripts/power_host_gate.sh
-    - name: Drag VM ABI layouts and VMX/EPT encodings (host half)
-      run: bash scripts/drag_host_gate.sh
+    - name: Drag VM ABI layouts and VMX/EPT encodings (host half), Crossdress cell on KVM when the runner has it
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        bash scripts/drag_host_gate.sh
     - name: Laptop power model (embedded controller, battery, backlight, thermal, _CRS)
       run: cargo test --locked -p sex-laptop
     - name: Touchpad model (I2C HID, report descriptors, contacts, gestures)
@@ -189,8 +291,12 @@ jobs:
 
   truth:
     name: Host kernel-model regressions (${{ matrix.shard }}/3)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
+    # Runs on the self-hosted Mac (x86_64 container under Rosetta, tools/ci/mac-runner)
+    # when the repo variable SEXOS_MAC_RUNNER is 'on', never for pull requests from forks.
+    runs-on: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && fromJSON('["self-hosted","sexos-mac"]') || 'ubuntu-latest' }}
+    timeout-minutes: ${{ (vars.SEXOS_MAC_RUNNER == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)) && 60 || 30 }}
     strategy:
       fail-fast: false
       matrix:
@@ -210,10 +316,15 @@ jobs:
         path: ${{ runner.temp }}/sexos-truth
         if-no-files-found: ignore
 
-  boot:
-    name: Build, boot and runtime gates
+  image:
+    name: Build and boot the image once (mandatory entrypoint)
+    needs: changes
+    if: needs.changes.outputs.scope != 'docs'
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 60
+    outputs:
+      # The jobs that test this image run only when every gate runs.
+      full: ${{ needs.changes.outputs.scope == 'full' }}
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -221,6 +332,39 @@ jobs:
         save-cache: "true"
     - name: Build and boot via single entrypoint (mandatory)
       run: GATE_DIR="$RUNNER_TEMP/sexos-runtime" bash scripts/master_runtime_gate.sh --probe 60 --keep-log
+    - name: Pack the image for the gate jobs
+      run: |
+        mkdir -p "$RUNNER_TEMP/sexos-image"
+        bash scripts/ci_image_pack.sh "$RUNNER_TEMP/sexos-image/image.tar.zst"
+        tar -I 'zstd -T0 -3' -cf "$RUNNER_TEMP/sexos-image/runtime.tar.zst" -C "$RUNNER_TEMP/sexos-runtime" .
+    - uses: actions/upload-artifact@v4
+      with:
+        name: sexos-image
+        path: ${{ runner.temp }}/sexos-image
+        compression-level: 0
+        retention-days: 2
+    - name: Preserve the entrypoint gate's evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-entrypoint-proof
+        path: ${{ runner.temp }}/sexos-runtime
+        if-no-files-found: ignore
+
+  boot:
+    name: Boot and runtime gates
+    runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
+    # Screenshot gates below (desktop capture and later) read pixels with PIL; it
+    # used to arrive with the browser steps that moved to the web job.
+    - name: Install image tools for gates
+      run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
     - name: Boots to the desktop with 1, 2, 4 and 32 GiB of RAM
       run: python3 scripts/ram_sizes_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/ram-sizes"
     - name: Compiled scheduler stack-release boundary
@@ -235,23 +379,94 @@ jobs:
       run: MEMORY_AUTHORITY_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/memory_authority_runtime_gate.sh
     - name: Guest sext paging and fault recovery
       run: PAGING_LOG="$RUNNER_TEMP/sexos-runtime/serial.log" bash scripts/paging_recovery_runtime_gate.sh
+    - name: Cufflinks (Bluetooth) starts and sleeps without a controller
+      run: python3 scripts/cufflinks_idle_gate.py --log "$RUNNER_TEMP/sexos-runtime/serial.log"
     - name: Ordinary Rust and C programs
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
+    - name: Programs keep their own SSE and AVX registers (XSAVE)
+      run: |
+        python3 scripts/program_fpu_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/fpu"
+        python3 scripts/program_avx_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/avx"
+    - name: IPC round trip and null call, 1 and 4 cores (bench)
+      run: |
+        SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/program_bench_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bench-1"
+        SEXOS_GATE_CORES=4 SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/program_bench_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/bench-4"
+        grep -ahE '\[bench\] name=(null_syscall|ipc_roundtrip)' "$RUNNER_TEMP"/sexos-runtime/bench-*/* 2>/dev/null || true
+    - name: IPC v2 endpoints and notifications on a booted system, 1 and 4 cores (bench ipc2)
+      run: |
+        SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/ipc_v2_runtime_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipc2-1"
+        SEXOS_GATE_CORES=4 SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/ipc_v2_runtime_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipc2-4"
+    - name: Boot time to the desktop (3 cold boots, #309)
+      run: python3 scripts/boot_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/boot-time"
+    - name: Big programs start time (#305)
+      run: python3 scripts/program_start_gate.py --programs spreadeagle,kaleidoscope,assuit --runs 2 --max-ms 60000 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/big-starts"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
       run: python3 scripts/program_ipv6_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipv6"
+    - name: Network time (a clock starting in 2024 comes right by SNTP)
+      run: python3 scripts/network_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/network-time"
     - name: ssh program logs in to OpenSSH on the host
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-server
         sudo usermod -p '*' "$USER"
         python3 scripts/ssh_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ssh"
+    - name: Swingers downloads a torrent from aria2 on the host
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends aria2
+        python3 scripts/swingers_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/swingers"
     - name: Lurk views a host VNC server and sends it keys
       run: python3 scripts/lurk_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lurk"
     - name: Needle prints to a fake IPP Everywhere printer and scans from a fake eSCL scanner
       run: python3 scripts/needle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/needle"
+    - name: Native screenshot saved as a real PNG file
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/capture-source.img"
+        python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
+    - name: USB input paths
+      run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: PKU gate cost on the runner's CPU (kernel study Phase 6; host Linux, informational)
+      run: |
+        cc -O2 -Wall -o "$RUNNER_TEMP/pku_gate_bench" tools/pku-gate-bench/pku_gate_bench.c
+        "$RUNNER_TEMP/pku_gate_bench"
+    - name: Kernel cycles on KVM, real CPU (kernel study Phase 0; 1 core with and without PKU, 4 cores; median of 3)
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        if [ ! -w /dev/kvm ]; then echo "[bench.kvm] no usable /dev/kvm on this runner; skipped"; exit 0; fi
+        grep -m1 'model name' /proc/cpuinfo; grep -qw pku /proc/cpuinfo && echo "[bench.kvm] host pku=yes" || echo "[bench.kvm] host pku=no"
+        # The real CPU's XSAVE path (XSAVEC, AVX-512 where the host has it): YMM state kept
+        # by two copies on one core and four copies across four cores.
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host python3 scripts/program_avx_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/avx-kvm-1"
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/program_avx_gate.py --copies 4 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/avx-kvm-4"
+        out="$RUNNER_TEMP/sexos-runtime/kvm-bench"
+        for run in 1 2 3; do
+          python3 scripts/program_bench_gate.py --accel kvm --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/1core-pku-$run"
+          python3 scripts/program_bench_gate.py --accel kvm --no-pku --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/1core-nopku-$run"
+          SEXOS_GATE_CORES=4 python3 scripts/program_bench_gate.py --accel kvm --no-pku --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/4core-nopku-$run"
+        done
+        python3 scripts/bench_median.py "$out"
+    - name: Preserve runtime evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-runtime-proof
+        path: |
+          ${{ runner.temp }}/sexos-runtime
+          ${{ runner.temp }}/sexos-usb
+        if-no-files-found: ignore
+
+  web:
+    name: Browser gates
+    runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
     - name: Web page JavaScript (native QuickJS tier)
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
@@ -259,6 +474,8 @@ jobs:
         python3 scripts/program_web_js_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-js"
     - name: Actual Web maximize and restore with full viewport pixels
       run: python3 scripts/program_web_viewport_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-viewport"
+    - name: Browser pointer input through decorative overlays
+      run: python3 scripts/program_web_pointer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-webjs.img" --out "$RUNNER_TEMP/sexos-runtime/web-pointer"
     - name: Classic script resources and fetch CORS isolation
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-classic.img"
@@ -283,67 +500,24 @@ jobs:
       run: python3 scripts/program_web_extensions_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-extensions"
     - name: Browser site suite (encyclopedia, news, links, GitHub, webmail sign-in)
       run: python3 scripts/browser_sites_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sites"
-    - name: Native screenshot saved as a real PNG file
-      run: |
-        truncate -s 1G "$RUNNER_TEMP/capture-source.img"
-        python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
-    - name: Settings last across a restart
-      run: |
-        truncate -s 1G "$RUNNER_TEMP/settings-source.img"
-        python3 scripts/settings_persist_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/settings-source.img" --out "$RUNNER_TEMP/sexos-runtime/settings"
-    - name: Alt+Tab window switcher with live thumbnails
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/switcher-source.img"
-        python3 scripts/window_switcher_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/switcher-source.img" --out "$RUNNER_TEMP/sexos-runtime/switcher"
-    - name: Clipboard history on Super+V
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/cliphist-source.img"
-        python3 scripts/clipboard_history_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/cliphist-source.img" --out "$RUNNER_TEMP/sexos-runtime/clipboard-history"
-    - name: Screenshot UI on Print
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/screenshot-source.img"
-        python3 scripts/screenshot_ui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/screenshot-source.img" --out "$RUNNER_TEMP/sexos-runtime/screenshot-ui"
-    - name: Panel tray and calendar
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/tray-source.img"
-        python3 scripts/tray_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-source.img" --out "$RUNNER_TEMP/sexos-runtime/tray"
-    - name: Window animations
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/motion-source.img"
-        python3 scripts/window_motion_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/motion-source.img" --out "$RUNNER_TEMP/sexos-runtime/motion"
-    - name: Programs starting programs
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/launch-source.img"
-        python3 scripts/shuttle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/launch-source.img" --out "$RUNNER_TEMP/sexos-runtime/launch"
-    - name: Session restore across a restart
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/session-source.img"
-        python3 scripts/session_restore_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/session-source.img" --out "$RUNNER_TEMP/sexos-runtime/session"
-    - name: Drag and drop between programs
-      run: |
-        truncate -s 256M "$RUNNER_TEMP/dnd-source.img"
-        python3 scripts/drag_drop_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/dnd-source.img" --out "$RUNNER_TEMP/sexos-runtime/dnd"
-    - name: USB input paths
-      run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
-    - name: Preserve runtime evidence
+    - name: Preserve browser evidence
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: sexos-runtime-proof
-        path: |
-          ${{ runner.temp }}/sexos-runtime
-          ${{ runner.temp }}/sexos-usb
+        name: sexos-browser-proof
+        path: ${{ runner.temp }}/sexos-runtime/web-*
         if-no-files-found: ignore
 
   devices:
     name: Disks, power and fuzzing
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: USB sticks in Files
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-usb.img"
@@ -354,12 +528,14 @@ jobs:
       run: python3 scripts/files_eject_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-eject"
     - name: Files thumbnails for a folder of 50 pictures, cached
       run: python3 scripts/files_thumbs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-thumbs"
-    - name: Files archives, batch rename, ratings, duplicates, disk usage and compare
+    - name: Files archives, disk and CD images, SFTP and WebDAV places, batch rename, ratings, duplicates, disk usage and compare
       run: python3 scripts/files_loom_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-loom"
     - name: ext4 stick written from SexOS, e2fsck clean
       run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"
     - name: Encrypted home unlocks with its password, unreadable without it
       run: python3 scripts/files_home_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-home"
+    - name: Corset partitions a blank USB disk (GPT, FAT32 and exFAT), Files mounts both; system disk writes refused
+      run: python3 scripts/corset_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-corset"
     - name: Files opens a file in its program
       run: python3 scripts/files_open_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-open"
     - name: Power cuts while Files writes (QEMU killed, disk checked each time)
@@ -388,10 +564,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/fuzz-source.img"
         python3 scripts/syscall_fuzz_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/fuzz-source.img" --out "$RUNNER_TEMP/sexos-fuzz"
-    - name: Drag VM syscall 110 refused cleanly without VMX (QEMU TCG; the guest path needs --accel kvm)
+    - name: Drag VMs and Crossdress through the kernel's AMD SVM backend (QEMU TCG emulates SVM with nested paging)
       run: |
         truncate -s 1G "$RUNNER_TEMP/drag-source.img"
-        python3 scripts/drag_gate.py --accel tcg --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drag-source.img" --out "$RUNNER_TEMP/sexos-drag"
+        python3 scripts/drag_gate.py --accel tcg --require-guest --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drag-source.img" --out "$RUNNER_TEMP/sexos-drag"
     - name: Preserve evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -417,7 +593,9 @@ jobs:
   media:
     name: Browser media streaming and seeking
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -425,13 +603,16 @@ jobs:
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
         bash scripts/media_source_host_gate.sh
-    - name: Build the FFmpeg-enabled image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/media-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/media-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Progressive playback and Range seek
       run: |
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
         python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
         python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Microphone on Intel HD Audio (input pin, converter and input stream)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/hda-mic-source.img"
+        python3 scripts/sound_listen_gate.py --card hda --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/hda-mic-source.img" --out "$RUNNER_TEMP/sexos-hda-mic"
     - name: Preserve media evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -441,19 +622,21 @@ jobs:
           ${{ runner.temp }}/media-build.log
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
+          ${{ runner.temp }}/sexos-hda-mic
         if-no-files-found: ignore
 
   editor:
     name: Quil code editor
     runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
     timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Quil engine on the host (1 GB lazy file, multi-cursor, Vim, keymaps, fuzzy, project search)
       run: cargo test --locked --release -p quil-core
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/editor-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/editor-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Quil in QEMU (200 MB file, Go to File, cursors, Vim dd, project search)
       run: |
         truncate -s 256M "$RUNNER_TEMP/editor-source.img"
@@ -470,12 +653,16 @@ jobs:
 
   profiles:
     name: Proof builds (${{ matrix.gate }})
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # A Cargo.lock change (crates added or removed) misses the exact build cache and
+    # rebuilds cold, which takes ~45 minutes here; 40 left such PRs no way to pass.
+    timeout-minutes: 80
     strategy:
       fail-fast: false
       matrix:
-        gate: [cleanup, app-resource, crash, denim]
+        gate: [cleanup, app-resource, denim, views]
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -485,21 +672,23 @@ jobs:
     - name: App resource retirement and normal desktop close
       if: matrix.gate == 'app-resource'
       run: GATE_DIR="$RUNNER_TEMP/sexos-proof" bash scripts/app_resource_profiles_gate.sh
-    - name: Boot log, stop screen, crash records and service restarts (probe build)
-      if: matrix.gate == 'crash'
-      run: |
-        SEXOS_CRASH_PROBE=1 SEXOS_STOP_RESTART_SECONDS=8 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/crash-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/crash-probe-build.log"; exit 1)
-        truncate -s 1G "$RUNNER_TEMP/crash-source.img"
-        python3 scripts/crash_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof"
     - name: Compressed memory, Denim pages out and back (eager build)
       if: matrix.gate == 'denim'
       run: |
         SEXOS_DENIM_EAGER=1 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/denim-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/denim-build.log"; exit 1)
         truncate -s 1G "$RUNNER_TEMP/denim-source.img"
         python3 scripts/denim_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/denim-source.img" --out "$RUNNER_TEMP/sexos-proof/denim"
-    - name: Cap-scoped peer epochs across same-task service restart
-      if: matrix.gate == 'crash'
-      run: SEXOS_GATE_CORES=4 python3 scripts/service_peer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof/service-peer"
+    - name: Shared-key program rows in protection views on 4 cores (no turn-taking, PCID)
+      if: matrix.gate == 'views'
+      run: |
+        ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/views-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/views-build.log"; exit 1)
+        truncate -s 1G "$RUNNER_TEMP/views-source.img"
+        SEXOS_GATE_CORES=4 SEXOS_GATE_MEMORY=2G python3 scripts/program_pool_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/views-source.img" --out "$RUNNER_TEMP/sexos-proof/views-pool"
+    - name: A shared-key row cannot read its neighbour without PKU (probe build)
+      if: matrix.gate == 'views'
+      run: |
+        SEXOS_PROGRAM_ISOLATION_PROBE=4 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/views-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/views-probe-build.log"; exit 1)
+        SEXOS_GATE_CPU=max,-pku,+rdseed SEXOS_GATE_CORES=4 SEXOS_GATE_MEMORY=2G python3 scripts/program_isolation_probe.py sexos-v1.0.0.iso "$RUNNER_TEMP/views-source.img" "$RUNNER_TEMP/sexos-proof/views-isolation" 4
     - name: Preserve evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -508,23 +697,73 @@ jobs:
         path: ${{ runner.temp }}/sexos-proof
         if-no-files-found: ignore
 
-  programs:
-    name: Programs, packages and ports
+  # The crash-probe image, built once for its own gates and the leak gate.
+  crash:
+    name: Proof builds (crash)
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 80
+    outputs:
+      image: ${{ steps.packed.outputs.image }}
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - name: Build the image with the crash probe
+      run: |
+        SEXOS_CRASH_PROBE=1 SEXOS_STOP_RESTART_SECONDS=8 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/crash-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/crash-probe-build.log"; exit 1)
+    - name: Pack the crash-probe image for the leak gate
+      run: |
+        mkdir -p "$RUNNER_TEMP/sexos-crash-image"
+        bash scripts/ci_image_pack.sh "$RUNNER_TEMP/sexos-crash-image/image.tar.zst"
+    - uses: actions/upload-artifact@v4
+      with:
+        name: sexos-crash-image
+        path: ${{ runner.temp }}/sexos-crash-image
+        compression-level: 0
+        retention-days: 2
+    - id: packed
+      run: echo "image=ready" >> "$GITHUB_OUTPUT"
+    - name: Boot log, stop screen, crash records and service restarts (probe build)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/crash-source.img"
+        python3 scripts/crash_screen_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof"
+    - name: Cap-scoped peer epochs across same-task service restart
+      run: SEXOS_GATE_CORES=4 python3 scripts/service_peer_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/crash-source.img" --out "$RUNNER_TEMP/sexos-proof/service-peer"
+    - name: Preserve evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-proof-crash
+        path: |
+          ${{ runner.temp }}/sexos-proof
+          ${{ runner.temp }}/crash-probe-build.log
+        if-no-files-found: ignore
+
+  programs:
+    name: Programs, packages and ports
+    runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
     - name: Blank program disk
       run: truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
     - name: Spreadeagle spreadsheet opens, edits, saves and reopens xlsx
       run: python3 scripts/program_spreadeagle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/spreadeagle"
+    - name: Polyamour 3D suite opens, switches workspaces, renders (F12) and saves
+      run: python3 scripts/program_polyamour_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/polyamour"
     - name: Assuit word processor opens, edits, saves and reopens docx
       run: python3 scripts/program_assuit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/assuit"
     - name: Lua 5.4 interpreter
       run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
+    - name: egui programs (the unmodified egui demo, clicks, keys and wheel)
+      run: python3 scripts/program_egui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/egui"
+    - name: Weft programs (Abacus typing, keypad clicks, errors, command palette)
+      run: python3 scripts/program_weft_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/weft"
     - name: Signed packages, install service and first-run grant question
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
@@ -545,12 +784,38 @@ jobs:
         python3 scripts/sdl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/sdl"
     - name: SDL2 game (demo score, window, sound, keys)
       run: python3 scripts/driftspark_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/driftspark"
-    - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
-      run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
+    - name: Weft programs
+      run: python3 scripts/program_weft_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/weft"
     - name: Moan edited multitrack mix through Bell (stereo waveform proof)
       run: python3 scripts/moan_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan"
+    - name: Moan EQ, compressor and decaying reverb through Bell
+      run: python3 scripts/moan_gate.py --effects --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-effects"
+    - name: Moan Weft window, editing and sound
+      run: python3 scripts/moan_app_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-app"
+    - name: Moan microphone permission and captured track
+      run: python3 scripts/moan_app_gate.py --microphone --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-capture"
+    - name: Velvet playable games
+      run: python3 scripts/velvet_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/velvet"
+    - name: Leather SDK hello, text editor, image viewer and fetch windows
+      run: python3 scripts/leather_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/leather"
+    - name: Chastity vault UI and encrypted snapshot across reboot
+      run: python3 scripts/program_chastity_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity" --input-privacy
+    - name: Aftercare backup (back up, delete, restore, hashes equal, wrong password refused)
+      run: python3 scripts/aftercare_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/aftercare"
+    - name: egui programs
+      run: python3 scripts/program_egui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/egui"
+    - name: Moan actual WAV, FLAC and MP3 Files exports
+      run: |
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+        python3 scripts/moan_export_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-export"
+    - name: Moan editable project waveform save and reopen across reboot
+      run: python3 scripts/moan_project_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan-project"
+    - name: Live autofill two-app consent and encrypted vault across reboot
+      run: python3 scripts/chastity_autofill_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/chastity-autofill"
     - name: Climax benchmark and thermal torture app
       run: python3 scripts/climax_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/climax"
+    - name: Programs run programs (std::process, posix_spawn, waitpid, kill, system)
+      run: python3 scripts/process_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/process"
     - name: Preserve program evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -560,14 +825,15 @@ jobs:
   reading:
     name: Reading programs
     runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
     timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: E-book and feed models (EPUB, FictionBook, CBZ, reflow, RSS, Atom, OPML) on the host
       run: cargo test --locked -p sex-xml -p sex-ebook -p sex-feed
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/reading-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/reading-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Bodice opens an EPUB, turns pages and reopens at the saved page
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-reading.img"
@@ -588,14 +854,15 @@ jobs:
   places:
     name: Phone link and maps
     runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
     timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Hookup protocol (KDE Connect) on the host, against the Python test peer; map tiles, search and routes
       run: cargo test --locked -p sex-kdeconnect -p sex-map
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/places-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/places-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Hookup pairs with a test phone, receives and sends files, media keys
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-places.img"
@@ -612,17 +879,128 @@ jobs:
           ${{ runner.temp }}/places-build.log
         if-no-files-found: ignore
 
+  desktop:
+    name: Desktop shell
+    runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 45
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Install image tools for gates
+      run: |
+        sudo apt-get update -qq
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
+    - uses: ./.github/actions/image
+    - name: Settings last across a restart
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/settings-source.img"
+        python3 scripts/settings_persist_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/settings-source.img" --out "$RUNNER_TEMP/sexos-desktop/settings"
+    - name: Alt+Tab window switcher with live thumbnails
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/switcher-source.img"
+        python3 scripts/window_switcher_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/switcher-source.img" --out "$RUNNER_TEMP/sexos-desktop/switcher"
+    - name: Window decorations (title bar buttons, window menu, double-click maximise, close ends the program)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/decor-source.img"
+        python3 scripts/window_decorations_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/decor-source.img" --out "$RUNNER_TEMP/sexos-desktop/decorations"
+    - name: Program tray items (a menu row reaches the program) and a notification's inline reply
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/tray-items-source.img"
+        python3 scripts/tray_items_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-items-source.img" --out "$RUNNER_TEMP/sexos-desktop/tray-items"
+    - name: Tabbed window groups (three windows grouped, tabs cycled), dwindle layout and per-workspace layout memory
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/groups-source.img"
+        python3 scripts/window_groups_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/groups-source.img" --out "$RUNNER_TEMP/sexos-desktop/groups"
+    - name: Desktop scripting (Spindle's silk command lists, focuses and moves a window to workspace 3, and prints the events)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/silk-source.img"
+        python3 scripts/silk_ctl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/silk-source.img" --out "$RUNNER_TEMP/sexos-desktop/silk"
+    - name: Hot corners (the top-left corner opens and closes the window overview)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/corner-source.img"
+        python3 scripts/hot_corner_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/corner-source.img" --out "$RUNNER_TEMP/sexos-desktop/corner"
+    - name: Magnifier and colour filters (accessibility)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/access-source.img"
+        python3 scripts/access_view_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/access-source.img" --out "$RUNNER_TEMP/sexos-desktop/access"
+    - name: Whisper screen reader (Super+Alt+R, spoken window titles and a Weft button)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/reader-source.img"
+        python3 scripts/screen_reader_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/reader-source.img" --out "$RUNNER_TEMP/sexos-desktop/reader"
+    - name: Clipboard history on Super+V
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/cliphist-source.img"
+        python3 scripts/clipboard_history_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/cliphist-source.img" --out "$RUNNER_TEMP/sexos-desktop/clipboard-history"
+    - name: Screenshot UI on Print
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/screenshot-source.img"
+        python3 scripts/screenshot_ui_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/screenshot-source.img" --out "$RUNNER_TEMP/sexos-desktop/screenshot-ui"
+    - name: Panel tray and calendar
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/tray-source.img"
+        python3 scripts/tray_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/tray-source.img" --out "$RUNNER_TEMP/sexos-desktop/tray"
+    - name: Bluetooth panel
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/bt-panel-source.img"
+        python3 scripts/bt_panel_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/bt-panel-source.img" --out "$RUNNER_TEMP/sexos-desktop/bt-panel"
+    - name: Window animations
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/motion-source.img"
+        python3 scripts/window_motion_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/motion-source.img" --out "$RUNNER_TEMP/sexos-desktop/motion"
+    - name: Frame time during workspace slides (60 Hz pacing, p99 < 20 ms on KVM, 4 cores) and a desktop screenshot
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        truncate -s 256M "$RUNNER_TEMP/frames-source.img"
+        python3 scripts/frame_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/frames-source.img" --out "$RUNNER_TEMP/sexos-desktop/frame-time"
+    - name: Programs starting programs
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/launch-source.img"
+        python3 scripts/shuttle_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/launch-source.img" --out "$RUNNER_TEMP/sexos-desktop/launch"
+    - name: Session restore across a restart
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/session-source.img"
+        python3 scripts/session_restore_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/session-source.img" --out "$RUNNER_TEMP/sexos-desktop/session"
+    - name: Drag and drop between programs
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/dnd-source.img"
+        python3 scripts/drag_drop_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/dnd-source.img" --out "$RUNNER_TEMP/sexos-desktop/dnd"
+    - name: Copy and paste between programs, Shift- and Alt-click
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/clip-source.img"
+        python3 scripts/program_clipboard_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/clip-source.img" --out "$RUNNER_TEMP/sexos-desktop/clip"
+    - name: Preserve desktop evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-desktop-proof
+        path: ${{ runner.temp }}/sexos-desktop
+        if-no-files-found: ignore
+
   build:
     if: always()
-    needs: [host, truth, boot, devices, programs, media, editor, profiles, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places]
+    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks]
     runs-on: ubuntu-latest
     steps:
+    # Every job must pass. A job may be skipped only when the scope leaves it out:
+    # in a full run nothing is skipped except behind a failure, which fails here too.
     - run: |
-        echo '${{ toJSON(needs) }}' | python3 -c "import json,sys; r={k:v['result'] for k,v in json.load(sys.stdin).items()}; print(r); sys.exit(any(v!='success' for v in r.values()))"
+        echo '${{ toJSON(needs) }}' | python3 -c "
+        import json, sys
+        r = {k: v['result'] for k, v in json.load(sys.stdin).items()}
+        scope = '${{ needs.changes.outputs.scope }}'
+        print('scope', scope, r)
+        ok = r.pop('changes') == 'success' and scope in ('full', 'smoke', 'docs')
+        needed = {'full': set(r), 'smoke': {'image'}, 'docs': set()}.get(scope, set(r))
+        ok = ok and all(v == 'success' or (v == 'skipped' and k not in needed) for k, v in r.items())
+        sys.exit(not ok)"
 
   js-jit:
     name: Experimental JS JIT and W^X (${{ matrix.cores }} cores)
     runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -633,8 +1011,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build sealed ISO from this candidate
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Runtime code permissions, blocked instructions and per-run fault isolation
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-jit.img"
@@ -665,15 +1042,20 @@ jobs:
 
   recording:
     name: Lossless encoder guest proof
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 120
     steps:
     - uses: actions/checkout@v4
+      with:
+        # Splicy Studio lives in its own repository (xirtus/Splicy), at apps/splicy-studio.
+        submodules: true
     - uses: ./.github/actions/setup
       with:
         recording: "true"
     - name: Independent decoder
-      run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+      run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg python3-pil
     - name: Build recording-profile candidate
       run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/recording-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/recording-build.log"; exit 1)
     - name: Output ownership and actual guest encoder
@@ -688,6 +1070,19 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/flash-source.img"
         python3 scripts/flash_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/flash-source.img" --require-video --out "$RUNNER_TEMP/recording/flash"
+    - name: Splicy editor opens a clip, shows filmstrip and waveform, cuts a sentence and exports
+      run: |
+        bash scripts/build_splicy.sh
+        truncate -s 1G "$RUNNER_TEMP/splicy-source.img"
+        python3 scripts/program_splicy_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --require-export --out "$RUNNER_TEMP/recording/splicy"
+    - name: FilmCraft's editing engine runs on SexOS (edit, undo, WAV and H.264 export)
+      run: |
+        bash scripts/build_splicy_probe.sh
+        python3 scripts/program_splicy_probe_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-probe"
+    - name: Splicy Studio opens a clip and its transcript in FilmCraft's editor in a SexOS window
+      run: |
+        bash scripts/build_splicy_studio.sh
+        python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"
     - name: Preserve encoder evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -701,15 +1096,16 @@ jobs:
   productivity:
     name: Productivity programs
     runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
     timeout-minutes: 40
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Calculator arithmetic and calendar model on the host
-      run: cargo test --locked -p sex-calc-core -p sex-calendar -p sex-dav -p sex-vcard -p sex-vt -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
-    - name: Calculator typed, clicked and recalled
+    - name: Calendar model and terminal on the host
+      run: cargo test --locked -p sex-calendar -p sex-dav -p sex-vcard -p sex-vt -p spindle-panes -p spindle-shell -p sex-textedit -p sex-wasm && cargo test --locked -p sex-pdx --test stream --test console_relay && cargo test --locked --release -p sex-vt --features render,ligatures render_tests
+    - uses: ./.github/actions/image
+    - name: Abacus typed, clicked, remembered and recalled
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-productivity.img"
         python3 scripts/program_calc_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-productivity.img" --out "$RUNNER_TEMP/sexos-productivity/calc"
@@ -736,12 +1132,13 @@ jobs:
   terminal-editor:
     name: Terminal and editor
     runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
     timeout-minutes: 40
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/term-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/term-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: Term draws the VT fixture, runs a Wasm program behind a stream; std consoles become terminals
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-term.img"
@@ -767,17 +1164,23 @@ jobs:
   documents-pictures:
     name: Documents and pictures
     runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
     timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
-    - name: Build the image
-      run: ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/productivity-build.log" 2>&1 || (tail -80 "$RUNNER_TEMP/productivity-build.log"; exit 1)
+    - uses: ./.github/actions/image
     - name: PDF finds a word on page 7, outline, thumbnails and zoom
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-pdf.img"
         python3 scripts/program_pdf_find_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-pdf.img" --out "$RUNNER_TEMP/sexos-productivity/pdf-find"
-    - name: View pictures, turns, zoom, animated WebP and a folder slideshow
+    - name: Vellum highlights, notes, fills a form, saves an incremental update; pdf --thumb
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/blank-pdf-edit.img"
+        python3 -m pip install --quiet --user --break-system-packages pypdf==6.1.3 || true
+        python3 scripts/program_pdf_edit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-pdf-edit.img" --out "$RUNNER_TEMP/sexos-productivity/pdf-edit"
+    - name: View pictures, turns, zoom, animated WebP, a folder slideshow, EXIF upright and details, SVG, --thumb
       run: |
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
         truncate -s 256M "$RUNNER_TEMP/blank-view.img"
@@ -790,4 +1193,91 @@ jobs:
         path: |
           ${{ runner.temp }}/productivity-build.log
           ${{ runner.temp }}/sexos-productivity
+        if-no-files-found: ignore
+
+  # Deliberately unsafe fixture-only image; every other job builds normal flags.
+  input-payload-proof:
+    name: Diagnostic keyboard payload proof (UNSAFE)
+    needs: changes
+    if: needs.changes.outputs.scope == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - name: Build and freeze diagnostic image, then rebuild normal image
+      # The image job already proves the normal image builds; skip rebuilding it here.
+      run: SEXOS_INPUT_PROOF_SKIP_NORMAL=1 bash scripts/build_input_payload_proof.sh "$RUNNER_TEMP/input-payload-proof"
+    - name: Strict physical-key oracles on the labeled diagnostic image only
+      run: |
+        evidence="$RUNNER_TEMP/input-payload-proof"
+        runner="$evidence/frozen/source/scripts"
+        iso="$evidence/frozen/tested.iso"
+        binding="$evidence/frozen/source-binding.json"
+        # The GREEN canonical boot formats this disk; preserve its real workspace.
+        python3 - "$evidence" "$RUNNER_TEMP/input-proof-seed.img" <<'PYSEED'
+        import hashlib, json, sys
+        from pathlib import Path
+        evidence, seed = map(Path, sys.argv[1:])
+        sys.path.insert(0, str(evidence / 'frozen/source/scripts'))
+        from https_import_gate import workspace
+        source = evidence / 'diagnostic-build/nvme.img'
+        data = source.read_bytes()
+        manifest = workspace(data)  # Reject missing/corrupt canonical workspace metadata.
+        with seed.open('xb') as output:
+            output.write(data)
+        digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest(seed) != digest(source):
+            raise ValueError('controlled diagnostic seed copy differs')
+        seed.chmod(0o444)
+        receipt = dict(source=str(source), seed=str(seed), bytes=len(data),
+                       source_sha256=digest(source), seed_sha256=digest(seed),
+                       iso_sha256=digest(evidence / 'frozen/tested.iso'),
+                       boot_serial_sha256=digest(evidence / 'diagnostic-build/serial.log'),
+                       boot_report_sha256=digest(evidence / 'diagnostic-build/report.md'),
+                       workspace=manifest)
+        (evidence / 'controlled-seed.json').write_text(json.dumps(receipt, indent=2) + '\n')
+        PYSEED
+        python3 "$runner/https_asset_gate.py" --iso "$iso" --binding "$binding" --source-disk "$RUNNER_TEMP/input-proof-seed.img" --out "$evidence/https-asset"
+        python3 "$runner/connected_desktop_gate.py" --iso "$iso" --binding "$binding" --source-disk "$RUNNER_TEMP/input-proof-seed.img" --out "$evidence/connected-desktop"
+        python3 "$runner/browser_reserve_gate.py" --iso "$iso" --binding "$binding" --source-disk "$RUNNER_TEMP/input-proof-seed.img" --out "$evidence/browser-reserve"
+    - name: Preserve labeled diagnostic and normal evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: UNSAFE-keyboard-payload-proof-never-private-input
+        path: ${{ runner.temp }}/input-payload-proof
+        if-no-files-found: ignore
+
+  # Leak gate (WS2): every program and restartable service gives its memory back.
+  leaks:
+    name: Leak gate (programs open/close, services restart)
+    # Tests the crash job's image; runs even when that job's own gates fail.
+    needs: crash
+    if: ${{ !cancelled() && needs.crash.outputs.image == 'ready' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
+      with:
+        artifact: sexos-crash-image
+        runtime: "false"
+    - name: Memory comes back after open/close and restart cycles
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/leak-source.img"
+        python3 scripts/leak_gate.py --services --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/leak-source.img" --out "$RUNNER_TEMP/sexos-leak"
+    - name: Leak report
+      if: always()
+      run: |
+        [ -f "$RUNNER_TEMP/sexos-leak/leak.json" ] && python3 -c "import json,sys; r=json.load(open(sys.argv[1])); print('ok', r.get('ok'), 'leaks', r.get('leaks'), 'why', r.get('why')); [print(k, n, v['growth']) for k in ('programs','services') for n, v in r.get(k, {}).items()]" "$RUNNER_TEMP/sexos-leak/leak.json" | tee -a "$GITHUB_STEP_SUMMARY" || true
+    - name: Preserve leak evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-leak-proof
+        path: |
+          ${{ runner.temp }}/sexos-leak/leak.json
+          ${{ runner.temp }}/sexos-leak/*.log
         if-no-files-found: ignore

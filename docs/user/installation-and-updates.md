@@ -1,6 +1,6 @@
 # Installation, Boot & Updates
 
-SexOS is designed to boot natively on bare-metal x86-64 hardware or inside virtual machines. It features a modern UEFI bootloader (Limine), early-boot hardware discovery (**Foreplay**), non-destructive disk installation, and atomic dual-slot (A/B) system updates.
+SexOS is designed to boot natively on bare-metal x86-64 hardware or inside virtual machines. It features a modern UEFI bootloader (Limine), early-boot hardware discovery (**Tantalize**), non-destructive disk installation, and atomic dual-slot (A/B) system updates.
 
 ![Spindle Session](assets/spindle-session.png)
 *Early Spindle session displaying system verification, boot facts, and storage readiness.*
@@ -28,7 +28,7 @@ To run SexOS with full hardware memory isolation:
    sudo dd if=sexos-v1.0.0.iso of=/dev/sdX bs=4M status=progress oflag=sync
    ```
 3. Boot the target machine, select your UEFI USB device, and Limine will launch the SexOS kernel.
-4. **Foreplay** (the early boot stage) initializes the hardware catalog, starts **sexdrive** and **sexnet**, warms the organ cache, and launches the **Silk** desktop environment.
+4. **Tantalize** (the early boot stage) initializes the hardware catalog, starts **sexdrive** and **sexnet**, warms the organ cache, and launches the **Silk** desktop environment.
 
 ---
 
@@ -80,7 +80,7 @@ update https://releases.sexos.dev/nightly/update.bin
 1. **Fetch & Verification**: Spindle downloads the update package and validates its cryptographic signature against trusted public keys.
 2. **Standby Staging**: The payload is written into the inactive partition slot. Your running system is completely untouched.
 3. **Trial Boot**: On next restart, UEFI boots into the newly updated slot on trial.
-4. **Health Verification**: If **Foreplay** and **Silk** boot cleanly and pass hardware liveness checks, the slot is marked permanently active.
+4. **Health Verification**: If **Tantalize** and **Silk** boot cleanly and pass hardware liveness checks, the slot is marked permanently active.
 5. **Automatic Rollback**: If the new slot fails to achieve quiescent desktop readiness within 30 seconds, the bootloader automatically reverts to the previous working slot.
 
 ---

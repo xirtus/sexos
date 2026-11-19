@@ -13,6 +13,11 @@ struct Held {slot:usize,catalog:Result<lifecycle_wire::CatalogInfo,u64>,state:Re
 thread_local! {
     static HELD:RefCell<Vec<Held>>=const{RefCell::new(Vec::new())};
     static QUERIES:RefCell<usize>=const{RefCell::new(0)};
+    static DENIED:RefCell<Vec<u32>>=const{RefCell::new(Vec::new())};
+}
+// A restricted helper domain is refused before any metadata query.
+mod restricted {
+    pub fn denied(pd:u32)->bool{crate::DENIED.with(|d|d.borrow().contains(&pd))}
 }
 pub mod app_lifecycle {
     pub use crate::lifecycle_wire::{CatalogInfo,LifecycleInfo,LIVE,SLOTS};
@@ -34,7 +39,7 @@ fn held(target:u32,task:u32)->Held {
     Held{slot:row.lifecycle_slot,catalog:Ok(lifecycle_wire::CatalogInfo{
         target_pd:target,task_id:task,surface_id:row.surface,coordinator_pd:3}),state:Err(app_lifecycle::LIVE)}
 }
-fn install(entries:Vec<Held>){HELD.with(|h|*h.borrow_mut()=entries);QUERIES.with(|n|*n.borrow_mut()=0);}
+fn install(entries:Vec<Held>){HELD.with(|h|*h.borrow_mut()=entries);DENIED.with(|d|d.borrow_mut().clear());QUERIES.with(|n|*n.borrow_mut()=0);}
 fn admitted(pd:u32,task:u32)->Option<jobs::Identity>{network_request_owner(pd,task)}
 #[test]
 fn original_browser_and_all_eight_spindles_require_exact_unequal_main_tasks(){
@@ -96,4 +101,10 @@ fn old_task_cannot_rebind_to_a_different_held_task(){
     assert_eq!(admitted(15,150),None);
     assert_ne!(network_owner(15),Some(old));
     assert_eq!(admitted(15,151),Some(jobs::Identity{pd:15,task:151}));
+}
+#[test]
+fn restricted_helper_domain_is_refused_before_any_query(){
+    install(vec![held(15,150)]);DENIED.with(|d|d.borrow_mut().push(15));
+    assert_eq!(admitted(15,150),None);assert_eq!(network_owner(15),None);
+    QUERIES.with(|n|assert_eq!(*n.borrow(),0));
 }

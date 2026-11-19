@@ -49,7 +49,8 @@ pub fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Error> {
         let local = u32le(zip, at + 42).ok_or(bad.clone())?;
         let name = core::str::from_utf8(zip.get(at + 46..at + 46 + n).ok_or(bad.clone())?).map_err(|_| bad.clone())?;
         at += 46 + n + e + c;
-        if name.ends_with('/') { continue; }
+        // A folder entry, even with trailing blanks ("wrap/ ", issue #319).
+        if name.trim_end().ends_with('/') { continue; }
         let Some(path) = clean_path(name) else { return Err(Error::Package("a file outside the package")) };
         total += size;
         if total > MAX_TOTAL { return Err(Error::Package("too big")); }
@@ -59,9 +60,9 @@ pub fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Error> {
         let data = match method {
             0 => Vec::from(raw),
             8 => {
-                // The size is the archive's word: it bounds the output, but room is made as
-                // bytes actually come (deflate expands at most ~1032 times).
-                let hint = size.min(raw.len().saturating_mul(4)).min(1 << 20);
+                // The declared size is untrusted: it bounds the output but only a small,
+                // packed-size-scaled hint is allocated up front (issue #319).
+                let hint = size.min(packed.saturating_mul(4)).min(256 * 1024);
                 let opts = zune_inflate::DeflateOptions::default().set_limit(size.max(1)).set_size_hint(hint);
                 zune_inflate::DeflateDecoder::new_with_options(raw, opts).decode_deflate().map_err(|_| Error::Package("a file could not be unpacked"))?
             }
@@ -75,7 +76,6 @@ pub fn unpack(bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, Error> {
         if let Some(top) = out.iter().find(|(p, _)| p.ends_with("/manifest.json") && p.matches('/').count() == 1).map(|(p, _)| String::from(&p[..p.len() - "manifest.json".len()])) {
             out.retain(|(p, _)| p.starts_with(&top));
             for (p, _) in out.iter_mut() { *p = String::from(&p[top.len()..]); }
-            out.retain(|(p, _)| !p.is_empty());
         }
     }
     if !out.iter().any(|(p, _)| p == "manifest.json") { return Err(Error::Package("no manifest.json")); }

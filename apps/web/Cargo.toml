@@ -41,4 +41,5 @@ sex-extensions = { path = "../../crates/sex-extensions" }
 serde_json = { version = "1.0.154", default-features = false, features = ["alloc"] }
 
 [features]
+jit-profile = ["baseline-jit", "sex-js/jit-profile"]
 baseline-jit = ["sex-js/baseline-jit"]

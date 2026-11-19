@@ -261,10 +261,10 @@ fn triangulate_weld_displace_smooth() {
     assert!(closed(&w));
 
     let s = primitives::ico_sphere(2, 1.0);
-    let d = Modifier::Displace { strength: 0.5 }.apply(&s);
+    let d = Modifier::Displace { strength: 0.5, vertex_group: None, invert_vertex_group: false }.apply(&s);
     assert_near(d.volume(), s.volume() * 1.5f32.powi(3), 0.05, "displaced volume");
 
-    let sm = apply_stack(&subdivide_simple(&cube, 2), &[Modifier::Smooth { factor: 0.5, iterations: 10 }]);
+    let sm = apply_stack(&subdivide_simple(&cube, 2), &[Modifier::Smooth { factor: 0.5, iterations: 10, vertex_group: None, invert_vertex_group: false }]);
     assert!(closed(&sm));
     assert!(sm.volume() < 7.5 && sm.volume() > 2.0, "smoothed volume {}", sm.volume());
 }

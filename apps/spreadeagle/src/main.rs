@@ -14,6 +14,7 @@
 //! The mouse picks cells and sheet tabs and the wheel scrolls.
 #![cfg_attr(not(target_os = "hermit"), allow(dead_code))]
 mod book;
+mod ods;
 #[cfg(target_os = "hermit")]
 mod ui;
 

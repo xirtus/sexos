@@ -36,7 +36,8 @@ assert 'pop_startup_message().or_else(|| pdx_try_listen_raw(0))' in shell
 guard = shell.index('if !startup_messages_pending() {')
 guard_end = shell.index('} // End startup backlog bypass.')
 assert guard < shell.index('linen_paint_surface();') < guard_end
-assert guard_end < shell.index('let msg = match pop_startup_message()')
+receive = re.search(r'let (?:mut )?msg = match pop_startup_message\(\)\.or_else\(\|\| pdx_try_listen_raw\(0\)\)', shell)
+assert receive is not None and guard_end < receive.start()
 paint = shell_source.split('unsafe fn linen_paint_surface() {', 1)[1].split('\n}', 1)[0]
 assert 'if !startup_messages_pending() && (!LINEN_REMOTE_FETCHED || !LINEN_REMOTE_REAL)' in paint
 assert shell_source.count('linen_fetch_remote_snapshot();') == 1

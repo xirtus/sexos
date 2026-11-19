@@ -124,6 +124,8 @@ pub struct Style {
     pub transform: Transform,
     pub list_style: ListStyle,
     pub hidden: bool,
+    /// Whether this element participates in pointer hit testing (inherited).
+    pub pointer_events: bool,
     pub margin: [Len; 4],
     pub padding: [Len; 4],
     pub border: [i32; 4],
@@ -211,6 +213,7 @@ impl Style {
             transform: Transform::None,
             list_style: ListStyle::Disc,
             hidden: false,
+            pointer_events: true,
             margin: [Len::Px(0); 4],
             padding: [Len::Px(0); 4],
             border: [0; 4],
@@ -273,6 +276,7 @@ impl Style {
         s.transform = parent.transform;
         s.list_style = parent.list_style;
         s.hidden = parent.hidden;
+        s.pointer_events = parent.pointer_events;
         s.letter_spacing = parent.letter_spacing;
         s.border_collapse = parent.border_collapse;
         s.border_spacing = parent.border_spacing;
@@ -395,6 +399,7 @@ impl<'a> Cascade<'a> {
         let mut found: Vec<Applied> = Vec::new();
         let mut consider = |list: Option<&Vec<(u16, u32, u16)>>| {
             for &(si, ri, xi) in list.into_iter().flatten() {
+                if self.sheets[si as usize].scope.is_some_and(|root| dom.style_scope(node) != root) { continue; }
                 let sel = &self.sheets[si as usize].rules[ri as usize].selectors[xi as usize];
                 if css::matches(dom, node, sel) {
                     let origin = if si == 0 { 0u64 } else { 1 };
@@ -1340,6 +1345,12 @@ fn apply(s: &mut Style, d: &Declaration, ctx: &Ctx, font_only: bool) {
                 };
             }
         }
+        "pointer-events" => match lv.as_str() {
+            "none" => s.pointer_events = false,
+            "auto" | "initial" => s.pointer_events = true,
+            "unset" => s.pointer_events = ctx.parent.pointer_events,
+            _ => {},
+        },
         "visibility" => s.hidden = lv == "hidden" || lv == "collapse",
         "margin" | "padding" => {
             let vals: Option<Vec<Len>> = words(v).iter().map(|w| parse_len(w, s, ctx)).collect();
@@ -1617,6 +1628,7 @@ fn side_index(name: &str) -> usize {
 fn inherit_one(s: &mut Style, name: &str, p: &Style) {
     match name {
         "color" => s.color = p.color,
+        "pointer-events" => s.pointer_events = p.pointer_events,
         "background-color" | "background" => s.background = p.background,
         "font-size" => s.font_size = p.font_size,
         "font-weight" => s.bold = p.bold,

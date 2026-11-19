@@ -29,18 +29,18 @@ fn list<'a>(c: &'a Value, keys: &[&str]) -> Vec<&'a str> {
     keys.iter().filter_map(|k| c.get(*k)).filter_map(Value::as_array).flatten().filter_map(Value::as_str).collect()
 }
 
-/// A domain as a rule may name one: letters, digits, `.`, `-`, `_` (and `*` as a whole
-/// label part). Anything else could carry filter syntax (`,option`, `|`, `$`, `#`).
-fn plain_domain(d: &str) -> bool {
-    !d.is_empty() && d.len() <= 253 && d.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'*'))
+/// A host name as DNR lists them: letters, digits, `.`, `-` and `_` only. Anything
+/// else (`,` `|` `$` `~` `#`, blanks) would be read as Shields filter syntax
+/// (issue #321).
+fn host_ok(d: &str) -> bool {
+    !d.is_empty() && d.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_'))
 }
 
-/// A `urlFilter` that stays a network filter: no options (`$`), no element hiding or
-/// scriptlet separators (`##`, `#@#`, `#?#`, `#$#`, `#%#`, ...), no white space or
-/// control characters.
-fn plain_url_filter(u: &str) -> bool {
-    !u.is_empty() && !u.contains('$') && !u.chars().any(|c| c.is_whitespace() || c.is_control())
-        && !u.as_bytes().windows(2).any(|w| w[0] == b'#' && matches!(w[1], b'#' | b'@' | b'?' | b'$' | b'%'))
+/// A `urlFilter` that stays a network filter: no `$` options, no `#` (which would
+/// make a cosmetic rule or exception such as `#@#`), no blanks or control
+/// characters (issue #321).
+fn url_filter_ok(u: &str) -> bool {
+    !u.is_empty() && !u.bytes().any(|b| b == b'$' || b == b'#' || b.is_ascii_whitespace() || b.is_ascii_control())
 }
 
 /// Turns a ruleset file (a JSON array of rules) into filters.
@@ -68,10 +68,9 @@ pub fn rule(r: &Value) -> Option<Vec<String>> {
         if c.get(unsupported).is_some() { return None; }
     }
     let url_filter = c.get("urlFilter").and_then(Value::as_str);
-    if url_filter.is_some_and(|u| !plain_url_filter(u)) { return None; }
-    for k in ["initiatorDomains", "domains", "excludedInitiatorDomains", "excludedDomains", "requestDomains", "excludedRequestDomains"] {
-        if !list(c, &[k]).iter().all(|d| plain_domain(d)) { return None; }
-    }
+    if url_filter.is_some_and(|u| !url_filter_ok(u)) { return None; }
+    let domain_keys = ["initiatorDomains", "domains", "excludedInitiatorDomains", "excludedDomains", "requestDomains", "excludedRequestDomains"];
+    if !list(c, &domain_keys).iter().all(|d| host_ok(d)) { return None; }
     let mut opts: Vec<String> = Vec::new();
     let types = list(c, &["resourceTypes"]);
     let excluded = list(c, &["excludedResourceTypes"]);

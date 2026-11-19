@@ -112,6 +112,17 @@ impl ActivationGrant {
         Ok(())
     }
 }
+/// One heap page offered to a VM (Drag), its leaf reading `leaf`: its frame while the
+/// page is lent as given (accessed and dirty aside) and present, writable if the guest
+/// may write. A page with Denim is `Out`: its leaf names the row, and Denim must bring
+/// it back first; the loan never takes a marker for a frame.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]pub enum Loan{Frame(u64),Out,Refused}
+pub fn loan(page:&PrivatePage,leaf:u64,writable:bool)->Loan{
+    use sex_pdx::denim as d;
+    if d::is_out(leaf)||d::is_out(page.expected){return Loan::Out}
+    if leaf&!0x60!=page.expected&!0x60||leaf&1==0||(writable&&leaf&2==0){return Loan::Refused}
+    Loan::Frame(page.expected&PHYSICAL_MASK)
+}
 /// Denim takes a heap page: its leaf, if it still holds the page lent (accessed and
 /// dirty aside) and that is writable data on the row's key, becomes the row's marker.
 /// `swap(old,new)` is the leaf's compare-exchange. Returns the frame, which the caller

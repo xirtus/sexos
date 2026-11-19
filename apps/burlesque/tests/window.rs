@@ -173,3 +173,77 @@ fn test_burlesque_window_interactions() {
         unique_colors.len()
     );
 }
+
+#[test]
+fn test_burlesque_magic_move_builds_rehearse_and_splicy_timeline() {
+    let mut ui = Ui::new(1280, 800, Theme::light(), Strings::new("en"));
+    let mut b = Burlesque::build(&mut ui);
+    ui.layout();
+
+    // Add second slide so Magic Move morphs hero-stat + hero-title across layouts
+    let btn_add = b.btn_add_slide;
+    click_widget(&mut ui, &mut b, btn_add);
+    assert_eq!(b.deck.slide_count(), 2);
+
+    let btn_prev = b.btn_prev;
+    click_widget(&mut ui, &mut b, btn_prev);
+    assert_eq!(b.current_slide, 0);
+
+    // Add intra-slide build step and step through it
+    let btn_add_build = b.btn_add_build;
+    click_widget(&mut ui, &mut b, btn_add_build);
+    assert_eq!(b.deck.get_slide(0).unwrap().builds.len(), 1);
+    assert_eq!(b.active_build_index, 1);
+
+    let btn_step_build = b.btn_step_build;
+    click_widget(&mut ui, &mut b, btn_step_build);
+    assert_eq!(b.active_build_index, 0);
+
+    // Activate Magic Move and play transition -> preserves 50% mid-morph preview
+    let btn_magic = b.btn_magic_move;
+    click_widget(&mut ui, &mut b, btn_magic);
+    assert_eq!(b.current_transition(), Transition::MagicMove);
+    assert_eq!(b.magic_move_preview, Some(0.5));
+
+    let (trans, frames) = b.play_transition(&mut ui);
+    assert_eq!(trans, Transition::MagicMove);
+    assert_eq!(frames, 8);
+    assert_eq!(b.magic_move_preview, Some(0.5));
+
+    // Rehearse timings across build + slide advance and commit to deck
+    let btn_rehearse = b.btn_rehearse;
+    click_widget(&mut ui, &mut b, btn_rehearse);
+    assert!(b.rehearsal_session.is_some());
+    b.rehearsal_session.as_mut().unwrap().tick(400);
+
+    let btn_next = b.btn_next;
+    click_widget(&mut ui, &mut b, btn_next); // advances build 0 -> 1
+    b.rehearsal_session.as_mut().unwrap().tick(850);
+    click_widget(&mut ui, &mut b, btn_next); // advances slide 0 -> 1
+    b.rehearsal_session.as_mut().unwrap().tick(900);
+
+    // Commit rehearsal timings
+    click_widget(&mut ui, &mut b, btn_rehearse);
+    assert!(b.rehearsal_session.is_none());
+    assert!(b.deck.get_slide(0).unwrap().rehearsed_dwell_ms.unwrap_or(0) >= 850);
+    assert!(
+        b.deck.get_slide(0).unwrap().builds[0]
+            .rehearsed_delay_ms
+            .unwrap_or(0)
+            >= 400
+    );
+
+    // Verify Splicy timeline export driver renders all frames deterministically
+    let mut rendered_frames = 0usize;
+    let (splice_tl, written, hash) =
+        burlesque::render_splicy_frames(&b.deck, 320, 180, 15, |_idx, px| {
+            assert_eq!(px.len(), 320 * 180);
+            rendered_frames += 1;
+            Ok(())
+        })
+        .expect("splicy timeline render");
+    assert_eq!(written, rendered_frames);
+    assert!(written > 20, "expected >20 rehearsed frames, got {}", written);
+    assert_eq!(splice_tl.markers.len(), 2);
+    assert_ne!(hash, 0);
+}

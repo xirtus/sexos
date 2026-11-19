@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Packs the Intel Wi-Fi firmware files into the one blob BOOT hands to the network
-service (format: crates/sex-wifi/src/pack.rs). Files come from
+service (format: crates/sex-wifi/src/pack.rs, SEXWIFW2: large files raw DEFLATE so the
+pack fits the installed disk's boot partition). Files come from
 scripts/fetch_wifi_firmware.sh (target/wifi-firmware); without them the pack is
 empty and the chip reports "firmware missing" instead of the boot failing."""
-import argparse, hashlib, struct, sys
+import argparse, hashlib, struct, sys, zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MAGIC = b"SEXWIFW1"
+MAGIC = b"SEXWIFW2"
 ENTRY = 88
-NAME = 48
+NAME = 44
+# Wi-Fi files at least this big are stored compressed (the .ucode files, about 2.6 to 1).
+COMPRESS_FROM = 64 * 1024
 PAGE = 4096
 MAX_FILES = 64
 
@@ -25,9 +28,15 @@ def build(files):
         name = f.name.encode()
         if len(name) >= NAME:
             raise SystemExit(f"firmware name too long: {f.name}")
-        body = f.read_bytes()
+        raw = f.read_bytes()
+        body, inflated = raw, 0
+        if len(raw) >= COMPRESS_FROM and f.name.startswith("iwlwifi-"):  # Cufflinks reads ibt-* stored
+            c = zlib.compressobj(9, zlib.DEFLATED, -15)
+            packed = c.compress(raw) + c.flush()
+            if len(packed) < len(raw):
+                body, inflated = packed, len(raw)
         offset = start + len(data)
-        header += name.ljust(NAME, b"\0") + struct.pack("<II", offset, len(body)) + hashlib.sha256(body).digest()
+        header += name.ljust(NAME, b"\0") + struct.pack("<III", inflated, offset, len(body)) + hashlib.sha256(raw).digest()
         data += body
         data += b"\0" * (-len(data) % PAGE)
     header += b"\0" * (start - len(header))

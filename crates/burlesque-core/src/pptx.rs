@@ -530,7 +530,7 @@ fn parse_pptx_shape(
             // Paragraph properties
             if let Some(p_pr) = p.child("pPr") {
                 if let Some(lvl) = p_pr.attr("lvl").and_then(|v| v.parse::<u8>().ok()) {
-                    paragraph.bullet_level = lvl + 1;
+                    paragraph.bullet_level = lvl.min(8).saturating_add(1);
                 }
                 if let Some(algn) = p_pr.attr("algn") {
                     paragraph.alignment = match algn {
@@ -557,7 +557,10 @@ fn parse_pptx_shape(
 
                     if let Some(r_pr) = r.child("rPr") {
                         if let Some(sz) = r_pr.attr("sz").and_then(|v| v.parse::<f32>().ok()) {
-                            font_sz = (sz / 100.0) * (deck_h / 720.0);
+                            let computed = (sz / 100.0) * (deck_h / 720.0);
+                            if computed.is_finite() && computed > 0.0 {
+                                font_sz = computed.clamp(4.0, 400.0);
+                            }
                         }
                         bold = r_pr.attr("b") == Some("1");
                         italic = r_pr.attr("i") == Some("1");
@@ -607,6 +610,7 @@ fn parse_pptx_shape(
                 bounds,
                 fill: fill_color,
                 stroke,
+                magic_key: None,
             }));
         }
     }

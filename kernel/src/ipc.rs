@@ -7,6 +7,7 @@ pub mod router;
 pub mod state;
 pub mod sender;
 pub mod reply_credit;
+pub mod recv;
 mod domain_registry;
 pub use domain_registry::DomainRegistry;
 

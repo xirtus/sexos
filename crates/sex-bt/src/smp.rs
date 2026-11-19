@@ -4,8 +4,11 @@
 //! (or Just Works), DHKey checks and the long-term key. Both roles run the same code, so
 //! the host tests pair two of these against each other.
 //!
-//! Not in W1: legacy (pre-4.2) pairing, passkey entry, OOB, and key distribution (we ask
-//! for none; bonds keep the LTK only). A peer that needs them gets "pairing not supported".
+//! Key distribution: as initiator we ask the responder for its identity (IRK and identity
+//! address, so a bonded device that uses resolvable private addresses is recognised
+//! later) and give none; as responder we give ours when we have one (`set_identity`).
+//! Not here yet: legacy (pre-4.2) pairing, passkey entry and OOB; a peer that needs them
+//! gets "pairing not supported".
 
 use crate::crypto::{self, KeyPair};
 use alloc::vec::Vec;
@@ -19,7 +22,13 @@ pub mod code {
     pub const SECURITY_REQUEST: u8 = 0x0B;
     pub const PUBLIC_KEY: u8 = 0x0C;
     pub const DHKEY_CHECK: u8 = 0x0D;
+    pub const IDENTITY_INFORMATION: u8 = 0x08;
+    pub const IDENTITY_ADDRESS_INFORMATION: u8 = 0x09;
 }
+
+/// Key distribution bits (Pairing Request/Response bytes 5 and 6).
+pub const DIST_ENC: u8 = 0x01;
+pub const DIST_ID: u8 = 0x02;
 
 pub mod reason {
     pub const AUTH_REQUIREMENTS: u8 = 0x03;
@@ -64,6 +73,8 @@ pub enum Action {
     Ltk([u8; 16]),
     /// Pairing ended with this reason (sent or received).
     Failed(u8),
+    /// The peer's identity: IRK (wire order) and identity address (type, address).
+    Identity { irk: [u8; 16], addr_type: u8, addr: [u8; 6] },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,6 +101,10 @@ pub struct Smp {
     state: State,
     user_ok: bool,
     peer_checked: bool,
+    /// Our IRK and identity address (type, then six bytes), to give when asked.
+    identity: Option<([u8; 16], [u8; 7])>,
+    peer_irk: Option<[u8; 16]>,
+    paired: bool,
 }
 
 fn arr<const N: usize>(b: &[u8]) -> [u8; N] { let mut a = [0; N]; a.copy_from_slice(&b[..N]); a }
@@ -101,13 +116,62 @@ impl Smp {
     pub fn new(role: Role, io: u8, auth: u8, local: [u8; 7], remote: [u8; 7], secret: &[u8; 32], nonce: [u8; 16]) -> Option<Smp> {
         Some(Smp { role, io, auth: auth | AUTH_SC, local, remote, keys: KeyPair::from_secret(secret)?, nonce,
             preq: [0; 7], pres: [0; 7], peer_pk: [0; 64], dhkey: [0; 32], peer_confirm: [0; 16], peer_nonce: [0; 16],
-            mackey: [0; 16], ltk: [0; 16], method: Method::JustWorks, state: State::Idle, user_ok: false, peer_checked: false })
+            mackey: [0; 16], ltk: [0; 16], method: Method::JustWorks, state: State::Idle, user_ok: false, peer_checked: false,
+            identity: None, peer_irk: None, paired: false })
     }
 
     pub fn method(&self) -> Method { self.method }
     pub fn done(&self) -> bool { self.state == State::Done }
 
-    fn features(&self, code: u8) -> [u8; 7] { [code, self.io, 0, self.auth, 16, 0, 0] }
+    /// Give this identity (IRK, address type and address) when a peer asks for it.
+    pub fn set_identity(&mut self, irk: [u8; 16], addr_type: u8, addr: [u8; 6]) {
+        let mut a = [0u8; 7];
+        a[0] = addr_type;
+        a[1..].copy_from_slice(&addr);
+        self.identity = Some((irk, a));
+    }
+
+    /// Pairing request: we give nothing and ask for the responder's identity. Response:
+    /// we take the initiator's identity if offered and give ours if asked and we have one.
+    fn features(&self, code: u8) -> [u8; 7] {
+        match code {
+            code::PAIRING_REQUEST => [code, self.io, 0, self.auth, 16, 0, DIST_ID],
+            _ => {
+                let ours = if self.identity.is_some() { DIST_ID } else { 0 };
+                [code, self.io, 0, self.auth, 16, self.preq[5] & DIST_ID, self.preq[6] & ours]
+            }
+        }
+    }
+
+    /// Responder, once the link is encrypted: the keys the initiator asked for.
+    pub fn distribute(&mut self) -> Vec<Action> {
+        let mut out = Vec::new();
+        if !self.paired || self.role != Role::Responder || self.pres[6] & DIST_ID == 0 { return out; }
+        if let Some((irk, a)) = self.identity {
+            let mut i = alloc::vec![code::IDENTITY_INFORMATION];
+            i.extend_from_slice(&irk);
+            let mut b = alloc::vec![code::IDENTITY_ADDRESS_INFORMATION];
+            b.extend_from_slice(&a);
+            out.push(Action::Send(i));
+            out.push(Action::Send(b));
+        }
+        out
+    }
+
+    /// Key distribution PDUs after pairing.
+    fn keys(&mut self, c: u8, body: &[u8]) -> Vec<Action> {
+        // The peer distributes what the response agreed: the responder pres[6], the initiator pres[5].
+        let from_peer = if self.role == Role::Initiator { self.pres[6] } else { self.pres[5] };
+        if !self.paired || from_peer & DIST_ID == 0 { return Vec::new(); }
+        match c {
+            code::IDENTITY_INFORMATION if body.len() == 16 => { self.peer_irk = Some(arr(body)); Vec::new() }
+            code::IDENTITY_ADDRESS_INFORMATION if body.len() == 7 => match self.peer_irk.take() {
+                Some(irk) => alloc::vec![Action::Identity { irk, addr_type: body[0] & 1, addr: arr(&body[1..]) }],
+                None => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
+    }
 
     /// Initiator: the Pairing Request that starts pairing.
     pub fn start(&mut self) -> Vec<Action> {
@@ -182,6 +246,7 @@ impl Smp {
     /// Responder: both checks are settled (peer's Ea verified, user said yes).
     fn responder_finish(&mut self) -> Vec<Action> {
         self.state = State::Done;
+        self.paired = true;
         alloc::vec![Action::Send(self.check_pdu()), Action::Ltk(self.ltk)]
     }
 
@@ -203,8 +268,8 @@ impl Smp {
     /// One SMP PDU from the peer.
     pub fn on_pdu(&mut self, pdu: &[u8]) -> Vec<Action> {
         let Some(&c) = pdu.first() else { return Vec::new() };
-        if self.state == State::Done { return Vec::new(); }
         let body = &pdu[1..];
+        if self.state == State::Done { return self.keys(c, body); }
         if c == code::PAIRING_FAILED {
             self.state = State::Done;
             return alloc::vec![Action::Failed(body.first().copied().unwrap_or(reason::UNSPECIFIED))];
@@ -286,6 +351,7 @@ impl Smp {
             (Role::Initiator, State::Check, code::DHKEY_CHECK) if body.len() == 16 => {
                 if body != self.peer_check() { return self.fail(reason::DHKEY_CHECK_FAILED); }
                 self.state = State::Done;
+                self.paired = true;
                 alloc::vec![Action::Encrypt(self.ltk)]
             }
             // A Security Request while pairing, or a PDU out of turn.

@@ -44,6 +44,9 @@ sex-extensions = { path = "../crates/sex-extensions" }
 sex-shields = { path = "../crates/sex-shields" }
 burlesque-core = { path = "../crates/burlesque-core" }
 batik-core = { path = "../crates/batik-core" }
+sex-bt = { path = "../crates/sex-bt" }
+sex-hid-touch = { path = "../crates/sex-hid-touch" }
+sex-torrent = { path = "../crates/sex-torrent" }
 
 [[bin]]
 name = "fuzz_archive"
@@ -182,4 +185,29 @@ name = "fuzz_batik_psd"
 path = "fuzz_targets/fuzz_batik_psd.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "fuzz_bt_gatt"
+path = "fuzz_targets/fuzz_bt_gatt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_bt_hid_touch"
+path = "fuzz_targets/fuzz_bt_hid_touch.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_bt_hid_pointer"
+path = "fuzz_targets/fuzz_bt_hid_pointer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_swingers_rpc"
+path = "fuzz_targets/fuzz_swingers_rpc.rs"
+test = false
+doc = false
+
 

@@ -14,7 +14,8 @@ pub struct CoreLocal {
     pub core_id: u32,
     pub kernel_stack: u64,
     pub user_stack: u64,
-    pub syscall_msg_ptr: u64,
+    /// Was the unused per-core user page on key 15 (audit S13); kept so gs offsets stay put.
+    pub _reserved: u64,
     pub pdx_ring: crate::ipc_ring::SpscRing<crate::ipc::messages::Message>,
     /// This core's own TSS, or null for the boot core's static one.
     pub tss: *mut x86_64::structures::tss::TaskStateSegment,
@@ -27,22 +28,6 @@ impl CoreLocal {
 
     pub unsafe fn init_with_tss(core_id: u32, tss: *mut x86_64::structures::tss::TaskStateSegment) {
         INITIALIZED_CORES.fetch_add(1, Ordering::AcqRel);
-        use x86_64::structures::paging::PageTableFlags;
-        use crate::memory::manager::GLOBAL_VAS;
-
-        // Allocate a page for syscall message returns (accessible by userland)
-        let msg_va = crate::memory::va_allocator::allocate_va(4096).expect("CoreLocal: VA alloc fail");
-        {
-            let mut vas = GLOBAL_VAS.lock();
-            let vas_ref = vas.as_mut().expect("VAS not initialized");
-            // Map with PKEY 15 for shared syscall buffer.
-            vas_ref.map_pku_range(
-                VirtAddr::new(msg_va),
-                4096,
-                PageTableFlags::PRESENT | PageTableFlags::WRITABLE | PageTableFlags::USER_ACCESSIBLE,
-                15 // PKEY 15
-            ).expect("CoreLocal: Map fail");
-        }
 
         let mut core_local = alloc::boxed::Box::new(CoreLocal {
             current_pd_ptr: AtomicPtr::new(core::ptr::null_mut()),
@@ -50,7 +35,7 @@ impl CoreLocal {
             core_id,
             kernel_stack: 0,
             user_stack: 0,
-            syscall_msg_ptr: msg_va,
+            _reserved: 0,
             pdx_ring: crate::ipc_ring::SpscRing::new(),
             tss,
             idle_stack: 0,

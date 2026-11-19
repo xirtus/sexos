@@ -209,7 +209,7 @@ Now: per-domain CPU share and memory from syscall 87 (J1 part 1, #175).
 | Per-program disk and network I/O, end/restart program | R4 (needs J1's remaining counters; coordinate with J) |
 | **Capability graph**: which domain holds which grant, live (the name "Mesh" is this) | R5 |
 | Hardware: devices, drivers, temperatures, fan, battery wear, NVMe SMART | R5 (readings from H9) |
-| Boot timeline (Foreplay) and start time per program | R5 |
+| Boot timeline (Tantalize) and start time per program | R5 |
 
 ### sexshop (store) vs Flathub / GNOME Software / Steam
 
@@ -454,6 +454,44 @@ Write set: new modules in `servers/silk-shell/src/` (C owns `main.rs`; hooks und
 | S7 | Screen reader (proposed **Whisper**): reads the AccessKit tree (M8), speech by espeak-ng (GPL-3.0) as a confined program, focus tracking, review keys; Tatami Accessibility page | gate: focusing a button speaks its label (audio buffer contains speech frames; text log equals label) |
 | S8 | Magnifier, high contrast, sticky/slow keys, on-screen keyboard | gate: magnifier zooms 2× around pointer |
 
+**S4 notes (2026-11-16).** The `silk` command is in: Spindle's `silk windows | focus FRAME |
+move FRAME WS | layout WS master|dwindle|monocle|grid | float FRAME | close FRAME | events
+[since SEQ] | events follow [COUNT]` sends one `sex_pdx::silk_ctl` request (`OP_SILK_CTL`
+0x2EE) to the Shell, which answers with `key=value` text lines in `OP_SILK_OUT` (0x2EF) plain
+calls, ending in an `ok ...` or `error ...` line. The Shell never waits on Spindle and never
+uses Spindle's reply slot. Events (opened, closed, focused, moved, workspace, layout) come from
+comparing the frames, focus, workspace and layouts on every main loop turn, are kept in a
+32-event ring with sequence numbers, and a `follow` feed pushes them live until its count
+or Esc. Only a live Spindle run, or a run a Spindle terminal started attached to it, may call.
+Pure logic: `servers/silk-shell/src/silk_ctl.rs` (host test `tests/silk_ctl.rs`); glue:
+`silk_ctl_glue.rs`; gate: `scripts/silk_ctl_gate.py`.
+
+*Wasm layout plugins are not in the Shell yet, on purpose.* `crates/sex-wasm` would run them
+(wasmi, `no_std` + `alloc`, with fuel limits), but not inside the Shell: (1) the Shell's heap
+starts at a 128 KiB arena and wasmi's engine, a compiled module and even one 64 KiB linear-memory
+page would be most of it; (2) the interpreter is roughly what makes the `wasm` program near the
+1 MiB image limit, and the Shell is already the largest server; (3) the Shell would have to
+read the plugin file through Files itself and run guest code inside the tile path of the
+desktop's single loop, so a slow plugin (even fuel-bounded) stalls input and drawing, and an
+interpreter fault ends the desktop. The plan instead: a plugin runs in its own confined run
+(the `wasm` host with a `layout` export, `layout(n, w, h) -> ptr` writing `n` rectangles into
+its memory, fuel-limited per call). The Shell sends it the tile count and work area as a plain
+call when a workspace with `silk layout WS plugin:PATH` retiles, keeps tiling with the
+workspace's previous layout meanwhile, and applies the rectangles the plugin sends back as its
+own program-initiated call (checked: inside the work area, one per window, sizes at least the
+minimum), so the Shell never waits on the plugin. `silk layout WS plugin:PATH` answers that
+plugins are not in this build until then.
+
+**S5 notes (2026-11-17).** S5 lands in two PRs. *Hot corners* (S5a): pushing the pointer
+onto a corner pixel runs that corner's action once, until the pointer leaves by 8 px; never
+while a button is held or something holds the pointer, never while locked, and not for the boot
+pointer already at 0,0. Settings has `desktop.corner_top_left` (default `overview`, the Super+W
+window overview) and the other three corners (default `none`); choices `none`, `overview`,
+`launcher`, `notifications`, `lock`, run through the same `wm_action` path as the Super chords.
+Pure logic: `servers/silk-shell/src/hot_corners.rs` (host test `tests/hot_corners.rs`); glue:
+`hot_corners_glue.rs`; gate: `scripts/hot_corner_gate.py`. *Desktop widgets* (S5b: clock,
+weather from Open-Meteo, system) follow.
+
 ### T. Office suite: Gingham, Brocade, Burlesque and the Craft apps (8)
 
 Write set: new `apps/gingham`, `apps/brocade`, `apps/burlesque`, new `crates/sex-office`.
@@ -550,7 +588,7 @@ Andreas (2026-11-14): the Craft apps are the starting point, improved as we go. 
 their UI, list what is not perfect, and fill the blanks from the leaders: **Logic Pro, REAPER, Audacity,
 Ardour and LMMS** for Moan; **Kdenlive and Shotcut** (FilmCraft's layout is good) and
 **[Scarlet](https://github.com/Forward-Future/scarlet)** (MIT, AI transcript-based editing)
-for Splicy; Blender gets its own workstream (Z). V16 is that audit.
+for Splicy; Blender gets its own workstream (Z). V16 is that audit: [CRAFT_UI_AUDIT_2026_11_15.md](CRAFT_UI_AUDIT_2026_11_15.md).
 
 V ports the Craft creative apps on M11 (see T): PhotoCraft becomes Batik, VectorCraft Gestalt,
 FilmCraft Splicy, SoundCraft Moan. LightCraft's non-destructive development feeds Gaze's
@@ -589,6 +627,7 @@ scanner transports only, with the USB owner).
 | W1 | **Cufflinks** Bluetooth: native USB HCI transport in sexusb, Intel firmware load (AX201 on the x17, firmware table row), host stack in a ring-3 server (no BlueZ); scanning and pairing | host: HCI event goldens; x17 receipt |
 | W2 | Cufflinks: HID (keyboards, mice) and BLE | x17 receipt |
 | W3 | Cufflinks: A2DP audio (SBC, AAC via FFmpeg) into Bell; tray and Tatami page | x17 receipt; host: SBC goldens |
+| W3b | Cufflinks: AVRCP: headset play/pause/next/previous as the desktop's media keys (we are target), absolute volume mirrored with Bell's master volume (we are controller); `CUFFLINKS_BLUETOOTH_2026_11_14.md` section 19 | host: `avrcp_peers.rs` (buttons, volume both ways, unencrypted ignored, hostile and random frames); x17 receipt |
 | W4 | **Needle** driverless printing: IPP Everywhere and AirPrint discovery (mDNS), PWG raster/PDF jobs, queue UI; no CUPS | gate: ipp-everywhere test printer receives the job |
 | W5 | Needle scanning: eSCL/AirScan driverless scanners | gate: eSCL fixture returns a page |
 | W6 | **Lurk** remote desktop: VNC client and server (RFB), RDP client later; screen and input grants | gate: VNC client views the QEMU host test server |

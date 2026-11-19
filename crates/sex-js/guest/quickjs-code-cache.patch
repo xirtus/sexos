@@ -1,0 +1,12 @@
+--- a/quickjs.c
++++ b/quickjs.c
+@@ -36699,6 +36699,9 @@
+     if (bc_get_u8(s, &v8))
+         goto fail;
+     bc.is_strict_mode = (v8 > 0);
++    /* SexOS code cache: provenance is not serialized; the host reads bytecode only
++       under the same source origin it was compiled with, as at compile time. */
++    bc.sexos_muted_errors = sexos_compiled_muted(ctx);
+     if (bc_get_atom(s, &bc.func_name))
+         goto fail;
+     if (bc_get_leb128_u16(s, &bc.arg_count))

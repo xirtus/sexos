@@ -51,7 +51,7 @@ impl Controller {
                 }
                 Action::Ltk(k) => self.peer.ltk = Some(k),
                 Action::Failed(r) => self.peer.failed = Some(r),
-                Action::Encrypt(_) => unreachable!("peer is the responder"),
+                Action::Encrypt(_) | Action::Identity { .. } => unreachable!("peer is the responder"),
             }
         }
     }
@@ -59,6 +59,8 @@ impl Controller {
     fn take(&mut self, p: &[u8]) {
         if let Some((h, pb, data)) = hci::parse_acl(p) {
             assert_eq!(h, HANDLE);
+            // The controller hands the buffer back (Number Of Completed Packets).
+            self.out.push_back(hci::event(hci::ev::NUMBER_OF_COMPLETED_PACKETS, &[1, h as u8, (h >> 8) as u8, 1, 0]));
             assert!(data.len() <= 251, "fragment larger than the LE buffer");
             if let Some(f) = self.peer.rx.push(pb, data) {
                 let (cid, payload) = l2cap::parse_frame(&f).unwrap();

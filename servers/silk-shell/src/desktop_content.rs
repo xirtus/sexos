@@ -71,6 +71,13 @@ pub fn children(frame:u64,x:i32,y:i32,w:u32,h:u32)->[Option<Child>;4] {
     result
 }
 
+/// A viewport receipt names the same immutable child geometry sent to Display.
+/// Unknown or clipped-away children have no published origin.
+pub fn child_origin(frame:u64,surface:u64,x:i32,y:i32,w:u32,h:u32)->Option<(i32,i32)> {
+    children(frame,x,y,w,h).iter().flatten()
+        .find(|child|child.sid==surface).map(|child|(child.x,child.y))
+}
+
 /// Immutable BOOT visual association, never caller-supplied authority.
 pub const fn parent_frame(child:u64)->Option<u64>{
     let mut index=0;while index<crate::app_catalog::COUNT {

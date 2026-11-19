@@ -144,3 +144,65 @@ fn test_psd_multi_layer_roundtrip() {
         panic!("Layer 2 not raster");
     }
 }
+
+#[test]
+fn test_issue_323_psd_planar_oob_limits_bypass_and_empty_layer() {
+    use batik_core::BatikError;
+
+    let strict_limits = Limits {
+        max_width: 512,
+        max_height: 512,
+        max_pixels: 262_144,
+        max_input_bytes: 4 * 1024 * 1024,
+    };
+
+    // 1. 41-byte composite planar OOB reproducer (unsupported composite compression / RGB < 3 channels)
+    let planar_oob = include_bytes!("../../../fuzz/repros/round4/batik-psd-composite-planar-oob.bin");
+    assert!(
+        parse_psd(planar_oob, &strict_limits).is_err(),
+        "Composite planar OOB reproducer must return Err cleanly without panicking"
+    );
+
+    // Also verify RGB (color_mode = 3) with channels_count = 1 is rejected cleanly
+    let mut rgb_one_ch = Vec::new();
+    rgb_one_ch.extend_from_slice(b"8BPS");
+    rgb_one_ch.extend_from_slice(&1u16.to_be_bytes());
+    rgb_one_ch.extend_from_slice(&[0u8; 6]);
+    rgb_one_ch.extend_from_slice(&1u16.to_be_bytes()); // 1 channel (< 3 for RGB!)
+    rgb_one_ch.extend_from_slice(&2u32.to_be_bytes()); // height = 2
+    rgb_one_ch.extend_from_slice(&2u32.to_be_bytes()); // width = 2
+    rgb_one_ch.extend_from_slice(&8u16.to_be_bytes()); // depth = 8
+    rgb_one_ch.extend_from_slice(&3u16.to_be_bytes()); // color_mode = 3 (RGB)
+    rgb_one_ch.extend_from_slice(&0u32.to_be_bytes()); // color mode len
+    rgb_one_ch.extend_from_slice(&0u32.to_be_bytes()); // resources len
+    rgb_one_ch.extend_from_slice(&0u32.to_be_bytes()); // layer/mask len
+    rgb_one_ch.extend_from_slice(&0u16.to_be_bytes()); // raw composite
+    rgb_one_ch.extend_from_slice(&[0xAA; 4]);
+    assert!(matches!(
+        parse_psd(&rgb_one_ch, &strict_limits),
+        Err(BatikError::Unsupported(_))
+    ));
+
+    // 2. 103-byte ~900 MiB layer Limits-bypass OOM reproducer (1x1 canvas, 30000x30000 layer)
+    let oom_repro = include_bytes!("../../../fuzz/repros/round4/batik-psd-layer-limits-bypass-oom.bin");
+    assert!(
+        matches!(parse_psd(oom_repro, &strict_limits), Err(BatikError::TooLarge)),
+        "30000x30000 layer must be rejected by Limits BEFORE allocating channel buffers"
+    );
+
+    // 3. 228-byte empty 0x0 layer cursor desync reproducer:
+    // Layer 0 ("Empty") is 0x0 with 4 bytes of channel data; Layer 1 ("Valid") is 4x4 with R=0x80.
+    let empty_desync = include_bytes!("../../../fuzz/repros/round4/batik-psd-empty-layer-cursor-desync.bin");
+    let doc = parse_psd(empty_desync, &strict_limits)
+        .expect("0x0 layer followed by 4x4 Valid layer must stay synchronized and parse cleanly");
+    assert_eq!(doc.layers.len(), 1);
+    assert_eq!(doc.layers[0].name, "Valid");
+    if let LayerKind::Raster(ref r) = doc.layers[0].kind {
+        assert_eq!(r.width, 4);
+        assert_eq!(r.height, 4);
+        assert!(r.pixels.iter().all(|&px| px == 0xFF800000));
+    } else {
+        panic!("Expected Raster layer");
+    }
+}
+

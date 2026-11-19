@@ -238,6 +238,7 @@ pub fn read_ora(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
             opacity: pl.opacity,
             blend_mode: pl.blend_mode,
             kind: LayerKind::Raster(raster),
+            filter_stack: Vec::new(),
         };
 
         doc.add_layer(layer);
@@ -266,6 +267,7 @@ pub fn read_ora(data: &[u8], limits: &Limits) -> Result<Document, BatikError> {
                         opacity: 255,
                         blend_mode: BlendMode::Normal,
                         kind: LayerKind::Raster(raster),
+                        filter_stack: Vec::new(),
                     });
                 }
             }
@@ -289,23 +291,22 @@ pub fn write_ora(doc: &Document) -> Result<Vec<u8>, BatikError> {
     let mut layer_pngs: Vec<(String, Vec<u8>)> = Vec::new();
 
     let mut layer_count = 0;
-    for layer in &doc.layers {
-        if let LayerKind::Raster(ref raster) = layer.kind {
-            let png_data = encode_rgba_png(&raster.pixels, raster.width, raster.height)?;
-            let src = format!("data/layer{layer_count}.png");
+    let exported_layers = doc.exportable_raster_layers();
+    for (layer, raster) in &exported_layers {
+        let png_data = encode_rgba_png(&raster.pixels, raster.width, raster.height)?;
+        let src = format!("data/layer{layer_count}.png");
 
-            let op_f = (layer.opacity as f32) / 255.0;
-            let vis_str = if layer.visible { "visible" } else { "hidden" };
-            let comp_op = layer.blend_mode.to_ora_op();
+        let op_f = (layer.opacity as f32) / 255.0;
+        let vis_str = if layer.visible { "visible" } else { "hidden" };
+        let comp_op = layer.blend_mode.to_ora_op();
 
-            let tag = format!(
-                "    <layer name=\"{}\" src=\"{}\" x=\"{}\" y=\"{}\" opacity=\"{:.3}\" visibility=\"{}\" composite-op=\"{}\"/>\n",
-                layer.name, src, raster.offset_x, raster.offset_y, op_f, vis_str, comp_op
-            );
-            layer_xmls.push(tag);
-            layer_pngs.push((src, png_data));
-            layer_count += 1;
-        }
+        let tag = format!(
+            "    <layer name=\"{}\" src=\"{}\" x=\"{}\" y=\"{}\" opacity=\"{:.3}\" visibility=\"{}\" composite-op=\"{}\"/>\n",
+            layer.name, src, raster.offset_x, raster.offset_y, op_f, vis_str, comp_op
+        );
+        layer_xmls.push(tag);
+        layer_pngs.push((src, png_data));
+        layer_count += 1;
     }
 
     // 3. Construct stack.xml

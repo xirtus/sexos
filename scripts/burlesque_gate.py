@@ -65,6 +65,8 @@ def main():
         p.add_argument('--' + name, required=True, type=Path)
     p.add_argument('--resolution', default='1280x800')
     p.add_argument('--screenshots-dir', type=Path, default=None)
+    p.add_argument('--save-assets', action='store_true', help='Copy screenshots to docs/user/assets/')
+    p.add_argument('--require-video', action='store_true', help='Require FFMPEG_RECORDING=2 WebM export profile in guest')
     a = p.parse_args()
     a.out = a.out.resolve()
     a.out.mkdir(parents=True, exist_ok=True)
@@ -132,11 +134,15 @@ def main():
             n = len(colours(ppm_bytes, tile))
             assert n > 8, (name, 'blank window', n)
 
-            png_bytes = ppm_to_png(ppm_bytes, tile)
+            png_bytes = ppm_to_png(ppm_bytes)
             png_path = a.out / f'{name}.png'
             png_path.write_bytes(png_bytes)
             if a.screenshots_dir:
                 (a.screenshots_dir / f'{name}.png').write_bytes(png_bytes)
+            if a.save_assets:
+                assets_dir = ROOT / 'docs/user/assets'
+                assets_dir.mkdir(parents=True, exist_ok=True)
+                (assets_dir / f'{name}.png').write_bytes(png_bytes)
 
             return n
 
@@ -175,7 +181,25 @@ def main():
         g['wait'](r'\[burlesque.transition\] kind=dissolve frames=8', start, 60)
         transition_colours = screenshot('burlesque-transition')
 
-        # 7. Presenter View & Speaker Notes (burlesque-presenter-notes.png)
+        # 7. Intra-Slide Builds & Magic Move Transition (burlesque-magic-move.png)
+        start = len(text())
+        control('magic_move')
+        g['wait'](r'\[burlesque.state\] .* transition=magic-move', start, 60)
+
+        start = len(text())
+        control('add_build')
+        g['wait'](r'\[burlesque.build\] slide=1 step=1', start, 60)
+
+        start = len(text())
+        control('step_build')
+        g['wait'](r'\[burlesque.build\] slide=1 step=0', start, 60)
+
+        start = len(text())
+        control('play_transition')
+        g['wait'](r'\[burlesque.transition\] kind=magic-move frames=8', start, 60)
+        magic_colours = screenshot('burlesque-magic-move')
+
+        # 8. Presenter View & Speaker Notes (burlesque-presenter-notes.png)
         start = len(text())
         control('presenter')
         g['wait'](r'\[burlesque.presenter\] active=1 slide=1', start, 60)
@@ -188,7 +212,52 @@ def main():
         g['wait'](r'\[burlesque.presenter\] active=0 slide=1', start, 60)
         g['wait'](r'\[burlesque.state\] slides=2 current=1 presenter=0', start, 60)
 
-        # 8. PPTX / ODP Roundtrip & PDF Export (burlesque-pptx-odp-pdf.png)
+        # 9. Rehearsal HUD & Splicy WebM Video Export (burlesque-rehearse-video.png)
+        start = len(text())
+        control('prev')
+        g['wait'](r'\[burlesque.state\] slides=2 current=0 presenter=0', start, 60)
+
+        start = len(text())
+        control('rehearse')
+        g['wait'](r'\[burlesque.rehearse\] active=1', start, 60)
+        time.sleep(1.2)
+        rehearse_colours = screenshot('burlesque-rehearse-video')
+
+        # Advance slide during rehearsal to record dwell timing, then commit timings
+        control('next')
+        time.sleep(0.6)
+        start = len(text())
+        control('rehearse')
+        g['wait'](r'\[burlesque.rehearse\] active=0', start, 60)
+
+        start = len(text())
+        control('export_webm')
+        if a.require_video:
+            m_webm = g['wait'](r'\[burlesque.exported\] fmt=webm file=(\S+) bytes=([1-9]\d*) frames=([1-9]\d*)', start, 60)
+            webm_status = 'encoded'
+            webm_file = m_webm[1]
+            webm_bytes = int(m_webm[2])
+            webm_frames = int(m_webm[3])
+            assert webm_bytes > 100, f'WebM too small: {webm_bytes}'
+        else:
+            m_webm = g['wait'](
+                r'\[burlesque\.(?:exported\] fmt=webm file=(\S+) bytes=([1-9]\d*) frames=([1-9]\d*)|video\.unavailable\] encoder=splicy reason=ffmpeg_export_not_built frames=([1-9]\d*) hash=([0-9a-f]{16}))',
+                start,
+                60,
+            )
+            if m_webm[1]:
+                webm_status = 'encoded'
+                webm_file = m_webm[1]
+                webm_bytes = int(m_webm[2])
+                webm_frames = int(m_webm[3])
+            else:
+                webm_status = 'splicy_timeline_verified'
+                webm_file = None
+                webm_bytes = 0
+                webm_frames = int(m_webm[4])
+        assert webm_frames > 15, f'WebM frames too small: {webm_frames}'
+
+        # 10. PPTX / ODP Roundtrip & PDF Export (burlesque-pptx-odp-pdf.png)
         start = len(text())
         control('save_pptx')
         m_pptx = g['wait'](r'\[burlesque.exported\] fmt=pptx file=(\S+) bytes=([1-9]\d*) pages=2', start, 60)
@@ -217,7 +286,7 @@ def main():
         assert exported_bytes > 500, f'PDF too small: {exported_bytes}'
         pdf_colours = screenshot('burlesque-pptx-odp-pdf')
 
-        # 9. Close window via F11
+        # 11. Close window via F11
         start = len(text())
         g['focus'](surface)
         q.key('f11')
@@ -232,10 +301,16 @@ def main():
             slides=2,
             exported_file=exported_file,
             exported_bytes=exported_bytes,
+            webm_status=webm_status,
+            webm_file=webm_file,
+            webm_bytes=webm_bytes,
+            webm_frames=webm_frames,
             colours=dict(
                 theme=theme_colours,
                 transition=transition_colours,
+                magic_move=magic_colours,
                 presenter=presenter_colours,
+                rehearse=rehearse_colours,
                 pdf=pdf_colours,
             ),
         )

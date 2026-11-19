@@ -81,6 +81,7 @@ int sxn_instantiate(w2c_sexjs *i, void *ctx, uint64_t max_bytes) {
 void sxn_free(w2c_sexjs *i) { wasm2c_sexjs_free(i); }
 uint8_t *sxn_memory(w2c_sexjs *i, uint64_t *size) { *size = i->w2c_memory.size; return i->w2c_memory.data; }
 
+int sxn_own_cache_stats(w2c_sexjs *i, u32 *out) { ENTER *out = w2c_sexjs_sx_own_cache_stats(i); LEAVE }
 int sxn_init(w2c_sexjs *i, u32 heap, u32 *out) { ENTER *out = w2c_sexjs_sx_init(i, heap); LEAVE }
 int sxn_alloc(w2c_sexjs *i, u32 n, u32 *out) { ENTER *out = w2c_sexjs_sx_alloc(i, n); LEAVE }
 int sxn_release(w2c_sexjs *i, u32 p) { ENTER w2c_sexjs_sx_free(i, p); LEAVE }

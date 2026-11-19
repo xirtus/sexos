@@ -1,0 +1,19 @@
+[package]
+name = "moangen"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Moan's one-shot ephemeral generative worker binary"
+
+[features]
+default = ["sexos"]
+sexos = ["dep:sex-app", "dep:sex-pdx"]
+
+[dependencies]
+moan-gen = { path = "../../crates/moan-gen" }
+moan-core = { path = "../../crates/moan-core" }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
+
+[target.'cfg(all(target_arch = "x86_64", any(target_os = "none", target_os = "hermit")))'.dependencies]
+sex-app = { path = "../../crates/sex-app", optional = true }
+sex-pdx = { path = "../../crates/sex-pdx", optional = true }

@@ -245,8 +245,9 @@ pub mod fs_service {
         w.prepare_count += 1;
         w.root_status
     }
-    pub fn handle(caller: u32, a: u64, _offset: u64, _length: u64) -> u64 {
+    pub fn handle(caller: u32, caller_task: u32, a: u64, _offset: u64, _length: u64) -> u64 {
         assert_eq!(caller, 42);
+        assert_eq!(caller_task, crate::WORLD.lock().unwrap().as_ref().unwrap().task);
         crate::nested_io();
         crate::WORLD.lock().unwrap().as_mut().unwrap().data_calls += 1;
         crate::fs::reply((a & 0xffffff) as u32, crate::fs::OK, 32)

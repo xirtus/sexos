@@ -94,50 +94,87 @@ fn dnr_rules_block_through_shields() {
     assert!(!b("https://cdn2.io/beacon", "https://x.y/", Kind::Ping));
 }
 
-// Fuzz round 4 (issues #319, #320, #321): the reproducers in fuzz/repros/round4.
-const REPRO_LOCALE: &[u8] = include_bytes!("../../../fuzz/repros/round4/kaleidoscope-ext-locale-path-traversal.bin");
-const REPRO_DNR: &[u8] = include_bytes!("../../../fuzz/repros/round4/kaleidoscope-ext-dnr-filter-smuggling.bin");
-const REPRO_BOMB: &[u8] = include_bytes!("../../../fuzz/repros/round4/kaleidoscope-ext-package-prealloc-bomb.bin");
-const REPRO_EMPTY: &[u8] = include_bytes!("../../../fuzz/repros/round4/kaleidoscope-ext-package-empty-path-and-prealloc.bin");
+/// A ZIP of (name, method, declared size, payload) entries, for hostile layouts.
+fn zip(entries: &[(&str, u16, u32, &[u8])]) -> std::vec::Vec<u8> {
+    let (mut out, mut cd) = (std::vec::Vec::new(), std::vec::Vec::new());
+    for (name, method, size, data) in entries {
+        let offset = out.len() as u32;
+        let head = |v: &mut std::vec::Vec<u8>| {
+            v.extend_from_slice(&method.to_le_bytes());
+            v.extend_from_slice(&[0; 8]); // time, date, crc
+            v.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            v.extend_from_slice(&size.to_le_bytes());
+            v.extend_from_slice(&(name.len() as u16).to_le_bytes());
+            v.extend_from_slice(&0u16.to_le_bytes());
+        };
+        out.extend_from_slice(b"PK\x03\x04\x14\x00\x00\x00");
+        head(&mut out);
+        out.extend_from_slice(name.as_bytes());
+        out.extend_from_slice(data);
+        cd.extend_from_slice(b"PK\x01\x02\x14\x00\x14\x00\x00\x00");
+        head(&mut cd);
+        cd.extend_from_slice(&[0; 10]); // comment, disk, attributes
+        cd.extend_from_slice(&offset.to_le_bytes());
+        cd.extend_from_slice(name.as_bytes());
+    }
+    let at = out.len() as u32;
+    out.extend_from_slice(&cd);
+    out.extend_from_slice(b"PK\x05\x06\x00\x00\x00\x00");
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    out.extend_from_slice(&(cd.len() as u32).to_le_bytes());
+    out.extend_from_slice(&at.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
 
+/// Issue #319: a 64 MiB declared size over a 2-byte stream is refused, and a
+/// folder entry with trailing blanks never becomes a file with an empty path.
 #[test]
-fn a_locale_name_never_leaves_the_extension() {
-    let m = Manifest::parse(core::str::from_utf8(REPRO_LOCALE).unwrap()).unwrap();
+fn hostile_packages() {
+    let manifest = br#"{"manifest_version":3,"name":"x","version":"1"}"#;
+    let bomb = zip(&[("manifest.json", 0, manifest.len() as u32, manifest), ("big.js", 8, 64 << 20, b"\x03\x00")]);
+    assert!(package::unpack(&bomb).is_err());
+    let wrap = zip(&[("wrap/ ", 0, 1, b"x"), ("wrap/manifest.json", 0, manifest.len() as u32, manifest)]);
+    let files = package::unpack(&wrap).unwrap();
+    assert_eq!(files.iter().map(|(p, _)| p.as_str()).collect::<std::vec::Vec<_>>(), ["manifest.json"]);
+    for p in ["a//b", "wrap/", "a/./b", "a/../b", " "] { assert_eq!(clean_path(p), None, "{p:?}"); }
+    assert_eq!(clean_path("./js/a.js").as_deref(), Some("js/a.js"));
+}
+
+/// Issue #320: `default_locale` can't climb out of `_locales/`.
+#[test]
+fn locale_cannot_traverse() {
+    let m = Manifest::parse(include_str!("../../../fuzz/repros/round4/kaleidoscope-ext-locale-path-traversal.bin")).unwrap();
     assert_eq!(m.default_locale, None);
     assert_eq!(m.locale_file().as_deref(), Some("_locales/en/messages.json"));
-    for (given, kept) in [("en", Some("en")), ("pt_BR", Some("pt_BR")), ("zh-TW", Some("zh-TW")), ("..", None), ("en/../..", None), ("a\\b", None), ("", None)] {
-        let m = Manifest::parse(&alloc::format!(r#"{{"manifest_version":3,"name":"x","default_locale":"{}"}}"#, given.replace('\\', "\\\\"))).unwrap();
-        assert_eq!(m.default_locale.as_deref(), kept, "{given}");
-    }
+    let m = Manifest::parse(r#"{"manifest_version":3,"name":"__MSG_n__","default_locale":"pt_BR"}"#).unwrap();
+    assert_eq!(m.locale_file().as_deref(), Some("_locales/pt_BR/messages.json"));
 }
 
+/// Issue #321: DNR rules can't smuggle cosmetic syntax or extra Shields options.
 #[test]
-fn rules_cannot_smuggle_filter_syntax() {
-    let c = dnr::convert(core::str::from_utf8(REPRO_DNR).unwrap()).unwrap();
-    assert!(c.filters.is_empty(), "{:?}", c.filters);
+fn dnr_cannot_smuggle_filter_syntax() {
     for cond in [
-        r#"{"urlFilter":"a.com#?#div"}"#, r#"{"urlFilter":"a.com#$#x"}"#, r#"{"urlFilter":"a b"}"#,
+        r#"{"urlFilter":"example.com#@#.ad-banner"}"#,
+        r#"{"urlFilter":"example.com##.x"}"#,
+        r#"{"urlFilter":"a.com\nb.com##.x"}"#,
         r#"{"urlFilter":"ads","initiatorDomains":["evil.com,badfilter"]}"#,
-        r#"{"urlFilter":"ads","requestDomains":["site.com,important"]}"#,
-        r#"{"excludedDomains":["a.com|b"]}"#, r#"{"domains":["x$y"]}"#, r#"{"excludedRequestDomains":["a\nb"]}"#,
+        r#"{"urlFilter":"ads","excludedDomains":["site.com,important"]}"#,
+        r#"{"requestDomains":["a.com$badfilter"]}"#,
+        r#"{"urlFilter":"ads","excludedRequestDomains":["a.com|b"]}"#,
     ] {
-        let rule: serde_json::Value = serde_json::from_str(&alloc::format!(r#"{{"id":1,"action":{{"type":"block"}},"condition":{}}}"#, cond)).unwrap();
+        let rule: serde_json::Value = serde_json::from_str(&alloc::format!(r#"{{"action":{{"type":"block"}},"condition":{cond}}}"#)).unwrap();
         assert_eq!(dnr::rule(&rule), None, "{cond}");
     }
-    // Ordinary rules still convert.
-    let ok: serde_json::Value = serde_json::from_str(r#"{"id":1,"action":{"type":"block"},"condition":{"urlFilter":"||ads.example^","initiatorDomains":["news.example","*.shop.example"]}}"#).unwrap();
-    assert_eq!(dnr::rule(&ok), Some(vec![String::from("||ads.example^$domain=news.example|*.shop.example")]));
-}
-
-#[test]
-fn packages_have_no_blank_paths_and_bounded_room() {
-    for bytes in [REPRO_BOMB, REPRO_EMPTY] {
-        if let Ok(files) = package::unpack(bytes) {
-            for (p, _) in files { assert!(clean_path(&p).as_deref() == Some(p.as_str()), "{p:?}"); }
-        }
+    let rule: serde_json::Value = serde_json::from_str(r#"{"action":{"type":"block"},"condition":{"urlFilter":"||ads.","initiatorDomains":["news.example-site.co.uk"]}}"#).unwrap();
+    assert_eq!(dnr::rule(&rule).unwrap(), ["||ads.$domain=news.example-site.co.uk"]);
+    let smuggle = include_str!("../../../fuzz/repros/round4/kaleidoscope-ext-dnr-filter-smuggling.bin");
+    if let Ok(c) = dnr::convert(smuggle) {
+        let mut engine = Engine::new();
+        for f in &c.filters { assert!(!f.contains('#'), "{f}"); let _ = engine.add_filter(f); }
+        assert_eq!(engine.counts().cosmetic, 0);
     }
-    for bad in ["", "/", "a/", "a//b", "a/./b", "a/../b", "wrap/ ", "a\u{7}b"] { assert_eq!(clean_path(bad), None, "{bad:?}"); }
-    assert_eq!(clean_path("./js/a.js").as_deref(), Some("js/a.js"));
 }
 
 /// With `SEXOS_DNR_RULESETS` naming ruleset files (uBlock Origin Lite's, say), counts

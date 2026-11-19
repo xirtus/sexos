@@ -818,3 +818,32 @@ fn test_pdf_export_with_and_without_notes() {
     let ed_with_notes = vellum_edit::Editor::open(pdf_with_notes).expect("open pdf with notes");
     assert_eq!(ed_with_notes.page_count(), 4);
 }
+
+#[test]
+fn test_issue_322_pptx_bullet_lvl_255_no_overflow() {
+    let repro = include_bytes!("../../../fuzz/repros/round4/burlesque-pptx-bullet-lvl-overflow.bin");
+    let deck = Deck::open_pptx(repro).expect("Issue #322 reproducer PPTX must open cleanly without u8 overflow");
+    assert!(deck.slide_count() >= 1);
+
+    let slide = deck.get_slide(0).expect("slide 0 exists");
+    let mut found_clamped_bullet = false;
+    for el in &slide.elements {
+        if let SlideElement::TextBox(tb) = el {
+            for p in &tb.paragraphs {
+                assert!(
+                    p.bullet_level <= 9,
+                    "bullet_level must be clamped to OOXML 0..=9 (got {})",
+                    p.bullet_level
+                );
+                if p.bullet_level == 9 {
+                    found_clamped_bullet = true;
+                }
+            }
+        }
+    }
+    assert!(found_clamped_bullet, "lvl=\"255\" paragraph must clamp cleanly to bullet_level 9");
+
+    let mut pixels = vec![0u32; 320 * 180];
+    render_slide(slide, &deck.theme, deck.aspect_ratio, &mut pixels, 320, 180);
+}
+

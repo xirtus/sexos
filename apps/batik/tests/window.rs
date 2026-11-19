@@ -2,7 +2,7 @@
 //! Batik Weft window host tests: widget events, painting, layers, adjustments, undo/redo, and rendering.
 
 use batik::weft;
-use batik::weft::input::{Button, Event, Pointer, PointerKind};
+use batik::weft::input::{Button, Event, Key, Pointer, PointerKind};
 use batik::weft::{Strings, Theme, Ui};
 use batik::{Batik, PressureCurve, Tool};
 use batik_core::layer::LayerKind;
@@ -412,4 +412,132 @@ fn test_batik_codecs_roundtrip() {
     // Re-import WebP
     batik.import_bytes(&webp, &mut ui).expect("import webp");
     assert_eq!(batik.layer_count(), 1);
+}
+
+#[test]
+fn test_batik_nondestructive_workflow_ui() {
+    let mut ui = Ui::new(800, 600, Theme::light(), Strings::new("en"));
+    let mut batik = Batik::build(&mut ui);
+    ui.layout();
+
+    // 1. Initial State
+    assert_eq!(batik.layer_count(), 1);
+    assert_eq!(batik.adj_layer_count(), 0);
+    assert_eq!(batik.text_layer_count(), 0);
+    assert_eq!(batik.active_fx_count(), 0);
+
+    // 2. Add Curves Adjustment Layer
+    click_widget(batik.btn_adj_curves, &mut ui, &mut batik);
+    assert_eq!(batik.layer_count(), 2);
+    assert_eq!(batik.adj_layer_count(), 1);
+    assert_eq!(batik.undo_count(), 1);
+
+    // 3. Cycle Curves Preset on active curves layer
+    click_widget(batik.btn_adj_curves, &mut ui, &mut batik);
+    assert_eq!(batik.layer_count(), 2);
+    assert_eq!(batik.curves_preset_idx, 1);
+    assert_eq!(batik.undo_count(), 2);
+
+    // 4. Add Hue/Saturation Adjustment Layer
+    click_widget(batik.btn_adj_huesat, &mut ui, &mut batik);
+    assert_eq!(batik.layer_count(), 3);
+    assert_eq!(batik.adj_layer_count(), 2);
+    assert_eq!(batik.undo_count(), 3);
+
+    // 5. Add Text Layer
+    click_widget(batik.btn_text_layer, &mut ui, &mut batik);
+    assert_eq!(batik.layer_count(), 4);
+    assert_eq!(batik.text_layer_count(), 1);
+    assert_eq!(batik.undo_count(), 4);
+
+    // Verify initial text
+    if let Some(l) = batik.doc.get_layer(batik.active_layer_id) {
+        if let LayerKind::Text(ref t) = l.kind {
+            assert_eq!(t.text, "SexOS Batik");
+        } else {
+            panic!("expected text layer");
+        }
+    }
+
+    // 6. Live Text Typing via Event::Key
+    let _ = batik.step(
+        &mut ui,
+        Event::Key(Key {
+            code: b'!',
+            shift: true,
+            control: false,
+            text: Some('!'),
+        }),
+    );
+    if let Some(l) = batik.doc.get_layer(batik.active_layer_id) {
+        if let LayerKind::Text(ref t) = l.kind {
+            assert_eq!(t.text, "SexOS Batik!");
+        } else {
+            panic!("expected text layer");
+        }
+    }
+    assert_eq!(batik.undo_count(), 5);
+
+    // Backspace typing
+    let _ = batik.step(
+        &mut ui,
+        Event::Key(Key {
+            code: 8,
+            shift: false,
+            control: false,
+            text: None,
+        }),
+    );
+    if let Some(l) = batik.doc.get_layer(batik.active_layer_id) {
+        if let LayerKind::Text(ref t) = l.kind {
+            assert_eq!(t.text, "SexOS Batik");
+        } else {
+            panic!("expected text layer");
+        }
+    }
+    assert_eq!(batik.undo_count(), 6);
+
+    // 7. Cycle Text Style
+    click_widget(batik.btn_edit_text_style, &mut ui, &mut batik);
+    assert_eq!(batik.text_style_idx, 1);
+    assert_eq!(batik.undo_count(), 7);
+
+    // 8. Push Filter onto Layer FilterStack
+    click_widget(batik.btn_push_fx_stack, &mut ui, &mut batik);
+    assert_eq!(batik.active_fx_count(), 1);
+    assert!(batik.active_fx_enabled());
+    assert_eq!(batik.undo_count(), 8);
+
+    // 9. Toggle Filter Node (disable)
+    click_widget(batik.btn_toggle_fx_stack, &mut ui, &mut batik);
+    assert_eq!(batik.active_fx_count(), 1);
+    assert!(!batik.active_fx_enabled());
+    assert_eq!(batik.undo_count(), 9);
+
+    // 10. Toggle Filter Node (re-enable)
+    click_widget(batik.btn_toggle_fx_stack, &mut ui, &mut batik);
+    assert_eq!(batik.active_fx_count(), 1);
+    assert!(batik.active_fx_enabled());
+    assert_eq!(batik.undo_count(), 10);
+
+    // 11. Clear Filter Stack
+    click_widget(batik.btn_clear_fx_stack, &mut ui, &mut batik);
+    assert_eq!(batik.active_fx_count(), 0);
+    assert_eq!(batik.undo_count(), 11);
+
+    // 12. Undo clear filter stack
+    click_widget(batik.btn_undo, &mut ui, &mut batik);
+    assert_eq!(batik.active_fx_count(), 1);
+    assert_eq!(batik.undo_count(), 10);
+
+    // 13. Redo clear filter stack
+    click_widget(batik.btn_redo, &mut ui, &mut batik);
+    assert_eq!(batik.active_fx_count(), 0);
+    assert_eq!(batik.undo_count(), 11);
+
+    // 14. Export PSD & ORA with Adjustment & Text Layers
+    let psd = batik.export_bytes("psd").expect("export psd with adjustment and text layers");
+    assert!(psd.starts_with(b"8BPS"));
+    let ora = batik.export_bytes("ora").expect("export ora with adjustment and text layers");
+    assert!(ora.starts_with(b"PK\x03\x04"));
 }

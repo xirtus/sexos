@@ -8,10 +8,22 @@
 * `stdhello echo`: lines typed into Term reach its standard input; Ctrl+D ends input and
   it exits 3, which Term reports.
 * `stdhello count` prints until Ctrl+C in Term stops it (status 130).
-* `chello one two`: a C program on sex-libc, the same way; it is refused the network.
+* `stdhello size` prints the size Term told Files (`[term.native.size]`), and the new size
+  after Shell's Meta+M (monocle) resizes Term's window.
+* `stdhello wait` blocked reading: Ctrl+C ends it within 50 ms (Term's and std's ticks).
+* `stdhello spin` never reads, writes or sleeps: the first Ctrl+C cannot reach it, the
+  second within a second has Shell stop it (status 137).
+* `stdhello raw`: raw mode reaches Term (mode 7); keys arrive one at a time, Ctrl+C as 3.
+* `chello one two`: a C program on sex-libc, the same way; it is refused the network, and
+  its `ioctl(TIOCGWINSZ)` is Term's size.
 * Lua 5.4 (`lua -e`, then its interactive prompt until Ctrl+D) and CPython (`python -c`).
-* A Term started with plain `run term` holds no grant: Files refuses its run (DENIED)."""
-import argparse,os,re,shutil,time
+* Two panes each run a program of their own at once.
+* Yarn: `stdhello count` goes on printing after its window closes (F11); in a new
+  window `attach N` shows it again with nothing lost in between. `cmd &` starts a
+  background job (a yarn from the start), `fg N` brings it in, `kill N` ends one.
+* A Term started with plain `run spindle` holds no relay grant: Files refuses its
+  relay ticket (DENIED) and Term reports the refusal."""
+import argparse,hashlib,json,os,re,shutil,time
 from pathlib import Path
 from install_program import install
 # A network to refuse: a run Term starts never gets it (chello checks connect is EACCES).
@@ -21,10 +33,105 @@ from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
 SURFACE={int(a):int(b)for a,b in re.findall(r'app: App::Program, ordinal: \d+, target: (\d+), surface: (\d+)',(ROOT/'crates/sex-pdx/src/app_catalog.rs').read_text())}
 KEYS={' ':'spc','.':'dot','/':'slash','-':'minus','=':'equal',',':'comma',';':'semicolon'}
-SHIFTED={'(':'9',')':'0','*':'8','+':'equal'}
+SHIFTED={'(':'9',')':'0','*':'8','+':'equal','&':'7'}
+def denial_sources(root):
+ """Bind this legacy relay denial to the reviewed exact-run ticket route.
+
+ These are bounded source-shape checks, not a general Rust authorization proof.
+ Native denial receipts and their causal window remain checked separately.
+ """
+ paths=('servers/sexfiles/src/fs_service.rs','crates/sex-app/src/lib.rs',
+        'servers/silk-shell/src/main.rs','servers/sexfiles/src/trampoline.rs')
+ source={name:(root/name).read_text()for name in paths}
+ def compact(text):
+  # Preserve normal string literals; comment-only copies cannot satisfy a guard.
+  text=re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*[\s\S]*?\*/',
+              lambda m:'' if m[0].startswith(('//','/*')) else m[0],text)
+  return re.sub(r'\s+','',text)
+ def section(text,start,end):
+  if text.count(start)!=1:raise ValueError('legacy relay source contract changed: ambiguous '+start)
+  at=text.index(start);stop=text.find(end,at+len(start))
+  if stop<0:raise ValueError('legacy relay source contract changed: missing '+end)
+  return compact(text[at:stop])
+ files,sdk,shell,trampoline=(source[name]for name in paths)
+ body=compact(files);front=section(files,'pub fn handle(','fn bound_sender(')
+ live=section(files,'fn program_live(','pub fn handle(')
+ legacy=section(shell,'    if msg.type_id==store::OP_RUN {','        PROGRAM_READING=status==0;')
+ stamped='ifby_program&&!program_run(msg.caller_pd).is_some_and(|(_,task)|launch_caller_task(task,msg.caller_task)){returntrue}'
+ forwarded='pdx_call(store::SHELL_ROUTE_SLOT,store::OP,msg.arg0,msg.arg1,ifby_program{msg.caller_pdasu64}else{0})'
+ sender=section(files,'fn bound_sender(','fn current_ticket_owner(')
+ owner=section(files,'fn current_ticket_owner(','pub enum Program')
+ ticket=section(files,'pub fn read_ticket(','fn run(')
+ run=section(files,'fn run(','pub fn run_on')
+ prepare=section(files,'fn prepare(','pub fn program_is(')
+ facts=[
+  ('exact ticket owner', 'structTicketOwner{target:u32,task:u32}' in body and
+   'staticmutPREPARED_OWNER:Option<TicketOwner>=None;' in body),
+  ('stamped live prepare', 'bound_task!=0&&program_live(target,bound_task)&&(!preparing||(sender_task!=0&&sender_task==bound_task))' in sender and
+   'bound_sender(caller,caller_task,b.task,r.kind==w::PREPARE)' in front and
+   'crate::fs_service::handle(caller,msg.caller_task,msg.arg0,msg.arg1,msg.arg2)' in compact(trampoline)),
+  ('live exact catalog task', 'c.is_subject(target,row.surface,3)&&c.task_id==task' in live and
+   'sex_pdx::app_lifecycle::info(row.lifecycle_slot)==Err(sex_pdx::app_lifecycle::LIVE)' in live),
+  ('current live task owner', '(binding.task!=0&&program_live(target,binding.task)).then_some(TicketOwner{target,task:binding.task})' in owner),
+  ('grant-specific relay prepare',
+   'letrelay=!matches!(r.offset&0xFF,w::PREPARE_LAUNCH|w::PREPARE_PIPED);' in front and
+   'ifr.kind==w::PREPARE{unsafe{PREPARING_ROW=program;PREPARING_FOR=None;}}' in front and
+   'iflet(Some(k),w::PREPARE,true)=(program,r.kind,relay){if!unsafe{(*core::ptr::addr_of!(BINDINGS))[k]}.is_some_and(|b|holds_launch(&b)){returnw::reply(r.seq,w::DENIED,0);}' in front and
+   'ifletErr(status)=crate::console_relay::may_prepare(relay){returnw::reply(r.seq,status,0);}' in front and
+   'sex_pdx::console_relay::plain_args(' in front),
+  ('explicit owner forwarding',
+   'letowner=ifr.kind==w::PREPARE&&program.is_some(){letSome(owner)=current_ticket_owner(caller)else{returnw::reply(r.seq,w::DENIED,0);};Some(owner)}else{None};letresult=run(fs,r,path,data,owner);' in front and
+   'returnprepare(fs,r,path,data,owner);' in run),
+  ('captured exact owner, preparing row and separate relay',
+   'letrow=unsafe{core::mem::take(&mut*core::ptr::addr_of_mut!(PREPARING_ROW))};' in prepare and
+   'unsafe{PREPARED_OWNER=owner;PREPARED_LAUNCHER=(relay,row);}' in prepare),
+  ('requester exact owner and preparing row check',
+   'letSome(owner)=current_ticket_owner(requester)else{return(Program::Absent,None);};Some(owner)' in ticket and
+   'ifunsafe{PREPARED_OWNER}!=owner||row!=asker{sex_pdx::serial_record!("[files.ticket.denied]requester={}",requester);return(Program::Absent,None);}' in ticket),
+  ('owner check before single-use consumption',
+   ticket.find('ifunsafe{PREPARED_OWNER}!=owner')>=0 and
+   ticket.find('ifunsafe{PREPARED_OWNER}!=owner')<ticket.find('core::mem::take(&mutprepared.1)')<ticket.find('PREPARED_OWNER=None;')),
+  ('legacy relay request', 'sex_pdx::program_store::OP_RUN,sex_pdx::program_store::TICKET,ticketasu64' in compact(sdk)),
+  ('Shell forwards stamped requester',
+   'fnlaunch_caller_task(current_task:u32,caller_task:u32)->bool{current_task!=0&&current_task==caller_task}' in compact(shell) and
+   stamped in legacy and forwarded in legacy and legacy.index(stamped)<legacy.index(forwarded)),
+ ]
+ if not all(ok for _,ok in facts):raise ValueError('legacy relay source contract changed: '+str(facts))
+ return {name:hashlib.sha256((root/name).read_bytes()).hexdigest()for name in paths}
+
+def downstream_denial(trace,launch_start,action_start,end,target,task,source_hashes):
+ """Exact negative action window; an enqueue receipt is never launch success."""
+ if not 0<=launch_start<action_start<end<=len(trace):raise ValueError('invalid denial boundaries')
+ setup=trace[launch_start:action_start];window=trace[action_start:end]
+ bound=rf'\[files.program.bound\] target={target} task={task} root=/data/term\n'
+ ready=rf'\[term.ready\] target={target} task={task} cols=\d+ rows=\d+\n'
+ b=list(re.finditer('^'+bound,setup,re.M));r=list(re.finditer('^'+ready,setup,re.M))
+ if len(b)!=1 or len(r)!=1 or b[0].end()>r[0].start():raise ValueError('missing exact current Term run')
+ # A replacement ready/binding cannot be silently accepted as the same run.
+ forbidden=('shell.program.launch','files.program.bound','files.console.attached',
+            'shell.launch.asked','shell.launch.event','app.activation.committed',
+            'term.ready','term.job.exit','std.out','stdhello.ok','stdhello.fail')
+ if any('['+tag+']'in window for tag in forbidden):raise ValueError('child, relay or run replacement in denial window')
+ expected=[r'\[term.command\] stdhello\n',r'\[term.native.start\] name=stdhello\n',
+           rf'\[files.ticket.denied\] requester={target}\n',
+           r'\[shell.program.denied\] reason=store error=1\n',r'\[spindle.program.refused\] code=1\n']
+ matches=[]
+ for pattern in expected:
+  found=list(re.finditer('^'+pattern,window,re.M))
+  if len(found)!=1:raise ValueError('missing/duplicate downstream denial receipt: '+pattern)
+  matches.append(found[0])
+ if any(a.end()>b.start()for a,b in zip(matches,matches[1:])):raise ValueError('denial receipt order differs')
+ if window.count('[files.ticket.denied]')!=1 or window.count('[shell.program.denied]')!=1:raise ValueError('unrelated requester/store denial')
+ if window.count('[term.command]')!=1 or window.count('[term.native.start]')!=1 or window.count('[spindle.program.refused]')!=1:raise ValueError('nonexclusive Term action')
+ ticks=[int(m[1])for m in re.finditer(r'^\[sched.active\] tick=(\d+) [^\n]*\n',window[matches[-1].end():],re.M)]
+ if len(ticks)<2 or any(b<=a for a,b in zip(ticks,ticks[1:])):raise ValueError('missing progressing post-denial observation window')
+ return dict(ok=True,target=target,task=task,launch_start=launch_start,action_start=action_start,end=end,
+             serial_sha256=hashlib.sha256(trace[:end].encode()).hexdigest(),source_sha256=source_hashes,
+             downstream_denied=True,child_started=False,relay_attached=False,feedback_qualified=False,
+             observation_ticks=[ticks[0],ticks[-1]],scope='Exact legacy relay ticket denial; Term refusal feedback remains unqualified.')
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
- progs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in ('term','stdhello','chello','lua','python')]
+ progs=[(n,(ROOT/'iso_root/programs'/n).read_bytes()) for n in ('spindle','stdhello','chello','lua','python')]
  for n,b in progs:assert b[:4]==b'\x7fELF',n
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
@@ -47,12 +154,12 @@ def main():
   target,task=int(m[1]),int(m[2])
   g['wait'](rf'\[display\.app\.title\] target={target} ',s,60);time.sleep(1)
   g['focus'](SURFACE[target]);time.sleep(.5)
-  return target,task
+  return target,task,s
  def ran(name,code,s,timeout=300):
   m=g['wait'](rf'\[term\.job\.exit\] name={name} code=(-?\d+)\n',s,timeout);assert m[1]==str(code),m[0];time.sleep(1)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  target,task=start('spindle')
+  target,task,_=start('spindle')
   # An ordinary std program, its console in Term.
   s=len(t());term_line('stdhello alpha beta')
   g['wait'](r'\[term\.native\.start\] name=stdhello',s,60)
@@ -70,6 +177,42 @@ def main():
   ran('stdhello',3,s)
   screen=snapshot();assert 'got: TWO WORDS' in screen and '[stdhello exited with 3]' in screen,screen
   q.cmd('screendump',{'filename':str(a.out/'term-native-echo.ppm')})
+  # The window's size reaches the program, and again after a resize.
+  term_line('clear');s=len(t());term_line('stdhello size')
+  told=g['wait'](r'\[term\.native\.size\] cols=(\d+) rows=(\d+) ok=1\n',s,60)
+  m=g['wait'](r'\[std\.out\] \[stdhello\.size\] cols=(\d+) rows=(\d+) changes=(\d+)\n',s,240)
+  assert (m[1],m[2])==(told[1],told[2]),(m[0],told[0])
+  r=len(t());chord('meta_l','m');g['wait'](r'\[shell\.wm\.action\] action=ToggleMonocle done=1',r,30)
+  told=g['wait'](r'\[term\.native\.size\] cols=(\d+) rows=(\d+) ok=1\n',r,60)
+  m2=g['wait'](r'\[std\.out\] \[stdhello\.resized\] cols=(\d+) rows=(\d+) changes=(\d+)\n',r,90)
+  assert (m2[1],m2[2])==(told[1],told[2]) and (m2[1],m2[2])!=(m[1],m[2]) and int(m2[3])>int(m[3]),(m[0],m2[0])
+  ran('stdhello',0,s)
+  r=len(t());chord('meta_l','m');g['wait'](r'\[shell\.wm\.action\] action=ToggleMonocle done=1',r,30);time.sleep(1)
+  # A run blocked reading sees Ctrl+C within 50 ms.
+  term_line('clear');s=len(t());term_line('stdhello wait')
+  g['wait'](r'\[std\.out\] \[stdhello\.wait\] reading\n',s,240);time.sleep(2)
+  chord('ctrl','c')
+  pressed=g['wait'](r'\[term\.job\.interrupt\] name=stdhello ms=(\d+)\n',s,30)
+  ended=g['wait'](r'\[std\.interrupted\] ms=(\d+)\n',s,30)
+  late=int(ended[1])-int(pressed[1]);assert 0<=late<=50,f'interrupt took {late} ms'
+  ran('stdhello',130,s)
+  print({'interrupt_ms':late})
+  # A run that computes without asking: the second Ctrl+C has Shell stop it.
+  term_line('clear');s=len(t());term_line('stdhello spin')
+  g['wait'](r'\[std\.out\] \[stdhello\.spin\] spinning\n',s,240);time.sleep(1)
+  chord('ctrl','c');g['wait'](r'\[term\.job\.interrupt\] name=stdhello ',s,30);time.sleep(.3)
+  chord('ctrl','c');g['wait'](r'\[term\.job\.stop\] name=stdhello target=\d+ ok=1 ',s,30)
+  g['wait'](r'\[shell\.attached\.stop\] terminal=\d+ target=\d+ task=\d+ ok=1\n',s,30)
+  ran('stdhello',137,s,120)
+  # Raw mode: keys one at a time, unechoed, Ctrl+C a byte.
+  term_line('clear');s=len(t());term_line('stdhello raw')
+  g['wait'](r'\[std\.out\] \[stdhello\.raw\] on=1\n',s,240)
+  g['wait'](r'\[term\.native\.mode\] name=stdhello mode=7\n',s,30)
+  keys('a');g['wait'](r'\[std\.out\] \[stdhello\.raw\] byte=97\n',s,30)
+  chord('ctrl','c');g['wait'](r'\[std\.out\] \[stdhello\.raw\] byte=3\n',s,30)
+  keys('q');g['wait'](r'\[std\.out\] \[stdhello\.raw\] off\n',s,30)
+  ran('stdhello',0,s)
+  assert '[term.job.interrupt] name=stdhello' not in t()[s:]
   # Ctrl+C stops a program that never reads.
   term_line('clear');s=len(t());term_line('stdhello count')
   g['wait'](r'\[std\.out\] count 20\n',s,240)
@@ -78,6 +221,8 @@ def main():
   # C on sex-libc.
   term_line('clear');s=len(t());term_line('chello one two')
   m=g['wait'](r'\[chello\.(ok|fail)\] passed=(\d+)/(\d+)\n',s,600);assert m[1]=='ok',m[0]
+  told=re.findall(r'\[term\.native\.size\] cols=(\d+) rows=(\d+) ok=1\n',t()[s:])[-1]
+  ws=re.search(r'\[std\.out\] winsize cols=(\d+) rows=(\d+)\n',t()[s:]);assert ws and ws.groups()==told,(ws and ws[0],told)
   ran('chello',0,s)
   screen=snapshot();assert 'one' in screen,screen
   q.cmd('screendump',{'filename':str(a.out/'term-native-c.ppm')})
@@ -91,11 +236,54 @@ def main():
   g['wait'](r'\[std\.out\] 42\n',s,600);ran('python',0,s,600)
   screen=snapshot();assert screen.count('42')>=2 and '5' in screen,screen
   q.cmd('screendump',{'filename':str(a.out/'term-native-lua-python.ppm')})
+  # Two panes, a program of its own in each at once (one relay slot per pane).
+  term_line('clear');s=len(t());chord('ctrl','shift','e');g['wait'](r'\[term\.pane\.split\] ',s,30);time.sleep(1)
+  term_line('stdhello wait');g['wait'](r'\[std\.out\] \[stdhello\.wait\] reading\n',s,240)
+  chord('ctrl','shift','left');time.sleep(.5);r=len(t());term_line('stdhello alpha beta')
+  m=g['wait'](r'\[stdhello\.(ok|fail)\] passed=(\d+)/(\d+)\n',r,600);assert m[1]=='ok',m[0]
+  ran('stdhello',0,r)
+  assert '[std.interrupted]' not in t()[s:],'the waiting pane was disturbed'
+  chord('ctrl','shift','right');time.sleep(.5);r=len(t());chord('ctrl','c');ran('stdhello',130,r)
+  q.cmd('screendump',{'filename':str(a.out/'term-native-two-panes.ppm')})
+  # Yarn: closing the window leaves a program running; `attach` in a new window shows it
+  # again, with what it wrote in between.
+  term_line('clear');s=len(t());term_line('stdhello count')
+  g['wait'](r'\[std\.out\] count 20\n',s,240)
+  r=len(t());q.key('f11')
+  m=g['wait'](r'\[term\.yarn\.detached\] name=stdhello yarn=(\d+) bytes=(\d+)\n',r,60);yarn=m[1];assert int(m[2])>0,m[0]
+  g['wait'](rf'\[files\.yarn\.detached\] terminal_row=\d+ slot=\d+ yarn={yarn} dump=[1-9]\d*\n',r,60)
+  g['wait'](r'\[term\.closed\] how=window',r,60)
+  g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',r,120)
+  gone=len(t());first=int(g['wait'](r'\[std\.out\] count (\d+)\n',gone,60)[1]);time.sleep(3)
+  last=int(re.findall(r'\[std\.out\] count (\d+)\n',t()[gone:])[-1]);assert last>first+20,('no output without a window',first,last)
+  target,task,_=start('spindle')
+  s=len(t());term_line('jobs');g['wait'](r'\[term\.shell\.done\] exit=0 error=0',s,60)
+  s=len(t());term_line('attach '+yarn)
+  g['wait'](rf'\[files\.yarn\.adopted\] terminal_row=\d+ slot=\d+ yarn={yarn}\n',s,60)
+  g['wait'](rf'\[term\.yarn\.attached\] name=stdhello yarn={yarn} state=2\n',s,60);time.sleep(2)
+  chord('ctrl','c');ran('stdhello',130,s)
+  screen=snapshot();nums=[int(n)for n in re.findall(r'^count (\d+)$',screen,re.M)]
+  assert nums and max(nums)>last and nums==list(range(nums[0],nums[0]+len(nums))),('the attached output has gaps',last,nums)
+  q.cmd('screendump',{'filename':str(a.out/'term-native-yarn-attached.ppm')})
+  # A background job: `&`, then `fg` brings it here until Ctrl+C.
+  term_line('clear');s=len(t());term_line('stdhello count &')
+  bg=g['wait'](r'\[term\.yarn\.background\] name=stdhello yarn=(\d+)\n',s,60)[1]
+  g['wait'](rf'\[files\.yarn\.started\] yarn={bg} ',s,240);g['wait'](r'\[std\.out\] count 20\n',s,240)
+  s=len(t());term_line('fg '+bg);g['wait'](rf'\[term\.shell\.fg\] job={bg} capture=0\n',s,60)
+  g['wait'](rf'\[term\.yarn\.attached\] name=stdhello yarn={bg} ',s,60);time.sleep(1)
+  chord('ctrl','c');ran('stdhello',130,s)
+  # `kill` ends a background job waiting for input.
+  term_line('clear');s=len(t());term_line('stdhello wait &')
+  w=g['wait'](r'\[term\.yarn\.background\] name=stdhello yarn=(\d+)\n',s,60)[1]
+  g['wait'](r'\[std\.out\] \[stdhello\.wait\] reading\n',s,240);time.sleep(1)
+  s=len(t());term_line('kill '+w);g['wait'](rf'\[files\.yarn\.stop\] yarn={w} state=2\n',s,60)
+  g['wait'](r'\[std\.interrupted\] ',s,60)
   s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   # Without the grant, Files refuses.
-  target,task=start('run term')
+  target,task,_=start('run spindle')
   s=len(t());term_line('stdhello');g['wait'](r'\[term\.native\.refused\] name=stdhello status=11\n',s,60)
   assert '[files.console.attached]' not in t()[s:]
+  assert '[term.native.start]' not in t()[s:]
   s=len(t());q.key('f11');g['wait'](rf'\[app\.private\.retired\] target={target} task={task} ',s,120)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[term.fatal]' not in t()
  finally:g['stop']()

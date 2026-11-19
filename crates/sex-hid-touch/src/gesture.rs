@@ -65,6 +65,8 @@ pub struct Recognizer {
     button: Option<u8>,
 }
 
+const COORD_LIMIT: i32 = 1 << 20;
+
 fn centroid(cs: &[Contact]) -> (i32, i32) {
     let n = cs.len().max(1) as i32;
     (cs.iter().map(|c| c.x).sum::<i32>() / n, cs.iter().map(|c| c.y).sum::<i32>() / n)
@@ -83,7 +85,16 @@ fn isqrt(v: u64) -> u64 {
 }
 fn down(f: &Frame, out: &mut [Contact; 5]) -> usize {
     let mut n = 0;
-    for c in f.down() { if n < out.len() { out[n] = *c; n += 1; } }
+    // Coordinates come from the device and may be any i32: keep them to +-2^20 (well
+    // past any real surface) so the arithmetic below cannot overflow.
+    for c in f.down() {
+        if n < out.len() {
+            out[n] = *c;
+            out[n].x = c.x.clamp(-COORD_LIMIT, COORD_LIMIT);
+            out[n].y = c.y.clamp(-COORD_LIMIT, COORD_LIMIT);
+            n += 1;
+        }
+    }
     out[..n].sort_unstable_by_key(|c| c.id);
     n
 }
@@ -142,7 +153,7 @@ impl Recognizer {
                 }
                 2 => self.two_fingers(cur, dx, dy, &mut emit),
                 _ => {
-                    self.acc.0 += dx; self.acc.1 += dy;
+                    self.acc.0 = self.acc.0.saturating_add(dx); self.acc.1 = self.acc.1.saturating_add(dy);
                     if !self.swipe_done {
                         let d = self.config.swipe_distance;
                         let ev = if self.acc.0 <= -d { Some(Event::SwipeLeft) } else if self.acc.0 >= d { Some(Event::SwipeRight) }
@@ -156,23 +167,24 @@ impl Recognizer {
     }
 
     fn pointer(&mut self, dx: i32, dy: i32, emit: &mut impl FnMut(Event)) {
-        let q = self.config.pointer_q8;
-        let (x, y) = (dx * q + self.rem.0, dy * q + self.rem.1);
+        let q = self.config.pointer_q8 as i64;
+        let (x, y) = (dx as i64 * q + self.rem.0 as i64, dy as i64 * q + self.rem.1 as i64);
         let (px, py) = (x / 256, y / 256);
-        self.rem = (x - px * 256, y - py * 256);
-        if px != 0 || py != 0 { emit(Event::Move(px, py)); }
+        self.rem = ((x - px * 256) as i32, (y - py * 256) as i32);
+        let clamp = |v: i64| v.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        if px != 0 || py != 0 { emit(Event::Move(clamp(px), clamp(py))); }
     }
 
     fn two_fingers(&mut self, cur: &[Contact], _dx: i32, dy: i32, emit: &mut impl FnMut(Event)) {
         let s = spread(cur);
         if self.mode == Mode::Undecided || self.mode == Mode::Pointer {
-            let change = (s - self.spread_base).abs() * 100 / self.spread_base.max(1);
+            let change = ((s as i64 - self.spread_base as i64).abs() * 100 / self.spread_base.max(1) as i64).min(i32::MAX as i64) as i32;
             if change >= self.config.pinch_percent / 2 && self.spread_base > self.config.tap_slop * 2 { self.mode = Mode::Pinch; }
             else if self.travel > self.config.tap_slop { self.mode = Mode::Scroll; }
         }
         match self.mode {
             Mode::Scroll => {
-                self.acc.1 += dy;
+                self.acc.1 = self.acc.1.saturating_add(dy);
                 let step = self.config.scroll_step;
                 let steps = (self.acc.1 / step).clamp(-127, 127);
                 if steps != 0 {
@@ -182,10 +194,10 @@ impl Recognizer {
                 }
             }
             Mode::Pinch => {
-                let base = self.spread_base.max(1);
-                let p = self.config.pinch_percent;
-                if s * 100 >= base * (100 + p) { emit(Event::ZoomIn); self.spread_base = s; }
-                else if s * 100 <= base * (100 - p) { emit(Event::ZoomOut); self.spread_base = s; }
+                let (s64, base) = (s as i64, self.spread_base.max(1) as i64);
+                let p = self.config.pinch_percent as i64;
+                if s64 * 100 >= base * (100 + p) { emit(Event::ZoomIn); self.spread_base = s; }
+                else if s64 * 100 <= base * (100 - p) { emit(Event::ZoomOut); self.spread_base = s; }
             }
             _ => {}
         }
@@ -300,5 +312,15 @@ mod tests {
         let ev = run(&mut r, &[(0, frame(&[(1, 100, 100)], false)), (10, frame(&[(1, 200, 100)], false)), (20, frame(&[], false)),
                                (500, frame(&[(2, 2900, 1900)], false)), (510, frame(&[(2, 2900, 1900)], false))]);
         assert!(ev.iter().all(|e| match e { Event::Move(x, y) => x.abs() < 40 && y.abs() < 40, _ => true }), "{:?}", ev);
+    }
+
+    #[test]
+    fn extreme_coordinates_do_not_overflow() {
+        let mut r = rec();
+        let (lo, hi) = (i32::MIN, i32::MAX);
+        let _ = run(&mut r, &[(0, frame(&[(1, lo, lo)], false)), (5, frame(&[(1, hi, hi)], false)), (10, frame(&[(1, lo, hi)], false)),
+            (15, frame(&[(1, lo, lo), (2, hi, hi)], false)), (20, frame(&[(1, hi, lo), (2, lo, hi)], false)),
+            (25, frame(&[(1, hi, hi), (2, hi, hi), (3, hi, hi), (4, hi, hi), (5, hi, hi)], false)),
+            (30, frame(&[(1, lo, lo), (2, lo, lo), (3, lo, lo), (4, lo, lo), (5, lo, lo)], false)), (300, frame(&[], false))]);
     }
 }

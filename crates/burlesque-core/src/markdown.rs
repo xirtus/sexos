@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Markdown deck importer and exporter with `---` slide separators and speaker notes.
 
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use sex_canvas::Rect;
+use crate::animation::{BuildEffect, BuildStep};
 use crate::deck::{AspectRatio, Deck, Slide};
-use crate::elements::{CodeBlock, Paragraph, SlideElement, TextBox, TextRun};
+use crate::elements::{CodeBlock, Paragraph, SlideElement, TextBox, TextRun, Transition};
 use crate::layout::SlideLayout;
 use crate::Result;
 
@@ -58,37 +59,67 @@ fn parse_slide_markdown(content: &str, slide_id: u64, width: f32, height: f32) -
     while let Some(line) = lines.next() {
         let trimmed = line.trim();
 
-        // Speaker notes: <!-- notes: ... -->
+        // Comments: <!-- transition: ... -->, <!-- build: ... -->, <!-- timing: ... -->, or <!-- notes: ... -->
         if trimmed.starts_with("<!--") {
             let mut note_buf = String::new();
-            if trimmed.contains("-->") {
-                let inner = trimmed
+            let inner_content = if trimmed.contains("-->") {
+                trimmed
                     .trim_start_matches("<!--")
                     .trim_end_matches("-->")
-                    .trim();
-                let clean = strip_notes_prefix(inner);
-                note_buf.push_str(clean);
+                    .trim()
+                    .to_string()
             } else {
-                let first = trimmed.trim_start_matches("<!--").trim();
-                note_buf.push_str(strip_notes_prefix(first));
-                note_buf.push('\n');
+                let mut buf = String::new();
+                buf.push_str(trimmed.trim_start_matches("<!--").trim());
+                buf.push('\n');
                 while let Some(nline) = lines.next() {
                     let ntrim = nline.trim();
                     if ntrim.contains("-->") {
-                        let last = ntrim.trim_end_matches("-->").trim();
-                        note_buf.push_str(last);
+                        buf.push_str(ntrim.trim_end_matches("-->").trim());
                         break;
                     } else {
-                        note_buf.push_str(ntrim);
-                        note_buf.push('\n');
+                        buf.push_str(ntrim);
+                        buf.push('\n');
                     }
                 }
+                buf
+            };
+
+            let clean_inner = inner_content.trim();
+            if let Some(trans) = clean_inner.strip_prefix("transition:").or_else(|| clean_inner.strip_prefix("transition ")) {
+                slide.transition = Transition::from_str_loose(trans.trim());
+                continue;
+            } else if let Some(timing) = clean_inner.strip_prefix("timing:").or_else(|| clean_inner.strip_prefix("timing ")) {
+                if let Ok(ms) = timing.trim().parse::<u32>() {
+                    slide.rehearsed_dwell_ms = Some(ms);
+                }
+                continue;
+            } else if let Some(build_str) = clean_inner.strip_prefix("build:").or_else(|| clean_inner.strip_prefix("build ")) {
+                let parts: Vec<&str> = build_str.split_whitespace().collect();
+                if !parts.is_empty() {
+                    let elem_idx = parts[0].parse::<usize>().unwrap_or(0);
+                    let effect = if parts.len() > 1 {
+                        BuildEffect::from_str_loose(parts[1])
+                    } else {
+                        BuildEffect::DissolveIn
+                    };
+                    let duration = if parts.len() > 2 {
+                        parts[2].parse::<u32>().unwrap_or(400)
+                    } else {
+                        400
+                    };
+                    slide.add_build(BuildStep::new(elem_idx, effect).with_duration(duration));
+                }
+                continue;
+            } else {
+                let clean = strip_notes_prefix(clean_inner);
+                note_buf.push_str(clean);
+                if !notes.is_empty() {
+                    notes.push('\n');
+                }
+                notes.push_str(note_buf.trim());
+                continue;
             }
-            if !notes.is_empty() {
-                notes.push('\n');
-            }
-            notes.push_str(note_buf.trim());
-            continue;
         }
 
         // Code block toggle
@@ -228,6 +259,22 @@ pub fn export_markdown(deck: &Deck) -> String {
                 }
                 _ => {}
             }
+        }
+
+        if slide.transition != Transition::None {
+            out.push_str("\n<!-- transition: ");
+            out.push_str(slide.transition.kind_str());
+            out.push_str(" -->\n");
+        }
+        if let Some(dwell) = slide.rehearsed_dwell_ms {
+            out.push_str("<!-- timing: ");
+            out.push_str(&alloc::format!("{}", dwell));
+            out.push_str(" -->\n");
+        }
+        for b in &slide.builds {
+            out.push_str("<!-- build: ");
+            out.push_str(&alloc::format!("{} {} {}", b.element_index, b.effect.kind_str(), b.duration_ms));
+            out.push_str(" -->\n");
         }
 
         if !slide.speaker_notes.is_empty() {

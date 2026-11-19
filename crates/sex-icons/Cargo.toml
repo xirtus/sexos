@@ -1,0 +1,10 @@
+[package]
+name = "sex-icons"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "The SexOS icon set (lips brand style), drawn at run time from assets/icons/icons.txt"
+
+[dependencies]
+sex-font = { path = "../sex-font" }
+libm = "0.2"

@@ -71,12 +71,15 @@ def main():
         p.add_argument('--' + name, required=True, type=Path)
     p.add_argument('--resolution', default='1280x800')
     p.add_argument('--screenshots-dir', default=None, type=Path)
+    p.add_argument('--save-assets', action='store_true', help='Save screenshots to docs/user/assets/')
     a = p.parse_args()
     a.out = a.out.resolve()
     a.out.mkdir(parents=True, exist_ok=True)
     if a.screenshots_dir:
         a.screenshots_dir = a.screenshots_dir.resolve()
         a.screenshots_dir.mkdir(parents=True, exist_ok=True)
+    if a.save_assets:
+        (ROOT / 'docs/user/assets').mkdir(parents=True, exist_ok=True)
 
     disk = a.out / 'nvme.img'
     shutil.copyfile(a.source_disk, disk)
@@ -170,7 +173,24 @@ def main():
             png_out.write_bytes(png_bytes)
             if a.screenshots_dir:
                 (a.screenshots_dir / f'{name}.png').write_bytes(png_bytes)
+            if a.save_assets:
+                (ROOT / 'docs/user/assets' / f'{name}.png').write_bytes(png_bytes)
             screenshots_saved[name] = str(png_out)
+
+            alias_map = {
+                'batik-adjustment-layers': 'adjustment-layers',
+                'batik-text-layer': 'text-layer',
+                'batik-filter-stack': 'filter-stack',
+            }
+            if name in alias_map:
+                alias = alias_map[name]
+                (a.out / f'{alias}.ppm').write_bytes(ppm_bytes)
+                (a.out / f'{alias}.png').write_bytes(png_bytes)
+                if a.screenshots_dir:
+                    (a.screenshots_dir / f'{alias}.png').write_bytes(png_bytes)
+                if a.save_assets:
+                    (ROOT / 'docs/user/assets' / f'{alias}.png').write_bytes(png_bytes)
+
             return n
 
         # 1. Assert initial state
@@ -283,7 +303,55 @@ def main():
         time.sleep(0.5)
         screenshot('batik-filters')
 
-        # 7. Capability: Codecs Export & Import
+        # 7. Capability: Non-Destructive Adjustment Layers (Curves & Hue/Sat)
+        start = len(text())
+        control('add_curves_adj')
+        g['wait'](r'\[batik.state\].*?adj_layers=1', start, 60)
+
+        start = len(text())
+        control('add_curves_adj')  # cycle curves preset
+        time.sleep(0.3)
+        control('add_huesat_adj')
+        g['wait'](r'\[batik.state\].*?adj_layers=2', start, 60)
+        screenshot('batik-adjustment-layers')
+
+        # 8. Capability: Scalable Editable Text Layer
+        start = len(text())
+        control('add_text_layer')
+        g['wait'](r'\[batik.state\].*?text_layers=1', start, 60)
+
+        # Type additional text via QEMU key injection
+        g['focus'](surface)
+        time.sleep(0.2)
+        for k in ' 2026':
+            q.key('spc' if k == ' ' else k)
+            time.sleep(0.08)
+        time.sleep(0.3)
+
+        start = len(text())
+        control('edit_text_style')  # cycle text style
+        time.sleep(0.3)
+        screenshot('batik-text-layer')
+
+        # 9. Capability: Non-Destructive Layer Filter Stack
+        start = len(text())
+        control('push_fx_stack')
+        g['wait'](r'\[batik.state\].*?fx_count=1.*?fx_enabled=yes', start, 60)
+
+        start = len(text())
+        control('push_fx_stack')
+        g['wait'](r'\[batik.state\].*?fx_count=2.*?fx_enabled=yes', start, 60)
+        screenshot('batik-filter-stack')
+
+        start = len(text())
+        control('toggle_fx_stack')  # toggle FX node disabled
+        g['wait'](r'\[batik.state\].*?fx_enabled=no', start, 60)
+
+        start = len(text())
+        control('toggle_fx_stack')  # toggle FX node back enabled
+        g['wait'](r'\[batik.state\].*?fx_enabled=yes', start, 60)
+
+        # 10. Capability: Codecs Export & Import
         start = len(text())
         control('export_png')
         m_png = g['wait'](r'\[batik.exported\] fmt=png bytes=(\d+)', start, 60)

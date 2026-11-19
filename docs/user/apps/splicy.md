@@ -28,7 +28,7 @@ Splicy's video pipeline spans three tightly integrated components:
 | **WebM Export** | `.webm` | VP9 | Opus | Royalty-free, highly compressed modern web and streaming format. |
 | **Universal MP4** | `.mp4` | H.264 (AVC) | AAC | Maximum compatibility across legacy devices, browsers, and mobile hardware. |
 | **Next-Gen MP4** | `.mp4` | AV1 | Opus | State-of-the-art compression efficiency with high-fidelity Opus sound. |
-| **Timeline Interchange**| `.otio` | N/A | N/A | OpenTimelineIO structured schema for importing and exporting edit decision lists. |
+| **Timeline Interchange**| `.otio`, `.fcpxml`, `.edl`, `.srt` | N/A | N/A | Full NLE handoff bundle (`Ctrl+H`) with FCPXML 1.10, OpenTimelineIO, CMX 3600 EDL, SubRip captions, and a per-project compatibility audit `README`. |
 
 ---
 
@@ -47,25 +47,23 @@ Splicy features professional trim modes that keep video and multi-track audio sy
 
 ## Unique Splicy Innovations
 
-### 1. Integer Microsecond Precision
-Unlike legacy video editors that measure time using floating-point seconds, Splicy represents all timeline points and media spans in integer microseconds (`type Micros = i64`, where 1 second = 1,000,000 µs). This guarantees:
-- Zero accumulated floating-point rounding errors across long projects.
-- Bit-identical golden output comparisons across test runs and renders.
-- Exact audio-to-video lip-sync alignment at every frame rate (24, 30, 60, or 120 fps).
+### 1. Integer Microsecond Precision & Acoustic Alignment (`sex_splice::align`)
+Unlike legacy video editors that measure time using floating-point seconds, Splicy represents all timeline points and media spans in integer microseconds (`type Micros = i64`, where 1 second = 1,000,000 µs):
+- Zero accumulated floating-point rounding errors across long projects and bit-identical golden renders.
+- **Viterbi CTC Forced Alignment & Room-Tone Snapping**: Refines coarse ASR word spans with integer CTC alignment, measures each recording's adaptive noise floor, snaps cut edges onto exact whole frames inside room-tone valleys, refuses cuts that split sounding speech, detects skipped speech holes and acoustic `"uh"/"um"` hesitations, and aligns dual-system audio via waveform envelope cross-correlation.
 
-### 2. Editing by Transcript
-Splicy integrates natural language transcript tokens directly with timeline ranges:
-- Search spoken dialogue in the transcript and delete words or sentences.
-- When dialogue is deleted from the text transcript, Splicy executes corresponding ripple cuts across all tied video and audio tracks automatically.
+### 2. Editing by Transcript, Centered Join Crossfades & Two-State `\` Audition
+Splicy integrates spoken dialogue directly with non-destructive source ranges:
+- Delete words or sentences (`S` + `Delete`) to execute synchronized ripple cuts across picture and sound tracks.
+- **Centered Audio-Only Join Crossfades (`sex_splice::crossfade`)**: Smooths dialogue joins using real source handles without shifting picture cuts or runtime, reporting exact handle diagnostics (`JoinFadeReport`).
+- **Two-State `\` Audition**: Press `\` once to hear the join in context, and press `\` again to audition the exact removed footage (`AuditionMode::HearRemoved`).
 
-### 3. Assistant Suggestions & Version History
-Changes made by collaborators or automated assistants are staged as non-destructive suggestions:
-- Review suggested cuts, speed adjustments, and transitions visually.
-- Accept or reject individual suggestions with one click.
-- Undo and redo any trim action using the persistent version history tree.
+### 3. Source-Anchored Rebasing, Inheritable Skills & Agent JSON-RPC (`sex_splice::{rebase, skills, ipc}`)
+- **Source-Anchored Rebasing**: Rebases concurrent assistant cut batches onto an actively edited timeline (`rebase_cuts`), supports partial batch apply (`apply_cut_subset`), and tracks `"N need you"` review flags (`EditFlag`).
+- **Inheritable `SKILL.md` Workflows**: Supports `extends: dialogue-pass` skill chains and verbatim-quoted standing-rule learnings (`LearningProposal`).
+- **Typed JSON-RPC 2.0 & Foreplay Bridge**: Exposes atomic `batch.execute`, `query.analyze_pacing`, `query.find_gaps`, push events, and `foreplay.cutscene_edl` J/L split-edit export.
 
-### 4. Zero-Ambient-Authority Confinement
-Media decoders and encoders are historically prone to memory-safety vulnerabilities:
-- In SexOS, Splicy, Play, and Flash execute inside isolated PKU protection domains.
-- A corrupted or malicious video file cannot exploit kernel memory or access system secrets.
-- Screen sleeping is automatically inhibited while media is actively playing (`[shell.idle] inhibited=media`), preventing display sleep during previews.
+### 4. Smooth CPU Scrubbing, Bottom VU Strip & Fuel-Metered WASM FX
+- **Quarter-Res Scrubbing & Dual-Limit `FrameCache`**: Composites at quarter resolution (`16×` fewer pixels) during playback/scrubbing and full resolution when paused, backed by an LRU `FrameCache` enforcing both entry and pixel-byte caps (`16 MiB` `LowMemoryMode` for tight guests).
+- **Full-Width Bottom VU Strip (`V`)**: Per-track and master stereo peak-hold meters sit in an optional horizontal bottom strip so metering never narrows the 16:9 video viewer at `1280×800`.
+- **Zero-Ambient-Authority Confinement & WASM Effects (`sex_wasm::frame_fx`)**: Splicy runs inside isolated PKU domains, and third-party frame effects execute in `wasmi` with a `50M` per-frame fuel budget, `64 MiB` memory cap, deterministic timestamps, and zero filesystem or network authority.

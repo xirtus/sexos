@@ -1,0 +1,3 @@
+fn main() {
+    println!("cargo:rustc-check-cfg=cfg(sexos_input_payload_proof)");
+}

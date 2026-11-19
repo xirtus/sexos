@@ -21,7 +21,7 @@ mod program {
         let s = app.ui.theme().scale;
 
         sex_pdx::serial_record!(
-            "[batik.state] layers={} active={} blend={} mask={} edit_mask={} tool={} sel={} undo={} pixel0={:08x}",
+            "[batik.state] layers={} active={} blend={} mask={} edit_mask={} tool={} sel={} undo={} pixel0={:08x} adj_layers={} text_layers={} fx_count={} fx_enabled={}",
             b.layer_count(),
             b.active_layer_id,
             b.active_blend_name(),
@@ -30,7 +30,11 @@ mod program {
             b.tool_name(),
             if b.selection.is_active() { "yes" } else { "no" },
             b.undo_count(),
-            b.pixel0()
+            b.pixel0(),
+            b.adj_layer_count(),
+            b.text_layer_count(),
+            b.active_fx_count(),
+            if b.active_fx_enabled() { "yes" } else { "no" }
         );
 
         let cr = app.ui.rect(b.canvas_id);

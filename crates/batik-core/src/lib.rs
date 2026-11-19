@@ -28,15 +28,21 @@ pub mod ora;
 pub mod png;
 pub mod psd;
 pub mod selection;
+pub mod text;
 pub mod transform;
 pub mod webp;
 
-pub use adjust::{auto_levels, Adjustment, Curves, Levels};
+pub use adjust::{
+    auto_levels, Adjustment, AdjustmentKind, Curves, CurvesAdjustment, CurvesPreset, HueSatAdjustment, Levels,
+};
 pub use blend::{pack_argb, split_argb, BlendMode};
 pub use brush::{bucket_fill, bucket_fill_mask, eyedropper, Brush, BrushPreset, PointerSample, StrokeEngine};
 pub use document::{BackgroundMode, Document};
 pub use error::BatikError;
-pub use filters::{box_blur, edge_detect, emboss, gaussian_blur, pixelate, sharpen, unsharp_mask};
+pub use filters::{
+    apply_filter_stack, box_blur, edge_detect, emboss, gaussian_blur, pixelate, sharpen, unsharp_mask,
+    FilterNode, FilterSpec, FilterStack,
+};
 pub use geom::Rect;
 pub use history::{History, HistoryAction};
 pub use jpeg::encode_jpeg;
@@ -45,6 +51,7 @@ pub use ora::{read_ora, write_ora};
 pub use png::encode_rgba_png;
 pub use psd::{encode_psd, parse_psd};
 pub use selection::{SelectionCombine, SelectionMask};
+pub use text::TextLayer;
 pub use webp::encode_webp;
 
 /// Enforces `sex_image::Limits` on picture dimensions before allocating buffers.

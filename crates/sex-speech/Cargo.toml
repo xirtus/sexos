@@ -1,0 +1,11 @@
+[package]
+name = "sex-speech"
+version = "0.1.0"
+edition = "2021"
+# Our code is GPL-3.0-only like the rest of SexOS; the vendored eSpeak NG it links
+# (vendor/espeak-ng-1.52.0) and its compiled data are GPL-3.0-or-later.
+license = "GPL-3.0-only AND GPL-3.0-or-later"
+description = "Text to speech (eSpeak NG with English data compiled in) for SexOS programs"
+build = "build.rs"
+
+[dependencies]

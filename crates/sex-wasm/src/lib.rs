@@ -44,6 +44,7 @@ use wasmi::{
 /// The guest exports `memory` and `_start`; returning from `_start` is exit code 0.
 #[cfg(feature = "sexos")]
 pub mod sexos;
+pub mod frame_fx;
 
 pub mod abi {
     use super::Event;

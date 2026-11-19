@@ -19,9 +19,17 @@ const STACK: usize = 16;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Stats {
     pub compiled: u64,
+    pub compiled_captured: u64,
     pub executed: u64,
     pub bailouts: u64,
     pub refused: u64,
+    pub considered: u64,
+    pub non_scalar: u64,
+    pub cache_full: u64,
+    pub unsupported: u64,
+    pub hottest: u16,
+    pub rejected_prefix: [u8; 32],
+    pub rejected_len: u32,
 }
 
 pub(crate) struct Jit {
@@ -32,6 +40,8 @@ pub(crate) struct Jit {
 struct Entry {
     bytecode: Vec<u8>,
     argc: usize,
+    closures: usize,
+    bool_mask: u8,
     calls: u16,
     code: Option<Executable>,
 }
@@ -48,6 +58,7 @@ impl Default for Jit {
 impl Jit {
     /// All offsets and JSValue tags are validated before compiling or calling code.
     /// The copied arguments are the only memory generated code may read.
+    #[cfg(test)]
     pub fn run(
         &mut self,
         data: &mut [u8],
@@ -57,20 +68,37 @@ impl Jit {
         argc: u32,
         out: u32,
     ) -> u32 {
-        if !self.enabled || argc > 8 || len == 0 || len as usize > MAX_BYTECODE {
+        self.run_typed(data, pc, len, argv, argc, out, false)
+    }
+
+    pub fn run_v3(&mut self, data: &mut [u8], pc: u32, len: u32, argv: u32, shape: u32, out: u32) -> u32 {
+        self.run_typed(data, pc, len, argv, shape, out, true)
+    }
+
+    fn run_typed(&mut self, data: &mut [u8], pc: u32, len: u32, argv: u32, shape: u32, out: u32, typed: bool) -> u32 {
+        let argc = (shape & 255) as usize;
+        let closures = (shape >> 8) as usize;
+        let total = argc.saturating_add(closures);
+        if !self.enabled || total > 8 || (!typed && closures != 0) || len == 0 || len as usize > MAX_BYTECODE {
             return 0;
         }
-        let argc = argc as usize;
+        self.stats.considered += 1;
         let Some(bc) = data.get(pc as usize..pc as usize + len as usize) else {
             return 0;
         };
-        let Some(args) = data.get(argv as usize..argv as usize + argc * 8) else {
+        let Some(args) = data.get(argv as usize..argv as usize + total * 8) else {
             return 0;
         };
         let mut copied = [0i32; 8];
+        let mut bool_mask = 0u8;
         for (i, a) in args.chunks_exact(8).enumerate() {
-            // QuickJS wasm32 uses NAN boxing: int32 has tag 0 in the upper word.
-            if a[4..] != [0, 0, 0, 0] {
+            // Only scalar payloads cross into generated code. Snapshot tags are
+            // checked on every call, including already-compiled closure getters.
+            let tag = u32::from_le_bytes(a[4..].try_into().unwrap());
+            let payload = i32::from_le_bytes(a[..4].try_into().unwrap());
+            if typed && tag == 1 && matches!(payload, 0 | 1) { bool_mask |= 1 << i; }
+            else if tag != 0 {
+                self.stats.non_scalar += 1;
                 return 0;
             }
             copied[i] = i32::from_le_bytes(a[..4].try_into().unwrap());
@@ -81,31 +109,42 @@ impl Jit {
         let index = match self
             .entries
             .iter()
-            .position(|e| e.argc == argc && e.bytecode == bc)
+            .position(|e| e.argc == argc && e.closures == closures && e.bool_mask == bool_mask && e.bytecode == bc)
         {
             Some(i) => i,
             None => {
+                let entry = Entry { bytecode: bc.to_vec(), argc, closures, bool_mask, calls: 0, code: None };
                 if self.entries.len() == CACHE {
-                    return 0;
+                    self.stats.cache_full += 1;
+                    // Cold one-shot functions must not permanently exclude later
+                    // hot functions. Never evict executable pages during a call.
+                    let Some((index, _)) = self.entries.iter().enumerate().filter(|(_, e)| e.code.is_none()).min_by_key(|(_, e)| e.calls) else { return 0 };
+                    self.entries[index] = entry;
+                    index
+                } else {
+                    self.entries.push(entry);
+                    self.entries.len() - 1
                 }
-                self.entries.push(Entry {
-                    bytecode: bc.to_vec(),
-                    argc,
-                    calls: 0,
-                    code: None,
-                });
-                self.entries.len() - 1
             }
         };
         let e = &mut self.entries[index];
         e.calls = e.calls.saturating_add(1);
+        self.stats.hottest = self.stats.hottest.max(e.calls);
         if e.calls == HOT {
-            if let Some(bytes) = compile(&e.bytecode, argc) {
+            if let Some(bytes) = compile_typed(&e.bytecode, argc, closures, bool_mask) {
                 e.code = Executable::new(&bytes);
                 if e.code.is_some() {
                     self.stats.compiled += 1;
+                    if closures != 0 { self.stats.compiled_captured += 1; }
                 } else {
                     self.stats.refused += 1;
+                }
+            } else {
+                self.stats.unsupported += 1;
+                if self.stats.rejected_len == 0 {
+                    self.stats.rejected_len = e.bytecode.len() as u32;
+                    let n = e.bytecode.len().min(32);
+                    self.stats.rejected_prefix[..n].copy_from_slice(&e.bytecode[..n]);
                 }
             }
         }
@@ -124,11 +163,16 @@ impl Jit {
 
 /// Compile the entire verified acyclic function; every reachable path returns.
 /// Branches target verified forward instruction boundaries. No general pointers or indirect calls.
+#[cfg(test)]
 fn compile(bytecode: &[u8], argc: usize) -> Option<Vec<u8>> {
-    if argc > 8 || bytecode.is_empty() || bytecode.len() > MAX_BYTECODE {
+    compile_typed(bytecode, argc, 0, 0)
+}
+
+fn compile_typed(bytecode: &[u8], argc: usize, closures: usize, bool_mask: u8) -> Option<Vec<u8>> {
+    if argc.saturating_add(closures) > 8 || bytecode.is_empty() || bytecode.len() > MAX_BYTECODE {
         return None;
     }
-    let plan = flow::validate(bytecode, argc)?;
+    let plan = flow::validate_typed(bytecode, argc, closures, bool_mask)?;
     for padding in 0..32 {
         let bytes = emit(&plan, padding)?;
         if !blocked(&bytes) {
@@ -347,6 +391,23 @@ impl Executable {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn closure_admission_checks_shape_and_rejects_writes() {
+        assert!(compile_typed(&[op::GET_VAR_REF0, op::RETURN], 0, 1, 1).is_some());
+        assert!(compile_typed(&[op::GET_VAR_REF0, op::RETURN], 0, 0, 0).is_none());
+        assert!(compile_typed(&[op::GET_ARG0, op::RETURN], 0, 1, 0).is_none());
+        assert!(compile_typed(&[op::GET_VAR_REF0, 227, op::RETURN], 0, 1, 0).is_none());
+        let mut jit=Jit::default(); let mut data=[0x55u8;64];
+        data[..2].copy_from_slice(&[op::GET_VAR_REF0,op::RETURN]);
+        for shape in [0x900,0x801,0x10000,u32::MAX] {
+            let before=data; assert_eq!(jit.run_v3(&mut data,0,2,16,shape,40),0); assert_eq!(data,before);
+        }
+        for tag in [0xffff_ffffu32,3,0x8000_0000] {
+            data[20..24].copy_from_slice(&tag.to_le_bytes());
+            let before=data; assert_eq!(jit.run_v3(&mut data,0,2,16,0x100,40),0); assert_eq!(data,before);
+        }
+    }
+
     #[test]
     fn rejects_incomplete_functions_and_memory_operations() {
         for bc in [

@@ -7,6 +7,7 @@ procedural RGBA oracle, so the decoded pixel hash must equal that gate's
 PIXEL_HASH; screen pixels inside the image are checked against the
 straight-alpha blend over the Browser background.
 """
+from input_payload_profile import require_payload_proof
 import argparse,hashlib,json,os,re,shutil,struct,subprocess,time,zlib
 from pathlib import Path
 import https_document_gate as doc
@@ -71,6 +72,7 @@ def main():
    time.sleep(.05)
   q=QMP(sock)
   if a.resolution=='1024x768':wait(r'SexOS compact 1024x768',timeout=10);q.key('down');q.key('ret')
+  require_payload_proof(dict(text=text,wait=wait))
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1');wait(r'\[browser.net.job.released\] ticket=1 view=Verified private_job=0');focus_surface(300,trace,key);palette_select(key,'ZoomToggle',palette_commands(root))
   b=len(trace());q.key('ret');wait(r'\[shell.window.action\] action=ZoomToggle frame=\d+ sid=300 ok=1',b);wait(r'\[browser.viewport\] target=15 task=15 sequence=\d+ w=\d+ h=\d+ origin=held_shell',b)
   b=len(trace());q.key('p');wait(r'\[shell.browser.input\] code=25 down=1 slot=43 accepted=1',b);wait(r'\[browser.asset.intent\] accepted=1 explicit=1 public_internet=0 format=png',b)

@@ -29,6 +29,9 @@ def main():
   sid=int(re.findall(rf'\[shell.program.launch\] target={target} task={task} surface=(\d+)',t())[-1])
   g['focus'](sid);time.sleep(.5);s=len(t());q.key('k')
   g['wait'](rf'\[heaptest\.kept\] target={target} task={task} pages=2048',s,120)
+  # Count only rounds after the keep: on a slow machine Denim already takes fresh,
+  # unwritten heap pages during it, and they fault back as the keep writes them.
+  s=len(t())
   # Idle while Denim's scans find the kept pages cold and take them.
   outs=0
   for _ in range(90):
@@ -40,14 +43,21 @@ def main():
   g['focus'](sid);time.sleep(.5);s=len(t());q.key('v')
   v=g['wait'](rf'\[heaptest\.verify\] target={target} task={task} pages=2048 bad=(\d+) ticks=(\d+)',s,240)
   assert v[1]=='0',f'{v[1]} kept pages came back wrong'
-  ins=re.findall(r'\[denim\.in\] target=\d+ page=0x[0-9a-f]+ fault=1 ins=(\d+)',t()[s:])
-  assert ins and int(ins[-1])>=512,f'pages did not come back through faults: {ins[-1:]}'
+  # Faults counted by Denim's rounds, from before verify to after it. ([denim.in] lines
+  # come only at powers of two of all ins, so the count may cross none during verify.)
+  base=int(re.findall(r'\[denim\.round\] .* faults=(\d+)',t()[:s])[-1])
+  faults=0
+  for _ in range(60):
+   r=re.findall(r'\[denim\.round\] .* faults=(\d+)',t()[s:])
+   if r and int(r[-1])-base>=512:break
+   time.sleep(1)
+  faults=int(r[-1])-base if r else 0
+  assert faults>=512,f'only {faults} pages came back through faults'
   # Close with pages still out: the run retires and every frame comes back.
-  g['wait'](r'\[denim\.round\] ',s,60)
   g['focus'](sid);time.sleep(.3);s=len(t());q.key('f11')
   g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
   for bad in ('KERNEL PANIC','panicked at','[denim.lost]','[denim.damaged]','[denim.panic]'):assert bad not in t(),bad
   assert not re.search(r'fault.kill \[paging.fault.terminal\] pd=\d+',t()),'a task was killed by a fault'
-  print({'ok':True,'target':target,'out':out_round,'verify_ticks':int(v[2]),'faults_in':int(ins[-1])})
+  print({'ok':True,'target':target,'out':out_round,'verify_ticks':int(v[2]),'faults_in':faults})
  finally:g['stop']()
 if __name__=='__main__':main()

@@ -186,6 +186,36 @@ pub fn torus(major_segments: u32, minor_segments: u32, major_radius: f32, minor_
     m
 }
 
+/// Polyamour's own low-poly monkey head (an original design built from the
+/// primitives above, not Blender's Suzanne): a rounded skull, a muzzle,
+/// two disc ears, two eyes and a brow ridge, each a closed shell. Faces -Y
+/// like Blender's front view, about two units wide.
+pub fn monkey() -> Mesh {
+    use crate::math::{Mat4, Quat};
+    let mut m = Mesh::new();
+    let mut part = |mut p: Mesh, t: Vec3, r: Quat, s: Vec3| {
+        p.transform(&Mat4::from_trs(t, r, s));
+        for f in &mut p.faces {
+            f.smooth = true;
+        }
+        m.append(&p);
+    };
+    let id = Quat::default();
+    // Skull: slightly narrow and deep, tilted forward a touch.
+    part(uv_sphere(16, 10, 1.0), Vec3::new(0.0, 0.05, 0.1), Quat::from_axis_angle(Vec3::X, 0.15), Vec3::new(0.9, 0.82, 0.95));
+    // Muzzle: a flattened ball low on the front.
+    part(uv_sphere(12, 8, 1.0), Vec3::new(0.0, -0.58, -0.35), id, Vec3::new(0.62, 0.42, 0.42));
+    // Brow ridge over the eyes.
+    part(uv_sphere(12, 6, 1.0), Vec3::new(0.0, -0.55, 0.42), id, Vec3::new(0.7, 0.25, 0.14));
+    // Ears: discs standing out sideways, turned slightly forward.
+    for sx in [-1.0f32, 1.0] {
+        let turn = Quat::from_axis_angle(Vec3::Z, -0.3 * sx) * Quat::from_axis_angle(Vec3::Y, core::f32::consts::FRAC_PI_2);
+        part(cylinder(12, 0.38, 0.12), Vec3::new(0.98 * sx, 0.05, 0.12), turn, Vec3::ONE);
+        part(ico_sphere(1, 0.13), Vec3::new(0.3 * sx, -0.72, 0.18), id, Vec3::ONE);
+    }
+    m
+}
+
 /// Default-sized primitive by name, as the Add menu and scripts ask for it.
 pub fn by_name(name: &str) -> Option<Mesh> {
     Some(match name {
@@ -197,6 +227,7 @@ pub fn by_name(name: &str) -> Option<Mesh> {
         "cylinder" => cylinder(32, 1.0, 2.0),
         "cone" => cone(32, 1.0, 0.0, 2.0),
         "torus" => torus(48, 12, 1.0, 0.25),
+        "monkey" => monkey(),
         _ => return None,
     })
 }
@@ -223,6 +254,12 @@ mod tests {
             let euler = if name == "torus" { 0 } else { 2 };
             assert_eq!(m.euler_characteristic(), euler, "{name}");
         }
+        // The monkey is several closed shells (Euler characteristic 2 each).
+        let mk = monkey();
+        mk.validate().unwrap();
+        assert!(mk.half_edges().is_closed_manifold());
+        assert!(mk.volume() > 0.0);
+        assert_eq!(mk.euler_characteristic(), 2 * 7);
         let s = ico_sphere(3, 1.0);
         assert_eq!(s.face_count(), 20 * 64);
         assert!((s.volume() - 4.0 / 3.0 * PI).abs() < 0.05);

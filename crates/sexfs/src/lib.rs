@@ -53,6 +53,14 @@ pub trait Device {
     fn read_data_run(&mut self, first: u64, out: &mut [u8]) -> core::result::Result<(), ()> {
         self.read_run(first, out)
     }
+    /// Sequential readahead: fills `out` from `first` like `read_data_run`, and may also
+    /// fetch the `ahead` blocks that follow on disk in the same command (they belong to the
+    /// same file, in order) and keep them for the next `read_data_run`. A device that keeps
+    /// them must drop them on any write. The filesystem checks every block it is handed.
+    fn read_data_ahead(&mut self, first: u64, out: &mut [u8], ahead: usize) -> core::result::Result<(), ()> {
+        let _ = ahead;
+        self.read_data_run(first, out)
+    }
     fn write(&mut self, block: u64, data: &[u8; BLOCK]) -> core::result::Result<(), ()>;
     fn flush(&mut self) -> core::result::Result<(), ()>;
     /// Most blocks one `read_run` or `write_run` should carry. A device whose commands
@@ -74,7 +82,7 @@ pub trait Device {
 }
 
 /// Longest run of file blocks moved together.
-const RUN_MAX: usize = 32;
+const RUN_MAX: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind { File, Dir }
@@ -248,6 +256,8 @@ pub struct Fs<'a, D: Device> {
     poisoned: bool,
     value: [u8; VALUE_MAX],
     value_len: usize,
+    /// (file id, next block index) after the last data run: a read starting there is sequential.
+    sequential: (u64, u64),
 }
 
 fn bit(map: &[u64], i: u64) -> bool { map[(i / 64) as usize] >> (i % 64) & 1 == 1 }
@@ -289,7 +299,7 @@ impl<'a, D: Device> Fs<'a, D> {
 
     fn empty(dev: D, mem: Memory<'a>, total: u64) -> Self {
         Fs { dev, mem, total, root: 0, next_id: 0, generation: 0, tx: 0, free: 0, pending_count: 0, pending_span: (usize::MAX, 0), cursor: SB_SLOTS, clock: 0,
-            changed: false, poisoned: false, value: [0; VALUE_MAX], value_len: 0 }
+            changed: false, poisoned: false, value: [0; VALUE_MAX], value_len: 0, sequential: (0, 0) }
     }
 
     fn reset_maps(&mut self) {
@@ -796,8 +806,22 @@ impl<'a, D: Device> Fs<'a, D> {
             n += 1;
         }
         if n < 2 { return Ok(0); }
+        // A sequential reader gets the file's next blocks in the same command, as many as
+        // still sit side by side on disk and fit one run.
+        let mut ahead = 0usize;
+        if n == want && self.sequential == (id, index) {
+            let room = self.dev.run_blocks().min(RUN_MAX).saturating_sub(n);
+            while ahead < room {
+                if !self.get(Key { id, kind: K_BLOCK, off: index + (n + ahead) as u64 })? { break; }
+                let block = get_u64(&self.value, 0);
+                if block != first + (n + ahead) as u64 || block >= self.total { break; }
+                ahead += 1;
+            }
+        }
+        self.sequential = (id, index + n as u64);
         let run = &mut out[..n * BLOCK];
-        self.dev.read_data_run(first, run).map_err(|_| Error::Io)?;
+        if ahead > 0 { self.dev.read_data_ahead(first, run, ahead) } else { self.dev.read_data_run(first, run) }
+            .map_err(|_| Error::Io)?;
         for j in 0..n {
             if checksum(&run[j * BLOCK..(j + 1) * BLOCK]) != sums[j] { return Err(Error::Corrupt); }
         }

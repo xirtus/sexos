@@ -21,13 +21,18 @@ mod program {
     fn report(app: &App, b: &Burlesque) {
         let s = app.ui.theme().scale;
 
+        let builds_count = b.deck.get_slide(b.current_slide).map(|s| s.builds.len()).unwrap_or(0);
+        let rehearse_active = if b.rehearsal_session.is_some() { 1 } else { 0 };
+
         sex_pdx::serial_record!(
-            "[burlesque.state] slides={} current={} presenter={} theme={} transition={}",
+            "[burlesque.state] slides={} current={} presenter={} theme={} transition={} builds={} rehearse={}",
             b.deck.slide_count(),
             b.current_slide,
             if b.presenter_mode { 1 } else { 0 },
             b.theme_slug(),
             b.current_transition().kind_str(),
+            builds_count,
+            rehearse_active,
         );
 
         for (name, id) in &b.controls {
@@ -51,6 +56,30 @@ mod program {
                     bytes.len(),
                     b.deck.slide_count()
                 );
+            }
+        }
+    }
+
+    fn export_webm_file(app: &mut App, b: &Burlesque) {
+        match b.export_webm(480, 270, 15) {
+            Ok((bytes, frames)) => {
+                if sex_app::files::write(&mut app.window, b"deck.webm", &bytes).is_ok() {
+                    sex_pdx::serial_record!(
+                        "[burlesque.exported] fmt=webm file=/data/burlesque/deck.webm bytes={} frames={}",
+                        bytes.len(),
+                        frames
+                    );
+                }
+            }
+            Err(burlesque::WebmExportError::EncoderUnavailable { frames, frame_hash }) => {
+                sex_pdx::serial_record!(
+                    "[burlesque.video.unavailable] encoder=splicy reason=ffmpeg_export_not_built frames={} hash={:016x}",
+                    frames,
+                    frame_hash
+                );
+            }
+            Err(e) => {
+                sex_pdx::serial_record!("[burlesque.video.error] err={:?}", e);
             }
         }
     }
@@ -143,12 +172,6 @@ mod program {
         let h = b.preview_h;
         let len = (w * h) as usize;
 
-        let mut from_buf = alloc::vec![0u32; len];
-        let mut to_buf = alloc::vec![0u32; len];
-
-        if let Some(slide) = b.deck.get_slide(b.current_slide) {
-            burlesque_core::render_slide(slide, &b.deck.theme, b.deck.aspect_ratio, &mut from_buf, w, h);
-        }
         let next_idx = if b.current_slide + 1 < b.deck.slide_count() {
             b.current_slide + 1
         } else if b.current_slide > 0 {
@@ -156,23 +179,54 @@ mod program {
         } else {
             b.current_slide
         };
-        if next_idx != b.current_slide {
-            if let Some(next_slide) = b.deck.get_slide(next_idx) {
-                burlesque_core::render_slide(next_slide, &b.deck.theme, b.deck.aspect_ratio, &mut to_buf, w, h);
-            }
-        } else {
-            let mut alt_theme = b.deck.theme.clone();
-            alt_theme.palette.background = b.deck.theme.palette.primary_accent;
-            if let Some(slide) = b.deck.get_slide(b.current_slide) {
-                burlesque_core::render_slide(slide, &alt_theme, b.deck.aspect_ratio, &mut to_buf, w, h);
-            }
-        }
 
-        for f in 1..=frames {
-            let t = f as f32 / frames as f32;
-            burlesque_core::render_transition_frame(&from_buf, &to_buf, &mut b.preview_buf, w, h, transition, t);
-            app.ui.set_image(b.preview_id, w as usize, h as usize, b.preview_buf.clone());
-            app.present();
+        if transition == burlesque_core::Transition::MagicMove {
+            let from_slide = b.deck.get_slide(b.current_slide);
+            let to_slide = b.deck.get_slide(next_idx);
+            if let (Some(sf), Some(st)) = (from_slide, to_slide) {
+                for f in 1..=frames {
+                    let t = f as f32 / frames as f32;
+                    burlesque_core::render_magic_move_frame(
+                        sf,
+                        st,
+                        &b.deck.theme,
+                        b.deck.aspect_ratio,
+                        t,
+                        &mut b.preview_buf,
+                        w,
+                        h,
+                    );
+                    app.ui.set_image(b.preview_id, w as usize, h as usize, b.preview_buf.clone());
+                    app.present();
+                }
+            }
+            b.magic_move_preview = Some(0.5);
+        } else {
+            b.magic_move_preview = None;
+            let mut from_buf = alloc::vec![0u32; len];
+            let mut to_buf = alloc::vec![0u32; len];
+
+            if let Some(slide) = b.deck.get_slide(b.current_slide) {
+                burlesque_core::render_slide(slide, &b.deck.theme, b.deck.aspect_ratio, &mut from_buf, w, h);
+            }
+            if next_idx != b.current_slide {
+                if let Some(next_slide) = b.deck.get_slide(next_idx) {
+                    burlesque_core::render_slide(next_slide, &b.deck.theme, b.deck.aspect_ratio, &mut to_buf, w, h);
+                }
+            } else {
+                let mut alt_theme = b.deck.theme.clone();
+                alt_theme.palette.background = b.deck.theme.palette.primary_accent;
+                if let Some(slide) = b.deck.get_slide(b.current_slide) {
+                    burlesque_core::render_slide(slide, &alt_theme, b.deck.aspect_ratio, &mut to_buf, w, h);
+                }
+            }
+
+            for f in 1..=frames {
+                let t = f as f32 / frames as f32;
+                burlesque_core::render_transition_frame(&from_buf, &to_buf, &mut b.preview_buf, w, h, transition, t);
+                app.ui.set_image(b.preview_id, w as usize, h as usize, b.preview_buf.clone());
+                app.present();
+            }
         }
 
         sex_pdx::serial_record!(
@@ -190,6 +244,8 @@ mod program {
 
         let prev_theme = burlesque.deck.theme.name.clone();
         let prev_presenter = burlesque.presenter_mode;
+        let prev_rehearse = burlesque.rehearsal_session.is_some();
+        let prev_build_idx = burlesque.active_build_index;
 
         for r in responses {
             if r == Response::Close {
@@ -198,6 +254,10 @@ mod program {
             if let Response::Clicked(id) = r {
                 if id == burlesque.btn_export_pdf {
                     export_pdf_file(app, burlesque);
+                    changed = true;
+                    continue;
+                } else if id == burlesque.btn_export_webm {
+                    export_webm_file(app, burlesque);
                     changed = true;
                     continue;
                 } else if id == burlesque.btn_save_pptx {
@@ -225,6 +285,10 @@ mod program {
             if let Response::Command(ref cmd) = r {
                 if cmd == "burlesque.export-pdf" {
                     export_pdf_file(app, burlesque);
+                    changed = true;
+                    continue;
+                } else if cmd == "burlesque.export-webm" {
+                    export_webm_file(app, burlesque);
                     changed = true;
                     continue;
                 } else if cmd == "burlesque.save-pptx" {
@@ -267,6 +331,19 @@ mod program {
                 burlesque.current_slide,
                 notes_len
             );
+        }
+
+        if burlesque.active_build_index != prev_build_idx {
+            sex_pdx::serial_record!(
+                "[burlesque.build] slide={} step={}",
+                burlesque.current_slide,
+                burlesque.active_build_index
+            );
+        }
+
+        if burlesque.rehearsal_session.is_some() != prev_rehearse {
+            let active = if burlesque.rehearsal_session.is_some() { 1 } else { 0 };
+            sex_pdx::serial_record!("[burlesque.rehearse] active={}", active);
         }
 
         changed
@@ -335,9 +412,20 @@ mod program {
                     session.tick(delta);
                 }
             }
+            if let Some(ref mut session) = burlesque.rehearsal_session {
+                session.tick(delta);
+            }
 
             let wait = app.ui.tick(now);
-            let e = match wait {
+            let effective_wait = if burlesque.rehearsal_session.is_some() || burlesque.presenter_mode {
+                match wait {
+                    Some(ms) => Some(ms.min(100)),
+                    None => Some(100),
+                }
+            } else {
+                wait
+            };
+            let e = match effective_wait {
                 Some(ms) => app.window.next_within(ms.max(1).min(500)),
                 None => Some(app.window.next()),
             };
@@ -356,10 +444,12 @@ mod program {
                 }
             }
 
-            if changed || burlesque.presenter_mode {
+            if changed || burlesque.presenter_mode || burlesque.rehearsal_session.is_some() {
                 burlesque.refresh_preview(&mut app.ui);
                 app.present();
-                report(&app, &burlesque);
+                if changed {
+                    report(&app, &burlesque);
+                }
             }
         }
     }
@@ -405,5 +495,67 @@ mod program {
 
 #[cfg(not(feature = "sexos"))]
 fn main() {
+    let args: std::vec::Vec<std::string::String> = std::env::args().collect();
+    if args.len() == 3 && args[1] == "--dump-splicy-frames" {
+        use burlesque_core::animation::{BuildEffect, BuildStep};
+        use burlesque_core::deck::{AspectRatio, Deck};
+        use burlesque_core::elements::Transition;
+        use burlesque_core::layout::SlideLayout;
+        use burlesque_core::rehearse::RehearsalSession;
+        use std::io::Write;
+
+        let mut deck = Deck::new(AspectRatio::Ratio16x9);
+        {
+            let s1 = deck.add_slide(SlideLayout::TitleSlide);
+            burlesque::sync_slide_elements(
+                s1,
+                AspectRatio::Ratio16x9,
+                "Burlesque Splicy Export",
+                "Magic Move + Intra-Slide Builds",
+            );
+            s1.transition = Transition::MagicMove;
+            s1.add_build(BuildStep::new(1, BuildEffect::PopScale).with_duration(300));
+        }
+        {
+            let s2 = deck.add_slide(SlideLayout::TitleAndBody);
+            burlesque::sync_slide_elements(
+                s2,
+                AspectRatio::Ratio16x9,
+                "Rehearsed Timings",
+                "- Exported via sex-splice\n- Encoded via sex-media VP9",
+            );
+        }
+
+        let mut rehearsal = RehearsalSession::new(deck.clone());
+        rehearsal.tick(350);
+        assert!(rehearsal.record_advance()); // build step 1
+        rehearsal.tick(650);
+        assert!(rehearsal.record_advance()); // advance slide 0 -> slide 1
+        rehearsal.tick(700);
+        assert!(!rehearsal.record_advance()); // finish rehearsal
+        rehearsal.apply_to_deck(&mut deck);
+
+        let (w, h, fps) = (320u32, 180u32, 15u32);
+        let mut raw_frames: std::vec::Vec<u8> = std::vec::Vec::new();
+        let (_tl, written, hash) = burlesque::render_splicy_frames(&deck, w, h, fps, |_idx, px| {
+            for &p in px {
+                raw_frames.extend_from_slice(&p.to_le_bytes());
+            }
+            Ok(())
+        })
+        .expect("render_splicy_frames");
+
+        let mut f = std::fs::File::create(&args[2]).expect("create output");
+        f.write_all(&w.to_le_bytes()).unwrap();
+        f.write_all(&h.to_le_bytes()).unwrap();
+        f.write_all(&fps.to_le_bytes()).unwrap();
+        f.write_all(&(written as u32).to_le_bytes()).unwrap();
+        f.write_all(&raw_frames).unwrap();
+        println!(
+            "{{\"width\":{},\"height\":{},\"fps\":{},\"frames\":{},\"hash\":\"{:016x}\"}}",
+            w, h, fps, written, hash
+        );
+        return;
+    }
     println!("Burlesque: Weft presentations app for SexOS.");
 }

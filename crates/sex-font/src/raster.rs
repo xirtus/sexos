@@ -137,14 +137,23 @@ impl<'a> Raster<'a> {
     }
 
     /// Coverage, 0 to 255, for each of the `w * h` pixels, row by row.
-    pub fn finish(&self, out: &mut [u8]) {
+    pub fn finish(&self, out: &mut [u8]) { self.finish_into(out, false) }
+
+    /// [`Raster::finish`] keeping the larger of this coverage and what `out` holds:
+    /// the union of two drawings of an outline a fraction of a pixel apart, exact
+    /// along straight edges (stem darkening uses it).
+    pub fn finish_max(&self, out: &mut [u8]) { self.finish_into(out, true) }
+
+    fn finish_into(&self, out: &mut [u8], keep_max: bool) {
         for y in 0..self.h {
             let mut sum = 0i32;
             let row = &self.acc[y * (self.w + 2)..];
             for x in 0..self.w {
                 sum += row[x];
                 let cover = sum.unsigned_abs().min(ONE as u32);
-                out[y * self.w + x] = ((cover * 255 + ONE as u32 / 2) / ONE as u32) as u8;
+                let v = ((cover * 255 + ONE as u32 / 2) / ONE as u32) as u8;
+                let o = &mut out[y * self.w + x];
+                *o = if keep_max { (*o).max(v) } else { v };
             }
         }
     }

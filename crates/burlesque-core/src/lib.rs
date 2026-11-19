@@ -13,6 +13,7 @@ extern crate alloc;
 #[cfg(feature = "std")]
 extern crate std;
 
+pub mod animation;
 pub mod command;
 pub mod deck;
 pub mod elements;
@@ -22,10 +23,12 @@ pub mod odp;
 pub mod pdf_export;
 pub mod pptx;
 pub mod presenter;
+pub mod rehearse;
 pub mod render;
 pub mod theme;
 pub mod xml_utils;
 
+pub use animation::{BuildEffect, BuildStep, BuildTrigger};
 pub use command::{Command, CommandStack};
 pub use deck::{AspectRatio, Deck, Metadata, Slide};
 pub use elements::{
@@ -39,7 +42,8 @@ pub use odp::{export_odp, import_odp};
 pub use pdf_export::{export_pdf, export_pdf_with_notes};
 pub use pptx::{export_pptx, import_pptx};
 pub use presenter::{BlankMode, PresenterSession, render_presenter_view};
-pub use render::{render_deck_transition, render_slide, render_transition_canvas, render_transition_frame};
+pub use rehearse::{RehearsalSession, SlideTiming, TimelineFrame, VideoTimeline, render_rehearsal_hud};
+pub use render::{render_deck_transition, render_magic_move_frame, render_slide, render_slide_at_build, render_transition_canvas, render_transition_frame};
 pub use theme::{Palette, Theme, Typography};
 
 /// Burlesque presentation errors.

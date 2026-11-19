@@ -56,7 +56,7 @@ SexOS is fundamentally different from Linux, macOS, or Windows:
 - **[sexshop (App Store)](apps/sexshop.md)**: Discovering, verifying, installing, upgrading, and rolling back signed software packages.
 - **[Mesh (System Overview)](apps/mesh.md)**: Real-time task manager, CPU/memory monitor, and interactive capability graph.
 - **[Vellum (PDF Reader)](apps/vellum.md)**: Document viewer with smooth zoom, text search, outline navigation, and form display.
-- **[Gaze (Image Viewer)](apps/gaze.md)**: High-speed viewer for PNG, JPEG, WebP, and animated GIF images.
+- **[Gaze (Image Viewer & Photo Library)](apps/gaze.md)**: High-speed viewer for PNG, JPEG, WebP, and animated GIF images with a persistent Photo Library, user Albums, faces-free Smart Search by date and offline-geocoded place, and non-destructive crop, exposure, and **Batik**-shared filter edits.
 - **[Abacus (Calculator)](apps/abacus.md)**: Exact rational math, scientific expressions, bitwise programmer tools, and base conversion.
 - **[Voyeur (Search & Launcher)](apps/voyeur.md)**: Universal spotlight search across programs, files, settings, math, and emoji.
 - **[Date (Calendar & Clock)](apps/date.md)**: Calendar management, iCalendar (`.ics`) scheduling, alarms, timers, and world clocks.
@@ -75,6 +75,7 @@ SexOS is fundamentally different from Linux, macOS, or Windows:
 - **[Batik (Raster Painting & Image Studio)](apps/batik.md)**: Multi-layer Porter-Duff blend modes, 8-bit paintable layer masks, pressure-sensitive brushes, lasso & magic wand selections, spatial/color filters, and PNG, JPEG, WebP & PSD import/export.
 - **[Burlesque (Keynote-Class Presentations)](apps/burlesque.md)**: Designer themes, live animated slide transitions, dual-pane Presenter View with speaker notes and timer, OOXML `.pptx` & OpenDocument `.odp` import/export, and vector PDF export.
 - **[Flash (Photo Booth & Camera)](apps/flash.md)**: Live 3×3 effects grid, 9 real-time Photo Booth filters, 3-second countdown timer, 4-shot burst contact sheets, Splicy WebM recording, and persistent photo library integration with **Gaze**.
+- **[Climax (Hardware Benchmark & Thermal Torture)](apps/climax.md)**: Six deterministic compute/cache/DRAM microbenchmarks, real-time scrolling thermal torture telemetry charts, and interactive **Compare with Linux** benchmark report visualization.
 
 ### Application Suites & Additional Tools
 - **[Creative & Professional Suite](creative-and-pro-suite.md)**: Deep dive into upcoming and parity tools: **Assuit**, **Spreadeagle**, **Burlesque** (presentations), **Batik** (raster painting), **Polyamour** (3D modeling), **Splicy** (video editing), **Flash** (UVC webcam capture), **Moan** (DAW audio editor), **Bodice** (e-books), **Corset** (disks & partitions), and **Climax** (hardware stress & benchmarking).

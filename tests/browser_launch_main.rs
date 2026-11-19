@@ -68,6 +68,7 @@ unsafe fn install(index:usize,sid:u64){let mut tabs=[None;MAX_TABS_PER_FRAME as 
 unsafe fn dead(index:usize,acked:u64){let e=APP_CUSTODY[index].as_mut().unwrap();e.dead=true;e.retired=true;e.acked=acked&1!=0;e.close_pending=false;
  LIVE[index]=Ok(a::LifecycleInfo{target_pd:e.target,task_id:e.task,required_mask:31,acked_mask:acked});
 }
+mod layouts_glue{pub unsafe fn behind(_:u64)->Option<(u32,usize)>{None}pub unsafe fn show(_:u64)->bool{true}}
 unsafe fn frame_for_surface(sid:u64)->Option<u32>{FRAMES.iter().flatten().find(|f|f.tabs.iter().flatten().any(|t|t.surface_id==sid)).map(|f|f.frame_id)}
 unsafe fn frame_is_minimized(fid:u32)->bool{FRAMES.iter().flatten().find(|f|f.frame_id==fid).is_some_and(|f|f.flags&FRAME_FLAG_MINIMIZED!=0)}
 unsafe fn lifecycle_state(sid:u64)->Option<LifecycleState>{let i=FRAMES.iter().position(|f|f.is_some_and(|f|f.tabs.iter().flatten().any(|t|t.surface_id==sid)))?;Some(if VISIBLE[i]{LifecycleState::Visible}else{LifecycleState::Hidden})}

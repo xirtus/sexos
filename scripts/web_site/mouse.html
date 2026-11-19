@@ -4,9 +4,11 @@
 body { margin: 0; }
 canvas { display: block; }
 p { margin: 8px; }
+#decoration { position:absolute; left:0; top:0; width:200px; height:100px; pointer-events:none; }
 </style></head>
 <body>
 <canvas id="c" width="200" height="100"></canvas>
+<div id="decoration"><span>Non-interactive overlay</span></div>
 <p><a id="next" href="mouse2.html">Next page</a></p>
 <script>
 const c = document.getElementById('c'), g = c.getContext('2d');

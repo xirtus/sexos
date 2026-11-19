@@ -112,7 +112,7 @@ mod shim {
                 e.y = height as i32;
             }
             // SDL games take no drops.
-            Event::Drop { .. } | Event::DragEnded { .. } => return 0,
+            Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_) => return 0,
         }
         unsafe { out.write(e) };
         1

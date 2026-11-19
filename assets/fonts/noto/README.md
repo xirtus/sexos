@@ -12,3 +12,6 @@ packages by `scripts/gen_fallback_fonts.py`:
   as the source's).
 - `emoji-36.sxe`: the single-scalar emoji of Noto Color Emoji as 36x36 4-bit coverage,
   shaded by lightness, for monochrome text. Format in `fallback.rs`.
+- `emoji-color-32.sxc`: the same emoji in colour, 32x32, a 16-colour palette (one
+  entry transparent) and 4-bit indices each, for colour text (Weft's `color-emoji`).
+  Format in `fallback.rs` (`ColorEmoji`).

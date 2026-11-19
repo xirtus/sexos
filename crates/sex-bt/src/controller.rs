@@ -30,6 +30,9 @@ pub struct Info {
     pub acl_packets: u16,
     pub le_acl_mtu: u16,
     pub le_acl_packets: u8,
+    /// LE and classic links share the classic ACL buffers (the controller reported no
+    /// LE buffers of its own).
+    pub le_shared: bool,
 }
 
 impl Info {
@@ -149,6 +152,7 @@ impl Bringup {
         if self.step == Step::LeBufferSize && self.info.le_acl_mtu == 0 {
             self.info.le_acl_mtu = self.info.acl_mtu;
             self.info.le_acl_packets = self.info.acl_packets.min(255) as u8;
+            self.info.le_shared = true;
         }
         self.waiting = None;
         self.step = Self::after(self.step);

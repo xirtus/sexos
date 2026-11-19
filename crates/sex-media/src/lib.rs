@@ -30,6 +30,7 @@ pub use source::{Source, Growing, AHEAD, NEAR};
 pub mod recording;
 pub mod export;
 pub use sex_episodes::{episodes, segments};
+pub mod audio_dsp;
 
 /// FFmpeg's error number, with its text through [`Error::text`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

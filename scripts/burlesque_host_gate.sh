@@ -13,6 +13,12 @@ cargo test --locked -p burlesque-core
 echo "[burlesque_host_gate] Running cargo test --locked -p burlesque --no-default-features..."
 cargo test --locked -p burlesque --no-default-features
 
+if command -v pkg-config >/dev/null 2>&1 && command -v ffprobe >/dev/null 2>&1 && \
+   pkg-config --exists libavcodec libavformat libavutil libswscale; then
+  echo "[burlesque_host_gate] Running Splicy VP9 WebM export smoke test (sex-splice + sex-media bridge.c + ffprobe)..."
+  python3 scripts/burlesque_splicy_export_smoke.py
+fi
+
 echo "[burlesque_host_gate] Checking x86_64-sex-app.json build target (no_std + alloc)..."
 cargo check --locked -p burlesque-core --target x86_64-sex-app.json -Z build-std=core,compiler_builtins,alloc
 cargo check --locked -p burlesque --target x86_64-sex-app.json -Z build-std=core,compiler_builtins,alloc
