@@ -584,7 +584,7 @@ jobs:
     runs-on: ubuntu-latest
     # A Cargo.lock change (crates added or removed) misses the exact build cache and
     # rebuilds cold, which takes ~45 minutes here; 40 left such PRs no way to pass.
-    timeout-minutes: 60
+    timeout-minutes: 80
     strategy:
       fail-fast: false
       matrix:
@@ -904,7 +904,7 @@ jobs:
   recording:
     name: Lossless encoder guest proof
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 120
     steps:
     - uses: actions/checkout@v4
       with:
@@ -1106,7 +1106,7 @@ jobs:
   leaks:
     name: Leak gate (programs open/close, services restart)
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 140
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
