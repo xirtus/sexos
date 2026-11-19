@@ -125,7 +125,7 @@ pub const USB: Manifest = Manifest {
 /// decides which parts have a known register layout), and Intel Wi-Fi (the chip table
 /// in `sex_wifi::devices` decides which ones it can start).
 pub const NET: Manifest = Manifest {
-    service: Service::Net, max_devices: 0, vectors: 0,
+    service: Service::Net, max_devices: 0, vectors: 1,
     matches: &[
         Match::vendor_class(0x8086, 0x02_00_00, CLASS, Lease::Nic, 19),
         Match::vendor_class(0x10ec, 0x02_00_00, CLASS, Lease::Nic, 19),

@@ -51,7 +51,9 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('37561f94116d2c
  'servers/sexnet/src/main.rs': ('00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725',
                               'd7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d', 'fcf8299b6ce8b8acdd0bc005507036087d5569664c08d63da001dc9e694c7253',
                               # first 32 timed returns logged, 2026-11-17
-                              '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b',),
+                              '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b',
+                              # wired NIC interrupt: 10-tick quiet sleep while armed, no stall after a full burst (two-tick envelope unchanged), 2026-11-19
+                              'd994aeb0af740e6157d92744656943261954b99c6828795723c9070d4625ff34',),
  'servers/sexusb/src/main.rs': ('3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81',
                                 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec')}
 
@@ -440,12 +442,13 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
   # since round 105 the
   # sexdrive main task (2) waits 1 tick for NVMe completions. Park records
   # are sampled (first four, then powers of two), so either may appear.
+  # With the wired NIC's interrupt armed, an idle SexNet (13) sleeps 10 ticks (irq_wait::QUIET_TICKS).
   # Idle Display (1) and SilkBar (6) sleep 8 ticks; polled sexinput (4) and sexusb (5) sleep 1.
   # Shell (3) wakes itself for password autofill (silk-shell autofill_routes::wake):
   # 100 ticks while a page identity is held, at most 1000 toward a transaction deadline;
   # and for the tray (tray_wake), at most 1000 while a Wi-Fi answer is owed or due.
   shell=source_ok and int(p[1])==SHELL_TASK and 1<=int(p[2])<=SHELL_AUTOFILL_MAX_TICKS
-  if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+input_idle+denim_waits+quil_waits+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
+  if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),(13,10))if source_ok else())+input_idle+denim_waits+quil_waits+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
  for e in expiries:
   if int(e[1])not in(13,2,1,6,4,5)+((SHELL_TASK,)if source_ok else())+((DENIM_TASK,)if denim['ok']else())+((QUIL_TASK,)if quil['ok']else())+selected+((50,)if acpi['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry: task=%s deadline=%s now=%s'%(e[1],e[2],e[3]))
  for r in returns:
