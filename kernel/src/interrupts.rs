@@ -44,8 +44,10 @@ lazy_static! {
     static ref IDT: InterruptDescriptorTable = {
         let mut idt = InterruptDescriptorTable::new();
         idt.breakpoint.set_handler_fn(breakpoint_handler);
-        idt.non_maskable_interrupt.set_handler_fn(nmi_handler);
         unsafe {
+            // NMIs can land between SYSCALL and the stack switch, or between `pop rsp` and
+            // SYSRET, when RSP is the caller's: they always take their own stack.
+            idt.non_maskable_interrupt.set_handler_fn(nmi_handler).set_stack_index(gdt::NMI_IST_INDEX as u16 + 1);
             idt.double_fault.set_handler_fn(double_fault_handler)
                 .set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX as u16 + 1);
             
@@ -105,10 +107,12 @@ pub fn init_idt() {
         // Enter Rust only after the GS/RSP transition is protected. The original
         // user flags remain in R11 and are restored by SYSRET/the forged IRET.
         use x86_64::registers::rflags::RFlags;
-        SFMask::write(RFlags::INTERRUPT_FLAG | RFlags::DIRECTION_FLAG
-            | RFlags::TRAP_FLAG | RFlags::ALIGNMENT_CHECK);
+        // NT too: a caller's NT left set makes the kernel's next IRETQ (a task switch
+        // inside the call) raise #GP in ring 0. IOPL is masked as Linux does.
+        SFMask::write(RFlags::INTERRUPT_FLAG | RFlags::DIRECTION_FLAG | RFlags::TRAP_FLAG
+            | RFlags::ALIGNMENT_CHECK | RFlags::NESTED_TASK | RFlags::IOPL_LOW | RFlags::IOPL_HIGH);
         Efer::write(Efer::read() | EferFlags::SYSTEM_CALL_EXTENSIONS);
-        serial_println!("   → Syscall setup COMPLETE (IF/DF/TF/AC masked at entry)");    }
+        serial_println!("   → Syscall setup COMPLETE (IF/DF/TF/AC/NT/IOPL masked at entry)");    }
 }
 
 #[repr(C)]
@@ -210,6 +214,9 @@ pub unsafe extern "C" fn syscall_entry() {
         // Call Handler
         "mov rdi, rsp",     // Pointer to SyscallRegs
         "call syscall_handler",
+        // A wait inside the call may have left IF set (idle is STI;HLT). An interrupt
+        // after `pop rsp` below would push onto the caller's stack with the user GS.
+        "cli",
 
         // 6.5 Propagate modified regs back to original saved slots.
         // dispatch may set regs.rdi/rsi/rdx/r10/r8 (PDX receive task and payload).
@@ -242,6 +249,14 @@ pub unsafe extern "C" fn syscall_entry() {
         "wrpkru",
         "93:",
         "pop rax",
+        // SYSRET to a non-canonical RCX faults in ring 0 on the caller's RSP (CVE-2012-0217).
+        // A SYSCALL as the last bytes below the hole is the only way to get one: send it to
+        // address 0, where it faults in ring 3 and ends only that task.
+        "mov rdi, [rsp + 56]", // saved user RIP
+        "shr rdi, 47",
+        "jz 94f",
+        "mov qword ptr [rsp + 56], 0",
+        "94:",
 
         // 10. Restore Saved Volatiles
         "pop r9", "pop r8", "pop r10", "pop rdx", "pop rsi", "pop rdi",
@@ -280,6 +295,7 @@ pub unsafe extern "C" fn $name() {
         "jz 1f", 
         "swapgs", 
         "1:",
+        "lfence", // no speculative GS use down the unswapped path (CVE-2019-1125)
 
         "cmp byte ptr [rip + {pku_enabled}], 0",
         "je 3f",
@@ -340,6 +356,7 @@ pub unsafe extern "C" fn page_fault_stub() {
         "jz 1f", 
         "swapgs", 
         "1:",
+        "lfence", // no speculative GS use down the unswapped path (CVE-2019-1125)
 
         "cmp byte ptr [rip + {pku_enabled}], 0",
         "je 3f",
@@ -382,6 +399,7 @@ pub unsafe extern "C" fn general_protection_fault_stub() {
         "jz 1f", 
         "swapgs", 
         "1:",
+        "lfence", // no speculative GS use down the unswapped path (CVE-2019-1125)
 
         "cmp byte ptr [rip + {pku_enabled}], 0",
         "je 3f",
@@ -427,6 +445,7 @@ macro_rules! cpu_fault_stub {
                 "jz 1f",
                 "swapgs",
                 "1:",
+                "lfence", // no speculative GS use down the unswapped path (CVE-2019-1125)
                 "cmp byte ptr [rip + {pku_enabled}], 0",
                 "je 3f",
                 "xor eax, eax",

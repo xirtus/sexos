@@ -216,6 +216,19 @@ fn start_one(index:usize,elf:&[u8],image:&crate::program_image::Image)->Result<(
         let (at,value)=crate::program_image::relocation(elf,image,relocation,base).ok_or(3u64)?;
         write_window(rec,at,&value.to_le_bytes());
     }
+    // Records keep the programs' rule: no WRPKRU/XRSTOR/XRSTORS in code, on the relocated
+    // bytes, scanned across each run of adjacent code pages (sex_pdx::program_code).
+    let hhdm=crate::HHDM_REQUEST.response().ok_or(3u64)?.offset;
+    let (mut scan,mut next)=(sex_pdx::program_code::Scan::new(),u64::MAX);
+    for segment in image.segments[..image.count].iter().filter(|s|s.executable){
+        if segment.window/PAGE!=next{scan=sex_pdx::program_code::Scan::new()}
+        next=(segment.window+segment.memory).div_ceil(PAGE);
+        for page in (segment.window/PAGE)..next{
+            let frame=unsafe{core::ptr::read_volatile(leaf(rec,page as usize))}&PTE_FRAME;
+            if scan.feed(unsafe{core::slice::from_raw_parts((frame+hhdm) as *const u8,PAGE as usize)},false).is_some(){
+                crate::serial_println!("[record.rejected] index={} reason=key_instruction page={}",index,page);return Err(3)}
+        }
+    }
     let id=NEXT_TASK.fetch_add(1,Ordering::Relaxed);
     let stack_top=virtual_page(index,STACK_FIRST+STACK_PAGES)-16;
     unsafe{(*rec.task).rearm(id,base+image.entry,stack_top,&*rec.pd);}
