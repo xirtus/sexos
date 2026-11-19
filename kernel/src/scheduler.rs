@@ -241,6 +241,13 @@ impl Task {
         for loaded in FPU_LOADED.iter() {
             let _ = loaded.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire);
         }
+        // The last run's IPC v2 wait and reply, and a core's handoff slot still naming
+        // it, belong to that run: with custody reset, a stale slot would run this task's
+        // kernel stack a second time (the soak's ret-to-0 after a service restart).
+        self.ipc_v2 = crate::ipc_v2::syscall::TaskIpc::new();
+        self.home = AtomicU32::new(u32::MAX);
+        let purged = SCHEDULERS.iter().filter(|s| s.handoff.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire).is_ok()).count();
+        if purged != 0 { serial_println!("[task.rearm.purged] task={} handoffs={}", id, purged); }
     }
 }
 
