@@ -358,7 +358,7 @@ waits for 5. 7 runs alongside from Phase 2.
 |---|---|---|
 | **D1** | Allow capabilities to be minted after BOOT, from BOOT-held roots only, with generation-based revocation? This changes "the capability graph is immutable once the epoch engine starts" to "the *kinds and roots* are fixed at BOOT; derived capabilities come and go". | Yes. It is what lets servers stop re-checking authority, and it keeps BOOT_DAG as the only source of genesis. |
 | **D2** | Allow per-core *permission views* (shared translation, separate root tables, PCID-tagged)? This touches "NO per-process page tables": translation stays global, but more than one root table exists. | Yes. It removes the 16-key ceiling and the one-core bottleneck, and gives isolation on CPUs without PKU. |
-| **D3** | Later: allow user-mode PKU gates between trusted services (no kernel entry)? | Decide after Phase 5 with a written side-channel review. |
+| **D3** | Later: allow user-mode PKU gates between trusted services (no kernel entry)? | Decide after Phase 5 with a written side-channel review. The review and design are in `docs/handoff/PKU_GATES_STUDY_2026_11_18.md` (2026-11-18): yes for trusted service pairs only, prototype after views land. |
 | **D4** | Rewrite `ARCHITECTURE.md` to describe the system as it is (drop the determinism invariant as a hard rule, or scope it to UiIR)? | Yes, in Phase 1. |
 
 ## 9. Coordination

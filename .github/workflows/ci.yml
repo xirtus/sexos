@@ -108,6 +108,8 @@ jobs:
       run: cargo test --locked -p sex-shape --features shaping
     - name: Shuttle userspace font fallback, RTL/BiDi shaping and font picker on the host
       run: bash scripts/shuttle_host_gate.sh
+    - name: PKU gate stubs (kernel study Phase 6) built and run under real protection keys on the host
+      run: cargo test --locked -p sex-gate -- --nocapture
     - name: Loom engines (batch rename, duplicates, usage map, tags, compare) on the host
       run: cargo test --locked -p loom-core
     - name: Vellum annotations, forms and incremental PDF saves on the host
@@ -372,6 +374,10 @@ jobs:
         python3 scripts/desktop_capture_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/capture-source.img" --out "$RUNNER_TEMP/sexos-runtime/capture"
     - name: USB input paths
       run: GATE_DIR="$RUNNER_TEMP/sexos-usb" SKIP_BUILD=1 bash scripts/usb_path_gate.sh
+    - name: PKU gate cost on the runner's CPU (kernel study Phase 6; host Linux, informational)
+      run: |
+        cc -O2 -Wall -o "$RUNNER_TEMP/pku_gate_bench" tools/pku-gate-bench/pku_gate_bench.c
+        "$RUNNER_TEMP/pku_gate_bench"
     - name: Kernel cycles on KVM, real CPU (kernel study Phase 0; 1 core with and without PKU, 4 cores; median of 3)
       run: |
         if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
