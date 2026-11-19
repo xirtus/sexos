@@ -377,7 +377,8 @@ fn read_material(n: &Node) -> Material {
     m
 }
 
-fn read_camera(attr: Option<&Node>) -> Camera {
+/// A camera attribute; `unit` converts file distances to metres.
+fn read_camera(attr: Option<&Node>, unit: f32) -> Camera {
     let mut c = Camera::default();
     let Some(a) = attr else { return c };
     let p = Props::of(a);
@@ -400,8 +401,8 @@ fn read_camera(attr: Option<&Node>) -> Camera {
         let fx = (p.num("FieldOfView", 40.0).to_radians() * 0.5).tan() as f32;
         c.fov_y = 2.0 * (fx / aspect).atan();
     }
-    c.near = p.num("NearPlane", 10.0) as f32;
-    c.far = p.num("FarPlane", 4000.0) as f32;
+    c.near = p.num("NearPlane", 10.0) as f32 * unit;
+    c.far = p.num("FarPlane", 4000.0) as f32 * unit;
     if p.num("CameraProjectionType", 0.0) as i64 == 1 {
         c.ortho_scale = Some(p.num("OrthoZoom", 1.0).max(1e-3) as f32 * 2.0);
     }
@@ -642,16 +643,32 @@ fn import_doc(scene: &mut Scene, doc: &Document, resolver: Resolver) -> Result<V
     // Scene objects for non-bone models.
     let mut added = Vec::new();
     let mut model_object: Vec<Option<usize>> = vec![None; models.len()];
-    let mut fix_of: Vec<Option<Mat4>> = vec![None; models.len()];
+    // Camera and light turns, all known before any child needs its parent's.
+    let model_attr = |mi: &ModelInfo| ctx.kids(mi.id, "NodeAttribute").first().map(|a| ctx.objects[a]);
+    let model_geom = |mi: &ModelInfo| ctx.kids(mi.id, "Geometry").into_iter().find(|g| ctx.objects[g].str(2).is_none_or(|t| t == "Mesh"));
+    let fix_of: Vec<Option<Mat4>> = models
+        .iter()
+        .enumerate()
+        .map(|(i, mi)| {
+            if is_bone[i] || model_geom(mi).is_some() {
+                return None;
+            }
+            match (mi.kind.as_str(), model_attr(mi).and_then(|a| a.str(2))) {
+                ("Camera", _) | (_, Some("Camera")) => Some(a * cam_fix()),
+                ("Light", _) | (_, Some("Light")) => Some(a * light_fix()),
+                _ => None,
+            }
+        })
+        .collect();
     let mut geom_mesh: HashMap<i64, usize> = HashMap::new();
     let mut mesh_object_geom: Vec<(usize, i64, usize)> = Vec::new(); // (object, geometry, model)
     for (i, mi) in models.iter().enumerate() {
         if is_bone[i] {
             continue;
         }
-        let attr = ctx.kids(mi.id, "NodeAttribute").first().map(|a| ctx.objects[a]);
-        let geom = ctx.kids(mi.id, "Geometry").into_iter().find(|g| ctx.objects[g].str(2).is_none_or(|t| t == "Mesh"));
-        let mut fix = None;
+        let attr = model_attr(mi);
+        let geom = model_geom(mi);
+        let fix = fix_of[i];
         let data = if let Some(gid) = geom {
             let gm = geometric(&mi.props);
             let plain = gm.approx_eq(&Mat4::IDENTITY, 1e-6);
@@ -675,14 +692,8 @@ fn import_doc(scene: &mut Scene, doc: &Document, resolver: Resolver) -> Result<V
             ObjectData::Mesh(mesh_idx)
         } else {
             match (mi.kind.as_str(), attr.and_then(|a| a.str(2))) {
-                ("Camera", _) | (_, Some("Camera")) => {
-                    fix = Some(a * cam_fix());
-                    ObjectData::Camera(read_camera(attr))
-                }
-                ("Light", _) | (_, Some("Light")) => {
-                    fix = Some(a * light_fix());
-                    ObjectData::Light(read_light(attr))
-                }
+                ("Camera", _) | (_, Some("Camera")) => ObjectData::Camera(read_camera(attr, unit)),
+                ("Light", _) | (_, Some("Light")) => ObjectData::Light(read_light(attr)),
                 _ => ObjectData::Empty,
             }
         };
@@ -698,7 +709,6 @@ fn import_doc(scene: &mut Scene, doc: &Document, resolver: Resolver) -> Result<V
         if let ObjectData::Mesh(_) = o.data {
             o.materials = ctx.kids(mi.id, "Material").iter().filter_map(|mid| material_ids.get(mid).copied()).collect();
         }
-        fix_of[i] = fix;
         let oi = scene.add_object(o);
         added.push(oi);
         model_object[i] = Some(oi);
@@ -1514,6 +1524,43 @@ Connections:  {
         assert!(m.positions[1].approx_eq(Vec3::new(1.0, 1.0, 0.5), 1e-5), "{:?}", m.positions[1]);
         assert!(m.positions[2].approx_eq(Vec3::new(0.0, 0.0, 0.5), 1e-5), "{:?}", m.positions[2]);
         assert_eq!(m.faces[0].uvs[1], Vec2::new(1.0, 1.0));
+    }
+
+    #[test]
+    fn child_listed_before_its_camera_and_cm_clip_planes() {
+        // The child Model comes before its camera parent in Objects.
+        let text = r#"; FBX 7.4.0 project file
+FBXHeaderExtension:  {
+	FBXVersion: 7400
+}
+Objects:  {
+	Model: 2, "Model::Tag", "Null" {
+		Properties70:  {
+			P: "Lcl Translation", "Lcl Translation", "", "A",100,0,0
+		}
+	}
+	NodeAttribute: 3, "NodeAttribute::Cam", "Camera" {
+		Properties70:  {
+			P: "NearPlane", "double", "Number", "",10
+			P: "FarPlane", "double", "Number", "",5000
+		}
+	}
+	Model: 1, "Model::Cam", "Camera" {
+	}
+}
+Connections:  {
+	C: "OO",1,0
+	C: "OO",3,1
+	C: "OO",2,1
+}
+"#;
+        let sc = io::import(text.as_bytes(), Format::Fbx, &no_files).unwrap();
+        let tag = sc.find_object("Tag").unwrap();
+        let cam = sc.find_object("Cam").unwrap();
+        // File +X (camera look axis, Y-up file) at 1 m is scene +X at 1 m.
+        assert!(sc.world_matrix(tag).translation_part().approx_eq(Vec3::new(1.0, 0.0, 0.0), 1e-5), "{:?}", sc.world_matrix(tag).translation_part());
+        let ObjectData::Camera(c) = &sc.objects[cam].data else { panic!() };
+        assert!((c.near - 0.1).abs() < 1e-6 && (c.far - 50.0).abs() < 1e-4);
     }
 
     /// Set FBX_OUT to a folder to write sample exports there (for checking with other tools).
