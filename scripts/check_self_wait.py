@@ -35,6 +35,7 @@ APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('fn-v1:50abfa82
     '53aec880d2ea82474231d37aaae0862dcb8747185626ab6f4d79175a422ce8a8',  # PKU gates: TSC_AUX on switch (P6.2a), 2026-11-19
     'fn-v1:458daaa0e25c5b534627e9cef612d5e71ba9f781e05b48689bee025a1fd4c70b',  # master 53aec880: PKU gates TSC_AUX on switch (no wait change), 2026-11-19
     'fn-v1:3af49f2ffe4d2b73c67ec09f190aa8e46cf43a3a7b233f7d8a24532828203567',  # #429 merged with master at 950c36ac (raw af1bffe7), wait change as reviewed at 28ffcb59, 2026-11-19
+    'fn-v1:9cba8bed549187d4c2cfbc41d27a800f32aec67ba241ee5623534c60ebdc17e2',  # IPC v2 wait spins (#426) merged with master after the CI freeze, 2026-11-19
     '586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae',  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
     '8acf9e2425054bcf1a0a03475bdb96116efad288257bf798af8af4c4e91007c7',  # IPC v2 wait spins in poll_for_partner (#426), 2026-11-19
     '13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1',  # IPC v2 syscalls 105/106, 2026-11-18
