@@ -956,7 +956,8 @@ impl Ui {
                 continue;
             };
             match event {
-                Event::Close => { self.keep(); break; }
+                // A cell being typed into counts: commit it, then keep.
+                Event::Close => { self.commit(); self.keep(); break; }
                 Event::Resize { .. } => self.draw(window),
                 Event::Key(key) => {
                     let col = self.col;

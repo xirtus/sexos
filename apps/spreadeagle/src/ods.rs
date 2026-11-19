@@ -358,7 +358,7 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
     for sheet in &wb.sheets {
         let _ = write!(body, "<table:table table:name=\"{}\">", escape(&sheet.name));
         let used = sheet.used_range();
-        let (rows, cols) = used.map_or((0, 0), |r| (r.end.row + 1, r.end.col + 1));
+        let cols = used.map_or(0, |r| r.end.col + 1);
         // Columns, with runs of one width written once.
         let mut c = 0;
         while c < cols.max(1) {
@@ -371,25 +371,27 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
             let _ = write!(body, "<table:table-column table:style-name=\"{name}\"{repeat}/>");
             c += run;
         }
-        let mut blank_rows = 0u32;
-        for r in 0..rows {
+        // Only the cells the sheet holds (and spilled array values), row by row: a lone value
+        // at XFD1048576 must not walk seventeen billion empty cells.
+        let mut occupied: BTreeMap<u32, std::collections::BTreeSet<u32>> = BTreeMap::new();
+        for at in sheet.cells.iter().map(|(at, _)| at).chain(sheet.spill.keys().copied()) {
+            occupied.entry(at.row).or_default().insert(at.col);
+        }
+        let mut next_row = 0u32;
+        for (&r, in_row) in &occupied {
             let mut row = String::new();
-            let mut blanks = 0u32;
-            for c in 0..cols {
+            let mut next_col = 0u32;
+            for &c in in_row {
                 let at = gridcraft_engine::core::CellRef::new(r, c);
                 let cell = sheet.cell(at);
                 let style = wb.styles.get(sheet.style_id(at));
                 let font = (style.font.bold, style.font.italic, style.font.underline != Underline::None);
                 let value = sheet.value(at);
                 let formula = cell.and_then(|x| x.formula.as_ref()).map(|f| format!("={}", f.text));
-                if matches!(value, Value::Empty) && formula.is_none() && font == (false, false, false) {
-                    blanks += 1;
-                    continue;
-                }
-                if blanks > 0 {
-                    let _ = write!(row, "<table:table-cell table:number-columns-repeated=\"{blanks}\"/>");
-                    blanks = 0;
-                }
+                if matches!(value, Value::Empty) && formula.is_none() && font == (false, false, false) { continue; }
+                let blanks = c - next_col;
+                if blanks > 0 { let _ = write!(row, "<table:table-cell table:number-columns-repeated=\"{blanks}\"/>"); }
+                next_col = c + 1;
                 let fmt = NumberFormat::parse(style.num_fmt.as_str());
                 let kind = match value {
                     Value::Number(_) if fmt.is_date() => Kind::Date,
@@ -426,17 +428,15 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
                     let _ = write!(row, "{open}>{paragraphs}</table:table-cell>");
                 }
             }
-            if row.is_empty() {
-                blank_rows += 1;
-                continue;
-            }
+            if row.is_empty() { continue; }
+            let blank_rows = r - next_row;
             if blank_rows > 0 {
                 let _ = write!(body, "<table:table-row table:number-rows-repeated=\"{blank_rows}\"><table:table-cell/></table:table-row>");
-                blank_rows = 0;
             }
+            next_row = r + 1;
             let _ = write!(body, "<table:table-row>{row}</table:table-row>");
         }
-        if rows == 0 { body.push_str("<table:table-row><table:table-cell/></table:table-row>"); }
+        if next_row == 0 { body.push_str("<table:table-row><table:table-cell/></table:table-row>"); }
         body.push_str("</table:table>");
     }
 
@@ -517,6 +517,19 @@ mod tests {
         assert_eq!(to_excel("of:=\"say \"\"hi\"\";\"").as_deref(), Some("=\"say \"\"hi\"\";\""));
         assert_eq!(to_excel("foo:=X()"), None);
         assert_eq!(to_excel("of:={1;2|3;4}").as_deref(), Some("={1,2;3,4}"));
+    }
+
+    #[test]
+    fn far_corner_writes_quickly() {
+        let mut s = gridcraft_engine::Session::new();
+        s.new_workbook();
+        s.execute_headless("cell.set", serde_json::json!({ "cell": "XFD1048576", "input": "far" })).unwrap();
+        s.execute_headless("cell.set", serde_json::json!({ "cell": "B2", "input": "=1+1" })).unwrap();
+        let started = std::time::Instant::now();
+        let bytes = write(&s.doc().unwrap().wb).unwrap();
+        assert!(started.elapsed().as_secs() < 5, "{:?}", started.elapsed());
+        let found = extras(&bytes).unwrap().formulas;
+        assert_eq!(found, [Found { sheet: 0, row: 1, col: 1, formula: "=1+1".into() }]);
     }
 
     #[test]

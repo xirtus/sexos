@@ -24,12 +24,15 @@ pub struct Chord<'a> { pub name: &'a str, pub ctrl: bool, pub shift: bool }
 pub struct Book {
     session: Session,
     pub path: String,
+    /// Commands run that change the document (WordCraft marks them `mutates`): typing,
+    /// formatting, styles, undo. The window watches it to keep unsaved work.
+    pub edits: u64,
 }
 
 impl Book {
     /// An empty document that Ctrl+S saves to `path`.
     pub fn blank(path: &str) -> Book {
-        Book { session: Session::new(Document::new()), path: path.to_string() }
+        Book { session: Session::new(Document::new()), path: path.to_string(), edits: 0 }
     }
 
     /// Opens a docx, doc, odt, rtf, html, md or txt file.
@@ -38,12 +41,14 @@ impl Book {
         let mut session = Session::new(doc);
         session.path = Some(path.into());
         session.dirty = false;
-        Ok(Book { session, path: path.to_string() })
+        Ok(Book { session, path: path.to_string(), edits: 0 })
     }
 
     /// Runs one WordCraft command, such as `text.insert` or `format.bold`.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        self.session.run(id, &params).map_err(|e| format!("{e:?}"))
+        let r = self.session.run(id, &params).map_err(|e| format!("{e:?}"))?;
+        if self.session.registry.get(id).is_some_and(|spec| spec.mutates) { self.edits += 1; }
+        Ok(r)
     }
     pub fn type_text(&mut self, text: &str) -> Result<(), String> { self.run("text.insert", json!({ "text": text })).map(|_| ()) }
 
@@ -453,6 +458,21 @@ mod tests {
         assert_eq!(book.go_to_page(99), pages - 1);
         assert_eq!(book.go_to_page(0), 0);
         assert_eq!(book.caret().unwrap().page, 0);
+    }
+
+    #[test]
+    fn edits_count_changes_not_moves() {
+        let mut book = welcome("edits.docx");
+        assert_eq!(book.edits, 0);
+        book.key(&Chord { name: "End", ctrl: false, shift: false });
+        book.key(&Chord { name: "Home", ctrl: false, shift: true });
+        assert_eq!(book.edits, 0, "moving and selecting change nothing");
+        book.key(&Chord { name: "B", ctrl: true, shift: false });
+        assert_eq!(book.edits, 1, "bold is an edit with the same text");
+        book.set_style("Heading1").unwrap();
+        assert_eq!(book.edits, 2);
+        book.type_text("x").unwrap();
+        assert_eq!(book.edits, 3);
     }
 
     #[test]

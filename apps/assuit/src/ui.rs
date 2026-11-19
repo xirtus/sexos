@@ -492,11 +492,11 @@ impl Ui {
                 Event::Resize { .. } => self.draw(window),
                 Event::Key(key) => {
                     let dirty = self.book.dirty();
-                    let before = self.book.text().len();
+                    let edits = self.book.edits;
                     self.key(key);
-                    // An edit (text, or a command that left the document changed): keep it soon, and
-                    // the brought-back changes become the user's own.
-                    if self.book.dirty() && (self.book.text().len() != before || !dirty) {
+                    // An edit (typing, formatting, a style, undo): keep it soon, and the
+                    // brought-back changes become the user's own.
+                    if self.book.edits != edits && self.book.dirty() {
                         self.unkept.get_or_insert(sex_std::sex_pdx::get_ticks());
                         if key.code != code::ESC { self.recovered = false; }
                     }
