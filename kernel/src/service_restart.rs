@@ -267,7 +267,7 @@ fn poll_one(index: usize) {
     // Take every waiting caller's reply queue now and keep it until its answer is in, so
     // none can fill or be taken between this check and the push below (other cores).
     const MAX_TOLD: usize = 8;
-    let mut held: [Option<(u32, spin::MutexGuard<'_, alloc::collections::VecDeque<crate::ipc::messages::IpcReply>>)>; MAX_TOLD] = [const { None }; MAX_TOLD];
+    let mut held: [Option<(u32, _)>; MAX_TOLD] = core::array::from_fn(|_| None);
     let mut missed = 0;
     if answers_every_call(s.pd) {
         for caller in credits.owed() {
