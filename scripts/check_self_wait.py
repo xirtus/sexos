@@ -410,12 +410,13 @@ def inspect(text,active=True,*,browser_tasks=(15,),source_root=None):
   # since round 105 the
   # sexdrive main task (2) waits 1 tick for NVMe completions. Park records
   # are sampled (first four, then powers of two), so either may appear.
+  # With the wired NIC's interrupt armed, an idle SexNet (13) sleeps 10 ticks (irq_wait::QUIET_TICKS).
   # Idle Display (1) and SilkBar (6) sleep 8 ticks; polled sexinput (4) and sexusb (5) sleep 1.
   # Shell (3) wakes itself for password autofill (silk-shell autofill_routes::wake):
   # 100 ticks while a page identity is held, at most 1000 toward a transaction deadline;
   # and for the tray (tray_wake), at most 1000 while a Wi-Fi answer is owed or due.
   shell=source_ok and int(p[1])==SHELL_TASK and 1<=int(p[2])<=SHELL_AUTOFILL_MAX_TICKS
-  if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),)if source_ok else())+input_idle+denim_waits+quil_waits+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
+  if not shell and((int(p[1]),int(p[2]))not in((13,2),(2,1),(1,8),(6,8),(4,1),(5,1))+(((5,32),(13,10))if source_ok else())+input_idle+denim_waits+quil_waits+tuple((task,2)for task in selected)+auxiliary)or int(p[3])==0:errors.append('unexpected timed-poll task/interval/deadline: task=%s ticks=%s'%(p[1],p[2]))
  for e in expiries:
   if int(e[1])not in(13,2,1,6,4,5)+((SHELL_TASK,)if source_ok else())+((DENIM_TASK,)if denim['ok']else())+((QUIL_TASK,)if quil['ok']else())+selected+((50,)if acpi['ok']else()) or int(e[3])<int(e[2]):errors.append('foreign task or early timer expiry: task=%s deadline=%s now=%s'%(e[1],e[2],e[3]))
  for r in returns:
