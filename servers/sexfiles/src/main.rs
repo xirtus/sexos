@@ -26,6 +26,7 @@ mod restricted_control;
 mod restricted_load;
 mod restricted_data;
 mod fs_service;
+mod organize;
 mod recording_role;
 mod recording_image;
 mod recording_journal;

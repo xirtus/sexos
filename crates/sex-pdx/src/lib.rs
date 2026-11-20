@@ -1363,3 +1363,4 @@ pub mod vm;
 pub mod gate;
 pub mod stream;
 pub mod console_relay;
+pub mod file_chooser;

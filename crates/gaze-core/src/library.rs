@@ -6,9 +6,11 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use crate::develop::DevelopRecipe;
 use crate::edits::EditRecipe;
 use crate::metadata::{PhotoDate, PhotoMeta};
 use crate::search::SmartQuery;
+use crate::sidecar::{ColorLabel, CullFlag, PhotoSidecar, SmartAlbumRule};
 
 const MAGIC_HEADER: &str = "GAZE_LIBRARY_V1";
 const MAX_SERIALIZED_LINES: usize = 16_384;
@@ -32,8 +34,13 @@ pub struct PhotoRecord {
     pub path: String,
     pub name: String,
     pub favorite: bool,
+    pub stars: u8,
+    pub flag: CullFlag,
+    pub color_label: ColorLabel,
+    pub keywords: Vec<String>,
     pub meta: PhotoMeta,
     pub recipe: EditRecipe,
+    pub develop: DevelopRecipe,
 }
 
 impl PhotoRecord {
@@ -44,9 +51,44 @@ impl PhotoRecord {
             path: path.to_string(),
             name,
             favorite: false,
+            stars: 0,
+            flag: CullFlag::Unflagged,
+            color_label: ColorLabel::None,
+            keywords: Vec::new(),
             meta,
             recipe: EditRecipe::default(),
+            develop: DevelopRecipe::default(),
         }
+    }
+
+    pub fn is_edited(&self) -> bool {
+        !self.recipe.is_identity() || !self.develop.is_identity()
+    }
+
+    pub fn is_keeper(&self) -> bool {
+        self.flag != CullFlag::Reject && (self.flag == CullFlag::Pick || self.stars >= 1)
+    }
+
+    pub fn to_sidecar(&self) -> PhotoSidecar {
+        PhotoSidecar {
+            version: 1,
+            source_name: self.name.clone(),
+            stars: self.stars.min(5),
+            flag: self.flag,
+            color_label: self.color_label,
+            keywords: self.keywords.clone(),
+            edit: self.recipe.clone(),
+            develop: self.develop.clone(),
+        }
+    }
+
+    pub fn apply_sidecar(&mut self, sidecar: &PhotoSidecar) {
+        self.stars = sidecar.stars.min(5);
+        self.flag = sidecar.flag;
+        self.color_label = sidecar.color_label;
+        self.keywords = sidecar.keywords.clone();
+        self.recipe = sidecar.edit.clone();
+        self.develop = sidecar.develop.clone();
     }
 }
 
@@ -70,6 +112,11 @@ pub enum SidebarCollection {
     AllPhotos,
     Favorites,
     Edited,
+    Keepers,
+    Picks,
+    Rejected,
+    MinStars(u8),
+    LabelFilter(ColorLabel),
     PlaceFilter(String),
     YearFilter(u16),
     UserAlbum(usize),
@@ -81,6 +128,11 @@ impl SidebarCollection {
             SidebarCollection::AllPhotos => "All Photos".to_string(),
             SidebarCollection::Favorites => "Favorites".to_string(),
             SidebarCollection::Edited => "Edited".to_string(),
+            SidebarCollection::Keepers => "Keepers".to_string(),
+            SidebarCollection::Picks => "Picks".to_string(),
+            SidebarCollection::Rejected => "Rejected".to_string(),
+            SidebarCollection::MinStars(s) => format!("{}+ Stars", s),
+            SidebarCollection::LabelFilter(l) => format!("Label: {}", l.label()),
             SidebarCollection::PlaceFilter(p) => format!("Place: {}", p),
             SidebarCollection::YearFilter(y) => format!("Year: {}", y),
             SidebarCollection::UserAlbum(idx) => albums
@@ -174,7 +226,77 @@ impl PhotoLibrary {
     }
 
     pub fn reset_recipe(&mut self, path: &str) -> bool {
-        self.set_recipe(path, EditRecipe::default())
+        if let Some(rec) = self.photo_by_path_mut(path) {
+            rec.recipe = EditRecipe::default();
+            rec.develop = DevelopRecipe::default();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_develop(&mut self, path: &str, develop: DevelopRecipe) -> bool {
+        if let Some(rec) = self.photo_by_path_mut(path) {
+            rec.develop = develop;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn reset_develop(&mut self, path: &str) -> bool {
+        self.set_develop(path, DevelopRecipe::default())
+    }
+
+    pub fn set_stars(&mut self, path: &str, stars: u8) -> bool {
+        if let Some(rec) = self.photo_by_path_mut(path) {
+            rec.stars = stars.min(5);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_flag(&mut self, path: &str, flag: CullFlag) -> bool {
+        if let Some(rec) = self.photo_by_path_mut(path) {
+            rec.flag = flag;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_color_label(&mut self, path: &str, label: ColorLabel) -> bool {
+        if let Some(rec) = self.photo_by_path_mut(path) {
+            rec.color_label = label;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn add_keyword(&mut self, path: &str, keyword: &str) -> bool {
+        let kw = keyword.trim();
+        if kw.is_empty() {
+            return false;
+        }
+        if let Some(rec) = self.photo_by_path_mut(path) {
+            if !rec.keywords.iter().any(|k| k.eq_ignore_ascii_case(kw)) {
+                rec.keywords.push(kw.to_string());
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn apply_sidecar(&mut self, path: &str, sidecar: &PhotoSidecar) -> bool {
+        if let Some(rec) = self.photo_by_path_mut(path) {
+            rec.apply_sidecar(sidecar);
+            true
+        } else {
+            false
+        }
     }
 
     pub fn create_album(&mut self, raw_name: &str) -> usize {
@@ -257,7 +379,31 @@ impl PhotoLibrary {
     }
 
     pub fn edited_count(&self) -> usize {
-        self.photos.iter().filter(|p| !p.recipe.is_identity()).count()
+        self.photos.iter().filter(|p| p.is_edited()).count()
+    }
+
+    pub fn keepers_count(&self) -> usize {
+        self.photos.iter().filter(|p| p.is_keeper()).count()
+    }
+
+    pub fn picks_count(&self) -> usize {
+        self.photos.iter().filter(|p| p.flag == CullFlag::Pick).count()
+    }
+
+    pub fn rejected_count(&self) -> usize {
+        self.photos.iter().filter(|p| p.flag == CullFlag::Reject).count()
+    }
+
+    /// Returns indices of all photos matching a [`SmartAlbumRule`], sorted newest-first.
+    pub fn matching_smart_rule(&self, rule: &SmartAlbumRule) -> Vec<usize> {
+        let mut indices: Vec<usize> = self
+            .photos
+            .iter()
+            .enumerate()
+            .filter_map(|(i, rec)| rule.matches(rec).then_some(i))
+            .collect();
+        self.sort_indices_newest_first(&mut indices);
+        indices
     }
 
     /// Returns distinct resolved places sorted by photo count descending, then alphabetically.
@@ -294,6 +440,18 @@ impl PhotoLibrary {
         counts
     }
 
+    fn sort_indices_newest_first(&self, indices: &mut [usize]) {
+        indices.sort_by(|&ia, &ib| {
+            let a = &self.photos[ia];
+            let b = &self.photos[ib];
+            let ka = a.meta.date.map(|d| d.sort_key()).unwrap_or(0);
+            let kb = b.meta.date.map(|d| d.sort_key()).unwrap_or(0);
+            kb.cmp(&ka)
+                .then_with(|| a.name.cmp(&b.name))
+                .then_with(|| a.path.cmp(&b.path))
+        });
+    }
+
     /// Computes filtered photo indices matching both `collection` and `query`,
     /// sorted deterministically (newest date first, tie-broken by filename).
     pub fn visible_indices(&self, collection: &SidebarCollection, query: &SmartQuery) -> Vec<usize> {
@@ -302,7 +460,12 @@ impl PhotoLibrary {
             let in_collection = match collection {
                 SidebarCollection::AllPhotos => true,
                 SidebarCollection::Favorites => rec.favorite,
-                SidebarCollection::Edited => !rec.recipe.is_identity(),
+                SidebarCollection::Edited => rec.is_edited(),
+                SidebarCollection::Keepers => rec.is_keeper(),
+                SidebarCollection::Picks => rec.flag == CullFlag::Pick,
+                SidebarCollection::Rejected => rec.flag == CullFlag::Reject,
+                SidebarCollection::MinStars(min_s) => rec.stars >= *min_s && rec.flag != CullFlag::Reject,
+                SidebarCollection::LabelFilter(lbl) => rec.color_label == *lbl,
                 SidebarCollection::PlaceFilter(place) => {
                     rec.meta.place.as_deref() == Some(place.as_str())
                 }
@@ -323,15 +486,7 @@ impl PhotoLibrary {
             }
         }
 
-        indices.sort_by(|&ia, &ib| {
-            let a = &self.photos[ia];
-            let b = &self.photos[ib];
-            let ka = a.meta.date.map(|d| d.sort_key()).unwrap_or(0);
-            let kb = b.meta.date.map(|d| d.sort_key()).unwrap_or(0);
-            kb.cmp(&ka)
-                .then_with(|| a.name.cmp(&b.name))
-                .then_with(|| a.path.cmp(&b.path))
-        });
+        self.sort_indices_newest_first(&mut indices);
         indices
     }
 
@@ -388,9 +543,18 @@ impl PhotoLibrary {
             };
 
             let opt = |v: &Option<String>| v.as_deref().map(escape_field).unwrap_or_else(|| "-".to_string());
-            // Lens and exposure come after the recipe, so older catalogs (13 columns) still load.
+            let kw_s = if p.keywords.is_empty() {
+                "-".to_string()
+            } else {
+                p.keywords
+                    .iter()
+                    .map(|k| escape_field(&k.replace(';', ",")))
+                    .collect::<Vec<_>>()
+                    .join(";")
+            };
+            // Lens/exposure and culling/develop columns come after the core 13 columns so older catalogs still load.
             out.push_str(&format!(
-                "PHOTO\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "PHOTO\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 escape_field(&p.path),
                 p.favorite as u8,
                 p.meta.width,
@@ -404,7 +568,12 @@ impl PhotoLibrary {
                 cam_s,
                 p.recipe.encode_compact(),
                 opt(&p.meta.lens),
-                opt(&p.meta.exposure)
+                opt(&p.meta.exposure),
+                p.stars.min(5),
+                p.flag.slug(),
+                p.color_label.slug(),
+                kw_s,
+                p.develop.encode_compact()
             ));
         }
 
@@ -498,6 +667,26 @@ impl PhotoLibrary {
                     let recipe = EditRecipe::decode_compact(cols[12]);
                     let extra = |i: usize| cols.get(i).filter(|c| **c != "-" && !c.is_empty()).map(|c| unescape_field(c));
                     let (lens, exposure) = (extra(13), extra(14));
+                    let stars = cols
+                        .get(15)
+                        .and_then(|s| s.parse::<u8>().ok())
+                        .unwrap_or(0)
+                        .min(5);
+                    let flag = cols.get(16).map_or(CullFlag::Unflagged, |s| CullFlag::from_slug(s));
+                    let color_label = cols.get(17).map_or(ColorLabel::None, |s| ColorLabel::from_slug(s));
+                    let keywords = cols
+                        .get(18)
+                        .filter(|s| **s != "-" && !s.is_empty())
+                        .map(|s| {
+                            s.split(';')
+                                .map(unescape_field)
+                                .filter(|k| !k.is_empty())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let develop = cols
+                        .get(19)
+                        .map_or_else(DevelopRecipe::default, |s| DevelopRecipe::decode_compact(s));
 
                     let mut rec = PhotoRecord::new(
                         &path,
@@ -516,6 +705,11 @@ impl PhotoLibrary {
                     );
                     rec.favorite = favorite;
                     rec.recipe = recipe;
+                    rec.stars = stars;
+                    rec.flag = flag;
+                    rec.color_label = color_label;
+                    rec.keywords = keywords;
+                    rec.develop = develop;
                     lib.photos.push(rec);
                 }
                 _ => {}

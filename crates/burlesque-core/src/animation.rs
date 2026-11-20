@@ -7,6 +7,11 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BuildEffect {
     Appear,
+    Fade,
+    FlyIn,
+    Scale,
+    Wipe,
+    Disappear,
     DissolveIn,
     FlyInLeft,
     FlyInBottom,
@@ -19,6 +24,11 @@ impl BuildEffect {
     pub fn name(&self) -> &'static str {
         match self {
             Self::Appear => "Appear",
+            Self::Fade => "Fade",
+            Self::FlyIn => "Fly In",
+            Self::Scale => "Scale",
+            Self::Wipe => "Wipe",
+            Self::Disappear => "Disappear",
             Self::DissolveIn => "Dissolve In",
             Self::FlyInLeft => "Fly In (Left)",
             Self::FlyInBottom => "Fly In (Bottom)",
@@ -31,6 +41,11 @@ impl BuildEffect {
     pub fn kind_str(&self) -> &'static str {
         match self {
             Self::Appear => "appear",
+            Self::Fade => "fade",
+            Self::FlyIn => "fly_in",
+            Self::Scale => "scale",
+            Self::Wipe => "wipe",
+            Self::Disappear => "disappear",
             Self::DissolveIn => "dissolve_in",
             Self::FlyInLeft => "fly_in_left",
             Self::FlyInBottom => "fly_in_bottom",
@@ -44,11 +59,15 @@ impl BuildEffect {
         let clean = s.trim();
         if clean.eq_ignore_ascii_case("appear") {
             Self::Appear
+        } else if clean.eq_ignore_ascii_case("fade") || clean.eq_ignore_ascii_case("fade_in") {
+            Self::Fade
         } else if clean.eq_ignore_ascii_case("dissolve")
             || clean.eq_ignore_ascii_case("dissolve_in")
             || clean.eq_ignore_ascii_case("dissolvein")
         {
             Self::DissolveIn
+        } else if clean.eq_ignore_ascii_case("fly_in") || clean.eq_ignore_ascii_case("flyin") {
+            Self::FlyIn
         } else if clean.eq_ignore_ascii_case("fly_in_left")
             || clean.eq_ignore_ascii_case("flyinleft")
             || clean.eq_ignore_ascii_case("fly_left")
@@ -59,16 +78,21 @@ impl BuildEffect {
             || clean.eq_ignore_ascii_case("fly_bottom")
         {
             Self::FlyInBottom
+        } else if clean.eq_ignore_ascii_case("scale") {
+            Self::Scale
         } else if clean.eq_ignore_ascii_case("pop")
             || clean.eq_ignore_ascii_case("pop_scale")
             || clean.eq_ignore_ascii_case("popscale")
         {
             Self::PopScale
-        } else if clean.eq_ignore_ascii_case("wipe")
-            || clean.eq_ignore_ascii_case("wipe_right")
+        } else if clean.eq_ignore_ascii_case("wipe") {
+            Self::Wipe
+        } else if clean.eq_ignore_ascii_case("wipe_right")
             || clean.eq_ignore_ascii_case("wiperight")
         {
             Self::WipeRight
+        } else if clean.eq_ignore_ascii_case("disappear") {
+            Self::Disappear
         } else if clean.eq_ignore_ascii_case("fade_out")
             || clean.eq_ignore_ascii_case("fadeout")
         {
@@ -80,7 +104,7 @@ impl BuildEffect {
 
     /// Whether this effect is a build-out (dismiss) effect.
     pub fn is_build_out(&self) -> bool {
-        matches!(self, Self::FadeOut)
+        matches!(self, Self::FadeOut | Self::Disappear)
     }
 }
 
@@ -133,6 +157,20 @@ impl BuildStep {
 
     pub fn with_trigger(mut self, trigger: BuildTrigger) -> Self {
         self.trigger = trigger;
+        self
+    }
+
+    /// Returns the configured delay before this build starts in milliseconds.
+    pub fn delay_ms(&self) -> u32 {
+        match self.trigger {
+            BuildTrigger::AfterPrevious { delay_ms } => delay_ms,
+            _ => self.rehearsed_delay_ms.unwrap_or(0),
+        }
+    }
+
+    /// Sets `AfterPrevious { delay_ms }` if trigger is `OnClick`/`AfterPrevious` with delay > 0.
+    pub fn with_delay(mut self, delay_ms: u32) -> Self {
+        self.trigger = BuildTrigger::AfterPrevious { delay_ms };
         self
     }
 }

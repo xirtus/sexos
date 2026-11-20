@@ -286,6 +286,18 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             let state=match holder.and_then(|pd|crate::service_restart::peer_state(pd,arg)){Ok(s)=>s,Err(e)=>return e};
             regs.rsi=state.epoch;regs.rdx=state.life as u64;wire::OK
         }
+        wire::OP_LOG_HEAD => {
+            // The boot log's first part, for a PC with no serial port: whoever may read
+            // crash records may read it too.
+            if !may_read(caller) { return wire::DENIED; }
+            if !crate::syscalls::validate_user_bytes(buf, wire::LOG_CHUNK, true) { return wire::INVALID; }
+            let mut chunk = [0u8; wire::LOG_CHUNK];
+            let (n, total) = crate::console::log_head(arg as usize, &mut chunk);
+            unsafe { core::ptr::copy_nonoverlapping(chunk.as_ptr(), buf as *mut u8, n) };
+            regs.rsi = n as u64;
+            regs.rdx = total as u64;
+            wire::OK
+        }
         wire::OP_KEEP => {
             if crate::service_restart::keep(caller, arg, buf) { wire::OK } else { wire::INVALID }
         }
