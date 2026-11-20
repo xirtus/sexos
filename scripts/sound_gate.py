@@ -17,7 +17,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 LIVE_HZ=660
 NOTES=[(440,400),(1000,300)]
-KEYS={' ':'spc'}
+KEYS={' ':'spc','-':'minus'}
 
 def segments(path,rate=48000,split=False):
  """Loud stretches of the left channel: (start s, length s, Hz by zero crossings).
