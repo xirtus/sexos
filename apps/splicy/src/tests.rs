@@ -555,3 +555,19 @@ fn audition_cycle_and_nearest_join_removed_range() {
     assert_eq!(removed_range.end, 4 * SECOND);
     assert_eq!(removed_range.len(), 2 * SECOND);
 }
+
+#[test]
+fn clean_up_with_levels_keeps_transcript_edges_where_words_pause() {
+    let (mut plain, mut placed) = (talk(), talk());
+    let pcm: Vec<[i16; 2]> = (0..48_000 * 10).map(|n| if n % 2 == 0 { [8000, 8000] } else { [-8000, -8000] }).collect();
+    let mut meter = sex_splice::edges::LevelMeter::new(20 * MS);
+    meter.add(0, &pcm, 48_000);
+    let levels = meter.levels();
+    assert_eq!(plain.suggest_cleanup(), 3);
+    assert_eq!(placed.suggest_cleanup_with(Some(&levels)), 3);
+    for (a, b) in plain.pending().iter().zip(placed.pending().iter()) {
+        let (a, b) = (plain.suggestions.get(*a).unwrap(), placed.suggestions.get(*b).unwrap());
+        assert_eq!(a.summary, b.summary);
+        assert_eq!(a.cuts, b.cuts, "every word in this talk has a pause beside it");
+    }
+}
