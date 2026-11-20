@@ -11,3 +11,7 @@ path = "src/main.rs"
 [dependencies]
 sex-pdx = { path = "../../crates/sex-pdx" }
 sex-app = { path = "../../crates/sex-app" }
+sex-pkg = { path = "../../crates/sex-pkg" }
+sex-image = { path = "../../crates/sex-image" }
+sex-font = { path = "../../crates/sex-font" }
+sha2 = { version = "=0.10.9", default-features = false, features = ["force-soft"] }
