@@ -216,6 +216,7 @@ fn decorate_row(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize
     split(1, t1);
     if !any { return; }
     let t2 = cycles_now();
+    crate::selected_row_start();
     let back = crate::bg(y, h);
     let marked = crate::wallpaper_mark::span(y, w, h).is_some();
     let wall = |x: usize| if marked { crate::wallpaper_mark::pixel(x, y, w, h, back) } else { back };
@@ -255,7 +256,7 @@ fn decorate_row(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize
                             let Some(b) = wins[from..].iter().position(|v| v.holds(xi, yi)).map(|i| i + from) else {
                                 break shape::darken(wall(x), shade_under(xi, None));
                             };
-                            let c = shape::darken(crate::composite_pixel_selected(x, y, w, h, wall(x), scene.focus, Some(wins[b].id), scene), shade_under(xi, Some(b)));
+                            let c = shape::darken(crate::selected_pixel(x, y, w, h, wins[b].id, scene), shade_under(xi, Some(b)));
                             let k = (wins[b].cover(xi, yi) as u32 * wins[b].fade as u32 / 255) as u8;
                             if k == 255 || depth == layers.len() { break c; }
                             layers[depth] = (c, k); depth += 1; from = b + 1;

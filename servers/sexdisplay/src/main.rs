@@ -630,6 +630,10 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
 /// Fill rects paint in order over the run (the last one wins, as there).
 /// Must match that function exactly.
 fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
+    fast_content_row(unsafe{fb.add(y*w)},x0,x1,y,w,h,source,scene)
+}
+/// fast_content_run into `row`, the start of row y (the framebuffer's or a scratch row).
+fn fast_content_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
     let surf=source.surface;
     let (sx,sy,sw,sh)=scene.groups.rect(surf,w,h);
     if !surf.active||sw==0||sh==0||x0<sx||x1>sx+sw||y<sy||y>=sy+sh{return false;}
@@ -644,7 +648,6 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
     let (lx0,lx1,ly)=(x0 as i32-content.x,x1 as i32-content.x,y as i32-content.y);
     let mask=surface_lifecycle::native_pixel_bit(if source.chrome{content.owner_pd}else{surf.owner_pd},if source.chrome{content.surface_id}else{surf.surface_id});
     if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
-    let row=unsafe{fb.add(y*w)};
     // The private frame is ordinary memory: plain fills vectorize.
     unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0).fill(content.color);}
     for i in 0..content.fill_count as usize{
@@ -738,6 +741,9 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
 /// top-rim lights of a window without a title bar, the SilkBar rows, or a run that
 /// reaches the content area. Must match composite_pixel_source exactly.
 fn fast_chrome_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
+    fast_chrome_row(unsafe{fb.add(y*w)},x0,x1,y,w,h,source,scene)
+}
+fn fast_chrome_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
     if !source.chrome{return false;}
     let surf=source.surface;
     let (sx,sy,sw,sh)=scene.groups.rect(surf,w,h);
@@ -750,7 +756,6 @@ fn fast_chrome_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:
     let rim_bottom=sh.saturating_sub(px8);
     let top_bar_active=surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0;
     let fb_h=scene.height as u32;
-    let row=unsafe{fb.add(y*w)};
     let mask=surface_lifecycle::native_pixel_bit(surf.owner_pd,surf.surface_id);
     if top_bar_active&&ly<(m.title()as usize){
         let frame_hovered=surf.chrome_flags&SURFACE_CHROME_FRAME_HOVER!=0;
@@ -802,7 +807,7 @@ fn fast_chrome_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:
         if ly<px8&&!top_bar_active{return false;}
         // A run across the content between the side rims: the content's own fast run.
         let (c0,c1)=(l0.max(px8),l1.min(rim_right));
-        if !band_row&&c0<c1&&!fast_content_run(fb,sx+c0,sx+c1,y,w,h,source,scene){return false;}
+        if !band_row&&c0<c1&&!fast_content_row(row,sx+c0,sx+c1,y,w,h,source,scene){return false;}
         let edge=m.scale()as usize;
         let edge_row=ly<edge||ly>=sh.saturating_sub(edge);
         let outline=glass_over_bg(scene.tokens.frame_rim_color,x0,y,112,scene);
@@ -815,6 +820,41 @@ fn fast_chrome_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:
     }
     if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
     true
+}
+
+/// What window `id` alone shows along row y (over the wallpaper), for the
+/// decoration pass: the window under a fading one or behind a corner arc.
+/// Painted a row run at a time by the same paths as raster_row, and kept until
+/// decor starts another row (selected_row_start).
+static mut SEL_ROW:[u32;MAX_FB_W]=[0;MAX_FB_W];
+static mut SEL_KEY:(u64,usize,usize,usize)=(0,usize::MAX,0,0);
+fn selected_row_start(){unsafe{(*core::ptr::addr_of_mut!(SEL_KEY)).1=usize::MAX;}}
+fn selected_pixel(x:usize,y:usize,w:usize,h:usize,id:u64,scene:&scene::SceneSnapshot)->u32{
+    unsafe{
+        let key=*core::ptr::addr_of!(SEL_KEY);
+        let row=core::ptr::addr_of_mut!(SEL_ROW) as *mut u32;
+        if key.0==id&&key.1==y&&x>=key.2&&x<key.3{return core::ptr::read(row.add(x));}
+        let back=bg(y,h);
+        let marked=wallpaper_mark::span(y,w,h).is_some();
+        let wall=|px:usize|if marked{wallpaper_mark::pixel(px,y,w,h,back)}else{back};
+        let Some(surface)=scene.surfaces.iter().find(|s|s.active&&s.surface_id==id) else{
+            return wall(x);
+        };
+        // The run of x: every surface edge splits it, so one content surface holds throughout.
+        let span=Some(scene.groups.run_span(&scene.surfaces,x,y,w,h));
+        let (sx,_,sw,_)=scene.groups.rect(surface,w,h);
+        let Some((lo,hi))=span.map(|(a,b)|(a.max(sx),b.min(sx+sw).min(w))).filter(|&(a,b)|a<=x&&x<b) else{
+            return composite_pixel_selected(x,y,w,h,wall(x),scene.focus,Some(id),scene);
+        };
+        let source=surface_groups::PixelSource{surface,content:scene.groups.content(surface,&scene.surfaces,lo,y,w,h),
+            chrome:surface.surface_id==scene.focus||scene.groups.is_frame(surface)||scene.groups.is_program_frame(surface)};
+        for px in lo..hi{core::ptr::write(row.add(px),wall(px));}
+        if !(fast_content_row(row,lo,hi,y,w,h,source,scene)||fast_chrome_row(row,lo,hi,y,w,h,source,scene)){
+            for px in lo..hi{core::ptr::write(row.add(px),composite_pixel_source(px,y,w,h,wall(px),Some(source),scene));}
+        }
+        *core::ptr::addr_of_mut!(SEL_KEY)=(id,y,lo,hi);
+        core::ptr::read(row.add(x))
+    }
 }
 
 /// Pixels sent down the per-pixel path since the last frame cost: no source, chrome, bitmap, other content.
