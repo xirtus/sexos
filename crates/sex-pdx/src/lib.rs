@@ -1292,6 +1292,7 @@ pub mod device;
 pub mod usb_disk;
 pub mod usb_net;
 pub mod bt_hci;
+pub mod nvidia_gpu;
 pub mod bt_bonds;
 pub mod bt_audio;
 pub mod bt_ui;

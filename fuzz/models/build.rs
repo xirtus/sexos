@@ -54,7 +54,18 @@ fn main() {
                                    ("pub const SLOT_COUNT: usize = 1024;", "pub const SLOT_COUNT: usize = 4;"),
                                    ("pub static OBJECTS: Generations = Generations::new();", ""),
                                    ("core::hint::spin_loop();", "crate::shim::spin_loop();")];
+    // Scheduler custody word and timed-wait deadlines (kernel pass 2, K6). The BOOT
+    // inventory's `[const { .. }; N]` has no space, so it is rewritten here.
+    // `Deadline::cancel` stores 0. Loom over-approximates a plain store racing another
+    // thread's compare-exchange: it lets that exchange's write land after the store,
+    // although the exchange read the value from before it, which C11 forbids (and a
+    // timer would appear to erase the owner's next arm). A swap is ordered the same way
+    // under C11 and loom models it exactly, so the loom copy cancels with a swap.
+    let self_wait: &[(&str, &str)] = &[("[const{AtomicPtr::new(core::ptr::null_mut())};N]", "core::array::from_fn(|_|AtomicPtr::new(core::ptr::null_mut()))"),
+                                       ("pub fn cancel(&self){self.at.store(0,Ordering::Release);}", "pub fn cancel(&self){self.at.swap(0,Ordering::AcqRel);}")];
     for (file, name, extra, arrays) in [("kernel/src/scheduler_queue.rs", "scheduler_queue", &[][..], true),
+                                        ("kernel/src/task_ownership.rs", "task_ownership", &[][..], false),
+                                        ("kernel/src/self_wait.rs", "self_wait", self_wait, false),
                                         ("kernel/src/ipc_ring.rs", "ipc_ring", ring_cell, true),
                                         ("kernel/src/ipc_v2/endpoint.rs", "endpoint", endpoint, false),
                                         ("kernel/src/ipc_v2/notification.rs", "notification", notification, false),

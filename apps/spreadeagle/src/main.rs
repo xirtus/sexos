@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Spreadeagle: the SexOS spreadsheet. `run spreadeagle NAME.xlsx` opens a workbook in the
-//! program's folder (xlsx, xls, csv or tsv; a name that does not exist yet starts an
+//! program's folder (xlsx, xls, ods, csv or tsv; a name that does not exist yet starts an
 //! empty workbook saved there). With no name it opens `welcome.xlsx`, writing it first
 //! if it is missing.
 //!
@@ -10,7 +10,11 @@
 //!
 //! Keys: arrows, Tab, Page Up/Down and Ctrl+Home move; typing replaces the cell, Enter
 //! edits it (arrows then move the caret), Enter or Tab commits, Esc cancels; Delete
-//! clears; Ctrl+Z / Ctrl+Y undo and redo; Ctrl+Page Up/Down change sheet; Ctrl+S saves.
+//! clears; Ctrl+Z / Ctrl+Y undo and redo; Ctrl+Page Up/Down change sheet; Ctrl+S saves,
+//! Ctrl+Shift+S saves as (the extension picks xlsx, ods, csv, tsv, html or pdf), Ctrl+P
+//! writes a PDF beside the file, Ctrl+G goes to a cell, Ctrl+Shift+= and Ctrl+- insert and
+//! delete rows or columns. Unsaved changes are kept aside on close and after a quiet
+//! moment, and come back the next time the workbook opens.
 //! The mouse picks cells and sheet tabs and the wheel scrolls.
 #![cfg_attr(not(target_os = "hermit"), allow(dead_code))]
 mod book;
@@ -30,7 +34,11 @@ fn main() {
         }
         "welcome.xlsx".to_string()
     });
-    let opened = if std::fs::metadata(&name).is_ok() {
+    let recovered = book::Book::open_recovered(&name);
+    let was_recovered = recovered.is_some();
+    let opened = if let Some(book) = recovered {
+        Ok(book)
+    } else if std::fs::metadata(&name).is_ok() {
         book::Book::open(&name).map(|(b, warnings)| {
             for w in warnings { sex_std::record(&format!("[spreadeagle.warning] {w}")); }
             b
@@ -48,7 +56,9 @@ fn main() {
     let (target, task) = sex_std::identity();
     sex_std::record(&format!("[spreadeagle.open] target={target} task={task} name={name} sheets={}", book.sheets().join(",")));
     let window = sex_std::window();
-    ui::Ui::new(book, name).run(window);
+    let ui = ui::Ui::new(book, name);
+    let ui = if was_recovered { sex_std::record("[spreadeagle.recovered]"); ui.recovered() } else { ui };
+    ui.run(window);
     std::process::exit(0);
 }
 
