@@ -1224,7 +1224,7 @@
     set src(v) { this.setAttribute('src', v); this.load(); }
     get currentSrc() { return this.src; }
     get currentTime() { return this._s().t; }
-    set currentTime(v) { const s = this._s(); s.t = Math.max(0, +v || 0); s.seeking = true; this._ask('seek', s.t); }
+    set currentTime(v) { const s = this._s(); s.t = Math.max(0, +v || 0); s.seeking = true; s.seekTo = s.t; this._ask('seek', s.t); }
     get duration() { return this._ms ? this._ms._d : this._s().d; }
     get paused() { return this._s().paused; }
     get ended() { return this._s().ended; }
@@ -1425,8 +1425,18 @@
     s.t = +f[3] || 0; s.d = f[4] === '' ? NaN : +f[4]; s.paused = f[5] === '1'; s.ended = f[6] === '1';
     s.w = +f[7] || 0; s.h = +f[8] || 0; s.ready = +f[9] || 0;
     for (const name of f[2] ? f[2].split(',') : []) {
-      if (name === 'seeked') s.seeking = false;
       if (name === 'error') s.error = { code: 4, message: 'The file could not be played' };
+      if (name === 'seeked') {
+        // The browser's report can come a frame or two after playing resumed; as in
+        // other browsers, seeked sees the time that was asked for.
+        s.seeking = false;
+        const now = s.t, to = s.seekTo;
+        s.seekTo = undefined;
+        if (to !== undefined && Math.abs(now - to) < 0.5) s.t = to;
+        el.dispatchEvent(new Event(name));
+        s.t = now;
+        continue;
+      }
       // dispatchEvent also runs the on<name> handler property.
       el.dispatchEvent(new Event(name));
     }

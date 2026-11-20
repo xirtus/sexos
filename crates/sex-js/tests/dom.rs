@@ -1932,3 +1932,18 @@ fn id_lookup_and_small_subtree_queries_after_changes() {
     "#, "t.js").unwrap();
     assert_eq!(logs(&mut s), ["0:2 null", "0:null 3 2", "0:true 2 3", "0:null true"]);
 }
+
+#[test]
+fn seeked_reports_the_asked_time() {
+    let mut s = page("<video id=v></video>");
+    s.eval(r#"
+        const v = document.getElementById('v');
+        v.addEventListener('seeked', () => console.log('seeked', v.currentTime, v.seeking));
+        v.addEventListener('timeupdate', () => console.log('time', v.currentTime));
+        v.currentTime = 6;
+        console.log('id', v._id);
+    "#, "t.js").unwrap();
+    let id = logs(&mut s)[0].trim_start_matches("0:id ").to_string();
+    s.dispatch(&format!("media\t{id}\tseeked,timeupdate\t6.12\t10\t0\t0\t320\t240\t4")).unwrap();
+    assert_eq!(logs(&mut s), ["0:seeked 6 false", "0:time 6.12"]);
+}
