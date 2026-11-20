@@ -658,10 +658,11 @@ impl Scheduler {
             || self.urgent.bottom.load(Ordering::Acquire) != self.urgent.top.load(Ordering::Acquire)
             || self.runqueue.bottom.load(Ordering::Acquire) != self.runqueue.top.load(Ordering::Acquire)
     }
-    /// Tasks waiting in this core's queues, for pair affinity's load check.
-    fn queued(&self) -> usize {
+    /// Tasks running or waiting to run here, for pair affinity's load check.
+    fn load(&self) -> usize {
         let depth = |bottom: &core::sync::atomic::AtomicUsize, top: &core::sync::atomic::AtomicUsize| bottom.load(Ordering::Acquire).wrapping_sub(top.load(Ordering::Acquire));
-        depth(&self.runqueue.bottom, &self.runqueue.top) + depth(&self.urgent.bottom, &self.urgent.top) + !self.handoff.load(Ordering::Relaxed).is_null() as usize
+        depth(&self.runqueue.bottom, &self.runqueue.top) + depth(&self.urgent.bottom, &self.urgent.top)
+            + !self.handoff.load(Ordering::Relaxed).is_null() as usize + !self.current_task.load(Ordering::Relaxed).is_null() as usize
     }
     fn running_normal(&self) -> bool {
         let current = self.current_task.load(Ordering::Acquire);

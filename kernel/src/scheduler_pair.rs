@@ -11,7 +11,8 @@
 //!
 //! Only programs and apps move, only between the cores programs use (2 and up), never
 //! a row that shares its key (those stay on one core), never records or services, and
-//! never to a core with more queued work than its own.
+//! only off a core busier than the average program core onto a less busy one. A
+//! program's start-up chatter with Files, on quiet cores, moves nothing.
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use super::{Task, SCHEDULERS};
 
@@ -47,6 +48,16 @@ pub fn advance(word: u32, core: u32) -> (u32, bool) {
     if n >= MOVE_STREAK { (tag, true) } else { (tag | n, false) }
 }
 
+/// `home` is busier than the average program core and `to` is less busy than `home`.
+fn crowded(home: u32, to: u32) -> bool {
+    let spare = crate::smp::program_cores();
+    if home < 2 || home >= 2 + spare { return false; }
+    let load = |core: u32| SCHEDULERS[core as usize].load();
+    let total: usize = (2..2 + spare).map(load).sum();
+    let mine = load(home);
+    mine * spare as usize > total && load(to) < mine
+}
+
 /// `task` is woken by an answer from the task running on this core.
 pub fn note_answer(task: *mut Task) {
     if task.is_null() { return; }
@@ -59,7 +70,7 @@ pub fn note_answer(task: *mut Task) {
     let (word, due) = advance(slot.load(Ordering::Relaxed), here);
     slot.store(word, Ordering::Relaxed);
     if !due || !movable(pd, here) { return; }
-    if SCHEDULERS[here as usize].queued() > SCHEDULERS[home as usize].queued() { return; }
+    if !crowded(home, here) { return; }
     task.home.store(here, Ordering::Release);
     let n = MOVES.fetch_add(1, Ordering::Relaxed) + 1;
     if n <= LOGGED_MOVES { crate::serial_println!("[sched.pair.move] pd={} from={} to={} moves={}", pd, home, here, n); }
