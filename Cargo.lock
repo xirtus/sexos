@@ -7293,6 +7293,7 @@ version = "0.1.0"
 name = "sex-js"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sex-app",
  "sex-fetch",
  "sex-gl",
@@ -10016,6 +10017,7 @@ dependencies = [
 name = "web"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sex-app",
  "sex-extensions",
  "sex-fetch",
