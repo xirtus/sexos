@@ -134,7 +134,10 @@ def main():
         source = f'http://10.0.2.2:{program_server.server_address[1]}/voice'
         line(f'fetch {source} /bin/voice', r'\[spindle.fetch.line\] Saved \d+ bytes', 240)
         endpoint = f'http://10.0.2.2:{voice_port}'
-        line('mkdir /data/voice', r'\[spindle.fs.result\] kind=3 status=\d+')
+        # A blank disk has no /data yet (a program's folder appears on its first run),
+        # and mkdir makes one level: make both, then leave Voice its token.
+        line('mkdir /data', r'\[spindle.fs.result\] kind=3 status=\d+')
+        line('mkdir /data/voice', r'\[spindle.fs.result\] kind=3 status=0')
         line(f'write /data/voice/voice.token {TOKEN}', r'\[spindle.fs.result\] kind=8 status=0')
         start = len(text())
         line(f'run +net voice {endpoint}', r'\[voice.ready\] [^\n]* token=1', 180)
