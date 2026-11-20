@@ -381,7 +381,7 @@ mod program {
                 }
                 (_, Some(b's')) => self.ed.select_sentence(),
                 (_, Some(b'c')) => {
-                    let n = self.ed.suggest_cleanup();
+                    let n = self.ed.suggest_cleanup_with(self.lib.levels.get(&self.ed.transcript.media));
                     sex_pdx::serial_record!("[splicy.cleanup] cards={}", n);
                     self.message = format!("{n} suggestion{} to look at", if n == 1 { "" } else { "s" });
                 }
@@ -621,6 +621,7 @@ mod program {
         let mut pic = vec![0u32; tw * th];
         let mut pcm = vec![[0i16; 2]; 8192];
         let mut peaks = Peaks { per: 10_000, v: Vec::new() };
+        let mut meter = sex_splice::edges::LevelMeter::new(20_000);
         let mut next_thumb = 0i64;
         let started = sex_pdx::get_ticks();
         loop {
@@ -629,7 +630,11 @@ mod program {
                     lib.add_thumb(media, Thumb { at: at_ms.max(0) * 1000, w: tw, h: th, px: pic.clone() });
                     next_thumb = at_ms + every;
                 }
-                Ok(Next::Sound { frames, at_ms }) => peaks.add(at_ms.max(0) * 1000, &pcm[..frames.min(pcm.len())], RATE),
+                Ok(Next::Sound { frames, at_ms }) => {
+                    let sound = &pcm[..frames.min(pcm.len())];
+                    peaks.add(at_ms.max(0) * 1000, sound, RATE);
+                    meter.add(at_ms.max(0) * 1000, sound, RATE);
+                }
                 Ok(Next::End) | Err(_) => break,
                 _ => {}
             }
@@ -642,6 +647,7 @@ mod program {
             sex_pdx::get_ticks() - started
         );
         lib.peaks.insert(media, peaks);
+        lib.levels.insert(media, meter.levels());
         lib
     }
 

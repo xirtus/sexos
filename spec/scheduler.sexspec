@@ -22,6 +22,7 @@
         "no_runnable",
         "rsp0",
         "task_ownership",
+        "scheduler_model",
         "ownership_runtime"
       ],
       "gaps": [
@@ -48,6 +49,7 @@
       "checks": [
         "scheduler_wake",
         "task_ownership",
+        "scheduler_model",
         "ownership_runtime",
         "fault_transactions"
       ],
@@ -115,7 +117,8 @@
         "Erase prior wake by unconditional Blocked store."
       ],
       "checks": [
-        "task_ownership"
+        "task_ownership",
+        "scheduler_model"
       ]
     },
     {
@@ -130,7 +133,8 @@
         "Running -> Ready; Exited -> Ready; direct enqueue of attached task."
       ],
       "checks": [
-        "task_ownership"
+        "task_ownership",
+        "scheduler_model"
       ]
     },
     {

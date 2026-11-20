@@ -191,6 +191,8 @@ pub fn log(app: &mut App, studio: &Studio) {
         ("position", studio.position),
         ("range_start", studio.from),
         ("range_end", studio.to),
+        ("voice_prompt", studio.voice_prompt),
+        ("voice_endpoint", studio.voice_endpoint),
     ] {
         let rect = app.ui.rect(id);
         if rect.w <= 0.0 || rect.h <= 0.0 {

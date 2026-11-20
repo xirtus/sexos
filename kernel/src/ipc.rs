@@ -89,9 +89,6 @@ pub enum DequeueSource {
 
 pub fn resolve_edge(cap_data: CapabilityData, caller_pd_id: u32, is_listen: bool) -> Result<GraphEdge, u64> {
     match cap_data {
-        // An IPC capability names a target only. It never selects code for
-        // the kernel to execute; invocation is a typed Domain enqueue.
-        CapabilityData::IPC(_) => Err(sex_pdx::ERR_CAP_INVALID),
         CapabilityData::Domain(id) => {
             if !crate::app_resources::accepts_ipc(id) {return Err(sex_pdx::ERR_SERVICE_NOT_READY);}
             if is_listen { return Err(sex_pdx::ERR_CAP_INVALID); }
@@ -156,18 +153,6 @@ pub fn safe_pdx_call(cap_id: u32, opcode: u64, arg0: u64, arg1: u64, arg2: u64) 
     let cap = unsafe { (*current_pd.cap_table).find(cap_id) }.ok_or(sex_pdx::ERR_CAP_INVALID)?;
     let edge = resolve_edge(cap.data, caller_pd_id, false)?;
     traverse_edge(edge, opcode, arg0, arg1, arg2, caller_pd_id, sender::current_task(caller_pd_id).unwrap_or(0))
-}
-
-pub fn resolve_phys_pdx(cap_id: u32) -> u64 {
-    let current_pd = crate::core_local::CoreLocal::get().current_pd_ref();
-    if let Some(cap) = unsafe { (*current_pd.cap_table).find(cap_id) } {
-        match cap.data {
-            CapabilityData::MemLend(data) => return data.base,
-            CapabilityData::DMA(data) => return data.phys_addr,
-            _ => (),
-        }
-    }
-    0
 }
 
 pub fn pdx_spawn_pd(elf_addr: u64, elf_len: u64) -> Result<u32, u64> {

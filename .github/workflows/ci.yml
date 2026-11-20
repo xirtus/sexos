@@ -182,6 +182,8 @@ jobs:
         cargo test --locked -p sex-font --features inspect --lib
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Voyeur search ranking and Abacus answers
+      run: cargo test --locked -p voyeur
     - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport
       run: |
         cargo test --locked -p sex-speech
@@ -295,6 +297,10 @@ jobs:
       run: cargo test --locked -p sex-hid-touch
     - name: DesignWare I2C bus (simulated controller)
       run: cargo test --locked -p sex-i2c-dw
+    - name: PCIe power management (ASPM, L1 substates, LTR, D-states on a simulated config space)
+      run: cargo test --locked -p sex-pcipm
+    - name: CPU idle states (which MWAIT C-state an idle core enters)
+      run: cargo test --locked -p sex-idle
 
   truth:
     name: Host kernel-model regressions (${{ matrix.shard }}/3)
@@ -398,6 +404,8 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
+    - name: Voyeur search (2+2, two providers, a setting page)
+      run: python3 scripts/voyeur_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/voyeur"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
     - name: Programs keep their own SSE and AVX registers (XSAVE)
@@ -1029,9 +1037,33 @@ jobs:
       if: always()
       run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
+  latency:
+    name: Desktop latency (key to pixel, launch, resize, file open; KVM)
+    runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
+    - name: Desktop latency, end to end (stage breakdown and traces in the log)
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        grep -m1 'model name' /proc/cpuinfo
+        truncate -s 1G "$RUNNER_TEMP/latency-source.img"
+        python3 scripts/desktop_latency_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/latency-source.img" --out "$RUNNER_TEMP/sexos-latency"
+    - name: Preserve latency evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-latency-proof
+        path: ${{ runner.temp }}/sexos-latency
+        if-no-files-found: ignore
+
   build:
     if: always()
-    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks]
+    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks, latency]
     runs-on: ubuntu-latest
     steps:
     # Every job must pass. A job may be skipped only when the scope leaves it out:
@@ -1133,7 +1165,11 @@ jobs:
       run: |
         bash scripts/build_splicy_probe.sh
         python3 scripts/program_splicy_probe_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-probe"
-    - name: Splicy Studio opens a clip and its transcript in FilmCraft's editor in a SexOS window
+    - name: Splicy Studio exports WebM (VP9+Opus), AV1 MP4 and H.264 MP4 with its own encoders, checked by FFmpeg
+      run: python3 scripts/splicy_studio_export_host_gate.py "$RUNNER_TEMP/recording/splicy-studio-export"
+    - name: Splicy Studio opens a clip and its transcript, and exports all three formats, in a SexOS window
+      # its own result even when the host export check before it fails
+      if: success() || failure()
       run: |
         bash scripts/build_splicy_studio.sh
         python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"

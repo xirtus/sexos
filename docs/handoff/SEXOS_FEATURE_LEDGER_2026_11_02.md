@@ -3695,6 +3695,20 @@ Plan: `docs/handoff/NVIDIA_GSP_BRINGUP_2026_11_19.md` (GSP boot, display through
 - **Gate** `scripts/nvidia_gsp_host_gate.sh` (CI): parses the real 535.113.01 files, pins every structure offset to NVIDIA's C layout, and boots a simulated GA104 end to end (signatures where the boot ROM looks, FRTS at the right VRAM address, Booter walks radix3 and finds the real image, first RPCs with good checksums, sequencer run, `GSP_INIT_DONE`), plus failure paths (Booter error, silent GSP, WPR2 left by a previous driver).
 - Not yet: the kernel lease and the `sexgpu-nv` service that runs this on the x17 (N4b). ABI: none.
 
+## NVIDIA GPU service and boot entry (N4b, 2026-11-19)
+
+- **Boot entry "SexOS with NVIDIA GPU"**: the main system plus `servers/sexgpu-nv` and `firmware/nvidia-gsp.pack`. Only that entry starts the service; the others keep the dGPU off.
+- **Kernel**: optional domain 53 (Core organ); with it present the NVIDIA GPU is not parked (`[gpu.power] ... action=keep reason=driver`) and is leased to it (`Lease::NvidiaGpu`): all 16 MiB of BAR0, memory + bus-master bits, a 64 MiB DMA pool mapped for the GPU in the IOMMU, the firmware pack read only. Without it Display keeps the GPU's identity (`manifest::claim_present`).
+- **`servers/sexgpu-nv`**: checks the pack's files against the pins (and SHA-256 of the bytes), carves the pool (`boot::Memory::carve`), turns on bus mastering, runs the `sex-gpu-nv` boot with a TSC clock and logs `[nvidia.gsp] step=...` per step, then `[nvidia.gsp.ready]` or `[nvidia.gsp.failed] step= reason=`.
+- **Firmware pack** `scripts/make_nvidia_firmware_pack.py` (`SEXNVFW1`, built in the ISO build and into the installed boot slot).
+- **ABI**: SYS_IDENTITY `QUERY_BARS` (3) returns the held NVIDIA GPU's BAR0/BAR1/BAR3 bus addresses and bus/devfn. Not yet proven on the x17.
+
+## NVIDIA RM objects after the GSP boot (N4c, 2026-11-19)
+
+- **`crates/sex-gpu-nv/src/rm.rs`**: an RPC session after `GSP_INIT_DONE` (sequencer scripts and notices handled while waiting), `GET_GSP_STATIC_INFO` decoded (GPU name, VRAM, usable regions, GPCs/TPCs, internal handles), `GSP_RM_ALLOC` / `GSP_RM_CONTROL` / `FREE`, our client/device/subdevice, and the display engine's static info (heads, windows).
+- **`sexgpu-nv`** logs `[nvidia.rm] name="..." vram_mib= ...`, `[nvidia.rm.device]`, `[nvidia.rm.display] heads= ...`, `[nvidia.rm.ready]`.
+- Simulated GSP-RM answers in the host gate; layouts pinned to NVIDIA's 535.113.01 structures. ABI: none.
+
 ## Net: ALPN http/1.1 (2026-11-09)
 
 - The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do (the rustls move set `alpn_protocols`). Host test `[sexnet.tls.open.host]` now proves it on the wire: an OpenSSL server offering `h2` and `http/1.1` must pick `http/1.1`. YouTube stage Y3e.
@@ -4402,6 +4416,33 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   `scripting`, `webRequest`, popups and options pages, isolated worlds for content
   scripts, signature checks. uBlock Origin Lite needs these; full uBO (MV2) also needs
   blocking webRequest.
+## Kaleidoscope extensions, slice N7b (2026-11-14)
+- **What:** each extension that is on and has a background (MV3 `service_worker`, as an
+  ES module when `type: module`; MV2 `scripts` or a background page's `<script src>`)
+  runs in a script realm of its own, started with the browser and on install, stopped
+  when turned off or removed. It hears `runtime.onInstalled` / `onStartup`.
+- **`chrome.*`** (`crates/sex-js/src/extensions.js`, op 35 `EXTENSION`): `runtime`
+  (sendMessage/onMessage both ways with async `sendResponse`, getURL, getManifest,
+  lastError), `tabs` (query/get/sendMessage/create/update), `storage.local/sync/session`
+  with `onChanged` across realms (kept with the profile's web storage under origin
+  `kaleidoscope-extension://<id>`, 10 MB), `scripting` (executeScript, insertCSS,
+  register/update/unregister/getRegisteredContentScripts), `declarativeNetRequest`
+  (get/updateEnabledRulesets, dynamic and session rules, rebuilt into the extension's
+  engine), `i18n`, `alarms`, and stubs for action, permissions, contextMenus, commands,
+  webNavigation, windows. Promises and callbacks both.
+- **Browser:** `apps/web/src/extensions.rs` routes realm messages (`ext_pump` in
+  `settle`), serves `kaleidoscope-extension://ID/PATH` to fetch, modules and pages,
+  and keeps run-time state in Files `Web/extensions-state/<id>.json`. Only code the
+  browser wrote gets a `chrome` object: it needs a key handed to each realm once,
+  before page scripts run.
+- **Tests:** `cargo test -p sex-js --test extensions`; the extensions gate now installs a
+  sample with a service worker (storage, registered script, dynamic rule, messaging).
+- **uBlock Origin Lite runs unmodified:** `scripts/program_web_ubol_gate.py` (not in CI;
+  downloads uBOL-home's `chromium/` build) installs it; its module service worker
+  starts (~7 s), loads 117,194 rules from its six default rulesets, registers 4 content
+  scripts, and with Shields down blocks 7 trackers on the Shields test page.
+- **Not yet:** isolated worlds, popups/options pages as extension pages, `webRequest`,
+  `runtime.connect` ports, content scripts in frames hearing messages.
 ## J5 D2: Denim compressed memory, page out and back (2026-11-14)
 - New syscall 88 `SYS_DENIM` (ABI addition, `sex_pdx::denim`), Denim only: SCAN (accessed bits), OUT (heap page leaf becomes a non-present marker naming the row, shootdown, bytes copied to Denim's window, frame freed), IN (fresh frame, leaf restored, parked fault task resumed). Kernel messages OP_FAULT 0x3D1 and OP_RECALL 0x3D2.
 - Page faults on a marker go to Denim instead of the row's pager (`forward_page_fault`). Worker spawn and SEAL/OPEN on a run with pages out return RETRY and recall them; OUT is refused while workers live.
@@ -5330,6 +5371,19 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Silkbar: the launcher button is the lips on the bar's glass instead of the blue square. Wallpaper: the default is now "SexOS" (warm charcoal with the lips at 26% width, centred); the old navy theme gradient is kept as "Midnight". Boot screen: a charcoal header with the lips and the title. Lock screen: charcoal with the lips above "Locked". README and website carry the mark.
 - Verified by `tests/brand.rs`, `tests/desktop_look.rs` (both now run in `scripts/service_custody_host_gate.sh`) and `scripts/desktop_look_gate.py` (Super+B still steps SexOS → Dusk).
 
+## Splicy Studio exports WebM, AV1 MP4 and H.264 MP4 with its own encoders (2026-11-18)
+- Splicy Studio (github.com/xirtus/Splicy) gains the two royalty-free formats Andreas asked for beside H.264 MP4: **WebM** (VP9 profile 0 + Opus) and **MP4 AV1** (AV1 Main 8-bit + Opus). All encoding is pure Rust (craft-libs' VP9, AV1 and Opus encoders, MIT OR Apache-2.0), so it runs on SexOS with no FFmpeg and no hardware encoder. A registered hardware AV1 encoder is still tried first.
+- `filmcraft-export`: `Format::Webm`, `AudioCodec::Opus` (48 kHz, mono or stereo, 5.1 folded to stereo, up to 96 kbit/s a channel), `open_formats.rs` (VP9 and AV1 encoders, Opus encoder with the right pre-skip and tail, WebM writer that interleaves picture and sound in time order with Opus codec delay and seek pre-roll). Opus in MP4 is `Opus` + `dOps` with an edit list over the pre-skip. Both formats are one-pass bitrate controlled (CBR or VBR).
+- Export panel: WebM (VP9) in the format list, AV1 no longer greyed out, Opus audio rows, presets "WebM 1080p (VP9 + Opus)" and "AV1 1080p (MP4)".
+- `splicy-studio --export=FORMAT:FILE[:SECONDS]` exports before the window opens (gates and scripts).
+- Verified by `scripts/splicy_studio_export_host_gate.py` (FFmpeg finds vp9/opus, av1/opus, h264/aac, decodes all three with no error, 60 of 60 pictures, PSNR over 30 dB against the source, loudness within 1.5 dB) and `scripts/program_splicy_studio_gate.py` (all three exported inside SexOS before the editor window opens).
+
+## Splicy: Scarlet's restart finder and cut edges on the waveform (2026-11-19)
+
+From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, not its agent prompts:
+- **Restarts** (`crates/sex-splice/src/restarts.rs`; Studio `core/crates/edit/src/transcript/restarts.rs`): a phrase said, then said again within 12 words and 12 s (three words or more, or two with at most one between; one word added or dropped; contractions fold). Splicy's clean-up cards use it in place of the old adjacent-repeat rule. Splicy Studio: `transcript.findRestarts`, `transcript.removeRestarts`, a Text panel **Remove restarts** button, and `--clean-up` for scripts.
+- **Cut edges between run-together words** (`crates/sex-splice/src/edges.rs`): where two words are timed under 60 ms apart, a cut's edge moves onto the waveform's room tone (-55 dBFS) or a trough (-48 dBFS, 10 dB under each side; -44 dBFS within 50 ms of the transcript edge), never inside a sounding word. Integer tenths of a dB, 20 ms RMS buckets measured during Splicy's scan. A card whose edge found no quiet place says "listen to the join first".
+- Gates: sex-splice host tests; Studio host gate `--clean-up` cuts 0.9 s of a restart; QEMU `program_splicy_studio_gate.py` runs `--clean-up` on SexOS.
 ## Office slice 3: Spreadeagle and Assuit daily-ready (2026-11-19)
 - Spreadeagle writes .ods itself (`apps/spreadeagle/src/ods.rs`): every sheet, formulas turned into OpenFormula (`of:=SUM([.B2:.B4])`, inline arrays, quoted sheets, whole rows and columns), cached results, dates, percentages with their places, bold, italic, underline and column widths. LibreOffice opens it with all of that; reopening in Spreadeagle restores formulas, fonts, percentages and widths that GridCraft's data-only ODS import drops. An .ods now saves as .ods (xls, xlsb, slk still save beside as .xlsx).
 - Both apps: Ctrl+P writes a PDF beside the file (GridCraft's sheet printer, WordCraft's page PDF); Save As by extension (Spreadeagle Ctrl+Shift+S: xlsx, ods, csv, tsv, html, pdf; Assuit Ctrl+Shift+E, since Ctrl+Shift+S is Word's style picker: docx, odt, rtf, html, md, txt, pdf); unsaved changes are kept in `NAME.recovered.xlsx`/`.docx` on close and after 15 s without a key, offered back on the next open (Esc throws them away), and forgotten on save.
@@ -5351,6 +5405,15 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
 
+## Device power part 1: link power states and the sleep notice (2026-11-19)
+- Every PCIe link gets the power states both ends support at BOOT: ASPM L0s/L1, L1.1/L1.2 substates, clock PM and LTR, with Linux's latency checks and quirks, adding to what firmware set and never removing it (`crates/sex-pcipm`, `kernel/src/pci_power.rs`). Idle links drop to L1.2, which the platform needs for its deepest idle states.
+- Drivers can put a device they hold in D3hot and back (syscall 86 `OP_POWER`); the kernel saves and restores what a reset loses, MSI-X table included.
+- Sleeping the desktop now tells every driver holding a device (`OP_DEVICE_SLEEP`); the disk flushes first.
+- Verified by `cargo test -p sex-pcipm` and `scripts/laptop_power_gate.py`. Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.
+
+## Device power part 2: devices power down while asleep (2026-11-19)
+- While the laptop sleeps the touchpad is in HID sleep, USB sticks and other idle USB devices are suspended (U3, cache flushed first), the HDA codecs are in D3 and the Intel eDP panel's backlight and panel power are off; all come back on wake. Keyboards, mice, hubs, USB network and Bluetooth stay up.
+- Verified by `cargo test -p sex-gpu-intel -p sex-hid-touch` and `scripts/laptop_power_gate.py` (USB stick suspend and resume). Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.
 ## Touchpad on its interrupt line (2026-11-19)
 - The laptop touchpad is read when its interrupt fires instead of 125 times a second: a new contact reaches the pointer at once (polling could add up to 8 ms), and an untouched pad costs no I2C reads (polling read it 20 times a second, each read a busy bus transfer).
 - sexacpi finds the line: an `Interrupt` in the pad's `_CRS`, or the pad's `GpioInt` pin on the Intel GPIO controller (Tiger Lake-LP/H as on the Alienware x17 R1, Alder Lake-P/S/N, Raptor Lake-S), when firmware routed that pad to the I/O APIC (read only). `sex_pdx::touchpad::Found` carries it (`irq`).

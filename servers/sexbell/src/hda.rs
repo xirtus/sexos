@@ -779,4 +779,32 @@ impl Hda {
         self.advance();
         !self.queued[token as usize % PERIODS]
     }
+
+    /// The machine is going to sleep (D3 for every audio function group with an
+    /// output or microphone: amplifiers and converters power off, settings are kept)
+    /// or woke (D0). HDA 7.3.3.10: the group's widgets follow it. Returns how many
+    /// groups reached the state.
+    pub fn power(&mut self, asleep: bool) -> u32 {
+        let state = if asleep { 3 } else { 0 };
+        let home = self.codec;
+        let mut groups = [(u32::MAX, 0u32); MAX_OUTPUTS + MAX_MICS];
+        let mut n = 0;
+        let mics = self.mics;
+        for (codec, afg) in self.routes.iter().flatten().map(|r| (r.codec, r.afg)).chain(mics.iter().flatten().map(|m| (m.codec, m.afg))) {
+            if groups[..n].contains(&(codec, afg)) || n == groups.len() { continue; }
+            groups[n] = (codec, afg);
+            n += 1;
+        }
+        let mut reached = 0;
+        for &(codec, afg) in &groups[..n] {
+            self.codec = codec;
+            let _ = self.verb(afg, SET_POWER, state);
+            // GET_POWER: bits 7:4 are the state the group is actually in.
+            let actual = self.verb(afg, 0xF05, 0).map_or(0xf, |v| v >> 4 & 0xf);
+            if actual == state { reached += 1; }
+        }
+        self.codec = home;
+        sex_pdx::serial_record!("[bell.hda.power] asleep={} groups={} reached={}", asleep as u8, n, reached);
+        reached
+    }
 }

@@ -26,3 +26,21 @@ pub fn set_percent(m: &mut impl Mmio, pct: u32) -> Option<Backlight> {
     m.write(BLC_PWM_DUTY, duty);
     Some(Backlight { duty, ..b })
 }
+
+/// The machine is going to sleep: the PWM stops (the panel's backlight goes dark).
+/// Returns what was set, for [`wake`]; None when firmware left it off.
+pub fn sleep(m: &mut impl Mmio) -> Option<Backlight> {
+    let b = read(m);
+    if !b.enabled { return None; }
+    let ctl = m.read(BLC_PWM_CTL);
+    m.write(BLC_PWM_CTL, ctl & !BLC_PWM_ENABLE);
+    Some(b)
+}
+
+/// The machine woke: the brightness from before [`sleep`] comes back, duty first.
+pub fn wake(m: &mut impl Mmio, before: Backlight) {
+    m.write(BLC_PWM_FREQ, before.period);
+    m.write(BLC_PWM_DUTY, before.duty.max(1));
+    let ctl = m.read(BLC_PWM_CTL);
+    m.write(BLC_PWM_CTL, ctl | BLC_PWM_ENABLE);
+}
