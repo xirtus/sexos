@@ -4721,6 +4721,11 @@ pub extern "C" fn _start() -> ! {
                 break;
             };
             drained += 1;
+            if msg.type_id == sex_pdx::power::OP_DEVICE_SLEEP && msg.caller_pd == 0 {
+                let intel = intel::device_sleep(msg.arg0 == 1);
+                sex_pdx::serial_record!("[sexdisplay.sleep] asleep={} intel={}", msg.arg0, intel as u8);
+                continue;
+            }
             unsafe {
                 DISPLAY_LAST_OP=msg.type_id;DISPLAY_LAST_CALLER=msg.caller_pd;
                 REPAINT_DRAINED=drained;

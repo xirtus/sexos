@@ -4098,6 +4098,7 @@
     }
     return 0;
   }
+  let extEvent = null;
   function dispatch(msg, detail) {
     const f = String(msg).split('\t');
     switch (f[0]) {
@@ -4111,6 +4112,8 @@
       case 'ws': wsEvent(f); return 0;
       case 'media': mediaState(f); return 0;
       case 'mse': mseState(f); return 0;
+      // An extension's message or event: `ext\tJSON` (extensions.js).
+      case 'ext': return extEvent ? (extEvent(f.slice(1).join('\t')) || 0) : 0;
       // A classic script is about to run (its node), or finished (empty).
       // A message from another page: `message\tFROM\tORIGIN\tDATA`, FROM `parent`
       // or the iframe element whose page sent it, DATA as JSON.
@@ -4163,6 +4166,8 @@
     }
     return 0;
   }
+  // What extensions.js builds on; it takes this and removes it.
+  Object.defineProperty(globalThis, '__sx_ext', { value: { H, report, onEvent: f => { extEvent = f; } }, configurable: true });
   // What indexeddb.js (evaluated right after) builds on; it takes this and removes it.
   Object.defineProperty(globalThis, '__sx_idb', { value: { H, OP, domError, addTimer, EventTarget, Event, DOMException, report }, configurable: true });
 })();

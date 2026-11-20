@@ -76,11 +76,28 @@ def assert_ordinary_launch(root, serial, target, task, surface):
     return rows[target]
 
 
+def program_views(serial):
+    """BOOT's protection view per program row (kernel `views`): target -> view."""
+    complete = serial[:serial.rfind('\n')+1]
+    views = {}
+    for target, view in re.findall(r'^\[boot\.program\.pool\.regions\] target=(\d+) pages=\d+ spans=\d+ view=(\d+) ', complete, re.M):
+        assert int(target) not in views, ('duplicate BOOT view record', target)
+        views[int(target)] = int(view)
+    return views
+
+
 def assert_private_ordinary_launch(root, serial, target, task, surface):
     row = assert_ordinary_launch(root, serial, target, task, surface)
-    # A private key appears once among ALL reusable rows, including constrained
-    # ones. Removing a constrained row must not make a shared key look private.
-    assert sum(other['key']==row['key'] for other in program_rows(root,serial))==1, ('JIT subject shares a program key',row)
+    rows = program_rows(root,serial)
+    # Private: a key no other reusable row holds (including constrained ones, so
+    # removing one must not make a shared key look private), or, where rows share a
+    # key, a protection view of its own: its memory is reachable in no other row's.
+    views = program_views(serial)
+    own_view = row['target'] in views and views[row['target']]>0 and \
+        list(views.values()).count(views[row['target']])==1 and \
+        all(other['target'] in views for other in rows if other['key']==row['key'])
+    own_key = sum(other['key']==row['key'] for other in rows)==1
+    assert own_key or own_view, ('JIT subject shares a program key and has no view of its own',row)
     return row
 
 
