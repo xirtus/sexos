@@ -737,9 +737,7 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
         let low = fault_rsp.wrapping_sub(64) & !7;
         if [low, low + 255].iter().all(|&a| crate::boot_memory::existing_leaf_address(a).is_some_and(|l| unsafe { core::ptr::read_volatile(l as *const u64) } & 1 != 0)) {
             let w = |i: u64| unsafe { core::ptr::read_volatile((low + i * 8) as *const u64) };
-            for r in (0..32).step_by(8) {
-                serial_println!("KERNEL PAGE FAULT STACK: at={:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}", low + r * 8, w(r), w(r + 1), w(r + 2), w(r + 3), w(r + 4), w(r + 5), w(r + 6), w(r + 7));
-            }
+            for r in (0..32).step_by(8) { serial_println!("KERNEL PAGE FAULT STACK: at={:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}", low + r * 8, w(r), w(r + 1), w(r + 2), w(r + 3), w(r + 4), w(r + 5), w(r + 6), w(r + 7)); }
         }
         let core = crate::core_local::CoreLocal::get().core_id as usize;
         let (task, custody, cur, out) = crate::scheduler::fault_report(core);

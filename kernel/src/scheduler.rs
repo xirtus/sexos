@@ -257,19 +257,14 @@ static SWITCHES: [[[AtomicU64; 4]; 16]; 128] = [const { [const { [const { Atomic
 static SWITCH_AT: [AtomicU32; 128] = [const { AtomicU32::new(0) }; 128];
 unsafe fn note_switch(core: usize, next: &Task) {
     let f = next.context.kstack_top as *const u64;
-    if f.is_null() { return; }
-    let (rip, cs, flags) = unsafe { (*f.add(16), *f.add(17), *f.add(18)) };
-    let at = SWITCH_AT[core].fetch_add(1, Ordering::Relaxed) as usize % 16;
-    for (s, v) in SWITCHES[core][at].iter().zip([next.id as u64, f as u64, rip, cs << 32 | flags & 0xFFFF_FFFF]) { s.store(v, Ordering::Relaxed); }
+    let Some([rip, cs, flags]) = (!f.is_null()).then(|| unsafe { [*f.add(16), *f.add(17), *f.add(18)] }) else { return };
+    for (s, v) in SWITCHES[core][SWITCH_AT[core].fetch_add(1, Ordering::Relaxed) as usize % 16].iter().zip([next.id as u64, f as u64, rip, cs << 32 | flags & 0xFFFF_FFFF]) { s.store(v, Ordering::Relaxed); }
     if rip == 0 { print_switches(core); panic!("SWITCH_TO_NULL_RIP task={} frame={:p}", next.id, f); }
 }
 /// The core's recent switches, oldest first, for a kernel fault report.
 pub fn print_switches(core: usize) {
     let end = SWITCH_AT[core].load(Ordering::Relaxed) as usize;
-    for i in end.saturating_sub(16)..end {
-        let w = SWITCHES[core][i % 16].each_ref().map(|a| a.load(Ordering::Relaxed));
-        serial_println!("KERNEL SWITCH: core={} n={} task={} frame={:#x} rip={:#x} cs={:#x} rflags={:#x}", core, i, w[0], w[1], w[2], w[3] >> 32, w[3] & 0xFFFF_FFFF);
-    }
+    for (i, w) in (end.saturating_sub(16)..end).map(|i| (i, SWITCHES[core][i % 16].each_ref().map(|a| a.load(Ordering::Relaxed)))) { serial_println!("KERNEL SWITCH: core={} n={} task={} frame={:#x} rip={:#x} cs={:#x} rflags={:#x}", core, i, w[0], w[1], w[2], w[3] >> 32, w[3] & 0xFFFF_FFFF); }
 }
 
 /// Per core: the task whose x87/SSE registers are in the core right now, if any.

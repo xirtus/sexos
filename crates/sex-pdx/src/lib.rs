@@ -1358,6 +1358,7 @@ pub mod clock_zone;
 pub mod screen_state;
 pub mod app_scroll;
 pub mod bitmap_batch;
+pub mod search;
 pub mod speech_voice;
 pub mod a11y;
 pub mod vm;
