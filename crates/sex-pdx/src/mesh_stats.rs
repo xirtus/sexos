@@ -1,12 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! More of SYS_STATS (syscall 87), for Mesh: program memory and who holds what, as
+//! More of SYS_STATS (syscall 87), for Mesh: per-core time, program memory and who holds what, as
 //! numbers only. Kept apart from `system_stats`, which the self-wait review pins whole.
 //! Answers use `system_stats`' OK, INVALID and NONE.
 pub use crate::system_stats::{INVALID, NONE, OK};
 
 /// rsi(core) -> rsi = idle cycles of that core, rdx = domain it runs now (0 idle), r10 =
-/// TSC now. Reserved: kernels answer INVALID until the per-core idle counters, kept in the
-/// self-wait-pinned `cpu_account`, are exposed after review.
+/// TSC now. INVALID past the last online core.
 pub const OP_CORE: u64 = 6;
 /// rsi = pages lent to program runs now, rdx = most ever lent, r10 = most they could hold.
 pub const OP_MEMORY: u64 = 7;
