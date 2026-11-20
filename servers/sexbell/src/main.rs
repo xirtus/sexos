@@ -621,11 +621,16 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::restricted_helper_provider::Effect::Install(_)|sex_pdx::restricted_helper_provider::Effect::Expire(_)=>true,
             });
             restricted::publish(&restriction);
-            if !sound::busy()&&!restriction.pending() { break paging_probe::next_message(); }
+            if !sound::busy()&&!restriction.pending() { sound::quiet(); break paging_probe::next_message(); }
             // Feed the card first, so a steady inbox can't starve playback.
             sound::pump();
             if let Some(m) = paging_probe::try_next_message() { break m; }
-            if sound::busy()||restriction.pending() { let _ = sex_pdx::sys_wait_self_ticks(1); }
+            // With an interrupting card Bell sleeps until the next period ends (or a
+            // message comes); policy work still looks every tick.
+            if sound::busy()||restriction.pending() {
+                let ticks = sound::wait_ticks();
+                let _ = sex_pdx::sys_wait_self_ticks(if restriction.pending() { 1 } else { ticks });
+            }
         };
         paging_probe::check_retained();
         if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:msg.caller_pd,task:msg.caller_task},opcode:msg.type_id,words:[msg.arg0,msg.arg1,msg.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}

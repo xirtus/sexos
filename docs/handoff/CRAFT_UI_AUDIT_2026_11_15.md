@@ -116,13 +116,16 @@ that float over cells.
 | F2 edits the cell, as in Excel | **fixed here** |
 | Copying between programs | cross-cutting 1 (shell) |
 | Find and replace (Ctrl+H) | **fixed** (office slice 2) |
-| Go To (Ctrl+G / F5) | next Spreadeagle slice |
+| Go To (Ctrl+G; F5 is Shell's) | **fixed** (office slice 3) |
 | Column resize by dragging | **fixed** (office slice 2) |
-| Row and column insert or delete, hide and unhide | next slice |
+| Row and column insert or delete (Ctrl+Shift+= and Ctrl+-, then R or C) | **fixed** (office slice 3) |
+| Hide and unhide rows and columns | next slice |
 | Number format keys (Ctrl+Shift+~ and 1..6) | **fixed** (office slice 2) |
 | Cell borders | next slice |
 | Multi-value filter picker, more chart kinds, moving and resizing charts | next slice |
-| ODS writing (saves as `.xlsx` today) | next slice |
+| ODS writing: sheets, formulas as OpenFormula, dates, percentages, fonts, column widths | **fixed** (office slice 3) |
+| Save As by extension (Ctrl+Shift+S), PDF of the sheet (Ctrl+P) | **fixed** (office slice 3) |
+| Unsaved changes kept on close and after 15 s quiet, offered back on the next open | **fixed** (office slice 3) |
 | PivotTables, conditional formatting UI, Get & Transform | later (GridCraft roadmap) |
 
 ## Assuit and WordCraft
@@ -149,7 +152,9 @@ that float over cells.
 | Copy, cut and paste inside the document (WordCraft's clipboard) | works; now gated |
 | Copying between programs | cross-cutting 1 (shell) |
 | Find and replace (Ctrl+H) | **fixed** (office slice 2) |
-| Go To page | next Assuit slice |
+| Go To page (Ctrl+G) | **fixed** (office slice 3) |
+| Save As by extension (Ctrl+Shift+E: docx, odt, rtf, html, md, txt, pdf), PDF (Ctrl+P), .doc saves beside as .docx | **fixed** (office slice 3) |
+| Unsaved changes kept on close and after 15 s quiet, offered back on the next open | **fixed** (office slice 3) |
 | Styles picker (Ctrl+Shift+S) and the paragraph's style in the status line | **fixed** (office slice 2) |
 | Navigation pane of headings | next slice |
 | Shift-click to extend a selection | cross-cutting 2 (input) |

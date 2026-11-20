@@ -52,6 +52,7 @@ crates = [
   "apps/moan/Cargo.toml",
   "apps/moanplug/Cargo.toml",
   "apps/jot/Cargo.toml",
+  "apps/voice/Cargo.toml",
   "apps/term/Cargo.toml",
   "apps/quil/Cargo.toml",
   "apps/files/Cargo.toml",
@@ -103,6 +104,7 @@ crates = [
   "apps/sdltest/Cargo.toml",
   "apps/driftspark/Cargo.toml",
   "servers/cufflinks/Cargo.toml",
+  "servers/sexgpu-nv/Cargo.toml",
   "apps/dragtest/Cargo.toml",
   "apps/drag/Cargo.toml",
   "apps/crossdress/Cargo.toml",
@@ -297,6 +299,15 @@ target = "x86_64-sex-app.json"
 manifest = "apps/fortune/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/fortune"
 dest_artifact = "iso_root/programs/fortune"
+
+# Voice: types a prompt, asks a host voice worker for a take, saves it under /data/voice.
+[[stage]]
+id = "build_voice"
+action = "cargo_manifest"
+target = "x86_64-sex-app.json"
+manifest = "apps/voice/Cargo.toml"
+source_artifact = "target/x86_64-sex-app/release/voice"
+dest_artifact = "iso_root/programs/voice"
 
 [[stage]]
 id = "build_jot"
@@ -962,6 +973,15 @@ source_artifact = "target/x86_64-sex/release/cufflinks"
 dest_artifact = "iso_root/servers/cufflinks"
 rustflags = "--cfg aes_force_soft"
 
+# sexgpu-nv (NVIDIA GPU, GSP-RM boot): BOOT starts it as domain 53 (sex_pdx::nvidia_gpu),
+# only from the "SexOS with NVIDIA GPU" entry. docs/handoff/NVIDIA_GSP_BRINGUP_2026_11_19.md
+[[stage]]
+id = "build_sexgpu_nv"
+action = "cargo_manifest"
+manifest = "servers/sexgpu-nv/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexgpu-nv"
+dest_artifact = "iso_root/servers/sexgpu-nv"
+
 # SexUVC: userspace USB Video Class webcam driver server
 [[stage]]
 id = "build_sexuvc"
@@ -1052,6 +1072,12 @@ artifacts = ["iso_root/limine.cfg"]
 id = "wifi_firmware"
 action = "wifi_firmware"
 artifacts = ["iso_root/firmware/wifi.pack"]
+
+# NVIDIA GSP-RM firmware for sexgpu-nv ("SexOS with NVIDIA GPU" entry only).
+[[stage]]
+id = "nvidia_firmware"
+action = "nvidia_firmware"
+artifacts = ["iso_root/firmware/nvidia-gsp.pack"]
 
 [[stage]]
 id = "boot_image"

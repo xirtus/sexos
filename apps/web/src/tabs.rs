@@ -100,6 +100,8 @@ impl Browser {
         self.tabs[from].title = title;
         self.swap_tab(i);
         self.active = i;
+        // Its scripts compile under its own site again.
+        self.code_site();
         self.editing = None;
         self.suggestions.clear();
         self.press_link = None;

@@ -75,6 +75,10 @@ fn winner(scene: &SceneSnapshot, x: usize, y: usize) -> Option<&Surface> {
 fn composite_pixel_selected(x: usize, y: usize, _w: usize, _h: usize, back: u32, _focus: u64, selected: Option<u64>, scene: &SceneSnapshot) -> u32 {
     scene.surfaces.iter().find(|s| s.active && Some(s.surface_id) == selected && holds(s, x, y)).map_or(back, |s| paint(s, y))
 }
+fn selected_row_start() {}
+fn selected_pixel(x: usize, y: usize, w: usize, h: usize, id: u64, scene: &SceneSnapshot) -> u32 {
+    composite_pixel_selected(x, y, w, h, bg(y, h), scene.focus, Some(id), scene)
+}
 fn raster(scene: &SceneSnapshot, fb: &mut [u32], y: usize, x0: usize, x1: usize) {
     for x in x0..x1 { fb[y * W + x] = winner(scene, x, y).map_or(bg(y, H), |s| paint(s, y)); }
 }

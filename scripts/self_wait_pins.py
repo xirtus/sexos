@@ -30,6 +30,8 @@ PINS = (
 
     ('timed', 'kernel/src/init.rs', 'fn-v1:fb2da8b1ece8812feee1502fa72b73deb6248639042d5ddd6e42422db14ed884'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
+    ('timed', 'kernel/src/init.rs', 'fn-v1:5424d8c0a824856443014bb081b57f3177c07d452e9f2558827a645a3fd1299e'),  # optional sexgpu-nv spawn (domain 53) + NVIDIA keep/lease arguments in init(), no wait change, 2026-11-19
+
     ('timed', 'kernel/src/init.rs', '784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64'),
 
     ('timed', 'kernel/src/init.rs', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334'),
@@ -42,38 +44,6 @@ PINS = (
 
     ('timed', 'kernel/src/init.rs', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d'),
 
-    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:d1ae84d320565569056b4890ee32b11af3b66bc34eba297a890387e8851f71ab'),
-
-    ('timed', 'kernel/src/scheduler.rs', '1b10ca8d1b0d1eb3a092f0a61ed1ca7fe6a4b43c448bc24d560ead211940f8d9'),  # #429 merged with master (28ffcb59), reviewed by WS4, 2026-11-19
-
-    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:dea888ff27ad54e217839dc46b9a74e521d07b2be1c36256452fd7df937802f2'),  # master 586140ad: kernel stack guard page + boxed FPU area (no wait change), 2026-11-19
-
-    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:4670ed1968ba7f46d7097721884c9cf2c95de4bd69220374b07321f2f5eec750'),  # cross-core IPC polling + lean first look + bounded re-check (#429 / 80b89713), reviewed by WS4, 2026-11-18
-
-    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:8b328859b9fda2ff8e024287e6d020c11182c169ad993a0e786ad86033420fe6'),  # XSAVE/AVX heap save area + kernel stack canary (#427 / ed888ad5), reviewed by WS4, 2026-11-18
-
-    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:c92ee26a67f14c438179f32834b8b0a62f82d1dee42271d43863d4cc96f95a8f'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
-
-    ('timed', 'kernel/src/scheduler.rs', '53aec880d2ea82474231d37aaae0862dcb8747185626ab6f4d79175a422ce8a8'),  # PKU gates: TSC_AUX on switch (P6.2a), 2026-11-19
-
-    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:458daaa0e25c5b534627e9cef612d5e71ba9f781e05b48689bee025a1fd4c70b'),  # master 53aec880: PKU gates TSC_AUX on switch (no wait change), 2026-11-19
-
-    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:3af49f2ffe4d2b73c67ec09f190aa8e46cf43a3a7b233f7d8a24532828203567'),  # #429 merged with master at 950c36ac (raw af1bffe7), wait change as reviewed at 28ffcb59, 2026-11-19
-
-    ('timed', 'kernel/src/scheduler.rs', '586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae'),  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
-
-    ('timed', 'kernel/src/scheduler.rs', '13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1'),  # IPC v2 syscalls 105/106, 2026-11-18
-
-    ('timed', 'kernel/src/scheduler.rs', '8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654'),  # IPC fast path (WS4), 2026-11-17
-
-    ('timed', 'kernel/src/scheduler.rs', '0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64'),
-
-    ('timed', 'kernel/src/scheduler.rs', '25c0bc835f30039f947f28bc79ed567e1c742e17ea3c9a8e0663b5f502c9d642'),  # per-task self-wait sampling (task_count), 2026-11-17
-
-    ('timed', 'kernel/src/self_wait.rs', '0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf'),
-
-    ('timed', 'kernel/src/task_ownership.rs', '57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6'),
-
     ('timed', 'kernel/src/smp.rs', '261699be11866980d2a30b72cbb8d35ddccdc00aa1ee1cbceefadc716edc7d75'),  # protection views (tlb hook, rows spread), 2026-11-17
 
     ('timed', 'kernel/src/smp.rs', 'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325'),
@@ -85,6 +55,7 @@ PINS = (
     ('timed', 'kernel/src/interrupts.rs', 'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d'),
 
     ('timed', 'kernel/src/interrupts.rs', 'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),  # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:9be7e0f042763f122e4881e3f91ce32256e08711eb9531cb73fac73865384dc4'),  # SMAP audit: a kernel fault on a user page is recorded and retried with AC; kernel faults keep PKRU (no wait change), 2026-11-20
 
     ('timed', 'kernel/src/syscalls/mod.rs', 'fn-v1:676eae4ad2ce1171bafcdd21eb7b0d61e5e387ff84e401eb926eecf173191fbb'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
@@ -143,6 +114,8 @@ PINS = (
     ('timed', 'servers/sexnet/src/main.rs', 'fcf8299b6ce8b8acdd0bc005507036087d5569664c08d63da001dc9e694c7253'),
 
     ('timed', 'servers/sexnet/src/main.rs', '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b'),  # first 32 timed returns logged, 2026-11-17
+
+    ('timed', 'servers/sexnet/src/main.rs', 'd994aeb0af740e6157d92744656943261954b99c6828795723c9070d4625ff34'),  # wired NIC interrupt: 10-tick quiet sleep while armed, no stall after a full burst (two-tick envelope unchanged), 2026-11-19
 
     ('timed', 'servers/sexusb/src/main.rs', '3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81'),
 

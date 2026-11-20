@@ -469,6 +469,9 @@ jobs:
           ${{ runner.temp }}/sexos-runtime
           ${{ runner.temp }}/sexos-usb
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   web:
     name: Browser gates
@@ -520,6 +523,9 @@ jobs:
         name: sexos-browser-proof
         path: ${{ runner.temp }}/sexos-runtime/web-*
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   devices:
     name: Disks, power and fuzzing
@@ -608,6 +614,9 @@ jobs:
           ${{ runner.temp }}/sexos-fuzz
           ${{ runner.temp }}/sexos-drag
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   media:
     name: Browser media streaming and seeking
@@ -640,6 +649,10 @@ jobs:
       run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_thumb_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-thumb"
     - name: Qupid Kodi repositories and installs
       run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_kodi_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-kodi"
+    - name: Sound on Intel HD Audio by interrupt (MSI, period-end wakes)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/hda-sound-source.img"
+        python3 scripts/sound_gate.py --card hda --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/hda-sound-source.img" --out "$RUNNER_TEMP/sexos-hda-sound"
     - name: Microphone on Intel HD Audio (input pin, converter and input stream)
       run: |
         truncate -s 1G "$RUNNER_TEMP/hda-mic-source.img"
@@ -655,7 +668,11 @@ jobs:
           ${{ runner.temp }}/sexos-web-seek
           ${{ runner.temp }}/sexos-qupid-*
           ${{ runner.temp }}/sexos-hda-mic
+          ${{ runner.temp }}/sexos-hda-sound
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   editor:
     name: Quil code editor
@@ -682,6 +699,9 @@ jobs:
           ${{ runner.temp }}/editor-build.log
           ${{ runner.temp }}/sexos-editor
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   profiles:
     name: Proof builds (${{ matrix.gate }})
@@ -854,6 +874,9 @@ jobs:
       with:
         name: sexos-programs-proof
         path: ${{ runner.temp }}/sexos-runtime
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
   reading:
     name: Reading programs
     runs-on: ubuntu-latest
@@ -883,6 +906,9 @@ jobs:
         if-no-files-found: ignore
 
   # Single required check: keeps the old "build" check name for branch rules.
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
   places:
     name: Phone link and maps
     runs-on: ubuntu-latest
@@ -910,6 +936,9 @@ jobs:
           ${{ runner.temp }}/sexos-places
           ${{ runner.temp }}/places-build.log
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   desktop:
     name: Desktop shell
@@ -1009,10 +1038,37 @@ jobs:
         name: sexos-desktop-proof
         path: ${{ runner.temp }}/sexos-desktop
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
+
+  latency:
+    name: Desktop latency (key to pixel, launch, resize, file open; KVM)
+    runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
+    - name: Desktop latency, end to end (stage breakdown and traces in the log)
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        grep -m1 'model name' /proc/cpuinfo
+        truncate -s 1G "$RUNNER_TEMP/latency-source.img"
+        python3 scripts/desktop_latency_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/latency-source.img" --out "$RUNNER_TEMP/sexos-latency"
+    - name: Preserve latency evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-latency-proof
+        path: ${{ runner.temp }}/sexos-latency
+        if-no-files-found: ignore
 
   build:
     if: always()
-    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks]
+    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks, latency]
     runs-on: ubuntu-latest
     steps:
     # Every job must pass. A job may be skipped only when the scope leaves it out:
@@ -1071,6 +1127,9 @@ jobs:
           ${{ runner.temp }}/build.log
           ${{ runner.temp }}/web-jit
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   recording:
     name: Lossless encoder guest proof
@@ -1167,6 +1226,9 @@ jobs:
           ${{ runner.temp }}/productivity-build.log
           ${{ runner.temp }}/sexos-productivity
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   terminal-editor:
     name: Terminal and editor
@@ -1199,6 +1261,9 @@ jobs:
           ${{ runner.temp }}/term-build.log
           ${{ runner.temp }}/sexos-term
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   documents-pictures:
     name: Documents and pictures
@@ -1235,6 +1300,9 @@ jobs:
         if-no-files-found: ignore
 
   # Deliberately unsafe fixture-only image; every other job builds normal flags.
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
   input-payload-proof:
     name: Diagnostic keyboard payload proof (UNSAFE)
     needs: changes

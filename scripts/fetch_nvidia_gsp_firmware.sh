@@ -15,7 +15,11 @@ while read -r sum name; do
   [ -n "$name" ] || continue
   if [ -f "$OUT/$name" ] && echo "$sum  $OUT/$name" | sha256sum -c --quiet - 2>/dev/null; then continue; fi
   for attempt in 1 2 3 4; do
-    if curl -sSfL -o "$OUT/$name.part" "$BASE/nvidia/ga102/gsp/$name"; then break; fi
+    rc=0; curl -sSfL --connect-timeout 20 -o "$OUT/$name.part" "$BASE/nvidia/ga102/gsp/$name" || rc=$?
+    [ "$rc" = 0 ] && break
+    # Host unreachable (resolve, connect or connect timeout): fail at once, not after
+    # every file and attempt; the host gates then skip the real-image tests.
+    case "$rc" in 6|7|28) echo "[firmware.fetch] FAIL host unreachable rc=$rc" >&2; exit 1;; esac
     [ "$attempt" = 4 ] && { echo "[nvidia.firmware] FAIL fetch $name" >&2; exit 1; }
     sleep $((attempt * 2))
   done
@@ -27,5 +31,5 @@ done <<'LIST'
 076d2a0675131ad8a8de215c611ce4271289adcc03e2cf39995f9b29079e2136 bootloader-535.113.01.bin
 e30231ec0d317021770e16c81ae2c0553f728d0344248827582f78132c9447d4 gsp-535.113.01.bin
 LIST
-[ -f "$OUT/LICENCE.nvidia" ] || curl -sSfL -o "$OUT/LICENCE.nvidia" "$BASE/LICENSES/LICENCE.nvidia"
+[ -f "$OUT/LICENCE.nvidia" ] || curl -sSfL --connect-timeout 20 -o "$OUT/LICENCE.nvidia" "$BASE/LICENSES/LICENCE.nvidia"
 echo "[nvidia.firmware] PASS dir=$OUT"

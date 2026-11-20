@@ -252,6 +252,11 @@ impl Card {
             }
         }
     }
+    /// True when the card interrupts at each period end (an HD Audio controller with
+    /// an MSI/MSI-X vector), so Bell may sleep until then instead of every tick.
+    fn irq(&self) -> bool { matches!(self, Card::Hda(h) if h.interrupts()) }
+    fn arm(&mut self, on: bool) { if let Card::Hda(h) = self { h.arm(on) } }
+    fn ack(&mut self) -> u32 { match self { Card::Hda(h) => h.ack(), _ => 0 } }
     /// Whether a period can go to the chip now, checked before mixing one.
     fn room(&mut self) -> bool {
         match self {
@@ -664,7 +669,20 @@ fn open_hda(view: m::RegionView) -> Result<Player, &'static str> {
     let dma = sex_pdx::memory_region_full_view(sex_pdx::SLOT_DMA_REGION, dma_info.rights).map_err(|_| "no_dma_view")?;
     let reply = sex_pdx::device_command(v::SLOT_SOUND, c::NIC_BITS as u64, 0).map_err(|_| "command")?;
     if reply.after & c::NIC_BITS != c::NIC_BITS { return Err("command_bits"); }
-    let h = crate::hda::Hda::open(view, dma)?;
+    // BOOT programs one MSI/MSI-X vector when the manifest asks and the controller
+    // offers one; behind VMD or without either, Bell polls as it always did.
+    let lease = sex_pdx::device::at_slot(v::SLOT_SOUND).filter(|l| l.vectors > 0);
+    let mut h = crate::hda::Hda::open(view, dma, lease.is_some())?;
+    match lease {
+        Some(l) => match sex_pdx::device::irq_unmask(v::SLOT_SOUND, 0) {
+            Ok(()) => sex_pdx::serial_record!("[bell.hda.irq] mode={} vectors={} bit={} polling=0", l.mode.name(), l.vectors, l.first_bit),
+            Err(e) => {
+                h.poll_instead();
+                sex_pdx::serial_record!("[bell.hda.irq] mode={} unmask_error={:#x} polling=1", l.mode.name(), e);
+            }
+        },
+        None => sex_pdx::serial_record!("[bell.hda.irq] mode=none polling=1"),
+    }
     sex_pdx::serial_record!("[bell.hda.ready] vendor={:#010x} dac={} pins={} periods={} period_bytes={}",
         h.vendor, h.dac, h.pins, crate::hda::PERIODS, crate::hda::PERIOD_BYTES);
     sex_pdx::serial_record!("[bell.mic.card] input={}", h.mic_inputs());
@@ -824,8 +842,52 @@ pub fn pump() {
         p.pump();
         if p.len == 0 && p.flying == 0 && p.played != before {
             sex_pdx::serial_record!("[bell.sound.drained] periods={}", p.played);
+            let w = wakes();
+            sex_pdx::serial_record!("[bell.sound.wakes] irq={} periods={} waits={} interrupts={}",
+                p.card.irq() as u8, p.played - w.periods, w.waits, w.interrupts);
+            *w = Wakes { periods: p.played, waits: 0, interrupts: 0 };
         }
     }
+}
+
+/// How often Bell slept while sound played, since the last drain: the boot log
+/// shows interrupt-driven sound wakes about once a period, not once a tick.
+struct Wakes { periods: u64, waits: u64, interrupts: u64 }
+static mut WAKES: Wakes = Wakes { periods: 0, waits: 0, interrupts: 0 };
+fn wakes() -> &'static mut Wakes { unsafe { &mut *core::ptr::addr_of_mut!(WAKES) } }
+
+/// While open streams may still hand Bell sound the card has room for, Bell looks
+/// at their rings this often (ms) even with interrupts: programs write without a
+/// message, and 4 ms adds little to the ~130 ms Bell keeps queued.
+const STREAM_POLL_TICKS: u64 = 4;
+
+/// How long Bell may sleep, in ticks, while sound plays. Call it right before the
+/// wait: it arms the card's interrupt, takes the pending bit (a pending bit would end
+/// every wait at once), clears the card's completion bits and feeds the card once
+/// more, so a period that ends after this still interrupts the wait.
+/// Without interrupts the answer is one tick, as before.
+pub fn wait_ticks() -> u64 {
+    let Some(p) = player() else { return 1 };
+    if !p.card.irq() { return 1; }
+    p.card.arm(true);
+    let w = wakes();
+    if sex_pdx::device::irq_take() != 0 { w.interrupts += 1; }
+    p.card.ack();
+    w.waits += 1;
+    pump();
+    let Some(p) = player() else { return 1 };
+    let more = p.streaming() && p.flying < IN_FLIGHT && p.card.room();
+    if more { STREAM_POLL_TICKS } else { sex_pdx::SELF_WAIT_MAX_TICKS }
+}
+
+/// Before Bell blocks for a message with nothing playing: the card stops
+/// interrupting, so an idle Bell is never woken by the silent stream.
+pub fn quiet() {
+    let Some(p) = player() else { return };
+    if !p.card.irq() { return; }
+    p.card.arm(false);
+    let _ = sex_pdx::device::irq_take();
+    p.card.ack();
 }
 
 /// Carries out a mixer request (`sound_mixer`) from a caller Bell has already let ask.
