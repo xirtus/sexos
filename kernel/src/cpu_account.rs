@@ -121,7 +121,8 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             wire::OK
         }
         // Who holds what, as numbers: a domain's PKU key, how many capabilities it holds,
-        // and which domains those let it call. Never the capabilities themselves.
+        // and which domains it holds a domain capability to (IPC v2 endpoints name
+        // objects, not domains, so they are counted but not linked). Never the capabilities themselves.
         wire::OP_ORGAN | wire::OP_LINK => {
             let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(arg as u32).filter(|_| arg != 0 && arg < DOMAINS as u64) else { return wire::INVALID };
             let table = unsafe { &*pd.cap_table };
@@ -132,7 +133,6 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
                 return wire::OK;
             }
             let next = held.filter_map(|c| match c.data {
-                crate::capability::CapabilityData::IPC(ipc) => Some(ipc.target_pd_id as u64),
                 crate::capability::CapabilityData::Domain(d) => Some(d as u64),
                 _ => None,
             }).filter(|&d| d > arg2).min();

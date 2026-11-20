@@ -468,6 +468,7 @@ pub extern "C" fn _start() -> ! {
             Some(Event::Key(key)) => mesh.key(&window, key),
             Some(Event::Pointer(p)) => mesh.pointer(&window, p),
             Some(Event::Resize { .. }) => true,
+            Some(_) => false,
             None => {
                 due = sex_pdx::get_ticks() + PERIOD_MS;
                 mesh.sample(&mut window);

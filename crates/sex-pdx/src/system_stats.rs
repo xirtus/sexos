@@ -24,8 +24,8 @@ pub const OP_CORE: u64 = 6;
 pub const OP_MEMORY: u64 = 7;
 /// rsi(pd) -> rsi = the domain's PKU key (its organ), rdx = capabilities it holds.
 pub const OP_ORGAN: u64 = 8;
-/// rsi(pd), rdx(after) -> rsi = the next domain above `after` that `pd` holds an IPC or
-/// domain capability to; NONE when there is none. Numbers only, never the capability.
+/// rsi(pd), rdx(after) -> rsi = the next domain above `after` that `pd` holds a domain
+/// capability to (IPC v2 endpoints name objects, not domains); NONE when there is none. Numbers only, never the capability.
 pub const OP_LINK: u64 = 9;
 pub const OK: u64 = 0;
 pub const INVALID: u64 = 1;
