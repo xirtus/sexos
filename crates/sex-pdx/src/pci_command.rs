@@ -37,7 +37,7 @@ pub const WIFI_FIRMWARE_MODULE: &str = "wifi.pack";
 /// DMA pool for the control ring (`sex_thunderbolt::ring::Layout`).
 pub const SLOT_THUNDERBOLT: u64 = 29;
 pub const SLOT_THUNDERBOLT_DMA: u64 = 30;
-pub const THUNDERBOLT_DMA_REGION_ID: u32 = 0x4500;
+pub const THUNDERBOLT_DMA_REGION_ID: u32 = 0x4600;
 pub const THUNDERBOLT_DMA_BYTES: u64 = 64 * 1024;
 pub const DENIED: u64 = u64::MAX;
 /// A hardware write/readback failure is uncertain; do not retry a mutation.

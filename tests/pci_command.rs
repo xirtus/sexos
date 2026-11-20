@@ -9,7 +9,8 @@ mod boot_network{pub fn query(caller:u32)->Option<[u64;4]>{super::boot_network_s
 pub const SLOT_DMA_REGION:u64=32;
 #[path="../crates/sex-pdx/src/pci_command.rs"]pub mod pci_command;
 /// NICs are leased by product id, never by class; no class lease applies here.
-mod device_lease{pub struct Kind;impl Kind{pub fn of_class(_:u32)->Option<Kind>{None}pub fn registers_end(&self)->u64{u64::MAX}pub fn max_view(&self)->u64{65536}pub fn dma(&self)->(u32,u64){(0,0)}pub fn dma_slot(&self)->u64{sex_pdx::SLOT_DMA_REGION}}}
+#[path="../crates/sex-pdx/src/nvidia_gpu.rs"]pub mod nvidia_gpu;
+mod device_lease{#[derive(PartialEq)]pub struct Kind;#[allow(non_upper_case_globals)]impl Kind{pub const NvidiaGpu:Kind=Kind;pub fn view_max(&self)->u64{65536}pub fn of_class(_:u32)->Option<Kind>{None}pub fn registers_end(&self)->u64{u64::MAX}pub fn dma(&self)->(u32,u64){(0,0)}pub fn dma_slot(&self)->u64{sex_pdx::SLOT_DMA_REGION}}}
 #[path="../crates/sex-pdx/src/memory_region.rs"]pub mod memory_region;
 #[path="../kernel/src/capability_slot.rs"]mod capability_slot;
 #[path="../kernel/src/nic_boot.rs"]mod nic_boot;

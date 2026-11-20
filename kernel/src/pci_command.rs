@@ -17,7 +17,7 @@ fn held_device(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64)->Option<(u32,w::
     let expected=pd.id.checked_mul(1024).and_then(|n|n.checked_add(0x10000)).and_then(|n|n.checked_add(slot));
     if expected!=Some(view.region_id) || m::resolve_info(Some(&view)).is_err()
         || view.rights!=m::QUERY_VIEW|m::READ|m::WRITE || view.dma_base.is_some() || view.peer_pd.is_some()
-        || view.length>crate::device_lease::Kind::of_class(device.class).map_or(65536,|k|k.max_view()) {return None;}
+        || view.length>crate::device_lease::Kind::of_class(device.class).map_or(65536,|k|k.view_max()) {return None;}
     // A virtio lease is sized by its register layout, a NIC's by its fixed registers.
     let complete=match device.virtio {
         Some(layout)=>crate::virtio_boot::supported(device.vendor_id,device.device_id)&&layout.valid(view.length),
@@ -34,6 +34,7 @@ pub fn identity(pd:&ProtectionDomain,slot:u64,a:u64,b:u64,c:u64,d:u64)->[u64;5] 
     let fail=[w::DENIED,0,0,0,0];
     if a==w::QUERY_WINDOW && b|c|d==0 { return window(pd,slot); }
     if a==w::QUERY_SUBSYSTEM && b|c|d==0 { return subsystem(pd,slot); }
+    if a==sex_pdx::nvidia_gpu::QUERY_BARS && b|c|d==0 { return nvidia_bars(pd,slot); }
     if a|b|c|d!=0{return fail;}
     let Some((slot,update))=held(pd,slot,0,0)else{return fail;};
     let grant=update.grant();
@@ -120,4 +121,21 @@ fn window(pd:&ProtectionDomain,slot:u64)->[u64;5]{
     let Some(view)=device.bar0_view else{return [w::DENIED,0,0,0,0];};
     let (offset,length)=match device.window { (0,0)=>(0,view.length), (o,l)=>(o as u64,l as u64) };
     [0,offset,length,0,0]
+}
+
+/// The held NVIDIA GPU's BAR0, BAR1 and BAR3 bus addresses and bus/devfn: GSP-RM is
+/// told them at boot (`GSP_SET_SYSTEM_INFO`). Read-only facts, no mapping.
+fn nvidia_bars(pd:&ProtectionDomain,slot:u64)->[u64;5]{
+    let Some((_,_,device))=held_device(pd,slot,0,0)else{return [w::DENIED,0,0,0,0];};
+    if crate::device_lease::Kind::of_class(device.class)!=Some(crate::device_lease::Kind::NvidiaGpu)||device.vendor_id!=0x10de{return [w::DENIED,0,0,0,0];}
+    let bar=|n:u8|->u64{
+        let at=0x10+4*n;
+        let lo=unsafe{crate::hal::pci::pci_config_read(device.bus,device.dev,device.func,at)};
+        if lo&1!=0{return 0;}
+        let hi=if (lo>>1)&3==2{unsafe{crate::hal::pci::pci_config_read(device.bus,device.dev,device.func,at+4)}}else{0};
+        (hi as u64)<<32|(lo&!0xf) as u64
+    };
+    // GA10x: BAR0 32-bit registers, BAR1 64-bit framebuffer (config 0x14), BAR3 64-bit
+    // instance memory (config 0x1c).
+    [0,bar(0),bar(1),bar(3),(device.bus as u64)<<8|(device.dev as u64)<<3|device.func as u64]
 }

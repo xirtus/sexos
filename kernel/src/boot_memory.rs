@@ -756,7 +756,7 @@ pub fn intel_display_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,sl
 pub fn class_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,kind:crate::device_lease::Kind)->Option<(RegionGrant,(u32,u32))>{
     require_boot();
     let(physical,actual_length)=dev.probe_boot_bar_any(kind.bar())?;
-    bar_lease(pd,dev,slot,kind.bar(),physical,actual_length,kind.registers_end(),kind.max_view())
+    bar_lease(pd,dev,slot,kind.bar(),physical,actual_length,kind.registers_end(),kind.view_max())
 }
 
 /// Memory-space and bus-master bits for a class-leased controller, like the NIC's.
@@ -766,7 +766,7 @@ pub fn class_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u
     require_boot();
     assert_eq!(view.region_id,0x10000 + pd.id * 1024 + slot as u32,"BOOT_CLASS_COMMAND_VIEW_ID");
     assert!(sex_pdx::memory_region::resolve_info(Some(&view)).is_ok()
-        && view.length >= kind.registers_end() && view.length <= kind.max_view()
+        && view.length >= kind.registers_end() && view.length <= kind.view_max()
         && view.rights == QUERY_VIEW|READ|WRITE && view.dma_base.is_none() && view.peer_pd.is_none(), "BOOT_CLASS_COMMAND_VIEW");
     let g=sex_pdx::pci_command::Grant {subject:pd.id,bus:dev.bus,device:dev.dev,function:dev.func,
         vendor_id:dev.vendor_id,device_id:dev.device_id,
@@ -786,27 +786,36 @@ pub fn class_dma(pd_id:u32,kind:crate::device_lease::Kind){
     let (region,bytes)=kind.dma();
     dma_at(pd_id,kind.dma_slot(),region,bytes);
     if kind==crate::device_lease::Kind::Wifi { firmware_pack(pd_id, sex_pdx::pci_command::SLOT_WIFI_FIRMWARE, sex_pdx::pci_command::WIFI_FIRMWARE_REGION_ID); }
+    if kind==crate::device_lease::Kind::NvidiaGpu {
+        use sex_pdx::nvidia_gpu as n;
+        module_region(pd_id, n::SLOT_FIRMWARE, n::FIRMWARE_REGION_ID, n::FIRMWARE_MODULE);
+    }
 }
 
 /// The firmware pack (a boot module) as a read-only region of a driver: the Wi-Fi
 /// service that holds the chip, and Cufflinks for the Bluetooth half. The kernel never
 /// looks inside; the driver checks each file.
 fn firmware_pack(pd_id:u32, slot:u64, region_id:u32){
-    use sex_pdx::pci_command as w;
+    module_region(pd_id, slot, region_id, sex_pdx::pci_command::WIFI_FIRMWARE_MODULE)
+}
+
+/// A boot module as a read-only region of one driver (Wi-Fi and Bluetooth firmware,
+/// NVIDIA's GSP firmware). The kernel never looks inside; the driver checks each file.
+fn module_region(pd_id:u32, slot:u64, region_id:u32, name:&str){
     require_boot();
-    let Some(module) = crate::MODULE_REQUEST.response().and_then(|m| m.modules().iter().find(|m| m.path().ends_with(w::WIFI_FIRMWARE_MODULE))) else {
-        crate::serial_println!("[boot.wifi.firmware.absent] pd={}", pd_id); return
+    let Some(module) = crate::MODULE_REQUEST.response().and_then(|m| m.modules().iter().find(|m| m.path().ends_with(name))) else {
+        crate::serial_println!("[boot.firmware.absent] pd={} module={}", pd_id, name); return
     };
-    let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_WIFI_FIRMWARE_NO_HHDM").offset;
+    let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_FIRMWARE_NO_HHDM").offset;
     let data = module.data();
     let virt = data.as_ptr() as u64;
     let length = (data.len() as u64).next_multiple_of(4096);
     if virt % 4096 != 0 || length == 0 { return; }
-    let pd = DOMAIN_REGISTRY.get(pd_id).expect("BOOT_WIFI_FIRMWARE_PD");
+    let pd = DOMAIN_REGISTRY.get(pd_id).expect("BOOT_FIRMWARE_PD");
     let virtual_base = alias(pd, virt - hhdm, length, false, false);
     grant(pd, slot, RegionGrant { region_id, virtual_base, length,
         rights: QUERY_VIEW | READ, dma_base: None, peer_pd: None });
-    crate::serial_println!("[boot.wifi.firmware.region] pd={} bytes={}", pd_id, data.len());
+    crate::serial_println!("[boot.firmware.region] pd={} bytes={} module={}", pd_id, data.len(), name);
 }
 
 /// Bluetooth: Cufflinks (the host stack) and SexUSB (the controller's USB transport)

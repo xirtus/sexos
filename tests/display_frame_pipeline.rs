@@ -62,6 +62,8 @@ pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../servers/sexdisplay/src/scene.rs"]mod scene;
 #[path="../servers/sexdisplay/src/paint_batch.rs"]mod paint_batch;
 use paint_batch::{Content,Plan,Dirty};
+// Host double: the decoration pass's per-frame window cache (nothing to gather here).
+mod decor{pub fn begin_frame(_:usize,_:usize,_:&crate::scene::SceneSnapshot){} pub fn end_frame(){}}
 use surface_lifecycle::{Surface,SURFACE_EMPTY,MAX_SURFACES};
 // Actual Main pure background conversion, observed without changing its result.
 // Actual SceneSnapshot calls this once for each capture attempt after bounds.

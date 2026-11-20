@@ -60,7 +60,7 @@ frame's CRC and descriptor, answers like the ICM and injects plug events
 - BOOT's USB manifest claims Intel devices of class 0c0340 (`Lease::Thunderbolt`)
   for SexUSB at slot 29: a BAR0 view of the whole 256 KiB (the firmware status
   word sits at 0x39944, past the usual 64 KiB cap; `Kind::max_view`), the memory
-  and bus-master command bits, and a 64 KiB DMA pool at slot 30 (region 0x4500).
+  and bus-master command bits, and a 64 KiB DMA pool at slot 30 (region 0x4600).
 - At lease time BOOT raises force power in VS_CAP_22 (DMA delay 0x22), since
   drivers never see config space, and logs `[kernel.pci.tb.force_power] fw_ready=`.
 - SexUSB (`servers/sexusb/src/thunderbolt.rs`) runs `Manager` every loop pass and
@@ -71,7 +71,7 @@ frame's CRC and descriptor, answers like the ICM and injects plug events
 - PCIe tunnels at security level user are not approved yet (T2 adds the prompt);
   DisplayPort and USB tunnels work without approval.
 
-ABI: new capability slots 29/30 in SexUSB and the region id 0x4500
+ABI: new capability slots 29/30 in SexUSB and the region id 0x4600
 (`sex_pdx::pci_command::SLOT_THUNDERBOLT*`); no new syscall.
 
 x17 check: boot with a dock or USB-C monitor on the Thunderbolt port and read the
