@@ -23,6 +23,7 @@ pub mod gpencil;
 pub mod editors;
 pub mod input;
 pub mod nodetree;
+pub mod omatools;
 pub mod persist;
 pub mod python;
 pub mod physics;
