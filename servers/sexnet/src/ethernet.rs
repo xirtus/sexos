@@ -51,6 +51,24 @@ const ADV_TX_COMMAND:u64=(0x3<<20)|((0x01|0x02|0x08|0x20)<<24);
 const RX_DATA:u32=8192;const TX_DATA:u32=RX_DATA+RX_COUNT*BUFFER;
 const RCTL_VALUE:u32=2|(1<<15)|(1<<26);
 const TCTL_VALUE:u32=2|8|(15<<4)|(64<<12);
+/// Interrupt causes (ICR/IMS, every Intel family in MSI mode): transmit descriptor
+/// written back, link status change, receive ring low, receive overrun, receive timer.
+const ICR:u32=0xc0;
+pub const IRQ_CAUSES:u32=(1<<0)|(1<<2)|(1<<4)|(1<<6)|(1<<7);
+/// 82574 in MSI-X mode: queue causes and IVAR (receive, transmit and other causes all
+/// on vector 0, each with its valid bit; bit 31 interrupts on every TX write-back),
+/// and CTRL_EXT.PBA_support.
+const IVAR_82574:u32=0xe4;
+const CAUSES_82574_MSIX:u32=(1<<20)|(1<<22)|(1<<24);
+const IVAR_82574_VECTOR0:u32=(1<<3)|(1<<11)|(1<<19)|(1<<31);
+const PBA_SUPPORT:u32=1<<31;
+/// igb/igc in MSI-X mode: GPIE.Multiple_MSIX and PBA_support, EIMS/EIAC/EICR, IVAR0
+/// (queue 0 receive in bits 7:0, transmit in 15:8) and IVAR_MISC (other causes, 15:8).
+/// The layout is the same on 82576, I210, I350 and I225.
+const GPIE:u32=0x1514;const GPIE_MSIX:u32=(1<<4)|(1<<31);
+const EIMS:u32=0x1524;const EIAC:u32=0x152c;const EICR:u32=0x1580;
+const IVAR0:u32=0x1700;const IVAR_MISC:u32=0x1740;const IVAR_VALID:u32=0x80;
+const LSC:u32=1<<2;
 const WAIT_TICKS:u64=5000;const WAIT_TURNS:u32=32768;
 const TX_TICKS:u64=2000;const TX_TURNS:u32=8192;
 
@@ -136,6 +154,49 @@ impl<H:Hardware> Driver<H>{
     fn read_modify(&mut self,offset:u32,set:u32)->bool{
         let value=self.hardware.read(offset);if value==u32::MAX{return false;}
         self.hardware.write(offset,value|set);true
+    }
+    /// Let the card interrupt the service (BOOT already programmed one MSI or MSI-X
+    /// vector, still masked at the kernel). Only once Running; the rings and their
+    /// custody rules are untouched, interrupts only shorten the service's sleep.
+    pub fn arm_interrupts(&mut self,msix:bool)->bool{
+        if self.phase!=Phase::Running{return false;}
+        if self.realtek(){rtl::irq_arm(&mut self.hardware);return true;}
+        let mut causes=IRQ_CAUSES;
+        if msix&&self.advanced(){
+            if !self.read_modify(GPIE,GPIE_MSIX){return false;}
+            let ivar=self.hardware.read(IVAR0);let misc=self.hardware.read(IVAR_MISC);
+            if ivar==u32::MAX||misc==u32::MAX{return false;}
+            self.hardware.write(IVAR0,(ivar&!0xffff)|IVAR_VALID|(IVAR_VALID<<8));
+            self.hardware.write(IVAR_MISC,(misc&!0xff00)|(IVAR_VALID<<8));
+            self.hardware.write(EIAC,1);self.hardware.write(EICR,u32::MAX);
+            self.hardware.write(EIMS,1);
+            // Queue causes travel through EIMS; IMS only carries the "other" ones.
+            causes=LSC;
+        }else if msix&&self.model()==c::Model::I82574{
+            if !self.read_modify(CTRL_EXT,PBA_SUPPORT){return false;}
+            self.hardware.write(IVAR_82574,IVAR_82574_VECTOR0);
+            causes|=CAUSES_82574_MSIX;
+        }
+        let stale=self.hardware.read(ICR);if stale==u32::MAX{return false;}
+        if stale!=0{self.hardware.write(ICR,stale);}
+        self.hardware.write(nic::IMS,causes);true
+    }
+    /// Clear the raised causes (write one to clear; MSI-X mode does not clear on
+    /// read) so the next frame sends a fresh message. Call it after taking the
+    /// service's interrupt bit and before draining the receive ring.
+    pub fn acknowledge_interrupts(&mut self)->u32{
+        if !self.active(){return 0;}
+        if self.realtek(){return rtl::irq_ack(&mut self.hardware);}
+        let icr=self.hardware.read(ICR);
+        if icr!=0&&icr!=u32::MAX{self.hardware.write(ICR,icr);}
+        if self.advanced(){self.hardware.write(EICR,1);}
+        icr
+    }
+    /// Mask every cause again (the service went back to polling).
+    pub fn disarm_interrupts(&mut self){
+        if self.realtek(){rtl::mask(&mut self.hardware);return;}
+        if self.advanced(){self.hardware.write(nic::EIMC,u32::MAX);}
+        self.hardware.write(nic::IMC,u32::MAX);
     }
     /// One bounded initialization phase, or at most one TX/RX completion.
     /// The service always handles IPC and yields between calls.

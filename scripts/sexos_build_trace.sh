@@ -155,6 +155,13 @@ run_stage() {
         || echo "[wifi.firmware] note: fetch incomplete; the pack holds only the files present"
       python3 scripts/make_wifi_firmware_pack.py --out iso_root/firmware/wifi.pack
       ;;
+    nvidia_firmware)
+      # NVIDIA's GSP-RM files (pinned, SHA-256 checked) as one pack for sexgpu-nv. An
+      # offline build packs nothing; the NVIDIA entry then logs "pack_empty".
+      bash scripts/fetch_nvidia_gsp_firmware.sh target/nvidia-firmware \
+        || echo "[nvidia.firmware] note: fetch incomplete; the pack is empty"
+      python3 scripts/make_nvidia_firmware_pack.py --firmware target/nvidia-firmware --out iso_root/firmware/nvidia-gsp.pack
+      ;;
     boot_image)
       # The disk image `install` writes, built from this ISO's own files.
       python3 scripts/make_boot_image.py --root iso_root --out iso_root/boot.img

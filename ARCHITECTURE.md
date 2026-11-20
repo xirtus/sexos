@@ -175,8 +175,9 @@ Entry hardening (audit: `docs/handoff/KERNEL_SECURITY_AUDIT_2026_11_18.md`): SME
 UMIP on where the CPU has them, enhanced or automatic IBRS against Spectre v2,
 NMIs on their own IST stack, `SFMASK` clears IF, DF, TF, AC, NT and IOPL, SYSRET
 never returns to a non-canonical RIP, and the kernel is built without SSE so no
-kernel data reaches user vector registers. SMAP is off until user-memory access
-goes through copy helpers. On syscall entry PKRU is set to 0 (all keys open) for
+kernel data reaches user vector registers. SMAP runs in audit mode: each kernel
+access to user memory is logged once and retried, until all of them go through
+copy helpers and the fault becomes fatal. On syscall entry PKRU is set to 0 (all keys open) for
 the length of the call.
 
 ### 1.6 SMP and scheduling
@@ -214,7 +215,7 @@ except through program records.
   one organ are not isolated from each other in memory; capabilities still separate
   their authority.
 - Known gaps, tracked in the audit: no isolation without PKU (until D2), kernel
-  runs with all keys open, no SMAP, Spectre v1 hardening of table lookups, and
+  runs with all keys open, SMAP only audits, Spectre v1 hardening of table lookups, and
   Meltdown-PK on CPUs without `RDCL_NO`.
 
 ## 2. Domains, organs and keys
