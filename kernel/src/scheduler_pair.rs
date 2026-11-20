@@ -75,3 +75,13 @@ pub fn note_answer(task: *mut Task) {
     let n = MOVES.fetch_add(1, Ordering::Relaxed) + 1;
     if n <= LOGGED_MOVES { crate::serial_println!("[sched.pair.move] pd={} from={} to={} moves={}", pd, home, here, n); }
 }
+
+/// Wakes `task` with an answer to its call: its home core runs it next, this core or
+/// another (the handoff slot, with a preempt), and the answer counts toward a move.
+pub fn wake_answer(task: *mut Task) {
+    note_answer(task);
+    let sched = &SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
+    sched.arm_handoff(true);
+    super::unpark_thread(task);
+    sched.arm_handoff(false);
+}

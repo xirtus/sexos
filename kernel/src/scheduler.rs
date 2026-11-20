@@ -54,6 +54,7 @@ pub mod self_wait;
 pub mod deadline;
 #[path = "scheduler_pair.rs"]
 pub mod pair;
+pub use pair::wake_answer;
 // Main-task addresses are registered once by BOOT, never from a syscall.
 static SELF_WAIT_TASKS:self_wait::BootInventory<Task,{self_wait::BOOT_MAIN_CAPACITY}>=self_wait::BootInventory::new();
 static TIMED_PARKS:AtomicU64=AtomicU64::new(0);
