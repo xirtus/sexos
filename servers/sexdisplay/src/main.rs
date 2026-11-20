@@ -863,12 +863,49 @@ fn selected_pixel(x:usize,y:usize,w:usize,h:usize,id:u64,scene:&scene::SceneSnap
 static mut SLOW_PIXELS:[u64;4]=[0;4];
 /// One framebuffer row from x0 to x1: fast runs where possible.
 fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot){
+    let t=decor::cycles_now();
+    let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,scene.focus,y,w,h)};
+    decor::tally(3,t);
+    raster_row_with(fb,y,x0,x1,w,h,scene,row.as_mut());
+}
+/// row_winners of the current band of rows during raster_rows only (set and
+/// cleared there): rows between the same surface and frame-body top/bottom
+/// edges have the same runs, so a window's 700 rows need a handful of builds.
+/// Static, not a local: a 9 KB table under raster_row and decor would crowd
+/// Display's 64 KB stack.
+static mut ROW_BAND:Option<(usize,usize,surface_groups::RowWinners<'static>)>=None;
+/// Rows y0..y1 from x0 to x1, building row_winners once per band.
+fn raster_rows(fb:*mut u32,y0:usize,y1:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot){
+    unsafe{
+        let band=&mut *core::ptr::addr_of_mut!(ROW_BAND);
+        *band=None;
+        for y in y0..y1{
+            if !band.as_ref().is_some_and(|(lo,hi,_)|*lo<=y&&y<*hi){
+                let t=decor::cycles_now();
+                fill_row_band(band,y,w,h,scene);
+                decor::tally(3,t);
+            }
+            match band.as_mut(){
+                Some((_,_,r))=>{r.rewind();raster_row_with(fb,y,x0,x1,w,h,scene,Some(core::mem::transmute::<&mut surface_groups::RowWinners<'static>,&mut surface_groups::RowWinners<'_>>(r)));}
+                None=>raster_row_with(fb,y,x0,x1,w,h,scene,None),
+            }
+        }
+        *band=None;
+    }
+}
+/// Builds the band's table in this frame only, never under raster_row_with and decor.
+#[inline(never)]
+fn fill_row_band(band:&mut Option<(usize,usize,surface_groups::RowWinners<'static>)>,y:usize,w:usize,h:usize,scene:&scene::SceneSnapshot){
+    *band=unsafe{scene.groups.row_winners(&scene.surfaces,scene.focus,y,w,h)}.map(|r|{
+        let (lo,hi)=scene.groups.row_band(&scene.surfaces,y,w,h);
+        // Lives only until raster_rows clears it; the scene outlives that call.
+        (lo,hi,unsafe{core::mem::transmute::<surface_groups::RowWinners<'_>,surface_groups::RowWinners<'static>>(r)})
+    });
+}
+fn raster_row_with(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot,mut row:Option<&mut surface_groups::RowWinners<'_>>){
     let focused=scene.focus;
     let back=bg(y,h);
     let mark=wallpaper_mark::span(y,w,h);
-    let t=decor::cycles_now();
-    let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
-    decor::tally(3,t);
     let mut x=x0;
     while x<x1{
         let (end,source)=match row.as_mut(){Some(row)=>row.run(x),None=>(x1,None)};
@@ -2527,7 +2564,7 @@ fn raster_full(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
             unsafe { core::ptr::write_volatile(fb.add(y*w+x), c); }
         }
     }
-    for y in (scene.metrics.bar()as usize)..h{raster_row(fb,y,0,w,w,h,scene);}
+    raster_rows(fb,scene.metrics.bar()as usize,h,0,w,w,h,scene);
     true
 }
 
@@ -2763,7 +2800,7 @@ fn raster_area(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
     }
     if total_pixels<w*h{return false;}
     for x in 0..w{unsafe{core::ptr::write_volatile(fb.add(((scene.metrics.bar()as usize)-1)*w+x),DEFAULT_THEME.panel_glow);}} // low-contrast bar edge
-    for y in (scene.metrics.bar()as usize)..h{raster_row(fb,y,0,w,w,h,scene);}
+    raster_rows(fb,scene.metrics.bar()as usize,h,0,w,w,h,scene);
     true
 }
 
@@ -2795,9 +2832,7 @@ fn raster_damage(target: &frame_output::Target<'_>, rect: damage::Rect, scene: &
     let bar=&scene.bar;
     // Decorations are per pixel: a content change repaints only its own pixels.
     // Geometry damage (moving windows, their shadows) arrives already grown.
-    for y in rect.y..rect.bottom {
-        raster_row(fb,y,rect.x,rect.right,w,h,scene);
-    }
+    raster_rows(fb,rect.y,rect.bottom,rect.x,rect.right,w,h,scene);
     true
 }
 
