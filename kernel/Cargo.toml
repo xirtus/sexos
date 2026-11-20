@@ -55,4 +55,6 @@ sex-pdx = { path = "../crates/sex-pdx" }
 sex-gate = { path = "../crates/sex-gate" }
 sex-iommu = { path = "../crates/sex-iommu" }
 sex-vmd = { path = "../crates/sex-vmd" }
+sex-pcipm = { path = "../crates/sex-pcipm" }
+sex-idle = { path = "../crates/sex-idle" }
 sex-hwdb = { path = "../crates/sex-hwdb" }

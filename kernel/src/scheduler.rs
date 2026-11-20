@@ -236,7 +236,21 @@ impl Task {
         for loaded in FPU_LOADED.iter() {
             let _ = loaded.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire);
         }
+        // A core's handoff slot still naming the last run lives outside the task: with
+        // custody reset, a stale slot would run this task's kernel stack a second time
+        // (the soak's ret-to-0 after a service restart).
+        let purged = SCHEDULERS.iter().filter(|s| s.handoff.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire).is_ok()).count();
+        if purged != 0 { serial_println!("[task.rearm.purged] task={} handoffs={}", id, purged); }
     }
+}
+
+/// For a kernel fault report: this core's current task (id, custody snapshot) and the
+/// outgoing task a switch has not yet finished with.
+pub fn fault_report(core: usize) -> (u32, Option<task_ownership::Snapshot>, *mut Task, *mut Task) {
+    let sched = &SCHEDULERS[core];
+    let (cur, out) = (sched.current_task.load(Ordering::Acquire), sched.pending_outgoing.load(Ordering::Acquire));
+    if cur.is_null() { return (0, None, cur, out); }
+    unsafe { ((*cur).id, Some((*cur).state.snapshot()), cur, out) }
 }
 
 /// Per core: the task whose x87/SSE registers are in the core right now, if any.

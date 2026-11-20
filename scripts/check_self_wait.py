@@ -207,7 +207,9 @@ ACPI_AUX_COHORTS=(
  ('822bebd1f4048d35105a0c7fae00b3112b4c11a6013501cf8de528dc5e42dbf6','b13e5f3e739b0000837a81c9ae7212f0356c5d507d04d0f100a421f2ea05ddd6'),
  ('24446427547d1f80eeb557e928b5854c27edc8b0caa45d5aebd7a5e6b460e531','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
  # FADT PM1 blocks outside IO space refused before FixedRegisters::new; wait loop unchanged.
- ('2456130585cec58be8f2fe41e758175ce79e83faefa3c09bf6acf73b3fc917af','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'))
+ ('2456130585cec58be8f2fe41e758175ce79e83faefa3c09bf6acf73b3fc917af','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
+ # power.rs gains OP_DEVICE_SLEEP; sexacpi reports every MWAIT _CST state (wait loop unchanged), 2026-11-20
+ ('8e6bb20e7be6ff97c756986704690f9a5ad3791d77106b69de16bfcc5618590a','231583a434ade78732de80b01c85ec47612099338adcc832e0c52e6b0c4e9142'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')
