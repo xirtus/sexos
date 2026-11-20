@@ -224,7 +224,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
     let result = match rax {
         85 => crate::crash_log::syscall(regs),
-        87 => crate::cpu_account::syscall(regs), // SYS_STATS: CPU time and memory by domain, read-only.
+        87 => crate::mesh_stats::syscall(regs).unwrap_or_else(|| crate::cpu_account::syscall(regs)), // SYS_STATS: CPU time and memory by domain, read-only.
         0 => { // SYSCALL_PDX_CALL
             let slot = rdi as u32;
             let num = rsi;

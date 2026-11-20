@@ -213,7 +213,14 @@ fn master_gain() -> u32 {
 #[derive(Clone, Copy)]
 /// A program's stream; `frac` is where between two of its frames the next output
 /// falls when it is not at 48 kHz (1/65536 of a frame).
-struct Stream { ring: ring::Ring, active: bool, pd: u32, frac: u32 }
+/// `start`: the tick the stream (re)opened, until its first take; 0 after.
+struct Stream { ring: ring::Ring, active: bool, pd: u32, frac: u32, start: u64 }
+
+/// A stream that has just opened waits this long (ms) for a whole period before
+/// Bell plays what part it has: a program's first write is often a fraction of a
+/// period, and playing it padded with silence puts a gap right after the start.
+/// A short sound that never fills a period still plays once this has passed.
+const START_HOLD_TICKS: u64 = 50;
 
 #[derive(Clone, Copy)]
 struct Note { hz: u32, frames: u32, volume: u16 }
@@ -435,7 +442,9 @@ impl Player {
             let step = crate::resample::step(rate);
             // Input a whole period needs: its frames at the program's rate, and one to blend.
             let need = if rate == crate::resample::OUT_RATE { PERIOD_FRAMES } else { ((PERIOD_FRAMES as u64 * step + st.frac as u64) >> 16) as usize + 2 };
-            if hold && have < need && r.load(ring::OPEN) != 0 { continue; }
+            let starting = st.start != 0 && sex_pdx::get_ticks().wrapping_sub(st.start) < START_HOLD_TICKS;
+            if (hold || starting) && have < need && r.load(ring::OPEN) != 0 { continue; }
+            st.start = 0;
             let n = have.min(PERIOD_FRAMES);
             // A muted program's sound is taken and counted as played, so its clock
             // runs on, but not heard.
@@ -776,6 +785,7 @@ pub fn stream(caller: u32) -> bool {
     let st = p.streams[k].as_mut().unwrap();
     if !st.active {
         st.active = true;
+        st.start = sex_pdx::get_ticks().max(1);
         played()[k] = caller;
         *last_played() = Some(k);
         sex_pdx::serial_record!("[bell.sound.stream.open] row={} caller={} written={} taken={}",
@@ -791,7 +801,7 @@ fn ring_of(p: &mut Player, caller: u32) -> Option<usize> {
     let k = ring::index_of(caller).filter(|k| *k < STREAMS)?;
     if p.streams[k].is_none() {
         match sex_pdx::sound_ring_bell(k) {
-            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false, pd: caller, frac: 0 }),
+            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false, pd: caller, frac: 0, start: 0 }),
             Err(e) => { sex_pdx::serial_record!("[bell.sound.stream.denied] row={} err={}", k, e); return None; }
         }
     }
