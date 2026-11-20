@@ -7,6 +7,7 @@
 
 mod hid;
 mod uac;
+mod thunderbolt;
 mod usb;
 mod xhci;
 
@@ -391,9 +392,13 @@ pub extern "C" fn _start() -> ! {
         },
         None => { serial_println!("[sexusb.irq] mode=none polling=1"); false }
     };
+    // Thunderbolt 4 / USB4: the firmware connection manager on Intel's NHI, if leased.
+    let mut bolt = thunderbolt::Thunderbolt::open();
+    serial_println!("[sexusb.thunderbolt] nhi={}", bolt.is_some() as u8);
     loop {
         if irq { let _ = sex_pdx::device::irq_take(); }
         let mut busy = false;
+        if let Some(b) = bolt.as_mut() { busy |= b.poll(); }
         for _ in 0..64 {
             let Some(e) = usb.x.event() else { break };
             usb.event(e);
@@ -414,6 +419,7 @@ pub extern "C" fn _start() -> ! {
             if m.type_id <= 1 { continue; }
             busy = true;
             if m.type_id == sex_pdx::power::OP_DEVICE_SLEEP && m.caller_pd == 0 {
+                if let Some(b) = bolt.as_mut() { b.sleep(m.arg0 == 1); }
                 let ports = usb.device_sleep(m.arg0 == 1);
                 serial_println!("[sexusb.sleep] asleep={} devices={} ports={}", m.arg0, usb.summary().slots, ports);
                 continue;

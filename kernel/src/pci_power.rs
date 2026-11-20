@@ -107,6 +107,12 @@ pub fn set_power(lease: &sex_pdx::device::Lease, table: u64, to: u64) -> u64 {
     if to == pm::D3HOT as u64 && table != 0 && pm::state(&mut hw, f) == Some(pm::D0) {
         for (i, w) in msix.iter_mut().enumerate().take(kept * 4) { *w = unsafe { ((table + i as u64 * 4) as *const u32).read_volatile() }; }
     }
+    // Thunderbolt NHI: GO2SX before it powers down, so a plug can wake the PC.
+    let thunderbolt = lease.class == sex_pcipm::nhi::CLASS;
+    if thunderbolt && to == pm::D3HOT as u64 && pm::state(&mut hw, f) == Some(pm::D0) {
+        let ms = sex_pcipm::nhi::go2sx(&mut hw, f);
+        serial_println!("[pci.power.tb.go2sx] {} done={} ms={}", f, ms.is_some() as u8, ms.unwrap_or(sex_pcipm::nhi::MAILBOX_MS));
+    }
     let result = pm::set_state(&mut hw, f, to as u8, &mut saved);
     match result {
         Ok(t) => {
@@ -119,6 +125,11 @@ pub fn set_power(lease: &sex_pdx::device::Lease, table: u64, to: u64) -> u64 {
             }
             serial_println!("[pci.power] {} id={:04x}:{:04x} from=d{} to=d{} no_soft_reset={} restored={} msix_kept={}",
                 f, lease.vendor, lease.device, t.from, t.to, t.no_soft_reset as u8, t.restored as u8, kept);
+            // Back in D0, its firmware boots again under force power.
+            if thunderbolt && t.to == pm::D0 {
+                let ms = sex_pcipm::nhi::power_up(&mut hw, f);
+                serial_println!("[pci.power.tb.fw_ready] {} ready={} ms={}", f, ms.is_some() as u8, ms.unwrap_or(sex_pcipm::nhi::FW_READY_MS));
+            }
             t.from as u64
         }
         Err(e) => {

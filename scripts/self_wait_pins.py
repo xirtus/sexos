@@ -127,6 +127,8 @@ PINS = (
 
     ('timed', 'servers/sexnet/src/main.rs', '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b'),  # first 32 timed returns logged, 2026-11-17
 
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master merge of #460 with the NIC interrupt change (same line as PR #482), 2026-11-20
+
     ('timed', 'servers/sexnet/src/main.rs', 'd994aeb0af740e6157d92744656943261954b99c6828795723c9070d4625ff34'),  # wired NIC interrupt: 10-tick quiet sleep while armed, no stall after a full burst (two-tick envelope unchanged), 2026-11-19
 
     ('timed', 'servers/sexusb/src/main.rs', '3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81'),
@@ -143,6 +145,11 @@ PINS = (
     ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master's Net as of 2026-11-20 (unpinned on master), pinned by Qupid #392
 
     ('timed', 'servers/sexusb/src/main.rs', '09b8a45c44bf3af5b7941823186b2ad09655ddf6fa57ba60bfbf215cabc3c667'),  # USB audio streaming merged with sleep suspend (Qupid #392), 2026-11-20
+    ('timed', 'servers/sexusb/src/main.rs', 'e78d6073dc41fe5b46b75e962e0ac3b5b9e7ab347bb9b95e5e21fed12a3f4e87'),  # Thunderbolt manager polled each pass, waits unchanged, 2026-11-19
+
+    ('timed', 'servers/sexusb/src/main.rs', '09a173d46a7f99edd8c810029e767552230e343f4b9ece7d69e161fe18d7ba5a'),  # Thunderbolt unload/GO2SX on the sleep notice, waits unchanged, 2026-11-20
+
+    ('timed', 'servers/sexusb/src/main.rs', '29fbd1f1d8d3cef6b20bb8920959aa1984650f57483afe0f20e787314c26576b'),  # USB audio merged with Thunderbolt (Qupid #392), 2026-11-20
 
     ('tree', '', '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5'),  # master after #407 + #408 + #422 combined, 2026-11-18
 
