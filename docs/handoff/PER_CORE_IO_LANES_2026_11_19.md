@@ -31,8 +31,8 @@ that runs there. No lock is shared between cores.
    - `OP_UNMASK` aims the vector at the unmasking task's core (direct MSI/MSI-X entries
      only; VMD-routed entries stay put). SexDrive and SexNet take their own interrupts
      on their own core: no IPI hop.
-   - `SYS_DEVICE OP_STEER` (86/6): aim one vector at any core.
-   - `SYS_DEVICE OP_BIND` (86/7): a vector signals a bit of an IPC v2 notification the
+   - `SYS_DEVICE OP_STEER` (86/7; 6 is device power): aim one vector at any core.
+   - `SYS_DEVICE OP_BIND` (86/8): a vector signals a bit of an IPC v2 notification the
      driver holds instead of waking the main task; each queue's worker waits on its own
      notification (`SYS_NOTIFY OP_NOTIFY_WAIT`). A destroyed notification falls back.
    - `SYS_PROGRAM_THREAD SPAWN_ON` (83/7): a driver service (a domain holding a device
