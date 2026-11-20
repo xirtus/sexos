@@ -324,6 +324,14 @@ impl CapabilityTable {
         id
     }
 
+    /// BOOT only: leave the next slot empty, keeping later slot numbers.
+    pub fn skip(&self) {
+        if self.is_sealed() {
+            panic!("CAP: Attempted to skip a slot in a sealed table");
+        }
+        self.next_slot.fetch_add(1, Ordering::SeqCst);
+    }
+
     /// BOOT only: place `data` in slot `id`, replacing what was there.
     pub fn insert_at(&self, id: u32, data: CapabilityData) {
         if self.is_sealed() {

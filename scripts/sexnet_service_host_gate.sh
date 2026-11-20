@@ -55,6 +55,9 @@ echo '[sexnet.ethernet.host] PASS scope=actual_fixed_queue_driver_with_explicit_
 rustc --edition=2021 --test "$ROOT_DIR/tests/sexnet_realtek.rs" -o "$TEST_DIR/realtek"
 "$TEST_DIR/realtek" --test-threads=1
 echo '[sexnet.realtek.host] PASS scope=actual_r8169_r8125_device_and_driver_with_width_aware_register_dma_clock_doubles_not_hardware'
+rustc --edition=2021 --test "$ROOT_DIR/tests/sexnet_irq_wait.rs" -o "$TEST_DIR/irq-wait"
+"$TEST_DIR/irq-wait" --test-threads=1
+echo '[sexnet.irq_wait.host] PASS scope=interrupt_armed_sleep_and_silent_fallback_bookkeeping'
 bash "$ROOT_DIR/scripts/sexnet_transport_host_gate.sh"
 
 bash "$ROOT_DIR/scripts/sexnet_jobs_host_gate.sh"

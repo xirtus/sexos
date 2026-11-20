@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Versioned editable Moan project, not a mixdown. PCM source IDs preserve shared
 //! clip sources, edits and effect configuration. DSP history/undo are not stored.
-use crate::{Session, MAX_FRAMES, MAX_TRACKS};
+use crate::{voice, Session, MAX_FRAMES, MAX_TRACKS};
 use alloc::{sync::Arc, vec::Vec};
 use moan_core::{
     effects::{Compressor, Equalizer, Reverb},
     Clip, Track, RATE,
 };
 pub const MAGIC: &[u8; 8] = b"MOANPRJ\0";
-pub const VERSION: u16 = 4;
+/// v5: v4 plus per-track voice generation provenance.
+pub const VERSION: u16 = 5;
 pub const V3_VERSION: u16 = 3;
 pub const MIDI_VERSION: u16 = 2;
 pub const V4_VERSION: u16 = 4;
@@ -159,8 +160,10 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
         || !session.rack.nodes.is_empty()
         || !session.muse_crate.is_empty();
 
-    let version = if has_v4 {
+    let version = if session.generated.iter().any(Option::is_some) {
         VERSION
+    } else if has_v4 {
+        V4_VERSION
     } else if session.master_volume != 100 {
         V3_VERSION
     } else if sources.iter().any(|source| source.midi_pattern().is_some()) {
@@ -177,7 +180,7 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
     w.u16(session.tracks.len() as u16)?;
     w.u16(session.selected as u16)?;
     // v1/v2 reserved this word and retain their exact unity encoding.
-    w.u16(if version >= 3 {
+    w.u16(if version >= V3_VERSION {
         session.master_volume
     } else {
         0
@@ -342,6 +345,25 @@ pub fn encode(session: &Session) -> Result<Vec<u8>, Error> {
             }
         }
     }
+    if version >= VERSION {
+        for index in 0..session.tracks.len() {
+            match session.generated.get(index).and_then(Option::as_ref) {
+                None => w.bytes(&[0])?,
+                Some(p) => {
+                    if p.job_id == 0 || p.asset_id == 0 || p.model_len == 0
+                        || p.model_len as usize > voice::MODEL_MAX || !(1..=2).contains(&p.source_channels)
+                        || !(8_000..=192_000).contains(&p.source_rate)
+                        || core::str::from_utf8(&p.model[..p.model_len as usize]).is_err() { return Err(Error::Metadata); }
+                    w.bytes(&[1])?;
+                    for value in [p.job_id, p.asset_id, p.seed] { w.bytes(&value.to_le_bytes())?; }
+                    w.bytes(&p.content_hash)?;
+                    w.bytes(&p.source_rate.to_le_bytes())?;
+                    w.bytes(&[p.source_channels, p.model_len])?;
+                    w.bytes(&p.model[..p.model_len as usize])?;
+                }
+            }
+        }
+    }
     let length = w.0.len();
     w.0[16..24].copy_from_slice(&(length as u64).to_le_bytes());
     let checksum = hash(&w.0);
@@ -379,7 +401,7 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
         return Err(Error::Header);
     }
     let version = r.u16()?;
-    if ![1, MIDI_VERSION, V3_VERSION, VERSION].contains(&version) {
+    if ![1, MIDI_VERSION, V3_VERSION, V4_VERSION, VERSION].contains(&version) {
         return Err(Error::Version);
     }
     r.zero()?;
@@ -394,7 +416,7 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
     let tracks = r.u16()? as usize;
     let selected = r.u16()? as usize;
     let master = r.u16()?;
-    let master_volume = if version >= 3 {
+    let master_volume = if version >= V3_VERSION {
         if master > 200 {
             return Err(Error::Metadata);
         }
@@ -703,7 +725,36 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
             muse_crate.push(take);
         }
     }
-    if r.at != bytes.len() {
+    let mut generated = Vec::new();
+    generated.try_reserve(tracks).map_err(|_| Error::Memory)?;
+    if version >= VERSION {
+        for _ in 0..tracks {
+            match r.bytes(1)?[0] {
+                0 => generated.push(None),
+                1 => {
+                    let job_id = u64::from_le_bytes(r.bytes(8)?.try_into().unwrap());
+                    let asset_id = u64::from_le_bytes(r.bytes(8)?.try_into().unwrap());
+                    let seed = u64::from_le_bytes(r.bytes(8)?.try_into().unwrap());
+                    let content_hash = r.bytes(32)?.try_into().unwrap();
+                    let source_rate = r.u32()? as u32;
+                    let source_channels = r.bytes(1)?[0];
+                    let model_len = r.bytes(1)?[0];
+                    if job_id == 0 || asset_id == 0 || model_len == 0
+                        || model_len as usize > voice::MODEL_MAX
+                        || !(8_000..=192_000).contains(&source_rate)
+                        || !(1..=2).contains(&source_channels) { return Err(Error::Metadata); }
+                    let model_bytes = r.bytes(model_len as usize)?;
+                    core::str::from_utf8(model_bytes).map_err(|_| Error::Metadata)?;
+                    let mut model = [0; voice::MODEL_MAX];
+                    model[..model_len as usize].copy_from_slice(model_bytes);
+                    generated.push(Some(voice::Provenance { job_id, asset_id, seed, content_hash,
+                        source_rate, source_channels, model, model_len }));
+                }
+                _ => return Err(Error::Metadata),
+            }
+        }
+    } else { generated.resize(tracks, None); }
+    if r.at != bytes.len() || used.iter().any(|used| !*used) {
         return Err(Error::Metadata);
     }
     // All structure is validated before PCM allocations or mutating any session.
@@ -785,5 +836,6 @@ pub fn decode(bytes: &[u8]) -> Result<Session, Error> {
     }
     session.rack = rack;
     session.muse_crate = muse_crate;
+    session.generated = generated;
     Ok(session)
 }

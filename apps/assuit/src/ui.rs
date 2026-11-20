@@ -36,7 +36,27 @@ pub struct Ui {
     find: Option<Prompt>,
     /// The Ctrl+Shift+S style list, while it is open: (id, name) and the highlighted row.
     picker: Option<(Vec<(String, String)>, usize)>,
+    /// The Save As or Go To prompt, while it is open.
+    ask: Option<Ask>,
+    /// The document came back with last time's unsaved changes: Esc throws them away until
+    /// the next edit.
+    recovered: bool,
+    /// When the document last changed without its changes being kept (ticks).
+    unkept: Option<u64>,
+    /// The page Go To asked for, to scroll to on the next draw.
+    scroll_to: Option<usize>,
 }
+
+/// A one-line prompt in the status line.
+enum Ask {
+    /// Ctrl+Shift+E: a file name; its extension picks the format.
+    SaveAs(String),
+    /// Ctrl+G: a page number.
+    GoTo(String),
+}
+
+/// Unsaved changes are copied aside after this long without a key (milliseconds).
+const KEEP_AFTER_MS: u64 = 15_000;
 
 /// Ctrl+F asks what to find; Ctrl+H also asks what to put in its place.
 struct Prompt {
@@ -65,6 +85,9 @@ mod code {
     pub const S: u8 = 0x1F;
     pub const F: u8 = 0x21;
     pub const H: u8 = 0x23;
+    pub const E: u8 = 0x12;
+    pub const G: u8 = 0x22;
+    pub const P: u8 = 0x19;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
 }
@@ -91,7 +114,7 @@ fn key_name(key: Key) -> Option<String> {
 
 impl Ui {
     pub fn new(book: Book, name: String) -> Ui {
-        Ui { book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None }
+        Ui { book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, recovered: false, unkept: None, scroll_to: None }
     }
 
     fn scale(&mut self, page: usize, width: i32) -> f32 {
@@ -135,6 +158,8 @@ impl Ui {
         let (w, h) = (width as i32, height as i32);
         let view_h = h - STATUS_H;
         self.place(w);
+        // Go To: the page's top at the top of the view.
+        if let Some(&(top, ..)) = self.scroll_to.take().and_then(|p| self.places.get(p)) { self.scroll = top - MARGIN; }
         let caret = self.book.caret();
         // Keep the caret on screen.
         if let Some(c) = caret {
@@ -195,7 +220,13 @@ impl Ui {
         canvas.fill(0, view_h, w, 1, LINE);
         let pages = self.places.len();
         let page = caret.map_or(0, |c| c.page);
-        let status = if let Some(p) = &self.find {
+        let status = if let Some(ask) = &self.ask {
+            let said = |hint: &str| if self.message.is_empty() { hint.to_string() } else { self.message.clone() };
+            match ask {
+                Ask::SaveAs(name) => format!("Save as: {name}_   {}", said("docx, odt, rtf, html, md, txt or pdf; Enter saves, Esc closes")),
+                Ask::GoTo(page) => format!("Go to page: {page}_   {}", said(&format!("1 to {pages}; Enter goes, Esc closes"))),
+            }
+        } else if let Some(p) = &self.find {
             match &p.with {
                 None => {
                     let said = if self.message.is_empty() { "Enter finds the next, Esc closes" } else { &self.message };
@@ -208,7 +239,7 @@ impl Ui {
                 }
             }
         } else if self.message.is_empty() {
-            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+F find  Ctrl+H replace  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
+            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
                 self.name, if self.book.dirty() { " (changed)" } else { "" }, page + 1, pages, self.book.paragraph_style(), self.book.words())
         } else {
             self.message.clone()
@@ -226,6 +257,9 @@ impl Ui {
     fn save(&mut self) {
         match self.book.save() {
             Ok(bytes) => {
+                self.recovered = false;
+                self.unkept = None;
+                self.name = self.book.path.rsplit('/').next().unwrap_or(&self.book.path).to_string();
                 sex_std::record(&format!("[assuit.saved] name={} bytes={bytes}", self.book.path));
                 self.message = format!("Saved {} ({bytes} bytes)", self.name);
             }
@@ -236,13 +270,104 @@ impl Ui {
         }
     }
 
+    /// Keeps unsaved changes aside (on close, and after a quiet moment), so a crash or a
+    /// closed window loses nothing: the next start opens them.
+    fn keep(&mut self) {
+        self.unkept = None;
+        if !self.book.dirty() { return; }
+        match self.book.write_recovery() {
+            Ok(()) => sex_std::record(&format!("[assuit.kept] name={}", crate::book::recovery_path(&self.book.path))),
+            Err(e) => sex_std::record(&format!("[assuit.keep-failed] {e}")),
+        }
+    }
+
+    /// Opens with last time's unsaved changes: says so, and Esc throws them away.
+    pub fn recovered(mut self) -> Ui {
+        self.recovered = true;
+        self.message = "Brought back the changes not saved last time: Ctrl+S keeps them, Esc throws them away".into();
+        self
+    }
+
+    /// Esc on a document that came back with unsaved changes: goes back to the saved file.
+    fn discard_recovered(&mut self) {
+        self.recovered = false;
+        self.book.forget_recovery();
+        let path = self.book.path.clone();
+        let opened = if std::fs::metadata(&path).is_ok() { Book::open(&path) } else { Ok(Book::blank(&path)) };
+        match opened {
+            Ok(book) => {
+                self.book = book;
+                self.scroll = 0;
+                self.invalidate();
+                sex_std::record(&format!("[assuit.discarded] name={path}"));
+                self.message = format!("Threw the kept changes away: {} is as last saved", self.name);
+            }
+            Err(e) => self.message = e,
+        }
+    }
+
+    /// A key while the Save As or Go To prompt is open.
+    fn ask_key(&mut self, key: Key) {
+        let Some(ask) = &mut self.ask else { return };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) => t };
+        match key.code {
+            code::ESC => { self.ask = None; self.message.clear(); return; }
+            code::BACKSPACE => { text.pop(); self.message.clear(); return; }
+            code::ENTER => {}
+            _ => {
+                if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) { text.push(ch); self.message.clear(); }
+                return;
+            }
+        }
+        let typed = text.trim().to_string();
+        if typed.is_empty() { return; }
+        if matches!(ask, Ask::GoTo(_)) {
+            let Ok(n) = typed.parse::<usize>() else { self.message = format!("{typed} is not a page number"); return };
+            self.ask = None;
+            let page = self.book.go_to_page(n);
+            self.scroll_to = Some(page);
+            sex_std::record(&format!("[assuit.goto] page={}", page + 1));
+            self.message = format!("Page {} of {}", page + 1, self.book.pages());
+            return;
+        }
+        match self.book.save_as(&typed) {
+            Ok((path, bytes)) => {
+                self.ask = None;
+                sex_std::record(&format!("[assuit.saved-as] name={path} bytes={bytes}"));
+                let short = path.rsplit('/').next().unwrap_or(&path).to_string();
+                if path == self.book.path { self.name = short.clone(); self.recovered = false; self.unkept = None; }
+                self.message = format!("Saved {short} ({bytes} bytes)");
+            }
+            Err(e) => self.message = e,
+        }
+    }
+
+    /// Writes every page as a PDF beside the document.
+    fn export_pdf(&mut self) {
+        match self.book.export_pdf() {
+            Ok((path, bytes)) => {
+                sex_std::record(&format!("[assuit.pdf] name={path} bytes={bytes}"));
+                self.message = format!("Wrote {} ({bytes} bytes)", path.rsplit('/').next().unwrap_or(&path));
+            }
+            Err(e) => {
+                sex_std::record(&format!("[assuit.pdf-failed] {e}"));
+                self.message = e;
+            }
+        }
+    }
+
     /// One key: Assuit's own (save, zoom), then WordCraft's shortcut, then typed text.
     fn key(&mut self, key: Key) {
+        if self.ask.is_some() { return self.ask_key(key); }
         if self.find.is_some() { return self.find_key(key); }
         if self.picker.is_some() { return self.picker_key(key); }
+        if self.recovered && key.code == code::ESC && !key.control { return self.discard_recovered(); }
         self.message.clear();
         if key.control {
             match (key.code, sex_app::typed(Key { control: false, ..key })) {
+                (code::E, _) if key.shift => { self.ask = Some(Ask::SaveAs(self.name.clone())); return; }
+                (code::G, _) if !key.shift => { self.ask = Some(Ask::GoTo(String::new())); return; }
+                (code::P, _) if !key.shift => return self.export_pdf(),
                 (code::S, _) if key.shift => {
                     let styles = self.book.styles();
                     let current = self.book.paragraph_style();
@@ -357,12 +482,24 @@ impl Ui {
     pub fn run(mut self, window: &mut sex_app::Window) {
         self.draw(window);
         loop {
-            match window.next() {
-                Event::Close => break,
+            let Some(event) = window.next_within(1000) else {
+                // A quiet moment after a change: keep the unsaved work safe.
+                if self.unkept.is_some_and(|t| sex_std::sex_pdx::get_ticks().saturating_sub(t) >= KEEP_AFTER_MS) { self.keep(); }
+                continue;
+            };
+            match event {
+                Event::Close => { self.keep(); break; }
                 Event::Resize { .. } => self.draw(window),
                 Event::Key(key) => {
                     let dirty = self.book.dirty();
+                    let edits = self.book.edits;
                     self.key(key);
+                    // An edit (typing, formatting, a style, undo): keep it soon, and the
+                    // brought-back changes become the user's own.
+                    if self.book.edits != edits && self.book.dirty() {
+                        self.unkept.get_or_insert(sex_std::sex_pdx::get_ticks());
+                        if key.code != code::ESC { self.recovered = false; }
+                    }
                     self.draw(window);
                     if self.book.dirty() != dirty || self.book.dirty() {
                         let text = self.book.text();

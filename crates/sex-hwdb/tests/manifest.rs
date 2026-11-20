@@ -14,7 +14,10 @@ fn x17_r1_parts_find_their_services() {
     assert_eq!(claim(id(0x8086, 0x43c8, 4, 3, 0x80)).map(|(m, e)| (m.service, e.lease)), Some((Service::Bell, Lease::Hda)));
     assert_eq!(claim(id(0x8086, 0x9a60, 3, 0, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Display, Lease::IntelDisplay)));
     assert_eq!(claim(id(0x8086, 0x3e9b, 3, 0, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Display, Lease::Display)));
-    assert_eq!(claim(id(0x10de, 0x249c, 3, 2, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Display, Lease::Display)));
+    // The RTX 3080 laptop (3D controller): to sexgpu-nv when the boot entry starts it,
+    // else to Display as identity only.
+    assert_eq!(claim(id(0x10de, 0x249c, 3, 2, 0)).map(|(m, e)| (m.service, e.lease, e.slot)), Some((Service::Gpu, Lease::NvidiaGpu, 16)));
+    assert_eq!(claim_present(id(0x10de, 0x249c, 3, 2, 0), |s| s != Service::Gpu).map(|(m, e)| (m.service, e.lease)), Some((Service::Display, Lease::Display)));
     // Killer AX1675x (AX210): Intel Wi-Fi goes to the network service beside the wired NIC.
     assert_eq!(claim(id(0x8086, 0x2725, 2, 0x80, 0)).map(|(m, e)| (m.service, e.lease, e.slot)), Some((Service::Net, Lease::Wifi, 22)));
 }
@@ -61,4 +64,16 @@ fn every_service_has_one_manifest() {
         assert!(ALL[i + 1..].iter().all(|o| o.service != m.service));
         assert_eq!(of(m.service), Some(m));
     }
+}
+
+#[test]
+fn the_nvidia_service_takes_only_nvidia_display_controllers() {
+    // RTX 3070 laptop as VGA (mux on the dGPU) and as 3D controller (Optimus).
+    for d in [id(0x10de, 0x249d, 3, 0, 0), id(0x10de, 0x249d, 3, 2, 0)] {
+        assert_eq!(claim(d).map(|(m, e)| (m.service, e.lease)), Some((Service::Gpu, Lease::NvidiaGpu)));
+    }
+    // Its HDMI audio function and an Intel GPU are not the GPU service's.
+    assert_eq!(claim(id(0x10de, 0x228b, 4, 3, 0)).map(|(m, _)| m.service), Some(Service::Bell));
+    assert_eq!(claim(id(0x8086, 0x9a60, 3, 0, 0)).map(|(m, _)| m.service), Some(Service::Display));
+    assert_eq!(of(Service::Gpu).map(|m| m.max_devices), Some(1));
 }
