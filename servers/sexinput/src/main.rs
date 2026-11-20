@@ -1291,7 +1291,9 @@ pub extern "C" fn _start() -> ! {
             pdx_call(SLOT_SHELL, OP_AUTODEMO_TICK, 0, 0, 0);
         }
 
-        // The laptop touchpad, when one was found.
+        // The laptop touchpad, when one was found. Its interrupt bit is taken even when
+        // the outboxes are full, so it cannot keep the wait below from sleeping.
+        touchpad::take_interrupt();
         if pointer_outbox.available() > 0 && keyboard_outbox.available() >= 20 {
             touchpad::poll(sex_pdx::get_ticks(), |o| match o {
                 touchpad::Out::Pointer(words) => { let _ = input_arrival.pointer(&mut pointer_outbox, &words); }
@@ -1310,7 +1312,7 @@ pub extern "C" fn _start() -> ! {
         // boot's timed proofs are over and nothing waits to go to Shell, sleep long;
         // the deadline only bounds a lost wake.
         let idle=tick>IDLE_AFTER_TICKS&&keyboard_outbox.len==0&&pointer_outbox.len==0;
-        // A touchpad is polled: never sleep past its next read.
+        // Never sleep past the touchpad's next timed read; its line wakes this task itself.
         let _=sex_pdx::sys_wait_self_ticks(if idle {touchpad::wait_bound(sex_pdx::get_ticks(),IDLE_WAIT_TICKS)} else {1});
     }
 }

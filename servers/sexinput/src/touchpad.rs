@@ -8,9 +8,13 @@
 //! from `sex-i2c-dw`. Frames become ordinary pointer events (motion, buttons, wheel),
 //! three-finger swipes become Alt+Tab and pinches Ctrl+= / Ctrl+-.
 //!
-//! The pad is polled: ~125 reads a second while a finger is down, ~20 when idle. Its
-//! GPIO interrupt (`gpio_pin`) is the next step.
+//! When the ACPI service names the pad's I/O APIC line (`Found::irq`), the pad is read
+//! when that line fires and not otherwise; a level line comes back masked by the kernel
+//! and is unmasked once the read quieted the pad. Without a line, or once the line
+//! proves stuck or silent (`sex_hid_touch::pace`), the pad is polled: ~125 reads a
+//! second while a finger is down, ~20 when idle.
 use sex_hid_touch::gesture::{Config, Event, Recognizer};
+use sex_hid_touch::pace::{Next, Pace, Read};
 use sex_hid_touch::session::{Bus, Touchpad, MAX_REPORT_DESCRIPTOR};
 use sex_i2c_dw::{timing, Controller, Counts, Regs, Speed};
 use sex_pdx::memory_region as m;
@@ -46,21 +50,27 @@ struct Pad {
     address: u16,
     tp: Touchpad,
     rec: Recognizer,
+    pace: Pace,
+    /// The line's pending bit while it is in use.
+    line_bit: Option<u8>,
+    /// The line fired and the pad has not been read since.
+    fired: bool,
+    /// An edge drain wants another read; it waits for the next turn, where Input checks
+    /// its outboxes have room again.
+    again: bool,
     next_poll: u64,
-    last_touch: u64,
     failures: u32,
     last_error: Option<sex_i2c_dw::Error>,
-    /// Suspended to idle: the pad is in HID `SET_POWER` sleep and is not read.
+    /// Suspended to idle: the pad is in HID `SET_POWER` sleep, its line masked, not read.
     asleep: bool,
 }
 
 static mut PAD: Option<Pad> = None;
 static mut SCRATCH: [u8; MAX_REPORT_DESCRIPTOR] = [0; MAX_REPORT_DESCRIPTOR];
 
-const ACTIVE_TICKS: u64 = 8;
-const IDLE_TICKS: u64 = 50;
-const IDLE_AFTER: u64 = 2000;
 const GIVE_UP_AFTER: u32 = 64;
+/// Reads that may empty a pad before its line is armed.
+const DRAIN_READS: u32 = 16;
 
 fn slot_of(f: &Found) -> Option<(u64, sex_pdx::device::Lease)> {
     let base = sex_pdx::device::EXTRA_SLOT_BASE;
@@ -100,7 +110,34 @@ fn open(f: &Found) -> Result<Pad, &'static str> {
     serial_println!("[sexinput.touchpad.ready] vendor={:#06x} product={:#06x} extent={}x{} fingers={} touch_mode={} report={:?} input_len={}",
         tp.hid.vendor_id, tp.hid.product_id, tp.extent.0, tp.extent.1, tp.layout.fingers, tp.touch_mode as u8, tp.layout.touch_report, tp.input_len());
     let rec = Recognizer::new(Config::for_extent(tp.extent.0));
-    Ok(Pad { ctrl, address: f.address, tp, rec, next_poll: 0, last_touch: 0, failures: 0, last_error: None, asleep: false })
+    let mut pad = Pad { ctrl, address: f.address, tp, rec, pace: Pace::polling(), line_bit: None, fired: false, again: false, next_poll: 0, failures: 0, last_error: None, asleep: false };
+    if let Some(irq) = f.irq { arm(&mut pad, irq); } else { serial_println!("[sexinput.touchpad.mode] mode=poll reason=no_line"); }
+    Ok(pad)
+}
+
+/// Empties the pad (its reset answer and anything since), then binds and unmasks its line.
+fn arm(p: &mut Pad, irq: sex_pdx::touchpad::Irq) {
+    use sex_pdx::device as d;
+    let mut bus = OnBus { c: &mut p.ctrl, address: p.address, last_error: &mut p.last_error };
+    let mut emptied = false;
+    for _ in 0..DRAIN_READS { if p.tp.poll(&mut bus).is_ok() && p.tp.last_empty { emptied = true; break; } }
+    let bound = d::line_bind(0, irq.gsi, irq.edge, irq.active_low).and_then(|bit| d::line_mask(0, false).map(|()| bit));
+    match bound {
+        Ok(bit) => {
+            p.line_bit = Some(bit);
+            p.pace = Pace::line(irq.edge, sex_pdx::get_ticks());
+            serial_println!("[sexinput.touchpad.mode] mode=interrupt gsi={} edge={} active_low={} bit={} emptied={}", irq.gsi, irq.edge as u8, irq.active_low as u8, bit, emptied as u8);
+        }
+        Err(e) => serial_println!("[sexinput.touchpad.mode] mode=poll reason=line_refused gsi={} status={:#x}", irq.gsi, e),
+    }
+}
+
+/// Takes the line's pending bit, so an interrupt that arrives while Input cannot read
+/// (its outboxes are full) does not keep waking it; the pad is read on the next `poll`.
+pub fn take_interrupt() {
+    let Some(p) = (unsafe { (*core::ptr::addr_of_mut!(PAD)).as_mut() }) else { return };
+    let Some(bit) = p.line_bit else { return };
+    if sex_pdx::device::irq_take() & 1 << bit != 0 { p.fired = true; }
 }
 
 /// The ACPI service's word: bring that touchpad up (once).
@@ -137,50 +174,75 @@ fn translate(e: Event) -> Option<Out> {
     })
 }
 
-/// Suspend to idle (the kernel's `OP_DEVICE_SLEEP`): the pad sleeps and is not read
-/// until the machine wakes; waking it costs one `SET_POWER`.
+/// Suspend to idle (the kernel's `OP_DEVICE_SLEEP`): the pad sleeps, its line is masked
+/// and it is not read until the machine wakes; waking costs one `SET_POWER` and a read.
 pub fn device_sleep(asleep: bool, now: u64) {
     let Some(p) = (unsafe { (*core::ptr::addr_of_mut!(PAD)).as_mut() }) else { return };
     if p.asleep == asleep { return; }
+    if p.line_bit.is_some() { let _ = sex_pdx::device::line_mask(0, asleep); }
     let mut bus = OnBus { c: &mut p.ctrl, address: p.address, last_error: &mut p.last_error };
     let ok = if asleep { p.tp.sleep(&mut bus) } else { p.tp.wake(&mut bus) };
     p.asleep = asleep;
-    // Asleep: no read is due, so Input waits its whole idle bound.
+    // Asleep: no read is due, so Input waits its whole idle bound. Awake: read once at once.
     p.next_poll = if asleep { u64::MAX } else { now };
+    p.again = !asleep;
     serial_println!("[sexinput.touchpad.power] asleep={} ok={}", asleep as u8, ok as u8);
 }
 
-/// One poll when due. Calls `out` for each resulting event.
+/// Reads the pad when its line fired or a timed read is due. Calls `out` for each
+/// resulting event.
 pub fn poll(now: u64, mut out: impl FnMut(Out)) {
+    take_interrupt();
     let Some(p) = (unsafe { (*core::ptr::addr_of_mut!(PAD)).as_mut() }) else { return };
-    if p.asleep || now < p.next_poll { return; }
-    let mut bus = OnBus { c: &mut p.ctrl, address: p.address, last_error: &mut p.last_error };
-    match p.tp.poll(&mut bus) {
-        Ok(Some(frame)) => {
-            p.failures = 0;
-            if frame.fingers() > 0 || frame.button { p.last_touch = now; }
-            p.rec.feed(&frame, now, |e| {
-                if !matches!(e, Event::Move(..)) { sex_pdx::serial_record!("[sexinput.touchpad.event] {:?}", e); }
-                if let Some(o) = translate(e) { out(o); }
-            });
-        }
-        Ok(None) => p.failures = 0,
-        Err(()) => {
-            p.failures += 1;
-            if p.failures == 1 || p.failures == GIVE_UP_AFTER {
-                serial_println!("[sexinput.touchpad.read.fail] count={} bus={:?}", p.failures, p.last_error);
+    if p.asleep { p.fired = false; return; }
+    let fired = core::mem::take(&mut p.fired);
+    p.next_poll = p.pace.next_read();
+    if !core::mem::take(&mut p.again) && !p.pace.due(now, fired) { return; }
+    {
+        let repeats = p.tp.repeats;
+        let mut bus = OnBus { c: &mut p.ctrl, address: p.address, last_error: &mut p.last_error };
+        let read = match p.tp.poll(&mut bus) {
+            Ok(Some(frame)) => {
+                p.failures = 0;
+                p.rec.feed(&frame, now, |e| {
+                    if !matches!(e, Event::Move(..)) { sex_pdx::serial_record!("[sexinput.touchpad.event] {:?}", e); }
+                    if let Some(o) = translate(e) { out(o); }
+                });
+                Read::Report { touch: frame.fingers() > 0 || frame.button }
             }
-            if p.failures >= GIVE_UP_AFTER {
-                serial_println!("[sexinput.touchpad.stopped] reports={}", p.tp.reports);
-                unsafe { *core::ptr::addr_of_mut!(PAD) = None; }
-                return;
+            // A pad that repeats its last report when idle has nothing new: as good as empty,
+            // so idle check reads never count against the line.
+            Ok(None) => { p.failures = 0; if p.tp.last_empty || p.tp.repeats != repeats { Read::Empty } else { Read::Report { touch: false } } }
+            Err(()) => {
+                p.failures += 1;
+                if p.failures == 1 || p.failures == GIVE_UP_AFTER {
+                    serial_println!("[sexinput.touchpad.read.fail] count={} bus={:?}", p.failures, p.last_error);
+                }
+                if p.failures >= GIVE_UP_AFTER {
+                    serial_println!("[sexinput.touchpad.stopped] reports={} interrupts={}", p.tp.reports, p.pace.interrupts);
+                    if p.line_bit.is_some() { let _ = sex_pdx::device::line_mask(0, true); }
+                    unsafe { *core::ptr::addr_of_mut!(PAD) = None; }
+                    return;
+                }
+                Read::Failed
             }
+        };
+        match p.pace.after(now, read) {
+            Next::Again => { p.again = true; p.next_poll = now; return; }
+            Next::Unmask => { let _ = sex_pdx::device::line_mask(0, false); }
+            Next::Fallback(why) => {
+                let _ = sex_pdx::device::line_mask(0, true);
+                p.line_bit = None;
+                serial_println!("[sexinput.touchpad.mode] mode=poll reason={} interrupts={} reports={}", why, p.pace.interrupts, p.tp.reports);
+            }
+            Next::Done => {}
         }
     }
-    p.next_poll = now + if now.saturating_sub(p.last_touch) < IDLE_AFTER { ACTIVE_TICKS } else { IDLE_TICKS };
+    p.next_poll = p.pace.next_read();
 }
 
-/// How long Input may sleep: `bound`, or until the touchpad's next read is due.
+/// How long Input may sleep: `bound`, or until the touchpad's next timed read (a poll,
+/// or the line's check read). The line's interrupt wakes Input by itself.
 pub fn wait_bound(now: u64, bound: u64) -> u64 {
     match unsafe { (*core::ptr::addr_of!(PAD)).as_ref() } {
         Some(p) => p.next_poll.saturating_sub(now).clamp(1, bound.max(1)),
