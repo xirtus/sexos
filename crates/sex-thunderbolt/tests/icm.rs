@@ -128,8 +128,9 @@ impl Nhi for Fake {
     fn read(&mut self, r: u32) -> u32 { self.reg(r) }
     fn write(&mut self, r: u32, v: u32) {
         self.regs.insert(r, v);
-        if r == TX_RING_BASE + 8 { self.transmit(); }
-        if r == RX_RING_BASE + 8 { self.deliver(); }
+        // A stopped ring (base cleared) carries nothing.
+        if r == TX_RING_BASE + 8 && self.reg(TX_RING_BASE) != 0 { self.transmit(); }
+        if r == RX_RING_BASE + 8 && self.reg(RX_RING_BASE) != 0 { self.deliver(); }
     }
     fn load(&self, at: u64, out: &mut [u8]) { out.copy_from_slice(&self.mem[at as usize..at as usize + out.len()]); }
     fn store(&mut self, at: u64, b: &[u8]) { self.mem[at as usize..at as usize + b.len()].copy_from_slice(b); }
@@ -346,4 +347,36 @@ fn no_firmware_or_no_controller() {
     f.regs.insert(FW_STS, u32::MAX);
     let mut m = Manager::new(Layout::control(BUS), 0);
     assert_eq!(run(&mut m, &mut f, 0), vec![Event::Failed(Failure::Gone)]);
+}
+
+#[test]
+fn sleep_unloads_then_a_new_manager_says_driver_ready_again() {
+    use sex_thunderbolt::mailbox::{self, State};
+    let (mut m, mut f) = ready();
+    f.connected(1, 0x01, 0x0001, 1);
+    run(&mut m, &mut f, 2000);
+    assert_eq!(m.count(), 1);
+    let sent = f.sent.len();
+    m.unload(&mut f);
+    assert_eq!(f.sent.len(), sent, "nothing more on the ring");
+    assert_eq!(f.reg(TX_OPTIONS_BASE) & RING_FLAG_ENABLE, 0);
+    assert_eq!(f.reg(RX_OPTIONS_BASE) & RING_FLAG_ENABLE, 0);
+    assert_eq!(f.reg(INMAIL_CMD), INMAIL_OP_REQUEST | mailbox::DRV_UNLOADS as u32);
+    assert_eq!(mailbox::state(&mut f), State::Busy);
+    assert_eq!(m.count(), 0, "devices forgotten until the firmware reports them again");
+    f.regs.insert(INMAIL_CMD, mailbox::DRV_UNLOADS as u32);
+    assert_eq!(mailbox::state(&mut f), State::Done);
+    f.regs.insert(INMAIL_CMD, INMAIL_ERROR);
+    assert_eq!(mailbox::state(&mut f), State::Error);
+    // Posting clears a stale error and the old command.
+    mailbox::post(&mut f, 0x23, 5);
+    assert_eq!((f.reg(INMAIL_DATA), f.reg(INMAIL_CMD)), (5, INMAIL_OP_REQUEST | 0x23));
+    // Awake: the rings start from slot 0 and DRIVER_READY goes out again.
+    f.tx_seen = 0;
+    f.rx_next = 0;
+    let mut m = Manager::new(Layout::control(BUS), 10_000);
+    run(&mut m, &mut f, 10_000);
+    run(&mut m, &mut f, 11_000);
+    assert_eq!(m.phase, Phase::Ready);
+    assert_eq!(f.sent[sent].1[0] as u8, icm::DRIVER_READY);
 }

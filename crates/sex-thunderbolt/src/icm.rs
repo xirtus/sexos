@@ -264,6 +264,18 @@ impl Manager {
         self.root_tries += 1;
     }
 
+    /// The host is going to sleep (Linux `icm_suspend`): rings stopped and DRV_UNLOADS
+    /// posted; poll [`crate::mailbox::state`] for the answer. The devices are
+    /// forgotten: after waking, a new manager says DRIVER_READY and the firmware
+    /// reports what is still plugged in.
+    pub fn unload(&mut self, n: &mut impl Nhi) {
+        if self.tx.running { self.tx.stop(n); }
+        if self.rx.running { self.rx.stop(n); }
+        self.request = None;
+        self.devices = [None; MAX_DEVICES];
+        crate::mailbox::post(n, crate::mailbox::DRV_UNLOADS, 0);
+    }
+
     /// Runs the manager: firmware wait, rings, driver ready, root router, then
     /// events and approvals. `now` in microseconds.
     pub fn poll(&mut self, n: &mut impl Nhi, now: u64, mut events: impl FnMut(Event)) {

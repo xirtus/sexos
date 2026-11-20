@@ -127,6 +127,8 @@ PINS = (
 
     ('timed', 'servers/sexusb/src/main.rs', 'e78d6073dc41fe5b46b75e962e0ac3b5b9e7ab347bb9b95e5e21fed12a3f4e87'),  # Thunderbolt manager polled each pass, waits unchanged, 2026-11-19
 
+    ('timed', 'servers/sexusb/src/main.rs', '09a173d46a7f99edd8c810029e767552230e343f4b9ece7d69e161fe18d7ba5a'),  # Thunderbolt unload/GO2SX on the sleep notice, waits unchanged, 2026-11-20
+
     ('tree', '', '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5'),  # master after #407 + #408 + #422 combined, 2026-11-18
 
     ('tree', '', 'dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8b114a8d2c6fb2'),  # XSAVE + AVX (stream 5), 2026-11-18

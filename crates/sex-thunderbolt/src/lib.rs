@@ -16,6 +16,7 @@
 
 pub mod frame;
 pub mod icm;
+pub mod mailbox;
 pub mod regs;
 pub mod ring;
 

@@ -409,6 +409,7 @@ pub extern "C" fn _start() -> ! {
             if m.type_id <= 1 { continue; }
             busy = true;
             if m.type_id == sex_pdx::power::OP_DEVICE_SLEEP && m.caller_pd == 0 {
+                if let Some(b) = bolt.as_mut() { b.sleep(m.arg0 == 1); }
                 let ports = usb.device_sleep(m.arg0 == 1);
                 serial_println!("[sexusb.sleep] asleep={} devices={} ports={}", m.arg0, usb.summary().slots, ports);
                 continue;

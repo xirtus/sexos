@@ -21,6 +21,10 @@ pub const RESET: u32 = 0x39898;
 pub const INMAIL_DATA: u32 = 0x39900;
 pub const INMAIL_CMD: u32 = 0x39904;
 pub const OUTMAIL_CMD: u32 = 0x3990c;
+/// INMAIL_CMD: command (7:0), the firmware's error flag (30), request pending (31).
+pub const INMAIL_CMD_MASK: u32 = 0xff;
+pub const INMAIL_ERROR: u32 = 1 << 30;
+pub const INMAIL_OP_REQUEST: u32 = 1 << 31;
 /// Firmware status: the ICM is enabled (bit 0) and has checked its NVM (bit 31).
 pub const FW_STS: u32 = 0x39944;
 pub const FW_STS_ICM_EN: u32 = 1 << 0;

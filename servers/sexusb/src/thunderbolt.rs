@@ -12,6 +12,7 @@ use sex_pdx::memory_region::{DMA_ADDRESS, QUERY_VIEW, READ, WRITE};
 use sex_pdx::pci_command as c;
 use sex_pdx::serial_record as log;
 use sex_thunderbolt::icm::{Event, Manager, Phase};
+use sex_thunderbolt::mailbox::{self, State};
 use sex_thunderbolt::ring::Layout;
 use sex_thunderbolt::{regs, Nhi};
 
@@ -45,7 +46,7 @@ impl Nhi for Hardware {
     }
 }
 
-pub struct Thunderbolt { hw: Hardware, manager: Manager, phase: Phase }
+pub struct Thunderbolt { hw: Hardware, manager: Manager, phase: Phase, asleep: bool }
 
 fn now_us() -> u64 { sex_pdx::get_ticks() * 1000 }
 
@@ -81,11 +82,39 @@ impl Thunderbolt {
         let mut hw = Hardware { registers: bar.virtual_address, length: bar.length, pool: pool.virtual_address, pool_length: pool.length };
         let status = hw.read(regs::FW_STS);
         log!("[tb.prepared] bar_bytes={} pool={} bus={:#x} fw_sts={:#x} caps={:#x}", bar.length, pool.length, bus, status, hw.read(regs::CAPS));
-        Some(Thunderbolt { hw, manager: Manager::new(layout, now_us()), phase: Phase::Firmware })
+        Some(Thunderbolt { hw, manager: Manager::new(layout, now_us()), phase: Phase::Firmware, asleep: false })
+    }
+
+    /// The desktop is going to sleep (true) or woke. Going down: the firmware hears
+    /// the driver unload, then BOOT sends the link controller GO2SX (wake on plug)
+    /// and puts the NHI in D3hot. Coming up: D0, BOOT raises force power and waits
+    /// for the firmware, and a new manager says DRIVER_READY; the firmware reports
+    /// again whatever is still plugged in.
+    pub fn sleep(&mut self, asleep: bool) {
+        if asleep == self.asleep { return; }
+        self.asleep = asleep;
+        if asleep {
+            self.manager.unload(&mut self.hw);
+            let start = now_us();
+            let unload = loop {
+                match mailbox::state(&mut self.hw) {
+                    State::Busy if now_us().saturating_sub(start) < mailbox::TIMEOUT_US => core::hint::spin_loop(),
+                    s => break s,
+                }
+            };
+            let power = sex_pdx::device::set_power(c::SLOT_THUNDERBOLT, sex_pdx::device::D3HOT);
+            log!("[tb.sleep] unload={:?} ms={} d3hot={} devices_forgotten=1", unload, (now_us() - start) / 1000, power.is_ok() as u8);
+        } else {
+            let power = sex_pdx::device::set_power(c::SLOT_THUNDERBOLT, sex_pdx::device::D0);
+            self.manager = Manager::new(self.manager.layout, now_us());
+            self.phase = Phase::Firmware;
+            log!("[tb.wake] d0={} from=d{} fw_sts={:#x}", power.is_ok() as u8, power.unwrap_or(9), self.hw.read(regs::FW_STS));
+        }
     }
 
     /// Runs the connection manager once; true if something happened.
     pub fn poll(&mut self) -> bool {
+        if self.asleep { return false; }
         let before = (self.manager.frames_in, self.manager.frames_out);
         let manager = &mut self.manager;
         manager.poll(&mut self.hw, now_us(), |e| match e {

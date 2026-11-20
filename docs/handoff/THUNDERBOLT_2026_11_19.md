@@ -59,7 +59,7 @@ frame's CRC and descriptor, answers like the ICM and injects plug events
 
 - BOOT's USB manifest claims Intel devices of class 0c0340 (`Lease::Thunderbolt`)
   for SexUSB at slot 29: a BAR0 view of the whole 256 KiB (the firmware status
-  word sits at 0x39944, past the usual 64 KiB cap; `Kind::max_view`), the memory
+  word sits at 0x39944, past the usual 64 KiB cap; `Kind::view_max`), the memory
   and bus-master command bits, and a 64 KiB DMA pool at slot 30 (region 0x4600).
 - At lease time BOOT raises force power in VS_CAP_22 (DMA delay 0x22), since
   drivers never see config space, and logs `[kernel.pci.tb.force_power] fw_ready=`.
@@ -76,6 +76,23 @@ ABI: new capability slots 29/30 in SexUSB and the region id 0x4600
 
 x17 check: boot with a dock or USB-C monitor on the Thunderbolt port and read the
 `[tb.*]` lines (`[tb.phase] Ready`, then one `[tb.device.connected]` per router).
+
+## Stage T1c: sleep and wake
+
+On the kernel's sleep notice (`sex_pdx::power::OP_DEVICE_SLEEP`), going down:
+
+1. SexUSB stops ring 0 and posts DRV_UNLOADS (0x07) on the NHI's inbound mailbox
+   (`sex_thunderbolt::mailbox`, Linux `icm_suspend`), waits up to 500 ms for the
+   firmware, and forgets its devices;
+2. it asks for D3hot (`sex_pdx::device::set_power`); BOOT first sends the link
+   controller GO2SX through VS_CAP_19 and waits for VS_CAP_18 DONE
+   (`sex_pcipm::nhi`, Linux `icl_nhi_suspend_noirq`), so a plug wakes the PC.
+
+Coming up, D0 is asked for; BOOT raises force power again and waits for FW_READY,
+and SexUSB starts a new manager (DRIVER_READY); the firmware reports what is still
+plugged in. Logs: `[tb.sleep] unload= d3hot=`, `[pci.power.tb.go2sx] done= ms=`,
+`[pci.power.tb.fw_ready] ready= ms=`, `[tb.wake] d0= fw_sts=`. Linux has no
+GO2SX_EXIT; wake is force power alone.
 
 ## Next
 
