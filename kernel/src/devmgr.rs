@@ -85,7 +85,8 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             Lease::NvidiaGpu => class_lease(&dev, crate::device_lease::Kind::NvidiaGpu, pd, slot, first),
             Lease::Virtio => virtio(&dev, pd, slot, first),
             Lease::Display => display_lease(&dev, pd),
-            Lease::IntelDisplay => intel_display_lease(&dev, pd, slot),
+            Lease::IntelDisplay => display_registers_lease(&dev, pd, slot, 0, sex_pdx::display_frames::INTEL_REGISTERS),
+            Lease::AmdDisplay => display_registers_lease(&dev, pd, slot, sex_pdx::display_frames::AMD_REGISTER_BAR, sex_pdx::display_frames::AMD_REGISTERS),
         };
         if !leased { continue; }
         held[index] += 1;
@@ -194,19 +195,19 @@ fn display_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain) -> boo
     true
 }
 
-/// Intel display engine: a read/write view of its display registers so Display
-/// can read what firmware lit and talk to the panel over AUX. No command grant
-/// (firmware left memory decode on) and no DMA pool.
-fn intel_display_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64) -> bool {
-    let Some(view) = crate::boot_memory::intel_display_bar(pd, dev, slot) else {
-        serial_println!("[kernel.cap.display.skip] device={:04x} reason=bar0", dev.device_id); return false;
+/// Intel or AMD display engine: a read/write view of its display registers so
+/// Display can read what firmware lit and talk to the panel over AUX. No command
+/// grant (firmware left memory decode on) and no DMA pool.
+fn display_registers_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64, bar: u8, length: u64) -> bool {
+    let Some(view) = crate::boot_memory::display_register_bar(pd, dev, slot, bar, length) else {
+        serial_println!("[kernel.cap.display.skip] vendor={:04x} device={:04x} reason=bar{}", dev.vendor_id, dev.device_id, bar); return false;
     };
     pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
         bar0_view: Some(view), command: None, virtio: None, class: 0x03_00_00 | dev.prog_if as u32, window: (0, view.length as u32),
     }));
-    serial_println!("[kernel.cap.display.grant] pd={} slot={} device={:04x} bytes={}", pd.id, slot, dev.device_id, view.length);
-    crate::boot_memory::intel_scanout(pd, dev);
+    serial_println!("[kernel.cap.display.grant] pd={} slot={} vendor={:04x} device={:04x} bar={} bytes={}", pd.id, slot, dev.vendor_id, dev.device_id, bar, view.length);
+    if dev.vendor_id == 0x8086 { crate::boot_memory::intel_scanout(pd, dev); }
     true
 }
 

@@ -54,6 +54,8 @@ mod ipc{
 mod capabilities{pub mod engine{pub struct CapEngine;impl CapEngine{pub fn verify_signal_rights(_pd:&super::super::Domain,_cap:u64)->bool{false}}}}
 mod scheduler{
  pub struct Task;
+ // An answer's wake (handoff and pair affinity in the kernel) is a plain wake here.
+ pub fn wake_answer(task:*mut Task){unpark_thread(task)}
  pub fn unpark_thread(task:*mut Task){
   let pd=unsafe{&*super::TARGET.load(super::Ordering::Acquire)};
   assert_eq!(task,pd.main_task.load(super::Ordering::Acquire));
