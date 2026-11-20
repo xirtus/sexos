@@ -10,17 +10,22 @@
 //! - [`usage`]: a disk-usage tree laid out as a squarified treemap and as sunburst rings.
 //! - [`tags`]: tags, ratings, colour labels and comments; smart folders; recent files; view memory.
 //! - [`compare`]: two folder trees side by side, sync plans, and `.sha256` sum files.
+//! - [`actions`]: declarative custom context actions and Collar capability grant planning.
+//! - [`journal`]: transactional file operation undo/redo journal and transfer progress state.
 //!
 //! Paths and names are bytes (`Vec<u8>`), as Loom keeps them; `/` separates path parts.
 //! Times are whole seconds since 1970-01-01 UTC.
 #![cfg_attr(not(test), no_std)]
+#![forbid(unsafe_code)]
 extern crate alloc;
 
+pub mod actions;
 pub mod compare;
 pub mod date;
 pub mod dupes;
 pub mod glob;
 pub mod hash;
+pub mod journal;
 pub mod rename;
 pub mod tags;
 mod text;

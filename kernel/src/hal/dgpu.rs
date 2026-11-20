@@ -173,6 +173,7 @@ pub fn init(nvidia_driven: bool) {
         if nvidia_driven && d.vendor == 0x10DE {
             serial_println!("[gpu.power] at={} name=\"{}\" action=keep reason=driver service=sexgpu-nv", gpu, name); continue;
         }
+        if crate::safe_start() { serial_println!("[gpu.power] at={} action=keep reason=safe_start", gpu); continue; }
         let port = *chain.last().unwrap();
         if let Some(pa) = fb.filter(|pa| bridge_forwards(port, *pa)) {
             serial_println!("[gpu.power] at={} action=keep reason=boot_framebuffer fb={:#x}", gpu, pa); continue;

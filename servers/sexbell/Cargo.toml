@@ -8,3 +8,7 @@ sex-pdx = { path = "../../crates/sex-pdx" }
 linked_list_allocator = "0.10.5"
 virtio-drivers = { version = "0.13.0", default-features = false, features = ["alloc"] }
 zerocopy = { version = "0.8.40", default-features = false }
+
+# fuzz/drivers builds hda.rs against a device model under cfg(device_model).
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(device_model)"] }

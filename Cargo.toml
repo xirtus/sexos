@@ -43,6 +43,7 @@ members = [
     "apps/monitor",
     "apps/fputest",
     "apps/avxtest",
+    "apps/mediabench",
     "apps/dragtest",
     "apps/drag",
     "crates/drag-vmm",
@@ -207,6 +208,13 @@ members = [
     "apps/splicy-probe",
     "crates/polyamour-sdk",
     "crates/polyamour-wasm",
+    "crates/sex-color",
+    "crates/cabaret-core",
+    "crates/cabaret-proto",
+    "crates/cabaret-plugins",
+    "crates/filigree-core",
+    "apps/filigree",
+    "apps/cabaret",
     "crates/sex-gate",
 ]
 [workspace.package]

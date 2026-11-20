@@ -6,7 +6,9 @@
 //! and the controller's `_ADR`, `FMCN`/`SSCN` give its PCI function and clock counts.
 //! The ACPI service reads those and sends one [`Found`] to Input, which holds the
 //! controller's register lease (BOOT leases every Intel Serial IO I2C function to
-//! Input, at [`CONTROLLER_SLOT`] and then the extra device slots).
+//! Input, at [`CONTROLLER_SLOT`] and then the extra device slots). When the pad's
+//! interrupt reaches the I/O APIC directly, [`Found::irq`] names that line and Input
+//! reads the pad when it fires instead of polling.
 
 /// Slot in the ACPI service's table of its route to Input.
 pub const ROUTE_SLOT: u64 = 61;
@@ -32,19 +34,32 @@ pub struct Found {
     pub counts: Option<(u16, u16, u16)>,
     /// GPIO interrupt pin, if `_CRS` names one.
     pub gpio_pin: Option<u16>,
+    /// The I/O APIC line that carries the pad's interrupt, when firmware gives one:
+    /// an `Interrupt` in `_CRS`, or a `GpioInt` pad firmware routed to the I/O APIC.
+    /// `None`: Input polls.
+    pub irq: Option<Irq>,
+}
+
+/// An I/O APIC line as the I/O APIC sees it (after any pad inversion).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Irq {
+    pub gsi: u16,
+    pub edge: bool,
+    pub active_low: bool,
 }
 
 impl Found {
     pub fn encode(&self) -> [u64; 3] {
         let a0 = self.bus as u64 | (self.device as u64 & 31) << 8 | (self.function as u64 & 7) << 13 | (self.khz as u64 & 0xffff) << 16
             | (self.address as u64 & 0x3ff) << 32 | (self.ten_bit as u64) << 42;
-        let a1 = self.hid_register as u64 | self.gpio_pin.map_or(0, |p| p as u64 | 1 << 16) << 16;
+        let a1 = self.hid_register as u64 | self.gpio_pin.map_or(0, |p| p as u64 | 1 << 16) << 16
+            | self.irq.map_or(0, |i| (i.gsi as u64 & 0x3ff) | 1 << 10 | (i.edge as u64) << 11 | (i.active_low as u64) << 12) << 33;
         let a2 = self.counts.map_or(0, |(h, l, s)| h as u64 | (l as u64) << 16 | (s as u64) << 32 | 1 << 48);
         [a0, a1, a2]
     }
     pub fn decode(w: [u64; 3]) -> Option<Self> {
         let [a0, a1, a2] = w;
-        if a0 >> 43 != 0 || a1 >> 33 != 0 || a2 >> 49 != 0 { return None; }
+        if a0 >> 43 != 0 || a1 >> 46 != 0 || a2 >> 49 != 0 { return None; }
         let khz = (a0 >> 16 & 0xffff) as u32;
         if khz == 0 { return None; }
         Some(Self {
@@ -52,6 +67,7 @@ impl Found {
             address: (a0 >> 32 & 0x3ff) as u16, ten_bit: a0 >> 42 & 1 != 0,
             hid_register: a1 as u16,
             gpio_pin: (a1 >> 32 & 1 != 0).then_some((a1 >> 16) as u16),
+            irq: (a1 >> 43 & 1 != 0).then_some(Irq { gsi: (a1 >> 33 & 0x3ff) as u16, edge: a1 >> 44 & 1 != 0, active_low: a1 >> 45 & 1 != 0 }),
             counts: (a2 >> 48 & 1 != 0).then_some((a2 as u16, (a2 >> 16) as u16, (a2 >> 32) as u16)),
         })
     }
@@ -63,8 +79,11 @@ mod tests {
     #[test]
     fn round_trips() {
         for f in [
-            Found { bus: 0, device: 0x15, function: 1, address: 0x2c, ten_bit: false, khz: 400, hid_register: 0x20, counts: Some((0x32, 0x71, 0x1e)), gpio_pin: Some(0x15c) },
-            Found { bus: 0, device: 0x19, function: 0, address: 0x2a5, ten_bit: true, khz: 100, hid_register: 1, counts: None, gpio_pin: None },
+            Found { bus: 0, device: 0x15, function: 1, address: 0x2c, ten_bit: false, khz: 400, hid_register: 0x20, counts: Some((0x32, 0x71, 0x1e)), gpio_pin: Some(0x15c), irq: None },
+            Found { bus: 0, device: 0x19, function: 0, address: 0x2a5, ten_bit: true, khz: 100, hid_register: 1, counts: None, gpio_pin: None,
+                irq: Some(Irq { gsi: 0x5d, edge: false, active_low: false }) },
+            Found { bus: 0, device: 0x15, function: 0, address: 0x15, ten_bit: false, khz: 400, hid_register: 0x20, counts: None, gpio_pin: Some(295),
+                irq: Some(Irq { gsi: 119, edge: true, active_low: true }) },
         ] {
             assert_eq!(Found::decode(f.encode()), Some(f));
         }
@@ -73,7 +92,7 @@ mod tests {
     fn refuses_stray_bits_and_no_speed() {
         let w = Found { khz: 400, ..Default::default() }.encode();
         assert!(Found::decode([w[0] | 1 << 50, w[1], w[2]]).is_none());
-        assert!(Found::decode([w[0], w[1] | 1 << 40, w[2]]).is_none());
+        assert!(Found::decode([w[0], w[1] | 1 << 50, w[2]]).is_none());
         assert!(Found::decode([0, 0, 0]).is_none());
     }
 }

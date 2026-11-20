@@ -180,6 +180,11 @@ pub const INPUT: Manifest = Manifest {
     matches: &[Match::vendor_class(0x8086, 0x0c_80_00, CLASS, Lease::SerialIo, 28)],
 };
 
+/// I/O APIC lines BOOT reserves for a service that holds at least one device: wires
+/// firmware describes, not messages a device writes (`sex_pdx::device::OP_LINE_BIND`).
+/// Input takes one for the touchpad's GPIO pad, when firmware routed it to the I/O APIC.
+pub const LINES: &[(Service, u8)] = &[(Service::Input, 1)];
+
 /// Every manifest, in the order BOOT consults them.
 pub const ALL: &[Manifest] = &[DRIVE, USB, NET, BELL, GPU, DISPLAY, INPUT];
 
