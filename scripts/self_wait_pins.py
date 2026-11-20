@@ -122,6 +122,8 @@ PINS = (
     ('timed', 'servers/sexusb/src/main.rs', 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06'),
 
     ('timed', 'servers/sexusb/src/main.rs', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec'),
+    ('timed', 'servers/sexnet/src/main.rs', 'fcc4ffc50a6302756285ae01c86fcd838852bfbdf4ac4a4b2198550bf2afe400'),  # OP_DEVICE_SLEEP from the kernel logged and skipped after the listen (no wait change), 2026-11-19
+    ('timed', 'servers/sexusb/src/main.rs', '2c15ba53f84180a5feb262de17783e3821be45c5f4941d9660835d9c9bb541a6'),  # sleep notice suspends idle ports (bounded link waits); quiet predicate unchanged, 2026-11-19
 
     ('tree', '', '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5'),  # master after #407 + #408 + #422 combined, 2026-11-18
 

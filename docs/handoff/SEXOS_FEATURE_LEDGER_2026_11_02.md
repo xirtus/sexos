@@ -5365,6 +5365,15 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
 
+## Device power part 1: link power states and the sleep notice (2026-11-19)
+- Every PCIe link gets the power states both ends support at BOOT: ASPM L0s/L1, L1.1/L1.2 substates, clock PM and LTR, with Linux's latency checks and quirks, adding to what firmware set and never removing it (`crates/sex-pcipm`, `kernel/src/pci_power.rs`). Idle links drop to L1.2, which the platform needs for its deepest idle states.
+- Drivers can put a device they hold in D3hot and back (syscall 86 `OP_POWER`); the kernel saves and restores what a reset loses, MSI-X table included.
+- Sleeping the desktop now tells every driver holding a device (`OP_DEVICE_SLEEP`); the disk flushes first.
+- Verified by `cargo test -p sex-pcipm` and `scripts/laptop_power_gate.py`. Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.
+
+## Device power part 2: devices power down while asleep (2026-11-19)
+- While the laptop sleeps the touchpad is in HID sleep, USB sticks and other idle USB devices are suspended (U3, cache flushed first), the HDA codecs are in D3 and the Intel eDP panel's backlight and panel power are off; all come back on wake. Keyboards, mice, hubs, USB network and Bluetooth stay up.
+- Verified by `cargo test -p sex-gpu-intel -p sex-hid-touch` and `scripts/laptop_power_gate.py` (USB stick suspend and resume). Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.
 ## Touchpad on its interrupt line (2026-11-19)
 - The laptop touchpad is read when its interrupt fires instead of 125 times a second: a new contact reaches the pointer at once (polling could add up to 8 ms), and an untouched pad costs no I2C reads (polling read it 20 times a second, each read a busy bus transfer).
 - sexacpi finds the line: an `Interrupt` in the pad's `_CRS`, or the pad's `GpioInt` pin on the Intel GPIO controller (Tiger Lake-LP/H as on the Alienware x17 R1, Alder Lake-P/S/N, Raptor Lake-S), when firmware routed that pad to the I/O APIC (read only). `sex_pdx::touchpad::Found` carries it (`irq`).
