@@ -745,6 +745,12 @@ impl Browser {
                 Ok(n) => (text_of(&self.buf[..n]), String::from(url)),
                 Err(e) => (message_page("Can't open that file", core::str::from_utf8(files::message(e)).unwrap_or(""), url), String::from(url)),
             }
+        } else if url.starts_with(extensions::SCHEME) {
+            // An extension's own page (its popup or options page), while it is on.
+            match self.extension_file(url) {
+                Some(b) => (text_of(&b), String::from(url)),
+                None => (message_page("Can't open this extension page", "The extension is off, removed, or has no such page.", url), String::from(url)),
+            }
         } else if url.starts_with("http://") || url.starts_with("https://") {
             let got = match &post {
                 // A form's POST: the answer is the next page.
@@ -776,6 +782,12 @@ impl Browser {
         self.fonts.svgs.clear();
         self.fonts.moving.clear();
         self.fonts.frames_shown = 0;
+        // An extension's page: its style sheets come from the extension.
+        if base.starts_with(extensions::SCHEME) {
+            for h in sex_html::stylesheet_links(&dom).into_iter().take(MAX_SHEETS) {
+                if let Some(text) = extension_url(&base, h).and_then(|u| self.extension_file(&u)) { sheets.push(text_of(&text)); }
+            }
+        }
         if base.starts_with("http") {
             let links: Vec<String> = sex_html::stylesheet_links(&dom).into_iter().take(MAX_SHEETS).filter_map(|h| sex_html::url::resolve(&base, h)).collect();
             for (i, link) in links.iter().enumerate() {
@@ -883,6 +895,11 @@ impl Browser {
                     self.buf = Vec::new();
                     r
                 }
+                // An extension's page loads its scripts from the extension.
+                Some(src) if base.starts_with(extensions::SCHEME) => {
+                    let Some(abs) = extension_url(base, src) else { continue };
+                    self.extension_file(&abs).map(|b| (text_of(&b), abs))
+                }
                 Some(src) => {
                     let Some(abs) = sex_html::url::resolve(base, src) else { continue };
                     if !abs.starts_with("http") { continue; }
@@ -908,7 +925,7 @@ impl Browser {
         doc.import_map = core::mem::take(&mut self.import_map);
         doc.code_cache = Some(self.code_cache.clone());
         self.code_site();
-        if self.extensions.any() && self.url.starts_with("http") {
+        if self.extensions.any() && (self.url.starts_with("http") || self.url.starts_with(extensions::SCHEME)) {
             doc.ext_key = self.extensions.key.clone();
             doc.ext_tab = self.ext_tab_json();
         }
@@ -1903,3 +1920,25 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
+/// `src` resolved against an extension page's address, staying inside that extension.
+fn extension_url(base: &str, src: &str) -> Option<String> {
+    let (id, path) = base.strip_prefix(extensions::SCHEME)?.split_once('/')?;
+    let src = src.split(['?', '#']).next().unwrap_or(src);
+    let joined = if let Some(rest) = src.strip_prefix(extensions::SCHEME) {
+        let (other, p) = rest.split_once('/')?;
+        if other != id { return None; }
+        String::from(p)
+    } else if let Some(p) = src.strip_prefix('/') {
+        String::from(p)
+    } else {
+        let dir = path.split(['?', '#']).next().unwrap_or(path).rsplit_once('/').map(|(d, _)| d).unwrap_or("");
+        if dir.is_empty() { String::from(src) } else { alloc::format!("{}/{}", dir, src) }
+    };
+    // `a/../b` folds; anything climbing out is refused.
+    let mut parts: Vec<&str> = Vec::new();
+    for seg in joined.split('/') {
+        match seg { "" | "." => {}, ".." => { parts.pop()?; } s => parts.push(s) }
+    }
+    let path = sex_extensions::clean_path(&parts.join("/"))?;
+    Some(alloc::format!("{}{}/{}", extensions::SCHEME, id, path))
+}

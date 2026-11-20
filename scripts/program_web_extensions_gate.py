@@ -8,7 +8,8 @@ question over chrome.runtime and gets the answer (with the stored count and the 
 its style sheet turns the page pink, and its static and dynamic declarativeNetRequest
 rules block two pictures and a script before they leave. Turned off on
 about:extensions, it stays off in the next run, its background doesn't start and the
-three requests reach the server."""
+three requests reach the server. Its options page, opened in the tab, has the whole
+API (N7c)."""
 import argparse,http.server,io,os,re,shutil,struct,threading,time,zipfile
 from pathlib import Path
 from PIL import Image
@@ -67,7 +68,7 @@ def main():
   assert '[web.extension.' not in t()[s:],'an extension before any was installed'
   hits.clear()
   s=go(f'about:extensions?install={base}/sample.crx')
-  g['wait'](r'\[web.extension.installed\] id=recolour-sample files=7 name=Recolour Sample',s,300)
+  g['wait'](r'\[web.extension.installed\] id=recolour-sample files=10 name=Recolour Sample',s,300)
   g['wait'](r'\[web.extension.loaded\] id=recolour-sample mv=3 enabled=1 rules=1 skipped=0 content_scripts=1 background=1',s,60)
   g['wait'](r'\[web.extension.background\] id=recolour-sample scripts=1 module=0 ',s,120)
   for line in ('background installed install','content script registered','dynamic rule added'):g['wait'](rf'\[web.extension.console\] id=recolour-sample level=0 {line}',s,120)
@@ -83,6 +84,15 @@ def main():
   assert sorted(blocked)==['image','image','script'],blocked
   assert not [h for h in hits if h in BLOCKED],hits
   time.sleep(2);on=pink('extension-on');assert on>3000,f'page not recoloured ({on} pink pixels)'
+  # Its options page (N7c), opened in the tab, has the whole API: it asks the background
+  # and reads the extension's storage. Content scripts don't run there.
+  opts='kaleidoscope-extension://recolour-sample/options.html'
+  s=go(opts);g['wait'](rf'\[web.extension.page\] id=recolour-sample url={re.escape(opts)}',s,120)
+  g['wait'](r'\[web.loaded\] bytes_ok=1 [^\n]* sheets=1 [^\n]*scripted=1',s,120)
+  g['wait'](rf'\[web.console\] level=0 options storage 1 {re.escape(opts)}',s,120)
+  reply=g['wait'](r'\[web.console\] level=0 options reply (\{[^\n]*\})',s,120)[1]
+  assert reply==f'{{"ok":true,"host":"options","installs":1,"tab":"{opts}"}}',reply
+  assert '[web.extension.content]' not in t()[s:],'content scripts ran on an extension page'
   s=go('about:extensions?toggle=recolour-sample');g['wait'](r'\[web.extension.toggle\] id=recolour-sample enabled=0',s,120)
   # Let the page finish before closing: a close that lands mid-load is not this gate's subject.
   g['wait'](r'\[web.loaded\] ',s,120);time.sleep(1)

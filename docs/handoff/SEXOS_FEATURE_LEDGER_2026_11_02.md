@@ -4421,7 +4421,8 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   ES module when `type: module`; MV2 `scripts` or a background page's `<script src>`)
   runs in a script realm of its own, started with the browser and on install, stopped
   when turned off or removed. It hears `runtime.onInstalled` / `onStartup`.
-- **`chrome.*`** (`crates/sex-js/src/extensions.js`, op 35 `EXTENSION`): `runtime`
+- **`chrome.*`** (`crates/sex-js/src/extensions.js`, op `EXTENSION`, 39 since the
+  master merge of 2026-11-19): `runtime`
   (sendMessage/onMessage both ways with async `sendResponse`, getURL, getManifest,
   lastError), `tabs` (query/get/sendMessage/create/update), `storage.local/sync/session`
   with `onChanged` across realms (kept with the profile's web storage under origin
@@ -4443,6 +4444,22 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   scripts, and with Shields down blocks 7 trackers on the Shields test page.
 - **Not yet:** isolated worlds, popups/options pages as extension pages, `webRequest`,
   `runtime.connect` ports, content scripts in frames hearing messages.
+## Kaleidoscope extensions, slice N7c: extension pages (2026-11-20)
+- **What:** an extension's own pages (its popup and options page, or any
+  `kaleidoscope-extension://ID/PATH.html`) open in the tab while it is on. Their
+  scripts, modules and style sheets load from the extension, the page realm gets the
+  whole `chrome.*` API (as the background has), and content scripts don't run there.
+  about:extensions links each extension's Popup and Options page. An extension page
+  speaks only for its own extension.
+- **Tests:** the extensions gate opens the sample's options page, which asks the service
+  worker and reads `chrome.storage` (reply `{"ok":true,"host":"options","installs":1,...}`)
+  and gets its style sheet. The uBOL gate (not in CI) now also fetches uBOL's popup and
+  dashboard: the popup renders ("not a website" for an extension tab, as in Chrome); the
+  dashboard's scripts need `:scope` and `:has()` selectors, which sex-html does not parse
+  yet (selector code is Codex's).
+- **Gate note:** the uBOL gate needs a 768 MiB guest (`SEXOS_GATE_MEMORY`); at 512 MiB the
+  shell ends the browser for memory, and a 1 GiB guest hit a kernel page fault at rip 0
+  in the browser's task (reported, not this slice's).
 ## J5 D2: Denim compressed memory, page out and back (2026-11-14)
 - New syscall 88 `SYS_DENIM` (ABI addition, `sex_pdx::denim`), Denim only: SCAN (accessed bits), OUT (heap page leaf becomes a non-present marker naming the row, shootdown, bytes copied to Denim's window, frame freed), IN (fresh frame, leaf restored, parked fault task resumed). Kernel messages OP_FAULT 0x3D1 and OP_RECALL 0x3D2.
 - Page faults on a marker go to Denim instead of the row's pager (`forward_page_fault`). Worker spawn and SEAL/OPEN on a run with pages out return RETRY and recall them; OUT is refused while workers live.
