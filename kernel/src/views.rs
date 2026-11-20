@@ -27,9 +27,10 @@ struct View { copies: Vec<(u64, u64, u32, u64)>, spans: Vec<u64> }
 static VIEWS: Mutex<[View; COUNT]> = Mutex::new([const { View { copies: Vec::new(), spans: Vec::new() } }; COUNT]);
 static ROOT: [AtomicU64; COUNT] = [const { AtomicU64::new(0) }; COUNT];
 static PCID: AtomicBool = AtomicBool::new(false);
+static INVPCID: AtomicBool = AtomicBool::new(false);
 /// Per local APIC id: the views that core must flush when it next enters them.
 static STALE: [AtomicU64; CORES] = [const { AtomicU64::new(!0) }; CORES];
-/// Per local APIC id: the views that core has entered, for one line each.
+/// Per local APIC id: the views that core has entered (it may cache their translations).
 static ENTERED: [AtomicU64; CORES] = [const { AtomicU64::new(0) }; CORES];
 static SWITCHES: AtomicU64 = AtomicU64::new(0);
 static FLUSHED: AtomicU64 = AtomicU64::new(0);
@@ -77,12 +78,17 @@ pub fn init() {
     }
     ROOT[0].store(root, Ordering::Release);
     let pcid = core::arch::x86_64::__cpuid(1).ecx & (1 << 17) != 0;
+    let invpcid = pcid && core::arch::x86_64::__cpuid_count(7, 0).ebx & (1 << 10) != 0;
     PCID.store(pcid, Ordering::Release);
-    crate::serial_println!("[boot.views] views={} pcid={} root={:#x}", COUNT, pcid as u8, root);
+    INVPCID.store(invpcid, Ordering::Release);
+    crate::serial_println!("[boot.views] views={} pcid={} invpcid={} root={:#x}", COUNT, pcid as u8, invpcid as u8, root);
 }
 
-/// `va`'s span opens in `view`, which gets private tables down to it as needed.
-pub fn open(view: usize, va: u64) {
+/// `va`'s span opens in `view`, which gets private tables down to it as needed. True
+/// when the view held it closed: cores may cache that, so the caller runs
+/// `flush_everywhere` once it holds no lock another core may wait on.
+#[must_use]
+pub fn open(view: usize, va: u64) -> bool {
     assert!(view != 0 && view < COUNT, "VIEWS_INDEX");
     let span = va & !(rules::SPAN - 1);
     let mut views = VIEWS.lock();
@@ -91,9 +97,12 @@ pub fn open(view: usize, va: u64) {
     let closed = rules::open(&mut hw(), root_table(), ROOT[view].load(Ordering::Acquire), span, &mut |level, c, p| made.push((c, p, level, span))).expect("VIEWS_SPAN_UNMAPPED");
     entry.copies.extend(made);
     if let Err(i) = entry.spans.binary_search(&span) { entry.spans.insert(i, span); }
-    drop(views);
-    if closed { changed(view); }
+    closed
 }
+
+/// Every core drops what it caches, in every view (an opening must reach a core already
+/// running the view, which may hold the closed entry).
+pub fn flush_everywhere() { crate::smp::tlb::flush_pages(usize::MAX, core::iter::empty()); }
 
 /// `va`'s span closes in the canonical tables and in every view but `owner`'s.
 pub fn close(owner: usize, va: u64) {
@@ -113,7 +122,7 @@ pub fn close(owner: usize, va: u64) {
     }
     drop(views);
     // Every core may hold the open entry, under any PCID.
-    crate::smp::tlb::flush_pages(usize::MAX, core::iter::empty());
+    flush_everywhere();
 }
 
 /// The canonical `table` changed at `index` (`boot_memory::arena_leaf`): views copying
@@ -156,15 +165,6 @@ pub fn resync() {
     }
 }
 
-/// Cores must flush `view` before using it again; this one at once if it is in it.
-fn changed(view: usize) {
-    for core in STALE.iter() { core.fetch_or(1 << view, Ordering::AcqRel); }
-    x86_64::instructions::interrupts::without_interrupts(|| {
-        let now = cr3();
-        if now & FRAME == ROOT[view].load(Ordering::Acquire) { unsafe { set_cr3(now & !rules::NOFLUSH); } }
-    });
-}
-
 /// Before a task runs: its view, entered with a CR3 write that keeps the TLB unless an
 /// invalidation since this core last ran the view says otherwise.
 pub fn enter(view: usize) {
@@ -195,14 +195,39 @@ pub fn enter(view: usize) {
     });
 }
 
-/// This core drops `va` (everything for `u64::MAX`) from the current view now, and from
-/// its other views when it next enters them. `smp::tlb` runs this on every core.
+/// INVPCID `kind` for `pcid` and `va`.
+unsafe fn invpcid(kind: u64, pcid: u64, va: u64) {
+    let descriptor: [u64; 2] = [pcid, va];
+    unsafe { core::arch::asm!("invpcid {0}, [{1}]", in(reg) kind, in(reg) descriptor.as_ptr(), options(nostack, preserves_flags)); }
+}
+
+/// This core drops `va` (everything for `u64::MAX`) from every view. With INVPCID that is
+/// done at once, in each view this core has run; without it, the current view drops it
+/// now and the others are flushed whole when the core next enters them. `smp::tlb` runs
+/// this on every core.
 pub fn invalidate(va: u64) {
-    if va == u64::MAX { let now = cr3(); unsafe { set_cr3(now & !rules::NOFLUSH); } }
-    else { x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(va)); }
-    if ROOT[0].load(Ordering::Relaxed) == 0 || !tagged() { return; }
+    let tags = ROOT[0].load(Ordering::Relaxed) != 0 && tagged();
+    let precise = tags && INVPCID.load(Ordering::Relaxed);
+    if va == u64::MAX {
+        if precise { unsafe { invpcid(rules::INVPCID_ALL_NONGLOBAL, 0, 0); } return; }
+        let now = cr3(); unsafe { set_cr3(now & !rules::NOFLUSH); }
+    } else {
+        // Global (kernel) translations go only by INVLPG, in any PCID.
+        x86_64::instructions::tlb::flush(x86_64::VirtAddr::new(va));
+    }
+    if !tags { return; }
     let current = (cr3() & 0xFFF) as usize;
-    STALE[crate::apic::local_id() as usize % CORES].fetch_or(rules::stale_after_invalidate(current), Ordering::AcqRel);
+    let core = crate::apic::local_id() as usize % CORES;
+    if precise {
+        let mut others = rules::invpcid_views(ENTERED[core].load(Ordering::Acquire), current);
+        while others != 0 {
+            let view = others.trailing_zeros() as u64;
+            others &= others - 1;
+            unsafe { invpcid(rules::INVPCID_ADDRESS, view, va); }
+        }
+        return;
+    }
+    STALE[core].fetch_or(rules::stale_after_invalidate(current), Ordering::AcqRel);
 }
 
 pub fn census() -> (u64, u64) { (SWITCHES.load(Ordering::Relaxed), FLUSHED.load(Ordering::Relaxed)) }

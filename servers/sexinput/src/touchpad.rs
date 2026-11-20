@@ -61,6 +61,8 @@ struct Pad {
     next_poll: u64,
     failures: u32,
     last_error: Option<sex_i2c_dw::Error>,
+    /// Suspended to idle: the pad is in HID `SET_POWER` sleep, its line masked, not read.
+    asleep: bool,
 }
 
 static mut PAD: Option<Pad> = None;
@@ -108,7 +110,7 @@ fn open(f: &Found) -> Result<Pad, &'static str> {
     serial_println!("[sexinput.touchpad.ready] vendor={:#06x} product={:#06x} extent={}x{} fingers={} touch_mode={} report={:?} input_len={}",
         tp.hid.vendor_id, tp.hid.product_id, tp.extent.0, tp.extent.1, tp.layout.fingers, tp.touch_mode as u8, tp.layout.touch_report, tp.input_len());
     let rec = Recognizer::new(Config::for_extent(tp.extent.0));
-    let mut pad = Pad { ctrl, address: f.address, tp, rec, pace: Pace::polling(), line_bit: None, fired: false, again: false, next_poll: 0, failures: 0, last_error: None };
+    let mut pad = Pad { ctrl, address: f.address, tp, rec, pace: Pace::polling(), line_bit: None, fired: false, again: false, next_poll: 0, failures: 0, last_error: None, asleep: false };
     if let Some(irq) = f.irq { arm(&mut pad, irq); } else { serial_println!("[sexinput.touchpad.mode] mode=poll reason=no_line"); }
     Ok(pad)
 }
@@ -172,11 +174,27 @@ fn translate(e: Event) -> Option<Out> {
     })
 }
 
+/// Suspend to idle (the kernel's `OP_DEVICE_SLEEP`): the pad sleeps, its line is masked
+/// and it is not read until the machine wakes; waking costs one `SET_POWER` and a read.
+pub fn device_sleep(asleep: bool, now: u64) {
+    let Some(p) = (unsafe { (*core::ptr::addr_of_mut!(PAD)).as_mut() }) else { return };
+    if p.asleep == asleep { return; }
+    if p.line_bit.is_some() { let _ = sex_pdx::device::line_mask(0, asleep); }
+    let mut bus = OnBus { c: &mut p.ctrl, address: p.address, last_error: &mut p.last_error };
+    let ok = if asleep { p.tp.sleep(&mut bus) } else { p.tp.wake(&mut bus) };
+    p.asleep = asleep;
+    // Asleep: no read is due, so Input waits its whole idle bound. Awake: read once at once.
+    p.next_poll = if asleep { u64::MAX } else { now };
+    p.again = !asleep;
+    serial_println!("[sexinput.touchpad.power] asleep={} ok={}", asleep as u8, ok as u8);
+}
+
 /// Reads the pad when its line fired or a timed read is due. Calls `out` for each
 /// resulting event.
 pub fn poll(now: u64, mut out: impl FnMut(Out)) {
     take_interrupt();
     let Some(p) = (unsafe { (*core::ptr::addr_of_mut!(PAD)).as_mut() }) else { return };
+    if p.asleep { p.fired = false; return; }
     let fired = core::mem::take(&mut p.fired);
     p.next_poll = p.pace.next_read();
     if !core::mem::take(&mut p.again) && !p.pace.due(now, fired) { return; }

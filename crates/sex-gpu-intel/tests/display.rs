@@ -259,6 +259,18 @@ fn backlight_percent_never_zero() {
 }
 
 #[test]
+fn backlight_sleep_and_wake_keep_brightness() {
+    let mut f = Fake::default();
+    assert_eq!(backlight::sleep(&mut f), None);
+    f.set(BLC_PWM_CTL, BLC_PWM_ENABLE | BLC_PWM_POLARITY); f.set(BLC_PWM_FREQ, 12_000); f.set(BLC_PWM_DUTY, 3_000);
+    let before = backlight::sleep(&mut f).unwrap();
+    assert!(!backlight::read(&mut f).enabled);
+    assert_eq!(f.get(BLC_PWM_CTL) & BLC_PWM_POLARITY, BLC_PWM_POLARITY);
+    backlight::wake(&mut f, before);
+    assert_eq!(backlight::read(&mut f), before);
+}
+
+#[test]
 fn hotplug_scan_and_diff() {
     let mut f = Fake::default();
     f.set(SDEISR, sde_hotplug_bit(0));
