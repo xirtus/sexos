@@ -286,6 +286,7 @@ macro_rules! switching_stub { ($name:ident, $handler:ident) => {
 #[unsafe(naked)]
 pub unsafe extern "C" fn $name() {
     core::arch::naked_asm!(
+        "cld", // the interrupted code may have DF set (a backward memmove); Rust code needs it clear
         "push 0", // DUMMY ERROR CODE
         "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
         "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
@@ -348,6 +349,7 @@ switching_stub!(preempt_interrupt_stub, preempt_interrupt_handler);
 #[unsafe(naked)]
 pub unsafe extern "C" fn page_fault_stub() {
     core::arch::naked_asm!(
+        "cld", // the interrupted code may have DF set (a backward memmove); Rust code needs it clear
         // CPU already pushed Error Code (8 bytes). CPU frame = 48 bytes.
         "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
         "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
@@ -395,6 +397,7 @@ pub unsafe extern "C" fn page_fault_stub() {
 #[unsafe(naked)]
 pub unsafe extern "C" fn general_protection_fault_stub() {
     core::arch::naked_asm!(
+        "cld", // the interrupted code may have DF set (a backward memmove); Rust code needs it clear
         // CPU already pushed Error Code (8 bytes). CPU frame = 48 bytes.
         "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
         "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
@@ -443,6 +446,7 @@ macro_rules! cpu_fault_stub {
         #[unsafe(naked)]
         pub unsafe extern "C" fn $name() {
             core::arch::naked_asm!(
+                "cld", // the interrupted code may have DF set (a backward memmove); Rust code needs it clear
                 $push_error,
                 "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
                 "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",

@@ -4,6 +4,8 @@
 //! spins so the core switches to other tasks (other copies of this test among them),
 //! and checks every register came back unchanged. It also runs float arithmetic whose
 //! exact result is known at compile time. Its gate runs several copies at once.
+//! Each spin also runs with the direction flag set, as a backward memmove leaves it:
+//! a timer tick there must neither hurt the kernel nor clear the program's flag.
 #![no_std]
 #![no_main]
 
@@ -23,11 +25,11 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 
 /// What `hold` loads and reads back, at fixed offsets for its assembly.
 #[repr(C)]
-struct Frame { regs: [[u64; 2]; 16], out: [[u64; 2]; 16], mx_in: u32, mx_out: u32, mx_default: u32, _pad: u32, spin: u64 }
+struct Frame { regs: [[u64; 2]; 16], out: [[u64; 2]; 16], mx_in: u32, mx_out: u32, mx_default: u32, _pad: u32, spin: u64, df_kept: u64 }
 
 /// Loads `regs` and `mxcsr`, yields and spins `YIELDS` times, then reads them back.
-fn hold(regs: &[[u64; 2]; 16], mxcsr: u32, spin: u64) -> ([[u64; 2]; 16], u32) {
-    let mut f = Frame { regs: *regs, out: [[0; 2]; 16], mx_in: mxcsr, mx_out: 0, mx_default: 0x1F80, _pad: 0, spin };
+fn hold(regs: &[[u64; 2]; 16], mxcsr: u32, spin: u64) -> ([[u64; 2]; 16], u32, u64) {
+    let mut f = Frame { regs: *regs, out: [[0; 2]; 16], mx_in: mxcsr, mx_out: 0, mx_default: 0x1F80, _pad: 0, spin, df_kept: 0 };
     unsafe {
         core::arch::asm!(
             "ldmxcsr [r14 + 512]",
@@ -40,9 +42,12 @@ fn hold(regs: &[[u64; 2]; 16], mxcsr: u32, spin: u64) -> ([[u64; 2]; 16], u32) {
             "mov eax, 32", // yield
             "syscall",
             "mov r13, [r14 + 528]",
+            "std",
             "4:",
             "dec r13",
             "jnz 4b",
+            "pushfq", "pop rax", "shr eax, 10", "and eax, 1", "add [r14 + 536], rax",
+            "cld",
             "dec r12",
             "jnz 3b",
             "movdqu [r14 + 256], xmm0", "movdqu [r14 + 272], xmm1", "movdqu [r14 + 288], xmm2", "movdqu [r14 + 304], xmm3",
@@ -59,10 +64,10 @@ fn hold(regs: &[[u64; 2]; 16], mxcsr: u32, spin: u64) -> ([[u64; 2]; 16], u32) {
             out("xmm8") _, out("xmm9") _, out("xmm10") _, out("xmm11") _, out("xmm12") _, out("xmm13") _, out("xmm14") _, out("xmm15") _,
         );
     }
-    (f.out, f.mx_out)
+    (f.out, f.mx_out, f.df_kept)
 }
 const _: () = assert!(core::mem::offset_of!(Frame, out) == 256 && core::mem::offset_of!(Frame, mx_in) == 512
-    && core::mem::offset_of!(Frame, mx_out) == 516 && core::mem::offset_of!(Frame, mx_default) == 520 && core::mem::offset_of!(Frame, spin) == 528);
+    && core::mem::offset_of!(Frame, mx_out) == 516 && core::mem::offset_of!(Frame, mx_default) == 520 && core::mem::offset_of!(Frame, spin) == 528 && core::mem::offset_of!(Frame, df_kept) == 536);
 
 /// Float arithmetic with an exact, known answer: the same loop run by the compiler.
 const fn series(n: u32) -> f64 {
@@ -89,9 +94,10 @@ fn run(task: u32) -> Result<u32, (u32, &'static str)> {
         let regs: [[u64; 2]; 16] = core::array::from_fn(|_| [next(), next()]);
         // A rounding mode and masks only some runs use, so leaking MXCSR shows.
         let mxcsr = 0x1F80 | (((task + round) & 3) << 13);
-        let (got, got_mx) = hold(&regs, mxcsr, 20_000 + (next() & 0x3FFF));
+        let (got, got_mx, df_kept) = hold(&regs, mxcsr, 20_000 + (next() & 0x3FFF));
         if got != regs { return Err((round, "XMM registers changed")); }
         if got_mx & 0xFFC0 != mxcsr & 0xFFC0 { return Err((round, "MXCSR changed")); }
+        if df_kept != YIELDS { return Err((round, "the direction flag was cleared")); }
         if core::hint::black_box(series)(core::hint::black_box(20_000)) != SERIES { return Err((round, "float arithmetic differs")); }
         round += 1;
     }
@@ -105,7 +111,7 @@ pub extern "C" fn _start() -> ! {
     let mut text = heapless_text();
     match run(window.task) {
         Ok(rounds) => {
-            let _ = write!(text, "FPU test passed.\n{} rounds, each across {} yields.\nXMM0-15 and MXCSR kept.\nF11 closes.", rounds, YIELDS);
+            let _ = write!(text, "FPU test passed.\n{} rounds, each across {} yields.\nXMM0-15, MXCSR and DF kept.\nF11 closes.", rounds, YIELDS);
             sex_pdx::serial_record!("[fputest.ok] target={} task={} rounds={}", window.target, window.task, rounds);
         }
         Err((round, why)) => {
