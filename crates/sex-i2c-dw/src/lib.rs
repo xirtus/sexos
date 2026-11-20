@@ -183,7 +183,12 @@ impl<R: Regs> Controller<R> {
         if total == 0 || total > MAX_TRANSFER { return Err(Error::Length); }
         self.select(address)?;
         let mut budget = POLL_BUDGET;
-        while self.regs.read(IC_STATUS) & STATUS_MST_ACTIVITY != 0 {
+        loop {
+            let status = self.regs.read(IC_STATUS);
+            // All ones: the controller is gone (powered down or off the bus), and
+            // no amount of polling brings it back.
+            if status == u32::MAX { self.target = None; return Err(Error::Timeout); }
+            if status & STATUS_MST_ACTIVITY == 0 { break; }
             budget = budget.checked_sub(1).ok_or(Error::Timeout)?;
         }
         let _ = self.regs.read(IC_CLR_INTR);
@@ -191,6 +196,7 @@ impl<R: Regs> Controller<R> {
         loop {
             budget = budget.checked_sub(1).ok_or_else(|| { self.recover(); Error::Timeout })?;
             let raw = self.regs.read(IC_RAW_INTR_STAT);
+            if raw == u32::MAX { self.target = None; return Err(Error::Timeout); }
             if raw & INTR_TX_ABRT != 0 { return Err(self.abort()); }
             // Queue commands while the TX FIFO has room and reads cannot overflow RX.
             while sent < total && self.regs.read(IC_STATUS) & STATUS_TFNF != 0 {
@@ -202,7 +208,9 @@ impl<R: Regs> Controller<R> {
                 self.regs.write(IC_DATA_CMD, cmd);
                 sent += 1;
             }
-            while received < read.len() && self.regs.read(IC_STATUS) & STATUS_RFNE != 0 {
+            // Only bytes for read commands already queued: a controller that
+            // claims data nobody asked for must not run `received` past them.
+            while received < sent.saturating_sub(write.len()) && self.regs.read(IC_STATUS) & STATUS_RFNE != 0 {
                 read[received] = self.regs.read(IC_DATA_CMD) as u8;
                 received += 1;
             }

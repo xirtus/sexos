@@ -13,66 +13,21 @@ EXPECTED_BOOT_MAIN_CAPACITY=64
 # Any new causal source requires explicit review. 2026-11-15 master reconcile:
 # Denim (syscall 88), Cufflinks/Bluetooth, touchpad route and SYS_VM (110) add no
 # deadline reference; USB quiet only narrows (also requires no Bluetooth HID traffic).
-APPROVED_TIMED_WAIT_SOURCES = {'kernel/src/program_records.rs': ('fn-v1:50abfa8222c49ebe84edeabc79324366bf1e5519a09c19d63542f664c6215981',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
-    '37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8',
-                               # record table allocated zeroed via CapabilityTable::new_boxed (no wait change), 2026-11-17
-                               'e4f79ad810b5bba8aab649b5472154ebece0d4ae1c7b96ccf0cacf3b076de769',
-    # record code scanned for key instructions (stream 2), 2026-11-18
-    'd8dab16031564c8540b35ce5e45c28d1cbf297071e3ffc6d21e5aff7322f625b',
-    # stream 2 scan merged with the v2 capability table, 2026-11-18
-    '46adbb04a4ef0f0e057f3282c9c19fc1f8044a8a9f4d4e77b0a4c679dee03215',
-    # protection views merged with the stream 2 scan, 2026-11-19
-    'fb6aaf0bc13ba27eaf82ce9e9dfb3498125830ee711899aff368c0fdc25bb96f',),
-'kernel/src/pd/create.rs': ('fn-v1:69758987a8d686a5f4b046db74d530379e4eff061dbe018b3019886371056906',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
-    '3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e',),
-'kernel/src/init.rs': ('fn-v1:fb2da8b1ece8812feee1502fa72b73deb6248639042d5ddd6e42422db14ed884',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
-    '784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334', '04012df3ba205083c64b904130b8cef0a43814099ad9109008c1d9957acd8550', '26a66c2f676742ab23625962ad5d8d380be6a670e56d0a659d1c614305bbdd8e', '905080c14b576c29a9f8dc0c90400bbd93d0b46723d4397fb851af5d317bd0e8', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d',),
-'kernel/src/scheduler.rs': ('fn-v1:d1ae84d320565569056b4890ee32b11af3b66bc34eba297a890387e8851f71ab', '1b10ca8d1b0d1eb3a092f0a61ed1ca7fe6a4b43c448bc24d560ead211940f8d9',  # #429 merged with master (28ffcb59), reviewed by WS4, 2026-11-19
-    'fn-v1:dea888ff27ad54e217839dc46b9a74e521d07b2be1c36256452fd7df937802f2',  # master 586140ad: kernel stack guard page + boxed FPU area (no wait change), 2026-11-19
-    'fn-v1:4670ed1968ba7f46d7097721884c9cf2c95de4bd69220374b07321f2f5eec750',  # cross-core IPC polling + lean first look + bounded re-check (#429 / 80b89713), reviewed by WS4, 2026-11-18
-    'fn-v1:8b328859b9fda2ff8e024287e6d020c11182c169ad993a0e786ad86033420fe6',  # XSAVE/AVX heap save area + kernel stack canary (#427 / ed888ad5), reviewed by WS4, 2026-11-18
-    'fn-v1:c92ee26a67f14c438179f32834b8b0a62f82d1dee42271d43863d4cc96f95a8f',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
-    '53aec880d2ea82474231d37aaae0862dcb8747185626ab6f4d79175a422ce8a8',  # PKU gates: TSC_AUX on switch (P6.2a), 2026-11-19
-    'fn-v1:458daaa0e25c5b534627e9cef612d5e71ba9f781e05b48689bee025a1fd4c70b',  # master 53aec880: PKU gates TSC_AUX on switch (no wait change), 2026-11-19
-    'fn-v1:3af49f2ffe4d2b73c67ec09f190aa8e46cf43a3a7b233f7d8a24532828203567',  # #429 merged with master at 950c36ac (raw af1bffe7), wait change as reviewed at 28ffcb59, 2026-11-19
-    '586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae',  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
-    '13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1',  # IPC v2 syscalls 105/106, 2026-11-18
-    '8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654',  # IPC fast path (WS4), 2026-11-17
-    '0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64',
-                             # per-task self-wait sampling (task_count), 2026-11-17
-                             '25c0bc835f30039f947f28bc79ed567e1c742e17ea3c9a8e0663b5f502c9d642',),
- 'kernel/src/self_wait.rs': ('0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf',),
- 'kernel/src/task_ownership.rs': ('57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6',),
- 'kernel/src/smp.rs': ('261699be11866980d2a30b72cbb8d35ddccdc00aa1ee1cbceefadc716edc7d75',  # protection views (tlb hook, rows spread), 2026-11-17
-    'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325',),
- 'kernel/src/interrupts.rs': ('fn-v1:235c80ce88b369d9d1da26b934e188c056b5e24330b1c242801deaf2e3854c86',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
-    'c686d2ff054854086e2f27e872b1c0d0eafd3c9aa88636b716775b33288afd0d',
-                              'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d',
-                              # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
-                              'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),
- 'kernel/src/syscalls/mod.rs': ('fn-v1:dcfd9075428ef7e5f81f7f1b7bf46be288047256915f7d60347ddded728251d6',  # driver restart: inbox watch + hang probe in syscall entry, 2026-11-19
-    'fn-v1:676eae4ad2ce1171bafcdd21eb7b0d61e5e387ff84e401eb926eecf173191fbb',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
-    '5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577',  # IPC v2 syscalls 105/106, 2026-11-18
-    '055312eb92a25b451b946caef4f00d1999391840bb782a1697db72e1903b1c41', '318f8602a3e053470c4f6f984fa818f928cae16253dcf9a9946edf1b114995ba',  # IPC fast path (WS4), 2026-11-17
-    'aa6169383696167b349be8f37819f61fb896239b3ff7aa489f4ffac1a4e11524', '425d2dc341b9dd2b5d03200a38a1ef85f0ed96de103e0524a5d51ba947500fa0', 'd5b9e12bf9f40d9170ee7557343187559a2fe73909d90a251c3982c04a3f078f',),
- 'kernel/src/program_workers.rs': ('fn-v1:83a85118b86748220c90c74a4050ea004db73bb95957bcbf1d7e447a3b0c2d24',  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
-    'c8ddc4a8002159a6814b651d32ef6fa7cb5f8b131b28e2ced837698bcc1c289b',  # S9 row task cap (no wait change), 2026-11-19
-    '6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a',),
- 'crates/sex-pdx/src/lib.rs': ('8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde', '9eb262eb2108d51f57ae9dc821e6e40a12a9e1003fbfac711422b246ec17fd44',
-                               'f76238b37b9a35de5bdf5e7e62c95e6788e30e86411ef4ec77d8638b4b82ef05', 'f9dd629e5cdda6ba58fb130e988d33f0d3a88948278d2f414bf612dca02fc166',
-                               'c2895d4991c2d48d099daee3e6090063b3288f77c0ad5e9a75201c903f95c984', 'ef6e695c7535ac077e8c4adef7ded6d79425210a1fd77005940be7f823cab40a', 'cee8e1525fa104c2c14f398b4eee80f4f63cd0f3f06602310cdf421dc15009c1', '1b7fe3f1752da8d10ea2f2ea6df5c387ff9ec9969a4287be64fb6e878f4a4d75', '562ccc2f5cf8cf755e68925f0a65a699fd9e968ac78a44bfe4c7dc84f464e7ab', 'f00f44669af45f707a4a24ec15f70321ed9ed04565007c9e1b093b42fdd39e96', '3766c55f455e02199154d9cdbe28c5fc93a454f91a2459fe04e2eafaf8abd24b', '74a5f4ccbd9aeeb574ff5c9d8f7008b486d89e214ef405ef589711dfda71904b',
-                               # wait fingerprint (wait_fingerprint), 2026-11-16
-                               'wait-v1:0f64f51bb2e99d980f283c55f402b56e3f5da5a1d22b814ac98b4b1867b8a3d2',
-                               # BLOCK_MAX_RUN 512 KiB + BLOCK_CMD_RUN (no wait change), 2026-11-17
-                               'wait-v1:aa1083137f9cf350f5a1fe54038943fa82596df2b4c8737d6e4f4fe2e4598946',),
- # Reviewed restricted-provider intake/polling; the exact Net2 envelope and
- # deadline owners are unchanged. See RESTRICTED_TIMER_SOURCE_REVIEW_2026_11_15.
- 'servers/sexnet/src/main.rs': ('00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725',
-                              'd7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d', 'fcf8299b6ce8b8acdd0bc005507036087d5569664c08d63da001dc9e694c7253',
-                              # first 32 timed returns logged, 2026-11-17
-                              '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b',),
- 'servers/sexusb/src/main.rs': ('3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81',
-                                'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec')}
+# Reviewed causal implementations, one pin per line in self_wait_pins.py (merged
+# with merge=union so parallel re-pins do not conflict).
+def _pins(kind):
+    try:
+        import self_wait_pins as module  # a plain import, so source freezers see it
+        if Path(module.__file__).resolve()!=Path(__file__).with_name('self_wait_pins.py').resolve():raise ImportError
+    except ImportError:
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('self_wait_pins',Path(__file__).with_name('self_wait_pins.py'))
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    out={}
+    for k,path,digest in module.PINS:
+        if k==kind and digest not in out.setdefault(path,()):out[path]+=(digest,)
+    return out
+APPROVED_TIMED_WAIT_SOURCES=_pins('timed')
 
 
 # Mechanical source closure only, not a general Rust/unsafe-code verifier.
@@ -83,42 +38,7 @@ DEADLINE_REFERENCE_OWNERS=frozenset((
     'kernel/src/program_workers.rs','kernel/src/program_records.rs','kernel/src/syscalls/mod.rs'))
 # Reviewed whole-tree digests, kept as review receipts; deadline_source_closure no
 # longer requires the current tree to be one of them.
-APPROVED_KERNEL_RUST_TREES=('8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5',  # master after #407 + #408 + #422 combined, 2026-11-18
-    'dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8b114a8d2c6fb2',  # XSAVE + AVX (stream 5), 2026-11-18
-    # Phase 1a dead kernel modules removed, 2026-11-18
-    '417835283472c60cfd1455bccc223876d2936126736b182b47c1e75f6ed56260',  # IPC v2 objects (#406) + #410 merged on master, 2026-11-18
-    '620ffd8bab9d6528e4842df3930d060d4ceacc071b7587db37604bd3ddaf7c6d','ad54b57094dec16de9007a317b15506afc52747967aa9d4fedd100a32b1d95dd',  # IPC fast path (WS4), 2026-11-17
-    '91e41656109be5dd659d70a70718e0640f68372f35762c34d95a28260b807e92', 'dd69100da62b94d190510e266327094b2990443442b2a59326b4e60afd2792dc', '1e5f9a4228d4f0342d7d54c4cbc2cba37b9c59ba1923e0d82b1afa50a687dbcb', '42f85248058717dfcb4983c4209337b544347a2167abfe769fe30a86330c94b4', 'b84ac4b152e0920d553a0a5121b31ea516522801e09aac03a499a45637d83707', 'd39d8695743904116ed5e7bc98b47524ffd018d2b28c17ca16d5a1eddc56307c', 'fa1efe78d28850a66b795eb44f7ff544f85ac9033673335a02e8ae5fc54056eb', 'e93d67e07151c4c0f5eed240e0f3a27f9abb58074e26f52934eb8c36963278f7',
-    # per-task self-wait sampling, 2026-11-17
-    'a897c8b8c617cfef1ec3a7fad038f32f8530b232cf698f9ea896a89950d5a0ec',
-    # WS2 kernel heap counters (SYS_STATS OP_KERNEL), unused slab.rs removed, 2026-11-17
-    '95ef2223d462a85888843a0700105ff4538f044360df25138dde638253e06fb5',
-    # entry hardening + security audit (stream 2), 2026-11-18
-    '24a9360f565da793ccaa3f9dda02c0540af671c7d7f997ea81d9286a28ce9865',
-    # BOOT loader refuses key instructions and W+X code (stream 2), 2026-11-18
-    'bdaa310d6ed632686c4284e34dcee8f2264ef16010014a6caac0013b998cf5bb',
-    # stream 2 on top of the IPC fast path (#402), 2026-11-18
-    '98e232964db1dbed07859aac5a285b9f80dbfdc87a7fe74adb0d23e7a0ca43ad',
-    # W^X for every user mapping + record code scan (stream 2), 2026-11-18
-    'ddd84cbbe668235c1afc410fcaa0373b5388a992f71c1cdf89d39bb1c7173345',
-    # stream 2 merged with master (core_local page removed upstream), 2026-11-18
-    '471f85c4ed8912eed8ae8b6ace5e1b6ccef5fc92af580498e3bdc0454c0b582f',
-    # Kernel plan phase 2: kernel/src/ipc_v2 (endpoint, reply, notification), not wired yet, 2026-11-17
-    'c620598cd6151890bb134924fcbb76dbe7ab8396503971b66f7e52b1c8251cbd',
-    # stream 2 merged with ipc_v2 (stream 4), 2026-11-18
-    '6653e237101288231f1336156721a6401df232d53786312b2ec222f5db2438b3',
-    # stream 2 merged with the shared-image CI (#399), 2026-11-18
-    '55803e9cff54b5b46b50be5a697c71617e5461f48a37cc9f99168f1046ed2cfd',
-    # authority v2 capability table (inline slots, generations), cheri.rs removed, 2026-11-17
-    '6371383dfa90b1b27da40ad384b65ebd757ae90284fe6f0f1a083453fb6b1933',
-    # stream 2 merged with authority v2 and XSAVE (#407, #408), 2026-11-18
-    'ace8232c43ac9354d1997d8aed554d48ad8a39bf26507479a00cab0affaea3ae',
-    # IPC v2 syscalls 105/106 wired (kernel plan phase 2), 2026-11-18
-    '22a70bcd8ad7b76d717a4484845ef6920d18fca47b892b0ae4f993a4953a0909',
-    # stream 2 merged with IPC v2 syscalls (#418/#421/#422), 2026-11-18
-    'c74db80e5ed8fa929a2a5253c80949ec3beffe467cfef29ac192dae43234902c',
-    # protection views with PCID (plan Phase 5b), 2026-11-17
-    'c90aad02c6aa7df0113ccb215474c805633b552229da4af87ee9c5949ff1b73b')
+APPROVED_KERNEL_RUST_TREES=_pins('tree').get('',())  # review receipts, one per line in self_wait_pins.py
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
@@ -234,7 +154,9 @@ def source_contract(root):
 ACPI_AUX_SOURCES=('servers/sexacpi/src/main.rs','crates/sex-pdx/src/power.rs')
 ACPI_AUX_COHORTS=(
  ('822bebd1f4048d35105a0c7fae00b3112b4c11a6013501cf8de528dc5e42dbf6','b13e5f3e739b0000837a81c9ae7212f0356c5d507d04d0f100a421f2ea05ddd6'),
- ('24446427547d1f80eeb557e928b5854c27edc8b0caa45d5aebd7a5e6b460e531','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'))
+ ('24446427547d1f80eeb557e928b5854c27edc8b0caa45d5aebd7a5e6b460e531','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
+ # FADT PM1 blocks outside IO space refused before FixedRegisters::new; wait loop unchanged.
+ ('2456130585cec58be8f2fe41e758175ce79e83faefa3c09bf6acf73b3fc917af','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')
@@ -368,13 +290,13 @@ def _task_ordinals_ok(records):
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
  'servers/silk-shell/src/main.rs': 'wait-v1:8f387c104199b88d2ea09b2248a64cde8d22b6ca7655b967b87b072e88ce687b',
  'crates/sex-pdx/src/system_stats.rs': '408fb8ea07d12eb2fc53f38797b8ddb4fd61c32140ecc516e63b69fd5689f97d',
- 'crates/sex-pdx/src/crash_log.rs': '25253ac16c94e169aecf44c829c6c0c39f597cbebaf1dc14a65c726d2287787a',
+ 'crates/sex-pdx/src/crash_log.rs': '87d50c205e92bd64db9223193542ca5aa6e35daa0f8861fc2fd10050a838fd97',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
  'kernel/src/cpu_account.rs': '281b10b4f856a7f665c7ba59951b73b926decefa5c3bfae968af5714ba202f45',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
  'kernel/src/app_resources.rs': '89626a05e12f0947a102e3332eac3c9ee0bb89092711afde33952e7c3d37496e',
  'kernel/src/service_restart.rs': 'c2cb3dfe653e24bad190188ef7ef044aa045f1eac84b3c3fcc255ac7e4384a7f',
- 'kernel/src/crash_log.rs': '5a6faf451e366cadd0448a2036d738b4c9c7689bf7f188d2ecd074c67b920a26',
+ 'kernel/src/crash_log.rs': 'b54b54b2a3b8094b648956cdbc00bd0364d7f244632ffd43ace87df160d7d820',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
 

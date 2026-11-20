@@ -45,7 +45,20 @@ fn commit_writes(fs: &mut Fs<'static, Disk>) {
     // Home's own commit first: its blocks then go out with the system's.
     crate::home::sync(fs);
     if let Err(e) = fs.commit() { forget_stats(None); sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
+    crate::organize::committed(fs);
 }
+/// Between requests: the Organizer's next event, once nothing waits to be committed.
+pub fn organize_idle() {
+    if writes_pending() { return; }
+    match unsafe { &mut *core::ptr::addr_of_mut!(STATE) } {
+        // On Files' own stack: `home::deep` would take 256 KiB from a 128 KiB heap.
+        State::Ready(fs) => if crate::organize::pending() { crate::organize::step(fs) },
+        State::Absent => crate::organize::unmounted(),
+        // Not mounted until the first request; nothing has arrived before it.
+        State::Untried => {}
+    }
+}
+pub(crate) fn forget_all_stats() { forget_stats(None) }
 /// Clients' regions, found once: (address, 0 until looked up, u64::MAX if absent).
 static mut REGIONS: [u64; 64] = [0; 64];
 // Files serves requests serially. Device counters are sampled only around an
@@ -245,9 +258,16 @@ pub fn home_unlock_from_lock_screen(password: &[u8]) -> Option<u8> {
 }
 fn bring_up() -> State {
     let sectors = DiskFs::diskfs_block_call(sex_pdx::BLOCK_CAPACITY, 0, 0, 0);
-    let state = bring_up_on(sectors);
+    // Another system's disk (Windows on the laptop's SSD): never mounted or formatted
+    // as SexOS's; sexdrive serves it for reading only.
+    let foreign = DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_FOREIGN;
+    let state = if foreign {
+        sex_pdx::serial_record!("[files.fs.foreign] sectors={} read_only=1", sectors);
+        State::Absent
+    } else { bring_up_on(sectors) };
     // No SexOS filesystem here (a Windows RAID volume, say): its own volumes, read only.
     if matches!(state, State::Absent) && sectors >= DEVICE_MIN_SECTORS { crate::volumes::attach_device(sectors); }
+    if matches!(state, State::Ready(_)) { crate::organize::mounted(); } else { crate::organize::unmounted(); }
     state
 }
 /// Smallest disk worth scanning for other systems' volumes: 1 MiB.
@@ -295,15 +315,19 @@ pub fn status(e: Error) -> u8 {
     match e {
         Error::Io | Error::Poisoned => w::IO, Error::Corrupt => w::CORRUPT, Error::NoSpace => w::NO_SPACE, Error::NotFound => w::NOT_FOUND,
         Error::Exists => w::EXISTS, Error::NotDir => w::NOT_DIR, Error::IsDir => w::IS_DIR, Error::NotEmpty => w::NOT_EMPTY,
-        Error::Name | Error::TooBig => w::NAME, Error::Unformatted => w::UNAVAILABLE,
+        Error::Name | Error::TooBig => w::NAME, Error::Unformatted => w::UNAVAILABLE, Error::Stale => w::STALE,
     }
 }
 /// A client's reply slot may hold another service's answer, so ours waits its turn.
 /// Each client has one request in flight, so one entry per caller is all it takes.
 static mut REPLIES: [(u32, u64); 64] = [(0, 0); 64];
+/// Queues a reply. Several may be owed to one caller at once (Shell's settings poll and a
+/// program load both answer as tagged replies), so a new one never replaces an older one:
+/// that lost the program load's answer and left a spawn waiting forever.
 pub fn reply_later(caller: u32, word: u64) {
     let replies = unsafe { &mut *core::ptr::addr_of_mut!(REPLIES) };
-    match replies.iter_mut().find(|r| r.0 == 0 || r.0 == caller) {
+    // Kept packed in arrival order: the first empty slot is after every queued reply.
+    match replies.iter_mut().find(|r| r.0 == 0) {
         Some(entry) => *entry = (caller, word),
         None => sex_pdx::serial_record!("[files.fs.reply.lost] caller={}", caller),
     }
@@ -311,11 +335,22 @@ pub fn reply_later(caller: u32, word: u64) {
 pub fn replies_pending() -> bool { (unsafe { (*core::ptr::addr_of!(REPLIES)).iter().any(|r| r.0 != 0) }) || crate::recording_runtime::pending() }
 pub fn poll_replies() {
     let replies = unsafe { &mut *core::ptr::addr_of_mut!(REPLIES) };
+    // A caller's replies go in the order they were queued: once one waits, its later ones wait too.
+    let mut waiting = [0u32; 8];
+    let mut waits = 0;
     for entry in replies.iter_mut().filter(|r| r.0 != 0) {
         if sex_pdx::desktop_recording::ENABLED&&entry.0==sex_pdx::desktop_recording::TARGET{
             sex_pdx::serial_record!("[record.reply.unscoped.drop] target={}",entry.0);*entry=(0,0);continue;
         }
+        if waiting[..waits].contains(&entry.0) { continue; }
         if sex_pdx::pdx_reply(entry.0, entry.1) == 0 { *entry = (0, 0); }
+        else if waits < waiting.len() { waiting[waits] = entry.0; waits += 1; }
+        else { break; }
+    }
+    // Close the gaps, keeping the order.
+    let mut kept = 0;
+    for i in 0..replies.len() {
+        if replies[i].0 != 0 { replies[kept] = replies[i]; if kept != i { replies[i] = (0, 0); } kept += 1; }
     }
     crate::recording_runtime::poll();
 }
@@ -681,6 +716,9 @@ fn program_live(target: u32, task: u32) -> bool {
 pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -> u64 {
     let Some(r) = w::Request::decode(a, offset, length) else { return w::reply((a & 0xFF_FFFF) as u32, w::INVALID, 0) };
     let program = program_index(caller);
+    if program.is_some() && (w::ORGANIZE_STATE..=w::ORGANIZE_LOG).contains(&r.kind) {
+        return w::reply(r.seq, w::DENIED, 0);
+    }
     let index = match (sex_pdx::app_catalog::SPINDLE_TARGETS.iter().position(|t| *t == caller), program) {
         (Some(index), _) => {
             if !crate::spindle_history::live(caller) { return w::reply(r.seq, w::DENIED, 0); }
@@ -751,7 +789,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         let result = crate::installer::run(fs, &path[..path_len], r.offset, go, &mut region[w::PATH_BYTES..]);
         // Once the installer has written raw, the driver stops this system's writes and the
         // layout under the mounted filesystem may have changed: drop it until restart.
-        if go && DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_LOCKED { *state = State::Absent; }
+        if go && DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_LOCKED { *state = State::Absent; crate::organize::unmounted(); }
         return match result { Ok(n) => w::reply(r.seq, w::OK, n), Err(e) => w::reply(r.seq, status(e), 0) };
     }
     if r.kind == w::UPDATE {
@@ -870,7 +908,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
                 unsafe { PREPARING_FOR = Some(relay_pipe(id, word)); }
             }
             n
-        } else if r.kind == w::RENAME {
+        } else if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE) {
             let Some(split) = raw[..path_len].iter().position(|b| *b == 0) else { return w::reply(r.seq, w::NAME, 0) };
             let mut second = [0u8; w::PATH_BYTES];
             let (Some(a), Some(b)) = (confine(&binding, &raw[..split], &mut own), confine(&binding, &raw[split + 1..path_len], &mut second)) else { return w::reply(r.seq, w::NAME, 0) };
@@ -893,7 +931,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // No SexOS filesystem on this disk: only its own volumes under /media, read only.
         let path = &path[..path_len];
         if !crate::volumes::owns(path) { return w::reply(r.seq, w::UNAVAILABLE, 0); }
-        if r.kind == w::RENAME || r.kind == w::MOUNT || r.kind == w::UNMOUNT { return w::reply(r.seq, w::READ_ONLY, 0); }
+        if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::READ_ONLY, 0); }
         return match crate::volumes::run(None, r, path, data) { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
     };
     // Reads change nothing; a write fails before it changes anything (sexfs checks
@@ -914,7 +952,18 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         _ => forget_stats(None),
     }
     // Other systems' volumes, under /media.
-    let rename_halves = (r.kind == w::RENAME).then(|| path.iter().position(|b| *b == 0)).flatten().map(|i| (&path[..i], &path[i + 1..]));
+    let rename_halves = matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE).then(|| path.iter().position(|b| *b == 0)).flatten().map(|i| (&path[..i], &path[i + 1..]));
+    // Checked (organizer) moves stay inside the SexOS filesystem: never into, out of or
+    // within another volume or the encrypted home, whose files have other identities.
+    if matches!(r.kind, w::MOVE_IF_ID | w::ORGANIZE_MOVE) {
+        let Some((a, b)) = rename_halves else { return w::reply(r.seq, w::NAME, 0) };
+        if crate::volumes::owns(a) || crate::volumes::owns(b) || crate::home::owns(a) || crate::home::owns(b) { return w::reply(r.seq, w::OTHER_DISK, 0); }
+    }
+    // The Organizer (Spindle only, checked in `handle`): Files' own policy module.
+    if (w::ORGANIZE_STATE..=w::ORGANIZE_LOG).contains(&r.kind) {
+        if crate::volumes::owns(path) || crate::home::owns(path) { return w::reply(r.seq, w::OTHER_DISK, 0); }
+        return match crate::organize::request(fs, r, path, data) { Ok(v) => w::reply(r.seq, w::OK, v), Err(st) => w::reply(r.seq, st, 0) };
+    }
     let media = match (r.kind, rename_halves) {
         (w::MOUNT, _) => Some(crate::volumes::mount(fs, path, data)),
         (w::UNMOUNT, _) => Some(crate::volumes::unmount(fs, path)),
@@ -962,6 +1011,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
                 if unsafe { UNCOMMITTED } >= COMMIT_BYTES { commit_writes(fs); }
             }
             if r.kind == w::SYNC { unsafe { UNCOMMITTED = 0; } }
+            if !read_only { crate::organize::after(fs, r.kind, path); }
             w::reply(r.seq, w::OK, value)
         }
         Err(e) => {
@@ -1127,6 +1177,13 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         w::RENAME => {
             let split = path.iter().position(|b| *b == 0).ok_or(Error::Name)?;
             fs.rename(&path[..split], &path[split + 1..])?;
+            fs.commit()?;
+            Ok(0)
+        }
+        w::MOVE_IF_ID => {
+            if r.length != 0 { return Err(Error::Name); }
+            let split = path.iter().position(|b| *b == 0).ok_or(Error::Name)?;
+            fs.move_file_if_id(&path[..split], &path[split + 1..], r.offset)?;
             fs.commit()?;
             Ok(0)
         }
