@@ -38,36 +38,23 @@ pub fn is_serial_present() -> bool {
 }
 
 /// Writes to the serial port and to the kernel's log (and its screen, while it has one).
-/// Each piece goes out a FIFO at a time: one line-status read, then up to 16 bytes in
-/// one `rep outsb`. The crate's byte loop it replaces read the line status before every
-/// byte, two port accesses (two exits to QEMU under KVM) per byte, which made the
-/// kernel's own boot log most of its time from entry to handing over to services.
-/// Nothing is gathered on the stack: prints run inside fault and interrupt paths.
-struct Tee<'a>(Option<&'a mut SerialPort>);
-impl fmt::Write for Tee<'_> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        let bytes = s.as_bytes();
-        if let Some(port) = self.0.as_mut() {
-            // The crate's writer spells backspace and DEL out; keep that for such text.
-            if bytes.iter().any(|b| *b == 8 || *b == 0x7F) { let _ = port.write_str(s); }
-            else { write_fifo(bytes); }
-        }
-        crate::console::write(bytes);
-        Ok(())
-    }
+/// Serial bytes collect in a small buffer and go out a FIFO's worth per string write:
+/// the byte-at-a-time driver cost two port accesses (two KVM exits) per byte, with
+/// interrupts off on the logging core.
+struct Tee { serial: bool, buf: [u8; 128], n: usize }
+impl Tee {
+    fn flush(&mut self) { if self.serial { write_string(&self.buf[..self.n]); } self.n = 0; }
 }
-
-/// COM1 with its FIFO on (`SerialPort::init` sets FCR 0xC7): an empty transmitter
-/// takes 16 bytes.
-fn write_fifo(bytes: &[u8]) {
-    use x86_64::instructions::port::Port;
-    let mut line_status: Port<u8> = Port::new(0x3F8 + 5);
-    for chunk in bytes.chunks(16) {
-        unsafe {
-            for _ in 0..100_000 { if line_status.read() & 0x20 != 0 { break; } }
-            core::arch::asm!("rep outsb", in("dx") 0x3f8u16, inout("rsi") chunk.as_ptr() => _,
-                inout("rcx") chunk.len() => _, options(nostack, preserves_flags, readonly));
+impl fmt::Write for Tee {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if self.serial {
+            for &b in s.as_bytes() {
+                if self.n == self.buf.len() { self.flush(); }
+                self.buf[self.n] = b; self.n += 1;
+            }
         }
+        crate::console::write(s.as_bytes());
+        Ok(())
     }
 }
 
@@ -78,9 +65,12 @@ pub fn _print(args: fmt::Arguments) {
 
     if crate::console::stopping() { return; }
     interrupts::without_interrupts(|| {
-        let mut guard = SERIAL1.lock();
+        let guard = SERIAL1.lock();
         // With no serial port the log and the screen still get every line.
-        let _ = Tee(guard.as_mut()).write_fmt(args);
+        let mut tee = Tee { serial: guard.is_some(), buf: [0; 128], n: 0 };
+        let _ = tee.write_fmt(args);
+        tee.flush();
+        drop(guard);
     });
 }
 
@@ -110,12 +100,18 @@ pub fn write_stopped(bytes: &[u8]) {
 /// A service's whole line in one string write (`rep outsb`). Under KVM that is one
 /// exit to QEMU for the line instead of one per byte, which made every logged line
 /// cost milliseconds on nested-virtualised CI runners and sat inside every
-/// keystroke's path. Like the byte loop it replaces, it does not wait on the FIFO.
+/// keystroke's path. Before each 16 bytes (a 16550's FIFO) it waits for the
+/// transmitter to be empty, so a real UART drops nothing; under QEMU that is one
+/// more exit per 16 bytes.
 pub fn write_string(bytes: &[u8]) {
-    if bytes.is_empty() { return; }
-    unsafe {
-        core::arch::asm!("rep outsb", in("dx") 0x3f8u16, inout("rsi") bytes.as_ptr() => _,
-            inout("rcx") bytes.len() => _, options(nostack, preserves_flags, readonly));
+    use x86_64::instructions::port::Port;
+    let mut line_status: Port<u8> = Port::new(0x3F8 + 5);
+    for chunk in bytes.chunks(16) {
+        unsafe {
+            for _ in 0..100_000 { if line_status.read() & 0x20 != 0 { break; } }
+            core::arch::asm!("rep outsb", in("dx") 0x3f8u16, inout("rsi") chunk.as_ptr() => _,
+                inout("rcx") chunk.len() => _, options(nostack, preserves_flags, readonly));
+        }
     }
 }
 
