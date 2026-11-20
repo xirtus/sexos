@@ -109,12 +109,19 @@ pub fn flush_for_power() -> bool {
 }
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
-/// Device reads of file payload, for the asking client's READ_IO counters.
+/// Device reads of file payload, for the asking client's READ_IO counters: one call,
+/// and the payload bytes it handed to the reader.
 fn counted(bytes: usize) {
     unsafe {
         DEVICE_READ_CALLS = DEVICE_READ_CALLS.saturating_add(1);
         DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(bytes as u64);
     }
+}
+/// Readahead bytes handed over later: they came from the device in an earlier call, so
+/// they count as device payload when served, not when fetched. A fetched block that is
+/// never served (a skip, a non-contiguous next extent, the buffer reused) is not payload.
+fn counted_ahead(bytes: usize) {
+    unsafe { DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(bytes as u64); }
 }
 /// Sequential readahead (#307): file blocks the last run fetched past what was asked.
 /// They stay where the device put them, in the shared block buffer (Files' heap is far
@@ -139,6 +146,7 @@ pub(crate) mod ahead {
             let from = offset + ((first - at) as usize) * BLOCK;
             let Some(held) = buffer.get(from..from + out.len()) else { forget(); return false; };
             out.copy_from_slice(held);
+            super::counted_ahead(out.len());
             let end = first + want;
             // What is left still starts at a held block; a skip forgets the rest.
             SPAN = if end < at + n && first == at { (end, at + n - end, from + out.len()) } else { (0, 0, 0) };
@@ -192,7 +200,7 @@ impl Device for Disk {
         if DiskFs::diskfs_block_read(Self::offset(first), total as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
         out.copy_from_slice(&buf[..out.len()]);
         ahead::keep(first + (out.len() / BLOCK) as u64, ((total - out.len()) / BLOCK) as u64, out.len());
-        counted(total);
+        counted(out.len());
         Ok(())
     }
     fn write_run(&mut self, first: u64, data: &[u8]) -> Result<(), ()> {
