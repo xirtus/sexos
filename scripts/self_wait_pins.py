@@ -115,6 +115,8 @@ PINS = (
 
     ('timed', 'servers/sexnet/src/main.rs', '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b'),  # first 32 timed returns logged, 2026-11-17
 
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master merge of #460 with the NIC interrupt change (same line as PR #482), 2026-11-20
+
     ('timed', 'servers/sexnet/src/main.rs', 'd994aeb0af740e6157d92744656943261954b99c6828795723c9070d4625ff34'),  # wired NIC interrupt: 10-tick quiet sleep while armed, no stall after a full burst (two-tick envelope unchanged), 2026-11-19
 
     ('timed', 'servers/sexusb/src/main.rs', '3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81'),
