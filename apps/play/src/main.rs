@@ -182,9 +182,11 @@ fn cos_sin(x: f64) -> (f64, f64) {
     (c, s)
 }
 
-/// `play --tone HZ RATE`: two seconds of a sine at HZ, written at RATE frames a second,
-/// for checking that Bell converts every program rate to its own.
-fn tone(window: &mut Window, hz: u32, rate: u32) {
+/// `play --tone HZ RATE [live]`: two seconds of a sine at HZ, written at RATE frames a
+/// second, for checking that Bell converts every program rate to its own. With `live`
+/// the program keeps only a quarter second queued, as a live instrument does, so Bell
+/// runs dry between writes and relies on the ring's doorbell to hear of new sound.
+fn tone(window: &mut Window, hz: u32, rate: u32, live: bool) {
     let Some(mut sound) = sex_app::sound::Sound::open() else { return fail(window, b"No sound for this program.") };
     sound.set_rate(rate);
     let (cw, sw) = cos_sin(2.0 * core::f64::consts::PI * hz as f64 / rate as f64);
@@ -207,13 +209,14 @@ fn tone(window: &mut Window, hz: u32, rate: u32) {
             made += n as u64;
             (at, len) = (0, n);
         }
+        if live && sound.pending() >= rate as u64 / 4 { let _ = sex_pdx::sys_wait_self_ticks(5); continue; }
         let took = sound.write(&buf[at..len]);
         at += took;
         if took == 0 { let _ = sex_pdx::sys_wait_self_ticks(5); }
     }
     sound.close();
     while sound.pending() > 0 { let _ = sex_pdx::sys_wait_self_ticks(10); }
-    sex_pdx::serial_record!("[play.tone] hz={} rate={} frames={} played={}", hz, rate, total, sound.played());
+    sex_pdx::serial_record!("[play.tone] hz={} rate={} frames={} played={} live={}", hz, rate, total, sound.played(), live as u8);
     say(window, b"Tone played.");
 }
 
@@ -283,7 +286,8 @@ pub extern "C" fn _start() -> ! {
         listen(&mut window, number(words.get(1)).unwrap_or(2));
         None
     } else if words.first() == Some(&&b"--tone"[..]) {
-        tone(&mut window, number(words.get(1)).unwrap_or(440), number(words.get(2)).unwrap_or(sex_app::sound::RATE));
+        tone(&mut window, number(words.get(1)).unwrap_or(440), number(words.get(2)).unwrap_or(sex_app::sound::RATE),
+            words.get(3) == Some(&&b"live"[..]));
         None
     } else { words.first().map(|f| f.to_vec()) };
     match file {
