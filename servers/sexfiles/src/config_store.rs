@@ -45,3 +45,13 @@ pub fn handle(caller: u32, arg0: u64, arg1: u64) -> u64 {
     }
     reply.word()
 }
+
+/// One value, for Files' own use, without loading the table: until someone has asked
+/// for settings (the Shell does at start) the key's default stands. Loading here could
+/// re-enter the filesystem in the middle of a request.
+pub fn value(id: u16) -> i32 {
+    match unsafe { &*core::ptr::addr_of!(TABLE) } {
+        Some(t) => t.value(id),
+        None => sex_pdx::config::schema::key(id).map_or(0, |k| k.default),
+    }
+}

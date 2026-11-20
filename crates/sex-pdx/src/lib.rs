@@ -1332,6 +1332,7 @@ pub mod program_store;
 pub mod package;
 pub mod crash_log;
 pub mod system_stats;
+pub mod mesh_stats;
 pub mod program_memory;
 pub mod program_code;
 pub mod power;

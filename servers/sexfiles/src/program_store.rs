@@ -82,6 +82,6 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u3
     }
     sex_pdx::serial_record!("[files.program.read] bytes={} lba={}", len, entry.lba);
     let packed = [name[0].to_le_bytes(), name[1].to_le_bytes()].concat();
-    if remember { crate::fs_service::loaded(&packed[..packed.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES)]); }
+    if remember { crate::fs_service::loaded_from_store(&packed[..packed.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES)]); }
     Ok(entry.len)
 }
