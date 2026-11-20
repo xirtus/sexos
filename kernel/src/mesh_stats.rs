@@ -11,14 +11,9 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> Option<u64> {
     if !matches!(op, wire::OP_CORE | wire::OP_MEMORY | wire::OP_ORGAN | wire::OP_LINK) { return None; }
     regs.rsi = 0; regs.rdx = 0; regs.r10 = 0; regs.r8 = 0;
     Some(match op {
-        wire::OP_CORE => {
-            let t = unsafe { core::arch::x86_64::_rdtsc() };
-            let Some((idle, running)) = crate::cpu_account::core_view(arg as usize, t) else { return Some(wire::INVALID) };
-            regs.rsi = idle;
-            regs.rdx = running as u64;
-            regs.r10 = t;
-            wire::OK
-        }
+        wire::OP_CORE => { let t = unsafe { core::arch::x86_64::_rdtsc() };
+            let Some((idle, pd)) = crate::cpu_account::core_view(arg as usize, t) else { return Some(wire::INVALID) };
+            regs.rsi = idle; regs.rdx = pd as u64; regs.r10 = t; wire::OK }
         wire::OP_MEMORY => {
             regs.rsi = crate::program_frames::lent();
             regs.rdx = crate::program_frames::peak();
