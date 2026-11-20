@@ -330,7 +330,12 @@ pub fn inside(_regs: &crate::interrupts::SyscallRegs) -> bool {
 /// The switching stub saved it in the dummy error slot.
 pub unsafe fn keep_live_pkru(ctx: &mut crate::scheduler::TaskContext, frame: &x86_64::structures::idt::InterruptStackFrame) {
     if !ON.load(Ordering::Acquire) || crate::pku::PKU_ENABLED.load(Ordering::Relaxed) == 0 { return; }
-    if frame.code_segment.0 & 3 != 3 || depth(ctx) == 0 { return; }
+    // Inside a stub the depth can read 0 while its PKRU already opens the frame: from
+    // the entry WRPKRU until the depth is raised, and on the way out once it is lowered
+    // until the closing WRPKRU. A preempt there must keep that PKRU as well.
+    let rip = frame.instruction_pointer.as_u64();
+    let in_stub = (STUBS..STUBS + MAX_STUBS as u64 * STUB_BYTES).contains(&rip);
+    if frame.code_segment.0 & 3 != 3 || (!in_stub && depth(ctx) == 0) { return; }
     ctx.pkru = unsafe { *(frame as *const _ as *const u64).offset(-1) } & 0xFFFF_FFFF;
 }
 
