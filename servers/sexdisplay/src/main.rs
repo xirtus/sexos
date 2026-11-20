@@ -5599,10 +5599,12 @@ pub extern "C" fn _start() -> ! {
         if needs_surface_redraw{pending_paint.request_area();}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
         if cursor_only_moved{pending_paint.request_cursor();}
-        if needs_top_strip_redraw{pending_paint.request_strip();}
-        if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}
+        // A recording in progress repaints in full; decided before the strip and
+        // pending-text joins so those stay last before the plan.
         unsafe{RECORDING_CAPTURE.placement(recording_indicator::rect(&bar,w,h,chrome_metrics().scale()).is_some());}
         if unsafe{RECORDING_CAPTURE.needs_publication(sex_pdx::get_ticks())}{pending_paint.request_full();}
+        if needs_top_strip_redraw{pending_paint.request_strip();}
+        if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}
         let plan=pending_paint.plan(w,h);
         let published=if fb_live&&!plan.is_empty(){
             clock_canon_apply_to_bar(&mut bar);
