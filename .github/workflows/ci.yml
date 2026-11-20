@@ -1029,9 +1029,33 @@ jobs:
       if: always()
       run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
+  latency:
+    name: Desktop latency (key to pixel, launch, resize, file open; KVM)
+    runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
+    - name: Desktop latency, end to end (stage breakdown and traces in the log)
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        grep -m1 'model name' /proc/cpuinfo
+        truncate -s 1G "$RUNNER_TEMP/latency-source.img"
+        python3 scripts/desktop_latency_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/latency-source.img" --out "$RUNNER_TEMP/sexos-latency"
+    - name: Preserve latency evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-latency-proof
+        path: ${{ runner.temp }}/sexos-latency
+        if-no-files-found: ignore
+
   build:
     if: always()
-    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks]
+    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks, latency]
     runs-on: ubuntu-latest
     steps:
     # Every job must pass. A job may be skipped only when the scope leaves it out:
