@@ -122,6 +122,8 @@ def main():
     p.add_argument('--keys', type=int, default=40); p.add_argument('--runs', type=int, default=4)
     p.add_argument('--programs', default='gestalt,jot')
     p.add_argument('--max-key-ms', type=float, default=250.0); p.add_argument('--max-launch-ms', type=float, default=15000.0)
+    p.add_argument('--key-inject', choices=('send-key', 'event'), default='event',
+                   help='key phase: input-send-event press, release after the commit (default); QMP send-key adds ~35 ms of its own queueing before the guest sees the key')
     p.add_argument('--skip', default='', help='comma-separated phases to skip: key,launch,resize,open')
     a = p.parse_args()
     skip = set(filter(None, a.skip.split(',')))
@@ -159,8 +161,13 @@ def main():
             g['focus'](SPINDLE); time.sleep(1)
             ms, st = [], []
             for i in range(a.keys):
-                tr.start(); q.key('abcdefghijklmnopqrstuvwxyz'[i % 26])
+                ch = 'abcdefghijklmnopqrstuvwxyz'[i % 26]
+                ev = lambda down: q.cmd('input-send-event', {'events': [{'type': 'key', 'data': {'down': down, 'key': {'type': 'qcode', 'data': ch}}}]})
+                tr.start()
+                if a.key_inject == 'event': ev(True)
+                else: q.key(ch)
                 d, _, _ = tr.until(r'\[display\.text\.committed\] target=12 ', 10)
+                if a.key_inject == 'event': ev(False)
                 time.sleep(.03); tr.poll(); ms.append(d); st.append(tr.stages())
                 if i in (2, 3): tr.dump(f'key {i}')
                 time.sleep(.08)
