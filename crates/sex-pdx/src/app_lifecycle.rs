@@ -24,18 +24,6 @@ pub fn close_request(opcode:u64,caller:u32,args:[u64;3],target:u32,task:u32)->Op
     (opcode==OP_APP_CLOSE && caller==3 && target!=0 && task!=0
         && args[0]==target as u64 && args[1]==task as u64 && args[2]<=CLOSE_CONFIRMED).then_some(args[2])
 }
-/// Program to Shell (Mesh's End): close another program run, `arg0` its domain and
-/// `arg1` its task, as that window's own close button would; a run that ignores Close
-/// is ended after five seconds as usual. Shell takes it only from the program whose
-/// window has the keyboard focus, so it happens only while the person uses that window.
-pub const OP_PROGRAM_END: u64 = 0x10B;
-/// The run an End request names, if Shell may act on it: the asker is the focused
-/// program, the named run is someone else, and the words are well formed.
-pub fn end_request(opcode:u64,caller:(u32,u32),focused:Option<(u32,u32)>,args:[u64;3])->Option<(u32,u32)> {
-    let (target,task)=(u32::try_from(args[0]).ok()?,u32::try_from(args[1]).ok()?);
-    (opcode==OP_PROGRAM_END && caller.0!=0 && caller.1!=0 && focused==Some(caller)
-        && target!=0 && task!=0 && target!=caller.0 && args[2]==0).then_some((target,task))
-}
 pub fn close_requested(opcode:u64,caller:u32,args:[u64;3],target:u32,task:u32)->bool {
     close_request(opcode,caller,args,target,task).is_some()
 }
@@ -243,26 +231,4 @@ fn activation_call(slot:usize,kind:u64,len:u64)->Result<ActivationInfo,u64>{
     if status!=OK{return Err(status)}
     Ok(ActivationInfo{successor:u32::try_from(pd).map_err(|_|INVALID)?,
         task:u32::try_from(task).map_err(|_|INVALID)?,surface,state})
-}
-
-#[cfg(test)]
-mod end_tests {
-    use super::*;
-    #[test]
-    fn only_the_focused_program_ends_another_run() {
-        let me = (42, 7);
-        assert_eq!(end_request(OP_PROGRAM_END, me, Some(me), [43, 9, 0]), Some((43, 9)));
-        // Not focused, someone else focused, or the wrong opcode: refused.
-        assert_eq!(end_request(OP_PROGRAM_END, me, None, [43, 9, 0]), None);
-        assert_eq!(end_request(OP_PROGRAM_END, me, Some((44, 1)), [43, 9, 0]), None);
-        assert_eq!(end_request(OP_PROGRAM_END, me, Some((42, 8)), [43, 9, 0]), None);
-        assert_eq!(end_request(OP_APP_CLOSE, me, Some(me), [43, 9, 0]), None);
-        // Itself, zero names, oversized or trailing words: refused.
-        assert_eq!(end_request(OP_PROGRAM_END, me, Some(me), [42, 9, 0]), None);
-        assert_eq!(end_request(OP_PROGRAM_END, me, Some(me), [0, 9, 0]), None);
-        assert_eq!(end_request(OP_PROGRAM_END, me, Some(me), [43, 0, 0]), None);
-        assert_eq!(end_request(OP_PROGRAM_END, me, Some(me), [1 << 40, 9, 0]), None);
-        assert_eq!(end_request(OP_PROGRAM_END, me, Some(me), [43, 9, 1]), None);
-        assert_eq!(end_request(OP_PROGRAM_END, (0, 0), Some((0, 0)), [43, 9, 0]), None);
-    }
 }
