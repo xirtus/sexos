@@ -98,6 +98,15 @@ pub fn _print(args: fmt::Arguments) {
     });
 }
 
+/// Writes to the serial port only, unless another path holds it (a fault taken
+/// inside a print): then nothing is written and this returns false.
+pub fn try_print(args: fmt::Arguments) -> bool {
+    use core::fmt::Write;
+    let Some(mut guard) = SERIAL1.try_lock() else { return false };
+    if let Some(port) = guard.as_mut() { let _ = port.write_fmt(args); }
+    true
+}
+
 /// The stop path's own writes: no lock, since the core that held it may be halted.
 pub fn write_stopped(bytes: &[u8]) {
     if !is_serial_present() { return; }
@@ -109,6 +118,18 @@ pub fn write_stopped(bytes: &[u8]) {
             for _ in 0..100_000 { if line_status.read() & 0x20 != 0 { break; } }
             data.write(b);
         }
+    }
+}
+
+/// A service's whole line in one string write (`rep outsb`). Under KVM that is one
+/// exit to QEMU for the line instead of one per byte, which made every logged line
+/// cost milliseconds on nested-virtualised CI runners and sat inside every
+/// keystroke's path. Like the byte loop it replaces, it does not wait on the FIFO.
+pub fn write_string(bytes: &[u8]) {
+    if bytes.is_empty() { return; }
+    unsafe {
+        core::arch::asm!("rep outsb", in("dx") 0x3f8u16, inout("rsi") bytes.as_ptr() => _,
+            inout("rcx") bytes.len() => _, options(nostack, preserves_flags, readonly));
     }
 }
 

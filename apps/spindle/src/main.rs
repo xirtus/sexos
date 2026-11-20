@@ -865,6 +865,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
+            sb.push(b"  organize [--dry-run|auto on|off|undo|log|status|pin|unpin|rule|rules|send]");
             sb.push(b"  fetch URL FILE   download a file");
             sb.push(b"  capture FILE.png   save whole desktop (first terminal)");
             sb.push(b"  beep [HZ] [MS] [VOL]  play a note on the sound card");
@@ -1496,7 +1497,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"update" => {unsafe{update_command::UPDATE.start(args,sb);}true},
         b"pkg" => {unsafe{pkg_command::PKG.command(args,sb);}true},
         b"silk" => {unsafe{(*core::ptr::addr_of_mut!(silk_command::SILK)).command(args,sb);}true},
-        b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
+        b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount"|b"organize" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
         // Loom (formerly Files), given a folder (the whole filesystem by default) to look after.
         b"loom" | b"files" => {
             let mut given = [0u8; 256];
