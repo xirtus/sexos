@@ -9,7 +9,7 @@ a GPT made with sgdisk: partition 1 "EFI system partition" and partition 41
 entry lies in a strip on the second drive. The drives are attached in the
 opposite order to the RAID's member order, so the members are found by serial
 number, not by position. The volume is big enough that Files looks for its own
-filesystem on it, finds none, and is refused when it tries to make one.
+filesystem on it and leaves it alone: another system's disk is never formatted.
 
 Passes when sexdrive serves the volume, lists both partitions, finds the backup
 GPT header in the volume's last sector; Files mounts RAIDDATA read only under
@@ -102,7 +102,7 @@ def main():
         expect('media', 'ls /media', r'\[spindle\.fs\.line\] RAIDDATA')
         mounted = re.search(r'\[files\.media\.mounted\] name=RAIDDATA format=FAT16 sectors=32768 start=%d read_only=1' % first, t())
         if mounted: found['mounted'] = True
-        if re.search(r'\[files\.fs\.(format\.failed|mount\.failed)\]', t()): found['no_sexos_fs'] = True
+        if re.search(r'\[files\.fs\.(foreign|format\.failed|mount\.failed)\]', t()): found['no_sexos_fs'] = True
         expect('cat', 'cat /media/RAIDDATA/HELLO.TXT', r'\[spindle\.fs\.cat\] hello from the raid volume')
         expect('refused', 'write /media/RAIDDATA/nope.txt x', r'\[spindle\.fs\.line\] read-only disk')
         text = t()

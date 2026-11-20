@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: GPL-3.0-only
 # Builds dav1d (the AV1 decoder) for SexOS programs as a static archive for
 # x86_64-sex-app.json, with the same flags as FFmpeg (scripts/build_ffmpeg.sh runs
-# this first and links it as libdav1d). Bit depths 8 and 10 (and 12). dav1d's
-# SSSE3/SSE4.1 assembly is built; its AVX2/AVX-512 code is never chosen at run time,
-# because the kernel keeps XCR0 to x87 and SSE. FFmpeg asks it for one thread.
+# this first and links it as libdav1d). Bit depths 8 and 10 (and 12). All of dav1d's
+# x86 assembly is built and chosen at run time from CPUID and XCR0: SSSE3/SSE4.1
+# everywhere, AVX2 where the CPU has it (the kernel saves AVX state since #408), and
+# AVX-512 only once the kernel enables its state. FFmpeg asks it for one thread.
 # C calls go to crates/sex-libc.
 #
 # Output: target/dav1d/lib/libdav1d.a, target/dav1d/include/dav1d and a pkg-config

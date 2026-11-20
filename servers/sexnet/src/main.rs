@@ -30,7 +30,6 @@ mod source_denial;
 mod web;
 mod wifi;
 extern crate sex_rt;
-extern crate alloc;
 mod source_binding;
 mod restricted;
 // One BOOT Net main task owns this fixed error-only backing. No large stack
