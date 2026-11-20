@@ -71,7 +71,8 @@ jobs:
     - uses: ./.github/actions/setup
       with:
         qemu: "false"
-        target-cache: none
+        # Its own cache of the host test builds (target/debug), saved by the nightly run.
+        target-cache: host
     - name: Enforce root allowlist
       run: bash scripts/dev/check_root_allowlist.sh --strict
     - name: Host proof regressions
@@ -295,6 +296,11 @@ jobs:
       run: cargo test --locked -p sex-hid-touch
     - name: DesignWare I2C bus (simulated controller)
       run: cargo test --locked -p sex-i2c-dw
+    - name: Save the host test builds for the next runs
+      if: github.ref == 'refs/heads/master'
+      uses: ./.github/actions/save-target
+      with:
+        target-cache: host
 
   truth:
     name: Host kernel-model regressions (${{ matrix.shard }}/3)
@@ -1132,6 +1138,10 @@ jobs:
     - uses: ./.github/actions/setup
       with:
         recording: "true"
+        # Its own cache (image plus Splicy, Splicy Studio and mediabench builds), saved by
+        # the nightly run; the image cache until the first one is saved.
+        target-cache: recording
+        target-cache-fallback: image
     - name: Independent decoder
       run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg python3-pil
     - name: Build recording-profile candidate
@@ -1158,6 +1168,10 @@ jobs:
         bash scripts/build_splicy_probe.sh
         python3 scripts/program_splicy_probe_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-probe"
     - name: Splicy Studio opens a clip and its transcript in FilmCraft's editor in a SexOS window
+      env:
+        # Under target/ so the recording target cache keeps its dependencies.
+        CARGO_TARGET_DIR: ${{ github.workspace }}/target/splicy-studio
+        SEXOS_SPLICY_STUDIO: ${{ github.workspace }}/target/splicy-studio/x86_64-sex-std/release/splicy-studio
       run: |
         bash scripts/build_splicy_studio.sh
         python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"
@@ -1168,6 +1182,11 @@ jobs:
         bash scripts/build_mediabench.sh
         truncate -s 1G "$RUNNER_TEMP/mediabench-source.img"
         python3 scripts/program_mediabench_gate.py --accel auto --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/mediabench-source.img" --out "$RUNNER_TEMP/recording/mediabench"
+    - name: Save the recording builds for the next runs
+      if: github.ref == 'refs/heads/master'
+      uses: ./.github/actions/save-target
+      with:
+        target-cache: recording
     - name: Preserve encoder evidence
       if: always()
       uses: actions/upload-artifact@v4

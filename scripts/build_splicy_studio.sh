@@ -3,7 +3,8 @@
 # Builds Splicy Studio: Splicy's editor (core/: engine and egui interface) on sex-egui, for
 # SexOS's standard library (x86_64-sex-std.json). Its own workspace (apps/splicy-studio),
 # size-optimised with fat LTO to fit the 32 MiB program image.
-# Output: apps/splicy-studio/target/x86_64-sex-std/release/splicy-studio.
+# Output: apps/splicy-studio/target/x86_64-sex-std/release/splicy-studio, or under
+# $CARGO_TARGET_DIR (an absolute path) when that is set, as CI does.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 # Splicy lives in its own repository (github.com/xirtus/Splicy), checked out here as a submodule.
@@ -13,7 +14,7 @@ cd "$(dirname "$0")/.."
 # locked version stays as Splicy's lock file has it.
 (cd apps/splicy-studio && cargo update --workspace --quiet)
 src="$(python3 scripts/sex_std_source.py)"
-bin=apps/splicy-studio/target/x86_64-sex-std/release/splicy-studio
+bin="${CARGO_TARGET_DIR:-apps/splicy-studio/target}/x86_64-sex-std/release/splicy-studio"
 build() {
   (cd apps/splicy-studio && SEX_LAYOUT_SEED="$1" __CARGO_TESTS_ONLY_SRC_ROOT="$src" RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie" cargo build --locked --release \
     -Z build-std=std,panic_abort -Z build-std-features=compiler-builtins-mem \
