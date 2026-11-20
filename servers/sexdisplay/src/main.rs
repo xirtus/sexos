@@ -4047,6 +4047,17 @@ fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, pub
         if sex_pdx::app_lifecycle::ack(c.slot, c.task_id).is_ok() {
             assert!(lifecycle.acknowledge(index, c.target_pd, c.task_id));
             sex_pdx::serial_record!("[display.app.cleanup.ack] target={} task={} role=display", c.target_pd, c.task_id);
+        } else if let Ok(now) = sex_pdx::app_lifecycle::catalog(c.slot) {
+            // The kernel already retired this run and started the row's next one (a
+            // late REBORN replay can ack the dead run for us). Its REBORN found this
+            // row still cleaning up and was dropped, so finish the reuse here, or the
+            // new run waits forever for Display's ack.
+            if now.target_pd == c.target_pd && now.task_id != c.task_id
+                && lifecycle.acknowledge(index, c.target_pd, c.task_id)
+                && lifecycle.reborn(now.target_pd, now.task_id) == Some(c.slot) {
+                let acked = sex_pdx::app_lifecycle::ack(c.slot, now.task_id).is_ok();
+                sex_pdx::serial_record!("[display.app.reborn.ack] target={} task={} ok={} late=1 old_task={}", now.target_pd, now.task_id, acked as u8, c.task_id);
+            }
         }
     }
     for index in 0..surface_lifecycle::CATALOG_CAPACITY {

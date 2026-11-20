@@ -7,12 +7,25 @@
 //! font is bytes, a glyph is a function of those bytes and a size.
 #![no_std]
 
+// Only the OpenType inspector allocates; glyph rendering stays allocation-free so
+// servers without an allocator (sexdisplay) can keep linking this crate.
+#[cfg(feature = "inspect")]
+extern crate alloc;
+
 pub mod cache;
 pub mod fallback;
+#[cfg(feature = "inspect")]
+#[forbid(unsafe_code)]
+pub mod inspect;
 pub mod gamma;
 mod gamma_tables;
 pub mod raster;
 
+#[cfg(feature = "inspect")]
+pub use inspect::{
+    font_collection_count, inspect_font, FontClass, FontMetadata, Panose, ScriptRange,
+    UnicodeCoverage,
+};
 pub use ttf_parser::GlyphId;
 use raster::{div_round, Raster, FX};
 use ttf_parser::{Face, OutlineBuilder};

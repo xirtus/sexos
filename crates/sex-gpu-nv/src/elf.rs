@@ -16,15 +16,18 @@ pub fn section<'a>(img: &'a [u8], name: &str) -> Result<&'a [u8], Error> {
     let shstrndx = rd16(img, 0x3e).ok_or(bad("gsp: short header"))? as usize;
     if shentsize < 0x40 || shstrndx >= shnum { return Err(bad("gsp: bad section table")); }
     let sh = |i: usize| shoff.checked_add(i.checked_mul(shentsize)?);
-    let strtab = sh(shstrndx).and_then(|o| rd64(img, o + 0x18)).ok_or(bad("gsp: bad shstrtab"))? as usize;
+    // Offsets come from the file: a section table near usize::MAX must not wrap.
+    let field = |o: usize, at: usize| o.checked_add(at);
+    let strtab = sh(shstrndx).and_then(|o| rd64(img, field(o, 0x18)?)).ok_or(bad("gsp: bad shstrtab"))? as usize;
     for i in 0..shnum {
         let o = sh(i).ok_or(bad("gsp: bad section table"))?;
         let name_off = rd32(img, o).ok_or(bad("gsp: bad section table"))? as usize;
-        let off = rd64(img, o + 0x18).ok_or(bad("gsp: bad section table"))? as usize;
-        let size = rd64(img, o + 0x20).ok_or(bad("gsp: bad section table"))? as usize;
+        let off = field(o, 0x18).and_then(|a| rd64(img, a)).ok_or(bad("gsp: bad section table"))? as usize;
+        let size = field(o, 0x20).and_then(|a| rd64(img, a)).ok_or(bad("gsp: bad section table"))? as usize;
         let start = strtab.checked_add(name_off).ok_or(bad("gsp: bad name"))?;
         let n = name.as_bytes();
-        if img.get(start..start + n.len()) == Some(n) && img.get(start + n.len()) == Some(&0) {
+        let end = start.checked_add(n.len()).ok_or(bad("gsp: bad name"))?;
+        if img.get(start..end) == Some(n) && img.get(end) == Some(&0) {
             return img.get(off..off.checked_add(size).ok_or(bad("gsp: bad section"))?).ok_or(bad("gsp: section outside file"));
         }
     }

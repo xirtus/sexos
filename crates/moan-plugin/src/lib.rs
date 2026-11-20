@@ -7,6 +7,8 @@ pub mod imports;
 pub mod job;
 pub mod ladspa;
 pub mod lv2;
+// Turtle manifest + preset parsing for Moan's plugin catalog (no native code is loaded by the app).
+pub mod lv2_turtle;
 #[cfg(all(
     feature = "sexos",
     target_arch = "x86_64",

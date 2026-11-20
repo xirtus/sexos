@@ -47,7 +47,9 @@ pub struct PipeReadout {
     pub psr2: bool,
 }
 
-fn pair(v: u32) -> (u16, u16) { ((v & 0xffff) as u16 + 1, (v >> 16) as u16 + 1) }
+/// Timing registers hold value-1 in two 13-bit fields (bits 12:0 and 28:16); the
+/// rest is reserved, and a device that sets it must not wrap a count to 0.
+fn pair(v: u32) -> (u16, u16) { ((v & 0x1fff) as u16 + 1, ((v >> 16) & 0x1fff) as u16 + 1) }
 
 pub fn read_pipe(m: &mut impl Mmio, p: u32) -> PipeReadout {
     let mut r = PipeReadout { pipe: p, ..Default::default() };
