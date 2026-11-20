@@ -7429,6 +7429,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-organize"
+version = "0.1.0"
+
+[[package]]
 name = "sex-pdx"
 version = "0.1.0"
 dependencies = [
@@ -7711,6 +7715,7 @@ dependencies = [
  "sex-crypt",
  "sex-disk",
  "sex-object-model",
+ "sex-organize",
  "sex-pdx",
  "sex-pkg",
  "sex-rt",
