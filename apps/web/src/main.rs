@@ -189,8 +189,12 @@ struct Browser {
     editing: Option<String>,
     status: Option<&'static str>,
     buf: Vec<u8>,
-    /// The window's cookies, shared with page scripts (`document.cookie`).
+    /// The shown tab's cookies, shared with page scripts (`document.cookie`).
     jar: alloc::rc::Rc<core::cell::RefCell<sex_fetch::Jar>>,
+    /// The shown tab's `localStorage`.
+    storage: alloc::rc::Rc<core::cell::RefCell<sex_js::storage::WebStorage>>,
+    /// Which box the shown tab's cookies and storage come from.
+    jarbox: profile::Jarbox,
     /// The window shows no full frame of the page yet, so pictures alone can't update it.
     full_redraw: bool,
     /// The link node a left press started on: a release follows a link only if it
@@ -374,7 +378,9 @@ impl Browser {
     /// Compiled scripts from now on belong to the shown top-level page's site (frames
     /// included). Called before any of its or its frames' scripts run.
     pub(crate) fn code_site(&mut self) {
-        if self.in_frame.is_none() { self.code_store.open(&mut self.window, &mut self.code_cache.borrow_mut(), &self.url); }
+        // A private tab's scripts are compiled in memory only, never kept in Files.
+        let url = if self.jarbox == profile::Jarbox::Private { "" } else { self.url.as_str() };
+        if self.in_frame.is_none() { self.code_store.open(&mut self.window, &mut self.code_cache.borrow_mut(), url); }
     }
     fn leave(&mut self, i: usize) { self.swap_frame(i); self.in_frame = None; }
 
@@ -522,7 +528,7 @@ impl Browser {
     fn tick_all(&mut self) {
         self.ws_poll();
         let now = sex_pdx::get_ticks();
-        if self.profile.due.is_some_and(|d| d <= now) { self.profile.save(&mut self.window, &self.jar.borrow(), wall(), false); }
+        if self.profile.due.is_some_and(|d| d <= now) { self.profile.save(&mut self.window, wall(), false); }
         self.code_store.later(&self.code_cache.borrow());
         if self.code_store.due.is_some_and(|d| d <= now) { self.code_store.save(&mut self.window, &mut self.code_cache.borrow_mut()); }
         if self.timer.is_some_and(|t| t <= now) { self.tick(); }
@@ -539,7 +545,7 @@ impl Browser {
     /// change shows.
     fn settle(&mut self) {
         self.ws_asks();
-        self.profile.touched(&self.jar.borrow());
+        self.profile.touched();
         if self.in_frame.is_none() { self.ext_pump(); }
         if core::mem::take(&mut self.frames_check) { self.sync_frames(); }
         if !self.frames.is_empty() { self.deliver(); }
@@ -559,10 +565,13 @@ impl Browser {
             (None, None) => if self.page.title.is_empty() { self.url.clone() } else { alloc::format!("{} — {}", self.page.title, self.url) },
         };
         let labels = self.tab_labels();
+        let colours = self.tab_colours();
         let mark = if self.profile.bookmarked(&self.url) && self.editing.is_none() { "★ " } else { "" };
-        let bar = alloc::format!("{mark}{bar}");
+        // A private or container tab says so in the bar.
+        let held = match self.jarbox.name() { Some(n) if self.editing.is_none() => alloc::format!("{n} · "), _ => String::new() };
+        let bar = alloc::format!("{held}{mark}{bar}");
         let chrome = sex_web::Chrome {
-            text: &bar, editing: self.editing.is_some(), tabs: &labels, active: self.active,
+            text: &bar, editing: self.editing.is_some(), tabs: &labels, colours: &colours, active: self.active,
             suggestions: &self.suggestions, chosen: self.chosen,
             find: self.find.as_deref().map(|q| (q, self.find_at, self.matches())), marks: &self.marks,
             zoom: sex_html::style::zoom(),
@@ -843,7 +852,8 @@ impl Browser {
         if let Some(css) = self.shields.css(&base, &dom) { sheets.push(css); }
         // Extensions' content scripts: their style sheets, and scripts before (at
         // `document_start`) or after the page's own.
-        let (ext_css, early, late) = self.extensions.content(&mut self.window, &base, self.in_frame.is_some());
+        // Like other browsers, extensions stay out of private tabs.
+        let (ext_css, early, late) = if self.jarbox == profile::Jarbox::Private { Default::default() } else { self.extensions.content(&mut self.window, &base, self.in_frame.is_some()) };
         sheets.extend(ext_css);
         let mut scripts = early;
         scripts.extend(self.scripts(&dom, &base));
@@ -860,7 +870,7 @@ impl Browser {
         let mut doc = Document::new(dom, &base, self.view, clock);
         doc.measure = sex_web::canvas::measure_css;
         doc.cookies = Some(self.jar.clone());
-        doc.storage = Some(self.profile.storage.clone());
+        doc.storage = Some(self.storage.clone());
         doc.wall = wall;
         doc.referrer = referrer;
         doc.parent_origin = self.parent.as_deref().and_then(|p| sex_fetch::Url::parse(p).ok()).map(|u| u.origin());
@@ -882,8 +892,11 @@ impl Browser {
         self.focus = None;
         if self.in_frame.is_some() { return; }
         self.status = None;
-        self.profile.visit(&self.url);
-        self.profile.titled(&self.url, &self.page.title);
+        // A private tab leaves no history.
+        if self.jarbox != profile::Jarbox::Private {
+            self.profile.visit(&self.url);
+            self.profile.titled(&self.url, &self.page.title);
+        }
         let title: Vec<u8> = self.page.title.bytes().take(16).collect();
         self.window.title(if title.is_empty() { b"Kaleidoscope" } else { &title });
         self.scroll_to(frag);
@@ -1732,7 +1745,7 @@ impl Browser {
         if let (Kind::Down { button: 1 }, Some(n), None) = (p.kind, link, self.in_frame) {
             let href = self.page.links.iter().find(|l| l.node == n).map(|l| l.href.clone()).unwrap_or_default();
             if let Some(t) = (!href.starts_with("javascript:") && !href.is_empty()).then(|| sex_html::url::resolve(&self.url, &href)).flatten() {
-                if t.starts_with("http") || built_in(&t).is_some() { let current = self.active; self.new_tab(Some(&t)); self.show_tab(current); return; }
+                if t.starts_with("http") || built_in(&t).is_some() { let current = self.active; self.new_tab(Some(&t), self.jarbox); self.show_tab(current); return; }
             }
         }
         let pressed = match p.kind {
@@ -1883,11 +1896,14 @@ pub extern "C" fn _start() -> ! {
     let view = surface.document(BAR);
     let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
         shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None };
-    b.profile = profile::Profile::load(&mut b.window, &mut b.jar.borrow_mut(), wall());
+    b.profile = profile::Profile::load(&mut b.window, wall());
+    // `--private` makes the window's first tab private (a private window).
+    if given.split_ascii_whitespace().any(|a| a == "--private") { b.jarbox = profile::Jarbox::Private; }
+    (b.jar, b.storage) = b.profile.store(&mut b.window, b.jarbox, wall());
     b.shields = shields::Shields::load(&mut b.window);
     b.extensions = extensions::Extensions::load(&mut b.window);
     let first_tab = tabs::Tab::blank(&b);

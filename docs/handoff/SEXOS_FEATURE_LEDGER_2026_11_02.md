@@ -5442,3 +5442,11 @@ From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, 
 
 - Ctrl+Shift+R opens `about:reader?url=…` for the current page, and pressing it again goes back. `crates/sex-web/src/reader.rs` scores the paragraph containers as Readability does: text length and commas, class and id names, and link density. It keeps the best box and any sibling boxes that score well. It writes only the paragraphs, headings, lists, quotes, code and pictures, with absolute addresses, on a calm 680 px page with an "N min read · host" line.
 - Host tests: `crates/sex-web/tests/reader.rs`. OS gate: `scripts/program_web_reader_gate.py`, which checks the article's words and title, that the picture is fetched from the site, the cream page, and the toggle back. Fixtures are in `scripts/web_site/reader/`.
+
+## Kaleidoscope private and container tabs, slice N4 (2026-11-20)
+
+- Each tab takes its cookies and localStorage from a box (`apps/web/src/profile.rs` `Jarbox`): the person's own; one of four containers (Personal, Work, Banking, Shopping), each saved to `Kaleidoscope/containers/<n>/`; or the private box, which lives in memory only.
+- When the last private tab closes, the private box is forgotten (`[web.private.forgotten]`). Private tabs record no history, keep compiled scripts in memory only, and run no extensions.
+- Keys: Ctrl+Shift+P opens a private tab and Ctrl+Shift+1..4 opens a container tab. Ctrl+T from a private tab stays private, and a link opened in a new tab keeps its box. `kaleidoscope URL --private` opens a private window.
+- The tab chip is underlined in its box's colour, and the bar shows "Private · " or the container's name.
+- Gate: `scripts/program_web_private_gate.py` (in CI). The server sees each box's cookie, and each page reports its localStorage. Own, Personal, Work and private never see each other's. Two private tabs share one box, and it is empty again after they close. A second Personal tab shares Personal's box, and only container 1's box is saved to Files.

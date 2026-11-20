@@ -74,7 +74,7 @@ fn esc(s: &str) -> String { s.replace('&', "&amp;").replace('<', "&lt;").replace
 pub fn article(dom: &Dom, base: &str) -> Option<Article> {
     let all = dom.descendants(Dom::ROOT);
     let mut scores: Vec<(NodeId, i64)> = Vec::new();
-    let mut add = |n: NodeId, s: i64, scores: &mut Vec<(NodeId, i64)>| match scores.iter_mut().find(|(m, _)| *m == n) {
+    let add = |n: NodeId, s: i64, scores: &mut Vec<(NodeId, i64)>| match scores.iter_mut().find(|(m, _)| *m == n) {
         Some((_, v)) => *v += s,
         None => scores.push((n, s + weight(dom, n))),
     };

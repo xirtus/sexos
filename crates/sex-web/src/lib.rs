@@ -639,6 +639,8 @@ pub struct Chrome<'a> {
     pub editing: bool,
     /// Each tab's label; the strip shows only with two tabs or more.
     pub tabs: &'a [String],
+    /// The line under each tab (its container's or private colour), 0 for none.
+    pub colours: &'a [u32],
     pub active: usize,
     /// Addresses offered under the bar while typing, and the chosen one.
     pub suggestions: &'a [String],
@@ -702,6 +704,7 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
         bar.fill(*x, 4, *w, BAR - 8, if on { 0xFF3A_4A60 } else { 0xFF18_2230 }, 6);
         let label = fit(fonts, &c.tabs[i], small, w - 12);
         text_run(&mut bar, fonts, x + 6, 19, small, if on { 0xFFFF_FFFF } else { 0xFF9A_A8B8 }, &label);
+        if let Some(&c) = c.colours.get(i).filter(|c| **c != 0) { bar.fill(x + 4, BAR - 7, w - 8, 2, c, 0); }
     }
     let left = chips.last().map_or(6, |(x, w)| x + w + 6);
     let zoom = if c.zoom != 0 && c.zoom != 100 { alloc::format!("{}%", c.zoom) } else { String::new() };

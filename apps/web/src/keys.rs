@@ -5,9 +5,10 @@
 //! tab, Ctrl+1..8 that tab and Ctrl+9 the last (Tab itself is the desktop's),
 //! Ctrl+L the address, Ctrl+D bookmark, Ctrl+F find, Ctrl+= / Ctrl+- / Ctrl+0 zoom,
 //! Ctrl+R reload, Ctrl+J downloads, Ctrl+Shift+Backspace forget this site's cookies and storage,
-//! Ctrl+Shift+S Shields down (or up) for this site, Ctrl+Shift+R reader view.
+//! Ctrl+Shift+S Shields down (or up) for this site, Ctrl+Shift+R reader view,
+//! Ctrl+Shift+P a private tab, Ctrl+Shift+1..4 a tab in a container.
 
-use super::{nav, Browser, Nav};
+use super::{nav, profile::Jarbox, Browser, Nav};
 use sex_web::sex_html;
 use alloc::string::String;
 
@@ -18,7 +19,12 @@ impl Browser {
     /// True when `key` (with Ctrl) was one of the browser's.
     pub(super) fn shortcut(&mut self, key: sex_pdx::app_key::Key) -> bool {
         match key.code {
-            0x14 => self.new_tab(None),
+            // Ctrl+T: a new tab; from a private tab it is private too, from a container
+            // tab it is an ordinary one (as in Firefox).
+            0x14 => { let b = if self.jarbox == Jarbox::Private { Jarbox::Private } else { Jarbox::Own }; self.new_tab(None, b) }
+            // Ctrl+Shift+P: a private tab. Ctrl+Shift+1..4: a tab in that container.
+            0x19 if key.shift => self.new_tab(None, Jarbox::Private),
+            0x02..=0x05 if key.shift => self.new_tab(None, Jarbox::Container((key.code - 0x01) as u8)),
             0x11 => self.close_tab(),
             0x51 => { let n = (self.active + 1) % self.tabs.len(); self.show_tab(n); }
             0x49 => { let n = (self.active + self.tabs.len() - 1) % self.tabs.len(); self.show_tab(n); }
@@ -61,7 +67,7 @@ impl Browser {
             }
             0x0E if key.shift => {
                 let url = self.url.clone();
-                self.profile.clear_site(&mut self.jar.borrow_mut(), &url);
+                self.profile.clear_site(&mut self.jar.borrow_mut(), &mut self.storage.borrow_mut(), &url);
                 self.code_store.forget(&mut self.window, &mut self.code_cache.borrow_mut(), &url);
                 sex_pdx::serial_record!("[web.site.cleared] url={}", url);
             }
@@ -126,8 +132,7 @@ impl Browser {
 
     /// Saves the profile and ends the program.
     pub(super) fn quit(&mut self) -> ! {
-        self.profile.touched(&self.jar.borrow());
-        self.profile.save(&mut self.window, &self.jar.borrow(), super::wall(), true);
+        self.profile.save(&mut self.window, super::wall(), true);
         self.code_store.save(&mut self.window, &mut self.code_cache.borrow_mut());
         sex_pdx::serial_record!("[web.closed] target={} task={}", self.window.target, self.window.task);
         sex_pdx::task_finish(0)
