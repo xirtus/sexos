@@ -89,6 +89,33 @@ pub fn mask(h: &mut impl Hardware) {
     if r8125(h) { h.write(INTR_MASK_8125, 0); h.write(INTR_STATUS_8125, u32::MAX); }
     else { h.write16(INTR_MASK_8168, 0); h.write16(INTR_STATUS_8168, u16::MAX); }
 }
+/// Causes that wake the service once it sleeps on the card's interrupt (one MSI
+/// vector, or MSI-X entry 0, as r8169 uses on both families): receive OK and error,
+/// transmit OK and error, receive descriptors used up, link change, receive FIFO
+/// overflow. The same bit values serve the 16-bit r8169 and 32-bit r8125 registers.
+pub const IRQ_CAUSES: u16 = 0x0001 | 0x0002 | 0x0004 | 0x0008 | 0x0010 | 0x0020 | 0x0040;
+
+/// Acknowledge anything stale, then unmask `IRQ_CAUSES`.
+pub fn irq_arm(h: &mut impl Hardware) {
+    if r8125(h) { h.write(INTR_STATUS_8125, u32::MAX); h.write(INTR_MASK_8125, IRQ_CAUSES as u32); }
+    else { h.write16(INTR_STATUS_8168, u16::MAX); h.write16(INTR_MASK_8168, IRQ_CAUSES); }
+}
+
+/// Write the raised causes back (write one to clear) so the next one sends a new
+/// message. Called before the receive ring is drained, so a frame landing after this
+/// raises a fresh interrupt. Returns the causes seen (all ones: the card is gone).
+pub fn irq_ack(h: &mut impl Hardware) -> u32 {
+    if r8125(h) {
+        let s = h.read(INTR_STATUS_8125);
+        if s != 0 && s != u32::MAX { h.write(INTR_STATUS_8125, s); }
+        s
+    } else {
+        let s = h.read16(INTR_STATUS_8168);
+        if s != 0 && s != u16::MAX { h.write16(INTR_STATUS_8168, s); }
+        if s == u16::MAX { u32::MAX } else { s as u32 }
+    }
+}
+
 fn interrupt_mask(h: &mut impl Hardware) -> u32 {
     if r8125(h) { h.read(INTR_MASK_8125) } else { h.read16(INTR_MASK_8168) as u32 }
 }
