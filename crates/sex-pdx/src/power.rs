@@ -98,6 +98,11 @@ pub const OP_PREPARE: u64 = 0x50F0;
 /// The message the kernel sends the desktop that holds the power button (from pd 0) when
 /// the button is pressed or the lid opens or closes: read `SENSORS` for what changed.
 pub const OP_EVENT: u64 = 0x50F1;
+/// Kernel to every service holding a device lease when suspend to idle begins
+/// (arg0 = 1) and ends (arg0 = 0), caller pd 0, no reply. A driver puts what it can
+/// into its lowest power state (USB ports suspended, codec in D3, disk flushed) and
+/// brings it back on 0. (0x50F2 is `touchpad::OP_FOUND`.)
+pub const OP_DEVICE_SLEEP: u64 = 0x50F3;
 /// How long the kernel waits for Files, in timer ticks (about a millisecond each).
 pub const FLUSH_TICKS: u64 = 5000;
 

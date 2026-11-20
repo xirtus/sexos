@@ -632,6 +632,7 @@ pub extern "C" fn _start() -> ! {
             }
         };
         paging_probe::check_retained();
+        if msg.type_id==sex_pdx::power::OP_DEVICE_SLEEP&&msg.caller_pd==0{let groups=sound::device_sleep(msg.arg0==1);sex_pdx::serial_record!("[bell.sleep] asleep={} codec_groups={}",msg.arg0,groups);continue;}
         if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:msg.caller_pd,task:msg.caller_task},opcode:msg.type_id,words:[msg.arg0,msg.arg1,msg.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}
         if restricted::denied(msg.caller_pd){continue;}
 
