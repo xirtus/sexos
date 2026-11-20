@@ -471,6 +471,10 @@ pub fn attach_device(sectors: u64) {
         Err(e) => { sex_pdx::serial_record!("[files.media.device.none] sectors={} error={:?}", sectors, e); return; }
     };
     sex_pdx::serial_record!("[files.media.device] sectors={} volumes={}", sectors, found.len());
+    // Windows device encryption: say so, or the missing volume looks like a bug.
+    for (start, len) in sv::bitlocker(&mut device).unwrap_or_default() {
+        sex_pdx::serial_record!("[files.media.bitlocker] start={} sectors={} readable=0 reason=encrypted", start, len);
+    }
     for (part, f) in found.into_iter().enumerate() {
         if mounts().len() >= MOUNTS_MAX { break; }
         let name = mount_name(&f.volume.label(), b"disk", part);
