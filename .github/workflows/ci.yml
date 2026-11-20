@@ -606,7 +606,11 @@ jobs:
         python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
         python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
     - name: Media Source Extensions (fMP4 and WebM, live append, quality switch, seek)
-      run: python3 scripts/program_web_mse_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-mse"
+      # Under KVM: its sound checks need real time, which TCG can't keep while decoding.
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        if [ -w /dev/kvm ]; then export SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host; fi
+        python3 scripts/program_web_mse_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-mse"
     - name: YouTube-shaped streaming (AV1 fMP4 + Opus WebM, POST ranges read through response.body, changeType to VP9)
       # Under KVM: AV1 in plain-C dav1d is too slow under TCG to keep the sound gapless.
       run: |
