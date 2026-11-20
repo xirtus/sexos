@@ -4,6 +4,7 @@ from pathlib import Path
 from history_roster_evidence import source_spindles, verify_boot_roster
 from check_desktop_pixels import cell_errors,chrome_geometry
 from check_disk_persistence import ppm_rgb
+import spindle_view_record
 
 SCALE_SOURCE='crates/sex-pdx/src/spindle_view.rs'
 
@@ -75,11 +76,7 @@ def verify(text,ppm,font,target=17,require_prompt=None,require_echo=True,require
         records={}
         for sid,sequence,paint,c,r,n in re.findall(rf'\[spindle.view.text\] target={target} sid=(\d+) sequence=(\d+) paint=(\d+) cols=(\d+) rows=(\d+) bytes=(\d+)',text):
             if int(sid)not in sids or int(sequence)!=seq:continue
-            chunks=[(int(off),bytes.fromhex(data))for off,data in re.findall(rf'\[spindle.view.bytes\] target={target} sid={sid} seq={seq} paint={paint} off=(\d+) hex=([0-9a-f]*)',text)]
-            joined=bytearray()
-            for off,data in chunks:
-                if off!=len(joined) or len(data)!=min(48,int(n)-off):raise ValueError('partial or duplicated viewport byte chunks')
-                joined.extend(data)
+            joined=spindle_view_record.pane(text,target,sid,seq,paint)
             records[int(sid)]=(int(c),int(r),int(n),bytes(joined))
         if sids[0]not in records or set(records)-{sids[0]}:raise ValueError('missing exact current-layout text payloads')
         rendered=[];errors=[]
