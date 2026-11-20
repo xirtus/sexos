@@ -446,3 +446,81 @@ pub fn draw_luma_histogram(fb: &mut [u32], fb_w: usize, fb_h: usize, img: &Image
         }
     }
 }
+
+/// Draws a 5-star culling indicator row starting at `(x, y)` inside `fb`.
+pub fn draw_star_row(
+    fb: &mut [u32],
+    fb_w: usize,
+    fb_h: usize,
+    x: i32,
+    y: i32,
+    stars: u8,
+    filled_color: u32,
+    empty_color: u32,
+) {
+    const STAR_7X7: [&[u8; 7]; 7] = [
+        b"...#...",
+        b"...#...",
+        b"..###..",
+        b"#######",
+        b".#####.",
+        b".##.##.",
+        b"#.....#",
+    ];
+    let filled = (stars.min(5)) as i32;
+    for s in 0..5 {
+        let col = if s < filled { filled_color } else { empty_color } & 0x00FF_FFFF;
+        let sx = x + s * 10;
+        for (ry, row) in STAR_7X7.iter().enumerate() {
+            let py = y + ry as i32;
+            if py < 0 || py >= fb_h as i32 {
+                continue;
+            }
+            let fb_row = py as usize * fb_w;
+            for (rx, &ch) in row.iter().enumerate() {
+                let px = sx + rx as i32;
+                if ch == b'#' && px >= 0 && px < fb_w as i32 {
+                    fb[fb_row + px as usize] = col;
+                }
+            }
+        }
+    }
+}
+
+/// Blits a `gaze_core::ScopeSurface` (`0xAARRGGBB`) directly into `dest` on `fb` with crisp scaling.
+pub fn blit_scope_surface(
+    fb: &mut [u32],
+    fb_w: usize,
+    fb_h: usize,
+    surface: &gaze_core::ScopeSurface,
+    dest: UiRect,
+) {
+    if surface.width == 0
+        || surface.height == 0
+        || surface.bgra.len() < surface.width * surface.height
+        || dest.w <= 2
+        || dest.h <= 2
+    {
+        return;
+    }
+    let dw = dest.w as usize;
+    let dh = dest.h as usize;
+    for y in 0..dh {
+        let dy = dest.y + y as i32;
+        if dy < 0 || dy >= fb_h as i32 {
+            continue;
+        }
+        let sy = (y * surface.height / dh).min(surface.height - 1);
+        let src_row = &surface.bgra[sy * surface.width..(sy + 1) * surface.width];
+        let fb_row = dy as usize * fb_w;
+        for x in 0..dw {
+            let dx = dest.x + x as i32;
+            if dx < 0 || dx >= fb_w as i32 {
+                continue;
+            }
+            let sx = (x * surface.width / dw).min(surface.width - 1);
+            fb[fb_row + dx as usize] = src_row[sx] & 0x00FF_FFFF;
+        }
+    }
+}
+

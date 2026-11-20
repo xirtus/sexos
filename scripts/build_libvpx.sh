@@ -3,7 +3,8 @@
 # Builds libvpx's VP9 encoder for SexOS programs as a static archive for
 # x86_64-sex-app.json, with the same flags as FFmpeg (scripts/build_ffmpeg.sh runs
 # this first for the export profile and links it as libvpx). Splicy exports WebM with
-# it. One thread; SSE2..SSE4.1 assembly, never AVX, whose state the kernel does not keep.
+# it. One thread; SSE2..SSE4.1, AVX and AVX2 code chosen at run time (runtime CPU
+# detection checks CPUID and XCR0; the kernel saves AVX state since #408). No AVX-512.
 # C calls go to crates/sex-libc.
 #
 # Output: target/libvpx/lib/libvpx.a, target/libvpx/include/vpx and a pkg-config file.
@@ -45,7 +46,7 @@ rm -rf "$BUILD" && mkdir -p "$BUILD" && cd "$BUILD"
 CC=clang AR=llvm-ar LD=clang AS=nasm STRIP=llvm-strip CFLAGS="$CFLAGS" CXXFLAGS="$CFLAGS" \
 LDFLAGS="--target=x86_64-unknown-none-elf -nostdlib -fuse-ld=lld -Wl,--unresolved-symbols=ignore-all" \
 "$LIBVPX_SRC/configure" --prefix="$OUT" --libdir="$OUT/lib" --target=x86_64-linux-gcc --as=nasm \
-  --disable-avx --disable-avx2 --disable-avx512 \
+  --enable-runtime-cpu-detect --disable-avx512 \
   --disable-multithread --disable-vp8 --enable-vp9 --disable-vp9-decoder \
   --disable-examples --disable-tools --disable-docs --disable-unit-tests --disable-install-bins \
   --disable-install-srcs --enable-pic --enable-static --disable-shared --disable-debug \

@@ -12,7 +12,9 @@ def session(a,disk,tag):
  g['focus'](153);time.sleep(.5)
  def line(text):
   for k in text:
-   q.key(KEYS.get(k,k));time.sleep(.03)
+   if k.isupper():q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':k.lower()}],'hold-time':80})
+   else:q.key(KEYS.get(k,k))
+   time.sleep(.03)
   q.key('ret')
  def run(text,want=None,timeout=60):
   """Send one command and wait for its final result."""

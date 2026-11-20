@@ -3,6 +3,10 @@
 sound card (or, with --card hda, an Intel HD Audio controller) through its BOOT lease. QEMU records the card's output to a WAV file, and
 the notes must be there at the pitch and length asked for.
 
+With --card hda, BOOT gives the controller an MSI vector and Bell must play by
+interrupt: it sleeps until each period ends instead of waking every 1 ms tick, so
+each drained note shows a handful of waits per period, not ~43.
+
 Without --no-card the gate also boots once with no card, where Bell must say the
 card is absent and `beep` must leave the rest of the desktop running.
 """
@@ -58,10 +62,19 @@ def main():
   if a.card=='virtio':grant=g['wait'](r'\[kernel.cap.virtio.grant\] pd=(\d+) slot=20 product=0x1059 [^\n]*',0,60)
   else:grant=g['wait'](r'\[kernel.cap.class.grant\] pd=(\d+) slot=20 kind=Hda [^\n]*',0,60)
   g['wait'](rf'\[bell.sound.ready\] card={a.card} stream=\d+ rate=48000 channels=2',0,300)
+  if a.card=='hda':g['wait'](r'\[bell.hda.irq\] mode=msix? vectors=1 bit=\d+ polling=0',0,10)
+  wakes=[]
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   for hz,ms in NOTES:
    s=len(t());say(f'beep {hz} {ms} 50',rf'\[bell.sound.tone\] caller_pd=\d+ hz={hz} ms={ms} volume=50 queued=1 card=1')
-   g['wait'](r'\[bell.sound.drained\]',s,60);time.sleep(.5)
+   g['wait'](r'\[bell.sound.drained\]',s,60)
+   m=g['wait'](r'\[bell.sound.wakes\] irq=(\d) periods=(\d+) waits=(\d+) interrupts=(\d+)',s,10)
+   irq,periods,waits,interrupts=map(int,m.groups());wakes.append(dict(irq=irq,periods=periods,waits=waits,interrupts=interrupts))
+   if a.card=='hda':
+    assert irq==1,m[0]
+    # Polling waits every tick: ~43 per 43 ms period. By interrupt it is about one.
+    assert waits<=3*periods+8 and interrupts>=max(1,periods//3),m[0]
+   time.sleep(.5)
   assert 'KERNEL PANIC' not in t()
   q.cmd('quit');g['proc'].wait(30)
   found=segments(wav)
@@ -69,6 +82,6 @@ def main():
   for (hz,ms),(start,length,heard) in zip(NOTES,found):
    assert abs(heard-hz)<=hz*0.02,f'{hz} Hz note came out at {heard:.1f} Hz'
    assert abs(length*1000-ms)<=40,f'{ms} ms note lasted {length*1000:.0f} ms'
-  print({'ok':True,'grant':grant[0],'notes':[dict(start=s,ms=round(l*1000),hz=round(h,1))for s,l,h in found]})
+  print({'ok':True,'grant':grant[0],'wakes':wakes,'notes':[dict(start=s,ms=round(l*1000),hz=round(h,1))for s,l,h in found]})
  finally:g['stop']()
 if __name__=='__main__':main()

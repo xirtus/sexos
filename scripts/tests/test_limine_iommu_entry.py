@@ -25,6 +25,13 @@ class IommuOffEntry(unittest.TestCase):
         self.assertEqual([l for l in off if l != 'CMDLINE=iommu=off'], e['SexOS'])
         self.assertEqual(list(e)[0], 'SexOS', 'the protected entry stays the default')
 
+    def test_safe_start_matches_main_entry_with_safe(self):
+        # kernel/src/lib.rs safe_start() reads the word `safe`.
+        e = entries((ROOT / 'limine.cfg').read_text())
+        safe = e['SexOS safe start']
+        self.assertIn('CMDLINE=safe', safe)
+        self.assertEqual([l for l in safe if l != 'CMDLINE=safe'], e['SexOS'])
+
 
 if __name__ == '__main__':
     unittest.main()
