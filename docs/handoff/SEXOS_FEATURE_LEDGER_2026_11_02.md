@@ -4421,7 +4421,8 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   ES module when `type: module`; MV2 `scripts` or a background page's `<script src>`)
   runs in a script realm of its own, started with the browser and on install, stopped
   when turned off or removed. It hears `runtime.onInstalled` / `onStartup`.
-- **`chrome.*`** (`crates/sex-js/src/extensions.js`, op 35 `EXTENSION`): `runtime`
+- **`chrome.*`** (`crates/sex-js/src/extensions.js`, op `EXTENSION`, 39 since the
+  master merge of 2026-11-19): `runtime`
   (sendMessage/onMessage both ways with async `sendResponse`, getURL, getManifest,
   lastError), `tabs` (query/get/sendMessage/create/update), `storage.local/sync/session`
   with `onChanged` across realms (kept with the profile's web storage under origin
@@ -4443,6 +4444,22 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   scripts, and with Shields down blocks 7 trackers on the Shields test page.
 - **Not yet:** isolated worlds, popups/options pages as extension pages, `webRequest`,
   `runtime.connect` ports, content scripts in frames hearing messages.
+## Kaleidoscope extensions, slice N7c: extension pages (2026-11-20)
+- **What:** an extension's own pages (its popup and options page, or any
+  `kaleidoscope-extension://ID/PATH.html`) open in the tab while it is on. Their
+  scripts, modules and style sheets load from the extension, the page realm gets the
+  whole `chrome.*` API (as the background has), and content scripts don't run there.
+  about:extensions links each extension's Popup and Options page. An extension page
+  speaks only for its own extension.
+- **Tests:** the extensions gate opens the sample's options page, which asks the service
+  worker and reads `chrome.storage` (reply `{"ok":true,"host":"options","installs":1,...}`)
+  and gets its style sheet. The uBOL gate (not in CI) now also fetches uBOL's popup and
+  dashboard: the popup renders ("not a website" for an extension tab, as in Chrome); the
+  dashboard's scripts need `:scope` and `:has()` selectors, which sex-html does not parse
+  yet (selector code is Codex's).
+- **Gate note:** the uBOL gate needs a 768 MiB guest (`SEXOS_GATE_MEMORY`); at 512 MiB the
+  shell ends the browser for memory, and a 1 GiB guest hit a kernel page fault at rip 0
+  in the browser's task (reported, not this slice's).
 ## J5 D2: Denim compressed memory, page out and back (2026-11-14)
 - New syscall 88 `SYS_DENIM` (ABI addition, `sex_pdx::denim`), Denim only: SCAN (accessed bits), OUT (heap page leaf becomes a non-present marker naming the row, shootdown, bytes copied to Denim's window, frame freed), IN (fresh frame, leaf restored, parked fault task resumed). Kernel messages OP_FAULT 0x3D1 and OP_RECALL 0x3D2.
 - Page faults on a marker go to Denim instead of the row's pager (`forward_page_fault`). Worker spawn and SEAL/OPEN on a run with pages out return RETRY and recall them; OUT is refused while workers live.
@@ -5433,3 +5450,16 @@ From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, 
 - Kernel: BOOT reserves one I/O APIC *line* for Input (`sex_hwdb::manifest::LINES`); syscall 86 gains `OP_LINE_BIND` (4) and `OP_LINE_MASK` (5). A level line is masked each time it fires, so a stuck wire costs one interrupt. Inputs under 16 and inputs already bound are refused.
 - Polling stays: no line, a refused line, a stuck line (32 empty reads in a row after interrupts) or a silent one (reports found by the once-a-second check read with no interrupt, three times in a row) drop back to it (`sex_hid_touch::pace`).
 - Verified by host tests (`cargo test -p sex-laptop -p sex-hid-touch`, `sex_pdx::touchpad` round trips with the line); not yet run on a real pad.
+
+## Kaleidoscope reader view, slice N5 (2026-11-20)
+
+- Ctrl+Shift+R opens `about:reader?url=…` for the current page, and pressing it again goes back. `crates/sex-web/src/reader.rs` scores the paragraph containers as Readability does: text length and commas, class and id names, and link density. It keeps the best box and any sibling boxes that score well. It writes only the paragraphs, headings, lists, quotes, code and pictures, with absolute addresses, on a calm 680 px page with an "N min read · host" line.
+- Host tests: `crates/sex-web/tests/reader.rs`. OS gate: `scripts/program_web_reader_gate.py`, which checks the article's words and title, that the picture is fetched from the site, the cream page, and the toggle back. Fixtures are in `scripts/web_site/reader/`.
+
+## Kaleidoscope private and container tabs, slice N4 (2026-11-20)
+
+- Each tab takes its cookies and localStorage from a box (`apps/web/src/profile.rs` `Jarbox`): the person's own; one of four containers (Personal, Work, Banking, Shopping), each saved to `Kaleidoscope/containers/<n>/`; or the private box, which lives in memory only.
+- When the last private tab closes, the private box is forgotten (`[web.private.forgotten]`). Private tabs record no history, keep compiled scripts in memory only, and run no extensions.
+- Keys: Ctrl+Shift+P opens a private tab and Ctrl+Shift+1..4 opens a container tab. Ctrl+T from a private tab stays private, and a link opened in a new tab keeps its box. `kaleidoscope URL --private` opens a private window.
+- The tab chip is underlined in its box's colour, and the bar shows "Private · " or the container's name.
+- Gate: `scripts/program_web_private_gate.py` (in CI). The server sees each box's cookie, and each page reports its localStorage. Own, Personal, Work and private never see each other's. Two private tabs share one box, and it is empty again after they close. A second Personal tab shares Personal's box, and only container 1's box is saved to Files.

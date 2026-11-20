@@ -522,6 +522,10 @@ jobs:
       run: python3 scripts/program_web_shields_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-shields"
     - name: Kaleidoscope installs an MV3 extension; its content script and rules apply
       run: python3 scripts/program_web_extensions_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-extensions"
+    - name: Kaleidoscope reader view shows the article alone (Ctrl+Shift+R)
+      run: python3 scripts/program_web_reader_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-reader"
+    - name: Kaleidoscope private and container tabs keep cookies apart
+      run: python3 scripts/program_web_private_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-private"
     - name: Browser site suite (encyclopedia, news, links, GitHub, webmail sign-in)
       run: python3 scripts/browser_sites_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sites"
     - name: Preserve browser evidence
