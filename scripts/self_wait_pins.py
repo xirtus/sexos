@@ -85,6 +85,7 @@ PINS = (
     ('timed', 'kernel/src/interrupts.rs', 'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d'),
 
     ('timed', 'kernel/src/interrupts.rs', 'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),  # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:9be7e0f042763f122e4881e3f91ce32256e08711eb9531cb73fac73865384dc4'),  # SMAP audit: a kernel fault on a user page is recorded and retried with AC; kernel faults keep PKRU (no wait change), 2026-11-20
 
     ('timed', 'kernel/src/syscalls/mod.rs', 'fn-v1:676eae4ad2ce1171bafcdd21eb7b0d61e5e387ff84e401eb926eecf173191fbb'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
