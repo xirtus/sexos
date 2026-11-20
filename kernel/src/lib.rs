@@ -22,6 +22,8 @@ pub mod memory;
 pub mod hal;
 #[cfg(target_arch = "x86_64")]
 pub mod pku;
+#[cfg(target_arch = "x86_64")]
+pub mod smap;
 pub mod gate;
 pub mod jitter;
 pub mod fpu;

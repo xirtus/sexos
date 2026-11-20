@@ -40,6 +40,33 @@ pub struct Memory<'a> {
     pub scratch: &'a mut [u8],
 }
 
+impl<'a> Memory<'a> {
+    /// Cut every buffer out of one GPU-visible pool (a service's DMA pool), page by
+    /// page, in the order the fields are listed. `bus` is the pool's first bus address.
+    pub fn carve(pool: &'a mut [u8], bus: u64, sizes: &Sizes, scratch: &'a mut [u8]) -> Result<Memory<'a>, Error> {
+        if bus % 4096 != 0 { return Err(Error::BadFirmware("DMA pool is not page aligned")); }
+        if pool.len() < sizes.total() { return Err(Error::BufferTooSmall { need: sizes.total(), have: pool.len() }); }
+        if scratch.len() < 2 * msgq::MAX_MSG { return Err(Error::BufferTooSmall { need: 2 * msgq::MAX_MSG, have: scratch.len() }); }
+        let mut rest = pool;
+        let mut at = bus;
+        let mut take = |n: usize| -> Dma<'a> {
+            let n = page(n);
+            let (a, b) = core::mem::take(&mut rest).split_at_mut(n);
+            rest = b;
+            let d = Dma::new(a, at);
+            at += n as u64;
+            d
+        };
+        Ok(Memory {
+            fwsec: take(sizes.fwsec_max), booter: take(sizes.booter), rm_image: take(sizes.rm_image),
+            radix3_l0: take(4096), radix3_l1: take(4096), radix3_l2: take(sizes.radix3_l2),
+            signature: take(sizes.signature), bootloader: take(sizes.bootloader), wpr_meta: take(4096),
+            libos: take(4096), loginit: take(libos::LOG_BUFFER_SIZE), logintr: take(libos::LOG_BUFFER_SIZE),
+            logrm: take(libos::LOG_BUFFER_SIZE), rmargs: take(libos::RMARGS_SIZE), shm: take(sizes.shm), scratch,
+        })
+    }
+}
+
 /// How big each buffer in [`Memory`] must be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Sizes {
@@ -103,6 +130,8 @@ pub struct Report {
     pub events: u32,
     pub sequencer_runs: u32,
     pub init_done: bool,
+    /// Commands queued so far: the next command's sequence number (for [`crate::rm::Session`]).
+    pub cmdq_seq: u32,
 }
 
 /// A step failed: which, and why.
@@ -199,7 +228,7 @@ pub fn boot(m: &mut impl Mmio, c: &mut impl Clock, cfg: &Config, f: &Firmware, v
 }
 
 #[allow(clippy::too_many_arguments)]
-fn prepare(m: &mut impl Mmio, l: &FbLayout, _booter: &FalconUcode, bl_desc: &fw::RiscvDesc, bl: &[u8], rm: &fw::GspRm, cfg: &Config, mem: &mut Memory, _r: &mut Report) -> Result<(), Error> {
+fn prepare(m: &mut impl Mmio, l: &FbLayout, _booter: &FalconUcode, bl_desc: &fw::RiscvDesc, bl: &[u8], rm: &fw::GspRm, cfg: &Config, mem: &mut Memory, r: &mut Report) -> Result<(), Error> {
     let fit = |d: &Dma, n: usize| if d.len() < n { Err(Error::BufferTooSmall { need: n, have: d.len() }) } else { Ok(()) };
     fit(&mem.rm_image, rm.image.len())?;
     mem.rm_image.cpu[..rm.image.len()].copy_from_slice(rm.image);
@@ -243,6 +272,7 @@ fn prepare(m: &mut impl Mmio, l: &FbLayout, _booter: &FalconUcode, bl_desc: &fw:
     q.push(mem.shm.cpu, scratch, rpc::FN_GSP_SET_SYSTEM_INFO, &info)?;
     let n = rpc::registry(payload, rpc::DEFAULT_REGISTRY)?;
     q.push(mem.shm.cpu, scratch, rpc::FN_SET_REGISTRY, &payload[..n])?;
+    r.cmdq_seq = q.seq;
     GSP.wr(m, regs::falcon::QUEUE_HEAD0, 0);
     Ok(())
 }

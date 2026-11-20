@@ -61,36 +61,56 @@ impl Book {
         Book { session, path: path.to_string() }
     }
 
-    /// Opens an xlsx, xls, csv, tsv or GridCraft json file.
+    /// Opens an xlsx, xls, ods, csv, tsv or GridCraft json file.
     pub fn open(path: &str) -> Result<(Book, Vec<String>), String> {
         let mut session = Session::new();
         let r = session.execute_headless("file.open", json!({ "path": path })).map_err(|e| e.to_string())?;
         let mut warnings: Vec<String> = r["warnings"].as_array().into_iter().flatten().filter_map(Json::as_str).map(str::to_string).collect();
         let mut book = Book { session, path: path.to_string() };
         if path.to_ascii_lowercase().ends_with(".ods") {
-            match book.restore_ods_formulas(path) {
-                Ok(0) => {}
-                Ok(n) => {
-                    warnings.retain(|w| !w.contains("formulas become their saved results"));
-                    warnings.push(format!("{n} formulas read from the ODS file; Ctrl+S saves an .xlsx beside it."));
-                }
+            match book.restore_ods_extras(path) {
+                Ok(n) => if n > 0 { warnings.retain(|w| !w.contains("formulas become their saved results")); },
                 Err(e) => warnings.push(format!("ODS formulas were kept as values: {e}")),
             }
         }
         Ok((book, warnings))
     }
 
-    /// Puts the file's formulas back over the values GridCraft imported, as part of the
-    /// opened file: no undo step, not a change. Returns how many.
-    fn restore_ods_formulas(&mut self, path: &str) -> Result<usize, String> {
+    /// Puts the file's formulas back over the values GridCraft imported, and its fonts and
+    /// column widths, as part of the opened file: no undo step, not a change. Returns how
+    /// many formulas.
+    fn restore_ods_extras(&mut self, path: &str) -> Result<usize, String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-        let found = crate::ods::formulas(&bytes)?;
-        if found.is_empty() { return Ok(0); }
+        let extras = crate::ods::extras(&bytes)?;
+        if extras == crate::ods::Extras::default() { return Ok(0); }
         let active = self.active_sheet();
         let mut sheet = usize::MAX;
-        for f in &found {
+        for f in &extras.formulas {
             if f.sheet != sheet { self.activate(f.sheet)?; sheet = f.sheet; }
             self.set(f.row, f.col, &f.formula)?;
+        }
+        // Fonts by runs of a row, one command per run.
+        let mut fonts = extras.fonts.clone();
+        fonts.sort_by_key(|f| (f.sheet, f.row, f.col));
+        let mut i = 0;
+        while i < fonts.len() {
+            let f = &fonts[i];
+            let mut end = i + 1;
+            while end < fonts.len() && fonts[end].sheet == f.sheet && fonts[end].row == f.row && fonts[end].col == fonts[end - 1].col + 1 && fonts[end].font == f.font { end += 1; }
+            if f.sheet != sheet { self.activate(f.sheet)?; sheet = f.sheet; }
+            let range = Range { r0: f.row, c0: f.col, r1: f.row, c1: fonts[end - 1].col };
+            for (on, style) in [(f.font.0, "bold"), (f.font.1, "italic"), (f.font.2, "underline")] {
+                if on { self.run(&format!("home.{style}"), json!({ "range": range.a1(), "on": true }))?; }
+            }
+            i = end;
+        }
+        for (s, row, col, code) in &extras.percents {
+            if *s != sheet { self.activate(*s)?; sheet = *s; }
+            self.run("home.numberFormat", json!({ "range": Range::cell(*row, *col).a1(), "format": code }))?;
+        }
+        for &(s, col, width) in &extras.widths {
+            if s != sheet { self.activate(s)?; sheet = s; }
+            if (width.round() as u32) != self.col_width(col) { self.set_col_width(col, width.round() as u32)?; }
         }
         self.activate(active)?;
         if let Ok(d) = self.session.doc_mut() {
@@ -98,7 +118,7 @@ impl Book {
             d.redo.clear();
             d.saved = d.wb.clone();
         }
-        Ok(found.len())
+        Ok(extras.formulas.len())
     }
 
     fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {
@@ -320,30 +340,137 @@ impl Book {
         Some(ChartPicture { pixels, text })
     }
 
-    /// Where Ctrl+S writes: the file itself, or beside it as .xlsx when the engine only
-    /// reads its format (ods, xls, xlsb).
+    /// Where Ctrl+S writes: the file itself, or beside it as .xlsx when nothing here writes
+    /// its format (xls, xlsb, slk).
     pub fn save_path(&self) -> String {
         let lower = self.path.to_ascii_lowercase();
-        match [".ods", ".xls", ".xlsb"].iter().find(|e| lower.ends_with(*e)) {
+        match [".xls", ".xlsb", ".slk"].iter().find(|e| lower.ends_with(*e)) {
             Some(e) => format!("{}.xlsx", &self.path[..self.path.len() - e.len()]),
             None => self.path.clone(),
         }
     }
 
-    /// The workbook as the bytes of its file, in the format `path`'s extension names
-    /// (xlsx when it names none the engine writes).
-    pub fn file_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
+    /// The workbook as the bytes of its file, in the format `path`'s extension names: xlsx,
+    /// xlsm, ods, csv, tsv, html, json, or pdf (the active sheet, as printed).
+    pub fn file_bytes(&mut self, path: &str) -> Result<Vec<u8>, String> {
+        let lower = path.to_ascii_lowercase();
+        if lower.ends_with(".pdf") {
+            let r = self.run("file.exportPdf", json!({}))?;
+            let data = r.get("base64").and_then(Json::as_str).ok_or("no PDF")?;
+            return gridcraft_engine::io::base64_decode(data).ok_or_else(|| "bad PDF data".to_string());
+        }
         let d = self.session.doc().map_err(|e| e.to_string())?;
+        if lower.ends_with(".ods") { return crate::ods::write(&d.wb); }
         gridcraft_engine::io::save_file_bytes(&d.wb, path).map_err(|e| e.to_string())
+    }
+
+    /// The file beside this one with extension `ext` (`report.xlsx` -> `report.pdf`).
+    pub fn beside(&self, ext: &str) -> String {
+        let name_at = self.path.rfind('/').map_or(0, |i| i + 1);
+        let stem = match self.path[name_at..].rfind('.') { Some(dot) if dot > 0 => &self.path[..name_at + dot], _ => &self.path[..] };
+        format!("{stem}.{ext}")
+    }
+
+    /// Writes the active sheet as a PDF beside the workbook (Ctrl+P: SexOS prints to PDF).
+    /// Returns (its name, size).
+    pub fn export_pdf(&mut self) -> Result<(String, usize), String> {
+        let path = self.beside("pdf");
+        let bytes = self.file_bytes(&path)?;
+        std::fs::write(&path, &bytes).map_err(|e| format!("Could not write {path}: {e}"))?;
+        Ok((path, bytes.len()))
+    }
+
+    /// Save As: writes the workbook as `path` in the format its extension names and, unless
+    /// that is a copy-only format (pdf, html, csv or tsv of one sheet, json), goes on
+    /// working in it. A name with no extension keeps this file's. Returns (path, size).
+    pub fn save_as(&mut self, path: &str) -> Result<(String, usize), String> {
+        let name_at = path.rfind('/').map_or(0, |i| i + 1);
+        let path = if path[name_at..].contains('.') { path.to_string() } else {
+            let ext = self.save_path().rsplit_once('.').map_or("xlsx".to_string(), |(_, e)| e.to_string());
+            format!("{path}.{ext}")
+        };
+        let lower = path.to_ascii_lowercase();
+        let copy = [".pdf", ".html", ".htm", ".json"].iter().any(|e| lower.ends_with(e))
+            || ([".csv", ".tsv"].iter().any(|e| lower.ends_with(e)) && self.sheets().len() > 1);
+        let bytes = self.file_bytes(&path)?;
+        std::fs::write(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
+        if !copy {
+            let old = std::mem::replace(&mut self.path, path.clone());
+            let _ = std::fs::remove_file(recovery_path(&old));
+            if let Ok(d) = self.session.doc_mut() {
+                d.saved = d.wb.clone();
+                d.path = Some(path.clone());
+            }
+        }
+        Ok((path, bytes.len()))
+    }
+
+    /// Keeps unsaved changes safe in [`recovery_path`] (on close, and after a quiet moment),
+    /// as GridCraft's own xlsx so nothing is lost.
+    pub fn write_recovery(&self) -> Result<(), String> {
+        let d = self.session.doc().map_err(|e| e.to_string())?;
+        let path = recovery_path(&self.path);
+        let bytes = gridcraft_engine::io::save_bytes_as(&d.wb, &path, gridcraft_engine::io::FileKind::Xlsx).map_err(|e| e.to_string())?;
+        std::fs::write(&path, bytes).map_err(|e| format!("Could not keep the changes in {path}: {e}"))
+    }
+
+    /// Opens `path` with the unsaved changes kept from last time, if there are any: the
+    /// workbook is then changed (not saved) and Ctrl+S writes it to `path`.
+    pub fn open_recovered(path: &str) -> Option<Book> {
+        let kept = recovery_path(path);
+        std::fs::metadata(&kept).ok()?;
+        let (mut book, _) = Book::open(&kept).ok()?;
+        book.path = path.to_string();
+        if let Ok(d) = book.session.doc_mut() {
+            d.path = Some(path.to_string());
+            // Not the saved file: a fresh copy reads as changed.
+            d.saved = std::sync::Arc::new((*d.wb).clone());
+        }
+        Some(book)
+    }
+
+    /// Throws the kept changes away.
+    pub fn forget_recovery(&self) { let _ = std::fs::remove_file(recovery_path(&self.path)); }
+
+    /// Ctrl+G: `B7`, `B7:D9`, `Sheet2!B7` or `'My sheet'!B7`. Activates the sheet it names
+    /// and returns the range.
+    pub fn go_to(&mut self, place: &str) -> Result<Range, String> {
+        let place = place.trim();
+        let (sheet, cells) = match place.rsplit_once('!') {
+            Some((sheet, cells)) => (Some(sheet.trim_matches('\'').replace("''", "'")), cells),
+            None => (None, place),
+        };
+        let bad = || format!("{place} is not a cell: try B7, B7:D9 or Sheet2!B7");
+        let r = gridcraft_engine::core::RangeRef::parse(cells).ok_or_else(bad)?;
+        if let Some(name) = sheet {
+            let at = self.sheets().iter().position(|s| s.eq_ignore_ascii_case(&name)).ok_or_else(|| format!("There is no sheet called {name}"))?;
+            self.activate(at)?;
+        }
+        Ok(Range { r0: r.start.row, c0: r.start.col, r1: r.end.row.min(LAST_ROW), c1: r.end.col.min(LAST_COL) })
+    }
+
+    /// Inserts as many rows above `range` (or columns left of it) as it spans.
+    pub fn insert_lines(&mut self, range: Range, rows: bool) -> Result<(), String> {
+        let (t, l, b, r) = range.bounds();
+        if rows { self.run("home.insertRows", json!({ "rows": format!("{}:{}", t + 1, b + 1) })) }
+        else { self.run("home.insertColumns", json!({ "cols": format!("{}:{}", column_name(l), column_name(r)) })) }.map(|_| ())
+    }
+
+    /// Deletes the rows (or columns) `range` spans.
+    pub fn delete_lines(&mut self, range: Range, rows: bool) -> Result<(), String> {
+        let (t, l, b, r) = range.bounds();
+        if rows { self.run("home.deleteRows", json!({ "rows": format!("{}:{}", t + 1, b + 1) })) }
+        else { self.run("home.deleteColumns", json!({ "cols": format!("{}:{}", column_name(l), column_name(r)) })) }.map(|_| ())
     }
 
     /// Writes the workbook to its file (see [`Book::save_path`]). std::fs::write, not the
     /// engine's write-then-rename, so a save works on every SexOS volume. Returns the size.
     pub fn save(&mut self) -> Result<usize, String> {
         let path = self.save_path();
-        self.path = path.clone();
         let bytes = self.file_bytes(&path)?;
         std::fs::write(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
+        self.forget_recovery();
+        self.path = path.clone();
         if let Ok(d) = self.session.doc_mut() {
             d.saved = d.wb.clone();
             d.path = Some(path);
@@ -351,6 +478,13 @@ impl Book {
         Ok(bytes.len())
     }
 }
+
+/// The last row and column Excel's grid has, counted from 0.
+pub const LAST_ROW: u32 = 1_048_575;
+pub const LAST_COL: u32 = 16_383;
+
+/// Where unsaved changes to `path` are kept: `report.ods` -> `report.ods.recovered.xlsx`.
+pub fn recovery_path(path: &str) -> String { format!("{path}.recovered.xlsx") }
 
 /// `A`, `B`, … `Z`, `AA`, … for column `col` counted from 0.
 pub fn column_name(col: u32) -> String {
@@ -549,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn ods_opens_and_saves_beside_it_as_xlsx() {
+    fn ods_opens_and_saves_as_ods() {
         let path = temp("sample.ods");
         std::fs::write(&path, include_bytes!("../assets/sample.ods")).unwrap();
         let (mut book, _) = Book::open(&path).unwrap();
@@ -561,10 +695,113 @@ mod tests {
         assert!(book.undo().is_err(), "the formulas are part of the opened file, not an edit");
         book.set(1, 1, "13").unwrap();
         assert_eq!(book.shown(4, 1).text, "50");
-        assert!(book.save_path().ends_with("sample.xlsx"));
+        assert!(book.save_path().ends_with("sample.ods"));
         book.save().unwrap();
-        assert!(book.path.ends_with("sample.xlsx"));
-        assert_eq!(Book::open(&book.path).unwrap().0.shown(4, 1).text, "50");
+        assert!(book.path.ends_with("sample.ods"));
+        let (again, _) = Book::open(&book.path).unwrap();
+        assert_eq!(again.shown(4, 1).text, "50");
+        assert_eq!(again.input(4, 1), "=SUM(B2:B4)");
+    }
+
+    #[test]
+    fn ods_keeps_sheets_formulas_dates_fonts_and_widths() {
+        let path = temp("kept.ods");
+        let mut book = Book::blank(&path);
+        book.set(0, 0, "Item").unwrap();
+        book.set(0, 1, "When").unwrap();
+        book.set(0, 2, "Share").unwrap();
+        book.toggle_style(Range { r0: 0, c0: 0, r1: 0, c1: 2 }, "bold").unwrap();
+        book.set(1, 0, "Tea & \"cakes\" <b>").unwrap();
+        book.set(1, 1, "2026-11-19").unwrap();
+        book.set(1, 2, "25%").unwrap();
+        book.set(2, 0, "Two\nlines").unwrap();
+        book.set(2, 1, "1.5").unwrap();
+        book.set(2, 2, "TRUE").unwrap();
+        book.toggle_style(Range::cell(2, 0), "italic").unwrap();
+        book.set(4, 1, "=SUM(B3,10)*2").unwrap();
+        book.set(5, 1, "=IF(B5>10,\"big\",\"small\")").unwrap();
+        book.set_col_width(0, 150).unwrap();
+        book.run("home.insertSheet", json!({ "name": "Other sheet" })).unwrap();
+        let other = book.sheets().iter().position(|s| s == "Other sheet").unwrap();
+        book.activate(other).unwrap();
+        book.set(0, 0, "='Sheet1'!B5+1").unwrap();
+        let first = book.sheets()[0].clone();
+        book.activate(0).unwrap();
+        let shown: Vec<_> = (0..6).flat_map(|r| (0..3).map(move |c| (r, c))).map(|(r, c)| (book.input(r, c), book.shown(r, c).text)).collect();
+        book.save().unwrap();
+        let (mut again, warnings) = Book::open(&path).unwrap();
+        assert_eq!(again.sheets(), book.sheets(), "{warnings:?}");
+        let back: Vec<_> = (0..6).flat_map(|r| (0..3).map(move |c| (r, c))).map(|(r, c)| (again.input(r, c), again.shown(r, c).text)).collect();
+        assert_eq!(back, shown);
+        assert_eq!(again.font(0, 1), (true, false, false));
+        assert_eq!(again.font(2, 0), (false, true, false));
+        assert_eq!(again.col_width(0), 150);
+        assert!(!again.dirty());
+        again.activate(other).unwrap();
+        assert_eq!(again.shown(0, 0).text, "24", "sheet {first}");
+        assert_eq!(again.input(0, 0), "=Sheet1!B5+1");
+    }
+
+    #[test]
+    fn exports_pdf_and_saves_as_other_formats() {
+        let path = temp("export.xlsx");
+        std::fs::write(&path, WELCOME).unwrap();
+        let (mut book, _) = Book::open(&path).unwrap();
+        let (pdf, n) = book.export_pdf().unwrap();
+        assert!(pdf.ends_with("export.pdf") && n > 500);
+        assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF-"));
+        assert_eq!(book.path, path, "a PDF is a copy");
+        book.set(1, 1, "7").unwrap();
+        let (csv, _) = book.save_as(&temp("copy.csv")).unwrap();
+        assert!(std::fs::read_to_string(&csv).unwrap().contains("Rent"));
+        assert_eq!(book.path, path, "one sheet of two is a copy");
+        assert!(book.dirty());
+        let (ods, _) = book.save_as(&temp("moved")).unwrap();
+        assert!(ods.ends_with("moved.xlsx"));
+        assert_eq!(book.path, ods);
+        assert!(!book.dirty());
+        assert!(book.save_as(&temp("bad.cvs")).is_err());
+    }
+
+    #[test]
+    fn unsaved_changes_are_recovered() {
+        let path = temp("recover.xlsx");
+        std::fs::write(&path, WELCOME).unwrap();
+        let (mut book, _) = Book::open(&path).unwrap();
+        assert!(Book::open_recovered(&path).is_none());
+        book.set(1, 1, "999").unwrap();
+        book.write_recovery().unwrap();
+        let mut back = Book::open_recovered(&path).unwrap();
+        assert_eq!(back.path, path);
+        assert!(back.dirty());
+        assert_eq!(back.shown(1, 1).text, "999");
+        back.save().unwrap();
+        assert!(Book::open_recovered(&path).is_none(), "saving forgets the kept copy");
+        assert_eq!(Book::open(&path).unwrap().0.shown(1, 1).text, "999");
+    }
+
+    #[test]
+    fn go_to_and_insert_delete_lines() {
+        let mut book = budget("lines.xlsx");
+        assert_eq!(book.go_to("c3").unwrap(), Range { r0: 2, c0: 2, r1: 2, c1: 2 });
+        assert_eq!(book.go_to("B2:D4").unwrap(), Range { r0: 1, c0: 1, r1: 3, c1: 3 });
+        assert_eq!(book.go_to("Notes!A2").unwrap(), Range::cell(1, 0));
+        assert_eq!(book.active_sheet(), 1);
+        assert!(book.go_to("Nowhere!A1").is_err());
+        assert!(book.go_to("hello").is_err());
+        book.activate(0).unwrap();
+        let before = column(&book, 0, 4);
+        book.insert_lines(Range { r0: 1, c0: 0, r1: 2, c1: 0 }, true).unwrap();
+        assert_eq!(column(&book, 0, 6), [before[0].as_str(), "", "", before[1].as_str(), before[2].as_str(), before[3].as_str()]);
+        book.delete_lines(Range { r0: 1, c0: 0, r1: 2, c1: 0 }, true).unwrap();
+        assert_eq!(column(&book, 0, 4), before);
+        let costs = column(&book, 1, 4);
+        book.insert_lines(Range::cell(0, 0), false).unwrap();
+        assert_eq!(column(&book, 2, 4), costs);
+        book.delete_lines(Range::cell(0, 0), false).unwrap();
+        assert_eq!(column(&book, 1, 4), costs);
+        book.undo().unwrap();
+        assert_eq!(column(&book, 2, 4), costs);
     }
 
     #[test]

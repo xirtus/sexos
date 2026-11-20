@@ -5,7 +5,8 @@ name: Kernel models and nightly fuzzing
 #   models  proptest model-based tests (reply credits, run queue, IPC ring, authority
 #           v2 capability table, IPC v2 endpoint/notification/reply, key-instruction scan)
 #   loom    every interleaving of the lock-free run queue, IPC ring, IPC v2 endpoint and
-#           notification, and the capability table's seqlock slots
+#           notification, the capability table's seqlock slots, and the scheduler's
+#           park/wake/exit custody and timed-wait deadlines
 #   kani    bounded proofs of the same structures
 #   isolation  cross-domain matrix on the booted image per backend (KVM+PKU when the
 #           runner has it, TCG+PKU, TCG without PKU): reads/writes/exec of another
@@ -26,6 +27,9 @@ name: Kernel models and nightly fuzzing
       - 'kernel/src/scheduler_queue.rs'
       - 'kernel/src/scheduler_queue_tests.rs'
       - 'kernel/src/ipc_ring.rs'
+      - 'kernel/src/task_ownership.rs'
+      - 'kernel/src/self_wait.rs'
+      - 'kernel/src/scheduler.rs'
       - 'tests/model_*.rs'
       - 'fuzz/models/**'
       - 'apps/fuzz/**'
@@ -40,6 +44,9 @@ name: Kernel models and nightly fuzzing
       - 'crates/sex-pdx/src/program_code.rs'
       - 'kernel/src/scheduler_queue.rs'
       - 'kernel/src/ipc_ring.rs'
+      - 'kernel/src/task_ownership.rs'
+      - 'kernel/src/self_wait.rs'
+      - 'kernel/src/scheduler.rs'
       - 'tests/model_*.rs'
       - 'fuzz/models/**'
   schedule:
@@ -122,7 +129,7 @@ jobs:
       run: |
         # Nightly: unbounded preemptions (every interleaving); PRs: bound 3.
         if [ "$DEEP" != true ]; then export LOOM_MAX_PREEMPTIONS=3; fi
-        cargo test --locked --release --test model_loom_queues --test model_loom_v2
+        cargo test --locked --release --test model_loom_queues --test model_loom_v2 --test model_loom_scheduler
 
   kani:
     name: Bounded proofs (Kani)
@@ -135,7 +142,7 @@ jobs:
     - uses: model-checking/kani-github-action@v1
       with:
         working-directory: fuzz/models
-        args: ${{ env.DEEP == 'true' && '--output-format terse' || '--output-format terse --harness run_queue_is_a_bounded_fifo --harness ipc_ring_is_a_bounded_fifo --harness reply_needs_an_invocation --harness derive_only_narrows --harness next_generation_moves_and_skips_zero' }}
+        args: ${{ env.DEEP == 'true' && '--output-format terse' || '--output-format terse --harness run_queue_is_a_bounded_fifo --harness ipc_ring_is_a_bounded_fifo --harness reply_needs_an_invocation --harness derive_only_narrows --harness next_generation_moves_and_skips_zero --harness a_deadline_fires_once_and_only_when_due' }}
 
   isolation:
     name: Cross-domain isolation matrix

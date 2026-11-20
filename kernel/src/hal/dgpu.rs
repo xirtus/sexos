@@ -18,8 +18,9 @@
 //! op only reaches the GPUs listed here: the service never names a PCI function itself,
 //! and the header save/restore (which writes BARs) stays in the kernel.
 //!
-//! What stays on: a GPU on the root bus (an integrated GPU) and a GPU that holds the boot
-//! framebuffer (BIOS "discrete only" mode or a mux set to the dGPU). Without the ACPI
+//! What stays on: a GPU on the root bus (an integrated GPU), a GPU that holds the boot
+//! framebuffer (BIOS "discrete only" mode or a mux set to the dGPU), and an NVIDIA GPU
+//! when the boot entry starts `sexgpu-nv` (stage N4b), which boots it. Without the ACPI
 //! service the GPU stays in D3hot, which every PCI device must accept.
 
 use super::acpi::stall_us;
@@ -148,7 +149,9 @@ fn scan() -> Vec<Found> {
 pub fn powered_off(b: Bdf) -> bool { OFF.lock().iter().any(|o| !o.on && o.gpu.bus == b.bus && o.gpu.dev == b.dev) }
 
 /// BOOT: find discrete GPUs and park the ones nothing will drive in D3hot.
-pub fn init() {
+/// `nvidia_driven`: the boot entry started `sexgpu-nv`, which boots NVIDIA GPUs
+/// itself; those stay powered for it.
+pub fn init(nvidia_driven: bool) {
     let Some(hhdm) = crate::HHDM_REQUEST.response().map(|r| r.offset) else { return };
     let fb = crate::FB_REQUEST.response().and_then(|r| r.framebuffers().iter().next().map(|f| (f.address() as u64).wrapping_sub(hhdm)));
     let all = scan();
@@ -167,6 +170,9 @@ pub fn init() {
             bus = up.bus;
         }
         if chain.is_empty() { serial_println!("[gpu.power] at={} action=keep reason=integrated", gpu); continue; }
+        if nvidia_driven && d.vendor == 0x10DE {
+            serial_println!("[gpu.power] at={} name=\"{}\" action=keep reason=driver service=sexgpu-nv", gpu, name); continue;
+        }
         if crate::safe_start() { serial_println!("[gpu.power] at={} action=keep reason=safe_start", gpu); continue; }
         let port = *chain.last().unwrap();
         if let Some(pa) = fb.filter(|pa| bridge_forwards(port, *pa)) {

@@ -5,7 +5,7 @@
   into its folder, opens it and draws page 1 with ink on it.
 * End, then typing " today" adds to the title; the record shows the new first line.
 * Shift+Home selects the title line (one highlight rectangle) and Ctrl+B runs format.bold.
-* Ctrl+S writes the docx; the window closes.
+* Ctrl+S writes the docx; Ctrl+P writes welcome.pdf beside it; the window closes.
 * A second `run assuit` reads the saved file back with the edit in its first line; Ctrl+End
   and fifty Enters push the text onto page 2, which the view draws below page 1.
 * Before that, Ctrl+F and "assuit" with Enter select a match and Enter again the next one;
@@ -56,6 +56,10 @@ def main():
   m=g['chord']('ctrl','s',r'\[assuit\.saved\] name=welcome\.docx bytes=(\d+)\n')
   assert int(m[1])>2000,f'saved file is too small: {m[0]}'
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-edited.ppm')})
+  # Ctrl+P: SexOS prints to a PDF beside the file.
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('ctrl','p')),(False,('p','ctrl')))for x in ks]})
+  pdf=g['wait'](r'\[assuit\.pdf\] name=welcome\.pdf bytes=(\d+)\n',s,300)
+  assert int(pdf[1])>500,f'PDF is too small: {pdf[0]}'
   close(o)
   o=opened()
   s=len(t());q.key('end');press('shift','1')

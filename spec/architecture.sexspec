@@ -3,7 +3,7 @@
   "subsystem": "architecture",
   "constitution": {
     "path": "ARCHITECTURE.md",
-    "sha256": "2edfa67517bc5df6cb698348ea4a4f5c1de99f67ae11e69813c7a762f1a8ea5f"
+    "sha256": "8d000b4222377e248ebcb266817a3b9f80bafc839c9ea698cb4398e4c1308ef9"
   },
   "state_model": {
     "equation": "S[n+1] = T(S[n], I[n], C)",
@@ -179,6 +179,15 @@
         "scripts/task_ownership_host_gate.sh"
       ],
       "scope": "Production atomic custody plus bounded queue; finite traces and host races do not prove x86 stack release or physical AP scheduling. Includes actual bounded self-wait deadline, immutable BOOT inventory and ownership-boundary host tests; not privileged x86 timer or SMP proof."
+    },
+    {
+      "id": "scheduler_model",
+      "kind": "host",
+      "argv": [
+        "bash",
+        "scripts/scheduler_model_gate.sh"
+      ],
+      "scope": "Kernel pass 2 K6 model over the real task_ownership.rs and self_wait.rs: every reachable custody state on two cores with its run-queue token keeps the invariants, no wake is lost, a fault wait holds until the pager completes it, an exit ends in Dead without dispatch, deadlines and the BOOT inventory match reference models, and ten compiled mutants are caught. Sequential; interleavings are loom's (assurance workflow); not x86 stack release, timer hardware or SMP evidence."
     },
     {
       "id": "compiled_switch",
