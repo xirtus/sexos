@@ -119,7 +119,9 @@ APPROVED_KERNEL_RUST_TREES=('8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3
     # protection views with PCID (plan Phase 5b), 2026-11-17
     'c90aad02c6aa7df0113ccb215474c805633b552229da4af87ee9c5949ff1b73b',
     # Denim D3-D5 and lazy stacks merged with master, 2026-11-19: no deadline reference
-    'c0263c3751bc075b0a5389a5ec119a9a99e53fd845d3a3ea29f3a98ed21e0250')
+    'c0263c3751bc075b0a5389a5ec119a9a99e53fd845d3a3ea29f3a98ed21e0250',
+    # Syscall buffers on a lazy program stack commit their pages, 2026-11-20: no deadline reference
+    'f49f938f47651d4308f37deddc37d1c4825edae9c89a8feb503051f4b71324a4')
 DEADLINE_REFERENCE=re.compile(r'\b(?:wait_deadline|poll_self_wait_deadlines|take_due|wait_for_message_ticks|wake_record_if_due)\b|\bself_wait\s*::\s*Deadline\b')
 
 
