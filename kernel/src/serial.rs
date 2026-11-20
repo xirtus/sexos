@@ -60,6 +60,15 @@ pub fn _print(args: fmt::Arguments) {
     });
 }
 
+/// Writes to the serial port only, unless another path holds it (a fault taken
+/// inside a print): then nothing is written and this returns false.
+pub fn try_print(args: fmt::Arguments) -> bool {
+    use core::fmt::Write;
+    let Some(mut guard) = SERIAL1.try_lock() else { return false };
+    if let Some(port) = guard.as_mut() { let _ = port.write_fmt(args); }
+    true
+}
+
 /// The stop path's own writes: no lock, since the core that held it may be halted.
 pub fn write_stopped(bytes: &[u8]) {
     if !is_serial_present() { return; }
