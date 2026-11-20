@@ -139,7 +139,7 @@ pub const READ_IO_STATS: u8 = 23;
 /// reads (calls, bytes) and the grants it holds (`@/path` tokens, `+packages`). Empty
 /// path/offset/length; data is [`runs`] entries. The grants' paths are given only to
 /// Spindle or a run holding the whole filesystem (`@/`); others get each run's count.
-pub const RUNS: u8 = 29;
+pub const RUNS: u8 = 35;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReadIoStats { pub requests: u64, pub device_calls: u64, pub device_bytes: u64 }
 impl ReadIoStats {
@@ -285,7 +285,7 @@ pub mod runs {
             assert_eq!(parse(&buf[..n + 3]).count(), 1);
             assert_eq!(parse(&buf[..n - 1]).count(), 0);
             assert!(put(&mut buf[..HEAD + 3], &a).is_none());
-            assert!(![STAT, READ_IO_STATS].contains(&super::super::RUNS));
+            assert!(![STAT, READ_IO_STATS, super::super::OFFER].contains(&super::super::RUNS));
             assert!(is_grant(b"@/x") && is_grant(PACKAGES) && !is_grant(b"spin") && !is_grant(b"@"));
         }
     }
