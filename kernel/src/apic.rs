@@ -354,6 +354,17 @@ pub fn init_timer() {
     }
 }
 
+/// The periodic timer's period, microseconds (one tick).
+pub const TICK_US: u32 = 1000;
+/// Microseconds until this core's next timer tick, from the timer's current count.
+pub fn until_tick_us() -> u32 {
+    let lapic = LAPIC_ADDR.load(core::sync::atomic::Ordering::Acquire) as *const u32;
+    if lapic.is_null() { return 0; }
+    let per = TIMER_COUNT.load(core::sync::atomic::Ordering::Relaxed).max(1) as u64;
+    let left = unsafe { lapic.offset(0x390 / 4).read_volatile() } as u64;
+    (left * TICK_US as u64 / per).min(TICK_US as u64) as u32
+}
+
 /// Turn on this core's local APIC, for a core started after the boot core set it up.
 static TIMER_COUNT: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(1_000_000);
 /// This core's timer, at the rate core 0 measured.

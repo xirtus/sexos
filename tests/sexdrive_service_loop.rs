@@ -5,6 +5,7 @@ use std::sync::{Mutex,mpsc};
 #[macro_export]macro_rules! serial_record{($($t:tt)*)=>{}}
 macro_rules! serial_println{($($t:tt)*)=>{}}
 include!(env!("SEXDRIVE_SERVICE_ABI_SOURCE"));
+pub mod power{pub const OP_DEVICE_SLEEP:u64=0x50F3;}
 const SLOT_NVME_HOST:u64=0;const NVME_LBA_BYTES:u64=BLOCK_SECTOR_SIZE;const WRITE_PROOF_LBA:u64=2047;
 #[derive(Clone,Copy)]struct RegionView{virtual_address:u64}
 const READ:u8=1;const WRITE:u8=2;
@@ -82,4 +83,11 @@ fn msg(op:u64)->Message{Message{type_id:op,caller_pd:27,arg0:400*512,arg1:512,ar
  for op in [BLOCK_SHUTDOWN,BLOCK_WRITE,BLOCK_SYNC,BLOCK_CAPACITY,BLOCK_SHUTDOWN]{let m=if op==BLOCK_WRITE{msg(op)}else{Message{arg0:0,arg1:0,arg2:0,..msg(op)}};tx.send(m).unwrap();service_next_request();}
  let e=EFFECTS.lock().unwrap();assert_eq!(e.device,[(BLOCK_SHUTDOWN,0,0)]);
  assert_eq!(e.replies,[(27,0),(27,BLOCK_ERR_NO_DEVICE),(27,BLOCK_ERR_NO_DEVICE),(27,2048),(27,BLOCK_ERR_NO_DEVICE)]);
+}
+#[test]fn kernel_sleep_notice_flushes_without_a_reply(){
+ let _guard=TEST_LOCK.lock().unwrap();let tx=setup();
+ tx.send(Message{type_id:power::OP_DEVICE_SLEEP,caller_pd:0,arg0:1,arg1:0,arg2:0}).unwrap();service_next_request();
+ assert_eq!(EFFECTS.lock().unwrap().device,[(BLOCK_SYNC,0,0)]);assert!(EFFECTS.lock().unwrap().replies.is_empty());
+ tx.send(Message{type_id:power::OP_DEVICE_SLEEP,caller_pd:0,arg0:0,arg1:0,arg2:0}).unwrap();service_next_request();
+ assert_eq!(EFFECTS.lock().unwrap().device.len(),1);assert!(EFFECTS.lock().unwrap().replies.is_empty());
 }

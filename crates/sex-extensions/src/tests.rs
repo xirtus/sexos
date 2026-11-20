@@ -176,3 +176,17 @@ fn dnr_cannot_smuggle_filter_syntax() {
         assert_eq!(engine.counts().cosmetic, 0);
     }
 }
+
+/// With `SEXOS_DNR_RULESETS` naming ruleset files (uBlock Origin Lite's, say), counts
+/// what converts.
+#[test]
+fn real_rulesets() {
+    let Ok(paths) = std::env::var("SEXOS_DNR_RULESETS") else { return };
+    let (mut filters, mut skipped) = (0, 0);
+    for p in paths.split(':') {
+        let c = dnr::convert(&std::fs::read_to_string(p).unwrap()).unwrap();
+        filters += c.filters.len();
+        skipped += c.skipped;
+    }
+    std::println!("filters={filters} skipped={skipped}");
+}
