@@ -162,6 +162,12 @@ pub struct State {
     /// Distance along the view of the surface under each pixel (Solid
     /// shading), for Grease Pencil depth tests and Surface placement.
     pub gp_depth: Vec<f32>,
+    /// Ground-plane shadow catcher attenuation toggle.
+    pub shadow_catcher: bool,
+    /// Active turntable orbit inspection state.
+    pub turntable: sex_3d::render::TurntableState,
+    /// Last applied inspection preset, if unchanged.
+    pub shading_preset: Option<sex_3d::render::ShadingPreset>,
 }
 
 pub struct WorldObj {
@@ -215,6 +221,9 @@ impl Default for State {
             dims: None,
             picker: None,
             gp_depth: Vec::new(),
+            shadow_catcher: false,
+            turntable: sex_3d::render::TurntableState::default(),
+            shading_preset: None,
         }
     }
 }
@@ -240,9 +249,9 @@ pub fn is_modal(s: &State) -> bool {
     !matches!(s.modal, Modal::None)
 }
 
-/// Whether the viewport wants more frames without input (progressive render).
+/// Whether the viewport wants more frames without input (progressive render or turntable).
 pub fn wants_tick(s: &State) -> bool {
-    s.refining || sculptview::wants_tick(s)
+    s.refining || s.turntable.active || sculptview::wants_tick(s)
 }
 
 fn cam_key(c: &ViewCamera) -> [u32; 8] {
@@ -760,8 +769,58 @@ fn run_view_op(s: &mut State, d: &mut Doc, ui: &mut Ui, id: &str, arg: &str, r: 
                 _ => Shading::Solid,
             }
         }
+        "view3d.shading_preset" => {
+            if let Some(preset) = sex_3d::render::ShadingPreset::from_name(arg) {
+                s.shading = Shading::Solid;
+                s.shading_preset = Some(preset);
+                preset.apply_to_workbench(&mut s.solid);
+                s.show_wire = preset.shows_wireframe();
+                d.report = format!("Shading Preset: {}", preset.label());
+            } else {
+                d.report = format!("Unknown shading preset '{arg}'");
+            }
+        }
+        "view3d.shadow_catcher" => {
+            s.shadow_catcher = match arg.trim().to_ascii_lowercase().as_str() {
+                "on" | "true" | "1" => true,
+                "off" | "false" | "0" => false,
+                _ => !s.shadow_catcher,
+            };
+            d.report = if s.shadow_catcher { "Shadow Catcher: ON" } else { "Shadow Catcher: OFF" }.into();
+        }
+        "view3d.turntable" => {
+            let trimmed = arg.trim();
+            if let Some(rest) = trimmed.strip_prefix("speed:") {
+                if let Ok(deg) = rest.parse::<f32>() {
+                    if deg.is_finite() {
+                        s.turntable.angular_speed_rad = deg.to_radians();
+                    }
+                }
+            } else if trimmed == "step" || trimmed.starts_with("step:") {
+                let dt = trimmed
+                    .strip_prefix("step:")
+                    .and_then(|v| v.parse::<f32>().ok())
+                    .filter(|&dt| dt.is_finite() && dt > 0.0)
+                    .unwrap_or(1.0 / 60.0);
+                leave_special_views(s);
+                sex_3d::render::step_turntable_camera(&mut s.cam, s.turntable.angular_speed_rad, dt);
+                let delta = s.turntable.angular_speed_rad * dt;
+                s.turntable.angle_rad = (s.turntable.angle_rad + delta).rem_euclid(core::f32::consts::TAU);
+            } else {
+                s.turntable.active = match trimmed.to_ascii_lowercase().as_str() {
+                    "on" | "start" | "true" | "1" => true,
+                    "off" | "stop" | "false" | "0" => false,
+                    _ => !s.turntable.active,
+                };
+                if s.turntable.active {
+                    leave_special_views(s);
+                }
+                d.report = if s.turntable.active { "Turntable: ON" } else { "Turntable: OFF" }.into();
+            }
+        }
         "view3d.solid" => {
             use sex_3d::render::workbench::{ColorType, Lighting};
+            s.shading_preset = None;
             let w = &mut s.solid;
             match arg.split_once(':') {
                 Some(("lighting", v)) => w.lighting = Lighting::ALL.into_iter().find(|l| l.label() == v).unwrap_or(w.lighting),
@@ -968,6 +1027,14 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
     s.rect = r;
     prepare_camera(s, d, r);
     consume_view_ops(s, d, ui, r);
+    if matches!(ui.input, Some(Input::Tick)) && s.turntable.active && !is_modal(s) {
+        let dt = 1.0 / 60.0;
+        let delta = s.turntable.step(dt);
+        if delta != 0.0 {
+            leave_special_views(s);
+            sex_3d::render::step_turntable_camera(&mut s.cam, s.turntable.angular_speed_rad, dt);
+        }
+    }
     prepare_camera(s, d, r);
     if d.mode != Mode::Edit && matches!(s.modal, Modal::MeshTool(_) | Modal::LoopCut { .. } | Modal::Knife { .. }) {
         s.modal = Modal::None;
@@ -1010,7 +1077,7 @@ pub fn body(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
 }
 
 fn signature(s: &State, d: &Doc) -> (u64, [u32; 8], u32, [u32; 3], u8) {
-    let flags = [s.show_toolbar, s.show_sidebar, s.xray, s.camera_view, s.show_overlays, s.show_gizmo, s.show_floor, s.show_wire]
+    let flags = [s.show_toolbar, s.show_sidebar, s.xray, s.camera_view, s.show_overlays, s.show_gizmo, s.show_floor, s.show_wire, s.shadow_catcher, s.turntable.active]
         .iter()
         .enumerate()
         .fold(0u32, |a, (i, &b)| a | (b as u32) << i)

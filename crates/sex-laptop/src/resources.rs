@@ -12,6 +12,8 @@ pub enum Resource<'a> {
     GpioInt { pin: u16, edge: bool, active_low: bool, controller: &'a [u8] },
     /// An extended interrupt (large 0x89), first number only.
     Interrupt { number: u32, edge: bool, active_low: bool },
+    /// A fixed 32-bit memory range (large 0x86), such as a GPIO community's registers.
+    Memory { base: u32, length: u32 },
 }
 
 /// Walks a template, calling `f` for each resource it understands.
@@ -37,6 +39,10 @@ pub fn parse<'a>(bytes: &'a [u8], mut f: impl FnMut(Resource<'a>)) {
                     let flags = body[0];
                     f(Resource::Interrupt { number: u32::from_le_bytes([body[2], body[3], body[4], body[5]]), edge: flags & 2 != 0, active_low: flags & 4 != 0 });
                 }
+                0x86 if body.len() >= 9 => f(Resource::Memory {
+                    base: u32::from_le_bytes([body[1], body[2], body[3], body[4]]),
+                    length: u32::from_le_bytes([body[5], body[6], body[7], body[8]]),
+                }),
                 0x8C => gpio(body, &mut f),
                 0x8E => serial_bus(body, &mut f),
                 _ => {}
@@ -129,6 +135,25 @@ mod tests {
         let mut irq = None;
         parse(&crs, |r| if let Resource::Interrupt { number, edge, active_low } = r { irq = Some((number, edge, active_low)); });
         assert_eq!(irq, Some((0x5D, false, true)));
+    }
+
+    #[test]
+    fn gpio_controller_crs_lists_communities_in_order() {
+        // Memory32Fixed(ReadWrite, 0xFD6E0000, 0x10000) twice, Interrupt {14}, EndTag.
+        let mut crs = Vec::new();
+        for base in [0xFD6E_0000u32, 0xFD6D_0000] {
+            crs.extend_from_slice(&[0x86, 9, 0, 1]);
+            crs.extend_from_slice(&base.to_le_bytes());
+            crs.extend_from_slice(&0x1_0000u32.to_le_bytes());
+        }
+        crs.extend_from_slice(&[0x89, 6, 0, 0x0D, 1, 14, 0, 0, 0, 0x79, 0]);
+        let mut seen = Vec::new();
+        parse(&crs, |r| seen.push(r));
+        assert_eq!(seen, [
+            Resource::Memory { base: 0xFD6E_0000, length: 0x1_0000 },
+            Resource::Memory { base: 0xFD6D_0000, length: 0x1_0000 },
+            Resource::Interrupt { number: 14, edge: false, active_low: true },
+        ]);
     }
 
     #[test]
