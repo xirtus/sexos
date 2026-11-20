@@ -14,7 +14,11 @@ while read -r sum name; do
   [ -n "$name" ] || continue
   if [ -f "$OUT/$name" ] && echo "$sum  $OUT/$name" | sha256sum -c --quiet - 2>/dev/null; then continue; fi
   for attempt in 1 2 3 4; do
-    if curl -sSfL -o "$OUT/$name.part" "$BASE/intel/iwlwifi/$name"; then break; fi
+    rc=0; curl -sSfL --connect-timeout 20 -o "$OUT/$name.part" "$BASE/intel/iwlwifi/$name" || rc=$?
+    [ "$rc" = 0 ] && break
+    # Host unreachable (resolve, connect or connect timeout): fail at once, not after
+    # every file and attempt; the host gates then skip the real-image tests.
+    case "$rc" in 6|7|28) echo "[firmware.fetch] FAIL host unreachable rc=$rc" >&2; exit 1;; esac
     [ "$attempt" = 4 ] && { echo "[wifi.firmware] FAIL fetch $name" >&2; exit 1; }
     sleep $((attempt * 2))
   done
@@ -35,5 +39,5 @@ e55640e849b16a387895807c18fa3c73f6750aa4721eb7a1070739a316e5e20e iwlwifi-so-a0-g
 fd8977dbfacfe50b8a6601479aa9ffd21d01e274e4a9efd13935dd9d667fd45b iwlwifi-ty-a0-gf-a0-77.ucode
 9ec7f36114c68d518f6c34212c3e7959ff60be0d1fae8e774a70cf6d9b7159fd iwlwifi-ty-a0-gf-a0.pnvm
 LIST
-curl -sSfL -o "$OUT/LICENCE.iwlwifi_firmware" "https://gitlab.com/kernel-firmware/linux-firmware/-/raw/$COMMIT/LICENSES/LICENCE.iwlwifi_firmware"
+curl -sSfL --connect-timeout 20 -o "$OUT/LICENCE.iwlwifi_firmware" "https://gitlab.com/kernel-firmware/linux-firmware/-/raw/$COMMIT/LICENSES/LICENCE.iwlwifi_firmware"
 echo "[wifi.firmware] PASS dir=$OUT"

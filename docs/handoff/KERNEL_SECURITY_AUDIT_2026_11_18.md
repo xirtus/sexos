@@ -26,14 +26,14 @@ hal/x86_64.rs +27).
 | S7 | Spectre v2: no IBRS of any kind | Medium | Partly fixed (eIBRS / AutoIBRS) |
 | S8 | Conditional SWAPGS can be speculated past (CVE-2019-1125) | Low | Fixed |
 | S9 | A program can exhaust kernel memory by churning worker threads | Medium | Fixed: a row keeps at most `2 * MAX_WORKERS` tasks |
-| S10 | Spectre v1 gadgets on capability-slot lookups | Medium | Open: stream 3 (new table) |
-| S11 | SMAP off and PKRU = 0 for the whole syscall | Medium | Open: Phase 6 design |
+| S10 | Spectre v1 gadgets on capability-slot lookups | Medium | Fixed: `spec_clamp` (v2 table), `index_nospec` (domain ids, #415) |
+| S11 | SMAP off and PKRU = 0 for the whole syscall | Medium | In progress: SMAP on in audit mode (K7a step 1) |
 | S12 | Meltdown and Meltdown-PK on CPUs without `RDCL_NO` | Info | Reported at boot |
 | S13 | Unused user-accessible per-core page on key 15 | Low | Fixed in #415 (page removed) |
-| S14 | Cross-domain branch-target injection between programs | Info | Open: decision for Phase 5/6 |
+| S14 | Cross-domain branch-target injection between programs | Info | Fixed: IBPB when a core leaves an untrusted domain |
 | S15 | BOOT services and bridges were never scanned for WRPKRU/XRSTOR/XRSTORS | High | Fixed |
 | S16 | Three kernel user mappings were writable and executable; program records' code was never scanned | High | Fixed |
-| S17 | The framebuffer grant sets the user bit on whole huge pages | Medium | Open: `init.rs`/boot display owner |
+| S17 | The framebuffer grant sets the user bit on whole huge pages | Medium | Fixed: huge pages are split before the grant |
 | S18 | Kernel stacks had no guard page; a Task built on a 16 KiB stack overran it | High | Fixed (follow-up PR): guard page, boxed FPU area |
 
 Checked and fine: syscall and interrupt returns restore every general register from
@@ -124,7 +124,7 @@ gates) and KVM `-cpu host` report both, so the gates exercise them. A program th
 uses `sgdt` now takes #GP and ends; Drag VMs run guest code in VMX non-root and are
 not affected.
 
-SMAP stays off (see S11).
+SMAP runs in audit mode until the user-copy module lands (see S11).
 
 ### S7. Spectre v2 (partly fixed)
 
@@ -162,7 +162,7 @@ Fixed 2026-11-19 as suggested: past the cap `spawn` returns `RETRY` (some task i
 Dead and becomes reusable within `REUSE_TICKS`), which `sex_pdx::program_threads::spawn`
 already retries after a yield. A row's worker stacks are now bounded at 8 MiB.
 
-### S10. Spectre v1 on slot lookups (open, stream 3)
+### S10. Spectre v1 on slot lookups (fixed)
 
 `decode_capability_slot` bounds-checks a register value and the table is then
 indexed with it. Speculatively, the index can run past the check. Stream 3's new
@@ -170,7 +170,7 @@ inline-slot table should clamp the index without a branch
 (`index & (SLOTS - 1)` with a power-of-two table, or a `cmov`-based mask) before
 the load. The same applies to `decode_domain_id` users (`DOMAIN_REGISTRY`).
 
-### S11. SMAP off, PKRU = 0 in the kernel (open, Phase 6)
+### S11. SMAP off, PKRU = 0 in the kernel (in progress, K7a)
 
 The kernel reads and writes user memory directly in many places, so SMAP cannot be
 turned on without wrapping every user access in `stac`/`clac`. And `syscall_entry`
@@ -179,6 +179,18 @@ caller's pointer can reach every domain's memory. The plan's Phase 6 user gates
 should come with: one user-copy module (the only place `stac`/`clac` appear), SMAP
 on, and PKRU set to the caller's keys plus the kernel's instead of 0.
 `SFMASK` already clears AC, so SMAP can be enabled without entry changes.
+
+Step 1, 2026-11-19 (kernel pass 2, K7a): SMAP is on in **audit mode** on every core
+whose CPU has it (`[cpu.smap] present=1 mode=audit`). A kernel data access to a
+user page faults. `smap::audit` records the instruction once per boot as
+`[smap.site] rip= from_audit= addr= write=`, sets AC in the interrupted frame and
+retries, so AC stays set until that entry returns to ring 3. A kernel page fault
+no longer clears PKRU on entry, because the audit path returns to the faulting
+code. The halt path clears PKRU itself. Every gate job ends with
+`scripts/smap_sites.py`, which lists the sites across that job's boots by kernel
+function. That list is the work for step 2: one user-copy module, the only place
+`stac`/`clac` appear. Step 3 adds `clac` on interrupt entry (an interrupt gate
+keeps a user-set AC) and makes the fault fatal.
 
 ### S12. Meltdown and Meltdown-PK (reported)
 
@@ -209,6 +221,12 @@ mispredicts. Enhanced IBRS protects the kernel, not one user domain from another
 Options: IBPB when switching between domains of different trust (thousands of
 cycles per switch on most parts), or STIBP plus core placement. This belongs with
 the Phase 5 placement and Phase 6 isolation work.
+
+Fixed 2026-11-19 (`scheduler.rs`, `hal/x86_64.rs`): each core remembers the last
+domain it ran. When it switches away from an untrusted domain (a program row, a
+program record or the browser) to a different domain, it writes IA32_PRED_CMD.IBPB
+first, where the CPU has IBPB. Switches between BOOT services cost nothing. Boot
+marker: `[cpu.ibpb] present=`.
 
 ### S15. BOOT services and bridges could hold key instructions (fixed)
 
@@ -255,7 +273,7 @@ After this, a page a ring-3 domain can write is never executable, and every page
 can execute was scanned once its bytes were final. The cross-domain isolation gate
 (stream 7) should include "write a page, jump to it, expect a fault".
 
-### S17. Framebuffer grant on huge pages (open)
+### S17. Framebuffer grant on huge pages (fixed)
 
 `init.rs` gives Display the framebuffer by calling `set_page_user_accessible` per
 4 KiB, but when the bootloader mapped it with a 2 MiB or 1 GiB page, the function
@@ -263,6 +281,11 @@ sets the user bit on the whole huge page. Display then reaches everything else i
 that page, which can include other devices' MMIO. Fix: map the framebuffer into a
 BOOT region window with 4 KiB pages (as other regions are) instead of changing the
 HHDM entry.
+
+Fixed 2026-11-19 in `pku.rs`: `set_page_user_accessible` now splits a 1 GiB or 2 MiB
+page into a table of smaller pages with the same frames and flags (PAT moved from
+bit 12 to bit 7 for 4 KiB leaves) before it changes anything, so the user bit and
+Display's key land on the framebuffer's own 4 KiB pages only.
 
 ### S18. Kernel stack overflow into the heap (fixed in a follow-up)
 

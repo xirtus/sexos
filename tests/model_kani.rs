@@ -163,3 +163,70 @@ fn key_scan_split_matches_bytewise() {
     let got = match scan.feed(&code[..cut], false) { Some(at) => Some(at), None => scan.feed(&code[cut..], false) };
     assert!(got == want);
 }
+
+// Scheduler custody word (kernel/src/task_ownership.rs) and timed-wait deadlines
+// (kernel/src/self_wait.rs), kernel pass 2 K6. tests/model_scheduler_wait.rs visits
+// every reachable state concretely; these prove the same invariants symbolically.
+
+use crate::self_wait::{Deadline, MAX_TICKS};
+use crate::task_ownership::{Phase, Snapshot, TaskOwnership};
+
+/// The custody invariants of tests/model_scheduler_wait.rs, with the run-queue
+/// token count.
+fn custody_holds(s: Snapshot, tokens: u32) -> bool {
+    let owned = matches!(s.phase, Phase::Dispatching | Phase::Attached | Phase::SwitchingOut);
+    tokens <= 1 && (tokens == 1) == (s.phase == Phase::Queued) && owned == s.owner_core.is_some()
+        && (s.phase != Phase::Dead || s.exited) && !(s.exited && (s.pending || s.blocked || s.fault_blocked))
+        && (!s.fault_blocked || s.blocked) && !(matches!(s.phase, Phase::Queued | Phase::Dispatching) && s.blocked)
+}
+
+/// Any sequence of eight scheduler operations, on any core, keeps the custody
+/// invariants after every step; an exit is never undone and Dead never changes.
+#[kani::proof]
+#[kani::unwind(10)]
+fn custody_survives_any_eight_operations() {
+    let t = TaskOwnership::new();
+    let mut tokens = 0u32;
+    for _ in 0..8 {
+        let before = t.snapshot();
+        let (op, core): (u8, u32) = (kani::any(), kani::any());
+        kani::assume(core < 2);
+        match op % 13 {
+            0 => { t.activate(); }
+            1 => { t.try_admit(|| { tokens += 1; Ok::<(), ()>(()) }); }
+            2 => { t.try_admit(|| Err::<(), ()>(())); }
+            3 => { if tokens > 0 { tokens -= 1; let dispatched = t.begin_dispatch(core); assert!(!dispatched || !before.exited); } }
+            4 => { t.attach(core); }
+            5 => { t.cancel_dispatch(core); }
+            6 => { t.park(core); }
+            7 => { t.park_fault(core); }
+            8 => { unsafe { t.complete_fault(); } }
+            9 => { t.resume_attached(core); }
+            10 => { t.begin_switch_out(core); }
+            11 => { unsafe { t.release_after_stack_switch(core); } }
+            _ => { if kani::any() { t.wake(); } else { t.exit(); } }
+        }
+        let after = t.snapshot();
+        assert!(custody_holds(after, tokens));
+        assert!(!before.exited || after.exited);
+        assert!(before.phase != Phase::Dead || after == before);
+    }
+}
+
+/// A deadline is claimed only once it is due, and only once; arming is refused
+/// while armed, for a zero or too-long interval, and on overflow.
+#[kani::proof]
+fn a_deadline_fires_once_and_only_when_due() {
+    let d = Deadline::new();
+    let (now, ticks, later): (u64, u64, u64) = (kani::any(), kani::any(), kani::any());
+    match d.arm(now, ticks) {
+        Some(at) => {
+            assert!(ticks >= 1 && ticks <= MAX_TICKS && at == now + ticks);
+            assert!(d.arm(kani::any(), kani::any()).is_none());
+            let first = d.take_due(later);
+            assert!(first == if later >= at { Some(at) } else { None });
+            if first.is_some() { assert!(d.take_due(u64::MAX).is_none()); }
+        }
+        None => assert!(ticks == 0 || ticks > MAX_TICKS || now.checked_add(ticks).is_none()),
+    }
+}
