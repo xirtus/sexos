@@ -200,3 +200,12 @@ fn wrote(ops:&[Op],n:u32)->Vec<(u8,u32)>{ops.iter().filter_map(|op|match op{Op::
    1=>{d.advance(2300);assert_eq!(d.failure(),Some(Failure::Deadline));},_=>{d.advance(299);assert_eq!(d.failure(),Some(Failure::Clock));}}
   let ops=m.ops();m.done(0);for n in 2300..2310{d.advance(n);}assert_eq!(d.send(&[0;60],2310),Err(SendError::Quarantined));assert_eq!(m.ops(),ops);}
 }
+#[test]fn interrupts_clear_stale_status_then_unmask_and_acknowledge_at_register_width(){
+ for model in MODELS{let m=Mock::new(model);let mut d=ready(&m);let r8125=model==c::Model::Rtl8125;
+  let (mask,status,w)=if r8125{(0x38,0x3c,4u8)}else{(0x3c,0x3e,2u8)};
+  let start=m.ops().len();assert!(d.arm_interrupts(true));let ops=&m.ops()[start..];
+  assert_eq!(wrote(ops,status),vec![(w,if r8125{u32::MAX}else{0xffff})]);assert_eq!(wrote(ops,mask),vec![(w,r::IRQ_CAUSES as u32)]);
+  assert!(ops.iter().position(|o|matches!(o,Op::Write(a,_,_)if *a==status)).unwrap()<ops.iter().position(|o|matches!(o,Op::Write(a,_,_)if *a==mask)).unwrap());
+  m.0.borrow_mut().regs[status as usize]=0x05;let start=m.ops().len();assert_eq!(d.acknowledge_interrupts(),0x05);assert_eq!(wrote(&m.ops()[start..],status),vec![(w,0x05)]);
+  let start=m.ops().len();d.disarm_interrupts();assert_eq!(wrote(&m.ops()[start..],mask),vec![(w,0)]);}
+}

@@ -4825,6 +4825,8 @@ dependencies = [
  "serenade-core",
  "sex-app",
  "sex-pdx",
+ "sex-voice",
+ "sha2 0.10.9",
  "taffy",
  "weft",
 ]
@@ -7600,6 +7602,10 @@ name = "sex-vmd"
 version = "0.1.0"
 
 [[package]]
+name = "sex-voice"
+version = "0.1.0"
+
+[[package]]
 name = "sex-volumes"
 version = "0.1.0"
 
@@ -7729,6 +7735,16 @@ dependencies = [
 [[package]]
 name = "sexfs"
 version = "0.1.0"
+
+[[package]]
+name = "sexgpu-nv"
+version = "0.1.0"
+dependencies = [
+ "linked_list_allocator",
+ "sex-gpu-nv",
+ "sex-pdx",
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "sexinput"
@@ -9664,6 +9680,16 @@ dependencies = [
  "safe-mmio",
  "thiserror 2.0.21",
  "zerocopy 0.8.63",
+]
+
+[[package]]
+name = "voice"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "sex-voice",
+ "sha2 0.10.9",
 ]
 
 [[package]]

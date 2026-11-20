@@ -194,6 +194,20 @@ pub fn ui_coverage(text:&[u8],x:i32,y:usize,scale:u32)->Option<u8>{
     sans_coverage(text,x,y,sex_pdx::desktop_style::chrome::UI_FONT*64*scale,UI_H*scale as usize,sex_pdx::desktop_style::chrome::UI_FONT as i32*256*scale as i32)
 }
 
+/// Where `ui_coverage`'s ink ends: past this x every pixel of the text has none.
+/// None when the text cannot be laid out (then ask pixel by pixel).
+pub fn ui_ink_end(text:&[u8],scale:u32)->Option<i32>{
+    let scale=scale.clamp(1,3);
+    let size=sex_pdx::desktop_style::chrome::UI_FONT*64*scale;
+    let l=text_layout(text,size)?;
+    let mut end=0i32;
+    for i in 0..l.len{
+        if l.font[i]==SKIP{continue;}
+        end=end.max((l.pen[i]>>8)-sans_padding(size)+l.width[i] as i32);
+    }
+    Some(end)
+}
+
 /// Title coverage at (`x`, `y`) pixels from the title's top left.
 pub fn title_coverage(title: &[u8], x: i32, y: usize) -> u8 {
     sans_coverage(title, x, y, TITLE_SIZE, TITLE_H, TITLE_BASELINE).unwrap_or(0)
