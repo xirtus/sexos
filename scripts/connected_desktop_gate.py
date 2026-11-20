@@ -218,7 +218,11 @@ def command_before_history(trace,expected):
 
 FAULTS=r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial\.record\.overflow|\[fault\.kill\]|unexpected[_ ]user[_ ]fault|\[sexfiles\.defer\.drop\]'
 def reject_faults(trace):
- if re.search(FAULTS,trace,re.I):raise ValueError('guest fault/deferred drop/diagnostic overflow')
+ if m:=re.search(FAULTS,trace,re.I):
+  # Name the line: the guest log is not always fetchable from the job's artifacts.
+  start=trace.rfind('\n',0,max(0,m.start()-1500))+1;end=trace.find('\n',m.end()+400)
+  print('--- guest fault context ---\n'+trace[start:end if end>=0 else len(trace)],flush=True)
+  raise ValueError('guest fault/deferred drop/diagnostic overflow: '+trace[m.start():trace.find('\n',m.start()) if '\n' in trace[m.start():] else len(trace)][:200])
 
 def command_profile(manifest,iso):
  command=manifest['command'];resolution=manifest['resolution'];model=manifest['model']
