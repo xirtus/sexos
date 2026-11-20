@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Scene files: glTF 2.0 (`.gltf` and `.glb`), Wavefront OBJ (+ MTL), STL and
-//! PLY, plus the shared plumbing every format uses.
+//! Scene files: glTF 2.0 (`.gltf` and `.glb`), Autodesk FBX, Wavefront OBJ (+ MTL),
+//! STL, PLY and `.blend`, plus the shared plumbing every format uses.
 //!
 //! The entry points are format-agnostic:
 //! - [`import`] / [`import_into`] read one main file. Files it refers to (an
@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 pub mod blend;
+pub mod fbx;
 pub mod gltf;
 pub mod obj;
 pub mod ply;
@@ -38,10 +39,12 @@ pub enum Format {
     Glb,
     /// Blender's native `.blend`.
     Blend,
+    /// Autodesk FBX 7.x (binary or ASCII in, binary 7.4 out).
+    Fbx,
 }
 
 impl Format {
-    pub const ALL: [Format; 6] = [Format::Obj, Format::Stl, Format::Ply, Format::Gltf, Format::Glb, Format::Blend];
+    pub const ALL: [Format; 7] = [Format::Obj, Format::Stl, Format::Ply, Format::Gltf, Format::Glb, Format::Blend, Format::Fbx];
 
     /// Format for a file extension (no dot, any case).
     pub fn from_extension(ext: &str) -> Option<Format> {
@@ -52,6 +55,7 @@ impl Format {
             "gltf" => Format::Gltf,
             "glb" => Format::Glb,
             "blend" => Format::Blend,
+            "fbx" => Format::Fbx,
             _ => return None,
         })
     }
@@ -72,6 +76,9 @@ impl Format {
         if bytes.starts_with(b"BLENDER") || bytes.starts_with(&[0x1f, 0x8b]) || bytes.starts_with(&[0x28, 0xb5, 0x2f, 0xfd]) {
             // Compressed .blend files are gzip (old) or zstd (4.x).
             return Some(Format::Blend);
+        }
+        if bytes.starts_with(fbx::tree::BINARY_MAGIC) || trim_ascii_start(bytes).starts_with(b"; FBX") {
+            return Some(Format::Fbx);
         }
         if bytes.starts_with(b"ply") {
             return Some(Format::Ply);
@@ -95,6 +102,7 @@ impl Format {
             Format::Gltf => "gltf",
             Format::Glb => "glb",
             Format::Blend => "blend",
+            Format::Fbx => "fbx",
         }
     }
 
@@ -107,6 +115,7 @@ impl Format {
             Format::Gltf => "glTF",
             Format::Glb => "GLB",
             Format::Blend => ".blend",
+            Format::Fbx => "FBX",
         }
     }
 }
@@ -189,6 +198,7 @@ pub fn import_into(scene: &mut Scene, bytes: &[u8], format: Format, resolver: Re
             let other = blend::import_blend(bytes).map_err(|message| IoError::Parse { format, line: None, message })?;
             Ok(append_scene(scene, other))
         }
+        Format::Fbx => fbx::import_into(scene, bytes, resolver),
     }
 }
 
@@ -263,7 +273,9 @@ pub fn export(scene: &Scene, format: Format) -> Result<Vec<u8>, IoError> {
         Format::Ply => Ok(ply::export_binary(scene)),
         Format::Gltf => gltf::export(scene, false),
         Format::Glb => gltf::export(scene, true),
-        Format::Blend => Err(IoError::Unsupported { format, message: "no .blend writer in this build".into() }),
+        // Without the app's actions (the app calls `blend::export_blend` itself).
+        Format::Blend => Ok(blend::export_blend(scene, &[], blend::BlendExport { width: 1920, height: 1080 })),
+        Format::Fbx => Ok(fbx::export(scene)),
     }
 }
 
