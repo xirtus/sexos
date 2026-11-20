@@ -17,16 +17,7 @@ use polyamour::input::{Button, Key, Mods};
 use polyamour::App;
 
 fn open_arg(app: &mut App, path: &str) {
-    match std::fs::read(path) {
-        Ok(bytes) => {
-            let dir = std::path::Path::new(path).parent().map(|p| p.to_path_buf()).unwrap_or_default();
-            let resolve = move |p: &str| std::fs::read(dir.join(p)).ok();
-            if let Err(e) = app.open_bytes(path, &bytes, &resolve) {
-                app.doc.report = e;
-            }
-        }
-        Err(e) => app.doc.report = format!("Cannot open {path}: {e}"),
-    }
+    polyamour::app::open_path(app, path);
 }
 
 /// Blender's `--python FILE` and `--python-expr EXPR`: run a script once the
@@ -44,7 +35,7 @@ fn run_python_arg(app: &mut App, flag: &str, value: &str) {
 #[cfg(not(target_os = "hermit"))]
 fn print_usage() {
     eprintln!(
-        "usage: polyamour [--screenshot out.png] [--workspace Name] [--wasm FILE.wasm] [--python FILE.py] [--python-expr EXPR] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--liquid-demo] [--gp-demo] [--seq-demo] [scene file]"
+        "usage: polyamour [--screenshot out.png] [--workspace Name] [--wasm FILE.wasm] [--python FILE.py] [--python-expr EXPR] [--node-demo] [--rig-demo] [--sculpt-demo] [--physics-demo] [--liquid-demo] [--gp-demo] [--seq-demo] [--browse open|save|import:EXT,..|export:EXT] [scene file]"
     );
 }
 
@@ -54,6 +45,7 @@ fn main() {
     let mut app = App::new(1600, 900);
     let mut out = None;
     let mut rig_demo = false;
+    let mut browse: Option<String> = None;
     let mut sculpt_demo = false;
     let mut physics_demo = false;
     let mut gp_demo = false;
@@ -93,6 +85,8 @@ fn main() {
                 gp_demo = true;
             }
             "--seq-demo" => polyamour::seqedit::demo(&mut app.doc),
+            // `--browse open|save|import:fbx,glb|export:fbx`: show the File Browser.
+            "--browse" => browse = it.next().cloned(),
             "--rig-demo" => {
                 polyamour::rig::demo(&mut app.doc);
                 app.doc.want_workspace = Some("Animation".into());
@@ -121,6 +115,18 @@ fn main() {
         polyamour::python::run_wasm_file(&mut app.doc, std::path::Path::new(w), &[]);
     }
     app.frame(Input::Tick);
+    if let Some(b) = &browse {
+        use polyamour::filebrowser::Purpose;
+        let (kind, exts) = b.split_once(':').unwrap_or((b.as_str(), ""));
+        let purpose = match kind {
+            "save" => Purpose::SaveAs,
+            "import" => Purpose::Import(exts.split(',').filter(|e| !e.is_empty()).map(String::from).collect()),
+            "export" => Purpose::Export(if exts.is_empty() { "fbx".into() } else { exts.into() }),
+            _ => Purpose::Open,
+        };
+        app.browse(purpose);
+        app.frame(Input::Tick);
+    }
     if sculpt_demo {
         // The Sculpting workspace's view frames the sphere, the sidebar
         // shows the brush settings.
