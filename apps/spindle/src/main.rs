@@ -1588,7 +1588,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             };
             match target {
                 Some(t) => {
-                    serial_println!("[spindle.crash.probe] target={} how={:#x}", t & 0xff, t >> 8);
+                    if t >> 8 == 0 { serial_println!("[spindle.crash.probe] target={}", t); } else { serial_println!("[spindle.crash.probe] target={} how={:#x}", t & 0xff, t >> 8); }
                     let (status, _, _) = sex_pdx::crash_log::call(sex_pdx::crash_log::OP_PROBE_FAULT, t, 0);
                     sb.push(if status == 0 { b"Asked the kernel to stop it." } else { b"The kernel refused." });
                 }
