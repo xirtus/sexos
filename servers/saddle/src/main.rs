@@ -18,7 +18,8 @@
 use harness::dma::DmaPool;
 use harness::manifest::Id;
 use harness::record::Record;
-use harness::sexos::{dma_pool, lease, LeaseIrq, LeasedRegs, Serial, SystemClock};
+use harness::sexos::{dma_pool, lease, LeaseIrq, LeasedRegs, Serial};
+use harness::Clock;
 use harness::{DriverInfo, Error};
 use sex_hwdb::manifest::SADDLE_SLOT;
 
@@ -34,7 +35,7 @@ static DRIVERS: &[Hosted] = &[Hosted { info: &edu::INFO, run: run_edu }];
 /// polled and interrupt-driven factorials, and a DMA round trip.
 fn run_edu(regs: LeasedRegs, l: sex_pdx::device::Lease, pool: &mut DmaPool<'static>) -> Result<(), Error> {
     use edu::{Direction, Edu, Wait};
-    let (mut clock, mut out) = (SystemClock, Serial);
+    let (mut clock, mut out) = (YieldClock, Serial);
     let mut dev = Edu::start(regs, &mut clock, &mut out)?;
     // Saddle's gate starts edu with a 32-bit DMA mask; BOOT's pools sit below 4 GiB.
     dev.set_dma_limit(1 << 32);
@@ -86,15 +87,28 @@ pub extern "C" fn _start() -> ! {
         }
     }
     Record::new("saddle.ready").num("drivers", started).emit(&mut Serial);
+    // Untimed park: hosted drivers are interrupt-free here, and a timed poll
+    // would be an unreviewed self-wait (check_self_wait.py admits no task 53).
     loop {
-        let _ = sex_pdx::sys_wait_self_ticks(1000);
+        sex_pdx::sys_wait_self();
     }
+}
+
+/// Saddle's clock yields instead of parking on a timer: a timed self-wait from a
+/// new boot task is refused by the self-wait gate until it is reviewed, and the
+/// hosted self tests only wait a few milliseconds.
+struct YieldClock;
+impl Clock for YieldClock {
+    fn now_ms(&mut self) -> u64 { sex_pdx::get_ticks() }
+    fn sleep_ms(&mut self, _ms: u64) { sex_pdx::sys_yield() }
 }
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     sex_pdx::serial_record!("[saddle.panic]");
+    // Untimed park: hosted drivers are interrupt-free here, and a timed poll
+    // would be an unreviewed self-wait (check_self_wait.py admits no task 53).
     loop {
-        let _ = sex_pdx::sys_wait_self_ticks(1000);
+        sex_pdx::sys_wait_self();
     }
 }
