@@ -70,7 +70,7 @@ def main():
   print({'ok':True,**res})
  except (AssertionError,TimeoutError):
   # Artifacts cannot always be fetched: put the evidence in the job log.
-  keep=re.compile(r'\[(?:shell\.program|shell\.focus|bench|sched\.pair|program\.(?:start|worker|exit)|ipc\.xcore|app\.)|PANIC|panic')
+  keep=re.compile(r'\[(?:shell\.program\.(?:launch|key)|shell\.focus|shell\.key|spindle|files\.(?:program|ticket|prepare)|bench|sched\.pair|program\.(?:start|worker|exit)|ipc\.xcore|input)|PANIC|panic')
   lines=[l for l in t().splitlines() if keep.search(l)]
   print('--- serial excerpt (last 120 matching lines) ---');print('\n'.join(lines[-120:]))
   raise
