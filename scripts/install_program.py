@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 """Writes programs into the disk program store: directory sectors from LBA 2048, then the files."""
-import argparse,struct
+import argparse,re,struct
 from pathlib import Path
-DIRECTORY_LBA=2048;SECTOR=512;MAGIC=b'SEXPROG1';ENTRY=32;PER_SECTOR=(SECTOR-16)//ENTRY;MAX_SECTORS=64;MAX=PER_SECTOR*MAX_SECTORS
+DIRECTORY_LBA=2048;SECTOR=512;
+# Files' file system starts here (sex_pdx::fs::BASE_LBA): the store must end before it, or
+# the file system's first writes overwrite the last programs' sectors.
+END_LBA=int(re.search(r'pub const BASE_LBA: u64 = (\d+);',(Path(__file__).resolve().parents[1]/'crates/sex-pdx/src/fs.rs').read_text())[1]);MAGIC=b'SEXPROG1';ENTRY=32;PER_SECTOR=(SECTOR-16)//ENTRY;MAX_SECTORS=64;MAX=PER_SECTOR*MAX_SECTORS
 def fnv(data):
  h=0xcbf29ce484222325
  for b in data:h=((h^b)*0x100000001b3)&(2**64-1)
  return h
+def sectors_for(programs):
+ """Store sectors (directory and files) that `programs` (name, bytes) take."""
+ return max(1,(len(programs)+PER_SECTOR-1)//PER_SECTOR)+sum((len(p[1])+SECTOR-1)//SECTOR for p in programs)
+def fits(programs):return DIRECTORY_LBA+sectors_for(programs)<=END_LBA
 def install(disk,programs):
  """programs: (name, bytes[, stored hash]). The disk grows to fit; DiskFS sectors stay untouched.
  The directory takes as many sectors as the programs need (15 per sector, up to 64)."""
  assert len(programs)<=MAX,'directory full'
+ assert fits(programs),f'programs need {sectors_for(programs)*SECTOR>>20} MiB; the store holds {(END_LBA-DIRECTORY_LBA)*SECTOR>>20} MiB'
  sectors=max(1,(len(programs)+PER_SECTOR-1)//PER_SECTOR)
  directory=bytearray(SECTOR*sectors)
  for k in range(sectors):directory[k*SECTOR:k*SECTOR+8]=MAGIC
