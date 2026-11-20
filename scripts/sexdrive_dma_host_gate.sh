@@ -12,7 +12,7 @@ start = source.index('fn block_buffer_view(')
 end = source.index('\nfn ', start + 1)
 Path(sys.argv[2]).write_text(source[start:end])
 parts = []
-for name in ['disk_sectors','device_sectors','place','prp2_for','prp2_for_loan','block_loan','end_block_loan','nvme_wait_completion', 'stop_uncertain_io', 'prepare_bounce', 'nvme_read_into_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_read_queued', 'nvme_wait_any', 'nvme_write_one_block', 'nvme_flush', 'write_guard_allows']:
+for name in ['disk_sectors','device_sectors','place','cmd_run','note_mdts_split','prp2_for','prp2_for_loan','block_loan','end_block_loan','nvme_wait_completion', 'stop_uncertain_io', 'prepare_bounce', 'nvme_read_into_bounce', 'typed_read_handoff', 'nvme_read_into_mapped_va', 'nvme_read_queued', 'nvme_wait_any', 'nvme_write_one_block', 'nvme_flush', 'write_guard_allows']:
     start = source.index('fn ' + name + '(')
     end = source.index('\nfn ', start + 1)
     parts.append(source[start:end])
@@ -39,6 +39,8 @@ rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_completion_wait.rs" -o "$T
 rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_controller_ready.rs" -o "$TEST_DIR/ready-tests"
 rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_apst.rs" -o "$TEST_DIR/apst-tests"
 "$TEST_DIR/apst-tests"
+rustc --edition=2021 --test "$ROOT_DIR/tests/sexdrive_identify.rs" -o "$TEST_DIR/identify-tests"
+"$TEST_DIR/identify-tests"
 "$TEST_DIR/ready-tests"
 "$TEST_DIR/completion-tests"
 echo '[gate.sexdrive_dma_host.result] PASS scope=production_lifetime_peer_check_not_device_DMA_containment'

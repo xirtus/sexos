@@ -47,6 +47,33 @@ pub const ARGS_MAX: usize = 256;
 /// Spindle only: it changes how the machine starts.
 pub const INSTALL: u8 = 14;
 pub const INSTALL_GO: u64 = 1;
+/// No-clobber move of a file, only if its current object ID equals `offset`.
+/// The path region contains `source\0destination`, like RENAME. The caller's
+/// existing file scope is applied to both paths independently.
+/// (43 onward: 30..=34 are `disks`, 40..=42 package, console relay and jobs.)
+pub const MOVE_IF_ID: u8 = 43;
+/// Spindle-only organizer controls. STATE returns, in the data area: enabled byte,
+/// committed filesystem generation (u64), last event sequence (u64), pins (u16) and
+/// rules (u16). SET uses offset 0/1; turning it on also organizes what is already there.
+pub const ORGANIZE_STATE: u8 = 44;
+pub const ORGANIZE_SET: u8 = 45;
+/// Same checked move as MOVE_IF_ID, with a durable undo record in one commit. The
+/// source must be in an organized folder (`sex_organize::ingress`) and the destination
+/// folder one `sex_organize::destination_allowed` accepts; the name stays the same.
+pub const ORGANIZE_MOVE: u8 = 46;
+/// Undoes the last placement and pins the restored file. Data: `from\0to` of the undone move.
+pub const ORGANIZE_UNDO: u8 = 47;
+/// Organizes the organized folders now (`offset` 1: only report). Data: one line per
+/// file, `moved FROM -> TO`, `would move FROM -> TO` or `stays FROM: why`.
+pub const ORGANIZE_SCAN: u8 = 48;
+/// Pins (`offset` 1) or unpins (0) the file at the path. Pinned files are never moved.
+pub const ORGANIZE_PIN: u8 = 49;
+/// The person's rules. Path empty: data gets the rules, one `PATTERN DEST` per line.
+/// Path `PATTERN\0DEST` adds or replaces that pattern's rule; `PATTERN` alone removes it.
+pub const ORGANIZE_RULE: u8 = 50;
+/// The post-commit event log: files that arrived in organized folders since sequence
+/// `offset`, and what was decided. Data: one line per event, `SEQ new|moved-in PATH: decision`.
+pub const ORGANIZE_LOG: u8 = 51;
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;
@@ -159,13 +186,15 @@ pub const READ_ONLY: u8 = 14;
 pub const UNSUPPORTED: u8 = 15;
 /// The person hasn't answered yet.
 pub const PENDING: u8 = 16;
+/// The file changed since it was inspected (organizer checked moves).
+pub const STALE: u8 = 17;
 
 pub fn message(status: u8) -> &'static [u8] {
     match status {
         OK => b"ok", UNAVAILABLE => b"no filesystem on this disk", NOT_FOUND => b"not found", EXISTS => b"already exists",
         NOT_DIR => b"not a directory", IS_DIR => b"is a directory", NOT_EMPTY => b"directory not empty", NAME => b"bad name",
         NO_SPACE => b"disk full", IO => b"disk error", CORRUPT => b"damaged data found", DENIED => b"not allowed",
-        OTHER_DISK => b"on another disk", READ_ONLY => b"read-only disk", UNSUPPORTED => b"not supported on this disk", PENDING => b"waiting for the person", _ => b"invalid request",
+        OTHER_DISK => b"on another disk", READ_ONLY => b"read-only disk", UNSUPPORTED => b"not supported on this disk", PENDING => b"waiting for the person", STALE => b"file changed since inspection", _ => b"invalid request",
     }
 }
 

@@ -32,7 +32,9 @@ impl Raw {
     /// Builds one from the integer elements of `_BST` and of `_BIF` (`bix` false) or `_BIX`.
     pub fn from_packages(bst: &[Option<u64>], info: &[Option<u64>], bix: bool) -> Option<Self> {
         let shift = bix as usize;
-        let at = |p: &[Option<u64>], i: usize| p.get(i).copied().flatten();
+        // ACPI defines these as DWORDs; a wider AML integer is firmware garbage,
+        // and taken as is it would overflow the sums below.
+        let at = |p: &[Option<u64>], i: usize| p.get(i).copied().flatten().map(|v| if v > 0xffff_ffff { UNKNOWN } else { v });
         Some(Self {
             state: at(bst, 0)?,
             rate: at(bst, 1).unwrap_or(UNKNOWN),

@@ -1363,3 +1363,4 @@ pub mod a11y;
 pub mod vm;
 pub mod stream;
 pub mod console_relay;
+pub mod file_chooser;
