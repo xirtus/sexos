@@ -5,6 +5,10 @@ edition = "2021"
 license = "GPL-3.0-only"
 description = "Runtime TrueType glyph rendering for SexOS: any size, anti-aliased, integer-only raster"
 
+[features]
+# OpenType metadata inspector (allocates; used by Filigree).
+inspect = []
+
 [dependencies]
 # MIT/Apache-2.0, zero-allocation, no_std. `no-std-float` supplies the few float
 # helpers it needs without std; the outline coordinates leave it as plain numbers.

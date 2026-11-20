@@ -90,10 +90,14 @@ impl Browser {
     }
 
     /// Streams the rest of `ex` into `Downloads/NAME` (a free name), showing progress.
+    /// The bytes go to `Downloads/.NAME.part` and take the real name only once whole, so
+    /// nothing (the Organizer, Loom, another program) ever sees half a download as a file.
     fn save_stream(&mut self, mut ex: net::Exchange, name: &str, url: &str) -> Result<(), &'static [u8]> {
         let _ = files::mkdir(&mut self.window, DIR.as_bytes());
         let path = self.free_name(name);
-        if files::write(&mut self.window, path.as_bytes(), &[]).is_err() { ex.cancel(&mut self.window); return Err(b"Can't save in Downloads."); }
+        let part = alloc::format!("{DIR}/.{}.part", &path[DIR.len() + 1..]);
+        let _ = files::remove(&mut self.window, part.as_bytes());
+        if files::write(&mut self.window, part.as_bytes(), &[]).is_err() { ex.cancel(&mut self.window); return Err(b"Can't save in Downloads."); }
         sex_pdx::serial_record!("[web.download.start] path={} url={}", path, url);
         let began = sex_pdx::get_ticks();
         let mut wrote: u64 = 0;
@@ -107,7 +111,7 @@ impl Browser {
                 streamed = true;
                 total = t;
                 if !chunk.is_empty() {
-                    if files::write_at(&mut self.window, path.as_bytes(), wrote, &chunk).map_or(true, |n| n < chunk.len()) {
+                    if files::write_at(&mut self.window, part.as_bytes(), wrote, &chunk).map_or(true, |n| n < chunk.len()) {
                         ex.cancel(&mut self.window);
                         return Err(b"Files is full: the download stopped.");
                     }
@@ -128,12 +132,13 @@ impl Browser {
         if !streamed {
             // Compressed or chunked: the body comes whole.
             let r = ex.finish().map_err(net::message)?;
-            if files::write(&mut self.window, path.as_bytes(), &r.body).is_err() { return Err(b"Files is full: the download stopped."); }
+            if files::write(&mut self.window, part.as_bytes(), &r.body).is_err() { return Err(b"Files is full: the download stopped."); }
             wrote = r.body.len() as u64;
         }
+        let check = self.check_file(&part, wrote);
+        if files::rename(&mut self.window, part.as_bytes(), path.as_bytes()).is_err() { self.download_status = None; return Err(b"Can't save in Downloads."); }
         let _ = files::sync(&mut self.window);
         self.download_status = None;
-        let check = self.check_file(&path, wrote);
         sex_pdx::serial_record!("[web.download.done] path={} bytes={} ticks={} fnv={:016x}", path, wrote, sex_pdx::get_ticks() - began, check);
         self.downloads.push(Done { path, bytes: wrote, url: String::from(url) });
         Ok(())
@@ -171,14 +176,24 @@ impl Browser {
         let mut html = String::from("<title>Downloads</title><body style='margin:24px;font-size:15px'><h2>Downloads</h2>");
         if self.downloads.is_empty() { html.push_str("<p>Nothing downloaded in this window yet.</p>"); }
         html.push_str("<ul>");
-        for d in self.downloads.iter().rev() {
-            html.push_str(&alloc::format!("<li><a href=\"@{}\">{}</a> — {} KB <span style='color:#5f6368'>from {}</span></li>", esc(&d.path), esc(d.path.trim_start_matches("Downloads/")), d.bytes >> 10, esc(&d.url)));
+        let mut here = Vec::with_capacity(self.downloads.len());
+        for d in self.downloads.iter() { here.push(files::size(&mut self.window, d.path.as_bytes()).is_ok()); }
+        for (d, there) in self.downloads.iter().zip(here).rev() {
+            let name = esc(d.path.trim_start_matches("Downloads/"));
+            // Files' Organizer may have placed it in the person's folders (Documents,
+            // Pictures...), outside this program's own: say so rather than link nowhere.
+            if there {
+                html.push_str(&alloc::format!("<li><a href=\"@{}\">{}</a> — {} KB <span style='color:#5f6368'>from {}</span></li>", esc(&d.path), name, d.bytes >> 10, esc(&d.url)));
+            } else {
+                html.push_str(&alloc::format!("<li>{} — {} KB <span style='color:#5f6368'>from {}; moved out of Downloads (Files' organize log says where)</span></li>", name, d.bytes >> 10, esc(&d.url)));
+            }
         }
         html.push_str("</ul>");
         if let Ok(list) = files::list(&mut self.window, DIR.as_bytes()) {
-            if !list.is_empty() {
+            if list.iter().any(|e| !e.name.starts_with(b".")) {
                 html.push_str("<h3>In Downloads</h3><ul>");
-                for e in list.iter() {
+                // Hidden names are downloads still arriving (`.NAME.part`).
+                for e in list.iter().filter(|e| !e.name.starts_with(b".")) {
                     let n = String::from_utf8_lossy(&e.name).into_owned();
                     html.push_str(&alloc::format!("<li><a href=\"@{DIR}/{}\">{}</a></li>", esc(&n), esc(&n)));
                 }
