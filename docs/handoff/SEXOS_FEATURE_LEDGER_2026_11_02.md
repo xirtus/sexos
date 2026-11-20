@@ -5411,6 +5411,13 @@ From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, 
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
 
+## L3: native Intel display on Tiger Lake (2026-11-19)
+- On Intel Tiger Lake graphics (the Alienware x17 R1's iGPU), Display takes the panel over from the firmware framebuffer without a modeset: it repoints the firmware's pipe at two buffers of its own and flips between them at vblank. Frames are tear-free and held to the panel's refresh; only changed rows are written and flushed.
+- The pointer is on the hardware cursor plane: moving it writes two registers and redraws no pixels (drawn arrow kept for the magnifier and screen-off).
+- BOOT gives Display the buffers and fills only their GPU page-table (GGTT) entries, so Display cannot point the GPU at other memory; the IOMMU maps them like any DMA pool.
+- Safe fallback: no matching pipe, PSR2, or a flip that never latches leaves or puts back the firmware framebuffer with the last picture.
+- Receipts: `[boot.display.intel_scanout]`, `[display.intel.takeover]`, `[display.intel.flip]`, `[display.intel.cursor]`, `[display.intel.fallback]`, measured `refresh_mhz=` and `[display.intel.edid.mode]` for every panel mode.
+- Verified on the host by `scripts/kms_host_gate.sh` (`takeover_keeps_the_mode_and_flips_between_our_buffers`: transcoder untouched, flips wait for the latch, dead pipe and PSR2 refused, firmware plane restored, cursor moves without pixels). QEMU has no Intel display; the x17 boot log is the first hardware run.
 ## Device power part 1: link power states and the sleep notice (2026-11-19)
 - Every PCIe link gets the power states both ends support at BOOT: ASPM L0s/L1, L1.1/L1.2 substates, clock PM and LTR, with Linux's latency checks and quirks, adding to what firmware set and never removing it (`crates/sex-pcipm`, `kernel/src/pci_power.rs`). Idle links drop to L1.2, which the platform needs for its deepest idle states.
 - Drivers can put a device they hold in D3hot and back (syscall 86 `OP_POWER`); the kernel saves and restores what a reset loses, MSI-X table included.
