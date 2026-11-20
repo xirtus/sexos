@@ -47,6 +47,10 @@ mod silk_ctl;
 mod silk_ctl_glue;
 mod hot_corners;
 mod hot_corners_glue;
+mod program_notify;
+mod startup;
+mod shortcuts;
+mod shortcuts_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -10615,7 +10619,7 @@ unsafe fn browser_wheel_input(word:u64,reserved:u64){
 // ── Window manager: Super chords, layouts, scratchpad (Hyprland/river/KDE) ──
 // Policy and arithmetic live in wm.rs (host-tested); this is the glue to the
 // shell's frames, scenes and focus.
-static mut WM_CHORDS: wm::Chords = wm::Chords::new();
+static mut WM_CHORDS: wm::Chords = wm::Chords::with(shortcuts_glue::binding);
 static mut WM_TILING: [wm::Tiling; ATLAS_MAX_SCENES] = [wm::Tiling::DEFAULT; ATLAS_MAX_SCENES];
 static mut WM_ORDER: wm::Order<MAX_FRAMES> = wm::Order::new();
 static mut WM_SCENE_FOCUS: [u64; ATLAS_MAX_SCENES] = [0; ATLAS_MAX_SCENES];
@@ -16941,6 +16945,7 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     }
     let assembler = &mut *core::ptr::addr_of_mut!(NOTIFY_ASSEMBLER);
     let Some(text) = assembler.push(msg.arg0, msg.arg1, msg.arg2) else { return true };
+    if program_notify::hidden(text.sender) { sex_pdx::serial_record!("[shell.notify.hidden] id={} sender={}", text.id, text.sender); return true; }
     NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = text;
     NOTIFY_TOTAL += 1;
     // Buttons and a reply field its program gave for it (slice S2).
@@ -17713,6 +17718,7 @@ fn program_bind(target:u32,task:u32){
     unsafe{autofill_routes::bound(target,task); }
     attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
+    program_notify::bound(target);
     let network=unsafe{core::mem::take(&mut PROGRAM_NETWORK)};
     if network{let _=pdx_call(sex_pdx::web::SHELL_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
     unsafe{launch_started(target,task,network);}
@@ -17924,6 +17930,14 @@ unsafe fn attached_stop(caller:u32,target:u64){
     let Some(row)=app_catalog::by_target(r.0)else{return};
     let result=sex_pdx::app_lifecycle::force_end(row.lifecycle_slot);
     sex_pdx::serial_record!("[shell.attached.stop] terminal={} target={} task={} ok={}",caller,r.0,r.1,result.is_ok() as u8);
+}
+/// The Shell's own `run NAME` (startup programs): false while another start is under way.
+unsafe fn program_start_own(name:[u64;2])->bool{
+    use sex_pdx::program_store as store;
+    if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||LAUNCH_ASKER.is_some()||RECORD_SPAWN_WANTED!=0||program_free_row().is_none(){return false}
+    PROGRAM_READING=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,name[0],name[1],0).0==0;
+    PROGRAM_NETWORK=false;PROGRAM_LAUNCHER=None;PROGRAM_TICKET=0;PROGRAM_SCENE=None;
+    PROGRAM_READING
 }
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
 unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
@@ -26361,7 +26375,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); }
+        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); startup::poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         #[cfg(sexos_input_payload_proof)]

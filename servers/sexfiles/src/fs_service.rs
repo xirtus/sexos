@@ -1324,11 +1324,12 @@ fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u
 /// True when `caller` is a live program run from `/data/NAME`: the folder Files
 /// bound it to, never a name the program claims; and the program came from the system
 /// (the disk program store or `/bin/NAME`), not another file with the same base name.
-pub fn program_is(caller: u32, name: &[u8]) -> bool {
-    let Some(k) = program_index(caller) else { return false };
-    let Some(b) = (unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }) else { return false };
-    let data = sex_pdx::program_store::DATA;
-    program_live(caller, b.task) && b.system && b.root[..b.len].strip_prefix(data) == Some(name)
+pub fn program_is(caller: u32, name: &[u8]) -> bool { program_name(caller, |n| n == name) == Some(true) }
+/// `f` of the NAME a live system program run in row `caller` was bound to (`program_is`).
+pub fn program_name<R>(caller: u32, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+    let b = unsafe { (*core::ptr::addr_of!(BINDINGS))[program_index(caller)?] }?;
+    (program_live(caller, b.task) && b.system).then_some(())?;
+    b.root[..b.len].strip_prefix(sex_pdx::program_store::DATA).map(f)
 }
 /// Files' own small files (settings): read whole, at most `out.len()` bytes.
 pub fn read_own(path: &[u8], out: &mut [u8]) -> Option<usize> {

@@ -14,6 +14,11 @@ rustc --edition 2021 --test -A dead_code --extern sex_config="$out/libsex_config
 "$out/settings-setup" -q
 rustc --edition 2021 --test -A dead_code apps/settings/src/grants.rs -o "$out/settings-grants"
 "$out/settings-grants" -q
+# Tatami's R3 pages: About's lines, and the Shell's reading of the Shortcuts page.
+rustc --edition 2021 --test -A dead_code apps/settings/src/about.rs -o "$out/settings-about"
+"$out/settings-about" -q
+rustc --edition 2021 --test -A dead_code --extern sex_config="$out/libsex_config.rlib" tests/shortcuts.rs -o "$out/shortcuts"
+"$out/shortcuts" -q
 rustc --edition 2021 --test -A dead_code tests/screen_state.rs -o "$out/screen-state" && "$out/screen-state" -q
 # Idle held off while media plays: the Shell asks Bell before an idle step.
 rustc --edition 2021 --test servers/silk-shell/src/idle_media.rs -o "$out/idle-media" && "$out/idle-media" -q

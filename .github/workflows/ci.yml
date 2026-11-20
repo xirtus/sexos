@@ -836,6 +836,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-privacy.img"
         python3 scripts/privacy_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-privacy.img" --out "$RUNNER_TEMP/sexos-runtime/privacy"
+    - name: Tatami pages (startup programs, shortcuts, notifications, About) each round-trip a setting
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-tatami.img"
+        python3 scripts/tatami_pages_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-tatami.img" --out "$RUNNER_TEMP/sexos-runtime/tatami"
     - name: ripgrep and fd
       run: python3 scripts/rg_fd_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/rg-fd"
     - name: bat

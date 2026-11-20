@@ -8,6 +8,7 @@
 #![no_std]
 #![no_main]
 
+mod about;
 mod grants;
 mod model;
 mod setup;
@@ -65,8 +66,27 @@ fn change_grant(window: &mut Window, m: &mut Model, row: &grants::Row, allow: bo
     m.say(if status != sex_pdx::fs::OK { "Files did not take the change." } else if allow { "Allowed from its next run." } else { "Taken away from its next run." });
 }
 
+/// The About page's lines, from the kernel's numbers (syscall 87).
+fn load_about(m: &mut Model) {
+    use sex_pdx::{mesh_stats as ms, system_stats as ss};
+    let overview = ss::overview();
+    let memory = ms::memory();
+    let kernel = ss::kernel();
+    let mut domains = 0;
+    let mut at = 0;
+    while let Some(pd) = ss::next(at) { if pd <= at || domains >= 4096 { break; } domains += 1; at = pd; }
+    let facts = about::Facts {
+        cores: overview.map(|o| o.cores), program_limit: memory.map(|x| x.limit_pages), program_lent: memory.map(|x| x.lent_pages),
+        free_frames: kernel.map(|k| k.free_frames), kernel_heap: kernel.map(|k| k.heap_used), domains, uptime_s: sex_pdx::get_ticks() / 1000,
+    };
+    let mut text = [0u8; model::ABOUT_MAX];
+    let n = about::render(&facts, env!("CARGO_PKG_VERSION"), &mut text);
+    m.set_about(&text[..n]);
+    sex_pdx::serial_record!("[settings.about] cores={} domains={} limit_pages={}", facts.cores.unwrap_or(0), domains, facts.program_limit.unwrap_or(0));
+}
+
 fn show(window: &mut Window, m: &Model) {
-    let mut text = [0u8; 4096];
+    let mut text = [0u8; 8192];
     let n = model::render(m, &mut text);
     window.show(&text[..n]);
 }
@@ -168,6 +188,7 @@ pub extern "C" fn _start() -> ! {
             }
         } };
         if m.page != page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
+        if m.page != page && m.on_about() { load_about(&mut m); }
         if let Change::Password(mut typed, n) = change {
             let result = settings::password(sex_config::secret::SET, &typed[..n]);
             for b in typed.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }

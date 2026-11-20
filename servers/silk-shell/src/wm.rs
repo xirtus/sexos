@@ -415,13 +415,16 @@ pub struct Chords {
     /// Every key pressed with Super that is still held, with its action, so
     /// overlapping chords never let a held key's repeats or release leak.
     captured: [Option<(u8, Option<WmAction>)>; 4],
+    /// What a chord means: `binding`, or the Shell's with the person's shortcuts.
+    keymap: fn(u8, Mods) -> Option<WmAction>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Chord { Pass, Consume, Act(WmAction) }
 
 impl Chords {
-    pub const fn new() -> Self { Self { super_down: 0, shift: 0, ctrl: 0, used: false, captured: [None; 4] } }
+    pub const fn new() -> Self { Self::with(binding) }
+    pub const fn with(keymap: fn(u8, Mods) -> Option<WmAction>) -> Self { Self { super_down: 0, shift: 0, ctrl: 0, used: false, captured: [None; 4], keymap } }
     pub fn super_held(&self) -> bool { self.super_down != 0 }
     pub fn event(&mut self, key: u8, value: u64) -> Chord {
         let bit = |k: u8| -> u8 { if k == code::SUPER_LEFT || k == code::SHIFT_LEFT || k == code::CTRL_LEFT { 1 } else { 2 } };
@@ -454,7 +457,7 @@ impl Chords {
         }
         if self.super_down == 0 || value != 1 { return Chord::Pass; }
         self.used = true;
-        let action = binding(key, Mods { shift: self.shift != 0, ctrl: self.ctrl != 0 });
+        let action = (self.keymap)(key, Mods { shift: self.shift != 0, ctrl: self.ctrl != 0 });
         // Four held chord keys at once is plenty; a fifth replaces the oldest slot.
         let slot = self.captured.iter().position(|c| c.is_none()).unwrap_or(0);
         self.captured[slot] = Some((key, action));
