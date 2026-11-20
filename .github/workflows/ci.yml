@@ -184,6 +184,8 @@ jobs:
         cargo test --locked -p sex-font --features inspect --lib
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
+    - name: Voyeur search ranking and Abacus answers
+      run: cargo test --locked -p voyeur
     - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport
       run: |
         cargo test --locked -p sex-speech
@@ -404,6 +406,8 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
+    - name: Voyeur search (2+2, two providers, a setting page)
+      run: python3 scripts/voyeur_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/voyeur"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
     - name: Programs keep their own SSE and AVX registers (XSAVE)

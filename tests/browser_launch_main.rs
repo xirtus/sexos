@@ -19,6 +19,8 @@ pub const ERR_SERVICE_NOT_READY:u64=2;pub const EV_KEY:u64=1;pub const EV_WHEEL:
 #[path="../servers/silk-shell/src/app_input.rs"]mod app_input;
 #[path="../servers/silk-shell/src/app_custody.rs"]mod app_custody;
 #[path="../servers/silk-shell/src/launcher.rs"]mod launcher;
+/// Voyeur frecency double: the launcher records a run; ranking is tests/voyeur_search.rs.
+mod voyeur{pub unsafe fn launched(_:usize){}}
 pub mod app_lifecycle{
  pub use crate::lifecycle_types::{CatalogInfo,LifecycleInfo,ActivationInfo,DENIED,LIVE,RETRY};
  pub fn catalog(slot:usize)->Result<CatalogInfo,u64>{unsafe{crate::HELD.iter().copied().find(|c|c.as_ref().is_ok_and(|c|crate::slot(c.target_pd)==slot)).unwrap_or(Err(DENIED))}}
