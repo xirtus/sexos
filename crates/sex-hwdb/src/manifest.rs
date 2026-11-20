@@ -38,6 +38,9 @@ pub enum Lease {
     IntelDisplay,
     /// Intel Wi-Fi: BAR0, command grant, its own 4 MiB DMA pool and the firmware pack.
     Wifi,
+    /// Intel Thunderbolt 4 / USB4 host interface (NHI): BAR0 up to its firmware status
+    /// words (past 64 KiB), command grant, a 64 KiB DMA pool, firmware force power.
+    Thunderbolt,
     /// Intel Serial IO I2C (DesignWare block plus Intel's private page): BAR0, memory
     /// command bit, the function woken to D0, no DMA. Only product ids in
     /// [`SERIAL_IO_I2C`] match, so Serial IO SPI and UART functions stay unleased.
@@ -119,10 +122,14 @@ pub const DRIVE: Manifest = Manifest {
     ],
 };
 
-/// sexusb: xHCI host controllers (USB 3; USB4 hosts expose xHCI too).
+/// sexusb: xHCI host controllers (USB 3; USB4 hosts expose xHCI too), and Intel's
+/// Thunderbolt 4 / USB4 host interface (the firmware connection manager's mailbox).
 pub const USB: Manifest = Manifest {
     service: Service::Usb, max_devices: 0, vectors: 1,
-    matches: &[Match::class(0x0c_03_30, EXACT, Lease::Xhci, 8)],
+    matches: &[
+        Match::class(0x0c_03_30, EXACT, Lease::Xhci, 8),
+        Match::vendor_class(0x8086, 0x0c_03_40, EXACT, Lease::Thunderbolt, 29),
+    ],
 };
 
 /// sexnet: Intel and Realtek wired Ethernet (the model table in `sex_pdx::pci_command`

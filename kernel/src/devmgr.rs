@@ -81,6 +81,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             Lease::Ahci => class_lease(&dev, crate::device_lease::Kind::Ahci, pd, slot, first),
             Lease::Wifi => class_lease(&dev, crate::device_lease::Kind::Wifi, pd, slot, first),
             Lease::SerialIo => class_lease(&dev, crate::device_lease::Kind::SerialIo, pd, slot, first),
+            Lease::Thunderbolt => class_lease(&dev, crate::device_lease::Kind::Thunderbolt, pd, slot, first),
             Lease::NvidiaGpu => class_lease(&dev, crate::device_lease::Kind::NvidiaGpu, pd, slot, first),
             Lease::Virtio => virtio(&dev, pd, slot, first),
             Lease::Display => display_lease(&dev, pd),
@@ -256,6 +257,10 @@ fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind
     };
     if kind == crate::device_lease::Kind::SerialIo && crate::device_lease::wake_d0(dev) {
         serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind=SerialIo", dev.bus, dev.dev, dev.func);
+    }
+    if kind == crate::device_lease::Kind::Thunderbolt {
+        let ready = crate::device_lease::force_power(dev);
+        serial_println!("[kernel.pci.tb.force_power] {:02x}:{:02x}.{} fw_ready={}", dev.bus, dev.dev, dev.func, ready >> 31);
     }
     let command = crate::boot_memory::class_command(pd, dev, slot, view, kind);
     pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
