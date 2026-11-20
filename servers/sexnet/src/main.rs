@@ -29,6 +29,7 @@ mod trust_policy;
 mod source_denial;
 mod web;
 mod wifi;
+mod irq_wait;
 extern crate sex_rt;
 mod source_binding;
 mod restricted;
@@ -5382,6 +5383,7 @@ pub extern "C" fn _start() -> ! {
     let mut transport_changes=0u64;
     let mut transfer_changes=0u64;
     let mut timed_waits=0u64;
+    let mut net_irq=irq_wait::NetIrq::default();
     let mut web=web::Service::new();let mut web_reply:Option<(u32,u64)>=None;
     loop {
         restriction.poll(&mut restricted::Kernel,|effect|match effect {
@@ -5460,7 +5462,33 @@ pub extern "C" fn _start() -> ! {
             };
             sex_pdx::serial_record!("[sexnet.wifi.transport] up=0 reason=link_down wired={}",wired as u8);
         }
-        let mut burst=0u32;
+        // The wired card's interrupt (MSI or MSI-X vector 0 of SLOT_NIC): take the bit
+        // and clear the card's causes before draining the ring; arm it once the card runs.
+        if net_irq.armed {
+            let bits=sex_pdx::device::irq_take();
+            if net_irq.took(bits){if let Some(d)=ethernet.as_mut().and_then(|l|l.pci_mut()){d.acknowledge_interrupts();}}
+            if !ethernet.as_ref().is_some_and(|l|l.active()&&matches!(l,link::Link::Pci(_))){
+                let _=sex_pdx::device::irq_mask(sex_pdx::SLOT_NIC,0);net_irq.reset();
+                sex_pdx::serial_record!("[sexnet.irq] armed=0 reason=link_gone polling=1");
+            }
+        } else if net_irq.may_arm() {
+            if let Some(d)=ethernet.as_mut().and_then(|l|l.pci_mut()).filter(|d|d.phase()==ethernet::Phase::Running){
+                use sex_pdx::device::Mode;
+                match sex_pdx::device::at_slot(sex_pdx::SLOT_NIC).filter(|l|l.vectors>0&&l.mode!=Mode::None){
+                    Some(lease)=>{
+                        if !d.arm_interrupts(lease.mode==Mode::MsiX){
+                            net_irq.gave_up=true;
+                            sex_pdx::serial_record!("[sexnet.irq] armed=0 mode={} model={:?} reason=registers polling=1",lease.mode.name(),d.model());
+                        }else{match sex_pdx::device::irq_unmask(sex_pdx::SLOT_NIC,0){
+                            Ok(())=>{net_irq.armed();sex_pdx::serial_record!("[sexnet.irq] armed=1 mode={} model={:?} quiet_ticks={} polling=0",lease.mode.name(),d.model(),irq_wait::QUIET_TICKS);},
+                            Err(e)=>{d.disarm_interrupts();net_irq.gave_up=true;sex_pdx::serial_record!("[sexnet.irq] armed=0 mode={} unmask_error={:#x} polling=1",lease.mode.name(),e);},
+                        }}
+                    },
+                    None=>{net_irq.gave_up=true;sex_pdx::serial_record!("[sexnet.irq] armed=0 mode=none model={:?} polling=1",d.model());},
+                }
+            }
+        }
+        let mut burst=0u32;let mut burst_full=false;
         loop {
             let mut progressed=false;
             if wifi_transport { if let (Some(w),Some(engine))=(wifi.as_mut(),transport.as_mut()) {
@@ -5500,6 +5528,11 @@ pub extern "C" fn _start() -> ! {
                 }
                 match event {
                     Some(ethernet::Event::Received{sequence,index,frame})=>{
+                        if net_irq.received()==irq_wait::Verdict::Silent{
+                            let _=sex_pdx::device::irq_mask(sex_pdx::SLOT_NIC,0);
+                            if let Some(d)=driver.pci_mut(){d.disarm_interrupts();}
+                            sex_pdx::serial_record!("[sexnet.irq.silent] missed={} wakes=0 polling=1",irq_wait::SILENT_LIMIT);
+                        }
                         if sequence<=64||sequence.is_power_of_two(){sex_pdx::serial_record!("[sexnet.ether.rx] sequence={} index={} length={} hash={:#x}",sequence,index,frame.length,ethernet::fingerprint(&frame.bytes[..frame.length]));}
                         if let Some(engine)=transport.as_mut(){
                             engine.submit_frame(&frame.bytes[..frame.length]).expect("PROTOCOL_RX_CUSTODY");
@@ -5565,7 +5598,7 @@ pub extern "C" fn _start() -> ! {
                 if !polling{pending_packet=None;if let Some(engine)=transport.as_mut(){engine.stop(sex_net::Error::Stopped);}}
             }
             burst+=1;
-            if !progressed||!polling||burst>=NET_BURST{break;}
+            if !progressed||!polling||burst>=NET_BURST{burst_full=progressed&&polling&&burst>=NET_BURST;break;}
         }
         if let Some((owner,word))=outbound.pending_reply(){
             if network_owner(owner.pd)!=Some(owner){outbound.retire(owner,&mut ClientWire(transport.as_mut(),false));}
@@ -5587,6 +5620,17 @@ pub extern "C" fn _start() -> ! {
             match sex_pdx::pdx_try_listen_raw(0) {
                 Some(req) => { sex_pdx::sys_yield(); req },
                 None => {
+                    // A full burst with frames still waiting: straight back to the
+                    // ring (try-listen already yielded once), no 2-tick stall.
+                    if burst_full{continue;}
+                    // Interrupt armed and nothing else to do: sleep until a frame,
+                    // an IPC message or the transport's next timer granule.
+                    if net_irq.armed&&!wifi_transport&&!restriction.pending()&&!preparing&&!reply_pending&&!seed.busy(){
+                        sex_pdx::sys_wait_self_ticks(irq_wait::QUIET_TICKS).expect("BOOT_SELF_WAIT_AUTHORITY");
+                        let bits=sex_pdx::device::irq_take();net_irq.slept(bits);
+                        if net_irq.took(bits){if let Some(d)=ethernet.as_mut().and_then(|l|l.pci_mut()){d.acknowledge_interrupts();}}
+                        continue;
+                    }
                     // Existing try-listen yields once; then bounded own-task
                     // wait retains IPC publication and guarantees a later poll.
                     let before=sex_pdx::get_ticks();
@@ -5604,6 +5648,7 @@ pub extern "C" fn _start() -> ! {
                 None => { let _ = sex_pdx::sys_wait_self_ticks(100); continue; }
             }
         } else { unsafe { pdx_listen_raw(0) } };
+        if req.type_id==sex_pdx::power::OP_DEVICE_SLEEP&&req.caller_pd==0{sex_pdx::serial_record!("[sexnet.sleep] asleep={}",req.arg0);continue;}
         if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:req.caller_pd,task:req.caller_task},opcode:req.type_id,words:[req.arg0,req.arg1,req.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}
         if restricted::denied(req.caller_pd){
             if req.type_id==sex_pdx::web::OP{let _=pdx_reply(req.caller_pd,sex_pdx::web::reply((req.arg0&0xff_ffff) as u32,sex_pdx::web::DENIED,0));}

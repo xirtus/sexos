@@ -272,3 +272,33 @@ impl Intel {
         sex_pdx::serial_record!("[display.intel.fallback] reason={} flips={} firmware_surf={:#x}", reason, self.chain.flips, self.chain.saved.surf);
     }
 }
+
+/// Backlight as it was before the machine slept.
+static mut BEFORE_SLEEP: Option<backlight::Backlight> = None;
+
+/// The machine is going to sleep (true) or woke: the eDP panel's backlight goes off
+/// and the panel to DPCD D3 (eDP 1.4 SET_POWER, 0x600), and back. False when no
+/// Intel display engine was leased.
+pub fn device_sleep(asleep: bool) -> bool {
+    let Ok(id) = sex_pdx::device_identity(df::INTEL_SLOT) else { return false };
+    if !sex_gpu_intel::supported(id.vendor, id.product) { return false; }
+    let Ok(view) = sex_pdx::memory_region_full_view(df::INTEL_SLOT, m::QUERY_VIEW | m::READ | m::WRITE) else { return false };
+    let mut bar = Bar { va: view.virtual_address, len: view.length };
+    let edp = (0..regs::PIPES).map(|p| readout::read_pipe(&mut bar, p))
+        .any(|r| r.enabled && r.port == Some(0) && r.mode_select == regs::FUNC_MODE_DP_SST);
+    let saved = unsafe { &mut *core::ptr::addr_of_mut!(BEFORE_SLEEP) };
+    let mut lit = saved.is_some();
+    let panel = if asleep {
+        *saved = backlight::sleep(&mut bar);
+        lit = saved.is_some();
+        edp && aux::dpcd_write(&mut bar, 0, 0x600, &[2]).is_ok()
+    } else {
+        // The sink needs up to 1 ms to wake; the AUX layer retries a deferring sink.
+        let ok = edp && aux::dpcd_write(&mut bar, 0, 0x600, &[1]).is_ok();
+        if let Some(b) = saved.take() { backlight::wake(&mut bar, b); }
+        ok
+    };
+    sex_pdx::serial_record!("[display.intel.sleep] asleep={} edp={} panel_power={} backlight={}",
+        asleep as u8, edp as u8, panel as u8, lit as u8);
+    true
+}

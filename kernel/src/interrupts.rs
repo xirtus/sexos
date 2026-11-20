@@ -355,16 +355,20 @@ pub unsafe extern "C" fn page_fault_stub() {
         "test al, 3", 
         "jz 1f", 
         "swapgs", 
-        "1:",
-        "lfence", // no speculative GS use down the unswapped path (CVE-2019-1125)
+        "lfence", // no speculative GS use down either path (CVE-2019-1125)
 
+        // A user fault opens every key for the kernel. A kernel fault keeps PKRU: the
+        // SMAP audit returns to the faulting code, which may run under a program's PKRU.
         "cmp byte ptr [rip + {pku_enabled}], 0",
-        "je 3f",
+        "je 4f",
         "xor eax, eax",
         "xor ecx, ecx",
         "xor edx, edx",
         "wrpkru",
-        "3:",
+        "jmp 4f",
+        "1:",
+        "lfence",
+        "4:",
 
         "sub rsp, 8", // CRITICAL: Re-align stack to 16 bytes before C call!
         "lea rdi, [rsp + 136]", // rdi points to InterruptStackFrame (RIP)
@@ -714,6 +718,8 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
     // Kernel faults never enter the user pager transaction. User protection,
     // PKU, reserved-bit, instruction-fetch and unknown faults fail closed too.
     if fault_cs_rpl != 3 {
+        if unsafe { crate::smap::audit(stack_frame as *mut _ as *mut u64, fault_addr, error_code) } { return; }
+        unsafe { crate::pku::wrpkru(0); }
         serial_println!("KERNEL PAGE FAULT HALT: addr={:#x} rip={:#x} rsp={:#x} err={:#x} pd={}",
             fault_addr, fault_rip, fault_rsp, error_code, cur_pd);
         crate::console::stop(format_args!("page fault in the kernel touching {:#x} at {:#x} (error {:#x})",

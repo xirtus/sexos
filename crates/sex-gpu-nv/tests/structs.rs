@@ -156,3 +156,22 @@ fn queue_roundtrip_with_wrap() {
     let m = qs.recv(&mut mem, &mut out).unwrap().unwrap();
     assert_eq!((m.function, m.len), (0x1001, 0));
 }
+
+/// RM object and control RPCs (stage N4c), as gcc lays out NVIDIA's 535.113.01
+/// structures from nouveau's nvrm excerpts: rpc_gsp_rm_alloc_v03_00 (32, status at 16),
+/// rpc_gsp_rm_control_v03_00 (24, status at 12), GspStaticConfigInfo (2168; name 1820,
+/// fb_length 1752, handles 2152..2160), NV2080_CTRL_INTERNAL_DISPLAY_GET_STATIC_INFO_PARAMS (28).
+#[test]
+fn rm_rpc_layouts() {
+    use sex_gpu_nv::rm;
+    assert_eq!((rm::ALLOC_HDR, rm::CONTROL_HDR, rm::STATIC_INFO_SIZE, rm::DISPLAY_STATIC_INFO_SIZE), (32, 24, 2168, 28));
+    assert_eq!((rm::FN_FREE, rm::FN_GET_GSP_STATIC_INFO, rm::FN_GSP_RM_CONTROL, rm::FN_GSP_RM_ALLOC), (10, 65, 76, 103));
+    assert_eq!(sex_gpu_nv::rpc::FN_CONTINUATION_RECORD, 71);
+    let mut b = vec![0u8; rm::STATIC_INFO_SIZE];
+    b[1820..1823].copy_from_slice(b"GPU");
+    b[1752..1760].copy_from_slice(&(8u64 << 30).to_le_bytes());
+    b[2160..2164].copy_from_slice(&0x5eu32.to_le_bytes());
+    let s = rm::StaticInfo::parse(&b).unwrap();
+    assert_eq!((s.name_str(), s.fb_length, s.internal_subdevice), ("GPU", 8 << 30, 0x5e));
+    assert!(rm::StaticInfo::parse(&b[..2000]).is_err());
+}
