@@ -5,7 +5,7 @@
 //! tab, Ctrl+1..8 that tab and Ctrl+9 the last (Tab itself is the desktop's),
 //! Ctrl+L the address, Ctrl+D bookmark, Ctrl+F find, Ctrl+= / Ctrl+- / Ctrl+0 zoom,
 //! Ctrl+R reload, Ctrl+J downloads, Ctrl+Shift+Backspace forget this site's cookies and storage,
-//! Ctrl+Shift+S Shields down (or up) for this site.
+//! Ctrl+Shift+S Shields down (or up) for this site, Ctrl+Shift+R reader view.
 
 use super::{nav, Browser, Nav};
 use sex_web::sex_html;
@@ -41,6 +41,15 @@ impl Browser {
                     _ => 100,
                 };
                 self.set_zoom(next);
+            }
+            // Ctrl+Shift+R: reader view of this page, or back to the page from it.
+            0x13 if key.shift => {
+                let url = self.url.clone();
+                match url.strip_prefix("about:reader?url=") {
+                    Some(page) => { let page = super::extensions::decode(page); self.open(&page, true) }
+                    None if url.starts_with("http") => self.open(&alloc::format!("about:reader?url={}", encode(&url)), true),
+                    None => {}
+                }
             }
             0x13 => { let u = self.url.clone(); self.open(&u, false); }
             0x24 => self.open("about:downloads", true),
@@ -123,4 +132,13 @@ impl Browser {
         sex_pdx::serial_record!("[web.closed] target={} task={}", self.window.target, self.window.task);
         sex_pdx::task_finish(0)
     }
+}
+
+/// `s` as a query value (what [`super::extensions::decode`] reads back).
+fn encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b'/' | b':') { out.push(b as char); } else { out.push_str(&alloc::format!("%{:02X}", b)); }
+    }
+    out
 }

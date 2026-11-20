@@ -5437,3 +5437,8 @@ From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, 
 - Kernel: BOOT reserves one I/O APIC *line* for Input (`sex_hwdb::manifest::LINES`); syscall 86 gains `OP_LINE_BIND` (4) and `OP_LINE_MASK` (5). A level line is masked each time it fires, so a stuck wire costs one interrupt. Inputs under 16 and inputs already bound are refused.
 - Polling stays: no line, a refused line, a stuck line (32 empty reads in a row after interrupts) or a silent one (reports found by the once-a-second check read with no interrupt, three times in a row) drop back to it (`sex_hid_touch::pace`).
 - Verified by host tests (`cargo test -p sex-laptop -p sex-hid-touch`, `sex_pdx::touchpad` round trips with the line); not yet run on a real pad.
+
+## Kaleidoscope reader view, slice N5 (2026-11-20)
+
+- Ctrl+Shift+R opens `about:reader?url=…` for the current page, and pressing it again goes back. `crates/sex-web/src/reader.rs` scores the paragraph containers as Readability does: text length and commas, class and id names, and link density. It keeps the best box and any sibling boxes that score well. It writes only the paragraphs, headings, lists, quotes, code and pictures, with absolute addresses, on a calm 680 px page with an "N min read · host" line.
+- Host tests: `crates/sex-web/tests/reader.rs`. OS gate: `scripts/program_web_reader_gate.py`, which checks the article's words and title, that the picture is fetched from the site, the cream page, and the toggle back. Fixtures are in `scripts/web_site/reader/`.

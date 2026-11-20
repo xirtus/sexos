@@ -745,6 +745,26 @@ impl Browser {
                 Ok(n) => (text_of(&self.buf[..n]), String::from(url)),
                 Err(e) => (message_page("Can't open that file", core::str::from_utf8(files::message(e)).unwrap_or(""), url), String::from(url)),
             }
+        } else if let Some(target) = url.strip_prefix("about:reader?url=") {
+            // Reader view: the page's article on a quiet page of its own.
+            let target = extensions::decode(target);
+            let got = if target.starts_with("http://") || target.starts_with("https://") { self.fetch(&target).map(|(u, body)| (u, text_of(&self.buf[body]))) } else { Err(&b"Reader view needs a web address."[..]) };
+            match got {
+                Ok((final_url, html)) => {
+                    let dom = sex_html::parse::parse(&html);
+                    match sex_web::reader::article(&dom, &final_url) {
+                        Some(a) => {
+                            sex_pdx::serial_record!("[web.reader] words={} title={} url={}", a.words, a.title, final_url);
+                            (sex_web::reader::page(&a, &final_url), String::from("about:reader"))
+                        }
+                        None => {
+                            sex_pdx::serial_record!("[web.reader] words=0 url={}", final_url);
+                            (message_page("No reader view", "This page has no article to show on its own.", &final_url), String::from("about:reader"))
+                        }
+                    }
+                }
+                Err(why) => (message_page("Can't open this page", core::str::from_utf8(why).unwrap_or(""), &target), String::from("about:reader")),
+            }
         } else if url.starts_with(extensions::SCHEME) {
             // An extension's own page (its popup or options page), while it is on.
             match self.extension_file(url) {
@@ -788,7 +808,8 @@ impl Browser {
                 if let Some(text) = extension_url(&base, h).and_then(|u| self.extension_file(&u)) { sheets.push(text_of(&text)); }
             }
         }
-        if base.starts_with("http") {
+        // A reader page's pictures come from the article's site.
+        if base.starts_with("http") || base == "about:reader" {
             let links: Vec<String> = sex_html::stylesheet_links(&dom).into_iter().take(MAX_SHEETS).filter_map(|h| sex_html::url::resolve(&base, h)).collect();
             for (i, link) in links.iter().enumerate() {
                 self.status = Some("Loading style…");
