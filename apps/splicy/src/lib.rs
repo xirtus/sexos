@@ -29,7 +29,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use sex_splice::history::History;
 use sex_splice::suggest::{Author, Status, Suggestions};
-use sex_splice::transcript::{ripple_ops, Transcript};
+use sex_splice::edges::Levels;
+use sex_splice::transcript::{ripple_ops, SourceCut, Transcript};
 use sex_splice::{EditError, MediaKind, Micros, Op, Range, Timeline, TrackKind, SECOND};
 
 /// How far either side of a join `\` plays, as in Scarlet's "hear the cut".
@@ -206,17 +207,34 @@ impl Editor {
     /// takes of a repeated phrase, filler words, and long pauses. Returns how many cards
     /// were added. Nothing changes until one is accepted.
     pub fn suggest_cleanup(&mut self) -> usize {
+        self.suggest_cleanup_with(None)
+    }
+
+    /// [`Editor::suggest_cleanup`], placing each cut's edges against the sound's `levels`
+    /// where words run together, so no cut clips a kept word. A card whose edge found no
+    /// quiet place says so, for the editor to listen before taking it.
+    pub fn suggest_cleanup_with(&mut self, levels: Option<&Levels>) -> usize {
         let before = self.suggestions.items.len();
         let t = &self.transcript;
-        for (first, last) in t.repeated_takes(3) {
-            if let Some(cut) = t.cut_words(first, last) {
-                let summary = format!("Remove the first take of \"{}\"", self.quote(first, last));
+        let place = |first: usize, last: usize| -> Option<(SourceCut, bool)> {
+            match levels {
+                Some(l) => t.placed_cut(first, last, l).map(|p| (p.cut, p.clean())),
+                None => t.cut_words(first, last).map(|c| (c, true)),
+            }
+        };
+        let listen = |clean: bool| if clean { "" } else { " (listen to the join first)" };
+        for r in t.restarts() {
+            let (first, last) = r.first_take();
+            if let Some((cut, clean)) = place(first, last) {
+                let summary = format!("Remove the first take of \"{}\"{}", self.quote(first, last), listen(clean));
                 self.suggestions.stage(Author::Rule, &summary, alloc::vec![cut]);
             }
         }
-        let fillers = t.filler_cuts();
-        if !fillers.is_empty() {
-            let summary = format!("Remove {} filler word{}", fillers.len(), if fillers.len() == 1 { "" } else { "s" });
+        let placed: Vec<(SourceCut, bool)> = (0..t.words.len()).filter(|i| t.is_filler(*i)).filter_map(|i| place(i, i)).collect();
+        if !placed.is_empty() {
+            let clean = placed.iter().all(|p| p.1);
+            let fillers: Vec<SourceCut> = placed.into_iter().map(|p| p.0).collect();
+            let summary = format!("Remove {} filler word{}{}", fillers.len(), if fillers.len() == 1 { "" } else { "s" }, listen(clean));
             self.suggestions.stage(Author::Rule, &summary, fillers);
         }
         let pauses = t.pause_cuts(LONG_PAUSE, KEEP_PAUSE);

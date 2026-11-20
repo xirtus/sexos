@@ -650,6 +650,11 @@ fn open_hda(view: m::RegionView) -> Result<Player, &'static str> {
 
 pub fn present() -> bool { player().is_some() }
 
+/// The machine is going to sleep or woke: the HDA codecs go to D3 and back.
+pub fn device_sleep(asleep: bool) -> u32 {
+    match player().map(|p| &mut p.card) { Some(Card::Hda(h)) => h.power(asleep), _ => 0 }
+}
+
 /// Queue a note: `hz` 0 is a rest. False when there's no card or the queue is full.
 pub fn tone(hz: u64, ms: u64, volume: u64) -> bool {
     let Some(p) = player() else { return false };
