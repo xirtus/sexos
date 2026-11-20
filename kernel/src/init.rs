@@ -242,6 +242,18 @@ pub fn init() {
             Err(e)=>{serial_println!("[kernel.spawn.saddle] failed={}",e);}
         }
     }
+    // sexgpu-nv, the NVIDIA GPU service (GSP-RM boot), in the Core organ beside the
+    // display it will feed. Only the "SexOS with NVIDIA GPU" entry lists it; without it
+    // the GPU is powered off as before and Display holds its identity.
+    let mut sexgpu_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with(sex_pdx::nvidia_gpu::SERVICE_MODULE)) {
+        let id=sex_pdx::nvidia_gpu::GPU_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::nvidia_gpu::GPU_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_GPU_IDENTITY");sexgpu_id=created;
+                serial_println!("[kernel.spawn.sexgpu-nv] id={} key={} organ=core",created,sex_pdx::nvidia_gpu::GPU_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.sexgpu-nv] failed={}",e);}
+        }
+    }
 
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
@@ -469,12 +481,12 @@ pub fn init() {
     }
 
     // Discrete GPUs no driver owns yet are powered off before leases are made.
-    crate::hal::dgpu::init();
+    crate::hal::dgpu::init(sexgpu_id != 0);
 
     // Hardware discovery and driver lease routing.
     // Includes XHCI discovery + lease to sexusb (slot SLOT_USB_HOST) when present.
     if sexdrive_id != 0 && sexdisp_id != 0 {
-        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id, sexinput_id);
+        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id, sexinput_id, sexgpu_id);
     }
 
     // SilkBar delivery path: grant display capability independently of silk-shell.
@@ -980,10 +992,9 @@ pub fn init() {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(incarnation.target).unwrap();
         let spindle=incarnation.app==sex_pdx::app_catalog::App::Spindle;
         for (slot,service) in [(sex_pdx::SLOT_DISPLAY,sexdisp_id),(sex_pdx::SLOT_STORAGE,sexfiles_id),(sex_pdx::SLOT_SHELL,silkshell_id),(sex_pdx::SLOT_LINEN,linen_id),(sex_pdx::SLOT_BELL,sexbell_id)].into_iter().take(if spindle{5}else{3}){
-            // The storage slot may hold the image's own VFS node; nothing else may collide.
+            // Every route slot must still be empty; nothing may collide.
             match pd.find_capability(slot as u32).map(|c|c.data) {
                 None=>{},
-                Some(crate::capability::CapabilityData::Node(_)) if slot==sex_pdx::SLOT_STORAGE=>{},
                 _=>panic!("BOOT_SUCCESSOR_ROUTE_COLLISION"),
             }
             pd.grant_capability(slot,crate::capability::CapabilityData::Domain(service));
@@ -1184,7 +1195,8 @@ pub fn init() {
                     50 => "sexacpi",
                     51 => "denim",
                     52 => "cufflinks",
-                    53 => "saddle",
+                    53 => "sexgpu-nv",
+                    54 => "saddle",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };

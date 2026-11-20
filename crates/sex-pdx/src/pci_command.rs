@@ -33,10 +33,10 @@ pub const WIFI_FIRMWARE_REGION_ID: u32 = 0x4401;
 /// The boot module holding the firmware pack (`sex_wifi::pack`).
 pub const WIFI_FIRMWARE_MODULE: &str = "wifi.pack";
 /// Saddle (drivers built on the Harness SDK): the pool behind its generic leases.
-pub const GENERIC_DMA_REGION_ID: u32 = 0x4500;
+pub const GENERIC_DMA_REGION_ID: u32 = 0x4510;
 pub const GENERIC_DMA_BYTES: u64 = 256 * 1024;
 /// Saddle runs as this BOOT domain, in the Senses organ (its key).
-pub const SADDLE_PD: u32 = 53;
+pub const SADDLE_PD: u32 = 54;
 pub const SADDLE_KEY: u8 = 4;
 pub const DENIED: u64 = u64::MAX;
 /// A hardware write/readback failure is uncertain; do not retry a mutation.

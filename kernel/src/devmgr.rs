@@ -7,7 +7,7 @@ use sex_hwdb::manifest::Lease;
 // Which device goes to which service is data: the driver manifests in
 // `sex_hwdb::manifest`. This file only builds leases of each kind.
 
-pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32, sexbell_pd_id: u32, sexinput_pd_id: u32) {
+pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32, sexbell_pd_id: u32, sexinput_pd_id: u32, sexgpu_pd_id: u32) {
     serial_println!("DevMgr: Starting hardware discovery...");
 
     let mut devices = HAL.enumerate_pci();
@@ -21,7 +21,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
         census.devices, census.working, census.in_progress, census.planned, census.unsupported, census.warnings);
 
     let behind_vmd = devices.iter().any(|d| sex_hwdb::is_vmd(id(d)));
-    let services = Services { drive: sexdrive_pd_id, display: sexdisplay_pd_id, usb: sexusb_pd_id, net: sexnet_pd_id, bell: sexbell_pd_id, input: sexinput_pd_id,
+    let services = Services { drive: sexdrive_pd_id, display: sexdisplay_pd_id, usb: sexusb_pd_id, net: sexnet_pd_id, bell: sexbell_pd_id, input: sexinput_pd_id, gpu: sexgpu_pd_id,
         // Saddle is optional: BOOT spawned it at its fixed id only when its module is present.
         saddle: sex_pdx::pci_command::SADDLE_PD };
     let mut held = [0u8; sex_hwdb::manifest::ALL.len()];
@@ -29,7 +29,9 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
     let safe = crate::safe_start();
     if safe { serial_println!("[kernel.safe_start] skipped=dgpu_power_off,iommu,msi,wifi,sound,touchpad,intel_display"); }
     for dev in devices {
-        let Some((manifest, entry)) = sex_hwdb::manifest::claim(id(&dev)) else { continue };
+        // A service this boot did not start passes its devices on (the NVIDIA GPU to
+        // Display) instead of leaving them unleased.
+        let Some((manifest, entry)) = sex_hwdb::manifest::claim_present(id(&dev), |s| s != sex_hwdb::Service::Gpu || services.gpu != 0) else { continue };
         let index = sex_hwdb::manifest::ALL.iter().position(|m| m.service == manifest.service).unwrap_or(0);
         if entry.lease == Lease::Nvme { nvme += 1; }
         let owner = services.owner(manifest.service);
@@ -79,6 +81,7 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             Lease::Ahci => class_lease(&dev, crate::device_lease::Kind::Ahci, pd, slot, first),
             Lease::Wifi => class_lease(&dev, crate::device_lease::Kind::Wifi, pd, slot, first),
             Lease::SerialIo => class_lease(&dev, crate::device_lease::Kind::SerialIo, pd, slot, first),
+            Lease::NvidiaGpu => class_lease(&dev, crate::device_lease::Kind::NvidiaGpu, pd, slot, first),
             Lease::Generic => class_lease(&dev, crate::device_lease::Kind::Generic, pd, slot, first),
             Lease::Virtio => virtio(&dev, pd, slot, first),
             Lease::Display => display_lease(&dev, pd),
@@ -94,8 +97,12 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
         let index = sex_hwdb::manifest::ALL.iter().position(|m| m.service == service).unwrap_or(0);
         if held[index] != 0 { crate::device_irq::reserve_lines(services.owner(service), lines); }
     }
-    serial_println!("[devmgr.manifest] services={} drive={} usb={} net={} bell={} display={} input={} saddle={}",
-        sex_hwdb::manifest::ALL.len(), held[0], held[1], held[2], held[3], held[4], held[5], held[6]);
+    let held_by = |s: sex_hwdb::Service| sex_hwdb::manifest::ALL.iter().position(|m| m.service == s).map_or(0, |i| held[i]);
+    {
+        use sex_hwdb::Service::*;
+        serial_println!("[devmgr.manifest] services={} drive={} usb={} net={} bell={} display={} input={} gpu={} saddle={}",
+            sex_hwdb::manifest::ALL.len(), held_by(Drive), held_by(Usb), held_by(Net), held_by(Bell), held_by(Display), held_by(Input), held_by(Gpu), held_by(Saddle));
+    }
 
     if nvme == 0 {
         serial_println!("[kernel.pci.nvme.absent] behind_vmd={}", behind_vmd as u8);
@@ -108,7 +115,7 @@ fn id(dev: &crate::hal::pci::PciDevice) -> sex_hwdb::Id {
 }
 
 /// The domains BOOT started for each driver service.
-struct Services { drive: u32, display: u32, usb: u32, net: u32, bell: u32, input: u32, saddle: u32 }
+struct Services { drive: u32, display: u32, usb: u32, net: u32, bell: u32, input: u32, gpu: u32, saddle: u32 }
 impl Services {
     fn owner(&self, service: sex_hwdb::Service) -> u32 {
         use sex_hwdb::Service::*;
@@ -120,6 +127,7 @@ impl Services {
             Bell => self.bell,
             Display => self.display,
             Input => self.input,
+            Gpu => self.gpu,
             Saddle => self.saddle,
             _ => 0,
         }

@@ -103,6 +103,7 @@ crates = [
   "apps/sdltest/Cargo.toml",
   "apps/driftspark/Cargo.toml",
   "servers/cufflinks/Cargo.toml",
+  "servers/sexgpu-nv/Cargo.toml",
   "apps/dragtest/Cargo.toml",
   "apps/drag/Cargo.toml",
   "apps/crossdress/Cargo.toml",
@@ -963,8 +964,17 @@ source_artifact = "target/x86_64-sex/release/cufflinks"
 dest_artifact = "iso_root/servers/cufflinks"
 rustflags = "--cfg aes_force_soft"
 
+# sexgpu-nv (NVIDIA GPU, GSP-RM boot): BOOT starts it as domain 53 (sex_pdx::nvidia_gpu),
+# only from the "SexOS with NVIDIA GPU" entry. docs/handoff/NVIDIA_GSP_BRINGUP_2026_11_19.md
+[[stage]]
+id = "build_sexgpu_nv"
+action = "cargo_manifest"
+manifest = "servers/sexgpu-nv/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/sexgpu-nv"
+dest_artifact = "iso_root/servers/sexgpu-nv"
+
 # Saddle: hosts drivers built on the Harness SDK on generic leases. BOOT starts it
-# as domain 53 (sex_pdx::pci_command::SADDLE_PD). docs/sdk/DRIVER_SDK.md
+# as domain 54 (sex_pdx::pci_command::SADDLE_PD). docs/sdk/DRIVER_SDK.md
 [[stage]]
 id = "build_saddle"
 action = "cargo_manifest"
@@ -1063,6 +1073,12 @@ artifacts = ["iso_root/limine.cfg"]
 id = "wifi_firmware"
 action = "wifi_firmware"
 artifacts = ["iso_root/firmware/wifi.pack"]
+
+# NVIDIA GSP-RM firmware for sexgpu-nv ("SexOS with NVIDIA GPU" entry only).
+[[stage]]
+id = "nvidia_firmware"
+action = "nvidia_firmware"
+artifacts = ["iso_root/firmware/nvidia-gsp.pack"]
 
 [[stage]]
 id = "boot_image"

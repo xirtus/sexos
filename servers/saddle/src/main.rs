@@ -88,7 +88,7 @@ pub extern "C" fn _start() -> ! {
     }
     Record::new("saddle.ready").num("drivers", started).emit(&mut Serial);
     // Untimed park: hosted drivers are interrupt-free here, and a timed poll
-    // would be an unreviewed self-wait (check_self_wait.py admits no task 53).
+    // would be an unreviewed self-wait (check_self_wait.py admits no task 54).
     loop {
         sex_pdx::sys_wait_self();
     }
@@ -107,7 +107,7 @@ impl Clock for YieldClock {
 fn panic(_: &core::panic::PanicInfo) -> ! {
     sex_pdx::serial_record!("[saddle.panic]");
     // Untimed park: hosted drivers are interrupt-free here, and a timed poll
-    // would be an unreviewed self-wait (check_self_wait.py admits no task 53).
+    // would be an unreviewed self-wait (check_self_wait.py admits no task 54).
     loop {
         sex_pdx::sys_wait_self();
     }

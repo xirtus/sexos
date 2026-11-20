@@ -187,7 +187,7 @@ let mut dev = my_driver::Device::start(regs, &mut SystemClock, &mut Serial)?;
 ### Saddle: where outside drivers run
 
 A device no system service drives gets a **generic lease** (`Lease::Generic`) to
-**Saddle** (`servers/saddle`, BOOT domain 53): a view of BAR0 (at least 256 bytes,
+**Saddle** (`servers/saddle`, BOOT domain 54): a view of BAR0 (at least 256 bytes,
 at most 64 KiB of it), memory and bus-master command bits, one MSI vector, and a
 256 KiB DMA pool behind the IOMMU. The kernel knows nothing else about the device.
 Saddle holds that authority and runs each driver in its table with only `Regs`,
