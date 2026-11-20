@@ -176,7 +176,8 @@ jobs:
       run: bash scripts/burlesque_host_gate.sh
     - name: Cabaret studio, Filigree fonts and the shared colour, broadcast and audio engines on the host
       run: |
-        cargo test --locked -p sex-color -p cabaret-core -p cabaret-proto -p cabaret-plugins -p filigree-core -p moan-core -p moan-plugin
+        cargo test --locked -p sex-color -p cabaret-core -p cabaret-proto -p cabaret-plugins -p filigree-core -p moan-core -p moan-plugin -p sex-voice
+        python3 -m unittest discover -q -s crates/sex-voice/adapters -p 'test_*.py'
         cargo test --locked -p cabaret -p filigree --no-default-features
         cargo test --locked -p sex-pdx --test cabaret_omatools
         cargo test --locked -p sex-font --features inspect --lib
@@ -825,6 +826,8 @@ jobs:
       run: python3 scripts/driftspark_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/driftspark"
     - name: Weft programs
       run: python3 scripts/program_weft_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/weft"
+    - name: Voice takes a prompt to a tokened MOSSlanding worker and saves the take
+      run: python3 scripts/program_voice_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/voice"
     - name: Moan edited multitrack mix through Bell (stereo waveform proof)
       run: python3 scripts/moan_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/moan"
     - name: Moan EQ, compressor and decaying reverb through Bell
