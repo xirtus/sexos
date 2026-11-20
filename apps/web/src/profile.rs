@@ -91,6 +91,9 @@ pub struct Profile {
     pub due: Option<u64>,
 }
 
+/// Voyeur's handle for an address (FNV-1a).
+pub fn key(url: &str) -> u64 { url.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3)) }
+
 fn clean(s: &str) -> String { s.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect() }
 
 fn read(window: &mut Window, path: &[u8]) -> Option<String> {
@@ -194,6 +197,25 @@ impl Profile {
             if !out.contains(&v.url) { out.push(v.url.clone()); }
         }
         out
+    }
+
+    /// Voyeur's answer from what is kept here (private tabs keep nothing): bookmarks,
+    /// newest first, then history by visits, each holding every query term (any case)
+    /// in its title or address. (bookmark, address, title)
+    pub fn lookup(&self, query: &str, most: usize) -> Vec<(bool, &str, &str)> {
+        let terms: Vec<String> = query.split(' ').filter(|t| !t.is_empty()).map(|t| t.to_ascii_lowercase()).collect();
+        if terms.is_empty() { return Vec::new(); }
+        let fits = |url: &str, title: &str| { let (u, t) = (url.to_ascii_lowercase(), title.to_ascii_lowercase()); terms.iter().all(|w| u.contains(w.as_str()) || t.contains(w.as_str())) };
+        let mut out: Vec<(bool, &str, &str)> = self.bookmarks.iter().rev().filter(|b| fits(&b.0, &b.1)).take(most).map(|b| (true, b.0.as_str(), b.1.as_str())).collect();
+        let mut seen: Vec<&Visit> = self.history.iter().rev().filter(|v| fits(&v.url, &v.title) && !out.iter().any(|o| o.1 == v.url)).collect();
+        seen.sort_by(|a, b| b.visits.cmp(&a.visits));
+        let room = most.saturating_sub(out.len());
+        out.extend(seen.into_iter().take(room).map(|v| (false, v.url.as_str(), v.title.as_str())));
+        out
+    }
+    /// The bookmarked or visited address Voyeur's `key` names.
+    pub fn address_for(&self, k: u64) -> Option<String> {
+        self.bookmarks.iter().map(|b| &b.0).chain(self.history.iter().map(|v| &v.url)).find(|u| key(u) == k).cloned()
     }
 
     /// The cookies and storage of box `kind`, read from Files the first time a

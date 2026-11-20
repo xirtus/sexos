@@ -438,6 +438,23 @@ module in silk-shell (hook only; C owns `main.rs`).
 | R9 | Voyeur protocol: search providers are programs answering a query with results only from what they already hold; Shell merges with frecency | host: ranking goldens; gate: two providers answer one query |
 | R10 | Voyeur providers: apps, files and contents (E4 index), settings pages, Abacus, windows, browser history/bookmarks, clipboard history, emoji; preview pane and actions | gate: typing `2+2`, a file word and a setting name each return the right first hit |
 
+**R10 notes (2026-11-20).** Files and browser history are program providers over
+`sex_pdx::search`; the Shell never reads their data. Loom (`apps/files`) registers as
+`loom` when it starts, walks its folder once in the background to fill the E4 index
+(`search.idx`, `[files.app.indexed]`), and answers each query from it: file names
+(kind file), then files with a word starting with each query term (kind content, hint
+300). Kaleidoscope (`apps/web`) registers as `kaleidoscope` and answers from the
+bookmarks and history it keeps (private tabs keep none). Programs read questions with
+`sex_app::search` (`asked`, `answer`, `activated`). Preview and actions: a program row
+shows its subtitle (path or address) and what Enter does; a result names its other
+actions in the RESULT header's top byte, and Tab in the launcher cycles them. Loom
+offers open, open with (its action palette), reveal in Loom and copy; Kaleidoscope open
+and copy. Copy is done by the Shell (the subtitle becomes that program's copy); other
+actions focus the program and send ACTIVATE. Host: `cargo test -p voyeur` (R10 goldens
+over the wire), `scripts/voyeur_host_gate.sh`; gate: `scripts/voyeur_gate.py`. Not
+yet: a pixel preview pane, Loom's index kept live after the first walk (it refreshes
+when Loom searches), copy for Abacus and emoji answers.
+
 ### S. Silk shell beyond workstream C, and accessibility (8)
 
 Write set: new modules in `servers/silk-shell/src/` (C owns `main.rs`; hooks under 10 lines),
