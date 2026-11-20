@@ -683,11 +683,11 @@ fn holds_launch(binding: &Binding) -> bool {
 }
 #[allow(non_snake_case)]
 fn PROGRAM_INDEX_BASE_PLUS(k: usize) -> u64 { w::PROVIDER_SLOT_BASE + (w::PROGRAM_INDEX_BASE + k) as u64 }
-/// The run is Settings': bound to `/data/settings`, the folder Files gave the run of
-/// `/bin/settings` (which no package may install, see `packages::RESERVED`). The same
+/// The run is Settings': bound to `/data/tatami`, the folder Files gave the run of
+/// `/bin/tatami` (which no package may install, see `packages::RESERVED`). The same
 /// identity `program_is` gives settings and lock-password writes.
 fn is_settings(binding: &Binding) -> bool {
-    binding.system && binding.root[..binding.len].strip_prefix(sex_pdx::program_store::DATA) == Some(b"settings")
+    binding.system && binding.root[..binding.len].strip_prefix(sex_pdx::program_store::DATA) == Some(b"tatami")
 }
 fn holds_packages(binding: &Binding) -> bool {
     binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN)

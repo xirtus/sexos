@@ -32,7 +32,7 @@ def main():
  web=http.server.ThreadingHTTPServer(('127.0.0.1',0),functools.partial(pg.Quiet,directory=str(serve)));threading.Thread(target=web.serve_forever,daemon=True).start()
  base=f'http://10.0.2.2:{web.server_address[1]}/'
  disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- install(disk,[('settings',(ROOT/'iso_root/programs/settings').read_bytes())])
+ install(disk,[('tatami',(ROOT/'iso_root/programs/tatami').read_bytes())])
  g=pg.boot(a.iso,disk,a.out,'privacy',a.resolution);t=g['text'];q=g['q']
  def type_line(line):
   g['focus'](153);time.sleep(.5)
@@ -61,7 +61,7 @@ def main():
   m,s=do(f'run chello net 10.0.2.2 {pg.ECHO_PORT}',r'\[spindle\.pkg\.note\] program=chello asked=1 answered=1 allowed=1\n')
   out['allowed_checks']=checks(23,s)
   # Settings: first-start setup, then its last page (PgUp from the first).
-  s=len(t());type_line('run settings');first_start(g,q,t,s);g['wait'](r'\[settings\.open\] generation=\d+',s,120);time.sleep(1)
+  s=len(t());type_line('run tatami');first_start(g,q,t,s);g['wait'](r'\[settings\.open\] generation=\d+',s,120);time.sleep(1)
   s=len(t());q.key('pgup')
   g['wait'](r'\[files\.pkg\.settings\] op=10 arg=\n',s,30)
   g['wait'](r'\[settings\.grants\] status=0 rows=1\n',s,30)

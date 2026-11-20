@@ -9,7 +9,7 @@
 //! CATALOG, SEARCH, LOCATE, SOURCE, REPO_REMOVE, REPOS and DETAILS. TRUST, CONSENT,
 //! REPO_ADD and ROLLBACK stay Spindle's: they are the person's answers (whom to trust,
 //! what to allow, going back to an older version). One exception for CONSENT: Settings
-//! (the system's `settings` program, run from `/data/settings`, the identity Files already
+//! (the system's `tatami` (Settings) program, run from `/data/tatami`, the identity Files already
 //! trusts with settings and the lock password) may send [`GRANTS`], LIST and CONSENT, and
 //! nothing else, so the person can review and revoke grants from its Privacy page. No
 //! other program can. A program's package paths, [`DOWNLOAD`], [`CATALOG_DOWNLOAD`] and

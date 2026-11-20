@@ -25,7 +25,7 @@ use sexfs::{Error, Fs, Kind};
 
 type F = Fs<'static, Disk>;
 /// Programs Files gives more than their own folder (see `fs_service::program_is`).
-const RESERVED: [&str; 1] = ["settings"];
+const RESERVED: [&str; 2] = ["tatami", "settings"];
 const CHUNK: usize = 64 * 1024;
 
 fn read_all(fs: &mut F, path: &[u8], max: usize) -> Result<Vec<u8>, Error> {
@@ -247,7 +247,7 @@ fn install(fs: &mut F, path: &[u8], go: bool, downgrade: bool, r: &mut Report) -
     let from = repo::origin(&key, &repos, &trusted).unwrap_or_else(|| MAIN.into());
     let m = &layout.manifest;
     let program = m.program.as_str();
-    // Files trusts the program run from /data/settings with settings, the lock password
+    // Files trusts the program run from /data/tatami with settings, the lock password
     // and grants: no package may become it.
     if RESERVED.contains(&program) { return refused(r, &format!("A package may not install the system program {program}.")); }
     sex_pdx::serial_record!("[files.pkg.verified] name={} version={} program={} grants={} files={} key={} repo={}", m.name, m.version, program, m.grant_words(), layout.entries.len(), &sex_pkg::hex(&key)[..16], from);
