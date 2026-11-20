@@ -21,8 +21,6 @@ def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  with disk.open('r+b') as f:f.truncate(1024**3)
- plug=a.out/'plugged.img'
- with plug.open('wb') as f:f.truncate(64*1024**2)
  os.environ['SEXOS_GATE_DEVICES']=f'{PORT} {NATIVE}'
  os.environ.setdefault('SEXOS_GATE_BOUND','600')
  from quil_autosave_gate import boot
@@ -31,10 +29,14 @@ def main():
   port=g['wait'](r'\[hotplug\.port\] (\S+) \S+ kind=root slot=7 [^\n]*present=0 [^\n]*mem=(0x[0-9a-f]+)\+(0x[0-9a-f]+)',0,10)
   bdf,base,size=port[1],int(port[2],16),int(port[3],16)
   assert size>=8<<20,('port window',hex(size))
-  q.cmd('blockdev-add',{'driver':'file','node-name':'hpfile','filename':str(plug)})
-  q.cmd('blockdev-add',{'driver':'raw','node-name':'hpdisk','file':'hpfile'})
   def arrive(tag):
-   s=len(t());q.cmd('device_add',{'driver':'nvme','drive':'hpdisk','serial':tag,'bus':'hp1','id':tag})
+   # A block node of its own per drive: QEMU lets go of a removed drive's node
+   # only some time after it leaves the bus.
+   image=a.out/f'{tag}.img'
+   with image.open('wb') as f:f.truncate(64*1024**2)
+   q.cmd('blockdev-add',{'driver':'file','node-name':tag+'-file','filename':str(image)})
+   q.cmd('blockdev-add',{'driver':'raw','node-name':tag+'-disk','file':tag+'-file'})
+   s=len(t());q.cmd('device_add',{'driver':'nvme','drive':tag+'-disk','serial':tag,'bus':'hp1','id':tag})
    m=g['wait'](rf'\[hotplug\.arrived\] port={re.escape(bdf)} functions=1 buses=([0-9a-f]+)-[0-9a-f]+ planned=1',s,30)
    bar=g['wait'](r'\[hotplug\.bar\] (\S+) bar=0 address=(0x[0-9a-f]+) bytes=(0x[0-9a-f]+)',s,5)
    assert bar[1].startswith(m[1]+':'),(bar[1],m[1])
