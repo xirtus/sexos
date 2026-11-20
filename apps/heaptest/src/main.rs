@@ -121,7 +121,8 @@ fn double_page(p: usize, page: &mut [u8]) {
 /// D: three times the memory free at the start and 128 MiB more (free memory is about
 /// two thirds of a 1 GiB machine, so this is over twice its RAM), a mebibyte at a time, so the
 /// heap only fits because Denim packs the cold part. Like a polite program, it waits
-/// while memory is critical or an allocation is refused. Then every page reads back.
+/// while memory is low (or worse) or an allocation is refused, so Denim packs ahead of it
+/// and the machine never sits at critical. Then every page reads back.
 fn double(target: u32, task: u32) {
     const MIB_PAGES: usize = 256;
     let free = sex_pdx::system_stats::overview().map_or(0, |o| o.free_pages) as usize;
@@ -132,7 +133,7 @@ fn double(target: u32, task: u32) {
     if chunks.try_reserve_exact(goal).is_err() { sex_pdx::serial_record!("[heaptest.fail] target={} task={} why=no room to count chunks", target, task); return; }
     while chunks.len() < goal {
         let mut chunk = Vec::new();
-        if memory::pressure() == memory::PRESSURE_CRITICAL || chunk.try_reserve_exact(MIB_PAGES * 4096).is_err() {
+        if memory::pressure() != memory::PRESSURE_NORMAL || chunk.try_reserve_exact(MIB_PAGES * 4096).is_err() {
             if sex_pdx::get_ticks() - since > 300_000 { sex_pdx::serial_record!("[heaptest.fail] target={} task={} why=no memory came free for 300 s at {} MiB", target, task, chunks.len()); return; }
             let _ = sex_pdx::sys_wait_self_ticks(8); waited += 8; continue;
         }

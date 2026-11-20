@@ -58,7 +58,8 @@ fn grow_in(arena: &mut Arena, want: u64) -> Result<[u64; 3], u64> {
         x86_64::instructions::tlb::flush(VirtAddr::new(arena.base + (arena.grown + i) as u64 * 4096));
     }
     arena.grown += want;
-    crate::serial_println!("[service.memory] pd={} granted={} held={} free_pages={}", arena.pd, want, arena.grown, crate::program_frames::available());
+    // A slab grows a page at a time: one line per 1024 pages keeps serial out of its way.
+    if want > 1 || arena.grown % 1024 == 0 { crate::serial_println!("[service.memory] pd={} granted={} held={} free_pages={}", arena.pd, want, arena.grown, crate::program_frames::available()); }
     Ok([m::OK, arena.base, arena.grown as u64])
 }
 
