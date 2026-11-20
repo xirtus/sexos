@@ -309,12 +309,8 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
                             // Compute target address in loaded image.
                             let target_vaddr = load_base.as_u64() + rela.r_offset.saturating_sub(min_vaddr);
                             let write_val = load_base.as_u64() + rela.r_addend as u64;
-                            unsafe {
-                                core::ptr::write_volatile(
-                                    target_vaddr as *mut u64,
-                                    write_val,
-                                );
-                            }
+                            // Relocations patch the image's own user pages.
+                            crate::smap::user(|| unsafe { core::ptr::write_volatile(target_vaddr as *mut u64, write_val) });
                             applied += 1;
                         }
                     }
