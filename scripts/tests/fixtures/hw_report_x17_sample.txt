@@ -1,0 +1,23 @@
+SexOS hardware report (Spindle hw save)
+[hw.census] devices=24 supported=21 bridges=9
+[hw.device] 00:02.0 8086:9a60 display support=intel_display
+[hw.device] 01:00.0 10de:24dd display support=power_only
+[hw.device] 00:14.3 8086:43f0 network support=wifi
+[hw.warning] 00:1f.5 8086:43a4 reason=no_driver
+[kernel.vmd.done] added=1
+[sexdrive.nvme.drive] vendor=144d model="Samsung SSD 980 PRO 1TB" firmware=5B2QGXA7 mdts=9 max_transfer_kib=128 namespaces=1
+[sexdrive.nvme.namespace] sectors=1953525168 lba_shift=9
+[sexdrive.nvme.irq] mode=msix polling=0
+[iommu.enabled] vendor=intel units=2
+[display.intel] device=9a60 pipes=1
+[display.intel.edid] port=0 edid=00ffffffffffff004d106f14
+[display.chrome.metrics] width=1920 height=1080
+[gpu.found] at=01:00.0 vendor=10de
+[gpu.power] off=1
+[wifi.ready] mac=02:00:00:00:00:01 country=DE
+[bell.hda.ready] vendor=0x10ec0236 outputs=2
+[sexusb.ready]
+[sexusb.enum.summary] ports_connected=2 slots_enabled=2 hid_devices=1 pointer_devices=1 keyboards=1 hubs=0 failed=0
+[sexinput.touchpad.ready] vendor=06cb
+[sexacpi.tables] loaded=4 of=4
+[display.panel.battery] percent=81

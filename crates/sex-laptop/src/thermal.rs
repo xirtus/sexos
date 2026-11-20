@@ -5,7 +5,7 @@
 pub fn plausible(decikelvin: u64) -> bool { (2232..=4732).contains(&decikelvin) }
 
 /// Whole degrees Celsius.
-pub fn celsius(decikelvin: u32) -> i32 { (decikelvin as i32 - 2732 + if decikelvin >= 2732 { 5 } else { -5 }) / 10 }
+pub fn celsius(decikelvin: u32) -> i32 { ((decikelvin as i64 - 2732 + if decikelvin >= 2732 { 5 } else { -5 }) / 10) as i32 }
 
 /// A zone's reading against its critical trip point (`_CRT`). Firmware placeholders on
 /// either side never trip it.

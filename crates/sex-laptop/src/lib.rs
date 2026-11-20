@@ -10,6 +10,7 @@
 pub mod backlight;
 pub mod battery;
 pub mod ec;
+pub mod intel_gpio;
 pub mod profile;
 pub mod resources;
 pub mod thermal;

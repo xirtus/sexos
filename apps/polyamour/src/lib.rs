@@ -24,6 +24,7 @@ pub mod editors;
 pub mod filebrowser;
 pub mod input;
 pub mod nodetree;
+pub mod omatools;
 pub mod persist;
 pub mod python;
 pub mod physics;

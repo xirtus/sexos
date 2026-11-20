@@ -175,12 +175,14 @@ impl<'a> Vbios<'a> {
         if p.version != 2 || p.length < 4 { return None; }
         let table = self.r32(p.offset as u32)?;
         if table == 0 { return None; }
-        let hdr = self.r8(table + 1)? as u32;
-        let len = self.r8(table + 2)? as u32;
-        let cnt = self.r8(table + 3)? as u32;
+        // Every offset comes from the ROM: a table near u32::MAX must not wrap
+        // round to the start of the image.
+        let hdr = self.r8(table.checked_add(1)?)? as u32;
+        let len = self.r8(table.checked_add(2)?)? as u32;
+        let cnt = self.r8(table.checked_add(3)?)? as u32;
         for i in 0..cnt {
-            let e = table + hdr + i * len;
-            if self.r8(e)? == kind { return self.r32(e + 2); }
+            let e = table.checked_add(hdr)?.checked_add(i * len)?;
+            if self.r8(e)? == kind { return self.r32(e.checked_add(2)?); }
         }
         None
     }
