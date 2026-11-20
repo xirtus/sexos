@@ -11,6 +11,8 @@ rustc --edition=2021 --test -O -C overflow-checks=on -A dead_code "$ROOT_DIR/tes
 # this test file built against that allocator, then mounted, read and grown by today's.
 mkdir -p "$TEST_DIR/legacy/tests" "$TEST_DIR/legacy/crates/sexfs/src"
 cp "$ROOT_DIR/tests/sexfs.rs" "$TEST_DIR/legacy/tests/"
+# Every other sexfs module as it is; only lib.rs gets the old allocator below.
+cp "$ROOT_DIR"/crates/sexfs/src/*.rs "$TEST_DIR/legacy/crates/sexfs/src/"
 python3 - "$ROOT_DIR/crates/sexfs/src/lib.rs" "$TEST_DIR/legacy/crates/sexfs/src/lib.rs" <<'PY'
 import sys
 s=open(sys.argv[1]).read()
@@ -29,6 +31,7 @@ SEXFS_LEGACY_IMAGE="$TEST_DIR/legacy.img" "$TEST_DIR/tests" --exact a_volume_lai
 mutant() {
   mkdir -p "$TEST_DIR/$1/tests" "$TEST_DIR/$1/crates/sexfs/src"
   cp "$ROOT_DIR/tests/sexfs.rs" "$TEST_DIR/$1/tests/"
+  cp "$ROOT_DIR"/crates/sexfs/src/*.rs "$TEST_DIR/$1/crates/sexfs/src/"
   python3 - "$ROOT_DIR/crates/sexfs/src/lib.rs" "$TEST_DIR/$1/crates/sexfs/src/lib.rs" "$2" "$3" <<'PY'
 import sys
 s=open(sys.argv[1]).read();assert s.count(sys.argv[3])>=1,sys.argv[3]
