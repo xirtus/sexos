@@ -7552,6 +7552,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-thunderbolt"
+version = "0.1.0"
+
+[[package]]
 name = "sex-time"
 version = "0.1.0"
 dependencies = [
@@ -7825,6 +7829,7 @@ version = "0.1.0"
 dependencies = [
  "sex-pdx",
  "sex-rt",
+ "sex-thunderbolt",
 ]
 
 [[package]]

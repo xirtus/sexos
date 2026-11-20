@@ -16,6 +16,7 @@
 #![no_std]
 
 pub mod aspm;
+pub mod nhi;
 pub mod pm;
 #[cfg(test)]
 mod tests;

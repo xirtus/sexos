@@ -472,7 +472,7 @@ fn authentication_and_association_frames() {
     let mut rsn = [0u8; 32];
     let rn = w::own_rsn(true, &mut rsn);
     let bss = w::parse_bss(&beacon(b"wpa3", 36, Some(&rsn[..rn]), true)).unwrap();
-    let n = w::assoc_request(&mut buf, &bss, &STA, 3, &rsn[..rn]);
+    let n = w::assoc_request(&mut buf, &bss, &STA, 3, &rsn[..rn], &[], &[]);
     let ies: Vec<u8> = w::elements(&buf[28..n]).map(|(id, _)| id).collect();
     assert_eq!(ies, [0, 1, 48, 244]);
     let mut resp = [0u8; 30];
@@ -1065,6 +1065,8 @@ impl Firmware {
                 (hcmd::LONG_GROUP, hcmd::ADD_STA_KEY) => Some(rsna::ADD_STA_KEY_BYTES),
                 (hcmd::DATA_PATH_GROUP, tlc::TLC_MNG_CONFIG_CMD) => Some(tlc::CONFIG_BYTES),
                 (hcmd::LONG_GROUP, hcmd::MCAST_FILTER_CMD) => Some(link::MCAST_FILTER_BYTES),
+                (hcmd::DATA_PATH_GROUP, sex_wifi::ax::STA_HE_CTXT_CMD) => Some(sex_wifi::ax::HE_CTXT_V2_BYTES),
+                (hcmd::DATA_PATH_GROUP, sex_wifi::ba::RX_BAID_ALLOCATION_CONFIG_CMD) => Some(sex_wifi::ba::BAID_CONFIG_BYTES),
                 _ => Some(4),
             };
             assert_eq!(Some(len), want, "payload size of {group:#x}/{opcode:#x}");
@@ -1109,6 +1111,8 @@ impl Firmware {
                     a[0..2].copy_from_slice(&self.queue_answer.to_le_bytes());
                     a
                 }
+                // The session's BAID.
+                (hcmd::DATA_PATH_GROUP, sex_wifi::ba::RX_BAID_ALLOCATION_CONFIG_CMD) => 5u32.to_le_bytes().to_vec(),
                 _ => vec![0u8; 4],
             };
             self.deliver(m, layout, &packet(opcode, group | failed, index, qid, &answer));
@@ -1599,7 +1603,7 @@ fn join_uses_only_the_antennas_the_nvm_allows() {
 fn join_command_layouts() {
     // ACK rates (iwx_ack_rates): basic 1/2 Mb/s and 6 Mb/s on 2.4 GHz.
     let mut t = join::Target { bssid: [2, 0, 0, 0, 0, 1], channel: 1, beacon_interval: 100, dtim_period: 1, rates: 0,
-        basic_cck: 0b0011, basic_ofdm: 0b1, short_slot: true, short_preamble: true };
+        basic_cck: 0b0011, basic_ofdm: 0b1, short_slot: true, short_preamble: true, peer: Default::default(), ours: Default::default() };
     assert_eq!(join::ack_rates(&t), (0b0011, 0b1));
     // Only 11 Mb/s basic: every lower CCK rate joins; only 24 Mb/s OFDM: 6 and 12 join.
     t.basic_cck = 0b1000; t.basic_ofdm = 1 << 4;
@@ -1726,7 +1730,7 @@ fn tx_command_layouts_and_rates() {
     assert_eq!(tx::byte_count(devices::Family::Ax210, 30, 3), 30);
     assert_eq!(tx::byte_count(devices::Family::Gen22000, 30, 3), 8);
     assert_eq!(tx::byte_count(devices::Family::Ax210, 30, 7), 30 | 1 << 14);
-    let mut t = join::Target { bssid: AP, channel: 36, beacon_interval: 100, dtim_period: 1, rates: 0, basic_cck: 0, basic_ofdm: 0b101, short_slot: true, short_preamble: false };
+    let mut t = join::Target { bssid: AP, channel: 36, beacon_interval: 100, dtim_period: 1, rates: 0, basic_cck: 0, basic_ofdm: 0b101, short_slot: true, short_preamble: false, peer: Default::default(), ours: Default::default() };
     assert_eq!(tx::management_rate(&t), 1 << 14 | 1 << 8, "OFDM 6 Mb/s");
     t.channel = 1; t.basic_cck = 0b1100;
     assert_eq!(tx::management_rate(&t), 1 << 14 | 2, "CCK 5.5 Mb/s");
@@ -1963,6 +1967,25 @@ fn x17_carries_ethernet_over_wpa2() {
     assert_eq!(link.dropped, 3);
     assert_eq!(link.last_drop, Some(link::Drop::Replay));
     assert_eq!(link.tx.queued, 0, "the TX response freed the ring");
+    // An A-MSDU the hardware split: three subframes of sequence 5 share packet
+    // number 20 and all pass. Replayed, every subframe is dropped (not only the
+    // first), and the same number on another sequence is a replay too.
+    let amsdu = |seq: u16, index: u8, fill: u8| {
+        let mut f = protected_from_ap(&me, &bss.bssid, &gw, 20, &ip(fill));
+        f[22..24].copy_from_slice(&(seq << 4).to_le_bytes());
+        let mut p = mpdu_status(fam, &f, ok, true);
+        p[8 + 3] |= 0x40; // the descriptor's A-MSDU flag
+        p[8 + 4] = index;
+        p
+    };
+    for (index, fill) in [(0, 0x50), (1, 0x51), (2, 0x52)] { sim.deliver(&mut m, &b.layout, &amsdu(5, index, fill)); }
+    for (index, fill) in [(0, 0x50), (1, 0x51), (2, 0x52)] { sim.deliver(&mut m, &b.layout, &amsdu(5, index, fill)); }
+    sim.deliver(&mut m, &b.layout, &amsdu(6, 1, 0x53));
+    let mut got: Vec<Vec<u8>> = vec![];
+    assert!(link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |e| got.push(e.to_vec())));
+    let fills: Vec<u8> = got.iter().map(|e| e[15]).collect();
+    assert_eq!(fills, vec![0x50, 0x51, 0x52]);
+    assert_eq!(link.dropped, 3 + 4);
     // The AP leaves: the link goes down.
     sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(w::FC_MGMT_DEAUTH, &me, &bss.bssid, &7u16.to_le_bytes()), 40, 6, true));
     assert!(!link.poll(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, |_| {}));
@@ -2125,4 +2148,138 @@ fn open_networks_pass_plain_data_and_refuse_protected_frames() {
     f.truncate(f.len() - 8);
     assert_eq!(link::decap(&f, 3, false, &mut out), Err(link::Drop::Malformed), "shorter than ARP");
     assert_eq!(link::decap(&f, 3, true, &mut out), Err(link::Drop::NotDecrypted), "plain data on a WPA2 link");
+}
+
+
+/// Wi-Fi 4/5/6 elements of a beacon: HT (MCS 0..15, 40 MHz), HT operation
+/// (primary 36, secondary above), VHT 80 MHz around 42, HE (MCS 0..11 on two
+/// streams), HE operation (BSS colour 9), WMM parameters.
+fn wifi6_elements() -> Vec<u8> {
+    let mut e = vec![45, 26, 0x63, 0x01, 0x17, 0xff, 0xff];
+    e.extend_from_slice(&[0; 21]);
+    e.extend_from_slice(&[61, 22, 36, 0x05, 0]);
+    e.extend_from_slice(&[0; 19]);
+    e.extend_from_slice(&[191, 12, 0x30, 0x01, 0x80, 0x03, 0xfa, 0xff, 0, 0, 0xfa, 0xff, 0, 0]);
+    e.extend_from_slice(&[192, 5, 1, 42, 0, 0xfc, 0xff]);
+    e.extend_from_slice(&[255, 22, 35, 0, 0, 0x20, 0, 0, 0, 0x04, 0x20, 0x08, 0, 0, 0, 0, 0, 0, 0x80, 0, 0xfa, 0xff, 0xfa, 0xff]);
+    e.extend_from_slice(&[255, 7, 36, 0, 0, 0, 9, 0xfc, 0xff]);
+    e.extend_from_slice(&[221, 24, 0x00, 0x50, 0xf2, 2, 1, 1, 0, 0, 0x03, 0xa4, 0, 0, 0x27, 0xa4, 0, 0, 0x42, 0x43, 0x5e, 0, 0x62, 0x32, 0x2f, 0]);
+    e
+}
+
+fn x17_ours() -> sex_wifi::ax::Ours {
+    sex_wifi::ax::Ours { tx_antennas: 3, rx_antennas: 3, max_width: sex_wifi::ax::Width::W160, vht: true, he_ctxt: 2, he_mbssid: true, tlc: 4 }
+}
+
+#[test]
+fn x17_associates_as_wifi6_on_80mhz() {
+    let (mut i, mut b, mut m, mut hw, mut sim, home, v) = x17_ready();
+    let mut f = beacon_from(home.bssid, b"Home6", 36, Some(home.rsn_element()));
+    f.extend_from_slice(&wifi6_elements());
+    let bss = w::parse_bss(&f).unwrap();
+    let target = join::Target::of(&bss, 36).with_ours(x17_ours());
+    assert_eq!(target.mode().generation(), 6);
+    let mut j = join::Join::new(target, v, i.mac, i.valid_rx_antennas(), hw.now);
+    run_join(&mut j, &mut i, &mut b, &mut m, &mut hw, &mut sim);
+    assert_eq!(j.step, join::Step::Joined);
+    // The join itself stays at 20 MHz.
+    let phy = sim.commands.iter().rev().find(|c| (c.0, c.1) == (hcmd::LONG_GROUP, hcmd::PHY_CONTEXT_CMD)).unwrap();
+    assert_eq!((phy.2[13], phy.2[14]), (0, 0));
+    let before = sim.commands.len();
+    let mut a = assoc::Assoc::new(bss, target, i.mac, b.boot.chip.family, hw.now).with_phy(v, i.valid_rx_antennas());
+    for _ in 0..5000 {
+        let t = hw.now;
+        if !a.advance(&mut b, &mut i.cmdq, &mut hw, &mut m, t) { break; }
+        sim.serve(&mut m, &b.layout, &mut hw);
+        hw.now += 1000;
+    }
+    assert_eq!(a.step, assoc::Step::Associated);
+    // The request offered HT, VHT, HE and WMM.
+    let (_, req) = &sim.frames[1];
+    let ids: Vec<u8> = w::elements(&req[28..]).map(|(id, _)| id).collect();
+    assert_eq!(ids, [0, 1, 48, 45, 191, 255, 221]);
+    // After the response: PHY wider, station flags, HE context, MAC with QoS.
+    let sent: Vec<(u8, u8)> = sim.commands[before..].iter().map(|c| (c.0, c.1)).collect();
+    assert_eq!(sent, vec![
+        (hcmd::LONG_GROUP, hcmd::PHY_CONTEXT_CMD), (hcmd::LONG_GROUP, hcmd::ADD_STA),
+        (hcmd::DATA_PATH_GROUP, sex_wifi::ax::STA_HE_CTXT_CMD), (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD),
+    ]);
+    let c = |k: usize| &sim.commands[before + k].2;
+    let u32at = |p: &Vec<u8>, at: usize| u32::from_le_bytes(p[at..at + 4].try_into().unwrap());
+    assert_eq!((u32at(c(0), 4), u32at(c(0), 8), c(0)[12], c(0)[13], c(0)[14]), (join::ACTION_MODIFY, 36, 0, 2, 1), "80 MHz, control 2 below");
+    assert_eq!(u32at(c(1), 20) >> 26 & 3, 2, "FAT 80 MHz");
+    assert_eq!(c(2)[40], 9, "BSS colour");
+    assert_eq!(u32at(c(3), 56), 3, "QoS + TGN");
+}
+
+#[test]
+fn x17_reorders_a_block_ack_session() {
+    use sex_wifi::ba;
+    let (r, mut sim, bss, _, _, mut i, mut b, mut m, mut hw) = x17_connect(b"correct horse", true);
+    let mut target = r.target();
+    target.peer = sex_wifi::ax::peer_of(&wifi6_elements());
+    let target = target.with_ours(x17_ours());
+    let me = i.mac;
+    let mut link = link::Link::new(r.tx, target, me, b.boot.chip.family, true).with_block_ack(2);
+    let mut slots = Box::new(ba::Slots::EMPTY);
+    let fam = b.boot.chip.family;
+    // Settle the multicast filter first (rate control is off in this test).
+    for _ in 0..3 { link.poll_with(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, Some(&mut slots), |_| {}); sim.serve(&mut m, &b.layout, &mut hw); }
+    // The AP asks for a session on TID 0: window 64, SSN 100.
+    let req = [ba::CATEGORY_BLOCK_ACK, ba::ADDBA_REQUEST, 7, 0x02, 0x10, 0, 0, (100u16 << 4) as u8, ((100u16 << 4) >> 8) as u8];
+    sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(ba::FC_ACTION, &me, &bss.bssid, &req), 40, 36, true));
+    let commands = sim.commands.len();
+    link.poll_with(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, Some(&mut slots), |_| {});
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let (g, o, c) = &sim.commands[commands];
+    assert_eq!((*g, *o), (hcmd::DATA_PATH_GROUP, ba::RX_BAID_ALLOCATION_CONFIG_CMD));
+    assert_eq!((c[0], c[4], c[8], u16::from_le_bytes([c[12], c[13]]), u16::from_le_bytes([c[14], c[15]])), (0, 1, 0, 100, 64));
+    let frames = sim.frames.len();
+    link.poll_with(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, Some(&mut slots), |_| {});
+    sim.serve(&mut m, &b.layout, &mut hw);
+    let s = link.ba.expect("session up");
+    assert_eq!((s.tid, s.baid, s.window, s.head()), (0, 5, 64, 100));
+    let (cmd, resp) = &sim.frames[frames];
+    assert_eq!(&resp[24..27], &[ba::CATEGORY_BLOCK_ACK, ba::ADDBA_RESPONSE, 7]);
+    assert_eq!(u16::from_le_bytes([resp[27], resp[28]]), ba::STATUS_SUCCESS);
+    assert_eq!(u16::from_le_bytes([resp[29], resp[30]]), 1 << 1 | 64 << 6, "immediate, TID 0, no A-MSDU, 64");
+    assert_eq!(u16::from_le_bytes([cmd[2], cmd[3]]), tx::FLAG_CMD_RATE | tx::FLAG_ENCRYPT_DIS);
+    // Frames 101, 100 (NSSN 102), 102 (NSSN 103), 104 (NSSN 103), then a firmware release to 105.
+    let ok = 3 | 2 << 8 | 1 << 6 | 1 << 11;
+    let gw = [0x02, 0x99, 0, 0, 0, 1];
+    let frame = |sn: u16, nssn: u16| {
+        let mut p = mpdu_status(fam, &protected_from_ap(&me, &bss.bssid, &gw, 1000 + sn as u64, &ip(sn as u8)), ok, true);
+        let reorder = nssn as u32 | (sn as u32) << 12 | 5 << 24;
+        p[8 + 16..8 + 20].copy_from_slice(&reorder.to_le_bytes());
+        p
+    };
+    for (sn, nssn) in [(101, 100), (100, 102), (102, 103), (104, 103)] { sim.deliver(&mut m, &b.layout, &frame(sn, nssn)); }
+    let mut got = vec![];
+    link.poll_with(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, Some(&mut slots), |e| got.push(e[14 + 4]));
+    assert_eq!(got, [100, 101, 102], "in order, despite 101 arriving first; 104 waits for 103");
+    assert_eq!(link.ba.unwrap().stored, 1);
+    let mut release = vec![5u8, 0];
+    release.extend_from_slice(&105u16.to_le_bytes());
+    sim.deliver(&mut m, &b.layout, &packet(ba::FRAME_RELEASE, 0, 0, 0x80, &release));
+    link.poll_with(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, Some(&mut slots), |e| got.push(e[14 + 4]));
+    assert_eq!(got, [100, 101, 102, 104], "the firmware gave up on 103");
+    assert_eq!(link.dropped, 0, "packet numbers checked in order: no false replays");
+    // A second TID is declined; a DELBA ends ours.
+    let req6 = [ba::CATEGORY_BLOCK_ACK, ba::ADDBA_REQUEST, 8, 0x1a, 0x10, 0, 0, 0, 0];
+    sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(ba::FC_ACTION, &me, &bss.bssid, &req6), 40, 36, true));
+    let frames = sim.frames.len();
+    link.poll_with(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, Some(&mut slots), |_| {});
+    sim.serve(&mut m, &b.layout, &mut hw);
+    assert_eq!(u16::from_le_bytes([sim.frames[frames].1[27], sim.frames[frames].1[28]]), ba::STATUS_REQUEST_DECLINED);
+    let delba = [ba::CATEGORY_BLOCK_ACK, ba::DELBA, 0, 1 << 3, 1, 0];
+    sim.deliver(&mut m, &b.layout, &mpdu(fam, &from_ap(ba::FC_ACTION, &me, &bss.bssid, &delba), 40, 36, true));
+    let commands = sim.commands.len();
+    for _ in 0..3 { link.poll_with(&mut b, &mut i.cmdq, &mut hw, &mut m, 0, Some(&mut slots), |_| {}); sim.serve(&mut m, &b.layout, &mut hw); }
+    assert!(link.ba.is_none());
+    let (g, o, c) = &sim.commands[commands];
+    assert_eq!((*g, *o, c[0]), (hcmd::DATA_PATH_GROUP, ba::RX_BAID_ALLOCATION_CONFIG_CMD, 2));
+    // Without slots the same request is declined.
+    let mut plain = link::Link::new(tx::TxQueue::new(fam), target, me, fam, true);
+    assert_eq!(plain.ba, None);
+    let _ = &mut plain;
 }

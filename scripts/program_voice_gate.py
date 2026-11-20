@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Native Voice fetches a fixture WAV over the optional network grant and saves it."""
+"""Native Voice fetches a fixture WAV over the optional network grant and saves it.
+
+The worker is started with MOSS_VOICE_TOKEN (as off loopback): Voice reads the token
+from /data/voice/voice.token and sends it on every frame and asset request."""
 import argparse
 import http.server
 import os
@@ -16,6 +19,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 KEYS = {' ': 'spc', '/': 'slash', '.': 'dot', '-': 'minus'}
+TOKEN = 'gate0voice0token'
+AUTH = {'Authorization': 'Bearer ' + TOKEN}
 
 
 class ProgramServer(http.server.BaseHTTPRequestHandler):
@@ -47,23 +52,29 @@ def check_worker_ranges(port):
              + b'enactivehello')
     for _ in range(100):
         try:
-            with urllib.request.urlopen(urllib.request.Request(base + '/v1/frame', data=frame), timeout=2) as reply:
+            with urllib.request.urlopen(urllib.request.Request(base + '/v1/frame', data=frame, headers=AUTH), timeout=2) as reply:
                 assert reply.status == 200 and reply.read()[5] == 4
             break
         except urllib.error.URLError:
             time.sleep(.05)
     else:
         raise RuntimeError('fixture voice worker did not start')
+    # Without the token the worker refuses.
+    try:
+        urllib.request.urlopen(urllib.request.Request(base + '/v1/frame', data=frame), timeout=2)
+        raise RuntimeError('worker accepted a request without its token')
+    except urllib.error.HTTPError as e:
+        assert e.code == 401, e.code
     for _ in range(2):
         with urllib.request.urlopen(urllib.request.Request(base + '/v1/frame',
-                                      data=frame[:5] + bytes((3,)) + frame[6:16]), timeout=2) as reply:
+                                      data=frame[:5] + bytes((3,)) + frame[6:16], headers=AUTH), timeout=2) as reply:
             reply.read()
-    request = urllib.request.Request(base + '/v1/assets/86', headers={'Range': 'bytes=0-31'})
+    request = urllib.request.Request(base + '/v1/assets/86', headers={'Range': 'bytes=0-31', **AUTH})
     with urllib.request.urlopen(request, timeout=2) as reply:
         data = reply.read()
         assert reply.status == 206 and reply.headers['Content-Range'] == 'bytes 0-31/52'
         assert len(data) == 32 and data.startswith(b'RIFF')
-    request = urllib.request.Request(base + '/v1/assets/86', headers={'Range': 'bytes=32-63'})
+    request = urllib.request.Request(base + '/v1/assets/86', headers={'Range': 'bytes=32-63', **AUTH})
     with urllib.request.urlopen(request, timeout=2) as reply:
         assert reply.status == 206 and reply.headers['Content-Range'] == 'bytes 32-51/52'
         assert len(reply.read()) == 20
@@ -87,7 +98,7 @@ def main():
     threading.Thread(target=program_server.serve_forever, daemon=True).start()
     voice_port = free_port()
     worker_env = os.environ.copy()
-    worker_env.pop('MOSS_VOICE_TOKEN', None)
+    worker_env['MOSS_VOICE_TOKEN'] = TOKEN
     worker = subprocess.Popen([sys.executable, str(ROOT / 'crates/sex-voice/adapters/mosslanding.py'),
                                '--fixture', '--port', str(voice_port)],
                               stdout=(args.out / 'voice-worker.log').open('w'), stderr=subprocess.STDOUT,
@@ -123,8 +134,13 @@ def main():
         source = f'http://10.0.2.2:{program_server.server_address[1]}/voice'
         line(f'fetch {source} /bin/voice', r'\[spindle.fetch.line\] Saved \d+ bytes', 240)
         endpoint = f'http://10.0.2.2:{voice_port}'
+        # A blank disk has no /data yet (a program's folder appears on its first run),
+        # and mkdir makes one level: make both, then leave Voice its token.
+        line('mkdir /data', r'\[spindle.fs.result\] kind=3 status=\d+')
+        line('mkdir /data/voice', r'\[spindle.fs.result\] kind=3 status=0')
+        line(f'write /data/voice/voice.token {TOKEN}', r'\[spindle.fs.result\] kind=8 status=0')
         start = len(text())
-        line(f'run +net voice {endpoint}', r'\[voice.ready\]', 180)
+        line(f'run +net voice {endpoint}', r'\[voice.ready\] [^\n]* token=1', 180)
         launch = guest['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)', start, 60)
         guest['focus'](int(launch[3]))
         time.sleep(.5)

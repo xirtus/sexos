@@ -10,6 +10,7 @@
 //! `iwx_binding_cmd`, `iwx_add_sta_cmd`, `iwx_scd_queue_cfg_cmd`,
 //! `iwx_session_prot_cmd`) and checked in host tests. Chips that only speak the
 //! newer "MLD" API (BZ family, MA MAC) are not handled; the x17's TY chip is not one.
+use crate::ax;
 use crate::bringup::Bringup;
 use crate::cmdq::{self, CommandQueue};
 use crate::context::{Dma, DmaRead, TFD_CB_SIZE};
@@ -80,6 +81,10 @@ pub struct Target {
     pub rates: u16,
     pub short_slot: bool,
     pub short_preamble: bool,
+    /// The AP's HT, VHT, HE and WMM elements (stage X1).
+    pub peer: ax::Peer,
+    /// What our chip and firmware can do; the default is a legacy-only station.
+    pub ours: ax::Ours,
 }
 impl Target {
     pub fn of(bss: &Bss, heard_on: u8) -> Self {
@@ -88,9 +93,14 @@ impl Target {
             beacon_interval: bss.beacon_interval, dtim_period: bss.dtim_period,
             basic_cck: bss.basic_cck, basic_ofdm: bss.basic_ofdm, rates: bss.rates,
             short_slot: bss.capability & 0x0400 != 0, short_preamble: bss.capability & 0x0020 != 0,
+            peer: bss.peer, ours: ax::Ours::default(),
         }
     }
+    /// The same AP, joined with what our chip can do (HT/VHT/HE when it can).
+    pub fn with_ours(mut self, ours: ax::Ours) -> Self { self.ours = ours; self }
     pub fn two_ghz(&self) -> bool { self.channel <= 14 }
+    /// The mode both sides have: generation, channel width, QoS.
+    pub fn mode(&self) -> ax::Mode { ax::mode(&self.peer, &self.ours, self.channel, self.two_ghz()) }
 }
 
 /// The rates control frames may answer at (`iwx_ack_rates`): the AP's basic rates
@@ -130,18 +140,28 @@ pub fn lmac(channel: u8, cdb: bool) -> u32 {
 /// channel numbering (capa 48), which widens the channel field to 32 bits.
 /// `rx_chain`: only when RLC_CONFIG_CMD is not version 2 (it then carries it).
 pub fn phy_context(out: &mut [u8; PHY_CONTEXT_BYTES], action: u32, channel: u8, uhb: bool, cdb: bool, rx_chain: Option<u32>) -> usize {
+    phy_context_wide(out, action, channel, ax::Width::W20, 0, uhb, cdb, rx_chain)
+}
+
+/// PHY_CONTEXT_CMD for a channel `width` wide with the control channel at
+/// `ctrl_pos` (`iwx_phy_ctxt_cmd_uhb_v3_v4`: width, then position, after the band).
+#[allow(clippy::too_many_arguments)]
+pub fn phy_context_wide(out: &mut [u8; PHY_CONTEXT_BYTES], action: u32, channel: u8, width: ax::Width, ctrl_pos: u8, uhb: bool, cdb: bool, rx_chain: Option<u32>) -> usize {
     out.fill(0);
     put32(out, 0, PHY_ID);
     put32(out, 4, action);
     let band = if channel <= 14 { PHY_BAND_24 } else { PHY_BAND_5 };
-    // Width 20 MHz (0) and control position "1 below" (0) stay zero.
     let after = if uhb {
         put32(out, 8, channel as u32);
         out[12] = band;
+        out[13] = width.code();
+        out[14] = ctrl_pos;
         16
     } else {
         out[8] = band;
         out[9] = channel;
+        out[10] = width.code();
+        out[11] = ctrl_pos;
         12
     };
     put32(out, after, lmac(channel, cdb));
@@ -177,13 +197,21 @@ pub fn mac_context(out: &mut [u8; MAC_CONTEXT_BYTES], action: u32, me: &[u8; 6],
     let (cck, ofdm) = ack_rates(t);
     put32(out, 32, cck);
     put32(out, 36, ofdm);
-    // protection_flags at 40 stay 0 (no HT yet; W6).
+    // HT protection and QoS only once associated with what was agreed (X1).
+    let mode = if aid.is_some() { t.mode() } else { ax::Mode::LEGACY };
+    let (protection, qos, filter_11ax) = ax::mac_flags(&mode, &t.peer);
+    put32(out, 40, protection);
     put32(out, 44, if t.short_preamble { MAC_FLG_SHORT_PREAMBLE } else { 0 });
     put32(out, 48, if t.short_slot { MAC_FLG_SHORT_SLOT } else { 0 });
     let assoc = aid.filter(|&a| a != 0 && t.dtim_period != 0);
-    put32(out, 52, MAC_FILTER_ACCEPT_GRP | if assoc.is_none() { MAC_FILTER_IN_BEACON } else { 0 });
-    // qos_flags at 56 stay 0 (QoS is negotiated in W6), then ac[5] from 60.
-    for (ac, &(ecw_min, ecw_max, aifsn, txop)) in EDCA.iter().enumerate() {
+    put32(out, 52, MAC_FILTER_ACCEPT_GRP | filter_11ax | if assoc.is_none() { MAC_FILTER_IN_BEACON } else { 0 });
+    put32(out, 56, qos);
+    // ac[5] from 60: the AP's EDCA parameters when it sent them (WMM), else the defaults.
+    for (ac, &default) in EDCA.iter().enumerate() {
+        let (ecw_min, ecw_max, aifsn, txop) = match ax::edca(&t.peer, ac).filter(|_| mode.qos) {
+            Some(e) => (e.ecw_min, e.ecw_max, e.aifsn, e.txop),
+            None => default,
+        };
         let fifo = AC_FIFO[ac];
         let at = 60 + fifo * 8;
         put16(out, at, (1u16 << ecw_min) - 1);
@@ -217,12 +245,19 @@ pub fn binding(out: &mut [u8; BINDING_BYTES], action: u32, channel: u8, cdb: boo
 /// ADD_STA for the AP (`iwx_add_sta_cmd`, no HT yet). `update` modifies the
 /// existing entry (after association) instead of adding it.
 pub fn add_station(out: &mut [u8; ADD_STA_BYTES], bssid: &[u8; 6], update: bool) {
+    add_station_flags(out, bssid, update, (0, 0));
+}
+
+/// ADD_STA with the HT/VHT/HE station flags and their extra mask bits
+/// (`ax::station_flags`) once associated.
+pub fn add_station_flags(out: &mut [u8; ADD_STA_BYTES], bssid: &[u8; 6], update: bool, (flags, mask): (u32, u32)) {
     out.fill(0);
     out[0] = update as u8;
     put32(out, 4, MAC_ID);
     if !update { out[8..14].copy_from_slice(bssid); }
     out[16] = STATION_ID;
-    put32(out, 24, STA_FLG_FAT_EN_MSK | STA_FLG_MIMO_EN_MSK);
+    put32(out, 20, flags);
+    put32(out, 24, STA_FLG_FAT_EN_MSK | STA_FLG_MIMO_EN_MSK | mask);
     out[35] = STA_LINK;
 }
 
