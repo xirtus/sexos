@@ -182,19 +182,27 @@ mod guest {
         studio.refresh(&mut app.ui);
         Ok(())
     }
-    struct VoiceJob { id: u64, endpoint: String, due: u64 }
+    struct VoiceJob { id: u64, endpoint: String, token: Option<Vec<u8>>, due: u64 }
+    const VOICE_NEEDS_TOKEN: &str = "Voice worker wants a token: put it in /data/moan/voice.token";
+    /// A worker started with MOSS_VOICE_TOKEN wants it as a bearer token.
+    fn voice_token(app: &mut App) -> Option<Vec<u8>> {
+        let mut held = [0u8; 300];
+        let n = files::read(&mut app.window, sex_voice::TOKEN_FILE.as_bytes(), &mut held).ok()?;
+        sex_voice::bearer_token(&held[..n]).map(|t| t.to_vec())
+    }
     fn voice_url(endpoint: &str, path: &str) -> Result<String, &'static str> {
         if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") { return Err("Voice worker URL must be HTTP or HTTPS"); }
         if endpoint.len() > 180 || endpoint.as_bytes().iter().any(|b| b.is_ascii_whitespace()) { return Err("Invalid voice worker URL"); }
         Ok(format!("{}{}", endpoint.trim_end_matches('/'), path))
     }
-    fn voice_request(app: &mut App, endpoint: &str, message: VoiceMessage<'_>) -> Result<VoiceMessage<'static>, &'static str> {
+    fn voice_request(app: &mut App, endpoint: &str, token: Option<&[u8]>, message: VoiceMessage<'_>) -> Result<VoiceMessage<'static>, &'static str> {
         let mut request = [0u8; sex_voice::MAX_FRAME];
         let n = sex_voice::encode(message, &mut request).map_err(|_| "Invalid voice request")?;
         let url = voice_url(endpoint, "/v1/frame")?;
         let mut response = [0u8; sex_voice::MAX_FRAME + 1024];
-        let reply = sex_app::net::post(&mut app.window, url.as_bytes(), &request[..n], &mut response)
+        let reply = sex_app::net::post_with(&mut app.window, url.as_bytes(), &request[..n], token, &mut response)
             .map_err(|_| "Voice worker unavailable; start Moan with run +net")?;
+        if reply.status == 401 { return Err(VOICE_NEEDS_TOKEN); }
         if reply.status != 200 { return Err("Voice worker rejected request"); }
         let decoded = sex_voice::decode(&response[reply.body..reply.end]).map_err(|_| "Invalid voice worker response")?;
         // Copy the only borrowed response payload before the stack buffer expires.
@@ -207,11 +215,12 @@ mod guest {
         let prompt = String::from(app.ui.text_of(studio.voice_prompt));
         if prompt.is_empty() || prompt.len() > sex_voice::MAX_TEXT { return Err("Enter up to 3072 bytes of voice text"); }
         let endpoint = voice_url(app.ui.text_of(studio.voice_endpoint), "")?;
-        let reply = voice_request(app, &endpoint, VoiceMessage::Submit { job_id: id,
+        let token = voice_token(app);
+        let reply = voice_request(app, &endpoint, token.as_deref(), VoiceMessage::Submit { job_id: id,
             data: VoiceSubmit { operation: VoiceOperation::Synthesize, seed: 0, voice_id: 0,
                 reference_asset_id: 0, max_frames: 11_520_000, language: "en", model: "active", text: &prompt } })?;
         if !matches!(reply, VoiceMessage::Status { job_id, data } if job_id == id && data.state == JobState::Queued) { return Err("Voice worker did not queue job"); }
-        Ok(VoiceJob { id, endpoint, due: weft::sexos::now().saturating_add(500) })
+        Ok(VoiceJob { id, endpoint, token, due: weft::sexos::now().saturating_add(500) })
     }
     fn content_range(value: &[u8]) -> Option<(usize, usize, usize)> {
         let value = core::str::from_utf8(value).ok()?.strip_prefix("bytes ")?;
@@ -219,15 +228,16 @@ mod guest {
         let (start, end) = part.split_once('-')?;
         Some((start.parse().ok()?, end.parse().ok()?, total.parse().ok()?))
     }
-    fn voice_asset(app: &mut App, url: &str, limit: usize) -> Result<Vec<u8>, &'static str> {
+    fn voice_asset(app: &mut App, url: &str, token: Option<&[u8]>, limit: usize) -> Result<Vec<u8>, &'static str> {
         let mut wav = Vec::new();
         let mut total = None;
         loop {
             let start = wav.len();
             let end = start.saturating_add(32 * 1024 - 1).min(total.unwrap_or(limit).saturating_sub(1));
             let mut chunk = [0u8; 32 * 1024 + 1024];
-            let reply = sex_app::net::fetch_range(&mut app.window, url.as_bytes(), start as u64, end as u64, &mut chunk)
+            let reply = sex_app::net::fetch_range_with(&mut app.window, url.as_bytes(), start as u64, end as u64, token, &mut chunk)
                 .map_err(|_| "Could not fetch voice output; use Retry Voice")?;
+            if reply.status == 401 { return Err(VOICE_NEEDS_TOKEN); }
             if reply.status != 206 { return Err("Voice worker did not return a byte range"); }
             let (from, to, full) = reply.header(&chunk, b"Content-Range").and_then(content_range)
                 .ok_or("Voice output missing Content-Range")?;
@@ -264,8 +274,9 @@ mod guest {
         let n = sex_voice::encode(VoiceMessage::GetStatus { job_id: job.id }, &mut request).map_err(|_| "Invalid voice status request")?;
         let url = voice_url(&job.endpoint, "/v1/frame")?;
         let mut response = [0u8; sex_voice::MAX_FRAME + 1024];
-        let reply = sex_app::net::post(&mut app.window, url.as_bytes(), &request[..n], &mut response)
+        let reply = sex_app::net::post_with(&mut app.window, url.as_bytes(), &request[..n], job.token.as_deref(), &mut response)
             .map_err(|_| "Voice worker unavailable; use Retry Voice")?;
+        if reply.status == 401 { return Err(VOICE_NEEDS_TOKEN); }
         if reply.status != 200 { return Err("Voice worker rejected status request"); }
         match sex_voice::decode(&response[reply.body..reply.end]).map_err(|_| "Invalid voice status response")? {
             VoiceMessage::Status { job_id, data } if job_id == job.id => match data.state {
@@ -283,7 +294,7 @@ mod guest {
                     .and_then(|n| n.checked_add(65_536)).filter(|n| *n <= 24 * 1024 * 1024)
                     .ok_or("Voice output exceeds 24 MiB import limit")?;
                 let url = voice_url(&job.endpoint, &format!("/v1/assets/{}", data.asset_id))?;
-                let wav = voice_asset(app, &url, size)?;
+                let wav = voice_asset(app, &url, job.token.as_deref(), size)?;
                 let (pcm, provenance) = moan::voice::import_result(job.id, &data, &wav)?;
                 studio.session.add_generated(pcm, provenance)?;
                 studio.refresh(&mut app.ui);
@@ -561,7 +572,7 @@ mod guest {
                         }
                         Some(Action::CancelVoice) => {
                             if let Some(job) = voice_job.take() {
-                                match voice_request(&mut app, &job.endpoint, VoiceMessage::Cancel { job_id: job.id }) {
+                                match voice_request(&mut app, &job.endpoint, job.token.as_deref(), VoiceMessage::Cancel { job_id: job.id }) {
                                     Ok(VoiceMessage::Status { job_id, data }) if job_id == job.id && data.state == JobState::Cancelled =>
                                         { sex_pdx::serial_record!("[moan.voice.cancelled] job={}", job.id); studio.message(&mut app.ui, "Voice cancelled; Retry Voice to resubmit"); },
                                     _ => studio.message(&mut app.ui, "Voice cancel not confirmed; retry or check worker"),
@@ -885,7 +896,7 @@ mod guest {
                         }
                         Some(Action::Quit) => {
                             if let Some(job) = voice_job.take() {
-                                let _ = voice_request(&mut app, &job.endpoint, VoiceMessage::Cancel { job_id: job.id });
+                                let _ = voice_request(&mut app, &job.endpoint, job.token.as_deref(), VoiceMessage::Cancel { job_id: job.id });
                             }
                             if plugin.busy() && !plugin.retired() {
                                 plugin.cancel();

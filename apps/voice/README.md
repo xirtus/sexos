@@ -12,6 +12,10 @@ voice filenames through `MOSS_VOICE_MAP`, such as `{"8":"voice.wav"}`. ID 0
 requests direct synthesis. A bare `run voice` can open the window, but its
 network request is refused because Shell did not grant that run the network.
 
+If the bridge was started with `MOSS_VOICE_TOKEN` (required off loopback), put
+the same token in `/data/voice/voice.token`; Voice sends it as
+`Authorization: Bearer TOKEN` on every frame and asset request.
+
 Type up to 1024 ASCII bytes. Ctrl+G submits one job, Ctrl+C cancels a pending
 job, and F11 closes the window. Each completed take is fetched as 32 KiB byte
 ranges, capped at 64 MiB, checked against the result's SHA-256, and saved by
