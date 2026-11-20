@@ -66,6 +66,8 @@ impl Peaks {
 pub struct Library {
     pub thumbs: BTreeMap<u32, Vec<Thumb>>,
     pub peaks: BTreeMap<u32, Peaks>,
+    /// RMS loudness for placing cut edges between words (20 ms buckets).
+    pub levels: BTreeMap<u32, sex_splice::edges::Levels>,
 }
 
 impl Library {
