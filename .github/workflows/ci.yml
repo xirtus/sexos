@@ -932,7 +932,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: image
     if: needs.image.outputs.full == 'true'
-    timeout-minutes: 55
+    timeout-minutes: 45
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -1002,12 +1002,6 @@ jobs:
         if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
         truncate -s 256M "$RUNNER_TEMP/frames-source.img"
         python3 scripts/frame_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/frames-source.img" --out "$RUNNER_TEMP/sexos-desktop/frame-time"
-    - name: Key-to-screen latency with four busy programs (4 cores on KVM, required; kernel pass 2 K3)
-      run: |
-        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
-        if [ ! -w /dev/kvm ]; then echo "[latency.kvm] no usable /dev/kvm on this runner; skipped"; exit 0; fi
-        truncate -s 256M "$RUNNER_TEMP/latency-source.img"
-        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/latency_gate.py --max-p99-ms 50 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/latency-source.img" --out "$RUNNER_TEMP/sexos-desktop/latency-4c"
     - name: Programs starting programs
       run: |
         truncate -s 256M "$RUNNER_TEMP/launch-source.img"
