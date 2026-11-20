@@ -32,7 +32,7 @@ def main():
   for k in ('run bench read-large' if a.large_read else 'run bench'):q.key('spc' if k==' ' else 'minus' if k=='-' else k);time.sleep(.05)
   q.key('ret')
   if a.large_read:
-   m=g['wait'](r'\[bench\.large\.(done|fail)\][^\n]*\n',s,900);assert m[1]=='done',m[0]
+   m=g['wait'](r'\[bench\.large\.(done|fail)\][^\n]*\n',s,900);assert m[1]=='done',(m[0],re.findall(r'\[bench\.large\.[^\r\n]*',t()[s:]))
    assert re.search(r'\[bench.large.baseline\] requests=0 device_calls=0 device_bytes=0\r?\n',t()[s:])
    fields=('pass','bytes','requests','device_calls','device_bytes','read_cycles','elapsed_ticks')
    rows=[dict(zip(fields,map(int,v))) for v in re.findall(r'\[bench.large.read\] pass=(\d+) bytes=(\d+) requests=(\d+) device_calls=(\d+) device_bytes=(\d+) read_cycles=(\d+) elapsed_ticks=(\d+) verified=1\r?\n',t()[s:])]
