@@ -13,7 +13,7 @@ Spindle `hw` report (runbook: `X17_BARE_METAL_RUNBOOK_2026_11_18.md`) confirms t
 | Bluetooth (same card, USB) | 8087:0032 (verify) | "Expand real-PC hardware support" | sex-bt host stack; real controller pending |
 | Ethernet, Killer E3100G (RTL8125) | 10ec:8125 | "Expand real-PC hardware support" | |
 | Intel UHD iGPU (Xe, TGL GT1) | 8086:9a60 | "Expand real-PC hardware support" | GOP framebuffer today |
-| NVIDIA RTX 3070 Laptop (GA104) | 10de:249d / 24dd | "Bring up the NVIDIA RTX 3070" | Boot power-off (D3cold) merged; GSP bring-up next |
+| NVIDIA RTX 3070 Laptop (GA104) | 10de:249d / 24dd | "Bring up the NVIDIA RTX 3070" | GSP-RM boot path merged (PR #449): Limine entry "SexOS with NVIDIA GPU"; capture `[nvidia.*]` lines on first boot for that thread |
 | eDP panel (FHD 165/360 Hz or UHD 120 Hz) and MUX | EDID | this thread | GOP mode only; see "Panel and MUX" |
 | HDMI 2.1, mini-DP, USB-C DP (on the dGPU) | | "Bring up the NVIDIA RTX 3070" (N5) | |
 | HDA controller + Realtek ALC3281 codec | 8086:43c8, 10ec:0289 family (verify) | "Expand real-PC hardware support" | Generic HDA works; Dell 1028:xxxx pin/EAPD quirks there |
