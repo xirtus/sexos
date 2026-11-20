@@ -10,17 +10,29 @@ use sex_pdx::fs as w;
 use sex_pdx::memory_region::{QUERY_VIEW, READ};
 use sexfs::Fs;
 
-/// SHA-256 of the boot image this run came with, once per Files run: it never changes.
-static mut IMAGE: Option<(u64, [u8; 32])> = None;
-fn image() -> Option<(u64, [u8; 32])> {
-    if let Some(known) = unsafe { IMAGE } { return Some(known); }
+/// The most of the boot image one ABOUT request hashes, so no request holds Files (and
+/// every other program's files) for long.
+const STEP: usize = 1 << 20;
+/// SHA-256 of the boot image this run came with, worked out a step per ABOUT request and
+/// kept once done: the image never changes while Files runs.
+enum Image { Hashing(sha2::Sha256, usize), Done([u8; 32]) }
+static mut IMAGE: Option<Image> = None;
+/// The image's length and its hash, or how many bytes are hashed so far.
+fn image() -> Option<(u64, Result<[u8; 32], u64>)> {
+    use sha2::Digest;
     let info = sex_pdx::memory_region_info(w::BOOT_IMAGE_SLOT).ok()?;
     let view = sex_pdx::memory_region_view(w::BOOT_IMAGE_SLOT, 0, info.length, QUERY_VIEW | READ).ok()?;
     let bytes = unsafe { core::slice::from_raw_parts(view.virtual_address as *const u8, view.length as usize) };
-    let len = (bytes.len() & !(sex_disk::SECTOR - 1)) as u64;
-    let hash = sex_disk::update::hash(&mut sex_disk::RoDev(&bytes[..len as usize]), 0, len).ok()?;
-    unsafe { IMAGE = Some((len, hash)); }
-    Some((len, hash))
+    let bytes = &bytes[..bytes.len() & !(sex_disk::SECTOR - 1)];
+    let state = unsafe { &mut *core::ptr::addr_of_mut!(IMAGE) };
+    let image = state.get_or_insert_with(|| Image::Hashing(sha2::Sha256::new(), 0));
+    if let Image::Hashing(h, at) = image {
+        let end = (*at + STEP).min(bytes.len());
+        h.update(&bytes[*at..end]);
+        *at = end;
+        if end == bytes.len() { *image = Image::Done(core::mem::take(h).finalize().into()); }
+    }
+    Some((bytes.len() as u64, match image { Image::Done(hash) => Ok(*hash), Image::Hashing(_, at) => Err(*at as u64) }))
 }
 
 /// The lines for `topic` into `out`; the reply's status and length.
@@ -47,10 +59,14 @@ pub fn answer(mut fs: Option<&mut Fs<'static, Disk>>, topic: u64, out: &mut [u8]
         }
         f::ABOUT => {
             crate::updater::facts(&mut t);
-            if let Some((len, hash)) = image() {
-                t.push_str(&format!("image_bytes={}\nimage_sha256=", len));
-                for b in hash { t.push_str(&format!("{:02x}", b)); }
-                t.push('\n');
+            match image() {
+                Some((len, Ok(hash))) => {
+                    t.push_str(&format!("image_bytes={}\nimage=", len));
+                    for b in hash { t.push_str(&format!("{:02x}", b)); }
+                    t.push('\n');
+                }
+                Some((len, Err(at))) => t.push_str(&format!("image_bytes={}\nimage=hashing {}%\n", len, at * 100 / len.max(1))),
+                None => {}
             }
         }
         _ => return (w::INVALID, 0),

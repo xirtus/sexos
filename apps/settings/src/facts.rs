@@ -124,12 +124,20 @@ pub fn about(data: &[u8], out: &mut [u8]) -> usize {
         (Some(s), Some(v)) => { w.put("  System version: "); w.num(v); w.put(", slot "); w.put(if s == b"a" { "A" } else { "B" }); w.put("\n"); }
         _ => w.put("  System version: Files did not say.\n"),
     }
-    match (field(data, "image_sha256"), field(data, "image_bytes").and_then(num)) {
-        (Some(h), Some(n)) => { w.put("  Boot image: "); w.size(n); w.put(", SHA-256 "); w.put(text(h)); w.put("\n"); }
+    match (field(data, "image"), field(data, "image_bytes").and_then(num)) {
+        (Some(h), Some(n)) => {
+            w.put("  Boot image: "); w.size(n);
+            match h.strip_prefix(b"hashing ") {
+                Some(done) => { w.put(", SHA-256 being worked out ("); w.put(text(done)); w.put(")\n"); }
+                None => { w.put(", SHA-256 "); w.put(text(h)); w.put("\n"); }
+            }
+        }
         _ => w.put("  Boot image hash: Files did not say.\n"),
     }
     w.at
 }
+/// Files is still hashing the boot image: ask again soon.
+pub fn hashing(data: &[u8]) -> bool { field(data, "image").is_some_and(|v| v.starts_with(b"hashing")) }
 
 #[cfg(test)]
 mod tests {
@@ -164,8 +172,12 @@ mod tests {
 
     #[test]
     fn about_has_the_version_and_image_hash() {
-        let t = show(about, "slot=a\nversion=3\nimage_bytes=33554432\nimage_sha256=ab12\n");
-        assert!(t.contains("System version: 3, slot A\n") && t.contains("Boot image: 32 MiB, SHA-256 ab12\n"), "{t}");
+        let done = "slot=a\nversion=3\nimage_bytes=33554432\nimage=ab12\n";
+        let t = show(about, done);
+        assert!(t.contains("System version: 3, slot A\n") && t.contains("Boot image: 32 MiB, SHA-256 ab12\n") && !hashing(done.as_bytes()), "{t}");
+        let part = "slot=none\nimage_bytes=33554432\nimage=hashing 37%\n";
+        let t = show(about, part);
+        assert!(t.contains("version: none") && t.contains("Boot image: 32 MiB, SHA-256 being worked out (37%)\n") && hashing(part.as_bytes()), "{t}");
         let t = show(about, "");
         assert!(t.contains("Files did not say.\n  Boot image hash: Files did not say."), "{t}");
         let mut small = [0u8; 10];

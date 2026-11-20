@@ -8,7 +8,8 @@ up from Files and Super+Esc then opens the overview instead of locking. Notifica
 Right on Abacus hides its notifications (key 38); `run abacus` makes the Shell ask Files
 which program the row runs, and Files names Abacus (program 3), hidden. About: the page
 shows the kernel's numbers (cores, domains) and, from Files (`sex_pdx::facts`, Tatami
-only), the boot image's SHA-256. Updates and Storage, the pages after Privacy, show
+only), the boot image's SHA-256, hashed a step per request. Updates and Storage, the
+pages after Privacy, show
 Files' slot state and the SexOS filesystem's size and free blocks. The second start on
 the same disk reads the settings back, and the Shell starts Mesh by itself, once."""
 import argparse,re,shutil,time
@@ -50,7 +51,11 @@ def main():
   s=len(t());keys('pgup','pgup','pgup','pgup')
   m=g['wait'](r'\[settings\.about\] cores=(\d+) domains=(\d+) limit_pages=(\d+)',s,30)
   assert int(m[1])>=1 and int(m[2])>=5,m[0];out['about']=m[0]
-  m=g['wait'](r'\[settings\.facts\] page=setup status=0 slot=(\S+) version=\S+ filesystem=- health=- image=([0-9a-f]{64})\n',s,90);out['image']=m[2]
+  # Files hashes the boot image 1 MiB per request: Tatami asks again while it says
+  # `hashing N%`, and the hash fills in. Re-checked until it does.
+  g['wait'](r'\[settings\.facts\] page=setup status=0 slot=\S+ version=\S+ filesystem=- health=- image=(hashing \d+%|[0-9a-f]{64})\n',s,30)
+  m=g['wait'](r'\[settings\.facts\] page=setup status=0 slot=(\S+) version=\S+ filesystem=- health=- image=([0-9a-f]{64})\n',s,300);out['image']=m[2]
+  out['about_requests']=t()[s:].count('page=setup status=0')
   # Updates and Storage: six pages on from About, after Privacy. Files answers Tatami alone.
   s=len(t());keys('pgdn','pgdn','pgdn','pgdn','pgdn','pgdn')
   m=g['wait'](r'\[settings\.facts\] page=updates status=0 slot=(none|a|b) ',s,30);out['slot']=m[1]

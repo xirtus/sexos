@@ -444,8 +444,8 @@ request, `sex_pdx::facts` (kind 36, topic in `offset`: UPDATES, STORAGE, ABOUT),
 only to the system's `tatami` run and changing nothing: the A/B slot, versions and trial
 from the boot menu (`updater.rs`), the release key, package updates the kept catalogs
 offer, the disk layout, sexfs size and free blocks, whether `/home` is encrypted, the
-volumes under `/media`, and the SHA-256 of the boot image the run came with (hashed once
-per Files run). Not done: rolling back to the other slot from Tatami (`updater.rs` has no
+volumes under `/media`, and the SHA-256 of the boot image the run came with (1 MiB per
+request, `image=hashing N%` until done, then kept). Not done: rolling back to the other slot from Tatami (`updater.rs` has no
 such step; the boot menu's "SexOS previous system" starts it once), an update channel
 (releases are signed files given to Spindle's `update`), package rollback (Spindle's,
 the person's answer), and disk health: no driver reads the NVMe SMART log yet (Q15/R5),

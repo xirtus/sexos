@@ -68,8 +68,9 @@ fn change_grant(window: &mut Window, m: &mut Model, row: &grants::Row, allow: bo
 }
 
 /// The Updates, Storage or About page's lines: Files' facts (`sex_pdx::facts`, answered
-/// to this program alone), and on About the kernel's numbers first.
-fn load_info(window: &mut Window, m: &mut Model, page: &str) {
+/// to this program alone), and on About the kernel's numbers first. True while Files is
+/// still hashing the boot image, a step per request: ask again soon.
+fn load_info(window: &mut Window, m: &mut Model, page: &str) -> bool {
     use sex_pdx::facts as f;
     let (topic, render): (u64, fn(&[u8], &mut [u8]) -> usize) = match page {
         "updates" => (f::UPDATES, facts::updates),
@@ -84,7 +85,8 @@ fn load_info(window: &mut Window, m: &mut Model, page: &str) {
     n += render(data, &mut text[n..]);
     m.set_info(&text[..n]);
     let word = |k| facts::field(data, k).and_then(|v| core::str::from_utf8(v).ok()).unwrap_or("-");
-    sex_pdx::serial_record!("[settings.facts] page={} status={} slot={} version={} filesystem={} health={} image={}", page, got.err().unwrap_or(0), word("slot"), word("version"), word("filesystem"), word("health"), word("image_sha256"));
+    sex_pdx::serial_record!("[settings.facts] page={} status={} slot={} version={} filesystem={} health={} image={}", page, got.err().unwrap_or(0), word("slot"), word("version"), word("filesystem"), word("health"), word("image"));
+    facts::hashing(data)
 }
 
 /// The About page's lines from the kernel's numbers (syscall 87); returns their length.
@@ -155,10 +157,17 @@ pub extern "C" fn _start() -> ! {
     let (values, mut generation) = load();
     let mut m = Model::new(values);
     let mut rows = [grants::Row::EMPTY; grants::ROWS_MAX];
+    let mut hashing = false;
     sex_pdx::serial_record!("[settings.open] generation={}", generation);
     show(&mut window, &m);
     loop {
-        let Some(event) = window.next_within(1000) else {
+        let Some(event) = window.next_within(if hashing { 100 } else { 1000 }) else {
+            // About is open and Files has more of the boot image to hash.
+            if let Some(info) = m.info_page().filter(|_| hashing) {
+                hashing = load_info(&mut window, &mut m, info);
+                show(&mut window, &m);
+                continue;
+            }
             // Someone else changed a setting (a Shell key, say): show it.
             if settings::generation().is_ok_and(|g| g != generation) {
                 let (values, g) = load();
@@ -207,7 +216,7 @@ pub extern "C" fn _start() -> ! {
             }
         } };
         if m.page != page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
-        if let Some(info) = m.info_page().filter(|_| m.page != page) { load_info(&mut window, &mut m, info); }
+        if m.page != page { hashing = m.info_page().is_some_and(|info| load_info(&mut window, &mut m, info)); }
         if let Change::Password(mut typed, n) = change {
             let result = settings::password(sex_config::secret::SET, &typed[..n]);
             for b in typed.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }

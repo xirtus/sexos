@@ -18,8 +18,10 @@
 //!   (the encrypted home, XTS), one `volume=FORMAT SECTORS FREE SOURCE RO NAME` per volume
 //!   under `/media` (`FREE` in 4 KiB blocks, `-` if the volume did not say; `SOURCE`:
 //!   image, usb, disk), and `health=none` while no driver reads the disk's health log.
-//! - [`ABOUT`]: `slot=` and `version=` as above, `image_bytes=N` and `image_sha256=HEX` of
-//!   the boot image the running system came with (the hash a release index names).
+//! - [`ABOUT`]: `slot=` and `version=` as above, `image_bytes=N`, and `image=HEX`: the
+//!   SHA-256 of the boot image the running system came with (the hash a release index
+//!   names). Files hashes at most 1 MiB of it per request and answers `image=hashing N%`
+//!   until it is done, so the asker asks again; the hash is kept once known.
 
 pub const KIND: u8 = 36;
 pub const UPDATES: u64 = 1;
