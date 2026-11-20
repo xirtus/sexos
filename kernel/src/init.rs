@@ -231,6 +231,19 @@ pub fn init() {
         }
     }
 
+    // sexgpu-nv, the NVIDIA GPU service (GSP-RM boot), in the Core organ beside the
+    // display it will feed. Only the "SexOS with NVIDIA GPU" entry lists it; without it
+    // the GPU is powered off as before and Display holds its identity.
+    let mut sexgpu_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with(sex_pdx::nvidia_gpu::SERVICE_MODULE)) {
+        let id=sex_pdx::nvidia_gpu::GPU_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::nvidia_gpu::GPU_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_GPU_IDENTITY");sexgpu_id=created;
+                serial_println!("[kernel.spawn.sexgpu-nv] id={} key={} organ=core",created,sex_pdx::nvidia_gpu::GPU_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.sexgpu-nv] failed={}",e);}
+        }
+    }
+
     // Grant Phase 25 well-known capabilities
     serial_println!("[bootgraph.phase25.begin]");
     // Static BOOT_DAG return edges for authenticated display-ready messages.
@@ -457,12 +470,12 @@ pub fn init() {
     }
 
     // Discrete GPUs no driver owns yet are powered off before leases are made.
-    crate::hal::dgpu::init();
+    crate::hal::dgpu::init(sexgpu_id != 0);
 
     // Hardware discovery and driver lease routing.
     // Includes XHCI discovery + lease to sexusb (slot SLOT_USB_HOST) when present.
     if sexdrive_id != 0 && sexdisp_id != 0 {
-        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id, sexinput_id);
+        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id, sexinput_id, sexgpu_id);
     }
 
     // SilkBar delivery path: grant display capability independently of silk-shell.
@@ -1169,6 +1182,7 @@ pub fn init() {
                     50 => "sexacpi",
                     51 => "denim",
                     52 => "cufflinks",
+                    53 => "sexgpu-nv",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };

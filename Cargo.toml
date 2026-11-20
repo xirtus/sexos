@@ -21,6 +21,7 @@ members = [
     "servers/sexnet",
     "servers/sext",
     "servers/cufflinks",
+    "servers/sexgpu-nv",
     "apps/sexdrive",
     "apps/kaleidoscope",
     "apps/hello",

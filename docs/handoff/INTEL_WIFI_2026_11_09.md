@@ -117,7 +117,7 @@ What the x17 R1 should print at its first boot, in order:
 [hw.device] 3b:00.0 8086:2725 class=028000 Intel Wi-Fi 6E AX210 / Killer AX1675x service=sexnet support=in_progress
 [devmgr.lease] 3b:00.0 8086:2725 service=sexnet pd=… slot=22 kind=Wifi nth=1
 [boot.class.command] … kind=Wifi … dma_region=0x4400 dma_bytes=4194304
-[boot.wifi.firmware.region] pd=… bytes=13795328
+[boot.firmware.region] pd=… bytes=13795328 module=wifi.pack
 [wifi.chip] vendor=0x8086 device=0x2725 subsystem=…:1674 hw_rev=… rf_id=… bar_bytes=…
 [wifi.chip.known] name="Killer Wi-Fi 6E AX1675x (AX210)" family=Ax210 firmware=iwlwifi-ty-a0-gf-a0-77.ucode integrated=0
 [wifi.firmware] file=iwlwifi-ty-a0-gf-a0-77.ucode bytes=1594276 version=… api=77 …

@@ -30,6 +30,8 @@ PINS = (
 
     ('timed', 'kernel/src/init.rs', 'fn-v1:fb2da8b1ece8812feee1502fa72b73deb6248639042d5ddd6e42422db14ed884'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
+    ('timed', 'kernel/src/init.rs', 'fn-v1:5424d8c0a824856443014bb081b57f3177c07d452e9f2558827a645a3fd1299e'),  # optional sexgpu-nv spawn (domain 53) + NVIDIA keep/lease arguments in init(), no wait change, 2026-11-19
+
     ('timed', 'kernel/src/init.rs', '784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64'),
 
     ('timed', 'kernel/src/init.rs', 'a977d60363a05adb60083b90bc6d898913c4efcd81a80209d0b9a4946340e334'),
