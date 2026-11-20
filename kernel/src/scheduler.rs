@@ -914,6 +914,22 @@ fn finish_last_runnable_proof(current: *mut Task) {
 #[cfg(not(scheduler_wake_proof))]
 fn finish_last_runnable_proof(_current: *mut Task) {}
 
+static LAST_DOMAIN: [AtomicU64; task_ownership::MAX_CORES as usize] = [const { AtomicU64::new(0) }; task_ownership::MAX_CORES as usize];
+/// Whether a domain runs code the system does not vouch for: a program row, a
+/// program record or the browser (web content, JIT).
+fn untrusted(pd: u64) -> bool {
+    use sex_pdx::app_catalog::{by_target, App};
+    crate::program_records::is_record(pd)
+        || u32::try_from(pd).ok().and_then(by_target).is_some_and(|row| matches!(row.app, App::Program | App::Browser))
+}
+/// Spectre v2 between domains (audit S14): eIBRS/AutoIBRS keep user branch training
+/// out of the kernel, not out of the next user domain. When a core leaves an
+/// untrusted domain for a different one, flush branch predictions first.
+fn branch_barrier(core: u32, next: u64) {
+    let last = LAST_DOMAIN[core as usize].swap(next, Ordering::Relaxed);
+    if last != next && last != 0 && untrusted(last) { crate::hal::x86_64::ibpb(); }
+}
+
 /// Called only by switch_to after its RSP pivot, before user PKRU restoration.
 /// No context-to-Task cast is valid: Task's Rust layout is intentionally opaque.
 #[no_mangle]
@@ -935,6 +951,8 @@ pub extern "C" fn scheduler_finish_switch() {
             loaded.store(next, Ordering::Release);
         }
     }
+    let next = sched.current_task.load(Ordering::Acquire);
+    if !next.is_null() { branch_barrier(core, unsafe { (*next).context.pd_id }); }
     if old.is_null() { return; }
     unsafe {
         let rsp: u64;
