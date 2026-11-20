@@ -12,6 +12,16 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/scheduler.rs', '59a7fe67bfa8a5a0d230296bd391d5261c6fbaeba42c3c0c05bcd7db6f19265e'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:395d7827fe51750aaa43f1cba2da266fc407f19ab9ac6dcad4e5f40e416121fe'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:2b52c1f01b3c0987f571d39433d87d3dfb7fde6689853aa748d5af2fb227e02d'),  # kernel fault report: task, custody, pending_outgoing (WS2 soak fault), 2026-11-20
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:eacc16fd01fce7c181e70f2178153c355c3793337e24f7acd9c58afb90415611'),  # rearm purges stale handoff slots + resets IPC v2 state (WS2 soak fault), 2026-11-19
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:96213afb9ba13c65c30b8892bda0d19b66aaf74aeedfcfeede56e4187b00f438'),  # kernel page fault prints the words around RSP (WS2 soak fault), 2026-11-19
+
     ('timed', 'kernel/src/program_records.rs', 'fn-v1:50abfa8222c49ebe84edeabc79324366bf1e5519a09c19d63542f664c6215981'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
     ('timed', 'kernel/src/program_records.rs', '37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8'),
