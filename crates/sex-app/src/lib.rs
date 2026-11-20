@@ -2371,24 +2371,37 @@ pub mod net {
     /// Fetches `url` into `out` and keeps the headers, so a caller can follow redirects
     /// and read the content type.
     pub fn fetch(window: &mut Window, url: &[u8], out: &mut [u8]) -> Result<Reply, Error> {
-        exchange(window, url, b"GET", &[], None, out)
+        exchange(window, url, b"GET", &[], None, None, out)
     }
     /// Fetches an inclusive byte range. Inspect status 206 and Content-Range.
     pub fn fetch_range(window: &mut Window, url: &[u8], start: u64, end: u64, out: &mut [u8]) -> Result<Reply, Error> {
+        fetch_range_with(window, url, start, end, None, out)
+    }
+    /// [`fetch_range`] with `Authorization: Bearer TOKEN`, for workers that need it.
+    pub fn fetch_range_with(window: &mut Window, url: &[u8], start: u64, end: u64, bearer: Option<&[u8]>, out: &mut [u8]) -> Result<Reply, Error> {
         if end < start || end - start >= 32 * 1024 { return Err(Error::Address); }
-        exchange(window, url, b"GET", &[], Some((start, end)), out)
+        exchange(window, url, b"GET", &[], Some((start, end)), bearer, out)
     }
     /// Sends a bounded binary request through this run's optional network grant.
     pub fn post(window: &mut Window, url: &[u8], body: &[u8], out: &mut [u8]) -> Result<Reply, Error> {
+        post_with(window, url, body, None, out)
+    }
+    /// [`post`] with `Authorization: Bearer TOKEN`, for workers that need it.
+    pub fn post_with(window: &mut Window, url: &[u8], body: &[u8], bearer: Option<&[u8]>, out: &mut [u8]) -> Result<Reply, Error> {
         if body.len() > 32 * 1024 { return Err(Error::Address); }
-        exchange(window, url, b"POST", body, None, out)
+        exchange(window, url, b"POST", body, None, bearer, out)
+    }
+    /// A bearer token is 1..=256 visible ASCII bytes: nothing that could end the header.
+    pub fn bearer_ok(token: &[u8]) -> bool {
+        (1..=256).contains(&token.len()) && token.iter().all(|b| (0x21..=0x7e).contains(b))
     }
     fn decimal(mut value: usize, out: &mut [u8; 20]) -> &[u8] {
         let mut at = out.len();
         loop { at -= 1; out[at] = b'0' + (value % 10) as u8; value /= 10; if value == 0 { break; } }
         &out[at..]
     }
-    fn exchange(window: &mut Window, url: &[u8], method: &[u8], body: &[u8], range: Option<(u64, u64)>, out: &mut [u8]) -> Result<Reply, Error> {
+    fn exchange(window: &mut Window, url: &[u8], method: &[u8], body: &[u8], range: Option<(u64, u64)>, bearer: Option<&[u8]>, out: &mut [u8]) -> Result<Reply, Error> {
+        if bearer.is_some_and(|t| !bearer_ok(t)) { return Err(Error::Address); }
         let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) { (Some(r), _) => (r, true), (_, Some(r)) => (r, false), _ => return Err(Error::Address) };
         let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
         let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
@@ -2408,8 +2421,12 @@ pub mod net {
             Some((start, end)) => (b"Range: bytes=", decimal(start as usize, &mut range_start_buf), b"-", decimal(end as usize, &mut range_end_buf), b"\r\n"),
             None => (b"", b"", b"", b"", b""),
         };
-        let parts: [&[u8]; 14] = [method, b" ", path, b" HTTP/1.0\r\nHost: ", host,
-            b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\nContent-Type: application/octet-stream\r\nContent-Length: ", body_len, b"\r\n", range_head, range_start, range_dash, range_end, range_tail, b"\r\n"];
+        let (auth_head, auth_token, auth_tail): (&[u8], &[u8], &[u8]) = match bearer {
+            Some(token) => (b"Authorization: Bearer ", token, b"\r\n"),
+            None => (b"", b"", b""),
+        };
+        let parts: [&[u8]; 17] = [method, b" ", path, b" HTTP/1.0\r\nHost: ", host,
+            b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\nContent-Type: application/octet-stream\r\nContent-Length: ", body_len, b"\r\n", range_head, range_start, range_dash, range_end, range_tail, auth_head, auth_token, auth_tail, b"\r\n"];
         let mut n = 0;
         for p in parts { if n + p.len() > request.len() { return Err(Error::Address); } request[n..n + p.len()].copy_from_slice(p); n += p.len(); }
         let host = core::str::from_utf8(host).map_err(|_| Error::Address)?;

@@ -4,7 +4,7 @@
 //! [`Tab`]s, swapped in when shown. A tab in the background keeps its state and its
 //! scripts' heap, but its timers and media pause until it shows again.
 
-use super::{clock, Browser, Doc, Frame};
+use super::{clock, profile::Jarbox, Browser, Doc, Frame};
 use alloc::string::String;
 use alloc::vec::Vec;
 use sex_html::layout::Page;
@@ -44,6 +44,9 @@ pub struct Tab {
     pub title: String,
     laid_zoom: u32,
     blocked: u32,
+    jar: alloc::rc::Rc<core::cell::RefCell<sex_fetch::Jar>>,
+    storage: alloc::rc::Rc<core::cell::RefCell<sex_js::storage::WebStorage>>,
+    pub jarbox: Jarbox,
 }
 
 impl Tab {
@@ -58,6 +61,7 @@ impl Tab {
             url: String::new(), history: Vec::new(), forward: Vec::new(), scroll: 0, focus: None, hover_css: false,
             import_map: Vec::new(), script_scroll: 0, view, frames: Vec::new(), images: Vec::new(), svgs: Vec::new(),
             moving: Vec::new(), frames_shown: 0, find: None, find_at: 0, marks: Vec::new(), title: String::new(), laid_zoom: sex_html::style::zoom(), blocked: 0,
+            jar: Default::default(), storage: Default::default(), jarbox: Jarbox::Own,
         }
     }
 }
@@ -79,6 +83,12 @@ impl Browser {
         swap(&mut self.find, &mut t.find); swap(&mut self.find_at, &mut t.find_at); swap(&mut self.marks, &mut t.marks);
         swap(&mut self.laid_zoom, &mut t.laid_zoom);
         swap(&mut self.blocked, &mut t.blocked);
+        swap(&mut self.jar, &mut t.jar); swap(&mut self.storage, &mut t.storage); swap(&mut self.jarbox, &mut t.jarbox);
+    }
+
+    /// The colour under each tab: its box's.
+    pub(super) fn tab_colours(&self) -> Vec<u32> {
+        (0..self.tabs.len()).map(|i| if i == self.active { self.jarbox } else { self.tabs[i].jarbox }.colour()).collect()
     }
 
     /// The label of each tab for the strip.
@@ -122,15 +132,17 @@ impl Browser {
         self.draw();
     }
 
-    /// Opens a new tab after the shown one, showing `url` (or a blank page with the
-    /// address bar ready for typing).
-    pub(super) fn new_tab(&mut self, url: Option<&str>) {
+    /// Opens a new tab after the shown one, its cookies and storage from `jarbox`,
+    /// showing `url` (or a blank page with the address bar ready for typing).
+    pub(super) fn new_tab(&mut self, url: Option<&str>, jarbox: Jarbox) {
         if self.tabs.len() >= MAX_TABS || self.in_frame.is_some() { return; }
         let at = self.active + 1;
-        let blank = Tab::blank(self);
+        let mut blank = Tab::blank(self);
+        (blank.jar, blank.storage) = self.profile.store(&mut self.window, jarbox, super::wall());
+        blank.jarbox = jarbox;
         self.tabs.insert(at, blank);
         self.show_tab(at);
-        sex_pdx::serial_record!("[web.tab.opened] index={} count={}", at, self.tabs.len());
+        sex_pdx::serial_record!("[web.tab.opened] index={} count={} box={}", at, self.tabs.len(), jarbox.tag());
         match url {
             Some(u) => self.open(u, false),
             None => { self.open("about:blank", false); self.editing = Some(String::new()); self.draw(); }
@@ -153,6 +165,8 @@ impl Browser {
         self.show_tab(next);
         self.tabs.remove(going);
         if self.active > going { self.active -= 1; }
+        // The last private tab took the private box's cookies and storage with it.
+        if self.jarbox != Jarbox::Private && !self.tabs.iter().enumerate().any(|(i, t)| i != self.active && t.jarbox == Jarbox::Private) { self.profile.forget_private(); }
         sex_pdx::serial_record!("[web.tab.closed] index={} count={} shown={}", going, self.tabs.len(), self.active);
         self.draw();
     }

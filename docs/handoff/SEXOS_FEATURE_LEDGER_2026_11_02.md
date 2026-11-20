@@ -4421,7 +4421,8 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   ES module when `type: module`; MV2 `scripts` or a background page's `<script src>`)
   runs in a script realm of its own, started with the browser and on install, stopped
   when turned off or removed. It hears `runtime.onInstalled` / `onStartup`.
-- **`chrome.*`** (`crates/sex-js/src/extensions.js`, op 35 `EXTENSION`): `runtime`
+- **`chrome.*`** (`crates/sex-js/src/extensions.js`, op `EXTENSION`, 39 since the
+  master merge of 2026-11-19): `runtime`
   (sendMessage/onMessage both ways with async `sendResponse`, getURL, getManifest,
   lastError), `tabs` (query/get/sendMessage/create/update), `storage.local/sync/session`
   with `onChanged` across realms (kept with the profile's web storage under origin
@@ -4443,6 +4444,22 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   scripts, and with Shields down blocks 7 trackers on the Shields test page.
 - **Not yet:** isolated worlds, popups/options pages as extension pages, `webRequest`,
   `runtime.connect` ports, content scripts in frames hearing messages.
+## Kaleidoscope extensions, slice N7c: extension pages (2026-11-20)
+- **What:** an extension's own pages (its popup and options page, or any
+  `kaleidoscope-extension://ID/PATH.html`) open in the tab while it is on. Their
+  scripts, modules and style sheets load from the extension, the page realm gets the
+  whole `chrome.*` API (as the background has), and content scripts don't run there.
+  about:extensions links each extension's Popup and Options page. An extension page
+  speaks only for its own extension.
+- **Tests:** the extensions gate opens the sample's options page, which asks the service
+  worker and reads `chrome.storage` (reply `{"ok":true,"host":"options","installs":1,...}`)
+  and gets its style sheet. The uBOL gate (not in CI) now also fetches uBOL's popup and
+  dashboard: the popup renders ("not a website" for an extension tab, as in Chrome); the
+  dashboard's scripts need `:scope` and `:has()` selectors, which sex-html does not parse
+  yet (selector code is Codex's).
+- **Gate note:** the uBOL gate needs a 768 MiB guest (`SEXOS_GATE_MEMORY`); at 512 MiB the
+  shell ends the browser for memory, and a 1 GiB guest hit a kernel page fault at rip 0
+  in the browser's task (reported, not this slice's).
 ## J5 D2: Denim compressed memory, page out and back (2026-11-14)
 - New syscall 88 `SYS_DENIM` (ABI addition, `sex_pdx::denim`), Denim only: SCAN (accessed bits), OUT (heap page leaf becomes a non-present marker naming the row, shootdown, bytes copied to Denim's window, frame freed), IN (fresh frame, leaf restored, parked fault task resumed). Kernel messages OP_FAULT 0x3D1 and OP_RECALL 0x3D2.
 - Page faults on a marker go to Denim instead of the row's pager (`forward_page_fault`). Worker spawn and SEAL/OPEN on a run with pages out return RETRY and recall them; OUT is refused while workers live.
@@ -5371,6 +5388,12 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Silkbar: the launcher button is the lips on the bar's glass instead of the blue square. Wallpaper: the default is now "SexOS" (warm charcoal with the lips at 26% width, centred); the old navy theme gradient is kept as "Midnight". Boot screen: a charcoal header with the lips and the title. Lock screen: charcoal with the lips above "Locked". README and website carry the mark.
 - Verified by `tests/brand.rs`, `tests/desktop_look.rs` (both now run in `scripts/service_custody_host_gate.sh`) and `scripts/desktop_look_gate.py` (Super+B still steps SexOS → Dusk).
 
+## Polyamour: FBX files and a working File Browser (2026-11-19)
+- `crates/sex-3d/src/io/fbx` reads FBX 7.x, binary (32- and 64-bit offsets, zlib arrays) and ASCII, and writes binary FBX 7.4. Import: models with the full FBX transform (rotation order, pre/post rotation, pivots, offsets, geometric transforms baked), meshes (n-gons, UVs, per-face materials, smoothing by polygon or edge, shading guessed from normals, vertex colours), Phong/Lambert materials mapped to Principled, embedded or external diffuse textures, cameras, lights, `GlobalSettings` axes and units, and skins (LimbNodes become armatures, clusters become vertex groups plus an Armature modifier; both `Transform` conventions accepted). Export: Y-up metres like Blender's exporter, meshes after modifiers (except Armature), materials, embedded PNG textures, cameras, lights, skeletons, skin clusters and a bind pose. Animation is not read or written yet; FBX 6 files are refused with a clear message.
+- `Format::Fbx` joins `sex_3d::io` (extension, sniffing, `import_into`, `export`); `Format::Blend` export now goes through `io::export` too.
+- Polyamour's File > Open, Save As, Import and Export were dead menu entries; they now open a File Browser dialog (`apps/polyamour/src/filebrowser.rs`: folders first, filtered by format, name field, keyboard and double click). Import adds to the scene as one undo step and frames the new objects; Open frames imported scenes. Import/Export menus list FBX, glTF, OBJ, STL, PLY and .blend. Ctrl O and Shift Ctrl S added. `--browse` shows the dialog for screenshots.
+- Verified by host tests (FBX round trips of a scene and a skinned mesh, ASCII Z-up centimetres with pivots, the node-tree reader/writer, File Browser keys), import of five real FBX files (Blender 2.7x binary with a skinned mesh, ASCII 7.5, Blender global settings, a 19-mesh model), and assimp 5.3 reading the exported files (meshes, camera, light, embedded texture, 2-bone skin).
+- Measured, not shipped: running the render workers on an AVX2 code path (runtime dispatch) changed the Solid viewport and path tracer by 0 to 3%. The viewport's time is in triangle setup (vertex fetch cache misses) and binning, not arithmetic; faster frames need data-layout work, and real GPU drawing needs a SexOS 3D GPU driver (virtio-gpu 3D or Intel Xe), which does not exist yet.
 ## Splicy Studio exports WebM, AV1 MP4 and H.264 MP4 with its own encoders (2026-11-18)
 - Splicy Studio (github.com/xirtus/Splicy) gains the two royalty-free formats Andreas asked for beside H.264 MP4: **WebM** (VP9 profile 0 + Opus) and **MP4 AV1** (AV1 Main 8-bit + Opus). All encoding is pure Rust (craft-libs' VP9, AV1 and Opus encoders, MIT OR Apache-2.0), so it runs on SexOS with no FFmpeg and no hardware encoder. A registered hardware AV1 encoder is still tried first.
 - `filmcraft-export`: `Format::Webm`, `AudioCodec::Opus` (48 kHz, mono or stereo, 5.1 folded to stereo, up to 96 kbit/s a channel), `open_formats.rs` (VP9 and AV1 encoders, Opus encoder with the right pre-skip and tail, WebM writer that interleaves picture and sound in time order with Opus codec delay and seek pre-roll). Opus in MP4 is `Opus` + `dOps` with an edit list over the pre-skip. Both formats are one-pass bitrate controlled (CBR or VBR).
@@ -5405,6 +5428,13 @@ From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, 
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
 
+## L3: native Intel display on Tiger Lake (2026-11-19)
+- On Intel Tiger Lake graphics (the Alienware x17 R1's iGPU), Display takes the panel over from the firmware framebuffer without a modeset: it repoints the firmware's pipe at two buffers of its own and flips between them at vblank. Frames are tear-free and held to the panel's refresh; only changed rows are written and flushed.
+- The pointer is on the hardware cursor plane: moving it writes two registers and redraws no pixels (drawn arrow kept for the magnifier and screen-off).
+- BOOT gives Display the buffers and fills only their GPU page-table (GGTT) entries, so Display cannot point the GPU at other memory; the IOMMU maps them like any DMA pool.
+- Safe fallback: no matching pipe, PSR2, or a flip that never latches leaves or puts back the firmware framebuffer with the last picture.
+- Receipts: `[boot.display.intel_scanout]`, `[display.intel.takeover]`, `[display.intel.flip]`, `[display.intel.cursor]`, `[display.intel.fallback]`, measured `refresh_mhz=` and `[display.intel.edid.mode]` for every panel mode.
+- Verified on the host by `scripts/kms_host_gate.sh` (`takeover_keeps_the_mode_and_flips_between_our_buffers`: transcoder untouched, flips wait for the latch, dead pipe and PSR2 refused, firmware plane restored, cursor moves without pixels). QEMU has no Intel display; the x17 boot log is the first hardware run.
 ## Device power part 1: link power states and the sleep notice (2026-11-19)
 - Every PCIe link gets the power states both ends support at BOOT: ASPM L0s/L1, L1.1/L1.2 substates, clock PM and LTR, with Linux's latency checks and quirks, adding to what firmware set and never removing it (`crates/sex-pcipm`, `kernel/src/pci_power.rs`). Idle links drop to L1.2, which the platform needs for its deepest idle states.
 - Drivers can put a device they hold in D3hot and back (syscall 86 `OP_POWER`); the kernel saves and restores what a reset loses, MSI-X table included.
@@ -5420,3 +5450,16 @@ From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, 
 - Kernel: BOOT reserves one I/O APIC *line* for Input (`sex_hwdb::manifest::LINES`); syscall 86 gains `OP_LINE_BIND` (4) and `OP_LINE_MASK` (5). A level line is masked each time it fires, so a stuck wire costs one interrupt. Inputs under 16 and inputs already bound are refused.
 - Polling stays: no line, a refused line, a stuck line (32 empty reads in a row after interrupts) or a silent one (reports found by the once-a-second check read with no interrupt, three times in a row) drop back to it (`sex_hid_touch::pace`).
 - Verified by host tests (`cargo test -p sex-laptop -p sex-hid-touch`, `sex_pdx::touchpad` round trips with the line); not yet run on a real pad.
+
+## Kaleidoscope reader view, slice N5 (2026-11-20)
+
+- Ctrl+Shift+R opens `about:reader?url=…` for the current page, and pressing it again goes back. `crates/sex-web/src/reader.rs` scores the paragraph containers as Readability does: text length and commas, class and id names, and link density. It keeps the best box and any sibling boxes that score well. It writes only the paragraphs, headings, lists, quotes, code and pictures, with absolute addresses, on a calm 680 px page with an "N min read · host" line.
+- Host tests: `crates/sex-web/tests/reader.rs`. OS gate: `scripts/program_web_reader_gate.py`, which checks the article's words and title, that the picture is fetched from the site, the cream page, and the toggle back. Fixtures are in `scripts/web_site/reader/`.
+
+## Kaleidoscope private and container tabs, slice N4 (2026-11-20)
+
+- Each tab takes its cookies and localStorage from a box (`apps/web/src/profile.rs` `Jarbox`): the person's own; one of four containers (Personal, Work, Banking, Shopping), each saved to `Kaleidoscope/containers/<n>/`; or the private box, which lives in memory only.
+- When the last private tab closes, the private box is forgotten (`[web.private.forgotten]`). Private tabs record no history, keep compiled scripts in memory only, and run no extensions.
+- Keys: Ctrl+Shift+P opens a private tab and Ctrl+Shift+1..4 opens a container tab. Ctrl+T from a private tab stays private, and a link opened in a new tab keeps its box. `kaleidoscope URL --private` opens a private window.
+- The tab chip is underlined in its box's colour, and the bar shows "Private · " or the container's name.
+- Gate: `scripts/program_web_private_gate.py` (in CI). The server sees each box's cookie, and each page reports its localStorage. Own, Personal, Work and private never see each other's. Two private tabs share one box, and it is empty again after they close. A second Personal tab shares Personal's box, and only container 1's box is saved to Files.

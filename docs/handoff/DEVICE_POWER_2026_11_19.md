@@ -57,6 +57,7 @@ On the sleep notice each driver now turns its own hardware down, and back up on 
 | Touchpad (sexinput) | HID-over-I2C `SET_POWER` sleep, not polled; `SET_POWER` on at wake | `[sexinput.touchpad.power] asleep= ok=` |
 | USB (sexusb, `servers/sexusb/src/sleep.rs`) | Root ports whose device only moves data on request (storage, idle devices) go to U3: cache flushed (SYNCHRONIZE CACHE), bulk endpoints stopped with the suspend flag, link to U3. Keyboards, pointers, hubs, the network adapter and Bluetooth stay up. Wake: USB 2 ports get 20 ms of resume signalling, then U0. A disk request while suspended resumes first. | `[sexusb.suspend] port= slot= id= storage= flushed= ok=`, `[sexusb.resume] port= ok=`, `[sexusb.sleep] ... ports=` |
 | Sound (sexbell) | Every HDA audio function group with an output or microphone to D3 (`SET_POWER` 0x705), checked with `GET_POWER`; D0 at wake. Widget settings are kept. | `[bell.hda.power] asleep= groups= reached=` |
+| Thunderbolt (sexusb, `servers/sexusb/src/thunderbolt.rs`) | Firmware connection manager told the driver unloads (DRV_UNLOADS), then D3hot; BOOT sends the link controller GO2SX first so a plug wakes the PC. Wake: D0, BOOT raises force power and waits for FW_READY, DRIVER_READY again. See THUNDERBOLT_2026_11_19.md (T1c). | `[tb.sleep] unload= d3hot=`, `[pci.power.tb.go2sx] done=`, `[pci.power.tb.fw_ready] ready=`, `[tb.wake] d0=` |
 | Display (sexdisplay, Intel) | eDP backlight PWM off (brightness kept by `sex_gpu_intel::backlight::sleep`/`wake`), panel to DPCD D3 (0x600 = 2); back at wake | `[display.intel.sleep] asleep= edp= panel_power= backlight=` |
 
 The laptop gate now has a USB stick on the xHCI controller and checks its suspend and
@@ -87,8 +88,6 @@ second; tickless idle (the rest of K4) lets these states last longer.
 
 ## Later
 
-- Thunderbolt: the GO2SX / GO2SX_EXIT mailbox (VS_CAP_19 commands 0x02/0x03) around sleep,
-  next to the force-power code from the Thunderbolt work (PR #455).
 - USB controller to D3hot (xHCI save/restore state, CSS/CRS) when nothing needs it.
 - HDA codec D3 when nothing plays (not only asleep); the controller to D3hot on sleep.
 - Panel self refresh / pipe off when the screen is dark (with the Intel display work).

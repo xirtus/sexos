@@ -47,6 +47,8 @@ pub const API_WIFI_MCC_UPDATE: usize = 9;
 pub const API_REGULATORY_NVM_INFO: usize = 48;
 pub const API_REDUCED_SCAN_CONFIG: usize = 56;
 pub const API_SCAN_EXT_CHAN_VER: usize = 58;
+/// STA_HE_CTXT_CMD takes its multiple-BSSID fields (`IWL_UCODE_TLV_API_MBSSID_HE`).
+pub const API_MBSSID_HE: usize = 52;
 pub const CAPA_DS_PARAM_SET_IE_SUPPORT: usize = 9;
 const MAX_SCAN_CHANNELS: u32 = 67;
 const FW_ADDR_CACHE_CONTROL: u32 = 0xc000_0000;
