@@ -630,6 +630,10 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
 /// Fill rects paint in order over the run (the last one wins, as there).
 /// Must match that function exactly.
 fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
+    fast_content_row(unsafe{fb.add(y*w)},x0,x1,y,w,h,source,scene)
+}
+/// fast_content_run into `row`, the start of row y (the framebuffer's or a scratch row).
+fn fast_content_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
     let surf=source.surface;
     let (sx,sy,sw,sh)=scene.groups.rect(surf,w,h);
     if !surf.active||sw==0||sh==0||x0<sx||x1>sx+sw||y<sy||y>=sy+sh{return false;}
@@ -640,11 +644,10 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
             ||x0-sx<(scene.metrics.px(8)as usize)||x1-sx>sw.saturating_sub((scene.metrics.px(8)as usize)){return false;}
         source.content
     }else{surf};
-    if unsafe{scene.bitmaps.matches_surface(content.owner_pd,content.surface_id)}{return false;}
+    let bitmap=unsafe{scene.bitmaps.matches_surface(content.owner_pd,content.surface_id)};
     let (lx0,lx1,ly)=(x0 as i32-content.x,x1 as i32-content.x,y as i32-content.y);
     let mask=surface_lifecycle::native_pixel_bit(if source.chrome{content.owner_pd}else{surf.owner_pd},if source.chrome{content.surface_id}else{surf.surface_id});
     if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
-    let row=unsafe{fb.add(y*w)};
     // The private frame is ordinary memory: plain fills vectorize.
     unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0).fill(content.color);}
     for i in 0..content.fill_count as usize{
@@ -655,7 +658,14 @@ fn fast_content_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
         let (a,b)=((a-lx0) as usize+x0,(b-lx0) as usize+x0);
         unsafe{core::slice::from_raw_parts_mut(row.add(a),b-a).fill(content.fill_color[i]);}
     }
+    // A page's pixels over the fills, under the text (bitmap_color's place there).
+    if bitmap{
+        let out=unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0)};
+        unsafe{scene.bitmaps.blend_row(content.owner_pd,content.surface_id,bitmap_viewport_for(content,scene.metrics),x0,y,out);}
+    }
+    let t=decor::cycles_now();
     text_run(row,x0,x1,y,content,scene.metrics);
+    decor::tally(2,t);
     true
 }
 
@@ -724,12 +734,178 @@ fn text_run(row:*mut u32,x0:usize,x1:usize,y:usize,surf:&Surface,metrics:sex_pdx
     }
 }
 
+/// One row run of window chrome (the rim band and the title bar) without asking
+/// composite_pixel_source pixel by pixel. Glass depends only on the row, so each
+/// run needs its colours once; per pixel only the outline edge, inactive tabs, the
+/// title's ink (within the title's laid-out width) and the control marks remain.
+/// Was the larger part of every full repaint's cost (`pixel_kcyc` in
+/// [display.frame.cost]). False leaves the run to composite_pixel_source: the
+/// top-rim lights of a window without a title bar, the SilkBar rows, or a run that
+/// reaches the content area. Must match composite_pixel_source exactly.
+fn fast_chrome_run(fb:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
+    fast_chrome_row(unsafe{fb.add(y*w)},x0,x1,y,w,h,source,scene)
+}
+fn fast_chrome_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source:surface_groups::PixelSource<'_>,scene: &scene::SceneSnapshot)->bool{
+    if !source.chrome{return false;}
+    let surf=source.surface;
+    let (sx,sy,sw,sh)=scene.groups.rect(surf,w,h);
+    if !surf.active||sw==0||sh==0||x0<sx||x1>sx+sw||x0>=x1||y<sy||y>=sy+sh{return false;}
+    let m=scene.metrics;
+    if y<(m.bar()as usize){return false;}
+    let (ly,px8)=(y-sy,m.px(8)as usize);
+    let (l0,l1)=(x0-sx,x1-sx);
+    let rim_right=sw.saturating_sub(px8);
+    let rim_bottom=sh.saturating_sub(px8);
+    let top_bar_active=surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0;
+    let fb_h=scene.height as u32;
+    let mask=surface_lifecycle::native_pixel_bit(surf.owner_pd,surf.surface_id);
+    if top_bar_active&&ly<(m.title()as usize){
+        let frame_hovered=surf.chrome_flags&SURFACE_CHROME_FRAME_HOVER!=0;
+        let light_hovered=surf.chrome_flags&SURFACE_CHROME_LIGHT_HOVER!=0;
+        let hovered_light_kind=(surf.chrome_flags&SURFACE_CHROME_LIGHT_KIND_MASK)>>SURFACE_CHROME_LIGHT_KIND_SHIFT;
+        let close_allowed=surf.chrome_flags&SURFACE_CHROME_CLOSE_ALLOWED!=0;
+        let chrome_dim:u32=if surf.tab_count<=1&&!frame_hovered{5}else{10};
+        let toolbar_alpha=((if frame_hovered{220u32}else{200})*chrome_dim/10) as u8;
+        if fb_h==0||(surf.tab_count==0&&toolbar_alpha==0){return false;}
+        let glass=|fg:u32,alpha:u8|glass_over_bg(fg,x0,y,alpha,scene);
+        let tab_paint=|color:u32,alpha:u8|alpha_blend_xrgb_over_xrgb(color,glass(color,224),alpha);
+        let mut base=if surf.tab_count>0{tab_paint(scene.tokens.active_tab_color,240)}else{glass(scene.tokens.frame_top_bar_color,toolbar_alpha)};
+        if surf.tab_count==0&&ly>=(m.title()as usize).saturating_sub(m.scale()as usize){base=FRAME_TOP_BAR_DIVIDER_COLOR;}
+        let inactive=if surf.tab_count>1{tab_paint(scene.tokens.inactive_tab_color,200)}else{base};
+        let exclusion=m.controls_end()as usize;
+        let slot_w=if surf.tab_count>1{rim_right.saturating_sub(exclusion)/surf.tab_count as usize}else{0};
+        // Past the title's last glyph no pixel has ink; None (no font) asks every pixel.
+        let ui_scale=m.scale();
+        let title_x=m.title_x()as usize;
+        let title_end=surface_title(surf.surface_id).and_then(|t|glyphs::ui_ink_end(t,ui_scale)).map_or(usize::MAX,|e|title_x.saturating_add(e.max(0) as usize).saturating_add(2));
+        for lx in l0..l1{
+            let mut c=base;
+            if slot_w>0&&lx>=exclusion&&lx<rim_right&&(lx-exclusion)/slot_w!=surf.active_tab as usize{c=inactive;}
+            if lx+2>=title_x&&lx<title_end{if let Some(fg)=toolbar_title_fg_at_scaled(lx,ly,surf.surface_id,c,ui_scale){c=fg;}}
+            if lx<exclusion{
+                for index in 0..sex_pdx::desktop_style::chrome::CONTROLS{
+                    let r=m.control(index).unwrap();
+                    let size=m.px(10)as usize;
+                    let left=r.x as usize+(r.w as usize-size)/2;
+                    let top=r.y as usize+(r.h as usize-size)/2;
+                    if !in_rect(lx,ly,left,top,size,size){continue;}
+                    let dx=(2*(lx-left)+1)as i32-size as i32;
+                    let dy=(2*(ly-top)+1)as i32-size as i32;
+                    if dx*dx+dy*dy>=(size*size)as i32{continue;}
+                    let color=match index{0=>scene.tokens.close_light_color,1=>scene.tokens.minimize_light_color,2=>scene.tokens.zoom_light_color,_=>FRAME_LIGHT_FLOAT_COLOR};
+                    let disabled=index==0&&!close_allowed;
+                    let hovered=light_hovered&&hovered_light_kind as u32==index;
+                    let alpha=if disabled{80}else if hovered{255}else{224};
+                    let inner=size.saturating_sub(2*m.scale()as usize);
+                    let ink=if dx*dx+dy*dy>=(inner*inner)as i32{sex_pdx::desktop_style::contrast_ink(c)}else{color};
+                    c=coverage_blend(ink,c,alpha);
+                }
+            }
+            unsafe{core::ptr::write_volatile(row.add(sx+lx),c);}
+        }
+    }else{
+        // The rim band: the whole row on the top and bottom rims, else the side rims.
+        let band_row=ly<px8||ly>=rim_bottom;
+        if ly<px8&&!top_bar_active{return false;}
+        // A run across the content between the side rims: the content's own fast run.
+        let (c0,c1)=(l0.max(px8),l1.min(rim_right));
+        if !band_row&&c0<c1&&!fast_content_row(row,sx+c0,sx+c1,y,w,h,source,scene){return false;}
+        let edge=m.scale()as usize;
+        let edge_row=ly<edge||ly>=sh.saturating_sub(edge);
+        let outline=glass_over_bg(scene.tokens.frame_rim_color,x0,y,112,scene);
+        let inset=glass_over_bg(sex_pdx::desktop_style::NATIVE_CANVAS,x0,y,224,scene);
+        for lx in l0..l1{
+            if !band_row&&lx>=c0&&lx<c1{continue;}
+            let c=if edge_row||lx<edge||lx>=sw.saturating_sub(edge){outline}else{inset};
+            unsafe{core::ptr::write_volatile(row.add(sx+lx),c);}
+        }
+    }
+    if mask!=0{unsafe{APP_PRESENT_BITS|=mask;}}
+    true
+}
+
+/// What window `id` alone shows along row y (over the wallpaper), for the
+/// decoration pass: the window under a fading one or behind a corner arc.
+/// Painted a row run at a time by the same paths as raster_row, and kept until
+/// decor starts another row (selected_row_start).
+static mut SEL_ROW:[u32;MAX_FB_W]=[0;MAX_FB_W];
+static mut SEL_KEY:(u64,usize,usize,usize)=(0,usize::MAX,0,0);
+fn selected_row_start(){unsafe{(*core::ptr::addr_of_mut!(SEL_KEY)).1=usize::MAX;}}
+fn selected_pixel(x:usize,y:usize,w:usize,h:usize,id:u64,scene:&scene::SceneSnapshot)->u32{
+    unsafe{
+        let key=*core::ptr::addr_of!(SEL_KEY);
+        let row=core::ptr::addr_of_mut!(SEL_ROW) as *mut u32;
+        if key.0==id&&key.1==y&&x>=key.2&&x<key.3{return core::ptr::read(row.add(x));}
+        let back=bg(y,h);
+        let marked=wallpaper_mark::span(y,w,h).is_some();
+        let wall=|px:usize|if marked{wallpaper_mark::pixel(px,y,w,h,back)}else{back};
+        let Some(surface)=scene.surfaces.iter().find(|s|s.active&&s.surface_id==id) else{
+            return wall(x);
+        };
+        // The run of x: every surface edge splits it, so one content surface holds throughout.
+        let span=Some(scene.groups.run_span(&scene.surfaces,x,y,w,h));
+        let (sx,_,sw,_)=scene.groups.rect(surface,w,h);
+        let Some((lo,hi))=span.map(|(a,b)|(a.max(sx),b.min(sx+sw).min(w))).filter(|&(a,b)|a<=x&&x<b) else{
+            return composite_pixel_selected(x,y,w,h,wall(x),scene.focus,Some(id),scene);
+        };
+        let source=surface_groups::PixelSource{surface,content:scene.groups.content(surface,&scene.surfaces,lo,y,w,h),
+            chrome:surface.surface_id==scene.focus||scene.groups.is_frame(surface)||scene.groups.is_program_frame(surface)};
+        for px in lo..hi{core::ptr::write(row.add(px),wall(px));}
+        if !(fast_content_row(row,lo,hi,y,w,h,source,scene)||fast_chrome_row(row,lo,hi,y,w,h,source,scene)){
+            for px in lo..hi{core::ptr::write(row.add(px),composite_pixel_source(px,y,w,h,wall(px),Some(source),scene));}
+        }
+        *core::ptr::addr_of_mut!(SEL_KEY)=(id,y,lo,hi);
+        core::ptr::read(row.add(x))
+    }
+}
+
+/// Pixels sent down the per-pixel path since the last frame cost: no source, chrome, bitmap, other content.
+static mut SLOW_PIXELS:[u64;4]=[0;4];
 /// One framebuffer row from x0 to x1: fast runs where possible.
 fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot){
+    let t=decor::cycles_now();
+    let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,scene.focus,y,w,h)};
+    decor::tally(3,t);
+    raster_row_with(fb,y,x0,x1,w,h,scene,row.as_mut());
+}
+/// row_winners of the current band of rows during raster_rows only (set and
+/// cleared there): rows between the same surface and frame-body top/bottom
+/// edges have the same runs, so a window's 700 rows need a handful of builds.
+/// Static, not a local: a 9 KB table under raster_row and decor would crowd
+/// Display's 64 KB stack.
+static mut ROW_BAND:Option<(usize,usize,surface_groups::RowWinners<'static>)>=None;
+/// Rows y0..y1 from x0 to x1, building row_winners once per band.
+fn raster_rows(fb:*mut u32,y0:usize,y1:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot){
+    unsafe{
+        let band=&mut *core::ptr::addr_of_mut!(ROW_BAND);
+        *band=None;
+        for y in y0..y1{
+            if !band.as_ref().is_some_and(|(lo,hi,_)|*lo<=y&&y<*hi){
+                let t=decor::cycles_now();
+                fill_row_band(band,y,w,h,scene);
+                decor::tally(3,t);
+            }
+            match band.as_mut(){
+                Some((_,_,r))=>{r.rewind();raster_row_with(fb,y,x0,x1,w,h,scene,Some(core::mem::transmute::<&mut surface_groups::RowWinners<'static>,&mut surface_groups::RowWinners<'_>>(r)));}
+                None=>raster_row_with(fb,y,x0,x1,w,h,scene,None),
+            }
+        }
+        *band=None;
+    }
+}
+/// Builds the band's table in this frame only, never under raster_row_with and decor.
+#[inline(never)]
+fn fill_row_band(band:&mut Option<(usize,usize,surface_groups::RowWinners<'static>)>,y:usize,w:usize,h:usize,scene:&scene::SceneSnapshot){
+    *band=unsafe{scene.groups.row_winners(&scene.surfaces,scene.focus,y,w,h)}.map(|r|{
+        let (lo,hi)=scene.groups.row_band(&scene.surfaces,y,w,h);
+        // Lives only until raster_rows clears it; the scene outlives that call.
+        (lo,hi,unsafe{core::mem::transmute::<surface_groups::RowWinners<'_>,surface_groups::RowWinners<'static>>(r)})
+    });
+}
+fn raster_row_with(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scene::SceneSnapshot,mut row:Option<&mut surface_groups::RowWinners<'_>>){
     let focused=scene.focus;
     let back=bg(y,h);
     let mark=wallpaper_mark::span(y,w,h);
-    let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
     let mut x=x0;
     while x<x1{
         let (end,source)=match row.as_mut(){Some(row)=>row.run(x),None=>(x1,None)};
@@ -737,7 +913,7 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
         if row.is_some(){
             if let Some(source)=source{
                 let t=decor::cycles_now();
-                let fast=fast_content_run(fb,x,end,y,w,h,source,scene);
+                let fast=fast_content_run(fb,x,end,y,w,h,source,scene)||fast_chrome_run(fb,x,end,y,w,h,source,scene);
                 decor::tally(0,t);
                 if fast{x=end;continue;}
             }else{
@@ -752,6 +928,9 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
             }
         }
         let t=decor::cycles_now();
+        // Which runs still take the per-pixel path ([display.frame.cost] slow=).
+        let kind=match row.as_mut().and_then(|r|r.source(x)){None=>0,Some(s)if s.chrome=>1,Some(s)if unsafe{scene.bitmaps.matches_surface(s.content.owner_pd,s.content.surface_id)}=>2,Some(_)=>3};
+        unsafe{SLOW_PIXELS[kind]+=(end-x) as u64;}
         while x<end{
             let under=if mark.is_some(){wallpaper_mark::pixel(x,y,w,h,back)}else{back};
             let color=if let Some(row)=row.as_mut(){
@@ -1142,6 +1321,38 @@ static mut REPAINT_UPSERTS: u32 = 0;
 static mut REPAINT_FITTED_NOOPS: u32 = 0;
 static mut REPAINT_TEXT_CALLS: u32 = 0;
 static mut REPAINT_STRIP_FOCUS: u64 = u64::MAX;
+/// Where each surface was before a change (slot order is stacking order), so a
+/// window that moves, resizes or changes colour repaints only where it was and
+/// where it is, shadows included, instead of the whole desktop.
+type GeomEntry=(u64,usize,usize,usize,usize,u32,bool);
+static mut GEOM_BEFORE:[GeomEntry;MAX_SURFACES]=[(0,0,0,0,0,0,false);MAX_SURFACES];
+unsafe fn geom_entry(s:&Surface,w:usize,h:usize)->GeomEntry{
+    if !s.active{return (0,0,0,0,0,0,false);}
+    let (x,y,sw,sh)=FRAME_GROUPS.rect(s,w,h);
+    // Whether it stands alone or shows inside its group's frame.
+    (s.surface_id,x,y,sw,sh,s.color,FRAME_GROUPS.independent(s))
+}
+unsafe fn geom_snapshot(){
+    let (w,h)=(FB_W as usize,FB_H as usize);
+    for i in 0..MAX_SURFACES{GEOM_BEFORE[i]=geom_entry(&SURFACES[i],w,h);}
+}
+/// Adds the old and new rectangles of every slot that changed since geom_snapshot.
+unsafe fn geom_damage(out:&mut damage::Damage){
+    let (w,h)=(FB_W as usize,FB_H as usize);
+    for i in 0..MAX_SURFACES{
+        let now=geom_entry(&SURFACES[i],w,h);
+        let was=GEOM_BEFORE[i];
+        if now==was{continue;}
+        for (id,x,y,sw,sh,_,_) in [was,now]{ if id!=0{ surface_damage(out,(x,y,sw,sh),w,h); } }
+    }
+}
+/// A surface's rectangle grown by its shadow and rounded corners' reach.
+fn surface_damage(out:&mut damage::Damage,(x,y,sw,sh):(usize,usize,usize,usize),w:usize,h:usize){
+    if sw==0||sh==0{return;}
+    let r=decor::grow(damage::Rect{x,y,right:(x+sw).min(w),bottom:(y+sh).min(h)},w,h,bar_height(),chrome_metrics().scale());
+    out.add((r.x,r.y,r.right-r.x,r.bottom-r.y),w,h);
+}
+
 fn repaint_begin() -> u64 { if unsafe{REPAINT_BUDGET==0}{0}else{sex_pdx::get_ticks()} }
 fn repaint_end(kind: &str, started: u64) {
     unsafe {
@@ -2246,9 +2457,11 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
     if plan.is_full(){RENDER_FRAME_COUNTER.fetch_add(1,core::sync::atomic::Ordering::Relaxed);}
     let Some(lease)=SceneLease::capture(w,h,bar)else{drop(preparation);backup.restore();return None;};
     let scene=lease.view();
+    decor::begin_frame(w,h,scene);
     let canon_ss=unsafe{CLOCK_CANON_SS};
     if !settle_only{unsafe{APP_PRESENT_BITS=0;PREPARED_CURSOR=None;}}
     let prepared={let target=preparation.target();raster_batch(&target,scene,plan)};
+    decor::end_frame();
     if !prepared{drop(preparation);backup.restore();return None;}
     if !preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();return None;}
     if let Some(front)=store.front_pixels(){unsafe{
@@ -2351,7 +2564,7 @@ fn raster_full(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
             unsafe { core::ptr::write_volatile(fb.add(y*w+x), c); }
         }
     }
-    for y in (scene.metrics.bar()as usize)..h{raster_row(fb,y,0,w,w,h,scene);}
+    raster_rows(fb,scene.metrics.bar()as usize,h,0,w,w,h,scene);
     true
 }
 
@@ -2587,7 +2800,7 @@ fn raster_area(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
     }
     if total_pixels<w*h{return false;}
     for x in 0..w{unsafe{core::ptr::write_volatile(fb.add(((scene.metrics.bar()as usize)-1)*w+x),DEFAULT_THEME.panel_glow);}} // low-contrast bar edge
-    for y in (scene.metrics.bar()as usize)..h{raster_row(fb,y,0,w,w,h,scene);}
+    raster_rows(fb,scene.metrics.bar()as usize,h,0,w,w,h,scene);
     true
 }
 
@@ -2617,10 +2830,9 @@ fn raster_damage(target: &frame_output::Target<'_>, rect: damage::Rect, scene: &
     }
     let Some(total) = w.checked_mul(h) else { return false; };
     let bar=&scene.bar;
-    let rect=decor::grow(rect,w,h,scene.metrics.bar()as usize,scene.metrics.scale());
-    for y in rect.y..rect.bottom {
-        raster_row(fb,y,rect.x,rect.right,w,h,scene);
-    }
+    // Decorations are per pixel: a content change repaints only its own pixels.
+    // Geometry damage (moving windows, their shadows) arrives already grown.
+    raster_rows(fb,rect.y,rect.bottom,rect.x,rect.right,w,h,scene);
     true
 }
 
@@ -3992,6 +4204,17 @@ fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, pub
         if sex_pdx::app_lifecycle::ack(c.slot, c.task_id).is_ok() {
             assert!(lifecycle.acknowledge(index, c.target_pd, c.task_id));
             sex_pdx::serial_record!("[display.app.cleanup.ack] target={} task={} role=display", c.target_pd, c.task_id);
+        } else if let Ok(now) = sex_pdx::app_lifecycle::catalog(c.slot) {
+            // The kernel already retired this run and started the row's next one (a
+            // late REBORN replay can ack the dead run for us). Its REBORN found this
+            // row still cleaning up and was dropped, so finish the reuse here, or the
+            // new run waits forever for Display's ack.
+            if now.target_pd == c.target_pd && now.task_id != c.task_id
+                && lifecycle.acknowledge(index, c.target_pd, c.task_id)
+                && lifecycle.reborn(now.target_pd, now.task_id) == Some(c.slot) {
+                let acked = sex_pdx::app_lifecycle::ack(c.slot, now.task_id).is_ok();
+                sex_pdx::serial_record!("[display.app.reborn.ack] target={} task={} ok={} late=1 old_task={}", now.target_pd, now.task_id, acked as u8, c.task_id);
+            }
         }
     }
     for index in 0..surface_lifecycle::CATALOG_CAPACITY {
@@ -4191,6 +4414,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { REPAINT_SEEN=0; REPAINT_DRAINED=0; REPAINT_UPSERTS=0; REPAINT_FITTED_NOOPS=0; }
         let mut needs_surface_redraw = false;
         let mut text_damage = damage::Damage::new(bar_height());
+        // Windows that moved, resized or changed chrome: only their old and new rectangles.
+        let mut geom_damage_rect = damage::Damage::new(bar_height());
         let mut needs_top_strip_redraw = false;
         // Cursor moved this cycle but nothing else did: eligible for the
         // save-under fast path instead of a full surface composite.
@@ -4997,6 +5222,7 @@ pub extern "C" fn _start() -> ! {
                         let color=sex_pdx::desktop_style::native_canvas(owner,surface_id).unwrap_or(color);
                         let before = SURFACES.iter().find(|s|s.active && s.surface_id==surface_id)
                             .map(|s|(s.x,s.y,s.w,s.h,s.color));
+                        geom_snapshot();
                         if surface_lifecycle::upsert(&mut SURFACES, admission, surface_id, x, y, w, h, color) {
                             REPAINT_UPSERTS += 1;
                             if let Some(index)=vacant {
@@ -5050,7 +5276,9 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                             }
-                            needs_surface_redraw |= fb_live;
+                            // A new window repaints the desktop (it fades in); a known one
+                            // only where it and any fitted children were and are.
+                            if fb_live { if before.is_some() { geom_damage(&mut geom_damage_rect); } else { needs_surface_redraw = true; } }
                         }
                     }
                 }
@@ -5503,8 +5731,13 @@ pub extern "C" fn _start() -> ! {
                                         surface_id, chrome_flags_raw, lk);
                                 }
                             }
+                            // Tabs and hover lights live in this window's own chrome.
                             if fb_live {
-                                needs_surface_redraw = true;
+                                let (w, h) = (FB_W as usize, FB_H as usize);
+                                match SURFACES.iter().find(|s| s.active && s.surface_id == surface_id) {
+                                    Some(s) => surface_damage(&mut geom_damage_rect, FRAME_GROUPS.rect(s, w, h), w, h),
+                                    None => needs_surface_redraw = true,
+                                }
                             }
                         }
                     }
@@ -5546,7 +5779,7 @@ pub extern "C" fn _start() -> ! {
             let pad = 16;
             damage::Rect { x: (l - pad).max(0) as usize, y: (t - pad).max(0) as usize, right: (r + pad).max(0) as usize, bottom: (b + pad).max(0) as usize }
         });
-        if let Some(rect) = motion_damage { pending_paint.request_damage(rect, w, h, bar_height()); }
+        if let Some(rect) = motion_damage { pending_paint.request_damage(decor::grow(rect, w, h, bar_height(), chrome_metrics().scale()), w, h, bar_height()); }
         if animating {
             if paced {
             static mut MOTION_FRAME_BUDGET: u32 = 96;
@@ -5557,11 +5790,12 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
         }
         // Frame cost: from here to the completed publication.
-        decor::take_cycles();decor::take_tally(0);decor::take_tally(1);
+        decor::take_cycles();decor::take_tally(0);decor::take_tally(1);decor::take_tally(2);decor::take_tally(3);decor::take_split();
         let render_start=decor::cycles_now();
         let render_ms_start=sex_pdx::get_ticks();
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
+        if let Some(rect)=geom_damage_rect.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
         if cursor_only_moved{pending_paint.request_cursor();}
         if needs_top_strip_redraw{pending_paint.request_strip();}
@@ -5585,14 +5819,20 @@ pub extern "C" fn _start() -> ! {
                 static mut FRAME_TIME_BUDGET: u32 = 600;
                 unsafe { if FRAME_TIME_BUDGET > 0 { FRAME_TIME_BUDGET -= 1; sex_pdx::serial_record!("[display.frame.time] ms={} p99={}", ms, pacer.percentile(99).unwrap_or(0)); } }
             }
-            // Where a paced frame's time goes: the whole render and its decoration share.
-            static mut FRAME_COST_BUDGET: u32 = 64;
-            unsafe { if FRAME_COST_BUDGET > 0 { FRAME_COST_BUDGET -= 1;
-                let decor = decor::take_cycles();
-                let (fast, pixel) = (decor::take_tally(0), decor::take_tally(1));
-                let kpx = match plan.content { paint_batch::Content::Damage(r) => ((r.right - r.x) * (r.bottom - r.y) / 1000) as u64, paint_batch::Content::Full | paint_batch::Content::Area => (w * h / 1000) as u64, _ => 0 };
-                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={} fast_kcyc={} pixel_kcyc={}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx, fast / 1000, pixel / 1000); } }
         }
+        // Where a frame's time goes: every paced frame (64) and any other frame that
+        // took 20 ms or more (64), with the render's decoration and slow-path shares.
+        static mut FRAME_COST_BUDGET: u32 = 64;
+        static mut FRAME_SLOW_BUDGET: u32 = 64;
+        let paced_frame = (animating && paced || landing) && published.is_some();
+        let budget = if paced_frame { core::ptr::addr_of_mut!(FRAME_COST_BUDGET) } else if published.is_some() && render_ms >= 20 { core::ptr::addr_of_mut!(FRAME_SLOW_BUDGET) } else { core::ptr::null_mut() };
+        unsafe { if !budget.is_null() && *budget > 0 { *budget -= 1;
+            let decor = decor::take_cycles();
+            let (fast, pixel, text, winners) = (decor::take_tally(0), decor::take_tally(1), decor::take_tally(2), decor::take_tally(3));
+            let kpx = match plan.content { paint_batch::Content::Damage(r) => ((r.right - r.x) * (r.bottom - r.y) / 1000) as u64, paint_batch::Content::Full | paint_batch::Content::Area => (w * h / 1000) as u64, _ => 0 };
+            let slow = core::mem::take(&mut *core::ptr::addr_of_mut!(SLOW_PIXELS));
+            let split = decor::take_split();
+            sex_pdx::serial_record!("[display.frame.cost] paced={} render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={} fast_kcyc={} text_kcyc={} pixel_kcyc={} winners_kcyc={} slow={}/{}/{}/{} decor_split={}/{}/{}", paced_frame as u8, render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx, fast / 1000, text / 1000, pixel / 1000, winners / 1000, slow[0], slow[1], slow[2], slow[3], split[0] / 1000, split[1] / 1000, split[2] / 1000); } }
         if let Some(frame)=published.as_ref(){
             if frame.plan.clock_dirty(){unsafe{LAST_REDRAWN_CLOCK_CANON_SS=frame.canon_ss;}}
             if primary_receipt_pending&&frame.plan.is_full(){

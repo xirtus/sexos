@@ -71,6 +71,7 @@ jobs:
     - uses: ./.github/actions/setup
       with:
         qemu: "false"
+        target-cache: none
     - name: Enforce root allowlist
       run: bash scripts/dev/check_root_allowlist.sh --strict
     - name: Host proof regressions
@@ -173,6 +174,12 @@ jobs:
       run: bash scripts/polyamour/check_wasm_guest.sh && cargo test --locked --release -p sex-3d -p polyamour -p polyamour-sdk -p polyamour-wasm
     - name: Burlesque presentations engine (PPTX, ODP, presenter view, PDF export) on the host
       run: bash scripts/burlesque_host_gate.sh
+    - name: Cabaret studio, Filigree fonts and the shared colour, broadcast and audio engines on the host
+      run: |
+        cargo test --locked -p sex-color -p cabaret-core -p cabaret-proto -p cabaret-plugins -p filigree-core -p moan-core -p moan-plugin
+        cargo test --locked -p cabaret -p filigree --no-default-features
+        cargo test --locked -p sex-pdx --test cabaret_omatools
+        cargo test --locked -p sex-font --features inspect --lib
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport
@@ -306,6 +313,7 @@ jobs:
     - uses: ./.github/actions/setup
       with:
         qemu: "false"
+        target-cache: none
     - name: Host kernel-model regressions
       run: python3 scripts/check_architectural_truth.py --run-host --shard ${{ matrix.shard }}/3 --evidence-dir "$RUNNER_TEMP/sexos-truth"
     - name: Preserve evidence
@@ -343,6 +351,9 @@ jobs:
         path: ${{ runner.temp }}/sexos-image
         compression-level: 0
         retention-days: 2
+    - name: Save the cargo target cache for the next runs
+      if: github.ref == 'refs/heads/master'
+      uses: ./.github/actions/save-target
     - name: Preserve the entrypoint gate's evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -367,6 +378,8 @@ jobs:
       run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends python3-pil
     - name: Boots to the desktop with 1, 2, 4 and 32 GiB of RAM
       run: python3 scripts/ram_sizes_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/ram-sizes"
+    - name: Drivers come up on device mixes other gates skip (Intel xHCI + hub, AHCI only, e1000, HDA output codec)
+      run: python3 scripts/device_matrix_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-runtime/device-matrix"
     - name: Compiled scheduler stack-release boundary
       run: SWITCH_EVIDENCE="$RUNNER_TEMP/sexos-runtime/scheduler-switch.txt" bash scripts/scheduler_switch_boundary_gate.sh
     - name: Timer PKRU save and restore boundary
@@ -456,6 +469,9 @@ jobs:
           ${{ runner.temp }}/sexos-runtime
           ${{ runner.temp }}/sexos-usb
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   web:
     name: Browser gates
@@ -507,6 +523,9 @@ jobs:
         name: sexos-browser-proof
         path: ${{ runner.temp }}/sexos-runtime/web-*
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   devices:
     name: Disks, power and fuzzing
@@ -538,6 +557,10 @@ jobs:
       run: python3 scripts/corset_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-corset"
     - name: Files opens a file in its program
       run: python3 scripts/files_open_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-open"
+    - name: Files saves a program's file through the picker (Save As), only that path granted
+      run: python3 scripts/files_save_picker_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-save-picker"
+    - name: Organizer places new arrivals in Inbox, Downloads and Desktop by rule; undo, pins and rules survive a restart
+      run: python3 scripts/spindle_organize_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-organize"
     - name: Power cuts while Files writes (QEMU killed, disk checked each time)
       run: python3 scripts/powercut_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-powercut"
     - name: Files repairs a damaged disk at start
@@ -546,6 +569,8 @@ jobs:
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
     - name: Intel RAID 0 on two NVMe drives, read only
       run: python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
+    - name: NVMe drives as real laptops have them (64 KiB per command; 4 KiB sectors refused)
+      run: python3 scripts/nvme_real_drive_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-nvme-real"
     - name: Power off and restart through ACPI
       run: python3 scripts/power_acpi_gate.py --iso sexos-v1.0.0.iso --out "$RUNNER_TEMP/sexos-power"
     - name: Discrete GPU powered off through ACPI
@@ -589,6 +614,9 @@ jobs:
           ${{ runner.temp }}/sexos-fuzz
           ${{ runner.temp }}/sexos-drag
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   media:
     name: Browser media streaming and seeking
@@ -609,6 +637,10 @@ jobs:
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
         python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
         python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Sound on Intel HD Audio by interrupt (MSI, period-end wakes)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/hda-sound-source.img"
+        python3 scripts/sound_gate.py --card hda --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/hda-sound-source.img" --out "$RUNNER_TEMP/sexos-hda-sound"
     - name: Microphone on Intel HD Audio (input pin, converter and input stream)
       run: |
         truncate -s 1G "$RUNNER_TEMP/hda-mic-source.img"
@@ -623,7 +655,11 @@ jobs:
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
           ${{ runner.temp }}/sexos-hda-mic
+          ${{ runner.temp }}/sexos-hda-sound
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   editor:
     name: Quil code editor
@@ -650,6 +686,9 @@ jobs:
           ${{ runner.temp }}/editor-build.log
           ${{ runner.temp }}/sexos-editor
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   profiles:
     name: Proof builds (${{ matrix.gate }})
@@ -822,6 +861,9 @@ jobs:
       with:
         name: sexos-programs-proof
         path: ${{ runner.temp }}/sexos-runtime
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
   reading:
     name: Reading programs
     runs-on: ubuntu-latest
@@ -851,6 +893,9 @@ jobs:
         if-no-files-found: ignore
 
   # Single required check: keeps the old "build" check name for branch rules.
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
   places:
     name: Phone link and maps
     runs-on: ubuntu-latest
@@ -878,6 +923,9 @@ jobs:
           ${{ runner.temp }}/sexos-places
           ${{ runner.temp }}/places-build.log
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   desktop:
     name: Desktop shell
@@ -977,10 +1025,37 @@ jobs:
         name: sexos-desktop-proof
         path: ${{ runner.temp }}/sexos-desktop
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
+
+  latency:
+    name: Desktop latency (key to pixel, launch, resize, file open; KVM)
+    runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 40
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
+    - name: Desktop latency, end to end (stage breakdown and traces in the log)
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        grep -m1 'model name' /proc/cpuinfo
+        truncate -s 1G "$RUNNER_TEMP/latency-source.img"
+        python3 scripts/desktop_latency_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/latency-source.img" --out "$RUNNER_TEMP/sexos-latency"
+    - name: Preserve latency evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-latency-proof
+        path: ${{ runner.temp }}/sexos-latency
+        if-no-files-found: ignore
 
   build:
     if: always()
-    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks]
+    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks, latency]
     runs-on: ubuntu-latest
     steps:
     # Every job must pass. A job may be skipped only when the scope leaves it out:
@@ -1039,6 +1114,9 @@ jobs:
           ${{ runner.temp }}/build.log
           ${{ runner.temp }}/web-jit
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   recording:
     name: Lossless encoder guest proof
@@ -1083,6 +1161,13 @@ jobs:
       run: |
         bash scripts/build_splicy_studio.sh
         python3 scripts/program_splicy_studio_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/splicy-source.img" --out "$RUNNER_TEMP/recording/splicy-studio"
+    - name: Media codecs use AVX2 and decode the same pictures as with SSE (decode and encode speed, real CPU on KVM)
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        grep -m1 'model name' /proc/cpuinfo
+        bash scripts/build_mediabench.sh
+        truncate -s 1G "$RUNNER_TEMP/mediabench-source.img"
+        python3 scripts/program_mediabench_gate.py --accel auto --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/mediabench-source.img" --out "$RUNNER_TEMP/recording/mediabench"
     - name: Preserve encoder evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -1128,6 +1213,9 @@ jobs:
           ${{ runner.temp }}/productivity-build.log
           ${{ runner.temp }}/sexos-productivity
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   terminal-editor:
     name: Terminal and editor
@@ -1160,6 +1248,9 @@ jobs:
           ${{ runner.temp }}/term-build.log
           ${{ runner.temp }}/sexos-term
         if-no-files-found: ignore
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
 
   documents-pictures:
     name: Documents and pictures
@@ -1196,6 +1287,9 @@ jobs:
         if-no-files-found: ignore
 
   # Deliberately unsafe fixture-only image; every other job builds normal flags.
+    - name: Kernel user-memory accesses found by SMAP audit (informational)
+      if: always()
+      run: python3 scripts/smap_sites.py --kernel iso_root/sexos-kernel "$RUNNER_TEMP" || true
   input-payload-proof:
     name: Diagnostic keyboard payload proof (UNSAFE)
     needs: changes
@@ -1207,7 +1301,14 @@ jobs:
     - uses: ./.github/actions/setup
     - name: Build and freeze diagnostic image, then rebuild normal image
       # The image job already proves the normal image builds; skip rebuilding it here.
-      run: SEXOS_INPUT_PROOF_SKIP_NORMAL=1 bash scripts/build_input_payload_proof.sh "$RUNNER_TEMP/input-payload-proof"
+      # The script sends every phase to its own log; show their tails when it fails.
+      run: |
+        SEXOS_INPUT_PROOF_SKIP_NORMAL=1 bash scripts/build_input_payload_proof.sh "$RUNNER_TEMP/input-payload-proof" || {
+          for f in "$RUNNER_TEMP"/input-payload-proof/*.log "$RUNNER_TEMP"/input-payload-proof/diagnostic-build/*.log "$RUNNER_TEMP"/input-payload-proof/diagnostic-build/*.md; do
+            [[ -f "$f" ]] && { echo "=== $f"; tail -60 "$f"; }
+          done
+          exit 1
+        }
     - name: Strict physical-key oracles on the labeled diagnostic image only
       run: |
         evidence="$RUNNER_TEMP/input-payload-proof"

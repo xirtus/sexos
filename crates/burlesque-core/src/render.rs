@@ -2,7 +2,6 @@
 //! Software rasterizer for slides, vector shapes, typography, and images.
 
 use alloc::vec;
-use alloc::vec::Vec;
 use sex_canvas::{Canvas, Color, Rect};
 use sex_font::raster::scratch_len;
 use sex_font::{Font, GEIST_MONO, GEIST_SANS};
@@ -46,6 +45,32 @@ pub fn render_slide_at_build(
     target_w: u32,
     target_h: u32,
 ) {
+    render_slide_at_build_with_options(
+        slide,
+        theme,
+        aspect_ratio,
+        completed_builds,
+        active_build_progress,
+        false,
+        buffer,
+        target_w,
+        target_h,
+    );
+}
+
+/// Render a slide at a build stage with optional transparent background (for live overlays).
+#[allow(clippy::too_many_arguments)]
+pub fn render_slide_at_build_with_options(
+    slide: &Slide,
+    theme: &Theme,
+    aspect_ratio: AspectRatio,
+    completed_builds: usize,
+    active_build_progress: Option<f32>,
+    transparent_background: bool,
+    buffer: &mut [u32],
+    target_w: u32,
+    target_h: u32,
+) {
     let needed = match (target_w as usize).checked_mul(target_h as usize) {
         Some(n) => n,
         None => return,
@@ -65,63 +90,106 @@ pub fn render_slide_at_build(
     let sy = target_h as f32 / deck_h;
 
     // 1. Background
-    match slide.background_override {
-        Some(Background::Solid(c)) => canvas.clear(c),
-        Some(Background::Gradient(top, bottom)) => {
-            canvas.fill_round_rect_gradient(
-                Rect::new(0.0, 0.0, target_w as f32, target_h as f32),
-                0.0,
-                top,
-                bottom,
-            );
+    if transparent_background {
+        canvas.clear(Color::TRANSPARENT);
+    } else {
+        match slide.background_override {
+            Some(Background::Solid(c)) => canvas.clear(c),
+            Some(Background::Gradient(top, bottom)) => {
+                canvas.fill_round_rect_gradient(
+                    Rect::new(0.0, 0.0, target_w as f32, target_h as f32),
+                    0.0,
+                    top,
+                    bottom,
+                );
+            }
+            None => canvas.clear(theme.palette.background),
         }
-        None => canvas.clear(theme.palette.background),
+
+        // 2. Master chrome (top accent ribbon, subtle card accents, styled slide number)
+        if theme.show_master_chrome {
+            render_master_chrome(&mut canvas, theme, slide.id, target_w, target_h, sx, sy);
+        }
     }
 
-    // 2. Master chrome (top accent ribbon, subtle card accents, styled slide number)
-    if theme.show_master_chrome {
-        render_master_chrome(&mut canvas, theme, slide.id, target_w, target_h, sx, sy);
-    }
+    let draw_elem_with_meta = |elem_idx: usize, elem: &SlideElement, dst: &mut [u32]| {
+        let meta = slide.element_meta(elem_idx);
+        if libm::fabsf(meta.rotation_deg) > 0.01 || meta.opacity < 0.999 {
+            crate::morph::render_element_transformed(
+                elem,
+                None,
+                meta.rotation_deg,
+                meta.opacity,
+                theme,
+                sx,
+                sy,
+                dst,
+                target_w,
+                target_h,
+                needed,
+            );
+        } else if let Some(mut c) = Canvas::new(dst, target_w, target_h) {
+            render_single_element(elem, None, None, theme, sx, sy, &mut c, target_w, target_h);
+        }
+    };
 
     // 3. Elements with intra-slide builds
     if slide.builds.is_empty() {
-        for elem in &slide.elements {
-            render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
+        for (elem_idx, elem) in slide.elements.iter().enumerate() {
+            draw_elem_with_meta(elem_idx, elem, canvas.pixels_mut());
         }
         return;
     }
 
-    for (elem_idx, elem) in slide.elements.iter().enumerate() {
-        let whole_step = slide
-            .builds
-            .iter()
-            .enumerate()
-            .find(|(_, b)| b.element_index == elem_idx && b.paragraph_index.is_none());
+    // Determine which build steps are simultaneously animating when WithPrevious chains exist.
+    let active_range_end = if active_build_progress.is_some() && completed_builds < slide.builds.len() {
+        let mut end = completed_builds + 1;
+        while end < slide.builds.len()
+            && matches!(slide.builds[end].trigger, crate::animation::BuildTrigger::WithPrevious)
+        {
+            end += 1;
+        }
+        end
+    } else {
+        completed_builds
+    };
 
-        if let Some((step_k, step)) = whole_step {
+    for (elem_idx, elem) in slide.elements.iter().enumerate() {
+        let mut has_whole = false;
+        let mut visible_after_completed = false;
+        let mut active_whole = None;
+        for (step_k, step) in slide.builds.iter().enumerate() {
+            if step.element_index != elem_idx || step.paragraph_index.is_some() {
+                continue;
+            }
+            if !has_whole {
+                has_whole = true;
+                // Elements whose first whole build is a build-out start visible on slide entry.
+                visible_after_completed = step.effect.is_build_out();
+            }
             if step_k < completed_builds {
-                if !step.effect.is_build_out() {
-                    render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
-                }
-            } else if step_k == completed_builds {
-                if let Some(progress) = active_build_progress {
-                    render_element_build_animation(
-                        elem,
-                        None,
-                        step.effect,
-                        progress,
-                        theme,
-                        sx,
-                        sy,
-                        canvas.pixels_mut(),
-                        target_w,
-                        target_h,
-                    );
-                } else if step.effect.is_build_out() {
-                    render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
-                }
-            } else if step.effect.is_build_out() {
-                render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
+                visible_after_completed = !step.effect.is_build_out();
+            } else if active_build_progress.is_some() && step_k < active_range_end {
+                active_whole = Some(step);
+            }
+        }
+
+        if has_whole {
+            if let (Some(step), Some(progress)) = (active_whole, active_build_progress) {
+                render_element_build_animation(
+                    elem,
+                    None,
+                    step.effect,
+                    progress,
+                    theme,
+                    sx,
+                    sy,
+                    canvas.pixels_mut(),
+                    target_w,
+                    target_h,
+                );
+            } else if visible_after_completed {
+                draw_elem_with_meta(elem_idx, elem, canvas.pixels_mut());
             }
         } else if let SlideElement::TextBox(tb) = elem {
             let has_any_para_step = slide
@@ -141,7 +209,7 @@ pub fn render_slide_at_build(
                         Some((k, s)) => {
                             if k < completed_builds {
                                 !s.effect.is_build_out()
-                            } else if k == completed_builds {
+                            } else if k >= completed_builds && k < active_range_end {
                                 active_build_progress.is_none() && s.effect.is_build_out()
                             } else {
                                 s.effect.is_build_out()
@@ -157,31 +225,33 @@ pub fn render_slide_at_build(
                 render_text_box(tb, rect, theme, sx, sy, canvas.pixels_mut(), target_w, target_h, Some(&para_filter));
 
                 if let Some(progress) = active_build_progress {
-                    if let Some(active_step) = slide.builds.get(completed_builds) {
-                        if active_step.element_index == elem_idx {
-                            if let Some(active_p_idx) = active_step.paragraph_index {
-                                let single_p_filter = move |p_idx: usize| p_idx == active_p_idx;
-                                render_element_build_animation(
-                                    elem,
-                                    Some(&single_p_filter),
-                                    active_step.effect,
-                                    progress,
-                                    theme,
-                                    sx,
-                                    sy,
-                                    canvas.pixels_mut(),
-                                    target_w,
-                                    target_h,
-                                );
+                    for k in completed_builds..active_range_end {
+                        if let Some(active_step) = slide.builds.get(k) {
+                            if active_step.element_index == elem_idx {
+                                if let Some(active_p_idx) = active_step.paragraph_index {
+                                    let single_p_filter = move |p_idx: usize| p_idx == active_p_idx;
+                                    render_element_build_animation(
+                                        elem,
+                                        Some(&single_p_filter),
+                                        active_step.effect,
+                                        progress,
+                                        theme,
+                                        sx,
+                                        sy,
+                                        canvas.pixels_mut(),
+                                        target_w,
+                                        target_h,
+                                    );
+                                }
                             }
                         }
                     }
                 }
             } else {
-                render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
+                draw_elem_with_meta(elem_idx, elem, canvas.pixels_mut());
             }
         } else {
-            render_single_element(elem, None, None, theme, sx, sy, &mut canvas, target_w, target_h);
+            draw_elem_with_meta(elem_idx, elem, canvas.pixels_mut());
         }
     }
 }
@@ -297,14 +367,14 @@ fn render_element_build_animation(
         BuildEffect::Appear => {
             if t > 0.0 {
                 render_single_element(elem, None, para_filter, theme, sx, sy, &mut canvas, w, h);
-                blend_buffer_over(&scratch, dst_buf, 1.0, None, w, h);
+                blend_buffer_over_alpha(&scratch, dst_buf, 1.0, None, w, h);
             }
         }
-        BuildEffect::DissolveIn => {
+        BuildEffect::Fade | BuildEffect::DissolveIn => {
             render_single_element(elem, None, para_filter, theme, sx, sy, &mut canvas, w, h);
-            blend_buffer_over(&scratch, dst_buf, ease, None, w, h);
+            blend_buffer_over_alpha(&scratch, dst_buf, ease, None, w, h);
         }
-        BuildEffect::FlyInLeft => {
+        BuildEffect::FlyIn | BuildEffect::FlyInLeft => {
             let offset_x = (scaled_bounds.right().max(250.0 * sx)) * (1.0 - ease);
             let translated = Rect::new(
                 scaled_bounds.x - offset_x,
@@ -313,7 +383,7 @@ fn render_element_build_animation(
                 scaled_bounds.h,
             );
             render_single_element(elem, Some(translated), para_filter, theme, sx, sy, &mut canvas, w, h);
-            blend_buffer_over(&scratch, dst_buf, ease, None, w, h);
+            blend_buffer_over_alpha(&scratch, dst_buf, ease, None, w, h);
         }
         BuildEffect::FlyInBottom => {
             let offset_y = ((h as f32 - scaled_bounds.y).max(180.0 * sy)) * (1.0 - ease);
@@ -324,9 +394,9 @@ fn render_element_build_animation(
                 scaled_bounds.h,
             );
             render_single_element(elem, Some(translated), para_filter, theme, sx, sy, &mut canvas, w, h);
-            blend_buffer_over(&scratch, dst_buf, ease, None, w, h);
+            blend_buffer_over_alpha(&scratch, dst_buf, ease, None, w, h);
         }
-        BuildEffect::PopScale => {
+        BuildEffect::Scale | BuildEffect::PopScale => {
             let s = 0.35 + 0.65 * ease;
             let cx = scaled_bounds.x + scaled_bounds.w * 0.5;
             let cy = scaled_bounds.y + scaled_bounds.h * 0.5;
@@ -334,21 +404,26 @@ fn render_element_build_animation(
             let new_h = scaled_bounds.h * s;
             let scaled_rect = Rect::new(cx - new_w * 0.5, cy - new_h * 0.5, new_w, new_h);
             render_single_element(elem, Some(scaled_rect), para_filter, theme, sx * s, sy * s, &mut canvas, w, h);
-            blend_buffer_over(&scratch, dst_buf, ease, None, w, h);
+            blend_buffer_over_alpha(&scratch, dst_buf, ease, None, w, h);
         }
-        BuildEffect::WipeRight => {
+        BuildEffect::Wipe | BuildEffect::WipeRight => {
             render_single_element(elem, None, para_filter, theme, sx, sy, &mut canvas, w, h);
             let clip_x = scaled_bounds.x + scaled_bounds.w * ease;
-            blend_buffer_over(&scratch, dst_buf, 1.0, Some(clip_x), w, h);
+            blend_buffer_over_alpha(&scratch, dst_buf, 1.0, Some(clip_x), w, h);
         }
-        BuildEffect::FadeOut => {
+        BuildEffect::Disappear | BuildEffect::FadeOut => {
             render_single_element(elem, None, para_filter, theme, sx, sy, &mut canvas, w, h);
-            blend_buffer_over(&scratch, dst_buf, 1.0 - ease, None, w, h);
+            let alpha = if effect == BuildEffect::Disappear && t >= 1.0 {
+                0.0
+            } else {
+                1.0 - ease
+            };
+            blend_buffer_over_alpha(&scratch, dst_buf, alpha, None, w, h);
         }
     }
 }
 
-fn blend_buffer_over(
+pub(crate) fn blend_buffer_over_alpha(
     src_buf: &[u32],
     dst_buf: &mut [u32],
     opacity: f32,
@@ -357,7 +432,7 @@ fn blend_buffer_over(
     _h: u32,
 ) {
     let opacity = opacity.clamp(0.0, 1.0);
-    if opacity <= 0.0 {
+    if opacity <= 0.0 || w == 0 {
         return;
     }
     let alpha_mul = (opacity * 255.0 + 0.5) as u32;
@@ -377,34 +452,37 @@ fn blend_buffer_over(
                 continue;
             }
         }
-        let eff_a = ((sa * alpha_mul) / 255).min(255);
+        let eff_a = ((sa * alpha_mul + 127) / 255).min(255);
         if eff_a == 0 {
             continue;
         }
 
-        let sr = (src >> 16) & 0xFF;
-        let sg = (src >> 8) & 0xFF;
-        let sb = src & 0xFF;
+        // src is premultiplied in Canvas; scale channels by alpha_mul
+        let sr = (((src >> 16) & 0xFF) * alpha_mul + 127) / 255;
+        let sg = (((src >> 8) & 0xFF) * alpha_mul + 127) / 255;
+        let sb = ((src & 0xFF) * alpha_mul + 127) / 255;
 
         let dst = dst_buf[i];
+        let da = (dst >> 24) & 0xFF;
         let dr = (dst >> 16) & 0xFF;
         let dg = (dst >> 8) & 0xFF;
         let db = dst & 0xFF;
 
         let inv_a = 255 - eff_a;
-        let out_r = ((sr * eff_a + dr * inv_a) / 255).min(255);
-        let out_g = ((sg * eff_a + dg * inv_a) / 255).min(255);
-        let out_b = ((sb * eff_a + db * inv_a) / 255).min(255);
+        let out_a = (eff_a + (da * inv_a + 127) / 255).min(255);
+        let out_r = (sr + (dr * inv_a + 127) / 255).min(255);
+        let out_g = (sg + (dg * inv_a + 127) / 255).min(255);
+        let out_b = (sb + (db * inv_a + 127) / 255).min(255);
 
-        dst_buf[i] = (0xFF << 24) | (out_r << 16) | (out_g << 8) | out_b;
+        dst_buf[i] = (out_a << 24) | (out_r << 16) | (out_g << 8) | out_b;
     }
 }
 
-fn scale_rect(r: Rect, sx: f32, sy: f32) -> Rect {
+pub(crate) fn scale_rect(r: Rect, sx: f32, sy: f32) -> Rect {
     Rect::new(r.x * sx, r.y * sy, r.w * sx, r.h * sy)
 }
 
-fn render_text_box(
+pub(crate) fn render_text_box(
     tb: &TextBox,
     bounds: Rect,
     theme: &Theme,
@@ -648,7 +726,7 @@ fn render_image(
             if px >= target_w {
                 break;
             }
-            let src_px = decoded.pixels[src_row + sx];
+            let src_px = Color(decoded.pixels[src_row + sx]).premultiplied();
             let dst_px = pixels[target_row + px as usize];
             pixels[target_row + px as usize] = blend_over(src_px, dst_px);
         }
@@ -824,7 +902,7 @@ fn draw_v_line(target: &mut [u32], target_w: u32, target_h: u32, y0: f32, y1: f3
     }
 }
 
-fn render_master_chrome(
+pub(crate) fn render_master_chrome(
     canvas: &mut Canvas<'_>,
     theme: &Theme,
     slide_id: u64,
@@ -895,7 +973,7 @@ pub fn render_transition_frame(
                 out[..len].copy_from_slice(&to[..len]);
             }
         }
-        Transition::Dissolve | Transition::Fade | Transition::MagicMove => {
+        Transition::Dissolve | Transition::Fade | Transition::MagicMove | Transition::Morph => {
             let t_u32 = (t * 256.0).min(256.0) as u32;
             let inv_u32 = 256 - t_u32;
 
@@ -1054,8 +1132,8 @@ pub fn render_deck_transition(
     width: u32,
     height: u32,
 ) {
-    if transition == Transition::MagicMove {
-        render_magic_move_frame(from_slide, to_slide, theme, aspect_ratio, t, out, width, height);
+    if transition == Transition::MagicMove || transition == Transition::Morph {
+        crate::morph::render_morph_frame(from_slide, to_slide, theme, aspect_ratio, t, out, width, height);
         return;
     }
     let len = match (width as usize).checked_mul(height as usize) {
@@ -1084,274 +1162,23 @@ pub fn render_magic_move_frame(
     target_w: u32,
     target_h: u32,
 ) {
-    let needed = match (target_w as usize).checked_mul(target_h as usize) {
-        Some(n) => n,
-        None => return,
-    };
-    if target_w == 0 || target_h == 0 || buffer.len() < needed {
-        return;
-    }
-
-    let mut canvas = match Canvas::new(buffer, target_w, target_h) {
-        Some(c) => c,
-        None => return,
-    };
-
-    let deck_w = aspect_ratio.width();
-    let deck_h = aspect_ratio.height();
-    let sx = target_w as f32 / deck_w;
-    let sy = target_h as f32 / deck_h;
-
-    // Smooth cubic ease-in-out: 3t² - 2t³
-    let t = progress.clamp(0.0, 1.0);
-    let ease = 3.0 * t * t - 2.0 * t * t * t;
-
-    // 1. Background interpolation
-    let bg_from = match from_slide.background_override {
-        Some(Background::Solid(c)) => c,
-        Some(Background::Gradient(c1, _)) => c1,
-        None => theme.palette.background,
-    };
-    let bg_to = match to_slide.background_override {
-        Some(Background::Solid(c)) => c,
-        Some(Background::Gradient(c1, _)) => c1,
-        None => theme.palette.background,
-    };
-    let interp_bg = lerp_color(bg_from, bg_to, ease);
-    canvas.clear(interp_bg);
-
-    // 2. Master chrome
-    if theme.show_master_chrome {
-        let active_id = if ease < 0.5 { from_slide.id } else { to_slide.id };
-        render_master_chrome(&mut canvas, theme, active_id, target_w, target_h, sx, sy);
-    }
-
-    // 3. Match elements between from_slide and to_slide
-    let from_elems = &from_slide.elements;
-    let to_elems = &to_slide.elements;
-    let n_from = from_elems.len();
-    let n_to = to_elems.len();
-
-    let mut matched_from = vec![false; n_from];
-    let mut matched_to = vec![false; n_to];
-    let mut pairs = Vec::new();
-
-    // Match Rule 1: Explicit magic_key
-    for (i, ef) in from_elems.iter().enumerate() {
-        if let Some(kf) = ef.magic_key() {
-            for (j, et) in to_elems.iter().enumerate() {
-                if !matched_to[j] {
-                    if let Some(kt) = et.magic_key() {
-                        if kf == kt {
-                            matched_from[i] = true;
-                            matched_to[j] = true;
-                            pairs.push((i, j));
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Match Rule 2: Title & Text content matching
-    for (i, ef) in from_elems.iter().enumerate() {
-        if matched_from[i] { continue; }
-        if let SlideElement::TextBox(tbf) = ef {
-            let tf = tbf.plain_text();
-            let tf_clean = tf.trim();
-            if !tf_clean.is_empty() {
-                for (j, et) in to_elems.iter().enumerate() {
-                    if matched_to[j] { continue; }
-                    if let SlideElement::TextBox(tbt) = et {
-                        let tt = tbt.plain_text();
-                        let tt_clean = tt.trim();
-                        if tf_clean == tt_clean || (tf_clean == from_slide.title.trim() && tt_clean == to_slide.title.trim()) {
-                            matched_from[i] = true;
-                            matched_to[j] = true;
-                            pairs.push((i, j));
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Match Rule 3: Shapes of same kind in ordinal order
-    for (i, ef) in from_elems.iter().enumerate() {
-        if matched_from[i] { continue; }
-        if let SlideElement::Shape(sf) = ef {
-            for (j, et) in to_elems.iter().enumerate() {
-                if matched_to[j] { continue; }
-                if let SlideElement::Shape(st) = et {
-                    let kind_match = match (sf.kind, st.kind) {
-                        (ShapeKind::Rect, ShapeKind::Rect) => true,
-                        (ShapeKind::RoundedRect { .. }, ShapeKind::RoundedRect { .. }) => true,
-                        (ShapeKind::Ellipse, ShapeKind::Ellipse) => true,
-                        (ShapeKind::Line, ShapeKind::Line) => true,
-                        (ShapeKind::Arrow, ShapeKind::Arrow) => true,
-                        _ => false,
-                    };
-                    if kind_match {
-                        matched_from[i] = true;
-                        matched_to[j] = true;
-                        pairs.push((i, j));
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    // Match Rule 4: Remaining elements of same enum kind by ordinal
-    for (i, ef) in from_elems.iter().enumerate() {
-        if matched_from[i] { continue; }
-        for (j, et) in to_elems.iter().enumerate() {
-            if matched_to[j] { continue; }
-            let same_kind = core::mem::discriminant(ef) == core::mem::discriminant(et);
-            if same_kind {
-                matched_from[i] = true;
-                matched_to[j] = true;
-                pairs.push((i, j));
-                break;
-            }
-        }
-    }
-
-    // 4. Render unmatched from_slide elements (fading out: 1.0 - ease)
-    let len = (target_w * target_h) as usize;
-    if ease < 1.0 {
-        for (i, ef) in from_elems.iter().enumerate() {
-            if !matched_from[i] {
-                let mut scratch = vec![0u32; len];
-                if let Some(mut sc) = Canvas::new(&mut scratch, target_w, target_h) {
-                    render_single_element(ef, None, None, theme, sx, sy, &mut sc, target_w, target_h);
-                    blend_buffer_over(&scratch, canvas.pixels_mut(), 1.0 - ease, None, target_w, target_h);
-                }
-            }
-        }
-    }
-
-    // 5. Render matched elements (smoothly interpolating position, size, color)
-    for (i, j) in pairs {
-        let ef = &from_elems[i];
-        let et = &to_elems[j];
-
-        let rf = scale_rect(ef.bounds(), sx, sy);
-        let rt = scale_rect(et.bounds(), sx, sy);
-        let r_interp = Rect::new(
-            lerp(rf.x, rt.x, ease),
-            lerp(rf.y, rt.y, ease),
-            lerp(rf.w, rt.w, ease),
-            lerp(rf.h, rt.h, ease),
-        );
-
-        match (ef, et) {
-            (SlideElement::Shape(sf), SlideElement::Shape(st)) => {
-                let fill_interp = lerp_color_opt(sf.fill, st.fill, ease);
-                let stroke_interp = lerp_stroke_opt(sf.stroke, st.stroke, ease);
-
-                match (sf.kind, st.kind) {
-                    (ShapeKind::RoundedRect { radius: rf }, ShapeKind::RoundedRect { radius: rt }) => {
-                        let rad = lerp(rf * sx, rt * sx, ease);
-                        if let Some(fill) = fill_interp {
-                            canvas.fill_round_rect(r_interp, rad, fill);
-                        }
-                        if let Some(stk) = stroke_interp {
-                            canvas.stroke_round_rect(r_interp, rad, stk.width * sx, stk.color);
-                        }
-                    }
-                    (ShapeKind::Ellipse, ShapeKind::Ellipse) => {
-                        let cx = r_interp.x + r_interp.w / 2.0;
-                        let cy = r_interp.y + r_interp.h / 2.0;
-                        let r = (r_interp.w.min(r_interp.h) / 2.0).max(1.0);
-                        if let Some(fill) = fill_interp {
-                            canvas.fill_circle(cx, cy, r, fill);
-                        }
-                        if let Some(stk) = stroke_interp {
-                            canvas.stroke_circle(cx, cy, r, stk.width * sx, stk.color);
-                        }
-                    }
-                    _ => {
-                        if let Some(fill) = fill_interp {
-                            canvas.fill_rect(r_interp, fill);
-                        }
-                        if let Some(stk) = stroke_interp {
-                            canvas.stroke_round_rect(r_interp, 0.0, stk.width * sx, stk.color);
-                        }
-                    }
-                }
-            }
-            (SlideElement::TextBox(tbf), SlideElement::TextBox(tbt)) => {
-                let bg_interp = lerp_color_opt(tbf.background, tbt.background, ease);
-                if let Some(bg) = bg_interp {
-                    canvas.fill_round_rect(r_interp, 8.0 * sx, bg);
-                }
-
-                let fs_f = tbf.paragraphs.first().and_then(|p| p.runs.first()).map(|r| r.font_size).unwrap_or(24.0);
-                let fs_t = tbt.paragraphs.first().and_then(|p| p.runs.first()).map(|r| r.font_size).unwrap_or(24.0);
-                let interp_fs = lerp(fs_f, fs_t, ease);
-
-                let col_f = tbf.paragraphs.first().and_then(|p| p.runs.first()).and_then(|r| r.color).unwrap_or(theme.palette.foreground);
-                let col_t = tbt.paragraphs.first().and_then(|p| p.runs.first()).and_then(|r| r.color).unwrap_or(theme.palette.foreground);
-                let interp_col = lerp_color(col_f, col_t, ease);
-
-                let active_tb = if ease < 0.5 { tbf } else { tbt };
-                let mut interp_tb = active_tb.clone();
-                for p in &mut interp_tb.paragraphs {
-                    for r in &mut p.runs {
-                        r.font_size = interp_fs;
-                        r.color = Some(interp_col);
-                    }
-                }
-                render_text_box(&interp_tb, r_interp, theme, sx, sy, canvas.pixels_mut(), target_w, target_h, None);
-            }
-            (SlideElement::Image(img_f), SlideElement::Image(img_t)) => {
-                let active_img = if ease < 0.5 { img_f } else { img_t };
-                render_image(active_img, r_interp, canvas.pixels_mut(), target_w, target_h);
-            }
-            (SlideElement::Code(cf), SlideElement::Code(ct)) => {
-                let active_c = if ease < 0.5 { cf } else { ct };
-                let fs = lerp(cf.font_size, ct.font_size, ease);
-                let mut c_clone = active_c.clone();
-                c_clone.font_size = fs;
-                render_code_block(&c_clone, r_interp, theme, sx, sy, canvas.pixels_mut(), target_w, target_h);
-            }
-            _ => {
-                let mut scratch = vec![0u32; len];
-                if let Some(mut sc) = Canvas::new(&mut scratch, target_w, target_h) {
-                    render_single_element(ef, Some(r_interp), None, theme, sx, sy, &mut sc, target_w, target_h);
-                    blend_buffer_over(&scratch, canvas.pixels_mut(), 1.0 - ease, None, target_w, target_h);
-                }
-                scratch.fill(0);
-                if let Some(mut sc) = Canvas::new(&mut scratch, target_w, target_h) {
-                    render_single_element(et, Some(r_interp), None, theme, sx, sy, &mut sc, target_w, target_h);
-                    blend_buffer_over(&scratch, canvas.pixels_mut(), ease, None, target_w, target_h);
-                }
-            }
-        }
-    }
-
-    // 6. Render unmatched to_slide elements (fading in: ease)
-    if ease > 0.0 {
-        for (j, et) in to_elems.iter().enumerate() {
-            if !matched_to[j] {
-                let mut scratch = vec![0u32; len];
-                if let Some(mut sc) = Canvas::new(&mut scratch, target_w, target_h) {
-                    render_single_element(et, None, None, theme, sx, sy, &mut sc, target_w, target_h);
-                    blend_buffer_over(&scratch, canvas.pixels_mut(), ease, None, target_w, target_h);
-                }
-            }
-        }
-    }
+    crate::morph::render_morph_frame(
+        from_slide,
+        to_slide,
+        theme,
+        aspect_ratio,
+        progress,
+        buffer,
+        target_w,
+        target_h,
+    );
 }
 
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
+pub(crate) fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
 }
 
-fn lerp_color(a: Color, b: Color, t: f32) -> Color {
+pub(crate) fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     let t = t.clamp(0.0, 1.0);
     let r = ((a.r() as f32) + ((b.r() as f32) - (a.r() as f32)) * t + 0.5) as u8;
     let g = ((a.g() as f32) + ((b.g() as f32) - (a.g() as f32)) * t + 0.5) as u8;
@@ -1360,7 +1187,7 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     Color::rgba(r, g, bl, al)
 }
 
-fn lerp_color_opt(a: Option<Color>, b: Option<Color>, t: f32) -> Option<Color> {
+pub(crate) fn lerp_color_opt(a: Option<Color>, b: Option<Color>, t: f32) -> Option<Color> {
     match (a, b) {
         (Some(ca), Some(cb)) => Some(lerp_color(ca, cb, t)),
         (Some(ca), None) => {
@@ -1375,7 +1202,7 @@ fn lerp_color_opt(a: Option<Color>, b: Option<Color>, t: f32) -> Option<Color> {
     }
 }
 
-fn lerp_stroke_opt(a: Option<StrokeStyle>, b: Option<StrokeStyle>, t: f32) -> Option<StrokeStyle> {
+pub(crate) fn lerp_stroke_opt(a: Option<StrokeStyle>, b: Option<StrokeStyle>, t: f32) -> Option<StrokeStyle> {
     match (a, b) {
         (Some(sa), Some(sb)) => Some(StrokeStyle {
             color: lerp_color(sa.color, sb.color, t),

@@ -24,12 +24,15 @@ pub struct Chord<'a> { pub name: &'a str, pub ctrl: bool, pub shift: bool }
 pub struct Book {
     session: Session,
     pub path: String,
+    /// Commands run that change the document (WordCraft marks them `mutates`): typing,
+    /// formatting, styles, undo. The window watches it to keep unsaved work.
+    pub edits: u64,
 }
 
 impl Book {
     /// An empty document that Ctrl+S saves to `path`.
     pub fn blank(path: &str) -> Book {
-        Book { session: Session::new(Document::new()), path: path.to_string() }
+        Book { session: Session::new(Document::new()), path: path.to_string(), edits: 0 }
     }
 
     /// Opens a docx, doc, odt, rtf, html, md or txt file.
@@ -38,12 +41,14 @@ impl Book {
         let mut session = Session::new(doc);
         session.path = Some(path.into());
         session.dirty = false;
-        Ok(Book { session, path: path.to_string() })
+        Ok(Book { session, path: path.to_string(), edits: 0 })
     }
 
     /// Runs one WordCraft command, such as `text.insert` or `format.bold`.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
-        self.session.run(id, &params).map_err(|e| format!("{e:?}"))
+        let r = self.session.run(id, &params).map_err(|e| format!("{e:?}"))?;
+        if self.session.registry.get(id).is_some_and(|spec| spec.mutates) { self.edits += 1; }
+        Ok(r)
     }
     pub fn type_text(&mut self, text: &str) -> Result<(), String> { self.run("text.insert", json!({ "text": text })).map(|_| ()) }
 
@@ -146,20 +151,108 @@ impl Book {
         Some(Picture { pixels, width: r.width as usize, height: r.height as usize })
     }
 
-    /// The document as the bytes of its file, in the format `path`'s extension names.
+    /// The document as the bytes of its file, in the format `path`'s extension names: docx,
+    /// odt, rtf, html, md, txt, or pdf (every page, as printed).
     pub fn file_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
         wordcraft_engine::io::save_bytes(path, &self.session.doc)
     }
 
-    /// Writes the document to its file with std::fs::write (the engine's safe save
-    /// creates and renames a temporary file). Returns the size.
+    /// Where Ctrl+S writes: the file itself, or beside it as .docx when WordCraft only
+    /// reads its format (Word 97-2003 .doc and .dot, or a PDF).
+    pub fn save_path(&self) -> String {
+        let lower = self.path.to_ascii_lowercase();
+        if [".doc", ".dot", ".pdf"].iter().any(|e| lower.ends_with(e)) { self.beside("docx") } else { self.path.clone() }
+    }
+
+    /// Writes the document to its file (see [`Book::save_path`]) with std::fs::write (the
+    /// engine's safe save creates and renames a temporary file). Returns the size.
     pub fn save(&mut self) -> Result<usize, String> {
-        let bytes = self.file_bytes(&self.path)?;
-        std::fs::write(&self.path, &bytes).map_err(|e| format!("Could not save {}: {e}", self.path))?;
+        let path = self.save_path();
+        let bytes = self.file_bytes(&path)?;
+        std::fs::write(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
+        self.forget_recovery();
+        self.path = path.clone();
+        self.session.path = Some(path.into());
         self.session.dirty = false;
         Ok(bytes.len())
     }
+
+    /// The file beside this one with extension `ext` (`letter.docx` -> `letter.pdf`).
+    pub fn beside(&self, ext: &str) -> String {
+        let name_at = self.path.rfind('/').map_or(0, |i| i + 1);
+        let stem = match self.path[name_at..].rfind('.') { Some(dot) if dot > 0 => &self.path[..name_at + dot], _ => &self.path[..] };
+        format!("{stem}.{ext}")
+    }
+
+    /// Writes every page as a PDF beside the document (Ctrl+P: SexOS prints to PDF).
+    /// Returns (its name, size).
+    pub fn export_pdf(&self) -> Result<(String, usize), String> {
+        let path = self.beside("pdf");
+        let bytes = self.file_bytes(&path)?;
+        std::fs::write(&path, &bytes).map_err(|e| format!("Could not write {path}: {e}"))?;
+        Ok((path, bytes.len()))
+    }
+
+    /// Save As: writes the document as `path` in the format its extension names and, unless
+    /// that is an export (pdf, png), goes on working in it. A name with no extension keeps
+    /// this file's. Returns (path, size).
+    pub fn save_as(&mut self, path: &str) -> Result<(String, usize), String> {
+        let name_at = path.rfind('/').map_or(0, |i| i + 1);
+        let path = if path[name_at..].contains('.') { path.to_string() } else {
+            let ext = self.save_path().rsplit_once('.').map_or("docx".to_string(), |(_, e)| e.to_string());
+            format!("{path}.{ext}")
+        };
+        let lower = path.to_ascii_lowercase();
+        if [".doc", ".dot"].iter().any(|e| lower.ends_with(e)) {
+            return Err("Word 97-2003 files open but do not save: save as .docx, .odt or .rtf".into());
+        }
+        let bytes = self.file_bytes(&path)?;
+        std::fs::write(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
+        if ![".pdf", ".png"].iter().any(|e| lower.ends_with(e)) {
+            self.forget_recovery();
+            self.path = path.clone();
+            self.session.path = Some(path.clone().into());
+            self.session.dirty = false;
+        }
+        Ok((path, bytes.len()))
+    }
+
+    /// Keeps unsaved changes safe in [`recovery_path`] (on close, and after a quiet moment),
+    /// as WordCraft's own docx so nothing is lost.
+    pub fn write_recovery(&self) -> Result<(), String> {
+        let path = recovery_path(&self.path);
+        let bytes = self.file_bytes(&path)?;
+        std::fs::write(&path, bytes).map_err(|e| format!("Could not keep the changes in {path}: {e}"))
+    }
+
+    /// Opens `path` with the unsaved changes kept from last time, if there are any: the
+    /// document is then changed (not saved) and Ctrl+S writes it to `path`.
+    pub fn open_recovered(path: &str) -> Option<Book> {
+        let kept = recovery_path(path);
+        std::fs::metadata(&kept).ok()?;
+        let mut book = Book::open(&kept).ok()?;
+        book.path = path.to_string();
+        book.session.path = Some(path.into());
+        book.session.dirty = true;
+        Some(book)
+    }
+
+    /// Throws the kept changes away.
+    pub fn forget_recovery(&self) { let _ = std::fs::remove_file(recovery_path(&self.path)); }
+
+    /// Ctrl+G: puts the caret at the top of page `page` (counted from 1, clamped to the
+    /// pages there are). Returns the page, counted from 0.
+    pub fn go_to_page(&mut self, page: usize) -> usize {
+        let page = page.clamp(1, self.pages().max(1)) - 1;
+        // The first line: a click just inside the body's top-left corner lands on it.
+        let (x, y) = self.layout().pages.get(page).map_or((72.0, 72.0), |p| (p.body.x + 1.0, p.body.y + 1.0));
+        self.click(page, x, y, false);
+        page
+    }
 }
+
+/// Where unsaved changes to `path` are kept: `letter.odt` -> `letter.odt.recovered.docx`.
+pub fn recovery_path(path: &str) -> String { format!("{path}.recovered.docx") }
 
 #[cfg(test)]
 mod tests {
@@ -309,6 +402,84 @@ mod tests {
         assert_eq!(book.words(), words + 1);
     }
 
+
+    #[test]
+    fn round_trips_odt_rtf_and_markdown() {
+        let mut book = welcome("formats.docx");
+        book.key(&Chord { name: "End", ctrl: true, shift: false });
+        book.type_text(" Last words.").unwrap();
+        let text = book.text();
+        for ext in ["odt", "rtf", "html", "md", "txt"] {
+            let (path, n) = book.save_as(&temp(&format!("copy.{ext}"))).unwrap();
+            assert!(n > 20, "{ext}");
+            assert_eq!(book.path, path);
+            let again = Book::open(&path).unwrap();
+            let words = |t: &str| t.split_whitespace().map(str::to_string).collect::<Vec<_>>();
+            assert_eq!(words(&again.text()), words(&text), "{ext} keeps the words");
+        }
+        // The title keeps its style through ODT, Writer's own format.
+        let mut odt = Book::open(&temp("copy.odt")).unwrap();
+        assert_eq!(odt.paragraph_style(), "Title");
+    }
+
+    #[test]
+    fn exports_pdf_and_keeps_unsaved_changes() {
+        let mut book = welcome("letter.docx");
+        let (pdf, n) = book.export_pdf().unwrap();
+        assert!(pdf.ends_with("letter.pdf") && n > 1000);
+        assert!(std::fs::read(&pdf).unwrap().starts_with(b"%PDF-"));
+        let (as_pdf, _) = book.save_as(&temp("printed.pdf")).unwrap();
+        assert!(as_pdf.ends_with("printed.pdf"));
+        assert!(book.path.ends_with("letter.docx"), "a PDF is an export");
+        assert!(book.save_as(&temp("old.doc")).is_err());
+
+        let path = book.path.clone();
+        assert!(Book::open_recovered(&path).is_none());
+        book.key(&Chord { name: "End", ctrl: true, shift: false });
+        book.type_text(" Unsaved.").unwrap();
+        book.write_recovery().unwrap();
+        let mut back = Book::open_recovered(&path).unwrap();
+        assert!(back.dirty());
+        assert_eq!(back.path, path);
+        assert!(back.text().trim_end().ends_with("Unsaved."));
+        back.save().unwrap();
+        assert!(Book::open_recovered(&path).is_none(), "saving forgets the kept copy");
+        assert!(Book::open(&path).unwrap().text().trim_end().ends_with("Unsaved."));
+    }
+
+    #[test]
+    fn go_to_page_moves_the_caret() {
+        let mut book = welcome("pages.docx");
+        for _ in 0..80 { book.type_text("A paragraph long enough to fill some of the page. ").unwrap(); book.key(&Chord { name: "Enter", ctrl: false, shift: false }); }
+        let pages = book.pages();
+        assert!(pages >= 2);
+        assert_eq!(book.go_to_page(2), 1);
+        assert_eq!(book.caret().unwrap().page, 1);
+        assert_eq!(book.go_to_page(99), pages - 1);
+        assert_eq!(book.go_to_page(0), 0);
+        assert_eq!(book.caret().unwrap().page, 0);
+    }
+
+    #[test]
+    fn edits_count_changes_not_moves() {
+        let mut book = welcome("edits.docx");
+        assert_eq!(book.edits, 0);
+        book.key(&Chord { name: "End", ctrl: false, shift: false });
+        book.key(&Chord { name: "Home", ctrl: false, shift: true });
+        assert_eq!(book.edits, 0, "moving and selecting change nothing");
+        book.key(&Chord { name: "B", ctrl: true, shift: false });
+        assert_eq!(book.edits, 1, "bold is an edit with the same text");
+        book.set_style("Heading1").unwrap();
+        assert_eq!(book.edits, 2);
+        book.type_text("x").unwrap();
+        assert_eq!(book.edits, 3);
+    }
+
+    #[test]
+    fn doc_saves_beside_as_docx() {
+        let book = Book::blank(&temp("old.doc"));
+        assert!(book.save_path().ends_with("old.docx"));
+    }
 
     #[test]
     fn replace_and_paragraph_styles() {

@@ -50,6 +50,8 @@ pub struct Touchpad {
     last_len: usize,
     pub reports: u64,
     pub repeats: u64,
+    /// Whether the last read was a zero-length answer (nothing pending).
+    pub last_empty: bool,
 }
 
 fn read_register<B: Bus>(bus: &mut B, register: u16, out: &mut [u8]) -> bool {
@@ -85,7 +87,7 @@ impl Touchpad {
             touch_mode = true;
         }
         let extent = touch::extent(&layout);
-        Ok(Self { hid: d, layout, extent, touch_mode, last: [0; MAX_INPUT], last_len: 0, reports: 0, repeats: 0 })
+        Ok(Self { hid: d, layout, extent, touch_mode, last: [0; MAX_INPUT], last_len: 0, reports: 0, repeats: 0, last_empty: false })
     }
 
     /// Bytes one input read takes.
@@ -95,8 +97,9 @@ impl Touchpad {
     pub fn poll<B: Bus>(&mut self, bus: &mut B) -> Result<Option<Frame>, ()> {
         let mut raw = [0u8; MAX_INPUT];
         let n = self.input_len();
+        self.last_empty = false;
         if !bus.transfer(&[], &mut raw[..n]) { return Err(()); }
-        let Some(payload) = hid::input_payload(&raw[..n]) else { return Ok(None) };
+        let Some(payload) = hid::input_payload(&raw[..n]) else { self.last_empty = true; return Ok(None) };
         if payload.len() == self.last_len && payload == &self.last[..self.last_len] {
             self.repeats += 1;
             return Ok(None);
@@ -199,6 +202,20 @@ pub(crate) mod tests {
         assert_eq!(t.extent, (3000, 2000));
         assert_eq!((t.hid.vendor_id, t.hid.product_id), (0x04f3, 0x3195));
         assert_eq!(t.input_len(), 64);
+    }
+
+    #[test]
+    fn empty_answers_are_told_apart_from_reports() {
+        let mut pad = Pad::new();
+        let mut t = up(&mut pad);
+        assert_eq!(t.poll(&mut pad), Ok(None));
+        assert!(t.last_empty);
+        pad.push(report(&[(1, true, 100, 100)], false));
+        assert!(t.poll(&mut pad).unwrap().is_some());
+        assert!(!t.last_empty);
+        pad.repeat_last = true;
+        assert_eq!(t.poll(&mut pad), Ok(None));
+        assert!(!t.last_empty, "a repeat is an answer, not an empty one");
     }
 
     #[test]

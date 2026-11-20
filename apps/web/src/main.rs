@@ -25,6 +25,7 @@ mod extensions;
 mod tabs;
 mod viewport;
 mod websocket;
+mod code_store;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -227,6 +228,8 @@ struct Browser {
     forward: Vec<String>,
     /// History, bookmarks, cookies and storage kept in Files.
     profile: profile::Profile,
+    /// The compiled-script cache's copy in Files.
+    code_store: code_store::CodeStore,
     /// Addresses offered while typing in the bar, and the one chosen with the arrows.
     suggestions: Vec<String>,
     chosen: Option<usize>,
@@ -366,7 +369,13 @@ impl Browser {
 
     /// Makes frame `i`'s page the current one, until `leave`. Only the shown page has
     /// frames: frames inside frames are not loaded.
-    fn enter(&mut self, i: usize) { self.swap_frame(i); self.in_frame = Some(self.frames[i].node); }
+    fn enter(&mut self, i: usize) { self.code_site(); self.swap_frame(i); self.in_frame = Some(self.frames[i].node); }
+
+    /// Compiled scripts from now on belong to the shown top-level page's site (frames
+    /// included). Called before any of its or its frames' scripts run.
+    pub(crate) fn code_site(&mut self) {
+        if self.in_frame.is_none() { self.code_store.open(&mut self.window, &mut self.code_cache.borrow_mut(), &self.url); }
+    }
     fn leave(&mut self, i: usize) { self.swap_frame(i); self.in_frame = None; }
 
     /// Stops a frame's downloads as it goes.
@@ -506,7 +515,7 @@ impl Browser {
 
     /// When the next timer of any page (shown or framed) is due.
     fn next_due(&self) -> Option<u64> {
-        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.profile.due).chain(self.ws_due()).chain(self.backgrounds_due()).min()
+        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.profile.due).chain(self.code_store.due).chain(self.ws_due()).chain(self.backgrounds_due()).min()
     }
 
     /// Runs the timers that are due, on every page.
@@ -514,6 +523,8 @@ impl Browser {
         self.ws_poll();
         let now = sex_pdx::get_ticks();
         if self.profile.due.is_some_and(|d| d <= now) { self.profile.save(&mut self.window, &self.jar.borrow(), wall(), false); }
+        self.code_store.later(&self.code_cache.borrow());
+        if self.code_store.due.is_some_and(|d| d <= now) { self.code_store.save(&mut self.window, &mut self.code_cache.borrow_mut()); }
         if self.timer.is_some_and(|t| t <= now) { self.tick(); }
         if self.backgrounds_due().is_some_and(|t| t <= now) { self.backgrounds_tick(); }
         let mut i = 0;
@@ -896,6 +907,7 @@ impl Browser {
         let Doc::Plain(mut doc) = core::mem::replace(&mut self.doc, Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", self.view, clock))) else { return };
         doc.import_map = core::mem::take(&mut self.import_map);
         doc.code_cache = Some(self.code_cache.clone());
+        self.code_site();
         if self.extensions.any() && self.url.starts_with("http") {
             doc.ext_key = self.extensions.key.clone();
             doc.ext_tab = self.ext_tab_json();
@@ -931,6 +943,7 @@ impl Browser {
             if let Err(sex_js::Error::Trapped(why)) = &r { sex_pdx::serial_record!("[web.script] trapped={}", why); break; }
         }
         let _ = script.dispatch("ready");
+        self.code_store.later(&self.code_cache.borrow());
         #[cfg(feature = "baseline-jit")]
         {
             if let Ok([hits, misses, concat, compare]) = script.guest_fast_path_stats() {
@@ -1833,7 +1846,7 @@ pub extern "C" fn _start() -> ! {
     let page = sex_html::render("", view.0, view.1, &fonts as &dyn Host);
     let doc = Doc::Plain(Document::new(sex_html::dom::Dom::new(), "", view, clock));
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
-        tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), suggestions: Vec::new(), chosen: None,
+        tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
         shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None };
     b.profile = profile::Profile::load(&mut b.window, &mut b.jar.borrow_mut(), wall());

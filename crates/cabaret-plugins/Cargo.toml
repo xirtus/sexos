@@ -1,0 +1,12 @@
+[package]
+name = "cabaret-plugins"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Cabaret effects, transitions, captions, overlays and multi-canvas tools in pure Rust"
+
+[dependencies]
+libm = "0.2"
+sex-color = { path = "../sex-color" }
+cabaret-core = { path = "../cabaret-core" }
+sex-wasm = { path = "../sex-wasm" }

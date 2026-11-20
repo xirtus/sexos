@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# The parts of sex-pdx that driver sources built for device-model fuzzing use,
+# with the kernel replaced: a model clock instead of syscalls, quiet logs.
+[package]
+name = "sex-pdx-model"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-only"
+
+[lib]
+name = "sex_pdx"
+path = "src/lib.rs"
+
+[dependencies]
+real = { package = "sex-pdx", path = "../../../crates/sex-pdx" }

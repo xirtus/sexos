@@ -1,0 +1,135 @@
+# SPDX-License-Identifier: GPL-3.0-only
+# Driver fuzzing: device models feed hostile register values, DMA rings,
+# descriptors, firmware files and tables to the real driver sources.
+#   cargo run --release --bin drv_wifi_rx              built-in mutator (PRs, any toolchain)
+#   cargo fuzz run drv_wifi_rx --features libfuzzer    coverage guided (nightly)
+#   ./run.sh [ITERS]                                   every target, built-in mutator
+# See README.md.
+[workspace]
+
+[package]
+name = "sexos-driver-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "GPL-3.0-only"
+
+[package.metadata]
+cargo-fuzz = true
+
+[features]
+libfuzzer = ["dep:libfuzzer-sys"]
+
+[dependencies]
+libfuzzer-sys = { version = "0.4", optional = true }
+sex-wifi = { path = "../../crates/sex-wifi" }
+sex-uvc = { path = "../../crates/sex-uvc" }
+sex-kms = { path = "../../crates/sex-kms" }
+sex-gpu-intel = { path = "../../crates/sex-gpu-intel" }
+sex-gpu-nv = { path = "../../crates/sex-gpu-nv" }
+sex-iommu = { path = "../../crates/sex-iommu" }
+sex-imsm = { path = "../../crates/sex-imsm" }
+sex-laptop = { path = "../../crates/sex-laptop" }
+sex-i2c-dw = { path = "../../crates/sex-i2c-dw" }
+sex-hid-touch = { path = "../../crates/sex-hid-touch" }
+p256 = { version = "=0.13.2", default-features = false, features = ["arithmetic"] }
+acpi = { path = "../../vendor/acpi-6.1.1", default-features = false, features = ["alloc", "aml"] }
+sex_pdx = { package = "sex-pdx-model", path = "pdx-model" }
+
+[profile.release]
+debug = 1
+debug-assertions = true
+overflow-checks = true
+
+# Third-party code runs as it does in the image (overflow wraps there); its real
+# panics (bounds, unwraps, unimplemented) still count.
+[profile.release.package.acpi]
+overflow-checks = false
+debug-assertions = false
+[[bin]]
+name = "drv_wifi_rx"
+path = "fuzz_targets/drv_wifi_rx.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_wifi_firmware"
+path = "fuzz_targets/drv_wifi_firmware.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_uvc"
+path = "fuzz_targets/drv_uvc.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_display_intel"
+path = "fuzz_targets/drv_display_intel.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_gpu_nv"
+path = "fuzz_targets/drv_gpu_nv.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_iommu_tables"
+path = "fuzz_targets/drv_iommu_tables.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_imsm_raid"
+path = "fuzz_targets/drv_imsm_raid.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_laptop_ec"
+path = "fuzz_targets/drv_laptop_ec.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_i2c_dw"
+path = "fuzz_targets/drv_i2c_dw.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_hid_touch"
+path = "fuzz_targets/drv_hid_touch.rs"
+test = false
+doc = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
+
+[[bin]]
+name = "drv_hda"
+path = "fuzz_targets/drv_hda.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_xhci_usb"
+path = "fuzz_targets/drv_xhci_usb.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_nvme"
+path = "fuzz_targets/drv_nvme.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "drv_acpi_aml"
+path = "fuzz_targets/drv_acpi_aml.rs"
+test = false
+doc = false
+

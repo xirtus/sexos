@@ -518,6 +518,10 @@ pub fn init_boot() {
         serial_println!("[iommu.absent] reason=boot_option_iommu_off translation=off dma=boot_pools");
         return;
     }
+    if crate::safe_start() {
+        serial_println!("[iommu.absent] reason=safe_start translation=off dma=boot_pools");
+        return;
+    }
     let firmware = match Firmware::find() {
         Ok(f) => f,
         Err(reason) => { serial_println!("[iommu.absent] reason={} translation=off dma=boot_pools", reason); return; }
@@ -665,11 +669,7 @@ pub fn init_boot() {
     if enabled > 0 { crate::iommu_selftest::run(); }
 }
 
-fn boot_cmdline() -> &'static str {
-    crate::KERNEL_FILE_REQUEST.response().map(|r| r.executable_file().cmdline()).unwrap_or("")
-}
-
-fn boot_option(word: &str) -> bool { boot_cmdline().split_ascii_whitespace().any(|w| w == word) }
+use crate::{boot_cmdline, boot_option};
 
 /// From the timer with IF masked: log and attribute faults, rate-limited.
 pub fn poll() {

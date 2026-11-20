@@ -28,6 +28,7 @@ def main():
  try:
   g['wait'](r'\[bell.mic.card\] input=(\d+)',0,120)
   if a.card=='hda':g['wait'](r'\[bell.hda.input\] codec=\d+ pin=\d+ adc=\d+ device=0x[8a] ',0,10)
+  if a.card=='hda':g['wait'](r'\[bell.hda.irq\] mode=msix? vectors=1 bit=\d+ polling=0',0,10)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   def ask():
    s0=len(t());m=say('run play --listen 2',r'\[bell.mic.asked\] row=(\d+) caller=(\d+) listen=1 allowed=0')
