@@ -653,6 +653,11 @@ mod guest {
                             studio.plugin_status(&mut app.ui, plugin.status());
                         }
                         Some(Action::Play) => {
+                            // Voice polling blocks this loop, which also refills playback.
+                            if voice_job.is_some() {
+                                studio.message(&mut app.ui, "Wait for the voice job, or Cancel Voice, before playback");
+                                continue;
+                            }
                             if plugin.busy() {
                                 studio.message(
                                     &mut app.ui,
@@ -778,6 +783,11 @@ mod guest {
                             }
                         }
                         Some(Action::Record) => {
+                            // Voice polling blocks this loop, which also drains the microphone.
+                            if voice_job.is_some() {
+                                studio.message(&mut app.ui, "Wait for the voice job, or Cancel Voice, before recording");
+                                continue;
+                            }
                             if recording.is_some() || studio.session.tracks.len() >= 8 {
                                 studio.message(&mut app.ui,"Stop recording first, or start a project with fewer than eight tracks");
                                 continue;
