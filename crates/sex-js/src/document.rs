@@ -500,7 +500,7 @@ impl Page for Document {
                 };
                 if list.is_empty() { return Some(String::from("!")); }
                 if operation == op::MATCHES {
-                    return Some(String::from(if list.iter().any(|s| sex_html::css::matches(&self.dom, root, s)) { "1" } else { "0" }));
+                    return Some(String::from(if list.iter().any(|s| sex_html::css::matches_scoped(&self.dom, root, s, root)) { "1" } else { "0" }));
                 }
                 let all = a.get(2) == Some(&"1");
                 let found = self.dom.query(root, &list, all);
