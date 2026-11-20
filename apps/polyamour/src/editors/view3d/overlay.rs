@@ -32,6 +32,7 @@ pub fn scene_image(s: &mut State, d: &mut Doc, ui: &mut Ui, r: Rect) {
         threads: 0,
         background: Some(BG),
         workbench: sex_3d::render::Workbench { xray: s.xray, ..s.solid },
+        shadow_catcher: s.shadow_catcher,
         ..ViewportSettings::default()
     };
     match s.shading {

@@ -8,13 +8,61 @@
 //! `_DSM` (function 1) gives the HID descriptor register; the controller's `_ADR` gives
 //! its PCI function and `FMCN`/`SSCN` its clock counts. Both devices' `_PS0` run first,
 //! since some firmware only powers the pad there.
+//!
+//! The interrupt: an `Interrupt` resource is already an I/O APIC input. A `GpioInt`
+//! pin is looked up on the GPIO controller it names (Intel Tiger Lake / Alder Lake,
+//! `sex_laptop::intel_gpio`): when firmware routed that pad to the I/O APIC, its
+//! `INTSEL` is the input. The pad is only read, never changed. Anything else leaves
+//! `irq` empty and Input polls.
 use crate::{eval, eval_int, int_of, name, Aml};
 use acpi::aml::namespace::AmlName;
 use acpi::aml::object::{Object, WrappedObject};
 use alloc::vec::Vec;
+use sex_laptop::intel_gpio::{self as gpio, Chip, Pad};
 use sex_laptop::resources::{self, Resource};
+use sex_pdx::power as w;
 use sex_pdx::serial_println;
-use sex_pdx::touchpad::{self as t, Found};
+use sex_pdx::touchpad::{self as t, Found, Irq};
+
+/// One 32-bit register read through the kernel's firmware window.
+fn read32(address: u64) -> Option<u32> {
+    crate::spend(1);
+    let r = w::call4(w::FW_MEM, address, 4, 0);
+    (r[0] == w::OK).then_some(r[1] as u32)
+}
+
+fn hid_of(aml: &Aml, dev: &AmlName) -> Option<alloc::string::String> {
+    let o = eval(aml, dev, "_HID", Vec::new())?;
+    match &*o {
+        Object::Integer(v) => Some(alloc::string::String::from_utf8_lossy(&w::eisa_id(*v as u32)).into_owned()),
+        Object::String(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// The I/O APIC input behind a `GpioInt` pin, or why there is none.
+fn gpio_line(aml: &Aml, dev: &AmlName, pin: u16, active_low: bool, controller: &[u8]) -> Result<Irq, &'static str> {
+    let path = path_from(controller, dev).ok_or("gpio_bad_path")?;
+    let chip = hid_of(aml, &path).as_deref().and_then(Chip::from_hid).ok_or("gpio_chip_unknown")?;
+    let (community, pad) = chip.locate(pin).ok_or("gpio_pin_unknown")?;
+    let crs = eval(aml, &path, "_CRS", Vec::new()).ok_or("gpio_no_crs")?;
+    let Object::Buffer(bytes) = &*crs else { return Err("gpio_crs_not_buffer") };
+    let mut bases = Vec::new();
+    resources::parse(bytes, |r| if let Resource::Memory { base, length } = r { bases.push((base as u64, length)); });
+    let &(base, length) = bases.get(community).ok_or("gpio_no_community")?;
+    let revid = read32(base + gpio::REVID as u64).ok_or("gpio_unreadable")?;
+    let padbar = read32(base + gpio::PADBAR as u64).ok_or("gpio_unreadable")?;
+    let at = gpio::pad_offset(revid, padbar, pad);
+    if at as u64 + 8 > length as u64 { return Err("gpio_pad_outside"); }
+    let p = Pad { dw0: read32(base + at as u64).ok_or("gpio_unreadable")?, dw1: read32(base + at as u64 + 4).ok_or("gpio_unreadable")? };
+    serial_println!("[sexacpi.touchpad.gpio] chip={} pin={} community={} pad={} dw0={:#010x} dw1={:#010x}", chip.name, pin, community, pad, p.dw0, p.dw1);
+    let l = p.apic_line(active_low).map_err(|e| match e {
+        gpio::NotRouted::NotGpioInput => "gpio_not_input",
+        gpio::NotRouted::NotApicRouted => "gpio_not_apic_routed",
+        gpio::NotRouted::NoLine => "gpio_no_line",
+    })?;
+    Ok(Irq { gsi: l.gsi, edge: l.edge, active_low: l.active_low })
+}
 
 fn path_from(bytes: &[u8], scope: &AmlName) -> Option<AmlName> {
     let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
@@ -55,10 +103,11 @@ fn counts(aml: &Aml, controller: &AmlName, khz: u32) -> Option<(u16, u16, u16)> 
 pub fn describe(aml: &Aml, dev: &AmlName) -> Result<Found, &'static str> {
     let crs = eval(aml, dev, "_CRS", Vec::new()).ok_or("no_crs")?;
     let Object::Buffer(bytes) = &*crs else { return Err("crs_not_buffer") };
-    let (mut bus, mut gpio) = (None, None);
+    let (mut bus, mut gpio, mut apic) = (None, None, None);
     resources::parse(bytes, |r| match r {
         Resource::I2c { address, ten_bit, hz, controller } if bus.is_none() => bus = Some((address, ten_bit, hz, controller.to_vec())),
-        Resource::GpioInt { pin, .. } if gpio.is_none() => gpio = Some(pin),
+        Resource::GpioInt { pin, active_low, controller, .. } if gpio.is_none() => gpio = Some((pin, active_low, controller.to_vec())),
+        Resource::Interrupt { number, edge, active_low } if apic.is_none() && number <= 0x3ff => apic = Some(Irq { gsi: number as u16, edge, active_low }),
         _ => {}
     });
     let (address, ten_bit, hz, controller) = bus.ok_or("no_i2c")?;
@@ -67,9 +116,15 @@ pub fn describe(aml: &Aml, dev: &AmlName) -> Result<Found, &'static str> {
     let hid = hid_register(aml, dev).ok_or("no_dsm")?;
     for p in [&controller, dev] { let _ = eval(aml, p, "_PS0", Vec::new()); }
     let khz = (hz / 1000).clamp(100, 1000);
+    let irq = match (apic, &gpio) {
+        (Some(i), _) => Ok(i),
+        (None, Some((pin, active_low, source))) => gpio_line(aml, dev, *pin, *active_low, source),
+        (None, None) => Err("none_named"),
+    };
+    if let Err(why) = irq { serial_println!("[sexacpi.touchpad.irq] path={} line=none reason={}", dev, why); }
     Ok(Found {
         bus: 0, device: (adr >> 16) as u8 & 31, function: (adr & 7) as u8, address, ten_bit, khz, hid_register: hid,
-        counts: counts(aml, &controller, khz), gpio_pin: gpio,
+        counts: counts(aml, &controller, khz), gpio_pin: gpio.map(|g| g.0), irq: irq.ok(),
     })
 }
 
@@ -79,9 +134,10 @@ pub fn find(aml: &Aml, devices: &[AmlName]) -> Vec<Found> {
     for dev in devices {
         match describe(aml, dev) {
             Ok(f) => {
-                serial_println!("[sexacpi.touchpad] path={} pci={:02x}:{:02x}.{} address={:#x} ten_bit={} khz={} hid_register={:#x} gpio={} counts={}",
+                serial_println!("[sexacpi.touchpad] path={} pci={:02x}:{:02x}.{} address={:#x} ten_bit={} khz={} hid_register={:#x} gpio={} counts={} irq={}",
                     dev, f.bus, f.device, f.function, f.address, f.ten_bit as u8, f.khz, f.hid_register,
-                    f.gpio_pin.map_or(-1, |p| p as i32), f.counts.map_or(alloc::string::String::from("none"), |(h, l, s)| alloc::format!("{h}/{l}/{s}")));
+                    f.gpio_pin.map_or(-1, |p| p as i32), f.counts.map_or(alloc::string::String::from("none"), |(h, l, s)| alloc::format!("{h}/{l}/{s}")),
+                    f.irq.map_or(alloc::string::String::from("none"), |i| alloc::format!("{}/{}/{}", i.gsi, if i.edge { "edge" } else { "level" }, if i.active_low { "low" } else { "high" })));
                 out.push(f);
             }
             Err(why) => serial_println!("[sexacpi.touchpad.skip] path={} reason={}", dev, why),
