@@ -164,7 +164,7 @@ c8ce764c793dd50836578efc7991b2c966b6a10021dde94cf452a8cfcd09b864  kernel/src/ipc
 
 dcc491154df5f4182c1cec5f13498ff9081b030e90d894af41b09163e8cbe029  kernel/src/ipc/reply_credit.rs
 
-5fd9d7d28138623172ea565d6a7d0ddb74a07baca2cd3f29079ccddac8fff0f0  kernel/src/ipc/router.rs
+6079ff86868ef358c9cbc91c91f4e3c47b0693eadbf971d7a21aee791be0d5bd  kernel/src/ipc/router.rs
 
 cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc/sender.rs
 
