@@ -731,7 +731,12 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
             // its other paths below; mounting stays Spindle's.
-            if !bound.is_some_and(|b| bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)) || matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)) {
+                // A run just started can ask (its arguments first) before Shell's bind gets
+                // here: it waits for it rather than starting with nothing.
+                return w::reply(r.seq, if binding_due(caller, caller_task, bound.map_or(0, |b| b.task)) { w::STARTING } else { w::DENIED }, 0);
+            }
             // A terminal the person started with Spindle's `spindle` command may start programs
             // attached to it (`console_relay`). Any program may PREPARE a run of its own
             // (`sex_pdx::launch`); `program_prepare` lets it pass on only what it holds.
@@ -1047,6 +1052,11 @@ static mut NEXT_TICKET: u32 = 0;
 fn bound_sender(target: u32, sender_task: u32, bound_task: u32, preparing: bool) -> bool {
     // Worker file I/O remains valid; launch delegation belongs to the main run.
     bound_task != 0 && program_live(target, bound_task) && (!preparing || (sender_task != 0 && sender_task == bound_task))
+}
+/// `task` runs live in row `target`, is not the task bound there, and a program read
+/// still waits for Shell's bind: that bind is on its way.
+fn binding_due(target: u32, task: u32, bound_task: u32) -> bool {
+    task != 0 && task != bound_task && unsafe { (*core::ptr::addr_of!(LOADED)).1 != 0 } && program_live(target, task)
 }
 fn current_ticket_owner(target: u32) -> Option<TicketOwner> {
     let index = program_index(target)?;
