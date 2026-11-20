@@ -42,19 +42,16 @@ fn dead(task: *mut Task) -> bool {
 }
 
 /// The core for a run's `n`th worker: spread over the cores programs use, away from
-/// the main task's own. Rows that share a key stay on their one core.
+/// the main task's own. A row's view may be entered on any core (`views`).
 fn core_for(target: u32, n: usize) -> u32 {
     let home = crate::smp::home_core(target as u64);
-    if crate::program_tenancy::shared(target) { return home; }
     let spare = crate::smp::program_cores();
     if spare <= 1 { return home; }
     2 + ((home - 2) + 1 + n as u32) % spare
 }
 
 /// Cores this run's workers use.
-fn cores(target: u32) -> u64 {
-    if crate::program_tenancy::shared(target) { 1 } else { crate::smp::program_cores().max(1) as u64 }
-}
+fn cores(_target: u32) -> u64 { crate::smp::program_cores().max(1) as u64 }
 
 /// Starts a worker for `target`'s run `run`. The caller holds the program table and
 /// has checked that `run` is the row's live run, so no end can race this.
