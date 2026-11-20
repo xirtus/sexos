@@ -24,6 +24,9 @@
   already keeps. Files resends block reads, writes and flushes on it
   (`[sexfiles.block.resend]`); a USB disk sees it as an I/O error and comes back
   through the normal re-plug path.
+- **Network's clients:** Network does not answer calls its old run took, so Spindle's
+  `fetch` watches Network's restart epoch and ends a download whose call was lost
+  (`fetch: network restarted`, `[spindle.fetch.lost]`) instead of waiting forever.
 - **Probe:** test builds (`SEXOS_CRASH_PROBE=1`) take `crash NAME busy` (end it in
   the middle of a request) and `crash NAME hang` (leave it stuck there for the hang
   watch). Spindle has `sum PATH` (size and FNV-1a 64 of a whole file).
