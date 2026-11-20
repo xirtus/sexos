@@ -8,6 +8,7 @@
 //! - `touch`: turns input reports into a frame of contacts.
 //! - `gesture`: one finger moves the pointer, two scroll, taps click, three-finger
 //!   swipes change workspace, pinches zoom.
+//! - `pace`: when to read: on the pad's interrupt line, with polling as the fallback.
 //!
 //! The bus driver (the DesignWare I2C controller) feeds bytes in; pointer events come out.
 #![cfg_attr(not(test), no_std)]
@@ -15,5 +16,6 @@
 pub mod descriptor;
 pub mod gesture;
 pub mod i2c_hid;
+pub mod pace;
 pub mod session;
 pub mod touch;

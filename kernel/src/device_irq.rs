@@ -12,10 +12,15 @@
 //! Nothing here is created after BOOT: the syscall only reads records, flips mask
 //! bits of vectors BOOT already gave the caller, and clears the caller's own bits.
 //!
+//! Lines are the same bits fed by an I/O APIC input instead of a message: BOOT reserves
+//! the vector and bit (`sex_hwdb::manifest::LINES`), the service binds the input firmware
+//! named once, and a level line is masked here each time it fires (the driver unmasks
+//! it after quieting the device), so a wire stuck asserted cannot storm.
+//!
 //! Without interrupt remapping (D4) a driver that can DMA can also forge an MSI
 //! write; that is the same trust a DMA-capable driver already has before the IOMMU.
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use sex_pdx::device::{Lease, Mode, MAX_LEASES, MAX_VECTORS_PER_SERVICE, ERR_NONE, OP_LIST, OP_MASK, OP_TAKE, OP_UNMASK};
+use sex_pdx::device::{Lease, Mode, MAX_LEASES, MAX_LINES, MAX_VECTORS_PER_SERVICE, ERR_NONE, OP_LINE_BIND, OP_LINE_MASK, OP_LIST, OP_MASK, OP_TAKE, OP_UNMASK, LINE_ACTIVE_LOW, LINE_EDGE};
 use x86_64::structures::idt::InterruptStackFrame;
 
 pub const FIRST_VECTOR: u8 = 0x50;
@@ -35,6 +40,81 @@ static ROUTE: [AtomicU64; VECTORS] = [const { AtomicU64::new(0) }; VECTORS];
 /// Interrupts delivered, by vector index.
 static FIRED: [AtomicU64; VECTORS] = [const { AtomicU64::new(0) }; VECTORS];
 static NEXT_VECTOR: AtomicU32 = AtomicU32::new(0);
+
+/// A line BOOT reserved: owner, vector index, pending bit, target core; the bound input.
+#[derive(Clone, Copy)]
+struct Line { pd: u32, vector: usize, bit: u8, apic: u32, gsi: Option<u32> }
+static LINES: spin::Mutex<[Option<Line>; 8]> = spin::Mutex::new([None; 8]);
+/// vector index → bound << 63 | level << 62 | redirection entry << 32 | I/O APIC address.
+static LINE_RTE: [AtomicU64; VECTORS] = [const { AtomicU64::new(0) }; VECTORS];
+/// The I/O APIC's index/data pair is one shared window; interrupts are off while held.
+static IOAPIC: spin::Mutex<()> = spin::Mutex::new(());
+
+fn ioapic(address: u32, register: u32, write: Option<u32>) -> u32 {
+    let base = crate::HHDM_REQUEST.response().map_or(0, |h| h.offset) + address as u64;
+    unsafe {
+        (base as *mut u32).write_volatile(register);
+        let window = (base + 0x10) as *mut u32;
+        match write { Some(v) => { window.write_volatile(v); v } None => window.read_volatile() }
+    }
+}
+
+/// The I/O APIC address and redirection entry for `gsi`, by each one's own entry count.
+/// Caller holds `IOAPIC` with interrupts off.
+fn line_entry(gsi: u32) -> Option<(u32, u32)> {
+    crate::apic::IO_APICS.lock().iter().find_map(|io| {
+        let entries = (ioapic(io.address, 1, None) >> 16 & 0xff) + 1;
+        let i = gsi.checked_sub(io.global_system_interrupt_base)?;
+        (i < entries).then_some((io.address, i))
+    })
+}
+
+fn set_line_mask(rte: u64, masked: bool) {
+    let (address, low) = (rte as u32, 0x10 + 2 * (rte >> 32 & 0xff) as u32);
+    let _held = IOAPIC.lock();
+    let v = ioapic(address, low, None);
+    ioapic(address, low, Some(if masked { v | 1 << 16 } else { v & !(1 << 16) }));
+}
+
+/// BOOT: reserve `n` lines for a service holding a device that may need one.
+pub fn reserve_lines(pd: u32, n: u8) {
+    let mut lines = LINES.lock();
+    for _ in 0..(n as usize).min(MAX_LINES) {
+        let (Some(free), Some((vector, bit))) = (lines.iter_mut().find(|l| l.is_none()), allocate(pd, 1)) else { break };
+        *free = Some(Line { pd, vector, bit, apic: crate::apic::local_id(), gsi: None });
+        crate::serial_println!("[device.irq.line.reserved] pd={} vector={:#x} bit={}", pd, FIRST_VECTOR as usize + vector, bit);
+    }
+}
+
+fn line_call(pd: u32, op: u64, index: u64, arg: u64) -> u64 {
+    let mut lines = LINES.lock();
+    let gsi = (arg & 0xffff) as u32;
+    let taken = lines.iter().flatten().any(|l| l.gsi == Some(gsi));
+    let Some(line) = lines.iter_mut().flatten().filter(|l| l.pd == pd).nth(index as usize) else { return sex_pdx::ERR_CAP_INVALID };
+    let rte = LINE_RTE[line.vector].load(Ordering::Acquire);
+    if op == OP_LINE_MASK {
+        if rte >> 63 == 0 { return sex_pdx::ERR_CAP_INVALID; }
+        x86_64::instructions::interrupts::without_interrupts(|| set_line_mask(rte, arg & 1 != 0));
+        return 0;
+    }
+    // ISA inputs (timer, keyboard, SCI) are the kernel's; one owner per input.
+    if line.gsi.is_some() || gsi < 16 || taken { return sex_pdx::ERR_CAP_INVALID; }
+    let level = arg & LINE_EDGE == 0;
+    let low = (FIRST_VECTOR as u32 + line.vector as u32) | (level as u32) << 15 | ((arg & LINE_ACTIVE_LOW != 0) as u32) << 13 | 1 << 16;
+    let found = x86_64::instructions::interrupts::without_interrupts(|| {
+        let _held = IOAPIC.lock();
+        let (address, entry) = line_entry(gsi)?;
+        ioapic(address, 0x10 + 2 * entry + 1, Some((line.apic & 0xff) << 24));
+        ioapic(address, 0x10 + 2 * entry, Some(low));
+        Some((address, entry))
+    });
+    let Some((address, entry)) = found else { return sex_pdx::ERR_CAP_INVALID };
+    line.gsi = Some(gsi);
+    LINE_RTE[line.vector].store(1 << 63 | (level as u64) << 62 | (entry as u64) << 32 | address as u64, Ordering::Release);
+    crate::serial_println!("[device.irq.line.bound] pd={} gsi={} level={} active_low={} vector={:#x} bit={} masked=1",
+        pd, gsi, level as u8, (arg & LINE_ACTIVE_LOW != 0) as u8, FIRST_VECTOR as usize + line.vector, line.bit);
+    line.bit as u64
+}
 
 #[derive(Clone, Copy)]
 struct Record {
@@ -227,6 +307,7 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             _ => sex_pdx::ERR_CAP_INVALID,
         },
         OP_TAKE => PENDING[pd as usize].swap(0, Ordering::AcqRel),
+        OP_LINE_BIND | OP_LINE_MASK => line_call(pd, op, a, b),
         _ => sex_pdx::ERR_CAP_INVALID,
     }
 }
@@ -240,6 +321,9 @@ pub fn pending(pd: u32) -> bool {
 pub fn fired(index: usize) -> u64 { FIRED[index].load(Ordering::Relaxed) }
 
 fn fire(index: usize) {
+    // A level line stays asserted until the driver quiets its device: hold it masked.
+    let rte = LINE_RTE[index].load(Ordering::Acquire);
+    if rte >> 62 == 3 { set_line_mask(rte, true); }
     let route = ROUTE[index].load(Ordering::Acquire);
     if route >> 40 & 1 != 0 {
         let (pd, bit) = (route as u32, (route >> 32) as u8 & 63);

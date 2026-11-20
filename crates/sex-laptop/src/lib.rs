@@ -14,6 +14,7 @@ pub mod battery;
 pub mod dell_smbios;
 pub mod dell_wmi;
 pub mod ec;
+pub mod intel_gpio;
 pub mod profile;
 pub mod resources;
 pub mod smbios;

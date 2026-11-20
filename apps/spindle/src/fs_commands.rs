@@ -7,7 +7,7 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 32 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount, Update, Package }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount, Update, Package, Organize }
 pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize, bare: [u8; 16], bare_len: usize }
 /// How Files answered the last update request: OK go on, EXISTS nothing newer, else stop.
 pub static mut UPDATE_STATUS: Option<u8> = None;
@@ -115,10 +115,117 @@ impl Client {
         self.start(Cmd::Package, sex_pdx::package::KIND, arg.len(), op, length);
         true
     }
+    /// `organize ...`: Files' Organizer (servers/sexfiles/src/organize.rs). Files keeps
+    /// the rules, pins and undo log and places new arrivals itself once they are
+    /// committed; this is only the person's way in.
+    fn organize(&mut self, args: &[u8], region: &mut [u8], sb: &mut Scrollback) {
+        let (first, rest) = split(args);
+        let path = |s: &Self, p: &[u8], region: &mut [u8], at: usize| -> Option<usize> {
+            let mut abs = [0u8; w::PATH_BYTES];
+            let n = s.join(p, &mut abs)?;
+            if at + n > w::PATH_BYTES { return None; }
+            region[at..at + n].copy_from_slice(&abs[..n]);
+            Some(at + n)
+        };
+        let usage = b"Usage: organize [--dry-run | auto on|off | undo | log | status | pin F | unpin F | rule PATTERN [FOLDER] | rules | send F FOLDER]";
+        match (first, rest) {
+            (b"", _) => { self.start(Cmd::Organize, w::ORGANIZE_SCAN, 0, 0, 0); sb.push(b"Organizing Inbox, Downloads and Desktop."); }
+            (b"--dry-run", _) => { self.start(Cmd::Organize, w::ORGANIZE_SCAN, 0, 1, 0); sb.push(b"Previewing placement."); }
+            (b"auto", b"on") => self.start(Cmd::Organize, w::ORGANIZE_SET, 0, 1, 0),
+            (b"auto", b"off") => self.start(Cmd::Organize, w::ORGANIZE_SET, 0, 0, 0),
+            (b"undo", b"") => self.start(Cmd::Organize, w::ORGANIZE_UNDO, 0, 0, 0),
+            (b"log", b"") => self.start(Cmd::Organize, w::ORGANIZE_LOG, 0, 0, 0),
+            (b"status", b"") => self.start(Cmd::Organize, w::ORGANIZE_STATE, 0, 0, 0),
+            (b"rules", b"") => self.start(Cmd::Organize, w::ORGANIZE_RULE, 0, 0, 0),
+            (b"pin" | b"unpin", f) if !f.is_empty() => match path(self, f, region, 0) {
+                Some(n) => self.start(Cmd::Organize, w::ORGANIZE_PIN, n, (first == b"pin") as u64, 0),
+                None => sb.push(b"Path too long."),
+            },
+            (b"rule", r) if !r.is_empty() => {
+                let (pattern, folder) = split(r);
+                if pattern.len() + 1 + folder.len() > w::PATH_BYTES { sb.push(b"Rule too long."); return; }
+                region[..pattern.len()].copy_from_slice(pattern);
+                let mut n = pattern.len();
+                if !folder.is_empty() {
+                    region[n] = 0; n += 1;
+                    match path(self, folder, region, n) { Some(m) => n = m, None => { sb.push(b"Path too long."); return; } }
+                }
+                self.start(Cmd::Organize, w::ORGANIZE_RULE, n, 0, 0);
+            }
+            (b"send", r) => {
+                let (file, folder) = split(r);
+                if file.is_empty() || folder.is_empty() { sb.push(usage); return; }
+                let Some(a) = path(self, file, region, 0) else { sb.push(b"Path too long."); return };
+                let name = region[..a].rsplit(|b| *b == b'/').next().map(|n| n.len()).unwrap_or(0);
+                let mut name_buf = [0u8; 256];
+                if name == 0 || name > name_buf.len() { sb.push(b"Bad name."); return; }
+                name_buf[..name].copy_from_slice(&region[a - name..a]);
+                region[a] = 0;
+                let Some(mut b) = path(self, folder, region, a + 1) else { sb.push(b"Path too long."); return };
+                if b + 1 + name > w::PATH_BYTES { sb.push(b"Path too long."); return; }
+                region[b] = b'/'; b += 1;
+                region[b..b + name].copy_from_slice(&name_buf[..name]);
+                self.start(Cmd::Organize, w::ORGANIZE_MOVE, b + name, 0, 0);
+            }
+            _ => sb.push(usage),
+        }
+    }
+    fn organized(&mut self, status: u8, value: u32, data: &[u8], sb: &mut Scrollback) {
+        let data = &data[..(value as usize).min(data.len())];
+        if status != w::OK {
+            let why = match (self.kind, status) {
+                (w::ORGANIZE_UNDO, w::NOT_FOUND) => &b"nothing to undo"[..],
+                (w::ORGANIZE_UNDO, w::EXISTS) => b"another file now has its old name",
+                (w::ORGANIZE_UNDO, w::STALE) => b"the file was replaced since",
+                (w::ORGANIZE_MOVE, w::DENIED) => b"only files in Inbox, Downloads or Desktop, to a folder of your own",
+                (w::ORGANIZE_RULE, w::NAME) => b"rules look like *.pdf /Documents, scan-* /Scans or scan-*.pdf /Scans",
+                _ => w::message(status),
+            };
+            say!(sb, "organize: {}", shown(why));
+            sex_pdx::serial_record!("[spindle.organize.failed] kind={} status={}", self.kind, status);
+            return;
+        }
+        match self.kind {
+            w::ORGANIZE_SET => {
+                say!(sb, "Automatic organization {}.", if self.offset == 1 { "on: new files in Inbox, Downloads and Desktop are placed once saved" } else { "off" });
+                sex_pdx::serial_record!("[spindle.organize.auto] enabled={}", self.offset);
+            }
+            w::ORGANIZE_STATE if data.len() >= 21 => {
+                let word = |i: usize| u64::from_le_bytes(data[i..i + 8].try_into().unwrap());
+                let pins = u16::from_le_bytes([data[17], data[18]]);
+                let rules = u16::from_le_bytes([data[19], data[20]]);
+                say!(sb, "Automatic organization {}; {} events seen; {} pinned; {} rules of yours.", if data[0] == 1 { "on" } else { "off" }, word(9), pins, rules);
+                sex_pdx::serial_record!("[spindle.organize.status] enabled={} events={} pins={} rules={}", data[0], word(9), pins, rules);
+            }
+            w::ORGANIZE_UNDO => {
+                match data.iter().position(|b| *b == 0) {
+                    Some(i) => say!(sb, "Put back {} (it was in {}); pinned there.", shown(&data[..i]), shown(&data[i + 1..])),
+                    None => say!(sb, "Undone."),
+                }
+                sex_pdx::serial_record!("[spindle.organize.undo] ok=1");
+            }
+            w::ORGANIZE_PIN => { say!(sb, "{}.", if self.offset == 1 { "Pinned: it stays where it is" } else { "Unpinned" }); sex_pdx::serial_record!("[spindle.organize.pin] on={}", self.offset); }
+            w::ORGANIZE_MOVE => { say!(sb, "Moved (organize undo puts it back)."); sex_pdx::serial_record!("[spindle.organize.sent] ok=1"); }
+            w::ORGANIZE_RULE if self.path_len != 0 => { say!(sb, "Rules updated."); sex_pdx::serial_record!("[spindle.organize.rule] ok=1"); }
+            _ => {
+                let mut lines = 0;
+                for line in data.split(|b| *b == b'\n').filter(|l| !l.is_empty()) {
+                    lines += 1;
+                    sex_pdx::serial_record!("[spindle.organize.line] {}", shown(line));
+                    for part in line.chunks(96) { sb.push(part); }
+                }
+                if lines == 0 {
+                    sb.push(match self.kind { w::ORGANIZE_RULE => &b"No rules of yours yet; the built-in ones place documents, pictures, music and videos."[..], w::ORGANIZE_LOG => b"Nothing has arrived yet.", _ => b"Nothing to organize." });
+                }
+                sex_pdx::serial_record!("[spindle.organize.done] kind={} lines={}", self.kind, lines);
+            }
+        }
+    }
     /// Starts a command. False only for `ls` with arguments unusable here.
     pub fn submit_line(&mut self, cmd: &[u8], args: &[u8], sb: &mut Scrollback) -> bool {
         if self.busy() { sb.push(b"The disk is busy with the last command."); return true; }
         let Some(region) = region() else { return false };
+        if cmd == b"organize" { self.organize(args, region, sb); return true; }
         let (first, rest) = split(args);
         if cmd == b"pwd" {
             if self.cwd_len == 0 { say!(sb, "/"); } else { say!(sb, "{}", shown(&self.cwd[..self.cwd_len])); }
@@ -305,6 +412,11 @@ impl Client {
             unsafe { PACKAGE_STATUS = Some(status); }
             return true;
         }
+        if cmd == Cmd::Organize {
+            self.cmd = None;
+            self.organized(status, value, &region[data_at..], sb);
+            return true;
+        }
         if cmd == Cmd::Update {
             // Files' report, whatever it decided.
             self.cmd = None;
@@ -426,7 +538,7 @@ impl Client {
                 }
             }
             Cmd::Unmount => { say!(sb, "Safe to remove."); }
-            Cmd::Update | Cmd::Package => {}
+            Cmd::Update | Cmd::Package | Cmd::Organize => {}
             Cmd::Program(count, flags) => {
                 use sex_pdx::program_store as store;
                 // A package's program: ask the person first, or apply what they said.
@@ -459,6 +571,8 @@ pub const RENAMED: &[(&[u8], &[u8])] = &[
     (b"term", b"spindle"),
     (b"view", b"gaze"),
     (b"settings", b"tatami"),
+    (b"filagree", b"filigree"),
+    (b"broadcast", b"cabaret"),
 ];
 /// The program a bare name means now; a path or a current name is kept as given.
 pub fn renamed(target: &[u8]) -> &[u8] {

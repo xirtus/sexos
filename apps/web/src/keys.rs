@@ -53,6 +53,7 @@ impl Browser {
             0x0E if key.shift => {
                 let url = self.url.clone();
                 self.profile.clear_site(&mut self.jar.borrow_mut(), &url);
+                self.code_store.forget(&mut self.window, &mut self.code_cache.borrow_mut(), &url);
                 sex_pdx::serial_record!("[web.site.cleared] url={}", url);
             }
             _ => return false,
@@ -118,6 +119,7 @@ impl Browser {
     pub(super) fn quit(&mut self) -> ! {
         self.profile.touched(&self.jar.borrow());
         self.profile.save(&mut self.window, &self.jar.borrow(), super::wall(), true);
+        self.code_store.save(&mut self.window, &mut self.code_cache.borrow_mut());
         sex_pdx::serial_record!("[web.closed] target={} task={}", self.window.target, self.window.task);
         sex_pdx::task_finish(0)
     }
