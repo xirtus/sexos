@@ -1,0 +1,26 @@
+name: Save the cargo target cache
+description: >-
+  Save target/ after a build (the image job on master) under a new key, so the next
+  run restores the newest build and cargo, comparing file checksums, rebuilds only
+  what changed.
+inputs:
+  target-cache:
+    description: Cache name (as the setup action's target-cache input)
+    default: image
+runs:
+  using: composite
+  steps:
+  - name: Size of what is saved
+    shell: bash
+    run: |
+      du -sh target 2>/dev/null || true
+      du -sh target/* 2>/dev/null | sort -h | tail -8 || true
+  - uses: actions/cache/save@v4
+    with:
+      # Keep in step with .github/actions/setup: the paths are part of the cache version.
+      path: |
+        target
+        !target/ffmpeg
+        !target/libcxx
+        !target/**/incremental
+      key: target-${{ inputs.target-cache }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ github.run_id }}
