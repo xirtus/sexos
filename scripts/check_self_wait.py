@@ -296,7 +296,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
  'kernel/src/app_resources.rs': '89626a05e12f0947a102e3332eac3c9ee0bb89092711afde33952e7c3d37496e',
  'kernel/src/service_restart.rs': 'c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e',
- 'kernel/src/crash_log.rs': '50143847c2b1ecb5a3be360f38ef900e562f271bde90ad9b5b0b728813988f96',
+ 'kernel/src/crash_log.rs': '1a0619db6d5e2e9a18f60f9da923df062d90206d7378009a5751c2802dc145d7',  # SMAP: user copies through smap::user (no observer change), 2026-11-20
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
 
