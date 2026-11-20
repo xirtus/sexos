@@ -17,16 +17,6 @@ pub const OP_SET_NAME: u64 = 4;
 /// bytes mapped, r10 = live heap blocks, r8 = most heap bytes ever in use; rsi(1) -> rsi =
 /// the machine's free frames.
 pub const OP_KERNEL: u64 = 5;
-/// rsi(core) -> rsi = idle cycles of that core, rdx = domain it runs now (0 idle), r10 = TSC now.
-/// INVALID past the last online core. Added 2026-11-14 (Mesh per-core graphs).
-pub const OP_CORE: u64 = 6;
-/// rsi = pages lent to program runs now, rdx = most ever lent, r10 = most they could hold.
-pub const OP_MEMORY: u64 = 7;
-/// rsi(pd) -> rsi = the domain's PKU key (its organ), rdx = capabilities it holds.
-pub const OP_ORGAN: u64 = 8;
-/// rsi(pd), rdx(after) -> rsi = the next domain above `after` that `pd` holds a domain
-/// capability to (IPC v2 endpoints name objects, not domains); NONE when there is none. Numbers only, never the capability.
-pub const OP_LINK: u64 = 9;
 pub const OK: u64 = 0;
 pub const INVALID: u64 = 1;
 pub const NONE: u64 = 2;
@@ -48,12 +38,6 @@ pub fn end_program(pd: u32) -> u64 {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Overview { pub tsc: u64, pub cores: u64, pub idle_cycles: u64, pub free_pages: u64 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Core { pub idle_cycles: u64, pub running: u32, pub tsc: u64 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Memory { pub lent_pages: u64, pub peak_pages: u64, pub limit_pages: u64 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Organ { pub pku_key: u8, pub capabilities: u64 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Domain { pub pd: u32, pub cycles: u64, pub pages: u64, pub task: u32, pub syscalls: u64 }
 
@@ -93,25 +77,6 @@ pub fn name(pd: u32) -> [u8; 16] {
 }
 pub fn next(after: u32) -> Option<u32> {
     let (s, r) = call(OP_NEXT, after as u64, 0);
-    (s == OK).then_some(r[0] as u32)
-}
-/// One core's idle time and what it runs; `None` past the last online core (or an
-/// older kernel without this operation).
-pub fn core(index: u32) -> Option<Core> {
-    let (s, r) = call(OP_CORE, index as u64, 0);
-    (s == OK).then_some(Core { idle_cycles: r[0], running: r[1] as u32, tsc: r[2] })
-}
-pub fn memory() -> Option<Memory> {
-    let (s, r) = call(OP_MEMORY, 0, 0);
-    (s == OK).then_some(Memory { lent_pages: r[0], peak_pages: r[1], limit_pages: r[2] })
-}
-pub fn organ(pd: u32) -> Option<Organ> {
-    let (s, r) = call(OP_ORGAN, pd as u64, 0);
-    (s == OK).then_some(Organ { pku_key: r[0] as u8, capabilities: r[1] })
-}
-/// The next domain above `after` that `pd` may call.
-pub fn link(pd: u32, after: u32) -> Option<u32> {
-    let (s, r) = call(OP_LINK, pd as u64, after as u64);
     (s == OK).then_some(r[0] as u32)
 }
 /// Names the calling domain; at most sixteen bytes are kept.

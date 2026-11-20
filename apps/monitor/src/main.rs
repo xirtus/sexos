@@ -28,6 +28,7 @@ use sex_mesh::line::Line;
 use sex_pdx::app_pointer::Kind;
 use sex_pdx::fs::runs;
 use sex_pdx::system_stats as stats;
+use sex_pdx::mesh_stats as mesh;
 
 const MAX: usize = 96;
 const PERIOD_MS: u64 = 1000;
@@ -58,12 +59,12 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 struct Row { pd: u32, cycles: u64, tenths: u64, pages: u64, task: u32, syscalls: u64, rate: u64, read_bytes: u64, read_rate: u64, grants: u8 }
 
 #[derive(Clone, Copy)]
-struct Sample { rows: [Row; MAX], count: usize, tsc: u64, idle: u64, cores: u64, free_pages: u64, ms: u64, core_idle: [u64; CORES], memory: Option<stats::Memory> }
+struct Sample { rows: [Row; MAX], count: usize, tsc: u64, idle: u64, cores: u64, free_pages: u64, ms: u64, core_idle: [u64; CORES], per_core: bool, memory: Option<mesh::Memory> }
 
 impl Sample {
     const fn empty() -> Self {
         Sample { rows: [Row { pd: 0, cycles: 0, tenths: 0, pages: 0, task: 0, syscalls: 0, rate: 0, read_bytes: 0, read_rate: 0, grants: 0 }; MAX],
-            count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, core_idle: [0; CORES], memory: None }
+            count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, core_idle: [0; CORES], per_core: false, memory: None }
     }
     fn row(&self, pd: u32) -> Option<&Row> { self.rows[..self.count].iter().find(|r| r.pd == pd) }
 }
@@ -137,10 +138,12 @@ impl Mesh {
         let mut s = Sample::empty();
         s.ms = ms;
         if let Some(o) = stats::overview() { s.tsc = o.tsc; s.idle = o.idle_cycles; s.cores = o.cores.max(1); s.free_pages = o.free_pages; }
-        for (i, idle) in s.core_idle.iter_mut().enumerate().take(s.cores as usize) {
-            *idle = stats::core(i as u32).map_or(0, |c| c.idle_cycles);
+        // Per-core idle time, if this kernel answers it (older ones say INVALID).
+        s.per_core = mesh::core(0).is_some();
+        for (i, idle) in s.core_idle.iter_mut().enumerate().take(if s.per_core { s.cores as usize } else { 0 }) {
+            *idle = mesh::core(i as u32).map_or(0, |c| c.idle_cycles);
         }
-        s.memory = stats::memory();
+        s.memory = mesh::memory();
         let span_ms = ms.saturating_sub(prev.ms).max(1);
         let had = prev.tsc != 0;
         let mut after = 0;
@@ -169,7 +172,7 @@ impl Mesh {
         let busy = history::busy_permille(s.idle.saturating_sub(p.idle), span, s.cores);
         self.cpu.push(busy);
         let cores = (s.cores as usize).min(CORES);
-        for i in 0..cores { self.cores[i].push(history::busy_permille(s.core_idle[i].saturating_sub(p.core_idle[i]), span, 1)); }
+        for i in 0..if s.per_core { cores } else { 0 } { self.cores[i].push(history::busy_permille(s.core_idle[i].saturating_sub(p.core_idle[i]), span, 1)); }
         let memory = s.memory.map_or(0, |m| history::permille(m.lent_pages, m.limit_pages));
         self.memory.push(memory);
         let calls: u64 = s.rows[..s.count].iter().map(|r| r.rate).sum();
@@ -281,14 +284,14 @@ impl Mesh {
             l.clear();
             name_into(l, pd, 16);
             l.put(b" pd ").num(pd as u64, 3);
-            let organ = stats::organ(pd);
+            let organ = mesh::organ(pd);
             match organ {
                 Some(o) => { l.put(b"  key ").num(o.pku_key as u64, 2).put(b"  caps ").num(o.capabilities, 3); }
                 None => { l.put(b"  key  -  caps   -"); }
             }
             l.put(b"  calls:");
             let (mut to, mut links) = (0u32, 0usize);
-            while let Some(d) = stats::link(pd, to) {
+            while let Some(d) = mesh::link(pd, to) {
                 to = d;
                 links += 1;
                 if links <= 6 { l.put(b" "); name_into(l, d, 0); }
@@ -381,9 +384,10 @@ impl Mesh {
         // The whole CPU on the left, each core on the right.
         let mut t: Line<64> = Line::new();
         t.put(b"CPU ").tenths(self.cpu.latest().unwrap_or(0) as u64).put(b"  ").num(self.now.cores, 1).put(b" cores");
-        let left_w = if cores > 1 { ww / 2 - PAD / 2 } else { ww };
+        let split = cores > 1 && self.now.per_core;
+        let left_w = if split { ww / 2 - PAD / 2 } else { ww };
         Self::graph(c, g, Area { x: x0, y: y0, w: left_w, h: top_h }, t.as_bytes(), &self.cpu, 1000, CPU);
-        if cores > 1 {
+        if split {
             let cols = (1..=cores).find(|k| k * k >= cores).unwrap_or(1) as i32;
             let rows = ((cores as i32) + cols - 1) / cols;
             let (gx, gw) = (x0 + left_w + PAD, ww - left_w - PAD);
@@ -425,9 +429,9 @@ impl Mesh {
             let s = &self.now;
             let mut n = 0;
             hw[n].put(b"Cores online      ").num(s.cores, 1); n += 1;
-            for i in 0..(s.cores as usize).min(CORES) {
+            for i in 0..if s.per_core { (s.cores as usize).min(CORES) } else { 0 } {
                 hw[n].put(b"  core ").num(i as u64, 2).put(b"  busy ").tenths(self.cores[i].latest().unwrap_or(0) as u64).put(b"  running ");
-                match stats::core(i as u32) { Some(k) if k.running != 0 => name_into(&mut hw[n], k.running, 0), _ => { hw[n].put(b"nothing"); } }
+                match mesh::core(i as u32) { Some(k) if k.running != 0 => name_into(&mut hw[n], k.running, 0), _ => { hw[n].put(b"nothing"); } }
                 n += 1;
             }
             if let Some(m) = s.memory {

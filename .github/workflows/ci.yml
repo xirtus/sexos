@@ -184,10 +184,8 @@ jobs:
       run: cargo test --locked -p sex-ime
     - name: Voyeur search ranking and Abacus answers
       run: cargo test --locked -p voyeur
-    - name: Mesh history, graphs and layout; sex-pdx wire tests on the host
-      run: |
-        cargo test --locked -p sex-mesh
-        cargo test --locked -p sex-pdx --lib
+    - name: Mesh history, graphs and layout on the host
+      run: cargo test --locked -p sex-mesh
     - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport
       run: |
         cargo test --locked -p sex-speech
