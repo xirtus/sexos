@@ -7974,6 +7974,7 @@ dependencies = [
  "sex-pdx",
  "sex-rt",
  "silkbar-model",
+ "voyeur",
 ]
 
 [[package]]
@@ -8331,7 +8332,11 @@ name = "store"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
+ "sex-image",
  "sex-pdx",
+ "sex-pkg",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -9728,6 +9733,10 @@ name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
+
+[[package]]
+name = "voyeur"
+version = "0.1.0"
 
 [[package]]
 name = "vst3"

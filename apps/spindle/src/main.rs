@@ -2457,13 +2457,16 @@ unsafe fn content_render(line:&CmdLine,sb:&mut Scrollback) {
     let text=viewport::render_at(view,line.as_bytes(),line.cur,sb.retained(),sb.scroll_offset as usize,|index|sb.get_retained(index));
     if GRID_PREV==Some(text){return}
     VIEW_PAINT=VIEW_PAINT.checked_add(1).expect("SPINDLE_PAINT_EXHAUSTED");
+    // Hand the text to Display first: the record below is ~2 KB of serial output
+    // (milliseconds under KVM) and gates match it by sequence and paint, not order.
+    DISPLAY_IO.text(&text,display_delivery::Stamp{sequence:VIEW_SEQUENCE,paint:VIEW_PAINT},CONTENT_TEXT_COLOR as u32);
     sex_pdx::serial_record!("[spindle.view.text] target={} sid={} sequence={} paint={} cols={} rows={} bytes={}",instance_pd(),grid_sids()[0],VIEW_SEQUENCE,VIEW_PAINT,text.cols,text.rows,text.len);
     for (chunk,bytes) in text.bytes[..text.len].chunks(48).enumerate(){
         let mut hex=[0u8;96];let alphabet=b"0123456789abcdef";
         for(n,b)in bytes.iter().enumerate(){hex[n*2]=alphabet[(b>>4)as usize];hex[n*2+1]=alphabet[(b&15)as usize];}
         sex_pdx::serial_record!("[spindle.view.bytes] target={} sid={} seq={} paint={} off={} hex={}",instance_pd(),grid_sids()[0],VIEW_SEQUENCE,VIEW_PAINT,chunk*48,core::str::from_utf8(&hex[..bytes.len()*2]).unwrap());
     }
-    DISPLAY_IO.text(&text,display_delivery::Stamp{sequence:VIEW_SEQUENCE,paint:VIEW_PAINT},CONTENT_TEXT_COLOR as u32);GRID_PREV=Some(text);
+    GRID_PREV=Some(text);
 }
 
 /// Check only metadata from a successful held SELF_CATALOG query. The

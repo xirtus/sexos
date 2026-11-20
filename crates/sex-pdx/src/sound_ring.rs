@@ -57,6 +57,14 @@ pub const MIC_WAITING: u64 = 1;
 pub const MIC_ON: u64 = 2;
 /// There is no microphone.
 pub const MIC_NONE: u64 = 3;
+/// (Bell writes 1, the program clears) Bell has mixed everything this ring holds
+/// and sleeps until the card needs more: the program's next write sends `OP_PLAY`
+/// once, so Bell need not look at the ring every few milliseconds.
+pub const WAKE: usize = 88;
+/// (program writes) 1 when the program answers `WAKE`. Bell keeps looking every few
+/// milliseconds at a ring without it, so programs built before the doorbell still
+/// play on time. Bell clears it when the stream closes.
+pub const DOORBELL: usize = 96;
 
 /// The program's own view, writable.
 pub const CLIENT_SLOT: u64 = 260;
