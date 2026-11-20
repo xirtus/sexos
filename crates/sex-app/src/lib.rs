@@ -211,7 +211,8 @@ impl Window {
         loop {
             if let Some(e) = self.poll() { return Some(e); }
             let now = sex_pdx::get_ticks();
-            if now >= end { return None; }
+            // A Voyeur question that came in with the events is answered now, not at `end`.
+            if now >= end || search::waiting() { return None; }
             let _ = sex_pdx::sys_wait_self_ticks((end - now).clamp(1, 64));
         }
     }
@@ -356,6 +357,8 @@ pub mod search {
         let bits = kinds.iter().fold(0u16, |b, &k| b | 1u16.checked_shl(k as u32).unwrap_or(0));
         wire::Registration::new(name, bits).is_some_and(|r| send(r.wire()))
     }
+    /// A query or a chosen result is waiting to be read.
+    pub fn waiting() -> bool { unsafe { ASKED != 0 || (*core::ptr::addr_of!(CHOSEN))[0].is_some() } }
     /// True once the Shell took the registration.
     pub fn registered() -> bool { unsafe { ID != 0 } }
     /// The query to answer now, if one came: (ticket, text). A newer query
