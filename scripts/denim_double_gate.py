@@ -56,5 +56,10 @@ def main():
   store=max(int(r[4]) for r in rounds)
   print({'ok':True,'ram_mib':ram,'heap_mib':int(d[1]),'times_ram':round(int(d[1])/ram,2),'fill_s':int(d[3])/1000,'verify_s':int(d[4])/1000,'waited_s':int(d[5])/1000,
    'outs':int(last[0]),'ins':int(last[1]),'faults':int(last[5]),'peak_pages_out':peak,'peak_store_pages':store,'ratio':round(peak/max(store,1),2),'returned':int(last[7])})
+ except Exception:
+  # The serial file may not be kept: say what Denim, the heap and the Shell did.
+  keep=re.compile(r'\[(heaptest|denim\.(round|ready|full|lost|damaged)|memory\.pressure|shell\.oom|service\.memory|app\.private)')
+  print('--- denim-double: memory lines ---');print('\n'.join([l for l in t().splitlines() if keep.search(l)][-150:]))
+  raise
  finally:g['stop']()
 if __name__=='__main__':main()

@@ -274,7 +274,7 @@ impl Denim {
         let r = d::call(d::SCAN, target, first, 0, 0);
         // DENIED: the run ended (or another began). RETRY is only a busy table: keep what is held.
         if r[0] != d::OK { if r[0] == d::DENIED { self.forget(target); } return None; }
-        let (grown, run, base) = ((r[3] & 0xFFFF_FFFF) as usize, (r[3] >> 32) as u32, r[4]);
+        let (mut grown, run, base) = ((r[3] & 0xFFFF_FFFF) as usize, (r[3] >> 32) as u32, r[4]);
         if self.run(target).is_some_and(|s| s.run != run || s.base != base) { self.forget(target); }
         if self.run(target).is_none() {
             if self.runs.try_reserve(1).is_err() { return None; }
@@ -285,9 +285,12 @@ impl Denim {
         {
             let state = self.run(target).unwrap();
             if state.cold.len() < grown {
-                // No room to track more pages: leave the rest of this run alone for now.
-                if state.cold.try_reserve(grown - state.cold.len()).is_err() || state.held.try_reserve(grown - state.held.len()).is_err() { return None; }
-                state.cold.resize(grown, 0); state.held.resize(grown, EMPTY);
+                // No room to track more pages: work on the pages already tracked and leave
+                // the rest of this run alone for now.
+                if state.cold.try_reserve(grown - state.cold.len()).is_err() || state.held.try_reserve(grown - state.held.len()).is_err() {
+                    grown = state.cold.len().min(state.held.len());
+                    if first as usize >= grown { return None; }
+                } else { state.cold.resize(grown, 0); state.held.resize(grown, EMPTY); }
             }
             for bit in 0..64usize {
                 let i = first as usize + bit;
