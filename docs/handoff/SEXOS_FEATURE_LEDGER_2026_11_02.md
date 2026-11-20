@@ -3695,6 +3695,20 @@ Plan: `docs/handoff/NVIDIA_GSP_BRINGUP_2026_11_19.md` (GSP boot, display through
 - **Gate** `scripts/nvidia_gsp_host_gate.sh` (CI): parses the real 535.113.01 files, pins every structure offset to NVIDIA's C layout, and boots a simulated GA104 end to end (signatures where the boot ROM looks, FRTS at the right VRAM address, Booter walks radix3 and finds the real image, first RPCs with good checksums, sequencer run, `GSP_INIT_DONE`), plus failure paths (Booter error, silent GSP, WPR2 left by a previous driver).
 - Not yet: the kernel lease and the `sexgpu-nv` service that runs this on the x17 (N4b). ABI: none.
 
+## NVIDIA GPU service and boot entry (N4b, 2026-11-19)
+
+- **Boot entry "SexOS with NVIDIA GPU"**: the main system plus `servers/sexgpu-nv` and `firmware/nvidia-gsp.pack`. Only that entry starts the service; the others keep the dGPU off.
+- **Kernel**: optional domain 53 (Core organ); with it present the NVIDIA GPU is not parked (`[gpu.power] ... action=keep reason=driver`) and is leased to it (`Lease::NvidiaGpu`): all 16 MiB of BAR0, memory + bus-master bits, a 64 MiB DMA pool mapped for the GPU in the IOMMU, the firmware pack read only. Without it Display keeps the GPU's identity (`manifest::claim_present`).
+- **`servers/sexgpu-nv`**: checks the pack's files against the pins (and SHA-256 of the bytes), carves the pool (`boot::Memory::carve`), turns on bus mastering, runs the `sex-gpu-nv` boot with a TSC clock and logs `[nvidia.gsp] step=...` per step, then `[nvidia.gsp.ready]` or `[nvidia.gsp.failed] step= reason=`.
+- **Firmware pack** `scripts/make_nvidia_firmware_pack.py` (`SEXNVFW1`, built in the ISO build and into the installed boot slot).
+- **ABI**: SYS_IDENTITY `QUERY_BARS` (3) returns the held NVIDIA GPU's BAR0/BAR1/BAR3 bus addresses and bus/devfn. Not yet proven on the x17.
+
+## NVIDIA RM objects after the GSP boot (N4c, 2026-11-19)
+
+- **`crates/sex-gpu-nv/src/rm.rs`**: an RPC session after `GSP_INIT_DONE` (sequencer scripts and notices handled while waiting), `GET_GSP_STATIC_INFO` decoded (GPU name, VRAM, usable regions, GPCs/TPCs, internal handles), `GSP_RM_ALLOC` / `GSP_RM_CONTROL` / `FREE`, our client/device/subdevice, and the display engine's static info (heads, windows).
+- **`sexgpu-nv`** logs `[nvidia.rm] name="..." vram_mib= ...`, `[nvidia.rm.device]`, `[nvidia.rm.display] heads= ...`, `[nvidia.rm.ready]`.
+- Simulated GSP-RM answers in the host gate; layouts pinned to NVIDIA's 535.113.01 structures. ABI: none.
+
 ## Net: ALPN http/1.1 (2026-11-09)
 
 - The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do (the rustls move set `alpn_protocols`). Host test `[sexnet.tls.open.host]` now proves it on the wire: an OpenSSL server offering `h2` and `http/1.1` must pick `http/1.1`. YouTube stage Y3e.
@@ -5335,6 +5349,11 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Super+Shift+W (setting `desktop.widgets`, off by default) puts three cards on the wallpaper at the top right, under every window: the time and date in your zone, today's weather, and processor load with free memory. Display draws them from its own clock and the kernel's numbers and only redraws when a word changes.
 - The weather comes from Open-Meteo (no account or key) for your time zone's city (Berlin, New York, Tokyo...; Fahrenheit for US zones). `apps/steamy` is a hidden helper the Shell starts with the network right only while the cards show and `desktop.weather` (default on) allows it; it sends only the city's rounded coordinates, asks every 30 minutes, and the Shell accepts its reports from that run alone. UTC names no city, so no request is made and the card says so.
 - Verified by `tests/desktop_widgets.rs` (words, places for every Settings zone, Open-Meteo answer parsing, wire, layout), `scripts/desktop_widgets_gate.py` and `scripts/weather_widget_gate.py` (Berlin, the helper's report reaching the card, the helper ending with the cards).
+## Office slice 3: Spreadeagle and Assuit daily-ready (2026-11-19)
+- Spreadeagle writes .ods itself (`apps/spreadeagle/src/ods.rs`): every sheet, formulas turned into OpenFormula (`of:=SUM([.B2:.B4])`, inline arrays, quoted sheets, whole rows and columns), cached results, dates, percentages with their places, bold, italic, underline and column widths. LibreOffice opens it with all of that; reopening in Spreadeagle restores formulas, fonts, percentages and widths that GridCraft's data-only ODS import drops. An .ods now saves as .ods (xls, xlsb, slk still save beside as .xlsx).
+- Both apps: Ctrl+P writes a PDF beside the file (GridCraft's sheet printer, WordCraft's page PDF); Save As by extension (Spreadeagle Ctrl+Shift+S: xlsx, ods, csv, tsv, html, pdf; Assuit Ctrl+Shift+E, since Ctrl+Shift+S is Word's style picker: docx, odt, rtf, html, md, txt, pdf); unsaved changes are kept in `NAME.recovered.xlsx`/`.docx` on close and after 15 s without a key, offered back on the next open (Esc throws them away), and forgotten on save.
+- Spreadeagle: Ctrl+G goes to B7, B7:D9 or Sheet2!B7; Ctrl+Shift+= / Ctrl+- then R or C insert or delete the selection's rows or columns. Assuit: Ctrl+G goes to a page; a .doc saves beside itself as .docx.
+- Verified by host tests (`cargo test -p spreadeagle -p assuit`: ODS round trip, PDF, Save As, recovery, Go To, insert/delete, ODT/RTF/HTML/MD/TXT round trips) and the program gates' new Ctrl+P step.
 ## Media codecs use AVX/AVX2/FMA3 (2026-11-18)
 - Since #408 the kernel saves AVX state per task, so the media stack now builds its AVX code: FFmpeg (`--enable-runtime-cpudetect`, AVX/AVX2/FMA3 assembly), libvpx (runtime CPU detection, AVX/AVX2), libaom (`ENABLE_AVX=1 ENABLE_AVX2=1`); dav1d and x264 always had it and now pick it at run time. C stays at the SSE2 baseline (`-mno-avx`), so machines without AVX still work; every codec checks CPUID and XCR0 before using AVX. AVX-512 stays off until the kernel enables its state (#427).
 - `apps/mediabench` + `sex_media::bench` (src/bench.c): decodes files and encodes synthetic pictures with SSE only (`--sse`), up to AVX2 (`--avx2`) or everything (default), timing the codec and the player's BGRA scaling / 48 kHz resampling apart. `scripts/program_mediabench_gate.py` (CI recording job; KVM `-cpu host` when the runner has /dev/kvm) runs it twice and fails if the SSE and AVX2 runs decode H.264, HEVC, VP9 or AV1 to different pictures.
@@ -5351,6 +5370,15 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
 
+## Device power part 1: link power states and the sleep notice (2026-11-19)
+- Every PCIe link gets the power states both ends support at BOOT: ASPM L0s/L1, L1.1/L1.2 substates, clock PM and LTR, with Linux's latency checks and quirks, adding to what firmware set and never removing it (`crates/sex-pcipm`, `kernel/src/pci_power.rs`). Idle links drop to L1.2, which the platform needs for its deepest idle states.
+- Drivers can put a device they hold in D3hot and back (syscall 86 `OP_POWER`); the kernel saves and restores what a reset loses, MSI-X table included.
+- Sleeping the desktop now tells every driver holding a device (`OP_DEVICE_SLEEP`); the disk flushes first.
+- Verified by `cargo test -p sex-pcipm` and `scripts/laptop_power_gate.py`. Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.
+
+## Device power part 2: devices power down while asleep (2026-11-19)
+- While the laptop sleeps the touchpad is in HID sleep, USB sticks and other idle USB devices are suspended (U3, cache flushed first), the HDA codecs are in D3 and the Intel eDP panel's backlight and panel power are off; all come back on wake. Keyboards, mice, hubs, USB network and Bluetooth stay up.
+- Verified by `cargo test -p sex-gpu-intel -p sex-hid-touch` and `scripts/laptop_power_gate.py` (USB stick suspend and resume). Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.
 ## Touchpad on its interrupt line (2026-11-19)
 - The laptop touchpad is read when its interrupt fires instead of 125 times a second: a new contact reaches the pointer at once (polling could add up to 8 ms), and an untouched pad costs no I2C reads (polling read it 20 times a second, each read a busy bus transfer).
 - sexacpi finds the line: an `Interrupt` in the pad's `_CRS`, or the pad's `GpioInt` pin on the Intel GPIO controller (Tiger Lake-LP/H as on the Alienware x17 R1, Alder Lake-P/S/N, Raptor Lake-S), when firmware routed that pad to the I/O APIC (read only). `sex_pdx::touchpad::Found` carries it (`irq`).

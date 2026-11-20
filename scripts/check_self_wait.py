@@ -53,13 +53,13 @@ SHELL_WAIT_LINE=re.compile(r'wait_observer|sys_wait_self_ticks|pdx_listen|pdx_tr
 # every `fn` whose body names a wait/park/wake/timer item. A short one is pinned
 # whole; a very long one (dispatch, init) by its signature and those lines. Other
 # functions change freely; a new function that waits changes the fingerprint.
-# self_wait.rs, task_ownership.rs (the park/wake state machine) and smp.rs stay whole.
+# smp.rs stays whole; scheduler.rs, self_wait.rs and task_ownership.rs are modelled (below).
 KERNEL_WAIT_TOKEN=re.compile(r'wait_deadline|self_wait|SELF_WAIT|take_due|wait_for_message|wake_record|poll_self_wait|ParkResult|\.park\(|\.wake\(|unpark|sexnet_id|resume_attached|yield_and_switch')
-KERNEL_FN_SCOPED=frozenset(('kernel/src/program_records.rs','kernel/src/pd/create.rs','kernel/src/init.rs','kernel/src/scheduler.rs',
+KERNEL_FN_SCOPED=frozenset(('kernel/src/program_records.rs','kernel/src/pd/create.rs','kernel/src/init.rs',
     'kernel/src/interrupts.rs','kernel/src/syscalls/mod.rs','kernel/src/program_workers.rs'))
 KERNEL_FN_WHOLE_LINES=200
-def _kernel_wait_functions(text):
-    out=[]
+def _functions(text):
+    """Each `fn` with a body: (name, text from `fn` to its closing brace)."""
     for m in re.finditer(r'\bfn\s+(\w+)\s*(?:<[^>{;]*>)?\s*\(',text):
         start=text.find('{',m.end());semi=text.find(';',m.end())
         if start<0 or 0<=semi<start:continue
@@ -68,12 +68,60 @@ def _kernel_wait_functions(text):
             depth+=(text[end]=='{')-(text[end]=='}')
             if depth==0:break
             end+=1
-        body=text[m.start():end+1]
+        yield m.group(1),text[m.start():end+1],start-m.start()
+def _kernel_wait_functions(text):
+    out=[]
+    for name,body,_ in _functions(text):
         if not KERNEL_WAIT_TOKEN.search(body):continue
         lines=body.splitlines()
         kept=lines if len(lines)<=KERNEL_FN_WHOLE_LINES else [lines[0]]+[l for l in lines[1:] if KERNEL_WAIT_TOKEN.search(l)]
-        out.append(m.group(1)+':'+''.join(re.sub(r'\s+','',l) for l in kept))
+        out.append(name+':'+''.join(re.sub(r'\s+','',l) for l in kept))
     return out
+# Kernel pass 2, K6: proof over pins. The park/wake custody word (task_ownership.rs)
+# and the timed-wait deadlines and BOOT inventory (self_wait.rs) are checked by the
+# model in tests/model_scheduler_wait.rs, run on the real files by
+# scripts/scheduler_model_gate.sh (spec check scheduler_model, with compiled mutants),
+# by loom (tests/model_loom_scheduler.rs) and by Kani, so they carry no pin. Their use
+# in scheduler.rs is checked against the model too: every scheduler.rs function that
+# waits or touches custody must make exactly the custody, deadline and wait calls,
+# in order with their match arms, that the model's SCHEDULER_PROTOCOL table lists.
+# An edit that keeps those calls needs no pin; one that changes them changes the
+# table, next to the models it must pass.
+SCHEDULER_MODEL='tests/model_scheduler_wait.rs'
+MODELLED_SOURCES=frozenset(('kernel/src/scheduler.rs','kernel/src/self_wait.rs','kernel/src/task_ownership.rs'))
+# Snapshots only read the word, so they are left out.
+SCHEDULER_PROTOCOL_CALL=re.compile(r'interrupts::disable\(\)|\.state\.(?!snapshot\()\w+\(|\.wait_deadline\.\w+\(|SELF_WAIT_TASKS\.\w+\(|'
+    r'\b(?:ParkResult|WakeResult|Admission)::\w+|\.(?:admit_task|admit)\(|\b(?:wake_owned_thread|yield_and_switch|wait_for_local_resume_or_switch|'
+    r'unpark_thread|park_current_thread|wake_record|wake_record_if_due|wait_for_message|wait_for_message_ticks|poll_self_wait_deadlines)\(')
+def scheduler_protocol(text):
+    """{function: calls} for each scheduler.rs function that waits or touches custody."""
+    out={}
+    for name,body,head in _functions(text):
+        inner=body[head:]
+        if not KERNEL_WAIT_TOKEN.search(body) and not re.search(r'\.state\.(?!snapshot\()\w+\(',inner):continue
+        calls=[re.sub(r'^\.(?=state|wait_deadline)','',c.group(0)).rstrip('(').replace('interrupts::disable()','interrupts::disable')
+               for c in SCHEDULER_PROTOCOL_CALL.finditer(re.sub(r'//[^\n]*','',inner))]
+        if not calls:continue
+        if name in out:raise ValueError('scheduler protocol function named twice: '+name)
+        out[name]=' '.join(calls)
+    return out
+def model_protocol(text):
+    table=text.split('pub const SCHEDULER_PROTOCOL: &str = "',1)[1].split('";',1)[0]
+    out={}
+    for line in table.strip().splitlines():
+        name,calls=line.split(':',1)
+        out[name.strip()]=' '.join(calls.split())
+    return out
+def model_fingerprint(root,name,data):
+    model=(root/SCHEDULER_MODEL).read_text()
+    if name=='kernel/src/scheduler.rs':
+        actual,modelled=scheduler_protocol(data.decode()),model_protocol(model)
+        for fn in sorted(set(actual)|set(modelled)):
+            if actual.get(fn)!=modelled.get(fn):
+                raise ValueError('scheduler.rs custody protocol differs from '+SCHEDULER_MODEL+' in '+fn+': kernel '+repr(actual.get(fn))+' model '+repr(modelled.get(fn)))
+        return 'model-v1:'+hashlib.sha256(json.dumps(actual,sort_keys=True).encode()).hexdigest()
+    if '#[path = "../'+name+'"]' not in model:raise ValueError(SCHEDULER_MODEL+' no longer models '+name)
+    return 'model-v1:'+SCHEDULER_MODEL
 def wait_fingerprint(name,data):
     text=data.decode()
     if name in KERNEL_FN_SCOPED:
@@ -121,11 +169,14 @@ def source_contract(root):
     sources={}
     try:
         root=Path(root).resolve(strict=True);texts={}
-        for name,approved in APPROVED_TIMED_WAIT_SOURCES.items():
+        for name in sorted(set(APPROVED_TIMED_WAIT_SOURCES)|MODELLED_SOURCES):
             path=(root/name).resolve(strict=True)
             if not path.is_relative_to(root) or not path.is_file():raise ValueError('source escapes root: '+name)
-            data=path.read_bytes();digest=wait_fingerprint(name,data);sources[name]=digest
-            if digest not in approved:raise ValueError('unreviewed timed-wait source: '+name)
+            data=path.read_bytes()
+            if name in MODELLED_SOURCES:sources[name]=model_fingerprint(root,name,data)
+            else:
+                digest=wait_fingerprint(name,data);sources[name]=digest
+                if digest not in APPROVED_TIMED_WAIT_SOURCES[name]:raise ValueError('unreviewed timed-wait source: '+name)
             texts[name]=re.sub(r'\s+','',data.decode())
         closure=deadline_source_closure(root)
         scheduler=texts['kernel/src/scheduler.rs']
@@ -156,7 +207,9 @@ ACPI_AUX_COHORTS=(
  ('822bebd1f4048d35105a0c7fae00b3112b4c11a6013501cf8de528dc5e42dbf6','b13e5f3e739b0000837a81c9ae7212f0356c5d507d04d0f100a421f2ea05ddd6'),
  ('24446427547d1f80eeb557e928b5854c27edc8b0caa45d5aebd7a5e6b460e531','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
  # FADT PM1 blocks outside IO space refused before FixedRegisters::new; wait loop unchanged.
- ('2456130585cec58be8f2fe41e758175ce79e83faefa3c09bf6acf73b3fc917af','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'))
+ ('2456130585cec58be8f2fe41e758175ce79e83faefa3c09bf6acf73b3fc917af','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
+ # power.rs gains OP_DEVICE_SLEEP; sexacpi reports every MWAIT _CST state (wait loop unchanged), 2026-11-20
+ ('8e6bb20e7be6ff97c756986704690f9a5ad3791d77106b69de16bfcc5618590a','231583a434ade78732de80b01c85ec47612099338adcc832e0c52e6b0c4e9142'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')
