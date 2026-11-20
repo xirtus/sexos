@@ -173,6 +173,12 @@ jobs:
       run: bash scripts/polyamour/check_wasm_guest.sh && cargo test --locked --release -p sex-3d -p polyamour -p polyamour-sdk -p polyamour-wasm
     - name: Burlesque presentations engine (PPTX, ODP, presenter view, PDF export) on the host
       run: bash scripts/burlesque_host_gate.sh
+    - name: Cabaret studio, Filigree fonts and the shared colour, broadcast and audio engines on the host
+      run: |
+        cargo test --locked -p sex-color -p cabaret-core -p cabaret-proto -p cabaret-plugins -p filigree-core -p moan-core -p moan-plugin
+        cargo test --locked -p cabaret -p filigree --no-default-features
+        cargo test --locked -p sex-pdx --test cabaret_omatools
+        cargo test --locked -p sex-font --features inspect --lib
     - name: Pinyin input method
       run: cargo test --locked -p sex-ime
     - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport
@@ -1218,7 +1224,14 @@ jobs:
     - uses: ./.github/actions/setup
     - name: Build and freeze diagnostic image, then rebuild normal image
       # The image job already proves the normal image builds; skip rebuilding it here.
-      run: SEXOS_INPUT_PROOF_SKIP_NORMAL=1 bash scripts/build_input_payload_proof.sh "$RUNNER_TEMP/input-payload-proof"
+      # The script sends every phase to its own log; show their tails when it fails.
+      run: |
+        SEXOS_INPUT_PROOF_SKIP_NORMAL=1 bash scripts/build_input_payload_proof.sh "$RUNNER_TEMP/input-payload-proof" || {
+          for f in "$RUNNER_TEMP"/input-payload-proof/*.log "$RUNNER_TEMP"/input-payload-proof/diagnostic-build/*.log "$RUNNER_TEMP"/input-payload-proof/diagnostic-build/*.md; do
+            [[ -f "$f" ]] && { echo "=== $f"; tail -60 "$f"; }
+          done
+          exit 1
+        }
     - name: Strict physical-key oracles on the labeled diagnostic image only
       run: |
         evidence="$RUNNER_TEMP/input-payload-proof"

@@ -459,6 +459,8 @@ pub const RENAMED: &[(&[u8], &[u8])] = &[
     (b"term", b"spindle"),
     (b"view", b"gaze"),
     (b"settings", b"tatami"),
+    (b"filagree", b"filigree"),
+    (b"broadcast", b"cabaret"),
 ];
 /// The program a bare name means now; a path or a current name is kept as given.
 pub fn renamed(target: &[u8]) -> &[u8] {
