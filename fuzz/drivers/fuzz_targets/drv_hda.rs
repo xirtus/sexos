@@ -12,6 +12,7 @@
 #[path = "../../../servers/sexbell/src/hda.rs"] mod hda;
 #[path = "../../../servers/sexbell/src/mic.rs"] mod mic;
 #[path = "../../../servers/sexbell/src/jack.rs"] mod jack;
+#[path = "../../../servers/sexbell/src/hdmi.rs"] mod hdmi;
 use core::mem::size_of;
 
 mod device_model {
