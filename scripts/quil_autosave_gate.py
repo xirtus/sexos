@@ -54,6 +54,9 @@ class SerialText:
   if start>=self.size:return tail[start-self.size:]
   i=max(0,bisect.bisect_right(self.starts,start)-1)
   return ''.join(self.chunks[i:])[start-self.starts[i]:]+tail
+ def length(self):
+  """len(text()), without joining the log."""
+  tail=self.pull();return self.size+len(tail)
 
 def check_serial_health(text,tag):
  m=re.search(r'KERNEL PANIC|KERNEL PAGE FAULT|DOUBLE FAULT|GP FAULT|panicked at|serial.record.overflow',text)
@@ -94,7 +97,7 @@ def boot(iso,disk,out,tag,resolution):
   proc=subprocess.Popen(cmd,stdout=qemu_log,stderr=subprocess.STDOUT)
  began=time.monotonic()
  # The log only grows: read what is new, so hours-long runs don't reread it on every poll.
- log=SerialText(serial);text=log.text;since=log.since;checked_health={'off':0}
+ log=SerialText(serial);text=log.text;since=log.since;size=log.length;checked_health={'off':0}
  def health():
   if time.monotonic()-began>int(os.environ.get('SEXOS_GATE_BOUND','300')):raise TimeoutError(tag+' over its time bound')
   if proc.poll()is not None:raise RuntimeError(tag+' guest exited')
@@ -108,7 +111,10 @@ def boot(iso,disk,out,tag,resolution):
  checked_launches={'off':0}
  def wait(pattern,start=0,timeout=120,*,raw=False):
   match=wait_serial(text,health,pattern,start,timeout,tag=tag,raw=raw,since=since)
-  checked_launches['off']=check_ordinary_launches(Path(__file__).resolve().parents[1],text(),checked_launches['off'])
+  # Launch receipts are checked against the whole log, built only when one arrived.
+  new=since(checked_launches['off']);new=new[:new.rfind('\n')+1]
+  if '[shell.program.launch]' in new:checked_launches['off']=check_ordinary_launches(Path(__file__).resolve().parents[1],text(),checked_launches['off'])
+  else:checked_launches['off']+=len(new)
   return match
  def stop():
   if proc.poll()is None:proc.kill();proc.wait()
@@ -124,10 +130,10 @@ def boot(iso,disk,out,tag,resolution):
   wait(r'\[shell.app.registered.reply\] target=15 .*committed=1',timeout=180);wait(r'\[linen.disk.publish.done\]',timeout=180)
  except BaseException:
   stop();raise
- def key(name,pattern):s=len(text());q.key(name);return wait(pattern,s)
+ def key(name,pattern):s=size();q.key(name);return wait(pattern,s)
  def chord(mod,k,pattern):
-  s=len(text());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,(mod,k)),(False,(k,mod)))for x in ks]});return wait(pattern,s)
- return dict(q=q,proc=proc,text=text,since=since,wait=wait,key=key,chord=chord,stop=stop,focus=lambda sid:focus_surface(sid,text,key))
+  s=size();q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,(mod,k)),(False,(k,mod)))for x in ks]});return wait(pattern,s)
+ return dict(q=q,proc=proc,text=text,since=since,size=size,wait=wait,key=key,chord=chord,stop=stop,focus=lambda sid:focus_surface(sid,text,key))
 
 def settle(g,timeout):
  """Wait until Display applied Quil's latest admitted paint."""

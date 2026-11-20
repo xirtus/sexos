@@ -22,6 +22,7 @@ class SerialTextTest(unittest.TestCase):
                 for start in {0, len(want), rng.randrange(0, len(want) + 1), max(0, len(want) - 3)}:
                     self.assertEqual(log.since(start), want[start:])
                 self.assertEqual(log.text(), want)
+                self.assertEqual(log.length(), len(want))
 
     def test_missing_file_is_empty(self):
         with tempfile.TemporaryDirectory() as d:
