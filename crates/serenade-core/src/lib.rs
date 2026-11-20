@@ -9,6 +9,7 @@ extern crate alloc;
 
 pub mod edit;
 pub mod meter;
+pub mod polish;
 pub mod recorder;
 pub mod wav;
 pub mod waveform;
@@ -17,6 +18,10 @@ pub use edit::{AudioClip, FadeCurve, Marker};
 pub use meter::{
     dbfs_to_linear, linear_to_dbfs, linear_to_dbfs_approx, ChannelMeter, LevelMeter, MIN_DBFS,
     MIN_DBFS_LINEAR,
+};
+pub use polish::{
+    clean_hum, de_ess, measure_loudness, normalize_podcast_lufs, polish_podcast_voice,
+    suppress_background_noise, LoudnessReadout, PODCAST_TARGET_LUFS, TRUE_PEAK_CEILING_DBTP,
 };
 pub use recorder::{
     CaptureSession, FeedStats, RecorderConfig, RecorderState, VoxConfig, VoxStatus,

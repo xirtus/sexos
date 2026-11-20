@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-only
 # Builds FFmpeg's libraries for SexOS programs as static archives for
-# x86_64-sex-app.json (x87 and SSE, whose registers the kernel saves per task; no AVX,
-# whose state it does not), with FFmpeg's hand-written SSE2/SSSE3/SSE4 assembly.
+# x86_64-sex-app.json. C is compiled for the baseline (x87 and SSE2, -mno-avx), so it
+# runs on every x86_64 machine; FFmpeg's hand-written SSE2..SSE4, AVX, AVX2 and FMA3
+# assembly is built too and chosen at run time from CPUID and XCR0 (the kernel saves
+# AVX state per task since #408). AVX-512 stays off: the kernel does not enable its
+# state (#427) until the FPU save area moves to its own heap block.
 # Formats: MP4/MOV, Matroska/WebM, Ogg, MP3, ADTS AAC, FLAC and WAV; video H.264,
 # HEVC, VP8, VP9, MPEG-4 Part 2 and AV1 (dav1d, scripts/build_dav1d.sh; AVIF pictures
 # come through the MP4 demuxer); audio AAC, MP3, Opus, Vorbis, FLAC and PCM; plus
@@ -101,7 +104,7 @@ PKG_CONFIG_LIBDIR="$PKG_LIBDIR:$SHINE/lib/pkgconfig" PKG_CONFIG_PATH= "$FFMPEG_S
   --extra-cflags="$CFLAGS" \
   --extra-ldflags="--target=x86_64-unknown-none-elf -nostdlib -fuse-ld=lld -Wl,--unresolved-symbols=ignore-all" \
   --x86asmexe=nasm --enable-pic \
-  --disable-avx --disable-avx2 --disable-avx512 --disable-avx512icl --disable-fma3 --disable-fma4 --disable-xop \
+  --enable-runtime-cpudetect --disable-avx512 --disable-avx512icl --disable-fma4 --disable-xop \
   --disable-everything --disable-autodetect --disable-debug \
   --disable-pthreads --disable-w32threads --disable-os2threads \
   --disable-network --disable-programs --disable-doc --disable-avdevice --disable-avfilter \

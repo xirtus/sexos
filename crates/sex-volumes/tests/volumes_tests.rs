@@ -189,3 +189,20 @@ fn test_filesystem_probing() {
         Ok(_) => {}
     }
 }
+
+#[test]
+fn test_bitlocker_partitions_are_found() {
+    let mut disk = MemDisk::new(1000);
+    disk.data[510] = 0x55;
+    disk.data[511] = 0xAA;
+    for (i, (kind, start)) in [(0x07u8, 100u32), (0x07, 400)].iter().enumerate() {
+        let at = 446 + 16 * i;
+        disk.data[at + 4] = *kind;
+        disk.data[at + 8..at + 12].copy_from_slice(&start.to_le_bytes());
+        disk.data[at + 12..at + 16].copy_from_slice(&200u32.to_le_bytes());
+    }
+    // Partition 1: BitLocker. Partition 2: plain NTFS's OEM id.
+    disk.data[100 * SECTOR + 3..100 * SECTOR + 11].copy_from_slice(b"-FVE-FS-");
+    disk.data[400 * SECTOR + 3..400 * SECTOR + 11].copy_from_slice(b"NTFS    ");
+    assert_eq!(sex_volumes::bitlocker(&mut disk).unwrap(), vec![(100, 200)]);
+}

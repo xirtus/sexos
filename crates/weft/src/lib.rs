@@ -18,6 +18,8 @@ use alloc::string::String;
 
 pub mod a11y;
 mod build;
+#[forbid(unsafe_code)]
+pub mod coach;
 mod draw;
 pub mod edit;
 mod events;
@@ -35,6 +37,7 @@ pub mod theme;
 mod ui;
 pub mod widget;
 
+pub use coach::{Coach, CoachControls, CoachStep};
 pub use geom::{Point, Rect};
 pub use sex_font::Style as FontStyle;
 pub use text::Face;
