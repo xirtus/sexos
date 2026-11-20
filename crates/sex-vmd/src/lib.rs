@@ -50,6 +50,36 @@ pub fn bus_start(vmcap: u32, vmconfig: u32) -> u8 {
 /// MEMBAR2 begins with VMD's own MSI-X table.
 pub const MEMBAR2_RESERVED: u64 = 0x2000;
 
+/// VMCONFIG bit 1: interrupts of the devices behind VMD go through VMD's own MSI-X
+/// table. A child's MSI-X entry then names a VMD vector, not a CPU.
+pub const VMCONFIG_MSI_REMAP: u32 = 1 << 1;
+
+/// VMD vectors the devices behind it may use. Vector 0 is left alone: on client parts
+/// (Tiger Lake and later) it carries VMD's own events, and Linux skips it there too.
+pub const FIRST_CHILD_VECTOR: u16 = 1;
+
+/// What a child device writes into its MSI-X entry to raise VMD vector `index`: the
+/// usual 0xFEE address with the vector in the destination field, and data 0. VMD
+/// catches the write and raises its own entry `index`, which points at a CPU vector.
+pub fn child_msi(index: u16) -> (u32, u32) { (0xFEE0_0000 | ((index as u32 & 0xff) << 12), 0) }
+
+/// VMD's own MSI-X vectors, handed out to the devices behind it in order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Vectors { size: u16, next: u16 }
+
+impl Vectors {
+    /// `size`: entries in VMD's MSI-X table (at most 256: the index travels in 8 bits).
+    pub fn new(size: u16) -> Self { Vectors { size: size.min(256), next: FIRST_CHILD_VECTOR } }
+    pub fn free(&self) -> u16 { self.size.saturating_sub(self.next) }
+    /// `n` consecutive vectors, or None when fewer are left.
+    pub fn take(&mut self, n: u16) -> Option<u16> {
+        if n == 0 || n > self.free() { return None; }
+        let first = self.next;
+        self.next += n;
+        Some(first)
+    }
+}
+
 /// Config space of the VMD domain, addressed by bus number relative to the
 /// domain's first bus (the CFGBAR offset). Bridge registers, on the other hand,
 /// hold absolute bus numbers (first bus + relative); `configure` writes those.

@@ -21,3 +21,20 @@
 - Not done here (other threads own them): per-core NVMe/NIC queues, driver restart,
   device power, hot-plug. Left alone: ACPI's calibration spin, because the self-wait
   source contract pins sexacpi's waits (it no longer runs on core 0 on 3+ cores anyway).
+
+## First timelines (PR #472 run 1, medians, ms from QEMU start)
+
+| | kernel entry | cores online | handed over | Display | Shell | Files | desktop |
+|---|---|---|---|---|---|---|---|
+| 1 core TCG | 3002 | 3084 | 3797 | 4081 | 4264 | 4810 | 5207 |
+| 4 cores TCG | 3082 | 3306 | 4271 | 5071 | 5214 | 4598 | 5691 |
+| 4 cores KVM | 2275 | 3150 | 6346 | 7152 | 8679 | 8195 | 10505 |
+
+- Under KVM the kernel spends 3.2 s between the cores coming online and handing over
+  to services (0.7 s under TCG). The kernel's serial writer read the line status before
+  every byte: two port accesses, two exits to QEMU, per byte of its boot log. It now
+  gathers a line and sends it a FIFO (16 bytes) per line-status read with `rep outsb`
+  (`kernel/src/serial.rs`); services' lines already go out in one write (#471).
+- With 4 cores, Files is ready before the desktop (USB/drive/ACPI no longer wait on
+  core 0); the desktop itself is later than on 1 core under TCG because 4 TCG vCPUs share
+  the runner's host CPUs and the kernel brings up three more cores serially.

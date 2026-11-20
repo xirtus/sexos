@@ -72,17 +72,33 @@ firmware plumbing every laptop needs first. Target: Alienware x17 R1.
   repeated reports. `servers/sexinput/src/touchpad.rs` turns frames into pointer motion,
   taps and clickpad buttons, two-finger wheel steps, three-finger swipes (Alt+Tab) and
   pinches (Ctrl+= / Ctrl+-), through Input's ordinary outboxes.
-- **Polling**: 125 Hz while touched, 20 Hz after two idle seconds. The GPIO interrupt is next:
-  the pad's pin (`gpio=` in the log) on the Tiger Lake GPIO controller (`INT34C6`).
+- **Interrupt** (2026-11-19): when firmware gives the pad's I/O APIC line, Input reads the
+  pad only when it fires. sexacpi takes an `Interrupt` resource as is; for a `GpioInt` it
+  finds the pad on the Intel GPIO controller (`sex_laptop::intel_gpio`: Tiger Lake-LP/H,
+  Alder Lake-P/S/N, Raptor Lake-S), reads its PADCFG through `FW_MEM` (never writes it)
+  and, when firmware routed it to the I/O APIC (`GPIROUTIOXAPIC`), uses `INTSEL` as the
+  line, with the polarity the I/O APIC sees after `RXINV`. `Found::irq` carries it to
+  Input, which binds the line BOOT reserved for it (syscall 86 `OP_LINE_BIND`; the
+  kernel masks a level line each time it fires, Input unmasks after the read).
+- **Polling** stays the fallback: 125 Hz while touched, 20 Hz after two idle seconds, when
+  there is no line, the kernel refuses it, the line fires 32 times in a row with nothing
+  to read (`line_stuck`), or a once-a-second check read finds reports no interrupt
+  announced three times in a row (`line_silent`). A pad in GPIO-driver mode (not I/O APIC
+  routed) polls; routing it ourselves needs GPIO writes and is the next step if the x17
+  shows `gpio_not_apic_routed`.
 
 ABI: `sex_pdx::touchpad` (`OP_FOUND` 0x50F2, `ROUTE_SLOT` 61, `CONTROLLER_SLOT` 28),
 `Lease::SerialIo`, `devmgr::init` takes Input's identity.
 
 On the x17 R1, look for:
 1. `[devmgr.lease] 00:15.N 8086:43eX service=sexinput ... kind=SerialIo`.
-2. `[sexacpi.touchpad] path=... pci=00:15.N address=0x2c khz=400 hid_register=0x20 gpio=... counts=...`.
+2. `[sexacpi.touchpad] path=... pci=00:15.N address=0x2c khz=400 hid_register=0x20 gpio=... counts=... irq=GSI/level/high`,
+   after `[sexacpi.touchpad.gpio] chip=tgl-h pin=... dw0=... dw1=...` for a `GpioInt`, or
+   `[sexacpi.touchpad.irq] ... line=none reason=...` when there is no line.
 3. `[sexinput.i2c.ready] ... from_firmware=1 fifo=64/64` then `[sexinput.touchpad.ready] vendor=...`.
-4. If bring-up fails: `[sexinput.touchpad.retry] ... bus=Some(AddressNack)` means the pad is
+4. `[device.irq.line.bound] pd=... gsi=...` and `[sexinput.touchpad.mode] mode=interrupt ...`;
+   `mode=poll reason=line_stuck` means the polarity is wrong (send the `dw0` above).
+5. If bring-up fails: `[sexinput.touchpad.retry] ... bus=Some(AddressNack)` means the pad is
    unpowered or at another address; `not_designware` means the function stayed in D3.
 
 ## Sleep (H8, suspend to idle)

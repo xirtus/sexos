@@ -1,0 +1,13 @@
+[package]
+name = "cabaret-core"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Cabaret linear-light live broadcast compositor, studios, 19 video filters, 29 wipes, stingers, 12-DSP audio mixer with sidechain and R128, replay buffer, and multi-streaming engine"
+
+[dependencies]
+libm = "0.2"
+sex-color = { path = "../sex-color" }
+sex-image = { path = "../sex-image" }
+sex-canvas = { path = "../sex-canvas" }
+sex-font = { path = "../sex-font" }

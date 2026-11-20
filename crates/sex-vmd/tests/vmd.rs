@@ -205,3 +205,25 @@ fn bridges_hold_absolute_bus_numbers_when_the_domain_starts_at_224() {
     assert!(configure(&mut sim, 224, 64, membar1, membar2, &mut out).is_ok());
     assert_eq!((sim.funcs[1].regs[6] >> 16) & 0xFF, (sim.funcs[1].regs[6] >> 8) & 0xFF);
 }
+
+#[test]
+fn child_interrupts_name_a_vmd_vector() {
+    // Linux's vmd.c: address 0xFEE00000 with the VMD vector in the destination field.
+    assert_eq!(child_msi(1), (0xFEE0_1000, 0));
+    assert_eq!(child_msi(31), (0xFEE1_F000, 0));
+    assert_eq!(VMCONFIG_MSI_REMAP, 2);
+}
+
+#[test]
+fn vmd_vectors_skip_vector_0_and_run_out() {
+    let mut v = Vectors::new(4);
+    assert_eq!(v.free(), 3);
+    assert_eq!(v.take(2), Some(1), "first drive: vectors 1 and 2");
+    assert_eq!(v.take(2), None, "only one left");
+    assert_eq!(v.take(1), Some(3));
+    assert_eq!(v.take(1), None);
+    assert_eq!(v.take(0), None);
+    assert_eq!(Vectors::new(0).free(), 0);
+    assert_eq!(Vectors::new(1).free(), 0, "a table with only vector 0 gives children nothing");
+    assert_eq!(Vectors::new(4096).free(), 255);
+}
