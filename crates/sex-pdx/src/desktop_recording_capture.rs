@@ -15,9 +15,9 @@ pub const PIXELS: usize = WIDTH * HEIGHT;
 pub const CHUNK_PIXELS: usize = 4096;
 pub const INTERVAL_MS: u64 = 200;
 pub const DURATION_MS: u64 = 60_000;
-pub const OP_CONTROL: u64 = 0x2e4;
-pub const OP_FRAME: u64 = 0x2e5;
-pub const OP_EVENT: u64 = 0x2e7;
+pub const OP_CONTROL: u64 = 0x2cd;
+pub const OP_FRAME: u64 = 0x2ce;
+pub const OP_EVENT: u64 = 0x2d3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Scope {
