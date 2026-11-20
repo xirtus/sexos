@@ -48,7 +48,7 @@ python3 - "$ROOT_DIR" "$TEST_DIR/service.rs" "$TEST_DIR/service_abi.rs" <<'PY'
 from pathlib import Path
 import re,sys
 s=(Path(sys.argv[1])/'apps/sexdrive/src/main.rs').read_text();parts=[]
-for name in ['service_next_request','fill_initial_frame']:
+for name in ['service_next_request','fill_initial_frame','device_sleep']:
  a=s.index('fn '+name+'(');i=s.index('{',a)+1;depth=1
  while depth:depth+=(s[i]=='{')-(s[i]=='}');i+=1
  parts.append(s[a:i])

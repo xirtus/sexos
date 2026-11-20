@@ -4840,6 +4840,8 @@ dependencies = [
  "serenade-core",
  "sex-app",
  "sex-pdx",
+ "sex-voice",
+ "sha2 0.10.9",
  "taffy",
  "weft",
 ]
@@ -7287,6 +7289,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-idle"
+version = "0.1.0"
+
+[[package]]
 name = "sex-image"
 version = "0.1.0"
 dependencies = [
@@ -7312,6 +7318,7 @@ version = "0.1.0"
 name = "sex-js"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sex-app",
  "sex-fetch",
  "sex-gl",
@@ -7348,7 +7355,9 @@ dependencies = [
  "raw-cpuid 11.6.0",
  "scopeguard",
  "sex-hwdb",
+ "sex-idle",
  "sex-iommu",
+ "sex-pcipm",
  "sex-pdx",
  "sex-vmd",
  "spin",
@@ -7455,6 +7464,10 @@ dependencies = [
 
 [[package]]
 name = "sex-organize"
+version = "0.1.0"
+
+[[package]]
+name = "sex-pcipm"
 version = "0.1.0"
 
 [[package]]
@@ -7622,6 +7635,10 @@ version = "0.1.0"
 
 [[package]]
 name = "sex-vmd"
+version = "0.1.0"
+
+[[package]]
+name = "sex-voice"
 version = "0.1.0"
 
 [[package]]
@@ -9697,6 +9714,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "voice"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "sex-voice",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10010,6 +10037,7 @@ dependencies = [
 name = "web"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sex-app",
  "sex-extensions",
  "sex-fetch",

@@ -5648,6 +5648,7 @@ pub extern "C" fn _start() -> ! {
                 None => { let _ = sex_pdx::sys_wait_self_ticks(100); continue; }
             }
         } else { unsafe { pdx_listen_raw(0) } };
+        if req.type_id==sex_pdx::power::OP_DEVICE_SLEEP&&req.caller_pd==0{sex_pdx::serial_record!("[sexnet.sleep] asleep={}",req.arg0);continue;}
         if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:req.caller_pd,task:req.caller_task},opcode:req.type_id,words:[req.arg0,req.arg1,req.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}
         if restricted::denied(req.caller_pd){
             if req.type_id==sex_pdx::web::OP{let _=pdx_reply(req.caller_pd,sex_pdx::web::reply((req.arg0&0xff_ffff) as u32,sex_pdx::web::DENIED,0));}
