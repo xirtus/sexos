@@ -92,7 +92,7 @@ parts+=[fn(main,n)for n in ['valid_scanout','raster_batch','render_prepared','re
 parts+=[fn(main,'publish_frame').replace('fn publish_frame(', 'fn actual_publish_frame(',1)]
 parts+=[fn(main,'write_access_view')]
 # Host doubles for the virtio-gpu presentation step (no device on the host).
-parts+=['fn gpu_scanout_active()->bool{false}','fn gpu_present(_first:usize,_end:usize)->bool{true}']
+parts+=['fn gpu_scanout_active()->bool{false}','fn gpu_present(_first:usize,_end:usize)->bool{true}','fn gpu_back_buffer(fb:*mut u32)->*mut u32{fb}']
 # Exact Main plan/render/completion statements; only the host function boundary
 # supplies the same local variables. No copied pending-work policy in the test.
 start=main.index('let plan=pending_paint.plan(w,h);');end=main.index('pending_paint.complete(published.is_some());',start)+len('pending_paint.complete(published.is_some());')
