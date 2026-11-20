@@ -46,6 +46,12 @@ impl PeerState {
 /// pages. Restarts leave those pages as the last run wrote them instead of putting
 /// BOOT's copy back, so a service can carry its session into its next run.
 pub const OP_KEEP: u64 = 5;
+/// rsi: byte offset; rdx: buffer of `LOG_CHUNK` bytes. Copies the boot log's first part
+/// (everything logged until the kernel's 256 KiB head buffer filled) from that offset.
+/// Returns bytes copied in rsi and the head's length so far in rdx. Files, Shell and
+/// Spindle only: on a PC with no serial port this is how the hardware report is read.
+pub const OP_LOG_HEAD: u64 = 6;
+pub const LOG_CHUNK: usize = 1024;
 
 /// The kernel's message to Files (caller 0) when it holds a record Files has not seen.
 pub const OP_NOTICE: u64 = 0x0C5A_0001;
@@ -269,6 +275,11 @@ pub fn keep(va: u64, pages: u64) -> bool { call(OP_KEEP, va, pages).0 == OK }
 #[cfg(target_arch = "x86_64")]
 pub fn status() -> Option<(usize, u64)> {
     match call(OP_STATUS, 0, 0) { (OK, n, boot) => Some((n as usize, boot)), _ => None }
+}
+/// The boot log's head from `offset`: (bytes copied into `buf`, head length so far).
+#[cfg(target_arch = "x86_64")]
+pub fn log_head(offset: usize, buf: &mut [u8; LOG_CHUNK]) -> Option<(usize, usize)> {
+    match call(OP_LOG_HEAD, offset as u64, buf.as_mut_ptr() as u64) { (OK, n, total) => Some((n as usize, total as usize)), _ => None }
 }
 /// The kernel's record at `index`, oldest first.
 #[cfg(target_arch = "x86_64")]

@@ -14,6 +14,14 @@
 //! the untimed inbox wait does not, so an untaken bit cannot make an idle service
 //! spin), and takes the bits with `irq_take`. A driver that never unmasks keeps polling.
 //!
+//! A device whose interrupt is a wire, not a message (a laptop touchpad's GPIO pad
+//! routed to the I/O APIC), uses a *line*: BOOT reserves the vector and pending bit
+//! (manifest `lines`), and the service, once firmware told it which I/O APIC input the
+//! wire is, binds that input to the line once (`OP_LINE_BIND`). A level line is masked
+//! by the kernel each time it fires, before the end of interrupt, so a wire held
+//! asserted costs one interrupt, not a storm; the driver unmasks it (`OP_LINE_MASK`)
+//! once it has quieted the device.
+//!
 //! All of this is BOOT-created: the call never mints a lease or a vector.
 
 pub const SYS_DEVICE: u64 = 86;
@@ -26,7 +34,17 @@ pub const OP_UNMASK: u64 = 1;
 pub const OP_MASK: u64 = 2;
 /// → the pending bits, cleared atomically.
 pub const OP_TAKE: u64 = 3;
-// 4 and 5: I/O APIC lines (touchpad thread).
+/// rdi=line index, rsi=gsi | `LINE_EDGE` | `LINE_ACTIVE_LOW` → rax=the line's pending bit.
+/// Points a line BOOT reserved for this service at I/O APIC input `gsi`, masked. Once
+/// per line; refused for inputs under 16 (ISA, the kernel's own), inputs already bound
+/// and inputs no I/O APIC has.
+pub const OP_LINE_BIND: u64 = 4;
+/// rdi=line index, rsi=1 mask / 0 unmask → 0.
+pub const OP_LINE_MASK: u64 = 5;
+pub const LINE_EDGE: u64 = 1 << 16;
+pub const LINE_ACTIVE_LOW: u64 = 1 << 17;
+/// Lines one service may hold.
+pub const MAX_LINES: usize = 2;
 /// rdi=slot, rsi=vector index | core << 16 → 0. Aims that vector at one core, so a
 /// queue's completions land where its worker runs. `OP_UNMASK` already aims the vector
 /// at the unmasking task's core; this is for a worker that unmasks on another's behalf.
@@ -147,6 +165,20 @@ pub fn irq_steer(slot: u64, vector: u16, core: u32) -> Result<(), u64> {
 #[cfg(target_arch = "x86_64")]
 pub fn irq_bind(slot: u64, vector: u16, notification_slot: u32, bit: u8) -> Result<(), u64> {
     let r = call(OP_BIND, slot, vector as u64 | ((bit & 63) as u64) << 16 | (notification_slot as u64) << 32)[0];
+    if r == 0 { Ok(()) } else { Err(r) }
+}
+
+/// Binds reserved line `index` to I/O APIC input `gsi` (masked); its pending bit.
+#[cfg(target_arch = "x86_64")]
+pub fn line_bind(index: u64, gsi: u16, edge: bool, active_low: bool) -> Result<u8, u64> {
+    let flags = if edge { LINE_EDGE } else { 0 } | if active_low { LINE_ACTIVE_LOW } else { 0 };
+    let r = call(OP_LINE_BIND, index, gsi as u64 | flags)[0];
+    if r < MAX_VECTORS_PER_SERVICE as u64 { Ok(r as u8) } else { Err(r) }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub fn line_mask(index: u64, masked: bool) -> Result<(), u64> {
+    let r = call(OP_LINE_MASK, index, masked as u64)[0];
     if r == 0 { Ok(()) } else { Err(r) }
 }
 
