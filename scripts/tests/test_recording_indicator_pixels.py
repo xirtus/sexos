@@ -37,6 +37,8 @@ extern crate self as sex_pdx;
 pub mod access_view {{ pub fn set_pointer<X,Y>(_:X,_:Y){{}} }}
 ''' + cursor + r'''
 const CURSOR_SURFACE_ID:u64=0x90;
+// No Intel cursor plane in the fixture: the pointer is drawn into the frame.
+fn hw_cursor(_:usize,_:usize,_:usize)->bool{false}
 #[derive(Clone,Copy)]struct PreparedCursor{x:usize,y:usize,seq:u32,shell_tick:u32}
 static mut PREPARED_CURSOR:Option<PreparedCursor>=None;
 static mut INPUT_TRACE_LAST_SEQ:u32=0;
