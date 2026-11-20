@@ -8,6 +8,7 @@
 #![no_std]
 #![no_main]
 
+mod grants;
 mod model;
 mod setup;
 
@@ -15,6 +16,9 @@ use model::{Change, Model};
 use sex_app::settings;
 use sex_app::{Event, Nav, Window};
 use sex_config::{Config, KEYS};
+use sex_pdx::package as pkg;
+
+const _: () = assert!(grants::GRANTS[0].0 == pkg::NETWORK && grants::GRANTS[1].0 == pkg::MICROPHONE && grants::MACHINE == pkg::MACHINE);
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -39,6 +43,26 @@ fn load() -> (Config, u64) {
     }
     sex_pdx::serial_record!("[settings.load] generation={} failed={} night={}", generation, failed, values.value(sex_config::id::NIGHT_LIGHT));
     (values, generation)
+}
+
+/// The Privacy page's program rows, from Files. Files lets this program, and no other,
+/// list grants and change the person's answers (`sex_pdx::package`).
+fn load_grants(window: &mut Window, m: &mut Model, rows: &mut [grants::Row; grants::ROWS_MAX]) -> usize {
+    let (status, report) = sex_app::files::package(window, pkg::GRANTS, b"", 0);
+    let n = if status == sex_pdx::fs::OK { grants::parse(&report, rows) } else { 0 };
+    let defaults = [m.values.value(sex_config::id::FIRST_RUN_NETWORK), m.values.value(sex_config::id::FIRST_RUN_MICROPHONE)];
+    let mut text = [0u8; model::EXTRA_MAX];
+    let k = grants::render(&rows[..n], defaults, &mut text);
+    m.set_extra(&text[..k], n);
+    sex_pdx::serial_record!("[settings.grants] status={} rows={}", status, n);
+    n
+}
+/// Left (take away) or Right (give) on a program row: the person's answer, to Files.
+fn change_grant(window: &mut Window, m: &mut Model, row: &grants::Row, allow: bool) {
+    let (status, _) = sex_app::files::package(window, pkg::CONSENT, row.program(), grants::consent(row, allow));
+    let program = core::str::from_utf8(row.program()).unwrap_or("?");
+    sex_pdx::serial_record!("[settings.grant] program={} grant={} allow={} status={}", program, row.word(), allow as u8, status);
+    m.say(if status != sex_pdx::fs::OK { "Files did not take the change." } else if allow { "Allowed from its next run." } else { "Taken away from its next run." });
 }
 
 fn show(window: &mut Window, m: &Model) {
@@ -91,6 +115,7 @@ pub extern "C" fn _start() -> ! {
     if settings::get(sex_config::id::SETUP_DONE).is_ok_and(|done| done == 0) { first_start(&mut window); }
     let (values, mut generation) = load();
     let mut m = Model::new(values);
+    let mut rows = [grants::Row::EMPTY; grants::ROWS_MAX];
     sex_pdx::serial_record!("[settings.open] generation={}", generation);
     show(&mut window, &m);
     loop {
@@ -115,7 +140,14 @@ pub extern "C" fn _start() -> ! {
         const KEY_P: u8 = 0x19;
         const PAGE_UP: u8 = 0x49;
         const PAGE_DOWN: u8 = 0x51;
-        let change = if m.entering() {
+        let page = m.page;
+        let program_row = m.extra_row().filter(|_| !m.entering());
+        let change = if let (Some(i), Some(nav)) = (program_row, sex_app::nav(key).filter(|n| matches!(n, Nav::Left | Nav::Right)).or((key.code == ENTER).then_some(Nav::Right))) {
+            let row = rows[i];
+            change_grant(&mut window, &mut m, &row, matches!(nav, Nav::Right));
+            load_grants(&mut window, &mut m, &mut rows);
+            Change::None
+        } else if m.entering() {
             let c = match key.code { ENTER => 13, ESC => 27, BACKSPACE => 8, _ => sex_app::typed(key).unwrap_or(0) };
             m.password_key(c)
         } else if key.control && key.code == KEY_P {
@@ -135,6 +167,7 @@ pub extern "C" fn _start() -> ! {
                 Change::None
             }
         } };
+        if m.page != page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
         if let Change::Password(mut typed, n) = change {
             let result = settings::password(sex_config::secret::SET, &typed[..n]);
             for b in typed.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }
@@ -145,7 +178,11 @@ pub extern "C" fn _start() -> ! {
             let result = settings::set(id, value);
             sex_pdx::serial_record!("[settings.set] key={} value={} status={}", id, value, result.err().unwrap_or(0));
             match result {
-                Ok(()) => { let _ = m.values.set(id, value); m.say("Saved."); }
+                Ok(()) => {
+                    let _ = m.values.set(id, value); m.say("Saved.");
+                    // A first-run default shows on the program rows too.
+                    if m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
+                }
                 Err(e) if e == sex_pdx::config::NOT_SAVED => { let _ = m.values.set(id, value); m.say("Changed, but the disk could not be written."); }
                 Err(e) => m.say(settings::message(e)),
             }

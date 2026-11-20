@@ -23,6 +23,7 @@ pub mod hotplug;
 pub mod plane;
 pub mod readout;
 pub mod regs;
+pub mod takeover;
 
 /// 32-bit register access to the display MMIO BAR (GTTMMADR, BAR 0).
 pub trait Mmio {

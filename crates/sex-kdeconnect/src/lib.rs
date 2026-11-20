@@ -288,7 +288,9 @@ impl Pairing {
     pub fn accept(&mut self) -> Vec<PairOutcome> {
         if let PairState::RequestedByPeer { .. } = self.state {
             self.state = PairState::Paired;
-            return alloc::vec![PairOutcome::Send(true), PairOutcome::NowPaired];
+            // Paired first: the peer may send paired-only packets (a notification) the
+            // moment it reads the answer, and those must not come before Paired.
+            return alloc::vec![PairOutcome::NowPaired, PairOutcome::Send(true)];
         }
         Vec::new()
     }

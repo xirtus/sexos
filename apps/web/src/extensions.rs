@@ -286,6 +286,16 @@ impl Extensions {
     /// scripts to run before the page's own, then after.
     pub fn content(&mut self, window: &mut Window, url: &str, in_frame: bool) -> (Vec<String>, Vec<PageScript>, Vec<PageScript>) {
         let (mut css, mut early, mut late) = (Vec::new(), Vec::new(), Vec::new());
+        // An extension's own page (its popup or options page, opened in a tab) gets the
+        // whole API in its realm, as its background does; no content scripts run there.
+        if let Some((id, _)) = split_url(url) {
+            if let Some(e) = self.list.iter().find(|e| e.enabled && e.id == id) {
+                let source = alloc::format!("globalThis.chrome=globalThis.browser={};", e.api(&self.key, "page"));
+                early.push(PageScript { source, name: alloc::format!("{}{}/kaleidoscope-extension-api.js", SCHEME, e.id), module: false, node: None, external: false });
+                sex_pdx::serial_record!("[web.extension.page] id={} url={}", e.id, url);
+            }
+            return (css, early, late);
+        }
         if !url.starts_with("http") { return (css, early, late); }
         let key = self.key.clone();
         for e in self.list.iter_mut().filter(|e| e.enabled) {
@@ -390,10 +400,17 @@ impl Browser {
             let what = alloc::format!("{} content script(s), {} blocking rule(s){}{}", m.content_scripts.len(), e.rule_count,
                 if e.skipped > 0 { alloc::format!(", {} rule(s) not supported yet", e.skipped) } else { String::new() },
                 if m.background.is_empty() { String::new() } else if self.extensions.backgrounds.iter().any(|b| b.id == e.id) { String::from(", background running") } else { String::from(", background stopped") });
+            // Its popup and options page open in the tab while it is on.
+            let mut pages = String::new();
+            if e.enabled {
+                for (label, page) in [("Popup", &m.popup), ("Options", &m.options_page)] {
+                    if let Some(p) = page { pages.push_str(&alloc::format!(" · <a href='{}{}/{}'>{}</a>", SCHEME, esc(&e.id), esc(p), label)); }
+                }
+            }
             rows.push_str(&alloc::format!(
                 "<li style='margin:10px 0'><b>{}</b> {} <span style='color:#5f6368'>MV{}</span><br>{}<br><span style='color:#5f6368'>{}</span><br>\
-                 <a href='about:extensions?toggle={}'>{}</a> · <a href='about:extensions?remove={}'>Remove</a></li>",
-                esc(&m.name), esc(&m.extension_version), m.version, esc(&m.description), what, esc(&e.id), if e.enabled { "Turn off" } else { "Turn on" }, esc(&e.id)));
+                 <a href='about:extensions?toggle={}'>{}</a>{} · <a href='about:extensions?remove={}'>Remove</a></li>",
+                esc(&m.name), esc(&m.extension_version), m.version, esc(&m.description), what, esc(&e.id), if e.enabled { "Turn off" } else { "Turn on" }, pages, esc(&e.id)));
         }
         if rows.is_empty() { rows.push_str("<li>None yet.</li>"); }
         alloc::format!(
@@ -599,6 +616,8 @@ impl Browser {
         // Code may speak only for its own extension, and only one that is on.
         let Some(ei) = self.extensions.list.iter().position(|e| e.enabled && e.id == id) else { return };
         if matches!(&from, Realm::Background(b) if *b != id) { return; }
+        // An extension's page speaks only for that extension.
+        if matches!(from, Realm::Page(_)) && split_url(&self.url).is_some_and(|(own, _)| own != id) { return; }
         sex_pdx::serial_record!("[web.extension.message] id={} t={} from={}", id, t, from.tag());
         match t {
             "send" | "tabsend" => {

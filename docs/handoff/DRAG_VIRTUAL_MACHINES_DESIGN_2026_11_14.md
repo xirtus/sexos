@@ -262,7 +262,9 @@ What remains for D2 to be "Linux boots to a shell":
   length from EXITINFO2 (next RIP); nested page faults become `EPT_VIOLATION` with the faulting
   GPA; shutdown becomes `TRIPLE_FAULT`; the SVM-only instructions become `VMX_INSTRUCTION`;
   an exit code with no Intel twin comes back as `SVM_OTHER | code`. Without NRIP save the
-  skipped instructions use their fixed lengths.
+  skipped instructions use their fixed lengths, which is wrong for prefixed forms (`66 0F A2`).
+  Every PKU-capable AMD CPU (Zen 3+) has NRIP save, so this only affects emulated CPUs such
+  as QEMU TCG; prefix decoding in drag-vmm is the follow-up if that ever matters.
 - TLB: every guest is ASID 1. A core flushes it (by ASID when the CPU can, else all) when it
   runs a different vCPU than last time, the vCPU last ran on another core (its INVLPGs
   there never reached this core), or a nested table lost a mapping (`EPT_GENERATION`).

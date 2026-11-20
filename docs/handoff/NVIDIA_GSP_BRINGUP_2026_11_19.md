@@ -96,8 +96,10 @@ What was built (and where it differs from the first sketch):
   addresses and bus/devfn for `GSP_SET_SYSTEM_INFO`, answered only for an NVIDIA GPU lease.
   Without the service, `manifest::claim_present` gives the GPU to Display (identity only) as before.
   No MSI yet: the service polls the message queue.
-- **Firmware**: a boot module after all. Installs write a 256 MiB system slot now (not the old
-  32 MiB one), so the 38 MB pack fits; `scripts/make_nvidia_firmware_pack.py` builds it
+- **Firmware**: a boot module of the ISO's NVIDIA entry only. It is kept out of the install
+  image `boot.img` (2026-11-20): Limine loads that image into RAM on every entry, so the pack
+  inside it cost every machine 32 MiB. Installs therefore have no NVIDIA entry yet; boot the
+  x17 from the ISO/USB to test. `scripts/make_nvidia_firmware_pack.py` builds the pack
   (`SEXNVFW1`, raw files with their SHA-256, `crates/sex-gpu-nv/src/pack.rs`) from the pinned
   linux-firmware files, with NVIDIA's licence beside them. The service checks each file's recorded
   hash against the pins and hashes the bytes itself (SHA-256). An offline build packs nothing and
