@@ -26,14 +26,14 @@ hal/x86_64.rs +27).
 | S7 | Spectre v2: no IBRS of any kind | Medium | Partly fixed (eIBRS / AutoIBRS) |
 | S8 | Conditional SWAPGS can be speculated past (CVE-2019-1125) | Low | Fixed |
 | S9 | A program can exhaust kernel memory by churning worker threads | Medium | Fixed: a row keeps at most `2 * MAX_WORKERS` tasks |
-| S10 | Spectre v1 gadgets on capability-slot lookups | Medium | Open: stream 3 (new table) |
+| S10 | Spectre v1 gadgets on capability-slot lookups | Medium | Fixed: `spec_clamp` (v2 table), `index_nospec` (domain ids, #415) |
 | S11 | SMAP off and PKRU = 0 for the whole syscall | Medium | Open: Phase 6 design |
 | S12 | Meltdown and Meltdown-PK on CPUs without `RDCL_NO` | Info | Reported at boot |
 | S13 | Unused user-accessible per-core page on key 15 | Low | Fixed in #415 (page removed) |
 | S14 | Cross-domain branch-target injection between programs | Info | Open: decision for Phase 5/6 |
 | S15 | BOOT services and bridges were never scanned for WRPKRU/XRSTOR/XRSTORS | High | Fixed |
 | S16 | Three kernel user mappings were writable and executable; program records' code was never scanned | High | Fixed |
-| S17 | The framebuffer grant sets the user bit on whole huge pages | Medium | Open: `init.rs`/boot display owner |
+| S17 | The framebuffer grant sets the user bit on whole huge pages | Medium | Fixed: huge pages are split before the grant |
 | S18 | Kernel stacks had no guard page; a Task built on a 16 KiB stack overran it | High | Fixed (follow-up PR): guard page, boxed FPU area |
 
 Checked and fine: syscall and interrupt returns restore every general register from
@@ -162,7 +162,7 @@ Fixed 2026-11-19 as suggested: past the cap `spawn` returns `RETRY` (some task i
 Dead and becomes reusable within `REUSE_TICKS`), which `sex_pdx::program_threads::spawn`
 already retries after a yield. A row's worker stacks are now bounded at 8 MiB.
 
-### S10. Spectre v1 on slot lookups (open, stream 3)
+### S10. Spectre v1 on slot lookups (fixed)
 
 `decode_capability_slot` bounds-checks a register value and the table is then
 indexed with it. Speculatively, the index can run past the check. Stream 3's new
@@ -255,7 +255,7 @@ After this, a page a ring-3 domain can write is never executable, and every page
 can execute was scanned once its bytes were final. The cross-domain isolation gate
 (stream 7) should include "write a page, jump to it, expect a fault".
 
-### S17. Framebuffer grant on huge pages (open)
+### S17. Framebuffer grant on huge pages (fixed)
 
 `init.rs` gives Display the framebuffer by calling `set_page_user_accessible` per
 4 KiB, but when the bootloader mapped it with a 2 MiB or 1 GiB page, the function
@@ -263,6 +263,11 @@ sets the user bit on the whole huge page. Display then reaches everything else i
 that page, which can include other devices' MMIO. Fix: map the framebuffer into a
 BOOT region window with 4 KiB pages (as other regions are) instead of changing the
 HHDM entry.
+
+Fixed 2026-11-19 in `pku.rs`: `set_page_user_accessible` now splits a 1 GiB or 2 MiB
+page into a table of smaller pages with the same frames and flags (PAT moved from
+bit 12 to bit 7 for 4 KiB leaves) before it changes anything, so the user bit and
+Display's key land on the framebuffer's own 4 KiB pages only.
 
 ### S18. Kernel stack overflow into the heap (fixed in a follow-up)
 

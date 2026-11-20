@@ -17,7 +17,11 @@ while read -r sum name; do
   [ -n "$name" ] || continue
   if [ -f "$OUT/$name" ] && echo "$sum  $OUT/$name" | sha256sum -c --quiet - 2>/dev/null; then continue; fi
   for attempt in 1 2 3 4; do
-    if curl -sSfL -o "$OUT/$name.part" "$BASE/intel/$name"; then break; fi
+    rc=0; curl -sSfL --connect-timeout 20 -o "$OUT/$name.part" "$BASE/intel/$name" || rc=$?
+    [ "$rc" = 0 ] && break
+    # Host unreachable (resolve, connect or connect timeout): fail at once, not after
+    # every file and attempt; the host gates then skip the real-image tests.
+    case "$rc" in 6|7|28) echo "[firmware.fetch] FAIL host unreachable rc=$rc" >&2; exit 1;; esac
     [ "$attempt" = 4 ] && { echo "[bt.firmware] FAIL fetch $name" >&2; exit 1; }
     sleep $((attempt * 2))
   done
@@ -31,7 +35,7 @@ fe272982577efdc289cfe3e8bedafca607c0b7d6c9df1aab1880e22ef930d077 ibt-0041-0041.d
 f14d059858623283f9e1bca3c9f5c5edc272cf538959d8f194327e3a9af5a75a ibt-0040-0041.sfi
 fe272982577efdc289cfe3e8bedafca607c0b7d6c9df1aab1880e22ef930d077 ibt-0040-0041.ddc
 LIST
-curl -sSfL -o "$OUT/LICENCE.ibt_firmware" "$BASE/LICENSES/LICENCE.ibt_firmware" \
-  || curl -sSfL -o "$OUT/LICENCE.ibt_firmware" "$BASE/LICENCE.ibt_firmware" \
+curl -sSfL --connect-timeout 20 -o "$OUT/LICENCE.ibt_firmware" "$BASE/LICENSES/LICENCE.ibt_firmware" \
+  || curl -sSfL --connect-timeout 20 -o "$OUT/LICENCE.ibt_firmware" "$BASE/LICENCE.ibt_firmware" \
   || echo "[bt.firmware] note: licence file not fetched"
 echo "[bt.firmware] PASS dir=$OUT"

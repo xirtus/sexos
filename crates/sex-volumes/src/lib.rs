@@ -208,6 +208,20 @@ pub fn scan(disk: &mut dyn Disk) -> Result<Vec<Found>> {
     Ok(found)
 }
 
+/// Partitions encrypted with BitLocker (Windows device encryption): their first sector
+/// names "-FVE-FS-" where a filesystem would name itself. They cannot be opened without
+/// the recovery key; this only finds them, so the person learns why Windows' files are
+/// not under /media. (start, len) in sectors.
+pub fn bitlocker(disk: &mut dyn Disk) -> Result<Vec<(u64, u64)>> {
+    let mut out = Vec::new();
+    let mut sector = [0u8; 512];
+    for p in partition::table(disk)? {
+        if p.len == 0 || disk.read(p.start, &mut sector).is_err() { continue; }
+        if &sector[3..11] == b"-FVE-FS-" { out.push((p.start, p.len)); }
+    }
+    Ok(out)
+}
+
 /// Little-endian fields.
 pub(crate) fn le16(b: &[u8], at: usize) -> u16 { u16::from_le_bytes([b[at], b[at + 1]]) }
 pub(crate) fn le32(b: &[u8], at: usize) -> u32 { u32::from_le_bytes(b[at..at + 4].try_into().unwrap()) }
