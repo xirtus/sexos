@@ -12,6 +12,16 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/scheduler.rs', '59a7fe67bfa8a5a0d230296bd391d5261c6fbaeba42c3c0c05bcd7db6f19265e'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:395d7827fe51750aaa43f1cba2da266fc407f19ab9ac6dcad4e5f40e416121fe'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:2b52c1f01b3c0987f571d39433d87d3dfb7fde6689853aa748d5af2fb227e02d'),  # kernel fault report: task, custody, pending_outgoing (WS2 soak fault), 2026-11-20
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:eacc16fd01fce7c181e70f2178153c355c3793337e24f7acd9c58afb90415611'),  # rearm purges stale handoff slots + resets IPC v2 state (WS2 soak fault), 2026-11-19
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:96213afb9ba13c65c30b8892bda0d19b66aaf74aeedfcfeede56e4187b00f438'),  # kernel page fault prints the words around RSP (WS2 soak fault), 2026-11-19
+
     ('timed', 'kernel/src/program_records.rs', 'fn-v1:50abfa8222c49ebe84edeabc79324366bf1e5519a09c19d63542f664c6215981'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
     ('timed', 'kernel/src/program_records.rs', '37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8'),
@@ -123,6 +133,7 @@ PINS = (
 
     ('timed', 'servers/sexusb/src/main.rs', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec'),
     ('timed', 'servers/sexnet/src/main.rs', 'fcc4ffc50a6302756285ae01c86fcd838852bfbdf4ac4a4b2198550bf2afe400'),  # OP_DEVICE_SLEEP from the kernel logged and skipped after the listen (no wait change), 2026-11-19
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master merge of the OP_DEVICE_SLEEP handler (#460) with the wired NIC interrupt wait (irq_wait, reviewed in its own PR); nothing new, 2026-11-20
     ('timed', 'servers/sexusb/src/main.rs', '2c15ba53f84180a5feb262de17783e3821be45c5f4941d9660835d9c9bb541a6'),  # sleep notice suspends idle ports (bounded link waits); quiet predicate unchanged, 2026-11-19
 
     ('tree', '', '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5'),  # master after #407 + #408 + #422 combined, 2026-11-18
