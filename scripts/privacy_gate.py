@@ -63,7 +63,7 @@ def main():
   # Settings: first-start setup, then its last page (PgUp from the first).
   s=len(t());type_line('run tatami');first_start(g,q,t,s);g['wait'](r'\[settings\.open\] generation=\d+',s,120);time.sleep(1)
   s=len(t());q.key('pgup')
-  g['wait'](r'\[files\.pkg\.settings\] op=10 arg=\n',s,30)
+  g['wait'](r'\[files\.pkg\.settings\] op=15 arg=\n',s,30)
   g['wait'](r'\[settings\.grants\] status=0 rows=1\n',s,30)
   # Two first-run settings, then chello's network row; Left takes it away.
   time.sleep(.3);q.key('down');time.sleep(.3);q.key('down');time.sleep(.3)
