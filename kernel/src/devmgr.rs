@@ -14,6 +14,8 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
     // Drives behind Intel VMD (RST "RAID On") join the list as ordinary devices.
     crate::vmd::expand(&mut devices);
     serial_println!("DevMgr: Enumerated {} PCI devices.", devices.len());
+    // Link power states before any driver touches its device.
+    crate::pci_power::boot(&devices);
 
     let mut census = sex_hwdb::Census::default();
     for dev in &devices { census_line(&mut census, dev); }

@@ -60,6 +60,8 @@ pub struct Manifest {
     pub rulesets: Vec<Ruleset>,
     /// MV3 `background.service_worker`, or MV2 `background.scripts` / `page`.
     pub background: Vec<String>,
+    /// MV3 `background.type` is `module`: the service worker is an ES module.
+    pub background_module: bool,
     pub permissions: Vec<String>,
     pub host_permissions: Vec<Pattern>,
     /// The page the toolbar button opens (`action`/`browser_action` `default_popup`).
@@ -89,7 +91,7 @@ pub fn clean_path(p: &str) -> Option<String> {
     let p = p.trim().trim_start_matches("./").trim_start_matches('/');
     // Empty segments ("a//b", a trailing "/") are refused too: a file path must
     // name a file (issue #319).
-    if p.is_empty() || p.contains('\\') || p.contains('\0') || p.split('/').any(|s| s.is_empty() || s == ".." || s == ".") { return None; }
+    if p.is_empty() || p.contains('\\') || p.chars().any(char::is_control) || p.split('/').any(|s| s.is_empty() || s == ".." || s == ".") { return None; }
     Some(String::from(p))
 }
 
@@ -128,6 +130,7 @@ impl Manifest {
             background.extend(strings(b.get("page")));
         }
         let background = background.iter().filter_map(|p| clean_path(p)).collect();
+        let background_module = bg.and_then(|b| b.get("type")).and_then(Value::as_str) == Some("module");
         let mut permissions = strings(o.get("permissions"));
         let mut host_permissions: Vec<Pattern> = strings(o.get("host_permissions")).iter().filter_map(|p| Pattern::parse(p)).collect();
         // MV2 lists hosts among the permissions.
@@ -142,7 +145,7 @@ impl Manifest {
             // A locale names a folder under _locales/: letters, digits, `_` and `-` only,
             // so it can't climb out of the extension (issue #320).
             default_locale: o.get("default_locale").and_then(Value::as_str).filter(|l| locale_ok(l)).map(String::from),
-            content_scripts, rulesets, background, permissions, host_permissions, popup, options_page,
+            content_scripts, rulesets, background, background_module, permissions, host_permissions, popup, options_page,
         })
     }
 

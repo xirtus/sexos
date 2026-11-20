@@ -515,7 +515,7 @@ impl Browser {
 
     /// When the next timer of any page (shown or framed) is due.
     fn next_due(&self) -> Option<u64> {
-        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.profile.due).chain(self.code_store.due).chain(self.ws_due()).min()
+        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.profile.due).chain(self.code_store.due).chain(self.ws_due()).chain(self.backgrounds_due()).min()
     }
 
     /// Runs the timers that are due, on every page.
@@ -526,6 +526,7 @@ impl Browser {
         self.code_store.later(&self.code_cache.borrow());
         if self.code_store.due.is_some_and(|d| d <= now) { self.code_store.save(&mut self.window, &mut self.code_cache.borrow_mut()); }
         if self.timer.is_some_and(|t| t <= now) { self.tick(); }
+        if self.backgrounds_due().is_some_and(|t| t <= now) { self.backgrounds_tick(); }
         let mut i = 0;
         while i < self.frames.len() {
             if self.frames[i].timer.is_some_and(|t| t <= now) { self.enter(i); self.tick(); self.leave(i); }
@@ -539,6 +540,7 @@ impl Browser {
     fn settle(&mut self) {
         self.ws_asks();
         self.profile.touched(&self.jar.borrow());
+        if self.in_frame.is_none() { self.ext_pump(); }
         if core::mem::take(&mut self.frames_check) { self.sync_frames(); }
         if !self.frames.is_empty() { self.deliver(); }
         if core::mem::take(&mut self.frame_dirty) { self.draw(); }
@@ -599,6 +601,10 @@ impl Browser {
     /// site allows that origin (`Access-Control-Allow-Origin`). So a page can't read
     /// another site's private pages with the person's cookies.
     fn http(&mut self, method: &str, url: &str, headers: &[(&str, &str)], body: &[u8], max: usize, script: Option<&str>) -> Result<Loaded, &'static [u8]> {
+        if url.starts_with(extensions::SCHEME) {
+            let body = self.extension_file(url).ok_or(&b"That extension file was not found."[..])?;
+            return Ok(Loaded { url: String::from(url), status: 200, headers: String::new(), body });
+        }
         self.http_pending(Pending::new(0, method, url, headers, body, max, script))
     }
 
@@ -902,6 +908,10 @@ impl Browser {
         doc.import_map = core::mem::take(&mut self.import_map);
         doc.code_cache = Some(self.code_cache.clone());
         self.code_site();
+        if self.extensions.any() && self.url.starts_with("http") {
+            doc.ext_key = self.extensions.key.clone();
+            doc.ext_tab = self.ext_tab_json();
+        }
         let started = sex_pdx::get_ticks();
         let mut script = match Script::new(doc, sex_js::Limits::default()) {
             Ok(s) => s,
@@ -967,7 +977,7 @@ impl Browser {
                         script.page_mut().keep_source_policy(&url, &final_url);
                         text_of(&self.buf[b])
                     })
-                } else { None };
+                } else if url.starts_with(extensions::SCHEME) { self.extension_file(&url).map(|b| text_of(&b)) } else { None };
                 self.buf = Vec::new();
                 sex_pdx::serial_record!("[web.module] ok={} bytes={} url={}", body.is_some() as u8, body.as_ref().map_or(0, |b| b.len()), url);
                 // A failed one is still recorded, so it is not asked for again.
@@ -1545,6 +1555,9 @@ impl Browser {
         let url = ask.url.as_str();
         let base = String::from(sex_html::url::fragment(&self.url).0);
         let done = |status: u16, body: Vec<u8>| Loaded { url: String::from(url), status, headers: String::new(), body };
+        if url.starts_with(extensions::SCHEME) {
+            return Ok(match self.extension_file(url) { Some(body) => done(200, body), None => done(404, Vec::new()) });
+        }
         if url.starts_with("about:") || (base.starts_with("about:") && !url.contains(':')) {
             let name = if url.starts_with("about:") { String::from(url) } else { alloc::format!("about:{}", url.trim_start_matches("./")) };
             return Ok(match built_in(&name) { Some(text) => done(200, Vec::from(text.as_bytes())), None => done(404, Vec::new()) });
@@ -1841,6 +1854,7 @@ pub extern "C" fn _start() -> ! {
     b.extensions = extensions::Extensions::load(&mut b.window);
     let first_tab = tabs::Tab::blank(&b);
     b.tabs.push(first_tab);
+    b.start_backgrounds();
     // Big WebGL draws spread over the cores, a band of rows each.
     let cores = sex_app::thread::cores();
     sex_gl::set_parallel(sex_app::thread::parallel, cores);
