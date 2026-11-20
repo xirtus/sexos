@@ -4920,6 +4920,7 @@ name = "monitor"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-mesh",
  "sex-pdx",
 ]
 
@@ -7400,6 +7401,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-mesh"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+]
+
+[[package]]
 name = "sex-multipass"
 version = "0.1.0"
 dependencies = [
@@ -7550,6 +7558,10 @@ version = "0.1.0"
 dependencies = [
  "libm",
 ]
+
+[[package]]
+name = "sex-thunderbolt"
+version = "0.1.0"
 
 [[package]]
 name = "sex-time"
@@ -7825,6 +7837,7 @@ version = "0.1.0"
 dependencies = [
  "sex-pdx",
  "sex-rt",
+ "sex-thunderbolt",
 ]
 
 [[package]]

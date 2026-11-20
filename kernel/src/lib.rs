@@ -16,6 +16,7 @@ pub mod console_font;
 pub mod crash_log;
 #[cfg(target_arch = "x86_64")]
 pub mod cpu_account;
+pub mod mesh_stats;
 #[cfg(target_arch = "x86_64")]
 pub mod memory;
 #[cfg(target_arch = "x86_64")]

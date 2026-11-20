@@ -43,6 +43,7 @@ use crate::rsna::{Key, Rekey};
 use crate::tx::{self, TxQueue};
 use crate::tlc;
 use crate::cmdq;
+use crate::ba;
 
 pub const MAX_ETHERNET: usize = 1514;
 const CCMP_HEADER: usize = 8;
@@ -90,6 +91,61 @@ pub fn parse_missed_beacons(p: &Packet<'_>) -> Option<u32> {
     p.data.get(4..8).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
 }
 
+/// The firmware saw this frame before (`IWX_RX_MPDU_RES_STATUS_DUPLICATE`).
+const STATUS_DUPLICATE: u32 = 1 << 22;
+/// How long a block-ack window may sit with holes before they are given up.
+pub const BA_STUCK_US: u64 = 250_000;
+
+/// The block-ack session's own command or frame in flight (stage X2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BaStep { Idle, Sent(u64, ba::AddbaRequest), Respond(ba::AddbaRequest, u16), Remove, Removing(u64) }
+
+/// The last frame the replay check accepted on a key and TID: its CCMP packet
+/// number, 802.11 sequence number and A-MSDU subframe index (0 when not one).
+type Accepted = (u64, u16, u8);
+
+/// Takes frames up in order: the replay check, then EAPOL to the supplicant or
+/// the frame to the stack.
+struct Intake<'a> {
+    pn: &'a mut [[Option<Accepted>; 16]; 4],
+    bssid: [u8; 6],
+    rekeying: bool,
+    key_frame: &'a mut [u8; eapol::MAX_FRAME],
+    key_len: &'a mut usize,
+    received: u64,
+    dropped: u64,
+    last_drop: Option<Drop>,
+}
+impl Intake<'_> {
+    /// `subframe`: the frame's sequence number and A-MSDU subframe index.
+    fn take(&mut self, eth: &[u8], tid: usize, number: Option<(usize, u64)>, subframe: (u16, u8), deliver: &mut impl FnMut(&[u8])) {
+        let n = eth.len();
+        if let Some((key, number)) = number {
+            // A-MSDU subframes after the first share the frame's packet number:
+            // the same number passes only for a later subframe of the same frame,
+            // so a replayed A-MSDU loses every subframe, not just the first.
+            let (seq, index) = subframe;
+            let replay = self.pn[key][tid].is_some_and(|(last, last_seq, last_index)|
+                number < last || (number == last && !(index > last_index && seq == last_seq)));
+            if replay {
+                self.dropped += 1;
+                self.last_drop = Some(Drop::Replay);
+                return;
+            }
+            self.pn[key][tid] = Some((number, seq, index));
+        }
+        let key = n > 14 && eth[12..14] == eapol::ETHERTYPE.to_be_bytes() && eth[6..12] == self.bssid;
+        if key && self.rekeying && n - 14 <= eapol::MAX_FRAME {
+            self.key_frame[..n - 14].copy_from_slice(&eth[14..n]);
+            *self.key_len = n - 14;
+        } else if n > 0 && !key { self.received += 1; deliver(eth); }
+    }
+    fn take_slot(&mut self, slots: &ba::Slots, i: usize, tid: usize, deliver: &mut impl FnMut(&[u8])) {
+        let n = slots.len[i] as usize;
+        self.take(&slots.data[i][..n], tid, slots.pn[i], (0, 0), deliver);
+    }
+}
+
 /// Why a frame from the air was not passed up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Drop { NotDecrypted, Replay, Malformed }
@@ -101,8 +157,11 @@ pub struct Link {
     family: Family,
     protected: bool,
     seq: u16,
+    /// QoS data (stage X1): sequence numbers count per TID.
+    qos: bool,
+    qos_seq: [u16; 8],
     /// Last CCMP packet number per key id and TID (non-QoS frames use TID 0).
-    pn: [[Option<u64>; 16]; 4],
+    pn: [[Option<Accepted>; 16]; 4],
     pub sent: u64,
     pub received: u64,
     pub dropped: u64,
@@ -123,6 +182,17 @@ pub struct Link {
     pub multicast: Setup,
     /// The most consecutive beacons the firmware reported missing.
     pub missed_beacons: u32,
+    /// Stage X2: the receive block-ack session, the command that makes one
+    /// (None: decline; 0: ADD_STA; else RX_BAID_ALLOCATION_CONFIG_CMD's version),
+    /// what is in flight, the AP's request waiting, and counters.
+    pub ba: Option<ba::Session>,
+    ba_command: Option<u8>,
+    pub ba_step: BaStep,
+    addba: Option<ba::AddbaRequest>,
+    ba_moved: u64,
+    pub ba_sessions: u32,
+    pub ba_declined: u32,
+    pub ba_flushes: u32,
 }
 
 /// Ethernet frame out of a data frame body from the AP: checks and strips CCMP.
@@ -167,9 +237,10 @@ pub fn declared(e: &[u8]) -> Option<usize> {
 impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
-        Self { tx, target, me, family, protected, seq: 0x400, pn: [[None; 16]; 4], sent: 0, received: 0, dropped: 0, last_drop: None, down: None,
+        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, received: 0, dropped: 0, last_drop: None, down: None,
             rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE,
-            multicast: Setup::Wanted, missed_beacons: 0 }
+            multicast: Setup::Wanted, missed_beacons: 0,
+            ba: None, ba_command: None, ba_step: BaStep::Idle, addba: None, ba_moved: 0, ba_sessions: 0, ba_declined: 0, ba_flushes: 0 }
     }
     /// Answers later key messages with the handshake's state.
     pub fn with_rekey(mut self, r: Rekey) -> Self { self.rekey = Some(r); self }
@@ -177,6 +248,12 @@ impl Link {
     /// TLC_MNG_CONFIG_CMD. Nothing changes when no legacy rate is shared.
     pub fn with_rate_control(mut self, version: u8) -> Self {
         if tlc::rates(&self.target) != 0 { self.rate_control = RateControl::Wanted(version); }
+        self
+    }
+    /// Accepts block-ack sessions (stage X2) with this firmware command: 0 for
+    /// ADD_STA, else RX_BAID_ALLOCATION_CONFIG_CMD's version. Legacy links decline.
+    pub fn with_block_ack(mut self, command: u8) -> Self {
+        if self.target.mode().ht { self.ba_command = Some(command); }
         self
     }
     pub fn me(&self) -> [u8; 6] { self.me }
@@ -188,9 +265,17 @@ impl Link {
     /// Sends one Ethernet II frame to the AP.
     pub fn send<D: Dma>(&mut self, b: &Bringup, r: &mut impl Registers, dma: &mut D, ethernet: &[u8]) -> Result<(), tx::Error> {
         if ethernet.len() < 14 || ethernet.len() > MAX_ETHERNET { return Err(tx::Error::TooLong); }
-        let mut out = [0u8; 24 + 8 + MAX_ETHERNET];
-        self.seq = (self.seq + 1) & 0xfff;
-        let (hdr, total) = w::from_ethernet(ethernet, &self.target.bssid, self.seq, &mut out).ok_or(tx::Error::TooLong)?;
+        let mut out = [0u8; 26 + 8 + MAX_ETHERNET];
+        let (hdr, total) = if self.qos {
+            // EAPOL goes as voice, as wpa_supplicant and the kernel send it.
+            let tid = if ethernet[12..14] == eapol::ETHERTYPE.to_be_bytes() { 7 } else { w::user_priority(ethernet) };
+            let seq = &mut self.qos_seq[tid as usize];
+            *seq = (*seq + 1) & 0xfff;
+            w::from_ethernet_qos(ethernet, &self.target.bssid, *seq, tid, &mut out)
+        } else {
+            self.seq = (self.seq + 1) & 0xfff;
+            w::from_ethernet(ethernet, &self.target.bssid, self.seq, &mut out)
+        }.ok_or(tx::Error::TooLong)?;
         // Our own address as the source, whatever the stack wrote.
         out[10..16].copy_from_slice(&self.me);
         let (rate_flag, rate) = if self.rate_control == RateControl::On { (0, 0) } else { (tx::FLAG_CMD_RATE, DATA_RATE) };
@@ -205,8 +290,18 @@ impl Link {
 
     /// Reads the receive ring: every Ethernet frame from the AP goes to `deliver`,
     /// key messages to the supplicant. Returns false once the link is down.
+    /// Block-ack requests are declined (see `poll_with`).
     pub fn poll<D: Dma + DmaRead>(&mut self, b: &mut Bringup, cmdq: &mut CommandQueue, r: &mut impl Registers, dma: &mut D,
-        now: u64, mut deliver: impl FnMut(&[u8])) -> bool
+        now: u64, deliver: impl FnMut(&[u8])) -> bool
+    {
+        self.poll_with(b, cmdq, r, dma, now, None, deliver)
+    }
+
+    /// `poll` with room to reorder one block-ack session's frames (stage X2):
+    /// with `slots` and `with_block_ack`, ADDBA requests are accepted.
+    #[allow(clippy::too_many_arguments)]
+    pub fn poll_with<D: Dma + DmaRead>(&mut self, b: &mut Bringup, cmdq: &mut CommandQueue, r: &mut impl Registers, dma: &mut D,
+        now: u64, mut slots: Option<&mut ba::Slots>, mut deliver: impl FnMut(&[u8])) -> bool
     {
         if self.down.is_some() { return false; }
         let cause = r.read(csr::INT);
@@ -216,7 +311,6 @@ impl Link {
         let (family, me, bssid, protected) = (self.family, self.me, self.target.bssid, self.protected);
         let (mut freed, mut gone, mut error, mut rate) = (None, None, None, None);
         let mut missed = 0u32;
-        let (mut received, mut dropped, mut last_drop) = (0u64, 0u64, None);
         let mut pn = self.pn;
         // A key's counters start over when the firmware takes it, in receive order:
         // frames after its answer are under the new key.
@@ -227,17 +321,31 @@ impl Link {
         });
         let mut scratch = [0u8; 4096];
         let mut eth = [0u8; 4096];
-        let rekeying = self.rekey.is_some();
         let mut key_frame = [0u8; eapol::MAX_FRAME];
         let mut key_len = 0;
+        let mut session = if slots.is_some() { self.ba } else { None };
+        let mut addba = None;
+        let mut delba = None;
+        let mut moved = false;
+        let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
         let result = b.receive(r, dma, |p: &Packet<'_>| {
             if cmdq.on_packet(p) {
-                if cmdq.answer.is_some_and(|a| !a.failed) { if let Some(id) = installing.take() { pn[id] = [None; 16]; } }
+                if cmdq.answer.is_some_and(|a| !a.failed) { if let Some(id) = installing.take() { intake.pn[id] = [None; 16]; } }
                 return;
             }
             if let Some(s) = tx::parse_response(p) { freed = Some(s); return; }
             if let Some(r) = tlc::parse_update(p) { rate = Some(r); return; }
             if let Some(n) = parse_missed_beacons(p) { missed = missed.max(n); return; }
+            if let Some((baid, nssn, tid)) = ba::parse_release(p) {
+                if let (Some(s), Some(sl)) = (session.as_mut(), slots.as_deref_mut()) {
+                    if s.baid == baid && tid.is_none_or(|t| t == s.tid) {
+                        let tid = s.tid as usize;
+                        s.release(nssn, |i| intake.take_slot(sl, i, tid, &mut deliver));
+                        moved = true;
+                    }
+                }
+                return;
+            }
             let Some(rx) = parse_mpdu(p, family, &mut scratch) else {
                 if let Some(e) = h::parse_error(p) { error = Some(e); }
                 return;
@@ -245,32 +353,63 @@ impl Link {
             let f = rx.frame;
             if f.len() < 24 || f[4..10] != me && f[4] & 1 == 0 { return; }
             if f[0] & 0x0c == 0 {
-                if f[16..22] == bssid && f[4..10] == me { if let Some(reason) = w::parse_disconnect(f) { gone = Some(reason); } }
+                if f[16..22] == bssid && f[4..10] == me {
+                    if let Some(reason) = w::parse_disconnect(f) { gone = Some(reason); }
+                    if let Some(req) = ba::parse_addba_request(f) { addba = Some(req); }
+                    if let Some((tid, _)) = ba::parse_delba(f) { delba = Some(tid); }
+                }
                 return;
             }
             // Data from our AP only, and not our own broadcasts relayed back.
             if f[0] & 0x0c != 0x08 || f[10..16] != bssid || f[16..22] == me { return; }
             match decap(f, rx.status, protected, &mut eth) {
                 Ok((n, tid, number)) => {
-                    if let Some((key, number)) = number {
-                        if pn[key][tid].is_some_and(|last| number <= last) { dropped += 1; last_drop = Some(Drop::Replay); return; }
-                        pn[key][tid] = Some(number);
+                    let subframe = (u16::from_le_bytes([f[22], f[23]]) >> 4, rx.subframe.unwrap_or(0));
+                    let qos_unicast = f[0] & 0x80 != 0 && f[4] & 1 == 0;
+                    let verdict = match (session.as_mut(), qos_unicast) {
+                        (Some(s), true) => s.frame(rx.reorder, tid as u8, rx.status & STATUS_DUPLICATE != 0, false),
+                        _ => ba::Verdict::Outside,
+                    };
+                    match verdict {
+                        ba::Verdict::Outside | ba::Verdict::Pass => intake.take(&eth[..n], tid, number, subframe, &mut deliver),
+                        ba::Verdict::Drop => {}
+                        ba::Verdict::Hold(i) => {
+                            let (s, sl) = (session.as_mut().unwrap(), slots.as_deref_mut().unwrap());
+                            sl.data[i][..n].copy_from_slice(&eth[..n]);
+                            sl.len[i] = n as u16;
+                            sl.pn[i] = number;
+                            s.release(ba::Session::nssn(rx.reorder), |i| intake.take_slot(sl, i, tid, &mut deliver));
+                            moved = true;
+                        }
                     }
-                    let key = n > 14 && eth[12..14] == eapol::ETHERTYPE.to_be_bytes() && eth[6..12] == bssid;
-                    if key && rekeying && n - 14 <= eapol::MAX_FRAME {
-                        key_frame[..n - 14].copy_from_slice(&eth[14..n]);
-                        key_len = n - 14;
-                    } else if n > 0 && !key { received += 1; deliver(&eth[..n]); }
                 }
                 // A frame with no payload (null data) is not an error.
                 Err(Drop::Malformed) if w::data_header_len(f) == Some(f.len()) => {}
-                Err(d) => { dropped += 1; last_drop = Some(d); }
+                Err(d) => { intake.dropped += 1; intake.last_drop = Some(d); }
             }
         });
+        let (received, dropped, last_drop) = (intake.received, intake.dropped, intake.last_drop);
         self.pn = pn;
         self.received += received;
         self.dropped += dropped;
         if last_drop.is_some() { self.last_drop = last_drop; }
+        if slots.is_some() { self.ba = session; }
+        // A window the firmware stopped moving (its own release timer should
+        // fire first): give up on the holes after a while.
+        if moved || self.ba.is_none_or(|s| s.stored == 0) { self.ba_moved = now; }
+        else if now.saturating_sub(self.ba_moved) >= BA_STUCK_US {
+            if let (Some(s), Some(sl)) = (self.ba.as_mut(), slots.as_deref_mut()) {
+                let tid = s.tid as usize;
+                let mut pn = self.pn;
+                let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
+                s.flush(|i| intake.take_slot(sl, i, tid, &mut deliver));
+                self.received += intake.received;
+                self.dropped += intake.dropped;
+                self.pn = pn;
+                self.ba_flushes += 1;
+            }
+            self.ba_moved = now;
+        }
         if let Some(s) = freed { self.tx.release(dma, &b.layout, s); }
         if let Err(id) = result { self.down = Some(Down::Failed(Failure::BadRxBuffer(id))); return false; }
         if let Some(e) = error { self.down = Some(Down::Failed(Failure::Firmware(e))); return false; }
@@ -279,6 +418,8 @@ impl Link {
         if missed > BEACON_LOSS { self.down = Some(Down::BeaconLoss(missed)); return false; }
         if let Some(rate) = rate { self.rate = rate; }
         if key_len > 0 { self.on_key_message(&key_frame[..key_len]); }
+        if let Some(req) = addba { self.addba = Some(req); }
+        if let Some(tid) = delba { if self.ba.is_some_and(|s| s.tid == tid) && self.ba_step == BaStep::Idle { self.ba_step = BaStep::Remove; } }
         // One command at a time: rate control waits for keys, keys for rate control.
         if !self.rate_control_step(b, cmdq, r, dma, now) { return true; }
         if !self.multicast_step(b, cmdq, r, dma, now) { return true; }
@@ -292,7 +433,122 @@ impl Link {
             Some(Err(f)) => { self.down = Some(Down::Failed(f)); return false; }
             _ => {}
         }
+        if self.rekey.as_ref().is_none_or(|k| k.keys.idle()) {
+            let held = slots.as_deref_mut();
+            self.block_ack_step(b, cmdq, r, dma, now, held, &mut deliver);
+        }
         true
+    }
+
+    /// Stage X2: answers ADDBA requests (after the firmware has the session) and
+    /// ends sessions the AP deletes. One command or frame per call.
+    #[allow(clippy::too_many_arguments)]
+    fn block_ack_step<D: Dma + DmaRead>(&mut self, b: &Bringup, cmdq: &mut CommandQueue, r: &mut impl Registers, dma: &mut D, now: u64,
+        slots: Option<&mut ba::Slots>, deliver: &mut impl FnMut(&[u8]))
+    {
+        if !matches!(self.rate_control, RateControl::Off | RateControl::On | RateControl::Refused) { return; }
+        if matches!(self.multicast, Setup::Wanted | Setup::Sent(_)) { return; }
+        let can = slots.is_some() && self.ba_command.is_some();
+        match self.ba_step {
+            BaStep::Idle => {
+                if let Some(req) = self.addba.take() {
+                    // Already ours (a renewed request): accept at once, start over at its SSN.
+                    if let Some(s) = self.ba.filter(|s| s.tid == req.tid && can) {
+                        self.ba = Some(ba::Session::new(s.tid, s.baid, req.ssn, ba::window_for(&req)));
+                        self.ba_step = BaStep::Respond(req, ba::STATUS_SUCCESS);
+                    } else if !can || self.ba.is_some() {
+                        self.ba_step = BaStep::Respond(req, ba::STATUS_REQUEST_DECLINED);
+                    } else if cmdq.pending.is_some() {
+                        self.addba = Some(req); // after the command in flight
+                        return;
+                    } else {
+                        let version = self.ba_command.unwrap();
+                        let window = ba::window_for(&req);
+                        let sent = if version > 0 {
+                            let mut c = [0u8; ba::BAID_CONFIG_BYTES];
+                            ba::baid_add(&mut c, req.tid, req.ssn, window);
+                            cmdq.send(dma, r, &b.layout, b.base, h::DATA_PATH_GROUP, ba::RX_BAID_ALLOCATION_CONFIG_CMD, 0, &c)
+                        } else {
+                            let mut c = [0u8; crate::join::ADD_STA_BYTES];
+                            ba::add_sta_ba(&mut c, req.tid, req.ssn, window, true);
+                            cmdq.send(dma, r, &b.layout, b.base, h::LONG_GROUP, h::ADD_STA, 0, &c)
+                        };
+                        self.ba_step = match sent {
+                            Ok(_) => BaStep::Sent(now, req),
+                            Err(_) => BaStep::Respond(req, ba::STATUS_REQUEST_DECLINED),
+                        };
+                        return;
+                    }
+                }
+                self.block_ack_step_respond(b, r, dma);
+            }
+            BaStep::Sent(since, req) => {
+                if let Some(a) = cmdq.answer.take() {
+                    let word = cmdq.response[..a.len.min(cmdq::RESPONSE_BYTES)].get(..4).map(|w| u32::from_le_bytes(w.try_into().unwrap()));
+                    let baid = if a.failed { None } else if self.ba_command.unwrap_or(0) > 0 {
+                        word.map(|w| w as u8).filter(|&b| b < ba::INVALID_BAID)
+                    } else { word.and_then(ba::baid_of_add_sta) };
+                    match baid {
+                        Some(baid) => {
+                            self.ba = Some(ba::Session::new(req.tid, baid, req.ssn, ba::window_for(&req)));
+                            self.ba_sessions += 1;
+                            self.ba_step = BaStep::Respond(req, ba::STATUS_SUCCESS);
+                        }
+                        None => self.ba_step = BaStep::Respond(req, ba::STATUS_REQUEST_DECLINED),
+                    }
+                    self.block_ack_step_respond(b, r, dma);
+                } else if now.saturating_sub(since) >= COMMAND_US {
+                    cmdq.abandon();
+                    self.ba_step = BaStep::Respond(req, ba::STATUS_REQUEST_DECLINED);
+                }
+            }
+            BaStep::Respond(..) => self.block_ack_step_respond(b, r, dma),
+            BaStep::Remove => {
+                if cmdq.pending.is_some() { return; }
+                let Some(mut s) = self.ba.take() else { self.ba_step = BaStep::Idle; return };
+                // Whatever is held goes up before the session ends.
+                if let Some(sl) = slots {
+                    let tid = s.tid as usize;
+                    let (mut key_frame, mut key_len) = ([0u8; eapol::MAX_FRAME], 0);
+                    let mut pn = self.pn;
+                    let mut intake = Intake { pn: &mut pn, bssid: self.target.bssid, rekeying: false, key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
+                    s.flush(|i| intake.take_slot(sl, i, tid, deliver));
+                    self.received += intake.received;
+                    self.pn = pn;
+                }
+                let version = self.ba_command.unwrap_or(0);
+                let _ = if version > 0 {
+                    let mut c = [0u8; ba::BAID_CONFIG_BYTES];
+                    ba::baid_remove(&mut c, version, s.tid, s.baid);
+                    cmdq.send(dma, r, &b.layout, b.base, h::DATA_PATH_GROUP, ba::RX_BAID_ALLOCATION_CONFIG_CMD, 0, &c)
+                } else {
+                    let mut c = [0u8; crate::join::ADD_STA_BYTES];
+                    ba::add_sta_ba(&mut c, s.tid, 0, 0, false);
+                    cmdq.send(dma, r, &b.layout, b.base, h::LONG_GROUP, h::ADD_STA, 0, &c)
+                };
+                self.ba_step = BaStep::Removing(now);
+            }
+            BaStep::Removing(since) => {
+                if cmdq.answer.take().is_some() || now.saturating_sub(since) >= COMMAND_US {
+                    if cmdq.pending.is_some() { cmdq.abandon(); }
+                    self.ba_step = BaStep::Idle;
+                }
+            }
+        }
+    }
+
+    /// Sends the ADDBA response that is waiting, if the queue has room.
+    fn block_ack_step_respond<D: Dma>(&mut self, b: &Bringup, r: &mut impl Registers, dma: &mut D) {
+        let BaStep::Respond(req, status) = self.ba_step else { return };
+        let mut out = [0u8; 64];
+        // Management frames share the non-QoS sequence counter.
+        self.seq = (self.seq + 1) & 0xfff;
+        let n = ba::addba_response(&mut out, &self.target.bssid, &self.me, self.seq, &req, status);
+        let rate = tx::management_rate(&self.target);
+        if self.tx.send(dma, r, &b.layout, b.base, &out[..n], w::MGMT_HEADER, tx::FLAG_CMD_RATE | tx::FLAG_ENCRYPT_DIS, rate).is_ok() {
+            if status != ba::STATUS_SUCCESS { self.ba_declined += 1; }
+            self.ba_step = BaStep::Idle;
+        }
     }
 
     /// Sends TLC_MNG_CONFIG_CMD when nothing else is in flight and takes its answer.

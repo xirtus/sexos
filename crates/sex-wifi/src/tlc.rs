@@ -5,10 +5,12 @@
 //! how earlier frames fared, so data frames go without a rate of their own
 //! (`iwx_tx_fill_cmd`: no CMD_RATE flag, rate_n_flags 0).
 //!
-//! The station joins as a legacy (non-HT) station on a 20 MHz channel, so the
-//! firmware chooses among the CCK and OFDM rates both sides have: up to 54 Mb/s
-//! where the fixed rate gave 12. HT and VHT rates come with HT capabilities in the
-//! association request.
+//! A legacy (non-HT) station on a 20 MHz channel has the firmware choose among
+//! the CCK and OFDM rates both sides have: up to 54 Mb/s where the fixed rate gave
+//! 12. Since X1 an HT, VHT or HE association also names the MCS sets both sides
+//! have per spatial stream, the channel width, short guard intervals, LDPC and
+//! STBC (`ax::rates`), and the firmware climbs to HE MCS 11 on two streams.
+use crate::ax;
 use crate::hcmd::{self as h, Packet};
 use crate::join::{Target, STATION_ID};
 
@@ -16,11 +18,6 @@ pub const TLC_MNG_CONFIG_CMD: u8 = 0x0f;
 pub const TLC_MNG_UPDATE_NOTIF: u8 = 0xf7;
 /// `iwx_tlc_config_cmd_v3` and `_v4` are both 28 bytes.
 pub const CONFIG_BYTES: usize = 28;
-const MODE_NON_HT: u8 = 0;
-const CH_WIDTH_20MHZ: u8 = 0;
-const CHAIN_A: u8 = 1;
-/// IEEE80211_MAX_LEN: 2300 bytes, CRC and WEP overhead.
-const MAX_MPDU_LEN: u16 = 2312;
 const NOTIF_FLAG_RATE: u32 = 1;
 
 /// The legacy rates both sides have, in the firmware's order (CCK bits 0..4,
@@ -34,15 +31,26 @@ pub fn rates(t: &Target) -> u16 {
 /// `version` of the command wants (4; 3 before it).
 pub fn config(out: &mut [u8; CONFIG_BYTES], version: u8, t: &Target) {
     out.fill(0);
+    let r = ax::rates(&t.mode(), &t.peer, &t.ours);
     out[0] = STATION_ID;
-    out[4] = CH_WIDTH_20MHZ;
-    out[5] = MODE_NON_HT;
-    out[6] = CHAIN_A;
-    // v3: amsdu at 7; v4: sgi_ch_width_supp. Both 0. flags at 8 stay 0 (no STBC).
+    out[4] = r.width;
+    out[5] = r.mode;
+    out[6] = r.chains;
+    // v4: SGI widths at 7 (v3 has its A-MSDU switch there, left 0).
+    if version >= 4 { out[7] = r.sgi; }
+    out[8..10].copy_from_slice(&r.flags.to_le_bytes());
     out[10..12].copy_from_slice(&rates(t).to_le_bytes());
-    // ht_rates stay 0; max_mpdu_len follows them.
-    let at = if version >= 4 { 24 } else { 20 };
-    out[at..at + 2].copy_from_slice(&MAX_MPDU_LEN.to_le_bytes());
+    // ht_rates[stream][width]: three widths per stream in v4 (80, 160, 320 MHz),
+    // two in v3; max_mpdu_len follows them.
+    let per = if version >= 4 { 3 } else { 2 };
+    for (s, widths) in r.mcs.iter().enumerate() {
+        for (w, &bits) in widths.iter().enumerate() {
+            let at = 12 + (s * per + w) * 2;
+            out[at..at + 2].copy_from_slice(&bits.to_le_bytes());
+        }
+    }
+    let at = 12 + 2 * per * 2;
+    out[at..at + 2].copy_from_slice(&r.max_mpdu.to_le_bytes());
 }
 
 /// The rate the firmware switched to, from a TLC update notification.

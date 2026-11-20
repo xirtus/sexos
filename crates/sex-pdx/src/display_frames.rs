@@ -18,6 +18,32 @@ pub const SCANOUT_REGION_ID:u32=0x4210;
 /// (pipes, transcoders, planes, DDI/AUX, PCH GMBUS/hotplug/backlight).
 pub const INTEL_SLOT:u64=27;
 pub const INTEL_REGISTERS:u64=0xd0000;
+/// Intel scanout buffers BOOT adds beside the lease (slot 28): two frames
+/// the display engine flips between, then one 256x256 ARGB cursor image.
+/// BOOT also writes the GPU's own page table (GGTT) so these pages, and only
+/// these, appear at INTEL_GGTT_WINDOW; Display never writes GGTT entries.
+pub const INTEL_SCANOUT_SLOT:u64=28;
+pub const INTEL_SCANOUT_REGION_ID:u32=0x4211;
+/// GGTT address of the scanout window: above any firmware framebuffer in
+/// stolen memory, inside the smallest GGTT firmware can configure (1 GiB).
+pub const INTEL_GGTT_WINDOW:u64=0x1000_0000;
+pub const INTEL_CURSOR_BYTES:u64=256*256*4;
+
+/// Geometry of the Intel scanout region: rows padded to the plane's 64-byte
+/// stride unit, each frame page-aligned, the cursor last.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct IntelScanout{pub stride:u64,pub span:u64,pub cursor:u64,pub total:u64}
+impl IntelScanout{
+    pub fn new(width:u64,height:u64)->Option<Self>{
+        if width==0||height==0||width>5120||height>4096{return None;}
+        let stride=width.checked_mul(4)?.checked_add(63)?/64*64;
+        let span=stride.checked_mul(height)?.checked_add(PAGE-1)?/PAGE*PAGE;
+        let cursor=span.checked_mul(2)?;
+        Some(Self{stride,span,cursor,total:cursor.checked_add(INTEL_CURSOR_BYTES)?})
+    }
+    /// GGTT address of frame `index` (0 or 1) or of the cursor (2).
+    pub fn ggtt(&self,index:u64)->u64{INTEL_GGTT_WINDOW+if index>=2{self.cursor}else{index*self.span}}
+}
 pub const MAX_WIDTH:u64=8192;
 pub const MAX_HEIGHT:u64=4320;
 pub const PAGE:u64=4096;
