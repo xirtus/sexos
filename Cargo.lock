@@ -4920,6 +4920,7 @@ name = "monitor"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-mesh",
  "sex-pdx",
 ]
 
@@ -7214,6 +7215,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-gpu-amd"
+version = "0.1.0"
+dependencies = [
+ "sex-kms",
+]
+
+[[package]]
 name = "sex-gpu-intel"
 version = "0.1.0"
 dependencies = [
@@ -7397,6 +7405,13 @@ dependencies = [
  "sex-episodes",
  "sex-libc",
  "sex-pdx",
+]
+
+[[package]]
+name = "sex-mesh"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
 ]
 
 [[package]]
@@ -7708,6 +7723,7 @@ name = "sexdisplay"
 version = "0.1.0"
 dependencies = [
  "sex-font",
+ "sex-gpu-amd",
  "sex-gpu-intel",
  "sex-graphics",
  "sex-icons",

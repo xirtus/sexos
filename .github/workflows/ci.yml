@@ -83,7 +83,7 @@ jobs:
       run: bash scripts/iommu_host_gate.sh
     - name: IPC v2 endpoints, reply capabilities and notifications on the host
       run: bash scripts/ipc_v2_host_gate.sh
-    - name: Display model (KMS, EDID) and Intel Gen12 display engine on the host
+    - name: Display model (KMS, EDID), Intel Gen12 and AMD DCN display engines on the host
       run: bash scripts/kms_host_gate.sh
     - name: NVIDIA GSP-RM boot (GA104 firmware, VBIOS/FWSEC, WPR2 layout, RPC queues, simulated GPU) on the host
       run: bash scripts/nvidia_gsp_host_gate.sh
@@ -186,6 +186,8 @@ jobs:
       run: cargo test --locked -p sex-ime
     - name: Voyeur search ranking and Abacus answers
       run: cargo test --locked -p voyeur
+    - name: Mesh history, graphs and layout on the host
+      run: cargo test --locked -p sex-mesh
     - name: Whisper voice (eSpeak NG speech, stop, determinism), its Shell wire and the a11y tree transport
       run: |
         cargo test --locked -p sex-speech
@@ -415,6 +417,8 @@ jobs:
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
     - name: Voyeur search (2+2, two providers, a setting page)
       run: python3 scripts/voyeur_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/voyeur"
+    - name: Mesh (busy program, end it, Jot's grant, capability graph)
+      run: python3 scripts/program_monitor_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/monitor"
     - name: Large reads must reach the device
       run: python3 scripts/program_bench_gate.py --large-read --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/large-read"
     - name: Programs keep their own SSE and AVX registers (XSAVE)
@@ -828,6 +832,10 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-packages.img"
         python3 scripts/package_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-packages.img" --out "$RUNNER_TEMP/sexos-runtime/packages"
+    - name: Settings Privacy page revokes a grant; the next connect is refused
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/blank-privacy.img"
+        python3 scripts/privacy_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-privacy.img" --out "$RUNNER_TEMP/sexos-runtime/privacy"
     - name: ripgrep and fd
       run: python3 scripts/rg_fd_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/rg-fd"
     - name: bat
