@@ -35,7 +35,7 @@ def main():
     while True:
      txt=t()[s:]
      if entered is None and '[spindle.enter]' in txt:entered=time.monotonic()
-     m=re.search(rf'\[{re.escape(TAG.get(name,name+".ready"))}\] target=(\d+) task=(\d+)',txt)
+     m=re.search(rf'\[{re.escape(TAG.get(name,name+".ready"))}\] target=(\d+) task=(\d+)[^\d]',txt)
      if m:break
      assert time.monotonic()<deadline,f'{name} never became ready'
      time.sleep(.001)
