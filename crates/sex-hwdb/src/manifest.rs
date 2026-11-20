@@ -169,7 +169,7 @@ pub const DISPLAY: Manifest = Manifest {
         Match::id(0x8086, 0x9a78, Lease::IntelDisplay, 27),
         // Every AMD display controller (VGA 03:00 and the 03:80 a hybrid laptop's dGPU
         // reports); Display reads only chips sex-gpu-amd knows and leaves the rest alone.
-        Match::vendor_class(0x1002, 0x03_00_00, BASE, Lease::AmdDisplay, 28),
+        Match::vendor_class(0x1002, 0x03_00_00, BASE, Lease::AmdDisplay, 29),
         Match::class(0x03_00_00, BASE, Lease::Display, 0),
     ],
 };

@@ -751,6 +751,37 @@ pub fn display_register_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice
     Some(pci_view(pd,slot,physical,actual_length,length))
 }
 
+/// Scanout buffers for an Intel display lease (workstream L3): two frames and a
+/// cursor image, DMA-addressable, which the IOMMU then maps for the GPU like any
+/// pool. The GGTT is the GPU's own page table; BOOT fills only the entries of
+/// the fixed window with these pages, so Display flips planes between buffers
+/// it owns but can never point the GPU at other memory.
+pub fn intel_scanout(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice){
+    use sex_pdx::display_frames::{IntelScanout,INTEL_SCANOUT_SLOT,INTEL_SCANOUT_REGION_ID,INTEL_GGTT_WINDOW};
+    require_boot();
+    let skip=|why:&str|{crate::serial_println!("[boot.display.intel_scanout] pd={} granted=0 reason={}",pd.id,why);};
+    let Some(fb)=crate::FB_REQUEST.response().and_then(|r|r.framebuffers().iter().next()) else{return skip("no_framebuffer")};
+    let Some(layout)=IntelScanout::new(fb.width,fb.height) else{return skip("geometry")};
+    let Some((bar,bar_len))=dev.probe_boot_bar_any(0) else{return skip("bar0")};
+    // GGC bits 7:6: GGTT page-table size, 2/4/8 MiB of 8-byte entries.
+    let ggms=(dev.read_u32(0x50)>>6)&3;
+    let ggtt_bytes=if ggms==0{0}else{((1u64<<ggms)<<20)/8*4096};
+    if bar_len<16<<20||INTEL_GGTT_WINDOW+layout.total>ggtt_bytes{return skip("ggtt_size")}
+    let Some(physical)=try_backing(layout.total) else{return skip("no_frames")};
+    let first=INTEL_GGTT_WINDOW/4096;let pages=layout.total/4096;
+    let pte_at=bar+(8<<20)+first*8;let pte_page=pte_at&!4095;
+    let ptes=kernel_mmio(pte_page,(pte_at+pages*8-pte_page).next_multiple_of(4096))+(pte_at-pte_page);
+    for i in 0..pages{unsafe{core::ptr::write_volatile((ptes+i*8) as *mut u64,((physical+i*4096)&0x7f_ffff_f000)|1);}}
+    // GFX_FLSH_CNTL: drop GGTT translations the GPU may have cached.
+    let flush=kernel_mmio(bar+0x101000,4096)+8;
+    unsafe{core::ptr::write_volatile(flush as *mut u32,1);let _=core::ptr::read_volatile(flush as *const u32);}
+    let virtual_base=alias(pd,physical,layout.total,true,false);
+    grant(pd,INTEL_SCANOUT_SLOT,RegionGrant{region_id:INTEL_SCANOUT_REGION_ID,virtual_base,length:layout.total,
+        rights:QUERY_VIEW|READ|WRITE|DMA_ADDRESS,dma_base:Some(physical),peer_pd:None});
+    crate::serial_println!("[boot.display.intel_scanout] pd={} granted=1 slot={} region={:#x} bytes={} width={} height={} stride={} ggtt={:#x} ggtt_bytes={:#x} entries={} runtime_mint=0",
+        pd.id,INTEL_SCANOUT_SLOT,INTEL_SCANOUT_REGION_ID,layout.total,fb.width,fb.height,layout.stride,INTEL_GGTT_WINDOW,ggtt_bytes,pages);
+}
+
 /// The register BAR of a controller leased by class (HD Audio, AHCI), if its
 /// whole register prefix fits.
 pub fn class_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,kind:crate::device_lease::Kind)->Option<(RegionGrant,(u32,u32))>{

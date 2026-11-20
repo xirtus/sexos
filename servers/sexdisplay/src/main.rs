@@ -118,6 +118,9 @@ static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
 /// Scanout row length in pixels; at least FB_W. GOP modes on real GPUs pad rows.
 static mut FB_PITCH: u32 = FALLBACK_W;
+/// The firmware framebuffer, kept for the Intel fallback path.
+static mut BOOT_FB_PTR: u64 = 0;
+static mut BOOT_FB_PITCH: u32 = 0;
 /// Pixels written to the scanout since boot, and by the last publication.
 static mut PUBLISHED_PIXELS: u64 = 0;
 static mut LAST_WRITTEN: u64 = 0;
@@ -168,6 +171,8 @@ mod intel;
 mod amd;
 /// The virtio-gpu that took the screen over from firmware, if BOOT leased one.
 static mut GPU: Option<virtio_gpu::Gpu> = None;
+/// Intel display engine taken over from firmware: Display's own buffers, flipped at vblank.
+static mut INTEL: Option<intel::Intel> = None;
 mod screen_capture;
 static mut SCREEN_CAPTURE:screen_capture::Server=screen_capture::Server::new();
 mod paint_batch;
@@ -2311,6 +2316,7 @@ fn valid_scanout(fb:*mut u32,w:usize,h:usize)->bool{
 // spans that differ from the frame the output already shows are written, each
 // row at the scanout's own pitch (real GPUs pad rows).
 fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>)->bool{
+    let fb=gpu_back_buffer(fb);
     let pixels=frame.pixels;
     if !valid_scanout(fb,w,h)||w.checked_mul(h)!=Some(pixels.len()){return false;}
     if frame.previous.is_some_and(|old|old.len()!=pixels.len())||frame.rows.end>h{return false;}
@@ -2401,11 +2407,40 @@ fn write_access_view(fb:*mut u32,w:usize,h:usize,pitch:usize,pixels:&[u32],night
     (written,touched_first,touched_end)
 }
 
-/// Display scans out from its own virtio-gpu resource (slice L2).
-fn gpu_scanout_active()->bool{unsafe{(*core::ptr::addr_of!(GPU)).is_some()}}
+/// Display scans out from its own virtio-gpu resource (slice L2) or its own
+/// Intel buffers (slice L3).
+fn gpu_scanout_active()->bool{unsafe{(*core::ptr::addr_of!(GPU)).is_some()||(*core::ptr::addr_of!(INTEL)).is_some()}}
+
+/// Where this publication writes. Intel: the back buffer, once the last flip
+/// latched (so at most one frame per refresh, never into the shown buffer).
+/// If the engine stops answering, the panel goes back to the firmware plane.
+fn gpu_back_buffer(fb:*mut u32)->*mut u32{
+    let Some(gpu)=(unsafe{(*core::ptr::addr_of_mut!(INTEL)).as_mut()})else{return fb};
+    match gpu.back(){
+        Ok(address)=>{unsafe{FB_PTR=address;}address as *mut u32}
+        Err(reason)=>{intel_fallback(reason);(unsafe{FB_PTR}) as *mut u32}
+    }
+}
+
+/// Firmware framebuffer again: it gets the picture the panel showed last, so
+/// the next publication's spans (relative to that picture) stay right.
+fn intel_fallback(reason:&str){
+    let Some(mut gpu)=(unsafe{(*core::ptr::addr_of_mut!(INTEL)).take()})else{return};
+    let (boot,boot_pitch)=unsafe{(BOOT_FB_PTR,BOOT_FB_PITCH as usize)};
+    let (front,pitch)=(gpu.front_address(),gpu.pitch());
+    let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
+    for y in 0..h{unsafe{core::ptr::copy_nonoverlapping((front+(y*pitch*4) as u64) as *const u32,(boot+(y*boot_pitch*4) as u64) as *mut u32,w);}}
+    gpu.hide_cursor();
+    gpu.release(reason);
+    unsafe{FB_PTR=boot;FB_PITCH=BOOT_FB_PITCH;CURSOR_UNDER_VALID=false;}
+}
 
 /// Show rows `first..end` of the scanout buffer: one fenced flip. True without a GPU.
 fn gpu_present(first:usize,end:usize)->bool{
+    if let Some(gpu)=unsafe{(*core::ptr::addr_of_mut!(INTEL)).as_mut()}{
+        if let Err(reason)=gpu.present(first,end){intel_fallback(reason);return false;}
+        return true;
+    }
     let Some(gpu)=(unsafe{(*core::ptr::addr_of_mut!(GPU)).as_mut()})else{return true};
     if gpu.present(first as u32,end as u32).is_err(){return false;}
     virtio_gpu::flip_receipt(gpu,first,end);
@@ -3171,6 +3206,13 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
             // HiDPI: each arrow bit covers cs x cs pixels.
             let cs = scene.metrics.scale() as usize;
             sex_pdx::access_view::set_pointer(ox, oy);
+            // Intel cursor plane: the pointer moves by register writes, no pixels.
+            if hw_cursor(ox, oy, cs) {
+                // No drawn arrow this frame: an old save-under is stale now.
+                CURSOR_UNDER_VALID = false;
+                PREPARED_CURSOR=Some(PreparedCursor{x:ox,y:oy,seq:INPUT_TRACE_LAST_SEQ,shell_tick:INPUT_TRACE_LAST_SHELL_TICK});
+                return;
+            }
             if save_under {
                 CURSOR_UNDER_X = ox;
                 CURSOR_UNDER_Y = oy;
@@ -3209,7 +3251,20 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
 
             break;
         }
+        // No pointer, or drawn in software this frame: no cursor plane either.
+        hw_cursor(usize::MAX, 0, 0);
     }
+}
+
+/// Show the pointer on the Intel cursor plane; false when it must be drawn
+/// into the frame (no plane, magnifier zooming it, screen off shading it).
+fn hw_cursor(x: usize, y: usize, scale: usize) -> bool {
+    let Some(gpu) = (unsafe { (*core::ptr::addr_of_mut!(INTEL)).as_mut() }) else { return false };
+    if x == usize::MAX || sex_pdx::access_view::active() || sex_pdx::screen_state::mode() == sex_pdx::screen_state::OFF {
+        gpu.hide_cursor();
+        return false;
+    }
+    gpu.cursor(x, y, scale, &CURSOR_ARROW_BITMAP, CURSOR_ARROW_COLOR)
 }
 
 /// Pass 4: draw launcher panel surface (LAUNCHER_PANEL_SURFACE_ID) on top of all
@@ -3948,7 +4003,7 @@ fn handle_primary_fb(ptr: u64, packed: u64) -> bool {
     }
     unsafe {
         // After a virtio-gpu takeover the scanout buffer is the output, not BOOT's.
-        if (*core::ptr::addr_of!(GPU)).is_none() { FB_PTR = ptr; }
+        if !gpu_scanout_active() { FB_PTR = ptr; }
         FB_W = w as u32;
         FB_H = h as u32;
     }
@@ -4238,7 +4293,7 @@ pub extern "C" fn _start() -> ! {
     let address=sex_pdx::display_boot::framebuffer().expect("BOOT_DISPLAY_FRAMEBUFFER");
     assert!(geometry.pitch>=geometry.width*4&&geometry.pitch%4==0,"DISPLAY_PITCH");
     assert!(address>=HIGH_HALF_BASE,"BOOT_DISPLAY_ADDRESS");
-    unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;FB_PITCH=geometry.pitch/4;}
+    unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;FB_PITCH=geometry.pitch/4;BOOT_FB_PTR=address;BOOT_FB_PITCH=geometry.pitch/4;}
     match virtio_gpu::open(geometry.width,geometry.height,address,geometry.pitch/4){
         Ok(gpu)=>{
             virtio_gpu::report(&gpu);
@@ -4246,8 +4301,15 @@ pub extern "C" fn _start() -> ! {
         }
         Err(reason)=>sex_pdx::serial_record!("[display.kms.virtio] takeover=0 reason={}",reason),
     }
-    // Intel display engine: read-only receipt of what firmware lit (slice L3).
-    let _=intel::report();
+    // Intel display engine: receipt of what firmware lit, then take the
+    // panel over with our own flipped buffers (slice L3). Any refusal keeps
+    // the firmware framebuffer exactly as it was.
+    if intel::report()&&unsafe{(*core::ptr::addr_of!(GPU)).is_none()}{
+        match intel::take_over(geometry.width,geometry.height,address,geometry.pitch/4){
+            Ok(gpu)=>unsafe{FB_PTR=gpu.front_address();FB_PITCH=gpu.pitch() as u32;INTEL=Some(gpu);},
+            Err(reason)=>sex_pdx::serial_record!("[display.intel.takeover] takeover=0 reason={}",reason),
+        }
+    }
     // AMD display engine: the same receipt for Ryzen APUs and Radeon (slice A2).
     let _=amd::report();
     glyphs::warm();

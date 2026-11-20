@@ -206,6 +206,7 @@ fn display_registers_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDoma
         bar0_view: Some(view), command: None, virtio: None, class: 0x03_00_00 | dev.prog_if as u32, window: (0, view.length as u32),
     }));
     serial_println!("[kernel.cap.display.grant] pd={} slot={} vendor={:04x} device={:04x} bar={} bytes={}", pd.id, slot, dev.vendor_id, dev.device_id, bar, view.length);
+    if dev.vendor_id == 0x8086 { crate::boot_memory::intel_scanout(pd, dev); }
     true
 }
 
