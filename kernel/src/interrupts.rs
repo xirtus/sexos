@@ -730,14 +730,17 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
             fault_addr, fault_rip, fault_rsp, error_code, cur_pd);
         // The words around RSP name the caller of a jump to a bad address (a return
         // address just below RSP after `ret`), read only where the stack is mapped.
-        let low = fault_rsp.wrapping_sub(32) & !7;
-        if [low, low + 63].iter().all(|&a| crate::boot_memory::existing_leaf_address(a).is_some_and(|l| unsafe { core::ptr::read_volatile(l as *const u64) } & 1 != 0)) {
+        let low = fault_rsp.wrapping_sub(64) & !7;
+        if [low, low + 255].iter().all(|&a| crate::boot_memory::existing_leaf_address(a).is_some_and(|l| unsafe { core::ptr::read_volatile(l as *const u64) } & 1 != 0)) {
             let w = |i: u64| unsafe { core::ptr::read_volatile((low + i * 8) as *const u64) };
-            serial_println!("KERNEL PAGE FAULT STACK: at={:#x} {:#x} {:#x} {:#x} {:#x} | {:#x} {:#x} {:#x} {:#x}", low, w(0), w(1), w(2), w(3), w(4), w(5), w(6), w(7));
+            for r in (0..32).step_by(8) {
+                serial_println!("KERNEL PAGE FAULT STACK: at={:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}", low + r * 8, w(r), w(r + 1), w(r + 2), w(r + 3), w(r + 4), w(r + 5), w(r + 6), w(r + 7));
+            }
         }
         let core = crate::core_local::CoreLocal::get().core_id as usize;
         let (task, custody, cur, out) = crate::scheduler::fault_report(core);
         serial_println!("KERNEL PAGE FAULT TASK: core={} task={} at={:p} custody={:?} pending_outgoing={:p}", core, task, cur, custody, out);
+        crate::scheduler::print_switches(core);
         crate::console::stop(format_args!("page fault in the kernel touching {:#x} at {:#x} (error {:#x})",
             fault_addr, fault_rip, error_code));
     }

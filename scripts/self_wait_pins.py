@@ -20,6 +20,8 @@ PINS = (
 
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:b548617e6d588bd25e62716751ce33650f03f5e6eeda83cede7720b2a9f3a7ad'),  # merge of PKU gates with #424's kernel fault report (no wait change), 2026-11-20
 
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:adad1c0cc3de320796ce9f5fc9ccc9fc58e999f2bc42d64a06abfe3239805b0d'),  # kernel fault report prints 32 stack words and the core's last switches (no wait change), 2026-11-20
+
     ('timed', 'kernel/src/scheduler.rs', '59a7fe67bfa8a5a0d230296bd391d5261c6fbaeba42c3c0c05bcd7db6f19265e'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
 
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:395d7827fe51750aaa43f1cba2da266fc407f19ab9ac6dcad4e5f40e416121fe'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20

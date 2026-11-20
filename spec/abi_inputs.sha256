@@ -156,7 +156,7 @@ ddda6ecb6219bb1cdad31c61a5401719eaecee79c8e3e218b44034ca45a2cc8f  kernel/src/clo
 
 cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/history_recovery.rs
 
-9cff2b1e3cfb41d5008e32698c37384abd9b7cdcbf329f209b5f2a480c3b475c  kernel/src/interrupts.rs
+10c507c988f460a5968d0d60f3ad6e9f8120b5c0dc973f8efd2f8fdb7c59ffb4  kernel/src/interrupts.rs
 
 e59e241f8814b892450462564ade856f0e84dbddab2ec11abb24d7f3725273f2  kernel/src/ipc.rs
 
