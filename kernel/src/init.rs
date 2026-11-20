@@ -966,10 +966,9 @@ pub fn init() {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(incarnation.target).unwrap();
         let spindle=incarnation.app==sex_pdx::app_catalog::App::Spindle;
         for (slot,service) in [(sex_pdx::SLOT_DISPLAY,sexdisp_id),(sex_pdx::SLOT_STORAGE,sexfiles_id),(sex_pdx::SLOT_SHELL,silkshell_id),(sex_pdx::SLOT_LINEN,linen_id),(sex_pdx::SLOT_BELL,sexbell_id)].into_iter().take(if spindle{5}else{3}){
-            // The storage slot may hold the image's own VFS node; nothing else may collide.
+            // Every route slot must still be empty; nothing may collide.
             match pd.find_capability(slot as u32).map(|c|c.data) {
                 None=>{},
-                Some(crate::capability::CapabilityData::Node(_)) if slot==sex_pdx::SLOT_STORAGE=>{},
                 _=>panic!("BOOT_SUCCESSOR_ROUTE_COLLISION"),
             }
             pd.grant_capability(slot,crate::capability::CapabilityData::Domain(service));
