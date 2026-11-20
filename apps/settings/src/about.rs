@@ -48,7 +48,6 @@ pub fn render(f: &Facts, version: &str, out: &mut [u8]) -> usize {
     if let Some(b) = f.kernel_heap { w.put("  Kernel heap: "); w.num(b / 1024); w.put(" KiB\n"); }
     w.put("  Running services and programs: "); w.num(f.domains as u64); w.put("\n");
     w.put("  Up for "); w.num(f.uptime_s / 3600); w.put(" h "); w.num(f.uptime_s / 60 % 60); w.put(" min\n");
-    w.put("  System version and image hash: Files does not tell programs yet.\n");
     w.at
 }
 

@@ -17,6 +17,9 @@ rustc --edition 2021 --test -A dead_code apps/settings/src/grants.rs -o "$out/se
 # Tatami's R3 pages: About's lines, and the Shell's reading of the Shortcuts page.
 rustc --edition 2021 --test -A dead_code apps/settings/src/about.rs -o "$out/settings-about"
 "$out/settings-about" -q
+# Updates, Storage and About's version and image hash: Files' lines (sex_pdx::facts) as text.
+rustc --edition 2021 --test -A dead_code apps/settings/src/facts.rs -o "$out/settings-facts"
+"$out/settings-facts" -q
 rustc --edition 2021 --test -A dead_code --extern sex_config="$out/libsex_config.rlib" tests/shortcuts.rs -o "$out/shortcuts"
 "$out/shortcuts" -q
 rustc --edition 2021 --test -A dead_code tests/screen_state.rs -o "$out/screen-state" && "$out/screen-state" -q

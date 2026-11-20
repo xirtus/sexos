@@ -438,6 +438,19 @@ module in silk-shell (hook only; C owns `main.rs`).
 | R9 | Voyeur protocol: search providers are programs answering a query with results only from what they already hold; Shell merges with frecency | host: ranking goldens; gate: two providers answer one query |
 | R10 | Voyeur providers: apps, files and contents (E4 index), settings pages, Abacus, windows, browser history/bookmarks, clipboard history, emoji; preview pane and actions | gate: typing `2+2`, a file word and a setting name each return the right first hit |
 
+**R3 notes (2026-11-20).** Startup programs, Shortcuts, Notifications and About landed
+first (#494). Updates, Storage and About's version and image hash read one new Files
+request, `sex_pdx::facts` (kind 36, topic in `offset`: UPDATES, STORAGE, ABOUT), answered
+only to the system's `tatami` run and changing nothing: the A/B slot, versions and trial
+from the boot menu (`updater.rs`), the release key, package updates the kept catalogs
+offer, the disk layout, sexfs size and free blocks, whether `/home` is encrypted, the
+volumes under `/media`, and the SHA-256 of the boot image the run came with (hashed once
+per Files run). Not done: rolling back to the other slot from Tatami (`updater.rs` has no
+such step; the boot menu's "SexOS previous system" starts it once), an update channel
+(releases are signed files given to Spindle's `update`), package rollback (Spindle's,
+the person's answer), and disk health: no driver reads the NVMe SMART log yet (Q15/R5),
+so Storage says so.
+
 ### S. Silk shell beyond workstream C, and accessibility (8)
 
 Write set: new modules in `servers/silk-shell/src/` (C owns `main.rs`; hooks under 10 lines),

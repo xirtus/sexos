@@ -9,6 +9,7 @@
 #![no_main]
 
 mod about;
+mod facts;
 mod grants;
 mod model;
 mod setup;
@@ -66,8 +67,28 @@ fn change_grant(window: &mut Window, m: &mut Model, row: &grants::Row, allow: bo
     m.say(if status != sex_pdx::fs::OK { "Files did not take the change." } else if allow { "Allowed from its next run." } else { "Taken away from its next run." });
 }
 
-/// The About page's lines, from the kernel's numbers (syscall 87).
-fn load_about(m: &mut Model) {
+/// The Updates, Storage or About page's lines: Files' facts (`sex_pdx::facts`, answered
+/// to this program alone), and on About the kernel's numbers first.
+fn load_info(window: &mut Window, m: &mut Model, page: &str) {
+    use sex_pdx::facts as f;
+    let (topic, render): (u64, fn(&[u8], &mut [u8]) -> usize) = match page {
+        "updates" => (f::UPDATES, facts::updates),
+        "storage" => (f::STORAGE, facts::storage),
+        _ => (f::ABOUT, facts::about),
+    };
+    let mut data = [0u8; 2048];
+    let got = sex_app::files::facts(window, topic, &mut data);
+    let data = match got { Ok(n) => &data[..n], Err(_) => &[][..] };
+    let mut text = [0u8; model::INFO_MAX];
+    let mut n = if topic == f::ABOUT { about_lines(&mut text) } else { 0 };
+    n += render(data, &mut text[n..]);
+    m.set_info(&text[..n]);
+    let word = |k| facts::field(data, k).and_then(|v| core::str::from_utf8(v).ok()).unwrap_or("-");
+    sex_pdx::serial_record!("[settings.facts] page={} status={} slot={} version={} filesystem={} health={} image={}", page, got.err().unwrap_or(0), word("slot"), word("version"), word("filesystem"), word("health"), word("image_sha256"));
+}
+
+/// The About page's lines from the kernel's numbers (syscall 87); returns their length.
+fn about_lines(text: &mut [u8]) -> usize {
     use sex_pdx::{mesh_stats as ms, system_stats as ss};
     let overview = ss::overview();
     let memory = ms::memory();
@@ -75,14 +96,12 @@ fn load_about(m: &mut Model) {
     let mut domains = 0;
     let mut at = 0;
     while let Some(pd) = ss::next(at) { if pd <= at || domains >= 4096 { break; } domains += 1; at = pd; }
-    let facts = about::Facts {
+    let k = about::Facts {
         cores: overview.map(|o| o.cores), program_limit: memory.map(|x| x.limit_pages), program_lent: memory.map(|x| x.lent_pages),
         free_frames: kernel.map(|k| k.free_frames), kernel_heap: kernel.map(|k| k.heap_used), domains, uptime_s: sex_pdx::get_ticks() / 1000,
     };
-    let mut text = [0u8; model::ABOUT_MAX];
-    let n = about::render(&facts, env!("CARGO_PKG_VERSION"), &mut text);
-    m.set_about(&text[..n]);
-    sex_pdx::serial_record!("[settings.about] cores={} domains={} limit_pages={}", facts.cores.unwrap_or(0), domains, facts.program_limit.unwrap_or(0));
+    sex_pdx::serial_record!("[settings.about] cores={} domains={} limit_pages={}", k.cores.unwrap_or(0), domains, k.program_limit.unwrap_or(0));
+    about::render(&k, env!("CARGO_PKG_VERSION"), text)
 }
 
 fn show(window: &mut Window, m: &Model) {
@@ -188,7 +207,7 @@ pub extern "C" fn _start() -> ! {
             }
         } };
         if m.page != page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
-        if m.page != page && m.on_about() { load_about(&mut m); }
+        if let Some(info) = m.info_page().filter(|_| m.page != page) { load_info(&mut window, &mut m, info); }
         if let Change::Password(mut typed, n) = change {
             let result = settings::password(sex_config::secret::SET, &typed[..n]);
             for b in typed.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }

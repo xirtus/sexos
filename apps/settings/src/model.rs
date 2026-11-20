@@ -18,7 +18,10 @@ pub const EXTRA_MAX: usize = 2048;
 pub const PRIVACY: &str = "privacy";
 /// The page that shows what this computer is after its settings (`about.rs`).
 pub const ABOUT: &str = "setup";
-pub const ABOUT_MAX: usize = 1024;
+/// Pages with no settings, after the schema's: what Files knows (`facts.rs`).
+pub const INFO_PAGES: [&str; 2] = ["updates", "storage"];
+/// About's, Updates' or Storage's lines.
+pub const INFO_MAX: usize = 2048;
 /// Rows a page or a search can show: every key, and every item of a set.
 pub const ROWS_MAX: usize = COUNT + 64;
 
@@ -29,7 +32,7 @@ pub fn page_title(section: &str) -> &str {
         "keyboard" => "Keyboard", "sound" => "Sound", "time" => "Date & time",
         "session" => "Lock & idle", "setup" => "About", "open" => "Default apps",
         "startup" => "Startup programs", "shortcuts" => "Shortcuts", "notifications" => "Notifications",
-        "privacy" => "Privacy and grants", other => other,
+        "privacy" => "Privacy and grants", "updates" => "Updates", "storage" => "Storage", other => other,
     }
 }
 
@@ -47,13 +50,14 @@ pub fn page_note(section: &str) -> &'static str {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Row { pub key: usize, pub item: Option<u8> }
 
-/// The schema's sections in order: the pages.
+/// The schema's sections in order, then the pages with no settings: the pages.
 pub fn pages() -> ([&'static str; PAGE_MAX], usize) {
     let mut out = [""; PAGE_MAX];
     let mut n = 0;
     for k in KEYS {
         if n == 0 || out[n - 1] != k.section() { if n < PAGE_MAX { out[n] = k.section(); n += 1; } }
     }
+    for p in INFO_PAGES { if n < PAGE_MAX { out[n] = p; n += 1; } }
     (out, n)
 }
 
@@ -72,9 +76,9 @@ pub struct Model {
     pub extra: [u8; EXTRA_MAX],
     pub extra_len: usize,
     pub extra_rows: usize,
-    /// The About page's lines after its settings: what this computer is.
-    pub about: [u8; ABOUT_MAX],
-    pub about_len: usize,
+    /// The lines after About's settings, or Updates' or Storage's: what this computer is.
+    pub info: [u8; INFO_MAX],
+    pub info_len: usize,
 }
 
 /// A new lock password, typed twice.
@@ -89,7 +93,7 @@ pub enum Change { None, Set(u16, i32), Password([u8; 64], usize) }
 
 impl Model {
     pub fn new(values: Config) -> Self {
-        Model { values, page: 0, row: 0, query: [0; QUERY_MAX], query_len: 0, status: [0; 64], status_len: 0, entry: None, extra: [0; EXTRA_MAX], extra_len: 0, extra_rows: 0, about: [0; ABOUT_MAX], about_len: 0 }
+        Model { values, page: 0, row: 0, query: [0; QUERY_MAX], query_len: 0, status: [0; 64], status_len: 0, entry: None, extra: [0; EXTRA_MAX], extra_len: 0, extra_rows: 0, info: [0; INFO_MAX], info_len: 0 }
     }
     pub fn searching(&self) -> bool { self.query_len > 0 }
     /// The rows shown now: keys, and a set key's items in its place.
@@ -112,12 +116,15 @@ impl Model {
     }
     /// True on the Privacy page (not searching): program rows follow its settings.
     pub fn on_privacy(&self) -> bool { !self.searching() && pages().0[self.page] == PRIVACY }
-    /// True on the About page (not searching): what this computer is follows its settings.
-    pub fn on_about(&self) -> bool { !self.searching() && pages().0[self.page] == ABOUT }
-    pub fn set_about(&mut self, text: &[u8]) {
-        let n = text.len().min(ABOUT_MAX);
-        self.about[..n].copy_from_slice(&text[..n]);
-        self.about_len = n;
+    /// The page being shown (not searching) is About, Updates or Storage: its lines follow.
+    pub fn info_page(&self) -> Option<&'static str> {
+        let page = pages().0[self.page];
+        (!self.searching() && (page == ABOUT || INFO_PAGES.contains(&page))).then_some(page)
+    }
+    pub fn set_info(&mut self, text: &[u8]) {
+        let n = text.len().min(INFO_MAX);
+        self.info[..n].copy_from_slice(&text[..n]);
+        self.info_len = n;
     }
     /// Program rows' text, `\n` after each line; `rows` lines.
     pub fn set_extra(&mut self, text: &[u8], rows: usize) {
@@ -288,7 +295,7 @@ pub fn render(m: &Model, out: &mut [u8]) -> usize {
     w.put("------------------------------------------------------------\n");
     if !m.searching() { w.put(page_note(pages[m.page])); }
     let (rows, count) = m.rows();
-    if count == 0 { w.put("  Nothing matches.\n"); }
+    if count == 0 && m.info_page().is_none() { w.put("  Nothing matches.\n"); }
     for (r, row) in rows[..count].iter().enumerate() {
         let k = &KEYS[row.key];
         w.put(if r == m.row { "> " } else { "  " });
@@ -322,9 +329,9 @@ pub fn render(m: &Model, out: &mut [u8]) -> usize {
             w.byte(b'\n');
         }
     }
-    if m.on_about() {
-        w.put("\n");
-        for b in &m.about[..m.about_len] { w.byte(*b); }
+    if m.info_page().is_some() {
+        if count > 0 { w.put("\n"); }
+        for b in &m.info[..m.info_len] { w.byte(*b); }
     }
     w.put("------------------------------------------------------------\n");
     w.put("Up/Down: choose   Left/Right: change   Shift: bigger steps\n");
@@ -340,7 +347,7 @@ mod tests {
     #[test]
     fn pages_follow_the_schema() {
         let (p, n) = pages();
-        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "setup", "open", "startup", "shortcuts", "notifications", "privacy"]);
+        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "setup", "open", "startup", "shortcuts", "notifications", "privacy", "updates", "storage"]);
     }
 
     #[test]
@@ -424,7 +431,23 @@ mod tests {
         assert!(text.ends_with("Saved."));
         m.next_page(false);
         m.next_page(false);
-        assert_eq!(pages().0[m.page], "privacy");
+        assert_eq!(pages().0[m.page], "storage");
+    }
+
+    #[test]
+    fn updates_and_storage_show_files_lines_without_rows() {
+        let mut m = Model::new(Config::new());
+        go(&mut m, "updates");
+        assert_eq!((m.rows().1, m.info_page()), (0, Some("updates")));
+        m.set_info(b"  Running from system slot A.\n");
+        let t = text(&m);
+        assert!(t.contains("[Updates]") && t.contains("Running from system slot A.") && !t.contains("Nothing matches"), "{t}");
+        m.move_row(true);
+        assert!(matches!(m.step(true, false), Change::None), "nothing to change");
+        go(&mut m, "storage");
+        assert!(text(&m).contains("[Storage]"));
+        for c in b"slot" { m.type_char(*c); }
+        assert!(m.info_page().is_none() && !text(&m).contains("Running from"));
     }
 
     fn go(m: &mut Model, section: &str) { while pages().0[m.page] != section { m.next_page(true); } }
@@ -462,8 +485,8 @@ mod tests {
         assert!(text(&m).contains("< default >"));
         assert!(matches!(m.step(true, false), Change::Set(id::SHORTCUT_LAUNCHER, 1)));
         go(&mut m, "setup");
-        m.set_about(b"  Processor: 4 cores\n");
-        assert!(m.on_about() && text(&m).contains("[About]") && text(&m).contains("Processor: 4 cores"));
+        m.set_info(b"  Processor: 4 cores\n");
+        assert!(m.info_page() == Some(ABOUT) && text(&m).contains("[About]") && text(&m).contains("Processor: 4 cores"));
         m.next_page(true);
         assert!(!text(&m).contains("Processor"));
     }
@@ -471,7 +494,7 @@ mod tests {
     #[test]
     fn privacy_page_has_program_rows() {
         let mut m = Model::new(Config::new());
-        m.next_page(false);
+        go(&mut m, "privacy");
         assert!(m.on_privacy());
         let mut buf = [0u8; 4096];
         let n = render(&m, &mut buf);

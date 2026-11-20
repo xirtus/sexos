@@ -7,8 +7,10 @@ Shortcuts: Left on the overview's row wraps to Escape (key 34 = 29); the Shell p
 up from Files and Super+Esc then opens the overview instead of locking. Notifications:
 Right on Abacus hides its notifications (key 38); `run abacus` makes the Shell ask Files
 which program the row runs, and Files names Abacus (program 3), hidden. About: the page
-shows the kernel's numbers (cores, domains). The second start on the same disk reads
-the settings back, and the Shell starts Mesh by itself, once."""
+shows the kernel's numbers (cores, domains) and, from Files (`sex_pdx::facts`, Tatami
+only), the boot image's SHA-256. Updates and Storage, the pages after Privacy, show
+Files' slot state and the SexOS filesystem's size and free blocks. The second start on
+the same disk reads the settings back, and the Shell starts Mesh by itself, once."""
 import argparse,re,shutil,time
 from pathlib import Path
 from install_program import install
@@ -34,8 +36,8 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(1)
   g['focus'](153);time.sleep(.5);s=len(t());typ('run tatami');first_start(g,q,t,s);g['wait'](r'\[settings\.open\] generation=\d+',s,120);time.sleep(1)
-  # Startup programs: four pages back from the first. Mesh is the third program.
-  keys('pgup','pgup','pgup','pgup','down','down')
+  # Startup programs: six pages back from the first (Updates and Storage come last). Mesh is the third program.
+  keys('pgup','pgup','pgup','pgup','pgup','pgup','down','down')
   s=len(t());q.key('right');g['wait'](r'\[settings\.set\] key=31 value=4 status=0',s,30)
   g['wait'](r'\[files\.config\.set\] caller=\d+ key=31 value=4 status=0',s,30)
   # Shortcuts: the overview is the third row; Left from "default" wraps to Escape.
@@ -48,6 +50,14 @@ def main():
   s=len(t());keys('pgup','pgup','pgup','pgup')
   m=g['wait'](r'\[settings\.about\] cores=(\d+) domains=(\d+) limit_pages=(\d+)',s,30)
   assert int(m[1])>=1 and int(m[2])>=5,m[0];out['about']=m[0]
+  m=g['wait'](r'\[settings\.facts\] page=setup status=0 slot=(\S+) version=\S+ filesystem=- health=- image=([0-9a-f]{64})\n',s,90);out['image']=m[2]
+  # Updates and Storage: six pages on from About, after Privacy. Files answers Tatami alone.
+  s=len(t());keys('pgdn','pgdn','pgdn','pgdn','pgdn','pgdn')
+  m=g['wait'](r'\[settings\.facts\] page=updates status=0 slot=(none|a|b) ',s,30);out['slot']=m[1]
+  g['wait'](r'\[files\.facts\] topic=1 bytes=\d+',s,5)
+  s=len(t());keys('pgdn')
+  m=g['wait'](r'\[settings\.facts\] page=storage status=0 slot=- version=- filesystem=sexfs (\d+) (\d+) health=none image=-\n',s,30)
+  assert int(m[1])>=int(m[2])>0,m[0];out['storage']=m[0]
   # The Shell has the new shortcut: Super+Esc opens the overview, and closes it again.
   time.sleep(.6);keys('down');g['wait'](r'\[shell\.config\.changed\] key=34 value=29',0,30)
   s=len(t());chord('meta_l','esc');g['wait'](r'\[shell\.wm\.action\] action=Overview ',s,30)

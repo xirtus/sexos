@@ -835,6 +835,13 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // A restarted Files may have lost writes its clients' caches still describe.
         if matches!(state, State::Ready(_)) { forget_stats(None); }
     }
+    // Tatami's Updates, Storage and About pages: read only, the system's `tatami` alone.
+    if r.kind == sex_pdx::facts::KIND {
+        if program.is_none() || !program_is(caller, sex_pdx::facts::PROGRAM) { return w::reply(r.seq, w::DENIED, 0); }
+        let fs = match state { State::Ready(fs) => Some(fs), _ => None };
+        let (st, n) = crate::facts::answer(fs, r.offset, &mut region[w::PATH_BYTES..w::CACHE_AT]);
+        return w::reply(r.seq, st, n);
+    }
     if r.kind == w::INSTALL {
         // Works without a filesystem: a live system on another OS's disk has none.
         let path_len = (r.path_len as usize).min(w::PATH_BYTES);
