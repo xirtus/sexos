@@ -663,7 +663,9 @@ fn fast_content_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,sourc
         let out=unsafe{core::slice::from_raw_parts_mut(row.add(x0),x1-x0)};
         unsafe{scene.bitmaps.blend_row(content.owner_pd,content.surface_id,bitmap_viewport_for(content,scene.metrics),x0,y,out);}
     }
+    let t=decor::cycles_now();
     text_run(row,x0,x1,y,content,scene.metrics);
+    decor::tally(2,t);
     true
 }
 
@@ -864,7 +866,9 @@ fn raster_row(fb:*mut u32,y:usize,x0:usize,x1:usize,w:usize,h:usize,scene: &scen
     let focused=scene.focus;
     let back=bg(y,h);
     let mark=wallpaper_mark::span(y,w,h);
+    let t=decor::cycles_now();
     let mut row=unsafe{scene.groups.row_winners(&scene.surfaces,focused,y,w,h)};
+    decor::tally(3,t);
     let mut x=x0;
     while x<x1{
         let (end,source)=match row.as_mut(){Some(row)=>row.run(x),None=>(x1,None)};
@@ -1280,6 +1284,38 @@ static mut REPAINT_UPSERTS: u32 = 0;
 static mut REPAINT_FITTED_NOOPS: u32 = 0;
 static mut REPAINT_TEXT_CALLS: u32 = 0;
 static mut REPAINT_STRIP_FOCUS: u64 = u64::MAX;
+/// Where each surface was before a change (slot order is stacking order), so a
+/// window that moves, resizes or changes colour repaints only where it was and
+/// where it is, shadows included, instead of the whole desktop.
+type GeomEntry=(u64,usize,usize,usize,usize,u32,bool);
+static mut GEOM_BEFORE:[GeomEntry;MAX_SURFACES]=[(0,0,0,0,0,0,false);MAX_SURFACES];
+unsafe fn geom_entry(s:&Surface,w:usize,h:usize)->GeomEntry{
+    if !s.active{return (0,0,0,0,0,0,false);}
+    let (x,y,sw,sh)=FRAME_GROUPS.rect(s,w,h);
+    // Whether it stands alone or shows inside its group's frame.
+    (s.surface_id,x,y,sw,sh,s.color,FRAME_GROUPS.independent(s))
+}
+unsafe fn geom_snapshot(){
+    let (w,h)=(FB_W as usize,FB_H as usize);
+    for i in 0..MAX_SURFACES{GEOM_BEFORE[i]=geom_entry(&SURFACES[i],w,h);}
+}
+/// Adds the old and new rectangles of every slot that changed since geom_snapshot.
+unsafe fn geom_damage(out:&mut damage::Damage){
+    let (w,h)=(FB_W as usize,FB_H as usize);
+    for i in 0..MAX_SURFACES{
+        let now=geom_entry(&SURFACES[i],w,h);
+        let was=GEOM_BEFORE[i];
+        if now==was{continue;}
+        for (id,x,y,sw,sh,_,_) in [was,now]{ if id!=0{ surface_damage(out,(x,y,sw,sh),w,h); } }
+    }
+}
+/// A surface's rectangle grown by its shadow and rounded corners' reach.
+fn surface_damage(out:&mut damage::Damage,(x,y,sw,sh):(usize,usize,usize,usize),w:usize,h:usize){
+    if sw==0||sh==0{return;}
+    let r=decor::grow(damage::Rect{x,y,right:(x+sw).min(w),bottom:(y+sh).min(h)},w,h,bar_height(),chrome_metrics().scale());
+    out.add((r.x,r.y,r.right-r.x,r.bottom-r.y),w,h);
+}
+
 fn repaint_begin() -> u64 { if unsafe{REPAINT_BUDGET==0}{0}else{sex_pdx::get_ticks()} }
 fn repaint_end(kind: &str, started: u64) {
     unsafe {
@@ -4332,6 +4368,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { REPAINT_SEEN=0; REPAINT_DRAINED=0; REPAINT_UPSERTS=0; REPAINT_FITTED_NOOPS=0; }
         let mut needs_surface_redraw = false;
         let mut text_damage = damage::Damage::new(bar_height());
+        // Windows that moved, resized or changed chrome: only their old and new rectangles.
+        let mut geom_damage_rect = damage::Damage::new(bar_height());
         let mut needs_top_strip_redraw = false;
         // Cursor moved this cycle but nothing else did: eligible for the
         // save-under fast path instead of a full surface composite.
@@ -5138,6 +5176,7 @@ pub extern "C" fn _start() -> ! {
                         let color=sex_pdx::desktop_style::native_canvas(owner,surface_id).unwrap_or(color);
                         let before = SURFACES.iter().find(|s|s.active && s.surface_id==surface_id)
                             .map(|s|(s.x,s.y,s.w,s.h,s.color));
+                        geom_snapshot();
                         if surface_lifecycle::upsert(&mut SURFACES, admission, surface_id, x, y, w, h, color) {
                             REPAINT_UPSERTS += 1;
                             if let Some(index)=vacant {
@@ -5191,7 +5230,9 @@ pub extern "C" fn _start() -> ! {
                                     }
                                 }
                             }
-                            needs_surface_redraw |= fb_live;
+                            // A new window repaints the desktop (it fades in); a known one
+                            // only where it and any fitted children were and are.
+                            if fb_live { if before.is_some() { geom_damage(&mut geom_damage_rect); } else { needs_surface_redraw = true; } }
                         }
                     }
                 }
@@ -5644,8 +5685,13 @@ pub extern "C" fn _start() -> ! {
                                         surface_id, chrome_flags_raw, lk);
                                 }
                             }
+                            // Tabs and hover lights live in this window's own chrome.
                             if fb_live {
-                                needs_surface_redraw = true;
+                                let (w, h) = (FB_W as usize, FB_H as usize);
+                                match SURFACES.iter().find(|s| s.active && s.surface_id == surface_id) {
+                                    Some(s) => surface_damage(&mut geom_damage_rect, FRAME_GROUPS.rect(s, w, h), w, h),
+                                    None => needs_surface_redraw = true,
+                                }
                             }
                         }
                     }
@@ -5698,11 +5744,12 @@ pub extern "C" fn _start() -> ! {
             sex_pdx::serial_record!("[display.motion.end] tick={}", motion_now);
         }
         // Frame cost: from here to the completed publication.
-        decor::take_cycles();decor::take_tally(0);decor::take_tally(1);decor::take_split();
+        decor::take_cycles();decor::take_tally(0);decor::take_tally(1);decor::take_tally(2);decor::take_tally(3);decor::take_split();
         let render_start=decor::cycles_now();
         let render_ms_start=sex_pdx::get_ticks();
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
+        if let Some(rect)=geom_damage_rect.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
         if cursor_only_moved{pending_paint.request_cursor();}
         if needs_top_strip_redraw{pending_paint.request_strip();}
@@ -5726,16 +5773,20 @@ pub extern "C" fn _start() -> ! {
                 static mut FRAME_TIME_BUDGET: u32 = 600;
                 unsafe { if FRAME_TIME_BUDGET > 0 { FRAME_TIME_BUDGET -= 1; sex_pdx::serial_record!("[display.frame.time] ms={} p99={}", ms, pacer.percentile(99).unwrap_or(0)); } }
             }
-            // Where a paced frame's time goes: the whole render and its decoration share.
-            static mut FRAME_COST_BUDGET: u32 = 64;
-            unsafe { if FRAME_COST_BUDGET > 0 { FRAME_COST_BUDGET -= 1;
-                let decor = decor::take_cycles();
-                let (fast, pixel) = (decor::take_tally(0), decor::take_tally(1));
-                let kpx = match plan.content { paint_batch::Content::Damage(r) => ((r.right - r.x) * (r.bottom - r.y) / 1000) as u64, paint_batch::Content::Full | paint_batch::Content::Area => (w * h / 1000) as u64, _ => 0 };
-                let slow = core::mem::take(&mut *core::ptr::addr_of_mut!(SLOW_PIXELS));
-                let split = decor::take_split();
-                sex_pdx::serial_record!("[display.frame.cost] render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={} fast_kcyc={} pixel_kcyc={} slow={}/{}/{}/{} decor_split={}/{}/{}", render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx, fast / 1000, pixel / 1000, slow[0], slow[1], slow[2], slow[3], split[0] / 1000, split[1] / 1000, split[2] / 1000); } }
         }
+        // Where a frame's time goes: every paced frame (64) and any other frame that
+        // took 20 ms or more (64), with the render's decoration and slow-path shares.
+        static mut FRAME_COST_BUDGET: u32 = 64;
+        static mut FRAME_SLOW_BUDGET: u32 = 64;
+        let paced_frame = (animating && paced || landing) && published.is_some();
+        let budget = if paced_frame { core::ptr::addr_of_mut!(FRAME_COST_BUDGET) } else if published.is_some() && render_ms >= 20 { core::ptr::addr_of_mut!(FRAME_SLOW_BUDGET) } else { core::ptr::null_mut() };
+        unsafe { if !budget.is_null() && *budget > 0 { *budget -= 1;
+            let decor = decor::take_cycles();
+            let (fast, pixel, text, winners) = (decor::take_tally(0), decor::take_tally(1), decor::take_tally(2), decor::take_tally(3));
+            let kpx = match plan.content { paint_batch::Content::Damage(r) => ((r.right - r.x) * (r.bottom - r.y) / 1000) as u64, paint_batch::Content::Full | paint_batch::Content::Area => (w * h / 1000) as u64, _ => 0 };
+            let slow = core::mem::take(&mut *core::ptr::addr_of_mut!(SLOW_PIXELS));
+            let split = decor::take_split();
+            sex_pdx::serial_record!("[display.frame.cost] paced={} render_ms={} render_kcyc={} decor_kcyc={} full={} plan={} strip={} kpx={} fast_kcyc={} text_kcyc={} pixel_kcyc={} winners_kcyc={} slow={}/{}/{}/{} decor_split={}/{}/{}", paced_frame as u8, render_ms, render_cycles / 1000, decor / 1000, published.as_ref().is_some_and(|f| f.plan.is_full()) as u8, plan.label(), plan.strip as u8, kpx, fast / 1000, text / 1000, pixel / 1000, winners / 1000, slow[0], slow[1], slow[2], slow[3], split[0] / 1000, split[1] / 1000, split[2] / 1000); } }
         if let Some(frame)=published.as_ref(){
             if frame.plan.clock_dirty(){unsafe{LAST_REDRAWN_CLOCK_CANON_SS=frame.canon_ss;}}
             if primary_receipt_pending&&frame.plan.is_full(){

@@ -227,6 +227,8 @@ def main():
                 if i in (2, 3): tr.dump(f'resize step {i}')
                 time.sleep(.15)
             btn(False); time.sleep(2)
+            # The desktop after the drag: compare builds to catch pixels a partial repaint left behind.
+            q.cmd('screendump', {'filename': str((a.out / 'resize.ppm').resolve())})
             res['resize'] = {'apply': summary(apply_ms), 'repaint': summary(paint_ms), 'stages': merged_stages(st),
                              'apply_all_ms': [x and round(x, 1) for x in apply_ms], 'repaint_all_ms': [x and round(x, 1) for x in paint_ms]}
             print('[latency.resize]', json.dumps(res['resize']))
