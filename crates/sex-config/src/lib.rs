@@ -113,8 +113,10 @@ pub mod id {
     pub const CORNER_TOP_RIGHT: u16 = 26;
     pub const CORNER_BOTTOM_LEFT: u16 = 27;
     pub const CORNER_BOTTOM_RIGHT: u16 = 28;
-    pub const WIDGETS: u16 = 29;
-    pub const WEATHER: u16 = 30;
+    pub const FIRST_RUN_NETWORK: u16 = 29;
+    pub const FIRST_RUN_MICROPHONE: u16 = 30;
+    pub const WIDGETS: u16 = 31;
+    pub const WEATHER: u16 = 32;
 }
 
 /// What a hot corner does (the Shell's `hot_corners::ACTIONS`). Append-only.
@@ -122,6 +124,11 @@ pub const CORNER_ACTIONS: &[&str] = &["none", "overview", "launcher", "notificat
 
 /// Themes, in `sex_theme::Mode` setting order. Append-only.
 pub const THEMES: &[&str] = &["Light", "Dark", "High contrast"];
+
+/// The answer a program's first-run question gets without asking (`sex_pdx::package`
+/// grants): ask the person, no, or yes. Files applies it to a run; nothing is recorded,
+/// so going back to "ask" asks again. Append-only.
+pub const FIRST_RUN: &[&str] = &["ask", "no", "yes"];
 
 /// Programs that open each kind of file, the default first. Append-only.
 pub const PDF_PROGRAMS: &[&str] = &["vellum", "kaleidoscope"];
@@ -187,6 +194,8 @@ pub const KEYS: &[Key] = &[
     Key { id: id::OPEN_VIDEO, name: "open.video", label: "Open videos with", kind: Kind::Choice(VIDEO_PROGRAMS), default: 0 },
     Key { id: id::OPEN_AUDIO, name: "open.audio", label: "Open music with", kind: Kind::Choice(AUDIO_PROGRAMS), default: 0 },
     Key { id: id::OPEN_PAGE, name: "open.page", label: "Open web pages with", kind: Kind::Choice(PAGE_PROGRAMS), default: 0 },
+    Key { id: id::FIRST_RUN_NETWORK, name: "privacy.network_first_run", label: "New programs asking for the network", kind: Kind::Choice(FIRST_RUN), default: 0 },
+    Key { id: id::FIRST_RUN_MICROPHONE, name: "privacy.microphone_first_run", label: "New programs asking for the microphone", kind: Kind::Choice(FIRST_RUN), default: 0 },
 ];
 pub const COUNT: usize = KEYS.len();
 

@@ -86,6 +86,7 @@ members = [
     "crates/quil-core",
     "crates/burlesque-core",
     "apps/quil",
+    "crates/sex-mesh",
     "crates/sex-keymap",
     "crates/sex-shape",
     "crates/spindle-shell",

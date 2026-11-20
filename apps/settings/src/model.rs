@@ -12,13 +12,18 @@ pub const ACCENTS: [(&str, i32); 9] = [
 ];
 pub const QUERY_MAX: usize = 24;
 pub const PAGE_MAX: usize = 12;
+/// The Privacy page's program rows as text, one line each (`grants.rs` writes them).
+pub const EXTRA_MAX: usize = 2048;
+/// The page that shows program rows after its settings.
+pub const PRIVACY: &str = "privacy";
 
 /// Page names for people, by schema section.
 pub fn page_title(section: &str) -> &str {
     match section {
         "appearance" => "Appearance", "desktop" => "Desktop", "display" => "Display",
         "keyboard" => "Keyboard", "sound" => "Sound", "time" => "Date & time",
-        "session" => "Lock & idle", "setup" => "System", "open" => "Default apps", other => other,
+        "session" => "Lock & idle", "setup" => "System", "open" => "Default apps",
+        "privacy" => "Privacy and grants", other => other,
     }
 }
 
@@ -43,6 +48,10 @@ pub struct Model {
     pub status_len: usize,
     /// Typing a new lock password (Ctrl+P), if under way.
     pub entry: Option<Entry>,
+    /// The Privacy page's program rows, one line each, after its settings rows.
+    pub extra: [u8; EXTRA_MAX],
+    pub extra_len: usize,
+    pub extra_rows: usize,
 }
 
 /// A new lock password, typed twice.
@@ -57,7 +66,7 @@ pub enum Change { None, Set(u16, i32), Password([u8; 64], usize) }
 
 impl Model {
     pub fn new(values: Config) -> Self {
-        Model { values, page: 0, row: 0, query: [0; QUERY_MAX], query_len: 0, status: [0; 64], status_len: 0, entry: None }
+        Model { values, page: 0, row: 0, query: [0; QUERY_MAX], query_len: 0, status: [0; 64], status_len: 0, entry: None, extra: [0; EXTRA_MAX], extra_len: 0, extra_rows: 0 }
     }
     pub fn searching(&self) -> bool { self.query_len > 0 }
     /// The rows shown now: schema indexes.
@@ -70,6 +79,23 @@ impl Model {
             if shown { out[n] = i; n += 1; }
         }
         (out, n)
+    }
+    /// True on the Privacy page (not searching): program rows follow its settings.
+    pub fn on_privacy(&self) -> bool { !self.searching() && pages().0[self.page] == PRIVACY }
+    /// Program rows' text, `\n` after each line; `rows` lines.
+    pub fn set_extra(&mut self, text: &[u8], rows: usize) {
+        let n = text.len().min(EXTRA_MAX);
+        self.extra[..n].copy_from_slice(&text[..n]);
+        self.extra_len = n;
+        self.extra_rows = rows;
+        let (_, keys) = self.rows();
+        self.row = self.row.min((keys + rows).saturating_sub(1));
+    }
+    fn row_count(&self) -> usize { self.rows().1 + if self.on_privacy() { self.extra_rows } else { 0 } }
+    /// The chosen program row, if the choice is past the page's settings.
+    pub fn extra_row(&self) -> Option<usize> {
+        let (_, keys) = self.rows();
+        (self.on_privacy() && self.row >= keys && self.row - keys < self.extra_rows).then(|| self.row - keys)
     }
     pub fn selected(&self) -> Option<&'static Key> {
         let (rows, n) = self.rows();
@@ -86,7 +112,7 @@ impl Model {
         self.row = 0;
     }
     pub fn move_row(&mut self, down: bool) {
-        let (_, n) = self.rows();
+        let n = self.row_count();
         if n == 0 { self.row = 0; return; }
         self.row = if down { (self.row + 1).min(n - 1) } else { self.row.saturating_sub(1) };
     }
@@ -230,6 +256,17 @@ pub fn render(m: &Model, out: &mut [u8]) -> usize {
         if r == m.row { w.put(" >"); }
         w.byte(b'\n');
     }
+    if m.on_privacy() {
+        w.put("\n  Programs: Left takes a grant away, Right gives it. A change applies from the program's next run.\n");
+        if m.extra_rows == 0 { w.put("  No installed program asks for anything.\n"); }
+        for (r, line) in m.extra[..m.extra_len].split(|b| *b == b'\n').take(m.extra_rows).enumerate() {
+            let chosen = m.extra_row() == Some(r);
+            w.put(if chosen { "> " } else { "  " });
+            for b in line { w.byte(*b); }
+            if chosen { w.put(" <>"); }
+            w.byte(b'\n');
+        }
+    }
     w.put("------------------------------------------------------------\n");
     w.put("Up/Down: choose   Left/Right: change   Shift: bigger steps\n");
     for b in &m.status[..m.status_len] { w.byte(*b); }
@@ -244,7 +281,7 @@ mod tests {
     #[test]
     fn pages_follow_the_schema() {
         let (p, n) = pages();
-        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "setup", "open"]);
+        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "setup", "open", "privacy"]);
     }
 
     #[test]
@@ -328,6 +365,33 @@ mod tests {
         assert!(text.ends_with("Saved."));
         m.next_page(false);
         m.next_page(false);
-        assert_eq!(pages().0[m.page], "open");
+        assert_eq!(pages().0[m.page], "privacy");
+    }
+
+    #[test]
+    fn privacy_page_has_program_rows() {
+        let mut m = Model::new(Config::new());
+        m.next_page(false);
+        assert!(m.on_privacy());
+        let mut buf = [0u8; 4096];
+        let n = render(&m, &mut buf);
+        assert!(core::str::from_utf8(&buf[..n]).unwrap().contains("No installed program asks for anything."));
+        m.set_extra(b"chello  network  allowed\nchello  microphone  not asked yet\n", 2);
+        // Two settings (first-run answers), then two program rows.
+        assert_eq!(m.selected().unwrap().id, id::FIRST_RUN_NETWORK);
+        for _ in 0..5 { m.move_row(true); }
+        assert_eq!((m.row, m.extra_row(), m.selected().is_none()), (3, Some(1), true));
+        assert!(matches!(m.step(true, false), Change::None));
+        m.move_row(false);
+        let n = render(&m, &mut buf);
+        let text = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(text.contains("[Privacy and grants]"), "{text}");
+        assert!(text.contains("> chello  network  allowed <>"), "{text}");
+        // Fewer rows later: the choice stays on the page.
+        m.set_extra(b"", 0);
+        assert_eq!((m.row, m.extra_row()), (1, None));
+        // Search hides program rows.
+        m.type_char(b'z');
+        assert!(!m.on_privacy());
     }
 }
