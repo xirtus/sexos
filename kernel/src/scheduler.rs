@@ -251,6 +251,15 @@ impl Task {
     }
 }
 
+/// For a kernel fault report: this core's current task (id, custody snapshot) and the
+/// outgoing task a switch has not yet finished with.
+pub fn fault_report(core: usize) -> (u32, Option<task_ownership::Snapshot>, *mut Task, *mut Task) {
+    let sched = &SCHEDULERS[core];
+    let (cur, out) = (sched.current_task.load(Ordering::Acquire), sched.pending_outgoing.load(Ordering::Acquire));
+    if cur.is_null() { return (0, None, cur, out); }
+    unsafe { ((*cur).id, Some((*cur).state.snapshot()), cur, out) }
+}
+
 /// Per core: the task whose x87/SSE registers are in the core right now, if any.
 /// Saving the outgoing task clears it; loading the incoming one sets it.
 static FPU_LOADED: [AtomicPtr<Task>; 128] = [const { AtomicPtr::new(ptr::null_mut()) }; 128];

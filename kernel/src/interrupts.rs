@@ -723,6 +723,9 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
             let w = |i: u64| unsafe { core::ptr::read_volatile((low + i * 8) as *const u64) };
             serial_println!("KERNEL PAGE FAULT STACK: at={:#x} {:#x} {:#x} {:#x} {:#x} | {:#x} {:#x} {:#x} {:#x}", low, w(0), w(1), w(2), w(3), w(4), w(5), w(6), w(7));
         }
+        let core = crate::core_local::CoreLocal::get().core_id as usize;
+        let (task, custody, cur, out) = crate::scheduler::fault_report(core);
+        serial_println!("KERNEL PAGE FAULT TASK: core={} task={} at={:p} custody={:?} pending_outgoing={:p}", core, task, cur, custody, out);
         crate::console::stop(format_args!("page fault in the kernel touching {:#x} at {:#x} (error {:#x})",
             fault_addr, fault_rip, error_code));
     }

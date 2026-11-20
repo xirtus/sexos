@@ -12,6 +12,8 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:2b52c1f01b3c0987f571d39433d87d3dfb7fde6689853aa748d5af2fb227e02d'),  # kernel fault report: task, custody, pending_outgoing (WS2 soak fault), 2026-11-20
+
     ('timed', 'kernel/src/scheduler.rs', 'fn-v1:eacc16fd01fce7c181e70f2178153c355c3793337e24f7acd9c58afb90415611'),  # rearm purges stale handoff slots + resets IPC v2 state (WS2 soak fault), 2026-11-19
 
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:96213afb9ba13c65c30b8892bda0d19b66aaf74aeedfcfeede56e4187b00f438'),  # kernel page fault prints the words around RSP (WS2 soak fault), 2026-11-19
