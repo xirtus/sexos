@@ -466,6 +466,8 @@ impl Player {
             self.took[slot][i] = used as u16;
             if made == 0 && r.load(ring::OPEN) == 0 {
                 st.active = false;
+                // The next run may be a program built before the doorbell.
+                r.store(ring::DOORBELL, 0);
                 sex_pdx::serial_record!("[bell.sound.stream.closed] row={} taken={}", i, taken);
             }
         }
@@ -848,22 +850,21 @@ pub fn pump() {
         if p.len == 0 && p.flying == 0 && p.played != before {
             sex_pdx::serial_record!("[bell.sound.drained] periods={}", p.played);
             let w = wakes();
-            sex_pdx::serial_record!("[bell.sound.wakes] irq={} periods={} waits={} interrupts={}",
-                p.card.irq() as u8, p.played - w.periods, w.waits, w.interrupts);
-            *w = Wakes { periods: p.played, waits: 0, interrupts: 0 };
+            sex_pdx::serial_record!("[bell.sound.wakes] irq={} periods={} waits={} interrupts={} doorbell_waits={}",
+                p.card.irq() as u8, p.played - w.periods, w.waits, w.interrupts, w.doorbell_waits);
+            *w = Wakes { periods: p.played, waits: 0, interrupts: 0, doorbell_waits: 0 };
         }
     }
 }
 
 /// How often Bell slept while sound played, since the last drain: the boot log
 /// shows interrupt-driven sound wakes about once a period, not once a tick.
-struct Wakes { periods: u64, waits: u64, interrupts: u64 }
-static mut WAKES: Wakes = Wakes { periods: 0, waits: 0, interrupts: 0 };
+struct Wakes { periods: u64, waits: u64, interrupts: u64, doorbell_waits: u64 }
+static mut WAKES: Wakes = Wakes { periods: 0, waits: 0, interrupts: 0, doorbell_waits: 0 };
 fn wakes() -> &'static mut Wakes { unsafe { &mut *core::ptr::addr_of_mut!(WAKES) } }
 
-/// While open streams may still hand Bell sound the card has room for, Bell looks
-/// at their rings this often (ms) even with interrupts: programs write without a
-/// message, and 4 ms adds little to the ~130 ms Bell keeps queued.
+/// While a program without the doorbell (`ring::DOORBELL`) may still hand Bell
+/// sound the card has room for, Bell looks at its ring this often (ms).
 const STREAM_POLL_TICKS: u64 = 4;
 
 /// How long Bell may sleep, in ticks, while sound plays. Call it right before the
@@ -880,9 +881,25 @@ pub fn wait_ticks() -> u64 {
     p.card.ack();
     w.waits += 1;
     pump();
-    let Some(p) = player() else { return 1 };
+    let (Some(p), w) = (player(), wakes()) else { return 1 };
     let more = p.streaming() && p.flying < IN_FLIGHT && p.card.room();
-    if more { STREAM_POLL_TICKS } else { sex_pdx::SELF_WAIT_MAX_TICKS }
+    if !more { return sex_pdx::SELF_WAIT_MAX_TICKS; }
+    // The card has room and streams are open: ask each program to ring when it
+    // writes. Set WAKE first, then look at WRITTEN once more; the program stores
+    // WRITTEN first, then reads WAKE, so a write in between is never missed.
+    let mut seen = [0u64; STREAMS];
+    let mut doorbells = true;
+    for (k, st) in p.streams.iter().enumerate() {
+        let Some(st) = st.as_ref().filter(|st| st.active && st.ring.load(ring::PAUSED) == 0) else { continue };
+        if st.ring.load(ring::DOORBELL) != 1 { doorbells = false; continue; }
+        seen[k] = st.ring.load(ring::WRITTEN);
+        st.ring.store(ring::WAKE, 1);
+    }
+    if !doorbells { return STREAM_POLL_TICKS; }
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    let moved = p.streams.iter().enumerate().any(|(k, st)| st.as_ref()
+        .is_some_and(|st| st.active && st.ring.load(ring::PAUSED) == 0 && st.ring.load(ring::WRITTEN) != seen[k]));
+    if moved { 1 } else { w.doorbell_waits += 1; sex_pdx::SELF_WAIT_MAX_TICKS }
 }
 
 /// Before Bell blocks for a message with nothing playing: the card stops
