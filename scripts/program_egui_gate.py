@@ -74,7 +74,12 @@ def main():
    print('--- egui: its own lines ---');print('\n'.join(l for l in t().splitlines() if '[egui.' in l or '[tassel.' in l or 'pointer' in l)[-6000:]);raise
   assert int(m[1])>0,m[0]
   probe=shot('tassel-probe',tile)
-  assert len(probe)>8,'the probe panel looks blank'
+  if len(probe)<=8:
+   # Say what the screen and the record showed, so a blank shot names its cause.
+   time.sleep(2);later=shot('tassel-probe-later',tile)
+   print(f'--- egui: probe tile {tile} colours={len(probe)} {sorted(c.hex() for c in probe)} two seconds later={len(later)} ---')
+   print('\n'.join(l for l in t().splitlines() if f'surface={surface}' in l or f'sid={surface}' in l or '[egui.' in l)[-6000:])
+  assert len(probe)>8,f'the probe panel looks blank ({len(probe)} colours in {tile})'
   close(target,task,surface)
   target,task,surface,tile,frame=start('')
   assert int(frame[5])>1000,f'the demo drew too little: {frame[0]}'
