@@ -202,6 +202,9 @@ pub struct Target<'a> {
     pub top: i32,
     /// Page rectangle (x, y, width, height) drawing is limited to, if any.
     pub clip: Option<[i32; 4]>,
+    /// Words from one row to the next: `width`, or more when the target is a
+    /// column of a wider buffer (the page beside the vertical tab strip).
+    pub stride: i32,
 }
 
 /// Source-over onto a premultiplied word, alpha included (canvas surfaces).
@@ -241,7 +244,7 @@ impl Target<'_> {
         if x0 >= x1 || y0 >= y1 { return; }
         let r = radius.min(w / 2).min(h / 2).max(0);
         for py in y0..y1 {
-            let row = (py * self.width) as usize;
+            let row = (py * self.stride) as usize;
             let dy = if py < y + r { y + r - py } else if py >= y + h - r { py - (y + h - r) + 1 } else { 0 };
             for px in x0..x1 {
                 let dx = if px < x + r { x + r - px } else if px >= x + w - r { px - (x + w - r) + 1 } else { 0 };
@@ -262,7 +265,7 @@ impl Target<'_> {
             let py = y + gy;
             let x = x + slant.map_or(0, |base| (((base - gy) * 13) >> 6) - ((base * 13) >> 7));
             if py < by0 || py >= by1 { continue; }
-            let row = (py * self.width) as usize;
+            let row = (py * self.stride) as usize;
             for gx in 0..w as i32 + smear {
                 let px = x + gx;
                 if px < bx0 || px >= bx1 { continue; }
@@ -299,7 +302,7 @@ fn corner_cover(dx: i32, dy: i32, r: i32) -> u32 {
 pub fn paint(page: &Page, fonts: &mut Fonts, target: &mut Target, focus: Option<usize>) {
     let bg = page.background;
     for y in target.top.max(0)..target.height {
-        let row = (y * target.width) as usize;
+        let row = (y * target.stride) as usize;
         target.pixels[row..row + target.width as usize].fill(bg & 0x00FF_FFFF);
     }
     let top = target.scroll;
@@ -385,7 +388,7 @@ fn paint_turned(page: &Page, fonts: &mut Fonts, target: &mut Target, run: core::
     if sw <= 0 || sh <= 0 || sw as i64 * sh as i64 > 16 << 20 { return; }
     let mut layer = alloc::vec![0u32; (sw * sh) as usize];
     {
-        let mut t = Target { pixels: &mut layer, width: sw, height: sh, scroll: 0, top: 0, premul: true, clip: None };
+        let mut t = Target { pixels: &mut layer, width: sw, height: sh, scroll: 0, top: 0, premul: true, clip: None, stride: sw };
         for i in run.clone() {
             let mut item = page.items[i].clone();
             item.offset(-sx0, -sy0);
@@ -396,7 +399,7 @@ fn paint_turned(page: &Page, fonts: &mut Fonts, target: &mut Target, run: core::
     let at = |x: i32, y: i32| if x < 0 || y < 0 || x >= sw || y >= sh { 0 } else { layer[(y * sw + x) as usize] };
     for py in dy0..dy1 {
         let ty = py - target.scroll + target.top;
-        let row = (ty * target.width) as usize;
+        let row = (ty * target.stride) as usize;
         for px in dx0..dx1 {
             let (u, v) = unmap(px as f32 + 0.5, py as f32 + 0.5);
             let (u, v) = (u - sx0 as f32 - 0.5, v - sy0 as f32 - 0.5);
@@ -446,11 +449,12 @@ fn draw_item(target: &mut Target, fonts: &mut Fonts, item: &Item, bg: u32) {
 
 /// Draws only the pictures named in `changed` (canvases that drew) over the last frame,
 /// when each is opaque and so covers what was under it. False when that can't stand in
-/// for a full `frame`.
-pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, changed: &[String]) -> bool {
+/// for a full `frame`. `side` is the vertical tab strip's width (0 for none).
+pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, side: i32, changed: &[String]) -> bool {
     // Sticky boxes move with the scroll and turned boxes paint as layers: only a whole frame does those.
     if !page.item_sticky.is_empty() || !page.item_transform.is_empty() { return false; }
-    let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false, clip: None };
+    let side = side.clamp(0, width);
+    let mut t = Target { pixels: &mut pixels[side as usize..], width: width - side, height, scroll, top: BAR, premul: false, clip: None, stride: width };
     let (top, bottom) = (scroll, scroll + height - BAR);
     let mut items: Vec<(i32, i32, i32, i32, &str, Option<[i32; 4]>)> = Vec::new();
     for (i, item) in page.items.iter().enumerate() {
@@ -500,7 +504,7 @@ fn image(target: &mut Target, fonts: &mut Fonts, x: i32, y: i32, w: i32, h: i32,
     let (bx0, by0, bx1, by1) = target.bounds();
     for ty in sy0.max(by0)..(sy0 + h).min(by1) {
         let srow = ((ty - sy0) as i64 * ih / h as i64) as usize * img.width;
-        let row = (ty * target.width) as usize;
+        let row = (ty * target.stride) as usize;
         for tx in x.max(bx0)..(x + w).min(bx1) {
             let s = img.pixels[srow + ((tx - x) as i64 * iw / w as i64) as usize];
             let p = &mut target.pixels[row + tx as usize];
@@ -654,6 +658,20 @@ pub struct Chrome<'a> {
     /// The shield badge: whether Shields are up for the site, and how many requests
     /// they blocked on the page. `None` shows no badge (built-in pages, files).
     pub shields: Option<(bool, u32)>,
+    /// Tabs in a strip down the left this wide instead of chips in the bar (0: chips).
+    pub side: i32,
+}
+
+/// The vertical tab strip's width, as Edge and Brave draw it.
+pub const SIDE: i32 = 200;
+/// Height of one tab in the vertical strip.
+pub const SIDE_ROW: i32 = 30;
+
+/// The tab in the vertical strip `side` wide under window point (`x`, `y`), of `n` tabs.
+pub fn side_tab_at(side: i32, n: usize, x: i32, y: i32) -> Option<usize> {
+    if side <= 0 || x < 0 || x >= side || y < BAR + 6 { return None; }
+    let i = ((y - BAR - 6) / SIDE_ROW) as usize;
+    (i < n).then_some(i)
 }
 
 /// Tab chips in the bar: each chip's x and width, for `width` and `n` tabs.
@@ -686,19 +704,40 @@ fn fit(fonts: &mut Fonts, text: &str, font: FontKey, w: i32) -> String {
 
 /// Like [`frame`], with tabs, suggestions, find marks and zoom.
 pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, c: &Chrome) {
-    let mut t = Target { pixels, width, height, scroll, top: BAR, premul: false, clip: None };
-    paint(page, fonts, &mut t, focus);
-    // Find matches: the current one strong, the others light, over the text.
-    for m in c.marks.iter() {
-        let current = c.find.is_some_and(|(_, at, _)| at as i32 == m[4]);
-        let color = if current { 0x80FF_8C00 } else { 0x70FF_EB3B };
-        t.fill(m[0], m[1], m[2], m[3], color, 2);
+    let side = c.side.clamp(0, width);
+    {
+        // The page takes the columns right of the tab strip.
+        let mut t = Target { pixels: &mut pixels[side as usize..], width: width - side, height, scroll, top: BAR, premul: false, clip: None, stride: width };
+        paint(page, fonts, &mut t, focus);
+        // Find matches: the current one strong, the others light, over the text.
+        for m in c.marks.iter() {
+            let current = c.find.is_some_and(|(_, at, _)| at as i32 == m[4]);
+            let color = if current { 0x80FF_8C00 } else { 0x70FF_EB3B };
+            t.fill(m[0], m[1], m[2], m[3], color, 2);
+        }
     }
-    let mut bar = Target { pixels: t.pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None };
+    let mut bar = Target { pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None, stride: width };
     bar.fill(0, 0, width, BAR, 0xFF0D_1420, 0);
     let font = FontKey { size: 13, bold: false, italic: false, mono: false, face: 0 };
     let small = FontKey { size: 12, ..font };
-    let chips = tab_chips(width, c.tabs.len());
+    if side > 0 {
+        // Vertical tabs: one row each down the strip, the shown one lit, with its
+        // container's colour as a bar at the left edge.
+        let mut strip = Target { pixels: bar.pixels, width: side, height, scroll: 0, top: BAR, premul: false, clip: None, stride: width };
+        strip.fill(0, 0, side, height - BAR, 0xFF0D_1420, 0);
+        strip.fill(side - 1, 0, 1, height - BAR, 0xFF22_2C3A, 0);
+        for (i, label) in c.tabs.iter().enumerate() {
+            let y = 6 + i as i32 * SIDE_ROW;
+            if y + SIDE_ROW > height - BAR { break; }
+            let on = i == c.active;
+            if on { strip.fill(6, y, side - 13, SIDE_ROW - 4, 0xFF3A_4A60, 6); }
+            if let Some(&c) = c.colours.get(i).filter(|c| **c != 0) { strip.fill(6, y + 4, 3, SIDE_ROW - 12, c, 1); }
+            let shown = fit(fonts, label, small, side - 32);
+            text_run(&mut strip, fonts, 16, y + 17, small, if on { 0xFFFF_FFFF } else { 0xFF9A_A8B8 }, &shown);
+        }
+        bar = Target { pixels: strip.pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None, stride: width };
+    }
+    let chips = if side > 0 { Vec::new() } else { tab_chips(width, c.tabs.len()) };
     for (i, (x, w)) in chips.iter().enumerate() {
         let on = i == c.active;
         bar.fill(*x, 4, *w, BAR - 8, if on { 0xFF3A_4A60 } else { 0xFF18_2230 }, 6);
@@ -738,7 +777,7 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
         bar.fill(x, 8, 1, BAR - 16, 0xFF0B_57D0, 0);
     }
     // Suggestions drop down over the page.
-    let all = Target { pixels: bar.pixels, width, height, scroll: 0, top: 0, premul: false, clip: None };
+    let all = Target { pixels: bar.pixels, width, height, scroll: 0, top: 0, premul: false, clip: None, stride: width };
     let mut over = all;
     if c.editing && !c.suggestions.is_empty() {
         let h = c.suggestions.len() as i32 * SUGGESTION_ROW + 4;

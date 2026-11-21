@@ -116,7 +116,7 @@ fn main() {
     eprintln!("{} items, {} links, height {}, {} sheets", page.items.len(), page.links.len(), page.height, sheets.len());
     if let Some(out) = args.get(2) {
         let mut buf = vec![0u32; (w * h) as usize];
-        sex_web::paint(&page, &mut fonts, &mut sex_web::Target { pixels: &mut buf, width: w, height: h, scroll: 0, top: 0, premul: false, clip: None }, None);
+        sex_web::paint(&page, &mut fonts, &mut sex_web::Target { pixels: &mut buf, width: w, height: h, scroll: 0, top: 0, premul: false, clip: None, stride: w }, None);
         let mut bytes = format!("P6 {w} {h} 255\n").into_bytes();
         for p in &buf { bytes.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, *p as u8]); }
         std::fs::write(out, bytes).unwrap();
