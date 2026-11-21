@@ -5777,7 +5777,8 @@ pub extern "C" fn _start() -> ! {
                             };
                             // The default preset leaves the chrome's colours to the desktop theme (S6a).
                             CHROME_FOLLOWS_THEME = msg.arg2 & 1 != 0;
-                            if CHROME_FOLLOWS_THEME { apply_desk_theme(); }
+                            // A preset of its own also takes back the resize band's own colour.
+                            if CHROME_FOLLOWS_THEME { apply_desk_theme(); } else { DISPLAY_TOKENS.band_color = sex_pdx::desktop_style::NATIVE_CANVAS; }
                             TOKEN_BUF_CALL1_RECEIVED = false;
                             TOKEN_BUF_OWNER = 0;
                             static mut APPEARANCE_TOKENS_APPLIED: u32 = 0;
