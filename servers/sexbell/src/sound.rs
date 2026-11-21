@@ -213,7 +213,14 @@ fn master_gain() -> u32 {
 #[derive(Clone, Copy)]
 /// A program's stream; `frac` is where between two of its frames the next output
 /// falls when it is not at 48 kHz (1/65536 of a frame).
-struct Stream { ring: ring::Ring, active: bool, pd: u32, frac: u32 }
+/// `start`: the tick the stream (re)opened, until its first take; 0 after.
+struct Stream { ring: ring::Ring, active: bool, pd: u32, frac: u32, start: u64 }
+
+/// A stream that has just opened waits this long (ms) for a whole period before
+/// Bell plays what part it has: a program's first write is often a fraction of a
+/// period, and playing it padded with silence puts a gap right after the start.
+/// A short sound that never fills a period still plays once this has passed.
+const START_HOLD_TICKS: u64 = 50;
 
 #[derive(Clone, Copy)]
 struct Note { hz: u32, frames: u32, volume: u16 }
@@ -224,12 +231,16 @@ enum Card {
     /// `input`: the card's first input stream (a microphone), when it has one.
     Virtio { card: VirtIOSound<PoolHal, LeaseTransport>, stream: u32, input: Option<u32> },
     Hda(crate::hda::Hda),
+    /// A USB sound card SexUSB drives: periods go through `sex_pdx::usb_audio`'s ring,
+    /// and one is done once SexUSB has taken its last frame (`ends`, by token).
+    Usb { link: sex_pdx::usb_audio::Shared, ends: [u64; IN_FLIGHT], next: u16 },
 }
 impl Card {
     fn done(&mut self, token: u16) -> bool {
         match self {
             Card::Virtio { card, .. } => card.pcm_xfer_ok(token).is_ok(),
             Card::Hda(h) => h.done(token),
+            Card::Usb { link, ends, .. } => link.card().is_none() || link.taken() >= ends[token as usize % IN_FLIGHT],
         }
     }
     fn submit(&mut self, period: &[u8; PERIOD_BYTES]) -> Result<u16, &'static str> {
@@ -237,6 +248,15 @@ impl Card {
             Card::Virtio { card, stream, .. } => card.pcm_xfer_nb(*stream, period).map_err(|e| {
                 sex_pdx::serial_record!("[bell.sound.xfer.error] {:?}", e); "xfer" }),
             Card::Hda(h) => h.submit(period).ok_or("ring_full"),
+            Card::Usb { link, ends, next } => {
+                if link.card().is_none() { return Err("usb_gone"); }
+                let frames = unsafe { core::slice::from_raw_parts(period.as_ptr() as *const [i16; 2], PERIOD_FRAMES) };
+                if link.write(frames) != PERIOD_FRAMES { return Err("usb_full"); }
+                let token = *next;
+                ends[token as usize % IN_FLIGHT] = link.written();
+                *next = next.wrapping_add(1);
+                Ok(token)
+            }
         }
     }
     /// True when the card interrupts at each period end (an HD Audio controller with
@@ -245,24 +265,37 @@ impl Card {
     fn arm(&mut self, on: bool) { if let Card::Hda(h) = self { h.arm(on) } }
     fn ack(&mut self) -> u32 { match self { Card::Hda(h) => h.ack(), _ => 0 } }
     /// Whether a period can go to the chip now, checked before mixing one.
-    fn room(&mut self) -> bool { match self { Card::Virtio { .. } => true, Card::Hda(h) => h.room() } }
+    fn room(&mut self) -> bool {
+        match self {
+            Card::Virtio { .. } => true,
+            Card::Hda(h) => h.room(),
+            Card::Usb { link, .. } => link.card().is_some() && link.room() >= PERIOD_FRAMES as u64,
+        }
+    }
     /// The HD Audio stream runs from the start; a virtio stream starts once fed.
     fn start(&mut self) -> bool {
         match self {
             Card::Virtio { card, stream, .. } => card.pcm_start(*stream).is_ok(),
-            Card::Hda(_) => true,
+            Card::Hda(_) | Card::Usb { .. } => true,
         }
     }
-    fn stream(&self) -> u32 { match self { Card::Virtio { stream, .. } => *stream, Card::Hda(_) => 0 } }
+    fn stream(&self) -> u32 { match self { Card::Virtio { stream, .. } => *stream, _ => 0 } }
+    fn name(&self) -> &'static str { match self { Card::Virtio { .. } => "virtio", Card::Hda(_) => "hda", Card::Usb { .. } => "usb" } }
     /// The outputs word: how many, their kinds, and which play.
     fn outputs(&self) -> u64 {
         match self {
             Card::Virtio { .. } => mixer::outputs(1, &[mixer::VIRTUAL]),
+            Card::Usb { .. } => mixer::outputs(1, &[mixer::USB]),
             Card::Hda(h) => {
                 let mut kinds = [0u8; mixer::MAX_OUTPUTS];
                 let n = h.outputs.min(mixer::MAX_OUTPUTS);
                 for (k, kind) in kinds.iter_mut().enumerate().take(n) {
-                    *kind = match h.output(k).map(|o| o.0) { Some(d @ 0..=2) => d as u8, _ => mixer::OTHER };
+                    *kind = match (h.display(k), h.output(k).map(|o| o.0)) {
+                        (Some(crate::hdmi::Display::Hdmi), _) => mixer::HDMI,
+                        (Some(crate::hdmi::Display::DisplayPort), _) => mixer::DISPLAYPORT,
+                        (None, Some(d @ 0..=2)) => d as u8,
+                        _ => mixer::OTHER,
+                    };
                 }
                 mixer::outputs(h.on as u8, &kinds[..n]) | if h.auto { mixer::OUTPUTS_AUTO } else { 0 }
             }
@@ -270,7 +303,7 @@ impl Card {
     }
     fn select(&mut self, mask: u64) -> bool {
         match self {
-            Card::Virtio { .. } => mask & 1 == 1 || mask == mixer::AUTO,
+            Card::Virtio { .. } | Card::Usb { .. } => mask & 1 == 1 || mask == mixer::AUTO,
             // The person's own pick stops Bell following the jack; AUTO resumes it.
             Card::Hda(h) if mask == mixer::AUTO => { h.auto = true; let home = h.home; h.select(home); h.follow_jack(); true }
             Card::Hda(h) => { let ok = mask <= 0xFF && h.select(mask as u32); if ok { h.auto = false; } ok }
@@ -286,21 +319,28 @@ impl Card {
             h.follow_jack();
         }
     }
+    /// A USB card with no microphone of its own records from the card it took over
+    /// from (the laptop's microphone next to USB speakers).
     fn has_input(&self) -> bool {
-        match self { Card::Virtio { input, .. } => input.is_some(), Card::Hda(h) => h.has_mic() }
+        match self { Card::Virtio { input, .. } => input.is_some(), Card::Hda(h) => h.has_mic(), Card::Usb { .. } => parked().is_some_and(|c| c.has_input()) }
     }
     /// Starts or stops the microphone stream.
     fn input_run(&mut self, on: bool) -> bool {
         match self {
             Card::Virtio { card, input: Some(i), .. } => if on { card.pcm_start(*i).is_ok() } else { card.pcm_stop(*i).is_ok() },
             Card::Hda(h) => if on { h.mic_start() } else { h.mic_stop() },
+            Card::Usb { .. } => parked().is_some_and(|c| c.input_run(on)),
             _ => false,
         }
     }
     /// Asks for one more period from the microphone. The HD Audio input stream runs
     /// on its own ring and needs no asking.
     fn input_ask(&mut self) -> bool {
-        match self { Card::Virtio { card, input: Some(i), .. } => card.pcm_capture_nb(*i).is_ok(), _ => false }
+        match self {
+            Card::Virtio { card, input: Some(i), .. } => card.pcm_capture_nb(*i).is_ok(),
+            Card::Usb { .. } => parked().is_some_and(|c| c.input_ask()),
+            _ => false,
+        }
     }
     /// A period the microphone filled, if one is back, copied into `out`: its length.
     fn input_take(&mut self, out: &mut [u8; PERIOD_BYTES]) -> Option<usize> {
@@ -311,6 +351,7 @@ impl Card {
                 n
             }),
             Card::Hda(h) => h.mic_take(out).then_some(crate::hda::PERIOD_BYTES.min(PERIOD_BYTES)),
+            Card::Usb { .. } => parked().and_then(|c| c.input_take(out)),
             _ => None,
         }
     }
@@ -342,6 +383,8 @@ struct Player {
     hearing: bool,
     asked: usize,
     heard: u64,
+    /// The microphone is a USB one (headset or microphone, through SexUSB), not the card's.
+    mic_usb: bool,
 }
 /// The period being mixed, kept off the service's small stack.
 static mut MIX: [[i32; 2]; PERIOD_FRAMES] = [[0; 2]; PERIOD_FRAMES];
@@ -409,7 +452,9 @@ impl Player {
             let step = crate::resample::step(rate);
             // Input a whole period needs: its frames at the program's rate, and one to blend.
             let need = if rate == crate::resample::OUT_RATE { PERIOD_FRAMES } else { ((PERIOD_FRAMES as u64 * step + st.frac as u64) >> 16) as usize + 2 };
-            if hold && have < need && r.load(ring::OPEN) != 0 { continue; }
+            let starting = st.start != 0 && sex_pdx::get_ticks().wrapping_sub(st.start) < START_HOLD_TICKS;
+            if (hold || starting) && have < need && r.load(ring::OPEN) != 0 { continue; }
+            st.start = 0;
             let n = have.min(PERIOD_FRAMES);
             // A muted program's sound is taken and counted as played, so its clock
             // runs on, but not heard.
@@ -440,6 +485,8 @@ impl Player {
             self.took[slot][i] = used as u16;
             if made == 0 && r.load(ring::OPEN) == 0 {
                 st.active = false;
+                // The next run may be a program built before the doorbell.
+                r.store(ring::DOORBELL, 0);
                 sex_pdx::serial_record!("[bell.sound.stream.closed] row={} taken={}", i, taken);
             }
         }
@@ -461,7 +508,15 @@ impl Player {
     /// The microphone: tell each asking program where it stands, run the input stream
     /// while anyone may listen, and copy what it hears into each listener's ring.
     fn listen_pump(&mut self) {
-        let input = self.card.has_input();
+        // A USB microphone, when one is plugged in, wins over the card's own.
+        let usb = usb_link().filter(|l| l.mic().is_some());
+        if usb.is_some() != self.mic_usb {
+            if self.hearing { self.input_run(false); self.hearing = false; self.asked = 0; }
+            self.mic_usb = usb.is_some();
+            sex_pdx::serial_record!("[bell.mic.source] usb={} vendor={:#06x} product={:#06x}", self.mic_usb as u8,
+                usb.and_then(|l| l.mic()).map_or(0, |m| m.0), usb.and_then(|l| l.mic()).map_or(0, |m| m.1));
+        }
+        let input = self.mic_usb || self.card.has_input();
         for (i, st) in self.streams.iter().enumerate() {
             let Some(st) = st else { continue };
             if crate::restricted::denied(st.pd){continue;}
@@ -472,13 +527,13 @@ impl Player {
         }
         let on = input && self.listening();
         if on != self.hearing {
-            let ok = self.card.input_run(on);
+            let ok = self.input_run(on);
             self.hearing = on;
             sex_pdx::serial_record!("[bell.mic] on={} ok={} heard={}", on as u8, ok as u8, self.heard);
         }
         // Periods come back in order; while no one listens they are dropped.
         let heard = unsafe { &mut *core::ptr::addr_of_mut!(HEARD) };
-        while let Some(len) = self.card.input_take(heard) {
+        while let Some(len) = self.input_take(heard) {
             let frames = &heard[..len];
             self.asked = self.asked.saturating_sub(1);
             if !self.hearing { continue; }
@@ -498,7 +553,37 @@ impl Player {
             if self.heard == 0 { sex_pdx::serial_record!("[bell.mic.first] frames={}", n); }
             self.heard += n;
         }
-        while self.hearing && self.asked < LISTEN_AHEAD && self.card.input_ask() { self.asked += 1; }
+        while self.hearing && !self.mic_usb && self.asked < LISTEN_AHEAD && self.card.input_ask() { self.asked += 1; }
+    }
+
+    /// Starts or stops whichever microphone is in use.
+    fn input_run(&mut self, on: bool) -> bool {
+        match usb_link().filter(|_| self.mic_usb) {
+            Some(l) => { l.set_listen(on); true }
+            None => self.card.input_run(on),
+        }
+    }
+    /// What the microphone in use heard since last asked, as S16 stereo bytes in `out`.
+    fn input_take(&mut self, out: &mut [u8; PERIOD_BYTES]) -> Option<usize> {
+        let Some(l) = usb_link().filter(|_| self.mic_usb) else { return self.card.input_take(out) };
+        let frames = unsafe { core::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut [i16; 2], PERIOD_FRAMES) };
+        let n = l.read_heard(frames);
+        (n > 0).then_some(n * FRAME_BYTES)
+    }
+
+    /// Drops the periods in flight when the card changes: the old card plays them out
+    /// (or they are lost with it), but each stream's frames in them are counted as
+    /// played, or the stream would wait for them forever.
+    fn forget_flying(&mut self) {
+        while self.flying > 0 {
+            for (i, st) in self.streams.iter().enumerate() {
+                let n = self.took[self.first][i];
+                if let (Some(st), true) = (st, n > 0) { if crate::restricted::denied(st.pd){continue;} st.ring.store(ring::PLAYED, st.ring.load(ring::PLAYED) + n as u64); }
+                self.took[self.first][i] = 0;
+            }
+            self.first = (self.first + 1) % IN_FLIGHT; self.flying -= 1;
+        }
+        self.first = 0;
     }
 
     fn pump(&mut self) {
@@ -572,7 +657,7 @@ pub fn init() {
     match open() {
         Ok(p) => {
             sex_pdx::serial_record!("[bell.sound.ready] card={} stream={} rate={} channels={} period_bytes={}",
-                match p.card { Card::Virtio { .. } => "virtio", Card::Hda(_) => "hda" }, p.card.stream(), RATE, CHANNELS, PERIOD_BYTES);
+                p.card.name(), p.card.stream(), RATE, CHANNELS, PERIOD_BYTES);
             unsafe { *core::ptr::addr_of_mut!(PLAYER) = Some(p) };
         }
         Err(reason) => sex_pdx::serial_record!("[bell.sound.absent] reason={}", reason),
@@ -582,7 +667,7 @@ pub fn init() {
 fn player_with(card: Card) -> Player {
     Player { card, started: false, notes: [Note { hz: 0, frames: 0, volume: 0 }; NOTES],
         head: 0, len: 0, done: 0, phase: 0, tokens: [0; IN_FLIGHT], first: 0, flying: 0,
-        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT], hearing: false, asked: 0, heard: 0 }
+        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT], hearing: false, asked: 0, heard: 0, mic_usb: false }
 }
 
 fn open() -> Result<Player, &'static str> {
@@ -648,10 +733,76 @@ fn open_hda(view: m::RegionView) -> Result<Player, &'static str> {
     Ok(player_with(Card::Hda(h)))
 }
 
-pub fn present() -> bool { player().is_some() }
+// ── USB sound cards ───────────────────────────────────────────────────
+// A card SexUSB finds takes over playback, as headphones plugged in do; the card
+// Bell had waits and comes back when it is unplugged.
+static mut USB_REGION: Option<u64> = None;
+static mut USB_SEEN: u32 = 0;
+static mut PARKED: Option<(Card, bool)> = None;
+
+/// The card a USB card took over from, while it waits.
+fn parked() -> Option<&'static mut Card> {
+    unsafe { (*core::ptr::addr_of_mut!(PARKED)).as_mut().map(|(c, _)| c) }
+}
+
+fn usb_link() -> Option<sex_pdx::usb_audio::Shared> {
+    let base = unsafe { *core::ptr::addr_of!(USB_REGION) }.unwrap_or_else(|| {
+        let at = sex_pdx::memory_region_full_view(sex_pdx::usb_audio::SLOT, m::QUERY_VIEW | m::READ | m::WRITE).ok()
+            .filter(|v| v.length >= sex_pdx::usb_audio::BYTES && v.region_id == sex_pdx::usb_audio::REGION_ID)
+            .map_or(0, |v| v.virtual_address);
+        unsafe { *core::ptr::addr_of_mut!(USB_REGION) = Some(at) };
+        at
+    });
+    (base != 0).then(|| unsafe { sex_pdx::usb_audio::Shared::at(base as *mut u8) })
+}
+
+/// Follows a USB sound card coming and going. Cheap: two loads when nothing changed.
+fn usb_check() {
+    let Some(link) = usb_link() else { return };
+    let seen = unsafe { &mut *core::ptr::addr_of_mut!(USB_SEEN) };
+    let parked = unsafe { &mut *core::ptr::addr_of_mut!(PARKED) };
+    match link.card() {
+        Some(c) if c.generation != *seen => {
+            *seen = c.generation;
+            let card = Card::Usb { link, ends: [0; IN_FLIGHT], next: 0 };
+            match player() {
+                None => unsafe { *core::ptr::addr_of_mut!(PLAYER) = Some(player_with(card)) },
+                Some(p) => {
+                    // The old card's microphone stops before it waits; Bell starts the
+                    // right one again on its next turn.
+                    if p.hearing && !p.mic_usb { p.card.input_run(false); p.hearing = false; p.asked = 0; }
+                    let old = core::mem::replace(&mut p.card, card);
+                    if !matches!(old, Card::Usb { .. }) { *parked = Some((old, p.started)); }
+                    // Periods still with the old card play out there; counting starts again.
+                    p.forget_flying(); p.started = false;
+                }
+            }
+            sex_pdx::serial_record!("[bell.usb.card] vendor={:#06x} product={:#06x} uac={} generation={} parked={}",
+                c.vendor, c.product, c.class, c.generation, parked.is_some() as u8);
+        }
+        None if *seen != 0 && player().is_some_and(|p| matches!(p.card, Card::Usb { .. })) => {
+            let p = player().unwrap();
+            if p.hearing && !p.mic_usb { p.card.input_run(false); p.hearing = false; p.asked = 0; }
+            let back = parked.take();
+            sex_pdx::serial_record!("[bell.usb.gone] generation={} back={}", *seen, back.as_ref().map_or("none", |(c, _)| c.name()));
+            if let Some((card, started)) = back { p.card = card; p.started = started; }
+            p.forget_flying();
+            *seen = 0;
+        }
+        _ => {}
+    }
+}
+
+pub fn present() -> bool { usb_check(); player().is_some() }
+
+/// The machine is going to sleep or woke: the HDA codecs go to D3 and back.
+pub fn device_sleep(asleep: bool) -> u32 {
+    match player().map(|p| &mut p.card) { Some(Card::Hda(h)) => h.power(asleep), _ => 0 }
+}
 
 /// Queue a note: `hz` 0 is a rest. False when there's no card or the queue is full.
 pub fn tone(hz: u64, ms: u64, volume: u64) -> bool {
+    usb_check();
     let Some(p) = player() else { return false };
     if hz > 20_000 || ms == 0 || ms > MAX_MS || volume > 100 || p.len == NOTES { return false; }
     let frames = (RATE as u64 * ms / 1000).max(1) as u32;
@@ -670,11 +821,13 @@ pub fn busy() -> bool { player().is_some_and(|p| p.len > 0 || p.flying > 0 || p.
 /// A program row says its ring has sound: play it from where Bell last took.
 /// False when there's no card or the caller has no ring.
 pub fn stream(caller: u32) -> bool {
+    usb_check();
     let Some(p) = player() else { return false };
     let Some(k) = ring_of(p, caller) else { return false };
     let st = p.streams[k].as_mut().unwrap();
     if !st.active {
         st.active = true;
+        st.start = sex_pdx::get_ticks().max(1);
         played()[k] = caller;
         *last_played() = Some(k);
         sex_pdx::serial_record!("[bell.sound.stream.open] row={} caller={} written={} taken={}",
@@ -690,7 +843,7 @@ fn ring_of(p: &mut Player, caller: u32) -> Option<usize> {
     let k = ring::index_of(caller).filter(|k| *k < STREAMS)?;
     if p.streams[k].is_none() {
         match sex_pdx::sound_ring_bell(k) {
-            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false, pd: caller, frac: 0 }),
+            Ok(r) => p.streams[k] = Some(Stream { ring: r, active: false, pd: caller, frac: 0, start: 0 }),
             Err(e) => { sex_pdx::serial_record!("[bell.sound.stream.denied] row={} err={}", k, e); return None; }
         }
     }
@@ -742,28 +895,28 @@ pub fn retire(pd: u32) -> bool {
 }
 
 pub fn pump() {
+    usb_check();
     if let Some(p) = player() {
         let before = p.played;
         p.pump();
         if p.len == 0 && p.flying == 0 && p.played != before {
             sex_pdx::serial_record!("[bell.sound.drained] periods={}", p.played);
             let w = wakes();
-            sex_pdx::serial_record!("[bell.sound.wakes] irq={} periods={} waits={} interrupts={}",
-                p.card.irq() as u8, p.played - w.periods, w.waits, w.interrupts);
-            *w = Wakes { periods: p.played, waits: 0, interrupts: 0 };
+            sex_pdx::serial_record!("[bell.sound.wakes] irq={} periods={} waits={} interrupts={} doorbell_waits={}",
+                p.card.irq() as u8, p.played - w.periods, w.waits, w.interrupts, w.doorbell_waits);
+            *w = Wakes { periods: p.played, waits: 0, interrupts: 0, doorbell_waits: 0 };
         }
     }
 }
 
 /// How often Bell slept while sound played, since the last drain: the boot log
 /// shows interrupt-driven sound wakes about once a period, not once a tick.
-struct Wakes { periods: u64, waits: u64, interrupts: u64 }
-static mut WAKES: Wakes = Wakes { periods: 0, waits: 0, interrupts: 0 };
+struct Wakes { periods: u64, waits: u64, interrupts: u64, doorbell_waits: u64 }
+static mut WAKES: Wakes = Wakes { periods: 0, waits: 0, interrupts: 0, doorbell_waits: 0 };
 fn wakes() -> &'static mut Wakes { unsafe { &mut *core::ptr::addr_of_mut!(WAKES) } }
 
-/// While open streams may still hand Bell sound the card has room for, Bell looks
-/// at their rings this often (ms) even with interrupts: programs write without a
-/// message, and 4 ms adds little to the ~130 ms Bell keeps queued.
+/// While a program without the doorbell (`ring::DOORBELL`) may still hand Bell
+/// sound the card has room for, Bell looks at its ring this often (ms).
 const STREAM_POLL_TICKS: u64 = 4;
 
 /// How long Bell may sleep, in ticks, while sound plays. Call it right before the
@@ -780,9 +933,25 @@ pub fn wait_ticks() -> u64 {
     p.card.ack();
     w.waits += 1;
     pump();
-    let Some(p) = player() else { return 1 };
+    let (Some(p), w) = (player(), wakes()) else { return 1 };
     let more = p.streaming() && p.flying < IN_FLIGHT && p.card.room();
-    if more { STREAM_POLL_TICKS } else { sex_pdx::SELF_WAIT_MAX_TICKS }
+    if !more { return sex_pdx::SELF_WAIT_MAX_TICKS; }
+    // The card has room and streams are open: ask each program to ring when it
+    // writes. Set WAKE first, then look at WRITTEN once more; the program stores
+    // WRITTEN first, then reads WAKE, so a write in between is never missed.
+    let mut seen = [0u64; STREAMS];
+    let mut doorbells = true;
+    for (k, st) in p.streams.iter().enumerate() {
+        let Some(st) = st.as_ref().filter(|st| st.active && st.ring.load(ring::PAUSED) == 0) else { continue };
+        if st.ring.load(ring::DOORBELL) != 1 { doorbells = false; continue; }
+        seen[k] = st.ring.load(ring::WRITTEN);
+        st.ring.store(ring::WAKE, 1);
+    }
+    if !doorbells { return STREAM_POLL_TICKS; }
+    core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+    let moved = p.streams.iter().enumerate().any(|(k, st)| st.as_ref()
+        .is_some_and(|st| st.active && st.ring.load(ring::PAUSED) == 0 && st.ring.load(ring::WRITTEN) != seen[k]));
+    if moved { 1 } else { w.doorbell_waits += 1; sex_pdx::SELF_WAIT_MAX_TICKS }
 }
 
 /// Before Bell blocks for a message with nothing playing: the card stops

@@ -57,7 +57,7 @@ def harness(root):
 
 CASES = r'''
 fn binding(args: &[u8], picked: &[u8]) -> Binding {
-    let mut b = Binding { task: 1, root: [0; ROOT_MAX], len: 10, args: [0; w::ARGS_MAX],
+    let mut b = Binding { task: 1, root: [0; ROOT_MAX], len: 10, system: false, args: [0; w::ARGS_MAX],
         args_len: args.len(), picked: [0; PICKED_MAX], picked_len: picked.len() };
     b.root[..10].copy_from_slice(b"/data/demo");
     b.args[..args.len()].copy_from_slice(args); b.picked[..picked.len()].copy_from_slice(picked); b

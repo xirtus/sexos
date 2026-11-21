@@ -4825,6 +4825,8 @@ dependencies = [
  "serenade-core",
  "sex-app",
  "sex-pdx",
+ "sex-voice",
+ "sha2 0.10.9",
  "taffy",
  "weft",
 ]
@@ -4918,6 +4920,7 @@ name = "monitor"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-mesh",
  "sex-pdx",
 ]
 
@@ -5877,6 +5880,10 @@ name = "play"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-episodes",
+ "sex-fetch",
+ "sex-font",
+ "sex-kodi",
  "sex-media",
  "sex-pdx",
 ]
@@ -6453,6 +6460,15 @@ dependencies = [
  "once_cell",
  "smallvec",
  "yoke",
+]
+
+[[package]]
+name = "record"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-pdx",
 ]
 
 [[package]]
@@ -7212,6 +7228,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-gpu-amd"
+version = "0.1.0"
+dependencies = [
+ "sex-kms",
+]
+
+[[package]]
 name = "sex-gpu-intel"
 version = "0.1.0"
 dependencies = [
@@ -7266,6 +7289,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-idle"
+version = "0.1.0"
+
+[[package]]
 name = "sex-image"
 version = "0.1.0"
 dependencies = [
@@ -7291,6 +7318,7 @@ version = "0.1.0"
 name = "sex-js"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sex-app",
  "sex-fetch",
  "sex-gl",
@@ -7328,7 +7356,9 @@ dependencies = [
  "scopeguard",
  "sex-hotplug",
  "sex-hwdb",
+ "sex-idle",
  "sex-iommu",
+ "sex-pcipm",
  "sex-pdx",
  "sex-vmd",
  "spin",
@@ -7396,6 +7426,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-mesh"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+]
+
+[[package]]
 name = "sex-multipass"
 version = "0.1.0"
 dependencies = [
@@ -7435,6 +7472,10 @@ dependencies = [
 
 [[package]]
 name = "sex-organize"
+version = "0.1.0"
+
+[[package]]
+name = "sex-pcipm"
 version = "0.1.0"
 
 [[package]]
@@ -7544,6 +7585,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-thunderbolt"
+version = "0.1.0"
+
+[[package]]
 name = "sex-time"
 version = "0.1.0"
 dependencies = [
@@ -7602,6 +7647,10 @@ version = "0.1.0"
 
 [[package]]
 name = "sex-vmd"
+version = "0.1.0"
+
+[[package]]
+name = "sex-voice"
 version = "0.1.0"
 
 [[package]]
@@ -7692,12 +7741,14 @@ name = "sexdisplay"
 version = "0.1.0"
 dependencies = [
  "sex-font",
+ "sex-gpu-amd",
  "sex-gpu-intel",
  "sex-graphics",
  "sex-icons",
  "sex-pdx",
  "sex-rt",
  "sex-shape",
+ "sex-theme",
  "sex-time",
  "silkbar-model",
 ]
@@ -7734,6 +7785,16 @@ dependencies = [
 [[package]]
 name = "sexfs"
 version = "0.1.0"
+
+[[package]]
+name = "sexgpu-nv"
+version = "0.1.0"
+dependencies = [
+ "linked_list_allocator",
+ "sex-gpu-nv",
+ "sex-pdx",
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "sexinput"
@@ -7803,6 +7864,7 @@ version = "0.1.0"
 dependencies = [
  "sex-pdx",
  "sex-rt",
+ "sex-thunderbolt",
 ]
 
 [[package]]
@@ -7927,6 +7989,7 @@ dependencies = [
  "sex-pdx",
  "sex-rt",
  "silkbar-model",
+ "voyeur",
 ]
 
 [[package]]
@@ -8280,11 +8343,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "steamy"
+version = "0.1.0"
+dependencies = [
+ "sex-config",
+ "sex-std",
+]
+
+[[package]]
 name = "store"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
+ "sex-image",
  "sex-pdx",
+ "sex-pkg",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -9667,10 +9742,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "voice"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "sex-voice",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
+
+[[package]]
+name = "voyeur"
+version = "0.1.0"
 
 [[package]]
 name = "vst3"
@@ -9980,6 +10069,7 @@ dependencies = [
 name = "web"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sex-app",
  "sex-extensions",
  "sex-fetch",

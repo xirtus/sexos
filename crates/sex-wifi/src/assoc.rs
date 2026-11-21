@@ -24,7 +24,8 @@ use crate::devices::Family;
 use crate::hcmd::{self as h, Packet};
 use crate::ieee80211::{self as w, Bss, Security};
 use crate::init::Failure;
-use crate::join::{self, Target, ACTION_MODIFY, ADD_STA_BYTES, MAC_CONTEXT_BYTES};
+use crate::ax;
+use crate::join::{self, Target, Versions, ACTION_MODIFY, ADD_STA_BYTES, MAC_CONTEXT_BYTES, PHY_CONTEXT_BYTES};
 use crate::scan::parse_mpdu;
 use crate::tx::{self, TxQueue};
 use crate::sae::{self, Sae};
@@ -35,7 +36,7 @@ const COMMAND_US: u64 = 1_000_000;
 const ADD_STA_SUCCESS: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step { SaeCommit, SaeConfirm, Auth, Assoc, Station, Mac, Associated, Refused(Refusal), Failed(Failure) }
+pub enum Step { SaeCommit, SaeConfirm, Auth, Assoc, Phy, Station, He, Mac, Associated, Refused(Refusal), Failed(Failure) }
 
 /// Why the AP turned us away, beyond the command failures `init::Failure` names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +59,8 @@ pub const STATUS_ANTI_CLOGGING_TOKEN: u16 = 76;
 pub const STATUS_SAE_HASH_TO_ELEMENT: u16 = 126;
 pub const AUTH_SAE: u16 = 3;
 const TOKEN_BYTES: usize = 64;
+/// Room for one authentication or association frame.
+pub const FRAME_BYTES: usize = 512;
 
 /// Our side of SAE while it runs.
 struct SaeRun { sae: Sae, h2e: bool, token: [u8; TOKEN_BYTES], token_len: usize }
@@ -84,6 +87,9 @@ pub struct Assoc {
     /// 4-way handshake's message 1 often follows the association response at once.
     pub early: Option<([u8; crate::eapol::MAX_FRAME], usize)>,
     sae: Option<SaeRun>,
+    /// The join's firmware facts and receive antennas, to widen the PHY context
+    /// after association (X1). Without them the channel stays 20 MHz.
+    phy: Option<(Versions, u8)>,
 }
 
 impl Assoc {
@@ -94,8 +100,13 @@ impl Assoc {
             Security::Wpa3Personal => Step::Failed(Failure::Unsupported("wpa3_sae")),
             Security::Unsupported => Step::Failed(Failure::Unsupported("security")),
         };
-        Self { step, target, bss, me, family, tx: TxQueue::new(family), aid: 0, attempts: 0, seq: 0, since: now, sent: false, status: 0, early: None, sae: None }
+        Self { step, target, bss, me, family, tx: TxQueue::new(family), aid: 0, attempts: 0, seq: 0, since: now, sent: false, status: 0, early: None, sae: None, phy: None }
     }
+    /// Lets the association widen the channel to what the AP and we agree on: the
+    /// join's `versions` and receive antennas build the PHY context again.
+    pub fn with_phy(mut self, versions: Versions, rx_antennas: u8) -> Self { self.phy = Some((versions, rx_antennas)); self }
+    /// What was agreed (legacy until the AP's answer).
+    pub fn mode(&self) -> ax::Mode { self.target.mode() }
     /// After a finished join to a WPA3 network: SAE with `sae`, built on the
     /// password element for this AP and us (hash-to-element when `h2e`).
     pub fn with_sae(bss: Bss, target: Target, me: [u8; 6], family: Family, now: u64, sae: Sae, h2e: bool) -> Self {
@@ -107,7 +118,7 @@ impl Assoc {
     }
     /// The PMK SAE agreed on, once confirmed.
     pub fn sae_pmk(&self) -> Option<[u8; 32]> {
-        self.sae.as_ref().filter(|_| matches!(self.step, Step::Assoc | Step::Station | Step::Mac | Step::Associated)).map(|s| s.sae.pmk)
+        self.sae.as_ref().filter(|_| matches!(self.step, Step::Assoc | Step::Phy | Step::Station | Step::He | Step::Mac | Step::Associated)).map(|s| s.sae.pmk)
     }
     /// Our address, as the frames carry it.
     pub fn me(&self) -> [u8; 6] { self.me }
@@ -116,7 +127,7 @@ impl Assoc {
     fn refuse(&mut self, r: Refusal) { self.step = Step::Refused(r); }
 
     /// The frame for `step` into `out`; returns (length, name).
-    pub fn frame(&mut self, step: Step, out: &mut [u8; 256]) -> (usize, &'static str) {
+    pub fn frame(&mut self, step: Step, out: &mut [u8; FRAME_BYTES]) -> (usize, &'static str) {
         self.seq = (self.seq + 1) & 0xfff;
         match step {
             Step::Auth => (w::auth(out, &self.bss.bssid, &self.me, self.seq, w::AUTH_OPEN, 1, 0, &[]), "auth"),
@@ -148,7 +159,9 @@ impl Assoc {
                 let n = if self.bss.security == Security::Open { 0 } else { w::own_rsn(self.sae.is_some(), &mut rsn) };
                 let mut bss = self.bss;
                 bss.h2e &= self.sae.as_ref().is_some_and(|s| s.h2e); // RSNXE only with SAE
-                (w::assoc_request(out, &bss, &self.me, self.seq, &rsn[..n]), "assoc")
+                let mut caps = [0u8; 128];
+                let (c, all) = ax::own_elements(&self.target.peer, &self.target.ours, self.target.two_ghz(), &mut caps);
+                (w::assoc_request(out, &bss, &self.me, self.seq, &rsn[..n], &caps[..c], &caps[c..all]), "assoc")
             }
         }
     }
@@ -208,7 +221,7 @@ impl Assoc {
         if let Some(Heard::Gone(reason)) = heard { self.refuse(Refusal::Disconnected(reason)); return false; }
         match self.step {
             Step::SaeCommit | Step::SaeConfirm | Step::Auth | Step::Assoc => self.frames(b, r, dma, heard, &auth_body[..auth_len], tx_status, now),
-            Step::Station | Step::Mac => self.command(b, cmdq, r, dma, now),
+            Step::Phy | Step::Station | Step::He | Step::Mac => self.command(b, cmdq, r, dma, now),
             _ => {}
         }
         !self.done()
@@ -252,7 +265,13 @@ impl Assoc {
             }
             (Step::Assoc, Some(Heard::Assoc { status, aid })) => {
                 if status != w::STATUS_SUCCESS { self.refuse(Refusal::Status { frame: name, status }); }
-                else { self.aid = aid; self.go(Step::Station, now); }
+                else {
+                    self.aid = aid;
+                    // A channel we cannot widen stays 20 MHz.
+                    if self.phy.is_none() { self.target.ours.max_width = ax::Width::W20; }
+                    let next = if self.mode().width != ax::Width::W20 { Step::Phy } else { Step::Station };
+                    self.go(next, now);
+                }
                 return;
             }
             _ => {}
@@ -267,7 +286,7 @@ impl Assoc {
             });
             return;
         }
-        let mut out = [0u8; 256];
+        let mut out = [0u8; FRAME_BYTES];
         let (n, _) = self.frame(step, &mut out);
         let rate = tx::management_rate(&self.target);
         match self.tx.send(dma, r, &b.layout, b.base, &out[..n], w::MGMT_HEADER, tx::FLAG_CMD_RATE | tx::FLAG_ENCRYPT_DIS, rate) {
@@ -280,14 +299,33 @@ impl Assoc {
         let step = self.step;
         if !self.sent {
             let mut p = [0u8; MAC_CONTEXT_BYTES];
-            let (group, opcode, len) = if step == Step::Station {
-                let mut c = [0u8; ADD_STA_BYTES];
-                join::add_station(&mut c, &self.target.bssid, true);
-                p[..ADD_STA_BYTES].copy_from_slice(&c);
-                (h::LONG_GROUP, h::ADD_STA, ADD_STA_BYTES)
-            } else {
-                join::mac_context(&mut p, ACTION_MODIFY, &self.me, &self.target, Some(self.aid));
-                (h::LONG_GROUP, h::MAC_CONTEXT_CMD, MAC_CONTEXT_BYTES)
+            let mode = self.mode();
+            let (group, opcode, len) = match step {
+                Step::Phy => {
+                    // `iwx_phy_ctxt_update`: the same channel, now as wide as agreed.
+                    let (v, rx) = self.phy.unwrap();
+                    let mut c = [0u8; PHY_CONTEXT_BYTES];
+                    let rx_chain = (v.rlc != 2).then_some(join::rx_chain_info(rx));
+                    let n = join::phy_context_wide(&mut c, ACTION_MODIFY, self.target.channel, mode.width, mode.ctrl_pos, v.uhb, v.cdb, rx_chain);
+                    p[..n].copy_from_slice(&c[..n]);
+                    (h::LONG_GROUP, h::PHY_CONTEXT_CMD, n)
+                }
+                Step::Station => {
+                    let mut c = [0u8; ADD_STA_BYTES];
+                    join::add_station_flags(&mut c, &self.target.bssid, true, ax::station_flags(&mode, &self.target.peer, &self.target.ours));
+                    p[..ADD_STA_BYTES].copy_from_slice(&c);
+                    (h::LONG_GROUP, h::ADD_STA, ADD_STA_BYTES)
+                }
+                Step::He => {
+                    let mut c = [0u8; ax::HE_CTXT_V3_BYTES];
+                    let n = ax::he_context(&mut c, join::STATION_ID, &self.target.peer, &self.target.ours);
+                    p[..n].copy_from_slice(&c[..n]);
+                    (h::DATA_PATH_GROUP, ax::STA_HE_CTXT_CMD, n)
+                }
+                _ => {
+                    join::mac_context(&mut p, ACTION_MODIFY, &self.me, &self.target, Some(self.aid));
+                    (h::LONG_GROUP, h::MAC_CONTEXT_CMD, MAC_CONTEXT_BYTES)
+                }
             };
             match cmdq.send(dma, r, &b.layout, b.base, group, opcode, 0, &p[..len]) {
                 Ok(_) => { self.sent = true; self.since = now; }
@@ -305,6 +343,10 @@ impl Assoc {
                     self.step = Step::Failed(Failure::BadAnswer { group: a.sent.group, opcode: a.sent.opcode, len: a.len });
                     return;
                 }
+                self.go(if self.mode().he { Step::He } else { Step::Mac }, now);
+            } else if step == Step::Phy {
+                self.go(Step::Station, now);
+            } else if step == Step::He {
                 self.go(Step::Mac, now);
             } else {
                 self.go(Step::Associated, now);

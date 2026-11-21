@@ -5,10 +5,14 @@
 //! The guest runs inside this program's confinement and narrows it further: its files
 //! are `guests/NAME/` in this program's folder, and it reaches the network only when
 //! this program was started with `run +net`. See `crates/sex-wasm`.
+//!
+//! `wasm layout @FILE` is a window layout plugin's run, which the Shell starts for
+//! `silk layout WS plugin:FILE` and which opens no window (`layout_mode.rs`).
 #![no_std]
 #![no_main]
 
 extern crate alloc;
+mod layout_mode;
 use alloc::vec;
 use alloc::vec::Vec;
 use sex_app::{files, Event, Window};
@@ -39,10 +43,13 @@ fn stem(file: &[u8]) -> &[u8] {
 
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
+    // The arguments first, before any window: a layout plugin's run has none.
+    let mut raw = [0u8; sex_pdx::fs::ARGS_MAX];
+    let n = files::direct::args(&mut raw);
+    let given: Vec<u8> = raw[..n].to_vec();
+    if given.split(|b| *b == b' ').find(|w| !w.is_empty()) == Some(sex_pdx::wasm_layout::MODE) { layout_mode::serve(&given) }
     let mut window = Window::open();
     window.title(b"Wasm");
-    let mut raw = [0u8; sex_pdx::fs::ARGS_MAX];
-    let given: Vec<u8> = files::args(&mut window, &mut raw).to_vec();
     let mut words = given.split(|b| *b == b' ').filter(|w| !w.is_empty());
     let (name, module): (&[u8], Vec<u8>) = match words.next() {
         None => (b"hello", HELLO.to_vec()),

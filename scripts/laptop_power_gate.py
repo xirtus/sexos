@@ -27,12 +27,21 @@ def ssdt(out,thermal):
  subprocess.run(['iasl',*(['-DTHERMAL_TRIP']if thermal else[]),'-p',str(aml.with_suffix('')),str(ROOT/'tests/acpi/laptop_gate_ssdt.asl')],check=True,stdout=subprocess.DEVNULL)
  return aml
 
+def stick(out):
+ f=out/'laptop-stick.img'
+ with f.open('wb')as h:h.truncate(4<<20)
+ return f
+
 def launch(iso,disk,out,tag,thermal):
  serial=out/f'{tag}-serial.log';debug=out/f'{tag}-debugcon.log';sock=Path('/tmp')/f'sex-laptop-{os.getpid()}-{tag}.sock'
  for f in(serial,debug):f.unlink(missing_ok=True)
  cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-smp',os.environ.get('SEXOS_GATE_CORES','1'),'-m','512M','-vga','none','-device','VGA,xres=1280,yres=800',
       '-acpitable',f'file={ssdt(out,thermal)}','-chardev',f'file,id=sxdbg,path={debug}','-device','isa-debugcon,iobase=0x402,chardev=sxdbg',
-      '-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),'-drive',f'if=none,id=nvm,file={disk},format=raw','-device','nvme,serial=sexos01,drive=nvm',
+      '-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),
+      # A USB stick: its port goes to U3 while the machine sleeps (the tablet's stays up).
+      '-drive',f'if=none,id=stick,file={stick(out)},format=raw','-device','usb-storage,bus=xhci.0,drive=stick','-drive',f'if=none,id=nvm,file={disk},format=raw',
+      # The SSD sits behind a PCIe root port, as on a laptop: a real link for ASPM.
+      '-device','pcie-root-port,id=rp1,chassis=1,slot=1','-device','nvme,serial=sexos01,drive=nvm,bus=rp1',
       '-serial',f'file:{serial}','-qmp',f'unix:{sock},server=on,wait=off','-display','none','-nic','none','-no-reboot']
  proc=subprocess.Popen(cmd,stdout=(out/f'{tag}-qemu.log').open('w'),stderr=subprocess.STDOUT)
  def text():return serial.read_text(errors='replace').replace('\\_SB_.','\\_SB.')if serial.exists()else''
@@ -89,16 +98,33 @@ def main():
   g['wait'](r'\[sexacpi\.notify\] path=\\_SB\.PCI0\.GFX0\.DD1F value=0x86 kind=backlight')
   g['wait'](r'\[sexacpi\.backlight\.set\] level=60 by=key bcm=1 bqc=60')
   g['wait'](r'\[display\.panel\.battery\] text=50%  2:00 left width=\d+')
+  # BOOT turned on the link power states both ends offer (QEMU's ports offer L0s).
+  aspm=g['wait'](r'\[pci\.aspm\] link=00:[0-9a-f]{2}\.0->01:00\.0 id=1b36:0010 support=l0s before=none after=l0s l12_threshold_us=0 skip=none lnkctl=(\d+)/(\d+)')
+  # Read back for the record: QEMU may keep its link-control bits read-only.
+  result['aspm_lnkctl']=f'{aspm[1]}/{aspm[2]}'
+  g['wait'](r'\[pci\.aspm\.summary\] links=[1-9]\d* changed=[1-9]\d* ltr_enabled=\d+ ltr_already=\d+ ecam_pages=[1-9]\d* fadt_no_aspm=0')
   desktop(g)
   # The lid closes and opens again (the firmware's _LID, read by the service).
   closed=g['wait'](r'\[shell\.lid\] open=0 ',0,180).end()
   # Closing the lid suspends to idle: firmware's LPS0 screen-off and entry, panel dark.
   g['wait'](r'\[shell\.sleep\] enter=1 by=lid ok=1',closed,30)
   g['wait'](r'\[acpi\.sleep\] enter=1 firmware_told=1',closed,30)
+  # Idle entries per state are counted (QEMU has no _CST, so all are HLT here).
+  usage=g['wait'](r'\[acpi\.idle\.usage\] states=(\d+) entries=\[([1-9]\d*)',closed,30)
+  result['idle_usage']=dict(states=int(usage[1]),hlt=int(usage[2]))
   g['wait'](r'\[sexacpi\.sleep\] enter=1 lps0=\\_SB\.PEPD ran=intel:3 intel:5 panel=10',closed,30)
+  # Every driver holding a device hears it; the disk flushes before the machine sleeps.
+  g['wait'](r'\[pci\.power\.sleep\] asleep=1 drivers_told=[2-9]',closed,30)
+  g['wait'](r'\[sexdrive\.sleep\] asleep=1 flush=0x0',closed,30)
+  g['wait'](r'\[sexusb\.suspend\] port=\d+ slot=\d+ id=46f4:0001 storage=1 flushed=1 ok=1',closed,30)
+  g['wait'](r'\[sexusb\.sleep\] asleep=1 devices=\d+ ports=1',closed,30)
   opened=g['wait'](r'\[shell\.lid\] open=1 ',closed,120).end()
   g['wait'](r'\[shell\.sleep\] enter=0 by=lid ok=1',opened,30)
   g['wait'](r'\[sexacpi\.sleep\] enter=0 lps0=\\_SB\.PEPD ran=intel:6 intel:4 panel=60',opened,30)
+  g['wait'](r'\[pci\.power\.sleep\] asleep=0 drivers_told=[2-9]',opened,30)
+  g['wait'](r'\[sexdrive\.sleep\] asleep=0 ',opened,30)
+  g['wait'](r'\[sexusb\.resume\] port=\d+ ok=1',opened,30)
+  g['wait'](r'\[sexusb\.sleep\] asleep=0 devices=\d+ ports=1',opened,30)
   if 'dSWD' not in g['firmware']().replace('B','').replace('P',''):raise RuntimeError(f"LPS0 order: {g['firmware']()!r}")
   def key(code,pattern):s=len(g['text']());g['q'].key(code);return g['wait'](pattern,s,30)
   # Launcher: Power Saver, then Brightness Down.
@@ -123,7 +149,7 @@ def main():
   code=g['ended']();result['dialog_off']=code
   if code!=0:raise RuntimeError(f'QEMU exit {code} after S5')
  except Exception:
-  print('\n'.join(l for l in g['text']().splitlines() if re.search(r'\[(sexacpi|sexinput\.touchpad|boot\.touchpad|acpi|shell\.(lid|power|laptop|sleep)|display\.panel\.battery)',l)),file=sys.stderr);raise
+  print('\n'.join(l for l in g['text']().splitlines() if re.search(r'\[(sexacpi|sexinput\.touchpad|boot\.touchpad|acpi|pci\.(aspm|power)|sex(drive|usb)\.(sleep|suspend|resume)|shell\.(lid|power|laptop|sleep)|display\.panel\.battery)',l)),file=sys.stderr);raise
  finally:g['stop']()
  # Boot 2: a thermal zone past its critical trip point shuts the machine down.
  g=launch(a.iso,disk,a.out,'thermal',thermal=True)

@@ -25,7 +25,9 @@ pub(crate) fn try_backing(length: u64) -> Option<u64> {
         .expect("BOOT_REGION_FRAME_OWNERSHIP_COLLISION");
     let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_REGION_NO_HHDM").offset;
     // Zero the entire reservation, including buddy rounding, before publication.
+    let t = crate::boot_cost::now();
     unsafe { core::ptr::write_bytes((physical + hhdm) as *mut u8, 0, (pages * 4096) as usize); }
+    crate::boot_cost::add(crate::boot_cost::Bucket::Zero, t, pages * 4096);
     Some(physical)
 }
 
@@ -325,6 +327,14 @@ pub fn init_screen_capture(display:u32){
     if DOMAIN_REGISTRY.get(c::CLIENT).is_some(){paired_at(display,c::CLIENT,c::SLOT,c::SLOT,c::REGION_ID,c::BYTES as u64,false);}
 }
 
+/// Pinned recorder profile only: Display writes, reserved private row reads.
+pub fn init_recording_capture(display:u32){
+    use sex_pdx::desktop_recording_capture as c;
+    require_boot();
+    assert!(sex_pdx::desktop_recording::ENABLED,"BOOT_RECORD_PROFILE");
+    paired_at(display,sex_pdx::desktop_recording::TARGET,c::SLOT,c::SLOT,c::REGION_ID,c::BYTES as u64,false);
+}
+
 /// Immutable Display-only frame storage, reserved at geometry-known genesis.
 /// One buddy reservation contains two page-aligned, disjoint frame spans.
 /// This is PD-held memory authority; tasks within the PD share its access.
@@ -462,6 +472,11 @@ pub fn init_pixel_regions(display: u32) {
 
 /// One sound ring per program row: the program writes sound, Bell mixes and plays it
 /// and writes back how far it got.
+/// USB sound cards: Bell's mix goes to SexUSB through this region (sex_pdx::usb_audio).
+pub fn init_usb_audio(bell: u32, usb: u32) {
+    paired(bell, usb, sex_pdx::usb_audio::SLOT, sex_pdx::usb_audio::REGION_ID, sex_pdx::usb_audio::BYTES, true);
+}
+
 pub fn init_sound_rings(bell: u32) {
     use sex_pdx::sound_ring::{BYTES, CLIENT_SLOT, bell_slot, region_id};
     require_boot();
@@ -668,19 +683,19 @@ pub fn nic_lease(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)-
     let(bar,physical,actual_length)=crate::nic_boot::bars(dev.vendor_id,dev.device_id).iter()
         .find_map(|&bar|dev.probe_boot_bar_any(bar).map(|(p,l)|(bar,p,l)))?;
     let end=crate::nic_boot::registers_end(dev.vendor_id,dev.device_id);
-    bar_lease(pd,dev,slot,bar,physical,actual_length,end)
+    bar_lease(pd,dev,slot,bar,physical,actual_length,end,64*1024)
 }
 
 /// One BAR as a page-granular view. A BAR of a page or more is leased from its
 /// start (at most 64 KiB). A smaller BAR is leased as its whole page only when no
 /// other BAR anywhere decodes in that page; the window says where it sits.
-fn bar_lease(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,bar:u8,physical:u64,actual_length:u64,end:u64)
+fn bar_lease(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,bar:u8,physical:u64,actual_length:u64,end:u64,max:u64)
     ->Option<(RegionGrant,(u32,u32))>
 {
     require_boot();
     if actual_length<end{return None}
     if actual_length>=4096 {
-        let length=actual_length.min(64*1024);
+        let length=actual_length.min(max);
         return Some((pci_view(pd,slot,physical,actual_length,length),(0,length as u32)));
     }
     let page=physical&!0xfff;
@@ -742,13 +757,44 @@ pub fn virtio_dma(pd_id:u32){
     dma(pd_id,sex_pdx::virtio::DMA_REGION_ID,sex_pdx::virtio::DMA_BYTES);
 }
 
-/// The display-register prefix of an Intel GPU's BAR0 (GTTMMADR), if present.
-pub fn intel_display_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)->Option<RegionGrant>{
+/// The display-register prefix of a GPU's register BAR (Intel BAR0's GTTMMADR, AMD
+/// BAR5), if present and at least that long.
+pub fn display_register_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,bar:u8,length:u64)->Option<RegionGrant>{
     require_boot();
-    let(physical,actual_length)=dev.probe_boot_bar_any(0)?;
-    let length=sex_pdx::display_frames::INTEL_REGISTERS;
+    let(physical,actual_length)=dev.probe_boot_bar_any(bar)?;
     if actual_length<length{return None}
     Some(pci_view(pd,slot,physical,actual_length,length))
+}
+
+/// Scanout buffers for an Intel display lease (workstream L3): two frames and a
+/// cursor image, DMA-addressable, which the IOMMU then maps for the GPU like any
+/// pool. The GGTT is the GPU's own page table; BOOT fills only the entries of
+/// the fixed window with these pages, so Display flips planes between buffers
+/// it owns but can never point the GPU at other memory.
+pub fn intel_scanout(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice){
+    use sex_pdx::display_frames::{IntelScanout,INTEL_SCANOUT_SLOT,INTEL_SCANOUT_REGION_ID,INTEL_GGTT_WINDOW};
+    require_boot();
+    let skip=|why:&str|{crate::serial_println!("[boot.display.intel_scanout] pd={} granted=0 reason={}",pd.id,why);};
+    let Some(fb)=crate::FB_REQUEST.response().and_then(|r|r.framebuffers().iter().next()) else{return skip("no_framebuffer")};
+    let Some(layout)=IntelScanout::new(fb.width,fb.height) else{return skip("geometry")};
+    let Some((bar,bar_len))=dev.probe_boot_bar_any(0) else{return skip("bar0")};
+    // GGC bits 7:6: GGTT page-table size, 2/4/8 MiB of 8-byte entries.
+    let ggms=(dev.read_u32(0x50)>>6)&3;
+    let ggtt_bytes=if ggms==0{0}else{((1u64<<ggms)<<20)/8*4096};
+    if bar_len<16<<20||INTEL_GGTT_WINDOW+layout.total>ggtt_bytes{return skip("ggtt_size")}
+    let Some(physical)=try_backing(layout.total) else{return skip("no_frames")};
+    let first=INTEL_GGTT_WINDOW/4096;let pages=layout.total/4096;
+    let pte_at=bar+(8<<20)+first*8;let pte_page=pte_at&!4095;
+    let ptes=kernel_mmio(pte_page,(pte_at+pages*8-pte_page).next_multiple_of(4096))+(pte_at-pte_page);
+    for i in 0..pages{unsafe{core::ptr::write_volatile((ptes+i*8) as *mut u64,((physical+i*4096)&0x7f_ffff_f000)|1);}}
+    // GFX_FLSH_CNTL: drop GGTT translations the GPU may have cached.
+    let flush=kernel_mmio(bar+0x101000,4096)+8;
+    unsafe{core::ptr::write_volatile(flush as *mut u32,1);let _=core::ptr::read_volatile(flush as *const u32);}
+    let virtual_base=alias(pd,physical,layout.total,true,false);
+    grant(pd,INTEL_SCANOUT_SLOT,RegionGrant{region_id:INTEL_SCANOUT_REGION_ID,virtual_base,length:layout.total,
+        rights:QUERY_VIEW|READ|WRITE|DMA_ADDRESS,dma_base:Some(physical),peer_pd:None});
+    crate::serial_println!("[boot.display.intel_scanout] pd={} granted=1 slot={} region={:#x} bytes={} width={} height={} stride={} ggtt={:#x} ggtt_bytes={:#x} entries={} runtime_mint=0",
+        pd.id,INTEL_SCANOUT_SLOT,INTEL_SCANOUT_REGION_ID,layout.total,fb.width,fb.height,layout.stride,INTEL_GGTT_WINDOW,ggtt_bytes,pages);
 }
 
 /// The register BAR of a controller leased by class (HD Audio, AHCI), if its
@@ -756,7 +802,7 @@ pub fn intel_display_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,sl
 pub fn class_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,kind:crate::device_lease::Kind)->Option<(RegionGrant,(u32,u32))>{
     require_boot();
     let(physical,actual_length)=dev.probe_boot_bar_any(kind.bar())?;
-    bar_lease(pd,dev,slot,kind.bar(),physical,actual_length,kind.registers_end())
+    bar_lease(pd,dev,slot,kind.bar(),physical,actual_length,kind.registers_end(),kind.view_max())
 }
 
 /// Memory-space and bus-master bits for a class-leased controller, like the NIC's.
@@ -766,7 +812,7 @@ pub fn class_command(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u
     require_boot();
     assert_eq!(view.region_id,0x10000 + pd.id * 1024 + slot as u32,"BOOT_CLASS_COMMAND_VIEW_ID");
     assert!(sex_pdx::memory_region::resolve_info(Some(&view)).is_ok()
-        && view.length >= kind.registers_end() && view.length <= 65536
+        && view.length >= kind.registers_end() && view.length <= kind.view_max()
         && view.rights == QUERY_VIEW|READ|WRITE && view.dma_base.is_none() && view.peer_pd.is_none(), "BOOT_CLASS_COMMAND_VIEW");
     let g=sex_pdx::pci_command::Grant {subject:pd.id,bus:dev.bus,device:dev.dev,function:dev.func,
         vendor_id:dev.vendor_id,device_id:dev.device_id,
@@ -786,27 +832,36 @@ pub fn class_dma(pd_id:u32,kind:crate::device_lease::Kind){
     let (region,bytes)=kind.dma();
     dma_at(pd_id,kind.dma_slot(),region,bytes);
     if kind==crate::device_lease::Kind::Wifi { firmware_pack(pd_id, sex_pdx::pci_command::SLOT_WIFI_FIRMWARE, sex_pdx::pci_command::WIFI_FIRMWARE_REGION_ID); }
+    if kind==crate::device_lease::Kind::NvidiaGpu {
+        use sex_pdx::nvidia_gpu as n;
+        module_region(pd_id, n::SLOT_FIRMWARE, n::FIRMWARE_REGION_ID, n::FIRMWARE_MODULE);
+    }
 }
 
 /// The firmware pack (a boot module) as a read-only region of a driver: the Wi-Fi
 /// service that holds the chip, and Cufflinks for the Bluetooth half. The kernel never
 /// looks inside; the driver checks each file.
 fn firmware_pack(pd_id:u32, slot:u64, region_id:u32){
-    use sex_pdx::pci_command as w;
+    module_region(pd_id, slot, region_id, sex_pdx::pci_command::WIFI_FIRMWARE_MODULE)
+}
+
+/// A boot module as a read-only region of one driver (Wi-Fi and Bluetooth firmware,
+/// NVIDIA's GSP firmware). The kernel never looks inside; the driver checks each file.
+fn module_region(pd_id:u32, slot:u64, region_id:u32, name:&str){
     require_boot();
-    let Some(module) = crate::MODULE_REQUEST.response().and_then(|m| m.modules().iter().find(|m| m.path().ends_with(w::WIFI_FIRMWARE_MODULE))) else {
-        crate::serial_println!("[boot.wifi.firmware.absent] pd={}", pd_id); return
+    let Some(module) = crate::MODULE_REQUEST.response().and_then(|m| m.modules().iter().find(|m| m.path().ends_with(name))) else {
+        crate::serial_println!("[boot.firmware.absent] pd={} module={}", pd_id, name); return
     };
-    let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_WIFI_FIRMWARE_NO_HHDM").offset;
+    let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_FIRMWARE_NO_HHDM").offset;
     let data = module.data();
     let virt = data.as_ptr() as u64;
     let length = (data.len() as u64).next_multiple_of(4096);
     if virt % 4096 != 0 || length == 0 { return; }
-    let pd = DOMAIN_REGISTRY.get(pd_id).expect("BOOT_WIFI_FIRMWARE_PD");
+    let pd = DOMAIN_REGISTRY.get(pd_id).expect("BOOT_FIRMWARE_PD");
     let virtual_base = alias(pd, virt - hhdm, length, false, false);
     grant(pd, slot, RegionGrant { region_id, virtual_base, length,
         rights: QUERY_VIEW | READ, dma_base: None, peer_pd: None });
-    crate::serial_println!("[boot.wifi.firmware.region] pd={} bytes={}", pd_id, data.len());
+    crate::serial_println!("[boot.firmware.region] pd={} bytes={} module={}", pd_id, data.len(), name);
 }
 
 /// Bluetooth: Cufflinks (the host stack) and SexUSB (the controller's USB transport)

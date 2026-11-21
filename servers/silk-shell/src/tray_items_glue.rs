@@ -142,6 +142,13 @@ pub unsafe fn busy() -> bool {
     STUCK_SINCE.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) < 2_000)
 }
 
+/// How long the idle Shell may sleep while items or cards are up: an ended
+/// program's item goes, and a card times out, only from `poll`.
+pub unsafe fn wake() -> Option<u64> {
+    if tray().items().next().is_none() && tray().queued() == 0 { return None; }
+    Some((LAST_LOOK + 250).saturating_sub(sex_pdx::get_ticks()).clamp(1, 250))
+}
+
 /// Main loop: cards time out, ended programs' items go, the pointer
 /// highlights menu rows and shows tooltips, and waiting sends go out.
 pub unsafe fn poll() {

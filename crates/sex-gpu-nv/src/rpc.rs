@@ -5,7 +5,7 @@ use crate::{wr16, wr32, wr64, Error};
 
 pub const FN_GSP_SET_SYSTEM_INFO: u32 = 72;
 pub const FN_SET_REGISTRY: u32 = 73;
-pub const FN_CONTINUATION_RECORD: u32 = 0;
+pub const FN_CONTINUATION_RECORD: u32 = 71;
 
 pub const EV_GSP_INIT_DONE: u32 = 0x1001;
 pub const EV_GSP_RUN_CPU_SEQUENCER: u32 = 0x1002;

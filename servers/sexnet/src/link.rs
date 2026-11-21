@@ -54,6 +54,8 @@ impl<H:ethernet::Hardware> Link<H>{
     pub fn mac(&self)->[u8;6]{match self{Link::Pci(d)=>d.mac,Link::Usb(u)=>u.mac}}
     pub fn dropped(&self)->u64{match self{Link::Pci(d)=>d.dropped,Link::Usb(u)=>u.dropped}}
     pub fn timing_verified(&self)->bool{match self{Link::Pci(d)=>d.timing_verified,Link::Usb(_)=>true}}
+    /// The PCI card this service drives itself, if that is the link.
+    pub fn pci_mut(&mut self)->Option<&mut ethernet::Driver<H>>{match self{Link::Pci(d)=>Some(d),Link::Usb(_)=>None}}
     pub fn advance_with_receive(&mut self,now:u64,receive:bool)->Option<Event>{
         match self{Link::Pci(d)=>d.advance_with_receive(now,receive),Link::Usb(u)=>u.advance(receive)}
     }

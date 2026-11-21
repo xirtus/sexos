@@ -12,6 +12,11 @@ pub const GENERATION: u8 = 3;
 /// key = the last key seen (0 to start), arg1 = generation the watcher last saw.
 /// Reply: the next changed key and its value, or status `DONE`.
 pub const NEXT: u8 = 4;
+/// Shell only. key = a program row's domain. Reply: key the same, value the place in
+/// `PROGRAMS` of the program Files bound that row's run to, or -1. Per-program settings
+/// (hidden notifications) follow the run Files knows, never a name a program claims.
+/// `serve` leaves it to Files and answers INVALID.
+pub const PROGRAM: u8 = 5;
 
 pub const OK: u8 = 0;
 pub const UNKNOWN_KEY: u8 = 1;

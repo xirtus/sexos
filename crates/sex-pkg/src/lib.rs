@@ -336,6 +336,8 @@ pub fn parse_keys(text: &[u8]) -> Vec<[u8; 32]> {
 }
 
 pub mod index;
+pub mod repo;
+pub mod rollback;
 
 #[cfg(test)]
 mod tests;

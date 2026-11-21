@@ -67,7 +67,7 @@ fn pairing_both_ways() {
     assert_eq!(p.received(false, 30), alloc::vec![PairOutcome::NowUnpaired("unpaired by the device")]);
     // They ask, the person accepts.
     assert_eq!(p.received(true, 40), alloc::vec![PairOutcome::Ask]);
-    assert_eq!(p.accept(), alloc::vec![PairOutcome::Send(true), PairOutcome::NowPaired]);
+    assert_eq!(p.accept(), alloc::vec![PairOutcome::NowPaired, PairOutcome::Send(true)]);
     assert_eq!(p.unpair(), alloc::vec![PairOutcome::Send(false), PairOutcome::NowUnpaired("unpaired")]);
     // They ask, the person refuses.
     p.received(true, 50);

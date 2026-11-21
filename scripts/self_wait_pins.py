@@ -12,6 +12,18 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/scheduler.rs', 'a23ecc7d73a7775b9d5b455435c99b58f3311e78ce2992788dc20604a91fccb2'),  # #468 cross-core handoff + pair affinity at 047e13f5 (admit takes the home core's slot, should_preempt honours it, idle has_queued sees it; wait functions unchanged), reviewed by WS4, 2026-11-20
+
+    ('timed', 'kernel/src/scheduler.rs', '59a7fe67bfa8a5a0d230296bd391d5261c6fbaeba42c3c0c05bcd7db6f19265e'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:395d7827fe51750aaa43f1cba2da266fc407f19ab9ac6dcad4e5f40e416121fe'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:2b52c1f01b3c0987f571d39433d87d3dfb7fde6689853aa748d5af2fb227e02d'),  # kernel fault report: task, custody, pending_outgoing (WS2 soak fault), 2026-11-20
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:eacc16fd01fce7c181e70f2178153c355c3793337e24f7acd9c58afb90415611'),  # rearm purges stale handoff slots + resets IPC v2 state (WS2 soak fault), 2026-11-19
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:96213afb9ba13c65c30b8892bda0d19b66aaf74aeedfcfeede56e4187b00f438'),  # kernel page fault prints the words around RSP (WS2 soak fault), 2026-11-19
+
     ('timed', 'kernel/src/program_records.rs', 'fn-v1:50abfa8222c49ebe84edeabc79324366bf1e5519a09c19d63542f664c6215981'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
     ('timed', 'kernel/src/program_records.rs', '37561f94116d2c3c44b1bf88b8f22927ebd57eeec7630cd6e40a8d38150fb2a8'),
@@ -29,6 +41,8 @@ PINS = (
     ('timed', 'kernel/src/pd/create.rs', '3fff0e0483f767e2e8509515874d0b320496cea0671c85b21c4aa368bbdf9b1e'),
 
     ('timed', 'kernel/src/init.rs', 'fn-v1:fb2da8b1ece8812feee1502fa72b73deb6248639042d5ddd6e42422db14ed884'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+
+    ('timed', 'kernel/src/init.rs', 'fn-v1:5424d8c0a824856443014bb081b57f3177c07d452e9f2558827a645a3fd1299e'),  # optional sexgpu-nv spawn (domain 53) + NVIDIA keep/lease arguments in init(), no wait change, 2026-11-19
 
     ('timed', 'kernel/src/init.rs', '784b18c238608b124ed2f2e2cd8d1d0eeaf6933b7bf9291fbc07b230688f0f64'),
 
@@ -74,9 +88,14 @@ PINS = (
 
     ('timed', 'kernel/src/task_ownership.rs', '57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6'),
 
+    ('timed', 'kernel/src/smp.rs', '6f70b8da98e5fe7fb49bdb660bb44fb9df784b5245ed2ae71cf4517024afcbc4'),  # spare-core placement of USB, Bell, ACPI, Cufflinks over master's preferred-core order (table only, no wait change), 2026-11-21
+    ('timed', 'kernel/src/smp.rs', '73db1b08514c89695981493296c4c94fbaeca8ea4022228aeb38b7c76dca833b'),  # USB, Bell, ACPI and Cufflinks start on spare cores (placement table only, no wait change), 2026-11-19
+
     ('timed', 'kernel/src/smp.rs', '261699be11866980d2a30b72cbb8d35ddccdc00aa1ee1cbceefadc716edc7d75'),  # protection views (tlb hook, rows spread), 2026-11-17
 
     ('timed', 'kernel/src/smp.rs', 'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325'),
+
+    ('timed', 'kernel/src/smp.rs', 'b70ef0379662d01aa7559855d91b63c82d45146d10302f05e101717aa33aeac2'),  # preferred-core order (PROGRAM_ORDER, rank_program_cores), no wait change, 2026-11-20
 
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:235c80ce88b369d9d1da26b934e188c056b5e24330b1c242801deaf2e3854c86'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
@@ -85,6 +104,7 @@ PINS = (
     ('timed', 'kernel/src/interrupts.rs', 'dac8806ada26bbf32518d7a835d009c96bfd4787aa724a9fd29eefccc6fac62d'),
 
     ('timed', 'kernel/src/interrupts.rs', 'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),  # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:9be7e0f042763f122e4881e3f91ce32256e08711eb9531cb73fac73865384dc4'),  # SMAP audit: a kernel fault on a user page is recorded and retried with AC; kernel faults keep PKRU (no wait change), 2026-11-20
 
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:c7ac0959a5dec36e2f31c4d10d81cca01f8a0903800114720f7a56a72237b250'),  # PCIe hot-plug slot look on the core-0 tick, 2026-11-19
 
@@ -146,11 +166,29 @@ PINS = (
 
     ('timed', 'servers/sexnet/src/main.rs', '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b'),  # first 32 timed returns logged, 2026-11-17
 
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master merge of #460 with the NIC interrupt change (same line as PR #482), 2026-11-20
+
+    ('timed', 'servers/sexnet/src/main.rs', 'd994aeb0af740e6157d92744656943261954b99c6828795723c9070d4625ff34'),  # wired NIC interrupt: 10-tick quiet sleep while armed, no stall after a full burst (two-tick envelope unchanged), 2026-11-19
+
     ('timed', 'servers/sexusb/src/main.rs', '3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81'),
 
     ('timed', 'servers/sexusb/src/main.rs', 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06'),
 
     ('timed', 'servers/sexusb/src/main.rs', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec'),
+    ('timed', 'servers/sexnet/src/main.rs', 'fcc4ffc50a6302756285ae01c86fcd838852bfbdf4ac4a4b2198550bf2afe400'),  # OP_DEVICE_SLEEP from the kernel logged and skipped after the listen (no wait change), 2026-11-19
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master merge of the OP_DEVICE_SLEEP handler (#460) with the wired NIC interrupt wait (irq_wait, reviewed in its own PR); nothing new, 2026-11-20
+    ('timed', 'servers/sexusb/src/main.rs', '2c15ba53f84180a5feb262de17783e3821be45c5f4941d9660835d9c9bb541a6'),  # sleep notice suspends idle ports (bounded link waits); quiet predicate unchanged, 2026-11-19
+
+    ('timed', 'servers/sexusb/src/main.rs', '96d3ea5a52156559eaf7106a145ffe1b08445eb88798fe64645bf92da8abeaae'),  # USB audio class streaming (Qupid #392), 2026-11-19
+
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master's Net as of 2026-11-20 (unpinned on master), pinned by Qupid #392
+
+    ('timed', 'servers/sexusb/src/main.rs', '09b8a45c44bf3af5b7941823186b2ad09655ddf6fa57ba60bfbf215cabc3c667'),  # USB audio streaming merged with sleep suspend (Qupid #392), 2026-11-20
+    ('timed', 'servers/sexusb/src/main.rs', 'e78d6073dc41fe5b46b75e962e0ac3b5b9e7ab347bb9b95e5e21fed12a3f4e87'),  # Thunderbolt manager polled each pass, waits unchanged, 2026-11-19
+
+    ('timed', 'servers/sexusb/src/main.rs', '09a173d46a7f99edd8c810029e767552230e343f4b9ece7d69e161fe18d7ba5a'),  # Thunderbolt unload/GO2SX on the sleep notice, waits unchanged, 2026-11-20
+
+    ('timed', 'servers/sexusb/src/main.rs', '29fbd1f1d8d3cef6b20bb8920959aa1984650f57483afe0f20e787314c26576b'),  # USB audio merged with Thunderbolt (Qupid #392), 2026-11-20
 
     ('tree', '', '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5'),  # master after #407 + #408 + #422 combined, 2026-11-18
 

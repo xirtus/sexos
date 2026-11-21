@@ -44,6 +44,8 @@ do from ring 3. When a feature needs a little ring-0 help, add the smallest mech
 | 2026-11-17 | 22,700 | Unchanged. Protection views with PCID (plan Phase 5b, decision D2) add 221 kernel lines, all mechanism: `views.rs` (extra roots over the one translation, PCID tags, per-core stale marks) and `views_rules.rs` (which tables a view copies). Which spans a view opens stays BOOT's layout and the program row's own grants; `program_tenancy` loses its turn-taking (-42). |
 | 2026-11-18 | 22,700 | Unchanged. IPC v2 (kernel plan phase 2) adds about 740 kernel lines, all mechanism: endpoint, one-shot reply and notification objects (`ipc_v2/`) and syscalls 105 SYS_ENDPOINT and 106 SYS_NOTIFY over authority v2 object capabilities (badges, rights, generations). Who serves what stays a server's choice. The old mailbox path (credits, reply queues, rings, about 400 lines) goes once Files and sex-app move to endpoints. Kernel about 21,500 lines. |
 | 2026-11-19 | 22,700 | Unchanged. Drag D5, the AMD SVM backend for SYS_VM, adds about 260 kernel lines inside the Drag allowance of 2026-11-14: `kernel/src/svm.rs` (EFER.SVME, VMCB, nested page tables, VMRUN with GIF held across the switch) and a vendor dispatch in `vmx.rs`. Exit translation to the VMX-shaped record is host code in `sex_pdx::vm::svm`. VMs, loans, the syscall and every VMM decision stay where they were; kernel 21,171 lines. |
+| 2026-11-19 | 22,700 | Unchanged. Device power part 1 adds about 155 kernel lines, all mechanism: `pci_power.rs` (ECAM page per function at BOOT, the BOOT link-power pass, syscall 86 `OP_POWER` for a device the caller already holds, the sleep notice to lease holders). Which link states are safe, latency checks, quirks and what a D-state change saves live in the host-tested `crates/sex-pcipm`. |
+| 2026-11-19 | 22,700 | Unchanged. Kernel pass 2 K4 (C-states) adds about 55 kernel lines, all mechanism: `hal/acpi.rs` keeps every MWAIT `_CST` state the ACPI service reports, counts idle entries per state, and on each idle enters the state `crates/sex-idle` (host-tested) picks from the time to the next tick and the core's recent idle lengths; `apic.rs` reads the time to the next tick. The choice and its limits are the crate's and the power profile's. |
 | 2026-11-19 | 22,700 | Unchanged. PCIe native hot-plug H1 (`kernel/src/hotplug.rs`) adds about 230 kernel lines, all mechanism: find hot-plug ports at BOOT, look at each slot from the core-0 tick, number buses and write BAR and bridge-window addresses below a port when devices arrive, quiet them when they leave. The rules (settle, power, link, attention button, window planning) live in `crates/sex-hotplug`, a pure crate with host tests. Kernel about 21,160 lines. |
 
 ## 2. No Linux-shaped kernel API
@@ -146,7 +148,7 @@ while, so scripts and habits keep working; aliases are dropped once nothing uses
 | Collar | Authority: grants and app permissions | silk-shell, sexfiles |
 | Mesh | The capability graph and the system overview | silk-shell |
 | Kaleidoscope | The browser | `apps/web` (to become `apps/kaleidoscope`) |
-| Qupid | The media player | `apps/play` (to become `apps/qupid`) |
+| Qupid | The media player and its music library (`--library`) | `apps/play`, program `/bin/qupid` |
 | sexshop | The app store | `apps/store` (to become the `sexshop` program) |
 | sexfiles | The filesystem service | `servers/sexfiles` |
 | sexnet | The network service (TCP/IP, DNS, Wi-Fi, Ethernet) | `servers/sexnet` |

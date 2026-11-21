@@ -28,18 +28,35 @@ impl Silk {
             sb.push(if self.following { &b"silk: events are printing; Esc stops them"[..] } else { &b"silk: still waiting for the shell"[..] });
             return;
         }
+        // A layout plugin: Files prepares its run first, then `plugin` sends the ticket.
+        match wire::layout_plugin(args) {
+            Some(Ok((ws, what))) => { unsafe { (*core::ptr::addr_of_mut!(crate::fs_commands::FS)).submit_layout_plugin(ws, what, sb); } return; }
+            Some(Err(e)) => { sb.push(e.as_bytes()); return; }
+            None => {}
+        }
         let req = match wire::parse(args) {
             Ok(r) => r,
             Err("") => { for l in wire::USAGE { sb.push(l.as_bytes()); } return; }
             Err(e) => { sb.push(e.as_bytes()); return; }
         };
+        self.request(req, sb);
+    }
+
+    /// Files prepared the plugin run for `silk layout WORKSPACE plugin:...` and
+    /// answered with `ticket`: the Shell starts it, or reuses the plugin's run.
+    pub fn plugin(&mut self, workspace: u8, ticket: u32, key: u64, sb: &mut Scrollback) {
+        if ticket == 0 || ticket > wire::TICKET_MAX { sb.push(b"silk: Files gave no ticket for the plugin"); return; }
+        self.request(Request::Plugin { workspace, ticket, key }, sb);
+    }
+
+    fn request(&mut self, req: Request, sb: &mut Scrollback) {
         let tag = self.next_tag;
         self.next_tag = self.next_tag.wrapping_add(1).max(1);
         if self.send(req, tag) {
             self.asm.expect(tag);
             self.waiting = true;
             self.following = matches!(req, Request::Follow { .. });
-            self.since = now;
+            self.since = sex_pdx::get_ticks();
             self.lines = 0;
         } else {
             sb.push(b"silk: could not reach the shell");

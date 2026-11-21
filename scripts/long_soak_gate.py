@@ -320,7 +320,7 @@ def main():
     if not resumed and progs_dir.exists():
         from install_program import install
         to_install = []
-        for name in ['jot', 'fortune', 'hum', mesh_name, 'play', 'abacus', 'pdf', 'view']:
+        for name in ['jot', 'fortune', 'hum', mesh_name, 'qupid', 'abacus', 'pdf', 'view']:
             p_bin = progs_dir / name
             if p_bin.exists():
                 to_install.append((name, p_bin.read_bytes()))
@@ -330,7 +330,7 @@ def main():
     # Populate HTTP server files
     if progs_dir.exists():
         with FILES_LOCK:
-            for name in ['jot', 'fortune', 'hum', mesh_name, 'play', 'abacus', 'pdf', 'view']:
+            for name in ['jot', 'fortune', 'hum', mesh_name, 'qupid', 'abacus', 'pdf', 'view']:
                 p_bin = progs_dir / name
                 if p_bin.exists():
                     FILES['/' + name] = p_bin.read_bytes()
@@ -474,9 +474,9 @@ def main():
             assert m[1] == '0' and m[2] == m[3], f'hum records left behind: {m[0]}'
 
         # If play binary is present, test play --tone periodically
-        if (progs_dir / 'play').exists() and round_n % 4 == 0:
+        if (progs_dir / 'qupid').exists() and round_n % 4 == 0:
             s_play = len(t())
-            line(f'run play --tone {hz} 48000')
+            line(f'run qupid --tone {hz} 48000')
             g['wait'](rf'\[play\.tone\] hz={hz} rate=48000 frames=(\d+) played=(\d+)', s_play, 60)
             m_launch = re.search(r'\[shell\.program\.launch\] target=(\d+) task=(\d+) surface=(\d+)', t()[s_play:])
             if m_launch:

@@ -38,10 +38,21 @@ pub fn is_serial_present() -> bool {
 }
 
 /// Writes to the serial port and to the kernel's log (and its screen, while it has one).
-struct Tee<'a>(Option<&'a mut SerialPort>);
-impl fmt::Write for Tee<'_> {
+/// Serial bytes collect in a small buffer and go out a FIFO's worth per string write:
+/// the byte-at-a-time driver cost two port accesses (two KVM exits) per byte, with
+/// interrupts off on the logging core.
+struct Tee { serial: bool, buf: [u8; 128], n: usize }
+impl Tee {
+    fn flush(&mut self) { if self.serial { write_string(&self.buf[..self.n]); } self.n = 0; }
+}
+impl fmt::Write for Tee {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        if let Some(port) = self.0.as_mut() { let _ = port.write_str(s); }
+        if self.serial {
+            for &b in s.as_bytes() {
+                if self.n == self.buf.len() { self.flush(); }
+                self.buf[self.n] = b; self.n += 1;
+            }
+        }
         crate::console::write(s.as_bytes());
         Ok(())
     }
@@ -54,10 +65,22 @@ pub fn _print(args: fmt::Arguments) {
 
     if crate::console::stopping() { return; }
     interrupts::without_interrupts(|| {
-        let mut guard = SERIAL1.lock();
+        let guard = SERIAL1.lock();
         // With no serial port the log and the screen still get every line.
-        let _ = Tee(guard.as_mut()).write_fmt(args);
+        let mut tee = Tee { serial: guard.is_some(), buf: [0; 128], n: 0 };
+        let _ = tee.write_fmt(args);
+        tee.flush();
+        drop(guard);
     });
+}
+
+/// Writes to the serial port only, unless another path holds it (a fault taken
+/// inside a print): then nothing is written and this returns false.
+pub fn try_print(args: fmt::Arguments) -> bool {
+    use core::fmt::Write;
+    let Some(mut guard) = SERIAL1.try_lock() else { return false };
+    if let Some(port) = guard.as_mut() { let _ = port.write_fmt(args); }
+    true
 }
 
 /// The stop path's own writes: no lock, since the core that held it may be halted.
@@ -72,6 +95,26 @@ pub fn write_stopped(bytes: &[u8]) {
             data.write(b);
         }
     }
+}
+
+/// A service's whole line in one string write (`rep outsb`), waiting for the
+/// transmitter to be empty before each 16 bytes (a 16550's FIFO), so a real UART drops
+/// nothing and QEMU with a slow stdio or pty backend does not overrun its emulated FIFO.
+/// Under nested KVM every byte costs ~17 us however it is written (the CI boot's
+/// `[boot.kernel.cost]` serial figure): sending whole lines saved nothing measurable
+/// (14a783d7, and again after #505), so the pacing stays everywhere.
+pub fn write_string(bytes: &[u8]) {
+    use x86_64::instructions::port::Port;
+    let mut line_status: Port<u8> = Port::new(0x3F8 + 5);
+    let t = crate::boot_cost::now();
+    for chunk in bytes.chunks(16) {
+        unsafe {
+            for _ in 0..100_000 { if line_status.read() & 0x20 != 0 { break; } }
+            core::arch::asm!("rep outsb", in("dx") 0x3f8u16, inout("rsi") chunk.as_ptr() => _,
+                inout("rcx") chunk.len() => _, options(nostack, preserves_flags, readonly));
+        }
+    }
+    crate::boot_cost::add(crate::boot_cost::Bucket::Serial, t, bytes.len() as u64);
 }
 
 #[macro_export]

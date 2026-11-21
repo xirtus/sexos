@@ -14,6 +14,12 @@
 //!   live event feed (`Follow`) sends one line per event and ends when its
 //!   count is reached or the caller sends `Unfollow`.
 //!
+//! - `Plugin` (S4 follow-up, `silk layout WS plugin:FILE`): Spindle first has
+//!   Files prepare a run of `/bin/wasm layout @FILE` (the run may read that one
+//!   file and nothing else of the person's) and sends the ticket with the
+//!   workspace and a key naming the plugin; the Shell starts that run, or
+//!   reuses the one already running for the key (`sex_pdx::wasm_layout`).
+//!
 //! Lines are printable ASCII, at most [`LINE_MAX`] bytes, as `key=value`
 //! words a script can split on spaces. Workspaces are numbered from 1 as the
 //! panel shows them (the Shell's scene 0 is workspace 1).
@@ -53,6 +59,10 @@ pub enum Request {
     Follow { count: u16 },
     /// Stop a feed.
     Unfollow,
+    /// A workspace's layout from a Wasm layout plugin: the Files ticket of a
+    /// prepared `wasm layout ...` run (24 bits, never 0) and the plugin's key
+    /// ([`plugin_key`] of its path or built-in name, never 0).
+    Plugin { workspace: u8, ticket: u32, key: u64 },
 }
 
 const K_LIST: u64 = 1;
@@ -64,6 +74,7 @@ const K_CLOSE: u64 = 6;
 const K_EVENTS: u64 = 7;
 const K_FOLLOW: u64 = 8;
 const K_UNFOLLOW: u64 = 9;
+const K_PLUGIN: u64 = 10;
 
 impl Request {
     /// `tag` names the answer, so a late answer to an earlier request is told apart.
@@ -78,6 +89,7 @@ impl Request {
             Request::Events { since } => (K_EVENTS, since as u64, 0),
             Request::Follow { count } => (K_FOLLOW, count as u64, 0),
             Request::Unfollow => (K_UNFOLLOW, 0, 0),
+            Request::Plugin { workspace, ticket, key } => (K_PLUGIN, workspace as u64 | (ticket as u64 & TICKET_MAX as u64) << 8, key),
         };
         [kind | (tag as u64) << 8, a, b]
     }
@@ -99,6 +111,8 @@ impl Request {
             K_EVENTS if w[2] == 0 => Request::Events { since: frame? },
             K_FOLLOW if w[1] <= u16::MAX as u64 && w[2] == 0 => Request::Follow { count: w[1] as u16 },
             K_UNFOLLOW if w[1] == 0 && w[2] == 0 => Request::Unfollow,
+            K_PLUGIN if w[1] >> 32 == 0 && w[1] >> 8 != 0 && w[2] != 0 =>
+                Request::Plugin { workspace: ws(w[1] & 0xFF)?, ticket: (w[1] >> 8) as u32, key: w[2] },
             _ => return None,
         };
         Some((tag, r))
@@ -115,16 +129,18 @@ impl Request {
             Request::Events { .. } => "events",
             Request::Follow { .. } => "follow",
             Request::Unfollow => "unfollow",
+            Request::Plugin { .. } => "layout",
         }
     }
 }
 
 /// How `silk` is used, one line per form.
-pub const USAGE: [&str; 9] = [
+pub const USAGE: [&str; 10] = [
     "usage: silk windows",
     "       silk focus FRAME",
     "       silk move FRAME WORKSPACE        (workspace 1-9)",
     "       silk layout WORKSPACE master|dwindle|monocle|grid",
+    "       silk layout WORKSPACE plugin:FILE.wasm|plugin:spiral",
     "       silk float FRAME",
     "       silk close FRAME",
     "       silk events [since SEQ]",
@@ -163,7 +179,8 @@ pub fn parse(args: &[u8]) -> Result<Request, &'static str> {
         b"layout" if c.is_none() => {
             let ws = workspace(a.ok_or("silk: layout WORKSPACE NAME")?)?;
             let name = b.ok_or("silk: layout WORKSPACE master|dwindle|monocle|grid")?;
-            if name.starts_with(b"plugin:") { return Err("silk: layout plugins are not in this build (docs/handoff S4)"); }
+            // Spindle prepares the plugin's run first (`layout_plugin`), then sends `Plugin`.
+            if name.starts_with(b"plugin:") { return Err("silk: a layout plugin is started from Spindle"); }
             let layout = LAYOUTS.iter().position(|l| l.as_bytes() == name).ok_or("silk: layouts are master, dwindle, monocle and grid")?;
             Request::Layout { workspace: ws, layout: layout as u8 }
         }
@@ -182,6 +199,41 @@ pub fn parse(args: &[u8]) -> Result<Request, &'static str> {
         _ => return Err(""),
     };
     Ok(r)
+}
+
+// ── Layout plugins ──────────────────────────────────────────────────────────
+
+/// The largest Files ticket a `Plugin` request carries.
+pub const TICKET_MAX: u32 = 0xFF_FFFF;
+/// Built-in layout plugins the `wasm` program carries (`plugin:NAME`, no `/`).
+pub const BUILTIN_PLUGINS: [&str; 1] = ["spiral"];
+
+/// `layout WORKSPACE plugin:WHAT`: the workspace and `WHAT` (a file path, or a
+/// built-in plugin's name), or the message to print. None for any other words.
+pub fn layout_plugin(args: &[u8]) -> Option<Result<(u8, &[u8]), &'static str>> {
+    let mut words = args.split(|c| *c == b' ' || *c == b'\t').filter(|w| !w.is_empty());
+    if words.next() != Some(b"layout") { return None; }
+    let (a, b, c) = (words.next(), words.next(), words.next());
+    let what = b?.strip_prefix(b"plugin:")?;
+    Some((|| {
+        if c.is_some() { return Err("silk: layout WORKSPACE plugin:FILE.wasm"); }
+        let ws = workspace(a.unwrap_or(b""))?;
+        if what.is_empty() || what.len() > 200 || !what.iter().all(|b| b.is_ascii_graphic()) || what.contains(&b'@') {
+            return Err("silk: plugin:FILE.wasm names a file, or plugin:spiral the built-in one");
+        }
+        if !what.contains(&b'/') && !BUILTIN_PLUGINS.iter().any(|n| n.as_bytes() == what) {
+            return Err("silk: no built-in layout plugin by that name (spiral); a file needs its path, as ./x.wasm");
+        }
+        Ok((ws, what))
+    })())
+}
+
+/// The key a plugin goes by: FNV-1a of its absolute path (or built-in name),
+/// never 0. One plugin run serves every workspace that names the same key.
+pub fn plugin_key(what: &[u8]) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    for &b in what { h = (h ^ b as u64).wrapping_mul(0x100000001b3); }
+    h.max(1)
 }
 
 // ── Shell -> Spindle: the answer in pieces ──────────────────────────────────

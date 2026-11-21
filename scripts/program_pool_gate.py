@@ -32,7 +32,10 @@ def main():
  g=boot(a.iso,disk,a.out,'program',a.resolution);t=g['text'];q=g['q'];commands=palette_commands(ROOT)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
-  views=re.search(r'\[boot\.views\] views=(\d+) pcid=(\d)',t());assert views,'no protection views'
+  views=re.search(r'\[boot\.views\] views=(\d+) pcid=(\d) invpcid=(\d)',t());assert views,'no protection views'
+  # With INVPCID an invalidation reaches every view a core ran at once, so a view
+  # switch flushes only on a core's first entry into a view.
+  invpcid=int(views[3])
   pool=re.findall(r'\[boot\.program\.pool\.regions\] target=(\d+) pages=(\d+) spans=(\d+) view=\d+ boot_spans=(\d+)',t())
   assert pool,'no shared rows claimed their regions'
   for target,pages,spans,boot_spans in pool:
@@ -69,6 +72,9 @@ def main():
   assert switches,'no view switches'
   n,flushed,_,_,pcid=switches[-1]
   if pcid:assert flushed*2<=n,f'most view switches flushed: {flushed} of {n}'
+  firsts=len(re.findall(r'\[views\.first\] view=\d+ core=\d+',t()))
+  if pcid and invpcid:assert flushed<=firsts,f'INVPCID, yet {flushed} switches flushed for {firsts} first entries'
+  print('[pool.views] switches=%d flushed=%d first_entries=%d pcid=%d invpcid=%d'%(n,flushed,firsts,pcid,invpcid),flush=True)
   cores={int(core) for view,core in re.findall(r'\[views\.first\] view=(\d+) core=(\d+)',t()) if view!='0'}
   if int(os.environ.get('SEXOS_GATE_CORES','1'))>=4:assert len(cores)>=2,f'shared rows ran on one core only: {cores}'
   for target,task,sid in reversed(live):
