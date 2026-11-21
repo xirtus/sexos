@@ -230,7 +230,7 @@ impl Jot {
     fn draw(&mut self, window: &mut Window) {
         if !self.scrolled { self.follow(); }
         let (w, h) = (self.width, self.height);
-        let pixels = &mut window.pixels()[..w * h];
+        let pixels = window.frame(w, h);
         pixels.fill(BG);
         let cache = unsafe { &mut *core::ptr::addr_of_mut!(CACHE) };
         let (cw, ch) = (self.painter.cell_w, self.painter.cell_h);
@@ -342,7 +342,7 @@ impl Jot {
             let rx = w.saturating_sub(right.chars().count() * cw);
             self.painter.text(cache, pixels, w, rx, y, &right, DIM, GUTTER);
         }
-        window.show_pixels(w, h);
+        window.show_frame(w, h);
     }
 
     fn key(&mut self, key: sex_pdx::app_key::Key) -> Ask {
