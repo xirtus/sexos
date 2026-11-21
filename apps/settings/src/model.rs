@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn pages_follow_the_schema() {
         let (p, n) = pages();
-        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "setup", "open", "startup", "shortcuts", "notifications", "accessibility", "privacy", "updates", "storage"]);
+        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "accessibility", "setup", "open", "startup", "shortcuts", "notifications", "privacy", "updates", "storage"]);
     }
 
     #[test]

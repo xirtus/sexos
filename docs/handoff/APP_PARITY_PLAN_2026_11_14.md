@@ -541,7 +541,7 @@ in Settings beyond the zone's city.
 
 **S7/S8 follow-up (2026-11-21): remembered choices.** The magnifier zoom, colour filter,
 sticky/slow/bounce keys and the screen reader are Settings keys (`accessibility.*`, ids 41-46;
-a new Accessibility page before Privacy). A Super+Alt chord saves its choice through Files, and
+a new Accessibility page after Lock & idle). A Super+Alt chord saves its choice through Files, and
 the Shell applies the saved values at start and whenever Settings changes them, without saying
 so aloud (`Access::restore` brings values into range; a view Display could not take yet is sent
 again). Gate: `settings_persist_gate.py` also checks that a colour filter survives a restart.
