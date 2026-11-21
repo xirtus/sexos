@@ -132,7 +132,7 @@ pub mod id {
 /// Programs (program store names) the Shell may start at login and whose
 /// notifications the person may hide: one bit each in `startup.programs` and
 /// `notifications.hidden`. Append-only, at most 31.
-pub const PROGRAMS: &[&str] = &["jot", "loom", "mesh", "abacus", "gaze", "play", "vellum", "date", "quil", "gossip", "chastity"];
+pub const PROGRAMS: &[&str] = &["jot", "loom", "mesh", "abacus", "gaze", "qupid", "vellum", "date", "quil", "gossip", "chastity"];
 /// The place of a program store name in [`PROGRAMS`].
 pub fn program_index(name: &[u8]) -> Option<usize> { PROGRAMS.iter().position(|p| p.as_bytes() == name) }
 
