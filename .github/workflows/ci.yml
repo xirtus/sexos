@@ -758,7 +758,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [cleanup, app-resource, denim, views]
+        gate: [cleanup, app-resource, denim, views, drivers]
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -785,6 +785,13 @@ jobs:
       run: |
         SEXOS_PROGRAM_ISOLATION_PROBE=4 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/views-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/views-probe-build.log"; exit 1)
         SEXOS_GATE_CPU=max,-pku,+rdseed SEXOS_GATE_CORES=4 SEXOS_GATE_MEMORY=2G python3 scripts/program_isolation_probe.py sexos-v1.0.0.iso "$RUNNER_TEMP/views-source.img" "$RUNNER_TEMP/sexos-proof/views-isolation" 4
+    - name: Drivers killed or hung mid-use restart and the work goes on (disk, USB, input, sound, network)
+      if: matrix.gate == 'drivers'
+      run: |
+        SEXOS_CRASH_PROBE=1 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/drivers-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/drivers-build.log"; exit 1)
+        mkdir -p "$RUNNER_TEMP/sexos-proof" && cp sexos-v1.0.0.iso "$RUNNER_TEMP/sexos-proof/drivers-probe.iso"
+        truncate -s 1G "$RUNNER_TEMP/drivers-source.img"
+        python3 scripts/driver_restart_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drivers-source.img" --out "$RUNNER_TEMP/sexos-proof/driver-restart"
     - name: Preserve evidence
       if: always()
       uses: actions/upload-artifact@v4

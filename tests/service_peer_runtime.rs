@@ -8,7 +8,7 @@ impl<T> Mutex<T>{pub const fn new(v:T)->Self{Self(std::sync::Mutex::new(v))}pub 
 pub const SEXFS_V0_META_END_LBA:u64=47;pub const SEXDRIVE_AP4_MULTI_BASE_LBA:u64=128;
 pub mod program_store{pub const DIRECTORY_LBA:u64=2048;}
 #[path="../crates/sex-pdx/src/crash_log.rs"]mod wire;
-pub mod crash_log{pub use crate::wire::*;pub fn poll(){}pub fn service(_:u32,_:u32,_:bool){}}
+pub mod crash_log{pub use crate::wire::*;pub fn poll(){}pub fn service(_:u32,_:u32,_:bool){}pub fn fault(_:u32,_:u64,_:u64,_:u64,_:u64,_:&str){}}
 #[path="../kernel/src/capability_slot.rs"]mod capability_slot;
 #[path="../kernel/src/task_ownership.rs"]pub mod task_ownership;
 #[macro_export]macro_rules! serial_println{($($t:tt)*)=>{{let _=format_args!($($t)*);}};}
@@ -23,21 +23,24 @@ mod capability{
  use crate::*;
  #[derive(Clone,Copy)]pub enum CapabilityData{Domain(u32),Memory}
  pub struct Capability{pub data:CapabilityData}
- pub struct ProtectionDomain{pub id:u32,pub pku_key:u8,pub main_task:AtomicPtr<scheduler::Task>,pub message_ring:*mut Queue,pub signal_ring:*mut Queue,pub incoming_replies:Mutex<VecDeque<u64>>,pub reply_credits:Mutex<Vec<u64>>,pub caps:Mutex<Vec<(u32,CapabilityData)>>}
- pub struct Queue;impl Queue{pub fn dequeue(&self)->Option<u8>{None}}
+ pub struct ProtectionDomain{pub id:u32,pub pku_key:u8,pub main_task:AtomicPtr<scheduler::Task>,pub message_ring:*mut Queue,pub signal_ring:*mut Queue,pub incoming_replies:Mutex<VecDeque<ipc::messages::IpcReply>>,pub reply_credits:Mutex<Credits>,pub caps:Mutex<Vec<(u32,CapabilityData)>>}
+ pub struct Queue;impl Queue{pub fn dequeue(&self)->Option<u8>{None}pub fn len(&self)->usize{0}}
+ #[derive(Default)]pub struct Credits(pub Vec<u32>);impl Credits{pub fn push(&mut self,c:u32){self.0.push(c)}pub fn is_empty(&self)->bool{self.0.is_empty()}pub fn owed(&self)->impl Iterator<Item=u32>+'_{self.0.iter().copied()}pub fn clear(&mut self){self.0.clear()}}
  impl ProtectionDomain{
-  pub fn new(id:u32,task:u32)->&'static Self{let main=Box::into_raw(Box::new(scheduler::Task{id:task,context:scheduler::Context{pd_id:id as u64,pd_ptr:std::ptr::null(),rip:0x4000,rsp:0x9000},state:task_ownership::TaskOwnership::new()}));let pd=Box::leak(Box::new(Self{id,pku_key:1,main_task:AtomicPtr::new(main),message_ring:Box::into_raw(Box::new(Queue)),signal_ring:Box::into_raw(Box::new(Queue)),incoming_replies:Mutex::new(VecDeque::new()),reply_credits:Mutex::new(Vec::new()),caps:Mutex::new(Vec::new())}));unsafe{(*main).context.pd_ptr=pd;}REGISTRY[id as usize].store(pd,Ordering::Release);pd}
+  pub fn new(id:u32,task:u32)->&'static Self{let main=Box::into_raw(Box::new(scheduler::Task{id:task,context:scheduler::Context{pd_id:id as u64,pd_ptr:std::ptr::null(),rip:0x4000,rsp:0x9000},state:task_ownership::TaskOwnership::new()}));let pd=Box::leak(Box::new(Self{id,pku_key:1,main_task:AtomicPtr::new(main),message_ring:Box::into_raw(Box::new(Queue)),signal_ring:Box::into_raw(Box::new(Queue)),incoming_replies:Mutex::new(VecDeque::new()),reply_credits:Mutex::new(Credits::default()),caps:Mutex::new(Vec::new())}));unsafe{(*main).context.pd_ptr=pd;}REGISTRY[id as usize].store(pd,Ordering::Release);pd}
   pub fn find_capability(&self,slot:u32)->Option<Capability>{self.caps.lock().iter().find(|c|c.0==slot).map(|c|Capability{data:c.1})}
  }
 }
 mod ipc{
  pub const MAX_DOMAINS:usize=1024;
  pub struct Registry;pub static DOMAIN_REGISTRY:Registry=Registry;impl Registry{pub fn get(&self,id:u32)->Option<&'static crate::capability::ProtectionDomain>{let p=crate::REGISTRY.get(id as usize)?.load(crate::Ordering::Acquire);unsafe{p.as_ref()}}}
- pub mod messages{pub struct IpcReply;impl IpcReply{pub fn erase_queue(q:&mut std::collections::VecDeque<u64>){q.clear()}}}
+ pub mod messages{pub struct IpcReply{pub value:u64,pub caller_pd:u32,pub caller_task:u32}impl IpcReply{pub fn erase_queue(q:&mut std::collections::VecDeque<Self>){q.clear()}}}
 }
 mod boot_memory{pub fn existing_leaf_address(_:u64)->Option<u64>{None}pub fn backing(_:u64)->u64{0}pub fn copy_frame(_:u64,_:u64){}}
 mod pci_command{pub fn quiesce(_: &crate::capability::ProtectionDomain){}}
 mod iommu{pub fn revoke(_:u32){}}
+mod device_irq{pub fn snapshot(_:u32){}pub fn reset_begin(_:u32)->bool{false}pub fn reset_end(_:u32){}}
+mod program_workers{pub fn end(_:u32){}pub fn all_dead(_:u32)->bool{true}}
 mod console{pub fn stop(_:std::fmt::Arguments)->!{panic!("unexpected desktop stop")}}
 #[path="../kernel/src/service_restart.rs"]mod service_restart;
 

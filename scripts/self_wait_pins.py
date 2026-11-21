@@ -244,4 +244,7 @@ PINS = (
 
     ('tree', '', 'c90aad02c6aa7df0113ccb215474c805633b552229da4af87ee9c5949ff1b73b'),  # protection views with PCID (plan Phase 5b), 2026-11-17
 
+
+    ('timed', 'kernel/src/syscalls/mod.rs', 'fn-v1:dcfd9075428ef7e5f81f7f1b7bf46be288047256915f7d60347ddded728251d6'),  # driver restart: inbox watch + hang probe in syscall entry, 2026-11-19
+
 )
