@@ -9,7 +9,8 @@ with no key pressed. Then the Settings program (installed on the disk) lowers ni
 light to 1 from its Desktop page; the Shell applies it from Files, and a third start
 shows it. Volume keys on the first start lower the volume to 90%, which the Shell keeps
 in settings and gives Bell again on the third start. The key repeat delay set in
-Settings reaches the Shell at once and again after the restart."""
+Settings reaches the Shell at once and again after the restart. Super+Alt+C's colour
+filter (high contrast) on the first start is on again on the second."""
 import argparse,re,shutil,time
 from pathlib import Path
 from install_program import install
@@ -45,6 +46,9 @@ def main():
   s=len(t())
   for _ in range(2):q.key('volumedown');time.sleep(.4)
   g['wait'](r'\[files.config.set\] caller=3 key=10 value=90 status=0',s,30)
+  # Super+Alt+C: the high-contrast filter, kept in settings like the rest.
+  s=len(t());press('meta_l','alt','c');g['wait'](r'\[shell.access\] change=View \{ zoom: 4, filter: 1 \}',s,30)
+  g['wait'](r'\[files.config.set\] caller=3 key=42 value=1 status=0',s,30)
   assert 'KERNEL PANIC' not in t()
  except Exception:evidence(t());raise
  finally:g['stop']()
@@ -54,6 +58,8 @@ def main():
   g['wait'](r'\[shell.config.changed\] key=2 value=1',0,60)
   g['wait'](r'\[shell.config.changed\] key=3 value=2',0,60)
   g['wait'](r'\[shell.look\] wallpaper=1 name=Dusk night=2 ok=1',0,60)
+  # The colour filter came back from settings, with no key pressed.
+  g['wait'](r'\[shell.access.setting\] (key=42 value=1 change|owed)=View \{ zoom: 4, filter: 1 \} status=0x0',0,60)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   g['focus'](153);time.sleep(.5);s=len(t())
   for k in 'run tatami':q.key('spc' if k==' ' else k);time.sleep(.05)

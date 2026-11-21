@@ -49,6 +49,15 @@ mod silk_ctl;
 mod silk_ctl_glue;
 mod hot_corners;
 mod hot_corners_glue;
+mod program_notify;
+mod startup;
+mod shortcuts;
+mod shortcuts_glue;
+mod widgets_glue;
+mod weather_glue;
+mod layout_plugin;
+mod layout_plugin_glue;
+mod theme_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -7886,7 +7895,7 @@ unsafe fn push_token_preset(p: &TokenPreset) {
     pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
         pack_u32_pair(p[APPEARANCE_TOKEN_MINIMIZE_LIGHT], p[APPEARANCE_TOKEN_ZOOM_LIGHT]),
         0u64, // appearance_flags=0, effect_levels=0
-        0u64, // reserved
+        (SCENE_APPEARANCE_STATE.preset_idx == 0 && SCENE_APPEARANCE_STATE.use_custom_colors == 0) as u64, // 1: default preset, chrome follows the desktop theme (S6a)
     );
 }
 
@@ -8853,6 +8862,7 @@ unsafe fn tile_active_scene_frames() {
     let mut rects = [wm::Rect::default(); MAX_FRAMES];
     wm::tile(&tiling, wm_work_area(), &mut rects[..count]);
     layouts_glue::tile(&tiling, &order[..count], &mut rects[..count]);
+    layout_plugin_glue::tile(&tiling, &order[..count], &mut rects[..count]);
     static mut WM_LAYOUT_RECORD_BUDGET: u32 = 256;
     if WM_LAYOUT_RECORD_BUDGET > 0 {
         WM_LAYOUT_RECORD_BUDGET -= 1;
@@ -10617,7 +10627,7 @@ unsafe fn browser_wheel_input(word:u64,reserved:u64){
 // ── Window manager: Super chords, layouts, scratchpad (Hyprland/river/KDE) ──
 // Policy and arithmetic live in wm.rs (host-tested); this is the glue to the
 // shell's frames, scenes and focus.
-static mut WM_CHORDS: wm::Chords = wm::Chords::new();
+static mut WM_CHORDS: wm::Chords = wm::Chords::with(shortcuts_glue::binding);
 static mut WM_TILING: [wm::Tiling; ATLAS_MAX_SCENES] = [wm::Tiling::DEFAULT; ATLAS_MAX_SCENES];
 static mut WM_ORDER: wm::Order<MAX_FRAMES> = wm::Order::new();
 static mut WM_SCENE_FOCUS: [u64; ATLAS_MAX_SCENES] = [0; ATLAS_MAX_SCENES];
@@ -10754,6 +10764,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Lock => lock::lock(),
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
         A::Bluetooth => bt_panel::toggle(),
+        A::Widgets => widgets_glue::toggle(),
         A::Group | A::Ungroup | A::NextTab | A::PrevTab | A::ToggleDwindle => layouts_glue::action(action),
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
@@ -11145,12 +11156,13 @@ static mut TRAY_WIFI_RETRY: u64 = 0;
 /// Wi-Fi answers lost in a row; after three the next 30 s look asks again.
 static mut TRAY_WIFI_LOST: u8 = 0;
 /// How long the idle Shell may sleep while a tray answer is owed or a Wi-Fi look is
-/// due: nothing else may wake it, and a lost answer is only noticed by `tray_tick`.
+/// due, or while program tray items or cards are up: nothing else may wake it, a lost
+/// answer is only noticed by `tray_tick`, and an ended program's item by its poll.
 pub unsafe fn tray_wake() -> Option<u64> {
     let now = sex_pdx::get_ticks();
     if let Some(t) = TRAY_WIFI_ASKED { return Some((t + 5_000).saturating_sub(now).clamp(1, 1_000)); }
     if TRAY_WIFI_DUE { return Some(TRAY_WIFI_RETRY.saturating_sub(now).clamp(1, 1_000)); }
-    None
+    [tray_items_glue::wake(), weather_glue::wake(), layout_plugin_glue::wake()].into_iter().flatten().min()
 }
 /// A volume or mute click made while another answer was owed to Shell: sent once that
 /// answer is in. The kernel keeps one unread reply per domain, so a second answer
@@ -16908,8 +16920,10 @@ unsafe fn desktop_look_step(wallpaper: u8, night: u8) -> bool {
 unsafe fn desktop_look_apply(wallpaper: u8, night: u8) -> bool {
     use sex_pdx::desktop_look as look;
     let next = (wallpaper % look::WALLPAPERS.len() as u8, night % look::NIGHT_LEVELS);
-    let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, 0).0 == 0;
+    let theme = theme_glue::word();
+    let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, theme).0 == 0;
     if ok { DESKTOP_LOOK = next; }
+    theme_glue::sent(theme, ok);
     sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
     ok
 }
@@ -16982,6 +16996,7 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     }
     let assembler = &mut *core::ptr::addr_of_mut!(NOTIFY_ASSEMBLER);
     let Some(text) = assembler.push(msg.arg0, msg.arg1, msg.arg2) else { return true };
+    if program_notify::hidden(text.sender) { sex_pdx::serial_record!("[shell.notify.hidden] id={} sender={}", text.id, text.sender); return true; }
     NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = text;
     NOTIFY_TOTAL += 1;
     // Buttons and a reply field its program gave for it (slice S2).
@@ -17772,6 +17787,7 @@ fn program_bind(target:u32,task:u32){
     unsafe{autofill_routes::bound(target,task); }
     attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
+    program_notify::bound(target);
     let network=unsafe{core::mem::take(&mut PROGRAM_NETWORK)};
     if network{let _=pdx_call(sex_pdx::web::SHELL_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
     unsafe{launch_started(target,task,network);}
@@ -17780,6 +17796,8 @@ fn program_bind(target:u32,task:u32){
 /// person who typed `run` is looking.
 fn program_refused(code:u32){
     if unsafe{reader_glue::voice_refused(code)}{return}
+    if unsafe{weather_glue::refused(code)}{return}
+    if unsafe{layout_plugin_glue::refused(code)}{return}
     if let Some((parent,_,cookie))=unsafe{LAUNCH_ASKER.take()}{unsafe{LAUNCH_HIDDEN=false;}launch_send(parent,sex_pdx::launch::Event::Refused{cookie,code});return}
     let _=pdx_call(spindle_route_slot(),sex_pdx::program_store::OP_REFUSED,code as u64,0,0);
 }
@@ -17840,6 +17858,8 @@ fn launch_send(parent:u32,event:sex_pdx::launch::Event){
 }
 unsafe fn launch_started(target:u32,task:u32,network:bool){
     if reader_glue::voice_started(target,task){return}
+    if weather_glue::started(target,task){return}
+    if layout_plugin_glue::started(target,task){return}
     if network{if let Some(slot)=NETWORK_RUNS.iter_mut().find(|s|s.is_none()){*slot=Some((target,task));}}
     let hidden=core::mem::take(&mut LAUNCH_HIDDEN);
     let scene=PROGRAM_SCENE.take();
@@ -17983,6 +18003,14 @@ unsafe fn attached_stop(caller:u32,target:u64){
     let Some(row)=app_catalog::by_target(r.0)else{return};
     let result=sex_pdx::app_lifecycle::force_end(row.lifecycle_slot);
     sex_pdx::serial_record!("[shell.attached.stop] terminal={} target={} task={} ok={}",caller,r.0,r.1,result.is_ok() as u8);
+}
+/// The Shell's own `run NAME` (startup programs): false while another start is under way.
+unsafe fn program_start_own(name:[u64;2])->bool{
+    use sex_pdx::program_store as store;
+    if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||LAUNCH_ASKER.is_some()||RECORD_SPAWN_WANTED!=0||program_free_row().is_none(){return false}
+    PROGRAM_READING=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,name[0],name[1],0).0==0;
+    PROGRAM_NETWORK=false;PROGRAM_LAUNCHER=None;PROGRAM_TICKET=0;PROGRAM_SCENE=None;
+    PROGRAM_READING
 }
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
 unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
@@ -26443,7 +26471,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); }
+        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); startup::poll(); }
         unsafe { sound_panel_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
@@ -27138,7 +27166,7 @@ pub extern "C" fn _start() -> ! {
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); tray_items_glue::display_restarted(); continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); tray_items_glue::display_restarted(); widgets_glue::display_restarted(); weather_glue::display_restarted(); continue; }
         // The kernel: the power button or the lid. Read the sensors now.
         if msg.type_id == sex_pdx::power::OP_EVENT && msg.caller_pd == 0 { unsafe { LAPTOP_NEXT_POLL = 0; laptop_poll(); } continue; }
         // The kernel's critical-memory word: the poll above acts on it.
@@ -27158,6 +27186,8 @@ pub extern "C" fn _start() -> ! {
             if bt_panel::receive(&msg) { continue; }
             if reader_glue::receive(&msg) { continue; }
             if tray_items_glue::receive(&msg) { continue; }
+            if weather_glue::receive(&msg) { continue; }
+            if layout_plugin_glue::receive(&msg) { continue; }
             if silk_ctl_glue::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }

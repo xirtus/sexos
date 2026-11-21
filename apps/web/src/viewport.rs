@@ -58,7 +58,7 @@ impl Frame {
         rect: [i32; 4],
         scroll: i32,
         bar: i32,
-        side: i32,
+        pane: (i32, i32),
         capacity: usize,
     ) -> Option<Self> {
         let [x, y, w, h] = rect;
@@ -66,11 +66,13 @@ impl Frame {
             return None;
         }
         let source = Surface::checked(w as usize, h as usize, capacity)?;
-        // The page starts `side` columns in, right of the vertical tab strip.
-        let (x, y) = (x as i64 + side.max(0) as i64, y as i64 - scroll as i64 + bar as i64);
-        let left = x.max(side.max(0) as i64);
+        // The page takes window columns `pane.0` .. `pane.0 + pane.1`: right of the
+        // vertical tab strip, or one half of a split view.
+        let (px, pw) = (pane.0.max(0) as i64, pane.1.max(0) as i64);
+        let (x, y) = (x as i64 + px, y as i64 - scroll as i64 + bar as i64);
+        let left = x.max(px);
         let top = y.max(bar.max(0) as i64);
-        let right = (x + w as i64).min(surface.w as i64);
+        let right = (x + w as i64).min(surface.w as i64).min(px + pw);
         let bottom = (y + h as i64).min(surface.h as i64);
         if left >= right || top >= bottom {
             return None;

@@ -8,6 +8,7 @@ use super::{clock, profile::Jarbox, Browser, Doc, Frame};
 use alloc::string::String;
 use alloc::vec::Vec;
 use sex_html::layout::Page;
+use sex_web::Slot;
 use sex_js::Document;
 use sex_web::sex_html::{self, Host};
 
@@ -44,12 +45,20 @@ pub struct Tab {
     pub title: String,
     laid_zoom: u32,
     blocked: u32,
-    jar: alloc::rc::Rc<core::cell::RefCell<sex_fetch::Jar>>,
-    storage: alloc::rc::Rc<core::cell::RefCell<sex_js::storage::WebStorage>>,
+    pub(super) jar: alloc::rc::Rc<core::cell::RefCell<sex_fetch::Jar>>,
+    pub(super) storage: alloc::rc::Rc<core::cell::RefCell<sex_js::storage::WebStorage>>,
     pub jarbox: Jarbox,
+    /// The tab group this slot's tab is in. It stays with the slot, not the page,
+    /// so it isn't swapped when the tab shows.
+    pub group: Option<usize>,
+    /// A restored tab's address, loaded when it is first shown.
+    pub restore: Option<String>,
 }
 
 impl Tab {
+    /// When the tab's next timer is due, while it waits.
+    pub fn timer(&self) -> Option<u64> { self.timer }
+
     /// An empty tab, before its first page.
     pub fn blank(b: &Browser) -> Tab {
         let view = b.view;
@@ -61,7 +70,7 @@ impl Tab {
             url: String::new(), history: Vec::new(), forward: Vec::new(), scroll: 0, focus: None, hover_css: false,
             import_map: Vec::new(), script_scroll: 0, view, frames: Vec::new(), images: Vec::new(), svgs: Vec::new(),
             moving: Vec::new(), frames_shown: 0, find: None, find_at: 0, marks: Vec::new(), title: String::new(), laid_zoom: sex_html::style::zoom(), blocked: 0,
-            jar: Default::default(), storage: Default::default(), jarbox: Jarbox::Own,
+            jar: Default::default(), storage: Default::default(), jarbox: Jarbox::Own, group: None, restore: None,
         }
     }
 }
@@ -88,12 +97,12 @@ impl Browser {
 
     /// The colour under each tab: its box's.
     pub(super) fn tab_colours(&self) -> Vec<u32> {
-        (0..self.tabs.len()).map(|i| if i == self.active { self.jarbox } else { self.tabs[i].jarbox }.colour()).collect()
+        (0..self.strip_len()).map(|i| if i == self.active { self.jarbox } else { self.tabs[i].jarbox }.colour()).collect()
     }
 
     /// The label of each tab for the strip.
     pub(super) fn tab_labels(&self) -> Vec<String> {
-        (0..self.tabs.len()).map(|i| {
+        (0..self.strip_len()).map(|i| {
             let (title, url) = if i == self.active { (self.page.title.as_str(), self.url.as_str()) } else { (self.tabs[i].title.as_str(), self.tabs[i].url.as_str()) };
             String::from(if !title.is_empty() { title } else if url.is_empty() { "New tab" } else { url.trim_start_matches("https://").trim_start_matches("http://") })
         }).collect()
@@ -102,6 +111,15 @@ impl Browser {
     /// Shows tab `i`.
     pub(super) fn show_tab(&mut self, i: usize) {
         if i >= self.tabs.len() || i == self.active || self.in_frame.is_some() { return; }
+        // Showing a tab of a folded group unfolds it, as in Chrome.
+        if let Some(g) = self.tabs[i].group.filter(|g| self.groups.get(*g).is_some_and(|g| g.folded)) {
+            self.groups[g].folded = false;
+            sex_pdx::serial_record!("[web.group.folded] group={} on=0", g);
+        }
+        // A tab outside the split ends it, as in Edge.
+        // With the side panel open, the tab shown takes its place beside it.
+        if let Some(p) = self.panel_slot().filter(|p| i != *p) { self.split = Some((i, p)); }
+        else if self.split.is_some_and(|(l, r)| i != l && i != r) { self.split = None; sex_pdx::serial_record!("[web.split] on=0 shown={}", i); }
         // The tab going back pauses its sound and remembers its title.
         for m in self.media.iter_mut() { m.hush(); }
         let title = self.page.title.clone();
@@ -129,6 +147,9 @@ impl Browser {
         let title: Vec<u8> = self.page.title.bytes().take(16).collect();
         self.window.title(if title.is_empty() { b"Kaleidoscope" } else { &title });
         sex_pdx::serial_record!("[web.tab.shown] index={} count={} url={}", i, self.tabs.len(), self.url);
+        // A restored tab loads the first time it shows.
+        if let Some(url) = self.tabs[i].restore.take() { return self.open(&url, false); }
+        self.save_session();
         self.draw();
     }
 
@@ -136,13 +157,21 @@ impl Browser {
     /// showing `url` (or a blank page with the address bar ready for typing).
     pub(super) fn new_tab(&mut self, url: Option<&str>, jarbox: Jarbox) {
         if self.tabs.len() >= MAX_TABS || self.in_frame.is_some() { return; }
-        let at = self.active + 1;
+        // New tabs go before the side panel's slot, and show beside the panel.
+        let at = (self.active + 1).min(self.strip_len());
+        self.split = None;
         let mut blank = Tab::blank(self);
         (blank.jar, blank.storage) = self.profile.store(&mut self.window, jarbox, super::wall());
         blank.jarbox = jarbox;
+        // A tab opened from a grouped tab joins its group, beside it.
+        blank.group = self.tabs[self.active].group;
         self.tabs.insert(at, blank);
+        // From the side panel, the new tab goes before the panel's slot, which moves up.
+        if at <= self.active { self.active += 1; }
+        if self.panel { self.split = Some((at, self.tabs.len() - 1)); }
         self.show_tab(at);
         sex_pdx::serial_record!("[web.tab.opened] index={} count={} box={}", at, self.tabs.len(), jarbox.tag());
+        if let Some(g) = self.tabs[at].group { sex_pdx::serial_record!("[web.group.joined] tab={} group={}", at, g); }
         match url {
             Some(u) => self.open(u, false),
             None => { self.open("about:blank", false); self.editing = Some(String::new()); self.draw(); }
@@ -153,27 +182,213 @@ impl Browser {
     /// last tab closing closes the window.
     pub(super) fn close_tab(&mut self) {
         if self.in_frame.is_some() { return; }
-        if self.tabs.len() <= 1 { self.quit(); }
+        // Ctrl+W in the side panel closes the panel.
+        if self.panel_shown() { return self.close_panel(); }
+        if self.strip_len() <= 1 { self.quit(); }
         let going = self.active;
-        let next = if going + 1 < self.tabs.len() { going + 1 } else { going - 1 };
-        // Take the closing page's frames and downloads down with it.
+        let next = if going + 1 < self.strip_len() { going + 1 } else { going - 1 };
+        self.split = None;
+        self.drop_shown_page();
+        self.show_tab(next);
+        self.tabs.remove(going);
+        if self.active > going { self.active -= 1; }
+        self.prune_groups();
+        self.repair_panel();
+        // The last private tab took the private box's cookies and storage with it.
+        if self.jarbox != Jarbox::Private && !self.tabs.iter().enumerate().any(|(i, t)| i != self.active && t.jarbox == Jarbox::Private) { self.profile.forget_private(); }
+        sex_pdx::serial_record!("[web.tab.closed] index={} count={} shown={}", going, self.tabs.len(), self.active);
+        self.save_session();
+        self.draw();
+    }
+
+    /// The tab beside the shown one that is drawn too: the other half of a split view,
+    /// or the side panel's page.
+    pub(super) fn waiting_half(&self) -> Option<usize> {
+        let (l, r) = self.split_pair()?;
+        if self.in_frame.is_some() || self.visiting { return None; }
+        Some(if self.active == l { r } else { l })
+    }
+
+    /// Runs `f` with tab `i` in the browser's fields, as if shown, then puts the shown
+    /// tab back. Its drawing goes to its own column only.
+    pub(super) fn visit<T>(&mut self, i: usize, f: impl FnOnce(&mut Self) -> T) -> T {
+        let back = self.active;
+        self.swap_tab(back);
+        self.swap_tab(i);
+        self.active = i;
+        self.visiting = true;
+        let out = f(self);
+        self.visiting = false;
+        self.swap_tab(i);
+        self.swap_tab(back);
+        self.active = back;
+        out
+    }
+
+    /// Takes the shown page's frames, sockets, sound and downloads down, as it goes.
+    pub(super) fn drop_shown_page(&mut self) {
         let owner = self.doc.get().owner();
         self.ws_close_page(owner);
         self.drop_frames();
         for mut l in core::mem::take(&mut self.media_loads) { l.ex.cancel(&mut self.window); }
         self.media.clear();
-        self.show_tab(next);
-        self.tabs.remove(going);
-        if self.active > going { self.active -= 1; }
-        // The last private tab took the private box's cookies and storage with it.
-        if self.jarbox != Jarbox::Private && !self.tabs.iter().enumerate().any(|(i, t)| i != self.active && t.jarbox == Jarbox::Private) { self.profile.forget_private(); }
-        sex_pdx::serial_record!("[web.tab.closed] index={} count={} shown={}", going, self.tabs.len(), self.active);
+    }
+
+    /// In a split view, paints the half that waits (as it last was) and the line
+    /// between the halves. Its frames and moving pictures wait until it shows.
+    pub(super) fn paint_split(&mut self) {
+        let Some((l, r)) = self.split_pair() else { return };
+        let Some((left, right)) = self.columns() else { return };
+        let (other, (ox, ow)) = if self.active == l { (r, right) } else { (l, left) };
+        let gap = left.0 + left.1;
+        let (w, h) = (self.surface.w, self.surface.h);
+        let t = &mut self.tabs[other];
+        use core::mem::swap;
+        swap(&mut self.fonts.images, &mut t.images); swap(&mut self.fonts.svgs, &mut t.svgs);
+        let pixels = &mut self.window.pixels()[..self.surface.pixels];
+        if let Some(mut target) = sex_web::column(pixels, w, h, t.scroll, ox, ow) { sex_web::paint(&t.page, &mut self.fonts, &mut target, None); }
+        swap(&mut self.fonts.images, &mut t.images); swap(&mut self.fonts.svgs, &mut t.svgs);
+        for y in sex_web::BAR..h {
+            let row = (y * w) as usize;
+            for x in gap..(gap + super::SPLIT_GAP).min(w) { pixels[row + x as usize] = 0x0022_2C3A; }
+        }
+    }
+
+    /// The chip under window point (`x`, `y`) in the bar, if any: a tab or a group's label.
+    pub(super) fn tab_at(&self, x: i32, y: i32) -> Option<Slot> {
+        if !(0..sex_web::BAR).contains(&y) || self.side() > 0 { return None; }
+        let slots = self.slots();
+        sex_web::tab_chips(self.surface.w, &slots, &self.groups).iter().position(|(cx, w)| x >= *cx && x < cx + w).map(|i| slots[i])
+    }
+
+    /// The row under window point (`x`, `y`) in the vertical strip, if any.
+    pub(super) fn side_at(&self, x: i32, y: i32) -> Option<Slot> {
+        let slots = self.slots();
+        sex_web::side_row_at(self.side(), slots.len(), x, y).map(|i| slots[i])
+    }
+
+    /// Each tab's group.
+    pub(super) fn group_of(&self) -> Vec<Option<usize>> { self.tabs[..self.strip_len()].iter().map(|t| t.group).collect() }
+
+    /// The strip's places: group labels and the tabs not folded away.
+    pub(super) fn slots(&self) -> Vec<Slot> { sex_web::strip_slots(&self.group_of(), &self.groups) }
+
+    /// Moves tab slot `from` to `to`, the shown tab staying shown. Ends a split view.
+    fn move_tab(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() { return; }
+        if !self.panel && self.split.take().is_some() { sex_pdx::serial_record!("[web.split] on=0 shown={}", self.active); }
+        let t = self.tabs.remove(from);
+        self.tabs.insert(to, t);
+        self.active = if self.active == from { to } else if from < self.active && to >= self.active { self.active - 1 } else if from > self.active && to <= self.active { self.active + 1 } else { self.active };
+        self.repair_panel();
+    }
+
+    /// Ctrl+Shift+G: the shown tab into a new group, named for its site, or out of its
+    /// group (to just after it).
+    pub(super) fn toggle_group(&mut self) {
+        if self.in_frame.is_some() || self.panel_shown() { return; }
+        let at = self.active;
+        match self.tabs[at].group {
+            Some(g) => {
+                let last = (0..self.tabs.len()).rev().find(|i| self.tabs[*i].group == Some(g)).unwrap_or(at);
+                self.tabs[at].group = None;
+                self.move_tab(at, last);
+                sex_pdx::serial_record!("[web.group.left] group={} from={} to={}", g, at, self.active);
+                self.prune_groups();
+                // A split that ended gives the shown page the whole width again.
+                self.save_session();
+                return self.refit();
+            }
+            None => {
+                if self.groups.len() >= MAX_GROUPS { return; }
+                // The next colour no group has yet, as Chrome picks.
+                let colour = sex_web::GROUP_COLOURS.iter().copied().find(|c| !self.groups.iter().any(|g| g.colour == *c)).unwrap_or(sex_web::GROUP_COLOURS[self.groups.len() % 8]);
+                let name = sex_web::group_name(&self.url);
+                sex_pdx::serial_record!("[web.group] group={} tab={} name={}", self.groups.len(), at, name);
+                self.groups.push(sex_web::TabGroup { colour, name, folded: false });
+                self.tabs[at].group = Some(self.groups.len() - 1);
+            }
+        }
+        self.save_session();
         self.draw();
     }
 
-    /// The tab chip under window point (`x`, `y`), if any.
-    pub(super) fn tab_at(&self, x: i32, y: i32) -> Option<usize> {
-        if !(0..sex_web::BAR).contains(&y) || self.side() > 0 { return None; }
-        sex_web::tab_chips(self.surface.w, self.tabs.len()).iter().position(|(cx, w)| x >= *cx && x < cx + w)
+    /// A click on a group's label: folds its tabs away, or shows them again. Folding
+    /// the group of the shown tab shows the nearest tab outside it first.
+    pub(super) fn fold_group(&mut self, g: usize) {
+        if g >= self.groups.len() || self.in_frame.is_some() { return; }
+        let on = !self.groups[g].folded;
+        if on && self.tabs[self.active].group == Some(g) {
+            let n = self.strip_len();
+            let after = (self.active..n).find(|i| self.tabs[*i].group != Some(g));
+            let before = (0..self.active).rev().find(|i| self.tabs[*i].group != Some(g));
+            let Some(next) = after.or(before) else { return };
+            self.show_tab(next);
+        }
+        self.groups[g].folded = on;
+        sex_pdx::serial_record!("[web.group.folded] group={} on={} tabs={}", g, on as u8, self.tabs.iter().filter(|t| t.group == Some(g)).count());
+        self.save_session();
+        self.draw();
+    }
+
+    /// A right-click on a group's label: its name is typed in the bar, the label
+    /// showing it as typed. Enter keeps it, Escape puts the old one back, and Up and
+    /// Down step through the group colours.
+    pub(super) fn start_naming(&mut self, g: usize) {
+        if g >= self.groups.len() || self.in_frame.is_some() { return; }
+        let old = self.groups[g].name.clone();
+        self.editing = Some(old.clone());
+        self.suggestions.clear();
+        self.chosen = None;
+        self.naming = Some((g, old));
+        sex_pdx::serial_record!("[web.group.naming] group={}", g);
+        self.draw();
+    }
+
+    /// A key while a group is being named.
+    pub(super) fn name_key(&mut self, key: sex_pdx::app_key::Key) {
+        let Some((g, old)) = self.naming.clone() else { return };
+        if g >= self.groups.len() { self.naming = None; self.editing = None; return self.draw(); }
+        match key.code {
+            // Escape: the old name back.
+            0x01 => { self.groups[g].name = old; self.naming = None; self.editing = None; }
+            0x1C => {
+                self.naming = None;
+                self.editing = None;
+                sex_pdx::serial_record!("[web.group.named] group={} name={} colour={:08x}", g, self.groups[g].name, self.groups[g].colour);
+                self.save_session();
+            }
+            0x48 | 0x50 | 0x67 | 0x6C => {
+                let n = sex_web::GROUP_COLOURS.len();
+                let at = sex_web::GROUP_COLOURS.iter().position(|c| *c == self.groups[g].colour).unwrap_or(0);
+                let next = if matches!(key.code, 0x50 | 0x6C) { (at + 1) % n } else { (at + n - 1) % n };
+                self.groups[g].colour = sex_web::GROUP_COLOURS[next];
+                sex_pdx::serial_record!("[web.group.colour] group={} colour={:08x}", g, self.groups[g].colour);
+            }
+            0x0E => { if let Some(t) = self.editing.as_mut() { t.pop(); } }
+            _ => {
+                let Some(c) = sex_app::text(key).filter(|c| !c.is_control()) else { return };
+                if let Some(t) = self.editing.as_mut().filter(|t| t.chars().count() < MAX_GROUP_NAME) { t.push(c); }
+            }
+        }
+        if let (Some(t), Some((g, _))) = (&self.editing, &self.naming) { self.groups[*g].name = t.clone(); }
+        self.draw();
+    }
+
+    /// Forgets groups with no tabs left, renumbering the rest.
+    fn prune_groups(&mut self) {
+        let mut g = 0;
+        while g < self.groups.len() {
+            if self.tabs.iter().any(|t| t.group == Some(g)) { g += 1; continue; }
+            self.groups.remove(g);
+            for t in self.tabs.iter_mut() { if let Some(x) = t.group.as_mut().filter(|x| **x > g) { *x -= 1; } }
+            sex_pdx::serial_record!("[web.group.gone] group={} left={}", g, self.groups.len());
+        }
     }
 }
+
+/// Longest group name, in characters.
+const MAX_GROUP_NAME: usize = 24;
+
+/// Most groups one window holds.
+pub const MAX_GROUPS: usize = 8;

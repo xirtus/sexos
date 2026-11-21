@@ -7,7 +7,9 @@
 //! Ctrl+R reload, Ctrl+J downloads, Ctrl+Shift+Backspace forget this site's cookies and storage,
 //! Ctrl+Shift+S Shields down (or up) for this site, Ctrl+Shift+R reader view,
 //! Ctrl+Shift+P a private tab, Ctrl+Shift+1..4 a tab in a container, Ctrl+Shift+,
-//! tabs down the side (vertical tabs) or back across the bar.
+//! tabs down the side (vertical tabs) or back across the bar, Ctrl+Shift+\\ split view,
+//! Ctrl+Shift+G the tab into a new group or out of its group (a click on a group's
+//! label folds it), Ctrl+Shift+B the side panel.
 
 use super::{nav, profile::Jarbox, Browser, Nav};
 use sex_web::sex_html;
@@ -28,11 +30,18 @@ impl Browser {
             0x02..=0x05 if key.shift => self.new_tab(None, Jarbox::Container((key.code - 0x01) as u8)),
             // Ctrl+Shift+, (as in Edge): tabs down the side, or back across the top.
             0x33 if key.shift => { let on = !self.vertical; self.set_vertical(on) }
+            // Ctrl+Shift+\: split view, the shown tab beside the next one, or one again.
+            0x2B if key.shift => self.toggle_split(),
+            // Ctrl+Shift+G: the tab into a new group (as Chrome's "Add tab to new group"), or out.
+            0x22 if key.shift => self.toggle_group(),
+            // Ctrl+Shift+B: the side panel with the bookmarks, or closed.
+            0x30 if key.shift => self.toggle_panel(),
             0x11 => self.close_tab(),
-            0x51 => { let n = (self.active + 1) % self.tabs.len(); self.show_tab(n); }
-            0x49 => { let n = (self.active + self.tabs.len() - 1) % self.tabs.len(); self.show_tab(n); }
-            0x02..=0x09 => self.show_tab((key.code - 0x02) as usize),
-            0x0A => self.show_tab(self.tabs.len() - 1),
+            // Next and previous go round the strip's tabs (not the side panel's page).
+            0x51 => { let n = (self.active + 1) % self.strip_len(); self.show_tab(n); }
+            0x49 => { let n = (self.active + self.strip_len() - 1) % self.strip_len(); self.show_tab(n); }
+            0x02..=0x09 => { let i = (key.code - 0x02) as usize; if i < self.strip_len() { self.show_tab(i) } }
+            0x0A => self.show_tab(self.strip_len() - 1),
             0x26 => { self.editing = Some(self.url.clone()); self.suggestions.clear(); self.chosen = None; self.draw(); }
             0x20 => {
                 let title = self.page.title.clone();
@@ -143,7 +152,7 @@ impl Browser {
 }
 
 /// `s` as a query value (what [`super::extensions::decode`] reads back).
-fn encode(s: &str) -> String {
+pub(super) fn encode(s: &str) -> String {
     let mut out = String::new();
     for b in s.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b'/' | b':') { out.push(b as char); } else { out.push_str(&alloc::format!("%{:02X}", b)); }

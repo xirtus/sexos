@@ -7743,6 +7743,7 @@ dependencies = [
  "sex-pdx",
  "sex-rt",
  "sex-shape",
+ "sex-theme",
  "sex-time",
  "silkbar-model",
 ]
@@ -8333,6 +8334,14 @@ dependencies = [
 name = "stdspawn"
 version = "0.1.0"
 dependencies = [
+ "sex-std",
+]
+
+[[package]]
+name = "steamy"
+version = "0.1.0"
+dependencies = [
+ "sex-config",
  "sex-std",
 ]
 

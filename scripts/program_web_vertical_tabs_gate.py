@@ -3,7 +3,10 @@
 strip down the left side, as in Edge and Brave. The page gets the rest of the width:
 it hears `resize` with innerWidth 200 px less, and its mouse coordinates start right of
 the strip. Clicking a tab in the strip shows it (a tab that waited relays out to the new
-width). Ctrl+Shift+, again puts the tabs back, and the choice is kept for next time.
+width). Ctrl+Shift+\\ shows the tab and the next one side by side (split view): each
+half lays out to its own width, a press on the other half gives it the keyboard, and
+pages get coordinates in their own half. Ctrl+Shift+, again puts the tabs back, and the
+choice is kept for next time.
 
 The test site: /p/<name> logs `vt <name> ready|resize <innerWidth>` and
 `vt <name> down <clientX>,<clientY>` to the console."""
@@ -85,6 +88,30 @@ def main():
   s=len(t());click(bx+SIDE+50,by+BAR+40)
   m=g['wait'](r'\[web.console\] level=0 vt a down (-?\d+),(-?\d+)',s,60)
   assert abs(int(m[1])-50)<=1 and abs(int(m[2])-40)<=1,m[0]
+  # Split view (Ctrl+Shift+\\): A and B side by side beside the strip, halves 531 wide.
+  half=(wide-SIDE-2)//2
+  s=chord('ctrl','shift','backslash')
+  g['wait'](rf'\[web.split\] on=1 left=0 right=1 shown=0 w={half}\n',s,60)
+  assert int(g['wait'](r'\[web.console\] level=0 vt a resize (\d+)',s,120)[1])==half
+  assert int(g['wait'](r'\[web.console\] level=0 vt b resize (\d+)',s,120)[1])==wide-SIDE-2-half
+  # The left half has the keyboard; a press there reaches A in its own coordinates.
+  s=len(t());click(bx+SIDE+50,by+BAR+40)
+  m=g['wait'](r'\[web.console\] level=0 vt a down (-?\d+),(-?\d+)',s,60)
+  assert abs(int(m[1])-50)<=1 and abs(int(m[2])-40)<=1,m[0]
+  # A press on the right half gives it the keyboard; the next one reaches B.
+  right=bx+SIDE+half+2
+  s=len(t());click(right+50,by+BAR+40);g['wait'](r'\[web.split.focus\] shown=1\n',s,60)
+  s=len(t());click(right+50,by+BAR+40)
+  m=g['wait'](r'\[web.console\] level=0 vt b down (-?\d+),(-?\d+)',s,60)
+  assert abs(int(m[1])-50)<=1 and abs(int(m[2])-40)<=1,m[0]
+  shot=a.out/'split.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(1)
+  # One again: B takes the whole width beside the strip; A follows when shown.
+  s=chord('ctrl','shift','backslash')
+  g['wait'](r'\[web.split\] on=0 shown=1\n',s,60)
+  assert int(g['wait'](r'\[web.console\] level=0 vt b resize (\d+)',s,120)[1])==wide-SIDE
+  s=len(t());click(bx+SIDE//2,by+BAR+6+SIDE_ROW//2)
+  g['wait'](r'\[web.tab.shown\] index=0 count=2 ',s,60)
+  assert int(g['wait'](r'\[web.console\] level=0 vt a resize (\d+)',s,120)[1])==wide-SIDE
   # Back across the bar: full width again.
   s=chord('ctrl','shift','comma')
   g['wait'](r'\[web.tabs.vertical\] on=0 side=0\n',s,60)
