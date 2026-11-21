@@ -21,9 +21,16 @@ pub fn guest_core() -> u32 { GUEST.load(Ordering::Acquire) }
 pub const WAKE_VECTOR: u8 = 0xF1;
 /// Asks a core to let a just-woken interactive task run now (scheduler latency classes).
 pub const PREEMPT_VECTOR: u8 = 0xF2;
-/// Services proven to run away from core 0, as domain ids. Shell and Display stay:
-/// the kernel's lifecycle paths and the desktop's hot path still assume core 0.
-const MOVED: [u64; 4] = [13, 11, 8, 2];
+/// Services that run away from core 0, as domain ids. Shell and Display stay: the
+/// kernel's lifecycle paths and the desktop's hot path still assume core 0. Network,
+/// Files, Storage and the disk driver moved first; the hardware drivers that probe at
+/// boot (USB with its port resets, Bell with its codecs, ACPI with its AML, Cufflinks)
+/// follow, so on 3 or more cores they bring their devices up while core 0 paints the
+/// desktop instead of taking turns with it.
+const MOVED: [u64; 8] = [
+    13, 11, 8, 2,
+    5, 10, sex_pdx::power::ACPI_SERVICE_PD as u64, sex_pdx::bt_hci::CUFFLINKS_PD as u64,
+];
 /// The core a domain's task belongs to.
 pub fn home_core(pd: u64) -> u32 { program_core(logical_home(pd)) }
 /// Program cores in preference order: `PROGRAM_ORDER[i]` is the physical core behind
