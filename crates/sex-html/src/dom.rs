@@ -31,6 +31,9 @@ pub struct Dom {
     pub caret: Option<(NodeId, usize)>,
     /// The element under the pointer, for `:hover`.
     pub hover: Option<NodeId>,
+    /// What `:scope` is while a script's `querySelector`/`matches` runs: the element
+    /// it was called on. `None` (style sheets) makes `:scope` the root element.
+    pub scope: core::cell::Cell<Option<NodeId>>,
 }
 
 impl Dom {
@@ -43,7 +46,10 @@ impl Dom {
 
     pub fn query(&self, root: NodeId, selectors: &[crate::css::Selector], all: bool) -> Vec<NodeId> {
         if root >= self.nodes.len() || selectors.iter().any(|s| s.parts.is_empty()) { return Vec::new(); }
-        self.query_cache.borrow_mut().query(self, root, selectors, all)
+        let outer = self.scope.replace(Some(root));
+        let found = self.query_cache.borrow_mut().query(self, root, selectors, all);
+        self.scope.set(outer);
+        found
     }
 
     /// `getElementById` under `root`: the first element in tree order with this exact id.
@@ -61,7 +67,7 @@ impl Dom {
     }
 
     pub fn new() -> Self {
-        Self { query_cache: Default::default(), adopted_styles: Default::default(), nodes: alloc::vec![Node { kind: Kind::Document, parent: None, children: Vec::new() }], clickable: Default::default(), values: Default::default(), caret: None, hover: None }
+        Self { query_cache: Default::default(), adopted_styles: Default::default(), nodes: alloc::vec![Node { kind: Kind::Document, parent: None, children: Vec::new() }], clickable: Default::default(), values: Default::default(), caret: None, hover: None, scope: Default::default() }
     }
 
     pub fn style_scope(&self, mut node: NodeId) -> NodeId {

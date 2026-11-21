@@ -63,6 +63,10 @@ fn manifest_and_locale() {
     assert_eq!(m2.popup.as_deref(), Some("popup.html"));
     assert!(m2.host_permissions[0].matches("https://b.a.com/"));
     assert_eq!(Manifest::parse(r#"{"manifest_version":4,"name":"x"}"#).unwrap_err(), Error::Version);
+    // MV3 side panel: its page, kept inside the extension.
+    let m3 = Manifest::parse(r#"{"manifest_version":3,"name":"P","version":"1","side_panel":{"default_path":"panel/side.html"}}"#).unwrap();
+    assert_eq!(m3.side_panel.as_deref(), Some("panel/side.html"));
+    assert_eq!(Manifest::parse(r#"{"manifest_version":3,"name":"P","version":"1","side_panel":{"default_path":"../x.html"}}"#).unwrap().side_panel, None);
 }
 
 #[test]

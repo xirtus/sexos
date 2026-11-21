@@ -97,15 +97,16 @@ pub fn write_stopped(bytes: &[u8]) {
     }
 }
 
-/// A service's whole line in one string write (`rep outsb`). Under KVM that is one
-/// exit to QEMU for the line instead of one per byte, which made every logged line
-/// cost milliseconds on nested-virtualised CI runners and sat inside every
-/// keystroke's path. Before each 16 bytes (a 16550's FIFO) it waits for the
-/// transmitter to be empty, so a real UART drops nothing; under QEMU that is one
-/// more exit per 16 bytes.
+/// A service's whole line in one string write (`rep outsb`), waiting for the
+/// transmitter to be empty before each 16 bytes (a 16550's FIFO), so a real UART drops
+/// nothing and QEMU with a slow stdio or pty backend does not overrun its emulated FIFO.
+/// Under nested KVM every byte costs ~17 us however it is written (the CI boot's
+/// `[boot.kernel.cost]` serial figure): sending whole lines saved nothing measurable
+/// (14a783d7, and again after #505), so the pacing stays everywhere.
 pub fn write_string(bytes: &[u8]) {
     use x86_64::instructions::port::Port;
     let mut line_status: Port<u8> = Port::new(0x3F8 + 5);
+    let t = crate::boot_cost::now();
     for chunk in bytes.chunks(16) {
         unsafe {
             for _ in 0..100_000 { if line_status.read() & 0x20 != 0 { break; } }
@@ -113,6 +114,7 @@ pub fn write_string(bytes: &[u8]) {
                 inout("rcx") chunk.len() => _, options(nostack, preserves_flags, readonly));
         }
     }
+    crate::boot_cost::add(crate::boot_cost::Bucket::Serial, t, bytes.len() as u64);
 }
 
 #[macro_export]

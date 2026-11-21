@@ -135,13 +135,9 @@ struct Found { at: Bdf, vendor: u16, device: u16, class: u16 }
 /// Config space, read only: the HAL's enumeration also runs boot NIC diagnostics.
 fn scan() -> Vec<Found> {
     let mut out = Vec::new();
-    for bus in 0..=255u8 {
-        for dev in 0..32u8 {
-            for at in functions(bus, dev) {
-                let id = rd(at, 0);
-                out.push(Found { at, vendor: id as u16, device: (id >> 16) as u16, class: (rd(at, 0x08) >> 16) as u16 });
-            }
-        }
+    for (bus, dev, func, id) in crate::hal::pci::present_functions() {
+        let at = Bdf { bus, dev, func };
+        out.push(Found { at, vendor: id as u16, device: (id >> 16) as u16, class: (rd(at, 0x08) >> 16) as u16 });
     }
     out
 }

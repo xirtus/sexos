@@ -171,7 +171,8 @@ fn exact(vendor: u16, device: u16) -> Option<Device> {
         (0x8086, 0x43ed) => known("Tiger Lake-H USB 3.2 xHCI", Usb, Driven),
         (0x8086, 0xa0ed) => known("Tiger Lake-LP USB 3.2 xHCI", Usb, Driven),
         (0x8086, 0x9a13) => known("Tiger Lake Thunderbolt 4 USB xHCI", Usb, Driven),
-        (0x8086, 0x9a1b) | (0x8086, 0x9a1d) => known("Tiger Lake Thunderbolt 4 NHI", Usb, Planned),
+        (0x8086, 0x9a1b) | (0x8086, 0x9a1d) => known("Tiger Lake Thunderbolt 4 NHI", Usb, InProgress),
+        (0x8086, 0x9a1f) | (0x8086, 0x9a21) => known("Tiger Lake-H Thunderbolt 4 NHI", Usb, InProgress),
         (0x8086, 0x1137) => known("Maple Ridge Thunderbolt 4 NHI", Usb, Planned),
         // Intel Wi-Fi (iwlwifi family). Killer AX1675 is an AX210 or AX211 module.
         (0x8086, 0x2725) => known("Wi-Fi 6E AX210 / Killer AX1675x", Net, InProgress),

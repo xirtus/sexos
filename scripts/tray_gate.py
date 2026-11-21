@@ -92,9 +92,14 @@ def main():
         time.sleep(1.5)
         # Icons: the three chips left of the bell (1280 wide, scale 1: x 1024..1096).
         w, h, px = shot('bar')
-        fg = sum(1 for y in range(0, 28) for x in range(1024, 1096)
-                 if px[(y * w + x) * 3] > 0xB0 and px[(y * w + x) * 3 + 2] > 0xD0)
-        if fg < 40: raise RuntimeError('tray icons look missing (%d bright pixels)' % fg)
+        # The icons take the desktop theme's ink (S6a): light on a dark bar, dark
+        # on a light one. Count pixels well apart from their row's bar colour.
+        fg = 0
+        for y in range(0, 28):
+            row = [bytes(px[(y * w + x) * 3:(y * w + x) * 3 + 3]) for x in range(1024, 1096)]
+            bar = max(set(row), key=row.count)
+            fg += sum(1 for c in row if max(abs(a - b) for a, b in zip(c, bar)) > 0x60)
+        if fg < 40: raise RuntimeError('tray icons look missing (%d ink pixels)' % fg)
 
         # Volume icon: quick settings open on the status panel surface.
         start = len(text()); click(1060, 13)

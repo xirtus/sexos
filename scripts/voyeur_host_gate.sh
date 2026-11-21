@@ -28,7 +28,7 @@ v=(root/'servers/silk-shell/src/voyeur.rs').read_text()
 w=(root/'crates/sex-pdx/src/search.rs').read_text()
 # The Shell's hooks, each once.
 for hook in ['mod voyeur;','voyeur::refresh(PALETTE_QUERY.as_str());','voyeur::rows(&rows,&mut shown)',
-             'voyeur::enter()','voyeur::step(','voyeur::launched(idx);','if voyeur::receive(&msg) { continue; }',
+             'voyeur::enter()','voyeur::step(','voyeur::cycle()','voyeur::launched(idx);','if voyeur::receive(&msg) { continue; }',
              'launcher_search::key_char_shifted(code, APP_MODIFIERS.key(code).shift)']:
     assert s.count(hook)==1,hook
 # A program's words reach Voyeur only after the clipboard's and before the
@@ -41,6 +41,12 @@ sent=re.findall(r'wire::(\w+)\(',v)
 assert {'query_packets','cancel','activate','registered'}<=set(sent),sent
 assert 'records()' in v and 'HINT_CAP_EXTERNAL' in v, 'program answers are capped'
 assert 'program_participant(' in v, 'only catalogued live programs register'
+# Copy is the Shell's own (the provider is never asked); other actions focus
+# the provider's window first. Loom and Kaleidoscope answer as programs.
+assert 'publish_program(p.participant.subject' in v and 'try_set_focus(p.participant.surface)' in v
+for app,name in [('apps/files/src/main.rs','"loom"'),('apps/web/src/main.rs','"kaleidoscope"')]:
+    src=(root/app).read_text()
+    assert f'sex_app::search::register({name}' in src and 'vs::asked()' in src and 'vs::activated()' in src,app
 # Opcodes stay in their block and nothing else in the tree uses it.
 ops=re.findall(r'pub const [A-Z]+: u64 = (0x3C[0-9A-F]);',w)
 assert len(ops)==8 and len(set(ops))==8,ops
@@ -48,5 +54,5 @@ for path in list((root/'crates').rglob('*.rs'))+list((root/'servers').rglob('*.r
     if 'target' in path.parts or path.name=='search.rs': continue
     for line in path.read_text(errors='ignore').splitlines():
         if re.search(r'const\s+\w+\s*:\s*u64\s*=\s*0x3[cC][0-7]\s*;',line): raise SystemExit(f'opcode collision: {path}: {line}')
-print('[voyeur.host] PASS scope=ranking_goldens_abacus_wire_protocol_two_provider_merge_shell_hooks_not_booted_pixels')
+print('[voyeur.host] PASS scope=ranking_goldens_abacus_wire_protocol_two_provider_merge_shell_hooks_loom_kaleidoscope_providers_not_booted_pixels')
 PY

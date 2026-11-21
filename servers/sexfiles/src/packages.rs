@@ -24,6 +24,8 @@ use sex_pkg::{rollback, Manifest, Target};
 use sexfs::{Error, Fs, Kind};
 
 type F = Fs<'static, Disk>;
+/// Programs Files gives more than their own folder (see `fs_service::program_is`).
+const RESERVED: [&str; 2] = ["tatami", "settings"];
 const CHUNK: usize = 64 * 1024;
 
 fn read_all(fs: &mut F, path: &[u8], max: usize) -> Result<Vec<u8>, Error> {
@@ -125,6 +127,40 @@ pub fn note(fs: &mut F, program: &[u8]) -> Option<p::Note> {
     Some(p::Note { asked: m.grants, answered: answered & m.grants, allowed: allowed & answered & m.grants })
 }
 
+/// The person's default answers for questions not yet asked (`privacy.*_first_run`:
+/// 0 ask, 1 no, 2 yes), applied to a run's note only: nothing is recorded, so changing
+/// the default back to "ask" asks again.
+pub fn with_defaults(mut n: p::Note) -> p::Note {
+    for (bit, key) in [(p::NETWORK, sex_config::id::FIRST_RUN_NETWORK), (p::MICROPHONE, sex_config::id::FIRST_RUN_MICROPHONE)] {
+        if n.open() & bit == 0 { continue; }
+        match crate::config_store::value(key) {
+            1 => n.answered |= bit,
+            2 => { n.answered |= bit; n.allowed |= bit; }
+            _ => {}
+        }
+    }
+    n
+}
+
+/// When Files last prepared a run of each program that held an allowed grant, since
+/// Files started (Unix seconds). Kept in memory: a disk write on every run is not worth it.
+const USED_MAX: usize = 32;
+static mut USED: [([u8; sex_pkg::NAME_MAX], u8, u64); USED_MAX] = [([0; sex_pkg::NAME_MAX], 0, 0); USED_MAX];
+pub fn mark_used(program: &[u8], now: u64) {
+    if program.len() > sex_pkg::NAME_MAX || program.is_empty() { return; }
+    let used = unsafe { &mut *core::ptr::addr_of_mut!(USED) };
+    let k = used.iter().position(|u| &u.0[..u.1 as usize] == program)
+        .or_else(|| used.iter().position(|u| u.1 == 0))
+        .unwrap_or_else(|| used.iter().enumerate().min_by_key(|(_, u)| u.2).map(|(i, _)| i).unwrap_or(0));
+    used[k].0[..program.len()].copy_from_slice(program);
+    used[k].1 = program.len() as u8;
+    used[k].2 = now;
+}
+fn last_used(program: &str) -> u64 {
+    let used = unsafe { &*core::ptr::addr_of!(USED) };
+    used.iter().find(|u| u.1 != 0 && &u.0[..u.1 as usize] == program.as_bytes()).map_or(0, |u| u.2)
+}
+
 struct Report<'a> { out: &'a mut [u8], n: usize }
 impl Report<'_> {
     fn machine(&mut self, s: &str) {
@@ -161,6 +197,7 @@ pub fn handle(fs: &mut F, op: u64, arg: &[u8], length: u64, out: &mut [u8], fold
         }
         p::REMOVE => remove(fs, arg, &mut r),
         p::LIST => list(fs, &mut r),
+        p::GRANTS => grants(fs, &mut r),
         p::TRUST => trust(fs, arg, &mut r),
         p::CONSENT => consent(fs, arg, length, &mut r),
         p::CATALOG => catalog(fs, arg, folder, &mut r),
@@ -210,6 +247,9 @@ fn install(fs: &mut F, path: &[u8], go: bool, downgrade: bool, r: &mut Report) -
     let from = repo::origin(&key, &repos, &trusted).unwrap_or_else(|| MAIN.into());
     let m = &layout.manifest;
     let program = m.program.as_str();
+    // Files trusts the program run from /data/tatami with settings, the lock password
+    // and grants: no package may become it.
+    if RESERVED.contains(&program) { return refused(r, &format!("A package may not install the system program {program}.")); }
     sex_pdx::serial_record!("[files.pkg.verified] name={} version={} program={} grants={} files={} key={} repo={}", m.name, m.version, program, m.grant_words(), layout.entries.len(), &sex_pkg::hex(&key)[..16], from);
     // What is there now: this package (an upgrade), another one, or a program no package put there.
     let old = manifest_at(fs, &record(program, "manifest"));
@@ -379,6 +419,20 @@ fn list(fs: &mut F, r: &mut Report) -> u8 {
     w::OK
 }
 
+/// Machine lines for Settings' Privacy page: `PROGRAM ASKED ANSWERED ALLOWED USED`.
+fn grants(fs: &mut F, r: &mut Report) -> u8 {
+    let all = installed(fs);
+    let mut n = 0;
+    for (program, _) in &all {
+        let Some(note) = note(fs, program.as_bytes()) else { continue };
+        if note.asked == 0 { continue; }
+        r.machine(&format!("{} {} {} {} {}", program, note.asked, note.answered, note.allowed, last_used(program)));
+        n += 1;
+    }
+    sex_pdx::serial_record!("[files.pkg.grants] programs={}", n);
+    w::OK
+}
+
 fn trust(fs: &mut F, arg: &[u8], r: &mut Report) -> u8 {
     let Some(key) = sex_pkg::unhex::<32>(arg) else { return refused(r, "A publisher key is 64 hex digits.") };
     let mut text = read_all(fs, p::TRUSTED, 64 * 1024).unwrap_or_default();
@@ -423,6 +477,16 @@ fn sources(fs: &mut F) -> Vec<Source> {
         if let Some(items) = kept_catalog(fs, &rp.name) { out.push(Source { repo: rp.name, url: rp.url, items }); }
     }
     out
+}
+/// Tatami's Updates page (`sex_pdx::facts`): `packages=N` and a `package=NAME VERSION`
+/// line per update the kept catalogs offer; nothing without a catalog.
+pub fn waiting(fs: &mut F, out: &mut String) {
+    let s = sources(fs);
+    if s.is_empty() { return; }
+    let h: Vec<Have> = have(fs).into_iter().map(|x| x.1).collect();
+    let up = repo::upgrades(&s, &h);
+    out.push_str(&format!("packages={}\n", up.len()));
+    for pk in up.iter().take(32) { out.push_str(&format!("package={} {}\n", pk.item.name, pk.item.version)); }
 }
 fn updates(fs: &mut F) -> usize {
     let s = sources(fs);

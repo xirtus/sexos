@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 
 const DEFAULT_ENDPOINT: &[u8] = b"http://10.0.2.2:8875";
 const MAX_PROMPT: usize = 1024;
+const NEEDS_TOKEN: &str = "Voice worker wants a token: put it in voice.token in Voice's folder";
 const AUDIO_CHUNK: u64 = 32 * 1024;
 const MAX_ASSET_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_AUDIO_FRAMES: u32 = 4_000_000;
@@ -43,7 +44,7 @@ fn endpoint_url(endpoint: &[u8], suffix: &[u8], out: &mut [u8; 320]) -> Option<u
     Some(len)
 }
 
-fn frame_request(window: &mut Window, endpoint: &[u8], message: Message<'_>) -> Result<Message<'static>, &'static str> {
+fn frame_request(window: &mut Window, endpoint: &[u8], token: Option<&[u8]>, message: Message<'_>) -> Result<Message<'static>, &'static str> {
     // Decode borrows its frame; own a fixed response buffer for the caller.
     // This function returns the small response by copying its parsed fields below.
     let mut url = [0u8; 320];
@@ -51,11 +52,12 @@ fn frame_request(window: &mut Window, endpoint: &[u8], message: Message<'_>) -> 
     let mut frame = [0u8; MAX_FRAME];
     let len = encode(message, &mut frame).map_err(|_| "Invalid voice request")?;
     let mut reply = [0u8; MAX_FRAME + 1024];
-    let result = net::post(window, &url[..n], &frame[..len], &mut reply).map_err(|e| match e {
+    let result = net::post_with(window, &url[..n], &frame[..len], token, &mut reply).map_err(|e| match e {
         net::Error::NotAllowed => "Start Voice with run +net",
         net::Error::TooSlow => "Voice worker timed out",
         _ => "Voice worker unavailable",
     })?;
+    if result.status == 401 { return Err(NEEDS_TOKEN); }
     if result.status != 200 { return Err("Voice worker rejected request"); }
     // A borrowed Message cannot outlive reply. Materialize only Status or Result
     // through the global response slot below, which is overwritten per request.
@@ -78,7 +80,7 @@ fn range_header(value: &[u8]) -> Option<(u64, u64, u64)> {
     Some((number(&rest[..dash])?, number(&rest[dash + 1..slash])?, number(&rest[slash + 1..])?))
 }
 
-fn save_result(window: &mut Window, endpoint: &[u8], job_id: u64, result: sex_voice::ResultAsset<'_>, prompt: &[u8]) -> Result<String, &'static str> {
+fn save_result(window: &mut Window, endpoint: &[u8], token: Option<&[u8]>, job_id: u64, result: sex_voice::ResultAsset<'_>, prompt: &[u8]) -> Result<String, &'static str> {
     let suffix = format!("/v1/assets/{}", result.asset_id);
     let mut url = [0u8; 320];
     let n = endpoint_url(endpoint, suffix.as_bytes(), &mut url).ok_or("Invalid asset URL")?;
@@ -91,11 +93,12 @@ fn save_result(window: &mut Window, endpoint: &[u8], job_id: u64, result: sex_vo
     let (mut at, mut total, mut created) = (0u64, None, false);
     loop {
         let end = at.saturating_add(AUDIO_CHUNK - 1);
-        let response = net::fetch_range(window, &url[..n], at, end, &mut bytes).map_err(|e| match e {
+        let response = net::fetch_range_with(window, &url[..n], at, end, token, &mut bytes).map_err(|e| match e {
             net::Error::NotAllowed => "Start Voice with run +net",
             net::Error::TooSlow => "Voice take transfer timed out; partial file retained",
             _ => "Could not fetch voice take; partial file retained",
         })?;
+        if response.status == 401 { return Err(NEEDS_TOKEN); }
         if response.status != 206 { return Err("Voice worker did not honor byte ranges"); }
         let (start, last, length) = response.header(&bytes, b"Content-Range")
             .and_then(range_header).ok_or("Invalid voice range")?;
@@ -156,11 +159,15 @@ pub extern "C" fn _start() -> ! {
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let (endpoint, voice_id) = split_args(files::args(&mut window, &mut args));
     let endpoint = endpoint.to_vec();
+    // A worker started with MOSS_VOICE_TOKEN wants it as a bearer token.
+    let mut held = [0u8; 300];
+    let token = files::read(&mut window, sex_voice::TOKEN_FILE.as_bytes(), &mut held).ok()
+        .and_then(|n| sex_voice::bearer_token(&held[..n])).map(|t| t.to_vec());
     let prompt = unsafe { &mut *core::ptr::addr_of_mut!(PROMPT) };
     let (mut len, mut job_id, mut next_job) = (0usize, None, sex_pdx::get_ticks().max(1));
     let mut state = String::from("Type a prompt, then generate.");
     display(&mut window, &endpoint, voice_id, &prompt[..len], &state);
-    sex_pdx::serial_record!("[voice.ready] target={} task={} voice={}", window.target, window.task, voice_id);
+    sex_pdx::serial_record!("[voice.ready] target={} task={} voice={} token={}", window.target, window.task, voice_id, token.is_some() as u8);
     loop {
         if let Some(event) = window.next_within(500) {
             match event {
@@ -172,7 +179,7 @@ pub extern "C" fn _start() -> ! {
                         operation: Operation::Synthesize, seed: 0, voice_id, reference_asset_id: 0,
                         max_frames: MAX_AUDIO_FRAMES, language: "en", model: "active", text,
                     }};
-                    match frame_request(&mut window, &endpoint, request) {
+                    match frame_request(&mut window, &endpoint, token.as_deref(), request) {
                         Ok(Message::Status { data, .. }) if data.state == JobState::Queued => { job_id = Some(id); state = String::from("Queued."); },
                         Ok(_) => state = String::from("Unexpected worker response."),
                         Err(e) => state = String::from(e),
@@ -180,7 +187,7 @@ pub extern "C" fn _start() -> ! {
                 }
                 Event::Key(key) if key.control && key.code == 0x2e => {
                     if let Some(id) = job_id.take() {
-                        let _ = frame_request(&mut window, &endpoint, Message::Cancel { job_id: id });
+                        let _ = frame_request(&mut window, &endpoint, token.as_deref(), Message::Cancel { job_id: id });
                         state = String::from("Cancelled (worker may finish current inference).");
                     }
                 }
@@ -191,7 +198,7 @@ pub extern "C" fn _start() -> ! {
                 _ => {}
             }
         } else if let Some(id) = job_id {
-            match frame_request(&mut window, &endpoint, Message::GetStatus { job_id: id }) {
+            match frame_request(&mut window, &endpoint, token.as_deref(), Message::GetStatus { job_id: id }) {
                 Ok(Message::Status { data, .. }) => match data.state {
                     JobState::Queued => state = String::from("Queued."),
                     JobState::Running => state = format!("Generating: {}%", data.progress_bps / 100),
@@ -200,7 +207,7 @@ pub extern "C" fn _start() -> ! {
                     JobState::Complete => state = String::from("Finishing take."),
                 },
                 Ok(Message::Result { data, .. }) => {
-                    state = match save_result(&mut window, &endpoint, id, data, &prompt[..len]) {
+                    state = match save_result(&mut window, &endpoint, token.as_deref(), id, data, &prompt[..len]) {
                         Ok(path) => format!("Saved {} with prompt and metadata.", path),
                         Err(e) => String::from(e),
                     };

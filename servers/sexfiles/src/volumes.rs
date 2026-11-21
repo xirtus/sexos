@@ -454,6 +454,14 @@ pub fn unmount(fs: &mut Fs<'static, FsDisk>, path: &[u8]) -> Result<u32, u8> {
     if let Some(disk) = usb { unsafe { EJECTED |= 1 << disk; } }
     Ok(0)
 }
+/// Tatami's Storage page (`sex_pdx::facts`): a `volume=` line per mounted volume.
+pub fn facts(mut fs: Option<&mut Fs<'static, FsDisk>>, out: &mut String) {
+    for m in mounts().iter_mut() {
+        let free = with(fs.as_deref_mut(), m, |v, d| v.statfs(d)).map_or(String::from("-"), |(_, free)| alloc::format!("{}", free / 4096));
+        let source = match m.source { Source::Image { .. } => "image", Source::Usb { .. } => "usb", Source::Device { .. } => "disk" };
+        out.push_str(&alloc::format!("volume={} {} {} {} {} {}\n", m.volume.format().name(), m.len, free, source, (m.read_only() || m.volume.read_only()) as u8, m.name));
+    }
+}
 /// SYNC with no path reaches every volume too.
 pub fn sync_all(fs: &mut Fs<'static, FsDisk>) {
     for m in mounts().iter_mut().filter(|m| !m.read_only()) {

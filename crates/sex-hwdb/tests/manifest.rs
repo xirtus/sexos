@@ -32,6 +32,16 @@ fn unclaimed_devices_stay_unleased() {
 }
 
 #[test]
+fn amd_display_engines_get_their_register_lease() {
+    // Rembrandt APU (03:00) and a hybrid laptop's Navi 23 (03:80) both reach slot 28 first.
+    for d in [id(0x1002, 0x1681, 3, 0, 0), id(0x1002, 0x73ef, 3, 0x80, 0)] {
+        assert_eq!(claim(d).map(|(m, e)| (m.service, e.lease, e.slot)), Some((Service::Display, Lease::AmdDisplay, 29)));
+    }
+    // AMD HDMI audio stays with sound, not with Display.
+    assert_ne!(claim(id(0x1002, 0x1640, 4, 3, 0)).map(|(m, _)| m.service), Some(Service::Display));
+}
+
+#[test]
 fn virtio_sound_is_claimed_by_id_not_class() {
     assert_eq!(claim(id(0x1af4, 0x1059, 4, 1, 0)).map(|(m, e)| (m.service, e.lease)), Some((Service::Bell, Lease::Virtio)));
 }

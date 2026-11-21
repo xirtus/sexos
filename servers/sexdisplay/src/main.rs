@@ -118,6 +118,9 @@ static mut FB_W: u32 = FALLBACK_W;
 static mut FB_H: u32 = FALLBACK_H;
 /// Scanout row length in pixels; at least FB_W. GOP modes on real GPUs pad rows.
 static mut FB_PITCH: u32 = FALLBACK_W;
+/// The firmware framebuffer, kept for the Intel fallback path.
+static mut BOOT_FB_PTR: u64 = 0;
+static mut BOOT_FB_PITCH: u32 = 0;
 /// Pixels written to the scanout since boot, and by the last publication.
 static mut PUBLISHED_PIXELS: u64 = 0;
 static mut LAST_WRITTEN: u64 = 0;
@@ -151,7 +154,11 @@ mod bitmap_transaction;
 mod bitmap_stores;
 mod fill_damage;
 mod wallpaper_mark;
+mod desktop_widgets;
 mod decor;
+mod desk_theme;
+mod glass;
+mod frost;
 mod pacing;
 mod damage;
 static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
@@ -165,9 +172,15 @@ mod restricted;
 mod frame_output;
 mod virtio_gpu;
 mod intel;
+mod amd;
 /// The virtio-gpu that took the screen over from firmware, if BOOT leased one.
 static mut GPU: Option<virtio_gpu::Gpu> = None;
+/// Intel display engine taken over from firmware: Display's own buffers, flipped at vblank.
+static mut INTEL: Option<intel::Intel> = None;
 mod screen_capture;
+mod recording_capture;
+mod recording_indicator;
+static mut RECORDING_CAPTURE:recording_capture::Server=recording_capture::Server::new();
 static mut SCREEN_CAPTURE:screen_capture::Server=screen_capture::Server::new();
 mod paint_batch;
 static mut FRAME_OUTPUT: Option<frame_output::Store> = None;
@@ -187,6 +200,7 @@ impl SceneLease {
             if !destination.capture(&SURFACES, &FRAME_GROUPS, &BITMAP_STORES, &TEXT_STAGES, bar,
                 DISPLAY_TOKENS, FOCUSED_SURFACE_ID, frame, w, h) { return None; }
             motion_place(destination);
+            destination.recording=RECORDING_CAPTURE.mark();
         }
         Some(Self { _single_task: core::marker::PhantomData })
     }
@@ -279,8 +293,6 @@ const FRAME_TOP_BAR_LIGHT_GAP_PX: usize = 5;
 const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX: usize = 50;
 /// Top bar background color: dark navy-blue header, distinct from content teal.
 const FRAME_TOP_BAR_COLOR: u32 = 0x001E1E2E;
-/// Toolbar divider color (bottom edge of top bar).
-const FRAME_TOP_BAR_DIVIDER_COLOR: u32 = 0x00B4BEFE;
 /// Light vertical zone: top (y offset within top bar), centered in 28px.
 const FRAME_TOP_BAR_LIGHT_TOP: usize = 9;
 /// Light vertical zone: bottom (exclusive).
@@ -301,6 +313,10 @@ struct RenderTokensV1 {
     zoom_light_color: u32,
     appearance_flags: u8,
     effect_levels: u8,
+    /// The bar's colours for this frame: the desktop theme (`desk_theme`).
+    bar: silkbar_model::Theme,
+    /// The quiet inset of a window's resize band.
+    band_color: u32,
 }
 
 const DEFAULT_RENDER_TOKENS: RenderTokensV1 = RenderTokensV1 {
@@ -314,9 +330,33 @@ const DEFAULT_RENDER_TOKENS: RenderTokensV1 = RenderTokensV1 {
     zoom_light_color:     FRAME_LIGHT_ZOOM_COLOR,
     appearance_flags:     0,
     effect_levels:        0,
+    bar:                  silkbar_model::DEFAULT_THEME,
+    band_color:           sex_pdx::desktop_style::NATIVE_CANVAS,
 };
 
 static mut DISPLAY_TOKENS: RenderTokensV1 = DEFAULT_RENDER_TOKENS;
+/// The Shell's default appearance preset is on: the window chrome wears the
+/// desktop theme's colours, not the preset's (S6a).
+static mut CHROME_FOLLOWS_THEME: bool = true;
+
+/// Puts the desktop theme (`desk_theme`) into the render tokens: always the
+/// bar's colours, and the chrome's while the default preset is on. Lights
+/// keep their meaning (close, minimize, zoom) in every theme.
+fn apply_desk_theme() {
+    let d = desk_theme::current();
+    unsafe {
+        let t = &mut *core::ptr::addr_of_mut!(DISPLAY_TOKENS);
+        t.bar = d.bar;
+        if CHROME_FOLLOWS_THEME {
+            t.focus_surface_color = d.focus;
+            t.frame_rim_color = d.rim;
+            t.frame_top_bar_color = d.title_bar;
+            t.active_tab_color = d.active_tab;
+            t.inactive_tab_color = d.inactive_tab;
+            t.band_color = d.band;
+        }
+    }
+}
 
 // Token reception state machine. Call 1 buffers; Call 2 commits.
 static mut TOKEN_BUF_CALL1_RECEIVED: bool = false;
@@ -515,7 +555,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             }
             // Divider: bright opaque line at bottom edge (a tabbed bar flows into its tab).
             if surf.tab_count == 0 && ly >= (scene.metrics.title()as usize).saturating_sub(scene.metrics.scale()as usize) {
-                c = FRAME_TOP_BAR_DIVIDER_COLOR;
+                c = scene.tokens.frame_rim_color;
             }
             // Tab strip: inactive tabs over the active-tab bar.
             if surf.tab_count > 1
@@ -608,7 +648,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                 c = if outer_edge {
                     glass_over_bg(scene.tokens.frame_rim_color, x, y, 112, scene)
                 } else {
-                    glass_over_bg(sex_pdx::desktop_style::NATIVE_CANVAS, x, y, 224, scene)
+                    glass_over_bg(scene.tokens.band_color, x, y, 224, scene)
                 };
             }
         } else {
@@ -770,7 +810,7 @@ fn fast_chrome_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
         let glass=|fg:u32,alpha:u8|glass_over_bg(fg,x0,y,alpha,scene);
         let tab_paint=|color:u32,alpha:u8|alpha_blend_xrgb_over_xrgb(color,glass(color,224),alpha);
         let mut base=if surf.tab_count>0{tab_paint(scene.tokens.active_tab_color,240)}else{glass(scene.tokens.frame_top_bar_color,toolbar_alpha)};
-        if surf.tab_count==0&&ly>=(m.title()as usize).saturating_sub(m.scale()as usize){base=FRAME_TOP_BAR_DIVIDER_COLOR;}
+        if surf.tab_count==0&&ly>=(m.title()as usize).saturating_sub(m.scale()as usize){base=scene.tokens.frame_rim_color;}
         let inactive=if surf.tab_count>1{tab_paint(scene.tokens.inactive_tab_color,200)}else{base};
         let exclusion=m.controls_end()as usize;
         let slot_w=if surf.tab_count>1{rim_right.saturating_sub(exclusion)/surf.tab_count as usize}else{0};
@@ -813,7 +853,7 @@ fn fast_chrome_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
         let edge=m.scale()as usize;
         let edge_row=ly<edge||ly>=sh.saturating_sub(edge);
         let outline=glass_over_bg(scene.tokens.frame_rim_color,x0,y,112,scene);
-        let inset=glass_over_bg(sex_pdx::desktop_style::NATIVE_CANVAS,x0,y,224,scene);
+        let inset=glass_over_bg(scene.tokens.band_color,x0,y,224,scene);
         for lx in l0..l1{
             if !band_row&&lx>=c0&&lx<c1{continue;}
             let c=if edge_row||lx<edge||lx>=sw.saturating_sub(edge){outline}else{inset};
@@ -1159,14 +1199,14 @@ fn workspace_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->O
             // strip. The whole shared target opens the real Atlas overview.
             let left=b.x+(b.w-10*scale)/2;let top=b.y+(b.h-10*scale)/2;
             if in_rect(x,y,left,top,10*scale,10*scale)
-                &&((x-left)/scale)%4<2&&((y-top)/scale)%4<2{return Some(DEFAULT_THEME.active);}
+                &&((x-left)/scale)%4<2&&((y-top)/scale)%4<2{return Some(scene.tokens.bar.active);}
             return None;
         }
         let size=if bar.workspaces[i].active{10*scale}else{6*scale};
         let left=b.x+(b.w-size)/2;let top=b.y+(b.h-size)/2;
         if !in_rect(x,y,left,top,size,size){return None;}
-        return Some(if bar.workspaces[i].urgent{DEFAULT_THEME.urgent}
-            else if bar.workspaces[i].active{DEFAULT_THEME.active}else{DEFAULT_THEME.muted});
+        return Some(if bar.workspaces[i].urgent{scene.tokens.bar.urgent}
+            else if bar.workspaces[i].active{scene.tokens.bar.active}else{scene.tokens.bar.muted});
     }
     let _=scene;None
 }
@@ -1174,8 +1214,6 @@ fn workspace_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->O
 static mut TRAY_STATUS: sex_pdx::tray::Status = sex_pdx::tray::Status::UNKNOWN;
 static mut TRAY_LABEL: u64 = 0;
 static mut TRAY_VIEW: sex_pdx::tray::View = sex_pdx::tray::View { menu: sex_pdx::tray::Menu::None, month_offset: 0 };
-const TRAY_FG: u32 = 0x00CDD6F4;
-const TRAY_DIM: u32 = 0x006C7086;
 /// One tray icon on a 16-unit grid: 0 network, 1 volume, 2 battery.
 fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option<u32>{
     // Tray icons in the three status chips: network, volume, battery.
@@ -1187,7 +1225,7 @@ fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option
         if !bar.chips[idx].visible{return None;}
         // The SexOS icon set's tray icons, anti-aliased over the bar's glass.
         return tray_icons::at(idx,x-left,y-top,size,unsafe{&*core::ptr::addr_of!(TRAY_STATUS)})
-            .map(|(c,a)|coverage_blend(c,bar_body(x,y,scene),a));
+            .map(|(c,a)|coverage_blend(desk_theme::tray_ink(c,desk_theme::current()),bar_body(x,y,scene),a));
     }
     None
 }
@@ -1438,7 +1476,7 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
                             1 => 0x0044FF44,
                             2 => 0x00FFCC44,
                             3 => 0x0044CCFF,
-                            _ => DEFAULT_THEME.panel_fill,
+                            _ => scene.tokens.bar.panel_fill,
                         };
                     }
                     // Unset bit: fall through to normal module rendering
@@ -1457,11 +1495,11 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
         let s = &bar.bell_state;
         if s.flags & 1 == 0 {
             // Bell unavailable (no SLOT_BELL grant or server not running) → dim dot
-            return DEFAULT_THEME.muted;
+            return scene.tokens.bar.muted;
         }
         if s.total_visible == 0 {
             // No events → dim/inactive dot
-            return DEFAULT_THEME.muted;
+            return scene.tokens.bar.muted;
         }
         if s.redacted_count > 0 {
             // Events with privacy-redacted content → warm tint
@@ -1515,24 +1553,24 @@ fn bar_body(x: usize, y: usize, scene: &scene::SceneSnapshot) -> u32 {
     let bar_bottom=(scene.metrics.bar()as usize);
     const GLOW_SPREAD: usize = 4;
     if y == 0 {
-        let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
+        let body = glass_over_bg(scene.tokens.bar.panel_fill, x, y, R6_BAR_ALPHA, scene);
         return alpha_blend_xrgb_over_xrgb(BAR_TOP_HIGHLIGHT, body, 64);
     }
     if y == bar_bottom - 1 {
-        let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
+        let body = glass_over_bg(scene.tokens.bar.panel_fill, x, y, R6_BAR_ALPHA, scene);
         let darkened = alpha_blend_xrgb_over_xrgb(BAR_BOTTOM_DARK_EDGE, body, 88);
-        return alpha_blend_xrgb_over_xrgb(DEFAULT_THEME.panel_glow, darkened, 48);
+        return alpha_blend_xrgb_over_xrgb(scene.tokens.bar.panel_glow, darkened, 48);
     }
     if y + GLOW_SPREAD >= bar_bottom && y < bar_bottom {
         let dist = (bar_bottom - 1 - y) as u32;
         let glow_a = glow_edge_alpha(dist, GLOW_SPREAD as u32, R6_EDGE_ALPHA);
         if glow_a > 0 {
-            let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
+            let base = glass_over_bg(scene.tokens.bar.panel_fill, x, y, R6_BAR_ALPHA, scene);
             let body = alpha_blend_xrgb_over_xrgb(BAR_CRYSTAL_TINT, base, 36);
-            return alpha_blend_xrgb_over_xrgb(DEFAULT_THEME.panel_glow, body, glow_a);
+            return alpha_blend_xrgb_over_xrgb(scene.tokens.bar.panel_glow, body, glow_a);
         }
     }
-    let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
+    let base = glass_over_bg(scene.tokens.bar.panel_fill, x, y, R6_BAR_ALPHA, scene);
     alpha_blend_xrgb_over_xrgb(BAR_CRYSTAL_TINT, base, 32)
 }
 
@@ -2310,6 +2348,7 @@ fn valid_scanout(fb:*mut u32,w:usize,h:usize)->bool{
 // spans that differ from the frame the output already shows are written, each
 // row at the scanout's own pitch (real GPUs pad rows).
 fn publish_frame(fb:*mut u32,w:usize,h:usize,frame:frame_output::Publication<'_>)->bool{
+    let fb=gpu_back_buffer(fb);
     let pixels=frame.pixels;
     if !valid_scanout(fb,w,h)||w.checked_mul(h)!=Some(pixels.len()){return false;}
     if frame.previous.is_some_and(|old|old.len()!=pixels.len())||frame.rows.end>h{return false;}
@@ -2400,15 +2439,79 @@ fn write_access_view(fb:*mut u32,w:usize,h:usize,pitch:usize,pixels:&[u32],night
     (written,touched_first,touched_end)
 }
 
-/// Display scans out from its own virtio-gpu resource (slice L2).
-fn gpu_scanout_active()->bool{unsafe{(*core::ptr::addr_of!(GPU)).is_some()}}
+/// Display scans out from its own virtio-gpu resource (slice L2) or its own
+/// Intel buffers (slice L3).
+fn gpu_scanout_active()->bool{unsafe{(*core::ptr::addr_of!(GPU)).is_some()||(*core::ptr::addr_of!(INTEL)).is_some()}}
+
+/// Where this publication writes. Intel: the back buffer, once the last flip
+/// latched (so at most one frame per refresh, never into the shown buffer).
+/// If the engine stops answering, the panel goes back to the firmware plane.
+fn gpu_back_buffer(fb:*mut u32)->*mut u32{
+    let Some(gpu)=(unsafe{(*core::ptr::addr_of_mut!(INTEL)).as_mut()})else{return fb};
+    match gpu.back(){
+        Ok(address)=>{unsafe{FB_PTR=address;}address as *mut u32}
+        Err(reason)=>{intel_fallback(reason);(unsafe{FB_PTR}) as *mut u32}
+    }
+}
+
+/// Firmware framebuffer again: it gets the picture the panel showed last, so
+/// the next publication's spans (relative to that picture) stay right.
+fn intel_fallback(reason:&str){
+    let Some(mut gpu)=(unsafe{(*core::ptr::addr_of_mut!(INTEL)).take()})else{return};
+    let (boot,boot_pitch)=unsafe{(BOOT_FB_PTR,BOOT_FB_PITCH as usize)};
+    let (front,pitch)=(gpu.front_address(),gpu.pitch());
+    let (w,h)=unsafe{(FB_W as usize,FB_H as usize)};
+    for y in 0..h{unsafe{core::ptr::copy_nonoverlapping((front+(y*pitch*4) as u64) as *const u32,(boot+(y*boot_pitch*4) as u64) as *mut u32,w);}}
+    gpu.hide_cursor();
+    gpu.release(reason);
+    unsafe{FB_PTR=boot;FB_PITCH=BOOT_FB_PITCH;CURSOR_UNDER_VALID=false;}
+}
 
 /// Show rows `first..end` of the scanout buffer: one fenced flip. True without a GPU.
 fn gpu_present(first:usize,end:usize)->bool{
+    if let Some(gpu)=unsafe{(*core::ptr::addr_of_mut!(INTEL)).as_mut()}{
+        if let Err(reason)=gpu.present(first,end){intel_fallback(reason);return false;}
+        return true;
+    }
     let Some(gpu)=(unsafe{(*core::ptr::addr_of_mut!(GPU)).as_mut()})else{return true};
     if gpu.present(first as u32,end as u32).is_err(){return false;}
     virtio_gpu::flip_receipt(gpu,first,end);
     true
+}
+
+/// Every popup that shows this frame and is drawn as frosted glass (S6b),
+/// with its whole rectangle, in drawing order.
+fn glass_panels(w:usize,h:usize,scene:&scene::SceneSnapshot)->frost::Shown{
+    let (bar,scale)=(scene.metrics.bar()as usize,scene.metrics.scale());
+    let mut shown:frost::Shown=[None;7];
+    let mut n=0;
+    let mut add=|p:frost::Panel,r:Option<glass::Rect>|{if let Some(r)=r.filter(|r|r.2!=0&&r.3!=0){if n<shown.len(){shown[n]=Some((p,r));n+=1;}}};
+    // The launcher panel (0x92) is a compositor surface: its own fill is the
+    // body under it, so there is nothing behind it to frost; it stays flat.
+    for item in program_tray::glass_rects(w,h,scale,bar).into_iter().flatten(){add(item.0,Some(item.1));}
+    add(frost::Panel::TrayMenu,tray_menu_rect(w,bar,scale));
+    add(frost::Panel::Bluetooth,bt_panel::glass_rect(w,scale,bar));
+    // The Super+W overview dims the whole desktop and stays as it is.
+    let state=unsafe{WINDOW_SWITCHER};
+    if state.visible()&&!state.grid{add(frost::Panel::Switcher,sex_pdx::window_switcher::Layout::new(w,h,state.count as usize,scale).map(|l|l.panel));}
+    add(frost::Panel::WindowMenu,window_menu::glass_rect(w,h,scale));
+    shown
+}
+
+/// Before the overlays: frosted panels (S6b) blur the body around them. A
+/// partial frame repainted only its damage, so elsewhere under a shown panel
+/// the frame still holds last frame's glass: paint the body there (and the
+/// blur margin) again, or each frame would blur the blur. Full and Area have
+/// just painted all of it.
+fn glass_body(fb:*mut u32,w:usize,h:usize,scene:&scene::SceneSnapshot,plan:Plan){
+    let shown=glass_panels(w,h,scene);
+    frost::frame(&shown);
+    if plan.is_full()||matches!(plan.content,Content::Area){return;}
+    let (bar,scale)=(scene.metrics.bar()as usize,scene.metrics.scale());
+    for (_,r) in shown.iter().flatten(){
+        let (x0,y0,x1,y1)=frost::region(*r,w,h,bar,scale);
+        if x0<x1&&y0<y1{raster_rows(fb,y0,y1,x0,x1,w,h,scene);}
+    }
 }
 
 fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,plan:Plan)->bool{
@@ -2423,6 +2526,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         Content::Damage(rect)=>raster_damage(target,rect,scene),Content::None|Content::Settle|Content::Cursor=>true};
     if !body||plan.strip&&!raster_strip(target,scene){return false;}
     if !plan.cursor_only(){
+        glass_body(fb,w,h,scene,plan);
         if plan.is_full()||matches!(plan.content,Content::Area)||plan.strip{
             draw_atlas_cards_pass(fb,w,h,total,scene);
             draw_atlas_frame_previews_pass(fb,w,h,total,scene);
@@ -2432,12 +2536,16 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         draw_tray_menu(fb,w,h,total,scene);
         bt_panel::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_window_switcher(fb,w,h,total,scene);
-        window_menu::draw(fb,w,h,total,scene.metrics.scale());
+        window_menu::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_screenshot_ui(fb,w,h,total,scene);
     }
     // Locked: the lock surface covers everything the passes above painted.
     lock_screen::draw(fb,w,h,total);
     draw_cursor_z_top(fb,w,h,total,true,scene);
+    // Protected marker is the final writer: network/chrome/cursor cannot hide it.
+    if scene.recording.is_some() {
+        if !unsafe{recording_indicator::paint(fb,w,h,&scene.bar,scene.metrics.scale(),DEFAULT_THEME.urgent,DEFAULT_THEME.chip_fill)}{return false;}
+    }
     true
 }
 
@@ -2465,6 +2573,10 @@ fn render_prepared(fb:*mut u32,w:usize,h:usize,bar:&SilkBar,requested:Plan)->Opt
     if !prepared{drop(preparation);backup.restore();return None;}
     if !preparation.commit(|frame|publish_frame(fb,w,h,frame)){backup.restore();return None;}
     if let Some(front)=store.front_pixels(){unsafe{
+        // Only a real full/strip CPU publication can establish the visible marker.
+        if plan.clock_dirty(){RECORDING_CAPTURE.published(scene.recording,
+            recording_indicator::matches(front,w,h,&scene.bar,scene.metrics.scale(),DEFAULT_THEME.urgent,DEFAULT_THEME.chip_fill),
+            store.generation(),w,h,front,sex_pdx::desktop_look::night_level(),sex_pdx::get_ticks());}
         if SCREEN_CAPTURE.published(store.generation(),w,h,front,sex_pdx::desktop_look::night_level()){
             let frame=app_catalog::by_target(sex_pdx::screen_capture::CLIENT).map(|row|row.frame());
             if let Some(surface)=scene.surfaces.iter().find(|s|s.active&&Some(s.surface_id)==frame){
@@ -2559,7 +2671,7 @@ fn raster_full(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
             let c: u32 = if y < (scene.metrics.bar()as usize).saturating_sub(scene.metrics.scale()as usize) {
                 top_strip_pixel(x, y, bar, &clock_lines, scene)
             } else {
-                DEFAULT_THEME.panel_glow // low-contrast bar edge
+                scene.tokens.bar.panel_glow // low-contrast bar edge
             };
             unsafe { core::ptr::write_volatile(fb.add(y*w+x), c); }
         }
@@ -2758,7 +2870,7 @@ fn raster_strip(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot)
             let c: u32 = if y < (scene.metrics.bar()as usize).saturating_sub(scene.metrics.scale()as usize) {
                 top_strip_pixel(x, y, bar, &clock_lines, scene)
             } else {
-                DEFAULT_THEME.panel_glow
+                scene.tokens.bar.panel_glow
             };
             let idx = y * w + x;
             if idx < total_pixels {
@@ -2799,7 +2911,7 @@ fn raster_area(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
         }
     }
     if total_pixels<w*h{return false;}
-    for x in 0..w{unsafe{core::ptr::write_volatile(fb.add(((scene.metrics.bar()as usize)-1)*w+x),DEFAULT_THEME.panel_glow);}} // low-contrast bar edge
+    for x in 0..w{unsafe{core::ptr::write_volatile(fb.add(((scene.metrics.bar()as usize)-1)*w+x),scene.tokens.bar.panel_glow);}} // low-contrast bar edge
     raster_rows(fb,scene.metrics.bar()as usize,h,0,w,w,h,scene);
     true
 }
@@ -3088,7 +3200,7 @@ unsafe fn input_trace_display_summary() {
 /// `save_under`: capture the pixels beneath the cursor rect before drawing,
 /// enabling the cursor-only fast path. Raster roots first reconstruct or
 /// restore the old cursor, then paint overlays before capturing a fresh patch.
-/// The cursor remains the last visible layer in every prepared frame.
+/// The cursor is the last ordinary layer; recording paints its protected marker afterwards.
 
 #[derive(Clone,Copy)]
 struct PreparedCursor{x:usize,y:usize,seq:u32,shell_tick:u32}
@@ -3170,6 +3282,13 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
             // HiDPI: each arrow bit covers cs x cs pixels.
             let cs = scene.metrics.scale() as usize;
             sex_pdx::access_view::set_pointer(ox, oy);
+            // Intel cursor plane: the pointer moves by register writes, no pixels.
+            if hw_cursor(ox, oy, cs) {
+                // No drawn arrow this frame: an old save-under is stale now.
+                CURSOR_UNDER_VALID = false;
+                PREPARED_CURSOR=Some(PreparedCursor{x:ox,y:oy,seq:INPUT_TRACE_LAST_SEQ,shell_tick:INPUT_TRACE_LAST_SHELL_TICK});
+                return;
+            }
             if save_under {
                 CURSOR_UNDER_X = ox;
                 CURSOR_UNDER_Y = oy;
@@ -3208,7 +3327,20 @@ fn draw_cursor_z_top(fb: *mut u32, w: usize, h: usize, total_pixels: usize, save
 
             break;
         }
+        // No pointer, or drawn in software this frame: no cursor plane either.
+        hw_cursor(usize::MAX, 0, 0);
     }
+}
+
+/// Show the pointer on the Intel cursor plane; false when it must be drawn
+/// into the frame (no plane, magnifier zooming it, screen off shading it).
+fn hw_cursor(x: usize, y: usize, scale: usize) -> bool {
+    let Some(gpu) = (unsafe { (*core::ptr::addr_of_mut!(INTEL)).as_mut() }) else { return false };
+    if x == usize::MAX || sex_pdx::access_view::active() || sex_pdx::screen_state::mode() == sex_pdx::screen_state::OFF {
+        gpu.hide_cursor();
+        return false;
+    }
+    gpu.cursor(x, y, scale, &CURSOR_ARROW_BITMAP, CURSOR_ARROW_COLOR)
 }
 
 /// Pass 4: draw launcher panel surface (LAUNCHER_PANEL_SURFACE_ID) on top of all
@@ -3239,14 +3371,16 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
     let layout = if state.grid { Layout::grid(w, h, scene.metrics.bar() as usize, state.count as usize, scale) }
         else { Layout::new(w, h, state.count as usize, scale) };
     let Some(layout) = layout else { return; };
-    const PANEL: u32 = 0x00121726;
-    const CARD: u32 = 0x001E2536;
-    const CARD_SELECTED: u32 = 0x002C3650;
-    let ring = sex_pdx::desktop_style::FOCUS;
+    let d = desk_theme::current();
+    let (panel, card_idle, card_selected) = (d.menu, desk_theme::blend(d.menu, d.menu_picked, 0.5), d.menu_picked);
+    let ring = d.focus;
     let at = |x: usize, y: usize| -> Option<usize> { let i = y * w + x; (x < w && y < h && i < total_pixels).then_some(i) };
     let (px, py, pw, ph) = layout.panel;
     // The overview dims the whole desktop below the panel; the switcher is a rounded glass panel.
     let (radius, shade) = if state.grid { (0, 200) } else { (10 * scale as usize, 225) };
+    // Frosted glass (S6b); the overview, and the switcher with glass off, shade it.
+    let frosted = !state.grid && switcher_frost(fb, w, h, total_pixels, layout.panel, radius, scale, scene.metrics.bar() as usize);
+    if !frosted {
     for y in py..py + ph {
         for x in px..px + pw {
             // Rounded corners: skip pixels outside the corner circles.
@@ -3256,14 +3390,15 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
             let Some(i) = at(x, y) else { continue };
             unsafe {
                 let under = core::ptr::read_volatile(fb.add(i));
-                core::ptr::write_volatile(fb.add(i), alpha_blend_xrgb_over_xrgb(PANEL, under, shade));
+                core::ptr::write_volatile(fb.add(i), alpha_blend_xrgb_over_xrgb(panel, under, shade));
             }
         }
+    }
     }
     for (index, sid) in state.ids().enumerate() {
         let selected = index == state.selected as usize;
         let (cx, cy, cw, ch) = layout.card(index);
-        let card = if selected { CARD_SELECTED } else { CARD };
+        let card = if selected { card_selected } else { card_idle };
         let rim = if selected { 3 * scale as usize } else { 0 };
         for y in cy..cy + ch {
             for x in cx..cx + cw {
@@ -3313,17 +3448,56 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
     }
 }
 
+/// The Alt+Tab panel as frosted glass (S6b) with its rounded corners: the
+/// body outside the corner arcs is kept as it was. False when glass is off.
+fn switcher_frost(fb: *mut u32, w: usize, h: usize, total: usize, r: glass::Rect, radius: usize, scale: u32, bar: usize) -> bool {
+    const MAX_R: usize = 10 * glass::MAX_SCALE as usize;
+    static mut CORNERS: [u32; 4 * MAX_R * MAX_R] = [0; 4 * MAX_R * MAX_R];
+    let radius = radius.min(MAX_R).min(r.2 / 2).min(r.3 / 2);
+    let (px, py, pw, ph) = r;
+    let corner = |k: usize| (if k & 1 == 0 { px } else { px + pw - radius }, if k & 2 == 0 { py } else { py + ph - radius });
+    let outside = |x: usize, y: usize| {
+        let dx = if x < px + radius { px + radius - x } else if x >= px + pw - radius { x + radius + 1 - (px + pw) } else { 0 };
+        let dy = if y < py + radius { py + radius - y } else if y >= py + ph - radius { y + radius + 1 - (py + ph) } else { 0 };
+        dx * dx + dy * dy > radius * radius
+    };
+    let corners = unsafe { &mut *core::ptr::addr_of_mut!(CORNERS) };
+    for k in 0..4 {
+        let (cx, cy) = corner(k);
+        for j in 0..radius { for i in 0..radius {
+            let at = (cy + j) * w + cx + i;
+            corners[(k * MAX_R + j) * MAX_R + i] = if at < total { unsafe { core::ptr::read_volatile(fb.add(at)) } } else { 0 };
+        } }
+    }
+    if !frost::glass(fb, w, h, total, frost::Panel::Switcher, r, scale, bar) { return false; }
+    for k in 0..4 {
+        let (cx, cy) = corner(k);
+        for j in 0..radius { for i in 0..radius {
+            let (x, y) = (cx + i, cy + j);
+            let at = y * w + x;
+            if at < total && outside(x, y) { unsafe { core::ptr::write_volatile(fb.add(at), corners[(k * MAX_R + j) * MAX_R + i]); } }
+        } }
+    }
+    true
+}
+
 /// Text at (x0, y0) over `bg`, cut at `max_w`; returns its width.
 fn tray_text(fb: *mut u32, w: usize, h: usize, total: usize, text: &[u8], x0: usize, y0: usize, bg: u32, scale: u32, max_w: usize) -> usize {
     let tw = glyphs::ui_width(text, scale).unwrap_or(0).min(max_w);
     let line = glyphs::UI_H * scale as usize;
+    // The ink reads on `bg`; its edges blend with what is drawn there, which
+    // on frosted glass (S6b) is not one flat colour.
+    let ink = sex_pdx::desktop_style::contrast_ink(bg);
     for y in 0..line {
         for x in 0..tw {
-            if let Some(c) = ui_label_at_scaled(text, x, y, bg, scale) {
-                let (px, py) = (x0 + x, y0 + y);
-                let i = py * w + px;
-                if px < w && py < h && i < total { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
-            }
+            let Some(alpha) = glyphs::ui_coverage(text, x as i32, y, scale) else { continue };
+            if alpha == 0 { continue; }
+            let (px, py) = (x0 + x, y0 + y);
+            let i = py * w + px;
+            if px < w && py < h && i < total { unsafe {
+                let p = fb.add(i);
+                core::ptr::write_volatile(p, coverage_blend(ink, core::ptr::read_volatile(p), alpha));
+            } }
         }
     }
     tw
@@ -3336,6 +3510,16 @@ fn tray_fill(fb: *mut u32, w: usize, h: usize, total: usize, r: (usize, usize, u
         }
     }
 }
+/// The open tray menu's rectangle, for its glass.
+fn tray_menu_rect(w: usize, bar: usize, scale: u32) -> Option<glass::Rect> {
+    use sex_pdx::tray::{self, Menu};
+    let s = scale as usize;
+    match unsafe { TRAY_VIEW }.menu {
+        Menu::Quick => tray::Quick::new(w, bar, s).map(|q| q.panel),
+        Menu::Calendar => tray::Calendar::new(w, bar, s).map(|c| c.panel),
+        Menu::None => None,
+    }
+}
 /// The tray menu the Shell opened: quick settings or the calendar.
 fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene::SceneSnapshot) {
     use sex_pdx::tray::{self, Menu};
@@ -3345,13 +3529,13 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
     let s = scale as usize;
     let bar = scene.metrics.bar() as usize;
     let line = glyphs::UI_H * s;
-    const BG: u32 = 0x00181825;
-    const RIM: u32 = 0x0045475A;
-    const TRACK: u32 = 0x00313244;
-    let ring = sex_pdx::desktop_style::FOCUS;
+    let d = desk_theme::current();
+    let (bg, rim, track) = (d.menu, d.menu_rim, d.menu_picked);
+    let ring = d.focus;
+    // Frosted glass inside an opaque rim (S6b), or the flat colour.
     let panel = |r: (usize, usize, usize, usize)| {
-        tray_fill(fb, w, h, total, r, RIM);
-        tray_fill(fb, w, h, total, (r.0 + s, r.1 + s, r.2 - 2 * s, r.3 - 2 * s), BG);
+        frost::glass_or(fb, w, h, total, frost::Panel::TrayMenu, frost::inside(r, s), scale, bar, bg);
+        frost::rim(fb, w, h, total, r, s, rim);
     };
     let status = unsafe { TRAY_STATUS };
     match view.menu {
@@ -3360,31 +3544,31 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
             panel(q.panel);
             let mid = |r: (usize, usize, usize, usize)| r.1 + r.3.saturating_sub(line) / 2;
             let r0 = q.rows[0];
-            tray_text(fb, w, h, total, b"Volume", r0.0, mid(r0), BG, scale, 80 * s);
+            tray_text(fb, w, h, total, b"Volume", r0.0, mid(r0), bg, scale, 80 * s);
             let (sx, sy, sw, sh) = q.slider;
-            tray_fill(fb, w, h, total, (sx, sy + sh / 3, sw, sh / 3), TRACK);
+            tray_fill(fb, w, h, total, (sx, sy + sh / 3, sw, sh / 3), track);
             let filled = sw * status.volume as usize / 100;
-            tray_fill(fb, w, h, total, (sx, sy + sh / 3, filled, sh / 3), if status.muted { TRAY_DIM } else { ring });
-            tray_fill(fb, w, h, total, (sx + filled.min(sw.saturating_sub(sh / 2)), sy, sh / 2, sh), TRAY_FG);
+            tray_fill(fb, w, h, total, (sx, sy + sh / 3, filled, sh / 3), if status.muted { d.menu_dim } else { ring });
+            tray_fill(fb, w, h, total, (sx + filled.min(sw.saturating_sub(sh / 2)), sy, sh / 2, sh), d.menu_ink);
             let m = q.mute;
-            let mbg = if status.muted { 0x005A2A35 } else { TRACK };
+            let mbg = if status.muted { desk_theme::blend(bg, d.menu_close, 0.35) } else { track };
             tray_fill(fb, w, h, total, m, mbg);
             let word: &[u8] = if status.muted { b"Muted" } else { b"Mute" };
             let tw = glyphs::ui_width(word, scale).unwrap_or(0);
             tray_text(fb, w, h, total, word, m.0 + m.2.saturating_sub(tw) / 2, mid(m), mbg, scale, m.2);
             let r1 = q.rows[1];
-            tray_text(fb, w, h, total, tray::wifi_text(status.wifi).as_bytes(), r1.0, mid(r1), BG, scale, r1.2);
+            tray_text(fb, w, h, total, tray::wifi_text(status.wifi).as_bytes(), r1.0, mid(r1), bg, scale, r1.2);
             let r2 = q.rows[2];
             let mut text = [0u8; 32];
             let n = tray::battery_text(&status, &mut text);
-            tray_text(fb, w, h, total, &text[..n], r2.0, mid(r2), BG, scale, r2.2);
+            tray_text(fb, w, h, total, &text[..n], r2.0, mid(r2), bg, scale, r2.2);
             let r3 = q.rows[3];
             let mut label = [0u8; 8];
             let ln = tray::label_decode(unsafe { TRAY_LABEL }, &mut label);
-            let x = r3.0 + tray_text(fb, w, h, total, b"Keyboard: ", r3.0, mid(r3), BG, scale, r3.2);
-            let x = x + tray_text(fb, w, h, total, &label[..ln], x, mid(r3), BG, scale, r3.2);
-            tray_text(fb, w, h, total, b"  (click to switch)", x, mid(r3), BG, scale, (r3.0 + r3.2).saturating_sub(x));
-            for r in &q.rows[1..] { tray_fill(fb, w, h, total, (r.0, r.1, r.2, s), TRACK); }
+            let x = r3.0 + tray_text(fb, w, h, total, b"Keyboard: ", r3.0, mid(r3), bg, scale, r3.2);
+            let x = x + tray_text(fb, w, h, total, &label[..ln], x, mid(r3), bg, scale, r3.2);
+            tray_text(fb, w, h, total, b"  (click to switch)", x, mid(r3), bg, scale, (r3.0 + r3.2).saturating_sub(x));
+            for r in &q.rows[1..] { tray_fill(fb, w, h, total, (r.0, r.1, r.2, s), track); }
         }
         Menu::Calendar => {
             let Some(c) = tray::Calendar::new(w, bar, s) else { return };
@@ -3393,7 +3577,7 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
                 sex_time::SexTimestamp::from_unix(scene.bar.civil_clock.seconds() as i64, 0).and_then(sex_time::Gregorian::from_timestamp)
             } else { None };
             let Some(today) = today else {
-                tray_text(fb, w, h, total, b"Date unknown", c.header.0, c.header.1, BG, scale, c.header.2);
+                tray_text(fb, w, h, total, b"Date unknown", c.header.0, c.header.1, bg, scale, c.header.2);
                 return;
             };
             let (year, month) = tray::shift_month(today.year, today.month, view.month_offset as i32);
@@ -3407,16 +3591,16 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
             for d in [1000, 100, 10, 1] { head[n] = b'0' + (y4 / d % 10) as u8; n += 1; }
             let hm = c.header.1 + c.header.3.saturating_sub(line) / 2;
             let tw = glyphs::ui_width(&head[..n], scale).unwrap_or(0);
-            tray_text(fb, w, h, total, &head[..n], c.header.0 + c.header.2.saturating_sub(tw) / 2, hm, BG, scale, c.header.2);
+            tray_text(fb, w, h, total, &head[..n], c.header.0 + c.header.2.saturating_sub(tw) / 2, hm, bg, scale, c.header.2);
             for (r, t) in [(c.prev, b"<"), (c.next, b">")] {
-                tray_fill(fb, w, h, total, r, TRACK);
+                tray_fill(fb, w, h, total, r, track);
                 let tw = glyphs::ui_width(t, scale).unwrap_or(0);
-                tray_text(fb, w, h, total, t, r.0 + r.2.saturating_sub(tw) / 2, hm, TRACK, scale, r.2);
+                tray_text(fb, w, h, total, t, r.0 + r.2.saturating_sub(tw) / 2, hm, track, scale, r.2);
             }
             let (cw, ch) = c.cell;
             for (i, d) in tray::WEEKDAYS.iter().enumerate() {
                 let tw = glyphs::ui_width(d.as_bytes(), scale).unwrap_or(0);
-                tray_text(fb, w, h, total, d.as_bytes(), c.grid.0 + i * cw + cw.saturating_sub(tw) / 2, c.grid.1 - ch + ch.saturating_sub(line) / 2, BG, scale, cw);
+                tray_text(fb, w, h, total, d.as_bytes(), c.grid.0 + i * cw + cw.saturating_sub(tw) / 2, c.grid.1 - ch + ch.saturating_sub(line) / 2, bg, scale, cw);
             }
             let first = tray::weekday(year, month, 1);
             let days = tray::days_in_month(year, month);
@@ -3424,7 +3608,7 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
             for day in 1..=days {
                 let r = c.day_cell(first, day);
                 let is_today = this_month && day == today.day;
-                let bg = if is_today { ring } else { BG };
+                let bg = if is_today { ring } else { bg };
                 if is_today { tray_fill(fb, w, h, total, (r.0 + 2 * s, r.1 + s, r.2 - 4 * s, r.3 - 2 * s), ring); }
                 let digits = [b'0' + day / 10, b'0' + day % 10];
                 let t: &[u8] = if day < 10 { &digits[1..] } else { &digits };
@@ -3465,7 +3649,7 @@ fn draw_screenshot_ui(fb: *mut u32, w: usize, h: usize, total_pixels: usize, sce
         }
     }
     if !empty {
-        let ring = sex_pdx::desktop_style::FOCUS;
+        let ring = desk_theme::current().focus;
         let t = 2 * scale;
         for y in sy.saturating_sub(t)..ey + t {
             for x in sx.saturating_sub(t)..ex + t {
@@ -3476,7 +3660,7 @@ fn draw_screenshot_ui(fb: *mut u32, w: usize, h: usize, total_pixels: usize, sce
         }
     }
     const HINT: &[u8] = b"Screenshot: drag a region, click a window, Enter for the whole screen, Esc to cancel";
-    const PILL: u32 = 0x00121726;
+    let pill = desk_theme::current().menu;
     let line = glyphs::UI_H * scale;
     let tw = glyphs::ui_width(HINT, scale as u32).unwrap_or(0).min(w.saturating_sub(16 * scale));
     let pad = 10 * scale;
@@ -3484,12 +3668,12 @@ fn draw_screenshot_ui(fb: *mut u32, w: usize, h: usize, total_pixels: usize, sce
     let (px, py) = (w.saturating_sub(pw) / 2, scene.metrics.bar() as usize + 12 * scale);
     for y in py..py + ph {
         for x in px..px + pw {
-            if let Some(i) = at(x, y) { unsafe { core::ptr::write_volatile(fb.add(i), PILL); } }
+            if let Some(i) = at(x, y) { unsafe { core::ptr::write_volatile(fb.add(i), pill); } }
         }
     }
     for y in 0..line {
         for x in 0..tw {
-            if let Some(c) = ui_label_at_scaled(HINT, x, y, PILL, scale as u32) {
+            if let Some(c) = ui_label_at_scaled(HINT, x, y, pill, scale as u32) {
                 if let Some(i) = at(px + pad + x, py + pad / 2 + y) { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
             }
         }
@@ -3947,7 +4131,7 @@ fn handle_primary_fb(ptr: u64, packed: u64) -> bool {
     }
     unsafe {
         // After a virtio-gpu takeover the scanout buffer is the output, not BOOT's.
-        if (*core::ptr::addr_of!(GPU)).is_none() { FB_PTR = ptr; }
+        if !gpu_scanout_active() { FB_PTR = ptr; }
         FB_W = w as u32;
         FB_H = h as u32;
     }
@@ -4098,6 +4282,7 @@ fn browser_text_binding_live(lifecycle: &surface_lifecycle::Lifecycle, owner: u3
 fn prepare_app_cleanup(lifecycle: &mut surface_lifecycle::Lifecycle, bar: &mut SilkBar) -> bool {
     // A retained scene cannot be retired or release cleanup custody.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return false;}
+    unsafe{RECORDING_CAPTURE.reconcile(sex_pdx::get_ticks());}
     let mut changed = false;
     for index in 0..surface_lifecycle::CATALOG_CAPACITY {
         let Some(catalog) = lifecycle.catalog(index) else { continue; };
@@ -4177,7 +4362,7 @@ fn commit_published_text(published:&PublishedFrame)->usize{
 fn finish_display_transactions(lifecycle: &mut surface_lifecycle::Lifecycle, published: Option<&PublishedFrame>) {
     // A retained scene cannot be retired or release cleanup custody.
     if unsafe{(*core::ptr::addr_of!(RENDER_SCENE)).is_valid()}{return;}
-    unsafe{SCREEN_CAPTURE.reconcile(lifecycle,sex_pdx::get_ticks());}
+    unsafe{SCREEN_CAPTURE.reconcile(lifecycle,sex_pdx::get_ticks());RECORDING_CAPTURE.reconcile(sex_pdx::get_ticks());}
     if let Some(published)=published{
         // This receipt belongs to the just-finished Main drain. No intake runs
         // between its scene capture, CPU publication and completion handling.
@@ -4237,7 +4422,9 @@ pub extern "C" fn _start() -> ! {
     let address=sex_pdx::display_boot::framebuffer().expect("BOOT_DISPLAY_FRAMEBUFFER");
     assert!(geometry.pitch>=geometry.width*4&&geometry.pitch%4==0,"DISPLAY_PITCH");
     assert!(address>=HIGH_HALF_BASE,"BOOT_DISPLAY_ADDRESS");
-    unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;FB_PITCH=geometry.pitch/4;}
+    unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;FB_PITCH=geometry.pitch/4;BOOT_FB_PTR=address;BOOT_FB_PITCH=geometry.pitch/4;}
+    // The desktop starts in the settings' default theme until the Shell says otherwise.
+    apply_desk_theme();
     match virtio_gpu::open(geometry.width,geometry.height,address,geometry.pitch/4){
         Ok(gpu)=>{
             virtio_gpu::report(&gpu);
@@ -4245,8 +4432,17 @@ pub extern "C" fn _start() -> ! {
         }
         Err(reason)=>sex_pdx::serial_record!("[display.kms.virtio] takeover=0 reason={}",reason),
     }
-    // Intel display engine: read-only receipt of what firmware lit (slice L3).
-    let _=intel::report();
+    // Intel display engine: receipt of what firmware lit, then take the
+    // panel over with our own flipped buffers (slice L3). Any refusal keeps
+    // the firmware framebuffer exactly as it was.
+    if intel::report()&&unsafe{(*core::ptr::addr_of!(GPU)).is_none()}{
+        match intel::take_over(geometry.width,geometry.height,address,geometry.pitch/4){
+            Ok(gpu)=>unsafe{FB_PTR=gpu.front_address();FB_PITCH=gpu.pitch() as u32;INTEL=Some(gpu);},
+            Err(reason)=>sex_pdx::serial_record!("[display.intel.takeover] takeover=0 reason={}",reason),
+        }
+    }
+    // AMD display engine: the same receipt for Ryzen APUs and Radeon (slice A2).
+    let _=amd::report();
     glyphs::warm();
     // Private frames are packed; publication steps rows at the scanout pitch.
     let frame_layout=sex_pdx::display_frames::Layout::new(geometry.width as u64,geometry.height as u64,geometry.width as u64*4)
@@ -4292,6 +4488,8 @@ pub extern "C" fn _start() -> ! {
     }else{
         sex_pdx::serial_record!("[sexdisplay.clock.presentation] label=DEMO wall_time=0 x={} y={} w={} h={} digits=proportional width={}",clock_layout.x,clock_layout.y,clock_layout.w,clock_layout.h,unsafe{FB_W});
     }
+    unsafe{RECORDING_CAPTURE.attach(match sex_pdx::crash_log::call(sex_pdx::crash_log::OP_RESTARTS,0,0){
+        (sex_pdx::crash_log::OK,n,_)=>n.checked_add(1).unwrap_or(0),_=>0});}
     let mut lifecycle = load_lifecycle_catalog();
     clock_canon_store(bar.clock_hh, bar.clock_mm, bar.clock_ss);
     let mut last_clock_tick = sex_pdx::get_ticks();
@@ -4724,6 +4922,15 @@ pub extern "C" fn _start() -> ! {
             if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:msg.caller_pd,task:msg.caller_task},opcode:msg.type_id,words:[msg.arg0,msg.arg1,msg.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}
             // Includes capture, inline text, region pixels, and window mutation.
             if restricted::denied(msg.caller_pd){continue;}
+            if msg.type_id==sex_pdx::desktop_recording_capture::OP_CONTROL{
+                let placement=recording_indicator::rect(&bar,unsafe{FB_W as usize},unsafe{FB_H as usize},chrome_metrics().scale()).is_some();
+                unsafe{RECORDING_CAPTURE.control(msg,sex_pdx::get_ticks(),placement);}
+                continue;
+            }
+            if msg.type_id==sex_pdx::desktop_recording_capture::OP_FRAME{
+                unsafe{RECORDING_CAPTURE.frame(msg,sex_pdx::get_ticks());}
+                continue;
+            }
 
             if msg.type_id==sex_pdx::screen_capture::OP{
                 if unsafe{SCREEN_CAPTURE.request(msg,&lifecycle,sex_pdx::get_ticks(),FB_W as usize,FB_H as usize)}{pending_paint.request_full();}
@@ -4801,10 +5008,12 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 sex_pdx::desktop_look::OP_DESKTOP_LOOK => {
-                    // Only the Shell picks the wallpaper and night light.
-                    if msg.caller_pd == 3 && sex_pdx::desktop_look::set(msg.arg0, msg.arg1) {
+                    // Only the Shell picks the wallpaper, night light and theme.
+                    if msg.caller_pd == 3 && sex_pdx::desktop_look::set_look(msg.arg0, msg.arg1, msg.arg2) {
                         needs_full_redraw = true;
                         sex_pdx::serial_record!("[display.look] wallpaper={} night={}", msg.arg0, msg.arg1);
+                        // A new theme: bar, chrome, menus and cards all repaint in it.
+                        if desk_theme::refresh() { apply_desk_theme(); desktop_widgets::restyle(); }
                     }
                 }
                 sex_pdx::access_view::OP_ACCESS_VIEW => {
@@ -4824,6 +5033,8 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+                sex_pdx::desktop_widgets::OP_DESKTOP_WIDGETS => { if desktop_widgets::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
+                sex_pdx::desktop_widgets::OP_WEATHER => desktop_widgets::weather(msg.caller_pd, msg.arg0, msg.arg1),
                 sex_pdx::window_menu::OP_WINDOW_MENU => { if window_menu::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
                 sex_pdx::program_tray::OP_TRAY_VIEW => { if program_tray::receive(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) { needs_full_redraw = true; } }
                 sex_pdx::window_motion::OP_MOTION => {
@@ -5653,7 +5864,13 @@ pub extern "C" fn _start() -> ! {
                                 zoom_light_color,
                                 appearance_flags,
                                 effect_levels,
+                                bar: DISPLAY_TOKENS.bar,
+                                band_color: DISPLAY_TOKENS.band_color,
                             };
+                            // The default preset leaves the chrome's colours to the desktop theme (S6a).
+                            CHROME_FOLLOWS_THEME = msg.arg2 & 1 != 0;
+                            // A preset of its own also takes back the resize band's own colour.
+                            if CHROME_FOLLOWS_THEME { apply_desk_theme(); } else { DISPLAY_TOKENS.band_color = sex_pdx::desktop_style::NATIVE_CANVAS; }
                             TOKEN_BUF_CALL1_RECEIVED = false;
                             TOKEN_BUF_OWNER = 0;
                             static mut APPEARANCE_TOKENS_APPLIED: u32 = 0;
@@ -5801,8 +6018,13 @@ pub extern "C" fn _start() -> ! {
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
         if let Some(rect)=geom_damage_rect.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
+        if let Some(r)=desktop_widgets::tick(&bar.civil_clock,w,h){text_damage.add(r,w,h);}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
         if cursor_only_moved{pending_paint.request_cursor();}
+        // A recording in progress repaints in full; decided before the strip and
+        // pending-text joins so those stay last before the plan.
+        unsafe{RECORDING_CAPTURE.placement(recording_indicator::rect(&bar,w,h,chrome_metrics().scale()).is_some());}
+        if unsafe{RECORDING_CAPTURE.needs_publication(sex_pdx::get_ticks())}{pending_paint.request_full();}
         if needs_top_strip_redraw{pending_paint.request_strip();}
         if typed_completion_needs_publication(){join_pending_text(&mut pending_paint,w,h);}
         let plan=pending_paint.plan(w,h);
@@ -5860,7 +6082,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         finish_display_transactions(&mut lifecycle,published.as_ref());
-        unsafe{SCREEN_CAPTURE.poll();}
+        unsafe{SCREEN_CAPTURE.poll();RECORDING_CAPTURE.poll(sex_pdx::get_ticks());}
         unsafe { for stage in &mut TEXT_STAGES { stage.poll_reply(sex_pdx::pdx_reply); } }
         unsafe { BITMAP_STORES.poll_reply(sex_pdx::pdx_reply); }
 

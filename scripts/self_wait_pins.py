@@ -12,6 +12,8 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/scheduler.rs', 'a23ecc7d73a7775b9d5b455435c99b58f3311e78ce2992788dc20604a91fccb2'),  # #468 cross-core handoff + pair affinity at 047e13f5 (admit takes the home core's slot, should_preempt honours it, idle has_queued sees it; wait functions unchanged), reviewed by WS4, 2026-11-20
+
     ('timed', 'kernel/src/scheduler.rs', '59a7fe67bfa8a5a0d230296bd391d5261c6fbaeba42c3c0c05bcd7db6f19265e'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
 
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:395d7827fe51750aaa43f1cba2da266fc407f19ab9ac6dcad4e5f40e416121fe'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
@@ -54,9 +56,46 @@ PINS = (
 
     ('timed', 'kernel/src/init.rs', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d'),
 
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:d1ae84d320565569056b4890ee32b11af3b66bc34eba297a890387e8851f71ab'),
+
+    ('timed', 'kernel/src/scheduler.rs', '1b10ca8d1b0d1eb3a092f0a61ed1ca7fe6a4b43c448bc24d560ead211940f8d9'),  # #429 merged with master (28ffcb59), reviewed by WS4, 2026-11-19
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:dea888ff27ad54e217839dc46b9a74e521d07b2be1c36256452fd7df937802f2'),  # master 586140ad: kernel stack guard page + boxed FPU area (no wait change), 2026-11-19
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:4670ed1968ba7f46d7097721884c9cf2c95de4bd69220374b07321f2f5eec750'),  # cross-core IPC polling + lean first look + bounded re-check (#429 / 80b89713), reviewed by WS4, 2026-11-18
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:8b328859b9fda2ff8e024287e6d020c11182c169ad993a0e786ad86033420fe6'),  # XSAVE/AVX heap save area + kernel stack canary (#427 / ed888ad5), reviewed by WS4, 2026-11-18
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:c92ee26a67f14c438179f32834b8b0a62f82d1dee42271d43863d4cc96f95a8f'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
+
+    ('timed', 'kernel/src/scheduler.rs', '53aec880d2ea82474231d37aaae0862dcb8747185626ab6f4d79175a422ce8a8'),  # PKU gates: TSC_AUX on switch (P6.2a), 2026-11-19
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:458daaa0e25c5b534627e9cef612d5e71ba9f781e05b48689bee025a1fd4c70b'),  # master 53aec880: PKU gates TSC_AUX on switch (no wait change), 2026-11-19
+
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:3af49f2ffe4d2b73c67ec09f190aa8e46cf43a3a7b233f7d8a24532828203567'),  # #429 merged with master at 950c36ac (raw af1bffe7), wait change as reviewed at 28ffcb59, 2026-11-19
+
+    ('timed', 'kernel/src/scheduler.rs', '586140ad4e39c4a7c9741196c75f0622d1742af04583ade9cadb1adde472b2ae'),  # kernel stack guard page + boxed FPU area (no wait change), 2026-11-18
+
+    ('timed', 'kernel/src/scheduler.rs', '13063202325fb2dc39a4feb3d2aff8d24f2e842bbbc187ffe2cdfe6602ae02c1'),  # IPC v2 syscalls 105/106, 2026-11-18
+
+    ('timed', 'kernel/src/scheduler.rs', '8956a2cebc2a3acd3be1b4f8fbab9bb967fcfd7304d66220854be44f61e64654'),  # IPC fast path (WS4), 2026-11-17
+
+    ('timed', 'kernel/src/scheduler.rs', '0b75bce2639de6891a9ed4b7e3e0f871f9a5110bc23b9002b2912316e4ef7f64'),
+
+    ('timed', 'kernel/src/scheduler.rs', '25c0bc835f30039f947f28bc79ed567e1c742e17ea3c9a8e0663b5f502c9d642'),  # per-task self-wait sampling (task_count), 2026-11-17
+
+    ('timed', 'kernel/src/self_wait.rs', '0e7b60adbce245427e67bf1bb0ba20ddb929c304efbad13ce078fa79e43e4eaf'),
+
+    ('timed', 'kernel/src/task_ownership.rs', '57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6'),
+
+    ('timed', 'kernel/src/smp.rs', '6f70b8da98e5fe7fb49bdb660bb44fb9df784b5245ed2ae71cf4517024afcbc4'),  # spare-core placement of USB, Bell, ACPI, Cufflinks over master's preferred-core order (table only, no wait change), 2026-11-21
+    ('timed', 'kernel/src/smp.rs', '73db1b08514c89695981493296c4c94fbaeca8ea4022228aeb38b7c76dca833b'),  # USB, Bell, ACPI and Cufflinks start on spare cores (placement table only, no wait change), 2026-11-19
+
     ('timed', 'kernel/src/smp.rs', '261699be11866980d2a30b72cbb8d35ddccdc00aa1ee1cbceefadc716edc7d75'),  # protection views (tlb hook, rows spread), 2026-11-17
 
     ('timed', 'kernel/src/smp.rs', 'bd523573ed7c9576665af35b7f0d598ddccb5b9a44f21d5d85fb21a15d961325'),
+
+    ('timed', 'kernel/src/smp.rs', 'b70ef0379662d01aa7559855d91b63c82d45146d10302f05e101717aa33aeac2'),  # preferred-core order (PROGRAM_ORDER, rank_program_cores), no wait change, 2026-11-20
 
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:235c80ce88b369d9d1da26b934e188c056b5e24330b1c242801deaf2e3854c86'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
@@ -125,6 +164,8 @@ PINS = (
 
     ('timed', 'servers/sexnet/src/main.rs', '10fd38acaa45e76df8e7bd579e382b66365f46b944d2fc958104b8631476cb5b'),  # first 32 timed returns logged, 2026-11-17
 
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master merge of #460 with the NIC interrupt change (same line as PR #482), 2026-11-20
+
     ('timed', 'servers/sexnet/src/main.rs', 'd994aeb0af740e6157d92744656943261954b99c6828795723c9070d4625ff34'),  # wired NIC interrupt: 10-tick quiet sleep while armed, no stall after a full burst (two-tick envelope unchanged), 2026-11-19
 
     ('timed', 'servers/sexusb/src/main.rs', '3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81'),
@@ -135,6 +176,17 @@ PINS = (
     ('timed', 'servers/sexnet/src/main.rs', 'fcc4ffc50a6302756285ae01c86fcd838852bfbdf4ac4a4b2198550bf2afe400'),  # OP_DEVICE_SLEEP from the kernel logged and skipped after the listen (no wait change), 2026-11-19
     ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master merge of the OP_DEVICE_SLEEP handler (#460) with the wired NIC interrupt wait (irq_wait, reviewed in its own PR); nothing new, 2026-11-20
     ('timed', 'servers/sexusb/src/main.rs', '2c15ba53f84180a5feb262de17783e3821be45c5f4941d9660835d9c9bb541a6'),  # sleep notice suspends idle ports (bounded link waits); quiet predicate unchanged, 2026-11-19
+
+    ('timed', 'servers/sexusb/src/main.rs', '96d3ea5a52156559eaf7106a145ffe1b08445eb88798fe64645bf92da8abeaae'),  # USB audio class streaming (Qupid #392), 2026-11-19
+
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master's Net as of 2026-11-20 (unpinned on master), pinned by Qupid #392
+
+    ('timed', 'servers/sexusb/src/main.rs', '09b8a45c44bf3af5b7941823186b2ad09655ddf6fa57ba60bfbf215cabc3c667'),  # USB audio streaming merged with sleep suspend (Qupid #392), 2026-11-20
+    ('timed', 'servers/sexusb/src/main.rs', 'e78d6073dc41fe5b46b75e962e0ac3b5b9e7ab347bb9b95e5e21fed12a3f4e87'),  # Thunderbolt manager polled each pass, waits unchanged, 2026-11-19
+
+    ('timed', 'servers/sexusb/src/main.rs', '09a173d46a7f99edd8c810029e767552230e343f4b9ece7d69e161fe18d7ba5a'),  # Thunderbolt unload/GO2SX on the sleep notice, waits unchanged, 2026-11-20
+
+    ('timed', 'servers/sexusb/src/main.rs', '29fbd1f1d8d3cef6b20bb8920959aa1984650f57483afe0f20e787314c26576b'),  # USB audio merged with Thunderbolt (Qupid #392), 2026-11-20
 
     ('tree', '', '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5'),  # master after #407 + #408 + #422 combined, 2026-11-18
 
