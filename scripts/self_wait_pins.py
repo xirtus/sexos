@@ -12,6 +12,8 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:230bcac20c18ce4eddb3b3a8232622d432edeff676b47f448b791bd48abf9615'),  # #466 (cld on entry, PKU gates) merged with #456's hot-plug tick (x17 PR sweep; union of two reviewed versions), 2026-11-21
+
 
 
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:179c3a01c3681837811f309e17e3e498760f93924e2c1cef2c2a3c0246a0272b'),  # PKU gate: keep live PKRU in reschedule (no wait change), 2026-11-19
