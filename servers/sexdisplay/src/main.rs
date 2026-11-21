@@ -169,6 +169,7 @@ mod restricted;
 mod frame_output;
 mod virtio_gpu;
 mod intel;
+mod amd;
 /// The virtio-gpu that took the screen over from firmware, if BOOT leased one.
 static mut GPU: Option<virtio_gpu::Gpu> = None;
 /// Intel display engine taken over from firmware: Display's own buffers, flipped at vblank.
@@ -4310,6 +4311,8 @@ pub extern "C" fn _start() -> ! {
             Err(reason)=>sex_pdx::serial_record!("[display.intel.takeover] takeover=0 reason={}",reason),
         }
     }
+    // AMD display engine: the same receipt for Ryzen APUs and Radeon (slice A2).
+    let _=amd::report();
     glyphs::warm();
     // Private frames are packed; publication steps rows at the scanout pitch.
     let frame_layout=sex_pdx::display_frames::Layout::new(geometry.width as u64,geometry.height as u64,geometry.width as u64*4)

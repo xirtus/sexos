@@ -34,7 +34,7 @@ a999b5df1d2c893392a2d04d87df10a58142c8585f76e7d123120657d3fb7991  crates/sex-pdx
 
 75ea7ea281d2cc93c27a2496d91f86ca9c2defe90777e2d5fd2b2aa1dcfd3f1c  crates/sex-pdx/src/display_boot.rs
 
-2124c06b2a81fa5789be3fcdee9cf34a844c0047bcfcba6b25cb22db41adb263  crates/sex-pdx/src/display_frames.rs
+3900828e1e8d1c6e6afd94e652525bba2b338bb56ece5bc91c4ffd694c455071  crates/sex-pdx/src/display_frames.rs
 
 164249ea4f01c7ffed97bec436f261a03c4a9a12834862eecc52a464dd4ca8ee  crates/sex-pdx/src/display_ready.rs
 
@@ -58,7 +58,7 @@ a0f555cd3af59954d4dce9ae913d16ac90089c8fa1dd61ecfda1a25a85de899d  crates/sex-pdx
 
 c802a7c131bc32914f6573342aa1f5045dfa1781f86bc05a1be4c0b546cda9dc  crates/sex-pdx/src/input_diagnostics.rs
 
-99a76ceae73bb1eb431ed00024641ce849b97927ed4c64a9824116bec7cb1587  crates/sex-pdx/src/lib.rs
+ebfc275d937bafe150eeac407cc0247e68352b4814c011be3c1282ea1b358e8c  crates/sex-pdx/src/lib.rs
 
 b02d602feb5f239687f1a450e8c0ec2b932c366df85ae4f2a5dc67df3f5edcef  crates/sex-pdx/src/memory_region.rs
 
@@ -134,7 +134,7 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
-17a49722587de359a097f5bd6efe222581b1252014ceb92f0dee4126485fc394  kernel/src/boot_memory.rs
+f88864cea7c202b8eaa1adf305a2d6dc023e7ba63c015e98b45628999a1c28c3  kernel/src/boot_memory.rs
 
 2fd25f89091106c70503869c40f52cfeb6662fab8ddfcd2c6202d2e04550fe69  kernel/src/boot_network.rs
 

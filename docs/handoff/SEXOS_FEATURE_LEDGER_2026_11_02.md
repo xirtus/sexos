@@ -5468,3 +5468,8 @@ From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, 
 - Keys: Ctrl+Shift+P opens a private tab and Ctrl+Shift+1..4 opens a container tab. Ctrl+T from a private tab stays private, and a link opened in a new tab keeps its box. `kaleidoscope URL --private` opens a private window.
 - The tab chip is underlined in its box's colour, and the bar shows "Private · " or the container's name.
 - Gate: `scripts/program_web_private_gate.py` (in CI). The server sees each box's cookie, and each page reports its localStorage. Own, Personal, Work and private never see each other's. Two private tabs share one box, and it is empty again after they close. A second Personal tab shares Personal's box, and only container 1's box is saved to Files.
+
+## sex-html `:scope` and `:has()` (2026-11-20)
+
+- `:scope` is the element a script's `querySelector*()` or `matches()` was called on (`Dom.scope`, set for the call); in style sheets it is the root element. `:has()` takes relative selectors (descendant, `>`, `+`, `~`); it can't be nested and its specificity is that of its most specific argument. Host tests: `crates/sex-html/tests/scope_has.rs`.
+- uBlock Origin Lite's dashboard now runs without script errors, and `scripts/program_web_ubol_gate.py` fails on any page script error. It runs in the default 512 MiB guest again, now that #484 took the NVIDIA GSP pack out of boot.img.
