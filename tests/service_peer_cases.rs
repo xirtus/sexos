@@ -37,8 +37,10 @@ fn cap_scoped_epoch_lifecycle_matrix_and_real_same_task_rearm(){
  unsafe{(*main).state=crate::task_ownership::TaskOwnership::new();(*main).state.activate();(*main).state.exit();}
  assert_eq!(state(holder).life,L::Dead);
  // poll_one is the real production restart path, with mapper/device effects doubled.
- let old_id=unsafe{(*main).id};peer.incoming_replies.lock().push_back(0x1234);peer.reply_credits.lock().push(7);
- poll_one(0);assert_eq!(unsafe{(*main).id},old_id);assert_eq!(old_id,3003);
+ let old_id=unsafe{(*main).id};peer.incoming_replies.lock().push_back(crate::ipc::messages::IpcReply{value:0x1234,caller_pd:7,caller_task:1});peer.reply_credits.lock().push(7);
+ // First the device is reset and the service marked down; it runs again a tick later.
+ poll_one(0);assert!(down(3));crate::interrupts::TICKS.fetch_add(2,Ordering::AcqRel);
+ poll_one(0);assert!(!down(3));assert_eq!(unsafe{(*main).id},old_id);assert_eq!(old_id,3003);
  assert_eq!(state(holder),PeerState{epoch:2,life:L::Live});assert!(peer.incoming_replies.lock().is_empty());assert!(peer.reply_credits.lock().is_empty());
  unsafe{let pd=(*main).context.pd_ptr;(*main).context.pd_ptr=other;assert_eq!(peer_state(holder,6),Err(crate::wire::INVALID));(*main).context.pd_ptr=pd;let pd_id=(*main).context.pd_id;(*main).context.pd_id=99;assert_eq!(peer_state(holder,6),Err(crate::wire::INVALID));(*main).context.pd_id=pd_id;let id=(*main).id;(*main).id=0;assert_eq!(peer_state(holder,6),Err(crate::wire::INVALID));(*main).id=id;}
  peer.main_task.store(std::ptr::null_mut(),Ordering::Release);assert_eq!(peer_state(holder,6),Err(crate::wire::INVALID));peer.main_task.store(main,Ordering::Release);
