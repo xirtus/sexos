@@ -193,13 +193,17 @@ pub const UNSUPPORTED: u8 = 15;
 pub const PENDING: u8 = 16;
 /// The file changed since it was inspected (organizer checked moves).
 pub const STALE: u8 = 17;
+/// A program asked for its arguments (ARGS) before Shell told Files where its run lives
+/// (the bind follows the start, and the program can run first). Ask again shortly.
+/// Statuses share one byte with `home_lock` (17, 18) and `console_relay` (60, 61).
+pub const STARTING: u8 = 62;
 
 pub fn message(status: u8) -> &'static [u8] {
     match status {
         OK => b"ok", UNAVAILABLE => b"no filesystem on this disk", NOT_FOUND => b"not found", EXISTS => b"already exists",
         NOT_DIR => b"not a directory", IS_DIR => b"is a directory", NOT_EMPTY => b"directory not empty", NAME => b"bad name",
         NO_SPACE => b"disk full", IO => b"disk error", CORRUPT => b"damaged data found", DENIED => b"not allowed",
-        OTHER_DISK => b"on another disk", READ_ONLY => b"read-only disk", UNSUPPORTED => b"not supported on this disk", PENDING => b"waiting for the person", STALE => b"file changed since inspection", _ => b"invalid request",
+        OTHER_DISK => b"on another disk", READ_ONLY => b"read-only disk", UNSUPPORTED => b"not supported on this disk", PENDING => b"waiting for the person", STALE => b"file changed since inspection", STARTING => b"program still starting", _ => b"invalid request",
     }
 }
 
