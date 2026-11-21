@@ -81,6 +81,8 @@ jobs:
       run: bash scripts/volumes_host_gate.sh
     - name: IOMMU tables, page tables and lending window on the host
       run: bash scripts/iommu_host_gate.sh
+    - name: Per-core I/O lanes (shared rings, adaptive polling, NVMe queues, RSS) on the host
+      run: bash scripts/lanes_host_gate.sh
     - name: IPC v2 endpoints, reply capabilities and notifications on the host
       run: bash scripts/ipc_v2_host_gate.sh
     - name: Display model (KMS, EDID), Intel Gen12 and AMD DCN display engines on the host
