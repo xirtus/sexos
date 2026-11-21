@@ -1315,6 +1315,7 @@ pub mod screenshot;
 pub mod tray;
 pub mod program_tray;
 pub mod silk_ctl;
+pub mod wasm_layout;
 pub mod window_motion;
 pub mod launch;
 pub mod restricted_helper;
