@@ -350,7 +350,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
  'kernel/src/app_resources.rs': '23d68b059a591aa4a2a0eaf75fd4b9ec9415ade1f3df0a62f8dfcce45e32a677',  # K2a hint backoff, K2c busy result + master merge (no observer change), 2026-11-21
  'kernel/src/service_restart.rs': 'a66ded412b60ef50cfc95310bee4027de9617a904908ab0f50d5df470622a856',  # K2c: poll reports work in flight (no observer change), 2026-11-20
- 'kernel/src/crash_log.rs': '50143847c2b1ecb5a3be360f38ef900e562f271bde90ad9b5b0b728813988f96',
+ 'kernel/src/crash_log.rs': '1a0619db6d5e2e9a18f60f9da923df062d90206d7378009a5751c2802dc145d7',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
 

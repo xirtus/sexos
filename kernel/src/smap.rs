@@ -6,8 +6,8 @@
 //! fault handler records the instruction once, as `[smap.site] rip=..`. It then
 //! sets RFLAGS.AC in the interrupted frame and retries. AC stays set until that
 //! kernel entry returns to ring 3 (SFMASK clears it again on the next syscall),
-//! so each entry pays at most one fault. Once every site goes through one
-//! user-copy module, the same fault becomes fatal.
+//! so each entry pays at most one fault. Deliberate accesses go through [`user`],
+//! the only place STAC/CLAC appear. Once every site does, the fault becomes fatal.
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 static ON: AtomicBool = AtomicBool::new(false);
@@ -15,6 +15,20 @@ const SITES: usize = 256;
 static RIP: [AtomicU64; SITES] = [const { AtomicU64::new(0) }; SITES];
 /// Fault address, plus bit 0 = write, bit 1 = printed, bit 2 = recorded (the low bits are dropped).
 static INFO: [AtomicU64; SITES] = [const { AtomicU64::new(0) }; SITES];
+/// Up to three return addresses found on the stack above the fault, as offsets from `audit`.
+static CALLERS: [[AtomicU64; 3]; SITES] = [const { [const { AtomicU64::new(0) }; 3] }; SITES];
+
+/// Opens user pages to the kernel while `f` runs (STAC ... CLAC). Callers have checked
+/// the range (`syscalls::validate_user_bytes`) or own the pages they fill.
+#[inline(always)]
+pub fn user<R>(f: impl FnOnce() -> R) -> R {
+    // No `nomem`: the asm is a compiler barrier, so no access moves outside the window.
+    let on = ON.load(Ordering::Relaxed);
+    if on { unsafe { core::arch::asm!("stac", options(nostack)) } }
+    let r = f();
+    if on { unsafe { core::arch::asm!("clac", options(nostack)) } }
+    r
+}
 
 /// Turns SMAP on for this core when the CPU has it (after the IDT is loaded).
 pub fn enable_core() -> bool {
@@ -39,7 +53,18 @@ pub unsafe fn audit(frame: *mut u64, addr: u64, error: u64) -> bool {
     let mut i = (rip as usize ^ (rip >> 12) as usize) % SITES;
     for _ in 0..SITES {
         match RIP[i].compare_exchange(0, rip, Ordering::AcqRel, Ordering::Acquire) {
-            Ok(_) => { INFO[i].store((addr & !7) | 4 | (error >> 1 & 1), Ordering::Release); break; }
+            Ok(_) => {
+                // Words on this stack page that point near the kernel's code: likely callers.
+                let (mut at, mut n) = (*frame.add(3) & !7, 0);
+                let end = (at | 0xFFF) + 1;
+                while at < end && n < 3 {
+                    let off = (*(at as *const u64)).wrapping_sub(audit as usize as u64) as i64;
+                    if off != 0 && off.unsigned_abs() < 8 << 20 { CALLERS[i][n].store(off as u64, Ordering::Relaxed); n += 1; }
+                    at += 8;
+                }
+                INFO[i].store((addr & !7) | 4 | (error >> 1 & 1), Ordering::Release);
+                break;
+            }
             Err(r) if r == rip => break,
             Err(_) => i = (i + 1) % SITES,
         }
@@ -51,8 +76,9 @@ pub unsafe fn audit(frame: *mut u64, addr: u64, error: u64) -> bool {
         if rip == 0 || info == 0 || info & 2 != 0 { continue; }
         // `from_audit` lets the host name the function: rip = address of smap::audit + it.
         let from_audit = rip.wrapping_sub(audit as usize as u64) as i64;
-        if !crate::serial::try_print(format_args!("[smap.site] rip={:#x} from_audit={} addr={:#x} write={}\n",
-            rip, from_audit, info & !7, info & 1)) { break; }
+        let c = |k: usize| CALLERS[i][k].load(Ordering::Relaxed) as i64;
+        if !crate::serial::try_print(format_args!("[smap.site] rip={:#x} from_audit={} addr={:#x} write={} callers={},{},{}\n",
+            rip, from_audit, info & !7, info & 1, c(0), c(1), c(2))) { break; }
         INFO[i].fetch_or(2, Ordering::AcqRel);
     }
     true
