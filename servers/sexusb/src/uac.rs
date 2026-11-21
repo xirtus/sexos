@@ -31,7 +31,13 @@ pub struct Playback {
     pub sync: u8,
     /// UAC2: the clock source the rate is set on (the first one listed).
     pub clock: u8,
+    /// An asynchronous card's feedback endpoint: how fast its own clock eats frames.
+    pub feedback: Option<Feedback>,
 }
+
+/// The isochronous IN endpoint an asynchronous card reports its rate on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Feedback { pub ep: u8, pub mps: u16, pub interval: u8 }
 
 /// Whether a UAC1 sample-rate list (bSamFreqType, then 3-byte rates) offers 48 kHz.
 fn offers_48k(kind: u8, rates: &[u8]) -> bool {
@@ -52,6 +58,7 @@ pub fn playback(cfg: &[u8]) -> Option<Playback> {
     // The interface setting being read, and what it has said so far.
     let (mut iface, mut alt, mut class, mut sub, mut proto) = (0u8, 0u8, 0u8, 0u8, 0u8);
     let (mut pcm, mut channels, mut bytes, mut rate_ok) = (false, 0u8, 0u8, false);
+    let (mut found, mut synch) = (None::<Playback>, 0u8);
     let mut at = 0;
     while at + 2 <= cfg.len() {
         let len = cfg[at] as usize;
@@ -59,6 +66,7 @@ pub fn playback(cfg: &[u8]) -> Option<Playback> {
         let d = &cfg[at..at + len];
         match d[1] {
             4 if len >= 9 => {
+                if found.is_some() { break; }
                 (iface, alt, class, sub, proto) = (d[2], d[3], d[5], d[6], d[7]);
                 (pcm, channels, bytes, rate_ok) = (false, 0, 0, false);
                 if class == CLASS_AUDIO && sub == SUB_CONTROL && control.is_none() { control = Some(iface); }
@@ -86,11 +94,20 @@ pub fn playback(cfg: &[u8]) -> Option<Playback> {
             }
             5 if len >= 7 && class == CLASS_AUDIO && sub == SUB_STREAMING && alt != 0 => {
                 let (addr, attr) = (d[2], d[3]);
-                if addr & 0x80 == 0 && attr & 3 == 1 && pcm && channels == 2 && bytes == 2 && rate_ok {
-                    return Some(Playback {
+                if let Some(p) = found.as_mut() {
+                    // After the data endpoint, in the same setting: its feedback endpoint,
+                    // an isochronous IN marked "feedback" (UAC2) or named by the data
+                    // endpoint's bSynchAddress (UAC1).
+                    let usage_feedback = (attr >> 4) & 3 == 1;
+                    if addr & 0x80 != 0 && attr & 3 == 1 && p.feedback.is_none() && (usage_feedback || addr == synch) {
+                        p.feedback = Some(Feedback { ep: addr, mps: u16::from_le_bytes([d[4], d[5]]) & 0x7ff, interval: d[6].max(1) });
+                    }
+                } else if addr & 0x80 == 0 && attr & 3 == 1 && pcm && channels == 2 && bytes == 2 && rate_ok {
+                    synch = if len >= 9 { d[8] } else { 0 };
+                    found = Some(Playback {
                         uac2: proto == PROTOCOL_UAC2, config, control: control.unwrap_or(0), iface, alt,
                         ep: addr, mps: u16::from_le_bytes([d[4], d[5]]) & 0x7ff, interval: d[6].max(1),
-                        sync: (attr >> 2) & 3, clock,
+                        sync: (attr >> 2) & 3, clock, feedback: None,
                     });
                 }
             }
@@ -98,7 +115,8 @@ pub fn playback(cfg: &[u8]) -> Option<Playback> {
         }
         at += len;
     }
-    None
+    // Only an asynchronous card's feedback is followed.
+    found.map(|mut p| { if p.sync != 1 { p.feedback = None; } p })
 }
 
 /// Microseconds between packets: full speed counts bInterval in 1 ms frames, high speed
@@ -119,4 +137,38 @@ pub fn set_rate(p: &Playback) -> (u8, u16, u16, [u8; 4], u16) {
     let r = 48_000u32.to_le_bytes();
     if p.uac2 { (0x21, 0x0100, (p.clock as u16) << 8 | p.control as u16, r, 4) }
     else { (0x22, 0x0100, p.ep as u16, r, 3) }
+}
+
+/// A feedback packet as frames per service interval of the feedback endpoint's bus
+/// unit, in 16.16 fixed point: full speed sends 10.14 frames per 1 ms frame in three
+/// bytes, high speed 16.16 frames per 125 µs microframe in four. None when the value
+/// is more than an eighth off `nominal` (16.16 per bus unit), which a real clock never is.
+pub fn feedback_q16(high_speed: bool, raw: &[u8], nominal: u32) -> Option<u32> {
+    let v = if high_speed {
+        u32::from_le_bytes(raw.get(..4)?.try_into().ok()?)
+    } else {
+        let r = raw.get(..3)?;
+        (r[0] as u32 | (r[1] as u32) << 8 | (r[2] as u32) << 16) << 2
+    };
+    (v.abs_diff(nominal) <= nominal / 8).then_some(v)
+}
+
+/// Frames per bus unit at 48 kHz in 16.16: 48 per 1 ms frame, 6 per microframe.
+pub fn nominal_q16(high_speed: bool) -> u32 { if high_speed { 6 << 16 } else { 48 << 16 } }
+
+/// Spreads a fractional frame rate over whole packets: each packet carries the whole
+/// frames the running total has reached, so the card gets exactly its own rate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pacer { per_packet: u32, carry: u32 }
+
+impl Pacer {
+    /// `per_packet`: frames per packet in 16.16.
+    pub fn new(per_packet: u32) -> Pacer { Pacer { per_packet, carry: 0 } }
+    pub fn set(&mut self, per_packet: u32) { self.per_packet = per_packet; }
+    /// Frames for the next packet.
+    pub fn next(&mut self) -> u32 {
+        let total = self.carry + self.per_packet;
+        self.carry = total & 0xffff;
+        total >> 16
+    }
 }
