@@ -1880,6 +1880,38 @@ impl Browser {
     }
 }
 
+/// How long an idle window waits before it looks for Voyeur's questions again.
+const SEARCH_LOOK_MS: u64 = 250;
+
+impl Browser {
+    /// Voyeur's questions, answered from history and bookmarks; a chosen one opens
+    /// here (the Shell has focused this window). Copy is the Shell's.
+    fn voyeur(&mut self) {
+        use sex_app::search as vs;
+        while let Some((ticket, query)) = vs::asked() {
+            let records: Vec<vs::Record> = self.profile.lookup(&query, vs::RESULTS_MAX).into_iter().filter_map(|(bookmark, url, title)| {
+                let shown = if title.is_empty() { url } else { title };
+                let mut t = shown.len().min(sex_pdx::search::TITLE_MAX);
+                while !shown.is_char_boundary(t) { t -= 1; }
+                let fits = url.len() <= sex_pdx::search::SUBTITLE_MAX;
+                let mut u = url.len().min(sex_pdx::search::SUBTITLE_MAX - 3);
+                while !url.is_char_boundary(u) { u -= 1; }
+                let sub = if fits { String::from(url) } else { alloc::format!("{}\u{2026}", &url[..u]) };
+                let kind = if bookmark { vs::KIND_BOOKMARK } else { vs::KIND_HISTORY };
+                let r = vs::Record::new(kind, vs::ACTION_OPEN, 300, profile::key(url), &shown[..t], &sub)?;
+                Some(if fits { r.with(&[vs::ACTION_COPY]) } else { r })
+            }).collect();
+            let sent = vs::answer(ticket, &records);
+            sex_pdx::serial_record!("[web.voyeur.answer] ticket={} query={} results={} first={} sent={}", ticket, query, records.len(), records.first().map_or("-", |r| r.title()), sent as u8);
+        }
+        while let Some((action, key)) = vs::activated() {
+            let url = self.profile.address_for(key);
+            sex_pdx::serial_record!("[web.voyeur] action={} url={}", action, url.as_deref().unwrap_or("-"));
+            if let (vs::ACTION_OPEN, Some(url)) = (action, url) { self.open(&url, true); }
+        }
+    }
+}
+
 // The stack size is linked in (build.rs): layout recurses per nesting level, and
 // scripts call back into it.
 #[no_mangle]
@@ -1915,7 +1947,9 @@ pub extern "C" fn _start() -> ! {
     sex_pdx::serial_record!("[web.cores] cores={}", cores);
     let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
     b.open(&first, false);
+    let registered = sex_app::search::register("kaleidoscope", &[sex_app::search::KIND_HISTORY, sex_app::search::KIND_BOOKMARK]);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
+    sex_pdx::serial_record!("[web.voyeur.register] sent={}", registered as u8);
     let mut queued: Option<Event> = None;
     loop {
         b.settle();
@@ -1924,6 +1958,7 @@ pub extern "C" fn _start() -> ! {
         // itself was dropped; never replay older held dimensions over it.
         let (width, height) = b.window.size();
         b.resize(width, height);
+        b.voyeur();
         let event = if let Some(e) = queued.take() { e } else { match b.next_due() {
             Some(due) => {
                 let now = sex_pdx::get_ticks();
@@ -1932,7 +1967,8 @@ pub extern "C" fn _start() -> ! {
                     None => { b.tick_all(); continue; }
                 }
             }
-            None => b.window.next(),
+            // Idle: wake now and then for Voyeur's questions.
+            None => match b.window.next_within(SEARCH_LOOK_MS) { Some(e) => e, None => continue },
         } };
         match event {
             Event::Close => b.quit(),

@@ -15420,6 +15420,8 @@ unsafe fn palette_search_intercept(scancode: u8) -> bool {
     }
     if scancode==0x1C && !PALETTE_QUERY.is_empty() && palette_order().1==0 {return true;}
     if APP_MODIFIERS.key(scancode).control {return false;}
+    // Tab: the selected result's next action (open, open with, reveal, copy).
+    if scancode==0x0F && !APP_MODIFIERS.key(scancode).alt && voyeur::cycle() {palette_render_list();return true;}
     let nav=matches!(scancode,0x24|0x25) && PALETTE_QUERY.is_empty();
     if !nav && palette_search_key(scancode) {return true;}
     if matches!(scancode,0x48|0x50) {
@@ -17245,7 +17247,7 @@ unsafe fn palette_render_list() {
     let none=[launcher::Row{name:"No match",status:"BACKSPACE TO EDIT"}];
     let v=if PALETTE_QUERY.is_empty() {launcher::text_with_metrics(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h,launcher::DEFAULT_HEAD,metrics)}
         else if matches==0 {launcher::text_with_metrics(&none,0,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ESC CLEARS THE SEARCH"],metrics)}
-        else {launcher::text_with_metrics(&shown[..matches],selected,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ARROWS CHOOSE  ENTER OPEN  ESC CLEAR"],metrics)};
+        else {launcher::text_with_metrics(&shown[..matches],selected,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ARROWS CHOOSE  ENTER OPEN  TAB ACTION  ESC CLEAR"],metrics)};
     let rows=if PALETTE_QUERY.is_empty() {rows} else {let mut r=shown;if matches==0 {r[0]=none[0];} r};
     for index in 0..8 {pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,0,(index as u64)<<56);}
     pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(m.title()as u64)<<32,
