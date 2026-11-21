@@ -3,5 +3,7 @@
 chrome.runtime.sendMessage({ hello: 'options' }).then(r => {
   console.log('options reply ' + JSON.stringify(r));
   document.getElementById('out').textContent = 'Installed ' + r.installs + ' time(s)';
+  // Its side panel (N13e) opens beside the page, as from a button in a real options page.
+  chrome.sidePanel.open({});
 });
 chrome.storage.local.get('installs').then(v => console.log('options storage ' + v.installs + ' ' + location.href));

@@ -671,6 +671,68 @@ pub struct Chrome<'a> {
     /// The window columns (x, width) the page takes in a split view, where the other
     /// half is painted apart; width 0 gives the page everything right of the strip.
     pub pane: (i32, i32),
+    /// Each tab's group (an index into `groups`), if it is in one.
+    pub group_of: &'a [Option<usize>],
+    /// Tab groups, as in Chrome: a coloured label before their tabs, which folds them away.
+    pub groups: &'a [TabGroup],
+}
+
+/// A group of tabs that sit together in the strip under a coloured label.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabGroup {
+    pub colour: u32,
+    pub name: String,
+    /// Folded: only the label shows, with how many tabs it holds.
+    pub folded: bool,
+}
+
+/// The colours new groups take in turn: Chrome's blue, red, yellow, green, pink,
+/// purple, cyan and grey.
+pub const GROUP_COLOURS: [u32; 8] = [0xFF1A_73E8, 0xFFD9_3025, 0xFFF9_AB00, 0xFF18_8038, 0xFFD0_1884, 0xFFA1_42F4, 0xFF00_7B83, 0xFF5F_6368];
+
+/// One place in the tab strip: a group's label, or a tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Slot { Group(usize), Tab(usize) }
+
+/// The strip's places, in order: each group's label before its first tab, and the
+/// tabs of a folded group left out. A group's tabs sit together.
+pub fn strip_slots(group_of: &[Option<usize>], groups: &[TabGroup]) -> Vec<Slot> {
+    let mut out = Vec::new();
+    let mut last = None;
+    for (i, g) in group_of.iter().enumerate() {
+        let g = g.filter(|g| *g < groups.len());
+        if g.is_some() && g != last { out.push(Slot::Group(g.unwrap())); }
+        last = g;
+        if !g.is_some_and(|g| groups[g].folded) { out.push(Slot::Tab(i)); }
+    }
+    out
+}
+
+/// How many tabs group `g` holds.
+fn group_count(group_of: &[Option<usize>], g: usize) -> usize { group_of.iter().filter(|x| **x == Some(g)).count() }
+
+/// A new group's name: its tab's site, without `www.` or the ending (`example` for
+/// news.example.com, `bbc` for bbc.co.uk); an address by number stays whole; nothing for built-in pages.
+pub fn group_name(url: &str) -> String {
+    let Some((_, rest)) = url.split_once("://") else { return String::new() };
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    let host = if host.starts_with('[') { host } else { host.split(':').next().unwrap_or("") };
+    let host = host.strip_prefix("www.").unwrap_or(host);
+    if host.bytes().all(|b| b.is_ascii_digit() || b == b'.') || host.starts_with('[') { return String::from(host); }
+    let labels: Vec<&str> = host.split('.').filter(|l| !l.is_empty()).collect();
+    let n = labels.len();
+    // A two-part ending (co.uk, com.au) is skipped too.
+    let two = n >= 3 && labels[n - 1].len() == 2 && labels[n - 2].len() <= 3;
+    String::from(match n { 0 => "", 1 => labels[0], _ if two => labels[n - 3], _ => labels[n - 2] })
+}
+
+/// A group label's width in the bar.
+fn group_chip(groups: &[TabGroup], g: usize) -> i32 {
+    let Some(grp) = groups.get(g) else { return 24 };
+    let name = grp.name.chars().count().min(12) as i32;
+    let w = if name == 0 { 24 } else { 22 + name * 7 };
+    if grp.folded && name > 0 { w + 26 } else { w }
 }
 
 /// The vertical tab strip's width, as Edge and Brave draw it.
@@ -678,20 +740,26 @@ pub const SIDE: i32 = 200;
 /// Height of one tab in the vertical strip.
 pub const SIDE_ROW: i32 = 30;
 
-/// The tab in the vertical strip `side` wide under window point (`x`, `y`), of `n` tabs.
-pub fn side_tab_at(side: i32, n: usize, x: i32, y: i32) -> Option<usize> {
+/// The row in the vertical strip `side` wide under window point (`x`, `y`), of `n`
+/// rows (one for each of [`strip_slots`]).
+pub fn side_row_at(side: i32, n: usize, x: i32, y: i32) -> Option<usize> {
     if side <= 0 || x < 0 || x >= side || y < BAR + 6 { return None; }
     let i = ((y - BAR - 6) / SIDE_ROW) as usize;
     (i < n).then_some(i)
 }
 
-/// Tab chips in the bar: each chip's x and width, for `width` and `n` tabs.
-pub fn tab_chips(width: i32, n: usize) -> Vec<(i32, i32)> {
-    if n < 2 { return Vec::new(); }
+/// Chips in the bar, one for each of `slots`: each chip's x and width, for `width`.
+/// The strip shows with two tabs or more, or any group.
+pub fn tab_chips(width: i32, slots: &[Slot], groups: &[TabGroup]) -> Vec<(i32, i32)> {
+    let tabs = slots.iter().filter(|s| matches!(s, Slot::Tab(_))).count() as i32;
+    let labels: i32 = slots.iter().map(|s| if let Slot::Group(g) = s { group_chip(groups, *g) + 2 } else { 0 }).sum();
+    if tabs + (labels > 0) as i32 * 2 < 2 { return Vec::new(); }
     // Tabs take up to half the bar; the address keeps the rest.
-    let room = (width / 2 - 8).max(0);
-    let w = (room / n as i32).clamp(28, 140);
-    (0..n).map(|i| (6 + i as i32 * (w + 2), w)).take_while(|(x, w)| x + w <= width - 60).collect()
+    let room = (width / 2 - 8 - labels).max(0);
+    let w = (room / tabs.max(1)).clamp(28, 140);
+    let mut x = 6;
+    slots.iter().map(|s| { let cw = if let Slot::Group(g) = s { group_chip(groups, *g) } else { w }; let at = x; x += cw + 2; (at, cw) })
+        .take_while(|(x, w)| x + w <= width - 60).collect()
 }
 
 /// Rows of suggestions under the bar.
@@ -731,32 +799,67 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
     bar.fill(0, 0, width, BAR, 0xFF0D_1420, 0);
     let font = FontKey { size: 13, bold: false, italic: false, mono: false, face: 0 };
     let small = FontKey { size: 12, ..font };
+    let slots = if c.group_of.len() == c.tabs.len() { strip_slots(c.group_of, c.groups) } else { (0..c.tabs.len()).map(Slot::Tab).collect() };
     if side > 0 {
         // Vertical tabs: one row each down the strip, the shown one lit, with its
         // container's colour as a bar at the left edge.
         let mut strip = Target { pixels: bar.pixels, width: side, height, scroll: 0, top: BAR, premul: false, clip: None, stride: width };
         strip.fill(0, 0, side, height - BAR, 0xFF0D_1420, 0);
         strip.fill(side - 1, 0, 1, height - BAR, 0xFF22_2C3A, 0);
-        for (i, label) in c.tabs.iter().enumerate() {
-            let y = 6 + i as i32 * SIDE_ROW;
+        for (row, slot) in slots.iter().enumerate() {
+            let y = 6 + row as i32 * SIDE_ROW;
             if y + SIDE_ROW > height - BAR { break; }
-            let on = i == c.active;
-            if on { strip.fill(6, y, side - 13, SIDE_ROW - 4, 0xFF3A_4A60, 6); }
-            if let Some(&c) = c.colours.get(i).filter(|c| **c != 0) { strip.fill(6, y + 4, 3, SIDE_ROW - 12, c, 1); }
-            let shown = fit(fonts, label, small, side - 32);
-            text_run(&mut strip, fonts, 16, y + 17, small, if on { 0xFFFF_FFFF } else { 0xFF9A_A8B8 }, &shown);
+            match *slot {
+                // A group's row: its colour as a dot, its name, and its count when folded.
+                Slot::Group(g) => {
+                    let grp = &c.groups[g];
+                    strip.fill(10, y + 9, 9, 9, grp.colour, 4);
+                    let name = if grp.name.is_empty() { "Group" } else { grp.name.as_str() };
+                    let label = if grp.folded { alloc::format!("{name} ({})", group_count(c.group_of, g)) } else { String::from(name) };
+                    let shown = fit(fonts, &label, small, side - 40);
+                    text_run(&mut strip, fonts, 26, y + 17, small, 0xFFD7_E3F0, &shown);
+                }
+                Slot::Tab(i) => {
+                    let Some(label) = c.tabs.get(i) else { continue };
+                    // A grouped tab sits in from the edge, its group's colour beside it.
+                    let group = c.group_of.get(i).copied().flatten().and_then(|g| c.groups.get(g));
+                    let inset = if group.is_some() { 12 } else { 0 };
+                    if let Some(g) = group { strip.fill(13, y - 4, 3, SIDE_ROW, g.colour, 0); }
+                    let on = i == c.active;
+                    if on { strip.fill(6 + inset, y, side - 13 - inset, SIDE_ROW - 4, 0xFF3A_4A60, 6); }
+                    if let Some(&c) = c.colours.get(i).filter(|c| **c != 0) { strip.fill(6 + inset, y + 4, 3, SIDE_ROW - 12, c, 1); }
+                    let shown = fit(fonts, label, small, side - 32 - inset);
+                    text_run(&mut strip, fonts, 16 + inset, y + 17, small, if on { 0xFFFF_FFFF } else { 0xFF9A_A8B8 }, &shown);
+                }
+            }
         }
         bar = Target { pixels: strip.pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None, stride: width };
     }
     // In a split view, a line under the bar marks the half that has the keyboard.
     if c.pane.1 > 0 { bar.fill(px, BAR - 2, pw, 2, 0xFF0B_57D0, 0); }
-    let chips = if side > 0 { Vec::new() } else { tab_chips(width, c.tabs.len()) };
-    for (i, (x, w)) in chips.iter().enumerate() {
+    let chips = if side > 0 { Vec::new() } else { tab_chips(width, &slots, c.groups) };
+    for (slot, (x, w)) in slots.iter().zip(chips.iter()) {
+        let i = match *slot {
+            // A group's label: its colour, its name (or count when folded) on it.
+            Slot::Group(g) => {
+                let grp = &c.groups[g];
+                bar.fill(*x, 6, *w, BAR - 12, grp.colour, 8);
+                let n = group_count(c.group_of, g);
+                let label = match (grp.folded, grp.name.is_empty()) { (true, true) => alloc::format!("{n}"), (true, false) => alloc::format!("{} ({n})", grp.name), _ => grp.name.clone() };
+                let label = fit(fonts, &label, small, w - 10);
+                text_run(&mut bar, fonts, x + 6, 19, small, 0xFFFF_FFFF, &label);
+                continue;
+            }
+            Slot::Tab(i) => i,
+        };
+        let Some(text) = c.tabs.get(i) else { continue };
         let on = i == c.active;
         bar.fill(*x, 4, *w, BAR - 8, if on { 0xFF3A_4A60 } else { 0xFF18_2230 }, 6);
-        let label = fit(fonts, &c.tabs[i], small, w - 12);
+        let label = fit(fonts, text, small, w - 12);
         text_run(&mut bar, fonts, x + 6, 19, small, if on { 0xFFFF_FFFF } else { 0xFF9A_A8B8 }, &label);
         if let Some(&c) = c.colours.get(i).filter(|c| **c != 0) { bar.fill(x + 4, BAR - 7, w - 8, 2, c, 0); }
+        // A grouped tab is underlined in its group's colour, joined to the next.
+        if let Some(g) = c.group_of.get(i).copied().flatten().and_then(|g| c.groups.get(g)) { bar.fill(*x, BAR - 3, w + 2, 2, g.colour, 0); }
     }
     let left = chips.last().map_or(6, |(x, w)| x + w + 6);
     let zoom = if c.zoom != 0 && c.zoom != 100 { alloc::format!("{}%", c.zoom) } else { String::new() };
@@ -870,4 +973,36 @@ pub fn find_marks(page: &Page, fonts: &mut Fonts, query: &str) -> Vec<[i32; 5]> 
         i += q.len();
     }
     out
+}
+
+#[cfg(test)]
+mod strip_tests {
+    use super::*;
+    fn group(folded: bool) -> TabGroup { TabGroup { colour: GROUP_COLOURS[1], name: String::from("news"), folded } }
+
+    #[test]
+    fn a_group_label_comes_before_its_tabs_and_folding_hides_them() {
+        let of = [None, Some(0), Some(0), None];
+        assert_eq!(strip_slots(&of, &[group(false)]), [Slot::Tab(0), Slot::Group(0), Slot::Tab(1), Slot::Tab(2), Slot::Tab(3)]);
+        assert_eq!(strip_slots(&of, &[group(true)]), [Slot::Tab(0), Slot::Group(0), Slot::Tab(3)]);
+    }
+
+    #[test]
+    fn one_tab_in_a_group_still_shows_the_strip() {
+        assert!(tab_chips(1000, &[Slot::Tab(0)], &[]).is_empty());
+        let slots = strip_slots(&[Some(0)], &[group(false)]);
+        let chips = tab_chips(1000, &slots, &[group(false)]);
+        assert_eq!(chips.len(), 2);
+        assert_eq!(chips[0], (6, 22 + 4 * 7));
+        assert_eq!(chips[1].0, 6 + 22 + 4 * 7 + 2);
+    }
+
+    #[test]
+    fn groups_are_named_for_their_site() {
+        assert_eq!(group_name("https://www.news.example.com/a"), "example");
+        assert_eq!(group_name("https://github.com/x"), "github");
+        assert_eq!(group_name("http://10.0.2.2:8080/p/a"), "10.0.2.2");
+        assert_eq!(group_name("about:blank"), "");
+        assert_eq!(group_name("https://www.bbc.co.uk/news"), "bbc");
+    }
 }

@@ -20,6 +20,7 @@ extern "C" {
     fn sxn_module(i: *mut c_void, a: u32, b: u32, c: u32, d: u32, e: u32, f: u32, out: *mut u32) -> i32;
     fn sxn_ready(i: *mut c_void, a: u32, out: *mut u32) -> i32;
     fn sxn_dispatch(i: *mut c_void, a: u32, b: u32, c: u32, out: *mut u32) -> i32;
+    fn sxn_world(i: *mut c_void, a: u32, out: *mut u32) -> i32;
 }
 
 const ALIGN: usize = 16;
@@ -217,6 +218,7 @@ impl<P: Page + 'static> Native<P> {
     pub fn dispatch(&mut self, a: (i32, i32, i32)) -> Result<i32, Error> {
         self.run(|i, o| unsafe { sxn_dispatch(i, a.0 as u32, a.1 as u32, a.2 as u32, o) })
     }
+    pub fn world(&mut self, a: i32) -> Result<i32, Error> { self.run(|i, o| unsafe { sxn_world(i, a as u32, o) }) }
     pub fn write(&mut self, at: usize, bytes: &[u8]) -> Result<(), Error> {
         let data = unsafe { memory(&*self.ctx) };
         data.get_mut(at..at + bytes.len()).ok_or_else(|| Error::Trapped(String::from("write")))?.copy_from_slice(bytes);

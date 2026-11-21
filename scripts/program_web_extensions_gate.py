@@ -9,7 +9,9 @@ its style sheet turns the page pink, and its static and dynamic declarativeNetRe
 rules block two pictures and a script before they leave. Turned off on
 about:extensions, it stays off in the next run, its background doesn't start and the
 three requests reach the server. Its options page, opened in the tab, has the whole
-API (N7c)."""
+API (N7c). Content scripts run in the extension's isolated world (N7d): page and content
+script don't see each other's globals, the page has no `chrome`, and mutation observers
+in each world hear the other world's changes."""
 import argparse,http.server,io,os,re,shutil,struct,threading,time,zipfile
 from pathlib import Path
 from PIL import Image
@@ -68,7 +70,7 @@ def main():
   assert '[web.extension.' not in t()[s:],'an extension before any was installed'
   hits.clear()
   s=go(f'about:extensions?install={base}/sample.crx')
-  g['wait'](r'\[web.extension.installed\] id=recolour-sample files=10 name=Recolour Sample',s,300)
+  g['wait'](r'\[web.extension.installed\] id=recolour-sample files=12 name=Recolour Sample',s,300)
   g['wait'](r'\[web.extension.loaded\] id=recolour-sample mv=3 enabled=1 rules=1 skipped=0 content_scripts=1 background=1',s,60)
   g['wait'](r'\[web.extension.background\] id=recolour-sample scripts=1 module=0 ',s,120)
   for line in ('background installed install','content script registered','dynamic rule added'):g['wait'](rf'\[web.extension.console\] id=recolour-sample level=0 {line}',s,120)
@@ -76,6 +78,13 @@ def main():
   assert '/sample.crx' in hits,hits
   s=go(page);g['wait'](loaded,s,600)
   g['wait'](r'\[web.console\] level=0 extension content script ran',s,60)
+  # Isolated worlds (N7d): the content script has a world of its own over the page's
+  # document. Neither sees the other's globals; each one's mutation observers hear the
+  # other's changes; the page never sees `chrome`.
+  g['wait'](r'\[web.console\] level=0 content sees undefined undefined\n',s,5)
+  g['wait'](r'\[web.console\] level=0 page saw data-recoloured\n',s,60)
+  g['wait'](r'\[web.console\] level=0 page sees undefined undefined yes\n',s,120)
+  g['wait'](r'\[web.console\] level=0 content saw late\n',s,60)
   g['wait'](r'\[web.extension.content\] css=1 early=0 late=2 url=\S+page.html',s,5)
   g['wait'](r'\[web.console\] level=0 registered content script ran recolour-sample',s,60)
   reply=g['wait'](r'\[web.console\] level=0 extension reply (\{[^\n]*\})',s,120)[1]

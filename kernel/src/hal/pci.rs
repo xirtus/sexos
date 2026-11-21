@@ -186,39 +186,56 @@ pub(crate) fn apply_command(update:sex_pdx::pci_command::Update)->Result<sex_pdx
     })
 }
 
+/// Every PCI function present, as (bus, device, function, vendor|device id), found by
+/// one walk of all 256 buses while the boot registry is built and reused by every boot
+/// caller after it (device manager, IOMMU, GPU power, BAR page checks). Each config read
+/// is two port accesses, two exits to the hypervisor under KVM: one walk is ~16k exits,
+/// which nested CI virtualisation turned into a third of a second per walk, and boot
+/// used to walk the bus several times. Functions 1-7 are read only on multi-function
+/// devices (header type bit 7), as the GPU and BAR walks already did. Outside the boot
+/// registry phase nothing is cached: devices may come and go.
+static PRESENT: spin::Mutex<Option<Vec<(u8, u8, u8, u32)>>> = spin::Mutex::new(None);
+pub fn present_functions() -> Vec<(u8, u8, u8, u32)> {
+    let boot = crate::ipc::BOOT_PHASE.load(Ordering::Acquire) == crate::ipc::BootPhase::RegistryBuild as u8;
+    if boot { if let Some(found) = PRESENT.lock().as_ref() { return found.clone(); } }
+    let mut found = Vec::new();
+    for bus in 0..256u16 {
+        for dev in 0..32u8 {
+            let id = unsafe { pci_config_read(bus as u8, dev, 0, 0) };
+            if id & 0xFFFF == 0xFFFF { continue; }
+            found.push((bus as u8, dev, 0, id));
+            let multi = (unsafe { pci_config_read(bus as u8, dev, 0, 0x0C) } >> 16) & 0x80 != 0;
+            if !multi { continue; }
+            for func in 1..8u8 {
+                let id = unsafe { pci_config_read(bus as u8, dev, func, 0) };
+                if id & 0xFFFF != 0xFFFF { found.push((bus as u8, dev, func, id)); }
+            }
+        }
+    }
+    if boot {
+        serial_println!("[pci.walk] functions={} cached=1", found.len());
+        *PRESENT.lock() = Some(found.clone());
+    }
+    found
+}
+
 pub fn enumerate_bus() -> Vec<PciDevice> {
     assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),
         crate::ipc::BootPhase::RegistryBuild as u8, "PCI_ENUMERATION_AFTER_GENESIS");
     let mut devices = Vec::new();
-    for bus in 0..256 {
-        for slot in 0..32 {
-            // Check if device exists
-            let vendor_id = unsafe { pci_config_read(bus as u8, slot as u8, 0, 0) } as u16;
-            if vendor_id == 0xFFFF { continue; }
-
-            for func in 0..8 {
-                let vendor_id = unsafe { pci_config_read(bus as u8, slot as u8, func as u8, 0) } as u16;
-                if vendor_id != 0xFFFF {
-                    let device_id = (unsafe { pci_config_read(bus as u8, slot as u8, func as u8, 0) } >> 16) as u16;
-                    let class_rev = unsafe { pci_config_read(bus as u8, slot as u8, func as u8, 8) };
-                    let class_id = (class_rev >> 24) as u8;
-                    let subclass_id = (class_rev >> 16) as u8;
-                    let prog_if = (class_rev >> 8) as u8;
-
-                    devices.push(PciDevice {
-                        bus: bus as u8,
-                        dev: slot as u8,
-                        func: func as u8,
-                        vendor_id,
-                        device_id,
-                        class_id,
-                        subclass_id,
-                        prog_if,
-                        ecam: 0,
-                    });
-                }
-            }
-        }
+    for (bus, slot, func, id) in present_functions() {
+        let class_rev = unsafe { pci_config_read(bus, slot, func, 8) };
+        devices.push(PciDevice {
+            bus,
+            dev: slot,
+            func,
+            vendor_id: id as u16,
+            device_id: (id >> 16) as u16,
+            class_id: (class_rev >> 24) as u8,
+            subclass_id: (class_rev >> 16) as u8,
+            prog_if: (class_rev >> 8) as u8,
+            ecam: 0,
+        });
     }
     
     // Log discovery for XPS 17 target
@@ -250,27 +267,20 @@ pub fn enumerate_bus() -> Vec<PciDevice> {
 /// two, so another window overlapping that page must start inside it. Reads BAR
 /// registers only; nothing is probed or written.
 pub fn page_exclusive(page: u64, bus: u8, dev: u8, func: u8, index: u8) -> bool {
-    for b in 0..256u16 {
-        for d in 0..32u8 {
-            for f in 0..8u8 {
-                let id = unsafe { pci_config_read(b as u8, d, f, 0) };
-                if id & 0xffff == 0xffff { if f == 0 { break; } continue; }
-                // Bridges (header type 1) have two BARs, ordinary functions six.
-                let header = (unsafe { pci_config_read(b as u8, d, f, 0x0c) } >> 16) as u8;
-                let bars = match header & 0x7f { 0 => 6u8, 1 => 2, _ => 0 };
-                let mut i = 0u8;
-                while i < bars {
-                    let low = unsafe { pci_config_read(b as u8, d, f, 0x10 + i * 4) };
-                    let wide = low & 1 == 0 && (low >> 1) & 3 == 2 && i + 1 < bars;
-                    let base = if low & 1 != 0 { 0 } else {
-                        (low & !15) as u64 | if wide { (unsafe { pci_config_read(b as u8, d, f, 0x14 + i * 4) } as u64) << 32 } else { 0 }
-                    };
-                    let own = (b as u8, d, f, i) == (bus, dev, func, index);
-                    if !own && base != 0 && base >= page && base < page + 4096 { return false; }
-                    i += if wide { 2 } else { 1 };
-                }
-                if f == 0 && header & 0x80 == 0 { break; }
-            }
+    for (b, d, f, _) in present_functions() {
+        // Bridges (header type 1) have two BARs, ordinary functions six.
+        let header = (unsafe { pci_config_read(b, d, f, 0x0c) } >> 16) as u8;
+        let bars = match header & 0x7f { 0 => 6u8, 1 => 2, _ => 0 };
+        let mut i = 0u8;
+        while i < bars {
+            let low = unsafe { pci_config_read(b, d, f, 0x10 + i * 4) };
+            let wide = low & 1 == 0 && (low >> 1) & 3 == 2 && i + 1 < bars;
+            let base = if low & 1 != 0 { 0 } else {
+                (low & !15) as u64 | if wide { (unsafe { pci_config_read(b, d, f, 0x14 + i * 4) } as u64) << 32 } else { 0 }
+            };
+            let own = (b, d, f, i) == (bus, dev, func, index);
+            if !own && base != 0 && base >= page && base < page + 4096 { return false; }
+            i += if wide { 2 } else { 1 };
         }
     }
     true
