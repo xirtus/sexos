@@ -76,6 +76,7 @@ fn buttons_and_rows_map_to_window_manager_actions() {
     assert_eq!(button_action(Button::Minimise), Action::Minimise);
     assert_eq!(item_action(Item::Workspace(4)), Action::MoveToWorkspace(4));
     assert_eq!(item_action(Item::Close), Action::Close);
+    assert_eq!(item_action(Item::Ungroup), Action::Ungroup);
 }
 
 #[test]
@@ -83,7 +84,7 @@ fn menu_rows_skip_the_windows_own_workspace_and_name_the_state() {
     assert_eq!(OP_WINDOW_MENU, 0x2E7);
     let m = Menu::new(10, 20, false, false, 9, 2);
     assert_eq!(m.rows(), 11);
-    assert_eq!(m.rows(), MAX_ROWS);
+    assert_eq!(m.grouped(true).rows(), MAX_ROWS);
     let items: Vec<_> = (0..m.rows()).map(|i| m.item(i).unwrap()).collect();
     assert_eq!(items[0], Item::Maximise);
     assert_eq!(items[1], Item::Float);
@@ -99,11 +100,18 @@ fn menu_rows_skip_the_windows_own_workspace_and_name_the_state() {
     assert_eq!(restore.label(Item::Maximise), "Restore");
     assert_eq!(restore.label(Item::Float), "Tile");
     assert_eq!(restore.item(2), Some(Item::Close));
+    // A group of tabs: Ungroup comes after Float, the workspaces follow.
+    let g = Menu::new(10, 20, false, false, 9, 2).grouped(true);
+    assert_eq!((g.item(2), g.item(3), g.item(10), g.item(11), g.item(12)),
+        (Some(Item::Ungroup), Some(Item::Workspace(0)), Some(Item::Workspace(8)), Some(Item::Close), None));
+    assert_eq!(g.label(Item::Ungroup), "Ungroup");
+    let alone = Menu::new(0, 0, false, false, 1, 0).grouped(true);
+    assert_eq!((alone.rows(), alone.item(2), alone.item(3)), (4, Some(Item::Ungroup), Some(Item::Close)));
 }
 
 #[test]
 fn menu_wire_round_trips_and_rejects_bad_words() {
-    for m in [Menu::new(0, 0, false, false, 9, 0), Menu::new(1279, 799, true, true, 9, 8), Menu { hover: Some(10), ..Menu::new(5, 6, false, true, 9, 3) }] {
+    for m in [Menu::new(0, 0, false, false, 9, 0), Menu::new(1279, 799, true, true, 9, 8), Menu { hover: Some(10), ..Menu::new(5, 6, false, true, 9, 3) }, Menu { hover: Some(11), ..Menu::new(5, 6, false, false, 9, 3).grouped(true) }] {
         assert_eq!(Menu::decode(m.wire()), Some(m));
     }
     assert_eq!(Menu::decode(0), None);
@@ -111,7 +119,8 @@ fn menu_wire_round_trips_and_rejects_bad_words() {
     assert!(Menu::decode(good).is_some());
     // Unknown bits, too many workspaces, current past the count, hover past the rows.
     assert_eq!(Menu::decode(good | 1 << 50), None);
-    assert_eq!(Menu::decode(good | 1 << 42), None);
+    assert_eq!(Menu::decode(good | 1 << 43), None);
+    assert_eq!(Menu::decode(good | 1 << 42).map(|m| m.rows()), Some(7), "grouped adds Ungroup");
     assert_eq!(Menu::decode(good & !(0xF << 32) | 10 << 32), None);
     assert_eq!(Menu::decode(good & !(0xF << 36) | 4 << 36), None);
     assert_eq!(Menu::decode(good & !(0xF << 44) | 6 << 44), None);

@@ -10,8 +10,10 @@ third calculator focused, Super+G twice pulls the other two into its group
 the first, Super+, steps back; each step focuses that tab's window. Super+2
 shows workspace 2 in its own layout (master), and Super+1 comes back to
 dwindle with the group of three still there and still cycling. Super+Shift+G
-takes the focused tab out of the group again. Every step waits for the
-Shell's `[shell.group]` / `[shell.layout*]` receipts."""
+takes the focused tab out of the group again, and the window menu's Ungroup
+row (a right click on the group's title bar) takes the next one out. Every step
+waits for the Shell's `[shell.group]` / `[shell.layout*]` / `[shell.decor.*]`
+receipts."""
 import argparse, json, re, shutil, time
 from pathlib import Path
 from install_program import install
@@ -24,7 +26,9 @@ TILE = r'\[shell.layout.tile\] scene=0 n=(\d+)/(\d+) frame=(\d+) sid=(\d+) depth
 JOIN = r'\[shell.group\] join frame=(\d+) took=(\d+) tabs={} active=(\d+) sid=(\d+) members=([\d,]+) ok=1'
 TAB = r'\[shell.group\] tab frame={} step={} tab=(\d+)/3 sid=(\d+) focus=(\d+) members=([\d,]+) ok=1'
 SCENE = r'\[shell.layout.scene\] scene={} layout=(\w+) leaves=(\d+) groups=(\d+) tabs=(\d+)'
-SPLIT = r'\[shell.group\] split frame={} sid={} to=(\d+) tabs=2 active=(\d+) members=([\d,]+) ok=1'
+SPLIT = r'\[shell.group\] split frame={} sid={} to=(\d+) tabs={} active=(\d+) members=([\d,]+) ok=1'
+FRAME = r'\[shell.decor.frame\] frame={} sid={} x=(-?\d+) y=(-?\d+) w=(\d+) h=(\d+) title_h=(\d+) title_x=(-?\d+) '
+MENU = r'\[shell.decor.menu\] open=1 frame={} sid={} rows=(\d+) x=(\d+) y=(\d+) w=(\d+) h=(\d+) row_h=(\d+) pad=(\d+)'
 
 
 def main():
@@ -40,8 +44,16 @@ def main():
     disk = out / 'nvme.img'; shutil.copyfile(a.source_disk, disk)
     with disk.open('r+b') as f: f.truncate(1024 ** 3)
     install(disk, [('abacus', (ROOT / 'iso_root/programs/abacus').read_bytes())])
+    rw, rh = map(int, a.resolution.split('x'))
     g = boot(a.iso, disk, out, 'groups', a.resolution); t = g['text']; q = g['q']; wait = g['wait']
     steps = []
+
+    def click(x, y, name):
+        q.cmd('input-send-event', {'events': [{'type': 'abs', 'data': {'axis': 'x', 'value': round(x * 32767 / (rw - 1))}},
+                                              {'type': 'abs', 'data': {'axis': 'y', 'value': round(y * 32767 / (rh - 1))}}]})
+        time.sleep(.3)
+        for down in (True, False):
+            q.cmd('input-send-event', {'events': [{'type': 'btn', 'data': {'down': down, 'button': name}}]}); time.sleep(.15)
 
     def send(down, key):
         q.cmd('input-send-event', {'events': [{'type': 'key', 'data': {'down': down, 'key': {'type': 'qcode', 'data': key}}}]})
@@ -144,16 +156,34 @@ def main():
 
         # Super+Shift+G: the focused tab leaves the group for a tile of its own.
         s, _ = chord(['meta_l', 'shift', 'g'], 'Ungroup')
-        m = step(SPLIT.format(fid, members[0]), s)
+        m = step(SPLIT.format(fid, members[0], 2), s)
         if int(m[2]) != members[1] or [int(x) for x in m[3].split(',')] != members[1:]: raise RuntimeError('ungroup left the wrong tabs: ' + m[0])
         shot('05-ungrouped')
+
+        # The window menu on the group's title bar offers Ungroup after Float;
+        # choosing it takes the shown tab out, as Super+Shift+G does.
+        g['focus'](members[1]); time.sleep(1)
+        step(FRAME.format(fid, members[1]), 0)
+        f = [int(x) for x in re.findall(FRAME.format(fid, members[1]), t())[-1]]  # the latest geometry
+        fx, fy, fw, fh, title_h, title_x = f
+        s = len(t()); click(max(title_x + 40, fx + fw // 2), fy + title_h // 2, 'right')
+        menu = step(MENU.format(fid, members[1]), s)
+        rows, mx, my, mw, mh, row_h, pad = map(int, menu.groups())
+        if rows != 12: raise RuntimeError(f'group window menu has {rows} rows, want 12 (with Ungroup)')
+        step(rf'\[display.window_menu.draw\] rows={rows} ', s)
+        shot('06-menu')
+        s = len(t()); click(mx + pad + 20, my + pad + 2 * row_h + row_h // 2, 'left')
+        step(r'\[shell.decor.menu\] open=0 reason=chose action=ungroup', s)
+        m = step(SPLIT.format(fid, members[1], 1), s)
+        if int(m[2]) != members[2] or [int(x) for x in m[3].split(',')] != members[2:]: raise RuntimeError('menu ungroup left the wrong tabs: ' + m[0])
+        step(rf'\[shell.decor.action\] frame={fid} sid={members[1]} action=ungroup via=menu ok=1', s)
 
         text = t()
         for bad in ('KERNEL PANIC', 'panicked', '[abacus.fatal]'):
             if bad in text: raise RuntimeError('guest reported ' + bad)
         result = dict(ok=True, calculators=sids, dwindle=tiles, group=fid, members=members, cycle=order, steps=steps,
                       scope=f'QEMU {a.resolution}: Super+T dwindle with alternating splits, Super+G groups three windows into one frame, '
-                            'Super+. and Super+, cycle its tabs, workspaces keep their own layout and group, Super+Shift+G ungroups')
+                            'Super+. and Super+, cycle its tabs, workspaces keep their own layout and group, Super+Shift+G and the window menu ungroup')
         (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n'); print(json.dumps(result))
     except Exception as e:
         (out / 'result.json').write_text(json.dumps(dict(ok=False, error=str(e), steps=steps)) + '\n'); raise
