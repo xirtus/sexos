@@ -34,6 +34,11 @@ use sex_web::sex_html::{self, layout::Page, Host};
 use sex_js::{Document, Script};
 use sex_web::{Fonts, BAR};
 
+/// Narrowest half of a split view.
+const SPLIT_MIN: i32 = 320;
+/// The line between the halves of a split view.
+const SPLIT_GAP: i32 = 2;
+
 const WELCOME: &str = include_str!("welcome.html");
 /// Pages built into the program, by `about:` address. The games are plain HTML and
 /// JavaScript on Canvas 2D, so they exercise the same engine as any web page.
@@ -257,6 +262,8 @@ struct Browser {
     shields: shields::Shields,
     /// Tabs down the left side instead of across the bar (Ctrl+Shift+,).
     vertical: bool,
+    /// Two tabs side by side (left, right), the shown one with the keyboard (Ctrl+Shift+\).
+    split: Option<(usize, usize)>,
     /// Installed extensions.
     extensions: extensions::Extensions,
     /// Requests Shields blocked for the shown page (and its frames).
@@ -533,7 +540,7 @@ impl Browser {
     fn paint_frames(&mut self) {
         for i in 0..self.frames.len() {
             let Some(copy) = viewport::Frame::visible(self.surface, self.frames[i].rect,
-                self.scroll, BAR, self.side(), self.window.pixels().len()) else { continue; };
+                self.scroll, BAR, self.pane(), self.window.pixels().len()) else { continue; };
             let mut tmp = alloc::vec![0xFFFF_FFFFu32; copy.source.pixels];
             self.enter(i);
             sex_web::paint(&self.page, &mut self.fonts, &mut sex_web::Target { pixels: &mut tmp,
@@ -584,17 +591,30 @@ impl Browser {
         if !self.vertical || self.in_frame.is_some() || self.surface.w < sex_web::SIDE * 3 { 0 } else { sex_web::SIDE }
     }
 
-    /// The page's own size: the window less the bar and the tab strip.
-    fn page_view(&self) -> (i32, i32) {
-        let (w, h) = self.surface.document(BAR);
-        (w - self.side(), h)
+    /// The two tabs of a split view (left, right), while the window has room for both.
+    fn split_pair(&self) -> Option<(usize, usize)> {
+        self.split.filter(|_| self.surface.w - self.side() >= 2 * SPLIT_MIN)
     }
 
-    /// Ctrl+Shift+,: tabs down the side, or back across the bar. Kept for next time.
-    fn set_vertical(&mut self, on: bool) {
-        self.vertical = on;
-        profile::set_vertical_tabs(&mut self.window, on);
-        sex_pdx::serial_record!("[web.tabs.vertical] on={} side={}", on as u8, self.side());
+    /// The window columns (x, width) the shown page takes: right of the tab strip,
+    /// or its half of a split view.
+    fn pane(&self) -> (i32, i32) {
+        let side = self.side();
+        let rest = (self.surface.w - side).max(0);
+        match self.split_pair() {
+            Some((_, r)) => { let w = (rest - SPLIT_GAP) / 2; if self.active == r { (side + w + SPLIT_GAP, rest - w - SPLIT_GAP) } else { (side, w) } }
+            None => (side, rest),
+        }
+    }
+
+    /// The page's own size: its pane less the bar.
+    fn page_view(&self) -> (i32, i32) {
+        let (_, h) = self.surface.document(BAR);
+        (self.pane().1, h)
+    }
+
+    /// Lays the shown page out again when its pane changed size.
+    fn refit(&mut self) {
         let want = self.page_view();
         self.full_redraw = true;
         if self.view != want {
@@ -607,11 +627,40 @@ impl Browser {
         self.draw();
     }
 
+    /// Ctrl+Shift+\: the shown tab and the next one side by side, or back to one.
+    fn toggle_split(&mut self) {
+        if self.in_frame.is_some() { return; }
+        if self.split.take().is_some() {
+            sex_pdx::serial_record!("[web.split] on=0 shown={}", self.active);
+            return self.refit();
+        }
+        if self.tabs.len() < 2 { return; }
+        let other = if self.active + 1 < self.tabs.len() { self.active + 1 } else { self.active - 1 };
+        let back = self.active;
+        self.split = Some((back.min(other), back.max(other)));
+        if self.split_pair().is_none() { self.split = None; return; }
+        // Both halves lay out to their new width; the keyboard stays where it was.
+        self.refit();
+        self.show_tab(other);
+        self.show_tab(back);
+        sex_pdx::serial_record!("[web.split] on=1 left={} right={} shown={} w={}", back.min(other), back.max(other), self.active, self.view.0);
+    }
+
+    /// Ctrl+Shift+,: tabs down the side, or back across the bar. Kept for next time.
+    fn set_vertical(&mut self, on: bool) {
+        self.vertical = on;
+        profile::set_vertical_tabs(&mut self.window, on);
+        sex_pdx::serial_record!("[web.tabs.vertical] on={} side={}", on as u8, self.side());
+        // In a split, the half that waits lays out again when it shows.
+        self.refit();
+    }
+
     fn draw(&mut self) {
         // A page in a frame is drawn as part of the page around it.
         if self.in_frame.is_some() { self.frame_dirty = true; return; }
         if self.surface.empty() { return; }
         let start = sex_pdx::get_ticks();
+        self.paint_split();
         let pixels = &mut self.window.pixels()[..self.surface.pixels];
         let bar = match (&self.editing, self.status) {
             (None, _) if self.download_status.is_some() => self.download_status.clone().unwrap_or_default(),
@@ -633,6 +682,7 @@ impl Browser {
             // The badge shows once Shields have blocked something on the page, or are down.
             shields: Some((self.shields.up(&self.url), self.blocked)).filter(|(up, n)| self.url.starts_with("http") && (*n > 0 || !up)),
             side: self.side(),
+            pane: if self.split_pair().is_some() { self.pane() } else { (0, 0) },
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
@@ -1164,9 +1214,9 @@ impl Browser {
         if !dirty && !self.full_redraw && self.in_frame.is_none() && !self.surface.empty() {
             let names: Vec<String> = changed.iter().map(|n| alloc::format!("canvas:{n}")).collect();
             let start = sex_pdx::get_ticks();
-            let side = self.side();
+            let (px, pw) = self.pane();
             let pixels = &mut self.window.pixels()[..self.surface.pixels];
-            if sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, side, &names) {
+            if sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, px, pw, &names) {
                 self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
                 sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={} canvases={}", self.surface.w, self.surface.h, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start, names.len());
                 return true;
@@ -1345,9 +1395,9 @@ impl Browser {
             self.relayout();
             self.draw();
         } else if !changed.is_empty() {
-            let side = self.side();
+            let (px, pw) = self.pane();
             let pixels = &mut self.window.pixels()[..self.surface.pixels];
-            if !self.full_redraw && self.in_frame.is_none() && !self.surface.empty() && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, side, &changed) {
+            if !self.full_redraw && self.in_frame.is_none() && !self.surface.empty() && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, px, pw, &changed) {
                 self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
             } else {
                 self.draw();
@@ -1821,7 +1871,17 @@ impl Browser {
             }
             return;
         }
-        let (x, y) = (p.x as i32 - side, p.y as i32 - BAR);
+        // In a split view a press on the other half gives it the keyboard.
+        let (px0, pw) = if self.in_frame.is_some() { (0, i32::MAX) } else { self.pane() };
+        if self.in_frame.is_none() && (p.y as i32) >= BAR && ((p.x as i32) < px0 || (p.x as i32) >= px0.saturating_add(pw)) {
+            if let (Some((l, r)), Kind::Down { .. }) = (self.split_pair(), p.kind) {
+                let other = if self.active == l { r } else { l };
+                self.show_tab(other);
+                sex_pdx::serial_record!("[web.split.focus] shown={}", self.active);
+            }
+            return;
+        }
+        let (x, y) = (p.x as i32 - px0, p.y as i32 - BAR);
         if p.y >= 0 && (p.y as i32) < BAR && matches!(p.kind, Kind::Down { button: 0 | 1 }) {
             match (self.tab_at(p.x as i32, p.y as i32), p.kind) {
                 (Some(i), Kind::Down { button: 1 }) => { self.show_tab(i); self.close_tab(); }
@@ -2042,7 +2102,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();
