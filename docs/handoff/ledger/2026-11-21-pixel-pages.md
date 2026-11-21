@@ -17,3 +17,8 @@
   address any more); Quil takes the page at each draw.
 - Fixes Display compositing (cursor, clock, neighbour damage) catching any program
   half drawn: SDL games, Kaleidoscope, the console, Weft, every sex-app program.
+- Display's `shown` answer counts as an answer (`is_answer`), so a task waiting for
+  Files that takes it keeps it in the mailbox instead of dropping it. Dropped, every
+  frame after a Files call waited the full 100 ms; Spindle then took a native
+  program's output too slowly and the relay lost a line (Terminal gate "attached
+  output has gaps").
