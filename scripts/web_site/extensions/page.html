@@ -6,4 +6,11 @@
 <img src="/site/extensions/blocked-by-extension.png" alt="">
 <img src="/site/extensions/blocked-dynamic.png" alt="">
 <script src="/site/extensions/blocked-by-extension.js"></script>
-<script>console.log('extension page script ran');</script>
+<script>console.log('extension page script ran');
+window.pageSecret = 'p';
+new MutationObserver(rs => { for (const r of rs) if (r.attributeName === 'data-recoloured') console.log('page saw ' + r.attributeName); }).observe(document.body, { attributes: true });
+setTimeout(() => {
+  console.log('page sees ' + typeof chrome + ' ' + typeof extSecret + ' ' + document.body.getAttribute('data-recoloured'));
+  const d = document.createElement('div'); d.id = 'late'; document.body.appendChild(d);
+}, 300);
+</script>

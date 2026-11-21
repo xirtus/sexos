@@ -89,6 +89,7 @@ int sxn_eval(w2c_sexjs *i, u32 a, u32 b, u32 c, u32 d, u32 e, u32 f, u32 *out) {
 int sxn_module(w2c_sexjs *i, u32 a, u32 b, u32 c, u32 d, u32 e, u32 f, u32 *out) { ENTER *out = w2c_sexjs_sx_module(i, a, b, c, d, e, f); LEAVE }
 int sxn_ready(w2c_sexjs *i, u32 a, u32 *out) { ENTER *out = w2c_sexjs_sx_modules_ready(i, a); LEAVE }
 int sxn_dispatch(w2c_sexjs *i, u32 a, u32 b, u32 c, u32 *out) { ENTER *out = w2c_sexjs_sx_dispatch(i, a, b, c); LEAVE }
+int sxn_world(w2c_sexjs *i, u32 a, u32 *out) { ENTER *out = w2c_sexjs_sx_world(i, a); LEAVE }
 
 /* Round to nearest, ties to even (the default mode; nothing changes it). Not every
  * target's builtins have nearbyint, and SSE2 has no rounding instruction. */

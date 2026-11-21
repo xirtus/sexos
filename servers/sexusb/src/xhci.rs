@@ -251,19 +251,30 @@ impl Xhci {
         self.set_portsc(port, (s & PORT_KEEP) | (s & PORT_CHANGES));
     }
 
-    /// Reset a USB 2 root port so its device becomes enabled. USB 3 ports enable
-    /// themselves when the link trains.
-    pub fn reset_port(&self, port: u32) -> bool {
+    /// Start a USB 2 root port's reset and return at once (true when one started), so
+    /// every connected port resets at the same time at boot; `finish_reset` then waits
+    /// for each. Root ports are separate links, so two devices still at their default
+    /// address on two ports never share a bus.
+    pub fn start_reset(&self, port: u32) -> bool {
+        let s = self.portsc(port);
+        if s & 1 == 0 || self.port_major[port as usize] == 3 || (self.port_major[port as usize] == 0 && s & 2 != 0) { return false; }
+        self.set_portsc(port, (s & PORT_KEEP) | (1 << 4));
+        true
+    }
+
+    /// Reset a USB 2 root port so its device becomes enabled, or wait for the reset
+    /// `start_reset` began (`started`). USB 3 ports enable themselves when the link trains.
+    pub fn finish_reset(&self, port: u32, started: bool) -> bool {
         let s = self.portsc(port);
         if s & 1 == 0 { return false; }
-        if self.port_major[port as usize] == 3 || (self.port_major[port as usize] == 0 && s & 2 != 0) {
+        if !started && (self.port_major[port as usize] == 3 || (self.port_major[port as usize] == 0 && s & 2 != 0)) {
             for _ in 0..200 {
                 if self.portsc(port) & 2 != 0 { return true; }
                 sleep_ticks(1);
             }
             return self.portsc(port) & 2 != 0;
         }
-        self.set_portsc(port, (s & PORT_KEEP) | (1 << 4));
+        if !started { self.set_portsc(port, (s & PORT_KEEP) | (1 << 4)); }
         for _ in 0..400 {
             let s = self.portsc(port);
             if s & (1 << 21) != 0 && s & (1 << 4) == 0 {

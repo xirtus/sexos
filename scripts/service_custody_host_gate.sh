@@ -235,6 +235,13 @@ rustc --edition=2021 -A dead_code --test tests/notify.rs -o "$TEST_DIR/notify"
 "$TEST_DIR/notify"
 rustc --edition=2021 -A dead_code --test tests/desktop_look.rs -o "$TEST_DIR/desktop-look"
 "$TEST_DIR/desktop-look"
+# Desktop theme (S6a): Settings' theme and accent mapped to the bar, chrome, menus and cards.
+rustc --edition=2021 --crate-type=rlib --crate-name silkbar_model crates/silkbar-model/src/lib.rs -o "$TEST_DIR/libdesktop_theme_silkbar_model.rlib"
+rustc --edition=2021 -A dead_code -A unused_attributes --extern silkbar_model="$TEST_DIR/libdesktop_theme_silkbar_model.rlib" --test tests/desktop_theme.rs -o "$TEST_DIR/desktop-theme"
+"$TEST_DIR/desktop-theme"
+# Frosted glass behind popups (S6b): blur, tint and the contrast band, over the S6a colours.
+rustc --edition=2021 -A dead_code -A unused_attributes --extern silkbar_model="$TEST_DIR/libdesktop_theme_silkbar_model.rlib" --test tests/glass_panels.rs -o "$TEST_DIR/glass-panels"
+"$TEST_DIR/glass-panels"
 rustc --edition=2021 -A dead_code --test tests/brand.rs -o "$TEST_DIR/brand"
 "$TEST_DIR/brand"
 rustc --edition=2021 -A dead_code --test tests/access_view.rs -o "$TEST_DIR/access-view"
@@ -261,9 +268,15 @@ printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/silk_ctl.rs"] pub mod silk_c
 rustc --edition=2021 -A dead_code --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/silk_ctl_pdx.rs" -o "$TEST_DIR/libsilk_ctl_pdx.rlib"
 rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libsilk_ctl_pdx.rlib" --test tests/silk_ctl.rs -o "$TEST_DIR/silk-ctl"
 "$TEST_DIR/silk-ctl"
+# Wasm layout plugins (S4 follow-up): the wire and the Shell's bookkeeping and checks.
+rustc --edition=2021 -A dead_code --test tests/layout_plugin.rs -o "$TEST_DIR/layout-plugin"
+"$TEST_DIR/layout-plugin"
 # Hot corners (S5).
 rustc --edition=2021 -A dead_code --test tests/hot_corners.rs -o "$TEST_DIR/hot-corners"
 "$TEST_DIR/hot-corners"
+# Desktop widgets' words and layout (S5b).
+rustc --edition=2021 -A dead_code --test tests/desktop_widgets.rs -o "$TEST_DIR/desktop-widgets"
+"$TEST_DIR/desktop-widgets"
 # Whisper, the screen reader: built against a sex_pdx of only the wires it uses.
 printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/speech_voice.rs"] pub mod speech_voice;\n#[path = "%s/crates/sex-pdx/src/a11y.rs"] pub mod a11y;\n' "$ROOT_DIR" "$ROOT_DIR" > "$TEST_DIR/reader_pdx.rs"
 rustc --edition=2021 --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/reader_pdx.rs" -o "$TEST_DIR/libreader_pdx.rlib"

@@ -16,6 +16,9 @@
 //! - [`package`]: an addon zip opened, checked to hold only `<id>/...` members and the
 //!   promised `addon.xml`, and unpacked into memory.
 //!
+//! - [`manager`]: the addon folder (installed addons, repositories) over a caller's
+//!   [`Net`] and [`Store`]: add a repository zip, refresh, install with dependencies.
+//!
 //! No networking or files here: Qupid fetches with sex_fetch and stores in the
 //! addon folder it was granted. Only running a plugin needs the Python helper.
 #![no_std]
@@ -24,6 +27,7 @@ extern crate alloc;
 pub mod addon;
 pub mod catalogue;
 pub mod check;
+pub mod manager;
 pub mod package;
 pub mod repo;
 pub mod version;
@@ -32,3 +36,4 @@ pub mod xml;
 pub use addon::{Addon, Kind, Require};
 pub use catalogue::{Catalogue, PlanError, Provided};
 pub use repo::{Dir, Repository};
+pub use manager::{Manager, Net, Store};

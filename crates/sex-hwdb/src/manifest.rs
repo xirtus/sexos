@@ -36,8 +36,15 @@ pub enum Lease {
     /// (`sex_pdx::display_frames::INTEL_REGISTERS` bytes, not the GTT half), no command
     /// grant and no DMA pool. Display reads what firmware lit (workstream L, slice L3).
     IntelDisplay,
+    /// AMD display engine (DCN, Ryzen APUs and Radeon RDNA): a view of the register
+    /// BAR's first `sex_pdx::display_frames::AMD_REGISTERS` bytes, no command grant and
+    /// no DMA pool. Display identifies the chip and reads what firmware lit (slice A2).
+    AmdDisplay,
     /// Intel Wi-Fi: BAR0, command grant, its own 4 MiB DMA pool and the firmware pack.
     Wifi,
+    /// Intel Thunderbolt 4 / USB4 host interface (NHI): BAR0 up to its firmware status
+    /// words (past 64 KiB), command grant, a 64 KiB DMA pool, firmware force power.
+    Thunderbolt,
     /// Intel Serial IO I2C (DesignWare block plus Intel's private page): BAR0, memory
     /// command bit, the function woken to D0, no DMA. Only product ids in
     /// [`SERIAL_IO_I2C`] match, so Serial IO SPI and UART functions stay unleased.
@@ -119,10 +126,14 @@ pub const DRIVE: Manifest = Manifest {
     ],
 };
 
-/// sexusb: xHCI host controllers (USB 3; USB4 hosts expose xHCI too).
+/// sexusb: xHCI host controllers (USB 3; USB4 hosts expose xHCI too), and Intel's
+/// Thunderbolt 4 / USB4 host interface (the firmware connection manager's mailbox).
 pub const USB: Manifest = Manifest {
     service: Service::Usb, max_devices: 0, vectors: 1,
-    matches: &[Match::class(0x0c_03_30, EXACT, Lease::Xhci, 8)],
+    matches: &[
+        Match::class(0x0c_03_30, EXACT, Lease::Xhci, 8),
+        Match::vendor_class(0x8086, 0x0c_03_40, EXACT, Lease::Thunderbolt, 29),
+    ],
 };
 
 /// sexnet: Intel and Realtek wired Ethernet (the model table in `sex_pdx::pci_command`
@@ -163,6 +174,9 @@ pub const DISPLAY: Manifest = Manifest {
         Match::id(0x8086, 0x9a68, Lease::IntelDisplay, 27),
         Match::id(0x8086, 0x9a70, Lease::IntelDisplay, 27),
         Match::id(0x8086, 0x9a78, Lease::IntelDisplay, 27),
+        // Every AMD display controller (VGA 03:00 and the 03:80 a hybrid laptop's dGPU
+        // reports); Display reads only chips sex-gpu-amd knows and leaves the rest alone.
+        Match::vendor_class(0x1002, 0x03_00_00, BASE, Lease::AmdDisplay, 29),
         Match::class(0x03_00_00, BASE, Lease::Display, 0),
     ],
 };

@@ -4920,6 +4920,7 @@ name = "monitor"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-mesh",
  "sex-pdx",
 ]
 
@@ -5879,6 +5880,10 @@ name = "play"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-episodes",
+ "sex-fetch",
+ "sex-font",
+ "sex-kodi",
  "sex-media",
  "sex-pdx",
 ]
@@ -6455,6 +6460,15 @@ dependencies = [
  "once_cell",
  "smallvec",
  "yoke",
+]
+
+[[package]]
+name = "record"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-pdx",
 ]
 
 [[package]]
@@ -7214,6 +7228,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-gpu-amd"
+version = "0.1.0"
+dependencies = [
+ "sex-kms",
+]
+
+[[package]]
 name = "sex-gpu-intel"
 version = "0.1.0"
 dependencies = [
@@ -7404,6 +7425,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-mesh"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+]
+
+[[package]]
 name = "sex-multipass"
 version = "0.1.0"
 dependencies = [
@@ -7554,6 +7582,10 @@ version = "0.1.0"
 dependencies = [
  "libm",
 ]
+
+[[package]]
+name = "sex-thunderbolt"
+version = "0.1.0"
 
 [[package]]
 name = "sex-time"
@@ -7708,12 +7740,14 @@ name = "sexdisplay"
 version = "0.1.0"
 dependencies = [
  "sex-font",
+ "sex-gpu-amd",
  "sex-gpu-intel",
  "sex-graphics",
  "sex-icons",
  "sex-pdx",
  "sex-rt",
  "sex-shape",
+ "sex-theme",
  "sex-time",
  "silkbar-model",
 ]
@@ -7829,6 +7863,7 @@ version = "0.1.0"
 dependencies = [
  "sex-pdx",
  "sex-rt",
+ "sex-thunderbolt",
 ]
 
 [[package]]
@@ -7953,6 +7988,7 @@ dependencies = [
  "sex-pdx",
  "sex-rt",
  "silkbar-model",
+ "voyeur",
 ]
 
 [[package]]
@@ -8306,11 +8342,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "steamy"
+version = "0.1.0"
+dependencies = [
+ "sex-config",
+ "sex-std",
+]
+
+[[package]]
 name = "store"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
+ "sex-image",
  "sex-pdx",
+ "sex-pkg",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -9707,6 +9755,10 @@ name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
+
+[[package]]
+name = "voyeur"
+version = "0.1.0"
 
 [[package]]
 name = "vst3"

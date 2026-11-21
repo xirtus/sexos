@@ -33,7 +33,7 @@ use std::collections::{HashMap, VecDeque};
 /// admission and the wait entry points. One function per line.
 pub const SCHEDULER_PROTOCOL: &str = "
 tick: state.begin_dispatch state.exit state.cancel_dispatch state.attach state.begin_switch_out
-admit: Admission::NotRunnable state.try_admit Admission::Published Admission::Published
+admit: Admission::NotRunnable state.try_admit Admission::Published Admission::Published Admission::Published
 activate_task: state.activate .admit_task
 retry_admission: state.needs_admission .admit_task
 proof_kernel_timer_wake: unpark_thread
@@ -103,6 +103,9 @@ impl World {
     fn new() -> Self { Self { t: TaskOwnership::new(), tokens: 0 } }
     fn snap(&self) -> Snapshot { self.t.snapshot() }
     fn key(&self) -> Key { key(self.snap(), self.tokens) }
+    /// One publication, wherever it lands (a queue, or a handoff slot on this core or
+    /// the task's home core): the kernel's three Published branches only choose which
+    /// interrupt follows (preempt, preempt_for_partner, kick), not custody.
     fn admit(&mut self, room: bool) -> Admission {
         let tokens = &mut self.tokens;
         self.t.try_admit(|| if room { *tokens += 1; Ok(()) } else { Err(()) })

@@ -11,6 +11,18 @@ pub use memory_region::MemoryRegionInfo;
 // capture observer inactive; active custody has its dedicated production gate.
 #[path="../crates/sex-pdx/src/screen_capture.rs"]pub mod screen_capture;
 #[path="../servers/sexdisplay/src/screen_capture.rs"]mod capture_server;
+// Actual recording controller stays unattached: this fixture grants no bank,
+// task or peer authority. Dedicated recording tests exercise active custody.
+#[path="../crates/sex-pdx/src/desktop_recording.rs"]pub mod desktop_recording;
+#[path="../crates/sex-pdx/src/desktop_recording_capture.rs"]pub mod desktop_recording_capture;
+#[path="../servers/sexdisplay/src/recording_capture.rs"]mod recording_capture;
+#[path="../servers/sexdisplay/src/recording_indicator.rs"]mod recording_indicator;
+pub mod crash_log {
+ pub struct Peer {pub epoch:u64}
+ impl Peer {pub fn live(&self)->bool{false}}
+ pub fn peer_state(_:u64)->Result<Peer,u64>{panic!("inactive recording cannot query peer authority")}
+}
+pub fn pdx_call(_:u64,_:u64,_:u64,_:u64,_:u64)->(u64,u64,u64,u64){panic!("inactive recording cannot emit events")}
 static mut SCREEN_CAPTURE:capture_server::Server=capture_server::Server::new();
 #[derive(Clone,Copy)]pub struct PdxMessage{pub type_id:u64,pub arg0:u64,pub arg1:u64,pub arg2:u64,pub caller_pd:u32,pub caller_task:u32}
 pub fn screen_capture_bank(_:bool)->Result<screen_capture::Bank,u64>{Err(ERR_CAP_INVALID)}
@@ -44,7 +56,12 @@ static mut QUERY_MODE:u8=0;
 static mut QUERIES:Vec<(u64,u64,u64,u8)>=Vec::new();
 pub const ERR_SERVICE_NOT_READY:u64=u64::MAX-1;
 #[path="../crates/sex-pdx/src/app_catalog.rs"]pub mod app_catalog;
-#[path="../crates/sex-pdx/src/app_lifecycle.rs"]pub mod app_lifecycle;
+#[path="../crates/sex-pdx/src/app_lifecycle.rs"]mod app_lifecycle_sdk;
+pub mod app_lifecycle {
+ pub use crate::app_lifecycle_sdk::*;
+ pub fn catalog(_:usize)->Result<CatalogInfo,u64>{panic!("inactive recording cannot query task authority")}
+ pub fn info(_:usize)->Result<LifecycleInfo,u64>{panic!("inactive recording cannot query task liveness")}
+}
 #[path="../crates/sex-pdx/src/bitmap_batch.rs"]pub mod bitmap_batch;
 #[path="../crates/sex-pdx/src/desktop_style.rs"]pub mod desktop_style;
 #[path="../crates/sex-pdx/src/desktop_look.rs"]pub mod desktop_look;
@@ -143,7 +160,9 @@ fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapsh
 fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_tray_menu(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 mod bt_panel{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
-mod window_menu{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32){}}
+mod window_menu{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
+// Frosted panels (S6b): no popup shows in this fixture, so no body is repainted under one.
+fn glass_body(_:*mut u32,_:usize,_:usize,_:&scene::SceneSnapshot,_:Plan){}
 mod program_tray{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
 fn motion_place(_:&mut scene::SceneSnapshot){}
 fn draw_cursor_z_top(fb:*mut u32,_w:usize,_h:usize,len:usize,save:bool,s:&scene::SceneSnapshot){observe_scene(s);assert!(save);unsafe{

@@ -157,6 +157,8 @@ unsafe fn act_on(pd: u32, task: u32, tag: u16, act: Act, wins: &[Win]) -> bool {
         }
         Act::Layout { scene, layout } => {
             let Some(l) = Layout::from_index(layout) else { return false };
+            // A named layout ends the workspace's plugin, if it had one.
+            crate::layout_plugin_glue::clear(scene, "silk_layout");
             let t = &mut (*core::ptr::addr_of_mut!(crate::WM_TILING))[(scene as usize).min(ATLAS_MAX_SCENES - 1)];
             t.layout = l;
             if l != Layout::Monocle { t.before_monocle = l; }
@@ -165,6 +167,19 @@ unsafe fn act_on(pd: u32, task: u32, tag: u16, act: Act, wins: &[Win]) -> bool {
             sex_pdx::serial_record!("[shell.silk.layout] ws={} layout={} shown={} ok=1", scene as u32 + 1, l.name(), shown as u8);
             end(pd, task, tag, &line(format_args!("ok layout ws={} layout={}", scene as u32 + 1, l.name())), true);
             true
+        }
+        Act::Plugin { scene, ticket, key } => {
+            use crate::layout_plugin_glue::{self as plug, Set};
+            let set = plug::set(scene, ticket, key);
+            let ok = matches!(set, Set::Started | Set::Reused);
+            let l = match set {
+                Set::Started | Set::Reused => sc::plugin_line(scene, key, matches!(set, Set::Started)),
+                Set::Busy => line(format_args!("error layout busy (another program is starting; try again)")),
+                Set::Full => line(format_args!("error layout plugins full (four plugins already in use)")),
+            };
+            sex_pdx::serial_record!("[shell.silk.layout] ws={} plugin={:x} ok={}", scene as u32 + 1, key, ok as u8);
+            end(pd, task, tag, &l, ok);
+            ok
         }
         Act::Float { frame, sid, on, shown } => {
             let zoomed = crate::frame_is_zoomed(frame);

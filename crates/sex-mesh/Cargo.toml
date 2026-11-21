@@ -1,0 +1,9 @@
+[package]
+name = "sex-mesh"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+description = "Mesh's pure parts: sample history, line graphs, text and layout in a pixel buffer"
+
+[dependencies]
+sex-font = { path = "../sex-font" }

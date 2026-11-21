@@ -21,6 +21,9 @@ python3 crates/sex-voice/adapters/mosslanding.py --fixture
 The Python adapter exposes `POST /v1/frame` and `GET /v1/assets/<id>` on
 `127.0.0.1:8875`. Its fixture mode needs only Python's standard library.
 Non-loopback binding requires `MOSS_VOICE_TOKEN`, passed as a bearer token.
+Voice and Moan send it from a `voice.token` file in their own folder
+(`/data/voice/voice.token`, `/data/moan/voice.token`); without that file they send
+no `Authorization` header, and a worker that wants one answers 401.
 For use across a LAN, put this HTTP bridge behind an authenticated TLS tunnel;
 the bearer token alone does not encrypt audio or credentials.
 

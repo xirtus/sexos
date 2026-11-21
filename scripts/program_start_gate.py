@@ -41,8 +41,11 @@ def main():
      time.sleep(.001)
     done=time.monotonic();times.append(round((done-t0)*1000));starts.append(round((done-(entered or t0))*1000))
     # Shell's launch receipt can trail the program's own ready line.
-    surface=int(g['wait'](rf'\[shell.program.launch\] target={m[1]} task={m[2]} surface=(\d+)\n',s,60)[1]);time.sleep(1.5)
-    s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,90);time.sleep(.5)
+    # Matched on the row: the run's task comes from Shell's receipt, since a program's own
+    # record can name another of its tasks (CI saw task=107 against run task 0x40000005).
+    launch=g['wait'](rf'\[shell.program.launch\] target={m[1]} task=(\d+) surface=(\d+)\n',s,60);surface=int(launch[2]);time.sleep(1.5)
+    if launch[1]!=m[2]:print(f'[start.task.mismatch] {name} target={m[1]} ready_task={m[2]} launch_task={launch[1]}')
+    s=len(t());g['focus'](surface);time.sleep(.3);q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={launch[1]} ',s,90);time.sleep(.5)
    res[name]={'bytes':len(elfs[name]),'from_key_ms':times,'from_command_ms':starts,'best_ms':min(starts)}
   (a.out/'start-times.json').write_text(json.dumps(res))
   worst=max(max(r['from_command_ms'])for r in res.values());assert worst<=a.max_ms,f'a start took {worst} ms'

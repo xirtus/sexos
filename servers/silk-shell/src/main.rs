@@ -4,6 +4,8 @@
 extern crate alloc;
 mod desktop_keys;
 mod media_keys;
+mod desktop_recording;
+static mut DESKTOP_RECORDING:desktop_recording::Controller=desktop_recording::Controller::new();
 mod app_custody;
 /// The BOOT incarnation catalog, at crate root for app_custody.
 use sex_pdx::app_catalog;
@@ -24,6 +26,7 @@ mod wait_observer;
 mod app_input;
 mod wm;
 mod launcher_search;
+mod voyeur;
 mod session;
 mod config_watch;
 mod idle_media;
@@ -46,6 +49,15 @@ mod silk_ctl;
 mod silk_ctl_glue;
 mod hot_corners;
 mod hot_corners_glue;
+mod program_notify;
+mod startup;
+mod shortcuts;
+mod shortcuts_glue;
+mod widgets_glue;
+mod weather_glue;
+mod layout_plugin;
+mod layout_plugin_glue;
+mod theme_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -7883,7 +7895,7 @@ unsafe fn push_token_preset(p: &TokenPreset) {
     pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
         pack_u32_pair(p[APPEARANCE_TOKEN_MINIMIZE_LIGHT], p[APPEARANCE_TOKEN_ZOOM_LIGHT]),
         0u64, // appearance_flags=0, effect_levels=0
-        0u64, // reserved
+        (SCENE_APPEARANCE_STATE.preset_idx == 0 && SCENE_APPEARANCE_STATE.use_custom_colors == 0) as u64, // 1: default preset, chrome follows the desktop theme (S6a)
     );
 }
 
@@ -8850,6 +8862,7 @@ unsafe fn tile_active_scene_frames() {
     let mut rects = [wm::Rect::default(); MAX_FRAMES];
     wm::tile(&tiling, wm_work_area(), &mut rects[..count]);
     layouts_glue::tile(&tiling, &order[..count], &mut rects[..count]);
+    layout_plugin_glue::tile(&tiling, &order[..count], &mut rects[..count]);
     static mut WM_LAYOUT_RECORD_BUDGET: u32 = 256;
     if WM_LAYOUT_RECORD_BUDGET > 0 {
         WM_LAYOUT_RECORD_BUDGET -= 1;
@@ -10614,7 +10627,7 @@ unsafe fn browser_wheel_input(word:u64,reserved:u64){
 // ── Window manager: Super chords, layouts, scratchpad (Hyprland/river/KDE) ──
 // Policy and arithmetic live in wm.rs (host-tested); this is the glue to the
 // shell's frames, scenes and focus.
-static mut WM_CHORDS: wm::Chords = wm::Chords::new();
+static mut WM_CHORDS: wm::Chords = wm::Chords::with(shortcuts_glue::binding);
 static mut WM_TILING: [wm::Tiling; ATLAS_MAX_SCENES] = [wm::Tiling::DEFAULT; ATLAS_MAX_SCENES];
 static mut WM_ORDER: wm::Order<MAX_FRAMES> = wm::Order::new();
 static mut WM_SCENE_FOCUS: [u64; ATLAS_MAX_SCENES] = [0; ATLAS_MAX_SCENES];
@@ -10751,6 +10764,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Lock => lock::lock(),
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
         A::Bluetooth => bt_panel::toggle(),
+        A::Widgets => widgets_glue::toggle(),
         A::Group | A::Ungroup | A::NextTab | A::PrevTab | A::ToggleDwindle => layouts_glue::action(action),
     };
     sex_pdx::serial_record!("[shell.wm.action] action={:?} done={} scene={}->{} focus={}->{} layout={}",
@@ -10787,6 +10801,7 @@ unsafe fn desktop_shortcut(code:u8,value:u64)->bool {
     if overview_key(code,value) {return true;}
     if bt_panel::key(code,value) {return true;}
     if media_keys::is_player_key(code){if value==1{player_key(code);}return true;}
+    if FOCUSED_SURFACE_ID==SURFACE_ID_BELL_PLACEHOLDER&&sound_panel_key(code,value){return true;}
     let modifier=APP_MODIFIERS.observe(code,value)|keyboard_layout::observe(code,value);
     if screenshot_key(code,value) {return true;}
     if tray_key(code,value) {return true;}
@@ -11141,12 +11156,13 @@ static mut TRAY_WIFI_RETRY: u64 = 0;
 /// Wi-Fi answers lost in a row; after three the next 30 s look asks again.
 static mut TRAY_WIFI_LOST: u8 = 0;
 /// How long the idle Shell may sleep while a tray answer is owed or a Wi-Fi look is
-/// due: nothing else may wake it, and a lost answer is only noticed by `tray_tick`.
+/// due, or while program tray items or cards are up: nothing else may wake it, a lost
+/// answer is only noticed by `tray_tick`, and an ended program's item by its poll.
 pub unsafe fn tray_wake() -> Option<u64> {
     let now = sex_pdx::get_ticks();
     if let Some(t) = TRAY_WIFI_ASKED { return Some((t + 5_000).saturating_sub(now).clamp(1, 1_000)); }
     if TRAY_WIFI_DUE { return Some(TRAY_WIFI_RETRY.saturating_sub(now).clamp(1, 1_000)); }
-    None
+    [tray_items_glue::wake(), weather_glue::wake(), layout_plugin_glue::wake()].into_iter().flatten().min()
 }
 /// A volume or mute click made while another answer was owed to Shell: sent once that
 /// answer is in. The kernel keeps one unread reply per domain, so a second answer
@@ -11347,11 +11363,42 @@ unsafe fn media_keys_receive(msg:&sex_pdx::PdxMessage)->bool{
             if sent{app_input_poll();}
             sex_pdx::serial_record!("[shell.media.route] code={:#x} pd={} sent={}",code,pd,sent as u8);
         }
+        Some(ask@(media_keys::Ask::Master|media_keys::Ask::Row(_)))=>{
+            SOUND_PANEL.answer(ask,word);
+            // The whole refresh is in: show it.
+            if !MEDIA_ASKS.pending()&&SOUND_PANEL_NEXT.is_none()&&bell_frame_id().is_some(){bell_render_lane_text();}
+        }
         Some(media_keys::Ask::Restore) if !media_keys::refused(word)=>{}
         ask=>sex_pdx::serial_record!("[shell.media.refused] ask={:?}",ask),
     }
     tray_send_owed();
     true
+}
+/// The sound panel in the notifications window: Bell's volumes, asked afresh.
+static mut SOUND_PANEL:media_keys::SoundPanel=media_keys::SoundPanel::new();
+/// The next of the panel's asks (0 the master, then each row): Bell keeps one answer
+/// waiting for Shell, so they go one at a time, from the main loop.
+static mut SOUND_PANEL_NEXT:Option<u8>=None;
+unsafe fn sound_panel_refresh(){SOUND_PANEL_NEXT=Some(0);sound_panel_poll();}
+unsafe fn sound_panel_poll(){
+    use sex_pdx::sound_mixer as mixer;
+    let Some(n)=SOUND_PANEL_NEXT else{return};
+    if MEDIA_ASKS.pending(){return}
+    let (ask,action,a)=if n==0{(media_keys::Ask::Master,mixer::STATE,0)}else{(media_keys::Ask::Row(n-1),mixer::STREAM,(n-1) as u64)};
+    if pdx_call(SLOT_BELL,mixer::OP_MIXER,action,a,0).0!=0{return}
+    MEDIA_ASKS.push(ask);
+    SOUND_PANEL_NEXT=if (n as usize)<media_keys::ROWS{Some(n+1)}else{None};
+}
+/// A key while the notifications window has the focus; true when the panel took it.
+unsafe fn sound_panel_key(code:u8,value:u64)->bool{
+    if value==0{return matches!(code,0x48|0x50|0x4B|0x4D|0x32);}
+    let (handled,change)=SOUND_PANEL.key(code);
+    if let Some((row,b))=change{
+        let status=pdx_call(SLOT_BELL,sex_pdx::sound_mixer::OP_MIXER,sex_pdx::sound_mixer::SET_STREAM,row as u64,b).0;
+        if status==0{MEDIA_ASKS.push(media_keys::Ask::Row(row));}
+        sex_pdx::serial_record!("[shell.sound.panel.set] row={} volume={} muted={} status={:#x}",row,b&0xFF,(b>>8)&1,status);
+    }else if handled&&bell_frame_id().is_some(){bell_render_lane_text();}
+    handled
 }
 
 /// main OP_HID_EVENT dispatch.  Used by linen_sync_reply and before-linen
@@ -11970,6 +12017,7 @@ unsafe fn handle_hid_event(event_class: u64, arg0: u64, arg1: u64) {
         }
         sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
             button, pressed);
+        if button==1&&pressed&&recording_stop_hit(POINTER_X,POINTER_Y){return;}
         if screenshot_button(button, pressed) {} else if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
         if button == 1 {
             serial_println!(
@@ -15380,11 +15428,19 @@ unsafe fn palette_order() -> ([usize; COMMAND_LIST.len()], usize) {
 unsafe fn palette_search_intercept(scancode: u8) -> bool {
     // Enter with nothing matching does nothing, with or without Ctrl: the
     // hidden earlier selection must never run.
+    // Voyeur's rows show once a search begins: Enter runs a command row through
+    // the launcher's own path below and carries out any other result itself.
+    if scancode==0x1C && !PALETTE_QUERY.is_empty() && !APP_MODIFIERS.key(scancode).control {
+        match voyeur::enter() {voyeur::Enter::Command(i)=>COMMAND_PALETTE_SELECTED=i,voyeur::Enter::Done=>{toggle_command_palette();return true;},voyeur::Enter::NotShowing=>{}}
+    }
     if scancode==0x1C && !PALETTE_QUERY.is_empty() && palette_order().1==0 {return true;}
     if APP_MODIFIERS.key(scancode).control {return false;}
+    // Tab: the selected result's next action (open, open with, reveal, copy).
+    if scancode==0x0F && !APP_MODIFIERS.key(scancode).alt && voyeur::cycle() {palette_render_list();return true;}
     let nav=matches!(scancode,0x24|0x25) && PALETTE_QUERY.is_empty();
     if !nav && palette_search_key(scancode) {return true;}
     if matches!(scancode,0x48|0x50) {
+        if voyeur::step(if scancode==0x50 {1} else {-1}) {palette_render_list();return true;}
         if scancode==0x50 {palette_select_next();} else {palette_select_prev();}
         return true;
     }
@@ -15400,12 +15456,13 @@ unsafe fn palette_search_intercept(scancode: u8) -> bool {
 /// select the best match. Returns false for keys search does not take.
 unsafe fn palette_search_key(code: u8) -> bool {
     let changed = if code == 0x0E { PALETTE_QUERY.pop() }
-        else if let Some(c) = launcher_search::key_char(code) { PALETTE_QUERY.push(c) }
+        else if let Some(c) = launcher_search::key_char_shifted(code, APP_MODIFIERS.key(code).shift) { PALETTE_QUERY.push(c) }
         else { return false };
     let (order, n) = palette_order();
     if n > 0 { COMMAND_PALETTE_SELECTED = order[0] as u8; }
     sex_pdx::serial_record!("[shell.launcher.search] query={} matches={} top={} changed={}",
         PALETTE_QUERY.as_str(), n, if n > 0 { COMMAND_LIST[order[0]].name } else { "-" }, changed as u8);
+    voyeur::refresh(PALETTE_QUERY.as_str());
     palette_render_list();
     true
 }
@@ -16520,7 +16577,9 @@ unsafe fn focus_or_open_bell() -> bool {
             }
         }
     }
-    open_bell_in_active_scene()
+    let opened = open_bell_in_active_scene();
+    if opened { sound_panel_refresh(); }
+    opened
 }
 
 /// Toggle Bell visibility. Minimize if visible, open if not.
@@ -16546,7 +16605,9 @@ unsafe fn toggle_bell() -> bool {
             }
         }
     }
-    open_bell_in_active_scene()
+    let opened = open_bell_in_active_scene();
+    if opened { sound_panel_refresh(); }
+    opened
 }
 
 /// Return Bell's frame_id, if its frame exists.
@@ -16859,8 +16920,10 @@ unsafe fn desktop_look_step(wallpaper: u8, night: u8) -> bool {
 unsafe fn desktop_look_apply(wallpaper: u8, night: u8) -> bool {
     use sex_pdx::desktop_look as look;
     let next = (wallpaper % look::WALLPAPERS.len() as u8, night % look::NIGHT_LEVELS);
-    let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, 0).0 == 0;
+    let theme = theme_glue::word();
+    let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, theme).0 == 0;
     if ok { DESKTOP_LOOK = next; }
+    theme_glue::sent(theme, ok);
     sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
     ok
 }
@@ -16933,6 +16996,7 @@ unsafe fn notification_receive(msg: &sex_pdx::PdxMessage) -> bool {
     }
     let assembler = &mut *core::ptr::addr_of_mut!(NOTIFY_ASSEMBLER);
     let Some(text) = assembler.push(msg.arg0, msg.arg1, msg.arg2) else { return true };
+    if program_notify::hidden(text.sender) { sex_pdx::serial_record!("[shell.notify.hidden] id={} sender={}", text.id, text.sender); return true; }
     NOTIFY_RING[NOTIFY_TOTAL % NOTIFY_HISTORY] = text;
     NOTIFY_TOTAL += 1;
     // Buttons and a reply field its program gave for it (slice S2).
@@ -17029,7 +17093,13 @@ unsafe fn bell_render_lane_text() {
     let mut history = [0u8; 512];
     let history_len = if NOTIFY_TOTAL > 0 { notify_history_text(&mut history) } else { 0 };
     let text: &[u8] = if history_len > 0 { &history[..history_len] } else { &buf };
-    let (_drawn, ok) = shell_draw_text(SURFACE_ID_BELL_PLACEHOLDER, text, 0x00E8FFFF);
+    // The sound panel above the notifications.
+    let mut all = [0u8; 1024];
+    let panel = SOUND_PANEL.text(&mut all);
+    let n = (panel + text.len()).min(all.len());
+    all[panel..n].copy_from_slice(&text[..n - panel]);
+    sex_pdx::serial_record!("[shell.sound.panel] {}", core::str::from_utf8(&all[..panel]).unwrap_or("?").replace('\n', " | "));
+    let (_drawn, ok) = shell_draw_text(SURFACE_ID_BELL_PLACEHOLDER, &all[..n], 0x00E8FFFF);
     if history_len > 0 { sex_pdx::serial_record!("[shell.notify.history] count={} bytes={}", NOTIFY_TOTAL.min(NOTIFY_HISTORY), history_len); }
     static mut BELL_LANE_TEXT_BUDGET: u32 = 8;
     if BELL_LANE_TEXT_BUDGET > 0 {
@@ -17189,12 +17259,13 @@ unsafe fn palette_render_list() {
     let mut shown=[launcher::Row{name:"",status:""};COMMAND_LIST.len()];
     for (slot,&index) in shown.iter_mut().zip(order[..matches].iter()) {*slot=rows[index];}
     let selected=order[..matches].iter().position(|&i|i==COMMAND_PALETTE_SELECTED as usize).unwrap_or(0);
+    let (matches,selected)=voyeur::rows(&rows,&mut shown).unwrap_or((matches,selected));
     let mut head=[0u8;40];let mut head_len=0;
     for &b in b"SEARCH: ".iter().chain(PALETTE_QUERY.as_str().as_bytes()).chain(b"_") {head[head_len]=b;head_len+=1;}
     let none=[launcher::Row{name:"No match",status:"BACKSPACE TO EDIT"}];
     let v=if PALETTE_QUERY.is_empty() {launcher::text_with_metrics(&rows[..COMMAND_LIST.len()],COMMAND_PALETTE_SELECTED as usize,w,h,launcher::DEFAULT_HEAD,metrics)}
         else if matches==0 {launcher::text_with_metrics(&none,0,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ESC CLEARS THE SEARCH"],metrics)}
-        else {launcher::text_with_metrics(&shown[..matches],selected,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ARROWS CHOOSE  ENTER OPEN  ESC CLEAR"],metrics)};
+        else {launcher::text_with_metrics(&shown[..matches],selected,w,h,[core::str::from_utf8(&head[..head_len]).unwrap_or(""),"ARROWS CHOOSE  ENTER OPEN  TAB ACTION  ESC CLEAR"],metrics)};
     let rows=if PALETTE_QUERY.is_empty() {rows} else {let mut r=shown;if matches==0 {r[0]=none[0];} r};
     for index in 0..8 {pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,0,(index as u64)<<56);}
     pdx_call(SLOT_DISPLAY,0xEF,SURFACE_ID_COMMAND_PALETTE,(m.title()as u64)<<32,
@@ -17632,6 +17703,18 @@ fn browser_active_frame()->Option<(u32,u64)>{
     if row.app!=app_catalog::App::Browser || !native_launcher_status(row.target).0{return None}
     Some((row.target,row.frame()))
 }
+/// The reserved row must consume its ordinary BOOT edge before later ordinary
+/// rows can advance. This activates only the bounded idle stub, never a loaded
+/// recorder image or any recording consent. It is not an activation fork.
+fn recorder_idle_poll(){
+    use sex_pdx::{app_lifecycle as a,desktop_recording as w};
+    if !w::ENABLED{return}
+    let Some(row)=app_catalog::by_target(w::TARGET)else{return};
+    let Some(slot)=row.activation_slot else{return};
+    if a::activation(slot,false).is_ok_and(|info|info.source_pinned&&info.successor==w::TARGET&&info.surface==row.surface&&info.state==a::ACTIVATION_READY){
+        if let Ok(info)=a::activation(slot,true){sex_pdx::serial_record!("[record.idle.launch] target={} task={} surface={} capture=0",info.successor,info.task,info.surface);}
+    }
+}
 static mut PROGRAM_REBIRTH: Option<usize> = None;
 /// What each program row can do right now, from the rows' own held grants.
 fn program_rows()->impl Iterator<Item=(&'static app_catalog::Incarnation,usize,u64)>{
@@ -17704,6 +17787,7 @@ fn program_bind(target:u32,task:u32){
     unsafe{autofill_routes::bound(target,task); }
     attached_record(target,task);
     let _=pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);
+    program_notify::bound(target);
     let network=unsafe{core::mem::take(&mut PROGRAM_NETWORK)};
     if network{let _=pdx_call(sex_pdx::web::SHELL_SLOT,sex_pdx::program_store::OP_BIND,target as u64,task as u64,0);}
     unsafe{launch_started(target,task,network);}
@@ -17712,6 +17796,8 @@ fn program_bind(target:u32,task:u32){
 /// person who typed `run` is looking.
 fn program_refused(code:u32){
     if unsafe{reader_glue::voice_refused(code)}{return}
+    if unsafe{weather_glue::refused(code)}{return}
+    if unsafe{layout_plugin_glue::refused(code)}{return}
     if let Some((parent,_,cookie))=unsafe{LAUNCH_ASKER.take()}{unsafe{LAUNCH_HIDDEN=false;}launch_send(parent,sex_pdx::launch::Event::Refused{cookie,code});return}
     let _=pdx_call(spindle_route_slot(),sex_pdx::program_store::OP_REFUSED,code as u64,0,0);
 }
@@ -17772,6 +17858,8 @@ fn launch_send(parent:u32,event:sex_pdx::launch::Event){
 }
 unsafe fn launch_started(target:u32,task:u32,network:bool){
     if reader_glue::voice_started(target,task){return}
+    if weather_glue::started(target,task){return}
+    if layout_plugin_glue::started(target,task){return}
     if network{if let Some(slot)=NETWORK_RUNS.iter_mut().find(|s|s.is_none()){*slot=Some((target,task));}}
     let hidden=core::mem::take(&mut LAUNCH_HIDDEN);
     let scene=PROGRAM_SCENE.take();
@@ -17915,6 +18003,14 @@ unsafe fn attached_stop(caller:u32,target:u64){
     let Some(row)=app_catalog::by_target(r.0)else{return};
     let result=sex_pdx::app_lifecycle::force_end(row.lifecycle_slot);
     sex_pdx::serial_record!("[shell.attached.stop] terminal={} target={} task={} ok={}",caller,r.0,r.1,result.is_ok() as u8);
+}
+/// The Shell's own `run NAME` (startup programs): false while another start is under way.
+unsafe fn program_start_own(name:[u64;2])->bool{
+    use sex_pdx::program_store as store;
+    if PROGRAM_READING||restricted_routes::busy()||PROGRAM_REBIRTH.is_some()||LAUNCH_ASKER.is_some()||RECORD_SPAWN_WANTED!=0||program_free_row().is_none(){return false}
+    PROGRAM_READING=pdx_call(store::SHELL_ROUTE_SLOT,store::OP,name[0],name[1],0).0==0;
+    PROGRAM_NETWORK=false;PROGRAM_LAUNCHER=None;PROGRAM_TICKET=0;PROGRAM_SCENE=None;
+    PROGRAM_READING
 }
 /// Spindle's `run NAME`, and Files' answer once it has read the file.
 unsafe fn shell_program_message(msg:&sex_pdx::PdxMessage)->bool{
@@ -18217,6 +18313,7 @@ unsafe fn palette_execute_selected() -> bool {
         return false;
     }
     sex_pdx::serial_record!("[command_palette.execute] cmd={} name={}", cmd as u8, COMMAND_LIST[idx].name);
+    voyeur::launched(idx);
 
     // Route to existing SurfaceAction handler paths.
     // Each of these reuses the same match arms as keyboard-triggered actions.
@@ -21746,6 +21843,7 @@ unsafe fn frame_close_allowed(frame_id: u32) -> bool {
 /// Reuses the same destroy mechanism as keyboard SurfaceAction::DestroyFocused.
 /// Returns true if the surface was actually destroyed.
 unsafe fn close_surface_from_frame_light(surface_id: u64) -> bool {
+    if !DESKTOP_RECORDING.before_hide(surface_id){return false}
     serial_println!("[silk.close.request] sid={}", surface_id);
     serial_println!("[silk.lifecycle.close.begin] sid={}", surface_id);
     // Must be closeable (checks registry, lifecycle registration, or alive flags).
@@ -22060,6 +22158,7 @@ unsafe fn minimize_frame(frame_id: u32) -> bool {
     if !surface_is_alive(surface_id) {
         return false;
     }
+    if !DESKTOP_RECORDING.before_hide(surface_id){return false}
     // Mark frame as minimized.
     set_frame_minimized(frame_id, true);
     serial_println!("[silk.lifecycle.minimize.snapshot] frame={} sid={} scene={}", frame_id, surface_id, ACTIVE_SCENE_IDX);
@@ -25031,6 +25130,7 @@ fn hit_target_label(target: HitTarget, silkbar_handled: bool) -> (&'static str, 
 /// Emits [shell.click_focus.down/hit/miss] markers.
 /// Emits [shell.frame.rim.drag.start] for rim drag, [shell.frame.chrome.capture] for other chrome.
 unsafe fn click_hit_test_and_focus(px: i32, py: i32, buttons_val: u8) -> (HitTarget, bool) {
+    if buttons_val&1!=0&&recording_stop_hit(px,py){return(HitTarget::None,true);}
     // The overview takes every click while it is open.
     if OVERVIEW.is_open() { overview_click(px, py); return (HitTarget::None, true); }
     if SCREENSHOT.is_open() { return (HitTarget::None, true); }
@@ -25644,10 +25744,28 @@ unsafe fn toggle_scene_settings_panel() {
     }
 }
 
+/// Protected recording Stop precedes Atlas and ordinary pointer capture.
+/// Call only after authenticated input admission (or internal proof dispatch).
+/// Existing button-up paths retain responsibility for releasing app/drag state.
+unsafe fn recording_stop_hit(px:i32,py:i32)->bool {
+    if !DESKTOP_RECORDING.stop_target()||DISPLAY_SCALE.pending()
+        ||!(ABS_SEEN_VALID||POINTER_USB_STATE_INIT)||px<0||py<0||py>=desktop_bar_height(){return false;}
+    let m=chrome_metrics();let mut bar=DEFAULT_SILK_BAR;
+    if !silkbar_model::reflow_chrome(&mut bar,desktop_width()as usize,m.bar()as usize,m.px(sex_pdx::desktop_style::chrome::TARGET)as usize){return false;}
+    if !matches!(hit_test_action(&bar,px as usize,py as usize),Action::ToggleModule(Module::StatusChip(0))){return false;}
+    DESKTOP_RECORDING.stop_now();
+    // Do not drop a program's captured release or commit a drag/snap here.
+    // Cancel Atlas's pending drop so the consumed Stop cannot switch scenes.
+    if ATLAS_DRAG_INTENT.active {let _=atlas_pointer_drag_cancel("record_stop");}
+    sex_pdx::serial_record!("[record.stop.request] source=trusted_chip x={} y={}",px,py);
+    true
+}
+
 /// Handle a left-click within the SilkBar top strip (y < 50).
 /// Uses hit_test_action() from silkbar-model to determine what was clicked,
 /// then dispatches the action (workspace switch, launcher, etc.).
 fn handle_silkbar_click(px: i32, py: i32) -> bool {
+    if unsafe{recording_stop_hit(px,py)}{return true;}
     if py < 0 || py >= desktop_bar_height() || px < 0 {
         return false;
     }
@@ -26341,6 +26459,8 @@ pub extern "C" fn _start() -> ! {
         }
         restricted_pool::recover();
         restricted_routes::poll();
+        recorder_idle_poll();
+        unsafe {DESKTOP_RECORDING.poll(sex_pdx::get_ticks());}
         unsafe { program_rebirth_poll(); launch_poll(); }
         unsafe { session::save(); }
         unsafe { record_spawn_poll(); }
@@ -26351,7 +26471,8 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); }
+        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); startup::poll(); }
+        unsafe { sound_panel_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
         #[cfg(sexos_input_payload_proof)]
@@ -27034,7 +27155,7 @@ pub extern "C" fn _start() -> ! {
                 unsafe { flush_pending_cursor_send(); }
                 // A full input ring may recover while the shell has no work.
                 // Return to the publisher instead of blocking in listen.
-                if shell_ready_publisher.is_pending() || unsafe { RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() || tray_items_glue::busy() || silk_ctl_glue::busy() || restricted_routes::pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
+                if shell_ready_publisher.is_pending() || unsafe { DESKTOP_RECORDING.pending() || RECORD_SPAWN_LEFT != 0 || DISPLAY_SCALE.request().is_some() || CURSOR_SEND_PENDING || APP_INPUT.pending() || LAUNCHER_FOCUS.is_some() || CLIPBOARD_INTAKE.pending() || CLIPBOARD.pending() || autofill_routes::pending() || WORKSPACE_REFRESH_PENDING.iter().any(|p|*p) || linen_text_can_progress() || (COMMAND_PALETTE_OPEN && PALETTE_TEXT.pending()) || PALETTE_VISIBILITY.pending() || DESKTOP_STATES.pending() || SPINDLE_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_VIEWS.iter().any(|v|v.pending()) || DOCUMENT_POINTER.is_some() || LINEN_ASYNC.can_send() || NOTIFY_NOTICE_UNTIL != 0 || MEMORY_CRITICAL_SINCE != 0 || KEY_REPEAT.pending() || launch_waiting() || reader_glue::busy() || tray_items_glue::busy() || silk_ctl_glue::busy() || restricted_routes::pending() } || unsafe { APP_CUSTODY.iter().flatten().any(|e| (e.pending && !e.acked) || e.close_pending || e.registration_reply) } {
                     sys_yield();
                     continue;
                 }
@@ -27045,7 +27166,7 @@ pub extern "C" fn _start() -> ! {
             }
         };
         // Display started again after a crash: it knows nothing of the desktop, so show it again.
-        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); tray_items_glue::display_restarted(); continue; }
+        if sex_pdx::display_ready::is_display_ready(&msg) { unsafe { display_came_back(); } config_watch::display_restarted(); lock::display_restarted(); bt_panel::display_restarted(); tray_items_glue::display_restarted(); widgets_glue::display_restarted(); weather_glue::display_restarted(); continue; }
         // The kernel: the power button or the lid. Read the sensors now.
         if msg.type_id == sex_pdx::power::OP_EVENT && msg.caller_pd == 0 { unsafe { LAPTOP_NEXT_POLL = 0; laptop_poll(); } continue; }
         // The kernel's critical-memory word: the poll above acts on it.
@@ -27054,6 +27175,7 @@ pub extern "C" fn _start() -> ! {
             if shell_lifecycle_hint(&msg) { continue; }
             if restricted_routes::receive(&msg){continue;}
             if restricted_pool::blocks(&msg){continue;}
+            if DESKTOP_RECORDING.receive(&msg,sex_pdx::get_ticks(),PROGRAM_READING||PROGRAM_REBIRTH.is_some()||RECORD_SPAWN_LEFT!=0) {continue;}
             if shell_launch_message(&msg) { continue; }
             if shell_dnd_message(&msg) { continue; }
             if shell_clip_message(&msg) { continue; }
@@ -27064,9 +27186,12 @@ pub extern "C" fn _start() -> ! {
             if bt_panel::receive(&msg) { continue; }
             if reader_glue::receive(&msg) { continue; }
             if tray_items_glue::receive(&msg) { continue; }
+            if weather_glue::receive(&msg) { continue; }
+            if layout_plugin_glue::receive(&msg) { continue; }
             if silk_ctl_glue::receive(&msg) { continue; }
             if shell_program_message(&msg) { continue; }
             if clipboard_receive(&msg) { continue; }
+            if voyeur::receive(&msg) { continue; }
             if notification_receive(&msg) { continue; }
             if media_keys_receive(&msg) { continue; }
             if tray_receive(&msg) { continue; }
@@ -27146,6 +27271,8 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 OP_USB_MOUSE_REPORT => {
+                    if msg.caller_pd!=sex_pdx::shell_ready::INPUT_PD_ID||msg.caller_task!=sex_pdx::shell_ready::INPUT_PD_ID {continue;}
+                    if unsafe{DISPLAY_SCALE.pending()}{continue;}
                     // AP14: pointer producer shell marker
                     unsafe {
                         static mut PTR_PRODUCER_SHELL_EMITTED: bool = false;
@@ -27187,6 +27314,7 @@ pub extern "C" fn _start() -> ! {
                         // The synthetic click-focus proof uses EV_ABS before button down to set
                         // the click position explicitly, so it is unaffected by this change.
                         POINTER_BUTTONS = buttons & 0x07;
+                        if buttons&1!=0&&recording_stop_hit(POINTER_X,POINTER_Y){continue;}
                         POINTER_WHEEL_ACCUM = POINTER_WHEEL_ACCUM.saturating_add(wheel as i32);
                         serial_println!(
                             "[shell.pointer.usb_state.ok] x={} y={} buttons={:#x} wheel={}",
@@ -28803,6 +28931,7 @@ pub extern "C" fn _start() -> ! {
                             // ── Click/focus proof marker: pointer event received ──
                             sex_pdx::serial_record!("[silk-shell.pointer.recv] class=EV_BTN btn={} pressed={}",
                                 button, pressed);
+                            if button==1&&pressed&&recording_stop_hit(POINTER_X,POINTER_Y){continue;}
                             if screenshot_button(button, pressed) {} else if !ATLAS_MODE_ENABLED && (ABS_SEEN_VALID || POINTER_USB_STATE_INIT) { program_pointer_button(button, pressed); }
                             serial_println!("[silk-shell] Pointer BTN {} {} buttons={:#x}",
                                 button, if pressed { "dn" } else { "up" }, POINTER_BUTTONS);
