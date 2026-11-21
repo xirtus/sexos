@@ -38,7 +38,7 @@ def main():
  a=p.parse_args();a.out.mkdir(parents=True,exist_ok=True);runs=[]
  for n in range(a.boots):
   disk=a.out/f'nvme-{n}.img';shutil.copyfile(a.source_disk,disk)
-  serial=a.out/f'boot{n}-serial.log';serial.unlink(missing_ok=True);seen={};done=threading.Event()
+  serial=a.out/f'boot{n}-serial.log';serial.unlink(missing_ok=True);seen={};done=threading.Event();window=[]
   def watch():
    # The boot helper returns only after Files published; time the log as it grows. Only
    # the new text is read each pass (with the unfinished last line carried over), so the
@@ -53,6 +53,9 @@ def main():
      offset+=len(chunk);text=carry+chunk.decode(errors='replace')
      lines=text.split('\n');carry=lines.pop()
      for line in lines:
+      # Every line the kernel prints between the cores coming online and the hand-over
+      # to services, with when it arrived: the widest gaps name the slow kernel step.
+      if 'cores_online' in seen and 'services_handed_over' not in seen:window.append((now,line))
       for name,pattern in COMPILED:
        if name not in seen and pattern.search(line):seen[name]=now
     # Storage and Files may come up after the desktop: keep timing them (60 s at most).
@@ -66,6 +69,9 @@ def main():
    assert 'KERNEL PANIC' not in g['text']()
    runs.append(dict(seen))
    order=sorted((v,k) for k,v in seen.items() if v is not None)
+   gaps=sorted(((window[i+1][0]-window[i][0],i) for i in range(len(window)-1)),reverse=True)[:8]
+   for ms,i in gaps:
+    if ms>=20:print(f'[boot.kernel_gap] boot={n} ms={ms} lines={len(window)} after={window[i][1][:100]!r} before={window[i+1][1][:100]!r}',flush=True)
    print(f'[boot.timeline] boot={n} cores={os.environ.get("SEXOS_GATE_CORES","1")} accel={os.environ.get("SEXOS_GATE_ACCEL","tcg")} '+' '.join(f'{k}={v}' for v,k in order),flush=True)
   finally:
    done.set()
