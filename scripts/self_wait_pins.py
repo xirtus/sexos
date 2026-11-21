@@ -56,6 +56,7 @@ PINS = (
 
     ('timed', 'kernel/src/init.rs', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d'),
 
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:9cba8bed549187d4c2cfbc41d27a800f32aec67ba241ee5623534c60ebdc17e2'),  # IPC v2 wait spins in poll_for_partner (#426), 2026-11-19
     ('timed', 'kernel/src/scheduler.rs', 'fn-v1:d1ae84d320565569056b4890ee32b11af3b66bc34eba297a890387e8851f71ab'),
 
     ('timed', 'kernel/src/scheduler.rs', '1b10ca8d1b0d1eb3a092f0a61ed1ca7fe6a4b43c448bc24d560ead211940f8d9'),  # #429 merged with master (28ffcb59), reviewed by WS4, 2026-11-19
@@ -127,6 +128,7 @@ PINS = (
     ('timed', 'kernel/src/program_workers.rs', '6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e'),
 
     ('timed', 'kernel/src/program_workers.rs', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a'),
+    ('timed', 'kernel/src/program_workers.rs', 'fn-v1:2970f89125d00c2b9373f95433b8d983e6cb203d0edb3f643c4fa19eb6a30800'),  # SMAP: WAIT reads and EXIT writes the futex word through smap::user (no wait change), 2026-11-20
 
     ('timed', 'crates/sex-pdx/src/lib.rs', '8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde'),
 

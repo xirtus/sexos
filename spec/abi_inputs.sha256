@@ -152,7 +152,7 @@ df66047e0c1003533553fe4e898692d023d3f0908ce7ee70aa989d71e6c47cc1  kernel/src/cap
 
 ddda6ecb6219bb1cdad31c61a5401719eaecee79c8e3e218b44034ca45a2cc8f  kernel/src/clock_source.rs
 
-b54b54b2a3b8094b648956cdbc00bd0364d7f244632ffd43ace87df160d7d820  kernel/src/crash_log.rs
+dee45405490e59e0bcf8c4aa532333d9b84e2a959344cccaebad1c09d00cb094  kernel/src/crash_log.rs
 
 3d4409ab3f2238999dbad3988e56cb19e66cd3fae1d78de035617ca4d0cfafe0  kernel/src/entropy_source.rs
 
@@ -182,9 +182,9 @@ c2cb3dfe653e24bad190188ef7ef044aa045f1eac84b3c3fcc255ac7e4384a7f  kernel/src/ser
 
 bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm.rs
 
-54f3b934d530f361ed3098ba339942a60b9f6171697802bf2c4b937e7efd4c2f  kernel/src/syscalls/mod.rs
+0c91c4b4262ef37f84a8c640e169a9de6c449f7fe13e4b37a20cdfe82976fc34  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 
-decb9e8eeaa1e1dc5e0dc2b479f9ea29f51ecbf60adcd565da7cd27601b33a3d  kernel/src/vmx.rs
+9f8558504caeadaeaa3b6acc564f2fa4297c9aae16f27d5aecc8b976f4e3e8ea  kernel/src/vmx.rs
 

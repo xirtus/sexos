@@ -178,15 +178,14 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
             let src_offset = ph.p_offset as usize;
             let src = &elf_data[src_offset..src_offset + ph.p_filesz as usize];
 
-            unsafe {
+            // The segment's pages are user pages this loader just mapped.
+            crate::smap::user(|| unsafe {
                 core::ptr::copy_nonoverlapping(src.as_ptr(), dest, ph.p_filesz as usize);
-                boot_trace!("   → Copy complete.");
                 if ph.p_memsz > ph.p_filesz {
-                    boot_trace!("   → Zeroing BSS...");
                     core::ptr::write_bytes(dest.add(ph.p_filesz as usize), 0, (ph.p_memsz - ph.p_filesz) as usize);
-                    boot_trace!("   → BSS zeroed.");
                 }
-            }
+            });
+            boot_trace!("   → Copy complete.");
 
             {
                 use x86_64::structures::paging::{Mapper, Page, Size4KiB};
@@ -310,12 +309,8 @@ pub fn load_elf_for_pd(elf_data: &[u8], vas: &mut GlobalVas, pku_key: u8, load_b
                             // Compute target address in loaded image.
                             let target_vaddr = load_base.as_u64() + rela.r_offset.saturating_sub(min_vaddr);
                             let write_val = load_base.as_u64() + rela.r_addend as u64;
-                            unsafe {
-                                core::ptr::write_volatile(
-                                    target_vaddr as *mut u64,
-                                    write_val,
-                                );
-                            }
+                            // Relocations patch the image's own user pages.
+                            crate::smap::user(|| unsafe { core::ptr::write_volatile(target_vaddr as *mut u64, write_val) });
                             applied += 1;
                         }
                     }
