@@ -220,10 +220,20 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.rdi = 0xfe;
             unsafe { crate::scheduler::finish_current_task(regs as *const _) }
         }
-        if option_env!("SEXOS_CRASH_PROBE").is_some() && crate::crash_log::probe_pending(pd) {
-            crate::crash_log::fault(pd, 0xff, regs.rcx, 0, 0, "crash probe");
-            regs.rdi = 0xff;
-            unsafe { crate::scheduler::finish_current_task(regs as *const _) }
+        if option_env!("SEXOS_CRASH_PROBE").is_some() {
+            if crate::crash_log::probe_pending(pd) {
+                crate::crash_log::fault(pd, 0xff, regs.rcx, 0, 0, "crash probe");
+                regs.rdi = 0xff;
+                unsafe { crate::scheduler::finish_current_task(regs as *const _) }
+            }
+            // The hang probe: this service is stuck mid-request until the hang watch ends
+            // it. Each wake runs the same syscall instruction again (it is 2 bytes long).
+            if crate::service_restart::frozen(pd) {
+                // The user RIP a resume returns to is the entry stub's saved rcx (see
+                // `scheduler::yield_and_switch`: SyscallRegs + 72 + 112).
+                unsafe { *((regs as *mut _ as *mut u8).add(184) as *mut u64) -= 2; }
+                loop { unsafe { crate::scheduler::park_current_unless(regs as *const _, || false); } }
+            }
         }
     }
 
@@ -411,6 +421,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.r10 = s_arg1;
             regs.r8  = s_arg2;
             regs.rdi = s_caller_task;
+            crate::service_restart::inbox(current_pd.id, type_id != 0);
 
             type_id
         },

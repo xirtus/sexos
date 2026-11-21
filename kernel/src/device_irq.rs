@@ -126,7 +126,18 @@ struct Record {
     msi: u8,
     msi_wide: bool,
     msi_masking: bool,
+    /// MSI-X capability offset and first vector index, to program it again after a reset.
+    msix: u8,
+    vector: u8,
+    ecam: u64,
+    /// BOOT's config words (`SAVED`), the PCIe capability offset (0: none) and its
+    /// device control words, put back after a function-level reset.
+    saved: [u32; 9],
+    pcie: u8,
+    devctl: [u32; 2],
 }
+/// Command/status, cache line, BAR0..5, interrupt line: what a function reset clears.
+const SAVED: [u8; 9] = [0x04, 0x0C, 0x10, 0x14, 0x18, 0x1C, 0x20, 0x24, 0x3C];
 
 static RECORDS: spin::Mutex<[Option<Record>; MAX_LEASES]> = spin::Mutex::new([None; MAX_LEASES]);
 
@@ -170,7 +181,7 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
     let mut lease = Lease { slot, vendor: dev.vendor_id, device: dev.device_id,
         class: (dev.class_id as u32) << 16 | (dev.subclass_id as u32) << 8 | dev.prog_if as u32,
         bus: dev.bus, dev: dev.dev, func: dev.func, mode: Mode::None, vectors: 0, first_bit: 0 };
-    let mut record = Record { pd, lease, table: 0, msi: 0, msi_wide: false, msi_masking: false };
+    let mut record = Record { pd, lease, table: 0, msi: 0, msi_wide: false, msi_masking: false, msix: 0, vector: 0, ecam: dev.ecam, saved: [0; 9], pcie: 0, devctl: [0; 2] };
     let (msi, msix) = if want == 0 { (None, None) } else { capabilities(dev) };
     let msi = if behind_vmd { None } else { msi };
     let apic = crate::apic::local_id();
@@ -213,7 +224,7 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
                 }
                 dev.write_u32(cap, (dev.read_u32(cap) | 0x8000 << 16) & !(0x4000 << 16));
                 dev.write_u32(0x04, (dev.read_u32(0x04) & 0xffff) | INTX_DISABLE);
-                record.table = table;
+                record.table = table; record.msix = cap; record.vector = vector as u8;
                 lease.mode = Mode::MsiX; lease.vectors = n as u8; lease.first_bit = bit;
                 crate::serial_println!("[device.irq.msix] pd={} slot={} {:02x}:{:02x}.{} table_size={} vectors={} first_vector={:#x} first_bit={} apic={} masked=1 vmd_vector={}",
                     pd, slot, dev.bus, dev.dev, dev.func, size, n, FIRST_VECTOR as usize + vector, bit, apic, via.map(|v| v as i32).unwrap_or(-1));
@@ -234,7 +245,7 @@ pub fn record(pd: u32, slot: u64, dev: &crate::hal::pci::PciDevice, want: u8) {
                 dev.write_u32(cap, dev.read_u32(cap) | 1 << 16);
                 dev.write_u32(0x04, (dev.read_u32(0x04) & 0xffff) | INTX_DISABLE);
             }
-            record.msi = cap; record.msi_wide = wide; record.msi_masking = masking;
+            record.msi = cap; record.msi_wide = wide; record.msi_masking = masking; record.vector = vector as u8;
             lease.mode = Mode::Msi; lease.vectors = 1; lease.first_bit = bit;
             crate::serial_println!("[device.irq.msi] pd={} slot={} {:02x}:{:02x}.{} vector={:#x} bit={} wide={} masking={} apic={} masked=1",
                 pd, slot, dev.bus, dev.dev, dev.func, FIRST_VECTOR as usize + vector, bit, wide as u8, masking as u8, apic);
@@ -282,6 +293,83 @@ fn set_mask(record: &Record, index: u64, masked: bool) -> bool {
         Mode::None => return false,
     }
     true
+}
+
+fn device(r: &Record) -> crate::hal::pci::PciDevice {
+    let l = &r.lease;
+    crate::hal::pci::PciDevice { bus: l.bus, dev: l.dev, func: l.func, vendor_id: l.vendor, device_id: l.device,
+        class_id: (l.class >> 16) as u8, subclass_id: (l.class >> 8) as u8, prog_if: l.class as u8, ecam: r.ecam }
+}
+
+/// BOOT, as a restartable service is captured: remember how each of its devices is set up.
+pub fn snapshot(pd: u32) {
+    for r in RECORDS.lock().iter_mut().flatten().filter(|r| r.pd == pd) {
+        let dev = device(r);
+        for (i, at) in SAVED.iter().enumerate() { r.saved[i] = dev.read_u32(*at); }
+        let mut at = if dev.read_u32(0x04) & CAP_LIST != 0 { byte(&dev, 0x34) & !3 } else { 0 };
+        for _ in 0..48 {
+            if at < 0x40 { break; }
+            if byte(&dev, at) == 0x10 { r.pcie = at; r.devctl = [dev.read_u32(at + 8), dev.read_u32(at + 0x28)]; break; }
+            at = byte(&dev, at + 1) & !3;
+        }
+    }
+}
+
+/// A restartable service ended: reset each of its devices that can do a function-level
+/// reset (PCIe FLR), with bus mastering already off. True if one started: the caller
+/// waits 100 ms before `reset_end` touches the device again (PCIe base spec 6.6.2).
+pub fn reset_begin(pd: u32) -> bool {
+    let mut started = false;
+    for r in RECORDS.lock().iter().flatten().filter(|r| r.pd == pd && r.pcie != 0) {
+        let dev = device(r);
+        // The function must still be the one BOOT leased, and say it can reset itself.
+        if dev.read_u32(0x00) != r.lease.vendor as u32 | (r.lease.device as u32) << 16 { continue; }
+        if dev.read_u32(r.pcie + 4) & 1 << 28 == 0 { continue; }
+        dev.write_u32(r.pcie + 8, dev.read_u32(r.pcie + 8) | 1 << 15);
+        crate::serial_println!("[device.reset.flr] pd={} {:02x}:{:02x}.{}", pd, r.lease.bus, r.lease.dev, r.lease.func);
+        started = true;
+    }
+    started
+}
+
+/// Before a restarted service runs: put back BOOT's config words after a reset, program
+/// its interrupt vectors again, every one masked, and forget bits the old run left.
+pub fn reset_end(pd: u32) {
+    for r in RECORDS.lock().iter().flatten().filter(|r| r.pd == pd) {
+        let dev = device(r);
+        if r.saved[0] != 0 && dev.read_u32(0x00) == r.lease.vendor as u32 | (r.lease.device as u32) << 16 {
+            // Command last, once the BARs decode where they did.
+            for (i, at) in SAVED.iter().enumerate().skip(1) { dev.write_u32(*at, r.saved[i]); }
+            if r.pcie != 0 { dev.write_u32(r.pcie + 8, r.devctl[0] & 0xffff & !(1 << 15)); dev.write_u32(r.pcie + 0x28, r.devctl[1] & 0xffff); }
+            dev.write_u32(0x04, r.saved[0] & 0xffff);
+        }
+        match r.lease.mode {
+            Mode::MsiX => {
+                let control = dev.read_u32(r.msix);
+                dev.write_u32(r.msix, control | 0xC000 << 16);
+                for i in 0..r.lease.vectors as u64 {
+                    let entry = (r.table + i * 16) as *mut u32;
+                    unsafe {
+                        entry.add(3).write_volatile(1);
+                        entry.write_volatile(address(crate::apic::local_id()));
+                        entry.add(1).write_volatile(0);
+                        entry.add(2).write_volatile(FIRST_VECTOR as u32 + r.vector as u32 + i as u32);
+                    }
+                }
+                dev.write_u32(r.msix, (dev.read_u32(r.msix) | 0x8000 << 16) & !(0x4000 << 16));
+            }
+            Mode::Msi => {
+                let data_at = if r.msi_wide { dev.write_u32(r.msi + 8, 0); r.msi + 12 } else { r.msi + 8 };
+                dev.write_u32(r.msi + 4, address(crate::apic::local_id()));
+                dev.write_u32(data_at, FIRST_VECTOR as u32 + r.vector as u32);
+                if r.msi_masking { dev.write_u32(data_at + 4, dev.read_u32(data_at + 4) | 1); dev.write_u32(r.msi, dev.read_u32(r.msi) | 1 << 16); }
+                else { dev.write_u32(r.msi, dev.read_u32(r.msi) & !(1 << 16)); }
+            }
+            Mode::None => continue,
+        }
+        dev.write_u32(0x04, (dev.read_u32(0x04) & 0xffff) | INTX_DISABLE);
+    }
+    if (pd as usize) < PENDING.len() { PENDING[pd as usize].store(0, Ordering::Release); }
 }
 
 /// Syscall 86. rdi=op; see `sex_pdx::device`.

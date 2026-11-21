@@ -353,14 +353,14 @@ def _task_ordinals_ok(records):
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
  'servers/silk-shell/src/main.rs': 'wait-v1:8f387c104199b88d2ea09b2248a64cde8d22b6ca7655b967b87b072e88ce687b',
  'crates/sex-pdx/src/system_stats.rs': '80a340a08a8ca1a73ec9e8ca0a719b0614e7b555870424f3cf3656c5f014f7e6',
- 'crates/sex-pdx/src/crash_log.rs': '4930c8a6ca16756e9421cc1b1c8dca8a0301413cb0f3694189005fa90579ae22',
+ 'crates/sex-pdx/src/crash_log.rs': '87d50c205e92bd64db9223193542ca5aa6e35daa0f8861fc2fd10050a838fd97',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
  'kernel/src/app_resources.rs': 'ad92808097df42c4707ba0132b7ff3b5c3c6184e4b6398fb179cbdee42943569',
- 'kernel/src/service_restart.rs': '0900a46c2424b1329a3ad9ca3b1a8b282cc03cb01f8d7d8ef373d36904bac5a4',
- 'kernel/src/crash_log.rs': 'de234fb7f6bba0ffd6502d4b39e5e00d74039c3e2b894e3c2728ccbb27bbf8c5',
+ 'kernel/src/service_restart.rs': 'cff4c0f340e435934c14414c632fb6ac7947fd58a648e166a4a35afd3b71d2e8',
+ 'kernel/src/crash_log.rs': '9e68b4bda1c859a7ed9d4e29bf83ec696912d50571592db07e26b92141c0d8c3',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
 
