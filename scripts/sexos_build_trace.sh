@@ -125,7 +125,7 @@ run_stage() {
       local seed=0 shuffle=""
       while ! python3 scripts/key_bytes.py "$src"; do
           seed=$((seed + 1))
-          [[ $seed -le 24 ]] || { echo "[FAIL] $src holds a refused instruction at every layout tried"; exit 1; }
+          [[ $seed -le 64 ]] || { echo "[FAIL] $src holds a refused instruction at every layout tried"; exit 1; }
           echo "[layout] $src: linking again with SEX_LAYOUT_SEED=$seed"
           if [[ ${stage_target:-$TARGET} != x86_64-sex-app.json && ${stage_target:-$TARGET} != x86_64-sex-std.json ]]; then
             shuffle="-C link-arg=--shuffle-sections=.rodata*=$seed -C link-arg=--shuffle-sections=.text*=$seed"

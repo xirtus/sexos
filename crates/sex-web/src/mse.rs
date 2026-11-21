@@ -904,4 +904,37 @@ mod made_by_ffmpeg {
             assert!(r[0].0 < 0.05 && (r[0].1 - 4.0).abs() < 0.05, "{:?} {:?}", format, r);
         }
     }
+
+    // YouTube-shaped fixtures (scripts/web_site/tube/yt/make.sh): AV1 fMP4 with a sidx,
+    // Opus WebM with Cues before the Clusters, then a codec switch to VP9 WebM on the
+    // same buffer (changeType), placed at 4 s with timestampOffset.
+    static YT_AV1: &[u8] = include_bytes!("../../../scripts/web_site/tube/yt/video-av1.mp4");
+    static YT_VP9: &[u8] = include_bytes!("../../../scripts/web_site/tube/yt/video-vp9.webm");
+    static YT_OPUS_A: &[u8] = include_bytes!("../../../scripts/web_site/tube/yt/audio-600.webm");
+    static YT_OPUS_B: &[u8] = include_bytes!("../../../scripts/web_site/tube/yt/audio-750.webm");
+
+    #[test]
+    fn youtube_shaped_streams_and_codec_switch() {
+        let mut v = Stream::new(Format::Mp4);
+        for p in YT_AV1.chunks(9973) { assert!(v.append(p)); }
+        assert_eq!(v.buffered().len(), 1);
+        assert!((v.buffered()[0].1 - 4.0).abs() < 0.05, "{:?}", v.buffered());
+        // changeType: another format from the next init segment on.
+        v.format = Format::WebM;
+        v.reset_parser();
+        v.offset = 4.0;
+        for p in YT_VP9.chunks(7001) { assert!(v.append(p)); }
+        v.finish();
+        assert_eq!(v.inits.len(), 2);
+        assert_eq!(v.buffered().len(), 1, "{:?}", v.buffered());
+        assert!(v.buffered()[0].0 < 0.05 && (v.buffered()[0].1 - 8.0).abs() < 0.05, "{:?}", v.buffered());
+        let mut a = Stream::new(Format::WebM);
+        for p in YT_OPUS_A.chunks(4093) { assert!(a.append(p)); }
+        a.offset = 4.0;
+        for p in YT_OPUS_B.chunks(4093) { assert!(a.append(p)); }
+        a.finish();
+        assert!(a.has_audio() && !a.has_video());
+        assert_eq!(a.buffered().len(), 1, "{:?}", a.buffered());
+        assert!(a.buffered()[0].0 < 0.05 && (a.buffered()[0].1 - 8.0).abs() < 0.05, "{:?}", a.buffered());
+    }
 }

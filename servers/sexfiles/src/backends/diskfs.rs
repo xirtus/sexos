@@ -291,7 +291,21 @@ impl DiskFs {
         // SLOT_BLOCK is a Domain capability → AsyncEnqueue: enqueues to sexdrive's
         // ring and returns (0,0) immediately. Must call pdx_listen_raw(0) to collect
         // sexdrive's reply via the incoming_replies priority queue (send_reply path).
+        // The disk driver may be down for a moment (it crashed or hung, and the kernel is
+        // resetting the controller): the call is refused until it runs again, and a call
+        // the dead run took comes back as PEER_RESTARTED. Every block request is safe to
+        // send again: a read reads the same sectors, a write writes the same bytes from
+        // the same buffer, a flush flushes.
+        let began = sex_pdx::get_ticks();
+        let mut resent = 0u32;
+        'send: loop {
         let (send_status, _) = pdx_call(SLOT_BLOCK, opcode, arg0, arg1, arg2);
+        if send_status == sex_pdx::ERR_SERVICE_NOT_READY
+            && sex_pdx::get_ticks().saturating_sub(began) < 60_000
+            && !matches!(sex_pdx::crash_log::peer_state(SLOT_BLOCK as u64), Ok(p) if p.life == sex_pdx::crash_log::PeerLife::GaveUp) {
+            sys_yield();
+            continue 'send;
+        }
         if send_status != 0 {
             if hot_log() { serial_println!("[sexfiles.diskfs.reply] status={:#x} value=0 err=enqueue_fail", send_status); }
             if opcode == BLOCK_READ || opcode == BLOCK_WRITE {
@@ -310,6 +324,12 @@ impl DiskFs {
         // them — vanished-request root cause). Stash for the main loop.
         loop {
             let msg = pdx_listen_raw(0);
+            if msg.type_id == 0x1 && msg.caller_pd==2 && msg.arg0 == sex_pdx::crash_log::PEER_RESTARTED {
+                resent += 1;
+                sex_pdx::serial_record!("[sexfiles.block.resend] opcode={:#x} lba={} bytes={} attempt={}", opcode, arg0 / BLOCK_SECTOR_SIZE, arg1, resent);
+                if resent > 8 { return BLOCK_ERR_NO_DEVICE; }
+                continue 'send;
+            }
             if msg.type_id == 0x1 && msg.caller_pd==2 {
                 let reply_val = msg.arg0;
                 if hot_log() { serial_println!("[sexfiles.diskfs.reply] status=0x0 value={:#x}", reply_val); }
@@ -326,6 +346,7 @@ impl DiskFs {
                 crate::pdx::defer_stash(msg.type_id, msg.caller_pd, msg.caller_task, msg.arg0, msg.arg1, msg.arg2);
             }
             sys_yield();
+        }
         }
     }
 

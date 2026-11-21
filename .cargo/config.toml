@@ -6,3 +6,9 @@ PKG_CONFIG_ALLOW_CROSS = "1"
 
 [unstable]
 json-target-spec = true
+
+# Fetch git dependencies (VectorCraft, craft-libs) with the git command line,
+# not libgit2: libgit2 holds the whole 280 MB VectorCraft pack in memory and
+# was killed on the self-hosted Mac runner.
+[net]
+git-fetch-with-cli = true

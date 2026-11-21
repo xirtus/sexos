@@ -66,6 +66,11 @@ impl ReplyCredits {
         true
     }
 
+    /// Callers still owed at least one reply.
+    pub fn owed(&self) -> impl Iterator<Item = u32> + '_ {
+        self.callers.iter().zip(self.counts.iter()).filter(|(c, n)| **c != 0 && **n != 0).map(|(c, _)| *c)
+    }
+
     /// A retired callee's reply rights cannot outlive its incarnation.
     pub fn clear(&mut self) {
         *self = Self::new();

@@ -121,6 +121,9 @@ pub fn traverse_edge(edge: GraphEdge, opcode: u64, arg0: u64, arg1: u64, arg2: u
             // The reply obligation exists before the call is visible, and is
             // withdrawn if the call is not accepted.
             let mut credits = callee.reply_credits.lock();
+            // A service that is down (being reset and restarted) takes no calls; the
+            // caller tries again once it runs.
+            if crate::service_restart::down(callee.id) { return Err(sex_pdx::ERR_SERVICE_NOT_READY); }
             // Every accepted invocation retains one consumable reply right.
             // The indexed table covers every legal registry caller; checked
             // counter exhaustion refuses before publication, never silently
