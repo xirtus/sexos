@@ -160,6 +160,9 @@ pub struct Usb {
     pub audio_region: u64,
     audio_buffers: (u64, u64),
     audio_ring: (u64, u64),
+    /// The USB microphone in use (it may be another device than the card).
+    mic: Option<audio::Mic>,
+    mic_buffers: (u64, u64),
     /// Root ports suspended while the machine sleeps (bit per port).
     suspended: u64,
 }
@@ -182,7 +185,7 @@ impl Usb {
             sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
             generation: 0, changed: false, freed: 0, ether: None, net_region: 0, ether_buffers: ((0, 0), (0, 0)),
             bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)), bt_keys: [(0, 0, 0); 8], bt_buttons: [(0, 0); 8],
-            audio: None, audio_region: 0, audio_buffers: (0, 0), audio_ring: (0, 0), suspended: 0 }
+            audio: None, audio_region: 0, audio_buffers: (0, 0), audio_ring: (0, 0), mic: None, mic_buffers: (0, 0), suspended: 0 }
     }
 
     fn ctx(&self, base: u64, index: u64) -> *mut u32 { (base + index * self.x.csz) as *mut u32 }

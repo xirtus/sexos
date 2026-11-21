@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! USB Audio Class 1 and 2 descriptors: finding the playback setting of a USB sound
-//! card (stereo, 16-bit PCM, 48 kHz) and the requests that set its rate. Pure, tested
-//! on the host (tests/usb_audio.rs).
+//! card (stereo, 16-bit PCM, 48 kHz), its microphone setting (mono or stereo, 16 to
+//! 32-bit PCM, 48 kHz) and the requests that set their rate. Pure, tested on the host
+//! (tests/usb_audio.rs).
 
 /// Interface class Audio, its subclasses, and the UAC2 protocol number.
 pub const CLASS_AUDIO: u8 = 1;
@@ -13,6 +14,8 @@ const CS_INTERFACE: u8 = 0x24;
 const AS_GENERAL: u8 = 1;
 const FORMAT_TYPE: u8 = 2;
 const CLOCK_SOURCE: u8 = 0x0A;
+const INPUT_TERMINAL: u8 = 2;
+const OUTPUT_TERMINAL: u8 = 3;
 
 /// A playback setting this driver can use.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -117,6 +120,111 @@ pub fn playback(cfg: &[u8]) -> Option<Playback> {
     }
     // Only an asynchronous card's feedback is followed.
     found.map(|mut p| { if p.sync != 1 { p.feedback = None; } p })
+}
+
+/// A microphone setting this driver can use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Capture {
+    pub uac2: bool,
+    pub config: u8,
+    pub control: u8,
+    pub iface: u8,
+    pub alt: u8,
+    /// Isochronous IN endpoint address, packet size and bInterval.
+    pub ep: u8,
+    pub mps: u16,
+    pub interval: u8,
+    /// Samples: 1 or 2 channels of 2, 3 or 4 bytes each (little endian).
+    pub channels: u8,
+    pub bytes: u8,
+    /// UAC2: the clock source of the terminal the setting streams from.
+    pub clock: u8,
+}
+
+/// The microphone setting in one configuration descriptor, if it has one: the first
+/// isochronous IN data endpoint of PCM at 48 kHz in one or two channels.
+pub fn capture(cfg: &[u8]) -> Option<Capture> {
+    if cfg.len() < 9 { return None; }
+    let config = cfg[5];
+    let (mut control, mut first_clock) = (None::<u8>, 0u8);
+    // UAC2 terminals and their clocks: a streaming setting names its terminal.
+    let mut terminals = [(0u8, 0u8); 16];
+    let mut nterm = 0;
+    let (mut iface, mut alt, mut class, mut sub, mut proto) = (0u8, 0u8, 0u8, 0u8, 0u8);
+    let (mut pcm, mut channels, mut bytes, mut rate_ok, mut link) = (false, 0u8, 0u8, false, 0u8);
+    let mut at = 0;
+    while at + 2 <= cfg.len() {
+        let len = cfg[at] as usize;
+        if len < 2 || at + len > cfg.len() { break; }
+        let d = &cfg[at..at + len];
+        match d[1] {
+            4 if len >= 9 => {
+                (iface, alt, class, sub, proto) = (d[2], d[3], d[5], d[6], d[7]);
+                (pcm, channels, bytes, rate_ok, link) = (false, 0, 0, false, 0);
+                if class == CLASS_AUDIO && sub == SUB_CONTROL && control.is_none() { control = Some(iface); }
+            }
+            CS_INTERFACE if class == CLASS_AUDIO && sub == SUB_CONTROL && len >= 4 => {
+                let uac2 = proto == PROTOCOL_UAC2;
+                match d[2] {
+                    CLOCK_SOURCE if first_clock == 0 => first_clock = d[3],
+                    INPUT_TERMINAL if uac2 && len >= 8 && nterm < terminals.len() => { terminals[nterm] = (d[3], d[7]); nterm += 1; }
+                    OUTPUT_TERMINAL if uac2 && len >= 9 && nterm < terminals.len() => { terminals[nterm] = (d[3], d[8]); nterm += 1; }
+                    _ => {}
+                }
+            }
+            CS_INTERFACE if class == CLASS_AUDIO && sub == SUB_STREAMING && len >= 3 => {
+                match (d[2], proto == PROTOCOL_UAC2) {
+                    (AS_GENERAL, false) if len >= 7 => pcm = u16::from_le_bytes([d[5], d[6]]) == 1,
+                    (AS_GENERAL, true) if len >= 11 => { link = d[3]; pcm = d[6] & 1 != 0; channels = d[10]; }
+                    (FORMAT_TYPE, false) if len >= 8 && d[3] == 1 => {
+                        channels = d[4];
+                        bytes = d[5];
+                        rate_ok = offers_48k(d[7], &d[8..]);
+                    }
+                    (FORMAT_TYPE, true) if len >= 6 && d[3] == 1 => { bytes = d[4]; rate_ok = true; }
+                    _ => {}
+                }
+            }
+            5 if len >= 7 && class == CLASS_AUDIO && sub == SUB_STREAMING && alt != 0 => {
+                let (addr, attr) = (d[2], d[3]);
+                // An isochronous IN whose usage is data (not a feedback endpoint).
+                if addr & 0x80 != 0 && attr & 3 == 1 && (attr >> 4) & 3 != 1 && pcm && rate_ok
+                    && (1..=2).contains(&channels) && (2..=4).contains(&bytes) {
+                    let uac2 = proto == PROTOCOL_UAC2;
+                    let clock = terminals[..nterm].iter().find(|t| t.0 == link && uac2).map_or(first_clock, |t| t.1);
+                    return Some(Capture {
+                        uac2, config, control: control.unwrap_or(0), iface, alt,
+                        ep: addr, mps: u16::from_le_bytes([d[4], d[5]]) & 0x7ff, interval: d[6].max(1),
+                        channels, bytes, clock,
+                    });
+                }
+            }
+            _ => {}
+        }
+        at += len;
+    }
+    None
+}
+
+/// The SET_CUR request that sets the microphone to 48 kHz, as [`set_rate`] does.
+pub fn capture_rate(c: &Capture) -> (u8, u16, u16, [u8; 4], u16) {
+    let r = 48_000u32.to_le_bytes();
+    if c.uac2 { (0x21, 0x0100, (c.clock as u16) << 8 | c.control as u16, r, 4) }
+    else { (0x22, 0x0100, c.ep as u16, r, 3) }
+}
+
+/// A microphone packet as stereo 16-bit frames: a mono sample goes to both sides, and
+/// wider samples keep their top 16 bits. Returns the frames written to `out`.
+pub fn to_stereo(raw: &[u8], channels: u8, bytes: u8, out: &mut [[i16; 2]]) -> usize {
+    let (ch, b) = (channels.clamp(1, 2) as usize, bytes.clamp(2, 4) as usize);
+    let sample = |s: &[u8]| i16::from_le_bytes([s[b - 2], s[b - 1]]);
+    let mut n = 0;
+    for (f, o) in raw.chunks_exact(ch * b).zip(out.iter_mut()) {
+        let l = sample(&f[..b]);
+        *o = [l, if ch == 2 { sample(&f[b..]) } else { l }];
+        n += 1;
+    }
+    n
 }
 
 /// Microseconds between packets: full speed counts bInterval in 1 ms frames, high speed
