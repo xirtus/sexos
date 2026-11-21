@@ -12,6 +12,8 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:f6ef904984a5335ae8a8db7df93b5dc6da52805e9adc60d812aa3a76080d0e0b'),  # #456 hot-plug tick merged with master (x17 PR sweep; union of two reviewed versions), 2026-11-21
+
     ('timed', 'kernel/src/scheduler.rs', 'a23ecc7d73a7775b9d5b455435c99b58f3311e78ce2992788dc20604a91fccb2'),  # #468 cross-core handoff + pair affinity at 047e13f5 (admit takes the home core's slot, should_preempt honours it, idle has_queued sees it; wait functions unchanged), reviewed by WS4, 2026-11-20
 
     ('timed', 'kernel/src/scheduler.rs', '59a7fe67bfa8a5a0d230296bd391d5261c6fbaeba42c3c0c05bcd7db6f19265e'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
@@ -106,6 +108,8 @@ PINS = (
 
     ('timed', 'kernel/src/interrupts.rs', 'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),  # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:9be7e0f042763f122e4881e3f91ce32256e08711eb9531cb73fac73865384dc4'),  # SMAP audit: a kernel fault on a user page is recorded and retried with AC; kernel faults keep PKRU (no wait change), 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:c7ac0959a5dec36e2f31c4d10d81cca01f8a0903800114720f7a56a72237b250'),  # PCIe hot-plug slot look on the core-0 tick, 2026-11-19
 
     ('timed', 'kernel/src/syscalls/mod.rs', 'fn-v1:676eae4ad2ce1171bafcdd21eb7b0d61e5e387ff84e401eb926eecf173191fbb'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
