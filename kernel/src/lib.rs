@@ -113,6 +113,7 @@ pub mod graphics;
 #[cfg(target_arch = "x86_64")]
 pub mod devmgr;
 pub mod pci_power;
+pub mod hotplug;
 pub mod iommu;
 pub mod iommu_selftest;
 pub mod vmd;

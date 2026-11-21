@@ -87,6 +87,8 @@ jobs:
       run: bash scripts/kms_host_gate.sh
     - name: NVIDIA GSP-RM boot (GA104 firmware, VBIOS/FWSEC, WPR2 layout, RPC queues, simulated GPU) on the host
       run: bash scripts/nvidia_gsp_host_gate.sh
+    - name: Hot-plug slots and window planning for docks and eGPUs on the host
+      run: bash scripts/hotplug_host_gate.sh
     - name: sexdrive DMA lifetime and zero-copy reads on the host
       run: bash scripts/sexdrive_dma_host_gate.sh
     - name: Intel RAID (IMSM metadata, VMD bus) on the host
@@ -611,6 +613,8 @@ jobs:
       run: python3 scripts/sexfs_repair_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-fs-repair"
     - name: USB network adapter
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
+    - name: PCIe hot-plug (NVMe drive plugged into a root port after boot, button removal, plugged again)
+      run: python3 scripts/pcie_hotplug_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-pcie-hotplug"
     - name: Intel RAID 0 on two NVMe drives, read only
       run: python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
     - name: NVMe drives as real laptops have them (64 KiB per command; 4 KiB sectors refused)
