@@ -8,6 +8,8 @@
 #![no_std]
 #![no_main]
 
+mod about;
+mod facts;
 mod grants;
 mod model;
 mod setup;
@@ -65,8 +67,47 @@ fn change_grant(window: &mut Window, m: &mut Model, row: &grants::Row, allow: bo
     m.say(if status != sex_pdx::fs::OK { "Files did not take the change." } else if allow { "Allowed from its next run." } else { "Taken away from its next run." });
 }
 
+/// The Updates, Storage or About page's lines: Files' facts (`sex_pdx::facts`, answered
+/// to this program alone), and on About the kernel's numbers first. True while Files is
+/// still hashing the boot image, a step per request: ask again soon.
+fn load_info(window: &mut Window, m: &mut Model, page: &str) -> bool {
+    use sex_pdx::facts as f;
+    let (topic, render): (u64, fn(&[u8], &mut [u8]) -> usize) = match page {
+        "updates" => (f::UPDATES, facts::updates),
+        "storage" => (f::STORAGE, facts::storage),
+        _ => (f::ABOUT, facts::about),
+    };
+    let mut data = [0u8; 2048];
+    let got = sex_app::files::facts(window, topic, &mut data);
+    let data = match got { Ok(n) => &data[..n], Err(_) => &[][..] };
+    let mut text = [0u8; model::INFO_MAX];
+    let mut n = if topic == f::ABOUT { about_lines(&mut text) } else { 0 };
+    n += render(data, &mut text[n..]);
+    m.set_info(&text[..n]);
+    let word = |k| facts::field(data, k).and_then(|v| core::str::from_utf8(v).ok()).unwrap_or("-");
+    sex_pdx::serial_record!("[settings.facts] page={} status={} slot={} version={} filesystem={} health={} image={}", page, got.err().unwrap_or(0), word("slot"), word("version"), word("filesystem"), word("health"), word("image"));
+    facts::hashing(data)
+}
+
+/// The About page's lines from the kernel's numbers (syscall 87); returns their length.
+fn about_lines(text: &mut [u8]) -> usize {
+    use sex_pdx::{mesh_stats as ms, system_stats as ss};
+    let overview = ss::overview();
+    let memory = ms::memory();
+    let kernel = ss::kernel();
+    let mut domains = 0;
+    let mut at = 0;
+    while let Some(pd) = ss::next(at) { if pd <= at || domains >= 4096 { break; } domains += 1; at = pd; }
+    let k = about::Facts {
+        cores: overview.map(|o| o.cores), program_limit: memory.map(|x| x.limit_pages), program_lent: memory.map(|x| x.lent_pages),
+        free_frames: kernel.map(|k| k.free_frames), kernel_heap: kernel.map(|k| k.heap_used), domains, uptime_s: sex_pdx::get_ticks() / 1000,
+    };
+    sex_pdx::serial_record!("[settings.about] cores={} domains={} limit_pages={}", k.cores.unwrap_or(0), domains, k.program_limit.unwrap_or(0));
+    about::render(&k, env!("CARGO_PKG_VERSION"), text)
+}
+
 fn show(window: &mut Window, m: &Model) {
-    let mut text = [0u8; 4096];
+    let mut text = [0u8; 8192];
     let n = model::render(m, &mut text);
     window.show(&text[..n]);
 }
@@ -116,10 +157,17 @@ pub extern "C" fn _start() -> ! {
     let (values, mut generation) = load();
     let mut m = Model::new(values);
     let mut rows = [grants::Row::EMPTY; grants::ROWS_MAX];
+    let mut hashing = false;
     sex_pdx::serial_record!("[settings.open] generation={}", generation);
     show(&mut window, &m);
     loop {
-        let Some(event) = window.next_within(1000) else {
+        let Some(event) = window.next_within(if hashing { 100 } else { 1000 }) else {
+            // About is open and Files has more of the boot image to hash.
+            if let Some(info) = m.info_page().filter(|_| hashing) {
+                hashing = load_info(&mut window, &mut m, info);
+                show(&mut window, &m);
+                continue;
+            }
             // Someone else changed a setting (a Shell key, say): show it.
             if settings::generation().is_ok_and(|g| g != generation) {
                 let (values, g) = load();
@@ -168,6 +216,7 @@ pub extern "C" fn _start() -> ! {
             }
         } };
         if m.page != page && m.on_privacy() { load_grants(&mut window, &mut m, &mut rows); }
+        if m.page != page { hashing = m.info_page().is_some_and(|info| load_info(&mut window, &mut m, info)); }
         if let Change::Password(mut typed, n) = change {
             let result = settings::password(sex_config::secret::SET, &typed[..n]);
             for b in typed.iter_mut() { unsafe { core::ptr::write_volatile(b, 0) }; }

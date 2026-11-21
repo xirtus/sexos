@@ -36,6 +36,13 @@ fn writer(caller: u32) -> bool {
 
 /// One request; the word to reply with.
 pub fn handle(caller: u32, arg0: u64, arg1: u64) -> u64 {
+    // The Shell asks which listed program a row runs (`c::PROGRAM`), for per-program settings.
+    if let Some((c::PROGRAM, row)) = c::decode_request(arg0) {
+        if caller != SHELL { return c::Reply { status: c::DENIED, key: row, value: 0 }.word(); }
+        let index = crate::fs_service::program_name(row as u32, sex_pdx::config::schema::program_index).flatten().map_or(-1, |i| i as i32);
+        sex_pdx::serial_record!("[files.config.program] row={} program={}", row, index);
+        return c::Reply { status: c::OK, key: row, value: index }.word();
+    }
     let reply = c::serve(table(), writer(caller), arg0, arg1, |config| {
         let mut text = [0u8; TEXT_MAX];
         config.write(&mut text).is_some_and(|n| crate::fs_service::replace_own(PATH, &text[..n]))

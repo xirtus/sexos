@@ -438,6 +438,19 @@ module in silk-shell (hook only; C owns `main.rs`).
 | R9 | Voyeur protocol: search providers are programs answering a query with results only from what they already hold; Shell merges with frecency | host: ranking goldens; gate: two providers answer one query |
 | R10 | Voyeur providers: apps, files and contents (E4 index), settings pages, Abacus, windows, browser history/bookmarks, clipboard history, emoji; preview pane and actions | gate: typing `2+2`, a file word and a setting name each return the right first hit |
 
+**R3 notes (2026-11-20).** Startup programs, Shortcuts, Notifications and About landed
+first (#494). Updates, Storage and About's version and image hash read one new Files
+request, `sex_pdx::facts` (kind 36, topic in `offset`: UPDATES, STORAGE, ABOUT), answered
+only to the system's `tatami` run and changing nothing: the A/B slot, versions and trial
+from the boot menu (`updater.rs`), the release key, package updates the kept catalogs
+offer, the disk layout, sexfs size and free blocks, whether `/home` is encrypted, the
+volumes under `/media`, and the SHA-256 of the boot image the run came with (1 MiB per
+request, `image=hashing N%` until done, then kept). Not done: rolling back to the other slot from Tatami (`updater.rs` has no
+such step; the boot menu's "SexOS previous system" starts it once), an update channel
+(releases are signed files given to Spindle's `update`), package rollback (Spindle's,
+the person's answer), and disk health: no driver reads the NVMe SMART log yet (Q15/R5),
+so Storage says so.
+
 **R10 notes (2026-11-20).** Files and browser history are program providers over
 `sex_pdx::search`; the Shell never reads their data. Loom (`apps/files`) registers as
 `loom` when it starts, walks its folder once in the background to fill the E4 index
