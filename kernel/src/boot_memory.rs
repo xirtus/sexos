@@ -462,6 +462,11 @@ pub fn init_pixel_regions(display: u32) {
 
 /// One sound ring per program row: the program writes sound, Bell mixes and plays it
 /// and writes back how far it got.
+/// USB sound cards: Bell's mix goes to SexUSB through this region (sex_pdx::usb_audio).
+pub fn init_usb_audio(bell: u32, usb: u32) {
+    paired(bell, usb, sex_pdx::usb_audio::SLOT, sex_pdx::usb_audio::REGION_ID, sex_pdx::usb_audio::BYTES, true);
+}
+
 pub fn init_sound_rings(bell: u32) {
     use sex_pdx::sound_ring::{BYTES, CLIENT_SLOT, bell_slot, region_id};
     require_boot();
@@ -742,11 +747,11 @@ pub fn virtio_dma(pd_id:u32){
     dma(pd_id,sex_pdx::virtio::DMA_REGION_ID,sex_pdx::virtio::DMA_BYTES);
 }
 
-/// The display-register prefix of an Intel GPU's BAR0 (GTTMMADR), if present.
-pub fn intel_display_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64)->Option<RegionGrant>{
+/// The display-register prefix of a GPU's register BAR (Intel BAR0's GTTMMADR, AMD
+/// BAR5), if present and at least that long.
+pub fn display_register_bar(pd:&ProtectionDomain,dev:&crate::hal::pci::PciDevice,slot:u64,bar:u8,length:u64)->Option<RegionGrant>{
     require_boot();
-    let(physical,actual_length)=dev.probe_boot_bar_any(0)?;
-    let length=sex_pdx::display_frames::INTEL_REGISTERS;
+    let(physical,actual_length)=dev.probe_boot_bar_any(bar)?;
     if actual_length<length{return None}
     Some(pci_view(pd,slot,physical,actual_length,length))
 }

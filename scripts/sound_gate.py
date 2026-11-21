@@ -52,7 +52,7 @@ def main():
   os.environ['SEXOS_GATE_DEVICES']=f'-audiodev wav,id=snd0,path={wav},out.frequency=48000,out.channels=2 {card}'
  if a.card=='hda':
   from install_program import install
-  install(disk,[('play',(ROOT/'iso_root/programs/play').read_bytes())])
+  install(disk,[('qupid',(ROOT/'iso_root/programs/qupid').read_bytes())])
  from quil_autosave_gate import boot
  g=boot(a.iso,disk,out,'sound',a.resolution);t=g['text'];q=g['q']
  def say(text,pattern,timeout=120):
@@ -82,7 +82,7 @@ def main():
     assert waits<=3*periods+8 and interrupts>=max(1,periods//3),m[0]
    time.sleep(.5)
   if a.card=='hda':
-   s=len(t());say(f'run play --tone {LIVE_HZ} 48000 live',rf'\[play.tone\] hz={LIVE_HZ} rate=48000 frames=96000 played=\d+ live=1',120)
+   s=len(t());say(f'run qupid --tone {LIVE_HZ} 48000 live',rf'\[play.tone\] hz={LIVE_HZ} rate=48000 frames=96000 played=\d+ live=1',120)
    m=g['wait'](r'\[bell.sound.wakes\] irq=1 periods=(\d+) waits=(\d+) interrupts=(\d+) doorbell_waits=(\d+)',s,30)
    periods,waits,_,doorbell=map(int,m.groups());wakes.append(dict(live=True,periods=periods,waits=waits,doorbell_waits=doorbell))
    # The program kept Bell short of sound, so Bell slept on the doorbell, not a 4 ms look.

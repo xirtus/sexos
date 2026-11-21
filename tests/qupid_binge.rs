@@ -108,5 +108,14 @@ fn ch(title: &str, s: u64) -> Chapter { Chapter { title: title.into(), start_ms:
     card.dismiss();
     assert_eq!(card.at(585_000), UpNext::Hidden, "watching the credits");
     assert_eq!(card.at(100_000), UpNext::Hidden);
-    assert_eq!(card.at(571_000), UpNext::Counting(9_000), "seeking back re-arms it");
+    assert_eq!(card.at(571_000), UpNext::Counting(10_000), "seeking back re-arms it");
+}
+
+#[test] fn seeking_past_the_countdown_still_shows_the_card() {
+    let mut card = UpNextCard::new(&[], 600_000);
+    assert_eq!(card.at(500_000), UpNext::Hidden);
+    assert_eq!(card.at(590_000), UpNext::Counting(10_000), "landed in the credits");
+    assert_eq!(card.at(595_000), UpNext::Counting(5_000));
+    assert_eq!(card.at(588_000), UpNext::Counting(10_000), "a seek back before its start restarts it");
+    assert_eq!(card.at(598_000), UpNext::Go);
 }

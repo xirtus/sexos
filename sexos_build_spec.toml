@@ -845,8 +845,8 @@ id = "build_play"
 action = "cargo_manifest"
 target = "x86_64-sex-app.json"
 manifest = "apps/play/Cargo.toml"
-source_artifact = "target/x86_64-sex-app/release/play"
-dest_artifact = "iso_root/programs/play"
+source_artifact = "target/x86_64-sex-app/release/qupid"
+dest_artifact = "iso_root/programs/qupid"
 
 # The same program, starting on its game.
 [[stage]]

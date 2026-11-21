@@ -5880,6 +5880,10 @@ name = "play"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-episodes",
+ "sex-fetch",
+ "sex-font",
+ "sex-kodi",
  "sex-media",
  "sex-pdx",
 ]
@@ -7215,6 +7219,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-gpu-amd"
+version = "0.1.0"
+dependencies = [
+ "sex-kms",
+]
+
+[[package]]
 name = "sex-gpu-intel"
 version = "0.1.0"
 dependencies = [
@@ -7716,6 +7727,7 @@ name = "sexdisplay"
 version = "0.1.0"
 dependencies = [
  "sex-font",
+ "sex-gpu-amd",
  "sex-gpu-intel",
  "sex-graphics",
  "sex-icons",

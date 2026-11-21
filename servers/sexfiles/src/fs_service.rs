@@ -109,12 +109,19 @@ pub fn flush_for_power() -> bool {
 }
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
-/// Device reads of file payload, for the asking client's READ_IO counters.
+/// Device reads of file payload, for the asking client's READ_IO counters. Bytes are
+/// charged to the request they are handed to: blocks read ahead are charged when a later
+/// request takes them (`served_ahead`), never when fetched, so readahead that another
+/// client's block read throws away is not charged twice once it is fetched again.
 fn counted(bytes: usize) {
     unsafe {
         DEVICE_READ_CALLS = DEVICE_READ_CALLS.saturating_add(1);
         DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(bytes as u64);
     }
+}
+/// Payload handed over from blocks an earlier device command read ahead.
+fn served_ahead(bytes: usize) {
+    unsafe { DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(bytes as u64); }
 }
 /// Sequential readahead (#307): file blocks the last run fetched past what was asked.
 /// They stay where the device put them, in the shared block buffer (Files' heap is far
@@ -177,7 +184,7 @@ impl Device for Disk {
         self.read_data_run(block, out)
     }
     fn read_data_run(&mut self, first: u64, out: &mut [u8]) -> Result<(), ()> {
-        if ahead::take(first, out, Self::buffer()?) { return Ok(()); }
+        if ahead::take(first, out, Self::buffer()?) { served_ahead(out.len()); return Ok(()); }
         self.read_run(first, out)?;
         counted(out.len());
         Ok(())
@@ -186,13 +193,13 @@ impl Device for Disk {
     /// the reader's next request.
     fn read_data_ahead(&mut self, first: u64, out: &mut [u8], ahead: usize) -> Result<(), ()> {
         let buf = Self::buffer()?;
-        if ahead::take(first, out, buf) { return Ok(()); }
+        if ahead::take(first, out, buf) { served_ahead(out.len()); return Ok(()); }
         let total = (out.len() + ahead * BLOCK).min(buf.len()) / BLOCK * BLOCK;
         if total <= out.len() || out.len() % BLOCK != 0 { return self.read_data_run(first, out); }
         if DiskFs::diskfs_block_read(Self::offset(first), total as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
         out.copy_from_slice(&buf[..out.len()]);
         ahead::keep(first + (out.len() / BLOCK) as u64, ((total - out.len()) / BLOCK) as u64, out.len());
-        counted(total);
+        counted(out.len());
         Ok(())
     }
     fn write_run(&mut self, first: u64, data: &[u8]) -> Result<(), ()> {

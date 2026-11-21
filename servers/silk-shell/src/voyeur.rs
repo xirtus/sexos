@@ -6,8 +6,15 @@
 //! (`2+2`), the launcher's apps and actions, this workspace's windows,
 //! clipboard history, settings page names and emoji. Programs registered
 //! with `sex_pdx::search` answer over their own route; they receive the
-//! query text and nothing else. Scores, frecency and the merge are the
-//! host-tested `voyeur` crate's; this file only gathers, sends and shows.
+//! query text and nothing else: Loom answers with files and the words inside
+//! them (its search index), Kaleidoscope with history and bookmarks. Scores,
+//! frecency and the merge are the host-tested `voyeur` crate's; this file
+//! only gathers, sends and shows.
+//!
+//! A program's row shows its subtitle (path or address) and what Enter does;
+//! Tab picks the next action the result offers (open, open with, reveal in
+//! Loom, copy). Copy is the Shell's: it copies the subtitle as the program's
+//! own copy. Any other action focuses the program and asks it to act.
 use crate::{launcher, COMMAND_LIST};
 use sex_pdx::search as wire;
 use voyeur::{abacus, rank, tables, Action, Kind};
@@ -17,6 +24,7 @@ const HITS: usize = 12;
 /// Programs that may register as providers at once.
 const PROGRAMS: usize = 4;
 const TEXT: usize = 48;
+const STATUS: usize = 96;
 
 /// Built-in providers in tie order, then programs.
 const NAMES: [&str; 6] = ["abacus", "apps", "windows", "settings", "clipboard", "emoji"];
@@ -35,10 +43,33 @@ const PROGRAM_WEIGHT: u8 = 80;
 enum Payload { None, Command(u8), Window(u64), Clip(u8), Emoji(u8), Setting(u8), Answer, Program { slot: u8, index: u8, key: u64 } }
 
 #[derive(Clone, Copy)]
-struct Hit { title: [u8; TEXT], tlen: u8, provider: u8, kind: u8, action: u8, score: u32, payload: Payload }
+struct Hit { title: [u8; TEXT], tlen: u8, provider: u8, kind: u8, action: u8, score: u32, payload: Payload, status: [u8; STATUS], slen: u8 }
 impl Hit {
-    const EMPTY: Self = Self { title: [0; TEXT], tlen: 0, provider: 0, kind: 0, action: 0, score: 0, payload: Payload::None };
+    const EMPTY: Self = Self { title: [0; TEXT], tlen: 0, provider: 0, kind: 0, action: 0, score: 0, payload: Payload::None, status: [0; STATUS], slen: 0 };
     fn title(&self) -> &str { core::str::from_utf8(&self.title[..self.tlen as usize]).unwrap_or("") }
+    fn status(&self) -> &str { core::str::from_utf8(&self.status[..self.slen as usize]).unwrap_or("") }
+}
+
+/// The program result a hit shows, while that answer is still the current one.
+fn record(payload: Payload) -> Option<&'static wire::Record> {
+    let Payload::Program { slot, index, .. } = payload else { return None };
+    state().programs.get(slot as usize)?.as_ref()?.answer.records().get(index as usize)
+}
+
+/// A program row's preview line: its subtitle, what Enter does and whether
+/// Tab offers more.
+fn fill_status(hit: &mut Hit) {
+    let Some(r) = record(hit.payload) else { return };
+    let mut n = 0;
+    let mut put = |b: &[u8]| { let take = b.len().min(STATUS - n); hit.status[n..n + take].copy_from_slice(&b[..take]); n += take; };
+    put(r.subtitle().as_bytes());
+    if !r.subtitle().is_empty() { put(b" / "); }
+    put(b"ENTER ");
+    for &c in Action::decode(hit.action).map_or("?", Action::name).as_bytes() { put(&[if c == b'_' { b' ' } else { c.to_ascii_uppercase() }]); }
+    if r.actions().nth(1).is_some() { put(b" / TAB MORE"); }
+    // Cut on a character boundary.
+    while n > 0 && core::str::from_utf8(&hit.status[..n]).is_err() { n -= 1; }
+    hit.slen = n as u8;
 }
 
 struct Program { participant: sex_pdx::clipboard::Participant, registration: wire::Registration, answer: wire::Collector }
@@ -64,9 +95,7 @@ fn now() -> u64 { sex_pdx::get_ticks() / 1000 }
 fn provider_name(p: u8) -> &'static str {
     if (p as usize) < NAMES.len() { return NAMES[p as usize]; }
     match state().programs.get((p - FIRST_PROGRAM) as usize) {
-        // Registration names are fixed ASCII, but only names in this table
-        // are 'static; programs show as "program".
-        Some(Some(_)) => "program",
+        Some(Some(p)) => p.registration.name(),
         _ => "?",
     }
 }
@@ -194,8 +223,9 @@ unsafe fn merge() {
                 Payload::Program { slot, index, .. } => st.programs[slot as usize].as_ref()
                     .and_then(|p| p.answer.records().get(index as usize)).map_or(Action::Open as u8, |r| r.action),
                 _ => Action::Open as u8,
-            } };
+            }, status: [0; STATUS], slen: 0 };
         hit.title[..cut].copy_from_slice(&t[..cut]);
+        fill_status(hit);
     }
     let first = st.hits[0];
     let mut names = [0u8; 64];
@@ -241,6 +271,7 @@ pub unsafe fn rows<'a, const N: usize>(apps: &[launcher::Row<'a>], out: &mut [la
                 Payload::Setting(_) => "SETTINGS PAGE",
                 Payload::Clip(_) => "CLIPBOARD / ENTER RESTORES",
                 Payload::Emoji(_) => "EMOJI",
+                Payload::Program { .. } if hit.slen != 0 => hit.status(),
                 Payload::Program { .. } => "FROM A PROGRAM",
                 _ => "",
             } },
@@ -256,6 +287,23 @@ pub unsafe fn step(dir: i32) -> bool {
     let n = st.count as i32;
     st.selected = ((st.selected as i32 + dir).rem_euclid(n)) as u8;
     sex_pdx::serial_record!("[voyeur.select] index={} title={}", st.selected, st.hits[st.selected as usize].title());
+    true
+}
+
+/// Tab: the selected program result's next action. False when Voyeur's rows
+/// are not showing.
+pub unsafe fn cycle() -> bool {
+    if !current() { return false; }
+    let st = state();
+    let hit = &mut st.hits[st.selected as usize];
+    let Some(r) = record(hit.payload) else { return true };
+    let mut list = [0u8; wire::ACTIONS as usize];
+    let mut n = 0;
+    for a in r.actions().take(list.len()) { list[n] = a; n += 1; }
+    let next = list[list[..n].iter().position(|&a| a == hit.action).map_or(0, |i| (i + 1) % n)];
+    hit.action = next;
+    fill_status(hit);
+    sex_pdx::serial_record!("[voyeur.action] index={} title={} action={}", st.selected, hit.title(), Action::decode(next).map_or("?", Action::name));
     true
 }
 
@@ -288,8 +336,19 @@ pub unsafe fn enter() -> Enter {
         // Shell has no clipboard publication of its own yet: show the value.
         Payload::Answer => { put(st.query[..st.qlen as usize].as_ref()); put(b" = "); put(title.as_bytes()); (true, "shown_copy_pending") }
         Payload::Emoji(i) => { let e = &tables::EMOJI[i as usize]; put(e.text.as_bytes()); put(b" "); put(e.name.as_bytes()); (true, "shown_copy_pending") }
+        // Copy is the Shell's: the subtitle (or title) becomes the program's copy.
+        Payload::Program { slot, .. } if hit.action == Action::Copy as u8 => match (&st.programs[slot as usize], record(hit.payload)) {
+            (Some(p), Some(r)) => {
+                let text = if r.subtitle().is_empty() { r.title() } else { r.subtitle() };
+                let ok = (*core::ptr::addr_of_mut!(crate::CLIPBOARD)).publish_program(p.participant.subject, text.as_bytes()).is_ok();
+                put(if ok { b"Copied: ".as_slice() } else { b"Not copied: ".as_slice() }); put(text.as_bytes());
+                (ok, "copy")
+            }
+            _ => (false, "program_gone"),
+        },
         Payload::Program { slot, index, key } => match &st.programs[slot as usize] {
             Some(p) => {
+                crate::try_set_focus(p.participant.surface);
                 let w = wire::activate(p.answer.ticket(), index, hit.action, key);
                 (sex_pdx::pdx_call(p.participant.route, w.opcode, w.args[0], w.args[1], w.args[2]).0 == 0, "program")
             }
