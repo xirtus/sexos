@@ -1,0 +1,10 @@
+[package]
+name = "sex-color"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+description = "Wide-gamut linear-light FP32/FP16 color pipeline, HDR10 PQ/HLG, tetrahedral 3D LUTs, physical film curves, 4-way color wheels, and broadcast video scopes"
+
+[dependencies]
+libm = "0.2"
+sex-image = { path = "../sex-image" }

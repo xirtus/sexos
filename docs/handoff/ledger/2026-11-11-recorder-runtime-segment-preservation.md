@@ -1,0 +1,5 @@
+# Runtime segment preservation and actual capacity
+
+Actual e80d86ed stripped-profile full build completed successfully. The fixed32MiB FAT has410,112 bytes free with the entire existing Wi-Fi pack present; mtype-extracted recorder bytes exactly match the canonical staged /programs/record. Kernel bytes match the earlier unstripped c0b78 build. All364 frozen C/header/Limine input hashes remained unchanged. The completed receipt, original artifacts, FAT directory and stripping receipt are retained under desktop-recorder/native-e80d86. No guest had run at this checkpoint.
+
+Read-only program-header audit of all19 actual staged server/app/record ELFs found zero file-backed headers outside validated PT_LOAD coverage. The validator is additionally strengthened for future inputs: every nonempty file-backed program-header range is compared even when outside PT_LOAD, preserving dynamic/TLS/relocation-bearing ranges without relying on current layout. An outside-load dynamic-range mutation negative joins the existing controls; all four targeted tests pass.

@@ -142,6 +142,8 @@ pub struct Bss {
     pub rates: u16,
     /// DTIM period from the TIM element (0 when the frame had none).
     pub dtim_period: u8,
+    /// HT, VHT, HE and WMM elements (stage X1).
+    pub peer: crate::ax::Peer,
 }
 /// Rates in 500 kb/s units, in iwx(4) rate-index order: CCK then OFDM.
 pub const CCK_RATES: [u8; 4] = [2, 4, 11, 22];
@@ -160,10 +162,11 @@ pub fn parse_bss(frame: &[u8]) -> Option<Bss> {
         security: Security::Open, rsn: Rsn::default(), rsn_element: [0; 64], rsn_element_len: 0,
         beacon_interval: u16::from_le_bytes([frame[32], frame[33]]),
         capability: u16::from_le_bytes([frame[34], frame[35]]), h2e: false,
-        basic_cck: 0, basic_ofdm: 0, rates: 0, dtim_period: 0 };
+        basic_cck: 0, basic_ofdm: 0, rates: 0, dtim_period: 0, peer: crate::ax::Peer::default() };
     let privacy = bss.capability & 0x0010 != 0;
     let mut has_rsn = false;
     for (id, body) in elements(&frame[MGMT_HEADER + 12..]) {
+        bss.peer.element(id, body);
         match id {
             0 if body.len() <= 32 => { bss.ssid[..body.len()].copy_from_slice(body); bss.ssid_len = body.len() as u8; }
             3 if body.len() == 1 => bss.channel = body[0],
@@ -225,8 +228,9 @@ pub fn parse_auth(frame: &[u8]) -> Option<AuthReply<'_>> {
     })
 }
 
-/// Association request with SSID, rates and our RSN element.
-pub fn assoc_request(out: &mut [u8], bss: &Bss, sa: &[u8; 6], seq: u16, rsn: &[u8]) -> usize {
+/// Association request with SSID, rates, our RSN element, then `caps` (HT, VHT
+/// and HE capabilities, stage X1), the RSNXE and `vendor` (WMM) last.
+pub fn assoc_request(out: &mut [u8], bss: &Bss, sa: &[u8; 6], seq: u16, rsn: &[u8], caps: &[u8], vendor: &[u8]) -> usize {
     mgmt_header(out, FC_MGMT_ASSOC_REQ, &bss.bssid, sa, &bss.bssid, seq);
     let capability = 0x0001 | if bss.security != Security::Open { 0x0010 } else { 0 } | 0x0400; // ESS, privacy, short slot
     out[24..26].copy_from_slice(&(capability as u16).to_le_bytes());
@@ -242,9 +246,11 @@ pub fn assoc_request(out: &mut [u8], bss: &Bss, sa: &[u8; 6], seq: u16, rsn: &[u
     };
     out[n..n + rates.len()].copy_from_slice(rates); n += rates.len();
     out[n..n + rsn.len()].copy_from_slice(rsn); n += rsn.len();
+    out[n..n + caps.len()].copy_from_slice(caps); n += caps.len();
     if bss.h2e {
         out[n..n + 3].copy_from_slice(&[244, 1, 1 << 5]); n += 3; // RSNXE: we do hash-to-element too
     }
+    out[n..n + vendor.len()].copy_from_slice(vendor); n += vendor.len();
     n
 }
 
@@ -278,6 +284,43 @@ pub fn from_ethernet(ethernet: &[u8], bssid: &[u8; 6], seq: u16, out: &mut [u8])
     out[24..30].copy_from_slice(&LLC_SNAP);
     out[30..total].copy_from_slice(payload);
     Some((24, total))
+}
+
+/// The same as a QoS data frame (stage X1, for an AP we associated with QoS):
+/// a 26-byte header whose QoS control field names `tid`.
+pub fn from_ethernet_qos(ethernet: &[u8], bssid: &[u8; 6], seq: u16, tid: u8, out: &mut [u8]) -> Option<(usize, usize)> {
+    if ethernet.len() < 14 { return None; }
+    let payload = &ethernet[12..];
+    let total = 26 + LLC_SNAP.len() + payload.len();
+    if out.len() < total { return None; }
+    out[..2].copy_from_slice(&(FC_QOS_DATA | FC_TO_DS).to_le_bytes());
+    out[2..4].fill(0);
+    out[4..10].copy_from_slice(bssid);
+    out[10..16].copy_from_slice(&ethernet[6..12]);
+    out[16..22].copy_from_slice(&ethernet[..6]);
+    out[22..24].copy_from_slice(&(seq << 4).to_le_bytes());
+    out[24] = tid & 7;
+    out[25] = 0;
+    out[26..32].copy_from_slice(&LLC_SNAP);
+    out[32..total].copy_from_slice(payload);
+    Some((26, total))
+}
+
+/// 802.1D user priority of an Ethernet frame from its IP header (the DSCP's
+/// class selector bits, as RFC 8325 maps most traffic), 0 for anything else.
+pub fn user_priority(ethernet: &[u8]) -> u8 {
+    let dscp = match (ethernet.get(12..14), ethernet.get(14), ethernet.get(15)) {
+        (Some([0x08, 0x00]), _, Some(&tos)) => tos >> 2,
+        (Some([0x86, 0xdd]), Some(&a), Some(&b)) => ((a & 0x0f) << 2) | (b >> 6),
+        _ => return 0,
+    };
+    match dscp {
+        46 | 44 => 6,       // EF, voice admit: voice
+        40 | 48 | 56 => 7,  // CS5..CS7: network control
+        34 | 36 | 38 | 32 | 26 | 28 | 30 | 24 => 5, // AF4x, CS4, AF3x, CS3: video
+        8 => 1,             // CS1: background
+        _ => 0,
+    }
 }
 
 /// Header length of a data frame (with QoS control and a fourth address when present).

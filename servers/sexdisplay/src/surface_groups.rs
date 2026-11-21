@@ -145,8 +145,47 @@ impl<'a> RowWinners<'a> {
         } else { (usize::MAX, None) }
     }
     pub fn selected(&mut self, x: usize) -> Option<u64> { self.source(x).map(|s| s.surface.surface_id) }
+    /// Back to the row's first run, to raster another row of the same band.
+    pub fn rewind(&mut self) { self.cursor = 0; }
 }
 impl FrameGroups {
+    /// Rows lo..hi around y have identical row_winners: no surface's or frame
+    /// body's top or bottom edge lies between them.
+    pub fn row_band(&self, surfaces: &[Surface], y: usize, w: usize, h: usize) -> (usize, usize) {
+        let (mut lo, mut hi) = (0usize, h);
+        let mut edge = |e: usize| if e <= y { lo = lo.max(e) } else { hi = hi.min(e) };
+        for s in surfaces.iter().filter(|s| s.active) {
+            let (_,sy,sw,sh) = self.rect(s,w,h);
+            if sw == 0 || sh == 0 { continue; }
+            edge(sy); edge(sy+sh);
+            if self.is_frame(s) {
+                let b=self.metrics.body(sw as u32,sh as u32);
+                let body_y = sy.saturating_add(b.y as usize);
+                edge(body_y); edge(body_y.saturating_add(b.h as usize));
+            }
+        }
+        (lo, hi)
+    }
+    /// The row_winners run holding `x` on row y, found without building the
+    /// row (no stack-heavy run table): nearest surface or frame-body edges around x.
+    pub fn run_span(&self, surfaces: &[Surface], x: usize, y: usize, w: usize, h: usize) -> (usize, usize) {
+        let (mut lo, mut hi) = (0usize, w);
+        let mut edge = |e: usize| if e <= x { lo = lo.max(e) } else { hi = hi.min(e) };
+        for s in surfaces.iter().filter(|s| s.active) {
+            let (sx,sy,sw,sh) = self.rect(s,w,h);
+            if sw == 0 || sh == 0 || y < sy || y-sy >= sh { continue; }
+            edge(sx); edge(sx+sw);
+            if self.is_frame(s) {
+                let b=self.metrics.body(sw as u32,sh as u32);
+                let body_y = sy.saturating_add(b.y as usize);
+                if y >= body_y && y-body_y < b.h as usize {
+                    let left = sx.saturating_add(b.x as usize).min(w);
+                    edge(left); edge(left.saturating_add(b.w as usize).min(w));
+                }
+            }
+        }
+        (lo, hi)
+    }
     pub fn row_winners<'a>(&self, surfaces: &'a [Surface], focused: u64, y: usize, w: usize, h: usize) -> Option<RowWinners<'a>> {
         if surfaces.len() > crate::surface_lifecycle::MAX_SURFACES || w == 0 || y >= h { return None; }
         let mut edges = [0usize; MAX_ROW_RUNS + 1]; edges[1] = w; let mut n = 2;

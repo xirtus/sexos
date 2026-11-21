@@ -846,6 +846,55 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e93abca9e28e0a1b9877922aacb20576e05d4679ffa78c3d6dc22a26a216659"
 
 [[package]]
+name = "cabaret"
+version = "0.1.0"
+dependencies = [
+ "burlesque-core",
+ "cabaret-core",
+ "cabaret-plugins",
+ "cabaret-proto",
+ "libm",
+ "sex-app",
+ "sex-color",
+ "sex-media",
+ "sex-pdx",
+ "sex-splice",
+ "sex-uvc",
+ "sex-wasm",
+ "shibari",
+ "weft",
+]
+
+[[package]]
+name = "cabaret-core"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "sex-canvas",
+ "sex-color",
+ "sex-font",
+ "sex-image",
+]
+
+[[package]]
+name = "cabaret-plugins"
+version = "0.1.0"
+dependencies = [
+ "cabaret-core",
+ "libm",
+ "sex-color",
+ "sex-wasm",
+]
+
+[[package]]
+name = "cabaret-proto"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "calendar"
 version = "0.1.0"
 dependencies = [
@@ -2494,6 +2543,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "filigree"
+version = "0.1.0"
+dependencies = [
+ "filigree-core",
+ "libm",
+ "sex-app",
+ "sex-font",
+ "sex-pdx",
+ "weft",
+]
+
+[[package]]
+name = "filigree-core"
+version = "0.1.0"
+dependencies = [
+ "sex-archive",
+ "sex-font",
+ "sha2 0.10.9",
+ "ttf-parser",
+]
+
+[[package]]
 name = "filmcraft-audio-dsp"
 version = "0.20.1"
 source = "git+https://github.com/storytold/filmcraft?rev=e63e1d790c8e59f208f8ff31de6f6847a1bb206b#e63e1d790c8e59f208f8ff31de6f6847a1bb206b"
@@ -3030,6 +3101,7 @@ dependencies = [
  "batik-core",
  "gaze-codecs",
  "libm",
+ "sex-color",
  "sex-image",
 ]
 
@@ -4687,6 +4759,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ebb8d8732c6a6df3d8f032a82911cfc747e00efb95cc46e8d0acd5b5b88570c"
 
 [[package]]
+name = "mediabench"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-pdx",
+]
+
+[[package]]
 name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4744,6 +4825,8 @@ dependencies = [
  "serenade-core",
  "sex-app",
  "sex-pdx",
+ "sex-voice",
+ "sha2 0.10.9",
  "taffy",
  "weft",
 ]
@@ -4837,6 +4920,7 @@ name = "monitor"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-mesh",
  "sex-pdx",
 ]
 
@@ -5796,6 +5880,10 @@ name = "play"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-episodes",
+ "sex-fetch",
+ "sex-font",
+ "sex-kodi",
  "sex-media",
  "sex-pdx",
 ]
@@ -6372,6 +6460,15 @@ dependencies = [
  "once_cell",
  "smallvec",
  "yoke",
+]
+
+[[package]]
+name = "record"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-pdx",
 ]
 
 [[package]]
@@ -7005,6 +7102,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-color"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "sex-image",
+]
+
+[[package]]
 name = "sex-config"
 version = "0.1.0"
 dependencies = [
@@ -7123,6 +7228,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-gpu-amd"
+version = "0.1.0"
+dependencies = [
+ "sex-kms",
+]
+
+[[package]]
 name = "sex-gpu-intel"
 version = "0.1.0"
 dependencies = [
@@ -7173,6 +7285,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-idle"
+version = "0.1.0"
+
+[[package]]
 name = "sex-image"
 version = "0.1.0"
 dependencies = [
@@ -7198,6 +7314,7 @@ version = "0.1.0"
 name = "sex-js"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sex-app",
  "sex-fetch",
  "sex-gl",
@@ -7234,7 +7351,9 @@ dependencies = [
  "raw-cpuid 11.6.0",
  "scopeguard",
  "sex-hwdb",
+ "sex-idle",
  "sex-iommu",
+ "sex-pcipm",
  "sex-pdx",
  "sex-vmd",
  "spin",
@@ -7302,6 +7421,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-mesh"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+]
+
+[[package]]
 name = "sex-multipass"
 version = "0.1.0"
 dependencies = [
@@ -7338,6 +7464,14 @@ version = "0.1.0"
 dependencies = [
  "sex-font",
 ]
+
+[[package]]
+name = "sex-organize"
+version = "0.1.0"
+
+[[package]]
+name = "sex-pcipm"
+version = "0.1.0"
 
 [[package]]
 name = "sex-pdx"
@@ -7446,6 +7580,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-thunderbolt"
+version = "0.1.0"
+
+[[package]]
 name = "sex-time"
 version = "0.1.0"
 dependencies = [
@@ -7504,6 +7642,10 @@ version = "0.1.0"
 
 [[package]]
 name = "sex-vmd"
+version = "0.1.0"
+
+[[package]]
+name = "sex-voice"
 version = "0.1.0"
 
 [[package]]
@@ -7594,12 +7736,14 @@ name = "sexdisplay"
 version = "0.1.0"
 dependencies = [
  "sex-font",
+ "sex-gpu-amd",
  "sex-gpu-intel",
  "sex-graphics",
  "sex-icons",
  "sex-pdx",
  "sex-rt",
  "sex-shape",
+ "sex-theme",
  "sex-time",
  "silkbar-model",
 ]
@@ -7622,6 +7766,7 @@ dependencies = [
  "sex-crypt",
  "sex-disk",
  "sex-object-model",
+ "sex-organize",
  "sex-pdx",
  "sex-pkg",
  "sex-rt",
@@ -7635,6 +7780,16 @@ dependencies = [
 [[package]]
 name = "sexfs"
 version = "0.1.0"
+
+[[package]]
+name = "sexgpu-nv"
+version = "0.1.0"
+dependencies = [
+ "linked_list_allocator",
+ "sex-gpu-nv",
+ "sex-pdx",
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "sexinput"
@@ -7704,6 +7859,7 @@ version = "0.1.0"
 dependencies = [
  "sex-pdx",
  "sex-rt",
+ "sex-thunderbolt",
 ]
 
 [[package]]
@@ -7828,6 +7984,7 @@ dependencies = [
  "sex-pdx",
  "sex-rt",
  "silkbar-model",
+ "voyeur",
 ]
 
 [[package]]
@@ -8181,11 +8338,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "steamy"
+version = "0.1.0"
+dependencies = [
+ "sex-config",
+ "sex-std",
+]
+
+[[package]]
 name = "store"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-font",
+ "sex-image",
  "sex-pdx",
+ "sex-pkg",
+ "sha2 0.10.9",
 ]
 
 [[package]]
@@ -9568,10 +9737,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "voice"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-pdx",
+ "sex-voice",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "volatile"
 version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "442887c63f2c839b346c192d047a7c87e73d0689c9157b00b53dcc27dd5ea793"
+
+[[package]]
+name = "voyeur"
+version = "0.1.0"
 
 [[package]]
 name = "vst3"
@@ -9881,6 +10064,7 @@ dependencies = [
 name = "web"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "sex-app",
  "sex-extensions",
  "sex-fetch",

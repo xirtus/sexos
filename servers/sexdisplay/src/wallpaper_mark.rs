@@ -37,15 +37,24 @@ fn place(w: usize, h: usize) -> Option<(usize, usize, usize, usize)> {
 }
 
 /// The columns [x0, x1) of row `y` the mark's box covers, if any.
+/// Desktop widgets (`desktop_widgets.rs`) count as part of the wallpaper here.
 pub fn span(y: usize, w: usize, h: usize) -> Option<(usize, usize)> {
-    let (x, top, mw, mh) = place(w, h)?;
-    (y >= top && y < top + mh).then_some((x, x + mw))
+    let mark = place(w, h).and_then(|(x, top, mw, mh)| (y >= top && y < top + mh).then_some((x, x + mw)));
+    match (mark, super::desktop_widgets::span(y)) {
+        (Some(a), Some(b)) => Some((a.0.min(b.0), a.1.max(b.1))),
+        (a, b) => a.or(b),
+    }
 }
 
 /// The desktop at (x, y): `back`, the gradient's colour for the row, with the
 /// mark over it where the mark is.
 #[inline]
 pub fn pixel(x: usize, y: usize, w: usize, h: usize, back: u32) -> u32 {
+    super::desktop_widgets::over(x, y, mark_pixel(x, y, w, h, back))
+}
+
+#[inline]
+fn mark_pixel(x: usize, y: usize, w: usize, h: usize, back: u32) -> u32 {
     let Some((left, top, mw, mh)) = place(w, h) else { return back };
     if x < left || y < top || x >= left + mw || y >= top + mh { return back; }
     let c = unsafe { COVER[(y - top) * mw + (x - left)] };

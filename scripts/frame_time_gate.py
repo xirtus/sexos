@@ -120,7 +120,7 @@ def main():
             wait(r'\[display.motion.end\]', mark, timeout=60); time.sleep(.5)
         times = [int(v) for v in re.findall(r'\[display\.frame\.time\] ms=(\d+)', text()[start:])]
         # Where each paced frame's time went: render ms, render and decoration kilocycles.
-        found = re.findall(r'\[display\.frame\.cost\] render_ms=(\d+) render_kcyc=(\d+) decor_kcyc=(\d+) full=(\d) plan=(\w+) strip=(\d) kpx=(\d+) fast_kcyc=(\d+) pixel_kcyc=(\d+)', text()[start:])
+        found = re.findall(r'\[display\.frame\.cost\] paced=1 render_ms=(\d+) render_kcyc=(\d+) decor_kcyc=(\d+) full=(\d) plan=(\w+) strip=(\d) kpx=(\d+) fast_kcyc=(\d+) text_kcyc=\d+ pixel_kcyc=(\d+) winners_kcyc=\d+', text()[start:])
         costs = [tuple(int(v) for v in m[:4]) for m in found]
         plans = ['%s%s:%s' % (m[4], '+strip' if m[5] == '1' else '', m[6]) for m in found]
         # Share of each frame's cycles: per-pixel compositing / fast runs / decoration.

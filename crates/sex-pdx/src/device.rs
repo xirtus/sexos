@@ -14,6 +14,14 @@
 //! the untimed inbox wait does not, so an untaken bit cannot make an idle service
 //! spin), and takes the bits with `irq_take`. A driver that never unmasks keeps polling.
 //!
+//! A device whose interrupt is a wire, not a message (a laptop touchpad's GPIO pad
+//! routed to the I/O APIC), uses a *line*: BOOT reserves the vector and pending bit
+//! (manifest `lines`), and the service, once firmware told it which I/O APIC input the
+//! wire is, binds that input to the line once (`OP_LINE_BIND`). A level line is masked
+//! by the kernel each time it fires, before the end of interrupt, so a wire held
+//! asserted costs one interrupt, not a storm; the driver unmasks it (`OP_LINE_MASK`)
+//! once it has quieted the device.
+//!
 //! All of this is BOOT-created: the call never mints a lease or a vector.
 
 pub const SYS_DEVICE: u64 = 86;
@@ -26,6 +34,25 @@ pub const OP_UNMASK: u64 = 1;
 pub const OP_MASK: u64 = 2;
 /// → the pending bits, cleared atomically.
 pub const OP_TAKE: u64 = 3;
+/// rdi=line index, rsi=gsi | `LINE_EDGE` | `LINE_ACTIVE_LOW` → rax=the line's pending bit.
+/// Points a line BOOT reserved for this service at I/O APIC input `gsi`, masked. Once
+/// per line; refused for inputs under 16 (ISA, the kernel's own), inputs already bound
+/// and inputs no I/O APIC has.
+pub const OP_LINE_BIND: u64 = 4;
+/// rdi=line index, rsi=1 mask / 0 unmask → 0.
+pub const OP_LINE_MASK: u64 = 5;
+pub const LINE_EDGE: u64 = 1 << 16;
+pub const LINE_ACTIVE_LOW: u64 = 1 << 17;
+/// Lines one service may hold.
+pub const MAX_LINES: usize = 2;
+/// rdi=slot, rsi=state (0 = D0, 3 = D3hot) → the D-state it was in, or `ERR_POWER`.
+/// Moves a device the caller holds between full power and D3hot. The kernel saves the
+/// configuration (header, PCIe controls, MSI/MSI-X, L1 substates, LTR) going down and
+/// puts it back if the device was reset; the driver quiesces the device first and
+/// re-initialises it after. (4 and 5 are the interrupt-line ops.)
+pub const OP_POWER: u64 = 6;
+pub const D0: u64 = 0;
+pub const D3HOT: u64 = 3;
 
 pub const EXTRA_SLOT_BASE: u64 = 160;
 pub const EXTRA_SLOTS: u64 = 32;
@@ -35,6 +62,8 @@ pub const MAX_LEASES: usize = 64;
 pub const MAX_VECTORS_PER_SERVICE: u32 = 64;
 
 pub const ERR_NONE: u64 = u64::MAX;
+/// The D-state change was refused or the device did not take it.
+pub const ERR_POWER: u64 = u64::MAX - 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -122,6 +151,27 @@ pub fn irq_mask(slot: u64, vector: u64) -> Result<(), u64> {
     if r == 0 { Ok(()) } else { Err(r) }
 }
 
+/// Binds reserved line `index` to I/O APIC input `gsi` (masked); its pending bit.
+#[cfg(target_arch = "x86_64")]
+pub fn line_bind(index: u64, gsi: u16, edge: bool, active_low: bool) -> Result<u8, u64> {
+    let flags = if edge { LINE_EDGE } else { 0 } | if active_low { LINE_ACTIVE_LOW } else { 0 };
+    let r = call(OP_LINE_BIND, index, gsi as u64 | flags)[0];
+    if r < MAX_VECTORS_PER_SERVICE as u64 { Ok(r as u8) } else { Err(r) }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub fn line_mask(index: u64, masked: bool) -> Result<(), u64> {
+    let r = call(OP_LINE_MASK, index, masked as u64)[0];
+    if r == 0 { Ok(()) } else { Err(r) }
+}
+
 /// Pending interrupt bits since the last take, cleared.
 #[cfg(target_arch = "x86_64")]
 pub fn irq_take() -> u64 { call(OP_TAKE, 0, 0)[0] }
+
+/// Moves the device at `slot` to `D0` or `D3HOT`; Ok(the state it was in).
+#[cfg(target_arch = "x86_64")]
+pub fn set_power(slot: u64, state: u64) -> Result<u64, u64> {
+    let r = call(OP_POWER, slot, state)[0];
+    if r <= 3 { Ok(r) } else { Err(r) }
+}

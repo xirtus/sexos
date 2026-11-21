@@ -103,6 +103,7 @@ mod display_delivery;
 mod sextime_command;
 mod volume_command;
 mod wifi_command;
+mod hw_command;
 mod calc_command;
 mod complete;
 mod silk_command;
@@ -864,6 +865,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  spawn N C    start C background copies of program N");
             sb.push(b"  records      count background programs; stopall [force]");
             sb.push(b"  ls cd pwd mkdir rm mv cat write append touch df   files");
+            sb.push(b"  organize [--dry-run|auto on|off|undo|log|status|pin|unpin|rule|rules|send]");
             sb.push(b"  fetch URL FILE   download a file");
             sb.push(b"  capture FILE.png   save whole desktop (first terminal)");
             sb.push(b"  beep [HZ] [MS] [VOL]  play a note on the sound card");
@@ -871,6 +873,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  silk windows|focus|move|layout|float|close|events  script the desktop (silk alone: usage)");
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  crashes      what stopped, this start and earlier ones");
+            sb.push(b"  hw [all|TEXT|save [PATH]]  hardware report from the boot log; save writes it to a file");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -1494,7 +1497,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         b"update" => {unsafe{update_command::UPDATE.start(args,sb);}true},
         b"pkg" => {unsafe{pkg_command::PKG.command(args,sb);}true},
         b"silk" => {unsafe{(*core::ptr::addr_of_mut!(silk_command::SILK)).command(args,sb);}true},
-        b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
+        b"cd"|b"pwd"|b"mkdir"|b"rm"|b"mv"|b"cat"|b"write"|b"append"|b"touch"|b"df"|b"install"|b"mount"|b"unmount"|b"organize" => unsafe{fs_commands::FS.submit_line(cmd,args,sb)},
         // Loom (formerly Files), given a folder (the whole filesystem by default) to look after.
         b"loom" | b"files" => {
             let mut given = [0u8; 256];
@@ -1568,6 +1571,7 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         }
         b"service-state" => { service_state_command(args, sb); true }
         b"crashes" => { crashes_command(sb); true }
+        b"hw" => { hw_command::command(args, sb); true }
         b"crash" if option_env!("SEXOS_CRASH_PROBE").is_some() => {
             // Test builds only: stop a service, or the kernel, as a fault would.
             let target = if args.eq_ignore_ascii_case(b"kernel") { Some(0) } else {
@@ -2437,6 +2441,8 @@ static mut GRID_PREV:Option<viewport::Text>=None;
 static mut VIEW_SIZE:(u32,u32)=(288,212);
 static mut VIEW_SEQUENCE:u64=0;
 static mut VIEW_PAINT:u64=0;
+/// The paint GRID_PREV holds, named as `base=` by the next delta record.
+static mut VIEW_PREV_PAINT:u64=0;
 
 /// Push one surface's 6x20 text subgrid to sexdisplay. Chunks go highest
 /// offset first so text_len jumps past sexdisplay's <=32 per-draw
@@ -2453,13 +2459,22 @@ unsafe fn content_render(line:&CmdLine,sb:&mut Scrollback) {
     let text=viewport::render_at(view,line.as_bytes(),line.cur,sb.retained(),sb.scroll_offset as usize,|index|sb.get_retained(index));
     if GRID_PREV==Some(text){return}
     VIEW_PAINT=VIEW_PAINT.checked_add(1).expect("SPINDLE_PAINT_EXHAUSTED");
-    sex_pdx::serial_record!("[spindle.view.text] target={} sid={} sequence={} paint={} cols={} rows={} bytes={}",instance_pd(),grid_sids()[0],VIEW_SEQUENCE,VIEW_PAINT,text.cols,text.rows,text.len);
+    // Hand the text to Display first: the record below is ~2 KB of serial output
+    // (milliseconds under KVM) and gates match it by sequence and paint, not order.
+    DISPLAY_IO.text(&text,display_delivery::Stamp{sequence:VIEW_SEQUENCE,paint:VIEW_PAINT},CONTENT_TEXT_COLOR as u32);
+    // A paint of the same shape records only the 48-byte chunks that changed since
+    // the last one (base=that paint); scripts/spindle_view_record.py rebuilds it.
+    // A keystroke then costs a line or two of serial output, not the whole pane.
+    let base=match &*core::ptr::addr_of!(GRID_PREV){Some(prev) if prev.cols==text.cols&&prev.rows==text.rows&&prev.len==text.len=>Some(prev),_=>None};
+    sex_pdx::serial_record!("[spindle.view.text] target={} sid={} sequence={} paint={} cols={} rows={} bytes={} base={}",instance_pd(),grid_sids()[0],VIEW_SEQUENCE,VIEW_PAINT,text.cols,text.rows,text.len,if base.is_some(){VIEW_PREV_PAINT}else{0});
     for (chunk,bytes) in text.bytes[..text.len].chunks(48).enumerate(){
+        if let Some(prev)=base{if prev.bytes[chunk*48..chunk*48+bytes.len()]==*bytes{continue}}
         let mut hex=[0u8;96];let alphabet=b"0123456789abcdef";
         for(n,b)in bytes.iter().enumerate(){hex[n*2]=alphabet[(b>>4)as usize];hex[n*2+1]=alphabet[(b&15)as usize];}
         sex_pdx::serial_record!("[spindle.view.bytes] target={} sid={} seq={} paint={} off={} hex={}",instance_pd(),grid_sids()[0],VIEW_SEQUENCE,VIEW_PAINT,chunk*48,core::str::from_utf8(&hex[..bytes.len()*2]).unwrap());
     }
-    DISPLAY_IO.text(&text,display_delivery::Stamp{sequence:VIEW_SEQUENCE,paint:VIEW_PAINT},CONTENT_TEXT_COLOR as u32);GRID_PREV=Some(text);
+    GRID_PREV=Some(text);
+    VIEW_PREV_PAINT=VIEW_PAINT;
 }
 
 /// Check only metadata from a successful held SELF_CATALOG query. The

@@ -3,14 +3,21 @@
 sound card (or, with --card hda, an Intel HD Audio controller) through its BOOT lease. QEMU records the card's output to a WAV file, and
 the notes must be there at the pitch and length asked for.
 
+With --card hda, BOOT gives the controller an MSI vector and Bell must play by
+interrupt: it sleeps until each period ends instead of waking every 1 ms tick, so
+each drained note shows a handful of waits per period, not ~43. A live program
+stream (`play --tone 660 48000 live`, a quarter second queued) then plays through
+the ring's doorbell: Bell sleeps until the program writes, and the tone is whole.
+
 Without --no-card the gate also boots once with no card, where Bell must say the
 card is absent and `beep` must leave the rest of the desktop running.
 """
 import argparse,os,re,shutil,struct,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
+LIVE_HZ=660
 NOTES=[(440,400),(1000,300)]
-KEYS={' ':'spc'}
+KEYS={' ':'spc','-':'minus'}
 
 def segments(path,rate=48000,split=False):
  """Loud stretches of the left channel: (start s, length s, Hz by zero crossings).
@@ -43,6 +50,9 @@ def main():
  if not a.no_card:
   card='-device virtio-sound-pci,audiodev=snd0' if a.card=='virtio' else '-device intel-hda -device hda-duplex,audiodev=snd0'
   os.environ['SEXOS_GATE_DEVICES']=f'-audiodev wav,id=snd0,path={wav},out.frequency=48000,out.channels=2 {card}'
+ if a.card=='hda':
+  from install_program import install
+  install(disk,[('qupid',(ROOT/'iso_root/programs/qupid').read_bytes())])
  from quil_autosave_gate import boot
  g=boot(a.iso,disk,out,'sound',a.resolution);t=g['text'];q=g['q']
  def say(text,pattern,timeout=120):
@@ -58,17 +68,38 @@ def main():
   if a.card=='virtio':grant=g['wait'](r'\[kernel.cap.virtio.grant\] pd=(\d+) slot=20 product=0x1059 [^\n]*',0,60)
   else:grant=g['wait'](r'\[kernel.cap.class.grant\] pd=(\d+) slot=20 kind=Hda [^\n]*',0,60)
   g['wait'](rf'\[bell.sound.ready\] card={a.card} stream=\d+ rate=48000 channels=2',0,300)
+  if a.card=='hda':g['wait'](r'\[bell.hda.irq\] mode=msix? vectors=1 bit=\d+ polling=0',0,10)
+  wakes=[]
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   for hz,ms in NOTES:
    s=len(t());say(f'beep {hz} {ms} 50',rf'\[bell.sound.tone\] caller_pd=\d+ hz={hz} ms={ms} volume=50 queued=1 card=1')
-   g['wait'](r'\[bell.sound.drained\]',s,60);time.sleep(.5)
+   g['wait'](r'\[bell.sound.drained\]',s,60)
+   m=g['wait'](r'\[bell.sound.wakes\] irq=(\d) periods=(\d+) waits=(\d+) interrupts=(\d+)',s,10)
+   irq,periods,waits,interrupts=map(int,m.groups());wakes.append(dict(irq=irq,periods=periods,waits=waits,interrupts=interrupts))
+   if a.card=='hda':
+    assert irq==1,m[0]
+    # Polling waits every tick: ~43 per 43 ms period. By interrupt it is about one.
+    assert waits<=3*periods+8 and interrupts>=max(1,periods//3),m[0]
+   time.sleep(.5)
+  if a.card=='hda':
+   s=len(t());say(f'run qupid --tone {LIVE_HZ} 48000 live',rf'\[play.tone\] hz={LIVE_HZ} rate=48000 frames=96000 played=\d+ live=1',120)
+   m=g['wait'](r'\[bell.sound.wakes\] irq=1 periods=(\d+) waits=(\d+) interrupts=(\d+) doorbell_waits=(\d+)',s,30)
+   periods,waits,_,doorbell=map(int,m.groups());wakes.append(dict(live=True,periods=periods,waits=waits,doorbell_waits=doorbell))
+   # The program kept Bell short of sound, so Bell slept on the doorbell, not a 4 ms look.
+   assert doorbell>=1 and waits<=4*periods+16,m[0]
   assert 'KERNEL PANIC' not in t()
   q.cmd('quit');g['proc'].wait(30)
   found=segments(wav)
+  if a.card=='hda':
+   live=[f for f in found[len(NOTES):]]
+   assert live and all(abs(h-LIVE_HZ)<=LIVE_HZ*0.02 for _,_,h in live),f'live tone: {live}'
+   # Two seconds written; a gap would split it and lose length.
+   assert len(live)==1 and abs(live[0][1]-2.0)<=0.06,f'live tone not whole: {live}'
+   found=found[:len(NOTES)]
   assert len(found)==len(NOTES),f'expected {len(NOTES)} notes, heard {found}'
   for (hz,ms),(start,length,heard) in zip(NOTES,found):
    assert abs(heard-hz)<=hz*0.02,f'{hz} Hz note came out at {heard:.1f} Hz'
    assert abs(length*1000-ms)<=40,f'{ms} ms note lasted {length*1000:.0f} ms'
-  print({'ok':True,'grant':grant[0],'notes':[dict(start=s,ms=round(l*1000),hz=round(h,1))for s,l,h in found]})
+  print({'ok':True,'grant':grant[0],'wakes':wakes,'notes':[dict(start=s,ms=round(l*1000),hz=round(h,1))for s,l,h in found]})
  finally:g['stop']()
 if __name__=='__main__':main()

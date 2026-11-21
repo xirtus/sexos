@@ -45,7 +45,20 @@ fn commit_writes(fs: &mut Fs<'static, Disk>) {
     // Home's own commit first: its blocks then go out with the system's.
     crate::home::sync(fs);
     if let Err(e) = fs.commit() { forget_stats(None); sex_pdx::serial_record!("[files.fs.commit.failed] bytes={} error={:?}", bytes, e); }
+    crate::organize::committed(fs);
 }
+/// Between requests: the Organizer's next event, once nothing waits to be committed.
+pub fn organize_idle() {
+    if writes_pending() { return; }
+    match unsafe { &mut *core::ptr::addr_of_mut!(STATE) } {
+        // On Files' own stack: `home::deep` would take 256 KiB from a 128 KiB heap.
+        State::Ready(fs) => if crate::organize::pending() { crate::organize::step(fs) },
+        State::Absent => crate::organize::unmounted(),
+        // Not mounted until the first request; nothing has arrived before it.
+        State::Untried => {}
+    }
+}
+pub(crate) fn forget_all_stats() { forget_stats(None) }
 /// Clients' regions, found once: (address, 0 until looked up, u64::MAX if absent).
 static mut REGIONS: [u64; 64] = [0; 64];
 // Files serves requests serially. Device counters are sampled only around an
@@ -96,12 +109,19 @@ pub fn flush_for_power() -> bool {
 }
 enum State { Untried, Absent, Ready(Fs<'static, Disk>) }
 
-/// Device reads of file payload, for the asking client's READ_IO counters.
+/// Device reads of file payload, for the asking client's READ_IO counters. Bytes are
+/// charged to the request they are handed to: blocks read ahead are charged when a later
+/// request takes them (`served_ahead`), never when fetched, so readahead that another
+/// client's block read throws away is not charged twice once it is fetched again.
 fn counted(bytes: usize) {
     unsafe {
         DEVICE_READ_CALLS = DEVICE_READ_CALLS.saturating_add(1);
         DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(bytes as u64);
     }
+}
+/// Payload handed over from blocks an earlier device command read ahead.
+fn served_ahead(bytes: usize) {
+    unsafe { DEVICE_READ_BYTES = DEVICE_READ_BYTES.saturating_add(bytes as u64); }
 }
 /// Sequential readahead (#307): file blocks the last run fetched past what was asked.
 /// They stay where the device put them, in the shared block buffer (Files' heap is far
@@ -164,7 +184,7 @@ impl Device for Disk {
         self.read_data_run(block, out)
     }
     fn read_data_run(&mut self, first: u64, out: &mut [u8]) -> Result<(), ()> {
-        if ahead::take(first, out, Self::buffer()?) { return Ok(()); }
+        if ahead::take(first, out, Self::buffer()?) { served_ahead(out.len()); return Ok(()); }
         self.read_run(first, out)?;
         counted(out.len());
         Ok(())
@@ -173,13 +193,13 @@ impl Device for Disk {
     /// the reader's next request.
     fn read_data_ahead(&mut self, first: u64, out: &mut [u8], ahead: usize) -> Result<(), ()> {
         let buf = Self::buffer()?;
-        if ahead::take(first, out, buf) { return Ok(()); }
+        if ahead::take(first, out, buf) { served_ahead(out.len()); return Ok(()); }
         let total = (out.len() + ahead * BLOCK).min(buf.len()) / BLOCK * BLOCK;
         if total <= out.len() || out.len() % BLOCK != 0 { return self.read_data_run(first, out); }
         if DiskFs::diskfs_block_read(Self::offset(first), total as u64, SLOT_BUF_LEND) != 0 { return Err(()); }
         out.copy_from_slice(&buf[..out.len()]);
         ahead::keep(first + (out.len() / BLOCK) as u64, ((total - out.len()) / BLOCK) as u64, out.len());
-        counted(total);
+        counted(out.len());
         Ok(())
     }
     fn write_run(&mut self, first: u64, data: &[u8]) -> Result<(), ()> {
@@ -245,9 +265,16 @@ pub fn home_unlock_from_lock_screen(password: &[u8]) -> Option<u8> {
 }
 fn bring_up() -> State {
     let sectors = DiskFs::diskfs_block_call(sex_pdx::BLOCK_CAPACITY, 0, 0, 0);
-    let state = bring_up_on(sectors);
+    // Another system's disk (Windows on the laptop's SSD): never mounted or formatted
+    // as SexOS's; sexdrive serves it for reading only.
+    let foreign = DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_FOREIGN;
+    let state = if foreign {
+        sex_pdx::serial_record!("[files.fs.foreign] sectors={} read_only=1", sectors);
+        State::Absent
+    } else { bring_up_on(sectors) };
     // No SexOS filesystem here (a Windows RAID volume, say): its own volumes, read only.
     if matches!(state, State::Absent) && sectors >= DEVICE_MIN_SECTORS { crate::volumes::attach_device(sectors); }
+    if matches!(state, State::Ready(_)) { crate::organize::mounted(); } else { crate::organize::unmounted(); }
     state
 }
 /// Smallest disk worth scanning for other systems' volumes: 1 MiB.
@@ -295,15 +322,19 @@ pub fn status(e: Error) -> u8 {
     match e {
         Error::Io | Error::Poisoned => w::IO, Error::Corrupt => w::CORRUPT, Error::NoSpace => w::NO_SPACE, Error::NotFound => w::NOT_FOUND,
         Error::Exists => w::EXISTS, Error::NotDir => w::NOT_DIR, Error::IsDir => w::IS_DIR, Error::NotEmpty => w::NOT_EMPTY,
-        Error::Name | Error::TooBig => w::NAME, Error::Unformatted => w::UNAVAILABLE,
+        Error::Name | Error::TooBig => w::NAME, Error::Unformatted => w::UNAVAILABLE, Error::Stale => w::STALE,
     }
 }
 /// A client's reply slot may hold another service's answer, so ours waits its turn.
 /// Each client has one request in flight, so one entry per caller is all it takes.
 static mut REPLIES: [(u32, u64); 64] = [(0, 0); 64];
+/// Queues a reply. Several may be owed to one caller at once (Shell's settings poll and a
+/// program load both answer as tagged replies), so a new one never replaces an older one:
+/// that lost the program load's answer and left a spawn waiting forever.
 pub fn reply_later(caller: u32, word: u64) {
     let replies = unsafe { &mut *core::ptr::addr_of_mut!(REPLIES) };
-    match replies.iter_mut().find(|r| r.0 == 0 || r.0 == caller) {
+    // Kept packed in arrival order: the first empty slot is after every queued reply.
+    match replies.iter_mut().find(|r| r.0 == 0) {
         Some(entry) => *entry = (caller, word),
         None => sex_pdx::serial_record!("[files.fs.reply.lost] caller={}", caller),
     }
@@ -311,11 +342,22 @@ pub fn reply_later(caller: u32, word: u64) {
 pub fn replies_pending() -> bool { (unsafe { (*core::ptr::addr_of!(REPLIES)).iter().any(|r| r.0 != 0) }) || crate::recording_runtime::pending() }
 pub fn poll_replies() {
     let replies = unsafe { &mut *core::ptr::addr_of_mut!(REPLIES) };
+    // A caller's replies go in the order they were queued: once one waits, its later ones wait too.
+    let mut waiting = [0u32; 8];
+    let mut waits = 0;
     for entry in replies.iter_mut().filter(|r| r.0 != 0) {
         if sex_pdx::desktop_recording::ENABLED&&entry.0==sex_pdx::desktop_recording::TARGET{
             sex_pdx::serial_record!("[record.reply.unscoped.drop] target={}",entry.0);*entry=(0,0);continue;
         }
+        if waiting[..waits].contains(&entry.0) { continue; }
         if sex_pdx::pdx_reply(entry.0, entry.1) == 0 { *entry = (0, 0); }
+        else if waits < waiting.len() { waiting[waits] = entry.0; waits += 1; }
+        else { break; }
+    }
+    // Close the gaps, keeping the order.
+    let mut kept = 0;
+    for i in 0..replies.len() {
+        if replies[i].0 != 0 { replies[kept] = replies[i]; if kept != i { replies[i] = (0, 0); } kept += 1; }
     }
     crate::recording_runtime::poll();
 }
@@ -324,7 +366,7 @@ pub fn poll_replies() {
 const PROGRAM_ROWS: usize = sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::Program);
 const ROOT_MAX: usize = 64;
 #[derive(Clone, Copy)]
-struct Binding { task: u32, root: [u8; ROOT_MAX], len: usize, args: [u8; w::ARGS_MAX], args_len: usize, picked: [u8; PICKED_MAX], picked_len: usize }
+struct Binding { task: u32, root: [u8; ROOT_MAX], len: usize, system: bool, args: [u8; w::ARGS_MAX], args_len: usize, picked: [u8; PICKED_MAX], picked_len: usize }
 /// Paths the person chose for a run in the picker, space separated, as `@/path` tokens.
 const PICKED_MAX: usize = 1024;
 /// Constructor only, never admission: the provider installs this after an exact
@@ -334,7 +376,7 @@ fn recording_binding(task:u32)->Option<Binding>{
     const _:()=assert!(sex_pdx::desktop_recording::ROOT.len()<=ROOT_MAX);
     let mut root=[0;ROOT_MAX];let length=sex_pdx::desktop_recording::ROOT.len();
     root[..length].copy_from_slice(sex_pdx::desktop_recording::ROOT);
-    Some(Binding{task,root,len:length,args:[0;w::ARGS_MAX],args_len:0,picked:[0;PICKED_MAX],picked_len:0})
+    Some(Binding{task,root,len:length,system:false,args:[0;w::ARGS_MAX],args_len:0,picked:[0;PICKED_MAX],picked_len:0})
 }
 
 pub(super) fn prepare_recording_root()->sex_pdx::desktop_recording::BindStatus {
@@ -373,6 +415,9 @@ static mut PICK_TICKET: u32 = 0;
 static mut BINDINGS: [Option<Binding>; PROGRAM_ROWS] = [None; PROGRAM_ROWS];
 /// The last program file read, by its base name, waiting for Shell to say where it runs.
 static mut LOADED: ([u8; 32], usize) = ([0; 32], 0);
+/// The program last read came from the system: the disk program store or `/bin/NAME`,
+/// never a file elsewhere that merely has the same base name.
+static mut LOADED_SYSTEM: bool = false;
 /// The arguments typed with the program last read.
 static mut LOADED_ARGS: ([u8; w::ARGS_MAX], usize) = ([0; w::ARGS_MAX], 0);
 /// The target of program row `k`.
@@ -383,6 +428,13 @@ fn program_index(target: u32) -> Option<usize> {
     sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program).position(|i| i.target == target)
 }
 pub fn loaded(path: &[u8]) {
+    let system = path.strip_prefix(sex_pdx::program_store::BIN).is_some_and(|n| !n.is_empty() && !n.contains(&b'/'));
+    loaded_from(path, system);
+}
+/// The disk program store's own load: always a system program.
+pub fn loaded_from_store(name: &[u8]) { loaded_from(name, true); }
+fn loaded_from(path: &[u8], system: bool) {
+    unsafe { *core::ptr::addr_of_mut!(LOADED_SYSTEM) = system; }
     let name = path.rsplit(|b| *b == b'/').next().unwrap_or(path);
     let loaded = unsafe { &mut *core::ptr::addr_of_mut!(LOADED) };
     let n = name.len().min(loaded.0.len());
@@ -419,7 +471,8 @@ pub fn bind(target: u32, task: u32) {
     let args = unsafe { &mut *core::ptr::addr_of_mut!(LOADED_ARGS) };
     if let Some(cache) = client_cache(w::PROGRAM_INDEX_BASE + index) { w::stat_cache::forget(cache, None); }
     unsafe { (*core::ptr::addr_of_mut!(OFFERS))[index] = None; }
-    bindings[index] = Some(Binding { task, root, len, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
+    let system = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_SYSTEM)) };
+    bindings[index] = Some(Binding { task, root, len, system, args: args.0, args_len: core::mem::take(&mut args.1), picked: [0; PICKED_MAX], picked_len: 0 });
     let launcher = unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(LOADED_LAUNCHER)) };
     // A pipe run's working folder: its starter held it (SET_CWD checked), and it is the
     // run's own from now on, as a path the person picked for it would be.
@@ -637,6 +690,12 @@ fn holds_launch(binding: &Binding) -> bool {
 }
 #[allow(non_snake_case)]
 fn PROGRAM_INDEX_BASE_PLUS(k: usize) -> u64 { w::PROVIDER_SLOT_BASE + (w::PROGRAM_INDEX_BASE + k) as u64 }
+/// The run is Settings': bound to `/data/tatami`, the folder Files gave the run of
+/// `/bin/tatami` (which no package may install, see `packages::RESERVED`). The same
+/// identity `program_is` gives settings and lock-password writes.
+fn is_settings(binding: &Binding) -> bool {
+    binding.system && binding.root[..binding.len].strip_prefix(sex_pdx::program_store::DATA) == Some(b"tatami")
+}
 fn holds_packages(binding: &Binding) -> bool {
     binding.args[..binding.args_len].split(|b| *b == b' ').any(|t| t == sex_pdx::package::GRANT_TOKEN)
 }
@@ -658,15 +717,25 @@ fn program_package(binding: &Binding, r: w::Request, arg: &[u8], out: &mut [u8; 
     use sex_pdx::package as p;
     let program = core::str::from_utf8(&binding.root[sex_pdx::program_store::DATA.len()..binding.len]).unwrap_or("?");
     let refuse = |why: &str| { sex_pdx::serial_record!("[files.pkg.denied] program={} op={} why={}", program, r.offset, why); None };
+    // Settings' Privacy page: the person reviews and changes grants there. Only these
+    // three, and the argument is a program name, never a path.
+    if is_settings(binding) && matches!(r.offset, p::GRANTS | p::LIST | p::CONSENT) {
+        if arg.len() > out.len() { return refuse("length"); }
+        out[..arg.len()].copy_from_slice(arg);
+        sex_pdx::serial_record!("[files.pkg.settings] op={} arg={}", r.offset, core::str::from_utf8(arg).unwrap_or("?"));
+        return Some(arg.len());
+    }
+    if !holds_packages(binding) { return refuse("no_grant"); }
     match r.offset {
         p::INSTALL if r.length & p::ALLOW_DOWNGRADE != 0 => refuse("downgrade"),
         p::INSTALL | p::CHECK => match confine(binding, arg, out) { Some(n) => Some(n), None => refuse("path") },
-        p::REMOVE | p::LIST | p::CATALOG | p::SEARCH | p::LOCATE | p::SOURCE => {
+        p::REMOVE | p::LIST | p::CATALOG | p::SEARCH | p::LOCATE | p::SOURCE | p::REPO_REMOVE | p::REPOS | p::DETAILS => {
             if arg.len() > out.len() { return refuse("length"); }
             out[..arg.len()].copy_from_slice(arg);
             Some(arg.len())
         }
-        p::TRUST | p::CONSENT => refuse("spindle_only"),
+        // Whom to trust, what to allow and going back a version are the person's answers.
+        p::TRUST | p::CONSENT | p::REPO_ADD | p::ROLLBACK => refuse("spindle_only"),
         _ => refuse("unknown"),
     }
 }
@@ -681,6 +750,9 @@ fn program_live(target: u32, task: u32) -> bool {
 pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -> u64 {
     let Some(r) = w::Request::decode(a, offset, length) else { return w::reply((a & 0xFF_FFFF) as u32, w::INVALID, 0) };
     let program = program_index(caller);
+    if program.is_some() && (w::ORGANIZE_STATE..=w::ORGANIZE_LOG).contains(&r.kind) {
+        return w::reply(r.seq, w::DENIED, 0);
+    }
     let index = match (sex_pdx::app_catalog::SPINDLE_TARGETS.iter().position(|t| *t == caller), program) {
         (Some(index), _) => {
             if !crate::spindle_history::live(caller) { return w::reply(r.seq, w::DENIED, 0); }
@@ -692,7 +764,19 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
             // its other paths below; mounting stays Spindle's.
-            if !bound.is_some_and(|b| bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)) || matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)) {
+                // A run just started can ask for its arguments before Shell's bind gets here:
+                // it waits for the bind rather than starting with none.
+                let bound_task = bound.map_or(0, |b| b.task);
+                let starting = r.kind == w::ARGS && binding_due(caller, caller_task, bound_task);
+                static mut DENIALS_LOGGED: u32 = 0;
+                if unsafe { DENIALS_LOGGED < 64 } {
+                    unsafe { DENIALS_LOGGED += 1; }
+                    sex_pdx::serial_record!("[files.program.denied] target={} task={} bound={} kind={} starting={}", caller, caller_task, bound_task, r.kind, starting as u8);
+                }
+                return w::reply(r.seq, if starting { w::STARTING } else { w::DENIED }, 0);
+            }
             // A terminal the person started with Spindle's `spindle` command may start programs
             // attached to it (`console_relay`). Any program may PREPARE a run of its own
             // (`sex_pdx::launch`); `program_prepare` lets it pass on only what it holds.
@@ -701,7 +785,7 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
                 return crate::console_relay::handle(k, holds_launch(&b), r, PROGRAM_INDEX_BASE_PLUS(k), |path, out| held_folder(&b, path, out));
             }
             // Packages only for a run the person started with `run +pkg` (see `program_package`).
-            if r.kind == sex_pdx::package::KIND && !bound.is_some_and(|b| holds_packages(&b)) {
+            if r.kind == sex_pdx::package::KIND && !bound.is_some_and(|b| holds_packages(&b) || is_settings(&b)) {
                 sex_pdx::serial_record!("[files.pkg.denied] target={} op={} why=no_grant", caller, r.offset);
                 return w::reply(r.seq, w::DENIED, 0);
             }
@@ -722,6 +806,31 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
     }
     answer
 }
+/// Mesh's view of every bound run (`w::RUNS`): its device reads and the grants it
+/// holds. Paths only for Spindle or a run the person gave the whole filesystem.
+fn runs_view(program: Option<usize>, out: &mut [u8]) -> usize {
+    let bindings = unsafe { &*core::ptr::addr_of!(BINDINGS) };
+    let paths = program.map_or(true, |k| bindings[k].as_ref().is_some_and(|b| b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/")));
+    let rows = sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i| i.app == sex_pdx::app_catalog::App::Program);
+    let mut used = 0;
+    for (k, row) in rows.enumerate() {
+        let Some(b) = bindings.get(k).and_then(|b| b.as_ref()) else { continue };
+        let mut text = [0u8; w::ARGS_MAX + PICKED_MAX + 2];
+        let (mut n, mut grants) = (0usize, 0u8);
+        let tokens = b.args[..b.args_len].split(|c| *c == b' ').chain(b.picked[..b.picked_len].split(|c| *c == b' '));
+        for t in tokens.filter(|t| w::runs::is_grant(t)) {
+            grants = grants.saturating_add(1);
+            if !paths || n + 1 + t.len() > text.len() { continue; }
+            if n > 0 { text[n] = b' '; n += 1; }
+            text[n..n + t.len()].copy_from_slice(t);
+            n += t.len();
+        }
+        let io = unsafe { (*core::ptr::addr_of!(READ_IO)).get(w::PROGRAM_INDEX_BASE + k).copied().unwrap_or(w::ReadIoStats::ZERO) };
+        let run = w::runs::Run { target: row.target, task: b.task, read_calls: io.device_calls, read_bytes: io.device_bytes, grants, text: &text[..n] };
+        match w::runs::put(&mut out[used..], &run) { Some(m) => used += m, None => break }
+    }
+    used
+}
 fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Request) -> u64 {
     let mut r = r;
     let Ok(view) = sex_pdx::memory_region_view(w::PROVIDER_SLOT_BASE + index as u64, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE) else { return w::reply(r.seq, w::IO, 0) };
@@ -731,6 +840,11 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         unsafe { READ_IO[index] }.encode(&mut region[w::PATH_BYTES..]).unwrap();
         return w::reply(r.seq, w::OK, w::ReadIoStats::BYTES as u32);
     }
+    if r.kind == w::RUNS {
+        if r.path_len != 0 || r.offset != 0 || r.length != 0 { return w::reply(r.seq, w::INVALID, 0); }
+        let n = runs_view(program, &mut region[w::PATH_BYTES..w::CACHE_AT]);
+        return w::reply(r.seq, w::OK, n as u32);
+    }
     // A client found now may have been absent when Files last looked: keep it, so its
     // cache is cleared with the others.
     if let Some(slot) = unsafe { (*core::ptr::addr_of_mut!(REGIONS)).get_mut(index) } { *slot = view.virtual_address; }
@@ -739,6 +853,13 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         *state = bring_up();
         // A restarted Files may have lost writes its clients' caches still describe.
         if matches!(state, State::Ready(_)) { forget_stats(None); }
+    }
+    // Tatami's Updates, Storage and About pages: read only, the system's `tatami` alone.
+    if r.kind == sex_pdx::facts::KIND {
+        if program.is_none() || !program_is(caller, sex_pdx::facts::PROGRAM) { return w::reply(r.seq, w::DENIED, 0); }
+        let fs = match state { State::Ready(fs) => Some(fs), _ => None };
+        let (st, n) = crate::facts::answer(fs, r.offset, &mut region[w::PATH_BYTES..w::CACHE_AT]);
+        return w::reply(r.seq, st, n);
     }
     if r.kind == w::INSTALL {
         // Works without a filesystem: a live system on another OS's disk has none.
@@ -751,7 +872,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         let result = crate::installer::run(fs, &path[..path_len], r.offset, go, &mut region[w::PATH_BYTES..]);
         // Once the installer has written raw, the driver stops this system's writes and the
         // layout under the mounted filesystem may have changed: drop it until restart.
-        if go && DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_LOCKED { *state = State::Absent; }
+        if go && DiskFs::diskfs_block_call(sex_pdx::BLOCK_LAYOUT, 0, 0, 0) & 0xFF == sex_pdx::BLOCK_LAYOUT_LOCKED { *state = State::Absent; crate::organize::unmounted(); }
         return match result { Ok(n) => w::reply(r.seq, w::OK, n), Err(e) => w::reply(r.seq, status(e), 0) };
     }
     if r.kind == w::UPDATE {
@@ -809,7 +930,10 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // Only Spindle, Shell or a run holding the whole filesystem.
         if let Some(k) = program {
             let b = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
-            if !b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/") { return w::reply(r.seq, w::DENIED, 0); }
+            if !b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/") {
+                sex_pdx::serial_record!("[files.program.denied] target={} task={} bound={} kind={} why=home_needs_whole args={}", caller, b.task, b.task, r.kind, core::str::from_utf8(&b.args[..b.args_len]).unwrap_or("?"));
+                return w::reply(r.seq, w::DENIED, 0);
+            }
         }
         let Some(fs) = fs else { return w::reply(r.seq, w::UNAVAILABLE, 0) };
         if writes_pending() { commit_writes(fs); }
@@ -870,7 +994,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
                 unsafe { PREPARING_FOR = Some(relay_pipe(id, word)); }
             }
             n
-        } else if r.kind == w::RENAME {
+        } else if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE) {
             let Some(split) = raw[..path_len].iter().position(|b| *b == 0) else { return w::reply(r.seq, w::NAME, 0) };
             let mut second = [0u8; w::PATH_BYTES];
             let (Some(a), Some(b)) = (confine(&binding, &raw[..split], &mut own), confine(&binding, &raw[split + 1..path_len], &mut second)) else { return w::reply(r.seq, w::NAME, 0) };
@@ -893,7 +1017,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // No SexOS filesystem on this disk: only its own volumes under /media, read only.
         let path = &path[..path_len];
         if !crate::volumes::owns(path) { return w::reply(r.seq, w::UNAVAILABLE, 0); }
-        if r.kind == w::RENAME || r.kind == w::MOUNT || r.kind == w::UNMOUNT { return w::reply(r.seq, w::READ_ONLY, 0); }
+        if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::READ_ONLY, 0); }
         return match crate::volumes::run(None, r, path, data) { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
     };
     // Reads change nothing; a write fails before it changes anything (sexfs checks
@@ -914,7 +1038,18 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         _ => forget_stats(None),
     }
     // Other systems' volumes, under /media.
-    let rename_halves = (r.kind == w::RENAME).then(|| path.iter().position(|b| *b == 0)).flatten().map(|i| (&path[..i], &path[i + 1..]));
+    let rename_halves = matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE).then(|| path.iter().position(|b| *b == 0)).flatten().map(|i| (&path[..i], &path[i + 1..]));
+    // Checked (organizer) moves stay inside the SexOS filesystem: never into, out of or
+    // within another volume or the encrypted home, whose files have other identities.
+    if matches!(r.kind, w::MOVE_IF_ID | w::ORGANIZE_MOVE) {
+        let Some((a, b)) = rename_halves else { return w::reply(r.seq, w::NAME, 0) };
+        if crate::volumes::owns(a) || crate::volumes::owns(b) || crate::home::owns(a) || crate::home::owns(b) { return w::reply(r.seq, w::OTHER_DISK, 0); }
+    }
+    // The Organizer (Spindle only, checked in `handle`): Files' own policy module.
+    if (w::ORGANIZE_STATE..=w::ORGANIZE_LOG).contains(&r.kind) {
+        if crate::volumes::owns(path) || crate::home::owns(path) { return w::reply(r.seq, w::OTHER_DISK, 0); }
+        return match crate::organize::request(fs, r, path, data) { Ok(v) => w::reply(r.seq, w::OK, v), Err(st) => w::reply(r.seq, st, 0) };
+    }
     let media = match (r.kind, rename_halves) {
         (w::MOUNT, _) => Some(crate::volumes::mount(fs, path, data)),
         (w::UNMOUNT, _) => Some(crate::volumes::unmount(fs, path)),
@@ -962,6 +1097,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
                 if unsafe { UNCOMMITTED } >= COMMIT_BYTES { commit_writes(fs); }
             }
             if r.kind == w::SYNC { unsafe { UNCOMMITTED = 0; } }
+            if !read_only { crate::organize::after(fs, r.kind, path); }
             w::reply(r.seq, w::OK, value)
         }
         Err(e) => {
@@ -996,6 +1132,11 @@ static mut NEXT_TICKET: u32 = 0;
 fn bound_sender(target: u32, sender_task: u32, bound_task: u32, preparing: bool) -> bool {
     // Worker file I/O remains valid; launch delegation belongs to the main run.
     bound_task != 0 && program_live(target, bound_task) && (!preparing || (sender_task != 0 && sender_task == bound_task))
+}
+/// `task` runs live in row `target`, is not the task bound there, and a program read
+/// still waits for Shell's bind: that bind is on its way.
+fn binding_due(target: u32, task: u32, bound_task: u32) -> bool {
+    task != 0 && task != bound_task && unsafe { (*core::ptr::addr_of!(LOADED)).1 != 0 } && program_live(target, task)
 }
 fn current_ticket_owner(target: u32) -> Option<TicketOwner> {
     let index = program_index(target)?;
@@ -1130,6 +1271,13 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
             fs.commit()?;
             Ok(0)
         }
+        w::MOVE_IF_ID => {
+            if r.length != 0 { return Err(Error::Name); }
+            let split = path.iter().position(|b| *b == 0).ok_or(Error::Name)?;
+            fs.move_file_if_id(&path[..split], &path[split + 1..], r.offset)?;
+            fs.commit()?;
+            Ok(0)
+        }
         // Both go through private memory: the client can change its region at any time, and
         // checksums must be over the bytes we keep, not bytes it might still be changing.
         w::READ => {
@@ -1195,19 +1343,27 @@ fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u
                 crate::console_relay::prepared(id, pipe);
             }
             // A program a package installed: what it asks for and what the person said.
-            let note = path.strip_prefix(sex_pdx::program_store::BIN).and_then(|name| crate::packages::note(fs, name));
+            // Unasked grants take the person's default answer; a run holding an allowed
+            // grant is its last use.
+            let name = path.strip_prefix(sex_pdx::program_store::BIN);
+            let note = name.and_then(|name| crate::packages::note(fs, name)).map(crate::packages::with_defaults);
+            if let (Some(name), Some(n)) = (name, note) {
+                if n.allowed != 0 { crate::packages::mark_used(name, sex_pdx::civil_time_ms().map_or(0, |ms| ms / 1000)); }
+            }
             match note { Some(n) => n.encode(data), None => data[..sex_pdx::package::NOTE_BYTES].fill(0) }
             Ok(ticket)
         }
     }
 }
 /// True when `caller` is a live program run from `/data/NAME`: the folder Files
-/// bound it to, never a name the program claims.
-pub fn program_is(caller: u32, name: &[u8]) -> bool {
-    let Some(k) = program_index(caller) else { return false };
-    let Some(b) = (unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }) else { return false };
-    let data = sex_pdx::program_store::DATA;
-    program_live(caller, b.task) && b.root[..b.len].strip_prefix(data) == Some(name)
+/// bound it to, never a name the program claims; and the program came from the system
+/// (the disk program store or `/bin/NAME`), not another file with the same base name.
+pub fn program_is(caller: u32, name: &[u8]) -> bool { program_name(caller, |n| n == name) == Some(true) }
+/// `f` of the NAME a live system program run in row `caller` was bound to (`program_is`).
+pub fn program_name<R>(caller: u32, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+    let b = unsafe { (*core::ptr::addr_of!(BINDINGS))[program_index(caller)?] }?;
+    (program_live(caller, b.task) && b.system).then_some(())?;
+    b.root[..b.len].strip_prefix(sex_pdx::program_store::DATA).map(f)
 }
 /// Files' own small files (settings): read whole, at most `out.len()` bytes.
 pub fn read_own(path: &[u8], out: &mut [u8]) -> Option<usize> {

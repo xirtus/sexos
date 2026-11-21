@@ -56,6 +56,7 @@ pub enum Api {
     GetStdHandle, WriteFile, ExitProcess, AddVectoredExceptionHandler, RemoveVectoredExceptionHandler,
     VirtualAlloc, GetCurrentThreadId, GetCurrentProcessId, GetTickCount64, GetLastError, SetLastError,
     Sleep, QueryPerformanceCounter, QueryPerformanceFrequency,
+    GetProcessHeap, HeapAlloc, HeapFree,
 }
 
 pub fn lookup(dll: &str, name: &str) -> Option<Api> {
@@ -75,13 +76,21 @@ pub fn lookup(dll: &str, name: &str) -> Option<Api> {
         "Sleep" => Api::Sleep,
         "QueryPerformanceCounter" => Api::QueryPerformanceCounter,
         "QueryPerformanceFrequency" => Api::QueryPerformanceFrequency,
+        "GetProcessHeap" => Api::GetProcessHeap,
+        "HeapAlloc" => Api::HeapAlloc,
+        "HeapFree" => Api::HeapFree,
         _ => return None,
     })
 }
 
-pub enum Outcome { Return(u64), Stop(Stop) }
+pub enum Outcome {
+    Return(u64),
+    Stop(Stop),
+    /// Resume the thread with these registers instead of returning (NtContinue).
+    Jump(Regs),
+}
 
-fn set_last_error(p: &mut WinProcess, code: u32) { let _ = p.cell.write_u32(process::TEB_VA + TEB_LAST_ERROR, code); }
+pub(crate) fn set_last_error(p: &mut WinProcess, code: u32) { let _ = p.cell.write_u32(process::TEB_VA + TEB_LAST_ERROR, code); }
 
 /// Runs import `index` with the Windows x64 arguments in `regs`.
 pub fn call(p: &mut WinProcess, index: usize, regs: &mut Regs, host: &mut impl Host) -> Outcome {
@@ -122,14 +131,39 @@ pub fn call(p: &mut WinProcess, index: usize, regs: &mut Regs, host: &mut impl H
             if p.cell.write_user(a1, &t.to_le_bytes()).is_some() { 1 } else { 0 }
         }
         Api::QueryPerformanceFrequency => if p.cell.write_user(a1, &1_000_000u64.to_le_bytes()).is_some() { 1 } else { 0 },
+        Api::GetProcessHeap => process::HEAP_VA,
+        Api::HeapAlloc => if a1 == process::HEAP_VA { heap_alloc(p, a3) } else { set_last_error(p, ERROR_INVALID_HANDLE); 0 },
+        Api::HeapFree => (a1 == process::HEAP_VA && (a3 == 0 || (a3 >= process::HEAP_VA + HEAP_HEADER && a3 < p.heap_next))) as u64,
     })
+}
+
+const HEAP_HEADER: u64 = 16;
+const HEAP_LIMIT: u64 = 1 << 30;
+const HEAP_GROW: u64 = 1 << 20;
+
+/// HeapAlloc on the process heap: 16-byte aligned blocks after a 16-byte header that
+/// holds the size, in pages mapped on demand. Fresh cell pages are zero and blocks are
+/// never reused yet, so HEAP_ZERO_MEMORY always holds; HeapFree only checks the pointer.
+/// (Scaffolding: from CW3 on, Wine's ntdll heap runs in the guest.)
+fn heap_alloc(p: &mut WinProcess, bytes: u64) -> u64 {
+    let need = match bytes.checked_add(HEAP_HEADER) { Some(n) if bytes <= HEAP_LIMIT => n.next_multiple_of(16), _ => { set_last_error(p, ERROR_NOT_ENOUGH_MEMORY); return 0 } };
+    let at = p.heap_next;
+    if at + need > process::HEAP_VA + HEAP_LIMIT { set_last_error(p, ERROR_NOT_ENOUGH_MEMORY); return 0; }
+    if at + need > p.heap_end {
+        let grow = (at + need - p.heap_end).next_multiple_of(HEAP_GROW);
+        if p.cell.map(p.heap_end, grow / PAGE, Access::USER_RW).is_err() { set_last_error(p, ERROR_NOT_ENOUGH_MEMORY); return 0; }
+        p.heap_end += grow;
+    }
+    if p.cell.write_u64(at, bytes).is_none() { return 0; }
+    p.heap_next = at + need;
+    at + HEAP_HEADER
 }
 
 const MEM_COMMIT: u32 = 0x1000;
 const MEM_RESERVE: u32 = 0x2000;
 
 /// VirtualAlloc: reserve and/or commit, at an address or anywhere above ALLOC_BASE.
-fn virtual_alloc(p: &mut WinProcess, address: u64, size: u64, kind: u32, protect: u32) -> u64 {
+pub(crate) fn virtual_alloc(p: &mut WinProcess, address: u64, size: u64, kind: u32, protect: u32) -> u64 {
     let fail = |p: &mut WinProcess, e| { set_last_error(p, e); 0 };
     if size == 0 || size > 1 << 40 || kind & !(MEM_COMMIT | MEM_RESERVE) != 0 || kind == 0 { return fail(p, ERROR_INVALID_PARAMETER); }
     let access = match protect {
@@ -161,7 +195,15 @@ fn virtual_alloc(p: &mut WinProcess, address: u64, size: u64, kind: u32, protect
     if reserve && p.cell.reserve(start, bytes).is_err() { return fail(p, ERROR_INVALID_ADDRESS); }
     if kind & MEM_COMMIT != 0 {
         if let Some(access) = access {
-            if p.cell.map(start, bytes / PAGE, access).is_err() { return fail(p, ERROR_NOT_ENOUGH_MEMORY); }
+            // Committing pages that are already committed is allowed: map only the gaps.
+            let mut at = start;
+            while at < start + bytes {
+                if p.cell.is_mapped(at, PAGE) { at += PAGE; continue; }
+                let mut end = at;
+                while end < start + bytes && !p.cell.is_mapped(end, PAGE) { end += PAGE; }
+                if p.cell.map(at, (end - at) / PAGE, access).is_err() { return fail(p, ERROR_NOT_ENOUGH_MEMORY); }
+                at = end;
+            }
         }
     }
     start

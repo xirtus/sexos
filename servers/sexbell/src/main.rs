@@ -8,6 +8,7 @@ mod resample;
 mod jack;
 mod mic;
 mod hda;
+mod hdmi;
 
 use sex_pdx::{pdx_reply, serial_println, OP_BELL_NOTIFY, OP_BELL_CLOSE, OP_BELL_ACTION,
               OP_BELL_CLEAR, OP_BELL_MUTE_SENDER, OP_BELL_LIST, OP_BELL_SUBSCRIBE, OP_BELL_SET_POLICY};
@@ -620,13 +621,19 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::restricted_helper_provider::Effect::Install(_)|sex_pdx::restricted_helper_provider::Effect::Expire(_)=>true,
             });
             restricted::publish(&restriction);
-            if !sound::busy()&&!restriction.pending() { break paging_probe::next_message(); }
+            if !sound::busy()&&!restriction.pending() { sound::quiet(); break paging_probe::next_message(); }
             // Feed the card first, so a steady inbox can't starve playback.
             sound::pump();
             if let Some(m) = paging_probe::try_next_message() { break m; }
-            if sound::busy()||restriction.pending() { let _ = sex_pdx::sys_wait_self_ticks(1); }
+            // With an interrupting card Bell sleeps until the next period ends (or a
+            // message comes); policy work still looks every tick.
+            if sound::busy()||restriction.pending() {
+                let ticks = sound::wait_ticks();
+                let _ = sex_pdx::sys_wait_self_ticks(if restriction.pending() { 1 } else { ticks });
+            }
         };
         paging_probe::check_retained();
+        if msg.type_id==sex_pdx::power::OP_DEVICE_SLEEP&&msg.caller_pd==0{let groups=sound::device_sleep(msg.arg0==1);sex_pdx::serial_record!("[bell.sleep] asleep={} codec_groups={}",msg.arg0,groups);continue;}
         if restriction.message(sex_pdx::restricted_helper_provider::Message{caller:sex_pdx::restricted_helper::Subject{pd:msg.caller_pd,task:msg.caller_task},opcode:msg.type_id,words:[msg.arg0,msg.arg1,msg.arg2]},&restricted::JOURNAL,&mut restricted::Kernel){restricted::publish(&restriction);continue;}
         if restricted::denied(msg.caller_pd){continue;}
 

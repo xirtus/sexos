@@ -141,7 +141,16 @@ pub fn request_v14(out: &mut [u8; REQUEST_V14_BYTES], channels: &[Channel], o: &
 }
 
 /// A frame the firmware passed up, with what the receiver measured.
-pub struct Received<'a> { pub frame: &'a [u8], pub rssi: i16, pub channel: u8, pub status: u32 }
+pub struct Received<'a> {
+    pub frame: &'a [u8], pub rssi: i16, pub channel: u8, pub status: u32,
+    /// For one subframe of an A-MSDU the hardware split up: its index (the
+    /// subframes share the 802.11 header, sequence and packet number).
+    pub subframe: Option<u8>,
+    /// The descriptor's reorder word (`IWX_RX_MPDU_REORDER_*`: NSSN, SN, BAID).
+    pub reorder: u32,
+}
+const MPDU_AMSDU: u8 = 0x40;
+const AMSDU_SUBFRAME_MASK: u8 = 0x7f;
 
 /// Reads an RX MPDU notification (`iwx_rx_mpdu_mq`): the descriptor, then the
 /// 802.11 frame. A padded header is joined to its body in `scratch`.
@@ -169,7 +178,9 @@ pub fn parse_mpdu<'a>(p: &'a Packet<'_>, family: Family, scratch: &'a mut [u8; 4
         }
         _ => body,
     };
-    Some(Received { frame, rssi, channel, status })
+    let subframe = (d[3] & MPDU_AMSDU != 0).then_some(d[4] & AMSDU_SUBFRAME_MASK);
+    let reorder = u32::from_le_bytes(d[16..20].try_into().unwrap());
+    Some(Received { frame, rssi, channel, status, subframe, reorder })
 }
 
 /// One network heard, keeping the strongest signal.

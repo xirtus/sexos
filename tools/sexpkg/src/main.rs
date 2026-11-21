@@ -7,6 +7,8 @@
 //!   sexpkg public KEY            prints KEY's public half (what `pkg trust` takes)
 //!   sexpkg verify PUB PACKAGE    checks a package against a public key, lists it
 //!   sexpkg index KEY DIR         writes DIR/sexos-store.txt and .sig for DIR/*.sexpkg
+//!       (DIR/NAME.store, if present, adds the store page: category, featured,
+//!       description, icon and screenshots)
 //!
 //! KEY is a file holding a 64-digit hex secret seed, "-" for SEXPKG_SECRET, or "test"
 //! for the gates' public test key (trusted only after `pkg trust` with its public half).
@@ -27,6 +29,32 @@ fn seed(key: &str) -> [u8; 32] {
     };
     let line: String = text.lines().filter(|l| !l.trim_start().starts_with('#')).collect();
     sex_pkg::unhex::<32>(line.trim().as_bytes()).unwrap_or_else(|| die("the key is not 64 hex digits"))
+}
+
+/// The store page fields for one package, from `DIR/NAME.store` if there is one:
+/// `category=WORD`, `featured=1`, `description=TEXT` (lines may repeat; they join with
+/// new lines), `icon=FILE` and `screenshot=FILE` (relative to DIR; their hashes go into
+/// the signed catalog).
+fn page(dir: &Path, item: &mut index::Item) {
+    let side = dir.join(format!("{}.store", item.name));
+    let Ok(text) = std::fs::read_to_string(&side) else { return };
+    let asset = |file: &str| {
+        let bytes = read(&dir.join(file).to_string_lossy());
+        if !sex_pkg::valid_rel(file) || !index::is_picture(file) { die(&format!("{}: {file} is not a picture path inside the store folder", side.display())); }
+        index::Asset { file: file.into(), sha256: Sha256::digest(&bytes).into() }
+    };
+    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        let (k, v) = line.split_once('=').unwrap_or_else(|| die(&format!("{}: lines are key=value", side.display())));
+        let v = v.trim();
+        match k.trim() {
+            "category" if sex_pkg::valid_name(v) => item.category = v.into(),
+            "featured" => item.featured = v == "1" || v == "yes",
+            "description" => { if !item.description.is_empty() { item.description.push('\n'); } item.description.push_str(v); }
+            "icon" => item.icon = Some(asset(v)),
+            "screenshot" if item.screenshots.len() < index::SCREENSHOTS_MAX => item.screenshots.push(asset(v)),
+            _ => die(&format!("{}: unknown or bad line: {line}", side.display())),
+        }
+    }
 }
 
 fn main() {
@@ -63,7 +91,9 @@ fn main() {
                 let bytes = std::fs::read(&p).unwrap_or_else(|e| die(&format!("{}: {e}", p.display())));
                 let (layout, _) = sex_pkg::verify(&bytes, &[sex_pkg::public_key(s)]).unwrap_or_else(|e| die(&format!("{}: {}", p.display(), e.why())));
                 let m = layout.manifest;
-                items.push(index::Item { name: m.name, version: m.version, file: p.file_name().unwrap().to_string_lossy().into(), bytes: bytes.len() as u64, sha256: Sha256::digest(&bytes).into(), grants: m.grants, summary: m.summary });
+                let mut item = index::Item { name: m.name, version: m.version, file: p.file_name().unwrap().to_string_lossy().into(), bytes: bytes.len() as u64, sha256: Sha256::digest(&bytes).into(), grants: m.grants, summary: m.summary, ..Default::default() };
+                page(Path::new(dir), &mut item);
+                items.push(item);
             }
             let mut text = String::from("# SexOS store\n");
             for i in &items { text.push_str(&index::line(i)); }

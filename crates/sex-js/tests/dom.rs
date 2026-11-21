@@ -1947,3 +1947,50 @@ fn seeked_reports_the_asked_time() {
     s.dispatch(&format!("media\t{id}\tseeked,timeupdate\t6.12\t10\t0\t0\t320\t240\t4")).unwrap();
     assert_eq!(logs(&mut s), ["0:seeked 6 false", "0:time 6.12"]);
 }
+
+#[test]
+fn code_cache_saved_entries_come_back_after_a_restart_for_the_same_site_only() {
+    use sex_js::code_cache::{decode, encode};
+    use std::{cell::RefCell, rc::Rc};
+    let classic = padded("function g(a) { return a + 1; }\nconsole.log('g', g(1));");
+    let module = padded("export const v = 7; console.log('m', v);");
+    let visit = |cache: &Rc<RefCell<sex_js::CodeCache>>| {
+        let mut s = page("");
+        s.page_mut().code_cache = Some(cache.clone());
+        s.eval(&classic, "http://site.test/c.js").unwrap();
+        run_module(&mut s, &module, "http://site.test/m.js", &[]).unwrap();
+        logs(&mut s)
+    };
+    // First run: the module is written at once, the classic script only noted as seen.
+    let first = Rc::new(RefCell::new(sex_js::CodeCache::new(16 << 20)));
+    first.borrow_mut().set_partition(b"http://site.test");
+    first.borrow_mut().persist = true;
+    let out = visit(&first);
+    let fresh = first.borrow_mut().take_fresh();
+    let seen = first.borrow_mut().take_seen();
+    assert_eq!((fresh.len(), seen.len()), (1, 1));
+    assert!(!first.borrow().has_fresh());
+    let saved: Vec<_> = fresh.iter().map(|(k, c)| (*k, encode(k, c))).collect();
+
+    // Second run of the browser, same site: saved entries are found, and the classic
+    // script seen last run is written now.
+    let restart = |origin: &[u8]| {
+        let c = Rc::new(RefCell::new(sex_js::CodeCache::new(16 << 20)));
+        c.borrow_mut().set_partition(origin);
+        c.borrow_mut().persist = true;
+        for (k, s) in &saved { c.borrow_mut().insert_loaded(*k, decode(k, s).unwrap()); }
+        for k in &seen { c.borrow_mut().insert_seen(*k); }
+        c
+    };
+    let second = restart(b"http://site.test");
+    assert_eq!(visit(&second), out);
+    assert!(second.borrow().hits >= 1, "the module came back from storage");
+    assert_eq!(second.borrow_mut().take_fresh().len(), 1, "the classic script is written on its second sighting");
+
+    // Another site never finds the first site's bytecode.
+    let other = restart(b"http://other.test");
+    assert_eq!(visit(&other), out);
+    assert_eq!(other.borrow().hits, first.borrow().hits, "as cold as the very first run");
+    let own = other.borrow_mut().take_fresh();
+    assert!(!own.is_empty() && own.iter().all(|(k, _)| saved.iter().all(|(s, _)| s != k)), "its own entries, under its own keys");
+}

@@ -1,0 +1,5 @@
+# Actual recorder end-to-end gate source
+
+The new desktop_recording_guest_gate.py boots the supplied sealed opt-in ISO with the supplied recorder installed under /bin/record, starts through real Spindle intent, waits for actual CPU-published Display indicator/frame events, stops through real intent, and requires revoke/scrub before the app's Saved summary. It then extracts /recordings/desktop.mkv and independently checks FFV1/BGR0 640x360, actual encoded frame count, increasing guest publication-derived PTS and complete decode length. The decoded first frame must be nonuniform. ISO/program/extractor/gate/helper/file/decode hashes are retained.
+
+The app emits one Saved summary only after actual SYNC and capture Release. Its frame counter counts successful encoder admissions, not Display publications. This gate does not establish exact framebuffer pixel correspondence, cross-key denial, crash recovery or hardware suitability; those remain separate gates. Source parsed successfully, no guest or compiler run yet while the shared heavy slot is owned by other lanes.

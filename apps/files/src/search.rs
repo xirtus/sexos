@@ -6,6 +6,10 @@
 //! size and modification time; a later search reads only files that changed since, so
 //! looking again is quick. A file whose time is unknown (some disks keep none) is read
 //! again each time rather than trusted.
+//!
+//! The same index answers Voyeur, the system search ([`Index::lookup`]): when Files
+//! starts it walks its folder once in the background ([`Search::crawl`]) so the words
+//! are there before anyone searches here.
 
 use alloc::collections::{BTreeMap, BTreeSet, VecDeque};
 use alloc::vec;
@@ -59,6 +63,31 @@ impl Index {
 }
 fn num(b: &[u8]) -> Option<u64> { core::str::from_utf8(b).ok()?.parse().ok() }
 
+/// Voyeur's handle for a path (FNV-1a): Files finds the path again by it.
+pub fn key(path: &[u8]) -> u64 { path.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100_0000_01b3)) }
+
+impl Index {
+    /// Up to `most` indexed files for `query` (space-separated terms, any case): those
+    /// whose name holds every term first, then those with a word starting with each.
+    /// (path, by words).
+    pub fn lookup(&mut self, window: &mut Window, query: &[u8], most: usize) -> Vec<(Vec<u8>, bool)> {
+        self.load(window);
+        let terms: Vec<Vec<u8>> = query.split(|b| *b == b' ').filter(|t| !t.is_empty()).map(|t| t.to_ascii_lowercase()).collect();
+        if terms.is_empty() { return Vec::new(); }
+        let named = |p: &[u8]| { let n = p.rsplit(|b| *b == b'/').next().unwrap_or(p).to_ascii_lowercase(); terms.iter().all(|t| n.windows(t.len()).any(|w| w == &t[..])) };
+        let worded = |k: &Known| terms.iter().all(|t| { let i = k.words.partition_point(|w| w < t); k.words.get(i).is_some_and(|w| w.starts_with(t)) });
+        let mut out: Vec<(Vec<u8>, bool)> = self.files.keys().filter(|p| named(p)).take(most).map(|p| (p.clone(), false)).collect();
+        for (p, k) in &self.files {
+            if out.len() >= most { break; }
+            if !named(p) && worded(k) { out.push((p.clone(), true)); }
+        }
+        out
+    }
+    /// The indexed path Voyeur's `key` names.
+    pub fn path_for(&self, k: u64) -> Option<Vec<u8>> { self.files.keys().find(|p| key(p) == k).cloned() }
+    pub fn len(&self) -> usize { self.files.len() }
+}
+
 /// Lower-case words of letters and digits, 2 to 32 bytes, each once.
 fn words(text: &[u8]) -> Vec<Vec<u8>> {
     let mut set = BTreeSet::new();
@@ -86,6 +115,8 @@ pub struct Search {
     pub read: u64,
     seen: BTreeSet<Vec<u8>>,
     pub started: u64,
+    /// Only indexing (no terms, no results): Files' walk at start.
+    crawl: bool,
 }
 
 impl Search {
@@ -93,8 +124,10 @@ impl Search {
         index.load(window);
         let terms = query.split(|b| *b == b' ').filter(|t| !t.is_empty()).map(|t| t.to_ascii_lowercase()).collect();
         Search { query: query.to_vec(), terms, base: base.to_vec(), dirs: VecDeque::from([base.to_vec()]), pending: VecDeque::new(), results: Vec::new(),
-                 looked: 0, read: 0, seen: BTreeSet::new(), started: sex_pdx::get_ticks() }
+                 looked: 0, read: 0, seen: BTreeSet::new(), started: sex_pdx::get_ticks(), crawl: false }
     }
+    /// Walks `base` only to bring the index up to date.
+    pub fn crawl(window: &mut Window, index: &mut Index, base: &[u8]) -> Self { Search { crawl: true, ..Self::new(window, index, base, b"") } }
     fn rel<'a>(&self, path: &'a [u8]) -> &'a [u8] {
         let r = &path[self.base.len().min(path.len())..];
         r.strip_prefix(b"/").unwrap_or(r)
@@ -111,7 +144,7 @@ impl Search {
         })
     }
     pub fn step(&mut self, window: &mut Window, index: &mut Index) -> Step {
-        if self.terms.is_empty() { return Step::Done; }
+        if self.terms.is_empty() && !self.crawl { return Step::Done; }
         if let Some((path, size)) = self.pending.pop_front() {
             self.looked += 1;
             self.seen.insert(path.clone());
@@ -130,8 +163,12 @@ impl Search {
                     index.changed = true;
                 }
                 content_hit = index.files.get(&path).is_some_and(|k| self.word_hit(&k.words));
+            } else if !index.files.contains_key(&path) {
+                // Too big to read: known by name only.
+                index.files.insert(path.clone(), Known { size, mtime: 0, words: Vec::new() });
+                index.changed = true;
             }
-            if (name_hit || content_hit) && self.results.len() < RESULTS_MAX {
+            if (name_hit || content_hit) && !self.crawl && self.results.len() < RESULTS_MAX {
                 let rel = self.rel(&path).to_vec();
                 self.results.push(Found { path: rel, by_words: !name_hit && content_hit, size, dir: false });
             }
@@ -142,7 +179,7 @@ impl Search {
                 if e.name == crate::TRASH || e.name.first() == Some(&b'.') && e.name.ends_with(b".part") { continue; }
                 let path = join(&dir, &e.name);
                 if e.dir {
-                    if self.name_hit(&path) && self.results.len() < RESULTS_MAX { let rel = self.rel(&path).to_vec(); self.results.push(Found { path: rel, by_words: false, size: 0, dir: true }); }
+                    if self.name_hit(&path) && !self.crawl && self.results.len() < RESULTS_MAX { let rel = self.rel(&path).to_vec(); self.results.push(Found { path: rel, by_words: false, size: 0, dir: true }); }
                     self.dirs.push_back(path);
                 } else { self.pending.push_back((path, e.size)); }
             }

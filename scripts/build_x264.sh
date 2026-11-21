@@ -3,8 +3,8 @@
 # Builds x264 (the H.264 encoder) for SexOS programs as a static archive for
 # x86_64-sex-app.json, with the same flags as FFmpeg (scripts/build_ffmpeg.sh runs this
 # first for the export profile). Splicy exports MP4 with H.264 + AAC through it.
-# One thread; x264 checks XCR0 at run time, so its AVX code stays off, as the kernel
-# keeps only x87 and SSE state. C calls go to crates/sex-libc.
+# One thread; x264 checks CPUID and XCR0 at run time, so its AVX/AVX2/FMA code runs
+# where the CPU has it (the kernel saves AVX state since #408) and SSE code elsewhere. C calls go to crates/sex-libc.
 #
 # x264 is GPL-2.0-or-later, so the export profile builds FFmpeg with --enable-gpl;
 # SexOS is GPL-3.0. H.264 itself is patent-licensed in some countries.
