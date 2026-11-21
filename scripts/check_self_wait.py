@@ -342,7 +342,7 @@ def _task_ordinals_ok(records):
 # combinations need independent review and an exact new fingerprint.
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
  'servers/silk-shell/src/main.rs': 'wait-v1:8f387c104199b88d2ea09b2248a64cde8d22b6ca7655b967b87b072e88ce687b',
- 'crates/sex-pdx/src/system_stats.rs': '2f41c001a47809131a3b47adfbf3a799de5bc0da44f86098a6d7b307aadb437f',
+ 'crates/sex-pdx/src/system_stats.rs': '80a340a08a8ca1a73ec9e8ca0a719b0614e7b555870424f3cf3656c5f014f7e6',
  'crates/sex-pdx/src/crash_log.rs': '4930c8a6ca16756e9421cc1b1c8dca8a0301413cb0f3694189005fa90579ae22',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).

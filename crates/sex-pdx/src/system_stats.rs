@@ -19,7 +19,7 @@ pub const OP_SET_NAME: u64 = 4;
 pub const OP_KERNEL: u64 = 5;
 /// rsi = domain (0: the machine) → rsi = pages Denim holds packed for the domain's run
 /// (the machine: for every run), rdx = pages Denim's store takes (the machine only).
-pub const OP_PACKED: u64 = 6;
+pub const OP_PACKED: u64 = 10;
 pub const OK: u64 = 0;
 pub const INVALID: u64 = 1;
 pub const NONE: u64 = 2;

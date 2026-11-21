@@ -15,6 +15,7 @@ pub const OP_ORGAN: u64 = 8;
 /// capability to; NONE when there is none. IPC v2 endpoints name objects, not domains,
 /// so they are counted by OP_ORGAN but not linked. Numbers only, never the capability.
 pub const OP_LINK: u64 = 9;
+// 10 is `system_stats::OP_PACKED` (Denim's packed pages).
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Core { pub idle_cycles: u64, pub running: u32, pub tsc: u64 }
