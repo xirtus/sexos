@@ -214,7 +214,7 @@ unsafe fn send(regs: &mut SyscallRegs, slot: u32, kind: CallKind) -> u64 {
 fn reply(regs: &SyscallRegs, me: TaskId) -> u64 {
     let Ok(words) = message(regs) else { return E_BADMSG };
     match ipc(me).reply.take(&OBJECTS) {
-        Ok(cap) => { complete(cap.caller, [0, 0, words[0], words[1], words[2], words[3]], true); 0 }
+        Ok(cap) => { crate::scheduler::pair::note_answer(cap.caller as *mut Task); complete(cap.caller, [0, 0, words[0], words[1], words[2], words[3]], true); 0 }
         Err(_) => E_GONE,
     }
 }

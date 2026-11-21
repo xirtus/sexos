@@ -12,6 +12,7 @@
 #[path = "../../../servers/sexbell/src/hda.rs"] mod hda;
 #[path = "../../../servers/sexbell/src/mic.rs"] mod mic;
 #[path = "../../../servers/sexbell/src/jack.rs"] mod jack;
+#[path = "../../../servers/sexbell/src/hdmi.rs"] mod hdmi;
 use core::mem::size_of;
 
 mod device_model {
@@ -125,7 +126,9 @@ fn run(d: &[u8]) {
     }));
     let view = sex_pdx::memory_region::RegionView { region_id: 1, virtual_address: 0x1000, length: MMIO_LEN as u64, dma_address: None };
     let pool = sex_pdx::memory_region::RegionView { region_id: 2, virtual_address: base as u64, length: len as u64, dma_address: Some(base as u64) };
-    if let Ok(mut h) = hda::Hda::open(view, pool) {
+    // Half the inputs run with an interrupt vector (period-end IOC, INTCTL, ack).
+    let irq = gcap & 1 != 0;
+    if let Ok(mut h) = hda::Hda::open(view, pool, irq) {
         let _ = (h.has_mic(), h.mic_inputs());
         for k in 0..hda::MAX_OUTPUTS { let _ = h.output(k); }
         let mut period = [0u8; hda::PERIOD_BYTES];
@@ -139,7 +142,7 @@ fn run(d: &[u8]) {
                 3 => { let _ = h.mic_take(&mut mic); }
                 4 => { let _ = h.mic_stop(); }
                 5 => { if let Some(t) = h.submit(&period) { let _ = h.done(t); } }
-                6 => { let _ = h.room(); }
+                6 => { let _ = h.room(); h.arm(ops & 8 != 0); let _ = h.ack(); }
                 _ => { let _ = h.done((ops >> 8) as u16); }
             }
             period[0] = period[0].wrapping_add(1);

@@ -7,13 +7,15 @@ use sex_hwdb::manifest::Lease;
 // Which device goes to which service is data: the driver manifests in
 // `sex_hwdb::manifest`. This file only builds leases of each kind.
 
-pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32, sexbell_pd_id: u32, sexinput_pd_id: u32) {
+pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexnet_pd_id: u32, sexbell_pd_id: u32, sexinput_pd_id: u32, sexgpu_pd_id: u32) {
     serial_println!("DevMgr: Starting hardware discovery...");
 
     let mut devices = HAL.enumerate_pci();
     // Drives behind Intel VMD (RST "RAID On") join the list as ordinary devices.
     crate::vmd::expand(&mut devices);
     serial_println!("DevMgr: Enumerated {} PCI devices.", devices.len());
+    // Link power states before any driver touches its device.
+    crate::pci_power::boot(&devices);
 
     let mut census = sex_hwdb::Census::default();
     for dev in &devices { census_line(&mut census, dev); }
@@ -21,13 +23,15 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
         census.devices, census.working, census.in_progress, census.planned, census.unsupported, census.warnings);
 
     let behind_vmd = devices.iter().any(|d| sex_hwdb::is_vmd(id(d)));
-    let services = Services { drive: sexdrive_pd_id, display: sexdisplay_pd_id, usb: sexusb_pd_id, net: sexnet_pd_id, bell: sexbell_pd_id, input: sexinput_pd_id };
+    let services = Services { drive: sexdrive_pd_id, display: sexdisplay_pd_id, usb: sexusb_pd_id, net: sexnet_pd_id, bell: sexbell_pd_id, input: sexinput_pd_id, gpu: sexgpu_pd_id };
     let mut held = [0u8; sex_hwdb::manifest::ALL.len()];
     let mut nvme = 0u32;
     let safe = crate::safe_start();
     if safe { serial_println!("[kernel.safe_start] skipped=dgpu_power_off,iommu,msi,wifi,sound,touchpad,intel_display"); }
     for dev in devices {
-        let Some((manifest, entry)) = sex_hwdb::manifest::claim(id(&dev)) else { continue };
+        // A service this boot did not start passes its devices on (the NVIDIA GPU to
+        // Display) instead of leaving them unleased.
+        let Some((manifest, entry)) = sex_hwdb::manifest::claim_present(id(&dev), |s| s != sex_hwdb::Service::Gpu || services.gpu != 0) else { continue };
         let index = sex_hwdb::manifest::ALL.iter().position(|m| m.service == manifest.service).unwrap_or(0);
         if entry.lease == Lease::Nvme { nvme += 1; }
         let owner = services.owner(manifest.service);
@@ -77,9 +81,12 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
             Lease::Ahci => class_lease(&dev, crate::device_lease::Kind::Ahci, pd, slot, first),
             Lease::Wifi => class_lease(&dev, crate::device_lease::Kind::Wifi, pd, slot, first),
             Lease::SerialIo => class_lease(&dev, crate::device_lease::Kind::SerialIo, pd, slot, first),
+            Lease::Thunderbolt => class_lease(&dev, crate::device_lease::Kind::Thunderbolt, pd, slot, first),
+            Lease::NvidiaGpu => class_lease(&dev, crate::device_lease::Kind::NvidiaGpu, pd, slot, first),
             Lease::Virtio => virtio(&dev, pd, slot, first),
             Lease::Display => display_lease(&dev, pd),
-            Lease::IntelDisplay => intel_display_lease(&dev, pd, slot),
+            Lease::IntelDisplay => display_registers_lease(&dev, pd, slot, 0, sex_pdx::display_frames::INTEL_REGISTERS),
+            Lease::AmdDisplay => display_registers_lease(&dev, pd, slot, sex_pdx::display_frames::AMD_REGISTER_BAR, sex_pdx::display_frames::AMD_REGISTERS),
         };
         if !leased { continue; }
         held[index] += 1;
@@ -91,8 +98,12 @@ pub fn init(sexdrive_pd_id: u32, sexdisplay_pd_id: u32, sexusb_pd_id: u32, sexne
         let index = sex_hwdb::manifest::ALL.iter().position(|m| m.service == service).unwrap_or(0);
         if held[index] != 0 { crate::device_irq::reserve_lines(services.owner(service), lines); }
     }
-    serial_println!("[devmgr.manifest] services={} drive={} usb={} net={} bell={} display={} input={}",
-        sex_hwdb::manifest::ALL.len(), held[0], held[1], held[2], held[3], held[4], held[5]);
+    let held_by = |s: sex_hwdb::Service| sex_hwdb::manifest::ALL.iter().position(|m| m.service == s).map_or(0, |i| held[i]);
+    {
+        use sex_hwdb::Service::*;
+        serial_println!("[devmgr.manifest] services={} drive={} usb={} net={} bell={} display={} input={} gpu={}",
+            sex_hwdb::manifest::ALL.len(), held_by(Drive), held_by(Usb), held_by(Net), held_by(Bell), held_by(Display), held_by(Input), held_by(Gpu));
+    }
 
     if nvme == 0 {
         serial_println!("[kernel.pci.nvme.absent] behind_vmd={}", behind_vmd as u8);
@@ -105,7 +116,7 @@ fn id(dev: &crate::hal::pci::PciDevice) -> sex_hwdb::Id {
 }
 
 /// The domains BOOT started for each driver service.
-struct Services { drive: u32, display: u32, usb: u32, net: u32, bell: u32, input: u32 }
+struct Services { drive: u32, display: u32, usb: u32, net: u32, bell: u32, input: u32, gpu: u32 }
 impl Services {
     fn owner(&self, service: sex_hwdb::Service) -> u32 {
         use sex_hwdb::Service::*;
@@ -117,6 +128,7 @@ impl Services {
             Bell => self.bell,
             Display => self.display,
             Input => self.input,
+            Gpu => self.gpu,
             _ => 0,
         }
     }
@@ -183,18 +195,19 @@ fn display_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain) -> boo
     true
 }
 
-/// Intel display engine: a read/write view of its display registers so Display
-/// can read what firmware lit and talk to the panel over AUX. No command grant
-/// (firmware left memory decode on) and no DMA pool.
-fn intel_display_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64) -> bool {
-    let Some(view) = crate::boot_memory::intel_display_bar(pd, dev, slot) else {
-        serial_println!("[kernel.cap.display.skip] device={:04x} reason=bar0", dev.device_id); return false;
+/// Intel or AMD display engine: a read/write view of its display registers so
+/// Display can read what firmware lit and talk to the panel over AUX. No command
+/// grant (firmware left memory decode on) and no DMA pool.
+fn display_registers_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64, bar: u8, length: u64) -> bool {
+    let Some(view) = crate::boot_memory::display_register_bar(pd, dev, slot, bar, length) else {
+        serial_println!("[kernel.cap.display.skip] vendor={:04x} device={:04x} reason=bar{}", dev.vendor_id, dev.device_id, bar); return false;
     };
     pd.grant_capability(slot, CapabilityData::Pci(PciCapData {
         bus: dev.bus, dev: dev.dev, func: dev.func, vendor_id: dev.vendor_id, device_id: dev.device_id,
         bar0_view: Some(view), command: None, virtio: None, class: 0x03_00_00 | dev.prog_if as u32, window: (0, view.length as u32),
     }));
-    serial_println!("[kernel.cap.display.grant] pd={} slot={} device={:04x} bytes={}", pd.id, slot, dev.device_id, view.length);
+    serial_println!("[kernel.cap.display.grant] pd={} slot={} vendor={:04x} device={:04x} bar={} bytes={}", pd.id, slot, dev.vendor_id, dev.device_id, bar, view.length);
+    if dev.vendor_id == 0x8086 { crate::boot_memory::intel_scanout(pd, dev); }
     true
 }
 
@@ -245,6 +258,10 @@ fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind
     };
     if kind == crate::device_lease::Kind::SerialIo && crate::device_lease::wake_d0(dev) {
         serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind=SerialIo", dev.bus, dev.dev, dev.func);
+    }
+    if kind == crate::device_lease::Kind::Thunderbolt {
+        let ready = crate::device_lease::force_power(dev);
+        serial_println!("[kernel.pci.tb.force_power] {:02x}:{:02x}.{} fw_ready={}", dev.bus, dev.dev, dev.func, ready >> 31);
     }
     let command = crate::boot_memory::class_command(pd, dev, slot, view, kind);
     pd.grant_capability(slot, CapabilityData::Pci(PciCapData {

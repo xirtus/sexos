@@ -164,7 +164,7 @@ impl Browser {
                             let mut seed = sex_pdx::get_ticks() ^ ((id as u64) << 32) ^ 0x2545_F491_4F6C_DD1D;
                             let key = random_bytes(&mut seed);
                             let origin = super::origin_of(&page).unwrap_or_else(|| String::from("null"));
-                            let cookie = self.jar.borrow().header(&t, wall());
+                            let cookie = if super::cookie_ok(&self.shields, &page, &t, sex_shields::Kind::WebSocket) { self.jar.borrow().header(&t, wall()) } else { None };
                             let protocols: Vec<&str> = c.protocols.iter().map(String::as_str).collect();
                             let (req, key) = ws::handshake(&t, &key, &origin, &protocols, cookie.as_deref());
                             c.key = key;

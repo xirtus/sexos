@@ -197,3 +197,36 @@ fn writes(ops:&[Op],n:u32)->Vec<u32>{ops.iter().filter_map(|op|match op{Op::Writ
   }
   for advanced in [0xc000,0xc028,0xe000,0xe028,0x1528,0x20]{assert!(writes(&ops,advanced).is_empty());}}
 }
+#[test]fn interrupts_arm_only_once_running_and_msi_parts_unmask_the_legacy_causes_after_clearing_stale_ones(){
+ let m=Mock::new(c::Model::I219);let mut d=Driver::new(m.clone(),MAC,0);assert!(!d.arm_interrupts(false));
+ let mut d=ready(&m);m.0.borrow_mut().regs.insert(0xc0,0x84);let start=m.ops().len();
+ assert!(d.arm_interrupts(false));let ops=&m.ops()[start..];
+ assert_eq!(writes(ops,0xc0),vec![0x84]);assert_eq!(writes(ops,0xd0),vec![ethernet::IRQ_CAUSES]);
+ assert!(writes(ops,0xe4).is_empty()&&writes(ops,0x1514).is_empty());
+ let clear=ops.iter().position(|o|*o==Op::Write(0xc0,0x84)).unwrap();let unmask=ops.iter().position(|o|*o==Op::Write(0xd0,ethernet::IRQ_CAUSES)).unwrap();assert!(clear<unmask);
+}
+#[test]fn igb_and_igc_in_msix_mode_route_queue_zero_and_other_causes_to_vector_zero(){
+ for model in [c::Model::I82576,c::Model::I210,c::Model::I350,c::Model::I225]{
+  let m=Mock::new(model);let mut d=ready(&m);m.0.borrow_mut().regs.insert(0x1700,0xdead_0000);m.0.borrow_mut().regs.insert(0x1740,0x0000_00ab);
+  let start=m.ops().len();assert!(d.arm_interrupts(true),"{:?}",model);let ops=&m.ops()[start..];
+  assert_eq!(m.0.borrow().regs[&0x1514]&((1<<4)|(1<<31)),(1<<4)|(1<<31));
+  assert_eq!(writes(ops,0x1700),vec![0xdead_8080]);assert_eq!(writes(ops,0x1740),vec![0x0000_80ab]);
+  assert_eq!(writes(ops,0x152c),vec![1]);assert_eq!(writes(ops,0x1524),vec![1]);assert_eq!(writes(ops,0xd0),vec![1<<2]);
+  // In MSI mode the same parts use the legacy causes.
+  let m=Mock::new(model);let mut d=ready(&m);let start=m.ops().len();assert!(d.arm_interrupts(false));
+  assert_eq!(writes(&m.ops()[start..],0xd0),vec![ethernet::IRQ_CAUSES]);assert!(writes(&m.ops()[start..],0x1700).is_empty());
+ }
+}
+#[test]fn i82574_in_msix_mode_sets_its_ivar_and_queue_causes(){
+ let m=Mock::new(c::Model::I82574);let mut d=ready(&m);let start=m.ops().len();assert!(d.arm_interrupts(true));let ops=&m.ops()[start..];
+ assert_eq!(writes(ops,0xe4),vec![(1<<3)|(1<<11)|(1<<19)|(1<<31)]);assert_ne!(m.0.borrow().regs[&0x18]&(1<<31),0);
+ assert_eq!(writes(ops,0xd0),vec![ethernet::IRQ_CAUSES|(1<<20)|(1<<22)|(1<<24)]);
+}
+#[test]fn acknowledge_writes_raised_causes_back_and_disarm_masks_everything(){
+ let m=Mock::new(c::Model::I225);let mut d=ready(&m);assert!(d.arm_interrupts(true));
+ m.0.borrow_mut().regs.insert(0xc0,0x80);let start=m.ops().len();assert_eq!(d.acknowledge_interrupts(),0x80);
+ assert_eq!(writes(&m.ops()[start..],0xc0),vec![0x80]);assert_eq!(writes(&m.ops()[start..],0x1580),vec![1]);
+ m.0.borrow_mut().regs.insert(0xc0,0);let start=m.ops().len();assert_eq!(d.acknowledge_interrupts(),0);assert!(writes(&m.ops()[start..],0xc0).is_empty());
+ let start=m.ops().len();d.disarm_interrupts();assert_eq!(writes(&m.ops()[start..],0xd8),vec![u32::MAX]);assert_eq!(writes(&m.ops()[start..],0x1528),vec![u32::MAX]);
+ let m=Mock::new(c::Model::I219);let mut d=ready(&m);let start=m.ops().len();d.disarm_interrupts();assert!(writes(&m.ops()[start..],0x1528).is_empty());
+}

@@ -63,6 +63,10 @@ fn manifest_and_locale() {
     assert_eq!(m2.popup.as_deref(), Some("popup.html"));
     assert!(m2.host_permissions[0].matches("https://b.a.com/"));
     assert_eq!(Manifest::parse(r#"{"manifest_version":4,"name":"x"}"#).unwrap_err(), Error::Version);
+    // MV3 side panel: its page, kept inside the extension.
+    let m3 = Manifest::parse(r#"{"manifest_version":3,"name":"P","version":"1","side_panel":{"default_path":"panel/side.html"}}"#).unwrap();
+    assert_eq!(m3.side_panel.as_deref(), Some("panel/side.html"));
+    assert_eq!(Manifest::parse(r#"{"manifest_version":3,"name":"P","version":"1","side_panel":{"default_path":"../x.html"}}"#).unwrap().side_panel, None);
 }
 
 #[test]
@@ -175,4 +179,18 @@ fn dnr_cannot_smuggle_filter_syntax() {
         for f in &c.filters { assert!(!f.contains('#'), "{f}"); let _ = engine.add_filter(f); }
         assert_eq!(engine.counts().cosmetic, 0);
     }
+}
+
+/// With `SEXOS_DNR_RULESETS` naming ruleset files (uBlock Origin Lite's, say), counts
+/// what converts.
+#[test]
+fn real_rulesets() {
+    let Ok(paths) = std::env::var("SEXOS_DNR_RULESETS") else { return };
+    let (mut filters, mut skipped) = (0, 0);
+    for p in paths.split(':') {
+        let c = dnr::convert(&std::fs::read_to_string(p).unwrap()).unwrap();
+        filters += c.filters.len();
+        skipped += c.skipped;
+    }
+    std::println!("filters={filters} skipped={skipped}");
 }

@@ -72,6 +72,16 @@ pub fn cr3(root: u64, view: usize, pcid: bool, stale: bool) -> u64 {
 /// INVLPG and a CR3 reload reach the current PCID only.
 pub fn stale_after_invalidate(current: usize) -> u64 { !(1u64 << current) }
 
+/// With INVPCID, the views to drop one address from at once, besides `current` (which
+/// INVLPG reaches): those this core has `entered`. A view it never entered caches
+/// nothing under its PCID here; one entered but marked stale is dropped too, harmlessly.
+pub fn invpcid_views(entered: u64, current: usize) -> u64 { entered & !(1u64 << current) }
+
+/// INVPCID types (Intel SDM, INVPCID): one address in one PCID; everything but global
+/// translations in every PCID.
+pub const INVPCID_ADDRESS: u64 = 0;
+pub const INVPCID_ALL_NONGLOBAL: u64 = 3;
+
 /// The entries of a table at `level` (3 root, 2 PDPT, 1 directory) covering `base` that
 /// reach into [start, end).
 pub fn reaching(level: u32, base: u64, start: u64, end: u64) -> core::ops::Range<usize> {

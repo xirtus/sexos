@@ -35,8 +35,11 @@ impl Win {
     fn holds(&self, x: i32, y: i32) -> bool { x >= self.x && y >= self.y && x < self.x + self.w as i32 && y < self.y + self.h as i32 }
     fn cover(&self, x: i32, y: i32) -> u8 { shape::coverage(x - self.x, y - self.y, self.w, self.h, self.r) }
     fn shade(&self, x: i32, y: i32) -> u8 {
-        let reach = self.shadow.reach() as i32;
-        if x < self.x - reach || x >= self.x + self.w as i32 + reach { return 0; }
+        // A pixel centre a whole spread or more outside the (offset) rectangle is
+        // past the fall-off (shadow_alpha's distance is at least that far).
+        let spread = self.shadow.spread as i32;
+        let (lx, ly) = (x - self.x, y - self.y - self.shadow.offset_y);
+        if lx < -spread || lx >= self.w as i32 + spread || ly < -spread || ly >= self.h as i32 + spread { return 0; }
         shape::shadow_alpha(x - self.x, y - self.y, self.w, self.h, self.r, self.shadow)
     }
 }
@@ -97,7 +100,7 @@ pub fn cycles_now() -> u64 {
 static mut CYCLES: u64 = 0;
 pub fn take_cycles() -> u64 { unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(CYCLES)) } }
 /// Compositor cycles by path for the frame-cost report: 0 fast runs, 1 per-pixel.
-static mut TALLY: [u64; 2] = [0; 2];
+static mut TALLY: [u64; 4] = [0; 4];
 pub fn tally(slot: usize, start: u64) {
     unsafe { let t = &mut *core::ptr::addr_of_mut!(TALLY); t[slot] = t[slot].wrapping_add(cycles_now().wrapping_sub(start)); }
 }
@@ -114,10 +117,47 @@ fn decorate(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, sc
     if !effects() || x0 >= x1 || x1 > w || w > crate::MAX_FB_W || y >= h { return; }
     let scale = scene.metrics.scale().max(1);
     let bar = scene.metrics.bar() as i32;
-    let focus = scene.groups.raised_focus(&scene.surfaces, scene.focus);
     let (yi, x0i, x1i) = (y as i32, x0 as i32, x1 as i32);
-    // Windows in winner order: the raised focus first, then slot order.
+    let t0 = cycles_now();
+    // The windows and their shadows are the same for every row of a frame:
+    // gathered once per frame (begin_frame), then filtered by row.
+    let cached = unsafe { &*core::ptr::addr_of!(FRAME_WINS) };
+    let mut local = FrameWins::EMPTY;
+    let frame = if cached.valid && cached.w == w && cached.h == h { cached } else { gather(&mut local, w, h, scale, bar, scene); &local };
+    let overlay = frame.overlay;
     let mut wins = [Win::EMPTY; MAX_SURFACES];
+    let mut n = 0;
+    for v in &frame.wins[..frame.n] {
+        let reach = v.shadow.reach() as i32;
+        if yi < v.y - reach || yi >= v.y + v.h as i32 + reach { continue; }
+        wins[n] = *v; n += 1;
+    }
+    split(0, t0);
+    if n == 0 { return; }
+    decorate_row(fb, y, x0, x1, w, h, scene, &wins[..n], overlay);
+}
+
+/// This frame's decorated windows in winner order (raised focus first).
+struct FrameWins { valid: bool, w: usize, h: usize, n: usize, wins: [Win; MAX_SURFACES], overlay: Option<Win> }
+impl FrameWins { const EMPTY: Self = Self { valid: false, w: 0, h: 0, n: 0, wins: [Win::EMPTY; MAX_SURFACES], overlay: None }; }
+static mut FRAME_WINS: FrameWins = FrameWins::EMPTY;
+/// Display's render of one immutable scene: rows share one gathering of the
+/// windows until end_frame. Without it each row gathers its own.
+pub fn begin_frame(w: usize, h: usize, scene: &crate::scene::SceneSnapshot) {
+    let frame = unsafe { &mut *core::ptr::addr_of_mut!(FRAME_WINS) };
+    frame.valid = false;
+    if !effects() || w == 0 || h == 0 { return; }
+    gather(frame, w, h, scene.metrics.scale().max(1), scene.metrics.bar() as i32, scene);
+}
+pub fn end_frame() { unsafe { (*core::ptr::addr_of_mut!(FRAME_WINS)).valid = false; } }
+/// Decoration cycles by part for the frame-cost report: 0 gather, 1 mark, 2 pixels.
+static mut SPLIT: [u64; 3] = [0; 3];
+fn split(slot: usize, start: u64) { unsafe { (*core::ptr::addr_of_mut!(SPLIT))[slot] = (*core::ptr::addr_of!(SPLIT))[slot].wrapping_add(cycles_now().wrapping_sub(start)); } }
+pub fn take_split() -> [u64; 3] { unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(SPLIT)) } }
+
+fn gather(frame: &mut FrameWins, w: usize, h: usize, scale: u32, bar: i32, scene: &crate::scene::SceneSnapshot) {
+    let focus = scene.groups.raised_focus(&scene.surfaces, scene.focus);
+    let wins = &mut frame.wins;
     let mut n = 0;
     let mut overlay: Option<Win> = None;
     for pass in 0..2 {
@@ -140,8 +180,6 @@ fn decorate(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, sc
                 else if focused { shape::FOCUSED.scaled(scale) } else { shape::RESTING.scaled(scale) };
             let fade = fade(s.surface_id);
             let shadow = Shadow { alpha: (shadow.alpha as u32 * fade as u32 / 255) as u8, ..shadow };
-            let reach = shadow.reach() as i32;
-            if yi < sy - reach || yi >= sy + sh as i32 + reach { continue; }
             if n < MAX_SURFACES {
                 wins[n] = Win { id: s.surface_id, x: sx, y: sy, w: sw, h: sh,
                     r: if full { 0 } else { shape::radius(scale, sw, sh) }, shadow, focused, fade };
@@ -149,8 +187,12 @@ fn decorate(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, sc
             }
         }
     }
-    if n == 0 { return; }
-    let wins = &wins[..n];
+    frame.n = n; frame.overlay = overlay; frame.w = w; frame.h = h; frame.valid = true;
+}
+
+fn decorate_row(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, scene: &crate::scene::SceneSnapshot, wins: &[Win], overlay: Option<Win>) {
+    let (yi, x0i, x1i) = (y as i32, x0 as i32, x1 as i32);
+    let t1 = cycles_now();
     // Mark the pixels that may change: shadow bands and corner arcs.
     let mut mark = [0u64; WORDS];
     let mut any = false;
@@ -171,7 +213,10 @@ fn decorate(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, sc
             }
         }
     }
+    split(1, t1);
     if !any { return; }
+    let t2 = cycles_now();
+    crate::selected_row_start();
     let back = crate::bg(y, h);
     let marked = crate::wallpaper_mark::span(y, w, h).is_some();
     let wall = |x: usize| if marked { crate::wallpaper_mark::pixel(x, y, w, h, back) } else { back };
@@ -211,7 +256,7 @@ fn decorate(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, sc
                             let Some(b) = wins[from..].iter().position(|v| v.holds(xi, yi)).map(|i| i + from) else {
                                 break shape::darken(wall(x), shade_under(xi, None));
                             };
-                            let c = shape::darken(crate::composite_pixel_selected(x, y, w, h, wall(x), scene.focus, Some(wins[b].id), scene), shade_under(xi, Some(b)));
+                            let c = shape::darken(crate::selected_pixel(x, y, w, h, wins[b].id, scene), shade_under(xi, Some(b)));
                             let k = (wins[b].cover(xi, yi) as u32 * wins[b].fade as u32 / 255) as u8;
                             if k == 255 || depth == layers.len() { break c; }
                             layers[depth] = (c, k); depth += 1; from = b + 1;
@@ -224,4 +269,5 @@ fn decorate(fb: *mut u32, y: usize, x0: usize, x1: usize, w: usize, h: usize, sc
             if out != cur { unsafe { core::ptr::write_volatile(row_ptr.add(x), out); } }
         }
     }
+    split(2, t2);
 }

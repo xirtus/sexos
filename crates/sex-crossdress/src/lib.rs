@@ -13,6 +13,12 @@
 //! - [`process`]: one process and thread, import thunks, the exit loop, vectored
 //!   exception dispatch.
 //! - [`win32`]: Windows structure layouts, status codes and the KERNEL32 subset.
+//! - [`nt`]: Wine's ntdll.dll in a cell: KUSER_SHARED_DATA, the syscall and Unix call
+//!   dispatchers, and the NT system calls served by the host (CW3).
+//! - [`wine`]: a Windows program started the Wine way (LdrInitializeThunk) with Wine's
+//!   own loader, kernel32 and kernelbase (CW3b).
+//! - [`clap`]: a Windows CLAP plugin DLL in a cell, driven by the host (the yabridge
+//!   role): descriptor, parameters, activate, sample-accurate `process`.
 //!
 //! Host-testable: the kernel is reached only through `drag_vmm::vmm::Vcpu`, and
 //! `tests/kvm.rs` runs the same cell on Linux KVM where /dev/kvm exists.
@@ -22,9 +28,12 @@ extern crate alloc;
 extern crate std;
 
 pub mod cell;
+pub mod clap;
+pub mod nt;
 pub mod pe;
 pub mod process;
 pub mod win32;
+pub mod wine;
 
 /// The CW1 test program (`test/hello.c`, built by `test/build.sh`): a real 64-bit
 /// Windows console program that prints, checks its TEB/PEB, allocates memory and
@@ -33,3 +42,28 @@ pub static TEST_EXE: &[u8] = include_bytes!("../test/hello.exe");
 
 /// The line the test program prints last when every check passed.
 pub const TEST_PASS: &str = "crossdress: all checks passed";
+
+/// The plugin test (`test/gain.c`, built by `test/build_gain.sh`): a real 64-bit Windows
+/// CLAP audio plugin DLL, "Crossdress Test Gain".
+pub static TEST_CLAP: &[u8] = include_bytes!("../test/gain.clap");
+/// The same plugin built with CROSSDRESS_MSVC_CRT (test/build_gain_msvc.sh): its memory
+/// comes from the C runtime through api-ms-win-crt-heap and vcruntime140.dll, so it loads
+/// only in a Wine process (CW5).
+pub static TEST_CLAP_MSVC: &[u8] = include_bytes!("../test/gain_msvc.clap");
+
+/// The CW3 test program (`test/wine_hello.c`, built by `test/build_wine_hello.sh`): runs
+/// on Wine's own KERNEL32, loaded by Wine's ntdll in the cell.
+pub static WINE_HELLO_EXE: &[u8] = include_bytes!("../test/wine_hello.exe");
+
+/// The line the Wine test program prints last when every check passed.
+pub const WINE_PASS: &str = "crossdress: wine checks passed";
+/// CW4: a program linked against the Universal C runtime (Wine's ucrtbase.dll), built from
+/// test/wine_crt.c by test/build_wine_crt.sh.
+pub static WINE_CRT_EXE: &[u8] = include_bytes!("../test/wine_crt.exe");
+/// What the CRT program prints when its checks pass.
+pub const CRT_PASS: &str = "crossdress: crt checks passed";
+/// CW4: a program that imports its C runtime the MSVC way (api-ms-win-crt-*.dll API sets
+/// and vcruntime140.dll), built from test/wine_msvc.c by test/build_wine_msvc.sh.
+pub static WINE_MSVC_EXE: &[u8] = include_bytes!("../test/wine_msvc.exe");
+/// What the MSVC-style program prints when its checks pass.
+pub const MSVC_PASS: &str = "crossdress: msvc checks passed";

@@ -54,6 +54,17 @@ fn cycles_of(pd: u32, t: u64) -> u64 {
     total
 }
 
+/// One online core's idle cycles (an idle run in progress included) and the domain it runs
+/// now (0 when idle), for Mesh's per-core graphs: numbers only, like the rest of this file.
+pub fn core_view(core: usize, t: u64) -> Option<(u64, u32)> {
+    if core >= cores() { return None; }
+    let running = RUNNING[core].load(Ordering::Relaxed);
+    let mut idle = IDLE_CYCLES[core].load(Ordering::Relaxed);
+    let since = SINCE[core].load(Ordering::Relaxed);
+    if running == IDLE && since != 0 && t > since { idle += t - since; }
+    Some((idle, if running == IDLE { 0 } else { running }))
+}
+
 fn named(pd: usize) -> bool { NAMES[pd][0].load(Ordering::Relaxed) != 0 }
 
 pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {

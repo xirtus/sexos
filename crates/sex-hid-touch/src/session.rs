@@ -117,6 +117,13 @@ impl Touchpad {
         let n = hid::set_power(self.hid.command_register, false, &mut cmd);
         bus.transfer(&cmd[..n], &mut [])
     }
+
+    /// Wakes the pad from `sleep` (`SET_POWER` on).
+    pub fn wake<B: Bus>(&self, bus: &mut B) -> bool {
+        let mut cmd = [0u8; 5];
+        let n = hid::set_power(self.hid.command_register, true, &mut cmd);
+        bus.transfer(&cmd[..n], &mut [])
+    }
 }
 
 #[cfg(test)]

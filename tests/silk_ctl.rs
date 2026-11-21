@@ -42,8 +42,41 @@ fn words_become_requests() {
     assert!(wire::parse(b"focus -1").is_err());
     assert!(wire::parse(b"focus 99999999999").is_err());
     assert!(wire::parse(b"layout 1 spiral").unwrap_err().contains("master"));
-    assert!(wire::parse(b"layout 1 plugin:/home/a.wasm").unwrap_err().contains("plugins"));
+    assert!(wire::parse(b"layout 1 plugin:/home/a.wasm").unwrap_err().contains("Spindle"));
     assert!(wire::parse(b"events follow 70000").is_err());
+}
+
+#[test]
+fn layout_plugins_are_named_by_file_or_built_in_name() {
+    assert_eq!(wire::layout_plugin(b"layout 1 plugin:/data/x.wasm"), Some(Ok((1, &b"/data/x.wasm"[..]))));
+    assert_eq!(wire::layout_plugin(b"layout 9 plugin:./x.wasm"), Some(Ok((9, &b"./x.wasm"[..]))));
+    assert_eq!(wire::layout_plugin(b"layout 2 plugin:spiral"), Some(Ok((2, &b"spiral"[..]))));
+    assert!(wire::layout_plugin(b"layout 2 plugin:fancy").unwrap().unwrap_err().contains("built-in"));
+    assert!(wire::layout_plugin(b"layout 0 plugin:spiral").unwrap().unwrap_err().contains("1 to 9"));
+    assert!(wire::layout_plugin(b"layout 1 plugin:").unwrap().is_err());
+    assert!(wire::layout_plugin(b"layout 1 plugin:@/x.wasm").unwrap().is_err(), "no grant words");
+    assert!(wire::layout_plugin(b"layout 1 plugin:spiral extra").unwrap().is_err());
+    // Anything else is not a plugin request.
+    assert_eq!(wire::layout_plugin(b"layout 1 dwindle"), None);
+    assert_eq!(wire::layout_plugin(b"windows"), None);
+    // One key per plugin, never 0.
+    assert_eq!(wire::plugin_key(b"/data/x.wasm"), wire::plugin_key(b"/data/x.wasm"));
+    assert_ne!(wire::plugin_key(b"/data/x.wasm"), wire::plugin_key(b"spiral"));
+    assert_ne!(wire::plugin_key(b""), 0);
+    // The request round-trips; a ticket of 0 or past 24 bits and a key of 0 are refused.
+    let key = wire::plugin_key(b"spiral");
+    let r = Request::Plugin { workspace: 3, ticket: 0xAB_CDEF, key };
+    assert_eq!(Request::decode(r.wire(77)), Some((77, r)));
+    assert_eq!(r.name(), "layout");
+    let w = r.wire(77);
+    assert_eq!(Request::decode([w[0], 3, w[2]]), None, "ticket 0");
+    assert_eq!(Request::decode([w[0], w[1] | 1 << 32, w[2]]), None, "ticket past 24 bits");
+    assert_eq!(Request::decode([w[0], w[1], 0]), None, "key 0");
+    assert_eq!(Request::decode([w[0], (w[1] & !0xFF) | 10, w[2]]), None, "workspace 10");
+    // The Shell's side: workspace 3 is scene 2.
+    assert_eq!(check(r, &[], 0), Ok(Act::Plugin { scene: 2, ticket: 0xAB_CDEF, key }));
+    let l = plugin_line(2, 0xAB, true);
+    assert_eq!(l.as_bytes(), &b"ok layout ws=3 plugin=00000000000000ab run=started (the previous layout tiles until it answers)"[..]);
 }
 
 #[test]

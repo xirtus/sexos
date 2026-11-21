@@ -40,25 +40,25 @@ def main():
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)
  def expect(text,pattern,timeout=120):
-  g['focus'](153);time.sleep(.5);s=len(t());keys(text);q.key('ret');return g['wait'](pattern,s,timeout)
+  g['focus'](153);time.sleep(.5);s=g['size']();keys(text);q.key('ret');return g['wait'](pattern,s,timeout)
  def chord(mod,key):q.cmd('send-key',{'keys':[{'type':'qcode','data':mod},{'type':'qcode','data':key}],'hold-time':80})
  base=f'http://10.0.2.2:{PORT}'
  def fetched(url,name):
   m=expect(f'fetch {base}{url} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',300);assert m[1].startswith('Saved'),m[1]
  def started(line,word):
-  s=len(t());expect(line,rf'\[{word}.ready\] target=(\d+)');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  s=g['size']();expect(line,rf'\[{word}.ready\] target=(\d+)');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](rf'\[display.text.committed\] target={m[1]} ',s,60);return m[1],m[2],int(m[3])
  def close(target,task,sid,word):
-  g['focus'](sid);time.sleep(.3);s=len(t());q.key('f11');g['wait'](rf'\[{word}.closed\] target={target} task={task}',s,60);g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
+  g['focus'](sid);time.sleep(.3);s=g['size']();q.key('f11');g['wait'](rf'\[{word}.closed\] target={target} task={task}',s,60);g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
  def key_ms():
-  g['focus'](153);time.sleep(1);s=len(t());t0=time.monotonic();q.key('x')
-  while not re.search(r'\[display\.text\.committed\] target=12 ',t()[s:]):
+  g['focus'](153);time.sleep(1);s=g['size']();t0=time.monotonic();q.key('x')
+  while not re.search(r'\[display\.text\.committed\] target=12 ',g['since'](s)):
    assert time.monotonic()-t0<30,'a key never reached the screen';time.sleep(.0005)
   ms=(time.monotonic()-t0)*1000;time.sleep(.2);q.key('backspace');return round(ms,1)
  def free_pages():
-  s=len(t());target,task,sid=started('run '+MESH,'monitor')
+  s=g['size']();target,task,sid=started('run '+MESH,'monitor')
   m=g['wait'](r'\[monitor\.sample\] [^\n]*free_pages=(\d+)',s,60)
-  g['focus'](sid);time.sleep(.3);s=len(t());q.key('f11');g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
+  g['focus'](sid);time.sleep(.3);s=g['size']();q.key('f11');g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
   return int(m[1])
  def kernel_memory():
   # Swatch (background, ends itself): kernel heap blocks/bytes and free frames.
@@ -68,7 +68,7 @@ def main():
  # Denim (compressed memory) too: a run with pages out then ends, and the Shell says which.
  VICTIMS=[('Files',11),('Network',13),('Bell',10),('Input',4),('Shell',3),('Display',1),('Denim',51)]
  def inject(n):
-  name,pd=VICTIMS[(n-1)%len(VICTIMS)];s=len(t())
+  name,pd=VICTIMS[(n-1)%len(VICTIMS)];s=g['size']()
   expect(f'crash {name.lower()}',rf'\[spindle.crash.probe\] target={pd}\b')
   g['wait'](rf'\[service.restarted\] pd={pd} task=\d+ restarts=\d+ [^\n]*admitted=1',s,180)
   if pd==3:g['wait'](r'\[shell.restarted\]',s,180)
@@ -79,7 +79,7 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   for name in ('jot','fortune','hum',MESH,'swatch'):fetched('/'+name,'/bin/'+name)
-  census0=None
+  census0=None;checked=0
   while time.monotonic()-began<a.hours*3600:
    n=len(rounds)+1;r0=time.monotonic()
    # Files: write, read back, list, remove.
@@ -94,9 +94,9 @@ def main():
    # The Browser.
    g['focus'](300);time.sleep(.5);chord('ctrl','l');time.sleep(.4)
    for _ in range(60):q.key('backspace');time.sleep(.005)
-   keys(base+'/');time.sleep(.5);s=len(t());q.key('ret');g['wait'](r'\[browser.web.page\] source=\d+',s,180)
+   keys(base+'/');time.sleep(.5);s=g['size']();q.key('ret');g['wait'](r'\[browser.web.page\] source=\d+',s,180)
    # Programs: a notepad saves, then several side by side close.
-   target,task,sid=started('run jot','jot');g['focus'](sid);time.sleep(.3);s=len(t());keys(f'r{n}');chord('ctrl','s');g['wait'](r'\[jot.saved\]',s,60);close(target,task,sid,'jot')
+   target,task,sid=started('run jot','jot');g['focus'](sid);time.sleep(.3);s=g['size']();keys(f'r{n}');chord('ctrl','s');g['wait'](r'\[jot.saved\]',s,60);close(target,task,sid,'jot')
    live=[started('run fortune','fortune') for _ in range(4)]
    for target,task,sid in reversed(live):close(target,task,sid,'fortune')
    # Background programs come and go, and every page comes back.
@@ -104,9 +104,11 @@ def main():
    g['focus'](153);time.sleep(.3);keys('stopall force');q.key('ret');time.sleep(5)
    m=expect('records',r'\[records.census\] live=(\d+) started=\d+ ended=\d+ capacity=\d+ pool_free=(\d+) pool_total=(\d+)')
    assert m[1]=='0' and m[2]==m[3],f'records left behind: {m[0]}'
-   for bad in ('KERNEL PANIC','panicked at'):assert bad not in t(),bad
+   # Faults since the last round's check (the whole log once made hours-long runs crawl).
+   new=g['since'](checked);new=new[:new.rfind('\n')+1];checked+=len(new)
+   for bad in ('KERNEL PANIC','panicked at'):assert bad not in new,bad
    # `stopall force` ends background records by taking their pages; nothing else may fault.
-   killed=[int(p) for p in re.findall(r'fault.kill \[paging.fault.terminal\] pd=(\d+)',t()) if int(p)<1024];assert not killed,f'killed: {killed}'
+   killed=[int(p) for p in re.findall(r'fault.kill \[paging.fault.terminal\] pd=(\d+)',new) if int(p)<1024];assert not killed,f'killed: {killed}'
    info['key_ms']=key_ms();info['free_pages']=free_pages();info.update(kernel_memory());rounds.append(round(time.monotonic()-r0,1));info['seconds']=rounds[-1]
    record['rounds'].append(info);save(True)
    assert info['key_ms']<=a.max_key_ms,f"round {n}: a key took {info['key_ms']} ms"
@@ -115,7 +117,8 @@ def main():
    # The kernel's own heap must not climb either (live blocks, against the first rounds' most).
    most=max(r['heap_blocks'] for r in record['rounds'][:a.warmup])
    if n>a.warmup:assert info['heap_blocks']-most<=a.leak_blocks,f"round {n}: kernel heap {info['heap_blocks']} blocks, {info['heap_blocks']-most} over the first rounds' {most}"
-   print(f'[soak] round={n} seconds={rounds[-1]} elapsed_min={round((time.monotonic()-began)/60,1)}',flush=True)
+   info['log_mb']=round(g['size']()/2**20,1)
+   print(f'[soak] round={n} seconds={rounds[-1]} key_ms={info["key_ms"]} log_mb={info["log_mb"]} elapsed_min={round((time.monotonic()-began)/60,1)}',flush=True)
   q.cmd('screendump',{'filename':str(a.out/'end.ppm')});time.sleep(.5)
   print({'ok':True,'rounds':len(rounds),'hours':round((time.monotonic()-began)/3600,2),'slowest':max(rounds),'fastest':min(rounds)})
  except BaseException as e:

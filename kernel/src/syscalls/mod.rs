@@ -227,7 +227,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
 
     let result = match rax {
         85 => crate::crash_log::syscall(regs),
-        87 => crate::cpu_account::syscall(regs), // SYS_STATS: CPU time and memory by domain, read-only.
+        87 => crate::mesh_stats::syscall(regs).unwrap_or_else(|| crate::cpu_account::syscall(regs)), // SYS_STATS: CPU time and memory by domain, read-only.
         0 => { // SYSCALL_PDX_CALL
             let slot = rdi as u32;
             let num = rsi;
@@ -257,13 +257,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                                 let slice = core::slice::from_raw_parts(ptr, len);
                                 // The kernel's own prints hold this lock, so whole lines stay whole.
                                 let _line = crate::serial::SERIAL1.lock();
-                                if crate::serial::is_serial_present() {
-                                    for &b in slice {
-                                        use x86_64::instructions::port::Port;
-                                        let mut port = Port::new(0x3f8);
-                                        port.write(b);
-                                    }
-                                }
+                                if crate::serial::is_serial_present() { crate::serial::write_string(slice); }
                                 // Services' own records are in the log the stop screen shows.
                                 crate::console::write(slice);
                             }

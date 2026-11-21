@@ -26,6 +26,8 @@ impl Sound {
         r.store(ring::RATE_HZ, 0);
         r.store(ring::OPEN, 1);
         r.store(ring::LISTEN, 0);
+        r.store(ring::WAKE, 0);
+        r.store(ring::DOORBELL, 1);
         Some(Sound { ring: r, written: taken, start: taken, told: false, heard: 0, lost: 0, listening: false })
     }
     /// Frames there is room for now.
@@ -40,8 +42,18 @@ impl Sound {
         }
         self.written += n as u64;
         self.ring.store(ring::WRITTEN, self.written);
-        if n > 0 { self.kick(); }
+        if n > 0 { self.kick(); self.ring_doorbell(); }
         n
+    }
+    /// Bell sleeps waiting for this ring: wake it, once. WRITTEN is stored before
+    /// WAKE is read, and Bell sets WAKE before it reads WRITTEN again, so one side
+    /// always sees the other.
+    fn ring_doorbell(&mut self) {
+        core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+        if self.ring.load(ring::WAKE) != 0 {
+            self.ring.store(ring::WAKE, 0);
+            let _ = sex_pdx::pdx_call(sex_pdx::SLOT_BELL, ring::OP_PLAY, 0, 0, 0);
+        }
     }
     /// Tell Bell there is sound: it plays until the ring runs dry and the program closes.
     pub fn kick(&mut self) {
@@ -78,7 +90,7 @@ impl Sound {
     pub fn set_rate(&mut self, hz: u32) { self.ring.store(ring::RATE_HZ, hz as u64); }
     pub fn set_volume(&mut self, percent: u8) { self.ring.store(ring::VOLUME, percent.min(100) as u64); }
     /// Undo `close`: the program means to play more into this ring.
-    pub fn reopen(&mut self) { self.ring.store(ring::OPEN, 1); self.told = false; }
+    pub fn reopen(&mut self) { self.ring.store(ring::OPEN, 1); self.ring.store(ring::DOORBELL, 1); self.told = false; }
     /// Ask to hear the microphone, or stop. Only frames heard from now on are read.
     pub fn listen(&mut self, on: bool) {
         self.heard = self.ring.load(ring::HEARD);

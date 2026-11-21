@@ -36,12 +36,23 @@ pub enum Lease {
     /// (`sex_pdx::display_frames::INTEL_REGISTERS` bytes, not the GTT half), no command
     /// grant and no DMA pool. Display reads what firmware lit (workstream L, slice L3).
     IntelDisplay,
+    /// AMD display engine (DCN, Ryzen APUs and Radeon RDNA): a view of the register
+    /// BAR's first `sex_pdx::display_frames::AMD_REGISTERS` bytes, no command grant and
+    /// no DMA pool. Display identifies the chip and reads what firmware lit (slice A2).
+    AmdDisplay,
     /// Intel Wi-Fi: BAR0, command grant, its own 4 MiB DMA pool and the firmware pack.
     Wifi,
+    /// Intel Thunderbolt 4 / USB4 host interface (NHI): BAR0 up to its firmware status
+    /// words (past 64 KiB), command grant, a 64 KiB DMA pool, firmware force power.
+    Thunderbolt,
     /// Intel Serial IO I2C (DesignWare block plus Intel's private page): BAR0, memory
     /// command bit, the function woken to D0, no DMA. Only product ids in
     /// [`SERIAL_IO_I2C`] match, so Serial IO SPI and UART functions stay unleased.
     SerialIo,
+    /// NVIDIA GPU booted through GSP-RM (Ampere and Ada): a view of all 16 MiB of BAR0,
+    /// memory + bus-master command grant, a 64 MiB DMA pool and the GSP firmware pack
+    /// (`sex_pdx::nvidia_gpu`). Only when the boot entry starts `sexgpu-nv`.
+    NvidiaGpu,
 }
 
 /// Intel Serial IO I2C functions, Skylake to Meteor Lake PCHs.
@@ -115,17 +126,21 @@ pub const DRIVE: Manifest = Manifest {
     ],
 };
 
-/// sexusb: xHCI host controllers (USB 3; USB4 hosts expose xHCI too).
+/// sexusb: xHCI host controllers (USB 3; USB4 hosts expose xHCI too), and Intel's
+/// Thunderbolt 4 / USB4 host interface (the firmware connection manager's mailbox).
 pub const USB: Manifest = Manifest {
     service: Service::Usb, max_devices: 0, vectors: 1,
-    matches: &[Match::class(0x0c_03_30, EXACT, Lease::Xhci, 8)],
+    matches: &[
+        Match::class(0x0c_03_30, EXACT, Lease::Xhci, 8),
+        Match::vendor_class(0x8086, 0x0c_03_40, EXACT, Lease::Thunderbolt, 29),
+    ],
 };
 
 /// sexnet: Intel and Realtek wired Ethernet (the model table in `sex_pdx::pci_command`
 /// decides which parts have a known register layout), and Intel Wi-Fi (the chip table
 /// in `sex_wifi::devices` decides which ones it can start).
 pub const NET: Manifest = Manifest {
-    service: Service::Net, max_devices: 0, vectors: 0,
+    service: Service::Net, max_devices: 0, vectors: 1,
     matches: &[
         Match::vendor_class(0x8086, 0x02_00_00, CLASS, Lease::Nic, 19),
         Match::vendor_class(0x10ec, 0x02_00_00, CLASS, Lease::Nic, 19),
@@ -136,7 +151,9 @@ pub const NET: Manifest = Manifest {
 
 /// sexbell: virtio sound, Intel HD Audio controllers.
 pub const BELL: Manifest = Manifest {
-    service: Service::Bell, max_devices: 0, vectors: 0,
+    // One vector: Intel HD Audio interrupts at each period end; virtio sound keeps
+    // its vector masked and polls its queues.
+    service: Service::Bell, max_devices: 0, vectors: 1,
     matches: &[
         // One sound card is driven: whichever comes first holds slot 20.
         Match::id(0x1af4, 0x1059, Lease::Virtio, 20),
@@ -157,8 +174,19 @@ pub const DISPLAY: Manifest = Manifest {
         Match::id(0x8086, 0x9a68, Lease::IntelDisplay, 27),
         Match::id(0x8086, 0x9a70, Lease::IntelDisplay, 27),
         Match::id(0x8086, 0x9a78, Lease::IntelDisplay, 27),
+        // Every AMD display controller (VGA 03:00 and the 03:80 a hybrid laptop's dGPU
+        // reports); Display reads only chips sex-gpu-amd knows and leaves the rest alone.
+        Match::vendor_class(0x1002, 0x03_00_00, BASE, Lease::AmdDisplay, 29),
         Match::class(0x03_00_00, BASE, Lease::Display, 0),
     ],
+};
+
+/// sexgpu-nv (slot 16 = `sex_pdx::nvidia_gpu::SLOT`): NVIDIA GPUs, booted through GSP-RM (`crates/sex-gpu-nv`). Listed before
+/// Display so it takes the GPU when the boot entry starts the service; without it
+/// [`claim_present`] passes the GPU on to Display as identity only.
+pub const GPU: Manifest = Manifest {
+    service: Service::Gpu, max_devices: 1, vectors: 0,
+    matches: &[Match::vendor_class(0x10de, 0x03_00_00, BASE, Lease::NvidiaGpu, 16)],
 };
 
 /// sexinput: the Serial IO I2C buses laptop touchpads sit on. Which one holds the
@@ -174,11 +202,15 @@ pub const INPUT: Manifest = Manifest {
 pub const LINES: &[(Service, u8)] = &[(Service::Input, 1)];
 
 /// Every manifest, in the order BOOT consults them.
-pub const ALL: &[Manifest] = &[DRIVE, USB, NET, BELL, DISPLAY, INPUT];
+pub const ALL: &[Manifest] = &[DRIVE, USB, NET, BELL, GPU, DISPLAY, INPUT];
 
-/// The manifest and entry that claim this device, if any.
-pub fn claim(id: Id) -> Option<(&'static Manifest, Match)> {
-    ALL.iter().find_map(|m| m.matches.iter().find(|e| e.matches(id)).map(|e| (m, *e)))
+/// The manifest and entry that claim this device, if any, with every service running.
+pub fn claim(id: Id) -> Option<(&'static Manifest, Match)> { claim_present(id, |_| true) }
+
+/// The same, among the services this boot started: a device whose first claimant is
+/// absent goes to the next one that matches (an NVIDIA GPU to Display, identity only).
+pub fn claim_present(id: Id, present: impl Fn(Service) -> bool) -> Option<(&'static Manifest, Match)> {
+    ALL.iter().filter(|m| present(m.service)).find_map(|m| m.matches.iter().find(|e| e.matches(id)).map(|e| (m, *e)))
 }
 
 /// The manifest of one service.

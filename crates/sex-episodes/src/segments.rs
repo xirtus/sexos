@@ -95,22 +95,26 @@ pub enum UpNext {
     Go,
 }
 
-/// Follows one item's "Up next" card: it appears at [`up_next_from`], counts down
-/// [`COUNTDOWN_MS`] of played time, and can be dismissed ("Watch credits") until the
-/// viewer seeks back before it.
+/// Follows one item's "Up next" card: it appears at [`up_next_from`] (or wherever the
+/// viewer lands after seeking past it), counts down [`COUNTDOWN_MS`] of played time
+/// from there, and can be dismissed ("Watch credits") until the viewer seeks back
+/// before it.
 #[derive(Clone, Debug)]
-pub struct UpNextCard { pub from_ms: Option<u64>, dismissed: bool }
+pub struct UpNextCard { pub from_ms: Option<u64>, dismissed: bool, started: Option<u64> }
 
 impl UpNextCard {
     pub fn new(segments: &[Segment], duration_ms: u64) -> UpNextCard {
-        UpNextCard { from_ms: up_next_from(segments, duration_ms), dismissed: false }
+        UpNextCard { from_ms: up_next_from(segments, duration_ms), dismissed: false, started: None }
     }
     pub fn dismiss(&mut self) { self.dismissed = true; }
     pub fn at(&mut self, ms: u64) -> UpNext {
         let Some(from) = self.from_ms else { return UpNext::Hidden };
-        if ms < from { self.dismissed = false; return UpNext::Hidden; }
+        if ms < from { self.dismissed = false; self.started = None; return UpNext::Hidden; }
         if self.dismissed { return UpNext::Hidden; }
-        let into = ms - from;
+        // A seek past the countdown still shows the whole card rather than jumping on.
+        let started = match self.started { Some(s) if s <= ms => s, _ => ms };
+        self.started = Some(started);
+        let into = ms - started;
         if into >= COUNTDOWN_MS { UpNext::Go } else { UpNext::Counting(COUNTDOWN_MS - into) }
     }
 }
