@@ -15349,6 +15349,9 @@ enum Command {
     PowerBalanced = 17,
     PowerPerformance = 18,
     Sleep = 19,
+    ChargeStandard = 20,
+    ChargeAdaptive = 21,
+    ChargeLimit = 22,
 }
 
 /// Static display info for each command in the palette.
@@ -15358,7 +15361,7 @@ struct CommandDef {
 }
 
 /// Daily-driver commands available in the command palette.
-const COMMAND_LIST: [CommandDef; 20] = [
+const COMMAND_LIST: [CommandDef; 23] = [
     CommandDef { command: Command::FocusSpindle, name: "Open Spindle" },
     CommandDef { command: Command::FocusQuil, name: "Open Quil" },
     CommandDef { command: Command::FocusLinen, name: "Open Linen" },
@@ -15379,6 +15382,9 @@ const COMMAND_LIST: [CommandDef; 20] = [
     CommandDef { command: Command::PowerBalanced, name: "Balanced Power" },
     CommandDef { command: Command::PowerPerformance, name: "Performance Power" },
     CommandDef { command: Command::Sleep, name: "Sleep" },
+    CommandDef { command: Command::ChargeStandard, name: "Battery Full Charge" },
+    CommandDef { command: Command::ChargeAdaptive, name: "Battery Adaptive Charge" },
+    CommandDef { command: Command::ChargeLimit, name: "Battery Stop at 80%" },
 ];
 
 /// Whether the command palette overlay is currently open.
@@ -15410,6 +15416,9 @@ fn command_words(cmd: Command) -> &'static str {
         Command::PowerBalanced => "battery profile energy normal",
         Command::PowerPerformance => "battery profile fast speed",
         Command::Sleep => "suspend standby lid power",
+        Command::ChargeStandard => "battery charging charge mode standard full 100",
+        Command::ChargeAdaptive => "battery charging charge mode adaptive health",
+        Command::ChargeLimit => "battery charging charge limit threshold health 80",
     }
 }
 /// COMMAND_LIST indexes that match the query, best first.
@@ -17170,7 +17179,7 @@ fn command_kind_color(cmd: Command) -> u32 {
         Command::FocusProgram => 0x00504818,
         Command::ShutDown | Command::Restart => 0x00603030,
         Command::BrightnessUp | Command::BrightnessDown => 0x00605820,
-        Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => 0x00305830,
+        Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep | Command::ChargeStandard | Command::ChargeAdaptive | Command::ChargeLimit => 0x00305830,
     }
 }
 
@@ -17197,7 +17206,7 @@ fn command_palette_selected_accent() -> u32 {
             Command::FocusProgram => 0x00F9E2AF,
             Command::ShutDown | Command::Restart => 0x00F38BA8,
             Command::BrightnessUp | Command::BrightnessDown => 0x00F9E2AF,
-            Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => 0x00A6E3A1,
+            Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep | Command::ChargeStandard | Command::ChargeAdaptive | Command::ChargeLimit => 0x00A6E3A1,
         }
     }
 }
@@ -17233,7 +17242,7 @@ unsafe fn palette_render_list() {
             Command::MinimizeFocused=>"HIDE CURRENT WINDOW",
             Command::ShutDown=>"SAVE FILES, POWER OFF",
             Command::Restart=>"SAVE FILES, START AGAIN",
-            Command::BrightnessUp|Command::BrightnessDown|Command::PowerSaver|Command::PowerBalanced|Command::PowerPerformance|Command::Sleep=>status,
+            Command::BrightnessUp|Command::BrightnessDown|Command::PowerSaver|Command::PowerBalanced|Command::PowerPerformance|Command::Sleep|Command::ChargeStandard|Command::ChargeAdaptive|Command::ChargeLimit=>status,
             _=>status,
         };
         let app=match item.command {
@@ -18160,6 +18169,8 @@ fn laptop_launcher_status(cmd: Command) -> (bool, &'static str, &'static str) {
     let flags = sex_pdx::power::info().map_or(0, |i| i.flags);
     match cmd {
         Command::Sleep => if s.sleeping { (true, "ASLEEP", "sleeping") } else { (true, "SCREEN OFF, WAKE WITH LID OR POWER", "sleep_available") },
+        // The firmware's charge modes (Dell and Alienware); elsewhere the request is logged and ignored.
+        Command::ChargeStandard | Command::ChargeAdaptive | Command::ChargeLimit => (true, "FIRMWARE CHARGE MODE", "charge_mode"),
         Command::BrightnessUp | Command::BrightnessDown => {
             if s.brightness.is_some() { (true, "SCREEN BRIGHTNESS", "acpi_backlight") } else { (false, "NO ACPI BACKLIGHT", "acpi_backlight_unavailable") }
         }
@@ -18178,6 +18189,10 @@ fn laptop_command(cmd: Command) -> bool {
         Command::BrightnessDown => ("brightness_down", p::control(p::CTL_BRIGHTNESS_STEP, 0xFF)),
         Command::PowerSaver => ("profile_saver", p::control(p::CTL_PROFILE, p::PROFILE_SAVER)),
         Command::PowerPerformance => ("profile_performance", p::control(p::CTL_PROFILE, p::PROFILE_PERFORMANCE)),
+        Command::ChargeStandard => ("charge_standard", p::control(p::CTL_CHARGE, p::CHARGE_STANDARD)),
+        Command::ChargeAdaptive => ("charge_adaptive", p::control(p::CTL_CHARGE, p::CHARGE_ADAPTIVE)),
+        // Custom mode: stop at 80%, start again at 70%.
+        Command::ChargeLimit => ("charge_limit_80", p::control(p::CTL_CHARGE, 80)),
         _ => ("profile_balanced", p::control(p::CTL_PROFILE, p::PROFILE_BALANCED)),
     };
     sex_pdx::serial_record!("[shell.laptop.command] what={} ok={} status={:#x}", what, result.is_ok() as u8, result.err().unwrap_or(0));
@@ -18268,7 +18283,7 @@ fn palette_item_status(cmd: Command) -> (bool, &'static str, &'static str) {
         Command::FocusBrowser => browser_launcher_status(),
         Command::FocusProgram => program_launcher_status(),
         Command::ShutDown | Command::Restart => power_launcher_status(cmd),
-        Command::BrightnessUp | Command::BrightnessDown | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => laptop_launcher_status(cmd),
+        Command::BrightnessUp | Command::BrightnessDown | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep | Command::ChargeStandard | Command::ChargeAdaptive | Command::ChargeLimit => laptop_launcher_status(cmd),
         Command::FocusLinen => {
             (true, "nonblocking_ready", "linen_fast_paint_nonblocking")
         }
@@ -18357,7 +18372,7 @@ unsafe fn palette_execute_selected() -> bool {
             false
         }
         Command::ShutDown | Command::Restart => palette_power(cmd),
-        Command::BrightnessUp | Command::BrightnessDown | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => laptop_command(cmd),
+        Command::BrightnessUp | Command::BrightnessDown | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep | Command::ChargeStandard | Command::ChargeAdaptive | Command::ChargeLimit => laptop_command(cmd),
         Command::FocusProgram => {
             let open_ok=open_program_in_active_scene();
             sex_pdx::serial_record!("[shell.palette.focus.result] target=PROGRAM ok={}",open_ok as u8);
@@ -21620,7 +21635,7 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
     for idx in 0..COMMAND_LIST.len() {
         // The proof opens and closes apps; it never turns the machine off.
         if matches!(COMMAND_LIST[idx].command, Command::ShutDown | Command::Restart | Command::BrightnessUp | Command::BrightnessDown
-            | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep) {
+            | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep | Command::ChargeStandard | Command::ChargeAdaptive | Command::ChargeLimit) {
             skipped = skipped.saturating_add(1);
             continue;
         }
@@ -21702,7 +21717,7 @@ unsafe fn maybe_run_palette_rejects_app_open_batch_proof() {
                 palette_batch_emit_app_focus("Program",0,ok,if ok{"ok"}else{"open_or_focus_reject"});
             }
             Command::ZoomToggle | Command::MinimizeFocused | Command::ShutDown | Command::Restart | Command::BrightnessUp | Command::BrightnessDown
-            | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep => {}
+            | Command::PowerSaver | Command::PowerBalanced | Command::PowerPerformance | Command::Sleep | Command::ChargeStandard | Command::ChargeAdaptive | Command::ChargeLimit => {}
         }
 
         if ok { passed = passed.saturating_add(1); } else { rejected = rejected.saturating_add(1); }
