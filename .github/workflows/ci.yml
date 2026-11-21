@@ -1032,6 +1032,10 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/silk-source.img"
         python3 scripts/silk_ctl_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/silk-source.img" --out "$RUNNER_TEMP/sexos-desktop/silk"
+    - name: Wasm layout plugins (a plugin's own run tiles three windows as a spiral; rectangles outside the area and an endless loop are refused)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/wasm-layout-source.img"
+        python3 scripts/wasm_layout_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/wasm-layout-source.img" --out "$RUNNER_TEMP/sexos-desktop/wasm-layout"
     - name: Hot corners (the top-left corner opens and closes the window overview)
       run: |
         truncate -s 256M "$RUNNER_TEMP/corner-source.img"

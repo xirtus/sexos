@@ -265,6 +265,9 @@ printf '#![no_std]\n#[path = "%s/crates/sex-pdx/src/silk_ctl.rs"] pub mod silk_c
 rustc --edition=2021 -A dead_code --crate-type=rlib --crate-name sex_pdx "$TEST_DIR/silk_ctl_pdx.rs" -o "$TEST_DIR/libsilk_ctl_pdx.rlib"
 rustc --edition=2021 -A dead_code --extern sex_pdx="$TEST_DIR/libsilk_ctl_pdx.rlib" --test tests/silk_ctl.rs -o "$TEST_DIR/silk-ctl"
 "$TEST_DIR/silk-ctl"
+# Wasm layout plugins (S4 follow-up): the wire and the Shell's bookkeeping and checks.
+rustc --edition=2021 -A dead_code --test tests/layout_plugin.rs -o "$TEST_DIR/layout-plugin"
+"$TEST_DIR/layout-plugin"
 # Hot corners (S5).
 rustc --edition=2021 -A dead_code --test tests/hot_corners.rs -o "$TEST_DIR/hot-corners"
 "$TEST_DIR/hot-corners"

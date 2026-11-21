@@ -496,21 +496,37 @@ or Esc. Only a live Spindle run, or a run a Spindle terminal started attached to
 Pure logic: `servers/silk-shell/src/silk_ctl.rs` (host test `tests/silk_ctl.rs`); glue:
 `silk_ctl_glue.rs`; gate: `scripts/silk_ctl_gate.py`.
 
-*Wasm layout plugins are not in the Shell yet, on purpose.* `crates/sex-wasm` would run them
-(wasmi, `no_std` + `alloc`, with fuel limits), but not inside the Shell: (1) the Shell's heap
-starts at a 128 KiB arena and wasmi's engine, a compiled module and even one 64 KiB linear-memory
-page would be most of it; (2) the interpreter is roughly what makes the `wasm` program near the
-1 MiB image limit, and the Shell is already the largest server; (3) the Shell would have to
-read the plugin file through Files itself and run guest code inside the tile path of the
-desktop's single loop, so a slow plugin (even fuel-bounded) stalls input and drawing, and an
-interpreter fault ends the desktop. The plan instead: a plugin runs in its own confined run
-(the `wasm` host with a `layout` export, `layout(n, w, h) -> ptr` writing `n` rectangles into
-its memory, fuel-limited per call). The Shell sends it the tile count and work area as a plain
-call when a workspace with `silk layout WS plugin:PATH` retiles, keeps tiling with the
-workspace's previous layout meanwhile, and applies the rectangles the plugin sends back as its
-own program-initiated call (checked: inside the work area, one per window, sizes at least the
-minimum), so the Shell never waits on the plugin. `silk layout WS plugin:PATH` answers that
-plugins are not in this build until then.
+*Wasm layout plugins (2026-11-21).* `silk layout WS plugin:FILE.wasm` (or `plugin:spiral`, the
+built-in sample) tiles a workspace with a Wasm plugin that never runs inside the Shell: the
+Shell's heap starts at a 128 KiB arena, the interpreter is most of the `wasm` program's size,
+and a slow or faulting guest must not stall input and drawing in the desktop's single loop, so
+the Shell links no interpreter and waits on nothing. Spindle has Files prepare a run of
+`/bin/wasm layout @FILE` and sends the ticket, the workspace and a key for the plugin (FNV-1a of
+its absolute path) in a `silk_ctl` `Plugin` request; the Shell starts that run hidden, as it
+starts the weather helper, or reuses the run it already has for that key (one run per plugin,
+at most four). The run opens no window. When a workspace using it retiles, the Shell keeps the
+workspace's previous layout and sends the run the tile count and work area in a plain call,
+`sex_pdx::wasm_layout::OP_LAYOUT_ASK` (0x310), with a generation number. The run calls the
+guest's `layout(n, w, h) -> ptr` in a fresh wasmi instance with 2 000 000 fuel (the guest may
+import nothing, 1 MiB memory at most) and sends each rectangle (x, y as i32, w, h as u32,
+relative to the work area) as its own call, `OP_LAYOUT_RECT` (0x311), or why there are none,
+`OP_LAYOUT_FAIL` (0x312: read, module, fuel, trap, result). The Shell takes those only from the
+plugin's run, puts the answer together, and uses it only whole and checked: one rectangle per
+window, each inside the work area and at least the minimum window size (120 by 80, scaled);
+otherwise `[shell.layout.plugin] ... ok=0 reason=count|outside|small|fuel|trap|...` and the
+previous layout stays. An answer for an older generation is dropped as stale. A run that ends
+(a crash) leaves its workspaces on their previous layouts; a run no workspace uses is closed
+(forced after 5 s). A named layout (`silk layout WS NAME`, or a chord that changes the
+workspace's layout) ends the workspace's plugin. Confinement: Files binds the run to the
+arguments Spindle prepared, so it may reach the plugin file itself (Files' `@` grants are whole
+files, not read-only, so it could also write it) and the `wasm` program's own folder
+`/data/wasm`, and nothing else of the person's files; it has no network; its program row holds
+what every program row holds. The guest inside reaches none of that. Pure logic:
+`servers/silk-shell/src/layout_plugin.rs` (host test `tests/layout_plugin.rs`, which also
+covers the wire `crates/sex-pdx/src/wasm_layout.rs`); glue: `layout_plugin_glue.rs` (one-line hooks
+in main.rs); host: `crates/sex-wasm/src/layout.rs` and `apps/wasm/src/layout_mode.rs`
+(tests `crates/sex-wasm/tests/layout.rs`); sample: `crates/sex-wasm/guests/layouts/spiral.wat`
+(a Fibonacci spiral, built into the `wasm` program); gate: `scripts/wasm_layout_gate.py`.
 
 **S5 notes (2026-11-17).** S5 lands in two PRs. *Hot corners* (S5a): pushing the pointer
 onto a corner pixel runs that corner's action once, until the pointer leaves by 8 px; never
