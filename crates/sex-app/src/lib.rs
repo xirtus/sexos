@@ -679,7 +679,10 @@ pub mod files {
                 // not by a count, since on a quiet core a yield returns at once.
                 Err(w::STARTING) => {
                     let (since, round) = starting.get_or_insert((sex_pdx::get_ticks(), 0));
-                    if sex_pdx::get_ticks().saturating_sub(*since) > STARTING_WAIT_TICKS { return Err(w::DENIED); }
+                    if sex_pdx::get_ticks().saturating_sub(*since) > STARTING_WAIT_TICKS {
+                        sex_pdx::serial_record!("[files.client.starting.timeout] kind={}", kind);
+                        return Err(w::DENIED);
+                    }
                     *round += 1;
                     crate::thread::pause(*round);
                 }

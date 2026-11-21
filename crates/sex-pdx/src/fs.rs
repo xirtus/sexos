@@ -193,8 +193,8 @@ pub const UNSUPPORTED: u8 = 15;
 pub const PENDING: u8 = 16;
 /// The file changed since it was inspected (organizer checked moves).
 pub const STALE: u8 = 17;
-/// A program asked before Shell told Files where its run lives (the bind follows the
-/// start, and the program can run first on another core). Ask again shortly.
+/// A program asked for its arguments (ARGS) before Shell told Files where its run lives
+/// (the bind follows the start, and the program can run first). Ask again shortly.
 pub const STARTING: u8 = 18;
 
 pub fn message(status: u8) -> &'static [u8] {

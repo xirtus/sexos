@@ -766,9 +766,16 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
             // its other paths below; mounting stays Spindle's.
             if matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
             if !bound.is_some_and(|b| bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)) {
-                // A run just started can ask (its arguments first) before Shell's bind gets
-                // here: it waits for it rather than starting with nothing.
-                return w::reply(r.seq, if binding_due(caller, caller_task, bound.map_or(0, |b| b.task)) { w::STARTING } else { w::DENIED }, 0);
+                // A run just started can ask for its arguments before Shell's bind gets here:
+                // it waits for the bind rather than starting with none.
+                let bound_task = bound.map_or(0, |b| b.task);
+                let starting = r.kind == w::ARGS && binding_due(caller, caller_task, bound_task);
+                static mut DENIALS_LOGGED: u32 = 0;
+                if unsafe { DENIALS_LOGGED < 64 } {
+                    unsafe { DENIALS_LOGGED += 1; }
+                    sex_pdx::serial_record!("[files.program.denied] target={} task={} bound={} kind={} starting={}", caller, caller_task, bound_task, r.kind, starting as u8);
+                }
+                return w::reply(r.seq, if starting { w::STARTING } else { w::DENIED }, 0);
             }
             // A terminal the person started with Spindle's `spindle` command may start programs
             // attached to it (`console_relay`). Any program may PREPARE a run of its own
