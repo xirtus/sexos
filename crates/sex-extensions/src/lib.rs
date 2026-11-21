@@ -67,6 +67,8 @@ pub struct Manifest {
     /// The page the toolbar button opens (`action`/`browser_action` `default_popup`).
     pub popup: Option<String>,
     pub options_page: Option<String>,
+    /// The page the browser's side panel shows for it (`side_panel.default_path`).
+    pub side_panel: Option<String>,
 }
 
 /// Why a manifest can't be used.
@@ -138,6 +140,7 @@ impl Manifest {
         let action = o.get("action").or_else(|| o.get("browser_action")).or_else(|| o.get("page_action"));
         let popup = action.and_then(|a| a.get("default_popup")).and_then(Value::as_str).and_then(clean_path);
         let options_page = o.get("options_page").and_then(Value::as_str).or_else(|| o.get("options_ui").and_then(|u| u.get("page")).and_then(Value::as_str)).and_then(clean_path);
+        let side_panel = o.get("side_panel").and_then(|p| p.get("default_path")).and_then(Value::as_str).and_then(clean_path);
         Ok(Manifest {
             version, name,
             extension_version: String::from(o.get("version").and_then(Value::as_str).unwrap_or("")),
@@ -145,7 +148,7 @@ impl Manifest {
             // A locale names a folder under _locales/: letters, digits, `_` and `-` only,
             // so it can't climb out of the extension (issue #320).
             default_locale: o.get("default_locale").and_then(Value::as_str).filter(|l| locale_ok(l)).map(String::from),
-            content_scripts, rulesets, background, background_module, permissions, host_permissions, popup, options_page,
+            content_scripts, rulesets, background, background_module, permissions, host_permissions, popup, options_page, side_panel,
         })
     }
 
