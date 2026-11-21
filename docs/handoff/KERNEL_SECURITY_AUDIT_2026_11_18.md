@@ -192,6 +192,14 @@ function. That list is the work for step 2: one user-copy module, the only place
 `stac`/`clac` appear. Step 3 adds `clac` on interrupt entry (an interrupt gate
 keeps a user-set AC) and makes the fault fatal.
 
+First list (CI on #475): the program loader's segment copy (`elf.rs`), the futex
+word in `program_workers` WAIT/EXIT, and one read in `syscalls::dispatch` of a
+struct on a service's stack (not yet named). Step 2a puts the deliberate copies
+behind `smap::user`, the one STAC/CLAC window: the loader, the futex word, crash-log
+reads and writes, VM register and exit records, scene snapshots, and serial records
+(copied to a kernel buffer first). Audit lines now carry `callers=`, the first
+kernel-code words on the stack above the fault, so the next list names the rest.
+
 ### S12. Meltdown and Meltdown-PK (reported)
 
 All domains and the kernel share one translation, so a CPU vulnerable to Meltdown
