@@ -119,6 +119,8 @@ jobs:
       run: bash scripts/program_heap_limit_host_gate.sh
     - name: Unarmed recorder custody and restart contracts
       run: bash scripts/desktop_recording_host_gate.sh
+    - name: Unarmed recorder application custom-target check
+      run: SEXOS_RECORDER=1 RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie" cargo check --locked --manifest-path apps/record/Cargo.toml --target x86_64-sex-app.json -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem
     - name: Native screenshot custody and PNG output on the host
       run: bash scripts/desktop_capture_host_gate.sh
     - name: HTML containing-block and replaced sizing
@@ -415,7 +417,7 @@ jobs:
       run: |
         truncate -s 1G "$RUNNER_TEMP/blank-programs.img"
         python3 scripts/program_std_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/programs-std"
-    - name: Voyeur search (2+2, two providers, a setting page)
+    - name: Voyeur search (2+2, two providers, a setting page, a file word from Loom, browser history)
       run: python3 scripts/voyeur_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/voyeur"
     - name: Mesh (busy program, end it, Jot's grant, capability graph)
       run: python3 scripts/program_monitor_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/monitor"
@@ -546,6 +548,10 @@ jobs:
       run: python3 scripts/program_web_reader_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-reader"
     - name: Kaleidoscope private and container tabs keep cookies apart
       run: python3 scripts/program_web_private_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-private"
+    - name: Browser privacy defaults (third-party cookies, HTTPS-first, GPC)
+      run: python3 scripts/program_web_privacy_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-privacy"
+    - name: Kaleidoscope vertical tabs (Ctrl+Shift+,), page beside the strip, kept
+      run: python3 scripts/program_web_vertical_tabs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-vtabs"
     - name: Browser site suite (encyclopedia, news, links, GitHub, webmail sign-in)
       run: python3 scripts/browser_sites_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sites"
     - name: Preserve browser evidence
@@ -1187,6 +1193,8 @@ jobs:
         # the nightly run; the image cache until the first one is saved.
         target-cache: recording
         target-cache-fallback: image
+    - name: Recorder encoder-profile custom-target check
+      run: SEXOS_RECORDER=1 RUSTFLAGS="-C relocation-model=pic -C link-arg=-pie" cargo check --locked --manifest-path apps/record/Cargo.toml --target x86_64-sex-app.json -Z build-std=core,compiler_builtins,alloc -Z build-std-features=compiler-builtins-mem
     - name: Independent decoder
       run: sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg python3-pil
     - name: Build recording-profile candidate

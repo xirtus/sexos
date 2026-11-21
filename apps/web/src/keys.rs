@@ -6,7 +6,8 @@
 //! Ctrl+L the address, Ctrl+D bookmark, Ctrl+F find, Ctrl+= / Ctrl+- / Ctrl+0 zoom,
 //! Ctrl+R reload, Ctrl+J downloads, Ctrl+Shift+Backspace forget this site's cookies and storage,
 //! Ctrl+Shift+S Shields down (or up) for this site, Ctrl+Shift+R reader view,
-//! Ctrl+Shift+P a private tab, Ctrl+Shift+1..4 a tab in a container.
+//! Ctrl+Shift+P a private tab, Ctrl+Shift+1..4 a tab in a container, Ctrl+Shift+,
+//! tabs down the side (vertical tabs) or back across the bar.
 
 use super::{nav, profile::Jarbox, Browser, Nav};
 use sex_web::sex_html;
@@ -25,6 +26,8 @@ impl Browser {
             // Ctrl+Shift+P: a private tab. Ctrl+Shift+1..4: a tab in that container.
             0x19 if key.shift => self.new_tab(None, Jarbox::Private),
             0x02..=0x05 if key.shift => self.new_tab(None, Jarbox::Container((key.code - 0x01) as u8)),
+            // Ctrl+Shift+, (as in Edge): tabs down the side, or back across the top.
+            0x33 if key.shift => { let on = !self.vertical; self.set_vertical(on) }
             0x11 => self.close_tab(),
             0x51 => { let n = (self.active + 1) % self.tabs.len(); self.show_tab(n); }
             0x49 => { let n = (self.active + self.tabs.len() - 1) % self.tabs.len(); self.show_tab(n); }

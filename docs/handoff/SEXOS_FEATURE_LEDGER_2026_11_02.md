@@ -1,5 +1,10 @@
 # SexOS feature ledger (from 2026-11-02)
 
+> **New entries do not go in this file.** Write one file per change in
+> [`ledger/`](ledger/README.md) (`YYYY-MM-DD-short-topic.md`). GitHub ignores
+> this file's `merge=union`, so every PR that appended here went "dirty" (merge
+> conflict) whenever another PR appended first.
+
 ## Handoff summary (as of 2026-11-05, after Q9)
 
 **Try it (native image).** Browser: `W` HTML page as text, `1`-`9`, `0`, `Shift+1`-`6` follow

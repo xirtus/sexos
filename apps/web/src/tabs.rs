@@ -117,7 +117,7 @@ impl Browser {
         self.press_link = None;
         self.full_redraw = true;
         // The window may have changed size while the tab waited.
-        let want = self.surface.document(sex_web::BAR);
+        let want = self.page_view();
         if self.view != want || self.laid_zoom != sex_html::style::zoom() {
             self.view = want;
             self.doc.get().viewport = want;
@@ -173,7 +173,7 @@ impl Browser {
 
     /// The tab chip under window point (`x`, `y`), if any.
     pub(super) fn tab_at(&self, x: i32, y: i32) -> Option<usize> {
-        if !(0..sex_web::BAR).contains(&y) { return None; }
+        if !(0..sex_web::BAR).contains(&y) || self.side() > 0 { return None; }
         sex_web::tab_chips(self.surface.w, self.tabs.len()).iter().position(|(cx, w)| x >= *cx && x < cx + w)
     }
 }
