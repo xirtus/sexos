@@ -51,9 +51,14 @@ pub struct Tab {
     /// The tab group this slot's tab is in. It stays with the slot, not the page,
     /// so it isn't swapped when the tab shows.
     pub group: Option<usize>,
+    /// A restored tab's address, loaded when it is first shown.
+    pub restore: Option<String>,
 }
 
 impl Tab {
+    /// When the tab's next timer is due, while it waits.
+    pub fn timer(&self) -> Option<u64> { self.timer }
+
     /// An empty tab, before its first page.
     pub fn blank(b: &Browser) -> Tab {
         let view = b.view;
@@ -65,7 +70,7 @@ impl Tab {
             url: String::new(), history: Vec::new(), forward: Vec::new(), scroll: 0, focus: None, hover_css: false,
             import_map: Vec::new(), script_scroll: 0, view, frames: Vec::new(), images: Vec::new(), svgs: Vec::new(),
             moving: Vec::new(), frames_shown: 0, find: None, find_at: 0, marks: Vec::new(), title: String::new(), laid_zoom: sex_html::style::zoom(), blocked: 0,
-            jar: Default::default(), storage: Default::default(), jarbox: Jarbox::Own, group: None,
+            jar: Default::default(), storage: Default::default(), jarbox: Jarbox::Own, group: None, restore: None,
         }
     }
 }
@@ -142,6 +147,9 @@ impl Browser {
         let title: Vec<u8> = self.page.title.bytes().take(16).collect();
         self.window.title(if title.is_empty() { b"Kaleidoscope" } else { &title });
         sex_pdx::serial_record!("[web.tab.shown] index={} count={} url={}", i, self.tabs.len(), self.url);
+        // A restored tab loads the first time it shows.
+        if let Some(url) = self.tabs[i].restore.take() { return self.open(&url, false); }
+        self.save_session();
         self.draw();
     }
 
@@ -189,7 +197,32 @@ impl Browser {
         // The last private tab took the private box's cookies and storage with it.
         if self.jarbox != Jarbox::Private && !self.tabs.iter().enumerate().any(|(i, t)| i != self.active && t.jarbox == Jarbox::Private) { self.profile.forget_private(); }
         sex_pdx::serial_record!("[web.tab.closed] index={} count={} shown={}", going, self.tabs.len(), self.active);
+        self.save_session();
         self.draw();
+    }
+
+    /// The tab beside the shown one that is drawn too: the other half of a split view,
+    /// or the side panel's page.
+    pub(super) fn waiting_half(&self) -> Option<usize> {
+        let (l, r) = self.split_pair()?;
+        if self.in_frame.is_some() || self.visiting { return None; }
+        Some(if self.active == l { r } else { l })
+    }
+
+    /// Runs `f` with tab `i` in the browser's fields, as if shown, then puts the shown
+    /// tab back. Its drawing goes to its own column only.
+    pub(super) fn visit<T>(&mut self, i: usize, f: impl FnOnce(&mut Self) -> T) -> T {
+        let back = self.active;
+        self.swap_tab(back);
+        self.swap_tab(i);
+        self.active = i;
+        self.visiting = true;
+        let out = f(self);
+        self.visiting = false;
+        self.swap_tab(i);
+        self.swap_tab(back);
+        self.active = back;
+        out
     }
 
     /// Takes the shown page's frames, sockets, sound and downloads down, as it goes.
@@ -263,6 +296,7 @@ impl Browser {
                 sex_pdx::serial_record!("[web.group.left] group={} from={} to={}", g, at, self.active);
                 self.prune_groups();
                 // A split that ended gives the shown page the whole width again.
+                self.save_session();
                 return self.refit();
             }
             None => {
@@ -275,6 +309,7 @@ impl Browser {
                 self.tabs[at].group = Some(self.groups.len() - 1);
             }
         }
+        self.save_session();
         self.draw();
     }
 
@@ -292,6 +327,51 @@ impl Browser {
         }
         self.groups[g].folded = on;
         sex_pdx::serial_record!("[web.group.folded] group={} on={} tabs={}", g, on as u8, self.tabs.iter().filter(|t| t.group == Some(g)).count());
+        self.save_session();
+        self.draw();
+    }
+
+    /// A right-click on a group's label: its name is typed in the bar, the label
+    /// showing it as typed. Enter keeps it, Escape puts the old one back, and Up and
+    /// Down step through the group colours.
+    pub(super) fn start_naming(&mut self, g: usize) {
+        if g >= self.groups.len() || self.in_frame.is_some() { return; }
+        let old = self.groups[g].name.clone();
+        self.editing = Some(old.clone());
+        self.suggestions.clear();
+        self.chosen = None;
+        self.naming = Some((g, old));
+        sex_pdx::serial_record!("[web.group.naming] group={}", g);
+        self.draw();
+    }
+
+    /// A key while a group is being named.
+    pub(super) fn name_key(&mut self, key: sex_pdx::app_key::Key) {
+        let Some((g, old)) = self.naming.clone() else { return };
+        if g >= self.groups.len() { self.naming = None; self.editing = None; return self.draw(); }
+        match key.code {
+            // Escape: the old name back.
+            0x01 => { self.groups[g].name = old; self.naming = None; self.editing = None; }
+            0x1C => {
+                self.naming = None;
+                self.editing = None;
+                sex_pdx::serial_record!("[web.group.named] group={} name={} colour={:08x}", g, self.groups[g].name, self.groups[g].colour);
+                self.save_session();
+            }
+            0x48 | 0x50 | 0x67 | 0x6C => {
+                let n = sex_web::GROUP_COLOURS.len();
+                let at = sex_web::GROUP_COLOURS.iter().position(|c| *c == self.groups[g].colour).unwrap_or(0);
+                let next = if matches!(key.code, 0x50 | 0x6C) { (at + 1) % n } else { (at + n - 1) % n };
+                self.groups[g].colour = sex_web::GROUP_COLOURS[next];
+                sex_pdx::serial_record!("[web.group.colour] group={} colour={:08x}", g, self.groups[g].colour);
+            }
+            0x0E => { if let Some(t) = self.editing.as_mut() { t.pop(); } }
+            _ => {
+                let Some(c) = sex_app::text(key).filter(|c| !c.is_control()) else { return };
+                if let Some(t) = self.editing.as_mut().filter(|t| t.chars().count() < MAX_GROUP_NAME) { t.push(c); }
+            }
+        }
+        if let (Some(t), Some((g, _))) = (&self.editing, &self.naming) { self.groups[*g].name = t.clone(); }
         self.draw();
     }
 
@@ -306,6 +386,9 @@ impl Browser {
         }
     }
 }
+
+/// Longest group name, in characters.
+const MAX_GROUP_NAME: usize = 24;
 
 /// Most groups one window holds.
 pub const MAX_GROUPS: usize = 8;

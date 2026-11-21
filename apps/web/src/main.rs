@@ -24,6 +24,7 @@ mod shields;
 mod extensions;
 mod tabs;
 mod panel;
+mod session;
 mod viewport;
 mod websocket;
 mod code_store;
@@ -275,6 +276,15 @@ struct Browser {
     /// The side panel is open (Ctrl+Shift+B): its page waits in the last tab slot,
     /// out of the strip, as the right of a split.
     panel: bool,
+    /// Keep the window's tabs for next time (Kaleidoscope itself, not the games).
+    keep_session: bool,
+    /// The waiting half of a split (or the side panel) is in the fields for its timers;
+    /// drawing paints only its column.
+    visiting: bool,
+    /// A group's name being typed in the bar (right-click on its label), with its old name.
+    naming: Option<(usize, String)>,
+    /// The session as last kept, so an unchanged one isn't written again.
+    session_saved: String,
     /// Installed extensions.
     extensions: extensions::Extensions,
     /// Requests Shields blocked for the shown page (and its frames).
@@ -565,7 +575,7 @@ impl Browser {
 
     /// When the next timer of any page (shown or framed) is due.
     fn next_due(&self) -> Option<u64> {
-        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.profile.due).chain(self.code_store.due).chain(self.ws_due()).chain(self.backgrounds_due()).min()
+        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.waiting_half().and_then(|o| self.tabs[o].timer())).chain(self.profile.due).chain(self.code_store.due).chain(self.ws_due()).chain(self.backgrounds_due()).min()
     }
 
     /// Runs the timers that are due, on every page.
@@ -577,6 +587,8 @@ impl Browser {
         if self.code_store.due.is_some_and(|d| d <= now) { self.code_store.save(&mut self.window, &mut self.code_cache.borrow_mut()); }
         if self.timer.is_some_and(|t| t <= now) { self.tick(); }
         if self.backgrounds_due().is_some_and(|t| t <= now) { self.backgrounds_tick(); }
+        // The other half of a split view, or the side panel, keeps running beside the page.
+        if let Some(o) = self.waiting_half().filter(|o| self.tabs[*o].timer().is_some_and(|t| t <= now)) { self.visit(o, |b| b.tick()); }
         let mut i = 0;
         while i < self.frames.len() {
             if self.frames[i].timer.is_some_and(|t| t <= now) { self.enter(i); self.tick(); self.leave(i); }
@@ -682,11 +694,20 @@ impl Browser {
         // A page in a frame is drawn as part of the page around it.
         if self.in_frame.is_some() { self.frame_dirty = true; return; }
         if self.surface.empty() { return; }
+        // The waiting half of a split, visited for its timers: just its column.
+        if self.visiting {
+            let (x, w) = self.pane();
+            let pixels = &mut self.window.pixels()[..self.surface.pixels];
+            if let Some(mut t) = sex_web::column(pixels, self.surface.w, self.surface.h, self.scroll, x, w) { sex_web::paint(&self.page, &mut self.fonts, &mut t, None); }
+            self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
+            return;
+        }
         let start = sex_pdx::get_ticks();
         self.paint_split();
         let pixels = &mut self.window.pixels()[..self.surface.pixels];
         let bar = match (&self.editing, self.status) {
             (None, _) if self.download_status.is_some() => self.download_status.clone().unwrap_or_default(),
+            (Some(t), _) if self.naming.is_some() => alloc::format!("Group name: {t}"),
             (Some(t), _) => t.clone(),
             (None, Some(s)) => alloc::format!("{}  {}", s, self.url),
             (None, None) => if self.page.title.is_empty() { self.url.clone() } else { alloc::format!("{} — {}", self.page.title, self.url) },
@@ -850,7 +871,7 @@ impl Browser {
             return self.open(&target, false);
         }
         // The side panel's address opens it (or changes what it shows) instead.
-        if let Some(what) = url.strip_prefix("about:sidepanel") {
+        if let Some(what) = url.strip_prefix("about:sidepanel").filter(|_| !self.visiting) {
             let what = what.strip_prefix("?url=").map(extensions::decode).unwrap_or_else(|| String::from(panel::BOOKMARKS));
             return self.panel_show(&what);
         }
@@ -1071,6 +1092,7 @@ impl Browser {
         self.focus = None;
         if self.in_frame.is_some() { return; }
         self.status = None;
+        self.save_session();
         // A private tab leaves no history.
         if self.jarbox != profile::Jarbox::Private {
             self.profile.visit(&self.url);
@@ -1910,6 +1932,7 @@ impl Browser {
                     (Some(sex_web::Slot::Tab(i)), 1) => { self.show_tab(i); self.close_tab(); }
                     (Some(sex_web::Slot::Tab(i)), 0) => self.show_tab(i),
                     (Some(sex_web::Slot::Group(g)), 0) => self.fold_group(g),
+                    (Some(sex_web::Slot::Group(g)), 2) => self.start_naming(g),
                     _ => {}
                 }
             }
@@ -1926,8 +1949,10 @@ impl Browser {
             return;
         }
         let (x, y) = (p.x as i32 - px0, p.y as i32 - BAR);
-        if p.y >= 0 && (p.y as i32) < BAR && matches!(p.kind, Kind::Down { button: 0 | 1 }) {
+        if p.y >= 0 && (p.y as i32) < BAR && matches!(p.kind, Kind::Down { button: 0 | 1 | 2 }) {
             match (self.tab_at(p.x as i32, p.y as i32), p.kind) {
+                (Some(sex_web::Slot::Group(g)), Kind::Down { button: 2 }) => self.start_naming(g),
+                (_, Kind::Down { button: 2 }) => {}
                 (Some(sex_web::Slot::Tab(i)), Kind::Down { button: 1 }) => { self.show_tab(i); self.close_tab(); }
                 (Some(sex_web::Slot::Tab(i)), _) => self.show_tab(i),
                 (Some(sex_web::Slot::Group(g)), _) => self.fold_group(g),
@@ -2045,6 +2070,7 @@ impl Browser {
         // The browser's own shortcuts come before the page's.
         if key.control && self.in_frame.is_none() && self.shortcut(key) { return; }
         if self.finding { return self.find_key(key); }
+        if self.naming.is_some() { return self.name_key(key); }
         if self.editing.is_none() && self.page_key(key) { return; }
         if let Some(text) = self.editing.as_mut() {
             let mut typed = true;
@@ -2149,7 +2175,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();
@@ -2166,8 +2192,12 @@ pub extern "C" fn _start() -> ! {
     let cores = sex_app::thread::cores();
     sex_gl::set_parallel(sex_app::thread::parallel, cores);
     sex_pdx::serial_record!("[web.cores] cores={}", cores);
-    let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
-    b.open(&first, false);
+    // Started without an address, Kaleidoscope opens the tabs it had last time.
+    let address = given.split_ascii_whitespace().find(|a| !a.starts_with("--"));
+    if address.is_some() || !b.keep_session || b.jarbox == profile::Jarbox::Private || !b.restore_session() {
+        let first = address.unwrap_or(first_page()).to_string();
+        b.open(&first, false);
+    }
     let registered = sex_app::search::register("kaleidoscope", &[sex_app::search::KIND_HISTORY, sex_app::search::KIND_BOOKMARK]);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
     sex_pdx::serial_record!("[web.voyeur.register] sent={}", registered as u8);
