@@ -148,6 +148,7 @@ enum Doc {
 }
 impl Doc {
     fn get(&mut self) -> &mut Document { match self { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() } }
+    fn get_ref(&self) -> &Document { match self { Doc::Plain(d) => d, Doc::Scripted(s) => s.page() } }
     fn script(&mut self) -> Option<&mut Script<Document>> { match self { Doc::Scripted(s) => Some(s), _ => None } }
 }
 
@@ -157,7 +158,9 @@ impl Doc {
 /// take about 10 MiB).
 const CODE_CACHE_BYTES: usize = 48 << 20;
 
-struct PageScript { source: String, name: String, module: bool, node: Option<usize>, external: bool }
+/// `world` is the script world it runs in: 0 the page's own, another an extension's
+/// isolated world (content scripts).
+struct PageScript { source: String, name: String, module: bool, node: Option<usize>, external: bool, world: u8 }
 
 struct Browser {
     #[cfg(feature = "baseline-jit")]
@@ -1093,7 +1096,7 @@ impl Browser {
                 None => Some((dom.text_content(n), alloc::format!("{}#script{}", base.split('#').next().unwrap_or(base), now.len() + later.len() + 1))),
             };
             let Some((source, name)) = got else { continue };
-            let s = PageScript { source, name, module, node: (!module).then_some(n), external: dom.attr(n, "src").is_some() };
+            let s = PageScript { source, name, module, node: (!module).then_some(n), external: dom.attr(n, "src").is_some(), world: 0 };
             if deferred { later.push(s) } else { now.push(s) }
         }
         now.extend(later);
@@ -1106,10 +1109,13 @@ impl Browser {
         doc.import_map = core::mem::take(&mut self.import_map);
         doc.code_cache = Some(self.code_cache.clone());
         self.code_site();
+        // The page's own world gets the extension key only on an extension's own page;
+        // content scripts get it in their isolated worlds (below).
         if self.extensions.any() && (self.url.starts_with("http") || self.url.starts_with(extensions::SCHEME)) {
-            doc.ext_key = self.extensions.key.clone();
+            if self.url.starts_with(extensions::SCHEME) { doc.ext_key = self.extensions.key.clone(); }
             doc.ext_tab = self.ext_tab_json();
         }
+        let ext_key = self.extensions.key.clone();
         let started = sex_pdx::get_ticks();
         let mut script = match Script::new(doc, sex_js::Limits::default()) {
             Ok(s) => s,
@@ -1124,7 +1130,15 @@ impl Browser {
         #[cfg(feature = "baseline-jit")]
         let scripts_started = sex_pdx::get_ticks();
         for s in scripts.iter() {
-            let r = if s.module {
+            let r = if s.world != 0 {
+                // A content script: its extension's isolated world, made (with the key
+                // for its `chrome`) the first time.
+                let key = ext_key.clone();
+                let r = script.in_world(s.world, |p| p.ext_key = key, |sc, _| sc.eval(&s.source, &s.name)).and_then(|r| r);
+                // Only the new world's own start may take the key.
+                script.page_mut().ext_key.clear();
+                r
+            } else if s.module {
                 self.load_modules(&mut script, s);
                 script.eval_module(&s.source, &s.name)
             } else {
