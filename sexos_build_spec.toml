@@ -115,6 +115,7 @@ crates = [
   "apps/hookup/Cargo.toml",
   "apps/rendezvous/Cargo.toml",
   "servers/sexuvc/Cargo.toml",
+  "servers/saddle/Cargo.toml",
   "apps/flash/Cargo.toml",
   "apps/climax/Cargo.toml",
   "apps/batik/Cargo.toml",
@@ -993,6 +994,16 @@ action = "cargo_manifest"
 manifest = "servers/sexgpu-nv/Cargo.toml"
 source_artifact = "target/x86_64-sex/release/sexgpu-nv"
 dest_artifact = "iso_root/servers/sexgpu-nv"
+
+# Saddle: hosts drivers built on the Harness SDK on generic leases. BOOT starts it
+# as domain 54 (sex_pdx::pci_command::SADDLE_PD). docs/sdk/DRIVER_SDK.md
+[[stage]]
+id = "build_saddle"
+action = "cargo_manifest"
+target = "x86_64-sex.json"
+manifest = "servers/saddle/Cargo.toml"
+source_artifact = "target/x86_64-sex/release/saddle"
+dest_artifact = "iso_root/servers/saddle"
 
 # SexUVC: userspace USB Video Class webcam driver server
 [[stage]]
