@@ -12,6 +12,7 @@
 #[path = "../../../servers/sexusb/src/xhci.rs"] mod xhci;
 #[path = "../../../servers/sexusb/src/usb.rs"] mod usb;
 #[path = "../../../servers/sexusb/src/hid.rs"] mod hid;
+#[path = "../../../servers/sexusb/src/uac.rs"] mod uac;
 use std::cell::RefCell;
 
 const OP_USB_MOUSE_REPORT: u64 = 0x260;

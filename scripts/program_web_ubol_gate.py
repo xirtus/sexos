@@ -71,9 +71,6 @@ class Quiet(http.server.ThreadingHTTPServer):daemon_threads=True
 server=Quiet(('127.0.0.1',0),Handler);PORT=server.server_address[1]
 threading.Thread(target=server.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
-# uBOL's 117k rules, its background and its content scripts in every frame want more than
-# the default 512 MiB guest (1 GiB hit a kernel fault on 2026-11-20).
-os.environ.setdefault('SEXOS_GATE_MEMORY','768M')
 from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus','=':'equal'}
 SHIFTED={':':'semicolon','?':'slash','+':'equal','_':'minus'}
@@ -124,6 +121,8 @@ def main():
    g['wait'](r'\[web.loaded\] bytes_ok=1 [^\n]*scripted=1',s,300);time.sleep(8)
    shot=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5);Image.open(shot).convert('RGB').save(a.out/f'{name}.png')
    pages[name]=re.findall(r'\[web.(?:console\] level=[1-9]|script.error\])[^\n]*',t()[s:])[:5]
+   # Both pages' scripts run clean (the dashboard needs :scope and :has()).
+   assert not pages[name],(name,pages[name])
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text and 'trapped=' not in text
   print({'ok':True,'pages':pages,'rules':rules,'registered_scripts':registered,'blocked':blocked})
  finally:g['stop']()

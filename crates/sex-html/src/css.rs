@@ -20,6 +20,10 @@ pub enum AttrOp { Exists, Equals(String), Word(String), Prefix(String), Suffix(S
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pseudo { FirstChild, LastChild, OnlyChild, Link, Root, Empty, NthChild(i32, i32), Not(Vec<Selector>), Is(Vec<Selector>), Where(Vec<Selector>),
+    /// The element a script's query was called on (the root element in style sheets).
+    Scope,
+    /// `:has()`: some element, reached from this one by the combinator, matches.
+    Has(Vec<(Combinator, Selector)>),
     /// Under the pointer (or an ancestor of what is).
     Hover, Focus, FocusWithin, Checked, Disabled, Enabled }
 
@@ -398,7 +402,11 @@ fn compound_specificity(c: &Compound) -> u32 {
     if c.id.is_some() { s += 1 << 16; }
     s += (c.classes.len() as u32 + c.attrs.len() as u32) << 8;
     for p in &c.pseudo {
-        s += match p { Pseudo::Not(inner) | Pseudo::Is(inner) => inner.iter().map(|s| s.specificity).max().unwrap_or(0), Pseudo::Where(_) => 0, _ => 1 << 8 };
+        s += match p {
+            Pseudo::Not(inner) | Pseudo::Is(inner) => inner.iter().map(|s| s.specificity).max().unwrap_or(0),
+            Pseudo::Has(inner) => inner.iter().map(|(_, s)| s.specificity).max().unwrap_or(0),
+            Pseudo::Where(_) => 0, _ => 1 << 8,
+        };
     }
     if c.tag.is_some() { s += 1; }
     s
@@ -461,6 +469,25 @@ fn parse_compound(text: &str, mut i: usize, nesting: usize) -> Option<(Compound,
                             "not" => Pseudo::Not(inner), "where" => Pseudo::Where(inner), _ => Pseudo::Is(inner),
                         });
                     }
+                    "scope" => c.pseudo.push(Pseudo::Scope),
+                    "has" => {
+                        // Relative selectors, each led by its combinator (a descendant
+                        // when none). `:has()` inside `:has()` is not allowed.
+                        if arg.contains(":has(") { return None; }
+                        let mut inner = Vec::new();
+                        for part in split_top(arg, ',') {
+                            let part = part.trim();
+                            let (comb, rest) = match part.as_bytes().first() {
+                                Some(b'>') => (Combinator::Child, &part[1..]),
+                                Some(b'+') => (Combinator::Next, &part[1..]),
+                                Some(b'~') => (Combinator::Subsequent, &part[1..]),
+                                _ => (Combinator::Descendant, part),
+                            };
+                            inner.push((comb, parse_selector_depth(rest.trim(), nesting + 1)?));
+                        }
+                        if inner.is_empty() { return None; }
+                        c.pseudo.push(Pseudo::Has(inner));
+                    }
                     "hover" => c.pseudo.push(Pseudo::Hover),
                     "focus" | "focus-visible" => c.pseudo.push(Pseudo::Focus),
                     "focus-within" => c.pseudo.push(Pseudo::FocusWithin),
@@ -518,32 +545,74 @@ fn parse_attr(inner: &str) -> Option<(String, AttrOp)> {
 }
 
 pub fn matches(dom: &Dom, node: NodeId, sel: &Selector) -> bool {
-    matches_from(dom, node, sel, sel.parts.len() - 1)
+    matches_from(dom, node, sel, sel.parts.len() - 1, None)
 }
 
-fn matches_from(dom: &Dom, node: NodeId, sel: &Selector, at: usize) -> bool {
+/// [`matches`] with `:scope` being `scope` (a script's `element.matches()`).
+pub fn matches_scoped(dom: &Dom, node: NodeId, sel: &Selector, scope: NodeId) -> bool {
+    let outer = dom.scope.replace(Some(scope));
+    let ok = matches(dom, node, sel);
+    dom.scope.set(outer);
+    ok
+}
+
+/// `anchor` is a relative selector's start (`:has()`): its leftmost compound must stand
+/// in that relation to that element.
+fn matches_from(dom: &Dom, node: NodeId, sel: &Selector, at: usize, anchor: Option<(Combinator, NodeId)>) -> bool {
     if !matches_compound(dom, node, &sel.parts[at]) { return false; }
-    if at == 0 { return true; }
+    if at == 0 { return anchor.is_none_or(|(c, a)| related(dom, a, c, node)); }
     match sel.links[at - 1] {
-        Combinator::Child => parent_element(dom, node).map_or(false, |p| matches_from(dom, p, sel, at - 1)),
+        Combinator::Child => parent_element(dom, node).map_or(false, |p| matches_from(dom, p, sel, at - 1, anchor)),
         Combinator::Descendant => {
             let mut p = parent_element(dom, node);
             while let Some(n) = p {
-                if matches_from(dom, n, sel, at - 1) { return true; }
+                if matches_from(dom, n, sel, at - 1, anchor) { return true; }
                 p = parent_element(dom, n);
             }
             false
         }
-        Combinator::Next => dom.prev_element(node).map_or(false, |p| matches_from(dom, p, sel, at - 1)),
+        Combinator::Next => dom.prev_element(node).map_or(false, |p| matches_from(dom, p, sel, at - 1, anchor)),
         Combinator::Subsequent => {
             let mut p = dom.prev_element(node);
             while let Some(n) = p {
-                if matches_from(dom, n, sel, at - 1) { return true; }
+                if matches_from(dom, n, sel, at - 1, anchor) { return true; }
                 p = dom.prev_element(n);
             }
             false
         }
     }
+}
+
+/// Whether `node` is reached from `a` by `c`.
+fn related(dom: &Dom, a: NodeId, c: Combinator, node: NodeId) -> bool {
+    match c {
+        Combinator::Child => parent_element(dom, node) == Some(a),
+        Combinator::Descendant => node != a && dom.is_inclusive_ancestor(a, node),
+        Combinator::Next => dom.prev_element(node) == Some(a),
+        Combinator::Subsequent => {
+            let mut p = dom.prev_element(node);
+            while let Some(n) = p { if n == a { return true; } p = dom.prev_element(n); }
+            false
+        }
+    }
+}
+
+/// `:has()`: an element after `node` (its descendants, or for `+`/`~` its later
+/// siblings and theirs) matches one of the relative selectors.
+fn has(dom: &Dom, node: NodeId, inner: &[(Combinator, Selector)]) -> bool {
+    inner.iter().any(|(c, sel)| {
+        let within = match c {
+            Combinator::Descendant | Combinator::Child => node,
+            Combinator::Next | Combinator::Subsequent => match dom.nodes[node].parent { Some(p) => p, None => return false },
+        };
+        // Only the subtree is searched; past its end the relation can't hold.
+        let mut stack: Vec<NodeId> = dom.nodes[within].children.iter().rev().copied().collect();
+        while let Some(n) = stack.pop() {
+            if matches_from(dom, n, sel, sel.parts.len() - 1, Some((*c, node))) { return true; }
+            stack.extend(dom.nodes[n].children.iter().rev().copied());
+        }
+        false
+    })
 }
 
 fn parent_element(dom: &Dom, node: NodeId) -> Option<NodeId> {
@@ -585,6 +654,8 @@ pub fn matches_compound(dom: &Dom, node: NodeId, c: &Compound) -> bool {
             }
             Pseudo::Not(inner) => !inner.iter().any(|s| matches(dom, node, s)),
             Pseudo::Is(inner) | Pseudo::Where(inner) => inner.iter().any(|s| matches(dom, node, s)),
+            Pseudo::Scope => match dom.scope.get() { Some(s) => s == node, None => tag == "html" },
+            Pseudo::Has(inner) => has(dom, node, inner),
             Pseudo::Hover => dom.hover.is_some_and(|h| dom.is_inclusive_ancestor(node, h)),
             Pseudo::Focus => dom.caret.is_some_and(|(f, _)| f == node),
             Pseudo::FocusWithin => dom.caret.is_some_and(|(f, _)| dom.is_inclusive_ancestor(node, f)),
