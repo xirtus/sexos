@@ -144,13 +144,17 @@ fn one_run_per_plugin_shared_by_workspaces_and_dropped_when_unused() {
     assert_eq!(p.set(2, 22, 0, 0), Ok((1, true)));
     assert_eq!(p.clear(0), None, "workspace 5 still uses plugin 11");
     assert_eq!(p.clear(4), Some(0));
-    // A run asked to close comes back into use if a workspace names it again.
+    // A run asked to close cannot take its Close back: naming the plugin
+    // again starts a fresh run in another slot while the old one retires.
     p.slots[0].as_mut().unwrap().run = Run::Stopping { target: 70, task: 5, since: 9 };
-    assert_eq!(p.set(3, 11, 2, 0), Ok((0, false)));
-    assert_eq!(p.slots[0].unwrap().run, Run::Running { target: 70, task: 5 });
+    assert_eq!(p.set(3, 11, 2, 0), Ok((2, true)));
+    assert_eq!(p.slots[0].unwrap().run, Run::Stopping { target: 70, task: 5, since: 9 });
+    assert_eq!(p.slot_of(11), Some(2));
+    assert_eq!(p.slot_of_run(70, 5), None, "the retiring run's answers are not taken");
+    p.slots[0] = None; // the poll frees it once it has ended
     // Its run ended (a crash): every workspace using it goes back to its own layout.
-    p.set(5, 11, 0, 0).unwrap();
-    assert_eq!(p.drop_plugin(0), 2);
+    assert_eq!(p.set(5, 11, 0, 0), Ok((2, false)));
+    assert_eq!(p.drop_plugin(2), 2);
     assert!(p.uses[3].is_none() && p.uses[5].is_none());
     assert!(p.uses[2].is_some(), "another plugin's workspace stays");
     // Four plugins at most.

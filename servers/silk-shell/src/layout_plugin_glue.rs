@@ -205,10 +205,22 @@ pub unsafe fn refused(code: u32) -> bool {
     if (*core::ptr::addr_of!(crate::LAUNCH_ASKER)).is_some() { return false; }
     let Some(slot) = plugins().slots.iter().position(|p| p.is_some_and(|p| matches!(p.run, Run::Starting { .. }))) else { return false };
     let key = plugins().slots[slot].map_or(0, |p| p.key);
-    let n = plugins().drop_plugin(slot);
+    let n = drop_and_retile(slot);
     sex_pdx::serial_record!("[shell.layout.plugin.run] key={:x} state=refused code={} workspaces={}", key, code, n);
     sex_pdx::serial_record!("[shell.layout.plugin] key={:x} ok=0 reason=refused", key);
     true
+}
+
+/// Drops plugin `slot` (its run ended or would not start). When the active
+/// workspace was tiled by it, retiles at once so its windows go back to the
+/// previous layout instead of keeping the dead plugin's rectangles.
+unsafe fn drop_and_retile(slot: usize) -> usize {
+    let key = plugins().slots[slot].map(|p| p.key);
+    let active = crate::ACTIVE_SCENE_IDX as usize;
+    let shown = key.is_some_and(|k| plugins().uses.get(active).copied().flatten().is_some_and(|u| u.key == k));
+    let n = plugins().drop_plugin(slot);
+    if shown { crate::tile_active_scene_frames(); }
+    n
 }
 
 /// Asks plugin `slot`'s run to close: no workspace uses it.
@@ -237,7 +249,7 @@ pub unsafe fn poll() {
         match p.run {
             Run::Starting { since } => {
                 if now.saturating_sub(since) > START_TICKS && !crate::PROGRAM_READING && (*core::ptr::addr_of!(crate::PROGRAM_REBIRTH)).is_none() {
-                    let n = plugins().drop_plugin(slot);
+                    let n = drop_and_retile(slot);
                     sex_pdx::serial_record!("[shell.layout.plugin.run] key={:x} state=timeout workspaces={}", p.key, n);
                     sex_pdx::serial_record!("[shell.layout.plugin] key={:x} ok=0 reason=start_timeout", p.key);
                 }
@@ -245,7 +257,7 @@ pub unsafe fn poll() {
             Run::Running { target, task } => {
                 if crate::program_run(target).is_none_or(|(_, t)| t != task) {
                     // A crash: every workspace that used it keeps its previous layout.
-                    let n = plugins().drop_plugin(slot);
+                    let n = drop_and_retile(slot);
                     sex_pdx::serial_record!("[shell.layout.plugin.run] key={:x} state=ended target={} task={} workspaces={}", p.key, target, task, n);
                     sex_pdx::serial_record!("[shell.layout.plugin] key={:x} ok=0 reason=ended", p.key);
                 } else if !used {

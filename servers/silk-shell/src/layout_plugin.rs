@@ -131,7 +131,12 @@ pub struct Plugins<const S: usize> {
 impl<const S: usize> Plugins<S> {
     pub const fn new() -> Self { Self { slots: [None; MAX_PLUGINS], uses: [None; S], next_generation: 0 } }
 
-    pub fn slot_of(&self, key: u64) -> Option<usize> { self.slots.iter().position(|p| p.is_some_and(|p| p.key == key)) }
+    /// The live slot of plugin `key`. A run already asked to close is not
+    /// one: its Close cannot be taken back, so choosing the plugin again
+    /// starts a fresh run in another slot while the old one retires.
+    pub fn slot_of(&self, key: u64) -> Option<usize> {
+        self.slots.iter().position(|p| p.is_some_and(|p| p.key == key && !matches!(p.run, Run::Stopping { .. })))
+    }
     /// The plugin whose run is `(target, task)`.
     pub fn slot_of_run(&self, target: u32, task: u32) -> Option<usize> {
         self.slots.iter().position(|p| p.is_some_and(|p| matches!(p.run, Run::Running { target: t, task: k } if t == target && k == task)))
@@ -145,7 +150,6 @@ impl<const S: usize> Plugins<S> {
     pub fn set(&mut self, scene: usize, key: u64, fallback: u8, now: u64) -> Result<(usize, bool), ()> {
         if scene >= S { return Err(()); }
         let (slot, fresh) = match self.slot_of(key) {
-            // A run asked to close comes back into use: it is still alive.
             Some(i) => (i, false),
             None => {
                 let i = self.slots.iter().position(|p| p.is_none()).ok_or(())?;
@@ -153,9 +157,6 @@ impl<const S: usize> Plugins<S> {
                 (i, true)
             }
         };
-        if let Some(p) = self.slots[slot].as_mut() {
-            if let Run::Stopping { target, task, .. } = p.run { p.run = Run::Running { target, task }; }
-        }
         let old = self.uses[scene].map(|u| u.fallback);
         // Moving from one plugin to another keeps the layout the workspace had first.
         self.uses[scene] = Some(Use { key, fallback: old.unwrap_or(fallback), generation: 0, applied: None, rects: [Raw::default(); MAX_RECTS] });
