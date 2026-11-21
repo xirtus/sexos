@@ -191,8 +191,10 @@ pub fn pdx_listen_raw(_slot: u64) -> Message {
         .expect("finite nested reply stream exhausted")
 }
 pub fn sys_yield() {}
+pub fn get_ticks() -> u64 { 0 }
+pub const ERR_SERVICE_NOT_READY: u64 = 0xFFFF_FFFF_FFFF_FFFE;
 mod nested_disk {
-    use super::{pdx_call, pdx_listen_raw, serial_println, sys_yield, SLOT_BLOCK};
+    use super::{pdx_call, pdx_listen_raw, serial_println, sys_yield, SLOT_BLOCK, BLOCK_ERR_NO_DEVICE};
     const BLOCK_READ: u64 = 1;
     const BLOCK_WRITE: u64 = 2;
     const BLOCK_SECTOR_SIZE: u64 = 512;

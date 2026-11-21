@@ -1809,6 +1809,90 @@ fn code_cache_runs_the_same_scripts_and_modules() {
 }
 
 #[test]
+fn streams_and_fetch_bodies() {
+    let mut s = page("<p>x</p>");
+    s.eval(r#"
+        const out = [];
+        // A ReadableStream read with a reader, piped through a TransformStream, teed.
+        const rs = new ReadableStream({ start(c) { c.enqueue('a'); c.enqueue('b'); c.close(); } });
+        const up = rs.pipeThrough(new TransformStream({ transform(ch, c) { c.enqueue(ch.toUpperCase()); } }));
+        const [l, r] = up.tee();
+        (async () => {
+            const got = [];
+            for await (const x of l) got.push(x);
+            const rd = r.getReader();
+            const one = await rd.read(), two = await rd.read(), end = await rd.read();
+            console.log('streams', got.join(''), one.value + two.value, end.done, rs.locked);
+            // Pull-driven, with UTF-8 split across chunks.
+            let n = 0;
+            const bytes = new ReadableStream({ pull(c) { n < 2 ? c.enqueue(new Uint8Array(n++ ? [0xA9, 0x21] : [0x63, 0xC2])) : c.close(); } });
+            let text = '';
+            for await (const t of bytes.pipeThrough(new TextDecoderStream())) text += t;
+            console.log('decoded', text);
+            // Response made by the page.
+            const made = new Response('{"k":1}', { status: 201, headers: { 'x-a': 'b' } });
+            const copy = made.clone();
+            console.log('made', made.status, made.ok, made.headers.get('content-type'), (await made.json()).k, made.bodyUsed, await copy.text());
+            console.log('stream body', await new Response(new ReadableStream({ start(c) { c.enqueue(new Uint8Array([104, 105])); c.close(); } })).text(), new Response(null).body);
+            await made.text().catch(e => console.log('again', e.constructor.name));
+            // Cloning after .body was touched still reads the bytes.
+            const touched = new Response('hello'); void touched.body;
+            console.log('clone touched', await touched.clone().text(), await touched.text());
+            // A failing transform errors the readable side too.
+            const bad = new ReadableStream({ start(c) { c.enqueue('x'); } }).pipeThrough(new TransformStream({ transform() { throw new Error('nope'); } }));
+            await bad.getReader().read().then(() => console.log('bad read'), e => console.log('transform', e.message));
+            // An aborted pipe aborts its destination's sink.
+            const ac2 = new AbortController();
+            let sunk = '';
+            const sink = new WritableStream({ write(ch) { sunk += ch; }, close() { sunk += '|closed'; }, abort(r) { sunk += '|abort ' + r; } });
+            const p = new ReadableStream({ start(c) { c.enqueue('a'); } }).pipeTo(sink, { signal: ac2.signal });
+            for (let i = 0; i < 6; i++) await null;
+            ac2.abort('stop');
+            await p.catch(e => console.log('pipe', e, sunk));
+        })();
+        // fetch: the body streams in pieces; an aborted fetch rejects.
+        fetch('/videoplayback', { method: 'POST', body: new Uint8Array([1, 2, 3]) }).then(async r => {
+            const reader = r.body.getReader();
+            let pieces = 0, total = 0;
+            for (;;) { const { value, done } = await reader.read(); if (done) break; pieces++; total += value.byteLength; }
+            console.log('fetch body', r.status, pieces, total, r.bodyUsed);
+        });
+        const ac = new AbortController();
+        fetch('/slow', { signal: ac.signal }).then(() => console.log('slow loaded'), e => console.log('slow', e.name));
+        ac.abort();
+        fetch(new Request('/req', { method: 'PUT', body: 'hey' })).then(r => r.arrayBuffer()).then(b => console.log('req', b.byteLength));
+    "#, "t.js").unwrap();
+    s.dispatch("flush").unwrap();
+    let asked = std::mem::take(&mut s.page_mut().fetches);
+    assert_eq!(asked.len(), 3);
+    assert_eq!((asked[0].method.as_str(), &asked[0].body[..]), ("POST", &[1u8, 2, 3][..]));
+    assert_eq!((asked[2].url.as_str(), asked[2].method.as_str(), &asked[2].body[..]), ("/req", "PUT", &b"hey"[..]));
+    s.page_mut().keep_head(asked[0].id, "http://example.test/videoplayback", "content-type: application/vnd.yt-ump\r\n");
+    s.page_mut().keep_body(asked[0].id, 200, vec![7; 150_000]);
+    s.dispatch(&format!("fetched\t{}\t200\t150000", asked[0].id)).unwrap();
+    s.page_mut().keep_body(asked[1].id, 200, vec![1; 10]);
+    s.dispatch(&format!("fetched\t{}\t200\t10", asked[1].id)).unwrap();
+    s.page_mut().keep_body(asked[2].id, 200, vec![1; 5]);
+    s.dispatch(&format!("fetched\t{}\t200\t5", asked[2].id)).unwrap();
+    for _ in 0..4 { s.dispatch("flush").unwrap(); }
+    let mut l = logs(&mut s);
+    l.sort();
+    assert_eq!(l, [
+        "0:again TypeError",
+        "0:clone touched hello hello",
+        "0:decoded c©!",
+        "0:fetch body 200 10 150000 true",
+        "0:made 201 true text/plain;charset=UTF-8 1 true {\"k\":1}",
+        "0:pipe stop a|abort stop",
+        "0:req 5",
+        "0:slow AbortError",
+        "0:stream body hi null",
+        "0:streams AB AB true false",
+        "0:transform nope",
+    ]);
+}
+
+#[test]
 fn document_position_in_one_host_call() {
     let mut s = page("<div id=a><p id=b>x<i id=c></i></p><p id=d></p></div><span id=e></span>");
     s.eval(r#"
@@ -1847,6 +1931,21 @@ fn id_lookup_and_small_subtree_queries_after_changes() {
         console.log(document.getElementById('in'), document.getElementById('renamed') === loose.firstChild);
     "#, "t.js").unwrap();
     assert_eq!(logs(&mut s), ["0:2 null", "0:null 3 2", "0:true 2 3", "0:null true"]);
+}
+
+#[test]
+fn seeked_reports_the_asked_time() {
+    let mut s = page("<video id=v></video>");
+    s.eval(r#"
+        const v = document.getElementById('v');
+        v.addEventListener('seeked', () => console.log('seeked', v.currentTime, v.seeking));
+        v.addEventListener('timeupdate', () => console.log('time', v.currentTime));
+        v.currentTime = 6;
+        console.log('id', v._id);
+    "#, "t.js").unwrap();
+    let id = logs(&mut s)[0].trim_start_matches("0:id ").to_string();
+    s.dispatch(&format!("media\t{id}\tseeked,timeupdate\t6.12\t10\t0\t0\t320\t240\t4")).unwrap();
+    assert_eq!(logs(&mut s), ["0:seeked 6 false", "0:time 6.12"]);
 }
 
 #[test]

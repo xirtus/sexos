@@ -29,9 +29,12 @@ pub fn event_words(msg: MessageType) -> [u64; 6] {
 /// 28 on slot 0 takes it. Type 0: nothing waiting.
 pub fn take_event(pd: &ProtectionDomain) -> [u64; 6] {
     if let Some(reply) = IpcReply::take(&mut pd.incoming_replies.lock()) {
+        crate::service_restart::inbox(pd.id, true);
         return [1, reply.caller_pd as u64, reply.value, 0, 0, reply.caller_task as u64];
     }
-    match unsafe { (*pd.message_ring).dequeue() } { Some(msg) => event_words(msg), None => [0; 6] }
+    let event = match unsafe { (*pd.message_ring).dequeue() } { Some(msg) => event_words(msg), None => [0; 6] };
+    crate::service_restart::inbox(pd.id, event[0] != 0);
+    event
 }
 
 /// Registers of a 102/103 return: rax status, rdi type, rsi caller_pd << 32 | caller_task,
