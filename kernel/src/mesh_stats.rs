@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! SYS_STATS operations for Mesh, answered before cpu_account (which keeps the rest):
-//! program memory, and who holds what as numbers (a domain's PKU
+//! each core's idle time and what it runs (read through `cpu_account::core_view`), program memory, and who holds what as numbers (a domain's PKU
 //! key, how many capabilities it holds, which domains it holds a domain capability to).
 //! Never the capabilities themselves. IPC v2 endpoints name objects, not domains, so
 //! they are counted but not linked. `None` for every other operation.
@@ -8,9 +8,12 @@ use sex_pdx::mesh_stats as wire;
 
 pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> Option<u64> {
     let (op, arg, arg2) = (regs.rdi, regs.rsi, regs.rdx);
-    if !matches!(op, wire::OP_MEMORY | wire::OP_ORGAN | wire::OP_LINK) { return None; }
+    if !matches!(op, wire::OP_CORE | wire::OP_MEMORY | wire::OP_ORGAN | wire::OP_LINK) { return None; }
     regs.rsi = 0; regs.rdx = 0; regs.r10 = 0; regs.r8 = 0;
     Some(match op {
+        wire::OP_CORE => { let t = unsafe { core::arch::x86_64::_rdtsc() };
+            let Some((idle, pd)) = crate::cpu_account::core_view(arg as usize, t) else { return Some(wire::INVALID) };
+            regs.rsi = idle; regs.rdx = pd as u64; regs.r10 = t; wire::OK }
         wire::OP_MEMORY => {
             regs.rsi = crate::program_frames::lent();
             regs.rdx = crate::program_frames::peak();

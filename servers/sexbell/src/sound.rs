@@ -319,21 +319,28 @@ impl Card {
             h.follow_jack();
         }
     }
+    /// A USB card with no microphone of its own records from the card it took over
+    /// from (the laptop's microphone next to USB speakers).
     fn has_input(&self) -> bool {
-        match self { Card::Virtio { input, .. } => input.is_some(), Card::Hda(h) => h.has_mic(), Card::Usb { .. } => false }
+        match self { Card::Virtio { input, .. } => input.is_some(), Card::Hda(h) => h.has_mic(), Card::Usb { .. } => parked().is_some_and(|c| c.has_input()) }
     }
     /// Starts or stops the microphone stream.
     fn input_run(&mut self, on: bool) -> bool {
         match self {
             Card::Virtio { card, input: Some(i), .. } => if on { card.pcm_start(*i).is_ok() } else { card.pcm_stop(*i).is_ok() },
             Card::Hda(h) => if on { h.mic_start() } else { h.mic_stop() },
+            Card::Usb { .. } => parked().is_some_and(|c| c.input_run(on)),
             _ => false,
         }
     }
     /// Asks for one more period from the microphone. The HD Audio input stream runs
     /// on its own ring and needs no asking.
     fn input_ask(&mut self) -> bool {
-        match self { Card::Virtio { card, input: Some(i), .. } => card.pcm_capture_nb(*i).is_ok(), _ => false }
+        match self {
+            Card::Virtio { card, input: Some(i), .. } => card.pcm_capture_nb(*i).is_ok(),
+            Card::Usb { .. } => parked().is_some_and(|c| c.input_ask()),
+            _ => false,
+        }
     }
     /// A period the microphone filled, if one is back, copied into `out`: its length.
     fn input_take(&mut self, out: &mut [u8; PERIOD_BYTES]) -> Option<usize> {
@@ -344,6 +351,7 @@ impl Card {
                 n
             }),
             Card::Hda(h) => h.mic_take(out).then_some(crate::hda::PERIOD_BYTES.min(PERIOD_BYTES)),
+            Card::Usb { .. } => parked().and_then(|c| c.input_take(out)),
             _ => None,
         }
     }
@@ -375,6 +383,8 @@ struct Player {
     hearing: bool,
     asked: usize,
     heard: u64,
+    /// The microphone is a USB one (headset or microphone, through SexUSB), not the card's.
+    mic_usb: bool,
 }
 /// The period being mixed, kept off the service's small stack.
 static mut MIX: [[i32; 2]; PERIOD_FRAMES] = [[0; 2]; PERIOD_FRAMES];
@@ -498,7 +508,15 @@ impl Player {
     /// The microphone: tell each asking program where it stands, run the input stream
     /// while anyone may listen, and copy what it hears into each listener's ring.
     fn listen_pump(&mut self) {
-        let input = self.card.has_input();
+        // A USB microphone, when one is plugged in, wins over the card's own.
+        let usb = usb_link().filter(|l| l.mic().is_some());
+        if usb.is_some() != self.mic_usb {
+            if self.hearing { self.input_run(false); self.hearing = false; self.asked = 0; }
+            self.mic_usb = usb.is_some();
+            sex_pdx::serial_record!("[bell.mic.source] usb={} vendor={:#06x} product={:#06x}", self.mic_usb as u8,
+                usb.and_then(|l| l.mic()).map_or(0, |m| m.0), usb.and_then(|l| l.mic()).map_or(0, |m| m.1));
+        }
+        let input = self.mic_usb || self.card.has_input();
         for (i, st) in self.streams.iter().enumerate() {
             let Some(st) = st else { continue };
             if crate::restricted::denied(st.pd){continue;}
@@ -509,13 +527,13 @@ impl Player {
         }
         let on = input && self.listening();
         if on != self.hearing {
-            let ok = self.card.input_run(on);
+            let ok = self.input_run(on);
             self.hearing = on;
             sex_pdx::serial_record!("[bell.mic] on={} ok={} heard={}", on as u8, ok as u8, self.heard);
         }
         // Periods come back in order; while no one listens they are dropped.
         let heard = unsafe { &mut *core::ptr::addr_of_mut!(HEARD) };
-        while let Some(len) = self.card.input_take(heard) {
+        while let Some(len) = self.input_take(heard) {
             let frames = &heard[..len];
             self.asked = self.asked.saturating_sub(1);
             if !self.hearing { continue; }
@@ -535,7 +553,22 @@ impl Player {
             if self.heard == 0 { sex_pdx::serial_record!("[bell.mic.first] frames={}", n); }
             self.heard += n;
         }
-        while self.hearing && self.asked < LISTEN_AHEAD && self.card.input_ask() { self.asked += 1; }
+        while self.hearing && !self.mic_usb && self.asked < LISTEN_AHEAD && self.card.input_ask() { self.asked += 1; }
+    }
+
+    /// Starts or stops whichever microphone is in use.
+    fn input_run(&mut self, on: bool) -> bool {
+        match usb_link().filter(|_| self.mic_usb) {
+            Some(l) => { l.set_listen(on); true }
+            None => self.card.input_run(on),
+        }
+    }
+    /// What the microphone in use heard since last asked, as S16 stereo bytes in `out`.
+    fn input_take(&mut self, out: &mut [u8; PERIOD_BYTES]) -> Option<usize> {
+        let Some(l) = usb_link().filter(|_| self.mic_usb) else { return self.card.input_take(out) };
+        let frames = unsafe { core::slice::from_raw_parts_mut(out.as_mut_ptr() as *mut [i16; 2], PERIOD_FRAMES) };
+        let n = l.read_heard(frames);
+        (n > 0).then_some(n * FRAME_BYTES)
     }
 
     /// Drops the periods in flight when the card changes: the old card plays them out
@@ -634,7 +667,7 @@ pub fn init() {
 fn player_with(card: Card) -> Player {
     Player { card, started: false, notes: [Note { hz: 0, frames: 0, volume: 0 }; NOTES],
         head: 0, len: 0, done: 0, phase: 0, tokens: [0; IN_FLIGHT], first: 0, flying: 0,
-        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT], hearing: false, asked: 0, heard: 0 }
+        period: [0; PERIOD_BYTES], played: 0, streams: [None; STREAMS], took: [[0; STREAMS]; IN_FLIGHT], hearing: false, asked: 0, heard: 0, mic_usb: false }
 }
 
 fn open() -> Result<Player, &'static str> {
@@ -707,6 +740,11 @@ static mut USB_REGION: Option<u64> = None;
 static mut USB_SEEN: u32 = 0;
 static mut PARKED: Option<(Card, bool)> = None;
 
+/// The card a USB card took over from, while it waits.
+fn parked() -> Option<&'static mut Card> {
+    unsafe { (*core::ptr::addr_of_mut!(PARKED)).as_mut().map(|(c, _)| c) }
+}
+
 fn usb_link() -> Option<sex_pdx::usb_audio::Shared> {
     let base = unsafe { *core::ptr::addr_of!(USB_REGION) }.unwrap_or_else(|| {
         let at = sex_pdx::memory_region_full_view(sex_pdx::usb_audio::SLOT, m::QUERY_VIEW | m::READ | m::WRITE).ok()
@@ -730,6 +768,9 @@ fn usb_check() {
             match player() {
                 None => unsafe { *core::ptr::addr_of_mut!(PLAYER) = Some(player_with(card)) },
                 Some(p) => {
+                    // The old card's microphone stops before it waits; Bell starts the
+                    // right one again on its next turn.
+                    if p.hearing && !p.mic_usb { p.card.input_run(false); p.hearing = false; p.asked = 0; }
                     let old = core::mem::replace(&mut p.card, card);
                     if !matches!(old, Card::Usb { .. }) { *parked = Some((old, p.started)); }
                     // Periods still with the old card play out there; counting starts again.
@@ -741,6 +782,7 @@ fn usb_check() {
         }
         None if *seen != 0 && player().is_some_and(|p| matches!(p.card, Card::Usb { .. })) => {
             let p = player().unwrap();
+            if p.hearing && !p.mic_usb { p.card.input_run(false); p.hearing = false; p.asked = 0; }
             let back = parked.take();
             sex_pdx::serial_record!("[bell.usb.gone] generation={} back={}", *seen, back.as_ref().map_or("none", |(c, _)| c.name()));
             if let Some((card, started)) = back { p.card = card; p.started = started; }

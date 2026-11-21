@@ -3920,7 +3920,7 @@
   const globals = {
     window, self: window, Window, globalThis: window, document, location, console, performance,
     navigator: { userAgent: 'Mozilla/5.0 (SexOS) Web/0.2', appName: 'Netscape', appCodeName: 'Mozilla', appVersion: '5.0 (SexOS) Web/0.2', product: 'Gecko', productSub: '20030107',
-      vendor: '', vendorSub: '', language: 'en-US', languages: ['en-US', 'en'], platform: 'SexOS', onLine: true, cookieEnabled: true, doNotTrack: null,
+      vendor: '', vendorSub: '', language: 'en-US', languages: ['en-US', 'en'], platform: 'SexOS', onLine: true, cookieEnabled: true, doNotTrack: null, globalPrivacyControl: true,
       hardwareConcurrency: 4, maxTouchPoints: 0, pdfViewerEnabled: false, webdriver: false, plugins: [], mimeTypes: [], javaEnabled: () => false,
       mediaCapabilities, sendBeacon, gpu: new GPU(),
       permissions: { query: d => Promise.resolve(Object.assign(new EventTarget(), { name: d && d.name, state: 'prompt', onchange: null })) } },
