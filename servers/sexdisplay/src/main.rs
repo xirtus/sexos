@@ -157,6 +157,8 @@ mod wallpaper_mark;
 mod desktop_widgets;
 mod decor;
 mod desk_theme;
+mod glass;
+mod frost;
 mod pacing;
 mod damage;
 static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
@@ -2477,6 +2479,41 @@ fn gpu_present(first:usize,end:usize)->bool{
     true
 }
 
+/// Every popup that shows this frame and is drawn as frosted glass (S6b),
+/// with its whole rectangle, in drawing order.
+fn glass_panels(w:usize,h:usize,scene:&scene::SceneSnapshot)->frost::Shown{
+    let (bar,scale)=(scene.metrics.bar()as usize,scene.metrics.scale());
+    let mut shown:frost::Shown=[None;7];
+    let mut n=0;
+    let mut add=|p:frost::Panel,r:Option<glass::Rect>|{if let Some(r)=r.filter(|r|r.2!=0&&r.3!=0){if n<shown.len(){shown[n]=Some((p,r));n+=1;}}};
+    // The launcher panel (0x92) is a compositor surface: its own fill is the
+    // body under it, so there is nothing behind it to frost; it stays flat.
+    for item in program_tray::glass_rects(w,h,scale,bar).into_iter().flatten(){add(item.0,Some(item.1));}
+    add(frost::Panel::TrayMenu,tray_menu_rect(w,bar,scale));
+    add(frost::Panel::Bluetooth,bt_panel::glass_rect(w,scale,bar));
+    // The Super+W overview dims the whole desktop and stays as it is.
+    let state=unsafe{WINDOW_SWITCHER};
+    if state.visible()&&!state.grid{add(frost::Panel::Switcher,sex_pdx::window_switcher::Layout::new(w,h,state.count as usize,scale).map(|l|l.panel));}
+    add(frost::Panel::WindowMenu,window_menu::glass_rect(w,h,scale));
+    shown
+}
+
+/// Before the overlays: frosted panels (S6b) blur the body around them. A
+/// partial frame repainted only its damage, so elsewhere under a shown panel
+/// the frame still holds last frame's glass: paint the body there (and the
+/// blur margin) again, or each frame would blur the blur. Full and Area have
+/// just painted all of it.
+fn glass_body(fb:*mut u32,w:usize,h:usize,scene:&scene::SceneSnapshot,plan:Plan){
+    let shown=glass_panels(w,h,scene);
+    frost::frame(&shown);
+    if plan.is_full()||matches!(plan.content,Content::Area){return;}
+    let (bar,scale)=(scene.metrics.bar()as usize,scene.metrics.scale());
+    for (_,r) in shown.iter().flatten(){
+        let (x0,y0,x1,y1)=frost::region(*r,w,h,bar,scale);
+        if x0<x1&&y0<y1{raster_rows(fb,y0,y1,x0,x1,w,h,scene);}
+    }
+}
+
 fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,plan:Plan)->bool{
     if !scene.is_valid()||scene.width!=target.width()||scene.height!=target.height()||plan.is_empty(){return false;}
     // Verified no-pixel text work republishes the committed baseline. Do not
@@ -2489,6 +2526,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         Content::Damage(rect)=>raster_damage(target,rect,scene),Content::None|Content::Settle|Content::Cursor=>true};
     if !body||plan.strip&&!raster_strip(target,scene){return false;}
     if !plan.cursor_only(){
+        glass_body(fb,w,h,scene,plan);
         if plan.is_full()||matches!(plan.content,Content::Area)||plan.strip{
             draw_atlas_cards_pass(fb,w,h,total,scene);
             draw_atlas_frame_previews_pass(fb,w,h,total,scene);
@@ -2498,7 +2536,7 @@ fn raster_batch(target:&frame_output::Target<'_>,scene: &scene::SceneSnapshot,pl
         draw_tray_menu(fb,w,h,total,scene);
         bt_panel::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_window_switcher(fb,w,h,total,scene);
-        window_menu::draw(fb,w,h,total,scene.metrics.scale());
+        window_menu::draw(fb,w,h,total,scene.metrics.scale(),scene.metrics.bar()as usize);
         draw_screenshot_ui(fb,w,h,total,scene);
     }
     // Locked: the lock surface covers everything the passes above painted.
@@ -3340,6 +3378,9 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
     let (px, py, pw, ph) = layout.panel;
     // The overview dims the whole desktop below the panel; the switcher is a rounded glass panel.
     let (radius, shade) = if state.grid { (0, 200) } else { (10 * scale as usize, 225) };
+    // Frosted glass (S6b); the overview, and the switcher with glass off, shade it.
+    let frosted = !state.grid && switcher_frost(fb, w, h, total_pixels, layout.panel, radius, scale, scene.metrics.bar() as usize);
+    if !frosted {
     for y in py..py + ph {
         for x in px..px + pw {
             // Rounded corners: skip pixels outside the corner circles.
@@ -3352,6 +3393,7 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
                 core::ptr::write_volatile(fb.add(i), alpha_blend_xrgb_over_xrgb(panel, under, shade));
             }
         }
+    }
     }
     for (index, sid) in state.ids().enumerate() {
         let selected = index == state.selected as usize;
@@ -3406,17 +3448,56 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
     }
 }
 
+/// The Alt+Tab panel as frosted glass (S6b) with its rounded corners: the
+/// body outside the corner arcs is kept as it was. False when glass is off.
+fn switcher_frost(fb: *mut u32, w: usize, h: usize, total: usize, r: glass::Rect, radius: usize, scale: u32, bar: usize) -> bool {
+    const MAX_R: usize = 10 * glass::MAX_SCALE as usize;
+    static mut CORNERS: [u32; 4 * MAX_R * MAX_R] = [0; 4 * MAX_R * MAX_R];
+    let radius = radius.min(MAX_R).min(r.2 / 2).min(r.3 / 2);
+    let (px, py, pw, ph) = r;
+    let corner = |k: usize| (if k & 1 == 0 { px } else { px + pw - radius }, if k & 2 == 0 { py } else { py + ph - radius });
+    let outside = |x: usize, y: usize| {
+        let dx = if x < px + radius { px + radius - x } else if x >= px + pw - radius { x + radius + 1 - (px + pw) } else { 0 };
+        let dy = if y < py + radius { py + radius - y } else if y >= py + ph - radius { y + radius + 1 - (py + ph) } else { 0 };
+        dx * dx + dy * dy > radius * radius
+    };
+    let corners = unsafe { &mut *core::ptr::addr_of_mut!(CORNERS) };
+    for k in 0..4 {
+        let (cx, cy) = corner(k);
+        for j in 0..radius { for i in 0..radius {
+            let at = (cy + j) * w + cx + i;
+            corners[(k * MAX_R + j) * MAX_R + i] = if at < total { unsafe { core::ptr::read_volatile(fb.add(at)) } } else { 0 };
+        } }
+    }
+    if !frost::glass(fb, w, h, total, frost::Panel::Switcher, r, scale, bar) { return false; }
+    for k in 0..4 {
+        let (cx, cy) = corner(k);
+        for j in 0..radius { for i in 0..radius {
+            let (x, y) = (cx + i, cy + j);
+            let at = y * w + x;
+            if at < total && outside(x, y) { unsafe { core::ptr::write_volatile(fb.add(at), corners[(k * MAX_R + j) * MAX_R + i]); } }
+        } }
+    }
+    true
+}
+
 /// Text at (x0, y0) over `bg`, cut at `max_w`; returns its width.
 fn tray_text(fb: *mut u32, w: usize, h: usize, total: usize, text: &[u8], x0: usize, y0: usize, bg: u32, scale: u32, max_w: usize) -> usize {
     let tw = glyphs::ui_width(text, scale).unwrap_or(0).min(max_w);
     let line = glyphs::UI_H * scale as usize;
+    // The ink reads on `bg`; its edges blend with what is drawn there, which
+    // on frosted glass (S6b) is not one flat colour.
+    let ink = sex_pdx::desktop_style::contrast_ink(bg);
     for y in 0..line {
         for x in 0..tw {
-            if let Some(c) = ui_label_at_scaled(text, x, y, bg, scale) {
-                let (px, py) = (x0 + x, y0 + y);
-                let i = py * w + px;
-                if px < w && py < h && i < total { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
-            }
+            let Some(alpha) = glyphs::ui_coverage(text, x as i32, y, scale) else { continue };
+            if alpha == 0 { continue; }
+            let (px, py) = (x0 + x, y0 + y);
+            let i = py * w + px;
+            if px < w && py < h && i < total { unsafe {
+                let p = fb.add(i);
+                core::ptr::write_volatile(p, coverage_blend(ink, core::ptr::read_volatile(p), alpha));
+            } }
         }
     }
     tw
@@ -3427,6 +3508,16 @@ fn tray_fill(fb: *mut u32, w: usize, h: usize, total: usize, r: (usize, usize, u
             let i = y * w + x;
             if i < total { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
         }
+    }
+}
+/// The open tray menu's rectangle, for its glass.
+fn tray_menu_rect(w: usize, bar: usize, scale: u32) -> Option<glass::Rect> {
+    use sex_pdx::tray::{self, Menu};
+    let s = scale as usize;
+    match unsafe { TRAY_VIEW }.menu {
+        Menu::Quick => tray::Quick::new(w, bar, s).map(|q| q.panel),
+        Menu::Calendar => tray::Calendar::new(w, bar, s).map(|c| c.panel),
+        Menu::None => None,
     }
 }
 /// The tray menu the Shell opened: quick settings or the calendar.
@@ -3441,9 +3532,10 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
     let d = desk_theme::current();
     let (bg, rim, track) = (d.menu, d.menu_rim, d.menu_picked);
     let ring = d.focus;
+    // Frosted glass inside an opaque rim (S6b), or the flat colour.
     let panel = |r: (usize, usize, usize, usize)| {
-        tray_fill(fb, w, h, total, r, rim);
-        tray_fill(fb, w, h, total, (r.0 + s, r.1 + s, r.2 - 2 * s, r.3 - 2 * s), bg);
+        frost::glass_or(fb, w, h, total, frost::Panel::TrayMenu, frost::inside(r, s), scale, bar, bg);
+        frost::rim(fb, w, h, total, r, s, rim);
     };
     let status = unsafe { TRAY_STATUS };
     match view.menu {

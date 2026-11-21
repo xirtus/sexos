@@ -55,6 +55,13 @@ pub struct Desk {
     pub warn: u32,
 }
 
+impl Desk {
+    /// The text drawn on a popup's background, which its frosted glass must
+    /// keep readable (slice S6b, `glass::params`): body, headings, secondary
+    /// text and Close. Disabled text (`menu_dim`) is exempt, as in WCAG.
+    pub const fn glass_inks(&self) -> [u32; 4] { [self.menu_ink, self.menu_title, self.menu_soft, self.menu_close] }
+}
+
 const fn x(c: u32) -> u32 { c & 0x00FF_FFFF }
 /// `a` mixed toward `b` by `t` (0..1), as XRGB.
 pub fn blend(a: u32, b: u32, t: f32) -> u32 { x(mix(a, b, t)) }

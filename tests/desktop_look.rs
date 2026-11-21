@@ -65,7 +65,9 @@ fn theme_word_round_trips_every_mode_and_accent() {
 fn unknown_theme_words_are_refused() {
     let _turn = LOOK.lock().unwrap();
     assert!(set_look(0, 0, theme_word(0, DEFAULT_ACCENT)));
-    for bad in [THEME_MODES as u64 + 1, 0xFF, 1 << 32, theme_word(1, 0x123456) | 1 << 40, 0x0000_1200] {
+    // Bit 32 is Reduce transparency; it never makes a theme word on its own,
+    // and every bit above it is still unknown.
+    for bad in [THEME_MODES as u64 + 1, 0xFF, 1 << 32, theme_word(1, 0x123456) | 1 << 40, theme_word(1, 0x123456) | 1 << 33, 0x0000_1200] {
         assert_eq!(decode_theme(bad), Err(()), "{bad:#x}");
         assert!(!set_look(3, 2, bad), "{bad:#x}");
     }
@@ -85,4 +87,17 @@ fn look_carries_the_theme_and_zero_keeps_it() {
     assert!(set(2, 1) && theme() == (1, 0x3584E4), "the old two-value set leaves it too");
     assert!(set_look(0, 0, theme_word(0, DEFAULT_ACCENT)));
     assert_eq!(theme(), (0, DEFAULT_ACCENT));
+}
+
+#[test]
+fn reduce_transparency_rides_with_the_theme() {
+    let _turn = LOOK.lock().unwrap();
+    assert!(set_look(0, 0, theme_word(0, DEFAULT_ACCENT)) && !reduce_transparency());
+    let word = theme_word_reduced(1, 0x3584E4, true);
+    assert_eq!(word, theme_word(1, 0x3584E4) | REDUCE_TRANSPARENCY);
+    assert_eq!(decode_theme(word), Ok(Some((1, 0x3584E4))), "the theme itself is the same");
+    assert!(set_look(0, 0, word) && reduce_transparency() && theme() == (1, 0x3584E4));
+    assert!(set_look(2, 0, 0) && reduce_transparency(), "arg2 = 0 keeps it");
+    assert!(!set_look(0, 0, word | 1 << 33) && reduce_transparency(), "a refused word changes nothing");
+    assert!(set_look(0, 0, theme_word_reduced(0, DEFAULT_ACCENT, false)) && !reduce_transparency());
 }

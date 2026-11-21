@@ -239,6 +239,9 @@ rustc --edition=2021 -A dead_code --test tests/desktop_look.rs -o "$TEST_DIR/des
 rustc --edition=2021 --crate-type=rlib --crate-name silkbar_model crates/silkbar-model/src/lib.rs -o "$TEST_DIR/libdesktop_theme_silkbar_model.rlib"
 rustc --edition=2021 -A dead_code -A unused_attributes --extern silkbar_model="$TEST_DIR/libdesktop_theme_silkbar_model.rlib" --test tests/desktop_theme.rs -o "$TEST_DIR/desktop-theme"
 "$TEST_DIR/desktop-theme"
+# Frosted glass behind popups (S6b): blur, tint and the contrast band, over the S6a colours.
+rustc --edition=2021 -A dead_code -A unused_attributes --extern silkbar_model="$TEST_DIR/libdesktop_theme_silkbar_model.rlib" --test tests/glass_panels.rs -o "$TEST_DIR/glass-panels"
+"$TEST_DIR/glass-panels"
 rustc --edition=2021 -A dead_code --test tests/brand.rs -o "$TEST_DIR/brand"
 "$TEST_DIR/brand"
 rustc --edition=2021 -A dead_code --test tests/access_view.rs -o "$TEST_DIR/access-view"

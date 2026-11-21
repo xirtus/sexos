@@ -159,8 +159,8 @@ fn take(w: &mut Watch, key: u16, value: i32) {
     sex_pdx::serial_record!("[shell.config.changed] key={} value={}", key, value);
     if before == value { return; }
     match key {
-        // The theme rides with the look (`theme_glue`).
-        id::WALLPAPER | id::NIGHT_LIGHT | id::THEME | id::ACCENT => show_look(w),
+        // The theme, and Reduce transparency, ride with the look (`theme_glue`).
+        id::WALLPAPER | id::NIGHT_LIGHT | id::THEME | id::ACCENT | id::REDUCE_TRANSPARENCY => show_look(w),
         id::ZONE => show_zone(w),
         id::VOLUME => give_volume(w),
         id::NTP => give_network_time(w),

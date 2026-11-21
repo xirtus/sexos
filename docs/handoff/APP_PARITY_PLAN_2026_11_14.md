@@ -568,6 +568,18 @@ Since the default theme is light, the default desktop is now light; `desktop_wid
 rather than for light pixels. Left: the lock screen, the legacy launcher panel and the
 recording indicator keep their fixed colours; the bar glass keeps its navy tint and highlight.
 
+**S6b notes (2026-11-21): blur behind panels and menus.** The window menu, tray menus, program
+tray menus/tooltips/cards, Bluetooth panel and Alt+Tab switcher are frosted glass: the desktop
+under them blurred (two box passes each way, radius 6 px x scale), tinted with the theme's popup
+colour at 200/255 and kept in the luminance band where their inks read at 4.5:1
+(`servers/sexdisplay/src/glass.rs`, frame side `frost.rs`). On a partial frame the body under each
+shown popup (plus the blur margin) is painted again before the overlays, so glass never blurs
+last frame's glass. Off in high contrast and with the new `accessibility.reduce_transparency`
+(id 47, bit 32 of the theme word), and for popups too big for the scratch. Receipts
+`[display.glass] panel=.. glass=1 radius=.. alpha=.. rect=..` / `glass=0 reason=..`. Tests:
+`tests/glass_panels.rs`; gate: `scripts/glass_panels_gate.py`. Left: drop shadows, the overview,
+the legacy launcher panel (a surface whose own fill is the body under it).
+
 ### T. Office suite: Gingham, Brocade, Burlesque and the Craft apps (8)
 
 Write set: new `apps/gingham`, `apps/brocade`, `apps/burlesque`, new `crates/sex-office`.
