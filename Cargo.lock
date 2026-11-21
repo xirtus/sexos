@@ -7410,6 +7410,9 @@ dependencies = [
 [[package]]
 name = "sex-laptop"
 version = "0.1.0"
+dependencies = [
+ "acpi",
+]
 
 [[package]]
 name = "sex-libc"

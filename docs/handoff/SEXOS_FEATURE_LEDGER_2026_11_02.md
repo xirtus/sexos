@@ -5393,6 +5393,17 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Silkbar: the launcher button is the lips on the bar's glass instead of the blue square. Wallpaper: the default is now "SexOS" (warm charcoal with the lips at 26% width, centred); the old navy theme gradient is kept as "Midnight". Boot screen: a charcoal header with the lips and the title. Lock screen: charcoal with the lips above "Locked". README and website carry the mark.
 - Verified by `tests/brand.rs`, `tests/desktop_look.rs` (both now run in `scripts/service_custody_host_gate.sh`) and `scripts/desktop_look_gate.py` (Super+B still steps SexOS → Dusk).
 
+## Alienware fans, thermal profiles and Dell hotkeys over WMI (2026-11-19)
+- ACPI-WMI support: `sex_laptop::wmi` reads `_WDG`; `servers/sexacpi/src/wmi.rs` finds `PNP0C14` devices and runs `WMxx`/`_WED`.
+- Alienware Command Center (x17 R1 and other Alienware laptops): fans (rpm, min, max), temperature sensors and thermal profiles are read at boot and logged (`[sexacpi.awcc*]`); the desktop's Power Saver / Balanced / Performance also switch the firmware's quiet / balanced / performance fan profile. The CPU sensor raises the reported temperature when it is hotter than the ACPI zones.
+- Dell hotkey events (mic mute, Command Center key, keyboard light, radio) are decoded and logged.
+- ACPI interpreter fixes: `DerefOf (PKG [i])` works (it failed on every package lookup), and buffer fields read as values (WMI argument parsing).
+- Verified by `crates/sex-laptop/tests/awcc_aml.rs` (real AML through the interpreter) and `scripts/laptop_power_gate.py`. Device checklist: `docs/handoff/X17_R1_DEVICE_CHECKLIST_2026_11_19.md`.
+
+## SMBIOS and Dell battery charge modes (2026-11-19)
+- The kernel copies the SMBIOS table at boot and hands it to the ACPI service, which logs the machine (vendor, model, SKU, BIOS version; recognises the Alienware x17 R1).
+- Dell/Alienware battery charge modes (standard, express, adaptive, primarily AC, custom start/stop) are read through Dell's WMI calling interface and can be set with the new `CTL_CHARGE` power control (custom: stop at 55-100%).
+- Verified by `crates/sex-laptop/tests/awcc_aml.rs` (Dell WMI device in AML) and `scripts/laptop_power_gate.py` (QEMU SMBIOS type 1 + Dell token table).
 ## Desktop widgets: clock, weather and system cards (S5b, S5c, 2026-11-18)
 
 - Super+Shift+W (setting `desktop.widgets`, off by default) puts three cards on the wallpaper at the top right, under every window: the time and date in your zone, today's weather, and processor load with free memory. Display draws them from its own clock and the kernel's numbers and only redraws when a word changes.

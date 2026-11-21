@@ -95,6 +95,8 @@ jobs:
       run: bash scripts/hwdb_host_gate.sh
     - name: Driver SDK (Harness), its edu template driver, fuzz hooks and the hardware list on the host
       run: bash scripts/driver_sdk_host_gate.sh
+    - name: USB isochronous endpoints and UVC camera detection on the host
+      run: bash scripts/usb_isoch_host_gate.sh
     - name: Rounded window corners and soft shadows (Display decoration pass) on the host
       run: bash scripts/display_decor_host_gate.sh
     - name: Deadline scheduling class (earliest first, share of each window) on the host
