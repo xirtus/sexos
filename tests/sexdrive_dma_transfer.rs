@@ -7,6 +7,7 @@ pub mod dma_pool;
 #[path = "../apps/sexdrive/src/dma_transfer.rs"]
 mod dma_transfer;
 #[path="../apps/sexdrive/src/completion_wait.rs"]mod completion_wait;
+#[path="../apps/sexdrive/src/ioq.rs"]mod ioq;
 pub fn get_ticks()->u64{driver_read::mock_ticks()}
 pub fn sys_wait_self_ticks(ticks:u64)->Result<(),u64>{driver_read::mock_wait(ticks)}
 pub fn sys_yield(){}
@@ -181,6 +182,11 @@ mod driver_read {
     static NVME_IRQ_WAITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     static mut READ_LEASE: Option<DmaLease> = None;
     static mut WRITE_LEASE: Option<DmaLease> = None;
+    static mut PRP_LEASES: [Option<DmaLease>; ioq::MAX_IN_FLIGHT] = [const { None }; ioq::MAX_IN_FLIGHT];
+    static mut SPARE_BOUNCE: [Option<DmaLease>; 2] = [const { None }; 2];
+    static NVME_IO_DEPTH: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(16);
+    /// A batch has several commands out: the one-command wait assertions do not apply.
+    static mut BATCH_WAIT: bool = false;
     static mut BLOCK_LOAN: u64 = 0;
     static mut ZERO_COPY_SEEN: bool = false;
     static mut NOW:u64=0;static mut WAITS:u32=0;static mut DELAY:u32=0;
@@ -190,6 +196,7 @@ mod driver_read {
     pub fn mock_ticks()->u64{unsafe{NOW}}
     pub fn mock_wait(ticks:u64)->Result<(),u64>{unsafe{
         assert_eq!(ticks,1);WAITS+=1;
+        if BATCH_WAIT{NOW+=completion_wait::MAX_TICKS;return Ok(());}
         assert!(NVME_IO_STATE.ready);assert_eq!(NVME_IO_STATE.cq_head,0,"no early CQ consumption");
         assert_eq!(*DOORBELLS,1,"one submitted SQ doorbell, no replay");assert_eq!(*DOORBELLS.add(1),0,"no CQ doorbell before completion");
         if !DEST_PTR.is_null(){assert!(core::slice::from_raw_parts(DEST_PTR,DEST_LEN).iter().all(|b|*b==0xa5),"no early READ handoff");}
@@ -294,7 +301,7 @@ mod driver_read {
         let _lock=LOCK.lock().unwrap();
         // Own setup, not left over from whichever test ran first: whole-disk layout,
         // polled mode, plain clock.
-        NVME_IRQ.store(false,Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);unsafe{LENS=Lens::Whole;CLOCK_MODE=0;DELAY=0;WAITS=0;}let mut sq=[0u64;128];let mut cq=[0u32;64];let mut db=[0u32;2];let mut buffer=[0u64;512];let source=[0xa5u8;512];
+        NVME_IRQ.store(false,Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);NVME_IO_DEPTH.store(16,Ordering::SeqCst);unsafe{LENS=Lens::Whole;CLOCK_MODE=0;DELAY=0;WAITS=0;}let mut sq=[0u64;128];let mut cq=[0u32;64];let mut db=[0u32;2];let mut buffer=[0u64;512];let source=[0xa5u8;512];
         unsafe{
             NOW=10;cq[15*4+3]=42|(1<<16);WRITE_LEASE=Some(DmaLease::new(dma_pool::DmaBuffer{virtual_address:buffer.as_mut_ptr()as u64,physical_address:0x200000,length:4096}));
             NVME_IO_STATE=NvmeState{sectors:0,ready:true,map_va:db.as_mut_ptr()as u64,io_sq_va:sq.as_mut_ptr()as u64,io_cq_va:cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:15,cq_head:15,cq_phase:1,next_cid:42};
@@ -302,32 +309,159 @@ mod driver_read {
         assert_eq!(nvme_write_one_block(0,512,source.as_ptr()as u64),0);assert_eq!(db,[0,0]);
         unsafe{assert_eq!((NVME_IO_STATE.sq_tail,NVME_IO_STATE.cq_head,NVME_IO_STATE.cq_phase,NVME_IO_STATE.next_cid),(0,0,0,43));assert!(!WRITE_LEASE.as_ref().unwrap().is_quarantined());WRITE_LEASE=None;NVME_IO_STATE.ready=false;}
     }
-    #[test]fn queued_read_keeps_two_commands_in_flight_and_accepts_completions_in_either_order(){
+    // ── Batches: many commands of one request in flight (nvme_batch) ──
+    const PRP_PHYS:u64=0x100_0000;
+    struct Rig{sq:Vec<u32>,cq:Vec<u32>,db:Box<[u32;2]>,bounce:Vec<Vec<u64>>,prp:Vec<u64>}
+    fn bounce_phys(i:usize)->u64{0x200000+i as u64*0x40000}
+    /// A 64-entry queue, `bounces` bounce leases (read, write, spares) holding byte
+    /// 0x11*(i+1), and the PRP list slots when `prp`.
+    fn rig(run:u64,bounces:usize,prp:bool)->Rig{
+        NVME_IRQ.store(false,Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);
+        let mut r=Rig{sq:vec![0;64*16],cq:vec![0;64*4],db:Box::new([0;2]),
+            bounce:(0..bounces).map(|i|vec![0x1111_1111_1111_1111u64*(i as u64+1);((BLOCK_CMD_RUN+PAGE_SIZE)/8)as usize]).collect(),
+            prp:vec![0;ioq::MAX_IN_FLIGHT*32]};
+        NVME_CMD_RUN.store(run,Ordering::SeqCst);NVME_IO_DEPTH.store(64,Ordering::SeqCst);
+        unsafe{
+            LENS=Lens::Whole;CLOCK_MODE=0;DELAY=0;WAITS=0;NOW=10;BATCH_WAIT=true;BLOCK_LOAN=0;
+            CQ_PTR=r.cq.as_mut_ptr();DOORBELLS=r.db.as_ptr();DEST_PTR=core::ptr::null();DEST_LEN=0;
+            let mut leases:Vec<Option<DmaLease>>=r.bounce.iter_mut().enumerate().map(|(i,v)|Some(DmaLease::new(dma_pool::DmaBuffer{
+                virtual_address:v.as_mut_ptr()as u64,physical_address:bounce_phys(i),length:BLOCK_CMD_RUN+PAGE_SIZE}))).collect();
+            leases.resize_with(4,||None);
+            let mut it=leases.into_iter();
+            READ_LEASE=it.next().unwrap();WRITE_LEASE=it.next().unwrap();SPARE_BOUNCE=[it.next().unwrap(),it.next().unwrap()];
+            for slot in 0..ioq::MAX_IN_FLIGHT{
+                PRP_LEASES[slot]=prp.then(||DmaLease::new(dma_pool::DmaBuffer{virtual_address:r.prp.as_mut_ptr()as u64+slot as u64*256,
+                    physical_address:PRP_PHYS+slot as u64*256,length:256}));
+            }
+            NVME_IO_STATE=NvmeState{sectors:0,ready:true,map_va:r.db.as_mut_ptr()as u64,io_sq_va:r.sq.as_mut_ptr()as u64,
+                io_cq_va:r.cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:0,cq_head:0,cq_phase:1,next_cid:42};
+        }
+        r
+    }
+    /// The device's CQEs, in the order it finished: entry i names `cids[i]`.
+    fn post(r:&mut Rig,cids:&[(u16,u32)]){for(i,&(cid,status))in cids.iter().enumerate(){r.cq[i*4+2]=i as u32+1;r.cq[i*4+3]=cid as u32|1<<16|status<<17;}}
+    fn sqe(r:&Rig,e:usize,i:usize)->u64{r.sq[e*16+i]as u64}
+    fn prp1(r:&Rig,e:usize)->u64{sqe(r,e,6)|sqe(r,e,7)<<32}
+    fn prp2(r:&Rig,e:usize)->u64{sqe(r,e,8)|sqe(r,e,9)<<32}
+    fn lease_states()->[Option<bool>;4]{unsafe{
+        let q=|l:&mut Option<DmaLease>|l.as_mut().map(|l|{let free=l.prepare(999).is_ok();if free{l.abort_before_submission(999).unwrap();}free});
+        [q(&mut READ_LEASE),q(&mut WRITE_LEASE),q(&mut SPARE_BOUNCE[0]),q(&mut SPARE_BOUNCE[1])]
+    }}
+    fn unrig(){unsafe{
+        READ_LEASE=None;WRITE_LEASE=None;SPARE_BOUNCE=[None,None];for l in PRP_LEASES.iter_mut(){*l=None;}
+        BATCH_WAIT=false;BLOCK_LOAN=0;CQ_PTR=core::ptr::null_mut();DOORBELLS=core::ptr::null();NVME_IO_STATE.ready=false;
+        NVME_CMD_RUN.store(BLOCK_CMD_RUN,Ordering::SeqCst);NVME_IO_DEPTH.store(16,Ordering::SeqCst);
+    }}
+
+    #[test]fn batch_read_sends_every_command_with_one_doorbell_and_reaps_in_any_order(){
         let _lock=LOCK.lock().unwrap();
-        NVME_IRQ.store(false,Ordering::SeqCst);crate::device::PENDING.store(0,Ordering::SeqCst);unsafe{LENS=Lens::Whole;CLOCK_MODE=0;DELAY=0;WAITS=0;}
-        let run=BLOCK_CMD_RUN as usize;
-        let mut sq=[0u64;128];let mut cq=[0u32;64];let mut db=[0u32;2];
-        let mut a=vec![0x1111_1111_1111_1111u64;(run+4096)/8];let mut b=vec![0x2222_2222_2222_2222u64;(run+4096)/8];
-        let mut dest=vec![0u8;run+8192];
-        // The device finished the second command first.
-        cq[3]=43|(1<<16);cq[4+3]=42|(1<<16);
-        unsafe{
-            NOW=10;CQ_PTR=cq.as_mut_ptr();DOORBELLS=db.as_ptr();DEST_PTR=core::ptr::null();DEST_LEN=0;
-            READ_LEASE=Some(DmaLease::new(dma_pool::DmaBuffer{virtual_address:a.as_mut_ptr()as u64,physical_address:0x200000,length:BLOCK_CMD_RUN+PAGE_SIZE}));
-            WRITE_LEASE=Some(DmaLease::new(dma_pool::DmaBuffer{virtual_address:b.as_mut_ptr()as u64,physical_address:0x400000,length:BLOCK_CMD_RUN+PAGE_SIZE}));
-            NVME_IO_STATE=NvmeState{sectors:0,ready:true,map_va:db.as_mut_ptr()as u64,io_sq_va:sq.as_mut_ptr()as u64,io_cq_va:cq.as_ptr()as u64,sq1tdbl:0,cq1hdbl:4,sq_tail:0,cq_head:0,cq_phase:1,next_cid:42};
+        let run=32*1024usize;let mut r=rig(run as u64,4,false);
+        post(&mut r,&[(45,0),(43,0),(42,0),(44,0)]);
+        let mut dest=vec![0xa5u8;4*run];
+        assert_eq!(typed_read_handoff(0,(4*run)as u64,SLOT_BLOCK_BUFFER,Some(RegionView{region_id:5,virtual_address:dest.as_mut_ptr()as u64,dma_address:None,length:BLOCK_MAX_RUN})),0);
+        for piece in 0..4{assert!(dest[piece*run..(piece+1)*run].iter().all(|&b|b==0x11*(piece as u8+1)),"piece {piece} from its own bounce");}
+        assert_eq!(*r.db,[4,4],"all four SQEs before the doorbell; the CQ head past all four");
+        for e in 0..4{
+            assert_eq!(sqe(&r,e,0),0x02|(42+e as u64)<<16);
+            assert_eq!((prp1(&r,e),prp2(&r,e)),(bounce_phys(e),bounce_phys(e)+BLOCK_CMD_RUN));
+            assert_eq!((sqe(&r,e,10),sqe(&r,e,12)),(e as u64*64,63));
         }
-        assert_eq!(nvme_read_queued(0,(run+8192)as u64,dest.as_mut_ptr()as u64,0),0);
-        assert!(dest[..run].iter().all(|&x|x==0x11));assert!(dest[run..].iter().all(|&x|x==0x22));
-        assert_eq!(db,[2,2],"one doorbell for both SQEs; the CQ head moved past both");
-        let dw=|e:usize,i:usize|unsafe{*((sq.as_ptr() as *const u32).add(e*16+i))} as u64;
-        assert_eq!((dw(0,0)>>16,dw(0,6)|dw(0,7)<<32,dw(0,10),dw(0,12)),(42,0x200000,0,(run/512-1)as u64));
-        assert_eq!((dw(1,0)>>16,dw(1,6)|dw(1,7)<<32,dw(1,10),dw(1,12)),(43,0x400000,(run/512)as u64,15));
-        unsafe{
-            assert_eq!((NVME_IO_STATE.sq_tail,NVME_IO_STATE.cq_head,NVME_IO_STATE.next_cid,NVME_IO_STATE.ready),(2,2,44,true));
-            assert!(READ_LEASE.as_mut().unwrap().prepare(99).is_ok()&&WRITE_LEASE.as_mut().unwrap().prepare(99).is_ok(),"both leases are free again");
-            READ_LEASE=None;WRITE_LEASE=None;CQ_PTR=core::ptr::null_mut();DOORBELLS=core::ptr::null();NVME_IO_STATE.ready=false;
+        unsafe{assert_eq!((NVME_IO_STATE.sq_tail,NVME_IO_STATE.cq_head,NVME_IO_STATE.cq_phase,NVME_IO_STATE.next_cid,NVME_IO_STATE.ready),(4,4,1,46,true));}
+        assert_eq!(lease_states(),[Some(true);4],"every bounce is free again");
+        unrig();
+    }
+    #[test]fn batch_with_two_bounces_refills_the_slot_that_finished_first(){
+        let _lock=LOCK.lock().unwrap();
+        let run=32*1024usize;let mut r=rig(run as u64,2,false);
+        // 43 (slot 1) then 42 (slot 0) finish; pieces 2 and 3 go to slots 0 and 1 as CIDs 44, 45.
+        post(&mut r,&[(43,0),(42,0),(45,0),(44,0)]);
+        let mut dest=vec![0xa5u8;4*run];
+        assert_eq!(nvme_read_into_mapped_va(0,(4*run)as u64,dest.as_mut_ptr()as u64,0),0);
+        for(piece,byte)in[(0,0x11u8),(1,0x22),(2,0x11),(3,0x22)]{assert!(dest[piece*run..(piece+1)*run].iter().all(|&b|b==byte));}
+        assert_eq!((sqe(&r,2,0)>>16,prp1(&r,2),sqe(&r,2,10)),(44,bounce_phys(0),128));
+        assert_eq!((sqe(&r,3,0)>>16,prp1(&r,3),sqe(&r,3,10)),(45,bounce_phys(1),192));
+        assert_eq!(*r.db,[4,4]);
+        assert_eq!(lease_states(),[Some(true),Some(true),None,None]);
+        unrig();
+    }
+    #[test]fn zero_copy_batch_keeps_thirty_two_commands_in_flight(){
+        let _lock=LOCK.lock().unwrap();
+        let mut r=rig(4096,0,true);
+        let loan=0x4000_0000u64;unsafe{BLOCK_LOAN=loan;}
+        let order:Vec<(u16,u32)>=(42..74u16).rev().map(|c|(c,0)).collect();post(&mut r,&order);
+        let mut dest=vec![0xa5u8;128*1024];
+        assert_eq!(nvme_read_into_mapped_va(0,128*1024,dest.as_mut_ptr()as u64,loan),0);
+        assert_eq!(*r.db,[32,32],"32 SQEs, one doorbell");
+        for e in 0..32{assert_eq!((sqe(&r,e,0)>>16,prp1(&r,e),prp2(&r,e),sqe(&r,e,10),sqe(&r,e,12)),(42+e as u64,loan+e as u64*4096,0,e as u64*8,7));}
+        assert!(dest.iter().all(|&b|b==0xa5),"the device wrote the loan; nothing copied");
+        unsafe{assert_eq!((NVME_IO_STATE.next_cid,NVME_IO_STATE.cq_head,NVME_IO_STATE.ready),(74,32,true));
+            assert!(PRP_LEASES.iter_mut().all(|l|l.as_mut().unwrap().prepare(1).is_ok()));}
+        unrig();
+    }
+    #[test]fn zero_copy_batch_puts_each_prp_list_in_its_own_slot(){
+        let _lock=LOCK.lock().unwrap();
+        let run=16*1024u64;let mut r=rig(run,0,true);
+        let loan=0x4000_0000u64;unsafe{BLOCK_LOAN=loan;}
+        let order:Vec<(u16,u32)>=[3,0,7,1,6,2,5,4].iter().map(|&i|(42+i,0)).collect();post(&mut r,&order);
+        let mut dest=vec![0xa5u8;128*1024];
+        assert_eq!(nvme_read_into_mapped_va(0,128*1024,dest.as_mut_ptr()as u64,loan),0);
+        for e in 0..8usize{
+            assert_eq!((prp1(&r,e),prp2(&r,e)),(loan+e as u64*run,PRP_PHYS+e as u64*256));
+            for k in 0..3{assert_eq!(r.prp[e*32+k],loan+e as u64*run+(k as u64+1)*4096);}
         }
+        assert_eq!(*r.db,[8,8]);
+        unrig();
+    }
+    #[test]fn batch_error_on_one_command_reaps_the_rest_frees_every_buffer_and_stops_the_queue(){
+        let _lock=LOCK.lock().unwrap();
+        let run=32*1024usize;let mut r=rig(run as u64,4,false);
+        post(&mut r,&[(42,0),(43,2),(45,0),(44,0)]);
+        let mut dest=vec![0xa5u8;4*run];
+        assert_eq!(nvme_read_into_mapped_va(0,(4*run)as u64,dest.as_mut_ptr()as u64,0),BLOCK_ERR_NO_DEVICE);
+        assert!(dest[run..2*run].iter().all(|&b|b==0xa5),"the failed command's data is not handed over");
+        assert_eq!(r.db[1],4,"every CQE reaped");
+        unsafe{assert!(!NVME_IO_STATE.ready);}
+        assert_eq!(lease_states(),[Some(true);4],"error CQEs still prove DMA finished: nothing quarantined");
+        unrig();
+    }
+    #[test]fn batch_timeout_quarantines_only_the_commands_still_out(){
+        let _lock=LOCK.lock().unwrap();
+        let run=32*1024usize;let mut r=rig(run as u64,4,false);
+        post(&mut r,&[(43,0),(42,0)]);
+        let mut dest=vec![0xa5u8;4*run];
+        assert_eq!(nvme_read_into_mapped_va(0,(4*run)as u64,dest.as_mut_ptr()as u64,0),BLOCK_ERR_NO_DEVICE);
+        unsafe{assert!(!NVME_IO_STATE.ready);assert_eq!(NVME_IO_STATE.cq_head,2);}
+        assert_eq!(lease_states(),[Some(true),Some(true),Some(false),Some(false)],"44 and 45 may still DMA");
+        assert_eq!(nvme_read_into_mapped_va(0,(4*run)as u64,dest.as_mut_ptr()as u64,0),BLOCK_ERR_NO_DEVICE,"no resubmission");
+        unsafe{assert_eq!(NVME_IO_STATE.next_cid,46);}
+        unrig();
+    }
+    #[test]fn zero_copy_batch_timeout_ends_the_loan(){
+        let _lock=LOCK.lock().unwrap();
+        let mut r=rig(16*1024,0,true);
+        let loan=0x4000_0000u64;unsafe{BLOCK_LOAN=loan;dma_lend::RETURNED=0;}
+        post(&mut r,&[(42,0)]);
+        let mut dest=vec![0xa5u8;64*1024];
+        assert_eq!(nvme_read_into_mapped_va(0,64*1024,dest.as_mut_ptr()as u64,loan),BLOCK_ERR_NO_DEVICE);
+        unsafe{assert_eq!(BLOCK_LOAN,0);assert_eq!(dma_lend::RETURNED,loan);
+            assert!(PRP_LEASES[0].as_mut().unwrap().prepare(1).is_ok());
+            assert!(PRP_LEASES[1..4].iter().all(|l|l.as_ref().unwrap().is_quarantined()));}
+        unrig();
+    }
+    #[test]fn batch_write_copies_each_piece_into_its_bounce_before_the_doorbell(){
+        let _lock=LOCK.lock().unwrap();
+        let run=32*1024usize;let mut r=rig(run as u64,4,false);
+        post(&mut r,&[(44,0),(45,0),(42,0),(43,0)]);
+        let source:Vec<u8>=(0..4*run).map(|i|(i/run)as u8+0xc0).collect();
+        assert_eq!(nvme_write_one_block(0,(4*run)as u64,source.as_ptr()as u64),0);
+        for e in 0..4{
+            assert_eq!(sqe(&r,e,0),0x01|(42+e as u64)<<16);
+            let bytes=unsafe{std::slice::from_raw_parts(r.bounce[e].as_ptr()as *const u8,run)};
+            assert!(bytes.iter().all(|&b|b==0xc0+e as u8),"bounce {e} holds piece {e}");
+        }
+        assert_eq!(*r.db,[4,4]);
+        assert_eq!(lease_states(),[Some(true);4]);
+        unrig();
     }
     #[test]fn actual_flush_waits_for_exact_completion_and_fences_on_timeout_without_replay(){
         let _lock=LOCK.lock().unwrap();

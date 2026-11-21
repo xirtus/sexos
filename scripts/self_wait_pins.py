@@ -156,6 +156,8 @@ PINS = (
 
     ('timed', 'crates/sex-pdx/src/lib.rs', 'wait-v1:aa1083137f9cf350f5a1fe54038943fa82596df2b4c8737d6e4f4fe2e4598946'),  # BLOCK_MAX_RUN 512 KiB + BLOCK_CMD_RUN (no wait change), 2026-11-17
 
+    ('timed', 'crates/sex-pdx/src/lib.rs', 'wait-v1:7c68a173d8b97e90ba5fff4bb165d5785ad4208f7c8f8fa8caf9f6040757b266'),  # BLOCK_MAX_RUN 512 KiB -> 4 MiB (no wait change), 2026-11-19
+
     ('timed', 'servers/sexnet/src/main.rs', '00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725'),  # Reviewed restricted-provider intake/polling; the exact Net2 envelope and deadline owners are unchanged. See RESTRICTED_TIMER_SOURCE_REVIEW_2026_11_15.
 
     ('timed', 'servers/sexnet/src/main.rs', 'd7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d'),

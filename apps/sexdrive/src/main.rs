@@ -23,6 +23,7 @@ mod ahci;
 mod controller_ready;
 mod apst;
 mod identify;
+mod ioq;
 use dma_transfer::DmaTransfer;
 use sex_pdx::dma_pool::{DmaLease, DmaRegionPool};
 use sex_pdx::memory_region::{RegionView, QUERY_VIEW, READ, WRITE, DMA_ADDRESS};
@@ -33,6 +34,18 @@ static mut DMA_POOL: Option<DmaRegionPool> = None;
 static mut DMA_VIEW: Option<RegionView> = None;
 static mut READ_LEASE: Option<DmaLease> = None;
 static mut WRITE_LEASE: Option<DmaLease> = None;
+/// One small PRP list per command slot of a batch (ioq::MAX_IN_FLIGHT of them,
+/// PRP_SLOT_BYTES each, carved from two pool pages): with the block buffer on
+/// loan, these are the only pool memory a command in flight needs.
+static mut PRP_LEASES: [Option<DmaLease>; ioq::MAX_IN_FLIGHT] = [const { None }; ioq::MAX_IN_FLIGHT];
+/// 31 entries cover one BLOCK_CMD_RUN command; a slot never crosses a page.
+const PRP_SLOT_BYTES: u64 = 256;
+/// Bounce leases beyond the read and write leases, from what the pool still has
+/// once every controller is up: without an IOMMU loan they bound how many bytes
+/// a batch has in flight.
+static mut SPARE_BOUNCE: [Option<DmaLease>; 2] = [const { None }; 2];
+/// I/O queue entries (ioq::queue_entries of CAP.MQES once the queue exists).
+static NVME_IO_DEPTH: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(16);
 // Files' block buffer, lent to our devices through the IOMMU: reads land there
 // directly instead of bouncing through the pool. 0 = no loan (no IOMMU).
 static mut BLOCK_LOAN: u64 = 0;
@@ -194,8 +207,40 @@ fn init_dma_region() -> bool {
         WRITE_LEASE = Some(DmaLease::new(write));
     }
     sex_pdx::serial_record!("[sexdrive.dma.region] slot={} bytes={} reusable_buffers=2", SLOT_DMA_REGION, view.length);
+    // PRP lists for a batch's commands. Without them a batch falls back to bounces.
+    let lists = ioq::MAX_IN_FLIGHT as u64 * PRP_SLOT_BYTES;
+    if let Ok(arena) = unsafe { (*core::ptr::addr_of_mut!(DMA_POOL)).as_mut() }.map_or(Err(sex_pdx::dma_pool::DmaError::Exhausted), |pool| pool.reserve(lists)) {
+        for slot in 0..ioq::MAX_IN_FLIGHT {
+            let at = slot as u64 * PRP_SLOT_BYTES;
+            unsafe { (*core::ptr::addr_of_mut!(PRP_LEASES))[slot] = Some(DmaLease::new(sex_pdx::dma_pool::DmaBuffer {
+                virtual_address: arena.virtual_address + at, physical_address: arena.physical_address + at, length: PRP_SLOT_BYTES,
+            })); }
+        }
+        sex_pdx::serial_record!("[sexdrive.dma.prp_slots] slots={} bytes={}", ioq::MAX_IN_FLIGHT, lists);
+    }
     true
 }
+
+/// Once every controller is up, give what is left of the pool to more bounces.
+fn reserve_spare_bounce() {
+    unsafe {
+        if !NVME_IO_STATE.ready || BLOCK_LOAN != 0 { return; }
+        let Some(pool) = (*core::ptr::addr_of_mut!(DMA_POOL)).as_mut() else { return; };
+        for spare in (*core::ptr::addr_of_mut!(SPARE_BOUNCE)).iter_mut() {
+            match pool.reserve(BLOCK_CMD_RUN + PAGE_SIZE) { Ok(buffer) => *spare = Some(DmaLease::new(buffer)), Err(_) => break }
+        }
+        sex_pdx::serial_record!("[sexdrive.dma.bounce] buffers={} bytes_each={} pool_used={}",
+            bounce_count(), BLOCK_CMD_RUN, pool.used());
+    }
+}
+
+fn bounce_count() -> usize {
+    2 + unsafe { (*core::ptr::addr_of!(SPARE_BOUNCE)).iter().filter(|l| l.is_some()).count() }
+}
+fn prp_slot_count() -> usize {
+    unsafe { (*core::ptr::addr_of!(PRP_LEASES)).iter().take_while(|l| l.is_some()).count() }
+}
+fn io_qdepth() -> u32 { NVME_IO_DEPTH.load(Ordering::Relaxed) }
 
 // Initialization-only reservation; no allocation or mapping syscall exists here.
 fn reserve_dma_phys(size: u64) -> u64 {
@@ -461,11 +506,11 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
     );
     if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=typed op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
-        cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
+        cid as u64, sq_tail as u64, ((sq_tail + 1) % io_qdepth()) as u64, cq_head as u64, cq_phase as u64, slba, size
     ); }
 
     compiler_fence(Ordering::SeqCst);
-    sq_tail = (sq_tail + 1) % 16;
+    sq_tail = (sq_tail + 1) % io_qdepth();
     unsafe {
         if transfer.submit().is_err() { return BLOCK_ERR_NO_DEVICE; }
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
@@ -542,7 +587,7 @@ fn nvme_read_into_bounce(offset: u64, size: u64) -> u64 {
         return BLOCK_ERR_NO_DEVICE;
     }
 
-    cq_head = (cq_head + 1) % 16;
+    cq_head = (cq_head + 1) % io_qdepth();
     if cq_head == 0 {
         cq_phase ^= 1;
     }
@@ -582,19 +627,19 @@ fn typed_read_handoff(offset:u64,size:u64,buf_cap:u64,view:Option<RegionView>)->
 /// device address, and the data goes there directly (single drives only; a
 /// RAID volume is assembled strip by strip through the pool).
 fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u64 {
-    // A call longer than one command (#307): NVMe gets two commands in flight at a
-    // time; RAID and AHCI take the pieces one after another.
+    // A call longer than one command (#307): NVMe sends the whole run as one batch of
+    // commands in flight together (nvme_batch); RAID and AHCI take the pieces one
+    // after another.
     let run = if serving_ahci() { BLOCK_CMD_RUN } else { cmd_run() };
     if size > run && size <= BLOCK_MAX_RUN && size % NVME_LBA_BYTES == 0 && dst_va != 0 {
         let direct = !(raid::serving() && !raid::raw()) && !serving_ahci();
-        let step = if direct { 2 * run } else { run };
         note_mdts_split(false, size, run);
+        if direct { return nvme_batch(false, offset, size, dst_va, loan); }
         let mut at = 0u64;
         while at < size {
-            let len = (size - at).min(step);
+            let len = (size - at).min(run);
             let piece_loan = if loan != 0 { loan + at } else { 0 };
-            let status = if direct && len > run { nvme_read_queued(offset + at, len, dst_va + at, piece_loan) }
-                else { nvme_read_into_mapped_va(offset + at, len, dst_va + at, piece_loan) };
+            let status = nvme_read_into_mapped_va(offset + at, len, dst_va + at, piece_loan);
             if status != 0 { return status; }
             at += len;
         }
@@ -707,9 +752,9 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
     compiler_fence(Ordering::SeqCst);
     if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=typed op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
-        cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
+        cid as u64, sq_tail as u64, ((sq_tail + 1) % io_qdepth()) as u64, cq_head as u64, cq_phase as u64, slba, size
     ); }
-    sq_tail = (sq_tail + 1) % 16;
+    sq_tail = (sq_tail + 1) % io_qdepth();
     unsafe {
         if transfer.submit().is_err() { return BLOCK_ERR_NO_DEVICE; }
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
@@ -786,7 +831,7 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
         return BLOCK_ERR_NO_DEVICE;
     }
 
-    cq_head = (cq_head + 1) % 16;
+    cq_head = (cq_head + 1) % io_qdepth();
     if cq_head == 0 {
         cq_phase ^= 1;
     }
@@ -811,106 +856,192 @@ fn nvme_read_into_mapped_va(offset: u64, size: u64, dst_va: u64, loan: u64) -> u
     0u64
 }
 
-/// Two read commands in flight at once (#307): the first `cmd_run()` bytes through
-/// the read lease, the rest through the write lease (Files' requests are served one at a
-/// time, so no write holds it now). Both SQEs go to the device with one doorbell; the
-/// CQEs may come back in either order. The same DMA rules as one command: a lease is
-/// reused only after its own CQE, and an unresolved command quarantines the queue.
-fn nvme_read_queued(offset: u64, size: u64, dst_va: u64, loan: u64) -> u64 {
+/// A request longer than one command, as one batch (#307, limits plan item 15):
+/// up to ioq::MAX_IN_FLIGHT commands of at most `cmd_run()` bytes in flight on
+/// I/O queue 1, all SQEs written before one doorbell, completions reaped by CID in
+/// whatever order the drive finishes them, and freed slots refilled until the
+/// request is done. Each command owns one DMA lease from SQE to its own CQE (CID and
+/// phase, dma_transfer.rs): the slot's small PRP list when reads land in the
+/// loaned block buffer, else a whole bounce buffer, so without an IOMMU the
+/// bounces (bounce_count() x BLOCK_CMD_RUN) bound the bytes in flight. A failed
+/// command stops new submissions; the rest are still reaped before the queue is
+/// stopped. A command that never completes quarantines everything still out.
+fn nvme_batch(write: bool, offset: u64, size: u64, va: u64, loan: u64) -> u64 {
     let run = cmd_run();
-    if size <= run || size > 2 * run || offset % NVME_LBA_BYTES != 0
-        || size % NVME_LBA_BYTES != 0 || dst_va == 0 || dst_va == u64::MAX { return BLOCK_ERR_BAD_LEN; }
-    let (map_va, io_sq_va, io_cq_va, sq1tdbl, cq1hdbl, mut sq_tail, mut cq_head, mut cq_phase) = unsafe {
+    if size == 0 || size > BLOCK_MAX_RUN || run == 0 || run % NVME_LBA_BYTES != 0
+        || offset % NVME_LBA_BYTES != 0 || size % NVME_LBA_BYTES != 0
+        || offset.checked_add(size).is_none() || va == 0 || va == u64::MAX
+        || (write && loan != 0) { return BLOCK_ERR_BAD_LEN; }
+    if write && offset + size > device_sectors() * NVME_LBA_BYTES { return BLOCK_ERR_BAD_LEN; }
+    let depth = io_qdepth();
+    let (map_va, io_sq_va, io_cq_va, sq1tdbl, cq1hdbl, sq_tail, cq_head, cq_phase) = unsafe {
         let st = &*core::ptr::addr_of!(NVME_IO_STATE);
         if !st.ready { return BLOCK_ERR_NO_DEVICE; }
         (st.map_va, st.io_sq_va, st.io_cq_va, st.sq1tdbl, st.cq1hdbl, st.sq_tail, st.cq_head, st.cq_phase)
     };
-    let parts = [(0u64, run), (run, size - run)];
-    let mut cids = [0u16; 2];
-    let mut transfers: [Option<DmaTransfer<'static>>; 2] = [None, None];
-    for (i, &(at, len)) in parts.iter().enumerate() {
-        let cid = unsafe { let c = NVME_IO_STATE.next_cid; NVME_IO_STATE.next_cid = c.wrapping_add(1); c };
-        let Some(transfer) = prepare_bounce(i == 1, cid) else { return BLOCK_ERR_NO_DEVICE };
-        let buffer = transfer.buffer;
-        if buffer.physical_address == 0 || buffer.physical_address % PAGE_SIZE != 0 || buffer.virtual_address == 0
-            || buffer.length < len { return BLOCK_ERR_NO_DEVICE; }
-        let prp2 = if loan != 0 { prp2_for_loan(&buffer, loan + at, len) } else { prp2_for(&buffer, len) };
-        let Some(prp2) = prp2 else { return BLOCK_ERR_BAD_LEN };
-        let prp1 = if loan != 0 { loan + at } else { buffer.physical_address };
-        let blocks = len / NVME_LBA_BYTES;
-        let Some(dev_lba) = place((offset + at) / NVME_LBA_BYTES, blocks, false) else { return BLOCK_ERR_NO_DEVICE };
-        let sqe = (io_sq_va as *mut u8).wrapping_add(sq_tail as usize * 64) as *mut u32;
-        unsafe {
-            for d in 0..16usize { core::ptr::write_volatile(sqe.add(d), 0); }
-            core::ptr::write_volatile(sqe.add(0), 0x02u32 | ((cid as u32) << 16)); // READ + CID
-            core::ptr::write_volatile(sqe.add(1), 1u32); // NSID=1
-            core::ptr::write_volatile(sqe.add(6), prp1 as u32);
-            core::ptr::write_volatile(sqe.add(7), (prp1 >> 32) as u32);
-            core::ptr::write_volatile(sqe.add(8), prp2 as u32);
-            core::ptr::write_volatile(sqe.add(9), (prp2 >> 32) as u32);
-            core::ptr::write_volatile(sqe.add(10), dev_lba as u32);
-            core::ptr::write_volatile(sqe.add(11), (dev_lba >> 32) as u32);
-            core::ptr::write_volatile(sqe.add(12), ((blocks - 1) & 0xFFFF) as u32); // NLB (0-based)
+    let zero_copy = loan != 0 && prp_slot_count() != 0;
+    let leases = if zero_copy { prp_slot_count() } else { bounce_count() };
+    let limit = leases.min(ioq::MAX_IN_FLIGHT).min(depth.saturating_sub(1) as usize);
+    if limit == 0 || (loan != 0 && !zero_copy) { return BLOCK_ERR_NO_DEVICE; }
+    let mut batch = ioq::Batch::new(ioq::Ring::idle(depth, sq_tail, cq_head, cq_phase), ioq::pieces(size, run), limit);
+    let mut transfers: [Option<DmaTransfer<'static>>; ioq::MAX_IN_FLIGHT] = [const { None }; ioq::MAX_IN_FLIGHT];
+    let mut status = 0u64;
+    let mut doorbells = 0u32;
+    loop {
+        // Every SQE that fits, then one doorbell for all of them.
+        let mut fresh = [0usize; ioq::MAX_IN_FLIGHT];
+        let mut count = 0usize;
+        while let Some((piece, slot)) = batch.next_submit() {
+            let (at, len) = ioq::piece(piece, size, run);
+            let cid = unsafe { let c = NVME_IO_STATE.next_cid; NVME_IO_STATE.next_cid = c.wrapping_add(1); c };
+            let piece_loan = if zero_copy { loan + at } else { 0 };
+            let Some(transfer) = batch_command(write, slot, cid, offset + at, len, va + at, piece_loan, io_sq_va, batch.ring.sq_tail) else {
+                status = BLOCK_ERR_NO_DEVICE; batch.stop(); break;
+            };
+            if batch.submitted(slot, cid).is_none() { status = BLOCK_ERR_NO_DEVICE; batch.stop(); break; }
+            transfers[slot] = Some(transfer);
+            fresh[count] = slot;
+            count += 1;
         }
-        sq_tail = (sq_tail + 1) % 16;
-        cids[i] = cid;
-        transfers[i] = Some(transfer);
-    }
-    compiler_fence(Ordering::SeqCst);
-    for t in transfers.iter_mut().flatten() { if t.submit().is_err() { return BLOCK_ERR_NO_DEVICE; } }
-    unsafe {
-        core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
-        NVME_IO_STATE.sq_tail = sq_tail;
-    }
-    let mut failed = false;
-    for _ in 0..2 {
-        let wait = nvme_wait_any(io_cq_va, cq_head, cids, cq_phase);
-        let Ok(done) = wait.result else {
+        if count != 0 {
+            compiler_fence(Ordering::SeqCst);
+            for &slot in &fresh[..count] {
+                let ok = transfers[slot].as_mut().is_some_and(|t| t.submit().is_ok());
+                if !ok { stop_uncertain_io(); return BLOCK_ERR_NO_DEVICE; }
+            }
+            unsafe {
+                core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, batch.ring.sq_tail);
+                NVME_IO_STATE.sq_tail = batch.ring.sq_tail;
+            }
+            doorbells += 1;
+        }
+        if batch.finished() { break; }
+        // Wait for the CQE at the head, then take every further one already there.
+        let wait = nvme_wait_batch(io_cq_va, batch.ring.cq_head, batch.ring.phase, |cid| batch.accepts(cid));
+        let Ok(first) = wait.result else {
             stop_uncertain_io();
-            serial_println!("[sexdrive.nvme.queued.err] reason=cqe_timeout cids={},{} head={} phase={}", cids[0], cids[1], cq_head, cq_phase);
+            serial_println!("[sexdrive.nvme.batch.err] reason=cqe_timeout in_flight={} head={} phase={}",
+                batch.flight.len(), batch.ring.cq_head, batch.ring.phase);
             return BLOCK_ERR_NO_DEVICE;
         };
-        let seen = (done.dw3 & 0xFFFF) as u16;
-        let i = if seen == cids[0] { 0 } else { 1 };
-        let Some(mut transfer) = transfers[i].take() else { stop_uncertain_io(); return BLOCK_ERR_NO_DEVICE };
-        if transfer.complete(seen, (done.dw3 >> 16) & 1, cq_phase).is_err() { return BLOCK_ERR_NO_DEVICE; }
-        if (done.dw3 >> 17) & 0x7FFF != 0 {
-            failed = true;
-            serial_println!("[sexdrive.nvme.queued.err] reason=status_fail cid={} dw3={:#x}", seen, done.dw3);
-        } else if loan == 0 {
-            // The CQE was observed (acquire), so this command's data is complete.
-            let (at, len) = parts[i];
-            unsafe { core::ptr::copy_nonoverlapping(transfer.buffer.virtual_address as *const u8, (dst_va + at) as *mut u8, len as usize); }
+        let mut cqe = (first.dw2, first.dw3);
+        loop {
+            let Ok(done) = batch.complete(cqe.0, cqe.1) else { break; };
+            let Some(mut transfer) = transfers[done.slot].take() else { stop_uncertain_io(); return BLOCK_ERR_NO_DEVICE; };
+            if transfer.complete(done.cid, ioq::phase(cqe.1), done.phase).is_err() { return BLOCK_ERR_NO_DEVICE; }
+            if done.status != 0 {
+                serial_println!("[sexdrive.nvme.batch.err] reason=status_fail op={} cid={} sc={} sct={} dw3={:#x}",
+                    if write { "WRITE" } else { "READ" }, done.cid, done.status & 0xFF, (done.status >> 8) & 0x7, cqe.1);
+            } else if !write && !zero_copy {
+                // The CQE was observed (acquire), so this command's data is complete.
+                let (at, len) = ioq::piece(done.piece, size, run);
+                unsafe { core::ptr::copy_nonoverlapping(transfer.buffer.virtual_address as *const u8, (va + at) as *mut u8, len as usize); }
+            }
+            drop(transfer);
+            if batch.flight.is_empty() { break; }
+            let next = (io_cq_va as *const u8).wrapping_add(batch.ring.cq_head as usize * 16) as *const u32;
+            let dw3 = unsafe { core::ptr::read_volatile(next.add(3)) };
+            compiler_fence(Ordering::Acquire);
+            if !batch.ring.fresh(dw3) || !batch.accepts(ioq::cid(dw3)) { break; }
+            cqe = (unsafe { core::ptr::read_volatile(next.add(2)) }, dw3);
         }
-        cq_head = (cq_head + 1) % 16;
-        if cq_head == 0 { cq_phase ^= 1; }
         unsafe {
-            core::ptr::write_volatile((map_va + cq1hdbl) as *mut u32, cq_head);
-            NVME_IO_STATE.cq_head = cq_head;
-            NVME_IO_STATE.cq_phase = cq_phase;
+            core::ptr::write_volatile((map_va + cq1hdbl) as *mut u32, batch.ring.cq_head);
+            NVME_IO_STATE.cq_head = batch.ring.cq_head;
+            NVME_IO_STATE.cq_phase = batch.ring.phase;
         }
     }
-    if failed {
+    if let Some((cid, sf)) = batch.first_error() {
         unsafe { NVME_IO_STATE.ready = false; } // as for one command: stop on a CQ error.
+        serial_println!("[sexdrive.nvme.batch.stopped] errors={} first_cid={} first_status={:#x} ready=0", batch.errors(), cid, sf);
         return BLOCK_ERR_NO_DEVICE;
     }
+    if status != 0 || !batch.succeeded() { return if status != 0 { status } else { BLOCK_ERR_NO_DEVICE }; }
     unsafe {
-        if loan != 0 && !ZERO_COPY_SEEN { ZERO_COPY_SEEN = true;
+        if zero_copy && !ZERO_COPY_SEEN { ZERO_COPY_SEEN = true;
             serial_println!("[sexdrive.read.zero_copy] first=1 device_address={:#x} bytes={} copy=0", loan, size); }
-        QUEUED_READS += 1;
-        if QUEUED_READS.is_power_of_two() { sex_pdx::serial_record!("[sexdrive.nvme.queued] reads={} depth=2 bytes={}", QUEUED_READS, size); }
+        BATCHES += 1;
+        let n = BATCHES;
+        if n.is_power_of_two() {
+            sex_pdx::serial_record!("[sexdrive.nvme.batch] n={} op={} bytes={} commands={} in_flight_max={} doorbells={} limit={} dma={}",
+                n, if write { "WRITE" } else { "READ" }, size, batch.submitted_pieces(), batch.most_in_flight, doorbells, batch.flight.limit(),
+                if zero_copy { "loan" } else { "bounce" });
+        }
     }
     0
 }
-static mut QUEUED_READS: u64 = 0;
+static mut BATCHES: u64 = 0;
 
-/// `nvme_wait_completion` for a CQ slot that may hold either of two commands.
-fn nvme_wait_any(cq_va: u64, head: u32, cids: [u16; 2], phase: u32) -> completion_wait::Report {
+/// The lease a batch's slot uses: its PRP list slot (data in the loan) or a bounce.
+fn batch_lease(slot: usize, zero_copy: bool) -> Option<&'static mut DmaLease> {
+    unsafe {
+        if zero_copy { return (*core::ptr::addr_of_mut!(PRP_LEASES)).get_mut(slot)?.as_mut(); }
+        match slot {
+            0 => (*core::ptr::addr_of_mut!(READ_LEASE)).as_mut(),
+            1 => (*core::ptr::addr_of_mut!(WRITE_LEASE)).as_mut(),
+            n => (*core::ptr::addr_of_mut!(SPARE_BOUNCE)).get_mut(n - 2)?.as_mut(),
+        }
+    }
+}
+
+/// Prepare one command of a batch and write its SQE at `sq_index` (no doorbell).
+/// None leaves nothing visible to the device: the lease returns unsubmitted.
+fn batch_command(write: bool, slot: usize, cid: u16, offset: u64, len: u64, va: u64, loan: u64,
+                 io_sq_va: u64, sq_index: u32) -> Option<DmaTransfer<'static>> {
+    let lease = batch_lease(slot, loan != 0)?;
+    let transfer = DmaTransfer::prepare(lease, cid as u64, stop_uncertain_io).ok()?;
+    let buffer = transfer.buffer;
+    if buffer.physical_address == 0 || buffer.physical_address % 8 != 0 || buffer.virtual_address == 0 { return None; }
+    let (prp1, prp2) = if loan != 0 {
+        (loan, prp2_in_slot(&buffer, loan, len)?)
+    } else {
+        if buffer.physical_address % PAGE_SIZE != 0 || buffer.length < len { return None; }
+        // A private copy: the client cannot change the bytes after we hand them to the device.
+        if write { unsafe { core::ptr::copy_nonoverlapping(va as *const u8, buffer.virtual_address as *mut u8, len as usize); } }
+        (buffer.physical_address, prp2_for(&buffer, len)?)
+    };
+    let blocks = len / NVME_LBA_BYTES;
+    if blocks == 0 || blocks > 0x1_0000 { return None; }
+    let dev_lba = place(offset / NVME_LBA_BYTES, blocks, write)?;
+    let sqe = (io_sq_va as *mut u8).wrapping_add(sq_index as usize * 64) as *mut u32;
+    unsafe {
+        for d in 0..16usize { core::ptr::write_volatile(sqe.add(d), 0); }
+        core::ptr::write_volatile(sqe.add(0), if write { 0x01u32 } else { 0x02u32 } | ((cid as u32) << 16));
+        core::ptr::write_volatile(sqe.add(1), 1u32); // NSID=1
+        core::ptr::write_volatile(sqe.add(6), prp1 as u32);
+        core::ptr::write_volatile(sqe.add(7), (prp1 >> 32) as u32);
+        core::ptr::write_volatile(sqe.add(8), prp2 as u32);
+        core::ptr::write_volatile(sqe.add(9), (prp2 >> 32) as u32);
+        core::ptr::write_volatile(sqe.add(10), dev_lba as u32);
+        core::ptr::write_volatile(sqe.add(11), (dev_lba >> 32) as u32);
+        core::ptr::write_volatile(sqe.add(12), ((blocks - 1) & 0xFFFF) as u32); // NLB (0-based)
+    }
+    Some(transfer)
+}
+
+/// PRP2 for `size` bytes at consecutive device addresses from `first` (a page
+/// boundary), with the PRP list, when one is needed, in a batch slot's own small
+/// buffer. A PRP list pointer may start inside a page; the slot never crosses one.
+fn prp2_in_slot(list: &sex_pdx::dma_pool::DmaBuffer, first: u64, size: u64) -> Option<u64> {
+    let pages = size.div_ceil(PAGE_SIZE);
+    if pages == 0 || first % PAGE_SIZE != 0 { return None; }
+    if pages == 1 { return Some(0); }
+    if pages == 2 { return Some(first + PAGE_SIZE); }
+    if (pages - 1) * 8 > list.length || list.physical_address / PAGE_SIZE != (list.physical_address + list.length - 1) / PAGE_SIZE { return None; }
+    let entries = list.virtual_address as *mut u64;
+    for i in 1..pages {
+        unsafe { core::ptr::write_volatile(entries.add((i - 1) as usize), first + i * PAGE_SIZE); }
+    }
+    Some(list.physical_address)
+}
+
+/// `nvme_wait_completion` for a CQ slot that may hold any command of a batch.
+fn nvme_wait_batch(cq_va: u64, head: u32, phase: u32, accept: impl Fn(u16) -> bool) -> completion_wait::Report {
     const QUICK_TURNS: u32 = 256;
     let mut quick = 0u32;
     let cqe = (cq_va as *const u8).wrapping_add(head as usize * 16) as *const u32;
     let irq = NVME_IRQ.load(Ordering::Relaxed);
-    let report = completion_wait::wait_for(|c| c == cids[0] || c == cids[1], phase, || unsafe {
+    let report = completion_wait::wait_for(accept, phase, || unsafe {
         let dw3 = core::ptr::read_volatile(cqe.add(3)); compiler_fence(Ordering::Acquire);
         (core::ptr::read_volatile(cqe.add(2)), dw3)
     }, sex_pdx::get_ticks, || {
@@ -922,8 +1053,8 @@ fn nvme_wait_any(cq_va: u64, head: u32, cids: [u16; 2], phase: u32) -> completio
         if quick < QUICK_TURNS { quick += 1; sex_pdx::sys_yield(); Ok(()) } else { sex_pdx::sys_wait_self_ticks(1) }
     });
     if report.turns > QUICK_TURNS || report.result.is_err() {
-        sex_pdx::serial_record!("[sexdrive.nvme.wait] cids={},{} head={} phase={} polls={} turns={} elapsed_ticks={} result={:?}",
-            cids[0], cids[1], head, phase, report.polls, report.turns, report.elapsed, report.result.map(|_| ()));
+        sex_pdx::serial_record!("[sexdrive.nvme.wait] batch=1 head={} phase={} polls={} turns={} elapsed_ticks={} result={:?}",
+            head, phase, report.polls, report.turns, report.elapsed, report.result.map(|_| ()));
     }
     report
 }
@@ -1124,10 +1255,12 @@ fn write_guard_allows(offset: u64, size: u64, buf_cap: u64) -> bool {
 
 fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     if raid::writes_refused() { return BLOCK_ERR_NO_DEVICE; }
-    // Writes longer than one command go out as consecutive commands.
+    // Writes longer than one command go to NVMe as one batch (each command through
+    // its own bounce), to AHCI as consecutive commands.
     let run = if serving_ahci() { BLOCK_CMD_RUN } else { cmd_run() };
     if size > run && size <= BLOCK_MAX_RUN && size % NVME_LBA_BYTES == 0 && src_va != 0 && src_va != u64::MAX {
         note_mdts_split(true, size, run);
+        if !serving_ahci() { return nvme_batch(true, offset, size, src_va, 0); }
         let mut at = 0u64;
         while at < size {
             let len = (size - at).min(run);
@@ -1235,11 +1368,11 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
     ); }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=typed op=WRITE cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
-        write_cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
+        write_cid as u64, sq_tail as u64, ((sq_tail + 1) % io_qdepth()) as u64, cq_head as u64, cq_phase as u64, slba, size
     ); }
 
     compiler_fence(Ordering::SeqCst);
-    sq_tail = (sq_tail + 1) % 16;
+    sq_tail = (sq_tail + 1) % io_qdepth();
     unsafe {
         if transfer.submit().is_err() { return BLOCK_ERR_NO_DEVICE; }
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
@@ -1315,7 +1448,7 @@ fn nvme_write_one_block(offset: u64, size: u64, src_va: u64) -> u64 {
         return BLOCK_ERR_NO_DEVICE;
     }
 
-    cq_head = (cq_head + 1) % 16;
+    cq_head = (cq_head + 1) % io_qdepth();
     if cq_head == 0 {
         cq_phase ^= 1;
     }
@@ -1448,11 +1581,11 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     ); }
     if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=selftest op=WRITE cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
-        write_cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
+        write_cid as u64, sq_tail as u64, ((sq_tail + 1) % io_qdepth()) as u64, cq_head as u64, cq_phase as u64, slba, size
     ); }
 
     compiler_fence(Ordering::SeqCst);
-    sq_tail = (sq_tail + 1) % 16;
+    sq_tail = (sq_tail + 1) % io_qdepth();
     unsafe {
         if write_transfer.submit().is_err() { return BLOCK_ERR_NO_DEVICE; }
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
@@ -1527,7 +1660,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         );
         return BLOCK_ERR_NO_DEVICE;
     }
-    cq_head = (cq_head + 1) % 16;
+    cq_head = (cq_head + 1) % io_qdepth();
     if cq_head == 0 {
         cq_phase ^= 1;
     }
@@ -1582,9 +1715,9 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
     compiler_fence(Ordering::SeqCst);
     if hot_log() { serial_println!(
         "[sexdrive.nvme.submit.detail] path=selftest op=READ cid={} sq_tail_before={} sq_tail_after={} cq_head={} cq_phase={} lba={} bytes={}",
-        read_cid as u64, sq_tail as u64, ((sq_tail + 1) % 16) as u64, cq_head as u64, cq_phase as u64, slba, size
+        read_cid as u64, sq_tail as u64, ((sq_tail + 1) % io_qdepth()) as u64, cq_head as u64, cq_phase as u64, slba, size
     ); }
-    sq_tail = (sq_tail + 1) % 16;
+    sq_tail = (sq_tail + 1) % io_qdepth();
     unsafe {
         if read_transfer.submit().is_err() { return BLOCK_ERR_NO_DEVICE; }
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
@@ -1653,7 +1786,7 @@ fn nvme_write_readback_proof(offset: u64, size: u64, src_va: u64) -> u64 {
         );
         return BLOCK_ERR_NO_DEVICE;
     }
-    cq_head = (cq_head + 1) % 16;
+    cq_head = (cq_head + 1) % io_qdepth();
     if cq_head == 0 {
         cq_phase ^= 1;
     }
@@ -1991,7 +2124,7 @@ fn nvme_flush() -> u64 {
     );
 
     compiler_fence(Ordering::SeqCst);
-    sq_tail = (sq_tail + 1) % 16;
+    sq_tail = (sq_tail + 1) % io_qdepth();
     unsafe {
         core::ptr::write_volatile((map_va + sq1tdbl) as *mut u32, sq_tail);
     }
@@ -2024,7 +2157,7 @@ fn nvme_flush() -> u64 {
         return BLOCK_ERR_NO_DEVICE;
     }
 
-    cq_head = (cq_head + 1) % 16;
+    cq_head = (cq_head + 1) % io_qdepth();
     if cq_head == 0 {
         cq_phase ^= 1;
     }
@@ -3018,8 +3151,12 @@ fn nvme_probe_bar() {
     let mut admin_cq_head = cq_head;
     let mut admin_cq_phase = cq_phase;
 
-    // Create IO Completion Queue (opcode 0x05), QID=1, QSIZE=15, PC=1, IV=0, and
-    // IEN=1 when BOOT programmed an MSI/MSI-X vector for this controller.
+    // Create IO Completion Queue (opcode 0x05), QID=1, PC=1, IV=0, and IEN=1 when
+    // BOOT programmed an MSI/MSI-X vector for this controller. QSIZE (0-based) is
+    // ioq::QUEUE_ENTRIES - 1, or less when CAP.MQES says so: deep enough to keep
+    // ioq::MAX_IN_FLIGHT commands out, and still one page per queue.
+    let io_entries = ioq::queue_entries(cap_mqes);
+    let io_qsize = io_entries - 1;
     let irq_lease = sex_pdx::device::at_slot(SLOT_NVME_HOST).filter(|l| l.vectors > 0);
     let cq_ien: u32 = if irq_lease.is_some() { 1 << 1 } else { 0 };
     let create_cq_cid: u16 = 0x0043;
@@ -3031,7 +3168,7 @@ fn nvme_probe_bar() {
         core::ptr::write_volatile(cq_sqe_ptr.add(0), 0x05u32 | ((create_cq_cid as u32) << 16));
         core::ptr::write_volatile(cq_sqe_ptr.add(6), (io_cq_phys & 0xFFFF_FFFF) as u32);
         core::ptr::write_volatile(cq_sqe_ptr.add(7), (io_cq_phys >> 32) as u32);
-        core::ptr::write_volatile(cq_sqe_ptr.add(10), (1u32) | (15u32 << 16));
+        core::ptr::write_volatile(cq_sqe_ptr.add(10), (1u32) | (io_qsize << 16));
         core::ptr::write_volatile(cq_sqe_ptr.add(11), 1u32 | cq_ien); // PC=1, IEN, IV=0
     }
     serial_println!(
@@ -3039,7 +3176,7 @@ fn nvme_probe_bar() {
         create_cq_cid as u64,
         0x05u64,
         1u64,
-        15u64,
+        io_qsize as u64,
         io_cq_phys,
         1u64
     );
@@ -3109,7 +3246,7 @@ fn nvme_probe_bar() {
         admin_cq_phase as u64
     );
 
-    // Create IO Submission Queue (opcode 0x01), QID=1, QSIZE=15, CQID=1, PC=1, QPRIO=0.
+    // Create IO Submission Queue (opcode 0x01), QID=1, QSIZE as the CQ, CQID=1, PC=1, QPRIO=0.
     let create_sq_cid: u16 = 0x0044;
     let sq_sqe_ptr = (asq_owned_va as *mut u8).wrapping_add((admin_sq_tail as usize) * 64) as *mut u32;
     unsafe {
@@ -3119,7 +3256,7 @@ fn nvme_probe_bar() {
         core::ptr::write_volatile(sq_sqe_ptr.add(0), 0x01u32 | ((create_sq_cid as u32) << 16));
         core::ptr::write_volatile(sq_sqe_ptr.add(6), (io_sq_phys & 0xFFFF_FFFF) as u32);
         core::ptr::write_volatile(sq_sqe_ptr.add(7), (io_sq_phys >> 32) as u32);
-        core::ptr::write_volatile(sq_sqe_ptr.add(10), (1u32) | (15u32 << 16));
+        core::ptr::write_volatile(sq_sqe_ptr.add(10), (1u32) | (io_qsize << 16));
         core::ptr::write_volatile(sq_sqe_ptr.add(11), (1u32 << 16) | 1u32); // CQID=1, PC=1, QPRIO=0
     }
     serial_println!(
@@ -3127,7 +3264,7 @@ fn nvme_probe_bar() {
         create_sq_cid as u64,
         0x01u64,
         1u64,
-        15u64,
+        io_qsize as u64,
         1u64,
         io_sq_phys
     );
@@ -3317,6 +3454,9 @@ fn nvme_probe_bar() {
         serial_println!("[sexdrive.nvme.irq] mode=none polling=1");
     }
     NVME_CMD_RUN.store(drive_cmd_run, Ordering::Relaxed);
+    NVME_IO_DEPTH.store(io_entries, Ordering::Relaxed);
+    sex_pdx::serial_record!("[sexdrive.nvme.queue] qid=1 entries={} mqes={} batch_max={} prp_slots={}",
+        io_entries, cap_mqes, ioq::MAX_IN_FLIGHT.min(io_entries as usize - 1), prp_slot_count());
     unsafe {
         NVME_IO_STATE.ready = true;
         NVME_IO_STATE.sectors = device_size;
@@ -3348,7 +3488,7 @@ fn nvme_probe_bar() {
     // storage proof tail (~10) and corrupts the IO SQ doorbell.
     if STORAGE_100_IO_READ_PROBE_ENABLED && unsafe { NVME_IO_STATE.ready } {
     // One real IO READ proof (no BLOCK API wiring in this mission).
-    let io_q_entries: u32 = 16;
+    let io_q_entries: u32 = io_qdepth();
     let mut io_sq_tail: u32 = 0;
     let mut io_cq_head: u32 = 0;
     let mut io_cq_phase: u32 = 1;
@@ -3797,6 +3937,7 @@ pub extern "C" fn _start() -> ! {
         // NVMe is preferred: AHCI is only probed (and its ports only touched)
         // when no NVMe controller came up. A machine with both serves NVMe.
         if !unsafe { NVME_IO_STATE.ready } && ahci_probe() { storage_selftests(); }
+        reserve_spare_bounce();
     }
     else { serial_println!("[sexdrive.dma.region.err] ready=0"); }
     // Boot timing (#309, scripts/boot_time_gate.py): disk up and self-tested.
