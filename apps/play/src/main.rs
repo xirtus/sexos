@@ -206,7 +206,8 @@ fn clock(out: &mut alloc::string::String, ms: u64) {
 fn present(window: &mut Window, player: &mut Player, ui: &mut Ui, at_ms: i64) {
     let (w, h) = player.size();
     if w == 0 || player.picture().len() < w * h { return; }
-    window.pixels()[..w * h].copy_from_slice(player.picture());
+    // Every pixel is the new picture: no need to carry the last frame over.
+    window.frame(w, h).copy_from_slice(player.picture());
     let showing = player.paused() || sex_pdx::get_ticks() < ui.controls_until;
     // Captions sit above the controls band while it shows, never under it.
     let reserve = match (ui.controls.as_ref(), showing) { (Some(c), true) => c.controls_band(h), _ => 0 };

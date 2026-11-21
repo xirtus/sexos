@@ -2,22 +2,33 @@
 //! A pixel surface for each program row: a BOOT region the program writes and Display
 //! reads, so a program can show an image or draw. Holding it grants only that window's
 //! pixels; Display takes a size only from the row that owns the surface.
+//!
+//! The region holds two pages. A program paints the page Display is not showing and
+//! names it in [`OP`]; Display reads only the page named last, and answers with
+//! [`shown`] once it has switched, so the program never paints a page that is on
+//! screen and Display never shows a frame half drawn.
 use crate::app_catalog::{App, INCARNATIONS};
 
-/// Every surface holds at least an 800 by 600 picture. BOOT sizes the regions to the
+/// Every page holds at least an 800 by 600 picture. BOOT sizes each page to the
 /// screen (four bytes per screen pixel, rounded up to 1 MiB), so a full-screen
 /// window is all pixels; programs read the real length from their grant.
 pub const MAX_W: usize = 800;
 pub const MAX_H: usize = 600;
 pub const PIXELS: usize = MAX_W * MAX_H;
-/// The smallest region BOOT grants.
+/// The smallest page BOOT grants (a region is [`PAGES`] of them).
 pub const BYTES: u64 = 4 * 1024 * 1024;
+/// Pages in each region: the one on screen and the one being painted.
+pub const PAGES: u64 = 2;
 const _: () = assert!(PIXELS as u64 * 4 <= BYTES);
-/// The region length BOOT grants for a screen of `width` by `height`.
+/// The page length for a screen of `width` by `height`.
 pub const fn bytes_for_screen(width: u64, height: u64) -> u64 {
     let want = (width * height * 4 + (1 << 20) - 1) & !((1 << 20) - 1);
     if want > BYTES { want } else { BYTES }
 }
+/// The region length BOOT grants for a screen of `width` by `height`: [`PAGES`] pages.
+pub const fn region_for_screen(width: u64, height: u64) -> u64 { PAGES * bytes_for_screen(width, height) }
+/// One page's length in a region `region` bytes long; page `p` starts at `p` times it.
+pub const fn page_bytes(region: u64) -> u64 { region / PAGES }
 /// Where a program's pixels start inside its framed window: below the title bar,
 /// inside the border. Display draws there and Shell reports the size left.
 pub const LEFT: u32 = crate::desktop_style::INSET;
@@ -45,9 +56,18 @@ pub const CLIENT_SLOT: u64 = 97;
 pub const DISPLAY_FIRST_SLOT: u64 = 600;
 pub const fn display_slot(index: usize) -> u64 { DISPLAY_FIRST_SLOT + index as u64 }
 pub const fn region_id(index: usize) -> u32 { 0x4200 + index as u32 }
-/// Program to Display: show `arg1 >> 32` by `arg1 & 0xFFFF_FFFF` pixels of its region
-/// (0x00RRGGBB, row-major) in surface `arg0`. A size of zero goes back to text.
+/// Program to Display: show `arg1 >> 32` by `arg1 & 0xFFFF_FFFF` pixels of page `arg2`
+/// (0 or 1) of its region (0x00RRGGBB, row-major) in surface `arg0`. A size of zero
+/// goes back to text. Display answers [`shown`]`(page)` once it reads that page; from
+/// then on the other page is the program's to paint.
 pub const OP: u64 = 0x2D2;
+const SHOWN_TAG: u64 = 0x5049_5853_0000_0000;
+/// Display's answer to [`OP`]: it now reads `page` and no longer the other.
+pub const fn shown(page: u64) -> u64 { SHOWN_TAG | (page & 1) }
+/// The page an answer from Display names, when it is [`shown`].
+pub const fn shown_page(value: u64) -> Option<u64> {
+    if value & !1 == SHOWN_TAG { Some(value & 1) } else { None }
+}
 /// The program row's position among program rows.
 pub fn index_of(target: u32) -> Option<usize> {
     INCARNATIONS.iter().filter(|r| r.app == App::Program).position(|r| r.target == target)
