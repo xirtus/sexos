@@ -44,8 +44,8 @@ pub fn run(window: &mut Window) -> Result<String, &'static str> {
         // Payload accounting excludes metadata. Every pass must physically
         // submit the complete file payload to the driver; cache hits cannot pass.
         if io.requests != (TOTAL / CHUNK) as u64 || io.device_calls == 0 || io.device_bytes != TOTAL as u64 {
-            sex_pdx::serial_record!("[bench.large.counts] pass={} requests={} device_calls={} device_bytes={} want_requests={} want_bytes={}",
-                pass, io.requests, io.device_calls, io.device_bytes, TOTAL / CHUNK, TOTAL);
+            sex_pdx::serial_record!("[bench.large.short] pass={} requests={} want_requests={} device_calls={} device_bytes={} want_bytes={}",
+                pass, io.requests, TOTAL / CHUNK, io.device_calls, io.device_bytes, TOTAL);
             return Err("large read was not fully device backed");
         }
         let cpu1 = cpu_split(window.target);

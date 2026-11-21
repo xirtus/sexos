@@ -648,13 +648,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: image
     if: needs.image.outputs.full == 'true'
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
     - name: Prepare media host checks
       run: |
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends ffmpeg python3-pil
         bash scripts/media_source_host_gate.sh
     - uses: ./.github/actions/image
     - name: Progressive playback and Range seek
@@ -662,6 +662,18 @@ jobs:
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
         python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
         python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Qupid subtitles, sound tracks and speed
+      run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/play_subtitles_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-subtitles"
+    - name: Qupid library plays an album without a gap
+      run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/music_gapless_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-gapless"
+    - name: Qupid chapters and the Skip intro card
+      run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_chapters_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-chapters"
+    - name: Qupid Up next plays the next episode
+      run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_upnext_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-upnext"
+    - name: Qupid thumbnails for Files and Loom
+      run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_thumb_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-thumb"
+    - name: Qupid Kodi repositories and installs
+      run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/qupid_kodi_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-kodi"
     - name: Sound on Intel HD Audio by interrupt (MSI, period-end wakes)
       run: |
         truncate -s 1G "$RUNNER_TEMP/hda-sound-source.img"
@@ -679,6 +691,7 @@ jobs:
           ${{ runner.temp }}/media-build.log
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
+          ${{ runner.temp }}/sexos-qupid-*
           ${{ runner.temp }}/sexos-hda-mic
           ${{ runner.temp }}/sexos-hda-sound
         if-no-files-found: ignore

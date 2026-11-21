@@ -44,10 +44,10 @@ fn dead(task: *mut Task) -> bool {
 /// The core for a run's `n`th worker: spread over the cores programs use, away from
 /// the main task's own. A row's view may be entered on any core (`views`).
 fn core_for(target: u32, n: usize) -> u32 {
-    let home = crate::smp::home_core(target as u64);
+    let home = crate::smp::logical_home(target as u64);
     let spare = crate::smp::program_cores();
-    if spare <= 1 { return home; }
-    2 + ((home - 2) + 1 + n as u32) % spare
+    if spare <= 1 || home < 2 { return crate::smp::program_core(home); }
+    crate::smp::program_core(2 + ((home - 2) + 1 + n as u32) % spare)
 }
 
 /// Cores this run's workers use.
