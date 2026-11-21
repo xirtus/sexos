@@ -102,6 +102,19 @@ fn read(window: &mut Window, path: &[u8]) -> Option<String> {
     String::from_utf8(buf).ok()
 }
 
+const LAYOUT: &[u8] = b"Kaleidoscope/layout.tsv";
+
+/// Whether tabs go down the side, as last chosen.
+pub fn vertical_tabs(window: &mut Window) -> bool {
+    read(window, LAYOUT).is_some_and(|t| t.lines().any(|l| l.trim() == "tabs\tvertical"))
+}
+
+/// Keeps the tab layout for next time.
+pub fn set_vertical_tabs(window: &mut Window, on: bool) {
+    let _ = files::mkdir(window, DIR);
+    let _ = files::write(window, LAYOUT, if on { b"tabs\tvertical\n" } else { b"tabs\tacross\n" });
+}
+
 impl Profile {
     /// Reads the profile back, with the person's own cookies.
     pub fn load(window: &mut Window, now: u64) -> Profile {

@@ -255,6 +255,8 @@ struct Browser {
     download_status: Option<String>,
     /// Ad and tracker blocking.
     shields: shields::Shields,
+    /// Tabs down the left side instead of across the bar (Ctrl+Shift+,).
+    vertical: bool,
     /// Installed extensions.
     extensions: extensions::Extensions,
     /// Requests Shields blocked for the shown page (and its frames).
@@ -366,7 +368,7 @@ impl Browser {
         };
         if self.surface == surface { return; }
         self.surface = surface;
-        self.view = surface.document(BAR);
+        self.view = self.page_view();
         let doc = match &mut self.doc { Doc::Plain(d) => d, Doc::Scripted(s) => s.page_mut() };
         doc.viewport = self.view;
         self.full_redraw = true;
@@ -531,12 +533,12 @@ impl Browser {
     fn paint_frames(&mut self) {
         for i in 0..self.frames.len() {
             let Some(copy) = viewport::Frame::visible(self.surface, self.frames[i].rect,
-                self.scroll, BAR, self.window.pixels().len()) else { continue; };
+                self.scroll, BAR, self.side(), self.window.pixels().len()) else { continue; };
             let mut tmp = alloc::vec![0xFFFF_FFFFu32; copy.source.pixels];
             self.enter(i);
             sex_web::paint(&self.page, &mut self.fonts, &mut sex_web::Target { pixels: &mut tmp,
                 width: copy.source.w, height: copy.source.h, scroll: self.scroll, top: 0,
-                premul: false, clip: None }, self.focus);
+                premul: false, clip: None, stride: copy.source.w }, self.focus);
             self.leave(i);
             let destination = &mut self.window.pixels()[..self.surface.pixels];
             let _ = copy.copy(self.surface, destination, &tmp);
@@ -576,6 +578,35 @@ impl Browser {
         if core::mem::take(&mut self.frame_dirty) { self.draw(); }
     }
 
+    /// The vertical tab strip's width: none while off, inside a frame's page, or
+    /// when the window is too narrow to give it room.
+    fn side(&self) -> i32 {
+        if !self.vertical || self.in_frame.is_some() || self.surface.w < sex_web::SIDE * 3 { 0 } else { sex_web::SIDE }
+    }
+
+    /// The page's own size: the window less the bar and the tab strip.
+    fn page_view(&self) -> (i32, i32) {
+        let (w, h) = self.surface.document(BAR);
+        (w - self.side(), h)
+    }
+
+    /// Ctrl+Shift+,: tabs down the side, or back across the bar. Kept for next time.
+    fn set_vertical(&mut self, on: bool) {
+        self.vertical = on;
+        profile::set_vertical_tabs(&mut self.window, on);
+        sex_pdx::serial_record!("[web.tabs.vertical] on={} side={}", on as u8, self.side());
+        let want = self.page_view();
+        self.full_redraw = true;
+        if self.view != want {
+            self.view = want;
+            self.doc.get().viewport = want;
+            self.relayout();
+            if let Some(script) = self.doc.script() { let _ = script.dispatch("resize"); }
+            self.after_script(false);
+        }
+        self.draw();
+    }
+
     fn draw(&mut self) {
         // A page in a frame is drawn as part of the page around it.
         if self.in_frame.is_some() { self.frame_dirty = true; return; }
@@ -601,6 +632,7 @@ impl Browser {
             zoom: sex_html::style::zoom(),
             // The badge shows once Shields have blocked something on the page, or are down.
             shields: Some((self.shields.up(&self.url), self.blocked)).filter(|(up, n)| self.url.starts_with("http") && (*n > 0 || !up)),
+            side: self.side(),
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
@@ -1132,8 +1164,9 @@ impl Browser {
         if !dirty && !self.full_redraw && self.in_frame.is_none() && !self.surface.empty() {
             let names: Vec<String> = changed.iter().map(|n| alloc::format!("canvas:{n}")).collect();
             let start = sex_pdx::get_ticks();
+            let side = self.side();
             let pixels = &mut self.window.pixels()[..self.surface.pixels];
-            if sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, &names) {
+            if sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, side, &names) {
                 self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
                 sex_pdx::serial_record!("[web.shown] w={} h={} scroll={} focus={} items={} ticks={} canvases={}", self.surface.w, self.surface.h, self.scroll, self.focus.map_or(-1, |f| f as i64), self.page.items.len(), sex_pdx::get_ticks() - start, names.len());
                 return true;
@@ -1312,8 +1345,9 @@ impl Browser {
             self.relayout();
             self.draw();
         } else if !changed.is_empty() {
+            let side = self.side();
             let pixels = &mut self.window.pixels()[..self.surface.pixels];
-            if !self.full_redraw && self.in_frame.is_none() && !self.surface.empty() && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, &changed) {
+            if !self.full_redraw && self.in_frame.is_none() && !self.surface.empty() && sex_web::repaint_pictures(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, side, &changed) {
                 self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
             } else {
                 self.draw();
@@ -1775,7 +1809,19 @@ impl Browser {
     #[inline(never)]
     fn pointer(&mut self, p: sex_pdx::app_pointer::Pointer) {
         use sex_pdx::app_pointer::Kind;
-        let (x, y) = (p.x as i32, p.y as i32 - BAR);
+        // The vertical tab strip takes clicks on its tabs; the page starts right of it.
+        let side = self.side();
+        if side > 0 && (p.x as i32) < side && (p.y as i32) >= BAR {
+            if let Kind::Down { button } = p.kind {
+                match (sex_web::side_tab_at(side, self.tabs.len(), p.x as i32, p.y as i32), button) {
+                    (Some(i), 1) => { self.show_tab(i); self.close_tab(); }
+                    (Some(i), 0) => self.show_tab(i),
+                    _ => {}
+                }
+            }
+            return;
+        }
+        let (x, y) = (p.x as i32 - side, p.y as i32 - BAR);
         if p.y >= 0 && (p.y as i32) < BAR && matches!(p.kind, Kind::Down { button: 0 | 1 }) {
             match (self.tab_at(p.x as i32, p.y as i32), p.kind) {
                 (Some(i), Kind::Down { button: 1 }) => { self.show_tab(i); self.close_tab(); }
@@ -1964,8 +2010,11 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new() };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false };
     b.profile = profile::Profile::load(&mut b.window, wall());
+    b.vertical = profile::vertical_tabs(&mut b.window);
+    b.view = b.page_view();
+    b.doc.get().viewport = b.view;
     // `--private` makes the window's first tab private (a private window).
     if given.split_ascii_whitespace().any(|a| a == "--private") { b.jarbox = profile::Jarbox::Private; }
     (b.jar, b.storage) = b.profile.store(&mut b.window, b.jarbox, wall());

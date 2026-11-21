@@ -58,6 +58,7 @@ impl Frame {
         rect: [i32; 4],
         scroll: i32,
         bar: i32,
+        side: i32,
         capacity: usize,
     ) -> Option<Self> {
         let [x, y, w, h] = rect;
@@ -65,8 +66,9 @@ impl Frame {
             return None;
         }
         let source = Surface::checked(w as usize, h as usize, capacity)?;
-        let (x, y) = (x as i64, y as i64 - scroll as i64 + bar as i64);
-        let left = x.max(0);
+        // The page starts `side` columns in, right of the vertical tab strip.
+        let (x, y) = (x as i64 + side.max(0) as i64, y as i64 - scroll as i64 + bar as i64);
+        let left = x.max(side.max(0) as i64);
         let top = y.max(bar.max(0) as i64);
         let right = (x + w as i64).min(surface.w as i64);
         let bottom = (y + h as i64).min(surface.h as i64);
