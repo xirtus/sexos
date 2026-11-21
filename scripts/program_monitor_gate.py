@@ -54,8 +54,18 @@ def main():
   assert graphs and int(graphs[-1][2])>=2,'Mesh kept no CPU history'
   cores=int(graphs[-1][1]);assert max(int(m[3]) for m in graphs)>=min(a.min_tenths//max(cores,1),500),'the CPU graph never showed Bench'
   # R4: end it from Mesh: Home chooses the busiest line, Delete asks Shell to end it.
-  g['focus'](mesh_sid);time.sleep(.5)
-  s=len(t());q.key('home');g['wait'](rf'\[monitor\.select\] pd={bench} task={bench_task} program=1',s,60)
+  # A press can go missing while one core is saturated; Mesh says each movement key
+  # it gets ([monitor.key]), so retry with fresh focus and keep those lines for the report.
+  select=rf'\[monitor\.select\] pd={bench} task={bench_task} program=1'
+  for attempt in range(4):
+   g['focus'](mesh_sid);time.sleep(.5)
+   s=len(t());q.key('home')
+   try:g['wait'](select,s,30 if attempt<3 else 60);break
+   except TimeoutError:
+    heard=re.findall(r'\[(?:monitor\.key|shell\.program\.key\.up)\][^\n]*',t()[s:])
+    print(f'monitor: Home attempt {attempt+1} chose nothing; {heard or "no key line"}',flush=True)
+    if attempt==3:raise
+    if any('monitor.key' in h and 'tab=programs' not in h for h in heard):q.key('1');time.sleep(1)
   q.key('delete');g['wait'](rf'\[monitor\.end\] target={bench} status=0\n',s,60)
   g['wait'](rf'\[shell\.program\.end\] caller={mesh_pd} target={bench} status=0\n',s,60)
   g['wait'](rf'\[app\.private\.retired\] target={bench} task={bench_task} ',s,120)
