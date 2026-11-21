@@ -576,6 +576,7 @@ pub extern "C" fn timer_interrupt_handler(stack_frame: &mut InterruptStackFrame)
         crate::scheduler::poll_self_wait_deadlines(TICKS.load(Ordering::Relaxed));
         crate::program_workers::poll(TICKS.load(Ordering::Relaxed));
         crate::console::tick();
+        crate::hotplug::tick(TICKS.load(Ordering::Relaxed));
         if TICKS.load(Ordering::Relaxed) % 2048 == 0 { crate::scheduler::report_latency(); }
     }
     if core_id == crate::smp::guest_core() { crate::program_records::poll(TICKS.load(Ordering::Relaxed)); }
