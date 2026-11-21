@@ -383,7 +383,9 @@ fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::Sce
 fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{DAMAGE_ORDER.push("launcher");}}
 mod lock_screen{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize)->bool{false}}
 mod bt_panel{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
-mod window_menu{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32){}}
+mod window_menu{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
+// Frosted panels (S6b): no popup shows in this fixture, so no body is repainted under one.
+fn glass_body(_:*mut u32,_:usize,_:usize,_:&scene::SceneSnapshot,_:Plan){}
 mod program_tray{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
 fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}

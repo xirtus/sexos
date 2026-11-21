@@ -89,17 +89,20 @@ def main():
         time.sleep(1.5)
         w, h, after = shot('open')
         # Inside the panel the pixels are the panel's background with its text, in
-        # the desktop theme's colours (S6a): count changed pixels against the
-        # desktop before, and text pixels well apart from the panel's colour.
+        # the desktop theme's colours (S6a). The background is frosted glass
+        # (S6b): the desktop under it blurred and tinted, so not one colour.
+        # Count changed pixels against the desktop before, and text pixels whose
+        # luminance is well apart from the background's middle luminance.
         changed = 0
-        inside = {}
+        lum = []
         for y in range(py0, min(py0 + ph, h)):
             for x in range(px0, min(px0 + pw, w)):
                 i = (y * w + x) * 3
                 if before[i:i + 3] != after[i:i + 3]: changed += 1
-                c = bytes(after[i:i + 3]); inside[c] = inside.get(c, 0) + 1
-        panel_bg = max(inside, key=inside.get)
-        bright = sum(n for c, n in inside.items() if max(abs(a - b) for a, b in zip(c, panel_bg)) > 0x60)
+                r, g, b = after[i:i + 3]
+                lum.append((54 * r + 183 * g + 19 * b) >> 8)
+        ground = sorted(lum)[len(lum) // 2]
+        bright = sum(1 for v in lum if abs(v - ground) > 0x60)
         if changed < pw * ph // 3: raise RuntimeError('panel not drawn (%d of %d pixels changed)' % (changed, pw * ph))
         if bright < 60: raise RuntimeError('panel text missing (%d bright pixels)' % bright)
 

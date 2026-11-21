@@ -56,14 +56,22 @@ fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0:
     width
 }
 
+/// The panel's rectangle while it shows, for its frosted glass (`frost`).
+pub fn glass_rect(w: usize, scale: u32, bar: usize) -> Option<b::Rect> {
+    let (lines, _) = (unsafe { SHOWN })?;
+    Panel::new(w, bar, scale.max(1) as usize, lines.count as usize).map(|p| p.panel)
+}
+
 /// Draws the panel, if one shows (after the body passes, before the lock surface).
 pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usize) {
     let Some((lines, selected)) = (unsafe { SHOWN }) else { return };
     let s = scale.max(1) as usize;
     let Some(p) = Panel::new(w, bar, s, lines.count as usize) else { return };
     let (x, y, pw, ph) = p.panel;
-    fill(fb, w, h, total, p.panel, desk().menu_rim);
-    fill(fb, w, h, total, (x + s, y + s, pw - 2 * s, ph - 2 * s), desk().menu);
+    // Frosted glass inside an opaque rim (slice S6b).
+    use crate::frost;
+    frost::glass_or(fb, w, h, total, frost::Panel::Bluetooth, frost::inside(p.panel, s), scale, bar, desk().menu);
+    frost::rim(fb, w, h, total, p.panel, s, desk().menu_rim);
     let line = super::glyphs::UI_H * s;
     for i in 0..p.count {
         let r = p.row(i);

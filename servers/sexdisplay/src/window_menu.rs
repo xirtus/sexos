@@ -61,15 +61,23 @@ fn text(fb: *mut u32, w: usize, h: usize, total: usize, t: &[u8], x0: usize, y0:
     }
 }
 
-/// Draws the menu, if one shows (after the body passes, before the lock surface).
-pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32) {
+/// The menu's rectangle while it shows, for its frosted glass (`frost`).
+pub fn glass_rect(w: usize, h: usize, scale: u32) -> Option<(usize, usize, usize, usize)> {
+    let menu = (unsafe { SHOWN })?;
+    Layout::new(&menu, w, h, scale).map(|l| l.panel)
+}
+
+/// Draws the menu, if one shows (after the body passes, before the lock surface):
+/// frosted glass inside an opaque rim (slice S6b), then the rows.
+pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usize) {
     let Some(menu) = (unsafe { SHOWN }) else { return };
     let Some(l) = Layout::new(&menu, w, h, scale) else { return };
     let scale = l.scale;
     let s = scale as usize;
     let (x, y, pw, ph) = l.panel;
-    fill(fb, w, h, total, l.panel, desk().menu_rim);
-    fill(fb, w, h, total, (x + s, y + s, pw - 2 * s, ph - 2 * s), desk().menu);
+    use crate::frost;
+    frost::glass_or(fb, w, h, total, frost::Panel::WindowMenu, frost::inside(l.panel, s), scale, bar, desk().menu);
+    frost::rim(fb, w, h, total, l.panel, s, desk().menu_rim);
     let line = super::glyphs::UI_H * s;
     for i in 0..l.rows {
         let Some(item) = menu.item(i) else { break };

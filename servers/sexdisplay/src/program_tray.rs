@@ -8,6 +8,7 @@
 use sex_pdx::program_tray::{CardLayout, MenuLayout, Receiver, Section};
 /// The menu, popup and card colours of the desktop theme (`desk_theme`).
 use crate::desk_theme::current as desk;
+use crate::frost;
 
 const SHELL_PD: u32 = 3;
 
@@ -50,10 +51,30 @@ fn fill(fb: *mut u32, w: usize, h: usize, total: usize, r: (usize, usize, usize,
     }
 }
 
-/// A panel with a one-pixel (scaled) rim.
-fn panel(fb: *mut u32, w: usize, h: usize, total: usize, r: (usize, usize, usize, usize), s: usize, bg: u32) {
-    fill(fb, w, h, total, r, desk().menu_rim);
-    fill(fb, w, h, total, (r.0 + s, r.1 + s, r.2.saturating_sub(2 * s), r.3.saturating_sub(2 * s)), bg);
+/// A panel with a one-pixel (scaled) rim around frosted glass (slice S6b),
+/// or around the theme's flat popup colour when glass is off.
+fn panel(fb: *mut u32, w: usize, h: usize, total: usize, r: (usize, usize, usize, usize), s: usize, which: frost::Panel, scale: u32, bar: usize) {
+    frost::glass_or(fb, w, h, total, which, frost::inside(r, s), scale, bar, desk().menu);
+    frost::rim(fb, w, h, total, r, s, desk().menu_rim);
+}
+
+/// The open menu (or else the tooltip) and the card, for their glass.
+pub fn glass_rects(w: usize, h: usize, scale: u32, bar: usize) -> [Option<(frost::Panel, (usize, usize, usize, usize))>; 2] {
+    let v = unsafe { &(*core::ptr::addr_of!(VIEW)).shown };
+    let s = scale.max(1) as usize;
+    let menu = v.menu.and_then(|m| MenuLayout::new(m.x as usize, m.y as usize, m.rows as usize, w, h, s)).map(|l| (frost::Panel::TrayItemsMenu, l.panel));
+    let popup = menu.or_else(|| v.tip.filter(|_| v.menu.is_none()).map(|t| (frost::Panel::TrayItemsTip, tip_rect(&t, w, scale))));
+    let card = v.card.and_then(|c| CardLayout::new(w, bar, s, c.actions as usize, c.reply)).map(|l| (frost::Panel::TrayItemsCard, l.panel));
+    [popup, card]
+}
+
+/// Where a tooltip shows.
+fn tip_rect(t: &sex_pdx::program_tray::TipView, w: usize, scale: u32) -> (usize, usize, usize, usize) {
+    let s = scale.max(1) as usize;
+    let tw = super::glyphs::ui_width(t.text.as_bytes(), scale).unwrap_or(0) + 16 * s;
+    let th = super::glyphs::UI_H * s + 8 * s;
+    let x = (t.x as usize).min(w.saturating_sub(tw));
+    (x, t.y as usize, tw, th)
 }
 
 /// Text at (x0, y0) in `ink`, cut at `max_w`; returns the width drawn.
@@ -110,7 +131,7 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
     }
     if let Some(m) = v.menu {
         if let Some(l) = MenuLayout::new(m.x as usize, m.y as usize, m.rows as usize, w, h, s) {
-            panel(fb, w, h, total, l.panel, s, desk().menu);
+            panel(fb, w, h, total, l.panel, s, frost::Panel::TrayItemsMenu, scale, bar);
             for i in 0..l.rows {
                 let r = l.row(i);
                 if m.hover == Some(i as u8) {
@@ -123,16 +144,13 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         }
     }
     if let Some(t) = v.tip.filter(|_| v.menu.is_none()) {
-        let tw = super::glyphs::ui_width(t.text.as_bytes(), scale).unwrap_or(0) + 16 * s;
-        let th = super::glyphs::UI_H * s + 8 * s;
-        let x = (t.x as usize).min(w.saturating_sub(tw));
-        let r = (x, t.y as usize, tw, th);
-        panel(fb, w, h, total, r, s, desk().menu);
+        let r = tip_rect(&t, w, scale);
+        panel(fb, w, h, total, r, s, frost::Panel::TrayItemsTip, scale, bar);
         text_in(fb, w, h, total, t.text.as_bytes(), r, 8 * s, desk().menu_ink, scale);
     }
     let Some(c) = v.card else { return };
     let Some(l) = CardLayout::new(w, bar, s, c.actions as usize, c.reply) else { return };
-    panel(fb, w, h, total, l.panel, s, desk().menu);
+    panel(fb, w, h, total, l.panel, s, frost::Panel::TrayItemsCard, scale, bar);
     // "From: summary", then the body, cut to the card.
     let used = text_in(fb, w, h, total, c.from.as_bytes(), l.head, 0, desk().menu_dim, scale);
     let gap = 8 * s;
