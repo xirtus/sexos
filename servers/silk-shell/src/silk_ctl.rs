@@ -75,6 +75,14 @@ pub fn window_line(w: &Win, focused: bool) -> Line {
     l
 }
 
+/// The answer to `silk layout WS plugin:...`: `started` when the plugin's run
+/// was started for it, else its run was already there.
+pub fn plugin_line(scene: u8, key: u64, started: bool) -> Line {
+    let mut l = Line::new();
+    let _ = write!(l, "ok layout ws={} plugin={:016x} run={} (the previous layout tiles until it answers)", scene as u32 + 1, key, if started { "started" } else { "running" });
+    l
+}
+
 /// The last line of `silk windows`.
 pub fn list_end(count: usize, scene: u8, focus_frame: u32) -> Line {
     let mut l = Line::new();
@@ -142,6 +150,9 @@ pub enum Act {
     Events { since: u32 },
     Follow { count: u16 },
     Unfollow,
+    /// Tile `scene` with the Wasm layout plugin `key`, whose run starts from
+    /// Spindle's Files `ticket` unless it already runs (`layout_plugin_glue`).
+    Plugin { scene: u8, ticket: u32, key: u64 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +194,7 @@ pub fn check(req: Request, wins: &[Win], active: u8) -> Result<Act, Refusal> {
         Request::Events { since } => Act::Events { since },
         Request::Follow { count } => Act::Follow { count },
         Request::Unfollow => Act::Unfollow,
+        Request::Plugin { workspace, ticket, key } => Act::Plugin { scene: workspace.saturating_sub(1), ticket, key },
     })
 }
 

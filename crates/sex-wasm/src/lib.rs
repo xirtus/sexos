@@ -45,6 +45,7 @@ use wasmi::{
 #[cfg(feature = "sexos")]
 pub mod sexos;
 pub mod frame_fx;
+pub mod layout;
 
 pub mod abi {
     use super::Event;
