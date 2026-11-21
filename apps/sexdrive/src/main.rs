@@ -407,7 +407,21 @@ fn nvme_wait_completion(cq_va:u64,head:u32,cid:u16,phase:u32)->completion_wait::
     if report.turns>QUICK_TURNS||report.result.is_err(){
         sex_pdx::serial_record!("[sexdrive.nvme.wait] cid={} head={} phase={} polls={} turns={} elapsed_ticks={} result={:?}",cid,head,phase,report.polls,report.turns,report.elapsed,report.result.map(|_|()));
     }
+    give_up_if_stuck(&report);
     report
+}
+
+/// Set once the disk serves requests: from then on a command the controller never
+/// finishes means the controller is stuck, not that it is still coming up.
+static SERVING: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// A controller that let a command run out its whole deadline while serving is stuck.
+/// This run ends, the kernel resets the controller (function-level reset where it has
+/// one) and starts the service again, and Files sends the request again.
+fn give_up_if_stuck(report: &completion_wait::Report) {
+    if SERVING.load(Ordering::Relaxed) && report.result == Err(completion_wait::Failure::Deadline) {
+        sex_pdx::serial_record!("[sexdrive.nvme.stuck] elapsed_ticks={} action=restart", report.elapsed);
+        sex_pdx::task_finish(0xd1);
+    }
 }
 
 fn block_buffer_view(caller: u32, slot: u64, bytes: u64, rights: u8) -> Option<RegionView> {
@@ -1056,6 +1070,7 @@ fn nvme_wait_batch(cq_va: u64, head: u32, phase: u32, accept: impl Fn(u16) -> bo
         sex_pdx::serial_record!("[sexdrive.nvme.wait] batch=1 head={} phase={} polls={} turns={} elapsed_ticks={} result={:?}",
             head, phase, report.polls, report.turns, report.elapsed, report.result.map(|_| ()));
     }
+    give_up_if_stuck(&report);
     report
 }
 
@@ -3966,5 +3981,6 @@ pub extern "C" fn _start() -> ! {
 
     if hot_log() { serial_println!("[sexdrive.ready]"); }
     sex_pdx::serial_record!("[sexdrive.boot.serving]");
+    SERVING.store(true, Ordering::Relaxed);
     loop { service_next_request(); }
 }

@@ -959,6 +959,11 @@ pub fn init() {
     crate::service_restart::capture(sexdisp_id, 1);
     // Shell: a new run rebuilds its windows from the app catalog.
     crate::service_restart::capture(silkshell_id, 3);
+    // Drive: a new run resets its controller and serves the same disk; Files sends a
+    // call the old run took again (sex_pdx::crash_log::PEER_RESTARTED).
+    crate::service_restart::capture(sexdrive_id, 2);
+    // USB: a new run resets the host controller and finds the same devices again.
+    crate::service_restart::capture(sexusb_id, 5);
     crate::program_records::init(silkshell_id);
     {
         let shell=crate::ipc::DOMAIN_REGISTRY.get(silkshell_id).expect("BOOT_SHELL_MISSING");

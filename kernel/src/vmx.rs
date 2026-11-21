@@ -178,7 +178,7 @@ fn call(pd: &crate::capability::ProtectionDomain, op: u64, a: u64, b: u64, c: u6
             vcpu(&mut m, pd.id, a, b).and_then(|v| {
                 if !user_ok || d != 0 { return Err(abi::INVALID); }
                 if v.running { return Err(abi::BUSY); }
-                unsafe { if get { (c as *mut abi::State).write_unaligned(v.state) } else { v.state = (c as *const abi::State).read_unaligned() } }
+                crate::smap::user(|| unsafe { if get { (c as *mut abi::State).write_unaligned(v.state) } else { v.state = (c as *const abi::State).read_unaligned() } });
                 Ok(0)
             })
         }
@@ -313,7 +313,7 @@ fn run(caps: &Backend, pd: u32, vm: u64, n: u64, out: u64, flags: u64) -> [u64; 
         let eptp = match caps { Backend::Vmx(_) => hw::eptp(v.root), Backend::Svm(_) => v.root };
         let Some(c) = v.vcpus.get_mut(n as usize) else { return [abi::INVALID, 0, 0] };
         if c.running { return [abi::BUSY, 0, 0]; }
-        if flags & abi::RUN_LOAD_REGS != 0 { c.state.regs = unsafe { (out as *const abi::Exit).read_unaligned() }.regs; }
+        if flags & abi::RUN_LOAD_REGS != 0 { c.state.regs = crate::smap::user(|| unsafe { (out as *const abi::Exit).read_unaligned() }).regs; }
         c.running = true;
         let event = (c.event, c.event_error);
         c.event = 0;
@@ -336,7 +336,7 @@ fn run(caps: &Backend, pd: u32, vm: u64, n: u64, out: u64, flags: u64) -> [u64; 
         }
     }
     match result {
-        Ok(_) if crate::syscalls::user_bytes_writable(out, size) => { unsafe { (out as *mut abi::Exit).write_unaligned(exit) }; [abi::OK, 0, 0] }
+        Ok(_) if crate::syscalls::user_bytes_writable(out, size) => { crate::smap::user(|| unsafe { (out as *mut abi::Exit).write_unaligned(exit) }); [abi::OK, 0, 0] }
         Ok(_) => [abi::INVALID, 0, 0],
         Err((status, detail)) => [status, detail, 0],
     }

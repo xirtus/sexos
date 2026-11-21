@@ -91,13 +91,18 @@ fn kernel_rejects_unrecordable_invocation_before_publication() {
     let ipc = include_str!("../kernel/src/ipc.rs");
     assert!(ipc.contains("pub const MAX_DOMAINS: usize = reply_credit::REPLY_CREDIT_CAPACITY;"));
     let enqueue = ipc.split("GraphEdge::AsyncEnqueue { callee } =>").nth(1).unwrap().split("GraphEdge::AsyncDequeue").next().unwrap();
+    // A callee that is down (being reset and restarted) is refused under its credit
+    // lock, before any obligation is recorded.
+    let lock = enqueue.find("callee.reply_credits.lock()").unwrap();
+    let down = enqueue.find("crate::service_restart::down(callee.id)").unwrap();
     let grant = enqueue.find("credits.grant(caller_pd)").unwrap();
     let full = enqueue.find("Grant::Full").unwrap();
-    let refuse = enqueue.find("return Err(sex_pdx::ERR_SERVICE_NOT_READY)").unwrap();
+    let refuse = grant + enqueue[grant..].find("return Err(sex_pdx::ERR_SERVICE_NOT_READY)").unwrap();
     let publish = enqueue.find("(*callee.message_ring).enqueue(msg)").unwrap();
     let withdraw = enqueue.find("credits.withdraw(caller_pd)").unwrap();
+    assert!(lock < down && down < grant);
     assert!(grant < full && full < refuse && refuse < publish && publish < withdraw);
-    assert_eq!(enqueue.matches("return Err(sex_pdx::ERR_SERVICE_NOT_READY)").count(), 2);
+    assert_eq!(enqueue.matches("return Err(sex_pdx::ERR_SERVICE_NOT_READY)").count(), 3);
 }
 
 #[test]

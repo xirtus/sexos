@@ -230,9 +230,17 @@ static PROBE_KILL: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32
 /// Test builds: the domain marked for ending is the caller; end it as a fault would.
 #[inline(always)]
 pub fn probe_pending(pd: u32) -> bool {
-    option_env!("SEXOS_CRASH_PROBE").is_some()
-        && PROBE_KILL.load(Ordering::Relaxed) == pd
-        && PROBE_KILL.compare_exchange(pd, 0, Ordering::AcqRel, Ordering::Relaxed).is_ok()
+    if option_env!("SEXOS_CRASH_PROBE").is_none() { return false; }
+    let armed = PROBE_KILL.load(Ordering::Relaxed);
+    // Busy and hang probes wait until the service holds a message it took.
+    if armed & 0xff != pd || (armed > 0xff && !crate::service_restart::holding(pd))
+        || PROBE_KILL.compare_exchange(armed, 0, Ordering::AcqRel, Ordering::Relaxed).is_err() { return false; }
+    if armed as u64 & wire::PROBE_HANG != 0 {
+        crate::serial_println!("[crash.probe.hang] pd={}", pd);
+        crate::service_restart::freeze(pd);
+        return false;
+    }
+    true
 }
 
 pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
@@ -254,14 +262,14 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             if arg as usize >= ring.count { return wire::NOT_FOUND; }
             let record = ring.records[arg as usize];
             drop(ring);
-            unsafe { core::ptr::copy_nonoverlapping(record.as_ptr(), buf as *mut u8, RECORD_BYTES) };
+            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(record.as_ptr(), buf as *mut u8, RECORD_BYTES) });
             wire::OK
         }
         wire::OP_ADOPT => {
             if caller != FILES_PD { return wire::DENIED; }
             if !crate::syscalls::validate_user_bytes(buf, RECORD_BYTES, false) { return wire::INVALID; }
             let mut bytes = [0u8; RECORD_BYTES];
-            unsafe { core::ptr::copy_nonoverlapping(buf as *const u8, bytes.as_mut_ptr(), RECORD_BYTES) };
+            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(buf as *const u8, bytes.as_mut_ptr(), RECORD_BYTES) });
             let Some(mut record) = Record::decode(&bytes) else { return wire::INVALID };
             // This start's records come from the kernel alone.
             if record.boot == boot_id() { return wire::INVALID; }
@@ -293,7 +301,7 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             if !crate::syscalls::validate_user_bytes(buf, wire::LOG_CHUNK, true) { return wire::INVALID; }
             let mut chunk = [0u8; wire::LOG_CHUNK];
             let (n, total) = crate::console::log_head(arg as usize, &mut chunk);
-            unsafe { core::ptr::copy_nonoverlapping(chunk.as_ptr(), buf as *mut u8, n) };
+            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(chunk.as_ptr(), buf as *mut u8, n) });
             regs.rsi = n as u64;
             regs.rdx = total as u64;
             wire::OK
@@ -307,11 +315,11 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
                 crate::serial_println!("[crash.probe.kernel]");
                 panic!("crash probe: the kernel was asked to stop");
             }
-            if !(1..=15).contains(&arg) { return wire::INVALID; }
-            crate::serial_println!("[crash.probe.service] pd={}", arg);
+            if !(1..=15).contains(&(arg & 0xff)) || arg & !(0xff | wire::PROBE_BUSY | wire::PROBE_HANG) != 0 { return wire::INVALID; }
+            crate::serial_println!("[crash.probe.service] pd={} busy={} hang={}", arg & 0xff, (arg & wire::PROBE_BUSY != 0) as u8, (arg & wire::PROBE_HANG != 0) as u8);
             PROBE_KILL.store(arg as u32, Ordering::Release);
             // A service waiting for messages makes no syscall until something wakes it.
-            if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(arg as u32) {
+            if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(arg as u32 & 0xff) {
                 crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire));
             }
             wire::OK

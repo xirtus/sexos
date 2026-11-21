@@ -87,12 +87,16 @@ jobs:
       run: bash scripts/kms_host_gate.sh
     - name: NVIDIA GSP-RM boot (GA104 firmware, VBIOS/FWSEC, WPR2 layout, RPC queues, simulated GPU) on the host
       run: bash scripts/nvidia_gsp_host_gate.sh
+    - name: Hot-plug slots and window planning for docks and eGPUs on the host
+      run: bash scripts/hotplug_host_gate.sh
     - name: sexdrive DMA lifetime and zero-copy reads on the host
       run: bash scripts/sexdrive_dma_host_gate.sh
     - name: Intel RAID (IMSM metadata, VMD bus) on the host
       run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
+    - name: USB isochronous endpoints and UVC camera detection on the host
+      run: bash scripts/usb_isoch_host_gate.sh
     - name: Rounded window corners and soft shadows (Display decoration pass) on the host
       run: bash scripts/display_decor_host_gate.sh
     - name: Deadline scheduling class (earliest first, share of each window) on the host
@@ -144,7 +148,7 @@ jobs:
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Spreadeagle workbook engine and office painting (host)
-      run: cargo test --locked -p spreadeagle -p assuit -p sex-office
+      run: cargo test --locked -p spreadeagle -p assuit -p gestalt -p sex-office
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
     - name: Keyboard layouts, dead keys and Compose
@@ -490,6 +494,9 @@ jobs:
           SEXOS_GATE_CORES=4 python3 scripts/program_bench_gate.py --accel kvm --no-pku --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/4core-nopku-$run"
         done
         python3 scripts/bench_median.py "$out"
+        # IPC v2 endpoints on the real CPU (kernel pass 2, K1a): 1 core with PKU, 4 cores.
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host python3 scripts/ipc_v2_runtime_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipc2-kvm-1"
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/ipc_v2_runtime_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipc2-kvm-4"
     - name: Preserve runtime evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -611,6 +618,8 @@ jobs:
       run: python3 scripts/sexfs_repair_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-fs-repair"
     - name: USB network adapter
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
+    - name: PCIe hot-plug (NVMe drive plugged into a root port after boot, button removal, plugged again)
+      run: python3 scripts/pcie_hotplug_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-pcie-hotplug"
     - name: Intel RAID 0 on two NVMe drives, read only
       run: python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
     - name: NVMe drives as real laptops have them (64 KiB per command; 4 KiB sectors refused)
@@ -667,7 +676,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: image
     if: needs.image.outputs.full == 'true'
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -681,6 +690,18 @@ jobs:
         truncate -s 1G "$RUNNER_TEMP/media-source.img"
         python3 scripts/program_web_stream_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-stream"
         python3 scripts/program_web_seek_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-seek"
+    - name: Media Source Extensions (fMP4 and WebM, live append, quality switch, seek)
+      # Under KVM: its sound checks need real time, which TCG can't keep while decoding.
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        if [ -w /dev/kvm ]; then export SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host; fi
+        python3 scripts/program_web_mse_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-mse"
+    - name: YouTube-shaped streaming (AV1 fMP4 + Opus WebM, POST ranges read through response.body, changeType to VP9)
+      # Under KVM: AV1 in plain-C dav1d is too slow under TCG to keep the sound gapless.
+      run: |
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        if [ -w /dev/kvm ]; then export SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host; else echo "[web.youtube] no usable /dev/kvm; TCG with the looser sound check"; fi
+        python3 scripts/program_web_youtube_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-web-youtube"
     - name: Qupid subtitles, sound tracks and speed
       run: SEXOS_PLAY=iso_root/programs/qupid python3 scripts/play_subtitles_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/media-source.img" --out "$RUNNER_TEMP/sexos-qupid-subtitles"
     - name: Qupid library plays an album without a gap
@@ -710,6 +731,8 @@ jobs:
           ${{ runner.temp }}/media-build.log
           ${{ runner.temp }}/sexos-web-stream
           ${{ runner.temp }}/sexos-web-seek
+          ${{ runner.temp }}/sexos-web-mse
+          ${{ runner.temp }}/sexos-web-youtube
           ${{ runner.temp }}/sexos-qupid-*
           ${{ runner.temp }}/sexos-hda-mic
           ${{ runner.temp }}/sexos-hda-sound
@@ -758,7 +781,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        gate: [cleanup, app-resource, denim, views]
+        gate: [cleanup, app-resource, denim, views, drivers]
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -785,6 +808,13 @@ jobs:
       run: |
         SEXOS_PROGRAM_ISOLATION_PROBE=4 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/views-probe-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/views-probe-build.log"; exit 1)
         SEXOS_GATE_CPU=max,-pku,+rdseed SEXOS_GATE_CORES=4 SEXOS_GATE_MEMORY=2G python3 scripts/program_isolation_probe.py sexos-v1.0.0.iso "$RUNNER_TEMP/views-source.img" "$RUNNER_TEMP/sexos-proof/views-isolation" 4
+    - name: Drivers killed or hung mid-use restart and the work goes on (disk, USB, input, sound, network)
+      if: matrix.gate == 'drivers'
+      run: |
+        SEXOS_CRASH_PROBE=1 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/drivers-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/drivers-build.log"; exit 1)
+        mkdir -p "$RUNNER_TEMP/sexos-proof" && cp sexos-v1.0.0.iso "$RUNNER_TEMP/sexos-proof/drivers-probe.iso"
+        truncate -s 1G "$RUNNER_TEMP/drivers-source.img"
+        python3 scripts/driver_restart_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/drivers-source.img" --out "$RUNNER_TEMP/sexos-proof/driver-restart"
     - name: Preserve evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -854,6 +884,8 @@ jobs:
       run: python3 scripts/program_polyamour_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/polyamour"
     - name: Assuit word processor opens, edits, saves and reopens docx
       run: python3 scripts/program_assuit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/assuit"
+    - name: Gestalt vector editor draws, edits, saves and reopens SVG
+      run: python3 scripts/program_gestalt_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/gestalt"
     - name: Lua 5.4 interpreter
       run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
     - name: egui programs (the unmodified egui demo, clicks, keys and wheel)

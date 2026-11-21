@@ -11,6 +11,8 @@ mod dma_transfer;
 pub fn get_ticks()->u64{driver_read::mock_ticks()}
 pub fn sys_wait_self_ticks(ticks:u64)->Result<(),u64>{driver_read::mock_wait(ticks)}
 pub fn sys_yield(){}
+/// A stuck controller ends the driver run; the tests never mark the driver serving.
+pub fn task_finish(reason:u64)->!{panic!("task_finish {reason:#x}")}
 /// Loans end through the kernel; the test records which device address came back.
 pub mod dma_lend {
     pub static mut RETURNED: u64 = 0;

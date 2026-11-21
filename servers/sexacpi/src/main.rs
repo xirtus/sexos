@@ -32,13 +32,14 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::str::FromStr;
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use sex_pdx::power as w;
 use sex_pdx::serial_println;
 
 mod fadt_check;
 mod laptop;
 mod touchpad;
+mod wmi;
 
 // ── Memory ─────────────────────────────────────────────────────────────────
 
@@ -125,9 +126,16 @@ pub(crate) fn spend(units: u64) {
     if left < units { BUDGET.store(u64::MAX, Ordering::Relaxed); panic!("AML work budget spent"); }
     BUDGET.store(left - units, Ordering::Relaxed);
 }
+/// Set while a call runs on `AML_STACK`: a nested `bounded` (a WMI method called from a
+/// discovery pass that is already bounded) stays on the current stack and inside the outer
+/// budget, since switching again would restart at the stack's top over the live frames.
+static ON_AML_STACK: AtomicBool = AtomicBool::new(false);
 pub(crate) fn bounded<R>(f: impl FnOnce() -> R) -> R {
+    if ON_AML_STACK.load(Ordering::Relaxed) { return f(); }
     BUDGET.store(PASS_BUDGET, Ordering::Relaxed);
+    ON_AML_STACK.store(true, Ordering::Relaxed);
     let r = on_aml_stack(f);
+    ON_AML_STACK.store(false, Ordering::Relaxed);
     BUDGET.store(u64::MAX, Ordering::Relaxed);
     r
 }
@@ -222,6 +230,18 @@ fn table(index: u64) -> Option<(u32, Vec<u8>)> {
     }
     bytes.truncate(length);
     Some((signature, bytes))
+}
+
+fn table_signature(index: u64) -> Option<u32> {
+    let r = w::call4(w::FW_TABLE, index, 0, 0);
+    (r[0] == w::OK).then_some((r[1] >> 32) as u32)
+}
+
+/// The SMBIOS structure table, when the kernel found a readable one.
+pub(crate) fn smbios() -> Option<Vec<u8>> {
+    (2..200).take_while(|i| table_signature(*i).is_some())
+        .find(|i| table_signature(*i) == Some(u32::from_le_bytes(*b"SMBI")))
+        .and_then(table).map(|(_, t)| t)
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -506,8 +526,11 @@ fn load() -> Option<&'static Aml> {
     let mut streams: Vec<&'static [u8]> = Vec::new();
     streams.push(Box::leak(dsdt.into_boxed_slice()));
     let mut index = 2;
-    while let Some((sig, ssdt)) = table(index) {
-        if sig == u32::from_le_bytes(*b"SSDT") && ssdt.len() >= 36 { streams.push(Box::leak(ssdt.into_boxed_slice())); }
+    while let Some(sig) = table_signature(index) {
+        // Only SSDTs are read whole here; the SMBIOS table ("SMBI") is read by `smbios`.
+        if sig == u32::from_le_bytes(*b"SSDT") {
+            if let Some((_, ssdt)) = table(index).filter(|(_, t)| t.len() >= 36) { streams.push(Box::leak(ssdt.into_boxed_slice())); }
+        }
         index += 1;
     }
     let tables = streams.len();
@@ -560,6 +583,16 @@ pub extern "C" fn _start() -> ! {
 
     power_off_gpus(aml);
     let mut touchpads = bounded(|| touchpad::find(aml, &devices.i2c_hid));
+    // Vendor extras over WMI: Alienware fans and thermal profiles, Dell hotkeys and
+    // battery charge modes (tokens from the SMBIOS table).
+    let smbios_table = smbios();
+    let (mut awcc, hotkeys, mut charge) = bounded(|| {
+        let wmi_devices = wmi::find(aml, &acpi_devices(aml));
+        let charge = wmi::Charging::find(aml, &wmi_devices, smbios_table.as_deref());
+        (wmi::Awcc::find(aml, &wmi_devices), wmi::Hotkeys::find(&wmi_devices), charge)
+    });
+    serial_println!("[sexacpi.vendor] awcc={} hotkeys={} charge={} smbios={}", awcc.is_some() as u8, hotkeys.is_some() as u8,
+        charge.is_some() as u8, smbios_table.as_ref().map_or(0, |t| t.len()));
 
     let mut next_read = 0u64;
     let mut last = w::Sensors::default();
@@ -576,8 +609,8 @@ pub extern "C" fn _start() -> ! {
         if !touchpads.is_empty() { touchpad::send(&mut touchpads); }
         // Firmware events: EC queries run `_Qxx`, which notify devices.
         if let Some(dev) = &ec { laptop::ec_events(aml, dev); }
-        let mut refresh = laptop::controls(aml, &mut light);
-        for event in laptop::notifications(aml, &devices, &light) {
+        let mut refresh = laptop::controls(aml, &mut light, &mut awcc, &mut charge);
+        for event in laptop::notifications(aml, &devices, &light, hotkeys.as_ref()) {
             match event {
                 laptop::Event::Brightness(up) => { light.step(aml, up, "key"); refresh = true; }
                 laptop::Event::Refresh => refresh = true,
@@ -586,7 +619,11 @@ pub extern "C" fn _start() -> ! {
         }
         let now = sex_pdx::get_ticks();
         if refresh || now >= next_read {
-            let s = bounded(|| { light.refresh(aml); laptop::read(aml, &devices, &light) });
+            let s = bounded(|| {
+                light.refresh(aml);
+                if let Some(a) = awcc.as_mut() { a.refresh(aml); }
+                laptop::read(aml, &devices, &light, awcc.as_ref())
+            });
             // Notifications raised while reading (firmware often notifies from _BST) wait
             // for the next pass.
             if s != last {

@@ -119,7 +119,8 @@ unsafe fn snapshot_ingest(src: *const sex_pdx::SceneSnapshot) -> Result<u64, u64
     }
     let idx = SNAP_IDX.fetch_add(1, Ordering::AcqRel) % SNAPSHOT_MAX;
     SNAP_GEN[idx] = SNAP_GEN[idx].wrapping_add(1);
-    core::ptr::copy_nonoverlapping(src, &mut SNAP_RING[idx], 1);
+    let slot = &mut SNAP_RING[idx];
+    crate::smap::user(|| core::ptr::copy_nonoverlapping(src, slot, 1));
     Ok(((SNAP_GEN[idx] as u64) << 32) | (idx as u64))
 }
 
@@ -138,7 +139,8 @@ fn snapshot_resolve(handle: u64, out_ptr: *mut sex_pdx::SceneSnapshot) -> u64 {
         if SNAP_GEN[idx] != gen {
             return sex_pdx::ERR_CAP_INVALID; // stale handle
         }
-        *out_ptr = SNAP_RING[idx];
+        let snap = &SNAP_RING[idx];
+        crate::smap::user(|| core::ptr::copy_nonoverlapping(snap, out_ptr, 1));
     }
     0u64
 }
@@ -215,10 +217,20 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.rdi = 0xfe;
             unsafe { crate::scheduler::finish_current_task(regs as *const _) }
         }
-        if option_env!("SEXOS_CRASH_PROBE").is_some() && crate::crash_log::probe_pending(pd) {
-            crate::crash_log::fault(pd, 0xff, regs.rcx, 0, 0, "crash probe");
-            regs.rdi = 0xff;
-            unsafe { crate::scheduler::finish_current_task(regs as *const _) }
+        if option_env!("SEXOS_CRASH_PROBE").is_some() {
+            if crate::crash_log::probe_pending(pd) {
+                crate::crash_log::fault(pd, 0xff, regs.rcx, 0, 0, "crash probe");
+                regs.rdi = 0xff;
+                unsafe { crate::scheduler::finish_current_task(regs as *const _) }
+            }
+            // The hang probe: this service is stuck mid-request until the hang watch ends
+            // it. Each wake runs the same syscall instruction again (it is 2 bytes long).
+            if crate::service_restart::frozen(pd) {
+                // The user RIP a resume returns to is the entry stub's saved rcx (see
+                // `scheduler::yield_and_switch`: SyscallRegs + 72 + 112).
+                unsafe { *((regs as *mut _ as *mut u8).add(184) as *mut u64) -= 2; }
+                loop { unsafe { crate::scheduler::park_current_unless(regs as *const _, || false); } }
+            }
         }
     }
 
@@ -250,8 +262,10 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                         {
                             (sex_pdx::ERR_CAP_INVALID, 0)
                         } else {
+                            let mut copy = [0u8; RAW_PRINT_MAX];
+                            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(ptr, copy.as_mut_ptr(), len) });
                             unsafe {
-                                let slice = core::slice::from_raw_parts(ptr, len);
+                                let slice = &copy[..len];
                                 // The kernel's own prints hold this lock, so whole lines stay whole.
                                 let _line = crate::serial::SERIAL1.lock();
                                 if crate::serial::is_serial_present() { crate::serial::write_string(slice); }
@@ -404,6 +418,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.r10 = s_arg1;
             regs.r8  = s_arg2;
             regs.rdi = s_caller_task;
+            crate::service_restart::inbox(current_pd.id, type_id != 0);
 
             type_id
         },
