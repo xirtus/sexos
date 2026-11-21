@@ -163,6 +163,7 @@ fn take(w: &mut Watch, key: u16, value: i32) {
         id::REPEAT_DELAY | id::REPEAT_RATE | id::CAPS_AS_CTRL => keyboard(w),
         id::WIDGETS => unsafe { crate::widgets_glue::set(value != 0) },
         id::WEATHER => unsafe { crate::widgets_glue::weather(value != 0) },
+        id::MAGNIFIER_ZOOM | id::COLOUR_FILTER | id::STICKY_KEYS | id::SLOW_KEYS | id::BOUNCE_KEYS | id::SCREEN_READER => unsafe { crate::access_glue::setting(key, value) },
         _ => {}
     }
 }

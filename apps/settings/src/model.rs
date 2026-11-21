@@ -32,6 +32,7 @@ pub fn page_title(section: &str) -> &str {
         "keyboard" => "Keyboard", "sound" => "Sound", "time" => "Date & time",
         "session" => "Lock & idle", "setup" => "About", "open" => "Default apps",
         "startup" => "Startup programs", "shortcuts" => "Shortcuts", "notifications" => "Notifications",
+        "accessibility" => "Accessibility",
         "privacy" => "Privacy and grants", "updates" => "Updates", "storage" => "Storage", other => other,
     }
 }
@@ -347,7 +348,7 @@ mod tests {
     #[test]
     fn pages_follow_the_schema() {
         let (p, n) = pages();
-        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "setup", "open", "startup", "shortcuts", "notifications", "privacy", "updates", "storage"]);
+        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "accessibility", "setup", "open", "startup", "shortcuts", "notifications", "privacy", "updates", "storage"]);
     }
 
     #[test]

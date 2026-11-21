@@ -129,6 +129,12 @@ pub mod id {
     pub const SHORTCUT_LOCK: u16 = 38;
     pub const SHORTCUT_CLOSE: u16 = 39;
     pub const NOTIFY_HIDDEN: u16 = 40;
+    pub const MAGNIFIER_ZOOM: u16 = 41;
+    pub const COLOUR_FILTER: u16 = 42;
+    pub const STICKY_KEYS: u16 = 43;
+    pub const SLOW_KEYS: u16 = 44;
+    pub const BOUNCE_KEYS: u16 = 45;
+    pub const SCREEN_READER: u16 = 46;
 }
 
 /// Programs (program store names) the Shell may start at login and whose
@@ -155,6 +161,9 @@ pub const THEMES: &[&str] = &["Light", "Dark", "High contrast"];
 /// grants): ask the person, no, or yes. Files applies it to a run; nothing is recorded,
 /// so going back to "ask" asks again. Append-only.
 pub const FIRST_RUN: &[&str] = &["ask", "no", "yes"];
+
+/// Colour filters, in `sex_pdx::access_view` order. Append-only.
+pub const COLOUR_FILTERS: &[&str] = &["Off", "High contrast", "Inverted", "Grayscale", "Red-green aid", "Blue-yellow aid"];
 
 /// Programs that open each kind of file, the default first. Append-only.
 pub const PDF_PROGRAMS: &[&str] = &["vellum", "kaleidoscope"];
@@ -218,6 +227,12 @@ pub const KEYS: &[Key] = &[
     Key { id: id::LOCK_AFTER, name: "session.lock_after_min", label: "Lock after (minutes, 0 never)", kind: int(0, 240), default: 0 },
     Key { id: id::BLANK_AFTER, name: "session.blank_after_min", label: "Screen off after (minutes, 0 never)", kind: int(0, 240), default: 0 },
     Key { id: id::LOCK_ON_IDLE, name: "session.lock_on_idle", label: "Lock when idle", kind: Kind::Bool, default: 1 },
+    Key { id: id::MAGNIFIER_ZOOM, name: "accessibility.magnifier_zoom", label: "Magnifier zoom in quarters (4 off, 8 is 2x)", kind: int(4, 32), default: 4 },
+    Key { id: id::COLOUR_FILTER, name: "accessibility.colour_filter", label: "Colour filter", kind: Kind::Choice(COLOUR_FILTERS), default: 0 },
+    Key { id: id::STICKY_KEYS, name: "accessibility.sticky_keys", label: "Sticky keys", kind: Kind::Bool, default: 0 },
+    Key { id: id::SLOW_KEYS, name: "accessibility.slow_keys", label: "Slow keys", kind: Kind::Bool, default: 0 },
+    Key { id: id::BOUNCE_KEYS, name: "accessibility.bounce_keys", label: "Bounce keys", kind: Kind::Bool, default: 0 },
+    Key { id: id::SCREEN_READER, name: "accessibility.screen_reader", label: "Screen reader (Whisper)", kind: Kind::Bool, default: 0 },
     Key { id: id::SETUP_DONE, name: "setup.done", label: "First-start setup finished", kind: Kind::Bool, default: 0 },
     Key { id: id::OPEN_PDF, name: "open.pdf", label: "Open PDF documents with", kind: Kind::Choice(PDF_PROGRAMS), default: 0 },
     Key { id: id::OPEN_IMAGE, name: "open.image", label: "Open pictures with", kind: Kind::Choice(IMAGE_PROGRAMS), default: 0 },
