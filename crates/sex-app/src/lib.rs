@@ -174,11 +174,18 @@ impl Window {
         if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
         // Tray items and notification answers wait for `tray::take` or `next_any`.
         if m.type_id == sex_pdx::program_tray::OP_TRAY_EVENT { tray::receive(m); return None; }
+        // Voyeur's questions wait for `search::asked` and `search::activated`.
+        if sex_pdx::search::shell_opcode(m.type_id) { search::receive(m); return None; }
         if let Some(on) = sex_pdx::a11y::decode_state(m.type_id, m.arg0, m.arg1) { a11y::told(on); return None; }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
         if m.type_id == 0x202 { if let Some(k) = Key::decode_release(m.arg0, m.arg1, m.arg2) { return Some(Event::KeyUp(k)); } }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
+    }
+    /// Process one already received message while the application multiplexes
+    /// its own nonblocking protocols. Shell input keeps the usual authentication.
+    pub fn receive(&mut self, message: &sex_pdx::PdxMessage) -> Option<Event> {
+        self.event(message)
     }
     /// The next key or close, waiting for one.
     pub fn next(&mut self) -> Event {
@@ -209,7 +216,8 @@ impl Window {
         loop {
             if let Some(e) = self.poll() { return Some(e); }
             let now = sex_pdx::get_ticks();
-            if now >= end { return None; }
+            // A Voyeur question that came in with the events is answered now, not at `end`.
+            if now >= end || search::waiting() { return None; }
             let _ = sex_pdx::sys_wait_self_ticks((end - now).clamp(1, 64));
         }
     }
@@ -316,6 +324,81 @@ pub mod tray {
             pt::Event::Reply { .. } => {
                 let r = unsafe { &mut *core::ptr::addr_of_mut!(REPLY) };
                 if let Some((tag, text)) = r.push(e) { put(Event::NotificationReply { tag, text }); }
+            }
+        }
+    }
+}
+
+/// Answering Voyeur, the system search ([`sex_pdx::search`]): a program that
+/// holds something worth finding (Loom's file index, Kaleidoscope's history)
+/// registers once, then answers each query from what it already holds. The
+/// Shell sends it the query text and nothing else. Queries and chosen results
+/// arrive with the window's events and wait here; read them each turn of the
+/// program's loop (a loop that waits in [`Window::next_within`] answers within
+/// its wait).
+pub mod search {
+    use sex_pdx::search as wire;
+    pub use wire::{Record, ACTION_COPY, ACTION_OPEN, ACTION_OPEN_WITH, ACTION_REVEAL, KIND_BOOKMARK, KIND_CONTENT, KIND_FILE, KIND_HISTORY, RESULTS_MAX};
+
+    static mut READER: wire::QueryReader = wire::QueryReader::new();
+    /// A whole query not yet answered (its ticket), 0 for none.
+    static mut ASKED: u32 = 0;
+    static mut CHOSEN: [Option<(u8, u64)>; 4] = [None; 4];
+    static mut ID: u8 = 0;
+
+    fn send(p: wire::Packet) -> bool {
+        for _ in 0..1000 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, p.opcode, p.args[0], p.args[1], p.args[2]) {
+                Ok(_) => return true,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+    /// Offers this program as a provider named `name` (up to 16 characters),
+    /// answering with the result kinds in `kinds` (`KIND_*`).
+    pub fn register(name: &str, kinds: &[u8]) -> bool {
+        let bits = kinds.iter().fold(0u16, |b, &k| b | 1u16.checked_shl(k as u32).unwrap_or(0));
+        wire::Registration::new(name, bits).is_some_and(|r| send(r.wire()))
+    }
+    /// A query or a chosen result is waiting to be read.
+    pub fn waiting() -> bool { unsafe { ASKED != 0 || (*core::ptr::addr_of!(CHOSEN))[0].is_some() } }
+    /// True once the Shell took the registration.
+    pub fn registered() -> bool { unsafe { ID != 0 } }
+    /// The query to answer now, if one came: (ticket, text). A newer query
+    /// replaces one not yet answered; a cancelled one goes.
+    pub fn asked() -> Option<(u32, alloc::string::String)> {
+        unsafe {
+            let ticket = core::mem::take(&mut *core::ptr::addr_of_mut!(ASKED));
+            (ticket != 0).then(|| (ticket, alloc::string::String::from((*core::ptr::addr_of!(READER)).query())))
+        }
+    }
+    /// Answers query `ticket` with up to [`RESULTS_MAX`] results.
+    pub fn answer(ticket: u32, records: &[Record]) -> bool {
+        let mut out = [wire::Packet { opcode: 0, args: [0; 3] }; wire::ANSWER_PACKETS];
+        let n = wire::answer_packets(ticket, records, &mut out);
+        out[..n].iter().all(|p| send(*p))
+    }
+    /// A result of ours the user chose: (action, key).
+    pub fn activated() -> Option<(u8, u64)> {
+        let q = unsafe { &mut *core::ptr::addr_of_mut!(CHOSEN) };
+        let e = q[0].take()?;
+        q.rotate_left(1);
+        Some(e)
+    }
+    pub(crate) fn receive(m: &sex_pdx::PdxMessage) {
+        let p = wire::Packet { opcode: m.type_id, args: [m.arg0, m.arg1, m.arg2] };
+        unsafe {
+            if let Some(ticket) = (*core::ptr::addr_of_mut!(READER)).accept(p) { ASKED = ticket; }
+            else if let Some(ticket) = wire::decode_cancel(p) { if ASKED == ticket { ASKED = 0; } }
+            else if let Some((_, _, action, key)) = wire::decode_activate(p) {
+                let q = &mut *core::ptr::addr_of_mut!(CHOSEN);
+                if let Some(slot) = q.iter_mut().find(|s| s.is_none()) { *slot = Some((action, key)); }
+            }
+            else if let Some((id, status)) = wire::decode_registered(p) {
+                if status == wire::Status::Ok { ID = id; }
+                sex_pdx::serial_record!("[app.search.registered] id={} status={:?}", id, status);
             }
         }
     }

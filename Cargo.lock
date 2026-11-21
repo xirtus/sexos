@@ -6463,6 +6463,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "record"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-pdx",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -17,12 +17,19 @@
 //! provider -> Shell  REGISTER   name, kinds it answers with
 //! Shell -> provider  REGISTERED provider id, status
 //! Shell -> provider  QUERY      ticket, query text (1..=3 parts)
-//! provider -> Shell  RESULT     ticket, index, kind, action, hint, key, lengths
+//! provider -> Shell  RESULT     ticket, index, kind, action, other actions, hint, key, lengths
 //! provider -> Shell  TEXT       ticket, index, field, 16 bytes of title/subtitle
 //! provider -> Shell  DONE       ticket, count
 //! Shell -> provider  CANCEL     ticket (a newer query replaced it)
 //! Shell -> provider  ACTIVATE   ticket, index, action, key (the user chose it)
 //! ```
+//!
+//! A result names the action Enter does and, as a bit set, the other
+//! actions the user may pick instead (Tab in the launcher). The provider
+//! carries out every action it is sent except [`ACTION_COPY`]: the Shell
+//! copies the result's subtitle (its path or address; the title when there
+//! is none) itself, as that program's copy, and never asks the provider.
+//! The Shell focuses the provider's window before it sends any other action.
 //!
 //! Opcodes 0x3C0..=0x3C7 (no other user of 0x3C0..=0x3CF in the tree).
 //! This file has no crate imports so host tests can include it by path.
@@ -35,6 +42,21 @@ pub const TEXT: u64 = 0x3C4;
 pub const DONE: u64 = 0x3C5;
 pub const ACTIVATE: u64 = 0x3C6;
 pub const CANCEL: u64 = 0x3C7;
+
+/// Result kinds (`voyeur::Kind` wire values) and actions (`voyeur::Action`).
+pub const KIND_APP: u8 = 1;
+pub const KIND_FILE: u8 = 2;
+pub const KIND_CONTENT: u8 = 3;
+pub const KIND_HISTORY: u8 = 7;
+pub const KIND_BOOKMARK: u8 = 8;
+pub const ACTION_OPEN: u8 = 1;
+pub const ACTION_OPEN_WITH: u8 = 2;
+pub const ACTION_REVEAL: u8 = 3;
+pub const ACTION_COPY: u8 = 4;
+/// The highest action number; a result's other actions are bits 0..ACTIONS-1.
+pub const ACTIONS: u8 = 6;
+/// The bit for `action` in [`Record::also`].
+pub const fn action_bit(action: u8) -> u8 { if action == 0 || action > ACTIONS { 0 } else { 1 << (action - 1) } }
 
 /// Protocol version carried in REGISTER.
 pub const VERSION: u8 = 1;
@@ -154,11 +176,13 @@ impl QueryReader {
 impl Default for QueryReader { fn default() -> Self { Self::new() } }
 
 /// One result. `key` is the provider's own handle for it, given back in
-/// ACTIVATE; the Shell never interprets it.
+/// ACTIVATE; the Shell never interprets it. `also` holds the other actions
+/// it offers ([`action_bit`] per action).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Record {
     pub kind: u8,
     pub action: u8,
+    pub also: u8,
     pub hint: u16,
     pub key: u64,
     title: [u8; TITLE_MAX],
@@ -167,7 +191,7 @@ pub struct Record {
     subtitle_len: u8,
 }
 impl Record {
-    pub const EMPTY: Self = Self { kind: 0, action: 0, hint: 0, key: 0, title: [0; TITLE_MAX], title_len: 0, subtitle: [0; SUBTITLE_MAX], subtitle_len: 0 };
+    pub const EMPTY: Self = Self { kind: 0, action: 0, also: 0, hint: 0, key: 0, title: [0; TITLE_MAX], title_len: 0, subtitle: [0; SUBTITLE_MAX], subtitle_len: 0 };
     /// None when a text is too long, has control characters, or the title is empty.
     pub fn new(kind: u8, action: u8, hint: u16, key: u64, title: &str, subtitle: &str) -> Option<Self> {
         let (t, s) = (title.as_bytes(), subtitle.as_bytes());
@@ -177,13 +201,22 @@ impl Record {
         r.subtitle[..s.len()].copy_from_slice(s);
         Some(r)
     }
+    /// The same result, also offering `actions`.
+    pub fn with(mut self, actions: &[u8]) -> Self {
+        for &a in actions { if a != self.action { self.also |= action_bit(a); } }
+        self
+    }
+    /// Every action the result offers: its own first, then the others in order.
+    pub fn actions(&self) -> impl Iterator<Item = u8> + '_ {
+        core::iter::once(self.action).chain((1..=ACTIONS).filter(move |&a| a != self.action && self.also & action_bit(a) != 0))
+    }
     pub fn title(&self) -> &str { core::str::from_utf8(&self.title[..self.title_len as usize]).unwrap_or("") }
     pub fn subtitle(&self) -> &str { core::str::from_utf8(&self.subtitle[..self.subtitle_len as usize]).unwrap_or("") }
 }
 
 fn header(ticket: u32, index: usize, r: &Record) -> Packet {
     Packet { opcode: RESULT, args: [
-        ticket as u64 | (index as u64) << 32 | (r.kind as u64) << 40 | (r.action as u64) << 48,
+        ticket as u64 | (index as u64) << 32 | (r.kind as u64) << 40 | (r.action as u64) << 48 | (r.also as u64) << 56,
         r.hint as u64 | (r.title_len as u64) << 16 | (r.subtitle_len as u64) << 24,
         r.key,
     ] }
@@ -254,14 +287,14 @@ impl Collector {
         if self.done { return self.fail(CollectError::OutOfOrder); }
         match p.opcode {
             RESULT => {
-                let (index, kind, action) = ((a >> 32) as u8 as usize, (a >> 40) as u8, (a >> 48) as u8);
+                let (index, kind, action, also) = ((a >> 32) as u8 as usize, (a >> 40) as u8, (a >> 48) as u8, (a >> 56) as u8);
                 let (hint, tl, sl) = (b as u16, (b >> 16) as u8 as usize, (b >> 24) as u8 as usize);
-                if a >> 56 != 0 || b >> 32 != 0 || kind == 0 || action == 0 || tl == 0 || tl > TITLE_MAX || sl > SUBTITLE_MAX {
+                if also >> ACTIONS != 0 || b >> 32 != 0 || kind == 0 || action == 0 || tl == 0 || tl > TITLE_MAX || sl > SUBTITLE_MAX {
                     return self.fail(CollectError::Malformed);
                 }
                 if index != self.count || index >= RESULTS_MAX { return self.fail(CollectError::OutOfOrder); }
                 if self.count > 0 && !self.complete(self.count - 1) { return self.fail(CollectError::Incomplete); }
-                self.records[index] = Record { kind, action, hint, key: c, title_len: tl as u8, subtitle_len: sl as u8, ..Record::EMPTY };
+                self.records[index] = Record { kind, action, also, hint, key: c, title_len: tl as u8, subtitle_len: sl as u8, ..Record::EMPTY };
                 self.got[index] = (0, 0);
                 self.count += 1;
                 Ok(Collect::Pending)

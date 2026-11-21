@@ -37,8 +37,8 @@ impl BootstrapPlanner {
     }
 }
 /// Boot regions BOOT may reserve. 128 was full on a QEMU desktop once Display also
-/// got a virtio-gpu scanout buffer.
-pub const CAPACITY: usize = 192;
+/// got a virtio-gpu scanout buffer; 256 leaves room for the desktop recorder's capture bank.
+pub const CAPACITY: usize = 256;
 pub struct BootFrameReservations { ranges: [Range; CAPACITY], count: usize }
 impl BootFrameReservations {
     pub const fn new() -> Self { Self { ranges: [Range {start:0,end:0};CAPACITY], count:0 } }

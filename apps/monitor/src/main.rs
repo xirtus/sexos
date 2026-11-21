@@ -467,18 +467,19 @@ pub extern "C" fn _start() -> ! {
     let mut due = sex_pdx::get_ticks() + PERIOD_MS;
     loop {
         let wait = due.saturating_sub(sex_pdx::get_ticks());
-        let redraw = match if wait == 0 { None } else { window.next_within(wait) } {
+        // Keys first: a sample that runs past its period must never starve them.
+        let event = window.poll().or_else(|| if wait == 0 { None } else { window.next_within(wait) });
+        let sampled = event.is_none();
+        let redraw = match event {
             Some(Event::Close) => window.close(),
             Some(Event::Key(key)) => mesh.key(&window, key),
             Some(Event::Pointer(p)) => mesh.pointer(&window, p),
             Some(Event::Resize { .. }) => true,
             Some(_) => false,
-            None => {
-                due = sex_pdx::get_ticks() + PERIOD_MS;
-                mesh.sample(&mut window);
-                true
-            }
+            None => { mesh.sample(&mut window); true }
         };
         if redraw { mesh.render(&mut window); }
+        // The next sample is a whole period after this one's work, however long it took.
+        if sampled { due = sex_pdx::get_ticks() + PERIOD_MS; }
     }
 }
