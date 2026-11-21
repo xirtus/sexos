@@ -10,7 +10,7 @@ with addr2line on the kernel ELF. Informational: it always exits 0.
 import argparse, os, re, subprocess
 from pathlib import Path
 
-LINE = re.compile(rb'\[smap\.site\] rip=(0x[0-9a-f]+) from_audit=(-?\d+) addr=(0x[0-9a-f]+) write=(\d)')
+LINE = re.compile(rb'\[smap\.site\] rip=(0x[0-9a-f]+) from_audit=(-?\d+) addr=(0x[0-9a-f]+) write=(\d)(?: callers=(-?\d+),(-?\d+),(-?\d+))?')
 
 def logs(roots, limit=64 << 20):
     for root in roots:
@@ -44,7 +44,8 @@ def main():
             continue
         for m in LINE.finditer(data):
             rel = int(m[2])
-            s = sites.setdefault(rel, {'hits': 0, 'write': False, 'addr': m[3].decode(), 'logs': set()})
+            s = sites.setdefault(rel, {'hits': 0, 'write': False, 'addr': m[3].decode(), 'logs': set(),
+                                       'callers': [int(c) for c in (m[5], m[6], m[7]) if c and int(c) != 0]})
             s['hits'] += 1
             s['write'] |= m[4] == b'1'
             s['logs'].add(p.parent.name)
@@ -54,15 +55,16 @@ def main():
     base = audit_address(a.kernel) if a.kernel and a.kernel.exists() else None
     names = {}
     if base is not None:
-        addrs = [hex(base + rel) for rel in sites]
+        rels = sorted({r for rel, s in sites.items() for r in (rel, *s['callers'])})
         # Without -i, addr2line prints one function line and one file:line per address.
-        out = subprocess.run(['addr2line', '-f', '-C', '-e', str(a.kernel), *addrs],
+        out = subprocess.run(['addr2line', '-f', '-C', '-e', str(a.kernel), *(hex(base + r) for r in rels)],
                              capture_output=True, text=True).stdout.splitlines()
-        for rel, i in zip(sites, range(0, len(out), 2)):
-            names[rel] = f'{out[i]} {out[i + 1]}' if i + 1 < len(out) else '?'
+        for rel, i in zip(rels, range(0, len(out), 2)):
+            names[rel] = out[i]
     for rel, s in sorted(sites.items(), key=lambda kv: -kv[1]['hits']):
         print(f"[smap.sites] from_audit={rel} hits={s['hits']} write={int(s['write'])} "
-              f"addr={s['addr']} where={names.get(rel, '?')} seen_in={','.join(sorted(s['logs']))[:120]}")
+              f"addr={s['addr']} where={names.get(rel, '?')} "
+              f"callers={'|'.join(names.get(c, '?') for c in s['callers']) or '-'} seen_in={','.join(sorted(s['logs']))[:120]}")
     return 0
 
 if __name__ == '__main__':

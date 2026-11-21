@@ -189,7 +189,7 @@ pub fn call(regs: &mut crate::interrupts::SyscallRegs, op: u64, a: u64, b: u64, 
             // runs it again, and the store and wake below happen in its last syscall.
             unsafe { (*current).state.exit(); }
             if a != 0 && a % 4 == 0 && crate::syscalls::user_bytes_writable(a, 4) {
-                unsafe { core::ptr::write_volatile(a as *mut u32, 1); }
+                crate::smap::user(|| unsafe { core::ptr::write_volatile(a as *mut u32, 1) });
                 let mut table = table();
                 wake_at(&mut table, pd.id, a, u64::MAX);
             }
@@ -204,7 +204,7 @@ pub fn call(regs: &mut crate::interrupts::SyscallRegs, op: u64, a: u64, b: u64, 
                 let mut table = table();
                 // Checked under the table lock, which every WAKE takes: a value changed
                 // and woken after this read finds the waiter registered.
-                if unsafe { core::ptr::read_volatile(a as *const u32) } as u64 != b & 0xFFFF_FFFF { return reply(regs, t::AGAIN, 0); }
+                if crate::smap::user(|| unsafe { core::ptr::read_volatile(a as *const u32) }) as u64 != b & 0xFFFF_FFFF { return reply(regs, t::AGAIN, 0); }
                 table.waiters.retain(|w| w.task != current);
                 table.waiters.push(Waiter { target: pd.id, task: current, at: a });
                 // A timed wait: `poll` wakes it once the deadline passes. Long waits wake

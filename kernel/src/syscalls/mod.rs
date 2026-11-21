@@ -122,7 +122,8 @@ unsafe fn snapshot_ingest(src: *const sex_pdx::SceneSnapshot) -> Result<u64, u64
     }
     let idx = SNAP_IDX.fetch_add(1, Ordering::AcqRel) % SNAPSHOT_MAX;
     SNAP_GEN[idx] = SNAP_GEN[idx].wrapping_add(1);
-    core::ptr::copy_nonoverlapping(src, &mut SNAP_RING[idx], 1);
+    let slot = &mut SNAP_RING[idx];
+    crate::smap::user(|| core::ptr::copy_nonoverlapping(src, slot, 1));
     Ok(((SNAP_GEN[idx] as u64) << 32) | (idx as u64))
 }
 
@@ -141,7 +142,8 @@ fn snapshot_resolve(handle: u64, out_ptr: *mut sex_pdx::SceneSnapshot) -> u64 {
         if SNAP_GEN[idx] != gen {
             return sex_pdx::ERR_CAP_INVALID; // stale handle
         }
-        *out_ptr = SNAP_RING[idx];
+        let snap = &SNAP_RING[idx];
+        crate::smap::user(|| core::ptr::copy_nonoverlapping(snap, out_ptr, 1));
     }
     0u64
 }
@@ -253,8 +255,10 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
                         {
                             (sex_pdx::ERR_CAP_INVALID, 0)
                         } else {
+                            let mut copy = [0u8; RAW_PRINT_MAX];
+                            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(ptr, copy.as_mut_ptr(), len) });
                             unsafe {
-                                let slice = core::slice::from_raw_parts(ptr, len);
+                                let slice = &copy[..len];
                                 // The kernel's own prints hold this lock, so whole lines stay whole.
                                 let _line = crate::serial::SERIAL1.lock();
                                 if crate::serial::is_serial_present() { crate::serial::write_string(slice); }

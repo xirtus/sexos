@@ -254,14 +254,14 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             if arg as usize >= ring.count { return wire::NOT_FOUND; }
             let record = ring.records[arg as usize];
             drop(ring);
-            unsafe { core::ptr::copy_nonoverlapping(record.as_ptr(), buf as *mut u8, RECORD_BYTES) };
+            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(record.as_ptr(), buf as *mut u8, RECORD_BYTES) });
             wire::OK
         }
         wire::OP_ADOPT => {
             if caller != FILES_PD { return wire::DENIED; }
             if !crate::syscalls::validate_user_bytes(buf, RECORD_BYTES, false) { return wire::INVALID; }
             let mut bytes = [0u8; RECORD_BYTES];
-            unsafe { core::ptr::copy_nonoverlapping(buf as *const u8, bytes.as_mut_ptr(), RECORD_BYTES) };
+            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(buf as *const u8, bytes.as_mut_ptr(), RECORD_BYTES) });
             let Some(mut record) = Record::decode(&bytes) else { return wire::INVALID };
             // This start's records come from the kernel alone.
             if record.boot == boot_id() { return wire::INVALID; }
@@ -293,7 +293,7 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
             if !crate::syscalls::validate_user_bytes(buf, wire::LOG_CHUNK, true) { return wire::INVALID; }
             let mut chunk = [0u8; wire::LOG_CHUNK];
             let (n, total) = crate::console::log_head(arg as usize, &mut chunk);
-            unsafe { core::ptr::copy_nonoverlapping(chunk.as_ptr(), buf as *mut u8, n) };
+            crate::smap::user(|| unsafe { core::ptr::copy_nonoverlapping(chunk.as_ptr(), buf as *mut u8, n) });
             regs.rsi = n as u64;
             regs.rdx = total as u64;
             wire::OK
