@@ -13,7 +13,7 @@ Andreas's machine is most likely the **RTX 3070 Laptop: GA104, 8 GB, PCI 10de:24
 | N1 | Name the GPU and power it off (D3cold through ACPI) when nothing drives it | **done, this PR** (QEMU gate; bare metal next week) |
 | N2 | Firmware store: GSP-RM, booter and FWSEC images as data files | planned (needs driver stage D8) |
 | N3 | `sexgpu` service in its own Graphics organ: BAR0/BAR1 lease, MSI-X, IOMMU domain, power on through a capability | planned (needs D2-D4) |
-| N4 | GSP boot on Ampere: VBIOS, FWSEC-FRTS, WPR2, booter on SEC2, GSP-RM, RPC queues | **N4a driver logic done (2026-11-19)**, see `NVIDIA_GSP_BRINGUP_2026_11_19.md`; N4b runs it on the x17 |
+| N4 | GSP boot on Ampere: VBIOS, FWSEC-FRTS, WPR2, booter on SEC2, GSP-RM, RPC queues | **N4a driver logic merged; N4b service + "SexOS with NVIDIA GPU" boot entry (2026-11-19)**, see `NVIDIA_GSP_BRINGUP_2026_11_19.md`; to prove on the x17 |
 | N5 | Display: HDMI and mini DisplayPort outputs through the GPU's display engine | planned, hardware only |
 | N6 | 3D: NVK (Mesa, MIT) over a SexOS channel/VM-bind interface; WebGPU in the browser on top | planned |
 

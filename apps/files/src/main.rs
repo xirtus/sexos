@@ -116,6 +116,8 @@ struct App {
     index: Index,
     /// A search running in the background.
     search: Option<Search>,
+    /// The walk at start that fills the index Voyeur asks, between everything else.
+    crawl: Option<Search>,
     /// The listing shows search results for this, not the folder.
     found: Option<Vec<u8>>,
     /// Ctrl+G: the folder as a grid of thumbnails.
@@ -309,7 +311,17 @@ impl App {
     fn work(&mut self, window: &mut Window) -> bool {
         if self.loom.busy() { return self.loom_work(); }
         if self.search.is_some() { return self.search_step(window); }
-        let Some(job) = self.job.as_mut() else { return self.thumbs.on && self.thumbs.step(window) };
+        let Some(job) = self.job.as_mut() else {
+            if self.thumbs.on && self.thumbs.busy() { return self.thumbs.step(window); }
+            if let Some(c) = self.crawl.as_mut() {
+                if let search::Step::Done = c.step(window, &mut self.index) {
+                    sex_pdx::serial_record!("[files.app.indexed] base={} files={} looked={} read={} ms={}", shown(&c.base), self.index.len(), c.looked, c.read, c.elapsed_ms());
+                    self.crawl = None;
+                }
+                return false;
+            }
+            return self.thumbs.on && self.thumbs.step(window);
+        };
         match job.step(window) {
             Outcome::Running => {
                 let pct = job.percent();
@@ -346,6 +358,50 @@ impl App {
                 true
             }
         }
+    }
+    /// Voyeur's questions: answered from the index, nothing read for them. A chosen
+    /// file opens in its program, or shows here selected (reveal), or with its
+    /// actions (open with). Copy is the Shell's and never comes here.
+    fn voyeur(&mut self, window: &mut Window) -> bool {
+        use sex_app::search as vs;
+        while let Some((ticket, query)) = vs::asked() {
+            let found = self.index.lookup(window, query.as_bytes(), vs::RESULTS_MAX);
+            let records: Vec<vs::Record> = found.iter().filter_map(|(path, by_words)| {
+                let name = core::str::from_utf8(base(path)).ok()?;
+                let full = core::str::from_utf8(path).ok()?;
+                let fits = full.len() <= sex_pdx::search::SUBTITLE_MAX;
+                let mut cut = full.len().saturating_sub(sex_pdx::search::SUBTITLE_MAX - 3);
+                while !full.is_char_boundary(cut) { cut += 1; }
+                let sub = if fits { String::from(full) } else { format!("\u{2026}{}", &full[cut..]) };
+                let mut t = name.len().min(sex_pdx::search::TITLE_MAX);
+                while !name.is_char_boundary(t) { t -= 1; }
+                let (kind, hint) = if *by_words { (vs::KIND_CONTENT, 300) } else { (vs::KIND_FILE, 0) };
+                let r = vs::Record::new(kind, vs::ACTION_OPEN, hint, search::key(path), &name[..t], &sub)?;
+                Some(if fits { r.with(&[vs::ACTION_OPEN_WITH, vs::ACTION_REVEAL, vs::ACTION_COPY]) } else { r.with(&[vs::ACTION_OPEN_WITH, vs::ACTION_REVEAL]) })
+            }).collect();
+            let sent = vs::answer(ticket, &records);
+            sex_pdx::serial_record!("[files.app.voyeur.answer] ticket={} query={} results={} first={} sent={}",
+                ticket, query, records.len(), records.first().map_or("-", |r| r.title()), sent as u8);
+        }
+        let mut redraw = false;
+        while let Some((action, key)) = vs::activated() {
+            let Some(path) = self.index.path_for(key) else { sex_pdx::serial_record!("[files.app.voyeur] action={} path=- ok=0", action); continue };
+            let name = base(&path).to_vec();
+            redraw = true;
+            sex_pdx::serial_record!("[files.app.voyeur] action={} path={} ok=1", action, shown(&path));
+            match action {
+                vs::ACTION_OPEN => self.open_file(&name, &path),
+                vs::ACTION_REVEAL | vs::ACTION_OPEN_WITH if self.job.is_some() => self.status = "Busy with the job below: wait for it, or Esc stops it.".into(),
+                vs::ACTION_REVEAL | vs::ACTION_OPEN_WITH => {
+                    self.search = None;
+                    self.go(window, parent(&path));
+                    self.select(&name);
+                    if action == vs::ACTION_OPEN_WITH { self.actions_open(window); }
+                }
+                _ => {}
+            }
+        }
+        redraw
     }
     fn search_step(&mut self, window: &mut Window) -> bool {
         let Some(sr) = self.search.as_mut() else { return false };
@@ -878,7 +934,7 @@ pub extern "C" fn _start() -> ! {
     };
     let portal = root == b"/";
     let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
     let start = app.root.clone();
@@ -890,6 +946,10 @@ pub extern "C" fn _start() -> ! {
         app.status = "Home is locked. Type its password, or Esc to leave it locked.".into();
     }
     app.poll_questions(&mut window);
+    // Voyeur asks this run about its files: their names and the words inside them.
+    app.crawl = Some(Search::crawl(&mut window, &mut app.index, &app.root));
+    let registered = sex_app::search::register("loom", &[sex_app::search::KIND_FILE, sex_app::search::KIND_CONTENT]);
+    sex_pdx::serial_record!("[files.app.voyeur.register] sent={}", registered as u8);
     app.render(&mut window);
     sex_pdx::serial_record!("[files.app.ready] target={} task={} root={} portal={}", window.target, window.task, shown(&app.root), portal as u8);
     // Where the left button went down, until a drag starts or it comes up.
@@ -907,8 +967,9 @@ pub extern "C" fn _start() -> ! {
                 None => {}
             }
         }
+        if app.voyeur(&mut window) { app.render(&mut window); }
         // While a job runs, look for keys between its pieces instead of sleeping.
-        let event = if app.job.is_some() || app.search.is_some() || app.thumbs.busy() || app.loom.busy() {
+        let event = if app.job.is_some() || app.search.is_some() || app.crawl.is_some() || app.thumbs.busy() || app.loom.busy() {
             match window.poll() { Some(e) => Some(e), None => { if app.work(&mut window) { app.render(&mut window); } continue; } }
         } else { window.next_within(400) };
         match event {

@@ -6,11 +6,48 @@
 //! also carries the lips mark (`brand.rs`) in its middle; night light warms the finished frame by
 //! scaling green and blue down, the way redshift/gammastep and Plasma's Night
 //! Color do, so programs need not know about it.
+//!
+//! The same message carries the theme (slice S6a): Settings'
+//! `appearance.theme` and `appearance.accent`, which programs already follow
+//! through `sex_theme`, so the bar, window chrome, menus and desktop cards
+//! repaint to match them.
 
-use core::sync::atomic::{AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 
-/// Shell -> Display. arg0 = wallpaper index, arg1 = night light level.
+/// Shell -> Display. arg0 = wallpaper index, arg1 = night light level,
+/// arg2 = theme word (`theme_word`), or 0 to keep the theme as it is.
 pub const OP_DESKTOP_LOOK: u64 = 0x2DA;
+
+/// Light, dark and high contrast: `appearance.theme` 0, 1 and 2.
+pub const THEME_MODES: u8 = 3;
+/// The mode names, in setting order, for receipts.
+pub const THEME_NAMES: [&str; THEME_MODES as usize] = ["light", "dark", "high-contrast"];
+/// SexOS pink, the default accent (`sex_theme::DEFAULT_ACCENT`).
+pub const DEFAULT_ACCENT: u32 = 0xD6336C;
+
+/// The theme word for arg2: bits 0..8 hold the mode plus one (so 0 means no
+/// theme), bits 8..32 the accent `0xRRGGBB`, bit 32 `REDUCE_TRANSPARENCY`;
+/// every higher bit is zero.
+pub const fn theme_word(mode: u8, accent: u32) -> u64 {
+    (mode as u64 + 1) | ((accent as u64 & 0xFF_FFFF) << 8)
+}
+/// Bit 32 of the theme word: `accessibility.reduce_transparency` (slice S6b),
+/// so menus and panels are opaque instead of frosted glass.
+pub const REDUCE_TRANSPARENCY: u64 = 1 << 32;
+/// A theme word that also says whether transparency is reduced.
+pub const fn theme_word_reduced(mode: u8, accent: u32, reduce: bool) -> u64 {
+    theme_word(mode, accent) | if reduce { REDUCE_TRANSPARENCY } else { 0 }
+}
+/// The (mode, accent) a theme word names: None for 0 (keep the theme), and
+/// Err for anything that is not a theme word.
+pub const fn decode_theme(word: u64) -> Result<Option<(u8, u32)>, ()> {
+    if word == 0 { return Ok(None); }
+    let mode = (word & 0xFF) as u8;
+    if word >> 33 != 0 || mode == 0 || mode > THEME_MODES { return Err(()); }
+    Ok(Some((mode - 1, (word >> 8) as u32 & 0xFF_FFFF)))
+}
+/// True when a theme word asks for reduced transparency.
+pub const fn reduces_transparency(word: u64) -> bool { word & REDUCE_TRANSPARENCY != 0 }
 
 /// Gradients (top, bottom). Index 0, the default, is the SexOS wallpaper:
 /// warm charcoal (`brand::WALL_TOP`/`WALL_BOTTOM`) with the lips mark on it.
@@ -32,6 +69,12 @@ pub const NIGHT_LEVELS: u8 = 4;
 static WALLPAPER: AtomicU8 = AtomicU8::new(0);
 static NIGHT: AtomicU8 = AtomicU8::new(0);
 static PUBLISHED_NIGHT: AtomicU8 = AtomicU8::new(0);
+/// The theme Display paints with, as a theme word; it starts at the settings'
+/// defaults (light, SexOS pink), which is what the Shell holds before it has
+/// read the person's settings.
+static THEME: AtomicU32 = AtomicU32::new(theme_word(0, DEFAULT_ACCENT) as u32);
+/// Reduce transparency, from the last theme word (off until told).
+static REDUCE: AtomicBool = AtomicBool::new(false);
 
 /// Takes a new look; false (and no change) when either value is out of range.
 pub fn set(wallpaper: u64, night: u64) -> bool {
@@ -40,6 +83,26 @@ pub fn set(wallpaper: u64, night: u64) -> bool {
     NIGHT.store(night as u8, Ordering::Relaxed);
     true
 }
+/// Takes a whole `OP_DESKTOP_LOOK`: false (and no change at all) when any of
+/// the three is out of range or the theme word has unknown bits.
+pub fn set_look(wallpaper: u64, night: u64, theme: u64) -> bool {
+    let word = theme;
+    let Ok(theme) = decode_theme(word) else { return false };
+    if wallpaper >= WALLPAPERS.len() as u64 || night >= NIGHT_LEVELS as u64 { return false; }
+    if let Some((mode, accent)) = theme {
+        THEME.store(theme_word(mode, accent) as u32, Ordering::Relaxed);
+        REDUCE.store(reduces_transparency(word), Ordering::Relaxed);
+    }
+    set(wallpaper, night)
+}
+/// The theme Display paints with: (mode, accent `0xRRGGBB`).
+pub fn theme() -> (u8, u32) {
+    match decode_theme(THEME.load(Ordering::Relaxed) as u64) { Ok(Some(t)) => t, _ => (0, DEFAULT_ACCENT) }
+}
+/// True when menus and panels are to be opaque (`REDUCE_TRANSPARENCY`).
+pub fn reduce_transparency() -> bool { REDUCE.load(Ordering::Relaxed) }
+/// The receipt name of a theme mode.
+pub fn theme_name(mode: u8) -> &'static str { THEME_NAMES.get(mode as usize).copied().unwrap_or("light") }
 pub fn wallpaper_index() -> u8 { WALLPAPER.load(Ordering::Relaxed) }
 pub fn night_level() -> u8 { NIGHT.load(Ordering::Relaxed) }
 /// True once after the night light level changes, for the publisher: the

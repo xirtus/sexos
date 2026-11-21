@@ -1,0 +1,14 @@
+LIBRARY ucrtbase.dll
+EXPORTS
+malloc
+calloc
+free
+strlen
+memcmp
+strtol
+atoi
+qsort
+sqrt
+puts
+exit
+__stdio_common_vsprintf

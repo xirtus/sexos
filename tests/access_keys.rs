@@ -179,3 +179,23 @@ fn reader_chord_toggles_the_screen_reader() {
     // R alone is typed as usual.
     assert_eq!(key(&mut a, code::R, 1, 0).0, Verdict::Pass);
 }
+
+#[test]
+fn settings_restore_the_choices() {
+    let mut a = Access::new();
+    // Zoom 2x and grayscale from settings: one view change, then nothing more.
+    assert_eq!(a.restore(Change::View { zoom: 8, filter: 3 }), Some(Change::View { zoom: 8, filter: 3 }));
+    assert_eq!(a.restore(Change::View { zoom: 8, filter: 3 }), None);
+    // Super+Alt+8 turns the magnifier off and back on at the restored zoom.
+    assert_eq!(chord(&mut a, code::DIGIT_8), Verdict::Chord(Change::View { zoom: access::ZOOM_ONE, filter: 3 }));
+    assert_eq!(chord(&mut a, code::DIGIT_8), Verdict::Chord(Change::View { zoom: 8, filter: 3 }));
+    // Out of range values come in.
+    assert_eq!(a.restore(Change::View { zoom: 99, filter: 42 }), Some(Change::View { zoom: access::ZOOM_MAX, filter: 0 }));
+    assert_eq!(a.restore(Change::View { zoom: 0, filter: 0 }), Some(Change::View { zoom: access::ZOOM_ONE, filter: 0 }));
+    for c in [Change::StickyKeys(true), Change::SlowKeys(true), Change::BounceKeys(true), Change::Reader(true)] {
+        assert_eq!(a.restore(c), Some(c));
+        assert_eq!(a.restore(c), None, "{c:?} twice");
+    }
+    assert!(a.sticky && a.slow && a.bounce && a.reader);
+    assert_eq!(chord(&mut a, code::K), Verdict::Chord(Change::SlowKeys(false)));
+}

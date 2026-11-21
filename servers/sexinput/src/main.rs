@@ -618,6 +618,11 @@ pub extern "C" fn _start() -> ! {
             pop_startup_message().or_else(|| pdx_try_listen_raw(0))
         }else{None}) {
             'input_message: {
+            if req.type_id == sex_pdx::power::OP_DEVICE_SLEEP && req.caller_pd == 0 {
+                sex_pdx::serial_record!("[sexinput.sleep] asleep={}", req.arg0);
+                touchpad::device_sleep(req.arg0 == 1, sex_pdx::get_ticks());
+                break 'input_message;
+            }
             if req.type_id == sex_pdx::touchpad::OP_FOUND {
                 if req.caller_pd == sex_pdx::power::ACPI_SERVICE_PD { touchpad::found([req.arg0, req.arg1, req.arg2]); }
                 else { sex_pdx::serial_record!("[sexinput.touchpad.reject] caller={} reason=sender", req.caller_pd); }

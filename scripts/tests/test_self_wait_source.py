@@ -9,7 +9,7 @@ import unittest
 
 ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'scripts'))
-from check_self_wait import inspect,source_contract,APPROVED_TIMED_WAIT_SOURCES,DEADLINE_REFERENCE_OWNERS,APPROVED_KERNEL_RUST_TREES
+from check_self_wait import inspect,source_contract,APPROVED_TIMED_WAIT_SOURCES,DEADLINE_REFERENCE_OWNERS,APPROVED_KERNEL_RUST_TREES,MODELLED_SOURCES,SCHEDULER_MODEL
 
 BASE='''[kernel.spawn.sexnet] id=13 path=/servers/sexnet
 [smp.online] cores=1 present=1
@@ -25,7 +25,7 @@ OBSERVED=BASE+'[scheduler.self_wait.park] task=13 ticks=2 deadline=102 count=2\n
 
 
 def copy_causal_sources(root):
-    names=set(APPROVED_TIMED_WAIT_SOURCES)
+    names=set(APPROVED_TIMED_WAIT_SOURCES)|MODELLED_SOURCES|{SCHEDULER_MODEL}
     names.update(path.relative_to(ROOT).as_posix()for path in (ROOT/'kernel').rglob('*.rs'))
     for name in names:
         target=root/name;target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/name,target)
@@ -43,7 +43,7 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
         self.assertEqual(len(result['inferred_timer_user_joins']),1)
         self.assertEqual(result['inferred_timer_user_joins'][0]['evidence_type'],
                          'source_bound_up_expiry_return_inferred_park')
-        self.assertEqual(set(result['source_contract']['source_sha256']),set(APPROVED_TIMED_WAIT_SOURCES))
+        self.assertEqual(set(result['source_contract']['source_sha256']),set(APPROVED_TIMED_WAIT_SOURCES)|MODELLED_SOURCES)
         self.assertTrue(result['up_topology']['ok'])
 
     def test_per_task_sample_joins_when_global_ordinal_is_unsampled(self):
@@ -159,7 +159,9 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
             ('kernel/src/scheduler.rs','(*task).wait_deadline.cancel();\n    (*task).state.exit();','(*task).state.exit();'),
             ('kernel/src/scheduler.rs','ParkResult::NotOwner=>{(*task).wait_deadline.cancel();panic!("TIMED_WAIT_WITHOUT_ATTACHED_OWNER")}',
              'ParkResult::NotOwner=>{panic!("TIMED_WAIT_WITHOUT_ATTACHED_OWNER")}'),
-            ('kernel/src/self_wait.rs','if at==0||now<at{return None;}','if at==0{return None;}'),
+            # self_wait.rs and task_ownership.rs carry no pin (K6): a change like
+            # `if at==0{return None;}` in take_due is caught by the model instead,
+            # scripts/scheduler_model_gate.sh's deadline_early mutant.
             ('kernel/src/interrupts.rs','crate::scheduler::poll_self_wait_deadlines(TICKS.load(Ordering::Relaxed));',''),
             ('crates/sex-pdx/src/lib.rs','inlateout("rax") SYSCALL_GET_TICKS => ret','inlateout("rax") 99u64 => ret'),
             ('servers/sexnet/src/main.rs','let before=sex_pdx::get_ticks();','let before=0;'),
@@ -218,11 +220,12 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
         self.assertEqual(digest,closure['tree_sha256'])
         self.assertIn(digest,APPROVED_KERNEL_RUST_TREES)
         self.assertEqual(set(closure['owner_sha256']),DEADLINE_REFERENCE_OWNERS)
+        # Modelled files (K6) are checked by tests/model_scheduler_wait.rs, not by pins.
         for name,digest in closure['owner_sha256'].items():
             self.assertEqual(digest,hashes[name])
-            self.assertIn(digest,APPROVED_TIMED_WAIT_SOURCES[name])
+            if name not in MODELLED_SOURCES:self.assertIn(digest,APPROVED_TIMED_WAIT_SOURCES[name])
         for name,digest in receipt['source_sha256'].items():
-            self.assertIn(digest,APPROVED_TIMED_WAIT_SOURCES[name])
+            if name not in MODELLED_SOURCES:self.assertIn(digest,APPROVED_TIMED_WAIT_SOURCES[name])
         # No arbitrary extension of the audited tree can inherit its identity.
         hashes['kernel/src/unreviewed.rs']='0'*64
         mutated=hashlib.sha256(json.dumps(hashes,sort_keys=True,separators=(',',':')).encode()).hexdigest()
@@ -241,9 +244,25 @@ class SourceBoundSelfWaitTests(unittest.TestCase):
                           '\nunsafe fn extra(task:*mut Task){unpark_thread(task);}\n'):
                 path.write_text(original+extra)
                 self.assertFalse(source_contract(root)['ok'],extra)
+            # scheduler.rs is checked against the model's protocol table (K6): an edit
+            # inside a wait function that keeps its custody calls needs no pin, one
+            # that reorders or drops them fails until the model's table changes too.
             path.write_text(original.replace('pub fn unpark_thread(task_ptr: *mut Task) {','pub fn unpark_thread(task_ptr: *mut Task) { let _changed = 0;',1))
-            self.assertFalse(source_contract(root)['ok'])
+            self.assertTrue(source_contract(root)['ok'])
+            for before,after in (('    unsafe { (*task_ptr).wait_deadline.cancel(); }\n    wake_owned_thread(task_ptr);','    wake_owned_thread(task_ptr);\n    unsafe { (*task_ptr).wait_deadline.cancel(); }'),
+                                 ('if woke == WakeResult::NeedsAdmission {','if woke != WakeResult::Exited {')):
+                self.assertIn(before,original)
+                path.write_text(original.replace(before,after,1))
+                result=source_contract(root)
+                self.assertFalse(result['ok'],before)
+                self.assertIn('differs from tests/model_scheduler_wait.rs',result['errors'][0])
             path.write_text(original)
+            # Dropping a modelled file from the model is refused.
+            model=root/SCHEDULER_MODEL;text=model.read_text()
+            model.write_text(text.replace('#[path = "../kernel/src/self_wait.rs"]','#[path = "../kernel/src/self_wait_copy.rs"]'))
+            self.assertFalse(source_contract(root)['ok'])
+            model.write_text(text)
+            self.assertTrue(source_contract(root)['ok'])
 
     def test_missing_source_does_not_enable_inference(self):
         with tempfile.TemporaryDirectory()as directory:

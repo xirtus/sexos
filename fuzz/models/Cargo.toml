@@ -57,3 +57,11 @@ path = "../../tests/model_loom_v2.rs"
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)", "cfg(kani)"] }
+
+[[test]]
+name = "model_scheduler_wait"
+path = "../../tests/model_scheduler_wait.rs"
+
+[[test]]
+name = "model_loom_scheduler"
+path = "../../tests/model_loom_scheduler.rs"

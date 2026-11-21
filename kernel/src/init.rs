@@ -61,6 +61,7 @@ fn grant_browser_successor_route(pd:&crate::capability::ProtectionDomain,slot:u6
 }
 
 pub fn init() {
+    crate::boot_cost::begin();
     // Advance boot phase to allow registry insertion
     unsafe { crate::ipc::BOOT_CONTROLLER.advance(crate::ipc::BootPhase::RegistryBuild); }
 
@@ -107,9 +108,11 @@ pub fn init() {
             if path.contains(target) {
                 serial_println!("[bootgraph.pd.spawn.begin] pd={}", target);
                 let key=sex_pdx::organs::service_key(domain_id);
+                let cost=crate::boot_cost::now();
                 let spawned=if key!=domain_id {
                     crate::pd::create::create_boot_domain(path,None,domain_id,key)
                 }else{pdx_spawn(path, domain_id)};
+                crate::boot_cost::add(crate::boot_cost::Bucket::Spawn,cost,1);
                 match spawned {
                     Ok(id) => {
                         serial_println!("✓ Spawned PD {}: {} (Domain {})", id, path, domain_id);
@@ -228,6 +231,19 @@ pub fn init() {
             Ok(created)=>{assert_eq!(created,id,"BOOT_CUFFLINKS_IDENTITY");cufflinks_id=created;
                 serial_println!("[kernel.spawn.cufflinks] id={} key={} organ=senses",created,sex_pdx::bt_hci::CUFFLINKS_KEY);}
             Err(e)=>{serial_println!("[kernel.spawn.cufflinks] failed={}",e);}
+        }
+    }
+
+    // sexgpu-nv, the NVIDIA GPU service (GSP-RM boot), in the Core organ beside the
+    // display it will feed. Only the "SexOS with NVIDIA GPU" entry lists it; without it
+    // the GPU is powered off as before and Display holds its identity.
+    let mut sexgpu_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with(sex_pdx::nvidia_gpu::SERVICE_MODULE)) {
+        let id=sex_pdx::nvidia_gpu::GPU_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::nvidia_gpu::GPU_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_GPU_IDENTITY");sexgpu_id=created;
+                serial_println!("[kernel.spawn.sexgpu-nv] id={} key={} organ=core",created,sex_pdx::nvidia_gpu::GPU_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.sexgpu-nv] failed={}",e);}
         }
     }
 
@@ -457,12 +473,12 @@ pub fn init() {
     }
 
     // Discrete GPUs no driver owns yet are powered off before leases are made.
-    crate::hal::dgpu::init();
+    crate::hal::dgpu::init(sexgpu_id != 0);
 
     // Hardware discovery and driver lease routing.
     // Includes XHCI discovery + lease to sexusb (slot SLOT_USB_HOST) when present.
     if sexdrive_id != 0 && sexdisp_id != 0 {
-        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id, sexinput_id);
+        crate::devmgr::init(sexdrive_id, sexdisp_id, sexusb_id, sexnet_id, sexbell_id, sexinput_id, sexgpu_id);
     }
 
     // SilkBar delivery path: grant display capability independently of silk-shell.
@@ -903,7 +919,26 @@ pub fn init() {
     crate::boot_memory::init_text_regions(sexdisp_id);
     crate::boot_memory::init_pixel_regions(sexdisp_id);
     crate::boot_memory::init_screen_capture(sexdisp_id);
+    // Recorder authority exists only in the explicit profile with a retained,
+    // exact image source and a uniquely private reusable key.
+    let recorder_source=if sex_pdx::desktop_recording::ENABLED{
+        let row=apps::by_target(sex_pdx::desktop_recording::TARGET).expect("BOOT_RECORD_ROW");
+        let key=sex_pdx::organs::program_key(row.ordinal);
+        assert!(row.app==App::Program && row.ordinal!=0 && key==5,"BOOT_RECORD_PRIVATE_ROW");
+        let anchor=apps::predecessor(row).expect("BOOT_RECORD_ANCHOR");
+        assert!(anchor.ordinal==0 && anchor.target==41,"BOOT_RECORD_ANCHOR_IDENTITY");
+        // The key5 anchor shares genesis only; normal successor admission
+        // requires its complete retirement before row42 can execute/capture.
+        assert!(!apps::INCARNATIONS.iter().any(|other|other.app==App::Program && other.ordinal!=0 && other.target!=row.target && sex_pdx::organs::program_key(other.ordinal)==key),"BOOT_RECORD_SHARED_KEY");
+        let mut matching=modules.modules().iter().filter(|module|module.path().ends_with("/programs/record"));
+        let image=matching.next().expect("BOOT_RECORD_IMAGE_REQUIRED");
+        assert!(matching.next().is_none(),"BOOT_RECORD_IMAGE_AMBIGUOUS");
+        Some(crate::boot_memory::retain_image_source(image.data()))
+    }else{None};
+    if recorder_source.is_some(){crate::boot_memory::init_recording_capture(sexdisp_id);}
+
     crate::boot_memory::init_sound_rings(sexbell_id);
+    crate::boot_memory::init_usb_audio(sexbell_id, sexusb_id);
     crate::boot_memory::init_program_image(sexfiles_id);
     crate::boot_memory::init_fs_regions(sexfiles_id);
     // Denim's store grows with what it holds.
@@ -971,10 +1006,9 @@ pub fn init() {
         let pd=crate::ipc::DOMAIN_REGISTRY.get(incarnation.target).unwrap();
         let spindle=incarnation.app==sex_pdx::app_catalog::App::Spindle;
         for (slot,service) in [(sex_pdx::SLOT_DISPLAY,sexdisp_id),(sex_pdx::SLOT_STORAGE,sexfiles_id),(sex_pdx::SLOT_SHELL,silkshell_id),(sex_pdx::SLOT_LINEN,linen_id),(sex_pdx::SLOT_BELL,sexbell_id)].into_iter().take(if spindle{5}else{3}){
-            // The storage slot may hold the image's own VFS node; nothing else may collide.
+            // Every route slot must still be empty; nothing may collide.
             match pd.find_capability(slot as u32).map(|c|c.data) {
                 None=>{},
-                Some(crate::capability::CapabilityData::Node(_)) if slot==sex_pdx::SLOT_STORAGE=>{},
                 _=>panic!("BOOT_SUCCESSOR_ROUTE_COLLISION"),
             }
             pd.grant_capability(slot,crate::capability::CapabilityData::Domain(service));
@@ -1090,10 +1124,15 @@ pub fn init() {
         assert!(shell.find_capability(sex_pdx::web::SHELL_SLOT as u32).is_none(),"BOOT_SHELL_NETWORK_COLLISION");
         shell.grant_capability(sex_pdx::web::SHELL_SLOT,crate::capability::CapabilityData::Domain(sexnet_id));
     }
+    if recorder_source.is_some(){
+        let files=crate::ipc::DOMAIN_REGISTRY.get(sexfiles_id).expect("BOOT_RECORD_FILES");
+        assert!(files.find_capability(6).is_none(),"BOOT_RECORD_FILES_SHELL_COLLISION");
+        files.grant_capability(6,crate::capability::CapabilityData::Domain(silkshell_id));
+    }
     // One-shot activation chain: each successor is bound to its exact predecessor.
     for incarnation in sex_pdx::app_catalog::INCARNATIONS.iter().filter(|i|i.ordinal!=0) {
         let predecessor=sex_pdx::app_catalog::predecessor(incarnation).expect("BOOT_SUCCESSOR_PREDECESSOR");
-        crate::app_resources::reserve_successor(predecessor.target,incarnation.target,silkshell_id,incarnation.activation_slot.expect("BOOT_SUCCESSOR_ACTIVATION_SLOT"));
+        crate::app_resources::reserve_successor_from(predecessor.target,incarnation.target,silkshell_id,incarnation.activation_slot.expect("BOOT_SUCCESSOR_ACTIVATION_SLOT"),if incarnation.target==sex_pdx::desktop_recording::TARGET{recorder_source}else{None});
     }
     // Linen serves Spindle's existing async list/open/search route. A read-only
     // lifecycle observer fences queued requests after death without owning an ACK.
@@ -1175,6 +1214,7 @@ pub fn init() {
                     50 => "sexacpi",
                     51 => "denim",
                     52 => "cufflinks",
+                    53 => "sexgpu-nv",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };
@@ -1202,6 +1242,7 @@ pub fn init() {
         crate::ipc::BOOT_CONTROLLER.advance(crate::ipc::BootPhase::SchedulerRunning);
     }
 
+    crate::boot_cost::report();
     serial_println!("init: Ready for Scheduler.");
 }
 

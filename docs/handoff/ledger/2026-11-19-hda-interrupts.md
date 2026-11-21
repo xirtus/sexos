@@ -24,3 +24,23 @@
 - **Not yet:** codec unsolicited responses (CIE + RIRB interrupt) for jack
   detection, which is still looked at twice a second while sound plays; a
   program-ring doorbell so live streams need no 4 ms look.
+
+## Follow-up: program-ring doorbell (no 4 ms look)
+
+- `sound_ring::WAKE` (Bell sets, program clears) and `DOORBELL` (program sets at
+  open; Bell clears when the stream closes). When the card has room and open
+  streams have nothing more, Bell sets `WAKE` on each, re-reads `WRITTEN` after a
+  SeqCst fence, and sleeps until the period interrupt. `sex_app::sound::Sound::write`
+  stores `WRITTEN`, fences, and sends `OP_PLAY` once if `WAKE` is set.
+- Programs built before the doorbell (no `DOORBELL`) keep the 4 ms look.
+- `play --tone HZ RATE live` keeps a quarter second queued like a live instrument;
+  `sound_gate.py --card hda` plays it, asserts `doorbell_waits>=1` in
+  `[bell.sound.wakes]` and that the 2 s tone comes out whole.
+
+## Fix: no gap right after a stream starts (2026-11-20)
+
+- CI caught the live tone as 30 ms, a ~50 ms gap, then the rest: Bell took the
+  program's first write (a fraction of a period) as soon as `OP_PLAY` arrived and
+  padded the period with silence. A newly opened stream now waits up to 50 ms
+  (`START_HOLD_TICKS`) for a whole period before its first take; a short sound
+  that never fills one still plays once the wait is over.
