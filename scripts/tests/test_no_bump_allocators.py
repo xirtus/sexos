@@ -8,7 +8,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 # Retired by their own workstreams; remove an entry when that lands.
 ALLOWED = {
-    'apps/qupid/src/main.rs',  # WS7 retires the stub; the player is apps/play.
     'crates/polyamour-sdk/src/transport.rs',  # wasm guests: one short call each.
 }
 EMPTY_DEALLOC = re.compile(r'fn\s+dealloc\s*\([^)]*\)\s*\{\s*\}')

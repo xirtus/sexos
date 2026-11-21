@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Programs hear the microphone only with the person's leave: `run play --listen 2`
+"""Programs hear the microphone only with the person's leave: `run qupid --listen 2`
 asks; Bell tells it it waits and hears nothing until Spindle's `volume ROW mic on`;
 then 48 kHz frames arrive at the card's pace (QEMU's silent input) for two seconds;
 when the program ends its leave lapses and what it heard is wiped, so the next asks anew;
@@ -16,7 +16,7 @@ KEYS={' ':'spc','-':'minus'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');p.add_argument('--card',choices=['virtio','hda'],default='virtio');a=p.parse_args()
  out=a.out.resolve();out.mkdir(parents=True,exist_ok=True);disk=out/'nvme.img';shutil.copyfile(a.source_disk,disk)
- install(disk,[('play',(ROOT/'iso_root/programs/play').read_bytes())])
+ install(disk,[('qupid',(ROOT/'iso_root/programs/qupid').read_bytes())])
  card='-device virtio-sound-pci,audiodev=snd0' if a.card=='virtio' else '-device intel-hda -device hda-duplex,audiodev=snd0'
  os.environ['SEXOS_GATE_DEVICES']=f'-audiodev none,id=snd0 {card}'
  from quil_autosave_gate import boot
@@ -31,7 +31,7 @@ def main():
   if a.card=='hda':g['wait'](r'\[bell.hda.irq\] mode=msix? vectors=1 bit=\d+ polling=0',0,10)
   g['wait'](r'\[app.private.retired\] target=41 ',0,300);time.sleep(2)
   def ask():
-   s0=len(t());m=say('run play --listen 2',r'\[bell.mic.asked\] row=(\d+) caller=(\d+) listen=1 allowed=0')
+   s0=len(t());m=say('run qupid --listen 2',r'\[bell.mic.asked\] row=(\d+) caller=(\d+) listen=1 allowed=0')
    row,pd=m[1],m[2]
    g['wait'](rf'\[play.listen.state\] row={row} mic=1',s0,60)
    surface=g['wait'](rf'\[display.text.committed\] target={pd} surface=(\d+)',s0,60)[1]

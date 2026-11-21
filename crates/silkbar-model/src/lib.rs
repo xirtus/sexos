@@ -251,6 +251,7 @@ pub struct SilkBarPhase1Ext {
 
 /// 10-token semantic color palette.
 /// Bevel / highlight / shadow colors are derived at runtime via Theme::bevels().
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Theme {
     /// Desktop background gradient top
     pub bg_top: u32,

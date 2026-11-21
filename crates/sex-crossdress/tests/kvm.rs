@@ -12,6 +12,8 @@ use sex_crossdress::process::{Host, WinProcess, Stop};
 use sex_pdx::vm::{exit, Exit, Regs, Segment, State, IO_IN};
 use std::os::fd::RawFd;
 
+mod common;
+
 const KVMIO: u64 = 0xAE;
 const fn io(nr: u64) -> u64 { (KVMIO << 8) | nr }
 const fn iow(nr: u64, size: u64) -> u64 { (1 << 30) | (size << 16) | (KVMIO << 8) | nr }
@@ -174,6 +176,26 @@ fn open_kvm() -> Option<RawFd> {
     Some(fd)
 }
 
+/// A KVM VM whose memory is `ram` (guest-physical 0) and its one vCPU.
+fn kvm_vcpu(kvm: RawFd, ram: &Ram) -> Kvm {
+    let vm = ioctl(kvm, KVM_CREATE_VM, 0) as RawFd;
+    assert!(vm >= 0, "KVM_CREATE_VM");
+    let _ = ioctl(vm, KVM_SET_TSS_ADDR, 0xFFFB_D000);
+    let region: [u64; 4] = [0, 0, ram.len(), ram.host_address()];
+    assert_eq!(ioctl(vm, KVM_SET_USER_MEMORY_REGION, region.as_ptr() as u64), 0, "KVM_SET_USER_MEMORY_REGION");
+    let vcpu = ioctl(vm, KVM_CREATE_VCPU, 0) as RawFd;
+    assert!(vcpu >= 0, "KVM_CREATE_VCPU");
+    // The guest's CPUID must offer NX (EFER.NXE) and the SSE state the program uses.
+    let mut cpuid = vec![0u8; 8 + 256 * 40];
+    cpuid[0..4].copy_from_slice(&256u32.to_le_bytes());
+    assert_eq!(ioctl(kvm, KVM_GET_SUPPORTED_CPUID, cpuid.as_mut_ptr() as u64), 0, "KVM_GET_SUPPORTED_CPUID");
+    assert_eq!(ioctl(vcpu, KVM_SET_CPUID2, cpuid.as_ptr() as u64), 0, "KVM_SET_CPUID2");
+    let size = ioctl(kvm, KVM_GET_VCPU_MMAP_SIZE, 0) as usize;
+    let run = unsafe { libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, vcpu, 0) };
+    assert_ne!(run, libc::MAP_FAILED);
+    Kvm { vcpu, run: run as *mut u8, ram }
+}
+
 #[test]
 fn the_test_program_runs_in_a_kvm_cell() {
     let Some(kvm) = open_kvm() else {
@@ -187,22 +209,7 @@ fn the_test_program_runs_in_a_kvm_cell() {
         None => sex_crossdress::TEST_EXE.to_vec(),
     };
     let mut proc = WinProcess::load(Ram::new(64 << 20).unwrap(), &exe).unwrap();
-    let vm = ioctl(kvm, KVM_CREATE_VM, 0) as RawFd;
-    assert!(vm >= 0, "KVM_CREATE_VM");
-    let _ = ioctl(vm, KVM_SET_TSS_ADDR, 0xFFFB_D000);
-    let region: [u64; 4] = [0, 0, proc.cell.ram.len(), proc.cell.ram.host_address()];
-    assert_eq!(ioctl(vm, KVM_SET_USER_MEMORY_REGION, region.as_ptr() as u64), 0, "KVM_SET_USER_MEMORY_REGION");
-    let vcpu = ioctl(vm, KVM_CREATE_VCPU, 0) as RawFd;
-    assert!(vcpu >= 0, "KVM_CREATE_VCPU");
-    // The guest's CPUID must offer NX (EFER.NXE) and the SSE state the program uses.
-    let mut cpuid = vec![0u8; 8 + 256 * 40];
-    cpuid[0..4].copy_from_slice(&256u32.to_le_bytes());
-    assert_eq!(ioctl(kvm, KVM_GET_SUPPORTED_CPUID, cpuid.as_mut_ptr() as u64), 0, "KVM_GET_SUPPORTED_CPUID");
-    assert_eq!(ioctl(vcpu, KVM_SET_CPUID2, cpuid.as_ptr() as u64), 0, "KVM_SET_CPUID2");
-    let size = ioctl(kvm, KVM_GET_VCPU_MMAP_SIZE, 0) as usize;
-    let run = unsafe { libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_SHARED, vcpu, 0) };
-    assert_ne!(run, libc::MAP_FAILED);
-    let mut cpu = Kvm { vcpu, run: run as *mut u8, ram: &proc.cell.ram };
+    let mut cpu = kvm_vcpu(kvm, &proc.cell.ram);
     cpu.set_state(&proc.initial_state()).unwrap();
     let mut console = Console::default();
     let stop = proc.run(&mut cpu, &mut console);
@@ -213,3 +220,148 @@ fn the_test_program_runs_in_a_kvm_cell() {
     assert!(text.contains(sex_crossdress::TEST_PASS), "every check in the program passed");
     assert_eq!(proc.counters.handled, 5, "five hardware exceptions went through the vectored handler");
 }
+
+/// The input both runs use: a 997 Hz sine on the left and a 2 kHz one on the right at
+/// 48 kHz (computed in f64, rounded to f32 once, so it is the same everywhere).
+fn sine(frames: usize, offset: usize, hz: f64) -> Vec<f32> {
+    (0..frames).map(|i| (0.5 * (2.0 * std::f64::consts::PI * hz * (offset + i) as f64 / 48_000.0).sin()) as f32).collect()
+}
+
+#[test]
+fn a_windows_clap_plugin_processes_audio_in_a_kvm_cell() {
+    use sex_crossdress::clap::{ClapPlugin, ParamChange};
+    let Some(kvm) = open_kvm() else {
+        println!("[crossdress.kvm.clap] SKIP no usable /dev/kvm: the plugin did not run on hardware here");
+        return;
+    };
+    let file = match std::env::var_os("CROSSDRESS_CLAP") {
+        Some(path) => { println!("[crossdress.kvm.clap] plugin={}", path.to_string_lossy()); std::fs::read(path).expect("CROSSDRESS_CLAP") }
+        None => sex_crossdress::TEST_CLAP.to_vec(),
+    };
+    let mut plugin = ClapPlugin::load(Ram::new(64 << 20).unwrap(), &file).unwrap();
+    let mut cpu = kvm_vcpu(kvm, &plugin.process.cell.ram);
+    let mut console = Console::default();
+    let r = plugin.open(&mut cpu, &mut console, "C:\\Program Files\\Common Files\\CLAP\\gain.clap");
+    println!("[crossdress.kvm.clap] open={r:?} counters={:?} last_fault={:?}", plugin.process.counters, plugin.process.last_fault);
+    r.unwrap();
+    let d = &plugin.descriptor;
+    println!("[crossdress.kvm.clap] id={} name={:?} vendor={} version={} features={:?} params={:?}", d.id, d.name, d.vendor, d.version, d.features, plugin.params);
+    assert_eq!(d.id, "org.sexos.crossdress.test-gain");
+    assert_eq!(d.name, "Crossdress Test Gain");
+    assert_eq!(d.features, ["audio-effect", "utility", "stereo"]);
+    assert_eq!(plugin.params.len(), 1);
+    assert_eq!((plugin.params[0].id, plugin.params[0].name.as_str(), plugin.params[0].min, plugin.params[0].max, plugin.params[0].default), (0, "Gain", 0.0, 2.0, 1.0));
+    assert!(plugin.requests.extensions >= 1, "the plugin asked the host for an extension (a callback out of the cell)");
+    assert_eq!((plugin.requests.callback, plugin.main_thread_calls), (1, 1), "its request_callback was answered with on_main_thread");
+    assert_eq!(plugin.param_value(&mut cpu, &mut console, 0).unwrap(), Some(1.0));
+
+    plugin.activate(&mut cpu, &mut console, 48_000.0, 512).unwrap();
+    // Three blocks: unity gain, then 0.5 from frame 100 and 1.5 from frame 300 of the
+    // second block, then the last value through the third. The plugin's output must be
+    // bit-for-bit what the same arithmetic gives here.
+    let blocks: [(usize, Vec<ParamChange>); 3] = [
+        (512, vec![]),
+        (512, vec![ParamChange { time: 100, id: 0, value: 0.5 }, ParamChange { time: 300, id: 0, value: 1.5 }]),
+        (256, vec![]),
+    ];
+    let (mut gain, mut at) = (1.0f32, 0usize);
+    let mut reported = Vec::new();
+    for (frames, changes) in &blocks {
+        let (l, r) = (sine(*frames, at, 997.0), sine(*frames, at, 2000.0));
+        let (mut ol, mut or) = (vec![9.0f32; *frames], vec![9.0f32; *frames]);
+        let pushed = plugin.process(&mut cpu, &mut console, [&l, &r], [&mut ol, &mut or], changes).unwrap();
+        for i in 0..*frames {
+            for c in changes.iter().filter(|c| c.time as usize == i) { gain = c.value as f32; }
+            assert_eq!((ol[i].to_bits(), or[i].to_bits()), ((l[i] * gain).to_bits(), (r[i] * gain).to_bits()), "frame {} of the block at {at}", i);
+        }
+        reported.extend(pushed);
+        at += frames;
+    }
+    println!("[crossdress.kvm.clap] processed={at} frames reported={reported:?} counters={:?}", plugin.process.counters);
+    assert_eq!(reported, [ParamChange { time: 100, id: 0, value: 0.5 }, ParamChange { time: 300, id: 0, value: 1.5 }], "the plugin reported each change through out_events");
+    assert_eq!(plugin.param_value(&mut cpu, &mut console, 0).unwrap(), Some(1.5));
+    plugin.close(&mut cpu, &mut console).unwrap();
+    assert!(plugin.process.counters.callbacks >= 6, "in_events.size/get and out_events.try_push reached the host");
+    println!("[crossdress.kvm.clap] ok: a Windows CLAP plugin processed {at} frames in a cell, bit-exact");
+}
+
+#[test]
+fn wines_ntdll_runs_in_a_kvm_cell() {
+    let Some(dll) = common::wine_dll("ntdll.dll") else { println!("[crossdress.kvm.wine] SKIP no CROSSDRESS_WINE_DIR (scripts/fetch_wine_pe.sh)"); return; };
+    let Some(kvm) = open_kvm() else { println!("[crossdress.kvm.wine] SKIP no usable /dev/kvm"); return; };
+    let mut p = WinProcess::load_dll(Ram::new(128 << 20).unwrap(), &dll).unwrap();
+    sex_crossdress::nt::prepare_ntdll(&mut p).unwrap();
+    println!("[crossdress.kvm.wine] ntdll base={:#x} exports={} syscalls={}", p.base, p.exports.len(), p.syscall_names.len());
+    let mut cpu = kvm_vcpu(kvm, &p.cell.ram);
+    for line in common::exercise_ntdll(&mut cpu, &mut p) { println!("[crossdress.kvm.wine] {line}"); }
+    println!("[crossdress.kvm.wine] ok: Wine's ntdll.dll ran in a KVM cell (Rtl, CRT, NT system calls, heap)");
+}
+
+#[test]
+fn a_program_runs_on_wines_kernel32_in_a_kvm_cell() {
+    let Some(mut p) = common::wine_program() else { println!("[crossdress.kvm.wine] SKIP no CROSSDRESS_WINE_DIR (scripts/fetch_wine_pe.sh)"); return; };
+    let Some(kvm) = open_kvm() else { println!("[crossdress.kvm.wine] SKIP no usable /dev/kvm"); return; };
+    let mut cpu = kvm_vcpu(kvm, &p.cell.ram);
+    let mut out = common::Keep::default();
+    let stop = sex_crossdress::wine::run(&mut p, &mut cpu, &mut out);
+    let text = String::from_utf8_lossy(&out.text);
+    for line in text.lines() { println!("[crossdress.kvm.wine.out] {line}"); }
+    println!("[crossdress.kvm.wine] stop={stop:?} counters={:?}", p.counters);
+    assert!(text.contains(sex_crossdress::WINE_PASS), "the program's checks passed on Wine's kernel32");
+    assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
+    println!("[crossdress.kvm.wine] ok: a Windows program ran on Wine's kernel32 and kernelbase in a KVM cell");
+}
+
+#[test]
+fn a_crt_program_runs_on_wines_ucrtbase_in_a_kvm_cell() {
+    let Some(mut p) = common::crt_program() else { println!("[crossdress.kvm.crt] SKIP no CROSSDRESS_WINE_DIR (scripts/fetch_wine_pe.sh)"); return; };
+    let Some(kvm) = open_kvm() else { println!("[crossdress.kvm.crt] SKIP no usable /dev/kvm"); return; };
+    let mut cpu = kvm_vcpu(kvm, &p.cell.ram);
+    let mut out = common::Keep::default();
+    let stop = sex_crossdress::wine::run(&mut p, &mut cpu, &mut out);
+    let text = String::from_utf8_lossy(&out.text);
+    for line in text.lines() { println!("[crossdress.kvm.crt.out] {line}"); }
+    println!("[crossdress.kvm.crt] stop={stop:?} counters={:?}", p.counters);
+    assert!(text.contains(sex_crossdress::CRT_PASS), "the program's checks passed on Wine's ucrtbase");
+    assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
+    println!("[crossdress.kvm.crt] ok: a C-runtime program ran on Wine's ucrtbase in a KVM cell");
+}
+
+#[test]
+fn an_msvc_style_program_runs_through_api_sets_in_a_kvm_cell() {
+    let Some(mut p) = common::msvc_program() else { println!("[crossdress.kvm.msvc] SKIP no CROSSDRESS_WINE_DIR (scripts/fetch_wine_pe.sh)"); return; };
+    let Some(kvm) = open_kvm() else { println!("[crossdress.kvm.msvc] SKIP no usable /dev/kvm"); return; };
+    let mut cpu = kvm_vcpu(kvm, &p.cell.ram);
+    let mut out = common::Keep::default();
+    let stop = sex_crossdress::wine::run(&mut p, &mut cpu, &mut out);
+    let text = String::from_utf8_lossy(&out.text);
+    for line in text.lines() { println!("[crossdress.kvm.msvc.out] {line}"); }
+    println!("[crossdress.kvm.msvc] stop={stop:?} counters={:?}", p.counters);
+    assert!(text.contains(sex_crossdress::MSVC_PASS), "the program's checks passed through API sets and vcruntime140");
+    assert_eq!(stop, sex_crossdress::process::Stop::Exited(0));
+    println!("[crossdress.kvm.msvc] ok: an MSVC-style program ran through API sets and vcruntime140 in a KVM cell");
+}
+
+/// Starts a Wine process on KVM, loads `file` with Wine's LdrLoadDll and runs the CX1
+/// audio checks on it.
+fn wine_clap_on_kvm(tag: &str, file: &[u8]) {
+    let Some(mut p) = common::wine_plugin_host(file) else { println!("[crossdress.kvm.{tag}] SKIP no CROSSDRESS_WINE_DIR (scripts/fetch_wine_pe.sh)"); return; };
+    let Some(kvm) = open_kvm() else { println!("[crossdress.kvm.{tag}] SKIP no usable /dev/kvm"); return; };
+    let mut cpu = kvm_vcpu(kvm, &p.cell.ram);
+    let mut out = common::Keep::default();
+    sex_crossdress::wine::start(&mut p, &mut cpu, &mut out).expect("Wine's loader initialized the process");
+    let (base, exports) = sex_crossdress::wine::load_library(&mut p, &mut cpu, &mut out, common::CLAP_PATH).expect("LdrLoadDll loaded the plugin");
+    println!("[crossdress.kvm.{tag}] plugin base={base:#x}");
+    // The guest RAM block stays put, but the Ram handle the vCPU reads guest code through
+    // moves with the process into the plugin: point the vCPU at the new place.
+    let mut plugin = sex_crossdress::clap::ClapPlugin::in_wine(p, &exports).unwrap();
+    cpu.ram = &plugin.process.cell.ram;
+    for line in common::drive_gain_plugin(&mut plugin, &mut cpu, &mut out) { println!("[crossdress.kvm.{tag}] {line}"); }
+    println!("[crossdress.kvm.{tag}] ok: a CLAP plugin loaded by Wine's loader processed audio bit-exact in a KVM cell");
+}
+
+#[test]
+fn a_clap_plugin_runs_in_a_wine_process_in_a_kvm_cell() { wine_clap_on_kvm("wineclap", sex_crossdress::TEST_CLAP); }
+
+#[test]
+fn an_msvc_crt_clap_plugin_runs_in_a_wine_process_in_a_kvm_cell() { wine_clap_on_kvm("msvcclap", sex_crossdress::TEST_CLAP_MSVC); }

@@ -45,6 +45,14 @@ pub const LINE_EDGE: u64 = 1 << 16;
 pub const LINE_ACTIVE_LOW: u64 = 1 << 17;
 /// Lines one service may hold.
 pub const MAX_LINES: usize = 2;
+/// rdi=slot, rsi=state (0 = D0, 3 = D3hot) → the D-state it was in, or `ERR_POWER`.
+/// Moves a device the caller holds between full power and D3hot. The kernel saves the
+/// configuration (header, PCIe controls, MSI/MSI-X, L1 substates, LTR) going down and
+/// puts it back if the device was reset; the driver quiesces the device first and
+/// re-initialises it after. (4 and 5 are the interrupt-line ops.)
+pub const OP_POWER: u64 = 6;
+pub const D0: u64 = 0;
+pub const D3HOT: u64 = 3;
 
 pub const EXTRA_SLOT_BASE: u64 = 160;
 pub const EXTRA_SLOTS: u64 = 32;
@@ -54,6 +62,8 @@ pub const MAX_LEASES: usize = 64;
 pub const MAX_VECTORS_PER_SERVICE: u32 = 64;
 
 pub const ERR_NONE: u64 = u64::MAX;
+/// The D-state change was refused or the device did not take it.
+pub const ERR_POWER: u64 = u64::MAX - 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -158,3 +168,10 @@ pub fn line_mask(index: u64, masked: bool) -> Result<(), u64> {
 /// Pending interrupt bits since the last take, cleared.
 #[cfg(target_arch = "x86_64")]
 pub fn irq_take() -> u64 { call(OP_TAKE, 0, 0)[0] }
+
+/// Moves the device at `slot` to `D0` or `D3HOT`; Ok(the state it was in).
+#[cfg(target_arch = "x86_64")]
+pub fn set_power(slot: u64, state: u64) -> Result<u64, u64> {
+    let r = call(OP_POWER, slot, state)[0];
+    if r <= 3 { Ok(r) } else { Err(r) }
+}

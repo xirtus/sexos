@@ -14,6 +14,13 @@
   delete globalThis.__sx_promise_setup;
   delete globalThis.__sx_promise_flags;
   delete globalThis.__sx_checkpoint_empty;
+  // Which world this is: 0 for the page's own, another for an extension's content
+  // scripts (an isolated world: its own globals over the same document). Isolated
+  // worlds hear the page's events but leave the browser's default actions to world 0.
+  const WORLD = globalThis.__sx_world | 0;
+  const ISOLATED = WORLD !== 0;
+  const worldPost = globalThis.__sx_world_post, worldOthers = globalThis.__sx_world_others, worldWatch = globalThis.__sx_world_watch;
+  delete globalThis.__sx_world; delete globalThis.__sx_world_post; delete globalThis.__sx_world_others; delete globalThis.__sx_world_watch;
   const trustedEvents = new WeakSet();
   const markTrusted = WeakSet.prototype.add.bind(trustedEvents);
   const untrust = WeakSet.prototype.delete.bind(trustedEvents);
@@ -180,7 +187,7 @@
       untrust(ev);
       if (this == null) return globalThis.dispatchEvent(ev);
       // A click runs its target's activation behaviour (checkboxes, submit buttons, labels).
-      if (ev.type === 'click' && this.nodeType === 1 && !ev._activating) { ev._activating = true; return activate(this, ev); }
+      if (ev.type === 'click' && this.nodeType === 1 && !ev._activating && !ISOLATED) { ev._activating = true; return activate(this, ev); }
       return this._dispatch(ev);
     }
     _dispatch(ev) {
@@ -266,7 +273,28 @@
   const mutationRegs = [];
   const mutationPending = new Set();
   let mutationQueued = false;
+  // Whether a change must be recorded: an observer here, or in another world.
+  function mutWatched() { return mutationRegs.length > 0 || (worldOthers ? worldOthers() : false); }
   function mutation(type, target, r) {
+    // Other worlds' observers hear of it too, by node id.
+    if (worldOthers && worldOthers()) {
+      const ids = a => Array.prototype.map.call(a || [], n => n._id).join(',');
+      worldPost(JSON.stringify({ t: type, g: target._id, a: ids(r.addedNodes), r: ids(r.removedNodes), p: r.previousSibling ? r.previousSibling._id : '',
+        n: r.nextSibling ? r.nextSibling._id : '', an: r.attributeName === undefined ? null : r.attributeName, o: r.oldValue === undefined ? null : r.oldValue }));
+    }
+    observed(type, target, r);
+  }
+  // A change another world made, as its record arrived here.
+  function mutationFrom(text) {
+    let m;
+    try { m = JSON.parse(text); } catch (e) { return; }
+    const target = wrap(m.g);
+    if (!target) return;
+    const nodes = t => (t ? String(t).split(',') : []).map(wrap).filter(Boolean);
+    observed(m.t, target, { addedNodes: nodes(m.a), removedNodes: nodes(m.r), previousSibling: m.p !== '' ? wrap(m.p) : null,
+      nextSibling: m.n !== '' ? wrap(m.n) : null, attributeName: m.an === null ? undefined : m.an, oldValue: m.o === null ? undefined : m.o });
+  }
+  function observed(type, target, r) {
     if (!mutationRegs.length) return;
     const hit = new Map();
     for (const reg of mutationRegs) {
@@ -294,7 +322,7 @@
   }
   // Records for a change that replaces all of `n`'s children (innerHTML, textContent).
   function replacingChildren(n, change) {
-    if (!mutationRegs.length) return change();
+    if (!mutWatched()) return change();
     const removedNodes = n.childNodes;
     change();
     const addedNodes = n.childNodes;
@@ -339,7 +367,7 @@
     set textContent(v) {
       v = v === null || v === undefined ? '' : String(v);
       if (this.nodeType === 3) {
-        const old = mutationRegs.length ? H(OP.GET_TEXT, this._id) : null;
+        const old = mutWatched() ? H(OP.GET_TEXT, this._id) : null;
         H(OP.SET_TEXT, this._id, v);
         mutation('characterData', this, { oldValue: old });
         return;
@@ -358,8 +386,9 @@
       if (c.contains(this) || (this instanceof ShadowRoot && c.contains(this.host))) throw domError('The new child element contains the parent.', 'HierarchyRequestError');
       if (ref && ref.parentNode !== this) throw domError('The node before which the new node is to be inserted is not a child of this node.', 'NotFoundError');
       const old = c.parentNode;
-      if (old && (mutationRegs.length || customByName.size)) old.removeChild(c);
-      const prev = mutationRegs.length ? (ref ? ref.previousSibling : this.lastChild) : null;
+      const watched = mutWatched();
+      if (old && (watched || customByName.size)) old.removeChild(c);
+      const prev = watched ? (ref ? ref.previousSibling : this.lastChild) : null;
       check(H(OP.INSERT, this._id, c._id, ref ? ref._id : ''));
       if (customByName.size && c.nodeType === 1 && c.isConnected) connected(c);
       mutation('childList', this, { addedNodes: [c], previousSibling: prev, nextSibling: ref });
@@ -368,7 +397,7 @@
     }
     removeChild(c) {
       if (!c || c.parentNode !== this) throw domError('The node to be removed is not a child of this node.', 'NotFoundError');
-      const r = mutationRegs.length ? { removedNodes: [c], previousSibling: c.previousSibling, nextSibling: c.nextSibling } : null;
+      const r = mutWatched() ? { removedNodes: [c], previousSibling: c.previousSibling, nextSibling: c.nextSibling } : null;
       const was = customByName.size && c.isConnected;
       H(OP.DETACH, c._id);
       if (was) disconnected(c);
@@ -558,14 +587,14 @@
     getAttribute(n) { return H(OP.GET_ATTR, this._id, String(n)); }
     setAttribute(n, v) {
       n = String(n); v = String(v);
-      const watched = mutationRegs.length || customByName.size;
+      const watched = mutWatched() || customByName.size;
       const old = watched ? this.getAttribute(n) : null;
       check(H(OP.SET_ATTR, this._id, n, v));
       if (watched) { mutation('attributes', this, { attributeName: n, oldValue: old }); attributeChanged(this, n, old, v); }
     }
     removeAttribute(n) {
       n = String(n);
-      const watched = mutationRegs.length || customByName.size;
+      const watched = mutWatched() || customByName.size;
       const old = watched ? this.getAttribute(n) : null;
       H(OP.REMOVE_ATTR, this._id, n);
       if (watched && old !== null) { mutation('attributes', this, { attributeName: n, oldValue: old }); attributeChanged(this, n, old, null); }
@@ -3837,10 +3866,12 @@
       if (o.attributeFilter) o.attributeFilter = [...o.attributeFilter].map(String);
       const had = mutationRegs.find(r => r.mo === this && r.target === target);
       if (had) had.o = o; else mutationRegs.push({ mo: this, target, o });
+      if (worldWatch) worldWatch(true);
     }
     disconnect() {
       for (let i = mutationRegs.length - 1; i >= 0; i--) if (mutationRegs[i].mo === this) mutationRegs.splice(i, 1);
       this._records = [];
+      if (worldWatch && !mutationRegs.length) worldWatch(false);
     }
     takeRecords() { const r = this._records; this._records = []; return r; }
   }
@@ -3920,7 +3951,7 @@
   const globals = {
     window, self: window, Window, globalThis: window, document, location, console, performance,
     navigator: { userAgent: 'Mozilla/5.0 (SexOS) Web/0.2', appName: 'Netscape', appCodeName: 'Mozilla', appVersion: '5.0 (SexOS) Web/0.2', product: 'Gecko', productSub: '20030107',
-      vendor: '', vendorSub: '', language: 'en-US', languages: ['en-US', 'en'], platform: 'SexOS', onLine: true, cookieEnabled: true, doNotTrack: null,
+      vendor: '', vendorSub: '', language: 'en-US', languages: ['en-US', 'en'], platform: 'SexOS', onLine: true, cookieEnabled: true, doNotTrack: null, globalPrivacyControl: true,
       hardwareConcurrency: 4, maxTouchPoints: 0, pdfViewerEnabled: false, webdriver: false, plugins: [], mimeTypes: [], javaEnabled: () => false,
       mediaCapabilities, sendBeacon, gpu: new GPU(),
       permissions: { query: d => Promise.resolve(Object.assign(new EventTarget(), { name: d && d.name, state: 'prompt', onchange: null })) } },
@@ -4064,7 +4095,7 @@
         if (p.defaultPrevented) return 1;
         if (fireMouse(el, 'mousedown', MouseEvent, init).defaultPrevented) return 1;
         // Focus moves to the control (or link) pressed, and leaves when it is elsewhere.
-        if (button === 0) setFocus(focusable(el));
+        if (button === 0 && !ISOLATED) setFocus(focusable(el));
         return 0;
       }
       case 'up': {
@@ -4098,6 +4129,7 @@
     }
     return 0;
   }
+  let extEvent = null;
   function dispatch(msg, detail) {
     const f = String(msg).split('\t');
     switch (f[0]) {
@@ -4111,6 +4143,10 @@
       case 'ws': wsEvent(f); return 0;
       case 'media': mediaState(f); return 0;
       case 'mse': mseState(f); return 0;
+      // An extension's message or event: `ext\tJSON` (extensions.js).
+      case 'ext': return extEvent ? (extEvent(f.slice(1).join('\t')) || 0) : 0;
+      // A change another world made to the document (see mutation()).
+      case 'mut': mutationFrom(f.slice(1).join('\t')); return 0;
       // A classic script is about to run (its node), or finished (empty).
       // A message from another page: `message\tFROM\tORIGIN\tDATA`, FROM `parent`
       // or the iframe element whose page sent it, DATA as JSON.
@@ -4141,6 +4177,8 @@
         const target = document._active || document.body || document;
         target.dispatchEvent(ev);
         if (ev.defaultPrevented) return 1;
+        // Typing into controls is the page's own world's to do.
+        if (ISOLATED) return 0;
         if (f[1] !== 'keydown') return edit.el && edit.el === document._active ? 1 : 0;
         if (edit.el && edit.el === document._active) return editKey(edit.el, ev.key, ev.ctrlKey) ? 1 : 0;
         const a = document._active;
@@ -4163,6 +4201,8 @@
     }
     return 0;
   }
+  // What extensions.js builds on; it takes this and removes it.
+  Object.defineProperty(globalThis, '__sx_ext', { value: { H, report, WORLD, onEvent: f => { extEvent = f; } }, configurable: true });
   // What indexeddb.js (evaluated right after) builds on; it takes this and removes it.
   Object.defineProperty(globalThis, '__sx_idb', { value: { H, OP, domError, addTimer, EventTarget, Event, DOMException, report }, configurable: true });
 })();

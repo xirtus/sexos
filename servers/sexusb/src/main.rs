@@ -6,6 +6,8 @@
 //! into reports for Input. Report packing and the ordered outbox to Input live here.
 
 mod hid;
+mod uac;
+mod thunderbolt;
 mod usb;
 mod xhci;
 
@@ -353,6 +355,14 @@ pub extern "C" fn _start() -> ! {
         }
     }
     serial_println!("[sexusb.bt.route] region={}", (usb.bt_region != 0) as u8);
+    // USB sound cards: Bell's frames through this region (sex_pdx::usb_audio).
+    if let Ok(v) = sex_pdx::memory_region_full_view(sex_pdx::usb_audio::SLOT, sex_pdx::memory_region::QUERY_VIEW | sex_pdx::memory_region::READ | sex_pdx::memory_region::WRITE) {
+        if v.length >= sex_pdx::usb_audio::BYTES && v.virtual_address != 0 {
+            unsafe { sex_pdx::usb_audio::Shared::at(v.virtual_address as *mut u8) }.set_card(None);
+            usb.audio_region = v.virtual_address;
+        }
+    }
+    serial_println!("[sexusb.audio.route] region={}", (usb.audio_region != 0) as u8);
     let ports = usb.x.ports;
     let (connected, first) = usb.scan();
     if connected == 0 {
@@ -382,9 +392,13 @@ pub extern "C" fn _start() -> ! {
         },
         None => { serial_println!("[sexusb.irq] mode=none polling=1"); false }
     };
+    // Thunderbolt 4 / USB4: the firmware connection manager on Intel's NHI, if leased.
+    let mut bolt = thunderbolt::Thunderbolt::open();
+    serial_println!("[sexusb.thunderbolt] nhi={}", bolt.is_some() as u8);
     loop {
         if irq { let _ = sex_pdx::device::irq_take(); }
         let mut busy = false;
+        if let Some(b) = bolt.as_mut() { busy |= b.poll(); }
         for _ in 0..64 {
             let Some(e) = usb.x.event() else { break };
             usb.event(e);
@@ -394,6 +408,7 @@ pub extern "C" fn _start() -> ! {
         busy |= usb.ether_pump();
         busy |= usb.bt_pump();
         busy |= usb.bt_hid_pump();
+        busy |= usb.audio_pump();
         if usb.changed && files != 0 {
             usb.changed = false;
             let (status, _) = sex_pdx::pdx_call(sex_pdx::usb_disk::SLOT, sex_pdx::usb_disk::OP_CHANGED, usb.generation, 0, 0);
@@ -403,6 +418,12 @@ pub extern "C" fn _start() -> ! {
         while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
             if m.type_id <= 1 { continue; }
             busy = true;
+            if m.type_id == sex_pdx::power::OP_DEVICE_SLEEP && m.caller_pd == 0 {
+                if let Some(b) = bolt.as_mut() { b.sleep(m.arg0 == 1); }
+                let ports = usb.device_sleep(m.arg0 == 1);
+                serial_println!("[sexusb.sleep] asleep={} devices={} ports={}", m.arg0, usb.summary().slots, ports);
+                continue;
+            }
             if m.caller_pd != files || region == 0 {
                 serial_println!("[sexusb.disks.refused] caller={} op={:#x}", m.caller_pd, m.type_id);
                 let _ = sex_pdx::pdx_reply(m.caller_pd, sex_pdx::usb_disk::INVALID);

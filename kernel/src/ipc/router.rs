@@ -70,7 +70,9 @@ pub fn send_reply(target_pd_id: u32, val: u64) -> Result<(), IpcError> {
         // 2. Unpark the main task to trigger immediate processing
         let task_handle = pd.main_task.load(core::sync::atomic::Ordering::Acquire);
         if !task_handle.is_null() {
-            crate::scheduler::unpark_thread(task_handle);
+            // An answer: the caller runs next on its own core, here or on another
+            // (K3a), and a caller that keeps calling a partner elsewhere moves (K3c).
+            crate::scheduler::wake_answer(task_handle);
         }
         Ok(())
     } else {

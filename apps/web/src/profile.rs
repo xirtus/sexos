@@ -3,6 +3,12 @@
 //! cookies that outlast the session, and each origin's `localStorage`. Changes are
 //! saved a moment after they happen (pages may write storage every frame), and at once
 //! when the window closes.
+//!
+//! Each tab takes its cookies and storage from a [`Jarbox`]: the person's own, one of
+//! the container boxes (Personal, Work, Banking, Shopping; each with its own files
+//! under `Kaleidoscope/containers/<n>/`, so sites can't follow the person from one to
+//! another), or the private box, which lives in memory only and is forgotten when its
+//! last tab closes. Private tabs leave no history either.
 
 use alloc::rc::Rc;
 use alloc::string::String;
@@ -12,7 +18,8 @@ use sex_app::{files, Window};
 use sex_js::storage::WebStorage;
 use sex_web::sex_html;
 
-const DIR: &[u8] = b"Kaleidoscope";
+const DIR_STR: &str = "Kaleidoscope";
+const DIR: &[u8] = DIR_STR.as_bytes();
 const HISTORY: &[u8] = b"Kaleidoscope/history.tsv";
 const BOOKMARKS: &[u8] = b"Kaleidoscope/bookmarks.tsv";
 const COOKIES: &[u8] = b"Kaleidoscope/cookies.tsv";
@@ -24,6 +31,44 @@ const MAX_FILE: u64 = 64 << 20;
 /// Changes wait this long (ticks, ms) before going to Files, so a burst saves once.
 const SAVE_AFTER: u64 = 1500;
 
+/// Where a tab keeps its cookies and storage.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Jarbox {
+    #[default]
+    Own,
+    /// One of [`CONTAINERS`], numbered from 1.
+    Container(u8),
+    /// Memory only, forgotten when the last private tab closes.
+    Private,
+}
+
+/// The container boxes: their names and colours (the tab's underline).
+pub const CONTAINERS: &[(&str, u32)] = &[("Personal", 0xFF37_ADFF), ("Work", 0xFFFF_9F00), ("Banking", 0xFF51_CD00), ("Shopping", 0xFFFF_4BDA)];
+
+impl Jarbox {
+    /// The box's name for the bar, `None` for the person's own.
+    pub fn name(self) -> Option<&'static str> {
+        match self { Jarbox::Own => None, Jarbox::Private => Some("Private"), Jarbox::Container(n) => CONTAINERS.get(n as usize - 1).map(|c| c.0) }
+    }
+    /// The colour under the box's tabs, 0 for none.
+    pub fn colour(self) -> u32 {
+        match self { Jarbox::Own => 0, Jarbox::Private => 0xFF9A_4DFF, Jarbox::Container(n) => CONTAINERS.get(n as usize - 1).map_or(0, |c| c.1) }
+    }
+    /// For logs: own, private, or the container's number.
+    pub fn tag(self) -> String {
+        match self { Jarbox::Own => String::from("own"), Jarbox::Private => String::from("private"), Jarbox::Container(n) => alloc::format!("{n}") }
+    }
+}
+
+/// A container's or the private box's cookies and storage.
+pub struct Store {
+    pub kind: Jarbox,
+    pub jar: Rc<RefCell<sex_fetch::Jar>>,
+    pub storage: Rc<RefCell<WebStorage>>,
+    saved_jar: u64,
+    saved_storage: u64,
+}
+
 /// A visited page: its address, title and how often it was opened.
 pub struct Visit { pub url: String, pub title: String, pub visits: u32 }
 
@@ -34,6 +79,10 @@ pub struct Profile {
     /// (address, title), oldest first.
     pub bookmarks: Vec<(String, String)>,
     pub storage: Rc<RefCell<WebStorage>>,
+    /// The person's own cookies.
+    pub jar: Rc<RefCell<sex_fetch::Jar>>,
+    /// The container boxes opened this run, and the private box while it has tabs.
+    pub boxes: Vec<Store>,
     history_dirty: bool,
     bookmarks_dirty: bool,
     saved_storage: u64,
@@ -41,6 +90,9 @@ pub struct Profile {
     /// When the pending changes go to Files.
     pub due: Option<u64>,
 }
+
+/// Voyeur's handle for an address (FNV-1a).
+pub fn key(url: &str) -> u64 { url.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3)) }
 
 fn clean(s: &str) -> String { s.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect() }
 
@@ -53,10 +105,26 @@ fn read(window: &mut Window, path: &[u8]) -> Option<String> {
     String::from_utf8(buf).ok()
 }
 
+const LAYOUT: &[u8] = b"Kaleidoscope/layout.tsv";
+
+/// Whether tabs go down the side, as last chosen.
+pub fn vertical_tabs(window: &mut Window) -> bool {
+    read(window, LAYOUT).is_some_and(|t| t.lines().any(|l| l.trim() == "tabs\tvertical"))
+}
+
+/// Keeps the tab layout for next time.
+pub fn set_vertical_tabs(window: &mut Window, on: bool) {
+    let _ = files::mkdir(window, DIR);
+    let _ = files::write(window, LAYOUT, if on { b"tabs\tvertical\n" } else { b"tabs\tacross\n" });
+}
+
 impl Profile {
-    /// Reads the profile back, and the cookies into `jar`.
-    pub fn load(window: &mut Window, jar: &mut sex_fetch::Jar, now: u64) -> Profile {
+    /// Reads the profile back, with the person's own cookies.
+    pub fn load(window: &mut Window, now: u64) -> Profile {
         let mut p = Profile::default();
+        let jar_rc = p.jar.clone();
+        let mut jar_ref = jar_rc.borrow_mut();
+        let jar = &mut *jar_ref;
         if let Some(t) = read(window, HISTORY) {
             for line in t.lines() {
                 let mut f = line.splitn(3, '\t');
@@ -144,21 +212,69 @@ impl Profile {
         out
     }
 
-    /// Forgets what the site at `url` kept: its cookies and its storage.
-    pub fn clear_site(&mut self, jar: &mut sex_fetch::Jar, url: &str) {
+    /// Voyeur's answer from what is kept here (private tabs keep nothing): bookmarks,
+    /// newest first, then history by visits, each holding every query term (any case)
+    /// in its title or address. (bookmark, address, title)
+    pub fn lookup(&self, query: &str, most: usize) -> Vec<(bool, &str, &str)> {
+        let terms: Vec<String> = query.split(' ').filter(|t| !t.is_empty()).map(|t| t.to_ascii_lowercase()).collect();
+        if terms.is_empty() { return Vec::new(); }
+        let fits = |url: &str, title: &str| { let (u, t) = (url.to_ascii_lowercase(), title.to_ascii_lowercase()); terms.iter().all(|w| u.contains(w.as_str()) || t.contains(w.as_str())) };
+        let mut out: Vec<(bool, &str, &str)> = self.bookmarks.iter().rev().filter(|b| fits(&b.0, &b.1)).take(most).map(|b| (true, b.0.as_str(), b.1.as_str())).collect();
+        let mut seen: Vec<&Visit> = self.history.iter().rev().filter(|v| fits(&v.url, &v.title) && !out.iter().any(|o| o.1 == v.url)).collect();
+        seen.sort_by(|a, b| b.visits.cmp(&a.visits));
+        let room = most.saturating_sub(out.len());
+        out.extend(seen.into_iter().take(room).map(|v| (false, v.url.as_str(), v.title.as_str())));
+        out
+    }
+    /// The bookmarked or visited address Voyeur's `key` names.
+    pub fn address_for(&self, k: u64) -> Option<String> {
+        self.bookmarks.iter().map(|b| &b.0).chain(self.history.iter().map(|v| &v.url)).find(|u| key(u) == k).cloned()
+    }
+
+    /// The cookies and storage of box `kind`, read from Files the first time a
+    /// container is used this run.
+    pub fn store(&mut self, window: &mut Window, kind: Jarbox, now: u64) -> (Rc<RefCell<sex_fetch::Jar>>, Rc<RefCell<WebStorage>>) {
+        if kind == Jarbox::Own { return (self.jar.clone(), self.storage.clone()); }
+        if let Some(s) = self.boxes.iter().find(|s| s.kind == kind) { return (s.jar.clone(), s.storage.clone()); }
+        let (mut jar, mut storage) = (sex_fetch::Jar::default(), WebStorage::default());
+        if let Jarbox::Container(n) = kind {
+            if let Some(t) = read(window, alloc::format!("{}/containers/{n}/cookies.tsv", DIR_STR).as_bytes()) { jar = sex_fetch::Jar::load(&t, now); }
+            if let Some(t) = read(window, alloc::format!("{}/containers/{n}/storage.tsv", DIR_STR).as_bytes()) { storage = WebStorage::load(&t); }
+        }
+        sex_pdx::serial_record!("[web.jarbox.opened] box={} cookies={} origins={}", kind.tag(), jar.len(), storage.origins().count());
+        let s = Store { kind, saved_jar: jar.changes(), saved_storage: storage.changes, jar: Rc::new(RefCell::new(jar)), storage: Rc::new(RefCell::new(storage)) };
+        let out = (s.jar.clone(), s.storage.clone());
+        self.boxes.push(s);
+        out
+    }
+
+    /// The last private tab closed: its cookies and storage go.
+    pub fn forget_private(&mut self) {
+        let Some(i) = self.boxes.iter().position(|s| s.kind == Jarbox::Private) else { return };
+        let s = self.boxes.remove(i);
+        sex_pdx::serial_record!("[web.private.forgotten] cookies={} origins={}", s.jar.borrow().len(), s.storage.borrow().origins().count());
+    }
+
+    /// Forgets what the site at `url` kept in one box: its cookies and its storage.
+    pub fn clear_site(&mut self, jar: &mut sex_fetch::Jar, storage: &mut WebStorage, url: &str) {
         let Ok(u) = sex_fetch::Url::parse(url) else { return };
         jar.clear_site(&u.host);
-        self.storage.borrow_mut().clear(&u.origin());
+        storage.clear(&u.origin());
         self.later();
     }
 
     /// Notes that storage or cookies may have changed.
-    pub fn touched(&mut self, jar: &sex_fetch::Jar) {
-        if self.storage.borrow().changes != self.saved_storage || jar.changes() != self.saved_jar { self.later(); }
+    pub fn touched(&mut self) {
+        let own = self.storage.borrow().changes != self.saved_storage || self.jar.borrow().changes() != self.saved_jar;
+        let boxes = self.boxes.iter().any(|s| s.kind != Jarbox::Private && (s.storage.borrow().changes != s.saved_storage || s.jar.borrow().changes() != s.saved_jar));
+        if own || boxes { self.later(); }
     }
 
     /// Saves what changed, when it is due (or now with `force`).
-    pub fn save(&mut self, window: &mut Window, jar: &sex_fetch::Jar, now: u64, force: bool) {
+    pub fn save(&mut self, window: &mut Window, now: u64, force: bool) {
+        let jar_rc = self.jar.clone();
+        let jar_ref = jar_rc.borrow();
+        let jar = &*jar_ref;
         if !force && !self.due.is_some_and(|d| sex_pdx::get_ticks() >= d) { return; }
         self.due = None;
         let _ = files::mkdir(window, DIR);
@@ -178,6 +294,18 @@ impl Profile {
         if changes != self.saved_storage {
             let text = self.storage.borrow().save();
             if files::write(window, STORAGE, text.as_bytes()).is_ok() { self.saved_storage = changes; wrote += 1; }
+        }
+        // Containers keep theirs in their own folders; the private box never reaches Files.
+        for s in self.boxes.iter_mut() {
+            let Jarbox::Container(n) = s.kind else { continue };
+            let dir = alloc::format!("{}/containers/{n}", DIR_STR);
+            let (jc, sc) = (s.jar.borrow().changes(), s.storage.borrow().changes);
+            if jc == s.saved_jar && sc == s.saved_storage { continue; }
+            let _ = files::mkdir(window, alloc::format!("{}/containers", DIR_STR).as_bytes());
+            let _ = files::mkdir(window, dir.as_bytes());
+            if jc != s.saved_jar && files::write(window, alloc::format!("{dir}/cookies.tsv").as_bytes(), s.jar.borrow().save(now).as_bytes()).is_ok() { s.saved_jar = jc; wrote += 1; }
+            if sc != s.saved_storage && files::write(window, alloc::format!("{dir}/storage.tsv").as_bytes(), s.storage.borrow().save().as_bytes()).is_ok() { s.saved_storage = sc; wrote += 1; }
+            sex_pdx::serial_record!("[web.jarbox.saved] box={} cookies={} origins={}", n, s.jar.borrow().len(), s.storage.borrow().origins().count());
         }
         if wrote > 0 { let _ = files::sync(window); }
         sex_pdx::serial_record!("[web.profile.saved] files={} history={} bookmarks={} cookies={}", wrote, self.history.len(), self.bookmarks.len(), jar.len());

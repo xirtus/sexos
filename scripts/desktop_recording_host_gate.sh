@@ -33,10 +33,10 @@ python3 - "$ROOT_DIR" "$TEST_DIR" <<'PY_IMAGE'
 from pathlib import Path
 import sys
 root,out=map(Path,sys.argv[1:]);text=(root/'servers/sexfiles/src/fs_service.rs').read_text();parts=[]
-for prefix in ['static mut LOADED:', 'static mut LOADED_ARGS:', 'static mut PREPARED:', 'static mut PREPARED_ARGS:', 'static mut PREPARED_OWNER:', 'static mut PREPARED_LAUNCHER:', 'static mut LOADED_LAUNCHER:', 'struct TicketOwner ', 'pub enum Program ']:
+for prefix in ['static mut LOADED:', 'static mut LOADED_SYSTEM:', 'static mut LOADED_ARGS:', 'static mut PREPARED:', 'static mut PREPARED_ARGS:', 'static mut PREPARED_OWNER:', 'static mut PREPARED_LAUNCHER:', 'static mut LOADED_LAUNCHER:', 'struct TicketOwner ', 'pub enum Program ']:
  if prefix == 'struct TicketOwner ': parts.append('#[derive(Clone, Copy, Debug, PartialEq, Eq)]')
  parts.append(next(line for line in text.splitlines()if line.startswith(prefix)))
-for name in ['loaded','read_program','read_named','read_named_unbound','load_failed','read_ticket']:
+for name in ['loaded','loaded_from_store','loaded_from','read_program','read_named','read_named_unbound','load_failed','read_ticket']:
  a=text.index('fn '+name+'(');a=text.rfind('\n',0,a)+1;i=text.index('{',a)+1;depth=1
  while depth:depth+=(text[i]=='{')-(text[i]=='}');i+=1
  parts.append(text[a:i])
@@ -72,4 +72,9 @@ PY_RUNTIME
 SEXOS_RECORDER=1 RECORDING_RUNTIME_CASES="$ROOT_DIR/tests/recording_runtime_cases.rs" RECORDING_NESTED_DISK_SOURCE="$TEST_DIR/nested_disk.rs" RECORDING_ORDINARY_DISPATCH_SOURCE="$TEST_DIR/ordinary.rs" rustc --test --edition=2021 "$TEST_DIR/runtime_runner.rs" -o "$TEST_DIR/runtime"
 "$TEST_DIR/runtime" --test-threads=1
 
+for test in activation_source_receipt recording_app_files recording_app_session recording_shell_controller; do
+    SEXOS_RECORDER=1 rustc --test --edition=2021 "$ROOT_DIR/tests/$test.rs" -o "$TEST_DIR/$test"
+    "$TEST_DIR/$test" --test-threads=1
+done
 python3 "$ROOT_DIR/tests/program_role_facts.py"
+python3 "$ROOT_DIR/scripts/tests/test_boot_image_recorder.py"
