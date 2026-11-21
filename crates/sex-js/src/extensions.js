@@ -6,18 +6,17 @@
 // browser dispatches answers and events here as `ext\tJSON`.
 //
 // Only code the browser wrote can make an API object: it must give the key the browser
-// handed this realm once, before any page script ran. Content scripts share the page's
-// realm (no isolated world yet), so this code never hands an API object or a record
-// holding one to anything a page script can replace: built-ins it uses are taken here,
-// before page scripts run, and its records have no prototype (no setter on
-// Object.prototype sees them). What a content script itself does with `chrome` in that
-// shared realm is still visible to the page; isolated worlds are the real fix.
+// handed this realm once, before any page script ran. Content scripts run in their
+// extension's isolated world (a context of their own over the page's document), so
+// page scripts never see their `chrome` or their globals. This code still takes the
+// built-ins it uses up front and gives its records no prototype, for the realms where
+// an extension's own page runs.
 (function () {
   'use strict';
   const X = globalThis.__sx_ext;
   delete globalThis.__sx_ext;
   if (!X) return;
-  const { H, report } = X;
+  const { H, report, WORLD } = X;
   const EXT = 39;
   const key = H(EXT, 'key');
   if (!key) return;
@@ -34,7 +33,8 @@
   let seq = 1;
   let lastError;
 
-  function post(o) { H(EXT, 'post', stringify(o)); }
+  // Each message says which world sent it, so answers come back to it.
+  function post(o) { o.w = WORLD; H(EXT, 'post', stringify(o)); }
   function event() {
     const ls = [];
     return {
