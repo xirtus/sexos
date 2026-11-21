@@ -506,8 +506,25 @@ pointer already at 0,0. Settings has `desktop.corner_top_left` (default `overvie
 window overview) and the other three corners (default `none`); choices `none`, `overview`,
 `launcher`, `notifications`, `lock`, run through the same `wm_action` path as the Super chords.
 Pure logic: `servers/silk-shell/src/hot_corners.rs` (host test `tests/hot_corners.rs`); glue:
-`hot_corners_glue.rs`; gate: `scripts/hot_corner_gate.py`. *Desktop widgets* (S5b: clock,
-weather from Open-Meteo, system) follow.
+`hot_corners_glue.rs`; gate: `scripts/hot_corner_gate.py`. *Desktop widgets* (S5b): a clock
+card (time and date in the bar's zone) and a system card (processor load, free memory) drawn
+by Display as part of the wallpaper, in a column at the top right, so every window covers them
+and they never take input. The Shell only turns them on or off (`desktop.widgets`, off by
+default; Super+Shift+W) with `sex_pdx::desktop_widgets` `OP_DESKTOP_WIDGETS` (0x2F9); Display
+fills them from its own civil time and the kernel's numbers (syscall 87) and redraws a small
+cache only when a word changes. Words and layout: `crates/sex-pdx/src/desktop_widgets.rs`
+(host test `tests/desktop_widgets.rs`); drawing: `servers/sexdisplay/src/desktop_widgets.rs`
+(blended in `wallpaper_mark::pixel`); gate: `scripts/desktop_widgets_gate.py`. *Weather*
+(S5c, done): `apps/steamy`, a hidden helper the Shell starts with the network right while the
+cards show and `desktop.weather` is on (default on; the widgets themselves are opt-in), asks
+Open-Meteo (HTTPS, no key) about the time zone's city (`PLACES`, one per Settings zone;
+Fahrenheit for US zones) every 30 minutes, 5 after a failure, and at once on a zone change.
+The Shell tells it the zone (`OP_WEATHER_PLACE` 0x2FB), takes `OP_WEATHER` (0x2FA) reports from
+that run only, and passes them to Display, which draws the card between clock and system. UTC
+names no city: the Shell tells Display so without starting the helper. Glue:
+`servers/silk-shell/src/weather_glue.rs`; gate: `scripts/weather_widget_gate.py` (takes either a
+forecast or "out of reach", since CI's guest may not reach the Internet). Later: a city picker
+in Settings beyond the zone's city.
 
 ### T. Office suite: Gingham, Brocade, Burlesque and the Craft apps (8)
 

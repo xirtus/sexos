@@ -154,6 +154,7 @@ mod bitmap_transaction;
 mod bitmap_stores;
 mod fill_damage;
 mod wallpaper_mark;
+mod desktop_widgets;
 mod decor;
 mod pacing;
 mod damage;
@@ -4913,6 +4914,8 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
+                sex_pdx::desktop_widgets::OP_DESKTOP_WIDGETS => { if desktop_widgets::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
+                sex_pdx::desktop_widgets::OP_WEATHER => desktop_widgets::weather(msg.caller_pd, msg.arg0, msg.arg1),
                 sex_pdx::window_menu::OP_WINDOW_MENU => { if window_menu::receive(msg.caller_pd, msg.arg0) { needs_full_redraw = true; } }
                 sex_pdx::program_tray::OP_TRAY_VIEW => { if program_tray::receive(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) { needs_full_redraw = true; } }
                 sex_pdx::window_motion::OP_MOTION => {
@@ -5890,6 +5893,7 @@ pub extern "C" fn _start() -> ! {
         if needs_full_redraw||transaction_full_render||scale_receipts.needs_publication(){pending_paint.request_full();}
         if needs_surface_redraw{pending_paint.request_area();}
         if let Some(rect)=geom_damage_rect.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
+        if let Some(r)=desktop_widgets::tick(&bar.civil_clock,w,h){text_damage.add(r,w,h);}
         if let Some(rect)=text_damage.rect(){pending_paint.request_damage(rect,w,h,bar_height());}
         if cursor_only_moved{pending_paint.request_cursor();}
         // A recording in progress repaints in full; decided before the strip and
