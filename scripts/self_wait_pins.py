@@ -56,6 +56,7 @@ PINS = (
 
     ('timed', 'kernel/src/init.rs', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d'),
 
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:9cba8bed549187d4c2cfbc41d27a800f32aec67ba241ee5623534c60ebdc17e2'),  # IPC v2 wait spins in poll_for_partner (#426), 2026-11-19
     ('timed', 'kernel/src/scheduler.rs', 'fn-v1:d1ae84d320565569056b4890ee32b11af3b66bc34eba297a890387e8851f71ab'),
 
     ('timed', 'kernel/src/scheduler.rs', '1b10ca8d1b0d1eb3a092f0a61ed1ca7fe6a4b43c448bc24d560ead211940f8d9'),  # #429 merged with master (28ffcb59), reviewed by WS4, 2026-11-19
