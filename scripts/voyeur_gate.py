@@ -28,6 +28,7 @@ threading.Thread(target=server.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 from quil_autosave_gate import boot
 KEYS={' ':'spc','/':'slash','.':'dot','-':'minus'}
+SHIFTED={':':'semicolon','+':'equal'}
 QUERY=r'\[voyeur.query\] ticket=\d+ query={} providers=(\d+) answered=(\S+) results=(\d+) first=([^\n]+?) first_kind=(\S+) first_provider=(\S+)'
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
@@ -42,7 +43,7 @@ def main():
   if shift:send(False,['shift'])
  def typed(text):
   for k in text:
-   if k==':':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'semicolon'}],'hold-time':80})
+   if k in SHIFTED:q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':SHIFTED[k]}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)
  def spindle(text,pattern,timeout=60):g['focus'](153);time.sleep(.5);s=len(t());typed(text);q.key('ret');return g['wait'](pattern,s,timeout)
