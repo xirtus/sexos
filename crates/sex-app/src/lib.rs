@@ -237,11 +237,11 @@ impl Window {
         if m.caller_pd==SHELL && m.caller_task==SHELL && sex_pdx::autofill::response(m.type_id) {mailbox::put(*m);return None;}
         // Launch receipts belong to their explicit supervisor, not UI dispatch.
         // is_shell excludes these from the UI mailbox scan, so they are stashed once.
-        if pages::told(m) { return None; }
         if launch::is_event(m) { mailbox::put(*m); return None; }
         if restricted_status::is_event(m) { mailbox::put(*m); return None; }
         // Another task's answer, taken while this one waited: it looks in the mailbox.
         if is_answer(m) { mailbox::put(*m); return None; }
+        if pages::told(m) { return None; }
         if m.caller_pd != SHELL { return None; }
         if m.type_id == 0x202 {
             if let Some((w, h)) = sex_pdx::pixel_region::resize_decode(m.arg0, m.arg1, m.arg2) {
