@@ -37,6 +37,9 @@ fn requests() {
     let o = encode(&Request { headers: &[("Origin", "https://page.example")], trusted_origin: true, ..Request::get("") }, &u, None).unwrap();
     assert!(core::str::from_utf8(&o).unwrap().contains("\r\nOrigin: https://page.example\r\n"));
     assert_eq!(encode(&Request { headers: &[("X", "a\r\nInjected: 1")], ..Request::get("") }, &u, None), Err(Error::Header));
+    let g = encode(&Request { headers: &[("Sec-GPC", "1"), ("Sec-Fetch-Site", "none")], ..Request::get("") }, &u, None).unwrap();
+    let g = core::str::from_utf8(&g).unwrap();
+    assert!(g.contains("Sec-GPC: 1\r\n") && !g.contains("Sec-Fetch-Site"), "{g}");
     assert_eq!(encode(&Request { method: "GET X", ..Request::get("") }, &u, None), Err(Error::Header));
     let g = encode(&Request { headers: &[("Range", "bytes=0-99")], ..Request::get("") }, &u, None).unwrap();
     let g = core::str::from_utf8(&g).unwrap();
@@ -248,4 +251,21 @@ fn woff_unpacks_to_the_font_it_wraps() {
     }
     assert_eq!(crate::woff::to_sfnt(b"wOF2\0\0\0\0"), None);
     assert_eq!(crate::woff::to_sfnt(&ttf[..]).as_deref(), Some(&ttf[..]));
+}
+
+#[test]
+fn same_site_is_the_registrable_domain() {
+    assert!(crate::same_site("www.example.com", "cdn.example.com"));
+    assert!(crate::same_site("a.example.co.uk", "b.example.co.uk"));
+    assert!(!crate::same_site("example.co.uk", "other.co.uk"));
+    assert!(!crate::same_site("tracker.com", "news.com"));
+    assert!(!crate::same_site("alice.github.io", "bob.github.io"));
+    assert!(crate::same_site("10.0.2.2", "10.0.2.2"));
+    assert!(!crate::same_site("10.0.2.2", "10.0.2.3"));
+}
+
+#[test]
+fn only_named_internet_hosts_are_upgraded() {
+    for h in ["example.com", "www.bbc.co.uk", "neverssl.com"] { assert!(crate::upgradable(h), "{h}"); }
+    for h in ["10.0.2.2", "127.0.0.1", "[::1]", "localhost", "printer", "nas.local", "router.lan", "x.home.arpa", "example.test", "crash.invalid", "www.example"] { assert!(!crate::upgradable(h), "{h}"); }
 }

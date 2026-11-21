@@ -21,6 +21,9 @@ fn desk() -> &'static mut Desk<{ crate::ATLAS_MAX_SCENES }> { unsafe { &mut *cor
 
 unsafe fn scene() -> usize { crate::ACTIVE_SCENE_IDX as usize }
 
+/// Tabs in frame `fid` (0 for no such frame); a group has more than one.
+pub unsafe fn tab_count(fid: u32) -> u8 { frame(fid).map_or(0, |f| f.tab_count) }
+
 unsafe fn frame(fid: u32) -> Option<&'static mut ShellFrame> {
     (*core::ptr::addr_of_mut!(FRAMES)).iter_mut().flatten().find(|f| f.frame_id == fid)
 }

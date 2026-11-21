@@ -29,12 +29,18 @@ def fetch_ubol():
   try:files[p]=urllib.request.urlopen(RAW+p,timeout=60).read()
   except Exception:files[p]=None
   return files[p]
- m=json.loads(get('manifest.json'));todo=[m['background']['service_worker'].lstrip('/')]
+ m=json.loads(get('manifest.json'))
+ # The service worker's module graph, and the popup's and dashboard's pages with their
+ # scripts, modules and style sheets.
+ todo=[m['background']['service_worker'].lstrip('/'),m['action']['default_popup'].lstrip('/'),m['options_page'].lstrip('/')]
+ def rel(p,spec):return spec[1:] if spec.startswith('/') else posixpath.normpath(posixpath.join(posixpath.dirname(p),spec))
  while todo:
   p=todo.pop();b=get(p) if p not in files else None
   if b is None:continue
-  for x in re.finditer(rb'''(?:import|export)\s*(?:[^'";]*?from\s*)?['"](\.{1,2}/[^'"]+|/[^'"]+)['"]''',b):
-   spec=x.group(1).decode();todo.append(spec[1:] if spec.startswith('/') else posixpath.normpath(posixpath.join(posixpath.dirname(p),spec)))
+  if p.endswith('.html'):specs=re.findall(rb'''(?:src|href)=["']([^"':?#]+\.(?:js|css))["']''',b)
+  elif p.endswith('.css'):specs=re.findall(rb'''@import\s+(?:url\()?["']([^"':?#]+\.css)["']''',b)
+  else:specs=re.findall(rb'''(?:import|export)\s*(?:[^'";]*?from\s*)?['"](\.{1,2}/[^'"]+|/[^'"]+)['"]''',b)
+  todo.extend(rel(p,x.decode()) for x in specs)
  on=[r for r in m['declarative_net_request']['rule_resources'] if r.get('enabled')]
  for p in ['_locales/en/messages.json','managed_storage.json']+[f'rulesets/{n}-details.json' for n in ('ruleset','generic','scriptlet')]+[r['path'].lstrip('/') for r in on]:get(p)
  for n in ('css-api','css-generic','css-procedural-api','css-specific','css-user-terminate','css-user','isolated-api','prevent-popup','prevent-popup-target','toolbar-icon'):get(f'js/scripting/{n}.js')
@@ -102,12 +108,22 @@ def main():
   registered=int(g['wait'](r'\[web.extension.registered\] id=ublock-origin-lite scripts=(\d+)',s,300)[1]);assert registered>0
   time.sleep(5)
   s=go(f'{base}/site/shields/index.html');g['wait'](loaded,s,600);time.sleep(10)
-  s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'shift'},{'type':'qcode','data':'s'}],'hold-time':80})
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}} for dn,ks in((True,('ctrl','shift','s')),(False,('s','shift','ctrl'))) for x in ks]})
   g['wait'](r'\[web.shields.toggle\] up=0',s,60);g['wait'](loaded,s,600);time.sleep(20)
   blocked=re.findall(r'\[web.extension.blocked\] id=ublock-origin-lite kind=\S+ filter=\S+ url=(\S+)',t()[s:])
   assert len(blocked)>=5,blocked
   assert '[web.shields.blocked]' not in t()[s:]
+  # Its popup and dashboard (N7c) open in the tab with the whole API.
+  pages={}
+  for name in ('popup','dashboard'):
+   url=f'kaleidoscope-extension://ublock-origin-lite/{name}.html'
+   s=go(url);g['wait'](rf'\[web.extension.page\] id=ublock-origin-lite url={re.escape(url)}',s,120)
+   g['wait'](r'\[web.loaded\] bytes_ok=1 [^\n]*scripted=1',s,300);time.sleep(8)
+   shot=a.out/f'{name}.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(.5);Image.open(shot).convert('RGB').save(a.out/f'{name}.png')
+   pages[name]=re.findall(r'\[web.(?:console\] level=[1-9]|script.error\])[^\n]*',t()[s:])[:5]
+   # Both pages' scripts run clean (the dashboard needs :scope and :has()).
+   assert not pages[name],(name,pages[name])
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text and 'trapped=' not in text
-  print({'ok':True,'rules':rules,'registered_scripts':registered,'blocked':blocked})
+  print({'ok':True,'pages':pages,'rules':rules,'registered_scripts':registered,'blocked':blocked})
  finally:g['stop']()
 if __name__=='__main__':main()

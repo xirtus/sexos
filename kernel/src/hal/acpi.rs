@@ -406,6 +406,15 @@ fn cpuid(leaf: u32, sub: u32) -> core::arch::x86_64::CpuidResult { unsafe { core
 fn max_leaf() -> u32 { cpuid(0, 0).eax }
 fn max_ext_leaf() -> u32 { cpuid(0x8000_0000, 0).eax }
 
+/// Each core's highest performance level (HWP or CPPC capabilities), 0 if unknown.
+/// Cores that boost higher (AMD preferred cores, Intel Turbo Boost Max) rank first.
+static HIGHEST_PERF: [AtomicU8; 256] = [const { AtomicU8::new(0) }; 256];
+pub fn highest_perf(core: u32) -> u8 { HIGHEST_PERF.get(core as usize).map_or(0, |p| p.load(Ordering::Acquire)) }
+fn note_highest(highest: u64) {
+    let core = crate::core_local::CoreLocal::get().core_id as usize;
+    if let Some(p) = HIGHEST_PERF.get(core) { p.store(highest as u8, Ordering::Release); }
+}
+
 /// Hands frequency choice to the CPU: Intel HWP or AMD CPPC, balanced bias. Per core.
 pub fn cpu_init_local() -> u64 {
     use x86_64::registers::model_specific::Msr;
@@ -417,6 +426,7 @@ pub fn cpu_init_local() -> u64 {
                 Msr::new(0x770).write(1); // IA32_PM_ENABLE
                 let caps = Msr::new(0x771).read();
                 let (highest, lowest) = (caps & 0xFF, (caps >> 24) & 0xFF);
+                note_highest(highest);
                 let has_epp = eax & (1 << 10) != 0;
                 let epp = if has_epp { (PROFILE_EPP[PROFILE.load(Ordering::Relaxed) as usize % 3] as u64) << 24 } else { 0 };
                 Msr::new(0x774).write(lowest | highest << 8 | epp); // IA32_HWP_REQUEST, desired = auto
@@ -430,6 +440,7 @@ pub fn cpu_init_local() -> u64 {
             Msr::new(0xC001_02B1).write(1); // CPPC_ENABLE
             let caps = Msr::new(0xC001_02B0).read();
             let (highest, lowest) = ((caps >> 24) & 0xFF, caps & 0xFF);
+            note_highest(highest);
             // Asleep, every core prefers energy whatever the profile.
     let epp = if SLEEPING.load(Ordering::Relaxed) { 0xFF } else { PROFILE_EPP[PROFILE.load(Ordering::Relaxed) as usize % 3] as u64 };
             Msr::new(0xC001_02B3).write(highest | lowest << 8 | epp << 24); // max, min, desired auto, EPP

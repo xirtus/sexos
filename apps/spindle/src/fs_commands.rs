@@ -7,7 +7,7 @@ use sex_pdx::memory_region::{QUERY_VIEW, READ, WRITE};
 const CWD_MAX: usize = 512;
 const CAT_MAX: u64 = 32 * 1024;
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Install, Mount, Unmount, Update, Package, Organize }
+enum Cmd { Ls, Cd, Mkdir, Rm, Mv, Cat, Create, Write, Append(u8), Df, Program(u64, u64), Plugin(u8, u64), Install, Mount, Unmount, Update, Package, Organize }
 pub struct Client { sent_at: u64, cmd: Option<Cmd>, seq: u32, kind: u8, path_len: u16, offset: u64, length: u64, sent: bool, cwd: [u8; CWD_MAX], cwd_len: usize, carry: [u8; 160], carry_len: usize, shown: u64, data_len: usize, bare: [u8; 16], bare_len: usize }
 /// How Files answered the last update request: OK go on, EXISTS nothing newer, else stop.
 pub static mut UPDATE_STATUS: Option<u8> = None;
@@ -360,6 +360,39 @@ impl Client {
         if count == 0 { unsafe { crate::session_command::SESSION.submitted(&path[..n], &given[..m], flags); } }
         self.start(Cmd::Program(count, flags), w::PREPARE, n, 0, m as u64);
     }
+    /// `silk layout WS plugin:WHAT` (slice S4 follow-up): Files prepares a run of
+    /// `/bin/wasm layout @FILE` (`layout NAME` for a built-in plugin), so the run may
+    /// read that one file and holds nothing else of the person's; the ticket then goes
+    /// to the Shell with the workspace (`silk_command`). Never kept in the session.
+    pub fn submit_layout_plugin(&mut self, workspace: u8, what: &[u8], sb: &mut Scrollback) {
+        if self.busy() { sb.push(b"The disk is busy with the last command."); return; }
+        let Some(region) = region() else { sb.push(b"The disk is not available."); return };
+        let mut file = [0u8; w::PATH_BYTES];
+        let mut args = [0u8; w::ARGS_MAX];
+        let mode = sex_pdx::wasm_layout::MODE;
+        args[..mode.len()].copy_from_slice(mode);
+        let mut m = mode.len();
+        args[m] = b' '; m += 1;
+        let named: &[u8] = if what.contains(&b'/') {
+            let Some(k) = self.join(what, &mut file) else { sb.push(b"Path too long."); return };
+            if k == 0 || m + 1 + k > args.len() { sb.push(b"Path too long."); return; }
+            args[m] = b'@';
+            args[m + 1..m + 1 + k].copy_from_slice(&file[..k]);
+            m += 1 + k;
+            &file[..k]
+        } else {
+            args[m..m + what.len()].copy_from_slice(what);
+            m += what.len();
+            what
+        };
+        let key = sex_pdx::silk_ctl::plugin_key(named);
+        let path = b"/bin/wasm";
+        region[..path.len()].copy_from_slice(path);
+        region[w::PATH_BYTES..w::PATH_BYTES + m].copy_from_slice(&args[..m]);
+        self.bare_len = 0;
+        sex_pdx::serial_record!("[spindle.silk.plugin] ws={} what={} key={:x} prepare=1", workspace, shown(named), key);
+        self.start(Cmd::Plugin(workspace, key), w::PREPARE, path.len(), 0, m as u64);
+    }
     /// Delivers the current request. Retries a full queue on the next pass.
     pub fn send(&mut self) -> bool {
         if self.cmd.is_none() || self.sent { return false; }
@@ -437,7 +470,10 @@ impl Client {
             }
             self.cmd = None;
             // A bare name with no filesystem to prepare it: the disk program store may have it.
-            if let (Cmd::Program(0, _), true) = (cmd, self.bare_len > 0) {
+            // Only a run with no arguments: the store's run carries none, and a program
+            // started without the words it was given does the wrong thing (`run bench
+            // spin 600` became a whole `bench` when a PREPARE failed under load).
+            if let (Cmd::Program(0, _), true) = (cmd, self.bare_len > 0 && self.length == 0) {
                 if let Some(name) = sex_pdx::program_store::pack_name(&self.bare[..self.bare_len]) {
                     let asked = sex_pdx::pdx_call_checked(crate::SLOT_SHELL, sex_pdx::program_store::OP_RUN, name[0], name[1], 0).is_ok();
                     say!(sb, "{}", if asked { "Asked for the program. A window opens if it starts." } else { "Could not reach the shell." });
@@ -539,6 +575,11 @@ impl Client {
             }
             Cmd::Unmount => { say!(sb, "Safe to remove."); }
             Cmd::Update | Cmd::Package | Cmd::Organize => {}
+            Cmd::Plugin(workspace, key) => {
+                self.cmd = None;
+                unsafe { (*core::ptr::addr_of_mut!(crate::silk_command::SILK)).plugin(workspace, value, key, sb); }
+                return true;
+            }
             Cmd::Program(count, flags) => {
                 use sex_pdx::program_store as store;
                 // A package's program: ask the person first, or apply what they said.

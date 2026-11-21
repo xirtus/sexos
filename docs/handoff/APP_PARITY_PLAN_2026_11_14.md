@@ -438,6 +438,36 @@ module in silk-shell (hook only; C owns `main.rs`).
 | R9 | Voyeur protocol: search providers are programs answering a query with results only from what they already hold; Shell merges with frecency | host: ranking goldens; gate: two providers answer one query |
 | R10 | Voyeur providers: apps, files and contents (E4 index), settings pages, Abacus, windows, browser history/bookmarks, clipboard history, emoji; preview pane and actions | gate: typing `2+2`, a file word and a setting name each return the right first hit |
 
+**R3 notes (2026-11-20).** Startup programs, Shortcuts, Notifications and About landed
+first (#494). Updates, Storage and About's version and image hash read one new Files
+request, `sex_pdx::facts` (kind 36, topic in `offset`: UPDATES, STORAGE, ABOUT), answered
+only to the system's `tatami` run and changing nothing: the A/B slot, versions and trial
+from the boot menu (`updater.rs`), the release key, package updates the kept catalogs
+offer, the disk layout, sexfs size and free blocks, whether `/home` is encrypted, the
+volumes under `/media`, and the SHA-256 of the boot image the run came with (1 MiB per
+request, `image=hashing N%` until done, then kept). Not done: rolling back to the other slot from Tatami (`updater.rs` has no
+such step; the boot menu's "SexOS previous system" starts it once), an update channel
+(releases are signed files given to Spindle's `update`), package rollback (Spindle's,
+the person's answer), and disk health: no driver reads the NVMe SMART log yet (Q15/R5),
+so Storage says so.
+
+**R10 notes (2026-11-20).** Files and browser history are program providers over
+`sex_pdx::search`; the Shell never reads their data. Loom (`apps/files`) registers as
+`loom` when it starts, walks its folder once in the background to fill the E4 index
+(`search.idx`, `[files.app.indexed]`), and answers each query from it: file names
+(kind file), then files with a word starting with each query term (kind content, hint
+300). Kaleidoscope (`apps/web`) registers as `kaleidoscope` and answers from the
+bookmarks and history it keeps (private tabs keep none). Programs read questions with
+`sex_app::search` (`asked`, `answer`, `activated`). Preview and actions: a program row
+shows its subtitle (path or address) and what Enter does; a result names its other
+actions in the RESULT header's top byte, and Tab in the launcher cycles them. Loom
+offers open, open with (its action palette), reveal in Loom and copy; Kaleidoscope open
+and copy. Copy is done by the Shell (the subtitle becomes that program's copy); other
+actions focus the program and send ACTIVATE. Host: `cargo test -p voyeur` (R10 goldens
+over the wire), `scripts/voyeur_host_gate.sh`; gate: `scripts/voyeur_gate.py`. Not
+yet: a pixel preview pane, Loom's index kept live after the first walk (it refreshes
+when Loom searches), copy for Abacus and emoji answers.
+
 ### S. Silk shell beyond workstream C, and accessibility (8)
 
 Write set: new modules in `servers/silk-shell/src/` (C owns `main.rs`; hooks under 10 lines),
@@ -466,21 +496,37 @@ or Esc. Only a live Spindle run, or a run a Spindle terminal started attached to
 Pure logic: `servers/silk-shell/src/silk_ctl.rs` (host test `tests/silk_ctl.rs`); glue:
 `silk_ctl_glue.rs`; gate: `scripts/silk_ctl_gate.py`.
 
-*Wasm layout plugins are not in the Shell yet, on purpose.* `crates/sex-wasm` would run them
-(wasmi, `no_std` + `alloc`, with fuel limits), but not inside the Shell: (1) the Shell's heap
-starts at a 128 KiB arena and wasmi's engine, a compiled module and even one 64 KiB linear-memory
-page would be most of it; (2) the interpreter is roughly what makes the `wasm` program near the
-1 MiB image limit, and the Shell is already the largest server; (3) the Shell would have to
-read the plugin file through Files itself and run guest code inside the tile path of the
-desktop's single loop, so a slow plugin (even fuel-bounded) stalls input and drawing, and an
-interpreter fault ends the desktop. The plan instead: a plugin runs in its own confined run
-(the `wasm` host with a `layout` export, `layout(n, w, h) -> ptr` writing `n` rectangles into
-its memory, fuel-limited per call). The Shell sends it the tile count and work area as a plain
-call when a workspace with `silk layout WS plugin:PATH` retiles, keeps tiling with the
-workspace's previous layout meanwhile, and applies the rectangles the plugin sends back as its
-own program-initiated call (checked: inside the work area, one per window, sizes at least the
-minimum), so the Shell never waits on the plugin. `silk layout WS plugin:PATH` answers that
-plugins are not in this build until then.
+*Wasm layout plugins (2026-11-21).* `silk layout WS plugin:FILE.wasm` (or `plugin:spiral`, the
+built-in sample) tiles a workspace with a Wasm plugin that never runs inside the Shell: the
+Shell's heap starts at a 128 KiB arena, the interpreter is most of the `wasm` program's size,
+and a slow or faulting guest must not stall input and drawing in the desktop's single loop, so
+the Shell links no interpreter and waits on nothing. Spindle has Files prepare a run of
+`/bin/wasm layout @FILE` and sends the ticket, the workspace and a key for the plugin (FNV-1a of
+its absolute path) in a `silk_ctl` `Plugin` request; the Shell starts that run hidden, as it
+starts the weather helper, or reuses the run it already has for that key (one run per plugin,
+at most four). The run opens no window. When a workspace using it retiles, the Shell keeps the
+workspace's previous layout and sends the run the tile count and work area in a plain call,
+`sex_pdx::wasm_layout::OP_LAYOUT_ASK` (0x310), with a generation number. The run calls the
+guest's `layout(n, w, h) -> ptr` in a fresh wasmi instance with 2 000 000 fuel (the guest may
+import nothing, 1 MiB memory at most) and sends each rectangle (x, y as i32, w, h as u32,
+relative to the work area) as its own call, `OP_LAYOUT_RECT` (0x311), or why there are none,
+`OP_LAYOUT_FAIL` (0x312: read, module, fuel, trap, result). The Shell takes those only from the
+plugin's run, puts the answer together, and uses it only whole and checked: one rectangle per
+window, each inside the work area and at least the minimum window size (120 by 80, scaled);
+otherwise `[shell.layout.plugin] ... ok=0 reason=count|outside|small|fuel|trap|...` and the
+previous layout stays. An answer for an older generation is dropped as stale. A run that ends
+(a crash) leaves its workspaces on their previous layouts; a run no workspace uses is closed
+(forced after 5 s). A named layout (`silk layout WS NAME`, or a chord that changes the
+workspace's layout) ends the workspace's plugin. Confinement: Files binds the run to the
+arguments Spindle prepared, so it may reach the plugin file itself (Files' `@` grants are whole
+files, not read-only, so it could also write it) and the `wasm` program's own folder
+`/data/wasm`, and nothing else of the person's files; it has no network; its program row holds
+what every program row holds. The guest inside reaches none of that. Pure logic:
+`servers/silk-shell/src/layout_plugin.rs` (host test `tests/layout_plugin.rs`, which also
+covers the wire `crates/sex-pdx/src/wasm_layout.rs`); glue: `layout_plugin_glue.rs` (one-line hooks
+in main.rs); host: `crates/sex-wasm/src/layout.rs` and `apps/wasm/src/layout_mode.rs`
+(tests `crates/sex-wasm/tests/layout.rs`); sample: `crates/sex-wasm/guests/layouts/spiral.wat`
+(a Fibonacci spiral, built into the `wasm` program); gate: `scripts/wasm_layout_gate.py`.
 
 **S5 notes (2026-11-17).** S5 lands in two PRs. *Hot corners* (S5a): pushing the pointer
 onto a corner pixel runs that corner's action once, until the pointer leaves by 8 px; never
@@ -489,8 +535,66 @@ pointer already at 0,0. Settings has `desktop.corner_top_left` (default `overvie
 window overview) and the other three corners (default `none`); choices `none`, `overview`,
 `launcher`, `notifications`, `lock`, run through the same `wm_action` path as the Super chords.
 Pure logic: `servers/silk-shell/src/hot_corners.rs` (host test `tests/hot_corners.rs`); glue:
-`hot_corners_glue.rs`; gate: `scripts/hot_corner_gate.py`. *Desktop widgets* (S5b: clock,
-weather from Open-Meteo, system) follow.
+`hot_corners_glue.rs`; gate: `scripts/hot_corner_gate.py`. *Desktop widgets* (S5b): a clock
+card (time and date in the bar's zone) and a system card (processor load, free memory) drawn
+by Display as part of the wallpaper, in a column at the top right, so every window covers them
+and they never take input. The Shell only turns them on or off (`desktop.widgets`, off by
+default; Super+Shift+W) with `sex_pdx::desktop_widgets` `OP_DESKTOP_WIDGETS` (0x2F9); Display
+fills them from its own civil time and the kernel's numbers (syscall 87) and redraws a small
+cache only when a word changes. Words and layout: `crates/sex-pdx/src/desktop_widgets.rs`
+(host test `tests/desktop_widgets.rs`); drawing: `servers/sexdisplay/src/desktop_widgets.rs`
+(blended in `wallpaper_mark::pixel`); gate: `scripts/desktop_widgets_gate.py`. *Weather*
+(S5c, done): `apps/steamy`, a hidden helper the Shell starts with the network right while the
+cards show and `desktop.weather` is on (default on; the widgets themselves are opt-in), asks
+Open-Meteo (HTTPS, no key) about the time zone's city (`PLACES`, one per Settings zone;
+Fahrenheit for US zones) every 30 minutes, 5 after a failure, and at once on a zone change.
+The Shell tells it the zone (`OP_WEATHER_PLACE` 0x2FB), takes `OP_WEATHER` (0x2FA) reports from
+that run only, and passes them to Display, which draws the card between clock and system. UTC
+names no city: the Shell tells Display so without starting the helper. Glue:
+`servers/silk-shell/src/weather_glue.rs`; gate: `scripts/weather_widget_gate.py` (takes either a
+forecast or "out of reach", since CI's guest may not reach the Internet). Later: a city picker
+in Settings beyond the zone's city.
+
+**S7/S8 follow-up (2026-11-21): remembered choices.** The magnifier zoom, colour filter,
+sticky/slow/bounce keys and the screen reader are Settings keys (`accessibility.*`, ids 41-46;
+a new Accessibility page after Lock & idle). A Super+Alt chord saves its choice through Files, and
+the Shell applies the saved values at start and whenever Settings changes them, without saying
+so aloud (`Access::restore` brings values into range; a view Display could not take yet is sent
+again). Gate: `settings_persist_gate.py` also checks that a colour filter survives a restart.
+
+**S6a notes (2026-11-21): the desktop follows the theme.** The bar, window chrome (title bar,
+rim and divider, tabs, resize band), window menu, tray menus, program tray, Bluetooth panel,
+Alt+Tab switcher, screenshot hint and the desktop cards now take Settings' `appearance.theme`
+and `appearance.accent`, as programs already did through `sex_theme`. The Shell sends them with
+the wallpaper and night light: `OP_DESKTOP_LOOK` arg2 is a theme word
+(`sex_pdx::desktop_look::theme_word`: mode + 1 in bits 0-7, accent RGB in bits 8-31; 0 keeps
+the theme, anything else is refused). `config_watch` resends the look when either key changes,
+once after the first settings walk, and after Display restarts (glue:
+`servers/silk-shell/src/theme_glue.rs`, receipt `[shell.theme] mode=.. accent=.. status=..`).
+Display maps the tokens in `servers/sexdisplay/src/desk_theme.rs` (dark keeps the old navy
+palette with the accent for active things; light gives light panels and dark ink; high contrast
+is black and white with sex_theme's yellow), puts the bar's colours into the render tokens so
+each frame's scene carries them, and repaints everything on a change (`[display.theme] mode=dark
+accent=d6336c`). The Shell's default appearance preset (0, no custom tint) now asks Display to
+take the chrome from the theme (`OP_APPEARANCE_TOKENS` call 2 arg2 bit 0); the other presets
+still override it. Tests: `tests/desktop_theme.rs` (mapping, contrast), `tests/desktop_look.rs`
+(wire); gate: `scripts/desktop_theme_gate.py` (Settings to Dark and back, bar luminance).
+Since the default theme is light, the default desktop is now light; `desktop_widgets_gate.py`,
+`tray_gate.py` and `bt_panel_gate.py` look for ink that stands apart from its background
+rather than for light pixels. Left: the lock screen, the legacy launcher panel and the
+recording indicator keep their fixed colours; the bar glass keeps its navy tint and highlight.
+
+**S6b notes (2026-11-21): blur behind panels and menus.** The window menu, tray menus, program
+tray menus/tooltips/cards, Bluetooth panel and Alt+Tab switcher are frosted glass: the desktop
+under them blurred (two box passes each way, radius 6 px x scale), tinted with the theme's popup
+colour at 200/255 and kept in the luminance band where their inks read at 4.5:1
+(`servers/sexdisplay/src/glass.rs`, frame side `frost.rs`). On a partial frame the body under each
+shown popup (plus the blur margin) is painted again before the overlays, so glass never blurs
+last frame's glass. Off in high contrast and with the new `accessibility.reduce_transparency`
+(id 47, bit 32 of the theme word), and for popups too big for the scratch. Receipts
+`[display.glass] panel=.. glass=1 radius=.. alpha=.. rect=..` / `glass=0 reason=..`. Tests:
+`tests/glass_panels.rs`; gate: `scripts/glass_panels_gate.py`. Left: drop shadows, the overview,
+the legacy launcher panel (a surface whose own fill is the body under it).
 
 ### T. Office suite: Gingham, Brocade, Burlesque and the Craft apps (8)
 

@@ -3,7 +3,9 @@
 programs computing flat out (`run bench spin`). Each key typed into Spindle is timed
 from the host's key event to Display committing Spindle's new text to the screen
 ([display.text.committed] for Spindle's surface). Reports p50/p95/p99 in ms for both
-phases and fails if the loaded p99 is above --max-p99-ms. Under QEMU TCG the numbers
+phases and fails if the loaded p99 is above --max-p99-ms, or (with --max-over-idle-ms)
+more than that above the idle p99: what busy programs add, apart from the serial-log
+path every key's timing goes through (about 80 ms on KVM, idle or loaded). Under QEMU TCG the numbers
 are far above real hardware; they are recorded to track regressions. The plan's target
 is p99 < 16 ms on hardware."""
 import argparse,json,os,re,shutil,time
@@ -17,7 +19,8 @@ def pct(xs,p):
  xs=sorted(xs);return xs[min(len(xs)-1,int(round(p*(len(xs)-1))))]
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800')
- p.add_argument('--keys',type=int,default=40);p.add_argument('--busy',type=int,default=4);p.add_argument('--max-p99-ms',type=float,default=400.0);a=p.parse_args()
+ p.add_argument('--keys',type=int,default=40);p.add_argument('--busy',type=int,default=4);p.add_argument('--max-p99-ms',type=float,default=400.0)
+ p.add_argument('--max-over-idle-ms',type=float);a=p.parse_args()
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('bench',(ROOT/'iso_root/programs/bench').read_bytes())])
  g=boot(a.iso,disk,a.out,'latency',a.resolution);t=g['text'];q=g['q'];serial=a.out/'latency-serial.log'
@@ -66,7 +69,15 @@ def main():
   (a.out/'latency.json').write_text(json.dumps(res))
   assert still==0,'the load ended before the loaded keys were timed'
   assert res['loaded']['p99_ms']<=a.max_p99_ms,f"loaded p99 {res['loaded']['p99_ms']} ms over {a.max_p99_ms}: {res}"
+  over=round(res['loaded']['p99_ms']-res['idle']['p99_ms'],1)
+  assert a.max_over_idle_ms is None or over<=a.max_over_idle_ms,f"loaded p99 is {over} ms over idle, more than {a.max_over_idle_ms}: {res}"
   text=t();assert 'KERNEL PANIC' not in text
   print({'ok':True,**res})
+ except (AssertionError,TimeoutError):
+  # Artifacts cannot always be fetched: put the evidence in the job log.
+  keep=re.compile(r'\[(?:shell\.program\.(?:launch|key)|shell\.focus|shell\.key|spindle|files\.(?:program|ticket|prepare)|bench|sched\.pair|program\.(?:start|worker|exit)|ipc\.xcore|input)|PANIC|panic')
+  lines=[l for l in t().splitlines() if keep.search(l)]
+  print('--- serial excerpt (last 120 matching lines) ---');print('\n'.join(lines[-120:]))
+  raise
  finally:g['stop']()
 if __name__=='__main__':main()
