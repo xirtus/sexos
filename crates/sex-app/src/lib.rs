@@ -769,17 +769,31 @@ pub mod files {
         if path.len() > w::PATH_BYTES { return Err(w::NAME); }
         let _turn = Turn::take();
         let mut tries = 0;
+        let mut starting: Option<(u64, u32)> = None;
         loop {
             let region = region()?;
             region[..path.len()].copy_from_slice(path);
             fill(&mut region[w::PATH_BYTES..]);
             match once(&mut hold, kind, path.len(), offset, length) {
                 Err(w::DENIED) if tries < retries => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
+                // The run started before Shell's bind reached Files: wait for it, by time and
+                // not by a count, since on a quiet core a yield returns at once.
+                Err(w::STARTING) if kind == w::ARGS => {
+                    let (since, round) = starting.get_or_insert((sex_pdx::get_ticks(), 0));
+                    if sex_pdx::get_ticks().saturating_sub(*since) > STARTING_WAIT_TICKS {
+                        sex_pdx::serial_record!("[files.client.starting.timeout] kind={}", kind);
+                        return Err(w::DENIED);
+                    }
+                    *round += 1;
+                    crate::thread::pause(*round);
+                }
                 Ok(value) => return Ok(take(value, &region[w::PATH_BYTES..])),
                 Err(e) => return Err(e),
             }
         }
     }
+    /// How long a request waits for its just-started run's bind (`w::STARTING`).
+    const STARTING_WAIT_TICKS: u64 = 5_000;
     fn mine(m: &sex_pdx::PdxMessage, seq: u32) -> bool {
         m.type_id == 1 && m.caller_pd == FILES && w::decode_reply(m.arg0).is_some_and(|r| r.0 == seq)
     }
