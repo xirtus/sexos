@@ -762,9 +762,11 @@ where
                             Opcode::CreateQWordField => (index * 8, 64),
                             _ => unreachable!(),
                         };
+                        // SexOS: the field points at the buffer itself, not at the argument or
+                        // local holding it (`CreateByteField (Arg2, ...)` panicked on read).
                         self.namespace.lock().insert(
                             name.resolve(&context.current_scope)?,
-                            Object::BufferField { buffer: buffer.clone(), offset: offset as usize, length }.wrap(),
+                            Object::BufferField { buffer: buffer.clone().unwrap_transparent_reference(), offset: offset as usize, length }.wrap(),
                         )?;
                         context.retire_op(op);
                     }
@@ -781,7 +783,7 @@ where
                         self.namespace.lock().insert(
                             name.resolve(&context.current_scope)?,
                             Object::BufferField {
-                                buffer: buffer.clone(),
+                                buffer: buffer.clone().unwrap_transparent_reference(),
                                 offset: bit_index as usize,
                                 length: num_bits as usize,
                             }
@@ -816,8 +818,21 @@ where
                     }
                     Opcode::DerefOf => {
                         let [Argument::Object(object)] = &op.arguments[..] else { panic!() };
-                        let result = if object.typ() == ObjectType::Reference {
-                            object.clone().unwrap_reference()
+                        /*
+                         * SexOS: `typ()` reports what a reference points at, so upstream's
+                         * `typ() == Reference` never held and every `DerefOf (PKG [i])` failed.
+                         * A dereferenced buffer element (a byte field) reads as an Integer.
+                         */
+                        let result = if matches!(**object, Object::Reference { .. }) {
+                            let inner = object.clone().unwrap_reference();
+                            if let Object::BufferField { length, .. } = *inner {
+                                let mut raw = [0u8; 8];
+                                if length > 64 { Err(AmlError::InvalidOperationOnObject { op: Operation::ReadBufferField, typ: ObjectType::BufferField })?; }
+                                inner.read_buffer_field(&mut raw)?;
+                                Object::Integer(u64::from_le_bytes(raw)).wrap()
+                            } else {
+                                inner
+                            }
                         } else if object.typ() == ObjectType::String {
                             let path = AmlName::from_str(&object.as_string().unwrap())?
                                 .resolve(&context.current_scope)?;
@@ -1533,6 +1548,26 @@ where
                                     } else if let Object::FieldUnit(ref field) = *object {
                                         let value = self.do_field_read(field)?;
                                         context.last_op()?.arguments.push(Argument::Object(value));
+                                    } else if let Object::BufferField { length, .. } = *object {
+                                        /*
+                                         * SexOS: a buffer field used as a value is read (ACPI 6.5
+                                         * §19.6.13): an Integer when it fits the integer width, a
+                                         * Buffer otherwise. Upstream passed the field object on, so
+                                         * `If (FLD0 == 2)` failed; every WMI method that takes its
+                                         * argument apart with CreateByteField compares like that.
+                                         */
+                                        let bytes = length.div_ceil(8);
+                                        let mut raw = vec![0u8; bytes.max(8)];
+                                        object.read_buffer_field(&mut raw)?;
+                                        let width = if self.dsdt_revision >= 2 { 64 } else { 32 };
+                                        let value = if length <= width {
+                                            let v = u64::from_le_bytes([raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7]]);
+                                            Object::Integer(v)
+                                        } else {
+                                            raw.truncate(bytes);
+                                            Object::Buffer(raw)
+                                        };
+                                        context.last_op()?.arguments.push(Argument::Object(value.wrap()));
                                     } else {
                                         context.last_op()?.arguments.push(Argument::Object(object));
                                     }

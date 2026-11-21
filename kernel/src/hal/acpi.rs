@@ -243,14 +243,56 @@ fn mapped(address: u64) -> bool {
 }
 fn width_ok(width: u64) -> Option<u8> { matches!(width, 1 | 2 | 4 | 8).then_some(width as u8) }
 
+/// A copy of the SMBIOS structure table, served as the last `FW_TABLE` entry ("SMBI").
+static SMBIOS_COPY: spin::Once<Vec<u8>> = spin::Once::new();
+
+/// `length` bytes of firmware memory (never usable RAM), through the HHDM when it maps them,
+/// else through a fresh read-only mapping: firmware puts SMBIOS in reserved memory, which
+/// the HHDM may leave out.
+fn firmware_bytes(address: u64, length: usize) -> Option<Vec<u8>> {
+    if length == 0 || memory_refused(address, length as u64, false) { return None; }
+    if mapped(address) && mapped(address + length as u64 - 1) {
+        return Some((0..length).map(|i| unsafe { phys::<u8>(address as usize + i).read_volatile() }).collect());
+    }
+    use x86_64::structures::paging::PageTableFlags as F;
+    let base = address & !0xFFF;
+    let bytes = ((address + length as u64 + 0xFFF) & !0xFFF) - base;
+    let va = crate::memory::va_allocator::allocate_va(bytes as usize)?;
+    let ok = crate::memory::manager::GLOBAL_VAS.lock().as_mut()
+        .map(|vas| vas.map_physical_range(x86_64::VirtAddr::new(va), base, bytes, F::PRESENT | F::NO_EXECUTE, 0).is_ok()).unwrap_or(false);
+    if !ok { return None; }
+    let at = va + (address - base);
+    Some((0..length).map(|i| unsafe { core::ptr::read_volatile((at + i as u64) as *const u8) }).collect())
+}
+
+/// Copies the SMBIOS structure table found from Limine's entry point.
+fn smbios_copy() -> Option<u32> {
+    let r = crate::SMBIOS_REQUEST.response()?;
+    let hhdm = HHDM.load(Ordering::Relaxed);
+    let phys_of = |p: u64| if p >= hhdm { p - hhdm } else { p };
+    let (e64, e32) = (r.entry_64 as u64, r.entry_32 as u64);
+    let found = if e64 != 0 { firmware_bytes(phys_of(e64), 24).filter(|b| &b[..5] == b"_SM3_").map(|b| (u64::from_le_bytes(b[16..24].try_into().unwrap()), u32::from_le_bytes(b[12..16].try_into().unwrap()), b[7], b[8])) } else { None }
+        .or_else(|| if e32 != 0 { firmware_bytes(phys_of(e32), 31).filter(|b| &b[..4] == b"_SM_").map(|b| (u32::from_le_bytes(b[24..28].try_into().unwrap()) as u64, u16::from_le_bytes([b[22], b[23]]) as u32, b[6], b[7])) } else { None });
+    let (address, length, major, minor) = found?;
+    let copy = firmware_bytes(address, length.min(64 * 1024) as usize);
+    serial_println!("[acpi.smbios] version={}.{} table={:#x} length={} readable={}", major, minor, address, length, copy.is_some() as u8);
+    let copy = copy?;
+    let n = copy.len() as u32;
+    SMBIOS_COPY.call_once(|| copy);
+    Some(n)
+}
+
 fn fw_table(index: u64, offset: u64) -> [u64; 5] {
     let Some(&(address, length, signature)) = TABLES.get().and_then(|t| t.get(index as usize)) else { return [w::INVALID, 0, 0, 0, 0] };
+    let copy = (signature == u32::from_le_bytes(*b"SMBI")).then(|| SMBIOS_COPY.get()).flatten();
     let mut words = [0u64; 3];
     for (i, word) in words.iter_mut().enumerate() {
         let mut bytes = [0u8; 8];
         for (j, b) in bytes.iter_mut().enumerate() {
             let at = offset + (i * 8 + j) as u64;
-            if at < length as u64 { *b = unsafe { phys::<u8>((address + at) as usize).read_volatile() }; }
+            if at < length as u64 {
+                *b = match copy { Some(c) => c[at as usize], None => unsafe { phys::<u8>((address + at) as usize).read_volatile() } };
+            }
         }
         *word = u64::from_le_bytes(bytes);
     }
@@ -563,6 +605,9 @@ pub fn init(rsdp: u64, hhdm: u64) {
     if let Ok(dsdt) = tables.dsdt() { list.push((dsdt.phys_address as u64, dsdt.length, u32::from_le_bytes(*b"DSDT"))); }
     for ssdt in tables.ssdts().take(64) { list.push((ssdt.phys_address as u64, ssdt.length, u32::from_le_bytes(*b"SSDT"))); }
     let table_count = list.len();
+    // The SMBIOS structure table goes last, signed "SMBI" (the service skips what it does
+    // not know). Read only: it is served through the same byte window as the AML.
+    if let Some(n) = smbios_copy() { list.push((0, n, u32::from_le_bytes(*b"SMBI"))); }
     TABLES.call_once(|| list);
     let cpu_flags = cpu_init_local();
     let s5 = S5.load(Ordering::Acquire);
@@ -742,7 +787,12 @@ fn wake_desktop() {
 fn control(caller: u32, word: u64) -> [u64; 5] {
     let value = (word >> 8) as u8;
     match word & 0xFF {
-        w::CTL_PROFILE => set_profile(value),
+        w::CTL_PROFILE => {
+            let r = set_profile(value);
+            // Vendor thermal profiles (Alienware fans) follow in the ACPI service.
+            if r[0] == w::OK { let _ = queue_control(word); }
+            r
+        }
         w::CTL_CLAIM_BUTTON => { DESKTOP_PD.store(caller, Ordering::Release); BUTTON_CLAIMED.store(true, Ordering::Release); [w::OK, 0, 0, 0, 0] }
         w::CTL_SLEEP if value > 1 => [w::INVALID, 0, 0, 0, 0],
         w::CTL_SLEEP => {
@@ -761,6 +811,8 @@ fn control(caller: u32, word: u64) -> [u64; 5] {
             [w::OK, 0, 0, 0, 0]
         }
         w::CTL_BRIGHTNESS_STEP | w::CTL_BRIGHTNESS_SET => queue_control(word),
+        w::CTL_CHARGE if !w::charge_value_ok(value) => [w::INVALID, 0, 0, 0, 0],
+        w::CTL_CHARGE => queue_control(word),
         _ => [w::INVALID, 0, 0, 0, 0],
     }
 }

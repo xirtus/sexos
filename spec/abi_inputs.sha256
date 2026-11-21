@@ -160,7 +160,7 @@ ddda6ecb6219bb1cdad31c61a5401719eaecee79c8e3e218b44034ca45a2cc8f  kernel/src/clo
 
 cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/history_recovery.rs
 
-cbe66e9bdefd2d23b7bfeba94dc52bd9a470bab00ae9c2b910751dac3533aeb8  kernel/src/interrupts.rs
+397d0c93e341f86a26cd52dcd85230846a75258faa3557a733464b0615eabefe  kernel/src/interrupts.rs
 
 e59e241f8814b892450462564ade856f0e84dbddab2ec11abb24d7f3725273f2  kernel/src/ipc.rs
 

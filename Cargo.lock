@@ -7258,6 +7258,10 @@ name = "sex-hid-touch"
 version = "0.1.0"
 
 [[package]]
+name = "sex-hotplug"
+version = "0.1.0"
+
+[[package]]
 name = "sex-html"
 version = "0.1.0"
 
@@ -7351,6 +7355,7 @@ dependencies = [
  "raw-cpuid 11.6.0",
  "scopeguard",
  "sex-gate",
+ "sex-hotplug",
  "sex-hwdb",
  "sex-idle",
  "sex-iommu",
@@ -7386,6 +7391,9 @@ dependencies = [
 [[package]]
 name = "sex-laptop"
 version = "0.1.0"
+dependencies = [
+ "acpi",
+]
 
 [[package]]
 name = "sex-libc"

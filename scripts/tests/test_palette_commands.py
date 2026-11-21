@@ -16,7 +16,8 @@ CURRENT=LEGACY+(('FocusBrowser','Open Browser'),('FocusProgram','Run Hello'))
 FUTURE=CURRENT+(('HostFixtureOnly','Host fixture only'),)
 # The live catalog: CURRENT plus the power rows, then brightness and power profiles.
 ACTUAL=CURRENT+(('ShutDown','Shut Down'),('Restart','Restart'),('BrightnessUp','Brightness Up'),('BrightnessDown','Brightness Down'),
-                ('PowerSaver','Power Saver'),('PowerBalanced','Balanced Power'),('PowerPerformance','Performance Power'),('Sleep','Sleep'))
+                ('PowerSaver','Power Saver'),('PowerBalanced','Balanced Power'),('PowerPerformance','Performance Power'),('Sleep','Sleep'),
+                ('ChargeStandard','Battery Full Charge'),('ChargeAdaptive','Battery Adaptive Charge'),('ChargeLimit','Battery Stop at 80%'))
 
 def catalog(commands):
     return 'const COMMAND_LIST: [CommandDef; '+str(len(commands))+'] = [\n'+''.join(
