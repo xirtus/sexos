@@ -25,7 +25,9 @@ pub(crate) fn try_backing(length: u64) -> Option<u64> {
         .expect("BOOT_REGION_FRAME_OWNERSHIP_COLLISION");
     let hhdm = crate::HHDM_REQUEST.response().expect("BOOT_REGION_NO_HHDM").offset;
     // Zero the entire reservation, including buddy rounding, before publication.
+    let t = crate::boot_cost::now();
     unsafe { core::ptr::write_bytes((physical + hhdm) as *mut u8, 0, (pages * 4096) as usize); }
+    crate::boot_cost::add(crate::boot_cost::Bucket::Zero, t, pages * 4096);
     Some(physical)
 }
 

@@ -114,6 +114,7 @@ pub fn write_stopped(bytes: &[u8]) {
 pub fn write_string(bytes: &[u8]) {
     use x86_64::instructions::port::Port;
     let mut line_status: Port<u8> = Port::new(0x3F8 + 5);
+    let t = crate::boot_cost::now();
     let chunk_len = if VIRTUAL_UART.load(Ordering::Relaxed) { 4096 } else { 16 };
     for chunk in bytes.chunks(chunk_len) {
         unsafe {
@@ -122,6 +123,7 @@ pub fn write_string(bytes: &[u8]) {
                 inout("rcx") chunk.len() => _, options(nostack, preserves_flags, readonly));
         }
     }
+    crate::boot_cost::add(crate::boot_cost::Bucket::Serial, t, bytes.len() as u64);
 }
 
 #[macro_export]
