@@ -7,6 +7,7 @@ from desktop_close_gate import QMP
 from spindle_durable_reboot_gate import snapshot,decode_snapshot
 from history_roster_evidence import verify_boot_roster
 from check_spindle_viewport_pixels import verify
+import spindle_view_record
 from check_desktop_pixels import font_from_source
 from quil_workflow_gate import palette_commands,palette_select
 
@@ -118,8 +119,9 @@ def main():
                     latest=list(map(int,matches[-1]))if matches else None
                 if output and latest:
                     metadata=re.findall(rf'\[spindle.view.text\] target=12 sid=154 sequence={latest[0]} paint=(\d+) cols=\d+ rows=\d+ bytes=\d+',value)
-                    pieces=re.findall(rf'\[spindle.view.bytes\] target=12 sid=154 seq={latest[0]} paint={metadata[-1]} off=\d+ hex=([0-9a-f]*)',value)if metadata else[]
-                    if output.encode()not in b''.join(bytes.fromhex(part)for part in pieces):errors.append('wrong selected output row')
+                    try:shown=spindle_view_record.pane(value,12,154,latest[0],metadata[-1])if metadata else b''
+                    except ValueError as error:shown=b'';errors.append(str(error))
+                    if output.encode()not in shown:errors.append('wrong selected output row')
                 if not errors and latest and (args.relative_tiles or ((latest[2]<=180)==small)):break
                 time.sleep(.2)
             if errors or not latest or (not args.relative_tiles and ((latest[2]<=180)!=small)):raise RuntimeError(name+': '+str(errors)+' layout='+str(latest))
