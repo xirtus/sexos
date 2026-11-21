@@ -102,6 +102,8 @@ impl Browser {
     /// Shows tab `i`.
     pub(super) fn show_tab(&mut self, i: usize) {
         if i >= self.tabs.len() || i == self.active || self.in_frame.is_some() { return; }
+        // A tab outside the split ends it, as in Edge.
+        if self.split.is_some_and(|(l, r)| i != l && i != r) { self.split = None; sex_pdx::serial_record!("[web.split] on=0 shown={}", i); }
         // The tab going back pauses its sound and remembers its title.
         for m in self.media.iter_mut() { m.hush(); }
         let title = self.page.title.clone();
@@ -137,6 +139,7 @@ impl Browser {
     pub(super) fn new_tab(&mut self, url: Option<&str>, jarbox: Jarbox) {
         if self.tabs.len() >= MAX_TABS || self.in_frame.is_some() { return; }
         let at = self.active + 1;
+        self.split = None;
         let mut blank = Tab::blank(self);
         (blank.jar, blank.storage) = self.profile.store(&mut self.window, jarbox, super::wall());
         blank.jarbox = jarbox;
@@ -156,6 +159,7 @@ impl Browser {
         if self.tabs.len() <= 1 { self.quit(); }
         let going = self.active;
         let next = if going + 1 < self.tabs.len() { going + 1 } else { going - 1 };
+        self.split = None;
         // Take the closing page's frames and downloads down with it.
         let owner = self.doc.get().owner();
         self.ws_close_page(owner);
@@ -169,6 +173,29 @@ impl Browser {
         if self.jarbox != Jarbox::Private && !self.tabs.iter().enumerate().any(|(i, t)| i != self.active && t.jarbox == Jarbox::Private) { self.profile.forget_private(); }
         sex_pdx::serial_record!("[web.tab.closed] index={} count={} shown={}", going, self.tabs.len(), self.active);
         self.draw();
+    }
+
+    /// In a split view, paints the half that waits (as it last was) and the line
+    /// between the halves. Its frames and moving pictures wait until it shows.
+    pub(super) fn paint_split(&mut self) {
+        let Some((l, r)) = self.split_pair() else { return };
+        let other = if self.active == l { r } else { l };
+        let (px, pw) = self.pane();
+        let side = self.side();
+        let rest = self.surface.w - side;
+        let (ox, ow) = if px == side { (side + pw + super::SPLIT_GAP, rest - pw - super::SPLIT_GAP) } else { (side, px - super::SPLIT_GAP - side) };
+        let gap = if px == side { px + pw } else { ox + ow };
+        let (w, h) = (self.surface.w, self.surface.h);
+        let t = &mut self.tabs[other];
+        use core::mem::swap;
+        swap(&mut self.fonts.images, &mut t.images); swap(&mut self.fonts.svgs, &mut t.svgs);
+        let pixels = &mut self.window.pixels()[..self.surface.pixels];
+        if let Some(mut target) = sex_web::column(pixels, w, h, t.scroll, ox, ow) { sex_web::paint(&t.page, &mut self.fonts, &mut target, None); }
+        swap(&mut self.fonts.images, &mut t.images); swap(&mut self.fonts.svgs, &mut t.svgs);
+        for y in sex_web::BAR..h {
+            let row = (y * w) as usize;
+            for x in gap..(gap + super::SPLIT_GAP).min(w) { pixels[row + x as usize] = 0x0022_2C3A; }
+        }
     }
 
     /// The tab chip under window point (`x`, `y`), if any.

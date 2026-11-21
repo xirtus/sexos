@@ -38,8 +38,6 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
     let mut modifiers = egui::Modifiers::NONE;
     let mut events: Vec<egui::Event> = Vec::new();
     let mut frames: u64 = 0;
-    // The frame being painted; the window region only ever receives finished frames.
-    let mut back: Vec<u32> = Vec::new();
     // When egui wants the next frame; None waits for input.
     let mut due: Option<Instant> = Some(start);
     let (target, task) = sex_std::identity();
@@ -110,16 +108,12 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
                 }
             }
         }
-        let pixels = window.pixels();
-        let (w, h) = (width.min(pixels.len() / height.max(1)), height);
-        // Display reads the window's region whenever it composites (a cursor move, the
-        // clock, a neighbour's damage), not only when the frame is shown. Painting there
-        // directly showed half-drawn frames: the panel cleared, the widgets not yet
-        // drawn, for the ~45 ms a frame takes. Paint aside, then copy the finished frame.
-        back.resize(w * h, 0);
-        let stats = painter.paint(&ctx, output, &mut raster::Target { pixels: &mut back[..], width: w, height: h, stride: w });
-        pixels[..w * h].copy_from_slice(&back[..w * h]);
-        window.show_pixels(w, h);
+        let room = window.pixels().len();
+        let (w, h) = (width.min(room / height.max(1)), height);
+        // Painted aside and shown whole: Display reads the window whenever it composites,
+        // and a frame takes ~45 ms (see `sex_app::Window::frame`).
+        let stats = painter.paint(&ctx, output, &mut raster::Target { pixels: window.frame(w, h), width: w, height: h, stride: w });
+        window.show_frame(w, h);
         frames += 1;
         if frames == 1 || options.trace_frames {
             sex_std::sex_pdx::serial_record!(

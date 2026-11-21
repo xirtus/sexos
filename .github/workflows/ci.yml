@@ -436,8 +436,15 @@ jobs:
       run: |
         SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/ipc_v2_runtime_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipc2-1"
         SEXOS_GATE_CORES=4 SEXOS_GATE_CPU=max,-pku,+rdseed python3 scripts/ipc_v2_runtime_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipc2-4"
-    - name: Boot time to the desktop (3 cold boots, #309)
-      run: python3 scripts/boot_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/boot-time"
+    - name: Boot time to the desktop (3 cold boots each; 1 and 4 cores, and KVM 4 cores; #309)
+      run: |
+        python3 scripts/boot_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/boot-time"
+        # Services bring their devices up in parallel only with spare cores (smp::home_core).
+        SEXOS_GATE_CORES=4 python3 scripts/boot_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/boot-time-4"
+        if [ -e /dev/kvm ]; then sudo chmod a+rw /dev/kvm || true; fi
+        if [ -w /dev/kvm ]; then
+          SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/boot_time_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/boot-time-kvm-4"
+        else echo "[boot.timeline] no usable /dev/kvm on this runner; KVM boot time skipped"; fi
     - name: Big programs start time (#305)
       run: python3 scripts/program_start_gate.py --programs spreadeagle,kaleidoscope,assuit --runs 2 --max-ms 60000 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/big-starts"
     - name: IPv6-only network (SLAAC, RDNSS, DHCPv6, sockets, name lookup)
@@ -543,7 +550,7 @@ jobs:
       run: python3 scripts/program_web_private_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-private"
     - name: Browser privacy defaults (third-party cookies, HTTPS-first, GPC)
       run: python3 scripts/program_web_privacy_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-privacy"
-    - name: Kaleidoscope vertical tabs (Ctrl+Shift+,), page beside the strip, kept
+    - name: Kaleidoscope vertical tabs (Ctrl+Shift+,) and split view (Ctrl+Shift+\\)
       run: python3 scripts/program_web_vertical_tabs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-vtabs"
     - name: Browser site suite (encyclopedia, news, links, GitHub, webmail sign-in)
       run: python3 scripts/browser_sites_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-daily.img" --out "$RUNNER_TEMP/sexos-runtime/web-sites"
@@ -1023,6 +1030,14 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/corner-source.img"
         python3 scripts/hot_corner_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/corner-source.img" --out "$RUNNER_TEMP/sexos-desktop/corner"
+    - name: Desktop widgets (Super+Shift+W shows the clock and system cards on the wallpaper, and hides them)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/widgets-source.img"
+        python3 scripts/desktop_widgets_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/widgets-source.img" --out "$RUNNER_TEMP/sexos-desktop/widgets"
+    - name: Weather card (zone set to Berlin, the hidden helper asks Open-Meteo, the card shows its report)
+      run: |
+        truncate -s 256M "$RUNNER_TEMP/weather-source.img"
+        python3 scripts/weather_widget_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/weather-source.img" --out "$RUNNER_TEMP/sexos-desktop/weather"
     - name: Magnifier and colour filters (accessibility)
       run: |
         truncate -s 256M "$RUNNER_TEMP/access-source.img"
@@ -1088,7 +1103,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: image
     if: needs.image.outputs.full == 'true'
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -1099,6 +1114,11 @@ jobs:
         grep -m1 'model name' /proc/cpuinfo
         truncate -s 1G "$RUNNER_TEMP/latency-source.img"
         python3 scripts/desktop_latency_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/latency-source.img" --out "$RUNNER_TEMP/sexos-latency"
+    - name: Key-to-screen latency with four busy programs (4 cores on KVM; kernel pass 2 K3)
+      run: |
+        if [ ! -w /dev/kvm ]; then echo "[latency.kvm] no usable /dev/kvm on this runner; skipped"; exit 0; fi
+        truncate -s 256M "$RUNNER_TEMP/busy-latency-source.img"
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/latency_gate.py --max-p99-ms 200 --max-over-idle-ms 20 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/busy-latency-source.img" --out "$RUNNER_TEMP/sexos-latency/busy-4c"
     - name: Preserve latency evidence
       if: always()
       uses: actions/upload-artifact@v4

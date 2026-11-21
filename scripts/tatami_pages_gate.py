@@ -2,10 +2,10 @@
 """Tatami's R3 pages each round-trip one setting (workstream R3).
 
 Settings (installed on the disk with Mesh and Abacus) opens; PgUp walks back from the
-first page. Startup programs: Right on Mesh puts it in `startup.programs` (key 31).
-Shortcuts: Left on the overview's row wraps to Escape (key 34 = 29); the Shell picks it
+first page. Startup programs: Right on Mesh puts it in `startup.programs` (key 33).
+Shortcuts: Left on the overview's row wraps to Escape (key 36 = 29); the Shell picks it
 up from Files and Super+Esc then opens the overview instead of locking. Notifications:
-Right on Abacus hides its notifications (key 38); `run abacus` makes the Shell ask Files
+Right on Abacus hides its notifications (key 40); `run abacus` makes the Shell ask Files
 which program the row runs, and Files names Abacus (program 3), hidden. About: the page
 shows the kernel's numbers (cores, domains) and, from Files (`sex_pdx::facts`, Tatami
 only), the boot image's SHA-256, hashed a step per request. Updates and Storage, the
@@ -39,14 +39,14 @@ def main():
   g['focus'](153);time.sleep(.5);s=len(t());typ('run tatami');first_start(g,q,t,s);g['wait'](r'\[settings\.open\] generation=\d+',s,120);time.sleep(1)
   # Startup programs: six pages back from the first (Updates and Storage come last). Mesh is the third program.
   keys('pgup','pgup','pgup','pgup','pgup','pgup','down','down')
-  s=len(t());q.key('right');g['wait'](r'\[settings\.set\] key=31 value=4 status=0',s,30)
-  g['wait'](r'\[files\.config\.set\] caller=\d+ key=31 value=4 status=0',s,30)
+  s=len(t());q.key('right');g['wait'](r'\[settings\.set\] key=33 value=4 status=0',s,30)
+  g['wait'](r'\[files\.config\.set\] caller=\d+ key=33 value=4 status=0',s,30)
   # Shortcuts: the overview is the third row; Left from "default" wraps to Escape.
   keys('pgdn','down','down')
-  s=len(t());q.key('left');g['wait'](r'\[settings\.set\] key=34 value=29 status=0',s,30)
+  s=len(t());q.key('left');g['wait'](r'\[settings\.set\] key=36 value=29 status=0',s,30)
   # Notifications: Abacus is the fourth program.
   keys('pgdn','down','down','down')
-  s=len(t());q.key('right');g['wait'](r'\[settings\.set\] key=38 value=8 status=0',s,30)
+  s=len(t());q.key('right');g['wait'](r'\[settings\.set\] key=40 value=8 status=0',s,30)
   # About: four pages back from Notifications.
   s=len(t());keys('pgup','pgup','pgup','pgup')
   m=g['wait'](r'\[settings\.about\] cores=(\d+) domains=(\d+) limit_pages=(\d+)',s,30)
@@ -64,12 +64,12 @@ def main():
   m=g['wait'](r'\[settings\.facts\] page=storage status=0 slot=- version=- filesystem=sexfs (\d+) (\d+) health=none image=-\n',s,30)
   assert int(m[1])>=int(m[2])>0,m[0];out['storage']=m[0]
   # The Shell has the new shortcut: Super+Esc opens the overview, and closes it again.
-  time.sleep(.6);keys('down');g['wait'](r'\[shell\.config\.changed\] key=34 value=29',0,30)
+  time.sleep(.6);keys('down');g['wait'](r'\[shell\.config\.changed\] key=36 value=29',0,30)
   s=len(t());chord('meta_l','esc');g['wait'](r'\[shell\.wm\.action\] action=Overview ',s,30)
   assert '[shell.wm.action] action=Lock' not in t()[s:],'Super+Esc still locks'
   chord('meta_l','esc');time.sleep(.5)
   # Abacus runs: Files names the row's program to the Shell, hidden from notifications.
-  g['wait'](r'\[shell\.config\.changed\] key=38 value=8',0,30)
+  g['wait'](r'\[shell\.config\.changed\] key=40 value=8',0,30)
   g['focus'](153);time.sleep(.5);s=len(t());typ('run abacus')
   m=g['wait'](r'\[files\.config\.program\] row=(\d+) program=3\n',s,120)
   g['wait'](rf'\[shell\.notify\.program\] row={m[1]} program=3 hidden=1\n',s,30)

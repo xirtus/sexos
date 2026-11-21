@@ -119,14 +119,16 @@ pub mod id {
     pub const CORNER_BOTTOM_RIGHT: u16 = 28;
     pub const FIRST_RUN_NETWORK: u16 = 29;
     pub const FIRST_RUN_MICROPHONE: u16 = 30;
-    pub const STARTUP: u16 = 31;
-    pub const SHORTCUT_LAUNCHER: u16 = 32;
-    pub const SHORTCUT_TERMINAL: u16 = 33;
-    pub const SHORTCUT_OVERVIEW: u16 = 34;
-    pub const SHORTCUT_NOTIFICATIONS: u16 = 35;
-    pub const SHORTCUT_LOCK: u16 = 36;
-    pub const SHORTCUT_CLOSE: u16 = 37;
-    pub const NOTIFY_HIDDEN: u16 = 38;
+    pub const WIDGETS: u16 = 31;
+    pub const WEATHER: u16 = 32;
+    pub const STARTUP: u16 = 33;
+    pub const SHORTCUT_LAUNCHER: u16 = 34;
+    pub const SHORTCUT_TERMINAL: u16 = 35;
+    pub const SHORTCUT_OVERVIEW: u16 = 36;
+    pub const SHORTCUT_NOTIFICATIONS: u16 = 37;
+    pub const SHORTCUT_LOCK: u16 = 38;
+    pub const SHORTCUT_CLOSE: u16 = 39;
+    pub const NOTIFY_HIDDEN: u16 = 40;
 }
 
 /// Programs (program store names) the Shell may start at login and whose
@@ -201,6 +203,8 @@ pub const KEYS: &[Key] = &[
     Key { id: id::CORNER_TOP_RIGHT, name: "desktop.corner_top_right", label: "Top-right corner", kind: Kind::Choice(CORNER_ACTIONS), default: 0 },
     Key { id: id::CORNER_BOTTOM_LEFT, name: "desktop.corner_bottom_left", label: "Bottom-left corner", kind: Kind::Choice(CORNER_ACTIONS), default: 0 },
     Key { id: id::CORNER_BOTTOM_RIGHT, name: "desktop.corner_bottom_right", label: "Bottom-right corner", kind: Kind::Choice(CORNER_ACTIONS), default: 0 },
+    Key { id: id::WIDGETS, name: "desktop.widgets", label: "Clock, weather and system widgets on the desktop", kind: Kind::Bool, default: 0 },
+    Key { id: id::WEATHER, name: "desktop.weather", label: "Weather widget (asks Open-Meteo about your clock's city)", kind: Kind::Bool, default: 1 },
     Key { id: id::SCALE, name: "display.scale", label: "Scale (0 automatic)", kind: int(0, 3), default: 0 },
     Key { id: id::LAYOUT, name: "keyboard.layout", label: "Keyboard layout", kind: Kind::Choice(LAYOUTS), default: 0 },
     Key { id: id::REPEAT_DELAY, name: "keyboard.repeat_delay_ms", label: "Repeat delay (ms)", kind: int(150, 1000), default: 400 },

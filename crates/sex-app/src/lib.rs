@@ -82,6 +82,8 @@ pub struct Window {
     size: (usize, usize),
     /// Events that arrived while a file request waited for its answer.
     held: [Option<Event>; 16],
+    /// The frame being painted (see [`Window::frame`]).
+    back: alloc::vec::Vec<u32>,
 }
 
 impl Window {
@@ -94,7 +96,7 @@ impl Window {
         call(SLOT_DISPLAY, 0xEC, surface, (56u64 << 32) | 200, (400u64 << 32) | 640);
         call(SLOT_SHELL, 0xFA, surface, TITLE_ID, (identity.target_pd as u64) << 8);
         let (w, h) = sex_pdx::pixel_region::area(640, 400);
-        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, size: (w as usize, h as usize), held: [const { None }; 16] };
+        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, size: (w as usize, h as usize), held: [const { None }; 16], back: alloc::vec::Vec::new() };
         window.show(b"");
         call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
         window
@@ -114,6 +116,22 @@ impl Window {
     /// (`KEYPAD`: [`Key::keypad`]). Lasts for this run; ask again to change it.
     pub fn want_keys(&self, flags: u64) -> bool {
         sex_pdx::pdx_call_checked(SLOT_SHELL, sex_pdx::app_key::OP_KEYS, flags, 0, 0).is_ok()
+    }
+    /// A private `width` by `height` frame to paint whole, then show with
+    /// [`Window::show_frame`]. Display reads the window's pixels whenever it composites
+    /// (a cursor move, the clock, a neighbour's damage), so a program that clears and
+    /// repaints in [`Window::pixels`] can be caught half drawn; this one never is. It
+    /// keeps the last frame painted, so a program may repaint only what changed.
+    pub fn frame(&mut self, width: usize, height: usize) -> &mut [u32] {
+        if self.back.len() < width * height { self.back.resize(width * height, 0); }
+        &mut self.back[..width * height]
+    }
+    /// Copies the finished [`Window::frame`] into the window and shows it.
+    pub fn show_frame(&mut self, width: usize, height: usize) {
+        let pixels = self.pixels();
+        let n = (width * height).min(pixels.len()).min(self.back.len());
+        pixels[..n].copy_from_slice(&self.back[..n]);
+        self.show_pixels(width, height);
     }
     /// Shows the first `width` by `height` pixels in the window instead of its text.
     pub fn show_pixels(&mut self, width: usize, height: usize) {
@@ -751,17 +769,31 @@ pub mod files {
         if path.len() > w::PATH_BYTES { return Err(w::NAME); }
         let _turn = Turn::take();
         let mut tries = 0;
+        let mut starting: Option<(u64, u32)> = None;
         loop {
             let region = region()?;
             region[..path.len()].copy_from_slice(path);
             fill(&mut region[w::PATH_BYTES..]);
             match once(&mut hold, kind, path.len(), offset, length) {
                 Err(w::DENIED) if tries < retries => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
+                // The run started before Shell's bind reached Files: wait for it, by time and
+                // not by a count, since on a quiet core a yield returns at once.
+                Err(w::STARTING) if kind == w::ARGS => {
+                    let (since, round) = starting.get_or_insert((sex_pdx::get_ticks(), 0));
+                    if sex_pdx::get_ticks().saturating_sub(*since) > STARTING_WAIT_TICKS {
+                        sex_pdx::serial_record!("[files.client.starting.timeout] kind={}", kind);
+                        return Err(w::DENIED);
+                    }
+                    *round += 1;
+                    crate::thread::pause(*round);
+                }
                 Ok(value) => return Ok(take(value, &region[w::PATH_BYTES..])),
                 Err(e) => return Err(e),
             }
         }
     }
+    /// How long a request waits for its just-started run's bind (`w::STARTING`).
+    const STARTING_WAIT_TICKS: u64 = 5_000;
     fn mine(m: &sex_pdx::PdxMessage, seq: u32) -> bool {
         m.type_id == 1 && m.caller_pd == FILES && w::decode_reply(m.arg0).is_some_and(|r| r.0 == seq)
     }

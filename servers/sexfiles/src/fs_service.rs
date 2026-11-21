@@ -764,7 +764,19 @@ pub fn handle(caller: u32, caller_task: u32, a: u64, offset: u64, length: u64) -
             let bound = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] };
             // A program may eject (UNMOUNT) a volume its grant covers whole, checked with
             // its other paths below; mounting stays Spindle's.
-            if !bound.is_some_and(|b| bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)) || matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if matches!(r.kind, w::INSTALL | w::UPDATE | w::MOUNT) { return w::reply(r.seq, w::DENIED, 0); }
+            if !bound.is_some_and(|b| bound_sender(caller, caller_task, b.task, r.kind == w::PREPARE)) {
+                // A run just started can ask for its arguments before Shell's bind gets here:
+                // it waits for the bind rather than starting with none.
+                let bound_task = bound.map_or(0, |b| b.task);
+                let starting = r.kind == w::ARGS && binding_due(caller, caller_task, bound_task);
+                static mut DENIALS_LOGGED: u32 = 0;
+                if unsafe { DENIALS_LOGGED < 64 } {
+                    unsafe { DENIALS_LOGGED += 1; }
+                    sex_pdx::serial_record!("[files.program.denied] target={} task={} bound={} kind={} starting={}", caller, caller_task, bound_task, r.kind, starting as u8);
+                }
+                return w::reply(r.seq, if starting { w::STARTING } else { w::DENIED }, 0);
+            }
             // A terminal the person started with Spindle's `spindle` command may start programs
             // attached to it (`console_relay`). Any program may PREPARE a run of its own
             // (`sex_pdx::launch`); `program_prepare` lets it pass on only what it holds.
@@ -918,7 +930,10 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // Only Spindle, Shell or a run holding the whole filesystem.
         if let Some(k) = program {
             let b = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
-            if !b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/") { return w::reply(r.seq, w::DENIED, 0); }
+            if !b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/") {
+                sex_pdx::serial_record!("[files.program.denied] target={} task={} bound={} kind={} why=home_needs_whole args={}", caller, b.task, b.task, r.kind, core::str::from_utf8(&b.args[..b.args_len]).unwrap_or("?"));
+                return w::reply(r.seq, w::DENIED, 0);
+            }
         }
         let Some(fs) = fs else { return w::reply(r.seq, w::UNAVAILABLE, 0) };
         if writes_pending() { commit_writes(fs); }
@@ -1117,6 +1132,11 @@ static mut NEXT_TICKET: u32 = 0;
 fn bound_sender(target: u32, sender_task: u32, bound_task: u32, preparing: bool) -> bool {
     // Worker file I/O remains valid; launch delegation belongs to the main run.
     bound_task != 0 && program_live(target, bound_task) && (!preparing || (sender_task != 0 && sender_task == bound_task))
+}
+/// `task` runs live in row `target`, is not the task bound there, and a program read
+/// still waits for Shell's bind: that bind is on its way.
+fn binding_due(target: u32, task: u32, bound_task: u32) -> bool {
+    task != 0 && task != bound_task && unsafe { (*core::ptr::addr_of!(LOADED)).1 != 0 } && program_live(target, task)
 }
 fn current_ticket_owner(target: u32) -> Option<TicketOwner> {
     let index = program_index(target)?;
