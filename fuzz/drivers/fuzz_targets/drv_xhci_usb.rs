@@ -86,7 +86,7 @@ impl Model {
             let at = base + idx * 16;
             let len = (d[2] & 0x1ffff) as u64;
             let ptr = d[0] as u64 | (d[1] as u64) << 32;
-            let input = (kind == 3 && d[3] & (1 << 16) != 0) || (kind == 1 && dci & 1 == 1);
+            let input = (kind == 3 && d[3] & (1 << 16) != 0) || ((kind == 1 || kind == 5) && dci & 1 == 1);
             let mut residual = 0u32;
             if input && len > 0 && self.in_pool(ptr, len) && !self.done() {
                 let want = self.u8() as u64;
@@ -192,10 +192,17 @@ fn run(d: &[u8]) {
     if let Ok(pool) = sex_pdx::dma_pool::DmaRegionPool::new(view) {
         if let Ok(x) = xhci::Xhci::start(CAP, LIMIT, pool) {
             let mut u = usb::Usb::new(x);
+            // Bell's sound region, so sound cards and microphones are driven too; Bell
+            // listens on some inputs, which starts a microphone.
+            let mut region = vec![0u64; (sex_pdx::usb_audio::BYTES / 8) as usize];
+            u.audio_region = region.as_mut_ptr() as u64;
+            let shared = unsafe { sex_pdx::usb_audio::Shared::at(region.as_mut_ptr() as *mut u8) };
+            shared.set_listen(flags & 0x20 != 0);
             let _ = u.scan();
             for _ in 0..48 {
                 for _ in 0..64 { let Some(e) = u.x.event() else { break }; u.event(e); }
                 u.service();
+                let _ = u.audio_pump();
                 if with(|m| m.done()) { break; }
             }
             let _ = u.summary();
