@@ -454,6 +454,14 @@ pub fn unmount(fs: &mut Fs<'static, FsDisk>, path: &[u8]) -> Result<u32, u8> {
     if let Some(disk) = usb { unsafe { EJECTED |= 1 << disk; } }
     Ok(0)
 }
+/// Tatami's Storage page (`sex_pdx::facts`): a `volume=` line per mounted volume.
+pub fn facts(mut fs: Option<&mut Fs<'static, FsDisk>>, out: &mut String) {
+    for m in mounts().iter_mut() {
+        let free = with(fs.as_deref_mut(), m, |v, d| v.statfs(d)).map_or(String::from("-"), |(_, free)| alloc::format!("{}", free / 4096));
+        let source = match m.source { Source::Image { .. } => "image", Source::Usb { .. } => "usb", Source::Device { .. } => "disk" };
+        out.push_str(&alloc::format!("volume={} {} {} {} {} {}\n", m.volume.format().name(), m.len, free, source, (m.read_only() || m.volume.read_only()) as u8, m.name));
+    }
+}
 /// SYNC with no path reaches every volume too.
 pub fn sync_all(fs: &mut Fs<'static, FsDisk>) {
     for m in mounts().iter_mut().filter(|m| !m.read_only()) {
@@ -471,6 +479,10 @@ pub fn attach_device(sectors: u64) {
         Err(e) => { sex_pdx::serial_record!("[files.media.device.none] sectors={} error={:?}", sectors, e); return; }
     };
     sex_pdx::serial_record!("[files.media.device] sectors={} volumes={}", sectors, found.len());
+    // Windows device encryption: say so, or the missing volume looks like a bug.
+    for (start, len) in sv::bitlocker(&mut device).unwrap_or_default() {
+        sex_pdx::serial_record!("[files.media.bitlocker] start={} sectors={} readable=0 reason=encrypted", start, len);
+    }
     for (part, f) in found.into_iter().enumerate() {
         if mounts().len() >= MOUNTS_MAX { break; }
         let name = mount_name(&f.volume.label(), b"disk", part);

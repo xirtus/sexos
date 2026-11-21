@@ -6,7 +6,7 @@
 * Right shows column B with the cached formula results recalculated by the engine
   (B5 =SUM(B2:B4) = 1650, B6 =B5*12 = 19800).
 * Typing 40 into B2 and Enter recalculates: B5 490, B6 5880.
-* Ctrl+S writes the xlsx; the window closes.
+* Ctrl+S writes the xlsx; Ctrl+P writes welcome.pdf beside it; the window closes.
 * A second `run spreadeagle` reads the saved file back: B2 is 40 and the formulas still give
   490 and 5880, so GridCraft's writer and reader round-trip on SexOS.
 * Shift+arrows select A1:B4; Ctrl+Shift+D sorts it by column B, Z to A, under its header
@@ -73,6 +73,10 @@ def main():
   m=g['chord']('ctrl','s',r'\[spreadeagle\.saved\] name=welcome\.xlsx bytes=(\d+)\n')
   assert int(m[1])>2000,f'saved file is too small: {m[0]}'
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-edited.ppm')})
+  # Ctrl+P: SexOS prints to a PDF beside the file.
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('ctrl','p')),(False,('p','ctrl')))for x in ks]})
+  pdf=g['wait'](r'\[spreadeagle\.pdf\] name=welcome\.pdf bytes=(\d+)\n',s,300)
+  assert int(pdf[1])>500,f'PDF is too small: {pdf[0]}'
   close(o)
   o=opened()
   s=len(t());q.key('right');column('B',r'Cost\|40\|300\|150\|490\|5880\|\|',s)

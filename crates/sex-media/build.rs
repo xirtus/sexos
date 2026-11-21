@@ -9,6 +9,11 @@ fn main() {
     let root = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()).join("../..");
     let ff = env::var("SEXOS_FFMPEG").map(PathBuf::from).unwrap_or_else(|_| root.join("target/ffmpeg"));
     println!("cargo:rerun-if-env-changed=SEXOS_FFMPEG");
+    // Restored caches keep old modification times, so a build script run cached with
+    // one FFmpeg profile is not rerun when a later job restores another profile's
+    // archives (the link list then lacks x264/aom). CI names the profile here; a
+    // changed value reruns this script whatever the file times say.
+    println!("cargo:rerun-if-env-changed=SEXOS_FFMPEG_PROFILE");
     println!("cargo:rerun-if-changed=src/bridge.c");
     println!("cargo:rerun-if-changed={}", ff.join("lib/libavcodec.a").display());
     println!("cargo::rustc-check-cfg=cfg(ffmpeg)");
@@ -45,7 +50,19 @@ fn main() {
     assert!(status.success(), "compiling src/bridge.c failed");
     let lib = out.join("libmediabridge.a");
     let _ = std::fs::remove_file(&lib);
-    let mut objects = vec![obj];
+    // The SIMD bench (src/bench.c): baseline flags like the bridge; the codecs choose
+    // their AVX code at run time.
+    println!("cargo:rerun-if-changed=src/bench.c");
+    let bench = out.join("bench.o");
+    assert!(Command::new("clang")
+        .args(["--target=x86_64-unknown-none-elf", "-nostdinc", "-std=c17", "-O2", "-fPIC", "-ffunction-sections", "-fdata-sections"])
+        .args(["-msse2", "-mno-avx", "-mno-red-zone", "-fno-stack-protector", "-Wall", "-Werror", "-D_GNU_SOURCE"])
+        .arg("-isystem").arg(format!("{}/include", resource.trim()))
+        .arg("-isystem").arg(ff.join("include-c"))
+        .arg("-I").arg(ff.join("include"))
+        .args(["-c", "src/bench.c", "-o"]).arg(&bench)
+        .status().expect("clang bench").success(), "compiling src/bench.c failed");
+    let mut objects = vec![obj, bench];
     if recording {
         println!("cargo:rerun-if-changed=src/recording/bridge.c");
         let object = out.join("recording_bridge.o");

@@ -13,6 +13,12 @@
 //! The microphone is the controller's first input stream: while someone may listen,
 //! the chosen input pin (`crate::mic`) records through an input converter into a
 //! second ring, and Bell copies out each period the controller has filled.
+//!
+//! Interrupts: when BOOT gave the lease an MSI or MSI-X vector, every period of both
+//! rings ends with an interrupt-on-completion, so Bell sleeps until a period is
+//! played or recorded instead of looking every tick. Bell arms the controller's
+//! interrupt only while sound plays (`arm`) and acknowledges each wake (`ack`).
+//! Without a vector it polls exactly as before.
 use sex_pdx::memory_region as m;
 
 // ── Controller registers (HDA 1.0a, section 3.3) ─────────────────────
@@ -46,6 +52,13 @@ const SD_BDPL: u32 = 0x18;
 const SD_BDPU: u32 = 0x1c;
 const SD_CTL_RESET: u32 = 1;
 const SD_CTL_RUN: u32 = 2;
+/// Interrupt on completion: the stream raises its status bit at a flagged period end.
+const SD_CTL_IOCE: u32 = 1 << 2;
+/// Buffer completion, FIFO error and descriptor error; each is cleared by writing 1.
+const SD_STS_BCIS: u8 = 1 << 2;
+const SD_STS_ALL: u8 = 0x1c;
+/// Global interrupt enable; bits 0..29 enable one stream descriptor each.
+const INTCTL_GIE: u32 = 1 << 31;
 /// The tag the output converter listens for; 0 means "no stream".
 const STREAM_TAG: u32 = 1;
 /// The tag the input converter sends with.
@@ -135,7 +148,20 @@ pub struct Hda {
     mic_sd: u32,
     mic_on: Option<usize>,
     mic_tail: usize,
+    /// Widgets one path search may still visit (see `WALK_BUDGET`).
+    walk: u32,
+    /// Streams flag period ends for an interrupt (BOOT gave the lease a vector).
+    irq: bool,
+    /// The INTCTL value written last.
+    armed: u32,
+    /// Period ends seen by `ack`.
+    pub completions: u64,
 }
+
+/// Widgets one pin's path search visits at most. Paths are at most 6 widgets with
+/// up to 16 connections each, so a dense or looping mixer graph (or a hostile
+/// codec) could otherwise cost 16^5 lookups; real codecs need a few dozen.
+const WALK_BUDGET: u32 = 512;
 
 pub const MAX_OUTPUTS: usize = 8;
 const MAX_MICS: usize = 4;
@@ -148,19 +174,40 @@ struct Mic { codec: u32, afg: u32, pin: u32, path: [u32; 6], pick: [u32; 6], len
 /// `device` is the jack's default-configuration device: 0 line out, 1 speaker,
 /// 2 headphones.
 #[derive(Clone, Copy)]
-struct Route { codec: u32, afg: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32, sense: bool }
+struct Route { codec: u32, afg: u32, pin: u32, dac: u32, path: [u32; 6], len: usize, rank: u32, device: u32, sense: bool,
+    /// A monitor over HDMI or DisplayPort rather than an analog jack.
+    display: Option<crate::hdmi::Display> }
 
 impl Hda {
     fn reg<T>(&self, offset: u32) -> *mut T {
         assert!(offset as usize + size_of::<T>() <= self.length, "HDA_MMIO_OUTSIDE_VIEW");
         (self.mmio + offset as usize) as *mut T
     }
+    #[cfg(not(device_model))]
     fn r8(&self, o: u32) -> u8 { unsafe { self.reg::<u8>(o).read_volatile() } }
+    #[cfg(not(device_model))]
     fn r16(&self, o: u32) -> u16 { unsafe { self.reg::<u16>(o).read_volatile() } }
+    #[cfg(not(device_model))]
     fn r32(&self, o: u32) -> u32 { unsafe { self.reg::<u32>(o).read_volatile() } }
+    #[cfg(not(device_model))]
     fn w8(&mut self, o: u32, v: u8) { unsafe { self.reg::<u8>(o).write_volatile(v) } }
+    #[cfg(not(device_model))]
     fn w16(&mut self, o: u32, v: u16) { unsafe { self.reg::<u16>(o).write_volatile(v) } }
+    #[cfg(not(device_model))]
     fn w32(&mut self, o: u32, v: u32) { unsafe { self.reg::<u32>(o).write_volatile(v) } }
+    // Host fuzzing (fuzz/drivers, drv_hda): the registers are a device model.
+    #[cfg(device_model)]
+    fn r8(&self, o: u32) -> u8 { let _ = self.reg::<u8>(o); crate::device_model::read(o, 1) as u8 }
+    #[cfg(device_model)]
+    fn r16(&self, o: u32) -> u16 { let _ = self.reg::<u16>(o); crate::device_model::read(o, 2) as u16 }
+    #[cfg(device_model)]
+    fn r32(&self, o: u32) -> u32 { let _ = self.reg::<u32>(o); crate::device_model::read(o, 4) }
+    #[cfg(device_model)]
+    fn w8(&mut self, o: u32, v: u8) { let _ = self.reg::<u8>(o); crate::device_model::write(o, 1, v as u32) }
+    #[cfg(device_model)]
+    fn w16(&mut self, o: u32, v: u16) { let _ = self.reg::<u16>(o); crate::device_model::write(o, 2, v as u32) }
+    #[cfg(device_model)]
+    fn w32(&mut self, o: u32, v: u32) { let _ = self.reg::<u32>(o); crate::device_model::write(o, 4, v) }
     fn dma<T>(&self, at: usize) -> *mut T {
         assert!(at + size_of::<T>() <= POOL_NEEDS, "HDA_DMA_OUTSIDE_POOL");
         (self.dma_va + at) as *mut T
@@ -235,7 +282,9 @@ impl Hda {
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
         self.corb_wp = wp;
         self.w16(CORBWP, wp);
-        loop {
+        // A codec may queue unsolicited responses (jack events) ahead of the
+        // answer, but not forever: past a full ring of them the answer is lost.
+        for _ in 0..256 {
             if !self.wait(|h| h.r16(RIRBWP) & 0xff != h.rirb_rp) { return None; }
             self.rirb_rp = (self.rirb_rp + 1) & 0xff;
             let at = RIRB_AT + self.rirb_rp as usize * 8;
@@ -244,6 +293,7 @@ impl Hda {
             self.w8(RIRBSTS, 0x05);
             if extra & 0x10 == 0 { return Some(answer); } // skip unsolicited responses
         }
+        None
     }
     fn param(&mut self, nid: u32, p: u32) -> u32 { self.verb(nid, GET_PARAMETER, p).unwrap_or(0) }
 
@@ -274,6 +324,8 @@ impl Hda {
 
     /// A path from `nid` back to an output converter through mixers and selectors.
     fn find_dac(&mut self, nid: u32, depth: usize, route: &mut Route) -> bool {
+        if self.walk == 0 { return false; }
+        self.walk -= 1;
         let caps = self.param(nid, P_WIDGET);
         let kind = caps >> 20 & 0xf;
         route.path[depth] = nid;
@@ -304,13 +356,15 @@ impl Hda {
             let caps = self.param(nid, P_WIDGET);
             if caps >> 20 & 0xf != WIDGET_PIN { continue; }
             let pin = self.param(nid, P_PIN);
-            // Output capable; not HDMI or DisplayPort (those go to the monitor).
-            if pin & 0x10 == 0 || pin & (1 << 7 | 1 << 24) != 0 { continue; }
+            if pin & 0x10 == 0 { continue; }
             let config = self.verb(nid, GET_CONFIG_DEFAULT, 0).unwrap_or(0);
             if config >> 30 == 1 { continue; } // nothing is wired to this jack
             let device = config >> 20 & 0xf;
-            let rank = match device { 1 => 0, 2 => 1, 0 => 2, 0xf | 5 => continue, _ => 3 };
-            let mut route = Route { codec: self.codec, afg, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device, sense: pin & 1 << 2 != 0 };
+            // HDMI and DisplayPort pins send sound to a monitor; they come last.
+            let display = crate::hdmi::display_pin(pin, config);
+            let rank = if display.is_some() { 4 } else { match device { 1 => 0, 2 => 1, 0 => 2, 0xf | 5 => continue, _ => 3 } };
+            let mut route = Route { codec: self.codec, afg, pin: nid, dac: 0, path: [0; 6], len: 0, rank, device, sense: pin & 1 << 2 != 0, display };
+            self.walk = WALK_BUDGET;
             if self.find_dac(nid, 0, &mut route) && n < out.len() { out[n] = Some(route); n += 1; }
         }
         n
@@ -318,6 +372,8 @@ impl Hda {
 
     /// A path from the input converter or mixer `nid` up to the pin `pin`.
     fn find_pin(&mut self, nid: u32, pin: u32, depth: usize, mic: &mut Mic) -> bool {
+        if self.walk == 0 { return false; }
+        self.walk -= 1;
         mic.path[depth] = nid;
         mic.len = depth + 1;
         if nid == pin && depth > 0 { return true; }
@@ -350,6 +406,7 @@ impl Hda {
             let Some(input) = crate::mic::input(config, caps) else { continue };
             for &adc in &adcs[..n_adc] {
                 let mut mic = Mic { codec: self.codec, afg, pin, path: [0; 6], pick: [0; 6], len: 0, input };
+                self.walk = WALK_BUDGET;
                 if self.find_pin(adc, pin, 0, &mut mic) {
                     sex_pdx::serial_record!("[bell.hda.input] codec={} pin={} adc={} device={:#x} rank={} sense={} hops={}",
                         self.codec, pin, adc, input.device, input.rank, input.sense as u8, mic.len);
@@ -385,6 +442,44 @@ impl Hda {
         let control = 0x40 | if self.verb(pin, GET_CONFIG_DEFAULT, 0).unwrap_or(0) >> 20 & 0xf == 2 { 0x80 } else { 0 };
         let _ = self.verb(pin, SET_PIN_CONTROL, control);
         if caps & 1 << 16 != 0 { let _ = self.verb(pin, SET_EAPD, 0x02); }
+        if route.display.is_some() { self.open_display(route); }
+    }
+
+    /// The digital half of a monitor route: two channels on the converter, digital
+    /// output on, the monitor's ELD read (for its name and formats) and the audio
+    /// InfoFrame loaded and sent.
+    fn open_display(&mut self, route: &Route) {
+        use crate::hdmi as d;
+        let (pin, cvt) = (route.pin, route.dac);
+        let _ = self.verb(cvt, d::SET_CVT_CHAN_COUNT, 1);
+        let _ = self.verb(cvt, d::SET_DIGI_CONVERT_1, d::DIGITAL_ENABLE);
+        let sense = self.verb(pin, GET_PIN_SENSE, 0).unwrap_or(0);
+        let mut channels = 2u8;
+        if sense & d::SENSE_PRESENT != 0 && sense & d::SENSE_ELD_VALID != 0 {
+            let size = (self.verb(pin, d::GET_HDMI_DIP_SIZE, 0x08).unwrap_or(0) & 0xff) as usize;
+            let mut eld = [0u8; 256];
+            let size = size.min(eld.len());
+            for (i, b) in eld[..size].iter_mut().enumerate() {
+                let v = self.verb(pin, d::GET_HDMI_ELDD, i as u32).unwrap_or(0);
+                if v & 1 << 31 == 0 { break; }
+                *b = v as u8;
+            }
+            match d::parse_eld(&eld[..size]) {
+                Some(e) => {
+                    channels = 2.min(e.pcm_channels);
+                    sex_pdx::serial_record!("[bell.hdmi.monitor] codec={} pin={} name={} channels={} rates={:#x} dp={} plays_48k={}",
+                        route.codec, pin, core::str::from_utf8(e.name()).unwrap_or("?"), e.pcm_channels, e.pcm_rates, e.displayport as u8, e.plays_48k() as u8);
+                }
+                None => sex_pdx::serial_record!("[bell.hdmi.monitor] codec={} pin={} eld=invalid size={}", route.codec, pin, size),
+            }
+        } else {
+            sex_pdx::serial_record!("[bell.hdmi.monitor] codec={} pin={} present={} eld_valid=0", route.codec, pin, (sense & d::SENSE_PRESENT != 0) as u8);
+        }
+        let frame = d::audio_infoframe(channels);
+        let _ = self.verb(pin, d::SET_HDMI_DIP_INDEX, 0);
+        for b in frame { let _ = self.verb(pin, d::SET_HDMI_DIP_DATA, b as u32); }
+        // Send it every frame ("best effort").
+        let _ = self.verb(pin, d::SET_HDMI_DIP_XMIT, 0xc0);
     }
 
     fn stream(&mut self) -> Result<(), &'static str> {
@@ -399,20 +494,22 @@ impl Hda {
 
     fn start(&mut self) -> Result<(), &'static str> {
         let sd = self.sd;
-        self.w32(sd + SD_CTL, STREAM_TAG << 20 | SD_CTL_RUN);
+        self.w32(sd + SD_CTL, STREAM_TAG << 20 | SD_CTL_RUN | self.ioce());
         if !self.wait(|h| h.r32(sd + SD_CTL) & SD_CTL_RUN != 0) { return Err("stream_run"); }
         Ok(())
     }
 
     /// Bring up the controller, a codec, an output route and the running stream.
-    pub fn open(view: m::RegionView, dma: m::RegionView) -> Result<Hda, &'static str> {
+    /// `irq`: the lease has a vector, so periods end with an interrupt.
+    pub fn open(view: m::RegionView, dma: m::RegionView, irq: bool) -> Result<Hda, &'static str> {
         let dma_pa = dma.dma_address.ok_or("no_dma_address")?;
         if (dma.length as usize) < POOL_NEEDS { return Err("dma_small"); }
         let mut h = Hda { mmio: view.virtual_address as usize, length: view.length as usize,
             dma_va: dma.virtual_address as usize, dma_pa, corb_wp: 0, rirb_rp: 0, codec: 0, sd: 0,
             tail: 0, head: 1, queued: [false; PERIODS], pending: 0, vendor: 0, dac: 0, pins: 0,
             routes: [None; MAX_OUTPUTS], outputs: 0, on: 0, home: 0, auto: true,
-            mics: [None; MAX_MICS], mic_count: 0, mic_sd: 0, mic_on: None, mic_tail: 0 };
+            mics: [None; MAX_MICS], mic_count: 0, mic_sd: 0, mic_on: None, mic_tail: 0, walk: 0,
+            irq, armed: 0, completions: 0 };
         if h.length < 0x180 { return Err("short_view"); }
         h.w32(INTCTL, 0);
         let codecs = h.reset()?;
@@ -424,6 +521,13 @@ impl Hda {
             if codecs & 1 << cad == 0 { continue; }
             h.codec = cad;
             let vendor = h.param(0, P_VENDOR);
+            // Intel display codecs show their monitor pins only once asked to.
+            if crate::hdmi::is_intel_display_codec(vendor) {
+                let v = h.verb(crate::hdmi::INTEL_VENDOR_NODE, crate::hdmi::INTEL_GET_VENDOR, 0).unwrap_or(0);
+                if v & crate::hdmi::INTEL_ALL_PINS == 0 {
+                    let _ = h.verb(crate::hdmi::INTEL_VENDOR_NODE, crate::hdmi::INTEL_SET_VENDOR, v | crate::hdmi::INTEL_ALL_PINS);
+                }
+            }
             let root = h.param(0, P_NODES);
             sex_pdx::serial_record!("[bell.hda.probe] address={} vendor={:#010x} nodes={:#x} corbrp={} rirbwp={} rirbsts={:#x}",
                 cad, vendor, root, h.r16(CORBRP), h.r16(RIRBWP), h.r8(RIRBSTS));
@@ -436,11 +540,19 @@ impl Hda {
                 sex_pdx::serial_record!("[bell.hda.codec] address={} vendor={:#010x} function={} outputs={}", cad, vendor, afg, n);
                 for r in routes[..n].iter().flatten() {
                     if h.outputs < MAX_OUTPUTS { h.routes[h.outputs] = Some(*r); h.outputs += 1; }
+                    if let Some(d) = r.display {
+                        sex_pdx::serial_record!("[bell.hda.display] codec={} pin={} converter={} kind={:?}", cad, r.pin, r.dac, d);
+                    }
                 }
-                if n > 0 && first_vendor.is_none() { first_vendor = Some((vendor, cad)); }
+                // Sound goes to the first codec with an analog output; a monitor plays
+                // by default only when there is no analog output at all.
+                if routes[..n].iter().flatten().any(|r| r.display.is_none()) && first_vendor.is_none() { first_vendor = Some((vendor, cad)); }
             }
         }
-        let (vendor, first) = first_vendor.ok_or("no_analog_output")?;
+        let (vendor, first) = match first_vendor {
+            Some(f) => f,
+            None => h.routes[..h.outputs].iter().flatten().next().map(|r| (0, r.codec)).ok_or("no_output")?,
+        };
         h.vendor = vendor;
         let best = h.routes[..h.outputs].iter().flatten().filter(|r| r.codec == first)
             .min_by_key(|r| r.rank).copied().ok_or("no_route")?;
@@ -521,6 +633,48 @@ impl Hda {
     pub fn output(&self, k: usize) -> Option<(u32, u32, u32)> {
         self.routes.get(k).copied().flatten().map(|r| (r.device, r.codec, r.pin))
     }
+    /// Whether output `k` is a monitor, and over which.
+    pub fn display(&self, k: usize) -> Option<crate::hdmi::Display> {
+        self.routes.get(k).copied().flatten().and_then(|r| r.display)
+    }
+
+    fn ioce(&self) -> u32 { if self.irq { SD_CTL_IOCE } else { 0 } }
+
+    /// True while periods end with an interrupt.
+    pub fn interrupts(&self) -> bool { self.irq }
+
+    /// The vector could not be unmasked after all: stay quiet and poll.
+    pub fn poll_instead(&mut self) {
+        self.arm(false);
+        self.irq = false;
+    }
+
+    /// Lets the playback stream (and the microphone's, when there is one) interrupt,
+    /// or stops them: Bell arms only while sound plays, so an idle Bell is never woken.
+    pub fn arm(&mut self, on: bool) {
+        if !self.irq { return; }
+        let mut want = 0;
+        if on {
+            want = INTCTL_GIE | 1 << ((self.sd - SD_BASE) / SD_STRIDE);
+            if self.mic_sd != 0 { want |= 1 << ((self.mic_sd - SD_BASE) / SD_STRIDE); }
+        }
+        if want != self.armed { self.w32(INTCTL, want); self.armed = want; }
+    }
+
+    /// Clears the streams' completion bits, so the next period end interrupts again
+    /// (a message-signalled interrupt fires on the edge). Returns how many were set.
+    pub fn ack(&mut self) -> u32 {
+        if !self.irq { return 0; }
+        let mut n = 0;
+        for sd in [self.sd, self.mic_sd] {
+            if sd == 0 { continue; }
+            let sts = self.r8(sd + SD_STS);
+            if sts & SD_STS_ALL != 0 { self.w8(sd + SD_STS, sts & SD_STS_ALL); }
+            n += (sts & SD_STS_BCIS != 0) as u32;
+        }
+        self.completions += n as u64;
+        n
+    }
 
     /// True when there is an input to record from and a stream to record with.
     pub fn has_mic(&self) -> bool { self.mic_sd != 0 }
@@ -541,7 +695,8 @@ impl Hda {
             unsafe {
                 self.dma::<u64>(at).write_volatile(self.dma_pa + (ring_at + i * PERIOD_BYTES) as u64);
                 self.dma::<u32>(at + 8).write_volatile(PERIOD_BYTES as u32);
-                self.dma::<u32>(at + 12).write_volatile(0);
+                // Bit 0: interrupt on completion of this period.
+                self.dma::<u32>(at + 12).write_volatile(self.irq as u32);
             }
         }
         core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
@@ -551,8 +706,8 @@ impl Hda {
         self.w32(sd + SD_CBL, (PERIOD_BYTES * periods) as u32);
         self.w16(sd + SD_LVI, (periods - 1) as u16);
         self.w16(sd + SD_FMT, FORMAT_48K_S16_STEREO);
-        self.w32(sd + SD_CTL, tag << 20);
-        self.w8(sd + SD_STS, 0x1c);
+        self.w32(sd + SD_CTL, tag << 20 | self.ioce());
+        self.w8(sd + SD_STS, SD_STS_ALL);
         Ok(())
     }
 
@@ -609,7 +764,7 @@ impl Hda {
         let _ = self.verb(adc, SET_STREAM, MIC_TAG << 4);
         let sd = self.mic_sd;
         if self.setup_sd(sd, MIC_BDL_AT, MIC_RING_AT, MIC_PERIODS, MIC_TAG).is_err() { return false; }
-        self.w32(sd + SD_CTL, MIC_TAG << 20 | SD_CTL_RUN);
+        self.w32(sd + SD_CTL, MIC_TAG << 20 | SD_CTL_RUN | self.ioce());
         if !self.wait(|h| h.r32(sd + SD_CTL) & SD_CTL_RUN != 0) { return false; }
         self.mic_tail = self.mic_position();
         self.mic_on = Some(k);
@@ -683,5 +838,33 @@ impl Hda {
     pub fn done(&mut self, token: u16) -> bool {
         self.advance();
         !self.queued[token as usize % PERIODS]
+    }
+
+    /// The machine is going to sleep (D3 for every audio function group with an
+    /// output or microphone: amplifiers and converters power off, settings are kept)
+    /// or woke (D0). HDA 7.3.3.10: the group's widgets follow it. Returns how many
+    /// groups reached the state.
+    pub fn power(&mut self, asleep: bool) -> u32 {
+        let state = if asleep { 3 } else { 0 };
+        let home = self.codec;
+        let mut groups = [(u32::MAX, 0u32); MAX_OUTPUTS + MAX_MICS];
+        let mut n = 0;
+        let mics = self.mics;
+        for (codec, afg) in self.routes.iter().flatten().map(|r| (r.codec, r.afg)).chain(mics.iter().flatten().map(|m| (m.codec, m.afg))) {
+            if groups[..n].contains(&(codec, afg)) || n == groups.len() { continue; }
+            groups[n] = (codec, afg);
+            n += 1;
+        }
+        let mut reached = 0;
+        for &(codec, afg) in &groups[..n] {
+            self.codec = codec;
+            let _ = self.verb(afg, SET_POWER, state);
+            // GET_POWER: bits 7:4 are the state the group is actually in.
+            let actual = self.verb(afg, 0xF05, 0).map_or(0xf, |v| v >> 4 & 0xf);
+            if actual == state { reached += 1; }
+        }
+        self.codec = home;
+        sex_pdx::serial_record!("[bell.hda.power] asleep={} groups={} reached={}", asleep as u8, n, reached);
+        reached
     }
 }

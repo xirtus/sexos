@@ -287,6 +287,33 @@ impl Access {
         })
     }
 
+    /// A choice kept in settings (at start, or changed in Settings): the change
+    /// to carry out, or None when it is already so. Values out of range are
+    /// brought in (zoom to its steps' range, an unknown filter to none).
+    pub fn restore(&mut self, c: Change) -> Option<Change> {
+        let same = match c {
+            Change::View { zoom, filter } => zoom.clamp(ZOOM_ONE, ZOOM_MAX) == self.zoom && (if filter < FILTER_COUNT { filter } else { 0 }) == self.filter,
+            Change::StickyKeys(on) => on == self.sticky,
+            Change::SlowKeys(on) => on == self.slow,
+            Change::BounceKeys(on) => on == self.bounce,
+            Change::Reader(on) => on == self.reader,
+        };
+        if same { return None; }
+        Some(match c {
+            Change::View { zoom, filter } => {
+                self.zoom = zoom.clamp(ZOOM_ONE, ZOOM_MAX);
+                if self.zoom != ZOOM_ONE { self.last_zoom = self.zoom; }
+                self.filter = if filter < FILTER_COUNT { filter } else { 0 };
+                if self.filter != 0 { self.last_filter = self.filter; }
+                Change::View { zoom: self.zoom, filter: self.filter }
+            }
+            Change::StickyKeys(on) => self.set_sticky(on),
+            Change::SlowKeys(on) => { self.slow = on; self.pending = None; self.accepted = None; Change::SlowKeys(on) }
+            Change::BounceKeys(on) => { self.bounce = on; self.released = None; self.bounced = None; Change::BounceKeys(on) }
+            Change::Reader(on) => { self.reader = on; Change::Reader(on) }
+        })
+    }
+
     /// Panel text for a change.
     pub fn notice(&self, change: Change, buf: &mut [u8]) -> usize {
         let mut n = 0;

@@ -29,7 +29,7 @@ use wasmi::{Caller, Config, Engine, Extern, Linker, Memory, Module, Store, Store
 /// The engine, as built by `scripts/build_quickjs_wasm.sh`.
 pub static QUICKJS_WASM: &[u8] = include_bytes!("../quickjs.wasm");
 /// The DOM and browser API, written in JavaScript over `__host`.
-pub static PRELUDE: &str = concat!(include_str!("prelude.js"), "\n", include_str!("indexeddb.js"));
+pub static PRELUDE: &str = concat!(include_str!("prelude.js"), "\n", include_str!("indexeddb.js"), "\n", include_str!("extensions.js"));
 
 /// Page operations, `__host`'s first argument. Node ids travel as decimal strings.
 pub mod op {
@@ -141,6 +141,13 @@ pub mod op {
     /// saved form; (`save`, name, text) answers `!` over the quota; (`delete`, name);
     /// (`list`) the names, one per line. Nothing answers without lasting storage.
     pub const IDB: u32 = 34;
+    /// Browser extensions (Kaleidoscope's `chrome.*`): (`key`) the secret that lets
+    /// extension code reach this, once, then nothing; (`tab`) the shown tab as JSON; (`post`, JSON) a message for the
+    /// browser to route (it delivers answers and events as `ext\tJSON`); (`store`, id,
+    /// verb, key, value) the extension's own storage, verb `get`, `set` (answers `!`
+    /// over the quota), `remove` or `keys` (the keys starting with `key`, that part cut,
+    /// one per line).
+    pub const EXTENSION: u32 = 39;
     /// (id): the oldest message not yet taken (text, or with bit 16 an ArrayBuffer).
     pub const WS_TAKE: u32 = 74;
     /// (name, source, kind+provenance): compiled bytecode for it, if the browser's code
@@ -228,6 +235,8 @@ struct State<P> {
 /// One page's script engine.
 pub struct Script<P: Page + 'static> {
     vm: Vm<P>,
+    /// The isolated worlds made so far (bit per world; world 0 always is).
+    worlds: u16,
     budget_ms: i32,
     load_budget_ms: i32,
     #[cfg(feature = "baseline-jit")]
@@ -251,6 +260,7 @@ struct Wasmi<P: Page + 'static> {
     module: TypedFunc<(i32, i32, i32, i32, i32, i32), i32>,
     ready: TypedFunc<i32, i32>,
     dispatch: TypedFunc<(i32, i32, i32), i32>,
+    world: TypedFunc<i32, i32>,
     #[cfg(feature = "baseline-jit")]
     own_cache_stats: Option<TypedFunc<(), i32>>,
 }
@@ -273,6 +283,7 @@ impl<P: Page + 'static> Vm<P> {
     fn module(&mut self, a: (i32, i32, i32, i32, i32, i32)) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.module.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.module(a) } }
     fn ready(&mut self, a: i32) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.ready.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.ready(a) } }
     fn dispatch(&mut self, a: (i32, i32, i32)) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.dispatch.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.dispatch(a) } }
+    fn world(&mut self, a: i32) -> Result<i32, Error> { match self { Vm::Wasmi(w) => w.world.call(&mut w.store, a).map_err(trapped), #[cfg(sexjs_native)] Vm::Native(v) => v.world(a) } }
     fn memory_bytes(&self) -> usize { match self { Vm::Wasmi(w) => w.memory.data(&w.store).len(), #[cfg(sexjs_native)] Vm::Native(v) => v.memory_bytes() } }
 }
 
@@ -317,7 +328,7 @@ impl<P: Page + 'static> Script<P> {
     pub const NATIVE: bool = cfg!(sexjs_native);
 
     fn start(vm: Vm<P>, limits: Limits) -> Result<Self, Error> {
-        let mut script = Self { vm, budget_ms: 0, load_budget_ms: 0, #[cfg(feature = "baseline-jit")] execution_ns: 0 };
+        let mut script = Self { vm, worlds: 1, budget_ms: 0, load_budget_ms: 0, #[cfg(feature = "baseline-jit")] execution_ns: 0 };
         // The prelude is ours: no time budget, which a slow machine could exceed.
         #[cfg(feature = "baseline-jit")]
         script.set_jit_enabled(false);
@@ -354,6 +365,7 @@ impl<P: Page + 'static> Script<P> {
             module: instance.get_typed_func(&store, "sx_module").map_err(|_| e("sx_module"))?,
             ready: instance.get_typed_func(&store, "sx_modules_ready").map_err(|_| e("sx_modules_ready"))?,
             dispatch: instance.get_typed_func(&store, "sx_dispatch").map_err(|_| e("sx_dispatch"))?,
+            world: instance.get_typed_func(&store, "sx_world").map_err(|_| e("sx_world"))?,
             #[cfg(feature = "baseline-jit")]
             own_cache_stats: instance.get_typed_func(&store, "sx_own_cache_stats").ok(),
             store, memory,
@@ -452,6 +464,31 @@ impl<P: Page + 'static> Script<P> {
         self.vm.free(nm);
         match r { Ok(0) => Ok(()), Ok(_) => Err(Error::Thrown), Err(x) => Err(x) }
     }
+
+    /// Runs `f` in isolated world `world` (1..16: one per extension's content scripts;
+    /// 0 is the page's own), a script context of its own over the same document, as in
+    /// Chrome. The first time, the world is made and gets the prelude: `prepare` sees
+    /// the page just before that (to hand the new world what only it may take), and
+    /// `made` is true. The page's own world is selected again afterwards.
+    pub fn in_world<T>(&mut self, world: u8, prepare: impl FnOnce(&mut P), f: impl FnOnce(&mut Self, bool) -> T) -> Result<T, Error> {
+        let made = match self.vm.world(world as i32)? {
+            1 => {
+                self.worlds |= 1 << (world & 15);
+                prepare(self.vm.page_mut());
+                let r = self.eval(PRELUDE, "prelude.js");
+                if let Err(e) = r { let _ = self.vm.world(0); return Err(e); }
+                true
+            }
+            0 => false,
+            _ => return Err(Error::Engine(String::from("world"))),
+        };
+        let out = f(self, made);
+        self.vm.world(0)?;
+        Ok(out)
+    }
+
+    /// Whether isolated world `world` has been made (see [`Script::in_world`]).
+    pub fn has_world(&self, world: u8) -> bool { world < 16 && self.worlds & (1 << world) != 0 }
 
     /// Calls the prelude's `__sx_dispatch` with `message`: `tick`, `click\tNODE`,
     /// `key\tTYPE\tKEY`, `load`. Returns its result (-1 if it threw).

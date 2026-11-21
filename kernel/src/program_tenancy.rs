@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! Windowed program rows past the first few share one hardware key, as there are only
-//! sixteen. Each of them runs in a protection view of its own (`views`), so rows run
-//! side by side on any core and a row can never reach another's memory.
+//! Every windowed program row holds one hardware key, as there are only sixteen. Each
+//! row runs in a protection view of its own (`views`), so rows run side by side on any
+//! core and a row can never reach another's memory.
 //!
 //! Views separate rows by span, not by page. Every page a shared row holds lies in a
 //! 2 MiB span no one else maps into: its arena, its regions (BOOT places them on whole
@@ -50,23 +50,26 @@ pub fn view_of(target: u32) -> Option<usize> {
 pub fn read(_target: u32, leaf: u64) -> u64 { unsafe { core::ptr::read_volatile(leaf as *const u64) } }
 /// What a restore writes.
 pub fn restored(_target: u32, _leaf: u64, value: u64) -> u64 { value }
-/// The span over `va` joins the row's view.
-fn note(row: &mut Row, view: usize, va: u64) {
+/// The span over `va` joins the row's view. True when cores must flush
+/// (`views::flush_everywhere`) once the pool is unlocked.
+fn note(row: &mut Row, view: usize, va: u64) -> bool {
     assert!(row.owned.iter().any(|&(base, end)| va >= base && va < end), "PROGRAM_POOL_SPAN_NOT_OWNED");
     let span = va & !(SPAN - 1);
-    if let Err(i) = row.spans.binary_search(&span) {
-        row.spans.insert(i, span);
-        crate::views::open(view, span);
+    match row.spans.binary_search(&span) {
+        Ok(_) => false,
+        Err(i) => { row.spans.insert(i, span); crate::views::open(view, span) }
     }
 }
-fn with_row(target: u32, f: impl FnOnce(&mut Row, usize)) {
+/// `f` on the row's pool entry; a span it opened reaches every core after the unlock.
+fn with_row(target: u32, f: impl FnOnce(&mut Row, usize) -> bool) {
     let Some(view) = view_of(target) else { return };
-    f(&mut POOL.lock()[view - 1], view);
+    let flush = f(&mut POOL.lock()[view - 1], view);
+    if flush { crate::views::flush_everywhere(); }
 }
 /// At BOOT: the row's arena, which no one else maps into.
 pub fn arena(target: u32, base: u64, bytes: u64) {
     assert!(base % SPAN == 0 && bytes % SPAN == 0, "PROGRAM_POOL_ARENA_SPAN");
-    with_row(target, |row, _| row.owned.push((base, base + bytes)));
+    with_row(target, |row, _| { row.owned.push((base, base + bytes)); false });
 }
 /// At BOOT: the pages BOOT made for the row before its arena. Their spans join the row's
 /// view at once if views exist (BOOT reserves successors after `claim_regions`).
@@ -74,7 +77,7 @@ pub fn boot_pages(target: u32, pages: &[PrivatePage]) {
     let Some(view) = view_of(target) else { return };
     let mut pool = POOL.lock();
     pool[view - 1].boot.extend_from_slice(pages);
-    if crate::views::ready() { claim_boot(&mut pool, view); }
+    if crate::views::ready() && claim_boot(&mut pool, view) != 0 { drop(pool); crate::views::flush_everywhere(); }
 }
 /// The spans of the row's BOOT pages not yet its own become its own: closed everywhere
 /// but in its view. Returns how many.
@@ -87,7 +90,7 @@ fn claim_boot(pool: &mut [Row; ROWS], view: usize) -> usize {
         let row = &mut pool[view - 1];
         row.owned.push((span, span + SPAN));
         crate::views::close(view, span);
-        note(row, view, span);
+        let _ = note(row, view, span);
     }
     boot.len()
 }
@@ -121,18 +124,19 @@ pub fn claim_regions() {
         let row = &mut pool[view - 1];
         row.owned.extend_from_slice(&owned);
         for &(base, end) in &owned {
-            for va in (base..end).step_by(SPAN as usize) { crate::views::close(view, va); note(row, view, va); }
+            for va in (base..end).step_by(SPAN as usize) { crate::views::close(view, va); let _ = note(row, view, va); }
         }
         crate::serial_println!("[boot.program.pool.regions] target={} pages={} spans={} view={} boot_spans={}", target, pages, row.spans.len(), view, boot);
     }
     crate::views::resync();
+    crate::views::flush_everywhere();
 }
 /// The row's pages, from the restore that just wrote them. A run starts here, so views
 /// also take any table the canonical root gained outside `boot_memory::arena_leaf`.
 pub fn adopt(target: u32, pages: &[PrivatePage]) {
     if !shared(target) { return; }
     crate::views::resync();
-    with_row(target, |row, view| for page in pages { note(row, view, page.va); });
+    with_row(target, |row, view| pages.iter().fold(false, |flush, page| note(row, view, page.va) | flush));
 }
 /// A row was given one more page: its leaf is set, and its span joins its view.
 pub fn grant(target: u32, page: PrivatePage) {

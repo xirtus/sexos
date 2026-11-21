@@ -11,8 +11,19 @@ inputs:
     description: Build the optional FFV1/Matroska recording profile
     default: "false"
   save-cache:
-    description: Save the cargo cache after this job (one job per run, on master)
+    description: Save the cargo registry cache after this job (one job per run, on master)
     default: "false"
+  target-cache:
+    description: >-
+      Restore a cargo target directory saved on master with .github/actions/save-target:
+      `image` (the image job, every master push), `host` or `recording` (those jobs, in the
+      nightly full run), or `none`
+    default: image
+  target-cache-fallback:
+    description: >-
+      Another target cache to start from while target-cache has none saved yet
+      (e.g. `image` for the recording job, which builds the same image first)
+    default: ""
   limine:
     description: Fetch and build Limine
     default: "true"
@@ -48,14 +59,32 @@ runs:
         ~/.rustup/update-hashes
         ~/.rustup/settings.toml
       key: rustup-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}
-  - name: Cargo cache
+  - name: Cargo registry cache
     uses: Swatinem/rust-cache@v2
     with:
       shared-key: sexos
       cache-all-crates: true
-      cache-workspace-crates: true
+      # The target directory has its own cache below: rust-cache's cleanup keeps
+      # only packages `cargo metadata` lists, so it deleted the -Z build-std units
+      # (core, alloc, std, compiler_builtins) and every crate above them rebuilt in
+      # every job (~25-30 minutes per image build, even on a full cache hit).
+      cache-targets: false
       cache-on-failure: true
       save-if: ${{ inputs.save-cache == 'true' && github.ref == 'refs/heads/master' }}
+  - name: Cargo target cache (the newest master build of this kind)
+    if: inputs.target-cache != 'none'
+    uses: actions/cache/restore@v4
+    with:
+      # Keep in step with .github/actions/save-target: the paths are part of the cache version.
+      path: |
+        target
+        !target/ffmpeg
+        !target/libcxx
+        !target/**/incremental
+      key: target-${{ inputs.target-cache }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ github.run_id }}
+      restore-keys: |
+        target-${{ inputs.target-cache }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+        target-${{ inputs.target-cache-fallback || inputs.target-cache }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
   - name: Fetch crates (builds and host gates run offline)
     shell: bash
     run: cargo fetch --locked
@@ -71,7 +100,7 @@ runs:
         target/ffmpeg/sexos-audio-export-v1
         target/ffmpeg/share/licenses
         target/ffmpeg/source-pin
-      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh', 'scripts/build_shine.sh', 'scripts/build_libvpx.sh', 'scripts/build_libaom.sh', 'scripts/build_x264.sh') }}
+      key: ffmpeg-${{ inputs.recording }}-${{ hashFiles('scripts/build_ffmpeg.sh', 'scripts/build_dav1d.sh', 'scripts/build_shine.sh', 'scripts/build_libvpx.sh', 'scripts/build_libaom.sh', 'scripts/build_x264.sh') }}
   - name: Build FFmpeg for programs
     if: inputs.media == 'true'
     shell: bash
@@ -79,6 +108,8 @@ runs:
       profile=0
       # The recording profile also enables Splicy's VP9/Opus/AAC export.
       if [[ "${{ inputs.recording }}" == true ]]; then profile=2; fi
+      # sex-media's build script reruns when this changes (restored files keep old mtimes).
+      echo "SEXOS_FFMPEG_PROFILE=$profile" >> "$GITHUB_ENV"
       if [[ ! -f target/ffmpeg/lib/libavcodec.a ]] || [[ ! -f target/ffmpeg/lib/libshine.a ]] || [[ "$(cat target/ffmpeg/sexos-audio-export-v1 2>/dev/null)" != 1 ]] || [[ "$(cat target/ffmpeg/sexos-recording-v1 2>/dev/null)" != "$profile" ]]; then
         FFMPEG_RECORDING=$profile bash scripts/build_ffmpeg.sh
       fi

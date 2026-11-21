@@ -47,6 +47,33 @@ pub const ARGS_MAX: usize = 256;
 /// Spindle only: it changes how the machine starts.
 pub const INSTALL: u8 = 14;
 pub const INSTALL_GO: u64 = 1;
+/// No-clobber move of a file, only if its current object ID equals `offset`.
+/// The path region contains `source\0destination`, like RENAME. The caller's
+/// existing file scope is applied to both paths independently.
+/// (43 onward: 30..=34 are `disks`, 40..=42 package, console relay and jobs.)
+pub const MOVE_IF_ID: u8 = 43;
+/// Spindle-only organizer controls. STATE returns, in the data area: enabled byte,
+/// committed filesystem generation (u64), last event sequence (u64), pins (u16) and
+/// rules (u16). SET uses offset 0/1; turning it on also organizes what is already there.
+pub const ORGANIZE_STATE: u8 = 44;
+pub const ORGANIZE_SET: u8 = 45;
+/// Same checked move as MOVE_IF_ID, with a durable undo record in one commit. The
+/// source must be in an organized folder (`sex_organize::ingress`) and the destination
+/// folder one `sex_organize::destination_allowed` accepts; the name stays the same.
+pub const ORGANIZE_MOVE: u8 = 46;
+/// Undoes the last placement and pins the restored file. Data: `from\0to` of the undone move.
+pub const ORGANIZE_UNDO: u8 = 47;
+/// Organizes the organized folders now (`offset` 1: only report). Data: one line per
+/// file, `moved FROM -> TO`, `would move FROM -> TO` or `stays FROM: why`.
+pub const ORGANIZE_SCAN: u8 = 48;
+/// Pins (`offset` 1) or unpins (0) the file at the path. Pinned files are never moved.
+pub const ORGANIZE_PIN: u8 = 49;
+/// The person's rules. Path empty: data gets the rules, one `PATTERN DEST` per line.
+/// Path `PATTERN\0DEST` adds or replaces that pattern's rule; `PATTERN` alone removes it.
+pub const ORGANIZE_RULE: u8 = 50;
+/// The post-commit event log: files that arrived in organized folders since sequence
+/// `offset`, and what was decided. Data: one line per event, `SEQ new|moved-in PATH: decision`.
+pub const ORGANIZE_LOG: u8 = 51;
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;
@@ -108,6 +135,11 @@ pub const PREPARE_PIPED: u64 = 2;
 /// Empty path/offset/length; data is three little-endian u64 values. Metadata
 /// reads are excluded; controller/host caches are outside this measurement.
 pub const READ_IO_STATS: u8 = 23;
+/// Every bound program run as Files sees it, for Mesh: domain, task, file-payload device
+/// reads (calls, bytes) and the grants it holds (`@/path` tokens, `+packages`). Empty
+/// path/offset/length; data is [`runs`] entries. The grants' paths are given only to
+/// Spindle or a run holding the whole filesystem (`@/`); others get each run's count.
+pub const RUNS: u8 = 35;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReadIoStats { pub requests: u64, pub device_calls: u64, pub device_bytes: u64 }
 impl ReadIoStats {
@@ -159,13 +191,19 @@ pub const READ_ONLY: u8 = 14;
 pub const UNSUPPORTED: u8 = 15;
 /// The person hasn't answered yet.
 pub const PENDING: u8 = 16;
+/// The file changed since it was inspected (organizer checked moves).
+pub const STALE: u8 = 17;
+/// A program asked for its arguments (ARGS) before Shell told Files where its run lives
+/// (the bind follows the start, and the program can run first). Ask again shortly.
+/// Statuses share one byte with `home_lock` (17, 18) and `console_relay` (60, 61).
+pub const STARTING: u8 = 62;
 
 pub fn message(status: u8) -> &'static [u8] {
     match status {
         OK => b"ok", UNAVAILABLE => b"no filesystem on this disk", NOT_FOUND => b"not found", EXISTS => b"already exists",
         NOT_DIR => b"not a directory", IS_DIR => b"is a directory", NOT_EMPTY => b"directory not empty", NAME => b"bad name",
         NO_SPACE => b"disk full", IO => b"disk error", CORRUPT => b"damaged data found", DENIED => b"not allowed",
-        OTHER_DISK => b"on another disk", READ_ONLY => b"read-only disk", UNSUPPORTED => b"not supported on this disk", PENDING => b"waiting for the person", _ => b"invalid request",
+        OTHER_DISK => b"on another disk", READ_ONLY => b"read-only disk", UNSUPPORTED => b"not supported on this disk", PENDING => b"waiting for the person", STALE => b"file changed since inspection", STARTING => b"program still starting", _ => b"invalid request",
     }
 }
 
@@ -199,6 +237,63 @@ pub const ENTRY_HEAD: usize = 10;
 /// a STAT, and clears it, in every client's region, before any change to that file can
 /// be seen; a rename, removal or mount clears them all. Only Files writes here.
 /// Each entry is guarded by a sequence word (odd while Files writes it).
+/// Entries of a [`RUNS`] answer: target u32, task u32, device calls u64, device bytes
+/// u64, grants u8, then the grants' text (u16 length, space-separated tokens), all LE.
+pub mod runs {
+    pub const HEAD: usize = 4 + 4 + 8 + 8 + 1 + 2;
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Run<'a> { pub target: u32, pub task: u32, pub read_calls: u64, pub read_bytes: u64, pub grants: u8, pub text: &'a [u8] }
+    /// Grant tokens in a run's arguments or picks: `@...` paths and the package grant.
+    pub fn is_grant(token: &[u8]) -> bool { token.len() > 1 && token[0] == b'@' || token == PACKAGES }
+    /// `package::GRANT_TOKEN`, spelled here so this file builds on its own (host tests).
+    pub const PACKAGES: &[u8] = b"+packages";
+    /// Writes one entry; `None` when it does not fit.
+    pub fn put(out: &mut [u8], r: &Run) -> Option<usize> {
+        let n = HEAD + r.text.len();
+        if r.text.len() > u16::MAX as usize || n > out.len() { return None; }
+        out[0..4].copy_from_slice(&r.target.to_le_bytes());
+        out[4..8].copy_from_slice(&r.task.to_le_bytes());
+        out[8..16].copy_from_slice(&r.read_calls.to_le_bytes());
+        out[16..24].copy_from_slice(&r.read_bytes.to_le_bytes());
+        out[24] = r.grants;
+        out[25..27].copy_from_slice(&(r.text.len() as u16).to_le_bytes());
+        out[HEAD..n].copy_from_slice(r.text);
+        Some(n)
+    }
+    /// The entries of an answer, stopping at the first malformed one.
+    pub fn parse(mut data: &[u8]) -> impl Iterator<Item = Run<'_>> {
+        core::iter::from_fn(move || {
+            if data.len() < HEAD { return None; }
+            let word = |a: usize, b: usize| { let mut x = [0u8; 8]; x[..b - a].copy_from_slice(&data[a..b]); u64::from_le_bytes(x) };
+            let len = word(25, 27) as usize;
+            if data.len() < HEAD + len { data = &[]; return None; }
+            let run = Run { target: word(0, 4) as u32, task: word(4, 8) as u32, read_calls: word(8, 16), read_bytes: word(16, 24), grants: data[24], text: &data[HEAD..HEAD + len] };
+            data = &data[HEAD + len..];
+            Some(run)
+        })
+    }
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use super::super::{STAT, READ_IO_STATS};
+        #[test]
+        fn entries_round_trip_and_stop_at_damage() {
+            let mut buf = [0u8; 128];
+            let a = Run { target: 42, task: 7, read_calls: 3, read_bytes: 12288, grants: 1, text: b"@/todo.txt" };
+            let b = Run { target: 43, task: 9, read_calls: 0, read_bytes: 0, grants: 2, text: b"" };
+            let n = put(&mut buf, &a).unwrap();
+            let m = put(&mut buf[n..], &b).unwrap();
+            let got: [Option<Run>; 3] = { let mut it = parse(&buf[..n + m]); [it.next(), it.next(), it.next()] };
+            assert_eq!(got, [Some(a), Some(b), None]);
+            // A cut answer yields only the whole entries before the cut.
+            assert_eq!(parse(&buf[..n + 3]).count(), 1);
+            assert_eq!(parse(&buf[..n - 1]).count(), 0);
+            assert!(put(&mut buf[..HEAD + 3], &a).is_none());
+            assert!(![STAT, READ_IO_STATS, super::super::OFFER].contains(&super::super::RUNS));
+            assert!(is_grant(b"@/x") && is_grant(PACKAGES) && !is_grant(b"spin") && !is_grant(b"@"));
+        }
+    }
+}
 pub mod stat_cache {
     use core::sync::atomic::{fence, AtomicU64, Ordering};
     pub const ENTRIES: usize = super::CACHE_BYTES / ENTRY;

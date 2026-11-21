@@ -1,0 +1,8 @@
+[package]
+name = "voyeur"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Voyeur, the SexOS system search: matching, frecency ranking and the built-in providers' pure parts"
+
+[dependencies]

@@ -155,7 +155,28 @@ run_stage() {
         || echo "[wifi.firmware] note: fetch incomplete; the pack holds only the files present"
       python3 scripts/make_wifi_firmware_pack.py --out iso_root/firmware/wifi.pack
       ;;
+    nvidia_firmware)
+      # NVIDIA's GSP-RM files (pinned, SHA-256 checked) as one pack for sexgpu-nv. An
+      # offline build packs nothing; the NVIDIA entry then logs "pack_empty".
+      bash scripts/fetch_nvidia_gsp_firmware.sh target/nvidia-firmware \
+        || echo "[nvidia.firmware] note: fetch incomplete; the pack is empty"
+      python3 scripts/make_nvidia_firmware_pack.py --firmware target/nvidia-firmware --out iso_root/firmware/nvidia-gsp.pack
+      ;;
     boot_image)
+      if [[ "${SEXOS_RECORDER:-0}" == "1" ]]; then
+        # Never silently use decoder-only libraries for a capture profile.
+        local record_prefix="${SEXOS_FFMPEG:-$PWD/target/ffmpeg}"
+        [[ -f "$record_prefix/sexos-recording-v1" && "$(cat "$record_prefix/sexos-recording-v1")" == "1" ]] || { echo '[FAIL] recorder requires explicit encoder profile'; exit 1; }
+        bash scripts/build_record.sh
+        cp "${SEXOS_RECORD_TARGET_DIR:-target/record}/x86_64-sex-app/release/record" iso_root/programs/record
+        python3 - <<'PY_RECORD'
+from pathlib import Path
+p=Path('iso_root/limine.cfg');s=p.read_text();anchor='    MODULE_PATH=boot:///apps/hello'
+assert anchor in s and '/programs/record' not in s
+p.write_text(s.replace(anchor,anchor+'\n    MODULE_PATH=boot:///programs/record'))
+PY_RECORD
+        python3 scripts/strip_recording_boot.py --root iso_root --receipt iso_root/recording-stripping.json
+      fi
       # The disk image `install` writes, built from this ISO's own files.
       python3 scripts/make_boot_image.py --root iso_root --out iso_root/boot.img
       ;;

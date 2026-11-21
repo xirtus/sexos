@@ -58,6 +58,16 @@ fn step(next: fn(&State, update::Slot) -> Option<State>, what: &str) {
     sex_pdx::serial_record!("[files.update.{}] slot={:?} trial={:?} version={} default_entry={} ok={}", what, slot, new.trial, new.version, new.default_entry(), ok as u8);
 }
 
+/// Tatami's Updates and About pages (`sex_pdx::facts`): the running slot and its menu
+/// state, read only; `slot=none` when this system was not started from an installed one.
+pub fn facts(out: &mut String) {
+    use core::fmt::Write;
+    let Some((_, _, slot, st)) = installed() else { out.push_str("slot=none\n"); return };
+    let trial = match st.trial { update::Trial::None => "none", update::Trial::Pending => "pending", update::Trial::Started => "started", update::Trial::Failed => "failed" };
+    let _ = write!(out, "slot={}\nversion={}\ncandidate={}\ntrial={}\nother={}\n", if slot == update::Slot::A { "a" } else { "b" }, st.version, st.candidate, trial, (st.prev != 0) as u8);
+}
+pub fn has_release_key() -> bool { release_key().is_some() }
+
 /// Files has started in the system slot `booted` names.
 pub fn on_start() { step(State::on_start, "start"); }
 

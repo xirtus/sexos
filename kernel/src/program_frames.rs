@@ -34,6 +34,8 @@ pub fn give(frame: u64) {
 pub fn available() -> u64 { GLOBAL_ALLOCATOR.free_frames().saturating_sub(FLOOR) }
 pub fn lent() -> u64 { LENT.load(Ordering::Relaxed) }
 pub fn peak() -> u64 { PEAK.load(Ordering::Relaxed) }
+/// Most pages programs could hold at once (free before any run took one).
+pub fn base() -> u64 { BASE.load(Ordering::Relaxed).max(available()) }
 
 /// How short memory is, for programs and services to act on before an allocation
 /// fails: drop caches, shrink buffers, refuse new work. Advisory, never a kill.

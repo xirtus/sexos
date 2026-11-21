@@ -146,6 +146,16 @@ impl<const N:usize> PublishedStores<N>{
     pub fn sample(&self,owner:u32,sid:u64,x:i64,y:i64)->Option<u32>{
         self.published[self.installed_index(owner,sid)?].sample(owner,sid,x,y)
     }
+    /// `bitmap_color` for a row run already holding its base colours: one lookup
+    /// of the surface's pixels for the run instead of one per pixel.
+    pub fn blend_row(&self,owner:u32,sid:u64,view:crate::bitmap_transaction::Viewport,x0:usize,y:usize,out:&mut [u32]){
+        let Some(index)=self.installed_index(owner,sid) else{return};
+        let published=&self.published[index];
+        for(i,pixel)in out.iter_mut().enumerate(){
+            let Some((x,y))=view.local(x0+i,y) else{continue};
+            if let Some(p)=published.sample(owner,sid,x,y){*pixel=crate::bitmap_transaction::blend(p,*pixel);}
+        }
+    }
     pub fn scrub(&mut self){for published in &mut self.published{published.scrub();}}
     #[cfg(test)]
     pub fn pixels_scrubbed(&self)->bool{self.published.iter().all(Published::pixels_scrubbed)}

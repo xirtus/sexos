@@ -8,6 +8,7 @@ extern crate alloc;
 // x86 build is byte-for-byte the same module set as before) ─────────────────
 #[cfg(target_arch = "x86_64")]
 pub mod serial;
+pub mod boot_cost;
 #[cfg(target_arch = "x86_64")]
 pub mod console;
 #[cfg(target_arch = "x86_64")]
@@ -16,12 +17,15 @@ pub mod console_font;
 pub mod crash_log;
 #[cfg(target_arch = "x86_64")]
 pub mod cpu_account;
+pub mod mesh_stats;
 #[cfg(target_arch = "x86_64")]
 pub mod memory;
 #[cfg(target_arch = "x86_64")]
 pub mod hal;
 #[cfg(target_arch = "x86_64")]
 pub mod pku;
+#[cfg(target_arch = "x86_64")]
+pub mod smap;
 pub mod gate;
 pub mod fpu;
 #[cfg(target_arch = "x86_64")]
@@ -108,6 +112,7 @@ pub mod init;
 pub mod graphics;
 #[cfg(target_arch = "x86_64")]
 pub mod devmgr;
+pub mod pci_power;
 pub mod iommu;
 pub mod iommu_selftest;
 pub mod vmd;
@@ -191,6 +196,19 @@ pub static MP_REQUEST: limine::request::MpRequest = limine::request::MpRequest::
 #[used]
 #[link_section = ".limine_requests"]
 pub static KERNEL_FILE_REQUEST: limine::request::ExecutableFileRequest = limine::request::ExecutableFileRequest::new();
+
+/// The boot menu entry's command line (`CMDLINE=`), empty when it has none.
+#[cfg(target_arch = "x86_64")]
+pub fn boot_cmdline() -> &'static str {
+    KERNEL_FILE_REQUEST.response().map(|r| r.executable_file().cmdline()).unwrap_or("")
+}
+#[cfg(target_arch = "x86_64")]
+pub fn boot_option(word: &str) -> bool { boot_cmdline().split_ascii_whitespace().any(|w| w == word) }
+/// "SexOS safe start" (`CMDLINE=safe`): a first start on new hardware with the riskiest
+/// steps left out (dGPU power-off, IOMMU, MSI/MSI-X, Wi-Fi, sound, touchpad, Intel
+/// display registers), so a hang in one of them can be told from the rest.
+#[cfg(target_arch = "x86_64")]
+pub fn safe_start() -> bool { boot_option("safe") }
 
 #[cfg(target_arch = "x86_64")]
 #[used]

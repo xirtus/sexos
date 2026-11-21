@@ -18,14 +18,8 @@ pub const fn service_key(domain: u8) -> u8 {
 /// Program records all hold this key. Only the running record's pages are present,
 /// so sharing it costs them nothing against each other.
 pub const RECORD_KEY: u8 = 10;
-/// Guests: each program row runs on a key no service holds, and no other live
-/// row holds. Row 0 only anchors the chain and is gone before row 1 starts.
-/// Rows from the third on share this key and take turns being present.
+/// Guests: every program row holds this one key, which no service holds. Rows keep
+/// apart by protection views instead (kernel `views`): each row's memory is reachable
+/// only in its own view. Keys 5 and 6, which rows 0 to 2 once held, are no row's.
 pub const SHARED_PROGRAM_KEY: u8 = 8;
-pub const fn program_key(ordinal: u8) -> u8 {
-    match ordinal {
-        0 | 1 => 5,
-        2 => 6,
-        _ => SHARED_PROGRAM_KEY,
-    }
-}
+pub const fn program_key(_ordinal: u8) -> u8 { SHARED_PROGRAM_KEY }

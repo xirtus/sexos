@@ -99,6 +99,26 @@ impl Url {
 /// its fragment within its own origin, only its origin elsewhere, and nothing from
 /// an https page to an http address or from a page that isn't http(s). The address
 /// is the page's real one: the browser never makes one up.
+/// Whether two hosts are the same site: the same registrable domain (`a.example.co.uk`
+/// and `b.example.co.uk`), or the same host where there is none (IP addresses,
+/// `localhost`).
+pub fn same_site(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim_end_matches('.').to_ascii_lowercase(), b.trim_end_matches('.').to_ascii_lowercase());
+    if a == b { return true; }
+    match (psl::domain_str(&a), psl::domain_str(&b)) { (Some(x), Some(y)) => x == y, _ => false }
+}
+
+/// Whether an `http://` address to `host` should be tried over HTTPS first: any named
+/// host on the internet, not IP addresses, `localhost`, single-label names or `.local`
+/// (home devices rarely have certificates).
+pub fn upgradable(host: &str) -> bool {
+    let h = host.trim_end_matches('.').to_ascii_lowercase();
+    !(h.is_empty() || h.starts_with('[') || h.bytes().all(|c| c.is_ascii_digit() || c == b'.') || h == "localhost" || h.ends_with(".localhost")
+        || !h.contains('.') || h.ends_with(".local") || h.ends_with(".internal") || h.ends_with(".lan") || h.ends_with(".home.arpa")
+        // RFC 6761 special-use names never have a public certificate.
+        || h.ends_with(".test") || h.ends_with(".invalid") || h.ends_with(".example"))
+}
+
 pub fn referrer(from: &str, to: &Url) -> Option<String> {
     let page = Url::parse(from).ok()?;
     if page.secure && !to.secure { return None; }
@@ -154,7 +174,9 @@ pub fn encode(req: &Request, url: &Url, cookie: Option<&str>) -> Result<Vec<u8>,
     for (k, v) in req.headers {
         if !token(k) || !value_ok(v) { return Err(Error::Header); }
         // The browser's own Origin goes through; a page's Origin or Host never does.
-        if forbidden_header(k) && !(k.eq_ignore_ascii_case("origin") && req.trusted_origin) { continue; }
+        // So does Global Privacy Control, which only ever says "1".
+        let gpc = k.eq_ignore_ascii_case("sec-gpc") && v.trim() == "1";
+        if forbidden_header(k) && !(k.eq_ignore_ascii_case("origin") && req.trusted_origin) && !gpc { continue; }
         put(k); put(": "); put(v.trim()); put("\r\n");
     }
     if let Some(c) = cookie.filter(|c| !c.is_empty()) {

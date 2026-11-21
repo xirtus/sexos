@@ -95,7 +95,7 @@ fn reference_composite_pixel_selected(x: usize, y: usize, w: usize, h: usize, bg
                         }
                         // Divider: bright opaque line at bottom edge.
                         if ly == 25 {
-                            c = FRAME_TOP_BAR_DIVIDER_COLOR;
+                            c = DISPLAY_TOKENS.frame_rim_color; // the rim colour, which follows the desktop theme (S6a)
                         }
                         // Tab strip: glass background with tab color overlay.
                         if surf.tab_count > 0

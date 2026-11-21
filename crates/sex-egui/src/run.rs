@@ -108,10 +108,12 @@ fn run_inner(options: Options, frame: &mut dyn FnMut(&egui::Context, egui::RawIn
                 }
             }
         }
-        let pixels = window.pixels();
-        let (w, h) = (width.min(pixels.len() / height.max(1)), height);
-        let stats = painter.paint(&ctx, output, &mut raster::Target { pixels, width: w, height: h, stride: w });
-        window.show_pixels(w, h);
+        let room = window.pixels().len();
+        let (w, h) = (width.min(room / height.max(1)), height);
+        // Painted aside and shown whole: Display reads the window whenever it composites,
+        // and a frame takes ~45 ms (see `sex_app::Window::frame`).
+        let stats = painter.paint(&ctx, output, &mut raster::Target { pixels: window.frame(w, h), width: w, height: h, stride: w });
+        window.show_frame(w, h);
         frames += 1;
         if frames == 1 || options.trace_frames {
             sex_std::sex_pdx::serial_record!(
