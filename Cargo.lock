@@ -4920,6 +4920,7 @@ name = "monitor"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-mesh",
  "sex-pdx",
 ]
 
@@ -5879,6 +5880,10 @@ name = "play"
 version = "0.1.0"
 dependencies = [
  "sex-app",
+ "sex-episodes",
+ "sex-fetch",
+ "sex-font",
+ "sex-kodi",
  "sex-media",
  "sex-pdx",
 ]
@@ -6455,6 +6460,15 @@ dependencies = [
  "once_cell",
  "smallvec",
  "yoke",
+]
+
+[[package]]
+name = "record"
+version = "0.1.0"
+dependencies = [
+ "sex-app",
+ "sex-media",
+ "sex-pdx",
 ]
 
 [[package]]
@@ -7214,6 +7228,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-gpu-amd"
+version = "0.1.0"
+dependencies = [
+ "sex-kms",
+]
+
+[[package]]
 name = "sex-gpu-intel"
 version = "0.1.0"
 dependencies = [
@@ -7401,6 +7422,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sex-mesh"
+version = "0.1.0"
+dependencies = [
+ "sex-font",
+]
+
+[[package]]
 name = "sex-multipass"
 version = "0.1.0"
 dependencies = [
@@ -7551,6 +7579,10 @@ version = "0.1.0"
 dependencies = [
  "libm",
 ]
+
+[[package]]
+name = "sex-thunderbolt"
+version = "0.1.0"
 
 [[package]]
 name = "sex-time"
@@ -7705,12 +7737,14 @@ name = "sexdisplay"
 version = "0.1.0"
 dependencies = [
  "sex-font",
+ "sex-gpu-amd",
  "sex-gpu-intel",
  "sex-graphics",
  "sex-icons",
  "sex-pdx",
  "sex-rt",
  "sex-shape",
+ "sex-theme",
  "sex-time",
  "silkbar-model",
 ]
@@ -7826,6 +7860,7 @@ version = "0.1.0"
 dependencies = [
  "sex-pdx",
  "sex-rt",
+ "sex-thunderbolt",
 ]
 
 [[package]]
@@ -8300,6 +8335,14 @@ dependencies = [
 name = "stdspawn"
 version = "0.1.0"
 dependencies = [
+ "sex-std",
+]
+
+[[package]]
+name = "steamy"
+version = "0.1.0"
+dependencies = [
+ "sex-config",
  "sex-std",
 ]
 

@@ -2441,6 +2441,8 @@ static mut GRID_PREV:Option<viewport::Text>=None;
 static mut VIEW_SIZE:(u32,u32)=(288,212);
 static mut VIEW_SEQUENCE:u64=0;
 static mut VIEW_PAINT:u64=0;
+/// The paint GRID_PREV holds, named as `base=` by the next delta record.
+static mut VIEW_PREV_PAINT:u64=0;
 
 /// Push one surface's 6x20 text subgrid to sexdisplay. Chunks go highest
 /// offset first so text_len jumps past sexdisplay's <=32 per-draw
@@ -2460,13 +2462,19 @@ unsafe fn content_render(line:&CmdLine,sb:&mut Scrollback) {
     // Hand the text to Display first: the record below is ~2 KB of serial output
     // (milliseconds under KVM) and gates match it by sequence and paint, not order.
     DISPLAY_IO.text(&text,display_delivery::Stamp{sequence:VIEW_SEQUENCE,paint:VIEW_PAINT},CONTENT_TEXT_COLOR as u32);
-    sex_pdx::serial_record!("[spindle.view.text] target={} sid={} sequence={} paint={} cols={} rows={} bytes={}",instance_pd(),grid_sids()[0],VIEW_SEQUENCE,VIEW_PAINT,text.cols,text.rows,text.len);
+    // A paint of the same shape records only the 48-byte chunks that changed since
+    // the last one (base=that paint); scripts/spindle_view_record.py rebuilds it.
+    // A keystroke then costs a line or two of serial output, not the whole pane.
+    let base=match &*core::ptr::addr_of!(GRID_PREV){Some(prev) if prev.cols==text.cols&&prev.rows==text.rows&&prev.len==text.len=>Some(prev),_=>None};
+    sex_pdx::serial_record!("[spindle.view.text] target={} sid={} sequence={} paint={} cols={} rows={} bytes={} base={}",instance_pd(),grid_sids()[0],VIEW_SEQUENCE,VIEW_PAINT,text.cols,text.rows,text.len,if base.is_some(){VIEW_PREV_PAINT}else{0});
     for (chunk,bytes) in text.bytes[..text.len].chunks(48).enumerate(){
+        if let Some(prev)=base{if prev.bytes[chunk*48..chunk*48+bytes.len()]==*bytes{continue}}
         let mut hex=[0u8;96];let alphabet=b"0123456789abcdef";
         for(n,b)in bytes.iter().enumerate(){hex[n*2]=alphabet[(b>>4)as usize];hex[n*2+1]=alphabet[(b&15)as usize];}
         sex_pdx::serial_record!("[spindle.view.bytes] target={} sid={} seq={} paint={} off={} hex={}",instance_pd(),grid_sids()[0],VIEW_SEQUENCE,VIEW_PAINT,chunk*48,core::str::from_utf8(&hex[..bytes.len()*2]).unwrap());
     }
     GRID_PREV=Some(text);
+    VIEW_PREV_PAINT=VIEW_PAINT;
 }
 
 /// Check only metadata from a successful held SELF_CATALOG query. The

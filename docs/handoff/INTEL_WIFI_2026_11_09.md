@@ -578,3 +578,93 @@ ABI: `sex_pdx::wifi_status::LEAVE` is new (a desktop request word, not a syscall
 `stopping_the_chip_halts_dma_then_resets_it` (`scripts/wifi_host_gate.sh`). The
 restart path itself is only provable on the radio: on the x17, `wifi leave` then
 `wifi join N PASS` exercises it, and walking out of range exercises beacon loss.
+
+## 19. Stage X1: Wi-Fi 4, 5 and 6 rates (2026-11-19)
+
+Until now every network was joined as a legacy 802.11a/g station on 20 MHz, so the
+best the firmware could pick was 54 Mb/s. X1 (`crates/sex-wifi/src/ax.rs`) makes the
+station an 802.11n/ac/ax (HT/VHT/HE) station when the AP is one:
+
+- **Beacon.** `Bss::peer` keeps the AP's HT capabilities (45) and operation (61),
+  VHT capabilities (191) and operation (192), the HE capabilities (extension 35,
+  with the 160 MHz MCS map and PPE thresholds), HE operation (extension 36: BSS
+  colour, default PE, RTS threshold), MU EDCA (extension 38) and the WMM parameter
+  element (EDCA per access category).
+- **What we offer.** `init::Init::ours` reads the NVM SKU (11n/11ac/11ax, MIMO off),
+  the valid TX/RX antennas, STA_HE_CTXT_CMD's version (1..3) and API bit 52
+  (`MBSSID_HE`). The association request then carries HT capabilities (LDPC, SGI,
+  RX STBC, 40 MHz on 5 GHz, MCS 0..15 on two antennas), VHT capabilities on 5 GHz
+  (MCS 0..9, SGI 80/160, SU beamformee, 1 MiB A-MPDUs, 160 MHz), the HE
+  capabilities extension (MCS 0..11 per stream, 40/80/160 MHz, LDPC, 16 µs
+  nominal padding, no HE-HTC, no PPE thresholds) and the WMM information element
+  last. Each only when the AP has the same; an AP without WMM stays legacy.
+- **Agreed mode.** `ax::mode`: HT needs WMM; VHT is 5 GHz only; HE needs the
+  firmware command. 5 GHz width from VHT operation (80; 160 new style with
+  segment 1 eight channels from segment 0, or old style width 2; 80+80 runs on
+  the primary's 80), else HT 40 (secondary above/below). 2.4 GHz stays 20 MHz.
+  The control channel position is `iwx_get_vht_ctrl_pos` (offset from the centre).
+- **After the association response** the station does what `iwx_run` and
+  iwlwifi's station-state change do: PHY_CONTEXT_CMD MODIFY with the width and
+  control position (`assoc::Step::Phy`, only when wider than 20 MHz), ADD_STA
+  update with FAT_EN width, MIMO2, max A-MPDU size and density
+  (`ax::station_flags`), STA_HE_CTXT_CMD on an HE network (`Step::He`, v1 80 /
+  v2 88 / v3 92 bytes: NIC-not-ACK-enabled, 32-bit BA bitmap, packet extension
+  from the AP's PPE thresholds or its nominal padding, BSS colour, MU EDCA per
+  firmware AC), then MAC_CONTEXT_CMD with QoS (UPDATE_EDCA, TGN), HT protection,
+  the 11ax filter bit and the AP's EDCA values.
+- **Rate control.** TLC_MNG_CONFIG_CMD (v3/v4) names mode HT/VHT/HE, the width,
+  chains A+B, SGI widths (not in HE), LDPC/STBC flags, MCS bits per stream for
+  ≤80 and 160 MHz, max MPDU 3839/3895 (`ax::rates`, iwx's `iwx_rs_init_v4` and
+  iwlwifi's `rs_fw_set_supp_rates`).
+- **Data.** A QoS association sends QoS data frames (26-byte header) with the
+  802.1D priority from the IP DSCP (EF voice 6, CS5..7 7, AF3x/AF4x video 5, CS1
+  background 1, else 0; EAPOL 7) and a sequence counter per TID, still on queue 1
+  as iwx does without aggregation. A-MSDU subframes the hardware split up may
+  repeat the frame's CCMP packet number (`Received::subframe`); they are no longer
+  dropped as replays.
+
+Command layouts for HE come from iwlwifi's `fw/api/mac.h` and `fw/api/rs.h`
+(dual-licensed GPL-2.0 or BSD-3-Clause); the rest stays iwx(4). The x17's
+`ty-a0-gf-a0-77` firmware has TLC v4, STA_HE_CTXT v2, PHY v4.
+
+Boot log: `[wifi.join.start] … wifi=6 width=80` (what we expect) and
+`[wifi.associated] … wifi=6 width=80 qos=1` (what was agreed); `wifi=0` is legacy.
+Tests: `crates/sex-wifi/tests/ax.rs` (elements, widths, frames, ADD_STA/MAC/PHY
+bytes, TLC v3/v4, HE context v1/v2/v3, PPE bit parsing, QoS data and priorities)
+in `scripts/wifi_host_gate.sh`. Not provable in QEMU (no Wi-Fi model): the x17
+run is `wifi join N PASS` next to a Wi-Fi 6 router and reading the two log lines
+and `[wifi.rate]`.
+
+Next: X2 block-ack (ADDBA answers, firmware BA sessions, receive reordering by
+the descriptor's reorder word, transmit aggregation queues), X3 roaming and 6 GHz.
+
+## 20. Stage X2a: block-ack receive (2026-11-19)
+
+An 802.11n/ac/ax AP sends its downlink as A-MPDUs only after a block-ack
+agreement. Without one the link stays at single-frame rates however wide the
+channel. X2a takes one receive session at a time (`crates/sex-wifi/src/ba.rs`,
+`Link::poll_with`).
+
+- **Agreement.** An ADDBA request (action category 3) on an HT link is answered
+  with an ADDBA response: immediate policy, no A-MSDU inside the A-MPDU, window
+  min(AP's, 64). Before answering, the firmware gets the session: with
+  CAPA_BAID_ML_SUPPORT (63) by RX_BAID_ALLOCATION_CONFIG_CMD (DATA_PATH 0x16,
+  16 bytes, answers the BAID), else by ADD_STA modify `add_immediate_ba`. A second
+  TID while a session runs, or a legacy link, is declined (status 37). DELBA
+  from the AP removes the session in the firmware.
+- **Reordering.** Each RX descriptor's reorder word (offset 16: NSSN, SN, BAID,
+  OLD_SN) says where a frame sits. Frames in order pass straight on; frames past
+  a gap wait in `ba::Slots` (64 × 1514 bytes, a static in sexnet), already
+  decrypted, with their PN; the firmware's FRAME_RELEASE (0xc3) and
+  BAR_FRAME_RELEASE (0xc2) move the window head and hand them over in order. The
+  CCMP replay check runs at release, in sequence order. Duplicates (status bit 22)
+  and frames behind the head are dropped. A window that has not moved for 250 ms
+  is flushed.
+- **Not yet.** Transmit aggregation (our ADDBA to the AP and a scheduler queue per
+  TID) is X2b.
+
+Boot log: `[wifi.ba] sessions=1 declined=0 flushes=0 tid=0 window=64` after the
+AP's first ADDBA. Tests: `crates/sex-wifi/tests/driver.rs`
+`x17_associates_as_wifi6_on_80mhz` and `x17_reorders_a_block_ack_session` (an
+out-of-order A-MPDU through a fake firmware, release notifications, a duplicate,
+DELBA).

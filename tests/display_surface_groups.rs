@@ -28,6 +28,7 @@ pub fn pdx_call(_:u64,_:u64,_:u64,_:u64,_:u64)->(u64,u64){unreachable!("display 
 #[path="../crates/sex-pdx/src/app_catalog.rs"] #[allow(dead_code)] mod app_catalog;
 #[path="../servers/sexdisplay/src/surface_lifecycle.rs"] mod surface_lifecycle;
 #[path="../servers/sexdisplay/src/surface_groups.rs"] mod surface_groups;
+#[path="../servers/sexdisplay/src/recording_indicator.rs"] mod recording_indicator;
 use surface_lifecycle::*;
 use surface_groups::FrameGroups;
 macro_rules! serial_println { ($($a:tt)*) => {} }
@@ -261,7 +262,7 @@ fn frame()->Surface{Surface{chrome_flags:1,color:0x445566,..surf(3,201)}}
  SURFACES[0]=surf(9,156);SURFACES[1]=frame();FRAME_GROUPS.observe(&SURFACES);FRAME_GROUPS.fit_children(&mut SURFACES);
  SURFACES[0].text_len=1;SURFACES[0].text_buf[0]=b'A';SURFACES[0].text_color=0xfedcba;recompute_text_lines(&mut SURFACES[0]);
  for focus in[0,201,156]{APP_PRESENT_BITS=0;assert_eq!(composite_pixel(150,180,1000,800,0,focus, &capture_scene(1000,800,focus)),0x123456);assert_eq!(APP_PRESENT_BITS,1);
- APP_PRESENT_BITS=0;assert_eq!(composite_pixel(120,125,1000,800,0,focus, &capture_scene(1000,800,focus)),FRAME_TOP_BAR_DIVIDER_COLOR);assert_eq!(APP_PRESENT_BITS,0);
+ APP_PRESENT_BITS=0;assert_eq!(composite_pixel(120,125,1000,800,0,focus, &capture_scene(1000,800,focus)),DISPLAY_TOKENS.frame_rim_color);assert_eq!(APP_PRESENT_BITS,0);
  // A top-row glyph foreground uses actual scaled font coordinates.
  let (ax,ay)=solid_a();let (px,py)=(SURFACES[0].x as usize+8+ax,SURFACES[0].y as usize+12+ay);
  assert_eq!(composite_pixel(px,py,1000,800,0,focus, &capture_scene(1000,800,focus)),0xfedcba);}
@@ -382,7 +383,9 @@ fn draw_cursor_z_top(_: *mut u32,_:usize,_:usize,_:usize,save:bool,_:&scene::Sce
 fn draw_launcher_panel(_: *mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){unsafe{DAMAGE_ORDER.push("launcher");}}
 mod lock_screen{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize)->bool{false}}
 mod bt_panel{pub fn draw(_: *mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
-mod window_menu{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32){}}
+mod window_menu{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
+// Frosted panels (S6b): no popup shows in this fixture, so no body is repainted under one.
+fn glass_body(_:*mut u32,_:usize,_:usize,_:&scene::SceneSnapshot,_:Plan){}
 mod program_tray{pub fn draw(_:*mut u32,_:usize,_:usize,_:usize,_:u32,_:usize){}}
 fn draw_window_switcher(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}
 fn draw_screenshot_ui(_:*mut u32,_:usize,_:usize,_:usize,_:&scene::SceneSnapshot){}

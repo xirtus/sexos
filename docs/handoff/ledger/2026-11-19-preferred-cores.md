@@ -1,0 +1,3 @@
+## Preferred cores: fastest cores take programs first (2026-11-19)
+- Every core records its highest performance level as it starts (AMD CPPC capabilities, or Intel HWP: Zen 4/5 laptops and Turbo Boost Max parts boost some cores higher). After all cores are up, BOOT orders the program cores by it, highest first, and prints `[smp.preferred] program_cores= first= highest_perf=LOW..HIGH ranked=`.
+- Program and app placement and their workers go through that order (`smp::program_core`), so a lone busy program runs on the core that boosts highest. Cores 0 and 1 (desktop, records) are unchanged; on machines that report no ranking (QEMU, equal cores) the order is the old one.

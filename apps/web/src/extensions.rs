@@ -85,15 +85,21 @@ pub struct Extensions {
 /// Where a message to or from an extension realm goes: a page's document (by its
 /// [`Document::owner`], so an answer never lands in another tab's page) or a background.
 #[derive(Clone, PartialEq, Eq)]
-enum Realm { Page(u64), Background(String) }
+/// A page realm is one world of that document: 0 the page's own (where an extension's
+/// own page runs), another an extension's isolated world for its content scripts.
+enum Realm { Page(u64, u8), Background(String) }
 
 impl Realm {
-    fn tag(&self) -> String { match self { Realm::Page(d) => alloc::format!("page:{}", d), Realm::Background(id) => alloc::format!("bg:{}", id) } }
+    fn tag(&self) -> String { match self { Realm::Page(d, w) => alloc::format!("page:{}:{}", d, w), Realm::Background(id) => alloc::format!("bg:{}", id) } }
     fn from_tag(t: &str) -> Option<Realm> {
         if let Some(id) = t.strip_prefix("bg:") { return Some(Realm::Background(String::from(id))); }
-        t.strip_prefix("page:")?.parse().ok().map(Realm::Page)
+        let (d, w) = t.strip_prefix("page:")?.split_once(':')?;
+        Some(Realm::Page(d.parse().ok()?, w.parse().ok().filter(|w| *w < WORLDS)?))
     }
 }
+
+/// Script worlds a page has (sex-js keeps 16): 0 is the page's own, 1.. are isolated.
+const WORLDS: u8 = 16;
 
 fn read_bytes(window: &mut Window, path: &str) -> Option<Vec<u8>> {
     let size = files::size(window, path.as_bytes()).ok()?;
@@ -269,6 +275,13 @@ impl Extensions {
     /// Whether any extension is on (pages then get the key for `chrome`).
     pub fn any(&self) -> bool { self.list.iter().any(|e| e.enabled) }
 
+    /// The isolated world extension `id`'s content scripts run in, in every page: its
+    /// own, as in Chrome (past fifteen extensions, the last ones share one).
+    pub fn world_of(&self, id: &str) -> u8 {
+        let i = self.list.iter().position(|e| e.id == id).unwrap_or(0);
+        (i + 1).min(WORLDS as usize - 1) as u8
+    }
+
     /// The extension whose rules block this request, if one does.
     pub fn blocks(&self, url: &str, page: &str, kind: Kind) -> Option<&str> {
         if !page.starts_with("http") { return None; }
@@ -286,16 +299,27 @@ impl Extensions {
     /// scripts to run before the page's own, then after.
     pub fn content(&mut self, window: &mut Window, url: &str, in_frame: bool) -> (Vec<String>, Vec<PageScript>, Vec<PageScript>) {
         let (mut css, mut early, mut late) = (Vec::new(), Vec::new(), Vec::new());
+        // An extension's own page (its popup or options page, opened in a tab) gets the
+        // whole API in its realm, as its background does; no content scripts run there.
+        if let Some((id, _)) = split_url(url) {
+            if let Some(e) = self.list.iter().find(|e| e.enabled && e.id == id) {
+                let source = alloc::format!("globalThis.chrome=globalThis.browser={};", e.api(&self.key, "page"));
+                early.push(PageScript { source, name: alloc::format!("{}{}/kaleidoscope-extension-api.js", SCHEME, e.id), module: false, node: None, external: false, world: 0 });
+                sex_pdx::serial_record!("[web.extension.page] id={} url={}", e.id, url);
+            }
+            return (css, early, late);
+        }
         if !url.starts_with("http") { return (css, early, late); }
         let key = self.key.clone();
-        for e in self.list.iter_mut().filter(|e| e.enabled) {
+        let worlds: Vec<u8> = self.list.iter().map(|e| self.world_of(&e.id)).collect();
+        for (e, world) in self.list.iter_mut().zip(worlds).filter(|(e, _)| e.enabled) {
             let mut wanted: Vec<(Vec<String>, Vec<String>, RunAt)> = e.manifest.content_scripts.iter().filter(|c| c.applies(url, in_frame)).map(|c| (c.css.clone(), c.js.clone(), c.run_at)).collect();
             wanted.extend(e.registered_for(url, in_frame));
             for (sheets, scripts, run_at) in wanted {
                 for p in sheets { if let Some(t) = e.file(window, &p) { css.push(t); } }
                 for p in scripts {
                     let Some(t) = e.file(window, &p) else { continue };
-                    let s = PageScript { source: e.wrap(&key, &t), name: alloc::format!("kaleidoscope-extension://{}/{}", e.id, p), module: false, node: None, external: false };
+                    let s = PageScript { source: e.wrap(&key, &t), name: alloc::format!("kaleidoscope-extension://{}/{}", e.id, p), module: false, node: None, external: false, world };
                     if run_at == RunAt::Start { early.push(s) } else { late.push(s) }
                 }
             }
@@ -390,10 +414,22 @@ impl Browser {
             let what = alloc::format!("{} content script(s), {} blocking rule(s){}{}", m.content_scripts.len(), e.rule_count,
                 if e.skipped > 0 { alloc::format!(", {} rule(s) not supported yet", e.skipped) } else { String::new() },
                 if m.background.is_empty() { String::new() } else if self.extensions.backgrounds.iter().any(|b| b.id == e.id) { String::from(", background running") } else { String::from(", background stopped") });
+            // Its popup and options page open in the tab while it is on.
+            let mut pages = String::new();
+            if e.enabled {
+                for (label, page) in [("Popup", &m.popup), ("Options", &m.options_page)] {
+                    if let Some(p) = page { pages.push_str(&alloc::format!(" · <a href='{}{}/{}'>{}</a>", SCHEME, esc(&e.id), esc(p), label)); }
+                }
+                // Its side panel page opens in the browser's side panel.
+                if let Some(p) = &m.side_panel {
+                    let url = alloc::format!("{}{}/{}", SCHEME, e.id, p);
+                    pages.push_str(&alloc::format!(" · <a href='about:sidepanel?url={}'>Side panel</a>", esc(&super::keys::encode(&url))));
+                }
+            }
             rows.push_str(&alloc::format!(
                 "<li style='margin:10px 0'><b>{}</b> {} <span style='color:#5f6368'>MV{}</span><br>{}<br><span style='color:#5f6368'>{}</span><br>\
-                 <a href='about:extensions?toggle={}'>{}</a> · <a href='about:extensions?remove={}'>Remove</a></li>",
-                esc(&m.name), esc(&m.extension_version), m.version, esc(&m.description), what, esc(&e.id), if e.enabled { "Turn off" } else { "Turn on" }, esc(&e.id)));
+                 <a href='about:extensions?toggle={}'>{}</a>{} · <a href='about:extensions?remove={}'>Remove</a></li>",
+                esc(&m.name), esc(&m.extension_version), m.version, esc(&m.description), what, esc(&e.id), if e.enabled { "Turn off" } else { "Turn on" }, pages, esc(&e.id)));
         }
         if rows.is_empty() { rows.push_str("<li>None yet.</li>"); }
         alloc::format!(
@@ -486,7 +522,7 @@ impl Browser {
 
     fn run_background_source(&mut self, script: &mut Script<Document>, source: String, name: String, module: bool) -> bool {
         let r = if module {
-            let s = PageScript { source, name, module: true, node: None, external: true };
+            let s = PageScript { source, name, module: true, node: None, external: true, world: 0 };
             self.load_modules(script, &s);
             script.eval_module(&s.source, &s.name)
         } else { script.eval(&source, &name) };
@@ -554,7 +590,7 @@ impl Browser {
         let tab = self.ext_tab();
         for b in self.extensions.backgrounds.iter_mut() { b.script.page_mut().ext_tab = tab.clone(); }
         for _ in 0..ROUNDS {
-            let page = Realm::Page(self.doc.get().owner());
+            let page = Realm::Page(self.doc.get().owner(), 0);
             let mut posted: Vec<(Realm, String)> = self.doc.get().ext_outbox.drain(..).map(|t| (page.clone(), t)).collect();
             for b in self.extensions.backgrounds.iter_mut() {
                 let id = b.id.clone();
@@ -563,6 +599,8 @@ impl Browser {
             if posted.is_empty() { return; }
             for (from, text) in posted {
                 let Ok(m) = serde_json::from_str::<Value>(&text) else { continue };
+                // A page's message says which of its worlds sent it.
+                let from = match from { Realm::Page(d, _) => Realm::Page(d, m["w"].as_u64().filter(|w| *w < WORLDS as u64).unwrap_or(0) as u8), b => b };
                 self.ext_route(from, &m);
             }
             for i in 0..self.extensions.backgrounds.len() { self.background_log(i); }
@@ -571,14 +609,27 @@ impl Browser {
         sex_pdx::serial_record!("[web.extension.busy] rounds={}", ROUNDS);
     }
 
+    /// The shown page's realm for extension `id`: the page's own world on that
+    /// extension's own page, else the isolated world of its content scripts.
+    fn page_realm(&self, id: &str) -> Realm {
+        let owner = self.doc.get_ref().owner();
+        if split_url(&self.url).is_some_and(|(own, _)| own == id) { Realm::Page(owner, 0) } else { Realm::Page(owner, self.extensions.world_of(id)) }
+    }
+
     /// Dispatches `e` into a realm. False when there's no such realm (or it fell over).
     fn ext_deliver(&mut self, to: &Realm, e: &Value) -> bool {
         let text = alloc::format!("ext\t{}", e);
         match to {
-            Realm::Page(owner) => {
+            Realm::Page(owner, world) => {
                 // Only the document that asked: after a tab switch or a new page it is gone.
                 if self.doc.get().owner() != *owner { sex_pdx::serial_record!("[web.extension.undelivered] page={}", owner); return false; }
-                let ok = match self.doc.script() { Some(s) => s.dispatch(&text).is_ok(), None => false };
+                let ok = match self.doc.script() {
+                    Some(s) if *world == 0 => s.dispatch(&text).is_ok(),
+                    // No content script of that extension runs here: nobody to hear it.
+                    Some(s) if !s.has_world(*world) => false,
+                    Some(s) => s.in_world(*world, |_| {}, |s, _| s.dispatch(&text).is_ok()).unwrap_or(false),
+                    None => false,
+                };
                 // A listener may have set a timer and changed nothing else.
                 self.timers_changed();
                 ok
@@ -599,12 +650,18 @@ impl Browser {
         // Code may speak only for its own extension, and only one that is on.
         let Some(ei) = self.extensions.list.iter().position(|e| e.enabled && e.id == id) else { return };
         if matches!(&from, Realm::Background(b) if *b != id) { return; }
+        // An extension's page speaks only for that extension, and a web page's world
+        // only for the extension whose content scripts it holds.
+        if let Realm::Page(_, w) = from {
+            let own_page = split_url(&self.url).map(|(own, _)| own == id);
+            if own_page == Some(false) || (own_page.is_none() && w != self.extensions.world_of(&id)) { return; }
+        }
         sex_pdx::serial_record!("[web.extension.message] id={} t={} from={}", id, t, from.tag());
         match t {
             "send" | "tabsend" => {
-                let to = if t == "send" { Realm::Background(id.clone()) } else { Realm::Page(self.doc.get().owner()) };
+                let to = if t == "send" { Realm::Background(id.clone()) } else { self.page_realm(&id) };
                 let sender = match &from {
-                    Realm::Page(_) => json!({ "id": id, "url": self.url, "origin": super::origin_of(&self.url), "frameId": 0, "tab": serde_json::from_str::<Value>(&self.ext_tab()).unwrap_or(Value::Null) }),
+                    Realm::Page(..) => json!({ "id": id, "url": self.url, "origin": super::origin_of(&self.url), "frameId": 0, "tab": serde_json::from_str::<Value>(&self.ext_tab()).unwrap_or(Value::Null) }),
                     Realm::Background(_) => json!({ "id": id, "url": alloc::format!("{}{}/_generated_background_page.html", SCHEME, id) }),
                 };
                 let e = json!({ "k": "msg", "id": id, "n": n, "m": m["m"], "to": from.tag(), "sender": sender });
@@ -619,7 +676,7 @@ impl Browser {
             }
             "changed" => {
                 let e = json!({ "k": "changed", "id": id, "area": m["area"], "changes": m["changes"] });
-                let page = Realm::Page(self.doc.get().owner());
+                let page = self.page_realm(&id);
                 if from != page { self.ext_deliver(&page, &e); }
                 let bg = Realm::Background(id.clone());
                 if from != bg { self.ext_deliver(&bg, &e); }
@@ -640,9 +697,12 @@ impl Browser {
                 } else if !code.is_empty() {
                     let wrapped = self.extensions.list[ei].wrap(&self.extensions.key, &code);
                     let name = alloc::format!("{}{}/executeScript.js", SCHEME, id);
+                    // Into the extension's isolated world, as its content scripts.
+                    let world = self.extensions.world_of(&id);
+                    let key = self.extensions.key.clone();
                     match self.doc.script() {
-                        Some(s) => { let _ = s.eval(&wrapped, &name); }
-                        None => self.run_scripts(alloc::vec![PageScript { source: wrapped, name, module: false, node: None, external: false }]),
+                        Some(s) => { let _ = s.in_world(world, |p| p.ext_key = key, |s, _| s.eval(&wrapped, &name)); s.page_mut().ext_key.clear(); }
+                        None => self.run_scripts(alloc::vec![PageScript { source: wrapped, name, module: false, node: None, external: false, world }]),
                     }
                 }
                 self.ext_answer(&from, n, Value::Null);

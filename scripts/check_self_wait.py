@@ -345,9 +345,10 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'crates/sex-pdx/src/system_stats.rs': '408fb8ea07d12eb2fc53f38797b8ddb4fd61c32140ecc516e63b69fd5689f97d',
  'crates/sex-pdx/src/crash_log.rs': '4930c8a6ca16756e9421cc1b1c8dca8a0301413cb0f3694189005fa90579ae22',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
- 'kernel/src/cpu_account.rs': '281b10b4f856a7f665c7ba59951b73b926decefa5c3bfae968af5714ba202f45',
+ # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20).
+ 'kernel/src/cpu_account.rs': '422f8b140abc987fd2758508927e687eeaab2fb6f5fda4e9997addd719d16d6b',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
- 'kernel/src/app_resources.rs': '769b963f795c1508360ee11030e6e687e2fae3c99dab36b304f95a8f0c8e815e',  # K2a hint backoff, K2c busy result (no observer change), 2026-11-20
+ 'kernel/src/app_resources.rs': '23d68b059a591aa4a2a0eaf75fd4b9ec9415ade1f3df0a62f8dfcce45e32a677',  # K2a hint backoff, K2c busy result + master merge (no observer change), 2026-11-21
  'kernel/src/service_restart.rs': 'a66ded412b60ef50cfc95310bee4027de9617a904908ab0f50d5df470622a856',  # K2c: poll reports work in flight (no observer change), 2026-11-20
  'kernel/src/crash_log.rs': '50143847c2b1ecb5a3be360f38ef900e562f271bde90ad9b5b0b728813988f96',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}

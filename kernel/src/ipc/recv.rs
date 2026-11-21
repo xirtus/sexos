@@ -41,10 +41,11 @@ fn event_regs(e: [u64; 6]) -> [u64; 6] { [0, e[0], e[1] << 32 | (e[5] & 0xFFFF_F
 /// After a delivered call or reply: waits like syscall 53, then returns the first inbox
 /// event in registers. A task that does not sleep (a worker, or one with something
 /// already waiting) gets it at once; a sleeping one gets it when it next runs (`deliver`).
-pub unsafe fn wait_and_take(regs: &mut crate::interrupts::SyscallRegs) -> u64 { wait_and_take_from(regs, None) }
+pub unsafe fn wait_and_take(regs: &mut crate::interrupts::SyscallRegs) -> u64 { wait_and_take_from(regs, None, false) }
 
-/// Cross-core counters: answers caught spinning, spins that ran out.
-static SPINS: [core::sync::atomic::AtomicU64; 2] = [const { core::sync::atomic::AtomicU64::new(0) }; 2];
+/// Cross-core counters: answers caught spinning and spins that ran out, after a call
+/// (102) and after a reply (103), and the cycles the caught ones waited.
+static SPINS: [core::sync::atomic::AtomicU64; 5] = [const { core::sync::atomic::AtomicU64::new(0) }; 5];
 /// How long a call or reply whose partner runs on another core waits for the answer
 /// still running. A real CPU answers in a few microseconds; parking, switching away and
 /// the wake interrupt back cost more than that, most of all under a hypervisor, where
@@ -68,9 +69,10 @@ fn away(pd: u32) -> bool {
 /// as `smp::tlb` does while it waits. True when it took a wake: the caller then returns
 /// without parking, as a park that finds the bit would, even when the inbox is empty
 /// (a worker may have moved the answer to the program's mailbox).
-unsafe fn spin_for_partner(task: *mut Task, pd: &ProtectionDomain) -> bool {
+unsafe fn spin_for_partner(task: *mut Task, pd: &ProtectionDomain, reply: bool) -> bool {
     let core = crate::core_local::CoreLocal::get().core_id;
-    let until = core::arch::x86_64::_rdtsc() + SPIN_CYCLES;
+    let start = core::arch::x86_64::_rdtsc();
+    let until = start + SPIN_CYCLES;
     loop {
         // Only a pending bit is taken (a park without one would block a running task).
         // A request already in the ring has its wake on the way: that bit stays, and
@@ -78,30 +80,34 @@ unsafe fn spin_for_partner(task: *mut Task, pd: &ProtectionDomain) -> bool {
         let pending = (*task).state.snapshot().pending;
         if pending || (*pd.message_ring).len() != 0 {
             if pending { let _ = (*task).state.park(core); }
-            note_spin(0);
+            note_spin(true, reply, core::arch::x86_64::_rdtsc() - start);
             return true;
         }
-        if core::arch::x86_64::_rdtsc() >= until { note_spin(1); return false; }
+        if core::arch::x86_64::_rdtsc() >= until { note_spin(false, reply, 0); return false; }
         crate::smp::tlb::service();
         core::hint::spin_loop();
     }
 }
-fn note_spin(i: usize) {
+fn note_spin(hit: bool, reply: bool, waited: u64) {
+    let i = (!hit) as usize * 2 + reply as usize;
+    if hit { SPINS[4].fetch_add(waited, Ordering::Relaxed); }
     let n = SPINS[i].fetch_add(1, Ordering::Relaxed) + 1;
-    if n & (n - 1) == 0 && n >= 1024 {
-        crate::serial_println!("[ipc.xcore] spin_hits={} spin_misses={} remote_resumes={}", SPINS[0].load(Ordering::Relaxed),
-            SPINS[1].load(Ordering::Relaxed), crate::scheduler::REMOTE_RESUMES.load(Ordering::Relaxed));
+    if n & (n - 1) == 0 && n >= 512 {
+        let x = |i: usize| SPINS[i].load(Ordering::Relaxed);
+        let hits = x(0) + x(1);
+        crate::serial_println!("[ipc.xcore] spin_hits={} spin_misses={} call_hits={} call_misses={} reply_hits={} reply_misses={} hit_avg_cycles={} remote_resumes={}",
+            hits, x(2) + x(3), x(0), x(2), x(1), x(3), x(4) / hits.max(1), crate::scheduler::REMOTE_RESUMES.load(Ordering::Relaxed));
     }
 }
 
 /// `wait_and_take`, after a call or reply to domain `partner`.
-unsafe fn wait_and_take_from(regs: &mut crate::interrupts::SyscallRegs, partner: Option<u32>) -> u64 {
+unsafe fn wait_and_take_from(regs: &mut crate::interrupts::SyscallRegs, partner: Option<u32>, reply: bool) -> u64 {
     let core = crate::core_local::CoreLocal::get();
     let task = crate::scheduler::SCHEDULERS[core.core_id as usize].current_task.load(Ordering::Acquire);
     let pd = core.current_pd_ref();
     if !task.is_null() && task == pd.main_task.load(Ordering::Acquire) {
         regs.rax = 0;
-        if !(partner.is_some_and(away) && spin_for_partner(task, pd)) {
+        if !(partner.is_some_and(away) && spin_for_partner(task, pd, reply)) {
             (*task).deliver.store(true, Ordering::Relaxed);
             crate::scheduler::wait_for_message(regs as *const _);
             // Still here: it did not sleep.
@@ -133,7 +139,7 @@ pub unsafe fn call_recv(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
     sched.arm_handoff(false);
     let partner = || match (*crate::core_local::CoreLocal::get().current_pd_ref().cap_table).find(regs.rdi as u32)?.data {
         crate::capability::CapabilityData::Domain(id) => Some(id), _ => None };
-    match called { Ok(_) => { let partner = partner(); wait_and_take_from(regs, partner) } Err(e) => { regs.rdi = 0; e } }
+    match called { Ok(_) => { let partner = partner(); wait_and_take_from(regs, partner, false) } Err(e) => { regs.rdi = 0; e } }
 }
 
 /// Syscall 103, PDX_REPLY_RECV: syscall 101, and the next request comes in registers.
@@ -143,5 +149,5 @@ pub unsafe fn reply_recv(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
     sched.arm_handoff(true);
     let sent = super::router::send_reply(regs.rdi as u32, regs.rsi).is_ok();
     sched.arm_handoff(false);
-    if sent { wait_and_take_from(regs, Some(regs.rdi as u32)) } else { regs.rdi = 0; 1 }
+    if sent { wait_and_take_from(regs, Some(regs.rdi as u32), true) } else { regs.rdi = 0; 1 }
 }

@@ -6,18 +6,17 @@
 // browser dispatches answers and events here as `ext\tJSON`.
 //
 // Only code the browser wrote can make an API object: it must give the key the browser
-// handed this realm once, before any page script ran. Content scripts share the page's
-// realm (no isolated world yet), so this code never hands an API object or a record
-// holding one to anything a page script can replace: built-ins it uses are taken here,
-// before page scripts run, and its records have no prototype (no setter on
-// Object.prototype sees them). What a content script itself does with `chrome` in that
-// shared realm is still visible to the page; isolated worlds are the real fix.
+// handed this realm once, before any page script ran. Content scripts run in their
+// extension's isolated world (a context of their own over the page's document), so
+// page scripts never see their `chrome` or their globals. This code still takes the
+// built-ins it uses up front and gives its records no prototype, for the realms where
+// an extension's own page runs.
 (function () {
   'use strict';
   const X = globalThis.__sx_ext;
   delete globalThis.__sx_ext;
   if (!X) return;
-  const { H, report } = X;
+  const { H, report, WORLD } = X;
   const EXT = 39;
   const key = H(EXT, 'key');
   if (!key) return;
@@ -34,7 +33,8 @@
   let seq = 1;
   let lastError;
 
-  function post(o) { H(EXT, 'post', stringify(o)); }
+  // Each message says which world sent it, so answers come back to it.
+  function post(o) { o.w = WORLD; H(EXT, 'post', stringify(o)); }
   function event() {
     const ls = [];
     return {
@@ -191,10 +191,21 @@
       enable: api(done), disable: api(done), openPopup: api(done), getUserSettings: api(() => ({ isOnToolbar: true })),
       onClicked: event(),
     };
+    // The side panel (MV3 chrome.sidePanel): open() shows the extension's panel page
+    // in the browser's side panel. Options set here last while this realm runs.
+    let panelPath = manifest.side_panel && manifest.side_panel.default_path ? String(manifest.side_panel.default_path) : '';
+    let panelBehavior = { openPanelOnActionClick: false };
+    const sidePanel = {
+      setOptions: api(o => { if (o && o.path != null && o.tabId == null) panelPath = String(o.path); }),
+      getOptions: api(() => ({ path: panelPath, enabled: !!panelPath })),
+      setPanelBehavior: api(o => { if (o) panelBehavior = Object.assign({}, panelBehavior, o); }),
+      getPanelBehavior: api(() => panelBehavior),
+      open: api(() => { if (panelPath) post({ t: 'open', id, url: 'about:sidepanel?url=' + encodeURIComponent(url(panelPath)) }); }),
+    };
     const alarms = new Map();
     const menus = { create: () => 0, update: api(done), remove: api(done), removeAll: api(done), onClicked: event(), ContextType: {} };
     const chrome = {
-      runtime, i18n, storage, tabs, scripting, action, declarativeNetRequest: dnr,
+      runtime, i18n, storage, tabs, scripting, action, sidePanel, declarativeNetRequest: dnr,
       browserAction: action, pageAction: action,
       extension: { getURL: url, inIncognitoContext: false, isAllowedIncognitoAccess: api(() => false), getBackgroundPage: () => (where === 'bg' ? globalThis : null), getViews: () => [] },
       permissions: {

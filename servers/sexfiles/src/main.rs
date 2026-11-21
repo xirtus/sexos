@@ -33,6 +33,7 @@ mod recording_journal;
 mod recording_runtime;
 mod installer;
 mod updater;
+mod facts;
 mod packages;
 mod console_relay;
 mod volumes;

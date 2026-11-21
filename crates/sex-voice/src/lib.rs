@@ -242,8 +242,32 @@ pub fn encode(message: Message<'_>, out: &mut [u8]) -> Result<usize, Error> {
     Ok(w.at)
 }
 
+/// File, in a client's own folder, that holds the worker's bearer token (the bridge's
+/// `MOSS_VOICE_TOKEN`). Without it, clients send no Authorization header, which a
+/// loopback worker started without a token accepts.
+pub const TOKEN_FILE: &str = "voice.token";
+
+/// The token in a [`TOKEN_FILE`]'s bytes: surrounding whitespace trimmed, then 1..=256
+/// visible ASCII bytes, or `None` (nothing that could end or split a header).
+pub fn bearer_token(file: &[u8]) -> Option<&[u8]> {
+    let start = file.iter().position(|b| !b.is_ascii_whitespace())?;
+    let end = file.iter().rposition(|b| !b.is_ascii_whitespace())? + 1;
+    let token = &file[start..end];
+    ((1..=256).contains(&token.len()) && token.iter().all(|b| (0x21..=0x7e).contains(b))).then_some(token)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn bearer_token_trims_and_refuses_header_breaks() {
+        assert_eq!(super::bearer_token(b"  s3cret-token\n"), Some(&b"s3cret-token"[..]));
+        assert_eq!(super::bearer_token(b"\n\n"), None);
+        assert_eq!(super::bearer_token(b"two words"), None);
+        assert_eq!(super::bearer_token(b"a\r\nX-Evil: 1"), None);
+        assert_eq!(super::bearer_token(&[b'a'; 257]), None);
+        assert!(super::bearer_token(&[b'a'; 256]).is_some());
+    }
+
     use super::*;
 
     fn round_trip(message: Message<'_>) {

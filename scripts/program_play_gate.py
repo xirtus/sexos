@@ -11,8 +11,8 @@ CLIP=(ROOT/'apps/play/tests/clip.mp4').read_bytes()
 # solid 0xC82828 for one second, then 0x28C828. Values as FFmpeg 9 on the host
 # decodes them at (3w/4, h/2), 0x00RRGGBB.
 FIRST,SECOND=0xC62726,0x26C626
-PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'iso_root/programs/play'))
-FILES={'/play':Path(PLAY).read_bytes(),'/clip.mp4':CLIP,'/note.txt':b'not a video\n'}
+PLAY=os.environ.get('SEXOS_PLAY',str(ROOT/'iso_root/programs/qupid'))
+FILES={'/qupid':Path(PLAY).read_bytes(),'/clip.mp4':CLIP,'/note.txt':b'not a video\n'}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -45,8 +45,8 @@ def main():
   s2=len(t());g['focus'](int(m[3]));time.sleep(.3);q.key('f11');g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s2,90)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
-  fetched('/play','/bin/play');fetched('/clip.mp4','clip.mp4');fetched('/note.txt','note.txt')
-  s=len(t());expect('run play @clip.mp4',r'\[play.opened\] format=\S+ codec=h264 w=320 h=240 fps=25/1 ms=\d+ shown=320x240',300)
+  fetched('/qupid','/bin/qupid');fetched('/clip.mp4','clip.mp4');fetched('/note.txt','note.txt')
+  s=len(t());expect('run qupid @clip.mp4',r'\[play.opened\] format=\S+ codec=h264 w=320 h=240 fps=25/1 ms=\d+ shown=320x240',300)
   m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   done=g['wait'](r'\[play.done\] frames=(\d+) ms=(\d+) w=320 h=240 ',s,900)
   frames,ms=int(done[1]),int(done[2]);assert frames==50,f'{frames} frames'
@@ -62,7 +62,7 @@ def main():
     r,gr,b=img.getpixel((bx+px,by+py));checked+=1;bad+=not near((r<<16)|(gr<<8)|b,SECOND,10)
   assert checked>50 and bad==0,f'{bad} of {checked} pixels of the last frame differ'
   close(m)
-  expect('run play @note.txt',r'\[play.failed\] Cannot play that file',120)
+  expect('run qupid @note.txt',r'\[play.failed\] Cannot play that file',120)
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t()
   print({'ok':True,'frames':frames,'play_ms':ms,'fps':round(frames*1000/max(ms,1),1),'pixels_checked':checked})
  finally:g['stop']()
