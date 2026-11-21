@@ -88,6 +88,7 @@ PINS = (
 
     ('timed', 'kernel/src/task_ownership.rs', '57e00d7269315b5810adb7d43bcc75e92a140b6fa02b1c2dd8c15533757564f6'),
 
+    ('timed', 'kernel/src/smp.rs', '6f70b8da98e5fe7fb49bdb660bb44fb9df784b5245ed2ae71cf4517024afcbc4'),  # spare-core placement of USB, Bell, ACPI, Cufflinks over master's preferred-core order (table only, no wait change), 2026-11-21
     ('timed', 'kernel/src/smp.rs', '73db1b08514c89695981493296c4c94fbaeca8ea4022228aeb38b7c76dca833b'),  # USB, Bell, ACPI and Cufflinks start on spare cores (placement table only, no wait change), 2026-11-19
 
     ('timed', 'kernel/src/smp.rs', '261699be11866980d2a30b72cbb8d35ddccdc00aa1ee1cbceefadc716edc7d75'),  # protection views (tlb hook, rows spread), 2026-11-17
