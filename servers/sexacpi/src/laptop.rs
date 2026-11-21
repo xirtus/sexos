@@ -133,10 +133,14 @@ fn path_of(aml: &Aml, target: &WrappedObject) -> Option<AmlName> {
 /// What a firmware notification asks of us.
 pub enum Event { Refresh, Brightness(bool), None }
 
-pub fn notifications(aml: &Aml, d: &Devices, light: &Backlight) -> Vec<Event> {
+pub fn notifications(aml: &Aml, d: &Devices, light: &Backlight, hotkeys: Option<&crate::wmi::Hotkeys>) -> Vec<Event> {
     let mut out = Vec::new();
     for (target, value) in take_notified() {
         let path = path_of(aml, &target);
+        // Dell/Alienware WMI hotkeys: logged and decoded in `wmi`.
+        if let (Some(h), Some(p)) = (hotkeys, &path) {
+            if h.take(aml, p, value).is_some() { continue; }
+        }
         let kind = match &path {
             Some(p) if d.lids.contains(p) => "lid",
             Some(p) if d.batteries.contains(p) => "battery",
@@ -201,7 +205,7 @@ impl Backlight {
 }
 
 /// Drains brightness requests the desktop queued through the kernel.
-pub fn controls(aml: &Aml, light: &mut Backlight) -> bool {
+pub fn controls(aml: &Aml, light: &mut Backlight, awcc: &mut Option<crate::wmi::Awcc>, charge: &mut Option<crate::wmi::Charging>) -> bool {
     let mut any = false;
     for _ in 0..8 {
         let r = w::call4(w::FW_CONTROL, 0, 0, 0);
@@ -211,6 +215,12 @@ pub fn controls(aml: &Aml, light: &mut Backlight) -> bool {
             w::CTL_BRIGHTNESS_STEP => light.step(aml, value == 1, "desktop"),
             w::CTL_BRIGHTNESS_SET => light.to_percent(aml, value),
             w::CTL_SLEEP => sleep(aml, light, value == 1),
+            // The kernel already set the CPU's preference; the fans follow here.
+            w::CTL_CHARGE => match charge.as_mut() {
+                Some(c) => c.set(aml, value),
+                None => serial_println!("[sexacpi.charge.set] value={} supported=0", value),
+            },
+            w::CTL_PROFILE => if let (Some(a), Some(p)) = (awcc.as_mut(), sex_laptop::profile::Profile::from_u8(value)) { a.follow(aml, p) },
             _ => {}
         }
         any = true;
@@ -281,7 +291,7 @@ fn integers(o: &Option<WrappedObject>) -> Option<Vec<Option<u64>>> {
     Some(items.iter().map(int_of).collect())
 }
 
-pub fn read(aml: &Aml, d: &Devices, light: &Backlight) -> w::Sensors {
+pub fn read(aml: &Aml, d: &Devices, light: &Backlight, awcc: Option<&crate::wmi::Awcc>) -> w::Sensors {
     let mut s = w::Sensors::default();
     let mut raws = Vec::new();
     for b in d.batteries.iter() {
@@ -311,6 +321,11 @@ pub fn read(aml: &Aml, d: &Devices, light: &Backlight) -> w::Sensors {
     if let Some((t, crt)) = hottest {
         s.hottest_decikelvin = Some(t as u32);
         s.critical_decikelvin = crt.map(|c| c as u16);
+    }
+    // The fan controller's own sensors (CPU, GPU) are often hotter than any ACPI zone.
+    // They raise the reading only: the critical trip stays the firmware's `_CRT`.
+    if let Some(t) = awcc.and_then(|a| a.last.hottest_decikelvin()) {
+        if s.hottest_decikelvin.map_or(true, |h| t > h) { s.hottest_decikelvin = Some(t); }
     }
     s.brightness = light.current;
     s

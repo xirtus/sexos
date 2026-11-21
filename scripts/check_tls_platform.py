@@ -95,7 +95,7 @@ def check_manifests(tls, workspace, app, trust=None):
         errors.append('unreviewed target-specific TLS dependencies')
     # Reviewed non-TLS replacements: the no_std port of naga's GLSL preprocessor, and
     # virtio-drivers with sound capture for Bell, acpi with embedded-controller region
-    # handlers, Notify and whole-buffer compares for sexacpi, ignore's parallel walker on
+    # handlers, Notify, whole-buffer compares, DerefOf and buffer-field reads for sexacpi, ignore's parallel walker on
     # std's Hermit target for rg and fd, and console, path_abs and clircle building on
     # std's Hermit target for bat (no network or TLS code in any of them).
     reviewed_patches = {'crates-io': {'pp-rs': {'path': 'vendor/pp-rs-0.2.1'},
