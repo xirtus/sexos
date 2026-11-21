@@ -261,6 +261,9 @@ struct Browser {
     blocked: u32,
     /// What the next request is for, when the code making it knows (see `send`).
     next_kind: Option<sex_shields::Kind>,
+    /// Hosts the person let load over plain HTTP this run, after HTTPS-only mode found
+    /// no secure version of them.
+    http_ok: Vec<String>,
 }
 
 /// Most iframes a page loads; more show as empty boxes.
@@ -323,6 +326,27 @@ fn message_page(title: &str, text: &str, url: &str) -> String {
         "<title>{}</title><body style='margin:24px;font-size:15px'><h2 style='color:#b3261e'>{}</h2><p>{}</p><p style='color:#5f6368'>{}</p><p><a href='about:welcome'>Welcome page</a></p>",
         esc(title), esc(title), esc(text), esc(url)
     )
+}
+
+/// Brave's default: while Shields are up for the tab's site, cookies go only to that
+/// site (first party). A request to another site (a tracker's pixel, an ad frame)
+/// neither sends nor sets them. The tab's own page is always first party.
+fn cookie_ok(shields: &shields::Shields, top: &str, target: &sex_fetch::Url, kind: sex_shields::Kind) -> bool {
+    if kind == sex_shields::Kind::Document { return true; }
+    // Built-in pages, files and extension pages have no site of their own.
+    let Ok(top_url) = sex_fetch::Url::parse(top) else { return true };
+    !shields.up(top) || sex_fetch::same_site(&top_url.host, &target.host)
+}
+
+/// What HTTPS-only mode shows when a site has no secure version.
+fn https_only_page(url: &str) -> String {
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('\'', "&#39;");
+    let enc: String = url.bytes().map(|b| if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~' | b'/' | b':') { (b as char).to_string() } else { alloc::format!("%{:02X}", b) }).collect();
+    alloc::format!(
+        "<title>Not secure</title><body style='margin:24px;font-size:15px'><h2 style='color:#b3261e'>This site has no secure connection</h2>\
+         <p>Kaleidoscope tried HTTPS and the site didn't answer over it. Over plain HTTP, others on the network can see and change the page.</p>\
+         <p style='color:#5f6368'>{}</p><p><a href='about:http?url={}'>Continue to the site over HTTP</a> &nbsp; <a href='about:welcome'>Go back to safety</a></p>",
+        esc(url), enc)
 }
 
 /// The origin of an http(s) address, as `postMessage` and `ancestorOrigins` name it.
@@ -626,6 +650,20 @@ impl Browser {
         }
     }
 
+    /// The address of the tab's own page, for whether a request is first party: the page
+    /// around a frame while in one (or while a frame loads), else the shown page.
+    fn top_url(&self, kind: sex_shields::Kind) -> String {
+        if self.in_frame.is_some() || (kind == sex_shields::Kind::Subdocument && self.nav_from.is_some()) { self.parent.clone().unwrap_or_default() } else { self.url.clone() }
+    }
+
+    /// The HTTPS address to try first for a plain-HTTP page, when HTTPS-only mode wants
+    /// one (not for local hosts, or ones the person let use HTTP).
+    fn https_first(&self, url: &str) -> Option<String> {
+        let rest = url.strip_prefix("http://")?;
+        let u = sex_fetch::Url::parse(url).ok()?;
+        (sex_fetch::upgradable(&u.host) && !self.http_ok.contains(&u.host)).then(|| alloc::format!("https://{rest}"))
+    }
+
     /// Starts `p`'s current hop. `patient` waits while every flow is someone else's.
     fn send(&mut self, p: &mut Pending, patient: bool) -> Result<net::Exchange, &'static [u8]> {
         if p.hops >= MAX_REDIRECTS { return Err(b"Too many redirects."); }
@@ -648,8 +686,11 @@ impl Browser {
         }
         if p.secure_only && !target.secure { return Err(b"An HTTPS page cannot load an insecure script."); }
         let cross = p.script.as_deref().filter(|o| *o != target.origin());
-        let cookie = if cross.is_some() { None } else { self.jar.borrow().header(&target, wall()) };
+        let first = cookie_ok(&self.shields, &self.top_url(kind), &target, kind);
+        let cookie = if cross.is_some() || !first { None } else { self.jar.borrow().header(&target, wall()) };
         let mut sent: Vec<(&str, &str)> = p.headers.iter().map(|(k, v)| (k.as_str(), v.as_str())).filter(|(k, _)| !sex_fetch::forbidden_header(k)).collect();
+        // Global Privacy Control, as Brave sends it: don't sell or share my data.
+        sent.push(("Sec-GPC", "1"));
         if let Some(o) = cross { sent.push(("Origin", o)); }
         // The page's own address, or while a page loads the one it was opened from.
         let from = match &self.nav_from { Some(loading) => loading.as_deref(), None => Some(self.url.as_str()) };
@@ -665,7 +706,8 @@ impl Browser {
     fn landed(&mut self, p: &mut Pending, r: net::Response) -> Option<Result<Loaded, &'static [u8]>> {
         let Ok(target) = sex_fetch::Url::parse(&p.url) else { return Some(Err(net::message(net::Error::Address))) };
         let cross = p.script.as_deref().filter(|o| *o != target.origin()).map(String::from);
-        if cross.is_none() {
+        let kind = p.kind.unwrap_or(sex_shields::Kind::Other);
+        if cross.is_none() && cookie_ok(&self.shields, &self.top_url(kind), &target, kind) {
             let mut jar = self.jar.borrow_mut();
             for c in r.head.all("set-cookie") { jar.store(&target, c, wall()); }
         }
@@ -692,6 +734,14 @@ impl Browser {
     }
 
     fn open(&mut self, url: &str, remember: bool) {
+        // "Continue to the site" on the HTTPS-only page: this host may use plain HTTP
+        // for the rest of the run.
+        if let Some(target) = url.strip_prefix("about:http?url=") {
+            let target = extensions::decode(target);
+            if let Ok(u) = sex_fetch::Url::parse(&target) { if !self.http_ok.contains(&u.host) { self.http_ok.push(u.host.clone()); } }
+            sex_pdx::serial_record!("[web.https.allowed] url={}", target);
+            return self.open(&target, false);
+        }
         let post = self.post.take();
         // The page this one is opened from, for its `Referer`: a link or script on it,
         // or the page around an iframe. A typed address has none.
@@ -785,6 +835,19 @@ impl Browser {
                 // A form's POST: the answer is the next page.
                 Some((body, ty)) => self.http("POST", url, &[("Content-Type", if ty.is_empty() { "application/x-www-form-urlencoded" } else { ty.as_str() })], body.as_bytes(), SOURCE_MAX, None)
                     .and_then(|r| if r.status >= 400 { Err(&b"The site answered with an error."[..]) } else { self.buf = r.body; Ok((r.url, 0..self.buf.len())) }),
+                // HTTPS-only: a page asked for over plain HTTP is tried over HTTPS first.
+                None if self.in_frame.is_none() && self.https_first(url).is_some() => {
+                    let secure = self.https_first(url).unwrap_or_default();
+                    match self.fetch_or_download(&secure) {
+                        Ok(r) => { sex_pdx::serial_record!("[web.https.upgraded] url={}", secure); self.url = secure.clone(); Ok(r.unwrap_or_else(|| (String::from("about:downloads"), 0..0))) }
+                        Err(why) if why == shields::BLOCKED => Err(why),
+                        Err(_) => {
+                            sex_pdx::serial_record!("[web.https.unavailable] url={}", url);
+                            self.buf = https_only_page(url).into_bytes();
+                            Ok((String::from(url), 0..self.buf.len()))
+                        }
+                    }
+                }
                 // A plain load may turn out to be a download, saved to Files as it comes.
                 None => self.fetch_or_download(url).map(|r| r.unwrap_or_else(|| (String::from("about:downloads"), 0..0))),
             };
@@ -869,7 +932,9 @@ impl Browser {
         self.timeline = sex_html::Timeline::default();
         let mut doc = Document::new(dom, &base, self.view, clock);
         doc.measure = sex_web::canvas::measure_css;
-        doc.cookies = Some(self.jar.clone());
+        // A frame from another site than the tab's page gets no `document.cookie`.
+        let frame_ok = self.in_frame.is_none() || sex_fetch::Url::parse(&base).is_ok_and(|t| cookie_ok(&self.shields, self.parent.as_deref().unwrap_or(""), &t, sex_shields::Kind::Subdocument));
+        doc.cookies = frame_ok.then(|| self.jar.clone());
         doc.storage = Some(self.storage.clone());
         doc.wall = wall;
         doc.referrer = referrer;
@@ -1500,7 +1565,7 @@ impl Browser {
                             l.streaming = true;
                             drop(g);
                             sex_pdx::serial_record!("[web.media.stream] node={} total={} url={}", l.node, total.map_or(-1, |t| t as i64), l.p.url);
-                            if let Ok(target) = sex_fetch::Url::parse(&l.p.url) {
+                            if let Some(target) = sex_fetch::Url::parse(&l.p.url).ok().filter(|t| cookie_ok(&self.shields, &self.url, t, sex_shields::Kind::Media)) {
                                 let mut jar = self.jar.borrow_mut();
                                 for c in head.all("set-cookie") { jar.store(&target, c, wall()); }
                             }
@@ -1899,7 +1964,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     // `--private` makes the window's first tab private (a private window).
     if given.split_ascii_whitespace().any(|a| a == "--private") { b.jarbox = profile::Jarbox::Private; }
