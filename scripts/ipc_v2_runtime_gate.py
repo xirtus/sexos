@@ -21,6 +21,8 @@ def main():
   m=g['wait'](r'\[bench\.ipc2\.(done|fail)\][^\n]*\n',s,600);assert m[1]=='done',m[0]
   results={n:int(c) for n,c in re.findall(r'\[bench\] name=(ipc2_\w+) ops=\d+ cycles=(\d+)',t()[s:])}
   assert set(results)=={'ipc2_roundtrip','ipc2_signal_poll'},results
+  path=re.search(r'\[bench\.ipc2\.path\]([^\n]*)',t()[s:])
+  if path:results.update({k:int(v) for k,v in re.findall(r'(\w+)=(\d+)',path[1])})
   (a.out/'ipc2.json').write_text(json.dumps(results));print({'ok':True,'cores':os.environ.get('SEXOS_GATE_CORES','1'),**results})
  finally:g['stop']()
 if __name__=='__main__':main()

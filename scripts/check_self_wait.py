@@ -206,10 +206,20 @@ ACPI_AUX_SOURCES=('servers/sexacpi/src/main.rs','crates/sex-pdx/src/power.rs')
 ACPI_AUX_COHORTS=(
  ('822bebd1f4048d35105a0c7fae00b3112b4c11a6013501cf8de528dc5e42dbf6','b13e5f3e739b0000837a81c9ae7212f0356c5d507d04d0f100a421f2ea05ddd6'),
  ('24446427547d1f80eeb557e928b5854c27edc8b0caa45d5aebd7a5e6b460e531','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
+ # Alienware WMI fans/profiles and Dell hotkeys (wait unchanged), 2026-11-19
+ ('269576f3cc365e9987edf36ab958dce3f4d42d3c79ba6fa697cbace95e96a584','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
+ # SMBIOS table + Dell battery charge modes, CTL_CHARGE (wait unchanged), 2026-11-19
+ ('42b7fc5891ed364bf6b3a805dc481065cbed05be7fad84f4fa0c205cdf26326f','1e6111a0f1ba1be3f21be3cf8ff6425a5c63bdf653ae5318801e985520942669'),
+ # bounded() reentrant for nested WMI calls (wait unchanged), 2026-11-19
+ ('5ae985960d2de531913dd283257fa48a08c285694971ae15601672a8d78a6266','1e6111a0f1ba1be3f21be3cf8ff6425a5c63bdf653ae5318801e985520942669'),
  # FADT PM1 blocks outside IO space refused before FixedRegisters::new; wait loop unchanged.
  ('2456130585cec58be8f2fe41e758175ce79e83faefa3c09bf6acf73b3fc917af','227ca3f652dd675bca14b52f9f287c70139dd1b999d1db3ffe462f0183682616'),
+ # x17 WMI/charge work merged with the FADT PM1 check (wait unchanged), 2026-11-19
+ ('d3e47eb0e96b763b478280e49ea90b80905846d50e4462e21e33c51ac9c07520','1e6111a0f1ba1be3f21be3cf8ff6425a5c63bdf653ae5318801e985520942669'),
  # power.rs gains OP_DEVICE_SLEEP; sexacpi reports every MWAIT _CST state (wait loop unchanged), 2026-11-20
- ('8e6bb20e7be6ff97c756986704690f9a5ad3791d77106b69de16bfcc5618590a','231583a434ade78732de80b01c85ec47612099338adcc832e0c52e6b0c4e9142'))
+ ('8e6bb20e7be6ff97c756986704690f9a5ad3791d77106b69de16bfcc5618590a','231583a434ade78732de80b01c85ec47612099338adcc832e0c52e6b0c4e9142'),
+ # x17 WMI/charge (CTL_CHARGE) merged with OP_DEVICE_SLEEP and MWAIT _CST reporting (wait unchanged), 2026-11-20
+ ('bebe39ef539901e45a8b979c2c9e2f17bbe30d4cff62abfb98e0283f61f67721','1f593d9e2de0d324237d4be805ebd9e916b48bfa426f4a9b9c7f2626ee1a0f79'))
 
 def _acpi_wait_profile(text,root,source,seals):
     result=dict(ok=False,task=50,ticks=64,source_sha256={},scope='optional sampled ACPI wait-role admission; no inferred park or user-return proof')
@@ -350,7 +360,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
  'kernel/src/app_resources.rs': '3ae927a6b4abc6651d556fae749f32a96250b0a72102cc378c637afdee02c119',
  'kernel/src/service_restart.rs': 'c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e',
- 'kernel/src/crash_log.rs': '50143847c2b1ecb5a3be360f38ef900e562f271bde90ad9b5b0b728813988f96',
+ 'kernel/src/crash_log.rs': '1a0619db6d5e2e9a18f60f9da923df062d90206d7378009a5751c2802dc145d7',  # SMAP: user copies through smap::user (no observer change), 2026-11-20
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
 

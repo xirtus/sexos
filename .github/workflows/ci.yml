@@ -87,12 +87,16 @@ jobs:
       run: bash scripts/kms_host_gate.sh
     - name: NVIDIA GSP-RM boot (GA104 firmware, VBIOS/FWSEC, WPR2 layout, RPC queues, simulated GPU) on the host
       run: bash scripts/nvidia_gsp_host_gate.sh
+    - name: Hot-plug slots and window planning for docks and eGPUs on the host
+      run: bash scripts/hotplug_host_gate.sh
     - name: sexdrive DMA lifetime and zero-copy reads on the host
       run: bash scripts/sexdrive_dma_host_gate.sh
     - name: Intel RAID (IMSM metadata, VMD bus) on the host
       run: bash scripts/raid_host_gate.sh
     - name: Hardware census table (names, owners, VMD warning) on the host
       run: bash scripts/hwdb_host_gate.sh
+    - name: USB isochronous endpoints and UVC camera detection on the host
+      run: bash scripts/usb_isoch_host_gate.sh
     - name: Rounded window corners and soft shadows (Display decoration pass) on the host
       run: bash scripts/display_decor_host_gate.sh
     - name: Deadline scheduling class (earliest first, share of each window) on the host
@@ -144,7 +148,7 @@ jobs:
     - name: Signed package format and store catalog
       run: cargo test --locked -p sex-pkg
     - name: Spreadeagle workbook engine and office painting (host)
-      run: cargo test --locked -p spreadeagle -p assuit -p sex-office
+      run: cargo test --locked -p spreadeagle -p assuit -p gestalt -p sex-office
     - name: Disk layouts (GPT, FAT, install beside other systems)
       run: cargo test --locked -p sex-disk --lib
     - name: Keyboard layouts, dead keys and Compose
@@ -490,6 +494,9 @@ jobs:
           SEXOS_GATE_CORES=4 python3 scripts/program_bench_gate.py --accel kvm --no-pku --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$out/4core-nopku-$run"
         done
         python3 scripts/bench_median.py "$out"
+        # IPC v2 endpoints on the real CPU (kernel pass 2, K1a): 1 core with PKU, 4 cores.
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host python3 scripts/ipc_v2_runtime_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipc2-kvm-1"
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/ipc_v2_runtime_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/ipc2-kvm-4"
     - name: Preserve runtime evidence
       if: always()
       uses: actions/upload-artifact@v4
@@ -611,6 +618,8 @@ jobs:
       run: python3 scripts/sexfs_repair_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-fs-repair"
     - name: USB network adapter
       run: python3 scripts/usb_net_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-net"
+    - name: PCIe hot-plug (NVMe drive plugged into a root port after boot, button removal, plugged again)
+      run: python3 scripts/pcie_hotplug_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-pcie-hotplug"
     - name: Intel RAID 0 on two NVMe drives, read only
       run: python3 scripts/raid_gate.py --out "$RUNNER_TEMP/sexos-raid"
     - name: NVMe drives as real laptops have them (64 KiB per command; 4 KiB sectors refused)
@@ -854,6 +863,8 @@ jobs:
       run: python3 scripts/program_polyamour_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/polyamour"
     - name: Assuit word processor opens, edits, saves and reopens docx
       run: python3 scripts/program_assuit_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/assuit"
+    - name: Gestalt vector editor draws, edits, saves and reopens SVG
+      run: python3 scripts/program_gestalt_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/gestalt"
     - name: Lua 5.4 interpreter
       run: python3 scripts/lua_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-programs.img" --out "$RUNNER_TEMP/sexos-runtime/lua"
     - name: egui programs (the unmodified egui demo, clicks, keys and wheel)

@@ -12,6 +12,8 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:f6ef904984a5335ae8a8db7df93b5dc6da52805e9adc60d812aa3a76080d0e0b'),  # #456 hot-plug tick merged with master (x17 PR sweep; union of two reviewed versions), 2026-11-21
+
     ('timed', 'kernel/src/scheduler.rs', 'a23ecc7d73a7775b9d5b455435c99b58f3311e78ce2992788dc20604a91fccb2'),  # #468 cross-core handoff + pair affinity at 047e13f5 (admit takes the home core's slot, should_preempt honours it, idle has_queued sees it; wait functions unchanged), reviewed by WS4, 2026-11-20
 
     ('timed', 'kernel/src/scheduler.rs', '59a7fe67bfa8a5a0d230296bd391d5261c6fbaeba42c3c0c05bcd7db6f19265e'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
@@ -56,6 +58,7 @@ PINS = (
 
     ('timed', 'kernel/src/init.rs', '3ed435db8f36db8c12c6fbc2b39a041926891e0135920b0c7426cf2e7375dc0d'),
 
+    ('timed', 'kernel/src/scheduler.rs', 'fn-v1:9cba8bed549187d4c2cfbc41d27a800f32aec67ba241ee5623534c60ebdc17e2'),  # IPC v2 wait spins in poll_for_partner (#426), 2026-11-19
     ('timed', 'kernel/src/scheduler.rs', 'fn-v1:d1ae84d320565569056b4890ee32b11af3b66bc34eba297a890387e8851f71ab'),
 
     ('timed', 'kernel/src/scheduler.rs', '1b10ca8d1b0d1eb3a092f0a61ed1ca7fe6a4b43c448bc24d560ead211940f8d9'),  # #429 merged with master (28ffcb59), reviewed by WS4, 2026-11-19
@@ -106,6 +109,8 @@ PINS = (
     ('timed', 'kernel/src/interrupts.rs', 'e79027cac805659384a0ab1ce0e651bed04727d37081c0e1a3e54d905910c43e'),  # entry hardening: NMI IST, NT/IOPL mask, cli + canonical RCX before SYSRET, swapgs lfence (2026-11-18)
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:9be7e0f042763f122e4881e3f91ce32256e08711eb9531cb73fac73865384dc4'),  # SMAP audit: a kernel fault on a user page is recorded and retried with AC; kernel faults keep PKRU (no wait change), 2026-11-20
 
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:c7ac0959a5dec36e2f31c4d10d81cca01f8a0903800114720f7a56a72237b250'),  # PCIe hot-plug slot look on the core-0 tick, 2026-11-19
+
     ('timed', 'kernel/src/syscalls/mod.rs', 'fn-v1:676eae4ad2ce1171bafcdd21eb7b0d61e5e387ff84e401eb926eecf173191fbb'),  # wait functions only (fn-v1), master 41dd66f3, 2026-11-18
 
     ('timed', 'kernel/src/syscalls/mod.rs', '5db4172f862dae745c2a5566327d5f0e0d66b7a7814beea7e49ad76651b3e577'),  # IPC v2 syscalls 105/106, 2026-11-18
@@ -127,6 +132,7 @@ PINS = (
     ('timed', 'kernel/src/program_workers.rs', '6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e'),
 
     ('timed', 'kernel/src/program_workers.rs', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a'),
+    ('timed', 'kernel/src/program_workers.rs', 'fn-v1:2970f89125d00c2b9373f95433b8d983e6cb203d0edb3f643c4fa19eb6a30800'),  # SMAP: WAIT reads and EXIT writes the futex word through smap::user (no wait change), 2026-11-20
 
     ('timed', 'crates/sex-pdx/src/lib.rs', '8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde'),
 

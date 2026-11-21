@@ -39,7 +39,7 @@ pub const NAME_MAX: usize = 16;
 /// The largest single file in a package.
 pub const FILE_MAX: u64 = 512 * 1024 * 1024;
 /// The installed program's largest image (the program store's limit).
-pub const PROGRAM_MAX: u64 = 32 * 1024 * 1024;
+pub const PROGRAM_MAX: u64 = 64 * 1024 * 1024;
 
 /// What a package may ask the person for. Bits, as stored in a consent record.
 pub const GRANT_NETWORK: u32 = 1;
