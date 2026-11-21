@@ -331,6 +331,50 @@ impl Browser {
         self.draw();
     }
 
+    /// A right-click on a group's label: its name is typed in the bar, the label
+    /// showing it as typed. Enter keeps it, Escape puts the old one back, and Up and
+    /// Down step through the group colours.
+    pub(super) fn start_naming(&mut self, g: usize) {
+        if g >= self.groups.len() || self.in_frame.is_some() { return; }
+        let old = self.groups[g].name.clone();
+        self.editing = Some(old.clone());
+        self.suggestions.clear();
+        self.chosen = None;
+        self.naming = Some((g, old));
+        sex_pdx::serial_record!("[web.group.naming] group={}", g);
+        self.draw();
+    }
+
+    /// A key while a group is being named.
+    pub(super) fn name_key(&mut self, key: sex_pdx::app_key::Key) {
+        let Some((g, old)) = self.naming.clone() else { return };
+        if g >= self.groups.len() { self.naming = None; self.editing = None; return self.draw(); }
+        match key.code {
+            // Escape: the old name back.
+            0x01 => { self.groups[g].name = old; self.naming = None; self.editing = None; }
+            0x1C => {
+                self.naming = None;
+                self.editing = None;
+                sex_pdx::serial_record!("[web.group.named] group={} name={} colour={:08x}", g, self.groups[g].name, self.groups[g].colour);
+                self.save_session();
+            }
+            0x48 | 0x50 | 0x67 | 0x6C => {
+                let n = sex_web::GROUP_COLOURS.len();
+                let at = sex_web::GROUP_COLOURS.iter().position(|c| *c == self.groups[g].colour).unwrap_or(0);
+                let next = if matches!(key.code, 0x50 | 0x6C) { (at + 1) % n } else { (at + n - 1) % n };
+                self.groups[g].colour = sex_web::GROUP_COLOURS[next];
+                sex_pdx::serial_record!("[web.group.colour] group={} colour={:08x}", g, self.groups[g].colour);
+            }
+            0x0E => { if let Some(t) = self.editing.as_mut() { t.pop(); } }
+            _ => {
+                let Some(c) = sex_app::text(key).filter(|c| !c.is_control()) else { return };
+                if let Some(t) = self.editing.as_mut().filter(|t| t.chars().count() < MAX_GROUP_NAME) { t.push(c); }
+            }
+        }
+        if let (Some(t), Some((g, _))) = (&self.editing, &self.naming) { self.groups[*g].name = t.clone(); }
+        self.draw();
+    }
+
     /// Forgets groups with no tabs left, renumbering the rest.
     fn prune_groups(&mut self) {
         let mut g = 0;
@@ -342,6 +386,9 @@ impl Browser {
         }
     }
 }
+
+/// Longest group name, in characters.
+const MAX_GROUP_NAME: usize = 24;
 
 /// Most groups one window holds.
 pub const MAX_GROUPS: usize = 8;

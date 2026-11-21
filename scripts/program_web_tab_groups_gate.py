@@ -4,7 +4,8 @@ named for its site and coloured, as Chrome's "Add tab to new group". Tabs opened
 grouped tab join it; Ctrl+Shift+G again takes a tab out, to just after the group. A
 click on the group's label folds its tabs away (showing the nearest tab outside the
 group if the shown one was in it), and showing a tab of a folded group unfolds it. The
-same works in the vertical strip. A group with no tabs left is forgotten.
+same works in the vertical strip. A right-click on the label names the group in the
+bar, Up and Down stepping through its colour. A group with no tabs left is forgotten.
 
 The test site: /p/<name> logs `vt <name> ready|resize <innerWidth>` and
 `vt <name> down <clientX>,<clientY>` to the console (as in the vertical tabs gate)."""
@@ -52,9 +53,9 @@ def main():
   s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}} for dn,order in((True,ks),(False,ks[::-1])) for x in order]});time.sleep(.8);return s
  def move(x,y):
   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},{'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.3)
- def click(x,y):
-  move(x,y);q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':True,'button':'left'}}]});time.sleep(.2)
-  q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':False,'button':'left'}}]});time.sleep(.2)
+ def click(x,y,button='left'):
+  move(x,y);q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':True,'button':button}}]});time.sleep(.2)
+  q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':False,'button':button}}]});time.sleep(.2)
  def launch():
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {base}/p/a');q.key('ret')
   w=int(g['wait'](r'\[web.console\] level=0 vt a ready (\d+)',s,1200)[1])
@@ -83,6 +84,11 @@ def main():
   # B out of the group: it moves to just after it (A, C grouped; then B).
   s=chord('ctrl','2');shown(1,'b')
   s=chord('ctrl','shift','g');g['wait'](r'\[web.group.left\] group=0 from=1 to=2\n',s,60)
+  # A right-click on the label names it in the bar; Down steps to the next colour.
+  s=len(t());click(*label,button='right');g['wait'](r'\[web.group.naming\] group=0\n',s,60)
+  for _ in range(8):q.key('backspace');time.sleep(.06)
+  keys('work');s=len(t());q.key('down');g['wait'](r'\[web.group.colour\] group=0 colour=ffd93025\n',s,60)
+  s=len(t());q.key('ret');g['wait'](r'\[web.group.named\] group=0 name=work colour=ffd93025\n',s,60)
   # A click on the label folds A and C away; B stays shown.
   s=len(t());click(*label);g['wait'](r'\[web.group.folded\] group=0 on=1 tabs=2\n',s,60)
   assert '[web.tab.shown]' not in t()[s:]
