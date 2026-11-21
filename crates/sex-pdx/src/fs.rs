@@ -195,7 +195,8 @@ pub const PENDING: u8 = 16;
 pub const STALE: u8 = 17;
 /// A program asked for its arguments (ARGS) before Shell told Files where its run lives
 /// (the bind follows the start, and the program can run first). Ask again shortly.
-pub const STARTING: u8 = 18;
+/// Statuses share one byte with `home_lock` (17, 18) and `console_relay` (60, 61).
+pub const STARTING: u8 = 62;
 
 pub fn message(status: u8) -> &'static [u8] {
     match status {

@@ -677,7 +677,7 @@ pub mod files {
                 Err(w::DENIED) if tries < retries => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
                 // The run started before Shell's bind reached Files: wait for it, by time and
                 // not by a count, since on a quiet core a yield returns at once.
-                Err(w::STARTING) => {
+                Err(w::STARTING) if kind == w::ARGS => {
                     let (since, round) = starting.get_or_insert((sex_pdx::get_ticks(), 0));
                     if sex_pdx::get_ticks().saturating_sub(*since) > STARTING_WAIT_TICKS {
                         sex_pdx::serial_record!("[files.client.starting.timeout] kind={}", kind);

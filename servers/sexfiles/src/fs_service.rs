@@ -484,7 +484,6 @@ pub fn bind(target: u32, task: u32) {
     crate::console_relay::bound(launcher, index, target, task);
     unsafe { (*core::ptr::addr_of_mut!(PICKS))[index] = None; }
     sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
-    sex_pdx::serial_record!("[files.program.bound.args] target={} len={}", target, bindings[index].map_or(0, |b| b.args_len));
 }
 /// A volume under `/media` went away (ejected or pulled out): every run loses the grants
 /// it held to `prefix` or anything inside it, so a stick that later mounts under the same
