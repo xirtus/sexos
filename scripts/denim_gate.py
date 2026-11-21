@@ -86,7 +86,7 @@ def main():
   g['wait'](rf'\[heaptest\.kept\] target={t2} task={k2} pages=2048',s,120)
   g['wait'](r'\[denim\.round\] [^\n]* runs=1\n',s,120)
   s=spindle('crash denim')
-  g['wait'](r'\[crash.probe.service\] pd=51\n',s,60)
+  g['wait'](r'\[crash.probe.service\] pd=51 busy=0 hang=0\n',s,60)
   g['wait'](r'\[service.restarted\] pd=51 [^\n]*admitted=1',s,60)
   r=g['wait'](r'\[denim\.ready\] ok=1 [^\n]*restarts=(\d+) ended=(\d+)',s,60)
   assert r[1]=='1' and r[2]=='1',r[0]
