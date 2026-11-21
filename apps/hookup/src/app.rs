@@ -170,7 +170,7 @@ impl App {
 
     fn draw(&mut self, window: &mut sex_app::Window) {
         let (w, h) = window.size();
-        let px = window.pixels();
+        let px = window.frame(w, h);
         let (fw, fh) = (self.face.w as i32, self.face.h as i32);
         let sh = self.small.h as i32;
         let mut c = Canvas { px: &mut px[..w * h], w, h };
@@ -226,7 +226,7 @@ impl App {
         c.fill(0, by - 4, w as i32, h as i32 - by + 4, PANEL);
         c.text(&mut self.small, 12, by, &self.status, TEXT, w as i32 - 24);
         c.text(&mut self.small, 12, by + sh + 4, "p pair  y/n answer  u unpair  s send files  c clipboard  space play  </> track  r announce", DIM, w as i32 - 24);
-        window.show_pixels(w, h);
+        window.show_frame(w, h);
     }
 }
 

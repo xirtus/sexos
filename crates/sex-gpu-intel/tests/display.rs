@@ -259,6 +259,18 @@ fn backlight_percent_never_zero() {
 }
 
 #[test]
+fn backlight_sleep_and_wake_keep_brightness() {
+    let mut f = Fake::default();
+    assert_eq!(backlight::sleep(&mut f), None);
+    f.set(BLC_PWM_CTL, BLC_PWM_ENABLE | BLC_PWM_POLARITY); f.set(BLC_PWM_FREQ, 12_000); f.set(BLC_PWM_DUTY, 3_000);
+    let before = backlight::sleep(&mut f).unwrap();
+    assert!(!backlight::read(&mut f).enabled);
+    assert_eq!(f.get(BLC_PWM_CTL) & BLC_PWM_POLARITY, BLC_PWM_POLARITY);
+    backlight::wake(&mut f, before);
+    assert_eq!(backlight::read(&mut f), before);
+}
+
+#[test]
 fn hotplug_scan_and_diff() {
     let mut f = Fake::default();
     f.set(SDEISR, sde_hotplug_bit(0));
@@ -276,4 +288,59 @@ fn ggtt_and_ids() {
     assert!(sex_gpu_intel::supported(0x8086, 0x9a60));
     assert!(!sex_gpu_intel::supported(0x10de, 0x249d));
     let _ = Rect::default();
+}
+
+#[test]
+fn takeover_keeps_the_mode_and_flips_between_our_buffers() {
+    use sex_gpu_intel::takeover::{Chain, Cursor, Refusal};
+    let mut f = gop_lit();
+    let fw_surf = f.get(plane(0, 1, PLANE_SURF));
+    let timings: Vec<u32> = [HTOTAL, HSYNC, VTOTAL, VSYNC, DDI_FUNC_CTL].iter().map(|&r| f.get(trans(0, r))).collect();
+    // Wrong size (Limine picked another mode than the plane shows): refused, untouched.
+    f.log.clear();
+    assert_eq!(Chain::take(&mut f, 1280, 800, [0x1000_0000, 0x1080_0000], 5120, 100), Err(Refusal::NoPipe));
+    assert!(f.log.is_empty());
+    let mut c = Chain::take(&mut f, 1920, 1080, [0x1000_0000, 0x107e_9000], 7680, 100).unwrap();
+    assert_eq!((c.pipe, c.front, c.saved.surf), (0, 0, fw_surf));
+    assert!(plane::flip_done(&mut f, 0, 0x1000_0000));
+    let after: Vec<u32> = [HTOTAL, HSYNC, VTOTAL, VSYNC, DDI_FUNC_CTL].iter().map(|&r| f.get(trans(0, r))).collect();
+    assert_eq!(timings, after, "no modeset: transcoder untouched");
+    assert_eq!(f.get(pipe(0, CONF)), CONF_ENABLE | CONF_STATE);
+    // Frame 1 goes to buffer 1; frame 2 must wait for that flip to latch first.
+    assert_eq!(c.back(&mut f, 100), Ok(1));
+    c.flip(&mut f).unwrap();
+    assert!(c.pending && c.front == 1);
+    assert_eq!(c.back(&mut f, 100), Ok(0));
+    assert!(plane::flip_done(&mut f, 0, 0x107e_9000) && !c.pending);
+    c.flip(&mut f).unwrap();
+    assert_eq!(c.flips, 2);
+    // A pipe that stops counting frames: the wait gives up instead of hanging.
+    f.frozen = true;
+    assert!(c.back(&mut f, 50).is_err());
+    // Fallback hands the firmware plane back.
+    c.release(&mut f);
+    assert_eq!(f.get(plane(0, 1, PLANE_SURF)), fw_surf);
+    assert_eq!(f.get(plane(0, 1, PLANE_STRIDE)), 7680 / 64);
+    // A device that never latches: refused, firmware plane restored.
+    let mut g = gop_lit();
+    g.frozen = true;
+    assert_eq!(Chain::take(&mut g, 1920, 1080, [0x1000_0000, 0x107e_9000], 7680, 30), Err(Refusal::NoLatch));
+    assert_eq!(g.get(plane(0, 1, PLANE_SURF)), fw_surf);
+    // A panel in PSR2 selective update is left to firmware.
+    let mut g = gop_lit();
+    g.set(trans(0, PSR2_CTL), PSR2_ENABLE);
+    assert_eq!(Chain::take(&mut g, 1920, 1080, [0x1000_0000, 0x107e_9000], 7680, 30), Err(Refusal::Psr2));
+    // Hardware cursor: shown once, then moved with no pixel work; unchanged = no writes.
+    let mut f = gop_lit();
+    let mut cur = Cursor::new(0, 64, 0x1100_0000).unwrap();
+    cur.show(&mut f, 100, 200).unwrap();
+    assert_eq!(f.get(cursor(0, CUR_CTL)) & CUR_MODE_MASK, CUR_MODE_64_ARGB);
+    f.log.clear();
+    cur.show(&mut f, 100, 200).unwrap();
+    assert!(f.log.is_empty());
+    cur.show(&mut f, -3, 7).unwrap();
+    assert_eq!(f.get(cursor(0, CUR_POS)), 7 << 16 | CUR_POS_SIGN | 3);
+    cur.hide(&mut f);
+    assert_eq!(f.get(cursor(0, CUR_CTL)) & CUR_MODE_MASK, 0);
+    assert!(Cursor::new(0, 48, 0x1100_0000).is_none());
 }

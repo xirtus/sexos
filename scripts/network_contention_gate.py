@@ -9,6 +9,7 @@ from pathlib import Path
 from desktop_close_gate import QMP
 from desktop_focus import focus_surface
 from check_tcp_capture import inspect as tcp_capture,frames,checksum,fingerprint
+import spindle_view_record
 from check_dns_capture import inspect as dns_capture,query as dns_query,response as dns_response
 from check_nic_command import inspect as nic_check
 from check_spindle_viewport_pixels import verify as spindle_pixels
@@ -69,11 +70,8 @@ def visible_spindle_text(trace,target):
  sid={12:154,17:302}[target]
  records=re.findall(rf'\[spindle.view.text\] target={target} sid={sid} sequence=(\d+) paint=(\d+) cols=(\d+) rows=(\d+) bytes=(\d+)',trace)
  if not records:raise ValueError('missing actual Spindle pane')
- seq,paint,cols,rows,length=map(int,records[-1]);data=bytearray()
- for offset,part in re.findall(rf'\[spindle.view.bytes\] target={target} sid={sid} seq={seq} paint={paint} off=(\d+) hex=([0-9a-f]*)',trace):
-  if int(offset)!=len(data):raise ValueError('noncontiguous current Spindle pane')
-  data.extend(bytes.fromhex(part))
- if len(data)!=length:raise ValueError('incomplete actual Spindle pane')
+ seq,paint,cols,rows,length=map(int,records[-1])
+ data=spindle_view_record.pane(trace,target,sid,seq,paint)
  lines=bytes(data).split(b'\n')
  if rows and (len(lines)!=rows+1 or any(len(line)!=cols for line in lines[:-1])):raise ValueError('malformed actual Spindle rows')
  return b'\n'.join(lines[:-1]if rows else[])

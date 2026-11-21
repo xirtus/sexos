@@ -1,0 +1,9 @@
+[package]
+name = "sex-idle"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "CPU idle states: which MWAIT C-state an idle core enters"
+
+[lib]
+path = "src/lib.rs"

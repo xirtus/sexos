@@ -22,12 +22,14 @@ extern crate std;
 
 pub mod align;
 pub mod crossfade;
+pub mod edges;
 pub mod export;
 pub mod handoff;
 pub mod history;
 pub mod ipc;
 pub mod otio;
 pub mod rebase;
+pub mod restarts;
 pub mod render;
 pub mod skills;
 pub mod suggest;

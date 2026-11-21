@@ -3,13 +3,16 @@
 # VBIOS/FWSEC, the VRAM layout and GspFwWprMeta (offsets pinned to NVIDIA's C
 # structs), radix3, LibOS arguments, the RPC queues, the CPU sequencer, and the
 # whole boot against a simulated GA104. NVIDIA's real 535.113.01 files are
-# parsed too when they can be fetched. No GPU here: the chip is proven on the x17.
+# parsed too when they can be fetched, and so is the firmware pack built from them. No GPU here: the chip is proven on the x17.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 FW_DIR="$ROOT_DIR/target/nvidia-firmware"
 if bash scripts/fetch_nvidia_gsp_firmware.sh "$FW_DIR"; then
   export NV_GSP_FW_DIR="$FW_DIR"
+  # The boot module sexgpu-nv reads, built the way the ISO build makes it.
+  python3 scripts/make_nvidia_firmware_pack.py --firmware "$FW_DIR" --out "$ROOT_DIR/target/nvidia-gsp.pack"
+  export NV_GSP_PACK="$ROOT_DIR/target/nvidia-gsp.pack"
 else
   echo "[gate.nvidia] note: firmware not fetched; real-image test skipped"
 fi

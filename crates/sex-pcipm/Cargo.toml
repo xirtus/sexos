@@ -1,0 +1,9 @@
+[package]
+name = "sex-pcipm"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "PCI Express power management: ASPM, L1 substates, LTR, clock PM and D-states"
+
+[lib]
+path = "src/lib.rs"

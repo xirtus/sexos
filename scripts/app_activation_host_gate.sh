@@ -38,7 +38,7 @@ assert 'plan_boot_apps(&sex_pdx::app_catalog::TARGETS)' in init
 assert 'crate::app_resources::init(sext_id, silkshell_id,' in init
 assert 'sex_pdx::app_catalog::CONTENT' in init
 assert 'sex_pdx::app_catalog::predecessor(incarnation)' in init
-reserve=init.index('reserve_successor(predecessor.target,incarnation.target,silkshell_id,incarnation.activation_slot.expect(')
+reserve=init.index('reserve_successor_from(predecessor.target,incarnation.target,silkshell_id,incarnation.activation_slot.expect(')
 audit=init.index('crate::app_resources::audit_boot_catalog(silkshell_id);')
 assert reserve<audit<init.index('crate::boot_memory::seal_all()')
 assert 'MAX_APPS:usize=sex_pdx::app_catalog::COUNT;' in (r/'kernel/src/app_resource_state.rs').read_text()

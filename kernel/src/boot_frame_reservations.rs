@@ -37,8 +37,8 @@ impl BootstrapPlanner {
     }
 }
 /// Boot regions BOOT may reserve. 128 was full on a QEMU desktop once Display also
-/// got a virtio-gpu scanout buffer.
-pub const CAPACITY: usize = 192;
+/// got a virtio-gpu scanout buffer; 256 leaves room for the desktop recorder's capture bank.
+pub const CAPACITY: usize = 256;
 pub struct BootFrameReservations { ranges: [Range; CAPACITY], count: usize }
 impl BootFrameReservations {
     pub const fn new() -> Self { Self { ranges: [Range {start:0,end:0};CAPACITY], count:0 } }
@@ -46,10 +46,15 @@ impl BootFrameReservations {
         let end = start.checked_add(length).ok_or("BOOT_FRAME_RANGE_OVERFLOW")?;
         if start == 0 || length == 0 || start % 4096 != 0 || length % 4096 != 0 { return Err("BOOT_FRAME_RANGE_ALIGNMENT"); }
         let range = Range {start,end};
-        if self.count == self.ranges.len() { return Err("BOOT_FRAME_RESERVATIONS_FULL"); }
         if already_consumed(range) || self.ranges[..self.count].iter().any(|r| r.overlaps(range)) {
             return Err("BOOT_FRAME_OWNERSHIP_OVERLAP");
         }
+        // A range touching one already held joins it, so neighbours take one entry.
+        if let Some(r) = self.ranges[..self.count].iter_mut().find(|r| r.end == start || r.start == end) {
+            (r.start, r.end) = (r.start.min(start), r.end.max(end));
+            return Ok(());
+        }
+        if self.count == self.ranges.len() { return Err("BOOT_FRAME_RESERVATIONS_FULL"); }
         self.ranges[self.count] = range;
         self.count += 1;
         Ok(())

@@ -1,5 +1,10 @@
 # SexOS feature ledger (from 2026-11-02)
 
+> **New entries do not go in this file.** Write one file per change in
+> [`ledger/`](ledger/README.md) (`YYYY-MM-DD-short-topic.md`). GitHub ignores
+> this file's `merge=union`, so every PR that appended here went "dirty" (merge
+> conflict) whenever another PR appended first.
+
 ## Handoff summary (as of 2026-11-05, after Q9)
 
 **Try it (native image).** Browser: `W` HTML page as text, `1`-`9`, `0`, `Shift+1`-`6` follow
@@ -3695,6 +3700,20 @@ Plan: `docs/handoff/NVIDIA_GSP_BRINGUP_2026_11_19.md` (GSP boot, display through
 - **Gate** `scripts/nvidia_gsp_host_gate.sh` (CI): parses the real 535.113.01 files, pins every structure offset to NVIDIA's C layout, and boots a simulated GA104 end to end (signatures where the boot ROM looks, FRTS at the right VRAM address, Booter walks radix3 and finds the real image, first RPCs with good checksums, sequencer run, `GSP_INIT_DONE`), plus failure paths (Booter error, silent GSP, WPR2 left by a previous driver).
 - Not yet: the kernel lease and the `sexgpu-nv` service that runs this on the x17 (N4b). ABI: none.
 
+## NVIDIA GPU service and boot entry (N4b, 2026-11-19)
+
+- **Boot entry "SexOS with NVIDIA GPU"**: the main system plus `servers/sexgpu-nv` and `firmware/nvidia-gsp.pack`. Only that entry starts the service; the others keep the dGPU off.
+- **Kernel**: optional domain 53 (Core organ); with it present the NVIDIA GPU is not parked (`[gpu.power] ... action=keep reason=driver`) and is leased to it (`Lease::NvidiaGpu`): all 16 MiB of BAR0, memory + bus-master bits, a 64 MiB DMA pool mapped for the GPU in the IOMMU, the firmware pack read only. Without it Display keeps the GPU's identity (`manifest::claim_present`).
+- **`servers/sexgpu-nv`**: checks the pack's files against the pins (and SHA-256 of the bytes), carves the pool (`boot::Memory::carve`), turns on bus mastering, runs the `sex-gpu-nv` boot with a TSC clock and logs `[nvidia.gsp] step=...` per step, then `[nvidia.gsp.ready]` or `[nvidia.gsp.failed] step= reason=`.
+- **Firmware pack** `scripts/make_nvidia_firmware_pack.py` (`SEXNVFW1`, built in the ISO build and into the installed boot slot).
+- **ABI**: SYS_IDENTITY `QUERY_BARS` (3) returns the held NVIDIA GPU's BAR0/BAR1/BAR3 bus addresses and bus/devfn. Not yet proven on the x17.
+
+## NVIDIA RM objects after the GSP boot (N4c, 2026-11-19)
+
+- **`crates/sex-gpu-nv/src/rm.rs`**: an RPC session after `GSP_INIT_DONE` (sequencer scripts and notices handled while waiting), `GET_GSP_STATIC_INFO` decoded (GPU name, VRAM, usable regions, GPCs/TPCs, internal handles), `GSP_RM_ALLOC` / `GSP_RM_CONTROL` / `FREE`, our client/device/subdevice, and the display engine's static info (heads, windows).
+- **`sexgpu-nv`** logs `[nvidia.rm] name="..." vram_mib= ...`, `[nvidia.rm.device]`, `[nvidia.rm.display] heads= ...`, `[nvidia.rm.ready]`.
+- Simulated GSP-RM answers in the host gate; layouts pinned to NVIDIA's 535.113.01 structures. ABI: none.
+
 ## Net: ALPN http/1.1 (2026-11-09)
 
 - The open-web TLS session names `http/1.1` in its handshake (ALPN), as browsers do (the rustls move set `alpn_protocols`). Host test `[sexnet.tls.open.host]` now proves it on the wire: an OpenSSL server offering `h2` and `http/1.1` must pick `http/1.1`. YouTube stage Y3e.
@@ -4402,6 +4421,50 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
   `scripting`, `webRequest`, popups and options pages, isolated worlds for content
   scripts, signature checks. uBlock Origin Lite needs these; full uBO (MV2) also needs
   blocking webRequest.
+## Kaleidoscope extensions, slice N7b (2026-11-14)
+- **What:** each extension that is on and has a background (MV3 `service_worker`, as an
+  ES module when `type: module`; MV2 `scripts` or a background page's `<script src>`)
+  runs in a script realm of its own, started with the browser and on install, stopped
+  when turned off or removed. It hears `runtime.onInstalled` / `onStartup`.
+- **`chrome.*`** (`crates/sex-js/src/extensions.js`, op `EXTENSION`, 39 since the
+  master merge of 2026-11-19): `runtime`
+  (sendMessage/onMessage both ways with async `sendResponse`, getURL, getManifest,
+  lastError), `tabs` (query/get/sendMessage/create/update), `storage.local/sync/session`
+  with `onChanged` across realms (kept with the profile's web storage under origin
+  `kaleidoscope-extension://<id>`, 10 MB), `scripting` (executeScript, insertCSS,
+  register/update/unregister/getRegisteredContentScripts), `declarativeNetRequest`
+  (get/updateEnabledRulesets, dynamic and session rules, rebuilt into the extension's
+  engine), `i18n`, `alarms`, and stubs for action, permissions, contextMenus, commands,
+  webNavigation, windows. Promises and callbacks both.
+- **Browser:** `apps/web/src/extensions.rs` routes realm messages (`ext_pump` in
+  `settle`), serves `kaleidoscope-extension://ID/PATH` to fetch, modules and pages,
+  and keeps run-time state in Files `Web/extensions-state/<id>.json`. Only code the
+  browser wrote gets a `chrome` object: it needs a key handed to each realm once,
+  before page scripts run.
+- **Tests:** `cargo test -p sex-js --test extensions`; the extensions gate now installs a
+  sample with a service worker (storage, registered script, dynamic rule, messaging).
+- **uBlock Origin Lite runs unmodified:** `scripts/program_web_ubol_gate.py` (not in CI;
+  downloads uBOL-home's `chromium/` build) installs it; its module service worker
+  starts (~7 s), loads 117,194 rules from its six default rulesets, registers 4 content
+  scripts, and with Shields down blocks 7 trackers on the Shields test page.
+- **Not yet:** isolated worlds, popups/options pages as extension pages, `webRequest`,
+  `runtime.connect` ports, content scripts in frames hearing messages.
+## Kaleidoscope extensions, slice N7c: extension pages (2026-11-20)
+- **What:** an extension's own pages (its popup and options page, or any
+  `kaleidoscope-extension://ID/PATH.html`) open in the tab while it is on. Their
+  scripts, modules and style sheets load from the extension, the page realm gets the
+  whole `chrome.*` API (as the background has), and content scripts don't run there.
+  about:extensions links each extension's Popup and Options page. An extension page
+  speaks only for its own extension.
+- **Tests:** the extensions gate opens the sample's options page, which asks the service
+  worker and reads `chrome.storage` (reply `{"ok":true,"host":"options","installs":1,...}`)
+  and gets its style sheet. The uBOL gate (not in CI) now also fetches uBOL's popup and
+  dashboard: the popup renders ("not a website" for an extension tab, as in Chrome); the
+  dashboard's scripts need `:scope` and `:has()` selectors, which sex-html does not parse
+  yet (selector code is Codex's).
+- **Gate note:** the uBOL gate needs a 768 MiB guest (`SEXOS_GATE_MEMORY`); at 512 MiB the
+  shell ends the browser for memory, and a 1 GiB guest hit a kernel page fault at rip 0
+  in the browser's task (reported, not this slice's).
 ## J5 D2: Denim compressed memory, page out and back (2026-11-14)
 - New syscall 88 `SYS_DENIM` (ABI addition, `sex_pdx::denim`), Denim only: SCAN (accessed bits), OUT (heap page leaf becomes a non-present marker naming the row, shootdown, bytes copied to Denim's window, frame freed), IN (fresh frame, leaf restored, parked fault task resumed). Kernel messages OP_FAULT 0x3D1 and OP_RECALL 0x3D2.
 - Page faults on a marker go to Denim instead of the row's pager (`forward_page_fault`). Worker spawn and SEAL/OPEN on a run with pages out return RETRY and recall them; OUT is refused while workers live.
@@ -5330,6 +5393,30 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Silkbar: the launcher button is the lips on the bar's glass instead of the blue square. Wallpaper: the default is now "SexOS" (warm charcoal with the lips at 26% width, centred); the old navy theme gradient is kept as "Midnight". Boot screen: a charcoal header with the lips and the title. Lock screen: charcoal with the lips above "Locked". README and website carry the mark.
 - Verified by `tests/brand.rs`, `tests/desktop_look.rs` (both now run in `scripts/service_custody_host_gate.sh`) and `scripts/desktop_look_gate.py` (Super+B still steps SexOS → Dusk).
 
+## Desktop widgets: clock, weather and system cards (S5b, S5c, 2026-11-18)
+
+- Super+Shift+W (setting `desktop.widgets`, off by default) puts three cards on the wallpaper at the top right, under every window: the time and date in your zone, today's weather, and processor load with free memory. Display draws them from its own clock and the kernel's numbers and only redraws when a word changes.
+- The weather comes from Open-Meteo (no account or key) for your time zone's city (Berlin, New York, Tokyo...; Fahrenheit for US zones). `apps/steamy` is a hidden helper the Shell starts with the network right only while the cards show and `desktop.weather` (default on) allows it; it sends only the city's rounded coordinates, asks every 30 minutes, and the Shell accepts its reports from that run alone. UTC names no city, so no request is made and the card says so.
+- Verified by `tests/desktop_widgets.rs` (words, places for every Settings zone, Open-Meteo answer parsing, wire, layout), `scripts/desktop_widgets_gate.py` and `scripts/weather_widget_gate.py` (Berlin, the helper's report reaching the card, the helper ending with the cards).
+## Polyamour: FBX files and a working File Browser (2026-11-19)
+- `crates/sex-3d/src/io/fbx` reads FBX 7.x, binary (32- and 64-bit offsets, zlib arrays) and ASCII, and writes binary FBX 7.4. Import: models with the full FBX transform (rotation order, pre/post rotation, pivots, offsets, geometric transforms baked), meshes (n-gons, UVs, per-face materials, smoothing by polygon or edge, shading guessed from normals, vertex colours), Phong/Lambert materials mapped to Principled, embedded or external diffuse textures, cameras, lights, `GlobalSettings` axes and units, and skins (LimbNodes become armatures, clusters become vertex groups plus an Armature modifier; both `Transform` conventions accepted). Export: Y-up metres like Blender's exporter, meshes after modifiers (except Armature), materials, embedded PNG textures, cameras, lights, skeletons, skin clusters and a bind pose. Animation is not read or written yet; FBX 6 files are refused with a clear message.
+- `Format::Fbx` joins `sex_3d::io` (extension, sniffing, `import_into`, `export`); `Format::Blend` export now goes through `io::export` too.
+- Polyamour's File > Open, Save As, Import and Export were dead menu entries; they now open a File Browser dialog (`apps/polyamour/src/filebrowser.rs`: folders first, filtered by format, name field, keyboard and double click). Import adds to the scene as one undo step and frames the new objects; Open frames imported scenes. Import/Export menus list FBX, glTF, OBJ, STL, PLY and .blend. Ctrl O and Shift Ctrl S added. `--browse` shows the dialog for screenshots.
+- Verified by host tests (FBX round trips of a scene and a skinned mesh, ASCII Z-up centimetres with pivots, the node-tree reader/writer, File Browser keys), import of five real FBX files (Blender 2.7x binary with a skinned mesh, ASCII 7.5, Blender global settings, a 19-mesh model), and assimp 5.3 reading the exported files (meshes, camera, light, embedded texture, 2-bone skin).
+- Measured, not shipped: running the render workers on an AVX2 code path (runtime dispatch) changed the Solid viewport and path tracer by 0 to 3%. The viewport's time is in triangle setup (vertex fetch cache misses) and binning, not arithmetic; faster frames need data-layout work, and real GPU drawing needs a SexOS 3D GPU driver (virtio-gpu 3D or Intel Xe), which does not exist yet.
+## Splicy Studio exports WebM, AV1 MP4 and H.264 MP4 with its own encoders (2026-11-18)
+- Splicy Studio (github.com/xirtus/Splicy) gains the two royalty-free formats Andreas asked for beside H.264 MP4: **WebM** (VP9 profile 0 + Opus) and **MP4 AV1** (AV1 Main 8-bit + Opus). All encoding is pure Rust (craft-libs' VP9, AV1 and Opus encoders, MIT OR Apache-2.0), so it runs on SexOS with no FFmpeg and no hardware encoder. A registered hardware AV1 encoder is still tried first.
+- `filmcraft-export`: `Format::Webm`, `AudioCodec::Opus` (48 kHz, mono or stereo, 5.1 folded to stereo, up to 96 kbit/s a channel), `open_formats.rs` (VP9 and AV1 encoders, Opus encoder with the right pre-skip and tail, WebM writer that interleaves picture and sound in time order with Opus codec delay and seek pre-roll). Opus in MP4 is `Opus` + `dOps` with an edit list over the pre-skip. Both formats are one-pass bitrate controlled (CBR or VBR).
+- Export panel: WebM (VP9) in the format list, AV1 no longer greyed out, Opus audio rows, presets "WebM 1080p (VP9 + Opus)" and "AV1 1080p (MP4)".
+- `splicy-studio --export=FORMAT:FILE[:SECONDS]` exports before the window opens (gates and scripts).
+- Verified by `scripts/splicy_studio_export_host_gate.py` (FFmpeg finds vp9/opus, av1/opus, h264/aac, decodes all three with no error, 60 of 60 pictures, PSNR over 30 dB against the source, loudness within 1.5 dB) and `scripts/program_splicy_studio_gate.py` (all three exported inside SexOS before the editor window opens).
+
+## Splicy: Scarlet's restart finder and cut edges on the waveform (2026-11-19)
+
+From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, not its agent prompts:
+- **Restarts** (`crates/sex-splice/src/restarts.rs`; Studio `core/crates/edit/src/transcript/restarts.rs`): a phrase said, then said again within 12 words and 12 s (three words or more, or two with at most one between; one word added or dropped; contractions fold). Splicy's clean-up cards use it in place of the old adjacent-repeat rule. Splicy Studio: `transcript.findRestarts`, `transcript.removeRestarts`, a Text panel **Remove restarts** button, and `--clean-up` for scripts.
+- **Cut edges between run-together words** (`crates/sex-splice/src/edges.rs`): where two words are timed under 60 ms apart, a cut's edge moves onto the waveform's room tone (-55 dBFS) or a trough (-48 dBFS, 10 dB under each side; -44 dBFS within 50 ms of the transcript edge), never inside a sounding word. Integer tenths of a dB, 20 ms RMS buckets measured during Splicy's scan. A card whose edge found no quiet place says "listen to the join first".
+- Gates: sex-splice host tests; Studio host gate `--clean-up` cuts 0.9 s of a restart; QEMU `program_splicy_studio_gate.py` runs `--clean-up` on SexOS.
 ## Office slice 3: Spreadeagle and Assuit daily-ready (2026-11-19)
 - Spreadeagle writes .ods itself (`apps/spreadeagle/src/ods.rs`): every sheet, formulas turned into OpenFormula (`of:=SUM([.B2:.B4])`, inline arrays, quoted sheets, whole rows and columns), cached results, dates, percentages with their places, bold, italic, underline and column widths. LibreOffice opens it with all of that; reopening in Spreadeagle restores formulas, fonts, percentages and widths that GridCraft's data-only ODS import drops. An .ods now saves as .ods (xls, xlsb, slk still save beside as .xlsx).
 - Both apps: Ctrl+P writes a PDF beside the file (GridCraft's sheet printer, WordCraft's page PDF); Save As by extension (Spreadeagle Ctrl+Shift+S: xlsx, ods, csv, tsv, html, pdf; Assuit Ctrl+Shift+E, since Ctrl+Shift+S is Word's style picker: docx, odt, rtf, html, md, txt, pdf); unsaved changes are kept in `NAME.recovered.xlsx`/`.docx` on close and after 15 s without a key, offered back on the next open (Esc throws them away), and forgotten on save.
@@ -5351,9 +5438,43 @@ energy. Details: `LAPTOP_POWER_2026_11_13.md` (Sleep section).
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
 
+## L3: native Intel display on Tiger Lake (2026-11-19)
+- On Intel Tiger Lake graphics (the Alienware x17 R1's iGPU), Display takes the panel over from the firmware framebuffer without a modeset: it repoints the firmware's pipe at two buffers of its own and flips between them at vblank. Frames are tear-free and held to the panel's refresh; only changed rows are written and flushed.
+- The pointer is on the hardware cursor plane: moving it writes two registers and redraws no pixels (drawn arrow kept for the magnifier and screen-off).
+- BOOT gives Display the buffers and fills only their GPU page-table (GGTT) entries, so Display cannot point the GPU at other memory; the IOMMU maps them like any DMA pool.
+- Safe fallback: no matching pipe, PSR2, or a flip that never latches leaves or puts back the firmware framebuffer with the last picture.
+- Receipts: `[boot.display.intel_scanout]`, `[display.intel.takeover]`, `[display.intel.flip]`, `[display.intel.cursor]`, `[display.intel.fallback]`, measured `refresh_mhz=` and `[display.intel.edid.mode]` for every panel mode.
+- Verified on the host by `scripts/kms_host_gate.sh` (`takeover_keeps_the_mode_and_flips_between_our_buffers`: transcoder untouched, flips wait for the latch, dead pipe and PSR2 refused, firmware plane restored, cursor moves without pixels). QEMU has no Intel display; the x17 boot log is the first hardware run.
+## Device power part 1: link power states and the sleep notice (2026-11-19)
+- Every PCIe link gets the power states both ends support at BOOT: ASPM L0s/L1, L1.1/L1.2 substates, clock PM and LTR, with Linux's latency checks and quirks, adding to what firmware set and never removing it (`crates/sex-pcipm`, `kernel/src/pci_power.rs`). Idle links drop to L1.2, which the platform needs for its deepest idle states.
+- Drivers can put a device they hold in D3hot and back (syscall 86 `OP_POWER`); the kernel saves and restores what a reset loses, MSI-X table included.
+- Sleeping the desktop now tells every driver holding a device (`OP_DEVICE_SLEEP`); the disk flushes first.
+- Verified by `cargo test -p sex-pcipm` and `scripts/laptop_power_gate.py`. Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.
+
+## Device power part 2: devices power down while asleep (2026-11-19)
+- While the laptop sleeps the touchpad is in HID sleep, USB sticks and other idle USB devices are suspended (U3, cache flushed first), the HDA codecs are in D3 and the Intel eDP panel's backlight and panel power are off; all come back on wake. Keyboards, mice, hubs, USB network and Bluetooth stay up.
+- Verified by `cargo test -p sex-gpu-intel -p sex-hid-touch` and `scripts/laptop_power_gate.py` (USB stick suspend and resume). Doc: `docs/handoff/DEVICE_POWER_2026_11_19.md`.
 ## Touchpad on its interrupt line (2026-11-19)
 - The laptop touchpad is read when its interrupt fires instead of 125 times a second: a new contact reaches the pointer at once (polling could add up to 8 ms), and an untouched pad costs no I2C reads (polling read it 20 times a second, each read a busy bus transfer).
 - sexacpi finds the line: an `Interrupt` in the pad's `_CRS`, or the pad's `GpioInt` pin on the Intel GPIO controller (Tiger Lake-LP/H as on the Alienware x17 R1, Alder Lake-P/S/N, Raptor Lake-S), when firmware routed that pad to the I/O APIC (read only). `sex_pdx::touchpad::Found` carries it (`irq`).
 - Kernel: BOOT reserves one I/O APIC *line* for Input (`sex_hwdb::manifest::LINES`); syscall 86 gains `OP_LINE_BIND` (4) and `OP_LINE_MASK` (5). A level line is masked each time it fires, so a stuck wire costs one interrupt. Inputs under 16 and inputs already bound are refused.
 - Polling stays: no line, a refused line, a stuck line (32 empty reads in a row after interrupts) or a silent one (reports found by the once-a-second check read with no interrupt, three times in a row) drop back to it (`sex_hid_touch::pace`).
 - Verified by host tests (`cargo test -p sex-laptop -p sex-hid-touch`, `sex_pdx::touchpad` round trips with the line); not yet run on a real pad.
+
+## Kaleidoscope reader view, slice N5 (2026-11-20)
+
+- Ctrl+Shift+R opens `about:reader?url=…` for the current page, and pressing it again goes back. `crates/sex-web/src/reader.rs` scores the paragraph containers as Readability does: text length and commas, class and id names, and link density. It keeps the best box and any sibling boxes that score well. It writes only the paragraphs, headings, lists, quotes, code and pictures, with absolute addresses, on a calm 680 px page with an "N min read · host" line.
+- Host tests: `crates/sex-web/tests/reader.rs`. OS gate: `scripts/program_web_reader_gate.py`, which checks the article's words and title, that the picture is fetched from the site, the cream page, and the toggle back. Fixtures are in `scripts/web_site/reader/`.
+
+## Kaleidoscope private and container tabs, slice N4 (2026-11-20)
+
+- Each tab takes its cookies and localStorage from a box (`apps/web/src/profile.rs` `Jarbox`): the person's own; one of four containers (Personal, Work, Banking, Shopping), each saved to `Kaleidoscope/containers/<n>/`; or the private box, which lives in memory only.
+- When the last private tab closes, the private box is forgotten (`[web.private.forgotten]`). Private tabs record no history, keep compiled scripts in memory only, and run no extensions.
+- Keys: Ctrl+Shift+P opens a private tab and Ctrl+Shift+1..4 opens a container tab. Ctrl+T from a private tab stays private, and a link opened in a new tab keeps its box. `kaleidoscope URL --private` opens a private window.
+- The tab chip is underlined in its box's colour, and the bar shows "Private · " or the container's name.
+- Gate: `scripts/program_web_private_gate.py` (in CI). The server sees each box's cookie, and each page reports its localStorage. Own, Personal, Work and private never see each other's. Two private tabs share one box, and it is empty again after they close. A second Personal tab shares Personal's box, and only container 1's box is saved to Files.
+
+## sex-html `:scope` and `:has()` (2026-11-20)
+
+- `:scope` is the element a script's `querySelector*()` or `matches()` was called on (`Dom.scope`, set for the call); in style sheets it is the root element. `:has()` takes relative selectors (descendant, `>`, `+`, `~`); it can't be nested and its specificity is that of its most specific argument. Host tests: `crates/sex-html/tests/scope_has.rs`.
+- uBlock Origin Lite's dashboard now runs without script errors, and `scripts/program_web_ubol_gate.py` fails on any page script error. It runs in the default 512 MiB guest again, now that #484 took the NVIDIA GSP pack out of boot.img.

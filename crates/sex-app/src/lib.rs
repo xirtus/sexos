@@ -82,6 +82,8 @@ pub struct Window {
     size: (usize, usize),
     /// Events that arrived while a file request waited for its answer.
     held: [Option<Event>; 16],
+    /// The frame being painted (see [`Window::frame`]).
+    back: alloc::vec::Vec<u32>,
 }
 
 impl Window {
@@ -94,7 +96,7 @@ impl Window {
         call(SLOT_DISPLAY, 0xEC, surface, (56u64 << 32) | 200, (400u64 << 32) | 640);
         call(SLOT_SHELL, 0xFA, surface, TITLE_ID, (identity.target_pd as u64) << 8);
         let (w, h) = sex_pdx::pixel_region::area(640, 400);
-        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, size: (w as usize, h as usize), held: [const { None }; 16] };
+        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, size: (w as usize, h as usize), held: [const { None }; 16], back: alloc::vec::Vec::new() };
         window.show(b"");
         call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
         window
@@ -114,6 +116,22 @@ impl Window {
     /// (`KEYPAD`: [`Key::keypad`]). Lasts for this run; ask again to change it.
     pub fn want_keys(&self, flags: u64) -> bool {
         sex_pdx::pdx_call_checked(SLOT_SHELL, sex_pdx::app_key::OP_KEYS, flags, 0, 0).is_ok()
+    }
+    /// A private `width` by `height` frame to paint whole, then show with
+    /// [`Window::show_frame`]. Display reads the window's pixels whenever it composites
+    /// (a cursor move, the clock, a neighbour's damage), so a program that clears and
+    /// repaints in [`Window::pixels`] can be caught half drawn; this one never is. It
+    /// keeps the last frame painted, so a program may repaint only what changed.
+    pub fn frame(&mut self, width: usize, height: usize) -> &mut [u32] {
+        if self.back.len() < width * height { self.back.resize(width * height, 0); }
+        &mut self.back[..width * height]
+    }
+    /// Copies the finished [`Window::frame`] into the window and shows it.
+    pub fn show_frame(&mut self, width: usize, height: usize) {
+        let pixels = self.pixels();
+        let n = (width * height).min(pixels.len()).min(self.back.len());
+        pixels[..n].copy_from_slice(&self.back[..n]);
+        self.show_pixels(width, height);
     }
     /// Shows the first `width` by `height` pixels in the window instead of its text.
     pub fn show_pixels(&mut self, width: usize, height: usize) {
@@ -174,11 +192,18 @@ impl Window {
         if m.type_id == sex_pdx::dnd::OP_DROP { return dnd::receive(m); }
         // Tray items and notification answers wait for `tray::take` or `next_any`.
         if m.type_id == sex_pdx::program_tray::OP_TRAY_EVENT { tray::receive(m); return None; }
+        // Voyeur's questions wait for `search::asked` and `search::activated`.
+        if sex_pdx::search::shell_opcode(m.type_id) { search::receive(m); return None; }
         if let Some(on) = sex_pdx::a11y::decode_state(m.type_id, m.arg0, m.arg1) { a11y::told(on); return None; }
         if lifecycle::close_requested(m.type_id, m.caller_pd, [m.arg0, m.arg1, m.arg2], self.target, self.task) { return Some(Event::Close); }
         if m.type_id == 0x202 { if let Some(k) = Key::decode_release(m.arg0, m.arg1, m.arg2) { return Some(Event::KeyUp(k)); } }
         if m.type_id == 0x202 { return Key::decode(m.arg0, m.arg1, m.arg2).map(Event::Key); }
         None
+    }
+    /// Process one already received message while the application multiplexes
+    /// its own nonblocking protocols. Shell input keeps the usual authentication.
+    pub fn receive(&mut self, message: &sex_pdx::PdxMessage) -> Option<Event> {
+        self.event(message)
     }
     /// The next key or close, waiting for one.
     pub fn next(&mut self) -> Event {
@@ -209,7 +234,8 @@ impl Window {
         loop {
             if let Some(e) = self.poll() { return Some(e); }
             let now = sex_pdx::get_ticks();
-            if now >= end { return None; }
+            // A Voyeur question that came in with the events is answered now, not at `end`.
+            if now >= end || search::waiting() { return None; }
             let _ = sex_pdx::sys_wait_self_ticks((end - now).clamp(1, 64));
         }
     }
@@ -316,6 +342,81 @@ pub mod tray {
             pt::Event::Reply { .. } => {
                 let r = unsafe { &mut *core::ptr::addr_of_mut!(REPLY) };
                 if let Some((tag, text)) = r.push(e) { put(Event::NotificationReply { tag, text }); }
+            }
+        }
+    }
+}
+
+/// Answering Voyeur, the system search ([`sex_pdx::search`]): a program that
+/// holds something worth finding (Loom's file index, Kaleidoscope's history)
+/// registers once, then answers each query from what it already holds. The
+/// Shell sends it the query text and nothing else. Queries and chosen results
+/// arrive with the window's events and wait here; read them each turn of the
+/// program's loop (a loop that waits in [`Window::next_within`] answers within
+/// its wait).
+pub mod search {
+    use sex_pdx::search as wire;
+    pub use wire::{Record, ACTION_COPY, ACTION_OPEN, ACTION_OPEN_WITH, ACTION_REVEAL, KIND_BOOKMARK, KIND_CONTENT, KIND_FILE, KIND_HISTORY, RESULTS_MAX};
+
+    static mut READER: wire::QueryReader = wire::QueryReader::new();
+    /// A whole query not yet answered (its ticket), 0 for none.
+    static mut ASKED: u32 = 0;
+    static mut CHOSEN: [Option<(u8, u64)>; 4] = [None; 4];
+    static mut ID: u8 = 0;
+
+    fn send(p: wire::Packet) -> bool {
+        for _ in 0..1000 {
+            match sex_pdx::pdx_call_checked(sex_pdx::SLOT_SHELL, p.opcode, p.args[0], p.args[1], p.args[2]) {
+                Ok(_) => return true,
+                Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+                Err(_) => return false,
+            }
+        }
+        false
+    }
+    /// Offers this program as a provider named `name` (up to 16 characters),
+    /// answering with the result kinds in `kinds` (`KIND_*`).
+    pub fn register(name: &str, kinds: &[u8]) -> bool {
+        let bits = kinds.iter().fold(0u16, |b, &k| b | 1u16.checked_shl(k as u32).unwrap_or(0));
+        wire::Registration::new(name, bits).is_some_and(|r| send(r.wire()))
+    }
+    /// A query or a chosen result is waiting to be read.
+    pub fn waiting() -> bool { unsafe { ASKED != 0 || (*core::ptr::addr_of!(CHOSEN))[0].is_some() } }
+    /// True once the Shell took the registration.
+    pub fn registered() -> bool { unsafe { ID != 0 } }
+    /// The query to answer now, if one came: (ticket, text). A newer query
+    /// replaces one not yet answered; a cancelled one goes.
+    pub fn asked() -> Option<(u32, alloc::string::String)> {
+        unsafe {
+            let ticket = core::mem::take(&mut *core::ptr::addr_of_mut!(ASKED));
+            (ticket != 0).then(|| (ticket, alloc::string::String::from((*core::ptr::addr_of!(READER)).query())))
+        }
+    }
+    /// Answers query `ticket` with up to [`RESULTS_MAX`] results.
+    pub fn answer(ticket: u32, records: &[Record]) -> bool {
+        let mut out = [wire::Packet { opcode: 0, args: [0; 3] }; wire::ANSWER_PACKETS];
+        let n = wire::answer_packets(ticket, records, &mut out);
+        out[..n].iter().all(|p| send(*p))
+    }
+    /// A result of ours the user chose: (action, key).
+    pub fn activated() -> Option<(u8, u64)> {
+        let q = unsafe { &mut *core::ptr::addr_of_mut!(CHOSEN) };
+        let e = q[0].take()?;
+        q.rotate_left(1);
+        Some(e)
+    }
+    pub(crate) fn receive(m: &sex_pdx::PdxMessage) {
+        let p = wire::Packet { opcode: m.type_id, args: [m.arg0, m.arg1, m.arg2] };
+        unsafe {
+            if let Some(ticket) = (*core::ptr::addr_of_mut!(READER)).accept(p) { ASKED = ticket; }
+            else if let Some(ticket) = wire::decode_cancel(p) { if ASKED == ticket { ASKED = 0; } }
+            else if let Some((_, _, action, key)) = wire::decode_activate(p) {
+                let q = &mut *core::ptr::addr_of_mut!(CHOSEN);
+                if let Some(slot) = q.iter_mut().find(|s| s.is_none()) { *slot = Some((action, key)); }
+            }
+            else if let Some((id, status)) = wire::decode_registered(p) {
+                if status == wire::Status::Ok { ID = id; }
+                sex_pdx::serial_record!("[app.search.registered] id={} status={:?}", id, status);
             }
         }
     }
@@ -668,17 +769,31 @@ pub mod files {
         if path.len() > w::PATH_BYTES { return Err(w::NAME); }
         let _turn = Turn::take();
         let mut tries = 0;
+        let mut starting: Option<(u64, u32)> = None;
         loop {
             let region = region()?;
             region[..path.len()].copy_from_slice(path);
             fill(&mut region[w::PATH_BYTES..]);
             match once(&mut hold, kind, path.len(), offset, length) {
                 Err(w::DENIED) if tries < retries => { tries += 1; for _ in 0..20 { sex_pdx::sys_yield(); } }
+                // The run started before Shell's bind reached Files: wait for it, by time and
+                // not by a count, since on a quiet core a yield returns at once.
+                Err(w::STARTING) if kind == w::ARGS => {
+                    let (since, round) = starting.get_or_insert((sex_pdx::get_ticks(), 0));
+                    if sex_pdx::get_ticks().saturating_sub(*since) > STARTING_WAIT_TICKS {
+                        sex_pdx::serial_record!("[files.client.starting.timeout] kind={}", kind);
+                        return Err(w::DENIED);
+                    }
+                    *round += 1;
+                    crate::thread::pause(*round);
+                }
                 Ok(value) => return Ok(take(value, &region[w::PATH_BYTES..])),
                 Err(e) => return Err(e),
             }
         }
     }
+    /// How long a request waits for its just-started run's bind (`w::STARTING`).
+    const STARTING_WAIT_TICKS: u64 = 5_000;
     fn mine(m: &sex_pdx::PdxMessage, seq: u32) -> bool {
         m.type_id == 1 && m.caller_pd == FILES && w::decode_reply(m.arg0).is_some_and(|r| r.0 == seq)
     }
@@ -758,6 +873,24 @@ pub mod files {
         exchange(Some(window), w::READ_IO_STATS, b"", 0, 0, |_| {}, |n, data| {
             w::ReadIoStats::decode(data.get(..n as usize).unwrap_or(&[])).ok_or(w::INVALID)
         })?
+    }
+    /// Every bound program run as Files sees it (`sex_pdx::fs::runs` entries), copied
+    /// into `out`; returns the length. Paths only if this run holds the whole filesystem.
+    pub fn runs(window: &mut Window, out: &mut [u8]) -> Result<usize, Error> {
+        exchange(Some(window), w::RUNS, b"", 0, 0, |_| {}, |n, data| {
+            let n = (n as usize).min(out.len()).min(data.len());
+            out[..n].copy_from_slice(&data[..n]);
+            n
+        })
+    }
+    /// Tatami's Updates, Storage or About lines (`sex_pdx::facts`, `topic` UPDATES ...),
+    /// copied into `out`; returns the length. Files answers the system's `tatami` alone.
+    pub fn facts(window: &mut Window, topic: u64, out: &mut [u8]) -> Result<usize, Error> {
+        exchange(Some(window), sex_pdx::facts::KIND, b"", topic, 0, |_| {}, |n, data| {
+            let n = (n as usize).min(out.len()).min(data.len());
+            out[..n].copy_from_slice(&data[..n]);
+            n
+        })
     }
     /// Reads up to `out.len()` bytes of the file from byte `offset`; fewer at its end.
     pub fn read_at(window: &mut Window, path: &[u8], offset: u64, out: &mut [u8]) -> Result<usize, Error> {
@@ -1137,6 +1270,28 @@ pub mod files {
         both[..from.len()].copy_from_slice(from);
         both[from.len() + 1..from.len() + 1 + to.len()].copy_from_slice(to);
         request(window, w::RENAME, &both[..from.len() + 1 + to.len()], 0, 0).map(|_| ())
+    }
+    /// Moves exactly the file inspected earlier (its [`file_id`]), never replacing the
+    /// destination: `STALE` if the source is now another file, `EXISTS` if the
+    /// destination is taken. Both paths stay inside this run's folder.
+    pub fn move_if_id(window: &mut Window, from: &[u8], to: &[u8], expected_id: u64) -> Result<(), Error> {
+        if expected_id == 0 || from.is_empty() || to.is_empty() || from.contains(&0) || to.contains(&0)
+            || from.len() + 1 + to.len() > w::PATH_BYTES { return Err(w::NAME); }
+        let mut both = [0u8; w::PATH_BYTES];
+        both[..from.len()].copy_from_slice(from);
+        both[from.len() + 1..from.len() + 1 + to.len()].copy_from_slice(to);
+        request(window, w::MOVE_IF_ID, &both[..from.len() + 1 + to.len()], expected_id, 0).map(|_| ())
+    }
+    /// The file's object identity, for [`move_if_id`]. Asks Files, never the cache.
+    pub fn file_id(window: &mut Window, path: &[u8]) -> Result<u64, Error> {
+        exchange(Some(window), w::STAT, path, 0, 0, |_| {}, |_, d| word(d, 3))
+    }
+    /// Creates a new file holding `data` and makes it durable. An existing name is
+    /// refused (`EXISTS`); an interrupted write can leave a partial new file.
+    pub fn write_new(window: &mut Window, path: &[u8], data: &[u8]) -> Result<(), Error> {
+        create(window, path)?;
+        if write_at(window, path, 0, data)? != data.len() { return Err(w::NO_SPACE); }
+        sync(window)
     }
     /// Writes `data` at byte `offset`, growing the file if it must. Returns bytes written.
     pub fn write_at(window: &mut Window, path: &[u8], offset: u64, data: &[u8]) -> Result<usize, Error> {
@@ -2344,6 +2499,37 @@ pub mod net {
     /// Fetches `url` into `out` and keeps the headers, so a caller can follow redirects
     /// and read the content type.
     pub fn fetch(window: &mut Window, url: &[u8], out: &mut [u8]) -> Result<Reply, Error> {
+        exchange(window, url, b"GET", &[], None, None, out)
+    }
+    /// Fetches an inclusive byte range. Inspect status 206 and Content-Range.
+    pub fn fetch_range(window: &mut Window, url: &[u8], start: u64, end: u64, out: &mut [u8]) -> Result<Reply, Error> {
+        fetch_range_with(window, url, start, end, None, out)
+    }
+    /// [`fetch_range`] with `Authorization: Bearer TOKEN`, for workers that need it.
+    pub fn fetch_range_with(window: &mut Window, url: &[u8], start: u64, end: u64, bearer: Option<&[u8]>, out: &mut [u8]) -> Result<Reply, Error> {
+        if end < start || end - start >= 32 * 1024 { return Err(Error::Address); }
+        exchange(window, url, b"GET", &[], Some((start, end)), bearer, out)
+    }
+    /// Sends a bounded binary request through this run's optional network grant.
+    pub fn post(window: &mut Window, url: &[u8], body: &[u8], out: &mut [u8]) -> Result<Reply, Error> {
+        post_with(window, url, body, None, out)
+    }
+    /// [`post`] with `Authorization: Bearer TOKEN`, for workers that need it.
+    pub fn post_with(window: &mut Window, url: &[u8], body: &[u8], bearer: Option<&[u8]>, out: &mut [u8]) -> Result<Reply, Error> {
+        if body.len() > 32 * 1024 { return Err(Error::Address); }
+        exchange(window, url, b"POST", body, None, bearer, out)
+    }
+    /// A bearer token is 1..=256 visible ASCII bytes: nothing that could end the header.
+    pub fn bearer_ok(token: &[u8]) -> bool {
+        (1..=256).contains(&token.len()) && token.iter().all(|b| (0x21..=0x7e).contains(b))
+    }
+    fn decimal(mut value: usize, out: &mut [u8; 20]) -> &[u8] {
+        let mut at = out.len();
+        loop { at -= 1; out[at] = b'0' + (value % 10) as u8; value /= 10; if value == 0 { break; } }
+        &out[at..]
+    }
+    fn exchange(window: &mut Window, url: &[u8], method: &[u8], body: &[u8], range: Option<(u64, u64)>, bearer: Option<&[u8]>, out: &mut [u8]) -> Result<Reply, Error> {
+        if bearer.is_some_and(|t| !bearer_ok(t)) { return Err(Error::Address); }
         let (rest, tls) = match (url.strip_prefix(b"https://"), url.strip_prefix(b"http://")) { (Some(r), _) => (r, true), (_, Some(r)) => (r, false), _ => return Err(Error::Address) };
         let split = rest.iter().position(|b| *b == b'/').unwrap_or(rest.len());
         let (authority, path) = (&rest[..split], if split == rest.len() { &b"/"[..] } else { &rest[split..] });
@@ -2355,11 +2541,26 @@ pub mod net {
         };
         // HTTP/1.0, so the reply needs no chunk decoding and ends when the peer closes.
         let mut request = [0u8; 900];
-        let parts: [&[u8]; 5] = [b"GET ", path, b" HTTP/1.0\r\nHost: ", host, b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\n\r\n"];
+        let mut length_buf = [0u8; 20];
+        let body_len = decimal(body.len(), &mut length_buf);
+        let mut range_start_buf = [0u8; 20];
+        let mut range_end_buf = [0u8; 20];
+        let (range_head, range_start, range_dash, range_end, range_tail): (&[u8], &[u8], &[u8], &[u8], &[u8]) = match range {
+            Some((start, end)) => (b"Range: bytes=", decimal(start as usize, &mut range_start_buf), b"-", decimal(end as usize, &mut range_end_buf), b"\r\n"),
+            None => (b"", b"", b"", b"", b""),
+        };
+        let (auth_head, auth_token, auth_tail): (&[u8], &[u8], &[u8]) = match bearer {
+            Some(token) => (b"Authorization: Bearer ", token, b"\r\n"),
+            None => (b"", b"", b""),
+        };
+        let parts: [&[u8]; 17] = [method, b" ", path, b" HTTP/1.0\r\nHost: ", host,
+            b"\r\nUser-Agent: SexOS\r\nAccept: */*\r\nConnection: close\r\nContent-Type: application/octet-stream\r\nContent-Length: ", body_len, b"\r\n", range_head, range_start, range_dash, range_end, range_tail, auth_head, auth_token, auth_tail, b"\r\n"];
         let mut n = 0;
         for p in parts { if n + p.len() > request.len() { return Err(Error::Address); } request[n..n + p.len()].copy_from_slice(p); n += p.len(); }
         let host = core::str::from_utf8(host).map_err(|_| Error::Address)?;
-        let mut ex = Exchange::raw(window, host, port, tls, request[..n].to_vec(), false, out.len().max(1), out.len())?;
+        let mut request_bytes = request[..n].to_vec();
+        request_bytes.extend_from_slice(body);
+        let mut ex = Exchange::raw(window, host, port, tls, request_bytes, false, out.len().max(1), out.len())?;
         wait(window, &mut ex)?;
         let got = ex.raw.len().min(out.len());
         out[..got].copy_from_slice(&ex.raw[..got]);

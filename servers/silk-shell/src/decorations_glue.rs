@@ -12,6 +12,9 @@ use crate::decorations::{self, Action, Button, DoubleClick, Press, TitleHit, Win
 static mut MENU: WindowMenu = WindowMenu::new();
 static mut DOUBLE: DoubleClick = DoubleClick::new();
 /// The last frame geometry reported (frame, sid, x, y, w, h, scale).
+/// A menu row whose action has to wait for the click that chose it to end
+/// (Ungroup, which refuses while a press is pending).
+static mut DEFERRED: Option<(u32, Action)> = None;
 static mut REPORTED: Option<(u32, u64, i32, i32, u32, u32, u32)> = None;
 
 fn scale() -> u32 { crate::chrome_metrics().scale() }
@@ -52,7 +55,8 @@ unsafe fn menu_open(frame: u32, sid: u64, x: i32, y: i32) {
     let flags = crate::wm_frame_flags(frame).unwrap_or(0);
     let current = (*core::ptr::addr_of!(crate::FRAMES)).iter().flatten().find(|f| f.frame_id == frame).map_or(crate::ACTIVE_SCENE_IDX, |f| f.scene_id);
     let menu = sex_pdx::window_menu::Menu::new(x, y, crate::frame_is_zoomed(frame), flags & crate::FRAME_FLAG_FLOATING != 0,
-        crate::WORKSPACE_COUNT.min(sex_pdx::window_menu::MAX_WORKSPACES), current);
+        crate::WORKSPACE_COUNT.min(sex_pdx::window_menu::MAX_WORKSPACES), current)
+        .grouped(crate::layouts_glue::tab_count(frame) > 1);
     let (w, h) = (crate::desktop_width().max(0) as usize, crate::desktop_height().max(0) as usize);
     // A screen that cannot hold the menu gets none, rather than an invisible
     // modal menu that swallows clicks.
@@ -87,6 +91,8 @@ unsafe fn act(frame: u32, action: Action, via: &str) {
             crate::tile_active_scene_frames();
             true
         }
+        // The same split as Super+Shift+G, on the tab this frame shows (focused above).
+        Action::Ungroup => crate::layouts_glue::action(crate::wm::WmAction::Ungroup),
         Action::MoveToWorkspace(n) => n < crate::WORKSPACE_COUNT && crate::reparent_frame_to_scene(frame, n, "window_menu"),
     };
     match action {
@@ -110,7 +116,8 @@ pub unsafe fn press(x: i32, y: i32) -> bool {
             Press::Choose { frame, action } => {
                 menu_send();
                 sex_pdx::serial_record!("[shell.decor.menu] open=0 reason=chose action={}", action.name());
-                act(frame, action, "menu");
+                // Ungroup runs once the choosing click is over (the main loop's next turn).
+                if action == Action::Ungroup { DEFERRED = Some((frame, action)); } else { act(frame, action, "menu"); }
             }
         }
         return true;
@@ -153,6 +160,9 @@ pub unsafe fn button(button: u8, pressed: bool) -> bool {
 /// Main loop: the menu follows the pointer and closes with its window, and
 /// the focused window's title bar geometry is reported when it changes.
 pub unsafe fn poll() {
+    if let Some((frame, action)) = DEFERRED {
+        if matches!(crate::INTERACTION, crate::InteractionState::Idle) { DEFERRED = None; act(frame, action, "menu"); }
+    }
     let menus = &mut *core::ptr::addr_of_mut!(MENU);
     if let Some(frame) = menus.frame() {
         let alive = crate::active_surface_for_frame(frame).map_or(false, |sid| crate::surface_is_alive(sid)) && crate::frame_accepts_input(frame);

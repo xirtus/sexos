@@ -140,7 +140,7 @@ def verify(result,frames,text,rows,*,out=None):
         if step.get('recovery')!=recovered:raise ValueError('recovery result metadata differs')
         _one(text,rf'\[sext.app.pool.ready\] target={pre} task={pre_task} bytes=[1-9]\d* zeroed=[1-9]\d* workspace_records=\d+ reused=1 zero_owner=sext ok=1',0,a)
         for sid in [row['surface']]:
-            if not re.search(rf'\[spindle.view.text\] target={target} sid={sid} sequence=\d+ paint=\d+ cols=\d+ rows=\d+ bytes=\d+'+END,text[a:b]):raise ValueError('missing current pane')
+            if not re.search(rf'\[spindle.view.text\] target={target} sid={sid} sequence=\d+ paint=\d+ cols=\d+ rows=\d+ bytes=\d+(?: base=\d+)?'+END,text[a:b]):raise ValueError('missing current pane')
         recall='echo alpha'+str(pre)
         _one(text,rf'\[spindle.history.nav\] dir=up idx=0 len={len(recall)} ok=1',b,c)
         _frame(step['recall_frame'],frames,text,'spindle',target,'> '+recall,b,c)

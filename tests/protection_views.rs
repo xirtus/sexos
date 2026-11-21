@@ -159,3 +159,11 @@ fn reaching_names_only_the_entries_a_mapping_touches() {
     assert_eq!(reaching(3, 0, C, C + 4096), index(C, 3)..index(C, 3) + 1);
     assert_eq!(reaching(2, A, A - 1, A + 1), 0..1, "clipped at the table's start");
 }
+
+#[test]
+fn invpcid_reaches_every_view_this_core_ran_but_the_current() {
+    assert_eq!(invpcid_views(0b1011, 1), 0b1001, "the current view is reached by INVLPG");
+    assert_eq!(invpcid_views(0, 3), 0, "a core that ran no view drops nothing more");
+    assert_eq!(invpcid_views(1 << 5, 5), 0);
+    assert_eq!((INVPCID_ADDRESS, INVPCID_ALL_NONGLOBAL), (0, 3));
+}

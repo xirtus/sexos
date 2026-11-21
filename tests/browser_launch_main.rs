@@ -19,6 +19,8 @@ pub const ERR_SERVICE_NOT_READY:u64=2;pub const EV_KEY:u64=1;pub const EV_WHEEL:
 #[path="../servers/silk-shell/src/app_input.rs"]mod app_input;
 #[path="../servers/silk-shell/src/app_custody.rs"]mod app_custody;
 #[path="../servers/silk-shell/src/launcher.rs"]mod launcher;
+/// Voyeur frecency double: the launcher records a run; ranking is tests/voyeur_search.rs.
+mod voyeur{pub unsafe fn launched(_:usize){}}
 pub mod app_lifecycle{
  pub use crate::lifecycle_types::{CatalogInfo,LifecycleInfo,ActivationInfo,DENIED,LIVE,RETRY};
  pub fn catalog(slot:usize)->Result<CatalogInfo,u64>{unsafe{crate::HELD.iter().copied().find(|c|c.as_ref().is_ok_and(|c|crate::slot(c.target_pd)==slot)).unwrap_or(Err(DENIED))}}
@@ -53,7 +55,7 @@ const SURFACE_ID_BELL_PLACEHOLDER:u64=204;const SURFACE_ID_COLLAR:u64=203;const 
 include!(env!("BROWSER_LAUNCH_PRODUCTION"));
 fn slot(target:u32)->usize{match target{15=>40,30=>154,31=>158,_=>usize::MAX}}
 fn held(target:u32,task:u32,surface:u64)->a::CatalogInfo{a::CatalogInfo{target_pd:target,task_id:task,surface_id:surface,coordinator_pd:3}}
-fn receipt(target:u32,task:u32,surface:u64,state:u64)->Result<a::ActivationInfo,u64>{Ok(a::ActivationInfo{successor:target,task,surface,state})}
+fn receipt(target:u32,task:u32,surface:u64,state:u64)->Result<a::ActivationInfo,u64>{Ok(a::ActivationInfo{successor:target,task,surface,state,source_pinned:false})}
 unsafe fn reset(){
  APP_CUSTODY=[Some(app_custody::Entry::new(40,15,150,300)),Some(app_custody::Entry::new(154,30,300,343)),Some(app_custody::Entry::new(158,31,310,344))];
  HELD=[Ok(held(15,150,300)),Ok(held(30,300,343)),Ok(held(31,310,344))];LIVE=[Err(a::LIVE);3];
