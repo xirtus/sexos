@@ -67,13 +67,13 @@ impl DoubleClick {
 
 /// What a button or a menu row does to its window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Action { Close, Minimise, ToggleMaximise, ToggleFloat, MoveToWorkspace(u8) }
+pub enum Action { Close, Minimise, ToggleMaximise, ToggleFloat, Ungroup, MoveToWorkspace(u8) }
 
 impl Action {
     pub fn name(self) -> &'static str {
         match self {
             Action::Close => "close", Action::Minimise => "minimise", Action::ToggleMaximise => "maximise",
-            Action::ToggleFloat => "float", Action::MoveToWorkspace(_) => "workspace",
+            Action::ToggleFloat => "float", Action::Ungroup => "ungroup", Action::MoveToWorkspace(_) => "workspace",
         }
     }
 }
@@ -83,7 +83,7 @@ pub fn button_action(b: Button) -> Action {
 }
 
 pub fn item_action(i: Item) -> Action {
-    match i { Item::Close => Action::Close, Item::Maximise => Action::ToggleMaximise, Item::Float => Action::ToggleFloat, Item::Workspace(n) => Action::MoveToWorkspace(n) }
+    match i { Item::Close => Action::Close, Item::Maximise => Action::ToggleMaximise, Item::Float => Action::ToggleFloat, Item::Ungroup => Action::Ungroup, Item::Workspace(n) => Action::MoveToWorkspace(n) }
 }
 
 /// A left press while the menu shows.

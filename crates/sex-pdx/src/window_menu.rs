@@ -2,7 +2,8 @@
 //!
 //! A right click on a window's title bar or one of its buttons opens a small
 //! menu at the pointer, as in KDE, GNOME and Windows: Maximise (or Restore),
-//! Float (or Tile), Move to workspace N for each other workspace, and Close.
+//! Float (or Tile), Ungroup for a tab in a group, Move to workspace N for each
+//! other workspace, and Close.
 //! The Shell keeps the menu and handles its clicks; Display draws it with the
 //! same `Layout`, so a click lands on the row drawn.
 //!
@@ -13,8 +14,8 @@
 pub const OP_WINDOW_MENU: u64 = 0x2E7;
 /// Workspaces a menu can offer (the desktop has nine).
 pub const MAX_WORKSPACES: u8 = 9;
-/// Rows: Maximise, Float, up to eight other workspaces, Close.
-pub const MAX_ROWS: usize = 3 + MAX_WORKSPACES as usize - 1;
+/// Rows: Maximise, Float, Ungroup, up to eight other workspaces, Close.
+pub const MAX_ROWS: usize = 4 + MAX_WORKSPACES as usize - 1;
 
 /// One row of the menu.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -23,6 +24,8 @@ pub enum Item {
     Maximise,
     /// Float, or Tile when the window floats.
     Float,
+    /// Take the shown tab out of its group (only when the window is a group).
+    Ungroup,
     /// Move the window to this workspace (0-based).
     Workspace(u8),
     Close,
@@ -36,6 +39,8 @@ pub struct Menu {
     pub y: u16,
     pub maximised: bool,
     pub floating: bool,
+    /// The window is a group of tabs: the menu offers Ungroup.
+    pub grouped: bool,
     /// Workspaces on the desktop, and the one the window is on (0-based).
     pub workspaces: u8,
     pub current: u8,
@@ -48,11 +53,14 @@ impl Menu {
         let workspaces = workspaces.clamp(1, MAX_WORKSPACES);
         Self {
             x: x.clamp(0, u16::MAX as i32) as u16, y: y.clamp(0, u16::MAX as i32) as u16,
-            maximised, floating, workspaces, current: current.min(workspaces - 1), hover: None,
+            maximised, floating, grouped: false, workspaces, current: current.min(workspaces - 1), hover: None,
         }
     }
 
-    pub fn rows(&self) -> usize { 3 + self.workspaces as usize - 1 }
+    /// The same menu for a group of tabs.
+    pub fn grouped(self, grouped: bool) -> Self { Self { grouped, ..self } }
+
+    pub fn rows(&self) -> usize { 3 + self.grouped as usize + self.workspaces as usize - 1 }
 
     /// The row at `index`, top to bottom.
     pub fn item(&self, index: usize) -> Option<Item> {
@@ -61,10 +69,11 @@ impl Menu {
         Some(match index {
             0 => Item::Maximise,
             1 => Item::Float,
+            2 if self.grouped => Item::Ungroup,
             i if i == n - 1 => Item::Close,
             i => {
                 // Every workspace but the window's own, in order.
-                let k = (i - 2) as u8;
+                let k = (i - 2 - self.grouped as usize) as u8;
                 Item::Workspace(if k >= self.current { k + 1 } else { k })
             }
         })
@@ -79,28 +88,29 @@ impl Menu {
         match item {
             Item::Maximise => if self.maximised { "Restore" } else { "Maximise" },
             Item::Float => if self.floating { "Tile" } else { "Float" },
+            Item::Ungroup => "Ungroup",
             Item::Workspace(n) => MOVE.get(n as usize).copied().unwrap_or("Move"),
             Item::Close => "Close",
         }
     }
 
     /// Bits: x 0-15, y 16-31, workspaces 32-35, current 36-39, maximised 40,
-    /// floating 41, hover 44-47 (15 = none), shown 63.
+    /// floating 41, grouped 42, hover 44-47 (15 = none), shown 63.
     pub fn wire(&self) -> u64 {
         let hover = self.hover.map_or(15, |h| h.min(14)) as u64;
         self.x as u64 | (self.y as u64) << 16 | (self.workspaces as u64) << 32 | (self.current as u64) << 36
-            | (self.maximised as u64) << 40 | (self.floating as u64) << 41 | hover << 44 | 1 << 63
+            | (self.maximised as u64) << 40 | (self.floating as u64) << 41 | (self.grouped as u64) << 42 | hover << 44 | 1 << 63
     }
 
     /// None for zero (hidden) and for words no Shell sends.
     pub fn decode(w: u64) -> Option<Self> {
-        if w >> 63 == 0 || w >> 48 & 0x7FFF != 0 || w >> 42 & 3 != 0 { return None; }
+        if w >> 63 == 0 || w >> 48 & 0x7FFF != 0 || w >> 43 & 1 != 0 { return None; }
         let workspaces = (w >> 32 & 0xF) as u8;
         let current = (w >> 36 & 0xF) as u8;
         if workspaces == 0 || workspaces > MAX_WORKSPACES || current >= workspaces { return None; }
         let menu = Self {
             x: w as u16, y: (w >> 16) as u16, workspaces, current,
-            maximised: w >> 40 & 1 != 0, floating: w >> 41 & 1 != 0, hover: None,
+            maximised: w >> 40 & 1 != 0, floating: w >> 41 & 1 != 0, grouped: w >> 42 & 1 != 0, hover: None,
         };
         let hover = (w >> 44 & 0xF) as u8;
         if hover != 15 && hover as usize >= menu.rows() { return None; }
