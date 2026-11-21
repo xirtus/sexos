@@ -484,6 +484,7 @@ pub fn bind(target: u32, task: u32) {
     crate::console_relay::bound(launcher, index, target, task);
     unsafe { (*core::ptr::addr_of_mut!(PICKS))[index] = None; }
     sex_pdx::serial_record!("[files.program.bound] target={} task={} root={}", target, task, core::str::from_utf8(&root[..len]).unwrap_or("?"));
+    sex_pdx::serial_record!("[files.program.bound.args] target={} len={}", target, bindings[index].map_or(0, |b| b.args_len));
 }
 /// A volume under `/media` went away (ejected or pulled out): every run loses the grants
 /// it held to `prefix` or anything inside it, so a stick that later mounts under the same
@@ -923,7 +924,10 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // Only Spindle, Shell or a run holding the whole filesystem.
         if let Some(k) = program {
             let b = unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }.unwrap();
-            if !b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/") { return w::reply(r.seq, w::DENIED, 0); }
+            if !b.args[..b.args_len].split(|c| *c == b' ').any(|t| t == b"@/") {
+                sex_pdx::serial_record!("[files.program.denied] target={} task={} bound={} kind={} why=home_needs_whole args={}", caller, b.task, b.task, r.kind, core::str::from_utf8(&b.args[..b.args_len]).unwrap_or("?"));
+                return w::reply(r.seq, w::DENIED, 0);
+            }
         }
         let Some(fs) = fs else { return w::reply(r.seq, w::UNAVAILABLE, 0) };
         if writes_pending() { commit_writes(fs); }
