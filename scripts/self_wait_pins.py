@@ -128,6 +128,7 @@ PINS = (
     ('timed', 'kernel/src/program_workers.rs', '6180ef3fb5702e6bd63e1649b07df8ce39390c8fe69a6a9c93b2e199686dbe8e'),
 
     ('timed', 'kernel/src/program_workers.rs', '82050a7bd043822bd1593d798dbdf14381d5efba4122a71a63a0948287251f6a'),
+    ('timed', 'kernel/src/program_workers.rs', 'fn-v1:2970f89125d00c2b9373f95433b8d983e6cb203d0edb3f643c4fa19eb6a30800'),  # SMAP: WAIT reads and EXIT writes the futex word through smap::user (no wait change), 2026-11-20
 
     ('timed', 'crates/sex-pdx/src/lib.rs', '8477d3326af90b744f72d300aa26af3b4b8ae7075527ca1b3aa622ea9ec5ccde'),
 
