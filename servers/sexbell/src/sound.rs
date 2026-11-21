@@ -220,7 +220,9 @@ struct Stream { ring: ring::Ring, active: bool, pd: u32, frac: u32, start: u64 }
 /// Bell plays what part it has: a program's first write is often a fraction of a
 /// period, and playing it padded with silence puts a gap right after the start.
 /// A short sound that never fills a period still plays once this has passed.
-const START_HOLD_TICKS: u64 = 50;
+/// 200 ms, not 50: under load (CI's TCG) a program's first period can take longer
+/// than 50 ms to arrive, and the padded partial period split the start again.
+const START_HOLD_TICKS: u64 = 200;
 
 #[derive(Clone, Copy)]
 struct Note { hz: u32, frames: u32, volume: u16 }
