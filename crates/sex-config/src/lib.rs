@@ -135,6 +135,7 @@ pub mod id {
     pub const SLOW_KEYS: u16 = 44;
     pub const BOUNCE_KEYS: u16 = 45;
     pub const SCREEN_READER: u16 = 46;
+    pub const REDUCE_TRANSPARENCY: u16 = 47;
 }
 
 /// Programs (program store names) the Shell may start at login and whose
@@ -233,6 +234,7 @@ pub const KEYS: &[Key] = &[
     Key { id: id::SLOW_KEYS, name: "accessibility.slow_keys", label: "Slow keys", kind: Kind::Bool, default: 0 },
     Key { id: id::BOUNCE_KEYS, name: "accessibility.bounce_keys", label: "Bounce keys", kind: Kind::Bool, default: 0 },
     Key { id: id::SCREEN_READER, name: "accessibility.screen_reader", label: "Screen reader (Whisper)", kind: Kind::Bool, default: 0 },
+    Key { id: id::REDUCE_TRANSPARENCY, name: "accessibility.reduce_transparency", label: "Reduce transparency (opaque menus and panels)", kind: Kind::Bool, default: 0 },
     Key { id: id::SETUP_DONE, name: "setup.done", label: "First-start setup finished", kind: Kind::Bool, default: 0 },
     Key { id: id::OPEN_PDF, name: "open.pdf", label: "Open PDF documents with", kind: Kind::Choice(PDF_PROGRAMS), default: 0 },
     Key { id: id::OPEN_IMAGE, name: "open.image", label: "Open pictures with", kind: Kind::Choice(IMAGE_PROGRAMS), default: 0 },
