@@ -11,6 +11,8 @@
 //! cover the cards like any wallpaper.
 
 use sex_pdx::desktop_widgets::{self as dw, Layout, Line, Report, Sample};
+/// The menu, popup and card colours of the desktop theme (`desk_theme`).
+use crate::desk_theme::current as desk;
 
 /// Largest cards kept: scale 2.
 const CAP_W: usize = dw::CARD_W * 2;
@@ -34,11 +36,7 @@ struct State {
 static mut STATE: State = State { cards: 0, layout: None, drawn: None, weather: None, sample: None, sampled_at: 0, cpu: None, free_pages: None, receipts: 64 };
 fn st() -> &'static mut State { unsafe { &mut *core::ptr::addr_of_mut!(STATE) } }
 
-const CARD: u32 = 0x0014_121A;
 const CARD_ALPHA: u32 = 0xC8;
-const RIM: u32 = 0x0046_3E4C;
-const INK: u32 = 0x00F4_EEF2;
-const SOFT: u32 = 0x00C2_B6C0;
 
 /// `OP_DESKTOP_WIDGETS` from the Shell. True when the cards changed (the
 /// whole frame repaints, so they appear or go).
@@ -51,6 +49,13 @@ pub fn receive(caller: u32, cards: u64) -> bool {
     s.drawn = None;
     sex_pdx::serial_record!("[display.widgets] cards={}", cards);
     true
+}
+
+/// The desktop theme changed (`desk_theme`): the cards on screen are drawn
+/// again in its colours, before the whole frame repaints.
+pub fn restyle() {
+    let s = st();
+    if let (Some(layout), Some((_, words))) = (s.layout, s.drawn) { draw(&layout, &words); }
 }
 
 /// `OP_WEATHER` from the Shell: the helper's report for a zone. The next
@@ -145,21 +150,21 @@ fn draw(l: &Layout, words: &[Line; 6]) {
     if let Some(r) = l.clock {
         let r = (r.0 - cx, r.1 - cy, r.2, r.3);
         card(cache, cw, r, s);
-        text(cache, cw, words[0].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, INK, 3, r.2 - 32 * s);
-        text(cache, cw, words[1].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + super::glyphs::UI_H * 3 + 8 * s, SOFT, ui, r.2 - 32 * s);
+        text(cache, cw, words[0].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, desk().card_ink, 3, r.2 - 32 * s);
+        text(cache, cw, words[1].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + super::glyphs::UI_H * 3 + 8 * s, desk().card_soft, ui, r.2 - 32 * s);
     }
     let line = super::glyphs::UI_H * s + 4 * s;
     if let Some(r) = l.weather {
         let r = (r.0 - cx, r.1 - cy, r.2, r.3);
         card(cache, cw, r, s);
-        text(cache, cw, words[4].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, INK, ui, r.2 - 32 * s);
-        text(cache, cw, words[5].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + line, SOFT, ui, r.2 - 32 * s);
+        text(cache, cw, words[4].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, desk().card_ink, ui, r.2 - 32 * s);
+        text(cache, cw, words[5].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + line, desk().card_soft, ui, r.2 - 32 * s);
     }
     if let Some(r) = l.system {
         let r = (r.0 - cx, r.1 - cy, r.2, r.3);
         card(cache, cw, r, s);
-        text(cache, cw, words[2].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, INK, ui, r.2 - 32 * s);
-        text(cache, cw, words[3].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + line, INK, ui, r.2 - 32 * s);
+        text(cache, cw, words[2].as_bytes(), r.0 + 16 * s, r.1 + 12 * s, desk().card_ink, ui, r.2 - 32 * s);
+        text(cache, cw, words[3].as_bytes(), r.0 + 16 * s, r.1 + 12 * s + line, desk().card_ink, ui, r.2 - 32 * s);
     }
 }
 
@@ -174,7 +179,7 @@ fn card(cache: &mut [u32], stride: usize, (x, y, w, h): (usize, usize, usize, us
             let d2 = dx * dx + dy * dy;
             if d2 > radius * radius { continue; }
             let edge = row < s || col < s || row + s >= h || col + s >= w || d2 > (radius - s as i64).pow(2);
-            cache[(y + row) * stride + x + col] = (CARD_ALPHA << 24) | if edge { RIM } else { CARD };
+            cache[(y + row) * stride + x + col] = (CARD_ALPHA << 24) | if edge { desk().card_rim } else { desk().card };
         }
     }
 }

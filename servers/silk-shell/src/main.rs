@@ -55,6 +55,7 @@ mod shortcuts;
 mod shortcuts_glue;
 mod widgets_glue;
 mod weather_glue;
+mod theme_glue;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -7892,7 +7893,7 @@ unsafe fn push_token_preset(p: &TokenPreset) {
     pdx_call(SLOT_DISPLAY, OP_APPEARANCE_TOKENS,
         pack_u32_pair(p[APPEARANCE_TOKEN_MINIMIZE_LIGHT], p[APPEARANCE_TOKEN_ZOOM_LIGHT]),
         0u64, // appearance_flags=0, effect_levels=0
-        0u64, // reserved
+        (SCENE_APPEARANCE_STATE.preset_idx == 0 && SCENE_APPEARANCE_STATE.use_custom_colors == 0) as u64, // 1: default preset, chrome follows the desktop theme (S6a)
     );
 }
 
@@ -16916,8 +16917,10 @@ unsafe fn desktop_look_step(wallpaper: u8, night: u8) -> bool {
 unsafe fn desktop_look_apply(wallpaper: u8, night: u8) -> bool {
     use sex_pdx::desktop_look as look;
     let next = (wallpaper % look::WALLPAPERS.len() as u8, night % look::NIGHT_LEVELS);
-    let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, 0).0 == 0;
+    let theme = theme_glue::word();
+    let ok = pdx_call(SLOT_DISPLAY, look::OP_DESKTOP_LOOK, next.0 as u64, next.1 as u64, theme).0 == 0;
     if ok { DESKTOP_LOOK = next; }
+    theme_glue::sent(theme, ok);
     sex_pdx::serial_record!("[shell.look] wallpaper={} name={} night={} ok={}", next.0, look::WALLPAPERS[next.0 as usize].0, next.1, ok as u8);
     ok
 }

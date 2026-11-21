@@ -3,7 +3,7 @@
 //!
 //! Whenever the Shell is awake and has not asked for a while, it asks Files for the
 //! settings generation; when it grew, it walks the changed keys, keeps them in its
-//! own copy and applies the ones it owns (wallpaper, night light, clock zone, volume).
+//! own copy and applies the ones it owns (wallpaper, night light, theme, clock zone, volume).
 //! Changes the person makes with Shell keys go the other way, to Files, so they
 //! last across restarts. Answers come back as tagged replies, one request in
 //! flight at a time.
@@ -126,6 +126,9 @@ pub fn receive(msg: &sex_pdx::PdxMessage) -> bool {
                 // A walk from the start (the first, or Files restarted): the keyboard
                 // settings hold even where none changed from their defaults.
                 if w.seen == Some(0) { keyboard(w); }
+                // The first walk: Display may hold another theme than the
+                // person's (the Shell restarted), so show the look once.
+                if !w.walked { w.look_owed = true; }
                 w.seen = Some(w.target);
                 w.walked = true;
                 sex_pdx::serial_record!("[shell.config.current] generation={}", w.target);
@@ -156,7 +159,8 @@ fn take(w: &mut Watch, key: u16, value: i32) {
     sex_pdx::serial_record!("[shell.config.changed] key={} value={}", key, value);
     if before == value { return; }
     match key {
-        id::WALLPAPER | id::NIGHT_LIGHT => show_look(w),
+        // The theme rides with the look (`theme_glue`).
+        id::WALLPAPER | id::NIGHT_LIGHT | id::THEME | id::ACCENT => show_look(w),
         id::ZONE => show_zone(w),
         id::VOLUME => give_volume(w),
         id::NTP => give_network_time(w),
@@ -202,7 +206,7 @@ fn give_volume(w: &mut Watch) {
 }
 
 /// Display started again and knows nothing: show the look and the clock's zone again.
-pub fn display_restarted() { let w = watch(); w.look_owed = true; w.zone_owed = w.copy.value(id::ZONE) != 0; }
+pub fn display_restarted() { let w = watch(); w.look_owed = true; w.zone_owed = w.copy.value(id::ZONE) != 0; crate::theme_glue::display_restarted(); }
 
 /// The person changed a setting with a Shell key: tell Files, so it lasts.
 pub fn changed_here(key: u16, value: i32) {

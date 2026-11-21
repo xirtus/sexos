@@ -7743,6 +7743,7 @@ dependencies = [
  "sex-pdx",
  "sex-rt",
  "sex-shape",
+ "sex-theme",
  "sex-time",
  "silkbar-model",
 ]

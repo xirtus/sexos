@@ -6,16 +6,9 @@
 //! sides share, so the Shell's clicks land on what is drawn here, in the
 //! style of the window menu. Only the Shell may send it.
 use sex_pdx::program_tray::{CardLayout, MenuLayout, Receiver, Section};
+/// The menu, popup and card colours of the desktop theme (`desk_theme`).
+use crate::desk_theme::current as desk;
 
-const BG: u32 = 0x0018_1825;
-const RIM: u32 = 0x0045_475A;
-const PICKED: u32 = 0x0031_3244;
-const INK: u32 = 0x00CD_D6F4;
-const DIM: u32 = 0x006C_7086;
-const FIELD: u32 = 0x0011_111B;
-const BUTTON: u32 = 0x0031_3244;
-const SEND: u32 = 0x0035_74E8;
-const CLOSE_INK: u32 = 0x00F3_8BA8;
 const SHELL_PD: u32 = 3;
 
 static mut VIEW: Receiver = Receiver::new();
@@ -59,7 +52,7 @@ fn fill(fb: *mut u32, w: usize, h: usize, total: usize, r: (usize, usize, usize,
 
 /// A panel with a one-pixel (scaled) rim.
 fn panel(fb: *mut u32, w: usize, h: usize, total: usize, r: (usize, usize, usize, usize), s: usize, bg: u32) {
-    fill(fb, w, h, total, r, RIM);
+    fill(fb, w, h, total, r, desk().menu_rim);
     fill(fb, w, h, total, (r.0 + s, r.1 + s, r.2.saturating_sub(2 * s), r.3.saturating_sub(2 * s)), bg);
 }
 
@@ -117,14 +110,14 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
     }
     if let Some(m) = v.menu {
         if let Some(l) = MenuLayout::new(m.x as usize, m.y as usize, m.rows as usize, w, h, s) {
-            panel(fb, w, h, total, l.panel, s, BG);
+            panel(fb, w, h, total, l.panel, s, desk().menu);
             for i in 0..l.rows {
                 let r = l.row(i);
                 if m.hover == Some(i as u8) {
-                    fill(fb, w, h, total, r, PICKED);
-                    fill(fb, w, h, total, (r.0, r.1 + 3 * s, 3 * s, r.3.saturating_sub(6 * s)), sex_pdx::desktop_style::FOCUS);
+                    fill(fb, w, h, total, r, desk().menu_picked);
+                    fill(fb, w, h, total, (r.0, r.1 + 3 * s, 3 * s, r.3.saturating_sub(6 * s)), desk().focus);
                 }
-                text_in(fb, w, h, total, m.text[i].as_bytes(), r, 10 * s, INK, scale);
+                text_in(fb, w, h, total, m.text[i].as_bytes(), r, 10 * s, desk().menu_ink, scale);
             }
             unsafe { if DRAWN.0 != CHANGES { DRAWN.0 = CHANGES; sex_pdx::serial_record!("[display.tray_items.draw] menu rows={} panel={}x{}+{}+{}", l.rows, l.panel.2, l.panel.3, l.panel.0, l.panel.1); } }
         }
@@ -134,50 +127,50 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
         let th = super::glyphs::UI_H * s + 8 * s;
         let x = (t.x as usize).min(w.saturating_sub(tw));
         let r = (x, t.y as usize, tw, th);
-        panel(fb, w, h, total, r, s, BG);
-        text_in(fb, w, h, total, t.text.as_bytes(), r, 8 * s, INK, scale);
+        panel(fb, w, h, total, r, s, desk().menu);
+        text_in(fb, w, h, total, t.text.as_bytes(), r, 8 * s, desk().menu_ink, scale);
     }
     let Some(c) = v.card else { return };
     let Some(l) = CardLayout::new(w, bar, s, c.actions as usize, c.reply) else { return };
-    panel(fb, w, h, total, l.panel, s, BG);
+    panel(fb, w, h, total, l.panel, s, desk().menu);
     // "From: summary", then the body, cut to the card.
-    let used = text_in(fb, w, h, total, c.from.as_bytes(), l.head, 0, DIM, scale);
+    let used = text_in(fb, w, h, total, c.from.as_bytes(), l.head, 0, desk().menu_dim, scale);
     let gap = 8 * s;
     let head_rest = (l.head.0 + used + gap, l.head.1, l.head.2.saturating_sub(used + gap), l.head.3);
-    text_in(fb, w, h, total, c.summary(), head_rest, 0, INK, scale);
+    text_in(fb, w, h, total, c.summary(), head_rest, 0, desk().menu_ink, scale);
     let body = c.body();
     let line = &body[..body.iter().position(|b| *b == b'\n').unwrap_or(body.len())];
-    text_in(fb, w, h, total, line, l.body, 0, INK, scale);
+    text_in(fb, w, h, total, line, l.body, 0, desk().menu_ink, scale);
     // Close: an x in its corner.
     let (cx, cy, cw, ch) = l.close;
     let n = cw.min(ch).saturating_sub(s);
     for i in (0..n).step_by(1) {
-        fill(fb, w, h, total, (cx + i, cy + i, s, s), CLOSE_INK);
-        fill(fb, w, h, total, (cx + n - 1 - i, cy + i, s, s), CLOSE_INK);
+        fill(fb, w, h, total, (cx + i, cy + i, s, s), desk().menu_close);
+        fill(fb, w, h, total, (cx + n - 1 - i, cy + i, s, s), desk().menu_close);
     }
     for i in 0..l.action_count {
         let r = l.actions[i];
-        fill(fb, w, h, total, r, BUTTON);
-        text_centre(fb, w, h, total, c.labels[i].as_bytes(), r, INK, scale);
+        fill(fb, w, h, total, r, desk().menu_button);
+        text_centre(fb, w, h, total, c.labels[i].as_bytes(), r, desk().menu_ink, scale);
     }
     if let (Some(f), Some(send)) = (l.field, l.send) {
         let active = v.reply.active;
-        fill(fb, w, h, total, f, if active { sex_pdx::desktop_style::FOCUS } else { RIM });
+        fill(fb, w, h, total, f, if active { desk().focus } else { desk().menu_rim });
         let inner = (f.0 + s, f.1 + s, f.2.saturating_sub(2 * s), f.3.saturating_sub(2 * s));
-        fill(fb, w, h, total, inner, FIELD);
+        fill(fb, w, h, total, inner, desk().menu_field);
         let typed = v.reply.text.as_bytes();
         // The end of a long reply shows, as in any one-line field.
         let room = inner.2.saturating_sub(16 * s);
         let mut from = 0;
         while from < typed.len() && super::glyphs::ui_width(&typed[from..], scale).unwrap_or(0) > room { from += 1; }
-        let tw = if typed.is_empty() && !active { text_in(fb, w, h, total, c.placeholder.as_bytes(), inner, 8 * s, DIM, scale); 0 }
-            else { text_in(fb, w, h, total, &typed[from..], inner, 8 * s, INK, scale) };
+        let tw = if typed.is_empty() && !active { text_in(fb, w, h, total, c.placeholder.as_bytes(), inner, 8 * s, desk().menu_dim, scale); 0 }
+            else { text_in(fb, w, h, total, &typed[from..], inner, 8 * s, desk().menu_ink, scale) };
         if active {
             let line = super::glyphs::UI_H * s;
-            fill(fb, w, h, total, (inner.0 + 8 * s + tw + s, inner.1 + inner.3.saturating_sub(line) / 2, s.max(1) * 2, line), INK);
+            fill(fb, w, h, total, (inner.0 + 8 * s + tw + s, inner.1 + inner.3.saturating_sub(line) / 2, s.max(1) * 2, line), desk().menu_ink);
         }
-        fill(fb, w, h, total, send, SEND);
-        text_centre(fb, w, h, total, b"Send", send, 0x00F5_F5F5, scale);
+        fill(fb, w, h, total, send, desk().menu_send);
+        text_centre(fb, w, h, total, b"Send", send, desk().menu_on_send, scale);
     }
     unsafe {
         if DRAWN.1 != CHANGES {
