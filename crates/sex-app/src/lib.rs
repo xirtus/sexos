@@ -82,8 +82,56 @@ pub struct Window {
     size: (usize, usize),
     /// Events that arrived while a file request waited for its answer.
     held: [Option<Event>; 16],
-    /// The frame being painted (see [`Window::frame`]).
-    back: alloc::vec::Vec<u32>,
+}
+
+/// The two pages of the window's pixel region (`sex_pdx::pixel_region`): Display shows
+/// `FRONT`, the program paints the other. `OWED`: a page was named to Display and its
+/// `shown` answer has not come yet, so the old front may still be on screen. `STALE`:
+/// the page being painted does not yet hold the frame last shown (`SHOWN` pixels).
+mod pages {
+    use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering::Relaxed};
+    pub static FRONT: AtomicU64 = AtomicU64::new(1);
+    pub static OWED: AtomicBool = AtomicBool::new(false);
+    pub static STALE: AtomicBool = AtomicBool::new(false);
+    pub static SHOWN: AtomicUsize = AtomicUsize::new(0);
+    /// How long to wait for Display's answer before painting anyway (a lost answer).
+    const PATIENCE_MS: u64 = 100;
+    pub fn back() -> u64 { 1 - FRONT.load(Relaxed) }
+    /// Page `p` of the region.
+    pub fn page(p: u64) -> &'static mut [u32] {
+        let (base, bytes) = sex_pdx::pixel_region_client().unwrap_or_else(|_| sex_pdx::task_finish(3));
+        let len = sex_pdx::pixel_region::page_bytes(bytes);
+        unsafe { core::slice::from_raw_parts_mut((base + p * len) as *mut u32, (len / 4) as usize) }
+    }
+    /// Display's answer that it has switched pages.
+    pub fn is_shown(m: &sex_pdx::PdxMessage) -> bool {
+        m.type_id == 1 && m.caller_pd == sex_pdx::display_ready::DISPLAY_PD_ID && sex_pdx::pixel_region::shown_page(m.arg0).is_some()
+    }
+    /// Notes an answer from Display; true when `m` was one.
+    pub fn told(m: &sex_pdx::PdxMessage) -> bool {
+        if !is_shown(m) { return false; }
+        if sex_pdx::pixel_region::shown_page(m.arg0) == Some(FRONT.load(Relaxed)) { OWED.store(false, Relaxed); }
+        true
+    }
+    /// Waits until Display no longer reads the back page. What else arrives meanwhile
+    /// is kept for whoever it belongs to.
+    pub fn settle() {
+        while let Some(m) = crate::mailbox::take(is_shown) { told(&m); }
+        if !OWED.load(Relaxed) { return; }
+        let end = sex_pdx::get_ticks().saturating_add(PATIENCE_MS);
+        while OWED.load(Relaxed) {
+            while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+                if told(&m) { continue; }
+                // Keys, closes and answers wait in the mailbox; the rest the window
+                // would drop too.
+                if crate::is_shell(&m) || crate::is_answer(&m) { crate::mailbox::put(m); }
+            }
+            while let Some(m) = crate::mailbox::take(is_shown) { told(&m); }
+            if !OWED.load(Relaxed) || sex_pdx::get_ticks() >= end { break; }
+            let _ = sex_pdx::sys_wait_self_ticks(1);
+        }
+        OWED.store(false, Relaxed);
+    }
 }
 
 impl Window {
@@ -96,18 +144,28 @@ impl Window {
         call(SLOT_DISPLAY, 0xEC, surface, (56u64 << 32) | 200, (400u64 << 32) | 640);
         call(SLOT_SHELL, 0xFA, surface, TITLE_ID, (identity.target_pd as u64) << 8);
         let (w, h) = sex_pdx::pixel_region::area(640, 400);
-        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, size: (w as usize, h as usize), held: [const { None }; 16], back: alloc::vec::Vec::new() };
+        let mut window = Self { target: identity.target_pd, task: identity.task_id, surface, region, sequence: 0, size: (w as usize, h as usize), held: [const { None }; 16] };
         window.show(b"");
         call(SLOT_DISPLAY, lifecycle::OP_APP_PRESENT, surface, 1, 0);
         window
     }
-    /// The window's pixel surface, 0x00RRGGBB, row-major at the width you show. It holds
-    /// at least 800 by 600 pixels and enough for the whole screen; what you don't show is
-    /// the program's own scratch.
+    /// The window's pixel surface, 0x00RRGGBB, row-major at the width you show: the
+    /// page Display is not showing, holding the frame shown last, so a program may
+    /// repaint only what changed. It holds at least 800 by 600 pixels and enough for the
+    /// whole screen; what you don't show is the program's own scratch. Paint, then
+    /// [`Window::show_pixels`]; take it again after showing (it is the other page then).
     pub fn pixels(&self) -> &'static mut [u32] {
-        let (base, bytes) = sex_pdx::pixel_region_client().unwrap_or_else(|_| sex_pdx::task_finish(3));
-        unsafe { core::slice::from_raw_parts_mut(base as *mut u32, (bytes / 4) as usize) }
+        pages::settle();
+        let back = pages::page(pages::back());
+        if pages::STALE.swap(false, core::sync::atomic::Ordering::Relaxed) {
+            let front = pages::page(1 - pages::back());
+            let n = pages::SHOWN.load(core::sync::atomic::Ordering::Relaxed).min(back.len());
+            back[..n].copy_from_slice(&front[..n]);
+        }
+        back
     }
+    /// How many pixels [`Window::pixels`] holds, without waiting for Display.
+    pub fn room(&self) -> usize { pages::page(0).len() }
     /// The width and height of the window's pixel area, as Shell last reported it
     /// (see [`Event::Resize`]). Pixels shown beyond it are cut off.
     pub fn size(&self) -> (usize, usize) { self.size }
@@ -117,25 +175,29 @@ impl Window {
     pub fn want_keys(&self, flags: u64) -> bool {
         sex_pdx::pdx_call_checked(SLOT_SHELL, sex_pdx::app_key::OP_KEYS, flags, 0, 0).is_ok()
     }
-    /// A private `width` by `height` frame to paint whole, then show with
-    /// [`Window::show_frame`]. Display reads the window's pixels whenever it composites
-    /// (a cursor move, the clock, a neighbour's damage), so a program that clears and
-    /// repaints in [`Window::pixels`] can be caught half drawn; this one never is. It
-    /// keeps the last frame painted, so a program may repaint only what changed.
+    /// The first `width` by `height` pixels of the page Display is not showing, for a
+    /// program that paints every pixel of every frame: unlike [`Window::pixels`] it
+    /// skips copying the last frame in, so what it holds before painting is older.
+    /// Show it with [`Window::show_frame`].
     pub fn frame(&mut self, width: usize, height: usize) -> &mut [u32] {
-        if self.back.len() < width * height { self.back.resize(width * height, 0); }
-        &mut self.back[..width * height]
+        pages::settle();
+        pages::STALE.store(false, core::sync::atomic::Ordering::Relaxed);
+        let back = pages::page(pages::back());
+        let n = (width * height).min(back.len());
+        &mut back[..n]
     }
-    /// Copies the finished [`Window::frame`] into the window and shows it.
-    pub fn show_frame(&mut self, width: usize, height: usize) {
-        let pixels = self.pixels();
-        let n = (width * height).min(pixels.len()).min(self.back.len());
-        pixels[..n].copy_from_slice(&self.back[..n]);
-        self.show_pixels(width, height);
-    }
-    /// Shows the first `width` by `height` pixels in the window instead of its text.
+    /// Shows the finished [`Window::frame`].
+    pub fn show_frame(&mut self, width: usize, height: usize) { self.show_pixels(width, height); }
+    /// Shows the first `width` by `height` pixels painted in the window instead of its
+    /// text. Display switches to that page; the next [`Window::pixels`] is the other.
     pub fn show_pixels(&mut self, width: usize, height: usize) {
-        call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, 0);
+        use core::sync::atomic::Ordering::Relaxed;
+        let page = pages::back();
+        call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, page);
+        pages::FRONT.store(page, Relaxed);
+        pages::SHOWN.store(width * height, Relaxed);
+        pages::OWED.store(true, Relaxed);
+        pages::STALE.store(true, Relaxed);
     }
     /// The name in the window's title bar, up to sixteen characters.
     pub fn title(&mut self, name: &[u8]) {
@@ -175,6 +237,7 @@ impl Window {
         if m.caller_pd==SHELL && m.caller_task==SHELL && sex_pdx::autofill::response(m.type_id) {mailbox::put(*m);return None;}
         // Launch receipts belong to their explicit supervisor, not UI dispatch.
         // is_shell excludes these from the UI mailbox scan, so they are stashed once.
+        if pages::told(m) { return None; }
         if launch::is_event(m) { mailbox::put(*m); return None; }
         if restricted_status::is_event(m) { mailbox::put(*m); return None; }
         // Another task's answer, taken while this one waited: it looks in the mailbox.

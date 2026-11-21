@@ -47,7 +47,11 @@ mod shim {
 
     #[no_mangle]
     pub unsafe extern "C" fn sex_sdl_window_pixels(len: *mut u64) -> *mut u32 {
-        let pixels = window().pixels();
+        // SDL keeps its own framebuffer and copies every pixel of it here before each
+        // present, so the page need not hold the last frame (see `Window::frame`).
+        let window = window();
+        let room = window.room();
+        let pixels = window.frame(room, 1);
         if !len.is_null() { unsafe { *len = pixels.len() as u64 }; }
         pixels.as_mut_ptr()
     }

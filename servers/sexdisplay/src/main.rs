@@ -2016,6 +2016,22 @@ const PROGRAM_ROWS:usize=sex_pdx::app_catalog::count(sex_pdx::app_catalog::App::
 static mut PIXEL_REGIONS:[u64;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
 static mut PIXEL_BYTES:[u64;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
 static mut PIXEL_SIZE:[(usize,usize);PROGRAM_ROWS]=[(0,0);PROGRAM_ROWS];
+/// The page each row shows (`pixel_region::OP` arg2): the program paints the other.
+static mut PIXEL_PAGE:[u64;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
+/// A `pixel_region::shown` answer not yet delivered (the program's reply slot was
+/// full): (program, value), retried each turn of the loop.
+static mut PIXEL_SHOWN:[(u32,u64);PROGRAM_ROWS]=[(0,0);PROGRAM_ROWS];
+/// Where the page row `k` shows starts.
+fn pixel_page_base(k:usize)->u64{
+    unsafe{let base=PIXEL_REGIONS[k];if base==0{0}else{base+PIXEL_PAGE[k]*sex_pdx::pixel_region::page_bytes(PIXEL_BYTES[k])}}
+}
+/// Delivers the pending `shown` answers.
+fn pixel_shown_flush(){
+    for k in 0..PROGRAM_ROWS{
+        let (target,value)=unsafe{PIXEL_SHOWN[k]};
+        if target!=0&&sex_pdx::pdx_reply(target,value)==0{unsafe{PIXEL_SHOWN[k]=(0,0);}}
+    }
+}
 /// The program row's picture under this pixel, when the surface shows one.
 fn program_pixel_at(x:usize,y:usize,surf:&Surface)->Option<Option<u32>>{
     program_pixel_at_for(x,y,surf,chrome_metrics())
@@ -2023,7 +2039,7 @@ fn program_pixel_at(x:usize,y:usize,surf:&Surface)->Option<Option<u32>>{
 fn program_pixel_at_for(x:usize,y:usize,surf:&Surface,metrics:sex_pdx::desktop_style::chrome::Metrics)->Option<Option<u32>>{
     let k=sex_pdx::pixel_region::index_of(surf.owner_pd)?;
     if !app_catalog::by_surface(surf.owner_pd,surf.surface_id).is_some_and(|r|r.app==app_catalog::App::Program){return None;}
-    let (w,h)=unsafe{PIXEL_SIZE[k]};let base=unsafe{PIXEL_REGIONS[k]};
+    let (w,h)=unsafe{PIXEL_SIZE[k]};let base=pixel_page_base(k);
     if w==0||h==0||base==0{return None;}
     let bx=(surf.x.max(0) as usize).saturating_add(metrics.px(sex_pdx::desktop_style::INSET)as usize);
     let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{(metrics.title()as usize)+(metrics.px(8)as usize)}else{metrics.px(sex_pdx::desktop_style::TEXT_TOP)as usize};
@@ -2043,7 +2059,7 @@ fn program_pixel_row(y:usize,x0:usize,x1:usize,surf:&Surface)->Option<(*const u3
 fn program_pixel_row_for(y:usize,x0:usize,x1:usize,surf:&Surface,metrics:sex_pdx::desktop_style::chrome::Metrics)->Option<(*const u32,usize,usize)>{
     let k=sex_pdx::pixel_region::index_of(surf.owner_pd)?;
     if !app_catalog::by_surface(surf.owner_pd,surf.surface_id).is_some_and(|r|r.app==app_catalog::App::Program){return None;}
-    let (w,h)=unsafe{PIXEL_SIZE[k]};let base=unsafe{PIXEL_REGIONS[k]};
+    let (w,h)=unsafe{PIXEL_SIZE[k]};let base=pixel_page_base(k);
     if w==0||h==0||base==0{return None;}
     let bx=(surf.x.max(0) as usize).saturating_add(metrics.px(sex_pdx::desktop_style::INSET)as usize);
     let top=if surf.chrome_flags&SURFACE_CHROME_TOP_BAR!=0{(metrics.title()as usize)+(metrics.px(8)as usize)}else{metrics.px(sex_pdx::desktop_style::TEXT_TOP)as usize};
@@ -5005,20 +5021,28 @@ pub extern "C" fn _start() -> ! {
                 sex_pdx::pixel_region::OP => {
                     // Only the program row that owns this surface shows pixels in it.
                     if let (Some(k), true) = (sex_pdx::pixel_region::index_of(msg.caller_pd), app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program)) {
-                        // Any shape the region holds: a full-screen window shows full-screen pixels.
-                        let pixels = unsafe { PIXEL_BYTES[k] } as usize / 4;
+                        // Any shape a page holds: a full-screen window shows full-screen pixels.
+                        let pixels = sex_pdx::pixel_region::page_bytes(unsafe { PIXEL_BYTES[k] }) as usize / 4;
                         let w = ((msg.arg1 >> 32) as usize).min(pixels);
                         let h = if w == 0 { 0 } else { ((msg.arg1 & 0xFFFF_FFFF) as usize).min(pixels / w) };
-                        unsafe { PIXEL_SIZE[k] = (w, h); }
+                        let page = msg.arg2 & 1;
+                        unsafe { PIXEL_SIZE[k] = (w, h); PIXEL_PAGE[k] = page; }
                         needs_full_redraw = true;
                         sex_pdx::serial_record!("[display.app.pixels] target={} surface={} w={} h={}", msg.caller_pd, msg.arg0, w, h);
+                    }
+                    // From here on only `page` is read: the program may paint the other.
+                    // Rendering happens after the drain, so no read of the old page is
+                    // in progress. Answered even when refused, so the program never waits.
+                    if let Some(k) = sex_pdx::pixel_region::index_of(msg.caller_pd) {
+                        unsafe { PIXEL_SHOWN[k] = (msg.caller_pd, sex_pdx::pixel_region::shown(msg.arg2 & 1)); }
+                        pixel_shown_flush();
                     }
                 }
                 sex_pdx::app_lifecycle::OP_APP_PRESENT => {
                     // A new run starts with the catalog's name and text until it gives its own.
                     if app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program) {
                         set_program_title(msg.arg0, None);
-                        if let Some(k) = sex_pdx::pixel_region::index_of(msg.caller_pd) { unsafe { PIXEL_SIZE[k] = (0, 0); } }
+                        if let Some(k) = sex_pdx::pixel_region::index_of(msg.caller_pd) { unsafe { PIXEL_SIZE[k] = (0, 0); PIXEL_PAGE[k] = 0; PIXEL_SHOWN[k] = (0, 0); } }
                     }
                     if lifecycle.request_present(msg.caller_pd, msg.arg0, msg.arg1, msg.arg2) {
                         sex_pdx::serial_record!("[display.app.present.request] target={} surface={} request={}", msg.caller_pd, msg.arg0, msg.arg1);
@@ -5956,6 +5980,7 @@ pub extern "C" fn _start() -> ! {
         unsafe{SCREEN_CAPTURE.poll();RECORDING_CAPTURE.poll(sex_pdx::get_ticks());}
         unsafe { for stage in &mut TEXT_STAGES { stage.poll_reply(sex_pdx::pdx_reply); } }
         unsafe { BITMAP_STORES.poll_reply(sex_pdx::pdx_reply); }
+        pixel_shown_flush();
 
         // ── Yield once regardless of whether messages remain queued ──
         loop_iter = loop_iter.wrapping_add(1);

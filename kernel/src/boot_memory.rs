@@ -441,17 +441,18 @@ pub fn init_text_regions(display: u32) {
 
 /// One pixel surface per program row: the program writes, Display reads.
 pub fn init_pixel_regions(display: u32) {
-    use sex_pdx::pixel_region::{bytes_for_screen, CLIENT_SLOT, display_slot, region_id};
+    use sex_pdx::pixel_region::{region_for_screen, CLIENT_SLOT, display_slot, region_id};
     require_boot();
     if display == 0 { return; }
     let second = DOMAIN_REGISTRY.get(display).expect("BOOT_PIXEL_DISPLAY_MISSING");
     let programs = || sex_pdx::app_catalog::INCARNATIONS.iter().filter(|r| r.app == sex_pdx::app_catalog::App::Program);
     let rows = programs().count();
-    // One buddy reservation per eight rows: per-row backing would spend a
-    // boot frame reservation each and run the table out.
-    const GROUP: usize = 8;
+    // One buddy reservation per four rows (each row holds two pages): per-row
+    // backing would spend a boot frame reservation each and run the table out,
+    // and four double rows ask for the same contiguous block eight single ones did.
+    const GROUP: usize = 4;
     let screen = SCREEN_PIXELS.load(core::sync::atomic::Ordering::Relaxed);
-    let length = bytes_for_screen(screen >> 32, screen & 0xFFFF_FFFF);
+    let length = region_for_screen(screen >> 32, screen & 0xFFFF_FFFF);
     let mut base = 0u64;
     for (k, row) in programs().enumerate() {
         if k % GROUP == 0 { base = backing(length * GROUP.min(rows - k) as u64); }

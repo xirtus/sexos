@@ -100,8 +100,6 @@ static void SEXOS_DestroyWindowFramebuffer(_THIS, SDL_Window *window)
 
 static int SEXOS_CreateWindowFramebuffer(_THIS, SDL_Window *window, Uint32 *format, void **pixels, int *pitch)
 {
-    uint64_t len = 0;
-    Uint32 *area;
     Framebuffer *fb;
     int w, h;
 
@@ -111,18 +109,16 @@ static int SEXOS_CreateWindowFramebuffer(_THIS, SDL_Window *window, Uint32 *form
     if (!fb) {
         return SDL_OutOfMemory();
     }
-    area = sex_sdl_window_pixels(&len);
     fb->w = w;
     fb->h = h;
-    if (area && (uint64_t)w * (uint64_t)h <= len) {
-        fb->pixels = area;
-        fb->direct = SDL_TRUE;
-    } else {
-        fb->pixels = (Uint32 *)SDL_calloc((size_t)w * h, 4);
-        if (!fb->pixels) {
-            SDL_free(fb);
-            return SDL_OutOfMemory();
-        }
+    /* SDL's own memory, copied into the window at each present: the window's pixel
+       area is two pages that take turns on screen, so it is no fixed address to draw
+       into, and drawing straight into it could show a frame half drawn. */
+    fb->direct = SDL_FALSE;
+    fb->pixels = (Uint32 *)SDL_calloc((size_t)(w > 0 ? w : 1) * (h > 0 ? h : 1), 4);
+    if (!fb->pixels) {
+        SDL_free(fb);
+        return SDL_OutOfMemory();
     }
     SDL_SetWindowData(window, FRAMEBUFFER, fb);
     *format = SDL_PIXELFORMAT_RGB888;
@@ -141,7 +137,7 @@ static int SEXOS_UpdateWindowFramebuffer(_THIS, SDL_Window *window, const SDL_Re
         return SDL_SetError("This window has no framebuffer");
     }
     if (!fb->direct) {
-        /* Too big for the pixel area: show as much as fits, at the same width. */
+        /* Show as much as fits, at the same width. */
         uint64_t len = 0;
         Uint32 *area = sex_sdl_window_pixels(&len);
         int rows = fb->w > 0 ? (int)SDL_min((uint64_t)fb->h, len / (uint64_t)fb->w) : 0;

@@ -361,7 +361,7 @@ impl Browser {
     fn resize(&mut self, width: usize, height: usize) {
         if self.reported_size == (width, height) { return; }
         self.reported_size = (width, height);
-        let capacity = self.window.pixels().len();
+        let capacity = self.window.room();
         let Some(surface) = viewport::Surface::checked(width, height, capacity) else {
             sex_pdx::serial_record!("[web.viewport.rejected] w={} h={} capacity={}", width, height, capacity);
             return;
@@ -533,7 +533,7 @@ impl Browser {
     fn paint_frames(&mut self) {
         for i in 0..self.frames.len() {
             let Some(copy) = viewport::Frame::visible(self.surface, self.frames[i].rect,
-                self.scroll, BAR, self.side(), self.window.pixels().len()) else { continue; };
+                self.scroll, BAR, self.side(), self.window.room()) else { continue; };
             let mut tmp = alloc::vec![0xFFFF_FFFFu32; copy.source.pixels];
             self.enter(i);
             sex_web::paint(&self.page, &mut self.fonts, &mut sex_web::Target { pixels: &mut tmp,

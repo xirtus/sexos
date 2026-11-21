@@ -669,6 +669,8 @@ impl App {
 
     fn draw(&mut self, window: &mut Window) {
         let (w, h) = window.size();
+        // The page to paint changes at every show (Display shows the other one).
+        self.p.px = window.pixels();
         self.p.w = w;
         self.p.h = h;
         let rows = self.rows();
