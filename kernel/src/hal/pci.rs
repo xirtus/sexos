@@ -198,6 +198,7 @@ static PRESENT: spin::Mutex<Option<Vec<(u8, u8, u8, u32)>>> = spin::Mutex::new(N
 pub fn present_functions() -> Vec<(u8, u8, u8, u32)> {
     let boot = crate::ipc::BOOT_PHASE.load(Ordering::Acquire) == crate::ipc::BootPhase::RegistryBuild as u8;
     if boot { if let Some(found) = PRESENT.lock().as_ref() { return found.clone(); } }
+    let t = crate::boot_cost::now();
     let mut found = Vec::new();
     for bus in 0..256u16 {
         for dev in 0..32u8 {
@@ -212,6 +213,7 @@ pub fn present_functions() -> Vec<(u8, u8, u8, u32)> {
             }
         }
     }
+    crate::boot_cost::add(crate::boot_cost::Bucket::PciWalk, t, 1);
     if boot {
         serial_println!("[pci.walk] functions={} cached=1", found.len());
         *PRESENT.lock() = Some(found.clone());

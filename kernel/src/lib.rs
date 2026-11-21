@@ -8,6 +8,7 @@ extern crate alloc;
 // x86 build is byte-for-byte the same module set as before) ─────────────────
 #[cfg(target_arch = "x86_64")]
 pub mod serial;
+pub mod boot_cost;
 #[cfg(target_arch = "x86_64")]
 pub mod console;
 #[cfg(target_arch = "x86_64")]

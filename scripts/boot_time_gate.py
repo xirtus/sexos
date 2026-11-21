@@ -72,6 +72,20 @@ def main():
    gaps=sorted(((window[i+1][0]-window[i][0],i) for i in range(len(window)-1)),reverse=True)[:8]
    for ms,i in gaps:
     if ms>=20:print(f'[boot.kernel_gap] boot={n} ms={ms} lines={len(window)} after={window[i][1][:100]!r} before={window[i+1][1][:100]!r}',flush=True)
+   # The same window by the tag of the line that ends each gap: time spread thinly over
+   # many lines of one kind (one per program set up, say) shows here and not above.
+   tags={}
+   for i in range(len(window)-1):
+    tag=re.match(r'\s*(\[[^\]]+\]|\S+)',window[i+1][1]);tag=tag[1] if tag else '?'
+    ms,count=tags.get(tag,(0,0));tags[tag]=(ms+window[i+1][0]-window[i][0],count+1)
+   top=sorted(tags.items(),key=lambda kv:-kv[1][0])[:10]
+   print(f'[boot.kernel_tags] boot={n} '+' '.join(f'{k}={v[0]}ms/{v[1]}' for k,v in top),flush=True)
+   # The kernel's own cycle counts for the same window ([boot.kernel.cost]), in host ms.
+   cost=next((l for _,l in window if '[boot.kernel.cost]' in l),None)
+   if cost and seen.get('services_handed_over') is not None:
+    fields=dict(kv.split('=',1) for kv in cost.split()[1:] if '=' in kv)
+    total=int(fields.get('window_cycles','0')) or 1;span=seen['services_handed_over']-seen['cores_online']
+    print(f'[boot.kernel_cost] boot={n} span_ms={span} shootdowns={fields.get("shootdowns")} '+' '.join(f'{k[:-7]}={round(int(v)*span/total)}ms/{fields.get(k[:-7]+"_units")}' for k,v in fields.items() if k.endswith('_cycles') and k!='window_cycles'),flush=True)
    print(f'[boot.timeline] boot={n} cores={os.environ.get("SEXOS_GATE_CORES","1")} accel={os.environ.get("SEXOS_GATE_ACCEL","tcg")} '+' '.join(f'{k}={v}' for v,k in order),flush=True)
   finally:
    done.set()

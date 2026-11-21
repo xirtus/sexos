@@ -61,6 +61,7 @@ fn grant_browser_successor_route(pd:&crate::capability::ProtectionDomain,slot:u6
 }
 
 pub fn init() {
+    crate::boot_cost::begin();
     // Advance boot phase to allow registry insertion
     unsafe { crate::ipc::BOOT_CONTROLLER.advance(crate::ipc::BootPhase::RegistryBuild); }
 
@@ -107,9 +108,11 @@ pub fn init() {
             if path.contains(target) {
                 serial_println!("[bootgraph.pd.spawn.begin] pd={}", target);
                 let key=sex_pdx::organs::service_key(domain_id);
+                let cost=crate::boot_cost::now();
                 let spawned=if key!=domain_id {
                     crate::pd::create::create_boot_domain(path,None,domain_id,key)
                 }else{pdx_spawn(path, domain_id)};
+                crate::boot_cost::add(crate::boot_cost::Bucket::Spawn,cost,1);
                 match spawned {
                     Ok(id) => {
                         serial_println!("✓ Spawned PD {}: {} (Domain {})", id, path, domain_id);
@@ -1234,6 +1237,7 @@ pub fn init() {
         crate::ipc::BOOT_CONTROLLER.advance(crate::ipc::BootPhase::SchedulerRunning);
     }
 
+    crate::boot_cost::report();
     serial_println!("init: Ready for Scheduler.");
 }
 
