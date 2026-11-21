@@ -156,6 +156,7 @@ mod fill_damage;
 mod wallpaper_mark;
 mod desktop_widgets;
 mod decor;
+mod desk_theme;
 mod pacing;
 mod damage;
 static mut TEXT_STAGES: [text_transaction::Stage; MAX_SURFACES] = [text_transaction::Stage::EMPTY; MAX_SURFACES];
@@ -290,8 +291,6 @@ const FRAME_TOP_BAR_LIGHT_GAP_PX: usize = 5;
 const FRAME_TOP_BAR_LIGHT_EXCLUSION_PX: usize = 50;
 /// Top bar background color: dark navy-blue header, distinct from content teal.
 const FRAME_TOP_BAR_COLOR: u32 = 0x001E1E2E;
-/// Toolbar divider color (bottom edge of top bar).
-const FRAME_TOP_BAR_DIVIDER_COLOR: u32 = 0x00B4BEFE;
 /// Light vertical zone: top (y offset within top bar), centered in 28px.
 const FRAME_TOP_BAR_LIGHT_TOP: usize = 9;
 /// Light vertical zone: bottom (exclusive).
@@ -312,6 +311,10 @@ struct RenderTokensV1 {
     zoom_light_color: u32,
     appearance_flags: u8,
     effect_levels: u8,
+    /// The bar's colours for this frame: the desktop theme (`desk_theme`).
+    bar: silkbar_model::Theme,
+    /// The quiet inset of a window's resize band.
+    band_color: u32,
 }
 
 const DEFAULT_RENDER_TOKENS: RenderTokensV1 = RenderTokensV1 {
@@ -325,9 +328,33 @@ const DEFAULT_RENDER_TOKENS: RenderTokensV1 = RenderTokensV1 {
     zoom_light_color:     FRAME_LIGHT_ZOOM_COLOR,
     appearance_flags:     0,
     effect_levels:        0,
+    bar:                  silkbar_model::DEFAULT_THEME,
+    band_color:           sex_pdx::desktop_style::NATIVE_CANVAS,
 };
 
 static mut DISPLAY_TOKENS: RenderTokensV1 = DEFAULT_RENDER_TOKENS;
+/// The Shell's default appearance preset is on: the window chrome wears the
+/// desktop theme's colours, not the preset's (S6a).
+static mut CHROME_FOLLOWS_THEME: bool = true;
+
+/// Puts the desktop theme (`desk_theme`) into the render tokens: always the
+/// bar's colours, and the chrome's while the default preset is on. Lights
+/// keep their meaning (close, minimize, zoom) in every theme.
+fn apply_desk_theme() {
+    let d = desk_theme::current();
+    unsafe {
+        let t = &mut *core::ptr::addr_of_mut!(DISPLAY_TOKENS);
+        t.bar = d.bar;
+        if CHROME_FOLLOWS_THEME {
+            t.focus_surface_color = d.focus;
+            t.frame_rim_color = d.rim;
+            t.frame_top_bar_color = d.title_bar;
+            t.active_tab_color = d.active_tab;
+            t.inactive_tab_color = d.inactive_tab;
+            t.band_color = d.band;
+        }
+    }
+}
 
 // Token reception state machine. Call 1 buffers; Call 2 commits.
 static mut TOKEN_BUF_CALL1_RECEIVED: bool = false;
@@ -526,7 +553,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
             }
             // Divider: bright opaque line at bottom edge (a tabbed bar flows into its tab).
             if surf.tab_count == 0 && ly >= (scene.metrics.title()as usize).saturating_sub(scene.metrics.scale()as usize) {
-                c = FRAME_TOP_BAR_DIVIDER_COLOR;
+                c = scene.tokens.frame_rim_color;
             }
             // Tab strip: inactive tabs over the active-tab bar.
             if surf.tab_count > 1
@@ -619,7 +646,7 @@ fn composite_pixel_source(x: usize, y: usize, w: usize, h: usize, bg: u32, sourc
                 c = if outer_edge {
                     glass_over_bg(scene.tokens.frame_rim_color, x, y, 112, scene)
                 } else {
-                    glass_over_bg(sex_pdx::desktop_style::NATIVE_CANVAS, x, y, 224, scene)
+                    glass_over_bg(scene.tokens.band_color, x, y, 224, scene)
                 };
             }
         } else {
@@ -781,7 +808,7 @@ fn fast_chrome_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
         let glass=|fg:u32,alpha:u8|glass_over_bg(fg,x0,y,alpha,scene);
         let tab_paint=|color:u32,alpha:u8|alpha_blend_xrgb_over_xrgb(color,glass(color,224),alpha);
         let mut base=if surf.tab_count>0{tab_paint(scene.tokens.active_tab_color,240)}else{glass(scene.tokens.frame_top_bar_color,toolbar_alpha)};
-        if surf.tab_count==0&&ly>=(m.title()as usize).saturating_sub(m.scale()as usize){base=FRAME_TOP_BAR_DIVIDER_COLOR;}
+        if surf.tab_count==0&&ly>=(m.title()as usize).saturating_sub(m.scale()as usize){base=scene.tokens.frame_rim_color;}
         let inactive=if surf.tab_count>1{tab_paint(scene.tokens.inactive_tab_color,200)}else{base};
         let exclusion=m.controls_end()as usize;
         let slot_w=if surf.tab_count>1{rim_right.saturating_sub(exclusion)/surf.tab_count as usize}else{0};
@@ -824,7 +851,7 @@ fn fast_chrome_row(row:*mut u32,x0:usize,x1:usize,y:usize,w:usize,h:usize,source
         let edge=m.scale()as usize;
         let edge_row=ly<edge||ly>=sh.saturating_sub(edge);
         let outline=glass_over_bg(scene.tokens.frame_rim_color,x0,y,112,scene);
-        let inset=glass_over_bg(sex_pdx::desktop_style::NATIVE_CANVAS,x0,y,224,scene);
+        let inset=glass_over_bg(scene.tokens.band_color,x0,y,224,scene);
         for lx in l0..l1{
             if !band_row&&lx>=c0&&lx<c1{continue;}
             let c=if edge_row||lx<edge||lx>=sw.saturating_sub(edge){outline}else{inset};
@@ -1170,14 +1197,14 @@ fn workspace_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->O
             // strip. The whole shared target opens the real Atlas overview.
             let left=b.x+(b.w-10*scale)/2;let top=b.y+(b.h-10*scale)/2;
             if in_rect(x,y,left,top,10*scale,10*scale)
-                &&((x-left)/scale)%4<2&&((y-top)/scale)%4<2{return Some(DEFAULT_THEME.active);}
+                &&((x-left)/scale)%4<2&&((y-top)/scale)%4<2{return Some(scene.tokens.bar.active);}
             return None;
         }
         let size=if bar.workspaces[i].active{10*scale}else{6*scale};
         let left=b.x+(b.w-size)/2;let top=b.y+(b.h-size)/2;
         if !in_rect(x,y,left,top,size,size){return None;}
-        return Some(if bar.workspaces[i].urgent{DEFAULT_THEME.urgent}
-            else if bar.workspaces[i].active{DEFAULT_THEME.active}else{DEFAULT_THEME.muted});
+        return Some(if bar.workspaces[i].urgent{scene.tokens.bar.urgent}
+            else if bar.workspaces[i].active{scene.tokens.bar.active}else{scene.tokens.bar.muted});
     }
     let _=scene;None
 }
@@ -1185,8 +1212,6 @@ fn workspace_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->O
 static mut TRAY_STATUS: sex_pdx::tray::Status = sex_pdx::tray::Status::UNKNOWN;
 static mut TRAY_LABEL: u64 = 0;
 static mut TRAY_VIEW: sex_pdx::tray::View = sex_pdx::tray::View { menu: sex_pdx::tray::Menu::None, month_offset: 0 };
-const TRAY_FG: u32 = 0x00CDD6F4;
-const TRAY_DIM: u32 = 0x006C7086;
 /// One tray icon on a 16-unit grid: 0 network, 1 volume, 2 battery.
 fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option<u32>{
     // Tray icons in the three status chips: network, volume, battery.
@@ -1198,7 +1223,7 @@ fn chip_color(x:usize,y:usize,bar:&SilkBar,scene: &scene::SceneSnapshot)->Option
         if !bar.chips[idx].visible{return None;}
         // The SexOS icon set's tray icons, anti-aliased over the bar's glass.
         return tray_icons::at(idx,x-left,y-top,size,unsafe{&*core::ptr::addr_of!(TRAY_STATUS)})
-            .map(|(c,a)|coverage_blend(c,bar_body(x,y,scene),a));
+            .map(|(c,a)|coverage_blend(desk_theme::tray_ink(c,desk_theme::current()),bar_body(x,y,scene),a));
     }
     None
 }
@@ -1449,7 +1474,7 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
                             1 => 0x0044FF44,
                             2 => 0x00FFCC44,
                             3 => 0x0044CCFF,
-                            _ => DEFAULT_THEME.panel_fill,
+                            _ => scene.tokens.bar.panel_fill,
                         };
                     }
                     // Unset bit: fall through to normal module rendering
@@ -1468,11 +1493,11 @@ fn bar_color(x: usize, y: usize, bar: &SilkBar, scene: &scene::SceneSnapshot) ->
         let s = &bar.bell_state;
         if s.flags & 1 == 0 {
             // Bell unavailable (no SLOT_BELL grant or server not running) → dim dot
-            return DEFAULT_THEME.muted;
+            return scene.tokens.bar.muted;
         }
         if s.total_visible == 0 {
             // No events → dim/inactive dot
-            return DEFAULT_THEME.muted;
+            return scene.tokens.bar.muted;
         }
         if s.redacted_count > 0 {
             // Events with privacy-redacted content → warm tint
@@ -1526,24 +1551,24 @@ fn bar_body(x: usize, y: usize, scene: &scene::SceneSnapshot) -> u32 {
     let bar_bottom=(scene.metrics.bar()as usize);
     const GLOW_SPREAD: usize = 4;
     if y == 0 {
-        let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
+        let body = glass_over_bg(scene.tokens.bar.panel_fill, x, y, R6_BAR_ALPHA, scene);
         return alpha_blend_xrgb_over_xrgb(BAR_TOP_HIGHLIGHT, body, 64);
     }
     if y == bar_bottom - 1 {
-        let body = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
+        let body = glass_over_bg(scene.tokens.bar.panel_fill, x, y, R6_BAR_ALPHA, scene);
         let darkened = alpha_blend_xrgb_over_xrgb(BAR_BOTTOM_DARK_EDGE, body, 88);
-        return alpha_blend_xrgb_over_xrgb(DEFAULT_THEME.panel_glow, darkened, 48);
+        return alpha_blend_xrgb_over_xrgb(scene.tokens.bar.panel_glow, darkened, 48);
     }
     if y + GLOW_SPREAD >= bar_bottom && y < bar_bottom {
         let dist = (bar_bottom - 1 - y) as u32;
         let glow_a = glow_edge_alpha(dist, GLOW_SPREAD as u32, R6_EDGE_ALPHA);
         if glow_a > 0 {
-            let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
+            let base = glass_over_bg(scene.tokens.bar.panel_fill, x, y, R6_BAR_ALPHA, scene);
             let body = alpha_blend_xrgb_over_xrgb(BAR_CRYSTAL_TINT, base, 36);
-            return alpha_blend_xrgb_over_xrgb(DEFAULT_THEME.panel_glow, body, glow_a);
+            return alpha_blend_xrgb_over_xrgb(scene.tokens.bar.panel_glow, body, glow_a);
         }
     }
-    let base = glass_over_bg(DEFAULT_THEME.panel_fill, x, y, R6_BAR_ALPHA, scene);
+    let base = glass_over_bg(scene.tokens.bar.panel_fill, x, y, R6_BAR_ALPHA, scene);
     alpha_blend_xrgb_over_xrgb(BAR_CRYSTAL_TINT, base, 32)
 }
 
@@ -2608,7 +2633,7 @@ fn raster_full(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
             let c: u32 = if y < (scene.metrics.bar()as usize).saturating_sub(scene.metrics.scale()as usize) {
                 top_strip_pixel(x, y, bar, &clock_lines, scene)
             } else {
-                DEFAULT_THEME.panel_glow // low-contrast bar edge
+                scene.tokens.bar.panel_glow // low-contrast bar edge
             };
             unsafe { core::ptr::write_volatile(fb.add(y*w+x), c); }
         }
@@ -2807,7 +2832,7 @@ fn raster_strip(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot)
             let c: u32 = if y < (scene.metrics.bar()as usize).saturating_sub(scene.metrics.scale()as usize) {
                 top_strip_pixel(x, y, bar, &clock_lines, scene)
             } else {
-                DEFAULT_THEME.panel_glow
+                scene.tokens.bar.panel_glow
             };
             let idx = y * w + x;
             if idx < total_pixels {
@@ -2848,7 +2873,7 @@ fn raster_area(target: &frame_output::Target<'_>, scene: &scene::SceneSnapshot) 
         }
     }
     if total_pixels<w*h{return false;}
-    for x in 0..w{unsafe{core::ptr::write_volatile(fb.add(((scene.metrics.bar()as usize)-1)*w+x),DEFAULT_THEME.panel_glow);}} // low-contrast bar edge
+    for x in 0..w{unsafe{core::ptr::write_volatile(fb.add(((scene.metrics.bar()as usize)-1)*w+x),scene.tokens.bar.panel_glow);}} // low-contrast bar edge
     raster_rows(fb,scene.metrics.bar()as usize,h,0,w,w,h,scene);
     true
 }
@@ -3308,10 +3333,9 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
     let layout = if state.grid { Layout::grid(w, h, scene.metrics.bar() as usize, state.count as usize, scale) }
         else { Layout::new(w, h, state.count as usize, scale) };
     let Some(layout) = layout else { return; };
-    const PANEL: u32 = 0x00121726;
-    const CARD: u32 = 0x001E2536;
-    const CARD_SELECTED: u32 = 0x002C3650;
-    let ring = sex_pdx::desktop_style::FOCUS;
+    let d = desk_theme::current();
+    let (panel, card_idle, card_selected) = (d.menu, desk_theme::blend(d.menu, d.menu_picked, 0.5), d.menu_picked);
+    let ring = d.focus;
     let at = |x: usize, y: usize| -> Option<usize> { let i = y * w + x; (x < w && y < h && i < total_pixels).then_some(i) };
     let (px, py, pw, ph) = layout.panel;
     // The overview dims the whole desktop below the panel; the switcher is a rounded glass panel.
@@ -3325,14 +3349,14 @@ fn draw_window_switcher(fb: *mut u32, w: usize, h: usize, total_pixels: usize, s
             let Some(i) = at(x, y) else { continue };
             unsafe {
                 let under = core::ptr::read_volatile(fb.add(i));
-                core::ptr::write_volatile(fb.add(i), alpha_blend_xrgb_over_xrgb(PANEL, under, shade));
+                core::ptr::write_volatile(fb.add(i), alpha_blend_xrgb_over_xrgb(panel, under, shade));
             }
         }
     }
     for (index, sid) in state.ids().enumerate() {
         let selected = index == state.selected as usize;
         let (cx, cy, cw, ch) = layout.card(index);
-        let card = if selected { CARD_SELECTED } else { CARD };
+        let card = if selected { card_selected } else { card_idle };
         let rim = if selected { 3 * scale as usize } else { 0 };
         for y in cy..cy + ch {
             for x in cx..cx + cw {
@@ -3414,13 +3438,12 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
     let s = scale as usize;
     let bar = scene.metrics.bar() as usize;
     let line = glyphs::UI_H * s;
-    const BG: u32 = 0x00181825;
-    const RIM: u32 = 0x0045475A;
-    const TRACK: u32 = 0x00313244;
-    let ring = sex_pdx::desktop_style::FOCUS;
+    let d = desk_theme::current();
+    let (bg, rim, track) = (d.menu, d.menu_rim, d.menu_picked);
+    let ring = d.focus;
     let panel = |r: (usize, usize, usize, usize)| {
-        tray_fill(fb, w, h, total, r, RIM);
-        tray_fill(fb, w, h, total, (r.0 + s, r.1 + s, r.2 - 2 * s, r.3 - 2 * s), BG);
+        tray_fill(fb, w, h, total, r, rim);
+        tray_fill(fb, w, h, total, (r.0 + s, r.1 + s, r.2 - 2 * s, r.3 - 2 * s), bg);
     };
     let status = unsafe { TRAY_STATUS };
     match view.menu {
@@ -3429,31 +3452,31 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
             panel(q.panel);
             let mid = |r: (usize, usize, usize, usize)| r.1 + r.3.saturating_sub(line) / 2;
             let r0 = q.rows[0];
-            tray_text(fb, w, h, total, b"Volume", r0.0, mid(r0), BG, scale, 80 * s);
+            tray_text(fb, w, h, total, b"Volume", r0.0, mid(r0), bg, scale, 80 * s);
             let (sx, sy, sw, sh) = q.slider;
-            tray_fill(fb, w, h, total, (sx, sy + sh / 3, sw, sh / 3), TRACK);
+            tray_fill(fb, w, h, total, (sx, sy + sh / 3, sw, sh / 3), track);
             let filled = sw * status.volume as usize / 100;
-            tray_fill(fb, w, h, total, (sx, sy + sh / 3, filled, sh / 3), if status.muted { TRAY_DIM } else { ring });
-            tray_fill(fb, w, h, total, (sx + filled.min(sw.saturating_sub(sh / 2)), sy, sh / 2, sh), TRAY_FG);
+            tray_fill(fb, w, h, total, (sx, sy + sh / 3, filled, sh / 3), if status.muted { d.menu_dim } else { ring });
+            tray_fill(fb, w, h, total, (sx + filled.min(sw.saturating_sub(sh / 2)), sy, sh / 2, sh), d.menu_ink);
             let m = q.mute;
-            let mbg = if status.muted { 0x005A2A35 } else { TRACK };
+            let mbg = if status.muted { desk_theme::blend(bg, d.menu_close, 0.35) } else { track };
             tray_fill(fb, w, h, total, m, mbg);
             let word: &[u8] = if status.muted { b"Muted" } else { b"Mute" };
             let tw = glyphs::ui_width(word, scale).unwrap_or(0);
             tray_text(fb, w, h, total, word, m.0 + m.2.saturating_sub(tw) / 2, mid(m), mbg, scale, m.2);
             let r1 = q.rows[1];
-            tray_text(fb, w, h, total, tray::wifi_text(status.wifi).as_bytes(), r1.0, mid(r1), BG, scale, r1.2);
+            tray_text(fb, w, h, total, tray::wifi_text(status.wifi).as_bytes(), r1.0, mid(r1), bg, scale, r1.2);
             let r2 = q.rows[2];
             let mut text = [0u8; 32];
             let n = tray::battery_text(&status, &mut text);
-            tray_text(fb, w, h, total, &text[..n], r2.0, mid(r2), BG, scale, r2.2);
+            tray_text(fb, w, h, total, &text[..n], r2.0, mid(r2), bg, scale, r2.2);
             let r3 = q.rows[3];
             let mut label = [0u8; 8];
             let ln = tray::label_decode(unsafe { TRAY_LABEL }, &mut label);
-            let x = r3.0 + tray_text(fb, w, h, total, b"Keyboard: ", r3.0, mid(r3), BG, scale, r3.2);
-            let x = x + tray_text(fb, w, h, total, &label[..ln], x, mid(r3), BG, scale, r3.2);
-            tray_text(fb, w, h, total, b"  (click to switch)", x, mid(r3), BG, scale, (r3.0 + r3.2).saturating_sub(x));
-            for r in &q.rows[1..] { tray_fill(fb, w, h, total, (r.0, r.1, r.2, s), TRACK); }
+            let x = r3.0 + tray_text(fb, w, h, total, b"Keyboard: ", r3.0, mid(r3), bg, scale, r3.2);
+            let x = x + tray_text(fb, w, h, total, &label[..ln], x, mid(r3), bg, scale, r3.2);
+            tray_text(fb, w, h, total, b"  (click to switch)", x, mid(r3), bg, scale, (r3.0 + r3.2).saturating_sub(x));
+            for r in &q.rows[1..] { tray_fill(fb, w, h, total, (r.0, r.1, r.2, s), track); }
         }
         Menu::Calendar => {
             let Some(c) = tray::Calendar::new(w, bar, s) else { return };
@@ -3462,7 +3485,7 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
                 sex_time::SexTimestamp::from_unix(scene.bar.civil_clock.seconds() as i64, 0).and_then(sex_time::Gregorian::from_timestamp)
             } else { None };
             let Some(today) = today else {
-                tray_text(fb, w, h, total, b"Date unknown", c.header.0, c.header.1, BG, scale, c.header.2);
+                tray_text(fb, w, h, total, b"Date unknown", c.header.0, c.header.1, bg, scale, c.header.2);
                 return;
             };
             let (year, month) = tray::shift_month(today.year, today.month, view.month_offset as i32);
@@ -3476,16 +3499,16 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
             for d in [1000, 100, 10, 1] { head[n] = b'0' + (y4 / d % 10) as u8; n += 1; }
             let hm = c.header.1 + c.header.3.saturating_sub(line) / 2;
             let tw = glyphs::ui_width(&head[..n], scale).unwrap_or(0);
-            tray_text(fb, w, h, total, &head[..n], c.header.0 + c.header.2.saturating_sub(tw) / 2, hm, BG, scale, c.header.2);
+            tray_text(fb, w, h, total, &head[..n], c.header.0 + c.header.2.saturating_sub(tw) / 2, hm, bg, scale, c.header.2);
             for (r, t) in [(c.prev, b"<"), (c.next, b">")] {
-                tray_fill(fb, w, h, total, r, TRACK);
+                tray_fill(fb, w, h, total, r, track);
                 let tw = glyphs::ui_width(t, scale).unwrap_or(0);
-                tray_text(fb, w, h, total, t, r.0 + r.2.saturating_sub(tw) / 2, hm, TRACK, scale, r.2);
+                tray_text(fb, w, h, total, t, r.0 + r.2.saturating_sub(tw) / 2, hm, track, scale, r.2);
             }
             let (cw, ch) = c.cell;
             for (i, d) in tray::WEEKDAYS.iter().enumerate() {
                 let tw = glyphs::ui_width(d.as_bytes(), scale).unwrap_or(0);
-                tray_text(fb, w, h, total, d.as_bytes(), c.grid.0 + i * cw + cw.saturating_sub(tw) / 2, c.grid.1 - ch + ch.saturating_sub(line) / 2, BG, scale, cw);
+                tray_text(fb, w, h, total, d.as_bytes(), c.grid.0 + i * cw + cw.saturating_sub(tw) / 2, c.grid.1 - ch + ch.saturating_sub(line) / 2, bg, scale, cw);
             }
             let first = tray::weekday(year, month, 1);
             let days = tray::days_in_month(year, month);
@@ -3493,7 +3516,7 @@ fn draw_tray_menu(fb: *mut u32, w: usize, h: usize, total: usize, scene: &scene:
             for day in 1..=days {
                 let r = c.day_cell(first, day);
                 let is_today = this_month && day == today.day;
-                let bg = if is_today { ring } else { BG };
+                let bg = if is_today { ring } else { bg };
                 if is_today { tray_fill(fb, w, h, total, (r.0 + 2 * s, r.1 + s, r.2 - 4 * s, r.3 - 2 * s), ring); }
                 let digits = [b'0' + day / 10, b'0' + day % 10];
                 let t: &[u8] = if day < 10 { &digits[1..] } else { &digits };
@@ -3534,7 +3557,7 @@ fn draw_screenshot_ui(fb: *mut u32, w: usize, h: usize, total_pixels: usize, sce
         }
     }
     if !empty {
-        let ring = sex_pdx::desktop_style::FOCUS;
+        let ring = desk_theme::current().focus;
         let t = 2 * scale;
         for y in sy.saturating_sub(t)..ey + t {
             for x in sx.saturating_sub(t)..ex + t {
@@ -3545,7 +3568,7 @@ fn draw_screenshot_ui(fb: *mut u32, w: usize, h: usize, total_pixels: usize, sce
         }
     }
     const HINT: &[u8] = b"Screenshot: drag a region, click a window, Enter for the whole screen, Esc to cancel";
-    const PILL: u32 = 0x00121726;
+    let pill = desk_theme::current().menu;
     let line = glyphs::UI_H * scale;
     let tw = glyphs::ui_width(HINT, scale as u32).unwrap_or(0).min(w.saturating_sub(16 * scale));
     let pad = 10 * scale;
@@ -3553,12 +3576,12 @@ fn draw_screenshot_ui(fb: *mut u32, w: usize, h: usize, total_pixels: usize, sce
     let (px, py) = (w.saturating_sub(pw) / 2, scene.metrics.bar() as usize + 12 * scale);
     for y in py..py + ph {
         for x in px..px + pw {
-            if let Some(i) = at(x, y) { unsafe { core::ptr::write_volatile(fb.add(i), PILL); } }
+            if let Some(i) = at(x, y) { unsafe { core::ptr::write_volatile(fb.add(i), pill); } }
         }
     }
     for y in 0..line {
         for x in 0..tw {
-            if let Some(c) = ui_label_at_scaled(HINT, x, y, PILL, scale as u32) {
+            if let Some(c) = ui_label_at_scaled(HINT, x, y, pill, scale as u32) {
                 if let Some(i) = at(px + pad + x, py + pad / 2 + y) { unsafe { core::ptr::write_volatile(fb.add(i), c); } }
             }
         }
@@ -4308,6 +4331,8 @@ pub extern "C" fn _start() -> ! {
     assert!(geometry.pitch>=geometry.width*4&&geometry.pitch%4==0,"DISPLAY_PITCH");
     assert!(address>=HIGH_HALF_BASE,"BOOT_DISPLAY_ADDRESS");
     unsafe{FB_PTR=address;FB_W=geometry.width;FB_H=geometry.height;FB_PITCH=geometry.pitch/4;BOOT_FB_PTR=address;BOOT_FB_PITCH=geometry.pitch/4;}
+    // The desktop starts in the settings' default theme until the Shell says otherwise.
+    apply_desk_theme();
     match virtio_gpu::open(geometry.width,geometry.height,address,geometry.pitch/4){
         Ok(gpu)=>{
             virtio_gpu::report(&gpu);
@@ -4891,10 +4916,12 @@ pub extern "C" fn _start() -> ! {
                     }
                 }
                 sex_pdx::desktop_look::OP_DESKTOP_LOOK => {
-                    // Only the Shell picks the wallpaper and night light.
-                    if msg.caller_pd == 3 && sex_pdx::desktop_look::set(msg.arg0, msg.arg1) {
+                    // Only the Shell picks the wallpaper, night light and theme.
+                    if msg.caller_pd == 3 && sex_pdx::desktop_look::set_look(msg.arg0, msg.arg1, msg.arg2) {
                         needs_full_redraw = true;
                         sex_pdx::serial_record!("[display.look] wallpaper={} night={}", msg.arg0, msg.arg1);
+                        // A new theme: bar, chrome, menus and cards all repaint in it.
+                        if desk_theme::refresh() { apply_desk_theme(); desktop_widgets::restyle(); }
                     }
                 }
                 sex_pdx::access_view::OP_ACCESS_VIEW => {
@@ -5745,7 +5772,12 @@ pub extern "C" fn _start() -> ! {
                                 zoom_light_color,
                                 appearance_flags,
                                 effect_levels,
+                                bar: DISPLAY_TOKENS.bar,
+                                band_color: DISPLAY_TOKENS.band_color,
                             };
+                            // The default preset leaves the chrome's colours to the desktop theme (S6a).
+                            CHROME_FOLLOWS_THEME = msg.arg2 & 1 != 0;
+                            if CHROME_FOLLOWS_THEME { apply_desk_theme(); }
                             TOKEN_BUF_CALL1_RECEIVED = false;
                             TOKEN_BUF_OWNER = 0;
                             static mut APPEARANCE_TOKENS_APPLIED: u32 = 0;

@@ -4,12 +4,9 @@
 //! Display draws it over the desktop with the layout both sides share, so the
 //! Shell's clicks land on the rows drawn here. Only the Shell may send it.
 use sex_pdx::window_menu::{Layout, Menu};
+/// The menu, popup and card colours of the desktop theme (`desk_theme`).
+use crate::desk_theme::current as desk;
 
-const BG: u32 = 0x0018_1825;
-const RIM: u32 = 0x0045_475A;
-const PICKED: u32 = 0x0031_3244;
-const INK: u32 = 0x00CD_D6F4;
-const CLOSE_INK: u32 = 0x00F3_8BA8;
 const SHELL_PD: u32 = 3;
 
 static mut SHOWN: Option<Menu> = None;
@@ -71,19 +68,19 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32) {
     let scale = l.scale;
     let s = scale as usize;
     let (x, y, pw, ph) = l.panel;
-    fill(fb, w, h, total, l.panel, RIM);
-    fill(fb, w, h, total, (x + s, y + s, pw - 2 * s, ph - 2 * s), BG);
+    fill(fb, w, h, total, l.panel, desk().menu_rim);
+    fill(fb, w, h, total, (x + s, y + s, pw - 2 * s, ph - 2 * s), desk().menu);
     let line = super::glyphs::UI_H * s;
     for i in 0..l.rows {
         let Some(item) = menu.item(i) else { break };
         let r = l.row(i);
         if menu.hover == Some(i as u8) {
-            fill(fb, w, h, total, r, PICKED);
-            fill(fb, w, h, total, (r.0, r.1 + 3 * s, 3 * s, r.3.saturating_sub(6 * s)), sex_pdx::desktop_style::FOCUS);
+            fill(fb, w, h, total, r, desk().menu_picked);
+            fill(fb, w, h, total, (r.0, r.1 + 3 * s, 3 * s, r.3.saturating_sub(6 * s)), desk().focus);
         }
         // A rule above Close sets it apart from the rest.
-        if item == sex_pdx::window_menu::Item::Close { fill(fb, w, h, total, (r.0, r.1, r.2, s), RIM); }
-        let ink = if item == sex_pdx::window_menu::Item::Close { CLOSE_INK } else { INK };
+        if item == sex_pdx::window_menu::Item::Close { fill(fb, w, h, total, (r.0, r.1, r.2, s), desk().menu_rim); }
+        let ink = if item == sex_pdx::window_menu::Item::Close { desk().menu_close } else { desk().menu_ink };
         let inset = 10 * s;
         let mid = r.1 + r.3.saturating_sub(line) / 2;
         text(fb, w, h, total, menu.label(item).as_bytes(), r.0 + inset, mid, ink, scale, r.2.saturating_sub(2 * inset));

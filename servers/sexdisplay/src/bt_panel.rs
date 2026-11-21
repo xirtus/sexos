@@ -5,13 +5,9 @@
 //! (`bt_ui::Panel`), so the Shell's clicks land on the rows drawn here. Only the Shell
 //! may send it; text bytes outside printable ASCII were already made '?'.
 use sex_pdx::bt_ui::{self as b, Assembler, Lines, Panel};
+/// The menu, popup and card colours of the desktop theme (`desk_theme`).
+use crate::desk_theme::current as desk;
 
-const BG: u32 = 0x0018_1825;
-const RIM: u32 = 0x0045_475A;
-const PICKED: u32 = 0x0031_3244;
-const INK: u32 = 0x00CD_D6F4;
-const BRIGHT: u32 = 0x00FF_FFFF;
-const SOFT: u32 = 0x0093_99B2;
 
 static mut ASSEMBLER: Assembler = Assembler::new();
 static mut SHOWN: Option<(Lines, Option<usize>)> = None;
@@ -66,25 +62,25 @@ pub fn draw(fb: *mut u32, w: usize, h: usize, total: usize, scale: u32, bar: usi
     let s = scale.max(1) as usize;
     let Some(p) = Panel::new(w, bar, s, lines.count as usize) else { return };
     let (x, y, pw, ph) = p.panel;
-    fill(fb, w, h, total, p.panel, RIM);
-    fill(fb, w, h, total, (x + s, y + s, pw - 2 * s, ph - 2 * s), BG);
+    fill(fb, w, h, total, p.panel, desk().menu_rim);
+    fill(fb, w, h, total, (x + s, y + s, pw - 2 * s, ph - 2 * s), desk().menu);
     let line = super::glyphs::UI_H * s;
     for i in 0..p.count {
         let r = p.row(i);
         let style = lines.style[i];
         if selected == Some(i) {
-            fill(fb, w, h, total, r, PICKED);
-            fill(fb, w, h, total, (r.0, r.1 + 3 * s, 3 * s, r.3.saturating_sub(6 * s)), sex_pdx::desktop_style::FOCUS);
+            fill(fb, w, h, total, r, desk().menu_picked);
+            fill(fb, w, h, total, (r.0, r.1 + 3 * s, 3 * s, r.3.saturating_sub(6 * s)), desk().focus);
         }
-        if style == b::TITLE && i + 1 < p.count { fill(fb, w, h, total, (r.0, r.1 + r.3 - s, r.2, s), RIM); }
-        let ink = match style { b::TITLE => BRIGHT, b::DIM => SOFT, _ => INK };
+        if style == b::TITLE && i + 1 < p.count { fill(fb, w, h, total, (r.0, r.1 + r.3 - s, r.2, s), desk().menu_rim); }
+        let ink = match style { b::TITLE => desk().menu_title, b::DIM => desk().menu_soft, _ => desk().menu_ink };
         let (left, right) = lines.columns(i);
         let mid = r.1 + r.3.saturating_sub(line) / 2;
         let inset = 8 * s;
         let right_w = super::glyphs::ui_width(right, scale).unwrap_or(0).min(r.2 / 2);
         text(fb, w, h, total, left, r.0 + inset, mid, ink, scale, r.2.saturating_sub(2 * inset + right_w + 8 * s));
         if !right.is_empty() {
-            text(fb, w, h, total, right, r.0 + r.2 - inset - right_w, mid, if style == b::TITLE { INK } else { SOFT }, scale, right_w);
+            text(fb, w, h, total, right, r.0 + r.2 - inset - right_w, mid, if style == b::TITLE { desk().menu_ink } else { desk().menu_soft }, scale, right_w);
         }
     }
     static mut DRAW_BUDGET: u32 = 16;

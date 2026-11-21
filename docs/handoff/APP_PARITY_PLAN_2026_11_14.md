@@ -546,6 +546,28 @@ the Shell applies the saved values at start and whenever Settings changes them, 
 so aloud (`Access::restore` brings values into range; a view Display could not take yet is sent
 again). Gate: `settings_persist_gate.py` also checks that a colour filter survives a restart.
 
+**S6a notes (2026-11-21): the desktop follows the theme.** The bar, window chrome (title bar,
+rim and divider, tabs, resize band), window menu, tray menus, program tray, Bluetooth panel,
+Alt+Tab switcher, screenshot hint and the desktop cards now take Settings' `appearance.theme`
+and `appearance.accent`, as programs already did through `sex_theme`. The Shell sends them with
+the wallpaper and night light: `OP_DESKTOP_LOOK` arg2 is a theme word
+(`sex_pdx::desktop_look::theme_word`: mode + 1 in bits 0-7, accent RGB in bits 8-31; 0 keeps
+the theme, anything else is refused). `config_watch` resends the look when either key changes,
+once after the first settings walk, and after Display restarts (glue:
+`servers/silk-shell/src/theme_glue.rs`, receipt `[shell.theme] mode=.. accent=.. status=..`).
+Display maps the tokens in `servers/sexdisplay/src/desk_theme.rs` (dark keeps the old navy
+palette with the accent for active things; light gives light panels and dark ink; high contrast
+is black and white with sex_theme's yellow), puts the bar's colours into the render tokens so
+each frame's scene carries them, and repaints everything on a change (`[display.theme] mode=dark
+accent=d6336c`). The Shell's default appearance preset (0, no custom tint) now asks Display to
+take the chrome from the theme (`OP_APPEARANCE_TOKENS` call 2 arg2 bit 0); the other presets
+still override it. Tests: `tests/desktop_theme.rs` (mapping, contrast), `tests/desktop_look.rs`
+(wire); gate: `scripts/desktop_theme_gate.py` (Settings to Dark and back, bar luminance).
+Since the default theme is light, the default desktop is now light; `desktop_widgets_gate.py`,
+`tray_gate.py` and `bt_panel_gate.py` look for ink that stands apart from its background
+rather than for light pixels. Left: the lock screen, the legacy launcher panel and the
+recording indicator keep their fixed colours; the bar glass keeps its navy tint and highlight.
+
 ### T. Office suite: Gingham, Brocade, Burlesque and the Craft apps (8)
 
 Write set: new `apps/gingham`, `apps/brocade`, `apps/burlesque`, new `crates/sex-office`.

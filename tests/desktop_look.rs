@@ -46,3 +46,43 @@ fn publisher_sees_each_night_change_once() {
     assert!(take_night_change() && !take_night_change());
     assert!(set(0, 0) && take_night_change());
 }
+
+#[test]
+fn theme_word_round_trips_every_mode_and_accent() {
+    for mode in 0..THEME_MODES {
+        for accent in [0, DEFAULT_ACCENT, 0x3584E4, 0xFF_FFFF] {
+            let word = theme_word(mode, accent);
+            assert!(word != 0 && word >> 32 == 0, "fits arg2 with room");
+            assert_eq!(decode_theme(word), Ok(Some((mode, accent))));
+        }
+    }
+    assert_eq!(theme_word(1, 0x1D6_336C), theme_word(1, 0xD6336C), "only the colour's 24 bits travel");
+    assert_eq!(decode_theme(0), Ok(None), "0 keeps the theme: an older sender");
+    assert_eq!((theme_name(0), theme_name(1), theme_name(2)), ("light", "dark", "high-contrast"));
+}
+
+#[test]
+fn unknown_theme_words_are_refused() {
+    let _turn = LOOK.lock().unwrap();
+    assert!(set_look(0, 0, theme_word(0, DEFAULT_ACCENT)));
+    for bad in [THEME_MODES as u64 + 1, 0xFF, 1 << 32, theme_word(1, 0x123456) | 1 << 40, 0x0000_1200] {
+        assert_eq!(decode_theme(bad), Err(()), "{bad:#x}");
+        assert!(!set_look(3, 2, bad), "{bad:#x}");
+    }
+    assert_eq!((wallpaper_index(), night_level(), theme()), (0, 0, (0, DEFAULT_ACCENT)), "a refused look changes nothing");
+    // A bad wallpaper refuses the theme with it.
+    assert!(!set_look(WALLPAPERS.len() as u64, 0, theme_word(2, 0)));
+    assert_eq!(theme(), (0, DEFAULT_ACCENT));
+}
+
+#[test]
+fn look_carries_the_theme_and_zero_keeps_it() {
+    let _turn = LOOK.lock().unwrap();
+    assert!(set_look(0, 0, theme_word(0, DEFAULT_ACCENT)));
+    assert!(set_look(1, 2, theme_word(1, 0x3584E4)));
+    assert_eq!((wallpaper_index(), night_level(), theme()), (1, 2, (1, 0x3584E4)));
+    assert!(set_look(4, 0, 0) && theme() == (1, 0x3584E4), "arg2 = 0 leaves the theme");
+    assert!(set(2, 1) && theme() == (1, 0x3584E4), "the old two-value set leaves it too");
+    assert!(set_look(0, 0, theme_word(0, DEFAULT_ACCENT)));
+    assert_eq!(theme(), (0, DEFAULT_ACCENT));
+}

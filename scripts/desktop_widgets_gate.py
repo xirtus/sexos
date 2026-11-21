@@ -9,9 +9,11 @@ so it matches the host's UTC time to a minute or two), the date, the weather
 card (UTC names no city, so the Shell says so and no helper runs: the network
 path is `weather_widget_gate.py`), and once two samples are in, the processor
 load. The screen shows the cards: the column
-differs from the bare wallpaper and holds light text. Super+Shift+W again
+differs from the bare wallpaper and holds text (ink that stands apart from
+the card, light on the dark theme's cards and dark on the light theme's). Super+Shift+W again
 hides them and the column is wallpaper again."""
 import argparse, datetime, json, re, shutil, time
+from collections import Counter
 from pathlib import Path
 from quil_autosave_gate import boot
 
@@ -83,14 +85,18 @@ def main():
         # A second sample gives the processor load.
         loaded = step(DRAW.replace(r'cpu="([^"]*)"', r'cpu="(Processor \d+%)"'), s, 60)
         sw, sh, shown = shot('widgets')
-        changed = bright = 0
+        changed = 0
+        cards = Counter()
         for yy in range(y, y + h):
             for xx in range(x, x + w):
                 i = (yy * sw + xx) * 3
-                if shown[i:i + 3] != bare[i:i + 3]: changed += 1
-                if min(shown[i:i + 3]) > 0xD0: bright += 1
+                if shown[i:i + 3] != bare[i:i + 3]: changed += 1; cards[bytes(shown[i:i + 3])] += 1
         if changed < w * h // 2: raise RuntimeError(f'the cards look missing: {changed} of {w * h} pixels changed')
-        if bright < 150: raise RuntimeError(f'no text on the cards: {bright} light pixels')
+        # The cards follow the desktop theme (S6a): text is whatever stands well
+        # apart from the cards' own colour, light or dark.
+        card = cards.most_common(1)[0][0]
+        bright = sum(n for c, n in cards.items() if max(abs(a - b) for a, b in zip(c, card)) > 0x60)
+        if bright < 150: raise RuntimeError(f'no text on the cards: {bright} ink pixels on card colour {card.hex()}')
 
         s = len(t()); chord('meta_l', 'shift', 'w')
         step(r'\[shell.widgets\] on=0 ok=1', s)
