@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Two immutable BOOT_DAG client watches. Hints confer no cleanup authority.
-use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use crate::scheduler::{Task, task_ownership::Phase};
 const LIVE:u64=5;
 const RETRY:u64=2;
@@ -13,6 +13,10 @@ impl Watch {
     const fn new()->Self{Self{target:AtomicU32::new(0),pager:AtomicU32::new(0),task:AtomicPtr::new(core::ptr::null_mut()),kicked:AtomicBool::new(false),notice:AtomicU8::new(0)}}
 }
 static WATCHES:[Watch;2]=[const{Watch::new()};2];
+/// `EXITS` as of the last scan; whether that scan left work in flight; scans skipped.
+static SEEN:AtomicU64=AtomicU64::new(0);
+static BUSY:AtomicBool=AtomicBool::new(true);
+pub static QUIET:AtomicU64=AtomicU64::new(0);
 #[derive(Debug,Clone,Copy,PartialEq,Eq)]
 pub struct DeadTarget{pub task_id:u32}
 
@@ -56,17 +60,30 @@ pub fn acknowledge_dead_cleanup(target:u32,pager:u32,task_id:u32)->bool{
 /// Called with kernel authority and IF masked, including idle timer interrupts.
 /// Exit intent first wakes the pager so a last-runnable exiting owner can switch
 /// away. Only Dead (after stack release) publishes the authenticated kernel hint.
+///
+/// The app table, service restarts and these watches only act after a task ends, so
+/// they are scanned only when `EXITS` moved, a scan still had work in flight, or as a
+/// safety net every 64 ticks: a quiet system pays two loads per tick and per switch.
 pub fn poll_paging_exit_notifications(){
-    crate::app_resources::poll_exit_notifications();
-    crate::service_restart::poll();
     crate::iommu::poll();
     crate::hal::acpi::poll();
+    let exits=crate::scheduler::task_ownership::EXITS.load(Ordering::Acquire);
+    let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
+    if !BUSY.load(Ordering::Acquire) && SEEN.load(Ordering::Acquire)==exits && now%64!=0 {
+        QUIET.fetch_add(1,Ordering::Relaxed);
+        crate::crash_log::poll();
+        return;
+    }
+    SEEN.store(exits,Ordering::Release);
+    let mut busy=crate::app_resources::poll_exit_notifications();
+    busy|=crate::service_restart::poll();
     for watch in &WATCHES{
         let target=watch.target.load(Ordering::Acquire);
         if target==0 || target==u32::MAX || watch.notice.load(Ordering::Acquire)>=2{continue;}
         let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(target)else{continue;};
         let task=pd.main_task.load(Ordering::Acquire);
         if task.is_null() || task!=watch.task.load(Ordering::Acquire) || !unsafe{(*task).state.snapshot().exited}{continue;}
+        busy=true;
         let pager_id=watch.pager.load(Ordering::Acquire);
         let Some(pager)=crate::ipc::DOMAIN_REGISTRY.get(pager_id)else{continue;};
         let pager_task=pager.main_task.load(Ordering::Acquire);
@@ -82,4 +99,5 @@ pub fn poll_paging_exit_notifications(){
             crate::serial_println!("[paging.exit.notice] target={} task={} pager={} detached=1 accepted=1",target,dead.task_id,pager_id);
         }
     }
+    BUSY.store(busy,Ordering::Release);
 }

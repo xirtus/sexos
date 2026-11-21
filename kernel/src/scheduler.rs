@@ -153,8 +153,15 @@ impl Task {
             (selectors.kernel_cs.0 as u64, selectors.kernel_ss.0 as u64, 0x202u64)
         };
 
-        let kstack_alloc_top = guarded_kernel_stack(kstack_bytes);
+        Self::on_stack(id, entry_point, stack_top, pd, (cs, ss, rflags), guarded_kernel_stack(kstack_bytes), kstack_bytes, fresh_fpu())
+    }
 
+    /// The one place a task's state is made: a new task, and every new run of a dead one
+    /// (`rearm`), which keeps only its kernel stack and FPU block. A field added to `Task`
+    /// is therefore reset on a restart without anyone remembering to (K2d).
+    fn on_stack(id: u32, entry_point: u64, stack_top: u64, pd: &ProtectionDomain, (cs, ss, rflags): (u64, u64, u64),
+                kstack_alloc_top: u64, kstack_bytes: usize, fpu: alloc::boxed::Box<crate::fpu::FpuState>) -> Self {
+        let pkru = pd.current_pkru_mask.load(Ordering::SeqCst);
         // Pre-seed kstack with IRETQ frame + Dummy Error + GPR zeros.
         // Layout low→high: [r15=0..rax=0][dummy=0][RIP][CS][RFLAGS][RSP][SS]
         let forged_ksp = unsafe {
@@ -197,7 +204,7 @@ impl Task {
             ext_init: None,
             resume_observation_pending: AtomicBool::new(false),
             wait_deadline:self_wait::Deadline::new(),
-            fpu: fresh_fpu(),
+            fpu,
             home: AtomicU32::new(u32::MAX),
             woken_at: AtomicU64::new(0),
             deliver: AtomicBool::new(false),
@@ -215,40 +222,26 @@ impl Task {
         // keeps 16-byte values on the stack. Idempotent, so a top read back from a
         // context gives the same entry RSP.
         let stack_top = ((stack_top - 8) & !0xF) + 8;
-        let forged = unsafe {
-            let mut ksp = self.kstack_top as *mut u64;
-            ksp = ksp.sub(1); *ksp = 0x23;
-            ksp = ksp.sub(1); *ksp = stack_top;
-            ksp = ksp.sub(1); *ksp = 0x202;
-            ksp = ksp.sub(1); *ksp = 0x2B;
-            ksp = ksp.sub(1); *ksp = entry;
-            ksp = ksp.sub(1); *ksp = 0;
-            for _ in 0..15 { ksp = ksp.sub(1); *ksp = 0; }
-            ksp as u64
-        };
-        let (pd_id, pd_ptr, pkru) = (self.context.pd_id, self.context.pd_ptr, pd.current_pkru_mask.load(Ordering::SeqCst));
-        self.id = id;
-        self.context = unsafe { core::mem::zeroed() };
-        self.context.pd_id = pd_id; self.context.pd_ptr = pd_ptr; self.context.pkru = pkru as u64;
-        self.context.rip = entry; self.context.rsp = stack_top; self.context.rflags = 0x202;
-        self.context.cs = 0x2B; self.context.ss = 0x23; self.context.kstack_top = forged;
-        self.state = TaskOwnership::new();
-        self.fault = fault_transaction::FaultSlot::new();
-        self.resume_observation_pending = AtomicBool::new(false);
-        self.wait_deadline = self_wait::Deadline::new();
-        self.deliver = AtomicBool::new(false);
-        self.deadline_us = AtomicU64::new(deadline::default_period_us(pd_id));
+        let pd_ptr = self.context.pd_ptr;
+        // Every field comes from the constructor; only the kernel stack, the FPU block
+        // (reset below) and the first-run argument carry over.
+        unsafe {
+            let old = ptr::read(self);
+            let Task { kstack_top, kstack_bytes, fpu, ext_init, .. } = old;
+            let mut fresh = Task::on_stack(id, entry, stack_top, pd, (0x2B, 0x23, 0x202), kstack_top, kstack_bytes as usize, fpu);
+            fresh.context.pd_ptr = pd_ptr;
+            fresh.ext_init = ext_init;
+            ptr::write(self, fresh);
+        }
         // A new run starts with fresh registers, never the last run's.
         unsafe { ptr::copy_nonoverlapping(&FPU_INIT, &mut *self.fpu, 1); }
         let me = self as *mut Task;
         for loaded in FPU_LOADED.iter() {
             let _ = loaded.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire);
         }
-        // The last run's IPC v2 wait and reply, and a core's handoff slot still naming
-        // it, belong to that run: with custody reset, a stale slot would run this task's
-        // kernel stack a second time (the soak's ret-to-0 after a service restart).
-        self.ipc_v2 = crate::ipc_v2::syscall::TaskIpc::new();
-        self.home = AtomicU32::new(u32::MAX);
+        // A core's handoff slot still naming the last run lives outside the task: with
+        // custody reset, a stale slot would run this task's kernel stack a second time
+        // (the soak's ret-to-0 after a service restart).
         let purged = SCHEDULERS.iter().filter(|s| s.handoff.compare_exchange(me, ptr::null_mut(), Ordering::AcqRel, Ordering::Acquire).is_ok()).count();
         if purged != 0 { serial_println!("[task.rearm.purged] task={} handoffs={}", id, purged); }
     }
@@ -261,6 +254,20 @@ pub fn fault_report(core: usize) -> (u32, Option<task_ownership::Snapshot>, *mut
     let (cur, out) = (sched.current_task.load(Ordering::Acquire), sched.pending_outgoing.load(Ordering::Acquire));
     if cur.is_null() { return (0, None, cur, out); }
     unsafe { ((*cur).id, Some((*cur).state.snapshot()), cur, out) }
+}
+/// Per core, the last 16 switches: task, saved frame, and that frame's rip and cs<<32|rflags.
+static SWITCHES: [[[AtomicU64; 4]; 16]; 128] = [const { [const { [const { AtomicU64::new(0) }; 4] }; 16] }; 128];
+static SWITCH_AT: [AtomicU32; 128] = [const { AtomicU32::new(0) }; 128];
+unsafe fn note_switch(core: usize, next: &Task) {
+    let f = next.context.kstack_top as *const u64;
+    let Some([rip, cs, flags]) = (!f.is_null()).then(|| unsafe { [*f.add(16), *f.add(17), *f.add(18)] }) else { return };
+    for (s, v) in SWITCHES[core][SWITCH_AT[core].fetch_add(1, Ordering::Relaxed) as usize % 16].iter().zip([next.id as u64, f as u64, rip, cs << 32 | flags & 0xFFFF_FFFF]) { s.store(v, Ordering::Relaxed); }
+    if rip == 0 { print_switches(core); panic!("SWITCH_TO_NULL_RIP task={} frame={:p}", next.id, f); }
+}
+/// The core's recent switches, oldest first, for a kernel fault report.
+pub fn print_switches(core: usize) {
+    let end = SWITCH_AT[core].load(Ordering::Relaxed) as usize;
+    for (i, w) in (end.saturating_sub(16)..end).map(|i| (i, SWITCHES[core][i % 16].each_ref().map(|a| a.load(Ordering::Relaxed)))) { serial_println!("KERNEL SWITCH: core={} n={} task={} frame={:#x} rip={:#x} cs={:#x} rflags={:#x}", core, i, w[0], w[1], w[2], w[3] >> 32, w[3] & 0xFFFF_FFFF); }
 }
 
 /// Per core: the task whose x87/SSE registers are in the core right now, if any.
@@ -310,6 +317,8 @@ fn note_latency(task: &Task) {
 }
 /// Logs the latency counters; the timekeeper calls it every couple of seconds.
 pub fn report_latency() {
+    let donated = DONATIONS.load(Ordering::Relaxed);
+    if donated != 0 { serial_println!("[sched.donation] wakes={}", donated); }
     for class in [CLASS_INTERACTIVE, CLASS_NORMAL] {
         let [count, total, worst] = &LATENCY[class];
         let n = count.load(Ordering::Relaxed);
@@ -336,6 +345,8 @@ pub struct Scheduler {
     handoff_streak: AtomicU32,
     /// Set by a call-and-wait or reply-and-wait for the wake it causes.
     handoff_armed: AtomicBool,
+    /// The wake being admitted answers a call from an interactive task (`unpark_for_call`).
+    donating: AtomicBool,
     /// This switch is a handoff, so it skips housekeeping (see `tick`).
     lean: AtomicBool,
     /// The next `tick` skips housekeeping: a task waits on its partner (102/103).
@@ -395,6 +406,7 @@ impl Scheduler {
             handoff: AtomicPtr::new(ptr::null_mut()),
             handoff_streak: AtomicU32::new(0),
             handoff_armed: AtomicBool::new(false),
+            donating: AtomicBool::new(false),
             lean: AtomicBool::new(false),
             lean_next: AtomicBool::new(false),
             sliced: AtomicBool::new(false),
@@ -656,7 +668,11 @@ impl Scheduler {
             if woken { unsafe { (*task).woken_at.store(now, Ordering::Relaxed) }; }
             if woken && period != 0 && !home.budget.exhausted() && home.deadline.try_push(task, now + home.budget.cycles(period)).is_ok() { due = true; return Ok(()); }
             if handoff && home.handoff.compare_exchange(ptr::null_mut(), task, Ordering::AcqRel, Ordering::Acquire).is_ok() { partner = true; return Ok(()); }
-            let interactive = class_of(unsafe { (*task).context.pd_id }) == CLASS_INTERACTIVE;
+            // A service woken by an interactive caller's request runs with the caller's
+            // class for that wake (K3b donation): Shell's call to Files does not queue
+            // behind a busy program on Files' core.
+            let interactive = class_of(unsafe { (*task).context.pd_id }) == CLASS_INTERACTIVE
+                || (woken && self.donating.load(Ordering::Relaxed));
             let keep = sliced && interactive && home.kept.fetch_add(1, Ordering::Relaxed) < SLICED_KEEP;
             if (woken || keep) && interactive && home.urgent.try_push(task).is_ok() { urgent = true; return Ok(()); }
             home.runqueue.try_push(task)
@@ -969,7 +985,7 @@ pub extern "C" fn scheduler_finish_switch() {
         }
     }
     let next = sched.current_task.load(Ordering::Acquire);
-    if !next.is_null() { branch_barrier(core, unsafe { (*next).context.pd_id }); }
+    if !next.is_null() { branch_barrier(core, unsafe { (*next).context.pd_id }); unsafe { note_switch(core as usize, &*next) } }
     if old.is_null() { return; }
     unsafe {
         let rsp: u64;
@@ -1101,6 +1117,7 @@ fn preempt_for_partner(core: u32) {
 /// Wakes another core for new work, unless it is polling for it anyway.
 fn kick(core: u32) {
     core::sync::atomic::fence(Ordering::SeqCst);
+    if crate::jitter::hit(crate::jitter::Site::Kick) { return; } // a late IPI: the next tick looks
     if !POLLING[core as usize].load(Ordering::SeqCst) { crate::apic::send_to_core(core, crate::smp::WAKE_VECTOR); }
 }
 
@@ -1209,6 +1226,24 @@ pub fn park_current_thread() {
     }
 }
 
+/// `unpark_thread` for the server of a call just published. When the caller is
+/// interactive and the server is a service (not an app or a record), the server is
+/// admitted with the interactive class for this wake.
+pub fn unpark_for_call(task_ptr: *mut Task) {
+    if task_ptr.is_null() { return; }
+    let sched = &SCHEDULERS[crate::core_local::CoreLocal::get().core_id as usize];
+    let caller = sched.current_task.load(Ordering::Acquire);
+    let server = unsafe { (*task_ptr).context.pd_id };
+    let donate = !caller.is_null() && class_of(unsafe { (*caller).context.pd_id }) == CLASS_INTERACTIVE
+        && class_of(server) != CLASS_INTERACTIVE && !crate::program_records::is_record(server)
+        && sex_pdx::app_catalog::by_target(server as u32).is_none();
+    if donate { sched.donating.store(true, Ordering::Relaxed); DONATIONS.fetch_add(1, Ordering::Relaxed); }
+    unpark_thread(task_ptr);
+    if donate { sched.donating.store(false, Ordering::Relaxed); }
+}
+/// Wakes admitted with a caller's interactive class (`unpark_for_call`).
+pub static DONATIONS: AtomicU64 = AtomicU64::new(0);
+
 pub fn unpark_thread(task_ptr: *mut Task) {
     if task_ptr.is_null() { return; }
     unsafe { (*task_ptr).wait_deadline.cancel(); }
@@ -1216,6 +1251,7 @@ pub fn unpark_thread(task_ptr: *mut Task) {
 }
 
 fn wake_owned_thread(task_ptr:*mut Task){
+    crate::jitter::delay(crate::jitter::Site::Wake);
     let woke = unsafe { (*task_ptr).state.wake() };
     if woke == WakeResult::Recorded {
         // A task parked on its own core stays attached there, and that core may be

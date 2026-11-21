@@ -12,6 +12,15 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:179c3a01c3681837811f309e17e3e498760f93924e2c1cef2c2a3c0246a0272b'),  # PKU gate: keep live PKRU in reschedule (no wait change), 2026-11-19
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:d661ae96f285ec4d7f14e15ee321c5e3996ac66873d396425d81c85c38974d97'),  # merge of PKU gate live-PKRU and SMAP audit (no wait change), 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:b548617e6d588bd25e62716751ce33650f03f5e6eeda83cede7720b2a9f3a7ad'),  # merge of PKU gates with #424's kernel fault report (no wait change), 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:adad1c0cc3de320796ce9f5fc9ccc9fc58e999f2bc42d64a06abfe3239805b0d'),  # kernel fault report prints 32 stack words and the core's last switches (no wait change), 2026-11-20
     ('timed', 'kernel/src/scheduler.rs', 'a23ecc7d73a7775b9d5b455435c99b58f3311e78ce2992788dc20604a91fccb2'),  # #468 cross-core handoff + pair affinity at 047e13f5 (admit takes the home core's slot, should_preempt honours it, idle has_queued sees it; wait functions unchanged), reviewed by WS4, 2026-11-20
 
     ('timed', 'kernel/src/scheduler.rs', '59a7fe67bfa8a5a0d230296bd391d5261c6fbaeba42c3c0c05bcd7db6f19265e'),  # #424 (kernel fault report, rearm purge) merged with master, 2026-11-20
@@ -167,6 +176,8 @@ PINS = (
     ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master merge of #460 with the NIC interrupt change (same line as PR #482), 2026-11-20
 
     ('timed', 'servers/sexnet/src/main.rs', 'd994aeb0af740e6157d92744656943261954b99c6828795723c9070d4625ff34'),  # wired NIC interrupt: 10-tick quiet sleep while armed, no stall after a full burst (two-tick envelope unchanged), 2026-11-19
+
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # #460 device sleep notice is logged and skipped before request handling (no wait change), 2026-11-20
 
     ('timed', 'servers/sexusb/src/main.rs', '3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81'),
 

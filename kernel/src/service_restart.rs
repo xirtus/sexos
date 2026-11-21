@@ -147,8 +147,10 @@ const DISPLAY_PD: u32 = 1;
 static DESKTOP_STOPPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// From the timer, IF masked: a service whose task has ended starts again.
-pub fn poll() {
-    for index in 0..SERVICES { poll_one(index); }
+/// Returns whether a service end is still being handled (or a slot was busy).
+pub fn poll() -> bool {
+    let mut busy = false;
+    for index in 0..SERVICES { busy |= poll_one(index); }
     // New crash records (a fault, this restart) go to Files for the disk ring.
     crate::crash_log::poll();
     for pd_id in DESKTOP {
@@ -165,21 +167,23 @@ pub fn poll() {
                 sex_pdx::crash_log::domain_name(pd_id)));
         }
     }
+    busy
 }
-fn poll_one(index: usize) {
-    let Some(s) = SERVICE[index].try_lock() else { return };
-    if s.pd == 0 || GAVE_UP[index].load(Ordering::Relaxed) { return; }
-    let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(s.pd) else { return };
+fn poll_one(index: usize) -> bool {
+    let Some(s) = SERVICE[index].try_lock() else { return true };
+    if s.pd == 0 || GAVE_UP[index].load(Ordering::Relaxed) { return false; }
+    let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(s.pd) else { return false };
     let main = pd.main_task.load(Ordering::Acquire);
-    if main.is_null() { return; }
+    if main.is_null() { return false; }
     let state = unsafe { (*main).state.snapshot() };
-    if !state.exited || state.phase != crate::scheduler::task_ownership::Phase::Dead || state.owner_core.is_some() { return; }
+    if !state.exited { return false; }
+    if state.phase != crate::scheduler::task_ownership::Phase::Dead || state.owner_core.is_some() { return true; }
     let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
     if now.saturating_sub(LAST_RESTART[index].load(Ordering::Relaxed)) > CRASH_LOOP_TICKS { LOOP[index].store(0, Ordering::Relaxed); }
     if LOOP[index].load(Ordering::Relaxed) >= MAX_RESTARTS {
         GAVE_UP[index].store(true, Ordering::Relaxed);
         crate::crash_log::service(s.pd, MAX_RESTARTS, true);
-        return;
+        return false;
     }
     crate::pci_command::quiesce(pd);
     crate::iommu::revoke(s.pd);
@@ -201,4 +205,5 @@ fn poll_one(index: usize) {
     // A new Shell starts from nothing: Display starts again too, so that it forgets
     // the old windows and announces itself ready to the new Shell.
     if s.pd == SHELL_PD { request_end(DISPLAY_PD); }
+    false
 }

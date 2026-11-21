@@ -27,6 +27,7 @@ pub mod pku;
 #[cfg(target_arch = "x86_64")]
 pub mod smap;
 pub mod gate;
+pub mod jitter;
 pub mod fpu;
 #[cfg(target_arch = "x86_64")]
 #[cfg(target_arch = "x86_64")]

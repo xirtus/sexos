@@ -8,7 +8,11 @@
 //! This module cannot establish physical stack departure: its unsafe release
 //! operation must be called by the runtime only after the final context save
 //! and after execution has moved off the outgoing task's stack.
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
+/// Bumped by every first `exit` (and a row's rebirth): housekeeping (`task_exit::poll_paging_exit_notifications`)
+/// scans for ended tasks only when this moved or a scan still had work in flight.
+pub static EXITS: AtomicU64 = AtomicU64::new(0);
 
 const PHASE_MASK: u32 = 7;
 const PENDING: u32 = 1 << 3;
@@ -290,7 +294,8 @@ impl TaskOwnership {
                 new = with_phase(new, Phase::Dead);
             }
             match self.word.compare_exchange_weak(old, new, Ordering::AcqRel, Ordering::Acquire) {
-                Ok(_) => return true, Err(now) => old = now,
+                Ok(_) => { EXITS.fetch_add(1, Ordering::AcqRel); return true }
+                Err(now) => old = now,
             }
         }
     }
