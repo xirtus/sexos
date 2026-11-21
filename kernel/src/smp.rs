@@ -25,7 +25,32 @@ pub const PREEMPT_VECTOR: u8 = 0xF2;
 /// the kernel's lifecycle paths and the desktop's hot path still assume core 0.
 const MOVED: [u64; 4] = [13, 11, 8, 2];
 /// The core a domain's task belongs to.
-pub fn home_core(pd: u64) -> u32 {
+pub fn home_core(pd: u64) -> u32 { program_core(logical_home(pd)) }
+/// Program cores in preference order: `PROGRAM_ORDER[i]` is the physical core behind
+/// logical core `2 + i`, highest boost first (AMD preferred cores, Turbo Boost Max),
+/// so a lone busy program lands on the fastest core. Identity until ranked.
+static PROGRAM_ORDER: [AtomicU32; 256] = [const { AtomicU32::new(0) }; 256];
+/// The physical core behind a logical one (0 and 1 are themselves).
+pub fn program_core(logical: u32) -> u32 {
+    match logical.checked_sub(2).and_then(|i| PROGRAM_ORDER.get(i as usize)) {
+        Some(c) => match c.load(Ordering::Acquire) { 0 => logical, c => c },
+        None => logical,
+    }
+}
+fn rank_program_cores(online: u32) {
+    let mut order = [0u32; 256];
+    let n = online.saturating_sub(2).min(256) as usize;
+    for (i, slot) in order[..n].iter_mut().enumerate() { *slot = 2 + i as u32; }
+    // Stable: equal cores keep their order, so machines without ranking are unchanged.
+    order[..n].sort_by_key(|&c| core::cmp::Reverse(crate::hal::acpi::highest_perf(c)));
+    for (i, &c) in order[..n].iter().enumerate() { PROGRAM_ORDER[i].store(c, Ordering::Release); }
+    if n > 0 {
+        let (best, worst) = (crate::hal::acpi::highest_perf(order[0]), crate::hal::acpi::highest_perf(order[n - 1]));
+        crate::serial_println!("[smp.preferred] program_cores={} first={} highest_perf={}..{} ranked={}", n, order[0], worst, best, (best != worst) as u8);
+    }
+}
+/// The logical core a domain's task belongs to, before preference order.
+pub fn logical_home(pd: u64) -> u32 {
     if crate::program_records::is_record(pd) { return guest_core(); }
     let spare = COVERED_SPARE.load(Ordering::Acquire);
     if spare == 0 { return 0; }
@@ -70,6 +95,7 @@ pub fn boot_aps(smp: &MpResponse) {
         }
     }
     if ONLINE.load(Ordering::Acquire) > 1 { GUEST.store(1, Ordering::Release); }
+    rank_program_cores(ONLINE.load(Ordering::Acquire));
     COVERED_SPARE.store(ONLINE.load(Ordering::Acquire).saturating_sub(2), Ordering::Release);
     tlb::COVERED.store(ONLINE.load(Ordering::Acquire), Ordering::Release);
     crate::serial_println!("[smp.online] cores={} present={}", ONLINE.load(Ordering::Acquire), smp.cpus().len());
