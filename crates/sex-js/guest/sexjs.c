@@ -19,7 +19,19 @@ int sexos_baseline_jit_enabled;
 #define EXPORT(name) __attribute__((export_name(name)))
 
 static JSRuntime *rt;
+// The context scripts run in now: one of the worlds below.
 static JSContext *ctx;
+// Isolated worlds: world 0 is the page's own; each other world (one per extension's
+// content scripts) is a context of its own over the same document, as in Chrome. Its
+// globals, prototypes and listeners are its own; nodes are shared by id through __host.
+#define MAX_WORLDS 16
+static JSContext *worlds[MAX_WORLDS];
+// The world the host selected (sx_world); the browser's events go to world 0 and,
+// for the kinds every world hears, on to the others.
+static int selected;
+// Worlds with mutation observers, which hear of changes made in other worlds.
+static int watching[MAX_WORLDS];
+static JSValue rejections[MAX_WORLDS];
 static int64_t deadline_ns;
 /* Per-Wasm-instance source policy, inherited by compiled function metadata. */
 int sexos_compile_origin = -1;
@@ -28,7 +40,6 @@ int sexos_opaque_source_seen;
    Every native callback/job scope restores its previous value before returning. */
 int sexos_job_muted = -1;
 extern int sexos_promise_flags(JSValueConst promise);
-static JSValue rejection_handler = JS_UNDEFINED;
 static void report(void);
 
 
@@ -185,11 +196,16 @@ static int source_muted(const char *name, size_t len) {
     if (muted) sexos_opaque_source_seen = 1;
     return muted;
 }
+static int world_of(JSContext *c) {
+    for (int i = 0; i < MAX_WORLDS; i++) if (worlds[i] && worlds[i] == c) return i;
+    return -1;
+}
 static JSValue promise_setup(JSContext *c, JSValueConst self, int argc, JSValueConst *argv) {
     (void)self;
-    if (!JS_IsUndefined(rejection_handler) || argc != 1 || !JS_IsFunction(c, argv[0]))
+    int w = world_of(c);
+    if (w < 0 || !JS_IsUndefined(rejections[w]) || argc != 1 || !JS_IsFunction(c, argv[0]))
         return JS_ThrowTypeError(c, "invalid promise event registration");
-    rejection_handler = JS_DupValue(c, argv[0]);
+    rejections[w] = JS_DupValue(c, argv[0]);
     return JS_UNDEFINED;
 }
 static JSValue promise_flags(JSContext *c, JSValueConst self, int argc, JSValueConst *argv) {
@@ -202,10 +218,11 @@ static JSValue checkpoint_empty(JSContext *c, JSValueConst self, int argc, JSVal
 }
 static void promise_tracker(JSContext *c, JSValueConst promise, JSValueConst reason, bool handled, void *opaque) {
     (void)opaque;
-    if (c != ctx || JS_IsUndefined(rejection_handler) || (sexos_promise_flags(promise) & 2)) return;
+    int w = world_of(c);
+    if (w < 0 || JS_IsUndefined(rejections[w]) || (sexos_promise_flags(promise) & 2)) return;
     JSValueConst args[] = { promise, reason, handled ? JS_TRUE : JS_FALSE };
-    JSValue result = JS_Call(c, rejection_handler, JS_UNDEFINED, 3, args);
-    if (JS_IsException(result)) report();
+    JSValue result = JS_Call(c, rejections[w], JS_UNDEFINED, 3, args);
+    if (JS_IsException(result)) { JSContext *was = ctx; ctx = c; report(); ctx = was; }
     JS_FreeValue(c, result);
 }
 
@@ -328,6 +345,99 @@ EXPORT("sx_modules_ready") int sx_modules_ready(int budget_ms) {
     return left;
 }
 
+// Calls world `w`'s `__sx_dispatch` with `arg` (as the current context for its
+// duration). Its integer result goes to *out; -1 when it threw.
+static int dispatch_world(int w, const char *arg, size_t len, int *out) {
+    JSContext *was = ctx;
+    ctx = worlds[w];
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue fn = JS_GetPropertyStr(ctx, global, "__sx_dispatch");
+    int ok = 0;
+    *out = 0;
+    if (JS_IsFunction(ctx, fn)) {
+        JSValue a = JS_NewStringLen(ctx, arg, len);
+        JSValue r = JS_Call(ctx, fn, global, 1, &a);
+        if (JS_IsException(r)) { report(); *out = -1; ok = -1; }
+        else JS_ToInt32(ctx, out, r);
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, a);
+    }
+    JS_FreeValue(ctx, fn);
+    JS_FreeValue(ctx, global);
+    ctx = was;
+    return ok;
+}
+
+// A change one world made to the document, for the observers of the others:
+// `__sx_world_post(record)` hands each watching world `mut\trecord`.
+static JSValue world_post(JSContext *c, JSValueConst self, int argc, JSValueConst *argv) {
+    (void)self;
+    int from = world_of(c);
+    if (from < 0 || argc < 1) return JS_UNDEFINED;
+    size_t n;
+    const char *rec = JS_ToCStringLen(c, &n, argv[0]);
+    if (!rec) return JS_EXCEPTION;
+    char *msg = malloc(n + 4);
+    if (msg) {
+        memcpy(msg, "mut\t", 4); memcpy(msg + 4, rec, n);
+        for (int w = 0; w < MAX_WORLDS; w++) {
+            if (w == from || !worlds[w] || !watching[w]) continue;
+            int ignored;
+            dispatch_world(w, msg, n + 4, &ignored);
+        }
+        free(msg);
+    }
+    JS_FreeCString(c, rec);
+    return JS_UNDEFINED;
+}
+// Whether another world has mutation observers (so this one tells it of changes).
+static JSValue world_others(JSContext *c, JSValueConst self, int argc, JSValueConst *argv) {
+    (void)self; (void)argc; (void)argv;
+    int from = world_of(c);
+    for (int w = 0; w < MAX_WORLDS; w++) if (w != from && worlds[w] && watching[w]) return JS_TRUE;
+    return JS_FALSE;
+}
+// `__sx_world_watch(on)`: this world has (or no longer has) mutation observers.
+static JSValue world_watch(JSContext *c, JSValueConst self, int argc, JSValueConst *argv) {
+    (void)self;
+    int w = world_of(c);
+    if (w >= 0 && argc > 0) watching[w] = JS_ToBool(c, argv[0]);
+    return JS_UNDEFINED;
+}
+
+// A world's native functions; the prelude takes and hides the world ones.
+static void install(JSContext *c, int id) {
+    JSValue global = JS_GetGlobalObject(c);
+    JS_SetPropertyStr(c, global, "__host", JS_NewCFunction(c, js_host, "__host", 1));
+    JS_SetPropertyStr(c, global, "__sx_promise_setup", JS_NewCFunction(c, promise_setup, "promise setup", 1));
+    JS_SetPropertyStr(c, global, "__sx_promise_flags", JS_NewCFunction(c, promise_flags, "promise flags", 1));
+    JS_SetPropertyStr(c, global, "__sx_checkpoint_empty", JS_NewCFunction(c, checkpoint_empty, "checkpoint empty", 0));
+    JS_SetPropertyStr(c, global, "__sx_world", JS_NewInt32(c, id));
+    JS_SetPropertyStr(c, global, "__sx_world_post", JS_NewCFunction(c, world_post, "world post", 1));
+    JS_SetPropertyStr(c, global, "__sx_world_others", JS_NewCFunction(c, world_others, "world others", 0));
+    JS_SetPropertyStr(c, global, "__sx_world_watch", JS_NewCFunction(c, world_watch, "world watch", 1));
+    JS_FreeValue(c, global);
+}
+
+// Selects world `id` for the calls that follow (eval, module, dispatch), making it
+// first if need be. 1 when it is new (the host then runs the prelude in it), 0 when it
+// was there, -1 when there can be no such world.
+EXPORT("sx_world") int sx_world(int id) {
+    if (id < 0 || id >= MAX_WORLDS || !rt) return -1;
+    int made = 0;
+    if (!worlds[id]) {
+        JSContext *c = JS_NewContext(rt);
+        if (!c) return -1;
+        worlds[id] = c;
+        rejections[id] = JS_UNDEFINED;
+        install(c, id);
+        made = 1;
+    }
+    selected = id;
+    ctx = worlds[id];
+    return made;
+}
+
 EXPORT("sx_init") int sx_init(int memory_limit) {
     sexos_baseline_jit_enabled = host_jit_available() == 3;
     rt = JS_NewRuntime();
@@ -338,14 +448,12 @@ EXPORT("sx_init") int sx_init(int memory_limit) {
     JS_SetHostPromiseRejectionTracker(rt, promise_tracker, NULL);
     JS_SetModuleLoaderFunc(rt, module_normalize, module_load, NULL);
     js_dynamic_import_hook = hold_import;
+    for (int i = 0; i < MAX_WORLDS; i++) rejections[i] = JS_UNDEFINED;
     ctx = JS_NewContext(rt);
     if (!ctx) return -1;
-    JSValue global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "__host", JS_NewCFunction(ctx, js_host, "__host", 1));
-    JS_SetPropertyStr(ctx, global, "__sx_promise_setup", JS_NewCFunction(ctx, promise_setup, "promise setup", 1));
-    JS_SetPropertyStr(ctx, global, "__sx_promise_flags", JS_NewCFunction(ctx, promise_flags, "promise flags", 1));
-    JS_SetPropertyStr(ctx, global, "__sx_checkpoint_empty", JS_NewCFunction(ctx, checkpoint_empty, "checkpoint empty", 0));
-    JS_FreeValue(ctx, global);
+    worlds[0] = ctx;
+    selected = 0;
+    install(ctx, 0);
     return 0;
 }
 
@@ -485,31 +593,40 @@ EXPORT("sx_module") int sx_module(const char *src, int len, const char *name, in
     return ok;
 }
 
+// What every world hears when the browser tells the page: input, timers, the page's
+// own progress, and the answers to requests (each world takes only its own). The
+// rest (script errors, extension messages, media) goes to the selected world alone.
+static int heard_by_all(const char *arg, int len) {
+    static const char *const kinds[] = { "mouse", "flush", "tick", "resize", "scroll", "click", "key", "ready", "message",
+        "frameload", "scriptload", "scriptend", "fetched", "ws", 0 };
+    int k = 0;
+    while (k < len && arg[k] != '\t') k++;
+    for (int i = 0; kinds[i]; i++) if ((int)strlen(kinds[i]) == k && !memcmp(arg, kinds[i], (size_t)k)) return 1;
+    return 0;
+}
+
 // Calls the prelude's dispatcher with one string argument; returns its integer result.
+// After `tick` the result is when the next timer of any world is due (-1 for none);
+// for input, 1 when any world's listeners cancelled it.
 EXPORT("sx_dispatch") int sx_dispatch(const char *arg, int len, int budget_ms) {
     sexos_baseline_jit_enabled = host_jit_available() == 3;
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue fn = JS_GetPropertyStr(ctx, global, "__sx_dispatch");
-    int out = 0;
-    if (JS_IsFunction(ctx, fn)) {
-        JSValue a = JS_NewStringLen(ctx, arg, (size_t)len);
-        deadline_ns = budget_ms > 0 ? now_ns() + (int64_t)budget_ms * 1000000 : 0;
-        JSValue r = JS_Call(ctx, fn, global, 1, &a);
-        if (JS_IsException(r)) { report(); out = -1; }
-        else JS_ToInt32(ctx, &out, r);
-        JS_FreeValue(ctx, r);
-        JS_FreeValue(ctx, a);
+    deadline_ns = budget_ms > 0 ? now_ns() + (int64_t)budget_ms * 1000000 : 0;
+    int all = selected == 0 && heard_by_all(arg, len);
+    int tick = len == 4 && !memcmp(arg, "tick", 4);
+    int out = 0, next = -1, threw = 0;
+    for (int w = 0; w < MAX_WORLDS; w++) {
+        if (!worlds[w] || (all ? 0 : w != selected)) continue;
+        int r;
+        if (dispatch_world(w, arg, (size_t)len, &r) < 0) threw = 1;
+        else if (r > out) out = r;
         run_jobs();
-        if (len == 4 && !memcmp(arg, "tick", 4)) {
-            JSValue query = JS_NewString(ctx, "next-timer");
-            JSValue next = JS_Call(ctx, fn, global, 1, &query);
-            if (JS_IsException(next)) { report(); out = -1; }
-            else JS_ToInt32(ctx, &out, next);
-            JS_FreeValue(ctx, next); JS_FreeValue(ctx, query);
+        if (tick) {
+            int n;
+            if (dispatch_world(w, "next-timer", 10, &n) < 0) threw = 1;
+            else if (n >= 0 && (next < 0 || n < next)) next = n;
         }
-        deadline_ns = 0;
     }
-    JS_FreeValue(ctx, fn);
-    JS_FreeValue(ctx, global);
-    return out;
+    deadline_ns = 0;
+    if (tick) return threw && next < 0 ? -1 : next;
+    return threw && !out ? -1 : out;
 }

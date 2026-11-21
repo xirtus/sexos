@@ -240,6 +240,10 @@ impl Mesh {
         self.status.put(b".");
     }
 
+    /// Says which navigation key came and on which tab, never what was typed.
+    fn heard(&self, key: sex_pdx::app_key::Key) {
+        if let Some(n) = nav(key) { sex_pdx::serial_record!("[monitor.key] nav={:?} tab={}", n, self.tab.name()); }
+    }
     fn key(&mut self, window: &Window, key: sex_pdx::app_key::Key) -> bool {
         match (nav(key), typed(key)) {
             (_, Some(c)) if Tab::from_key(c).is_some() => self.show(Tab::from_key(c).unwrap(), "key"),
@@ -472,7 +476,7 @@ pub extern "C" fn _start() -> ! {
         let sampled = event.is_none();
         let redraw = match event {
             Some(Event::Close) => window.close(),
-            Some(Event::Key(key)) => mesh.key(&window, key),
+            Some(Event::Key(key)) => { mesh.heard(key); mesh.key(&window, key) }
             Some(Event::Pointer(p)) => mesh.pointer(&window, p),
             Some(Event::Resize { .. }) => true,
             Some(_) => false,
