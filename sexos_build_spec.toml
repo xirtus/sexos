@@ -63,7 +63,6 @@ crates = [
   "apps/heaptest/Cargo.toml",
   "apps/bench/Cargo.toml",
   "apps/wasm/Cargo.toml",
-  "apps/shapes/Cargo.toml",
   "apps/monitor/Cargo.toml",
   "apps/fputest/Cargo.toml",
   "apps/avxtest/Cargo.toml",
@@ -90,6 +89,7 @@ crates = [
   "apps/spreadeagle/Cargo.toml",
   "apps/polyamour/Cargo.toml",
   "apps/assuit/Cargo.toml",
+  "apps/gestalt/Cargo.toml",
   "apps/settings/Cargo.toml",
   "apps/aftercare/Cargo.toml",
   "apps/crush/Cargo.toml",
@@ -407,14 +407,6 @@ target = "x86_64-sex-app.json"
 manifest = "apps/wasm/Cargo.toml"
 source_artifact = "target/x86_64-sex-app/release/wasm"
 dest_artifact = "iso_root/programs/wasm"
-
-[[stage]]
-id = "build_shapes"
-action = "cargo_manifest"
-target = "x86_64-sex-app.json"
-manifest = "apps/shapes/Cargo.toml"
-source_artifact = "target/x86_64-sex-app/release/shapes"
-dest_artifact = "iso_root/programs/gestalt"
 
 [[stage]]
 id = "build_monitor"
@@ -851,6 +843,17 @@ manifest = "apps/assuit/Cargo.toml"
 profile = "lean"
 source_artifact = "target/x86_64-sex-std/lean/assuit"
 dest_artifact = "iso_root/programs/assuit"
+
+# Gestalt: the vector editor, VectorCraft's engine (paths, Pathfinder, SVG/PDF/.ai) under a
+# native canvas.
+[[stage]]
+id = "build_gestalt"
+action = "cargo_manifest"
+target = "x86_64-sex-std.json"
+build_std = "std,panic_abort"
+manifest = "apps/gestalt/Cargo.toml"
+source_artifact = "target/x86_64-sex-std/release/gestalt"
+dest_artifact = "iso_root/programs/gestalt"
 
 [[stage]]
 id = "build_play"

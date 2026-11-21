@@ -56,7 +56,12 @@ static int open_decoder(struct sx *s, enum AVMediaType type, struct decoder *d, 
     d->codec = avcodec_alloc_context3(codec);
     if (!d->codec) return AVERROR(ENOMEM);
     int r = avcodec_parameters_to_context(d->codec, st->codecpar);
-    if (r >= 0) { d->codec->pkt_timebase = st->time_base; r = avcodec_open2(d->codec, codec, NULL); }
+    // One thread. FFmpeg's own decoders are built without threads; dav1d (AV1) would
+    // start a pool sized to the cores and hand every frame between its workers, and
+    // each hand-off is a sleep and a wake in the kernel. Played in the browser, that
+    // starved the sound (the YouTube-shaped MSE gate heard gaps). 320x240 to 1080p
+    // AV1 decodes faster than real time on one core.
+    if (r >= 0) { d->codec->pkt_timebase = st->time_base; d->codec->thread_count = 1; r = avcodec_open2(d->codec, codec, NULL); }
     if (r < 0) { avcodec_free_context(&d->codec); d->stream = -1; return r; }
     d->done = 0;
     *name = codec->name;

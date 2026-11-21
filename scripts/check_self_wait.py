@@ -353,14 +353,14 @@ def _task_ordinals_ok(records):
 PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d657e10aa0aca89e34bdd2b632207aebe2e1655eeb5bc0a16a03b73c5fc',
  'servers/silk-shell/src/main.rs': 'wait-v1:8f387c104199b88d2ea09b2248a64cde8d22b6ca7655b967b87b072e88ce687b',
  'crates/sex-pdx/src/system_stats.rs': '408fb8ea07d12eb2fc53f38797b8ddb4fd61c32140ecc516e63b69fd5689f97d',
- 'crates/sex-pdx/src/crash_log.rs': '4930c8a6ca16756e9421cc1b1c8dca8a0301413cb0f3694189005fa90579ae22',
+ 'crates/sex-pdx/src/crash_log.rs': '87d50c205e92bd64db9223193542ca5aa6e35daa0f8861fc2fd10050a838fd97',
  'crates/sex-pdx/src/web.rs': '2cd0cedd8bf837aca965d45a147d5251006d0d14521179b1d6c1496a8cffeccd',
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20).
  'kernel/src/cpu_account.rs': '422f8b140abc987fd2758508927e687eeaab2fb6f5fda4e9997addd719d16d6b',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
  'kernel/src/app_resources.rs': '23d68b059a591aa4a2a0eaf75fd4b9ec9415ade1f3df0a62f8dfcce45e32a677',  # K2a hint backoff, K2c busy result + master merge (no observer change), 2026-11-21
- 'kernel/src/service_restart.rs': 'a66ded412b60ef50cfc95310bee4027de9617a904908ab0f50d5df470622a856',  # K2c: poll reports work in flight (no observer change), 2026-11-20
- 'kernel/src/crash_log.rs': '1a0619db6d5e2e9a18f60f9da923df062d90206d7378009a5751c2802dc145d7',
+ 'kernel/src/service_restart.rs': 'ba9477b3ee05f3d9250d795493dfaec401108e930a640af1714ef69a30f26aff',  # K2c: poll reports work in flight (no observer change), 2026-11-20
+ 'kernel/src/crash_log.rs': 'dee45405490e59e0bcf8c4aa532333d9b84e2a959344cccaebad1c09d00cb094',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
 
