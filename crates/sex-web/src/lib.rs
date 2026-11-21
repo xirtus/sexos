@@ -449,12 +449,12 @@ fn draw_item(target: &mut Target, fonts: &mut Fonts, item: &Item, bg: u32) {
 
 /// Draws only the pictures named in `changed` (canvases that drew) over the last frame,
 /// when each is opaque and so covers what was under it. False when that can't stand in
-/// for a full `frame`. `side` is the vertical tab strip's width (0 for none).
-pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, side: i32, changed: &[String]) -> bool {
+/// for a full `frame`. The page sits in window columns `x` .. `x + w` (beside the
+/// vertical tab strip, or in one half of a split view).
+pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, x: i32, w: i32, changed: &[String]) -> bool {
     // Sticky boxes move with the scroll and turned boxes paint as layers: only a whole frame does those.
     if !page.item_sticky.is_empty() || !page.item_transform.is_empty() { return false; }
-    let side = side.clamp(0, width);
-    let mut t = Target { pixels: &mut pixels[side as usize..], width: width - side, height, scroll, top: BAR, premul: false, clip: None, stride: width };
+    let Some(mut t) = column(pixels, width, height, scroll, x, w) else { return false };
     let (top, bottom) = (scroll, scroll + height - BAR);
     let mut items: Vec<(i32, i32, i32, i32, &str, Option<[i32; 4]>)> = Vec::new();
     for (i, item) in page.items.iter().enumerate() {
@@ -480,6 +480,14 @@ pub fn repaint_pictures(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], widt
     if !items.iter().all(|i| opaque(i.4)) { return false; }
     for (x, y, w, h, src, clip) in items { t.clip = clip; image(&mut t, fonts, x, y, w, h, src, ""); }
     true
+}
+
+/// A target for window columns `x` .. `x + w` under the bar, `None` when that is empty.
+pub fn column(pixels: &mut [u32], width: i32, height: i32, scroll: i32, x: i32, w: i32) -> Option<Target<'_>> {
+    let x = x.clamp(0, width);
+    let w = w.clamp(0, width - x);
+    if w == 0 { return None; }
+    Some(Target { pixels: &mut pixels[x as usize..], width: w, height, scroll, top: BAR, premul: false, clip: None, stride: width })
 }
 
 fn image(target: &mut Target, fonts: &mut Fonts, x: i32, y: i32, w: i32, h: i32, src: &str, alt: &str) {
@@ -660,6 +668,9 @@ pub struct Chrome<'a> {
     pub shields: Option<(bool, u32)>,
     /// Tabs in a strip down the left this wide instead of chips in the bar (0: chips).
     pub side: i32,
+    /// The window columns (x, width) the page takes in a split view, where the other
+    /// half is painted apart; width 0 gives the page everything right of the strip.
+    pub pane: (i32, i32),
 }
 
 /// The vertical tab strip's width, as Edge and Brave draw it.
@@ -705,9 +716,9 @@ fn fit(fonts: &mut Fonts, text: &str, font: FontKey, w: i32) -> String {
 /// Like [`frame`], with tabs, suggestions, find marks and zoom.
 pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32, height: i32, scroll: i32, focus: Option<usize>, c: &Chrome) {
     let side = c.side.clamp(0, width);
-    {
-        // The page takes the columns right of the tab strip.
-        let mut t = Target { pixels: &mut pixels[side as usize..], width: width - side, height, scroll, top: BAR, premul: false, clip: None, stride: width };
+    let (px, pw) = if c.pane.1 > 0 { c.pane } else { (side, width - side) };
+    // The page takes the columns right of the tab strip (or its half of a split).
+    if let Some(mut t) = column(pixels, width, height, scroll, px, pw) {
         paint(page, fonts, &mut t, focus);
         // Find matches: the current one strong, the others light, over the text.
         for m in c.marks.iter() {
@@ -737,6 +748,8 @@ pub fn frame_with(page: &Page, fonts: &mut Fonts, pixels: &mut [u32], width: i32
         }
         bar = Target { pixels: strip.pixels, width, height: height.min(BAR).max(0), scroll: 0, top: 0, premul: false, clip: None, stride: width };
     }
+    // In a split view, a line under the bar marks the half that has the keyboard.
+    if c.pane.1 > 0 { bar.fill(px, BAR - 2, pw, 2, 0xFF0B_57D0, 0); }
     let chips = if side > 0 { Vec::new() } else { tab_chips(width, c.tabs.len()) };
     for (i, (x, w)) in chips.iter().enumerate() {
         let on = i == c.active;

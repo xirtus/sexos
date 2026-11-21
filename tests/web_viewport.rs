@@ -24,7 +24,7 @@ fn actual_grant_bounds_overflow_and_zero_are_not_fixed_fallback_dimensions() {
 #[test]
 fn iframe_copy_clips_left_top_and_toolbar_and_preserves_uncovered_pixels() {
     let surface = Surface::checked(4, 4, 16).unwrap();
-    let frame = Frame::visible(surface, [-1, 0, 4, 3], 1, 1, 0, 16).unwrap();
+    let frame = Frame::visible(surface, [-1, 0, 4, 3], 1, 1, (0, i32::MAX), 16).unwrap();
     assert_eq!(
         (frame.sx, frame.sy, frame.dx, frame.dy, frame.w, frame.h),
         (1, 1, 0, 1, 3, 2)
@@ -41,7 +41,7 @@ fn iframe_copy_clips_left_top_and_toolbar_and_preserves_uncovered_pixels() {
 #[test]
 fn iframe_copy_clips_right_bottom_and_refuses_impossible_scratch_or_buffers() {
     let surface = Surface::checked(4, 4, 16).unwrap();
-    let frame = Frame::visible(surface, [3, 2, 3, 3], 0, 1, 0, 16).unwrap();
+    let frame = Frame::visible(surface, [3, 2, 3, 3], 0, 1, (0, i32::MAX), 16).unwrap();
     assert_eq!(
         (frame.sx, frame.sy, frame.dx, frame.dy, frame.w, frame.h),
         (0, 0, 3, 3, 1, 1)
@@ -52,17 +52,25 @@ fn iframe_copy_clips_right_bottom_and_refuses_impossible_scratch_or_buffers() {
     let before = dest;
     assert!(!frame.copy(surface, &mut dest, &[1]));
     assert_eq!(dest, before);
-    assert!(Frame::visible(surface, [0, 0, 5, 5], 0, 1, 0, 16).is_none());
-    assert!(Frame::visible(surface, [i32::MAX, i32::MAX, 4, 4], i32::MIN, 1, 0, 16).is_none());
-    assert!(Frame::visible(surface, [i32::MIN, i32::MIN, 4, 4], i32::MAX, 1, 0, 16).is_none());
+    assert!(Frame::visible(surface, [0, 0, 5, 5], 0, 1, (0, i32::MAX), 16).is_none());
+    assert!(Frame::visible(surface, [i32::MAX, i32::MAX, 4, 4], i32::MIN, 1, (0, i32::MAX), 16).is_none());
+    assert!(Frame::visible(surface, [i32::MIN, i32::MIN, 4, 4], i32::MAX, 1, (0, i32::MAX), 16).is_none());
 }
 
 #[test]
 fn frame_beside_vertical_tabs_starts_right_of_the_strip() {
     let surface = Surface::checked(8, 4, 32).unwrap();
     // A frame at page x 0 lands 3 columns in; one reaching left of the page is cut there.
-    let frame = Frame::visible(surface, [0, 0, 2, 2], 0, 1, 3, 16).unwrap();
+    let frame = Frame::visible(surface, [0, 0, 2, 2], 0, 1, (3, 5), 16).unwrap();
     assert_eq!((frame.dx, frame.dy, frame.w, frame.h, frame.sx), (3, 1, 2, 2, 0));
-    let frame = Frame::visible(surface, [-1, 0, 3, 2], 0, 1, 3, 16).unwrap();
+    let frame = Frame::visible(surface, [-1, 0, 3, 2], 0, 1, (3, 5), 16).unwrap();
     assert_eq!((frame.dx, frame.w, frame.sx), (3, 2, 1));
+}
+
+#[test]
+fn frame_in_the_left_half_of_a_split_stops_at_the_half() {
+    let surface = Surface::checked(8, 4, 32).unwrap();
+    // The left half is columns 0..4: a frame 6 wide at x 1 shows 3 columns.
+    let frame = Frame::visible(surface, [1, 0, 6, 2], 0, 1, (0, 4), 16).unwrap();
+    assert_eq!((frame.dx, frame.w, frame.sx), (1, 3, 0));
 }
