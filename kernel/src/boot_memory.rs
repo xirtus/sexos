@@ -177,7 +177,8 @@ pub fn reserve_table(base: u64, pkey: u8, any_frame: u64) -> *mut u64 {
 /// Address space for one program row's arena; no page tables yet, every page absent.
 /// Tables are made on first use (`arena_leaf`) and frames are lent per run
 /// (`program_frames`), so the size, set once from what this machine holds, costs
-/// nothing until a program uses it: one program may use all of the machine's memory.
+/// nothing until a program uses it: one program may use all of the machine's memory,
+/// and more once Denim packs its cold pages.
 pub fn reserve_arena(pkey: u8) -> (u64, usize) {
     require_boot();
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -186,7 +187,8 @@ pub fn reserve_arena(pkey: u8) -> (u64, usize) {
     let mut pages = PAGES.load(Ordering::Acquire);
     if pages == 0 {
         let free = crate::memory::allocator::debug_global_free_frames() * 4096;
-        let bytes = free.max(1).next_power_of_two().clamp(8 * 1024 * 1024, sex_pdx::program_store::WINDOW_BYTES as u64);
+        // Four times the memory, whole GiB: Denim lets a heap outgrow RAM.
+        let bytes = (free.max(1) * 4).div_ceil(1 << 30).saturating_mul(1 << 30).min(sex_pdx::program_store::WINDOW_BYTES as u64);
         pages = (bytes / 4096) as usize;
         PAGES.store(pages, Ordering::Release);
     }

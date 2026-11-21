@@ -24,7 +24,7 @@ e45f86d95f464bcbefe222acdb7ea565dda7f35301c54dd22ca1a71ba3e86f04  crates/sex-pdx
 
 4930c8a6ca16756e9421cc1b1c8dca8a0301413cb0f3694189005fa90579ae22  crates/sex-pdx/src/crash_log.rs
 
-1c4224481339a54ed14854d9fa014bf2141605c639d3b7239eadc3bf5bb33681  crates/sex-pdx/src/denim.rs
+5e2f7daf24d0d791f70455abfca5d3e4161eb19f3a1736d2964a4dd6305291f7  crates/sex-pdx/src/denim.rs
 
 950f465662c1cc0c1e79b2f566e566b6cc8d6b72ed5dc097e7b665f7df714e5c  crates/sex-pdx/src/desktop_recording.rs
 
@@ -134,11 +134,11 @@ a947e57a405316312fe334d17fdfdb2d3e6b59e708b4d61f416a4db6275ee4cb  kernel/src/app
 
 99e2089130ccb63dec906a478946d6c18939b21c2554895e49fb6789033c1ada  kernel/src/app_resource_state.rs
 
-3ae927a6b4abc6651d556fae749f32a96250b0a72102cc378c637afdee02c119  kernel/src/app_resources.rs
+ad92808097df42c4707ba0132b7ff3b5c3c6184e4b6398fb179cbdee42943569  kernel/src/app_resources.rs
 
 f6246b2ba9d3c3aa8354736e5a1f51f9b55972b078efa2008a9e3d0e259125b3  kernel/src/boot_display_state.rs
 
-fe964163d98eea62f57c24030ac8c9bcc46f20b247a23311ee4922605f7a58bf  kernel/src/boot_memory.rs
+d7353fc5c2bb931ecd0dbc6e9c893ce85a10df455ad2e962242003c306d0b053  kernel/src/boot_memory.rs
 
 2fd25f89091106c70503869c40f52cfeb6662fab8ddfcd2c6202d2e04550fe69  kernel/src/boot_network.rs
 
@@ -152,11 +152,11 @@ df66047e0c1003533553fe4e898692d023d3f0908ce7ee70aa989d71e6c47cc1  kernel/src/cap
 
 ddda6ecb6219bb1cdad31c61a5401719eaecee79c8e3e218b44034ca45a2cc8f  kernel/src/clock_source.rs
 
-50143847c2b1ecb5a3be360f38ef900e562f271bde90ad9b5b0b728813988f96  kernel/src/crash_log.rs
+45ccea88134f9c35ffe704914690f7b0dd1fe3095d26620c9a86994ccbeeafb9  kernel/src/crash_log.rs
 
 3d4409ab3f2238999dbad3988e56cb19e66cd3fae1d78de035617ca4d0cfafe0  kernel/src/entropy_source.rs
 
-0b5914ff61ea39a942f544e75afa4e11d7516d2c80c57572abc3fcf2a7c460ab  kernel/src/fault_transaction.rs
+e8be235ab6c6e1142a06a206737934a9812d100aa9762ee875ebab12fb41980d  kernel/src/fault_transaction.rs
 
 cf020f742459f6862a152fbed48da11da00a0b3a12c95e2f755c84ff6441be74  kernel/src/history_recovery.rs
 
@@ -178,11 +178,11 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 
 6efe30b3285999e43a5c320c1eb4ed6efbcf4b429cbeeca10d1f323bd2c166a2  kernel/src/pci_command.rs
 
-c8899b8f71ab65b431a7c2f05380ec7562d398857ebbbde97787b11fedf63b5e  kernel/src/service_restart.rs
+0900a46c2424b1329a3ad9ca3b1a8b282cc03cb01f8d7d8ef373d36904bac5a4  kernel/src/service_restart.rs
 
 bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm.rs
 
-caa84ae72d6bcfdc01fde922cfe47a3cbae0916c9cf028ab8a6d175fb5ab08e7  kernel/src/syscalls/mod.rs
+9c1f6178f32dff9aefe7fdfdf7bf280760399d6174e9f18484350beab4bb6784  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 

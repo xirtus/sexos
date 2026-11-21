@@ -768,10 +768,10 @@ jobs:
     - name: App resource retirement and normal desktop close
       if: matrix.gate == 'app-resource'
       run: GATE_DIR="$RUNNER_TEMP/sexos-proof" bash scripts/app_resource_profiles_gate.sh
-    - name: Compressed memory, Denim pages out and back (eager build)
+    - name: Compressed memory, Denim pages out and back, and a Denim restart (eager probe build)
       if: matrix.gate == 'denim'
       run: |
-        SEXOS_DENIM_EAGER=1 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/denim-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/denim-build.log"; exit 1)
+        SEXOS_DENIM_EAGER=1 SEXOS_CRASH_PROBE=1 ./scripts/entrypoint_build.sh > "$RUNNER_TEMP/denim-build.log" 2>&1 || (tail -50 "$RUNNER_TEMP/denim-build.log"; exit 1)
         truncate -s 1G "$RUNNER_TEMP/denim-source.img"
         python3 scripts/denim_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/denim-source.img" --out "$RUNNER_TEMP/sexos-proof/denim"
     - name: Shared-key program rows in protection views on 4 cores (no turn-taking, PCID)
@@ -834,6 +834,34 @@ jobs:
         path: |
           ${{ runner.temp }}/sexos-proof
           ${{ runner.temp }}/crash-probe-build.log
+        if-no-files-found: ignore
+
+  denim-double:
+    name: Memory, lazy stacks and a heap twice the RAM (1G and 12G)
+    runs-on: ubuntu-latest
+    needs: image
+    if: needs.image.outputs.full == 'true'
+    timeout-minutes: 150
+    steps:
+    - uses: actions/checkout@v4
+    - uses: ./.github/actions/setup
+    - uses: ./.github/actions/image
+    - name: Program heap, lazy stacks and the stack guard page (#306)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/heap-source.img"
+        python3 scripts/program_heap_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/heap-source.img" --out "$RUNNER_TEMP/sexos-proof/heap"
+    - name: Heap over twice the RAM at 1 GiB
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/double-source.img"
+        SEXOS_GATE_MEMORY=1G python3 scripts/denim_double_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/double-source.img" --out "$RUNNER_TEMP/sexos-proof/double-1g"
+    - name: Heap over twice the RAM at 12 GiB
+      run: SEXOS_GATE_MEMORY=12G python3 scripts/denim_double_gate.py --minutes 100 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/double-source.img" --out "$RUNNER_TEMP/sexos-proof/double-12g"
+    - name: Preserve evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: sexos-proof-denim-double
+        path: ${{ runner.temp }}/sexos-proof
         if-no-files-found: ignore
 
   programs:
@@ -1147,7 +1175,7 @@ jobs:
 
   build:
     if: always()
-    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks, latency]
+    needs: [changes, host, truth, image, boot, web, desktop, devices, programs, media, editor, crash, profiles, input-payload-proof, js-jit, recording, productivity, terminal-editor, documents-pictures, reading, places, leaks, latency, denim-double]
     runs-on: ubuntu-latest
     steps:
     # Every job must pass. A job may be skipped only when the scope leaves it out:
