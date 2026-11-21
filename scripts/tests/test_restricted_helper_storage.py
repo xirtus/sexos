@@ -48,7 +48,7 @@ fn civil_time_ms()->Option<u64>{Some(1000)}
 
 fn get_ticks()->u64{NOW.load(Ordering::SeqCst)}
 fn pdx_reply(_:u32,word:u64)->u64{if FULL.load(Ordering::SeqCst){return 1}LAST.store(word,Ordering::SeqCst);SENDS.fetch_add(1,Ordering::SeqCst);0}
-fn memory_region_info(slot:u64)->Result<memory_region::Info,()>{let image=slot==100;let child=slot==fs::PROVIDER_SLOT_BASE+1;Ok(memory_region::Info{peer_pd:if image{None}else{Some(if child{43}else{42})},region_id:if image{0x4000}else{fs::REGION_ID_BASE+child as u32},length:if image{32*1024*1024}else{fs::REGION_BYTES as u64},rights:7})}
+fn memory_region_info(slot:u64)->Result<memory_region::Info,()>{let image=slot==100;let child=slot==fs::PROVIDER_SLOT_BASE+1;Ok(memory_region::Info{peer_pd:if image{None}else{Some(if child{43}else{42})},region_id:if image{0x4000}else{fs::REGION_ID_BASE+child as u32},length:if image{program_store_wire::IMAGE_BYTES as u64}else{fs::REGION_BYTES as u64},rights:7})}
 fn memory_region_view(slot:u64,_:u64,_:u64,_:u8)->Result<memory_region::View,()>{let info=memory_region_info(slot)?;Ok(memory_region::View{region_id:info.region_id,length:info.length,virtual_address:if info.peer_pd==Some(43){core::ptr::addr_of_mut!(REGION_CHILD) as u64}else{core::ptr::addr_of_mut!(REGION) as u64},dma_address:None})}
 #[path="PROGRAM_STORE_PATH"]mod program_store_wire;
 mod program_store{pub fn load_unbound(_:[u64;2])->u64{super::program_store_wire::loaded(4)}}
