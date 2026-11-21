@@ -218,7 +218,7 @@ def main():
             cells = [(x, y) for y in range(top + scale, top + row_h) for x in range(ix, ix + iw)
                      if not (tx - 2 <= x < tx + 12 * scale and ty - 2 <= y < ty + 20 * scale)]
             ground = [after(*k) for k in cells if k in gset]
-            ink = [after(*k) for k in cells if k not in grown]
+            ink = [after(*k) for k in cells if k in skip]
             if not ground or not ink: continue
             ground.sort(key=luminance); g0 = ground[len(ground) // 2]
             best = max(wcag(c, g0) for c in ink)
