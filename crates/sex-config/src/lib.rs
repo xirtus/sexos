@@ -31,6 +31,9 @@ pub enum Kind {
     Choice(&'static [&'static str]),
     /// `0xRRGGBB`; the file holds `"#rrggbb"`.
     Color,
+    /// Some of a list of names (at most 31), one bit each by place; the file holds
+    /// `["name", ...]`. Names a newer system added are skipped when read.
+    Set(&'static [&'static str]),
 }
 
 /// One setting.
@@ -56,6 +59,7 @@ impl Key {
             Kind::Int { min, max } => (min..=max).contains(&value),
             Kind::Choice(names) => value >= 0 && (value as usize) < names.len(),
             Kind::Color => (0..=0xFF_FFFF).contains(&value),
+            Kind::Set(names) => value >= 0 && (value as i64) < 1i64 << names.len(),
         }
     }
 }
@@ -117,13 +121,35 @@ pub mod id {
     pub const FIRST_RUN_MICROPHONE: u16 = 30;
     pub const WIDGETS: u16 = 31;
     pub const WEATHER: u16 = 32;
-    pub const MAGNIFIER_ZOOM: u16 = 33;
-    pub const COLOUR_FILTER: u16 = 34;
-    pub const STICKY_KEYS: u16 = 35;
-    pub const SLOW_KEYS: u16 = 36;
-    pub const BOUNCE_KEYS: u16 = 37;
-    pub const SCREEN_READER: u16 = 38;
+    pub const STARTUP: u16 = 33;
+    pub const SHORTCUT_LAUNCHER: u16 = 34;
+    pub const SHORTCUT_TERMINAL: u16 = 35;
+    pub const SHORTCUT_OVERVIEW: u16 = 36;
+    pub const SHORTCUT_NOTIFICATIONS: u16 = 37;
+    pub const SHORTCUT_LOCK: u16 = 38;
+    pub const SHORTCUT_CLOSE: u16 = 39;
+    pub const NOTIFY_HIDDEN: u16 = 40;
+    pub const MAGNIFIER_ZOOM: u16 = 41;
+    pub const COLOUR_FILTER: u16 = 42;
+    pub const STICKY_KEYS: u16 = 43;
+    pub const SLOW_KEYS: u16 = 44;
+    pub const BOUNCE_KEYS: u16 = 45;
+    pub const SCREEN_READER: u16 = 46;
 }
+
+/// Programs (program store names) the Shell may start at login and whose
+/// notifications the person may hide: one bit each in `startup.programs` and
+/// `notifications.hidden`. Append-only, at most 31.
+pub const PROGRAMS: &[&str] = &["jot", "loom", "mesh", "abacus", "gaze", "qupid", "vellum", "date", "quil", "gossip", "chastity"];
+/// The place of a program store name in [`PROGRAMS`].
+pub fn program_index(name: &[u8]) -> Option<usize> { PROGRAMS.iter().position(|p| p.as_bytes() == name) }
+
+/// The key a Shell shortcut (Super and the key) takes: its own key, none, or one of
+/// these. The Shell's `shortcuts.rs` maps the names to key codes. Append-only.
+pub const SHORTCUT_KEYS: &[&str] = &[
+    "default", "none", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+    "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "enter", "escape",
+];
 
 /// What a hot corner does (the Shell's `hot_corners::ACTIONS`). Append-only.
 pub const CORNER_ACTIONS: &[&str] = &["none", "overview", "launcher", "notifications", "lock"];
@@ -165,6 +191,10 @@ impl Config {
         let k = key(kind_of(name)?)?;
         match k.kind { Kind::Choice(names) => names.get(self.value(k.id) as usize).copied(), _ => None }
     }
+    /// True when the set `id` holds item `index` (false for any other kind of key).
+    pub fn holds(&self, id: u16, index: usize) -> bool {
+        matches!(key(id).map(|k| k.kind), Some(Kind::Set(_))) && index < 31 && self.value(id) >> index & 1 == 1
+    }
 }
 
 const fn int(min: i32, max: i32) -> Kind { Kind::Int { min, max } }
@@ -203,6 +233,14 @@ pub const KEYS: &[Key] = &[
     Key { id: id::OPEN_VIDEO, name: "open.video", label: "Open videos with", kind: Kind::Choice(VIDEO_PROGRAMS), default: 0 },
     Key { id: id::OPEN_AUDIO, name: "open.audio", label: "Open music with", kind: Kind::Choice(AUDIO_PROGRAMS), default: 0 },
     Key { id: id::OPEN_PAGE, name: "open.page", label: "Open web pages with", kind: Kind::Choice(PAGE_PROGRAMS), default: 0 },
+    Key { id: id::STARTUP, name: "startup.programs", label: "Start at login", kind: Kind::Set(PROGRAMS), default: 0 },
+    Key { id: id::SHORTCUT_LAUNCHER, name: "shortcuts.launcher", label: "Launcher (Super+D)", kind: Kind::Choice(SHORTCUT_KEYS), default: 0 },
+    Key { id: id::SHORTCUT_TERMINAL, name: "shortcuts.terminal", label: "Terminal (Super+Enter)", kind: Kind::Choice(SHORTCUT_KEYS), default: 0 },
+    Key { id: id::SHORTCUT_OVERVIEW, name: "shortcuts.overview", label: "Overview (Super+W)", kind: Kind::Choice(SHORTCUT_KEYS), default: 0 },
+    Key { id: id::SHORTCUT_NOTIFICATIONS, name: "shortcuts.notifications", label: "Notification history (Super+N)", kind: Kind::Choice(SHORTCUT_KEYS), default: 0 },
+    Key { id: id::SHORTCUT_LOCK, name: "shortcuts.lock", label: "Lock the screen (Super+Esc)", kind: Kind::Choice(SHORTCUT_KEYS), default: 0 },
+    Key { id: id::SHORTCUT_CLOSE, name: "shortcuts.close", label: "Close the window (Super+Q)", kind: Kind::Choice(SHORTCUT_KEYS), default: 0 },
+    Key { id: id::NOTIFY_HIDDEN, name: "notifications.hidden", label: "Hide notifications", kind: Kind::Set(PROGRAMS), default: 0 },
     Key { id: id::MAGNIFIER_ZOOM, name: "accessibility.magnifier_zoom", label: "Magnifier zoom in quarters (4 off, 8 is 2x)", kind: int(4, 32), default: 4 },
     Key { id: id::COLOUR_FILTER, name: "accessibility.colour_filter", label: "Colour filter", kind: Kind::Choice(COLOUR_FILTERS), default: 0 },
     Key { id: id::STICKY_KEYS, name: "accessibility.sticky_keys", label: "Sticky keys", kind: Kind::Bool, default: 0 },
@@ -317,6 +355,14 @@ impl Config {
                     for shift in [20, 16, 12, 8, 4, 0] { w.put(&[b"0123456789abcdef"[(v >> shift & 0xF) as usize]])?; }
                     w.put(b"\"")?;
                 }
+                Kind::Set(names) => {
+                    w.put(b"[")?;
+                    for (i, name) in names.iter().enumerate().filter(|(i, _)| v >> i & 1 == 1) {
+                        if v & ((1 << i) - 1) != 0 { w.put(b", ")?; }
+                        w.put(b"\"")?; w.put(name.as_bytes())?; w.put(b"\"")?;
+                    }
+                    w.put(b"]")?;
+                }
             }
             w.put(b"\n")?;
         }
@@ -339,6 +385,15 @@ pub fn parse_value(k: &Key, text: &[u8]) -> Option<i32> {
             if hex.len() != 6 { return None; }
             let mut v = 0i32;
             for b in hex { v = v << 4 | (*b as char).to_digit(16)? as i32; }
+            v
+        }
+        Kind::Set(names) => {
+            let inner = trim(text.strip_prefix(b"[")?.strip_suffix(b"]")?);
+            let mut v = 0i32;
+            for item in inner.split(|b| *b == b',').map(trim).filter(|i| !i.is_empty()) {
+                let s = unquote(item)?;
+                if let Some(i) = names.iter().position(|n| n.as_bytes().eq_ignore_ascii_case(s)) { v |= 1 << i; }
+            }
             v
         }
     };
@@ -519,6 +574,40 @@ mod tests {
         assert_eq!(c.program_for(b"archive.tar.gz"), None);
         c.set(id::OPEN_PDF, 1).unwrap();
         assert_eq!(c.program_for(b"report.pdf"), Some("kaleidoscope"));
+    }
+
+    #[test]
+    fn sets_round_trip_and_skip_unknown_names() {
+        assert!(PROGRAMS.len() <= 31);
+        let mut c = Config::new();
+        let mut buf = [0u8; TEXT_MAX];
+        let n = c.write(&mut buf).unwrap();
+        assert!(core::str::from_utf8(&buf[..n]).unwrap().contains("[startup]\nprograms = []\n"));
+        let mesh = program_index(b"mesh").unwrap();
+        c.set(id::STARTUP, 1 | 1 << mesh).unwrap();
+        c.set(id::NOTIFY_HIDDEN, 1 << program_index(b"abacus").unwrap()).unwrap();
+        assert_eq!(c.set(id::STARTUP, 1 << PROGRAMS.len()), Err(SetError::OutOfRange));
+        assert_eq!(c.set(id::STARTUP, -1), Err(SetError::OutOfRange));
+        assert!(c.holds(id::STARTUP, mesh) && !c.holds(id::STARTUP, 1) && !c.holds(id::VOLUME, 0));
+        let n = c.write(&mut buf).unwrap();
+        let text = core::str::from_utf8(&buf[..n]).unwrap();
+        assert!(text.contains("programs = [\"jot\", \"mesh\"]"), "{text}");
+        assert!(text.contains("[notifications]\nhidden = [\"abacus\"]"), "{text}");
+        let mut d = Config::new();
+        assert_eq!(d.read(text.as_bytes()).invalid, 0);
+        for k in KEYS { assert_eq!(d.get(k.id), c.get(k.id), "{}", k.name); }
+        // A newer system's names are skipped; a broken list is not taken.
+        let mut e = Config::new();
+        let r = e.read(b"[startup]\nprograms = [ \"Mesh\" , \"future\", ]\n[notifications]\nhidden = [jot]\n");
+        assert_eq!(r, Report { taken: 1, unknown: 0, invalid: 1 });
+        assert_eq!(e.value(id::STARTUP), 1 << mesh);
+        // Everything chosen still fits the file.
+        let mut full = Config::new();
+        for k in KEYS {
+            let v = match k.kind { Kind::Set(names) => (1 << names.len()) - 1, Kind::Choice(names) => (0..names.len()).max_by_key(|&i| names[i].len()).unwrap() as i32, _ => k.default };
+            full.set(k.id, v).unwrap();
+        }
+        assert!(full.write(&mut buf).is_some());
     }
 
     #[test]

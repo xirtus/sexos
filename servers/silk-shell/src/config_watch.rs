@@ -17,7 +17,9 @@ const POLL_TICKS: u64 = 500;
 const QUEUE: usize = 8;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Asked { Nothing, Generation, Next, Set }
+enum Asked { Nothing, Generation, Next, Set, Program }
+/// Program rows whose program the Shell still has to ask Files about.
+const ROWS: usize = 8;
 
 struct Watch {
     copy: Config,
@@ -38,17 +40,34 @@ struct Watch {
     volume_owed: bool,
     /// Network time on/off still has to reach sexnet.
     time_owed: bool,
+    /// A whole walk has finished: `copy` holds the person's settings, not defaults.
+    walked: bool,
+    /// Rows just bound to a run, to ask Files which program it is (`c::PROGRAM`).
+    rows: [u32; ROWS],
+    row_count: usize,
 }
 
 static mut WATCH: Watch = Watch {
     copy: Config::new(), seen: None, target: 0, asked: Asked::Nothing, asked_at: 0, last_poll: 0,
     queue: [(0, 0); QUEUE], queued: 0, look_owed: false, zone_owed: false, volume_owed: false, time_owed: false,
+    walked: false, rows: [0; ROWS], row_count: 0,
 };
 
 fn watch() -> &'static mut Watch { unsafe { &mut *core::ptr::addr_of_mut!(WATCH) } }
 
 /// The setting's value as the Shell last heard it (its default before that).
 pub fn value(key: u16) -> i32 { watch().copy.value(key) }
+/// True once the Shell holds the person's settings (the first walk ended).
+pub fn current() -> bool { watch().walked }
+/// True when the set `key` holds item `index`.
+pub fn holds(key: u16, index: usize) -> bool { watch().copy.holds(key, index) }
+/// A program row now runs something new: ask Files which program (`program_notify`).
+pub fn ask_program(row: u32) {
+    let w = watch();
+    if w.rows[..w.row_count].contains(&row) { return; }
+    if w.row_count < ROWS { w.rows[w.row_count] = row; w.row_count += 1; }
+    poll();
+}
 
 fn ask(w: &mut Watch, asked: Asked, verb: u8, key: u16, arg1: u64) {
     let (status, _) = sex_pdx::pdx_call(sex_pdx::program_store::SHELL_ROUTE_SLOT, c::OP, c::request(verb, key), arg1, 0);
@@ -71,6 +90,11 @@ pub fn poll() {
     if w.queued > 0 {
         let (key, value) = w.queue[0];
         ask(w, Asked::Set, c::SET, key, value as u32 as u64);
+        return;
+    }
+    if w.row_count > 0 {
+        let row = w.rows[0];
+        ask(w, Asked::Program, c::PROGRAM, row as u16, 0);
         return;
     }
     if now.saturating_sub(w.last_poll) < POLL_TICKS { return; }
@@ -103,8 +127,13 @@ pub fn receive(msg: &sex_pdx::PdxMessage) -> bool {
                 // settings hold even where none changed from their defaults.
                 if w.seen == Some(0) { keyboard(w); }
                 w.seen = Some(w.target);
+                w.walked = true;
                 sex_pdx::serial_record!("[shell.config.current] generation={}", w.target);
             }
+        }
+        Asked::Program => {
+            if w.row_count > 0 && w.rows[0] as u16 == r.key { w.rows.copy_within(1..w.row_count, 0); w.row_count -= 1; }
+            crate::program_notify::learned(r.key as u32, if r.status == c::OK { r.value } else { -1 });
         }
         Asked::Set => {
             sex_pdx::serial_record!("[shell.config.saved] key={} value={} status={}", r.key, r.value, r.status);

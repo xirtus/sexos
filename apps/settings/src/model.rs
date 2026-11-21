@@ -11,29 +11,54 @@ pub const ACCENTS: [(&str, i32); 9] = [
     ("Orange", 0xF97316), ("Red", 0xEF4444), ("Pink", 0xEC4899), ("Violet", 0x8B5CF6),
 ];
 pub const QUERY_MAX: usize = 24;
-pub const PAGE_MAX: usize = 12;
+pub const PAGE_MAX: usize = 16;
 /// The Privacy page's program rows as text, one line each (`grants.rs` writes them).
 pub const EXTRA_MAX: usize = 2048;
 /// The page that shows program rows after its settings.
 pub const PRIVACY: &str = "privacy";
+/// The page that shows what this computer is after its settings (`about.rs`).
+pub const ABOUT: &str = "setup";
+/// Pages with no settings, after the schema's: what Files knows (`facts.rs`).
+pub const INFO_PAGES: [&str; 2] = ["updates", "storage"];
+/// About's, Updates' or Storage's lines.
+pub const INFO_MAX: usize = 2048;
+/// Rows a page or a search can show: every key, and every item of a set.
+pub const ROWS_MAX: usize = COUNT + 64;
 
 /// Page names for people, by schema section.
 pub fn page_title(section: &str) -> &str {
     match section {
         "appearance" => "Appearance", "desktop" => "Desktop", "display" => "Display",
         "keyboard" => "Keyboard", "sound" => "Sound", "time" => "Date & time",
-        "session" => "Lock & idle", "setup" => "System", "open" => "Default apps",
-        "accessibility" => "Accessibility", "privacy" => "Privacy and grants", other => other,
+        "session" => "Lock & idle", "setup" => "About", "open" => "Default apps",
+        "startup" => "Startup programs", "shortcuts" => "Shortcuts", "notifications" => "Notifications",
+        "accessibility" => "Accessibility",
+        "privacy" => "Privacy and grants", "updates" => "Updates", "storage" => "Storage", other => other,
     }
 }
 
-/// The schema's sections in order: the pages.
+/// A line above a page's rows that says how its settings work, or nothing.
+pub fn page_note(section: &str) -> &'static str {
+    match section {
+        "startup" => "  The Shell starts these programs once you are logged in (Right: yes, Left: no).\n\n",
+        "shortcuts" => "  Super and this key. \"default\" keeps the key in brackets; a chosen key replaces it.\n\n",
+        "notifications" => "  The Shell does not show notifications from a program set to Yes.\n\n",
+        _ => "",
+    }
+}
+
+/// One row: a key, or one item of a set key (`Kind::Set`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Row { pub key: usize, pub item: Option<u8> }
+
+/// The schema's sections in order, then the pages with no settings: the pages.
 pub fn pages() -> ([&'static str; PAGE_MAX], usize) {
     let mut out = [""; PAGE_MAX];
     let mut n = 0;
     for k in KEYS {
         if n == 0 || out[n - 1] != k.section() { if n < PAGE_MAX { out[n] = k.section(); n += 1; } }
     }
+    for p in INFO_PAGES { if n < PAGE_MAX { out[n] = p; n += 1; } }
     (out, n)
 }
 
@@ -52,6 +77,9 @@ pub struct Model {
     pub extra: [u8; EXTRA_MAX],
     pub extra_len: usize,
     pub extra_rows: usize,
+    /// The lines after About's settings, or Updates' or Storage's: what this computer is.
+    pub info: [u8; INFO_MAX],
+    pub info_len: usize,
 }
 
 /// A new lock password, typed twice.
@@ -66,22 +94,39 @@ pub enum Change { None, Set(u16, i32), Password([u8; 64], usize) }
 
 impl Model {
     pub fn new(values: Config) -> Self {
-        Model { values, page: 0, row: 0, query: [0; QUERY_MAX], query_len: 0, status: [0; 64], status_len: 0, entry: None, extra: [0; EXTRA_MAX], extra_len: 0, extra_rows: 0 }
+        Model { values, page: 0, row: 0, query: [0; QUERY_MAX], query_len: 0, status: [0; 64], status_len: 0, entry: None, extra: [0; EXTRA_MAX], extra_len: 0, extra_rows: 0, info: [0; INFO_MAX], info_len: 0 }
     }
     pub fn searching(&self) -> bool { self.query_len > 0 }
-    /// The rows shown now: schema indexes.
-    pub fn rows(&self) -> ([usize; COUNT], usize) {
-        let mut out = [0; COUNT];
+    /// The rows shown now: keys, and a set key's items in its place.
+    pub fn rows(&self) -> ([Row; ROWS_MAX], usize) {
+        let mut out = [Row { key: 0, item: None }; ROWS_MAX];
         let mut n = 0;
         let (pages, _) = pages();
+        let query = &self.query[..self.query_len];
         for (i, k) in KEYS.iter().enumerate() {
-            let shown = if self.searching() { matches(k, &self.query[..self.query_len]) } else { k.section() == pages[self.page] };
-            if shown { out[n] = i; n += 1; }
+            let page = !self.searching() && k.section() == pages[self.page];
+            let whole = page || self.searching() && matches(k, query);
+            match k.kind {
+                Kind::Set(names) => for (j, name) in names.iter().enumerate() {
+                    if (whole || self.searching() && has(name, query)) && n < ROWS_MAX { out[n] = Row { key: i, item: Some(j as u8) }; n += 1; }
+                },
+                _ => if whole && n < ROWS_MAX { out[n] = Row { key: i, item: None }; n += 1; },
+            }
         }
         (out, n)
     }
     /// True on the Privacy page (not searching): program rows follow its settings.
     pub fn on_privacy(&self) -> bool { !self.searching() && pages().0[self.page] == PRIVACY }
+    /// The page being shown (not searching) is About, Updates or Storage: its lines follow.
+    pub fn info_page(&self) -> Option<&'static str> {
+        let page = pages().0[self.page];
+        (!self.searching() && (page == ABOUT || INFO_PAGES.contains(&page))).then_some(page)
+    }
+    pub fn set_info(&mut self, text: &[u8]) {
+        let n = text.len().min(INFO_MAX);
+        self.info[..n].copy_from_slice(&text[..n]);
+        self.info_len = n;
+    }
     /// Program rows' text, `\n` after each line; `rows` lines.
     pub fn set_extra(&mut self, text: &[u8], rows: usize) {
         let n = text.len().min(EXTRA_MAX);
@@ -97,10 +142,12 @@ impl Model {
         let (_, keys) = self.rows();
         (self.on_privacy() && self.row >= keys && self.row - keys < self.extra_rows).then(|| self.row - keys)
     }
-    pub fn selected(&self) -> Option<&'static Key> {
+    pub fn selected_row(&self) -> Option<Row> {
         let (rows, n) = self.rows();
-        (self.row < n).then(|| &KEYS[rows[self.row]])
+        (self.row < n).then(|| rows[self.row])
     }
+    #[cfg(test)]
+    pub fn selected(&self) -> Option<&'static Key> { self.selected_row().map(|r| &KEYS[r.key]) }
     pub fn say(&mut self, text: &str) {
         let n = text.len().min(self.status.len());
         self.status[..n].copy_from_slice(&text.as_bytes()[..n]);
@@ -152,18 +199,21 @@ impl Model {
         Change::None
     }
     /// Left/Right (or Enter, as Right) on the chosen row.
+    /// On a set's item, Right puts the item in and Left takes it out.
     pub fn step(&self, forward: bool, big: bool) -> Change {
-        let Some(k) = self.selected() else { return Change::None };
+        let Some(row) = self.selected_row() else { return Change::None };
+        let k = &KEYS[row.key];
         let v = self.values.value(k.id);
-        Change::Set(k.id, step_value(k, v, forward, big))
+        match row.item {
+            Some(i) => Change::Set(k.id, if forward { v | 1 << i } else { v & !(1 << i) }),
+            None => Change::Set(k.id, step_value(k, v, forward, big)),
+        }
     }
 }
 
+fn has(hay: &str, query: &[u8]) -> bool { hay.as_bytes().windows(query.len()).any(|w| w.eq_ignore_ascii_case(query)) }
 /// Case-insensitive substring of the label or the TOML name.
-fn matches(k: &Key, query: &[u8]) -> bool {
-    let has = |hay: &str| hay.as_bytes().windows(query.len()).any(|w| w.eq_ignore_ascii_case(query));
-    has(k.label) || has(k.name)
-}
+fn matches(k: &Key, query: &[u8]) -> bool { has(k.label, query) || has(k.name, query) }
 
 /// The value one step from `v`, staying in range.
 pub fn step_value(k: &Key, v: i32, forward: bool, big: bool) -> i32 {
@@ -185,6 +235,8 @@ pub fn step_value(k: &Key, v: i32, forward: bool, big: bool) -> i32 {
             let i = match (at, forward) { (Some(i), true) => (i + 1) % n, (Some(i), false) => (i + n - 1) % n, (None, _) => 0 };
             ACCENTS[i].1
         }
+        // A set changes one item at a time (`Model::step`).
+        Kind::Set(_) => v,
     }
 }
 
@@ -200,6 +252,7 @@ pub fn show_value(k: &Key, v: i32, out: &mut [u8; 32]) -> usize {
             w.put(" #");
             for shift in [20, 16, 12, 8, 4, 0] { w.byte(b"0123456789abcdef"[(v >> shift & 0xF) as usize]); }
         }
+        Kind::Set(_) => { w.int(v.count_ones() as i32); w.put(" chosen"); }
     }
     w.at
 }
@@ -241,16 +294,26 @@ pub fn render(m: &Model, out: &mut [u8]) -> usize {
         w.byte(b'\n');
     }
     w.put("------------------------------------------------------------\n");
+    if !m.searching() { w.put(page_note(pages[m.page])); }
     let (rows, count) = m.rows();
-    if count == 0 { w.put("  Nothing matches.\n"); }
-    for (r, &i) in rows[..count].iter().enumerate() {
-        let k = &KEYS[i];
+    if count == 0 && m.info_page().is_none() { w.put("  Nothing matches.\n"); }
+    for (r, row) in rows[..count].iter().enumerate() {
+        let k = &KEYS[row.key];
         w.put(if r == m.row { "> " } else { "  " });
-        let label_len = k.label.len().min(38);
-        w.put(&k.label[..label_len]);
-        for _ in label_len..40 { w.byte(b' '); }
+        let start = w.at;
+        w.put(&k.label[..k.label.len().min(38)]);
         let mut value = [0u8; 32];
-        let len = show_value(k, m.values.value(k.id), &mut value);
+        let len = match (row.item, k.kind) {
+            (Some(i), Kind::Set(names)) => {
+                w.put(": ");
+                w.put(names[i as usize]);
+                let on = m.values.holds(k.id, i as usize);
+                value[..3].copy_from_slice(if on { b"Yes" } else { b"No " });
+                if on { 3 } else { 2 }
+            }
+            _ => show_value(k, m.values.value(k.id), &mut value),
+        };
+        for _ in w.at - start..40 { w.byte(b' '); }
         if r == m.row { w.put("< "); }
         for b in &value[..len] { w.byte(*b); }
         if r == m.row { w.put(" >"); }
@@ -267,6 +330,10 @@ pub fn render(m: &Model, out: &mut [u8]) -> usize {
             w.byte(b'\n');
         }
     }
+    if m.info_page().is_some() {
+        if count > 0 { w.put("\n"); }
+        for b in &m.info[..m.info_len] { w.byte(*b); }
+    }
     w.put("------------------------------------------------------------\n");
     w.put("Up/Down: choose   Left/Right: change   Shift: bigger steps\n");
     for b in &m.status[..m.status_len] { w.byte(*b); }
@@ -281,7 +348,7 @@ mod tests {
     #[test]
     fn pages_follow_the_schema() {
         let (p, n) = pages();
-        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "setup", "open", "accessibility", "privacy"]);
+        assert_eq!(&p[..n], &["appearance", "desktop", "display", "keyboard", "sound", "time", "session", "setup", "open", "startup", "shortcuts", "notifications", "accessibility", "privacy", "updates", "storage"]);
     }
 
     #[test]
@@ -310,7 +377,7 @@ mod tests {
         for c in b"repeat" { m.type_char(*c); }
         let (rows, n) = m.rows();
         assert_eq!(n, 2);
-        assert_eq!(KEYS[rows[0]].id, id::REPEAT_DELAY);
+        assert_eq!(KEYS[rows[0].key].id, id::REPEAT_DELAY);
         m.move_row(true);
         m.move_row(true);
         assert_eq!(m.selected().unwrap().id, id::REPEAT_RATE);
@@ -365,13 +432,70 @@ mod tests {
         assert!(text.ends_with("Saved."));
         m.next_page(false);
         m.next_page(false);
-        assert_eq!(pages().0[m.page], "privacy");
+        assert_eq!(pages().0[m.page], "storage");
+    }
+
+    #[test]
+    fn updates_and_storage_show_files_lines_without_rows() {
+        let mut m = Model::new(Config::new());
+        go(&mut m, "updates");
+        assert_eq!((m.rows().1, m.info_page()), (0, Some("updates")));
+        m.set_info(b"  Running from system slot A.\n");
+        let t = text(&m);
+        assert!(t.contains("[Updates]") && t.contains("Running from system slot A.") && !t.contains("Nothing matches"), "{t}");
+        m.move_row(true);
+        assert!(matches!(m.step(true, false), Change::None), "nothing to change");
+        go(&mut m, "storage");
+        assert!(text(&m).contains("[Storage]"));
+        for c in b"slot" { m.type_char(*c); }
+        assert!(m.info_page().is_none() && !text(&m).contains("Running from"));
+    }
+
+    fn go(m: &mut Model, section: &str) { while pages().0[m.page] != section { m.next_page(true); } }
+    fn text(m: &Model) -> String { let mut buf = [0u8; 8192]; let n = render(m, &mut buf); String::from_utf8_lossy(&buf[..n]).into_owned() }
+
+    #[test]
+    fn startup_and_notification_pages_have_a_row_per_program() {
+        let mut m = Model::new(Config::new());
+        go(&mut m, "startup");
+        let (rows, n) = m.rows();
+        assert_eq!(n, sex_config::PROGRAMS.len());
+        assert_eq!(rows[2], Row { key: rows[0].key, item: Some(2) });
+        m.move_row(true); m.move_row(true);
+        assert!(text(&m).contains("> Start at login: mesh"), "{}", text(&m));
+        let Change::Set(k, v) = m.step(true, false) else { panic!() };
+        assert_eq!((k, v), (id::STARTUP, 4));
+        m.values.set(k, v).unwrap();
+        assert!(text(&m).contains("< Yes >"));
+        assert!(matches!(m.step(false, false), Change::Set(id::STARTUP, 0)));
+        go(&mut m, "notifications");
+        m.move_row(true); m.move_row(true); m.move_row(true);
+        assert!(matches!(m.step(true, false), Change::Set(id::NOTIFY_HIDDEN, 8)), "abacus is fourth");
+        // Search finds one program's rows on both pages.
+        m.clear_search();
+        for c in b"abacus" { m.type_char(*c); }
+        let (rows, n) = m.rows();
+        assert_eq!((n, KEYS[rows[0].key].id, KEYS[rows[1].key].id), (2, id::STARTUP, id::NOTIFY_HIDDEN));
+    }
+
+    #[test]
+    fn shortcuts_and_about() {
+        let mut m = Model::new(Config::new());
+        go(&mut m, "shortcuts");
+        assert_eq!(m.selected().unwrap().id, id::SHORTCUT_LAUNCHER);
+        assert!(text(&m).contains("< default >"));
+        assert!(matches!(m.step(true, false), Change::Set(id::SHORTCUT_LAUNCHER, 1)));
+        go(&mut m, "setup");
+        m.set_info(b"  Processor: 4 cores\n");
+        assert!(m.info_page() == Some(ABOUT) && text(&m).contains("[About]") && text(&m).contains("Processor: 4 cores"));
+        m.next_page(true);
+        assert!(!text(&m).contains("Processor"));
     }
 
     #[test]
     fn privacy_page_has_program_rows() {
         let mut m = Model::new(Config::new());
-        m.next_page(false);
+        go(&mut m, "privacy");
         assert!(m.on_privacy());
         let mut buf = [0u8; 4096];
         let n = render(&m, &mut buf);

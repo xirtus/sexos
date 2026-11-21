@@ -478,6 +478,16 @@ fn sources(fs: &mut F) -> Vec<Source> {
     }
     out
 }
+/// Tatami's Updates page (`sex_pdx::facts`): `packages=N` and a `package=NAME VERSION`
+/// line per update the kept catalogs offer; nothing without a catalog.
+pub fn waiting(fs: &mut F, out: &mut String) {
+    let s = sources(fs);
+    if s.is_empty() { return; }
+    let h: Vec<Have> = have(fs).into_iter().map(|x| x.1).collect();
+    let up = repo::upgrades(&s, &h);
+    out.push_str(&format!("packages={}\n", up.len()));
+    for pk in up.iter().take(32) { out.push_str(&format!("package={} {}\n", pk.item.name, pk.item.version)); }
+}
 fn updates(fs: &mut F) -> usize {
     let s = sources(fs);
     let h: Vec<Have> = have(fs).into_iter().map(|x| x.1).collect();

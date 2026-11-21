@@ -48,7 +48,7 @@ def main():
   g['wait'](r'\[files.config.set\] caller=3 key=10 value=90 status=0',s,30)
   # Super+Alt+C: the high-contrast filter, kept in settings like the rest.
   s=len(t());press('meta_l','alt','c');g['wait'](r'\[shell.access\] change=View \{ zoom: 4, filter: 1 \}',s,30)
-  g['wait'](r'\[files.config.set\] caller=3 key=34 value=1 status=0',s,30)
+  g['wait'](r'\[files.config.set\] caller=3 key=42 value=1 status=0',s,30)
   assert 'KERNEL PANIC' not in t()
  except Exception:evidence(t());raise
  finally:g['stop']()
@@ -59,7 +59,7 @@ def main():
   g['wait'](r'\[shell.config.changed\] key=3 value=2',0,60)
   g['wait'](r'\[shell.look\] wallpaper=1 name=Dusk night=2 ok=1',0,60)
   # The colour filter came back from settings, with no key pressed.
-  g['wait'](r'\[shell.access.setting\] (key=34 value=1 change|owed)=View \{ zoom: 4, filter: 1 \} status=0x0',0,60)
+  g['wait'](r'\[shell.access.setting\] (key=42 value=1 change|owed)=View \{ zoom: 4, filter: 1 \} status=0x0',0,60)
   g['wait'](r'\[app.private.retired\] target=41 ',0,120)
   g['focus'](153);time.sleep(.5);s=len(t())
   for k in 'run tatami':q.key('spc' if k==' ' else k);time.sleep(.05)

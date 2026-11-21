@@ -883,6 +883,15 @@ pub mod files {
             n
         })
     }
+    /// Tatami's Updates, Storage or About lines (`sex_pdx::facts`, `topic` UPDATES ...),
+    /// copied into `out`; returns the length. Files answers the system's `tatami` alone.
+    pub fn facts(window: &mut Window, topic: u64, out: &mut [u8]) -> Result<usize, Error> {
+        exchange(Some(window), sex_pdx::facts::KIND, b"", topic, 0, |_| {}, |n, data| {
+            let n = (n as usize).min(out.len()).min(data.len());
+            out[..n].copy_from_slice(&data[..n]);
+            n
+        })
+    }
     /// Reads up to `out.len()` bytes of the file from byte `offset`; fewer at its end.
     pub fn read_at(window: &mut Window, path: &[u8], offset: u64, out: &mut [u8]) -> Result<usize, Error> {
         direct::read_at_held(Some(window), path, offset, out)

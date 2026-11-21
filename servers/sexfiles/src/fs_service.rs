@@ -854,6 +854,13 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // A restarted Files may have lost writes its clients' caches still describe.
         if matches!(state, State::Ready(_)) { forget_stats(None); }
     }
+    // Tatami's Updates, Storage and About pages: read only, the system's `tatami` alone.
+    if r.kind == sex_pdx::facts::KIND {
+        if program.is_none() || !program_is(caller, sex_pdx::facts::PROGRAM) { return w::reply(r.seq, w::DENIED, 0); }
+        let fs = match state { State::Ready(fs) => Some(fs), _ => None };
+        let (st, n) = crate::facts::answer(fs, r.offset, &mut region[w::PATH_BYTES..w::CACHE_AT]);
+        return w::reply(r.seq, st, n);
+    }
     if r.kind == w::INSTALL {
         // Works without a filesystem: a live system on another OS's disk has none.
         let path_len = (r.path_len as usize).min(w::PATH_BYTES);
@@ -1351,11 +1358,12 @@ fn prepare(fs: &mut Fs<'static, Disk>, r: w::Request, path: &[u8], data: &mut [u
 /// True when `caller` is a live program run from `/data/NAME`: the folder Files
 /// bound it to, never a name the program claims; and the program came from the system
 /// (the disk program store or `/bin/NAME`), not another file with the same base name.
-pub fn program_is(caller: u32, name: &[u8]) -> bool {
-    let Some(k) = program_index(caller) else { return false };
-    let Some(b) = (unsafe { (*core::ptr::addr_of!(BINDINGS))[k] }) else { return false };
-    let data = sex_pdx::program_store::DATA;
-    program_live(caller, b.task) && b.system && b.root[..b.len].strip_prefix(data) == Some(name)
+pub fn program_is(caller: u32, name: &[u8]) -> bool { program_name(caller, |n| n == name) == Some(true) }
+/// `f` of the NAME a live system program run in row `caller` was bound to (`program_is`).
+pub fn program_name<R>(caller: u32, f: impl FnOnce(&[u8]) -> R) -> Option<R> {
+    let b = unsafe { (*core::ptr::addr_of!(BINDINGS))[program_index(caller)?] }?;
+    (program_live(caller, b.task) && b.system).then_some(())?;
+    b.root[..b.len].strip_prefix(sex_pdx::program_store::DATA).map(f)
 }
 /// Files' own small files (settings): read whole, at most `out.len()` bytes.
 pub fn read_own(path: &[u8], out: &mut [u8]) -> Option<usize> {
