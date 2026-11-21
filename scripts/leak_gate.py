@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault('SEXOS_GATE_BOUND', '5400')
-from install_program import install  # noqa: E402
+from install_program import fits, install  # noqa: E402
 from quil_autosave_gate import boot  # noqa: E402
 
 # The fifteen programs people open most; each must close with F11.
@@ -74,18 +74,42 @@ def main():
     a = p.parse_args()
     tol = {'heap_bytes': a.tol_heap_bytes, 'heap_blocks': a.tol_blocks, 'frames': a.tol_frames, 'row_pages': 0}
     programs = [n for n in a.programs.split(',') if n]
-
+    elfs = {n: (ROOT / 'iso_root/programs' / n).read_bytes() for n in ['swatch', *programs]}
+    # The disk program store ends where Files' file system begins (63 MiB): programs that
+    # do not all fit are measured over more than one boot, each with as many as fit.
+    batches = [[]]
+    for n in programs:
+        if batches[-1] and not fits([(m, elfs[m]) for m in ['swatch', *batches[-1], n]]):
+            batches.append([])
+        batches[-1].append(n)
     a.out.mkdir(parents=True, exist_ok=True)
-    disk = a.out / 'nvme.img'
+    record = {'tolerance': tol, 'cycles': a.cycles, 'warm': a.warm, 'boots': batches,
+              'programs': {}, 'services': {}, 'samples': []}
+    out = a.out / 'leak.json'
+    found = []
+    overall = {}
+    for i, batch in enumerate(batches):
+        tag = 'leak' if i == 0 else f'leak{i + 1}'
+        grew = run(a, tol, batch, a.services and i == len(batches) - 1, record, out, found, tag, elfs)
+        overall = {k: overall.get(k, 0) + v for k, v in grew.items()}
+    record['overall'] = overall
+    record['ok'] = not found
+    record['leaks'] = found
+    out.write_text(json.dumps(record, indent=1))
+    assert not found, 'memory did not come back: ' + '; '.join(found)
+    print({'ok': True, 'programs': len(programs), 'boots': len(batches), 'services': a.services, 'overall': overall})
+
+
+def run(a, tol, programs, services, record, out, found, tag, elfs):
+    """One boot: install Swatch and `programs`, measure them (and the services), return
+    the growth from the first sample to the last."""
+    disk = a.out / f'{tag}-nvme.img'
     shutil.copyfile(a.source_disk, disk)
     with disk.open('r+b') as f:
         f.truncate(max(f.seek(0, 2), 1024 ** 3))
-    install(disk, [(n, (ROOT / 'iso_root/programs' / n).read_bytes()) for n in ['swatch', *programs]])
-    g = boot(a.iso, disk, a.out, 'leak', a.resolution)
+    install(disk, [(n, elfs[n]) for n in ['swatch', *programs]])
+    g = boot(a.iso, disk, a.out, tag, a.resolution)
     t, q = g['text'], g['q']
-    record = {'tolerance': tol, 'cycles': a.cycles, 'warm': a.warm, 'programs': {}, 'services': {}, 'samples': []}
-    out = a.out / 'leak.json'
-    found = []
 
     def keys(text):
         for k in text:
@@ -157,21 +181,16 @@ def main():
     try:
         g['wait'](r'\[app.private.retired\] target=41 ', 0, 120)
         time.sleep(2)
-        start = sample('start')
+        start = sample(f'{tag}:start')
         for name in programs:
             measure('programs', name, lambda name=name: cycle(name), a.cycles)
-        if a.services:
+        if services:
             for name, pd in SERVICES:
                 measure('services', name, lambda name=name, pd=pd: crash(name, pd), a.service_cycles)
-        end = sample('end')
-        record['overall'] = growth(start, end)
+        end = sample(f'{tag}:end')
         for bad in ('KERNEL PANIC', 'panicked at'):
             assert bad not in t(), bad
-        record['ok'] = not found
-        record['leaks'] = found
-        out.write_text(json.dumps(record, indent=1))
-        assert not found, 'memory did not come back: ' + '; '.join(found)
-        print({'ok': True, 'programs': len(programs), 'services': a.services, 'overall': record['overall']})
+        return growth(start, end)
     except BaseException as e:
         record['ok'] = False
         record['why'] = repr(e)

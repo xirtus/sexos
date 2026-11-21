@@ -13,7 +13,7 @@ from quil_autosave_gate import boot
 ROOT=Path(__file__).resolve().parents[1]
 PROGRAMS=['fortune','mesh','gestalt','jot']
 # The serial line a program says it is ready with, where it is not [NAME.ready].
-TAG={'mesh':'monitor.ready','gestalt':'shapes.ready','kaleidoscope':'web.ready','spreadeagle':'spreadeagle.open','assuit':'assuit.open'}
+TAG={'mesh':'monitor.ready','kaleidoscope':'web.ready','spreadeagle':'spreadeagle.open','assuit':'assuit.open'}
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--binding',type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800')
  p.add_argument('--runs',type=int,default=3);p.add_argument('--programs',default=','.join(PROGRAMS),help='comma-separated, e.g. spreadeagle,kaleidoscope (#305)');p.add_argument('--max-ms',type=float,default=30000.0);a=p.parse_args()
