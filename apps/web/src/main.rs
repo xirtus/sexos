@@ -278,6 +278,9 @@ struct Browser {
     panel: bool,
     /// Keep the window's tabs for next time (Kaleidoscope itself, not the games).
     keep_session: bool,
+    /// The waiting half of a split (or the side panel) is in the fields for its timers;
+    /// drawing paints only its column.
+    visiting: bool,
     /// The session as last kept, so an unchanged one isn't written again.
     session_saved: String,
     /// Installed extensions.
@@ -570,7 +573,7 @@ impl Browser {
 
     /// When the next timer of any page (shown or framed) is due.
     fn next_due(&self) -> Option<u64> {
-        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.profile.due).chain(self.code_store.due).chain(self.ws_due()).chain(self.backgrounds_due()).min()
+        self.frames.iter().filter_map(|f| f.timer).chain(self.timer).chain(self.waiting_half().and_then(|o| self.tabs[o].timer())).chain(self.profile.due).chain(self.code_store.due).chain(self.ws_due()).chain(self.backgrounds_due()).min()
     }
 
     /// Runs the timers that are due, on every page.
@@ -582,6 +585,8 @@ impl Browser {
         if self.code_store.due.is_some_and(|d| d <= now) { self.code_store.save(&mut self.window, &mut self.code_cache.borrow_mut()); }
         if self.timer.is_some_and(|t| t <= now) { self.tick(); }
         if self.backgrounds_due().is_some_and(|t| t <= now) { self.backgrounds_tick(); }
+        // The other half of a split view, or the side panel, keeps running beside the page.
+        if let Some(o) = self.waiting_half().filter(|o| self.tabs[*o].timer().is_some_and(|t| t <= now)) { self.visit(o, |b| b.tick()); }
         let mut i = 0;
         while i < self.frames.len() {
             if self.frames[i].timer.is_some_and(|t| t <= now) { self.enter(i); self.tick(); self.leave(i); }
@@ -687,6 +692,14 @@ impl Browser {
         // A page in a frame is drawn as part of the page around it.
         if self.in_frame.is_some() { self.frame_dirty = true; return; }
         if self.surface.empty() { return; }
+        // The waiting half of a split, visited for its timers: just its column.
+        if self.visiting {
+            let (x, w) = self.pane();
+            let pixels = &mut self.window.pixels()[..self.surface.pixels];
+            if let Some(mut t) = sex_web::column(pixels, self.surface.w, self.surface.h, self.scroll, x, w) { sex_web::paint(&self.page, &mut self.fonts, &mut t, None); }
+            self.window.show_pixels(self.surface.w as usize, self.surface.h as usize);
+            return;
+        }
         let start = sex_pdx::get_ticks();
         self.paint_split();
         let pixels = &mut self.window.pixels()[..self.surface.pixels];
@@ -855,7 +868,7 @@ impl Browser {
             return self.open(&target, false);
         }
         // The side panel's address opens it (or changes what it shows) instead.
-        if let Some(what) = url.strip_prefix("about:sidepanel") {
+        if let Some(what) = url.strip_prefix("about:sidepanel").filter(|_| !self.visiting) {
             let what = what.strip_prefix("?url=").map(extensions::decode).unwrap_or_else(|| String::from(panel::BOOKMARKS));
             return self.panel_show(&what);
         }
@@ -2155,7 +2168,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", session_saved: String::new() };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, session_saved: String::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();

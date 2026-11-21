@@ -56,6 +56,9 @@ pub struct Tab {
 }
 
 impl Tab {
+    /// When the tab's next timer is due, while it waits.
+    pub fn timer(&self) -> Option<u64> { self.timer }
+
     /// An empty tab, before its first page.
     pub fn blank(b: &Browser) -> Tab {
         let view = b.view;
@@ -196,6 +199,30 @@ impl Browser {
         sex_pdx::serial_record!("[web.tab.closed] index={} count={} shown={}", going, self.tabs.len(), self.active);
         self.save_session();
         self.draw();
+    }
+
+    /// The tab beside the shown one that is drawn too: the other half of a split view,
+    /// or the side panel's page.
+    pub(super) fn waiting_half(&self) -> Option<usize> {
+        let (l, r) = self.split_pair()?;
+        if self.in_frame.is_some() || self.visiting { return None; }
+        Some(if self.active == l { r } else { l })
+    }
+
+    /// Runs `f` with tab `i` in the browser's fields, as if shown, then puts the shown
+    /// tab back. Its drawing goes to its own column only.
+    pub(super) fn visit<T>(&mut self, i: usize, f: impl FnOnce(&mut Self) -> T) -> T {
+        let back = self.active;
+        self.swap_tab(back);
+        self.swap_tab(i);
+        self.active = i;
+        self.visiting = true;
+        let out = f(self);
+        self.visiting = false;
+        self.swap_tab(i);
+        self.swap_tab(back);
+        self.active = back;
+        out
     }
 
     /// Takes the shown page's frames, sockets, sound and downloads down, as it goes.

@@ -5,7 +5,7 @@ page beside it hears `resize` with innerWidth 362 px less. A press on the panel 
 it the keyboard, and a link followed there opens in the page beside it. New tabs open
 beside the panel, and the strip leaves the panel's page out. An extension's
 `side_panel` page opens there through chrome.sidePanel.open() (here from its options
-page), laid out to the panel's width. Ctrl+Shift+B shows the bookmarks again, and once
+page), laid out to the panel's width; its timers keep running beside the page. Ctrl+Shift+B shows the bookmarks again, and once
 more closes the panel: the page takes the width back.
 
 The test site: /p/<name> logs `vt <name> ready|resize <innerWidth>` to the console;
@@ -113,6 +113,9 @@ def main():
   s=go('kaleidoscope-extension://recolour-sample/options.html')
   g['wait'](rf'\[web.console\] level=0 panel ready {PANEL} function {re.escape(panel)}\n',s,120)
   g['wait'](rf'\[web.panel\] on=1 w={PANEL} url={re.escape(panel)}\n',s,60)
+  # Its timer keeps running beside the page, which has the keyboard.
+  m=g['wait'](r'\[web.console\] level=0 panel tick 3\n',s,60)
+  assert not re.search(r'\[web.split.focus\]|\[web.tab.shown\] index=3 ',t()[t().index('[web.panel] on=1 w=360 url=kaleidoscope-extension',s):]),'the panel took the keyboard'
   time.sleep(2);shot=a.out/'extension-panel.ppm';q.cmd('screendump',{'filename':str(shot)});time.sleep(1)
   # Ctrl+Shift+B shows the bookmarks there instead; once more closes it.
   s=chord('ctrl','shift','b');g['wait'](rf'\[web.panel\] on=1 w={PANEL} url=about:bookmarks\n',s,60)
