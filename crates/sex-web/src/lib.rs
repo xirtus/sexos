@@ -22,6 +22,7 @@ pub mod canvas;
 pub mod svg;
 pub mod mse;
 pub mod reader;
+pub mod session;
 pub use sex_image::Image;
 
 /// Glyph bitmaps kept between paints.

@@ -24,6 +24,7 @@ mod shields;
 mod extensions;
 mod tabs;
 mod panel;
+mod session;
 mod viewport;
 mod websocket;
 mod code_store;
@@ -275,6 +276,10 @@ struct Browser {
     /// The side panel is open (Ctrl+Shift+B): its page waits in the last tab slot,
     /// out of the strip, as the right of a split.
     panel: bool,
+    /// Keep the window's tabs for next time (Kaleidoscope itself, not the games).
+    keep_session: bool,
+    /// The session as last kept, so an unchanged one isn't written again.
+    session_saved: String,
     /// Installed extensions.
     extensions: extensions::Extensions,
     /// Requests Shields blocked for the shown page (and its frames).
@@ -1071,6 +1076,7 @@ impl Browser {
         self.focus = None;
         if self.in_frame.is_some() { return; }
         self.status = None;
+        self.save_session();
         // A private tab leaves no history.
         if self.jarbox != profile::Jarbox::Private {
             self.profile.visit(&self.url);
@@ -2149,7 +2155,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", session_saved: String::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();
@@ -2166,8 +2172,12 @@ pub extern "C" fn _start() -> ! {
     let cores = sex_app::thread::cores();
     sex_gl::set_parallel(sex_app::thread::parallel, cores);
     sex_pdx::serial_record!("[web.cores] cores={}", cores);
-    let first = given.split_ascii_whitespace().next().unwrap_or(first_page()).to_string();
-    b.open(&first, false);
+    // Started without an address, Kaleidoscope opens the tabs it had last time.
+    let address = given.split_ascii_whitespace().find(|a| !a.starts_with("--"));
+    if address.is_some() || !b.keep_session || b.jarbox == profile::Jarbox::Private || !b.restore_session() {
+        let first = address.unwrap_or(first_page()).to_string();
+        b.open(&first, false);
+    }
     let registered = sex_app::search::register("kaleidoscope", &[sex_app::search::KIND_HISTORY, sex_app::search::KIND_BOOKMARK]);
     sex_pdx::serial_record!("[web.ready] target={} task={}", b.window.target, b.window.task);
     sex_pdx::serial_record!("[web.voyeur.register] sent={}", registered as u8);

@@ -51,6 +51,8 @@ pub struct Tab {
     /// The tab group this slot's tab is in. It stays with the slot, not the page,
     /// so it isn't swapped when the tab shows.
     pub group: Option<usize>,
+    /// A restored tab's address, loaded when it is first shown.
+    pub restore: Option<String>,
 }
 
 impl Tab {
@@ -65,7 +67,7 @@ impl Tab {
             url: String::new(), history: Vec::new(), forward: Vec::new(), scroll: 0, focus: None, hover_css: false,
             import_map: Vec::new(), script_scroll: 0, view, frames: Vec::new(), images: Vec::new(), svgs: Vec::new(),
             moving: Vec::new(), frames_shown: 0, find: None, find_at: 0, marks: Vec::new(), title: String::new(), laid_zoom: sex_html::style::zoom(), blocked: 0,
-            jar: Default::default(), storage: Default::default(), jarbox: Jarbox::Own, group: None,
+            jar: Default::default(), storage: Default::default(), jarbox: Jarbox::Own, group: None, restore: None,
         }
     }
 }
@@ -142,6 +144,9 @@ impl Browser {
         let title: Vec<u8> = self.page.title.bytes().take(16).collect();
         self.window.title(if title.is_empty() { b"Kaleidoscope" } else { &title });
         sex_pdx::serial_record!("[web.tab.shown] index={} count={} url={}", i, self.tabs.len(), self.url);
+        // A restored tab loads the first time it shows.
+        if let Some(url) = self.tabs[i].restore.take() { return self.open(&url, false); }
+        self.save_session();
         self.draw();
     }
 
@@ -189,6 +194,7 @@ impl Browser {
         // The last private tab took the private box's cookies and storage with it.
         if self.jarbox != Jarbox::Private && !self.tabs.iter().enumerate().any(|(i, t)| i != self.active && t.jarbox == Jarbox::Private) { self.profile.forget_private(); }
         sex_pdx::serial_record!("[web.tab.closed] index={} count={} shown={}", going, self.tabs.len(), self.active);
+        self.save_session();
         self.draw();
     }
 
@@ -263,6 +269,7 @@ impl Browser {
                 sex_pdx::serial_record!("[web.group.left] group={} from={} to={}", g, at, self.active);
                 self.prune_groups();
                 // A split that ended gives the shown page the whole width again.
+                self.save_session();
                 return self.refit();
             }
             None => {
@@ -275,6 +282,7 @@ impl Browser {
                 self.tabs[at].group = Some(self.groups.len() - 1);
             }
         }
+        self.save_session();
         self.draw();
     }
 
@@ -292,6 +300,7 @@ impl Browser {
         }
         self.groups[g].folded = on;
         sex_pdx::serial_record!("[web.group.folded] group={} on={} tabs={}", g, on as u8, self.tabs.iter().filter(|t| t.group == Some(g)).count());
+        self.save_session();
         self.draw();
     }
 
