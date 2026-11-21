@@ -1296,6 +1296,7 @@ pub mod nvidia_gpu;
 pub mod bt_bonds;
 pub mod bt_audio;
 pub mod bt_ui;
+pub mod usb_audio;
 pub mod network_config;
 
 pub mod desktop_style;

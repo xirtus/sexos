@@ -109,6 +109,10 @@ def main():
     except Exception as e:
         error = e
         text = g['text']() if g else ''
+        # A boot that never finished: show where it stopped.
+        serial = a.out / 'raid-serial.log'
+        if not g and serial.exists():
+            print('\n'.join(serial.read_text(errors='replace').splitlines()[-80:]))
     finally:
         if g: g['stop']()
     after = (sha(d0), sha(d1))
