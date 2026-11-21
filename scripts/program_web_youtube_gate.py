@@ -89,7 +89,8 @@ def main():
   console(r'done (\S+)',s,60)
   text=t()[s:];assert 'web.mse.starved' not in text and 'web.mse.failed' not in text and 'web.mse.refused' not in text and 'play.sound.stalled' not in text
   time.sleep(1)
-  found=segments(wav,split=True)
+  # 600 and 750 Hz are only 25% apart, under segments' default 30% cut.
+  found=segments(wav,split=True,change=0.12)
   # Gapless needs real time: under TCG, AV1 (dav1d in plain C) decodes too slowly to
   # keep the sound ring fed, so there the tones only have to be mostly there.
   low=3.5 if os.environ.get('SEXOS_GATE_ACCEL')=='kvm' else 2.5
