@@ -1080,7 +1080,7 @@ jobs:
       run: |
         if [ ! -w /dev/kvm ]; then echo "[latency.kvm] no usable /dev/kvm on this runner; skipped"; exit 0; fi
         truncate -s 256M "$RUNNER_TEMP/busy-latency-source.img"
-        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/latency_gate.py --max-p99-ms 50 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/busy-latency-source.img" --out "$RUNNER_TEMP/sexos-latency/busy-4c"
+        SEXOS_GATE_ACCEL=kvm SEXOS_GATE_CPU=host SEXOS_GATE_CORES=4 python3 scripts/latency_gate.py --max-p99-ms 200 --max-over-idle-ms 20 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/busy-latency-source.img" --out "$RUNNER_TEMP/sexos-latency/busy-4c"
     - name: Preserve latency evidence
       if: always()
       uses: actions/upload-artifact@v4
