@@ -9,8 +9,11 @@ notification once, as a laptop's EC event method does for the Fn key.
 Boot 1 checks: the ACPI service finds every device and reports 50%, 2:00 left, 96% health,
 on battery; Notify reaches the service (it used to stop the interpreter) and raises the
 brightness; the panel shows "50%  2:00 left"; the Shell sees the lid close and open; the
-launcher's Power Saver and Brightness Down reach the kernel and the firmware; the power
+launcher's Power Saver, Brightness Down and Battery Stop at 80% reach the kernel and the firmware; the power
 button opens the power dialog instead of cutting power, and Enter on it shuts down cleanly.
+An Alienware WMI device (AWCC) is found with its fans, sensors and profiles, its hotkey
+event decodes to mic mute, and Power Saver also puts the fans in the firmware's quiet
+profile.
 Boot 2 (-DTHERMAL_TRIP): the zone passes its critical trip point and the machine shuts
 itself down cleanly, Files flushing first.
 """
@@ -27,6 +30,14 @@ def ssdt(out,thermal):
  subprocess.run(['iasl',*(['-DTHERMAL_TRIP']if thermal else[]),'-p',str(aml.with_suffix('')),str(ROOT/'tests/acpi/laptop_gate_ssdt.asl')],check=True,stdout=subprocess.DEVNULL)
  return aml
 
+def dell_tokens(out):
+ """SMBIOS type 0xDA (Dell token table) with the battery charge-mode tokens, for QEMU's -smbios file=."""
+ import struct
+ toks=[(0x0341,1),(0x0342,1),(0x0343,1),(0x0346,1),(0x0349,0),(0x034A,0),(0xFFFF,0)]
+ body=struct.pack('<HBI',0xB2,0xDA,0x20003)+b''.join(struct.pack('<HHH',t,t if t!=0xFFFF else 0,v)for t,v in toks)
+ data=bytes([0xDA,4+len(body)])+struct.pack('<H',0xDA00)+body+b'\0\0'
+ f=out/'dell_tokens.smbios';f.write_bytes(data);return f
+
 def stick(out):
  f=out/'laptop-stick.img'
  with f.open('wb')as h:h.truncate(4<<20)
@@ -36,7 +47,7 @@ def launch(iso,disk,out,tag,thermal):
  serial=out/f'{tag}-serial.log';debug=out/f'{tag}-debugcon.log';sock=Path('/tmp')/f'sex-laptop-{os.getpid()}-{tag}.sock'
  for f in(serial,debug):f.unlink(missing_ok=True)
  cmd=['qemu-system-x86_64','-M','q35','-cpu','max,+pku,+rdseed','-smp',os.environ.get('SEXOS_GATE_CORES','1'),'-m','512M','-vga','none','-device','VGA,xres=1280,yres=800',
-      '-acpitable',f'file={ssdt(out,thermal)}','-chardev',f'file,id=sxdbg,path={debug}','-device','isa-debugcon,iobase=0x402,chardev=sxdbg',
+      '-acpitable',f'file={ssdt(out,thermal)}','-smbios','type=1,manufacturer=Alienware,product=Alienware x17 R1,sku=0A69','-smbios',f'file={dell_tokens(out)}','-chardev',f'file,id=sxdbg,path={debug}','-device','isa-debugcon,iobase=0x402,chardev=sxdbg',
       '-device','nec-usb-xhci,id=xhci','-device','usb-tablet,bus=xhci.0','-cdrom',str(iso),
       # A USB stick: its port goes to U3 while the machine sleeps (the tablet's stays up).
       '-drive',f'if=none,id=stick,file={stick(out)},format=raw','-device','usb-storage,bus=xhci.0,drive=stick','-drive',f'if=none,id=nvm,file={disk},format=raw',
@@ -93,6 +104,21 @@ def main():
   g['wait'](r'\[sexacpi\.touchpad\.sent\] pci=00:15\.1 status=0x0')
   g['wait'](r'\[sexinput\.touchpad\.found\] pci=00:15\.1 address=0x2c khz=400 hid_register=0x20')
   g['wait'](r'\[sexinput\.touchpad\.absent\] reason=controller_not_leased')
+  # Alienware Command Center over WMI: the fan controller and the hotkey event block.
+  g['wait'](r'\[sexacpi\.wmi\] path=\\_SB\.AMW0 guid=A70591CE-A997-11DA-B012-B622A1EF5492 name=alienware_wmax id=4158 instances=1 flags=0x2')
+  g['wait'](r'\[sexacpi\.wmi\] path=\\_SB\.AMW0 guid=9DBB5994-A997-11DA-B012-B622A1EF5492 name=dell_event id=d000 instances=1 flags=0x8')
+  result['awcc']=g['wait'](r'\[sexacpi\.awcc\] path=\\_SB\.AMW0 method=WMAX description=0x04000302 fans=2 sensors=3 profiles=3 current=balanced')[0]
+  g['wait'](r'\[sexacpi\.awcc\.fan\] id=0x32 name=cpu rpm=2400 min=0 max=5600')
+  g['wait'](r'\[sexacpi\.awcc\.fan\] id=0x33 name=gpu rpm=2100 min=0 max=5900')
+  g['wait'](r'\[sexacpi\.awcc\.temp\] id=0x01 name=cpu celsius=41')
+  g['wait'](r'\[sexacpi\.awcc\.profile\] id=0xa3 kind=quiet')
+  # SMBIOS from the kernel: the machine model, and Dell's token table for charge modes.
+  g['wait'](r'\[acpi\.smbios\] version=\d+\.\d+ table=0x[0-9a-f]+ length=\d+ readable=1')
+  g['wait'](r'\[sexacpi\.smbios\] vendor=Alienware product=Alienware x17 R1 sku=0A69 bios=[^ ]+ dell_tokens=6 x17r1=1')
+  result['charge']=g['wait'](r'\[sexacpi\.charge\.state\] modes=primarily_ac,standard,adaptive,custom mode=standard start=50 end=90')[0]
+  g['wait'](r'\[sexacpi\.charge\] path=\\_SB\.DWMI method=WMBC buffer=40 descriptor=1')
+  g['wait'](r'\[sexacpi\.vendor\] awcc=1 hotkeys=1 charge=1 smbios=\d+')
+  g['wait'](r'\[sexacpi\.hotkey\] key=mic_mute code=0x0000 act=1')
   sensors=g['wait'](r'\[sexacpi\.sensors\] battery=50 charging=0 minutes=120 health=96 ac=0 lid=1 temp_dk=3182 crit_dk=3732 brightness=\d+ critical=0')
   # The brightness-up key, as firmware Notify: it used to stop the interpreter.
   g['wait'](r'\[sexacpi\.notify\] path=\\_SB\.PCI0\.GFX0\.DD1F value=0x86 kind=backlight')
@@ -131,10 +157,18 @@ def main():
   s=len(g['text']());palette_select(key,'PowerSaver',commands);g['q'].key('ret')
   g['wait'](r'\[shell\.laptop\.command\] what=profile_saver ok=1',s,30)
   result['profile']=g['wait'](r'\[acpi\.profile\] profile=saver epp=0xc0 ([^\n]*)',s,30)[1]
+  # The fans follow: the firmware's quiet profile, read back from the controller.
+  g['wait'](r'\[sexacpi\.awcc\.set\] desktop=saver firmware=0xa3 kind=quiet ok=1',s,30)
+  g['wait'](r'\[sexacpi\.awcc\.reading\] rpm=cpu:2400 gpu:2100 celsius=cpu:41 gpu:38 front:-1 profile=quiet',s,30)
   s=len(g['text']());palette_select(key,'BrightnessDown',commands);g['q'].key('ret')
   g['wait'](r'\[shell\.laptop\.command\] what=brightness_down ok=1',s,30)
   g['wait'](r'\[sexacpi\.backlight\.set\] level=50 by=desktop bcm=1 bqc=50',s,30)
   g['wait'](r'\[sexacpi\.sensors\] [^\n]*brightness=50 ',s,30)
+  # Battery Stop at 80%: Dell custom charging, 70-80%, read back from the tokens.
+  s=len(g['text']());palette_select(key,'ChargeLimit',commands);g['q'].key('ret')
+  g['wait'](r'\[shell\.laptop\.command\] what=charge_limit_80 ok=1',s,30)
+  g['wait'](r'\[sexacpi\.charge\.set\] value=80 mode=custom ok=1',s,30)
+  result['charge_limit']=g['wait'](r'\[sexacpi\.charge\.state\] modes=[^ ]+ mode=custom start=70 end=80',s,30)[0]
   fw=g['firmware']()
   if fw.count('B')<2:raise RuntimeError(f'_BCM did not run twice: {fw!r}')
   if fw.count('P')<2:raise RuntimeError(f'touchpad and controller _PS0 did not run: {fw!r}')

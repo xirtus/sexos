@@ -8,6 +8,14 @@
 //! reports. Unplugging releases whatever that device held.
 
 use sex_pdx::serial_record as log;
+// Isochronous endpoints and camera detection (pure, host-tested); streaming and sexuvc's
+// binding build on them.
+#[allow(dead_code)]
+#[path = "isoch.rs"]
+mod isoch;
+#[allow(dead_code)]
+#[path = "uvc_scan.rs"]
+mod uvc_scan;
 use crate::xhci::{self, page, trb, Event, Failure, Ring, Xhci, CC_SHORT_PACKET, CC_SUCCESS};
 use crate::hid::{PointerLayout, Pointer};
 #[path = "ether.rs"]
@@ -304,6 +312,15 @@ impl Usb {
         let cfg = &cfg[..got.min(2048)];
         log!("[sexusb.device] slot={} port={} route={:#x} depth={} speed={} vendor={:#06x} product={:#06x} class={}",
             slot, root_port, route, depth, speed_name(speed), self.dev[i].vendor, self.dev[i].product, class);
+        // A webcam (UVC): logged so the first boot names the built-in camera and what it offers.
+        if let Some(cam) = uvc_scan::scan(cfg) {
+            log!("[sexusb.uvc] slot={} vendor={:#06x} product={:#06x} control={} stream={} alts={} max_payload={} bulk={} more_streams={}",
+                slot, self.dev[i].vendor, self.dev[i].product, cam.control_iface, cam.stream_iface, cam.alt_count,
+                cam.max_payload(speed), cam.bulk() as u8, cam.more_streams);
+            for f in cam.formats() {
+                log!("[sexusb.uvc.format] slot={} index={} format={} frames={} max={}x{}", slot, f.index, f.format.name(), f.frames, f.max_w, f.max_h);
+            }
+        }
 
         // Choose interfaces we drive: HID with an interrupt IN endpoint, or a hub.
         struct Pick { iface: u8, sub: u8, proto: u8, ep: u8, mps: u16, interval: u8, report_len: u16, hub: bool }

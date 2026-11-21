@@ -7,3 +7,7 @@ description = "Laptop power model: embedded controller protocol, battery, backli
 
 [lib]
 path = "src/lib.rs"
+
+[dev-dependencies]
+# The vendored interpreter (workspace patch) runs the fixture AML in tests/awcc_aml.rs.
+acpi = { version = "6.1.1", default-features = false, features = ["alloc", "aml"] }
