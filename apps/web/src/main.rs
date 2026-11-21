@@ -265,6 +265,8 @@ struct Browser {
     shields: shields::Shields,
     /// Tabs down the left side instead of across the bar (Ctrl+Shift+,).
     vertical: bool,
+    /// Tab groups; each tab slot names its own.
+    groups: Vec<sex_web::TabGroup>,
     /// Two tabs side by side (left, right), the shown one with the keyboard (Ctrl+Shift+\).
     split: Option<(usize, usize)>,
     /// Installed extensions.
@@ -673,6 +675,7 @@ impl Browser {
         };
         let labels = self.tab_labels();
         let colours = self.tab_colours();
+        let group_of = self.group_of();
         let mark = if self.profile.bookmarked(&self.url) && self.editing.is_none() { "★ " } else { "" };
         // A private or container tab says so in the bar.
         let held = match self.jarbox.name() { Some(n) if self.editing.is_none() => alloc::format!("{n} · "), _ => String::new() };
@@ -686,6 +689,7 @@ impl Browser {
             shields: Some((self.shields.up(&self.url), self.blocked)).filter(|(up, n)| self.url.starts_with("http") && (*n > 0 || !up)),
             side: self.side(),
             pane: if self.split_pair().is_some() { self.pane() } else { (0, 0) },
+            group_of: &group_of, groups: &self.groups,
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
@@ -1877,9 +1881,10 @@ impl Browser {
         let side = self.side();
         if side > 0 && (p.x as i32) < side && (p.y as i32) >= BAR {
             if let Kind::Down { button } = p.kind {
-                match (sex_web::side_tab_at(side, self.tabs.len(), p.x as i32, p.y as i32), button) {
-                    (Some(i), 1) => { self.show_tab(i); self.close_tab(); }
-                    (Some(i), 0) => self.show_tab(i),
+                match (self.side_at(p.x as i32, p.y as i32), button) {
+                    (Some(sex_web::Slot::Tab(i)), 1) => { self.show_tab(i); self.close_tab(); }
+                    (Some(sex_web::Slot::Tab(i)), 0) => self.show_tab(i),
+                    (Some(sex_web::Slot::Group(g)), 0) => self.fold_group(g),
                     _ => {}
                 }
             }
@@ -1898,8 +1903,9 @@ impl Browser {
         let (x, y) = (p.x as i32 - px0, p.y as i32 - BAR);
         if p.y >= 0 && (p.y as i32) < BAR && matches!(p.kind, Kind::Down { button: 0 | 1 }) {
             match (self.tab_at(p.x as i32, p.y as i32), p.kind) {
-                (Some(i), Kind::Down { button: 1 }) => { self.show_tab(i); self.close_tab(); }
-                (Some(i), _) => self.show_tab(i),
+                (Some(sex_web::Slot::Tab(i)), Kind::Down { button: 1 }) => { self.show_tab(i); self.close_tab(); }
+                (Some(sex_web::Slot::Tab(i)), _) => self.show_tab(i),
+                (Some(sex_web::Slot::Group(g)), _) => self.fold_group(g),
                 (None, _) => { self.editing = Some(String::new()); self.suggestions.clear(); self.chosen = None; self.draw(); }
             }
             return;
@@ -2116,7 +2122,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new() };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();

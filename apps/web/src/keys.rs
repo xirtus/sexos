@@ -7,7 +7,9 @@
 //! Ctrl+R reload, Ctrl+J downloads, Ctrl+Shift+Backspace forget this site's cookies and storage,
 //! Ctrl+Shift+S Shields down (or up) for this site, Ctrl+Shift+R reader view,
 //! Ctrl+Shift+P a private tab, Ctrl+Shift+1..4 a tab in a container, Ctrl+Shift+,
-//! tabs down the side (vertical tabs) or back across the bar, Ctrl+Shift+\\ split view.
+//! tabs down the side (vertical tabs) or back across the bar, Ctrl+Shift+\\ split view,
+//! Ctrl+Shift+G the tab into a new group or out of its group (a click on a group's
+//! label folds it).
 
 use super::{nav, profile::Jarbox, Browser, Nav};
 use sex_web::sex_html;
@@ -30,6 +32,8 @@ impl Browser {
             0x33 if key.shift => { let on = !self.vertical; self.set_vertical(on) }
             // Ctrl+Shift+\: split view, the shown tab beside the next one, or one again.
             0x2B if key.shift => self.toggle_split(),
+            // Ctrl+Shift+G: the tab into a new group (as Chrome's "Add tab to new group"), or out.
+            0x22 if key.shift => self.toggle_group(),
             0x11 => self.close_tab(),
             0x51 => { let n = (self.active + 1) % self.tabs.len(); self.show_tab(n); }
             0x49 => { let n = (self.active + self.tabs.len() - 1) % self.tabs.len(); self.show_tab(n); }
