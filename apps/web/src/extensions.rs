@@ -420,6 +420,11 @@ impl Browser {
                 for (label, page) in [("Popup", &m.popup), ("Options", &m.options_page)] {
                     if let Some(p) = page { pages.push_str(&alloc::format!(" · <a href='{}{}/{}'>{}</a>", SCHEME, esc(&e.id), esc(p), label)); }
                 }
+                // Its side panel page opens in the browser's side panel.
+                if let Some(p) = &m.side_panel {
+                    let url = alloc::format!("{}{}/{}", SCHEME, e.id, p);
+                    pages.push_str(&alloc::format!(" · <a href='about:sidepanel?url={}'>Side panel</a>", esc(&super::keys::encode(&url))));
+                }
             }
             rows.push_str(&alloc::format!(
                 "<li style='margin:10px 0'><b>{}</b> {} <span style='color:#5f6368'>MV{}</span><br>{}<br><span style='color:#5f6368'>{}</span><br>\

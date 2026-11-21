@@ -23,6 +23,7 @@ mod profile;
 mod shields;
 mod extensions;
 mod tabs;
+mod panel;
 mod viewport;
 mod websocket;
 mod code_store;
@@ -38,6 +39,8 @@ use sex_web::{Fonts, BAR};
 const SPLIT_MIN: i32 = 320;
 /// The line between the halves of a split view.
 const SPLIT_GAP: i32 = 2;
+/// The side panel's width, at the right of the window.
+const PANEL_W: i32 = 360;
 
 const WELCOME: &str = include_str!("welcome.html");
 /// Pages built into the program, by `about:` address. The games are plain HTML and
@@ -265,8 +268,13 @@ struct Browser {
     shields: shields::Shields,
     /// Tabs down the left side instead of across the bar (Ctrl+Shift+,).
     vertical: bool,
+    /// Tab groups; each tab slot names its own.
+    groups: Vec<sex_web::TabGroup>,
     /// Two tabs side by side (left, right), the shown one with the keyboard (Ctrl+Shift+\).
     split: Option<(usize, usize)>,
+    /// The side panel is open (Ctrl+Shift+B): its page waits in the last tab slot,
+    /// out of the strip, as the right of a split.
+    panel: bool,
     /// Installed extensions.
     extensions: extensions::Extensions,
     /// Requests Shields blocked for the shown page (and its frames).
@@ -596,17 +604,27 @@ impl Browser {
 
     /// The two tabs of a split view (left, right), while the window has room for both.
     fn split_pair(&self) -> Option<(usize, usize)> {
-        self.split.filter(|_| self.surface.w - self.side() >= 2 * SPLIT_MIN)
+        let need = if self.panel { SPLIT_MIN + SPLIT_GAP + PANEL_W } else { 2 * SPLIT_MIN };
+        self.split.filter(|_| self.surface.w - self.side() >= need)
+    }
+
+    /// The window columns (x, width) of a split's left and right, while there is one:
+    /// halves, or the page beside the side panel.
+    fn columns(&self) -> Option<((i32, i32), (i32, i32))> {
+        self.split_pair()?;
+        let side = self.side();
+        let rest = (self.surface.w - side).max(0);
+        let w = if self.panel { rest - SPLIT_GAP - PANEL_W } else { (rest - SPLIT_GAP) / 2 };
+        Some(((side, w), (side + w + SPLIT_GAP, rest - w - SPLIT_GAP)))
     }
 
     /// The window columns (x, width) the shown page takes: right of the tab strip,
     /// or its half of a split view.
     fn pane(&self) -> (i32, i32) {
         let side = self.side();
-        let rest = (self.surface.w - side).max(0);
-        match self.split_pair() {
-            Some((_, r)) => { let w = (rest - SPLIT_GAP) / 2; if self.active == r { (side + w + SPLIT_GAP, rest - w - SPLIT_GAP) } else { (side, w) } }
-            None => (side, rest),
+        match (self.split_pair(), self.columns()) {
+            (Some((_, r)), Some((left, right))) => if self.active == r { right } else { left },
+            _ => (side, (self.surface.w - side).max(0)),
         }
     }
 
@@ -633,6 +651,8 @@ impl Browser {
     /// Ctrl+Shift+\: the shown tab and the next one side by side, or back to one.
     fn toggle_split(&mut self) {
         if self.in_frame.is_some() { return; }
+        // The side panel makes way for a split view.
+        if self.panel { self.close_panel(); }
         if self.split.take().is_some() {
             sex_pdx::serial_record!("[web.split] on=0 shown={}", self.active);
             return self.refit();
@@ -673,6 +693,7 @@ impl Browser {
         };
         let labels = self.tab_labels();
         let colours = self.tab_colours();
+        let group_of = self.group_of();
         let mark = if self.profile.bookmarked(&self.url) && self.editing.is_none() { "★ " } else { "" };
         // A private or container tab says so in the bar.
         let held = match self.jarbox.name() { Some(n) if self.editing.is_none() => alloc::format!("{n} · "), _ => String::new() };
@@ -686,6 +707,7 @@ impl Browser {
             shields: Some((self.shields.up(&self.url), self.blocked)).filter(|(up, n)| self.url.starts_with("http") && (*n > 0 || !up)),
             side: self.side(),
             pane: if self.split_pair().is_some() { self.pane() } else { (0, 0) },
+            group_of: &group_of, groups: &self.groups,
         };
         sex_web::frame_with(&self.page, &mut self.fonts, pixels, self.surface.w, self.surface.h, self.scroll, self.focus, &chrome);
         self.paint_frames();
@@ -827,6 +849,11 @@ impl Browser {
             sex_pdx::serial_record!("[web.https.allowed] url={}", target);
             return self.open(&target, false);
         }
+        // The side panel's address opens it (or changes what it shows) instead.
+        if let Some(what) = url.strip_prefix("about:sidepanel") {
+            let what = what.strip_prefix("?url=").map(extensions::decode).unwrap_or_else(|| String::from(panel::BOOKMARKS));
+            return self.panel_show(&what);
+        }
         let post = self.post.take();
         // The page this one is opened from, for its `Referer`: a link or script on it,
         // or the page around an iframe. A typed address has none.
@@ -879,6 +906,8 @@ impl Browser {
             (self.downloads_page(), String::from(url))
         } else if url == "about:shields" || url == "about:shields?update" {
             (self.shields_page(url), String::from("about:shields"))
+        } else if url == panel::BOOKMARKS {
+            (self.bookmarks_page(), String::from(url))
         } else if url == "about:extensions" || url.starts_with("about:extensions?") {
             (self.extensions_page(url), String::from("about:extensions"))
         } else if let Some(page) = built_in(if url.is_empty() { "about:welcome" } else { url }) {
@@ -1877,9 +1906,10 @@ impl Browser {
         let side = self.side();
         if side > 0 && (p.x as i32) < side && (p.y as i32) >= BAR {
             if let Kind::Down { button } = p.kind {
-                match (sex_web::side_tab_at(side, self.tabs.len(), p.x as i32, p.y as i32), button) {
-                    (Some(i), 1) => { self.show_tab(i); self.close_tab(); }
-                    (Some(i), 0) => self.show_tab(i),
+                match (self.side_at(p.x as i32, p.y as i32), button) {
+                    (Some(sex_web::Slot::Tab(i)), 1) => { self.show_tab(i); self.close_tab(); }
+                    (Some(sex_web::Slot::Tab(i)), 0) => self.show_tab(i),
+                    (Some(sex_web::Slot::Group(g)), 0) => self.fold_group(g),
                     _ => {}
                 }
             }
@@ -1898,8 +1928,9 @@ impl Browser {
         let (x, y) = (p.x as i32 - px0, p.y as i32 - BAR);
         if p.y >= 0 && (p.y as i32) < BAR && matches!(p.kind, Kind::Down { button: 0 | 1 }) {
             match (self.tab_at(p.x as i32, p.y as i32), p.kind) {
-                (Some(i), Kind::Down { button: 1 }) => { self.show_tab(i); self.close_tab(); }
-                (Some(i), _) => self.show_tab(i),
+                (Some(sex_web::Slot::Tab(i)), Kind::Down { button: 1 }) => { self.show_tab(i); self.close_tab(); }
+                (Some(sex_web::Slot::Tab(i)), _) => self.show_tab(i),
+                (Some(sex_web::Slot::Group(g)), _) => self.fold_group(g),
                 (None, _) => { self.editing = Some(String::new()); self.suggestions.clear(); self.chosen = None; self.draw(); }
             }
             return;
@@ -2002,6 +2033,8 @@ impl Browser {
         } else { sex_html::url::resolve(&self.url, &href) };
         match target {
             Some(t) if t.starts_with('#') => { let frag = t[1..].to_string(); self.scroll_to(Some(&frag)); }
+            // A link in the bookmarks panel opens in the page beside it.
+            Some(t) if self.panel_shown() && self.url == panel::BOOKMARKS => self.panel_follow(&t),
             Some(t) => { self.referrer_next = Some(self.url.clone()); self.open(&t, true) }
             None => {}
         }
@@ -2116,7 +2149,7 @@ pub extern "C" fn _start() -> ! {
     let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
-        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None };
+        shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false };
     b.profile = profile::Profile::load(&mut b.window, wall());
     b.vertical = profile::vertical_tabs(&mut b.window);
     b.view = b.page_view();

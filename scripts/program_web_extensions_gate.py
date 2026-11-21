@@ -70,7 +70,7 @@ def main():
   assert '[web.extension.' not in t()[s:],'an extension before any was installed'
   hits.clear()
   s=go(f'about:extensions?install={base}/sample.crx')
-  g['wait'](r'\[web.extension.installed\] id=recolour-sample files=10 name=Recolour Sample',s,300)
+  g['wait'](r'\[web.extension.installed\] id=recolour-sample files=12 name=Recolour Sample',s,300)
   g['wait'](r'\[web.extension.loaded\] id=recolour-sample mv=3 enabled=1 rules=1 skipped=0 content_scripts=1 background=1',s,60)
   g['wait'](r'\[web.extension.background\] id=recolour-sample scripts=1 module=0 ',s,120)
   for line in ('background installed install','content script registered','dynamic rule added'):g['wait'](rf'\[web.extension.console\] id=recolour-sample level=0 {line}',s,120)

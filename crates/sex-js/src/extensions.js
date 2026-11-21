@@ -191,10 +191,21 @@
       enable: api(done), disable: api(done), openPopup: api(done), getUserSettings: api(() => ({ isOnToolbar: true })),
       onClicked: event(),
     };
+    // The side panel (MV3 chrome.sidePanel): open() shows the extension's panel page
+    // in the browser's side panel. Options set here last while this realm runs.
+    let panelPath = manifest.side_panel && manifest.side_panel.default_path ? String(manifest.side_panel.default_path) : '';
+    let panelBehavior = { openPanelOnActionClick: false };
+    const sidePanel = {
+      setOptions: api(o => { if (o && o.path != null && o.tabId == null) panelPath = String(o.path); }),
+      getOptions: api(() => ({ path: panelPath, enabled: !!panelPath })),
+      setPanelBehavior: api(o => { if (o) panelBehavior = Object.assign({}, panelBehavior, o); }),
+      getPanelBehavior: api(() => panelBehavior),
+      open: api(() => { if (panelPath) post({ t: 'open', id, url: 'about:sidepanel?url=' + encodeURIComponent(url(panelPath)) }); }),
+    };
     const alarms = new Map();
     const menus = { create: () => 0, update: api(done), remove: api(done), removeAll: api(done), onClicked: event(), ContextType: {} };
     const chrome = {
-      runtime, i18n, storage, tabs, scripting, action, declarativeNetRequest: dnr,
+      runtime, i18n, storage, tabs, scripting, action, sidePanel, declarativeNetRequest: dnr,
       browserAction: action, pageAction: action,
       extension: { getURL: url, inIncognitoContext: false, isAllowedIncognitoAccess: api(() => false), getBackgroundPage: () => (where === 'bg' ? globalThis : null), getViews: () => [] },
       permissions: {
