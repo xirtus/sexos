@@ -6,6 +6,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 /// True if COM1 at 0x3F8 probed successfully.
 static SERIAL_PRESENT: AtomicBool = AtomicBool::new(false);
+/// True under a hypervisor (CPUID leaf 1, ECX bit 31): its UART takes a whole string
+/// in one exit and hands every byte to its backend at once, so no FIFO pacing.
+static VIRTUAL_UART: AtomicBool = AtomicBool::new(false);
 
 /// Probe COM1 (0x3F8) for existence before full init.
 /// Writes to the scratch register (offset 7) and reads back.
@@ -24,6 +27,8 @@ lazy_static! {
         if probe_com1() {
             let mut serial_port = unsafe { SerialPort::new(0x3F8) };
             serial_port.init();
+            let hypervisor = unsafe { core::arch::x86_64::__cpuid(1) }.ecx & (1 << 31) != 0;
+            VIRTUAL_UART.store(hypervisor, Ordering::Release);
             SERIAL_PRESENT.store(true, Ordering::Release);
             Spinlock::new(Some(serial_port))
         } else {
@@ -100,13 +105,17 @@ pub fn write_stopped(bytes: &[u8]) {
 /// A service's whole line in one string write (`rep outsb`). Under KVM that is one
 /// exit to QEMU for the line instead of one per byte, which made every logged line
 /// cost milliseconds on nested-virtualised CI runners and sat inside every
-/// keystroke's path. Before each 16 bytes (a 16550's FIFO) it waits for the
-/// transmitter to be empty, so a real UART drops nothing; under QEMU that is one
-/// more exit per 16 bytes.
+/// keystroke's path. On a real 16550 it waits for the transmitter to be empty before
+/// each 16 bytes (the FIFO), so nothing is dropped. Under a hypervisor it waits once
+/// and sends the whole string: the emulated UART passes each byte straight to its
+/// backend, and the 16-byte pacing cost two exits per 16 bytes (about 14 for a typical
+/// line, ~1,100 of which the kernel logs before services start). The CI KVM boot spent
+/// ~2.6 ms per line there against ~0.4 ms under TCG.
 pub fn write_string(bytes: &[u8]) {
     use x86_64::instructions::port::Port;
     let mut line_status: Port<u8> = Port::new(0x3F8 + 5);
-    for chunk in bytes.chunks(16) {
+    let chunk_len = if VIRTUAL_UART.load(Ordering::Relaxed) { 4096 } else { 16 };
+    for chunk in bytes.chunks(chunk_len) {
         unsafe {
             for _ in 0..100_000 { if line_status.read() & 0x20 != 0 { break; } }
             core::arch::asm!("rep outsb", in("dx") 0x3f8u16, inout("rsi") chunk.as_ptr() => _,
