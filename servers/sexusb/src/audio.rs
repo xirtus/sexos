@@ -93,6 +93,7 @@ pub(super) struct Audio {
     errors: u32,
     high: bool,
     mps: u16,
+    config: u8,
     fb: Option<Fb>,
     pacer: uac::Pacer,
 }
@@ -199,7 +200,7 @@ impl Usb {
         unsafe { core::ptr::copy_nonoverlapping(data.as_ptr(), buf.1 as *mut u8, 4); }
         let rate_ok = self.get(i, rt, 0x01, value, index, buf.0, len).is_ok();
         let pacer = uac::Pacer::new(frames << 16);
-        self.audio = Some(Audio { dev: i, dci, ring, frames, in_flight: 0, silent: TAIL, packets: 0, sound: 0, errors: 0, high, mps: p.mps, fb, pacer });
+        self.audio = Some(Audio { dev: i, dci, ring, frames, in_flight: 0, silent: TAIL, packets: 0, sound: 0, errors: 0, high, mps: p.mps, config: p.config, fb, pacer });
         if let Some(mut f) = fb {
             for _ in 0..FB_IN_FLIGHT { self.fb_queue(&mut f); }
             self.x.doorbell(slot, f.dci);
@@ -310,6 +311,11 @@ impl Usb {
         let pos = f.ring.idx as u64;
         let phys = self.audio_ring.0 + FB_BUF_AT + pos * FB_SLOT;
         f.ring.push(phys as u32, (phys >> 32) as u32, f.mps as u32, (ISOCH << 10) | trb::IOC | trb::ISP | SIA);
+    }
+
+    /// The configuration device `i`'s sound runs in, when it is the card or microphone.
+    pub(super) fn audio_config(&self, i: usize) -> Option<u8> {
+        self.audio.filter(|a| a.dev == i).map(|a| a.config).or(self.mic.filter(|m| m.dev == i).map(|m| m.c.config))
     }
 
     /// A microphone packet came in (or a stop finished).

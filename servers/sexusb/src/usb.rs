@@ -28,7 +28,7 @@ const IN_FLIGHT: u32 = 4;
 const REPORT: u64 = 64;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Role { None, Keyboard, Pointer, Hub }
+pub enum Role { None, Keyboard, Pointer, Hub, Media }
 
 /// A USB mass storage device (bulk-only transport, SCSI commands): a stick, a card
 /// reader, an external disk. Files sees it as disk `disk`.
@@ -163,6 +163,9 @@ pub struct Usb {
     /// The USB microphone in use (it may be another device than the card).
     mic: Option<audio::Mic>,
     mic_buffers: (u64, u64),
+    /// Media buttons (headsets, remotes, keyboards' media keys): which interrupt
+    /// endpoint (device + 1, index) and where the buttons sit in its reports.
+    media: [(u8, u8, crate::hid::MediaLayout); 4],
     /// Root ports suspended while the machine sleeps (bit per port).
     suspended: u64,
 }
@@ -185,7 +188,7 @@ impl Usb {
             sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
             generation: 0, changed: false, freed: 0, ether: None, net_region: 0, ether_buffers: ((0, 0), (0, 0)),
             bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)), bt_keys: [(0, 0, 0); 8], bt_buttons: [(0, 0); 8],
-            audio: None, audio_region: 0, audio_buffers: (0, 0), audio_ring: (0, 0), mic: None, mic_buffers: (0, 0), suspended: 0 }
+            audio: None, audio_region: 0, audio_buffers: (0, 0), audio_ring: (0, 0), mic: None, mic_buffers: (0, 0), media: [(0, 0, crate::hid::MediaLayout { fields: [crate::hid::MediaField { report_id: 0, bit: 0, size: 0, key: 0, array: false, umin: 0, umax: 0, lmin: 0 }; crate::hid::MEDIA_FIELDS], n: 0, ids: false }); 4], suspended: 0 }
     }
 
     fn ctx(&self, base: u64, index: u64) -> *mut u32 { (base + index * self.x.csz) as *mut u32 }
@@ -345,8 +348,14 @@ impl Usb {
         // another configuration, as on Realtek RTL8152/8153).
         if msc.is_none() && picks.iter().all(|p| p.is_none()) && self.try_bt(i, cfg, config_value, speed)? { return Ok(i); }
         if msc.is_none() && picks.iter().all(|p| p.is_none()) && self.try_ether(i, configs)? { return Ok(i); }
-        // A sound card (its buttons, if it has a HID interface, are not driven yet).
-        if msc.is_none() && !picks.iter().flatten().any(|p| p.hub) && self.try_audio(i, configs)? { return Ok(i); }
+        // A sound card; a headset's buttons (its HID interface) are driven next to it,
+        // without choosing the configuration again (that would stop the sound).
+        let audio = msc.is_none() && !picks.iter().flatten().any(|p| p.hub) && self.try_audio(i, configs)?;
+        if audio {
+            let same = self.audio_config(i) == Some(config_value);
+            if !same { picks = [None, None, None]; }
+            if picks.iter().all(|p| p.is_none()) { return Ok(i); }
+        }
 
         // Configure Endpoint for each picked interrupt endpoint.
         let mut add = 1u32;
@@ -380,11 +389,13 @@ impl Usb {
             last_dci = last_dci.max(in_dci).max(out_dci);
         }
         if add != 1 {
+            // Endpoints a sound card configured stay inside the slot's context entries.
+            let entries = unsafe { core::ptr::read_volatile(self.ctx(mem.out_ctx.1, 0)) } >> 27;
             self.input_flags(i, add);
-            self.slot_context(i, last_dci);
+            self.slot_context(i, last_dci.max(if audio { entries } else { 0 }));
             self.x.command_ok(mem.in_ctx.0 as u32, (mem.in_ctx.0 >> 32) as u32, 0, (trb::CONFIGURE_ENDPOINT << 10) | (slot << 24))?;
         }
-        self.set(i, 0x00, 9, config_value as u16, 0)?;
+        if !audio { self.set(i, 0x00, 9, config_value as u16, 0)?; }
         if self.dev[i].storage.active {
             if let Err(e) = self.start_storage(i) {
                 log!("[sexusb.storage.fail] slot={} reason={:?}", slot, e);
@@ -476,6 +487,11 @@ impl Usb {
                 if let Some(layout) = crate::hid::parse_pointer(desc) {
                     self.dev[i].intr[k].layout = layout;
                     role = Role::Pointer;
+                } else if let (Some(m), Some(at)) = (crate::hid::parse_media(desc), self.media.iter().position(|s| s.0 == 0)) {
+                    // Media buttons: a headset's, a remote's, a keyboard's media keys.
+                    self.media[at] = (i as u8 + 1, k as u8, m);
+                    role = Role::Media;
+                    log!("[sexusb.hid.media] slot={} iface={} fields={} report_ids={}", self.dev[i].slot, iface, m.n, m.ids as u8);
                 }
             }
             if role == Role::None && sub == 1 && proto == 2 {
@@ -492,7 +508,7 @@ impl Usb {
         let l = self.dev[i].intr[k].layout;
         log!("[sexusb.hid.bind.summary] keyboard_ep={} pointer_role={} slot={} iface={} report_id={} wheel={} ep_dci={}",
             if role == Role::Keyboard { "set" } else { "none" },
-            if role == Role::Keyboard { "none" } else if l.absolute { "tablet" } else { "mouse" },
+            match role { Role::Pointer if l.absolute => "tablet", Role::Pointer => "mouse", Role::Media => "media", _ => "none" },
             self.dev[i].slot, iface, l.report_id, l.wheel.present() as u8, self.dev[i].intr[k].dci);
         self.arm(i, k, IN_FLIGHT);
     }
@@ -602,7 +618,9 @@ impl Usb {
         for k in 0..MAX_INTR {
             let e = &mut self.dev[i].intr[k];
             if !e.active { continue; }
-            if e.role == Role::Keyboard && (e.keys != 0 || e.modifiers != 0) { e.keys = 0; e.modifiers = 0; keys_changed = true; }
+            if matches!(e.role, Role::Keyboard | Role::Media) && (e.keys != 0 || e.modifiers != 0) { e.keys = 0; e.modifiers = 0; keys_changed = true; }
+            if e.role == Role::Media { self.media.iter_mut().filter(|s| s.0 == i as u8 + 1 && s.1 == k as u8).for_each(|s| s.0 = 0); }
+            let e = &mut self.dev[i].intr[k];
             if e.role == Role::Pointer && e.buttons != 0 {
                 e.buttons = 0;
                 let packed = if e.layout.absolute { 1u64 << 32 } else { 0 };
@@ -695,6 +713,7 @@ impl Usb {
         match x.role {
             Role::Keyboard => self.keyboard(i, k, report),
             Role::Pointer => self.pointer(i, k, report),
+            Role::Media => self.media_report(i, k, report),
             Role::Hub => {
                 let mut bits = 0u32;
                 for (b, byte) in report.iter().enumerate().take(4) { bits |= (*byte as u32) << (8 * b); }
@@ -721,13 +740,26 @@ impl Usb {
         self.send_keys();
     }
 
+    /// A media-button report: the keys it holds go to Input as a keyboard's would.
+    fn media_report(&mut self, i: usize, k: usize, r: &[u8]) {
+        let Some(m) = self.media.iter().find(|s| s.0 == i as u8 + 1 && s.1 == k as u8).map(|s| s.2) else { return };
+        let e = &mut self.dev[i].intr[k];
+        // `buttons` holds the pressed-key mask; `keys` the usages sent for it.
+        let Some(held) = m.decode(r, e.buttons) else { return };
+        if held == e.buttons { return; }
+        e.buttons = held;
+        e.keys = crate::hid::MediaLayout::usages(held);
+        log!("[sexusb.hid.media.keys] slot={} held={:#04x} keys={:#x}", self.dev[i].slot, held, e.keys);
+        self.send_keys();
+    }
+
     /// Every keyboard's keys and modifiers, merged into one snapshot for Input.
     fn send_keys(&mut self) {
         let mut keys = 0u64;
         let mut n = 0;
         let mut modifiers = 0u8;
         let usb = self.dev.iter().filter(|d| d.used)
-            .flat_map(|d| d.intr.iter().filter(|e| e.active && e.role == Role::Keyboard).map(|e| (e.modifiers, e.keys)));
+            .flat_map(|d| d.intr.iter().filter(|e| e.active && matches!(e.role, Role::Keyboard | Role::Media)).map(|e| (e.modifiers, e.keys)));
         // Bluetooth keyboards (from Cufflinks) count as more keyboards.
         let bt = self.bt_keys.iter().filter(|k| k.0 != 0).map(|k| (k.1, k.2));
         for (m, held) in usb.chain(bt) {
