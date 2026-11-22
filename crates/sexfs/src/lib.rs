@@ -56,8 +56,9 @@ pub trait Device {
         self.read_run(first, out)
     }
     /// Sequential readahead: fills `out` from `first` like `read_data_run`, and may also
-    /// fetch the `ahead` blocks that follow on disk in the same command (they belong to the
-    /// same file, in order) and keep them for the next `read_data_run`. A device that keeps
+    /// fetch the `ahead` blocks that follow on disk in the same command (the same file's
+    /// next blocks, in order, with at most a few unused blocks between) and keep them for
+    /// the next `read_data_run`. A device that keeps
     /// them must drop them on any write. The filesystem checks every block it is handed.
     fn read_data_ahead(&mut self, first: u64, out: &mut [u8], ahead: usize) -> core::result::Result<(), ()> {
         let _ = ahead;
@@ -83,8 +84,19 @@ pub trait Device {
     }
 }
 
-/// Longest run of file blocks moved together.
+/// Longest run of file blocks a read hands over at once (their checksums sit on the stack).
 const RUN_MAX: usize = 128;
+/// Longest run of blocks written side by side, and longest a sequential read fetches
+/// (what it asked for plus readahead): 4 MiB, a whole block buffer
+/// (sex_pdx::BLOCK_MAX_RUN), so SexDrive gets its full batch of commands in flight.
+/// Readahead blocks wait in the device's buffer, not here.
+const LONG_RUN: usize = 1024;
+/// How far past a file's last block `alloc_data` looks to continue it. A block
+/// rewritten in a later commit (the partial last block an append fills) cannot go
+/// back in place, so it lands one or two blocks on; readahead skips such gaps.
+const NEAR: u64 = 8;
+/// Most unused blocks one readahead reads across between a file's blocks.
+const GAP_MAX: u64 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind { File, Dir }
@@ -253,6 +265,9 @@ pub struct Fs<'a, D: Device> {
     /// Words of `pending` that may hold bits, so a commit never walks the whole map.
     pending_span: (usize, usize),
     cursor: u64,
+    /// Tree blocks come from the top of the disk downwards, from here, so they never
+    /// land between a file's data runs (see `alloc_meta`).
+    meta_cursor: u64,
     clock: u64,
     changed: bool,
     poisoned: bool,
@@ -300,7 +315,7 @@ impl<'a, D: Device> Fs<'a, D> {
     }
 
     fn empty(dev: D, mem: Memory<'a>, total: u64) -> Self {
-        Fs { dev, mem, total, root: 0, next_id: 0, generation: 0, tx: 0, free: 0, pending_count: 0, pending_span: (usize::MAX, 0), cursor: SB_SLOTS, clock: 0,
+        Fs { dev, mem, total, root: 0, next_id: 0, generation: 0, tx: 0, free: 0, pending_count: 0, pending_span: (usize::MAX, 0), cursor: SB_SLOTS, meta_cursor: total.saturating_sub(1), clock: 0,
             changed: false, poisoned: false, value: [0; VALUE_MAX], value_len: 0, sequential: (0, 0) }
     }
 
@@ -312,6 +327,7 @@ impl<'a, D: Device> Fs<'a, D> {
         self.free = self.total - SB_SLOTS;
         self.pending_count = 0;
         self.cursor = SB_SLOTS;
+        self.meta_cursor = self.total - 1;
     }
 
     /// Read the newest valid superblock and rebuild free space from the tree.
@@ -426,6 +442,53 @@ impl<'a, D: Device> Fs<'a, D> {
         }
         Err(Error::NoSpace)
     }
+    /// A block for the tree, searched from the top of the disk downwards. File data
+    /// grows upwards from the bottom (`alloc`, `alloc_data`), so a file appended to
+    /// over many commits stays side by side on disk instead of being cut into pieces
+    /// by each commit's copied tree blocks. Only where blocks go changes: free space
+    /// is still what the tree says, and nothing committed is reused before the commit
+    /// that stops using it, so the on-disk format and crash guarantees are the same.
+    fn alloc_meta(&mut self) -> Result<u64> {
+        if self.free == 0 { return Err(Error::NoSpace); }
+        for _ in 0..2 {
+            let mut at = self.meta_cursor;
+            while at >= SB_SLOTS {
+                let word = self.mem.used[(at / 64) as usize];
+                if word == u64::MAX { at = (at / 64 * 64).wrapping_sub(1); if at == u64::MAX { break; } continue; }
+                if !bit(self.mem.used, at) {
+                    set_bit(self.mem.used, at, true);
+                    self.free -= 1;
+                    self.meta_cursor = at.saturating_sub(1).max(SB_SLOTS);
+                    return Ok(at);
+                }
+                at -= 1;
+            }
+            self.meta_cursor = self.total - 1;
+        }
+        Err(Error::NoSpace)
+    }
+    /// A block for file data, at `hint` (just past the file's previous block) or the
+    /// first free block shortly after it, so appends continue where the file ended.
+    /// Elsewhere (`alloc`) when that stretch is taken.
+    fn alloc_data(&mut self, hint: u64) -> Result<u64> {
+        if hint >= SB_SLOTS && self.free > RESERVED {
+            let end = hint.saturating_add(NEAR).min(self.total);
+            for at in hint..end {
+                if !bit(self.mem.used, at) {
+                    set_bit(self.mem.used, at, true);
+                    self.free -= 1;
+                    self.cursor = at + 1;
+                    return Ok(at);
+                }
+            }
+        }
+        self.alloc()
+    }
+    /// The disk block just past file block `index - 1`: where block `index` should go.
+    fn data_hint(&mut self, id: u64, index: u64) -> Result<u64> {
+        if index == 0 || !self.get(Key { id, kind: K_BLOCK, off: index - 1 })? { return Ok(0); }
+        Ok(get_u64(&self.value, 0) + 1)
+    }
     /// Takes exactly `block` if it is free, to grow a run of file data.
     fn take(&mut self, block: u64) -> bool {
         if block >= self.total || self.free <= RESERVED || bit(self.mem.used, block) { return false; }
@@ -444,7 +507,7 @@ impl<'a, D: Device> Fs<'a, D> {
         }
     }
     fn new_node(&mut self, lvl: u8) -> Result<(u64, usize)> {
-        let block = self.alloc()?;
+        let block = self.alloc_meta()?;
         let i = self.victim()?;
         let tx = self.tx;
         node_init(&mut self.mem.cache[i], lvl, tx, block);
@@ -458,7 +521,7 @@ impl<'a, D: Device> Fs<'a, D> {
         let i = self.fetch(block)?;
         if gen_of(&self.mem.cache[i]) == self.tx { self.mem.slots[i].dirty = true; return Ok((block, i)); }
         self.pin(i);
-        let copy = self.alloc();
+        let copy = self.alloc_meta();
         self.unpin(i);
         let copy = copy?;
         self.release(block);
@@ -726,10 +789,11 @@ impl<'a, D: Device> Fs<'a, D> {
         let index = at / BLOCK as u64;
         let inside = (at % BLOCK as u64) as usize;
         let whole = if inside == 0 { data.len() / BLOCK } else { 0 };
-        let want = whole.min(self.dev.run_blocks()).min(RUN_MAX);
+        let want = whole.min(self.dev.run_blocks()).min(LONG_RUN);
+        let hint = self.data_hint(id, index)?;
         if want >= 2 {
             // New blocks side by side, so the device takes them in one command.
-            let first = self.alloc()?;
+            let first = self.alloc_data(hint)?;
             let mut n = 1;
             while n < want && self.take(first + n as u64) { n += 1; }
             self.dev.write_run(first, &data[..n * BLOCK]).map_err(|_| Error::Io)?;
@@ -747,7 +811,7 @@ impl<'a, D: Device> Fs<'a, D> {
         }
         self.mem.scratch[inside..inside + take].copy_from_slice(&data[..take]);
         let sum = checksum(&self.mem.scratch[..]);
-        let block = self.alloc()?;
+        let block = self.alloc_data(hint)?;
         self.dev.write(block, self.mem.scratch).map_err(|_| Error::Io)?;
         self.map_block(id, index, block, sum)?;
         Ok(take)
@@ -782,7 +846,10 @@ impl<'a, D: Device> Fs<'a, D> {
                     if n > 0 { done += n * BLOCK; at += (n * BLOCK) as u64; continue; }
                 }
                 let take = (BLOCK - inside).min(want - done);
-                if f.read_block(id, at / BLOCK as u64)? {
+                let index = at / BLOCK as u64;
+                // A block read alone still keeps a sequential reader sequential.
+                if f.sequential == (id, index) { f.sequential = (id, index + 1); }
+                if f.read_block(id, index)? {
                     out[done..done + take].copy_from_slice(&f.mem.scratch[inside..inside + take]);
                 } else {
                     out[done..done + take].fill(0);
@@ -810,15 +877,20 @@ impl<'a, D: Device> Fs<'a, D> {
         }
         if n < 2 { return Ok(0); }
         // A sequential reader gets the file's next blocks in the same command, as many as
-        // still sit side by side on disk and fit one run.
+        // follow in order on disk and fit one run. Up to GAP_MAX unused blocks between two
+        // of them (where a later append rewrote a partial block) are read across: one
+        // command with a few spare blocks beats one command per piece.
         let mut ahead = 0usize;
-        if n == want && self.sequential == (id, index) {
-            let room = self.dev.run_blocks().min(RUN_MAX).saturating_sub(n);
-            while ahead < room {
-                if !self.get(Key { id, kind: K_BLOCK, off: index + (n + ahead) as u64 })? { break; }
+        if self.sequential == (id, index) {
+            let room = self.dev.run_blocks().min(LONG_RUN).saturating_sub(n);
+            let (mut k, mut end) = (n as u64, first + n as u64);
+            loop {
+                if !self.get(Key { id, kind: K_BLOCK, off: index + k })? { break; }
                 let block = get_u64(&self.value, 0);
-                if block != first + (n + ahead) as u64 || block >= self.total { break; }
-                ahead += 1;
+                if block < end || block > end + GAP_MAX || block >= self.total { break; }
+                let span = (block + 1 - first) as usize - n;
+                if span > room { break; }
+                (ahead, end, k) = (span, block + 1, k + 1);
             }
         }
         self.sequential = (id, index + n as u64);
