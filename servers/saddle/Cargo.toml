@@ -1,0 +1,12 @@
+[package]
+name = "saddle"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Saddle: the SexOS service that hosts drivers built on the Harness SDK, on generic device leases"
+
+[dependencies]
+sex-pdx = { path = "../../crates/sex-pdx" }
+sex-hwdb = { path = "../../crates/sex-hwdb" }
+harness = { path = "../../crates/harness", features = ["sexos"] }
+harness-template = { path = "../../crates/harness-template" }

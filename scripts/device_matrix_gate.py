@@ -27,6 +27,12 @@ ROWS = {
     'e1000_82540': (['-netdev', 'user,id=n0', '-device', 'e1000,netdev=n0'], [b'[sexnet.ether.ready]']),
     'hda_output': (['-audiodev', 'none,id=a0', '-device', 'intel-hda', '-device', 'hda-output,audiodev=a0'],
                    [b'[bell.hda.ready]']),
+    # QEMU's edu teaching device on a generic lease, driven inside Saddle by the
+    # Harness SDK's template driver (crates/harness-template): bring-up, a polled
+    # and an interrupt-driven factorial, and a DMA round trip through the IOMMU pool.
+    'edu_saddle': (['-device', 'edu,dma_mask=0xffffffff'],
+                   [b'[kernel.spawn.saddle]', b'kind=Generic', b'[edu.ready]', b'[saddle.selftest] driver=edu ok=1',
+                    b'[saddle.driver] name=edu', b'state=running']),
     'bare': ([], []),
 }
 NVME = ['-drive', 'if=none,id=nvm,file={disk},format=raw', '-device', 'nvme,serial=sexos01,drive=nvm']

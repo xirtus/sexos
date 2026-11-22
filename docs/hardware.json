@@ -1,0 +1,907 @@
+{
+ "classes": [
+  {
+   "class": "0x01",
+   "name": "NVMe SSD",
+   "only": "",
+   "prog_if": "_",
+   "service": "Drive",
+   "subclass": "0x08",
+   "support": "Driven"
+  },
+  {
+   "class": "0x01",
+   "name": "SATA controller (AHCI)",
+   "only": "",
+   "prog_if": "0x01",
+   "service": "Drive",
+   "subclass": "0x06",
+   "support": "Driven"
+  },
+  {
+   "class": "0x01",
+   "name": "RAID controller",
+   "only": "",
+   "prog_if": "_",
+   "service": "Drive",
+   "subclass": "0x04",
+   "support": "Unsupported"
+  },
+  {
+   "class": "0x01",
+   "name": "storage controller",
+   "only": "",
+   "prog_if": "_",
+   "service": "Nothing",
+   "subclass": "_",
+   "support": "Unsupported"
+  },
+  {
+   "class": "0x02",
+   "name": "Ethernet controller",
+   "only": "Intel or Realtek",
+   "prog_if": "_",
+   "service": "Net",
+   "subclass": "0x00",
+   "support": "Planned"
+  },
+  {
+   "class": "0x02",
+   "name": "wireless network controller",
+   "only": "Intel",
+   "prog_if": "_",
+   "service": "Net",
+   "subclass": "0x80",
+   "support": "Planned"
+  },
+  {
+   "class": "0x02",
+   "name": "network controller",
+   "only": "",
+   "prog_if": "_",
+   "service": "Net",
+   "subclass": "_",
+   "support": "Unsupported"
+  },
+  {
+   "class": "0x03",
+   "name": "display controller",
+   "only": "",
+   "prog_if": "_",
+   "service": "Display",
+   "subclass": "_",
+   "support": "Firmware"
+  },
+  {
+   "class": "0x04",
+   "name": "HD Audio controller",
+   "only": "not NVIDIA or AMD/ATI",
+   "prog_if": "_",
+   "service": "Bell",
+   "subclass": "0x03",
+   "support": "Driven"
+  },
+  {
+   "class": "0x04",
+   "name": "HD Audio controller",
+   "only": "",
+   "prog_if": "_",
+   "service": "Bell",
+   "subclass": "0x03",
+   "support": "Planned"
+  },
+  {
+   "class": "0x04",
+   "name": "multimedia controller",
+   "only": "",
+   "prog_if": "_",
+   "service": "Nothing",
+   "subclass": "_",
+   "support": "Unsupported"
+  },
+  {
+   "class": "0x05",
+   "name": "memory controller",
+   "only": "",
+   "prog_if": "_",
+   "service": "Kernel",
+   "subclass": "_",
+   "support": "Platform"
+  },
+  {
+   "class": "0x06",
+   "name": "bridge",
+   "only": "",
+   "prog_if": "_",
+   "service": "Kernel",
+   "subclass": "_",
+   "support": "Platform"
+  },
+  {
+   "class": "0x08",
+   "name": "system peripheral",
+   "only": "",
+   "prog_if": "_",
+   "service": "Kernel",
+   "subclass": "_",
+   "support": "Platform"
+  },
+  {
+   "class": "0x11",
+   "name": "signal processing controller",
+   "only": "",
+   "prog_if": "_",
+   "service": "Kernel",
+   "subclass": "_",
+   "support": "Platform"
+  },
+  {
+   "class": "0x0c",
+   "name": "USB 3 controller (xHCI)",
+   "only": "",
+   "prog_if": "0x30",
+   "service": "Usb",
+   "subclass": "0x03",
+   "support": "Driven"
+  },
+  {
+   "class": "0x0c",
+   "name": "USB controller",
+   "only": "",
+   "prog_if": "_",
+   "service": "Usb",
+   "subclass": "0x03",
+   "support": "Unsupported"
+  },
+  {
+   "class": "0x0c",
+   "name": "SMBus controller",
+   "only": "",
+   "prog_if": "_",
+   "service": "Kernel",
+   "subclass": "0x05",
+   "support": "Platform"
+  },
+  {
+   "class": "0x0c",
+   "name": "serial bus controller",
+   "only": "Intel Serial IO I2C functions",
+   "prog_if": "_",
+   "service": "Input",
+   "subclass": "0x80",
+   "support": "InProgress"
+  },
+  {
+   "class": "0x0c",
+   "name": "serial bus controller",
+   "only": "Intel",
+   "prog_if": "_",
+   "service": "Input",
+   "subclass": "0x80",
+   "support": "Planned"
+  },
+  {
+   "class": "_",
+   "name": "anything else",
+   "only": "",
+   "prog_if": "_",
+   "service": "Nothing",
+   "subclass": "_",
+   "support": "Unsupported"
+  }
+ ],
+ "devices": [
+  {
+   "device": "9a60",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "UHD Graphics (Tiger Lake-H GT1)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "9a68",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "UHD Graphics (Tiger Lake-H)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "9a49",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Iris Xe Graphics (Tiger Lake GT2)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "9a0b",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Volume Management Device (Tiger Lake, RST RAID)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Planned",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "467f",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Volume Management Device (Alder Lake, RST RAID)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Planned",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "a77f",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Volume Management Device (Raptor Lake, RST RAID)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Planned",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "7d0b",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Volume Management Device (Meteor Lake, RST RAID)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Planned",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "ad0b",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Volume Management Device (Arrow Lake, RST RAID)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Planned",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "43c8",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Tiger Lake-H HD Audio (cAVS)",
+   "seen": [],
+   "service": "Bell",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "a0c8",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Tiger Lake-LP HD Audio (cAVS)",
+   "seen": [],
+   "service": "Bell",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "43ed",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Tiger Lake-H USB 3.2 xHCI",
+   "seen": [],
+   "service": "Usb",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "a0ed",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Tiger Lake-LP USB 3.2 xHCI",
+   "seen": [],
+   "service": "Usb",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "9a13",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Tiger Lake Thunderbolt 4 USB xHCI",
+   "seen": [],
+   "service": "Usb",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "9a1b",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Tiger Lake Thunderbolt 4 NHI",
+   "seen": [],
+   "service": "Usb",
+   "support": "Planned",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "9a1d",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Tiger Lake Thunderbolt 4 NHI",
+   "seen": [],
+   "service": "Usb",
+   "support": "Planned",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "1137",
+   "group": "Intel Tiger Lake-H platform (x17 R1, XPS 17 9710)",
+   "model": "Maple Ridge Thunderbolt 4 NHI",
+   "seen": [],
+   "service": "Usb",
+   "support": "Planned",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "2725",
+   "group": "Intel Wi-Fi (iwlwifi family). Killer AX1675 is an AX210 or AX211 module",
+   "model": "Wi-Fi 6E AX210 / Killer AX1675x",
+   "seen": [],
+   "service": "Net",
+   "support": "InProgress",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "2723",
+   "group": "Intel Wi-Fi (iwlwifi family). Killer AX1675 is an AX210 or AX211 module",
+   "model": "Wi-Fi 6 AX200 / Killer AX1650x",
+   "seen": [],
+   "service": "Net",
+   "support": "InProgress",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "43f0",
+   "group": "Intel Wi-Fi (iwlwifi family). Killer AX1675 is an AX210 or AX211 module",
+   "model": "Wi-Fi 6 AX201 (Tiger Lake-H CNVi) / Killer AX1650i",
+   "seen": [],
+   "service": "Net",
+   "support": "InProgress",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "a0f0",
+   "group": "Intel Wi-Fi (iwlwifi family). Killer AX1675 is an AX210 or AX211 module",
+   "model": "Wi-Fi 6 AX201 (Tiger Lake CNVi)",
+   "seen": [],
+   "service": "Net",
+   "support": "InProgress",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "51f0",
+   "group": "Intel Wi-Fi (iwlwifi family). Killer AX1675 is an AX210 or AX211 module",
+   "model": "Wi-Fi 6E AX211 (Alder Lake CNVi) / Killer AX1675i",
+   "seen": [],
+   "service": "Net",
+   "support": "InProgress",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "51f1",
+   "group": "Intel Wi-Fi (iwlwifi family). Killer AX1675 is an AX210 or AX211 module",
+   "model": "Wi-Fi 6E AX211 (Alder Lake CNVi) / Killer AX1675i",
+   "seen": [],
+   "service": "Net",
+   "support": "InProgress",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "7af0",
+   "group": "Intel Wi-Fi (iwlwifi family). Killer AX1675 is an AX210 or AX211 module",
+   "model": "Wi-Fi 6E AX211 (Alder Lake-S CNVi)",
+   "seen": [],
+   "service": "Net",
+   "support": "InProgress",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "272b",
+   "group": "Intel Wi-Fi (iwlwifi family). Killer AX1675 is an AX210 or AX211 module",
+   "model": "Wi-Fi 7 BE200",
+   "seen": [],
+   "service": "Net",
+   "support": "Planned",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "100e",
+   "group": "Intel Ethernet (e1000, e1000e/I219, igb, igc families are driven by sexnet)",
+   "model": "82540EM Gigabit (e1000)",
+   "seen": [],
+   "service": "Net",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "10d3",
+   "group": "Intel Ethernet (e1000, e1000e/I219, igb, igc families are driven by sexnet)",
+   "model": "82574L Gigabit (e1000e)",
+   "seen": [],
+   "service": "Net",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "15f3",
+   "group": "Intel Ethernet (e1000, e1000e/I219, igb, igc families are driven by sexnet)",
+   "model": "I225-V 2.5GbE",
+   "seen": [],
+   "service": "Net",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "125c",
+   "group": "Intel Ethernet (e1000, e1000e/I219, igb, igc families are driven by sexnet)",
+   "model": "I226-V 2.5GbE",
+   "seen": [],
+   "service": "Net",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "1533",
+   "group": "Intel Ethernet (e1000, e1000e/I219, igb, igc families are driven by sexnet)",
+   "model": "I210 Gigabit",
+   "seen": [],
+   "service": "Net",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "10c9",
+   "group": "Intel Ethernet (e1000, e1000e/I219, igb, igc families are driven by sexnet)",
+   "model": "82576 Gigabit (igb)",
+   "seen": [],
+   "service": "Net",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "29c0",
+   "group": "QEMU q35 platform",
+   "model": "Q35 host bridge (QEMU)",
+   "seen": [],
+   "service": "Kernel",
+   "support": "Platform",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "2918",
+   "group": "QEMU q35 platform",
+   "model": "ICH9 LPC bridge (QEMU)",
+   "seen": [],
+   "service": "Kernel",
+   "support": "Platform",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "2922",
+   "group": "QEMU q35 platform",
+   "model": "ICH9 SATA AHCI (QEMU)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "2930",
+   "group": "QEMU q35 platform",
+   "model": "ICH9 SMBus (QEMU)",
+   "seen": [],
+   "service": "Kernel",
+   "support": "Platform",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "293e",
+   "group": "QEMU q35 platform",
+   "model": "ICH9 HD Audio (QEMU)",
+   "seen": [],
+   "service": "Bell",
+   "support": "Driven",
+   "vendor": "8086",
+   "vendor_name": "Intel"
+  },
+  {
+   "device": "0010",
+   "group": "QEMU q35 platform",
+   "model": "NVMe controller (QEMU)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Driven",
+   "vendor": "1b36",
+   "vendor_name": "QEMU"
+  },
+  {
+   "device": "000d",
+   "group": "QEMU q35 platform",
+   "model": "xHCI controller (QEMU)",
+   "seen": [],
+   "service": "Usb",
+   "support": "Driven",
+   "vendor": "1b36",
+   "vendor_name": "QEMU"
+  },
+  {
+   "device": "0194",
+   "group": "QEMU q35 platform",
+   "model": "uPD720200 xHCI (QEMU nec-usb-xhci)",
+   "seen": [],
+   "service": "Usb",
+   "support": "Driven",
+   "vendor": "1033",
+   "vendor_name": "NEC/Renesas"
+  },
+  {
+   "device": "1111",
+   "group": "QEMU q35 platform",
+   "model": "Standard VGA (QEMU)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "1234",
+   "vendor_name": "QEMU/Bochs"
+  },
+  {
+   "device": "11e8",
+   "group": "Saddle hosts drivers built on the Harness SDK; the template drives QEMU's edu",
+   "model": "edu teaching device (QEMU, Harness template driver)",
+   "seen": [],
+   "service": "Saddle",
+   "support": "Driven",
+   "vendor": "1234",
+   "vendor_name": "QEMU/Bochs"
+  },
+  {
+   "device": "8125",
+   "group": "Realtek",
+   "model": "RTL8125 2.5GbE",
+   "seen": [],
+   "service": "Net",
+   "support": "Driven",
+   "vendor": "10ec",
+   "vendor_name": "Realtek"
+  },
+  {
+   "device": "3000",
+   "group": "Realtek",
+   "model": "Killer E3000/E3100G 2.5GbE (RTL8125 family)",
+   "seen": [],
+   "service": "Net",
+   "support": "Driven",
+   "vendor": "10ec",
+   "vendor_name": "Realtek"
+  },
+  {
+   "device": "8168",
+   "group": "Realtek",
+   "model": "RTL8111/8168 Gigabit",
+   "seen": [],
+   "service": "Net",
+   "support": "Driven",
+   "vendor": "10ec",
+   "vendor_name": "Realtek"
+  },
+  {
+   "device": "8139",
+   "group": "Realtek",
+   "model": "RTL8139 Fast Ethernet",
+   "seen": [],
+   "service": "Net",
+   "support": "Unsupported",
+   "vendor": "10ec",
+   "vendor_name": "Realtek"
+  },
+  {
+   "device": "525a",
+   "group": "Realtek",
+   "model": "RTS525A PCIe card reader",
+   "seen": [],
+   "service": "Drive",
+   "support": "Planned",
+   "vendor": "10ec",
+   "vendor_name": "Realtek"
+  },
+  {
+   "device": "522a",
+   "group": "Realtek",
+   "model": "RTS522A PCIe card reader",
+   "seen": [],
+   "service": "Drive",
+   "support": "Planned",
+   "vendor": "10ec",
+   "vendor_name": "Realtek"
+  },
+  {
+   "device": "249c",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GeForce RTX 3080 Laptop (GA104)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "24dc",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GeForce RTX 3080 Laptop (GA104)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "249d",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GeForce RTX 3070 Laptop (GA104)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "24dd",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GeForce RTX 3070 Laptop (GA104)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "2520",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GeForce RTX 3060 Laptop (GA106)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "2560",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GeForce RTX 3060 Laptop (GA106)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "2420",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GeForce RTX 3080 Ti Laptop (GA103)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "2460",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GeForce RTX 3080 Ti Laptop (GA103)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "2204",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GeForce RTX 3090 (GA102)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "2206",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GeForce RTX 3080 (GA102)",
+   "seen": [],
+   "service": "Display",
+   "support": "Firmware",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "228b",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GA104 HD Audio (HDMI/DP)",
+   "seen": [],
+   "service": "Bell",
+   "support": "Planned",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "228e",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GA106 HD Audio (HDMI/DP)",
+   "seen": [],
+   "service": "Bell",
+   "support": "Planned",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "1aef",
+   "group": "NVIDIA Ampere laptop GPUs (the x17 R1 sold the 3060, 3070 and 3080)",
+   "model": "GA102 HD Audio (HDMI/DP)",
+   "seen": [],
+   "service": "Bell",
+   "support": "Planned",
+   "vendor": "10de",
+   "vendor_name": "NVIDIA"
+  },
+  {
+   "device": "a808",
+   "group": "NVMe SSDs commonly shipped in laptops; any NVMe class device is driven",
+   "model": "NVMe SSD (970 EVO/PM981)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Driven",
+   "vendor": "144d",
+   "vendor_name": "Samsung"
+  },
+  {
+   "device": "a809",
+   "group": "NVMe SSDs commonly shipped in laptops; any NVMe class device is driven",
+   "model": "NVMe SSD (980)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Driven",
+   "vendor": "144d",
+   "vendor_name": "Samsung"
+  },
+  {
+   "device": "a80a",
+   "group": "NVMe SSDs commonly shipped in laptops; any NVMe class device is driven",
+   "model": "NVMe SSD (980 PRO/PM9A1)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Driven",
+   "vendor": "144d",
+   "vendor_name": "Samsung"
+  },
+  {
+   "device": "5006",
+   "group": "NVMe SSDs commonly shipped in laptops; any NVMe class device is driven",
+   "model": "NVMe SSD (PC SN730/SN750)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Driven",
+   "vendor": "15b7",
+   "vendor_name": "Western Digital"
+  },
+  {
+   "device": "174a",
+   "group": "NVMe SSDs commonly shipped in laptops; any NVMe class device is driven",
+   "model": "NVMe SSD (PC711/Gold P31)",
+   "seen": [],
+   "service": "Drive",
+   "support": "Driven",
+   "vendor": "1c5c",
+   "vendor_name": "SK hynix"
+  },
+  {
+   "device": "1059",
+   "group": "virtio",
+   "model": "sound device",
+   "seen": [],
+   "service": "Bell",
+   "support": "Driven",
+   "vendor": "1af4",
+   "vendor_name": "virtio"
+  },
+  {
+   "device": "1041",
+   "group": "virtio",
+   "model": "network device",
+   "seen": [],
+   "service": "Net",
+   "support": "Planned",
+   "vendor": "1af4",
+   "vendor_name": "virtio"
+  },
+  {
+   "device": "1000",
+   "group": "virtio",
+   "model": "network device",
+   "seen": [],
+   "service": "Net",
+   "support": "Planned",
+   "vendor": "1af4",
+   "vendor_name": "virtio"
+  },
+  {
+   "device": "1042",
+   "group": "virtio",
+   "model": "block device",
+   "seen": [],
+   "service": "Drive",
+   "support": "Planned",
+   "vendor": "1af4",
+   "vendor_name": "virtio"
+  },
+  {
+   "device": "1001",
+   "group": "virtio",
+   "model": "block device",
+   "seen": [],
+   "service": "Drive",
+   "support": "Planned",
+   "vendor": "1af4",
+   "vendor_name": "virtio"
+  },
+  {
+   "device": "1052",
+   "group": "virtio",
+   "model": "input device",
+   "seen": [],
+   "service": "Input",
+   "support": "Planned",
+   "vendor": "1af4",
+   "vendor_name": "virtio"
+  },
+  {
+   "device": "1050",
+   "group": "virtio",
+   "model": "GPU",
+   "seen": [],
+   "service": "Display",
+   "support": "Driven",
+   "vendor": "1af4",
+   "vendor_name": "virtio"
+  }
+ ],
+ "machines": [],
+ "unlisted": []
+}

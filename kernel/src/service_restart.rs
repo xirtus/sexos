@@ -29,7 +29,8 @@ const PTE_FRAME: u64 = 0x000f_ffff_ffff_f000;
 #[derive(Clone, Copy)]
 struct Page { frame: u64, pristine: u64 }
 struct Service { pd: u32, entry: u64, stack_top: u64, pages: [Page; MAX_PAGES], count: usize }
-const SERVICES: usize = 8;
+// Net, Files, Input, Bell, Display, Shell, Saddle, and Drive and USB (driver restart).
+const SERVICES: usize = 10;
 static SERVICE: [Mutex<Service>; SERVICES] = [const { Mutex::new(Service { pd: 0, entry: 0, stack_top: 0, pages: [Page { frame: 0, pristine: 0 }; MAX_PAGES], count: 0 }) }; SERVICES];
 // BOOT publishes immutable identity separately; self count cannot contend with its own rearm.
 static SERVICE_IDS:[AtomicU32;SERVICES]=[const{AtomicU32::new(0)};SERVICES];
@@ -42,14 +43,16 @@ static RESET_AT: [core::sync::atomic::AtomicU64; SERVICES] = [const { core::sync
 
 const DRIVE_PD: u32 = 2;
 const USB_PD: u32 = 5;
+/// `sex_pdx::pci_command::SADDLE_PD` (init.rs asserts they match).
+pub(crate) const SADDLE_PD: u32 = 54;
 /// How long a service may hold one message before it counts as hung, in ticks; 0: not
 /// watched. Drive's own command deadline is 30 s, so it gets longer than that.
 fn hang_limit(pd: u32) -> u64 { match pd { DRIVE_PD => 45_000, 4 | USB_PD | 10 | 13 => 10_000, _ => 0 } }
 /// Services that answer every call they take, so every owed reply was really awaited.
 fn answers_every_call(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD) }
-/// Drivers whose devices get a function-level reset before they run again (not Display:
-/// that would drop the firmware's screen).
-fn resets_devices(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD | 10 | 13) }
+/// Drivers whose devices get a function-level reset before they run again (Saddle too,
+/// for the outside drivers it hosts; not Display: that would drop the firmware's screen).
+fn resets_devices(pd: u32) -> bool { matches!(pd, DRIVE_PD | USB_PD | 10 | 13 | SADDLE_PD) }
 
 /// By domain id: the tick it last looked at its inbox, and whether it then took something.
 static INBOX_AT: [core::sync::atomic::AtomicU64; 64] = [const { core::sync::atomic::AtomicU64::new(0) }; 64];

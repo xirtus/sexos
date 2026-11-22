@@ -32,6 +32,12 @@ pub const WIFI_DMA_BYTES: u64 = 4 * 1024 * 1024;
 pub const WIFI_FIRMWARE_REGION_ID: u32 = 0x4401;
 /// The boot module holding the firmware pack (`sex_wifi::pack`).
 pub const WIFI_FIRMWARE_MODULE: &str = "wifi.pack";
+/// Saddle (drivers built on the Harness SDK): the pool behind its generic leases.
+pub const GENERIC_DMA_REGION_ID: u32 = 0x4510;
+pub const GENERIC_DMA_BYTES: u64 = 256 * 1024;
+/// Saddle runs as this BOOT domain, in the Senses organ (its key).
+pub const SADDLE_PD: u32 = 54;
+pub const SADDLE_KEY: u8 = 4;
 /// An Intel Thunderbolt 4 / USB4 host interface (NHI) in the USB service: its
 /// register view (256 KiB BAR: rings and the firmware status words), and a small
 /// DMA pool for the control ring (`sex_thunderbolt::ring::Layout`).

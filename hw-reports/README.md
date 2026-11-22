@@ -35,3 +35,10 @@ Wi-Fi, sound, USB, touchpad, ACPI, battery, and whether anything crashed. Each r
 `ok`, `BAD` (with what it means) or `?` (the report has no line that answers it). The
 checks live in `CHECKS` in `scripts/hw_report.py`; add a row when a driver gains a
 `[tag]` line that answers a new question.
+
+## The public hardware list
+
+`docs/HARDWARE.md` (and `docs/hardware.json`) is built from these reports and the
+driver table in `crates/sex-hwdb`: `python3 scripts/hardware_list.py` after filing a
+report. Each device row gains a "Seen on" entry for every machine whose newest
+report lists it, saying whether its driver came up there.

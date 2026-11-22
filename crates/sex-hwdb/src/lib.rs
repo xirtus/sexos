@@ -17,7 +17,7 @@ pub struct Id { pub vendor: u16, pub device: u16, pub class: u8, pub subclass: u
 
 /// The SexOS service that owns a device kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Service { Kernel, Drive, Net, Bell, Usb, Display, Input, Gpu, Nothing }
+pub enum Service { Kernel, Drive, Net, Bell, Usb, Display, Input, Gpu, Saddle, Nothing }
 
 impl Service {
     pub fn name(self) -> &'static str {
@@ -29,6 +29,7 @@ impl Service {
             Service::Usb => "sexusb",
             Service::Display => "sexdisplay",
             Service::Input => "sexinput",
+            Service::Saddle => "saddle",
             Service::Gpu => "sexgpu-nv",
             Service::Nothing => "none",
         }
@@ -198,6 +199,8 @@ fn exact(vendor: u16, device: u16) -> Option<Device> {
         (0x1b36, 0x000d) => known("xHCI controller (QEMU)", Usb, Driven),
         (0x1033, 0x0194) => known("uPD720200 xHCI (QEMU nec-usb-xhci)", Usb, Driven),
         (0x1234, 0x1111) => known("Standard VGA (QEMU)", Display, Firmware),
+        // Saddle hosts drivers built on the Harness SDK; the template drives QEMU's edu.
+        (0x1234, 0x11e8) => known("edu teaching device (QEMU, Harness template driver)", Saddle, Driven),
         // Realtek.
         (0x10ec, 0x8125) => known("RTL8125 2.5GbE", Net, Driven),
         (0x10ec, 0x3000) => known("Killer E3000/E3100G 2.5GbE (RTL8125 family)", Net, Driven),
