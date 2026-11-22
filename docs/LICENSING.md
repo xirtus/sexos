@@ -16,6 +16,7 @@ driver service links:
 | sex-rt | `sex-rt` |
 | libsys | `sex-src/lib/libsys` |
 | sex-hwdb | `crates/sex-hwdb` |
+| harness | `crates/harness` (the driver SDK) and `crates/harness-template` |
 | sex-bt | `crates/sex-bt` (Bluetooth host stack core; its own dependencies `aes` and `p256` are MIT/Apache-2.0) |
 
 You may use each of them under either the GNU General Public License, version 2 or (at
