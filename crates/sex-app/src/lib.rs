@@ -96,8 +96,14 @@ mod pages {
     pub static OWED: AtomicBool = AtomicBool::new(false);
     pub static STALE: AtomicBool = AtomicBool::new(false);
     pub static SHOWN: AtomicUsize = AtomicUsize::new(0);
-    /// How long to wait for Display's answer before painting anyway (a lost answer).
+    /// The surface last shown, for asking Display again (`pixel_region::ASK`).
+    pub static SURFACE: AtomicU64 = AtomicU64::new(0);
+    /// How long to wait for Display's answer before painting anyway.
     const PATIENCE_MS: u64 = 100;
+    /// After this long without an answer, ask Display again: a task that waited for
+    /// something else may have taken the first answer and dropped it.
+    const ASK_AFTER_MS: u64 = 4;
+    static LATE: AtomicUsize = AtomicUsize::new(0);
     pub fn back() -> u64 { 1 - FRONT.load(Relaxed) }
     /// Page `p` of the region.
     pub fn page(p: u64) -> &'static mut [u32] {
@@ -120,7 +126,9 @@ mod pages {
     pub fn settle() {
         while let Some(m) = crate::mailbox::take(is_shown) { told(&m); }
         if !OWED.load(Relaxed) { return; }
-        let end = sex_pdx::get_ticks().saturating_add(PATIENCE_MS);
+        let began = sex_pdx::get_ticks();
+        let mut ask = began.saturating_add(ASK_AFTER_MS);
+        let mut asked = 0u32;
         while OWED.load(Relaxed) {
             while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
                 if told(&m) { continue; }
@@ -129,8 +137,19 @@ mod pages {
                 if crate::is_shell(&m) || crate::is_answer(&m) { crate::mailbox::put(m); }
             }
             while let Some(m) = crate::mailbox::take(is_shown) { told(&m); }
-            if !OWED.load(Relaxed) || sex_pdx::get_ticks() >= end { break; }
+            let now = sex_pdx::get_ticks();
+            if !OWED.load(Relaxed) || now >= began.saturating_add(PATIENCE_MS) { break; }
+            if now >= ask {
+                // Display answers which page it shows; it changes nothing.
+                let _ = sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, sex_pdx::pixel_region::OP, SURFACE.load(Relaxed), sex_pdx::pixel_region::ASK, 0);
+                asked += 1;
+                ask = now.saturating_add(ASK_AFTER_MS);
+            }
             let _ = sex_pdx::sys_wait_self_ticks(1);
+        }
+        let waited = sex_pdx::get_ticks().saturating_sub(began);
+        if waited >= ASK_AFTER_MS && LATE.fetch_add(1, Relaxed) < 16 {
+            sex_pdx::serial_record!("[app.pages.late] waited_ms={} asked={} answered={}", waited, asked, !OWED.load(Relaxed) as u8);
         }
         OWED.store(false, Relaxed);
     }
@@ -197,6 +216,7 @@ impl Window {
         let page = pages::back();
         call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, page);
         pages::FRONT.store(page, Relaxed);
+        pages::SURFACE.store(self.surface, Relaxed);
         pages::SHOWN.store(width * height, Relaxed);
         pages::OWED.store(true, Relaxed);
         pages::STALE.store(true, Relaxed);

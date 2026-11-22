@@ -61,6 +61,9 @@ pub const fn region_id(index: usize) -> u32 { 0x4200 + index as u32 }
 /// goes back to text. Display answers [`shown`]`(page)` once it reads that page; from
 /// then on the other page is the program's to paint.
 pub const OP: u64 = 0x2D2;
+/// [`OP`] with this as arg1 changes nothing: Display answers [`shown`] with the page
+/// it reads for the caller, for a program whose first answer went astray.
+pub const ASK: u64 = u64::MAX;
 const SHOWN_TAG: u64 = 0x5049_5853_0000_0000;
 /// Display's answer to [`OP`]: it now reads `page` and no longer the other.
 pub const fn shown(page: u64) -> u64 { SHOWN_TAG | (page & 1) }

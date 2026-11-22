@@ -5142,7 +5142,12 @@ pub extern "C" fn _start() -> ! {
                 }
                 sex_pdx::pixel_region::OP => {
                     // Only the program row that owns this surface shows pixels in it.
-                    if let (Some(k), true) = (sex_pdx::pixel_region::index_of(msg.caller_pd), app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program)) {
+                    if msg.arg1 == sex_pdx::pixel_region::ASK {
+                        if let Some(k) = sex_pdx::pixel_region::index_of(msg.caller_pd) {
+                            unsafe { PIXEL_SHOWN[k] = (msg.caller_pd, sex_pdx::pixel_region::shown(PIXEL_PAGE[k])); }
+                            pixel_shown_flush();
+                        }
+                    } else if let (Some(k), true) = (sex_pdx::pixel_region::index_of(msg.caller_pd), app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program)) {
                         // Any shape a page holds: a full-screen window shows full-screen pixels.
                         let pixels = sex_pdx::pixel_region::page_bytes(unsafe { PIXEL_BYTES[k] }) as usize / 4;
                         let w = ((msg.arg1 >> 32) as usize).min(pixels);
@@ -5155,7 +5160,7 @@ pub extern "C" fn _start() -> ! {
                     // From here on only `page` is read: the program may paint the other.
                     // Rendering happens after the drain, so no read of the old page is
                     // in progress. Answered even when refused, so the program never waits.
-                    if let Some(k) = sex_pdx::pixel_region::index_of(msg.caller_pd) {
+                    if let (Some(k), false) = (sex_pdx::pixel_region::index_of(msg.caller_pd), msg.arg1 == sex_pdx::pixel_region::ASK) {
                         unsafe { PIXEL_SHOWN[k] = (msg.caller_pd, sex_pdx::pixel_region::shown(msg.arg2 & 1)); }
                         pixel_shown_flush();
                     }
