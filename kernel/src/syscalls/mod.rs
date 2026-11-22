@@ -69,6 +69,9 @@ pub(crate) fn validate_user_bytes(start: u64, len: usize, writable: bool) -> boo
         match crate::memory::manager::read_pte_flags(x86_64::VirtAddr::new(va)) {
             Ok(pte) => {
                 if (pte & 0x1) == 0 {
+                    // A program's stack is committed page by page on touch (#306): a buffer
+                    // there the program has not touched yet is committed now, as a touch would.
+                    if crate::app_resources::stack_fault(pd, va) == Some(true) { continue; }
                     return false; // not present
                 }
                 if (pte & 0x4) == 0 {

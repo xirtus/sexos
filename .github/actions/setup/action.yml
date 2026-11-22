@@ -47,7 +47,7 @@ runs:
       # timed out twice on PR #433 inside `apt-get install ffmpeg`). Every later apt call
       # in the job reads this too: give up on a dead connection fast and retry.
       printf 'Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "5";\n' | sudo tee /etc/apt/apt.conf.d/99sexos-ci-net >/dev/null
-      pkgs="ripgrep clang lld llvm wabt nasm musl-dev cmake ninja-build meson acpica-tools mtools gdisk dosfstools"
+      pkgs="ripgrep clang lld llvm wabt nasm musl-dev cmake ninja-build meson acpica-tools mtools gdisk dosfstools ruby"
       if [[ "${{ inputs.qemu }}" == true ]]; then pkgs="$pkgs xorriso qemu-system-x86"; fi
       sudo apt-get update -qq
       sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $pkgs

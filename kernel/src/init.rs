@@ -970,6 +970,8 @@ pub fn init() {
     crate::service_restart::capture(sexdisp_id, 1);
     // Shell: a new run rebuilds its windows from the app catalog.
     crate::service_restart::capture(silkshell_id, 3);
+    // Denim: a new run ends the runs whose pages the old one held (`denim::RESET`).
+    crate::service_restart::capture(denim_id, sex_pdx::denim::DENIM_PD as u8);
     // Saddle: an outside driver that faults starts again on a reset device.
     crate::service_restart::capture(saddle_id, sex_pdx::pci_command::SADDLE_PD as u8);
     const _: () = assert!(crate::service_restart::SADDLE_PD == sex_pdx::pci_command::SADDLE_PD);

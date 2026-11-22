@@ -73,11 +73,17 @@ def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False
  """
  d=time.monotonic()+timeout
  while time.monotonic()<d:
-  health();now=since(start) if since else text()[start:]
+  try:health()
+  except TimeoutError:_tell(text,start,tag);raise
+  now=since(start) if since else text()[start:]
   if not raw:now=now[:now.rfind('\n')+1]
   match=re.search(pattern,now)
   if match:return match
   time.sleep(.02)
+ _tell(text,start,tag)
+ raise TimeoutError(f'{tag}: {pattern}')
+
+def _tell(text,start,tag):
  # What the system said meanwhile, for CI logs (the serial file may not be kept).
  noise=('view.bytes','view.text','clock.source.snapshot','silkbar.civil','sched.latency','display.heartbeat',
         'clock.civil','display.civil.draw','silkbar.clock','scheduler.self_wait','sched.active')
@@ -85,7 +91,6 @@ def wait_serial(text,health,pattern,start=0,timeout=120,*,tag='serial',raw=False
  print(f'--- {tag}: last serial lines before the timeout ---',*tail,sep='\n',file=sys.stderr)
  life=[l for l in text().splitlines() if re.search(r'\[(?:app|display\.app|shell\.app|shell\.program|files\.app|files\.program|net\.app|bell\.app|boot\.app)\.',l)][-200:]
  print(f'--- {tag}: program lifecycle lines over the whole run ---',*life,sep='\n',file=sys.stderr)
- raise TimeoutError(f'{tag}: {pattern}')
 
 def boot(iso,disk,out,tag,resolution):
  serial=out/f'{tag}-serial.log';sock=Path('/tmp')/f'sex-autosave-{os.getpid()}-{tag}.sock'

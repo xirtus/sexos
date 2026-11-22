@@ -12,7 +12,7 @@
 //!   how many capabilities it holds and which domains it may call, and the file grants
 //!   of every program run (paths shown when Mesh itself holds the whole filesystem,
 //!   `run mesh @/`).
-//! - Hardware: cores and memory.
+//! - Hardware: cores and memory, and what Denim keeps compressed (pages, store, ratio).
 //!
 //! Every number comes from the kernel's read-only statistics (syscall 87) and Files'
 //! read-only view of program runs; ending a program is Shell's (`system_stats::end_program`).
@@ -56,15 +56,15 @@ fn panic(info: &core::panic::PanicInfo) -> ! {
 }
 
 #[derive(Clone, Copy, Default)]
-struct Row { pd: u32, cycles: u64, tenths: u64, pages: u64, task: u32, syscalls: u64, rate: u64, read_bytes: u64, read_rate: u64, grants: u8 }
+struct Row { pd: u32, cycles: u64, tenths: u64, pages: u64, task: u32, syscalls: u64, rate: u64, read_bytes: u64, read_rate: u64, grants: u8, packed: u64 }
 
 #[derive(Clone, Copy)]
-struct Sample { rows: [Row; MAX], count: usize, tsc: u64, idle: u64, cores: u64, free_pages: u64, ms: u64, core_idle: [u64; CORES], per_core: bool, memory: Option<mesh::Memory> }
+struct Sample { rows: [Row; MAX], count: usize, tsc: u64, idle: u64, cores: u64, free_pages: u64, ms: u64, core_idle: [u64; CORES], per_core: bool, memory: Option<mesh::Memory>, packed: u64, store: u64 }
 
 impl Sample {
     const fn empty() -> Self {
-        Sample { rows: [Row { pd: 0, cycles: 0, tenths: 0, pages: 0, task: 0, syscalls: 0, rate: 0, read_bytes: 0, read_rate: 0, grants: 0 }; MAX],
-            count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, core_idle: [0; CORES], per_core: false, memory: None }
+        Sample { rows: [Row { pd: 0, cycles: 0, tenths: 0, pages: 0, task: 0, syscalls: 0, rate: 0, read_bytes: 0, read_rate: 0, grants: 0, packed: 0 }; MAX],
+            count: 0, tsc: 0, idle: 0, cores: 1, free_pages: 0, ms: 0, core_idle: [0; CORES], per_core: false, memory: None, packed: 0, store: 0 }
     }
     fn row(&self, pd: u32) -> Option<&Row> { self.rows[..self.count].iter().find(|r| r.pd == pd) }
 }
@@ -144,6 +144,8 @@ impl Mesh {
             *idle = mesh::core(i as u32).map_or(0, |c| c.idle_cycles);
         }
         s.memory = mesh::memory();
+        // Denim (compressed memory): pages it keeps packed and the store they take.
+        if let Some((packed, store)) = stats::packed(0) { s.packed = packed; s.store = store; }
         let span_ms = ms.saturating_sub(prev.ms).max(1);
         let had = prev.tsc != 0;
         let mut after = 0;
@@ -157,7 +159,8 @@ impl Mesh {
             let run = self.run_of(pd, d.task);
             let read_bytes = run.map_or(0, |r| r.read_bytes);
             let read_rate = before.map_or(0, |b| history::per_second(read_bytes.saturating_sub(b.read_bytes), span_ms));
-            s.rows[s.count] = Row { pd, cycles: d.cycles, tenths, pages: d.pages, task: d.task, syscalls: d.syscalls, rate, read_bytes, read_rate, grants: run.map_or(0, |r| r.grants) };
+            s.rows[s.count] = Row { pd, cycles: d.cycles, tenths, pages: d.pages, task: d.task, syscalls: d.syscalls, rate, read_bytes, read_rate, grants: run.map_or(0, |r| r.grants),
+                packed: if s.packed > 0 && d.pages != stats::UNKNOWN { stats::packed(pd).map_or(0, |p| p.0) } else { 0 } };
             s.count += 1;
         }
         // Busiest first; ties by domain so the list does not jump about.
@@ -183,6 +186,10 @@ impl Mesh {
         sex_pdx::serial_record!("[monitor.sample] rows={} busy_tenths={} top_pd={} top_tenths={} top_task={} free_pages={}", s.count, busy, first.pd, first.tenths, first.task, s.free_pages);
         for r in s.rows[..s.count].iter().take(4) {
             sex_pdx::serial_record!("[monitor.row] pd={} tenths={} pages={} calls_per_s={}", r.pd, r.tenths, r.pages, r.rate);
+        }
+        if s.packed > 0 {
+            sex_pdx::serial_record!("[monitor.packed] packed_pages={} store_pages={} ratio_tenths={}", s.packed, s.store, s.packed * 10 / s.store.max(1));
+            for r in s.rows[..s.count].iter().filter(|r| r.packed > 0) { sex_pdx::serial_record!("[monitor.row.packed] pd={} packed_pages={}", r.pd, r.packed); }
         }
         sex_pdx::serial_record!("[monitor.graph] cores={} points={} cpu_permille={} core0_permille={} memory_permille={} calls_per_s={} disk_bytes_per_s={}",
             s.cores, self.cpu.len(), busy, self.cores[0].latest().unwrap_or(0), memory, calls, disk);
@@ -343,6 +350,7 @@ impl Mesh {
     fn summary(&self) -> Line<96> {
         let mut l = Line::new();
         l.put(b"CPU ").tenths(self.cpu.latest().unwrap_or(0) as u64).put(b" of ").num(self.now.cores, 1).put(b" cores   free").pages(self.now.free_pages);
+        if self.now.packed > 0 { l.put(b"   packed").pages(self.now.packed); }
         l
     }
 
@@ -442,6 +450,10 @@ impl Mesh {
                 hw[n].put(b"Program memory    ").pages(m.limit_pages).put(b" at most,").pages(m.lent_pages).put(b" in use,").pages(m.peak_pages).put(b" most used"); n += 1;
             }
             hw[n].put(b"Free for programs ").pages(s.free_pages); n += 1;
+            if s.packed > 0 {
+                let r = s.packed * 10 / s.store.max(1);
+                hw[n].put(b"Compressed (Denim)").pages(s.packed).put(b" in").pages(s.store).put(b" (").num(r / 10, 1).put(b".").num(r % 10, 1).put(b"x)"); n += 1;
+            }
             n += 1;
             hw[n].put(b"Not read yet: temperatures, fans, battery wear, NVMe SMART"); n += 1;
             hw[n].put(b"and the boot timeline (they need the sensor readings of H9)."); n += 1;

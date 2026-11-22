@@ -315,8 +315,9 @@ pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
                 crate::serial_println!("[crash.probe.kernel]");
                 panic!("crash probe: the kernel was asked to stop");
             }
-            if !(1..=15).contains(&(arg & 0xff)) || arg & !(0xff | wire::PROBE_BUSY | wire::PROBE_HANG) != 0 { return wire::INVALID; }
-            crate::serial_println!("[crash.probe.service] pd={} busy={} hang={}", arg & 0xff, (arg & wire::PROBE_BUSY != 0) as u8, (arg & wire::PROBE_HANG != 0) as u8);
+            let pd = arg & 0xff;
+            if !((1..=15).contains(&pd) || pd == sex_pdx::denim::DENIM_PD as u64) || arg & !(0xff | wire::PROBE_BUSY | wire::PROBE_HANG) != 0 { return wire::INVALID; }
+            crate::serial_println!("[crash.probe.service] pd={} busy={} hang={}", pd, (arg & wire::PROBE_BUSY != 0) as u8, (arg & wire::PROBE_HANG != 0) as u8);
             PROBE_KILL.store(arg as u32, Ordering::Release);
             // A service waiting for messages makes no syscall until something wakes it.
             if let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(arg as u32 & 0xff) {

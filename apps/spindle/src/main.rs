@@ -1583,7 +1583,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
                 if w.eq_ignore_ascii_case(b"busy") { how |= sex_pdx::crash_log::PROBE_BUSY; }
                 if w.eq_ignore_ascii_case(b"hang") { how |= sex_pdx::crash_log::PROBE_HANG; }
             }
-            let target = if name.eq_ignore_ascii_case(b"kernel") { Some(0) } else {
+            let target = if name.eq_ignore_ascii_case(b"kernel") { Some(0) }
+                else if name.eq_ignore_ascii_case(b"denim") { Some(sex_pdx::denim::DENIM_PD as u64 | how) } else {
                 sex_pdx::crash_log::SERVICE_NAMES.iter().position(|n| n.as_bytes().eq_ignore_ascii_case(name)).map(|i| i as u64 + 1 | how)
             };
             match target {

@@ -56,6 +56,8 @@ pub fn call(caller: u32, op: u64, target: u64, a: u64, b: u64, c: u64) -> [u64; 
         d::SCAN => crate::app_resources::denim_scan(target, a),
         d::OUT => match window(b) { Ok(w) => two(crate::app_resources::denim_out(target, a, w)), Err(e) => [e, 0, 0, 0, 0] },
         d::IN => match window(b) { Ok(w) => two(page_in(target, a, w, c)), Err(e) => [e, 0, 0, 0, 0] },
+        d::RESET => { let ended = crate::app_resources::denim_lost(); crate::service_memory::empty(d::DENIM_PD); [d::OK, ended, 0, 0, 0] }
+        d::RETURN | d::REFILL => [crate::service_memory::hole(d::DENIM_PD, a, op == d::REFILL), 0, 0, 0, 0],
         _ => [d::INVALID, 0, 0, 0, 0],
     }
 }

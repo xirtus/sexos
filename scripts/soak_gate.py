@@ -65,7 +65,8 @@ def main():
   m=expect('spawn swatch 1',r'\[swatch\.sample\] heap_used=(\d+) heap_mapped=\d+ heap_blocks=(\d+) heap_peak=\d+ free_frames=(\d+)',60);time.sleep(1.5)
   return dict(heap_used=int(m[1]),heap_blocks=int(m[2]),free_frames=int(m[3]))
  # Services that start again in place, and their crash_log names.
- VICTIMS=[('Files',11),('Network',13),('Bell',10),('Input',4),('Shell',3),('Display',1)]
+ # Denim (compressed memory) too: a run with pages out then ends, and the Shell says which.
+ VICTIMS=[('Files',11),('Network',13),('Bell',10),('Input',4),('Shell',3),('Display',1),('Denim',51)]
  def inject(n):
   name,pd=VICTIMS[(n-1)%len(VICTIMS)];s=g['size']()
   expect(f'crash {name.lower()}',rf'\[spindle.crash.probe\] target={pd}\b')

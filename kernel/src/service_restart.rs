@@ -29,7 +29,7 @@ const PTE_FRAME: u64 = 0x000f_ffff_ffff_f000;
 #[derive(Clone, Copy)]
 struct Page { frame: u64, pristine: u64 }
 struct Service { pd: u32, entry: u64, stack_top: u64, pages: [Page; MAX_PAGES], count: usize }
-// Net, Files, Input, Bell, Display, Shell, Saddle, and Drive and USB (driver restart).
+// Net, Files, Input, Bell, Display, Shell, Denim, Saddle, Drive and USB.
 const SERVICES: usize = 10;
 static SERVICE: [Mutex<Service>; SERVICES] = [const { Mutex::new(Service { pd: 0, entry: 0, stack_top: 0, pages: [Page { frame: 0, pristine: 0 }; MAX_PAGES], count: 0 }) }; SERVICES];
 // BOOT publishes immutable identity separately; self count cannot contend with its own rearm.
