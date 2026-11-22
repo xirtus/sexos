@@ -485,17 +485,19 @@ pub fn init_pixel_regions(display: u32) {
     let second = DOMAIN_REGISTRY.get(display).expect("BOOT_PIXEL_DISPLAY_MISSING");
     let programs = || sex_pdx::app_catalog::INCARNATIONS.iter().filter(|r| r.app == sex_pdx::app_catalog::App::Program);
     let rows = programs().count();
-    // One buddy reservation per four rows (each row holds two pages): per-row
-    // backing would spend a boot frame reservation each and run the table out,
-    // and four double rows ask for the same contiguous block eight single ones did.
-    const GROUP: usize = 4;
+    // One buddy reservation per few rows: per-row backing would spend a boot frame
+    // reservation each and run the table out. Double rows go four to a block, so
+    // each block is the size eight single ones were.
+    let group: usize = if roomy { 4 } else { 8 };
     let screen = SCREEN_PIXELS.load(core::sync::atomic::Ordering::Relaxed);
-    let length = region_for_screen(screen >> 32, screen & 0xFFFF_FFFF);
+    // Whole-screen pages when memory allows; half pages on a small machine.
+    let roomy = crate::memory::allocator::GLOBAL_ALLOCATOR.free_frames() * 4096 >= sex_pdx::pixel_region::ROOMY_BYTES;
+    let length = region_for_screen(screen >> 32, screen & 0xFFFF_FFFF, roomy);
     let mut base = 0u64;
     for (k, row) in programs().enumerate() {
-        if k % GROUP == 0 { base = backing(length * GROUP.min(rows - k) as u64); }
+        if k % group == 0 { base = backing(length * group.min(rows - k) as u64); }
         if row.target == 0 { continue; }
-        let physical = base + (k % GROUP) as u64 * length;
+        let physical = base + (k % group) as u64 * length;
         let first = DOMAIN_REGISTRY.get(row.target).expect("BOOT_PIXEL_PROGRAM_MISSING");
         let first_va = alias(first, physical, length, true, false);
         let second_va = alias(second, physical, length, false, false);
@@ -504,7 +506,7 @@ pub fn init_pixel_regions(display: u32) {
         grant(second, display_slot(k), RegionGrant { region_id: region_id(k), virtual_base: second_va, length,
             rights: QUERY_VIEW | READ, dma_base: None, peer_pd: Some(first.id) });
     }
-    crate::serial_println!("[boot.pixel.regions] display={} bytes={} runtime_mint=0", display, length);
+    crate::serial_println!("[boot.pixel.regions] display={} bytes={} whole_pages={} runtime_mint=0", display, length, roomy as u8);
 }
 
 /// One sound ring per program row: the program writes sound, Bell mixes and plays it

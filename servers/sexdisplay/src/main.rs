@@ -2051,7 +2051,7 @@ static mut PIXEL_PAGE:[u64;PROGRAM_ROWS]=[0;PROGRAM_ROWS];
 static mut PIXEL_SHOWN:[(u32,u64);PROGRAM_ROWS]=[(0,0);PROGRAM_ROWS];
 /// Where the page row `k` shows starts.
 fn pixel_page_base(k:usize)->u64{
-    unsafe{let base=PIXEL_REGIONS[k];if base==0{0}else{base+PIXEL_PAGE[k]*sex_pdx::pixel_region::page_bytes(PIXEL_BYTES[k])}}
+    unsafe{let base=PIXEL_REGIONS[k];if base==0{0}else{base+sex_pdx::pixel_region::page_span(PIXEL_BYTES[k],PIXEL_PAGE[k]).0}}
 }
 /// Delivers the pending `shown` answers.
 fn pixel_shown_flush(){
@@ -5149,10 +5149,10 @@ pub extern "C" fn _start() -> ! {
                         }
                     } else if let (Some(k), true) = (sex_pdx::pixel_region::index_of(msg.caller_pd), app_catalog::by_surface(msg.caller_pd, msg.arg0).is_some_and(|row| row.app == app_catalog::App::Program)) {
                         // Any shape a page holds: a full-screen window shows full-screen pixels.
-                        let pixels = sex_pdx::pixel_region::page_bytes(unsafe { PIXEL_BYTES[k] }) as usize / 4;
+                        let page = if msg.arg2 == sex_pdx::pixel_region::WHOLE { msg.arg2 } else { msg.arg2 & 1 };
+                        let pixels = sex_pdx::pixel_region::page_span(unsafe { PIXEL_BYTES[k] }, page).1 as usize / 4;
                         let w = ((msg.arg1 >> 32) as usize).min(pixels);
                         let h = if w == 0 { 0 } else { ((msg.arg1 & 0xFFFF_FFFF) as usize).min(pixels / w) };
-                        let page = msg.arg2 & 1;
                         unsafe { PIXEL_SIZE[k] = (w, h); PIXEL_PAGE[k] = page; }
                         needs_full_redraw = true;
                         sex_pdx::serial_record!("[display.app.pixels] target={} surface={} w={} h={}", msg.caller_pd, msg.arg0, w, h);
@@ -5161,7 +5161,7 @@ pub extern "C" fn _start() -> ! {
                     // Rendering happens after the drain, so no read of the old page is
                     // in progress. Answered even when refused, so the program never waits.
                     if let (Some(k), false) = (sex_pdx::pixel_region::index_of(msg.caller_pd), msg.arg1 == sex_pdx::pixel_region::ASK) {
-                        unsafe { PIXEL_SHOWN[k] = (msg.caller_pd, sex_pdx::pixel_region::shown(msg.arg2 & 1)); }
+                        unsafe { PIXEL_SHOWN[k] = (msg.caller_pd, sex_pdx::pixel_region::shown(if msg.arg2 == sex_pdx::pixel_region::WHOLE { msg.arg2 } else { msg.arg2 & 1 })); }
                         pixel_shown_flush();
                     }
                 }

@@ -26,3 +26,7 @@
   4 ms or more log `[app.pages.late]` (first 16). `Window::ready()` says, without
   waiting, whether the back page is free: Qupid drops a picture instead of holding
   up decoding and sound while Display finishes a frame.
+- Memory: BOOT gives whole-screen pages only with 1.5 GB free (`ROOMY_BYTES`);
+  otherwise the region stays one screen (as before) split in half pages, and a
+  window bigger than a half shows `WHOLE` (page 2), painted in place. 512 MB gates
+  ran out of program memory with doubled regions (Qupid `no_memory`).

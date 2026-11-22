@@ -104,12 +104,25 @@ mod pages {
     /// something else may have taken the first answer and dropped it.
     const ASK_AFTER_MS: u64 = 4;
     static LATE: AtomicUsize = AtomicUsize::new(0);
-    pub fn back() -> u64 { 1 - FRONT.load(Relaxed) }
-    /// Page `p` of the region.
+    /// The page Display is not reading. When it reads the whole region (which starts
+    /// with page 0), that is page 1.
+    pub fn back() -> u64 { if FRONT.load(Relaxed) == 1 { 0 } else { 1 } }
+    /// Page `p` of the region (0, 1, or `pixel_region::WHOLE`).
     pub fn page(p: u64) -> &'static mut [u32] {
         let (base, bytes) = sex_pdx::pixel_region_client().unwrap_or_else(|_| sex_pdx::task_finish(3));
-        let len = sex_pdx::pixel_region::page_bytes(bytes);
-        unsafe { core::slice::from_raw_parts_mut((base + p * len) as *mut u32, (len / 4) as usize) }
+        let (at, len) = sex_pdx::pixel_region::page_span(bytes, p);
+        unsafe { core::slice::from_raw_parts_mut((base + at) as *mut u32, (len / 4) as usize) }
+    }
+    /// Copies the frame shown last into `to` when it does not hold it yet.
+    pub fn carry(to: u64) {
+        if !STALE.swap(false, Relaxed) { return; }
+        let front = FRONT.load(Relaxed);
+        // Page 0 is the start of the whole region: nothing to move between them.
+        if front == to || (front == 0 && to == sex_pdx::pixel_region::WHOLE) || (to == 0 && front == sex_pdx::pixel_region::WHOLE) { return; }
+        let (src, dst) = (page(front), page(to));
+        // Pages 1 and 0 (or the whole region's start) never overlap: at most a page is copied.
+        let n = SHOWN.load(Relaxed).min(src.len()).min(dst.len()).min(page(0).len());
+        dst[..n].copy_from_slice(&src[..n]);
     }
     /// Display's answer that it has switched pages.
     pub fn is_shown(m: &sex_pdx::PdxMessage) -> bool {
@@ -195,21 +208,23 @@ impl Window {
     /// whole screen; what you don't show is the program's own scratch. Paint, then
     /// [`Window::show_pixels`]; take it again after showing (it is the other page then).
     pub fn pixels(&self) -> &'static mut [u32] {
-        pages::settle();
-        let back = pages::page(pages::back());
-        if pages::STALE.swap(false, core::sync::atomic::Ordering::Relaxed) {
-            let front = pages::page(1 - pages::back());
-            let n = pages::SHOWN.load(core::sync::atomic::Ordering::Relaxed).min(back.len());
-            back[..n].copy_from_slice(&front[..n]);
-        }
-        back
+        let to = self.target();
+        // The whole region is painted in place: Display may read it any time.
+        if to != sex_pdx::pixel_region::WHOLE { pages::settle(); }
+        pages::carry(to);
+        pages::page(to)
+    }
+    /// The page to paint: the one Display is not reading, or the whole region for a
+    /// window bigger than a page (a small machine's full-screen window).
+    fn target(&self) -> u64 {
+        if self.size.0 * self.size.1 > pages::page(0).len() { sex_pdx::pixel_region::WHOLE } else { pages::back() }
     }
     /// True when [`Window::pixels`] and [`Window::frame`] would not wait: Display has
     /// moved to the page shown last. A program with frames to spare (video, games)
     /// can skip a frame instead of waiting for Display to finish its own.
-    pub fn ready(&self) -> bool { pages::ready() }
+    pub fn ready(&self) -> bool { self.target() == sex_pdx::pixel_region::WHOLE || pages::ready() }
     /// How many pixels [`Window::pixels`] holds, without waiting for Display.
-    pub fn room(&self) -> usize { pages::page(0).len() }
+    pub fn room(&self) -> usize { pages::page(self.target()).len() }
     /// The width and height of the window's pixel area, as Shell last reported it
     /// (see [`Event::Resize`]). Pixels shown beyond it are cut off.
     pub fn size(&self) -> (usize, usize) { self.size }
@@ -224,11 +239,12 @@ impl Window {
     /// skips copying the last frame in, so what it holds before painting is older.
     /// Show it with [`Window::show_frame`].
     pub fn frame(&mut self, width: usize, height: usize) -> &mut [u32] {
-        pages::settle();
+        let to = self.target();
+        if to != sex_pdx::pixel_region::WHOLE { pages::settle(); }
         pages::STALE.store(false, core::sync::atomic::Ordering::Relaxed);
-        let back = pages::page(pages::back());
-        let n = (width * height).min(back.len());
-        &mut back[..n]
+        let page = pages::page(to);
+        let n = (width * height).min(page.len());
+        &mut page[..n]
     }
     /// Shows the finished [`Window::frame`].
     pub fn show_frame(&mut self, width: usize, height: usize) { self.show_pixels(width, height); }
@@ -236,7 +252,7 @@ impl Window {
     /// text. Display switches to that page; the next [`Window::pixels`] is the other.
     pub fn show_pixels(&mut self, width: usize, height: usize) {
         use core::sync::atomic::Ordering::Relaxed;
-        let page = pages::back();
+        let page = self.target();
         call(SLOT_DISPLAY, sex_pdx::pixel_region::OP, self.surface, ((width as u64) << 32) | height as u64, page);
         pages::FRONT.store(page, Relaxed);
         pages::SURFACE.store(self.surface, Relaxed);
