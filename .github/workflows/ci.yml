@@ -875,7 +875,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: image
     if: needs.image.outputs.full == 'true'
-    timeout-minutes: 150
+    # The 12 GiB proof fills ~36 GiB and reads it back: hours, not minutes. It runs
+    # only on the daily schedule and by hand, with the job's longest budget.
+    timeout-minutes: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 355 || 60 }}
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -889,7 +891,8 @@ jobs:
         truncate -s 1G "$RUNNER_TEMP/double-source.img"
         SEXOS_GATE_MEMORY=1G python3 scripts/denim_double_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/double-source.img" --out "$RUNNER_TEMP/sexos-proof/double-1g"
     - name: Heap over twice the RAM at 12 GiB
-      run: SEXOS_GATE_MEMORY=12G python3 scripts/denim_double_gate.py --minutes 100 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/double-source.img" --out "$RUNNER_TEMP/sexos-proof/double-12g"
+      if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      run: SEXOS_GATE_MEMORY=12G python3 scripts/denim_double_gate.py --minutes 300 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/double-source.img" --out "$RUNNER_TEMP/sexos-proof/double-12g"
     - name: Preserve evidence
       if: always()
       uses: actions/upload-artifact@v4
