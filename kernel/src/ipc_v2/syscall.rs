@@ -277,6 +277,23 @@ pub unsafe fn endpoint_syscall(regs: &mut SyscallRegs) -> u64 {
     }
 }
 
+/// A notification the caller may signal, for a device vector to signal from now on
+/// (`device_irq` OP_BIND): its pool entry, object id and generation.
+pub fn signal_target(slot: u32) -> Result<(usize, u32, u32), u64> {
+    object(slot, rights::WRITE, false).map(|(cap, entry)| (entry, cap.object, cap.generation))
+}
+
+/// An interrupt signals a bound notification. False when that object is gone,
+/// revoked, or its id now names a newer object (the generation moved on), so a
+/// recycled id never inherits the binding.
+pub fn signal_bound(entry: usize, object: u32, generation: u32, bits: u64) -> bool {
+    if entry >= POOL || NOTIFICATION_OBJECT[entry].load(Ordering::Acquire) != object + 1 { return false; }
+    if !OBJECTS.live(&ObjectCap { object, generation, rights: 0, badge: 0 }) { return false; }
+    let n = &NOTIFICATIONS[entry];
+    if let SignalOutcome::Wake(t) = n.signal(bits) { complete(t, [0, 0, n.poll(), 0, 0, 0], false); }
+    true
+}
+
 /// Syscall 106, SYS_NOTIFY.
 pub unsafe fn notify_syscall(regs: &mut SyscallRegs) -> u64 {
     let (op, slot) = (regs.rdi & 0xFF, (regs.rdi >> 8) as u32);

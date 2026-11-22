@@ -1,0 +1,9 @@
+[package]
+name = "sex-lanes"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Per-core I/O lanes: shared submission/completion rings, adaptive polling, NVMe multi-queue and NIC RSS helpers"
+
+[lib]
+path = "src/lib.rs"
