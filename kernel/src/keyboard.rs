@@ -103,9 +103,13 @@ pub fn is_keyboard_ready() -> bool {
 }
 
 /// Reads a single byte from the PS/2 keyboard data port.
-/// Returns None if keyboard was not initialized.
+/// Returns None if keyboard was not initialized, or if the controller holds no byte
+/// (the polled path in `take_pending` may already have taken the one this IRQ1 raised).
 pub fn read_scancode() -> Option<u8> {
     if !KEYBOARD_READY.load(Ordering::Acquire) {
+        return None;
+    }
+    if status() & OUTPUT_FULL == 0 {
         return None;
     }
     let mut port: Port<u8> = Port::new(0x60);

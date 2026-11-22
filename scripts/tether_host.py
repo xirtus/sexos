@@ -61,7 +61,10 @@ def scan_targets(base=None):
 
 
 def find_listener(hosts, port, timeout=0.6):
-    """The first host with PORT open, trying them all at once."""
+    """The first host with PORT open, trying them all at once, and its connected socket.
+
+    The socket is kept, not reconnected: SexOS opens its next listener only when Spindle
+    polls ACCEPT, so a second connection right after this one can be refused."""
     socks = {}
     for h in hosts:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -79,13 +82,17 @@ def find_listener(hosts, port, timeout=0.6):
             _, writable, _ = select.select([], list(socks), [], timeout)
             for s in writable:
                 if s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0:
-                    found = socks[s]
+                    found = (socks.pop(s), s)
                     break
                 socks.pop(s).close()
     finally:
         for s in socks:
             s.close()
-    return found
+    if found:
+        host, conn = found
+        conn.setblocking(True)
+        return host, conn
+    return None
 
 
 def write_state(d: Path, **state):
@@ -267,10 +274,9 @@ def main(argv=None):
             hosts = [a.host] if a.host and not a.scan else scan_targets(a.host)
             found = find_listener(hosts, a.port)
             if found:
-                print(f'tether: found SexOS at {found}:{a.port}', flush=True)
-                conn = socket.create_connection((found, a.port), timeout=5)
-                conn.settimeout(None)
-                session(a.dir, conn, found, auto, a.quiet)
+                host, conn = found
+                print(f'tether: found SexOS at {host}:{a.port}', flush=True)
+                session(a.dir, conn, host, auto, a.quiet)
                 return 0
             if time.time() > end:
                 print('tether: no SexOS listener found (is the x17 on the same network, booted with "report to the Mac"?)', file=sys.stderr)
