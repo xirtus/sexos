@@ -3670,6 +3670,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "harness"
+version = "0.1.0"
+dependencies = [
+ "sex-hwdb",
+ "sex-pdx",
+]
+
+[[package]]
+name = "harness-template"
+version = "0.1.0"
+dependencies = [
+ "harness",
+]
+
+[[package]]
 name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7112,6 +7127,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
+name = "saddle"
+version = "0.1.0"
+dependencies = [
+ "harness",
+ "harness-template",
+ "sex-hwdb",
+ "sex-pdx",
+]
+
+[[package]]
 name = "safe-mmio"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7635,6 +7660,7 @@ dependencies = [
  "rand_hc",
  "raw-cpuid 11.6.0",
  "scopeguard",
+ "sex-gate",
  "sex-hotplug",
  "sex-hwdb",
  "sex-idle",
@@ -7667,6 +7693,10 @@ dependencies = [
  "sex-archive",
  "sha2 0.10.9",
 ]
+
+[[package]]
+name = "sex-lanes"
+version = "0.1.0"
 
 [[package]]
 name = "sex-laptop"

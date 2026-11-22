@@ -12,6 +12,17 @@ place; to retire a pin, delete its line. Order within a kind does not matter.
       a reviewed whole kernel Rust tree digest, kept as a review receipt
 """
 PINS = (
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:230bcac20c18ce4eddb3b3a8232622d432edeff676b47f448b791bd48abf9615'),  # #466 (cld on entry, PKU gates) merged with #456's hot-plug tick (x17 PR sweep; union of two reviewed versions), 2026-11-21
+
+
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:179c3a01c3681837811f309e17e3e498760f93924e2c1cef2c2a3c0246a0272b'),  # PKU gate: keep live PKRU in reschedule (no wait change), 2026-11-19
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:d661ae96f285ec4d7f14e15ee321c5e3996ac66873d396425d81c85c38974d97'),  # merge of PKU gate live-PKRU and SMAP audit (no wait change), 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:b548617e6d588bd25e62716751ce33650f03f5e6eeda83cede7720b2a9f3a7ad'),  # merge of PKU gates with #424's kernel fault report (no wait change), 2026-11-20
+
+    ('timed', 'kernel/src/interrupts.rs', 'fn-v1:adad1c0cc3de320796ce9f5fc9ccc9fc58e999f2bc42d64a06abfe3239805b0d'),  # kernel fault report prints 32 stack words and the core's last switches (no wait change), 2026-11-20
     ('timed', 'kernel/src/interrupts.rs', 'fn-v1:f6ef904984a5335ae8a8db7df93b5dc6da52805e9adc60d812aa3a76080d0e0b'),  # #456 hot-plug tick merged with master (x17 PR sweep; union of two reviewed versions), 2026-11-21
 
     ('timed', 'kernel/src/scheduler.rs', 'a23ecc7d73a7775b9d5b455435c99b58f3311e78ce2992788dc20604a91fccb2'),  # #468 cross-core handoff + pair affinity at 047e13f5 (admit takes the home core's slot, should_preempt honours it, idle has_queued sees it; wait functions unchanged), reviewed by WS4, 2026-11-20
@@ -162,6 +173,8 @@ PINS = (
 
     ('timed', 'crates/sex-pdx/src/lib.rs', 'wait-v1:aa1083137f9cf350f5a1fe54038943fa82596df2b4c8737d6e4f4fe2e4598946'),  # BLOCK_MAX_RUN 512 KiB + BLOCK_CMD_RUN (no wait change), 2026-11-17
 
+    ('timed', 'crates/sex-pdx/src/lib.rs', 'wait-v1:7c68a173d8b97e90ba5fff4bb165d5785ad4208f7c8f8fa8caf9f6040757b266'),  # BLOCK_MAX_RUN 512 KiB -> 4 MiB (no wait change), 2026-11-19
+
     ('timed', 'servers/sexnet/src/main.rs', '00da2ed6f93bb473e3944a8a4bc7e38f887676083cfe8cf9195c821cba4fc725'),  # Reviewed restricted-provider intake/polling; the exact Net2 envelope and deadline owners are unchanged. See RESTRICTED_TIMER_SOURCE_REVIEW_2026_11_15.
 
     ('timed', 'servers/sexnet/src/main.rs', 'd7526adf2002e45afd5ad986808e65e7eee3d5f793f718e62f8893fef51ae10d'),
@@ -174,12 +187,15 @@ PINS = (
 
     ('timed', 'servers/sexnet/src/main.rs', 'd994aeb0af740e6157d92744656943261954b99c6828795723c9070d4625ff34'),  # wired NIC interrupt: 10-tick quiet sleep while armed, no stall after a full burst (two-tick envelope unchanged), 2026-11-19
 
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # #460 device sleep notice is logged and skipped before request handling (no wait change), 2026-11-20
+
     ('timed', 'servers/sexusb/src/main.rs', '3fb9341fda71262a023114c8115407949ce700c604c7c3327464e79a68af3a81'),
 
     ('timed', 'servers/sexusb/src/main.rs', 'adc83a02655343df1b83d99dedd252a7e9ee06164055a54420b5e9207b3dba06'),
 
     ('timed', 'servers/sexusb/src/main.rs', '129171cc0512a8097fe5535c36f8e76a1c358355432f9105f556fe2c454335ec'),
     ('timed', 'servers/sexnet/src/main.rs', 'fcc4ffc50a6302756285ae01c86fcd838852bfbdf4ac4a4b2198550bf2afe400'),  # OP_DEVICE_SLEEP from the kernel logged and skipped after the listen (no wait change), 2026-11-19
+    ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # #451 NIC interrupt sleep + #460 OP_DEVICE_SLEEP notice merged together (both reviewed, two-tick envelope unchanged), 2026-11-20
     ('timed', 'servers/sexnet/src/main.rs', '361ad412d188a65e0e6ceebe7e71f518449aea32d466d276356ef10153261b12'),  # master merge of the OP_DEVICE_SLEEP handler (#460) with the wired NIC interrupt wait (irq_wait, reviewed in its own PR); nothing new, 2026-11-20
     ('timed', 'servers/sexusb/src/main.rs', '2c15ba53f84180a5feb262de17783e3821be45c5f4941d9660835d9c9bb541a6'),  # sleep notice suspends idle ports (bounded link waits); quiet predicate unchanged, 2026-11-19
 
@@ -249,5 +265,8 @@ PINS = (
     ('tree', '', 'c74db80e5ed8fa929a2a5253c80949ec3beffe467cfef29ac192dae43234902c'),  # stream 2 merged with IPC v2 syscalls (#418/#421/#422), 2026-11-18
 
     ('tree', '', 'c90aad02c6aa7df0113ccb215474c805633b552229da4af87ee9c5949ff1b73b'),  # protection views with PCID (plan Phase 5b), 2026-11-17
+
+
+    ('timed', 'kernel/src/syscalls/mod.rs', 'fn-v1:dcfd9075428ef7e5f81f7f1b7bf46be288047256915f7d60347ddded728251d6'),  # driver restart: inbox watch + hang probe in syscall entry, 2026-11-19
 
 )

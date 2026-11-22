@@ -5448,6 +5448,24 @@ From Scarlet's commits since 2026-11-16 (MIT), the deterministic editing rules, 
 - SSH domains: `ssh.NAME = user@host[:port]` lines in `spindle.conf` (`ssh NAME [COMMAND]` logs in there); bad lines are reported like other settings.
 - Network: Spindle's `spindle` command now opens the terminal window with the network, and the window passes it on only to the runs that need it (`ssh`), through Shell, which grants a terminal's run the network only when the terminal itself holds it (the same inheritance as `sex_pdx::launch` children, NETWORK_RUNS). Other programs typed in a pane still run without the network.
 - Verified by `cargo test -p spindle-panes` (`config_names_ssh_domains`) and `scripts/ssh_gate.py` (QEMU against the host's OpenSSH: pane PTY size equals `stty size` remotely, `echo` runs, `exit` ends with status 0).
+## Per-core I/O lanes, stage 1: interrupts on the driver's core, driver workers, lanes crate (2026-11-19)
+- Device interrupts land on the core of the task that unmasks them (they all went to core 0, then an IPI woke SexDrive/SexNet on their own core). `SYS_DEVICE` gains `OP_STEER` (aim one vector at any core) and `OP_BIND` (a vector signals an IPC v2 notification, so each queue's worker sleeps on its own interrupt). `SYS_PROGRAM_THREAD SPAWN_ON` lets a driver service start workers pinned to cores.
+- `crates/sex-lanes`: shared SPSC rings with a need-wakeup handshake and lying-peer checks, adaptive interrupt/polling switch, NVMe multi-queue commands and doorbells, core/queue/vector plans, Toeplitz RSS and Intel igb/igc queue registers.
+- Plan and baseline (4-core disk reads 2.4x slower than 1-core today): `docs/handoff/PER_CORE_IO_LANES_2026_11_19.md`. Verified by `scripts/lanes_host_gate.sh` (15 tests) and the KVM bench lane.
+
+## Harness driver SDK and the public hardware list (2026-11-19)
+- `crates/harness` (GPL-2.0-or-later OR MIT): the driver SDK. `Regs` (with a bounds-checked `Mmio`), `Clock`, `Irq` (pending bits, `NoIrq`), `DmaPool`/`DmaBuf`/`RingIndex`, bounded waits (`poll_until`, `wait_for`: deadline plus a 1M poll cap; all ones is `Gone`), `[tag] key=value` records that `hw_report.py` always parses, and `Error`.
+- `mock` feature: `DeviceModel` + `ModelRegs` (access log, shared model), `MockClock` (models step while the driver sleeps), `MockIrq`/`IrqLine`, `MockDma`/`BusPort` (out-of-region device DMA counted as an IOMMU fault), `Lines`. Fuzz hooks: `FuzzRegs` (pins), `FuzzIrq`, `Src`, the built-in mutator from `fuzz/drivers` with its hang budget, `fuzz_main!`, and `fuzz::one` for cargo-fuzz.
+- `sexos` feature: lease BAR view, service DMA pool, syscall 86 interrupts, clock, serial records through `sex_pdx`.
+- `crates/harness-template`: a complete driver for QEMU's edu device (identity, liveness, factorial by poll or interrupt, DMA both ways, limits checked before the device sees them), a device model with fault knobs, 10 tests, and the `fuzz_edu` binary. Guide: `docs/sdk/DRIVER_SDK.md`.
+- `scripts/hardware_list.py` builds `docs/HARDWARE.md` and `docs/hardware.json` from sex-hwdb (every `exact()` row and `by_class()` rule) and the newest `hw-reports/` report of each machine ("Seen on: works/failed").
+- Verified by `scripts/driver_sdk_host_gate.sh` (CI host job) and `scripts/tests/test_hardware_list.py`.
+
+## Saddle: Harness drivers run inside SexOS on generic leases (2026-11-20)
+- `Lease::Generic` (`sex_hwdb::manifest`) and `device_lease::Kind::Generic` (kernel): BAR0 view (256 B to 64 KiB), memory + bus-master command bits, a 256 KiB DMA pool (`GENERIC_DMA_REGION_ID`), MSI vectors from the manifest. The lease's class word carries bit 24 so the command path knows its kind.
+- `servers/saddle` (BOOT domain 54, Senses key, restartable): holds the leases from the `SADDLE` manifest (consulted last, exact ids only) and runs each driver in its `DRIVERS` table through `harness::sexos`. First driver: the edu template, with a self test (polled and interrupt factorials, DMA round trip): `[saddle.selftest] driver=edu ok=1`.
+- `harness::sexos::LeasedRegs` honours the lease window (sub-page BARs).
+- Verified by the `edu_saddle` row of `scripts/device_matrix_gate.py` (QEMU `-device edu,dma_mask=0xffffffff`) and `crates/sex-hwdb/tests/manifest.rs`.
 
 ## L3: native Intel display on Tiger Lake (2026-11-19)
 - On Intel Tiger Lake graphics (the Alienware x17 R1's iGPU), Display takes the panel over from the firmware framebuffer without a modeset: it repoints the firmware's pipe at two buffers of its own and flips between them at vblank. Frames are tear-free and held to the panel's refresh; only changed rows are written and flushed.

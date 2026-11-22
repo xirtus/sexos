@@ -69,6 +69,9 @@ pub(crate) fn validate_user_bytes(start: u64, len: usize, writable: bool) -> boo
         match crate::memory::manager::read_pte_flags(x86_64::VirtAddr::new(va)) {
             Ok(pte) => {
                 if (pte & 0x1) == 0 {
+                    // A program's stack is committed page by page on touch (#306): a buffer
+                    // there the program has not touched yet is committed now, as a touch would.
+                    if crate::app_resources::stack_fault(pd, va) == Some(true) { continue; }
                     return false; // not present
                 }
                 if (pte & 0x4) == 0 {
@@ -217,10 +220,20 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.rdi = 0xfe;
             unsafe { crate::scheduler::finish_current_task(regs as *const _) }
         }
-        if option_env!("SEXOS_CRASH_PROBE").is_some() && crate::crash_log::probe_pending(pd) {
-            crate::crash_log::fault(pd, 0xff, regs.rcx, 0, 0, "crash probe");
-            regs.rdi = 0xff;
-            unsafe { crate::scheduler::finish_current_task(regs as *const _) }
+        if option_env!("SEXOS_CRASH_PROBE").is_some() {
+            if crate::crash_log::probe_pending(pd) {
+                crate::crash_log::fault(pd, 0xff, regs.rcx, 0, 0, "crash probe");
+                regs.rdi = 0xff;
+                unsafe { crate::scheduler::finish_current_task(regs as *const _) }
+            }
+            // The hang probe: this service is stuck mid-request until the hang watch ends
+            // it. Each wake runs the same syscall instruction again (it is 2 bytes long).
+            if crate::service_restart::frozen(pd) {
+                // The user RIP a resume returns to is the entry stub's saved rcx (see
+                // `scheduler::yield_and_switch`: SyscallRegs + 72 + 112).
+                unsafe { *((regs as *mut _ as *mut u8).add(184) as *mut u64) -= 2; }
+                loop { unsafe { crate::scheduler::park_current_unless(regs as *const _, || false); } }
+            }
         }
     }
 
@@ -408,6 +421,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
             regs.r10 = s_arg1;
             regs.r8  = s_arg2;
             regs.rdi = s_caller_task;
+            crate::service_restart::inbox(current_pd.id, type_id != 0);
 
             type_id
         },
@@ -515,7 +529,8 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         },
 
         83 => { // SYS_PROGRAM_THREAD: workers of the caller's own run.
-            crate::program_workers::call(regs,rdi,rsi,rdx,r10)
+            if rdi==sex_pdx::program_threads::SPAWN_ON{crate::program_workers::spawn_service(regs)}
+            else{crate::program_workers::call(regs,rdi,rsi,rdx,r10)}
         },
 
         82 => { // SYS_PROGRAM_CODE: self-only, the run's own heap pages become code or data.
@@ -658,6 +673,7 @@ pub fn dispatch(regs: &mut SyscallRegs) -> u64 {
         86 => crate::device_irq::syscall(regs), // SYS_DEVICE: own leases, own vectors, own bits.
 
         110 => crate::vmx::syscall(regs), // SYS_VM: Drag virtual machines, Machine capability only.
+        111 => crate::gate::syscall(regs), // SYS_GATE: PKU gates between trusted services.
 
         100 => { // PDX_CALL_WAIT: syscall 0 to a slot, then syscall 53, in one entry.
             // The callee runs next on this core if it lives here (a handoff).

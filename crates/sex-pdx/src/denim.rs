@@ -13,8 +13,12 @@
 //!
 //! Which pages, when, and how they are stored is Denim's policy. Only the Denim domain
 //! may call. Only writable, non-executable heap pages (from `program_memory::grow`) of a
-//! live, single-threaded run go out: a run that starts a worker gets `RETRY` and Denim a
-//! `OP_RECALL`, and code pages stay. A run's out pages simply end with it.
+//! live run go out; a worker's touch comes back through Denim as the main task's does.
+//! Code pages stay: a run that turns heap into code gets `RETRY` and Denim an
+//! `OP_RECALL`. A run's out pages simply end with it.
+//!
+//! Denim restarts like the other BOOT services. Its first call, `RESET`, ends every run
+//! that still had pages out (the old run's store is gone) and frees the old store.
 
 /// rdi = op, rsi = target domain, rdx/r10/r8 per op → rax = status, rsi..r8 per op.
 pub const SYS: u64 = 88;
@@ -33,6 +37,14 @@ pub const OUT: u64 = 2;
 /// rdx = heap page address, r10 = window holding its bytes, r8 = fault token (0 when
 /// no task waits, as for a recall) → rsi = pages of the run still out.
 pub const IN: u64 = 3;
+/// Denim is starting: every run with pages out ends (its pages were in the old run's
+/// store) and the Shell hears `OP_LOST` for each; every page of Denim's own arena goes
+/// back, leaving holes `REFILL` can use → rsi = runs ended.
+pub const RESET: u64 = 4;
+/// rdx = a page of Denim's arena → its frame goes back to the machine (a hole).
+pub const RETURN: u64 = 5;
+/// rdx = a hole in Denim's arena → a fresh zeroed frame there.
+pub const REFILL: u64 = 6;
 
 pub const OK: u64 = 0;
 pub const INVALID: u64 = 1;
@@ -49,6 +61,9 @@ pub const OP_FAULT: u64 = 0x3D1;
 /// From the kernel (caller 0): bring back every page of arg0's run (it starts a worker
 /// or turns heap into code).
 pub const OP_RECALL: u64 = 0x3D2;
+/// From the kernel (caller 0) to the Shell: arg0's run was ended because Denim started
+/// again and the pages it held for the run were lost.
+pub const OP_LOST: u64 = 0x3D3;
 
 /// The leaf of a page Denim holds: not present, tagged, naming its row. Never a frame.
 pub const OUT_TAG: u64 = 0x600;

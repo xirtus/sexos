@@ -275,6 +275,8 @@ pub unsafe extern "C" fn syscall_entry() {
 pub extern "C" fn syscall_handler(regs: &mut SyscallRegs) -> u64 {
     // syscall_entry already opened every key; a second write only costs time.
     crate::scheduler::observe_user_entry();
+    if crate::gate::inside(regs) { return sex_pdx::gate::IN_GATE; }
+    crate::jitter::delay(crate::jitter::Site::Entry);
     crate::syscalls::dispatch(regs)
 }
 
@@ -284,6 +286,7 @@ macro_rules! switching_stub { ($name:ident, $handler:ident) => {
 #[unsafe(naked)]
 pub unsafe extern "C" fn $name() {
     core::arch::naked_asm!(
+        "cld", // the interrupted code may have DF set (a backward memmove); Rust code needs it clear
         "push 0", // DUMMY ERROR CODE
         "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
         "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
@@ -346,6 +349,7 @@ switching_stub!(preempt_interrupt_stub, preempt_interrupt_handler);
 #[unsafe(naked)]
 pub unsafe extern "C" fn page_fault_stub() {
     core::arch::naked_asm!(
+        "cld", // the interrupted code may have DF set (a backward memmove); Rust code needs it clear
         // CPU already pushed Error Code (8 bytes). CPU frame = 48 bytes.
         "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
         "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
@@ -393,6 +397,7 @@ pub unsafe extern "C" fn page_fault_stub() {
 #[unsafe(naked)]
 pub unsafe extern "C" fn general_protection_fault_stub() {
     core::arch::naked_asm!(
+        "cld", // the interrupted code may have DF set (a backward memmove); Rust code needs it clear
         // CPU already pushed Error Code (8 bytes). CPU frame = 48 bytes.
         "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
         "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
@@ -441,6 +446,7 @@ macro_rules! cpu_fault_stub {
         #[unsafe(naked)]
         pub unsafe extern "C" fn $name() {
             core::arch::naked_asm!(
+                "cld", // the interrupted code may have DF set (a backward memmove); Rust code needs it clear
                 $push_error,
                 "push r15", "push r14", "push r13", "push r12", "push r11", "push r10", "push r9", "push r8",
                 "push rdi", "push rsi", "push rbp", "push rdx", "push rcx", "push rbx", "push rax",
@@ -496,6 +502,7 @@ fn fault_name(vector: u64) -> &'static str {
 #[no_mangle]
 pub extern "C" fn cpu_fault_handler(stack_frame: &mut InterruptStackFrame, error_code: u64, vector: u64) {
     if stack_frame.code_segment.0 & 3 == 3 {
+        if unsafe { crate::gate::unwind(stack_frame, vector, error_code, 0) } { return; }
         unsafe { end_user_fault(stack_frame, vector, error_code) }
     }
     let cur_pd = crate::core_local::CoreLocal::get().current_pd();
@@ -638,7 +645,10 @@ fn reschedule(stack_frame: &mut InterruptStackFrame) {
         // Save old context from interrupt stub's GPR push level on the stack.
         // stack_frame points to RIP.  Stub pushed [rax..r15][dummy=0] above RIP.
         // Layout from RIP downward: [dummy][r15][r14]..[rbx][rax]
-        if !old_ctx_ptr.is_null() { save_user_frame(&mut *old_ctx_ptr, stack_frame); }
+        if !old_ctx_ptr.is_null() {
+            save_user_frame(&mut *old_ctx_ptr, stack_frame);
+            crate::gate::keep_live_pkru(&mut *old_ctx_ptr, stack_frame);
+        }
 
         let kstack_top = (*next_ctx_ptr).kstack_top;
         if TIMER_TICK_LOG_BUDGET.load(Ordering::Acquire) > 0 {
@@ -725,17 +735,20 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
             fault_addr, fault_rip, fault_rsp, error_code, cur_pd);
         // The words around RSP name the caller of a jump to a bad address (a return
         // address just below RSP after `ret`), read only where the stack is mapped.
-        let low = fault_rsp.wrapping_sub(32) & !7;
-        if [low, low + 63].iter().all(|&a| crate::boot_memory::existing_leaf_address(a).is_some_and(|l| unsafe { core::ptr::read_volatile(l as *const u64) } & 1 != 0)) {
+        let low = fault_rsp.wrapping_sub(64) & !7;
+        if [low, low + 255].iter().all(|&a| crate::boot_memory::existing_leaf_address(a).is_some_and(|l| unsafe { core::ptr::read_volatile(l as *const u64) } & 1 != 0)) {
             let w = |i: u64| unsafe { core::ptr::read_volatile((low + i * 8) as *const u64) };
-            serial_println!("KERNEL PAGE FAULT STACK: at={:#x} {:#x} {:#x} {:#x} {:#x} | {:#x} {:#x} {:#x} {:#x}", low, w(0), w(1), w(2), w(3), w(4), w(5), w(6), w(7));
+            for r in (0..32).step_by(8) { serial_println!("KERNEL PAGE FAULT STACK: at={:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}", low + r * 8, w(r), w(r + 1), w(r + 2), w(r + 3), w(r + 4), w(r + 5), w(r + 6), w(r + 7)); }
         }
         let core = crate::core_local::CoreLocal::get().core_id as usize;
         let (task, custody, cur, out) = crate::scheduler::fault_report(core);
         serial_println!("KERNEL PAGE FAULT TASK: core={} task={} at={:p} custody={:?} pending_outgoing={:p}", core, task, cur, custody, out);
+        crate::scheduler::print_switches(core);
         crate::console::stop(format_args!("page fault in the kernel touching {:#x} at {:#x} (error {:#x})",
             fault_addr, fault_rip, error_code));
     }
+    // A fault inside a gate call is the callee's: the caller gets PEER_DIED.
+    if unsafe { crate::gate::unwind(stack_frame, 14, error_code, fault_addr) } { return; }
     let recoverable = crate::scheduler::fault_transaction::eligible_user_fault(
         fault_addr, error_code, fault_cs);
     serial_println!("[paging.fault.trap] pd={} addr={:#x} rip={:#x} error={:#x} eligible={}",
@@ -821,6 +834,7 @@ pub extern "C" fn general_protection_fault_handler(
     error_code: u64,
 ) {
     if stack_frame.code_segment.0 & 3 == 3 {
+        if unsafe { crate::gate::unwind(stack_frame, 13, error_code, 0) } { return; }
         unsafe { end_user_fault(stack_frame, 13, error_code) }
     }
     #[repr(C, packed)]

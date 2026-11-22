@@ -13,6 +13,9 @@ struct App {
     pages:alloc::vec::Vec<PrivatePage>,count:usize,captured:bool,ready:bool,
     pool:u64,coordinator:u32,pager:u32,services:[u32;5],acked:u8,
     identity:Incarnation,predecessor:u32,activated:bool,retired:bool,last_hint:[u64;6],hinted:u8,kicked:bool,
+    /// Hints re-sent to each recipient this run: the gap doubles (16..128 ticks), so a
+    /// holder busy cleaning up is not flooded (the exit-notice storms).
+    tries:[u8;6],
     /// Program rows run again. The grants name boot_task; `task` is the current run.
     reusable:bool,boot_task:u32,generation:u32,rebirthing:bool,pristine:u64,entry:u64,stack_top:u64,
     /// Shell took this run's pages because it ignored Close; retire need not find them.
@@ -26,10 +29,13 @@ struct App {
     image_pages:usize,grown:usize,stack_pages:usize,
     /// Heap pages Denim holds compressed (their leaves are its marker).
     out:usize,
+    /// Stack pages committed on the run's first touch, below the `STACK_COMMIT` it
+    /// starts with (`stack_fault`). Kept apart so heap pages stay the manifest's last.
+    stack:alloc::vec::Vec<PrivatePage>,
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
     pages:alloc::vec::Vec::new(),count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,stack_pages:0,out:0,last_hint:[0;6],hinted:0,kicked:false}}}
+    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,stack_pages:0,out:0,stack:alloc::vec::Vec::new(),last_hint:[0;6],hinted:0,kicked:false,tries:[0;6]}}}
 impl App {
     /// Sets manifest entry `i`, growing the manifest by one when `i` is its end.
     fn put(&mut self,i:usize,page:PrivatePage){
@@ -58,7 +64,7 @@ static TERMINAL:[AtomicBool;MAX_APPS]=[const{AtomicBool::new(false)};MAX_APPS];
 /// The live run of an app row and the pages its manifest holds, for the system monitor.
 pub fn held_pages(target:u32)->Option<(u32,u64)>{
     let i=TARGETS.iter().position(|t|t.load(Ordering::Acquire)==target)?;
-    let apps=apps_lock!()?;Some((apps[i].task,apps[i].count as u64))
+    let apps=apps_lock!()?;Some((apps[i].task,(apps[i].count+apps[i].stack.len()) as u64))
 }
 fn boot(){assert_eq!(crate::ipc::BOOT_PHASE.load(Ordering::Acquire),crate::ipc::BootPhase::RegistryBuild as u8,"APP_GENESIS_AFTER_SEAL");}
 pub fn plan_boot_apps(targets:&[u32]){
@@ -360,6 +366,8 @@ pub fn activation(pd:&ProtectionDomain,slot:u64,kind:u64,len:u64)->[u64;5]{
 /// A run's stack when its file names none, and the most one may ask for.
 const STACK_DEFAULT:u64=1<<20;
 const STACK_MAX:u64=256<<20;
+/// Stack pages a run starts with (64 KiB); the rest of its stack is committed on touch.
+const STACK_COMMIT:usize=16;
 pub(crate) fn checked_program_image(len:usize,source:Option<ImageSource>)->Result<crate::boot_memory::ImageCopy,u64>{
     let copy=crate::boot_memory::program_image(len).ok_or(INVALID)?;
     if source.is_some_and(|approved|!approved.matches(&copy)){return Err(DENIED)}
@@ -438,9 +446,12 @@ fn load_program(app:&mut App,elf:&[u8],task:u32)->Result<(),u64>{
     }
     // The stack: at the arena's top, sized by the file (`-z stack-size`) or 1 MiB, with
     // an unmapped guard page below it, so an overflow faults instead of reaching the heap.
+    // Only its top `STACK_COMMIT` is there at the start; the rest comes page by page as
+    // the run first touches it (`stack_fault`), so a big stack costs only what is used.
     let stack_pages=(if parsed.stack==0{STACK_DEFAULT}else{parsed.stack.min(STACK_MAX)}).div_ceil(4096) as usize;
     if image_pages+stack_pages+1>app.arena_pages{fail(app,count,"stack_room");return Err(DENIED)}
-    for index in app.arena_pages-stack_pages..app.arena_pages{
+    app.stack=alloc::vec::Vec::new();
+    for index in app.arena_pages-stack_pages.min(STACK_COMMIT)..app.arena_pages{
         let va=app.arena+(index*4096) as u64;
         let (Some(leaf),Some(frame))=(crate::boot_memory::arena_leaf(va,app.pkey),crate::program_frames::take())else{
             fail(app,count,"no_memory");return Err(DENIED)};
@@ -452,7 +463,7 @@ fn load_program(app:&mut App,elf:&[u8],task:u32)->Result<(),u64>{
     let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
     let main=target.main_task.load(Ordering::Acquire);
     unsafe{(*main).rearm(task,entry,rsp,target);}
-    crate::serial_println!("[app.program.loaded] target={} task={} bytes={} pages={} entry={:#x} stack_pages={}",app.target,task,len,count,entry,stack_pages);
+    crate::serial_println!("[app.program.loaded] target={} task={} bytes={} pages={} entry={:#x} stack_pages={} stack_committed={}",app.target,task,len,count,entry,stack_pages,stack_pages.min(STACK_COMMIT));
     Ok(())
 }
 /// More memory for the calling program's current run: the arena's next pages after its
@@ -537,6 +548,28 @@ pub fn heap_frames<R>(pd:&ProtectionDomain,va:u64,pages:usize,writable:bool,out:
     }
     then(out)
 }
+/// A touch of the calling run's stack below what is committed: a zeroed page there, as
+/// `grow` gives the heap (Some(true)). The guard page under the stack stays unmapped: a
+/// touch there is an overflow (Some(false)), and the run ends as for any bad fault.
+/// None: not a stack page of a live run, or no memory for one.
+pub fn stack_fault(pd:&ProtectionDomain,va:u64)->Option<bool>{
+    let mut apps=apps_lock!()?;
+    let app=apps.iter_mut().find(|a|a.ready&&a.target==pd.id)?;
+    live(app,pd).ok()?;
+    let (va,top)=(va&!0xFFF,app.arena+(app.arena_pages*4096) as u64);
+    let low=top-(app.stack_pages*4096) as u64;
+    if va==low-4096{return Some(false)}
+    if va<low||va>=top{return None}
+    let leaf=crate::boot_memory::arena_leaf(va,app.pkey)?;
+    if unsafe{core::ptr::read_volatile(leaf as *const u64)}!=0||app.stack.try_reserve(1).is_err(){return None}
+    let frame=crate::program_frames::take()?;
+    let page=PrivatePage{va,leaf,expected:frame|7|((app.pkey as u64)<<59)|(1<<63)};
+    app.stack.push(page);
+    // The leaf was clear, so no core holds a translation for it.
+    crate::program_tenancy::grant(app.target,page);
+    x86_64::instructions::tlb::flush(VirtAddr::new(va));
+    Some(true)
+}
 pub fn live_run(pd:&ProtectionDomain)->Result<u32,u64>{
     let apps=apps_lock!().ok_or(RETRY)?;
     let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(DENIED)?;
@@ -548,8 +581,6 @@ pub fn spawn_worker(pd:&ProtectionDomain,entry:u64,stack:u64,arg:u64)->Result<u6
     let apps=apps_lock!().ok_or(RETRY)?;
     let app=apps.iter().find(|a|a.ready&&a.target==pd.id).ok_or(DENIED)?;
     let run=live(app,pd)?;
-    // Denim pages come back only to the main task's faults: bring them all back first.
-    if app.out>0{return Err(RECALL)}
     let id=next_run_task()?;
     crate::program_workers::spawn(pd,run,id,entry,stack,arg)
 }
@@ -644,6 +675,8 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>,source:Optio
         DORMANT[index].store(true,Ordering::Release);
         TERMINAL[index].store(false,Ordering::Release);
         crate::serial_println!("[app.rebirth.begin] target={} task={} generation={}",app.target,task,app.generation);
+        // Hints for the new run go out on the next tick, not the 64-tick safety scan.
+        crate::scheduler::task_ownership::EXITS.fetch_add(1,Ordering::AcqRel);
         return Ok(5);
     }
     if app.acked!=REQUIRED {return Ok(5)}
@@ -671,13 +704,36 @@ pub fn force_end(pd:&ProtectionDomain,slot:u64)->u64{
         g.authorize(pd.id,app.target,app.boot_task,QUERY)?;
         if pd.id!=app.coordinator||!app.reusable{return Err(DENIED)}
         if app.forced||app.retired||app.rebirthing{return Ok(())}
-        let id=app.target;crate::program_tenancy::release(id);
-        for page in &app.pages[..app.count]{unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};}
-        crate::smp::tlb::flush_pages(app.count,app.pages[..app.count].iter().map(|p|p.va));
-        app.forced=true;
-        crate::program_workers::end(id);
-        crate::serial_println!("[app.program.forced] target={} task={} pages={}",app.target,app.task,app.count);
+        end_forced(app);
         Ok(())})();result.map_or_else(|e|e,|()|0)
+}
+fn end_forced(app:&mut App){
+    let id=app.target;crate::program_tenancy::release(id);
+    for page in app.pages[..app.count].iter().chain(&app.stack){unsafe{core::ptr::write_volatile(page.leaf as *mut u64,0)};}
+    crate::smp::tlb::flush_pages(app.count+app.stack.len(),app.pages[..app.count].iter().chain(&app.stack).map(|p|p.va));
+    app.forced=true;
+    crate::program_workers::end(id);
+    crate::serial_println!("[app.program.forced] target={} task={} pages={}",app.target,app.task,app.count);
+}
+/// Denim started again, so the pages it held are gone: every run with pages out ends
+/// as a forced run does (a task parked on such a page with it), the Shell is told
+/// which (`OP_LOST`), and each gets a crash record. Returns how many ended.
+pub fn denim_lost()->u64{
+    let Some(mut apps)=apps_lock!() else{return 0};
+    let mut ended=0;
+    for app in apps.iter_mut().filter(|a|a.ready&&a.reusable&&a.out>0&&!a.forced&&!a.retired&&!a.rebirthing){
+        end_forced(app);
+        let main=app.main as *mut crate::scheduler::Task;
+        if unsafe{(*main).state.exit()}{crate::scheduler::unpark_thread(main)}
+        crate::crash_log::fault(app.target,14,0,0,0,"compressed memory lost: Denim restarted");
+        if let Some(shell)=crate::ipc::DOMAIN_REGISTRY.get(app.coordinator){
+            let msg=crate::ipc::messages::MessageType::IpcCall{func_id:sex_pdx::denim::OP_LOST,arg0:app.target as u64,arg1:app.task as u64,arg2:app.out as u64,caller_pd:0,caller_task:0};
+            if unsafe{(*shell.message_ring).enqueue(msg)}.is_ok(){crate::scheduler::unpark_thread(shell.main_task.load(Ordering::Acquire));}
+        }
+        crate::serial_println!("[denim.lost.run] target={} task={} pages_out={}",app.target,app.task,app.out);
+        ended+=1;
+    }
+    ended
 }
 pub fn ack(pd:&ProtectionDomain,slot:u64,task:u64)->u64{
     let result=(||{let g=grant(pd,slot)?;let mut apps=apps_lock!().ok_or(RETRY)?;
@@ -703,8 +759,10 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
             |leaf|crate::program_tenancy::read(id,leaf),
             |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},
             |_|{})?};
+        if !app.forced&&!app.stack.is_empty(){retire_private_pages(&app.stack,|leaf|crate::program_tenancy::read(id,leaf),
+            |leaf|unsafe{core::ptr::write_volatile(leaf as *mut u64,0)},|_|{})?;}
         // One shootdown for the whole run, before any frame is reused.
-        if !app.forced{crate::smp::tlb::flush_pages(app.count,app.pages[..app.count].iter().map(|p|p.va));}
+        if !app.forced{crate::smp::tlb::flush_pages(app.count+app.stack.len(),app.pages[..app.count].iter().chain(&app.stack).map(|p|p.va));}
         if app.reusable{
             // The row keeps its authority and its BOOT frames for the next run; frames
             // lent to this run's arena go back for any program to use.
@@ -714,6 +772,7 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
                 if sex_pdx::denim::is_out(app.pages[i].expected){continue}
                 if app.in_arena(va){crate::program_frames::give(frame)}else{crate::boot_memory::zero_frame(frame)}
             }
+            for page in core::mem::take(&mut app.stack){crate::program_frames::give(page.expected&PHYSICAL_MASK)}
             app.count=0;app.out=0;
             // Release the manifest's capacity too: a large run must not pin its heap after it ends.
             app.pages=alloc::vec::Vec::new();
@@ -745,14 +804,19 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         Ok([0,app.pool,app.count as u64*4096,app.task as u64])
     })();result.unwrap_or_else(|e|[e,0,0,0])
 }
-/// Retry each unacknowledged recipient at a bounded 16-tick cadence. Accepted
+/// Retry each unacknowledged recipient with a gap that doubles from 16 to 128 ticks. Accepted
 /// hints can be lost by nested userland waits, so acceptance never substitutes
 /// for the service's capability-authenticated ACK.
-pub fn poll_exit_notifications(){
-    let Some(mut apps)=APPS.try_lock()else{return};
+/// Ticks before a hint is sent again, after `tries` earlier re-sends.
+fn gap(tries:u8)->u64{16<<tries.min(3)}
+/// Returns whether any row still has lifecycle work in flight (or the table was busy).
+pub fn poll_exit_notifications()->bool{
+    let Some(mut apps)=APPS.try_lock()else{return true};
+    let mut busy=false;
     let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
     for (index,app) in apps.iter_mut().enumerate(){
         if app.ready && app.rebirthing {
+            busy=true;
             // Everyone has forgotten the old run: wake the coordinator to commit.
             if app.acked==REQUIRED && app.hinted&32==0 {
                 let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(app.coordinator)else{continue};
@@ -762,10 +826,10 @@ pub fn poll_exit_notifications(){
             }
             for recipient in 0..5 {
                 let bit=1u8<<recipient;
-                if app.acked&bit!=0 || (app.hinted&bit!=0 && now.wrapping_sub(app.last_hint[recipient])<16){continue}
+                if app.acked&bit!=0 || (app.hinted&bit!=0 && now.wrapping_sub(app.last_hint[recipient])<gap(app.tries[recipient])){continue}
                 let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(app.services[recipient])else{continue};
                 let msg=crate::ipc::messages::MessageType::IpcCall{func_id:sex_pdx::app_lifecycle::OP_APP_REBORN,arg0:app.target as u64,arg1:app.task as u64,arg2:0,caller_pd:0,caller_task:0};
-                app.hinted|=bit;app.last_hint[recipient]=now;
+                app.tries[recipient]=if app.hinted&bit!=0{app.tries[recipient].saturating_add(1)}else{0};app.hinted|=bit;app.last_hint[recipient]=now;
                 if unsafe{(*pd.message_ring).enqueue(msg)}.is_ok(){crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire));}
             }
             continue;
@@ -773,6 +837,7 @@ pub fn poll_exit_notifications(){
         if !app.ready || app.retired{continue}
         let main=app.main as *mut crate::scheduler::Task;
         if !unsafe{(*main).state.snapshot().exited}{continue}
+        busy=true;
         if app.reusable{crate::program_workers::end(app.target);}
         if !app.kicked{for holder in app.services.into_iter().chain(core::iter::once(app.pager)){
             if let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(holder){crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire));}
@@ -781,20 +846,28 @@ pub fn poll_exit_notifications(){
         for recipient in 0..6{
             if recipient<5 && app.acked&(1<<recipient)!=0{continue}
             let bit=1u8<<recipient;
-            if app.hinted&bit!=0 && now.wrapping_sub(app.last_hint[recipient])<16{continue}
+            if app.hinted&bit!=0 && now.wrapping_sub(app.last_hint[recipient])<gap(app.tries[recipient]){continue}
             let holder=if recipient==5{app.pager}else{app.services[recipient]};
             let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(holder)else{continue};
             let msg=crate::ipc::messages::MessageType::IpcCall{func_id:sex_pdx::app_lifecycle::OP_APP_EXIT,arg0:app.target as u64,arg1:app.task as u64,arg2:0,caller_pd:0,caller_task:0};
             // Back off full queues too; every unsuccessful attempt remains pending.
-            app.hinted|=bit;app.last_hint[recipient]=now;
+            app.tries[recipient]=if app.hinted&bit!=0{app.tries[recipient].saturating_add(1)}else{0};app.hinted|=bit;app.last_hint[recipient]=now;
             if unsafe{(*pd.message_ring).enqueue(msg)}.is_ok(){
                 crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire));
                 crate::serial_println!("[app.exit.notice] target={} task={} holder={} detached=1 accepted=1",app.target,app.task,holder);
             }
         }
     }
+    busy
 }
-/// Denim's view of a live, single-threaded run (`sex_pdx::denim`). The run must be the
+/// Pages Denim holds for `target`'s run, or (`target` 0) for every run and the pages
+/// Denim's store takes (`system_stats::packed`).
+pub fn packed(target:u32)->(u64,u64){
+    let Some(apps)=apps_lock!() else{return (0,0)};
+    let out=apps.iter().filter(|a|a.ready&&(target==0||a.target==target)&&!a.retired).map(|a|a.out as u64).sum();
+    (out,if target==0{crate::service_memory::present(sex_pdx::denim::DENIM_PD)}else{0})
+}
+/// Denim's view of a live run (`sex_pdx::denim`). The run must be the
 /// row's current one, as for `grow`; its domain is found by target, not by caller.
 fn denim_run(apps:&mut [App;MAX_APPS],target:u32)->Result<&mut App,u64>{
     let app=apps.iter_mut().find(|a|a.ready&&a.target==target).ok_or(DENIED)?;
@@ -837,8 +910,6 @@ pub fn denim_out(target:u32,va:u64,window:u64)->[u64;2]{
     let result=(||{
         let mut apps=apps_lock!().ok_or(RETRY)?;
         let app=denim_run(&mut apps,target)?;
-        // A worker could fault on the marker, and only the main task's faults reach Denim.
-        if !crate::program_workers::all_dead(target){return Err(DENIED)}
         let at=heap_index(app,va)?;
         // A VM maps this frame (Drag): the guest's touches never mark the page used,
         // and its frame must outlive the loan. Lent pages stay.

@@ -86,6 +86,8 @@ pub fn sys_yield(){}
 mod program_tenancy{pub fn read(_:u32,leaf:u64)->u64{unsafe{core::ptr::read_volatile(leaf as *const u64)}}pub fn restored(_:u32,_:u64,value:u64)->u64{value}pub fn boot_pages(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn adopt(_:u32,_:&[crate::app_resource_state::PrivatePage]){}pub fn release(_:u32){}pub fn arena(_:u32,_:u64,_:u64){}pub fn grant(_:u32,page:crate::app_resource_state::PrivatePage){unsafe{core::ptr::write_volatile(page.leaf as *mut u64,page.expected)}}}
 mod smp{pub fn shootdown_covers_all()->bool{crate::core_local::INITIALIZED_CORES.load(crate::Ordering::Acquire)==1}pub mod tlb{pub fn service(){}pub fn flush(va:u64){crate::x86_64::instructions::tlb::flush(crate::VirtAddr::new(va))}pub fn flush_pages(_:usize,pages:impl Iterator<Item=u64>){for va in pages{flush(va)}}}}
 mod program_frames{pub static FRAMES:crate::Mutex<Vec<u64>>=crate::Mutex::new(Vec::new());pub fn take()->Option<u64>{FRAMES.lock().pop()}pub fn give(frame:u64){FRAMES.lock().push(frame)}pub fn available()->u64{FRAMES.lock().len() as u64}}
+mod crash_log{pub fn fault(_:u32,_:u64,_:u64,_:u64,_:u64,_:&str){}}
+mod service_memory{pub fn present(_:u32)->u64{0}}
 pub static ALLOCATOR:HeapLock=HeapLock;pub struct HeapLock;impl HeapLock{pub fn lock(&self)->Heap{Heap}}pub struct Heap;impl Heap{pub fn used(&self)->usize{0}}
 mod boot_memory{
  pub type ImageCopy=Vec<u8>;
@@ -165,10 +167,12 @@ fn fixture_elf()->Vec<u8>{
  while unsafe{(*shell.message_ring).dequeue()}.is_some(){}
  interrupts::TICKS.store(15,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_none());
  interrupts::TICKS.store(16,Ordering::Release);app_resources::poll_exit_notifications();assert!(matches!(unsafe{(*shell.message_ring).dequeue()},Some(messages::MessageType::IpcCall{func_id:0x107,arg0:15,arg1:15,caller_pd:0,..})));
- interrupts::TICKS.store(32,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_some());
+ // Re-sends back off: 16 ticks, then 32 (so none at 32, one at 48).
+ interrupts::TICKS.store(32,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_none());
+ interrupts::TICKS.store(48,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_some());
  assert_eq!(app_resources::ack(shell,38,0x1_0000_000f),DENIED);
  assert_eq!(app_resources::ack(shell,38,15),0);assert_eq!(app_resources::ack(shell,38,15),0);
- interrupts::TICKS.store(48,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_none());
+ interrupts::TICKS.store(200,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_none());
  assert_eq!(app_resources::status(shell,38,0),[0,15,15,31,1]);assert_eq!(app_resources::retire(pager,38),[RETRY,0,0,0]);
  for id in &services[1..]{assert_eq!(app_resources::ack(ipc::DOMAIN_REGISTRY.get(*id).unwrap(),38,15),0);}
  assert_eq!(app_resources::status(shell,38,0),[0,15,15,31,31]);assert_eq!(app_resources::retire(pager,38),[RETRY,0,0,0]);

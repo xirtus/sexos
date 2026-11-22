@@ -243,6 +243,7 @@ pub extern "C" fn trampoline_main() {
     let crash_keeper=unsafe{&mut *core::ptr::addr_of_mut!(CRASH_KEEPER)};
     crash_keeper.load(&mut crate::history_disk::DiskIo);
     crash_keeper.sync(&mut crate::history_disk::DiskIo);
+    crate::gate_ping::prove();
     // The next request, when a reply that waited brought it back in registers.
     let mut next:Option<sex_pdx::PdxMessage>=None;
     loop {

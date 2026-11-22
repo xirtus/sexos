@@ -156,8 +156,16 @@ def main():
                 q.cmd('input-send-event', {'events': [{'type': 'btn', 'data': {'down': down, 'button': 'left'}}]})
                 time.sleep(0.15)
 
-        def control(name):
-            matches = re.findall(rf'\[climax.control\] name={name} x=(-?\d+) y=(-?\d+)', text())
+        def control(name, since=None):
+            # report() prints [climax.state] before the control records, so a
+            # wait on the state line can return before this frame's positions
+            # reach serial. With since, wait for the frame line that ends the
+            # report and only read positions printed after since.
+            body = text()
+            if since is not None:
+                g['wait'](r'\[climax.frame\] n=\d+\n', since, 60)
+                body = text()[since:]
+            matches = re.findall(rf'\[climax.control\] name={name} x=(-?\d+) y=(-?\d+)', body)
             assert matches, f'no control {name} in serial text'
             click_at(*map(int, matches[-1]))
 
@@ -193,7 +201,7 @@ def main():
 
         # Start Step (1 step)
         s_step = len(text())
-        control('start_step')
+        control('start_step', s_torture)
         g['wait'](r'\[climax.state\] mode=Thermal .* step=1/20', s_step, 60)
 
         # Run Burst (5 steps -> step 6/20)
@@ -213,7 +221,7 @@ def main():
         control('compare_linux')
         g['wait'](r'\[climax.state\] mode=CompareLinux', s_compare, 60)
         s_reload = len(text())
-        control('reload_doc')
+        control('reload_doc', s_compare)
         g['wait'](r'\[climax.compare\] source=\S+ rows=9 geomean_pct=134\.8', s_reload, 60)
         compare_linux_colours = screenshot('compare-linux')
         assert compare_linux_colours > 25, f'insufficient distinct colours in compare-linux: {compare_linux_colours}'

@@ -15,8 +15,10 @@ static SERIAL:Mutex<()>=Mutex::new(());
 static DOMAINS:[AtomicPtr<Domain>;16]=[const{AtomicPtr::new(core::ptr::null_mut())};16];
 static WAKES:AtomicUsize=AtomicUsize::new(0);
 struct Domain{main_task:AtomicPtr<scheduler::Task>,trampoline_task:AtomicPtr<scheduler::Task>,message_ring:*mut ring::RingBuffer<messages::MessageType,4>}
-mod app_resources{pub fn poll_exit_notifications(){}}
-mod service_restart{pub fn poll(){}}
+mod app_resources{pub fn poll_exit_notifications()->bool{false}}
+mod service_restart{pub fn poll()->bool{false}}
+mod crash_log{pub fn poll(){}}
+mod interrupts{pub static TICKS:core::sync::atomic::AtomicU64=core::sync::atomic::AtomicU64::new(0);}
 mod iommu{pub fn poll(){}}
 mod hal{pub mod acpi{pub fn poll(){}}}
 mod scheduler{

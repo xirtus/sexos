@@ -16,5 +16,6 @@
   "features": "-mmx,+sse,+sse2",
   "disable-redzone": true,
   "panic-strategy": "abort",
+  "stack-probes": { "kind": "inline" },
   "code-model": "kernel"
 }

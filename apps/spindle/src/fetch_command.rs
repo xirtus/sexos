@@ -13,12 +13,15 @@ pub struct Fetch {
     phase: Phase, seq: u32, sent: bool, to_files: bool, next_at: u64, deadline: u64, host: [u8; 256], host_len: usize, port: u16, address: [u8; 4],
     request: [u8; 900], request_len: usize, request_sent: usize, path_len: usize, head: [u8; HEAD_MAX], head_len: usize, in_body: bool,
     written: u64, chunk: usize, fs_seq: u32, peer_done: bool, status: u32, tls: bool,
+    /// Network's run when the pending call went out, and when it did: a call the old
+    /// run took is never answered after a restart, so the download ends instead of waiting.
+    net_epoch: u64, sent_at: u64,
     /// Where a redirect said to go next ("URL FILE"), and how many were followed.
     redirect: [u8; 1024], redirect_len: usize, hops: u8,
     /// How the last download ended, for `update`: Some(true) saved, Some(false) failed.
     pub result: Option<bool>,
 }
-pub static mut FETCH: Fetch = Fetch { phase: Phase::Idle, seq: 0, sent: false, to_files: false, next_at: 0, deadline: 0, host: [0; 256], host_len: 0, port: 80, address: [0; 4], request: [0; 900], request_len: 0, request_sent: 0, path_len: 0, head: [0; HEAD_MAX], head_len: 0, in_body: false, written: 0, chunk: 0, fs_seq: 0x80_0000, peer_done: false, status: 0, tls: false, redirect: [0; 1024], redirect_len: 0, hops: 0, result: None };
+pub static mut FETCH: Fetch = Fetch { phase: Phase::Idle, seq: 0, sent: false, to_files: false, next_at: 0, deadline: 0, host: [0; 256], host_len: 0, port: 80, address: [0; 4], request: [0; 900], request_len: 0, request_sent: 0, path_len: 0, head: [0; HEAD_MAX], head_len: 0, in_body: false, written: 0, chunk: 0, fs_seq: 0x80_0000, peer_done: false, status: 0, tls: false, net_epoch: 0, sent_at: 0, redirect: [0; 1024], redirect_len: 0, hops: 0, result: None };
 
 fn net() -> Option<&'static mut [u8]> {
     let view = sex_pdx::memory_region_view(w::CLIENT_SLOT, 0, w::REGION_BYTES as u64, QUERY_VIEW | READ | WRITE).ok()?;
@@ -56,6 +59,8 @@ macro_rules! say { ($sb:expr, $($arg:tt)*) => {{
     $sb.push(&t.buf[..t.len]);
     sex_pdx::serial_record!("[spindle.fetch.line] {}", core::str::from_utf8(&t.buf[..t.len]).unwrap_or("?"));
 }}}
+/// Network's restart epoch (0 when it cannot be read).
+fn net_epoch() -> u64 { sex_pdx::crash_log::peer_state(sex_pdx::SLOT_NET).map_or(0, |p| p.epoch) }
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> { hay.windows(needle.len()).position(|w| w == needle) }
 
 impl Fetch {
@@ -112,7 +117,20 @@ impl Fetch {
     }
     fn net_call(&mut self, kind: u8, value: u64) {
         self.seq = (self.seq + 1) & 0x7F_FFFF;
-        if sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, w::OP, w::request(self.seq, kind), value, 0).is_ok() { self.sent = true; self.to_files = false; }
+        self.net_epoch = net_epoch();
+        if sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, w::OP, w::request(self.seq, kind), value, 0).is_ok() { self.sent = true; self.to_files = false; self.sent_at = sex_pdx::get_ticks(); }
+    }
+    /// A call Network took before it restarted gets no answer: give up on it (and on one
+    /// that has gone unanswered far past the download's deadline).
+    fn lost_call(&mut self, sb: &mut Scrollback) -> bool {
+        if !self.sent || self.to_files { return false; }
+        let now = sex_pdx::get_ticks();
+        let restarted = self.net_epoch != 0 && matches!(net_epoch(), e if e != 0 && e != self.net_epoch);
+        if !restarted && now < self.deadline.max(self.sent_at) + 10_000 { return false; }
+        self.sent = false;
+        sex_pdx::serial_record!("[spindle.fetch.lost] restarted={} phase={:?}", restarted as u8, self.phase);
+        if self.phase == Phase::Close { self.phase = Phase::Idle; } else { self.fail(sb, if restarted { "network restarted" } else { "no answer" }); self.phase = Phase::Idle; }
+        true
     }
     fn fs_call(&mut self, kind: u8, offset: u64, length: u64) {
         self.fs_seq = 0x80_0000 | ((self.fs_seq + 1) & 0x7F_FFFF);
@@ -122,6 +140,7 @@ impl Fetch {
     }
     /// Sends the next request when one is due.
     pub fn step(&mut self, sb: &mut Scrollback) -> bool {
+        if self.lost_call(sb) { return true; }
         if self.phase == Phase::Idle || self.sent { return false; }
         let now = sex_pdx::get_ticks();
         if now < self.next_at { return false; }

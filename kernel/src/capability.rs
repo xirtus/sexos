@@ -52,6 +52,8 @@ pub enum CapabilityData {
     Notification(ObjectCap),
     /// One-shot reply to one call; `generation` is the caller's incarnation.
     Reply(ObjectCap),
+    /// A PKU gate into its owner's code (crate::gate, syscall 111).
+    Gate(ObjectCap),
     Interrupt(InterruptCapData), Domain(u32), Pci(PciCapData),
     Region(sex_pdx::memory_region::RegionGrant),
     FramePool(crate::paging_state::FramePoolGrant),
@@ -89,6 +91,7 @@ impl CapabilityData {
             CapabilityData::Endpoint(cap) => Some((2, cap)),
             CapabilityData::Notification(cap) => Some((3, cap)),
             CapabilityData::Reply(cap) => Some((Self::REPLY_TAG, cap)),
+            CapabilityData::Gate(cap) => Some((5, cap)),
             _ => None,
         }
     }
@@ -98,6 +101,7 @@ impl CapabilityData {
             2 => Some(CapabilityData::Endpoint(cap)),
             3 => Some(CapabilityData::Notification(cap)),
             Self::REPLY_TAG => Some(CapabilityData::Reply(cap)),
+            5 => Some(CapabilityData::Gate(cap)),
             _ => None,
         }
     }
@@ -130,6 +134,8 @@ impl PkruValue {
         if pkey < 16 {
             mask &= !(0b11 << (pkey * 2));
         }
+        // The PKU gate frame key: readable by every domain, writable only in a stub.
+        if crate::gate::KEY_FREE { mask &= !(0b01 << (crate::gate::FRAME_KEY * 2)); }
 
         mask
     }
