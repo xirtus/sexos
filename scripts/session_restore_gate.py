@@ -54,7 +54,9 @@ def main():
   restored=[g['wait'](r'\[spindle.session.restore\] scene=(\d) path=/bin/gaze',0,120)]
   g['wait'](r'\[spindle.session.started\] target=\d+ task=\d+ scene=\d',0,240)
   g['wait'](r'\[spindle.session.restored\]',0,300)
-  log=t();scenes=sorted(int(x) for x in __import__('re').findall(r'\[spindle.session.restore\] scene=(\d) path=/bin/gaze',log))
+  # A run Shell refuses for now (busy image, no free row) is asked again, and logged again: count each run's last ask.
+  log=t();asks=__import__('re').split(r'(?=\[spindle.session.restore\] )',log)[1:]
+  scenes=sorted(int(a[len('[spindle.session.restore] scene='):][0]) for a in asks if a.startswith('[spindle.session.restore] scene=') and '/bin/gaze' in a.split('\n',1)[0] and '[spindle.program.refused]' not in a)
   assert scenes==[0,2],scenes
   assert len(__import__('re').findall(r'\[spindle.session.started\]',log))==2,'both did not start'
   g['wait'](r'\[shell.launch.placed\] target=\d+ surface=\d+ scene=2',0,60)

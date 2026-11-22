@@ -165,10 +165,12 @@ fn fixture_elf()->Vec<u8>{
  while unsafe{(*shell.message_ring).dequeue()}.is_some(){}
  interrupts::TICKS.store(15,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_none());
  interrupts::TICKS.store(16,Ordering::Release);app_resources::poll_exit_notifications();assert!(matches!(unsafe{(*shell.message_ring).dequeue()},Some(messages::MessageType::IpcCall{func_id:0x107,arg0:15,arg1:15,caller_pd:0,..})));
- interrupts::TICKS.store(32,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_some());
+ // Re-sends back off: 16 ticks, then 32 (so none at 32, one at 48).
+ interrupts::TICKS.store(32,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_none());
+ interrupts::TICKS.store(48,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_some());
  assert_eq!(app_resources::ack(shell,38,0x1_0000_000f),DENIED);
  assert_eq!(app_resources::ack(shell,38,15),0);assert_eq!(app_resources::ack(shell,38,15),0);
- interrupts::TICKS.store(48,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_none());
+ interrupts::TICKS.store(200,Ordering::Release);app_resources::poll_exit_notifications();assert!(unsafe{(*shell.message_ring).dequeue()}.is_none());
  assert_eq!(app_resources::status(shell,38,0),[0,15,15,31,1]);assert_eq!(app_resources::retire(pager,38),[RETRY,0,0,0]);
  for id in &services[1..]{assert_eq!(app_resources::ack(ipc::DOMAIN_REGISTRY.get(*id).unwrap(),38,15),0);}
  assert_eq!(app_resources::status(shell,38,0),[0,15,15,31,31]);assert_eq!(app_resources::retire(pager,38),[RETRY,0,0,0]);

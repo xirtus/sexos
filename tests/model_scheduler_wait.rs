@@ -48,6 +48,7 @@ wake_record: wait_deadline.cancel wake_owned_thread
 wake_record_if_due: wait_deadline.take_due wake_owned_thread
 park_current_thread: state.park
 unpark_thread: wait_deadline.cancel wake_owned_thread
+unpark_for_call: unpark_thread
 wake_owned_thread: state.wake WakeResult::Recorded WakeResult::NeedsAdmission .admit_task Admission::Published
 resume_resolved_fault: state.complete_fault .admit_task
 seal_self_wait_inventory: SELF_WAIT_TASKS.register SELF_WAIT_TASKS.seal
