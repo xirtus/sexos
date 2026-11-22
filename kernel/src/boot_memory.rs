@@ -485,14 +485,14 @@ pub fn init_pixel_regions(display: u32) {
     let second = DOMAIN_REGISTRY.get(display).expect("BOOT_PIXEL_DISPLAY_MISSING");
     let programs = || sex_pdx::app_catalog::INCARNATIONS.iter().filter(|r| r.app == sex_pdx::app_catalog::App::Program);
     let rows = programs().count();
-    // One buddy reservation per few rows: per-row backing would spend a boot frame
-    // reservation each and run the table out. Double rows go four to a block, so
-    // each block is the size eight single ones were.
-    let group: usize = if roomy { 4 } else { 8 };
     let screen = SCREEN_PIXELS.load(core::sync::atomic::Ordering::Relaxed);
     // Whole-screen pages when memory allows; half pages on a small machine.
     let roomy = crate::memory::allocator::GLOBAL_ALLOCATOR.free_frames() * 4096 >= sex_pdx::pixel_region::ROOMY_BYTES;
     let length = region_for_screen(screen >> 32, screen & 0xFFFF_FFFF, roomy);
+    // One buddy reservation per few rows: per-row backing would spend a boot frame
+    // reservation each and run the table out. Double rows go four to a block, so
+    // each block is the size eight single ones were.
+    let group: usize = if roomy { 4 } else { 8 };
     let mut base = 0u64;
     for (k, row) in programs().enumerate() {
         if k % group == 0 { base = backing(length * group.min(rows - k) as u64); }
