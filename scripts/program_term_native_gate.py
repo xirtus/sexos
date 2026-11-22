@@ -262,8 +262,9 @@ def main():
   g['wait'](rf'\[files\.yarn\.adopted\] terminal_row=\d+ slot=\d+ yarn={yarn}\n',s,60)
   g['wait'](rf'\[term\.yarn\.attached\] name=stdhello yarn={yarn} state=2\n',s,60);time.sleep(2)
   chord('ctrl','c');ran('stdhello',130,s)
-  screen=snapshot();nums=[int(n)for n in re.findall(r'^count (\d+)$',screen,re.M)]
-  assert nums and max(nums)>last and nums==list(range(nums[0],nums[0]+len(nums))),('the attached output has gaps',last,nums)
+  # The Ctrl+C echo may share a row with a line the program was still writing.
+  screen=snapshot();nums=[int(n)for n in re.findall(r'count (\d+)',screen)]
+  assert nums and max(nums)>last and nums==list(range(nums[0],nums[0]+len(nums))),('the attached output has gaps',last,nums,screen[-700:])
   q.cmd('screendump',{'filename':str(a.out/'term-native-yarn-attached.ppm')})
   # A background job: `&`, then `fg` brings it here until Ctrl+C.
   term_line('clear');s=len(t());term_line('stdhello count &')
