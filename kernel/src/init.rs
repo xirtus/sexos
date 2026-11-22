@@ -972,6 +972,7 @@ pub fn init() {
     crate::service_restart::capture(silkshell_id, 3);
     // Saddle: an outside driver that faults starts again on a reset device.
     crate::service_restart::capture(saddle_id, sex_pdx::pci_command::SADDLE_PD as u8);
+    const _: () = assert!(crate::service_restart::SADDLE_PD == sex_pdx::pci_command::SADDLE_PD);
     // Drive: a new run resets its controller and serves the same disk; Files sends a
     // call the old run took again (sex_pdx::crash_log::PEER_RESTARTED).
     crate::service_restart::capture(sexdrive_id, 2);

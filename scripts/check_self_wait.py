@@ -359,7 +359,7 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  'kernel/src/cpu_account.rs': '422f8b140abc987fd2758508927e687eeaab2fb6f5fda4e9997addd719d16d6b',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
  'kernel/src/app_resources.rs': '3ae927a6b4abc6651d556fae749f32a96250b0a72102cc378c637afdee02c119',
- 'kernel/src/service_restart.rs': '8bc3e77fe64b5c7089d6ffab2495602ec2a7620e6b3ced6d6300eac2071c3c5e',
+ 'kernel/src/service_restart.rs': '3f6450cd4ba1144b20c7c9281ae16aa3d8ce692da1aeb1280de8deef306cdea3',
  'kernel/src/crash_log.rs': 'dee45405490e59e0bcf8c4aa532333d9b84e2a959344cccaebad1c09d00cb094',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 

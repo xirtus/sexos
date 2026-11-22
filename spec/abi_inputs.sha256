@@ -178,7 +178,7 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 
 6efe30b3285999e43a5c320c1eb4ed6efbcf4b429cbeeca10d1f323bd2c166a2  kernel/src/pci_command.rs
 
-8bc3e77fe64b5c7089d6ffab2495602ec2a7620e6b3ced6d6300eac2071c3c5e  kernel/src/service_restart.rs
+3f6450cd4ba1144b20c7c9281ae16aa3d8ce692da1aeb1280de8deef306cdea3  kernel/src/service_restart.rs
 
 bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm.rs
 
