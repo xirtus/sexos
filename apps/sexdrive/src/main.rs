@@ -22,6 +22,7 @@ mod raid;
 mod ahci;
 mod controller_ready;
 mod apst;
+mod gate_ping;
 mod identify;
 mod ioq;
 use dma_transfer::DmaTransfer;
@@ -3946,6 +3947,7 @@ fn fill_initial_frame(shared_addr:u64){
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexdrive.init.start]");
+    gate_ping::export();
     if init_dma_region() {
         lend_block_buffer();
         nvme_probe_bar();

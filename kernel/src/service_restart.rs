@@ -196,8 +196,10 @@ const DISPLAY_PD: u32 = 1;
 static DESKTOP_STOPPED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
 /// From the timer, IF masked: a service whose task has ended starts again.
-pub fn poll() {
-    for index in 0..SERVICES { poll_one(index); }
+/// Returns whether a service end is still being handled (or a slot was busy).
+pub fn poll() -> bool {
+    let mut busy = false;
+    for index in 0..SERVICES { busy |= poll_one(index); }
     // New crash records (a fault, this restart) go to Files for the disk ring.
     crate::crash_log::poll();
     for pd_id in DESKTOP {
@@ -214,13 +216,14 @@ pub fn poll() {
                 sex_pdx::crash_log::domain_name(pd_id)));
         }
     }
+    busy
 }
-fn poll_one(index: usize) {
-    let Some(s) = SERVICE[index].try_lock() else { return };
-    if s.pd == 0 || GAVE_UP[index].load(Ordering::Relaxed) { return; }
-    let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(s.pd) else { return };
+fn poll_one(index: usize) -> bool {
+    let Some(s) = SERVICE[index].try_lock() else { return true };
+    if s.pd == 0 || GAVE_UP[index].load(Ordering::Relaxed) { return false; }
+    let Some(pd) = crate::ipc::DOMAIN_REGISTRY.get(s.pd) else { return false };
     let main = pd.main_task.load(Ordering::Acquire);
-    if main.is_null() { return; }
+    if main.is_null() { return false; }
     let state = unsafe { (*main).state.snapshot() };
     let now = crate::interrupts::TICKS.load(Ordering::Relaxed);
     if !state.exited {
@@ -238,16 +241,17 @@ fn poll_one(index: usize) {
             crate::serial_println!("[service.hung] pd={} held_ticks={} queued={}", s.pd, now - since, unsafe { (*pd.message_ring).len() });
             crate::crash_log::fault(s.pd, 0xfd, unsafe { (*main).context.rip }, 0, now - since, "no answer (hung)");
             crate::scheduler::unpark_thread(main);
+            return true;
         }
-        return;
+        return false;
     }
-    if state.phase != crate::scheduler::task_ownership::Phase::Dead || state.owner_core.is_some() { return; }
+    if state.phase != crate::scheduler::task_ownership::Phase::Dead || state.owner_core.is_some() { return true; }
     if now.saturating_sub(LAST_RESTART[index].load(Ordering::Relaxed)) > CRASH_LOOP_TICKS { LOOP[index].store(0, Ordering::Relaxed); }
     if LOOP[index].load(Ordering::Relaxed) >= MAX_RESTARTS {
         GAVE_UP[index].store(true, Ordering::Relaxed);
         DOWN.fetch_or(1 << s.pd, Ordering::AcqRel);
         crate::crash_log::service(s.pd, MAX_RESTARTS, true);
-        return;
+        return false;
     }
     // First the device: no more DMA, no loans, and a reset where it has one.
     if RESET_AT[index].load(Ordering::Relaxed) == 0 {
@@ -258,11 +262,11 @@ fn poll_one(index: usize) {
         crate::iommu::revoke(s.pd);
         let flr = resets_devices(s.pd) && crate::device_irq::reset_begin(s.pd);
         RESET_AT[index].store(now + if flr { 100 } else { 1 }, Ordering::Relaxed);
-        return;
+        return true;
     }
-    if now < RESET_AT[index].load(Ordering::Relaxed) || !crate::program_workers::all_dead(s.pd) { return; }
+    if now < RESET_AT[index].load(Ordering::Relaxed) || !crate::program_workers::all_dead(s.pd) { return true; }
     // The callee's credit lock orders this against every call being admitted.
-    let Some(mut credits) = pd.reply_credits.try_lock() else { return };
+    let Some(mut credits) = pd.reply_credits.try_lock() else { return true };
     // Each waiting caller needs room for its one answer; this runs in the timer, so it
     // neither waits for a lock nor grows a queue. A caller that keeps a reply unread
     // for a whole second is passed over.
@@ -279,7 +283,7 @@ fn poll_one(index: usize) {
             match (slot, guard) {
                 (Some(i), Some(q)) => held[i] = Some((caller, q)),
                 _ if late => missed += 1,
-                _ => return,
+                _ => return true,
             }
         }
     }
@@ -320,4 +324,5 @@ fn poll_one(index: usize) {
     // A new Shell starts from nothing: Display starts again too, so that it forgets
     // the old windows and announces itself ready to the new Shell.
     if s.pd == SHELL_PD { request_end(DISPLAY_PD); }
+    false
 }

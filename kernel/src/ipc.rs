@@ -141,7 +141,7 @@ pub fn traverse_edge(edge: GraphEdge, opcode: u64, arg0: u64, arg1: u64, arg2: u
             // Publish the event only after its payload is visible. A full ring
             // grants no wake; an accepted invocation retains its receiver's
             // pending event even across park/save/stack-release boundaries.
-            crate::scheduler::unpark_thread(task);
+            crate::scheduler::unpark_for_call(task);
             Ok(0)
         },
         GraphEdge::AsyncDequeue { ring: _, source: _ } => {

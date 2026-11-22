@@ -1,18 +1,86 @@
 // SPDX-License-Identifier: GPL-3.0-only
-//! PKU gates, kernel side (docs/handoff/PKU_GATES_STUDY_2026_11_18.md, P6.2a).
+//! PKU gates, kernel side (docs/handoff/PKU_GATES_STUDY_2026_11_18.md, P6.2; ABI in
+//! `sex_pdx::gate`, syscall 111).
 //!
 //! A gate stub finds the running task's gate area with RDPID, which reads IA32_TSC_AUX.
 //! `Scheduler::switch_to`, the one place a core starts running a task, loads TSC_AUX
-//! from `TaskContext.gate_aux` once [`ON`] is set. Until gates are switched on that
-//! costs one predicted branch per switch. Ring 3 cannot write TSC_AUX, and Drag guests
-//! get neither RDTSCP nor the MSR, so a task's RDPID always names its own area.
-use core::sync::atomic::{AtomicBool, Ordering};
+//! from `TaskContext.gate_aux` once [`ON`] is set. Ring 3 cannot write TSC_AUX, and
+//! Drag guests get neither RDTSCP nor the MSR, so a task's RDPID names its own area.
+//!
+//! The kernel owns everything a stub trusts: the stub pages (built by `sex_gate`, user
+//! read+execute, key 0), the matrix page (one byte per stub, user read-only) and each
+//! task's area: a frame page under [`FRAME_KEY`] (readable by every domain, writable
+//! only under a stub's G value) and one slot page per domain the task enters, under
+//! that domain's key, with the callee's stack top in it. The kernel writes all of them
+//! through the HHDM alias, which PKU does not cover. Stubs live below the service code
+//! (`loader::elf::pd_code_base`), so every entry is in rel32 reach.
+//!
+//! A Gate may also be exported under a number; a service holding a route (Domain
+//! capability) to its owner binds it with OP_BIND_ROUTE.
+//!
+//! A callee runs on its caller's task, so three kernel paths know about gates (P6.2d):
+//! a fault in the callee returns to the caller with `PEER_DIED` and is logged against
+//! the callee ([`unwind`]); a system call from inside a gate is refused ([`inside`]),
+//! so a callee can never act with its caller's capabilities; and a preempted task keeps
+//! the PKRU it really had ([`keep_live_pkru`]), not its domain's.
+//!
+//! An unwind also resets the vector registers. Not yet: nested gate calls (a callee
+//! calling a third service on the caller's task).
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use spin::Mutex;
+use x86_64::structures::paging::PageTableFlags as F;
+use x86_64::VirtAddr;
+use crate::capability::{CapabilityData, ProtectionDomain};
+use crate::capability_table::{rights, ObjectCap, OBJECTS};
+use sex_pdx::endpoint::{E_CLOSED, E_FULL, E_RIGHTS};
+use sex_pdx::gate::*;
 
 pub const TSC_AUX: u32 = 0xC000_0103;
+/// The gate frame key. Program rows gave it up for protection views; until they all
+/// have, [`KEY_FREE`] keeps it closed to every domain and gates unavailable.
+pub const FRAME_KEY: u8 = 5;
+pub const KEY_FREE: bool = {
+    use sex_pdx::organs::program_key as k;
+    k(0) != FRAME_KEY && k(1) != FRAME_KEY && k(2) != FRAME_KEY
+};
 
-/// Set once gates may run: PKU on and RDPID present (study 4.1). Index 0 is "no area"
-/// and is never mapped, so a stub run by a task without an area faults at once.
+const PAGE: u64 = 4096;
+const MATRIX: u64 = 0x3EFF_F000;
+const STUBS: u64 = 0x3F00_0000;
+const STUB_BYTES: u64 = 1024;
+const MAX_STUBS: usize = 1024;
+const MAX_AREAS: u64 = 1024;
+const CALLEE_STACK_PAGES: u64 = 4;
+const _: () = assert!(sex_gate::template::LEN as u64 <= STUB_BYTES && MAX_STUBS < PAGE as usize);
+const _: () = assert!(sex_gate::AREA_SHIFT == 18 && STUBS + MAX_STUBS as u64 * STUB_BYTES <= 0x4000_0000);
+
+/// Set by the first bind; from then on every switch loads TSC_AUX.
 pub static ON: AtomicBool = AtomicBool::new(false);
+static USABLE: AtomicBool = AtomicBool::new(false);
+static AREAS: AtomicU64 = AtomicU64::new(0);
+/// Frame page of each area, for the lock-free "is this task inside a call" check.
+static FRAME_OF: [AtomicU64; MAX_AREAS as usize + 1] = [const { AtomicU64::new(0) }; MAX_AREAS as usize + 1];
+
+static CLEAN_FPU: crate::fpu::FpuState = crate::fpu::FpuState::INIT;
+
+struct Gate { object: u32, generation: u32, callee: u32, entry: u64, export: u64 }
+struct Bound { object: u32, generation: u32, caller: u32, callee: u32 }
+/// One task's area: its slot pages (one bit per domain), the frame page, slot frames and
+/// the task. Tasks are never freed; one that starts over (`Task::rearm`) zeroes its
+/// `gate_aux`, and an area whose task no longer names it is free for the next binder.
+struct Area { mask: u64, frame: u64, slots: [u64; 64], task: usize }
+struct State {
+    gates: Vec<Gate>,
+    /// By stub id - 1.
+    stubs: Vec<Bound>,
+    /// Frames of the stub pages, in VA order from `STUBS`.
+    pages: Vec<u64>,
+    matrix: u64,
+    /// By area index (index 0 unused).
+    areas: Vec<Area>,
+}
+static STATE: Mutex<State> = Mutex::new(State { gates: Vec::new(), stubs: Vec::new(), pages: Vec::new(), matrix: 0, areas: Vec::new() });
 
 fn rdpid() -> u64 {
     let v: u64;
@@ -21,7 +89,6 @@ fn rdpid() -> u64 {
 }
 
 /// Boot check on the first core: RDPID exists and returns what was written to TSC_AUX.
-/// Gates stay off; the first granted gate switches them on (P6.3).
 pub fn init() -> bool {
     let has = core::arch::x86_64::__cpuid_count(7, 0).ecx & (1 << 22) != 0;
     let ok = has && crate::pku::PKU_ENABLED.load(Ordering::Acquire) != 0 && unsafe {
@@ -31,6 +98,305 @@ pub fn init() -> bool {
         m.write(0);
         seen == 0x5A5
     };
-    crate::serial_println!("[gate.rdpid] cpu={} usable={} gates=off", has as u8, ok as u8);
+    USABLE.store(ok, Ordering::Release);
+    crate::serial_println!("[gate.rdpid] cpu={} usable={} frame_key_free={} gates=off", has as u8, ok as u8, KEY_FREE as u8);
     ok
+}
+
+fn hhdm() -> u64 { crate::HHDM_REQUEST.response().expect("GATE_NO_HHDM").offset }
+
+/// A fresh frame filled with `fill`, mapped user-mode at `va` under `key`.
+fn page(va: u64, key: u8, flags: F, fill: u8) -> Result<u64, u64> {
+    let frame = crate::memory::allocator::alloc_frame().ok_or(E_FULL)?;
+    unsafe { core::ptr::write_bytes((frame + hhdm()) as *mut u8, fill, PAGE as usize) };
+    let mut vas = crate::memory::manager::GLOBAL_VAS.lock();
+    vas.as_mut().ok_or(E_FULL)?
+        .map_physical_range(VirtAddr::new(va), frame, PAGE, F::PRESENT | F::USER_ACCESSIBLE | flags, key)
+        .map_err(|_| E_FULL)?;
+    Ok(frame)
+}
+
+fn put(frame: u64, offset: u64, value: u64) {
+    unsafe { ((frame + hhdm() + offset) as *mut u64).write_volatile(value) }
+}
+
+fn get(frame: u64, offset: u64) -> u64 {
+    unsafe { ((frame + hhdm() + offset) as *const u64).read_volatile() }
+}
+
+/// The word at user address `va`, read through the page tables (PKU does not apply).
+fn peek(va: u64) -> Option<u64> {
+    let mut table = x86_64::registers::control::Cr3::read().0.start_address().as_u64();
+    for level in [3u32, 2, 1, 0] {
+        let entry = get(table, ((va >> (12 + 9 * level)) & 511) * 8);
+        if entry & 5 != 5 { return None; } // present and user
+        let span = 1u64 << (12 + 9 * level);
+        if level == 0 || (level < 3 && entry & (1 << 7) != 0) {
+            let base = entry & 0x000F_FFFF_FFFF_F000 & !(span - 1);
+            return Some(get(base, (va & (span - 1)) & !7));
+        }
+        table = entry & 0x000F_FFFF_FFFF_F000;
+    }
+    None
+}
+
+fn me() -> &'static ProtectionDomain { crate::core_local::CoreLocal::get().current_pd_ref() }
+fn table(pd: &ProtectionDomain) -> &'static crate::capability_table::CapabilityTable { unsafe { &*pd.cap_table } }
+fn live(object: u32, generation: u32) -> bool { OBJECTS.live(&ObjectCap { object, generation, rights: 0, badge: 0 }) }
+
+/// Gates join trusted services only: never a program row, a record or the browser.
+fn trusted(pd: &ProtectionDomain) -> bool {
+    use sex_pdx::organs::{program_key, RECORD_KEY, SHARED_PROGRAM_KEY};
+    let k = pd.pku_key;
+    pd.id >= 1 && pd.id <= sex_gate::MAX_DOMAIN && k != 0 && k != FRAME_KEY && k != RECORD_KEY
+        && k != SHARED_PROGRAM_KEY && k != program_key(0) && k != program_key(2) && k != crate::pku::UNTRUSTED
+}
+
+/// Stubs whose Gate died (destroyed, or its owner's incarnation ended) deny.
+fn sweep(st: &mut State) {
+    st.gates.retain(|g| live(g.object, g.generation));
+    if st.matrix == 0 { return; }
+    for (i, b) in st.stubs.iter().enumerate() {
+        if !live(b.object, b.generation) { unsafe { ((st.matrix + hhdm() + i as u64 + 1) as *mut u8).write_volatile(0) } }
+    }
+}
+
+/// OP_CREATE: a Gate into the caller's own code at `entry`, exported as `export`.
+fn create(entry: u64, export: u64) -> Result<u64, u64> {
+    let pd = me();
+    if !trusted(pd) || export > 255 { return Err(E_RIGHTS); }
+    let pte = crate::memory::manager::read_pte_flags(VirtAddr::try_new(entry).map_err(|_| E_RIGHTS)?).map_err(|_| E_RIGHTS)?;
+    if pte & F::USER_ACCESSIBLE.bits() == 0 || pte & F::NO_EXECUTE.bits() != 0 || ((pte >> 59) & 0xF) as u8 != pd.pku_key {
+        return Err(E_RIGHTS);
+    }
+    let cap = OBJECTS.create(pd.id).ok_or(E_FULL)?;
+    let mut st = STATE.lock();
+    sweep(&mut st);
+    if export != 0 && st.gates.iter().any(|g| g.callee == pd.id && g.export == export) {
+        OBJECTS.destroy(cap.object);
+        return Err(sex_pdx::endpoint::E_BUSY);
+    }
+    st.gates.push(Gate { object: cap.object, generation: cap.generation, callee: pd.id, entry, export });
+    match table(pd).install(CapabilityData::Gate(cap)) {
+        Ok(slot) => Ok(slot as u64),
+        Err(_) => { OBJECTS.destroy(cap.object); st.gates.pop(); Err(E_FULL) }
+    }
+}
+
+/// OP_DESTROY: the owner ends a Gate; its stubs deny from now on.
+fn destroy(slot: u32) -> Result<u64, u64> {
+    let pd = me();
+    let Some(CapabilityData::Gate(cap)) = table(pd).find(slot).map(|c| c.data) else { return Err(sex_pdx::ERR_CAP_INVALID) };
+    if !OBJECTS.live(&cap) { return Err(E_CLOSED); }
+    if OBJECTS.owner(cap.object) != Some(pd.id) { return Err(E_RIGHTS); }
+    OBJECTS.destroy(cap.object);
+    table(pd).revoke(slot);
+    sweep(&mut STATE.lock());
+    Ok(0)
+}
+
+/// OP_BIND: the Gate capability in `slot`. OP_BIND_ROUTE: the Gate the service behind
+/// the route in `slot` exported as `export`; holding the route is the authority.
+fn bind(slot: u32, route: Option<u64>) -> Result<u64, u64> {
+    if !KEY_FREE || !USABLE.load(Ordering::Acquire) { return Err(UNAVAILABLE); }
+    let caller = me();
+    if !trusted(caller) { return Err(E_RIGHTS); }
+    let mut st = STATE.lock();
+    sweep(&mut st);
+    let found = match route {
+        None => {
+            let Some(CapabilityData::Gate(cap)) = table(caller).find(slot).map(|c| c.data) else { return Err(sex_pdx::ERR_CAP_INVALID) };
+            if !OBJECTS.live(&cap) { return Err(E_CLOSED); }
+            if !cap.allows(rights::CALL) { return Err(E_RIGHTS); }
+            st.gates.iter().find(|g| g.object == cap.object && g.generation == cap.generation)
+        }
+        Some(export) => {
+            let held = crate::capability_slot::decode_capability_slot(slot as u64).and_then(|s| table(caller).find(s));
+            let Some(CapabilityData::Domain(target)) = held.map(|c| c.data) else { return Err(sex_pdx::ERR_CAP_INVALID) };
+            st.gates.iter().find(|g| g.callee == target && export != 0 && g.export == export)
+        }
+    };
+    let (object, generation, callee, entry) = found.map(|g| (g.object, g.generation, g.callee, g.entry)).ok_or(E_CLOSED)?;
+    let cap = ObjectCap { object, generation, rights: 0, badge: 0 };
+    let callee = crate::ipc::DOMAIN_REGISTRY.get(callee).ok_or(E_CLOSED)?;
+    if !trusted(callee) || callee.pku_key == caller.pku_key { return Err(E_RIGHTS); }
+    let areas = match AREAS.load(Ordering::Acquire) {
+        0 => {
+            let base = crate::memory::va_allocator::allocate_va(((MAX_AREAS + 1) << sex_gate::AREA_SHIFT) as usize).ok_or(E_FULL)?;
+            AREAS.store(base, Ordering::Release);
+            base
+        }
+        base => base,
+    };
+    if st.matrix == 0 { st.matrix = page(MATRIX, 0, F::NO_EXECUTE, 0)?; }
+    let found = st.stubs.iter().position(|b| b.object == cap.object && b.generation == cap.generation && b.caller == caller.id);
+    let id = match found {
+        Some(i) => i as u32 + 1,
+        None => {
+            if st.stubs.len() >= MAX_STUBS { return Err(E_FULL); }
+            let id = st.stubs.len() as u32 + 1;
+            let at = STUBS + (id as u64 - 1) * STUB_BYTES;
+            let code = sex_gate::build(&sex_gate::Stub {
+                at, matrix: MATRIX + id as u64, id, frame_key: FRAME_KEY,
+                caller_pkru: caller.base_pkru_mask, callee_pkru: callee.base_pkru_mask,
+                caller: caller.id, callee: callee.id, entry, areas,
+            }).map_err(|_| E_RIGHTS)?;
+            let index = ((at - STUBS) / PAGE) as usize;
+            while st.pages.len() <= index {
+                let va = STUBS + st.pages.len() as u64 * PAGE;
+                let frame = page(va, 0, F::empty(), 0xCC)?; // int3 between stubs
+                st.pages.push(frame);
+            }
+            unsafe { core::ptr::copy_nonoverlapping(code.as_ptr(), (st.pages[index] + hhdm() + at % PAGE) as *mut u8, code.len()) };
+            st.stubs.push(Bound { object: cap.object, generation: cap.generation, caller: caller.id, callee: callee.id });
+            id
+        }
+    };
+    area(&mut st, areas, caller, callee)?;
+    unsafe { ((st.matrix + hhdm() + id as u64) as *mut u8).write_volatile(1) };
+    ON.store(true, Ordering::Release);
+    Ok(STUBS + (id as u64 - 1) * STUB_BYTES)
+}
+
+/// This task's gate area, with slot pages for `caller` and `callee` (and the callee's
+/// stack for this task). The first bind also points this core's TSC_AUX at it.
+fn area(st: &mut State, areas: u64, caller: &ProtectionDomain, callee: &ProtectionDomain) -> Result<(), u64> {
+    let core = crate::core_local::CoreLocal::get().core_id as usize;
+    let task = crate::scheduler::SCHEDULERS[core].current_task.load(Ordering::Acquire);
+    if task.is_null() { return Err(E_RIGHTS); }
+    let ctx = unsafe { &mut (*task).context };
+    if ctx.pd_id as u32 != caller.id { return Err(E_RIGHTS); }
+    if st.areas.is_empty() { st.areas.push(Area { mask: !0, frame: 0, slots: [0; 64], task: 0 }); }
+    if ctx.gate_aux == 0 {
+        let free = (1..st.areas.len()).find(|&i| unsafe { (*(st.areas[i].task as *const crate::scheduler::Task)).context.gate_aux } != i as u64);
+        if let Some(index) = free {
+            st.areas[index].task = task as usize;
+            let (frame, index) = (st.areas[index].frame, index as u64);
+            put(frame, sex_gate::frame::DEPTH as u64, 0);
+            put(frame, sex_gate::frame::CUR as u64, caller.base_pkru_mask as u64);
+            put(frame, sex_gate::frame::ACTIVE as u64, 1 << caller.id);
+            ctx.gate_aux = index;
+            unsafe { x86_64::registers::model_specific::Msr::new(TSC_AUX).write(index) };
+        }
+    }
+    if ctx.gate_aux == 0 {
+        let index = st.areas.len() as u64;
+        if index > MAX_AREAS { return Err(E_FULL); }
+        let frame = page(areas + (index << sex_gate::AREA_SHIFT), FRAME_KEY, F::WRITABLE | F::NO_EXECUTE, 0)?;
+        put(frame, sex_gate::frame::CUR as u64, caller.base_pkru_mask as u64);
+        put(frame, sex_gate::frame::ACTIVE as u64, 1 << caller.id);
+        st.areas.push(Area { mask: 0, frame, slots: [0; 64], task: task as usize });
+        FRAME_OF[index as usize].store(frame, Ordering::Release);
+        ctx.gate_aux = index;
+        unsafe { x86_64::registers::model_specific::Msr::new(TSC_AUX).write(index) };
+    }
+    let index = ctx.gate_aux as usize;
+    let base = areas + ((index as u64) << sex_gate::AREA_SHIFT);
+    for (pd, stack) in [(caller, false), (callee, true)] {
+        if st.areas[index].mask & (1 << pd.id) != 0 { continue; }
+        let slot = page(base + sex_gate::slot_offset(pd.id) as u64, pd.pku_key, F::WRITABLE | F::NO_EXECUTE, 0)?;
+        if stack {
+            // One unmapped guard page below the callee's stack.
+            let va = crate::memory::va_allocator::allocate_va(((CALLEE_STACK_PAGES + 1) * PAGE) as usize).ok_or(E_FULL)?;
+            for p in 1..=CALLEE_STACK_PAGES { page(va + p * PAGE, pd.pku_key, F::WRITABLE | F::NO_EXECUTE, 0)?; }
+            put(slot, sex_gate::slot::STACK as u64, va + (CALLEE_STACK_PAGES + 1) * PAGE);
+        }
+        st.areas[index].mask |= 1 << pd.id;
+        st.areas[index].slots[pd.id as usize] = slot;
+    }
+    Ok(())
+}
+
+/// Depth of the gate calls `ctx`'s task is in (0: none, or no area).
+fn depth(ctx: &crate::scheduler::TaskContext) -> u64 {
+    match FRAME_OF.get(ctx.gate_aux as usize).map(|f| f.load(Ordering::Acquire)) {
+        Some(frame) if frame != 0 && ctx.gate_aux != 0 => get(frame, sex_gate::frame::DEPTH as u64),
+        _ => 0,
+    }
+}
+
+fn current_context() -> Option<&'static mut crate::scheduler::TaskContext> {
+    let core = crate::core_local::CoreLocal::get().core_id as usize;
+    let task = crate::scheduler::SCHEDULERS[core].current_task.load(Ordering::Acquire);
+    (!task.is_null()).then(|| unsafe { &mut (*task).context })
+}
+
+/// True when a system call comes from inside a gate call: only the callee runs then.
+pub fn inside(_regs: &crate::interrupts::SyscallRegs) -> bool {
+    ON.load(Ordering::Acquire) && current_context().is_some_and(|ctx| depth(ctx) != 0)
+}
+
+/// A preempted task resumes with the PKRU it had, which inside a gate is the callee's.
+/// The switching stub saved it in the dummy error slot.
+pub unsafe fn keep_live_pkru(ctx: &mut crate::scheduler::TaskContext, frame: &x86_64::structures::idt::InterruptStackFrame) {
+    if !ON.load(Ordering::Acquire) || crate::pku::PKU_ENABLED.load(Ordering::Relaxed) == 0 { return; }
+    // Inside a stub the depth can read 0 while its PKRU already opens the frame: from
+    // the entry WRPKRU until the depth is raised, and on the way out once it is lowered
+    // until the closing WRPKRU. A preempt there must keep that PKRU as well.
+    let rip = frame.instruction_pointer.as_u64();
+    let in_stub = (STUBS..STUBS + MAX_STUBS as u64 * STUB_BYTES).contains(&rip);
+    if frame.code_segment.0 & 3 != 3 || (!in_stub && depth(ctx) == 0) { return; }
+    ctx.pkru = unsafe { *(frame as *const _ as *const u64).offset(-1) } & 0xFFFF_FFFF;
+}
+
+/// A user fault on a task inside a gate call is the callee's: undo the top call and
+/// return to the caller's stub call site with `PEER_DIED`, its stack, callee-saved
+/// registers and keys taken from its own slot. The fault stubs push the 15 GPRs just
+/// below the frame and return through IRETQ.
+pub unsafe fn unwind(frame: &mut x86_64::structures::idt::InterruptStackFrame, vector: u64, error: u64, address: u64) -> bool {
+    if !ON.load(Ordering::Acquire) || frame.code_segment.0 & 3 != 3 { return false; }
+    let Some(ctx) = current_context() else { return false };
+    if depth(ctx) == 0 { return false; }
+    let aux = ctx.gate_aux as usize;
+    let st = STATE.lock();
+    let Some(area) = st.areas.get(aux).filter(|_| aux != 0) else { return false };
+    let depth = get(area.frame, sex_gate::frame::DEPTH as u64);
+    if depth == 0 || depth > sex_gate::MAX_DEPTH { return false; }
+    let top = sex_gate::frame::FRAMES as u64 + (depth - 1) * 8;
+    let Some(bound) = (get(area.frame, top) as usize).checked_sub(1).and_then(|i| st.stubs.get(i)) else { return false };
+    let (slot, callee) = (area.slots[bound.caller as usize & 63], bound.callee);
+    let Some(caller) = crate::ipc::DOMAIN_REGISTRY.get(bound.caller) else { return false };
+    if slot == 0 { return false; }
+    let rsp = get(slot, sex_gate::slot::RSP as u64);
+    let Some(ret) = peek(rsp) else { return false };
+    put(area.frame, top, 0);
+    put(area.frame, sex_gate::frame::DEPTH as u64, depth - 1);
+    put(area.frame, sex_gate::frame::ACTIVE as u64, get(area.frame, sex_gate::frame::ACTIVE as u64) & !(1 << callee));
+    put(area.frame, sex_gate::frame::CUR as u64, caller.base_pkru_mask as u64);
+    put(slot, sex_gate::slot::ID as u64, 0);
+    let base = frame as *mut _ as *mut u64;
+    let rip = unsafe { base.read() };
+    let saved = |i: u64| get(slot, sex_gate::slot::SAVED as u64 + 8 * i);
+    // Below the frame: -2 r15 -3 r14 -4 r13 -5 r12 -6..-9 r11..r8 -10 rdi -11 rsi
+    // -12 rbp -13 rdx -14 rcx -15 rbx -16 rax.
+    let regs: [(isize, u64); 15] = [(-2, saved(5)), (-3, saved(4)), (-4, saved(3)), (-5, saved(2)),
+        (-6, 0), (-7, 0), (-8, 0), (-9, 0), (-10, 0), (-11, 0), (-12, saved(1)), (-13, 0), (-14, 0),
+        (-15, saved(0)), (-16, PEER_DIED)];
+    unsafe {
+        for (at, value) in regs { base.offset(at).write(value); }
+        base.write(ret); // RIP
+        base.add(3).write(rsp + 8); // RSP
+        // The callee's vector, x87 and AVX-512 state is still live (it is saved only on a
+        // switch): reset all of it, so nothing of the callee's reaches the caller.
+        crate::fpu::restore(&CLEAN_FPU);
+        if crate::pku::PKU_ENABLED.load(Ordering::Relaxed) != 0 {
+            core::arch::asm!("wrpkru", in("eax") caller.base_pkru_mask, in("ecx") 0, in("edx") 0, options(nostack));
+        }
+    }
+    crate::serial_println!("[gate.unwind] caller={} callee={} vector={} address={:#x}", bound.caller, callee, vector, address);
+    crate::crash_log::fault(callee, vector, rip, address, error, "gate callee");
+    true
+}
+
+/// SYS_GATE (111): rdi = op | slot << 8, rsi = argument; rsi out = value.
+pub fn syscall(regs: &mut crate::interrupts::SyscallRegs) -> u64 {
+    let slot = (regs.rdi >> 8) as u32;
+    let result = match regs.rdi & 0xFF {
+        OP_CREATE => create(regs.rsi, regs.rdx),
+        OP_BIND => bind(slot, None),
+        OP_BIND_ROUTE => bind(slot, Some(regs.rsi)),
+        OP_DESTROY => destroy(slot),
+        _ => Err(sex_pdx::ERR_CAP_INVALID),
+    };
+    match result { Ok(v) => { regs.rsi = v; 0 } Err(e) => { regs.rsi = 0; e } }
 }

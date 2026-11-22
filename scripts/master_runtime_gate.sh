@@ -533,6 +533,9 @@ for pat in "${FAULT_PATTERNS[@]}"; do
     if grep -qiE "$pat" "$LOG" 2>/dev/null; then
         print_gate "  x pattern: $pat" "FOUND"
         FAULT_HIT="$pat"
+        # The serial log only reaches the artifact; show the first hit and what led to it.
+        first=$(grep -niE "$pat" "$LOG" | head -1 | cut -d: -f1)
+        sed -n "$(( first > 25 ? first - 25 : 1 )),$(( first + 5 ))p" "$LOG" | sed 's/^/    | /' | cut -c1-240
     fi
 done
 

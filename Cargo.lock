@@ -7660,6 +7660,7 @@ dependencies = [
  "rand_hc",
  "raw-cpuid 11.6.0",
  "scopeguard",
+ "sex-gate",
  "sex-hotplug",
  "sex-hwdb",
  "sex-idle",

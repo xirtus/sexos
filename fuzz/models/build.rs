@@ -63,8 +63,13 @@ fn main() {
     // under C11 and loom models it exactly, so the loom copy cancels with a swap.
     let self_wait: &[(&str, &str)] = &[("[const{AtomicPtr::new(core::ptr::null_mut())};N]", "core::array::from_fn(|_|AtomicPtr::new(core::ptr::null_mut()))"),
                                        ("pub fn cancel(&self){self.at.store(0,Ordering::Release);}", "pub fn cancel(&self){self.at.swap(0,Ordering::AcqRel);}")];
+    // The EXITS epoch (K2c) is a housekeeping hint, not custody: loom has no const
+    // atomics for a static, so the loom copy keeps it as a plain std atomic.
+    let ownership: &[(&str, &str)] = &[("pub static EXITS: AtomicU64 = AtomicU64::new(0);",
+                                        "pub static EXITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);"),
+                                       ("use crate::shim::atomic::{AtomicU32, AtomicU64, Ordering};", "use crate::shim::atomic::{AtomicU32, Ordering};")];
     for (file, name, extra, arrays) in [("kernel/src/scheduler_queue.rs", "scheduler_queue", &[][..], true),
-                                        ("kernel/src/task_ownership.rs", "task_ownership", &[][..], false),
+                                        ("kernel/src/task_ownership.rs", "task_ownership", ownership, false),
                                         ("kernel/src/self_wait.rs", "self_wait", self_wait, false),
                                         ("kernel/src/ipc_ring.rs", "ipc_ring", ring_cell, true),
                                         ("kernel/src/ipc_v2/endpoint.rs", "endpoint", endpoint, false),
