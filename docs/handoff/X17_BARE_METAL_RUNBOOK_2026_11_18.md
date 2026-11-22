@@ -49,6 +49,22 @@ ACPI and Wi-Fi. `hw nvme`, `hw wifi`, `hw display` show every line containing th
 `hw-report.txt` with every hardware line plus the newest 200 lines of the boot log;
 `unmount NAME` before pulling the stick, then send the file.
 
+**Keep a copy going:** `hw record` (in the stick's folder, as above) rewrites the
+report every 30 seconds into `hw-record-1.txt` and `hw-record-2.txt` in turn, each with
+Spindle's newest lines too (what was typed and answered). If the machine hangs later,
+the newer of the two is on the stick. `hw record off` stops it.
+
+**Let Claude watch and drive (tether):** with the network up (Ethernet, or
+`wifi join N PASSWORD`), on the Mac run `python3 scripts/tether_host.py` (Claude can
+start it on the Mac itself); it prints the Mac's address. In Spindle type
+`tether MAC-ADDRESS` (e.g. `tether 192.168.1.20`). SexOS connects out to the Mac and
+sends the whole boot log head and every Spindle line; the Mac side keeps them in
+`tether-logs/session-DATE.log`. Commands from the Mac (`tether_host.py send hw wifi`)
+run as if typed and show on the laptop's screen as `remote> ...` lines, so you see
+everything that is run. `install go`, `update` and `format` are refused from the tether.
+`tether off` ends it. Nothing on SexOS listens; the Mac firewall may ask to allow Python
+once. While tethered, `fetch`, `update` and `pkg` wait for `tether off`.
+
 Also useful from Spindle: `df` (did the disk mount), `wifi` and `wifi scan` (radio state
 and networks), `wifi join N PASSWORD`, `beep` (sound).
 
@@ -70,6 +86,16 @@ and networks), `wifi join N PASSWORD`, `beep` (sound).
 | dGPU off | `[gpu.found] ... vendor=10de`, `[gpu.power] ...` | | |
 | Wi-Fi | `[wifi.chip] ...`, `[wifi.firmware] ...`, `[wifi.alive]`, `[wifi.ready] mac=... country=..` | ready | `[wifi.failed] step=... reason=...` |
 | Sound | `[bell.hda.ready] vendor=0x10ec0..` | Realtek codec | |
+
+## 3b. The first start, in order (2026-11-22)
+
+1. BIOS as in section 1; F12, the stick, plain **SexOS** (not "with NVIDIA GPU" yet).
+2. Hangs: photo, then **safe start**, then "without DMA protection" (section 4).
+3. Desktop up: Scroll Lock for Spindle, `hw` (photo is fine as a first look).
+4. Second stick in: `ls /media`, `cd /media/NAME`, `hw record`.
+5. Network: Ethernet cable, or `wifi scan` then `wifi join N PASSWORD`.
+6. `tether MAC-ADDRESS` with `tether_host.py` running on the Mac: Claude takes it from there.
+7. Done: `hw record off`, `tether off`, `unmount NAME`, pull the stick.
 
 ## 4. If it goes wrong
 

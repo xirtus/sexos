@@ -104,6 +104,7 @@ mod sextime_command;
 mod volume_command;
 mod wifi_command;
 mod hw_command;
+mod tether_command;
 mod calc_command;
 mod complete;
 mod silk_command;
@@ -794,6 +795,25 @@ impl core::fmt::Write for Cursor<'_> {
 }
 
 /// A command typed while the session was being saved; it runs when the save ends.
+/// A line the tether brought: shown as `remote> LINE`, then run as if typed, unless it
+/// writes disks or boot entries (those stay the person's to type).
+fn run_remote(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) {
+    let mut shown = [0u8; MAX_LINE_BYTES];
+    let prefix = b"remote> ";
+    let n = (prefix.len() + line.len()).min(MAX_LINE_BYTES);
+    shown[..prefix.len()].copy_from_slice(prefix);
+    shown[prefix.len()..n].copy_from_slice(&line[..n - prefix.len()]);
+    sb.push(&shown[..n]);
+    if tether_command::refused(line) {
+        sb.push(b"remote: refused (it writes disks or boot entries); type it yourself if you want it.");
+        serial_println!("[spindle.tether.refused] len={}", line.len());
+        return;
+    }
+    let ok = dispatch(line, sb, hist, ev);
+    if !ok { sb.push(b"remote: unknown command."); }
+    serial_println!("[spindle.tether.run] len={} ok={}", line.len(), ok as u8);
+}
+
 static mut HELD: [u8; CMD_MAX] = [0; CMD_MAX];
 static mut HELD_LEN: usize = 0;
 fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut EventRing) -> bool {
@@ -833,7 +853,10 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
         serial_println!("[spindle.cmd.held] len={}",line.len());
         return true
     }
+    // The tether holds the network region's calls; downloads wait for `tether off`.
+    if unsafe{tether_command::TETHER.active()}&&matches!(cmd,b"fetch"|b"update"|b"pkg"){sb.push(b"The tether is using the network: tether off first, then try again.");return true}
     let recognized = match cmd {
+        b"tether"=>{unsafe{let busy=fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy();(*core::ptr::addr_of_mut!(tether_command::TETHER)).command(args,sb,busy);}true},
         b"record"=>{unsafe{record_command::RECORD.start(args,sb);}true},
         b"record-stop"=>{unsafe{record_command::RECORD.stop(args,sb);}true},
         b"capture"=>{unsafe{capture_command::CAPTURE.start(args,sb);}true},
@@ -874,6 +897,8 @@ fn dispatch(line: &[u8], sb: &mut Scrollback, hist: &mut History, ev: &mut Event
             sb.push(b"  Tab          complete a command name");
             sb.push(b"  crashes      what stopped, this start and earlier ones");
             sb.push(b"  hw [all|TEXT|save [PATH]]  hardware report from the boot log; save writes it to a file");
+            sb.push(b"  hw record [PATH|off]  rewrite the hardware report every 30 s (two files in turn)");
+            sb.push(b"  tether HOST[:PORT]|off  stream this Spindle to tether_host.py there; run its commands");
             sb.push(b"  about        Spindle version + identity");
             sb.push(b"  route        input/surface route info");
             sb.push(b"  close        session lifecycle status");
@@ -2852,13 +2877,26 @@ pub extern "C" fn _start() -> ! {
         if unsafe{fetch_command::FETCH.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{update_command::UPDATE.step(sb)}{unsafe{content_render(&line,sb);}}
         if unsafe{pkg_command::PKG.step(sb)}{unsafe{content_render(&line,sb);}}
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0}{
+        {
+            // The tether and `hw record` poll on their own clocks: draw only when they said something.
+            let before=sb.total_lines;
+            unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).step(sb);}
+            let files_free=unsafe{!session_command::SESSION.io_busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()&&HELD_LEN==0};
+            hw_command::tick(sb,files_free);
+            if unsafe{HELD_LEN==0&&!session_command::SESSION.io_busy()}{
+                let mut remote=[0u8;tether_command::CMD_MAX];
+                if let Some(n)=unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).next_command(&mut remote)}{run_remote(&remote[..n],sb,hist,&mut ev);}
+            }
+            if sb.total_lines!=before{unsafe{content_render(&line,sb);}}
+        }
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0} || unsafe{tether_command::TETHER.active()||hw_command::recording()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         let capture_lines=sb.total_lines;
         if msg.type_id==1&&unsafe{record_command::RECORD.receive(msg.caller_pd,msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1&&unsafe{capture_command::CAPTURE.receive(msg.caller_pd,msg.arg0,sb)}{if sb.total_lines!=capture_lines{unsafe{content_render(&line,sb);}}continue;}
         if msg.type_id==1&&unsafe{fetch_command::FETCH.receive(msg.caller_pd,msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
+        if msg.type_id==1&&unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).receive(msg.caller_pd,msg.arg0,sb)}{if sb.total_lines!=capture_lines{unsafe{content_render(&line,sb);}}continue;}
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{session_command::SESSION.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if msg.type_id==1&&msg.caller_pd==11&&unsafe{fs_commands::FS.receive(msg.arg0,sb)}{unsafe{content_render(&line,sb);}continue;}
         if let Some(r)=unsafe{DISPLAY_IO.receive(msg.caller_pd,msg.arg0)}{
