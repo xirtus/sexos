@@ -2,7 +2,7 @@
 //! `hw`: the hardware report on screen. A laptop like the Alienware x17 R1 has no
 //! serial port, and the boot log on screen ends when Display takes the framebuffer,
 //! before the disk, Wi-Fi and sound drivers have said what they found. The kernel keeps
-//! the boot log's first 256 KiB (`crash_log::OP_LOG_HEAD`); this picks out the lines
+//! the boot log's first 1 MiB (`crash_log::OP_LOG_HEAD`); this picks out the lines
 //! about hardware, so one photo of Spindle is the hardware report.
 //!
 //! `hw` shows the hardware lines; `hw all` shows the newest lines of the whole head;
@@ -31,6 +31,7 @@ pub const TAGS: &[&[u8]] = &[
     b"[sexnet.nic.", b"[net.dhcp.lease]", b"[usb.host.controller.found]", b"[sexusb.device]",
     b"[sexusb.device.refused]", b"[sexusb.device.fail]", b"[sexacpi.ready]", b"[sexacpi.tables]", b"[sexacpi.ec]",
     b"[sexacpi.touchpad]", b"[crash.record]", b"[files.fs.foreign]", b"[files.media.", b"[kernel.safe_start]",
+    b"[kernel.ps2", b"[ps2.", b"[sexinput.", b"[input.", b"[sexusb.", b"[usb.", b"[iommu.boot_options]", b"[spindle.autorun", b"[spindle.tether.",
 ];
 
 /// Whether `line` is a hardware line: one of `TAGS`, at its start or after a prefix.
@@ -108,9 +109,9 @@ pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
     sb.push(&text[..n]);
 }
 
-/// The most a saved report holds: every hardware line of a 256 KiB head fits easily,
+/// The most a saved report holds: every hardware line of the head fits easily,
 /// with room for the boot log's tail and Spindle's own newest lines.
-const SAVE_MAX: usize = 160 * 1024;
+const SAVE_MAX: usize = 240 * 1024;
 /// Spindle's own newest lines kept in a report.
 const SAVE_SPINDLE_LINES: usize = 300;
 static mut OWN_LINES: [[u8; crate::MAX_LINE_BYTES]; SAVE_SPINDLE_LINES] = [[0; crate::MAX_LINE_BYTES]; SAVE_SPINDLE_LINES];
@@ -151,10 +152,10 @@ fn save(path: &[u8], sb: &mut crate::Scrollback) -> Option<usize> {
         put(&stamp[..n], &mut at);
         head = walk(|line| { put(line, &mut at); lines += 1; }, Pick::Hardware);
         if head.is_none() { put(b"The boot log is not available here.", &mut at); }
-        // The newest 200 lines of the whole head, for what the tags miss.
+        // The newest lines of the whole head, for what the tags miss.
         let mut total = 0usize;
         let _ = walk(|_| total += 1, Pick::All);
-        let skip = total.saturating_sub(200);
+        let skip = total.saturating_sub(1200);
         put(b"", &mut at);
         put(b"--- newest lines of the boot log head ---", &mut at);
         let mut index = 0usize;
@@ -233,6 +234,19 @@ fn record(args: &[u8], sb: &mut crate::Scrollback) {
         core::str::from_utf8(&r.paths[0][..r.len[0]]).unwrap_or("?"), core::str::from_utf8(&r.paths[1][..r.len[1]]).unwrap_or("?")));
     let n = w.len;
     sb.push(&text[..n]);
+}
+
+/// Whether the boot entry's command line holds `word` (the kernel prints it once at
+/// boot as `[iommu.boot_options] cmdline="..."`; there is no other way to read it here).
+pub fn boot_word(word: &[u8]) -> bool {
+    let mut found = false;
+    let _ = walk(|line| {
+        let Some(at) = line.windows(9).position(|w| w == b"cmdline=\"") else { return };
+        let rest = &line[at + 9..];
+        let rest = &rest[..rest.iter().position(|b| *b == b'"').unwrap_or(rest.len())];
+        if rest.split(|b| *b == b' ').any(|w| w == word) { found = true; }
+    }, Pick::Matching(b"[iommu.boot_options]"));
+    found
 }
 
 /// Whether `hw record` is on (the main loop then keeps its clock running).

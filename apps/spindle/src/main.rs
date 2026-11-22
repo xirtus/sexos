@@ -2843,6 +2843,17 @@ pub extern "C" fn _start() -> ! {
     unsafe { content_render(&line, sb) };
 
     serial_println!("[spindle.ready]");
+    // "SexOS report to the Mac" boot entries (`autorun`): a machine whose keyboard and
+    // mouse do nothing yet still reports itself: the hardware report onto the Ventoy
+    // stick every 30 s, and a tether listener the Mac finds (tether_host.py connect --scan).
+    if hw_command::boot_word(b"autorun") {
+        sb.push(b"autorun: this boot entry reports to the Mac without typing.");
+        serial_println!("[spindle.autorun] on=1");
+        for line in [&b"hw record /media/Ventoy/sexos-report.txt"[..], b"tether listen"] {
+            let ok = dispatch(line, sb, hist, &mut ev);
+            serial_println!("[spindle.autorun.run] len={} ok={}", line.len(), ok as u8);
+        }
+    }
     let mut registration_pending=incarnation.ordinal!=0;
     let mut presentation_pending=false;let mut presentation_sent=false;
     let mut storage_owner=0u8;

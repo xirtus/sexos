@@ -49,6 +49,45 @@ def addresses():
     return sorted(a for a in found if not a.startswith('127.'))
 
 
+def scan_targets(base=None):
+    """Every host address of this computer's /24 networks (or of BASE's)."""
+    nets = set()
+    for a in ([base] if base else addresses()):
+        parts = a.split('.')
+        if len(parts) == 4:
+            nets.add('.'.join(parts[:3]))
+    mine = set(addresses())
+    return [f'{n}.{i}' for n in sorted(nets) for i in range(1, 255) if f'{n}.{i}' not in mine]
+
+
+def find_listener(hosts, port, timeout=0.6):
+    """The first host with PORT open, trying them all at once."""
+    socks = {}
+    for h in hosts:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.setblocking(False)
+        try:
+            s.connect_ex((h, port))
+        except OSError:
+            s.close()
+            continue
+        socks[s] = h
+    found = None
+    end = time.time() + timeout * 3
+    try:
+        while socks and time.time() < end and not found:
+            _, writable, _ = select.select([], list(socks), [], timeout)
+            for s in writable:
+                if s.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) == 0:
+                    found = socks[s]
+                    break
+                socks.pop(s).close()
+    finally:
+        for s in socks:
+            s.close()
+    return found
+
+
 def write_state(d: Path, **state):
     tmp = d / 'state.json.tmp'
     tmp.write_text(json.dumps(state))
@@ -75,68 +114,75 @@ def serve(d: Path, port: int, auto: list, once: bool, quiet: bool):
     write_state(d, connected=False, port=port, waiting_since=time.time())
     while True:
         conn, peer = listener.accept()
-        stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
-        path = d / f'session-{stamp}.log'
-        current = d / 'current.log'
-        try:
-            if current.is_symlink() or current.exists():
-                current.unlink()
-            current.symlink_to(path.name)
-        except OSError:
-            (d / 'current.txt').write_text(path.name)
-        print(f'tether: {peer[0]} connected; keeping {path}', flush=True)
-        inbox_at = inbox.stat().st_size
-        received = 0
-        started = time.time()
-        write_state(d, connected=True, peer=peer[0], session=path.name, started=started, bytes=0)
-        conn.setblocking(False)
-        pending = b''.join(c.encode() + b'\n' for c in auto)
-        last_state = 0.0
-        with path.open('ab') as log:
-            while True:
-                readable, writable, _ = select.select([conn], [conn] if pending else [], [], 0.2)
-                if readable:
-                    try:
-                        data = conn.recv(65536)
-                    except (BlockingIOError, InterruptedError):
-                        data = None
-                    except OSError:
-                        data = b''
-                    if data == b'':
-                        break
-                    if data:
-                        log.write(data)
-                        log.flush()
-                        received += len(data)
-                        if not quiet:
-                            sys.stdout.write(data.decode('utf-8', 'replace'))
-                            sys.stdout.flush()
-                if writable and pending:
-                    try:
-                        sent = conn.send(pending)
-                        pending = pending[sent:]
-                    except (BlockingIOError, InterruptedError):
-                        pass
-                    except OSError:
-                        break
-                size = inbox.stat().st_size
-                if size < inbox_at:
-                    inbox_at = 0
-                if size > inbox_at:
-                    with inbox.open('rb') as f:
-                        f.seek(inbox_at)
-                        new = f.read()
-                    whole = new[:new.rfind(b'\n') + 1]
-                    inbox_at += len(whole)
-                    pending += whole
-                if time.time() - last_state > 1:
-                    last_state = time.time()
-                    write_state(d, connected=True, peer=peer[0], session=path.name, started=started, bytes=received)
-        conn.close()
-        print(f'\ntether: {peer[0]} disconnected after {received} bytes', flush=True)
-        write_state(d, connected=False, port=port, last_session=path.name, bytes=received, ended=time.time())
+        session(d, conn, peer[0], auto, quiet)
         if once:
             return
+
+
+def session(d: Path, conn, peer: str, auto: list, quiet: bool):
+    """One SexOS session on a connected socket, whichever side connected."""
+    inbox = d / 'inbox.txt'
+    inbox.touch()
+    stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+    path = d / f'session-{stamp}.log'
+    current = d / 'current.log'
+    try:
+        if current.is_symlink() or current.exists():
+            current.unlink()
+        current.symlink_to(path.name)
+    except OSError:
+        (d / 'current.txt').write_text(path.name)
+    print(f'tether: {peer} connected; keeping {path}', flush=True)
+    inbox_at = inbox.stat().st_size
+    received = 0
+    started = time.time()
+    write_state(d, connected=True, peer=peer, session=path.name, started=started, bytes=0)
+    conn.setblocking(False)
+    pending = b''.join(c.encode() + b'\n' for c in auto)
+    last_state = 0.0
+    with path.open('ab') as log:
+        while True:
+            readable, writable, _ = select.select([conn], [conn] if pending else [], [], 0.2)
+            if readable:
+                try:
+                    data = conn.recv(65536)
+                except (BlockingIOError, InterruptedError):
+                    data = None
+                except OSError:
+                    data = b''
+                if data == b'':
+                    break
+                if data:
+                    log.write(data)
+                    log.flush()
+                    received += len(data)
+                    if not quiet:
+                        sys.stdout.write(data.decode('utf-8', 'replace'))
+                        sys.stdout.flush()
+            if writable and pending:
+                try:
+                    sent = conn.send(pending)
+                    pending = pending[sent:]
+                except (BlockingIOError, InterruptedError):
+                    pass
+                except OSError:
+                    break
+            size = inbox.stat().st_size
+            if size < inbox_at:
+                inbox_at = 0
+            if size > inbox_at:
+                with inbox.open('rb') as f:
+                    f.seek(inbox_at)
+                    new = f.read()
+                whole = new[:new.rfind(b'\n') + 1]
+                inbox_at += len(whole)
+                pending += whole
+            if time.time() - last_state > 1:
+                last_state = time.time()
+                write_state(d, connected=True, peer=peer, session=path.name, started=started, bytes=received)
+    conn.close()
+    print(f'\ntether: {peer} disconnected after {received} bytes', flush=True)
+    write_state(d, connected=False, last_session=path.name, bytes=received, ended=time.time())
 
 
 def current_log(d: Path):
@@ -200,12 +246,37 @@ def main(argv=None):
     t = sub.add_parser('tail')
     t.add_argument('-n', type=int, default=80)
     sub.add_parser('status')
+    k = sub.add_parser('connect', help='connect to SexOS started with `tether listen` (the "report to the Mac" boot entries)')
+    k.add_argument('host', nargs='?', help='its address; with --scan, found on the local network')
+    k.add_argument('--scan', action='store_true', help='try every address of this computer\'s /24 networks')
+    k.add_argument('--port', type=int, default=PORT)
+    k.add_argument('--auto', default='hw;crashes;df')
+    k.add_argument('--quiet', action='store_true')
+    k.add_argument('--retry', type=float, default=600, help='seconds to keep looking')
     a = p.parse_args(argv)
     if a.what in (None, 'serve'):
         port = getattr(a, 'port', PORT)
         auto = [x.strip() for x in getattr(a, 'auto', 'hw;crashes;df').split(';') if x.strip()]
         serve(a.dir, port, auto, getattr(a, 'once', False), getattr(a, 'quiet', False))
         return 0
+    if a.what == 'connect':
+        auto = [x.strip() for x in a.auto.split(';') if x.strip()]
+        a.dir.mkdir(parents=True, exist_ok=True)
+        end = time.time() + a.retry
+        while True:
+            hosts = [a.host] if a.host and not a.scan else scan_targets(a.host)
+            found = find_listener(hosts, a.port)
+            if found:
+                print(f'tether: found SexOS at {found}:{a.port}', flush=True)
+                conn = socket.create_connection((found, a.port), timeout=5)
+                conn.settimeout(None)
+                session(a.dir, conn, found, auto, a.quiet)
+                return 0
+            if time.time() > end:
+                print('tether: no SexOS listener found (is the x17 on the same network, booted with "report to the Mac"?)', file=sys.stderr)
+                return 1
+            print(f'tether: not found yet among {len(hosts)} addresses; trying again', flush=True)
+            time.sleep(5)
     if a.what == 'send':
         return send(a.dir, ' '.join(a.command), a.wait)
     if a.what == 'tail':
