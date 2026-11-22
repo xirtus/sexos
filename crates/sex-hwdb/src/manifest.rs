@@ -53,7 +53,17 @@ pub enum Lease {
     /// memory + bus-master command grant, a 64 MiB DMA pool and the GSP firmware pack
     /// (`sex_pdx::nvidia_gpu`). Only when the boot entry starts `sexgpu-nv`.
     NvidiaGpu,
+    /// Any other device, for a driver built on the Harness SDK (`crates/harness`) in
+    /// the Saddle service: BAR0 (at least [`GENERIC_REGISTERS_END`] bytes, at most
+    /// 64 KiB of it), memory and bus-master command bits, and a DMA pool of its own
+    /// behind the IOMMU. Nothing about the device is known to the kernel.
+    Generic,
 }
+
+/// The smallest BAR0 a [`Lease::Generic`] device may have.
+pub const GENERIC_REGISTERS_END: u64 = 0x100;
+/// Where Saddle reads its first device ([`Lease::Generic`]).
+pub const SADDLE_SLOT: u64 = 24;
 
 /// Intel Serial IO I2C functions, Skylake to Meteor Lake PCHs.
 pub const SERIAL_IO_I2C: &[u16] = &[
@@ -196,13 +206,25 @@ pub const INPUT: Manifest = Manifest {
     matches: &[Match::vendor_class(0x8086, 0x0c_80_00, CLASS, Lease::SerialIo, 28)],
 };
 
+/// Saddle: devices driven by drivers built on the Harness SDK, outside the system
+/// services. Consulted last, so it never takes a device a system service drives.
+/// Add a device here (exact id, `Lease::Generic`) when its Harness driver joins
+/// Saddle's driver table (`servers/saddle`).
+pub const SADDLE: Manifest = Manifest {
+    service: Service::Saddle, max_devices: 8, vectors: 1,
+    matches: &[
+        // QEMU's edu teaching device: the Harness template driver (crates/harness-template).
+        Match::id(0x1234, 0x11e8, Lease::Generic, SADDLE_SLOT),
+    ],
+};
+
 /// I/O APIC lines BOOT reserves for a service that holds at least one device: wires
 /// firmware describes, not messages a device writes (`sex_pdx::device::OP_LINE_BIND`).
 /// Input takes one for the touchpad's GPIO pad, when firmware routed it to the I/O APIC.
 pub const LINES: &[(Service, u8)] = &[(Service::Input, 1)];
 
 /// Every manifest, in the order BOOT consults them.
-pub const ALL: &[Manifest] = &[DRIVE, USB, NET, BELL, GPU, DISPLAY, INPUT];
+pub const ALL: &[Manifest] = &[DRIVE, USB, NET, BELL, GPU, DISPLAY, INPUT, SADDLE];
 
 /// The manifest and entry that claim this device, if any, with every service running.
 pub fn claim(id: Id) -> Option<(&'static Manifest, Match)> { claim_present(id, |_| true) }

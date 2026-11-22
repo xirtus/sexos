@@ -234,6 +234,17 @@ pub fn init() {
         }
     }
 
+    // Saddle hosts drivers built on the Harness SDK (crates/harness) for devices no
+    // system service drives, on generic leases. Optional, in the Senses organ.
+    let mut saddle_id=0;
+    if let Some(module)=modules.modules().iter().find(|m|m.path().ends_with("/saddle")) {
+        let id=sex_pdx::pci_command::SADDLE_PD;
+        match crate::pd::create::create_boot_domain(module.path(),Some(id),id as u8,sex_pdx::pci_command::SADDLE_KEY) {
+            Ok(created)=>{assert_eq!(created,id,"BOOT_SADDLE_IDENTITY");saddle_id=created;
+                serial_println!("[kernel.spawn.saddle] id={} key={} organ=senses",created,sex_pdx::pci_command::SADDLE_KEY);}
+            Err(e)=>{serial_println!("[kernel.spawn.saddle] failed={}",e);}
+        }
+    }
     // sexgpu-nv, the NVIDIA GPU service (GSP-RM boot), in the Core organ beside the
     // display it will feed. Only the "SexOS with NVIDIA GPU" entry lists it; without it
     // the GPU is powered off as before and Display holds its identity.
@@ -961,6 +972,9 @@ pub fn init() {
     crate::service_restart::capture(silkshell_id, 3);
     // Denim: a new run ends the runs whose pages the old one held (`denim::RESET`).
     crate::service_restart::capture(denim_id, sex_pdx::denim::DENIM_PD as u8);
+    // Saddle: an outside driver that faults starts again on a reset device.
+    crate::service_restart::capture(saddle_id, sex_pdx::pci_command::SADDLE_PD as u8);
+    const _: () = assert!(crate::service_restart::SADDLE_PD == sex_pdx::pci_command::SADDLE_PD);
     // Drive: a new run resets its controller and serves the same disk; Files sends a
     // call the old run took again (sex_pdx::crash_log::PEER_RESTARTED).
     crate::service_restart::capture(sexdrive_id, 2);
@@ -1217,6 +1231,7 @@ pub fn init() {
                     51 => "denim",
                     52 => "cufflinks",
                     53 => "sexgpu-nv",
+                    54 => "saddle",
                     _ => "unknown",
                 };
                 let entry = unsafe { (*task_ptr).context.rip };

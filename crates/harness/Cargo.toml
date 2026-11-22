@@ -1,0 +1,27 @@
+[package]
+name = "harness"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "Harness, the SexOS driver SDK: register, DMA, interrupt and clock traits for native drivers, a mock device and a fuzz runner to test them on the host"
+
+# Drivers built on Harness are plain no_std crates. They hold no syscalls of
+# their own: the service that holds the device lease hands them a `Regs`, a
+# `Clock`, an `Irq` and DMA memory. On the host the `mock` feature supplies a
+# device model and the fuzz runner instead.
+[features]
+default = []
+# Host-side helpers that need std (the mock device, the fuzz runner).
+std = []
+mock = ["std"]
+# Bindings to the real system (device leases, DMA pool, interrupts, serial
+# records) through sex-pdx. Only a SexOS service enables this.
+sexos = ["dep:sex-pdx"]
+
+[dependencies]
+sex-hwdb = { path = "../sex-hwdb" }
+sex-pdx = { path = "../sex-pdx", optional = true }
+
+[[test]]
+name = "sdk"
+required-features = ["mock"]

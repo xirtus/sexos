@@ -1,0 +1,27 @@
+[package]
+name = "harness-template"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later OR MIT"
+description = "A complete SexOS driver built on Harness, for the QEMU edu teaching device: copy this crate to start a driver"
+
+[lib]
+name = "edu"
+
+[features]
+default = []
+# The built-in-mutator fuzz binary (host only).
+fuzz = ["harness/mock"]
+
+[dependencies]
+harness = { path = "../harness" }
+
+[dev-dependencies]
+harness = { path = "../harness", features = ["mock"] }
+
+[[bin]]
+name = "fuzz_edu"
+path = "src/bin/fuzz_edu.rs"
+required-features = ["fuzz"]
+test = false
+doc = false
