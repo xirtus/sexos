@@ -32,7 +32,7 @@ b1018b600797885f519a469c00eed0818ed927c1ffaeb0bde47b137541b8c2fa  crates/sex-pdx
 
 d17ef036e0f28ec8199e709913df79689f31bacdf4d84e951fbe0da540269383  crates/sex-pdx/src/desktop_style.rs
 
-a999b5df1d2c893392a2d04d87df10a58142c8585f76e7d123120657d3fb7991  crates/sex-pdx/src/device.rs
+215fc8fd9bde03aa71ba6b1d5f10b53183bd8616b3945f26de50c84914b73c0e  crates/sex-pdx/src/device.rs
 
 75ea7ea281d2cc93c27a2496d91f86ca9c2defe90777e2d5fd2b2aa1dcfd3f1c  crates/sex-pdx/src/display_boot.rs
 
@@ -182,7 +182,7 @@ cff4c0f340e435934c14414c632fb6ac7947fd58a648e166a4a35afd3b71d2e8  kernel/src/ser
 
 bdd336b802c5971b861cdefee87c4f5c4764d457516fdc8b97f2df7aa6158cb6  kernel/src/svm.rs
 
-3ff4bece91b2e17acd29f5249ebc48f6b0e1085be5efcbe96714aeb598efb73d  kernel/src/syscalls/mod.rs
+25fb076b9578be20cd1450fccdd74d0f8eb120e4f93d7cc7b88f2d69505b9ab2  kernel/src/syscalls/mod.rs
 
 d96aa774f2c9ddf72f5fca8c9aa31e6127d182038f9bff826faa5e55ef8083eb  kernel/src/trust_source.rs
 
