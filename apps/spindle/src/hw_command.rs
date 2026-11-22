@@ -10,6 +10,13 @@
 //! every hardware line to a text file (default `hw-report.txt` in the working
 //! directory), e.g. `cd /media/STICK` then `hw save`, so the report leaves the laptop
 //! on a USB stick instead of as photos.
+//!
+//! `hw record [PATH]` keeps doing that every 30 seconds for the rest of the run, so a
+//! machine that hangs later still leaves a recent report behind. It writes two files in
+//! turn (`hw-record-1.txt`, `hw-record-2.txt`, or PATH with `-1`/`-2` before its
+//! extension), so one whole copy survives a hang in the middle of a write. Each copy
+//! also holds Spindle's own newest lines (what was typed and answered: `wifi`, `beep`,
+//! `tether`, ...). `hw record off` stops it.
 
 use sex_pdx::crash_log as log;
 use sex_pdx::serial_println;
@@ -65,7 +72,13 @@ pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
     if args == b"save" || args.starts_with(b"save ") {
         let mut path = &args[4..];
         while let [b' ', rest @ ..] = path { path = rest; }
-        save(if path.is_empty() { b"hw-report.txt" } else { path }, sb);
+        let _ = save(if path.is_empty() { b"hw-report.txt" } else { path }, sb);
+        return;
+    }
+    if args == b"record" || args.starts_with(b"record ") {
+        let mut rest = &args[6..];
+        while let [b' ', r @ ..] = rest { rest = r; }
+        record(rest, sb);
         return;
     }
     let pick = pick(args);
@@ -95,12 +108,33 @@ pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
     sb.push(&text[..n]);
 }
 
-/// The most a saved report holds: every hardware line of a 256 KiB head fits easily.
-const SAVE_MAX: usize = 64 * 1024;
+/// The most a saved report holds: every hardware line of a 256 KiB head fits easily,
+/// with room for the boot log's tail and Spindle's own newest lines.
+const SAVE_MAX: usize = 160 * 1024;
+/// Spindle's own newest lines kept in a report.
+const SAVE_SPINDLE_LINES: usize = 300;
+static mut OWN_LINES: [[u8; crate::MAX_LINE_BYTES]; SAVE_SPINDLE_LINES] = [[0; crate::MAX_LINE_BYTES]; SAVE_SPINDLE_LINES];
+static mut OWN_LENGTHS: [u8; SAVE_SPINDLE_LINES] = [0; SAVE_SPINDLE_LINES];
 
-/// `hw save PATH`: the hardware lines, then the newest lines of the whole head, as text.
-fn save(path: &[u8], sb: &mut crate::Scrollback) {
+/// `hw save PATH`: the hardware lines, the newest lines of the whole head, then
+/// Spindle's newest lines, as text. Some(lines) when the write started.
+fn save(path: &[u8], sb: &mut crate::Scrollback) -> Option<usize> {
     let (mut lines, mut bytes, mut head) = (0usize, 0usize, None);
+    // Spindle's own lines are copied out first (the fill below cannot borrow `sb`), into
+    // static room: 33 KB would crowd the 64 KiB stack.
+    let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN_LINES) };
+    let own_len = unsafe { &mut *core::ptr::addr_of_mut!(OWN_LENGTHS) };
+    let kept = sb.retained();
+    let first = kept.saturating_sub(SAVE_SPINDLE_LINES);
+    let mut own_count = 0usize;
+    for i in first..kept {
+        let line = sb.get_retained(i);
+        let n = line.len().min(crate::MAX_LINE_BYTES);
+        own[own_count][..n].copy_from_slice(&line[..n]);
+        own_len[own_count] = n as u8;
+        own_count += 1;
+    }
+    let ticks = sex_pdx::get_ticks();
     let started = unsafe { crate::fs_commands::FS.start_write_with(path, SAVE_MAX, |room| {
         let mut at = 0usize;
         let mut put = |text: &[u8], at: &mut usize| {
@@ -110,6 +144,11 @@ fn save(path: &[u8], sb: &mut crate::Scrollback) {
             *at += text.len() + 1;
         };
         put(b"SexOS hardware report (Spindle hw save)", &mut at);
+        let mut stamp = [0u8; 64];
+        let mut c = Cursor { buf: &mut stamp, len: 0 };
+        let _ = core::fmt::Write::write_fmt(&mut c, format_args!("uptime_ms={}", ticks));
+        let n = c.len;
+        put(&stamp[..n], &mut at);
         head = walk(|line| { put(line, &mut at); lines += 1; }, Pick::Hardware);
         if head.is_none() { put(b"The boot log is not available here.", &mut at); }
         // The newest 200 lines of the whole head, for what the tags miss.
@@ -120,17 +159,98 @@ fn save(path: &[u8], sb: &mut crate::Scrollback) {
         put(b"--- newest lines of the boot log head ---", &mut at);
         let mut index = 0usize;
         let _ = walk(|line| { if index >= skip { put(line, &mut at); } index += 1; }, Pick::All);
+        put(b"", &mut at);
+        put(b"--- newest Spindle lines ---", &mut at);
+        for i in 0..own_count { put(&own[i][..own_len[i] as usize], &mut at); }
         bytes = at;
         at
     }, sb) };
-    if !started { return; }
+    if !started { return None; }
     serial_println!("[spindle.hw.save] lines={} bytes={} head_bytes={}", lines, bytes, head.unwrap_or(0));
+    if unsafe { RECORDING.quiet } { return Some(lines); }
     let mut text = [0u8; 160];
     let mut w = Cursor { buf: &mut text, len: 0 };
     let _ = core::fmt::Write::write_fmt(&mut w, format_args!(
         "Saving {} hardware lines ({} bytes) to {}.", lines, bytes, core::str::from_utf8(path).unwrap_or("?")));
     let n = w.len;
     sb.push(&text[..n]);
+    Some(lines)
+}
+
+/// `hw record`'s state: the two file names it writes in turn, and when the next is due.
+pub struct Recording {
+    paths: [[u8; 256]; 2],
+    len: [usize; 2],
+    on: bool,
+    turn: usize,
+    next_at: u64,
+    writes: u64,
+    /// Set while a recorded copy is written, so it says nothing on screen.
+    quiet: bool,
+}
+pub static mut RECORDING: Recording = Recording { paths: [[0; 256]; 2], len: [0; 2], on: false, turn: 0, next_at: 0, writes: 0, quiet: false };
+const RECORD_EVERY_MS: u64 = 30_000;
+
+/// `NAME.EXT` -> `NAME-1.EXT` (or `NAME-1` without an extension).
+fn numbered(path: &[u8], n: u8, out: &mut [u8; 256]) -> Option<usize> {
+    let slash = path.iter().rposition(|b| *b == b'/').map_or(0, |i| i + 1);
+    let dot = path[slash..].iter().rposition(|b| *b == b'.').map(|i| slash + i).filter(|i| *i > slash).unwrap_or(path.len());
+    let total = path.len() + 2;
+    if total > out.len() { return None; }
+    out[..dot].copy_from_slice(&path[..dot]);
+    out[dot] = b'-';
+    out[dot + 1] = b'0' + n;
+    out[dot + 2..total].copy_from_slice(&path[dot..]);
+    Some(total)
+}
+
+fn record(args: &[u8], sb: &mut crate::Scrollback) {
+    let r = unsafe { &mut *core::ptr::addr_of_mut!(RECORDING) };
+    if args == b"off" || args == b"stop" {
+        if r.on { r.on = false; serial_println!("[spindle.hw.record] on=0 writes={}", r.writes); sb.push(b"hw record stopped. The last copies stay on the disk."); }
+        else { sb.push(b"hw record is not running."); }
+        return;
+    }
+    let base: &[u8] = if args.is_empty() { b"hw-record.txt" } else { args };
+    for i in 0..2 {
+        match numbered(base, i as u8 + 1, &mut r.paths[i]) { Some(n) => r.len[i] = n, None => { sb.push(b"Path too long."); return; } }
+    }
+    r.on = true;
+    r.turn = 0;
+    r.next_at = 0;
+    r.writes = 0;
+    serial_println!("[spindle.hw.record] on=1 every_ms={}", RECORD_EVERY_MS);
+    let mut text = [0u8; 160];
+    let mut w = Cursor { buf: &mut text, len: 0 };
+    let _ = core::fmt::Write::write_fmt(&mut w, format_args!(
+        "Recording the hardware report every 30 s to {} and {} (hw record off stops).",
+        core::str::from_utf8(&r.paths[0][..r.len[0]]).unwrap_or("?"), core::str::from_utf8(&r.paths[1][..r.len[1]]).unwrap_or("?")));
+    let n = w.len;
+    sb.push(&text[..n]);
+}
+
+/// Whether `hw record` is on (the main loop then keeps its clock running).
+pub fn recording() -> bool { unsafe { (*core::ptr::addr_of!(RECORDING)).on } }
+
+/// From the main loop: writes the next recorded copy when one is due and the disk is free.
+pub fn tick(sb: &mut crate::Scrollback) -> bool {
+    let r = unsafe { &mut *core::ptr::addr_of_mut!(RECORDING) };
+    if !r.on || unsafe { crate::fs_commands::FS.busy() } { return false; }
+    let now = sex_pdx::get_ticks();
+    if now < r.next_at { return false; }
+    r.next_at = now + RECORD_EVERY_MS;
+    let mut path = [0u8; 256];
+    let n = r.len[r.turn];
+    path[..n].copy_from_slice(&r.paths[r.turn][..n]);
+    r.quiet = true;
+    let wrote = save(&path[..n], sb);
+    r.quiet = false;
+    if wrote.is_some() {
+        r.writes += 1;
+        r.turn ^= 1;
+        serial_println!("[spindle.hw.record.write] n={} file={}", r.writes, core::str::from_utf8(&path[..n]).unwrap_or("?"));
+    }
+    true
 }
 
 /// Calls `each` for every kept line of the head, in order; returns the head's length.
