@@ -121,9 +121,10 @@ pub fn parse_target(arg: &[u8]) -> Option<(&[u8], u16)> {
 
 /// Commands the tether may not run: they write disks or boot entries.
 pub fn refused(line: &[u8]) -> bool {
-    let mut words = line.split(|b| *b == b' ').filter(|w| !w.is_empty());
+    let mut words = line.split(|b| b.is_ascii_whitespace()).filter(|w| !w.is_empty());
     match words.next() {
-        Some(b"install") => words.next() == Some(b"go"),
+        // Files runs the install when `go` is any of its words.
+        Some(b"install") => words.any(|w| w == b"go"),
         Some(b"update") | Some(b"format") | Some(b"mkfs") => true,
         _ => false,
     }

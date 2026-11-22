@@ -179,7 +179,8 @@ fn save(path: &[u8], sb: &mut crate::Scrollback) -> Option<usize> {
 
 /// `hw record`'s state: the two file names it writes in turn, and when the next is due.
 pub struct Recording {
-    paths: [[u8; 256]; 2],
+    /// Absolute: resolved once at `hw record`, so a later `cd` leaves the copies where they were.
+    paths: [[u8; 512]; 2],
     len: [usize; 2],
     on: bool,
     turn: usize,
@@ -188,7 +189,7 @@ pub struct Recording {
     /// Set while a recorded copy is written, so it says nothing on screen.
     quiet: bool,
 }
-pub static mut RECORDING: Recording = Recording { paths: [[0; 256]; 2], len: [0; 2], on: false, turn: 0, next_at: 0, writes: 0, quiet: false };
+pub static mut RECORDING: Recording = Recording { paths: [[0; 512]; 2], len: [0; 2], on: false, turn: 0, next_at: 0, writes: 0, quiet: false };
 const RECORD_EVERY_MS: u64 = 30_000;
 
 /// `NAME.EXT` -> `NAME-1.EXT` (or `NAME-1` without an extension).
@@ -213,7 +214,12 @@ fn record(args: &[u8], sb: &mut crate::Scrollback) {
     }
     let base: &[u8] = if args.is_empty() { b"hw-record.txt" } else { args };
     for i in 0..2 {
-        match numbered(base, i as u8 + 1, &mut r.paths[i]) { Some(n) => r.len[i] = n, None => { sb.push(b"Path too long."); return; } }
+        let mut name = [0u8; 256];
+        let Some(n) = numbered(base, i as u8 + 1, &mut name) else { sb.push(b"Path too long."); return };
+        match unsafe { (*core::ptr::addr_of!(crate::fs_commands::FS)).join(&name[..n], &mut r.paths[i]) } {
+            Some(n) if n > 0 => r.len[i] = n,
+            _ => { sb.push(b"Path too long."); return; }
+        }
     }
     r.on = true;
     r.turn = 0;
@@ -232,14 +238,16 @@ fn record(args: &[u8], sb: &mut crate::Scrollback) {
 /// Whether `hw record` is on (the main loop then keeps its clock running).
 pub fn recording() -> bool { unsafe { (*core::ptr::addr_of!(RECORDING)).on } }
 
-/// From the main loop: writes the next recorded copy when one is due and the disk is free.
-pub fn tick(sb: &mut crate::Scrollback) -> bool {
+/// From the main loop: writes the next recorded copy when one is due. `files_free`: no
+/// other command (session save, capture, download, update, package, recording) holds the
+/// Files region, whose path and data a copy would overwrite.
+pub fn tick(sb: &mut crate::Scrollback, files_free: bool) -> bool {
     let r = unsafe { &mut *core::ptr::addr_of_mut!(RECORDING) };
-    if !r.on || unsafe { crate::fs_commands::FS.busy() } { return false; }
+    if !r.on || !files_free || unsafe { crate::fs_commands::FS.busy() } { return false; }
     let now = sex_pdx::get_ticks();
     if now < r.next_at { return false; }
     r.next_at = now + RECORD_EVERY_MS;
-    let mut path = [0u8; 256];
+    let mut path = [0u8; 512];
     let n = r.len[r.turn];
     path[..n].copy_from_slice(&r.paths[r.turn][..n]);
     r.quiet = true;

@@ -2881,7 +2881,8 @@ pub extern "C" fn _start() -> ! {
             // The tether and `hw record` poll on their own clocks: draw only when they said something.
             let before=sb.total_lines;
             unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).step(sb);}
-            hw_command::tick(sb);
+            let files_free=unsafe{!session_command::SESSION.io_busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()&&HELD_LEN==0};
+            hw_command::tick(sb,files_free);
             if unsafe{HELD_LEN==0&&!session_command::SESSION.io_busy()}{
                 let mut remote=[0u8;tether_command::CMD_MAX];
                 if let Some(n)=unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).next_command(&mut remote)}{run_remote(&remote[..n],sb,hist,&mut ev);}

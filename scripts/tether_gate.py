@@ -7,7 +7,7 @@
    boot log head between its markers, then Spindle's lines; the host's automatic `hw`
    comes back as `remote> hw` and the hardware report follows.
 3. A command sent from the host (`df`) runs and its answer streams back; `install go`
-   from the host is refused; `fetch` typed while tethered waits for `tether off`.
+   (also `install 32 go`) from the host is refused; `fetch` typed while tethered waits for `tether off`.
 4. `tether off` closes the flow and the host sees the session end.
 5. `hw record` writes hw-record-1.txt now and hw-record-2.txt 30 s later, each holding
    the report and Spindle's newest lines.
@@ -110,20 +110,22 @@ def main():
         r = host('send', 'install go', '--wait', '5')
         assert 'remote: refused' in r.stdout, r.stdout
         assert re.search(r'\[spindle\.tether\.refused\]', t()[s:]), 'refusal not logged'
+        r = host('send', 'install 32 go', '--wait', '5')
+        assert 'remote: refused' in r.stdout, r.stdout
 
         line('fetch http://10.0.2.2/x x.txt')
         until(r'The tether is using the network')
 
         s2 = len(t())
         line('tether off')
-        g['wait'](r'\[spindle\.tether\.closed\] bytes=\d+ commands=3', s2, 60)
+        g['wait'](r'\[spindle\.tether\.closed\] bytes=\d+ commands=4', s2, 60)
         serve.wait(60)
         assert re.search(r'disconnected after \d+ bytes', (a.out / 'tether-host.log').read_text())
 
         s3 = len(t())
         line('hw record')
-        g['wait'](r'\[spindle\.hw\.record\.write\] n=1 file=hw-record-1\.txt', s3, 60)
-        g['wait'](r'\[spindle\.hw\.record\.write\] n=2 file=hw-record-2\.txt', s3, 90)
+        g['wait'](r'\[spindle\.hw\.record\.write\] n=1 file=\S*/hw-record-1\.txt', s3, 60)
+        g['wait'](r'\[spindle\.hw\.record\.write\] n=2 file=\S*/hw-record-2\.txt', s3, 90)
         time.sleep(2)
         s4 = len(t())
         line('ls')
