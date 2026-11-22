@@ -476,7 +476,9 @@ fn play(window: &mut Window, src: FileSource, ui: &mut Ui, start_ms: u64, progre
         }
         match player.step() {
             Step::Picture { n, at_ms } => {
-                present(window, &mut player, ui, at_ms);
+                // Display still reads the other page: drop this picture rather than
+                // hold up decoding and sound until it is done.
+                if window.ready() { present(window, &mut player, ui, at_ms); }
                 // A picture that turns bright in the middle is logged with the tick it
                 // was shown at: the A/V sync gate lines these up with its beeps.
                 let mid = player.picture().get((h / 2) * w + w / 2).copied().unwrap_or(0);

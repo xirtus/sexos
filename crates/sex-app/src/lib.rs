@@ -123,6 +123,25 @@ mod pages {
     }
     /// Waits until Display no longer reads the back page. What else arrives meanwhile
     /// is kept for whoever it belongs to.
+    pub static OWED_SINCE: AtomicU64 = AtomicU64::new(0);
+    static ASKED_AT: AtomicU64 = AtomicU64::new(0);
+    /// One look, without waiting: true when Display no longer reads the back page.
+    /// Asks Display again when its answer is overdue.
+    pub fn ready() -> bool {
+        while let Some(m) = crate::mailbox::take(is_shown) { told(&m); }
+        if !OWED.load(Relaxed) { return true; }
+        while let Some(m) = sex_pdx::pdx_try_listen_raw(0) {
+            if told(&m) { continue; }
+            if crate::is_shell(&m) || crate::is_answer(&m) { crate::mailbox::put(m); }
+        }
+        if !OWED.load(Relaxed) { return true; }
+        let now = sex_pdx::get_ticks();
+        if now >= OWED_SINCE.load(Relaxed).saturating_add(ASK_AFTER_MS) && now >= ASKED_AT.load(Relaxed).saturating_add(ASK_AFTER_MS) {
+            ASKED_AT.store(now, Relaxed);
+            let _ = sex_pdx::pdx_call(sex_pdx::SLOT_DISPLAY, sex_pdx::pixel_region::OP, SURFACE.load(Relaxed), sex_pdx::pixel_region::ASK, 0);
+        }
+        false
+    }
     pub fn settle() {
         while let Some(m) = crate::mailbox::take(is_shown) { told(&m); }
         if !OWED.load(Relaxed) { return; }
@@ -185,6 +204,10 @@ impl Window {
         }
         back
     }
+    /// True when [`Window::pixels`] and [`Window::frame`] would not wait: Display has
+    /// moved to the page shown last. A program with frames to spare (video, games)
+    /// can skip a frame instead of waiting for Display to finish its own.
+    pub fn ready(&self) -> bool { pages::ready() }
     /// How many pixels [`Window::pixels`] holds, without waiting for Display.
     pub fn room(&self) -> usize { pages::page(0).len() }
     /// The width and height of the window's pixel area, as Shell last reported it
@@ -219,6 +242,7 @@ impl Window {
         pages::SURFACE.store(self.surface, Relaxed);
         pages::SHOWN.store(width * height, Relaxed);
         pages::OWED.store(true, Relaxed);
+        pages::OWED_SINCE.store(sex_pdx::get_ticks(), Relaxed);
         pages::STALE.store(true, Relaxed);
     }
     /// The name in the window's title bar, up to sixteen characters.

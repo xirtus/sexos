@@ -22,3 +22,7 @@
   frame after a Files call waited the full 100 ms; Spindle then took a native
   program's output too slowly and the relay lost a line (Terminal gate "attached
   output has gaps").
+- A shown answer overdue by 4 ms is asked for again (`OP` arg1 = `ASK`); waits of
+  4 ms or more log `[app.pages.late]` (first 16). `Window::ready()` says, without
+  waiting, whether the back page is free: Qupid drops a picture instead of holding
+  up decoding and sound while Display finishes a frame.
