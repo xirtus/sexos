@@ -106,7 +106,7 @@ def main():
         until(r'MiB free of')
         # The host's automatic `hw`.
         until(r'remote> hw\n')
-        until(r'lines from the first \d+ KiB of the boot log')
+        until(r'lines from \d+ KiB of the boot log')
         g['wait'](r'\[spindle\.tether\.run\] len=2 ok=1', s, 60)
 
         r = host('send', 'df', '--wait', '8')

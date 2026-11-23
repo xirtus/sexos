@@ -107,7 +107,7 @@ pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
     let mut text = [0u8; 120];
     let mut w = Cursor { buf: &mut text, len: 0 };
     let _ = core::fmt::Write::write_fmt(&mut w, format_args!(
-        "{} of {} lines from the first {} KiB of the boot log. hw all | hw TEXT for more.",
+        "{} of {} lines from {} KiB of the boot log (its start and newest part). hw all | hw TEXT for more.",
         total.min(SHOW), total, bytes / 1024));
     let n = w.len;
     sb.push(&text[..n]);
@@ -279,28 +279,71 @@ pub fn tick(sb: &mut crate::Scrollback, files_free: bool) -> bool {
     true
 }
 
-/// Calls `each` for every kept line of the head, in order; returns the head's length.
+/// Calls `each` for every kept line of the log, in order: the head (the first 512 KiB),
+/// then whatever of the newest 64 KiB came after it, so lines logged after the head
+/// filled (a Wi-Fi join, an address lease) are found too. Returns the bytes read.
 fn walk(mut each: impl FnMut(&[u8]), pick: Pick) -> Option<usize> {
     let mut chunk = [0u8; log::LOG_CHUNK];
     let mut line = [0u8; 256];
-    let (mut len, mut offset, mut total) = (0usize, 0usize, 0usize);
-    loop {
-        let (n, head) = log::log_head(offset, &mut chunk)?;
-        total = head;
-        for &b in &chunk[..n] {
+    let mut len = 0usize;
+    let mut feed = |bytes: &[u8], len: &mut usize, line: &mut [u8; 256]| {
+        for &b in bytes {
             if b == b'\n' {
-                let text = trim(&line[..len]);
+                let text = trim(&line[..*len]);
                 if keeps(pick, text) { each(text); }
-                len = 0;
-            } else if b != b'\r' && len < line.len() {
-                line[len] = b;
-                len += 1;
+                *len = 0;
+            } else if b != b'\r' && *len < line.len() {
+                line[*len] = b;
+                *len += 1;
             }
         }
+    };
+    // The kernel answers 0 bytes while another core is writing the log: ask again.
+    let mut busy = 0u32;
+    let (mut offset, mut head) = (0usize, 0usize);
+    loop {
+        let (n, total) = log::log_head(offset, &mut chunk)?;
+        if n == 0 && total == 0 && busy < 256 { busy += 1; sex_pdx::sys_yield(); continue; }
+        head = head.max(total);
+        feed(&chunk[..n], &mut len, &mut line);
         offset += n;
         if n == 0 || offset >= head { break; }
     }
-    Some(total)
+    // The newest part, from where the head stopped (or the oldest byte still held).
+    let mut written = 0usize;
+    for _ in 0..256 {
+        if let Some((_, w)) = log::log_at(usize::MAX, &mut chunk) { if w != 0 { written = w; break; } }
+        sex_pdx::sys_yield();
+    }
+    let mut read = offset;
+    if written > offset {
+        let mut at = offset.max(written.saturating_sub(log::LOG_TAIL_BYTES));
+        // Starting past the head means starting mid-line: that partial line is dropped.
+        let mut skipping = at != offset;
+        if skipping { len = 0; }
+        let mut tries = 0u32;
+        while at < written {
+            let Some((n, now)) = log::log_at(at, &mut chunk) else { break };
+            if n == 0 {
+                if now == 0 && tries < 256 { tries += 1; sex_pdx::sys_yield(); continue; }
+                // Overwritten while reading: jump to the oldest byte still held.
+                let oldest = now.saturating_sub(log::LOG_TAIL_BYTES);
+                if now != 0 && at < oldest { at = oldest; len = 0; skipping = true; continue; }
+                break;
+            }
+            let mut bytes = &chunk[..n.min(written - at)];
+            if skipping {
+                match bytes.iter().position(|&b| b == b'\n') {
+                    Some(i) => { bytes = &bytes[i + 1..]; skipping = false; }
+                    None => bytes = &[],
+                }
+            }
+            feed(bytes, &mut len, &mut line);
+            at += n;
+            read += n;
+        }
+    }
+    Some(read)
 }
 
 fn trim(mut line: &[u8]) -> &[u8] {
