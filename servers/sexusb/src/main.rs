@@ -331,7 +331,7 @@ pub extern "C" fn _start() -> ! {
     let _ = reserve_dma(&mut pool, 0);
     let Some(pool) = pool else { serial_println!("[sexusb.memory.dma.bad]"); park(); };
     let mut pool = Some(pool);
-    let mut usb: Option<usb::Usb> = None;
+    let mut started: [Option<xhci::Xhci>; usb::MAX_CTL] = [None, None, None, None];
     // Extra controllers first, each with its own share of the DMA region; the first
     // controller keeps the rest (it carries sticks, network and sound buffers too).
     for n in (0..count).rev() {
@@ -360,15 +360,20 @@ pub extern "C" fn _start() -> ! {
         match xhci::Xhci::start(cap, limit, own) {
             Ok(x) => {
                 if count > 1 { serial_println!("[sexusb.controller] slot={} ports={} ok=1", slot, x.ports); }
-                match usb.as_mut() {
-                    None => usb = Some(usb::Usb::new(x)),
-                    Some(u) => { let _ = u.add_controller(x); }
-                }
+                started[n] = Some(x);
             }
             Err(e) => serial_println!("[sexusb.xhci.start.fail] reason={:?}", e),
         }
     }
-    let Some(mut usb) = usb else { park() };
+    // The first controller (SLOT_USB_HOST) is controller 0. `Usb` lives in a static:
+    // a second copy of it on this task's stack would overrun it.
+    let mut running = started.into_iter().flatten();
+    let Some(first) = running.next() else { park() };
+    let usb = unsafe {
+        *core::ptr::addr_of_mut!(USB) = Some(usb::Usb::new(first));
+        (*core::ptr::addr_of_mut!(USB)).as_mut().unwrap()
+    };
+    for x in running { let _ = usb.add_controller(x); }
     if count > 1 { serial_println!("[sexusb.controllers] held={} running={}", count, usb.controllers); }
     serial_println!("[sexusb.ready]");
     // The first report to Input is the first real one: a report sent here could reach
@@ -493,6 +498,8 @@ fn reserve_dma(pool: &mut Option<sex_pdx::dma_pool::DmaRegionPool>, bytes: u64) 
         Err(_) => (u64::MAX, u64::MAX),
     }
 }
+
+static mut USB: Option<usb::Usb> = None;
 
 /// DMA each extra controller gets: its rings and scratchpad, plus pages for the devices on it.
 const EXTRA_CONTROLLER_DMA: u64 = 1024 * 1024;
