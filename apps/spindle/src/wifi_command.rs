@@ -110,12 +110,16 @@ fn state_line(s: ws::State, scan: bool, join: bool, leave: bool, out: &mut [u8])
             put(out, &mut at, b").");
             if scan || join { put(out, &mut at, b" That is not possible right now."); }
         }
-        ws::JOINING => put(out, &mut at, if join {
-            b"Wi-Fi: connecting (the chip restarts first if it was busy); type wifi to see how it went." as &[u8]
-        } else { b"Wi-Fi: connecting to the network; type wifi to see how it went." }),
-        ws::JOINED | ws::ASSOCIATING | ws::HANDSHAKE => put(out, &mut at, if scan || join {
-            b"Wi-Fi: already joining a network." as &[u8]
-        } else { b"Wi-Fi: connecting to the network; type wifi to see how it went." }),
+        // Each connecting step says which one it is, so a join that stalls shows where.
+        ws::JOINING if join => put(out, &mut at,
+            b"Wi-Fi: connecting (the chip restarts first if it was busy); type wifi to see how it went."),
+        // No scan behind it: the chip is restarting or waiting to retry the network.
+        ws::JOINING if s.networks == 0 => put(out, &mut at,
+            b"Wi-Fi: connecting, step 1 of 4: restarting the chip and looking for the network (retries for about 3 minutes)."),
+        ws::JOINING => put(out, &mut at, b"Wi-Fi: connecting, step 2 of 4: tuning to the network's channel."),
+        ws::JOINED | ws::ASSOCIATING | ws::HANDSHAKE if scan || join => put(out, &mut at, b"Wi-Fi: already joining a network."),
+        ws::JOINED | ws::ASSOCIATING => put(out, &mut at, b"Wi-Fi: connecting, step 3 of 4: asking the access point to let us in."),
+        ws::HANDSHAKE => put(out, &mut at, b"Wi-Fi: connecting, step 4 of 4: checking the passphrase with the network."),
         ws::ASSOCIATED | ws::CONNECTED => put(out, &mut at, if scan {
             b"Wi-Fi: connected; scanning while connected comes later (wifi leave first)." as &[u8]
         } else if join { b"Wi-Fi: connected; that network was busy, try again." } else if s.phase == ws::CONNECTED { b"Wi-Fi: connected (WPA2); the network service now uses Wi-Fi." }

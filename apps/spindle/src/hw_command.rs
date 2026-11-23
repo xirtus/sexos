@@ -62,6 +62,8 @@ pub fn pick(args: &[u8]) -> Pick<'_> {
 }
 
 pub fn keeps(pick: Pick, line: &[u8]) -> bool {
+    // An earlier `hw`'s own echo of a line: the line itself is shown, not its copies.
+    if line.starts_with(b"[spindle.hw") { return false; }
     match pick {
         Pick::Hardware => is_hardware(line),
         Pick::All => !line.is_empty(),
@@ -98,8 +100,8 @@ pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
     let _ = walk(|line| {
         if index >= skip {
             let n = line.len().min(LINE);
-            // Not echoed to the log: each `hw` would refill the log ring it reads with copies.
             sb.push(&line[..n]);
+            serial_println!("[spindle.hw.line] {}", core::str::from_utf8(&line[..n]).unwrap_or("?"));
         }
         index += 1;
     }, pick);
