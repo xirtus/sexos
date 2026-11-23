@@ -358,8 +358,8 @@ PASSIVE_OBSERVER_SOURCES = {'servers/silk-shell/src/wait_observer.rs': '99900d65
  # core_view: Relaxed reads only (reviewed by the microkernel thread, 2026-11-20); #396 Denim counter merged (x17 PR sweep, 2026-11-21).
  'kernel/src/cpu_account.rs': 'bb3ecda737e713e83d364896a51d106bdee7324471278c5eb7632e5b6aecd8e2',
  'kernel/src/core_local.rs': '5abe787a39e72745c3087029be159b43a7ca38e4c95edc57bbd6892abdfaf6cb',
- 'kernel/src/app_resources.rs': '73aab903bc7eda2e0066d4aad5cb087200dab07ba82bc2f627a9923f9195d5ee',  # K2a hint backoff, K2c busy result + master merge (no observer change), 2026-11-21
- 'kernel/src/service_restart.rs': '7c5e42b259c557db66f9ac771fc4f3e6c7954d76196a93a495dbbb12003bdf8d',  # K2c: poll reports work in flight (no observer change), 2026-11-20
+ 'kernel/src/app_resources.rs': 'a27fb46c3cc99ae69f526ec4614d3778b6a93c58b26302cc115881ab8780dcdd',  # is_program_slot for service stacks (no observer change), 2026-11-23
+ 'kernel/src/service_restart.rs': '846f8eeb0930389a8488b313c5ec43438fa2b62a947c0364f23c85981960151d',  # service stack comment (no observer change), 2026-11-23
  'kernel/src/crash_log.rs': '9e68b4bda1c859a7ed9d4e29bf83ec696912d50571592db07e26b92141c0d8c3',
  'crates/sex-pdx/src/app_catalog.rs': '07b846017c83b1662fc66dbdffd14dd09374b7a58454ebf0cbbc06954757e0f3'}
 
