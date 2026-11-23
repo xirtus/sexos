@@ -56,7 +56,14 @@ fn data(byte: u8) -> bool {
     true
 }
 
+/// IRQ1 is routed before this runs, and its handler drains port 0x60 while the keyboard
+/// is not ready: with interrupts on, it would take the controller's answers (the
+/// configuration byte, the ACK) and init would time out. Run with interrupts off.
 pub fn init() {
+    x86_64::instructions::interrupts::without_interrupts(init_locked)
+}
+
+fn init_locked() {
     if !probe_i8042() {
         crate::serial_println!("[kernel.ps2] present=0 reason=status_ff");
         return;
