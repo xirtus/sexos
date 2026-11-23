@@ -62,6 +62,14 @@ pub const OP_KEEP: u64 = 5;
 /// Spindle only: on a PC with no serial port this is how the hardware report is read.
 pub const OP_LOG_HEAD: u64 = 6;
 pub const LOG_CHUNK: usize = 1024;
+/// rsi: absolute byte position in the log (bytes logged since boot); rdx: buffer of
+/// `LOG_CHUNK` bytes. Copies the log from there: the kernel holds its newest 64 KiB, so
+/// lines logged after the head filled can still be read. Returns bytes copied in rsi
+/// (0 for a position no longer held, or a log busy this instant) and bytes logged so far
+/// in rdx (0 when busy). Same readers as `OP_LOG_HEAD`.
+pub const OP_LOG_TAIL: u64 = 7;
+/// How much of the newest log the kernel holds for `OP_LOG_TAIL`.
+pub const LOG_TAIL_BYTES: usize = 64 * 1024;
 
 /// The kernel's message to Files (caller 0) when it holds a record Files has not seen.
 pub const OP_NOTICE: u64 = 0x0C5A_0001;
@@ -290,6 +298,11 @@ pub fn status() -> Option<(usize, u64)> {
 #[cfg(target_arch = "x86_64")]
 pub fn log_head(offset: usize, buf: &mut [u8; LOG_CHUNK]) -> Option<(usize, usize)> {
     match call(OP_LOG_HEAD, offset as u64, buf.as_mut_ptr() as u64) { (OK, n, total) => Some((n as usize, total as usize)), _ => None }
+}
+/// The log from absolute position `at`: (bytes copied into `buf`, bytes logged so far).
+#[cfg(target_arch = "x86_64")]
+pub fn log_at(at: usize, buf: &mut [u8; LOG_CHUNK]) -> Option<(usize, usize)> {
+    match call(OP_LOG_TAIL, at as u64, buf.as_mut_ptr() as u64) { (OK, n, written) => Some((n as usize, written as usize)), _ => None }
 }
 /// The kernel's record at `index`, oldest first.
 #[cfg(target_arch = "x86_64")]

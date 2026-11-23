@@ -68,6 +68,7 @@ pub mod program_workers;
 pub mod denim;
 pub mod service_memory;
 pub mod service_restart;
+pub mod service_stack;
 pub mod history_recovery;
 #[cfg(target_arch = "x86_64")]
 pub(crate) mod pci_bar_bounds;

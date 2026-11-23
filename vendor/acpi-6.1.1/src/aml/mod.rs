@@ -253,7 +253,7 @@ where
                         .evaluate_if_present(AmlName::from_str("_STA").unwrap().resolve(path)?, vec![])
                     {
                         Ok(Some(result)) => {
-                            let Object::Integer(result) = *result else { panic!() };
+                            let Object::Integer(result) = *result else { return Err(AmlError::LibUnimplemented) };
                             let status = DeviceStatus(result);
                             status.present() && status.functioning()
                         }
@@ -418,7 +418,7 @@ where
                         self.do_unary_maths(&mut context, op)?;
                     }
                     Opcode::Increment | Opcode::Decrement => {
-                        let [Argument::Object(operand)] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(operand)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         let token = self.object_token.lock();
                         let Object::Integer(operand) = (unsafe { operand.gain_mut(&token) }) else {
                             Err(AmlError::ObjectNotOfExpectedType {
@@ -458,7 +458,7 @@ where
                     Opcode::ConcatRes => {
                         let [Argument::Object(source1), Argument::Object(source2), target] = &op.arguments[..]
                         else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
                         let source1 = source1.as_buffer()?;
                         let source2 = source2.as_buffer()?;
@@ -478,7 +478,7 @@ where
                     }
                     Opcode::Reset => {
                         let [Argument::Object(sync_object)] = &op.arguments[..] else {
-                            panic!();
+                            return Err(AmlError::LibUnimplemented);
                         };
                         let sync_object = sync_object.clone().unwrap_reference();
 
@@ -494,7 +494,7 @@ where
                     Opcode::Notify => {
                         // SexOS: upstream had no arm here and panicked on every Notify.
                         let [Argument::Object(target), Argument::Object(value)] = &op.arguments[..] else {
-                            panic!();
+                            return Err(AmlError::LibUnimplemented);
                         };
                         let target = target.clone().unwrap_reference();
                         let value = value.clone().unwrap_transparent_reference().as_integer()?;
@@ -502,7 +502,7 @@ where
                     }
                     Opcode::Signal => {
                         let [Argument::Object(sync_object)] = &op.arguments[..] else {
-                            panic!();
+                            return Err(AmlError::LibUnimplemented);
                         };
                         let sync_object = sync_object.clone().unwrap_reference();
 
@@ -517,7 +517,7 @@ where
                     }
                     Opcode::Wait => {
                         let [Argument::Object(sync_object), Argument::Object(timeout)] = &op.arguments[..] else {
-                            panic!();
+                            return Err(AmlError::LibUnimplemented);
                         };
                         let sync_object = sync_object.clone().unwrap_reference();
                         let timeout = u64::min(timeout.as_integer()?, 0xffff);
@@ -574,7 +574,7 @@ where
                     Opcode::ToBCD => self.do_to_bcd(&mut context, op)?,
                     Opcode::Name => {
                         let [Argument::Namestring(name), Argument::Object(object)] = &op.arguments[..] else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
 
                         let name = name.resolve(&context.current_scope)?;
@@ -585,7 +585,7 @@ where
                         let [Argument::ByteData(typ), Argument::DWordData(code), Argument::Object(arg)] =
                             &op.arguments[..]
                         else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
                         let arg = arg.as_integer()?;
                         self.handler.handle_fatal_error(*typ, *code, arg);
@@ -599,7 +599,7 @@ where
                             Argument::Object(region_length),
                         ] = &op.arguments[..]
                         else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
 
                         let region_offset = region_offset.clone().unwrap_transparent_reference();
@@ -622,7 +622,7 @@ where
                             Argument::Object(oem_table_id),
                         ] = &op.arguments[..]
                         else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
                         let _signature = signature.as_string()?;
                         let _oem_id = oem_id.as_string()?;
@@ -649,7 +649,7 @@ where
                             Argument::Object(buffer_size),
                         ] = &op.arguments[..]
                         else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
                         let buffer_size = buffer_size.clone().unwrap_transparent_reference().as_integer()?;
 
@@ -667,7 +667,7 @@ where
                     Opcode::Package => {
                         let mut elements = Vec::with_capacity(op.expected_arguments);
                         for arg in &op.arguments {
-                            let Argument::Object(object) = arg else { panic!() };
+                            let Argument::Object(object) = arg else { return Err(AmlError::LibUnimplemented) };
                             elements.push(object.clone());
                         }
 
@@ -689,13 +689,13 @@ where
                         context.retire_op(op);
                     }
                     Opcode::VarPackage => {
-                        let Argument::Object(total_elements) = &op.arguments[0] else { panic!() };
+                        let Argument::Object(total_elements) = &op.arguments[0] else { return Err(AmlError::LibUnimplemented) };
                         let total_elements =
                             total_elements.clone().unwrap_transparent_reference().as_integer()? as usize;
 
                         let mut elements = Vec::with_capacity(total_elements);
                         for arg in &op.arguments[1..] {
-                            let Argument::Object(object) = arg else { panic!() };
+                            let Argument::Object(object) = arg else { return Err(AmlError::LibUnimplemented) };
                             elements.push(object.clone());
                         }
 
@@ -716,7 +716,7 @@ where
                             Argument::Object(predicate),
                         ] = &op.arguments[..]
                         else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
                         let predicate = predicate.as_integer()?;
                         let remaining_then_length = then_length - (context.current_block.pc - start_pc);
@@ -750,7 +750,7 @@ where
                     | opcode @ Opcode::CreateDWordField
                     | opcode @ Opcode::CreateQWordField => {
                         let [Argument::Object(buffer), Argument::Object(index)] = &op.arguments[..] else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
                         let name = context.namestring()?;
                         let index = index.as_integer()?;
@@ -774,7 +774,7 @@ where
                         let [Argument::Object(buffer), Argument::Object(bit_index), Argument::Object(num_bits)] =
                             &op.arguments[..]
                         else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
                         let name = context.namestring()?;
                         let bit_index = bit_index.as_integer()?;
@@ -792,19 +792,19 @@ where
                         context.retire_op(op);
                     }
                     Opcode::Store => {
-                        let [Argument::Object(object), target] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(object), target] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         self.do_store(target, object.clone())?;
                         context.retire_op(op);
                     }
                     Opcode::RefOf => {
-                        let [Argument::Object(object)] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(object)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         let reference =
                             Object::Reference { kind: ReferenceKind::RefOf, inner: object.clone() }.wrap();
                         context.contribute_arg(Argument::Object(reference));
                         context.retire_op(op);
                     }
                     Opcode::CondRefOf => {
-                        let [Argument::Object(object), target] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(object), target] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         let result = if let Object::Reference { kind: ReferenceKind::Unresolved, .. } = **object {
                             Object::Integer(0)
                         } else {
@@ -817,7 +817,7 @@ where
                         context.retire_op(op);
                     }
                     Opcode::DerefOf => {
-                        let [Argument::Object(object)] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(object)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         /*
                          * SexOS: `typ()` reports what a reference points at, so upstream's
                          * `typ() == Reference` never held and every `DerefOf (PKG [i])` failed.
@@ -847,17 +847,17 @@ where
                         context.retire_op(op);
                     }
                     Opcode::Sleep => {
-                        let [Argument::Object(msec)] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(msec)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         self.handler.sleep(msec.as_integer()?);
                         context.retire_op(op);
                     }
                     Opcode::Stall => {
-                        let [Argument::Object(usec)] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(usec)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         self.handler.stall(usec.as_integer()?);
                         context.retire_op(op);
                     }
                     Opcode::Acquire => {
-                        let [Argument::Object(mutex)] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(mutex)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         let Object::Mutex { mutex, sync_level: _ } = **mutex else {
                             Err(AmlError::InvalidOperationOnObject { op: Operation::Acquire, typ: mutex.typ() })?
                         };
@@ -873,7 +873,7 @@ where
                         context.retire_op(op);
                     }
                     Opcode::Release => {
-                        let [Argument::Object(mutex)] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(mutex)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         let Object::Mutex { mutex, sync_level: _ } = **mutex else {
                             Err(AmlError::InvalidOperationOnObject { op: Operation::Release, typ: mutex.typ() })?
                         };
@@ -890,19 +890,19 @@ where
                     Opcode::InternalMethodCall => {
                         let [Argument::Object(method), Argument::Namestring(method_scope)] = &op.arguments[0..2]
                         else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
 
                         let args = op.arguments[2..]
                             .iter()
                             .map(|arg| {
                                 if let Argument::Object(arg) = arg {
-                                    arg.clone()
+                                    Ok(arg.clone())
                                 } else {
-                                    panic!();
+                                    Err(AmlError::LibUnimplemented)
                                 }
                             })
-                            .collect();
+                            .collect::<Result<Vec<_>, AmlError>>()?;
 
                         if let Object::Method { .. } = **method {
                             self.namespace
@@ -918,11 +918,11 @@ where
                             let result = f(&args)?;
                             context.contribute_arg(Argument::Object(result));
                         } else {
-                            panic!();
+                            return Err(AmlError::LibUnimplemented);
                         }
                     }
                     Opcode::Return => {
-                        let [Argument::Object(object)] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(object)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         let object = object.clone().unwrap_transparent_reference();
 
                         if let Some(last) = self.context_stack.lock().pop() {
@@ -938,7 +938,7 @@ where
                         }
                     }
                     Opcode::ObjectType => {
-                        let [Argument::Object(object)] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(object)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         // TODO: this should technically support scopes as well - this is less easy
                         // (they should return `0`)
                         let typ = match object.typ() {
@@ -959,8 +959,8 @@ where
                             ObjectType::BufferField => 14,
                             // XXX: 15 is reserved
                             ObjectType::Debug => 16,
-                            ObjectType::Reference => panic!(),
-                            ObjectType::RawDataBuffer => todo!(),
+                            ObjectType::Reference => return Err(AmlError::LibUnimplemented),
+                            ObjectType::RawDataBuffer => return Err(AmlError::LibUnimplemented),
                         };
 
                         context.contribute_arg(Argument::Object(Object::Integer(typ).wrap()));
@@ -977,7 +977,7 @@ where
                             Argument::Object(bank_value),
                         ] = &op.arguments[..]
                         else {
-                            panic!()
+                            return Err(AmlError::LibUnimplemented)
                         };
                         let bank_value = bank_value.as_integer()?;
                         let field_flags = context.next()?;
@@ -998,7 +998,7 @@ where
                          * We've just evaluated the predicate for an iteration of a while loop. If
                          * false, skip over the rest of the loop, otherwise carry on.
                          */
-                        let [Argument::Object(predicate)] = &op.arguments[..] else { panic!() };
+                        let [Argument::Object(predicate)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
                         let predicate = predicate.as_integer()?;
 
                         if predicate == 0 {
@@ -1007,7 +1007,7 @@ where
                             context.retire_op(op);
                         }
                     }
-                    _ => panic!("Unexpected operation has created in-flight op!"),
+                    _ => return Err(AmlError::LibUnimplemented),
                 }
             }
 
@@ -1080,7 +1080,7 @@ where
                             {
                                 let num_elements_left = {
                                     let Argument::Object(total_elements) = &package_op.arguments[0] else {
-                                        panic!()
+                                        return Err(AmlError::LibUnimplemented)
                                     };
                                     let total_elements =
                                         total_elements.clone().unwrap_transparent_reference().as_integer()?
@@ -1290,8 +1290,8 @@ where
                     let name = name.resolve(&context.current_scope)?;
                     self.namespace.lock().insert(name, Object::Event(Arc::new(AtomicU64::new(0))).wrap())?;
                 }
-                Opcode::LoadTable => todo!(),
-                Opcode::Load => todo!(),
+                Opcode::LoadTable => return Err(AmlError::LibUnimplemented),
+                Opcode::Load => return Err(AmlError::LibUnimplemented),
                 Opcode::Stall => context.start(OpInFlight::new(Opcode::Stall, &[ResolveBehaviour::TermArg])),
                 Opcode::Sleep => context.start(OpInFlight::new(Opcode::Sleep, &[ResolveBehaviour::TermArg])),
                 Opcode::Acquire => context.start(OpInFlight::new(opcode, &[ResolveBehaviour::SuperName])),
@@ -1582,7 +1582,7 @@ where
                                 .push(Argument::Object(Object::String(name.to_string()).wrap()));
                         }
                         ResolveBehaviour::Placeholder => {
-                            panic!("Invalid resolve behaviour for name to be resolved!")
+                            return Err(AmlError::LibUnimplemented)
                         }
                     }
                 }
@@ -1639,7 +1639,7 @@ where
                  * internal in-flight ops to parse the static bytedatas as we go, and then retire
                  * the real op at the end.
                  */
-                Opcode::Match => todo!(),
+                Opcode::Match => return Err(AmlError::LibUnimplemented),
 
                 Opcode::CreateBitField
                 | Opcode::CreateByteField
@@ -1673,7 +1673,7 @@ where
                 )),
 
                 Opcode::ObjectType => context.start(OpInFlight::new(opcode, &[ResolveBehaviour::SuperName])),
-                Opcode::CopyObject => todo!(),
+                Opcode::CopyObject => return Err(AmlError::LibUnimplemented),
                 Opcode::Mid => context.start(OpInFlight::new(
                     Opcode::Mid,
                     &[
@@ -1743,7 +1743,7 @@ where
                     context.last_op()?.arguments.push(Argument::Object(Object::Integer(u64::MAX).wrap()));
                 }
 
-                Opcode::InternalMethodCall => panic!(),
+                Opcode::InternalMethodCall => return Err(AmlError::LibUnimplemented),
             }
         }
     }
@@ -1754,7 +1754,7 @@ where
         kind: FieldUnitKind,
         start_pc: usize,
         pkg_length: usize,
-        flags: u8,
+        mut flags: u8,
     ) -> Result<(), AmlError> {
         const RESERVED_FIELD: u8 = 0x00;
         const ACCESS_FIELD: u8 = 0x01;
@@ -1775,17 +1775,28 @@ where
                      * elements. They change the access type and attributes for remaining fields in
                      * the list.
                      */
-                    let _access_type = context.next()?;
+                    let access_type = context.next()?;
                     let _access_attrib = context.next()?;
-                    todo!()
+                    flags = (flags & !0x0f) | (access_type & 0x0f);
                 }
                 CONNECT_FIELD => {
-                    // TODO: either consume a namestring or `BufferData` (it's not
-                    // clear what a buffer data acc is lmao)
-                    todo!("Connect field :(");
+                    // `Connection (...)`: a resource template (DefBuffer) or a name of one,
+                    // naming the GPIO pin or serial bus the following fields use. Fields are
+                    // read here only through ordinary regions, so it is skipped.
+                    if context.peek()? == 0x11 {
+                        context.next()?;
+                        let start = context.current_block.pc;
+                        let length = context.pkglength()?;
+                        context.current_block.pc = start + length;
+                    } else {
+                        context.namestring()?;
+                    }
                 }
                 EXTENDED_ACCESS_FIELD => {
-                    todo!("Extended access field :(");
+                    let access_type = context.next()?;
+                    let _access_attrib = context.next()?;
+                    let _access_length = context.next()?;
+                    flags = (flags & !0x0f) | (access_type & 0x0f);
                 }
                 _ => {
                     context.current_block.pc -= 1;
@@ -1810,12 +1821,17 @@ where
     }
 
     fn do_binary_maths(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
-        let [Argument::Object(left), Argument::Object(right), target] = &op.arguments[0..3] else { panic!() };
+        let [Argument::Object(left), Argument::Object(right), target] = &op.arguments[0..3] else {
+            return Err(AmlError::LibUnimplemented);
+        };
         let target2 = if op.op == Opcode::Divide { Some(&op.arguments[3]) } else { None };
 
         let left = left.clone().unwrap_transparent_reference().as_integer()?;
         let right = right.clone().unwrap_transparent_reference().as_integer()?;
 
+        if right == 0 && matches!(op.op, Opcode::Divide | Opcode::Mod) {
+            return Err(AmlError::DivideByZero);
+        }
         let result = match op.op {
             Opcode::Add => left.wrapping_add(right),
             Opcode::Subtract => left.wrapping_sub(right),
@@ -1826,15 +1842,16 @@ where
                 }
                 left.wrapping_div_euclid(right)
             }
-            Opcode::ShiftLeft => left.wrapping_shl(right as u32),
-            Opcode::ShiftRight => left.wrapping_shr(right as u32),
+            // A shift by the integer width or more leaves nothing (wrapping_* would wrap the count).
+            Opcode::ShiftLeft => if right >= 64 { 0 } else { left << right },
+            Opcode::ShiftRight => if right >= 64 { 0 } else { left >> right },
             Opcode::Mod => left.wrapping_rem(right),
             Opcode::Nand => !(left & right),
             Opcode::And => left & right,
             Opcode::Or => left | right,
             Opcode::Nor => !(left | right),
             Opcode::Xor => left ^ right,
-            _ => panic!(),
+            _ => return Err(AmlError::LibUnimplemented),
         };
 
         let result = Object::Integer(result).wrap();
@@ -1845,7 +1862,9 @@ where
     }
 
     fn do_unary_maths(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
-        let [Argument::Object(operand)] = &op.arguments[..] else { panic!() };
+        // Not, FindSetLeftBit and FindSetRightBit all take an operand and a target (upstream
+        // matched one argument and panicked on every one of them: the x17 R1's DSDT has Not).
+        let [Argument::Object(operand), target] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
         let operand = operand.clone().unwrap_transparent_reference().as_integer()?;
 
         let result = match op.op {
@@ -1857,10 +1876,11 @@ where
                      * This is a particularly important place to respect the integer width as set
                      * by the DSDT revision.
                      */
+                    // One-based index of the highest set bit (ACPI 19.6.49).
                     if self.dsdt_revision >= 2 {
-                        (operand.leading_zeros() + 1) as u64
+                        (64 - operand.leading_zeros()) as u64
                     } else {
-                        ((operand as u32).leading_zeros() + 1) as u64
+                        (32 - (operand as u32).leading_zeros()) as u64
                     }
                 }
             }
@@ -1871,24 +1891,20 @@ where
                     (operand.trailing_zeros() + 1) as u64
                 }
             }
-            Opcode::Not => {
-                if operand == 0 {
-                    u64::MAX
-                } else {
-                    0
-                }
-            }
-            _ => panic!(),
+            // Bitwise (ACPI 19.6.93); LNot is the logical one.
+            Opcode::Not => !operand,
+            _ => return Err(AmlError::LibUnimplemented),
         };
 
-        context.contribute_arg(Argument::Object(Object::Integer(result).wrap()));
+        let result = self.do_store(target, Object::Integer(result).wrap())?;
+        context.contribute_arg(Argument::Object(result));
         context.retire_op(op);
         Ok(())
     }
 
     fn do_logical_op(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
         if op.op == Opcode::LNot {
-            let [Argument::Object(operand)] = &op.arguments[..] else { panic!() };
+            let [Argument::Object(operand)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
             let operand = operand.clone().unwrap_transparent_reference().as_integer()?;
             let result = if operand == 0 { u64::MAX } else { 0 };
 
@@ -1897,7 +1913,7 @@ where
             return Ok(());
         }
 
-        let [Argument::Object(left), Argument::Object(right)] = &op.arguments[..] else { panic!() };
+        let [Argument::Object(left), Argument::Object(right)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
         let left = left.clone().unwrap_transparent_reference();
         let right = right.clone().unwrap_transparent_reference();
 
@@ -1938,7 +1954,7 @@ where
             Opcode::LEqual => ordering == Equal,
             Opcode::LGreater => ordering == Greater,
             Opcode::LLess => ordering == Less,
-            _ => panic!(),
+            _ => return Err(AmlError::LibUnimplemented),
         };
         let result = if result { Object::Integer(u64::MAX) } else { Object::Integer(0) };
 
@@ -1948,7 +1964,7 @@ where
     }
 
     fn do_to_buffer(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
-        let [Argument::Object(operand), target] = &op.arguments[..] else { panic!() };
+        let [Argument::Object(operand), target] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
         let operand = operand.clone().unwrap_transparent_reference();
 
         let result = match *operand {
@@ -1981,7 +1997,7 @@ where
     }
 
     fn do_to_integer(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
-        let [Argument::Object(operand), target] = &op.arguments[..] else { panic!() };
+        let [Argument::Object(operand), target] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
         let operand = operand.clone().unwrap_transparent_reference();
 
         let result = match *operand {
@@ -2026,7 +2042,7 @@ where
     }
 
     fn do_to_string(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
-        let [Argument::Object(source), Argument::Object(length), target] = &op.arguments[..] else { panic!() };
+        let [Argument::Object(source), Argument::Object(length), target] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
         let source = source.clone().unwrap_transparent_reference();
         let source = source.as_buffer()?;
         let length = length.clone().unwrap_transparent_reference().as_integer()? as usize;
@@ -2054,7 +2070,7 @@ where
 
     /// Perform a `ToDecimalString` or `ToHexString` operation
     fn do_to_dec_hex_string(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
-        let [Argument::Object(operand), target] = &op.arguments[..] else { panic!() };
+        let [Argument::Object(operand), target] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
         let operand = operand.clone().unwrap_transparent_reference();
 
         let result = match *operand {
@@ -2062,7 +2078,7 @@ where
             Object::Integer(value) => match op.op {
                 Opcode::ToDecimalString => Object::String(value.to_string()),
                 Opcode::ToHexString => Object::String(alloc::format!("{value:#x}")),
-                _ => panic!(),
+                _ => return Err(AmlError::LibUnimplemented),
             },
             Object::Buffer(ref bytes) => {
                 if bytes.is_empty() {
@@ -2073,7 +2089,7 @@ where
                         let as_str = match op.op {
                             Opcode::ToDecimalString => alloc::format!("{byte},"),
                             Opcode::ToHexString => alloc::format!("{byte:#04X},"),
-                            _ => panic!(),
+                            _ => return Err(AmlError::LibUnimplemented),
                         };
                         string.push_str(&as_str);
                     }
@@ -2098,7 +2114,7 @@ where
         let [Argument::Object(source), Argument::Object(index), Argument::Object(length), target] =
             &op.arguments[..]
         else {
-            panic!()
+            return Err(AmlError::LibUnimplemented)
         };
         let index = index.clone().unwrap_transparent_reference().as_integer()? as usize;
         let length = length.clone().unwrap_transparent_reference().as_integer()? as usize;
@@ -2133,7 +2149,7 @@ where
     }
 
     fn do_concat(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
-        let [Argument::Object(source1), Argument::Object(source2), target] = &op.arguments[..] else { panic!() };
+        let [Argument::Object(source1), Argument::Object(source2), target] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
         let source1 = source1.clone().unwrap_transparent_reference();
         let source2 = source2.clone().unwrap_transparent_reference();
 
@@ -2154,7 +2170,7 @@ where
                 Object::PowerResource { .. } => "[Power Resource]".to_string(),
                 Object::Processor { .. } => "[Processor]".to_string(),
                 // TODO: what even is one of these??
-                Object::RawDataBuffer => todo!(),
+                Object::RawDataBuffer => String::new(),
                 Object::String(value) => value.clone(),
                 Object::ThermalZone => "[Thermal Zone]".to_string(),
                 Object::Debug => "[Debug Object]".to_string(),
@@ -2194,7 +2210,7 @@ where
     }
 
     fn do_from_bcd(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
-        let [Argument::Object(value)] = &op.arguments[..] else { panic!() };
+        let [Argument::Object(value)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
         let mut value = value.clone().unwrap_transparent_reference().as_integer()?;
 
         let mut result = 0;
@@ -2211,7 +2227,7 @@ where
     }
 
     fn do_to_bcd(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
-        let [Argument::Object(value)] = &op.arguments[..] else { panic!() };
+        let [Argument::Object(value)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
         let mut value = value.clone().unwrap_transparent_reference().as_integer()?;
 
         let mut result = 0;
@@ -2228,7 +2244,7 @@ where
     }
 
     fn do_size_of(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
-        let [Argument::Object(object)] = &op.arguments[..] else { panic!() };
+        let [Argument::Object(object)] = &op.arguments[..] else { return Err(AmlError::LibUnimplemented) };
         let object = object.clone().unwrap_transparent_reference();
 
         let result = match *object {
@@ -2245,7 +2261,7 @@ where
 
     fn do_index(&self, context: &mut MethodContext, op: OpInFlight) -> Result<(), AmlError> {
         let [Argument::Object(object), Argument::Object(index_value), target] = &op.arguments[..] else {
-            panic!()
+            return Err(AmlError::LibUnimplemented)
         };
         let object = object.clone().unwrap_transparent_reference();
         let index_value = index_value.clone().unwrap_transparent_reference().as_integer()?;
@@ -2340,12 +2356,12 @@ where
                     Object::Buffer(value) => {
                         unsafe { target.gain_mut(&token) }.write_buffer_field(value.as_slice(), &token)?;
                     }
-                    _ => panic!(),
+                    _ => return Err(AmlError::LibUnimplemented),
                 },
                 Object::FieldUnit(field) => self.do_field_write(field, object)?,
                 Object::Reference { kind, inner } => {
                     match kind {
-                        ReferenceKind::RefOf => todo!(),
+                        ReferenceKind::RefOf => return Err(AmlError::LibUnimplemented),
                         ReferenceKind::LocalOrArg => {
                             if let Object::Reference { kind: _inner_kind, inner: inner_inner } = &**inner {
                                 // TODO: this should store into the reference, potentially doing an
@@ -2360,18 +2376,18 @@ where
                                 }
                             }
                         }
-                        ReferenceKind::Unresolved => todo!(),
+                        ReferenceKind::Unresolved => return Err(AmlError::LibUnimplemented),
                     }
                 }
                 Object::Debug => {
                     self.handler.handle_debug(&object);
                 }
-                _ => panic!("Stores to objects like {:?} are not yet supported", target),
+                _ => return Err(AmlError::LibUnimplemented),
             },
 
-            Argument::Namestring(_) => todo!(),
+            Argument::Namestring(_) => return Err(AmlError::LibUnimplemented),
             Argument::ByteData(_) | Argument::DWordData(_) | Argument::TrackedPc(_) | Argument::PkgLength(_) => {
-                panic!()
+                return Err(AmlError::LibUnimplemented)
             }
         }
 
@@ -2409,15 +2425,15 @@ where
             // FieldUnitKind::Bank { ref region, ref bank, bank_value } => {
             FieldUnitKind::Bank { .. } => {
                 // TODO: put the bank_value in the bank
-                todo!();
+                return Err(AmlError::LibUnimplemented);
             }
             // FieldUnitKind::Index { ref index, ref data } => {
             FieldUnitKind::Index { .. } => {
                 // TODO: configure the correct index
-                todo!();
+                return Err(AmlError::LibUnimplemented);
             }
         };
-        let Object::OpRegion(ref read_region) = **read_region else { panic!() };
+        let Object::OpRegion(ref read_region) = **read_region else { return Err(AmlError::LibUnimplemented) };
 
         /*
          * TODO: it might be worth having a fast path here for reads that don't do weird
@@ -2469,15 +2485,15 @@ where
             // FieldUnitKind::Bank { ref region, ref bank, bank_value } => {
             FieldUnitKind::Bank { .. } => {
                 // TODO: put the bank_value in the bank
-                todo!();
+                return Err(AmlError::LibUnimplemented);
             }
             // FieldUnitKind::Index { ref index, ref data } => {
             FieldUnitKind::Index { .. } => {
                 // TODO: configure the correct index
-                todo!();
+                return Err(AmlError::LibUnimplemented);
             }
         };
-        let Object::OpRegion(ref write_region) = **write_region else { panic!() };
+        let Object::OpRegion(ref write_region) = **write_region else { return Err(AmlError::LibUnimplemented) };
 
         // TODO: if the region wants locking, do that
 
@@ -2543,7 +2559,7 @@ where
                     2 => self.handler.read_u16(address) as u64,
                     4 => self.handler.read_u32(address) as u64,
                     8 => self.handler.read_u64(address),
-                    _ => panic!(),
+                    _ => return Err(AmlError::LibUnimplemented),
                 }
             }),
             RegionSpace::SystemIO => Ok({
@@ -2552,7 +2568,7 @@ where
                     1 => self.handler.read_io_u8(address) as u64,
                     2 => self.handler.read_io_u16(address) as u64,
                     4 => self.handler.read_io_u32(address) as u64,
-                    _ => panic!(),
+                    _ => return Err(AmlError::LibUnimplemented),
                 }
             }),
             RegionSpace::PciConfig => {
@@ -2561,7 +2577,7 @@ where
                     1 => Ok(self.handler.read_pci_u8(address, offset as u16) as u64),
                     2 => Ok(self.handler.read_pci_u16(address, offset as u16) as u64),
                     4 => Ok(self.handler.read_pci_u32(address, offset as u16) as u64),
-                    _ => panic!(),
+                    _ => return Err(AmlError::LibUnimplemented),
                 }
             }
 
@@ -2615,7 +2631,7 @@ where
                     2 => self.handler.write_u16(address, value as u16),
                     4 => self.handler.write_u32(address, value as u32),
                     8 => self.handler.write_u64(address, value),
-                    _ => panic!(),
+                    _ => return Err(AmlError::LibUnimplemented),
                 }
                 Ok(())
             }
@@ -2625,7 +2641,7 @@ where
                     1 => self.handler.write_io_u8(address, value as u8),
                     2 => self.handler.write_io_u16(address, value as u16),
                     4 => self.handler.write_io_u32(address, value as u32),
-                    _ => panic!(),
+                    _ => return Err(AmlError::LibUnimplemented),
                 }
                 Ok(())
             }
@@ -2635,7 +2651,7 @@ where
                     1 => self.handler.write_pci_u8(address, offset as u16, value as u8),
                     2 => self.handler.write_pci_u16(address, offset as u16, value as u16),
                     4 => self.handler.write_pci_u32(address, offset as u16, value as u32),
-                    _ => panic!(),
+                    _ => return Err(AmlError::LibUnimplemented),
                 }
                 Ok(())
             }
@@ -3333,6 +3349,8 @@ pub enum Operation {
 #[non_exhaustive]
 pub enum AmlError {
     RunOutOfStream,
+    /// `Divide` or `Mod` by zero (ACPI's AE_AML_DIVIDE_BY_ZERO): the method fails, nothing panics.
+    DivideByZero,
     IllegalOpcode(u16),
     InvalidFieldFlags,
 

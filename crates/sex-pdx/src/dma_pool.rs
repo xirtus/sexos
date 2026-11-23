@@ -53,6 +53,14 @@ impl DmaRegionPool {
     }
 
     pub fn used(&self) -> u64 { self.used }
+
+    /// Hands `bytes` of this pool to a second pool (one driver with two controllers):
+    /// the two never overlap, and neither can grow past the original region.
+    pub fn split(&mut self, bytes: u64) -> Result<DmaRegionPool, DmaError> {
+        let b = self.reserve(bytes)?;
+        DmaRegionPool::new(RegionView { region_id: self.view.region_id, virtual_address: b.virtual_address,
+            length: b.length, dma_address: Some(b.physical_address) })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

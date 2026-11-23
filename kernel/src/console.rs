@@ -54,7 +54,7 @@ impl Fb {
 
 // ── The log ring ───────────────────────────────────────────────────────────────
 
-const LOG_BYTES: usize = 64 * 1024;
+const LOG_BYTES: usize = sex_pdx::crash_log::LOG_TAIL_BYTES;
 struct Log { bytes: [u8; LOG_BYTES], written: usize }
 static LOG: Mutex<Log> = Mutex::new(Log { bytes: [0; LOG_BYTES], written: 0 });
 
@@ -66,7 +66,7 @@ pub fn log_tail(out: &mut [u8]) -> usize {
 /// The first HEAD_BYTES logged, kept whole: the start is where a PC with no serial port
 /// says what hardware it found (devices, disks, Wi-Fi), and the ring above has long
 /// moved past it by the time anyone asks. Spindle's `hw` reads it.
-const HEAD_BYTES: usize = 256 * 1024;
+const HEAD_BYTES: usize = 512 * 1024;
 struct Head { bytes: [u8; HEAD_BYTES], len: usize }
 static HEAD: Mutex<Head> = Mutex::new(Head { bytes: [0; HEAD_BYTES], len: 0 });
 
@@ -77,6 +77,17 @@ pub fn log_head(offset: usize, out: &mut [u8]) -> (usize, usize) {
     let n = out.len().min(head.len - from);
     out[..n].copy_from_slice(&head.bytes[from..from + n]);
     (n, head.len)
+}
+
+/// The log from absolute position `at` (bytes logged since boot): (bytes copied, bytes
+/// logged so far). Only the newest `LOG_BYTES` are still held; older positions copy
+/// nothing. A busy log copies nothing too: the caller asks again.
+pub fn log_at(at: usize, out: &mut [u8]) -> (usize, usize) {
+    let log = match LOG.try_lock() { Some(l) => l, None => return (0, 0) };
+    if at < log.written.saturating_sub(LOG_BYTES) || at >= log.written { return (0, log.written); }
+    let n = out.len().min(log.written - at);
+    for (i, slot) in out[..n].iter_mut().enumerate() { *slot = log.bytes[(at + i) % LOG_BYTES]; }
+    (n, log.written)
 }
 
 fn copy_tail(log: &Log, out: &mut [u8]) -> usize {

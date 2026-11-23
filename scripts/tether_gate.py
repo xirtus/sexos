@@ -9,7 +9,9 @@
 3. A command sent from the host (`df`) runs and its answer streams back; `install go`
    (also `install 32 go`) from the host is refused; `fetch` typed while tethered waits for `tether off`.
 4. `tether off` closes the flow and the host sees the session end.
-5. `hw record` writes hw-record-1.txt now and hw-record-2.txt 30 s later, each holding
+5. `tether listen`: the host's `tether_host.py connect` finds it, gets the boot log head
+   and runs `df` there; dropping the connection leaves it listening; `tether off`.
+6. `hw record` writes hw-record-1.txt now and hw-record-2.txt 30 s later, each holding
    the report and Spindle's newest lines.
 """
 import argparse, os, re, shutil, socket, subprocess, sys, tempfile, time
@@ -25,7 +27,9 @@ def free_port():
         return s.getsockname()[1]
 
 
-os.environ['SEXOS_GATE_NIC'] = '-netdev user,id=n0 -device e1000e,netdev=n0'
+# The guest's port 7177 shows on this host for `tether listen` (the no-typing boot entries).
+LISTEN_HOST_PORT = free_port()
+os.environ['SEXOS_GATE_NIC'] = f'-netdev user,id=n0,hostfwd=tcp:127.0.0.1:{LISTEN_HOST_PORT}-:7177 -device e1000e,netdev=n0'
 sys.path.insert(0, str(ROOT / 'scripts'))
 from quil_autosave_gate import boot  # noqa: E402
 
@@ -102,7 +106,7 @@ def main():
         until(r'MiB free of')
         # The host's automatic `hw`.
         until(r'remote> hw\n')
-        until(r'lines from the first \d+ KiB of the boot log')
+        until(r'lines from \d+ KiB of the boot log')
         g['wait'](r'\[spindle\.tether\.run\] len=2 ok=1', s, 60)
 
         r = host('send', 'df', '--wait', '8')
@@ -121,6 +125,30 @@ def main():
         g['wait'](r'\[spindle\.tether\.closed\] bytes=\d+ commands=4', s2, 60)
         serve.wait(60)
         assert re.search(r'disconnected after \d+ bytes', (a.out / 'tether-host.log').read_text())
+
+        # tether listen: SexOS waits, the host connects (what `autorun` starts by itself).
+        s3 = len(t())
+        line('tether listen')
+        g['wait'](r'\[spindle\.tether\.listening\] port=7177 v4=1', s3, 120)
+        ldir = logs / 'listen'
+        conn = subprocess.Popen([sys.executable, str(HOST), '--dir', str(ldir), 'connect', '127.0.0.1', '--port', str(LISTEN_HOST_PORT),
+                                 '--auto', 'df', '--quiet', '--retry', '60'], stdout=open(a.out / 'tether-connect.log', 'w'), stderr=subprocess.STDOUT)
+        g['wait'](r'\[spindle\.tether\.up\] port=7177 accepted=1', s3, 90)
+        end = time.monotonic() + 120
+        while time.monotonic() < end:
+            c = ldir / 'current.log'
+            text = c.read_text(errors='replace') if c.exists() else ''
+            if 'remote> df' in text and 'MiB free of' in text.split('remote> df', 1)[1]:
+                break
+            time.sleep(1)
+        else:
+            raise AssertionError('listen session: no df answer; ' + text[-600:])
+        assert text.startswith('SEXOS-TETHER 1\n--- boot log head ---\n'), text[:200]
+        conn.kill()
+        g['wait'](r'\[spindle\.tether\.end\] reason=the other computer closed the connection', s3, 90)
+        s3b = len(t())
+        line('tether off')
+        g['wait'](r'\[spindle\.tether\.closed\]', s3b, 60)
 
         s3 = len(t())
         line('hw record')

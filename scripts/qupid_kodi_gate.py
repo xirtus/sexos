@@ -84,8 +84,12 @@ def main():
    elif k==':':q.cmd('send-key',{'keys':[{'type':'qcode','data':'shift'},{'type':'qcode','data':'semicolon'}],'hold-time':80})
    else:q.key(KEYS.get(k,k))
    time.sleep(.06)
+ began=time.monotonic()
  def say(text,pattern,timeout=180):
-  g['focus'](153);time.sleep(.5);s=len(t());keys(text);q.key('ret');return g['wait'](pattern,s,timeout)
+  print(f'[kodi.gate] t={time.monotonic()-began:.1f}s focus then: {text}',flush=True)
+  g['focus'](153);print(f'[kodi.gate] t={time.monotonic()-began:.1f}s focused',flush=True)
+  time.sleep(.5);s=len(t());keys(text);q.key('ret');m=g['wait'](pattern,s,timeout)
+  print(f'[kodi.gate] t={time.monotonic()-began:.1f}s answered',flush=True);return m
  def fetched(name):
   m=say(f'fetch http://10.0.2.2:{port}/{name} {name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',600);assert m[1].startswith('Saved'),m[1]
  try:
@@ -110,6 +114,9 @@ def main():
   print({'ok':True,'repo':added[0].strip(),'installed':inst[0].strip(),'tampered':bad[1][:80],'requests':len(served)})
  except Exception:
   from qupid_shot import player_trace
-  print('--- player records ---\n'+player_trace(t()),flush=True);raise
+  print('--- player records ---\n'+player_trace(t()),flush=True)
+  import re as _re
+  keep=[l for l in t().splitlines() if _re.search(r'\[(input\.keyboard|shell\.kbd|kernel\.ps2|ps2\.|spindle\.|shell\.program|shell\.focus|app\.program|qupid\.)',l)]
+  print('--- input, focus and Spindle lines (last 120) ---\n'+'\n'.join(keep[-120:]),flush=True);raise
  finally:g['stop']()
 if __name__=='__main__':main()

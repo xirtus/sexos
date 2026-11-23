@@ -15,7 +15,9 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 
-/// Code and data of one service fit its 16 MiB slot; the stack is 64 KiB under its top.
+/// Code and data of one service fit its 16 MiB slot; the stack is 64 KiB under its top
+/// (as BOOT maps it; it grows on touch below that, `service_stack`, and pages it grew
+/// stay as the last run left them).
 const SLOT_BYTES: u64 = 0x0100_0000;
 const STACK_BYTES: u64 = 64 * 1024;
 const MAX_PAGES: usize = 2048;

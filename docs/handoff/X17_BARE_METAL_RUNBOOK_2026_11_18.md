@@ -38,7 +38,7 @@ The x17 has **no serial port**. Three places show what happened:
 | If the kernel stops | Red "SexOS stopped" screen | Photograph it; it restarts after 30 s |
 | Once the desktop is up | **Spindle: `hw`** (Scroll Lock shows Spindle) | Photograph each screen of output (scroll the terminal back for earlier lines) |
 
-`hw` reads the kernel's copy of the boot log's first 256 KiB and shows only the
+`hw` reads the kernel's copy of the boot log's first 1 MiB and shows only the
 hardware lines: the PCI device census, VMD, the NVMe drives (model, firmware, transfer
 limit, sector format), RAID, IOMMU, Intel display, GPU power, sound, network cards, USB,
 ACPI and Wi-Fi. `hw nvme`, `hw wifi`, `hw display` show every line containing that text;
@@ -96,6 +96,15 @@ and networks), `wifi join N PASSWORD`, `beep` (sound).
 5. Network: Ethernet cable, or `wifi scan` then `wifi join N PASSWORD`.
 6. `tether MAC-ADDRESS` with `tether_host.py` running on the Mac: Claude takes it from there.
 7. Done: `hw record off`, `tether off`, `unmount NAME`, pull the stick.
+
+**No keyboard or mouse (the x17's first start, 2026-11-22):** pick
+**"SexOS report to the Mac (no typing)"** (or **"SexOS safe start, report to the Mac"**) in
+the boot menu. Spindle then, by itself, writes `/media/Ventoy/sexos-report-1.txt` and
+`-2.txt` every 30 s (the hardware lines, the newest 1,200 boot log lines and Spindle's
+own) and listens for the Mac on port 7177. Wait two minutes, hold the power button, and
+read the files on the Mac. With a network (Ethernet, or a Mac USB-C Ethernet adapter
+with Internet Sharing on), `python3 tether_host.py connect --scan` on the Mac finds it
+and Claude can drive it live. The kernel now keeps the first 1 MiB of the boot log.
 
 ## 4. If it goes wrong
 

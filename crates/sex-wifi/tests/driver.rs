@@ -265,6 +265,14 @@ fn power_up_stops_on_radio_switch_and_on_silence() {
     assert_eq!(boot.step, csr::Step::Failed(csr::Failure::AliveTimeout));
     assert!(hw.writes.contains(&(csr::CTXT_INFO_BA, 0)), "22000 series uses the old context register");
     assert!(hw.prph_writes.is_empty() || !hw.prph_writes.iter().any(|w| w.0 == csr::UREG_CPU_INIT_RUN + 0x30_0000));
+    // The firmware raises SW_ERR instead of ALIVE: reported with its cause, at once.
+    let mut hw = Chip::new();
+    let mut boot = csr::Boot::new(info, 0);
+    while { let t = hw.now; boot.advance(&mut hw, t, &layout, 0, 0) } {
+        if boot.step == csr::Step::WaitAlive { hw.regs.insert(csr::INT, csr::INT_SW_ERR); }
+        hw.now += 1000; assert!(hw.now < 2_000_000);
+    }
+    assert_eq!(boot.step, csr::Step::Failed(csr::Failure::Crashed { cause: csr::INT_SW_ERR }));
     // A device that fell off the bus reads all ones.
     let mut hw = Chip::new();
     hw.regs.insert(csr::HW_IF_CONFIG, u32::MAX);

@@ -217,6 +217,12 @@ impl Scan {
     }
 
     pub fn done(&self) -> bool { matches!(self.step, Step::Done | Step::Failed(_)) }
+    /// Starts from the networks an earlier scan found, so a rescan never shows an empty
+    /// list (nor shifts the numbers a join picks by); what it hears refreshes them.
+    pub fn keep_networks(&mut self, earlier: &Scan) {
+        self.networks = earlier.networks;
+        self.count = earlier.count;
+    }
     pub fn networks(&self) -> impl Iterator<Item = &Network> { self.networks.iter().flatten() }
 
     /// Adds or refreshes a network from a beacon or probe response.

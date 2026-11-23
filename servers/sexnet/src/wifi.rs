@@ -141,9 +141,17 @@ impl Wifi {
             Ok(v) if v.dma_address.is_none() && v.length >= 0x2000 => v,
             other => { sex_pdx::serial_record!("[wifi.lease.bad] product={:#06x} view={}", identity.product, other.is_ok() as u8); return None; }
         };
+        // Memory decoding and bus mastering first: firmware may leave them off (the x17
+        // R1 does), and then every register reads all ones: a wrong hw_rev and rf_id,
+        // and a firmware start that fails at once.
+        match sex_pdx::device_command(c::SLOT_WIFI, c::NIC_BITS as u64, 0) {
+            Ok(r) if r.after & c::NIC_BITS == c::NIC_BITS => {}
+            other => { sex_pdx::serial_record!("[wifi.failed] step=command ok={}", other.is_ok() as u8); return None; }
+        }
         let mut mmio = Mmio { base: bar.virtual_address, length: bar.length };
         use csr::Registers;
-        let hw_rev = devices::normalize_hw_rev(mmio.read(csr::HW_REV));
+        let raw_rev = mmio.read(csr::HW_REV);
+        let hw_rev = if raw_rev == u32::MAX { u32::MAX } else { devices::normalize_hw_rev(raw_rev) };
         let rf_id = mmio.read(csr::HW_RF_ID);
         sex_pdx::serial_record!("[wifi.chip] vendor={:#06x} device={:#06x} subsystem={:04x}:{:04x} hw_rev={:#x} rf_id={:#x} bar_bytes={}",
             identity.vendor, identity.product, sub_vendor, sub_device, hw_rev, rf_id, bar.length);
@@ -189,10 +197,6 @@ impl Wifi {
             Ok(b) => b,
             Err(e) => { sex_pdx::serial_record!("[wifi.failed] step=layout reason={:?} pool={}", e, dma.length); return None; }
         };
-        match sex_pdx::device_command(c::SLOT_WIFI, c::NIC_BITS as u64, 0) {
-            Ok(r) if r.after & c::NIC_BITS == c::NIC_BITS => {}
-            other => { sex_pdx::serial_record!("[wifi.failed] step=command ok={}", other.is_ok() as u8); return None; }
-        }
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
         Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, link: None, rx: RxQueue::EMPTY, finished: false,
@@ -242,9 +246,10 @@ impl Wifi {
             _ => {
                 self.finished = true;
                 sex_pdx::serial_record!(
-                    "[wifi.failed] step={:?} alive_ok={:?} notifications={} bad_rx_buffer={:?} int={:#x} gp_cntrl={:#x} rx_closed={}",
-                    step, self.bringup.alive.map(|a| a.ok), self.bringup.notifications, self.bringup.bad_buffer,
+                    // The registers first: a narrow screen still shows them.
+                    "[wifi.failed] int={:#x} gp_cntrl={:#x} step={:?} alive_ok={:?} notifications={} bad_rx_buffer={:?} rx_closed={}",
                     self.mmio.read(csr::INT), self.mmio.read(csr::GP_CNTRL),
+                    step, self.bringup.alive.map(|a| a.ok), self.bringup.notifications, self.bringup.bad_buffer,
                     self.bringup.rx.closed(&self.pool, &self.bringup.layout));
             }
         }
@@ -734,7 +739,8 @@ impl Wifi {
         let Some(i) = self.init.as_ref() else { return false };
         // Once a join has begun the chip stays on that channel (leaving it is W5b's).
         if !self.finished || self.scan.is_none() || self.join.is_some() || i.step != init::Step::Ready { return false; }
-        let sc = i.scan(now_ticks * 1000);
+        let mut sc = i.scan(now_ticks * 1000);
+        if let Some(earlier) = self.scan.as_ref() { sc.keep_networks(earlier); }
         self.scans = self.scans.wrapping_add(1);
         sex_pdx::serial_record!("[wifi.scan.start] channels={} scan={} ticks={}", sc.channels, self.scans, now_ticks);
         self.scan = Some(sc);

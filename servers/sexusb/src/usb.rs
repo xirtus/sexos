@@ -30,6 +30,9 @@ mod sleep;
 use crate::{send_report_to_sexinput, record_device_wheel, OP_USB_KEYBOARD_REPORT, OP_USB_MOUSE_REPORT};
 
 pub const MAX_DEVICES: usize = 32;
+/// xHCI controllers driven at once (Tiger Lake laptops have two: the chipset's for the
+/// USB-A ports and the Type-C/Thunderbolt one).
+pub const MAX_CTL: usize = 4;
 const MAX_INTR: usize = 3;
 const INTR_TRBS: u32 = 32; // 31 usable: one 64-byte report buffer per ring position
 const IN_FLIGHT: u32 = 4;
@@ -121,10 +124,12 @@ struct Device {
     vendor: u16,
     product: u16,
     storage: Storage,
+    /// The controller it is on (index into the controllers `Usb` drives).
+    ctl: u8,
 }
 impl Device {
     const fn empty() -> Self {
-        Device { used: false, slot: 0, speed: 0, route: 0, depth: 0, root_port: 0, parent: 0, parent_port: 0,
+        Device { ctl: 0, used: false, slot: 0, speed: 0, route: 0, depth: 0, root_port: 0, parent: 0, parent_port: 0,
             tt_slot: 0, tt_port: 0, mps0: 8, ep0: Ring::empty(), mem: None, intr: [Interrupt::empty(); MAX_INTR],
             hub_ports: 0, hub_ss: false, hub_ttt: 0, hub_mtt: false, hub_pending: 0, vendor: 0, product: 0,
             storage: Storage::empty() }
@@ -133,10 +138,15 @@ impl Device {
 }
 
 pub struct Usb {
+    /// The controller in use now (`ctl`); the others wait in `parked`. Every device
+    /// operation first selects its device's controller (`select`).
     pub x: Xhci,
+    pub ctl: u8,
+    pub controllers: u8,
+    parked: [Option<Xhci>; MAX_CTL],
     dev: [Device; MAX_DEVICES],
-    slot_dev: [u8; 256],
-    root_pending: u64,
+    slot_dev: [[u8; 256]; MAX_CTL],
+    root_pending: [u64; MAX_CTL],
     sent_keys: u64,
     sent_modifiers: u8,
     pub stats: Stats,
@@ -174,8 +184,8 @@ pub struct Usb {
     /// Media buttons (headsets, remotes, keyboards' media keys): which interrupt
     /// endpoint (device + 1, index) and where the buttons sit in its reports.
     media: [(u8, u8, crate::hid::MediaLayout); 4],
-    /// Root ports suspended while the machine sleeps (bit per port).
-    suspended: u64,
+    /// Root ports suspended while the machine sleeps (bit per port, per controller).
+    suspended: [u64; MAX_CTL],
 }
 
 const BOUNCE: u64 = sex_pdx::usb_disk::BUFFER_BYTES + 8192;
@@ -192,11 +202,48 @@ impl Usb {
     /// A USB Ethernet adapter is up (its transmit ring has no wake of its own).
     pub fn ether_active(&self) -> bool { self.ether.is_some() }
     pub fn new(x: Xhci) -> Usb {
-        Usb { x, dev: [Device::empty(); MAX_DEVICES], slot_dev: [0; 256], root_pending: 0, sent_keys: 0,
+        Usb { x, ctl: 0, controllers: 1, parked: [None, None, None, None], dev: [Device::empty(); MAX_DEVICES], slot_dev: [[0; 256]; MAX_CTL], root_pending: [0; MAX_CTL], sent_keys: 0,
             sent_modifiers: 0, stats: Stats::default(), bounce: (0, 0), disks: [0; sex_pdx::usb_disk::MAX_DISKS as usize],
             generation: 0, changed: false, freed: 0, ether: None, net_region: 0, ether_buffers: ((0, 0), (0, 0)),
             bt: None, bt_region: 0, bt_buffers: ((0, 0), (0, 0), (0, 0)), bt_keys: [(0, 0, 0); 8], bt_buttons: [(0, 0); 8],
-            audio: None, audio_region: 0, audio_buffers: (0, 0), audio_ring: (0, 0), mic: None, mic_buffers: (0, 0), media: [(0, 0, crate::hid::MediaLayout { fields: [crate::hid::MediaField { report_id: 0, bit: 0, size: 0, key: 0, array: false, umin: 0, umax: 0, lmin: 0 }; crate::hid::MEDIA_FIELDS], n: 0, ids: false }); 4], suspended: 0 }
+            audio: None, audio_region: 0, audio_buffers: (0, 0), audio_ring: (0, 0), mic: None, mic_buffers: (0, 0), media: [(0, 0, crate::hid::MediaLayout { fields: [crate::hid::MediaField { report_id: 0, bit: 0, size: 0, key: 0, array: false, umin: 0, umax: 0, lmin: 0 }; crate::hid::MEDIA_FIELDS], n: 0, ids: false }); 4], suspended: [0; MAX_CTL] }
+    }
+
+    /// Adds another controller; Ok(its index).
+    pub fn add_controller(&mut self, x: Xhci) -> Result<u8, Xhci> {
+        if self.controllers as usize >= MAX_CTL { return Err(x); }
+        let c = self.controllers;
+        self.parked[c as usize] = Some(x);
+        self.controllers += 1;
+        Ok(c)
+    }
+
+    /// Makes controller `c` the one `self.x` names.
+    pub fn select(&mut self, c: u8) {
+        if c == self.ctl || c >= self.controllers { return; }
+        let Some(incoming) = self.parked[c as usize].take() else { return };
+        let outgoing = core::mem::replace(&mut self.x, incoming);
+        self.parked[self.ctl as usize] = Some(outgoing);
+        self.ctl = c;
+    }
+
+    /// Root ports over every controller.
+    pub fn ports(&self) -> u32 {
+        self.x.ports + self.parked.iter().flatten().map(|x| x.ports).sum::<u32>()
+    }
+
+    /// Handles up to `max` events from each controller. True if any came.
+    pub fn drain_events(&mut self, max: usize) -> bool {
+        let mut any = false;
+        for c in 0..self.controllers {
+            for _ in 0..max {
+                self.select(c);
+                let Some(e) = self.x.event() else { break };
+                self.event(e);
+                any = true;
+            }
+        }
+        any
     }
 
     fn ctx(&self, base: u64, index: u64) -> *mut u32 { (base + index * self.x.csz) as *mut u32 }
@@ -212,6 +259,18 @@ impl Usb {
 
     /// Scan the root ports once at start, and enumerate whatever is plugged in.
     pub fn scan(&mut self) -> (u32, u32) {
+        let (mut connected, mut first) = (0, 0);
+        for c in 0..self.controllers {
+            self.select(c);
+            if self.controllers > 1 { log!("[sexusb.controller.scan] index={} ports={}", c, self.x.ports); }
+            let (n, f) = self.scan_one();
+            connected += n;
+            if first == 0 { first = f; }
+        }
+        (connected, first)
+    }
+
+    fn scan_one(&mut self) -> (u32, u32) {
         let mut connected = 0;
         let mut first = 0;
         for p in 1..=self.x.ports {
@@ -273,8 +332,8 @@ impl Usb {
         let slot = self.x.command_ok(0, 0, 0, trb::ENABLE_SLOT << 10)?;
         let mps0 = match speed { LOW | FULL => 8, HIGH => 64, _ => 512 };
         self.dev[i] = Device { used: true, slot, speed, route, depth, root_port, parent, parent_port, tt_slot, tt_port,
-            mps0, mem: Some(mem), ..Device::empty() };
-        self.slot_dev[slot as usize] = i as u8 + 1;
+            mps0, mem: Some(mem), ctl: self.ctl, ..Device::empty() };
+        self.slot_dev[self.ctl as usize][slot as usize] = i as u8 + 1;
         self.stats.slots += 1;
         self.dev[i].ep0.init(mem.ep0.0, mem.ep0.1, 256);
         unsafe {
@@ -441,6 +500,7 @@ impl Usb {
     }
 
     fn get(&mut self, i: usize, rt: u8, req: u8, value: u16, index: u16, phys: u64, len: u16) -> Result<u32, Failure> {
+        self.select(self.dev[i].ctl);
         let slot = self.dev[i].slot;
         let mut ring = self.dev[i].ep0;
         let r = self.x.control(slot, &mut ring, rt, req, value, index, phys, len);
@@ -541,6 +601,7 @@ impl Usb {
 
     /// Queue `n` interrupt-IN TRBs, each with the report buffer of its ring position.
     fn arm(&mut self, i: usize, k: usize, n: u32) {
+        self.select(self.dev[i].ctl);
         let slot = self.dev[i].slot;
         let e = &mut self.dev[i].intr[k];
         for _ in 0..n {
@@ -638,6 +699,7 @@ impl Usb {
 
     /// Forget a device and everything behind it; release its keys and buttons.
     fn detach(&mut self, i: usize) {
+        self.select(self.dev[i].ctl);
         for c in 0..MAX_DEVICES {
             if self.dev[c].used && self.dev[c].parent == i as u8 + 1 { self.detach(c); }
         }
@@ -669,9 +731,10 @@ impl Usb {
             log!("[sexusb.storage.gone] disk={} generation={}", disk, self.generation);
         }
         if slot != 0 {
+            self.select(self.dev[i].ctl);
             let _ = self.x.command(0, 0, 0, (trb::DISABLE_SLOT << 10) | (slot << 24));
             unsafe { core::ptr::write_volatile((self.x.dcbaa + slot as u64 * 8) as *mut u64, 0); }
-            self.slot_dev[slot as usize] = 0;
+            self.slot_dev[self.ctl as usize][slot as usize] = 0;
         }
         log!("[sexusb.device.gone] slot={} port={} route={:#x}", slot, self.dev[i].root_port, self.dev[i].route);
         let mem = self.dev[i].mem;
@@ -683,7 +746,7 @@ impl Usb {
         match e.kind() {
             trb::PORT_STATUS_CHANGE => {
                 let port = e.d0 >> 24;
-                if port >= 1 && port <= self.x.ports.min(63) { self.root_pending |= 1 << port; }
+                if port >= 1 && port <= self.x.ports.min(63) { self.root_pending[self.ctl as usize] |= 1 << port; }
             }
             trb::TRANSFER_EVENT => self.transfer(e),
             _ => {}
@@ -692,27 +755,39 @@ impl Usb {
 
     /// Work that may need commands or control transfers: root port and hub changes.
     pub fn service(&mut self) {
-        while self.root_pending != 0 {
-            let port = self.root_pending.trailing_zeros();
-            self.root_pending &= !(1 << port);
+        for c in 0..self.controllers {
+            while self.root_pending[c as usize] != 0 {
+                self.select(c);
+                let port = self.root_pending[c as usize].trailing_zeros();
+                self.root_pending[c as usize] &= !(1 << port);
+                self.root_change(port);
+            }
+        }
+        for i in 0..MAX_DEVICES {
+            if self.dev[i].used && self.dev[i].hub_pending != 0 { self.select(self.dev[i].ctl); self.service_hub(i); }
+        }
+    }
+
+    /// A change on root port `port` of the selected controller.
+    fn root_change(&mut self, port: u32) {
+        let c = self.ctl;
+        {
             let s = self.x.portsc(port);
             self.x.clear_port_changes(port);
-            let root_dev = self.dev.iter().position(|d| d.used && d.parent == 0 && d.root_port == port);
+            let root_dev = self.dev.iter().position(|d| d.used && d.ctl == c && d.parent == 0 && d.root_port == port);
             log!("[sexusb.port.change] port={} connected={} enabled={} portsc={:#x}", port, s & 1, (s >> 1) & 1, s);
             if s & 1 == 0 || s & (1 << 17) != 0 {
                 if let Some(d) = root_dev { self.detach(d); }
             }
-            if s & 1 != 0 && self.dev.iter().all(|d| !(d.used && d.parent == 0 && d.root_port == port)) {
+            self.select(c);
+            if s & 1 != 0 && self.dev.iter().all(|d| !(d.used && d.ctl == c && d.parent == 0 && d.root_port == port)) {
                 self.attach_root(port);
             }
-        }
-        for i in 0..MAX_DEVICES {
-            if self.dev[i].used && self.dev[i].hub_pending != 0 { self.service_hub(i); }
         }
     }
 
     fn transfer(&mut self, e: Event) {
-        let Some(i) = (self.slot_dev[e.slot() as usize] as usize).checked_sub(1) else { return };
+        let Some(i) = (self.slot_dev[self.ctl as usize][e.slot() as usize] as usize).checked_sub(1) else { return };
         let dci = e.endpoint();
         if self.ether_event(i, e) { return; }
         if self.bt_event(i, e) { return; }
@@ -940,6 +1015,7 @@ impl Usb {
 
     /// One SCSI command: CBW out, data through the bounce buffer, CSW in.
     fn scsi(&mut self, i: usize, cdb: &[u8], input: bool, len: u32) -> Result<u32, Scsi> {
+        self.select(self.dev[i].ctl);
         let slot = self.dev[i].slot;
         let st = &mut self.dev[i].storage;
         st.tag = st.tag.wrapping_add(1);
@@ -1049,7 +1125,7 @@ impl Usb {
 
     /// One request from Files.
     pub fn disk_request(&mut self, op: u64, a0: u64, a1: u64, a2: u64, region: u64) -> u64 {
-        if self.suspended != 0 && matches!(op, ud::OP_READ | ud::OP_WRITE | ud::OP_SYNC) { self.resume_all(); }
+        if self.suspended.iter().any(|s| *s != 0) && matches!(op, ud::OP_READ | ud::OP_WRITE | ud::OP_SYNC) { self.resume_all(); }
         match op {
             ud::OP_DISKS => {
                 let mask = self.disks.iter().enumerate().fold(0u64, |m, (k, d)| if *d != 0 { m | 1 << k } else { m });

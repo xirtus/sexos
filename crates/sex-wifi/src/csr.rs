@@ -153,7 +153,11 @@ pub enum Step {
     NicLock, WaitAlive, Alive, Failed(Failure),
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Failure { NotReady, Persistence, ClockTimeout, NicLock, AliveTimeout, RfKill, Gone }
+pub enum Failure {
+    NotReady, Persistence, ClockTimeout, NicLock, AliveTimeout, RfKill, Gone,
+    /// The chip raised a firmware (SW_ERR) or hardware (HW_ERR) error before ALIVE: `cause` is CSR_INT.
+    Crashed { cause: u32 },
+}
 
 /// Power-up and firmware start. Times are microseconds from a monotonic clock.
 pub struct Boot {
@@ -295,7 +299,10 @@ impl Boot {
             }
             Step::WaitAlive => {
                 let cause = r.read(INT);
-                if cause & (INT_SW_ERR | INT_HW_ERR) != 0 { self.fail(Failure::AliveTimeout); }
+                // All ones: the chip fell off the bus; 0xa5a5a5aX: a read while it sleeps (iwlwifi).
+                if cause == u32::MAX { self.fail(Failure::Gone); }
+                else if cause & 0xffff_fff0 == 0xa5a5_a5a0 {}
+                else if cause & (INT_SW_ERR | INT_HW_ERR) != 0 { self.fail(Failure::Crashed { cause }); }
                 else if cause & (INT_ALIVE | INT_FH_RX) != 0 {
                     // The ALIVE notification itself arrives on the RX ring; the queue
                     // layer confirms it with `alive_received`.

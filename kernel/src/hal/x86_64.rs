@@ -118,7 +118,7 @@ impl HardwareAbstractionLayer for X86Hal {
             crate::apic::init_timer();
             // Route PS/2 keyboard IRQ1 → IDT vector 0x21 (keyboard_interrupt_handler).
             // IOAPIC is enumerated by init_apic; handler installed at idt[0x21] in interrupts::init_idt.
-            unsafe { crate::apic::map_irq(1, 0x21, 0, x86_64::VirtAddr::new(hhdm_offset)); }
+            unsafe { crate::apic::map_irq(1, 0x21, crate::apic::local_id() as u8, x86_64::VirtAddr::new(hhdm_offset)); }
             // Power: S5, restart, the power button, sensors, idle and performance states.
             crate::hal::acpi::init(rsdp_addr, hhdm_offset);
         } else {

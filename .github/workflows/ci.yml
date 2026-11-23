@@ -598,6 +598,8 @@ jobs:
       run: |
         truncate -s 256M "$RUNNER_TEMP/blank-usb.img"
         python3 scripts/usb_storage_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-usb-storage"
+    - name: Two USB controllers (x17 chipset + Type-C xHCI), keyboard and stick on the second
+      run: python3 scripts/two_xhci_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-two-xhci"
     - name: Files background copy, cancel, trash and delete for good
       run: python3 scripts/files_jobs_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-jobs"
     - name: Files safe eject and pulled-out sticks
