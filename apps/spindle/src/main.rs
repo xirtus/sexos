@@ -2897,6 +2897,7 @@ pub extern "C" fn _start() -> ! {
             // The tether and `hw record` poll on their own clocks: draw only when they said something.
             let before=sb.total_lines;
             unsafe{(*core::ptr::addr_of_mut!(tether_command::TETHER)).step(sb);}
+            unsafe{(*core::ptr::addr_of_mut!(wifi_command::WIFI)).step(sb);}
             let files_free=unsafe{!session_command::SESSION.io_busy()&&!capture_command::CAPTURE.busy()&&!fetch_command::FETCH.busy()&&!update_command::UPDATE.busy()&&!pkg_command::PKG.busy()&&!record_command::RECORD.sending()&&HELD_LEN==0};
             hw_command::tick(sb,files_free);
             if unsafe{HELD_LEN==0&&!session_command::SESSION.io_busy()}{
@@ -2905,7 +2906,7 @@ pub extern "C" fn _start() -> ! {
             }
             if sb.total_lines!=before{unsafe{content_render(&line,sb);}}
         }
-        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0} || unsafe{tether_command::TETHER.active()||hw_command::recording()}{
+        let msg=if registration_pending || presentation_pending || storage_owner!=0 || unsafe{DISPLAY_IO.pending() || HISTORY_STATUS.pending() || NETWORK_PROBE.busy()} || unsafe{fs_commands::FS.busy()||fetch_command::FETCH.busy()||update_command::UPDATE.busy()||pkg_command::PKG.busy()} || unsafe{capture_command::CAPTURE.busy()||record_command::RECORD.sending()||session_command::SESSION.wants_turn()||HELD_LEN!=0} || unsafe{tether_command::TETHER.active()||hw_command::recording()||(*core::ptr::addr_of!(wifi_command::WIFI)).busy()}{
             match sex_pdx::pdx_try_listen_raw(0){Some(msg)=>msg,None=>{sex_pdx::sys_yield();continue}}
         }else{sex_pdx::pdx_listen_raw(0)};
         let capture_lines=sb.total_lines;
