@@ -32,3 +32,10 @@
   reference and store forms) returns `AmlError::LibUnimplemented` instead of panicking.
   In `sexacpi` a panic sets all AML aside for the boot; an error fails only the method or
   table that used the construct.
+- `aml/mod.rs`: `Not`, `FindSetLeftBit` and `FindSetRightBit` take their target and store
+  the result. Upstream started them with an operand and a target but matched one argument
+  and panicked, which set all AML aside on the Alienware x17 R1 (no touchpad again, after
+  the field list fix). `Divide`/`Mod` by zero return `AmlError::DivideByZero`, shifts by 64
+  or more give 0, and every remaining argument mismatch (`else { panic!() }`) or unknown
+  store target returns `AmlError::LibUnimplemented`: a bad construct fails its method, not
+  the interpreter.
