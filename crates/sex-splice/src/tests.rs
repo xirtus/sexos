@@ -247,6 +247,30 @@ fn otio_export_names_each_clip_and_gap_in_frames() {
     assert_eq!(doc.matches("Clip.2").count(), 4);
 }
 
+#[test]
+fn otio_export_turns_off_muted_tracks_and_warps_retimed_clips() {
+    let (mut tl, _, _, _) = interview();
+    let pic = tl.tracks[0].clips[0].id;
+    tl.apply(&Op::Split { clip: pic, at: 10 * S }).unwrap();
+    let tail = tl.tracks[0].clips[1].id;
+    tl.tracks[0].clips[1].enabled = false;
+    tl.tracks[1].muted = true;
+    let doc = otio::export(&tl, "x");
+    // The muted sound track is in the file, turned off, with its clip.
+    assert!(doc.contains("\"kind\":\"Audio\",\"enabled\":false"));
+    assert!(doc.contains("\"kind\":\"Video\",\"enabled\":true"));
+    assert_eq!(doc.matches("Clip.2").count(), 3);
+    assert_eq!(doc.matches("\"enabled\":false,\"source_range\"").count(), 1);
+    // Retimed: a 1.5x clip's range is its 6 s (180 frames) on the timeline, warped by 1.5.
+    let mut fast = tl.clone();
+    fast.tracks[0].clips.retain(|c| c.id != tail);
+    fast.tracks[0].clips[0].speed = 1500;
+    fast.tracks[0].clips[0].source = Range::new(0, 9 * S);
+    let doc = otio::export(&fast, "x");
+    assert!(doc.contains("\"value\":0.0},\"duration\":{\"OTIO_SCHEMA\":\"RationalTime.1\",\"rate\":30.0,\"value\":180.0}"), "{doc}");
+    assert!(doc.contains("\"time_scalar\":1.5}"));
+}
+
 mod export_tests {
     use super::*;
     use crate::export::*;

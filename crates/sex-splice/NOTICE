@@ -1,5 +1,5 @@
-Parts of this crate (align.rs, crossfade.rs, edges.rs, handoff.rs, ipc.rs, rebase.rs, restarts.rs,
-skills.rs) are
+Parts of this crate (align.rs, crossfade.rs, edges.rs, handoff.rs, ipc.rs, otio.rs, rebase.rs, restarts.rs,
+skills.rs, split_edit.rs) are
 adapted from Scarlet (https://github.com/Forward-Future/scarlet), used under the MIT
 license below, and from Rook (https://github.com/xirtus/Rook, GPL-3.0). The crate as a
 whole is GPL-3.0-only.

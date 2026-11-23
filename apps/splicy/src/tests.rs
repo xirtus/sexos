@@ -571,3 +571,18 @@ fn clean_up_with_levels_keeps_transcript_edges_where_words_pause() {
         assert_eq!(a.cuts, b.cuts, "every word in this talk has a pause beside it");
     }
 }
+
+#[test]
+fn a_j_cut_at_a_join_brings_the_next_voice_in_early() {
+    let mut ed = talk();
+    ed.place(3, false);
+    ed.select_sentence();
+    ed.delete().unwrap();
+    let before = ed.timeline().duration();
+    let at = ed.split_edit(-SECOND / 4).unwrap();
+    let tl = ed.timeline();
+    let sound = tl.tracks.iter().find(|t| t.kind == sex_splice::TrackKind::Audio).unwrap();
+    assert!(sound.clips.iter().any(|c| c.end() == at - SECOND / 4), "{:?}", sound.clips);
+    assert_eq!(tl.duration(), before, "the runtime stays");
+    assert!(ed.undo());
+}
