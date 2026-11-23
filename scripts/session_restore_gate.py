@@ -60,7 +60,11 @@ def main():
   assert scenes==[0,2],scenes
   assert len(__import__('re').findall(r'\[spindle.session.started\]',log))==2,'both did not start'
   g['wait'](r'\[shell.launch.placed\] target=\d+ surface=\d+ scene=2',0,60)
-  assert len(__import__('re').findall(r'\[files.program.bound\] target=\d+ task=\d+ root=/data/gaze',log))==2
+  # Each restored run binds its folder once; the second may bind after the restore line.
+  bound=lambda:len(__import__('re').findall(r'\[files.program.bound\] target=\d+ task=\d+ root=/data/gaze',t()))
+  end=time.monotonic()+60
+  while bound()<2 and time.monotonic()<end:time.sleep(.5)
+  assert bound()==2,bound()
   time.sleep(3);q.cmd('screendump',{'filename':str(a.out/'session-restored.ppm')});time.sleep(.5)
   assert 'KERNEL PANIC' not in log and 'panicked' not in log
   print({'ok':True,'scenes':scenes})
