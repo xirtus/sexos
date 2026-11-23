@@ -326,54 +326,7 @@ pub extern "C" fn _start() -> ! {
             count += 1;
         }
     }
-    // A zero-byte reservation is refused, but it builds the pool from the DMA region.
-    let mut pool = None;
-    let _ = reserve_dma(&mut pool, 0);
-    let Some(pool) = pool else { serial_println!("[sexusb.memory.dma.bad]"); park(); };
-    let mut pool = Some(pool);
-    let mut started: [Option<xhci::Xhci>; usb::MAX_CTL] = [None, None, None, None];
-    // Extra controllers first, each with its own share of the DMA region; the first
-    // controller keeps the rest (it carries sticks, network and sound buffers too).
-    for n in (0..count).rev() {
-        let slot = slots[n];
-        let limit = sex_pdx::memory_region_info(slot).map(|info| info.length).unwrap_or(0).min(0x10000);
-        let mut cap = u64::MAX;
-        for _ in 0..3 {
-            cap = if limit >= 0x20 { map_xhci_bar0(slot, limit) } else { u64::MAX };
-            if cap != 0 && cap != u64::MAX { break; }
-            sys_yield();
-        }
-        if cap == 0 || cap == u64::MAX {
-            serial_println!("[sexusb.xhci.map.bad] reason=bar_zero_after_retry attempts=3 ok=0");
-            serial_println!("[usb.host.controller.none] map_va={:#x}", cap);
-            continue;
-        }
-        serial_println!("[usb.host.controller.found] slot={} bar=0 map_va={:#x}", slot, cap);
-        serial_println!("[sexusb.xhci.map.ok]");
-        let share = if n == 0 { None } else {
-            match pool.as_mut().map(|p| p.split(EXTRA_CONTROLLER_DMA)) {
-                Some(Ok(p)) => Some(p),
-                _ => { serial_println!("[sexusb.controller.skip] slot={} reason=dma", slot); continue; }
-            }
-        };
-        let Some(own) = share.or_else(|| pool.take()) else { continue };
-        match xhci::Xhci::start(cap, limit, own) {
-            Ok(x) => {
-                if count > 1 { serial_println!("[sexusb.controller] slot={} ports={} ok=1", slot, x.ports); }
-                started[n] = Some(x);
-            }
-            Err(e) => serial_println!("[sexusb.xhci.start.fail] reason={:?}", e),
-        }
-    }
-    // The first controller (SLOT_USB_HOST) is controller 0. `Usb` lives in a static:
-    // a second copy of it on this task's stack would overrun it.
-    let mut running = started.into_iter().flatten();
-    let Some(first) = running.next() else { park() };
-    let usb = unsafe {
-        *core::ptr::addr_of_mut!(USB) = Some(usb::Usb::new(first));
-        (*core::ptr::addr_of_mut!(USB)).as_mut().unwrap()
-    };
-    for x in running { let _ = usb.add_controller(x); }
+    let usb = start_controllers(&slots[..count]);
     if count > 1 { serial_println!("[sexusb.controllers] held={} running={}", count, usb.controllers); }
     serial_println!("[sexusb.ready]");
     // The first report to Input is the first real one: a report sent here could reach
@@ -500,6 +453,64 @@ fn reserve_dma(pool: &mut Option<sex_pdx::dma_pool::DmaRegionPool>, bytes: u64) 
 }
 
 static mut USB: Option<usb::Usb> = None;
+
+/// Starts every leased xHCI and builds `Usb` in its static. Kept out of `_start` so its
+/// temporaries (a whole `Usb` is ~36 KiB) leave the 64 KiB task stack before the main
+/// loop runs; controllers wait in a static rather than on the stack.
+#[inline(never)]
+fn start_controllers(slots: &[u64]) -> &'static mut usb::Usb {
+    let count = slots.len();
+    // A zero-byte reservation is refused, but it builds the pool from the DMA region.
+    let mut pool = None;
+    let _ = reserve_dma(&mut pool, 0);
+    let Some(pool) = pool else { serial_println!("[sexusb.memory.dma.bad]"); park(); };
+    let mut pool = Some(pool);
+    let started = unsafe { &mut *core::ptr::addr_of_mut!(STARTED) };
+    // Extra controllers first, each with its own share of the DMA region; the first
+    // controller keeps the rest (it carries sticks, network and sound buffers too).
+    for n in (0..count).rev() {
+        let slot = slots[n];
+        let limit = sex_pdx::memory_region_info(slot).map(|info| info.length).unwrap_or(0).min(0x10000);
+        let mut cap = u64::MAX;
+        for _ in 0..3 {
+            cap = if limit >= 0x20 { map_xhci_bar0(slot, limit) } else { u64::MAX };
+            if cap != 0 && cap != u64::MAX { break; }
+            sys_yield();
+        }
+        if cap == 0 || cap == u64::MAX {
+            serial_println!("[sexusb.xhci.map.bad] reason=bar_zero_after_retry attempts=3 ok=0");
+            serial_println!("[usb.host.controller.none] map_va={:#x}", cap);
+            continue;
+        }
+        serial_println!("[usb.host.controller.found] slot={} bar=0 map_va={:#x}", slot, cap);
+        serial_println!("[sexusb.xhci.map.ok]");
+        let share = if n == 0 { None } else {
+            match pool.as_mut().map(|p| p.split(EXTRA_CONTROLLER_DMA)) {
+                Some(Ok(p)) => Some(p),
+                _ => { serial_println!("[sexusb.controller.skip] slot={} reason=dma", slot); continue; }
+            }
+        };
+        let Some(own) = share.or_else(|| pool.take()) else { continue };
+        match xhci::Xhci::start(cap, limit, own) {
+            Ok(x) => {
+                if count > 1 { serial_println!("[sexusb.controller] slot={} ports={} ok=1", slot, x.ports); }
+                started[n] = Some(x);
+            }
+            Err(e) => serial_println!("[sexusb.xhci.start.fail] reason={:?}", e),
+        }
+    }
+    // The first controller (SLOT_USB_HOST) is controller 0.
+    let Some(first) = started.iter_mut().find_map(|s| s.take()) else { park() };
+    let usb = unsafe {
+        *core::ptr::addr_of_mut!(USB) = Some(usb::Usb::new(first));
+        (*core::ptr::addr_of_mut!(USB)).as_mut().unwrap()
+    };
+    for x in started.iter_mut().filter_map(|s| s.take()) { let _ = usb.add_controller(x); }
+    usb
+}
+
+static mut STARTED: [Option<xhci::Xhci>; usb::MAX_CTL] = [None, None, None, None];
+
 
 /// DMA each extra controller gets: its rings and scratchpad, plus pages for the devices on it.
 const EXTRA_CONTROLLER_DMA: u64 = 1024 * 1024;
