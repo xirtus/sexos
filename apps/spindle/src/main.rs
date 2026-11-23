@@ -2430,7 +2430,12 @@ fn history_event(event:history_persistence::Event,sb:&mut Scrollback){
  use history_persistence::Outcome;
  let kind=match event.outcome{Outcome::Saved=>"saved",Outcome::Loaded=>"loaded",Outcome::Missing=>"missing",Outcome::Conflict=>"conflict",Outcome::Failed=>"failed",Outcome::Uncertain=>"uncertain",Outcome::Aborted=>"aborted"};
  sex_pdx::serial_record!("[spindle.history.receipt] target={} task={} kind={} handle={} bytes={} count={} hash={:#x} error={}",instance_pd(),INSTANCE_TASK.load(core::sync::atomic::Ordering::Acquire),kind,event.handle,event.bytes,event.count,event.hash,event.error);
- match event.outcome{Outcome::Saved=>sb.push(b"History saved: own handle closed."),Outcome::Loaded=>sb.push(b"History loaded: validated snapshot."),Outcome::Missing=>{},Outcome::Conflict=>sb.push(b"Load skipped: newer local history."),Outcome::Failed=>sb.push(b"History I/O failed; no success receipt."),Outcome::Uncertain=>sb.push(b"History uncertain: receipt timed out."),Outcome::Aborted=>sb.push(b"History session closed; commit may remain.")}
+ match event.outcome{Outcome::Saved=>sb.push(b"History saved: own handle closed."),Outcome::Loaded=>sb.push(b"History loaded: validated snapshot."),Outcome::Missing=>{},Outcome::Conflict=>sb.push(b"Load skipped: newer local history."),Outcome::Failed=>{
+  // Once per run: a live boot has nowhere to save history, and the line after every
+  // command buried the command's own answer (the x17 R1).
+  static SHOWN:core::sync::atomic::AtomicBool=core::sync::atomic::AtomicBool::new(false);
+  if !SHOWN.swap(true,core::sync::atomic::Ordering::Relaxed){sb.push(b"History I/O failed; history is not saved this run.")}
+ },Outcome::Uncertain=>sb.push(b"History uncertain: receipt timed out."),Outcome::Aborted=>sb.push(b"History session closed; commit may remain.")}
 }
 
 // ── Entry ──────────────────────────────────────────────────────────────────
