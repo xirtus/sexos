@@ -8,7 +8,7 @@ The x17's first start reached the desktop with no keyboard, mouse or USB keyboar
   `tether listen` by itself.
 - **`tether listen [PORT]`**: listener on flow 2, the accepted connection on flow 1; a dropped
   session goes back to listening. Host: `tether_host.py connect HOST|--scan`.
-- **Kernel**: the boot log head kept is 1 MiB (was 256 KiB). i8042 init waits on the
+- **Kernel**: the boot log head kept is 512 KiB (was 256 KiB). i8042 init waits on the
   controller's status bits, flushes stale bytes, takes the 0xF4 ACK, logs `[kernel.ps2]`; a
   key byte whose IRQ1 never came is read by the input ring's reader (`keyboard::take_pending`,
   `[kernel.ps2.polled]`).

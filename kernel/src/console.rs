@@ -66,7 +66,7 @@ pub fn log_tail(out: &mut [u8]) -> usize {
 /// The first HEAD_BYTES logged, kept whole: the start is where a PC with no serial port
 /// says what hardware it found (devices, disks, Wi-Fi), and the ring above has long
 /// moved past it by the time anyone asks. Spindle's `hw` reads it.
-const HEAD_BYTES: usize = 1024 * 1024;
+const HEAD_BYTES: usize = 512 * 1024;
 struct Head { bytes: [u8; HEAD_BYTES], len: usize }
 static HEAD: Mutex<Head> = Mutex::new(Head { bytes: [0; HEAD_BYTES], len: 0 });
 

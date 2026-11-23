@@ -13,4 +13,4 @@
 - Memory is spent only where a service actually goes, so small and large machines boot
   the same services. Program slots are not registered (their stacks are in their arenas).
   Pages a run grew stay across a service restart (the run starts again at the same top).
-- The per-service static stacks (SexACPI's AML stack, SexNet's 512 KiB stack) stay.
+- SexNet's own 512 KiB static stack (from earlier in this PR) is gone: it now grows like the rest. SexACPI's AML stack stays.

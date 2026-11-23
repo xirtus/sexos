@@ -2,7 +2,7 @@
 //! `hw`: the hardware report on screen. A laptop like the Alienware x17 R1 has no
 //! serial port, and the boot log on screen ends when Display takes the framebuffer,
 //! before the disk, Wi-Fi and sound drivers have said what they found. The kernel keeps
-//! the boot log's first 1 MiB (`crash_log::OP_LOG_HEAD`); this picks out the lines
+//! the boot log's first 512 KiB (`crash_log::OP_LOG_HEAD`); this picks out the lines
 //! about hardware, so one photo of Spindle is the hardware report.
 //!
 //! `hw` shows the hardware lines; `hw all` shows the newest lines of the whole head;

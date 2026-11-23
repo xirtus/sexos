@@ -9,7 +9,7 @@
   port changes, hubs, transfers, sticks, network, Bluetooth, sound and sleep all select
   the device's controller first. A controller that fails to start no longer stops the
   rest. Each extra controller gets 1 MiB of the DMA region (`DmaRegionPool::split`); the
-  USB DMA grant grew from 2 to 4 MiB. New records: `[sexusb.controller.extra]`,
+  USB DMA grant grows by 1 MiB per extra xHCI (2 MiB with one, at most 4). New records: `[sexusb.controller.extra]`,
   `[sexusb.controller]`, `[sexusb.controllers]`, `[sexusb.controller.scan]`.
 - **xHCI lease wakes the controller**: D3hot to D0 and memory/bus master on
   (`[kernel.pci.xhci.power]`), as NVMe already did; firmware may leave the controller

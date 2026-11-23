@@ -155,6 +155,10 @@ fn nvme_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64
     true
 }
 
+/// xHCIs leased to SexUSB at BOOT (its DMA grant grows by 1 MiB for each extra one).
+static XHCI_LEASES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+pub fn xhci_leases() -> u32 { XHCI_LEASES.load(core::sync::atomic::Ordering::Relaxed) }
+
 fn xhci_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64) -> bool {
     let irq_line = (dev.read_u32(0x3C) & 0xFF) as u8;
     // Firmware may leave a controller it does not boot from (Tiger Lake's Type-C xHCI)
@@ -173,6 +177,7 @@ fn xhci_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64
         virtio: None, class: 0, window: (0, 0),
     }));
     pd.grant(CapabilityData::Interrupt(InterruptCapData { irq: irq_line }));
+    XHCI_LEASES.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     serial_println!("DevMgr: Leased XHCI to pd={} slot={}", pd.id, slot);
     true
 }
