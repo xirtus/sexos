@@ -5,3 +5,5 @@
   64 KiB lost a Wi-Fi join's lines within seconds and `hw wifi.join` showed nothing.
 - No ABI shape change (constant only); spec/abi_inputs.sha256 and the crash_log.rs
   observer pin in scripts/check_self_wait.py updated.
+- Spindle `hw` no longer echoes each shown line to the log as `[spindle.hw.line]`: every
+  `hw` refilled the ring with copies (the x17 photos showed only echoes, no join lines).

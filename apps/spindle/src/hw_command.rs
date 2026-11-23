@@ -98,8 +98,8 @@ pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
     let _ = walk(|line| {
         if index >= skip {
             let n = line.len().min(LINE);
+            // Not echoed to the log: each `hw` would refill the log ring it reads with copies.
             sb.push(&line[..n]);
-            serial_println!("[spindle.hw.line] {}", core::str::from_utf8(&line[..n]).unwrap_or("?"));
         }
         index += 1;
     }, pick);
