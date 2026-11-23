@@ -86,16 +86,31 @@ pub fn init() {
 /// A key byte the controller holds that no IRQ1 brought (the edge was lost, or IRQ1 is
 /// not routed on this machine). The input ring's reader calls this when the ring is
 /// empty, so a keyboard whose interrupt never arrives still types, at the reader's pace.
+/// A byte is taken only once it has waited `STUCK_TICKS` with no IRQ1 taking it: where
+/// IRQ1 works it always wins, and the poller never races its handler for port 0x60
+/// (a racing pair reads one byte twice and doubles or breaks key sequences).
 pub fn take_pending() -> Option<u8> {
     if !KEYBOARD_READY.load(Ordering::Acquire) { return None; }
     let s = status();
-    if s == 0xFF || s & OUTPUT_FULL == 0 || s & AUX_DATA != 0 { return None; }
+    if s == 0xFF || s & OUTPUT_FULL == 0 || s & AUX_DATA != 0 {
+        PENDING_SINCE.store(0, Ordering::Relaxed);
+        return None;
+    }
+    let now = crate::interrupts::TICKS.load(Ordering::Relaxed).max(1);
+    let since = PENDING_SINCE.load(Ordering::Relaxed);
+    if since == 0 { PENDING_SINCE.store(now, Ordering::Relaxed); return None; }
+    if now.saturating_sub(since) < STUCK_TICKS { return None; }
+    PENDING_SINCE.store(0, Ordering::Relaxed);
     let byte = unsafe { Port::<u8>::new(0x60).read() };
     let n = POLLED.fetch_add(1, Ordering::Relaxed) + 1;
     if n <= 4 || n.is_power_of_two() { crate::serial_println!("[kernel.ps2.polled] n={}", n); }
     Some(byte)
 }
 static POLLED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// When the poller first saw the byte now waiting (TICKS, 0 = none waiting).
+static PENDING_SINCE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+/// Milliseconds a byte waits for IRQ1 before the poller takes it.
+const STUCK_TICKS: u64 = 30;
 
 /// Returns true if the PS/2 keyboard was successfully probed and initialized.
 pub fn is_keyboard_ready() -> bool {
@@ -112,6 +127,7 @@ pub fn read_scancode() -> Option<u8> {
     if status() & OUTPUT_FULL == 0 {
         return None;
     }
+    PENDING_SINCE.store(0, Ordering::Relaxed);
     let mut port: Port<u8> = Port::new(0x60);
     Some(unsafe { port.read() })
 }

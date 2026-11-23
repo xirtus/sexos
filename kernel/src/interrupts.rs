@@ -948,7 +948,9 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
             // IRQ1 edges), and a missing EOI leaves vector 0x21 in-service.
             // Either alone kills all future IRQ1 delivery (root cause of
             // "QEMU sendkey no PS/2 IRQ1 delivery", 2026-07-02).
-            let _ = crate::keyboard::read_scancode_raw();
+            // With the keyboard up, None means the byte is already gone (the stuck-byte
+            // poller took it); reading the empty port then could swallow the next key.
+            if !crate::keyboard::is_keyboard_ready() { let _ = crate::keyboard::read_scancode_raw(); }
             unsafe { send_eoi(); }
             return;
         }
