@@ -747,6 +747,15 @@ pub extern "C" fn page_fault_handler(stack_frame: &mut InterruptStackFrame, erro
         crate::console::stop(format_args!("page fault in the kernel touching {:#x} at {:#x} (error {:#x})",
             fault_addr, fault_rip, error_code));
     }
+    // A service's stack grows on touch: a not-present user read or write in its stack
+    // reserve gets a zeroed page and runs again (`service_stack`).
+    if error_code & 0b1_0101 == 0b0_0100 {
+        match crate::service_stack::commit(crate::core_local::CoreLocal::get().current_pd_ref(), fault_addr) {
+            Some(true) => return,
+            Some(false) => { serial_println!("[service.stack.overflow] pd={} addr={:#x} rip={:#x}", cur_pd, fault_addr, fault_rip); }
+            None => {}
+        }
+    }
     // A fault inside a gate call is the callee's: the caller gets PEER_DIED.
     if unsafe { crate::gate::unwind(stack_frame, 14, error_code, fault_addr) } { return; }
     let recoverable = crate::scheduler::fault_transaction::eligible_user_fault(

@@ -72,6 +72,8 @@ pub(crate) fn validate_user_bytes(start: u64, len: usize, writable: bool) -> boo
                     // A program's stack is committed page by page on touch (#306): a buffer
                     // there the program has not touched yet is committed now, as a touch would.
                     if crate::app_resources::stack_fault(pd, va) == Some(true) { continue; }
+                    // A service's stack likewise (`service_stack`).
+                    if crate::service_stack::commit(pd, va) == Some(true) { continue; }
                     return false; // not present
                 }
                 if (pte & 0x4) == 0 {

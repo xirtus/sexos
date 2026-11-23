@@ -91,6 +91,9 @@ impl ElfLoader {
             )?;
         }
         boot_trace!("loader: Guard-page stack initialized at {:#x}", stack_top);
+        // Below the mapped top the stack grows on touch, down to its slot's guard page;
+        // program slots keep theirs in their arenas.
+        if !crate::app_resources::is_program_slot(pd_id) { crate::service_stack::register(pd_id, stack_top); }
 
         crate::app_resources::capture_boot_image(pd_id,pku_key,elf_data,code_base,stack_top)?;
 

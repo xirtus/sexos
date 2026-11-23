@@ -28,7 +28,7 @@ pub const TAGS: &[&[u8]] = &[
     b"[sexdrive.nvme.reprovision.err]", b"[sexdrive.nvme.irq", b"[device.irq.", b"[sexdrive.nvme2.", b"[sexdrive.raid.serve]",
     b"[sexdrive.disk.", b"[sexdrive.ahci.", b"[wifi.chip", b"[wifi.firmware]", b"[wifi.alive]", b"[wifi.ready]",
     b"[wifi.failed]", b"[wifi.lease.bad]", b"[wifi.link.up]", b"[bell.hda.ready]", b"[bell.hda.codec]",
-    b"[sexnet.", b"[net.dhcp.lease]", b"[paging.fault", b"fault.kill", b"[service.restarted]", b"[usb.host.controller.found]", b"[sexusb.device]",
+    b"[sexnet.", b"[net.dhcp.lease]", b"[paging.fault", b"fault.kill", b"[service.restarted]", b"[service.stack.", b"[usb.host.controller.found]", b"[sexusb.device]",
     b"[sexusb.device.refused]", b"[sexusb.device.fail]", b"[sexacpi.",
     b"[crash.record]", b"[files.fs.foreign]", b"[files.media.", b"[kernel.safe_start]",
     b"[kernel.ps2", b"[kernel.pci.xhci", b"[devmgr.lease", b"[shell.kbd", b"[ps2.", b"[sexinput.", b"[input.", b"[sexusb.", b"[usb.", b"[iommu.boot_options]", b"[spindle.autorun", b"[spindle.tether.",
