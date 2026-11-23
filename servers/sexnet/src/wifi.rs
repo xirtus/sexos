@@ -141,9 +141,17 @@ impl Wifi {
             Ok(v) if v.dma_address.is_none() && v.length >= 0x2000 => v,
             other => { sex_pdx::serial_record!("[wifi.lease.bad] product={:#06x} view={}", identity.product, other.is_ok() as u8); return None; }
         };
+        // Memory decoding and bus mastering first: firmware may leave them off (the x17
+        // R1 does), and then every register reads all ones: a wrong hw_rev and rf_id,
+        // and a firmware start that fails at once.
+        match sex_pdx::device_command(c::SLOT_WIFI, c::NIC_BITS as u64, 0) {
+            Ok(r) if r.after & c::NIC_BITS == c::NIC_BITS => {}
+            other => { sex_pdx::serial_record!("[wifi.failed] step=command ok={}", other.is_ok() as u8); return None; }
+        }
         let mut mmio = Mmio { base: bar.virtual_address, length: bar.length };
         use csr::Registers;
-        let hw_rev = devices::normalize_hw_rev(mmio.read(csr::HW_REV));
+        let raw_rev = mmio.read(csr::HW_REV);
+        let hw_rev = if raw_rev == u32::MAX { u32::MAX } else { devices::normalize_hw_rev(raw_rev) };
         let rf_id = mmio.read(csr::HW_RF_ID);
         sex_pdx::serial_record!("[wifi.chip] vendor={:#06x} device={:#06x} subsystem={:04x}:{:04x} hw_rev={:#x} rf_id={:#x} bar_bytes={}",
             identity.vendor, identity.product, sub_vendor, sub_device, hw_rev, rf_id, bar.length);
@@ -189,10 +197,6 @@ impl Wifi {
             Ok(b) => b,
             Err(e) => { sex_pdx::serial_record!("[wifi.failed] step=layout reason={:?} pool={}", e, dma.length); return None; }
         };
-        match sex_pdx::device_command(c::SLOT_WIFI, c::NIC_BITS as u64, 0) {
-            Ok(r) if r.after & c::NIC_BITS == c::NIC_BITS => {}
-            other => { sex_pdx::serial_record!("[wifi.failed] step=command ok={}", other.is_ok() as u8); return None; }
-        }
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
         Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, link: None, rx: RxQueue::EMPTY, finished: false,

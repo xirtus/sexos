@@ -273,8 +273,9 @@ fn class_lease(dev: &crate::hal::pci::PciDevice, kind: crate::device_lease::Kind
     let Some((view, window)) = crate::boot_memory::class_bar(pd, dev, slot, kind) else {
         serial_println!("[kernel.cap.class.skip] kind={:?} reason=invalid_bar bar={}", kind, kind.bar()); return false;
     };
-    if kind == crate::device_lease::Kind::SerialIo && crate::device_lease::wake_d0(dev) {
-        serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind=SerialIo", dev.bus, dev.dev, dev.func);
+    // Firmware may leave a part it does not use in D3hot (its registers read all ones).
+    if matches!(kind, crate::device_lease::Kind::SerialIo | crate::device_lease::Kind::Wifi) && crate::device_lease::wake_d0(dev) {
+        serial_println!("[kernel.pci.class.d0] {:02x}:{:02x}.{} kind={:?}", dev.bus, dev.dev, dev.func, kind);
     }
     if kind == crate::device_lease::Kind::Thunderbolt {
         let ready = crate::device_lease::force_power(dev);
