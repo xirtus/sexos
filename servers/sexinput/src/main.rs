@@ -13,6 +13,15 @@ fn panic(_info: &PanicInfo) -> ! {
 
 // ── Pointer state for HID report normalizer ──
 static mut LAST_BUTTONS: u8 = 0;
+/// USB pointer reports seen. Each one used to write about a dozen serial lines, a
+/// syscall each: on real hardware a moving mouse spent its time logging and lagged.
+static MOUSE_REPORTS: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+/// The first 64 reports are logged in full (gates and boot reports read them), then one
+/// in 1024.
+fn mouse_verbose() -> bool {
+    let n = MOUSE_REPORTS.load(core::sync::atomic::Ordering::Relaxed);
+    n <= 64 || n % 1024 == 0
+}
 // Tracks the USB HID keycode from the previous keyboard report for press/release detection.
 static mut LAST_USB_KEY: u64 = 0;
 static mut LAST_USB_MODIFIERS: u8 = 0;
@@ -236,9 +245,11 @@ impl PointerOutbox {
                     batch.words[batch.next]=(0,0,0);batch.next+=1;self.stalled=0;
                     if batch.next==batch.len {
                         // Existing liveness receipts now follow the whole actual admission.
-                        sex_pdx::serial_record!("[usb.hid.pointer.emit] op=OP_HID_EVENT buttons={} dx={} dy={} ok=1",self.sent_buttons,batch.dx,batch.dy);
-                        sex_pdx::serial_record!("[usb.hid.pointer.pass] ok=1");
-                        sex_pdx::serial_record!("[sexinput.usb_mouse.shell_send.ok]");
+                        if mouse_verbose() {
+                            sex_pdx::serial_record!("[usb.hid.pointer.emit] op=OP_HID_EVENT buttons={} dx={} dy={} ok=1",self.sent_buttons,batch.dx,batch.dy);
+                            sex_pdx::serial_record!("[usb.hid.pointer.pass] ok=1");
+                            sex_pdx::serial_record!("[sexinput.usb_mouse.shell_send.ok]");
+                        }
                         *batch=PointerBatch::new();self.head=(self.head+1)%self.batches.len();self.len-=1;
                     }
                 }
@@ -628,7 +639,8 @@ pub extern "C" fn _start() -> ! {
                 else { sex_pdx::serial_record!("[sexinput.touchpad.reject] caller={} reason=sender", req.caller_pd); }
                 break 'input_message;
             }
-            serial_println!("[sexinput.usb_mouse.recv] type={:#x}", req.type_id);
+            MOUSE_REPORTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            if mouse_verbose() { serial_println!("[sexinput.usb_mouse.recv] type={:#x}", req.type_id); }
             if (req.type_id == OP_USB_MOUSE_REPORT || req.type_id == OP_USB_KEYBOARD_REPORT)
                 && !usb_report_sender(&req) {
                 sex_pdx::serial_record!("[sexinput.usb.reject] caller={} task={} reason=sender",
@@ -742,27 +754,27 @@ pub extern "C" fn _start() -> ! {
                 } else {
                     "relative"
                 };
-                serial_println!(
+                if mouse_verbose() { serial_println!(
                     "[sexinput.usb_mouse.decode.ok] buttons={:#x} dx={} dy={} wheel={} is_abs={}",
                     buttons,
                     dx,
                     dy,
                     wheel,
                     is_abs
-                );
-                serial_println!(
+                ); }
+                if mouse_verbose() { serial_println!(
                     "[usb.hid.pointer.normalized] buttons={} dx={} dy={} kind={} ok=1",
                     buttons,
                     dx,
                     dy,
                     kind
-                );
-                serial_println!(
+                ); }
+                if mouse_verbose() { serial_println!(
                     "[input.hid.pointer.recv] source=usb buttons={} dx={} dy={} ok=1",
                     buttons,
                     dx,
                     dy
-                );
+                ); }
                 unsafe {
                     static mut POINTER_MODE_BUDGET_PACKED: u32 = 64;
                     if POINTER_MODE_BUDGET_PACKED > 0 {
@@ -790,7 +802,7 @@ pub extern "C" fn _start() -> ! {
                         }
                     }
                 }
-                serial_println!("[sexinput.usb_mouse.normalize.start]");
+                if mouse_verbose() { serial_println!("[sexinput.usb_mouse.normalize.start]"); }
                 let report = HidPointerRawReport {
                     dx,
                     dy,
@@ -811,7 +823,7 @@ pub extern "C" fn _start() -> ! {
                         }
                     },
                 );
-                serial_println!("[sexinput.usb_mouse.normalize.ok]");
+                if mouse_verbose() { serial_println!("[sexinput.usb_mouse.normalize.ok]"); }
 
                 // AP13: one-shot normalizer output proof markers
                 unsafe {
