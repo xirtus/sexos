@@ -226,6 +226,7 @@ impl Usb {
         let slot = self.dev[a.dev].slot;
         let dci = a.out_dci;
         self.ether = Some(a);
+        self.select(self.dev[a.dev].ctl);
         if moved { self.x.doorbell(slot, dci); }
         moved
     }

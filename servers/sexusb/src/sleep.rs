@@ -38,8 +38,10 @@ impl Usb {
         let mut n = 0;
         for i in 0..MAX_DEVICES {
             if !self.may_suspend(i) { continue; }
+            self.select(self.dev[i].ctl);
+            let c = self.ctl as usize;
             let port = self.dev[i].root_port;
-            if port == 0 || port > 63 || self.suspended & (1 << port) != 0 { continue; }
+            if port == 0 || port > 63 || self.suspended[c] & (1 << port) != 0 { continue; }
             if self.x.portsc(port) & 2 == 0 { continue; }
             let st = self.dev[i].storage;
             let flushed = !st.active || self.scsi(i, &[0x35, 0, 0, 0, 0, 0, 0, 0, 0, 0], false, 0).is_ok();
@@ -50,8 +52,9 @@ impl Usb {
                     let _ = self.x.command(0, 0, 0, (trb::STOP_ENDPOINT << 10) | (dci << 16) | (slot << 24) | SUSPEND_FLAG);
                 }
             }
+            self.select(c as u8);
             let ok = self.x.set_link(port, U3);
-            if ok { self.suspended |= 1 << port; n += 1; }
+            if ok { self.suspended[c] |= 1 << port; n += 1; }
             log!("[sexusb.suspend] port={} slot={} id={:04x}:{:04x} storage={} flushed={} ok={}",
                 port, slot, self.dev[i].vendor, self.dev[i].product, st.active as u8, flushed as u8, ok as u8);
         }
@@ -61,9 +64,11 @@ impl Usb {
     /// Resume every port suspended for sleep.
     pub fn resume_all(&mut self) -> u32 {
         let mut n = 0;
-        while self.suspended != 0 {
-            let port = self.suspended.trailing_zeros();
-            self.suspended &= !(1 << port);
+        for c in 0..self.controllers {
+        self.select(c);
+        while self.suspended[c as usize] != 0 {
+            let port = self.suspended[c as usize].trailing_zeros();
+            self.suspended[c as usize] &= !(1 << port);
             let s = self.x.portsc(port);
             // Unplugged while asleep: the change event detaches it as usual.
             if s & 1 == 0 { continue; }
@@ -74,6 +79,7 @@ impl Usb {
             let ok = self.x.set_link(port, U0);
             if ok { n += 1; }
             log!("[sexusb.resume] port={} ok={}", port, ok as u8);
+        }
         }
         n
     }

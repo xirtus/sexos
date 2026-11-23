@@ -195,8 +195,10 @@ pub unsafe fn map_irq(irq: u8, vector: u8, dest_lapic_id: u8, physical_memory_of
     let io_apics = IO_APICS.lock();
     
     // Find the correct I/O APIC based on the Global System Interrupt (GSI) base
-    // For simplicity, we assume IRQ maps 1:1 to GSI
-    let gsi = irq as u32;
+    // An ISA IRQ (0-15) sits on the GSI a MADT source override names, else on its own number.
+    let gsi = if irq < 16 {
+        ISO_OVERRIDES.lock().iter().flatten().find(|o| o.isa_source == irq).map_or(irq as u32, |o| o.gsi)
+    } else { irq as u32 };
     let io_apic = io_apics.iter()
         .find(|io| gsi >= io.global_system_interrupt_base && gsi < io.global_system_interrupt_base + 24)
         .or_else(|| io_apics.first()) // Fallback to first

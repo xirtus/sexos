@@ -157,6 +157,12 @@ fn nvme_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64
 
 fn xhci_lease(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64) -> bool {
     let irq_line = (dev.read_u32(0x3C) & 0xFF) as u8;
+    // Firmware may leave a controller it does not boot from (Tiger Lake's Type-C xHCI)
+    // in D3hot or with memory decoding off; its registers then read all ones.
+    let woke = crate::device_lease::wake_d0(dev);
+    let command = dev.read_u32(0x04);
+    dev.write_u32(0x04, (command & 0xFFFF) | 0x0006);
+    serial_println!("[kernel.pci.xhci.power] {:02x}:{:02x}.{} woke_d0={} command={:#06x}", dev.bus, dev.dev, dev.func, woke as u8, command & 0xFFFF);
     serial_println!("DevMgr: Discovered USB XHCI ({:02x}:{:02x}.{}) vendor={:04x} device={:04x} bar0={:#x} irq_line={:#x}",
         dev.bus, dev.dev, dev.func, dev.vendor_id, dev.device_id, dev.get_bar(0), irq_line);
     // Strict lease boundary: one xHCI PCI capability per driver slot.

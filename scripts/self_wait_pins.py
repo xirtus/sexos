@@ -210,6 +210,8 @@ PINS = (
 
     ('timed', 'servers/sexusb/src/main.rs', '29fbd1f1d8d3cef6b20bb8920959aa1984650f57483afe0f20e787314c26576b'),  # USB audio merged with Thunderbolt (Qupid #392), 2026-11-20
 
+    ('timed', 'servers/sexusb/src/main.rs', '8eddb5e58f4e89062176240fb1f4e9ad71cd9352273b0818db3260fee6c19cbb'),  # every leased xHCI driven (x17 chipset + Type-C), one quiet wait over all, 2026-11-23
+
     ('tree', '', '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5'),  # master after #407 + #408 + #422 combined, 2026-11-18
 
     ('tree', '', 'dd0b57a2633e5dcf5bbfe653d883f3172ff44976bbb5d670af8b114a8d2c6fb2'),  # XSAVE + AVX (stream 5), 2026-11-18

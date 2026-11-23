@@ -20,14 +20,14 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     loop { sys_yield(); }
 }
 
-fn map_xhci_bar0(map_size: u64) -> u64 {
+fn map_xhci_bar0(slot: u64, map_size: u64) -> u64 {
     let map_va: u64;
     unsafe {
         // syscall 43 = MAP_PCI_BAR(cap_slot, bar_index, map_size)
         core::arch::asm!(
             "syscall",
             in("rax") 43u64,
-            in("rdi") SLOT_USB_HOST,
+            in("rdi") slot,
             in("rsi") 0u64,
             in("rdx") map_size,
             lateout("rax") map_va,
@@ -312,32 +312,67 @@ fn send_report_once(op: u64, arg0: u64, arg1: u64, arg2: u64) -> Result<bool, u6
 pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.init.start]");
     sex_pdx::serial_record!("[input.payload.mode] component=sexusb mode=redacted");
-    let limit = sex_pdx::memory_region_info(SLOT_USB_HOST).map(|info| info.length).unwrap_or(0).min(0x10000);
-    let mut cap = u64::MAX;
-    for _ in 0..3 {
-        cap = if limit >= 0x20 { map_xhci_bar0(limit) } else { u64::MAX };
-        if cap != 0 && cap != u64::MAX { break; }
-        sys_yield();
+    // Every xHCI this service holds: the first at SLOT_USB_HOST, more (a laptop's
+    // chipset and Type-C controllers) at extra slots. Each runs on its own, so one that
+    // fails to start leaves the others working.
+    let mut slots = [0u64; usb::MAX_CTL];
+    let mut count = 0usize;
+    slots[0] = SLOT_USB_HOST;
+    count += 1;
+    for lease in (0..sex_pdx::device::MAX_LEASES as u64).map_while(sex_pdx::device::list) {
+        if lease.class == 0x0c_03_30 && lease.slot != SLOT_USB_HOST && count < usb::MAX_CTL {
+            serial_println!("[sexusb.controller.extra] slot={} id={:04x}:{:04x} at={:02x}:{:02x}.{}", lease.slot, lease.vendor, lease.device, lease.bus, lease.dev, lease.func);
+            slots[count] = lease.slot;
+            count += 1;
+        }
     }
-    if cap == 0 || cap == u64::MAX {
-        serial_println!("[sexusb.xhci.map.bad] reason=bar_zero_after_retry attempts=3 ok=0");
-        serial_println!("[usb.host.controller.none] map_va={:#x}", cap);
-        park();
-    }
-    serial_println!("[usb.host.controller.found] slot={} bar=0 map_va={:#x}", SLOT_USB_HOST, cap);
-    serial_println!("[sexusb.xhci.map.ok]");
     // A zero-byte reservation is refused, but it builds the pool from the DMA region.
     let mut pool = None;
     let _ = reserve_dma(&mut pool, 0);
     let Some(pool) = pool else { serial_println!("[sexusb.memory.dma.bad]"); park(); };
-    let controller = match xhci::Xhci::start(cap, limit, pool) {
-        Ok(x) => x,
-        Err(e) => { serial_println!("[sexusb.xhci.start.fail] reason={:?}", e); park(); }
-    };
+    let mut pool = Some(pool);
+    let mut usb: Option<usb::Usb> = None;
+    // Extra controllers first, each with its own share of the DMA region; the first
+    // controller keeps the rest (it carries sticks, network and sound buffers too).
+    for n in (0..count).rev() {
+        let slot = slots[n];
+        let limit = sex_pdx::memory_region_info(slot).map(|info| info.length).unwrap_or(0).min(0x10000);
+        let mut cap = u64::MAX;
+        for _ in 0..3 {
+            cap = if limit >= 0x20 { map_xhci_bar0(slot, limit) } else { u64::MAX };
+            if cap != 0 && cap != u64::MAX { break; }
+            sys_yield();
+        }
+        if cap == 0 || cap == u64::MAX {
+            serial_println!("[sexusb.xhci.map.bad] reason=bar_zero_after_retry attempts=3 ok=0");
+            serial_println!("[usb.host.controller.none] map_va={:#x}", cap);
+            continue;
+        }
+        serial_println!("[usb.host.controller.found] slot={} bar=0 map_va={:#x}", slot, cap);
+        serial_println!("[sexusb.xhci.map.ok]");
+        let share = if n == 0 { None } else {
+            match pool.as_mut().map(|p| p.split(EXTRA_CONTROLLER_DMA)) {
+                Some(Ok(p)) => Some(p),
+                _ => { serial_println!("[sexusb.controller.skip] slot={} reason=dma", slot); continue; }
+            }
+        };
+        let Some(own) = share.or_else(|| pool.take()) else { continue };
+        match xhci::Xhci::start(cap, limit, own) {
+            Ok(x) => {
+                if count > 1 { serial_println!("[sexusb.controller] slot={} ports={} ok=1", slot, x.ports); }
+                match usb.as_mut() {
+                    None => usb = Some(usb::Usb::new(x)),
+                    Some(u) => { let _ = u.add_controller(x); }
+                }
+            }
+            Err(e) => serial_println!("[sexusb.xhci.start.fail] reason={:?}", e),
+        }
+    }
+    let Some(mut usb) = usb else { park() };
+    if count > 1 { serial_println!("[sexusb.controllers] held={} running={}", count, usb.controllers); }
     serial_println!("[sexusb.ready]");
     // The first report to Input is the first real one: a report sent here could reach
     // Input before it is ready (the boot order check counts that as a failure).
-    let mut usb = usb::Usb::new(controller);
     // USB network adapters: frames to and from SexNet through this region (sex_pdx::usb_net).
     let net_view = sex_pdx::memory_region_full_view(sex_pdx::usb_net::SLOT, sex_pdx::memory_region::QUERY_VIEW | sex_pdx::memory_region::READ | sex_pdx::memory_region::WRITE).ok()
         .filter(|v| v.length >= sex_pdx::usb_net::BYTES && v.virtual_address != 0);
@@ -363,7 +398,7 @@ pub extern "C" fn _start() -> ! {
         }
     }
     serial_println!("[sexusb.audio.route] region={}", (usb.audio_region != 0) as u8);
-    let ports = usb.x.ports;
+    let ports = usb.ports();
     let (connected, first) = usb.scan();
     if connected == 0 {
         serial_println!("[sexusb.discovery.summary] ports={} connected=0 first=none ok=1", ports);
@@ -371,7 +406,7 @@ pub extern "C" fn _start() -> ! {
         serial_println!("[sexusb.discovery.summary] ports={} connected={} first={} ok=1", ports, connected, first);
         // Devices behind hubs found at start count too.
         for _ in 0..8 {
-            while let Some(e) = usb.x.event() { usb.event(e); }
+            while usb.drain_events(64) {}
             usb.service();
         }
         let s = usb.summary();
@@ -385,13 +420,16 @@ pub extern "C" fn _start() -> ! {
     serial_println!("[sexusb.disks.route] files={} region={} ok={}", files, (region != 0) as u8, (files != 0 && region != 0) as u8);
     // With the controller's MSI/MSI-X vector unmasked, an event wakes this task, so an
     // idle controller costs no polling. Without one, poll every tick as before.
-    let irq = match sex_pdx::device::at_slot(SLOT_USB_HOST).filter(|l| l.vectors > 0) {
-        Some(lease) => match sex_pdx::device::irq_unmask(SLOT_USB_HOST, 0) {
-            Ok(()) => { serial_println!("[sexusb.irq] mode={} vectors={} polling=0", lease.mode.name(), lease.vectors); true }
-            Err(e) => { serial_println!("[sexusb.irq] mode={} unmask_error={:#x} polling=1", lease.mode.name(), e); false }
-        },
-        None => { serial_println!("[sexusb.irq] mode=none polling=1"); false }
-    };
+    let mut irq = true;
+    for &slot in &slots[..count] {
+        irq &= match sex_pdx::device::at_slot(slot).filter(|l| l.vectors > 0) {
+            Some(lease) => match sex_pdx::device::irq_unmask(slot, 0) {
+                Ok(()) => { serial_println!("[sexusb.irq] mode={} vectors={} polling=0", lease.mode.name(), lease.vectors); true }
+                Err(e) => { serial_println!("[sexusb.irq] mode={} unmask_error={:#x} polling=1", lease.mode.name(), e); false }
+            },
+            None => { serial_println!("[sexusb.irq] mode=none polling=1"); false }
+        };
+    }
     // Thunderbolt 4 / USB4: the firmware connection manager on Intel's NHI, if leased.
     let mut bolt = thunderbolt::Thunderbolt::open();
     serial_println!("[sexusb.thunderbolt] nhi={}", bolt.is_some() as u8);
@@ -399,11 +437,7 @@ pub extern "C" fn _start() -> ! {
         if irq { let _ = sex_pdx::device::irq_take(); }
         let mut busy = false;
         if let Some(b) = bolt.as_mut() { busy |= b.poll(); }
-        for _ in 0..64 {
-            let Some(e) = usb.x.event() else { break };
-            usb.event(e);
-            busy = true;
-        }
+        busy |= usb.drain_events(64);
         usb.service();
         busy |= usb.ether_pump();
         busy |= usb.bt_pump();
@@ -459,5 +493,8 @@ fn reserve_dma(pool: &mut Option<sex_pdx::dma_pool::DmaRegionPool>, bytes: u64) 
         Err(_) => (u64::MAX, u64::MAX),
     }
 }
+
+/// DMA each extra controller gets: its rings and scratchpad, plus pages for the devices on it.
+const EXTRA_CONTROLLER_DMA: u64 = 1024 * 1024;
 
 fn park() -> ! { loop { let _ = sex_pdx::sys_wait_self_ticks(100); } }
