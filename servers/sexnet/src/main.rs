@@ -15,6 +15,7 @@ static mut DNS_RX:[u8;sex_net::DNS_BYTES]=[0;sex_net::DNS_BYTES];
 static mut DNS_TX:[u8;sex_net::DNS_BYTES]=[0;sex_net::DNS_BYTES];
 static mut DNS_RX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
 static mut DNS_TX_META:[sex_net::DnsMetadata;1]=[sex_net::DnsMetadata::EMPTY];
+mod big_stack;
 mod nic;
 mod ethernet;
 mod link;
@@ -949,8 +950,8 @@ fn command_probe() {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn _start() -> ! {
+/// The service body, on `big_stack`'s stack (see there).
+pub(crate) fn net_main() -> ! {
     sex_rt::heap_init();
     let mut restriction=sex_pdx::restricted_helper_provider::Provider::new();
     restriction.initialize(&restricted::JOURNAL,&mut restricted::Kernel);
