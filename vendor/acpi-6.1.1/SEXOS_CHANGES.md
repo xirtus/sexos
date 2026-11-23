@@ -23,3 +23,12 @@
   buffer itself rather than the argument slot (reading it panicked). Every WMI method that
   takes its input buffer apart with `CreateByteField` needs both, e.g. Alienware's `WMAX`.
 - Removed the upstream `Cargo.lock` and `.cargo_vcs_info.json`.
+- `aml/mod.rs`: field lists accept `AccessAs` (changes the access type of the fields
+  after it), `Connection (...)` (skipped: a resource template or its name) and extended
+  `AccessAs`. Upstream hit `todo!()` on all three, which killed the whole AML namespace
+  on the Alienware x17 R1 (its DSDT declares GPIO/I2C fields with them): no touchpad,
+  battery, lid or brightness.
+- `aml/mod.rs`: every remaining `todo!()` (CopyObject, Match, Load, LoadTable, some
+  reference and store forms) returns `AmlError::LibUnimplemented` instead of panicking.
+  In `sexacpi` a panic sets all AML aside for the boot; an error fails only the method or
+  table that used the construct.

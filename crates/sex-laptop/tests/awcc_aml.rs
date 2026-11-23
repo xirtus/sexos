@@ -154,3 +154,16 @@ fn dell_charge_modes_end_to_end() {
     assert!(d::set_mode(&mut fw, &tokens, Mode::Adaptive, None));
     assert_eq!(d::charge(&mut fw, &tokens).mode, Some(Mode::Adaptive));
 }
+
+/// AccessAs, Connection and extended AccessAs in field lists (GPIO and I2C fields in
+/// laptop DSDTs): the table loads, and what follows the fields still runs.
+#[test]
+fn field_lists_with_connections_load() {
+    let aml = interpreter();
+    let fields: &'static [u8] = include_bytes!("fixtures/fields_ssdt.aml");
+    aml.load_table(&fields[36..]).unwrap();
+    assert_eq!(as_int(eval(&aml, "\\CHK", vec![])), 0x2B);
+    for name in ["\\_SB.GPO1", "\\_SB.SMB1", "\\_SB.RPB0"] {
+        assert!(aml.namespace.lock().get(AmlName::from_str(name).unwrap()).is_ok(), "{name}");
+    }
+}

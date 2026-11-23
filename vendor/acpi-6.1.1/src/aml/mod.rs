@@ -960,7 +960,7 @@ where
                             // XXX: 15 is reserved
                             ObjectType::Debug => 16,
                             ObjectType::Reference => panic!(),
-                            ObjectType::RawDataBuffer => todo!(),
+                            ObjectType::RawDataBuffer => return Err(AmlError::LibUnimplemented),
                         };
 
                         context.contribute_arg(Argument::Object(Object::Integer(typ).wrap()));
@@ -1290,8 +1290,8 @@ where
                     let name = name.resolve(&context.current_scope)?;
                     self.namespace.lock().insert(name, Object::Event(Arc::new(AtomicU64::new(0))).wrap())?;
                 }
-                Opcode::LoadTable => todo!(),
-                Opcode::Load => todo!(),
+                Opcode::LoadTable => return Err(AmlError::LibUnimplemented),
+                Opcode::Load => return Err(AmlError::LibUnimplemented),
                 Opcode::Stall => context.start(OpInFlight::new(Opcode::Stall, &[ResolveBehaviour::TermArg])),
                 Opcode::Sleep => context.start(OpInFlight::new(Opcode::Sleep, &[ResolveBehaviour::TermArg])),
                 Opcode::Acquire => context.start(OpInFlight::new(opcode, &[ResolveBehaviour::SuperName])),
@@ -1639,7 +1639,7 @@ where
                  * internal in-flight ops to parse the static bytedatas as we go, and then retire
                  * the real op at the end.
                  */
-                Opcode::Match => todo!(),
+                Opcode::Match => return Err(AmlError::LibUnimplemented),
 
                 Opcode::CreateBitField
                 | Opcode::CreateByteField
@@ -1673,7 +1673,7 @@ where
                 )),
 
                 Opcode::ObjectType => context.start(OpInFlight::new(opcode, &[ResolveBehaviour::SuperName])),
-                Opcode::CopyObject => todo!(),
+                Opcode::CopyObject => return Err(AmlError::LibUnimplemented),
                 Opcode::Mid => context.start(OpInFlight::new(
                     Opcode::Mid,
                     &[
@@ -1754,7 +1754,7 @@ where
         kind: FieldUnitKind,
         start_pc: usize,
         pkg_length: usize,
-        flags: u8,
+        mut flags: u8,
     ) -> Result<(), AmlError> {
         const RESERVED_FIELD: u8 = 0x00;
         const ACCESS_FIELD: u8 = 0x01;
@@ -1775,17 +1775,28 @@ where
                      * elements. They change the access type and attributes for remaining fields in
                      * the list.
                      */
-                    let _access_type = context.next()?;
+                    let access_type = context.next()?;
                     let _access_attrib = context.next()?;
-                    todo!()
+                    flags = (flags & !0x0f) | (access_type & 0x0f);
                 }
                 CONNECT_FIELD => {
-                    // TODO: either consume a namestring or `BufferData` (it's not
-                    // clear what a buffer data acc is lmao)
-                    todo!("Connect field :(");
+                    // `Connection (...)`: a resource template (DefBuffer) or a name of one,
+                    // naming the GPIO pin or serial bus the following fields use. Fields are
+                    // read here only through ordinary regions, so it is skipped.
+                    if context.peek()? == 0x11 {
+                        context.next()?;
+                        let start = context.current_block.pc;
+                        let length = context.pkglength()?;
+                        context.current_block.pc = start + length;
+                    } else {
+                        context.namestring()?;
+                    }
                 }
                 EXTENDED_ACCESS_FIELD => {
-                    todo!("Extended access field :(");
+                    let access_type = context.next()?;
+                    let _access_attrib = context.next()?;
+                    let _access_length = context.next()?;
+                    flags = (flags & !0x0f) | (access_type & 0x0f);
                 }
                 _ => {
                     context.current_block.pc -= 1;
@@ -2154,7 +2165,7 @@ where
                 Object::PowerResource { .. } => "[Power Resource]".to_string(),
                 Object::Processor { .. } => "[Processor]".to_string(),
                 // TODO: what even is one of these??
-                Object::RawDataBuffer => todo!(),
+                Object::RawDataBuffer => String::new(),
                 Object::String(value) => value.clone(),
                 Object::ThermalZone => "[Thermal Zone]".to_string(),
                 Object::Debug => "[Debug Object]".to_string(),
@@ -2345,7 +2356,7 @@ where
                 Object::FieldUnit(field) => self.do_field_write(field, object)?,
                 Object::Reference { kind, inner } => {
                     match kind {
-                        ReferenceKind::RefOf => todo!(),
+                        ReferenceKind::RefOf => return Err(AmlError::LibUnimplemented),
                         ReferenceKind::LocalOrArg => {
                             if let Object::Reference { kind: _inner_kind, inner: inner_inner } = &**inner {
                                 // TODO: this should store into the reference, potentially doing an
@@ -2360,7 +2371,7 @@ where
                                 }
                             }
                         }
-                        ReferenceKind::Unresolved => todo!(),
+                        ReferenceKind::Unresolved => return Err(AmlError::LibUnimplemented),
                     }
                 }
                 Object::Debug => {
@@ -2369,7 +2380,7 @@ where
                 _ => panic!("Stores to objects like {:?} are not yet supported", target),
             },
 
-            Argument::Namestring(_) => todo!(),
+            Argument::Namestring(_) => return Err(AmlError::LibUnimplemented),
             Argument::ByteData(_) | Argument::DWordData(_) | Argument::TrackedPc(_) | Argument::PkgLength(_) => {
                 panic!()
             }
@@ -2409,12 +2420,12 @@ where
             // FieldUnitKind::Bank { ref region, ref bank, bank_value } => {
             FieldUnitKind::Bank { .. } => {
                 // TODO: put the bank_value in the bank
-                todo!();
+                return Err(AmlError::LibUnimplemented);
             }
             // FieldUnitKind::Index { ref index, ref data } => {
             FieldUnitKind::Index { .. } => {
                 // TODO: configure the correct index
-                todo!();
+                return Err(AmlError::LibUnimplemented);
             }
         };
         let Object::OpRegion(ref read_region) = **read_region else { panic!() };
@@ -2469,12 +2480,12 @@ where
             // FieldUnitKind::Bank { ref region, ref bank, bank_value } => {
             FieldUnitKind::Bank { .. } => {
                 // TODO: put the bank_value in the bank
-                todo!();
+                return Err(AmlError::LibUnimplemented);
             }
             // FieldUnitKind::Index { ref index, ref data } => {
             FieldUnitKind::Index { .. } => {
                 // TODO: configure the correct index
-                todo!();
+                return Err(AmlError::LibUnimplemented);
             }
         };
         let Object::OpRegion(ref write_region) = **write_region else { panic!() };
