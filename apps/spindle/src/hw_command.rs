@@ -62,6 +62,8 @@ pub fn pick(args: &[u8]) -> Pick<'_> {
 }
 
 pub fn keeps(pick: Pick, line: &[u8]) -> bool {
+    // An earlier `hw`'s own echo of a line: the line itself is shown, not its copies.
+    if line.starts_with(b"[spindle.hw") { return false; }
     match pick {
         Pick::Hardware => is_hardware(line),
         Pick::All => !line.is_empty(),
