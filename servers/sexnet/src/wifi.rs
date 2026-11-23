@@ -242,9 +242,10 @@ impl Wifi {
             _ => {
                 self.finished = true;
                 sex_pdx::serial_record!(
-                    "[wifi.failed] step={:?} alive_ok={:?} notifications={} bad_rx_buffer={:?} int={:#x} gp_cntrl={:#x} rx_closed={}",
-                    step, self.bringup.alive.map(|a| a.ok), self.bringup.notifications, self.bringup.bad_buffer,
+                    // The registers first: a narrow screen still shows them.
+                    "[wifi.failed] int={:#x} gp_cntrl={:#x} step={:?} alive_ok={:?} notifications={} bad_rx_buffer={:?} rx_closed={}",
                     self.mmio.read(csr::INT), self.mmio.read(csr::GP_CNTRL),
+                    step, self.bringup.alive.map(|a| a.ok), self.bringup.notifications, self.bringup.bad_buffer,
                     self.bringup.rx.closed(&self.pool, &self.bringup.layout));
             }
         }
