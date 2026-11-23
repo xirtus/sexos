@@ -50,9 +50,13 @@ def main():
     g = boot(a.iso, disk, a.out, 'two-xhci', a.resolution)
     t, q = g['text'], g['q']
 
+    # QEMU sends keys to the newest keyboard: the hot-added USB one. (input-send-event's
+    # `device` names a display console, not an input device, so it is not used.)
+    q.sock.settimeout(30)
+
     def usb_key(code):
         for down in (True, False):
-            q.cmd('input-send-event', {'device': 'kbd2', 'events': [
+            q.cmd('input-send-event', {'events': [
                 {'type': 'key', 'data': {'down': down, 'key': {'type': 'qcode', 'data': code}}}]})
             time.sleep(.05)
 
