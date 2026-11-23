@@ -63,13 +63,14 @@ pub const OP_KEEP: u64 = 5;
 pub const OP_LOG_HEAD: u64 = 6;
 pub const LOG_CHUNK: usize = 1024;
 /// rsi: absolute byte position in the log (bytes logged since boot); rdx: buffer of
-/// `LOG_CHUNK` bytes. Copies the log from there: the kernel holds its newest 64 KiB, so
+/// `LOG_CHUNK` bytes. Copies the log from there: the kernel holds its newest 2 MiB, so
 /// lines logged after the head filled can still be read. Returns bytes copied in rsi
 /// (0 for a position no longer held, or a log busy this instant) and bytes logged so far
 /// in rdx (0 when busy). Same readers as `OP_LOG_HEAD`.
 pub const OP_LOG_TAIL: u64 = 7;
-/// How much of the newest log the kernel holds for `OP_LOG_TAIL`.
-pub const LOG_TAIL_BYTES: usize = 64 * 1024;
+/// How much of the newest log the kernel holds for `OP_LOG_TAIL`. A USB mouse logs about
+/// a dozen lines per move: on the x17 R1, 64 KiB lost a Wi-Fi join's lines within seconds.
+pub const LOG_TAIL_BYTES: usize = 2 * 1024 * 1024;
 
 /// The kernel's message to Files (caller 0) when it holds a record Files has not seen.
 pub const OP_NOTICE: u64 = 0x0C5A_0001;
