@@ -212,7 +212,7 @@ PINS = (
 
     ('timed', 'servers/sexusb/src/main.rs', '7f57f601ddae3841b94e199c312e44adcaf64eb6c4ee3cff1ec13595f9ba6f1f'),  # every leased xHCI driven (x17 chipset + Type-C), one quiet wait over all, 2026-11-23
     ('timed', 'servers/sexusb/src/main.rs', '3baa507b1fa1433a8a88696c067e1e77172ae364737a2fe0b3d4f834a01b3358'),  # controllers started outside _start (64 KiB task stack), waits unchanged, 2026-11-23
-    ('timed', 'servers/sexnet/src/main.rs', '7ac3f1963c61f4f231e7631348215a2c7cad9f4c668fb1ac41ae8e1f80351e40'),  # _start moved to big_stack.rs (512 KiB own stack, x17 Wi-Fi overflow); waits unchanged, 2026-11-23
+    ('timed', 'servers/sexnet/src/main.rs', '1010045b80b56ff4264494bc889894bd94b0b99ef0cf95cfa77384cc8d58f8a3'),  # _start moved to big_stack.rs (512 KiB own stack, x17 Wi-Fi overflow); waits unchanged, 2026-11-23
 
     ('tree', '', '8ec4ce1789d6ddf9623378e848505d1b78ed2a01dcf61cd9cc3e30bb37e260c5'),  # master after #407 + #408 + #422 combined, 2026-11-18
 

@@ -19,10 +19,10 @@ sexnet_on_stack:
 "#);
 extern "C" { fn sexnet_on_stack(f: extern "C" fn() -> !, stack_top: u64) -> !; }
 
-extern "C" fn enter() -> ! { crate::net_main() }
+extern "C" fn enter() -> ! { crate::_start() }
 
-#[no_mangle]
-pub extern "C" fn _start() -> ! {
+#[export_name = "_start"]
+pub extern "C" fn start() -> ! {
     let top = unsafe { (core::ptr::addr_of_mut!(STACK.0) as *mut u8).add(STACK_BYTES) as u64 } & !15;
     unsafe { sexnet_on_stack(enter, top) }
 }

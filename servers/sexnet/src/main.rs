@@ -950,8 +950,9 @@ fn command_probe() {
     }
 }
 
-/// The service body, on `big_stack`'s stack (see there).
-pub(crate) fn net_main() -> ! {
+/// The service body, on `big_stack`'s stack (see there); the ELF entry is
+/// `big_stack::start`, exported as `_start`.
+pub extern "C" fn _start() -> ! {
     sex_rt::heap_init();
     let mut restriction=sex_pdx::restricted_helper_provider::Provider::new();
     restriction.initialize(&restricted::JOURNAL,&mut restricted::Kernel);
