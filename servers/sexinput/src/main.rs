@@ -245,7 +245,10 @@ impl PointerOutbox {
                     batch.words[batch.next]=(0,0,0);batch.next+=1;self.stalled=0;
                     if batch.next==batch.len {
                         // Existing liveness receipts now follow the whole actual admission.
-                        if mouse_verbose() {
+                        // As `mouse_verbose`: the first 64 batches in full, then 1 in 1024.
+                        static BATCHES: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+                        let n = BATCHES.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+                        if n <= 64 || n % 1024 == 0 {
                             sex_pdx::serial_record!("[usb.hid.pointer.emit] op=OP_HID_EVENT buttons={} dx={} dy={} ok=1",self.sent_buttons,batch.dx,batch.dy);
                             sex_pdx::serial_record!("[usb.hid.pointer.pass] ok=1");
                             sex_pdx::serial_record!("[sexinput.usb_mouse.shell_send.ok]");
