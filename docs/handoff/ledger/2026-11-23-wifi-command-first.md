@@ -9,3 +9,6 @@
   part to D0 as it already did for Serial IO (`[kernel.pci.class.d0] kind=Wifi`).
 - A firmware error before ALIVE is now `Failed(Crashed { cause })`, not `AliveTimeout`, and
   `[wifi.failed]` prints `int=` and `gp_cntrl=` first so a narrow screen shows them.
+- A new scan starts from the last scan's networks, so `wifi` lists them (with the same
+  numbers) while it runs and `wifi join N` works mid-scan. On the x17 a `wifi scan`
+  emptied the list for its 15 seconds and the join looked broken.

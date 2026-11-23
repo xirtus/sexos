@@ -739,7 +739,8 @@ impl Wifi {
         let Some(i) = self.init.as_ref() else { return false };
         // Once a join has begun the chip stays on that channel (leaving it is W5b's).
         if !self.finished || self.scan.is_none() || self.join.is_some() || i.step != init::Step::Ready { return false; }
-        let sc = i.scan(now_ticks * 1000);
+        let mut sc = i.scan(now_ticks * 1000);
+        if let Some(earlier) = self.scan.as_ref() { sc.keep_networks(earlier); }
         self.scans = self.scans.wrapping_add(1);
         sex_pdx::serial_record!("[wifi.scan.start] channels={} scan={} ticks={}", sc.channels, self.scans, now_ticks);
         self.scan = Some(sc);
