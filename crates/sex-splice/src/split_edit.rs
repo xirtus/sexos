@@ -116,8 +116,14 @@ pub fn split_edit_ops(tl: &Timeline, at: Micros, shift: Micros) -> Result<Vec<Op
         let add = Op::AddClip { track, media: p.media, at: p.at, source: p.source };
         let mute = Op::SetVolume { clip: p.id, volume: 0 };
         work.apply(&add).map_err(SplitEditError::Edit)?;
-        work.apply(&mute).map_err(SplitEditError::Edit)?;
         ops.push(add);
+        // The copy plays at the picture's own volume.
+        if p.volume != 1000 {
+            let level = Op::SetVolume { clip: id, volume: p.volume };
+            work.apply(&level).map_err(SplitEditError::Edit)?;
+            ops.push(level);
+        }
+        work.apply(&mute).map_err(SplitEditError::Edit)?;
         ops.push(mute);
         sides[k] = id;
     }
@@ -185,6 +191,16 @@ mod tests {
         assert_eq!(a1[1].1, Range::new(3_500_000, 8 * SECOND));
         assert_eq!(a1[1].2, Range::new(4_500_000, 9 * SECOND), "b's sound plays half a second earlier in its recording");
         assert_eq!(out.duration(), tl.duration());
+    }
+
+    #[test]
+    fn a_copied_sound_keeps_the_pictures_volume() {
+        let (mut tl, v, s, _) = two_shots();
+        let first = tl.tracks.iter().find(|t| t.id == v).unwrap().clips[0].id;
+        tl.apply(&Op::SetVolume { clip: first, volume: 250 }).unwrap();
+        let out = tl.apply_all(&split_edit_ops(&tl, 4 * SECOND, -SECOND / 2).unwrap()).unwrap();
+        let vols: Vec<u32> = out.tracks.iter().find(|t| t.id == s).unwrap().clips.iter().map(|c| c.volume).collect();
+        assert_eq!(vols, [250, 1000]);
     }
 
     #[test]

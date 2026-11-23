@@ -186,7 +186,8 @@ impl Transcript {
     /// that", "no no", "bye bye") are left alone, as are doubles with a pause between.
     pub fn doubled_words(&self) -> Vec<usize> {
         const MEANT: &[&str] = &["had", "that", "no", "yes", "yeah", "bye", "very", "so", "really", "go", "ha", "oh", "is", "do"];
-        let keys: Vec<String> = self.words.iter().map(|w| restart_key(&w.text)).collect();
+        // Plain words, contractions not folded: "can't, can" is not a double.
+        let keys: Vec<String> = self.words.iter().map(|w| norm(&w.text).replace('\'', "")).collect();
         (0..keys.len().saturating_sub(1))
             .filter(|&i| {
                 !keys[i].is_empty()
@@ -295,6 +296,7 @@ mod tests {
         assert_eq!(said("I went to the the shop").doubled_words(), vec![3]);
         assert_eq!(said("what he had had was gone").doubled_words(), vec![]);
         assert_eq!(said("no no no").doubled_words(), vec![]);
+        assert_eq!(said("you can't can you").doubled_words(), vec![], "a contraction is its own word here");
         let mut t = said("to the the shop");
         t.words[2].source.start += SECOND;
         assert_eq!(t.doubled_words(), vec![], "a pause between is a choice");
