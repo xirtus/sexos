@@ -230,9 +230,16 @@ pub fn parse_auth(frame: &[u8]) -> Option<AuthReply<'_>> {
 
 /// Association request with SSID, rates, our RSN element, then `caps` (HT, VHT
 /// and HE capabilities, stage X1), the RSNXE and `vendor` (WMM) last.
+/// Capability information: the short preamble bit (802.11-2020 9.4.1.4).
+pub const CAPINFO_SHORT_PREAMBLE: u16 = 0x0020;
 pub fn assoc_request(out: &mut [u8], bss: &Bss, sa: &[u8; 6], seq: u16, rsn: &[u8], caps: &[u8], vendor: &[u8]) -> usize {
     mgmt_header(out, FC_MGMT_ASSOC_REQ, &bss.bssid, sa, &bss.bssid, seq);
-    let capability = 0x0001 | if bss.security != Security::Open { 0x0010 } else { 0 } | 0x0400; // ESS, privacy, short slot
+    // ESS, privacy, short slot, and on 2.4 GHz short preamble: every 802.11n+ radio does
+    // it, and an AP that requires it refuses a request without the bit (status 19, the
+    // x17 R1's home network on channel 10).
+    let two_ghz = bss.channel != 0 && bss.channel <= 14;
+    let capability = 0x0001 | if bss.security != Security::Open { 0x0010 } else { 0 } | 0x0400
+        | if two_ghz { CAPINFO_SHORT_PREAMBLE } else { 0 };
     out[24..26].copy_from_slice(&(capability as u16).to_le_bytes());
     out[26..28].copy_from_slice(&10u16.to_le_bytes()); // listen interval
     let mut n = 28;
