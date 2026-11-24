@@ -36,6 +36,7 @@ pub const TAGS: &[&[u8]] = &[
     b"[sexacpi.ec]", b"[sexacpi.ec.error", b"[sexacpi.touchpad", b"[sexacpi.aml.", b"[sexacpi.fadt.refused", b"[sexacpi.window.refused",
     b"[crash.record]", b"[files.fs.foreign]", b"[files.media.", b"[kernel.safe_start]",
     b"[kernel.ps2", b"[kernel.pci.xhci", b"[devmgr.lease", b"[ps2.port", b"[sexusb.controller", b"[iommu.boot_options]", b"[spindle.autorun", b"[spindle.tether.",
+    b"[timer.source]", b"[shell.boot.windows]",
 ];
 
 /// Whether `line` is a hardware line: one of `TAGS`, at its start or after a prefix.

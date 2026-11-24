@@ -438,10 +438,12 @@ fn countdown(seconds: u32) {
 
 static TSC_PER_10MS: AtomicU64 = AtomicU64::new(0);
 fn rdtsc() -> u64 { unsafe { core::arch::x86_64::_rdtsc() } }
-/// 10 ms by the PIT, measured once against the TSC; with no PIT, a guess of 2 GHz.
+/// 10 ms by the TSC at the rate CPUID reports, else by the PIT measured once against
+/// the TSC; with neither, a guess of 2 GHz.
 fn wait_10ms() {
     let mut per = TSC_PER_10MS.load(Ordering::Relaxed);
     if per == 0 {
+        if let Some(hz) = crate::apic::cpu_clocks().tsc_hz { TSC_PER_10MS.store(hz / 100, Ordering::Relaxed); return wait_10ms(); }
         let start = rdtsc();
         per = if pit_10ms() { (rdtsc() - start).max(1) } else { 20_000_000 };
         TSC_PER_10MS.store(per, Ordering::Relaxed);

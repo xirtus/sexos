@@ -52,6 +52,7 @@ mod hot_corners;
 mod hot_corners_glue;
 mod program_notify;
 mod startup;
+mod boot_windows;
 mod shortcuts;
 mod shortcuts_glue;
 mod widgets_glue;
@@ -12367,8 +12368,9 @@ fn point_in_surface(px: i32, py: i32, sid: u64) -> bool {
     unsafe {
         // Self-defending: skip dead surfaces regardless of caller precondition.
         // This ensures no hit-test or drag-start can select a destroyed surface.
+        // Silent: every pointer move hit-tests every surface, so a line here was
+        // dozens of log lines a move (x17, 2026-11-23: 731 in one report).
         if !surface_is_alive(sid) {
-            serial_println!("[shell.surface.dead.skip] id={} reason=inactive", sid);
             return false;
         }
         if APP_CUSTODY.iter().flatten().any(|e| e.surface == sid || e.is_successor_frame(sid)) {
@@ -26487,7 +26489,7 @@ pub extern "C" fn _start() -> ! {
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); }
         unsafe { workspace_refresh_poll(); shell_lifecycle_poll(); display_scale_poll(); shell_close_poll(); shell_memory_poll(); shell_registration_reply_poll(); clipboard_intake_poll(); clipboard_poll(); autofill_routes::poll(); app_input_poll(); desktop_state_poll(); launcher_focus_poll(); spindle_view_poll(); document_view_poll(); palette_visibility_poll(); palette_text_poll(); linen_text_poll(); linen_async_poll(); notification_poll(); tray_tick(); laptop_poll(); }
         bt_panel::poll();
-        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); startup::poll(); }
+        unsafe { decorations_glue::poll(); tray_items_glue::poll(); layouts_glue::poll(); silk_ctl_glue::poll(); hot_corners_glue::poll(); widgets_glue::poll(); weather_glue::poll(); layout_plugin_glue::poll(); startup::poll(); boot_windows::poll(); }
         unsafe { sound_panel_poll(); }
         // Retain failed notification attempts while continuing normal receives.
         // Success means enqueue only; sexinput validates caller and version.
