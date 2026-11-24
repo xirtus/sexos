@@ -312,7 +312,10 @@ impl Wifi {
         self.finished = true;
         if sc.step != scan::Step::Done {
             sex_pdx::serial_record!("[wifi.failed] step=scan reason={:?} frames={} networks={}", sc.step, sc.frames, sc.count);
-            if self.want_join { self.retry(now_ticks); }
+            if self.want_join {
+                self.why.set(format_args!("scan {:?} networks={}", sc.step, sc.count));
+                self.retry(now_ticks);
+            }
             return;
         }
         for n in sc.networks() {
@@ -345,6 +348,7 @@ impl Wifi {
         self.password = saved.password;
         self.password_len = saved.password_len;
         if !self.start_join(index, now_ticks) {
+            self.why.set(format_args!("could not start the join (try {})", self.attempts + 1));
             self.password = [0; ws::PASSWORD_MAX];
             self.password_len = 0;
             self.retry(now_ticks);
@@ -371,7 +375,9 @@ impl Wifi {
             other => {
                 self.finished = true;
                 self.want_join = false;
-                sex_pdx::serial_record!("[wifi.failed] step=restart reason={}", if other.is_none() { "firmware" } else { "layout" });
+                let reason = if other.is_none() { "firmware" } else { "layout" };
+                sex_pdx::serial_record!("[wifi.failed] step=restart reason={}", reason);
+                self.why.set(format_args!("chip restart failed: {}", reason));
             }
         }
     }
@@ -400,6 +406,12 @@ impl Wifi {
     /// The link went down: the IP stack has already let go of it (main loop).
     fn link_lost(&mut self, down: wlink::Down, now_ticks: u64) {
         sex_pdx::serial_record!("[wifi.lost] reason={:?} saved={}", down, self.saved.is_some() as u8);
+        // Joined, then dropped: say how, or the retries that follow look unexplained.
+        match down {
+            wlink::Down::Disconnected(reason) => self.why.set(format_args!("connected, then the AP sent us away (reason {})", reason)),
+            wlink::Down::BeaconLoss(missed) => self.why.set(format_args!("connected, then lost the AP ({} beacons missed)", missed)),
+            wlink::Down::Failed(f) => self.why.set(format_args!("connected, then the link failed: {:?}", f)),
+        }
         self.link = None;
         self.attempts = 0;
         self.retry(now_ticks);
