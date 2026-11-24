@@ -141,8 +141,8 @@ static mut BA_SLOTS: sex_wifi::ba::Slots = sex_wifi::ba::Slots::EMPTY;
 static mut LINK_RX: [[u8; wlink::MAX_ETHERNET]; RX_FRAMES] = [[0; wlink::MAX_ETHERNET]; RX_FRAMES];
 /// The receive queue, and what IPv4 went by (for `[wifi.link.ip]`: whether DHCP
 /// requests leave and answers come back).
-struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64, rx_v4: u32, rx_arp: u32, rx_dhcp: u32, tx_v4: u32, tx_arp: u32, tx_dhcp: u32, seen: (u32, u32, u32, u32, u32, u32) }
-impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0, rx_v4: 0, rx_arp: 0, rx_dhcp: 0, tx_v4: 0, tx_arp: 0, tx_dhcp: 0, seen: (0, 0, 0, 0, 0, 0) }; }
+struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64, rx_v4: u32, rx_arp: u32, rx_dhcp: u32, tx_v4: u32, tx_arp: u32, tx_dhcp: u32, seen: (u32, u32, u32, u32, u32, u32), unicast_in: u32 }
+impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0, rx_v4: 0, rx_arp: 0, rx_dhcp: 0, tx_v4: 0, tx_arp: 0, tx_dhcp: 0, seen: (0, 0, 0, 0, 0, 0), unicast_in: 0 }; }
 
 /// An Ethernet frame's kind: 1 IPv4, 2 ARP, 3 DHCP (IPv4 UDP to or from port 67/68), 0 other.
 fn ip_kind(f: &[u8]) -> u8 {
@@ -193,6 +193,20 @@ fn log_dhcp(way: &str, f: &[u8]) {
         u16::from_be_bytes([f[udp], f[udp + 1]]), u16::from_be_bytes([f[udp + 2], f[udp + 3]]),
         f[d + 16], f[d + 17], f[d + 18], f[d + 19], u16::from_be_bytes([f[d + 10], f[d + 11]]),
         u16::from_be_bytes([f[16], f[17]]), f.len(), u16::from_be_bytes([f[udp + 6], f[udp + 7]]));
+}
+
+/// A DHCP client message (UDP 68 -> 67) with the broadcast flag set, copied into
+/// `out`, and the UDP checksum cleared (0 = none, allowed for UDP over IPv4).
+fn dhcp_broadcast(f: &[u8], out: &mut [u8]) -> Option<usize> {
+    if ip_kind(f) != 3 || f.len() > out.len() { return None; }
+    let udp = 14 + (f[14] & 0xf) as usize * 4;
+    let d = udp + 8;
+    if f.len() < d + 12 || u16::from_be_bytes([f[udp], f[udp + 1]]) != 68 || u16::from_be_bytes([f[udp + 2], f[udp + 3]]) != 67 || f[d] != 1 { return None; }
+    out[..f.len()].copy_from_slice(f);
+    out[d + 10] |= 0x80;
+    out[udp + 6] = 0;
+    out[udp + 7] = 0;
+    Some(f.len())
 }
 
 fn view(slot: u64, rights: u8) -> Result<m::RegionView, u64> {
@@ -725,6 +739,12 @@ impl Wifi {
     /// Sends one Ethernet frame over the air.
     pub fn link_send(&mut self, ethernet: &[u8]) -> bool {
         let Some(l) = self.link.as_mut() else { return false };
+        // DHCP requests ask for broadcast replies (BOOTP flag 0x8000, RFC 2131
+        // 4.1). On the x17 the router's broadcast OFFERs to other clients came in
+        // but no unicast reply to us ever did; broadcast replies come under the
+        // group key, which is known to work here.
+        let mut patched = [0u8; wlink::MAX_ETHERNET];
+        let ethernet = match dhcp_broadcast(ethernet, &mut patched) { Some(n) => &patched[..n], None => ethernet };
         match l.send(&self.bringup, &mut self.mmio, &mut self.pool, ethernet) {
             Ok(()) => {
                 let q = &mut self.rx;
@@ -750,6 +770,13 @@ impl Wifi {
         // SAFETY: sexnet runs one thread, and only this link touches BA_SLOTS.
         let slots = unsafe { &mut *core::ptr::addr_of_mut!(BA_SLOTS) };
         let up = l.poll_with(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, Some(slots), |frame| {
+            // Frames to us alone (not broadcast or multicast): on the x17 none were seen.
+            if frame[0] & 1 == 0 {
+                q.unicast_in += 1;
+                if q.unicast_in <= 8 || q.unicast_in.is_power_of_two() {
+                    sex_pdx::serial_record!("[wifi.link.unicast] in={} type={:02x}{:02x} len={}", q.unicast_in, frame[12], frame[13], frame.len());
+                }
+            }
             match ip_kind(frame) { 1 => q.rx_v4 += 1, 2 => q.rx_arp += 1, 3 => { q.rx_dhcp += 1; if q.rx_dhcp <= 24 { log_dhcp("in", frame); } } _ => {} }
             if q.count == RX_FRAMES || frame.len() > wlink::MAX_ETHERNET { q.overflow += 1; return; }
             let at = (q.head + q.count) % RX_FRAMES;

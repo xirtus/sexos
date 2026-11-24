@@ -24,3 +24,14 @@ lease is lost inside SexOS. So each DHCP frame (first 24 each way) is now logged
 - `[wifi.link.dhcp] in|out type= xid= client= to=` (type: 1 discover, 2 offer,
   3 request, 5 ack, 6 nak; client = chaddr; to = Ethernet destination)
 - `[wifi.link.dhcp2] in|out SRC->DST SPORT->DPORT you= fl= ip_len= frame= sum=`
+
+Second x17 result (image f555571f): our DISCOVER left (`out type=1`, our MAC,
+fl=0000) and the firmware reported it sent, but the only answers seen were for
+other clients: another client's DISCOVER and an OFFER with the broadcast flag
+(fl=8000) sent to ff:ff:ff:ff:ff:ff. No unicast frame to us shows in any count.
+So either our protected TX doesn't reach the router or unicast RX is lost.
+
+- DHCP client messages now go out with the BOOTP broadcast flag (0x8000; UDP
+  checksum cleared) so the router answers by broadcast, under the group key that
+  is known to work. If the lease comes now, TX works and unicast RX is the bug.
+- `[wifi.link.unicast] in= type= len=` counts frames addressed to us alone.
