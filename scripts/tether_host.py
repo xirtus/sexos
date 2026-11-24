@@ -46,6 +46,17 @@ def addresses():
             found.add(info[4][0])
     except OSError:
         pass
+    # IPv6 too: a network whose router hands out IPv6 by itself but no IPv4 (SexOS's
+    # Wi-Fi before DHCP works) is still reachable that way.
+    for probe in ('2001:db8::1', 'fd00::1'):
+        try:
+            with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s:
+                s.connect((probe, 9))  # no packet is sent either
+                a = s.getsockname()[0]
+                if not a.lower().startswith('fe80') and a != '::1':
+                    found.add(a)
+        except OSError:
+            pass
     return sorted(a for a in found if not a.startswith('127.'))
 
 
@@ -112,9 +123,16 @@ def serve(d: Path, port: int, auto: list, once: bool, quiet: bool):
     d.mkdir(parents=True, exist_ok=True)
     inbox = d / 'inbox.txt'
     inbox.touch()
-    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    listener.bind(('0.0.0.0', port))
+    try:
+        # Both families on one socket: IPv4 and IPv6 (`tether [ADDRESS]:PORT` on SexOS).
+        listener = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        listener.bind(('::', port))
+    except OSError:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(('0.0.0.0', port))
     listener.listen(1)
     shown = ', '.join(addresses()) or '(no network address found)'
     print(f'tether: waiting on port {port}. On SexOS, in Spindle: tether ADDRESS  (this computer: {shown})', flush=True)

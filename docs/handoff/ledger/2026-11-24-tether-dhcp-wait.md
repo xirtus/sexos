@@ -13,3 +13,7 @@
   `[display.typed.released]`) still go to the serial port but no longer into the
   64 KiB log ring or the 512 KiB head: five a keystroke pushed every Wi-Fi line out
   before `hw` could read it.
+- Tether over IPv6: `tether [fdxx::y]:7177` (or a bare IPv6 address) connects with
+  CONNECT_TO and needs no DHCP. tether_host.py now listens on IPv6 and IPv4 on one
+  socket and prints its IPv6 addresses too (the x17 gets IPv6 from the router over
+  Wi-Fi while DHCPv4 never finishes).

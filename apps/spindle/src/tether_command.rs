@@ -117,8 +117,46 @@ pub fn numeric(host: &[u8]) -> Option<[u8; 4]> {
     Some(out)
 }
 
-/// `HOST[:PORT]` -> (host, port).
+/// An IPv6 address in text (`fd00::1`, full or with one `::`).
+pub fn numeric6(host: &[u8]) -> Option<[u8; 16]> {
+    let groups = |part: &[u8], out: &mut [u16; 8]| -> Option<usize> {
+        if part.is_empty() { return Some(0); }
+        let mut n = 0;
+        for g in part.split(|b| *b == b':') {
+            if n == 8 || g.is_empty() || g.len() > 4 { return None; }
+            let mut v = 0u16;
+            for b in g { v = v << 4 | (*b as char).to_digit(16)? as u16; }
+            out[n] = v; n += 1;
+        }
+        Some(n)
+    };
+    let (mut head, mut tail) = ([0u16; 8], [0u16; 8]);
+    let words = match host.windows(2).position(|w| w == b"::") {
+        Some(i) => {
+            let (h, t) = (groups(&host[..i], &mut head)?, groups(&host[i + 2..], &mut tail)?);
+            if h + t > 7 { return None; }
+            let mut all = [0u16; 8];
+            all[..h].copy_from_slice(&head[..h]);
+            all[8 - t..].copy_from_slice(&tail[..t]);
+            all
+        }
+        None => { if groups(host, &mut head)? != 8 { return None; } head }
+    };
+    let mut out = [0u8; 16];
+    for (k, w) in words.iter().enumerate() { out[2 * k..2 * k + 2].copy_from_slice(&w.to_be_bytes()); }
+    Some(out)
+}
+
+/// `HOST[:PORT]` -> (host, port). IPv6: `[ADDRESS]:PORT`, or a bare address (port 7177).
 pub fn parse_target(arg: &[u8]) -> Option<(&[u8], u16)> {
+    if let Some(rest) = arg.strip_prefix(b"[") {
+        let close = rest.iter().position(|b| *b == b']')?;
+        let port = match &rest[close + 1..] { b"" => DEFAULT_PORT, [b':', digits @ ..] => parse_port(digits)?, _ => return None };
+        let host = &rest[..close];
+        numeric6(host)?;
+        return Some((host, port));
+    }
+    if arg.iter().filter(|b| **b == b':').count() > 1 { numeric6(arg)?; return Some((arg, DEFAULT_PORT)); }
     let (host, port) = match arg.iter().rposition(|b| *b == b':') {
         Some(i) => {
             let digits = &arg[i + 1..];
@@ -323,7 +361,10 @@ impl Tether {
             Phase::V4Wait => self.net_call(w::ADDRESSES, 0, Call::Plain),
             Phase::ResolveAsk => { region[..self.host_len].copy_from_slice(&self.host[..self.host_len]); self.net_call(w::RESOLVE, self.host_len as u64, Call::Plain); }
             Phase::ResolveWait => self.net_call(w::RESOLVE, 0, Call::Plain),
-            Phase::Connect => self.net_call(w::CONNECT, w::address_port(self.address, self.port), Call::Plain),
+            Phase::Connect => match numeric6(&self.host[..self.host_len]) {
+                Some(a) => { w::put_address(region, w::FAMILY_V6, &a); self.net_call(w::CONNECT_TO, self.port as u64, Call::Plain) }
+                None => self.net_call(w::CONNECT, w::address_port(self.address, self.port), Call::Plain),
+            },
             Phase::Opening => self.net_call(w::STATE, 0, Call::Plain),
             Phase::Close => self.net_call(w::CLOSE, 0, Call::Close),
             Phase::Listen => self.net_call_on(LISTEN_FLOW, w::LISTEN, self.port as u64, Call::Plain),
@@ -400,6 +441,8 @@ impl Tether {
                         self.phase = Phase::V4Wait;
                         self.deadline = now + CONNECT_MS;
                     }
+                    // IPv6 needs no DHCP: the router's own advertisement gave the address.
+                    None if numeric6(&self.host[..self.host_len]).is_some() => self.phase = Phase::Connect,
                     None => self.phase = Phase::ResolveAsk,
                 }
             }
@@ -422,8 +465,8 @@ impl Tether {
             Phase::Opening => match value {
                 w::STATE_OPEN => {
                     self.phase = Phase::Live;
-                    let a = self.address;
-                    say!(sb, "tether: up to {}.{}.{}.{}:{}. Commands from there show as remote> lines; tether off ends it.", a[0], a[1], a[2], a[3], self.port);
+                    let host = core::str::from_utf8(&self.host[..self.host_len]).unwrap_or("?");
+                    say!(sb, "tether: up to {}:{}. Commands from there show as remote> lines; tether off ends it.", host, self.port);
                     sex_pdx::serial_record!("[spindle.tether.up] port={}", self.port);
                 }
                 w::STATE_OPENING => self.next_at = now + POLL_MS,
