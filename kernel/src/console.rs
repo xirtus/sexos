@@ -266,9 +266,14 @@ pub fn tick() {
     if let Some(mut s) = SCREEN.try_lock() { if let Some(fb) = s.fb { draw_due(&mut *s, &fb); } }
 }
 
-/// Every logged byte comes through here, from `serial::_print` and serial records.
-pub fn write(bytes: &[u8]) {
-    if STOPPING.load(Ordering::Relaxed) { return; }
+/// Lines written for every key typed or text frame drawn: they still go to the serial
+/// port (gates read them), but not into the log ring or its head, where five of them a
+/// keystroke pushed out what `hw` and crash reports are for (x17, 2026-11-24).
+const PER_KEY: [&[u8]; 6] = [b"[spindle.text.", b"[spindle.view.text]", b"[display.text.prepared]",
+    b"[display.text.committed]", b"[display.typed.released]", b"[spindle.line.edit"];
+fn per_key(bytes: &[u8]) -> bool { PER_KEY.iter().any(|p| bytes.starts_with(p)) }
+
+fn keep(bytes: &[u8]) {
     if let Some(mut log) = LOG.try_lock() {
         for &b in bytes {
             let at = log.written % LOG_BYTES;
@@ -282,6 +287,12 @@ pub fn write(bytes: &[u8]) {
         head.bytes[at..at + n].copy_from_slice(&bytes[..n]);
         head.len += n;
     }
+}
+
+/// Every logged byte comes through here, from `serial::_print` and serial records.
+pub fn write(bytes: &[u8]) {
+    if STOPPING.load(Ordering::Relaxed) { return; }
+    if !per_key(bytes) { keep(bytes); }
     if SHOWING.load(Ordering::Acquire) {
         if let Some(mut s) = SCREEN.try_lock() {
             if let Some(fb) = s.fb {

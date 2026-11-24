@@ -102,7 +102,11 @@ pub fn command(args: &[u8], sb: &mut crate::Scrollback) {
         if index >= skip {
             let n = line.len().min(LINE);
             sb.push(&line[..n]);
-            serial_println!("[spindle.hw.line] {}", core::str::from_utf8(&line[..n]).unwrap_or("?"));
+            // Plain `hw` only (the gates read it): a filtered one's echo would fill the
+            // log's newest part with copies and push out the lines asked about next.
+            if matches!(pick, Pick::Hardware) {
+                serial_println!("[spindle.hw.line] {}", core::str::from_utf8(&line[..n]).unwrap_or("?"));
+            }
         }
         index += 1;
     }, pick);

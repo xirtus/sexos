@@ -42,9 +42,14 @@ pub const CMD_MAX: usize = 256;
 const STATE_EVERY: u32 = 25;
 /// Connecting gives up after this long.
 const CONNECT_MS: u64 = 20_000;
+/// An answer not back by then is taken as lost.
+const LOST_MS: u64 = 1_500;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Phase { Idle, Up, ResolveAsk, ResolveWait, Connect, Opening, Live, Close,
+enum Phase { Idle, Up,
+    /// An IPv4 host: wait until DHCP gave this machine an IPv4 address (an IPv6-only
+    /// network is up too, but cannot reach it).
+    V4Wait, ResolveAsk, ResolveWait, Connect, Opening, Live, Close,
     /// `tether listen`: make the listener, say the address, wait for the Mac, and drop a
     /// finished connection to wait for the next one.
     Listen, Addresses, Accept, Drop, CloseListener }
@@ -56,9 +61,13 @@ pub struct Tether {
     phase: Phase,
     seq: u32,
     sent: bool,
+    /// When the call out was made: an answer lost on the way is asked for again.
+    sent_at: u64,
     call: Call,
     next_at: u64,
     deadline: u64,
+    /// Said once that it waits for DHCP.
+    told_v4: bool,
     host: [u8; 128],
     host_len: usize,
     port: u16,
@@ -85,7 +94,7 @@ pub struct Tether {
 }
 
 pub static mut TETHER: Tether = Tether {
-    phase: Phase::Idle, seq: 0, sent: false, call: Call::Plain, next_at: 0, deadline: 0,
+    phase: Phase::Idle, seq: 0, sent: false, sent_at: 0, call: Call::Plain, next_at: 0, deadline: 0, told_v4: false,
     host: [0; 128], host_len: 0, port: DEFAULT_PORT, address: [0; 4],
     out: [0; OUT_MAX], out_len: 0, log_at: 0, log_total: 0, lines_sent: 0,
     inbound: [0; IN_MAX], in_len: 0, queue: [[0; CMD_MAX]; QUEUE], queue_len: [0; QUEUE],
@@ -112,8 +121,46 @@ pub fn numeric(host: &[u8]) -> Option<[u8; 4]> {
     Some(out)
 }
 
-/// `HOST[:PORT]` -> (host, port).
+/// An IPv6 address in text (`fd00::1`, full or with one `::`).
+pub fn numeric6(host: &[u8]) -> Option<[u8; 16]> {
+    let groups = |part: &[u8], out: &mut [u16; 8]| -> Option<usize> {
+        if part.is_empty() { return Some(0); }
+        let mut n = 0;
+        for g in part.split(|b| *b == b':') {
+            if n == 8 || g.is_empty() || g.len() > 4 { return None; }
+            let mut v = 0u16;
+            for b in g { v = v << 4 | (*b as char).to_digit(16)? as u16; }
+            out[n] = v; n += 1;
+        }
+        Some(n)
+    };
+    let (mut head, mut tail) = ([0u16; 8], [0u16; 8]);
+    let words = match host.windows(2).position(|w| w == b"::") {
+        Some(i) => {
+            let (h, t) = (groups(&host[..i], &mut head)?, groups(&host[i + 2..], &mut tail)?);
+            if h + t > 7 { return None; }
+            let mut all = [0u16; 8];
+            all[..h].copy_from_slice(&head[..h]);
+            all[8 - t..].copy_from_slice(&tail[..t]);
+            all
+        }
+        None => { if groups(host, &mut head)? != 8 { return None; } head }
+    };
+    let mut out = [0u8; 16];
+    for (k, w) in words.iter().enumerate() { out[2 * k..2 * k + 2].copy_from_slice(&w.to_be_bytes()); }
+    Some(out)
+}
+
+/// `HOST[:PORT]` -> (host, port). IPv6: `[ADDRESS]:PORT`, or a bare address (port 7177).
 pub fn parse_target(arg: &[u8]) -> Option<(&[u8], u16)> {
+    if let Some(rest) = arg.strip_prefix(b"[") {
+        let close = rest.iter().position(|b| *b == b']')?;
+        let port = match &rest[close + 1..] { b"" => DEFAULT_PORT, [b':', digits @ ..] => parse_port(digits)?, _ => return None };
+        let host = &rest[..close];
+        numeric6(host)?;
+        return Some((host, port));
+    }
+    if arg.iter().filter(|b| **b == b':').count() > 1 { numeric6(arg)?; return Some((arg, DEFAULT_PORT)); }
     let (host, port) = match arg.iter().rposition(|b| *b == b':') {
         Some(i) => {
             let digits = &arg[i + 1..];
@@ -223,6 +270,7 @@ impl Tether {
         self.empty_receives = 0;
         self.lines_sent = sb.total_lines.saturating_sub(sb.retained() as u32);
         self.deadline = sex_pdx::get_ticks() + CONNECT_MS;
+        self.told_v4 = false;
         self.next_at = 0;
         self.sent = false;
     }
@@ -246,6 +294,7 @@ impl Tether {
         self.seq = (self.seq + 1) & 0x7F_FFFF;
         if sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, w::OP, w::request_on(self.seq, kind, flow), value, 0).is_ok() {
             self.sent = true;
+            self.sent_at = sex_pdx::get_ticks();
             self.call = call;
         } else {
             self.next_at = sex_pdx::get_ticks() + POLL_MS;
@@ -300,9 +349,21 @@ impl Tether {
 
     /// Sends the next call when one is due. True when the screen may need drawing.
     pub fn step(&mut self, sb: &mut Scrollback) -> bool {
-        if self.phase == Phase::Idle || self.sent { return false; }
+        if self.phase == Phase::Idle { return false; }
         let now = sex_pdx::get_ticks();
+        // sexnet keeps one answer per program waiting: when another command's call
+        // (`wifi`) took it, ours never comes. Ask again; a late answer has an old number.
+        if self.sent {
+            if now.saturating_sub(self.sent_at) < LOST_MS { return false; }
+            sex_pdx::serial_record!("[spindle.tether.resend] phase={:?} call={:?}", self.phase, self.call);
+            self.sent = false;
+            self.next_at = 0;
+        }
         if now < self.next_at { return false; }
+        if self.phase == Phase::V4Wait && now > self.deadline {
+            self.fail(sb, "no IPv4 address: the router never answered DHCP (`hw dhcp` shows the lease when it comes)");
+            return true;
+        }
         if !self.listening && self.phase != Phase::Live && self.phase != Phase::Close && now > self.deadline {
             self.fail(sb, "could not reach the other computer (is tether_host.py running, and the firewall open?)");
             return true;
@@ -310,9 +371,13 @@ impl Tether {
         let Some(region) = net() else { self.phase = Phase::Idle; sb.push(b"tether: no network here."); return true };
         match self.phase {
             Phase::Up => self.net_call(w::UP, 0, Call::Plain),
+            Phase::V4Wait => self.net_call(w::ADDRESSES, 0, Call::Plain),
             Phase::ResolveAsk => { region[..self.host_len].copy_from_slice(&self.host[..self.host_len]); self.net_call(w::RESOLVE, self.host_len as u64, Call::Plain); }
             Phase::ResolveWait => self.net_call(w::RESOLVE, 0, Call::Plain),
-            Phase::Connect => self.net_call(w::CONNECT, w::address_port(self.address, self.port), Call::Plain),
+            Phase::Connect => match numeric6(&self.host[..self.host_len]) {
+                Some(a) => { w::put_address(region, w::FAMILY_V6, &a); self.net_call(w::CONNECT_TO, self.port as u64, Call::Plain) }
+                None => self.net_call(w::CONNECT, w::address_port(self.address, self.port), Call::Plain),
+            },
             Phase::Opening => self.net_call(w::STATE, 0, Call::Plain),
             Phase::Close => self.net_call(w::CLOSE, 0, Call::Close),
             Phase::Listen => self.net_call_on(LISTEN_FLOW, w::LISTEN, self.port as u64, Call::Plain),
@@ -383,8 +448,24 @@ impl Tether {
                 if status == w::WAIT { self.next_at = now + POLL_MS * 5; return true; }
                 if self.listening { self.phase = Phase::Listen; return true; }
                 match numeric(&self.host[..self.host_len]) {
-                    Some(a) => { self.address = a; self.phase = Phase::Connect; }
+                    Some(a) => {
+                        self.address = a;
+                        // DHCP gets its own time: the link may have come up a moment ago.
+                        self.phase = Phase::V4Wait;
+                        self.deadline = now + CONNECT_MS;
+                    }
+                    // IPv6 needs no DHCP: the router's own advertisement gave the address.
+                    None if numeric6(&self.host[..self.host_len]).is_some() => self.phase = Phase::Connect,
                     None => self.phase = Phase::ResolveAsk,
+                }
+            }
+            Phase::V4Wait => {
+                let n = (value as usize).min(w::REGION_BYTES / (w::ADDRESS_BYTES + 1));
+                let v4 = (0..n).any(|k| region[k * (w::ADDRESS_BYTES + 1)] == w::FAMILY_V4);
+                if v4 { self.phase = Phase::Connect; }
+                else {
+                    if !self.told_v4 { self.told_v4 = true; sb.push(b"tether: waiting for an IPv4 address from the router (DHCP)."); }
+                    self.next_at = now + 500;
                 }
             }
             Phase::ResolveAsk => { self.phase = Phase::ResolveWait; self.next_at = now + POLL_MS; }
@@ -397,8 +478,8 @@ impl Tether {
             Phase::Opening => match value {
                 w::STATE_OPEN => {
                     self.phase = Phase::Live;
-                    let a = self.address;
-                    say!(sb, "tether: up to {}.{}.{}.{}:{}. Commands from there show as remote> lines; tether off ends it.", a[0], a[1], a[2], a[3], self.port);
+                    let host = core::str::from_utf8(&self.host[..self.host_len]).unwrap_or("?");
+                    say!(sb, "tether: up to {}:{}. Commands from there show as remote> lines; tether off ends it.", host, self.port);
                     sex_pdx::serial_record!("[spindle.tether.up] port={}", self.port);
                 }
                 w::STATE_OPENING => self.next_at = now + POLL_MS,
