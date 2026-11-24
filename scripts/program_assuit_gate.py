@@ -93,6 +93,11 @@ def main():
   s=len(t());q.key('up');time.sleep(.3);q.key('ret')
   g['wait'](r'\[assuit\.style\] style=Heading 1\n',s,120)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-pages.ppm')})
+  # The native page view inserts an editable table through its dimensions prompt.
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'t'}],'hold-time':80});time.sleep(.5)
+  s=len(t());type_line('2x2');q.key('ret')
+  g['wait'](r'\[assuit\.table\] rows=2 cols=2\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-table.ppm')})
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})

@@ -104,6 +104,15 @@ impl Book {
     /// Gives the caret's (or the selection's) paragraphs the style `id`.
     pub fn set_style(&mut self, id: &str) -> Result<(), String> { self.run("para.style", json!({ "style": id })).map(|_| ()) }
 
+    /// Inserts an editable table at the caret. Keep the UI's dimensions bounded so
+    /// one accidental input cannot lay out thousands of cells at once.
+    pub fn insert_table(&mut self, rows: usize, cols: usize) -> Result<(), String> {
+        if !(1..=20).contains(&rows) || !(1..=10).contains(&cols) {
+            return Err("Table size must be 1–20 rows by 1–10 columns".into());
+        }
+        self.run("insert.table", json!({ "rows": rows, "cols": cols })).map(|_| ())
+    }
+
     /// Words in the body, as a word processor's status bar counts them.
     pub fn words(&self) -> usize { self.text().split_whitespace().count() }
 
@@ -576,6 +585,24 @@ mod tests {
         book.set_style("Heading1").unwrap();
         assert_eq!(book.paragraph_style(), "Heading 1");
         assert!(book.dirty());
+    }
+
+    #[test]
+    fn inserted_table_round_trips_in_docx_and_odt() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("table.{ext}"));
+            let mut book = Book::blank(&path);
+            assert!(book.insert_table(0, 2).is_err());
+            assert!(book.insert_table(21, 2).is_err());
+            book.insert_table(2, 2).unwrap();
+            book.type_text("First cell").unwrap();
+            book.key(&Chord { name: "Tab", ctrl: false, shift: false });
+            book.type_text("Second cell").unwrap();
+            book.save().unwrap();
+            let again = Book::open(&path).unwrap();
+            assert!(again.text().contains("First cell"), "{ext}: {}", again.text());
+            assert!(again.text().contains("Second cell"), "{ext}: {}", again.text());
+        }
     }
 
 }
