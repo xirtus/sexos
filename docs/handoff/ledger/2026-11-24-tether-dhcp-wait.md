@@ -8,3 +8,8 @@
 - `hw TEXT` / `hw all` no longer echo their lines as `[spindle.hw.line]` into the
   boot log: four filtered `hw` calls filled the 64 KiB newest part with copies, so the
   next `hw TAG` found nothing (x17, 2026-11-24). Plain `hw` still echoes (gates read it).
+- Kernel console: per-keystroke lines (`[spindle.text.*]`, `[spindle.view.text]`,
+  `[spindle.line.edit*]`, `[display.text.prepared]`, `[display.text.committed]`,
+  `[display.typed.released]`) still go to the serial port but no longer into the
+  64 KiB log ring or the 512 KiB head: five a keystroke pushed every Wi-Fi line out
+  before `hw` could read it.
