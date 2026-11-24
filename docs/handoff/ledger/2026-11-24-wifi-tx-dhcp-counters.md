@@ -17,3 +17,10 @@ On the x17: `hw wifi.link` shows both. Reading them:
 - dhcp_sent>0, failed>0: the firmware refuses or gets no ACK (look at last_failure).
 - dhcp_sent>0, ok>0, dhcp_answers=0: frames leave but the AP/router drops them
   (encryption or addressing).
+
+First x17 result (image 4141b489): `dhcp_sent=6 dhcp_answers=8 arp_in=60 v4_in=330`,
+`txdone ok=12 failed=0`. Wi-Fi TX and RX both work and the router answers; the
+lease is lost inside SexOS. So each DHCP frame (first 24 each way) is now logged:
+- `[wifi.link.dhcp] in|out type= xid= client= to=` (type: 1 discover, 2 offer,
+  3 request, 5 ack, 6 nak; client = chaddr; to = Ethernet destination)
+- `[wifi.link.dhcp2] in|out SRC->DST SPORT->DPORT you= fl= ip_len= frame= sum=`

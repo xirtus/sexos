@@ -162,6 +162,39 @@ fn ip_kind(f: &[u8]) -> u8 {
     }
 }
 
+/// One line per DHCP frame on the Wi-Fi link (the first 24 each way): who it is
+/// from and to, its message type (option 53: 1 discover, 2 offer, 3 request,
+/// 5 ack, 6 nak), transaction id and client address. For the x17, where replies
+/// arrive and no lease follows.
+fn log_dhcp(way: &str, f: &[u8]) {
+    let ihl = (f.get(14).copied().unwrap_or(0) & 0xf) as usize * 4;
+    let (udp, ip) = (14 + ihl, 14);
+    let d = udp + 8;
+    if f.len() < d + 240 || ihl < 20 {
+        sex_pdx::serial_record!("[wifi.link.dhcp] way={} short len={}", way, f.len());
+        return;
+    }
+    let mut kind = 0u8;
+    let mut at = d + 240;
+    while at + 1 < f.len() {
+        match f[at] { 0 => { at += 1; continue; } 255 => break, _ => {} }
+        let len = f[at + 1] as usize;
+        if f[at] == 53 && len >= 1 && at + 2 < f.len() { kind = f[at + 2]; break; }
+        at += 2 + len;
+    }
+    let m = |a: usize| (f[a], f[a + 1], f[a + 2], f[a + 3], f[a + 4], f[a + 5]);
+    let (e, c) = (m(0), m(d + 28));
+    let xid = u32::from_be_bytes([f[d + 4], f[d + 5], f[d + 6], f[d + 7]]);
+    // Two short lines: `hw` cuts lines at the screen's width.
+    sex_pdx::serial_record!("[wifi.link.dhcp] {} type={} xid={:08x} client={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} to={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        way, kind, xid, c.0, c.1, c.2, c.3, c.4, c.5, e.0, e.1, e.2, e.3, e.4, e.5);
+    sex_pdx::serial_record!("[wifi.link.dhcp2] {} {}.{}.{}.{}->{}.{}.{}.{} {}->{} you={}.{}.{}.{} fl={:04x} ip_len={} frame={} sum={:04x}",
+        way, f[ip + 12], f[ip + 13], f[ip + 14], f[ip + 15], f[ip + 16], f[ip + 17], f[ip + 18], f[ip + 19],
+        u16::from_be_bytes([f[udp], f[udp + 1]]), u16::from_be_bytes([f[udp + 2], f[udp + 3]]),
+        f[d + 16], f[d + 17], f[d + 18], f[d + 19], u16::from_be_bytes([f[d + 10], f[d + 11]]),
+        u16::from_be_bytes([f[16], f[17]]), f.len(), u16::from_be_bytes([f[udp + 6], f[udp + 7]]));
+}
+
 fn view(slot: u64, rights: u8) -> Result<m::RegionView, u64> {
     let info = sex_pdx::memory_region_info(slot)?;
     if info.rights & rights != rights { return Err(c::DENIED); }
@@ -695,7 +728,7 @@ impl Wifi {
         match l.send(&self.bringup, &mut self.mmio, &mut self.pool, ethernet) {
             Ok(()) => {
                 let q = &mut self.rx;
-                match ip_kind(ethernet) { 1 => q.tx_v4 += 1, 2 => q.tx_arp += 1, 3 => q.tx_dhcp += 1, _ => {} }
+                match ip_kind(ethernet) { 1 => q.tx_v4 += 1, 2 => q.tx_arp += 1, 3 => { q.tx_dhcp += 1; if q.tx_dhcp <= 24 { log_dhcp("out", ethernet); } } _ => {} }
                 if l.sent <= 16 || l.sent.is_power_of_two() { sex_pdx::serial_record!("[wifi.link.tx] frames={} length={}", l.sent, ethernet.len()); } true }
             Err(e) => { sex_pdx::serial_record!("[wifi.link.tx.failed] error={:?}", e); false }
         }
@@ -717,7 +750,7 @@ impl Wifi {
         // SAFETY: sexnet runs one thread, and only this link touches BA_SLOTS.
         let slots = unsafe { &mut *core::ptr::addr_of_mut!(BA_SLOTS) };
         let up = l.poll_with(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, Some(slots), |frame| {
-            match ip_kind(frame) { 1 => q.rx_v4 += 1, 2 => q.rx_arp += 1, 3 => q.rx_dhcp += 1, _ => {} }
+            match ip_kind(frame) { 1 => q.rx_v4 += 1, 2 => q.rx_arp += 1, 3 => { q.rx_dhcp += 1; if q.rx_dhcp <= 24 { log_dhcp("in", frame); } } _ => {} }
             if q.count == RX_FRAMES || frame.len() > wlink::MAX_ETHERNET { q.overflow += 1; return; }
             let at = (q.head + q.count) % RX_FRAMES;
             // SAFETY: sexnet runs one thread, and only this queue touches LINK_RX.
