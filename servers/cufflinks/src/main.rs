@@ -125,13 +125,17 @@ pub extern "C" fn _start() -> ! {
     audio::Audio::probe();
     let mut desk = ui::Desk::probe();
     let mut failed: Option<u32> = None;
+    // A controller whose firmware is not in the pack: not asked again until SexUSB
+    // reports it anew (replugged or reset), or this loop floods the log (x17: 800
+    // lines a few seconds, pushing everything else out of the kept log).
+    let mut no_firmware: Option<u32> = None;
     let mut packet = [0u8; bt_hci::MAX_PACKET];
     loop {
         // Wait for SexUSB to report a controller: it sends OP_LINK when one comes.
         let mut idle = false;
         let ((vendor, product), generation) = loop {
             serve();
-            if let Some(l) = ring.link() { break l; }
+            if let Some(l) = ring.link().filter(|l| no_firmware != Some(l.1)) { break l; }
             if !idle { log!("[cufflinks.idle] controller=none"); idle = true; }
             sex_pdx::sys_wait_self();
         };
@@ -139,7 +143,7 @@ pub extern "C" fn _start() -> ! {
         log!("[cufflinks.controller] vendor={:#06x} product={:#06x} part=\"{}\"", vendor, product, name);
         // A controller that failed stays "failed" in the panel while it retries.
         if failed != Some(generation) { desk.phase(u::STARTING); }
-        if vendor == intel::INTEL_VENDOR && !load_intel_firmware(&ring, generation, &mut packet) {
+        if vendor == intel::INTEL_VENDOR && !load_intel_firmware(&ring, generation, &mut packet, &mut no_firmware) {
             failed = still(&ring, generation).then_some(generation);
             desk.phase(if failed.is_some() { u::FAILED } else { u::NO_CONTROLLER });
             continue;
@@ -153,14 +157,15 @@ pub extern "C" fn _start() -> ! {
 fn still(ring: &Shared, generation: u32) -> bool { ring.link().is_some_and(|l| l.1 == generation) }
 
 /// Load Intel firmware. False: the controller left or the load failed.
-fn load_intel_firmware(ring: &Shared, generation: u32, packet: &mut [u8]) -> bool {
+fn load_intel_firmware(ring: &Shared, generation: u32, packet: &mut [u8], no_firmware: &mut Option<u32>) -> bool {
     let mut l = Loader::new();
     let mut idle = 0u32;
     while still(ring, generation) {
         if let Some((sfi, ddc)) = l.wants_firmware() {
             let pack = firmware_pack();
             let Some(file) = pack.and_then(|p| sex_bt::pack::find(p, &sfi)) else {
-                log!("[cufflinks.firmware] missing={} pack={}", sfi, pack.is_some() as u8);
+                log!("[cufflinks.firmware] missing={} pack={} retry=replug", sfi, pack.is_some() as u8);
+                *no_firmware = Some(generation);
                 return false;
             };
             let ddc_file = pack.and_then(|p| sex_bt::pack::find(p, &ddc));
