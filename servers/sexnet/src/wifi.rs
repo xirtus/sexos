@@ -100,6 +100,24 @@ pub struct Wifi {
     restarts: u32,
     /// No register access until this tick (the chip settling after a reset).
     settle_until: u64,
+    /// Why the last join, association or handshake failed, as the `[wifi.failed]`
+    /// line says it: Spindle's `wifi` shows it (`wifi_status::WHY`), since the boot
+    /// log may have moved past that line by the time anyone asks.
+    why: Why,
+}
+
+/// The newest failure's text, cut at `ws::WHY_BYTES`.
+#[derive(Clone, Copy)]
+struct Why { bytes: [u8; ws::WHY_BYTES], len: usize }
+impl core::fmt::Write for Why {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        for &b in s.as_bytes() { if self.len < self.bytes.len() { self.bytes[self.len] = b; self.len += 1; } }
+        Ok(())
+    }
+}
+impl Why {
+    const NONE: Why = Why { bytes: [0; ws::WHY_BYTES], len: 0 };
+    fn set(&mut self, args: core::fmt::Arguments<'_>) { *self = Why::NONE; let _ = core::fmt::Write::write_fmt(self, args); }
 }
 
 #[derive(Clone, Copy)]
@@ -200,7 +218,7 @@ impl Wifi {
         sex_pdx::serial_record!("[wifi.prepared] pool={} used={} rx_pages={} bus={:#x}",
             dma.length, bringup.layout.end, context::RX_BUFFERS, bus);
         Some(Wifi { mmio, pool, bringup, last: csr::Step::Ready, file, pnvm, hw_rev, rf_id, init: None, last_init: None, scan: None, scans: 0, join: None, joined_ssid: [0; 32], joined_bss: None, assoc: None, rsna: None, password: [0; ws::PASSWORD_MAX], password_len: 0, link: None, rx: RxQueue::EMPTY, finished: false,
-            saved: None, restart_at: None, want_join: false, attempts: 0, restarts: 0, settle_until: 0 })
+            saved: None, restart_at: None, want_join: false, attempts: 0, restarts: 0, settle_until: 0, why: Why::NONE })
     }
 
     /// True while the chip is busy (starting, scanning, joining) or recovering.
@@ -321,6 +339,7 @@ impl Wifi {
             .filter(|(_, n)| n.bss.ssid() == saved.ssid()).max_by_key(|(_, n)| n.rssi).map(|(k, _)| k as u64));
         let Some(index) = best else {
             sex_pdx::serial_record!("[wifi.rejoin] ssid=\"{}\" heard=0 attempt={}", core::str::from_utf8(saved.ssid()).unwrap_or("?"), self.attempts);
+            self.why.set(format_args!("not heard in the scan (try {})", self.attempts + 1));
             return self.retry(now_ticks);
         };
         self.password = saved.password;
@@ -364,6 +383,10 @@ impl Wifi {
         self.attempts = self.attempts.saturating_add(1);
         if self.attempts > MAX_ATTEMPTS {
             sex_pdx::serial_record!("[wifi.rejoin.gave_up] attempts={}", self.attempts - 1);
+            let mut last = Why::NONE;
+            let _ = core::fmt::Write::write_fmt(&mut last, format_args!("gave up after {} tries; last: ", self.attempts - 1));
+            for &b in &self.why.bytes[..self.why.len] { if last.len < last.bytes.len() { last.bytes[last.len] = b; last.len += 1; } }
+            self.why = last;
             self.want_join = false;
             self.restart_at = Some(now_ticks);
             return;
@@ -396,6 +419,7 @@ impl Wifi {
     /// Stops using Wi-Fi's network: forgets it and restarts the chip (it scans again).
     fn leave(&mut self, now_ticks: u64) {
         sex_pdx::serial_record!("[wifi.leave] connected={}", self.link_up() as u8);
+        self.why = Why::NONE;
         self.saved = None;
         self.attempts = 0;
         self.want_join = false;
@@ -428,6 +452,7 @@ impl Wifi {
                             self.password = [0; ws::PASSWORD_MAX];
                             self.password_len = 0;
                             sex_pdx::serial_record!("[wifi.failed] step=sae reason=no_entropy_or_element");
+                            self.why.set(format_args!("sae no_entropy_or_element"));
                             return self.join_failed(false, now_ticks);
                         }
                     }
@@ -442,6 +467,7 @@ impl Wifi {
             self.password = [0; ws::PASSWORD_MAX];
             self.password_len = 0;
             sex_pdx::serial_record!("[wifi.failed] step=join reason={:?} ssid=\"{}\" int={:#x}", j.step, ssid, self.mmio.read(csr::INT));
+            self.why.set(format_args!("join {:?}", j.step));
             self.join_failed(false, now_ticks);
         }
     }
@@ -474,6 +500,7 @@ impl Wifi {
             self.password = [0; ws::PASSWORD_MAX];
             self.password_len = 0;
             sex_pdx::serial_record!("[wifi.failed] step=assoc reason={:?} ssid=\"{}\" int={:#x}", a.step, ssid, self.mmio.read(csr::INT));
+            self.why.set(format_args!("assoc {:?} frames={}", a.step, a.tx.sent));
             // SAE that the AP refuses or never confirms: the passphrase is wrong.
             let sae = a.bss.security == Security::Wpa3Personal && matches!(a.step, assoc::Step::Refused(_));
             self.join_failed(sae, now_ticks);
@@ -553,6 +580,7 @@ impl Wifi {
         } else {
             use csr::Registers;
             sex_pdx::serial_record!("[wifi.failed] step=handshake reason={:?} ssid=\"{}\" int={:#x}", r.step, ssid, self.mmio.read(csr::INT));
+            self.why.set(format_args!("handshake {:?}", r.step));
             let refused = matches!(r.step, rsna::Step::Refused(_));
             self.join_failed(refused, now_ticks);
         }
@@ -748,6 +776,13 @@ impl Wifi {
         true
     }
 
+    /// Part `part` of the newest failure's text (`ws::WHY`).
+    fn why_part(&self, part: u64) -> u64 {
+        let from = (part as usize).saturating_mul(7);
+        if part >= ws::WHY_PARTS || from >= self.why.len { return ws::MISSING; }
+        ws::bytes_word(&self.why.bytes[from..self.why.len])
+    }
+
     fn network(&self, index: u64, part: u64) -> u64 {
         let Some(n) = self.scan.as_ref().and_then(|sc| sc.networks().nth(index as usize)) else { return ws::MISSING };
         let b = &n.bss;
@@ -786,6 +821,8 @@ pub fn request(wifi: Option<&mut Wifi>, caller: u32, action: u64, a: u64, b: u64
         }
         (ws::LEAVE, Some(w)) if caller != 6 => { w.leave(now_ticks); w.state().word() }
         (ws::LEAVE, None) => none,
+        (ws::WHY, Some(w)) => w.why_part(a),
+        (ws::WHY, None) => ws::MISSING,
         (ws::PASSWORD, Some(w)) if caller != 6 => if w.password_part(a, b) { w.state().word() } else { ws::REFUSED },
         _ => ws::REFUSED,
     }
