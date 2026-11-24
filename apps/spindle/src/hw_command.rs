@@ -72,6 +72,14 @@ pub fn keeps(pick: Pick, line: &[u8]) -> bool {
     }
 }
 
+/// Shows the newest line holding `text`, if the log still has one.
+pub fn newest(text: &[u8], sb: &mut crate::Scrollback) {
+    let mut last = [0u8; LINE];
+    let mut n = 0usize;
+    let _ = walk(|line| { n = line.len().min(LINE); last[..n].copy_from_slice(&line[..n]); }, Pick::Matching(text));
+    if n > 0 { sb.push(&last[..n]); }
+}
+
 /// Lines shown at most: the newest ones when more match.
 const SHOW: usize = 160;
 const LINE: usize = 158;

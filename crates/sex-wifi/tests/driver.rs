@@ -2300,3 +2300,34 @@ fn x17_reorders_a_block_ack_session() {
     assert_eq!(plain.ba, None);
     let _ = &mut plain;
 }
+
+/// x17 tether stall: an answer's SSN is a ring entry, not our 16-bit write pointer.
+/// One that does not match it exactly must still free only the answered frames, not
+/// the ones waiting behind them (whose byte counts would be zeroed).
+#[test]
+fn tx_release_frees_up_to_the_answered_ring_entry() {
+    let fw_file = synthetic_firmware();
+    let fw = ucode::Firmware::parse(&fw_file).unwrap();
+    let family = devices::Family::Ax210;
+    let layout = context::Layout::plan(family, &fw.image(), 0, 2 << 20).unwrap();
+    let mut m = Memory(vec![0; 2 << 20]);
+    let mut hw = Chip::new();
+    let mut q = tx::TxQueue::new(family);
+    let frame = [0u8; 60];
+    let status = |ssn: u32| tx::Status { index: 0, status: 1, retries: 0, ssn };
+    // 4100 frames, answered one at a time with a 12-bit SSN (wraps at 4096).
+    for n in 0..4100u32 {
+        q.send(&mut m, &mut hw, &layout, 0, &frame, 24, 0, 0).unwrap();
+        q.release(&mut m, &layout, status((n + 1) & 0xfff));
+        assert_eq!(q.queued, 0, "frame {n}");
+    }
+    // Three out, one answered: two stay queued, their byte counts kept.
+    for _ in 0..3 { q.send(&mut m, &mut hw, &layout, 0, &frame, 24, 0, 0).unwrap(); }
+    q.release(&mut m, &layout, status((4101) & 0xfff));
+    assert_eq!(q.queued, 2);
+    let at = |i: u64| u16::from_le_bytes(m.0[(layout.tx_byte_counts.offset + i * 2) as usize..][..2].try_into().unwrap());
+    assert_eq!(at(4100 % 256), 0);
+    assert_ne!(at(4101 % 256), 0);
+    assert_ne!(at(4102 % 256), 0);
+    assert!(q.ssn_skew > 0);
+}

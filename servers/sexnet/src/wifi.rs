@@ -141,8 +141,8 @@ static mut BA_SLOTS: sex_wifi::ba::Slots = sex_wifi::ba::Slots::EMPTY;
 static mut LINK_RX: [[u8; wlink::MAX_ETHERNET]; RX_FRAMES] = [[0; wlink::MAX_ETHERNET]; RX_FRAMES];
 /// The receive queue, and what IPv4 went by (for `[wifi.link.ip]`: whether DHCP
 /// requests leave and answers come back).
-struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64, rx_v4: u32, rx_arp: u32, rx_dhcp: u32, tx_v4: u32, tx_arp: u32, tx_dhcp: u32, seen: (u32, u32, u32, u32, u32, u32), unicast_in: u32 }
-impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0, rx_v4: 0, rx_arp: 0, rx_dhcp: 0, tx_v4: 0, tx_arp: 0, tx_dhcp: 0, seen: (0, 0, 0, 0, 0, 0), unicast_in: 0 }; }
+struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64, rx_v4: u32, rx_arp: u32, rx_dhcp: u32, tx_v4: u32, tx_arp: u32, tx_dhcp: u32, seen: (u32, u32, u32, u32, u32, u32), unicast_in: u32, tx_full: u32 }
+impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0, rx_v4: 0, rx_arp: 0, rx_dhcp: 0, tx_v4: 0, tx_arp: 0, tx_dhcp: 0, seen: (0, 0, 0, 0, 0, 0), unicast_in: 0, tx_full: 0 }; }
 
 /// An Ethernet frame's kind: 1 IPv4, 2 ARP, 3 DHCP (IPv4 UDP to or from port 67/68), 0 other.
 fn ip_kind(f: &[u8]) -> u8 {
@@ -736,6 +736,18 @@ impl Wifi {
     pub fn link_up(&self) -> bool { self.link.as_ref().is_some_and(|l| l.up()) }
     pub fn link_mac(&self) -> Option<[u8; 6]> { self.link.as_ref().map(|l| l.me()) }
     pub fn link_ready(&self) -> bool { self.link.as_ref().is_some_and(|l| l.ready()) }
+    /// Logs the link's counters now (`[wifi.link.now]`, `[wifi.link.now2]`): Spindle's
+    /// `wifi` shows them, since typing alone can push older lines out of the log's tail.
+    pub fn log_link_now(&self) {
+        let Some(l) = self.link.as_ref() else { sex_pdx::serial_record!("[wifi.link.now] link=none"); return };
+        let q = &self.rx;
+        let t = &l.tx;
+        let (ssn, last) = t.last.map_or((0, 0), |s| (s.ssn, s.status));
+        sex_pdx::serial_record!("[wifi.link.now] up={} ready={} sent={} ok={} failed={} queued={} cur={} hw={} tail_hw={} ssn={} last={:#x} skew={} full={}",
+            l.up() as u8, l.ready() as u8, l.sent, l.tx_ok, l.tx_failed, t.queued, t.cur, t.hw, t.tail_hw(), ssn, last, t.ssn_skew, q.tx_full);
+        sex_pdx::serial_record!("[wifi.link.now2] rx={} dropped={} last_drop={:?} overflow={} queued_in={} v4_out={} v4_in={} arp={}/{} missed_beacons={} ba={} flushes={}",
+            l.received, l.dropped, l.last_drop, q.overflow, q.count, q.tx_v4, q.rx_v4, q.tx_arp, q.rx_arp, l.missed_beacons, l.ba.is_some() as u8, l.ba_flushes);
+    }
     /// Sends one Ethernet frame over the air.
     pub fn link_send(&mut self, ethernet: &[u8]) -> bool {
         let Some(l) = self.link.as_mut() else { return false };
@@ -750,7 +762,12 @@ impl Wifi {
                 let q = &mut self.rx;
                 match ip_kind(ethernet) { 1 => q.tx_v4 += 1, 2 => q.tx_arp += 1, 3 => { q.tx_dhcp += 1; if q.tx_dhcp <= 24 { log_dhcp("out", ethernet); } } _ => {} }
                 if l.sent <= 16 || l.sent.is_power_of_two() { sex_pdx::serial_record!("[wifi.link.tx] frames={} length={}", l.sent, ethernet.len()); } true }
-            Err(e) => { sex_pdx::serial_record!("[wifi.link.tx.failed] error={:?}", e); false }
+            Err(e) => {
+                let q = &mut self.rx;
+                q.tx_full += 1;
+                if q.tx_full <= 8 || q.tx_full.is_power_of_two() { sex_pdx::serial_record!("[wifi.link.tx.failed] error={:?} times={}", e, q.tx_full); }
+                false
+            }
         }
     }
     /// Reads the air into the receive queue, then offers the oldest queued frame to
@@ -924,7 +941,11 @@ pub fn request(wifi: Option<&mut Wifi>, caller: u32, action: u64, a: u64, b: u64
     match (action, wifi) {
         (ws::STATE, None) | (ws::SCAN, None) => none,
         (ws::NETWORK, None) => ws::MISSING,
-        (ws::STATE, Some(w)) => w.state().word(),
+        (ws::STATE, Some(w)) => {
+            // Spindle's `wifi` (not SilkBar's polling): its counters, for `wifi` to show.
+            if spindle { w.log_link_now(); }
+            w.state().word()
+        }
         (ws::SCAN, Some(w)) if caller != 6 => { w.rescan(now_ticks); w.state().word() }
         (ws::NETWORK, Some(w)) => w.network(a, b),
         (ws::JOIN, None) => none,

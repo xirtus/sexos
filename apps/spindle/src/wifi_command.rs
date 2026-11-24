@@ -273,6 +273,12 @@ impl Wifi {
                 let n = state_line(s, scan, join, leave, &mut line);
                 sb.push(&line[..n]);
                 sex_pdx::serial_record!("[spindle.wifi] phase={} networks={} scans={} channels={}", s.phase, s.networks, s.scans, s.channels);
+                // On a network: the link's counters, which sexnet logged just before
+                // answering (typing alone can push older Wi-Fi lines out of the log).
+                if matches!(s.phase, ws::ASSOCIATED | ws::CONNECTED) && !scan && !join && !leave {
+                    crate::hw_command::newest(b"[wifi.link.now]", sb);
+                    crate::hw_command::newest(b"[wifi.link.now2]", sb);
+                }
                 // Connecting, or a try failed: why the last one failed says more than
                 // the list (the boot log may have moved past its [wifi.failed] line).
                 let trying = matches!(s.phase, ws::FAILED | ws::JOINING | ws::JOINED | ws::ASSOCIATING | ws::HANDSHAKE);
