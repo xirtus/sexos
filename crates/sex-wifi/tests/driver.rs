@@ -483,6 +483,12 @@ fn authentication_and_association_frames() {
     let n = w::assoc_request(&mut buf, &bss, &STA, 3, &rsn[..rn], &[], &[]);
     let ies: Vec<u8> = w::elements(&buf[28..n]).map(|(id, _)| id).collect();
     assert_eq!(ies, [0, 1, 48, 244]);
+    // Short preamble on 2.4 GHz only (an AP that requires it answers status 19 otherwise).
+    let cap = |buf: &[u8]| u16::from_le_bytes([buf[24], buf[25]]);
+    assert_eq!(cap(&buf) & w::CAPINFO_SHORT_PREAMBLE, 0);
+    let two = w::parse_bss(&beacon(b"wpa2", 10, Some(&rsn[..rn]), false)).unwrap();
+    w::assoc_request(&mut buf, &two, &STA, 4, &rsn[..rn], &[], &[]);
+    assert_eq!(cap(&buf), 0x0001 | 0x0010 | 0x0400 | w::CAPINFO_SHORT_PREAMBLE);
     let mut resp = [0u8; 30];
     resp[0] = 0x10;
     resp[28..30].copy_from_slice(&(0xc000u16 | 5).to_le_bytes());
