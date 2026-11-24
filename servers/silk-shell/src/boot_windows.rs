@@ -32,9 +32,11 @@ fn in_vm() -> bool { core::arch::x86_64::__cpuid(1).ecx & (1 << 31) != 0 }
 unsafe fn ready(sid: u64) -> Option<u32> {
     let fid = frame_for_surface(sid)?;
     if !surface_is_alive(sid) { return None; }
-    // Apps with a custody row are ready once their registration is answered.
+    // Apps with a custody row are ready once their registration is answered. Only an
+    // app whose window is its own surface (Kaleidoscope) gets custody bounds; Quil's
+    // window is the Shell's frame 201 around its content, which never does.
     if let Some(e) = APP_CUSTODY.iter().flatten().find(|e| e.owns_surface(sid)) {
-        if e.dead || e.bounds.is_none() || e.registration_reply { return None; }
+        if e.dead || e.registration_reply || (e.surface == sid && e.bounds.is_none()) { return None; }
     }
     Some(fid)
 }
@@ -63,10 +65,9 @@ pub(crate) unsafe fn poll() {
     }
     if LEFT != 0 && now.wrapping_sub(STARTED) < GIVE_UP_TICKS { return; }
     DONE = true;
-    if frame_for_surface(SURFACE_ID_SPINDLE).is_none() { let _ = ensure_spindle_frame(); }
-    let spindle = frame_for_surface(SURFACE_ID_SPINDLE);
-    if let Some(fid) = spindle { if frame_is_minimized(fid) { restore_minimized_frame(fid); } }
-    let focused = spindle.is_some() && try_set_focus(SURFACE_ID_SPINDLE);
+    // The ordinary open path: maps and tiles the frame if it is not up yet, restores it
+    // if minimized, and focuses it.
+    let focused = open_spindle_in_active_scene();
     sex_pdx::serial_record!("[shell.boot.windows] tidy=1 minimized={:#05b} left={:#05b} spindle_focus={} ms={}",
         MINIMIZED, LEFT, focused as u8, now.wrapping_sub(STARTED));
 }
