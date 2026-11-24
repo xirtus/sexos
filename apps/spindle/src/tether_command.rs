@@ -42,6 +42,8 @@ pub const CMD_MAX: usize = 256;
 const STATE_EVERY: u32 = 25;
 /// Connecting gives up after this long.
 const CONNECT_MS: u64 = 20_000;
+/// An answer not back by then is taken as lost.
+const LOST_MS: u64 = 1_500;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Phase { Idle, Up,
@@ -59,6 +61,8 @@ pub struct Tether {
     phase: Phase,
     seq: u32,
     sent: bool,
+    /// When the call out was made: an answer lost on the way is asked for again.
+    sent_at: u64,
     call: Call,
     next_at: u64,
     deadline: u64,
@@ -90,7 +94,7 @@ pub struct Tether {
 }
 
 pub static mut TETHER: Tether = Tether {
-    phase: Phase::Idle, seq: 0, sent: false, call: Call::Plain, next_at: 0, deadline: 0, told_v4: false,
+    phase: Phase::Idle, seq: 0, sent: false, sent_at: 0, call: Call::Plain, next_at: 0, deadline: 0, told_v4: false,
     host: [0; 128], host_len: 0, port: DEFAULT_PORT, address: [0; 4],
     out: [0; OUT_MAX], out_len: 0, log_at: 0, log_total: 0, lines_sent: 0,
     inbound: [0; IN_MAX], in_len: 0, queue: [[0; CMD_MAX]; QUEUE], queue_len: [0; QUEUE],
@@ -290,6 +294,7 @@ impl Tether {
         self.seq = (self.seq + 1) & 0x7F_FFFF;
         if sex_pdx::pdx_call_checked(sex_pdx::SLOT_NET, w::OP, w::request_on(self.seq, kind, flow), value, 0).is_ok() {
             self.sent = true;
+            self.sent_at = sex_pdx::get_ticks();
             self.call = call;
         } else {
             self.next_at = sex_pdx::get_ticks() + POLL_MS;
@@ -344,8 +349,16 @@ impl Tether {
 
     /// Sends the next call when one is due. True when the screen may need drawing.
     pub fn step(&mut self, sb: &mut Scrollback) -> bool {
-        if self.phase == Phase::Idle || self.sent { return false; }
+        if self.phase == Phase::Idle { return false; }
         let now = sex_pdx::get_ticks();
+        // sexnet keeps one answer per program waiting: when another command's call
+        // (`wifi`) took it, ours never comes. Ask again; a late answer has an old number.
+        if self.sent {
+            if now.saturating_sub(self.sent_at) < LOST_MS { return false; }
+            sex_pdx::serial_record!("[spindle.tether.resend] phase={:?} call={:?}", self.phase, self.call);
+            self.sent = false;
+            self.next_at = 0;
+        }
         if now < self.next_at { return false; }
         if self.phase == Phase::V4Wait && now > self.deadline {
             self.fail(sb, "no IPv4 address: the router never answered DHCP (`hw dhcp` shows the lease when it comes)");

@@ -17,3 +17,6 @@
   CONNECT_TO and needs no DHCP. tether_host.py now listens on IPv6 and IPv4 on one
   socket and prints its IPv6 addresses too (the x17 gets IPv6 from the router over
   Wi-Fi while DHCPv4 never finishes).
+- Tether asks again when sexnet's answer is lost (not back in 1.5 s). sexnet keeps
+  one answer per program waiting, so a `wifi` typed while the tether connects took
+  it and the tether waited forever at "connecting" (x17, 10 minutes).
