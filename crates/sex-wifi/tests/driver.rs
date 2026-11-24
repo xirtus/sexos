@@ -890,7 +890,10 @@ fn mpdu(family: devices::Family, frame: &[u8], energy: u8, channel: u8, pad: boo
     d[12..16].copy_from_slice(&3u32.to_le_bytes());
     let e = if family == devices::Family::Ax210 { 40 } else { 32 };
     d[e] = energy; d[e + 1] = 0; d[e + 2] = channel;
-    if pad { d.extend_from_slice(&frame[..24]); d.extend_from_slice(&[0, 0]); d.extend_from_slice(&frame[24..]); }
+    // The pad follows the 802.11 header, or the CCMP header of a protected frame
+    // (`iwl_mvm_create_skb`: "the padding is inserted after the IV").
+    let at = if frame[0] & 0x0c == 8 { w::data_header_len(frame).unwrap_or(24) } else { 24 } + if frame[1] & 0x40 != 0 { 8 } else { 0 };
+    if pad { d.extend_from_slice(&frame[..at]); d.extend_from_slice(&[0, 0]); d.extend_from_slice(&frame[at..]); }
     else { d.extend_from_slice(frame); }
     packet(0xc1, 0, 0, 0x80, &d)
 }
