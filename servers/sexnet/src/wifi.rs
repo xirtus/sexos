@@ -139,8 +139,28 @@ static mut FIRMWARE: [u8; 2 << 20] = [0; 2 << 20];
 /// Stage X2: frames one block-ack session holds until the gap before them fills.
 static mut BA_SLOTS: sex_wifi::ba::Slots = sex_wifi::ba::Slots::EMPTY;
 static mut LINK_RX: [[u8; wlink::MAX_ETHERNET]; RX_FRAMES] = [[0; wlink::MAX_ETHERNET]; RX_FRAMES];
-struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64 }
-impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0 }; }
+/// The receive queue, and what IPv4 went by (for `[wifi.link.ip]`: whether DHCP
+/// requests leave and answers come back).
+struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64, rx_v4: u32, rx_arp: u32, rx_dhcp: u32, tx_v4: u32, tx_arp: u32, tx_dhcp: u32 }
+impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0, rx_v4: 0, rx_arp: 0, rx_dhcp: 0, tx_v4: 0, tx_arp: 0, tx_dhcp: 0 }; }
+
+/// An Ethernet frame's kind: 1 IPv4, 2 ARP, 3 DHCP (IPv4 UDP to or from port 67/68), 0 other.
+fn ip_kind(f: &[u8]) -> u8 {
+    if f.len() < 14 { return 0; }
+    match u16::from_be_bytes([f[12], f[13]]) {
+        0x0806 => 2,
+        0x0800 => {
+            let ihl = (f.get(14).copied().unwrap_or(0) & 0xf) as usize * 4;
+            let udp = 14 + ihl;
+            if f.get(23) == Some(&17) && f.len() >= udp + 4 {
+                let (src, dst) = (u16::from_be_bytes([f[udp], f[udp + 1]]), u16::from_be_bytes([f[udp + 2], f[udp + 3]]));
+                if matches!(src, 67 | 68) || matches!(dst, 67 | 68) { return 3; }
+            }
+            1
+        }
+        _ => 0,
+    }
+}
 
 fn view(slot: u64, rights: u8) -> Result<m::RegionView, u64> {
     let info = sex_pdx::memory_region_info(slot)?;
@@ -673,7 +693,10 @@ impl Wifi {
     pub fn link_send(&mut self, ethernet: &[u8]) -> bool {
         let Some(l) = self.link.as_mut() else { return false };
         match l.send(&self.bringup, &mut self.mmio, &mut self.pool, ethernet) {
-            Ok(()) => { if l.sent <= 16 || l.sent.is_power_of_two() { sex_pdx::serial_record!("[wifi.link.tx] frames={} length={}", l.sent, ethernet.len()); } true }
+            Ok(()) => {
+                let q = &mut self.rx;
+                match ip_kind(ethernet) { 1 => q.tx_v4 += 1, 2 => q.tx_arp += 1, 3 => q.tx_dhcp += 1, _ => {} }
+                if l.sent <= 16 || l.sent.is_power_of_two() { sex_pdx::serial_record!("[wifi.link.tx] frames={} length={}", l.sent, ethernet.len()); } true }
             Err(e) => { sex_pdx::serial_record!("[wifi.link.tx.failed] error={:?}", e); false }
         }
     }
@@ -685,11 +708,14 @@ impl Wifi {
         let before = (l.received, l.dropped);
         let keys = (l.rekey_messages, l.rekeyed);
         let rates = (l.rate_control, l.rate);
+        let answered = (l.tx_ok, l.tx_failed);
         let block_ack = (l.ba_sessions, l.ba_declined, l.ba_flushes);
         let q = &mut self.rx;
+        let ip = (q.rx_v4, q.rx_arp, q.rx_dhcp, q.tx_v4, q.tx_arp, q.tx_dhcp);
         // SAFETY: sexnet runs one thread, and only this link touches BA_SLOTS.
         let slots = unsafe { &mut *core::ptr::addr_of_mut!(BA_SLOTS) };
         let up = l.poll_with(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, Some(slots), |frame| {
+            match ip_kind(frame) { 1 => q.rx_v4 += 1, 2 => q.rx_arp += 1, 3 => q.rx_dhcp += 1, _ => {} }
             if q.count == RX_FRAMES || frame.len() > wlink::MAX_ETHERNET { q.overflow += 1; return; }
             let at = (q.head + q.count) % RX_FRAMES;
             // SAFETY: sexnet runs one thread, and only this queue touches LINK_RX.
@@ -701,6 +727,19 @@ impl Wifi {
             sex_pdx::serial_record!("[wifi.link.down] reason={:?} sent={} received={} dropped={} overflow={}", l.down, l.sent, l.received, l.dropped, q.overflow);
             *q = RxQueue::EMPTY;
             return false;
+        }
+        if (l.tx_ok, l.tx_failed) != answered {
+            let n = l.tx_ok + l.tx_failed;
+            if n <= 16 || n.is_power_of_two() || l.tx_failed != answered.1 && l.tx_failed <= 16 {
+                sex_pdx::serial_record!("[wifi.link.txdone] ok={} failed={} last_failure={:#x}", l.tx_ok, l.tx_failed, l.tx_last_failure);
+            }
+        }
+        let now_ip = (q.rx_v4, q.rx_arp, q.rx_dhcp, q.tx_v4, q.tx_arp, q.tx_dhcp);
+        if now_ip != ip {
+            let n = now_ip.0 + now_ip.1 + now_ip.2 + now_ip.3 + now_ip.4 + now_ip.5;
+            if n <= 32 || n.is_power_of_two() || now_ip.2 != ip.2 && now_ip.2 <= 16 {
+                sex_pdx::serial_record!("[wifi.link.ip] dhcp_sent={} dhcp_answers={} arp_sent={} arp_in={} v4_sent={} v4_in={}", q.tx_dhcp, q.rx_dhcp, q.tx_arp, q.rx_arp, q.tx_v4, q.rx_v4);
+            }
         }
         if (l.rate_control, l.rate) != rates {
             sex_pdx::serial_record!("[wifi.rate] control={:?} rate={:#x}", l.rate_control, l.rate);
