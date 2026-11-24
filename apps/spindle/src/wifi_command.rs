@@ -217,6 +217,11 @@ impl Wifi {
         let word = ws::bytes_word(&self.password[from..self.password_len.max(from)]);
         self.ask(ws::PASSWORD, part | (self.password_len as u64) << 8, word)
     }
+    /// Asks sexnet why the last try failed (`Waiting::Why`); nothing shows when none did.
+    fn ask_why(&mut self) {
+        self.why_len = 0;
+        if self.ask(ws::WHY, 0, 0) { self.waiting = Waiting::Why { part: 0 }; }
+    }
     /// Spindle keeps no copy once sexnet has it.
     fn forget(&mut self) { self.password = [0; ws::PASSWORD_MAX]; self.password_len = 0; }
 
@@ -271,14 +276,14 @@ impl Wifi {
                 // Connecting, or a try failed: why the last one failed says more than
                 // the list (the boot log may have moved past its [wifi.failed] line).
                 let trying = matches!(s.phase, ws::FAILED | ws::JOINING | ws::JOINED | ws::ASSOCIATING | ws::HANDSHAKE);
-                if trying && !leave {
-                    self.why_len = 0;
-                    if self.ask(ws::WHY, 0, 0) { self.waiting = Waiting::Why { part: 0 }; }
-                    return true;
-                }
+                if trying && !leave { self.ask_why(); return true; }
                 // A scan just started has nothing finished to list yet.
                 if s.networks > 0 && !join && !(scan && s.phase == ws::SCANNING) && self.ask(ws::NETWORK, 0, ws::PART_INFO) {
                     self.waiting = Waiting::Network { index: 0, part: ws::PART_INFO };
+                } else if !join && !leave {
+                    // Restarting or rescanning after a refused passphrase or a given-up
+                    // rejoin: that failure still says the most.
+                    self.ask_why();
                 }
             }
             Waiting::Password { index, part } => {
@@ -310,7 +315,8 @@ impl Wifi {
                 }
             }
             Waiting::Network { index, part } => {
-                if value == ws::MISSING { return true; }
+                // The list ended: then why the last try failed, if one did.
+                if value == ws::MISSING { self.ask_why(); return true; }
                 match part {
                     ws::PART_INFO => { self.info = ws::Info::of(value); self.ssid = [0; 35]; }
                     ws::PART_BSSID => ws::word_bytes(value, &mut self.bssid),
@@ -328,7 +334,7 @@ impl Wifi {
                 sb.push(&line[..n]);
                 if index + 1 < MAX_LISTED && self.ask(ws::NETWORK, index + 1, ws::PART_INFO) {
                     self.waiting = Waiting::Network { index: index + 1, part: ws::PART_INFO };
-                }
+                } else { self.ask_why(); }
             }
         }
         true
