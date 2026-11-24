@@ -35,6 +35,13 @@ pub const PASSWORD: u64 = 5;
 /// Leaves the network (if any), forgets it and its passphrase, and restarts the chip,
 /// which scans again. Shell and Spindle only. Replies with the state word.
 pub const LEAVE: u64 = 6;
+/// Part `a` (bytes 7a..7a+7, as `bytes_word`) of why the last join, association or
+/// handshake failed, in words (the boot log's `[wifi.failed]` reason, or that the
+/// network was not heard): what Spindle's `wifi` shows while connecting. `MISSING`
+/// past its end, and when nothing failed since the last `LEAVE`.
+pub const WHY: u64 = 7;
+pub const WHY_PARTS: u64 = 9;
+pub const WHY_BYTES: usize = 63;
 /// 9 × 7 bytes hold WPA2's 63-character maximum.
 pub const PASSWORD_PARTS: u64 = 9;
 pub const PASSWORD_MAX: usize = 63;
