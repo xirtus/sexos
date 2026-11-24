@@ -141,8 +141,8 @@ static mut BA_SLOTS: sex_wifi::ba::Slots = sex_wifi::ba::Slots::EMPTY;
 static mut LINK_RX: [[u8; wlink::MAX_ETHERNET]; RX_FRAMES] = [[0; wlink::MAX_ETHERNET]; RX_FRAMES];
 /// The receive queue, and what IPv4 went by (for `[wifi.link.ip]`: whether DHCP
 /// requests leave and answers come back).
-struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64, rx_v4: u32, rx_arp: u32, rx_dhcp: u32, tx_v4: u32, tx_arp: u32, tx_dhcp: u32 }
-impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0, rx_v4: 0, rx_arp: 0, rx_dhcp: 0, tx_v4: 0, tx_arp: 0, tx_dhcp: 0 }; }
+struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64, rx_v4: u32, rx_arp: u32, rx_dhcp: u32, tx_v4: u32, tx_arp: u32, tx_dhcp: u32, seen: (u32, u32, u32, u32, u32, u32) }
+impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0, rx_v4: 0, rx_arp: 0, rx_dhcp: 0, tx_v4: 0, tx_arp: 0, tx_dhcp: 0, seen: (0, 0, 0, 0, 0, 0) }; }
 
 /// An Ethernet frame's kind: 1 IPv4, 2 ARP, 3 DHCP (IPv4 UDP to or from port 67/68), 0 other.
 fn ip_kind(f: &[u8]) -> u8 {
@@ -711,7 +711,9 @@ impl Wifi {
         let answered = (l.tx_ok, l.tx_failed);
         let block_ack = (l.ba_sessions, l.ba_declined, l.ba_flushes);
         let q = &mut self.rx;
-        let ip = (q.rx_v4, q.rx_arp, q.rx_dhcp, q.tx_v4, q.tx_arp, q.tx_dhcp);
+        // Compared with what the last turn saw, not this turn's start: link_send
+        // counts between turns, and requests nobody answers must still show.
+        let ip = q.seen;
         // SAFETY: sexnet runs one thread, and only this link touches BA_SLOTS.
         let slots = unsafe { &mut *core::ptr::addr_of_mut!(BA_SLOTS) };
         let up = l.poll_with(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, Some(slots), |frame| {
@@ -736,6 +738,7 @@ impl Wifi {
         }
         let now_ip = (q.rx_v4, q.rx_arp, q.rx_dhcp, q.tx_v4, q.tx_arp, q.tx_dhcp);
         if now_ip != ip {
+            q.seen = now_ip;
             let n = now_ip.0 + now_ip.1 + now_ip.2 + now_ip.3 + now_ip.4 + now_ip.5;
             if n <= 32 || n.is_power_of_two() || now_ip.2 != ip.2 && now_ip.2 <= 16 {
                 sex_pdx::serial_record!("[wifi.link.ip] dhcp_sent={} dhcp_answers={} arp_sent={} arp_in={} v4_sent={} v4_in={}", q.tx_dhcp, q.rx_dhcp, q.tx_arp, q.rx_arp, q.tx_v4, q.rx_v4);
