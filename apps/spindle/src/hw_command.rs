@@ -77,8 +77,17 @@ pub fn newest(text: &[u8], sb: &mut crate::Scrollback) {
     let mut last = [0u8; LINE];
     let mut n = 0usize;
     let _ = walk(|line| { n = line.len().min(LINE); last[..n].copy_from_slice(&line[..n]); }, Pick::Matching(text));
-    if n > 0 { sb.push(&last[..n]); }
+    // Scrollback keeps 110 bytes a line: wrap at spaces so no counter is cut off.
+    let mut rest = &last[..n];
+    while !rest.is_empty() {
+        let mut cut = rest.len().min(WRAP);
+        if cut < rest.len() { if let Some(sp) = rest[..cut].iter().rposition(|&b| b == b' ') { if sp > 0 { cut = sp; } } }
+        sb.push(&rest[..cut]);
+        rest = &rest[cut..];
+        while let [b' ', r @ ..] = rest { rest = r; }
+    }
 }
+const WRAP: usize = 100;
 
 /// Lines shown at most: the newest ones when more match.
 const SHOW: usize = 160;
