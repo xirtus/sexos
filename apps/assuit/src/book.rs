@@ -5,6 +5,7 @@
 //! so the host tests drive it directly.
 use std::path::Path;
 use std::sync::Arc;
+use std::io::Write;
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
 use wordcraft_engine::doc::{Document, StoryRef};
@@ -164,12 +165,11 @@ impl Book {
         if [".doc", ".dot", ".pdf"].iter().any(|e| lower.ends_with(e)) { self.beside("docx") } else { self.path.clone() }
     }
 
-    /// Writes the document to its file (see [`Book::save_path`]) with std::fs::write (the
-    /// engine's safe save creates and renames a temporary file). Returns the size.
+    /// Writes the document to its file (see [`Book::save_path`]). Returns the size.
     pub fn save(&mut self) -> Result<usize, String> {
         let path = self.save_path();
         let bytes = self.file_bytes(&path)?;
-        std::fs::write(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
+        replace_file(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
         self.forget_recovery();
         self.path = path.clone();
         self.session.path = Some(path.into());
@@ -189,7 +189,7 @@ impl Book {
     pub fn export_pdf(&self) -> Result<(String, usize), String> {
         let path = self.beside("pdf");
         let bytes = self.file_bytes(&path)?;
-        std::fs::write(&path, &bytes).map_err(|e| format!("Could not write {path}: {e}"))?;
+        replace_file(&path, &bytes).map_err(|e| format!("Could not write {path}: {e}"))?;
         Ok((path, bytes.len()))
     }
 
@@ -207,7 +207,7 @@ impl Book {
             return Err("Word 97-2003 files open but do not save: save as .docx, .odt or .rtf".into());
         }
         let bytes = self.file_bytes(&path)?;
-        std::fs::write(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
+        replace_file(&path, &bytes).map_err(|e| format!("Could not save {path}: {e}"))?;
         if ![".pdf", ".png"].iter().any(|e| lower.ends_with(e)) {
             self.forget_recovery();
             self.path = path.clone();
@@ -222,7 +222,7 @@ impl Book {
     pub fn write_recovery(&self) -> Result<(), String> {
         let path = recovery_path(&self.path);
         let bytes = self.file_bytes(&path)?;
-        std::fs::write(&path, bytes).map_err(|e| format!("Could not keep the changes in {path}: {e}"))
+        replace_file(&path, &bytes).map_err(|e| format!("Could not keep the changes in {path}: {e}"))
     }
 
     /// Opens `path` with the unsaved changes kept from last time, if there are any: the
@@ -253,6 +253,51 @@ impl Book {
 
 /// Where unsaved changes to `path` are kept: `letter.odt` -> `letter.odt.recovered.docx`.
 pub fn recovery_path(path: &str) -> String { format!("{path}.recovered.docx") }
+
+/// Stage bytes beside the destination, then ask Files to replace its name in one
+/// rename. A failed encode or write leaves the previous document untouched.
+fn replace_file(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::{Error, ErrorKind};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut staged = None;
+    for _ in 0..16 {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let name = format!("{path}.assuit-{n}.tmp");
+        match OpenOptions::new().write(true).create_new(true).open(&name) {
+            Ok(file) => { staged = Some((name, file)); break; }
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    let (name, mut file) = staged.ok_or_else(|| Error::new(ErrorKind::AlreadyExists, "no free Assuit staging name"))?;
+    let write_result = (|| {
+        file.write_all(bytes)?;
+        file.flush()?;
+        sync_staged(&file)
+    })();
+    drop(file);
+    let result = write_result.and_then(|()| rename_staged(&name, path));
+    if result.is_err() { let _ = std::fs::remove_file(&name); }
+    result
+}
+
+#[cfg(target_os = "hermit")]
+fn sync_staged(file: &std::fs::File) -> std::io::Result<()> {
+    use sex_std::fs::FileExt;
+    file.fsync()
+}
+
+#[cfg(not(target_os = "hermit"))]
+fn sync_staged(file: &std::fs::File) -> std::io::Result<()> { file.sync_all() }
+
+#[cfg(target_os = "hermit")]
+fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { sex_std::fs::rename(from, to) }
+
+#[cfg(not(target_os = "hermit"))]
+fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { std::fs::rename(from, to) }
 
 #[cfg(test)]
 mod tests {
@@ -479,6 +524,19 @@ mod tests {
     fn doc_saves_beside_as_docx() {
         let book = Book::blank(&temp("old.doc"));
         assert!(book.save_path().ends_with("old.docx"));
+    }
+
+    #[test]
+    fn replacement_preserves_previous_file_until_staged_bytes_are_ready() {
+        let path = temp("replace.docx");
+        std::fs::write(&path, b"previous copy").unwrap();
+        let staged_name = format!("{path}.assuit-0.tmp");
+        // A stale staging name must not truncate either that file or the document.
+        std::fs::write(&staged_name, b"stale staging data").unwrap();
+        replace_file(&path, b"new complete copy").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"new complete copy");
+        assert_eq!(std::fs::read(&staged_name).unwrap(), b"stale staging data");
+        std::fs::remove_file(staged_name).unwrap();
     }
 
     #[test]
