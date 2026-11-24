@@ -139,8 +139,75 @@ static mut FIRMWARE: [u8; 2 << 20] = [0; 2 << 20];
 /// Stage X2: frames one block-ack session holds until the gap before them fills.
 static mut BA_SLOTS: sex_wifi::ba::Slots = sex_wifi::ba::Slots::EMPTY;
 static mut LINK_RX: [[u8; wlink::MAX_ETHERNET]; RX_FRAMES] = [[0; wlink::MAX_ETHERNET]; RX_FRAMES];
-struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64 }
-impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0 }; }
+/// The receive queue, and what IPv4 went by (for `[wifi.link.ip]`: whether DHCP
+/// requests leave and answers come back).
+struct RxQueue { head: usize, count: usize, len: [u16; RX_FRAMES], overflow: u64, rx_v4: u32, rx_arp: u32, rx_dhcp: u32, tx_v4: u32, tx_arp: u32, tx_dhcp: u32, seen: (u32, u32, u32, u32, u32, u32), unicast_in: u32 }
+impl RxQueue { const EMPTY: Self = Self { head: 0, count: 0, len: [0; RX_FRAMES], overflow: 0, rx_v4: 0, rx_arp: 0, rx_dhcp: 0, tx_v4: 0, tx_arp: 0, tx_dhcp: 0, seen: (0, 0, 0, 0, 0, 0), unicast_in: 0 }; }
+
+/// An Ethernet frame's kind: 1 IPv4, 2 ARP, 3 DHCP (IPv4 UDP to or from port 67/68), 0 other.
+fn ip_kind(f: &[u8]) -> u8 {
+    if f.len() < 14 { return 0; }
+    match u16::from_be_bytes([f[12], f[13]]) {
+        0x0806 => 2,
+        0x0800 => {
+            let ihl = (f.get(14).copied().unwrap_or(0) & 0xf) as usize * 4;
+            let udp = 14 + ihl;
+            if f.get(23) == Some(&17) && f.len() >= udp + 4 {
+                let (src, dst) = (u16::from_be_bytes([f[udp], f[udp + 1]]), u16::from_be_bytes([f[udp + 2], f[udp + 3]]));
+                if matches!(src, 67 | 68) || matches!(dst, 67 | 68) { return 3; }
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// One line per DHCP frame on the Wi-Fi link (the first 24 each way): who it is
+/// from and to, its message type (option 53: 1 discover, 2 offer, 3 request,
+/// 5 ack, 6 nak), transaction id and client address. For the x17, where replies
+/// arrive and no lease follows.
+fn log_dhcp(way: &str, f: &[u8]) {
+    let ihl = (f.get(14).copied().unwrap_or(0) & 0xf) as usize * 4;
+    let (udp, ip) = (14 + ihl, 14);
+    let d = udp + 8;
+    if f.len() < d + 240 || ihl < 20 {
+        sex_pdx::serial_record!("[wifi.link.dhcp] way={} short len={}", way, f.len());
+        return;
+    }
+    let mut kind = 0u8;
+    let mut at = d + 240;
+    while at + 1 < f.len() {
+        match f[at] { 0 => { at += 1; continue; } 255 => break, _ => {} }
+        let len = f[at + 1] as usize;
+        if f[at] == 53 && len >= 1 && at + 2 < f.len() { kind = f[at + 2]; break; }
+        at += 2 + len;
+    }
+    let m = |a: usize| (f[a], f[a + 1], f[a + 2], f[a + 3], f[a + 4], f[a + 5]);
+    let (e, c) = (m(0), m(d + 28));
+    let xid = u32::from_be_bytes([f[d + 4], f[d + 5], f[d + 6], f[d + 7]]);
+    // Two short lines: `hw` cuts lines at the screen's width.
+    sex_pdx::serial_record!("[wifi.link.dhcp] {} type={} xid={:08x} client={:02x}{:02x}{:02x}{:02x}{:02x}{:02x} to={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        way, kind, xid, c.0, c.1, c.2, c.3, c.4, c.5, e.0, e.1, e.2, e.3, e.4, e.5);
+    sex_pdx::serial_record!("[wifi.link.dhcp2] {} {}.{}.{}.{}->{}.{}.{}.{} {}->{} you={}.{}.{}.{} fl={:04x} ip_len={} frame={} sum={:04x}",
+        way, f[ip + 12], f[ip + 13], f[ip + 14], f[ip + 15], f[ip + 16], f[ip + 17], f[ip + 18], f[ip + 19],
+        u16::from_be_bytes([f[udp], f[udp + 1]]), u16::from_be_bytes([f[udp + 2], f[udp + 3]]),
+        f[d + 16], f[d + 17], f[d + 18], f[d + 19], u16::from_be_bytes([f[d + 10], f[d + 11]]),
+        u16::from_be_bytes([f[16], f[17]]), f.len(), u16::from_be_bytes([f[udp + 6], f[udp + 7]]));
+}
+
+/// A DHCP client message (UDP 68 -> 67) with the broadcast flag set, copied into
+/// `out`, and the UDP checksum cleared (0 = none, allowed for UDP over IPv4).
+fn dhcp_broadcast(f: &[u8], out: &mut [u8]) -> Option<usize> {
+    if ip_kind(f) != 3 || f.len() > out.len() { return None; }
+    let udp = 14 + (f[14] & 0xf) as usize * 4;
+    let d = udp + 8;
+    if f.len() < d + 12 || u16::from_be_bytes([f[udp], f[udp + 1]]) != 68 || u16::from_be_bytes([f[udp + 2], f[udp + 3]]) != 67 || f[d] != 1 { return None; }
+    out[..f.len()].copy_from_slice(f);
+    out[d + 10] |= 0x80;
+    out[udp + 6] = 0;
+    out[udp + 7] = 0;
+    Some(f.len())
+}
 
 fn view(slot: u64, rights: u8) -> Result<m::RegionView, u64> {
     let info = sex_pdx::memory_region_info(slot)?;
@@ -672,8 +739,17 @@ impl Wifi {
     /// Sends one Ethernet frame over the air.
     pub fn link_send(&mut self, ethernet: &[u8]) -> bool {
         let Some(l) = self.link.as_mut() else { return false };
+        // DHCP requests ask for broadcast replies (BOOTP flag 0x8000, RFC 2131
+        // 4.1). On the x17 the router's broadcast OFFERs to other clients came in
+        // but no unicast reply to us ever did; broadcast replies come under the
+        // group key, which is known to work here.
+        let mut patched = [0u8; wlink::MAX_ETHERNET];
+        let ethernet = match dhcp_broadcast(ethernet, &mut patched) { Some(n) => &patched[..n], None => ethernet };
         match l.send(&self.bringup, &mut self.mmio, &mut self.pool, ethernet) {
-            Ok(()) => { if l.sent <= 16 || l.sent.is_power_of_two() { sex_pdx::serial_record!("[wifi.link.tx] frames={} length={}", l.sent, ethernet.len()); } true }
+            Ok(()) => {
+                let q = &mut self.rx;
+                match ip_kind(ethernet) { 1 => q.tx_v4 += 1, 2 => q.tx_arp += 1, 3 => { q.tx_dhcp += 1; if q.tx_dhcp <= 24 { log_dhcp("out", ethernet); } } _ => {} }
+                if l.sent <= 16 || l.sent.is_power_of_two() { sex_pdx::serial_record!("[wifi.link.tx] frames={} length={}", l.sent, ethernet.len()); } true }
             Err(e) => { sex_pdx::serial_record!("[wifi.link.tx.failed] error={:?}", e); false }
         }
     }
@@ -685,11 +761,23 @@ impl Wifi {
         let before = (l.received, l.dropped);
         let keys = (l.rekey_messages, l.rekeyed);
         let rates = (l.rate_control, l.rate);
+        let answered = (l.tx_ok, l.tx_failed);
         let block_ack = (l.ba_sessions, l.ba_declined, l.ba_flushes);
         let q = &mut self.rx;
+        // Compared with what the last turn saw, not this turn's start: link_send
+        // counts between turns, and requests nobody answers must still show.
+        let ip = q.seen;
         // SAFETY: sexnet runs one thread, and only this link touches BA_SLOTS.
         let slots = unsafe { &mut *core::ptr::addr_of_mut!(BA_SLOTS) };
         let up = l.poll_with(&mut self.bringup, &mut i.cmdq, &mut self.mmio, &mut self.pool, sex_pdx::get_ticks() * 1000, Some(slots), |frame| {
+            // Frames to us alone (not broadcast or multicast): on the x17 none were seen.
+            if frame[0] & 1 == 0 {
+                q.unicast_in += 1;
+                if q.unicast_in <= 8 || q.unicast_in.is_power_of_two() {
+                    sex_pdx::serial_record!("[wifi.link.unicast] in={} type={:02x}{:02x} len={}", q.unicast_in, frame[12], frame[13], frame.len());
+                }
+            }
+            match ip_kind(frame) { 1 => q.rx_v4 += 1, 2 => q.rx_arp += 1, 3 => { q.rx_dhcp += 1; if q.rx_dhcp <= 24 { log_dhcp("in", frame); } } _ => {} }
             if q.count == RX_FRAMES || frame.len() > wlink::MAX_ETHERNET { q.overflow += 1; return; }
             let at = (q.head + q.count) % RX_FRAMES;
             // SAFETY: sexnet runs one thread, and only this queue touches LINK_RX.
@@ -701,6 +789,20 @@ impl Wifi {
             sex_pdx::serial_record!("[wifi.link.down] reason={:?} sent={} received={} dropped={} overflow={}", l.down, l.sent, l.received, l.dropped, q.overflow);
             *q = RxQueue::EMPTY;
             return false;
+        }
+        if (l.tx_ok, l.tx_failed) != answered {
+            let n = l.tx_ok + l.tx_failed;
+            if n <= 16 || n.is_power_of_two() || l.tx_failed != answered.1 && l.tx_failed <= 16 {
+                sex_pdx::serial_record!("[wifi.link.txdone] ok={} failed={} last_failure={:#x}", l.tx_ok, l.tx_failed, l.tx_last_failure);
+            }
+        }
+        let now_ip = (q.rx_v4, q.rx_arp, q.rx_dhcp, q.tx_v4, q.tx_arp, q.tx_dhcp);
+        if now_ip != ip {
+            q.seen = now_ip;
+            let n = now_ip.0 + now_ip.1 + now_ip.2 + now_ip.3 + now_ip.4 + now_ip.5;
+            if n <= 32 || n.is_power_of_two() || now_ip.2 != ip.2 && now_ip.2 <= 16 {
+                sex_pdx::serial_record!("[wifi.link.ip] dhcp_sent={} dhcp_answers={} arp_sent={} arp_in={} v4_sent={} v4_in={}", q.tx_dhcp, q.rx_dhcp, q.tx_arp, q.rx_arp, q.tx_v4, q.rx_v4);
+            }
         }
         if (l.rate_control, l.rate) != rates {
             sex_pdx::serial_record!("[wifi.rate] control={:?} rate={:#x}", l.rate_control, l.rate);

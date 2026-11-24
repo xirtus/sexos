@@ -163,6 +163,11 @@ pub struct Link {
     /// Last CCMP packet number per key id and TID (non-QoS frames use TID 0).
     pn: [[Option<Accepted>; 16]; 4],
     pub sent: u64,
+    /// TX responses from the firmware: frames it reports sent, and refused or
+    /// unacknowledged ones with the last such status (`tx::Status::status`).
+    pub tx_ok: u64,
+    pub tx_failed: u64,
+    pub tx_last_failure: u16,
     pub received: u64,
     pub dropped: u64,
     pub last_drop: Option<Drop>,
@@ -237,7 +242,7 @@ pub fn declared(e: &[u8]) -> Option<usize> {
 impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
-        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, received: 0, dropped: 0, last_drop: None, down: None,
+        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, down: None,
             rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE,
             multicast: Setup::Wanted, missed_beacons: 0,
             ba: None, ba_command: None, ba_step: BaStep::Idle, addba: None, ba_moved: 0, ba_sessions: 0, ba_declined: 0, ba_flushes: 0 }
@@ -310,6 +315,7 @@ impl Link {
         if cause != 0 { r.write(csr::INT, cause); }
         let (family, me, bssid, protected) = (self.family, self.me, self.target.bssid, self.protected);
         let (mut freed, mut gone, mut error, mut rate) = (None, None, None, None);
+        let (mut tx_ok, mut tx_failed, mut tx_failure) = (0u64, 0u64, None);
         let mut missed = 0u32;
         let mut pn = self.pn;
         // A key's counters start over when the firmware takes it, in receive order:
@@ -333,7 +339,11 @@ impl Link {
                 if cmdq.answer.is_some_and(|a| !a.failed) { if let Some(id) = installing.take() { intake.pn[id] = [None; 16]; } }
                 return;
             }
-            if let Some(s) = tx::parse_response(p) { freed = Some(s); return; }
+            if let Some(s) = tx::parse_response(p) {
+                if s.ok() { tx_ok += 1; } else { tx_failed += 1; tx_failure = Some(s.status); }
+                freed = Some(s);
+                return;
+            }
             if let Some(r) = tlc::parse_update(p) { rate = Some(r); return; }
             if let Some(n) = parse_missed_beacons(p) { missed = missed.max(n); return; }
             if let Some((baid, nssn, tid)) = ba::parse_release(p) {
@@ -411,6 +421,9 @@ impl Link {
             self.ba_moved = now;
         }
         if let Some(s) = freed { self.tx.release(dma, &b.layout, s); }
+        self.tx_ok += tx_ok;
+        self.tx_failed += tx_failed;
+        if let Some(f) = tx_failure { self.tx_last_failure = f; }
         if let Err(id) = result { self.down = Some(Down::Failed(Failure::BadRxBuffer(id))); return false; }
         if let Some(e) = error { self.down = Some(Down::Failed(Failure::Firmware(e))); return false; }
         if let Some(reason) = gone { self.down = Some(Down::Disconnected(reason)); return false; }
