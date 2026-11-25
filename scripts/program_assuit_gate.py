@@ -369,6 +369,17 @@ def main():
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-header-rich-edit.ppm')})
   assert (a.out/'assuit-header-rich-edit.ppm').stat().st_size>10000
   s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  press('ctrl','home')
+  s=len(t());press('ctrl','shift','n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-footnote-prompt.ppm')})
+  assert (a.out/'assuit-footnote-prompt.ppm').stat().st_size>10000
+  type_line('Source one');q.key('ret')
+  g['wait'](r'\[assuit\.footnote\.insert\] chars=10',s,120)
+  type_line(' updated')
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-footnote-edit.ppm')})
+  assert (a.out/'assuit-footnote-edit.ppm').stat().st_size>10000
+  s=len(t());q.key('esc');g['wait'](r'\[assuit\.footnote\.close\]',s,120)
+  s=len(t());press('ctrl','s');g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})

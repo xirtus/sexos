@@ -18,6 +18,10 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   indents. Ctrl+Alt+I now opens a bounded inch prompt, including negative
   first-line values for hanging indents. One-step undo and DOCX/ODT persistence
   are covered by a host test; CI captures the guest prompt and result.
+- **Footnotes:** Ctrl+Shift+N now inserts a linked note at the body caret
+  through a bounded prompt. The note remains editable on the page; Esc returns
+  to the body caret. DOCX/ODT round trips are covered. Endnotes and note
+  management controls remain.
 - **Page numbering:** WordCraft can insert dynamic page fields in a header or
   footer, but Assuit has no native control for it. This slice exposes bounded
   top/bottom and left/center/right choices, checks the visible page and

@@ -105,6 +105,8 @@ enum Ask {
     Spacing(String),
     /// Ctrl+Alt+I: left, right and first-line indents in inches.
     Indents(String),
+    /// Ctrl+Shift+N: text for a linked footnote at the body caret.
+    Footnote(String),
     /// Ctrl+Shift+K: document proofing language.
     Language(String),
 }
@@ -141,6 +143,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Alt+H / F", "Edit shown header / footer; Esc returns to body"),
     ("Ctrl+Alt+S", "Paragraph line multiple or exact/minimum height"),
     ("Ctrl+Alt+I", "Paragraph indents; negative first line hangs"),
+    ("Ctrl+Shift+N", "Insert a footnote; Esc returns to body"),
     ("Ctrl+T", "Insert table"),
     ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
     ("Ctrl+Alt+L", "Lists: formats, level 1–9, off or restart"),
@@ -417,6 +420,7 @@ impl Ui {
                 Ask::PageNumbers(place) => format!("Page numbers: {place}_   {}", said("place, remove, start N, continue, format TYPE, first/even on/off")),
                 Ask::Spacing(spacing) => format!("Paragraph spacing: {spacing}_   {}", said("multiple 1.5 0 8, exact 18 0 8, or minimum 18 0 8")),
                 Ask::Indents(indents) => format!("Paragraph indents: {indents}_   {}", said("left right first-line inches; 0.5 0 -0.25 hangs")),
+                Ask::Footnote(note) => format!("Footnote: {note}_   {}", said("Enter inserts at body caret; continue editing, then Esc returns")),
                 Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US or en-GB; also applies to selected text")),
             }
         } else if let Some(p) = &self.find {
@@ -443,7 +447,9 @@ impl Ui {
                     proof.word, proof.suggestions[proof.at], proof.at + 1, proof.suggestions.len())
             }
         } else if self.message.is_empty() {
-            if self.book.editing_header_footer() {
+            if self.book.editing_inserted_footnote() {
+                format!("Editing footnote on page {}  ·  Esc returns to body  ·  Ctrl+S saves", page + 1)
+            } else if self.book.editing_header_footer() {
                 format!("Editing header/footer on page {}  ·  Esc returns to body  ·  Ctrl+S saves", page + 1)
             } else {
             format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+T table  Ctrl+Shift+I picture  Ctrl+Shift+Y spelling  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
@@ -553,7 +559,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Language(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::TableEdit(t) | Ask::List(t) | Ask::Picture(t) | Ask::PictureAlt(t) | Ask::PictureWidth(t) | Ask::PictureCrop(t) | Ask::PrintRange(t) | Ask::Paper(t) | Ask::Margins(t) | Ask::PageNumbers(t) | Ask::Spacing(t) | Ask::Indents(t) | Ask::Footnote(t) | Ask::Language(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -751,6 +757,18 @@ impl Ui {
             }
             return;
         }
+        if matches!(ask, Ask::Footnote(_)) {
+            match self.book.insert_footnote(&typed) {
+                Ok(()) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.footnote.insert] chars={}", typed.chars().count()));
+                    self.message = "Editing footnote · Esc returns to body".into();
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
         if matches!(ask, Ask::Language(_)) {
             match self.book.proofing_language(&typed) {
                 Ok(tag) => {
@@ -846,6 +864,13 @@ impl Ui {
             }
             return;
         }
+        if key.code == code::ESC && !key.control && self.book.editing_inserted_footnote() {
+            self.book.close_inserted_footnote();
+            self.invalidate();
+            self.message = "Returned to document body".into();
+            sex_std::record("[assuit.footnote.close]");
+            return;
+        }
         if self.recovered && key.code == code::ESC && !key.control { return self.discard_recovered(); }
         if key.control && key.alt && !key.shift && matches!(key.code, code::H | code::F) {
             let header = key.code == code::H;
@@ -900,6 +925,7 @@ impl Ui {
                 (code::L, _) if key.alt => { self.ask = Some(Ask::List(String::new())); return; }
                 (code::M, _) if key.shift => { self.ask = Some(Ask::Margins(String::new())); return; }
                 (code::N, _) if key.alt => { self.ask = Some(Ask::PageNumbers(String::new())); return; }
+                (code::N, _) if key.shift => { self.ask = Some(Ask::Footnote(String::new())); return; }
                 (code::S, _) if key.alt => { self.ask = Some(Ask::Spacing(String::new())); return; }
                 (code::I, _) if key.alt && !key.shift => { self.ask = Some(Ask::Indents(String::new())); return; }
                 (code::K, _) if key.shift => { self.ask = Some(Ask::Language(String::new())); return; }
