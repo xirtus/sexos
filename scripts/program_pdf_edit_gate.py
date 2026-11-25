@@ -83,7 +83,7 @@ def main():
   launch=re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])
   sid=int(launch[-1]);time.sleep(1);g['focus'](sid);time.sleep(.5)
   s=len(t());chord('ctrl','shift','v')
-  g['wait'](r'\[pdf\.signatures\] fields=0 signed=0 malformed=0 verified=0\n',s,120)
+  g['wait'](r'\[pdf\.signatures\] fields=0 signed=0 malformed=0 verified=0 content_intact=0 content_changed=0 unsupported=0\n',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-signature-inspection.ppm')})
   # Find the word, highlight it.
   s=len(t());chord('ctrl','f');keys(FORM_WORD.lower());q.key('ret')
@@ -150,8 +150,9 @@ def main():
   g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid);time.sleep(.5)
   s=len(t());chord('ctrl','shift','v')
-  g['wait'](r'\[pdf\.signatures\] fields=1 signed=1 malformed=0 verified=0\n',s,120)
+  g['wait'](r'\[pdf\.signatures\] fields=1 signed=1 malformed=0 verified=0 content_intact=1 content_changed=0 unsupported=0\n',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-cms-signed-inspection.ppm')})
+  q.cmd('screendump',{'filename':str(a.out/'pdf-cms-content-intact.ppm')})
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # A separate source stays untouched while a complete unsaved PDF is kept.
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/form.pdf recover.pdf')

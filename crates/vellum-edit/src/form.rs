@@ -82,6 +82,11 @@ pub struct SignatureInfo {
     pub mdp_permissions: Option<i64>,
 }
 
+/// Whether the PDF bytes covered by a supported detached CMS still match its
+/// cryptographic signature. Even `Intact` says nothing about certificate trust.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentIntegrity { Intact, Changed, Unsupported }
+
 #[derive(Clone, Default)]
 struct Inherit {
     ft: Option<Vec<u8>>,
@@ -112,6 +117,44 @@ const FF_MULTISELECT: i64 = 1 << 21;
 const FF_COMB: i64 = 1 << 24;
 
 impl Editor {
+    /// Verify a stored P-256/SHA-256 detached CMS against its exact PDF byte
+    /// ranges. Other algorithms/layouts stay unsupported; none are called valid.
+    pub fn signature_content_integrity(&self, field_name: &str) -> Result<ContentIntegrity, Error> {
+        let mut found = self.signatures()?.into_iter().filter(|s| s.field_name == field_name);
+        let info = found.next().ok_or_else(|| Error::NoSuchField(field_name.into()))?;
+        if found.next().is_some() { return Err(Error::BadValue("ambiguous signature field".into())); }
+        if !info.signed || !info.byte_range_well_formed
+            || info.sub_filter.as_deref() != Some("adbe.pkcs7.detached") {
+            return Ok(ContentIntegrity::Unsupported);
+        }
+        let mut nodes = self.field_nodes().into_iter().filter(|n| n.name == field_name);
+        let node = nodes.next().ok_or_else(|| Error::NoSuchField(field_name.into()))?;
+        if nodes.next().is_some() { return Err(Error::BadValue("ambiguous signature field".into())); }
+        let Some(value) = node.inh.v.as_ref().and_then(|v| self.dict_of(v)) else { return Ok(ContentIntegrity::Unsupported) };
+        let Some(contents) = self.lookup(&value, b"Contents").and_then(|o| o.as_str().map(<[u8]>::to_vec))
+            else { return Ok(ContentIntegrity::Unsupported) };
+        let [(first, first_len), (second, second_len)] = info.byte_range.as_slice() else { return Ok(ContentIntegrity::Unsupported) };
+        if *first != 0 { return Ok(ContentIntegrity::Unsupported); }
+        let bytes = self.original();
+        let (first_end, second_start, second_end) = (*first_len as usize, *second as usize, (*second + *second_len) as usize);
+        if second_end != bytes.len() { return Ok(ContentIntegrity::Unsupported); }
+        let (Some(prefix), Some(gap), Some(suffix)) = (bytes.get(..first_end), bytes.get(first_end..second_start), bytes.get(second_start..second_end))
+            else { return Ok(ContentIntegrity::Unsupported) };
+        if gap.len() != contents.len().saturating_mul(2).saturating_add(2)
+            || gap.first() != Some(&b'<') || gap.last() != Some(&b'>') {
+            return Ok(ContentIntegrity::Unsupported);
+        }
+        let hex = |b: u8| match b { b'0'..=b'9' => Some(b - b'0'), b'A'..=b'F' => Some(b - b'A' + 10), b'a'..=b'f' => Some(b - b'a' + 10), _ => None };
+        if gap[1..gap.len() - 1].chunks_exact(2).zip(contents.iter()).any(|(pair, byte)| {
+            hex(pair[0]).zip(hex(pair[1])).is_none_or(|(hi, lo)| (hi << 4 | lo) != *byte)
+        }) { return Ok(ContentIntegrity::Unsupported); }
+        Ok(match crate::cms::verify_detached_p256_sha256(prefix, suffix, &contents) {
+            Ok(()) => ContentIntegrity::Intact,
+            Err(crate::cms::CmsError::BadSignature) => ContentIntegrity::Changed,
+            Err(_) => ContentIntegrity::Unsupported,
+        })
+    }
+
     /// Every terminal field of the AcroForm, in tree order.
     pub fn fields(&self) -> Result<Vec<FieldInfo>, Error> {
         Ok(self.field_nodes().iter().map(|n| self.field_info(n)).collect())

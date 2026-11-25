@@ -5,6 +5,7 @@
 //! signs DER encoded CMS attributes. Certificate trust and PDF permissions are
 //! separate decisions; constructing a valid container does not make a signer trusted.
 use sha2::{Digest, Sha256};
+use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 
 const ID_DATA: &[u8] = &[
     0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01,
@@ -249,6 +250,60 @@ pub fn detached_p256_sha256(
     Ok(output)
 }
 
+/// Check the signed PDF bytes against a single-certificate detached CMS using
+/// ECDSA P-256/SHA-256. This proves content integrity under the included public
+/// key only. It does not establish the signer's identity or certificate trust.
+/// Other CMS algorithms and layouts are left unsupported, never called valid.
+pub fn verify_detached_p256_sha256(first: &[u8], second: &[u8], cms: &[u8]) -> Result<(), CmsError> {
+    if cms.len() > 64 * 1024 { return Err(CmsError::TooLarge); }
+    let mut input = cms;
+    let outer = take(&mut input, 0x30)?;
+    if input.iter().any(|byte| *byte != 0) { return Err(CmsError::BadCertificate); }
+    let mut content = outer.value;
+    if take(&mut content, 0x06)?.full != ID_SIGNED_DATA { return Err(CmsError::BadCertificate); }
+    let signed_outer = take(&mut content, 0xa0)?;
+    if !content.is_empty() { return Err(CmsError::BadCertificate); }
+    let mut wrapper = signed_outer.value;
+    let signed = take(&mut wrapper, 0x30)?;
+    if !wrapper.is_empty() { return Err(CmsError::BadCertificate); }
+    let mut fields = signed.value;
+    if take(&mut fields, 0x02)?.full != [0x02, 0x01, 0x01] { return Err(CmsError::BadCertificate); }
+    let algorithms = take(&mut fields, 0x31)?;
+    if algorithms.value != joined(0x30, &[ID_SHA256]) { return Err(CmsError::BadCertificate); }
+    let encapsulated = take(&mut fields, 0x30)?;
+    if encapsulated.value != ID_DATA { return Err(CmsError::BadCertificate); }
+    let certificates = take(&mut fields, 0xa0)?;
+    let mut certs = certificates.value;
+    let certificate = take(&mut certs, 0x30)?;
+    if !certs.is_empty() { return Err(CmsError::BadCertificate); }
+    let (issuer, serial, point) = cert_parts(certificate.full)?;
+    let signers = take(&mut fields, 0x31)?;
+    if !fields.is_empty() { return Err(CmsError::BadCertificate); }
+    let mut signer_set = signers.value;
+    let signer = take(&mut signer_set, 0x30)?;
+    if !signer_set.is_empty() { return Err(CmsError::BadCertificate); }
+    let mut signer_fields = signer.value;
+    if take(&mut signer_fields, 0x02)?.full != [0x02, 0x01, 0x01]
+        || take(&mut signer_fields, 0x30)?.full != joined(0x30, &[issuer, serial])
+        || take(&mut signer_fields, 0x30)?.value != ID_SHA256
+    { return Err(CmsError::BadCertificate); }
+    let attrs_implicit = take(&mut signer_fields, 0xa0)?;
+    if take(&mut signer_fields, 0x30)?.value != ID_ECDSA_SHA256 {
+        return Err(CmsError::BadCertificate);
+    }
+    let signature = take(&mut signer_fields, 0x04)?;
+    if !signer_fields.is_empty() { return Err(CmsError::BadCertificate); }
+    let mut hash = Sha256::new();
+    hash.update(first);
+    hash.update(second);
+    let expected_attrs = signed_attrs(&hash.finalize().into());
+    let attrs = der(0x31, attrs_implicit.value);
+    if attrs != expected_attrs { return Err(CmsError::BadSignature); }
+    let key = VerifyingKey::from_sec1_bytes(point).map_err(|_| CmsError::BadCertificate)?;
+    let signature = Signature::from_der(signature.value).map_err(|_| CmsError::BadSignature)?;
+    key.verify(&attrs, &signature).map_err(|_| CmsError::BadSignature)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,6 +333,9 @@ mod tests {
                 .map_err(|_| CmsError::SignerRefused)
         })
         .unwrap();
+        assert_eq!(verify_detached_p256_sha256(first, second, &cms), Ok(()));
+        assert_eq!(verify_detached_p256_sha256(b"changed", second, &cms), Err(CmsError::BadSignature));
+        assert_eq!(verify_detached_p256_sha256(first, second, b"not cms"), Err(CmsError::BadCertificate));
         let path = std::env::temp_dir().join(format!("sexos-vellum-cms-{}", std::process::id()));
         fs::create_dir_all(&path).unwrap();
         let cms_path = path.join("signature.der");
