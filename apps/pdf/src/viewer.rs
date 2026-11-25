@@ -77,7 +77,7 @@ const SHORTCUTS: &[&str] = &[
     "Home / End first / last; Up / Down scroll",
     "+ / - zoom; 0 / W fit width; F fit page; 1 actual size",
     "T thumbnails; O outline (Up / Down / Enter choose)",
-    "Search: Ctrl+F find; Enter / Ctrl+G next; Shift previous",
+    "Search: Ctrl+F find; Enter / Ctrl+G next; spaces cross lines",
     "Escape closes search",
     "Markup: Ctrl+R select region; arrows move; Shift+arrows size",
     "Ctrl+H highlight a found word or selected region",
@@ -386,7 +386,6 @@ impl Viewer {
             let left = l.x0 + if r.w + 2 * MARGIN <= l.aw { (l.aw - r.w) / 2 } else { MARGIN };
             let hits: Vec<(Hit, bool)> = self.hits.iter().filter(|h| h.page == r.page && self.finding).map(|h| (*h, Some(*h) == self.hit)).collect();
             let boxes = self.texts.as_ref().map(|t| &t[r.page].boxes);
-            let len = self.searched.chars().count();
             for y in 0..l.ah {
                 let py = (y + self.scroll).wrapping_sub(MARGIN);
                 if py >= r.h { continue; }
@@ -398,7 +397,7 @@ impl Viewer {
                 // Light up the hits on this row: each character's box, scaled.
                 if let Some(boxes) = boxes {
                     for (hit, now) in &hits {
-                        for b in boxes.iter().skip(hit.at).take(len) {
+                        for b in boxes.iter().skip(hit.at).take(hit.len) {
                             let (top, bottom) = ((b.y0 * r.scale as f64) as usize, (b.y1 * r.scale as f64) as usize);
                             if py < top || py >= bottom { continue; }
                             let (x0, x1) = ((b.x0 * r.scale as f64) as usize, (b.x1 * r.scale as f64) as usize);
@@ -1058,8 +1057,7 @@ impl Viewer {
         let (page, rects, from) = if let Some(r) = self.region {
             (self.page, vec![r], "region")
         } else if let (Some(hit), Some(texts)) = (self.hit, &self.texts) {
-            let len = self.searched.chars().count();
-            let boxes: Vec<[f64; 4]> = texts[hit.page].boxes.iter().skip(hit.at).take(len).map(|b| [b.x0, b.y0, b.x1, b.y1]).collect();
+            let boxes: Vec<[f64; 4]> = texts[hit.page].boxes.iter().skip(hit.at).take(hit.len).map(|b| [b.x0, b.y0, b.x1, b.y1]).collect();
             (hit.page, marks::line_rects(&boxes), "find")
         } else {
             self.status = Some("Find a word (Ctrl+F) or choose a region (Ctrl+R) first".into());
@@ -1147,8 +1145,7 @@ impl Viewer {
         let (page, at) = if let Some(r) = self.region {
             (self.page, (r[0], r[1]))
         } else if let (Some(hit), Some(texts)) = (self.hit, &self.texts) {
-            let len = self.searched.chars().count().max(1);
-            let b = texts[hit.page].boxes.get(hit.at + len - 1).copied().unwrap_or_default();
+            let b = texts[hit.page].boxes.get(hit.at + hit.len.saturating_sub(1)).copied().unwrap_or_default();
             (hit.page, (b.x1 + 2.0, (b.y0 - 4.0).max(0.0)))
         } else {
             (self.page, (36.0, 36.0))
