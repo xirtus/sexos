@@ -80,6 +80,19 @@ impl Book {
     }
     pub fn type_text(&mut self, text: &str) -> Result<(), String> { self.run("text.insert", json!({ "text": text })).map(|_| ()) }
 
+    /// Plain text for SexOS's shared clipboard. WordCraft also retains its
+    /// formatted fragment so a same-document paste can preserve styling.
+    pub fn copy_text(&mut self) -> Result<String, String> {
+        self.run("edit.copy", json!({}))?["text"].as_str()
+            .map(str::to_string).ok_or_else(|| "Copy returned no text".into())
+    }
+
+    /// Pass the actual system clipboard text to WordCraft. It uses its own
+    /// formatted fragment only when that text still matches the last copy.
+    pub fn paste_text(&mut self, text: &str) -> Result<(), String> {
+        self.run("edit.paste", json!({ "text": text })).map(|_| ())
+    }
+
     /// Runs what a key does in WordCraft: its shortcut's command, Shift extending a
     /// caret move. Returns the command run, if the key has one.
     pub fn key(&mut self, chord: &Chord) -> Option<String> {
@@ -747,6 +760,22 @@ mod tests {
         book.key(&Chord { name: "V", ctrl: true, shift: false });
         assert!(book.text().trim_end().ends_with("Assuit"), "{:?}", book.text().chars().rev().take(40).collect::<String>());
         assert_eq!(book.words(), words + 1);
+    }
+
+    #[test]
+    fn shared_clipboard_text_moves_between_documents_without_stale_fragments() {
+        let mut source = Book::blank(&temp("clipboard-source.docx"));
+        source.type_text("Assuit handoff").unwrap();
+        source.key(&Chord { name: "A", ctrl: true, shift: false });
+        assert_eq!(source.copy_text().unwrap(), "Assuit handoff");
+        let mut destination = Book::blank(&temp("clipboard-destination.docx"));
+        destination.type_text("Old").unwrap();
+        destination.key(&Chord { name: "A", ctrl: true, shift: false });
+        destination.copy_text().unwrap();
+        destination.paste_text("Assuit handoff").unwrap();
+        assert_eq!(destination.text(), "Assuit handoff");
+        destination.key(&Chord { name: "Z", ctrl: true, shift: false });
+        assert_eq!(destination.text(), "Old");
     }
 
 
