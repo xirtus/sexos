@@ -191,7 +191,7 @@ pub extern "C" fn _start() -> ! {
             Some(Event::Pointer(ptr)) => {
                 match ptr.kind {
                     Kind::Wheel { steps } => { app.scroll = (app.scroll as i32 - steps as i32 * 3).max(0) as usize; },
-                    Kind::Down { button: 0 } if ptr.x < (window.size().0 as i32 / 3).clamp(260, 420) && ptr.y >= 78 => {
+                    Kind::Down { button: 0 } if i32::from(ptr.x) < (window.size().0 as i32 / 3).clamp(260, 420) && ptr.y >= 78 => {
                         let row = ((ptr.y - 78) / 58).max(0) as usize;
                         let first = app.picked.saturating_sub(((window.size().1 as i32 - 116) / 58).max(1) as usize - 1);
                         if let Some(&i) = app.shown.get(first + row) { app.picked = first + row; app.open(i, &mut window); }

@@ -21,6 +21,7 @@ threading.Thread(target=server.serve_forever,daemon=True).start()
 os.environ['SEXOS_GATE_NIC']='-netdev user,id=n0 -device e1000e,netdev=n0'
 from install_program import install
 from quil_autosave_gate import boot
+from valentine_key_input import send_text
 
 def main():
  p=argparse.ArgumentParser();p.add_argument('--iso',required=True,type=Path);p.add_argument('--source-disk',required=True,type=Path);p.add_argument('--out',required=True,type=Path);p.add_argument('--resolution',default='1280x800');a=p.parse_args()
@@ -30,7 +31,7 @@ def main():
  install(disk,[('valentine',elf)])
  g=boot(a.iso,disk,a.out,'valentine',a.resolution);t=g['text'];q=g['q']
  def keys(value):
-  for k in value:q.key({' ':'spc','.':'dot','/':'slash',':':'semicolon'}.get(k,k));time.sleep(.06)
+  send_text(q,value)
  def shell(line,pattern,timeout=120):
   g['focus'](153);time.sleep(.5);s=len(t());keys(line);q.key('ret');return g['wait'](pattern,s,timeout)
  def launch():

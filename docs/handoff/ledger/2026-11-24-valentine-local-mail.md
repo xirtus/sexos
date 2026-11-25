@@ -11,6 +11,12 @@
   detection. The CI QEMU gate imports a multipart message, opens, searches and
   reloads it, then captures `valentine-inbox.ppm` and
   `valentine-search.ppm` in `sexos-productivity-proof`.
+- CI correction: compare the pointer's `i16` x coordinate as `i32` against the
+  scaled list width; the first CI build caught this type mismatch.
+- CI correction: QEMU's unshifted `semicolon` key typed `;` for both colons in
+  the fixture URL, so the import never reached Spindle's fetch route. The gate
+  now sends Shift+semicolon for `:` and Shift+2 for `@`; host tests assert the
+  actual QMP key sequences, and the gate passes Python syntax checking.
 - Limit: Multipass account flow, live IMAP/SMTP binding, drafts and sending are
   separate pending slices, documented in `codex-week/valentine.md`.
 - Scope: Valentine app, mail summary model, build manifest, CI gate and docs.
