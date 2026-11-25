@@ -373,6 +373,7 @@ dependencies = [
  "serde_json",
  "sex-office",
  "sex-std",
+ "sex-theme",
  "sha2 0.10.9",
  "wordcraft-engine",
 ]
