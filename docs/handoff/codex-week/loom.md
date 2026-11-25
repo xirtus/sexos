@@ -19,10 +19,12 @@ Remaining gaps:
   root, with a recoverable previous copy. An encrypted-home unlock and missing
   removable-volume restore policy still need a full session audit.
 - Clearer file version history.
-- Text folder lists now support contiguous Shift+Up/Down/Home/End selection.
+- Text folder lists support contiguous Shift+Up/Down/Home/End selection.
   Delete sends every selected item to trash in one recoverable action, and one
-  Ctrl+Z restores the batch. Multi-item cut/copy, noncontiguous selection and
-  grid selection remain daily-driver gaps.
+  Ctrl+Z restores the batch. Ctrl+X now cuts a selected range, and Ctrl+V moves
+  it to another folder on the same disk with collision-safe names; one Ctrl+Z
+  reverses the group. Cross-disk batch moves, multi-item copy, noncontiguous
+  selection and grid selection remain daily-driver gaps.
 - The thumbnail grid and disk usage map now follow Tatami's light, dark and high
   contrast tokens. Pictures retain a dark photo well because their RGB cache
   already contains that well; this avoids stale transparency halos across themes.

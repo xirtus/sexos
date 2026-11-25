@@ -78,6 +78,7 @@ const HOME_MIB: u64 = 256;
 
 /// One step Ctrl+Z can take back.
 enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> },
+    MovedBatch(Vec<(Vec<u8>, Vec<u8>)>),
     TrashedBatch(Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>),
     /// A batch rename in `dir`: the moves that take it back, in order.
     Renamed { dir: Vec<u8>, moves: Vec<(Vec<u8>, Vec<u8>)> } }
@@ -100,6 +101,8 @@ struct App {
     /// Show this tab beside the next tab in the list; keys act in the active tab.
     split: bool,
     clip: Option<(Vec<u8>, bool)>,
+    /// A contiguous cut range; it moves together on one disk.
+    clip_batch: Option<Vec<Vec<u8>>>,
     undo: Vec<Undo>,
     input: Option<(Input, Vec<u8>)>,
     status: String,
@@ -379,7 +382,7 @@ impl App {
         let space = files::space(window, &at(&self.cwd)).ok().filter(|s| s.0 > 0).map(|(total, free)| format!("  {} free of {}", human(free), human(total))).unwrap_or_default();
         t.push_str(&format!("Loom [{}/{}]  {}{}\n", self.active_tab + 1, self.tabs.len(), shown(&self.cwd), space));
         if let Some(count) = self.selection_anchor.and_then(|_| self.selection().map(|r| r.count())) {
-            t.push_str(&format!("{count} selected  ·  Delete moves them to trash  ·  Ctrl+Z restores the batch\n"));
+            t.push_str(&format!("{count} selected  ·  Ctrl+X cuts  ·  Delete trashes  ·  Ctrl+Z undoes the batch\n"));
         }
         if self.tabs.len() > 1 {
             t.push_str("Tabs:");
@@ -583,11 +586,8 @@ impl App {
     fn free_name(&mut self, window: &mut Window, dir: &[u8], name: &[u8], tag: &str) -> Vec<u8> {
         let try_name = join(dir, name);
         if files::stat(window, &at(&try_name)).is_err() { return try_name; }
-        let (stem, ext) = match name.iter().rposition(|b| *b == b'.') { Some(i) if i > 0 => (&name[..i], &name[i..]), _ => (name, &name[name.len()..]) };
         for k in 1..1000 {
-            let mut n = stem.to_vec();
-            n.extend_from_slice(if k == 1 { format!(" ({})", tag) } else { format!(" ({} {})", tag, k) }.as_bytes());
-            n.extend_from_slice(ext);
+            let n = loom_core::selection::collision_name(name, tag, k);
             let p = join(dir, &n);
             if files::stat(window, &at(&p)).is_err() { return p; }
         }
@@ -595,6 +595,7 @@ impl App {
     }
 
     fn paste(&mut self, window: &mut Window) {
+        if let Some(paths) = self.clip_batch.clone() { self.paste_cut_batch(window, &paths); return; }
         let Some((from, cut)) = self.clip.clone() else { self.status = "Nothing to paste: Ctrl+C or Ctrl+X a file first.".into(); return };
         if self.cwd.starts_with(&from) && (self.cwd.len() == from.len() || self.cwd[from.len()] == b'/') { self.status = "A folder can't go inside itself.".into(); return; }
         let to = self.free_name(window, &self.cwd.clone(), base(&from), "copy");
@@ -625,6 +626,66 @@ impl App {
             }
             Err(e) => self.status = format!("Couldn't paste: {}.", shown(files::message(e))),
         }
+    }
+
+    fn paste_cut_batch(&mut self, window: &mut Window, paths: &[Vec<u8>]) {
+        if !loom_core::selection::can_move_group_into(paths, &self.cwd) {
+            self.status = "Choose another folder outside the selected items before pasting.".into(); return;
+        }
+        if paths.iter().any(|p| disk_root(p) != disk_root(&self.cwd)) {
+            self.status = "Batch cut stays on one disk; move items from another disk one at a time.".into(); return;
+        }
+        // Validate every source before changing any path. The later rename loop
+        // rolls back earlier moves if a disk or permission changes midway.
+        if paths.iter().any(|p| files::stat(window, &at(p)).is_err()) {
+            self.status = "A selected item is no longer there; select the range again.".into(); return;
+        }
+        let mut moved: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(paths.len());
+        for from in paths {
+            let to = self.free_name(window, &self.cwd.clone(), base(from), "copy");
+            if files::stat(window, &at(&to)).is_ok() {
+                let mut rollback_ok = true;
+                for (original, placed) in moved.iter().rev() {
+                    rollback_ok &= files::rename(window, &at(placed), &at(original)).is_ok();
+                }
+                self.status = if rollback_ok { "No free destination name; no items moved.".into() }
+                    else { "No free destination name; some items need moving back.".into() };
+                self.load(window);
+                return;
+            }
+            if let Err(e) = files::rename(window, &at(from), &at(&to)) {
+                let mut rollback_ok = true;
+                for (original, placed) in moved.iter().rev() {
+                    rollback_ok &= files::rename(window, &at(placed), &at(original)).is_ok();
+                }
+                self.status = format!("Batch move failed: {}.{}", shown(files::message(e)),
+                    if rollback_ok { " No items moved." } else { " Some items need moving back." });
+                self.load(window);
+                return;
+            }
+            moved.push((from.clone(), to));
+        }
+        for (from, to) in &moved { self.meta_moved(window, from, to); }
+        sex_pdx::serial_record!("[files.app.pasted.batch] count={} cut=1", moved.len());
+        self.status = format!("Moved {} items. Ctrl+Z moves them back together.", moved.len());
+        self.undo.push(Undo::MovedBatch(moved));
+        self.clip_batch = None;
+        let _ = files::sync(window);
+        self.load(window);
+    }
+
+    fn undo_move_batch(&mut self, window: &mut Window, items: &[(Vec<u8>, Vec<u8>)]) -> Result<(), u8> {
+        let mut restored: Vec<(&Vec<u8>, &Vec<u8>)> = Vec::new();
+        for (from, to) in items.iter().rev() {
+            if let Err(e) = files::rename(window, &at(to), &at(from)) {
+                for (original, placed) in restored.iter().rev() {
+                    let _ = files::rename(window, &at(original), &at(placed));
+                }
+                return Err(e);
+            }
+            restored.push((from, to));
+        }
+        Ok(())
     }
     fn trash(&mut self, window: &mut Window) {
         let chosen = self.selected_paths();
@@ -791,6 +852,7 @@ impl App {
             Undo::Moved { from, to } => self.move_path(window, to, from),
             Undo::Trashed { from, to, info } => self.move_path(window, to, from).map(|_| { let _ = files::remove(window, &at(info)); }),
             Undo::TrashedBatch(items) => self.undo_trash_batch(window, items),
+            Undo::MovedBatch(items) => self.undo_move_batch(window, items),
             Undo::Copied { to } => self.remove_all(window, to),
             Undo::Made { path } => files::remove(window, &at(path)),
             Undo::Renamed { dir, moves } => { let (dir, moves) = (dir.clone(), moves.clone()); self.rename_undo(window, &dir, &moves) }
@@ -1016,13 +1078,19 @@ impl App {
                 KEY_W if key.shift => self.close_tab(window),
                 0x49 => { let next = (self.active_tab + self.tabs.len() - 1) % self.tabs.len(); self.show_tab(window, next); }
                 0x51 => { let next = (self.active_tab + 1) % self.tabs.len(); self.show_tab(window, next); }
-                KEY_C | KEY_X if self.selection_anchor.is_some() && self.selected_paths().len() > 1 => {
-                    self.status = "Copy and cut currently take one item. Delete moves the selection to trash together.".into();
+                KEY_C if self.selection_anchor.is_some() && self.selected_paths().len() > 1 => {
+                    self.status = "Batch copy remains open; cut this range with Ctrl+X or copy one item.".into();
+                }
+                KEY_X if self.selection_anchor.is_some() && self.selected_paths().len() > 1 => {
+                    let paths = self.selected_paths();
+                    sex_pdx::serial_record!("[files.app.cut.batch] count={}", paths.len());
+                    self.status = format!("Cut {} items. Open a destination folder and press Ctrl+V.", paths.len());
+                    self.clip_batch = Some(paths); self.clip = None;
                 }
                 KEY_C | KEY_X => if let Some(p) = self.selected() {
                     let cut = key.code == KEY_X;
                     self.status = format!("{} {}: Ctrl+V pastes it.", if cut { "Cut" } else { "Copied" }, shown(base(&p)));
-                    self.clip = Some((p, cut));
+                    self.clip = Some((p, cut)); self.clip_batch = None;
                 },
                 KEY_V => self.paste(window),
                 KEY_Z => self.undo(window),
@@ -1147,7 +1215,7 @@ pub extern "C" fn _start() -> ! {
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
-    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
+    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, top: 0, clip: None, clip_batch: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
                         job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
