@@ -141,6 +141,10 @@ def main():
   s=len(t());send('ctrl','p');time.sleep(.3);keys('reference');q.key('ret');time.sleep(.5)
   ctrl('home');q.key('down')
   for _ in range(15):q.key('right')
+  s=len(t());send('ctrl','shift','h')
+  g['wait'](r'\[quil.lsp.hover\] language=rust text=Function helper at line 1',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-hover.ppm')})
+  assert (a.out/'quil-lsp-hover.ppm').stat().st_size>100000
   s=len(t());send('ctrl','shift','g')
   g['wait'](r'\[quil.lsp.definition\] language=rust line=1 at=3',s,90)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-definition.ppm')})

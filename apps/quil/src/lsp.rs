@@ -214,6 +214,28 @@ fn receive_definition(deadline: u64, rx: &mut Vec<u8>, expected_uri: &str) -> co
     Err("Language definition timed out")
 }
 
+fn receive_hover(deadline: u64, rx: &mut Vec<u8>) -> core::result::Result<Option<String>, &'static str> {
+    while sex_pdx::get_ticks() < deadline {
+        let (_, bytes) = relay::take_at(0).map_err(|_| "Language service output failed")?;
+        if rx.len() + bytes.len() > quil_core::lsp::MAX_BODY + 1024 { return Err("Language service output is too large"); }
+        rx.extend_from_slice(&bytes);
+        while let Some(body) = take_frame(rx)? {
+            let value: Value = serde_json::from_slice(&body).map_err(|_| "Language service sent invalid JSON")?;
+            if value["id"].as_u64() != Some(2) { continue; }
+            let result = &value["result"];
+            if result.is_null() { return Ok(None); }
+            if result["contents"]["kind"] != "plaintext" { return Err("Language service sent invalid hover"); }
+            let text = result["contents"]["value"].as_str().ok_or("Language service sent invalid hover")?;
+            if text.is_empty() || text.len() > 160 || text.chars().any(char::is_control) {
+                return Err("Language service sent invalid hover");
+            }
+            return Ok(Some(text.to_string()));
+        }
+        sex_pdx::sched_yield();
+    }
+    Err("Language hover timed out")
+}
+
 fn complete_inner(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Vec<String>, &'static str> {
     let (line, character) = completion_position(text, cursor).ok_or("Language completion cursor is invalid")?;
     let (_, mut rx, deadline) = begin(path, language, text)?;
@@ -233,6 +255,13 @@ fn definition_inner(path: &[u8], language: &str, text: &str, cursor: usize) -> c
     let name = uri(path);
     send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":name.as_str()},"position":{"line":line,"character":character}}}), deadline)?;
     receive_definition(deadline, &mut rx, &name)
+}
+
+fn hover_inner(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Option<String>, &'static str> {
+    let (line, character) = completion_position(text, cursor).ok_or("Language hover cursor is invalid")?;
+    let (_, mut rx, deadline) = begin(path, language, text)?;
+    send(json!({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":uri(path)},"position":{"line":line,"character":character}}}), deadline)?;
+    receive_hover(deadline, &mut rx)
 }
 
 fn cleanup() {
@@ -279,6 +308,14 @@ pub fn symbols(path: &[u8], language: &str, text: &str) -> core::result::Result<
 pub fn definition(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Option<(u32, u32)>, &'static str> {
     if text.len() > 256 * 1024 { return Err("Language definition supports files up to 256 KiB"); }
     let result = definition_inner(path, language, text, cursor);
+    cleanup();
+    result
+}
+
+/// Requests a bounded plain-text declaration summary for the open snapshot.
+pub fn hover(path: &[u8], language: &str, text: &str, cursor: usize) -> core::result::Result<Option<String>, &'static str> {
+    if text.len() > 256 * 1024 { return Err("Language hover supports files up to 256 KiB"); }
+    let result = hover_inner(path, language, text, cursor);
     cleanup();
     result
 }

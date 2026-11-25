@@ -66,6 +66,16 @@ pub fn definition(text: &str, language: &str, cursor: usize) -> Option<Symbol> {
     found
 }
 
+/// A bounded plain-text summary for one unique declaration in this snapshot.
+pub fn hover(text: &str, language: &str, cursor: usize) -> Option<String> {
+    let symbol = definition(text, language, cursor)?;
+    let kind = match symbol.kind {
+        12 => "Function", 23 => "Struct", 10 => "Enum", 11 => "Trait",
+        2 => "Module", 5 => "Type", _ => "Declaration",
+    };
+    Some(format!("{kind} {} at line {}", symbol.name, symbol.line + 1))
+}
+
 /// A small, bounded completion set for the bundled language service. The
 /// replacement start is a byte offset in the snapshot supplied by the editor.
 /// Declaration heads in the same snapshot are offered before language keywords;
@@ -349,5 +359,19 @@ mod tests {
         assert_eq!(definition(text, "python", at), None);
         let ambiguous = "fn helper() {}\nfn helper() {}\nhelper();";
         assert_eq!(definition(ambiguous, "rust", ambiguous.rfind("helper();").unwrap() + 2), None);
+    }
+
+    #[test]
+    fn hover_requires_a_unique_declaration_in_the_snapshot() {
+        for (text, language, want) in [
+            ("fn helper() {}\nhelper();", "rust", "Function helper at line 1"),
+            ("class Client:\n    pass\nClient", "python", "Type Client at line 1"),
+            ("function run() {}\nrun()", "javascript", "Function run at line 1"),
+        ] {
+            let at = text.rfind('\n').unwrap() + 2;
+            assert_eq!(hover(text, language, at).as_deref(), Some(want));
+        }
+        let ambiguous = "fn helper() {}\nfn helper() {}\nhelper();";
+        assert_eq!(hover(ambiguous, "rust", ambiguous.len() - 4), None);
     }
 }
