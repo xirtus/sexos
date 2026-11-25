@@ -17,6 +17,7 @@ open prompt determine which keys act. F11 closes the window.
 | Show trash; restore from trash | Ctrl+T; Ctrl+R while in trash |
 | Empty trash; eject a removable disk | Ctrl+E in the corresponding view |
 | Go home; show removable disks | Ctrl+H; Ctrl+D |
+| Show local Places (Start, Previous, and available Home, Downloads, Documents, Disks) | Ctrl+Shift+B |
 | Search file names and contents | Ctrl+F |
 | Toggle thumbnail grid in one or both split panes; show disk usage | Ctrl+G; Ctrl+U |
 | Open a new folder tab; close the current one | Ctrl+Shift+T; Ctrl+Shift+W |
@@ -43,3 +44,5 @@ the new items. Grid and noncontiguous batch selection remain open.
 Ctrl+Shift+R opens the batch rename preview.
 In split grid view, a click in either pane focuses that folder. Clicking a tile
 also selects it; Ctrl+Page Up/Down changes the active folder from the keyboard.
+Local Places lists only folders available through this Loom window's Files grant.
+Use Up/Down and Enter to navigate; Escape returns to the folder view.

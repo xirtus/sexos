@@ -172,6 +172,13 @@ def main():
   # Folder tabs preserve each path and return to the first tab after close.
   step(lambda:cs('t'),r'\[loom.tab.opened\] active=2 count=2 dir=/media/LOOM')
   step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/docs count=3\b')
+  # Local Places only offers folders inside the grant; Start returns this tab
+  # to the granted USB root while leaving the other tab independent.
+  step(lambda:cs('b'),r'\[loom.quick-places.open\] count=1 dir=/media/LOOM/docs')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'folder-places.ppm')})
+  assert (a.out/'folder-places.ppm').stat().st_size>10000
+  step(lambda:q.key('ret'),r'\[loom.quick-places.go\] name=Start dir=/media/LOOM\b')
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/docs count=3\b')
   step(lambda:chord('pgup','ctrl'),r'\[loom.tab.shown\] active=1 count=2 dir=/media/LOOM\b')
   step(lambda:chord('pgdn','ctrl'),r'\[loom.tab.shown\] active=2 count=2 dir=/media/LOOM/docs\b')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-tabs.ppm')})
@@ -188,6 +195,8 @@ def main():
   g['wait'](r'\[loom.split.grid\] active=2 pair=1 left=/media/LOOM/docs right=/media/LOOM/ren',0,60)
   time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'folder-split-grid.ppm')})
   assert (a.out/'folder-split-grid.ppm').stat().st_size>10000
+  step(lambda:cs('b'),r'\[loom.quick-places.open\] count=1 dir=/media/LOOM/docs')
+  step(lambda:q.key('esc'),r'\[loom.quick-places.closed\]')
   tile=current_tile(t(),surfaces[-1]);rw,rh=map(int,a.resolution.split('x'))
   x=tile[0]+8+(tile[2]-16)*3//4;y=tile[1]+34+15
   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},

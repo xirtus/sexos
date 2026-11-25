@@ -75,6 +75,7 @@ const KEY_E: u8 = 0x12;
 const KEY_I: u8 = 0x17;
 const KEY_F: u8 = 0x21;
 const KEY_G: u8 = 0x22;
+const KEY_B: u8 = 0x30;
 const KEY_K: u8 = 0x25;
 const HOME: &[u8] = sex_pdx::home_lock::HOME;
 /// Size of the encrypted home Ctrl+K makes.
@@ -103,6 +104,9 @@ struct App {
     top: usize,
     tabs: Vec<FolderTab>,
     active_tab: usize,
+    /// Local folders shown by Ctrl+Shift+B, scoped to this run's Files grant.
+    quick_places: Option<(usize, Vec<loom_core::quick_places::Place>)>,
+    previous_folder: Option<Vec<u8>>,
     /// Show this tab beside the next tab in the list; keys act in the active tab.
     split: bool,
     clip: Option<(Vec<u8>, bool)>,
@@ -182,6 +186,7 @@ fn human(bytes: u64) -> String {
 impl App {
     fn tab_ready(&self) -> bool {
         self.question.is_none() && self.disk_ask.is_none() && self.job.is_none() && self.search.is_none()
+            && self.quick_places.is_none()
             && self.found.is_none() && self.loom.inside.is_none() && self.loom.image.is_none()
             && !self.loom.places.active() && matches!(&self.loom.mode, loom::Mode::None)
             && self.loom.prompt.is_none()
@@ -260,9 +265,36 @@ impl App {
         self.thumbs.folder(&self.cwd, &self.entries);
     }
     fn go(&mut self, window: &mut Window, dir: Vec<u8>) {
+        if self.cwd != dir { self.previous_folder = Some(self.cwd.clone()); }
         self.cwd = dir; self.cursor = 0; self.top = 0; self.load(window);
         let root = disk_root(&self.cwd);
         self.watching = (root != b"/" && self.status.is_empty()).then_some(root);
+    }
+    fn open_quick_places(&mut self, window: &mut Window) {
+        if !self.tab_ready() { self.status = "Finish the current view before opening Places.".into(); return; }
+        let choices: Vec<_> = loom_core::quick_places::candidates(&self.root, &self.cwd,
+            self.previous_folder.as_deref(), HOME).into_iter()
+            .filter(|place| files::stat(window, &at(&place.path)).is_ok_and(|st| st.dir)).collect();
+        if choices.is_empty() { self.status = "No folders are available within this grant.".into(); return; }
+        sex_pdx::serial_record!("[loom.quick-places.open] count={} dir={}", choices.len(), shown(&self.cwd));
+        self.quick_places = Some((0, choices));
+    }
+    fn quick_places_key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) {
+        let Some((cursor, choices)) = self.quick_places.as_mut() else { return };
+        match (key.code, sex_app::nav(key)) {
+            (ESC | BACKSPACE, _) => { self.quick_places = None; sex_pdx::serial_record!("[loom.quick-places.closed]"); }
+            (_, Some(Nav::Up)) => *cursor = cursor.saturating_sub(1),
+            (_, Some(Nav::Down)) => *cursor = (*cursor + 1).min(choices.len() - 1),
+            (_, Some(Nav::Home)) => *cursor = 0,
+            (_, Some(Nav::End)) => *cursor = choices.len() - 1,
+            (ENTER, _) => {
+                let place = choices[*cursor].clone();
+                self.quick_places = None;
+                self.go(window, place.path.clone());
+                sex_pdx::serial_record!("[loom.quick-places.go] name={} dir={}", place.label, shown(&place.path));
+            }
+            _ => {}
+        }
     }
     /// Ctrl+E outside a trash: Eject the stick or disk the current folder is on (or the one selected in
     /// /media). Everything is written out first; then it is safe to pull out.
@@ -359,6 +391,16 @@ impl App {
 
     fn render(&mut self, window: &mut Window) {
         if self.loom_render(window) { return; }
+        if let Some((cursor, choices)) = &self.quick_places {
+            if self.showing_pixels { window.show_pixels(0, 0); self.showing_pixels = false; }
+            let mut text = String::from("Loom Places  Up/Down choose  Enter opens  Esc closes\n\n");
+            for (i, place) in choices.iter().enumerate() {
+                text.push_str(&format!("{} {}  {}\n", if i == *cursor { '>' } else { ' ' }, place.label, shown(&place.path)));
+            }
+            text.push_str("\nOnly folders available through this Loom window are listed.\n");
+            window.show(text.as_bytes());
+            return;
+        }
         let split_grid = self.split && self.tabs.len() > 1 && self.thumbs.on && self.tab_ready()
             && self.input.is_none();
         if split_grid && !split_grid_fits(window) {
@@ -1118,6 +1160,7 @@ impl App {
             }
             return;
         }
+        if self.quick_places.is_some() { self.quick_places_key(window, key); return; }
         if self.loom_key(window, key) { return; }
         // Shift+Del and Ctrl+E ask twice; anything else between keeps things.
         let confirming = self.confirm.is_some();
@@ -1134,6 +1177,7 @@ impl App {
         self.status.clear();
         if key.control {
             match key.code {
+                KEY_B if key.shift => self.open_quick_places(window),
                 0x2B if key.shift => {
                     if !self.tab_ready() {
                         self.status = "Finish this view before splitting.".into();
@@ -1286,7 +1330,7 @@ pub extern "C" fn _start() -> ! {
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
-    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, top: 0, clip: None, clip_batch: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
+    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, quick_places: None, previous_folder: None, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, top: 0, clip: None, clip_batch: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
                         job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);

@@ -14,7 +14,10 @@ Remaining gaps:
   focuses its tab and clicking a tile selects it. Ctrl+PageUp/PageDown changes
   active tab by keyboard. The inactive grid pane uses previews already cached
   from a visit there; uncached items show their SexOS file icons until focused.
-  A short or narrow window falls back to the text split list. A places sidebar remains.
+  A short or narrow window falls back to the text split list. Ctrl+Shift+B now
+  opens a compact local Places list with the granted root, previous folder and
+  available SexOS Home, Downloads, Documents and Disks folders, in single or
+  split views. A persistent favorites editor and graphical sidebar remain.
 - Broader preview types and archive creation formats. ZIP and tar.zst can now
   be created from a selected file or folder; plain tar and tar.gz creation still
   need file-manager controls.
