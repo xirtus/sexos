@@ -1363,12 +1363,12 @@ impl Viewer {
             Ok(b) => b,
             Err(e) => { self.status = Some(format!("Could not save: {e}")); sex_std::record(&format!("[pdf.save.failed] {e}")); return; }
         };
-        if let Err(e) = thumb::write_whole(&path, &bytes) {
+        if let Err(e) = thumb::write_confirmed(&path, &bytes, sex_std::sex_app::files::direct::sync) {
             self.status = Some(format!("Could not save: {e}"));
             sex_std::record(&format!("[pdf.save.failed] {e}"));
             return;
         }
-        let _ = sex_std::sex_app::files::direct::sync();
+        sex_std::record(&format!("[pdf.save.synced] path={path} bytes={}", bytes.len()));
         // Show the file as it is on the disk now, not as it was meant to be.
         let back = match std::fs::read(&path) {
             Ok(b) => b,
