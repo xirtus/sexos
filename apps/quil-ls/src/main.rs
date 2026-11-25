@@ -60,6 +60,7 @@ fn send(out: &mut impl Write, body: &Value) -> io::Result<()> {
 }
 
 fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
+    let mut opened: Option<(String, String, String)> = None;
     while let Some(body) = read_message(input)? {
         let Ok(request) = serde_json::from_slice::<Value>(&body) else {
             continue;
@@ -69,7 +70,7 @@ fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
                 send(
                     out,
-                    &json!({"jsonrpc":"2.0","id":id,"result":{"capabilities":{"textDocumentSync":1},"serverInfo":{"name":"Quil Language Service","version":"0.1"}}}),
+                    &json!({"jsonrpc":"2.0","id":id,"result":{"capabilities":{"textDocumentSync":1,"completionProvider":{}},"serverInfo":{"name":"Quil Language Service","version":"0.1"}}}),
                 )?;
             }
             Some("textDocument/didOpen") => {
@@ -85,7 +86,18 @@ fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
                     out,
                     &json!({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{"uri":uri,"diagnostics":diagnostics}}),
                 )?;
-                return Ok(());
+                opened = Some((uri.to_owned(), language.to_owned(), text.to_owned()));
+            }
+            Some("textDocument/completion") => {
+                let id = request.get("id").cloned().unwrap_or(Value::Null);
+                let requested_uri = request["params"]["textDocument"]["uri"].as_str();
+                let pos = &request["params"]["position"];
+                let items: Vec<_> = opened.as_ref().filter(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
+                    .and_then(|(_, language, text)| {
+                        let at = lsp::offset_at_position(text, pos["line"].as_u64()?, pos["character"].as_u64()?)?;
+                        Some(lsp::complete(text, language, at).1)
+                    }).unwrap_or_default().into_iter().map(|label| json!({"label":label,"kind":14})).collect();
+                send(out, &json!({"jsonrpc":"2.0","id":id,"result":items}))?;
             }
             Some("shutdown") => {
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
@@ -128,5 +140,23 @@ mod tests {
             "Unclosed {"
         );
         assert!(out.is_empty());
+    }
+
+    #[test]
+    fn completion_uses_open_document_and_rejects_other_uri() {
+        let init = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}});
+        let open = json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///quil/test.rs","languageId":"rust","version":1,"text":"fn main() { ret"}}});
+        let completion = json!({"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///quil/test.rs"},"position":{"line":0,"character":15}}});
+        let wrong = json!({"jsonrpc":"2.0","id":3,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///quil/other.rs"},"position":{"line":0,"character":15}}});
+        let mut input = Vec::new();
+        for value in [init, open, completion, wrong] { input.extend(lsp::frame(&serde_json::to_vec(&value).unwrap())); }
+        let mut out = Vec::new();
+        serve(&mut BufReader::new(input.as_slice()), &mut out).unwrap();
+        let mut replies = Vec::new();
+        while let Some(body) = lsp::take_frame(&mut out).unwrap() { replies.push(serde_json::from_slice::<Value>(&body).unwrap()); }
+        assert_eq!(replies[0]["result"]["capabilities"]["completionProvider"], json!({}));
+        assert_eq!(replies[2]["id"], 2);
+        assert_eq!(replies[2]["result"][0]["label"], "return");
+        assert_eq!(replies[3]["result"], json!([]));
     }
 }

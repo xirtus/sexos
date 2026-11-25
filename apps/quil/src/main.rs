@@ -13,6 +13,7 @@
 //! The palette switches to Vim mode or Emacs keys.
 //! Ctrl+Shift+J checks the current Rust, Python or JavaScript file with Quil's
 //! native LSP diagnostic helper through a run-scoped pipe.
+//! Ctrl+Shift+Space requests bounded keyword completions from the same helper.
 #![no_std]
 #![no_main]
 
@@ -279,6 +280,7 @@ enum Focus { Editor, Tree }
 
 enum Overlay {
     None,
+    Completion { items: Vec<String>, sel: usize, start: usize, cursor: usize, version: u64, path: Vec<u8> },
     Help { scroll: usize },
     Git { changes: Vec<GitChange>, sel: usize, note: String },
     Palette { query: String, sel: usize },
@@ -334,6 +336,32 @@ fn press(key: Key) -> Option<Press> {
 }
 
 impl App {
+    fn complete_language(&mut self) {
+        if self.focus != Focus::Editor { return; }
+        let len = self.tab().ed.buf.len();
+        if len > 256 * 1024 { self.status = String::from("Language completion supports files up to 256 KiB"); return; }
+        let (path, source, cursor, version, one_cursor) = {
+            let tab = self.tab();
+            (tab.path.clone(), tab.ed.buf.slice(0..len), tab.ed.cursor(), tab.ed.version(), tab.ed.sels.len() == 1 && tab.ed.primary_sel().is_empty())
+        };
+        if !one_cursor { self.status = String::from("Completion needs one cursor without a selection"); return; }
+        let language = if path.ends_with(b".rs") { "rust" }
+            else if path.ends_with(b".py") { "python" }
+            else if path.ends_with(b".js") { "javascript" }
+            else { self.status = String::from("Completion supports .rs, .py and .js"); return; };
+        let Ok(source) = core::str::from_utf8(&source) else { self.status = String::from("Completion needs UTF-8 text"); return; };
+        let (start, _) = quil_core::lsp::complete(source, language, cursor);
+        if start == cursor { self.status = String::from("Type a word prefix first"); return; }
+        match lsp::complete(&path, language, source, cursor) {
+            Ok(items) => {
+                sex_pdx::serial_record!("[quil.lsp.completion] language={} count={} prefix={}", language, items.len(), &source[start..cursor]);
+                if items.is_empty() { self.status = String::from("No completions for this prefix"); }
+                else { self.overlay = Overlay::Completion { items, sel: 0, start, cursor, version, path }; }
+            }
+            Err(why) => { self.status = String::from(why); sex_pdx::serial_record!("[quil.lsp.unavailable] reason={why}"); }
+        }
+    }
+
     fn check_language(&mut self) {
         let len = self.tab().ed.buf.len();
         if len > 256 * 1024 {
@@ -604,6 +632,7 @@ impl App {
 
     fn key(&mut self, key: Key, window: &mut Window) {
         let Some(p) = press(key) else { return };
+        if p.ctrl && p.shift && p.k == K::Char(' ') { self.complete_language(); return; }
         if p == Press::ctrl_shift('j') { self.check_language(); return; }
         if p == Press::ctrl_shift('/') {
             self.overlay = if matches!(self.overlay, Overlay::Help { .. }) { Overlay::None } else { Overlay::Help { scroll: 0 } };
@@ -703,6 +732,23 @@ impl App {
         core::mem::swap(&mut take, &mut self.overlay);
         let mut keep = true;
         match &mut take {
+            Overlay::Completion { items, sel, start, cursor, version, path } => {
+                *sel = (*sel as isize + updown).clamp(0, items.len().saturating_sub(1) as isize) as usize;
+                if enter {
+                    keep = false;
+                    let label = items[*sel].clone();
+                    let tab = self.tab();
+                    if tab.path != *path || tab.ed.version() != *version || tab.ed.cursor() != *cursor || tab.ed.sels.len() != 1 {
+                        self.status = String::from("Completion expired; request it again");
+                    } else {
+                        tab.ed.break_group();
+                        tab.ed.edit(|_, _| (*start..*cursor, label.as_bytes().to_vec(), quil_core::editor::After::End));
+                        let new_version = tab.ed.version();
+                        self.status = format!("Completed {label}");
+                        sex_pdx::serial_record!("[quil.lsp.inserted] label={} version={}", label, new_version);
+                    }
+                }
+            }
             Overlay::Help { scroll } => {
                 let visible = self.rows().saturating_sub(2).max(1);
                 let max = keymap::shortcut_rows(self.keymap).len().saturating_sub(visible);
@@ -1030,10 +1076,15 @@ impl App {
         let mut lines: Vec<(String, bool)> = Vec::new();
         let (title, input): (&str, String) = match &self.overlay {
             Overlay::None => return,
+            Overlay::Completion { items, sel, .. } => {
+                for (i, item) in items.iter().enumerate() { lines.push((item.clone(), i == *sel)); }
+                ("Quil completions  ", String::from("Up/Down choose; Enter inserts; Esc closes"))
+            }
             Overlay::Help { scroll } => {
                 let mut all = keymap::shortcut_rows(self.keymap);
                 all.insert(0, String::from("Ctrl+Shift+V  tracked Git changes (read-only)"));
                 all.insert(0, String::from("Language diagnostics  Ctrl+Shift+J"));
+                all.insert(0, String::from("Language completion  Ctrl+Shift+Space"));
                 for row in all.into_iter().skip(*scroll).take(rows.saturating_sub(2)) { lines.push((row, false)); }
                 ("Quil shortcuts  ", format!("{}  (Up/Down, Esc)", match self.keymap { Keymap::Vim => "Vim", Keymap::Emacs => "Emacs", Keymap::VsCode => "Default" }))
             }

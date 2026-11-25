@@ -14,6 +14,43 @@ pub struct Diagnostic {
     pub message: String,
 }
 
+/// A small, bounded completion set for the bundled language service. The
+/// replacement start is a byte offset in the snapshot supplied by the editor.
+pub fn complete(text: &str, language: &str, cursor: usize) -> (usize, Vec<String>) {
+    let bytes = text.as_bytes();
+    if cursor > bytes.len() || !text.is_char_boundary(cursor) { return (cursor.min(bytes.len()), Vec::new()); }
+    let mut start = cursor;
+    while start > 0 && (bytes[start - 1].is_ascii_alphanumeric() || bytes[start - 1] == b'_') { start -= 1; }
+    let prefix = &text[start..cursor];
+    if prefix.is_empty() { return (start, Vec::new()); }
+    let keywords: &[&str] = match language {
+        "rust" => &["async", "await", "const", "else", "enum", "fn", "for", "if", "impl", "let", "match", "mod", "mut", "pub", "return", "self", "struct", "trait", "use", "where", "while"],
+        "python" => &["async", "await", "class", "def", "elif", "else", "except", "for", "from", "if", "import", "in", "None", "pass", "return", "self", "try", "while", "with", "yield"],
+        "javascript" => &["async", "await", "class", "const", "else", "export", "for", "from", "function", "if", "import", "let", "return", "this", "var", "while"],
+        _ => &[],
+    };
+    let mut out = Vec::new();
+    for &word in keywords {
+        if word.starts_with(prefix) && word != prefix { out.push(word.to_string()); }
+        if out.len() == 8 { break; }
+    }
+    (start, out)
+}
+
+/// Convert an LSP UTF-16 position into an offset in the open UTF-8 snapshot.
+pub fn offset_at_position(text: &str, line: u64, character: u64) -> Option<usize> {
+    let mut at = 0usize;
+    for _ in 0..line { at = text[at..].find('\n').map(|n| at + n + 1)?; }
+    let mut units = 0u64;
+    for (delta, c) in text[at..].char_indices() {
+        if units == character { return Some(at + delta); }
+        if c == '\n' { return None; }
+        units += c.len_utf16() as u64;
+        if units > character { return None; }
+    }
+    (units == character).then_some(text.len())
+}
+
 pub fn frame(body: &[u8]) -> Vec<u8> {
     let mut out = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
     out.extend_from_slice(body);
@@ -206,5 +243,16 @@ mod tests {
         assert_eq!(issues[0].line, 0);
         assert_eq!(diagnose("print('ok')\n", "python"), Vec::new());
         assert_eq!(diagnose("let x = [1, 2];\n", "javascript"), Vec::new());
+    }
+
+    #[test]
+    fn completion_respects_prefix_and_utf16_position() {
+        let text = "// 🦀\nfn main() {\n  ret\n}";
+        let at = offset_at_position(text, 2, 5).unwrap();
+        let (start, items) = complete(text, "rust", at);
+        assert_eq!(&text[start..at], "ret");
+        assert_eq!(items, ["return"]);
+        assert_eq!(offset_at_position(text, 0, 4), None); // inside surrogate pair
+        assert!(complete(text, "rust", text.len() + 1).1.is_empty());
     }
 }
