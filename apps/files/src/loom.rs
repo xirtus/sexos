@@ -3,7 +3,8 @@
 //! and the few calls Files makes into them for keys, drawing and background work.
 //!
 //! Keys: Enter on an archive browses into it, Ctrl+Shift+X extracts, Ctrl+Shift+A packs
-//! a zip, Ctrl+Shift+Z packs a tar.gz; Ctrl+0..Ctrl+5 rate, Ctrl+Shift+G tags; Ctrl+Shift+R batch renames;
+//! a zip, Ctrl+Shift+Z packs a tar.gz, Ctrl+Shift+Y packs a tar.zst;
+//! Ctrl+0..Ctrl+5 rate, Ctrl+Shift+G tags; Ctrl+Shift+R batch renames;
 //! Ctrl+Shift+D finds duplicates; Ctrl+U maps disk usage; Ctrl+Shift+C compares folders.
 //! Enter on a disk or CD image (`.iso`, `.img`, `.qcow2`, `.vhd(x)`, `.vmdk`, ...) browses it
 //! the same way, its partitions as folders (see `diskimg`). Ctrl+Shift+P lists network
@@ -21,6 +22,7 @@ use crate::{actions, archive, compare, diskimg, places, dupes, meta, rename, sho
 pub const KEY_A: u8 = 0x1E;
 pub const KEY_X: u8 = 0x2D;
 const KEY_Z: u8 = 0x2C;
+const KEY_Y: u8 = 0x15;
 const KEY_R: u8 = 0x13;
 const KEY_D: u8 = 0x20;
 const KEY_C: u8 = 0x2E;
@@ -103,6 +105,7 @@ impl App {
                 },
                 KEY_A => self.make_zip(window),
                 KEY_Z => self.make_targz(window),
+                KEY_Y => self.make_tarzst(window),
                 KEY_X => self.extract_any(window),
                 KEY_O => self.actions_open(window),
                 KEY_P => self.places_open(window),

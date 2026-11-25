@@ -12,6 +12,7 @@
 | Ctrl+I, Ctrl+D, Ctrl+H | Size and checksum; disks; home |
 | Ctrl+Shift+A, Ctrl+Shift+X | Make a zip; extract an archive |
 | Ctrl+Shift+Z | Make a tar.gz archive |
+| Ctrl+Shift+Y | Make a tar.zst archive |
 | Ctrl+Shift+R, Ctrl+Shift+D, Ctrl+U | Batch rename; duplicates; disk usage |
 | Ctrl+Shift+C, Ctrl+Shift+G, Ctrl+Shift+O | Compare; tags; actions |
 

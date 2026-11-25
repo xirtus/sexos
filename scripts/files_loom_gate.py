@@ -329,6 +329,14 @@ def main():
   g['wait'](r'\[files.app.archive.list\] archive=/media/LOOM/docs.tar.gz dir=/ count=1\b',0,10)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'created-targz.ppm')})
   step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar.gz')
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  m=step(lambda:cs('y'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar.zst files=(\d+) bytes=(\d+)',180)
+  assert int(m[1])==3 and int(m[2])>0,m[0]
+  step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar.zst format=TarZst entries=5')
+  step(lambda:q.key('ret'),r'\[files.app.archive.list\] archive=/media/LOOM/docs.tar.zst dir=docs count=3\b')
+  q.key('down');time.sleep(.3)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'created-tarzst.ppm')})
+  step(lambda:cs('x'),r'\[files.app.archive.extracted\] archive=/media/LOOM/docs.tar.zst member=docs/alpha.txt to=/media/LOOM/alpha.txt files=1 bytes=%d'%len(CONTENT['docs/alpha.txt']),180)
   step(lambda:q.key('f11'),r'\[files.app.closed\]')
   assert 'KERNEL PANIC' not in t() and 'panicked' not in t() and '[files.app.fatal]' not in t()
  except BaseException:
@@ -343,6 +351,7 @@ def main():
  for name,data in CONTENT.items():assert z.read(name)==data,name
  with tarfile.open(fileobj=io.BytesIO(mread(stick,'docs.tar.gz')),mode='r:gz') as tar:
   for name,data in CONTENT.items():assert tar.extractfile(name).read()==data,name
+ assert mread(stick,'alpha.txt')==CONTENT['docs/alpha.txt']
  for name,data in CONTENT.items():assert mread(stick,'docs (extracted)/'+name)==data,name
  assert mlist(stick,'ren')==['pic_01.txt','pic_02.txt','pic_03.txt'],mlist(stick,'ren')
  assert mread(stick,'ren/pic_01.txt')==REN['one.txt']
