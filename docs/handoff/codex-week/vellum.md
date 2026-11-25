@@ -38,6 +38,11 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
   notes, and visual signatures now have bounded Ctrl+Z / Ctrl+Shift+Z histories until
   save. A deleted annotation restores its original PDF object and appearance.
   Precise pointer selection and appearance controls remain.
+- **Mixed edit undo:** form edits and markup previously cleared each other's
+  history. They now share one bounded, chronological Ctrl+Z / Ctrl+Shift+Z
+  timeline until save. A new edit after undo drops redo for both kinds. The
+  host regression checks PDF values and annotation identity; the guest gate
+  captures a form edit followed by undo of an earlier note edit.
 - **Performance and polish:** the viewer chrome now follows Settings' light,
   dark and high-contrast colors. This slice retains up to two retired rendered
   pages under a 48 MiB cache cap, so a same-zoom revisit avoids Hayro rendering.

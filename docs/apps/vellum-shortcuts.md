@@ -23,7 +23,7 @@ Vellum's light, dark, and high-contrast colors.
 | Select and replace form text | Shift+Left / Shift+Right or Shift+Home / Shift+End extends a selection; Ctrl+A selects the whole text field; typing, Backspace, or Delete replaces or removes it |
 | Place the form text caret | Click the focused text field's value in Vellum's form bar |
 | Select form text with the pointer | Drag across the focused text field's value in Vellum's form bar; typing replaces the selected range |
-| Undo / redo committed form-field edits or added/deleted markup | Ctrl+Z / Ctrl+Shift+Z, before saving |
+| Undo / redo committed form-field edits and markup in edit order | Ctrl+Z / Ctrl+Shift+Z, before saving |
 | Place a typed visual signature | Ctrl+Shift+G |
 | Place an empty digital signature field at the chosen region | Ctrl+Shift+D |
 | Sign a saved empty digital signature field | Ctrl+Shift+B, then Enter to request Shibari approval; Escape cancels |
