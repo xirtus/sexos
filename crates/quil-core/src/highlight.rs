@@ -89,6 +89,45 @@ fn python_f_string_end(text: &[u8], start: usize) -> Option<usize> {
     None
 }
 
+/// Split only simple `${identifier}` substitutions in a complete one-line JS
+/// template. Complex expressions stay string-colored until a parser is used.
+fn js_inline_template(text: &[u8], start: usize, out: &mut Vec<(usize, usize, Kind)>) -> Option<usize> {
+    let mut end = start + 1;
+    while end < text.len() {
+        if text[end] == b'\\' { end = (end + 2).min(text.len()); continue; }
+        if text[end] == b'`' { break; }
+        end += 1;
+    }
+    if end == text.len() { return None; }
+    let (mut i, mut segment) = (start + 1, start);
+    while i < end {
+        if text[i] == b'\\' { i = (i + 2).min(end); continue; }
+        if text[i..end].starts_with(b"${") {
+            let begin = i + 2;
+            let mut after = begin;
+            if text.get(after).is_some_and(|b| b.is_ascii_alphabetic() || matches!(*b, b'_' | b'$')) {
+                after += 1;
+                while text.get(after).is_some_and(|b| b.is_ascii_alphanumeric() || matches!(*b, b'_' | b'$')) { after += 1; }
+                if after < end && text[after] == b'}' {
+                    if i > segment { out.push((segment, i, Kind::String)); }
+                    out.push((i, begin, Kind::Punct));
+                    let word = core::str::from_utf8(&text[begin..after]).unwrap_or("");
+                    let kind = if Lang::Js.keywords().contains(&word) { Kind::Keyword }
+                        else if text[begin].is_ascii_uppercase() { Kind::Type } else { Kind::Plain };
+                    out.push((begin, after, kind));
+                    out.push((after, after + 1, Kind::Punct));
+                    segment = after + 1;
+                    i = segment;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    out.push((segment, end + 1, Kind::String));
+    Some(end + 1)
+}
+
 /// Colours one line. `in_comment` says whether it starts inside a block comment; the
 /// return value says whether the next line does.
 pub fn line(lang: Lang, text: &[u8], in_comment: bool, out: &mut Vec<(usize, usize, Kind)>) -> bool {
@@ -123,6 +162,9 @@ pub fn line(lang: Lang, text: &[u8], in_comment: bool, out: &mut Vec<(usize, usi
                 i = end;
                 continue;
             }
+        }
+        if lang == Lang::Js && c == b'`' {
+            if let Some(end) = js_inline_template(text, i, out) { i = end; continue; }
         }
         let line_comment = match lang {
             Lang::Python | Lang::Shell | Lang::Toml => c == b'#',

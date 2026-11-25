@@ -9,6 +9,9 @@ Multiline raw strings and full parser-backed syntax remain gaps.
 Python coloring now includes `f`, `fr`, and `rf` prefixes in complete one-line
 formatted string spans. Interpolation expressions and triple-quoted strings
 still need a richer lexer.
+JavaScript coloring now separates simple `${identifier}` substitutions in
+complete one-line template strings, while keeping escaped and complex
+substitutions string-colored. Nested and multiline templates remain gaps.
 Ctrl+D now continues past already selected matches after wrapping, so starting
 in the middle of a file can reach every occurrence. Bounded multi-cursor
 selection and undo are covered by focused tests and the QEMU editor gate.
