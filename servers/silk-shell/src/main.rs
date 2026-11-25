@@ -220,7 +220,7 @@ unsafe fn program_resize_flush() {
         let Some(destination) = program_participant(sid) else { *entry = None; continue };
         let (aw, ah) = sex_pdx::pixel_region::area_scaled(w,h,sex_pdx::desktop_style::ui_scale());
         let input = app_input::Input::Resize(sex_pdx::pixel_region::resize_wire(aw, ah));
-        if APP_INPUT.push(app_input::Item { destination, input }) { *entry = None; }
+        if APP_INPUT.push_resize(app_input::Item { destination, input }) { *entry = None; }
     }
 }
 unsafe fn app_input_poll(){
@@ -10622,7 +10622,7 @@ unsafe fn browser_wheel_input(word:u64,reserved:u64){
         if program_pointer_wheel(scroll.vertical()){return}
         sex_pdx::serial_record!("[shell.browser.wheel.rejected] reason=target wheel={} x={} y={} effects=0",scroll.vertical(),POINTER_X,POINTER_Y);return;
     };
-    let accepted=APP_INPUT.push(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
+    let accepted=APP_INPUT.push_scroll(app_input::Item{destination,input:app_input::Input::Scroll(scroll)});
     sex_pdx::serial_record!("[shell.browser.wheel.queued] pd={} task={} route={} wheel={} x={} y={} accepted={} capacity=32",destination.subject.pd,destination.subject.task,destination.route,scroll.vertical(),POINTER_X,POINTER_Y,accepted as u8);
     app_input_poll();
 }
@@ -10762,6 +10762,7 @@ unsafe fn wm_action(action: wm::WmAction) -> bool {
         A::Notifications => toggle_bell(),
         A::Wallpaper => desktop_look_step(1, 0),
         A::Animations => { let (look, on) = animations::cycle(); MOTION_ON = look == animations::Look::Full; motion_hint(0); if notify_panel(on) { NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS; } true }
+        A::FrameMeter => { let (_, notice) = animations::toggle_frame_meter(); motion_hint(0); if notify_panel(notice) { NOTIFY_NOTICE_UNTIL = sex_pdx::get_ticks() + NOTIFY_SHOW_TICKS; } true }
         A::NightLight => desktop_look_step(0, 1),
         A::Lock => lock::lock(),
         A::KeyboardLayout => { let (label, title) = keyboard_layout::next(); keyboard_layout_notice(label, title) }
@@ -24328,11 +24329,21 @@ unsafe fn update_frame_hover_at(x: i32, y: i32) -> bool {
 unsafe fn try_set_focus(sid: u64) -> bool {
     try_set_focus_inner(sid,true)
 }
+fn focused_domain_for_surface(sid: u64) -> u64 {
+    if sid == 0 { return 0; }
+    sex_pdx::app_catalog::INCARNATIONS
+        .iter()
+        .find(|r| r.frame() == sid || r.surface == sid || r.children.contains(&sid))
+        .map(|r| r.target as u64)
+        .unwrap_or(0)
+}
+
 unsafe fn try_set_focus_inner(sid: u64,refresh_children:bool) -> bool {
     launcher_focus_discard(); // A newer explicit focus supersedes a queued launcher focus.
     program_held_release(sid);
     if sid == 0 {
         FOCUSED_SURFACE_ID = 0;
+        let _ = sex_pdx::sched::set_priority_hint(0);
         serial_println!("[silk-shell.focus.change] from=0 to=0 (clear)");
         pdx_call(SLOT_DISPLAY, 0xED, 0, 0, 0);
         serial_println!("[shell.focus.clear] id=0");
@@ -24396,6 +24407,7 @@ unsafe fn try_set_focus_inner(sid: u64,refresh_children:bool) -> bool {
     if refresh_children {if let Some((x,y,w,h))=get_surface_bounds(sid) { native_child_geometry(sid,x,y,w,h); }}
     let old_focus = FOCUSED_SURFACE_ID;
     FOCUSED_SURFACE_ID = sid;
+    let _ = sex_pdx::sched::set_priority_hint(focused_domain_for_surface(sid));
     // Alt+Tab order; steps inside an open switcher do not reorder it.
     if !SWITCHER.is_open() { SWITCHER_RECENT.touch(sid); }
     // A4: Sync FocusRef shadow and emit commit marker.

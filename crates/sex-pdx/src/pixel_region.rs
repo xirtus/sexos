@@ -46,9 +46,33 @@ pub const DISPLAY_FIRST_SLOT: u64 = 600;
 pub const fn display_slot(index: usize) -> u64 { DISPLAY_FIRST_SLOT + index as u64 }
 pub const fn region_id(index: usize) -> u32 { 0x4200 + index as u32 }
 /// Program to Display: show `arg1 >> 32` by `arg1 & 0xFFFF_FFFF` pixels of its region
-/// (0x00RRGGBB, row-major) in surface `arg0`. A size of zero goes back to text.
+/// (0x00RRGGBB, row-major) starting at pixel offset `arg2` in surface `arg0`.
+/// A size of zero goes back to text.
 pub const OP: u64 = 0x2D2;
+/// Front and back pixel offsets when two `width` by `height` frames fit in
+/// `total_pixels`. Returns `Some((0, total_pixels / 2))` so both halves stay
+/// disjoint even across resizes; returns `None` when a frame exceeds half the region.
+pub const fn double_buffer_offsets(total_pixels: usize, width: usize, height: usize) -> Option<(usize, usize)> {
+    let half = total_pixels / 2;
+    let Some(need) = width.checked_mul(height) else { return None; };
+    if need == 0 || need > half { return None; }
+    Some((0, half))
+}
 /// The program row's position among program rows.
 pub fn index_of(target: u32) -> Option<usize> {
     INCARNATIONS.iter().filter(|r| r.app == App::Program).position(|r| r.target == target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn double_buffer_offsets_bounds() {
+        let total = (BYTES / 4) as usize; // 1_048_576 pixels (4 MiB)
+        assert_eq!(double_buffer_offsets(total, 640, 400), Some((0, total / 2)));
+        assert_eq!(double_buffer_offsets(total, 800, 600), Some((0, total / 2)));
+        assert_eq!(double_buffer_offsets(total, 1280, 800), None);
+        assert_eq!(double_buffer_offsets(total, 0, 400), None);
+        assert_eq!(double_buffer_offsets(total, usize::MAX, 2), None);
+    }
 }

@@ -152,6 +152,8 @@ pub enum WmAction {
     PrevTab,
     /// Super+T: dwindle on this workspace, or back to its previous layout.
     ToggleDwindle,
+    /// Super+Shift+F: toggle the compositor frame-time meter HUD.
+    FrameMeter,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -191,7 +193,8 @@ pub fn binding(key: u8, m: Mods) -> Option<WmAction> {
         (code::ENTER, _) => WmAction::Terminal,
         (code::D, _) => WmAction::Launcher,
         (code::Q, _) => WmAction::Close,
-        (code::F, _) => WmAction::Fullscreen,
+        (code::F, false) => WmAction::Fullscreen,
+        (code::F, true) => WmAction::FrameMeter,
         (code::V, false) => WmAction::ClipboardHistory,
         (code::V, true) | (code::SPACE, true) => WmAction::ToggleFloating,
         (code::SPACE, false) => WmAction::CycleLayout,
