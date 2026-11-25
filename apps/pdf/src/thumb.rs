@@ -120,6 +120,16 @@ pub fn encode(image: &Image) -> Option<Vec<u8>> {
 /// Stages complete bytes beside `path`, then replaces it through Files' rename.
 /// A failed write leaves any previous PDF or thumbnail untouched.
 pub fn write_whole(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    write_whole_matching(path, bytes, None)
+}
+
+/// Refuse to replace a PDF if its saved source changed while Vellum was open.
+/// The comparison happens after staging, immediately before promotion.
+pub fn write_whole_if_unchanged(path: &str, bytes: &[u8], original: &[u8]) -> std::io::Result<()> {
+    write_whole_matching(path, bytes, Some(original))
+}
+
+fn write_whole_matching(path: &str, bytes: &[u8], original: Option<&[u8]>) -> std::io::Result<()> {
     use std::fs::OpenOptions;
     use std::io::{Error, ErrorKind, Write};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -145,7 +155,14 @@ pub fn write_whole(path: &str, bytes: &[u8]) -> std::io::Result<()> {
         sync_staged(&file)
     })();
     drop(file);
-    let result = write_result.and_then(|()| rename_staged(&name, path));
+    let result = write_result.and_then(|()| {
+        if let Some(original) = original {
+            if std::fs::read(path)? != original {
+                return Err(Error::new(ErrorKind::Other, "PDF changed on disk; reopen before saving"));
+            }
+        }
+        rename_staged(&name, path)
+    });
     if result.is_err() { let _ = std::fs::remove_file(&name); }
     result
 }
@@ -177,6 +194,20 @@ fn rename_staged(from: &str, to: &str) -> std::io::Result<()> { std::fs::rename(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signing_save_refuses_changed_source_and_keeps_its_bytes() {
+        let path = std::env::temp_dir().join(format!("vellum-sign-source-{}.pdf", std::process::id()));
+        let path = path.to_str().unwrap();
+        std::fs::write(path, b"opened PDF").unwrap();
+        std::fs::write(path, b"newer PDF from another run").unwrap();
+        let error = write_whole_if_unchanged(path, b"signed opened PDF", b"opened PDF").unwrap_err();
+        assert!(error.to_string().contains("changed on disk"));
+        assert_eq!(std::fs::read(path).unwrap(), b"newer PDF from another run");
+        write_whole_if_unchanged(path, b"signed newer PDF", b"newer PDF from another run").unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"signed newer PDF");
+        std::fs::remove_file(path).unwrap();
+    }
 
     fn words(s: &str) -> Vec<String> { s.split(' ').map(String::from).collect() }
 

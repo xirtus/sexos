@@ -1309,7 +1309,8 @@ impl Viewer {
             return;
         }
         let path = self.path.clone();
-        if let Err(e) = thumb::write_whole(&path, &bytes) {
+        let Some(original) = self.editor.as_ref().ok().map(Editor::original) else { return };
+        if let Err(e) = thumb::write_whole_if_unchanged(&path, &bytes, original) {
             self.status = Some(format!("Could not save signed PDF: {e}"));
             sex_std::record("[pdf.sign.failed] stage=save");
             return;
