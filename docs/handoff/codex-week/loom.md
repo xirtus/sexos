@@ -9,7 +9,9 @@ Remaining gaps:
 
 - Independent folder tabs. This change adds them with Ctrl+Shift+T to open,
   Ctrl+PageUp/PageDown to switch, and Ctrl+Shift+W to close.
-- Split panes and a full graphical places sidebar.
+- Text-mode split panes now show two independent folder tabs side by side; the
+  active tab receives navigation keys. A graphical split grid and places sidebar
+  remain.
 - Broader preview types and archive creation formats. ZIP and tar.zst can now
   be created from a selected file or folder; plain tar and tar.gz creation still
   need file-manager controls.

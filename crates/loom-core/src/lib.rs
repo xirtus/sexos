@@ -28,6 +28,7 @@ pub mod hash;
 pub mod journal;
 pub mod rename;
 pub mod session;
+pub mod split;
 pub mod tags;
 mod text;
 pub mod usage;

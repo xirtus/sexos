@@ -95,6 +95,8 @@ struct App {
     top: usize,
     tabs: Vec<FolderTab>,
     active_tab: usize,
+    /// Show this tab beside the next tab in the list; keys act in the active tab.
+    split: bool,
     clip: Option<(Vec<u8>, bool)>,
     undo: Vec<Undo>,
     input: Option<(Input, Vec<u8>)>,
@@ -206,6 +208,7 @@ impl App {
         if !self.tab_ready() { self.status = "Finish the current view before closing a tab.".into(); return; }
         if self.tabs.len() == 1 { self.status = "One tab remains.".into(); return; }
         self.tabs.remove(self.active_tab);
+        if self.tabs.len() < 2 { self.split = false; }
         self.active_tab = self.active_tab.min(self.tabs.len() - 1);
         let tab = &self.tabs[self.active_tab];
         let path = tab.cwd.clone(); let cursor = tab.cursor; let top = tab.top;
@@ -289,6 +292,39 @@ impl App {
     fn selected(&self) -> Option<Vec<u8>> { self.entries.get(self.cursor).map(|e| join(&self.cwd, &e.name)) }
     fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; } }
 
+    /// A pair of live folder listings. Navigation remains in the active tab; the
+    /// existing Ctrl+PageUp/PageDown changes which tab receives the keys.
+    fn render_split(&mut self, window: &mut Window) {
+        let other = (self.active_tab + 1) % self.tabs.len();
+        let other_tab = &self.tabs[other];
+        let mut t = String::from("Loom split view  Ctrl+PageUp/PageDown active tab  Ctrl+Shift+\\ close split\n");
+        t.push_str(&loom_core::split::columns(
+            &format!("> [{}] {}", self.active_tab + 1, shown(&self.cwd)),
+            &format!("  [{}] {}", other + 1, shown(&other_tab.cwd)), 38));
+        t.push_str("\n\n");
+        if self.cursor < self.top { self.top = self.cursor; }
+        if self.cursor >= self.top + ROWS { self.top = self.cursor + 1 - ROWS; }
+        let left: Vec<String> = self.entries.iter().enumerate().skip(self.top).take(ROWS)
+            .map(|(i, e)| format!("{} {}{}", if i == self.cursor { ">" } else { " " }, shown(&e.name), if e.dir { "/" } else { "" }))
+            .collect();
+        let right: Vec<String> = match files::list(window, &at(&other_tab.cwd)) {
+            Ok(mut entries) => {
+                entries.retain(|e| e.name != TRASH && e.name != meta::FILE && e.name != session::FILE && e.name != session::PREVIOUS && !(e.name.first() == Some(&b'.') && e.name.ends_with(b".part")));
+                entries.sort_by(|a, b| b.dir.cmp(&a.dir).then_with(|| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase())));
+                entries.iter().enumerate().skip(other_tab.top).take(ROWS)
+                    .map(|(i, e)| format!("{} {}{}", if i == other_tab.cursor { ">" } else { " " }, shown(&e.name), if e.dir { "/" } else { "" }))
+                    .collect()
+            }
+            Err(_) => vec![String::from("Folder unavailable")],
+        };
+        for i in 0..ROWS {
+            t.push_str(&loom_core::split::columns(left.get(i).map(String::as_str).unwrap_or(""), right.get(i).map(String::as_str).unwrap_or(""), 38));
+            t.push('\n');
+        }
+        if !self.status.is_empty() { t.push('\n'); t.push_str(&self.status); t.push('\n'); }
+        window.show(t.as_bytes());
+    }
+
     fn render(&mut self, window: &mut Window) {
         if self.loom_render(window) { return; }
         if self.thumbs.on && self.input.is_none() && self.search.is_none() && self.question.is_none() && self.disk_ask.is_none() {
@@ -306,6 +342,10 @@ impl App {
             return;
         }
         if self.showing_pixels { window.show_pixels(0, 0); self.showing_pixels = false; self.top = 0; }
+        if self.split && self.tabs.len() > 1 && self.tab_ready() {
+            self.render_split(window);
+            return;
+        }
         let mut t = String::new();
         if let Some(sr) = &self.search {
             t.push_str(&format!("Searching {} for \"{}\": {} found in {} files so far. Esc stops.\n\n", shown(&sr.base), shown(&sr.query), sr.results.len(), sr.looked));
@@ -351,7 +391,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nCtrl+Shift+T new tab  Ctrl+PageUp/PageDown switch  Ctrl+Shift+W close tab\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+Shift+M tar.zst\nCtrl+0..5 rate  Ctrl+Shift+G tags  Ctrl+Shift+R rename all  Ctrl+Shift+D duplicates\nCtrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nCtrl+Shift+T new tab  Ctrl+PageUp/PageDown switch  Ctrl+Shift+W close tab  Ctrl+Shift+\\ split\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+Shift+M tar.zst\nCtrl+0..5 rate  Ctrl+Shift+G tags  Ctrl+Shift+R rename all  Ctrl+Shift+D duplicates\nCtrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
         window.show(t.as_bytes());
     }
 
@@ -872,6 +912,17 @@ impl App {
         self.status.clear();
         if key.control {
             match key.code {
+                0x2B if key.shift => {
+                    if !self.tab_ready() || self.thumbs.on {
+                        self.status = "Finish this view and switch to the list before splitting.".into();
+                    } else if self.tabs.len() < 2 {
+                        self.status = "Open a second tab before splitting.".into();
+                    } else {
+                        self.split = !self.split;
+                        let other = (self.active_tab + 1) % self.tabs.len();
+                        sex_pdx::serial_record!("[loom.split] on={} active={} pair={} dir={} other={}", self.split as u8, self.active_tab + 1, other + 1, shown(&self.cwd), shown(&self.tabs[other].cwd));
+                    }
+                },
                 KEY_T if key.shift => self.new_tab(window),
                 KEY_W if key.shift => self.close_tab(window),
                 0x49 => { let next = (self.active_tab + self.tabs.len() - 1) % self.tabs.len(); self.show_tab(window, next); }
@@ -1000,7 +1051,7 @@ pub extern "C" fn _start() -> ! {
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
-    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
+    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, split: false, root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
                         job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
