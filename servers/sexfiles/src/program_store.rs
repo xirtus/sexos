@@ -11,6 +11,9 @@ fn read(lba: u64, bytes: u64, out: &mut [u8], buf_va: u64) -> Result<(), u32> {
     Ok(())
 }
 static mut DIRECTORY: [u8; store::SECTOR * store::MAX_DIRECTORY_SECTORS] = [0; store::SECTOR * store::MAX_DIRECTORY_SECTORS];
+static mut DIRECTORY_SECTORS: usize = 0;
+/// Last verified program-store binary sitting in `IMAGE_SLOT_FILES`: (packed name, len, fnv hash).
+static mut LAST_LOADED: Option<([u64; 2], u32, u64)> = None;
 /// `requester`: the program Shell starts a ticket for, 0 for Spindle.
 pub fn load(name: [u64; 2], requester: u32) -> u64 {
     // A run with arguments arrives as a ticket for `/bin/NAME`; without that file it is
@@ -39,30 +42,41 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u3
         else { crate::fs_service::read_named_unbound(&bytes[..len], image) }
     };
     match found {
-        crate::fs_service::Program::Loaded(len) => return Ok(len),
-        crate::fs_service::Program::Failed(error) => return Err(error),
+        crate::fs_service::Program::Loaded(len) => { unsafe { LAST_LOADED = None; } return Ok(len); }
+        crate::fs_service::Program::Failed(error) => { unsafe { LAST_LOADED = None; } return Err(error); }
         crate::fs_service::Program::Absent if name[0] == store::TICKET => match store_name {
             Some(packed) => name = packed,
             None => return Err(store::NOT_FOUND),
         },
         crate::fs_service::Program::Absent => {}
     }
-    // The directory: its first sector says how many follow.
+    // The directory: read from disk once and cached in RAM (program store is immutable at runtime).
     let directory = unsafe { &mut *core::ptr::addr_of_mut!(DIRECTORY) };
-    read(store::DIRECTORY_LBA, store::SECTOR as u64, &mut directory[..store::SECTOR], buf_va)?;
-    let sectors = store::directory_sectors(&directory[..store::SECTOR]).ok_or(store::NOT_FOUND)?;
-    let mut have = 1;
-    while have < sectors {
-        let take = (sectors - have).min(BLOCK_BYTES / store::SECTOR);
-        let at = have * store::SECTOR;
-        let mut block = [0u8; BLOCK_BYTES];
-        read(store::DIRECTORY_LBA + have as u64, (take * store::SECTOR) as u64, &mut block, buf_va)?;
-        directory[at..at + take * store::SECTOR].copy_from_slice(&block[..take * store::SECTOR]);
-        have += take;
+    let mut sectors = unsafe { DIRECTORY_SECTORS };
+    if sectors == 0 {
+        read(store::DIRECTORY_LBA, store::SECTOR as u64, &mut directory[..store::SECTOR], buf_va)?;
+        sectors = store::directory_sectors(&directory[..store::SECTOR]).ok_or(store::NOT_FOUND)?;
+        let mut have = 1;
+        while have < sectors {
+            let take = (sectors - have).min(BLOCK_BYTES / store::SECTOR);
+            let at = have * store::SECTOR;
+            let mut block = [0u8; BLOCK_BYTES];
+            read(store::DIRECTORY_LBA + have as u64, (take * store::SECTOR) as u64, &mut block, buf_va)?;
+            directory[at..at + take * store::SECTOR].copy_from_slice(&block[..take * store::SECTOR]);
+            have += take;
+        }
+        unsafe { DIRECTORY_SECTORS = sectors; }
     }
     let entry = store::find(&directory[..sectors * store::SECTOR], name).ok_or(store::NOT_FOUND)?;
     if entry.len == 0 || entry.len as usize > store::IMAGE_BYTES { return Err(store::TOO_LARGE); }
     if entry.lba < store::DIRECTORY_LBA + sectors as u64 { return Err(store::CORRUPT); }
+    if unsafe { LAST_LOADED } == Some((name, entry.len, entry.hash)) {
+        sex_pdx::serial_record!("[files.program.read] bytes={} lba={} cached=1", entry.len, entry.lba);
+        let packed = [name[0].to_le_bytes(), name[1].to_le_bytes()].concat();
+        if remember { crate::fs_service::loaded_from_store(&packed[..packed.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES)]); }
+        return Ok(entry.len);
+    }
+    unsafe { LAST_LOADED = None; }
     // One command per shared-buffer run (up to 128 KiB), copied straight into the image:
     // a page at a time, a 26 MiB program cost 6,600 drive round trips.
     let run = (crate::vfs::diskfs_bridge_buf_len() as usize & !(store::SECTOR - 1)).max(BLOCK_BYTES);
@@ -80,6 +94,7 @@ fn try_load(mut name: [u64; 2], remember:bool, requester: u32) -> Result<u32, u3
         sex_pdx::serial_record!("[files.program.corrupt] bytes={}", len);
         return Err(store::CORRUPT);
     }
+    unsafe { LAST_LOADED = Some((name, entry.len, entry.hash)); }
     sex_pdx::serial_record!("[files.program.read] bytes={} lba={}", len, entry.lba);
     let packed = [name[0].to_le_bytes(), name[1].to_le_bytes()].concat();
     if remember { crate::fs_service::loaded_from_store(&packed[..packed.iter().position(|b| *b == 0).unwrap_or(store::NAME_BYTES)]); }

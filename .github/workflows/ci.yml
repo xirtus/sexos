@@ -1205,6 +1205,10 @@ jobs:
         grep -m1 'model name' /proc/cpuinfo
         truncate -s 1G "$RUNNER_TEMP/latency-source.img"
         python3 scripts/desktop_latency_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/latency-source.img" --out "$RUNNER_TEMP/sexos-latency"
+    - name: App open & close-to-reclaim speed regression gate (zero leaked pages)
+      run: |
+        truncate -s 1G "$RUNNER_TEMP/open-close-source.img"
+        python3 scripts/app_open_close_speed_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/open-close-source.img" --out "$RUNNER_TEMP/sexos-latency/open-close-speed"
     - name: Key-to-screen latency with four busy programs (4 cores on KVM; kernel pass 2 K3)
       run: |
         if [ ! -w /dev/kvm ]; then echo "[latency.kvm] no usable /dev/kvm on this runner; skipped"; exit 0; fi

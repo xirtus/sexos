@@ -32,10 +32,12 @@ struct App {
     /// Stack pages committed on the run's first touch, below the `STACK_COMMIT` it
     /// starts with (`stack_fault`). Kept apart so heap pages stay the manifest's last.
     stack:alloc::vec::Vec<PrivatePage>,
+    /// Shared read-only code/rodata cache slot currently mapped by this run.
+    code_cache:Option<usize>,
 }
 impl App {const fn new()->Self{Self{target:0,task:0,main:0,trampoline:0,pkey:0,surface:0,
     pages:alloc::vec::Vec::new(),count:0,captured:false,ready:false,pool:0,
-    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,stack_pages:0,out:0,stack:alloc::vec::Vec::new(),last_hint:[0;6],hinted:0,kicked:false,tries:[0;6]}}}
+    coordinator:0,pager:0,services:[0;5],acked:0,identity:Incarnation::EMPTY,predecessor:0,activated:false,retired:false,reusable:false,boot_task:0,generation:0,rebirthing:false,pristine:0,entry:0,forced:false,stack_top:0,boot_pages:[PrivatePage::EMPTY;64],boot_count:0,arena:0,arena_pages:0,image_pages:0,grown:0,stack_pages:0,out:0,stack:alloc::vec::Vec::new(),code_cache:None,last_hint:[0;6],hinted:0,kicked:false,tries:[0;6]}}}
 impl App {
     /// Sets manifest entry `i`, growing the manifest by one when `i` is its end.
     fn put(&mut self,i:usize,page:PrivatePage){
@@ -375,6 +377,32 @@ pub(crate) fn checked_program_image(len:usize,source:Option<ImageSource>)->Resul
     if source.is_some_and(|approved|!approved.matches(&copy)){return Err(DENIED)}
     Ok(copy)
 }
+/// Shared read-only `.text`/`.rodata` page cache across launches/incarnations.
+/// Each entry holds verified, non-relocated, read-only physical frames keyed by
+/// `(len, h1, h2)`. Runs map them read-only under their own arena VA, PKU key and view.
+const CODE_CACHE_SLOTS:usize=4;
+const CODE_CACHE_MAX_PAGES:usize=1024;
+struct CachedCode{len:usize,h1:u64,h2:u64,refs:usize,pages:alloc::vec::Vec<(usize,u64)>}
+static CODE_CACHE:Mutex<[Option<CachedCode>;CODE_CACHE_SLOTS]>=Mutex::new([const{None};CODE_CACHE_SLOTS]);
+fn elf_hashes(elf:&[u8])->(u64,u64){
+    let (mut h1,mut h2)=(0xcbf2_9ce4_8422_2325u64,0x9e37_79b9_7f4a_7c15u64);
+    let mut chunks=elf.chunks_exact(8);
+    for c in &mut chunks{
+        let w=u64::from_le_bytes([c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7]]);
+        h1=(h1^w).wrapping_mul(0x100_0000_01b3);
+        h2=(h2.rotate_left(13)^w).wrapping_mul(0x94d0_49bb_1331_11eb);
+    }
+    for &b in chunks.remainder(){h1=(h1^b as u64).wrapping_mul(0x100_0000_01b3);h2=(h2.rotate_left(7)^b as u64).wrapping_mul(0x94d0_49bb_1331_11eb);}
+    (h1,h2)
+}
+fn code_cache_release(slot:Option<usize>){
+    let Some(i)=slot else{return};
+    if let Some(e)=CODE_CACHE.lock()[i].as_mut(){e.refs=e.refs.saturating_sub(1);}
+}
+fn code_cache_has(slot:Option<usize>,frame:u64)->bool{
+    let Some(i)=slot else{return false};
+    CODE_CACHE.lock()[i].as_ref().is_some_and(|e|e.pages.iter().any(|&(_,f)|f==frame))
+}
 fn load_program(app:&mut App,elf:&[u8],task:u32)->Result<(),u64>{
     use crate::program_image as image;
     if app.arena==0{return Err(DENIED)}
@@ -382,74 +410,124 @@ fn load_program(app:&mut App,elf:&[u8],task:u32)->Result<(),u64>{
     let parsed=image::parse(elf,(app.arena_pages*4096) as u64).map_err(|reason|{
         crate::serial_println!("[app.program.rejected] target={} bytes={} reason={:?}",app.target,len,reason);DENIED})?;
     let stack_low=app.stack_top.checked_sub(65536).ok_or(DENIED)?;
-    // The retired run's leaves are clear and its frames returned, so nothing reads the
-    // manifest meanwhile. Frames come zeroed, so nothing of another run survives.
     let mut count=0;let mut image_pages=0;
+    for segment in &parsed.segments[..parsed.count]{image_pages=image_pages.max(((segment.window+segment.memory-1)/4096) as usize+1);}
     for i in 0..app.boot_count{let page=app.boot_pages[i];if page.va>=stack_low&&page.va<app.stack_top{app.put(count,page);count+=1;}}
     let stack=count;
+    let mut relocated=alloc::vec![false;image_pages];
+    let arena=app.arena;
+    for index in 0..parsed.rela_count{
+        if let Some((at,_))=image::relocation(elf,&parsed,index,arena){
+            let p=(at/4096) as usize;let p2=((at+7)/4096) as usize;
+            if p<image_pages{relocated[p]=true;}if p2<image_pages{relocated[p2]=true;}
+        }
+    }
+    let (h1,h2)=elf_hashes(elf);
+    let mut cached_frames=alloc::vec![0u64;image_pages];
+    let mut cache_hit=false;
+    {
+        let mut cache=CODE_CACHE.lock();
+        if let Some((ci,entry))=cache.iter_mut().enumerate().find_map(|(i,e)|e.as_mut().filter(|e|e.len==len&&e.h1==h1&&e.h2==h2).map(|e|(i,e))){
+            entry.refs+=1;app.code_cache=Some(ci);cache_hit=true;
+            for &(idx,f) in &entry.pages{if idx<image_pages{cached_frames[idx]=f;}}
+        }
+    }
     let fail=|app:&mut App,count:usize,why:&str|{
-        for page in &app.pages[stack..count]{crate::program_frames::give(page.expected&PHYSICAL_MASK);}
-        app.count=0;
+        let slot=app.code_cache.take();
+        for page in &app.pages[stack..count]{let f=page.expected&PHYSICAL_MASK;if !code_cache_has(slot,f){crate::program_frames::give(f);}}
+        code_cache_release(slot);app.count=0;
         crate::serial_println!("[app.program.rejected] target={} bytes={} reason={}",app.target,len,why);
     };
+    let mut full_file=alloc::vec![false;image_pages];
     for segment in &parsed.segments[..parsed.count]{
         let first=segment.window/4096;let last=(segment.window+segment.memory-1)/4096;
         for index in first..=last{
+            let full=index*4096>=segment.window&&(index+1)*4096<=segment.window+segment.file;
+            full_file[index as usize]=full;
             let va=app.arena+index*4096;
-            let (Some(leaf),Some(frame))=(crate::boot_memory::arena_leaf(va,app.pkey),crate::program_frames::take())else{
+            let frame=if cached_frames[index as usize]!=0&&!segment.writable&&!relocated[index as usize]{
+                cached_frames[index as usize]
+            }else if full{
+                match crate::program_frames::take_unzeroed(){Some(f)=>f,None=>{fail(app,count,"no_memory");return Err(DENIED)}}
+            }else{
+                match crate::program_frames::take(){Some(f)=>f,None=>{fail(app,count,"no_memory");return Err(DENIED)}}
+            };
+            let Some(leaf)=crate::boot_memory::arena_leaf(va,app.pkey)else{
+                if cached_frames[index as usize]==0{crate::program_frames::give(frame);}
                 fail(app,count,"no_memory");return Err(DENIED)};
             let mut flags=frame|5|((app.pkey as u64)<<59);
             if segment.writable{flags|=2}
             if !segment.executable{flags|=1<<63}
             app.put(count,PrivatePage{va,leaf,expected:flags});count+=1;
         }
-        image_pages=image_pages.max(last as usize+1);
     }
-    // Arena page index -> frame, for writing the file's bytes and relocations.
     let mut frames=alloc::vec![0u64;image_pages];
     for page in &app.pages[stack..count]{frames[((page.va-app.arena)/4096) as usize]=page.expected&PHYSICAL_MASK;}
-    let write=|mut at:u64,mut bytes:&[u8]|->bool{
+    let write=|mut at:u64,mut bytes:&[u8],skip_cached:bool|->bool{
         while !bytes.is_empty(){
-            let Some(&frame)=frames.get((at/4096) as usize)else{return false};
+            let idx=(at/4096) as usize;
+            let Some(&frame)=frames.get(idx)else{return false};
             if frame==0{return false}
             let n=bytes.len().min(4096-(at as usize&4095));
-            crate::boot_memory::write_frames(frame+(at&4095),&bytes[..n]);
+            if !(skip_cached&&cached_frames[idx]!=0){crate::boot_memory::write_frames(frame+(at&4095),&bytes[..n]);}
             at+=n as u64;bytes=&bytes[n..];
         }
         true
     };
-    let arena=app.arena;
     for segment in &parsed.segments[..parsed.count]{
         let from=segment.offset as usize;
-        if !write(segment.window,&elf[from..from+segment.file as usize]){fail(app,count,"segment");return Err(DENIED)}
+        if !write(segment.window,&elf[from..from+segment.file as usize],cache_hit){fail(app,count,"segment");return Err(DENIED)}
     }
     for index in 0..parsed.rela_count{
         let Some((at,value))=image::relocation(elf,&parsed,index,arena)else{fail(app,count,"relocation");return Err(DENIED)};
-        if !write(at,&value.to_le_bytes()){fail(app,count,"relocation");return Err(DENIED)}
+        if !write(at,&value.to_le_bytes(),false){fail(app,count,"relocation");return Err(DENIED)}
     }
-    // A program's own code may not hold an instruction that rewrites its protection
-    // keys, or it could reach every other program's memory. Checked on the final
-    // bytes, after relocations, across every run of executable pages in address order,
-    // so neither a relocation nor a page boundary can assemble one. Code the program
-    // makes later is checked the same way when sealed (`code`).
     let mut executable=alloc::vec![false;image_pages];
     for segment in parsed.segments[..parsed.count].iter().filter(|s|s.executable){
         for index in segment.window/4096..=(segment.window+segment.memory-1)/4096{executable[index as usize]=true;}
     }
-    let mut scan=sex_pdx::program_code::Scan::new();
-    for index in 0..image_pages{
-        if !executable[index]||frames[index]==0{scan=sex_pdx::program_code::Scan::new();continue}
-        let hhdm=crate::HHDM_REQUEST.response().ok_or(DENIED)?.offset;
-        let page=unsafe{core::slice::from_raw_parts((frames[index]+hhdm) as *const u8,4096)};
-        if let Some(at)=scan.feed(page,false){
-            crate::serial_println!("[app.program.rejected] target={} bytes={} reason=key_instruction page={} offset={:#x}",app.target,len,index,at);
-            fail(app,count,"key_instruction");return Err(DENIED);
+    let all_exec_cached=cache_hit&&(0..image_pages).all(|i|!executable[i]||cached_frames[i]!=0);
+    if !all_exec_cached{
+        let mut scan=sex_pdx::program_code::Scan::new();
+        for index in 0..image_pages{
+            if !executable[index]||frames[index]==0{scan=sex_pdx::program_code::Scan::new();continue}
+            let hhdm=crate::HHDM_REQUEST.response().ok_or(DENIED)?.offset;
+            let page=unsafe{core::slice::from_raw_parts((frames[index]+hhdm) as *const u8,4096)};
+            if let Some(at)=scan.feed(page,false){
+                crate::serial_println!("[app.program.rejected] target={} bytes={} reason=key_instruction page={} offset={:#x}",app.target,len,index,at);
+                fail(app,count,"key_instruction");return Err(DENIED);
+            }
         }
     }
-    // The stack: at the arena's top, sized by the file (`-z stack-size`) or 1 MiB, with
-    // an unmapped guard page below it, so an overflow faults instead of reaching the heap.
-    // Only its top `STACK_COMMIT` is there at the start; the rest comes page by page as
-    // the run first touches it (`stack_fault`), so a big stack costs only what is used.
+    // Cache verified immutable RO pages for future launches/incarnations.
+    if !cache_hit&&crate::program_frames::pressure()==crate::program_frames::NORMAL{
+        let mut ro=alloc::vec::Vec::new();
+        for segment in parsed.segments[..parsed.count].iter().filter(|s|!s.writable){
+            for index in segment.window/4096..=(segment.window+segment.memory-1)/4096{
+                let i=index as usize;
+                if !relocated[i]&&frames[i]!=0{ro.push((i,frames[i]));}
+            }
+        }
+        if !ro.is_empty()&&ro.len()<=CODE_CACHE_MAX_PAGES{
+            let mut cache=CODE_CACHE.lock();
+            let mut total:usize=cache.iter().flatten().map(|e|e.pages.len()).sum();
+            for slot in cache.iter_mut(){
+                if total+ro.len()<=CODE_CACHE_MAX_PAGES{break}
+                if slot.as_ref().is_some_and(|e|e.refs==0){
+                    if let Some(old)=slot.take(){total-=old.pages.len();for &(_,f) in &old.pages{crate::program_frames::give_cache(f);}}
+                }
+            }
+            if total+ro.len()<=CODE_CACHE_MAX_PAGES{
+                let free=cache.iter().position(|s|s.is_none()).or_else(||cache.iter().position(|s|s.as_ref().is_some_and(|e|e.refs==0)));
+                if let Some(ci)=free{
+                    if let Some(old)=cache[ci].take(){for &(_,f) in &old.pages{crate::program_frames::give_cache(f);}}
+                    crate::program_frames::promote_to_cache(ro.len() as u64);
+                    cache[ci]=Some(CachedCode{len,h1,h2,refs:1,pages:ro});
+                    app.code_cache=Some(ci);
+                }
+            }
+        }
+    }
     let stack_pages=(if parsed.stack==0{STACK_DEFAULT}else{parsed.stack.min(STACK_MAX)}).div_ceil(4096) as usize;
     if image_pages+stack_pages+1>app.arena_pages{fail(app,count,"stack_room");return Err(DENIED)}
     app.stack=alloc::vec::Vec::new();
@@ -465,7 +543,7 @@ fn load_program(app:&mut App,elf:&[u8],task:u32)->Result<(),u64>{
     let target=crate::ipc::DOMAIN_REGISTRY.get(app.target).ok_or(DENIED)?;
     let main=target.main_task.load(Ordering::Acquire);
     unsafe{(*main).rearm(task,entry,rsp,target);}
-    crate::serial_println!("[app.program.loaded] target={} task={} bytes={} pages={} entry={:#x} stack_pages={} stack_committed={}",app.target,task,len,count,entry,stack_pages,stack_pages.min(STACK_COMMIT));
+    crate::serial_println!("[app.program.loaded] target={} task={} bytes={} pages={} entry={:#x} stack_pages={} stack_committed={} code_cached={}",app.target,task,len,count,entry,stack_pages,stack_pages.min(STACK_COMMIT),cache_hit as u8);
     Ok(())
 }
 /// More memory for the calling program's current run: the arena's next pages after its
@@ -650,6 +728,11 @@ pub fn code(pd:&ProtectionDomain,op:u64,va:u64,want:u64)->[u64;3]{
         Ok([0,0,want as u64])
     })();result.unwrap_or_else(|(e,o)|[e,o,0])
 }
+fn notify_domain(holder:u32,op:u64,target:u32,task:u32)->bool{
+    let Some(pd)=crate::ipc::DOMAIN_REGISTRY.get(holder)else{return false};
+    let msg=crate::ipc::messages::MessageType::IpcCall{func_id:op,arg0:target as u64,arg1:task as u64,arg2:0,caller_pd:0,caller_task:0};
+    if unsafe{(*pd.message_ring).enqueue(msg)}.is_ok(){crate::scheduler::unpark_thread(pd.main_task.load(Ordering::Acquire));true}else{false}
+}
 fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>,source:Option<ImageSource>)->Result<u64,u64>{
     let app=&mut apps[index];
     if !app.rebirthing {
@@ -673,11 +756,17 @@ fn rebirth(apps:&mut [App;MAX_APPS],index:usize,image:Option<usize>,source:Optio
             let main=target.main_task.load(Ordering::Acquire);
             unsafe{(*main).rearm(task,app.entry,app.stack_top,target);}
         }
-        app.task=task;app.acked=0;app.hinted=0;app.kicked=false;app.retired=false;app.rebirthing=true;app.forced=false;
+        app.task=task;app.acked=0;app.hinted=0;app.tries=[0;6];app.kicked=false;app.retired=false;app.rebirthing=true;app.forced=false;
         DORMANT[index].store(true,Ordering::Release);
         TERMINAL[index].store(false,Ordering::Release);
         crate::serial_println!("[app.rebirth.begin] target={} task={} generation={}",app.target,task,app.generation);
-        // Hints for the new run go out on the next tick, not the 64-tick safety scan.
+        // Dispatch OP_APP_REBORN immediately so services wake without waiting for a timer tick.
+        let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
+        for recipient in 0..5{
+            if notify_domain(app.services[recipient],sex_pdx::app_lifecycle::OP_APP_REBORN,app.target,task){
+                app.hinted|=1u8<<recipient;app.last_hint[recipient]=now;
+            }
+        }
         crate::scheduler::task_ownership::EXITS.fetch_add(1,Ordering::AcqRel);
         return Ok(5);
     }
@@ -742,7 +831,21 @@ pub fn ack(pd:&ProtectionDomain,slot:u64,task:u64)->u64{
         let app=apps.iter_mut().find(|a|a.ready&&a.target==g.target_pd).ok_or(DENIED)?;
         g.authorize(pd.id,app.target,app.boot_task,ACK)?;if task!=app.task as u64{return Err(DENIED)}if !app.rebirthing{dead(app)?;}
         let old=app.acked;app.acked|=g.ack_bit;
-        if app.acked!=old{crate::serial_println!("[app.service.ack] target={} task={} holder={} role={} acked={} required={}",app.target,app.task,pd.id,g.ack_bit,app.acked,REQUIRED);}
+        if app.acked!=old{
+            crate::serial_println!("[app.service.ack] target={} task={} holder={} role={} acked={} required={}",app.target,app.task,pd.id,g.ack_bit,app.acked,REQUIRED);
+            // Final service ACK: wake coordinator (rebirth) or pager (retire) immediately
+            // instead of waiting 16+ timer ticks for poll_exit_notifications retry.
+            if app.acked==REQUIRED{
+                let now=crate::interrupts::TICKS.load(Ordering::Relaxed);
+                if app.rebirthing && app.hinted&32==0{
+                    if notify_domain(app.coordinator,sex_pdx::app_lifecycle::OP_APP_REBORN,app.target,app.task){app.hinted|=32;}
+                }else if !app.rebirthing && !app.retired{
+                    if notify_domain(app.pager,sex_pdx::app_lifecycle::OP_APP_EXIT,app.target,app.task){
+                        app.hinted|=32;app.last_hint[5]=now;
+                    }
+                }
+            }
+        }
         Ok(())})();result.map_or_else(|e|e,|()|0)
 }
 pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
@@ -766,14 +869,20 @@ pub fn retire(pd:&ProtectionDomain,slot:u64)->[u64;4]{
         // One shootdown for the whole run, before any frame is reused.
         if !app.forced{crate::smp::tlb::flush_pages(app.count+app.stack.len(),app.pages[..app.count].iter().chain(&app.stack).map(|p|p.va));}
         if app.reusable{
-            // The row keeps its authority and its BOOT frames for the next run; frames
-            // lent to this run's arena go back for any program to use.
+            // The row keeps its authority and its BOOT frames for the next run; private
+            // frames lent to this run's arena go back, while shared RO code cache frames
+            // drop their refcount cleanly.
+            let cache_slot=app.code_cache.take();
             for i in 0..app.count{
                 let (va,frame)=(app.pages[i].va,app.pages[i].expected&PHYSICAL_MASK);
                 // A page Denim held has no frame here: it went back when the page went out.
                 if sex_pdx::denim::is_out(app.pages[i].expected){continue}
-                if app.in_arena(va){crate::program_frames::give(frame)}else{crate::boot_memory::zero_frame(frame)}
+                if app.in_arena(va){
+                    if app.pages[i].expected&2==0 && code_cache_has(cache_slot,frame){continue}
+                    crate::program_frames::give(frame)
+                }else{crate::boot_memory::zero_frame(frame)}
             }
+            code_cache_release(cache_slot);
             for page in core::mem::take(&mut app.stack){crate::program_frames::give(page.expected&PHYSICAL_MASK)}
             app.count=0;app.out=0;
             // Release the manifest's capacity too: a large run must not pin its heap after it ends.

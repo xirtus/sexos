@@ -707,7 +707,7 @@ fn preview_rows(blocks: &[markdown::Block], cols: usize) -> Vec<PreviewRow> {
 }
 
 #[no_mangle]
-pub extern "C" fn _start() -> ! { sex_app::with_stack(1 << 20, main) }
+pub extern "C" fn _start() -> ! { main() }
 
 extern "C" fn main() -> ! {
     let mut window = Window::open();
@@ -728,6 +728,7 @@ extern "C" fn main() -> ! {
         spell: spell::Checker::new(), spelling: true, scrolled: false, fresh: false, wrap: false, dirty_at: None, seen_edits: 0,
     };
     let restored = restore_session(&mut window, &mut jot.tabs);
+    let mut has_session = restored > 0;
     if restored > 0 {
         jot.active = jot.tabs.iter().position(|t| t.unsaved()).unwrap_or(0);
         jot.status = format!("Brought back unsaved work in {} tab{}.", restored, if restored == 1 { "" } else { "s" });
@@ -744,13 +745,16 @@ extern "C" fn main() -> ! {
             if jot.dirty_at.is_some_and(|t| sex_pdx::get_ticks().saturating_sub(t) >= SESSION_MS) {
                 jot.dirty_at = None;
                 write_session(&mut window, &jot.tabs);
+                has_session = jot.tabs.iter().any(|t| t.unsaved() && !t.readonly);
             }
             continue;
         };
         match event {
             Event::Close => {
                 // Closing keeps unsaved tabs for next time, as the session does after a crash.
-                write_session(&mut window, &jot.tabs);
+                if has_session || jot.tabs.iter().any(|t| t.unsaved() && !t.readonly) {
+                    write_session(&mut window, &jot.tabs);
+                }
                 sex_pdx::serial_record!("[jot.closed] target={} task={}", window.target, window.task);
                 window.close()
             }

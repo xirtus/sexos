@@ -16,10 +16,15 @@ static PEAK: AtomicU64 = AtomicU64::new(0);
 
 /// A zeroed frame for a program run, or None when memory is down to the floor.
 pub fn take() -> Option<u64> {
+    let frame = take_unzeroed()?;
+    crate::boot_memory::zero_frame(frame);
+    Some(frame)
+}
+/// An unzeroed frame for a caller that immediately overwrites all 4096 bytes.
+pub fn take_unzeroed() -> Option<u64> {
     pressure();
     if GLOBAL_ALLOCATOR.free_frames() <= FLOOR { return None; }
     let frame = GLOBAL_ALLOCATOR.alloc(0)?;
-    crate::boot_memory::zero_frame(frame);
     let lent = LENT.fetch_add(1, Ordering::Relaxed) + 1;
     PEAK.fetch_max(lent, Ordering::Relaxed);
     Some(frame)
@@ -30,6 +35,11 @@ pub fn give(frame: u64) {
     LENT.fetch_sub(1, Ordering::Relaxed);
     pressure();
 }
+/// Transfers `count` immutable code frames from per-run `LENT` to the kernel's
+/// shared read-only code cache (freed via `give_cache` on eviction).
+pub fn promote_to_cache(count: u64) { LENT.fetch_sub(count, Ordering::Relaxed); }
+/// Frees a frame evicted from the shared read-only code cache.
+pub fn give_cache(frame: u64) { GLOBAL_ALLOCATOR.free(frame, 0); pressure(); }
 /// Pages programs could still take.
 pub fn available() -> u64 { GLOBAL_ALLOCATOR.free_frames().saturating_sub(FLOOR) }
 pub fn lent() -> u64 { LENT.load(Ordering::Relaxed) }
