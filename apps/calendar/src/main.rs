@@ -42,6 +42,7 @@ use sex_calendar::{ics, tz, Calendar, Date, Event as Entry, MonthGrid, PartStat,
 use sex_calendar::history::{ClockEditKind, ClockHistory, ClockState, EventEdit, EventHistory, ReplyDraftHistory};
 use sex_calendar::notice_cursor::{lease_live, NoticeCursor};
 use sex_calendar::conflicts;
+use sex_calendar::storage::{finish_replace, ReplaceFailure as SaveFailure};
 use sex_dav::FileAccount;
 use sex_pdx::app_pointer::Kind;
 
@@ -84,6 +85,8 @@ pub struct App {
     pub help_offset: usize,
     /// The retained local conflict note being compared with the server copy.
     pub review: Option<(usize, usize, usize)>,
+    /// A conflict choice waits for Enter before a staged calendar save.
+    pub review_choice: Option<conflicts::Choice>,
     /// The chosen day's events listed with details (Enter in the month).
     pub agenda: bool,
     /// What is being typed, and for what.
@@ -276,22 +279,27 @@ fn stamp(ms: u64) -> String {
 
 /// Commit a complete replacement in the program's own folder. The old file
 /// remains readable if the write or its first sync fails.
-fn save_file(window: &mut Window, live: &[u8], data: &[u8]) -> Result<(), files::Error> {
+fn save_file_phase(window: &mut Window, live: &[u8], data: &[u8]) -> Result<(), SaveFailure<files::Error>> {
     let name = core::str::from_utf8(live).unwrap_or("date");
     let stage = format!("{name}.stage-{}", window.task);
     let _ = files::remove(window, stage.as_bytes());
     if let Err(e) = files::write(window, stage.as_bytes(), data) {
         let _ = files::remove(window, stage.as_bytes());
-        return Err(e);
+        return Err(SaveFailure::BeforeRename(e));
     }
     if let Err(e) = files::sync(window) {
         let _ = files::remove(window, stage.as_bytes());
-        return Err(e);
+        return Err(SaveFailure::BeforeRename(e));
     }
-    files::rename(window, stage.as_bytes(), live)?;
-    files::sync(window)?;
+    finish_replace(window, |w| files::rename(w, stage.as_bytes(), live), files::sync)?;
     sex_pdx::serial_record!("[date.save.committed] file={} bytes={}", name, data.len());
     Ok(())
+}
+
+fn save_file(window: &mut Window, live: &[u8], data: &[u8]) -> Result<(), files::Error> {
+    save_file_phase(window, live, data).map_err(|failure| match failure {
+        SaveFailure::BeforeRename(e) | SaveFailure::AfterRename(e) => e,
+    })
 }
 
 impl App {
@@ -341,6 +349,7 @@ impl App {
         }
     }
     fn review_next(&mut self) {
+        self.review_choice = None;
         self.review = conflicts::next(&self.cal, self.review.map(|(index, _, _)| index));
         match self.review {
             Some((index, position, total)) => {
@@ -348,6 +357,37 @@ impl App {
                 sex_pdx::serial_record!("[date.conflict.review] item={} total={} local=1 server={}", position, total, server.is_some() as u8);
             }
             None => self.status = String::from("No CalDAV conflicts kept for review."),
+        }
+    }
+    fn resolve_review(&mut self, window: &mut Window) {
+        let (Some((index, _, _)), Some(choice)) = (self.review, self.review_choice) else { return };
+        let next = match conflicts::resolve(&self.cal, index, choice) {
+            Ok(next) => next,
+            Err(message) => { self.status = String::from(message); self.review_choice = None; return; }
+        };
+        let text = next.serialize();
+        match save_file_phase(window, FILE, text.as_bytes()) {
+            result @ (Ok(()) | Err(SaveFailure::AfterRename(_))) => {
+                let uncertain = matches!(result, Err(SaveFailure::AfterRename(_)));
+                self.cal = next;
+                self.event_history.clear();
+                self.review = None;
+                self.review_choice = None;
+                let name = if choice == conflicts::Choice::Local { "local" } else { "server" };
+                if uncertain {
+                    sex_pdx::serial_record!("[date.conflict.save.uncertain] choice={} events={}", name, self.cal.events.len());
+                    self.status = String::from("Resolution replaced the file, but final sync failed. Reopen Date to confirm it persisted.");
+                } else {
+                    sex_pdx::serial_record!("[date.conflict.resolved] choice={} events={}", name, self.cal.events.len());
+                    self.status = if choice == conflicts::Choice::Local {
+                        String::from("Kept the local copy. Sync to send it to the server.")
+                    } else { String::from("Kept server state and removed the local note.") };
+                }
+            }
+            Err(SaveFailure::BeforeRename(e)) => {
+                sex_pdx::serial_record!("[date.conflict.save.failed] status={}", e);
+                self.status = format!("Resolution not confirmed: {}", core::str::from_utf8(files::message(e)).unwrap_or("save failed"));
+            }
         }
     }
     fn read_file(&mut self, window: &mut Window, path: &[u8]) -> Option<String> {
@@ -436,11 +476,15 @@ impl App {
                 if !r.conflicts.is_empty() {
                     let notes = cal.calendars.iter().find(|c| c.name == "Conflicts" && c.url.is_empty()).map(|c| c.id);
                     let notes = notes.unwrap_or_else(|| cal.add_calendar("Conflicts", ""));
-                    for note in &r.conflicts {
+                    for (position, note) in r.conflicts.iter().enumerate() {
+                        let href = r.conflict_hrefs.get(position).cloned().unwrap_or_default();
                         for mut e in ics::import(note).unwrap_or_default() {
                             e.calendar = notes;
                             e.title = format!("Conflict: {}", e.title);
                             e.uid = format!("{}-conflict", e.uid);
+                            e.conflict_source_calendar = Some(id);
+                            e.conflict_source_href = href.clone();
+                            sex_pdx::serial_record!("[date.conflict.source] calendar={} href={}", id, href);
                             cal.events.push(e);
                         }
                     }
@@ -663,8 +707,18 @@ impl App {
         }
         if self.review.is_some() {
             match (key.code, typed) {
+                (0x01, _) if self.review_choice.is_some() => { self.review_choice = None; self.status = String::from("Choice cancelled; both copies remain."); },
                 (0x01, _) => self.review = None,
                 (_, Some(b'v')) => self.review_next(),
+                (_, Some(b'l')) => {
+                    if self.review.and_then(|(index, _, _)| conflicts::server_copy(&self.cal, index)).is_some() {
+                        self.review_choice = Some(conflicts::Choice::Local);
+                        self.status.clear();
+                        sex_pdx::serial_record!("[date.conflict.choice] local");
+                    } else { self.status = String::from("No unique server event matches; choose S to discard the local note."); }
+                }
+                (_, Some(b's')) => { self.review_choice = Some(conflicts::Choice::Server); self.status.clear(); sex_pdx::serial_record!("[date.conflict.choice] server"); },
+                (0x1C, _) => self.resolve_review(window),
                 _ => {},
             }
             return;
@@ -918,7 +972,7 @@ pub extern "C" fn _start() -> ! {
     let theme_generation = settings::generation().unwrap_or(0);
     sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
     let mut app = App { cal, event_history: EventHistory::default(), reply_history: ReplyDraftHistory::default(), clock_history: ClockHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
-        help: false, help_offset: 0, review: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
+        help: false, help_offset: 0, review: None, review_choice: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
         picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: cursor.minute, uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args);

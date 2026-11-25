@@ -42,7 +42,7 @@ pub const HELP_ROWS: &[(&str, &str)] = &[
     ("?", "Open or close this shortcut reference"),
     ("M W D C L", "Month, week, day, clock, calendars"),
     ("S / E", "Sync CalDAV / export shown events to .ics"),
-    ("V", "Review retained local CalDAV conflicts"),
+    ("V", "Review CalDAV conflicts; L/S choose, Enter saves"),
     ("Ctrl+Z / Ctrl+Y", "Undo / redo events, reply choice, Clock zones or alarms"),
     ("Month: arrows", "Move one day or one week"),
     ("Month: PgUp/PgDn", "Previous or next month"),
@@ -242,10 +242,19 @@ fn conflict_review(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces, index: 
         c.text(&mut f.tiny, right, y + 140, &server.location, p.text, half);
         c.text(&mut f.tiny, right, y + 168, &server.description, p.text, half);
     } else {
-        c.text(&mut f.small, right, y + 84, "No matching server event", p.dim, half);
+        c.text(&mut f.small, right, y + 84, "No unique server event", p.dim, half);
     }
-    c.text(&mut f.tiny, x + 18, y + 224, "Read only: both copies remain. V next conflict; Esc closes.", p.text, width - 36);
-    c.text(&mut f.tiny, x + 18, y + 246, "Resolve by editing the calendar event and then removing its conflict note.", p.dim, width - 36);
+    let action = match app.review_choice {
+        Some(conflicts::Choice::Local) => "Use local copy? Enter saves it for the next sync; Esc cancels.",
+        Some(conflicts::Choice::Server) => "Keep server copy? Enter removes the local note; Esc cancels.",
+        None => "L use local  ·  S keep server  ·  V next conflict  ·  Esc close",
+    };
+    c.text(&mut f.tiny, x + 18, y + 224, action, p.text, width - 36);
+    c.text(&mut f.tiny, x + 18, y + 246,
+        if conflicts::server_copy(&app.cal, index).is_some() {
+            "Your choice is saved locally first. Sync again to send a local choice."
+        } else { "No unique server match. S discards the local note; local replacement is unavailable." },
+        p.dim, width - 36);
 }
 
 fn month(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {

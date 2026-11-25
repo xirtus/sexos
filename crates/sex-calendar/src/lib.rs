@@ -14,6 +14,7 @@ pub mod clock;
 pub mod conflicts;
 pub mod history;
 pub mod notice_cursor;
+pub mod storage;
 pub mod ics;
 pub mod tz;
 
@@ -394,13 +395,17 @@ pub struct Event {
     pub href: String,
     pub etag: String,
     pub state: SyncState,
+    /// Original CalDAV identity of a retained conflict note; absent on old notes.
+    pub conflict_source_calendar: Option<u16>,
+    pub conflict_source_href: String,
 }
 
 impl Default for Event {
     fn default() -> Event {
         Event { start: Date { year: 1970, month: 1, day: 1 }, time: None, utc: false, span: 1, title: String::new(), location: String::new(), rule: None,
             uid: String::new(), calendar: 0, exdates: Vec::new(), rdates: Vec::new(), recurrence_id: None, alarms: Vec::new(), description: String::new(),
-            organizer: String::new(), attendees: Vec::new(), invitation: false, sequence: 0, href: String::new(), etag: String::new(), state: SyncState::Clean }
+            organizer: String::new(), attendees: Vec::new(), invitation: false, sequence: 0, href: String::new(), etag: String::new(), state: SyncState::Clean,
+            conflict_source_calendar: None, conflict_source_href: String::new() }
     }
 }
 
@@ -509,7 +514,8 @@ pub const PALETTE: [u32; 8] = [0x7FB8FF, 0xF2A65A, 0x8BD17C, 0xE57BA5, 0xC59BF2,
 ///
 /// Event fields: first day, time or `-` for all day, `Z` or `-`, days covered, rule or
 /// `-`, title, location, then any number of `key=value` fields (uid, cal, ex, rdate,
-/// rid, alarm, desc, org, att, inv, seq, href, etag, state). Tabs, newlines and
+/// rid, alarm, desc, org, att, inv, seq, href, etag, state, source_cal,
+/// source_href). Tabs, newlines and
 /// backslashes in text are escaped as `\t` `\n` `\\`. A `!cal` line is one calendar:
 /// id, name, colour, shown, collection address, ctag, sync token.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -594,6 +600,8 @@ impl Calendar {
                     "href" => e.href = unescape(value),
                     "etag" => e.etag = unescape(value),
                     "state" => e.state = match value { "new" => SyncState::New, "mod" => SyncState::Modified, "del" => SyncState::Deleted, _ => SyncState::Clean },
+                    "source_cal" => e.conflict_source_calendar = value.parse().ok(),
+                    "source_href" => e.conflict_source_href = unescape(value),
                     _ => {}
                 }
             }
@@ -648,6 +656,8 @@ impl Calendar {
             if e.sequence != 0 { let _ = write!(out, "\tseq={}", e.sequence); }
             put_text(&mut out, "href", &e.href);
             put_text(&mut out, "etag", &e.etag);
+            if let Some(id) = e.conflict_source_calendar { let _ = write!(out, "\tsource_cal={id}"); }
+            put_text(&mut out, "source_href", &e.conflict_source_href);
             match e.state { SyncState::Clean => {}, SyncState::New => out.push_str("\tstate=new"), SyncState::Modified => out.push_str("\tstate=mod"), SyncState::Deleted => out.push_str("\tstate=del") }
             out.push('\n');
         }
