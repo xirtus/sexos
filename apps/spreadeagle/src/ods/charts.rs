@@ -304,6 +304,7 @@ mod tests {
         std::fs::write(&path, include_bytes!("../../assets/lo-pie.ods")).unwrap();
         let (mut book, warnings) = crate::book::Book::open(path.to_str().unwrap()).unwrap();
         assert!(warnings.iter().all(|w| !w.contains("could not") && !w.contains("cannot")), "{warnings:?}");
+        assert_eq!(book.chart_kinds(), vec![ChartKind::Pie, ChartKind::Line]);
         assert_eq!(book.charts()[0].col, 3);
         let bytes = book.file_bytes(path.to_str().unwrap()).unwrap();
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();

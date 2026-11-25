@@ -1655,6 +1655,7 @@ impl Ui {
         let mut theme_next = sex_std::sex_pdx::get_ticks().saturating_add(1000);
         let frozen = self.book.frozen().map_or("none".into(), |(r, c)| format!("{r},{c}"));
         sex_std::record(&format!("[spreadeagle.view] charts={} frozen={frozen}", self.book.charts().len()));
+        sex_std::record(&format!("[spreadeagle.chart-types] kinds={:?}", self.book.chart_kinds()));
         sex_std::record(&format!("[spreadeagle.columns] A={} B={}", self.book.col_width(0), self.book.col_width(1)));
         sex_std::record(&format!("[spreadeagle.rows] 1={} 2={}", self.book.row_height(0), self.book.row_height(1)));
         self.record_column();

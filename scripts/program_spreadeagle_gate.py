@@ -117,6 +117,7 @@ def main():
   s=len(t());run('run spreadeagle lo-pie.ods')
   pie=g['wait'](r'\[spreadeagle.open\] target=(\d+) task=(\d+) name=lo-pie.ods sheets=Sheet1\n',s,900)
   g['wait'](r'\[spreadeagle.view\] charts=2 frozen=none\n',s,120)
+  g['wait'](r'\[spreadeagle.chart-types\] kinds=\[Pie, Line\]\n',s,120)
   g['focus'](SURFACE[int(pie[1])]);q.key('esc');time.sleep(.8)
   q.cmd('screendump',{'filename':str(a.out/'spreadeagle-ods-pie.ppm')})
   assert (a.out/'spreadeagle-ods-pie.ppm').stat().st_size>10000
