@@ -9,6 +9,7 @@ keeps the help key as ordinary text until that entry is finished.
 | Any view | M, W, D, C, L | Month, week, day, clock, calendars |
 | Any view | S | Sync a linked CalDAV account |
 | Any view | E | Export shown events to `date-export.ics` |
+| Notice showing | Shift+S | Snooze the notice for five minutes; it survives a Date restart |
 | Month | Arrow keys | Move one day or one week |
 | Month | Page Up, Page Down | Previous or next month |
 | Month, week, day | T or Home | Return to today |

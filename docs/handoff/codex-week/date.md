@@ -18,3 +18,6 @@ Remaining gaps:
   review, including localized key names, remains.
 - Date now draws its native surfaces from SexOS light, dark and high-contrast
   appearance tokens, and refreshes when Settings changes theme or accent.
+- Date already routes reminders, alarms and timers to Bell. A visible notice can
+  now be snoozed for five minutes with Shift+S; the new timer survives restart.
+  System-wide delivery after Date itself closes still needs a userspace service.

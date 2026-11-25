@@ -150,9 +150,13 @@ impl App {
             }
         }
     }
-    fn save_clock(&mut self, window: &mut Window) {
-        if let Err(e) = save_file(window, CLOCK, self.clock.serialize().as_bytes()) {
-            self.status = String::from(core::str::from_utf8(files::message(e)).unwrap_or("Not saved."));
+    fn save_clock(&mut self, window: &mut Window) -> bool {
+        match save_file(window, CLOCK, self.clock.serialize().as_bytes()) {
+            Ok(()) => true,
+            Err(e) => {
+                self.status = String::from(core::str::from_utf8(files::message(e)).unwrap_or("Not saved."));
+                false
+            }
         }
     }
     fn new_uid(&mut self) -> String {
@@ -323,6 +327,16 @@ impl App {
         let posted = sex_pdx::notify::post(title.as_bytes(), body.as_bytes(), sex_pdx::notify::URGENCY_CRITICAL);
         sex_pdx::serial_record!("[date.alarm.fired] kind={} title={} notified={}", kind, title, posted as u8);
         self.banner = Some(if body.is_empty() { String::from(title) } else { format!("{title}: {body}") });
+    }
+    fn snooze_notice(&mut self, window: &mut Window) {
+        let Some(notice) = self.banner.take() else { return };
+        if self.clock.snooze_notice(now_ms(), &notice) {
+            let saved = self.save_clock(window);
+            if saved { self.status = String::from("Snoozed for 5 minutes."); }
+            sex_pdx::serial_record!("[date.notice.snoozed] seconds=300 saved={}", saved as u8);
+        } else {
+            self.status = String::from("No clock for snooze.");
+        }
     }
     /// Looks at the clock: reminders, alarms and timers due since last time. Returns
     /// whether anything rang.
@@ -647,7 +661,15 @@ pub extern "C" fn _start() -> ! {
         };
         match event {
             Event::Close => { sex_pdx::serial_record!("[calendar.closed] target={} task={}", window.target, window.task); window.close() }
-            Event::Key(key) => { app.status.clear(); app.banner = None; app.key(&mut window, key); }
+            Event::Key(key) => {
+                app.status.clear();
+                if app.banner.is_some() && key.shift && !key.control && key.code == 0x1F {
+                    app.snooze_notice(&mut window);
+                } else {
+                    app.banner = None;
+                    app.key(&mut window, key);
+                }
+            }
             Event::Pointer(_) if app.help => continue,
             Event::Pointer(p) if matches!(p.kind, Kind::Down { button: 0 }) && app.ask.is_none() => { app.banner = None; app.click(&mut window, p.x as i32, p.y as i32); }
             Event::Pointer(p) => match p.kind {

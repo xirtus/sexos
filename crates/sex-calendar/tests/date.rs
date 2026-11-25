@@ -153,6 +153,19 @@ fn alarms_and_timers() {
     assert_eq!(Clock::default().world().len(), 7);
 }
 
+#[test]
+fn snoozed_notice_survives_restart_and_rings_once() {
+    let mut clock = Clock::default();
+    assert!(!clock.snooze_notice(0, "Dentist"));
+    assert!(clock.snooze_notice(1_000_000, "Dentist: in 5 min"));
+    let mut restored = Clock::parse(&clock.serialize());
+    assert!(restored.timers_done(1_299_999).is_empty());
+    let rung = restored.timers_done(1_300_000);
+    assert_eq!(rung.len(), 1);
+    assert_eq!(rung[0].label, "Dentist: in 5 min");
+    assert!(restored.timers_done(1_300_001).is_empty());
+}
+
 const INVITE: &str = "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nMETHOD:REQUEST\r\nBEGIN:VEVENT\r\nUID:plan@example.org\r\nSEQUENCE:2\r\n\
 DTSTART:20261120T140000Z\r\nDTEND:20261120T150000Z\r\nSUMMARY:Planning\r\nORGANIZER;CN=Boss:mailto:boss@example.org\r\n\
 ATTENDEE;CN=Boss;PARTSTAT=ACCEPTED:mailto:boss@example.org\r\nATTENDEE;CN=\"Me, Myself\";PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:me@example.org\r\n\
