@@ -15,6 +15,9 @@ Remaining gaps:
   language-service protocol slice, not semantic completion. Continuous
   diagnostics, identifier and semantic completion, cross-file navigation, rename, and
   full language-server implementations remain gaps.
+  The diagnostic request now opens a bounded picker with exact source ranges;
+  Enter jumps to the selected issue in the same unchanged snapshot. Continuous
+  diagnostics remain open.
   Ctrl+Shift+M now requests bounded document symbols from that same child and
   opens a keyboard picker that jumps to a declaration. The helper recognizes
   basic Rust, Python and JavaScript declaration heads; full syntax and
