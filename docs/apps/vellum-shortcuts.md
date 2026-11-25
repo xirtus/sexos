@@ -16,6 +16,7 @@ Vellum's light, dark, and high-contrast colors.
 | Remove selected annotation | Delete in the annotation list |
 | Fill a form | Ctrl+E; Ctrl+Down / Ctrl+Up changes fields; type text, Space checks a box, Up / Down chooses combo or list options, Enter commits and advances. Editable combos accept custom text (Ctrl+A clears); multi-select lists use Space to toggle the focused option |
 | Edit form text at the caret | Left / Right moves one character; Home / End jumps to an edge; Backspace / Delete removes the character before / after the caret |
+| Select and replace form text | Shift+Left / Shift+Right or Shift+Home / Shift+End extends a selection; Ctrl+A selects the whole text field; typing, Backspace, or Delete replaces or removes it |
 | Undo / redo committed form-field edits or added/deleted markup | Ctrl+Z / Ctrl+Shift+Z, before saving |
 | Place a typed visual signature | Ctrl+Shift+G |
 | Place an empty digital signature field at the chosen region | Ctrl+Shift+D |
@@ -25,7 +26,8 @@ Vellum's light, dark, and high-contrast colors.
 
 In Find, a single space can match words separated by a line break in the PDF.
 
-For a focused combo or list field, click its value in the form bar to open
+Editable combo boxes retain their existing Ctrl+A clear command. For a focused
+combo or list field, click its value in the form bar to open
 Vellum's option menu. Click a row to choose it; multi-select lists remain open
 for more toggles, and the pointer wheel scrolls long lists.
 Click a form widget on the page to focus it directly; a choice widget opens its
