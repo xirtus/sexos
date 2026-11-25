@@ -307,6 +307,62 @@ fn signatures_are_reported_and_survive() {
 }
 
 #[test]
+fn detached_signature_slot_covers_exact_final_bytes() {
+    let mut source = form(Style::Table, true);
+    let old = b"/V 19 0 R";
+    let at = source.windows(old.len()).position(|w| w == old).unwrap();
+    source[at..at + old.len()].copy_from_slice(b"/V null  ");
+    let editor = Editor::open(source.clone()).unwrap();
+    assert!(!editor.signatures().unwrap()[0].signed);
+    let mut covered = Vec::new();
+    let signed = editor.embed_detached_signature_with("sig", 1024, |first, second| {
+        covered.extend_from_slice(first);
+        covered.extend_from_slice(second);
+        Ok(vec![0x30, 0x03, 0x02, 0x01, 0x01])
+    }).unwrap();
+    assert_eq!(&signed[..source.len()], source.as_slice(), "incremental signing must keep original bytes");
+    let parsed = Editor::open(signed.clone()).unwrap();
+    let sig = &parsed.signatures().unwrap()[0];
+    assert!(sig.signed && sig.byte_range_well_formed && sig.covers_whole_file, "{sig:?}");
+    let mut actual = Vec::new();
+    for (offset, len) in &sig.byte_range { actual.extend_from_slice(&signed[*offset as usize..(*offset + *len) as usize]); }
+    assert_eq!(actual, covered, "the callback must see exactly the bytes the PDF covers");
+    let gap = sig.byte_range[0].1 as usize..sig.byte_range[1].0 as usize;
+    assert!(signed[gap.clone()].starts_with(b"<3003020101"));
+    assert_eq!(gap.end - gap.start, 2050);
+    let external = lopdf::Document::load_mem(&signed).expect("independent parser reopens signed PDF");
+    let catalog = external.catalog().unwrap();
+    let form = catalog.get(b"AcroForm").unwrap().as_dict().unwrap();
+    let fields = form.get(b"Fields").unwrap().as_array().unwrap();
+    let sig_field = external.get_dictionary(fields.last().unwrap().as_reference().unwrap()).unwrap();
+    let sig_ref = sig_field.get(b"V").unwrap().as_reference().unwrap();
+    let sig_dict = external.get_dictionary(sig_ref).unwrap();
+    assert_eq!(sig_dict.get(b"SubFilter").unwrap().as_name().unwrap(), b"adbe.pkcs7.detached");
+    assert_eq!(sig_dict.get(b"ByteRange").unwrap().as_array().unwrap().len(), 4);
+    assert!(!editor.is_modified(), "signing output does not mutate the editor on success");
+    let mut tampered = signed;
+    tampered[source.len() + 1] ^= 1;
+    let mut changed = Vec::new();
+    for (offset, len) in &sig.byte_range { changed.extend_from_slice(&tampered[*offset as usize..(*offset + *len) as usize]); }
+    assert_ne!(changed, covered, "a covered byte change must alter the callback's message");
+}
+
+#[test]
+fn detached_signature_slot_refuses_invalid_requests_without_editing() {
+    let mut source = form(Style::Table, true);
+    let old = b"/V 19 0 R";
+    let at = source.windows(old.len()).position(|w| w == old).unwrap();
+    source[at..at + old.len()].copy_from_slice(b"/V null  ");
+    let editor = Editor::open(source.clone()).unwrap();
+    assert!(editor.embed_detached_signature_with("sig", 1023, |_, _| Ok(vec![1])).is_err());
+    assert!(editor.embed_detached_signature_with("name", 1024, |_, _| Ok(vec![1])).is_err());
+    assert!(editor.embed_detached_signature_with("sig", 1024, |_, _| Ok(vec![1; 1025])).is_err());
+    assert!(editor.embed_detached_signature_with("sig", 1024, |_, _| Err(Error::BadValue("signer failed".into()))).is_err());
+    assert!(!editor.is_modified());
+    assert_eq!(editor.original(), source);
+}
+
+#[test]
 fn malformed_signature_range_is_not_presented_as_covered() {
     let mut pdf = form(Style::Table, true);
     let at = pdf.windows(b"/ByteRange [0 ".len()).position(|w| w == b"/ByteRange [0 ").unwrap() + b"/ByteRange [0 ".len();

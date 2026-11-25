@@ -5,6 +5,13 @@ use crate::cos::{fmt_num as n, Dict, ObjId, Object, Stream};
 use crate::text::{content_string, decode_text, encode_text, text_width, wrap};
 use crate::{rect_of, Editor, Error};
 
+fn find_once(data: &[u8], needle: &[u8]) -> Result<usize, Error> {
+    let mut found = data.windows(needle.len()).enumerate().filter(|(_, window)| *window == needle);
+    let at = found.next().map(|(at, _)| at).ok_or(Error::Malformed("signature placeholder missing"))?;
+    if found.next().is_some() { return Err(Error::Malformed("signature placeholder is ambiguous")); }
+    Ok(at)
+}
+
 /// The kind of a terminal field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FieldKind {
@@ -148,6 +155,73 @@ impl Editor {
                 byte_range_well_formed,
                 mdp_permissions: mdp,
             });
+        }
+        Ok(out)
+    }
+
+    /// Embeds a detached CMS signature in an existing, empty signature field.
+    /// The callback receives exactly the two PDF byte slices covered by `/ByteRange`
+    /// and must produce CMS SignedData with detached content. It can call Shibari
+    /// to use a private key; Vellum never needs to see that key. This method only
+    /// places the returned container. It does not validate the certificate or CMS.
+    ///
+    /// A failed callback or oversized container leaves this editor unchanged.
+    pub fn embed_detached_signature_with(
+        &self,
+        field_name: &str,
+        reserve_bytes: usize,
+        sign: impl FnOnce(&[u8], &[u8]) -> Result<Vec<u8>, Error>,
+    ) -> Result<Vec<u8>, Error> {
+        const MARKER: &[u8] = b"/ByteRange [0 9999999991 9999999992 9999999993]";
+        if !(1024..=65536).contains(&reserve_bytes) {
+            return Err(Error::BadValue("signature reservation must be 1–64 KiB".into()));
+        }
+        let mut nodes = self.field_nodes().into_iter().filter(|n| n.name == field_name);
+        let node = nodes.next().ok_or_else(|| Error::NoSuchField(field_name.into()))?;
+        if nodes.next().is_some() { return Err(Error::BadValue("ambiguous signature field".into())); }
+        if node.inh.ft.as_deref() != Some(b"Sig") || node.inh.ff & FF_READONLY != 0
+            || node.inh.v.as_ref().is_some_and(|v| self.resolve(v) != Object::Null) {
+            return Err(Error::ReadOnly(field_name.into()));
+        }
+        let mut changes = self.changes.clone();
+        let sig_id = ObjId(self.next_num, 0);
+        let signature = Dict::new()
+            .with(b"Type", Object::name("Sig"))
+            .with(b"Filter", Object::name("Adobe.PPKLite"))
+            .with(b"SubFilter", Object::name("adbe.pkcs7.detached"))
+            .with(b"ByteRange", Object::Array(vec![0i64.into(), 9999999991i64.into(),
+                9999999992i64.into(), 9999999993i64.into()]))
+            .with(b"Contents", Object::Str(vec![0xA5; reserve_bytes]));
+        changes.insert(sig_id.0, (0, Object::Dict(signature)));
+        let mut field = self.get_dict(node.id).ok_or(Error::Malformed("signature field vanished"))?;
+        field.set(b"V", sig_id);
+        let generation = changes.get(&node.id.0).map(|(generation, _)| *generation)
+            .unwrap_or_else(|| self.doc.generation(node.id.0));
+        changes.insert(node.id.0, (generation, Object::Dict(field)));
+        let mut out = crate::write::incremental(&self.doc, &changes, self.next_num + 1)?;
+        let appended = self.original().len();
+        let range_at = find_once(&out[appended..], MARKER)? + appended;
+        let contents_marker = format!("/Contents <{}>", "A5".repeat(reserve_bytes));
+        let contents_at = find_once(&out[appended..], contents_marker.as_bytes())? + appended;
+        let gap_start = contents_at + b"/Contents ".len();
+        let gap_end = contents_at + contents_marker.len();
+        let values = [gap_start, gap_end, out.len() - gap_end];
+        let mut slot = range_at + b"/ByteRange [0 ".len();
+        for value in values {
+            let fixed = format!("{value:010}");
+            if fixed.len() != 10 { return Err(Error::BadValue("PDF exceeds 10-digit byte range".into())); }
+            out[slot..slot + 10].copy_from_slice(fixed.as_bytes());
+            slot += 11;
+        }
+        let cms = sign(&out[..gap_start], &out[gap_end..])?;
+        if cms.is_empty() || cms.len() > reserve_bytes {
+            return Err(Error::BadValue("CMS container is empty or exceeds reserved space".into()));
+        }
+        let hex = b"0123456789ABCDEF";
+        for (at, byte) in cms.iter().copied().chain(std::iter::repeat(0).take(reserve_bytes - cms.len())).enumerate() {
+            let offset = gap_start + 1 + at * 2;
+            out[offset] = hex[(byte >> 4) as usize];
+            out[offset + 1] = hex[(byte & 0x0F) as usize];
         }
         Ok(out)
     }
