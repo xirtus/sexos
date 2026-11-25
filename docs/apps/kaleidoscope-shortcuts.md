@@ -14,14 +14,17 @@ address bar. These controls belong to Kaleidoscope and work without a network gr
 | Select tab 1–8, last tab | Ctrl+1–8, Ctrl+9 |
 | Private tab, container tab 1–4 | Ctrl+Shift+P, Ctrl+Shift+1–4 |
 | Vertical tabs, split view, group, side panel | Ctrl+Shift+,, Ctrl+Shift+\\, Ctrl+Shift+G, Ctrl+Shift+B |
-| Site settings, Shields, clear site data | Ctrl+Shift+E, Ctrl+Shift+S, Ctrl+Shift+Backspace |
+| Site settings, Shields, JavaScript, clear site data | Ctrl+Shift+E, Ctrl+Shift+S, Ctrl+Shift+Y, Ctrl+Shift+Backspace |
 | Request Chastity fill for a visible HTTPS login | Ctrl+Shift+K |
 | Ask Chastity to review saving a visible HTTPS login | Ctrl+Shift+U |
 | Keyboard reference | Ctrl+Shift+/ |
 
 The reader view shortcut returns to the source page when used in reader view.
 Site settings shows the current container's cookie and local-storage counts for
-the site. Clearing site data refreshes those counts.
+the site. Ctrl+Shift+Y blocks or allows JavaScript for that exact origin and
+reloads the page. The choice survives restart. It covers page scripts, inline
+handlers, and content scripts on that origin. Clearing site data refreshes the
+stored-data counts.
 The downloads panel lists completed files and failed transfers. **Try again**
 opens the failed address again; completed files open from the same panel.
 Ctrl+Shift+J pauses the live transfer at its current staged file offset and

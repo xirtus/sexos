@@ -102,6 +102,19 @@ def main():
   reply=g['wait'](r'\[web.console\] level=0 options reply (\{[^\n]*\})',s,120)[1]
   assert reply==f'{{"ok":true,"host":"options","installs":1,"tab":"{opts}"}}',reply
   assert '[web.extension.content]' not in t()[s:],'content scripts ran on an extension page'
+  # A content script arms the background's explicit executeScript probe. Once
+  # site JavaScript is disabled, that later injection must not create a runtime.
+  s=go(page+'?probe=1');g['wait'](r'\[web.extension.console\] id=recolour-sample level=0 script probe armed',s,120)
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}} for dn,ks in((True,('ctrl','shift','y')),(False,('y','shift','ctrl'))) for x in ks]})
+  g['wait'](r'\[web.site.scripts\] enabled=0 origin='+re.escape(base),s,120)
+  blocked=g['wait'](r'\[web.site.script.blocked\] origin='+re.escape(base),s,120)
+  blocked_at=s+blocked.end()
+  g['wait'](r'\[web.loaded\] [^\n]*scripted=0',s,120)
+  g['wait'](r'\[web.extension.script.blocked\] id=recolour-sample origin='+re.escape(base),blocked_at,120)
+  assert 'extension explicit injection ran' not in t()[blocked_at:], 'executeScript bypassed the site setting'
+  s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}} for dn,ks in((True,('ctrl','shift','y')),(False,('y','shift','ctrl'))) for x in ks]})
+  g['wait'](r'\[web.site.scripts\] enabled=1 origin='+re.escape(base),s,120)
+  g['wait'](loaded,s,120)
   s=go('about:extensions?toggle=recolour-sample');g['wait'](r'\[web.extension.toggle\] id=recolour-sample enabled=0',s,120)
   # Let the page finish before closing: a close that lands mid-load is not this gate's subject.
   g['wait'](r'\[web.loaded\] ',s,120);time.sleep(1)
