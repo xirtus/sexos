@@ -4,7 +4,7 @@
 use quil_core::lsp::{self, MAX_BODY};
 use serde_json::{json, Value};
 use sex_std as _;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, BufRead, BufReader, Write};
 
 fn read_message(input: &mut impl BufRead) -> io::Result<Option<Vec<u8>>> {
     let mut length = None;
@@ -70,7 +70,7 @@ fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
                 send(
                     out,
-                    &json!({"jsonrpc":"2.0","id":id,"result":{"capabilities":{"textDocumentSync":1,"completionProvider":{},"documentSymbolProvider":true},"serverInfo":{"name":"Quil Language Service","version":"0.1"}}}),
+                    &json!({"jsonrpc":"2.0","id":id,"result":{"capabilities":{"textDocumentSync":1,"completionProvider":{},"documentSymbolProvider":true,"definitionProvider":true},"serverInfo":{"name":"Quil Language Service","version":"0.1"}}}),
                 )?;
             }
             Some("textDocument/didOpen") => {
@@ -110,6 +110,18 @@ fn serve(input: &mut impl BufRead, out: &mut impl Write) -> io::Result<()> {
                         "selectionRange":{"start":{"line":symbol.line,"character":symbol.character},"end":{"line":symbol.line,"character":symbol.character}}
                     })).collect();
                 send(out, &json!({"jsonrpc":"2.0","id":id,"result":items}))?;
+            }
+            Some("textDocument/definition") => {
+                let id = request.get("id").cloned().unwrap_or(Value::Null);
+                let requested_uri = request["params"]["textDocument"]["uri"].as_str();
+                let position = &request["params"]["position"];
+                let result = opened.as_ref().filter(|(uri, _, _)| Some(uri.as_str()) == requested_uri)
+                    .and_then(|(uri, language, text)| {
+                        let at = lsp::offset_at_position(text, position["line"].as_u64()?, position["character"].as_u64()?)?;
+                        let symbol = lsp::definition(text, language, at)?;
+                        Some(json!({"uri":uri,"range":{"start":{"line":symbol.line,"character":symbol.character},"end":{"line":symbol.line,"character":symbol.character}}}))
+                    });
+                send(out, &json!({"jsonrpc":"2.0","id":id,"result":result}))?;
             }
             Some("shutdown") => {
                 let id = request.get("id").cloned().unwrap_or(Value::Null);
@@ -185,5 +197,21 @@ mod tests {
         assert_eq!(replies[1]["result"][0]["name"], "main");
         assert_eq!(replies[1]["result"][1]["selectionRange"]["start"]["line"], 1);
         assert_eq!(replies[2]["result"], json!([]));
+    }
+
+    #[test]
+    fn definition_returns_only_unique_open_document_location() {
+        let text = "fn helper() {}\nfn main() { helper(); }\n";
+        let open = json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///quil/demo.rs","languageId":"rust","version":1,"text":text}}});
+        let request = |id, uri| json!({"jsonrpc":"2.0","id":id,"method":"textDocument/definition","params":{"textDocument":{"uri":uri},"position":{"line":1,"character":16}}});
+        let mut input = Vec::new();
+        for value in [open, request(2, "file:///quil/demo.rs"), request(3, "file:///quil/other.rs")] { input.extend(lsp::frame(&serde_json::to_vec(&value).unwrap())); }
+        let mut out = Vec::new();
+        serve(&mut BufReader::new(input.as_slice()), &mut out).unwrap();
+        let mut replies = Vec::new();
+        while let Some(body) = lsp::take_frame(&mut out).unwrap() { replies.push(serde_json::from_slice::<Value>(&body).unwrap()); }
+        assert_eq!(replies[1]["result"]["uri"], "file:///quil/demo.rs");
+        assert_eq!(replies[1]["result"]["range"]["start"]["line"], 0);
+        assert_eq!(replies[2]["result"], Value::Null);
     }
 }

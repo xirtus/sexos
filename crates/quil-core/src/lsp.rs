@@ -45,6 +45,27 @@ pub fn symbols(text: &str, language: &str) -> Vec<Symbol> {
     out
 }
 
+/// Resolve one identifier to a unique declaration in the same text snapshot.
+/// This bundled helper recognizes declaration heads; it does not resolve imports,
+/// scopes, members, or names in other files.
+pub fn definition(text: &str, language: &str, cursor: usize) -> Option<Symbol> {
+    let bytes = text.as_bytes();
+    if cursor > bytes.len() || !text.is_char_boundary(cursor) { return None; }
+    let ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut start = cursor;
+    while start > 0 && ident(bytes[start - 1]) { start -= 1; }
+    let mut end = cursor;
+    while end < bytes.len() && ident(bytes[end]) { end += 1; }
+    if start == end { return None; }
+    let name = &text[start..end];
+    let mut found = None;
+    for symbol in symbols(text, language).into_iter().filter(|s| s.name == name) {
+        if found.is_some() { return None; }
+        found = Some(symbol);
+    }
+    found
+}
+
 /// A small, bounded completion set for the bundled language service. The
 /// replacement start is a byte offset in the snapshot supplied by the editor.
 pub fn complete(text: &str, language: &str, cursor: usize) -> (usize, Vec<String>) {
@@ -293,5 +314,17 @@ mod tests {
         assert_eq!(symbols("  async def fetch():\n    pass\nclass Client:\n", "python").iter().map(|s| (&*s.name, s.character)).collect::<Vec<_>>(), [("fetch", 12), ("Client", 6)]);
         assert_eq!(symbols("export function go() {}\n", "javascript")[0].name, "go");
         assert!(symbols("fn x() {}\n".repeat(140).as_str(), "rust").len() == 128);
+    }
+
+    #[test]
+    fn definition_requires_one_same_file_declaration() {
+        let text = "// 🦀\nfn helper() {}\nfn main() { helper(); }\n";
+        let at = text.rfind("helper();").unwrap() + 3;
+        let symbol = definition(text, "rust", at).unwrap();
+        assert_eq!((symbol.name.as_str(), symbol.line), ("helper", 1));
+        assert_eq!(definition(text, "rust", text.len() + 1), None);
+        assert_eq!(definition(text, "python", at), None);
+        let ambiguous = "fn helper() {}\nfn helper() {}\nhelper();";
+        assert_eq!(definition(ambiguous, "rust", ambiguous.rfind("helper();").unwrap() + 2), None);
     }
 }

@@ -9,11 +9,12 @@ DEMO=b'fn main() {\n    let needle = 1;\n    println!("{}", needle);\n}\n'
 OTHER=b'// another file\npub fn helper() -> u32 { 2 }\n'
 BROKEN=b'fn main() {\n    let value = 1;\n'
 COMPLETE=b'ret'
+REFERENCE=b'fn helper() {}\nfn main() { helper(); }\n'
 INDEX=(ROOT/'tests/fixtures/quil-git-index').read_bytes()
 GIT_BLOB=b'blob '+str(len(DEMO)).encode()+b'\0'+DEMO
 GIT_ID=hashlib.sha1(GIT_BLOB).hexdigest()
 assert bytes.fromhex(GIT_ID)==INDEX[52:72]
-FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/git-index':INDEX,'/git-blob':zlib.compress(GIT_BLOB)}
+FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/reference.rs':REFERENCE,'/git-index':INDEX,'/git-blob':zlib.compress(GIT_BLOB)}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -63,7 +64,7 @@ def main():
   g['wait'](rf'\[files.program.bound\] target={m[1]} task={m[2]} root=/data/quil',s,60);g['wait'](r'\[quil.code.ready\]',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5);s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={m[1]} task={m[2]}',s,60)
   g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,60);time.sleep(1)
-  for name in ('demo.rs','other.rs','broken.rs','complete.rs'):
+  for name in ('demo.rs','other.rs','broken.rs','complete.rs','reference.rs'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
   line('mkdir /data/quil/.git')
   m=expect(f'fetch http://10.0.2.2:{PORT}/git-index /data/quil/.git/index',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
@@ -133,6 +134,15 @@ def main():
   s=len(t());q.key('ret');g['wait'](r'\[quil.lsp.symbol.jump\] line=2 name=helper',s,30)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-symbol-jump.ppm')})
   assert (a.out/'quil-lsp-symbol-jump.ppm').stat().st_size>100000
+  # Definition stays in the open snapshot and jumps from a use to the unique
+  # declaration returned by Quil Language Service.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('reference');q.key('ret');time.sleep(.5)
+  ctrl('home');q.key('down')
+  for _ in range(15):q.key('right')
+  s=len(t());send('ctrl','shift','g')
+  g['wait'](r'\[quil.lsp.definition\] language=rust line=1 at=3',s,90)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-definition.ppm')})
+  assert (a.out/'quil-lsp-definition.ppm').stat().st_size>100000
   # Completion is a second request over the same native LSP pipe, and Enter
   # replaces the prefix in the editor's undoable document.
   s=len(t());send('ctrl','p');time.sleep(.3);keys('complete');q.key('ret');time.sleep(.5)
