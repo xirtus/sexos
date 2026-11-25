@@ -6,6 +6,9 @@ keymaps, and Rust/Python/JavaScript syntax colors.
 Rust syntax coloring now treats complete one-line `r#"..."#` and
 `br##"..."##` raw strings as strings, including comment-like text inside.
 Multiline raw strings and full parser-backed syntax remain gaps.
+Python coloring now includes `f`, `fr`, and `rf` prefixes in complete one-line
+formatted string spans. Interpolation expressions and triple-quoted strings
+still need a richer lexer.
 Ctrl+D now continues past already selected matches after wrapping, so starting
 in the middle of a file can reach every occurrence. Bounded multi-cursor
 selection and undo are covered by focused tests and the QEMU editor gate.
