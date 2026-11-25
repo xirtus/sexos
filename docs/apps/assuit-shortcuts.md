@@ -14,7 +14,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Shift+M | Set normal, narrow, moderate, wide or mirrored margins, or enter top/bottom/left/right inches |
 | Ctrl+Alt+L | Edit the current list: `bullet`, `numbered`, `numbered paren`, `upper letter`, `lower letter`, `lower roman`, `legal`, `off`, `restart`, or `level 1` through `level 9` (1 is the outermost level) |
 | Ctrl+T | Insert a table by entering rows × columns |
-| Ctrl+Shift+T | Edit the table at the caret: select/insert/delete rows or columns; `merge cells` for a selected range; `split 2` through `split 10` for the current cell; `shade RRGGBB` for cell fill; `border all`, `outside`, `inside`, or `none` for DOCX table borders; enter `style` to browse the native DOCX table-style gallery, or `style NAME` to apply one directly |
+| Ctrl+Shift+T | Edit the table at the caret: select/insert/delete rows or columns; `merge cells` for a selected range; `split 2` through `split 10` for the current cell; `header on` or `header off` to repeat a leading row across pages; `shade RRGGBB` for cell fill; `border all`, `outside`, `inside`, or `none` for DOCX table borders; enter `style` to browse the native DOCX table-style gallery, or `style NAME` to apply one directly |
 | Ctrl+Shift+I | Insert an image from Assuit's granted folder |
 | Ctrl+Shift+R | Describe the selected picture with alternative text (1–500 characters) |
 | Ctrl+Shift+O | Set the selected picture's width in inches, preserving proportions |

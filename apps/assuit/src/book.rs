@@ -211,6 +211,12 @@ impl Book {
     /// Keep the accepted phrases explicit so a typo cannot delete a different part.
     pub fn edit_table(&mut self, action: &str) -> Result<&'static str, String> {
         let action = action.trim().to_ascii_lowercase();
+        if matches!(action.as_str(), "header on" | "header off") {
+            let on = action == "header on";
+            self.run("table.repeatHeader", json!({ "value": on }))
+                .map_err(|_| "Place the caret in the table row to change".to_string())?;
+            return Ok(if on { "Repeating table header enabled" } else { "Repeating table header disabled" });
+        }
         if let Some(columns) = action.strip_prefix("split ") {
             let columns = columns.parse::<usize>().map_err(|_| "Enter split 2 through split 10".to_string())?;
             if !(2..=10).contains(&columns) { return Err("Enter split 2 through split 10".into()); }
@@ -259,7 +265,7 @@ impl Book {
             "delete row" => ("table.deleteRow", "Deleted row"),
             "delete column" => ("table.deleteColumn", "Deleted column"),
             "merge cells" => ("table.merge", "Merged selected cells"),
-            _ => return Err("Choose row/column edits, merge cells, split 2–10, shade RRGGBB, border all/outside/inside/none, or style NAME".into()),
+            _ => return Err("Choose row/column edits, merge cells, split 2–10, header on/off, shade RRGGBB, border all/outside/inside/none, or style NAME".into()),
         };
         self.run(command, json!({})).map_err(|_| "Place the caret in a table cell first".to_string())?;
         Ok(description)
@@ -1202,6 +1208,25 @@ mod tests {
         assert_eq!(table.props.style.as_deref(), Some("GridTable1Light"));
         let odt = Book::blank(&temp("table-gallery.odt"));
         assert!(odt.table_styles().unwrap_err().contains("ODT named table styles"));
+    }
+
+    #[test]
+    fn repeating_table_header_round_trips_in_docx_and_odt() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("table-header.{ext}"));
+            let mut book = Book::blank(&path);
+            assert!(book.edit_table("header on").is_err(), "requires a table row");
+            book.insert_table(2, 2).unwrap();
+            let header = |b: &Book| b.session.doc.body.iter().find_map(|block| block.as_table())
+                .unwrap().rows.iter().map(|row| row.props.header).collect::<Vec<_>>();
+            assert_eq!(book.edit_table("header on").unwrap(), "Repeating table header enabled");
+            assert_eq!(header(&book), [true, false]);
+            book.edit_table("header off").unwrap();
+            assert_eq!(header(&book), [false, false]);
+            book.edit_table("header on").unwrap();
+            book.save().unwrap();
+            assert_eq!(header(&Book::open(&path).unwrap()), [true, false], "{ext} lost repeating header");
+        }
     }
 
     #[test]

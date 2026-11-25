@@ -393,7 +393,7 @@ impl Ui {
                 Ask::SaveAs(name) => format!("Save as: {name}_   {}", said("docx, odt, rtf, html, md, txt or pdf; Enter saves, Esc closes")),
                 Ask::GoTo(page) => format!("Go to page: {page}_   {}", said(&format!("1 to {pages}; Enter goes, Esc closes"))),
                 Ask::Table(size) => format!("Insert table: {size}_   {}", said("rows x columns, for example 2x3; Enter inserts, Esc closes")),
-                Ask::TableEdit(action) => format!("Table: {action}_   {}", said("row/column edits, merge/split, shade, border, style to browse, or style NAME")),
+                Ask::TableEdit(action) => format!("Table: {action}_   {}", said("row/column edits, merge/split, header on/off, shade, border, style")),
                 Ask::List(kind) => format!("List: {kind}_   {}", said("bullet, numbered, formats, level 1–9, off, restart")),
                 Ask::Picture(path) => format!("Insert picture: {path}_   {}", said("PNG, JPEG, GIF, WebP or BMP in this program's folder; Enter inserts")),
                 Ask::PictureAlt(alt) => format!("Picture description: {alt}_   {}", said("Describe the selected picture for readers who cannot see it")),
