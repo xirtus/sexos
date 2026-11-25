@@ -20,7 +20,10 @@ Remaining gaps:
   basic Rust, Python and JavaScript declaration heads; full syntax and
   reference resolution remain gaps. Ctrl+Shift+G now asks the helper for an
   unambiguous declaration in the same file and jumps to it. Cross-file and
-  semantic definition resolution remain gaps.
+  semantic definition resolution remain gaps. Completion now also offers up to
+  eight distinct declaration names from the open Rust, Python, or JavaScript
+  snapshot before keywords. Scope, import, member, and cross-file completion
+  still need a fuller language service.
 - Ctrl+Shift+V shows tracked modified, deleted and conflicted files from a
   checked Git index in the project's Files grant. Right shows a bounded,
   read-only line diff against an authenticated loose Git blob for UTF-8 files.
