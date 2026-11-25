@@ -46,6 +46,19 @@ pub enum DueNotice {
 
 impl DueNotice {
     pub fn at(&self) -> i64 { match self { Self::Reminder { at, .. } | Self::Alarm { at, .. } => *at } }
+
+    /// Stable source identity for a reminder occurrence. A UID is required:
+    /// the event's vector index changes after import, sorting or sync. The
+    /// due UTC minute distinguishes multiple alarms on one occurrence.
+    /// Length-prefixing the UID keeps arbitrary iCalendar UIDs unambiguous.
+    /// Clock alarms have no persisted ID yet and deliberately return None.
+    pub fn semantic_key(&self, cal: &Calendar) -> Option<String> {
+        let Self::Reminder { event, day, at } = self else { return None };
+        let source = cal.events.get(*event)?;
+        if source.uid.is_empty() { return None; }
+        Some(format!("date:reminder:{}:{}:{}:{}:{}", source.calendar,
+            source.uid.len(), source.uid, day.days(), at))
+    }
 }
 
 pub struct NoticeDelivery {
@@ -209,6 +222,24 @@ mod tests {
         assert_eq!(second.delivered.len(), 2, "earlier success may replay in the failed minute");
         assert!(!clock.alarms[0].enabled);
         assert!(deliver_due(&cal, &mut clock, second.cursor, 62, 0, |_| true).delivered.is_empty());
+    }
+
+    #[test]
+    fn reminder_key_survives_reorder_and_separates_occurrences() {
+        let day = Date { year: 2026, month: 11, day: 25 };
+        let first = Event { uid: String::from("uid:one"), calendar: 2, ..Event::all_day(day, "first") };
+        let other = Event { uid: String::from("uid:two"), calendar: 2, ..Event::all_day(day, "other") };
+        let cal = Calendar { events: vec![first.clone(), other.clone()], calendars: vec![] };
+        let due = DueNotice::Reminder { event: 0, day, at: 1234 };
+        let key = due.semantic_key(&cal).unwrap();
+        let reordered = Calendar { events: vec![other, first], calendars: vec![] };
+        assert_eq!(key, DueNotice::Reminder { event: 1, day, at: 1234 }.semantic_key(&reordered).unwrap());
+        assert_ne!(key, DueNotice::Reminder { event: 1, day, at: 1235 }.semantic_key(&reordered).unwrap());
+        assert_ne!(key, DueNotice::Reminder { event: 1, day: Date { day: 26, ..day }, at: 1234 }.semantic_key(&reordered).unwrap());
+        assert_ne!(key, DueNotice::Reminder { event: 0, day, at: 1234 }.semantic_key(&reordered).unwrap());
+        assert!(DueNotice::Alarm { index: 0, alarm: Alarm { minute: 10, days: 0, enabled: true,
+            label: String::from("wake") }, at: 1234 }.semantic_key(&cal).is_none());
+        assert!(DueNotice::Reminder { event: 99, day, at: 1234 }.semantic_key(&cal).is_none());
     }
 
     #[test]
