@@ -410,7 +410,7 @@ impl Ui {
                 Ask::PrintRange(pages) => format!("Print pages: {pages}_   {}", said("Enter a range such as 1-3,5; PDF is saved beside the document")),
                 Ask::Paper(paper) => format!("Paper: {paper}_   {}", said("Letter, Legal or A4 then portrait or landscape; Enter applies")),
                 Ask::Margins(margins) => format!("Margins: {margins}_   {}", said("normal/narrow/moderate/wide/mirrored or top bottom left right in inches")),
-                Ask::PageNumbers(place) => format!("Page numbers: {place}_   {}", said("top/bottom left/center/right, optional 'of'; or remove top/bottom")),
+                Ask::PageNumbers(place) => format!("Page numbers: {place}_   {}", said("top/bottom left/center/right, optional 'of'; remove top/bottom; start N; continue")),
                 Ask::Spacing(spacing) => format!("Paragraph spacing: {spacing}_   {}", said("line multiple, before pt, after pt; for example 1.5 0 8")),
                 Ask::Language(lang) => format!("Default proofing language: {lang}_   {}", said("en-US or en-GB; also applies to selected text")),
             }

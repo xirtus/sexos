@@ -289,6 +289,13 @@ def main():
   g['wait'](r'\[assuit\.page-numbers\] bottom center of\n',s,120)
   time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-page-numbers.ppm')})
   assert (a.out/'assuit-page-numbers.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','alt','n');type_line('start 5');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] start 5\n',s,120)
+  time.sleep(.8);q.cmd('screendump',{'filename':str(a.out/'assuit-page-number-start.ppm')})
+  started=(a.out/'assuit-page-number-start.ppm').read_bytes()
+  assert started.startswith(b'P6\n') and started!=(a.out/'assuit-page-numbers.ppm').read_bytes()
+  s=len(t());press('ctrl','alt','n');type_line('continue');q.key('ret')
+  g['wait'](r'\[assuit\.page-numbers\] continue\n',s,120)
   s=len(t());press('ctrl','s')
   g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   s=len(t());press('ctrl','alt','n');type_line('remove bottom');q.key('ret')

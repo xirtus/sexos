@@ -307,11 +307,19 @@ impl Book {
         Ok(())
     }
 
-    /// Add a dynamic page field to the current section's repeating header or
-    /// footer. The engine owns the field, layout and DOCX/ODT serialization.
+    /// Edit dynamic page numbers in the section at the caret. The engine owns
+    /// the field, numbering, layout and DOCX/ODT serialization.
     pub fn insert_page_numbers(&mut self, input: &str) -> Result<(), String> {
-        const HELP: &str = "Enter top/bottom left/center/right, optional 'of'; or remove top/bottom";
+        const HELP: &str = "Enter top/bottom left/center/right, optional 'of'; remove top/bottom; start 1–32767; or continue";
         let words: Vec<_> = input.split_whitespace().collect();
+        if words.len() == 1 && words[0].eq_ignore_ascii_case("continue") {
+            return self.run("layout.pageNumberFormat", json!({ "start": null })).map(|_| ());
+        }
+        if words.len() == 2 && words[0].eq_ignore_ascii_case("start") {
+            let n = words[1].parse::<u32>().map_err(|_| HELP.to_string())?;
+            if !(1..=32_767).contains(&n) { return Err(HELP.into()); }
+            return self.run("layout.pageNumberFormat", json!({ "start": n })).map(|_| ());
+        }
         if words.len() == 2 && words[0].eq_ignore_ascii_case("remove") {
             return self.remove_generated_page_numbers(words[1]);
         }
@@ -1172,6 +1180,34 @@ mod tests {
             assert!(top.insert_page_numbers("remove bottom").is_err(), "author's footer must survive");
             let text = top.session.doc.story(StoryRef::Part(id)).unwrap()[0].as_para().unwrap().plain_text();
             assert_eq!(text, "Confidential");
+        }
+    }
+
+    #[test]
+    fn page_number_start_is_section_scoped_and_round_trips() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("page-number-start.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("First section").unwrap();
+            book.insert_page_numbers("bottom center").unwrap();
+            book.run("layout.break", json!({ "kind": "nextPage" })).unwrap();
+            book.type_text("Second section").unwrap();
+            assert_eq!(book.session.doc.sections().len(), 2);
+            for bad in ["start", "start zero", "start 0", "start 32768", "start 2 extra"] {
+                assert!(book.insert_page_numbers(bad).is_err(), "{bad}");
+            }
+            book.insert_page_numbers("start 5").unwrap();
+            let starts = |b: &Book| b.session.doc.sections().into_iter()
+                .map(|(_, sec)| sec.page_num_start).collect::<Vec<_>>();
+            assert_eq!(starts(&book), [None, Some(5)]);
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert_eq!(starts(&reopened), [None, Some(5)], "{ext} lost section restart");
+            reopened.key(&Chord { name: "End", ctrl: true, shift: false });
+            reopened.insert_page_numbers("continue").unwrap();
+            assert_eq!(starts(&reopened), [None, None]);
+            reopened.save().unwrap();
+            assert_eq!(starts(&Book::open(&path).unwrap()), [None, None], "{ext} lost continuation");
         }
     }
 
