@@ -8,7 +8,8 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
 - **Writing aids:** Ctrl+Shift+Y now selects the next issue and offers correction suggestions. Dictionary management, language selection, and continuous underlines still need native controls.
 - **Print workflow:** PDF export exists, but page range, paper settings, and print preview are missing.
 - **Polish:** the app now follows Settings' light, dark and high-contrast
-  appearance for its page desk, status bar and style picker. It still needs a
-  full shortcut reference and verified recovery after an interrupted save.
+  appearance for its page desk, status bar and style picker. A keyboard shortcut
+  reference is available in the app and `docs/apps/assuit-shortcuts.md`. Verified
+  recovery after an interrupted save remains.
 
 Each remaining feature should have a focused host test and a CI guest gate before it is claimed complete.
