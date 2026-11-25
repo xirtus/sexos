@@ -356,7 +356,11 @@ impl Service {
                 slot.tls = None;
                 slot.out_at = 0; slot.out_len = 0;
                 let Some(to) = to.filter(|_| port != 0) else { slot.free(i, Some(engine)); return w::reply(seq, w::INVALID, 0) };
-                match engine.open_connect(i, to, port) { Ok(()) => w::reply(seq, w::OK, 0), Err(_) => { slot.free(i, Some(engine)); w::reply(seq, w::FAILED, 0) } }
+                match engine.open_connect(i, to, port) { Ok(()) => {
+                    // Spindle's flows (the tether) may idle for minutes between commands.
+                    if index < spindles.len() { engine.open_keep_alive(i, true); }
+                    w::reply(seq, w::OK, 0)
+                } Err(_) => { slot.free(i, Some(engine)); w::reply(seq, w::FAILED, 0) } }
             }
             w::LISTEN => {
                 let slot = &mut self.slots[i];

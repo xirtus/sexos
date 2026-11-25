@@ -267,10 +267,6 @@ impl<'a> Engine<'a>{
         open.tcp.try_reserve(1).map_err(|_|Error::Length)?;open.groups.try_reserve(1).map_err(|_|Error::Length)?;
         let mut flow=tcp::Socket::new(tcp::SocketBuffer::new(rx),tcp::SocketBuffer::new(tx));
         flow.set_timeout(Some(Duration::from_secs(30)));flow.set_nagle_enabled(false);
-        // The timeout counts silence from the other side: an idle flow (a tether
-        // waiting for the next command) was closed after 30 s. Keep-alives every
-        // 10 s draw an ACK, so only a peer that is really gone times out.
-        flow.set_keep_alive(Some(Duration::from_secs(10)));
         // Acknowledge at once: a delayed ACK holds the sender to one window per delay.
         flow.set_ack_delay(None);
         open.tcp.push(self.flows.add(flow));open.groups.push(None);
@@ -427,6 +423,8 @@ impl<'a> Engine<'a>{
         let flow=self.flows.get_mut::<tcp::Socket>(handle);
         let_go(flow);
         let local=match address{Address::V4(_)=>IpListenEndpoint{addr:Some(IpAddress::v4(local[0],local[1],local[2],local[3])),port},Address::V6(_)=>IpListenEndpoint{addr:None,port}};
+        // A reused flow starts without the last owner's keep-alives.
+        flow.set_keep_alive(None);
         flow.connect(self.iface.context(),(address.ip(),remote),local).map_err(|_|Error::Protocol)
     }
     /// Makes flow `flow` listen on `port`, for either family. Another flow listening there
@@ -497,6 +495,13 @@ impl<'a> Engine<'a>{
         let flow=self.flows.get_mut::<tcp::Socket>(self.tcp_handle(flow)?);
         if !flow.can_recv(){return Ok(0);}
         flow.recv_slice(out).map_err(|_|Error::Protocol)
+    }
+    /// Keep-alives every 10 s on a connected flow, for a long-lived one that may sit
+    /// idle (Spindle's tether waiting for a command): the 30 s timeout counts silence
+    /// from the other side, and each keep-alive draws an ACK. Off by default: short
+    /// flows (Qupid's add-on downloads) never exited once every flow sent them.
+    pub fn open_keep_alive(&mut self,flow:usize,on:bool){
+        if let Ok(h)=self.tcp_handle(flow){self.flows.get_mut::<tcp::Socket>(h).set_keep_alive(on.then(||Duration::from_secs(10)));}
     }
     /// Sends the flow's FIN after what is queued.
     pub fn open_shutdown(&mut self,flow:usize){
