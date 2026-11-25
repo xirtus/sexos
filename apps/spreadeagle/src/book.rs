@@ -534,8 +534,19 @@ impl Book {
     pub fn edit_chart(&mut self, id: u32, input: &str) -> Result<String, String> {
         let input = input.trim();
         let chart = self.session.doc().ok().and_then(|d| d.wb.active()
-            .and_then(|sheet| sheet.charts.iter().find(|chart| chart.id == id).map(|chart| (chart.kind, chart.by_rows))));
-        let Some((kind, by_rows)) = chart else { return Err("Choose a chart on this sheet first".into()); };
+            .and_then(|sheet| sheet.charts.iter().find(|chart| chart.id == id).map(|chart| (chart.kind, chart.by_rows, chart.series.len()))));
+        let Some((kind, by_rows, series_count)) = chart else { return Err("Choose a chart on this sheet first".into()); };
+        if let Some(number) = input.strip_prefix("remove ") {
+            let number = number.parse::<usize>().map_err(|_| "Enter a series number from the legend")?;
+            if series_count < 2 || number == 0 || number > series_count {
+                return Err(format!("Choose series 1–{series_count}; keep at least one"));
+            }
+            self.run("chart.selectData", json!({ "chart": id, "removeSeries": [number - 1] }))?;
+            let remaining = self.session.doc().ok().and_then(|d| d.wb.active()
+                .and_then(|sheet| sheet.charts.iter().find(|chart| chart.id == id).map(|chart| chart.series.len()))).unwrap_or(0);
+            if remaining != series_count - 1 { return Err("Could not remove that series".into()); }
+            return Ok(format!("Removed chart series {number}"));
+        }
         if input == "switch" {
             self.run("chart.switchRowColumn", json!({ "chart": id }))?;
             let switched = self.session.doc().ok().and_then(|d| d.wb.active()
@@ -617,7 +628,7 @@ impl Book {
                 return Ok(format!("Chart {label}: {}", if on { "on" } else { "off" }));
             }
         }
-        Err("Enter data A1:B4, switch, type, title, legend, table, hole, angle, axes or labels".into())
+        Err("Enter remove 2, data A1:B4, switch, type, title, legend, table, hole or angle".into())
     }
 
     /// Chart `index` of the active sheet laid out at `width` x `height` pixels: shapes
@@ -1372,6 +1383,36 @@ mod tests {
         let path = book.path.clone();
         book.save().unwrap();
         assert!(values(&Book::open(&path).unwrap().0).contains("$B$2:$B$4"));
+    }
+
+    #[test]
+    fn chart_remove_series_keeps_remaining_data_and_round_trips() {
+        let mut book = Book::blank(&temp("chart-remove-series.xlsx"));
+        for (col, title) in [(0, "Month"), (1, "North"), (2, "South")] {
+            book.set(0, col, title).unwrap();
+        }
+        for (row, month, north, south) in [(1, "Jan", "10", "60"), (2, "Feb", "20", "50"), (3, "Mar", "30", "40")] {
+            for (col, value) in [(0, month), (1, north), (2, south)] { book.set(row, col, value).unwrap(); }
+        }
+        book.add_chart(Range { r0: 0, c0: 0, r1: 3, c1: 2 }, 0, 4).unwrap();
+        let id = book.chart_at_anchor(0, 4).unwrap().id;
+        let series = |book: &Book| book.session.doc().unwrap().wb.active().unwrap().charts[0].series.clone();
+        let original = series(&book);
+        assert_eq!(original.len(), 2);
+        for bad in ["remove 0", "remove 3", "remove x"] { assert!(book.edit_chart(id, bad).is_err(), "{bad}"); }
+        let before = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        book.edit_chart(id, "remove 2").unwrap();
+        assert_eq!(series(&book), original[..1]);
+        assert!(book.edit_chart(id, "remove 1").is_err());
+        let after = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        assert_ne!(before, after);
+        book.undo().unwrap();
+        assert_eq!(series(&book), original);
+        book.redo().unwrap();
+        assert_eq!(series(&book), original[..1]);
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert_eq!(series(&Book::open(&path).unwrap().0).len(), 1);
     }
 
     #[test]
