@@ -132,8 +132,11 @@ impl ClockHistory {
         let source = if backward { &mut self.undo } else { &mut self.redo };
         let (before, after, kind) = source.pop()?;
         let (current, wanted) = if backward { (&after, &before) } else { (&before, &after) };
+        // A due timer still in the current clock has not necessarily reached Bell.
+        // Do not let undo/redo remove it before the next delivery tick.
         if !current.matches(clock, kind) ||
-            (kind == ClockEditKind::Timer && wanted.timers.iter().any(|timer| timer.ends_ms <= now_ms)) {
+            (kind == ClockEditKind::Timer && current.timers.iter().chain(&wanted.timers)
+                .any(|timer| timer.ends_ms <= now_ms)) {
             self.undo.clear(); self.redo.clear();
             return None;
         }
@@ -311,6 +314,18 @@ mod tests {
         history.push(before, ClockState::from_clock(&clock), ClockEditKind::Timer);
         clock.deliver_timers(10_000, |_| true);
         assert_eq!(history.undo_at(&mut clock, 11_000), None);
+        assert!(clock.timers.is_empty());
+    }
+
+    #[test]
+    fn undo_cannot_cancel_due_timer_before_delivery_tick() {
+        let mut clock = Clock::default();
+        let mut history = ClockHistory::default();
+        let before = ClockState::from_clock(&clock);
+        clock.timers.push(crate::clock::Timer { ends_ms: 5_000, seconds: 5, label: "tea".into() });
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Timer);
+        assert_eq!(history.undo_at(&mut clock, 5_000), None);
+        assert_eq!(clock.deliver_timers(5_000, |_| true).len(), 1);
         assert!(clock.timers.is_empty());
     }
 

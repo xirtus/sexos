@@ -883,7 +883,7 @@ impl App {
                         let before = ClockState::from_clock(&self.clock);
                         self.clock.timers.push(Timer { ends_ms: self.now_ms + seconds as u64 * 1000, seconds, label: label.trim().into() });
                         self.clock_history.push(before, ClockState::from_clock(&self.clock), ClockEditKind::Timer);
-                        sex_pdx::serial_record!("[date.timer.started] seconds={} label={}", seconds, label.trim());
+                        sex_pdx::serial_record!("[date.timer.started] seconds={} label={} timers={}", seconds, label.trim(), self.clock.timers.len());
                         self.status = format!("Timer: {}.", clock::format_duration(seconds as u64));
                         self.save_clock(window);
                     }
@@ -996,7 +996,7 @@ impl App {
                     match kind {
                         ClockEditKind::Zone => sex_pdx::serial_record!("[date.zone.{}] home={} zones={}", if redo { "redo" } else { "undo" }, self.clock.home, self.clock.zones.len()),
                         ClockEditKind::Alarm => sex_pdx::serial_record!("[date.alarm.{}] alarms={}", if redo { "redo" } else { "undo" }, self.clock.alarms.len()),
-                        ClockEditKind::Timer => sex_pdx::serial_record!("[date.timer.{}] timers={}", if redo { "redo" } else { "undo" }, self.clock.timers.len()),
+                        ClockEditKind::Timer => sex_pdx::serial_record!("[date.timer.{}] timers={} last={}", if redo { "redo" } else { "undo" }, self.clock.timers.len(), self.clock.timers.last().map_or("", |timer| timer.label.as_str())),
                     }
                 } else { self.status = String::from(if redo { "Nothing to redo in Clock." } else { "Nothing to undo in Clock." }); }
                 return;
