@@ -5,6 +5,7 @@
 //! Ctrl+R reloads the folder, Up/Down chooses a message and wheel scrolls its body.
 //! Ctrl+N starts a draft, Ctrl+E edits an unsent draft, Tab moves fields and
 //! Ctrl+S saves it. A quiet draft autosaves after three seconds.
+//! Ctrl+Shift+/ opens the offline keyboard reference; Escape closes it.
 #![no_std]
 #![no_main]
 extern crate alloc;
@@ -23,6 +24,21 @@ use sex_theme::Tokens;
 
 const MAX_MAIL: u64 = 4 << 20;
 const MAX_LIST: usize = 200;
+const SHORTCUTS: &[(&str, &str)] = &[
+    ("Ctrl+Shift+/", "Show or close this keyboard reference"),
+    ("Up / Down", "Choose a message in the local folder"),
+    ("Enter", "Open the chosen message"),
+    ("Type", "Filter sender, subject and preview"),
+    ("Escape", "Clear search or leave a draft, saving changes"),
+    ("Ctrl+R", "Reload local mail"),
+    ("Ctrl+N", "Start an unsent local draft"),
+    ("Ctrl+E", "Edit an opened unsent draft"),
+    ("Tab / Enter", "Move between draft fields / insert a body line"),
+    ("Ctrl+S", "Save the draft in Valentine's folder"),
+    ("Ctrl+M", "Show mail account status"),
+    ("Mouse wheel", "Scroll the opened message"),
+    ("F11", "Close the Valentine window"),
+];
 static mut STORE: [u8; MAX_MAIL as usize] = [0; MAX_MAIL as usize];
 
 #[panic_handler]
@@ -53,7 +69,7 @@ struct App {
     items: Vec<Item>, shown: Vec<usize>, picked: usize, opened: Option<usize>,
     mail: Option<Message>, query: String, status: String, scroll: usize,
     palette: Palette, generation: u64,
-    compose: Option<Compose>, next_draft: u32,
+    compose: Option<Compose>, next_draft: u32, help: bool,
 }
 impl App {
     fn new() -> Self {
@@ -62,7 +78,7 @@ impl App {
         sex_pdx::serial_record!("[valentine.theme] mode={:?}", theme.mode);
         Self { items: Vec::new(), shown: Vec::new(), picked: 0, opened: None, mail: None,
             query: String::new(), status: String::new(), scroll: 0, palette,
-            generation: settings::generation().unwrap_or(0), compose: None, next_draft: 0 }
+            generation: settings::generation().unwrap_or(0), compose: None, next_draft: 0, help: false }
     }
     fn filter(&mut self) {
         self.shown = self.items.iter().enumerate().filter_map(|(i, item)| item.summary.matches(&self.query).then_some(i)).collect();
@@ -179,6 +195,18 @@ impl App {
         true
     }
     fn key(&mut self, window: &mut Window, k: sex_pdx::app_key::Key) {
+        if k.control && k.shift && k.code == 0x35 {
+            self.help = !self.help;
+            sex_pdx::serial_record!("[valentine.shortcuts] open={}", self.help as u8);
+            return;
+        }
+        if self.help {
+            if k.code == 0x01 {
+                self.help = false;
+                sex_pdx::serial_record!("[valentine.shortcuts] open=0");
+            }
+            return;
+        }
         if self.compose_key(window, k) { return; }
         match (k.control, k.code) {
             (true, 0x32) => { // Ctrl+M: account linking needs the boot-routed Multipass service.
@@ -222,6 +250,21 @@ fn render(window: &mut Window, app: &App, tiny: &mut Face, body: &mut Face, titl
     c.fill(0, 41, w, 1, p.border);
     c.text(title, 16, 6, "Valentine", p.accent, list_w - 24);
     c.text(tiny, list_w + 16, 12, "Local mail | No account linked", p.dim, w - list_w - 24);
+    if app.help {
+        c.text(title, 24, 58, "Valentine shortcuts", p.text, w - 48);
+        c.text(tiny, 24, 93, "Local mail and drafts. No message is sent by these controls.", p.dim, w - 48);
+        for (i, (key, action)) in SHORTCUTS.iter().enumerate() {
+            let y = 132 + i as i32 * 31;
+            if y + 25 >= h - 32 { break; }
+            c.text(body, 24, y, key, p.accent, 210);
+            c.text(body, 240, y, action, p.text, w - 260);
+        }
+        c.fill(0, h - 28, w, 28, p.panel);
+        c.fill(0, h - 28, w, 1, p.border);
+        c.text(tiny, 12, h - 22, "Escape or Ctrl+Shift+/ closes this reference", p.dim, w - 24);
+        window.show_pixels(w as usize, h as usize);
+        return;
+    }
     c.fill(0, 42, list_w, h - 70, p.panel);
     c.fill(list_w - 1, 42, 1, h - 42, p.border);
     c.text(tiny, 12, 50, &format!("Find: {}_   {} messages", app.query, app.shown.len()), p.dim, list_w - 20);
