@@ -66,6 +66,7 @@ const KEY_H: u8 = 0x23;
 const KEY_L: u8 = 0x26;
 const KEY_N: u8 = 0x31;
 const KEY_Z: u8 = 0x2C;
+const KEY_V: u8 = 0x2F;
 const SLASH: u8 = 0x35;
 const SHORTCUTS: &[&str] = &[
     "Pages: Right / Space / N next; Left / P previous",
@@ -82,6 +83,7 @@ const SHORTCUTS: &[&str] = &[
     "Ctrl+Z / Ctrl+Shift+Z undo / redo fields or new markup",
     "Ctrl+Shift+G places a typed visual signature",
     "Visual signatures are markup, not digital signatures",
+    "Ctrl+Shift+V inspects stored digital signature fields",
     "Ctrl+S saves edits; Ctrl+Shift+/ opens this help",
 ];
 /// The chosen region's outline, and a focused form field's.
@@ -733,6 +735,7 @@ impl Viewer {
             if self.editor().is_some() { self.signature = Some(String::new()); }
             return true;
         }
+        if ctrl(KEY_V) && key.shift { self.inspect_signatures(); return true; }
         if ctrl(KEY_S) { self.save(); return true; }
         if ctrl(KEY_H) { self.highlight(); return true; }
         if ctrl(KEY_R) {
@@ -757,6 +760,24 @@ impl Viewer {
         if self.region.is_some() && !self.finding && self.region_key(key) { return true; }
         if self.panel == Panel::Annots && self.annots_key(key) { return true; }
         false
+    }
+
+    fn inspect_signatures(&mut self) {
+        match self.editor.as_ref().ok().and_then(|editor| editor.signatures().ok()) {
+            Some(signatures) => {
+                let signed = signatures.iter().filter(|s| s.signed).count();
+                let malformed = signatures.iter().filter(|s| s.signed && !s.byte_range_well_formed).count();
+                self.status = Some(if signatures.is_empty() {
+                    "No digital signature fields in this PDF".into()
+                } else if malformed > 0 {
+                    format!("{signed} stored signature(s), {malformed} with invalid byte ranges; trust unverified")
+                } else {
+                    format!("{signed} stored signature(s); cryptographic identity and content unverified")
+                });
+                sex_std::record(&format!("[pdf.signatures] fields={} signed={signed} malformed={malformed} verified=0", signatures.len()));
+            }
+            None => self.status = Some("Cannot inspect signatures in this PDF".into()),
+        }
     }
 
     /// The editing engine, or `None` with the reason in the bar.

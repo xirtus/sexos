@@ -266,6 +266,7 @@ fn signatures_are_reported_and_survive() {
     assert_eq!(PdfDate::parse(s.date.as_ref().unwrap()).unwrap().utc_offset_minutes, 60);
     assert_eq!(s.reason.as_deref(), Some("Approved"));
     assert_eq!(s.sub_filter.as_deref(), Some("adbe.pkcs7.detached"));
+    assert!(s.byte_range_well_formed);
     assert!(s.covers_whole_file, "{:?}", s.byte_range);
     assert!(ed.fields().unwrap().iter().any(|f| f.name == "sig" && f.kind == FieldKind::Signature));
     assert!(matches!(ed.set_field("sig", FieldValue::Empty), Err(Error::ReadOnly(_))));
@@ -284,6 +285,17 @@ fn signatures_are_reported_and_survive() {
     let re = Editor::open(saved).unwrap();
     let s2 = &re.signatures().unwrap()[0];
     assert!(s2.signed && !s2.covers_whole_file, "the signature now covers an earlier revision only");
+}
+
+#[test]
+fn malformed_signature_range_is_not_presented_as_covered() {
+    let mut pdf = form(Style::Table, true);
+    let at = pdf.windows(b"/ByteRange [0 ".len()).position(|w| w == b"/ByteRange [0 ").unwrap() + b"/ByteRange [0 ".len();
+    pdf[at..at + 10].copy_from_slice(b"9999999999");
+    let signature = Editor::open(pdf).unwrap().signatures().unwrap().remove(0);
+    assert!(signature.signed);
+    assert!(!signature.byte_range_well_formed);
+    assert!(!signature.covers_whole_file);
 }
 
 #[test]
