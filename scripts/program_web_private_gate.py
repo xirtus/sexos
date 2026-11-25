@@ -8,17 +8,31 @@ private tab starts empty. A container's cookies are saved to its own folder in F
 The test site: /set/<v> answers with `Set-Cookie: who=<v>` and a script that stores
 `who=<v>` in localStorage. /show/<tag> runs a script that fetches /ls/<tag>/<what
 localStorage holds>. The server notes the Cookie header of every request."""
-import argparse,http.server,os,shutil,threading,time
+import argparse,base64,hashlib,http.server,os,shutil,threading,time
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 seen={}
 ls={}
+PRIVATE_SENTINEL='privateDiagCanary7519'
+ws_started=threading.Event()
+ws_release=threading.Event()
+ws_answered=threading.Event()
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   cookie=self.headers.get('Cookie')
   parts=self.path.strip('/').split('/')
   head=[]
+  if parts[0]=='ws' and len(parts)==2 and parts[1]==PRIVATE_SENTINEL:
+   ws_started.set();assert ws_release.wait(30),'private WebSocket was never released'
+   key=self.headers.get('Sec-WebSocket-Key','')
+   answer=base64.b64encode(hashlib.sha1((key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
+   self.send_response(101);self.send_header('Upgrade','websocket');self.send_header('Connection','Upgrade')
+   self.send_header('Sec-WebSocket-Accept',answer);self.send_header('Sec-WebSocket-Protocol',PRIVATE_SENTINEL);self.end_headers();ws_answered.set();return
   if self.path=='/web':body=(ROOT/'iso_root/programs/kaleidoscope').read_bytes()
+  elif parts[0]=='private-canary':
+   body=f'''<!doctype html><title>{PRIVATE_SENTINEL}</title><p>Private page.</p><script>
+console.log('{PRIVATE_SENTINEL}');new WebSocket('ws://10.0.2.2:{PORT}/ws/{PRIVATE_SENTINEL}','{PRIVATE_SENTINEL}');
+</script>'''.encode()
   elif parts[0]=='set' and len(parts)==2:
    v=parts[1];head=[('Set-Cookie',f'who={v}; Path=/; Max-Age=86400')]
    body=f'<!doctype html><title>set {v}</title><p>Set {v}.</p><script>localStorage.setItem("who","{v}")</script>'.encode()
@@ -85,6 +99,17 @@ def main():
   go('/set/p');results['p2']=show('p2');assert results['p2']==('who=p','p'),results
   tab('t',box='private')
   results['p3']=show('p3',True);assert results['p3']==('who=p','p'),results
+  # A private page's URL, title, console and a delayed WebSocket protocol must
+  # stay out of the serial stream, even after another tab becomes active.
+  s=len(t());go(f'/private-canary/{PRIVATE_SENTINEL}?key={PRIVATE_SENTINEL}')
+  assert ws_started.wait(30),'private WebSocket did not begin'
+  time.sleep(.3);q.cmd('screendump',{'filename':str(a.out/'web-private-diagnostics.ppm')})
+  assert (a.out/'web-private-diagnostics.ppm').stat().st_size>100000
+  chord('ctrl','1');ws_release.set()
+  assert ws_answered.wait(30),'private WebSocket did not finish after tab switch'
+  time.sleep(2)
+  assert PRIVATE_SENTINEL not in t()[s:],'private content reached the serial log after tab switch'
+  chord('ctrl','5');time.sleep(.5)
   # Closing both private tabs forgets the private box.
   s=chord('ctrl','w');time.sleep(1);chord('ctrl','w')
   m=g['wait'](r'\[web.private.forgotten\] cookies=(\d+) origins=(\d+)',s,60);assert m[1]=='1',m[0]

@@ -60,7 +60,7 @@ impl Shields {
         }
         if let Some(text) = state_file::read(window, OFF, OFF_MAX) { s.off = text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect(); }
         let c = s.engine.counts();
-        sex_pdx::serial_record!("[web.shields.loaded] lists={} network={} cosmetic={} skipped={} off={} ticks={}", s.lists.len() + 1, c.network, c.cosmetic, c.skipped, s.off.len(), sex_pdx::get_ticks() - begun);
+        web_record!("[web.shields.loaded] lists={} network={} cosmetic={} skipped={} off={} ticks={}", s.lists.len() + 1, c.network, c.cosmetic, c.skipped, s.off.len(), sex_pdx::get_ticks() - begun);
         s
     }
 
@@ -73,7 +73,7 @@ impl Shields {
         match self.engine.check(&Request { url, page, kind }) {
             Verdict::Block(id) => {
                 let filter = String::from(self.engine.filter_text(id));
-                sex_pdx::serial_record!("[web.shields.blocked] kind={} filter={} url={}", kind.name(), filter, url);
+                web_record!("[web.shields.blocked] kind={} filter={} url={}", kind.name(), filter, url);
                 self.total += 1;
                 if self.recent.len() >= RECENT { self.recent.remove(0); }
                 self.recent.push((kind.name(), String::from(url), filter));
@@ -98,7 +98,7 @@ impl Shields {
         ids.sort_unstable();
         ids.dedup();
         let css = self.engine.css(page, &|c| classes.binary_search(&c).is_ok(), &|i| ids.binary_search(&i).is_ok());
-        sex_pdx::serial_record!("[web.shields.hide] rules={} classes={} ids={} url={}", css.lines().count(), classes.len(), ids.len(), page);
+        web_record!("[web.shields.hide] rules={} classes={} ids={} url={}", css.lines().count(), classes.len(), ids.len(), page);
         (!css.is_empty()).then_some(css)
     }
 
@@ -115,10 +115,10 @@ impl Shields {
         let _ = files::mkdir(window, b"Web");
         if !state_file::replace(window, OFF, text.as_bytes()) {
             self.off = before;
-            sex_pdx::serial_record!("[web.shields.save.failed] host={}", host);
+            web_record!("[web.shields.save.failed] host={}", host);
             return self.up(page);
         }
-        sex_pdx::serial_record!("[web.shields.toggle] up={} host={}", up as u8, host);
+        web_record!("[web.shields.toggle] up={} host={}", up as u8, host);
         up
     }
 }
@@ -147,7 +147,7 @@ impl Browser {
             match got {
                 Ok(bytes) if bytes.starts_with(b"[Adblock") || bytes.starts_with(b"!") => {
                     let ok = files::write(&mut self.window, list_path(name).as_bytes(), &bytes).is_ok();
-                    sex_pdx::serial_record!("[web.shields.list] name={} bytes={} saved={}", name, bytes.len(), ok as u8);
+                    web_record!("[web.shields.list] name={} bytes={} saved={}", name, bytes.len(), ok as u8);
                     report.push_str(&alloc::format!("<li>{}: {} KB {}</li>", name, bytes.len() / 1024, if ok { "saved" } else { "could not be saved" }));
                 }
                 Ok(_) => report.push_str(&alloc::format!("<li>{}: not a filter list</li>", name)),

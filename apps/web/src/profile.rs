@@ -139,7 +139,7 @@ impl Profile {
         if let Some(t) = read(window, COOKIES) { *jar = sex_fetch::Jar::load(&t, now); }
         if let Some(t) = read(window, STORAGE) { p.storage = Rc::new(RefCell::new(WebStorage::load(&t))); }
         p.saved_jar = jar.changes();
-        sex_pdx::serial_record!("[web.profile.loaded] history={} bookmarks={} cookies={} origins={}", p.history.len(), p.bookmarks.len(), jar.len(), p.storage.borrow().origins().count());
+        web_record!("[web.profile.loaded] history={} bookmarks={} cookies={} origins={}", p.history.len(), p.bookmarks.len(), jar.len(), p.storage.borrow().origins().count());
         p
     }
 
@@ -238,7 +238,7 @@ impl Profile {
             if let Some(t) = read(window, alloc::format!("{}/containers/{n}/cookies.tsv", DIR_STR).as_bytes()) { jar = sex_fetch::Jar::load(&t, now); }
             if let Some(t) = read(window, alloc::format!("{}/containers/{n}/storage.tsv", DIR_STR).as_bytes()) { storage = WebStorage::load(&t); }
         }
-        sex_pdx::serial_record!("[web.jarbox.opened] box={} cookies={} origins={}", kind.tag(), jar.len(), storage.origins().count());
+        web_record!("[web.jarbox.opened] box={} cookies={} origins={}", kind.tag(), jar.len(), storage.origins().count());
         let s = Store { kind, saved_jar: jar.changes(), saved_storage: storage.changes, jar: Rc::new(RefCell::new(jar)), storage: Rc::new(RefCell::new(storage)) };
         let out = (s.jar.clone(), s.storage.clone());
         self.boxes.push(s);
@@ -304,6 +304,6 @@ impl Profile {
             if sc != s.saved_storage && state_file::replace(window, &alloc::format!("{dir}/storage.tsv"), s.storage.borrow().save().as_bytes()) { s.saved_storage = sc; wrote += 1; }
             sex_pdx::serial_record!("[web.jarbox.saved] box={} cookies={} origins={}", n, s.jar.borrow().len(), s.storage.borrow().origins().count());
         }
-        sex_pdx::serial_record!("[web.profile.saved] files={} history={} bookmarks={} cookies={}", wrote, self.history.len(), self.bookmarks.len(), jar.len());
+        web_record!("[web.profile.saved] files={} history={} bookmarks={} cookies={}", wrote, self.history.len(), self.bookmarks.len(), jar.len());
     }
 }

@@ -63,7 +63,7 @@ impl Browser {
                     Refusal::NoLogin | Refusal::Ambiguous => "No eligible login form is visible",
                     Refusal::Empty | Refusal::Oversize => "This login has no bounded credentials to save",
                 });
-                sex_pdx::serial_record!("[web.autofill.refused] reason={:?}", reason);
+                web_record!("[web.autofill.refused] reason={:?}", reason);
                 self.draw();
                 return;
             }
@@ -72,7 +72,7 @@ impl Browser {
             Ok(client) => client,
             Err(why) => {
                 self.status = Some("Password request unavailable");
-                sex_pdx::serial_record!("[web.autofill.refused] reason={:?}", why);
+                web_record!("[web.autofill.refused] reason={:?}", why);
                 self.draw();
                 return;
             }
@@ -82,7 +82,7 @@ impl Browser {
             username: pair.username, password: pair.password, cancelled: false,
         });
         self.status = Some("Approve the password request in Chastity");
-        sex_pdx::serial_record!("[web.autofill.requested] tab={}", self.active);
+        web_record!("[web.autofill.requested] tab={}", self.active);
         self.draw();
     }
 
@@ -99,7 +99,7 @@ impl Browser {
                 Refusal::UnsafeAction => "This form does not submit safely to this site",
                 _ => "No eligible login form is visible",
             });
-            sex_pdx::serial_record!("[web.password_save.refused] reason={:?}", reason);
+            web_record!("[web.password_save.refused] reason={:?}", reason);
             self.draw();
             return;
         }
@@ -107,7 +107,7 @@ impl Browser {
             Ok(captured) => captured,
             Err(reason) => {
                 self.status = Some("Enter a username and password in the visible form");
-                sex_pdx::serial_record!("[web.password_save.refused] reason={:?}", reason);
+                web_record!("[web.password_save.refused] reason={:?}", reason);
                 self.draw();
                 return;
             }
@@ -116,7 +116,7 @@ impl Browser {
             Ok(client) => client,
             Err(why) => {
                 self.status = Some("Password save request unavailable");
-                sex_pdx::serial_record!("[web.password_save.refused] reason={:?}", why);
+                web_record!("[web.password_save.refused] reason={:?}", why);
                 self.draw();
                 return;
             }
@@ -126,7 +126,7 @@ impl Browser {
             username: captured.username_node, password: captured.password_node, cancelled: false,
         });
         self.status = Some("Waiting for Chastity to review the save request");
-        sex_pdx::serial_record!("[web.password_save.requested] tab={}", self.active);
+        web_record!("[web.password_save.requested] tab={}", self.active);
         self.draw();
     }
 
@@ -135,7 +135,7 @@ impl Browser {
             if !p.cancelled {
                 p.client.cancel();
                 p.cancelled = true;
-                sex_pdx::serial_record!("[web.password_save.cancelled] reason=page_changed");
+                web_record!("[web.password_save.cancelled] reason=page_changed");
             }
         }
     }
@@ -154,7 +154,7 @@ impl Browser {
         if !valid && !pending.cancelled {
             pending.client.cancel();
             pending.cancelled = true;
-            sex_pdx::serial_record!("[web.password_save.cancelled] reason=identity_or_values_changed");
+            web_record!("[web.password_save.cancelled] reason=identity_or_values_changed");
         }
         match pending.client.poll(sex_pdx::get_ticks()) {
             None => { if pending.client.active() { self.password_save = Some(pending); } }
@@ -165,7 +165,7 @@ impl Browser {
                         Error::Declined => "Password save declined",
                         _ => "Password save request expired or failed",
                     });
-                    sex_pdx::serial_record!("[web.password_save.refused] reason={:?}", why);
+                    web_record!("[web.password_save.refused] reason={:?}", why);
                     self.draw();
                 }
                 if why == Error::Stale { pending.cancelled = true; }
@@ -174,7 +174,7 @@ impl Browser {
             Some(Ok(())) => {
                 if valid {
                     self.status = Some("Password saved in Chastity");
-                    sex_pdx::serial_record!("[web.password_save.approved]");
+                    web_record!("[web.password_save.approved]");
                     self.draw();
                 }
             }
@@ -186,7 +186,7 @@ impl Browser {
             if !p.cancelled {
                 p.client.cancel();
                 p.cancelled = true;
-                sex_pdx::serial_record!("[web.autofill.cancelled] reason=page_changed");
+                web_record!("[web.autofill.cancelled] reason=page_changed");
             }
         }
     }
@@ -197,12 +197,12 @@ impl Browser {
             || autofill_policy::origin(&self.url, self.in_frame.is_some()).ok().as_deref() != Some(pending.origin.as_str())) {
             pending.client.cancel();
             pending.cancelled = true;
-            sex_pdx::serial_record!("[web.autofill.cancelled] reason=identity_changed");
+            web_record!("[web.autofill.cancelled] reason=identity_changed");
         }
         match pending.client.poll(sex_pdx::get_ticks()) {
             None => {
                 if pending.client.active() { self.autofill = Some(pending); }
-                else if pending.cancelled { sex_pdx::serial_record!("[web.autofill.cleared]"); }
+                else if pending.cancelled { web_record!("[web.autofill.cleared]"); }
             }
             Some(Err(why)) => {
                 if !pending.cancelled {
@@ -211,12 +211,12 @@ impl Browser {
                         Error::Declined => "Password request declined",
                         _ => "Password request expired or failed",
                     });
-                    sex_pdx::serial_record!("[web.autofill.refused] reason={:?}", why);
+                    web_record!("[web.autofill.refused] reason={:?}", why);
                     self.draw();
                 }
                 if why == Error::Stale { pending.cancelled = true; }
                 if pending.client.active() { self.autofill = Some(pending); }
-                else if pending.cancelled { sex_pdx::serial_record!("[web.autofill.cleared]"); }
+                else if pending.cancelled { web_record!("[web.autofill.cleared]"); }
             }
             Some(Ok(credentials)) => {
                 let valid = !pending.cancelled && pending.tab == self.active
@@ -231,10 +231,10 @@ impl Browser {
                     });
                     self.relayout();
                     self.status = Some("Password filled from Chastity");
-                    sex_pdx::serial_record!("[web.autofill.filled] fields=2");
+                    web_record!("[web.autofill.filled] fields=2");
                     self.draw();
                 } else {
-                    sex_pdx::serial_record!("[web.autofill.cancelled] reason=stale_document");
+                    web_record!("[web.autofill.cancelled] reason=stale_document");
                 }
             }
         }

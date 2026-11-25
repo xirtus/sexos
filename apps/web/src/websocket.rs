@@ -50,7 +50,7 @@ impl Conn {
         self.mask.to_le_bytes()
     }
     fn fail(&mut self, window: &mut sex_app::Window, why: &str) {
-        sex_pdx::serial_record!("[web.ws.failed] id={} why={}", self.id, why);
+        web_record!("[web.ws.failed] id={} why={}", self.id, why);
         if let Some(mut l) = self.link.take() { l.close(window); }
         if self.state != State::Closed {
             self.events.push((alloc::format!("ws\t{}\terror", self.id), None));
@@ -101,7 +101,7 @@ impl Conn {
             match ws::check(&head, &self.key, &protocols) {
                 Ok(chosen) => {
                     self.state = State::Open;
-                    sex_pdx::serial_record!("[web.ws.open] id={} protocol={}", self.id, if chosen.is_empty() { "-" } else { &chosen });
+                    web_record!("[web.ws.open] id={} protocol={}", self.id, if chosen.is_empty() { "-" } else { &chosen });
                     self.events.push((alloc::format!("ws\t{}\topen\t{}", self.id, chosen), None));
                 }
                 Err(why) => { self.fail(window, why); return; }
@@ -123,7 +123,7 @@ impl Conn {
                     if !self.close_sent { let p = ws::close_payload(if code == 1005 { 1000 } else { code }, ""); self.send_frame(window, ws::CLOSE, &p); self.close_sent = true; }
                     if let Some(mut l) = self.link.take() { l.close(window); }
                     self.state = State::Closed;
-                    sex_pdx::serial_record!("[web.ws.closed] id={} code={} clean=1", self.id, code);
+                    web_record!("[web.ws.closed] id={} code={} clean=1", self.id, code);
                     self.events.push((alloc::format!("ws\t{}\tclose\t{}\t1\t{}", self.id, code, reason.replace('\t', " ")), None));
                     break;
                 }
@@ -169,7 +169,7 @@ impl Browser {
                             let (req, key) = ws::handshake(&t, &key, &origin, &protocols, cookie.as_deref());
                             c.key = key;
                             match net::Duplex::start(&mut self.window, &t.host, t.port, t.secure, req) {
-                                Ok(l) => { c.link = Some(l); sex_pdx::serial_record!("[web.ws.connecting] id={} url={}", id, url); }
+                                Ok(l) => { c.link = Some(l); web_record!("[web.ws.connecting] id={} url={}", id, url); }
                                 Err(_) => c.fail(&mut self.window, "connect"),
                             }
                         }

@@ -181,7 +181,7 @@ impl Ext {
             if let Some(Value::Array(a)) = st.get("scripts") { ext.registered = a.clone(); }
         }
         ext.rebuild(window);
-        sex_pdx::serial_record!("[web.extension.loaded] id={} mv={} enabled={} rules={} skipped={} content_scripts={} background={}",
+        web_record!("[web.extension.loaded] id={} mv={} enabled={} rules={} skipped={} content_scripts={} background={}",
             ext.id, ext.manifest.version, ext.enabled as u8, ext.rule_count, ext.skipped, ext.manifest.content_scripts.len(), ext.manifest.background.len());
         Some(ext)
     }
@@ -221,7 +221,7 @@ impl Ext {
         let _ = files::mkdir(window, b"Web");
         let _ = files::mkdir(window, STATE.as_bytes());
         if !state_file::replace(window, &alloc::format!("{}/{}.json", STATE, self.id), st.to_string().as_bytes()) {
-            sex_pdx::serial_record!("[web.extension.state.save.failed] id={}", self.id);
+            web_record!("[web.extension.state.save.failed] id={}", self.id);
         }
     }
 
@@ -291,7 +291,7 @@ impl Extensions {
         for e in self.list.iter().filter(|e| e.enabled) {
             let Some(rules) = &e.rules else { continue };
             if let Verdict::Block(id) = rules.check(&Request { url, page, kind }) {
-                sex_pdx::serial_record!("[web.extension.blocked] id={} kind={} filter={} url={}", e.id, kind.name(), rules.filter_text(id), url);
+                web_record!("[web.extension.blocked] id={} kind={} filter={} url={}", e.id, kind.name(), rules.filter_text(id), url);
                 return Some(&e.id);
             }
         }
@@ -308,7 +308,7 @@ impl Extensions {
             if let Some(e) = self.list.iter().find(|e| e.enabled && e.id == id) {
                 let source = alloc::format!("globalThis.chrome=globalThis.browser={};", e.api(&self.key, "page"));
                 early.push(PageScript { source, name: alloc::format!("{}{}/kaleidoscope-extension-api.js", SCHEME, e.id), module: false, node: None, external: false, world: 0 });
-                sex_pdx::serial_record!("[web.extension.page] id={} url={}", e.id, url);
+                web_record!("[web.extension.page] id={} url={}", e.id, url);
             }
             return (css, early, late);
         }
@@ -328,7 +328,7 @@ impl Extensions {
             }
         }
         if !css.is_empty() || !early.is_empty() || !late.is_empty() {
-            sex_pdx::serial_record!("[web.extension.content] css={} early={} late={} url={}", css.len(), early.len(), late.len(), url);
+            web_record!("[web.extension.content] css={} early={} late={} url={}", css.len(), early.len(), late.len(), url);
         }
         (css, early, late)
     }
@@ -372,7 +372,7 @@ impl Browser {
             files::write(w, alloc::format!("{}/{}", base, path).as_bytes(), data).map_err(|e| String::from(core::str::from_utf8(files::message(e)).unwrap_or("could not save")))?;
         }
         let _ = files::sync(w);
-        sex_pdx::serial_record!("[web.extension.installed] id={} files={} name={}", id, unpacked.len(), manifest.name);
+        web_record!("[web.extension.installed] id={} files={} name={}", id, unpacked.len(), manifest.name);
         if let Some(mut ext) = Ext::load(&mut self.window, &id, &[]) { ext.fresh = true; self.extensions.list.push(ext); } else { id = String::new(); }
         // A new version starts its background again.
         self.extensions.backgrounds.retain(|b| b.id != id);
@@ -391,17 +391,17 @@ impl Browser {
             match k {
                 "install" if !v.is_empty() => match self.install_extension(&v) {
                     Ok(id) => note = alloc::format!("<p style='color:#137333'>Installed <b>{}</b>.</p>", esc(&id)),
-                    Err(why) => { sex_pdx::serial_record!("[web.extension.install_failed] why={} url={}", why, v); note = alloc::format!("<p style='color:#b3261e'>Could not install: {}</p>", esc(&why)) }
+                    Err(why) => { web_record!("[web.extension.install_failed] why={} url={}", why, v); note = alloc::format!("<p style='color:#b3261e'>Could not install: {}</p>", esc(&why)) }
                 },
                 "toggle" => {
                     if let Some(i) = self.extensions.list.iter().position(|e| e.id == v) {
                         self.extensions.list[i].enabled = !self.extensions.list[i].enabled;
                         if self.extensions.save_off(&mut self.window) {
                             let e = &self.extensions.list[i];
-                            sex_pdx::serial_record!("[web.extension.toggle] id={} enabled={}", e.id, e.enabled as u8);
+                            web_record!("[web.extension.toggle] id={} enabled={}", e.id, e.enabled as u8);
                         } else {
                             self.extensions.list[i].enabled = !self.extensions.list[i].enabled;
-                            sex_pdx::serial_record!("[web.extension.toggle.save.failed] id={}", v);
+                            web_record!("[web.extension.toggle.save.failed] id={}", v);
                             note = String::from("<p style='color:#b3261e'>Could not save extension choice.</p>");
                         }
                     }
@@ -417,9 +417,9 @@ impl Browser {
                         let _ = files::remove(&mut self.window, alloc::format!("{state}.previous").as_bytes());
                         let _ = files::remove(&mut self.window, alloc::format!("{state}.next").as_bytes());
                         if !self.extensions.save_off(&mut self.window) {
-                            sex_pdx::serial_record!("[web.extension.off.save.failed] id={}", e.id);
+                            web_record!("[web.extension.off.save.failed] id={}", e.id);
                         }
-                        sex_pdx::serial_record!("[web.extension.removed] id={}", e.id);
+                        web_record!("[web.extension.removed] id={}", e.id);
                         self.start_backgrounds();
                     }
                 }
@@ -507,7 +507,7 @@ impl Browser {
         doc.ext_tab = self.ext_tab();
         let mut script = match Script::new(doc, sex_js::Limits::default()) {
             Ok(s) => Box::new(s),
-            Err(e) => { sex_pdx::serial_record!("[web.extension.background] id={} engine={:?}", id, e); return; }
+            Err(e) => { web_record!("[web.extension.background] id={} engine={:?}", id, e); return; }
         };
         let api = self.extensions.list[i].api(&self.extensions.key, "bg");
         let _ = script.eval(&alloc::format!("globalThis.chrome=globalThis.browser={};globalThis.self=globalThis;globalThis.importScripts=function(){{}};", api), "kaleidoscope-extension-api.js");
@@ -533,7 +533,7 @@ impl Browser {
         let e = if fresh { json!({ "k": "installed", "id": id, "reason": "install" }) } else { json!({ "k": "startup", "id": id }) };
         let _ = script.dispatch(&alloc::format!("ext\t{}", e));
         if fresh { let _ = script.dispatch(&alloc::format!("ext\t{}", json!({ "k": "startup", "id": id }))); }
-        sex_pdx::serial_record!("[web.extension.background] id={} scripts={} module={} ticks={} memory={}", id, ran, module as u8, sex_pdx::get_ticks() - started, script.memory_bytes());
+        web_record!("[web.extension.background] id={} scripts={} module={} ticks={} memory={}", id, ran, module as u8, sex_pdx::get_ticks() - started, script.memory_bytes());
         self.extensions.backgrounds.push(Background { id: String::from(id), script, timer: Some(sex_pdx::get_ticks()) });
         self.background_log(self.extensions.backgrounds.len() - 1);
     }
@@ -544,7 +544,7 @@ impl Browser {
             self.load_modules(script, &s);
             script.eval_module(&s.source, &s.name)
         } else { script.eval(&source, &name) };
-        if let Err(e) = &r { sex_pdx::serial_record!("[web.extension.background.error] {:?}", e); }
+        if let Err(e) = &r { web_record!("[web.extension.background.error] {:?}", e); }
         r.is_ok()
     }
 
@@ -553,7 +553,7 @@ impl Browser {
         let Some(b) = self.extensions.backgrounds.get_mut(i) else { return };
         let id = b.id.clone();
         for (level, text) in b.script.page_mut().log.drain(..) {
-            for line in text.lines().take(8) { sex_pdx::serial_record!("[web.extension.console] id={} level={} {}", id, level, line); }
+            for line in text.lines().take(8) { web_record!("[web.extension.console] id={} level={} {}", id, level, line); }
         }
         // Its requests are answered in turn: a background rarely asks for much.
         for _ in 0..8 {
@@ -575,7 +575,7 @@ impl Browser {
                         }
                     }
                 };
-                sex_pdx::serial_record!("[web.extension.fetch] id={} status={} bytes={} url={}", id, r.status, r.body.len(), ask.url);
+                web_record!("[web.extension.fetch] id={} status={} bytes={} url={}", id, r.status, r.body.len(), ask.url);
                 let Some(b) = self.extensions.backgrounds.get_mut(i) else { return };
                 let n = r.body.len();
                 b.script.page_mut().keep_head(ask.id, &r.url, &r.headers);
@@ -624,7 +624,7 @@ impl Browser {
             for i in 0..self.extensions.backgrounds.len() { self.background_log(i); }
             if matches!(self.doc, Doc::Scripted(_)) { self.after_script(true); }
         }
-        sex_pdx::serial_record!("[web.extension.busy] rounds={}", ROUNDS);
+        web_record!("[web.extension.busy] rounds={}", ROUNDS);
     }
 
     /// The shown page's realm for extension `id`: the page's own world on that
@@ -640,7 +640,7 @@ impl Browser {
         match to {
             Realm::Page(owner, world) => {
                 // Only the document that asked: after a tab switch or a new page it is gone.
-                if self.doc.get().owner() != *owner { sex_pdx::serial_record!("[web.extension.undelivered] page={}", owner); return false; }
+                if self.doc.get().owner() != *owner { web_record!("[web.extension.undelivered] page={}", owner); return false; }
                 let ok = match self.doc.script() {
                     Some(s) if *world == 0 => s.dispatch(&text).is_ok(),
                     // No content script of that extension runs here: nobody to hear it.
@@ -674,7 +674,7 @@ impl Browser {
             let own_page = split_url(&self.url).map(|(own, _)| own == id);
             if own_page == Some(false) || (own_page.is_none() && w != self.extensions.world_of(&id)) { return; }
         }
-        sex_pdx::serial_record!("[web.extension.message] id={} t={} from={}", id, t, from.tag());
+        web_record!("[web.extension.message] id={} t={} from={}", id, t, from.tag());
         match t {
             "send" | "tabsend" => {
                 let to = if t == "send" { Realm::Background(id.clone()) } else { self.page_realm(&id) };
@@ -736,7 +736,7 @@ impl Browser {
                     }
                 }
                 e.save_state(&mut self.window);
-                sex_pdx::serial_record!("[web.extension.registered] id={} scripts={}", id, self.extensions.list[ei].registered.len());
+                web_record!("[web.extension.registered] id={} scripts={}", id, self.extensions.list[ei].registered.len());
                 self.ext_answer(&from, n, Value::Null);
             }
             "unregister" => {
@@ -759,7 +759,7 @@ impl Browser {
                     e.rulesets_on = Some(on);
                     e.rebuild(&mut self.window);
                     e.save_state(&mut self.window);
-                    sex_pdx::serial_record!("[web.extension.rulesets] id={} on={} rules={}", id, e.rulesets_enabled().join(","), e.rule_count);
+                    web_record!("[web.extension.rulesets] id={} on={} rules={}", id, e.rulesets_enabled().join(","), e.rule_count);
                 }
                 let on = self.extensions.list[ei].rulesets_enabled();
                 self.ext_answer(&from, n, json!(on));
@@ -775,7 +775,7 @@ impl Browser {
                     list.extend(add);
                     e.rebuild(&mut self.window);
                     if dynamic { e.save_state(&mut self.window); }
-                    sex_pdx::serial_record!("[web.extension.rules] id={} dynamic={} session={} rules={}", id, e.dynamic.len(), e.session.len(), e.rule_count);
+                    web_record!("[web.extension.rules] id={} dynamic={} session={} rules={}", id, e.dynamic.len(), e.session.len(), e.rule_count);
                 }
                 let e = &self.extensions.list[ei];
                 self.ext_answer(&from, n, Value::Array(if dynamic { e.dynamic.clone() } else { e.session.clone() }));

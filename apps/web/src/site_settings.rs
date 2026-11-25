@@ -37,7 +37,7 @@ impl Browser {
         let storage = self.storage.borrow();
         let stored = storage.len(&origin);
         let bytes = storage.area(&origin).map_or(0, |area| area.bytes());
-        sex_pdx::serial_record!("[web.site.settings] origin={} shields={} box={} cookies={} storage={} bytes={}", origin, shield, box_name, cookies, stored, bytes);
+        web_record!("[web.site.settings] origin={} shields={} box={} cookies={} storage={} bytes={}", origin, shield, box_name, cookies, stored, bytes);
         alloc::format!("<title>Site settings</title><body style='margin:32px;font-size:16px;background:#fbf8f1;color:#25232b'>\
             <h1>Site settings</h1><p><strong>{}</strong></p><p>Container: {}</p>\
             <p>Shields: <strong>{}</strong> — Ctrl+Shift+S to change</p>\
