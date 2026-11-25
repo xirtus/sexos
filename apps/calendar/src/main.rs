@@ -263,7 +263,17 @@ fn notice_worker() -> ! {
         };
         let mut cursor = match fs::read_at(NOTICE_CURSOR, 0, &mut store[..]) {
             Ok(n) => NoticeCursor::recover(&String::from_utf8_lossy(&store[..n]), now),
-            Err(_) => NoticeCursor::current(now),
+            Err(e) => {
+                let initial = NoticeCursor::current(now);
+                if e == files::NOT_FOUND {
+                    if save_notice_direct(NOTICE_CURSOR, initial.serialize().as_bytes()) {
+                        sex_pdx::serial_record!("[date.notice.cursor.initialized] owner=worker minute={}", initial.minute);
+                    } else {
+                        sex_pdx::serial_record!("[date.notice.worker.save.failed] file=cursor-initial");
+                    }
+                }
+                initial
+            }
         };
         let mut retry = NoticeRetry::default();
         sex_pdx::serial_record!("[date.notice.worker.resumed]");
@@ -1103,7 +1113,17 @@ pub extern "C" fn _start() -> ! {
     };
     let cursor = match files::read(&mut window, NOTICE_CURSOR, store) {
         Ok(n) => NoticeCursor::recover(&String::from_utf8_lossy(&store[..n]), now),
-        Err(_) => NoticeCursor::current(now),
+        Err(e) => {
+            let initial = NoticeCursor::current(now);
+            if e == files::NOT_FOUND {
+                if save_file(&mut window, NOTICE_CURSOR, initial.serialize().as_bytes()).is_ok() {
+                    sex_pdx::serial_record!("[date.notice.cursor.initialized] owner=visible minute={}", initial.minute);
+                } else {
+                    sex_pdx::serial_record!("[date.notice.cursor.failed] status=initial");
+                }
+            }
+            initial
+        }
     };
     let current_minute = NoticeCursor::current(now).minute;
     sex_pdx::serial_record!("[date.notice.cursor.loaded] minute={} now={} catchup={}",

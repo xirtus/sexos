@@ -44,6 +44,8 @@ Remaining gaps:
   when their Bell PDX post fails, retrying without losing the saved timer. This
   also applies to reminders and alarms: both delivery paths stop at the first
   failed Bell transport, keep that minute pending and retry after five seconds.
+  A fresh profile commits its initial cursor before delivery, preserving the
+  first failed notice across a window-to-worker handoff.
   A one-time alarm is disabled only after a successful post. Earlier notices
   in the failed minute can replay on retry or after a crash; delivery is at
   least once, not exactly once. A host failure-injection test covers false-then-
