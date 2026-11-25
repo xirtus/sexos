@@ -822,8 +822,12 @@ impl Book {
 
     /// Inserts a picture from a file the program can read in its granted folder.
     pub fn insert_picture(&mut self, path: &str) -> Result<(), String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("Could not read {path}: {e}"))?;
-        if bytes.len() > 16 * 1024 * 1024 {
+        const MAX: u64 = 16 * 1024 * 1024;
+        // Bound the read itself, so a huge file is refused without loading it.
+        let file = std::fs::File::open(path).map_err(|e| format!("Could not read {path}: {e}"))?;
+        let mut bytes = Vec::new();
+        file.take(MAX + 1).read_to_end(&mut bytes).map_err(|e| format!("Could not read {path}: {e}"))?;
+        if bytes.len() as u64 > MAX {
             return Err("Picture is larger than 16 MiB".into());
         }
         let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
@@ -963,7 +967,7 @@ impl Book {
                 let region = if region.len() == 2 { region.to_ascii_uppercase() } else { region.to_string() };
                 let tag = format!("{language}-{region}");
                 if !wordcraft_engine::proof::has_dictionary(Some(&tag)) {
-                    return Err("WordCraft cannot proof that language".into());
+                    return Err("Assuit cannot proof that language".into());
                 }
                 let folder = self.session.prefs.dictionaries_folder.clone()
                     .ok_or("Assuit dictionaries folder is unavailable")?;
