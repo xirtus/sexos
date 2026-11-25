@@ -537,6 +537,35 @@ impl App {
         }
     }
 
+    fn show_hover(&mut self) {
+        if self.focus != Focus::Editor { return; }
+        let len = self.tab().ed.buf.len();
+        if len > 256 * 1024 { self.status = String::from("Language hover supports files up to 256 KiB"); return; }
+        let (path, source, cursor, version, one_cursor) = {
+            let tab = self.tab();
+            (tab.path.clone(), tab.ed.buf.slice(0..len), tab.ed.cursor(), tab.ed.version(), tab.ed.sels.len() == 1 && tab.ed.primary_sel().is_empty())
+        };
+        if !one_cursor { self.status = String::from("Hover needs one cursor without a selection"); return; }
+        let language = if path.ends_with(b".rs") { "rust" }
+            else if path.ends_with(b".py") { "python" }
+            else if path.ends_with(b".js") { "javascript" }
+            else { self.status = String::from("Hover supports .rs, .py and .js"); return; };
+        let Ok(source) = core::str::from_utf8(&source) else { self.status = String::from("Hover needs UTF-8 text"); return; };
+        match lsp::hover(&path, language, source, cursor) {
+            Ok(Some(summary)) => {
+                let tab = self.tab();
+                if tab.path != path || tab.ed.version() != version || tab.ed.cursor() != cursor {
+                    self.status = String::from("Hover expired; request it again");
+                } else {
+                    self.status = format!("Hover: {summary}");
+                    sex_pdx::serial_record!("[quil.lsp.hover] language={} text={}", language, summary);
+                }
+            }
+            Ok(None) => self.status = String::from("No unique declaration in this file"),
+            Err(why) => { self.status = String::from(why); sex_pdx::serial_record!("[quil.lsp.unavailable] reason={why}"); }
+        }
+    }
+
     fn check_language(&mut self) {
         let len = self.tab().ed.buf.len();
         if len > 256 * 1024 {
@@ -828,6 +857,7 @@ impl App {
         if p == Press::ctrl_shift('j') { self.check_language(); return; }
         if p == Press::ctrl_shift('m') { self.show_symbols(); return; }
         if p == Press::ctrl_shift('g') { self.go_to_definition(); return; }
+        if p == Press::ctrl_shift('h') { self.show_hover(); return; }
         if p == Press::ctrl_shift('/') {
             self.overlay = if matches!(self.overlay, Overlay::Help { .. }) { Overlay::None } else { Overlay::Help { scroll: 0 } };
             sex_pdx::serial_record!("[quil.code.shortcuts] open={}", matches!(self.overlay, Overlay::Help { .. }) as u8);
@@ -1357,6 +1387,7 @@ impl App {
                 all.insert(0, String::from("Language completion  Ctrl+Shift+Space"));
                 all.insert(0, String::from("Document symbols  Ctrl+Shift+M"));
                 all.insert(0, String::from("Go to definition  Ctrl+Shift+G"));
+                all.insert(0, String::from("Describe declaration  Ctrl+Shift+H"));
                 for row in all.into_iter().skip(*scroll).take(rows.saturating_sub(2)) { lines.push((row, false)); }
                 ("Quil shortcuts  ", format!("{}  (Up/Down, Esc)", match self.keymap { Keymap::Vim => "Vim", Keymap::Emacs => "Emacs", Keymap::VsCode => "Default" }))
             }

@@ -24,6 +24,8 @@ Remaining gaps:
   eight distinct declaration names from the open Rust, Python, or JavaScript
   snapshot before keywords. Scope, import, member, and cross-file completion
   still need a fuller language service.
+  Ctrl+Shift+H now requests a bounded plain-text hover summary for a unique
+  declaration in the open file. Type inference and documentation hover remain.
 - Ctrl+Shift+V shows tracked modified, deleted and conflicted files from a
   checked Git index in the project's Files grant. Right shows a bounded,
   read-only line diff against an authenticated loose Git blob for UTF-8 files.

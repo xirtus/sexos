@@ -29,6 +29,7 @@ to scroll, and Esc or Ctrl+Shift+/ to close the reference. The command palette
 | Request Quil Language Service completion | Ctrl+Shift+Space | Ctrl+Shift+Space |
 | Show document symbols | Ctrl+Shift+M | Ctrl+Shift+M |
 | Go to a declaration in the open file | Ctrl+Shift+G | Ctrl+Shift+G |
+| Describe a declaration in the open file | Ctrl+Shift+H | Ctrl+Shift+H |
 
 Default editing also supports Ctrl+Shift+Up for a cursor above, Ctrl+Shift+I
 for a cursor on each selected line, Ctrl+G for next match, Ctrl+L for a line,
@@ -39,7 +40,8 @@ Ctrl+Shift+J starts Quil's native language-service helper with a run-scoped pipe
 sends the current Rust, Python or JavaScript text through LSP 3.17 JSON-RPC, and
 shows its diagnostic count and first issue in the status line. The first helper
 checks delimiter balance and trailing whitespace in UTF-8 files up to 256 KiB.
-Ctrl+Shift+Space requests up to eight keyword completions for the typed prefix.
+Ctrl+Shift+Space requests up to eight same-file declaration or keyword
+completions for the typed prefix.
 Use Up/Down to choose, Enter to insert, or Esc to dismiss. Quil refuses a choice
 if the document revision or cursor changed after the request. Semantic
 completion, cross-file navigation, rename and richer language analysis remain future work.
@@ -55,6 +57,10 @@ bundled helper follows an identifier to a unique declaration head in the same
 open file. It refuses ambiguous names and other-file locations. Imports,
 scopes, member references and full semantic definition lookup still need a
 language server with broader analysis.
+
+Ctrl+Shift+H sends a `textDocument/hover` request and shows the recognized
+declaration kind, name and line in the status bar. It uses the same unique
+same-file declaration rule; it does not infer types or documentation.
 
 Vim mode keeps the default Ctrl shortcuts for application commands. Esc enters
 normal mode, `i` enters insert mode, `dd` deletes a line, `u` undoes, `/` searches,
