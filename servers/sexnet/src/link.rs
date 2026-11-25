@@ -42,24 +42,33 @@ impl Usb{
 }
 
 #[derive(Clone,Copy,Debug)]
-pub enum Kind{Pci(sex_pdx::pci_command::Model),Usb}
+pub enum Kind{Pci(sex_pdx::pci_command::Model),Virtio,Usb}
 
-pub enum Link<H:ethernet::Hardware>{Pci(ethernet::Driver<H>),Usb(Usb)}
+pub enum Link<H:ethernet::Hardware>{Pci(ethernet::Driver<H>),Virtio(crate::virtio_net::Driver<crate::virtio_net::LiveTransport>),Usb(Usb)}
 impl<H:ethernet::Hardware> Link<H>{
-    pub fn phase(&self)->Phase{match self{Link::Pci(d)=>d.phase(),Link::Usb(u)=>u.phase}}
-    pub fn failure(&self)->Option<Failure>{match self{Link::Pci(d)=>d.failure(),Link::Usb(_)=>None}}
-    pub fn model(&self)->Kind{match self{Link::Pci(d)=>Kind::Pci(d.model()),Link::Usb(_)=>Kind::Usb}}
+    pub fn phase(&self)->Phase{match self{Link::Pci(d)=>d.phase(),Link::Virtio(v)=>v.phase(),Link::Usb(u)=>u.phase}}
+    pub fn failure(&self)->Option<Failure>{match self{Link::Pci(d)=>d.failure(),Link::Virtio(v)=>v.failure(),Link::Usb(_)=>None}}
+    pub fn model(&self)->Kind{match self{Link::Pci(d)=>Kind::Pci(d.model()),Link::Virtio(_)=>Kind::Virtio,Link::Usb(_)=>Kind::Usb}}
     pub fn active(&self)->bool{self.phase()!=Phase::Quarantined}
-    pub fn busy(&self)->bool{match self{Link::Pci(d)=>d.busy(),Link::Usb(u)=>u.shared.tx_space()==0}}
-    pub fn mac(&self)->[u8;6]{match self{Link::Pci(d)=>d.mac,Link::Usb(u)=>u.mac}}
-    pub fn dropped(&self)->u64{match self{Link::Pci(d)=>d.dropped,Link::Usb(u)=>u.dropped}}
-    pub fn timing_verified(&self)->bool{match self{Link::Pci(d)=>d.timing_verified,Link::Usb(_)=>true}}
-    /// The PCI card this service drives itself, if that is the link.
-    pub fn pci_mut(&mut self)->Option<&mut ethernet::Driver<H>>{match self{Link::Pci(d)=>Some(d),Link::Usb(_)=>None}}
+    pub fn busy(&self)->bool{match self{Link::Pci(d)=>d.busy(),Link::Virtio(v)=>v.busy(),Link::Usb(u)=>u.shared.tx_space()==0}}
+    pub fn mac(&self)->[u8;6]{match self{Link::Pci(d)=>d.mac,Link::Virtio(v)=>v.mac,Link::Usb(u)=>u.mac}}
+    pub fn dropped(&self)->u64{match self{Link::Pci(d)=>d.dropped,Link::Virtio(v)=>v.dropped,Link::Usb(u)=>u.dropped}}
+    pub fn timing_verified(&self)->bool{match self{Link::Pci(d)=>d.timing_verified,Link::Virtio(_)|Link::Usb(_)=>true}}
+    /// True when this link holds `SLOT_NIC` and can arm MSI/MSI-X interrupts.
+    pub fn has_irq(&self)->bool{matches!(self,Link::Pci(_)|Link::Virtio(_))}
+    pub fn arm_interrupts(&mut self,msix:bool)->bool{
+        match self{Link::Pci(d)=>d.arm_interrupts(msix),Link::Virtio(v)=>v.arm_interrupts(msix),Link::Usb(_)=>false}
+    }
+    pub fn disarm_interrupts(&mut self){
+        match self{Link::Pci(d)=>d.disarm_interrupts(),Link::Virtio(v)=>v.disarm_interrupts(),Link::Usb(_)=>{}}
+    }
+    pub fn acknowledge_interrupts(&mut self){
+        match self{Link::Pci(d)=>{let _=d.acknowledge_interrupts();},Link::Virtio(v)=>v.acknowledge_interrupts(),Link::Usb(_)=>{}}
+    }
     pub fn advance_with_receive(&mut self,now:u64,receive:bool)->Option<Event>{
-        match self{Link::Pci(d)=>d.advance_with_receive(now,receive),Link::Usb(u)=>u.advance(receive)}
+        match self{Link::Pci(d)=>d.advance_with_receive(now,receive),Link::Virtio(v)=>v.advance_with_receive(now,receive),Link::Usb(u)=>u.advance(receive)}
     }
     pub fn send(&mut self,packet:&[u8],now:u64)->Result<(u64,u32,usize,u64),SendError>{
-        match self{Link::Pci(d)=>d.send(packet,now),Link::Usb(u)=>u.send(packet)}
+        match self{Link::Pci(d)=>d.send(packet,now),Link::Virtio(v)=>v.send(packet),Link::Usb(u)=>u.send(packet)}
     }
 }

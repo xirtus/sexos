@@ -258,7 +258,8 @@ fn virtio(dev: &crate::hal::pci::PciDevice, pd: &ProtectionDomain, slot: u64, fi
         bar0_view: Some(view), command: Some(command), virtio: Some(layout), class: 0, window: (0, 0),
     }));
     // One DMA pool per service: a second device shares the first one's.
-    if first { crate::boot_memory::virtio_dma(pd.id); }
+    // sexnet already holds its 256 KiB DMA pool from `boot_memory::init`.
+    if first && dev.device_id != sex_pdx::virtio::NET { crate::boot_memory::virtio_dma(pd.id); }
     serial_println!("[kernel.cap.virtio.grant] pd={} slot={} product={:#06x} bar={} common={:#x} notify={:#x} isr={:#x} device={:#x} multiplier={}",
         pd.id, slot, dev.device_id, bar, layout.common.offset, layout.notify.offset, layout.isr.offset, layout.device.offset, layout.notify_multiplier);
     true
