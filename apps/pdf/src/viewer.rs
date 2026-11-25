@@ -1250,6 +1250,8 @@ impl Viewer {
     }
 
     fn sign_field(&mut self, choice: SigningChoice, window: &mut sex_app::Window) {
+        let source_path = self.path.clone();
+        let sign_field = choice.field.clone();
         let mut certificate = vec![0; choice.signer.certificate_bytes];
         let mut point = [0; pdf_sign::POINT_BYTES];
         if pdf_sign::certificate(choice.signer, &mut certificate).is_err()
@@ -1268,7 +1270,8 @@ impl Viewer {
         let result = self.editor.as_ref().ok().and_then(|editor| {
             editor.embed_detached_signature_with(&choice.field, 4096, |first, second| {
                 vellum_edit::cms::detached_p256_sha256(first, second, &certificate, &point, |attrs| {
-                    pdf_sign::request(choice.signer, attrs).map_err(|_| vellum_edit::cms::CmsError::SignerRefused)?;
+                    pdf_sign::request(choice.signer, &source_path, &sign_field, attrs)
+                        .map_err(|_| vellum_edit::cms::CmsError::SignerRefused)?;
                     let deadline = sex_std::sex_pdx::get_ticks().saturating_add(90_000);
                     loop {
                         let mut signature = [0; pdf_sign::MAX_SIGNATURE];

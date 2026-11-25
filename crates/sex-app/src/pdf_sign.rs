@@ -81,11 +81,17 @@ pub fn public_point(signer: Signer, into: &mut [u8; POINT_BYTES]) -> Result<(), 
     Ok(())
 }
 
-pub fn request(signer: Signer, attrs: &[u8]) -> Result<(), u64> {
-    if attrs.is_empty() || attrs.len() > p::MAX_ATTRS { return Err(p::REFUSED); }
-    if call(p::BEGIN, signer.row as u64, attrs.len() as u64, 0).unwrap_or(p::REFUSED) != 0 {
+pub fn request(signer: Signer, source_path: &str, field: &str, attrs: &[u8]) -> Result<(), u64> {
+    let meta = p::metadata_lengths(source_path.len(), field.len()).ok_or(p::REFUSED)?;
+    if attrs.is_empty() || attrs.len() > p::MAX_ATTRS
+        || source_path.bytes().any(|b| b < 0x20 || b == 0x7f)
+        || field.bytes().any(|b| b < 0x20 || b == 0x7f) { return Err(p::REFUSED); }
+    if call(p::BEGIN, signer.row as u64, attrs.len() as u64, meta).unwrap_or(p::REFUSED) != 0 {
         cancel(signer);
         return Err(p::REFUSED);
+    }
+    for (i, chunk) in source_path.as_bytes().iter().chain(field.as_bytes()).copied().collect::<Vec<_>>().chunks(8).enumerate() {
+        if call(p::META, signer.row as u64, i as u64, p::pack(chunk)).unwrap_or(p::REFUSED) != 0 { cancel(signer); return Err(p::REFUSED); }
     }
     for (i, chunk) in attrs.chunks(8).enumerate() {
         if call(p::CHUNK, signer.row as u64, i as u64, p::pack(chunk)).unwrap_or(p::REFUSED) != 0 { cancel(signer); return Err(p::REFUSED); }

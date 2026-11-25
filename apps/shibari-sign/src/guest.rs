@@ -6,8 +6,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 enum Session {
     Idle,
-    Collect { client: u32, len: usize, data: Vec<u8>, next: usize },
-    Approval { client: u32, data: Vec<u8> },
+    Collect { client: u32, len: usize, data: Vec<u8>, next: usize, path_len: usize, field_len: usize, meta: Vec<u8>, meta_next: usize },
+    Approval { client: u32, data: Vec<u8>, source_path: String, field: String },
     Signed(Vec<u8>),
     Refused,
 }
@@ -47,12 +47,26 @@ fn receive(message: &sex_pdx::PdxMessage, cert: &[u8], point: &[u8], keeper: &Ke
         p::POINT => point.chunks(8).nth(message.arg0 as usize).map(p::pack).unwrap_or(0),
         // Shell owns the one active request. A prior client may have died while
         // Shibari was collecting or awaiting approval; a fresh BEGIN replaces it.
-        p::BEGIN if message.arg1 > 0 && message.arg1 <= p::MAX_ATTRS as u64 => {
-            *session = Session::Collect { client: message.arg0 as u32, len: message.arg1 as usize, data: Vec::with_capacity(message.arg1 as usize), next: 0 };
+        p::BEGIN if message.arg1 > 0 && message.arg1 <= p::MAX_ATTRS as u64
+            && p::decode_metadata_lengths(message.arg2).is_some() => {
+            let (path_len, field_len) = p::decode_metadata_lengths(message.arg2).unwrap();
+            *session = Session::Collect { client: message.arg0 as u32, len: message.arg1 as usize, data: Vec::with_capacity(message.arg1 as usize), next: 0,
+                path_len, field_len, meta: Vec::with_capacity(path_len + field_len), meta_next: 0 };
             0
         }
+        p::META => match session {
+            Session::Collect { path_len, field_len, meta, meta_next, next, .. }
+                if *next == 0 && message.arg0 as usize == *meta_next && *meta_next * 8 < *path_len + *field_len => {
+                let n = (*path_len + *field_len - meta.len()).min(8);
+                meta.extend_from_slice(&message.arg1.to_le_bytes()[..n]);
+                *meta_next += 1;
+                0
+            }
+            _ => 1,
+        },
         p::CHUNK => match session {
-            Session::Collect { len, data, next, .. } if message.arg0 as usize == *next && *next * 8 < *len => {
+            Session::Collect { len, data, next, path_len, field_len, meta, .. }
+                if meta.len() == *path_len + *field_len && message.arg0 as usize == *next && *next * 8 < *len => {
                 let n = (*len - data.len()).min(8);
                 data.extend_from_slice(&message.arg1.to_le_bytes()[..n]);
                 *next += 1;
@@ -63,7 +77,16 @@ fn receive(message: &sex_pdx::PdxMessage, cert: &[u8], point: &[u8], keeper: &Ke
         p::FINISH => {
             let old = core::mem::replace(session, Session::Idle);
             match old {
-                Session::Collect { client, len, data, .. } if data.len() == len => { *session = Session::Approval { client, data }; 0 }
+                Session::Collect { client, len, data, path_len, field_len, meta, .. }
+                    if data.len() == len && meta.len() == path_len + field_len => {
+                    match (core::str::from_utf8(&meta[..path_len]), core::str::from_utf8(&meta[path_len..])) {
+                        (Ok(path), Ok(field)) if !path.is_empty() && !field.is_empty()
+                            && !path.bytes().chain(field.bytes()).any(|b| b < 0x20 || b == 0x7f) => {
+                            *session = Session::Approval { client, data, source_path: path.into(), field: field.into() }; 0
+                        }
+                        _ => { *session = Session::Refused; 1 }
+                    }
+                }
                 other => { *session = other; 1 }
             }
         }
