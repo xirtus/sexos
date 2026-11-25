@@ -4,7 +4,7 @@
 //! draws this same list.)
 
 use crate::editor::Editor;
-use crate::highlight::Lang;
+use crate::highlight::{self, Lang, State};
 use alloc::vec::Vec;
 
 pub struct Tab {
@@ -17,10 +17,66 @@ pub struct Tab {
     /// Byte offset of the first line shown, and the first column.
     pub top: usize,
     pub left: usize,
+    syntax_version: u64,
+    syntax_checkpoints: Vec<(usize, State)>,
+    pub syntax_pending: bool,
 }
 
+/// State at the first visible line. A distant jump is scanned over idle draws.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SyntaxAt { Ready(State), Pending, Unavailable }
+
+pub const SYNTAX_LINE_MAX: usize = 1 << 20;
+
 impl Tab {
-    pub fn new(path: &[u8], ed: Editor) -> Tab { Tab { lang: Lang::from_path(path), ed, path: path.to_vec(), untitled_slot: None, top: 0, left: 0 } }
+    pub fn new(path: &[u8], ed: Editor) -> Tab { Tab { lang: Lang::from_path(path), ed, path: path.to_vec(), untitled_slot: None, top: 0, left: 0, syntax_version: 0, syntax_checkpoints: alloc::vec![(0, State::Normal)], syntax_pending: false } }
+    /// Find a line boundary without walking an arbitrarily large lazy file line.
+    pub fn syntax_line_end(&self, at: usize) -> Option<usize> {
+        let mut pos = at;
+        let mut bytes = [0u8; 4096];
+        while pos - at <= SYNTAX_LINE_MAX {
+            let want = bytes.len().min(SYNTAX_LINE_MAX + 1 - (pos - at));
+            let n = self.ed.buf.read(pos, &mut bytes[..want]);
+            if let Some(i) = memchr::memchr(b'\n', &bytes[..n]) { return Some(pos + i); }
+            pos += n;
+            if n == 0 { return Some(pos); }
+        }
+        None
+    }
+    fn remember_syntax(&mut self, at: usize, state: State) {
+        if let Some(slot) = self.syntax_checkpoints.iter_mut().find(|(offset, _)| *offset == at) {
+            slot.1 = state;
+        } else {
+            self.syntax_checkpoints.push((at, state));
+            if self.syntax_checkpoints.len() > 128 { self.syntax_checkpoints.remove(1); }
+        }
+    }
+    /// Scan at most 64 KiB of ordinary lines per call. A far jump shows plain
+    /// text with a visible indexing label until the exact state is known.
+    pub fn syntax_state_at_top(&mut self) -> SyntaxAt {
+        if self.syntax_version != self.ed.version() {
+            self.syntax_version = self.ed.version();
+            self.syntax_checkpoints.clear();
+            self.syntax_checkpoints.push((0, State::Normal));
+        }
+        let (mut at, mut state) = self.syntax_checkpoints.iter().copied()
+            .filter(|(offset, _)| *offset <= self.top).max_by_key(|(offset, _)| *offset)
+            .unwrap_or((0, State::Normal));
+        let mut scanned = 0;
+        let mut spans = Vec::new();
+        while at < self.top {
+            let Some(end) = self.syntax_line_end(at) else { self.syntax_pending = false; return SyntaxAt::Unavailable; };
+            if scanned > 0 && scanned + end - at > 64 * 1024 { break; }
+            let bytes = self.ed.buf.slice(at..end);
+            state = highlight::line_state(self.lang, &bytes, state, &mut spans);
+            let next = if end < self.ed.buf.len() { end + 1 } else { end };
+            scanned += next - at;
+            at = next;
+        }
+        self.remember_syntax(at, state);
+        self.syntax_pending = at < self.top;
+        if self.syntax_pending { SyntaxAt::Pending } else { SyntaxAt::Ready(state) }
+    }
     pub fn name(&self) -> &[u8] {
         if self.path.is_empty() { return b"untitled"; }
         self.path.rsplit(|b| *b == b'/').next().unwrap_or(&self.path)
