@@ -172,7 +172,17 @@ impl Book {
     /// Edit an actual WordCraft list at the caret or across selected paragraphs.
     /// The names stay deliberately finite so a typo cannot pick a different list.
     pub fn edit_list(&mut self, input: &str) -> Result<&'static str, String> {
-        let (command, params, result) = match input.trim().to_ascii_lowercase().as_str() {
+        let action = input.trim().to_ascii_lowercase();
+        if let Some(level) = action.strip_prefix("level ") {
+            let level = level.parse::<u8>().map_err(|_| "Enter level 1 through level 9".to_string())?;
+            if !(1..=9).contains(&level) { return Err("Enter level 1 through level 9".into()); }
+            self.run("list.get", json!({}))
+                .map_err(|_| "Place the caret in a list first".to_string())?;
+            self.run("para.listLevel", json!({ "level": level - 1 }))
+                .map_err(|_| "Could not change the list level".to_string())?;
+            return Ok("Changed list level");
+        }
+        let (command, params, result) = match action.as_str() {
             "bullet" | "bullets" => ("para.bullets", json!({}), "Toggled bullets"),
             "numbered" | "numbers" => ("para.numbering", json!({}), "Toggled numbering"),
             "numbered paren" => ("para.numbering", json!({ "kind": "numberedParen" }), "Toggled parenthesized numbering"),
@@ -182,7 +192,7 @@ impl Book {
             "legal" => ("para.multilevel", json!({ "kind": "legal" }), "Toggled legal numbering"),
             "off" => ("para.numbering", json!({ "off": true }), "Removed list formatting"),
             "restart" => ("para.restartNumbering", json!({}), "Restarted numbering at one"),
-            _ => return Err("Choose bullet, numbered, numbered paren, upper letter, lower letter, lower roman, legal, off or restart".into()),
+            _ => return Err("Choose bullet, numbered, numbered paren, upper letter, lower letter, lower roman, legal, off, restart or level 1–9".into()),
         };
         self.run(command, params).map_err(|_| "Place the caret in a paragraph that can take this list action".to_string())?;
         Ok(result)
@@ -769,6 +779,31 @@ mod tests {
                 book.save().unwrap();
                 check(&Book::open(&path).unwrap());
             }
+        }
+    }
+
+    #[test]
+    fn nested_list_levels_round_trip_in_docx_and_odt() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("nested-list.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("Parent item").unwrap();
+            assert!(book.edit_list("level 2").is_err(), "level requires an existing list");
+            book.edit_list("numbered").unwrap();
+            book.key(&Chord { name: "Enter", ctrl: false, shift: false });
+            book.type_text("Child item").unwrap();
+            assert!(book.edit_list("level 0").is_err());
+            assert!(book.edit_list("level 10").is_err());
+            assert_eq!(book.edit_list("level 2").unwrap(), "Changed list level");
+            let levels = |b: &Book| b.session.doc.body.iter().filter_map(|block| block.as_para())
+                .map(|para| para.props.numbering.unwrap().level).collect::<Vec<_>>();
+            assert_eq!(levels(&book), [0, 1]);
+            book.save().unwrap();
+            let mut reopened = Book::open(&path).unwrap();
+            assert_eq!(levels(&reopened), [0, 1], "{ext} lost the nested level");
+            reopened.key(&Chord { name: "End", ctrl: true, shift: false });
+            reopened.edit_list("level 1").unwrap();
+            assert_eq!(levels(&reopened), [0, 0]);
         }
     }
 

@@ -243,6 +243,14 @@ def main():
   assert numbered.startswith(b'P6\n') and numbered!=prompt,'List edit did not change the document view'
   s=len(t());press('ctrl','s')
   g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
+  # The second item must move to a nested list level on the rendered page.
+  s=len(t());press('ctrl','alt','l');type_line('level 2');q.key('ret')
+  g['wait'](r'\[assuit\.list\] action=level 2\n',s,120)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'assuit-nested-list.ppm')})
+  nested=(a.out/'assuit-nested-list.ppm').read_bytes()
+  assert nested.startswith(b'P6\n') and nested!=numbered,'Nested level did not change the document view'
+  s=len(t());press('ctrl','s')
+  g['wait'](r'\[assuit\.saved\] name=welcome\.docx bytes=\d+\n',s,300)
   close(o)
   text=t();assert 'KERNEL PANIC' not in text and '[std.abort]' not in text and 'KERNEL PAGE FAULT' not in text
   print({'ok':True,'saved_bytes':int(m[1])})
