@@ -2,7 +2,7 @@
 //! In-session undo for Date's local event, reply-choice, and clock edits.
 //! Server sync changes the event list outside this history, so Date clears it then.
 use alloc::vec::Vec;
-use crate::{clock::{Alarm, Clock}, Event, PartStat};
+use crate::{clock::{Alarm, Clock, Timer}, Event, PartStat};
 
 const LIMIT: usize = 32;
 
@@ -81,21 +81,30 @@ impl ReplyDraftHistory {
     pub fn clear(&mut self) { self.current = None; self.redo = None; }
 }
 
-/// A clock edit changes zones or alarms. Timers remain live outside the history.
+/// Clock edits share one order, including timer starts and cancellations.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ClockEditKind { Zone, Alarm }
+pub enum ClockEditKind { Zone, Alarm, Timer }
 
-/// A fired one-time alarm changes the current alarm list and invalidates older
-/// history, so undo cannot re-enable it. Timers are never restored from history.
+/// A fired alarm or timer changes its own state and invalidates stale history.
 #[derive(Clone, PartialEq, Eq)]
-pub struct ClockState { home: alloc::string::String, zones: Vec<alloc::string::String>, alarms: Vec<Alarm> }
+pub struct ClockState { home: alloc::string::String, zones: Vec<alloc::string::String>, alarms: Vec<Alarm>, timers: Vec<Timer> }
 
 impl ClockState {
-    pub fn from_clock(clock: &Clock) -> Self { Self { home: clock.home.clone(), zones: clock.zones.clone(), alarms: clock.alarms.clone() } }
-    fn restore(&self, clock: &mut Clock) {
-        clock.home = self.home.clone();
-        clock.zones = self.zones.clone();
-        clock.alarms = self.alarms.clone();
+    pub fn from_clock(clock: &Clock) -> Self { Self { home: clock.home.clone(), zones: clock.zones.clone(), alarms: clock.alarms.clone(), timers: clock.timers.clone() } }
+    fn matches(&self, clock: &Clock, kind: ClockEditKind) -> bool {
+        match kind {
+            ClockEditKind::Zone | ClockEditKind::Alarm =>
+                self.home == clock.home && self.zones == clock.zones && self.alarms == clock.alarms,
+            ClockEditKind::Timer => self.home == clock.home && self.zones == clock.zones &&
+                self.alarms == clock.alarms && self.timers == clock.timers,
+        }
+    }
+    fn restore(&self, clock: &mut Clock, kind: ClockEditKind) {
+        match kind {
+            ClockEditKind::Zone => { clock.home = self.home.clone(); clock.zones = self.zones.clone(); }
+            ClockEditKind::Alarm => clock.alarms = self.alarms.clone(),
+            ClockEditKind::Timer => clock.timers = self.timers.clone(),
+        }
     }
 }
 
@@ -104,22 +113,34 @@ pub struct ClockHistory { undo: Vec<(ClockState, ClockState, ClockEditKind)>, re
 
 impl ClockHistory {
     pub fn push(&mut self, before: ClockState, after: ClockState, kind: ClockEditKind) {
-        if before == after { return; }
+        if match kind {
+            ClockEditKind::Zone => before.home == after.home && before.zones == after.zones,
+            ClockEditKind::Alarm => before.alarms == after.alarms,
+            ClockEditKind::Timer => before.timers == after.timers,
+        } { return; }
         if self.undo.len() == LIMIT { self.undo.remove(0); }
         self.undo.push((before, after, kind));
         self.redo.clear();
     }
-    pub fn undo(&mut self, clock: &mut Clock) -> Option<ClockEditKind> { self.apply(clock, true) }
-    pub fn redo(&mut self, clock: &mut Clock) -> Option<ClockEditKind> { self.apply(clock, false) }
-    fn apply(&mut self, clock: &mut Clock, backward: bool) -> Option<ClockEditKind> {
+    #[cfg(test)]
+    fn undo(&mut self, clock: &mut Clock) -> Option<ClockEditKind> { self.undo_at(clock, 0) }
+    #[cfg(test)]
+    fn redo(&mut self, clock: &mut Clock) -> Option<ClockEditKind> { self.redo_at(clock, 0) }
+    pub fn undo_at(&mut self, clock: &mut Clock, now_ms: u64) -> Option<ClockEditKind> { self.apply(clock, true, now_ms) }
+    pub fn redo_at(&mut self, clock: &mut Clock, now_ms: u64) -> Option<ClockEditKind> { self.apply(clock, false, now_ms) }
+    fn apply(&mut self, clock: &mut Clock, backward: bool, now_ms: u64) -> Option<ClockEditKind> {
         let source = if backward { &mut self.undo } else { &mut self.redo };
         let (before, after, kind) = source.pop()?;
         let (current, wanted) = if backward { (&after, &before) } else { (&before, &after) };
-        if ClockState::from_clock(clock) != *current {
+        // A due timer still in the current clock has not necessarily reached Bell.
+        // Do not let undo/redo remove it before the next delivery tick.
+        if !current.matches(clock, kind) ||
+            (kind == ClockEditKind::Timer && current.timers.iter().chain(&wanted.timers)
+                .any(|timer| timer.ends_ms <= now_ms)) {
             self.undo.clear(); self.redo.clear();
             return None;
         }
-        wanted.restore(clock);
+        wanted.restore(clock, kind);
         if backward { self.redo.push((before, after, kind)); } else { self.undo.push((before, after, kind)); }
         Some(kind)
     }
@@ -254,5 +275,75 @@ mod tests {
         assert_eq!(history.redo(&mut clock), Some(ClockEditKind::Alarm));
         assert_eq!(history.redo(&mut clock), Some(ClockEditKind::Alarm));
         assert!(clock.alarms.is_empty());
+    }
+
+    #[test]
+    fn timer_start_cancel_undo_redo_keep_deadline_and_saved_state() {
+        let mut clock = Clock::default();
+        let mut history = ClockHistory::default();
+        let before = ClockState::from_clock(&clock);
+        clock.timers.push(crate::clock::Timer { ends_ms: 90_000, seconds: 90, label: "tea".into() });
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Timer);
+        assert_eq!(history.undo_at(&mut clock, 1_000), Some(ClockEditKind::Timer));
+        assert!(Clock::parse(&clock.serialize()).timers.is_empty());
+        assert_eq!(history.redo_at(&mut clock, 2_000), Some(ClockEditKind::Timer));
+        assert_eq!(Clock::parse(&clock.serialize()).timers[0].ends_ms, 90_000);
+
+        let before = ClockState::from_clock(&clock);
+        clock.timers.remove(0);
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Timer);
+        assert_eq!(history.undo_at(&mut clock, 3_000), Some(ClockEditKind::Timer));
+        assert_eq!(clock.timers.len(), 1);
+        assert_eq!(history.redo_at(&mut clock, 4_000), Some(ClockEditKind::Timer));
+        assert!(clock.timers.is_empty());
+    }
+
+    #[test]
+    fn elapsed_or_delivered_timer_cannot_be_resurrected() {
+        let mut clock = Clock::default();
+        let mut history = ClockHistory::default();
+        let before = ClockState::from_clock(&clock);
+        clock.timers.push(crate::clock::Timer { ends_ms: 5_000, seconds: 5, label: "tea".into() });
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Timer);
+        assert_eq!(history.undo_at(&mut clock, 1_000), Some(ClockEditKind::Timer));
+        assert_eq!(history.redo_at(&mut clock, 5_000), None);
+        assert!(clock.timers.is_empty());
+
+        let before = ClockState::from_clock(&clock);
+        clock.timers.push(crate::clock::Timer { ends_ms: 10_000, seconds: 10, label: "tea".into() });
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Timer);
+        clock.deliver_timers(10_000, |_| true);
+        assert_eq!(history.undo_at(&mut clock, 11_000), None);
+        assert!(clock.timers.is_empty());
+    }
+
+    #[test]
+    fn undo_cannot_cancel_due_timer_before_delivery_tick() {
+        let mut clock = Clock::default();
+        let mut history = ClockHistory::default();
+        let before = ClockState::from_clock(&clock);
+        clock.timers.push(crate::clock::Timer { ends_ms: 5_000, seconds: 5, label: "tea".into() });
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Timer);
+        assert_eq!(history.undo_at(&mut clock, 5_000), None);
+        assert_eq!(clock.deliver_timers(5_000, |_| true).len(), 1);
+        assert!(clock.timers.is_empty());
+    }
+
+    #[test]
+    fn timer_and_alarm_edits_undo_in_one_order() {
+        let mut clock = Clock::default();
+        let mut history = ClockHistory::default();
+        let before = ClockState::from_clock(&clock);
+        clock.timers.push(crate::clock::Timer { ends_ms: 60_000, seconds: 60, label: "tea".into() });
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Timer);
+        let before = ClockState::from_clock(&clock);
+        clock.alarms.push(crate::clock::Alarm { minute: 450, days: 0, enabled: true, label: "wake".into() });
+        history.push(before, ClockState::from_clock(&clock), ClockEditKind::Alarm);
+        assert_eq!(history.undo_at(&mut clock, 1_000), Some(ClockEditKind::Alarm));
+        assert_eq!(clock.timers.len(), 1);
+        assert_eq!(history.undo_at(&mut clock, 1_000), Some(ClockEditKind::Timer));
+        assert!(clock.timers.is_empty());
+        assert_eq!(history.redo_at(&mut clock, 2_000), Some(ClockEditKind::Timer));
+        assert_eq!(history.redo_at(&mut clock, 2_000), Some(ClockEditKind::Alarm));
     }
 }

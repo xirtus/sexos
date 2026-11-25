@@ -11,7 +11,7 @@ keeps the help key as ordinary text until that entry is finished.
 | Any view | V | Review retained local CalDAV conflicts; press again for the next |
 | Conflict review | L or S, then Enter | Keep the local or server copy; Enter stages and saves the choice. A local choice is sent on the next sync. Escape cancels the choice. |
 | Calendar views | Ctrl+Z, Ctrl+Y | Undo or redo local event additions, copies and removals; sync clears this history |
-| Clock | Ctrl+Z, Ctrl+Y | Undo or redo world-zone and alarm changes in order; fired alarms and live timers are outside this history |
+| Clock | Ctrl+Z, Ctrl+Y | Undo or redo world-zone, alarm and timer changes in order; elapsed timers cannot be restored |
 | Any view | E | Export shown events to `date-export.ics` |
 | Notice showing | Shift+S | Snooze the notice for five minutes; it survives a Date restart |
 | Month | Arrow keys | Move one day or one week |

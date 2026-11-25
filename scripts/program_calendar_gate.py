@@ -113,6 +113,21 @@ def main():
   s=len(t());g['chord']('ctrl','y',r'\[date.alarm.redo\] alarms=1')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-alarm-redone.ppm')})
   g['chord']('ctrl','z',r'\[date.alarm.undo\] alarms=0')
+  s=len(t());q.key('r');time.sleep(.3);keys('1h Undo demo');q.key('ret')
+  started=g['wait'](r'\[date.timer.started\] seconds=3600 label=Undo demo timers=(\d+)',s,30)
+  timer_count=int(started[1]);assert timer_count>=1
+  saved=g['wait'](r'\[date.save.committed\] file=clock.txt bytes=(\d+)',s,30)
+  s=len(t());g['chord']('ctrl','z',rf'\[date.timer.undo\] timers={timer_count-1} last=[^\n]*\n')
+  undone=g['wait'](r'\[date.save.committed\] file=clock.txt bytes=(\d+)',s,30)
+  assert int(undone[1])<int(saved[1]),'undo did not remove the timer from the saved clock'
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-timer-undone.ppm')})
+  s=len(t());g['chord']('ctrl','y',rf'\[date.timer.redo\] timers={timer_count} last=Undo demo\n')
+  redone=g['wait'](r'\[date.save.committed\] file=clock.txt bytes=(\d+)',s,30)
+  assert redone[1]==saved[1],'redo did not restore the timer in the saved clock'
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-timer-redone.ppm')})
+  restored=(a.out/'date-timer-redone.ppm').read_bytes()
+  removed=(a.out/'date-timer-undone.ppm').read_bytes()
+  assert restored.startswith(b'P6\n') and len(restored)>100000 and restored!=removed,'redone timer did not change the Clock screenshot'
   q.key('m');time.sleep(.3)
   # Today is the machine's clock (QEMU's RTC follows this host, in UTC).
   host=datetime.datetime.now(datetime.timezone.utc).date()

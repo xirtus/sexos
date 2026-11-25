@@ -107,11 +107,15 @@ Remaining gaps:
   result saved immediately. A CalDAV sync clears the event history so undo cannot roll
   back server changes. In Clock, those keys now undo and redo world-zone additions,
   removals and home-zone changes, as well as alarm additions, toggles and removals,
-  in one order. A fired alarm invalidates stale undo; live timers are never
-  restored. In an invitation
+  in one order. Timer starts and cancellations now join that order. Undoing a
+  start cancels its timer; redo restores its original deadline only while it is
+  still in the future. Undoing a cancellation likewise refuses to resurrect an
+  elapsed timer. Each result uses the staged clock save. A fired alarm or timer
+  invalidates stale edits of its own kind. The undo stack itself remains
+  in-session. In an invitation
   preview, Ctrl+Z cancels and Ctrl+Y restores the local reply choice; Enter queues the
   `.ics` file. A queued or externally sent reply cannot be recalled. Timer edits
-  remain outside undo.
+  remain outside undo. Snoozes and timers settled by Bell remain outside undo.
 - The calendar QEMU gate now kills the guest after a completed staged event save,
   reboots the same disk, and verifies the event in Date. This covers recovery
   after the save receipt; a write interrupted before that receipt remains outside
