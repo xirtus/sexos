@@ -22,7 +22,7 @@ open prompt determine which keys act. F11 closes the window.
 | Open a new folder tab; close the current one | Ctrl+Shift+T; Ctrl+Shift+W |
 | Switch tabs; show or hide split view | Ctrl+Page Up/Down; Ctrl+Shift+\ |
 | Browse an archive; extract it | Enter; Ctrl+Shift+X |
-| Create ZIP or tar.zst from the selection | Ctrl+Shift+A; Ctrl+Shift+M |
+| Create ZIP, tar, tar.gz or tar.zst from the selection | Ctrl+Shift+A; Ctrl+Shift+N; Ctrl+Shift+B; Ctrl+Shift+M |
 | Batch rename with preview | Ctrl+Shift+R |
 | Compare folders; find duplicates | Ctrl+Shift+C; Ctrl+Shift+D |
 | Rate from zero to five stars; edit tags | Ctrl+0 through Ctrl+5; Ctrl+Shift+G |
