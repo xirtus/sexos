@@ -217,6 +217,22 @@ mod tests {
     }
 
     #[test]
+    fn visual_signature_survives_as_markup_without_a_digital_signature() {
+        const FORM: &[u8] = include_bytes!("../../../tests/fixtures/pdf/form1.pdf");
+        let mut ed = Editor::open(FORM.to_vec()).unwrap();
+        let info = ed.page_info(0).unwrap();
+        let rect = rect_to_user(&info, [100.0, 600.0, 350.0, 650.0]);
+        ed.add_annotation(0, &vellum_edit::NewAnnot {
+            kind: vellum_edit::AnnotKind::FreeText { rect, text: "Ada Lovelace".into(), font_size: 20.0 },
+            style: vellum_edit::AnnotStyle { contents: Some("Visual signature: Ada Lovelace".into()), ..Default::default() },
+        }).unwrap();
+        let again = Editor::open(ed.save_incremental().unwrap()).unwrap();
+        let marks = again.annotations(0).unwrap();
+        assert!(marks.iter().any(|a| a.subtype == "FreeText" && a.contents.as_deref() == Some("Visual signature: Ada Lovelace")));
+        assert!(again.signatures().unwrap().is_empty(), "visual markup must not claim a digital signature");
+    }
+
+    #[test]
     fn fields_in_reading_order_and_checkbox_toggles() {
         let mut ed = Editor::open(form()).unwrap();
         let fields = fillable(&ed.fields().unwrap());

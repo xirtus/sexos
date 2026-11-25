@@ -106,20 +106,24 @@ def main():
   step(lambda:q.key('spc'),r'\[pdf\.field\] name=agree kind=checkbox value=Yes\n')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-filled.ppm')})
   step(lambda:q.key('esc'),r'\[pdf\.form\] done=1\n')
+  # A typed visual signature is visible markup, explicitly not a digital signature.
+  s=len(t());chord('ctrl','shift','g');keys(NAME);q.key('ret')
+  g['wait'](rf'\[pdf\.sign\.visual\] page=1 chars={len(NAME)} annots=3\n',s)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-visual-signature.ppm')})
   # Save: an update after the original, read back, and drawn again from what was read.
   s=len(t());chord('ctrl','s')
-  sv=g['wait'](r'\[pdf\.saved\] path=(\S+) bytes=(\d+) original=(\d+) prefix=1 same=1 annots=2 filled=2 ms=(\d+)\n',s,300)
+  sv=g['wait'](r'\[pdf\.saved\] path=(\S+) bytes=(\d+) original=(\d+) prefix=1 same=1 annots=3 filled=2 ms=(\d+)\n',s,300)
   saved_path=sv[1];assert int(sv[3])==len(FORM) and int(sv[2])>len(FORM),sv[0]
   g['wait'](r'\[pdf\.page\] page=1 pages=1 width=\d+ height=\d+ ink=\d+ ms=\d+\n',s,600)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-saved.ppm')})
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   g['wait'](rf'\[app\.private\.retired\] target={o[1]} task={o[2]} ',s,180)
-  # Opened again from the disk: the two annotations are there.
+  # Opened again from the disk: all three annotations are there.
   s=len(t());line('run vellum @form.pdf')
   o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=form\.pdf pages=1\n',s,600)
   g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
   sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(1);g['focus'](sid);time.sleep(.5)
-  step(lambda:chord('ctrl','l'),r'\[pdf\.annots\] page=1 count=2 kinds=Highlight,Text\n')
+  step(lambda:chord('ctrl','l'),r'\[pdf\.annots\] page=1 count=3 kinds=Highlight,Text,FreeText\n')
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   assert 'KERNEL PANIC' not in t() and '[std.abort]' not in t() and 'panicked' not in t()
  finally:g['stop']()
@@ -128,7 +132,7 @@ def main():
  out_pdf=a.out/'form-saved.pdf';subprocess.run([str(extractor),str(disk),saved_path[1:],str(out_pdf)],check=True)
  data=out_pdf.read_bytes();assert data.startswith(FORM) and len(data)>len(FORM)
  update=data[len(FORM):]
- for want in (b'/Subtype /Highlight',b'/Subtype /Text',b'/QuadPoints',b'/V /Yes',b'/Prev '):assert want in update,want
+ for want in (b'/Subtype /Highlight',b'/Subtype /Text',b'/Subtype /FreeText',b'/QuadPoints',b'/V /Yes',b'/Prev '):assert want in update,want
  assert NOTE.encode() in update and NAME.encode() in update
  checked='bytes'
  try:import pypdf
@@ -136,7 +140,7 @@ def main():
  if pypdf:
   r=pypdf.PdfReader(io.BytesIO(data));annots=[x.get_object() for x in r.pages[0]['/Annots']]
   kinds=sorted(str(x['/Subtype']) for x in annots)
-  assert kinds.count('/Highlight')==1 and kinds.count('/Text')==1 and kinds.count('/Widget')==2,kinds
+  assert kinds.count('/Highlight')==1 and kinds.count('/Text')==1 and kinds.count('/FreeText')==1 and kinds.count('/Widget')==2,kinds
   assert any(str(x.get('/Contents',''))==NOTE for x in annots)
   fields=r.get_fields();assert str(fields['name'].get('/V'))==NAME and str(fields['agree'].get('/V'))=='/Yes',fields
   checked='pypdf'
