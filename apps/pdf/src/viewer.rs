@@ -926,7 +926,7 @@ impl Viewer {
             sex_std::record("[pdf.sign.failed] stage=save");
             return;
         }
-        let _ = sex_std::sex_app::files::direct::sync();
+        let sync_result = sex_std::sex_app::files::direct::sync();
         let back = match std::fs::read(&path) {
             Ok(back) => back,
             Err(e) => { self.status = Some(format!("Signed PDF saved but could not be read: {e}")); return; }
@@ -947,8 +947,13 @@ impl Viewer {
         self.recovered_pending = false;
         self.recovery_fingerprint = None;
         let _ = std::fs::remove_file(recovery::path(&path));
-        self.status = Some("Signature content intact; signer trust unverified".into());
-        sex_std::record(&format!("[pdf.sign.saved] field={} bytes={} content_intact=1 verified=0", choice.field, bytes.len()));
+        if let Err(error) = sync_result {
+            self.status = Some(format!("Signed PDF reopened, but Files could not confirm storage sync: {error:?}"));
+            sex_std::record("[pdf.sign.failed] stage=sync");
+        } else {
+            self.status = Some("Signature content intact; signer trust unverified".into());
+            sex_std::record(&format!("[pdf.sign.saved] field={} bytes={} content_intact=1 verified=0", choice.field, bytes.len()));
+        }
     }
 
     fn signature_intact(bytes: &[u8], field: &str) -> bool {
