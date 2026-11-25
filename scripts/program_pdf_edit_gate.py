@@ -104,6 +104,9 @@ def main():
   s=len(t());chord('ctrl','down')
   g['wait'](rf'\[pdf\.field\] name=name kind=text value={NAME}\n',s);g['wait'](r'\[pdf\.field\.focus\] name=agree index=2 page=1\n',s)
   step(lambda:q.key('spc'),r'\[pdf\.field\] name=agree kind=checkbox value=Yes\n')
+  step(lambda:chord('ctrl','z'),r'\[pdf\.field\.history\] action=undo name=agree\n')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-form-undone.ppm')})
+  step(lambda:chord('ctrl','shift','z'),r'\[pdf\.field\.history\] action=redo name=agree\n')
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-filled.ppm')})
   step(lambda:q.key('esc'),r'\[pdf\.form\] done=1\n')
   # A typed visual signature is visible markup, explicitly not a digital signature.

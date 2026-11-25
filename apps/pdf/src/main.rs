@@ -19,6 +19,7 @@
 //! field (or Tab, where Shell passes it on), Ctrl+Up for the one before, type into text fields, Space ticks a
 //! checkbox, Escape ends. Ctrl+S saves every change as an incremental update appended
 //! to the file (its original bytes stay as they were) and shows the file as saved.
+//! Ctrl+Z and Ctrl+Shift+Z undo/redo committed form-field edits before saving.
 //! Ctrl+Shift+G places a typed visual signature. It is visible markup, not a
 //! cryptographically verified digital signature. Ctrl+Shift+/ opens Vellum's
 //! keyboard reference; Escape closes it.
@@ -28,6 +29,8 @@
 mod sample;
 #[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
 mod marks;
+#[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
+mod history;
 #[cfg_attr(not(target_os = "hermit"), allow(dead_code))]
 mod thumb;
 // The pure parts, and those that need only hayro, build and are tested on the host too.

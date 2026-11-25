@@ -15,6 +15,7 @@ Vellum's light, dark, and high-contrast colors.
 | Highlight, add note, list annotations | Ctrl+H; Ctrl+N; Ctrl+L |
 | Remove selected annotation | Delete in the annotation list |
 | Fill a form | Ctrl+E; Ctrl+Down / Ctrl+Up changes fields; Space checks a box |
+| Undo / redo committed form-field edits | Ctrl+Z / Ctrl+Shift+Z, before saving |
 | Place a typed visual signature | Ctrl+Shift+G |
 | Save edits | Ctrl+S |
 
