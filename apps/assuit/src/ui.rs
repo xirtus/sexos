@@ -4,7 +4,7 @@
 //! status line, and turns SexOS keys into WordCraft's shortcuts. Only pages on screen
 //! are drawn, and only again after an edit. WordCraft's egui chrome (ribbon, rulers,
 //! panes) follows with M11.
-use crate::book::{Book, Chord, Picture};
+use crate::book::{Book, Chord, Picture, TableStyleChoice};
 use sex_office::{Canvas, Pen};
 use sex_std::sex_app::{self, Event, Nav};
 use sex_std::sex_pdx::app_key::Key;
@@ -47,10 +47,13 @@ pub struct Ui {
     pen: Pen,
     /// Where each page sat in the last draw: (top in the stack, left, width, height, scale).
     places: Vec<(i32, i32, i32, i32, f32)>,
+    surface_size: (i32, i32),
     /// The Ctrl+F or Ctrl+H prompt, while it is open.
     find: Option<Prompt>,
     /// The Ctrl+Shift+S style list, while it is open: (id, name) and the highlighted row.
     picker: Option<(Vec<(String, String)>, usize)>,
+    /// Native samples for the named table styles in this DOCX document.
+    table_gallery: Option<(Vec<TableStyleChoice>, usize)>,
     /// The Save As or Go To prompt, while it is open.
     ask: Option<Ask>,
     /// Ctrl+Shift+Y's selected issue and its suggestion list.
@@ -127,7 +130,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+L", "Paper size and orientation"),
     ("Ctrl+Shift+M", "Page margins"),
     ("Ctrl+T", "Insert table"),
-    ("Ctrl+Shift+T", "Edit table rows and columns"),
+    ("Ctrl+Shift+T", "Edit table; enter style to browse DOCX table styles"),
     ("Ctrl+Shift+I", "Insert picture"), ("Ctrl+Shift+R", "Picture alt text"),
     ("Ctrl+Shift+O", "Picture width"),
     ("Ctrl+Shift+C", "Crop selected picture"),
@@ -196,7 +199,7 @@ impl Ui {
         let palette = Palette::from_tokens(theme);
         let theme_generation = sex_app::settings::generation().unwrap_or(0);
         sex_std::record(&format!("[assuit.theme] mode={:?} accent={:06x}", theme.mode, palette.selected));
-        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), find: None, picker: None, ask: None, proof: None, dictionary: None, help: false, recovered: false, unkept: None, scroll_to: None, preview_page: None }
+        Ui { palette, theme_generation, book, name, zoom: 1.0, scroll: 0, shown: Vec::new(), message: String::new(), pen: Pen::sans(13), places: Vec::new(), surface_size: (0, 0), find: None, picker: None, table_gallery: None, ask: None, proof: None, dictionary: None, help: false, recovered: false, unkept: None, scroll_to: None, preview_page: None }
     }
 
     fn scale(&mut self, page: usize, width: i32) -> f32 {
@@ -206,6 +209,15 @@ impl Ui {
 
     /// The pages change after an edit: draw them again.
     fn invalidate(&mut self) { self.shown.clear(); }
+
+    fn gallery_bounds(w: i32, view_h: i32, count: usize, at: usize) -> (i32, i32, i32, usize, usize, i32) {
+        let row = 44;
+        let shown = count.min(((view_h - 2 * MARGIN - 63) / row).max(1) as usize);
+        let first = (at + 1).saturating_sub(shown);
+        let bw = (w - 2 * MARGIN).min(450).max(1);
+        let bh = 63 + shown as i32 * row;
+        ((w - bw) / 2, ((view_h - bh) / 2).max(0), bw, shown, first, row)
+    }
 
     /// Lays the pages out one under another for a window `w` wide.
     fn place(&mut self, w: i32) {
@@ -240,6 +252,7 @@ impl Ui {
         let palette = self.palette;
         let (width, height) = window.size();
         let (w, h) = (width as i32, height as i32);
+        self.surface_size = (w, h);
         let view_h = h - STATUS_H;
         self.place(w);
         // Go To: the page's top at the top of the view.
@@ -300,6 +313,31 @@ impl Ui {
                 self.pen.text(&mut canvas, bx + 12, y + 2, name, if i == *at { palette.on_selected } else { palette.ink }, Some((bx, bw - 12)));
             }
         }
+        if let Some((styles, at)) = &self.table_gallery {
+            let (bx, by, bw, shown, first, row) = Self::gallery_bounds(w, view_h, styles.len(), *at);
+            let bh = 63 + shown as i32 * row;
+            canvas.fill(bx + 3, by + 3, bw, bh, palette.shadow);
+            canvas.fill(bx, by, bw, bh, palette.bar_bg);
+            canvas.frame(bx, by, bw, bh, palette.line);
+            self.pen.text(&mut canvas, bx + 12, by + 8, "Assuit table styles", palette.ink, Some((bx, bw - 24)));
+            for (slot, style) in styles.iter().skip(first).take(shown).enumerate() {
+                let y = by + 33 + slot as i32 * row;
+                if first + slot == *at { canvas.fill(bx + 5, y - 3, bw - 10, row - 2, palette.selected); }
+                for r in 0..3 {
+                    for c in 0..3 {
+                        let x = bx + 14 + c * 22;
+                        let cy = y + r * 11;
+                        let color = if r == 0 { style.header } else if r == 1 { style.band } else { style.body };
+                        canvas.fill(x, cy, 21, 10, color);
+                        if style.borders { canvas.frame(x, cy, 21, 10, palette.line); }
+                    }
+                }
+                self.pen.text(&mut canvas, bx + 92, y + 8, &style.name,
+                    if first + slot == *at { palette.on_selected } else { palette.ink }, Some((bx + 92, bw - 105)));
+            }
+            self.pen.text(&mut canvas, bx + 12, by + bh - 25,
+                "Up/Down choose  ·  Enter or click apply  ·  Esc close", palette.dim, Some((bx, bw - 24)));
+        }
         if self.help {
             let row = self.pen.line_height() + 6;
             let bw = (w - 2 * MARGIN).min(520).max(0);
@@ -347,7 +385,7 @@ impl Ui {
                 Ask::SaveAs(name) => format!("Save as: {name}_   {}", said("docx, odt, rtf, html, md, txt or pdf; Enter saves, Esc closes")),
                 Ask::GoTo(page) => format!("Go to page: {page}_   {}", said(&format!("1 to {pages}; Enter goes, Esc closes"))),
                 Ask::Table(size) => format!("Insert table: {size}_   {}", said("rows x columns, for example 2x3; Enter inserts, Esc closes")),
-                Ask::TableEdit(action) => format!("Table: {action}_   {}", said("row/column edits, merge/split, shade RRGGBB, border kind, style NAME")),
+                Ask::TableEdit(action) => format!("Table: {action}_   {}", said("row/column edits, merge/split, shade, border, style to browse, or style NAME")),
                 Ask::Picture(path) => format!("Insert picture: {path}_   {}", said("PNG, JPEG, GIF, WebP or BMP in this program's folder; Enter inserts")),
                 Ask::PictureAlt(alt) => format!("Picture description: {alt}_   {}", said("Describe the selected picture for readers who cannot see it")),
                 Ask::PictureWidth(width) => format!("Picture width: {width}_   {}", said("Inches, 0.1 to 20; proportions stay the same")),
@@ -369,6 +407,8 @@ impl Ui {
                     format!("Find: {}{a}   Replace with: {with}{b}   {said}", p.what)
                 }
             }
+        } else if let Some((styles, at)) = &self.table_gallery {
+            format!("Table styles: {} of {}  ·  {}", at + 1, styles.len(), styles[*at].name)
         } else if let Some(dict) = &self.dictionary {
             format!("Custom dictionary: {} words   {}", dict.words.len(), self.message)
         } else if let Some(proof) = &self.proof {
@@ -528,6 +568,19 @@ impl Ui {
             return;
         }
         if matches!(ask, Ask::TableEdit(_)) {
+            if typed.eq_ignore_ascii_case("style") {
+                match self.book.table_styles() {
+                    Ok(styles) if !styles.is_empty() => {
+                        sex_std::record(&format!("[assuit.table-gallery.open] styles={}", styles.len()));
+                        self.ask = None;
+                        self.table_gallery = Some((styles, 0));
+                        self.message.clear();
+                    }
+                    Ok(_) => self.message = "This document has no table styles".into(),
+                    Err(e) => self.message = e,
+                }
+                return;
+            }
             match self.book.edit_table(&typed) {
                 Ok(description) => {
                     self.ask = None;
@@ -707,6 +760,7 @@ impl Ui {
         if self.ask.is_some() { return self.ask_key(key); }
         if self.find.is_some() { return self.find_key(key); }
         if self.picker.is_some() { return self.picker_key(key); }
+        if self.table_gallery.is_some() { return self.table_gallery_key(key); }
         if self.proof.is_some() { return self.proof_key(key); }
         if self.recovered && key.code == code::ESC && !key.control { return self.discard_recovered(); }
         self.message.clear();
@@ -919,6 +973,32 @@ impl Ui {
         }
     }
 
+    fn apply_table_gallery(&mut self, at: usize) {
+        let Some((styles, _)) = self.table_gallery.take() else { return };
+        let Some(style) = styles.get(at) else { return };
+        match self.book.edit_table(&format!("style {}", style.name)) {
+            Ok(_) => {
+                sex_std::record(&format!("[assuit.table-gallery.applied] name={}", style.name));
+                self.message = format!("Table style: {}", style.name);
+                self.invalidate();
+            }
+            Err(e) => { self.message = e; self.table_gallery = Some((styles, at)); }
+        }
+    }
+
+    fn table_gallery_key(&mut self, key: Key) {
+        let Some((styles, at)) = &mut self.table_gallery else { return };
+        match (key.code, sex_app::nav(key)) {
+            (code::ESC, _) => { self.table_gallery = None; sex_std::record("[assuit.table-gallery.closed]"); },
+            (_, Some(Nav::Up)) => *at = at.saturating_sub(1),
+            (_, Some(Nav::Down)) => *at = (*at + 1).min(styles.len() - 1),
+            (c, _) if code::page_up(c) => *at = at.saturating_sub(6),
+            (c, _) if code::page_down(c) => *at = (*at + 6).min(styles.len() - 1),
+            (code::ENTER, _) => { let at = *at; self.apply_table_gallery(at); },
+            _ => {}
+        }
+    }
+
     /// A click puts the caret where it lands; dragging with the button held selects;
     /// the wheel scrolls.
     fn pointer(&mut self, p: Pointer) -> bool {
@@ -928,6 +1008,16 @@ impl Ui {
                 return true;
             }
             return false;
+        }
+        if let Some((styles, at)) = &self.table_gallery {
+            let Kind::Down { button: 0 } = p.kind else { return false };
+            let (width, height) = self.surface_size;
+            let (bx, by, bw, shown, first, row) = Self::gallery_bounds(width, height - STATUS_H, styles.len(), *at);
+            let (x, y) = (p.x as i32, p.y as i32);
+            if x < bx || x >= bx + bw || y < by + 33 || y >= by + 33 + shown as i32 * row { return false; }
+            let index = first + ((y - by - 33) / row) as usize;
+            self.apply_table_gallery(index);
+            return true;
         }
         // The style list is modal: the pages under it do not take clicks.
         if self.picker.is_some() || self.dictionary.is_some() { return false; }

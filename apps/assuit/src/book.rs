@@ -8,12 +8,22 @@ use std::sync::Arc;
 use std::io::{Read, Write};
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
-use wordcraft_engine::doc::{Document, StoryRef};
+use wordcraft_engine::doc::{Document, StoryRef, StyleKind};
 use wordcraft_engine::layout::DocLayout;
 use wordcraft_engine::render::{RenderOptions, render_page};
 
 /// A drawn page: 0x00RRGGBB pixels, width, height.
 pub struct Picture { pub pixels: Vec<u32>, pub width: usize, pub height: usize }
+
+/// One real table style in the open document, with colours for a native sample.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableStyleChoice {
+    pub name: String,
+    pub header: u32,
+    pub body: u32,
+    pub band: u32,
+    pub borders: bool,
+}
 
 /// Where the caret is: page, and its top-left and height in page points.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,6 +119,31 @@ impl Book {
             .filter(|s| s["inGallery"] == true && s["hidden"] != true && matches!(s["type"].as_str(), Some("paragraph" | "linked")))
             .filter_map(|s| Some((s["id"].as_str()?.to_string(), s["name"].as_str()?.to_string())))
             .collect()
+    }
+
+    /// Available DOCX table styles, including inherited conditional fills.
+    /// ODT cannot keep a named table style through WordCraft's writer yet.
+    pub fn table_styles(&self) -> Result<Vec<TableStyleChoice>, String> {
+        if self.save_path().to_ascii_lowercase().ends_with(".odt") {
+            return Err("ODT named table styles do not round-trip yet; save as DOCX for this command".into());
+        }
+        let sheet = &self.session.doc.styles;
+        let rgb = |c: wordcraft_engine::doc::Rgb| (u32::from(c.0) << 16) | (u32::from(c.1) << 8) | u32::from(c.2);
+        let mut styles: Vec<_> = sheet.styles.iter()
+            .filter(|style| style.kind == StyleKind::Table && !style.hidden)
+            .filter_map(|style| {
+                let parts = sheet.table_style(&style.id)?.parts;
+                let body = parts.fill.map(rgb).unwrap_or(0xFFFFFF);
+                Some((style.priority.unwrap_or(u32::MAX), TableStyleChoice {
+                    name: style.name.clone(),
+                    header: parts.header_fill.map(rgb).unwrap_or(body),
+                    body,
+                    band: parts.band_fill.map(rgb).unwrap_or(body),
+                    borders: parts.borders.is_some() || parts.header_borders.is_some(),
+                }))
+            }).collect();
+        styles.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+        Ok(styles.into_iter().map(|(_, style)| style).collect())
     }
 
     /// The style name of the caret's paragraph.
@@ -989,6 +1024,25 @@ mod tests {
             book.save().unwrap();
             assert_eq!(style(&Book::open(&path).unwrap()).as_deref(), Some("GridTable1Light"), "{ext} lost named table style");
         }
+    }
+
+    #[test]
+    fn table_gallery_lists_real_docx_styles_and_applies_choice() {
+        let path = temp("table-gallery.docx");
+        let mut book = Book::blank(&path);
+        book.insert_table(2, 2).unwrap();
+        let choices = book.table_styles().unwrap();
+        assert!(!choices.is_empty());
+        let chosen = choices.iter().find(|s| s.name == "Grid Table 1 Light").unwrap();
+        assert!(chosen.borders || chosen.header != chosen.body || chosen.band != chosen.body,
+            "sample should show a real style feature");
+        book.edit_table(&format!("style {}", chosen.name)).unwrap();
+        book.save().unwrap();
+        let reopened = Book::open(&path).unwrap();
+        let table = reopened.session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(table.props.style.as_deref(), Some("GridTable1Light"));
+        let odt = Book::blank(&temp("table-gallery.odt"));
+        assert!(odt.table_styles().unwrap_err().contains("ODT named table styles"));
     }
 
     #[test]
