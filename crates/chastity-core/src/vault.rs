@@ -187,6 +187,15 @@ impl Vault {
         match self.db.entry_mut(id) { Some(e) => { e.remove(); true } None => false }
     }
 
+    /// Replace only the protected password field. The caller must first check
+    /// the entry's account scope; this method is deliberately crate-private.
+    pub(crate) fn replace_password(&mut self, id: EntryId, password: &str) -> bool {
+        match self.db.entry_mut(id) {
+            Some(mut e) => { e.set_protected(fields::PASSWORD, password); true }
+            None => false,
+        }
+    }
+
     pub fn detail(&self, id: EntryId) -> Option<Detail> {
         let e = self.db.entry(id)?;
         Some(Detail {

@@ -9,7 +9,9 @@ and Shields. The remaining gaps are:
   unambiguous same-origin POST login pair. This slice wires explicit Ctrl+Shift+K
   requests to Chastity, rechecks the
   tab and document after approval, and cancels pending requests on navigation
-  or tab changes. Passkeys and save/update prompts remain.
+  or tab changes. A browser capture policy and Chastity's scoped add/update
+  decision are host-tested; the Shell write transfer, visible Chastity approval,
+  browser command, and passkeys remain.
 - A visible per-site settings view for Shields and stored data. This change adds a
   first view and controls; permission prompts and a full settings catalog remain.
 - Stronger tab isolation, developer tools, extensions, and browser compatibility.

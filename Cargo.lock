@@ -8005,6 +8005,7 @@ dependencies = [
  "sex-image",
  "sex-js",
  "sex-theme",
+ "zeroize",
 ]
 
 [[package]]

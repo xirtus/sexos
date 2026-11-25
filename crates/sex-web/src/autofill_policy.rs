@@ -3,6 +3,7 @@
 //! This module only identifies a page and two controls; it never handles secrets.
 use alloc::string::String;
 use sex_html::dom::{Dom, NodeId};
+use zeroize::Zeroizing;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refusal {
@@ -12,6 +13,38 @@ pub enum Refusal {
     NoLogin,
     Ambiguous,
     UnsafeAction,
+    Empty,
+    Oversize,
+}
+
+/// A bounded snapshot from two current form controls, created only by an
+/// explicit browser command. No persistent browser profile field owns it.
+pub struct SaveLogin {
+    pub origin: String,
+    pub username: Zeroizing<String>,
+    pub password: Zeroizing<String>,
+    pub username_node: NodeId,
+    pub password_node: NodeId,
+}
+
+/// Capture only user/script-updated control values, never markup defaults.
+/// The caller must recheck tab, document identity, origin and visibility both
+/// before capture and before any eventual consented transfer.
+pub fn save_login(dom: &Dom, url: &str, in_frame: bool) -> Result<SaveLogin, Refusal> {
+    let pair = login(dom, url, in_frame)?;
+    let user = dom.values.get(&pair.username).ok_or(Refusal::Empty)?;
+    let pass = dom.values.get(&pair.password).ok_or(Refusal::Empty)?;
+    if user.is_empty() || pass.is_empty() || user.contains('\0') || pass.contains('\0') {
+        return Err(Refusal::Empty);
+    }
+    if user.len() > 4096 || pass.len() > 4096 { return Err(Refusal::Oversize); }
+    Ok(SaveLogin {
+        origin: pair.origin,
+        username: Zeroizing::new(user.clone()),
+        password: Zeroizing::new(pass.clone()),
+        username_node: pair.username,
+        password_node: pair.password,
+    })
 }
 
 pub struct Login {
