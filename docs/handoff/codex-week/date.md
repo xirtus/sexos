@@ -23,3 +23,6 @@ Remaining gaps:
 - Date already routes reminders, alarms and timers to Bell. A visible notice can
   now be snoozed for five minutes with Shift+S; the new timer survives restart.
   System-wide delivery after Date itself closes still needs a userspace service.
+- Ctrl+Z/Ctrl+Y now undo and redo local event additions and removals, with each
+  result saved immediately. A CalDAV sync clears the history so undo cannot roll
+  back server changes. Clock edits and invitation replies still need undo.

@@ -95,7 +95,20 @@ def main():
   q.key('ret');time.sleep(.3);s=len(t());q.key('n');time.sleep(.3);keys('09:30 dentist');q.key('ret')
   g['wait'](r'\[calendar.added\] date=2026-03-16 when=09:30-10:30 title=dentist\n',s,30);g['wait'](r'\[calendar.saved\] events=7 ',s,60)
   g['wait'](r'\[date.save.committed\] file=events.txt bytes=\d+',s,60)
+  # Event history is saved at each step, and redo restores the same event.
+  s=len(t());g['chord']('ctrl','z',r'\[date.undo\] events=6\n')
+  g['wait'](r'\[calendar.saved\] events=6 ',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-event-undo.ppm')})
+  s=len(t());g['chord']('ctrl','y',r'\[date.redo\] events=7\n')
+  g['wait'](r'\[calendar.saved\] events=7 ',s,60)
   s=len(t());q.key('ret');g['wait'](r'\[calendar.day\] date=2026-03-16 events=5\n',s,30)
+  s=len(t());q.key('delete')
+  removed=g['wait'](r'\[calendar.removed\] date=2026-03-16 title=([^\n]+)\n',s,30)
+  assert removed[1],removed[0]
+  g['chord']('ctrl','z',r'\[date.undo\] events=7\n')
+  g['chord']('ctrl','y',r'\[date.redo\] events=6\n')
+  g['chord']('ctrl','z',r'\[date.undo\] events=7\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'date-event-restored.ppm')})
   # The 23rd is the weekly meeting's last (COUNT=4) and the 20th has only lunch: the
   # daily standup's UNTIL is that midnight.
   q.key('ret');time.sleep(.3)

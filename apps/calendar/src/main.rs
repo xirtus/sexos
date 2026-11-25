@@ -10,6 +10,8 @@
 //! Keys, anywhere: `m` month, `w` week, `d` day, `c` clock, `l` calendars, `s` sync,
 //! `e` export every shown event to `date-export.ics`.
 //! `v` reviews local copies kept after CalDAV conflicts; press again for the next.
+//! Ctrl+Z / Ctrl+Y undo and redo local event additions and removals until the
+//! next server sync or other calendar change.
 //! Month: arrows move a day or a week, PageUp and PageDown a month, Home (or `t`)
 //! today, Enter opens the chosen day and Esc goes back, `n` adds an event (start it
 //! with `HH:MM` to give it a time). An open day: Up/Down pick, Delete removes, `a`
@@ -36,6 +38,7 @@ use draw::Face;
 use sex_app::{files, settings, Event, Nav, Window};
 use sex_calendar::clock::{self, Alarm, Clock, Timer};
 use sex_calendar::{ics, tz, Calendar, Date, Event as Entry, MonthGrid, PartStat, SyncState};
+use sex_calendar::history::{EventEdit, EventHistory};
 use sex_calendar::conflicts;
 use sex_dav::FileAccount;
 use sex_pdx::app_pointer::Kind;
@@ -61,6 +64,7 @@ pub enum Ask { Event, Alarm, Timer, Zone, Home, NewCalendar }
 
 pub struct App {
     pub cal: Calendar,
+    event_history: EventHistory,
     pub clock: Clock,
     pub today: Date,
     pub selected: Date,
@@ -235,6 +239,7 @@ impl App {
                 let invitations = events.iter().filter(|e| e.invitation).count();
                 for e in &mut events { e.calendar = self.target; if e.uid.is_empty() { e.uid = self.new_uid(); } }
                 let added = self.cal.merge(events);
+                if added > 0 { self.event_history.clear(); }
                 sex_pdx::serial_record!("[calendar.imported] events={} added={}", found, added);
                 if invitations > 0 { sex_pdx::serial_record!("[date.invitations] count={}", invitations); }
                 self.status = if invitations > 0 { format!("{invitations} invitation(s) from {name}: open the day, a accepts, x declines.") }
@@ -301,6 +306,7 @@ impl App {
             Ok((pulled, pushed, conflicts))
         })();
         self.cal = cal;
+        self.event_history.clear();
         match result {
             Ok((pulled, pushed, conflicts)) => {
                 sex_pdx::serial_record!("[date.sync.done] events={} pulled={} pushed={} conflicts={}", self.cal.events.len(), pulled, pushed, conflicts);
@@ -328,6 +334,7 @@ impl App {
         let me: Vec<&str> = me.iter().map(String::as_str).collect();
         let Some(e) = self.cal.events.iter_mut().find(|e| **e == target) else { return };
         if !e.respond(&me, answer) { self.status = String::from("No attendee to answer for."); return; }
+        self.event_history.clear();
         let reply = ics::reply(e, &me, &stamp(self.now_ms)).unwrap_or_default();
         let uid = e.uid.clone();
         // Valentine sends replies; until then the reply waits in this folder.
@@ -396,7 +403,9 @@ impl App {
                 if !self.cal.info(self.target).url.is_empty() { e.state = SyncState::New; }
                 sex_pdx::serial_record!("[calendar.added] date={} when={} title={}", e.start, when(&e), e.title);
                 self.status = format!("Added \"{}\" on {}.", e.title, e.start);
-                self.cal.events.push(e);
+                let index = self.cal.events.len();
+                self.cal.events.push(e.clone());
+                self.event_history.push(EventEdit { index, before: None, after: Some(e) });
                 self.save(window);
             }
             Ask::Alarm => {
@@ -437,6 +446,7 @@ impl App {
                 None => self.status = format!("No zone called {text}."),
             },
             Ask::NewCalendar => {
+                self.event_history.clear();
                 let id = self.cal.add_calendar(&text, "");
                 self.target = id;
                 sex_pdx::serial_record!("[date.calendar.added] id={} name={}", id, text);
@@ -481,6 +491,18 @@ impl App {
             }
             return;
         }
+        if key.control && (key.code == 0x2C || key.code == 0x15) {
+            let redo = key.code == 0x15 || key.shift;
+            let changed = if redo { self.event_history.redo(&mut self.cal.events) }
+                else { self.event_history.undo(&mut self.cal.events) };
+            if changed {
+                self.picked = self.picked.min(self.cal.on_day(self.selected).len().saturating_sub(1));
+                self.status = String::from(if redo { "Redid event change." } else { "Undid event change." });
+                self.save(window);
+                sex_pdx::serial_record!("[date.{}] events={}", if redo { "redo" } else { "undo" }, self.cal.events.len());
+            } else { self.status = String::from(if redo { "Nothing to redo." } else { "Nothing to undo." }); }
+            return;
+        }
         if typed == Some(b'v') { self.review_next(); return; }
         if self.agenda {
             match (key.code, sex_app::nav(key), typed) {
@@ -489,10 +511,17 @@ impl App {
                 (_, Some(Nav::Down), _) => self.picked = (self.picked + 1).min(self.cal.on_day(self.selected).len().saturating_sub(1)),
                 (_, Some(Nav::Delete), _) | (0x6F, _, _) => {
                     let Some(gone) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
+                    let Some(index) = self.cal.events.iter().position(|e| *e == gone) else { return };
                     // Removes the whole event, every repeat of it included; one on a
                     // server waits to be deleted there at the next sync.
-                    for e in self.cal.events.iter_mut().filter(|e| **e == gone) { if !e.href.is_empty() { e.state = SyncState::Deleted; } }
-                    self.cal.events.retain(|e| *e != gone || e.state == SyncState::Deleted);
+                    let after = if gone.href.is_empty() {
+                        self.cal.events.remove(index);
+                        None
+                    } else {
+                        self.cal.events[index].state = SyncState::Deleted;
+                        Some(self.cal.events[index].clone())
+                    };
+                    self.event_history.push(EventEdit { index, before: Some(gone.clone()), after });
                     sex_pdx::serial_record!("[calendar.removed] date={} title={}", self.selected, gone.title);
                     self.status = format!("Removed \"{}\".", gone.title);
                     self.picked = self.picked.saturating_sub(1);
@@ -585,6 +614,7 @@ impl App {
         }
     }
     fn toggle_calendar(&mut self, window: &mut Window, id: u16) {
+        self.event_history.clear();
         let shown = self.cal.toggle(id);
         sex_pdx::serial_record!("[date.calendar.toggled] id={} visible={}", id, shown as u8);
         self.save(window);
@@ -643,7 +673,7 @@ pub extern "C" fn _start() -> ! {
     let palette = views::Palette::from_tokens(theme);
     let theme_generation = settings::generation().unwrap_or(0);
     sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
-    let mut app = App { cal, clock, today, selected: today, view: View::Month, palette, theme_generation,
+    let mut app = App { cal, event_history: EventHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
         help: false, help_offset: 0, review: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
         picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: minute, uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
