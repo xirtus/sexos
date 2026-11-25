@@ -307,6 +307,23 @@ impl Book {
         Ok(())
     }
 
+    /// Add a dynamic page field to the current section's repeating header or
+    /// footer. The engine owns the field, layout and DOCX/ODT serialization.
+    pub fn insert_page_numbers(&mut self, input: &str) -> Result<(), String> {
+        const HELP: &str = "Enter top or bottom, then left, center or right; add 'of' for Page X of Y";
+        let words: Vec<_> = input.split_whitespace().collect();
+        if !(words.len() == 2 || words.len() == 3 && words[2].eq_ignore_ascii_case("of")) {
+            return Err(HELP.into());
+        }
+        let position = words[0].to_ascii_lowercase();
+        let align = words[1].to_ascii_lowercase();
+        if !matches!(position.as_str(), "top" | "bottom")
+            || !matches!(align.as_str(), "left" | "center" | "right") { return Err(HELP.into()); }
+        let format = if words.len() == 3 { "x of y" } else { "" };
+        self.run("insert.pageNumber", json!({ "position": position, "align": align, "format": format }))
+            .map(|_| ())
+    }
+
     /// Set page margins with a named preset or top, bottom, left, right in inches.
     /// WordCraft checks that the resulting section leaves room for text.
     pub fn set_margins(&mut self, input: &str) -> Result<(), String> {
@@ -1047,6 +1064,39 @@ mod tests {
             let mut reopened = Book::open(&path).unwrap();
             let (w, h) = reopened.page_size(0);
             assert!(w > h && (w - 842.0).abs() < 2.0 && (h - 595.0).abs() < 2.0, "{ext}: {w} × {h}");
+        }
+    }
+
+    #[test]
+    fn page_numbers_are_dynamic_and_round_trip_in_docx_and_odt() {
+        use wordcraft_engine::doc::InlineObject;
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("page-numbers.{ext}"));
+            let mut book = Book::blank(&path);
+            book.type_text("Numbered pages").unwrap();
+            for bad in ["", "bottom", "middle center", "bottom middle", "bottom center junk"] {
+                assert!(book.insert_page_numbers(bad).is_err(), "{bad}");
+            }
+            let unnumbered = book.draw(0, 2.0).unwrap().pixels;
+            book.insert_page_numbers("bottom right of").unwrap();
+            assert_ne!(book.draw(0, 2.0).unwrap().pixels, unnumbered,
+                "page number must appear on the rendered page");
+            let fields = |b: &Book| {
+                let id = b.session.doc.last_section.footers.default.expect("footer exists");
+                b.session.doc.story(StoryRef::Part(id)).unwrap().iter()
+                    .filter_map(|block| block.as_para())
+                    .flat_map(|para| &para.objects)
+                    .filter_map(|object| match object {
+                        InlineObject::Field { instr, .. } => Some(instr.as_str()),
+                        _ => None,
+                    }).map(str::to_string).collect::<Vec<_>>()
+            };
+            assert_eq!(fields(&book), ["PAGE", "NUMPAGES"]);
+            book.insert_page_numbers("bottom left").unwrap();
+            assert_eq!(fields(&book), ["PAGE"], "reformatting must replace generated fields");
+            book.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            assert_eq!(fields(&reopened), ["PAGE"], "{ext} lost its dynamic page field");
         }
     }
 

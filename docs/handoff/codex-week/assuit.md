@@ -13,6 +13,11 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   before/after, but Assuit currently has no native control for these common
   document edits. This slice adds a bounded paragraph-spacing prompt and checks
   DOCX/ODT save and reopen. More advanced exact/at-least line heights remain.
+- **Page numbering:** WordCraft can insert dynamic page fields in a header or
+  footer, but Assuit has no native control for it. This slice exposes bounded
+  top/bottom and left/center/right choices, checks the visible page and
+  DOCX/ODT save/reopen. Removing an existing page number and section-specific
+  numbering controls remain.
 - **List editing:** WordCraft can create bullet and numbered lists, but Assuit
   exposes no native way to choose numbered formats, remove a list, or restart
   numbering. This slice adds a bounded list prompt for those document edits and
