@@ -4,8 +4,9 @@
 A FAT32 USB stick holds a folder `docs` (two text files and a 300 KiB file in `docs/sub`),
 a folder `ren` with three files, and `host.tar.gz` made on the host. Files, given that
 stick:
-1. packs `docs` into `docs.zip` (Ctrl+Shift+A), browses into it (Enter, then into its
-   `docs` folder) and out (Backspace), then extracts it (Ctrl+Shift+X) into a new folder;
+1. packs `docs` into `docs.zip` (Ctrl+Shift+A), plain tar (Ctrl+Shift+N),
+   tar.gz (Ctrl+Shift+F, then 3) and tar.zst (Ctrl+Shift+M), browses into each,
+   then extracts the zip (Ctrl+Shift+X) into a new folder;
 2. compares `docs` with the extracted copy (Ctrl+Shift+C): everything is the same;
 3. browses into `host.tar.gz`, made by another program;
 4. renames the files in `ren` by the mask `pic_[C:2]` (Ctrl+Shift+R), takes it back with
@@ -261,6 +262,17 @@ def main():
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   q.key('down');time.sleep(.3);q.key('down');time.sleep(.3)
   step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren count=3\b')
+  # Cut one.txt and paste it within the same FAT32 volume, then undo/redo/undo.
+  ctrl('x');time.sleep(.3)
+  step(lambda:ctrl('h'),r'\[files.app.list\] dir=/media/LOOM count=5\b')
+  step(lambda:ctrl('v'),r'\[files.app.pasted\] from=/media/LOOM/ren/one.txt to=/media/LOOM/one.txt cut=1')
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  step(lambda:ctrl('y'),r'\[files.app.redone\] left=0')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'same-volume-redone.ppm')})
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  q.key('home');time.sleep(.2)
+  q.key('down');time.sleep(.2);q.key('down');time.sleep(.2)
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/ren count=3\b')
   for n in (1,2):
    step(lambda:cs('r'),r'\[files.app.rename.start\] dir=/media/LOOM/ren items=3')
    for _ in range(3):q.key('backspace');time.sleep(.05)
@@ -270,6 +282,8 @@ def main():
    g['wait'](r'\[files.app.renamed.file\] from=one.txt to=pic_01.txt',0,5)
    if n==1:
     step(lambda:ctrl('z'),r'\[files.app.undone\]');g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  # The second rename cleared redo (FAT32 has no stable IDs for rename redo anyway).
+  step(lambda:ctrl('y'),r'\[files.app.redo.empty\]')
   # Shift+Down selects the first two rows; Delete and one undo cover both.
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   step(lambda:chord('down','shift'),r'\[files.app.selection\] count=2 first=0 last=1')
@@ -406,22 +420,24 @@ def main():
   assert int(m[1])>=4,m[0]
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar-zst.ppm')})
   step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar.zst')
-  # The format picker uses the same streaming writer and staged promotion.
+  # Ctrl+Shift+N packs plain tar directly; the Ctrl+Shift+F picker packs
+  # tar.gz. Both use the same streaming writer and staged promotion.
+  step(lambda:q.key('home'),r'\[display.text.committed\]',10)
+  m=step(lambda:cs('n'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar files=(\d+) bytes=(\d+)',180)
+  assert int(m[1])==3 and int(m[2])>0,m[0]
+  m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar format=Tar entries=(\d+)',180)
+  assert int(m[1])>=4,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar.ppm')})
+  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar')
   q.key('home');time.sleep(.2)
   step(lambda:cs('f'),r'\[files.app.archive.format\] selected=/media/LOOM/docs')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'loom-pack-format.ppm')})
   assert (a.out/'loom-pack-format.ppm').stat().st_size>10000
-  m=step(lambda:q.key('2'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar files=(\d+) bytes=(\d+)',180)
-  assert int(m[1])==3 and int(m[2])>0,m[0]
-  m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar format=Tar entries=(\d+)',180)
-  assert int(m[1])>=4,m[0]
-  step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar')
-  q.key('home');time.sleep(.2)
-  step(lambda:cs('f'),r'\[files.app.archive.format\] selected=/media/LOOM/docs')
   m=step(lambda:q.key('3'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.tar.gz files=(\d+) bytes=(\d+)',180)
   assert int(m[1])==3 and int(m[2])>0,m[0]
   m=step(lambda:q.key('ret'),r'\[files.app.archive.opened\] path=/media/LOOM/docs.tar.gz format=TarGz entries=(\d+)',180)
   assert int(m[1])>=4,m[0]
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'inside-tar-gz.ppm')})
   step(lambda:q.key('esc'),r'\[files.app.archive.left\] path=/media/LOOM/docs.tar.gz')
   step(lambda:q.key('f11'),r'\[files.app.closed\]');time.sleep(2)
   # 7. Disk and CD images, on a second stick.

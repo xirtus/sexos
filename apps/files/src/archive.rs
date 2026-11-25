@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Archives in Files: Enter on a zip, tar (plain, gz, zst, xz) or 7z browses into it as a
 //! read-only folder; Ctrl+Shift+X extracts it next to itself (or, inside one, copies the
-//! selected item out); Ctrl+Shift+A packs the selected file or folder into a zip.
+//! selected item out); Ctrl+Shift+A/N/M packs the selected file or folder
+//! into zip, tar or tar.zst, and Ctrl+Shift+F picks zip, tar, tar.gz or tar.zst.
 //!
 //! The archive is read through Files' own file calls a piece at a time, never loaded
 //! whole. What is extracted or packed is written under a hidden `.NAME.part` name and
@@ -364,7 +365,7 @@ impl App {
                     Some(why) => format!("Extracted {} safely, but hidden partial cleanup is unconfirmed: {}. Ctrl+Z takes the extracted output back.", shown(base(&to)), why),
                     None => format!("Extracted {} ({} files, {}). Ctrl+Z takes it back.", shown(base(&to)), writer.files, human(writer.bytes)),
                 };
-                self.undo.push(Undo::Copied { to: to.clone() });
+                self.record_undo(Undo::Copied { to: to.clone() });
             }
             ArchiveEnd::Stopped => {
                 let cleaned = self.remove_all(window, &part).is_ok() && files::sync(window).is_ok();
@@ -411,10 +412,12 @@ impl App {
         self.make_archive(window, OutputFormat::TarZst, b".tar.zst", "tar.zst");
     }
 
+    /// Ctrl+Shift+N, or Ctrl+Shift+F then 2: an uncompressed tar.
     pub(crate) fn make_tar(&mut self, window: &mut Window) {
         self.make_archive(window, OutputFormat::Tar, b".tar", "tar");
     }
 
+    /// Ctrl+Shift+F then 3: gzip-compressed tar for widely shared archives.
     pub(crate) fn make_tar_gz(&mut self, window: &mut Window) {
         self.make_archive(window, OutputFormat::TarGz, b".tar.gz", "tar.gz");
     }
@@ -474,7 +477,7 @@ impl App {
             ArchiveEnd::Done => {
                 sex_pdx::serial_record!("[files.app.archive.created] from={} to={} files={} bytes={}", shown(&path), shown(&to), files_n, sink.offset);
                 self.status = format!("Packed {} into {} ({}). Ctrl+Z takes it back.", shown(&name), shown(base(&to)), human(sink.offset));
-                self.undo.push(Undo::Copied { to: to.clone() });
+                self.record_undo(Undo::Copied { to: to.clone() });
             }
             ArchiveEnd::Stopped => {
                 let cleaned = files::remove(window, &at(&part)).is_ok() && files::sync(window).is_ok();

@@ -3,7 +3,7 @@
 //! and the few calls Files makes into them for keys, drawing and background work.
 //!
 //! Keys: Enter on an archive browses into it, Ctrl+Shift+X extracts, Ctrl+Shift+A packs
-//! a zip, Ctrl+Shift+M packs tar.zst, Ctrl+Shift+F chooses an archive format;
+//! a zip, Ctrl+Shift+N packs tar, Ctrl+Shift+M packs tar.zst, Ctrl+Shift+F chooses an archive format;
 //! Ctrl+0..Ctrl+5 rate, Ctrl+Shift+G tags; Ctrl+Shift+R batch renames;
 //! Ctrl+Shift+D finds duplicates; Ctrl+U maps disk usage; Ctrl+Shift+C compares folders.
 //! Enter on a disk or CD image (`.iso`, `.img`, `.qcow2`, `.vhd(x)`, `.vmdk`, ...) browses it
@@ -30,6 +30,7 @@ const KEY_O: u8 = 0x18;
 const KEY_P: u8 = 0x19;
 const KEY_M: u8 = 0x32;
 const KEY_F: u8 = 0x21;
+const KEY_N: u8 = 0x31;
 /// `1`..`5` are 0x02..0x06; `0` is 0x0B.
 const KEY_0: u8 = 0x0B;
 
@@ -123,6 +124,8 @@ impl App {
                     sex_pdx::serial_record!("[files.app.archive.format] selected={}", shown(&self.selected().unwrap()));
                 }
                     else { self.status = String::from("Choose one file or folder to pack."); },
+                // Ctrl+Shift+B stays with local Places in main.rs; tar.gz is in the Ctrl+Shift+F picker.
+                KEY_N => self.make_tar(window),
                 KEY_X => self.extract_any(window),
                 KEY_O => self.actions_open(window),
                 KEY_P => self.places_open(window),

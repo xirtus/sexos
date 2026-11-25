@@ -616,6 +616,8 @@ jobs:
       run: python3 scripts/files_theme_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-theme"
     - name: Files archives, disk and CD images, SFTP and WebDAV places, batch rename, ratings, duplicates, disk usage and compare
       run: python3 scripts/files_loom_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-loom"
+    - name: Loom cross-volume move undo and redo
+      run: python3 scripts/program_files_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-cross-redo"
     - name: ext4 stick written from SexOS, e2fsck clean
       run: python3 scripts/files_ext4_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/blank-usb.img" --out "$RUNNER_TEMP/sexos-files-ext4"
     - name: Encrypted home unlocks with its password, unreadable without it
@@ -677,6 +679,8 @@ jobs:
           ${{ runner.temp }}/sexos-files-thumbs/*.ppm
           ${{ runner.temp }}/sexos-files-loom/*.ppm
           ${{ runner.temp }}/sexos-files-loom/*.log
+          ${{ runner.temp }}/sexos-files-cross-redo/*.ppm
+          ${{ runner.temp }}/sexos-files-cross-redo/*.log
           ${{ runner.temp }}/sexos-fs-repair/*.log
           ${{ runner.temp }}/sexos-raid
           ${{ runner.temp }}/sexos-power

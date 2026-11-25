@@ -21,7 +21,9 @@ Remaining gaps:
 - Broader preview types and archive creation formats. ZIP and tar.zst can now
   be created from a selected file or folder. Ctrl+Shift+F opens a format picker
   for ZIP, plain tar, tar.gz and tar.zst, all using the same staged streaming
-  writer and one-step undo. Archive creation and extraction now sync the hidden
+  writer and one-step undo. Ctrl+Shift+N also packs plain tar directly; tar.gz
+  stays in the picker because Ctrl+Shift+B belongs to local Places. Archive
+  creation and extraction now sync the hidden
   complete output before promotion and the visible rename before reporting
   success. A failed final sync reports unconfirmed storage instead of offering
   undo. Archive files on SexFS and encrypted home now use no-replace checked
@@ -67,7 +69,12 @@ Remaining gaps:
 - The in-app controls have a standalone reference in `docs/apps/loom-shortcuts.md`.
   Folder navigation now saves the active tab's new path after startup recovery.
   The GitHub CI gate cuts VM power after a completed two-tab session save,
-  reattaches the same USB disk and captures the restored tabs. Ctrl+Y now redoes
+  reattaches the same USB disk and captures the restored tabs. Ctrl+Y redoes
   one undone batch rename, with checked source/destination moves on SexFS and a
-  QEMU screenshot of the redone folder. Other file operations still need redo;
-  removable volumes cannot offer atomic collision checks without stable IDs.
+  QEMU screenshot of the redone folder; removable volumes cannot offer atomic
+  collision checks without stable IDs, so their batch rename redo is refused.
+  Ctrl+Y also replays undone single-item trash moves, with metadata and trash
+  origin notes restored. Ordinary rename and empty-folder creation are
+  replayable too, as are cut-and-paste moves across and within volumes.
+  Cross-volume undo and redo wait for their background transfer before changing
+  history. Redo for copy and for multi-item trash, cut and copy groups remain.

@@ -506,7 +506,7 @@ impl App {
             End::Done => {
                 sex_pdx::serial_record!("[files.app.places.downloaded] place={} member={} to={} files={} bytes={}", place, top, shown(&to), files_n, done);
                 self.status = format!("Copied down {} ({} files, {}) into {}. Ctrl+Z takes it back.", name, files_n, crate::human(done), shown(&home));
-                self.undo.push(Undo::Copied { to });
+                self.record_undo(Undo::Copied { to });
             }
             End::Stopped => { let _ = self.remove_all(window, &part); self.status = "Stopped downloading: nothing half-copied was left.".into(); sex_pdx::serial_record!("[files.app.places.cancelled] kind=download place={}", place); }
             End::Failed(why) => {

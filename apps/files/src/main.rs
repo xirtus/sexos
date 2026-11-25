@@ -83,12 +83,13 @@ const HOME: &[u8] = sex_pdx::home_lock::HOME;
 const HOME_MIB: u64 = 256;
 
 /// One step Ctrl+Z can take back.
-enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> },
+enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, MovedSame { from: Vec<u8>, to: Vec<u8> }, RenamedOne { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: Vec<u8>, info: Vec<u8> }, Copied { to: Vec<u8> }, Made { path: Vec<u8> },
     CopiedBatch(Vec<(Vec<u8>, Vec<u8>)>),
     MovedBatch(Vec<(Vec<u8>, Vec<u8>)>),
     TrashedBatch(Vec<(Vec<u8>, Vec<u8>, Vec<u8>)>),
     /// A batch rename in `dir`: the moves that take it back, in order.
     Renamed { dir: Vec<u8>, moves: Vec<RenameMove> } }
+enum HistoryJob { Undo(Undo), Redo(Undo) }
 #[derive(Clone)]
 struct RenameMove { from: Vec<u8>, to: Vec<u8>, id: u64 }
 fn inverse_moves(moves: &[RenameMove]) -> Vec<RenameMove> {
@@ -120,8 +121,8 @@ struct App {
     /// A contiguous copied or cut range; it pastes as one undoable action.
     clip_batch: Option<(Vec<Vec<u8>>, bool)>,
     undo: Vec<Undo>,
-    /// The last batch rename taken back. Any new file operation drops it.
-    redo_rename: Option<Undo>,
+    /// Reversible rename, trash and empty-folder steps enter this stack.
+    redo: Vec<Undo>,
     input: Option<(Input, Vec<u8>)>,
     status: String,
     question: Option<Question>,
@@ -133,6 +134,8 @@ struct App {
     job: Option<Job>,
     /// What Ctrl+Z will take back once the job finishes.
     job_undo: Option<Undo>,
+    /// Cross-volume history becomes final only when its background transfer completes.
+    history_job: Option<HistoryJob>,
     /// Name to select once the job finishes.
     job_select: Option<Vec<u8>>,
     last_drawn: u64,
@@ -549,7 +552,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+Y redo batch rename  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nCtrl+Shift+T new tab  Ctrl+PageUp/PageDown switch  Ctrl+Shift+W close tab  Ctrl+Shift+\\ split\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+F pack as...  Ctrl+Shift+A zip  Ctrl+Shift+M tar.zst\nCtrl+0..5 rate  Ctrl+Shift+G tags  Ctrl+Shift+R rename all  Ctrl+Shift+D duplicates\nCtrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+Y redo move/rename/trash/folder  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nCtrl+Shift+T new tab  Ctrl+PageUp/PageDown switch  Ctrl+Shift+W close tab  Ctrl+Shift+\\ split\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+F pack as...  Ctrl+Shift+A zip  Ctrl+Shift+N tar  Ctrl+Shift+M tar.zst\nCtrl+0..5 rate  Ctrl+Shift+G tags  Ctrl+Shift+R rename all  Ctrl+Shift+D duplicates\nCtrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
         window.show(t.as_bytes());
     }
 
@@ -606,7 +609,20 @@ impl App {
                 } else if kind == Kind::Copy || kind == Kind::Move {
                     sex_pdx::serial_record!("[files.app.pasted] from={} to={} cut={}", shown(&job.from), shown(&job.to), (kind == Kind::Move) as u8);
                 }
-                if let Some(u) = self.job_undo.take() {
+                if let Some(history) = self.history_job.take() {
+                    match history {
+                        HistoryJob::Undo(step) => {
+                            if self.redo.len() == 64 { self.redo.remove(0); }
+                            self.redo.push(step);
+                            sex_pdx::serial_record!("[files.app.undone] left={}", self.undo.len());
+                        }
+                        HistoryJob::Redo(step) => {
+                            if self.undo.len() == 64 { self.undo.remove(0); }
+                            self.undo.push(step);
+                            sex_pdx::serial_record!("[files.app.redone] left={}", self.redo.len());
+                        }
+                    }
+                } else if let Some(u) = self.job_undo.take() {
                     if let Undo::CopiedBatch(items) = &u {
                         for (from, to) in items { self.meta_copied(window, from, to); }
                     }
@@ -619,10 +635,17 @@ impl App {
             }
             Outcome::Failed(kind, why, cleaned) => {
                 sex_pdx::serial_record!("[files.app.job.failed] kind={:?} cleaned={} why={}", kind, cleaned as u8, why);
+                let committed = self.job.as_ref().is_some_and(|job| job.committed);
                 self.job = None;
                 self.job_undo = None;
+                if let Some(history) = self.history_job.take() {
+                    // Once source removal began, both locations may hold data.
+                    // The old history step no longer describes a safe replay.
+                    if !committed && cleaned { self.restore_history(history); }
+                }
                 self.status = match (kind, cleaned) {
                     (Kind::Sum, _) => format!("Couldn't finish checking: {}. No files changed.", why),
+                    (Kind::Move, _) if committed => format!("Couldn't finish moving: {}. Check both locations before trying again.", why),
                     (Kind::Copy | Kind::Move, true) => format!("Couldn't finish: {}. Copied paths were removed; source files remain.", why),
                     _ => format!("Couldn't finish: {}. Storage state is unconfirmed; check source and destination before retrying.", why),
                 };
@@ -705,6 +728,7 @@ impl App {
         sex_pdx::serial_record!("[files.app.job.cancelled] kind={:?} what={} pct={}", job.kind, shown(&job.what), job.percent());
         self.job = None;
         self.job_undo = None;
+        if let Some(history) = self.history_job.take() { self.restore_history(history); }
         self.load(window);
     }
     fn remove_all(&mut self, window: &mut Window, path: &[u8]) -> Result<(), u8> {
@@ -713,11 +737,28 @@ impl App {
         }
         files::remove(window, &at(path))
     }
-    /// Rename where the disk allows it, else a background move.
-    fn move_path(&mut self, window: &mut Window, from: &[u8], to: &[u8]) -> Result<(), u8> {
+    fn restore_history(&mut self, history: HistoryJob) {
+        match history {
+            HistoryJob::Undo(step) => self.undo.push(step),
+            HistoryJob::Redo(step) => self.redo.push(step),
+        }
+    }
+    /// Rename where the disk allows it, else start a background move. The caller
+    /// keeps the history entry pending until that move reports completion.
+    fn move_path(&mut self, window: &mut Window, from: &[u8], to: &[u8]) -> Result<bool, u8> {
+        match files::stat(window, &at(to)) {
+            Ok(_) => return Err(w::EXISTS),
+            Err(w::NOT_FOUND) => {},
+            Err(e) => return Err(e),
+        }
         match files::rename(window, &at(from), &at(to)) {
-            Err(w::OTHER_DISK) => { let job = Job::move_across(window, from, to); self.start(window, job, None, None); Ok(()) }
-            other => other,
+            Err(w::OTHER_DISK) => {
+                let job = Job::move_across(window, from, to)?;
+                self.start(window, Ok(job), None, None);
+                Ok(true)
+            }
+            Ok(()) => Ok(false),
+            Err(e) => Err(e),
         }
     }
     /// A name not yet taken in `dir`: `name`, `name (copy)`, `name (copy 2)`...
@@ -760,7 +801,7 @@ impl App {
                 sex_pdx::serial_record!("[files.app.pasted] from={} to={} cut={}", shown(&from), shown(&to), cut as u8);
                 if cut { self.meta_moved(window, &from, &to); }
                 self.status = format!("{} {}.", if cut { "Moved" } else { "Copied" }, shown(base(&to)));
-                self.record_undo(if cut { Undo::Moved { from: from.clone(), to: to.clone() } } else { Undo::Copied { to: to.clone() } });
+                self.record_undo(if cut { Undo::MovedSame { from: from.clone(), to: to.clone() } } else { Undo::Copied { to: to.clone() } });
                 if cut { self.clip = None; }
                 let _ = files::sync(window);
                 self.load(window);
@@ -975,7 +1016,7 @@ impl App {
             return;
         }
         self.confirm = None;
-        self.redo_rename = None;
+        self.redo.clear();
         self.meta_removed(window, &path);
         let mut paths = vec![path.clone()];
         // A trash entry's note goes with it.
@@ -996,7 +1037,7 @@ impl App {
             return;
         }
         self.confirm = None;
-        self.redo_rename = None;
+        self.redo.clear();
         let list = files::list(window, &at(&self.cwd)).unwrap_or_default();
         let paths: Vec<Vec<u8>> = list.iter().map(|e| join(&self.cwd, &e.name)).collect();
         let trash = self.cwd.clone();
@@ -1044,11 +1085,29 @@ impl App {
             Err(e) => self.status = format!("Couldn't restore: {}.", shown(files::message(e))),
         }
     }
+    fn record_undo(&mut self, step: Undo) {
+        self.redo.clear();
+        if self.undo.len() == 64 { self.undo.remove(0); }
+        self.undo.push(step);
+    }
     fn undo(&mut self, window: &mut Window) {
         let Some(step) = self.undo.pop() else { self.status = "Nothing to undo.".into(); return };
         let result = match &step {
-            Undo::Moved { from, to } => self.move_path(window, to, from),
-            Undo::Trashed { from, to, info } => self.move_path(window, to, from).map(|_| { let _ = files::remove(window, &at(info)); }),
+            Undo::Moved { from, to } => match self.move_path(window, to, from) {
+                Ok(true) => { self.history_job = Some(HistoryJob::Undo(step)); return; }
+                Ok(false) => Ok(()),
+                Err(e) => Err(e),
+            },
+            Undo::MovedSame { from, to } | Undo::RenamedOne { from, to } => match files::stat(window, &at(from)) {
+                Ok(_) => Err(w::EXISTS),
+                Err(w::NOT_FOUND) => files::rename(window, &at(to), &at(from)),
+                Err(e) => Err(e),
+            },
+            Undo::Trashed { from, to, info } => match files::stat(window, &at(from)) {
+                Ok(_) => Err(w::EXISTS),
+                Err(w::NOT_FOUND) => files::rename(window, &at(to), &at(from)).map(|_| { let _ = files::remove(window, &at(info)); }),
+                Err(e) => Err(e),
+            },
             Undo::TrashedBatch(items) => self.undo_trash_batch(window, items),
             Undo::MovedBatch(items) => self.undo_move_batch(window, items),
             Undo::CopiedBatch(items) => self.undo_copy_batch(window, items),
@@ -1059,12 +1118,12 @@ impl App {
         match result {
             Ok(()) => {
                 self.meta_undone(window, &step);
-                self.redo_rename = match &step {
-                    Undo::Renamed { dir, moves } => Some(Undo::Renamed { dir: dir.clone(), moves: inverse_moves(moves) }),
-                    _ => None,
-                };
                 sex_pdx::serial_record!("[files.app.undone] left={}", self.undo.len());
                 self.status = "Undone.".into();
+                if matches!(&step, Undo::Renamed { .. } | Undo::RenamedOne { .. } | Undo::Moved { .. } | Undo::MovedSame { .. } | Undo::Trashed { .. } | Undo::Made { .. }) {
+                    if self.redo.len() == 64 { self.redo.remove(0); }
+                    self.redo.push(step);
+                } else { self.redo.clear(); }
                 let _ = files::sync(window);
                 self.load(window);
             }
@@ -1079,36 +1138,73 @@ impl App {
             }
         }
     }
-    /// Redo the last successfully undone batch rename. A failed checked move
-    /// leaves the plan available for retry and does not alter undo history.
-    fn redo_rename(&mut self, window: &mut Window) {
-        let Some(step) = self.redo_rename.take() else { self.status = "Nothing to redo.".into(); return };
-        let Undo::Renamed { dir, moves } = &step else { unreachable!() };
-        match self.rename_undo(window, dir, moves, true) {
+    /// Ctrl+Y: replay the last undone step. A failed replay keeps the step for
+    /// retry and does not alter undo history.
+    fn redo(&mut self, window: &mut Window) {
+        let Some(step) = self.redo.pop() else {
+            self.status = "Nothing to redo.".into();
+            sex_pdx::serial_record!("[files.app.redo.empty]");
+            return;
+        };
+        let result = match &step {
+            Undo::Moved { from, to } => match self.move_path(window, from, to) {
+                Ok(true) => { self.history_job = Some(HistoryJob::Redo(step)); return; }
+                Ok(false) => Ok(()),
+                Err(e) => Err(e),
+            },
+            // Batch renames replay only with stable object IDs (see rename_undo).
+            Undo::Renamed { dir, moves } => { let (dir, forward) = (dir.clone(), inverse_moves(moves)); self.rename_undo(window, &dir, &forward, true) }
+            Undo::RenamedOne { from, to } | Undo::MovedSame { from, to } => match files::stat(window, &at(to)) {
+                Ok(_) => Err(w::EXISTS),
+                Err(w::NOT_FOUND) => files::rename(window, &at(from), &at(to)),
+                Err(e) => Err(e),
+            },
+            Undo::Made { path } => files::mkdir(window, &at(path)),
+            Undo::Trashed { from, to, info } => match files::stat(window, &at(to)) {
+                Ok(_) => Err(w::EXISTS),
+                Err(w::NOT_FOUND) => {
+                    // Commit the origin note first, as trash_many does; creation
+                    // fails rather than replacing a note another item now owns.
+                    match files::create_with_data(window, &at(info), from) {
+                        Err(e) => Err(e),
+                        Ok(note_id) => match files::sync(window).and_then(|_| files::rename(window, &at(from), &at(to))) {
+                            Ok(()) => Ok(()),
+                            Err(e) => {
+                                if note_id != 0 { let _ = files::remove_if_id(window, &at(info), note_id); }
+                                Err(e)
+                            }
+                        },
+                    }
+                }
+                Err(e) => Err(e),
+            },
+            _ => Err(w::DENIED),
+        };
+        match result {
             Ok(()) => {
-                self.meta_undone(window, &step);
-                self.undo.push(Undo::Renamed { dir: dir.clone(), moves: inverse_moves(moves) });
-                sex_pdx::serial_record!("[files.app.redone] kind=rename count={}", moves.len());
-                self.status = "Renamed again. Ctrl+Z takes it back.".into();
+                self.meta_redone(window, &step);
+                match &step {
+                    Undo::Renamed { moves, .. } => sex_pdx::serial_record!("[files.app.redone] kind=rename count={} left={}", moves.len(), self.redo.len()),
+                    _ => sex_pdx::serial_record!("[files.app.redone] left={}", self.redo.len()),
+                }
+                self.status = "Redone. Ctrl+Z takes it back.".into();
+                if self.undo.len() == 64 { self.undo.remove(0); }
+                self.undo.push(step);
+                let _ = files::sync(window);
                 self.load(window);
             }
+            Err(e) if e == sex_pdx::fs::UNSUPPORTED => {
+                self.status = "This disk has no stable file IDs, so Loom cannot safely redo its batch rename.".into();
+            }
             Err(e) => {
-                if e == sex_pdx::fs::UNSUPPORTED {
-                    self.status = "This disk has no stable file IDs, so Loom cannot safely redo its batch rename.".into();
+                self.status = if e == rename::ROLLBACK_UNCONFIRMED {
+                    "Couldn't redo: rollback was not confirmed. Inspect the folder before retrying.".into()
                 } else {
-                    self.status = if e == rename::ROLLBACK_UNCONFIRMED {
-                        "Couldn't redo: rollback was not confirmed. Inspect the folder before retrying.".into()
-                    } else {
-                        format!("Couldn't redo: {}. Check the folder before retrying.", shown(files::message(e)))
-                    };
-                    self.redo_rename = Some(step);
-                }
+                    format!("Couldn't redo: {}. Check the folder before retrying.", shown(files::message(e)))
+                };
+                self.redo.push(step);
             }
         }
-    }
-    fn record_undo(&mut self, step: Undo) {
-        self.redo_rename = None;
-        self.undo.push(step);
     }
     /// Enter on a file: it opens in its program, which is given that file alone.
     fn open_file(&mut self, name: &[u8], path: &[u8]) {
@@ -1193,8 +1289,9 @@ impl App {
                 match files::rename(window, &at(&from), &at(&to)) {
                     Ok(()) => {
                         self.meta_moved(window, &from, &to);
+                        sex_pdx::serial_record!("[files.app.renamed.one] from={} to={}", shown(&from), shown(&to));
                         self.status = format!("Renamed to {}.", shown(&text));
-                        self.record_undo(Undo::Moved { from, to });
+                        self.record_undo(Undo::RenamedOne { from, to });
                         self.load(window);
                         self.select(&text);
                     }
@@ -1205,6 +1302,7 @@ impl App {
                 let path = join(&self.cwd, &text);
                 match files::mkdir(window, &at(&path)) {
                     Ok(()) => {
+                        sex_pdx::serial_record!("[files.app.made] path={}", shown(&path));
                         self.status = format!("Made {}.", shown(&text));
                         self.record_undo(Undo::Made { path });
                         self.load(window);
@@ -1361,7 +1459,7 @@ impl App {
                 },
                 KEY_V => self.paste(window),
                 KEY_Z => self.undo(window),
-                KEY_Y => self.redo_rename(window),
+                KEY_Y => self.redo(window),
                 KEY_N => self.input = Some((Input::NewFolder, Vec::new())),
                 KEY_T => { let t = join(&disk_root(&self.cwd), TRASH); self.go(window, t); }
                 KEY_R => self.restore(window),
@@ -1484,8 +1582,8 @@ pub extern "C" fn _start() -> ! {
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
-    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, quick_places: None, previous_folder: None, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, selection_marks: Vec::new(), top: 0, clip: None, clip_batch: None, undo: Vec::new(), redo_rename: None, input: None, status: String::new(), question: None, disk_ask: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None, session_ready: false };
+    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, quick_places: None, previous_folder: None, split: false, root, entries: Vec::new(), cursor: 0, selection_anchor: None, selection_marks: Vec::new(), top: 0, clip: None, clip_batch: None, undo: Vec::new(), redo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
+                        job: None, job_undo: None, history_job: None, job_select: None, last_drawn: 0, theme_generation: sex_app::settings::generation().unwrap_or(0), last_theme_check: sex_pdx::get_ticks(), last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None, session_ready: false };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
     let start = app.root.clone();

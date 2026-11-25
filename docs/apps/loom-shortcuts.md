@@ -16,7 +16,7 @@ open prompt determine which keys act. F11 closes the window.
 | Create a folder | Ctrl+N |
 | Move to trash; delete for good after confirmation | Delete; Shift+Delete |
 | Undo a file operation | Ctrl+Z |
-| Redo the last undone batch rename | Ctrl+Y |
+| Redo an undone move (including between volumes), rename, batch rename, trash move or empty-folder creation | Ctrl+Y |
 | Show trash; restore from trash | Ctrl+T; Ctrl+R while in trash |
 | Empty trash; eject a removable disk | Ctrl+E in the corresponding view |
 | Go home; show removable disks | Ctrl+H; Ctrl+D |
@@ -26,7 +26,7 @@ open prompt determine which keys act. F11 closes the window.
 | Open a new folder tab; close the current one | Ctrl+Shift+T; Ctrl+Shift+W |
 | Switch tabs; show or hide split view | Ctrl+Page Up/Down; Ctrl+Shift+\ |
 | Browse an archive; extract it | Enter; Ctrl+Shift+X |
-| Create ZIP or tar.zst from the selection | Ctrl+Shift+A; Ctrl+Shift+M |
+| Create ZIP, tar or tar.zst from the selection | Ctrl+Shift+A; Ctrl+Shift+N; Ctrl+Shift+M |
 | Pick an archive format: ZIP, TAR, TAR.GZ or TAR.ZST | Ctrl+Shift+F, then 1 through 4 |
 | Batch rename with preview | Ctrl+Shift+R |
 | Compare folders; find duplicates | Ctrl+Shift+C; Ctrl+Shift+D |
@@ -37,10 +37,14 @@ open prompt determine which keys act. F11 closes the window.
 Enter confirms a prompt and Escape cancels it. When a background job is active,
 Escape stops it; file-changing shortcuts wait until the job ends. Deletion for
 good and emptying trash require a second confirmation. Undo is available for
-supported file operations in the current Loom run. Ctrl+Y redoes one undone
-batch rename on SexFS, where object IDs protect the original files. A mounted
-volume without stable IDs can undo its rename but cannot redo it. A new file
-operation clears redo; other operations do not yet have redo.
+supported file operations in the current Loom run. Redo currently replays batch
+and single-item renames, cut-and-paste moves, trash moves and
+empty-folder creation; a new file operation clears its history. Cross-volume
+history finishes only after the background transfer completes. A copy cannot
+be redone from a changed source without changing the copied bytes.
+Batch rename redo needs SexFS object IDs to protect the original files. A
+mounted volume without stable IDs can undo its batch rename but cannot redo it.
+Multi-item trash, cut and copy groups can be undone but not yet redone.
 When Delete moves items to trash, Loom saves their restore paths first and
 confirms storage before offering Ctrl+Z. If storage cannot confirm a move or
 rollback, check the folder and trash before acting again.
