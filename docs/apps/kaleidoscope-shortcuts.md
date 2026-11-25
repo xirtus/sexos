@@ -34,6 +34,8 @@ Ctrl+Shift+J pauses the live transfer at its current staged file offset and
 resumes the same connection; if the site closes it while paused, the download
 fails with a retry link. Esc stops it, removes the hidden partial file, and
 shows a retry link in the downloads panel.
+On launch, Kaleidoscope clears empty hidden download parts left by a crash.
+Nonempty parts remain for recovery when no validated resume record survived.
 The Chastity request requires a visible, unambiguous same-origin login form.
 Saving additionally requires current username and password values. Chastity must
 approve and store the proposal before Kaleidoscope reports a saved password.

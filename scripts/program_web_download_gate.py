@@ -110,7 +110,13 @@ def main():
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'fetch http://10.0.2.2:{PORT}/web /bin/kaleidoscope');q.key('ret')
   m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,240);assert m[1].startswith('Saved'),m[1]
+  # A hard stop before the first download write leaves an empty hidden part.
+  # A nonempty hidden part may still contain recoverable bytes and must stay.
+  for command in ('mkdir Downloads','touch Downloads/.empty.bin.part','write Downloads/.recoverable.bin.part x'):
+   g['focus'](153);time.sleep(.3);s=len(t());keys(command);q.key('ret')
+   g['wait'](r'\[spindle.fs.line\] ok',s,90)
   g['focus'](153);time.sleep(.5);s=len(t());keys(f'run +net kaleidoscope {base}/big.bin');q.key('ret')
+  g['wait'](r'\[web.download.empty_parts.cleaned\] count=1',s,120)
   g['wait'](r'\[web.download.start\] path=Downloads/big.bin ',s,300)
   g['wait'](r'\[web.download.progress\] bytes=\d+ total=20971520',s,300)
   m=g['wait'](r'\[web.download.done\] path=Downloads/big.bin bytes=(\d+) ticks=\d+ fnv=([0-9a-f]+)',s,900)
@@ -129,6 +135,8 @@ def main():
   g['wait'](r'\[web.download.panel\] done=3 failed=0',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'browser-download-durable.ppm')})
   assert (a.out/'browser-download-durable.ppm').stat().st_size>10000
+  q.cmd('screendump',{'filename':str(a.out/'browser-download-empty-parts-cleaned.ppm')})
+  assert (a.out/'browser-download-empty-parts-cleaned.ppm').stat().st_size>10000
   # A truncated transfer leaves no hidden .part file, and the panel offers retry.
   s=len(t());q.key('slash');time.sleep(.3);keys(f'{base}/retry.bin');q.key('ret')
   g['wait'](r'\[web.download.failed\] name=retry.bin reason=',s,300)
@@ -230,6 +238,9 @@ def main():
   g['focus'](153);time.sleep(.5);s=len(t());keys('run +net kaleidoscope about:downloads');q.key('ret')
   g['wait'](r'\[web.download.history.loaded\] count=0',s,300)
   g['wait'](r'\[web.download.panel\] done=0 failed=0',s,120)
+  g['focus'](153);time.sleep(.3);s=len(t());keys('ls Downloads');q.key('ret')
+  g['wait'](r'\[spindle.fs.line\] \.recoverable\.bin\.part  2',s,90)
+  assert '.empty.bin.part' not in t()[s:],t()[s:]
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'fnv':m.group(0)})
  finally:g['stop']()

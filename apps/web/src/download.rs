@@ -106,6 +106,20 @@ impl Browser {
             .unwrap_or_default();
         self.download_resumes.retain(|r| part_offset(&mut self.window, r).is_some());
         web_record!("[web.download.resume.loaded] count={}", self.download_resumes.len());
+        // A hard stop between CREATE and the first write leaves a hidden zero
+        // byte part without a resume record. Preserve every nonempty part: it
+        // may contain recoverable data even when its metadata was interrupted.
+        let mut cleaned = 0usize;
+        if let Ok(entries) = files::list(&mut self.window, DIR.as_bytes()) {
+            for e in entries {
+                if download_resume::empty_orphan_part(&e.name, e.dir, e.size, &self.download_resumes) {
+                    let mut path = Vec::from(&b"Downloads/"[..]);
+                    path.extend_from_slice(&e.name);
+                    if files::remove(&mut self.window, &path).is_ok() { cleaned += 1; }
+                }
+            }
+        }
+        web_record!("[web.download.empty_parts.cleaned] count={}", cleaned);
     }
 
     fn keep_resumes(&mut self) -> bool {
