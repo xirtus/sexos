@@ -100,6 +100,20 @@ def main():
   s=len(t());q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}} for dn,ks in((True,('ctrl','shift','s')),(False,('s','shift','ctrl'))) for x in ks]})
   g['wait'](r'\[web.shields.toggle\] up=0',s,60);g['wait'](loaded,s,300);time.sleep(4)
   px=seen('10.0.2.100','/b/pixel.png');assert px and px[-1][2] and 'b=own' in px[-1][2],px
+  # Site settings are opened by a browser key, and their controls act on A even
+  # though the visible address is now about:site.
+  def chord(*keys):
+   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}} for dn,ks in((True,keys),(False,keys[::-1])) for x in ks]})
+  s=len(t());chord('ctrl','shift','e')
+  g['wait'](r'\[web.site.settings\] origin=http://10\.0\.2\.2:'+str(PORT)+r' shields=Off box=Main',s,120)
+  time.sleep(1)
+  shot=a.out/'site-settings.ppm';q.cmd('screendump',{'filename':str(shot)})
+  Image.open(shot).convert('RGB').save(a.out/'site-settings.png')
+  s=len(t());chord('ctrl','shift','s')
+  g['wait'](r'\[web.shields.toggle\] up=1 host=10\.0\.2\.2',s,60)
+  g['wait'](r'\[web.site.settings\] origin=http://10\.0\.2\.2:'+str(PORT)+r' shields=On box=Main',s,120)
+  s=len(t());chord('ctrl','shift','backspace')
+  g['wait'](r'\[web.site.cleared\] url=http://10\.0\.2\.2:'+str(PORT)+r'/a/page2',s,60)
   text=t();assert 'KERNEL PANIC' not in text and '[web.fatal]' not in text and 'panicked' not in text
   print({'ok':True,'third_party_requests':len(third),'frame_cookie':frame_cookie[0],'shields_down_cookie':px[-1][2]})
  finally:g['stop']()

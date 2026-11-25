@@ -28,6 +28,7 @@ mod session;
 mod viewport;
 mod websocket;
 mod code_store;
+mod site_settings;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -925,6 +926,8 @@ impl Browser {
         if self.in_frame.is_none() { self.blocked = 0; }
         let (html, base) = if url == "about:downloads" {
             (self.downloads_page(), String::from(url))
+        } else if url.starts_with("about:site?") {
+            (self.site_settings_page(url), String::from("about:site"))
         } else if url == "about:shields" || url == "about:shields?update" {
             (self.shields_page(url), String::from("about:shields"))
         } else if url == panel::BOOKMARKS {
