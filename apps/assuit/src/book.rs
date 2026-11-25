@@ -414,13 +414,24 @@ impl Book {
         Ok((path, bytes.len()))
     }
 
-    /// Prints a chosen 1-based page range (`1-3,5`) beside the document. The
-    /// engine keeps PDF links and validates the range against laid-out pages.
-    pub fn export_pdf_range(&self, pages: &str) -> Result<(String, usize), String> {
-        if pages.len() > 80 { return Err("Page range is too long".into()); }
-        let (bytes, _) = self.session.print_pdf(&json!({ "pages": pages }))
+    /// Prints a page range (`1-3,5`), current page, selected pages, or odd/even
+    /// pages beside the document. WordCraft validates the chosen laid-out pages.
+    pub fn export_pdf_range(&self, choice: &str) -> Result<(String, usize), String> {
+        let choice = choice.trim();
+        if choice.len() > 80 { return Err("Page range is too long".into()); }
+        let (settings, suffix) = match choice.to_ascii_lowercase().as_str() {
+            "current" => (json!({ "range": "current" }), "current.pdf"),
+            "selection" => {
+                if self.session.sel.is_collapsed() { return Err("Select text before printing selected pages".into()); }
+                (json!({ "range": "selection" }), "selection.pdf")
+            }
+            "odd" => (json!({ "parity": "odd" }), "odd.pdf"),
+            "even" => (json!({ "parity": "even" }), "even.pdf"),
+            _ => (json!({ "pages": choice }), "pages.pdf"),
+        };
+        let (bytes, _) = self.session.print_pdf(&settings)
             .map_err(|e| format!("Could not print pages: {e:?}"))?;
-        let path = self.beside("pages.pdf");
+        let path = self.beside(suffix);
         replace_file(&path, &bytes).map_err(|e| format!("Could not write {path}: {e}"))?;
         Ok((path, bytes.len()))
     }
@@ -775,6 +786,33 @@ mod tests {
         back.save().unwrap();
         assert!(Book::open_recovered(&path).is_none(), "saving forgets the kept copy");
         assert!(Book::open(&path).unwrap().text().trim_end().ends_with("Unsaved."));
+    }
+
+    #[test]
+    fn pdf_page_choices_use_current_selection_and_parity() {
+        let mut book = welcome("choices.docx");
+        assert!(book.export_pdf_range("selection").unwrap_err().contains("Select text"));
+        assert!(book.export_pdf_range("even").is_err(), "one-page document has no even page");
+        book.key(&Chord { name: "End", ctrl: true, shift: false });
+        for i in 0..60 {
+            book.type_text(&format!("Line {i} of a longer document")).unwrap();
+            book.key(&Chord { name: "Enter", ctrl: false, shift: false });
+        }
+        assert!(book.pages() >= 2);
+        let mut printed = Vec::new();
+        for (choice, suffix) in [("current", "current.pdf"), ("odd", "odd.pdf"), ("even", "even.pdf")] {
+            let (path, size) = book.export_pdf_range(choice).unwrap();
+            assert!(path.ends_with(suffix), "{path}");
+            let pdf = std::fs::read(path).unwrap();
+            assert!(size > 500 && pdf.starts_with(b"%PDF-"));
+            printed.push(pdf);
+        }
+        assert_ne!(printed[1], printed[2], "odd and even pages must print different content");
+        book.key(&Chord { name: "Home", ctrl: true, shift: true });
+        assert!(!book.session.sel.is_collapsed());
+        let (path, size) = book.export_pdf_range(" SeLeCtIoN ").unwrap();
+        assert!(path.ends_with("selection.pdf") && size > 500);
+        assert_eq!(book.path, temp("choices.docx"), "printing must keep the editing document");
     }
 
     #[test]
