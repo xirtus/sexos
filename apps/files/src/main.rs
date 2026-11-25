@@ -37,6 +37,7 @@ use sex_pdx::fs as w;
 use jobs::{Job, Kind, Outcome};
 use search::{Index, Search};
 use thumbs::Thumbs;
+use loom_core::tabs::{Tab, Tabs};
 
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo) -> ! {
@@ -54,6 +55,7 @@ const ESC: u8 = 0x01;
 const F2: u8 = 0x3C;
 const F3: u8 = 0x3D;
 const F5: u8 = 0x3F;
+const TAB: u8 = 0x0F;
 // Letters, PS/2 set 1, used with Ctrl.
 const KEY_C: u8 = 0x2E;
 const KEY_X: u8 = 0x2D;
@@ -62,6 +64,7 @@ const KEY_Z: u8 = 0x2C;
 const KEY_N: u8 = 0x31;
 const KEY_Y: u8 = 0x15;
 const KEY_T: u8 = 0x14;
+const KEY_W: u8 = 0x11;
 const KEY_R: u8 = 0x13;
 const KEY_H: u8 = 0x23;
 const KEY_D: u8 = 0x20;
@@ -130,6 +133,7 @@ struct App {
     /// A file Enter opened, until its program has started (or couldn't).
     opening: Option<(u32, Vec<u8>)>,
     preview: Option<(Vec<u8>, loom_core::preview::TextPreview)>,
+    tabs: Tabs,
 }
 
 /// The path as Files knows a granted one: `@/absolute/path`.
@@ -236,6 +240,42 @@ impl App {
     fn selected(&self) -> Option<Vec<u8>> { self.entries.get(self.cursor).map(|e| join(&self.cwd, &e.name)) }
     fn select(&mut self, name: &[u8]) { if let Some(i) = self.entries.iter().position(|e| e.name == name) { self.cursor = i; } }
 
+    fn tab_position(&self) -> Tab { Tab { folder: self.cwd.clone(), cursor: self.cursor, top: self.top } }
+    fn tab_ready(&self) -> bool {
+        self.job.is_none() && self.search.is_none() && self.found.is_none() && self.input.is_none()
+            && self.question.is_none() && self.disk_ask.is_none() && self.preview.is_none()
+            && self.confirm.is_none() && self.opening.is_none()
+            && self.loom.inside.is_none() && self.loom.image.is_none() && !self.loom.places.active()
+            && matches!(self.loom.mode, loom::Mode::None)
+    }
+    fn tab_restore(&mut self, window: &mut Window, tab: Tab) {
+        self.go(window, tab.folder);
+        self.cursor = tab.cursor.min(self.entries.len().saturating_sub(1));
+        self.top = tab.top.min(self.cursor);
+    }
+    fn tab_open(&mut self) {
+        if !self.tab_ready() { self.status = "Finish this view or operation before changing tabs.".into(); return; }
+        let current = self.tab_position();
+        if !self.tabs.open(current) { self.status = "Loom keeps up to eight folder tabs.".into(); return; }
+        self.status = format!("Opened tab {} of {}.", self.tabs.active() + 1, self.tabs.len());
+        sex_pdx::serial_record!("[files.app.tab.opened] index={} count={} dir={}", self.tabs.active() + 1, self.tabs.len(), shown(&self.cwd));
+    }
+    fn tab_next(&mut self, window: &mut Window) {
+        if !self.tab_ready() { self.status = "Finish this view or operation before changing tabs.".into(); return; }
+        let current = self.tab_position();
+        let Some(tab) = self.tabs.next(current) else { self.status = "Open another tab with Ctrl+Shift+T.".into(); return };
+        self.tab_restore(window, tab);
+        self.status = format!("Tab {} of {}.", self.tabs.active() + 1, self.tabs.len());
+        sex_pdx::serial_record!("[files.app.tab.switched] index={} count={} dir={}", self.tabs.active() + 1, self.tabs.len(), shown(&self.cwd));
+    }
+    fn tab_close(&mut self, window: &mut Window) {
+        if !self.tab_ready() { self.status = "Finish this view or operation before changing tabs.".into(); return; }
+        let Some(tab) = self.tabs.close() else { self.status = "This is the only tab.".into(); return };
+        self.tab_restore(window, tab);
+        self.status = format!("Closed tab; showing {} of {}.", self.tabs.active() + 1, self.tabs.len());
+        sex_pdx::serial_record!("[files.app.tab.closed] index={} count={} dir={}", self.tabs.active() + 1, self.tabs.len(), shown(&self.cwd));
+    }
+
     fn preview_open(&mut self, window: &mut Window) {
         let Some(e) = self.entries.get(self.cursor) else { return };
         if e.dir { self.status = "Select a text file for F3 preview.".into(); return; }
@@ -271,7 +311,7 @@ impl App {
         }
         if self.loom_render(window) { return; }
         if self.thumbs.on && self.input.is_none() && self.search.is_none() && self.question.is_none() && self.disk_ask.is_none() {
-            let mut head = format!("Files  {}", shown(&self.cwd));
+            let mut head = format!("Loom  {}  Tab {}/{}", shown(&self.cwd), self.tabs.active() + 1, self.tabs.len());
             if let Some(q) = &self.found { head = format!("Found {} for \"{}\" in {}", self.entries.len(), shown(q), shown(&self.cwd)); }
             let mut foot = String::new();
             if let Some(job) = &self.job { foot.push_str(&job.progress()); foot.push_str("  "); }
@@ -292,7 +332,16 @@ impl App {
             t.push_str(&format!("Found {} for \"{}\" in {}. Enter opens its folder, Esc goes back.\n", self.entries.len(), shown(q), shown(&self.cwd)));
         }
         let space = files::space(window, &at(&self.cwd)).ok().filter(|s| s.0 > 0).map(|(total, free)| format!("  {} free of {}", human(free), human(total))).unwrap_or_default();
-        t.push_str(&format!("Files  {}{}\n", shown(&self.cwd), space));
+        t.push_str(&format!("Loom  {}{}\n", shown(&self.cwd), space));
+        if self.tabs.len() > 1 {
+            t.push_str("Tabs  ");
+            for (i, tab) in self.tabs.all().iter().enumerate() {
+                let folder = if i == self.tabs.active() { &self.cwd } else { &tab.folder };
+                let label = if folder == b"/" { "/" } else { shown(base(folder)) };
+                t.push_str(&format!("{}{}:{}  ", if i == self.tabs.active() { ">" } else { "" }, i + 1, label));
+            }
+            t.push('\n');
+        }
         if let Some(q) = &self.question {
             let what = match q.mode { Pick::Open => "open a file: Enter chooses it", Pick::Save => "save a file: Ctrl+S names it here", Pick::Folder => "pick a folder: Ctrl+S chooses this one" };
             t.push_str(&format!(">> {} asks to {}. Esc says no.\n", shown(&q.program), what));
@@ -322,7 +371,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  F3 text preview  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+Shift+Z tar.gz  Ctrl+Shift+Y tar.zst\nCtrl+0..5 rate  Ctrl+Shift+G tags  Ctrl+Shift+R rename all  Ctrl+Shift+D duplicates\nCtrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
+        t.push_str("Enter open  Backspace up  F2 rename  F3 text preview  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nCtrl+Shift+T new tab  Ctrl+Tab next tab  Ctrl+W close tab  Ctrl+T trash\nDel trash  Shift+Del delete for good  In trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nEnter on archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+Shift+Z tar.gz  Ctrl+Shift+Y tar.zst\nCtrl+0..5 rate  Ctrl+Shift+G tags  Ctrl+Shift+R rename all  Ctrl+Shift+D duplicates\nCtrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
         window.show(t.as_bytes());
     }
 
@@ -859,6 +908,9 @@ impl App {
         self.status.clear();
         if key.control {
             match key.code {
+                KEY_T if key.shift => self.tab_open(),
+                TAB => self.tab_next(window),
+                KEY_W => self.tab_close(window),
                 KEY_C | KEY_X => if let Some(p) = self.selected() {
                     let cut = key.code == KEY_X;
                     self.status = format!("{} {}: Ctrl+V pastes it.", if cut { "Cut" } else { "Copied" }, shown(base(&p)));
@@ -984,8 +1036,9 @@ pub extern "C" fn _start() -> ! {
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
+    let tabs = Tabs::new(root.clone());
     let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
-                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None, preview: None };
+                        job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None, preview: None, tabs };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
     let start = app.root.clone();

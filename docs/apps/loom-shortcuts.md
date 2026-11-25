@@ -5,6 +5,7 @@
 | Arrows, Home, End | Move through the folder |
 | Enter, Backspace | Open item; go to parent folder |
 | F2, F3, F5 | Rename; preview UTF-8 text; refresh |
+| Ctrl+Shift+T, Ctrl+Tab, Ctrl+W | Open a folder tab; next tab; close the current tab |
 | Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+Z | Copy, cut, paste, undo |
 | Delete, Shift+Delete | Move to trash; delete after confirmation |
 | Ctrl+T, Ctrl+R, Ctrl+E | Show trash; restore; empty trash or eject a volume |
@@ -19,3 +20,5 @@
 In the F3 preview, Up/Down scroll, Home/End jump, and Escape closes it.
 The preview is read only and shows at most the first 32 KiB of UTF-8 text.
 F3 also previews a text member while browsing an archive, without extracting it.
+Tabs keep their own folder and selection for this Loom run. Leave an archive,
+preview, picker, or active file operation before changing tabs.

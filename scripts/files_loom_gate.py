@@ -167,6 +167,14 @@ def main():
   g['wait'](r'\[files\.media\.mounted\] name=LOOM format=FAT32 [^\n]*source=usb',s,120)
   s=open_files()
   g['wait'](r'\[files.app.meta.loaded\] root=/media/LOOM records=0',s,10)
+  # Two independent folder tabs: enter docs in the new one, return to root,
+  # then close the docs tab without changing the first tab's selection.
+  step(lambda:cs('t'),r'\[files.app.tab.opened\] index=2 count=2 dir=/media/LOOM')
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/docs count=3\b')
+  step(lambda:ctrl('tab'),r'\[files.app.tab.switched\] index=1 count=2 dir=/media/LOOM')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'folder-tabs.ppm')})
+  step(lambda:ctrl('tab'),r'\[files.app.tab.switched\] index=2 count=2 dir=/media/LOOM/docs')
+  step(lambda:ctrl('w'),r'\[files.app.tab.closed\] index=1 count=1 dir=/media/LOOM')
   # F3 previews a text file without starting its editor or interpreting controls.
   step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/docs count=3\b')
   q.key('down')  # folders precede files; alpha.txt is the next row.

@@ -29,6 +29,7 @@ pub mod journal;
 pub mod preview;
 pub mod rename;
 pub mod tags;
+pub mod tabs;
 mod text;
 pub mod usage;
 

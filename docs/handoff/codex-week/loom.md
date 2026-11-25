@@ -12,7 +12,12 @@ folder using Ctrl+Shift+Z or Ctrl+Shift+Y, with the same staged output and undo
 as zip. A QEMU gate browses both results, checks tar.gz on the host and copies
 a member out of the tar.zst for byte comparison.
 
-Remaining gaps: multiple folder tabs, richer document previews, more archive
+Loom now has up to eight folder tabs. Ctrl+Shift+T duplicates the current
+folder into a new tab, Ctrl+Tab cycles tabs, and Ctrl+W closes the current tab;
+each remembers its folder and selection. Tabs are in memory for this run and
+switching waits until a modal view or file operation is finished.
+
+Remaining gaps: persistent folder tabs, richer document previews, more archive
 creation formats, drag selection and multi-item operations, and a full
 keyboard shortcut reference. The preview shows the first 32 KiB only and
 rejects binary or control-bearing files; Enter still opens the chosen app.
