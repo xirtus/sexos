@@ -10,7 +10,7 @@ keeps the help key as ordinary text until that entry is finished.
 | Any view | S | Sync a linked CalDAV account |
 | Any view | V | Review retained local CalDAV conflicts; press again for the next |
 | Calendar views | Ctrl+Z, Ctrl+Y | Undo or redo local event additions and removals; sync clears this history |
-| Clock | Ctrl+Z, Ctrl+Y | Undo or redo world-zone additions, removals, and home-zone changes; alarms and timers are outside this history |
+| Clock | Ctrl+Z, Ctrl+Y | Undo or redo world-zone and alarm changes in order; fired alarms and live timers are outside this history |
 | Any view | E | Export shown events to `date-export.ics` |
 | Notice showing | Shift+S | Snooze the notice for five minutes; it survives a Date restart |
 | Month | Arrow keys | Move one day or one week |
