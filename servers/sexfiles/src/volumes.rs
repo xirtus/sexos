@@ -334,6 +334,16 @@ pub fn run(fs: Option<&mut Fs<'static, FsDisk>>, r: w::Request, path: &[u8], dat
             with(fs, m, |v, d| v.write(d, inner, r.offset, &own)).map(|n| n as u32)
         }
         w::CREATE => with(fs, m, |v, d| v.create(d, inner)).map(|_| 0),
+        w::CREATE_WITH_DATA => {
+            let total = r.length as usize;
+            if r.offset != 0 || total == 0 || total > data.len() || total > w::IO_MAX { return Err(w::NAME); }
+            let own = data[..total].to_vec();
+            with(fs, m, |v, d| {
+                v.create(d, inner)?;
+                if v.write(d, inner, 0, &own)? != own.len() { return Err(sv::Error::NoSpace); }
+                v.sync(d)
+            }).map(|_| 0) // Removable formats have no stable object IDs.
+        }
         w::MKDIR => with(fs, m, |v, d| v.mkdir(d, inner)).map(|_| 0),
         w::REMOVE if inner.iter().all(|b| *b == b'/') => return Err(w::DENIED),
         w::REMOVE => with(fs, m, |v, d| v.remove(d, inner)).map(|_| 0),

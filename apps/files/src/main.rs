@@ -881,19 +881,19 @@ impl App {
         // A failed create must never make rollback delete another writer's note.
         let mut prepared: Vec<(Vec<u8>, Vec<u8>, Vec<u8>, Option<u64>)> = Vec::new();
         let mut moved = 0usize;
+        let mut attempting = None;
         let result = (|| -> Result<(), u8> {
             for from in paths {
                 let (to, note) = self.free_trash_name(window, &trash, &info, base(from));
                 if to.is_empty() { return Err(w::EXISTS); }
-                files::create(window, &at(&note))?;
-                prepared.push((from.clone(), to.clone(), note, None));
-                let note_id = files::file_id(window, &at(&prepared.last().unwrap().2))?;
-                prepared.last_mut().unwrap().3 = Some(note_id);
-                if files::write_at(window, &at(&prepared.last().unwrap().2), 0, from)? != from.len() {
-                    return Err(w::NO_SPACE);
-                }
+                // Creation, full contents and commit are one Files request.
+                // Removable volumes return no stable ID, so their rollback
+                // leaves a stranded note rather than risking a foreign file.
+                let note_id = files::create_with_data(window, &at(&note), from)?;
+                prepared.push((from.clone(), to.clone(), note, (note_id != 0).then_some(note_id)));
                 files::sync(window)?;
                 sex_pdx::serial_record!("[files.app.trash.note.synced] from={}", shown(from));
+                attempting = Some(moved);
                 // SexFS's ordinary file rename can replace a name claimed
                 // since free_trash_name checked it.
                 if !from.starts_with(b"/media/") && files::stat(window, &at(from)).map(|s| !s.dir).unwrap_or(false) {
@@ -903,19 +903,23 @@ impl App {
                     files::rename(window, &at(from), &at(&to))?;
                 }
                 moved += 1;
+                attempting = None;
             }
             files::sync(window)
         })();
         if let Err(e) = result {
             let mut rollback_ok = true;
             for (i, (from, to, note, note_id)) in prepared.iter().enumerate().rev() {
-                let restored = i >= moved || files::rename(window, &at(to), &at(from)).is_ok();
+                // A failed move request can have committed before its reply
+                // failed. Keep its note and report uncertainty; a blind retry
+                // could overwrite a name claimed by somebody else.
+                let restored = if attempting == Some(i) { false }
+                    else { i >= moved || files::rename(window, &at(to), &at(from)).is_ok() };
                 rollback_ok &= restored;
                 // Keep the origin note when a move could not be rolled back or
                 // another writer now owns its name.
                 if restored {
-                    rollback_ok &= note_id.is_some_and(|id| files::file_id(window, &at(note)) == Ok(id)
-                        && files::remove(window, &at(note)).is_ok());
+                    rollback_ok &= note_id.is_some_and(|id| files::remove_if_id(window, &at(note), id).is_ok());
                 }
             }
             rollback_ok &= files::sync(window).is_ok();

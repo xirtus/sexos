@@ -74,6 +74,12 @@ pub const ORGANIZE_RULE: u8 = 50;
 /// The post-commit event log: files that arrived in organized folders since sequence
 /// `offset`, and what was decided. Data: one line per event, `SEQ new|moved-in PATH: decision`.
 pub const ORGANIZE_LOG: u8 = 51;
+/// Remove a path only while it still names the object ID in `offset`.
+pub const REMOVE_IF_ID: u8 = 54;
+/// Create a new file with the complete bytes in the data region and commit it
+/// in one Files request. On success data[0..8] contains the new object ID.
+/// Mounted formats return ID 0: the note is synced but cannot be removed by ID.
+pub const CREATE_WITH_DATA: u8 = 55;
 /// The boot slot: after the program store, before the filesystem. MBR partition 1, type EFI.
 pub const BOOT_LBA: u64 = 65536;
 pub const BOOT_SECTORS: u64 = 65536;

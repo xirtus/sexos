@@ -36,6 +36,8 @@ Remaining gaps:
   syncs the moved items before reporting success or offering undo. A failed
   note, move, or final sync attempts rollback and reports unconfirmed storage
   if rollback cannot be verified. A stale restore note also reserves its name.
+  Origin-note creation and contents share one Files request; mounted volumes
+  without stable object IDs keep notes on uncertain rollback for recovery.
   Restore and undo still need the same durability audit; directory moves on
   SexFS still lack a checked no-replace promotion.
 - Text folder lists support contiguous Shift+Up/Down/Home/End selection.

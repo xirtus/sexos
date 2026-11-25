@@ -1018,6 +1018,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         // No SexOS filesystem on this disk: only its own volumes under /media, read only.
         let path = &path[..path_len];
         if !crate::volumes::owns(path) { return w::reply(r.seq, w::UNAVAILABLE, 0); }
+        if r.kind == w::REMOVE_IF_ID { return w::reply(r.seq, w::UNSUPPORTED, 0); }
         if matches!(r.kind, w::RENAME | w::MOVE_IF_ID | w::ORGANIZE_MOVE | w::MOUNT | w::UNMOUNT) { return w::reply(r.seq, w::READ_ONLY, 0); }
         return match crate::volumes::run(None, r, path, data) { Ok(value) => w::reply(r.seq, w::OK, value), Err(status) => w::reply(r.seq, status, 0) };
     };
@@ -1031,11 +1032,15 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
         if fs.has_changes() { return w::reply(r.seq, w::IO, 0); }
     }
     let path = &path[..path_len];
+    // These requests require SexFS object IDs and a single committed edit.
+    if crate::volumes::owns(path) && r.kind == w::REMOVE_IF_ID {
+        return w::reply(r.seq, w::UNSUPPORTED, 0);
+    }
     // Before anything changes: forget what clients were told about it.
     match r.kind {
         w::STAT | w::LIST | w::READ | w::STATFS | w::SYNC | w::PREPARE => {}
         // By file id, so every spelling of the path (`a//b`, `a/b/`) is cleared.
-        w::WRITE | w::TRUNCATE | w::CREATE | w::MKDIR => { if let Ok(st) = fs.open(path) { forget_stats(Some(st.id)); } }
+        w::WRITE | w::TRUNCATE | w::CREATE | w::CREATE_WITH_DATA | w::MKDIR => { if let Ok(st) = fs.open(path) { forget_stats(Some(st.id)); } }
         _ => forget_stats(None),
     }
     // Other systems' volumes, under /media.
@@ -1080,7 +1085,7 @@ fn handle_request(index: usize, program: Option<usize>, caller: u32, r: w::Reque
     // Its sealed file changes only through it.
     if !read_only && (path == sex_pdx::home_lock::IMAGE || rename_halves.is_some_and(|(_, b)| b == sex_pdx::home_lock::IMAGE)) { return w::reply(r.seq, w::DENIED, 0); }
     // A mounted image changes only through its volume.
-    if matches!(r.kind, w::WRITE | w::TRUNCATE | w::REMOVE) && fs.open(path).is_ok_and(|st| crate::volumes::busy(st.id)) {
+    if matches!(r.kind, w::WRITE | w::TRUNCATE | w::REMOVE | w::REMOVE_IF_ID) && fs.open(path).is_ok_and(|st| crate::volumes::busy(st.id)) {
         return w::reply(r.seq, w::DENIED, 0);
     }
     let media_sync_error = if r.kind == w::SYNC { crate::volumes::sync_all(fs).err() } else { None };
@@ -1269,7 +1274,25 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         }
         w::MKDIR => { fs.mkdir(path, now)?; fs.commit()?; Ok(0) }
         w::CREATE => { fs.create(path, now)?; fs.commit()?; Ok(0) }
+        w::CREATE_WITH_DATA => {
+            let len = r.length as usize;
+            if r.offset != 0 || len == 0 || len > data.len() { return Err(Error::Name); }
+            let own = unsafe { &mut *core::ptr::addr_of_mut!(OWN) };
+            own[..len].copy_from_slice(&data[..len]);
+            let id = fs.create(path, now)?;
+            if fs.write(id, 0, &own[..len], now)? != len { return Err(Error::NoSpace); }
+            fs.commit()?;
+            data[..8].copy_from_slice(&id.to_le_bytes());
+            Ok(8)
+        }
         w::REMOVE => { fs.remove_path(path)?; fs.commit()?; Ok(0) }
+        w::REMOVE_IF_ID => {
+            if r.offset == 0 || r.length != 0 { return Err(Error::Name); }
+            if fs.open(path)?.id != r.offset { return Err(Error::Stale); }
+            fs.remove_path(path)?;
+            fs.commit()?;
+            Ok(0)
+        }
         w::RENAME => {
             let split = path.iter().position(|b| *b == 0).ok_or(Error::Name)?;
             fs.rename(&path[..split], &path[split + 1..])?;
