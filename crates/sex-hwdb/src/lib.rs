@@ -226,7 +226,8 @@ fn exact(vendor: u16, device: u16) -> Option<Device> {
         (0x1c5c, 0x174a) => known("NVMe SSD (PC711/Gold P31)", Drive, Driven),
         // virtio.
         (0x1af4, 0x1059) => known("sound device", Bell, Driven),
-        (0x1af4, 0x1041) | (0x1af4, 0x1000) => known("network device", Net, Planned),
+        (0x1af4, 0x1041) => known("network device", Net, Driven),
+        (0x1af4, 0x1000) => known("network device (legacy)", Net, Planned),
         (0x1af4, 0x1042) | (0x1af4, 0x1001) => known("block device", Drive, Planned),
         (0x1af4, 0x1052) => known("input device", Input, Planned),
         (0x1af4, 0x1050) => known("GPU", Display, Driven),

@@ -71,7 +71,7 @@ pub fn invoke(pd:&ProtectionDomain,slot:u64,set:u64,clear:u64,reserved0:u64,rese
     let fail=[w::DENIED,0,0,0,0];
     if reserved0!=0 || reserved1!=0 { return fail; }
     let Some((slot,update,device))=held_device(pd,slot,set,clear)else{return fail;};
-    let (region_id,bytes)=if device.virtio.is_some(){(sex_pdx::virtio::DMA_REGION_ID,sex_pdx::virtio::DMA_BYTES)}
+    let (region_id,bytes)=if device.virtio.is_some() && device.device_id != sex_pdx::virtio::NET {(sex_pdx::virtio::DMA_REGION_ID,sex_pdx::virtio::DMA_BYTES)}
         else if let Some(kind)=crate::device_lease::Kind::of_class(device.class){kind.dma()}
         else{(w::DMA_REGION_ID,w::DMA_BYTES)};
     // Only bus-master enable needs DMA authority; querying or disabling a

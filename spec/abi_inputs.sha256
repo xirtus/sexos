@@ -176,7 +176,7 @@ cae67c2ff9adc1e53c84114f80246865f1b7dd70b6a2718098d45738ed846fda  kernel/src/ipc
 
 61c23d34744793d69bcfde0d6e0b4044a2867134754204cd58759ee5ab37164b  kernel/src/paging_state.rs
 
-6efe30b3285999e43a5c320c1eb4ed6efbcf4b429cbeeca10d1f323bd2c166a2  kernel/src/pci_command.rs
+070d401419064d6d3d5f20332ddc6d2e99d7f8a836171e186227db07f79f1e94  kernel/src/pci_command.rs
 
 846f8eeb0930389a8488b313c5ec43438fa2b62a947c0364f23c85981960151d  kernel/src/service_restart.rs
 
