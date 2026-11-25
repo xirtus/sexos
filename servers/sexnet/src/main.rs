@@ -5624,7 +5624,11 @@ pub extern "C" fn _start() -> ! {
         if let Some((pd,word))=web_reply{if restricted::denied(pd)||pdx_reply(pd,word)==0{web_reply=None;}}
         let reply_pending=web_reply.is_some()||outbound.pending_reply().is_some()||dns.pending_reply().is_some()||seed.pending_reply().is_some()||clock.pending_reply().is_some()||trust.pending_reply().is_some()||source_denials.pending_reply().is_some();
         let pending=restriction.pending()||preparing||polling||reply_pending||seed.busy();
-        let req = if pending {
+        static mut SEXNET_NEXT_MSG: Option<sex_pdx::PdxMessage> = None;
+        let idle_for_fast_reply = !pending && !(device.is_none() && usb_config.is_some());
+        let req = if let Some(m) = unsafe { (*core::ptr::addr_of_mut!(SEXNET_NEXT_MSG)).take() } {
+            m
+        } else if pending {
             // One message per device turn; no startup polling loop can starve
             // cleanup or ordinary service calls. try_listen yields when empty.
             match sex_pdx::pdx_try_listen_raw(0) {
@@ -5835,7 +5839,14 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         let result = handle_call(req.type_id, req.arg0, req.arg1);
-        pdx_reply(req.caller_pd, result);
+        if idle_for_fast_reply {
+            match sex_pdx::ipc_recv::pdx_reply_recv(req.caller_pd, result) {
+                Ok(m) => unsafe { *core::ptr::addr_of_mut!(SEXNET_NEXT_MSG) = m; },
+                Err(()) => { pdx_reply(req.caller_pd, result); }
+            }
+        } else {
+            pdx_reply(req.caller_pd, result);
+        }
     }
 }
 

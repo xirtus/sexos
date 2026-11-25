@@ -42,8 +42,23 @@ fn answer() -> Option<u64> {
 }
 
 fn call(verb: u8, chunk: u16) -> Option<u64> {
-    if !send(b::request(verb, chunk), 0, true) { return None; }
-    answer()
+    let arg0 = b::request(verb, chunk);
+    for _ in 0..64 {
+        match sex_pdx::ipc_recv::pdx_call_recv(sex_pdx::SLOT_STORAGE, b::OP, arg0, 0, 0) {
+            Ok(Some(m)) if m.type_id == 1 && m.caller_pd == FILES => {
+                if let Some(v) = b::decode_reply(m.arg0) { return Some(v); }
+                return answer();
+            }
+            Ok(Some(m)) if m.type_id > 1 => {
+                let _ = sex_pdx::pdx_reply(m.caller_pd, if m.type_id == sex_pdx::bt_hci::OP_LINK { 0 } else { u64::MAX });
+                return answer();
+            }
+            Ok(_) => return answer(),
+            Err(sex_pdx::ERR_SERVICE_NOT_READY) => sex_pdx::sys_yield(),
+            Err(_) => return None,
+        }
+    }
+    None
 }
 
 /// The stored bonds (empty when there are none or Files cannot be reached).

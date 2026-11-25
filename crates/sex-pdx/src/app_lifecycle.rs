@@ -10,6 +10,10 @@ pub const OP_APP_TITLE: u64 = 0x2D1;
 pub const OP_APP_REBORN: u64 = 0x10F;
 pub const OP_APP_CLOSE: u64 = 0x108;
 pub const OP_APP_PRESENT: u64 = 0x109;
+/// Combined one-hop window open: app sends this to Shell (arg0=surface, arg1=title_id,
+/// arg2=(target_pd<<8)|caps) so Shell registers the frame and forwards a single combined
+/// surface-upsert+clear+present to Display instead of four separate app-to-server IPCs.
+pub const OP_WINDOW_OPEN_COMBINED: u64 = 0x10B;
 pub const CLOSE_SLOTS: [usize;3] = [41,42,43];
 /// An app holding unsaved work may decline an ordinary close request once;
 /// the user's next Close for that incarnation is sent as confirmed.
