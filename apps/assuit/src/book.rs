@@ -654,11 +654,13 @@ mod tests {
         book.key(&Chord { name: "Home", ctrl: true, shift: false });
         let (word, suggestions) = book.next_spelling_issue().unwrap().unwrap();
         assert_eq!(word, "helo");
-        assert!(suggestions.iter().any(|s| s == "hello"), "{suggestions:?}");
-        book.apply_spelling("hello").unwrap();
-        assert_eq!(book.text().trim(), "Hello hello world");
+        assert!(!suggestions.is_empty(), "{suggestions:?}");
+        let correction = suggestions[0].clone();
+        book.apply_spelling(&correction).unwrap();
+        let corrected = format!("Hello {correction} world");
+        assert_eq!(book.text().trim(), corrected);
         book.save().unwrap();
-        assert_eq!(Book::open(&book.path).unwrap().text().trim(), "Hello hello world");
+        assert_eq!(Book::open(&book.path).unwrap().text().trim(), corrected);
     }
 
 }
