@@ -65,7 +65,7 @@ impl Browser {
         self.jarbox = boxes[0];
         (self.jar, self.storage) = self.profile.store(&mut self.window, boxes[0], super::wall());
         self.tabs[0].restore = None;
-        sex_pdx::serial_record!("[web.session.restored] tabs={} groups={} shown={}", s.tabs.len(), s.groups.len(), s.shown);
+        web_record!("[web.session.restored] tabs={} groups={} shown={}", s.tabs.len(), s.groups.len(), s.shown);
         if s.shown == 0 {
             self.open(&first.url, false);
         } else {

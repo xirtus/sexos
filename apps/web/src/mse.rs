@@ -134,7 +134,7 @@ impl Source for Feed {
         let mut b = self.0.borrow_mut();
         if let Some(at) = b.switch {
             // A new init segment (a quality switch): a new stream from there.
-            sex_pdx::serial_record!("[web.mse.switch] at={}", at);
+            web_record!("[web.mse.switch] at={}", at);
             return Some(b.start_at(at));
         }
         if b.done() { return None; }
@@ -213,7 +213,7 @@ impl Mse {
             self.appended += data.len() as u64;
         } else {
             let s = b.shared.borrow();
-            sex_pdx::serial_record!("[web.mse.refused] node={} buffer={} bytes={} broken={} held={}", node, index, data.len(), s.stream.broken as u8, s.stream.held());
+            web_record!("[web.mse.refused] node={} buffer={} bytes={} broken={} held={}", node, index, data.len(), s.stream.broken as u8, s.stream.held());
         }
         let r = b.reply(node, index, ok);
         self.replies.push(r);
@@ -281,7 +281,7 @@ impl Mse {
         for b in self.live() {
             if !b.shared.borrow_mut().start_at(t) { return Err(sex_media::Error::UNSUPPORTED); }
             let dec = Decoder::open(Box::new(Feed(b.shared.clone())))?;
-            sex_pdx::serial_record!("[web.mse.decoder] kind={} format={} video={} audio={} w={} h={} at={}", b.kind, dec.info.format, dec.info.video_codec, dec.info.audio_codec, dec.info.width, dec.info.height, t);
+            web_record!("[web.mse.decoder] kind={} format={} video={} audio={} w={} h={} at={}", b.kind, dec.info.format, dec.info.video_codec, dec.info.audio_codec, dec.info.width, dec.info.height, t);
             let has_video = b.shared.borrow().stream.has_video();
             if has_video && video.is_none() { video = Some(dec); } else if audio.is_none() { audio = Some(dec); }
         }

@@ -97,7 +97,7 @@ impl Browser {
             .or_else(|| state_file::read(&mut self.window, "Kaleidoscope/downloads.tsv.previous", download_history::MAX_FILE)
                 .and_then(|s| download_history::decode(&s).ok()))
             .unwrap_or_default();
-        sex_pdx::serial_record!("[web.download.history.loaded] count={}", loaded.len());
+        web_record!("[web.download.history.loaded] count={}", loaded.len());
         self.downloads = loaded;
         self.download_resumes = state_file::read(&mut self.window, "Kaleidoscope/resumable.tsv", download_resume::MAX_FILE)
             .and_then(|s| download_resume::decode(&s).ok())
@@ -105,7 +105,7 @@ impl Browser {
                 .and_then(|s| download_resume::decode(&s).ok()))
             .unwrap_or_default();
         self.download_resumes.retain(|r| part_offset(&mut self.window, r).is_some());
-        sex_pdx::serial_record!("[web.download.resume.loaded] count={}", self.download_resumes.len());
+        web_record!("[web.download.resume.loaded] count={}", self.download_resumes.len());
     }
 
     fn keep_resumes(&mut self) -> bool {
@@ -125,7 +125,7 @@ impl Browser {
         let _ = files::mkdir(&mut self.window, b"Kaleidoscope");
         let text = download_history::encode(&self.downloads);
         let kept = state_file::replace(&mut self.window, "Kaleidoscope/downloads.tsv", text.as_bytes());
-        sex_pdx::serial_record!("[web.download.history.saved] count={} kept={}", self.downloads.iter().filter(|d| !d.private).count(), kept as u8);
+        web_record!("[web.download.history.saved] count={} kept={}", self.downloads.iter().filter(|d| !d.private).count(), kept as u8);
     }
 
     /// Clear the list, not the person's downloaded files or resumable transfers.
@@ -141,10 +141,10 @@ impl Browser {
         if retired {
             self.downloads.clear();
             self.download_failures.clear();
-            sex_pdx::serial_record!("[web.download.history.cleared] count={} kept=1", old);
+            web_record!("[web.download.history.cleared] count={} kept=1", old);
             self.open("about:downloads", false);
         } else {
-            sex_pdx::serial_record!("[web.download.history.cleared] count={} kept=0", old);
+            web_record!("[web.download.history.cleared] count={} kept=0", old);
             self.download_status = Some(String::from("Could not clear download history; try again."));
             self.draw();
         }
@@ -179,7 +179,7 @@ impl Browser {
                         let mut jar = self.jar.borrow_mut();
                         for c in head.all("set-cookie") { jar.store(&t, c, super::wall()); }
                     }
-                    sex_pdx::serial_record!("[web.download.resume] path={} offset={} total={}", r.path, offset, r.total);
+                    web_record!("[web.download.resume] path={} offset={} total={}", r.path, offset, r.total);
                     let name = file_name(&head, &p.url);
                     self.save_stream(ex, &head, &name, &p.url, Some(r.clone()))?;
                     return Ok(None);
@@ -188,10 +188,10 @@ impl Browser {
                 resume = None;
                 if head.status != 200 || p.url != url {
                     ex.cancel(&mut self.window);
-                    sex_pdx::serial_record!("[web.download.resume.restart] reason=range_response");
+                    web_record!("[web.download.resume.restart] reason=range_response");
                     continue 'request;
                 }
-                sex_pdx::serial_record!("[web.download.resume.restart] reason=full_response");
+                web_record!("[web.download.resume.restart] reason=full_response");
             }
             if head.status == 206 { ex.cancel(&mut self.window); return Err(b"The server sent an unexpected partial response."); }
             if head.is_redirect() || !is_download(&head) {
@@ -240,7 +240,7 @@ impl Browser {
         let start = resume.as_ref().and_then(|_| files::size(&mut self.window, part.as_bytes()).ok()).unwrap_or(0);
         let resumable = if self.jarbox == super::profile::Jarbox::Private { None }
             else { resume.or_else(|| download_resume::eligible(head, url, &path)) };
-        sex_pdx::serial_record!("[web.download.start] path={} url={} offset={}", path, url, start);
+        web_record!("[web.download.start] path={} url={} offset={}", path, url, start);
         let mut cancelled = false;
         let mut interrupted = false;
         let mut written = start;
@@ -272,7 +272,7 @@ impl Browser {
                         alloc::format!("Resuming {} at {} KB", name, transfer.written() >> 10)
                     });
                     self.draw();
-                    sex_pdx::serial_record!("[web.download.pause] paused={} bytes={}", paused as u8, transfer.written());
+                    web_record!("[web.download.pause] paused={} bytes={}", paused as u8, transfer.written());
                 }
                 Control::Continue => {}
             }
@@ -297,7 +297,7 @@ impl Browser {
                 shown_at = now;
                 self.download_status = Some(match total { Some(t) if t > 0 => alloc::format!("Downloading {}%  {}  ·  Ctrl+Shift+J pauses  ·  Esc cancels", transfer.written() * 100 / t, name), _ => alloc::format!("Downloading {} KB  {}  ·  Ctrl+Shift+J pauses  ·  Esc cancels", transfer.written() >> 10, name) });
                 self.draw();
-                sex_pdx::serial_record!("[web.download.progress] bytes={} total={}", transfer.written(), total.map_or(-1, |t| t as i64));
+                web_record!("[web.download.progress] bytes={} total={}", transfer.written(), total.map_or(-1, |t| t as i64));
             }
             if done { break; }
             if ex.idle() > 64 { super::pause() } else if ex.idle() > 0 { sex_pdx::sys_yield() }
@@ -321,7 +321,7 @@ impl Browser {
             };
             if result.is_ok() {
                 let stage = match step { Step::SyncPart => "part", Step::Rename => "rename", Step::SyncName => "name" };
-                sex_pdx::serial_record!("[web.download.promote] step={} path={}", stage, path);
+                web_record!("[web.download.promote] step={} path={}", stage, path);
             }
             result
         });
@@ -335,7 +335,7 @@ impl Browser {
             || (transfer.written() <= 64 << 20 && (check == 0 || self.check_file(&path, transfer.written()) != check)) {
             return Err(b"The saved download did not match its staged bytes.");
         }
-        sex_pdx::serial_record!("[web.download.done] path={} bytes={} ticks={} fnv={:016x}", path, transfer.written(), sex_pdx::get_ticks() - began, check);
+        web_record!("[web.download.done] path={} bytes={} ticks={} fnv={:016x}", path, transfer.written(), sex_pdx::get_ticks() - began, check);
         Ok((transfer.written(), check))
         })();
         self.download_status = None;
@@ -358,10 +358,10 @@ impl Browser {
                         self.keep_resumes()
                     };
                 if !kept { let _ = files::remove(&mut self.window, part.as_bytes()); self.drop_resume(url); }
-                else { sex_pdx::serial_record!("[web.download.resume.kept] path={} bytes={}", path, written); }
+                else { web_record!("[web.download.resume.kept] path={} bytes={}", path, written); }
                 if cancelled {
                     let clean = files::size(&mut self.window, part.as_bytes()).is_err();
-                    sex_pdx::serial_record!("[web.download.cancelled] path={} cleaned={}", path, clean as u8);
+                    web_record!("[web.download.cancelled] path={} cleaned={}", path, clean as u8);
                     self.failed_download(name, url, why);
                     return Ok(());
                 }
@@ -374,7 +374,7 @@ impl Browser {
     fn failed_download(&mut self, name: &str, url: &str, why: &'static [u8]) {
         self.download_status = None;
         let why = core::str::from_utf8(why).unwrap_or("Download stopped");
-        sex_pdx::serial_record!("[web.download.failed] name={} reason={}", name, why);
+        web_record!("[web.download.failed] name={} reason={}", name, why);
         if self.download_failures.len() == 32 { self.download_failures.remove(0); }
         self.download_failures.push(Failure {
             name: name.chars().take(120).collect(),
@@ -412,7 +412,7 @@ impl Browser {
 
     /// The `about:downloads` page: this run's downloads, then what else is in the folder.
     pub(super) fn downloads_page(&mut self) -> String {
-        sex_pdx::serial_record!("[web.download.panel] done={} failed={}", self.downloads.len(), self.download_failures.len());
+        web_record!("[web.download.panel] done={} failed={}", self.downloads.len(), self.download_failures.len());
         let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
         let mut html = String::from("<title>Downloads</title><body style='margin:24px;font-size:15px'><h2>Downloads</h2><p>Ctrl+Alt+J clears this history; downloaded files and resumable transfers stay.</p>");
         if self.downloads.is_empty() { html.push_str("<p>No completed downloads in history yet.</p>"); }

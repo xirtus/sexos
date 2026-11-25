@@ -77,7 +77,7 @@ impl CodeStore {
                 None => { let _ = files::remove(window, path.as_bytes()); }
             }
         }
-        sex_pdx::serial_record!("[web.code_cache.loaded] site={} entries={} bytes={}", site, loaded, bytes);
+        web_record!("[web.code_cache.loaded] site={} entries={} bytes={}", site, loaded, bytes);
     }
 
     /// New entries are waiting: save them a moment from now.
@@ -120,7 +120,7 @@ impl CodeStore {
             let _ = files::write(window, path.as_bytes(), &all[keep..]);
         }
         let _ = files::sync(window);
-        sex_pdx::serial_record!("[web.code_cache.saved] site={} entries={} seen={} bytes={}", site, wrote, seen.len(), used);
+        web_record!("[web.code_cache.saved] site={} entries={} seen={} bytes={}", site, wrote, seen.len(), used);
     }
 
     /// Before a new site's folder: drop one other site when there are too many.

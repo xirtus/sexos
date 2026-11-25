@@ -52,6 +52,12 @@ and Shields. The remaining gaps are:
   local storage items and bytes in the current container. Clearing site data
   updates those counts to zero. Permission prompts and a full settings catalog remain.
 - Stronger tab isolation, developer tools, extensions, and browser compatibility.
+- Private URLs and page content previously reached serial diagnostics even though
+  private history, session, cookies and storage stayed out of Files. Kaleidoscope
+  now stops content-bearing diagnostics for the rest of a process once a private
+  tab opens, including delayed callbacks after switching back to a public tab.
+  Numeric lifecycle receipts remain. The private guest gate checks URL, title,
+  console and delayed WebSocket protocol sentinels against the serial stream.
 - Inline PDF, print to PDF, service workers, and web app installation.
 - Profile and session writes previously replaced live files in place. This slice
   stages and syncs each save, retains a previous copy, and recovers it after an

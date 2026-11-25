@@ -53,7 +53,7 @@ impl Browser {
     pub(super) fn panel_show(&mut self, url: &str) {
         if self.in_frame.is_some() { return; }
         // A split view of two tabs makes way for the panel.
-        if !self.panel && self.split.take().is_some() { sex_pdx::serial_record!("[web.split] on=0 shown={}", self.active); }
+        if !self.panel && self.split.take().is_some() { web_record!("[web.split] on=0 shown={}", self.active); }
         let back = if self.panel_shown() { self.panel_main() } else { self.active };
         if !self.panel {
             if self.tabs.len() >= super::tabs::MAX_TABS { return; }
@@ -72,7 +72,7 @@ impl Browser {
             self.tabs.pop();
             self.panel = false;
             self.split = None;
-            sex_pdx::serial_record!("[web.panel] on=0 room=0");
+            web_record!("[web.panel] on=0 room=0");
             return;
         }
         // The page beside it lays out narrower; the panel's page opens at its width.
@@ -81,7 +81,7 @@ impl Browser {
         self.open(url, false);
         let w = self.view.0;
         self.show_tab(back);
-        sex_pdx::serial_record!("[web.panel] on=1 w={} url={}", w, url);
+        web_record!("[web.panel] on=1 w={} url={}", w, url);
     }
 
     /// Closes the panel; the page beside it takes the width back.
@@ -95,7 +95,7 @@ impl Browser {
         self.tabs.pop();
         self.panel = false;
         self.split = None;
-        sex_pdx::serial_record!("[web.panel] on=0 shown={}", self.active);
+        web_record!("[web.panel] on=0 shown={}", self.active);
         self.refit();
     }
 
@@ -104,7 +104,7 @@ impl Browser {
     pub(super) fn panel_follow(&mut self, url: &str) {
         let back = self.panel_main();
         self.show_tab(back);
-        sex_pdx::serial_record!("[web.panel.follow] shown={} url={}", self.active, url);
+        web_record!("[web.panel.follow] shown={} url={}", self.active, url);
         self.open(url, true);
     }
 

@@ -97,7 +97,7 @@ impl Media {
         match Decoder::open(src) {
             Err(e) => {
                 let mut text = [0u8; 80];
-                sex_pdx::serial_record!("[web.media.failed] node={} err={} why={} last={}", self.node, e.0, e.text(&mut text), last as u8);
+                web_record!("[web.media.failed] node={} err={} why={} last={}", self.node, e.0, e.text(&mut text), last as u8);
                 if last {
                     self.state = State::Failed;
                     self.events.push("error");
@@ -120,7 +120,7 @@ impl Media {
         let info = player.info().clone();
         player.set_volume(self.volume);
         player.set_muted(self.muted);
-        sex_pdx::serial_record!("[web.media.opened] node={} format={} video={} audio={} w={} h={} ms={} sound={}",
+        web_record!("[web.media.opened] node={} format={} video={} audio={} w={} h={} ms={} sound={}",
             self.node, info.format, info.video_codec, info.audio_codec, w, h, info.duration_ms, player.has_sound() as u8);
         self.size = player.size();
         self.player = Some(player);
@@ -226,7 +226,7 @@ impl Media {
                     if self.want_play {
                         self.want_play = false;
                         self.events.extend_from_slice(&["timeupdate", "pause", "ended"]);
-                        sex_pdx::serial_record!("[web.media.ended] node={} frames={} sound_frames={} played={} err={}", self.node, self.frames, p.heard, p.played(), p.error().map_or(0, |e| e.0));
+                        web_record!("[web.media.ended] node={} frames={} sound_frames={} played={} err={}", self.node, self.frames, p.heard, p.played(), p.error().map_or(0, |e| e.0));
                     }
                     break;
                 }
@@ -263,7 +263,7 @@ impl Media {
                 Ok((None, None)) => return,
                 Err(e) => {
                     let mut text = [0u8; 80];
-                    sex_pdx::serial_record!("[web.mse.failed] node={} err={} why={}", self.node, e.0, e.text(&mut text));
+                    web_record!("[web.mse.failed] node={} err={} why={}", self.node, e.0, e.text(&mut text));
                     self.state = State::Failed;
                     self.events.push("error");
                     return;
@@ -276,7 +276,7 @@ impl Media {
         let p = self.player.as_mut().unwrap();
         if let Some(t) = self.pending {
             if m.ready_at(t) {
-                sex_pdx::serial_record!("[web.mse.seek] node={} to={}", self.node, t);
+                web_record!("[web.mse.seek] node={} to={}", self.node, t);
                 p.seek(ms(t));
                 if core::mem::take(&mut self.resume) { p.play(); }
                 self.pending = None;
@@ -441,12 +441,12 @@ pub fn decode_avif(bytes: &[u8], max_w: usize, max_h: usize) -> Option<Image> {
     match sex_media::decode_picture(bytes, max_w, max_h) {
         Ok((width, height, pixels)) => {
             let centre = pixels[(height / 2) * width + width / 2];
-            sex_pdx::serial_record!("[web.avif] w={} h={} bytes={} centre={:06x}", width, height, bytes.len(), centre & 0xFF_FFFF);
+            web_record!("[web.avif] w={} h={} bytes={} centre={:06x}", width, height, bytes.len(), centre & 0xFF_FFFF);
             Some(Image { width, height, pixels })
         }
         Err(e) => {
             let mut buf = [0u8; 64];
-            sex_pdx::serial_record!("[web.avif] failed: {}", e.text(&mut buf));
+            web_record!("[web.avif] failed: {}", e.text(&mut buf));
             None
         }
     }

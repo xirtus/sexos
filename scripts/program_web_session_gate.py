@@ -72,7 +72,8 @@ def main():
    keys(f'{base}/p/{n}');q.key('ret');g['wait'](rf'\[web.console\] level=0 vt {n} ready',s,300)
    if n=='b':s=chord('ctrl','shift','g');g['wait'](r'\[web.group\] group=0 tab=1 ',s,60)
   s=chord('ctrl','shift','p');g['wait'](r'\[web.tab.opened\] index=3 count=4 box=private',s,60);time.sleep(.5)
-  keys(f'{base}/p/d');q.key('ret');g['wait'](r'\[web.console\] level=0 vt d ready',s,300)
+  s=len(t());keys(f'{base}/p/d');q.key('ret');g['wait'](r'\[web.loaded\] bytes_ok=1 ',s,300)
+  assert 'vt d ready' not in t()[s:],'private page console reached serial diagnostics'
   # B shown last: the private tab is not kept.
   s=chord('ctrl','2');g['wait'](r'\[web.tab.shown\] index=1 count=4 ',s,60)
   g['wait'](r'\[web.session.saved\] tabs=3 ',s,60)

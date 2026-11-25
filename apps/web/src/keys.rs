@@ -27,7 +27,7 @@ impl Browser {
             // The reference is a built-in page, so it works without a network grant.
             0x35 if key.shift => {
                 self.open("about:shortcuts", true);
-                sex_pdx::serial_record!("[web.shortcuts.opened] url=about:shortcuts");
+                web_record!("[web.shortcuts.opened] url=about:shortcuts");
             }
             // Ctrl+T: a new tab; from a private tab it is private too, from a container
             // tab it is an ordinary one (as in Firefox).
@@ -62,7 +62,7 @@ impl Browser {
                 let title = self.page.title.clone();
                 let url = self.url.clone();
                 let on = self.profile.toggle_bookmark(&url, &title);
-                sex_pdx::serial_record!("[web.bookmark] on={} count={} url={}", on as u8, self.profile.bookmarks.len(), url);
+                web_record!("[web.bookmark] on={} count={} url={}", on as u8, self.profile.bookmarks.len(), url);
                 self.draw();
             }
             0x21 => { self.finding = true; if self.find.is_none() { self.find = Some(String::new()); } self.draw(); }
@@ -86,11 +86,11 @@ impl Browser {
                         let article = sex_web::reader::article(&self.doc.get().dom, &url);
                         let page = match article {
                             Some(a) => {
-                                sex_pdx::serial_record!("[web.reader] words={} title={} url={}", a.words, a.title, url);
+                                web_record!("[web.reader] words={} title={} url={}", a.words, a.title, url);
                                 sex_web::reader::page(&a, &url)
                             }
                             None => {
-                                sex_pdx::serial_record!("[web.reader] words=0 url={}", url);
+                                web_record!("[web.reader] words=0 url={}", url);
                                 super::message_page("No reader view", "This page has no article to show on its own.", &url)
                             }
                         };
@@ -114,7 +114,7 @@ impl Browser {
                 let url = super::site_settings::target(&self.url).unwrap_or_else(|| self.url.clone());
                 self.profile.clear_site(&mut self.jar.borrow_mut(), &mut self.storage.borrow_mut(), &url);
                 self.code_store.forget(&mut self.window, &mut self.code_cache.borrow_mut(), &url);
-                sex_pdx::serial_record!("[web.site.cleared] url={}", url);
+                web_record!("[web.site.cleared] url={}", url);
                 if super::site_settings::target(&self.url).is_some() { let shown = self.url.clone(); self.open(&shown, false); }
             }
             _ => return false,
@@ -132,7 +132,7 @@ impl Browser {
         self.scroll = ((at * self.page.height as i64 / 10_000) as i32).clamp(0, self.max_scroll());
         self.full_redraw = true;
         self.refind();
-        sex_pdx::serial_record!("[web.zoom] percent={} height={} items={}", percent, self.page.height, self.page.items.len());
+        web_record!("[web.zoom] percent={} height={} items={}", percent, self.page.height, self.page.items.len());
         self.draw();
     }
 
@@ -172,7 +172,7 @@ impl Browser {
             },
         }
         self.show_match();
-        sex_pdx::serial_record!("[web.find] query={} matches={} at={}", self.find.as_deref().unwrap_or(""), self.matches(), self.find_at);
+        web_record!("[web.find] query={} matches={} at={}", self.find.as_deref().unwrap_or(""), self.matches(), self.find_at);
         self.draw();
     }
 
