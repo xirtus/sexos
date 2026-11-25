@@ -26,6 +26,11 @@ on:
   # Every gate on master once a day (09:17 UTC).
   - cron: '17 9 * * *'
   workflow_dispatch:
+    inputs:
+      extended_memory:
+        description: Run the five-hour 12 GiB memory proof too
+        type: boolean
+        default: false
 
 concurrency:
   # Per event: the nightly run is not replaced by, and does not replace, a push.
@@ -882,8 +887,9 @@ jobs:
     needs: image
     if: needs.image.outputs.full == 'true'
     # The 12 GiB proof fills ~36 GiB and reads it back: hours, not minutes. It runs
-    # only on the daily schedule and by hand, with the job's longest budget.
-    timeout-minutes: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && 355 || 60 }}
+    # nightly or when explicitly selected for a manual run. Ordinary manual app
+    # verification still runs the heap and 1 GiB memory proofs below.
+    timeout-minutes: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.extended_memory)) && 355 || 60 }}
     steps:
     - uses: actions/checkout@v4
     - uses: ./.github/actions/setup
@@ -897,7 +903,7 @@ jobs:
         truncate -s 1G "$RUNNER_TEMP/double-source.img"
         SEXOS_GATE_MEMORY=1G python3 scripts/denim_double_gate.py --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/double-source.img" --out "$RUNNER_TEMP/sexos-proof/double-1g"
     - name: Heap over twice the RAM at 12 GiB
-      if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+      if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.extended_memory)
       run: SEXOS_GATE_MEMORY=12G python3 scripts/denim_double_gate.py --minutes 300 --iso sexos-v1.0.0.iso --source-disk "$RUNNER_TEMP/double-source.img" --out "$RUNNER_TEMP/sexos-proof/double-12g"
     - name: Preserve evidence
       if: always()
