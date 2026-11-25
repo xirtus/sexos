@@ -7,6 +7,7 @@ address bar. These controls belong to Kaleidoscope and work without a network gr
 | --- | --- |
 | Address, reload, find, bookmark | Ctrl+L, Ctrl+R, Ctrl+F, Ctrl+D |
 | Downloads, reader view | Ctrl+J, Ctrl+Shift+R |
+| Clear history in the downloads panel | Ctrl+Alt+J |
 | Stop an active download | Esc |
 | Pause or resume an active download | Ctrl+Shift+J |
 | Zoom in, out, reset | Ctrl+=, Ctrl+-, Ctrl+0 |
@@ -24,6 +25,8 @@ Site settings shows the current container's cookie and local-storage counts for
 the site. Clearing site data refreshes those counts.
 The downloads panel lists completed files and failed transfers. **Try again**
 opens the failed address again; completed files open from the same panel.
+Ctrl+Alt+J clears the panel's saved history and failed-transfer list. It keeps
+downloaded files and resumable transfers.
 Ctrl+Shift+J pauses the live transfer at its current staged file offset and
 resumes the same connection; if the site closes it while paused, the download
 fails with a retry link. Esc stops it, removes the hidden partial file, and

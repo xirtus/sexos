@@ -24,6 +24,9 @@ and Shields. The remaining gaps are:
   discards the partial and restarts from byte zero. Last-Modified alone and weak
   ETags still require a fresh transfer; a process killed mid-transfer can leave
   an orphan hidden part because no confirmed metadata was written yet.
+  The downloads panel now offers Ctrl+Alt+J to clear saved history and current
+  failures after a durable state write. Downloaded files and resumable transfers
+  remain available; orphan hidden-part cleanup is still open.
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
   The first autofill slice defines and tests exact top-level HTTPS scope and an

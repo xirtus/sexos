@@ -125,6 +125,28 @@ impl Browser {
         sex_pdx::serial_record!("[web.download.history.saved] count={} kept={}", self.downloads.iter().filter(|d| !d.private).count(), kept as u8);
     }
 
+    /// Clear the list, not the person's downloaded files or resumable transfers.
+    pub(super) fn clear_download_history(&mut self) {
+        if self.url != "about:downloads" { return; }
+        let old = self.downloads.len();
+        let replaced = state_file::replace(&mut self.window, "Kaleidoscope/downloads.tsv", b"v1\n");
+        // The normal recovery copy contains the old list. A deliberate clear
+        // must retire it too, or a later damaged live file could restore it.
+        let previous = b"Kaleidoscope/downloads.tsv.previous";
+        let retired = replaced && (files::size(&mut self.window, previous).is_err()
+            || files::remove(&mut self.window, previous).is_ok() && files::sync(&mut self.window).is_ok());
+        if retired {
+            self.downloads.clear();
+            self.download_failures.clear();
+            sex_pdx::serial_record!("[web.download.history.cleared] count={} kept=1", old);
+            self.open("about:downloads", false);
+        } else {
+            sex_pdx::serial_record!("[web.download.history.cleared] count={} kept=0", old);
+            self.download_status = Some(String::from("Could not clear download history; try again."));
+            self.draw();
+        }
+    }
+
     /// Loads `url` for showing as a page: like `fetch`, but an answer that is a download
     /// streams to Files instead (then `Ok(None)`).
     pub(super) fn fetch_or_download(&mut self, url: &str) -> Result<Option<(String, core::ops::Range<usize>)>, &'static [u8]> {
@@ -389,7 +411,7 @@ impl Browser {
     pub(super) fn downloads_page(&mut self) -> String {
         sex_pdx::serial_record!("[web.download.panel] done={} failed={}", self.downloads.len(), self.download_failures.len());
         let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;").replace('"', "&quot;");
-        let mut html = String::from("<title>Downloads</title><body style='margin:24px;font-size:15px'><h2>Downloads</h2>");
+        let mut html = String::from("<title>Downloads</title><body style='margin:24px;font-size:15px'><h2>Downloads</h2><p>Ctrl+Alt+J clears this history; downloaded files and resumable transfers stay.</p>");
         if self.downloads.is_empty() { html.push_str("<p>No completed downloads in history yet.</p>"); }
         html.push_str("<ul>");
         let mut here = Vec::with_capacity(self.downloads.len());
