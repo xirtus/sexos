@@ -2,6 +2,7 @@
 //! Serialized Vellum client for Shell's Shibari relay. The PDX call reports
 //! queue admission; the answer arrives later as a stamped reply message.
 use super::mailbox;
+use alloc::vec::Vec;
 use sex_pdx::{self, pdf_sign as p};
 
 pub use p::{Signer, POINT_BYTES, MAX_SIGNATURE};
