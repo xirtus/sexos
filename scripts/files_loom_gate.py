@@ -330,6 +330,26 @@ def main():
   step(lambda:q.key('backspace'),r'\[files.app.list\] dir=/media/LOOM/ren count=4\b')
   step(lambda:ctrl('z'),r'\[files.app.undone\]')
   g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  # The graphical grid uses its actual tile hit geometry and pointer Ctrl bit.
+  q.key('home');time.sleep(.2)
+  step(lambda:ctrl('g'),r'\[files.app.grid\] on=1 dir=/media/LOOM/ren')
+  tile=current_tile(t(),surfaces[-1]);rw,rh=map(int,a.resolution.split('x'))
+  def tile_click(index,control=False):
+   x=tile[0]+8+index*136+20;y=tile[1]+34+20
+   if control:q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':True,'key':{'type':'qcode','data':'ctrl'}}}]});time.sleep(.1)
+   q.cmd('input-send-event',{'events':[{'type':'abs','data':{'axis':'x','value':round(x*32767/(rw-1))}},
+                                     {'type':'abs','data':{'axis':'y','value':round(y*32767/(rh-1))}}]});time.sleep(.2)
+   for down in (True,False):q.cmd('input-send-event',{'events':[{'type':'btn','data':{'down':down,'button':'left'}}]});time.sleep(.15)
+   if control:q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':False,'key':{'type':'qcode','data':'ctrl'}}}]});time.sleep(.1)
+  step(lambda:tile_click(0),r'\[files.app.grid.select\] focus=0 count=1 control=0')
+  step(lambda:tile_click(2,True),r'\[files.app.grid.select\] focus=2 count=2 control=1')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'loom-grid-selection.ppm')})
+  assert (a.out/'loom-grid-selection.ppm').stat().st_size>10000
+  step(lambda:ctrl('c'),r'\[files.app.copy.batch\] count=2')
+  step(lambda:ctrl('v'),r'\[files.app.pasted.batch\] count=2 cut=0',120)
+  step(lambda:ctrl('z'),r'\[files.app.undone\]')
+  g['wait'](r'\[files.app.list\] dir=/media/LOOM/ren count=3\b',0,10)
+  step(lambda:ctrl('g'),r'\[files.app.grid\] on=0 dir=/media/LOOM/ren')
   # 5. Rate and tag the first file.
   step(lambda:q.key('home'),r'\[display.text.committed\]',10)
   step(lambda:ctrl('3'),r'\[files.app.meta.rated\] path=ren/pic_01.txt stars=3')
