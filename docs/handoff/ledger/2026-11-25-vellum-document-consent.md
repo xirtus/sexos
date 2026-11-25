@@ -1,0 +1,6 @@
+# Vellum signing: document-bound Shibari approval
+
+- **Change:** Shibari obtains its own Loom picker grant for the exact `@/` PDF path named by Vellum, opens those saved bytes, reproduces the signature field's deterministic `/ByteRange` CMS attributes, and refuses mismatches. Its approval view includes the file, field, PDF SHA-256, and certificate SHA-256. Y triggers a fresh read and verification before the RAM-held key signs. Shell's row/task gate and Vellum's conditional source promotion remain in the path.
+- **Why:** the signer previously approved an opaque attribute blob with only a program row, which did not establish that the person approved a particular PDF.
+- **Checks:** the focused isolated host harness passed 2/2 tests for forged attributes, a different picked path, a swapped field, malformed path, and source bytes changed before or after approval. Full guest build, QEMU signing gate, and screenshot require exact-head GitHub CI and are pending.
+- **Limit:** the signer's PDF read and derivation run in a separate task so its event loop can answer Shell STATUS while they run. The guest gate must verify this with a representative file and a deliberately slow read. Files grants currently last for the signer run, so signer restart clears them.

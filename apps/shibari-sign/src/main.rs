@@ -6,6 +6,7 @@
 
 #[cfg(target_os = "hermit")]
 mod guest;
+mod source;
 
 fn main() {
     #[cfg(target_os = "hermit")]
