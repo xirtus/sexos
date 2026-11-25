@@ -142,6 +142,11 @@ def main():
   s=len(t());type_line('labels on');q.key('ret')
   g['wait'](r'\[spreadeagle\.chart\.edit\] id=\d+ action=labels on\n',s,120)
   time.sleep(.6);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-chart-layout-edited.ppm')})
+  ctrl_shift('q',r'\[spreadeagle\.chart\.edit-prompt\] id=\d+ at=D1\n')
+  s=len(t());type_line('table on');q.key('ret')
+  g['wait'](r'\[spreadeagle\.chart\.edit\] id=\d+ action=table on\n',s,120)
+  time.sleep(.6);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-chart-presentation.ppm')})
+  assert (a.out/'spreadeagle-chart-presentation.ppm').stat().st_size>10000
   s=len(t());g['chord']('ctrl','g');type_line('B4');q.key('ret')
   g['wait'](r'\[spreadeagle\.goto\] place=B4 cell=B4\n',s,120)
   s=len(t());q.key('left');column('A',r'Item\|Food\|Fun\|Rent\|Total\|Per year\|\|',s)

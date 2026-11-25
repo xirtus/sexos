@@ -451,6 +451,11 @@ impl Book {
             self.run("chart.set", json!({ "chart": id, "legend": position }))?;
             return Ok(format!("Chart legend: {position}"));
         }
+        if let Some(choice) = input.strip_prefix("table ") {
+            let on = match choice { "on" => true, "off" => false, _ => return Err("Choose table on or off".into()) };
+            self.run("chart.set", json!({ "chart": id, "dataTable": on }))?;
+            return Ok(format!("Chart data table: {}", if on { "on" } else { "off" }));
+        }
         for (prefix, field, label) in [("x title ", "xTitle", "horizontal axis"), ("y title ", "yTitle", "vertical axis")] {
             if let Some(title) = input.strip_prefix(prefix) {
                 if title.is_empty() || title.chars().count() > 120 {
@@ -473,7 +478,7 @@ impl Book {
                 return Ok(format!("Chart {label}: {}", if on { "on" } else { "off" }));
             }
         }
-        Err("Enter type, title, legend, x/y title, labels or gridlines".into())
+        Err("Enter type, title, legend, table on/off, x/y title, labels or gridlines".into())
     }
 
     /// Chart `index` of the active sheet laid out at `width` x `height` pixels: shapes
@@ -1018,6 +1023,31 @@ mod tests {
         let path = book.path.clone();
         book.save().unwrap();
         assert_eq!(state(&Book::open(&path).unwrap().0), ("Right".into(), Some("Category".into()), Some("Annual cost".into()), true, false));
+    }
+
+    #[test]
+    fn chart_data_table_changes_preview_and_round_trips() {
+        let mut book = budget("chart-presentation.xlsx");
+        book.add_chart(Range { r0: 0, c0: 0, r1: 3, c1: 1 }, 0, 3).unwrap();
+        let id = book.chart_at_anchor(0, 3).unwrap().id;
+        for bad in ["table maybe", "table enable"] {
+            assert!(book.edit_chart(id, bad).is_err(), "{bad}");
+        }
+        let before = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        book.edit_chart(id, "table on").unwrap();
+        let state = |book: &Book| {
+            let c = &book.session.doc().unwrap().wb.active().unwrap().charts[0];
+            c.data_table.is_some()
+        };
+        assert!(state(&book));
+        let after = book.chart_picture(0, 480, 288, &gridcraft_chart::ApproxMeasure).unwrap().pixels;
+        assert_ne!(before, after, "the chart's native pixels must show the data table");
+        book.undo().unwrap();
+        assert!(!state(&book));
+        book.redo().unwrap();
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert!(state(&Book::open(&path).unwrap().0));
     }
 
     #[test]
