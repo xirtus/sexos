@@ -124,6 +124,25 @@ impl Book {
                 .map_err(|_| "Place the caret in a table cell first".to_string())?;
             return Ok("Split cell");
         }
+        if let Some(color) = action.strip_prefix("shade ") {
+            if color.len() != 6 || !color.bytes().all(|b| b.is_ascii_hexdigit()) {
+                return Err("Enter shade RRGGBB, for example shade FFE8B0".into());
+            }
+            self.run("table.shading", json!({ "color": color }))
+                .map_err(|_| "Place the caret in a table cell first".to_string())?;
+            return Ok("Shaded selected cells");
+        }
+        if let Some(kind) = action.strip_prefix("border ") {
+            if !matches!(kind, "all" | "outside" | "inside" | "none") {
+                return Err("Enter border all, outside, inside, or none".into());
+            }
+            if self.save_path().to_ascii_lowercase().ends_with(".odt") {
+                return Err("ODT table borders do not round-trip yet; save as DOCX for this command".into());
+            }
+            self.run("table.borders", json!({ "kind": kind }))
+                .map_err(|_| "Place the caret in a table cell first".to_string())?;
+            return Ok("Changed table borders");
+        }
         let (command, description) = match action.as_str() {
             "select row" => ("table.selectRow", "Selected row"),
             "select column" => ("table.selectColumn", "Selected column"),
@@ -134,7 +153,7 @@ impl Book {
             "delete row" => ("table.deleteRow", "Deleted row"),
             "delete column" => ("table.deleteColumn", "Deleted column"),
             "merge cells" => ("table.merge", "Merged selected cells"),
-            _ => return Err("Choose select row/column, row above/below, column left/right, delete row/column, merge cells, or split 2–10".into()),
+            _ => return Err("Choose row/column edits, merge cells, split 2–10, shade RRGGBB, or border all/outside/inside/none".into()),
         };
         self.run(command, json!({})).map_err(|_| "Place the caret in a table cell first".to_string())?;
         Ok(description)
@@ -806,6 +825,27 @@ mod tests {
             assert_eq!(again.session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells.len(), 2);
             again.save().unwrap();
             assert_eq!(Book::open(&path).unwrap().session.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells.len(), 2, "{ext} lost split cells");
+        }
+    }
+
+    #[test]
+    fn table_shading_and_borders_round_trip_in_docx_and_odt() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("table-style.{ext}"));
+            let mut book = Book::blank(&path);
+            book.insert_table(2, 2).unwrap();
+            assert!(book.edit_table("shade blue").is_err());
+            assert!(book.edit_table("border maybe").is_err());
+            book.edit_table("shade FFE8B0").unwrap();
+            if ext == "docx" { book.edit_table("border all").unwrap(); }
+            else { assert!(book.edit_table("border all").unwrap_err().contains("ODT table borders")); }
+            let styled = |book: &Book| {
+                let table = book.session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+                (table.rows[0].cells[0].props.shading.map(|color| color.hex()), table.props.borders.is_some())
+            };
+            assert_eq!(styled(&book), (Some("FFE8B0".into()), ext == "docx"));
+            book.save().unwrap();
+            assert_eq!(styled(&Book::open(&path).unwrap()), (Some("FFE8B0".into()), ext == "docx"), "{ext} lost table styling");
         }
     }
 

@@ -303,7 +303,7 @@ impl Ui {
                 Ask::SaveAs(name) => format!("Save as: {name}_   {}", said("docx, odt, rtf, html, md, txt or pdf; Enter saves, Esc closes")),
                 Ask::GoTo(page) => format!("Go to page: {page}_   {}", said(&format!("1 to {pages}; Enter goes, Esc closes"))),
                 Ask::Table(size) => format!("Insert table: {size}_   {}", said("rows x columns, for example 2x3; Enter inserts, Esc closes")),
-                Ask::TableEdit(action) => format!("Table: {action}_   {}", said("row/column edits, select row/column, merge cells, split 2–10")),
+                Ask::TableEdit(action) => format!("Table: {action}_   {}", said("row/column edits, merge cells, split 2–10, shade RRGGBB, border all/outside/inside/none")),
                 Ask::Picture(path) => format!("Insert picture: {path}_   {}", said("PNG, JPEG, GIF, WebP or BMP in this program's folder; Enter inserts")),
                 Ask::PrintRange(pages) => format!("Print pages: {pages}_   {}", said("Enter a range such as 1-3,5; PDF is saved beside the document")),
                 Ask::Paper(paper) => format!("Paper: {paper}_   {}", said("Letter, Legal or A4 then portrait or landscape; Enter applies")),
