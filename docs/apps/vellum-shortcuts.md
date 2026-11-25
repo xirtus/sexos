@@ -18,11 +18,15 @@ Vellum's light, dark, and high-contrast colors.
 | Undo / redo committed form-field edits or added/deleted markup | Ctrl+Z / Ctrl+Shift+Z, before saving |
 | Place a typed visual signature | Ctrl+Shift+G |
 | Place an empty digital signature field at the chosen region | Ctrl+Shift+D |
+| Sign a saved empty digital signature field | Ctrl+Shift+B, then Enter to request Shibari approval; Escape cancels |
 | Inspect digital signature fields and supported content integrity | Ctrl+Shift+V |
 | Save edits | Ctrl+S |
 
 Typed visual signatures are markup. Signature inspection verifies exact covered
 bytes for the supported P-256/SHA-256 detached CMS shape. It does not verify
 signer identity, certificate trust, or other CMS algorithms.
-An empty digital signature field can be saved and later signed once the Shibari
-certificate service is available. Placing the field does not sign the PDF.
+To sign, run `shibari-sign` with a P-256 DER certificate in Shibari's own
+window, enter the matching private scalar there, and approve each request with
+Y. Vellum refuses signing when edits are unsaved or the PDF already has a
+signature. It checks signed content after writing. Certificate-chain trust and
+signer identity are still unverified.

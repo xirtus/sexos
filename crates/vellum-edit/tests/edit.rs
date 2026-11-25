@@ -451,6 +451,49 @@ fn detached_cms_in_pdf_verifies_over_its_byte_range() {
 }
 
 #[test]
+fn guest_signed_pdf_verifies_independently_when_supplied() {
+    use std::{fs, process::Command};
+    let Some(input) = std::env::var_os("SEXOS_VELLUM_GUEST_SIGNED_PDF") else { return; };
+    let bytes = fs::read(input).unwrap();
+    let editor = Editor::open(bytes.clone()).unwrap();
+    assert_eq!(editor.signature_content_integrity("Vellum signature 1").unwrap(), ContentIntegrity::Intact);
+    let signatures = editor.signatures().unwrap();
+    assert_eq!(signatures.len(), 1);
+    let signature = &signatures[0];
+    assert!(signature.signed && signature.byte_range_well_formed && signature.covers_whole_file);
+    let mut covered = Vec::new();
+    for (offset, len) in &signature.byte_range {
+        covered.extend_from_slice(&bytes[*offset as usize..(*offset + *len) as usize]);
+    }
+    let independent = lopdf::Document::load_mem(&bytes).unwrap();
+    let acroform = independent.catalog().unwrap().get(b"AcroForm").unwrap().as_dict().unwrap();
+    let field = independent.get_dictionary(acroform.get(b"Fields").unwrap().as_array().unwrap()
+        .last().unwrap().as_reference().unwrap()).unwrap();
+    let signed = independent.get_dictionary(field.get(b"V").unwrap().as_reference().unwrap()).unwrap();
+    let contents = signed.get(b"Contents").unwrap().as_str().unwrap();
+    assert_eq!(contents[0], 0x30);
+    let (header, body) = if contents[1] & 0x80 == 0 {
+        (2, contents[1] as usize)
+    } else {
+        let n = (contents[1] & 0x7f) as usize;
+        assert!((1..=4).contains(&n) && contents.len() >= n + 2);
+        (n + 2, contents[2..n + 2].iter().fold(0usize, |v, b| (v << 8) | *b as usize))
+    };
+    assert!(header + body <= contents.len());
+    assert!(contents[header + body..].iter().all(|b| *b == 0));
+    let dir = std::env::temp_dir().join(format!("sexos-vellum-guest-cms-{}", std::process::id()));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("cms.der"), &contents[..header + body]).unwrap();
+    fs::write(dir.join("covered.bin"), &covered).unwrap();
+    let verified = Command::new("openssl").args(["cms", "-verify", "-inform", "DER", "-binary", "-noverify", "-in"])
+        .arg(dir.join("cms.der")).arg("-content").arg(dir.join("covered.bin"))
+        .arg("-out").arg(dir.join("verified.bin")).output().unwrap();
+    assert!(verified.status.success(), "{}", String::from_utf8_lossy(&verified.stderr));
+    assert_eq!(fs::read(dir.join("verified.bin")).unwrap(), covered);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn detached_signature_slot_refuses_invalid_requests_without_editing() {
     let mut source = form(Style::Table, true);
     let old = b"/V 19 0 R";

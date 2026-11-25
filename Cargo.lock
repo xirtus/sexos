@@ -5941,6 +5941,7 @@ dependencies = [
  "sex-image",
  "sex-std",
  "sex-theme",
+ "sha2 0.10.9",
  "vellum-edit",
 ]
 
@@ -8246,6 +8247,17 @@ name = "shibari"
 version = "0.1.0"
 dependencies = [
  "p256",
+ "zeroize",
+]
+
+[[package]]
+name = "shibari-sign"
+version = "0.1.0"
+dependencies = [
+ "sex-std",
+ "sha2 0.10.9",
+ "shibari",
+ "vellum-edit",
  "zeroize",
 ]
 

@@ -7,6 +7,8 @@ use hayro::vello_cpu::color::palette::css::WHITE;
 use hayro::{render, PixmapSettings, RenderCache, RenderSettings};
 use sex_std::sex_app::{self, Event, Nav};
 use sex_std::sex_pdx::app_pointer::Kind;
+use sex_std::sex_app::pdf_sign;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::time::Instant;
 use sex_theme::Tokens;
@@ -68,6 +70,7 @@ const KEY_L: u8 = 0x26;
 const KEY_N: u8 = 0x31;
 const KEY_Z: u8 = 0x2C;
 const KEY_V: u8 = 0x2F;
+const KEY_B: u8 = 0x30;
 const SLASH: u8 = 0x35;
 const SHORTCUTS: &[&str] = &[
     "Pages: Right / Space / N next; Left / P previous",
@@ -86,6 +89,9 @@ const SHORTCUTS: &[&str] = &[
     "Visual signatures are markup, not digital signatures",
     "Ctrl+Shift+V inspects stored digital signature fields",
     "Ctrl+Shift+D places an empty digital signature field",
+    "Ctrl+Shift+B signs an empty field; Enter confirms, Escape cancels",
+    "Escape also cancels while Shibari approval is pending",
+    "Shibari asks separately; content integrity does not establish trust",
     "Ctrl+S saves edits; Ctrl+Shift+/ opens this help",
 ];
 /// The chosen region's outline, and a focused form field's.
@@ -98,6 +104,8 @@ enum Panel { None, Thumbs, Outline, Annots }
 
 /// Form filling: the fields the keyboard reaches, which one, and its text so far.
 struct Form { fields: Vec<(FieldInfo, usize, [f64; 4])>, at: usize, text: String }
+
+struct SigningChoice { signer: pdf_sign::Signer, field: String, certificate_hash: [u8; 32] }
 
 /// Annotations Ctrl+L lists: markup, not form widgets, links or popups.
 fn listed(a: &AnnotInfo) -> bool { !matches!(a.subtype.as_str(), "Widget" | "Popup" | "Link") }
@@ -241,6 +249,8 @@ struct Viewer {
     note: Option<String>,
     /// A typed visual signature; it is markup, not a cryptographic signature.
     signature: Option<String>,
+    signing: Option<SigningChoice>,
+    close_after_sign: bool,
     form: Option<Form>,
     /// The current page's annotations, while Ctrl+L lists them.
     annots: Vec<AnnotInfo>,
@@ -426,7 +436,7 @@ impl Viewer {
     }
 
     fn bar_shown(&self) -> bool {
-        self.finding || self.note.is_some() || self.signature.is_some() || self.form.is_some() || self.region.is_some() || self.status.is_some()
+        self.finding || self.note.is_some() || self.signature.is_some() || self.signing.is_some() || self.form.is_some() || self.region.is_some() || self.status.is_some()
     }
 
     fn draw_shortcuts(&mut self, out: &mut [u32], width: usize, height: usize) {
@@ -451,7 +461,9 @@ impl Viewer {
         fill(out, width, (0, bar - 1, width, 1), palette.accent);
         let y = (bar.saturating_sub(CH)) / 2;
         // Editing has the bar before find: what is typed goes where the bar says.
-        let editing = if let Some(signature) = &self.signature {
+        let editing = if let Some(choice) = &self.signing {
+            Some(("Sole Shibari cert:".into(), format!("{} / {}", choice.field, choice.certificate_hash[..8].iter().map(|b| format!("{b:02X}")).collect::<String>()), "Enter requests approval; Escape cancels".into()))
+        } else if let Some(signature) = &self.signature {
             Some(("Visual signature:".to_string(), format!("{signature}_"), "Enter places, Escape cancels; not digital".to_string()))
         } else if let Some(note) = &self.note {
             Some(("Note:".to_string(), format!("{note}_"), "Enter adds it, Escape cancels".to_string()))
@@ -601,7 +613,8 @@ impl Viewer {
     }
 
     /// A key; true when something changed and the window should be drawn again.
-    fn key(&mut self, key: sex_std::sex_pdx::app_key::Key, size: (usize, usize)) -> bool {
+    fn key(&mut self, key: sex_std::sex_pdx::app_key::Key, window: &mut sex_app::Window) -> bool {
+        let size = window.size();
         if key.control && key.shift && key.code == SLASH {
             self.shortcuts = !self.shortcuts;
             self.shortcuts_top = 0;
@@ -619,7 +632,7 @@ impl Viewer {
             return true;
         }
         let had_status = self.status.take().is_some();
-        if self.edit_key(key) { return true; }
+        if self.edit_key(key, window) { return true; }
         self.view_key(key, size) || had_status
     }
 
@@ -724,8 +737,14 @@ impl Viewer {
 /// Annotating, form filling and saving.
 impl Viewer {
     /// An editing key; true when it was one (and the window should be drawn again).
-    fn edit_key(&mut self, key: sex_std::sex_pdx::app_key::Key) -> bool {
+    fn edit_key(&mut self, key: sex_std::sex_pdx::app_key::Key, window: &mut sex_app::Window) -> bool {
         let ctrl = |code: u8| key.control && key.code == code;
+        if let Some(choice) = self.signing.take() {
+            if key.code == ENTER && !key.control { self.sign_field(choice, window); }
+            else if key.code == ESCAPE { self.status = Some("Digital signing cancelled".into()); sex_std::record("[pdf.sign.cancelled] stage=viewer"); }
+            else { self.signing = Some(choice); }
+            return true;
+        }
         if self.signature.is_some() { self.signature_key(key); return true; }
         if ctrl(KEY_Z) {
             self.commit_field();
@@ -739,6 +758,7 @@ impl Viewer {
         }
         if ctrl(KEY_V) && key.shift { self.inspect_signatures(); return true; }
         if ctrl(KEY_D) && key.shift { self.place_signature_field(); return true; }
+        if ctrl(KEY_B) && key.shift { self.choose_signature_field(); return true; }
         if ctrl(KEY_S) { self.save(); return true; }
         if ctrl(KEY_H) { self.highlight(); return true; }
         if ctrl(KEY_R) {
@@ -824,6 +844,144 @@ impl Viewer {
             }
             Err(e) => self.status = Some(format!("Could not add signature field: {e}")),
         }
+    }
+
+    fn choose_signature_field(&mut self) {
+        self.commit_field();
+        let recovered_pending = self.recovered_pending;
+        let Some(editor) = self.editor() else { return };
+        if editor.is_modified() || recovered_pending {
+            self.status = Some("Save pending edits with Ctrl+S before signing".into());
+            return;
+        }
+        let fields = match editor.signatures() {
+            Ok(fields) => fields,
+            Err(e) => { self.status = Some(format!("Cannot list signature fields: {e}")); return; }
+        };
+        if fields.iter().any(|field| field.signed) {
+            self.status = Some("Already signed PDF: adding another signature is not supported".into());
+            return;
+        }
+        let Some(field) = fields.iter().find(|field| !field.signed) else {
+            self.status = Some("Place and save an empty signature field first".into());
+            return;
+        };
+        let field_name = field.field_name.clone();
+        let signer = match pdf_sign::selected() {
+            Ok(Some(signer)) => signer,
+            Ok(None) => { self.status = Some("Open Shibari and load a signing certificate first".into()); return; }
+            Err(_) => { self.status = Some("Shibari signer unavailable".into()); return; }
+        };
+        let mut certificate = vec![0; signer.certificate_bytes];
+        if pdf_sign::certificate(signer, &mut certificate).is_err() {
+            self.status = Some("Could not read Shibari's certificate".into());
+            return;
+        }
+        let certificate_hash: [u8; 32] = Sha256::digest(&certificate).into();
+        self.signing = Some(SigningChoice { signer, field: field_name.clone(), certificate_hash });
+        self.status = None;
+        sex_std::record(&format!("[pdf.sign.choice] field={field_name} certificate_bytes={} confirmed=0", signer.certificate_bytes));
+    }
+
+    fn sign_field(&mut self, choice: SigningChoice, window: &mut sex_app::Window) {
+        let mut certificate = vec![0; choice.signer.certificate_bytes];
+        let mut point = [0; pdf_sign::POINT_BYTES];
+        if pdf_sign::certificate(choice.signer, &mut certificate).is_err()
+            || pdf_sign::public_point(choice.signer, &mut point).is_err() {
+            self.status = Some("Could not read Shibari's certificate".into());
+            sex_std::record("[pdf.sign.failed] stage=certificate");
+            return;
+        }
+        if <[u8; 32]>::from(Sha256::digest(&certificate)) != choice.certificate_hash {
+            self.status = Some("Shibari's certificate changed; choose it again".into());
+            sex_std::record("[pdf.sign.failed] stage=certificate_changed");
+            return;
+        }
+        let mut canceled_by_viewer = false;
+        let mut close_after_sign = false;
+        let result = self.editor.as_ref().ok().and_then(|editor| {
+            editor.embed_detached_signature_with(&choice.field, 4096, |first, second| {
+                vellum_edit::cms::detached_p256_sha256(first, second, &certificate, &point, |attrs| {
+                    pdf_sign::request(choice.signer, attrs).map_err(|_| vellum_edit::cms::CmsError::SignerRefused)?;
+                    let deadline = sex_std::sex_pdx::get_ticks().saturating_add(90_000);
+                    loop {
+                        let mut signature = [0; pdf_sign::MAX_SIGNATURE];
+                        match pdf_sign::poll(choice.signer, &mut signature) {
+                            Ok(Some(len)) => return Ok(signature[..len].to_vec()),
+                            Ok(None) if sex_std::sex_pdx::get_ticks() < deadline => {
+                                match window.poll() {
+                                    Some(Event::Key(key)) if key.code == ESCAPE => canceled_by_viewer = true,
+                                    Some(Event::Close) => { canceled_by_viewer = true; close_after_sign = true; },
+                                    _ => {},
+                                }
+                                if canceled_by_viewer {
+                                    pdf_sign::cancel(choice.signer);
+                                    return Err(vellum_edit::cms::CmsError::SignerRefused);
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                            }
+                            _ => { pdf_sign::cancel(choice.signer); return Err(vellum_edit::cms::CmsError::SignerRefused); }
+                        }
+                    }
+                }).map_err(|e| vellum_edit::Error::BadValue(format!("CMS signing failed: {e:?}")))
+            }).ok()
+        });
+        self.close_after_sign = close_after_sign;
+        let Some(bytes) = result else {
+            if canceled_by_viewer {
+                self.status = Some("Digital signing cancelled; PDF unchanged".into());
+                sex_std::record("[pdf.sign.cancelled] stage=approval");
+            } else {
+                self.status = Some("Signature declined or could not be created; PDF unchanged".into());
+                sex_std::record("[pdf.sign.failed] stage=approval_or_cms");
+            }
+            return;
+        };
+        if !Self::signature_intact(&bytes, &choice.field) {
+            self.status = Some("Signature content check failed; PDF unchanged".into());
+            sex_std::record("[pdf.sign.failed] stage=content_check");
+            return;
+        }
+        let path = self.path.clone();
+        if let Err(e) = thumb::write_whole(&path, &bytes) {
+            self.status = Some(format!("Could not save signed PDF: {e}"));
+            sex_std::record("[pdf.sign.failed] stage=save");
+            return;
+        }
+        let sync_result = sex_std::sex_app::files::direct::sync();
+        let back = match std::fs::read(&path) {
+            Ok(back) => back,
+            Err(e) => { self.status = Some(format!("Signed PDF saved but could not be read: {e}")); return; }
+        };
+        if back != bytes || !Self::signature_intact(&back, &choice.field) {
+            self.status = Some("Saved signature failed content check".into());
+            sex_std::record("[pdf.sign.failed] stage=readback");
+            return;
+        }
+        let Ok(pdf) = Pdf::new(back.clone()) else { self.status = Some("Saved signed PDF could not reopen".into()); return; };
+        self.editor = Editor::open(back).map_err(|e| e.to_string());
+        self.pdf = pdf;
+        self.clear_page_cache();
+        self.thumbs = vec![None; self.pages()];
+        self.texts = None;
+        self.field_history.clear();
+        self.annotation_history.clear();
+        self.recovered_pending = false;
+        self.recovery_fingerprint = None;
+        let _ = std::fs::remove_file(recovery::path(&path));
+        if let Err(error) = sync_result {
+            self.status = Some(format!("Signed PDF reopened, but Files could not confirm storage sync: {error:?}"));
+            sex_std::record("[pdf.sign.failed] stage=sync");
+        } else {
+            self.status = Some("Signature content intact; signer trust unverified".into());
+            sex_std::record(&format!("[pdf.sign.saved] field={} bytes={} content_intact=1 verified=0", choice.field, bytes.len()));
+        }
+    }
+
+    fn signature_intact(bytes: &[u8], field: &str) -> bool {
+        Editor::open(bytes.to_vec()).ok()
+            .and_then(|editor| editor.signature_content_integrity(field).ok())
+            == Some(ContentIntegrity::Intact)
     }
 
     /// The editing engine, or `None` with the reason in the bar.
@@ -1370,7 +1528,7 @@ pub fn main() {
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),
         path: name, editor, recovered_pending, recovery_fingerprint: None,
-        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), region: None, note: None, signature: None, form: None, annots: Vec::new(),
+        field_history: FieldHistory::default(), annotation_history: AnnotationHistory::default(), region: None, note: None, signature: None, signing: None, close_after_sign: false, form: None, annots: Vec::new(),
         status: recovered_pending.then(|| "Brought back unsaved changes. Ctrl+S saves them to the PDF.".into()),
         shortcuts: false, shortcuts_top: 0,
     };
@@ -1400,7 +1558,8 @@ pub fn main() {
             Some(Event::Close) => { viewer.keep_recovery(); break },
             Some(Event::Resize { .. }) => true,
             Some(Event::Key(key)) => {
-                let changed = viewer.key(key, window.size());
+                let changed = viewer.key(key, window);
+                if viewer.close_after_sign { viewer.keep_recovery(); break; }
                 if viewer.panel == Panel::Annots { viewer.load_annots(false); }
                 changed
             }
