@@ -130,10 +130,15 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-visual-signature.ppm')})
   # Save: an update after the original, read back, and drawn again from what was read.
   s=len(t());chord('ctrl','s')
+  g['wait'](r'\[pdf\.save\.synced\] path=@/form\.pdf bytes=\d+\n',s,300)
   sv=g['wait'](r'\[pdf\.saved\] path=(\S+) bytes=(\d+) original=(\d+) prefix=1 same=1 annots=3 filled=2 ms=(\d+)\n',s,300)
+  trace=t()[s:]
+  assert trace.find('[pdf.save.synced]')<trace.find('[pdf.saved]'), 'save reported success before Files sync'
   saved_path=sv[1];assert int(sv[3])==len(FORM) and int(sv[2])>len(FORM),sv[0]
   g['wait'](r'\[pdf\.page\] page=1 pages=1 width=\d+ height=\d+ ink=\d+ ms=\d+\n',s,600)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'pdf-saved.ppm')})
+  q.cmd('screendump',{'filename':str(a.out/'pdf-form-sync-confirmed.ppm')})
+  assert (a.out/'pdf-form-sync-confirmed.ppm').stat().st_size>10000
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   g['wait'](rf'\[app\.private\.retired\] target={o[1]} task={o[2]} ',s,180)
   # Opened again from the disk: all three annotations are there.

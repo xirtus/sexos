@@ -150,6 +150,15 @@ pub fn write_whole(path: &str, bytes: &[u8]) -> std::io::Result<()> {
     result
 }
 
+/// Save a complete PDF and require Files to confirm the promoted name before
+/// the viewer may clear its edit history or recovery copy.
+pub fn write_confirmed<E: core::fmt::Debug>(
+    path: &str, bytes: &[u8], sync: impl FnOnce() -> Result<(), E>,
+) -> Result<(), String> {
+    write_whole(path, bytes).map_err(|e| format!("Could not write {path}: {e}"))?;
+    sync().map_err(|e| format!("Files could not confirm the PDF save: {e:?}"))
+}
+
 #[cfg(target_os = "hermit")]
 fn sync_staged(file: &std::fs::File) -> std::io::Result<()> {
     use sex_std::fs::FileExt;
@@ -170,6 +179,30 @@ mod tests {
     use super::*;
 
     fn words(s: &str) -> Vec<String> { s.split(' ').map(String::from).collect() }
+
+    #[test]
+    fn failed_sync_keeps_filled_form_and_recovery_for_retry() {
+        use vellum_edit::{Editor, FieldValue};
+        const FORM: &[u8] = include_bytes!("../../../tests/fixtures/pdf/form1.pdf");
+        let path = std::env::temp_dir().join(format!("vellum-confirmed-{}.pdf", std::process::id()));
+        let path = path.to_str().unwrap();
+        let recovery = format!("{path}.vellum-recovered.pdf");
+        std::fs::write(path, FORM).unwrap();
+        let mut editor = Editor::open(FORM.to_vec()).unwrap();
+        editor.set_field("name", FieldValue::Text("Ada Lovelace".into())).unwrap();
+        let bytes = editor.save_incremental().unwrap();
+        std::fs::write(&recovery, &bytes).unwrap();
+        let failed = write_confirmed(path, &bytes, || Err("sync failed"));
+        assert!(failed.unwrap_err().contains("sync failed"));
+        assert!(editor.is_modified(), "unconfirmed form edit must remain dirty");
+        assert_eq!(std::fs::read(&recovery).unwrap(), bytes, "recovery copy remains available");
+        assert!(write_confirmed(path, &bytes, || Ok::<(), &str>(())).is_ok());
+        let reopened = Editor::open(std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(reopened.fields().unwrap().into_iter().find(|f| f.name == "name").unwrap().value,
+            FieldValue::Text("Ada Lovelace".into()));
+        std::fs::remove_file(recovery).unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn requests() {
