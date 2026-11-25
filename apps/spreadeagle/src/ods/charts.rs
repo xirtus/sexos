@@ -15,7 +15,8 @@ fn supported(chart: &Chart) -> Result<&'static str, String> {
     let kind = match chart.kind {
         ChartKind::ColumnClustered => "chart:bar",
         ChartKind::Line => "chart:line",
-        _ => return Err("ODS chart export supports plain column and line charts; save as XLSX to keep this chart".into()),
+        ChartKind::Pie => "chart:circle",
+        _ => return Err("ODS chart export supports plain column, line and pie charts; save as XLSX to keep this chart".into()),
     };
     if chart.style != 1 || chart.data_labels || chart.data_table.is_some() || chart.x_title.is_some()
         || chart.y_title.is_some() || chart.pivot.is_some() || chart.hole_size != 75
@@ -25,6 +26,9 @@ fn supported(chart: &Chart) -> Result<&'static str, String> {
     if chart.series.is_empty() || chart.series.iter().any(|s| s.color.is_some() || s.secondary
         || s.kind.is_some() || s.smooth || !s.trendlines.is_empty() || s.bubble_sizes.is_some()) {
         return Err("ODS cannot preserve this chart's series settings; save as XLSX".into());
+    }
+    if chart.kind == ChartKind::Pie && chart.series.len() != 1 {
+        return Err("ODS cannot preserve a pie chart with multiple series; save as XLSX".into());
     }
     Ok(kind)
 }
@@ -159,10 +163,12 @@ fn parse_object(xml: &str, names: &[String], anchor: Anchor, id: u32) -> Option<
     loop {
         match reader.read_event().ok()? {
             Event::Start(ref e) | Event::Empty(ref e) => match e.local_name().as_ref() {
-                b"chart" if e.name().as_ref() == b"chart:chart" => kind = match attr(e, b"class")?.as_str() { "chart:bar" => Some(ChartKind::ColumnClustered), "chart:line" => Some(ChartKind::Line), _ => return None },
+                b"chart" if e.name().as_ref() == b"chart:chart" => kind = match attr(e, b"class")?.as_str() { "chart:bar" => Some(ChartKind::ColumnClustered), "chart:line" => Some(ChartKind::Line), "chart:circle" => Some(ChartKind::Pie), _ => return None },
                 b"title" => in_title = true,
                 b"legend" => legend = match attr(e, b"legend-position").as_deref() { Some("bottom") => LegendPos::Bottom, Some("top") => LegendPos::Top, Some("start") => LegendPos::Left, Some("end") => LegendPos::Right, _ => return None },
                 b"series" => {
+                    let expected = match kind? { ChartKind::ColumnClustered => "chart:bar", ChartKind::Line => "chart:line", ChartKind::Pie => "chart:circle", _ => return None };
+                    if attr(e, b"class").as_deref() != Some(expected) { return None; }
                     let values = from_addr(&attr(e, b"values-cell-range-address")?, names)?;
                     let name = match attr(e, b"label-cell-address") { Some(a) => Some(format!("={}", from_addr(&a, names)?)), None => None };
                     series.push(Series { name, categories: None, values, bubble_sizes: None, color: None, secondary: false, kind: None, smooth: false, quartiles: Default::default(), trendlines: Vec::new() });
@@ -176,7 +182,7 @@ fn parse_object(xml: &str, names: &[String], anchor: Anchor, id: u32) -> Option<
             _ => {},
         }
     }
-    if series.is_empty() || anchor.width <= 0.0 || anchor.height <= 0.0 { return None; }
+    if series.is_empty() || anchor.width <= 0.0 || anchor.height <= 0.0 || (kind == Some(ChartKind::Pie) && series.len() != 1) { return None; }
     for item in &mut series { item.categories = categories.clone(); }
     Some(Chart { id, kind: kind?, anchor, title, series, legend, data_labels: false, data_table: None,
         gridlines: xml.contains("<chart:grid"), style: 1, hole_size: 75, first_slice_angle: 0, x_title: None, y_title: None,
@@ -189,8 +195,9 @@ fn unsupported_plot_semantics(xml: &str) -> bool {
         match reader.read_event() {
             Ok(Event::Start(e) | Event::Empty(e)) => {
                 if e.attributes().flatten().any(|a| {
-                    matches!(a.key.local_name().as_ref(), b"vertical" | b"stacked" | b"percentage" | b"three-dimensional")
-                        && a.value.as_ref() == b"true"
+                    (matches!(a.key.local_name().as_ref(), b"vertical" | b"stacked" | b"percentage" | b"three-dimensional")
+                        && a.value.as_ref() == b"true")
+                        || matches!(a.key.local_name().as_ref(), b"pie-offset" | b"starting-angle" | b"hole-size")
                 }) { return true; }
             }
             Ok(Event::Eof) => return false,
@@ -260,8 +267,69 @@ mod tests {
             ("A3", "Feb"), ("B3", "18")] {
             session.execute_headless("cell.set", json!({"cell": cell, "input": input})).unwrap();
         }
-        session.execute_headless("insert.chart", json!({"range":"A1:B3", "type":"pie", "at":"D2"})).unwrap();
+        session.execute_headless("insert.chart", json!({"range":"A1:B3", "type":"doughnut", "at":"D2"})).unwrap();
         assert!(super::super::write(&session.doc().unwrap().wb).unwrap_err().contains("save as XLSX"));
+    }
+
+    #[test]
+    fn pie_chart_round_trips_with_categories_and_position() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        for (cell, input) in [("A1", "Month"), ("B1", "Sales"), ("A2", "Jan"), ("B2", "12"),
+            ("A3", "Feb"), ("B3", "18")] {
+            session.execute_headless("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        session.execute_headless("insert.chart", json!({"range":"A1:B3", "type":"pie", "at":"D2"})).unwrap();
+        let original = &session.doc().unwrap().wb.sheets[0].charts[0];
+        let bytes = super::super::write(&session.doc().unwrap().wb).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut content = String::new();
+        zip.by_name("content.xml").unwrap().read_to_string(&mut content).unwrap();
+        let mut object = String::new();
+        zip.by_name("Object 1/content.xml").unwrap().read_to_string(&mut object).unwrap();
+        assert!(object.contains("chart:class=\"chart:circle\""));
+        assert!(object.contains("<chart:categories"));
+        let (found, warnings) = read(&mut zip, &content, &["Sheet1".into()]).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].chart.kind, ChartKind::Pie);
+        assert_eq!(found[0].chart.series[0].categories, original.series[0].categories);
+        assert_eq!(found[0].chart.series[0].values, original.series[0].values);
+        assert!(found[0].chart.anchor.dx > 0.0);
+    }
+
+    #[test]
+    fn libreoffice_resaved_pie_fixture_opens_and_round_trips() {
+        let path = std::env::temp_dir().join(format!("spreadeagle-lo-pie-{}.ods", std::process::id()));
+        std::fs::write(&path, include_bytes!("../../assets/lo-pie.ods")).unwrap();
+        let (mut book, warnings) = crate::book::Book::open(path.to_str().unwrap()).unwrap();
+        assert!(warnings.iter().all(|w| !w.contains("could not") && !w.contains("cannot")), "{warnings:?}");
+        assert_eq!(book.charts()[0].col, 3);
+        let bytes = book.file_bytes(path.to_str().unwrap()).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut content = String::new();
+        zip.by_name("content.xml").unwrap().read_to_string(&mut content).unwrap();
+        let (found, warnings) = read(&mut zip, &content, &["Sheet1".into()]).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(found[0].chart.kind, ChartKind::Pie);
+        assert_eq!(found[0].chart.series[0].categories.as_deref(), Some("Sheet1!$A$2:$A$4"));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn pie_rotation_and_exploded_slices_refuse_lossy_ods_save_or_import() {
+        let mut session = gridcraft_engine::Session::new();
+        session.new_workbook();
+        for (cell, input) in [("A1", "Month"), ("B1", "Sales"), ("A2", "Jan"), ("B2", "12")] {
+            session.execute_headless("cell.set", json!({"cell": cell, "input": input})).unwrap();
+        }
+        session.execute_headless("insert.chart", json!({"range":"A1:B2", "type":"pie", "at":"D2"})).unwrap();
+        let mut wb = (*session.doc().unwrap().wb).clone();
+        wb.sheet_mut(0).unwrap().charts[0].first_slice_angle = 90;
+        assert!(super::super::write(&wb).unwrap_err().contains("save as XLSX"));
+        let xml = r#"<office:document-content><chart:chart chart:class="chart:circle"><chart:plot-area><chart:series chart:class="chart:circle" chart:values-cell-range-address="$Sheet1.B2:$Sheet1.B2"/></chart:plot-area></chart:chart></office:document-content>"#;
+        assert!(unsupported_plot_semantics(&xml.replace("<chart:plot-area>", "<chart:plot-area chart:pie-offset=\"20\">")));
+        assert!(unsupported_plot_semantics(&xml.replace("<chart:plot-area>", "<chart:plot-area chart:starting-angle=\"90\">")));
     }
 
     #[test]
