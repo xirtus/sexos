@@ -1074,6 +1074,7 @@ impl Firmware {
                 (hcmd::LONG_GROUP, hcmd::PHY_CONTEXT_CMD) => Some(join::PHY_CONTEXT_BYTES),
                 (hcmd::DATA_PATH_GROUP, hcmd::RLC_CONFIG_CMD) => Some(32),
                 (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD) => Some(148),
+                (hcmd::LONG_GROUP, hcmd::MAC_PM_POWER_TABLE) => Some(sex_wifi::join::MAC_POWER_BYTES),
                 (hcmd::LONG_GROUP, hcmd::BINDING_CONTEXT_CMD) => Some(28),
                 (hcmd::LONG_GROUP, hcmd::ADD_STA) => Some(48),
                 (hcmd::DATA_PATH_GROUP, hcmd::SCD_QUEUE_CONFIG_CMD) => Some(36),
@@ -1706,7 +1707,12 @@ fn x17_authenticates_and_associates_like_net80211() {
     assert_eq!(&rsn.1[14..18], &[0, 0x0f, 0xac, 2], "PSK");
     // Then iwx_run: the station entry updated, the MAC context told the AID.
     let sent: Vec<(u8, u8)> = sim.commands[before..].iter().map(|c| (c.0, c.1)).collect();
-    assert_eq!(sent, vec![(hcmd::LONG_GROUP, hcmd::ADD_STA), (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD)]);
+    assert_eq!(sent, vec![(hcmd::LONG_GROUP, hcmd::ADD_STA), (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD), (hcmd::LONG_GROUP, hcmd::MAC_PM_POWER_TABLE)]);
+    // Awake: power management on, power save off, keep-alive at least 25 s.
+    let power = &sim.commands[before + 2].2;
+    assert_eq!(u32::from_le_bytes(power[0..4].try_into().unwrap()), u32::from_le_bytes(sim.commands[before + 1].2[0..4].try_into().unwrap()), "our MAC");
+    assert_eq!(u16::from_le_bytes([power[4], power[5]]), 1 << 1);
+    assert!(u16::from_le_bytes([power[6], power[7]]) >= 25);
     let (sta, mac) = (&sim.commands[before].2, &sim.commands[before + 1].2);
     assert_eq!(sta[0], 1, "modify");
     let u32at = |p: &Vec<u8>, at: usize| u32::from_le_bytes(p[at..at + 4].try_into().unwrap());
@@ -2246,6 +2252,7 @@ fn x17_associates_as_wifi6_on_80mhz() {
     assert_eq!(sent, vec![
         (hcmd::LONG_GROUP, hcmd::PHY_CONTEXT_CMD), (hcmd::LONG_GROUP, hcmd::ADD_STA),
         (hcmd::DATA_PATH_GROUP, sex_wifi::ax::STA_HE_CTXT_CMD), (hcmd::LONG_GROUP, hcmd::MAC_CONTEXT_CMD),
+        (hcmd::LONG_GROUP, hcmd::MAC_PM_POWER_TABLE),
     ]);
     let c = |k: usize| &sim.commands[before + k].2;
     let u32at = |p: &Vec<u8>, at: usize| u32::from_le_bytes(p[at..at + 4].try_into().unwrap());

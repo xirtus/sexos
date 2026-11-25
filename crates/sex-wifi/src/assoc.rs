@@ -36,7 +36,10 @@ const COMMAND_US: u64 = 1_000_000;
 const ADD_STA_SUCCESS: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step { SaeCommit, SaeConfirm, Auth, Assoc, Phy, Station, He, Mac, Associated, Refused(Refusal), Failed(Failure) }
+pub enum Step { SaeCommit, SaeConfirm, Auth, Assoc, Phy, Station, He, Mac,
+    /// MAC_PM_POWER_TABLE: the radio stays awake (no power save), so the AP never
+    /// holds our unicast frames back for a station it thinks is dozing.
+    Power, Associated, Refused(Refusal), Failed(Failure) }
 
 /// Why the AP turned us away, beyond the command failures `init::Failure` names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,7 +121,7 @@ impl Assoc {
     }
     /// The PMK SAE agreed on, once confirmed.
     pub fn sae_pmk(&self) -> Option<[u8; 32]> {
-        self.sae.as_ref().filter(|_| matches!(self.step, Step::Assoc | Step::Phy | Step::Station | Step::He | Step::Mac | Step::Associated)).map(|s| s.sae.pmk)
+        self.sae.as_ref().filter(|_| matches!(self.step, Step::Assoc | Step::Phy | Step::Station | Step::He | Step::Mac | Step::Power | Step::Associated)).map(|s| s.sae.pmk)
     }
     /// Our address, as the frames carry it.
     pub fn me(&self) -> [u8; 6] { self.me }
@@ -221,7 +224,7 @@ impl Assoc {
         if let Some(Heard::Gone(reason)) = heard { self.refuse(Refusal::Disconnected(reason)); return false; }
         match self.step {
             Step::SaeCommit | Step::SaeConfirm | Step::Auth | Step::Assoc => self.frames(b, r, dma, heard, &auth_body[..auth_len], tx_status, now),
-            Step::Phy | Step::Station | Step::He | Step::Mac => self.command(b, cmdq, r, dma, now),
+            Step::Phy | Step::Station | Step::He | Step::Mac | Step::Power => self.command(b, cmdq, r, dma, now),
             _ => {}
         }
         !self.done()
@@ -322,6 +325,12 @@ impl Assoc {
                     p[..n].copy_from_slice(&c[..n]);
                     (h::DATA_PATH_GROUP, ax::STA_HE_CTXT_CMD, n)
                 }
+                Step::Power => {
+                    let mut c = [0u8; join::MAC_POWER_BYTES];
+                    join::mac_power_awake(&mut c, &self.target);
+                    p[..join::MAC_POWER_BYTES].copy_from_slice(&c);
+                    (h::LONG_GROUP, h::MAC_PM_POWER_TABLE, join::MAC_POWER_BYTES)
+                }
                 _ => {
                     join::mac_context(&mut p, ACTION_MODIFY, &self.me, &self.target, Some(self.aid));
                     (h::LONG_GROUP, h::MAC_CONTEXT_CMD, MAC_CONTEXT_BYTES)
@@ -348,6 +357,8 @@ impl Assoc {
                 self.go(Step::Station, now);
             } else if step == Step::He {
                 self.go(Step::Mac, now);
+            } else if step == Step::Mac {
+                self.go(Step::Power, now);
             } else {
                 self.go(Step::Associated, now);
             }

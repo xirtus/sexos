@@ -828,7 +828,10 @@ impl Tether {
                     let n = line.len().min(110);
                     copy[0] = b' '; copy[1] = b' ';
                     copy[2..2 + n].copy_from_slice(&line[..n]);
-                    if !line.starts_with(b"remote>") && !line.starts_with(b"sweep ") { self.note(&copy[..n + 2]); }
+                    // The link's counters only: the network list (numbered lines and its
+                    // count) would fill the file.
+                    let listed = line.trim_ascii_start().first().is_some_and(u8::is_ascii_digit);
+                    if !listed && !line.starts_with(b"remote>") && !line.starts_with(b"sweep ") { self.note(&copy[..n + 2]); }
                     i += 1;
                 }
                 self.save(sb);
