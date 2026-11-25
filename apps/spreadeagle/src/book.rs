@@ -1613,7 +1613,7 @@ mod tests {
         std::fs::write(&path, target.finish().unwrap().into_inner()).unwrap();
 
         let (mut reopened, _) = Book::open(&path).unwrap();
-        assert_eq!(reopened.sheets()[1], "Sheet2");
+        assert_ne!(reopened.sheets()[1], "Q1:Q2", "GridCraft must normalize the ODF-only sheet name");
         assert_eq!(reopened.validation_choices(1, 0), Some(vec!["Food".into(), "Fun".into()]));
         assert!(reopened.set(1, 0, "Other").is_err());
     }

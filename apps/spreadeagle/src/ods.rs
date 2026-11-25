@@ -201,7 +201,10 @@ fn read_freezes(zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, names: &[Stri
                     _ => {},
                 }
             }
-            Event::Text(e) if item.is_some() => value.push_str(&e.unescape().map_err(|e| e.to_string())?),
+            Event::Text(e) if item.is_some() => {
+                let decoded = e.decode().map_err(|e| e.to_string())?;
+                value.push_str(&quick_xml::escape::unescape(&decoded).map_err(|e| e.to_string())?);
+            }
             Event::End(ref e) => {
                 if e.local_name().as_ref() == b"config-item" && item.as_ref().is_some_and(|(_, d)| *d == depth) {
                     let n = value.trim().parse::<u32>().unwrap_or(0);
