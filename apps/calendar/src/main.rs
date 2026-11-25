@@ -15,7 +15,8 @@
 //! Month: arrows move a day or a week, PageUp and PageDown a month, Home (or `t`)
 //! today, Enter opens the chosen day and Esc goes back, `n` adds an event (start it
 //! with `HH:MM` to give it a time). An open day: Up/Down pick, Delete removes, `a`
-//! accepts an invitation, `x` declines it. Week and day: Left/Right a day, Up/Down
+//! prepares accepting an invitation, `x` prepares declining it; Enter queues a
+//! local reply and Esc cancels. Week and day: Left/Right a day, Up/Down
 //! scroll the hours, PageUp/PageDown a week. Clock: `n` new alarm (`07:30 Wake up`),
 //! `r` new timer (`5m Tea`), `z` add a zone, `h` set the local zone, Space switches an
 //! alarm on or off, Delete removes. Calendars: Up/Down pick, Space shows or hides,
@@ -38,7 +39,7 @@ use draw::Face;
 use sex_app::{files, settings, Event, Nav, Window};
 use sex_calendar::clock::{self, Alarm, Clock, Timer};
 use sex_calendar::{ics, tz, Calendar, Date, Event as Entry, MonthGrid, PartStat, SyncState};
-use sex_calendar::history::{EventEdit, EventHistory, ZoneHistory, ZoneState};
+use sex_calendar::history::{EventEdit, EventHistory, ReplyDraftHistory, ZoneHistory, ZoneState};
 use sex_calendar::conflicts;
 use sex_dav::FileAccount;
 use sex_pdx::app_pointer::Kind;
@@ -65,6 +66,7 @@ pub enum Ask { Event, Alarm, Timer, Zone, Home, NewCalendar }
 pub struct App {
     pub cal: Calendar,
     event_history: EventHistory,
+    pub reply_history: ReplyDraftHistory,
     zone_history: ZoneHistory,
     pub clock: Clock,
     pub today: Date,
@@ -329,20 +331,42 @@ impl App {
             Err(e) => self.status = format!("Not written: {}", core::str::from_utf8(files::message(e)).unwrap_or("?")),
         }
     }
-    fn answer(&mut self, window: &mut Window, answer: PartStat) {
+    fn prepare_answer(&mut self, window: &mut Window, answer: PartStat) {
         let Some(target) = self.cal.on_day(self.selected).get(self.picked).map(|e| (*e).clone()) else { return };
         let me = self.me(window);
         let me: Vec<&str> = me.iter().map(String::as_str).collect();
-        let Some(e) = self.cal.events.iter_mut().find(|e| **e == target) else { return };
-        if !e.respond(&me, answer) { self.status = String::from("No attendee to answer for."); return; }
-        self.event_history.clear();
-        let reply = ics::reply(e, &me, &stamp(self.now_ms)).unwrap_or_default();
-        let uid = e.uid.clone();
-        // Valentine sends replies; until then the reply waits in this folder.
+        let mut preview = target.clone();
+        if !preview.respond(&me, answer) { self.status = String::from("No attendee to answer for."); return; }
+        self.reply_history.choose(target.clone(), answer);
+        self.status = format!("{} \"{}\"? Enter queues a local reply; Esc or Ctrl+Z cancels.",
+            if answer == PartStat::Accepted { "Accept" } else { "Decline" }, target.title);
+        sex_pdx::serial_record!("[date.invite.preview] uid={} partstat={}", target.uid, answer.as_str());
+    }
+    fn commit_answer(&mut self, window: &mut Window) {
+        let Some(draft) = self.reply_history.take() else { return };
+        let Some(index) = self.cal.events.iter().position(|e| *e == draft.event) else {
+            self.status = String::from("Invitation changed; choose an answer again."); return;
+        };
+        let me = self.me(window);
+        let me: Vec<&str> = me.iter().map(String::as_str).collect();
+        let mut answered = draft.event.clone();
+        if !answered.respond(&me, draft.answer) { self.status = String::from("No attendee to answer for."); return; }
+        let Some(reply) = ics::reply(&answered, &me, &stamp(self.now_ms)) else {
+            self.status = String::from("Could not prepare the invitation reply."); return;
+        };
+        let uid = answered.uid.clone();
+        // Valentine will send replies later; Date only queues a local .ics file.
         let name = format!("reply-{}", sex_dav::resource_name(&uid, ".ics"));
-        let _ = files::write(window, name.as_bytes(), reply.as_bytes());
-        sex_pdx::serial_record!("[date.invite.answered] uid={} partstat={} reply={} bytes={}", uid, answer.as_str(), name, reply.len());
-        self.status = format!("{} \"{}\"; the reply is in {name}.", if answer == PartStat::Accepted { "Accepted" } else { "Declined" }, target.title);
+        if let Err(e) = files::write_new(window, name.as_bytes(), reply.as_bytes()) {
+            self.status = format!("Reply not queued: {}. Check {name} before trying again.",
+                core::str::from_utf8(files::message(e)).unwrap_or("file error"));
+            sex_pdx::serial_record!("[date.invite.queue.failed] uid={} status={}", uid, e);
+            return;
+        }
+        self.cal.events[index] = answered;
+        self.event_history.clear();
+        sex_pdx::serial_record!("[date.invite.answered] uid={} partstat={} reply={} bytes={}", uid, draft.answer.as_str(), name, reply.len());
+        self.status = format!("{} \"{}\"; the local reply is in {name}.", if draft.answer == PartStat::Accepted { "Accepted" } else { "Declined" }, draft.event.title);
         self.save(window);
     }
     fn ring(&mut self, kind: &str, title: &str, body: &str) {
@@ -460,6 +484,27 @@ impl App {
     fn clock_rows(&self) -> usize { self.clock.alarms.len() + self.clock.timers.len() + self.clock.world().len() }
     fn key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) {
         let typed = sex_app::typed(key);
+        if self.reply_history.pending().is_some() {
+            match (key.control, key.code) {
+                (false, 0x1C) => self.commit_answer(window),
+                (false, 0x01) | (true, 0x2C) => {
+                    self.reply_history.cancel();
+                    self.status = String::from("Cancelled local invitation reply. Ctrl+Y restores the choice.");
+                    sex_pdx::serial_record!("[date.invite.preview.undo]");
+                }
+                _ => {},
+            }
+            return;
+        }
+        if self.reply_history.has_redo() {
+            if key.control && key.code == 0x15 {
+                self.reply_history.redo();
+                self.status = String::from("Restored local invitation reply choice. Enter queues it.");
+                sex_pdx::serial_record!("[date.invite.preview.redo]");
+                return;
+            }
+            self.reply_history.clear();
+        }
         if self.review.is_some() {
             match (key.code, typed) {
                 (0x01, _) => self.review = None,
@@ -541,8 +586,8 @@ impl App {
                     self.picked = self.picked.saturating_sub(1);
                     self.save(window);
                 }
-                (_, _, Some(b'a')) => self.answer(window, PartStat::Accepted),
-                (_, _, Some(b'x')) => self.answer(window, PartStat::Declined),
+                (_, _, Some(b'a')) => self.prepare_answer(window, PartStat::Accepted),
+                (_, _, Some(b'x')) => self.prepare_answer(window, PartStat::Declined),
                 _ => {}
             }
             return;
@@ -689,7 +734,7 @@ pub extern "C" fn _start() -> ! {
     let palette = views::Palette::from_tokens(theme);
     let theme_generation = settings::generation().unwrap_or(0);
     sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
-    let mut app = App { cal, event_history: EventHistory::default(), zone_history: ZoneHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
+    let mut app = App { cal, event_history: EventHistory::default(), reply_history: ReplyDraftHistory::default(), zone_history: ZoneHistory::default(), clock, today, selected: today, view: View::Month, palette, theme_generation,
         help: false, help_offset: 0, review: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
         picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: minute, uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
@@ -740,10 +785,11 @@ pub extern "C" fn _start() -> ! {
                 }
             }
             Event::Pointer(_) if app.help => continue,
-            Event::Pointer(p) if matches!(p.kind, Kind::Down { button: 0 }) && app.ask.is_none() => { app.banner = None; app.click(&mut window, p.x as i32, p.y as i32); }
+            Event::Pointer(_) if app.reply_history.pending().is_some() => continue,
+            Event::Pointer(p) if matches!(p.kind, Kind::Down { button: 0 }) && app.ask.is_none() => { app.banner = None; app.reply_history.clear(); app.click(&mut window, p.x as i32, p.y as i32); }
             Event::Pointer(p) => match p.kind {
-                Kind::Wheel { steps } if matches!(app.view, View::Week | View::Day) => app.first_hour = (app.first_hour as i32 - steps as i32).clamp(0, 23) as u16,
-                Kind::Wheel { steps } if app.view == View::Month => app.select(app.selected.add_days(if steps > 0 { -7 } else { 7 })),
+                Kind::Wheel { steps } if matches!(app.view, View::Week | View::Day) => { app.reply_history.clear(); app.first_hour = (app.first_hour as i32 - steps as i32).clamp(0, 23) as u16; },
+                Kind::Wheel { steps } if app.view == View::Month => { app.reply_history.clear(); app.select(app.selected.add_days(if steps > 0 { -7 } else { 7 })); },
                 _ => continue,
             },
             Event::Drop { .. } | Event::DragEnded { .. } | Event::KeyUp(_) => continue,

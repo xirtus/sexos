@@ -54,6 +54,8 @@ def main():
   s=len(t());q.key('f11');g['wait'](rf'\[calendar.closed\] target={target} task={task}',s,60);g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
  def press(k,pattern,timeout=60):
   s=len(t());keys(k) if len(k)==1 else q.key(k);return g['wait'](pattern,s,timeout)
+ def chord(*names):
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':name}for name in names],'hold-time':80})
  def shot(name):time.sleep(1);q.cmd('screendump',{'filename':str(a.out/f'{name}.ppm')});time.sleep(.5)
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
@@ -93,7 +95,12 @@ def main():
   s=len(t());q.key('ret');g['wait'](rf'\[calendar.day\] date={invite_day} events=\d+\n',s,30)
   g['wait'](rf'\[calendar.event\] date={invite_day} when=15:00-16:00 UTC title=Design review\n',s,30)
   # Gym (17:00) may share the day; the review at 15:00 sorts first.
-  m=press('a',r'\[date.invite.answered\] uid=review-invite@example.org partstat=ACCEPTED reply=(\S+) bytes=(\d+)\n')
+  press('a',r'\[date.invite.preview\] uid=review-invite@example.org partstat=ACCEPTED\n')
+  shot('date-invitation-preview')
+  s=len(t());chord('ctrl','z');g['wait'](r'\[date.invite.preview.undo\]\n',s,30)
+  s=len(t());chord('ctrl','y');g['wait'](r'\[date.invite.preview.redo\]\n',s,30)
+  s=len(t());q.key('ret')
+  m=g['wait'](r'\[date.invite.answered\] uid=review-invite@example.org partstat=ACCEPTED reply=(\S+) bytes=(\d+)\n',s,60)
   shot('date-invitation');q.key('esc');time.sleep(.3)
   # Week and day views, mouse on a tab too.
   press('w',r'\[date.view\] view=Week');shot('date-week')
@@ -126,7 +133,8 @@ def main():
   for _ in range(3):q.key('right');time.sleep(.15)
   s=len(t());q.key('ret')
   g['wait'](rf'\[calendar.day\] date={conflict_day} events=\d+\n',s,30)
-  press('a',r'\[date.invite.answered\] uid=conflict@fixture partstat=ACCEPTED reply=\S+ bytes=\d+\n')
+  press('a',r'\[date.invite.preview\] uid=conflict@fixture partstat=ACCEPTED\n')
+  s=len(t());q.key('ret');g['wait'](r'\[date.invite.answered\] uid=conflict@fixture partstat=ACCEPTED reply=\S+ bytes=\d+\n',s,60)
   q.key('esc');time.sleep(.3)
   dav.put('conflict.ics',ics('conflict@fixture',conflict_start,conflict_end,'Server revised',attendee))
   s=len(t());keys('s')
