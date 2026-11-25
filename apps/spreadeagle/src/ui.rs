@@ -1045,7 +1045,7 @@ impl Ui {
         let values: Vec<String> = if let Some(value) = exact {
             vec![value]
         } else if menu.toggled {
-            menu.values.into_iter().zip(menu.checked).filter_map(|(value, checked)| checked.then_some(value)).collect()
+            menu.checked_all
         } else {
             chosen.map(|i| menu.values[i].clone()).into_iter().collect()
         };
@@ -1077,19 +1077,20 @@ impl Ui {
         if let Some(menu) = &mut self.filter_menu {
             if key.code == code::BACKSPACE && menu.searching {
                 menu.pop_query();
+                menu.extend_values(self.book.filter_search_choices(menu.col, &menu.query));
                 if menu.results.is_empty() { menu.offer_exact(self.book.filter_exact_choice(menu.col, &menu.query)); }
                 return false;
             }
             if key.code == code::SPACE && menu.searching && !key.control {
                 menu.push_query(' ');
+                menu.extend_values(self.book.filter_search_choices(menu.col, &menu.query));
                 if menu.results.is_empty() { menu.offer_exact(self.book.filter_exact_choice(menu.col, &menu.query)); }
                 return false;
             }
             if key.code == code::SPACE && (!key.control || menu.searching) {
                 if menu.selected_exact().is_some() { return false; }
                 menu.toggled = true;
-                if menu.selected == 0 { menu.checked.fill(false); }
-                else if let Some(i) = menu.selected_value_index() { menu.checked[i] = !menu.checked[i]; }
+                menu.toggle_selected();
                 return false;
             }
             match sex_app::nav(key) {
@@ -1098,6 +1099,7 @@ impl Ui {
                 _ => if menu.searching {
                     if let Some(c) = sex_app::text(key).filter(|c| !c.is_control() && !key.control) {
                         menu.push_query(c);
+                        menu.extend_values(self.book.filter_search_choices(menu.col, &menu.query));
                         if menu.results.is_empty() {
                             menu.offer_exact(self.book.filter_exact_choice(menu.col, &menu.query));
                         }
