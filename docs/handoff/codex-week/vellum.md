@@ -16,11 +16,13 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
 - **Highlight opacity:** Ctrl+Shift+O cycles 100%, 75%, 50%, and 25% before placing a highlight. The PDF annotation stores `/CA` and the generated appearance applies the same alpha. A focused test compares opaque and translucent renders; the QEMU gate captures a green 75% highlight and checks its guest-saved opacity. Other markup appearance controls remain open.
 - **Highlight comments:** Ctrl+L lists annotations; Enter on a highlight edits its comment in the top bar, with Ctrl+Z/Ctrl+Shift+Z before save. The edit updates only `/Contents`, retaining the highlight's geometry and appearance. A host round trip and QEMU save/reopen gate check the text; comments on other annotation kinds and richer metadata editing remain open.
 - **Sticky note text:** Enter on a selected note in Ctrl+L edits its existing text with the same bounded input and undo/redo path. The editor updates `/Contents` while keeping the note icon and placement. A focused PDF test and QEMU save/reopen gate check the changed note; other annotation kinds and richer metadata editing remain open.
-- **Search across layout breaks:** Find currently treats extracted line breaks as
-  literal characters, so a phrase typed with a space misses words split across
-  two visible lines. This slice makes whitespace runs match one query space and
-  highlights the exact source character span. Hyphenated word joins and
-  multi-column reading order remain separate gaps.
+- **Search across layout breaks:** Find collapses extracted whitespace runs, so
+  a phrase typed with a space matches adjacent visible lines while its highlight
+  keeps the source span. Find also matches both `international` and
+  `inter-national` when the PDF prints `inter-` then `national` on the next line.
+  Both queries retain that full source span; same-line hyphens remain literal.
+  The fixture, pure search tests, and QEMU gate cover both forms.
+  Multi-column reading order remains separate.
 - **Match Case:** Find now offers Ctrl+Shift+M while its bar is open. The bar
   shows the mode, and changing it reruns the existing query against the same
   source character spans. The default still ignores case; the guest gate

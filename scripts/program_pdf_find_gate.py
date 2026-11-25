@@ -125,6 +125,27 @@ def main():
   for _ in range(6):
    q.cmd('send-key',{'keys':[{'type':'qcode','data':k} for k in ('meta_l','ctrl','spc')],'hold-time':80});time.sleep(.15)
   g['wait'](r'\[shell.keyboard.layout\] label=US title=English \(US\)',s,30)
+  # The same visibly split word is found both as one word and with its printed hyphen.
+  s=len(t());q.key('esc');time.sleep(.3)
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80})
+  for _ in phrase:q.key('backspace');time.sleep(.04)
+  keys('international');q.key('ret')
+  g['wait'](rf'\[pdf\.find\] term=international page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find-hyphen-joined.ppm')})
+  joined=(a.out/'pdf-find-hyphen-joined.ppm').read_bytes()
+  assert joined.startswith(b'P6\n') and joined!=cross
+  s=len(t());q.key('esc');time.sleep(.3)
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80})
+  for _ in 'international':q.key('backspace');time.sleep(.04)
+  keys('inter-national');q.key('ret')
+  g['wait'](rf'\[pdf\.find\] term=inter-national page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find-hyphen-literal.ppm')})
+  assert (a.out/'pdf-find-hyphen-literal.ppm').stat().st_size>10000
+  s=len(t());q.key('esc');time.sleep(.3)
+  q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'f'}],'hold-time':80})
+  for _ in 'inter-national':q.key('backspace');time.sleep(.04)
+  keys('cooperate');q.key('ret')
+  g['wait'](r'\[pdf\.find\] term=cooperate hits=0\n',s,300)
   s=len(t());q.key('esc');time.sleep(.3)
   # The outline: four entries; Up to the first, Enter turns to page 1.
   press('o',r'\[pdf\.outline\] shown=1 entries=4\n')

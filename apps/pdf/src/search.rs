@@ -18,17 +18,54 @@ fn fold(c: char) -> char {
 
 /// Collapse each whitespace run to one space, keeping the range of source
 /// characters it replaced so highlights can cover the actual extracted text.
+fn push_normalized(out: &mut Vec<(char, usize, usize)>, at: usize, c: char, match_case: bool) {
+    if c.is_whitespace() {
+        if let Some((last, _, end)) = out.last_mut() {
+            if *last == ' ' { *end = at + 1; return; }
+        }
+        out.push((' ', at, at + 1));
+    } else { out.push((if match_case { c } else { fold(c) }, at, at + 1)); }
+}
+
 fn normalized(chars: impl IntoIterator<Item = char>, match_case: bool) -> Vec<(char, usize, usize)> {
     let mut out: Vec<(char, usize, usize)> = Vec::new();
     for (at, c) in chars.into_iter().enumerate() {
-        if c.is_whitespace() {
-            if let Some((last, _, end)) = out.last_mut() {
-                if *last == ' ' { *end = at + 1; continue; }
-            }
-            out.push((' ', at, at + 1));
-        } else { out.push((if match_case { c } else { fold(c) }, at, at + 1)); }
+        push_normalized(&mut out, at, c, match_case);
     }
     out
+}
+
+/// Only an alphabetic word visibly split at a line-end hyphen may be joined.
+/// A hyphen within a line, or before a space, remains part of the word.
+fn hyphen_break(text: &[char], at: usize) -> Option<usize> {
+    if text.get(at) != Some(&'-') || at == 0 || !text[at - 1].is_alphabetic() { return None; }
+    let mut next = at + 1;
+    if text.get(next) == Some(&'\r') { next += 1; }
+    if text.get(next) != Some(&'\n') { return None; }
+    next += 1;
+    text.get(next).is_some_and(|c| c.is_alphabetic()).then_some(next)
+}
+
+fn normalized_hyphen_breaks(text: &[char], keep_hyphen: bool, match_case: bool) -> Vec<(char, usize, usize)> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at < text.len() {
+        if let Some(next) = hyphen_break(text, at) {
+            if keep_hyphen { push_normalized(&mut out, at, '-', match_case); }
+            at = next;
+        } else {
+            push_normalized(&mut out, at, text[at], match_case);
+            at += 1;
+        }
+    }
+    out
+}
+
+fn matches(hay: &[(char, usize, usize)], needle: &[char]) -> Vec<(usize, usize)> {
+    if needle.len() > hay.len() { return Vec::new(); }
+    (0..=hay.len() - needle.len())
+        .filter(|&i| hay[i..i + needle.len()].iter().map(|x| x.0).eq(needle.iter().copied()))
+        .map(|i| (hay[i].1, hay[i + needle.len() - 1].2)).collect()
 }
 
 fn spans(text: &[char], term: &str, match_case: bool) -> Vec<(usize, usize)> {
@@ -38,11 +75,14 @@ fn spans(text: &[char], term: &str, match_case: bool) -> Vec<(usize, usize)> {
     let last = needle.iter().rposition(|c| *c != ' ').unwrap();
     let needle = &needle[first..=last];
     if needle.is_empty() { return Vec::new(); }
-    let hay = normalized(text.iter().copied(), match_case);
-    if needle.len() > hay.len() { return Vec::new(); }
-    (0..=hay.len() - needle.len())
-        .filter(|&i| hay[i..i + needle.len()].iter().map(|x| x.0).eq(needle.iter().copied()))
-        .map(|i| (hay[i].1, hay[i + needle.len() - 1].2)).collect()
+    let mut found = matches(&normalized(text.iter().copied(), match_case), needle);
+    if (0..text.len()).any(|at| hyphen_break(text, at).is_some()) {
+        found.extend(matches(&normalized_hyphen_breaks(text, true, match_case), needle));
+        found.extend(matches(&normalized_hyphen_breaks(text, false, match_case), needle));
+    }
+    found.sort_unstable();
+    found.dedup();
+    found
 }
 
 /// Where `term` starts in `text`, ignoring case and layout whitespace, in
@@ -92,6 +132,23 @@ mod tests {
         assert_eq!(hits(&[page], "line second"), vec![Hit { page: 0, at: 6, len: 12 }]);
         assert!(find_all(&chars("one two"), "   ").is_empty());
         assert_eq!(find_all(&chars("one\t\ntwo"), " one   two "), vec![0]);
+    }
+
+    #[test]
+    fn line_end_hyphen_matches_joined_and_printed_forms() {
+        let page = chars("The inter-\nnational report says co-operate and re- entry.");
+        let source = "inter-\nnational";
+        for query in ["international", "inter-national"] {
+            let found = hits(&[page.clone()], query);
+            assert_eq!(found.len(), 1, "{query}");
+            let hit = found[0];
+            assert_eq!((hit.at, hit.len), (4, source.chars().count()));
+            assert_eq!(page[hit.at..hit.at + hit.len].iter().collect::<String>(), source);
+        }
+        assert!(hits(&[page.clone()], "inter national").is_empty());
+        assert!(hits(&[page.clone()], "cooperate").is_empty());
+        assert!(hits(&[page.clone()], "reentry").is_empty());
+        assert_eq!(hits(&[page], "co-operate").len(), 1);
     }
 
     #[test]
