@@ -229,6 +229,21 @@ impl Browser {
                         dom.values.insert(pending.username, String::from(user));
                         dom.values.insert(pending.password, String::from(pass));
                     });
+                    if let Some(script) = self.doc.script() {
+                        // Sites that track input/change must see the completed pair.
+                        // The script message contains node IDs, never credential bytes.
+                        let _ = script.dispatch(&alloc::format!("autofill\t{}\t{}", pending.username, pending.password));
+                        self.after_script(true);
+                        self.timers_changed();
+                        // An input listener may submit, navigate, hide, or replace the
+                        // form. Never put a "filled" status on the resulting page.
+                        if self.active != pending.tab || self.doc.get_ref().owner() != pending.owner
+                            || !ready(self).is_ok_and(|pair| pair.origin == pending.origin
+                                && pair.username == pending.username && pair.password == pending.password) {
+                            sex_pdx::serial_record!("[web.autofill.changed_after_events]");
+                            return;
+                        }
+                    }
                     self.relayout();
                     self.status = Some("Password filled from Chastity");
                     web_record!("[web.autofill.filled] fields=2");

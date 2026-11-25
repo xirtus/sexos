@@ -37,13 +37,18 @@ and Shields. The remaining gaps are:
   hidden-part cleanup is still open.
 
 - A password manager with safe autofill and passkeys, integrated with Chastity.
+  **Reactive login:** approved fills now emit `input` and `change` for both
+  controls after writing their values, so a page can enable Sign in from those
+  events. The dispatch carries node IDs rather than credential bytes, and the
+  browser rechecks the page after listeners run. The two-app gate requires the
+  events before its fixture accepts the login.
   The first autofill slice defines and tests exact top-level HTTPS scope and an
   unambiguous same-origin POST login pair. This slice wires explicit Ctrl+Shift+K
   requests to Chastity, rechecks the
   tab and document after approval, and cancels pending requests on navigation
   or tab changes. A browser capture policy and Chastity's scoped add/update
   decision are host-tested; the Shell write transfer, visible Chastity approval,
-  browser command, and passkeys remain.
+  and browser save command now form an end-to-end saved-login path. Passkeys remain.
   The Shell broker now has an attested, bounded reverse proposal route from
   Kaleidoscope to Chastity. Ctrl+Shift+U now captures the current eligible
   login, transfers it through that route, and cancels when the page or values

@@ -4669,6 +4669,20 @@
         el.dispatchEvent(ev);
         return ev.defaultPrevented ? 1 : 0;
       }
+      case 'autofill': {
+        // The browser has already written both values after Chastity consent.
+        // Only node IDs cross this dispatch boundary; event payloads carry no secret.
+        const user = wrap(f[1]), password = wrap(f[2]);
+        if (!user || !password || user === password || !user.isConnected || !password.isConnected ||
+            user.localName !== 'input' || password.localName !== 'input' || password.type !== 'password') return 0;
+        for (const el of [user, password]) {
+          if (!el.isConnected) return 0;
+          fire(el, 'input', InputEvent, { inputType: 'insertReplacementText' });
+          if (!el.isConnected) return 0;
+          fire(el, 'change');
+        }
+        return 1;
+      }
       case 'key': {
         if (!KEY_TYPES.has(f[1])) return 0;
         const ev = new KeyboardEvent(f[1], { key: f[2] || '', code: f[3] || '', bubbles: true, cancelable: true, ctrlKey: f[4] === '1' });
