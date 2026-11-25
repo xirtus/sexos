@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 //! Read-only Git index facts for a project inside Quil's Files grant.
 //! Version 2/3 SHA-1 indexes are understood; unsupported formats are reported.
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use alloc::string::{String, ToString};
@@ -86,6 +87,21 @@ pub fn diff_text(before: &[u8], after: &[u8]) -> Result<Vec<String>, DiffError> 
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tracked { pub path: Vec<u8>, pub id: [u8; 20], pub size: u32, pub stage: u8 }
+
+/// Files found by Quil's bounded project walk but absent from the index.
+/// These are *candidates*: Git ignore rules and excludes are not evaluated.
+pub fn untracked_candidates(tracked: &[Tracked], walked: &[(Vec<u8>, u64)], limit: usize) -> Vec<Vec<u8>> {
+    if limit == 0 { return Vec::new(); }
+    let names: BTreeSet<&[u8]> = tracked.iter().map(|entry| entry.path.as_slice()).collect();
+    let mut out = Vec::new();
+    for (path, _) in walked {
+        if !names.contains(path.as_slice()) && !out.contains(path) {
+            out.push(path.clone());
+            if out.len() == limit.min(64) { break; }
+        }
+    }
+    out
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error { Header, Version, Truncated, Checksum, Path, Limit }
@@ -250,5 +266,14 @@ mod tests {
             b"ref: refs/tags/v1\n", b"ref: refs/heads/main\x1b[31m\n"] {
             assert_eq!(head_label(bytes), None);
         }
+    }
+
+    #[test]
+    fn untracked_candidates_are_bounded_and_do_not_claim_ignored_state() {
+        let tracked = parse_index(INDEX).unwrap();
+        let walked = vec![(b"demo.rs".to_vec(), 10), (b"notes.txt".to_vec(), 4),
+            (b"notes.txt".to_vec(), 4), (b"ignored.tmp".to_vec(), 3)];
+        assert_eq!(untracked_candidates(&tracked, &walked, 2), [b"notes.txt".to_vec(), b"ignored.tmp".to_vec()]);
+        assert_eq!(untracked_candidates(&tracked, &walked, 1), [b"notes.txt".to_vec()]);
     }
 }

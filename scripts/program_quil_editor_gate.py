@@ -16,8 +16,9 @@ INDEX=(ROOT/'tests/fixtures/quil-git-index').read_bytes()
 GIT_BLOB=b'blob '+str(len(DEMO)).encode()+b'\0'+DEMO
 GIT_ID=hashlib.sha1(GIT_BLOB).hexdigest()
 GIT_HEAD=b'ref: refs/heads/quil/demo\n'
+UNTRACKED=b'Quil work note\n'
 assert bytes.fromhex(GIT_ID)==INDEX[52:72]
-FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/reference.rs':REFERENCE,'/identifier.rs':IDENTIFIER,'/git-index':INDEX,'/git-head':GIT_HEAD,'/git-blob':zlib.compress(GIT_BLOB)}
+FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN,'/complete.rs':COMPLETE,'/reference.rs':REFERENCE,'/identifier.rs':IDENTIFIER,'/untracked':UNTRACKED,'/git-index':INDEX,'/git-head':GIT_HEAD,'/git-blob':zlib.compress(GIT_BLOB)}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -69,6 +70,7 @@ def main():
   g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,60);time.sleep(1)
   for name in ('demo.rs','other.rs','broken.rs','complete.rs','reference.rs','identifier.rs'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
+  m=expect(f'fetch http://10.0.2.2:{PORT}/untracked /data/quil/notes.txt',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   line('mkdir /data/quil/.git')
   m=expect(f'fetch http://10.0.2.2:{PORT}/git-head /data/quil/.git/HEAD',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   m=expect(f'fetch http://10.0.2.2:{PORT}/git-index /data/quil/.git/index',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
@@ -99,6 +101,10 @@ def main():
   s=len(t());send('ctrl','shift','v')
   g['wait'](r'\[quil.code.git\] tracked_changes=1 note=\n',s,60)
   g['wait'](r'\[quil.code.git.head\] label=quil/demo\n',s,60)
+  found=g['wait'](r'\[quil.code.git.candidates\] count=(\d+)\n',s,60)
+  assert int(found[1])>=1,found[0]
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-git-untracked-candidates.ppm')})
+  assert (a.out/'quil-git-untracked-candidates.ppm').stat().st_size>100000
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'quil-git-branch.ppm')})
   assert (a.out/'quil-git-branch.ppm').stat().st_size>100000
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-git-status.ppm')})

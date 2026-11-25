@@ -176,11 +176,14 @@ fn git_head(root: &[u8]) -> String {
 #[derive(Clone)]
 struct GitChange { code: char, path: Vec<u8>, id: [u8; 20] }
 
-/// Compare tracked paths with the checked Git index; no ignored/untracked claim.
+/// Compare tracked paths with the checked Git index and list bounded files
+/// absent from it. Ignore rules are not parsed, so those rows are candidates.
 fn git_changes(root: &[u8]) -> Result<Vec<GitChange>, String> {
     let index = project::join(root, b".git/index");
     let bytes = git_read(&index, git::MAX_INDEX).ok_or_else(|| String::from("No readable Git index in this project."))?;
     let tracked = git::parse_index(&bytes).map_err(|e| format!("Unsupported or damaged Git index: {e:?}"))?;
+    let walked = project::walk(&mut AppFs, root, 5000);
+    let candidates = git::untracked_candidates(&tracked, &walked, 64);
     let mut out = Vec::new();
     for entry in tracked {
         if entry.stage != 0 { out.push(GitChange { code: 'C', path: entry.path, id: entry.id }); continue; }
@@ -197,8 +200,12 @@ fn git_changes(root: &[u8]) -> Result<Vec<GitChange>, String> {
         };
         out.push(GitChange { code, path: entry.path, id: entry.id });
     }
+    for path in candidates { out.push(GitChange { code: 'N', path, id: [0; 20] }); }
     Ok(out)
 }
+
+fn git_tracked_count(changes: &[GitChange]) -> usize { changes.iter().filter(|c| c.code != 'N').count() }
+fn git_candidate_count(changes: &[GitChange]) -> usize { changes.iter().filter(|c| c.code == 'N').count() }
 
 fn git_diff(root: &[u8], change: &GitChange) -> Result<Vec<String>, String> {
     if !matches!(change.code, 'M' | 'D') { return Err(String::from("Diff is available for tracked modified or deleted text files.")); }
@@ -885,7 +892,8 @@ impl App {
                     Ok(changes) => (changes, String::new()),
                     Err(note) => (Vec::new(), note),
                 };
-                sex_pdx::serial_record!("[quil.code.git] tracked_changes={} note={}", changes.len(), note);
+                sex_pdx::serial_record!("[quil.code.git] tracked_changes={} note={}", git_tracked_count(&changes), note);
+                sex_pdx::serial_record!("[quil.code.git.candidates] count={}", git_candidate_count(&changes));
                 let head = git_head(&self.root);
                 sex_pdx::serial_record!("[quil.code.git.head] label={head}");
                 self.overlay = Overlay::Git { changes, sel: 0, note, head };
@@ -1049,7 +1057,7 @@ impl App {
                         Ok(()) => {
                             self.git_stage_undo = None;
                             let refreshed = git_changes(&self.root).unwrap_or_default();
-                            sex_pdx::serial_record!("[quil.code.git.unstaged] tracked_changes={}", refreshed.len());
+                            sex_pdx::serial_record!("[quil.code.git.unstaged] tracked_changes={}", git_tracked_count(&refreshed));
                             self.overlay = Overlay::Git { changes: refreshed, sel: 0, note: String::from("Undid last Quil stage."), head: git_head(&self.root) };
                             keep = false;
                         }
@@ -1061,7 +1069,7 @@ impl App {
                         Ok(history) => {
                             self.git_stage_undo = Some(history);
                             let refreshed = git_changes(&self.root).unwrap_or_default();
-                            sex_pdx::serial_record!("[quil.code.git.staged] path={} tracked_changes={}", lossy(&change.path), refreshed.len());
+                            sex_pdx::serial_record!("[quil.code.git.staged] path={} tracked_changes={}", lossy(&change.path), git_tracked_count(&refreshed));
                             self.overlay = Overlay::Git { changes: refreshed, sel: 0, note: format!("Staged {}. U undoes this stage.", lossy(&change.path)), head: git_head(&self.root) };
                             keep = false;
                         }
@@ -1437,6 +1445,9 @@ impl App {
             }
             Overlay::Git { changes, sel, note, head } => {
                 lines.push((format!("HEAD: {head}"), false));
+                if git_candidate_count(changes) > 0 {
+                    lines.push((String::from("N = outside index; ignore rules not checked"), false));
+                }
                 if !note.is_empty() { lines.push((note.clone(), false)); }
                 else if changes.is_empty() { lines.push((String::from("Indexed files match the worktree."), false)); }
                 let first = sel.saturating_sub(9);
