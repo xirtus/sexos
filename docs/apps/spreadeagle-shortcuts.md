@@ -45,8 +45,10 @@ press / or Ctrl+F in the menu to search its values (case-insensitive). Search
 narrows the list without losing checked choices; Enter applies the highlighted
 match, and Backspace edits the query. Esc clears a query before closing the menu.
 Space can be typed in a search. Ctrl+Space toggles a highlighted search result.
-When the preview has no match, an exact value from the full filter range appears
-if it exists; Enter applies it. Enter on the untouched
+Search also finds partial matches beyond the first 1,000 preview values and
+10,000 rows, including formula spill values. The result list shows up to 128
+distinct matches; narrow the query to reach a value beyond that limit.
+Ctrl+Space can mark several search results before Enter applies them. Enter on the untouched
 **All rows** row leaves an active filter in place. Move to a value and press
 Enter to replace it, or press Space on **All rows**, then
 Enter, to clear that column's filter.

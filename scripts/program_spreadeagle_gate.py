@@ -127,6 +127,19 @@ def main():
   assert (a.out/'spreadeagle-filter-overflow.ppm').stat().st_size>10000
   s=len(t());q.key('ret')
   g['wait'](r'\[spreadeagle\.filter\.choice\] col=A value=Item 1100\n',s,180)
+  ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=A values=1000\n')
+  q.key('spc');q.key('ret')
+  ctrl_shift('o',r'\[spreadeagle\.filter\.menu\] col=A values=1000\n')
+  s=len(t());q.key('slash');type_line('Late')
+  g['wait'](r'\[spreadeagle\.filter\.search\] col=A query=Late matches=2 selected=1\n',s,180)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-filter-partial-search.ppm')})
+  assert (a.out/'spreadeagle-filter-partial-search.ppm').stat().st_size>10000
+  def mark_search_result():
+   keys=('ctrl','spc')
+   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]})
+  mark_search_result();q.key('down');mark_search_result()
+  s=len(t());q.key('ret')
+  g['wait'](r'\[spreadeagle\.filter\.choice\] col=A value=2-values\n',s,180)
   close(large)
   o=opened()
   s=len(t());q.key('right');column('B',r'Cost\|1200\|300\|150\|1650\|19800\|\|',s)

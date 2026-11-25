@@ -3,7 +3,7 @@
 //! Apache-2.0) holds the cells, recalculates, keeps undo, and reads and writes the
 //! files. Nothing here draws or touches SexOS, so the host tests drive it directly.
 use gridcraft_engine::Session;
-use gridcraft_engine::core::{CellRef, Value};
+use gridcraft_engine::core::{CellRef, RangeRef, Value};
 use gridcraft_engine::model::{ErrorStyle, FilterCriterion};
 use std::collections::BTreeSet;
 use serde_json::{Value as Json, json};
@@ -533,6 +533,34 @@ impl Book {
             if value.to_lowercase() == needle { return Some(value); }
         }
         None
+    }
+
+    /// Search the full AutoFilter column, including sparse cells and array spills,
+    /// instead of only the menu's first 1,000 values or 10,000 rows. Return a
+    /// bounded set of distinct displayed matches so the menu cannot grow without
+    /// limit; the scan follows sparse stored cells and dynamic-array spills.
+    pub fn filter_search_choices(&self, col: u32, query: &str) -> Vec<String> {
+        const MAX_MATCHES: usize = 128;
+        let Some(range) = self.filter_range() else { return Vec::new() };
+        let (top, left, bottom, right) = range.bounds();
+        if query.is_empty() || !(left..=right).contains(&col) || bottom <= top { return Vec::new() }
+        let needle = query.to_lowercase();
+        let Ok(d) = self.session.doc() else { return Vec::new() };
+        let Some(sheet) = d.wb.active() else { return Vec::new() };
+        let mut matches = BTreeSet::new();
+        let wants_blank = "(blank)".contains(&needle);
+        let mut occupied_rows = wants_blank.then(BTreeSet::new);
+        let cells = sheet.cells.iter_range(RangeRef::new(CellRef::new(top + 1, col), CellRef::new(bottom, col)))
+            .map(|(at, _)| at).chain(sheet.spill.keys().copied().filter(|at| at.col == col && at.row > top && at.row <= bottom));
+        for at in cells {
+            let value = gridcraft_engine::display::cell_text(&d.wb, sheet, at);
+            if let Some(rows) = &mut occupied_rows { if !value.is_empty() { rows.insert(at.row); } }
+            let label = if value.is_empty() { "(blank)" } else { value.as_str() };
+            if label.to_lowercase().contains(&needle) { matches.insert(value); }
+            if matches.len() >= MAX_MATCHES && !wants_blank { break; }
+        }
+        if wants_blank && occupied_rows.is_some_and(|rows| rows.len() < (bottom - top) as usize) { matches.insert(String::new()); }
+        matches.into_iter().take(MAX_MATCHES).collect()
     }
 
     /// Turns the AutoFilter on (over the region around `at`) or off.
@@ -1215,7 +1243,7 @@ mod tests {
         std::fs::write(&path, include_bytes!("../assets/filter-overflow.xlsx")).unwrap();
         let mut book = Book::open(&path).unwrap().0;
         book.toggle_filter(Range::cell(0, 0)).unwrap();
-        assert_eq!(book.filter_range().unwrap().bounds().2, 1_100);
+        assert_eq!(book.filter_range().unwrap().bounds().2, 1_102);
         assert_eq!(book.filter_choices(0).len(), 1_000);
         assert_eq!(book.filter_exact_choice(0, "item 1100").as_deref(), Some("Item 1100"));
         assert_eq!(book.filter_exact_choice(0, "not present"), None);
@@ -2019,6 +2047,38 @@ mod tests {
         let sum = functions.iter().find(|f| f.name == "SUM").unwrap();
         assert!(!sum.signature.is_empty() && !sum.description.is_empty());
         assert!(sum.matches("sum") && sum.matches(&sum.category) && !sum.matches("not-a-function"));
+    }
+
+    #[test]
+    fn filter_partial_search_reaches_sparse_rows_beyond_preview_and_reopens() {
+        let path = temp("filter-late-search.xlsx");
+        let mut book = Book::blank(&path);
+        book.set(0, 0, "Code").unwrap();
+        for row in 1..=1_001 { book.set(row, 0, &format!("Item {row:04}")).unwrap(); }
+        book.set(10_050, 0, "Late amber").unwrap();
+        book.set(10_051, 0, "Late azure").unwrap();
+        let area = Range { r0: 0, c0: 0, r1: 10_051, c1: 0 };
+        book.toggle_filter(area).unwrap();
+        assert_eq!(book.filter_choices(0).len(), 1_000);
+        assert_eq!(book.filter_search_choices(0, "late a"), ["Late amber", "Late azure"]);
+        book.filter_by_values(area, 0, &["Late amber".into(), "Late azure".into()]).unwrap();
+        book.save().unwrap();
+        let (again, warnings) = Book::open(&path).unwrap();
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(again.filter_state(0), FilterState::Values { values: vec!["Late amber".into(), "Late azure".into()], blanks: false });
+    }
+
+    #[test]
+    fn filter_search_includes_spill_results_and_sparse_blanks() {
+        let mut book = Book::blank(&temp("filter-spill.xlsx"));
+        book.set(0, 0, "Code").unwrap();
+        book.set(0, 1, "Generated").unwrap();
+        book.set(1, 0, "filled").unwrap();
+        book.set(3, 0, "other").unwrap();
+        book.set(1, 1, "=SEQUENCE(3)").unwrap();
+        book.toggle_filter(Range { r0: 0, c0: 0, r1: 3, c1: 1 }).unwrap();
+        assert_eq!(book.filter_search_choices(0, "blank"), [""]);
+        assert_eq!(book.filter_search_choices(1, "3"), ["3"]);
     }
 
     #[test]
