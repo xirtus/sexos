@@ -23,4 +23,6 @@ Remaining gaps:
   contrast tokens. Pictures retain a dark photo well because their RGB cache
   already contains that well; this avoids stale transparency halos across themes.
 - The in-app controls have a standalone reference in `docs/apps/loom-shortcuts.md`.
-  Redo and a forced power-cut session recovery gate remain open polish gaps.
+  Ctrl+Y now replays undone batch renames and trash moves, with metadata and trash
+  origin notes restored. Redo for copy, ordinary rename, folder creation and
+  cross-disk move, plus a forced power-cut session recovery gate, remain.

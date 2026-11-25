@@ -109,14 +109,20 @@ impl App {
         sex_pdx::serial_record!("[files.app.renamed] dir={} mask={} files={} moves={}", shown(&dir), shown(&mask), changed, done.len());
         for l in preview.lines.iter().filter(|l| l.changed()).take(20) { sex_pdx::serial_record!("[files.app.renamed.file] from={} to={}", shown(&l.from), shown(&l.to)); }
         let undo: Vec<(Vec<u8>, Vec<u8>)> = rn::undo(&done).into_iter().map(|m| (m.from, m.to)).collect();
-        self.undo.push(Undo::Renamed { dir, moves: undo });
+        self.record_undo(Undo::Renamed { dir, moves: undo });
         self.load(window);
         self.status = format!("Renamed {} files. Ctrl+Z takes them all back.", changed);
     }
     /// Ctrl+Z after a batch rename: every move back, in an order that never overwrites.
     pub(crate) fn rename_undo(&mut self, window: &mut Window, dir: &[u8], moves: &[(Vec<u8>, Vec<u8>)]) -> Result<(), u8> {
         for (i, (f, t)) in moves.iter().enumerate() {
-            if let Err(e) = files::rename(window, &at(&join(dir, f)), &at(&join(dir, t))) {
+            let dest = at(&join(dir, t));
+            let moved = match files::stat(window, &dest) {
+                Ok(_) => Err(sex_pdx::fs::EXISTS),
+                Err(sex_pdx::fs::NOT_FOUND) => files::rename(window, &at(&join(dir, f)), &dest),
+                Err(e) => Err(e),
+            };
+            if let Err(e) = moved {
                 // Redo what was already undone, so the batch stays whole either way.
                 for (f2, t2) in moves[..i].iter().rev() { let _ = files::rename(window, &at(&join(dir, t2)), &at(&join(dir, f2))); }
                 return Err(e);
