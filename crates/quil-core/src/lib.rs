@@ -12,6 +12,7 @@
 extern crate alloc;
 
 pub mod buffer;
+pub mod draft;
 pub mod editor;
 pub mod fuzzy;
 pub mod highlight;

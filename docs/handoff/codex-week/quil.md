@@ -12,7 +12,9 @@ Remaining gaps:
 - A save can truncate the live small file, and the large-file path removes the
   original before replacement. This change fixes that data-loss window on the
   same volume. Cross-volume saves need an explicit safe copy strategy.
-- Draft recovery needs a complete app-level audit. Quil now follows the system's
+- Named files up to 4 MiB now get staged, checksummed recovery drafts every two
+  seconds while edited; reopening the file restores its draft. Untitled and larger
+  files still need recovery. Quil now follows the system's
   light, dark and high-contrast colors, including accent changes while open.
 - The keyboard reference is available in Quil with Ctrl+Shift+/, including the
   active keymap and scrolling; the complete user guide is `docs/QUIL_SHORTCUTS.md`.

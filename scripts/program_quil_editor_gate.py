@@ -99,7 +99,22 @@ def main():
   g['wait'](rf'\[quil.code.saved\] path=large-check.txt bytes={len(big)} hash={fnv(big):016x}',s,1200)
   g['wait'](rf'\[quil.code.save.committed\] path=large-check.txt bytes={len(big)}',s,60)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-large.ppm')});time.sleep(.5)
+  # Leave a named file modified, close the program, and reopen it from its
+  # already granted folder. Recovery must restore the draft, not the disk file.
+  send('ctrl','p');time.sleep(.3);keys('demo');q.key('ret');time.sleep(.5)
+  s=len(t());q.key('x')
+  saved=g['wait'](r'\[quil.code.draft.saved\] path=demo.rs bytes=(\d+)',s,90)
+  assert int(saved[1])>len(want2),saved[0]
   s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={target} task={task}',s,60)
+  g['wait'](rf'\[app.private.retired\] target={target} task={task} ',s,90)
+  s=len(t());line('run quil demo.rs')
+  recovered=g['wait'](r'\[quil.code.draft.recovered\] path=demo.rs bytes=(\d+)',s,120)
+  assert recovered[1]==saved[1],(saved[0],recovered[0])
+  relaunched=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
+  g['focus'](int(relaunched[3]));time.sleep(1)
+  q.cmd('screendump',{'filename':str(a.out/'quil-draft-recovered.ppm')})
+  assert (a.out/'quil-draft-recovered.ppm').stat().st_size>100000
+  s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={relaunched[1]} task={relaunched[2]}',s,60)
   assert 'KERNEL PANIC'not in t() and 'panicked' not in t() and '[quil.code.fatal]' not in t()
  finally:g['stop']()
  print({'ok':True,'large_mb':a.large_mb})
