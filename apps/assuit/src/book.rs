@@ -113,6 +113,16 @@ impl Book {
         self.run("insert.table", json!({ "rows": rows, "cols": cols })).map(|_| ())
     }
 
+    /// Inserts a picture from a file the program can read in its granted folder.
+    pub fn insert_picture(&mut self, path: &str) -> Result<(), String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("Could not read {path}: {e}"))?;
+        if bytes.len() > 16 * 1024 * 1024 {
+            return Err("Picture is larger than 16 MiB".into());
+        }
+        let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
+        self.run("insert.picture", json!({ "data": data, "alt": path.rsplit('/').next().unwrap_or(path) })).map(|_| ())
+    }
+
     /// Words in the body, as a word processor's status bar counts them.
     pub fn words(&self) -> usize { self.text().split_whitespace().count() }
 
@@ -602,6 +612,23 @@ mod tests {
             let again = Book::open(&path).unwrap();
             assert!(again.text().contains("First cell"), "{ext}: {}", again.text());
             assert!(again.text().contains("Second cell"), "{ext}: {}", again.text());
+        }
+    }
+
+    #[test]
+    fn inserted_picture_round_trips_in_docx_and_odt() {
+        let png = include_bytes!("../../../assets/brand/sexos-lips-badge-64.png");
+        let picture = temp("mark.png");
+        std::fs::write(&picture, png).unwrap();
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("picture.{ext}"));
+            let mut book = Book::blank(&path);
+            book.insert_picture(&picture).unwrap();
+            assert_eq!(book.session.doc.media.len(), 1);
+            book.save().unwrap();
+            let again = Book::open(&path).unwrap();
+            assert_eq!(again.session.doc.media.len(), 1, "{ext} lost the picture");
+            assert!(again.session.doc.media.values().next().unwrap().starts_with(b"\x89PNG"));
         }
     }
 

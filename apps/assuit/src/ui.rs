@@ -55,6 +55,8 @@ enum Ask {
     GoTo(String),
     /// Ctrl+T: dimensions such as 2x3.
     Table(String),
+    /// Ctrl+Shift+I: image path in the program's granted folder.
+    Picture(String),
 }
 
 /// Unsaved changes are copied aside after this long without a key (milliseconds).
@@ -91,6 +93,7 @@ mod code {
     pub const G: u8 = 0x22;
     pub const P: u8 = 0x19;
     pub const T: u8 = 0x14;
+    pub const I: u8 = 0x17;
     pub fn page_up(c: u8) -> bool { matches!(c, 0x49 | 0x68) }
     pub fn page_down(c: u8) -> bool { matches!(c, 0x51 | 0x6D) }
 }
@@ -229,6 +232,7 @@ impl Ui {
                 Ask::SaveAs(name) => format!("Save as: {name}_   {}", said("docx, odt, rtf, html, md, txt or pdf; Enter saves, Esc closes")),
                 Ask::GoTo(page) => format!("Go to page: {page}_   {}", said(&format!("1 to {pages}; Enter goes, Esc closes"))),
                 Ask::Table(size) => format!("Insert table: {size}_   {}", said("rows x columns, for example 2x3; Enter inserts, Esc closes")),
+                Ask::Picture(path) => format!("Insert picture: {path}_   {}", said("PNG, JPEG, GIF, WebP or BMP in this program's folder; Enter inserts")),
             }
         } else if let Some(p) = &self.find {
             match &p.with {
@@ -243,7 +247,7 @@ impl Ui {
                 }
             }
         } else if self.message.is_empty() {
-            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+T table  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
+            format!("{}{}   Page {} of {}   {}   {} words   Ctrl+S save  Ctrl+Shift+E save as  Ctrl+P PDF  Ctrl+T table  Ctrl+Shift+I picture  Ctrl+F find  Ctrl+H replace  Ctrl+G go to  Ctrl+Shift+S styles  Ctrl+B/I/U  Ctrl+Z undo  Ctrl+=/- zoom",
                 self.name, if self.book.dirty() { " (changed)" } else { "" }, page + 1, pages, self.book.paragraph_style(), self.book.words())
         } else {
             self.message.clone()
@@ -313,7 +317,7 @@ impl Ui {
     /// A key while the Save As or Go To prompt is open.
     fn ask_key(&mut self, key: Key) {
         let Some(ask) = &mut self.ask else { return };
-        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) => t };
+        let text = match ask { Ask::SaveAs(t) | Ask::GoTo(t) | Ask::Table(t) | Ask::Picture(t) => t };
         match key.code {
             code::ESC => { self.ask = None; self.message.clear(); return; }
             code::BACKSPACE => { text.pop(); self.message.clear(); return; }
@@ -350,6 +354,18 @@ impl Ui {
                     self.invalidate();
                     sex_std::record(&format!("[assuit.table] rows={rows} cols={cols}"));
                     self.message = format!("Inserted {rows} × {cols} table");
+                }
+                Err(e) => self.message = e,
+            }
+            return;
+        }
+        if matches!(ask, Ask::Picture(_)) {
+            match self.book.insert_picture(&typed) {
+                Ok(()) => {
+                    self.ask = None;
+                    self.invalidate();
+                    sex_std::record(&format!("[assuit.picture] path={typed}"));
+                    self.message = format!("Inserted picture from {typed}");
                 }
                 Err(e) => self.message = e,
             }
@@ -394,6 +410,7 @@ impl Ui {
                 (code::G, _) if !key.shift => { self.ask = Some(Ask::GoTo(String::new())); return; }
                 (code::P, _) if !key.shift => return self.export_pdf(),
                 (code::T, _) if !key.shift => { self.ask = Some(Ask::Table(String::new())); return; }
+                (code::I, _) if key.shift => { self.ask = Some(Ask::Picture(String::new())); return; }
                 (code::S, _) if key.shift => {
                     let styles = self.book.styles();
                     let current = self.book.paragraph_style();

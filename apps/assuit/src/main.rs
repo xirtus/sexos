@@ -22,12 +22,18 @@ mod ui;
 
 /// The first document, hand-written WordprocessingML (apps/assuit/make_welcome.py).
 const WELCOME: &[u8] = include_bytes!("../assets/welcome.docx");
+/// A small first-run picture for trying the insert command, using SexOS's own mark.
+#[cfg(target_os = "hermit")]
+const MARK: &[u8] = include_bytes!("../../../assets/brand/sexos-lips-badge-64.png");
 
 #[cfg(target_os = "hermit")]
 fn main() {
     let name = std::env::args().nth(1).unwrap_or_else(|| {
         if std::fs::metadata("welcome.docx").is_err() {
             if let Err(e) = std::fs::write("welcome.docx", WELCOME) { eprintln!("Could not write welcome.docx: {e}"); }
+        }
+        if std::fs::metadata("assuitmark.png").is_err() {
+            if let Err(e) = std::fs::write("assuitmark.png", MARK) { eprintln!("Could not write assuitmark.png: {e}"); }
         }
         "welcome.docx".to_string()
     });
