@@ -441,7 +441,7 @@ impl Book {
     /// Apply one or two AutoFilter comparisons to a column. GridCraft evaluates
     /// the criteria against cells, including numeric values and formula results.
     pub fn filter_by_condition(&mut self, at: Range, col: u32, input: &str) -> Result<(), String> {
-        const HELP: &str = "Enter =, <>, contains/starts/ends/notcontains text or >, >=, <, <= number; join two with and/or";
+        const HELP: &str = "Enter top/bottom N or N%, =, <>, text or numeric comparison; join two comparisons with and/or";
         fn criterion(input: &str) -> Result<(&'static str, &str), String> {
             let (name, value) = input.trim().split_once(' ').ok_or(HELP)?;
             let value = value.trim();
@@ -458,6 +458,19 @@ impl Book {
             Ok((op, value))
         }
         let input = input.trim();
+        let mut words = input.split_whitespace();
+        let direction = words.next().unwrap_or("").to_ascii_lowercase();
+        if matches!(direction.as_str(), "top" | "bottom") {
+            let amount = words.next().ok_or(HELP)?;
+            if words.next().is_some() { return Err(HELP.into()); }
+            let percent = amount.ends_with('%');
+            let count = amount.trim_end_matches('%').parse::<u32>().map_err(|_| HELP)?;
+            if count == 0 || count > if percent { 100 } else { 1_000_000 } { return Err(HELP.into()); }
+            if self.filter_range().is_none() { self.toggle_filter(at)?; }
+            self.run("data.filterBy", json!({ "column": column_name(col),
+                "top": { "count": count, "bottom": direction == "bottom", "percent": percent } }))?;
+            return Ok(());
+        }
         // Ordinary text may contain "and" or "or". A join exists only when
         // its right side starts a second comparison. Reject three comparisons.
         let mut joins = Vec::new();
@@ -1163,6 +1176,30 @@ mod tests {
         book.save().unwrap();
         let reopened = Book::open(&path).unwrap().0;
         assert_eq!([1, 2, 3].map(|r| reopened.row_height(r) > 0), [true, false, false]);
+    }
+
+    #[test]
+    fn top_bottom_items_and_percent_include_ties_and_reopen() {
+        let mut book = Book::blank(&temp("filter-top-bottom.xlsx"));
+        book.set(0, 0, "Score").unwrap();
+        for (row, value) in ["5", "1", "9", "3", "9", "7", "x"].iter().enumerate() {
+            book.set(row as u32 + 1, 0, value).unwrap();
+        }
+        let at = Range::cell(0, 0);
+        for bad in ["top 0", "bottom 101%", "top 2 extra", "top many"] {
+            assert!(book.filter_by_condition(at, 0, bad).is_err(), "{bad}");
+        }
+        assert!(book.filter_range().is_none());
+        let visible = |book: &Book| (1..=7).map(|row| book.row_height(row) > 0).collect::<Vec<_>>();
+        book.filter_by_condition(at, 0, "top 2").unwrap();
+        assert_eq!(visible(&book), [false, false, true, false, true, false, false]);
+        book.filter_by_condition(at, 0, "bottom 2").unwrap();
+        assert_eq!(visible(&book), [false, true, false, true, false, false, false]);
+        book.filter_by_condition(at, 0, "top 50%").unwrap();
+        assert_eq!(visible(&book), [false, false, true, false, true, true, false]);
+        let path = book.path.clone();
+        book.save().unwrap();
+        assert_eq!(visible(&Book::open(&path).unwrap().0), visible(&book));
     }
 
     #[test]

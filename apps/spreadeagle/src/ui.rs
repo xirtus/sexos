@@ -578,7 +578,7 @@ impl Ui {
                 Ask::Chart => format!("Chart of {}: C column, L line, B bar, P pie, D doughnut, Esc cancels", self.selection().a1()),
                 Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("remove 2, data A1:B4, switch, type/title, hole, angle")),
                 Ask::MultiSort { range, text } => format!("Sort {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("columns in priority order: A asc, C desc; Enter sorts")),
-                Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("= or <> text (*, ? wildcards); numeric; join two with and/or")),
+                Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("top 2, bottom 50%, = or <> text, numeric; Enter applies")),
             }
         } else if let Some(p) = &self.find {
             let what: String = p.what.iter().collect();
