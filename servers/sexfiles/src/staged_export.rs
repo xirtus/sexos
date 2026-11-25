@@ -36,8 +36,8 @@ pub fn sealed_image_alias(path: &[u8]) -> bool {
     let mut parts = path.split(|b| *b == b'/').filter(|p| !p.is_empty());
     parts.next() == sex_pdx::home_lock::IMAGE.strip_prefix(b"/") && parts.next().is_none()
 }
-pub fn visible_entry(name: &[u8]) -> bool {
-    name != b".__sexfiles_staged"
+pub fn visible_entry(at_volume_root: bool, name: &[u8]) -> bool {
+    !at_volume_root || name != b".__sexfiles_staged"
 }
 
 fn code(e: Error) -> u8 {
@@ -515,7 +515,8 @@ mod tests {
             assert!(sealed_image_alias(path));
         }
         assert!(!sealed_image_alias(b"/folder/.home.sexcrypt"));
-        assert!(!visible_entry(b".__sexfiles_staged"));
-        assert!(visible_entry(b"personal.txt"));
+        assert!(!visible_entry(true, b".__sexfiles_staged"));
+        assert!(visible_entry(false, b".__sexfiles_staged"));
+        assert!(visible_entry(true, b"personal.txt"));
     }
 }

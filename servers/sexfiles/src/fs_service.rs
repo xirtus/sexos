@@ -1292,10 +1292,11 @@ pub fn run_on<D: sexfs::Device>(fs: &mut Fs<'static, D>, r: w::Request, path: &[
         }
         w::LIST => {
             let id = fs.open(path)?.id;
+            let at_volume_root = id == fs.open(b"/")?.id;
             let (mut cursor, mut used, mut name) = (r.offset, w::LIST_HEAD, [0u8; sexfs::NAME_MAX]);
             let mut next = 0;
             while let Some((len, kind, child, after)) = fs.read_dir(id, cursor, &mut name)? {
-                if !crate::staged_export::visible_entry(&name[..len]) { cursor = after; continue; }
+                if !crate::staged_export::visible_entry(at_volume_root, &name[..len]) { cursor = after; continue; }
                 if used + w::ENTRY_HEAD + len > 4000 { next = cursor; break; }
                 let size = if kind == Kind::File { fs.stat(child)?.size } else { 0 };
                 data[used] = (kind == Kind::Dir) as u8;
