@@ -62,6 +62,7 @@ impl Editor {
     pub fn from_bytes(text: &[u8]) -> Editor { Editor::new(Buffer::from_bytes(text)) }
     pub fn text(&self) -> Vec<u8> { self.buf.to_vec() }
     pub fn modified(&self) -> bool { self.version != self.saved }
+    pub fn version(&self) -> u64 { self.version }
     pub fn mark_saved(&mut self) { self.saved = self.version; }
     /// After a save that rebased the buffer on the new file, old steps point at text
     /// that is gone.

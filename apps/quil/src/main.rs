@@ -21,6 +21,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use quil_core::buffer::{Buffer, MemSource, Source};
+use quil_core::draft;
 use quil_core::editor::{Editor, Motion};
 use quil_core::highlight::{self, Kind};
 use quil_core::keymap::{self, Command, Keymap, Keys, Lookup, Named, Press, K};
@@ -141,6 +142,36 @@ fn write_buffer(buf: &Buffer, path: &[u8]) -> Result<(usize, u64), u8> {
     Ok((at, h))
 }
 
+fn draft_name(path: &[u8]) -> Vec<u8> { format!("quil-draft-{:016x}", draft::hash(path)).into_bytes() }
+
+fn read_draft(path: &[u8]) -> Option<Vec<u8>> {
+    if path.is_empty() { return None; }
+    let name = draft_name(path);
+    let len = usize::try_from(files::direct::stat(&name).ok()?.size).ok()?;
+    if len > draft::HEADER + draft::MAX_PATH + draft::MAX_TEXT { return None; }
+    let mut packet = vec![0u8; len];
+    let mut at = 0;
+    while at < len {
+        let end = (at + sex_pdx::fs::IO_MAX).min(len);
+        let n = files::direct::read_at(&name, at as u64, &mut packet[at..end]).ok()?;
+        if n == 0 { return None; }
+        at += n;
+    }
+    draft::decode(path, &packet).map(|text| text.to_vec())
+}
+
+fn write_draft(path: &[u8], text: &[u8]) -> bool {
+    let Some(packet) = draft::encode(path, text) else { return false };
+    let name = draft_name(path);
+    let mut stage = name.clone();
+    stage.extend_from_slice(b".part");
+    let _ = files::direct::remove(&stage);
+    if write_buffer(&Buffer::from_bytes(&packet), &stage).is_err() { return false; }
+    if files::direct::sync().is_err() { return false; }
+    if files::direct::rename(&stage, &name).is_err() { return false; }
+    files::direct::sync().is_ok()
+}
+
 // ---- Drawing ----
 
 struct Painter {
@@ -231,6 +262,8 @@ struct App {
     palette: Palette,
     theme_generation: u64,
     theme_next: u64,
+    draft_next: u64,
+    drafted: BTreeMap<Vec<u8>, u64>,
     p: Painter,
 }
 
@@ -270,18 +303,31 @@ impl App {
             Ok(buf) => {
                 let len = buf.len();
                 let mut ed = Editor::new(buf);
+                if let Some(draft) = read_draft(path) {
+                    if ed.buf.len() != draft.len() || ed.buf.to_vec() != draft {
+                        ed.select_all();
+                        ed.type_text(&draft);
+                        sex_pdx::serial_record!("[quil.code.draft.recovered] path={} bytes={}", lossy(path), draft.len());
+                        self.status = format!("Recovered draft of {}", lossy(path));
+                    }
+                }
                 ed.indent = b"    ".to_vec();
                 // Replace an empty, untouched untitled tab rather than keep it.
                 if self.tabs.len() == 1 && self.tabs.list[0].path.is_empty() && self.tabs.list[0].ed.buf.is_empty() && !self.tabs.list[0].ed.modified() { self.tabs.close(0); }
                 self.tabs.add(Tab::new(path, ed));
                 sex_pdx::serial_record!("[quil.code.opened] path={} bytes={} lazy={}", lossy(path), len, (len as u64 > IN_MEMORY) as u8);
-                self.status = format!("Opened {} ({} bytes)", lossy(path), len);
+                if !self.tab().ed.modified() { self.status = format!("Opened {} ({} bytes)", lossy(path), len); }
             }
             Err(e) => {
                 // A new file: an empty tab that saves to that path.
                 if e == files::NOT_FOUND {
-                    self.tabs.add(Tab::new(path, Editor::from_bytes(b"")));
-                    self.status = format!("New file {}", lossy(path));
+                    let mut ed = Editor::from_bytes(b"");
+                    if let Some(draft) = read_draft(path) {
+                        ed.type_text(&draft);
+                        sex_pdx::serial_record!("[quil.code.draft.recovered] path={} bytes={}", lossy(path), draft.len());
+                    }
+                    self.tabs.add(Tab::new(path, ed));
+                    self.status = if self.tab().ed.modified() { format!("Recovered draft of {}", lossy(path)) } else { format!("New file {}", lossy(path)) };
                 } else { self.status = lossy(files::message(e)); }
             }
         }
@@ -329,11 +375,29 @@ impl App {
                 t.path = path.clone();
                 t.lang = highlight::Lang::from_path(&path);
                 t.ed.mark_saved();
+                let _ = files::direct::remove(&draft_name(&path));
+                let _ = files::direct::sync();
+                self.drafted.remove(&path);
                 sex_pdx::serial_record!("[quil.code.saved] path={} bytes={} hash={:016x}", lossy(&path), n, h);
                 sex_pdx::serial_record!("[quil.code.save.committed] path={} bytes={}", lossy(&path), n);
                 self.status = format!("Saved {} bytes", n);
             }
             Err(e) => { let _ = files::direct::remove(&target); sex_pdx::serial_record!("[quil.code.save.failed] status={}", e); self.status = lossy(files::message(e)); }
+        }
+    }
+
+    fn autosave_drafts(&mut self) {
+        for i in 0..self.tabs.list.len() {
+            let tab = &self.tabs.list[i];
+            if tab.path.is_empty() || !tab.ed.modified() || tab.ed.buf.len() > draft::MAX_TEXT { continue; }
+            let path = tab.path.clone();
+            let version = tab.ed.version();
+            if self.drafted.get(&path) == Some(&version) { continue; }
+            let text = tab.ed.text();
+            if write_draft(&path, &text) {
+                self.drafted.insert(path.clone(), version);
+                sex_pdx::serial_record!("[quil.code.draft.saved] path={} bytes={}", lossy(&path), text.len());
+            }
         }
     }
 
@@ -366,12 +430,16 @@ impl App {
                 if self.tab().ed.modified() && !self.quit_armed { self.quit_armed = true; self.status = String::from("Unsaved changes: Close Tab again to discard."); return; }
                 self.quit_armed = false;
                 let i = self.tabs.active;
-                self.tabs.close(i);
+                if let Some(tab) = self.tabs.close(i) {
+                    if !tab.path.is_empty() { let _ = files::direct::remove(&draft_name(&tab.path)); self.drafted.remove(&tab.path); let _ = files::direct::sync(); }
+                }
             }
             Command::NextTab => self.tabs.next(),
             Command::PrevTab => self.tabs.prev(),
             Command::Quit => {
                 if self.tabs.list.iter().any(|t| t.ed.modified()) && !self.quit_armed { self.quit_armed = true; self.status = String::from("Unsaved changes: Quit again to discard them."); return; }
+                for tab in &self.tabs.list { if !tab.path.is_empty() { let _ = files::direct::remove(&draft_name(&tab.path)); } }
+                let _ = files::direct::sync();
                 sex_pdx::serial_record!("[quil.code.closed] target={} task={}", window.target, window.task);
                 sex_pdx::task_finish(0);
             }
@@ -962,7 +1030,8 @@ extern "C" fn main() -> ! {
         tabs: Tabs::default(), tree: Tree::new(b""), show_tree: false, focus: Focus::Editor, root: Vec::new(), keymap: Keymap::VsCode,
         keys: Keys::default(), vim: Vim::new(), overlay: Overlay::None, clipboard: (Vec::new(), false), status: String::from("Ctrl+Shift+P: all commands"),
         numbers: true, find: Vec::new(), mark: false, quit_armed: false, drag: false,
-        palette, theme_generation, theme_next: sex_pdx::get_ticks().saturating_add(1000), p,
+        palette, theme_generation, theme_next: sex_pdx::get_ticks().saturating_add(1000),
+        draft_next: sex_pdx::get_ticks().saturating_add(2000), drafted: BTreeMap::new(), p,
     };
     // `quil @/path` opens a file or a folder; words like `vim` or `emacs` pick the keys.
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
@@ -999,8 +1068,12 @@ extern "C" fn main() -> ! {
                 }
             }
         }
+        if now >= app.draft_next {
+            app.draft_next = now.saturating_add(2000);
+            app.autosave_drafts();
+        }
         match window.next_within(100) {
-            Some(Event::Close) => { sex_pdx::serial_record!("[quil.code.closed] target={} task={}", window.target, window.task); window.close() }
+            Some(Event::Close) => { app.autosave_drafts(); sex_pdx::serial_record!("[quil.code.closed] target={} task={}", window.target, window.task); window.close() }
             Some(Event::Resize { .. }) | Some(Event::Drop { .. }) | Some(Event::DragEnded { .. } | Event::KeyUp(_)) => {}
             Some(Event::Pointer(ptr)) => app.pointer(ptr),
             Some(Event::Key(key)) => {
