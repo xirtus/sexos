@@ -170,6 +170,15 @@ def main():
   g['wait'](r'\[assuit\.dictionary\.added\] word=helo\n',s,120)
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-dictionary-added.ppm')})
   assert (a.out/'assuit-dictionary-added.ppm').stat().st_size>10000
+  s=len(t());press('ctrl','shift','d')
+  g['wait'](r'\[assuit\.dictionary\.open\] words=1\n',s,120)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-dictionary-manager.ppm')})
+  assert (a.out/'assuit-dictionary-manager.ppm').stat().st_size>10000
+  s=len(t());q.key('delete')
+  g['wait'](r'\[assuit\.dictionary\.manager\.removed\] word=helo\n',s,120)
+  s=len(t());q.key('a');type_line('helo');q.key('ret')
+  g['wait'](r'\[assuit\.dictionary\.manager\.added\] word=helo\n',s,120)
+  q.key('esc')
   s=len(t());press('ctrl','shift','k')
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'assuit-proofing-language-prompt.ppm')})
   assert (a.out/'assuit-proofing-language-prompt.ppm').stat().st_size>10000

@@ -5,7 +5,7 @@
 //! so the host tests drive it directly.
 use std::path::Path;
 use std::sync::Arc;
-use std::io::Write;
+use std::io::{Read, Write};
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
 use wordcraft_engine::doc::{Document, StoryRef};
@@ -316,6 +316,33 @@ impl Book {
         if !saved.lines().any(|line| line.eq_ignore_ascii_case(word)) {
             return Err("Could not keep dictionary word".into());
         }
+        Ok(())
+    }
+
+    /// Only the words in Assuit's own persisted dictionary, sorted for the UI.
+    pub fn dictionary_words(&self) -> Vec<String> {
+        let Some(path) = &self.session.user_dict_path else { return Vec::new() };
+        let mut bytes = Vec::new();
+        if let Ok(file) = std::fs::File::open(path) { let _ = file.take(1_000_000).read_to_end(&mut bytes); }
+        let mut words: Vec<String> = String::from_utf8_lossy(&bytes).lines()
+            .filter_map(wordcraft_engine::proof::custom_word).take(100_000).collect();
+        words.sort();
+        words.dedup();
+        words
+    }
+
+    /// Remove one saved word and make the change durable. The proofing engine's
+    /// save merges concurrent additions while keeping this removal out.
+    pub fn remove_spelling_word(&mut self, word: &str) -> Result<(), String> {
+        let path = self.session.user_dict_path.clone().ok_or("Dictionary is unavailable")?;
+        let key = wordcraft_engine::proof::custom_word(word).ok_or("Choose one dictionary word")?;
+        if !self.dictionary_words().contains(&key) { return Err("Word is not in Assuit's dictionary".into()); }
+        wordcraft_engine::proof::remove_word(&key);
+        if let Err(e) = wordcraft_engine::proof::save_user_dictionary(&path, &[key.clone()]) {
+            wordcraft_engine::proof::add_word(&key);
+            return Err(format!("Could not keep dictionary: {e}"));
+        }
+        self.session.relayout();
         Ok(())
     }
 
@@ -1098,6 +1125,22 @@ mod tests {
         let next = reopened.next_spelling_issue().unwrap();
         assert!(next.is_none(), "{next:?}");
         wordcraft_engine::proof::remove_word(word);
+    }
+
+    #[test]
+    fn dictionary_manager_lists_and_removes_saved_words() {
+        let path = temp("assuit-manager-words.txt");
+        let word = "zxqassuitmanagerword";
+        let mut book = Book::blank(&temp("manager.docx"));
+        book.load_dictionary(Path::new(&path));
+        book.add_spelling_word(word).unwrap();
+        assert!(book.dictionary_words().contains(&word.to_string()));
+        book.remove_spelling_word(word).unwrap();
+        assert!(!book.dictionary_words().contains(&word.to_string()));
+        assert!(!wordcraft_engine::proof::user_dictionary().contains(&word.to_string()));
+        let mut again = Book::blank(&temp("manager-reopen.docx"));
+        again.load_dictionary(Path::new(&path));
+        assert!(!again.dictionary_words().contains(&word.to_string()));
     }
 
 }

@@ -27,6 +27,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+Shift+Y | Check spelling and choose a suggestion |
 | A (during a spelling suggestion) | Add the selected word to Assuit's persistent dictionary |
 | Ctrl+Shift+K | Set the document default and selected text's proofing language to `en-US` or `en-GB` |
+| Ctrl+Shift+D | Manage Assuit's custom dictionary: A adds a word, Up/Down chooses, Delete removes, Esc closes |
 | Ctrl+=, Ctrl+-, Ctrl+0 | Zoom in, out, or reset |
 
 The status bar shows the most common actions. Selection, cursor movement and
