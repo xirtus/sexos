@@ -23,7 +23,8 @@ ROOT=Path(__file__).resolve().parents[1]
 FORM=form_document()
 CHOICE=choice_document()
 ADVANCED=advanced_choice_document()
-FILES={'/form.pdf':FORM,'/choice.pdf':CHOICE,'/advanced-choice.pdf':ADVANCED}
+CATALOG_DOCMDP=form_document(catalog_docmdp=True)
+FILES={'/form.pdf':FORM,'/choice.pdf':CHOICE,'/advanced-choice.pdf':ADVANCED,'/catalog-docmdp.pdf':CATALOG_DOCMDP}
 FILES['/certificate.der']=(ROOT/'crates/vellum-edit/tests/fixtures/cms-test-cert.der').read_bytes()
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
@@ -409,6 +410,19 @@ def main():
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-signed-markup-refused.ppm')})
   assert (a.out/'pdf-signed-markup-refused.ppm').stat().st_size>10000
   step(lambda:chord('ctrl','shift','v'),r'\[pdf\.signatures\] fields=1 signed=1 malformed=0 verified=0 content_intact=1 content_changed=0 unsupported=0\n')
+  s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
+  # The catalog's /Perms /DocMDP can carry a certification signature even
+  # when the AcroForm has no discoverable signature field.
+  s=len(t());line(f'fetch http://10.0.2.2:{PORT}/catalog-docmdp.pdf catalog-docmdp.pdf')
+  m=g['wait'](r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',s,300);assert m[1].startswith('Saved'),m[1]
+  s=len(t());line('run vellum @catalog-docmdp.pdf')
+  o=g['wait'](r'\[pdf\.open\] target=(\d+) task=(\d+) name=catalog-docmdp\.pdf pages=1\n',s,600)
+  g['wait'](r'\[pdf\.page\] page=1 pages=1 ',s,900)
+  sid=int(re.findall(rf'\[shell.program.launch\] target={o[1]} task={o[2]} surface=(\d+)',t()[s:])[-1]);time.sleep(.5);g['focus'](sid)
+  step(lambda:chord('ctrl','r'),r'\[pdf\.region\] shown=1\n')
+  step(lambda:q.key('ret'),r'\[pdf\.annotate\.refused\] action=highlight reason=bad value: cannot edit annotations in a signed PDF\n')
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-catalog-docmdp-refused.ppm')})
+  assert (a.out/'pdf-catalog-docmdp-refused.ppm').stat().st_size>10000
   s=len(t());q.key('f11');g['wait'](r'\[pdf\.closed\]\n',s,60)
   # A separate source stays untouched while a complete unsaved PDF is kept.
   s=len(t());line(f'fetch http://10.0.2.2:{PORT}/form.pdf recover.pdf')
