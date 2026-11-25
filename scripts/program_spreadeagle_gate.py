@@ -261,6 +261,15 @@ def main():
   btn(False)
   wd=g['wait'](r'\[spreadeagle\.width\] col=A width=(\d+)\n',s,60)
   assert int(wd[1])>wa+30,(wa,wd[0])
+  # Resize the first row from its header, then save and reopen the actual XLSX.
+  ha=int(re.findall(r'\[spreadeagle\.rows\] 1=(\d+) 2=\d+\n',t())[-1])
+  s=len(t());at(24,52+ha-1);btn(True)
+  for dy in range(10,60,10):at(24,52+ha-1+dy)
+  btn(False)
+  ht=g['wait'](r'\[spreadeagle\.height\] row=1 height=(\d+)\n',s,60)
+  assert int(ht[1])>ha+30,(ha,ht[0])
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-row-height.ppm')})
+  assert (a.out/'spreadeagle-row-height.ppm').stat().st_size>10000
   s=len(t());g['chord']('ctrl','pgdn',r'\[spreadeagle\.column\] sheet=Notes col=A text=Welcome to Spreadeagle, the SexOS spreadsheet\.\|')
   g['chord']('ctrl','pgup',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|meals\|Fun\|Rent\|Total\|Per year\|\|')
   g['chord']('ctrl','s',r'\[spreadeagle\.saved\] name=welcome\.xlsx bytes=\d+\n')
@@ -268,6 +277,7 @@ def main():
   # The previous close was orderly. This time no close or Ctrl+S is sent: only the
   # idle recovery copy can carry the edit through the power cut.
   o=opened(r'Item\|meals\|Fun\|Rent\|Total\|Per year\|\|')
+  assert re.search(rf'\[spreadeagle\.rows\] 1={int(ht[1])} 2=\d+\n',t()),'resized row did not reopen'
   s=len(t());q.key('right');q.key('down');type_line('777');q.key('ret')
   g['wait'](r'\[spreadeagle\.set\] cell=B2 input=777\n',s,120)
   column('B',r'Cost\|\$777\.00 ?\|\$150\.00 ?\|\$40\.00 ?\|967\|11604\|\|',s)
