@@ -68,6 +68,8 @@ pub fn definition(text: &str, language: &str, cursor: usize) -> Option<Symbol> {
 
 /// A small, bounded completion set for the bundled language service. The
 /// replacement start is a byte offset in the snapshot supplied by the editor.
+/// Declaration heads in the same snapshot are offered before language keywords;
+/// this does not resolve scopes, imports, or members.
 pub fn complete(text: &str, language: &str, cursor: usize) -> (usize, Vec<String>) {
     let bytes = text.as_bytes();
     if cursor > bytes.len() || !text.is_char_boundary(cursor) { return (cursor.min(bytes.len()), Vec::new()); }
@@ -82,8 +84,14 @@ pub fn complete(text: &str, language: &str, cursor: usize) -> (usize, Vec<String
         _ => &[],
     };
     let mut out = Vec::new();
+    for symbol in symbols(text, language) {
+        if symbol.name.starts_with(prefix) && symbol.name != prefix && !out.contains(&symbol.name) {
+            out.push(symbol.name);
+        }
+        if out.len() == 8 { return (start, out); }
+    }
     for &word in keywords {
-        if word.starts_with(prefix) && word != prefix { out.push(word.to_string()); }
+        if word.starts_with(prefix) && word != prefix && !out.iter().any(|item| item == word) { out.push(word.to_string()); }
         if out.len() == 8 { break; }
     }
     (start, out)
@@ -306,6 +314,21 @@ mod tests {
         assert_eq!(items, ["return"]);
         assert_eq!(offset_at_position(text, 0, 4), None); // inside surrogate pair
         assert!(complete(text, "rust", text.len() + 1).1.is_empty());
+    }
+
+    #[test]
+    fn completion_offers_unique_same_file_declarations() {
+        for (text, language, want) in [
+            ("fn helper() {}\nfn helper() {}\nhel", "rust", "helper"),
+            ("def helper():\n    pass\nhel", "python", "helper"),
+            ("function helper() {}\nhel", "javascript", "helper"),
+        ] {
+            let (start, items) = complete(text, language, text.len());
+            assert_eq!(&text[start..], "hel");
+            assert_eq!(items, [want]);
+        }
+        let comment = "// fn hidden() {}\nhid";
+        assert!(complete(comment, "rust", comment.len()).1.is_empty());
     }
 
     #[test]
