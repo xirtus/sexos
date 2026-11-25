@@ -10,6 +10,7 @@ use alloc::vec::Vec;
 use sex_app::Window;
 use sex_calendar::{clock, tz, Date, Event as Entry, MonthGrid, PartStat, MONTH_NAMES, WEEKDAY_NAMES};
 use sex_theme::Tokens;
+use sex_calendar::conflicts;
 
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -41,6 +42,7 @@ pub const HELP_ROWS: &[(&str, &str)] = &[
     ("?", "Open or close this shortcut reference"),
     ("M W D C L", "Month, week, day, clock, calendars"),
     ("S / E", "Sync CalDAV / export shown events to .ics"),
+    ("V", "Review retained local CalDAV conflicts"),
     ("Month: arrows", "Move one day or one week"),
     ("Month: PgUp/PgDn", "Previous or next month"),
     ("T / Home", "Return to today"),
@@ -169,7 +171,7 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
         None if !app.status.is_empty() => app.status.clone(),
         None if app.agenda => String::from("Up/Down pick, Delete removes, a accepts, x declines, Esc back"),
         None => String::from(match app.view {
-            View::Month => "Enter opens a day, n adds, m w d c l views, s syncs, e exports, ? shortcuts",
+            View::Month => "Enter opens a day, n adds, v conflicts, s syncs, ? shortcuts",
             View::Week | View::Day => "Arrows move, Up/Down hours, n adds, Enter opens the day, ? shortcuts",
             View::Clock => "n alarm, r timer, z zone, h local zone, Space on/off, Delete removes, ? shortcuts",
             View::Calendars => "Space shows/hides, n adds a calendar; ? shortcuts",
@@ -177,6 +179,7 @@ pub fn render(window: &mut Window, app: &App, f: &mut Faces) {
     };
     c.text(&mut f.small, 12, l.h - 26, &bottom, if app.ask.is_some() { palette.text } else { palette.dim }, l.side_x - 20);
     if app.help { help(&mut c, app, &l, f); }
+    if let Some((index, position, total)) = app.review { conflict_review(&mut c, app, &l, f, index, position, total); }
     window.show_pixels(w, h);
 }
 
@@ -195,6 +198,37 @@ fn help(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {
         c.text(&mut f.small, x + 225, line_y, action, palette.text, width - 242);
     }
     c.text(&mut f.tiny, x + 18, y + height - 20, "Up/Down scroll  Page Up/Down jumps  ? or Esc closes", palette.dim, width - 36);
+}
+
+/// Read-only comparison. The local copy stays in Date's Conflicts calendar until
+/// the person chooses what to do with it; this view never pushes either copy.
+fn conflict_review(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces, index: usize, position: usize, total: usize) {
+    let Some(local) = app.cal.events.get(index) else { return };
+    let p = app.palette;
+    let width = (l.w - 48).min(760);
+    let x = (l.w - width) / 2;
+    let y = ((l.h - 282) / 2).max(8);
+    c.fill(x, y, width, 282, p.panel);
+    c.outline(x, y, width, 282, 2, p.accent);
+    c.text(&mut f.big, x + 18, y + 14, &format!("CalDAV conflict {position} of {total}"), p.text, width - 36);
+    let half = (width - 48) / 2;
+    let right = x + 30 + half;
+    c.text(&mut f.small, x + 18, y + 55, "Retained local copy", p.accent, half);
+    c.text(&mut f.small, x + 18, y + 84, &local.title, p.text, half);
+    c.text(&mut f.tiny, x + 18, y + 112, &format!("{}  {}", local.start, crate::when(local)), p.dim, half);
+    c.text(&mut f.tiny, x + 18, y + 140, &local.location, p.text, half);
+    c.text(&mut f.tiny, x + 18, y + 168, &local.description, p.text, half);
+    c.text(&mut f.small, right, y + 55, "Current server copy", p.accent, half);
+    if let Some(server) = conflicts::server_copy(&app.cal, index).and_then(|i| app.cal.events.get(i)) {
+        c.text(&mut f.small, right, y + 84, &server.title, p.text, half);
+        c.text(&mut f.tiny, right, y + 112, &format!("{}  {}", server.start, crate::when(server)), p.dim, half);
+        c.text(&mut f.tiny, right, y + 140, &server.location, p.text, half);
+        c.text(&mut f.tiny, right, y + 168, &server.description, p.text, half);
+    } else {
+        c.text(&mut f.small, right, y + 84, "No matching server event", p.dim, half);
+    }
+    c.text(&mut f.tiny, x + 18, y + 224, "Read only: both copies remain. V next conflict; Esc closes.", p.text, width - 36);
+    c.text(&mut f.tiny, x + 18, y + 246, "Resolve by editing the calendar event and then removing its conflict note.", p.dim, width - 36);
 }
 
 fn month(c: &mut Canvas, app: &App, l: &Layout, f: &mut Faces) {

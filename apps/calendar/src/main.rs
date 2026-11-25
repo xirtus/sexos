@@ -9,6 +9,7 @@
 //!
 //! Keys, anywhere: `m` month, `w` week, `d` day, `c` clock, `l` calendars, `s` sync,
 //! `e` export every shown event to `date-export.ics`.
+//! `v` reviews local copies kept after CalDAV conflicts; press again for the next.
 //! Month: arrows move a day or a week, PageUp and PageDown a month, Home (or `t`)
 //! today, Enter opens the chosen day and Esc goes back, `n` adds an event (start it
 //! with `HH:MM` to give it a time). An open day: Up/Down pick, Delete removes, `a`
@@ -35,6 +36,7 @@ use draw::Face;
 use sex_app::{files, settings, Event, Nav, Window};
 use sex_calendar::clock::{self, Alarm, Clock, Timer};
 use sex_calendar::{ics, tz, Calendar, Date, Event as Entry, MonthGrid, PartStat, SyncState};
+use sex_calendar::conflicts;
 use sex_dav::FileAccount;
 use sex_pdx::app_pointer::Kind;
 
@@ -67,6 +69,8 @@ pub struct App {
     theme_generation: u64,
     pub help: bool,
     pub help_offset: usize,
+    /// The retained local conflict note being compared with the server copy.
+    pub review: Option<(usize, usize, usize)>,
     /// The chosen day's events listed with details (Enter in the month).
     pub agenda: bool,
     /// What is being typed, and for what.
@@ -184,6 +188,16 @@ impl App {
             sex_pdx::serial_record!("[calendar.event] date={} when={} title={}", self.selected, when(e), e.title);
         }
     }
+    fn review_next(&mut self) {
+        self.review = conflicts::next(&self.cal, self.review.map(|(index, _, _)| index));
+        match self.review {
+            Some((index, position, total)) => {
+                let server = conflicts::server_copy(&self.cal, index);
+                sex_pdx::serial_record!("[date.conflict.review] item={} total={} local=1 server={}", position, total, server.is_some() as u8);
+            }
+            None => self.status = String::from("No CalDAV conflicts kept for review."),
+        }
+    }
     fn read_file(&mut self, window: &mut Window, path: &[u8]) -> Option<String> {
         let input = unsafe { &mut *core::ptr::addr_of_mut!(IMPORT) };
         let name = core::str::from_utf8(path).unwrap_or("?");
@@ -290,7 +304,7 @@ impl App {
         match result {
             Ok((pulled, pushed, conflicts)) => {
                 sex_pdx::serial_record!("[date.sync.done] events={} pulled={} pushed={} conflicts={}", self.cal.events.len(), pulled, pushed, conflicts);
-                self.status = format!("Synced: {pulled} from the server, {pushed} to it{}.", if conflicts > 0 { format!(", {conflicts} conflict(s) kept as notes") } else { String::new() });
+                self.status = format!("Synced: {pulled} from the server, {pushed} to it{}.", if conflicts > 0 { format!(", {conflicts} conflict(s) kept; V reviews") } else { String::new() });
             }
             Err(e) => {
                 sex_pdx::serial_record!("[date.sync.failed] error={:?}", e);
@@ -433,6 +447,14 @@ impl App {
     fn clock_rows(&self) -> usize { self.clock.alarms.len() + self.clock.timers.len() + self.clock.world().len() }
     fn key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) {
         let typed = sex_app::typed(key);
+        if self.review.is_some() {
+            match (key.code, typed) {
+                (0x01, _) => self.review = None,
+                (_, Some(b'v')) => self.review_next(),
+                _ => {},
+            }
+            return;
+        }
         if self.help {
             match (key.code, typed) {
                 (0x01, _) | (_, Some(b'?')) => { self.help = false; self.help_offset = 0; },
@@ -459,6 +481,7 @@ impl App {
             }
             return;
         }
+        if typed == Some(b'v') { self.review_next(); return; }
         if self.agenda {
             match (key.code, sex_app::nav(key), typed) {
                 (0x01 | 0x1C, _, _) => self.agenda = false,
@@ -621,7 +644,7 @@ pub extern "C" fn _start() -> ! {
     let theme_generation = settings::generation().unwrap_or(0);
     sex_pdx::serial_record!("[date.theme] mode={:?} accent={:06x}", theme.mode, palette.accent);
     let mut app = App { cal, clock, today, selected: today, view: View::Month, palette, theme_generation,
-        help: false, help_offset: 0, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
+        help: false, help_offset: 0, review: None, agenda: false, ask: None, input: String::new(), status: String::new(), banner: None,
         picked: 0, first_hour: 7, target: 0, now_ms: now, last_minute: minute, uid_counter: 0 };
     let mut args = [0u8; sex_pdx::fs::ARGS_MAX];
     let given = files::args(&mut window, &mut args);
