@@ -745,6 +745,7 @@ impl Wifi {
         let (ssn, last) = t.last.map_or((0, 0), |s| (s.ssn, s.status));
         sex_pdx::serial_record!("[wifi.link.now] up={} ready={} sent={} ok={} failed={} queued={} cur={} hw={} tail_hw={} ssn={} last={:#x} skew={} full={}",
             l.up() as u8, l.ready() as u8, l.sent, l.tx_ok, l.tx_failed, t.queued, t.cur, t.hw, t.tail_hw(), ssn, last, t.ssn_skew, q.tx_full);
+        if l.ba_bypass || !l.replay_check { sex_pdx::serial_record!("[wifi.link.now5] tests: ba={} replay={}", if l.ba_bypass { "off" } else { "on" }, if l.replay_check { "on" } else { "off" }); }
         sex_pdx::serial_record!("[wifi.link.now2] rx={} dropped={} last_drop={:?} overflow={} queued_in={} v4_out={} v4_in={} arp={}/{} missed_beacons={} ba={} flushes={}",
             l.received, l.dropped, l.last_drop, q.overflow, q.count, q.tx_v4, q.rx_v4, q.tx_arp, q.rx_arp, l.missed_beacons, l.ba.is_some() as u8, l.ba_flushes);
         let (status, reorder) = l.last_unicast.unwrap_or((0, 0));
@@ -765,6 +766,16 @@ impl Wifi {
             sex_pdx::serial_record!("[wifi.link.now3] malformed={} len={} status={:#x} subframe={:?} bytes={}",
                 l.malformed_count, m.len, m.status, m.subframe, core::str::from_utf8(&hex[..2 * k]).unwrap_or("?"));
         }
+    }
+    /// A field test knob (`wifi_status::TUNE`), for this boot.
+    pub fn tune(&mut self, knob: u64, on: bool) {
+        let Some(l) = self.link.as_mut() else { return };
+        match knob {
+            ws::TUNE_BA => l.ba_bypass = !on,
+            ws::TUNE_REPLAY => l.replay_check = on,
+            _ => return,
+        }
+        sex_pdx::serial_record!("[wifi.tune] knob={} on={} ba_bypass={} replay_check={}", knob, on as u8, l.ba_bypass as u8, l.replay_check as u8);
     }
     /// Sends one Ethernet frame over the air.
     pub fn link_send(&mut self, ethernet: &[u8]) -> bool {
@@ -974,6 +985,7 @@ pub fn request(wifi: Option<&mut Wifi>, caller: u32, action: u64, a: u64, b: u64
         }
         (ws::LEAVE, Some(w)) if caller != 6 => { w.leave(now_ticks); w.state().word() }
         (ws::LEAVE, None) => none,
+        (ws::TUNE, Some(w)) if spindle => { w.tune(a, b != 0); w.state().word() }
         (ws::WHY, Some(w)) => w.why_part(a),
         (ws::WHY, None) => ws::MISSING,
         (ws::PASSWORD, Some(w)) if caller != 6 => if w.password_part(a, b) { w.state().word() } else { ws::REFUSED },

@@ -115,12 +115,13 @@ struct Intake<'a> {
     received: u64,
     dropped: u64,
     last_drop: Option<Drop>,
+    replay: bool,
 }
 impl Intake<'_> {
     /// `subframe`: the frame's sequence number and A-MSDU subframe index.
     fn take(&mut self, eth: &[u8], tid: usize, number: Option<(usize, u64)>, subframe: (u16, u8), deliver: &mut impl FnMut(&[u8])) {
         let n = eth.len();
-        if let Some((key, number)) = number {
+        if let Some((key, number)) = number.filter(|_| self.replay) {
             // A-MSDU subframes after the first share the frame's packet number:
             // the same number passes only for a later subframe of the same frame,
             // so a replayed A-MSDU loses every subframe, not just the first.
@@ -183,6 +184,9 @@ pub struct Link {
     /// word of the last frame to us (diagnostics).
     pub dup_flagged: u64,
     pub last_unicast: Option<(u32, u32)>,
+    /// Field tests: hand frames up without block-ack reordering; skip the replay check.
+    pub ba_bypass: bool,
+    pub replay_check: bool,
     pub down: Option<Down>,
     rekey: Option<Rekey>,
     /// Key messages answered after the handshake, keys installed since, and the
@@ -300,7 +304,7 @@ pub fn declared(e: &[u8]) -> Option<usize> {
 impl Link {
     /// Over the association's (or handshake's) queue, once connected.
     pub fn new(tx: TxQueue, target: Target, me: [u8; 6], family: Family, protected: bool) -> Self {
-        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, malformed: None, malformed_count: 0, dup_flagged: 0, last_unicast: None, down: None,
+        Self { tx, target, me, family, protected, seq: 0x400, qos: target.mode().qos, qos_seq: [0; 8], pn: [[None; 16]; 4], sent: 0, tx_ok: 0, tx_failed: 0, tx_last_failure: 0, received: 0, dropped: 0, last_drop: None, malformed: None, malformed_count: 0, dup_flagged: 0, last_unicast: None, ba_bypass: false, replay_check: true, down: None,
             rekey: None, rekey_messages: 0, rekeyed: 0, rekey_error: None, reply: None, rate_control: RateControl::Off, rate: DATA_RATE,
             multicast: Setup::Wanted, missed_beacons: 0,
             ba: None, ba_command: None, ba_step: BaStep::Idle, addba: None, ba_moved: 0, ba_sessions: 0, ba_declined: 0, ba_flushes: 0 }
@@ -393,7 +397,8 @@ impl Link {
         let mut moved = false;
         let (mut malformed, mut malformed_count) = (None, 0u64);
         let (mut dup_flagged, mut last_status) = (0u64, None);
-        let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
+        let ba_bypass = self.ba_bypass;
+        let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None, replay: self.replay_check };
         let result = b.receive(r, dma, |p: &Packet<'_>| {
             if cmdq.on_packet(p) {
                 if cmdq.answer.is_some_and(|a| !a.failed) { if let Some(id) = installing.take() { intake.pn[id] = [None; 16]; } }
@@ -450,7 +455,7 @@ impl Link {
                     let qos_unicast = f[0] & 0x80 != 0 && f[4] & 1 == 0;
                     if f[4] & 1 == 0 { last_status = Some((rx.status, rx.reorder)); }
                     let verdict = match (session.as_mut(), qos_unicast) {
-                        (Some(s), true) => {
+                        (Some(s), true) if !ba_bypass => {
                             // A duplicate is a retry of a frame already taken. The bit
                             // alone is not trusted: on newer firmware bits 16..31 of this
                             // word are the A1 hash and filter status, and a set bit 22
@@ -507,7 +512,7 @@ impl Link {
             if let (Some(s), Some(sl)) = (self.ba.as_mut(), slots.as_deref_mut()) {
                 let tid = s.tid as usize;
                 let mut pn = self.pn;
-                let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
+                let mut intake = Intake { pn: &mut pn, bssid, rekeying: self.rekey.is_some(), key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None, replay: self.replay_check };
                 s.flush(|i| intake.take_slot(sl, i, tid, &mut deliver));
                 self.received += intake.received;
                 self.dropped += intake.dropped;
@@ -620,7 +625,7 @@ impl Link {
                     let tid = s.tid as usize;
                     let (mut key_frame, mut key_len) = ([0u8; eapol::MAX_FRAME], 0);
                     let mut pn = self.pn;
-                    let mut intake = Intake { pn: &mut pn, bssid: self.target.bssid, rekeying: false, key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None };
+                    let mut intake = Intake { pn: &mut pn, bssid: self.target.bssid, rekeying: false, key_frame: &mut key_frame, key_len: &mut key_len, received: 0, dropped: 0, last_drop: None, replay: true };
                     s.flush(|i| intake.take_slot(sl, i, tid, deliver));
                     self.received += intake.received;
                     self.pn = pn;

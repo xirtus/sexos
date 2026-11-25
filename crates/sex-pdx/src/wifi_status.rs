@@ -41,6 +41,13 @@ pub const LEAVE: u64 = 6;
 /// past its end, and when nothing failed since the last `LEAVE`.
 pub const WHY: u64 = 7;
 pub const WHY_PARTS: u64 = 9;
+/// Field tests (Spindle `wifi ba off`, `wifi replay off`): knob `a` to `b` (0 off,
+/// 1 on) for this boot. Spindle only. Replies with the state word.
+pub const TUNE: u64 = 8;
+/// Receive block-ack reordering: off hands frames up as they arrive.
+pub const TUNE_BA: u64 = 1;
+/// The CCMP replay check on frames received.
+pub const TUNE_REPLAY: u64 = 2;
 pub const WHY_BYTES: usize = 63;
 /// 9 × 7 bytes hold WPA2's 63-character maximum.
 pub const PASSWORD_PARTS: u64 = 9;
