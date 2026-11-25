@@ -26,6 +26,7 @@ Press it again, or Esc, to return to editing.
 | Ctrl+F, Ctrl+H | Find, find and replace |
 | Ctrl+G | Go to page |
 | Ctrl+Shift+Y | Check spelling and choose a suggestion |
+| Ctrl+Shift+U | Show or hide continuous spelling marks on the editable page |
 | A (during a spelling suggestion) | Add the selected word to Assuit's persistent dictionary |
 | Ctrl+Shift+K | Set the document default and selected text's proofing language to `en-US` or `en-GB` |
 | Ctrl+Shift+D | Manage Assuit's custom dictionary: A adds a word, Up/Down chooses, Delete removes, Esc closes |

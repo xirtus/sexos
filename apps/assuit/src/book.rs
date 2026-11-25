@@ -344,6 +344,16 @@ impl Book {
         self.run("review.applySuggestion", json!({ "text": suggestion })).map(|_| ())
     }
 
+    /// WordCraft lays spelling issues into the editable page as red proofing
+    /// marks. This view choice leaves document bytes and undo history alone.
+    pub fn proofing_marks(&self) -> bool { self.session.view.proofing }
+
+    pub fn set_proofing_marks(&mut self, enabled: bool) -> Result<(), String> {
+        let result = self.run("file.options", json!({ "checkSpelling": enabled }))?;
+        if result["checkSpelling"] != enabled { return Err("Proofing view did not change".into()); }
+        Ok(())
+    }
+
     /// Set the document's default proofing language and the current selection.
     pub fn proofing_language(&mut self, input: &str) -> Result<&'static str, String> {
         let tag = match input.trim().to_ascii_lowercase().as_str() {
@@ -1172,6 +1182,25 @@ mod tests {
         assert_eq!(book.text().trim(), corrected);
         book.save().unwrap();
         assert_eq!(Book::open(&book.path).unwrap().text().trim(), corrected);
+    }
+
+    #[test]
+    fn proofing_toggle_changes_page_marks_without_changing_document_or_undo() {
+        let mut book = Book::blank(&temp("proofing-marks.docx"));
+        book.type_text("Hello helo world").unwrap();
+        book.key(&Chord { name: "Home", ctrl: true, shift: false });
+        assert!(book.proofing_marks());
+        let with_marks = book.draw(0, 2.0).unwrap().pixels;
+        let text = book.text();
+        let edits = book.edits;
+        book.set_proofing_marks(false).unwrap();
+        assert!(!book.proofing_marks());
+        let without_marks = book.draw(0, 2.0).unwrap().pixels;
+        assert_ne!(with_marks, without_marks, "a misspelling must visibly lose its page mark");
+        book.set_proofing_marks(true).unwrap();
+        assert_eq!(book.draw(0, 2.0).unwrap().pixels, with_marks);
+        assert_eq!(book.text(), text);
+        assert_eq!(book.edits, edits);
     }
 
     #[test]
