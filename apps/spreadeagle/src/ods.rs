@@ -35,6 +35,8 @@ pub struct Extras {
     pub percents: Vec<(usize, u32, u32, String)>,
     /// List rules and their cell ranges, recovered from ODF content validations.
     pub validations: Vec<(usize, RangeRef, Validation)>,
+    /// Frozen rows and columns from LibreOffice's per-sheet view settings.
+    pub freezes: Vec<(usize, u32, u32)>,
 }
 
 /// Rows and columns past these are not walked (a repeat count can say a million).
@@ -153,6 +155,84 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
             Event::End(ref e) if e.local_name().as_ref() == b"percentage-style" => percent_style = None,
             Event::Eof => break,
             _ => {}
+        }
+    }
+    // View settings are optional metadata. A damaged settings.xml must not
+    // discard formulas, formatting, and validations recovered from content.xml.
+    out.freezes = read_freezes(&mut zip, &out.sheet_names).unwrap_or_default();
+    Ok(out)
+}
+
+/// LibreOffice stores frozen panes in settings.xml, under a named Tables map.
+/// Split mode 2 is fixed; mode 1 is a movable split and must not become a freeze.
+fn read_freezes(zip: &mut zip::ZipArchive<std::io::Cursor<&[u8]>>, names: &[String]) -> Result<Vec<(usize, u32, u32)>, String> {
+    let mut xml = String::new();
+    match zip.by_name("settings.xml") {
+        Ok(mut f) => { f.read_to_string(&mut xml).map_err(|e| e.to_string())?; }
+        Err(zip::result::ZipError::FileNotFound) => return Ok(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    }
+    let mut reader = quick_xml::Reader::from_str(&xml);
+    let mut depth = 0usize;
+    let (mut view_settings, mut views, mut view, mut tables) = (None, None, None, None);
+    let (mut table, mut item, mut value) = (None::<(usize, usize)>, None::<(String, usize)>, String::new());
+    let (mut hm, mut vm, mut hp, mut vp) = (0u32, 0u32, 0u32, 0u32);
+    let mut out = Vec::new();
+    loop {
+        match reader.read_event().map_err(|e| e.to_string())? {
+            Event::Start(ref e) => {
+                depth += 1;
+                match e.local_name().as_ref() {
+                    b"config-item-set" if attr(e, b"name").as_deref() == Some("ooo:view-settings") =>
+                        view_settings = Some(depth),
+                    b"config-item-map-indexed" if view_settings == Some(depth - 1)
+                        && attr(e, b"name").as_deref() == Some("Views") => views = Some(depth),
+                    b"config-item-map-entry" if views == Some(depth - 1) => view = Some(depth),
+                    b"config-item-map-named" if view == Some(depth - 1)
+                        && attr(e, b"name").as_deref() == Some("Tables") => tables = Some(depth),
+                    b"config-item-map-entry" if tables == Some(depth - 1) => {
+                        table = attr(e, b"name").and_then(|n| names.iter().position(|s| *s == n))
+                            .map(|s| (s, depth));
+                        (hm, vm, hp, vp) = (0, 0, 0, 0);
+                    }
+                    b"config-item" if table.is_some_and(|(_, d)| d == depth - 1) => {
+                        item = attr(e, b"name").map(|name| (name, depth)); value.clear();
+                    }
+                    _ => {},
+                }
+            }
+            Event::Text(e) if item.is_some() => {
+                let decoded = e.decode().map_err(|e| e.to_string())?;
+                value.push_str(&quick_xml::escape::unescape(&decoded).map_err(|e| e.to_string())?);
+            }
+            Event::End(ref e) => {
+                if e.local_name().as_ref() == b"config-item" && item.as_ref().is_some_and(|(_, d)| *d == depth) {
+                    let n = value.trim().parse::<u32>().unwrap_or(0);
+                    match item.take().map(|(name, _)| name).as_deref() {
+                        Some("HorizontalSplitMode") => hm = n,
+                        Some("VerticalSplitMode") => vm = n,
+                        Some("HorizontalSplitPosition") => hp = n.min(MAX_COL),
+                        Some("VerticalSplitPosition") => vp = n.min(MAX_ROW),
+                        _ => {},
+                    }
+                }
+                if e.local_name().as_ref() == b"config-item-map-entry" {
+                    if let Some((s, d)) = table {
+                        if d == depth {
+                            let (r, c) = (if vm == 2 { vp } else { 0 }, if hm == 2 { hp } else { 0 });
+                            if r != 0 || c != 0 { out.push((s, r, c)); }
+                            table = None;
+                        }
+                    }
+                }
+                if tables == Some(depth) { tables = None; }
+                if view == Some(depth) { view = None; }
+                if views == Some(depth) { views = None; }
+                if view_settings == Some(depth) { view_settings = None; }
+                depth = depth.saturating_sub(1);
+            }
+            Event::Eof => break,
+            _ => {},
         }
     }
     Ok(out)
@@ -613,12 +693,23 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles><style:default-style style:family=\"table-cell\"/><style:style style:name=\"Default\" style:family=\"table-cell\"/></office:styles></office:document-styles>");
     let meta = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-meta xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\" office:version=\"1.3\"><office:meta><meta:generator>Spreadeagle</meta:generator></office:meta></office:document-meta>");
+    let mut settings = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?><office:document-settings xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" xmlns:config=\"urn:oasis:names:tc:opendocument:xmlns:config:1.0\" office:version=\"1.3\"><office:settings><config:config-item-set config:name=\"ooo:view-settings\"><config:config-item-map-indexed config:name=\"Views\"><config:config-item-map-entry><config:config-item-map-named config:name=\"Tables\">");
+    for sheet in &wb.sheets {
+        let (r, c) = sheet.freeze.unwrap_or((0, 0));
+        let _ = write!(settings, "<config:config-item-map-entry config:name=\"{}\">", escape(&sheet.name));
+        for (name, kind, n) in [("HorizontalSplitMode", "short", u32::from(c > 0) * 2), ("VerticalSplitMode", "short", u32::from(r > 0) * 2), ("HorizontalSplitPosition", "int", c), ("VerticalSplitPosition", "int", r)] {
+            let _ = write!(settings, "<config:config-item config:name=\"{name}\" config:type=\"{kind}\">{n}</config:config-item>");
+        }
+        settings.push_str("</config:config-item-map-entry>");
+    }
+    settings.push_str("</config:config-item-map-named></config:config-item-map-entry></config:config-item-map-indexed></config:config-item-set></office:settings></office:document-settings>");
     let manifest = concat!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">",
         "<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.spreadsheet\"/>",
         "<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>",
         "<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>",
         "<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>",
+        "<manifest:file-entry manifest:full-path=\"settings.xml\" manifest:media-type=\"text/xml\"/>",
         "</manifest:manifest>");
 
     use std::io::Write as _;
@@ -629,7 +720,7 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
     zip.start_file("mimetype", SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).map_err(|e| err(&e))?;
     zip.write_all(b"application/vnd.oasis.opendocument.spreadsheet").map_err(|e| err(&e))?;
     let deflated = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    for (name, text) in [("META-INF/manifest.xml", manifest), ("content.xml", content.as_str()), ("styles.xml", styles_xml.as_str()), ("meta.xml", meta.as_str())] {
+    for (name, text) in [("META-INF/manifest.xml", manifest), ("content.xml", content.as_str()), ("styles.xml", styles_xml.as_str()), ("meta.xml", meta.as_str()), ("settings.xml", settings.as_str())] {
         zip.start_file(name, deflated).map_err(|e| err(&e))?;
         zip.write_all(text.as_bytes()).map_err(|e| err(&e))?;
     }
@@ -639,6 +730,48 @@ pub fn write(wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn zip_parts(parts: &[(&str, &str)]) -> Vec<u8> {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for &(name, text) in parts {
+            zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zip.write_all(text.as_bytes()).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn libreoffice_view_settings_distinguish_fixed_from_movable_splits() {
+        use std::io::Write;
+        let xml = r#"<office:document-settings xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"><office:settings><config:config-item-set config:name="ooo:view-settings"><config:config-item-map-indexed config:name="Views"><config:config-item-map-entry><config:config-item-map-named config:name="Tables"><config:config-item-map-entry config:name="Sheet1"><config:config-item config:name="HorizontalSplitMode" config:type="short">2</config:config-item><config:config-item config:name="HorizontalSplitPosition" config:type="int">4</config:config-item><config:config-item config:name="VerticalSplitMode" config:type="short">1</config:config-item><config:config-item config:name="VerticalSplitPosition" config:type="int">100</config:config-item></config:config-item-map-entry></config:config-item-map-named></config:config-item-map-entry></config:config-item-map-indexed></config:config-item-set></office:settings></office:document-settings>"#;
+        let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("settings.xml", zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(xml.as_bytes()).unwrap();
+        let bytes = zip.finish().unwrap().into_inner();
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        assert_eq!(read_freezes(&mut archive, &["Sheet1".into()]).unwrap(), vec![(0, 0, 4)]);
+    }
+
+    #[test]
+    fn only_tables_in_view_settings_can_freeze_a_sheet() {
+        let xml = r#"<office:document-settings xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"><office:settings>
+            <config:config-item-set config:name="other"><config:config-item-map-named config:name="Other"><config:config-item-map-entry config:name="Sheet1"><config:config-item config:name="HorizontalSplitMode" config:type="short">2</config:config-item><config:config-item config:name="HorizontalSplitPosition" config:type="int">99</config:config-item></config:config-item-map-entry></config:config-item-map-named></config:config-item-set>
+            <config:config-item-set config:name="ooo:view-settings"><config:config-item-map-indexed config:name="Views"><config:config-item-map-entry><config:config-item-map-named config:name="Tables"><config:config-item-map-entry config:name="Sheet1"><config:config-item config:name="HorizontalSplitMode" config:type="short">2</config:config-item><config:config-item config:name="HorizontalSplitPosition" config:type="int">4</config:config-item></config:config-item-map-entry></config:config-item-map-named></config:config-item-map-entry></config:config-item-map-indexed></config:config-item-set>
+            </office:settings></office:document-settings>"#;
+        let bytes = zip_parts(&[("settings.xml", xml)]);
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        assert_eq!(read_freezes(&mut archive, &["Sheet1".into()]).unwrap(), vec![(0, 0, 4)]);
+    }
+
+    #[test]
+    fn damaged_optional_settings_keeps_content_formulas() {
+        let content = r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"><office:body><office:spreadsheet><table:table table:name="Sheet1"><table:table-row><table:table-cell table:formula="of:=1+1"/></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#;
+        let bytes = zip_parts(&[("content.xml", content), ("settings.xml", "<broken")]);
+        let found = extras(&bytes).unwrap();
+        assert_eq!(found.formulas, vec![Found { sheet: 0, row: 0, col: 0, formula: "=1+1".into() }]);
+        assert!(found.freezes.is_empty());
+    }
 
     #[test]
     fn openformula_becomes_excel() {
