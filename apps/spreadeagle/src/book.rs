@@ -108,11 +108,12 @@ impl Book {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let extras = crate::ods::extras(&bytes)?;
         if extras == crate::ods::Extras::default() { return Ok(0); }
+        let imported_names = self.sheets();
         let active = self.active_sheet();
         let mut sheet = usize::MAX;
         for f in &extras.formulas {
             if f.sheet != sheet { self.activate(f.sheet)?; sheet = f.sheet; }
-            self.set(f.row, f.col, &f.formula)?;
+            self.set(f.row, f.col, &crate::ods::remap_sheet_names(&f.formula, &extras.sheet_names, &imported_names))?;
         }
         // Fonts by runs of a row, one command per run.
         let mut fonts = extras.fonts.clone();
@@ -1131,6 +1132,40 @@ mod tests {
         let (again, _) = Book::open(&book.path).unwrap();
         assert_eq!(again.shown(4, 1).text, "50");
         assert_eq!(again.input(4, 1), "=SUM(B2:B4)");
+    }
+
+    #[test]
+    fn imported_ods_formula_arguments_recalculate() {
+        let path = temp("formula-compat.ods");
+        std::fs::write(&path, include_bytes!("../assets/formula-compat.ods")).unwrap();
+        let (mut book, warnings) = Book::open(&path).unwrap();
+        assert_eq!(book.sheets(), ["Formula checks", "Q1Q2"], "{warnings:?}");
+        assert_eq!(book.input(0, 1), "=IF(A1>0,SUM(A1,A3),0)");
+        assert_eq!(book.input(1, 1), "=IFERROR(A1/A2,99)");
+        assert_eq!(book.input(2, 1), "=ROUND(AVERAGE(A1,A3),1)");
+        assert_eq!(book.input(3, 1), "=COUNTIF(A1:A3,\">0\")");
+        assert_eq!(book.input(4, 1), "=Q1Q2!A1+1");
+        assert_eq!(book.shown(4, 1).text, "5");
+        assert_eq!(column(&book, 1, 4), ["15", "99", "7.5", "2"]);
+        book.set(2, 0, "7").unwrap();
+        assert_eq!(column(&book, 1, 4), ["17", "99", "8.5", "2"]);
+        book.activate(1).unwrap();
+        book.set(0, 0, "8").unwrap();
+        book.activate(0).unwrap();
+        assert_eq!(book.shown(4, 1).text, "9");
+        let xlsx = temp("formula-compat.xlsx");
+        book.save_as(&xlsx).unwrap();
+        let (again, _) = Book::open(&xlsx).unwrap();
+        assert_eq!(column(&again, 1, 4), ["17", "99", "8.5", "2"]);
+        assert_eq!(again.shown(4, 1).text, "9");
+
+        let csv = temp("formula-compat.csv");
+        std::fs::write(&csv, "Amount,Rate\n10,2\n7,3\n").unwrap();
+        let (mut imported, _) = Book::open(&csv).unwrap();
+        imported.set(1, 2, "=SUM(A2*B2,A3*B3)").unwrap();
+        assert_eq!(imported.shown(1, 2).text, "41");
+        imported.set(2, 0, "8").unwrap();
+        assert_eq!(imported.shown(1, 2).text, "44");
     }
 
     #[test]

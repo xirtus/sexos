@@ -42,11 +42,12 @@ def main():
  elf=(ROOT/'iso_root/programs/spreadeagle').read_bytes();assert elf[:4]==b'\x7fELF'
  a.out.mkdir(parents=True,exist_ok=True);disk=a.out/'nvme.img';shutil.copyfile(a.source_disk,disk)
  install(disk,[('spreadeagle',elf)])
- warning_ods=(ROOT/'apps/spreadeagle/assets/import-warning.ods').read_bytes()
+ fixtures={name:(ROOT/'apps/spreadeagle/assets'/name).read_bytes() for name in ('import-warning.ods','formula-compat.ods')}
  class WarningServer(http.server.BaseHTTPRequestHandler):
   def do_GET(self):
-   if self.path!='/import-warning.ods':self.send_error(404);return
-   self.send_response(200);self.send_header('Content-Length',str(len(warning_ods)));self.end_headers();self.wfile.write(warning_ods)
+   body=fixtures.get(self.path.lstrip('/'))
+   if body is None:self.send_error(404);return
+   self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
   def log_message(self,*args):pass
  server=http.server.ThreadingHTTPServer(('127.0.0.1',0),WarningServer)
  threading.Thread(target=server.serve_forever,daemon=True).start()
@@ -95,6 +96,17 @@ def main():
   s=len(t());q.key('esc');g['wait'](r'\[spreadeagle.warnings.closed\]',s,120)
   ctrl_shift('w',r'\[spreadeagle.warnings.shown\] count=1')
   q.key('esc');close(o)
+  s=len(t());run(f'fetch http://10.0.2.2:{server.server_address[1]}/formula-compat.ods /data/spreadeagle/formula-compat.ods')
+  g['wait'](r'\[spindle.fetch.line\] Saved \d+ bytes',s,240)
+  s=len(t());run('run spreadeagle formula-compat.ods')
+  f=g['wait'](r'\[spreadeagle.open\] target=(\d+) task=(\d+) name=formula-compat.ods sheets=Formula checks,Q1Q2\n',s,900)
+  g['wait'](r'\[spreadeagle.warnings.shown\] count=\d+',s,120)
+  g['focus'](SURFACE[int(f[1])]);q.key('esc')
+  s=len(t());q.key('right')
+  g['wait'](r'\[spreadeagle.column\] sheet=Formula checks col=B text=15\|99\|7\.5\|2\|5\|',s,120)
+  time.sleep(.7);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-formula-compat.ppm')})
+  assert (a.out/'spreadeagle-formula-compat.ppm').stat().st_size>10000
+  close(f)
   o=opened()
   s=len(t());q.key('right');column('B',r'Cost\|1200\|300\|150\|1650\|19800\|\|',s)
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-opened.ppm')})

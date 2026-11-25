@@ -22,6 +22,8 @@ pub struct Styled { pub sheet: usize, pub row: u32, pub col: u32, pub font: (boo
 /// column, width in pixels at 96 per inch).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Extras {
+    /// Original ODS names, in table order. The engine may shorten names for XLSX rules.
+    pub sheet_names: Vec<String>,
     pub formulas: Vec<Found>,
     pub fonts: Vec<Styled>,
     pub widths: Vec<(usize, u32, f32)>,
@@ -75,7 +77,10 @@ pub fn extras(bytes: &[u8]) -> Result<Extras, String> {
                     b"table-column-properties" => if let (Some(name), Some(w)) = (&style, attr(e, b"column-width").as_deref().and_then(length_px)) {
                         widths.insert(name.clone(), w);
                     }
-                    b"table" => { sheet = Some(sheet.map_or(0, |s| s + 1)); row = 0; column = 0; }
+                    b"table" => {
+                        sheet = Some(sheet.map_or(0, |s| s + 1)); row = 0; column = 0;
+                        out.sheet_names.push(attr(e, b"name").unwrap_or_default());
+                    }
                     b"table-column" => {
                         let repeat = number(e, b"number-columns-repeated").max(1);
                         if let (Some(s), Some(w)) = (sheet, attr(e, b"style-name").and_then(|n| widths.get(&n).copied())) {
@@ -188,7 +193,23 @@ pub fn to_excel(formula: &str) -> Option<String> {
 
 /// `.A1`, `$Sheet1.$A$1:.B2`, `'My sheet'.A1` -> `A1`, `Sheet1!$A$1:B2`, `'My sheet'!A1`.
 fn reference(inner: &str) -> String {
-    inner.split(':').enumerate().map(|(i, part)| {
+    // A colon inside a quoted sheet name is part of that name, not a range separator.
+    let mut parts = Vec::new();
+    let (mut start, mut quoted) = (0, false);
+    let chars: Vec<(usize, char)> = inner.char_indices().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let (at, ch) = chars[i];
+        if ch == '\'' {
+            if quoted && chars.get(i + 1).is_some_and(|(_, next)| *next == '\'') { i += 1; }
+            else { quoted = !quoted; }
+        } else if ch == ':' && !quoted {
+            parts.push(&inner[start..at]); start = at + 1;
+        }
+        i += 1;
+    }
+    parts.push(&inner[start..]);
+    parts.into_iter().enumerate().map(|(i, part)| {
         let (sheet, cell) = match part.rfind('.') {
             Some(at) => (&part[..at], &part[at + 1..]),
             None => ("", part),
@@ -196,6 +217,39 @@ fn reference(inner: &str) -> String {
         let sheet = sheet.trim_start_matches('$');
         if sheet.is_empty() || i > 0 { cell.to_string() } else { format!("{sheet}!{cell}") }
     }).collect::<Vec<_>>().join(":")
+}
+
+/// Rewrites sheet references after the ODS reader has normalized a sheet name. Only
+/// references outside double-quoted formula strings are changed.
+pub fn remap_sheet_names(formula: &str, source: &[String], imported: &[String]) -> String {
+    let mut names = Vec::new();
+    for (old, new) in source.iter().zip(imported).filter(|(a, b)| a != b) {
+        let target = format!("'{}'!", new.replace('\'', "''"));
+        names.push((format!("'{}'!", old.replace('\'', "''")), target.clone()));
+        if old.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.')) {
+            names.push((format!("{old}!"), target));
+        }
+    }
+    if names.is_empty() { return formula.to_string(); }
+    let mut out = String::new();
+    let mut i = 0;
+    let mut string = false;
+    while i < formula.len() {
+        let rest = &formula[i..];
+        if !string {
+            if let Some((old, new)) = names.iter().find(|(old, _)| rest.starts_with(old)
+                && (i == 0 || !formula[..i].chars().next_back().is_some_and(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.')))) {
+                out.push_str(new); i += old.len(); continue;
+            }
+        }
+        let ch = rest.chars().next().unwrap();
+        out.push(ch); i += ch.len_utf8();
+        if ch == '"' {
+            if string && formula[i..].starts_with('"') { out.push('"'); i += 1; }
+            else { string = !string; }
+        }
+    }
+    out
 }
 
 
@@ -517,6 +571,11 @@ mod tests {
         assert_eq!(to_excel("of:=\"say \"\"hi\"\";\"").as_deref(), Some("=\"say \"\"hi\"\";\""));
         assert_eq!(to_excel("foo:=X()"), None);
         assert_eq!(to_excel("of:={1;2|3;4}").as_deref(), Some("={1,2;3,4}"));
+        assert_eq!(to_excel("of:=['Q1:Q2'.A1]+1").as_deref(), Some("='Q1:Q2'!A1+1"));
+        assert_eq!(remap_sheet_names("=IF(A1>0,\"'Q1:Q2'!\",'Q1:Q2'!A1)", &["Q1:Q2".into()], &["Q1Q2".into()]),
+                   "=IF(A1>0,\"'Q1:Q2'!\",'Q1Q2'!A1)");
+        assert_eq!(remap_sheet_names("=SUM(LongSheetName!A1,NotLongSheetName!A1)", &["LongSheetName".into()], &["Short".into()]),
+                   "=SUM('Short'!A1,NotLongSheetName!A1)");
     }
 
     #[test]
