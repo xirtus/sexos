@@ -13,7 +13,7 @@ open prompt determine which keys act. F11 closes the window.
 | Create a folder | Ctrl+N |
 | Move to trash; delete for good after confirmation | Delete; Shift+Delete |
 | Undo a file operation | Ctrl+Z |
-| Redo an undone batch rename or trash move | Ctrl+Y |
+| Redo an undone rename, trash move or empty-folder creation | Ctrl+Y |
 | Show trash; restore from trash | Ctrl+T; Ctrl+R while in trash |
 | Empty trash; eject a removable disk | Ctrl+E in the corresponding view |
 | Go home; show removable disks | Ctrl+H; Ctrl+D |
@@ -33,4 +33,5 @@ Enter confirms a prompt and Escape cancels it. When a background job is active,
 Escape stops it; file-changing shortcuts wait until the job ends. Deletion for
 good and emptying trash require a second confirmation. Undo is available for
 supported file operations in the current Loom run. Redo currently replays batch
-rename and trash moves, and a new file operation clears its history.
+and single-item renames, trash moves and empty-folder creation; a new file
+operation clears its history.
