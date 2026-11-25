@@ -77,6 +77,10 @@ def main():
   s=len(t());keys=('ctrl','shift',k)
   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]})
   return g['wait'](pattern,s,120)
+ def ctrl_alt(k,pattern):
+  s=len(t());keys=('ctrl','alt',k)
+  q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,keys),(False,keys[::-1]))for x in ks]})
+  return g['wait'](pattern,s,120)
  def shift(k):
   q.cmd('input-send-event',{'events':[{'type':'key','data':{'down':dn,'key':{'type':'qcode','data':x}}}for dn,ks in((True,('shift',k)),(False,(k,'shift')))for x in ks]});time.sleep(.3)
  def close(o):
@@ -420,6 +424,14 @@ def main():
   assert int(ht[1])>ha+30,(ha,ht[0])
   time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-row-height.ppm')})
   assert (a.out/'spreadeagle-row-height.ppm').stat().st_size>10000
+  s=len(t());g['chord']('ctrl','g');type_line('A1');q.key('ret')
+  g['wait'](r'\[spreadeagle\.goto\] place=A1 cell=A1\n',s,120)
+  fitted_row=ctrl_alt('r',r'\[spreadeagle\.autofit\] axis=row range=A1 first=1 size=(\d+)\n')
+  assert int(fitted_row[1])<int(ht[1]),fitted_row[0]
+  fitted_col=ctrl_alt('c',r'\[spreadeagle\.autofit\] axis=column range=A1 first=1 size=(\d+)\n')
+  assert int(fitted_col[1])<int(wd[1]),fitted_col[0]
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'spreadeagle-autofit.ppm')})
+  assert (a.out/'spreadeagle-autofit.ppm').read_bytes()!=(a.out/'spreadeagle-row-height.ppm').read_bytes()
   s=len(t());g['chord']('ctrl','pgdn',r'\[spreadeagle\.column\] sheet=Notes col=A text=Welcome to Spreadeagle, the SexOS spreadsheet\.\|')
   g['chord']('ctrl','pgup',r'\[spreadeagle\.column\] sheet=Budget col=A text=Item\|meals\|Fun\|Rent\|Total\|Per year\|\|')
   g['chord']('ctrl','s',r'\[spreadeagle\.saved\] name=welcome\.xlsx bytes=\d+\n')
@@ -427,7 +439,8 @@ def main():
   # The previous close was orderly. This time no close or Ctrl+S is sent: only the
   # idle recovery copy can carry the edit through the power cut.
   o=opened(r'Item\|meals\|Fun\|Rent\|Total\|Per year\|\|')
-  assert re.search(rf'\[spreadeagle\.rows\] 1={int(ht[1])} 2=\d+\n',t()),'resized row did not reopen'
+  assert re.search(rf'\[spreadeagle\.rows\] 1={int(fitted_row[1])} 2=\d+\n',t()),'fitted row did not reopen'
+  assert re.search(rf'\[spreadeagle\.columns\] A={int(fitted_col[1])} B=\d+\n',t()),'fitted column did not reopen'
   s=len(t());q.key('right');q.key('down');type_line('777');q.key('ret')
   g['wait'](r'\[spreadeagle\.set\] cell=B2 input=777\n',s,120)
   column('B',r'Cost\|\$777\.00 ?\|\$150\.00 ?\|\$40\.00 ?\|967\|11604\|\|',s)
