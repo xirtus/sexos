@@ -1,0 +1,6 @@
+# Valentine broker-owned mail operations
+
+- Gap: The authenticated mail flow core expected SexNet to move a live TLS flow from Multipass to Valentine. SexNet binds each flow to its caller and has no ownership transfer operation; Multipass also has no boot-routed server. Live Valentine mail remains unavailable in the guest.
+- Change: Multipass now offers grant-checked inbox UID paging, exact UID fetch, and plain-text SMTP submission while retaining its authenticated TLS flow. The account fixes the SMTP envelope sender; mailbox and header validation rejects command injection before dialing. Valentine receives messages and status, never a password, knot, or network flow.
+- Tests: Host fixture tests send, page, and fetch a message; verify read/write grants and revocation; and reject malformed mailbox, UID, recipient, and subject without opening a network flow. The focused `sex-multipass` library tests passed. Full image builds and QEMU run only on GitHub CI. The existing Valentine account-status QEMU gate captures a screenshot of the honest unavailable state.
+- Remaining: Boot a Multipass service with a verified TLS SexNet mail dialer, account setup and grant UI, a Valentine PDX client for these operations, mailbox sync/offline cache, and Bell notification delivery. This PR does not claim a guest live inbox or send path.
