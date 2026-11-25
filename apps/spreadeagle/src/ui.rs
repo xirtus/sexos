@@ -116,6 +116,8 @@ enum Ask {
     MultiSort { range: crate::book::Range, text: Vec<char> },
     /// Ctrl+Shift+K or C in the value menu: a comparison for this column.
     FilterCondition { col: u32, text: Vec<char> },
+    /// Ctrl+Alt+L: literal list validation on the selected cells.
+    ValidationList { range: crate::book::Range, text: Vec<char> },
 }
 
 
@@ -171,6 +173,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+Shift+I", "Search and insert a worksheet function"),
     ("Ctrl+Shift+U", "Wrap or unwrap selected cells"),
     ("Ctrl+Alt+C / R", "Fit selected columns / rows to their contents"),
+    ("Ctrl+Alt+L", "Allow only listed values in selected cells"),
     ("Ctrl+Shift+W", "Review import warnings"),
     ("Ctrl+PageUp / Down", "Previous / next sheet"),
     ("Ctrl+Shift+/", "Show or hide this reference"),
@@ -312,7 +315,10 @@ impl Ui {
                 sex_std::record(&format!("[spreadeagle.set] cell={} input={text}", self.cell_name()));
                 self.message.clear();
             }
-            Err(e) => self.message = format!("{}: {e}", self.cell_name()),
+            Err(e) => {
+                sex_std::record(&format!("[spreadeagle.set.rejected] cell={}", self.cell_name()));
+                self.message = format!("{}: {e}", self.cell_name());
+            }
         }
         true
     }
@@ -580,6 +586,7 @@ impl Ui {
                 Ask::ChartEdit { text, .. } => format!("Edit chart: {}_   {}", text.iter().collect::<String>(), said("remove 2, data A1:B4, switch, type/title, hole, angle")),
                 Ask::MultiSort { range, text } => format!("Sort {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("columns in priority order: A asc, C desc; Enter sorts")),
                 Ask::FilterCondition { col, text } => format!("Filter {}: {}_   {}", column_name(*col), text.iter().collect::<String>(), said("above/below average, top 2, bottom 50%, = or <> text")),
+                Ask::ValidationList { range, text } => format!("Choices for {}: {}_   {}", range.a1(), text.iter().collect::<String>(), said("comma-separated; blank clears")),
             }
         } else if let Some(p) = &self.find {
             let what: String = p.what.iter().collect();
@@ -834,6 +841,25 @@ impl Ui {
                 if done.is_ok() { self.ask = None; }
                 let changed = self.command("data.filterBy", done, format!("Filter {}: {typed}", column_name(col)));
                 if changed { sex_std::record(&format!("[spreadeagle.filter.condition] col={} rule={typed}", column_name(col))); }
+                changed
+            }
+            Ask::ValidationList { range, text } => {
+                let range = *range;
+                match key.code {
+                    code::BACKSPACE => { text.pop(); self.message.clear(); return false; }
+                    code::ENTER => {}
+                    _ => {
+                        if let Some(ch) = sex_app::text(key).filter(|c| !c.is_control()) {
+                            if text.len() < 255 { text.push(ch); self.message.clear(); }
+                        }
+                        return false;
+                    }
+                }
+                let typed = text.iter().collect::<String>();
+                let done = self.book.list_validation(range, &typed);
+                if done.is_ok() { self.ask = None; }
+                let changed = self.command("data.validation", done, format!("Choices for {} {}", range.a1(), if typed.is_empty() { "cleared" } else { "set" }));
+                if changed { sex_std::record(&format!("[spreadeagle.validation.list] range={} choices={}", range.a1(), typed.split(',').count())); }
                 changed
             }
             Ask::SaveAs(text) | Ask::GoTo(text) => {
@@ -1115,6 +1141,13 @@ impl Ui {
                 }
                 return self.command(if row { "home.autofitRowHeight" } else { "home.autofitColumnWidth" }, done,
                     format!("Fit {} to content", if row { "rows" } else { "columns" }));
+            }
+            if key.alt && !key.shift && key.code == code::L {
+                let range = self.selection();
+                sex_std::record(&format!("[spreadeagle.validation.prompt] range={}", range.a1()));
+                self.ask = Some(Ask::ValidationList { range, text: Vec::new() });
+                self.message.clear();
+                return false;
             }
             let ask = match key.code {
                 code::I if key.shift => {
