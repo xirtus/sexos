@@ -45,6 +45,9 @@ const BAR: usize = 30;
 const CW: usize = 9;
 const CH: usize = 16;
 const ROW: usize = 20;
+/// Two pages besides the shown page, never more than 48 MiB of retired pixels.
+const CACHE_PAGES: usize = 2;
+const CACHE_BYTES: usize = 48 << 20;
 
 /// Keyboard codes Shell passes through.
 const ESCAPE: u8 = 0x01;
@@ -88,7 +91,7 @@ fn now_date() -> vellum_edit::PdfDate {
 }
 
 /// A rendered page: pixels 0x00RRGGBB, width, height, which page, at what scale.
-struct Rendered { pixels: Vec<u32>, w: usize, h: usize, page: usize, scale: f32 }
+struct Rendered { pixels: Vec<u32>, w: usize, h: usize, page: usize, scale: f32, ink: usize }
 
 /// Text drawn with Geist Mono, each character rasterised once.
 struct Letters { font: sex_font::Font<'static>, acc: Vec<i32>, cells: HashMap<char, Vec<u8>> }
@@ -171,6 +174,9 @@ struct Viewer {
     scroll: usize,
     hscroll: usize,
     shown: Option<Rendered>,
+    /// Oldest first. These are owned pixels, not references into Hayro's cache.
+    page_cache: Vec<Rendered>,
+    cache_bytes: usize,
     panel: Panel,
     thumbs: Vec<Option<(Vec<u32>, usize, usize)>>,
     /// The first thumbnail slot shown, so the current page stays in view.
@@ -227,11 +233,42 @@ impl Viewer {
     fn render(&mut self, scale: f32) {
         if self.shown.as_ref().is_some_and(|s| s.page == self.page && (s.scale - scale).abs() < 1e-4) { return; }
         let started = Instant::now();
+        let hit = self.page_cache.iter().position(|s| s.page == self.page && (s.scale - scale).abs() < 1e-4)
+            .map(|i| {
+                let page = self.page_cache.remove(i);
+                self.cache_bytes = self.cache_bytes.saturating_sub(page.pixels.len().saturating_mul(4));
+                page
+            });
+        if let Some(old) = self.shown.take() { self.remember(old); }
+        if let Some(page) = hit {
+            sex_std::record(&format!("[pdf.page] page={} pages={} width={} height={} ink={} ms={}",
+                page.page + 1, self.pages(), page.w, page.h, page.ink, started.elapsed().as_millis()));
+            sex_std::record(&format!("[pdf.page.cache] hit=1 page={} bytes={}", page.page + 1, page.pixels.len().saturating_mul(4)));
+            self.shown = Some(page);
+            return;
+        }
         let Some((pixels, w, h)) = render_page(&self.pdf, self.page, scale) else { return };
         let ink = pixels.iter().filter(|p| **p != 0x00ffffff).count();
         sex_std::record(&format!("[pdf.page] page={} pages={} width={w} height={h} ink={ink} ms={}",
             self.page + 1, self.pages(), started.elapsed().as_millis()));
-        self.shown = Some(Rendered { pixels, w, h, page: self.page, scale });
+        self.shown = Some(Rendered { pixels, w, h, page: self.page, scale, ink });
+    }
+
+    fn remember(&mut self, page: Rendered) {
+        let bytes = page.pixels.len().saturating_mul(4);
+        if bytes > CACHE_BYTES { return; }
+        while !self.page_cache.is_empty() && (self.page_cache.len() >= CACHE_PAGES || self.cache_bytes.saturating_add(bytes) > CACHE_BYTES) {
+            let old = self.page_cache.remove(0);
+            self.cache_bytes = self.cache_bytes.saturating_sub(old.pixels.len().saturating_mul(4));
+        }
+        self.cache_bytes += bytes;
+        self.page_cache.push(page);
+    }
+
+    fn clear_page_cache(&mut self) {
+        self.shown = None;
+        self.page_cache.clear();
+        self.cache_bytes = 0;
     }
 
     fn texts(&mut self) -> &[PageText] {
@@ -663,7 +700,7 @@ impl Viewer {
         match editor.save_incremental().map_err(|e| e.to_string()).and_then(|b| Pdf::new(b).map_err(|e| format!("{e:?}"))) {
             Ok(pdf) => {
                 self.pdf = pdf;
-                self.shown = None;
+                self.clear_page_cache();
                 self.thumbs = vec![None; self.pages()];
             }
             Err(e) => self.status = Some(format!("Could not show the change: {e}")),
@@ -988,7 +1025,7 @@ impl Viewer {
         };
         self.editor = Editor::open(back.clone()).map_err(|e| e.to_string());
         self.pdf = pdf;
-        self.shown = None;
+        self.clear_page_cache();
         self.thumbs = vec![None; self.pages()];
         self.texts = None;
         if self.panel == Panel::Annots { self.load_annots(false); }
@@ -1071,7 +1108,7 @@ pub fn main() {
     let pages = pdf.pages().len();
     let mut viewer = Viewer {
         palette, theme_generation,
-        pdf, name: short, page: 0, zoom: Zoom::FitWidth, scroll: 0, hscroll: 0, shown: None,
+        pdf, name: short, page: 0, zoom: Zoom::FitWidth, scroll: 0, hscroll: 0, shown: None, page_cache: Vec::new(), cache_bytes: 0,
         panel: Panel::None, thumbs: vec![None; pages], thumb_top: 0, outline: None, chosen: 0,
         finding: false, term: String::new(), searched: String::new(), hits: Vec::new(), hit: None, found_none: false,
         texts: None, reveal: None, letters: Letters::new(),

@@ -69,6 +69,11 @@ def main():
   hit=g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} page={UNIQUE_PAGE} hits=1 index=1\n',s,300)
   g['wait'](rf'\[pdf\.page\] page={UNIQUE_PAGE} pages={PAGES} width=\d+ height=\d+ ink=(\d+) ms=\d+\n',s,900)
   time.sleep(1.5);q.cmd('screendump',{'filename':str(a.out/'pdf-find.ppm')})
+  # The first page was retired when search jumped to page 7. Revisit it at
+  # the same zoom; pixels must come from the bounded cache.
+  s=len(t());q.key('home')
+  g['wait'](r'\[pdf\.page\.cache\] hit=1 page=1 bytes=\d+',s,60)
+  time.sleep(.5);q.cmd('screendump',{'filename':str(a.out/'pdf-revisit.ppm')})
   # Ctrl+G (Shell keeps F3): the only hit again, after going round.
   s=len(t());q.cmd('send-key',{'keys':[{'type':'qcode','data':'ctrl'},{'type':'qcode','data':'g'}],'hold-time':80})
   g['wait'](rf'\[pdf\.find\] term={UNIQUE.lower()} page={UNIQUE_PAGE} hits=1 index=1\n',s,300)

@@ -7,7 +7,9 @@ Baseline: a daily PDF reader and editor such as Preview or Acrobat. Checked agai
 - **Signing:** Ctrl+Shift+G now places an explicitly labelled typed visual signature. Vellum can inspect stored signature fields, but still cannot create or cryptographically verify a CMS/PDF digital signature.
 - **Editing depth:** annotation tools need more types, precise pointer selection, appearance controls, and undo/redo for editing sessions.
 - **Performance and polish:** the viewer chrome now follows Settings' light,
-  dark and high-contrast colors. Document the render latency target with a
-  fixture, add a shortcut reference and prove crash recovery on interrupted saves.
+  dark and high-contrast colors. This slice retains up to two retired rendered
+  pages under a 48 MiB cache cap, so a same-zoom revisit avoids Hayro rendering.
+  Document the cold-render latency target with a fixture, add a shortcut
+  reference and prove crash recovery on interrupted saves.
 
 Each remaining feature needs a focused host test and CI guest evidence before being called complete.
