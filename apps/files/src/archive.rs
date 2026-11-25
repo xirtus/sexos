@@ -18,6 +18,7 @@ use core::cell::RefCell;
 use sex_app::files::{self, direct, Entry};
 use sex_app::{Event, Nav, Window};
 use sex_archive::{Archive, ArchiveBuilder, ByteSource, EntryKind, ExtractVisitor, Flow, IoError, OutputFormat, Progress, Sink, SourceReader};
+use loom_core::preview::{BoundedBytes, TextPreview, MAX_BYTES};
 
 use crate::{at, base, human, join, parent, shown, App, Undo, BACKSPACE, ENTER, ESC};
 
@@ -142,6 +143,16 @@ pub struct Inside {
     pub dir: String,
 }
 
+/// Keep decompressed preview bytes in memory only, with a hard bound even if
+/// an archive's declared member size is false.
+struct PreviewSink { bytes: BoundedBytes }
+impl Sink for PreviewSink {
+    fn write_all(&mut self, data: &[u8]) -> Result<(), IoError> {
+        if !self.bytes.push(data) { return Err(IoError("preview limit")); }
+        Ok(())
+    }
+}
+
 /// How an operation with a progress line ended.
 pub(crate) enum End { Done, Stopped, Failed(String) }
 
@@ -192,7 +203,7 @@ impl App {
                 sex_pdx::serial_record!("[files.app.archive.opened] path={} format={:?} entries={}", shown(&path), arch.format(), arch.entries().len());
                 let home = parent(&path);
                 self.loom.inside = Some(Inside { arch, file: path, home, dir: String::new() });
-                self.status = "Inside an archive, read only. Ctrl+Shift+X copies the selected item out next to it; Backspace leaves.".into();
+                self.status = "Inside an archive, read only. F3 previews text; Ctrl+Shift+X copies an item out; Backspace leaves.".into();
                 self.archive_list();
             }
             Err(why) => {
@@ -224,6 +235,34 @@ impl App {
         self.go(window, inside.home);
         self.select(&name);
     }
+    /// F3: inspect a small text member without creating a file beside the archive.
+    fn archive_preview(&mut self) {
+        let Some(e) = self.entries.get(self.cursor) else { return };
+        if e.dir { self.status = "Select a text file inside the archive for F3 preview.".into(); return; }
+        let Some(inside) = self.loom.inside.as_ref() else { return };
+        let mut member = inside.dir.clone();
+        if !member.is_empty() { member.push('/'); }
+        member.push_str(shown(&e.name));
+        let mut path = inside.file.clone();
+        path.push(b'/');
+        path.extend_from_slice(member.as_bytes());
+        let result = (|| -> Result<TextPreview, &'static str> {
+            let index = inside.arch.find(&member).ok_or("That member is unavailable.")?;
+            let entry = &inside.arch.entries()[index];
+            if !entry.size_known || entry.size > MAX_BYTES as u64 { return Err("F3 previews archive members up to 32 KiB."); }
+            let mut sink = PreviewSink { bytes: BoundedBytes::new() };
+            let mut next = |_| Flow::Continue;
+            inside.arch.extract(index, &mut sink, &mut next).map_err(|_| "Couldn't read that archive member.")?;
+            TextPreview::parse(sink.bytes.as_slice(), false).ok_or("F3 previews UTF-8 text only.")
+        })();
+        match result {
+            Ok(preview) => {
+                sex_pdx::serial_record!("[files.app.preview.opened] path={} lines={} truncated=0 source=archive", shown(&path), preview.len());
+                self.preview = Some((path, preview));
+            }
+            Err(why) => self.status = why.into(),
+        }
+    }
     /// Keys while inside an archive. False lets Files handle the key (moving the cursor).
     pub(crate) fn archive_key(&mut self, window: &mut Window, key: sex_pdx::app_key::Key) -> bool {
         if matches!(sex_app::nav(key), Some(Nav::Up | Nav::Down | Nav::Home | Nav::End | Nav::Left | Nav::Right)) { return false; }
@@ -231,6 +270,7 @@ impl App {
         // Going somewhere else leaves the archive first.
         if key.control && !key.shift && matches!(key.code, crate::KEY_H | crate::KEY_D | crate::KEY_T | crate::KEY_G) { self.loom.inside = None; return false; }
         match key.code {
+            crate::F3 => self.archive_preview(),
             ESC => self.archive_leave(window),
             BACKSPACE => {
                 let inside = self.loom.inside.as_mut().unwrap();
@@ -249,10 +289,10 @@ impl App {
                     inside.dir.push_str(shown(&e.name));
                     self.archive_list();
                 } else {
-                    self.status = format!("{}: {} in the archive. Ctrl+Shift+X copies it out next to the archive.", shown(&e.name), human(e.size));
+                    self.status = format!("{}: {} in the archive. F3 previews text; Ctrl+Shift+X copies it out.", shown(&e.name), human(e.size));
                 }
             }
-            _ => self.status = "This is inside an archive, read only: Ctrl+Shift+X copies the selected item out, Backspace leaves.".into(),
+            _ => self.status = "Inside an archive: F3 previews text, Ctrl+Shift+X copies an item out, Backspace leaves.".into(),
         }
         true
     }

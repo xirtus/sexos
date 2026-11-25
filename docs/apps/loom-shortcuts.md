@@ -18,3 +18,4 @@
 
 In the F3 preview, Up/Down scroll, Home/End jump, and Escape closes it.
 The preview is read only and shows at most the first 32 KiB of UTF-8 text.
+F3 also previews a text member while browsing an archive, without extracting it.

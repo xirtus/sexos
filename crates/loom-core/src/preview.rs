@@ -8,6 +8,18 @@ pub const MAX_BYTES: usize = 32 * 1024;
 pub const PAGE_ROWS: usize = 18;
 const COLS: usize = 120;
 
+/// Collects a member's decompressed bytes without trusting its declared size.
+pub struct BoundedBytes { bytes: Vec<u8> }
+impl BoundedBytes {
+    pub fn new() -> Self { Self { bytes: Vec::new() } }
+    pub fn push(&mut self, data: &[u8]) -> bool {
+        if data.len() > MAX_BYTES - self.bytes.len() { return false; }
+        self.bytes.extend_from_slice(data);
+        true
+    }
+    pub fn as_slice(&self) -> &[u8] { &self.bytes }
+}
+
 pub struct TextPreview { rows: Vec<String>, pub offset: usize, pub truncated: bool }
 
 impl TextPreview {
@@ -60,5 +72,15 @@ mod tests {
         assert_eq!(TextPreview::parse(b"a\rb", false).unwrap().page()[0], "a b");
         assert_eq!(TextPreview::parse(b"ok\xc3", true).unwrap().page()[0], "ok");
         assert!(TextPreview::parse(b"ok\xc3", false).is_none());
+    }
+
+    #[test]
+    fn archive_preview_bytes_stop_at_limit_even_when_streamed() {
+        let mut bytes = BoundedBytes::new();
+        assert!(bytes.push(&alloc::vec![b'a'; MAX_BYTES - 1]));
+        assert!(bytes.push(b"b"));
+        assert!(!bytes.push(b"too much"));
+        assert_eq!(bytes.as_slice().len(), MAX_BYTES);
+        assert_eq!(bytes.as_slice()[MAX_BYTES - 1], b'b');
     }
 }
