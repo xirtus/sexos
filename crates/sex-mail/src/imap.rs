@@ -5,6 +5,7 @@ use crate::{Auth, Conn, Error, Lines, Result};
 use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
+use zeroize::Zeroizing;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token { Atom(String), Str(Vec<u8>), List(Vec<Token>), Nil }
@@ -101,7 +102,8 @@ impl<C: Conn> Client<C> {
     /// Send a command; collect untagged responses until its tagged reply.
     pub fn command(&mut self, cmd: &str) -> Result<Vec<Response>> {
         let tag = self.next_tag();
-        self.io.send(format!("{tag} {cmd}\r\n").as_bytes())?;
+        let wire = Zeroizing::new(format!("{tag} {cmd}\r\n"));
+        self.io.send(wire.as_bytes())?;
         self.finish(&tag)
     }
 
@@ -127,7 +129,8 @@ impl<C: Conn> Client<C> {
     /// Run by Multipass with the secret from Shibari, before Valentine gets the flow.
     pub fn authenticate(&mut self, auth: &Auth) -> Result<()> {
         let (mech, ir) = auth.sasl();
-        self.command(&format!("AUTHENTICATE {mech} {ir}"))?;
+        let command = Zeroizing::new(format!("AUTHENTICATE {mech} {}", ir.as_str()));
+        self.command(&command)?;
         self.authenticated = true;
         Ok(())
     }

@@ -22,6 +22,7 @@ pub mod b64;
 pub mod dpop;
 pub mod flows;
 pub mod http;
+pub mod mail;
 pub mod net;
 pub mod pkce;
 pub mod service;
