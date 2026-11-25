@@ -7,7 +7,8 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 DEMO=b'fn main() {\n    let needle = 1;\n    println!("{}", needle);\n}\n'
 OTHER=b'// another file\npub fn helper() -> u32 { 2 }\n'
-FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER}
+BROKEN=b'fn main() {\n    let value = 1;\n'
+FILES={'/quil':(ROOT/'iso_root/programs/quil').read_bytes(),'/quil-ls':(ROOT/'iso_root/programs/quil-ls').read_bytes(),'/demo.rs':DEMO,'/other.rs':OTHER,'/broken.rs':BROKEN}
 class Handler(http.server.BaseHTTPRequestHandler):
  def do_GET(self):
   body=FILES.get(self.path)
@@ -51,12 +52,13 @@ def main():
  try:
   g['wait'](r'\[app.private.retired\] target=41 ',0,120);time.sleep(2)
   m=expect(f'fetch http://10.0.2.2:{PORT}/quil /bin/quil',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
+  m=expect(f'fetch http://10.0.2.2:{PORT}/quil-ls /bin/quil-ls',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),m[1]
   # The first run makes Quil's folder; the fixtures go into it for the second.
   s=len(t());line('run quil');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   g['wait'](rf'\[files.program.bound\] target={m[1]} task={m[2]} root=/data/quil',s,60);g['wait'](r'\[quil.code.ready\]',s,60);time.sleep(1)
   g['focus'](int(m[3]));time.sleep(.5);s=len(t());q.key('f11');g['wait'](rf'\[quil.code.closed\] target={m[1]} task={m[2]}',s,60)
   g['wait'](rf'\[app.private.retired\] target={m[1]} task={m[2]} ',s,60);time.sleep(1)
-  for name in ('demo.rs','other.rs'):
+  for name in ('demo.rs','other.rs','broken.rs'):
    m=expect(f'fetch http://10.0.2.2:{PORT}/{name} /data/quil/{name}',r'\[spindle.fetch.line\] (Saved \d+ bytes|fetch: [^\n]*)',240);assert m[1].startswith('Saved'),(name,m[1])
   s=len(t());line('run quil');m=g['wait'](r'\[shell.program.launch\] target=(\d+) task=(\d+) surface=(\d+)',s,60)
   target,task,sid=m[1],m[2],int(m[3])
@@ -91,6 +93,13 @@ def main():
   time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-search.ppm')});time.sleep(.5);q.key('esc')
   # Back to VS Code keys, then the large-file check from the palette.
   s=len(t());send('ctrl','shift','p');time.sleep(.3);keys('vs code');q.key('ret');g['wait'](r'\[quil.code.keymap\] vscode',s,30)
+  # A real hidden language-service child receives JSON-RPC and publishes a
+  # diagnostic for this file's unclosed Rust block.
+  s=len(t());send('ctrl','p');time.sleep(.3);keys('broken');q.key('ret');time.sleep(.5)
+  s=len(t());send('ctrl','shift','j')
+  g['wait'](r'\[quil.lsp.diagnostics\] language=rust count=1 first_line=1',s,90)
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'quil-lsp-diagnostics.ppm')})
+  assert (a.out/'quil-lsp-diagnostics.ppm').stat().st_size>100000
   s=len(t());send('ctrl','shift','p');time.sleep(.3);keys(f'large {a.large_mb}');q.key('ret')
   big=large_expected(a.large_mb)
   m=g['wait'](rf'\[quil.code.large\] mb={a.large_mb} write_ms=(\d+) open_ms=(\d+) pieces=(\d+)',s,1200)

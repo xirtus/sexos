@@ -10,6 +10,8 @@
 //! next occurrence, Ctrl+Shift+L all occurrences, Ctrl+Shift+Up/Down add cursors,
 //! Ctrl+/ comment, Ctrl+F find, Ctrl+H replace, Ctrl+L go to line, Escape one cursor.
 //! The palette switches to Vim mode or Emacs keys.
+//! Ctrl+Shift+J checks the current Rust, Python or JavaScript file with Quil's
+//! native LSP diagnostic helper through a run-scoped pipe.
 #![no_std]
 #![no_main]
 
@@ -33,6 +35,7 @@ use sex_app::{files, settings, Event, Window};
 use sex_pdx::app_key::{us_char, Key};
 use sex_pdx::app_pointer::Kind as PKind;
 use sex_theme::{Mode, Tokens};
+mod lsp;
 
 /// Files up to this size are read into memory when opened (so undo survives saving);
 /// bigger ones stay on disk and are read a block at a time.
@@ -286,6 +289,36 @@ fn press(key: Key) -> Option<Press> {
 }
 
 impl App {
+    fn check_language(&mut self) {
+        let len = self.tab().ed.buf.len();
+        if len > 256 * 1024 {
+            self.status = String::from("Language check supports files up to 256 KiB");
+            return;
+        }
+        let (path, source) = {
+            let tab = self.tab();
+            (tab.path.clone(), tab.ed.buf.slice(0..len))
+        };
+        let language = if path.ends_with(b".rs") { "rust" }
+            else if path.ends_with(b".py") { "python" }
+            else if path.ends_with(b".js") { "javascript" }
+            else { self.status = String::from("Language check supports .rs, .py and .js"); return; };
+        let Ok(source) = core::str::from_utf8(&source) else {
+            self.status = String::from("Language check needs UTF-8 text");
+            return;
+        };
+        match lsp::check(&path, language, source) {
+            Ok(result) => {
+                self.status = match (result.first_line, result.first) {
+                    (Some(line), Some(message)) => format!("LSP: {} issue(s); line {}: {}", result.count, line + 1, message),
+                    _ => format!("LSP: {} issue(s)", result.count),
+                };
+                sex_pdx::serial_record!("[quil.lsp.diagnostics] language={} count={} first_line={}", language, result.count, result.first_line.map_or(0, |n| n + 1));
+            }
+            Err(why) => { self.status = String::from(why); sex_pdx::serial_record!("[quil.lsp.unavailable] reason={why}"); }
+        }
+    }
+
     fn rows(&self) -> usize { (self.p.h / CELL_H).saturating_sub(2).max(1) }
     fn cols(&self) -> usize { self.p.w / CELL_W }
     fn tree_cols(&self) -> usize { if self.show_tree { TREE_COLS.min(self.cols() / 3) } else { 0 } }
@@ -526,6 +559,7 @@ impl App {
 
     fn key(&mut self, key: Key, window: &mut Window) {
         let Some(p) = press(key) else { return };
+        if p == Press::ctrl_shift('j') { self.check_language(); return; }
         if p == Press::ctrl_shift('/') {
             self.overlay = if matches!(self.overlay, Overlay::Help { .. }) { Overlay::None } else { Overlay::Help { scroll: 0 } };
             sex_pdx::serial_record!("[quil.code.shortcuts] open={}", matches!(self.overlay, Overlay::Help { .. }) as u8);
@@ -930,7 +964,8 @@ impl App {
         let (title, input): (&str, String) = match &self.overlay {
             Overlay::None => return,
             Overlay::Help { scroll } => {
-                let all = keymap::shortcut_rows(self.keymap);
+                let mut all = keymap::shortcut_rows(self.keymap);
+                all.insert(0, String::from("Language diagnostics  Ctrl+Shift+J"));
                 for row in all.into_iter().skip(*scroll).take(rows.saturating_sub(2)) { lines.push((row, false)); }
                 ("Quil shortcuts  ", format!("{}  (Up/Down, Esc)", match self.keymap { Keymap::Vim => "Vim", Keymap::Emacs => "Emacs", Keymap::VsCode => "Default" }))
             }
