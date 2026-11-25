@@ -284,10 +284,13 @@ impl Book {
         Ok(())
     }
 
-    /// Remove a link from selected text, leaving the text in place. A collapsed
-    /// caret cannot identify a multi-word link safely, so require a selection.
+    /// Remove a link from selected text, leaving the text in place. At a caret,
+    /// select the complete link label first so a multi-word label is removed
+    /// in one undoable edit.
     pub fn remove_hyperlink(&mut self) -> Result<(), String> {
-        if self.session.sel.is_collapsed() { return Err("Select linked text to remove its link".into()); }
+        if self.session.sel.is_collapsed() && self.select_hyperlink_at_caret().is_none() {
+            return Err("Place the caret in a link or select linked text".into());
+        }
         let (a, b) = self.session.sel.ordered();
         let linked = self.session.doc.paths_between(&a, &b).into_iter().any(|path| {
             let Some(para) = self.session.doc.para(a.story, &path) else { return false };
@@ -1857,6 +1860,29 @@ mod tests {
             assert_eq!(reopened.text(), "Visit Assuit");
             assert!(reopened.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
                 .all(|r| r.props.link.is_none()), "{ext} restored a removed link");
+        }
+    }
+
+    #[test]
+    fn caret_removes_complete_link_and_round_trips() {
+        for ext in ["docx", "odt"] {
+            let path = temp(&format!("caret-remove-link.{ext}"));
+            let mut book = Book::blank(&path);
+            book.insert_hyperlink("https://example.org Linked name").unwrap();
+            book.session.sel = Selection::caret(Pos::body(0, 4));
+            book.remove_hyperlink().unwrap();
+            assert_eq!(book.text(), "Linked name");
+            assert!(book.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
+                .all(|r| r.props.link.is_none()));
+            book.key(&Chord { name: "Z", ctrl: true, shift: false });
+            assert!(book.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
+                .any(|r| r.props.link.as_deref() == Some("https://example.org")));
+            book.key(&Chord { name: "Y", ctrl: true, shift: false });
+            book.save().unwrap();
+            let reopened = Book::open(&path).unwrap();
+            assert_eq!(reopened.text(), "Linked name");
+            assert!(reopened.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.runs)
+                .all(|r| r.props.link.is_none()));
         }
     }
 

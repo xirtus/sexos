@@ -40,7 +40,9 @@ Baseline: a daily word processor such as LibreOffice Writer or Pages. Checked ag
   keeping the words; undo and DOCX/ODT round trips are covered. Ctrl+K at a
   caret inside an existing single-paragraph link now selects its whole label
   and prefills the address, so its target or display text can be changed without
-  manual reselection. Cross-paragraph link editing remains.
+  manual reselection. Ctrl+Alt+K also removes a complete single-paragraph link
+  from a caret inside its label, preserving the words and one-step undo; DOCX/ODT
+  round trips are checked. Cross-paragraph link editing and removal remain.
 - **Table of contents:** Ctrl+Alt+T now inserts a generated contents table
   from heading styles (levels 1–9), refreshes it after edits, or removes it.
   A DOCX/ODT host test covers insert, update, removal and save/reopen.
