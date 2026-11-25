@@ -149,11 +149,32 @@ impl Book {
         let index = self.session.doc.section_index_of(block);
         let sections = self.session.doc.sections();
         let section = sections.get(index).ok_or("Could not locate the current section")?.1;
-        let own = if header { section.headers.default } else { section.footers.default };
-        if own.is_some() {
+        let slot = |sec: &wordcraft_engine::doc::section::SectionProps| if header { sec.headers.default } else { sec.footers.default };
+        let own = slot(section);
+        // A section break copies the section's header and footer ids, so a new section starts
+        // out sharing the previous one's story. Only an id no other section uses is its own;
+        // a shared one is detached here so the insert below does not rewrite the other section.
+        let shared = own.is_some() && sections.iter().enumerate().any(|(i, (_, sec))| i != index && slot(sec) == own);
+        if own.is_some() && !shared {
             return Err("This section already has its own running text; use Ctrl+Alt+H/F to edit it".into());
         }
-        self.run(if header { "insert.header" } else { "insert.footer" }, json!({ "text": text }))?;
+        if !shared {
+            self.run(if header { "insert.header" } else { "insert.footer" }, json!({ "text": text }))?;
+            return Ok(());
+        }
+        // Detach and insert as one undo step.
+        let mark = self.session.undo_mark();
+        let (doc, sel) = (self.session.doc.clone(), self.session.sel.clone());
+        self.session.push_undo(if header { "Header" } else { "Footer" }, doc, sel);
+        let sect = self.session.doc.section_mut(block);
+        if header { sect.headers.default = None } else { sect.footers.default = None }
+        if let Err(e) = self.run(if header { "insert.header" } else { "insert.footer" }, json!({ "text": text })) {
+            // The step pushed above holds the untouched document: taking it back restores it.
+            self.session.merge_undo_since(mark);
+            self.session.undo();
+            return Err(e);
+        }
+        self.session.merge_undo_since(mark);
         Ok(())
     }
 
@@ -1727,10 +1748,14 @@ mod tests {
                     b.session.doc.plain_text(StoryRef::Part(id.unwrap()))
                 })
             }).collect::<Vec<_>>();
-            assert_eq!(running(&book), vec![["First heading".into(), "First footer".into()],
-                ["Second heading".into(), "Second footer".into()]]);
+            assert_eq!(running(&book), vec![["First heading".to_string(), "First footer".to_string()],
+                ["Second heading".to_string(), "Second footer".to_string()]]);
             book.run("edit.undo", json!({})).unwrap();
-            assert_eq!(book.session.doc.sections()[1].1.footers.default, None, "one undo removes only this section's new footer");
+            // The break copied the first section's footer id, so undo returns to sharing it.
+            let sections = book.session.doc.sections();
+            assert_eq!(sections[1].1.footers.default, sections[0].1.footers.default, "one undo removes only this section's new footer");
+            assert_eq!(book.session.doc.plain_text(StoryRef::Part(sections[0].1.footers.default.unwrap())), "First footer");
+            assert_eq!(book.session.doc.plain_text(StoryRef::Part(sections[1].1.headers.default.unwrap())), "Second heading");
             book.run("edit.redo", json!({})).unwrap();
             book.save().unwrap();
             assert_eq!(running(&Book::open(&path).unwrap()), running(&book), "{ext} lost independent section running text");
