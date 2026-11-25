@@ -167,6 +167,13 @@ def main():
   g['wait'](r'\[files\.media\.mounted\] name=LOOM format=FAT32 [^\n]*source=usb',s,120)
   s=open_files()
   g['wait'](r'\[files.app.meta.loaded\] root=/media/LOOM records=0',s,10)
+  # Folder tabs preserve each path and return to the first tab after close.
+  step(lambda:cs('t'),r'\[loom.tab.opened\] active=2 count=2 dir=/media/LOOM')
+  step(lambda:q.key('ret'),r'\[files.app.list\] dir=/media/LOOM/docs count=3\b')
+  step(lambda:chord('pgup','ctrl'),r'\[loom.tab.shown\] active=1 count=2 dir=/media/LOOM\b')
+  step(lambda:chord('pgdn','ctrl'),r'\[loom.tab.shown\] active=2 count=2 dir=/media/LOOM/docs\b')
+  time.sleep(1);q.cmd('screendump',{'filename':str(a.out/'folder-tabs.ppm')})
+  step(lambda:cs('w'),r'\[loom.tab.closed\] active=1 count=1 dir=/media/LOOM\b')
   # 1. Pack docs (the first row), browse into the zip and out, extract it.
   m=step(lambda:cs('a'),r'\[files.app.archive.created\] from=/media/LOOM/docs to=/media/LOOM/docs.zip files=(\d+) bytes=(\d+)',180)
   assert int(m[1])==3,m[0];result['zip_bytes']=int(m[2])

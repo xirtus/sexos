@@ -61,6 +61,7 @@ const KEY_Z: u8 = 0x2C;
 const KEY_N: u8 = 0x31;
 const KEY_Y: u8 = 0x15;
 const KEY_T: u8 = 0x14;
+const KEY_W: u8 = 0x11;
 const KEY_R: u8 = 0x13;
 const KEY_H: u8 = 0x23;
 const KEY_D: u8 = 0x20;
@@ -81,6 +82,7 @@ enum Undo { Moved { from: Vec<u8>, to: Vec<u8> }, Trashed { from: Vec<u8>, to: V
 enum Input { Rename(Vec<u8>), NewFolder, SaveAs, Search, Password(Secret) }
 /// What a password typed into Files is for.
 enum Secret { Unlock, New, Repeat(Vec<u8>), Current, ChangeTo(Vec<u8>), ChangeRepeat(Vec<u8>, Vec<u8>) }
+struct FolderTab { cwd: Vec<u8>, cursor: usize, top: usize }
 /// Something that can't be undone, waiting for the same key a second time.
 #[derive(PartialEq, Eq)]
 enum Confirm { DeleteForever(Vec<u8>), EmptyTrash(Vec<u8>) }
@@ -90,6 +92,8 @@ struct App {
     entries: Vec<Entry>,
     cursor: usize,
     top: usize,
+    tabs: Vec<FolderTab>,
+    active_tab: usize,
     clip: Option<(Vec<u8>, bool)>,
     undo: Vec<Undo>,
     input: Option<(Input, Vec<u8>)>,
@@ -161,6 +165,51 @@ fn human(bytes: u64) -> String {
 }
 
 impl App {
+    fn tab_ready(&self) -> bool {
+        self.question.is_none() && self.disk_ask.is_none() && self.job.is_none() && self.search.is_none()
+            && self.found.is_none() && self.loom.inside.is_none() && self.loom.image.is_none()
+            && !self.loom.places.active() && matches!(&self.loom.mode, loom::Mode::None)
+            && self.loom.prompt.is_none()
+    }
+    fn remember_tab(&mut self) {
+        self.tabs[self.active_tab] = FolderTab { cwd: self.cwd.clone(), cursor: self.cursor, top: self.top };
+    }
+    fn show_tab(&mut self, window: &mut Window, next: usize) {
+        if !self.tab_ready() { self.status = "Finish the current view before changing tabs.".into(); return; }
+        self.remember_tab();
+        self.active_tab = next;
+        let tab = &self.tabs[next];
+        let path = tab.cwd.clone();
+        let cursor = tab.cursor;
+        let top = tab.top;
+        if files::stat(window, &at(&path)).is_err() { let root = self.root.clone(); self.go(window, root); }
+        else { self.cwd = path; self.cursor = cursor; self.top = top; self.load(window); }
+        let disk = disk_root(&self.cwd);
+        self.watching = (disk != b"/" && self.status.is_empty()).then_some(disk);
+        sex_pdx::serial_record!("[loom.tab.shown] active={} count={} dir={}", next + 1, self.tabs.len(), shown(&self.cwd));
+    }
+    fn new_tab(&mut self, window: &mut Window) {
+        if !self.tab_ready() { self.status = "Finish the current view before opening a tab.".into(); return; }
+        if self.tabs.len() >= 12 { self.status = "Twelve tabs are open.".into(); return; }
+        self.remember_tab();
+        self.tabs.push(FolderTab { cwd: self.cwd.clone(), cursor: 0, top: 0 });
+        self.active_tab = self.tabs.len() - 1;
+        self.cursor = 0; self.top = 0; self.load(window);
+        sex_pdx::serial_record!("[loom.tab.opened] active={} count={} dir={}", self.active_tab + 1, self.tabs.len(), shown(&self.cwd));
+    }
+    fn close_tab(&mut self, window: &mut Window) {
+        if !self.tab_ready() { self.status = "Finish the current view before closing a tab.".into(); return; }
+        if self.tabs.len() == 1 { self.status = "One tab remains.".into(); return; }
+        self.tabs.remove(self.active_tab);
+        self.active_tab = self.active_tab.min(self.tabs.len() - 1);
+        let tab = &self.tabs[self.active_tab];
+        let path = tab.cwd.clone(); let cursor = tab.cursor; let top = tab.top;
+        if files::stat(window, &at(&path)).is_err() { let root = self.root.clone(); self.go(window, root); }
+        else { self.cwd = path; self.cursor = cursor; self.top = top; self.load(window); }
+        let disk = disk_root(&self.cwd);
+        self.watching = (disk != b"/" && self.status.is_empty()).then_some(disk);
+        sex_pdx::serial_record!("[loom.tab.closed] active={} count={} dir={}", self.active_tab + 1, self.tabs.len(), shown(&self.cwd));
+    }
     fn load(&mut self, window: &mut Window) {
         self.found = None;
         match files::list(window, &at(&self.cwd)) {
@@ -237,7 +286,7 @@ impl App {
     fn render(&mut self, window: &mut Window) {
         if self.loom_render(window) { return; }
         if self.thumbs.on && self.input.is_none() && self.search.is_none() && self.question.is_none() && self.disk_ask.is_none() {
-            let mut head = format!("Files  {}", shown(&self.cwd));
+            let mut head = format!("Loom [{}/{}]  {}", self.active_tab + 1, self.tabs.len(), shown(&self.cwd));
             if let Some(q) = &self.found { head = format!("Found {} for \"{}\" in {}", self.entries.len(), shown(q), shown(&self.cwd)); }
             let mut foot = String::new();
             if let Some(job) = &self.job { foot.push_str(&job.progress()); foot.push_str("  "); }
@@ -258,7 +307,15 @@ impl App {
             t.push_str(&format!("Found {} for \"{}\" in {}. Enter opens its folder, Esc goes back.\n", self.entries.len(), shown(q), shown(&self.cwd)));
         }
         let space = files::space(window, &at(&self.cwd)).ok().filter(|s| s.0 > 0).map(|(total, free)| format!("  {} free of {}", human(free), human(total))).unwrap_or_default();
-        t.push_str(&format!("Files  {}{}\n", shown(&self.cwd), space));
+        t.push_str(&format!("Loom [{}/{}]  {}{}\n", self.active_tab + 1, self.tabs.len(), shown(&self.cwd), space));
+        if self.tabs.len() > 1 {
+            t.push_str("Tabs:");
+            for (i, tab) in self.tabs.iter().enumerate() {
+                let path = if i == self.active_tab { &self.cwd } else { &tab.cwd };
+                t.push_str(&format!("  {}{}:{}", if i == self.active_tab { ">" } else { "" }, i + 1, shown(base(path))));
+            }
+            t.push('\n');
+        }
         if let Some(q) = &self.question {
             let what = match q.mode { Pick::Open => "open a file: Enter chooses it", Pick::Save => "save a file: Ctrl+S names it here", Pick::Folder => "pick a folder: Ctrl+S chooses this one" };
             t.push_str(&format!(">> {} asks to {}. Esc says no.\n", shown(&q.program), what));
@@ -288,7 +345,7 @@ impl App {
             t.push_str(&format!("{}: {}|   (Enter confirms, Esc cancels)\n", label, shown_text));
         } else if !self.status.is_empty() { t.push_str(&self.status); t.push('\n'); }
         if let Some(job) = &self.job { t.push_str(&job.progress()); t.push('\n'); }
-        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+0..5 rate  Ctrl+Shift+G tags\nCtrl+Shift+R rename all  Ctrl+Shift+D duplicates  Ctrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
+        t.push_str("Enter open  Backspace up  F2 rename  Ctrl+I size and checksum\nCtrl+C/X/V copy, cut, paste  Ctrl+N folder\nDel trash  Shift+Del delete for good  Ctrl+T show trash\nIn the trash: Ctrl+R restore  Ctrl+E empty\nOn a stick: Ctrl+E eject  Ctrl+D disks  Ctrl+Z undo  Ctrl+H home\nCtrl+F search names and words in files  Ctrl+G thumbnails  Ctrl+K home lock  Ctrl+Shift+K its password\nCtrl+Shift+T new tab  Ctrl+PageUp/PageDown switch  Ctrl+Shift+W close tab\nEnter on an archive opens it  Ctrl+Shift+X extract  Ctrl+Shift+A zip  Ctrl+0..5 rate  Ctrl+Shift+G tags\nCtrl+Shift+R rename all  Ctrl+Shift+D duplicates  Ctrl+U disk usage  Ctrl+Shift+C compare  Ctrl+Shift+O actions\n");
         window.show(t.as_bytes());
     }
 
@@ -809,6 +866,10 @@ impl App {
         self.status.clear();
         if key.control {
             match key.code {
+                KEY_T if key.shift => self.new_tab(window),
+                KEY_W if key.shift => self.close_tab(window),
+                0x49 => { let next = (self.active_tab + self.tabs.len() - 1) % self.tabs.len(); self.show_tab(window, next); }
+                0x51 => { let next = (self.active_tab + 1) % self.tabs.len(); self.show_tab(window, next); }
                 KEY_C | KEY_X => if let Some(p) = self.selected() {
                     let cut = key.code == KEY_X;
                     self.status = format!("{} {}: Ctrl+V pastes it.", if cut { "Cut" } else { "Copied" }, shown(base(&p)));
@@ -928,12 +989,12 @@ pub extern "C" fn _start() -> ! {
     let given = files::args(&mut window, &mut args);
     let root = given.split(|b| *b == b' ').find_map(|t| t.strip_prefix(b"@")).filter(|p| p.first() == Some(&b'/')).map(|p| p.to_vec());
     let Some(root) = root else {
-        window.show(b"Files needs a folder to look after. Start it from Spindle with:  files  (everything)  or  files DIR\n\nF11 closes.");
+        window.show(b"Loom needs a folder to look after. Start it from Spindle with: loom or loom DIR\n\nF11 closes.");
         sex_pdx::serial_record!("[files.app.ready] root=none");
         loop { if let Event::Close = window.next() { window.close() } }
     };
     let portal = root == b"/";
-    let mut app = App { cwd: root.clone(), root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
+    let mut app = App { cwd: root.clone(), tabs: vec![FolderTab { cwd: root.clone(), cursor: 0, top: 0 }], active_tab: 0, root, entries: Vec::new(), cursor: 0, top: 0, clip: None, undo: Vec::new(), input: None, status: String::new(), question: None, disk_ask: None, portal,
                         job: None, job_undo: None, job_select: None, last_drawn: 0, last_pct: 0, confirm: None, origins: Vec::new(), watching: None, last_look: 0, index: Index::new(), search: None, crawl: None, found: None, thumbs: Thumbs::new(), showing_pixels: false, loom: loom::Loom::new(), opening: None };
     app.meta_load(&mut window);
     app.loom.actions.load(&mut window);
