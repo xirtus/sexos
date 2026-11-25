@@ -17,8 +17,10 @@ and Shields. The remaining gaps are:
   login, transfers it through that route, and cancels when the page or values
   change. Chastity now exposes a fully received proposal only after bounded
   transfer and can acknowledge it only after the caller's durable commit.
-  Its save consent UI and commit wiring are still needed before password
-  saving works for users.
+  Chastity now shows a default-deny save dialog with Add or the one exact
+  matching account as Replace, stores the encrypted vault, and only then
+  acknowledges the browser. The GitHub CI two-app QEMU gate is the runtime
+  evidence for this first end-to-end password save. Passkeys still remain.
 - A visible per-site settings view for Shields and stored data. This change adds a
   first view and controls; permission prompts and a full settings catalog remain.
 - Stronger tab isolation, developer tools, extensions, and browser compatibility.
