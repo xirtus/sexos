@@ -172,6 +172,7 @@ struct PageScript { source: String, name: String, module: bool, node: Option<usi
 
 struct Browser {
     autofill: Option<passwords::Pending>,
+    password_save: Option<passwords::PendingSave>,
     #[cfg(feature = "baseline-jit")]
     jit_enabled: bool,
     /// Compiled scripts and modules, shared by every page and frame this session
@@ -873,6 +874,7 @@ impl Browser {
 
     fn open(&mut self, url: &str, remember: bool) {
         self.cancel_autofill();
+        self.cancel_password_save();
         // "Continue to the site" on the HTTPS-only page: this host may use plain HTTP
         // for the rest of the run.
         if let Some(target) = url.strip_prefix("about:http?url=") {
@@ -2194,7 +2196,7 @@ pub extern "C" fn _start() -> ! {
     let chrome_palette = sex_web::ChromePalette::from_tokens(theme);
     let theme_generation = sex_app::settings::generation().unwrap_or(0);
     sex_pdx::serial_record!("[web.theme] mode={:?} generation={}", theme.mode, theme_generation);
-    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), autofill: None, code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, reader_pending: None, chrome_palette, theme_generation, nav_from: None, frames_check: false,
+    let mut b = Browser { #[cfg(feature = "baseline-jit")] jit_enabled: !given.split_ascii_whitespace().any(|a| a == "--no-jit"), autofill: None, password_save: None, code_cache: alloc::rc::Rc::new(core::cell::RefCell::new(sex_js::CodeCache::new(CODE_CACHE_BYTES))), window, surface, reported_size: (width, height), fonts, page, doc, sheets: Vec::new(), timer: None, timeline: Default::default(), animating: false, canvases: sex_web::canvas::Canvases::new(), media: Vec::new(), media_asked: false, media_loads: Vec::new(), url: String::new(), history: Vec::new(), scroll: 0, focus: None, editing: None, status: None, buf: Vec::new(), full_redraw: true, jar: Default::default(), storage: Default::default(), jarbox: Default::default(), press_link: None, script_scroll: 0, hover_css: false, post: None, import_map: Vec::new(), view, parent: None, frames: Vec::new(), in_frame: None, frame_dirty: false, referrer_next: None, reader_pending: None, chrome_palette, theme_generation, nav_from: None, frames_check: false,
         tabs: Vec::new(), active: 0, forward: Vec::new(), profile: Default::default(), code_store: Default::default(), suggestions: Vec::new(), chosen: None,
         find: None, find_at: 0, marks: Vec::new(), finding: false, laid_zoom: 100, sockets: Vec::new(), downloads: Vec::new(), download_status: None, web_fonts: Vec::new(),
         shields: shields::Shields::empty(), extensions: Default::default(), blocked: 0, next_kind: None, http_ok: Vec::new(), vertical: false, split: None, groups: Vec::new(), panel: false, keep_session: env!("CARGO_BIN_NAME") == "web", visiting: false, naming: None, session_saved: String::new() };
@@ -2241,6 +2243,7 @@ pub extern "C" fn _start() -> ! {
             }
         }
         b.poll_autofill();
+        b.poll_password_save();
         b.settle();
         // Blocking resource calls can fill the bounded held-event queue. Window
         // still tracks the latest authenticated size even when a resize event
@@ -2248,7 +2251,7 @@ pub extern "C" fn _start() -> ! {
         let (width, height) = b.window.size();
         b.resize(width, height);
         b.voyeur();
-        let autofill_wait = if b.autofill.is_some() { 1 } else { SEARCH_LOOK_MS };
+        let autofill_wait = if b.autofill.is_some() || b.password_save.is_some() { 1 } else { SEARCH_LOOK_MS };
         let event = if let Some(e) = queued.take() { e } else { match b.next_due() {
             Some(due) => {
                 let now = sex_pdx::get_ticks();

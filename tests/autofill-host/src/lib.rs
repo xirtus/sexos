@@ -115,6 +115,63 @@ fn save_write_relay_requires_attested_browser_and_vault_consent() {
     assert!(messages.iter().any(|(s, op, _)| *s == C && *op == w::SAVE_APPROVED));
     assert_eq!(b.receive(C, &Packet::new(w::SAVE_FINISH, token as u64, 99, 0), true, 17), w::Status::Stale);
 }
+
+#[test]
+fn browser_save_sdk_waits_for_vault_commit() {
+    reset();
+    env(|e| e.broker.label(C, *b"kaleidoscope\0\0\0\0"));
+    current(P);
+    let mut provider = sdk::Provider::new(&Window { target: P.pd, task: P.task }, 99).unwrap();
+    provider.poll(0);
+    pump();
+    provider.poll(0);
+    assert!(provider.registered());
+    current(C);
+    let mut client = sdk::SaveClient::request(
+        &Window { target: C.pd, task: C.task }, "https://example.org", "alice", "secret", 0,
+    ).unwrap();
+    assert!(client.matches("alice", "secret"));
+    assert!(!client.matches("alice", "changed"));
+    let mut complete = false;
+    let mut token = 0;
+    for tick in 1..100 {
+        env(|e| e.now = tick);
+        current(C);
+        assert!(client.poll(tick).is_none(), "receipt alone must never report success");
+        pump();
+        current(P);
+        while let Some(m) = pdx_try_listen_raw(0) {
+            if m.type_id == autofill::SAVE_OFFER { token = m.arg0 as u32; }
+            if m.type_id == autofill::SAVE_COMPLETE { complete = true; }
+        }
+        if complete { break; }
+    }
+    assert!(complete, "bounded proposal reaches Chastity");
+    assert_ne!(token, 0);
+    current(C);
+    assert!(client.poll(100).is_none());
+    env(|e| { e.now = 101; e.focus = P; });
+    current(P);
+    assert_eq!(pdx_call(SLOT_SHELL, autofill::SAVE_ALLOW, token as u64, 99, 0).0, 0);
+    pump();
+    current(C);
+    assert!(matches!(client.poll(101), Some(Ok(()))));
+    assert!(!client.matches("alice", "secret"));
+}
+
+#[test]
+fn browser_save_sdk_cancellation_wipes_proposal() {
+    reset();
+    env(|e| e.broker.label(C, *b"kaleidoscope\0\0\0\0"));
+    current(C);
+    let mut client = sdk::SaveClient::request(
+        &Window { target: C.pd, task: C.task }, "https://example.org", "alice", "secret", 0,
+    ).unwrap();
+    client.cancel();
+    assert!(!client.matches("alice", "secret"));
+    assert!(!client.active());
+    assert!(client.poll(1).is_none());
+}
 struct Env {
     broker: Broker,
     current: Subject,

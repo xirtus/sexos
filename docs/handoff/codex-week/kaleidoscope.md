@@ -13,8 +13,10 @@ and Shields. The remaining gaps are:
   decision are host-tested; the Shell write transfer, visible Chastity approval,
   browser command, and passkeys remain.
   The Shell broker now has an attested, bounded reverse proposal route from
-  Kaleidoscope to Chastity. The browser client, vault consent UI and commit
-  wiring are still needed before password saving works for users.
+  Kaleidoscope to Chastity. Ctrl+Shift+U now captures the current eligible
+  login, transfers it through that route, and cancels when the page or values
+  change. Chastity's save consent UI and commit wiring are still needed before
+  password saving works for users.
 - A visible per-site settings view for Shields and stored data. This change adds a
   first view and controls; permission prompts and a full settings catalog remain.
 - Stronger tab isolation, developer tools, extensions, and browser compatibility.

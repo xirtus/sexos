@@ -10,7 +10,7 @@
 //! tabs down the side (vertical tabs) or back across the bar, Ctrl+Shift+\\ split view,
 //! Ctrl+Shift+G the tab into a new group or out of its group (a click on a group's
 //! label folds it), Ctrl+Shift+B the side panel, Ctrl+Shift+E site settings,
-//! Ctrl+Shift+K asks Chastity to fill a visible HTTPS login form.
+//! Ctrl+Shift+K asks Chastity to fill a visible HTTPS login form; Ctrl+Shift+U asks it to save one.
 //! Ctrl+Shift+/ opens Kaleidoscope's keyboard reference.
 
 use super::{nav, profile::Jarbox, Browser, Nav};
@@ -50,6 +50,7 @@ impl Browser {
                 else if sex_fetch::Url::parse(&url).is_ok() { self.open(&super::site_settings::address(&url), true); }
             }
             0x25 if key.shift => self.request_autofill(),
+            0x18 if key.shift => self.request_password_save(),
             0x11 => self.close_tab(),
             // Next and previous go round the strip's tabs (not the side panel's page).
             0x51 => { let n = (self.active + 1) % self.strip_len(); self.show_tab(n); }
@@ -177,6 +178,7 @@ impl Browser {
     /// Saves the profile and ends the program.
     pub(super) fn quit(&mut self) -> ! {
         self.cancel_autofill();
+        self.cancel_password_save();
         self.profile.save(&mut self.window, super::wall(), true);
         self.code_store.save(&mut self.window, &mut self.code_cache.borrow_mut());
         sex_pdx::serial_record!("[web.closed] target={} task={}", self.window.target, self.window.task);
